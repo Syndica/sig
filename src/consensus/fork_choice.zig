@@ -11,8 +11,8 @@ const Pubkey = sig.core.Pubkey;
 const SortedMap = sig.utils.collections.SortedMap;
 const SlotAndHash = sig.core.hash.SlotAndHash;
 const Slot = sig.core.Slot;
-const EpochStakesMap = sig.core.EpochStakesMap;
-const EpochStakes = sig.core.EpochStakes;
+const Epoch = sig.core.Epoch;
+const VersionedEpochStakes = sig.core.VersionedEpochStakes;
 const EpochSchedule = sig.core.EpochSchedule;
 const ReplayTower = sig.consensus.replay_tower.ReplayTower;
 const LatestValidatorVotes =
@@ -22,8 +22,8 @@ const PubkeyVote = struct {
     pubkey: Pubkey,
     slot_hash: SlotAndHash,
 };
-
-const UpdateLabel = enum {
+const PubkeyVote = struct {
+    pubkey: Pubkey,
     Aggregate,
     MarkValid,
     MarkInvalid,
@@ -373,14 +373,11 @@ pub const ForkChoice = struct {
         return null;
     }
 
-    /// Add new votes, returns the best slot
-    ///
-    /// Analogous to [add_votes](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L343)
     pub fn addVotes(
         self: *ForkChoice,
         allocator: std.mem.Allocator,
         pubkey_votes: []const PubkeyVote,
-        epoch_stakes: *const EpochStakesMap,
+        epoch_stakes: *const AutoHashMap(Epoch, VersionedEpochStakes),
         epoch_schedule: *const EpochSchedule,
     ) !SlotAndHash {
         // Generate the set of updates
