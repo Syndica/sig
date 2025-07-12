@@ -4297,8 +4297,7 @@ pub const TestFixture = struct {
         allocator: std.mem.Allocator,
         random: std.Random,
     ) !void {
-        var epoch_stakes =
-            try EpochStakes.initEmptyWithGenesisStakeHistoryEntry(allocator);
+        var epoch_stakes = try EpochStakes.initEmpty(allocator);
         epoch_stakes.total_stake = 1000;
         epoch_stakes.stakes.deinit(allocator);
         epoch_stakes.stakes = try Stakes(.delegation).initRandom(
