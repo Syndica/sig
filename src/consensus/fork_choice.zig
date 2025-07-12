@@ -1970,7 +1970,7 @@ test "HeaviestSubtreeForkChoice.propagateNewLeaf" {
     );
     // New leaf 9, should be the heaviest and deepest choice for all ancestors
     var ancestors_of_9 = fork_choice.ancestorIterator(
-        SlotAndHash{ .slot = 10, .hash = Hash.ZEROES },
+        SlotAndHash{ .slot = 9, .hash = Hash.ZEROES },
     );
     while (ancestors_of_9.next()) |item| {
         try std.testing.expectEqual(9, fork_choice.heaviestSlot(item).?.slot);
