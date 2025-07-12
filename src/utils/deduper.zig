@@ -3,7 +3,7 @@ const sig = @import("../sig.zig");
 
 const AtomicU64 = std.atomic.Value(u64);
 
-const Instant = sig.time.Instant;
+const Instant = std.time.Instant;
 const Duration = sig.time.Duration;
 const AHashSeed = sig.utils.ahash.AHashSeed;
 const AHasher = sig.utils.ahash.AHasher;
@@ -33,7 +33,7 @@ pub fn Deduper(comptime n_hashers: usize, comptime T: type) type {
                 .num_bits = num_bits,
                 .bits = bits,
                 .state = state,
-                .last_reset_instant = Instant.now(),
+                .last_reset_instant = sig.time.clock.sample(),
                 .masked_count = AtomicU64.init(0),
             };
         }
@@ -51,15 +51,16 @@ pub fn Deduper(comptime n_hashers: usize, comptime T: type) type {
         ) bool {
             std.debug.assert(0.0 < false_positive_rate and false_positive_rate < 1.0);
             const saturated = self.falsePositiveRate() >= false_positive_rate;
+            const now = sig.time.clock.sample();
             if (saturated or
-                self.last_reset_instant.elapsed().asNanos() >= reset_cycle.asNanos())
+                now.since(self.last_reset_instant) >= reset_cycle.asNanos())
             {
                 for (self.bits.items) |_bit| {
                     var bit = _bit;
                     bit = AtomicU64.init(0);
                 }
                 for (0..n_hashers) |i| self.state[i] = AHashSeed.initRandom(rand);
-                self.last_reset_instant = Instant.now();
+                self.last_reset_instant = sig.time.clock.sample();
                 self.masked_count = AtomicU64.init(0);
             }
             return saturated;

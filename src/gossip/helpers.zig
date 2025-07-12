@@ -11,7 +11,6 @@ const IpAddr = sig.net.IpAddr;
 
 const resolveSocketAddr = sig.net.net.resolveSocketAddr;
 const getShredAndIPFromEchoServer = sig.net.echo.getShredAndIPFromEchoServer;
-const getWallclockMs = sig.time.getWallclockMs;
 const getClusterEntrypoints = sig.gossip.service.getClusterEntrypoints;
 
 /// inits a gossip client with the minimum required configuration
@@ -40,7 +39,7 @@ pub fn initGossipFromCluster(
     const my_keypair = try sig.identity.getOrInit(allocator, logger);
 
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
-    var contact_info = ContactInfo.init(allocator, my_pubkey, getWallclockMs(), 0);
+    var contact_info = ContactInfo.init(allocator, my_pubkey, sig.time.clock.now(), 0);
     try contact_info.setSocket(.gossip, SocketAddr.init(my_ip, my_port));
     contact_info.shred_version = my_shred_version;
 

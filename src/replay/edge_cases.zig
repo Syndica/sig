@@ -1249,7 +1249,7 @@ const TestData = struct {
 
         const slot_infos = [_]SlotInfo{
             .initRandom(random, null, 0, .{
-                .now = .now(),
+                .now = sig.time.clock.sample(),
                 .last_entry = try .parseBase58String(
                     "5NjW2CAV6MBQYxpL4oK2CESrpdj6tkcvxP3iigAgrHyR",
                 ),
@@ -1265,7 +1265,7 @@ const TestData = struct {
                 .num_dropped_blocks_on_fork = 0,
             }),
             .initRandom(random, 0, 1, .{
-                .now = .now(),
+                .now = sig.time.clock.sample(),
                 .last_entry = try .parseBase58String("11111111111111111111111111111111"),
                 .prev_leader_slot = null,
                 .validator_stake_info = null,
@@ -1273,7 +1273,7 @@ const TestData = struct {
                 .num_dropped_blocks_on_fork = 0,
             }),
             .initRandom(random, 1, 2, .{
-                .now = .now(),
+                .now = sig.time.clock.sample(),
                 .last_entry = try .parseBase58String("11111111111111111111111111111111"),
                 .prev_leader_slot = null,
                 .validator_stake_info = null,
@@ -1281,7 +1281,7 @@ const TestData = struct {
                 .num_dropped_blocks_on_fork = 0,
             }),
             .initRandom(random, 2, 3, .{
-                .now = .now(),
+                .now = sig.time.clock.sample(),
                 .last_entry = try .parseBase58String("11111111111111111111111111111111"),
                 .prev_leader_slot = null,
                 .validator_stake_info = null,

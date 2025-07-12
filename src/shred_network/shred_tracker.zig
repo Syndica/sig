@@ -7,7 +7,7 @@ const Mutex = std.Thread.Mutex;
 
 const Duration = sig.time.Duration;
 const Gauge = sig.prometheus.Gauge;
-const Instant = sig.time.Instant;
+const Instant = std.time.Instant;
 const Registry = sig.prometheus.Registry;
 const Slot = sig.core.Slot;
 
@@ -181,8 +181,8 @@ pub const BasicShredTracker = struct {
         const last_slot_to_check = @max(self.max_slot_processed, self.current_bottom_slot);
         for (self.current_bottom_slot..last_slot_to_check + 1) |slot| {
             const monitored_slot = try self.getMonitoredSlot(slot);
-            if (timestamp.elapsedSince(monitored_slot.first_received_timestamp)
-                .lt(MIN_SLOT_AGE_TO_REPORT_AS_MISSING))
+            if (timestamp.since(monitored_slot.first_received_timestamp) <
+                MIN_SLOT_AGE_TO_REPORT_AS_MISSING.asNanos())
                 continue;
             var slot_report = try slot_reports.addOne();
             slot_report.slot = slot;
@@ -279,7 +279,7 @@ const MonitoredSlot = struct {
     shreds: ShredSet = ShredSet.initEmpty(),
     max_seen: ?u32 = null,
     last_shred: ?u32 = null,
-    first_received_timestamp: Instant = Instant.UNIX_EPOCH,
+    first_received_timestamp: Instant = Duration.zero.asInstant(),
     is_complete: bool = false,
     parent_slot: ?Slot = null,
     unique_observed_count: u32 = 0,
@@ -350,7 +350,7 @@ test "trivial happy path" {
     defer registry.deinit();
     var tracker = try BasicShredTracker.init(13579, .noop, &registry);
 
-    _ = try tracker.identifyMissing(&msr, Instant.UNIX_EPOCH.plus(Duration.fromSecs(1)));
+    _ = try tracker.identifyMissing(&msr, Duration.fromSecs(1).asInstant());
 
     try std.testing.expect(1 == msr.len);
     const report = msr.items()[0];
@@ -369,12 +369,12 @@ test "1 registered shred is identified" {
     var registry = sig.prometheus.Registry(.{}).init(allocator);
     defer registry.deinit();
     var tracker = try BasicShredTracker.init(13579, .noop, &registry);
-    try tracker.registerShred(13579, 123, 13578, false, Instant.UNIX_EPOCH);
+    try tracker.registerShred(13579, 123, 13578, false, Duration.zero.asInstant());
 
-    _ = try tracker.identifyMissing(&msr, Instant.UNIX_EPOCH);
+    _ = try tracker.identifyMissing(&msr, Duration.zero.asInstant());
     try std.testing.expectEqual(0, msr.len);
 
-    _ = try tracker.identifyMissing(&msr, Instant.UNIX_EPOCH.plus(Duration.fromSecs(1)));
+    _ = try tracker.identifyMissing(&msr, Duration.fromSecs(1).asInstant());
     try std.testing.expectEqual(1, msr.len);
 
     const report = msr.items()[0];
