@@ -914,6 +914,147 @@ pub const ForkChoice = struct {
         return reachable_set;
     }
 
+    /// Analogous to [generate_update_operations](https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L969)
+    fn generateUpdateOperations(
+        self: *ForkChoice,
+        allocator: std.mem.Allocator,
+        pubkey_votes: []const PubkeyVote,
+        epoch_stakes: *const AutoHashMap(Epoch, VersionedEpochStakes),
+        epoch_schedule: *const EpochSchedule,
+    ) !UpdateOperations {
+        var update_operations = UpdateOperations.init(self.allocator);
+        errdefer update_operations.deinit();
+
+        var observed_pubkeys = std.AutoHashMapUnmanaged(Pubkey, Slot).empty;
+        defer observed_pubkeys.deinit(allocator);
+
+        for (pubkey_votes) |pubkey_vote| {
+            const pubkey = pubkey_vote.pubkey;
+            const new_vote_slot_hash = pubkey_vote.slot_hash;
+            const new_vote_slot = new_vote_slot_hash.slot;
+            const new_vote_hash = new_vote_slot_hash.hash;
+
+            if (new_vote_slot < self.tree_root.slot) {
+                // If the new vote is less than the root we can ignore it. This is because there
+                // are two cases. Either:
+                // 1) The validator's latest vote was bigger than the new vote, so we can ignore it
+                // 2) The validator's latest vote was less than the new vote, then the validator's latest
+                // vote was also less than root. This means either every node in the current tree has the
+                // validators stake counted toward it (if the latest vote was an ancestor of the current root),
+                // OR every node doesn't have this validator's vote counting toward it (if the latest vote
+                // was not an ancestor of the current root). Thus this validator is essentially a no-op
+                // and won't affect fork choice.
+                continue;
+            }
+
+            // Check for duplicate pubkeys in the same batch
+            if (observed_pubkeys.contains(pubkey)) {
+                return error.MultipleVotesForPubKey;
+            }
+            try observed_pubkeys.put(allocator, pubkey, new_vote_slot);
+
+            const pubkey_latest_vote = self.latest_votes.getPtr(pubkey);
+
+            // Filter out any votes or slots < any slot this pubkey has
+            // already voted for, we only care about the latest votes.
+            //
+            // If the new vote is for the same slot, but a different, smaller hash,
+            // then allow processing to continue as this is a duplicate version
+            // of the same slot.
+            if (pubkey_latest_vote) |latest_vote| {
+                if (new_vote_slot < latest_vote.slot or
+                    (new_vote_slot == latest_vote.slot and
+                        new_vote_hash.order(&latest_vote.hash) != .lt))
+                {
+                    continue;
+                }
+            }
+
+            // We either:
+            // 1) don't have a vote yet for this pubkey,
+            // 2) or the new vote slot is bigger than the old vote slot
+            // 3) or the new vote slot == old_vote slot, but for a smaller bank hash.
+            // In all cases, we need to remove this pubkey stake from the previous fork
+            if (try self.latest_votes.fetchPut(pubkey, new_vote_slot_hash)) |old_latest_vote| {
+                const old_latest_vote_slot = old_latest_vote.value.slot;
+                const old_latest_vote_hash = old_latest_vote.value.hash;
+                std.debug.assert(if (new_vote_slot == old_latest_vote_slot)
+                    // If the slots are equal, then the new
+                    // vote must be for a smaller hash
+                    new_vote_hash.order(&old_latest_vote_hash) == .lt
+                else
+                    new_vote_slot > old_latest_vote_slot);
+
+                const epoch = epoch_schedule.getEpoch(old_latest_vote_slot);
+                const stake_update = if (epoch_stakes.get(epoch)) |stakes| blk: {
+                    const stake_and_vote_account =
+                        stakes.current.stakes.vote_accounts.vote_accounts.get(pubkey) orelse
+                        break :blk 0;
+                    break :blk stake_and_vote_account.stake;
+                } else blk: {
+                    break :blk 0;
+                };
+
+                if (stake_update > 0) {
+                    const subtract_op = UpdateOperation{ .Subtract = stake_update };
+                    const subtract_label = SlotAndHashLabel{
+                        .slot_hash_key = old_latest_vote.value,
+                        .label = .Subtract,
+                    };
+
+                    if (update_operations.getEntry(subtract_label)) |existing_op| {
+                        switch (existing_op.value_ptr.*) {
+                            .Subtract => |*stake| stake.* += stake_update,
+                            else => {}, // Shouldn't happen for Subtract label
+                        }
+                    } else {
+                        try update_operations.put(subtract_label, subtract_op);
+                    }
+
+                    try self.insertAggregateOperations(
+                        &update_operations,
+                        old_latest_vote.value,
+                    );
+                }
+            }
+
+            {
+                // Add this pubkey stake to new fork
+                const epoch = epoch_schedule.getEpoch(new_vote_slot_hash.slot);
+                const stake_update = if (epoch_stakes.get(epoch)) |stakes| blk: {
+                    const stake_and_vote_account =
+                        stakes.current.stakes.vote_accounts.vote_accounts.get(pubkey) orelse
+                        break :blk 0;
+                    break :blk stake_and_vote_account.stake;
+                } else blk: {
+                    break :blk 0;
+                };
+
+                const add_op = UpdateOperation{ .Add = stake_update };
+                const add_label = SlotAndHashLabel{
+                    .slot_hash_key = new_vote_slot_hash,
+                    .label = .Add,
+                };
+
+                if (update_operations.getEntry(add_label)) |existing_op| {
+                    switch (existing_op.value_ptr.*) {
+                        .Add => |*stake| stake.* += stake_update,
+                        else => {}, // Shouldn't happen for Add label
+                    }
+                } else {
+                    try update_operations.put(add_label, add_op);
+                }
+
+                try self.insertAggregateOperations(
+                    &update_operations,
+                    new_vote_slot_hash,
+                );
+            }
+        }
+
+        return update_operations;
+    }
+
     /// [Agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L1088
     fn processUpdateOperations(
         self: *ForkChoice,
