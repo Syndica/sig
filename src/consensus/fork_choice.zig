@@ -2015,6 +2015,7 @@ test "HeaviestSubtreeForkChoice.propagateNewLeaf" {
         try std.testing.expectEqual(9, fork_choice.deepestSlot(&item).?.slot);
     }
 
+    // Add a vote for the other branch at slot 6
     var prng = std.Random.DefaultPrng.init(91);
     const random = prng.random();
     const stake: u64 = 100;
@@ -2031,10 +2032,10 @@ test "HeaviestSubtreeForkChoice.propagateNewLeaf" {
     );
     defer versioned_stakes.deinit(test_allocator);
 
-    var epoch_stakes = EpochStakesMap.empty;
-    defer epoch_stakes.deinit(test_allocator);
+    var epoch_stakes = AutoHashMap(Epoch, VersionedEpochStakes).init(test_allocator);
+    defer epoch_stakes.deinit();
 
-    try epoch_stakes.put(test_allocator, 0, versioned_stakes);
+    try epoch_stakes.put(0, versioned_stakes);
 
     const pubkey_votes = [_]PubkeyVote{
         .{ .pubkey = vote_pubkeys[0], .slot_hash = .{ .slot = 6, .hash = Hash.ZEROES } },
@@ -2115,7 +2116,6 @@ test "HeaviestSubtreeForkChoice.propagateNewLeaf" {
     }
 }
 
-// Analogous to [propagateNewLeaf2](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L2035)
 test "HeaviestSubtreeForkChoice.propagateNewLeaf2" {
     // Build fork structure:
     //      slot 0
@@ -2172,10 +2172,10 @@ test "HeaviestSubtreeForkChoice.propagateNewLeaf2" {
     );
     defer versioned_stakes.deinit(test_allocator);
 
-    var epoch_stakes = EpochStakesMap.empty;
-    defer epoch_stakes.deinit(test_allocator);
+    var epoch_stakes = AutoHashMap(Epoch, VersionedEpochStakes).init(test_allocator);
+    defer epoch_stakes.deinit();
 
-    try epoch_stakes.put(test_allocator, 0, versioned_stakes);
+    try epoch_stakes.put(0, versioned_stakes);
 
     const pubkey_votes = [_]PubkeyVote{
         .{ .pubkey = vote_pubkeys[0], .slot_hash = .{ .slot = 4, .hash = Hash.ZEROES } },
@@ -2198,7 +2198,6 @@ test "HeaviestSubtreeForkChoice.propagateNewLeaf2" {
     try std.testing.expectEqual(6, fork_choice.heaviestOverallSlot().slot);
 }
 
-// Analogous to [test_set_root_and_add_outdated_votes](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L1772)
 test "HeaviestSubtreeForkChoice.setRootAndAddOutdatedVotes" {
     var fork_choice = try forkChoiceForTest(test_allocator, fork_tuples[0..]);
     defer fork_choice.deinit();
@@ -2218,10 +2217,10 @@ test "HeaviestSubtreeForkChoice.setRootAndAddOutdatedVotes" {
     );
     defer versioned_stakes.deinit(test_allocator);
 
-    var epoch_stakes = EpochStakesMap.empty;
-    defer epoch_stakes.deinit(test_allocator);
+    var epoch_stakes = AutoHashMap(Epoch, VersionedEpochStakes).init(test_allocator);
+    defer epoch_stakes.deinit();
 
-    try epoch_stakes.put(test_allocator, 0, versioned_stakes);
+    try epoch_stakes.put(0, versioned_stakes);
 
     // Vote for slot 0
     const pubkey_votes1 = [_]PubkeyVote{
