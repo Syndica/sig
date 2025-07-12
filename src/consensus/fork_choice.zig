@@ -2863,6 +2863,492 @@ test "HeaviestSubtreeForkChoice.heaviestSlotOnSameVotedFork_missing_candidate" {
     );
 }
 
+test "HeaviestSubtreeForkChoice.GenerateUpdateOperations" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(91);
+    const random = prng.random();
+    const stake = 100;
+    const vote_pubkeys = [_]Pubkey{
+        Pubkey.initRandom(random),
+        Pubkey.initRandom(random),
+        Pubkey.initRandom(random),
+    };
+    const versioned_stakes = try testEpochStakes(allocator, &vote_pubkeys, stake, random);
+    defer versioned_stakes.deinit(allocator);
+
+    var epoch_stakes = AutoHashMap(Epoch, VersionedEpochStakes).init(allocator);
+    defer epoch_stakes.deinit();
+
+    try epoch_stakes.put(0, versioned_stakes);
+    try epoch_stakes.put(1, versioned_stakes);
+
+    var fork_choice = try forkChoiceForTest(test_allocator, fork_tuples[0..]);
+    defer fork_choice.deinit();
+
+    {
+        const pubkey_votes = [_]PubkeyVote{
+            .{ .pubkey = vote_pubkeys[0], .slot_hash = .{ .slot = 3, .hash = Hash.ZEROES } },
+            .{ .pubkey = vote_pubkeys[1], .slot_hash = .{ .slot = 4, .hash = Hash.ZEROES } },
+            .{ .pubkey = vote_pubkeys[2], .slot_hash = .{ .slot = 1, .hash = Hash.ZEROES } },
+        };
+
+        var expected_update_operations = blk: {
+            var operations = UpdateOperations.init(allocator);
+            errdefer operations.deinit();
+
+            // Add/remove from new/old forks
+            try operations.put(
+                .{ .slot_hash_key = .{ .slot = 1, .hash = Hash.ZEROES }, .label = .Add },
+                UpdateOperation{ .Add = stake },
+            );
+            try operations.put(
+                .{ .slot_hash_key = .{ .slot = 3, .hash = Hash.ZEROES }, .label = .Add },
+                UpdateOperation{ .Add = stake },
+            );
+            try operations.put(
+                .{ .slot_hash_key = .{ .slot = 4, .hash = Hash.ZEROES }, .label = .Add },
+                UpdateOperation{ .Add = stake },
+            );
+            // Aggregate all ancestors of changed slots
+            try operations.put(
+                .{ .slot_hash_key = .{ .slot = 0, .hash = Hash.ZEROES }, .label = .Aggregate },
+                UpdateOperation.Aggregate,
+            );
+            try operations.put(
+                .{ .slot_hash_key = .{ .slot = 1, .hash = Hash.ZEROES }, .label = .Aggregate },
+                UpdateOperation.Aggregate,
+            );
+            try operations.put(
+                .{ .slot_hash_key = .{ .slot = 2, .hash = Hash.ZEROES }, .label = .Aggregate },
+                UpdateOperation.Aggregate,
+            );
+
+            break :blk operations;
+        };
+        defer expected_update_operations.deinit();
+
+        var generated_update_operations = try fork_choice.generateUpdateOperations(
+            allocator,
+            &pubkey_votes,
+            &epoch_stakes,
+            &EpochSchedule.DEFAULT,
+        );
+        defer generated_update_operations.deinit();
+
+        try std.testing.expect(
+            try isUpdateOpsEqual(
+                &expected_update_operations,
+                &generated_update_operations,
+            ),
+        );
+    }
+
+    // Everyone makes older/same votes, should be ignored
+    {
+        const pubkey_votes = [_]PubkeyVote{
+            .{ .pubkey = vote_pubkeys[0], .slot_hash = .{ .slot = 3, .hash = Hash.ZEROES } },
+            .{ .pubkey = vote_pubkeys[1], .slot_hash = .{ .slot = 2, .hash = Hash.ZEROES } },
+            .{ .pubkey = vote_pubkeys[2], .slot_hash = .{ .slot = 1, .hash = Hash.ZEROES } },
+        };
+
+        var generated_update_operations = try fork_choice.generateUpdateOperations(
+            allocator,
+            &pubkey_votes,
+            &epoch_stakes,
+            &EpochSchedule.DEFAULT,
+        );
+        defer generated_update_operations.deinit();
+        try std.testing.expect(generated_update_operations.count() == 0);
+    }
+
+    // Some people make newer votes
+    {
+        const pubkey_votes = [_]PubkeyVote{
+            // old, ignored
+            .{ .pubkey = vote_pubkeys[0], .slot_hash = .{ .slot = 3, .hash = Hash.ZEROES } },
+            // new, switched forks
+            .{ .pubkey = vote_pubkeys[1], .slot_hash = .{ .slot = 5, .hash = Hash.ZEROES } },
+            // new, same fork
+            .{ .pubkey = vote_pubkeys[2], .slot_hash = .{ .slot = 3, .hash = Hash.ZEROES } },
+        };
+
+        var expected_update_operations = blk: {
+            var operations = UpdateOperations.init(allocator);
+            errdefer operations.deinit();
+
+            // Add/remove from new/old forks
+            try operations.put(
+                .{ .slot_hash_key = .{ .slot = 3, .hash = Hash.ZEROES }, .label = .Add },
+                UpdateOperation{ .Add = stake },
+            );
+            try operations.put(
+                .{ .slot_hash_key = .{ .slot = 5, .hash = Hash.ZEROES }, .label = .Add },
+                UpdateOperation{ .Add = stake },
+            );
+            try operations.put(
+                .{ .slot_hash_key = .{ .slot = 1, .hash = Hash.ZEROES }, .label = .Subtract },
+                UpdateOperation{ .Subtract = stake },
+            );
+            try operations.put(
+                .{ .slot_hash_key = .{ .slot = 4, .hash = Hash.ZEROES }, .label = .Subtract },
+                UpdateOperation{ .Subtract = stake },
+            );
+            // Aggregate all ancestors of changed slots
+            try operations.put(
+                .{ .slot_hash_key = .{ .slot = 0, .hash = Hash.ZEROES }, .label = .Aggregate },
+                UpdateOperation.Aggregate,
+            );
+            try operations.put(
+                .{ .slot_hash_key = .{ .slot = 1, .hash = Hash.ZEROES }, .label = .Aggregate },
+                UpdateOperation.Aggregate,
+            );
+            try operations.put(
+                .{ .slot_hash_key = .{ .slot = 2, .hash = Hash.ZEROES }, .label = .Aggregate },
+                UpdateOperation.Aggregate,
+            );
+            try operations.put(
+                .{ .slot_hash_key = .{ .slot = 3, .hash = Hash.ZEROES }, .label = .Aggregate },
+                UpdateOperation.Aggregate,
+            );
+
+            break :blk operations;
+        };
+        defer expected_update_operations.deinit();
+
+        var generated_update_operations = try fork_choice.generateUpdateOperations(
+            allocator,
+            &pubkey_votes,
+            &epoch_stakes,
+            &EpochSchedule.DEFAULT,
+        );
+        defer generated_update_operations.deinit();
+
+        try std.testing.expect(
+            try isUpdateOpsEqual(
+                &expected_update_operations,
+                &generated_update_operations,
+            ),
+        );
+    }
+
+    // People make new votes
+    {
+        const pubkey_votes = [_]PubkeyVote{
+            // new, switch forks
+            .{ .pubkey = vote_pubkeys[0], .slot_hash = .{ .slot = 4, .hash = Hash.ZEROES } },
+            // new, same fork
+            .{ .pubkey = vote_pubkeys[1], .slot_hash = .{ .slot = 6, .hash = Hash.ZEROES } },
+            // new, same fork
+            .{ .pubkey = vote_pubkeys[2], .slot_hash = .{ .slot = 6, .hash = Hash.ZEROES } },
+        };
+
+        var expected_update_operations = blk: {
+            var operations = UpdateOperations.init(allocator);
+            errdefer operations.deinit();
+
+            // Add/remove from new/old forks
+            try operations.put(
+                .{ .slot_hash_key = .{ .slot = 4, .hash = Hash.ZEROES }, .label = .Add },
+                UpdateOperation{ .Add = stake },
+            );
+            try operations.put(
+                .{ .slot_hash_key = .{ .slot = 6, .hash = Hash.ZEROES }, .label = .Add },
+                UpdateOperation{ .Add = stake },
+            );
+            try operations.put(
+                .{ .slot_hash_key = .{ .slot = 3, .hash = Hash.ZEROES }, .label = .Subtract },
+                UpdateOperation{ .Subtract = stake },
+            );
+            try operations.put(
+                .{ .slot_hash_key = .{ .slot = 5, .hash = Hash.ZEROES }, .label = .Subtract },
+                UpdateOperation{ .Subtract = stake },
+            );
+            // Aggregate all ancestors of changed slots
+            try operations.put(
+                .{ .slot_hash_key = .{ .slot = 0, .hash = Hash.ZEROES }, .label = .Aggregate },
+                UpdateOperation.Aggregate,
+            );
+            try operations.put(
+                .{ .slot_hash_key = .{ .slot = 1, .hash = Hash.ZEROES }, .label = .Aggregate },
+                UpdateOperation.Aggregate,
+            );
+            try operations.put(
+                .{ .slot_hash_key = .{ .slot = 2, .hash = Hash.ZEROES }, .label = .Aggregate },
+                UpdateOperation.Aggregate,
+            );
+            try operations.put(
+                .{ .slot_hash_key = .{ .slot = 3, .hash = Hash.ZEROES }, .label = .Aggregate },
+                UpdateOperation.Aggregate,
+            );
+            try operations.put(
+                .{ .slot_hash_key = .{ .slot = 5, .hash = Hash.ZEROES }, .label = .Aggregate },
+                UpdateOperation.Aggregate,
+            );
+
+            break :blk operations;
+        };
+        defer expected_update_operations.deinit();
+
+        var generated_update_operations = try fork_choice.generateUpdateOperations(
+            allocator,
+            &pubkey_votes,
+            &epoch_stakes,
+            &EpochSchedule.DEFAULT,
+        );
+        defer generated_update_operations.deinit();
+
+        try std.testing.expect(
+            try isUpdateOpsEqual(
+                &expected_update_operations,
+                &generated_update_operations,
+            ),
+        );
+    }
+}
+
+test "HeaviestSubtreeForkChoice.testGenerateUpdateOperations" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(91);
+    const random = prng.random();
+    const stake = 100;
+    const vote_pubkeys = [_]Pubkey{
+        Pubkey.initRandom(random),
+        Pubkey.initRandom(random),
+        Pubkey.initRandom(random),
+    };
+    const versioned_stakes = try testEpochStakes(allocator, &vote_pubkeys, stake, random);
+    defer versioned_stakes.deinit(allocator);
+
+    var epoch_stakes = AutoHashMap(Epoch, VersionedEpochStakes).init(allocator);
+    defer epoch_stakes.deinit();
+
+    try epoch_stakes.put(0, versioned_stakes);
+    try epoch_stakes.put(1, versioned_stakes);
+
+    var fork_choice = try forkChoiceForTest(test_allocator, fork_tuples[0..]);
+    defer fork_choice.deinit();
+
+    {
+        const pubkey_votes = [_]PubkeyVote{
+            .{ .pubkey = vote_pubkeys[0], .slot_hash = .{ .slot = 3, .hash = Hash.ZEROES } },
+            .{ .pubkey = vote_pubkeys[1], .slot_hash = .{ .slot = 4, .hash = Hash.ZEROES } },
+            .{ .pubkey = vote_pubkeys[2], .slot_hash = .{ .slot = 1, .hash = Hash.ZEROES } },
+        };
+
+        var expected_update_operations = blk: {
+            var operations = UpdateOperations.init(allocator);
+            errdefer operations.deinit();
+
+            // Add/remove from new/old forks
+            try operations.put(
+                .{ .slot_hash_key = .{ .slot = 1, .hash = Hash.ZEROES }, .label = .Add },
+                UpdateOperation{ .Add = stake },
+            );
+            try operations.put(
+                .{ .slot_hash_key = .{ .slot = 3, .hash = Hash.ZEROES }, .label = .Add },
+                UpdateOperation{ .Add = stake },
+            );
+            try operations.put(
+                .{ .slot_hash_key = .{ .slot = 4, .hash = Hash.ZEROES }, .label = .Add },
+                UpdateOperation{ .Add = stake },
+            );
+            // Aggregate all ancestors of changed slots
+            try operations.put(
+                .{ .slot_hash_key = .{ .slot = 0, .hash = Hash.ZEROES }, .label = .Aggregate },
+                UpdateOperation.Aggregate,
+            );
+            try operations.put(
+                .{ .slot_hash_key = .{ .slot = 1, .hash = Hash.ZEROES }, .label = .Aggregate },
+                UpdateOperation.Aggregate,
+            );
+            try operations.put(
+                .{ .slot_hash_key = .{ .slot = 2, .hash = Hash.ZEROES }, .label = .Aggregate },
+                UpdateOperation.Aggregate,
+            );
+
+            break :blk operations;
+        };
+        defer expected_update_operations.deinit();
+
+        var generated_update_operations = try fork_choice.generateUpdateOperations(
+            allocator,
+            &pubkey_votes,
+            &epoch_stakes,
+            &EpochSchedule.DEFAULT,
+        );
+        defer generated_update_operations.deinit();
+
+        try std.testing.expect(
+            try isUpdateOpsEqual(
+                &expected_update_operations,
+                &generated_update_operations,
+            ),
+        );
+    }
+
+    // Everyone makes older/same votes, should be ignored
+    {
+        const pubkey_votes = [_]PubkeyVote{
+            .{ .pubkey = vote_pubkeys[0], .slot_hash = .{ .slot = 3, .hash = Hash.ZEROES } },
+            .{ .pubkey = vote_pubkeys[1], .slot_hash = .{ .slot = 2, .hash = Hash.ZEROES } },
+            .{ .pubkey = vote_pubkeys[2], .slot_hash = .{ .slot = 1, .hash = Hash.ZEROES } },
+        };
+
+        var generated_update_operations = try fork_choice.generateUpdateOperations(
+            allocator,
+            &pubkey_votes,
+            &epoch_stakes,
+            &EpochSchedule.DEFAULT,
+        );
+        defer generated_update_operations.deinit();
+        try std.testing.expect(generated_update_operations.count() == 0);
+    }
+
+    // Some people make newer votes
+    {
+        const pubkey_votes = [_]PubkeyVote{
+            // old, ignored
+            .{ .pubkey = vote_pubkeys[0], .slot_hash = .{ .slot = 3, .hash = Hash.ZEROES } },
+            // new, switched forks
+            .{ .pubkey = vote_pubkeys[1], .slot_hash = .{ .slot = 5, .hash = Hash.ZEROES } },
+            // new, same fork
+            .{ .pubkey = vote_pubkeys[2], .slot_hash = .{ .slot = 3, .hash = Hash.ZEROES } },
+        };
+
+        var expected_update_operations = blk: {
+            var operations = UpdateOperations.init(allocator);
+            errdefer operations.deinit();
+
+            // Add/remove from new/old forks
+            try operations.put(
+                .{ .slot_hash_key = .{ .slot = 3, .hash = Hash.ZEROES }, .label = .Add },
+                UpdateOperation{ .Add = stake },
+            );
+            try operations.put(
+                .{ .slot_hash_key = .{ .slot = 5, .hash = Hash.ZEROES }, .label = .Add },
+                UpdateOperation{ .Add = stake },
+            );
+            try operations.put(
+                .{ .slot_hash_key = .{ .slot = 1, .hash = Hash.ZEROES }, .label = .Subtract },
+                UpdateOperation{ .Subtract = stake },
+            );
+            try operations.put(
+                .{ .slot_hash_key = .{ .slot = 4, .hash = Hash.ZEROES }, .label = .Subtract },
+                UpdateOperation{ .Subtract = stake },
+            );
+            // Aggregate all ancestors of changed slots
+            try operations.put(
+                .{ .slot_hash_key = .{ .slot = 0, .hash = Hash.ZEROES }, .label = .Aggregate },
+                UpdateOperation.Aggregate,
+            );
+            try operations.put(
+                .{ .slot_hash_key = .{ .slot = 1, .hash = Hash.ZEROES }, .label = .Aggregate },
+                UpdateOperation.Aggregate,
+            );
+            try operations.put(
+                .{ .slot_hash_key = .{ .slot = 2, .hash = Hash.ZEROES }, .label = .Aggregate },
+                UpdateOperation.Aggregate,
+            );
+            try operations.put(
+                .{ .slot_hash_key = .{ .slot = 3, .hash = Hash.ZEROES }, .label = .Aggregate },
+                UpdateOperation.Aggregate,
+            );
+
+            break :blk operations;
+        };
+        defer expected_update_operations.deinit();
+
+        var generated_update_operations = try fork_choice.generateUpdateOperations(
+            allocator,
+            &pubkey_votes,
+            &epoch_stakes,
+            &EpochSchedule.DEFAULT,
+        );
+        defer generated_update_operations.deinit();
+
+        try std.testing.expect(
+            try isUpdateOpsEqual(
+                &expected_update_operations,
+                &generated_update_operations,
+            ),
+        );
+    }
+
+    // People make new votes
+    {
+        const pubkey_votes = [_]PubkeyVote{
+            // new, switch forks
+            .{ .pubkey = vote_pubkeys[0], .slot_hash = .{ .slot = 4, .hash = Hash.ZEROES } },
+            // new, same fork
+            .{ .pubkey = vote_pubkeys[1], .slot_hash = .{ .slot = 6, .hash = Hash.ZEROES } },
+            // new, same fork
+            .{ .pubkey = vote_pubkeys[2], .slot_hash = .{ .slot = 6, .hash = Hash.ZEROES } },
+        };
+
+        var expected_update_operations = blk: {
+            var operations = UpdateOperations.init(allocator);
+            errdefer operations.deinit();
+
+            // Add/remove from new/old forks
+            try operations.put(
+                .{ .slot_hash_key = .{ .slot = 4, .hash = Hash.ZEROES }, .label = .Add },
+                UpdateOperation{ .Add = stake },
+            );
+            try operations.put(
+                .{ .slot_hash_key = .{ .slot = 6, .hash = Hash.ZEROES }, .label = .Add },
+                UpdateOperation{ .Add = stake },
+            );
+            try operations.put(
+                .{ .slot_hash_key = .{ .slot = 3, .hash = Hash.ZEROES }, .label = .Subtract },
+                UpdateOperation{ .Subtract = stake },
+            );
+            try operations.put(
+                .{ .slot_hash_key = .{ .slot = 5, .hash = Hash.ZEROES }, .label = .Subtract },
+                UpdateOperation{ .Subtract = stake },
+            );
+            // Aggregate all ancestors of changed slots
+            try operations.put(
+                .{ .slot_hash_key = .{ .slot = 0, .hash = Hash.ZEROES }, .label = .Aggregate },
+                UpdateOperation.Aggregate,
+            );
+            try operations.put(
+                .{ .slot_hash_key = .{ .slot = 1, .hash = Hash.ZEROES }, .label = .Aggregate },
+                UpdateOperation.Aggregate,
+            );
+            try operations.put(
+                .{ .slot_hash_key = .{ .slot = 2, .hash = Hash.ZEROES }, .label = .Aggregate },
+                UpdateOperation.Aggregate,
+            );
+            try operations.put(
+                .{ .slot_hash_key = .{ .slot = 3, .hash = Hash.ZEROES }, .label = .Aggregate },
+                UpdateOperation.Aggregate,
+            );
+            try operations.put(
+                .{ .slot_hash_key = .{ .slot = 5, .hash = Hash.ZEROES }, .label = .Aggregate },
+                UpdateOperation.Aggregate,
+            );
+
+            break :blk operations;
+        };
+        defer expected_update_operations.deinit();
+
+        var generated_update_operations = try fork_choice.generateUpdateOperations(
+            allocator,
+            &pubkey_votes,
+            &epoch_stakes,
+            &EpochSchedule.DEFAULT,
+        );
+        defer generated_update_operations.deinit();
+
+        try std.testing.expect(
+            try isUpdateOpsEqual(
+                &expected_update_operations,
+                &generated_update_operations,
+            ),
+        );
+    }
+}
+
 pub fn forkChoiceForTest(
     allocator: std.mem.Allocator,
     forks: []const TreeNode,
