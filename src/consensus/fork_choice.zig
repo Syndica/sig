@@ -1393,6 +1393,39 @@ pub const ForkChoice = struct {
         };
     }
 
+    pub fn computeBankStats(
+        self: *ForkChoice,
+        allocator: std.mem.Allocator,
+        epoch_stakes: *const AutoHashMap(Epoch, VersionedEpochStakes),
+        epoch_schedule: *const EpochSchedule,
+        latest_validator_votes: *LatestValidatorVotes,
+    ) !void {
+        const root = self.tree_root.slot;
+
+        var new_votes = std.ArrayListUnmanaged(PubkeyVote).empty;
+        defer new_votes.deinit(allocator);
+
+        const news = try latest_validator_votes.takeVotesDirtySet(
+            allocator,
+            root,
+        );
+        defer allocator.free(news);
+
+        for (news) |vote_tuple| {
+            try new_votes.append(allocator, .{
+                .pubkey = vote_tuple[0],
+                .slot_hash = vote_tuple[1],
+            });
+        }
+
+        _ = try self.addVotes(
+            allocator,
+            new_votes.items,
+            epoch_stakes,
+            epoch_schedule,
+        );
+    }
+
     /// Split off the node at `slot_hash_key` and propagate the stake subtraction up to the root of the
     /// tree.
     ///
