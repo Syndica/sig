@@ -4133,8 +4133,7 @@ pub const TestFixture = struct {
         {
             var it = self.epoch_stake_map.iterator();
             while (it.next()) |entry| {
-                entry.value_ptr.stakes.deinit(allocator);
-                entry.value_ptr.epoch_authorized_voters.deinit(allocator);
+                entry.value_ptr.deinit(allocator);
             }
             self.epoch_stake_map.deinit(allocator);
         }
@@ -4227,11 +4226,7 @@ pub const TestFixture = struct {
         allocator: std.mem.Allocator,
         random: std.Random,
     ) !void {
-        var epoch_stakes: EpochStakes = try EpochStakes.initRandom(
-            allocator,
-            random,
-            1,
-        );
+        var epoch_stakes = try EpochStakes.initEmpty(allocator);
         epoch_stakes.total_stake = 1000;
         epoch_stakes.stakes.deinit(allocator);
         epoch_stakes.stakes = try Stakes(.delegation).initRandom(
