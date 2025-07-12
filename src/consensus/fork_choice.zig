@@ -11,9 +11,19 @@ const Pubkey = sig.core.Pubkey;
 const SortedMap = sig.utils.collections.SortedMap;
 const SlotAndHash = sig.core.hash.SlotAndHash;
 const Slot = sig.core.Slot;
+const Epoch = sig.core.Epoch;
+const VersionedEpochStakes = sig.core.VersionedEpochStakes;
+const EpochSchedule = sig.core.EpochSchedule;
 const ReplayTower = sig.consensus.replay_tower.ReplayTower;
+const LatestValidatorVotes =
+    sig.consensus.latest_validator_votes.LatestValidatorVotes;
 
-const UpdateLabel = enum {
+const PubkeyVote = struct {
+    pubkey: Pubkey,
+    slot_hash: SlotAndHash,
+};
+const PubkeyVote = struct {
+    pubkey: Pubkey,
     Aggregate,
     MarkValid,
     MarkInvalid,
@@ -354,6 +364,27 @@ pub const ForkChoice = struct {
             return fork_info.height;
         }
         return null;
+    }
+
+    pub fn addVotes(
+        self: *ForkChoice,
+        allocator: std.mem.Allocator,
+        pubkey_votes: []const PubkeyVote,
+        epoch_stakes: *const AutoHashMap(Epoch, VersionedEpochStakes),
+        epoch_schedule: *const EpochSchedule,
+    ) !SlotAndHash {
+        // Generate the set of updates
+        var update_ops = try self.generateUpdateOperations(
+            allocator,
+            pubkey_votes,
+            epoch_stakes,
+            epoch_schedule,
+        );
+        defer update_ops.deinit();
+
+        // Finalize all updates
+        self.processUpdateOperations(&update_ops);
+        return self.heaviestOverallSlot();
     }
 
     /// [Agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L358
