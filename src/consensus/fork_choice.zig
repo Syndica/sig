@@ -2884,8 +2884,7 @@ test "HeaviestSubtreeForkChoice.heaviestSlotOnSameVotedFork_missing_candidate" {
     );
 }
 
-// Analogous to [test_generate_update_operations](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L2312)
-test "HeaviestSubtreeForkChoice.generateUpdateOperations" {
+test "HeaviestSubtreeForkChoice.GenerateUpdateOperations" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(91);
     const random = prng.random();
@@ -2898,11 +2897,11 @@ test "HeaviestSubtreeForkChoice.generateUpdateOperations" {
     const versioned_stakes = try testEpochStakes(allocator, &vote_pubkeys, stake, random);
     defer versioned_stakes.deinit(allocator);
 
-    var epoch_stakes = EpochStakesMap.empty;
-    defer epoch_stakes.deinit(test_allocator);
+    var epoch_stakes = AutoHashMap(Epoch, VersionedEpochStakes).init(allocator);
+    defer epoch_stakes.deinit();
 
-    try epoch_stakes.put(test_allocator, 0, versioned_stakes);
-    try epoch_stakes.put(test_allocator, 1, versioned_stakes);
+    try epoch_stakes.put(0, versioned_stakes);
+    try epoch_stakes.put(1, versioned_stakes);
 
     var fork_choice = try forkChoiceForTest(test_allocator, fork_tuples[0..]);
     defer fork_choice.deinit();
@@ -3128,1554 +3127,247 @@ test "HeaviestSubtreeForkChoice.generateUpdateOperations" {
     }
 }
 
-// Analogous to [add_root_parent](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L426)
-test "HeaviestSubtreeForkChoice.addRootParent" {
+test "HeaviestSubtreeForkChoice.testGenerateUpdateOperations" {
+    const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(91);
     const random = prng.random();
-    const vote_pubkeys = [_]Pubkey{Pubkey.initRandom(random)};
-    // Build fork structure:
-    // slot 3
-    //   |
-    // slot 4
-    //   |
-    // slot 5
-    const tree = [_]TreeNode{
-        .{
-            SlotAndHash{ .slot = 4, .hash = Hash.ZEROES },
-            SlotAndHash{ .slot = 3, .hash = Hash.ZEROES },
-        },
-        .{
-            SlotAndHash{ .slot = 5, .hash = Hash.ZEROES },
-            SlotAndHash{ .slot = 4, .hash = Hash.ZEROES },
-        },
-    };
-    var fork_choice = try forkChoiceForTest(test_allocator, tree[0..]);
-    defer fork_choice.deinit();
-
-    const stake: u64 = 100;
-    const versioned_stakes = try testEpochStakes(
-        test_allocator,
-        &vote_pubkeys,
-        stake,
-        random,
-    );
-    defer versioned_stakes.deinit(test_allocator);
-
-    var epoch_stakes = EpochStakesMap.empty;
-    defer epoch_stakes.deinit(test_allocator);
-
-    try epoch_stakes.put(test_allocator, 0, versioned_stakes);
-
-    const pubkey_votes = [_]PubkeyVote{
-        .{ .pubkey = vote_pubkeys[0], .slot_hash = .{
-            .slot = 5,
-            .hash = Hash.ZEROES,
-        } },
-    };
-
-    _ = try fork_choice.addVotes(
-        test_allocator,
-        &pubkey_votes,
-        &epoch_stakes,
-        &EpochSchedule.DEFAULT,
-    );
-
-    try fork_choice.addRootParent(.{ .slot = 2, .hash = Hash.ZEROES });
-
-    try std.testing.expectEqual(
-        SlotAndHash{ .slot = 2, .hash = Hash.ZEROES },
-        fork_choice.getParent(&.{ .slot = 3, .hash = Hash.ZEROES }).?,
-    );
-
-    try std.testing.expectEqual(
-        stake,
-        fork_choice.stakeForSubtree(&.{ .slot = 3, .hash = Hash.ZEROES }).?,
-    );
-
-    try std.testing.expectEqual(
-        0,
-        fork_choice.stakeForSlot(&.{ .slot = 2, .hash = Hash.ZEROES }).?,
-    );
-
-    var children = fork_choice.getChildren(&.{ .slot = 2, .hash = Hash.ZEROES }).?;
-    try std.testing.expectEqual(1, children.count());
-    try std.testing.expectEqual(
-        SlotAndHash{ .slot = 3, .hash = Hash.ZEROES },
-        children.keys()[0],
-    );
-
-    try std.testing.expectEqual(
-        SlotAndHash{ .slot = 5, .hash = Hash.ZEROES },
-        fork_choice.heaviestSlot(.{ .slot = 2, .hash = Hash.ZEROES }).?,
-    );
-
-    try std.testing.expectEqual(
-        SlotAndHash{ .slot = 5, .hash = Hash.ZEROES },
-        fork_choice.deepestSlot(&.{ .slot = 2, .hash = Hash.ZEROES }).?,
-    );
-
-    try std.testing.expectEqual(
-        null,
-        fork_choice.getParent(&.{ .slot = 2, .hash = Hash.ZEROES }),
-    );
-}
-
-// Analogous to [test_add_votes](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L2493)
-test "HeaviestSubtreeForkChoice.addVotes" {
-    var prng = std.Random.DefaultPrng.init(91);
-    const random = prng.random();
-    const stake: u64 = 100;
+    const stake = 100;
     const vote_pubkeys = [_]Pubkey{
         Pubkey.initRandom(random),
         Pubkey.initRandom(random),
         Pubkey.initRandom(random),
     };
+    const versioned_stakes = try testEpochStakes(allocator, &vote_pubkeys, stake, random);
+    defer versioned_stakes.deinit(allocator);
 
-    const versioned_stakes = try testEpochStakes(
-        test_allocator,
-        &vote_pubkeys,
-        stake,
-        random,
-    );
-    defer versioned_stakes.deinit(test_allocator);
+    var epoch_stakes = AutoHashMap(Epoch, VersionedEpochStakes).init(allocator);
+    defer epoch_stakes.deinit();
 
-    var epoch_stakes = EpochStakesMap.empty;
-    defer epoch_stakes.deinit(test_allocator);
-
-    try epoch_stakes.put(test_allocator, 0, versioned_stakes);
+    try epoch_stakes.put(0, versioned_stakes);
+    try epoch_stakes.put(1, versioned_stakes);
 
     var fork_choice = try forkChoiceForTest(test_allocator, fork_tuples[0..]);
     defer fork_choice.deinit();
 
-    const pubkey_votes = [_]PubkeyVote{
-        .{ .pubkey = vote_pubkeys[0], .slot_hash = .{ .slot = 3, .hash = Hash.ZEROES } },
-        .{ .pubkey = vote_pubkeys[1], .slot_hash = .{ .slot = 2, .hash = Hash.ZEROES } },
-        .{ .pubkey = vote_pubkeys[2], .slot_hash = .{ .slot = 1, .hash = Hash.ZEROES } },
-    };
+    {
+        const pubkey_votes = [_]PubkeyVote{
+            .{ .pubkey = vote_pubkeys[0], .slot_hash = .{ .slot = 3, .hash = Hash.ZEROES } },
+            .{ .pubkey = vote_pubkeys[1], .slot_hash = .{ .slot = 4, .hash = Hash.ZEROES } },
+            .{ .pubkey = vote_pubkeys[2], .slot_hash = .{ .slot = 1, .hash = Hash.ZEROES } },
+        };
 
-    const deepest_slot = try fork_choice.addVotes(
-        test_allocator,
-        &pubkey_votes,
-        &epoch_stakes,
-        &EpochSchedule.DEFAULT,
-    );
+        var expected_update_operations = blk: {
+            var operations = UpdateOperations.init(allocator);
+            errdefer operations.deinit();
 
-    try std.testing.expectEqual(
-        SlotAndHash{ .slot = 4, .hash = Hash.ZEROES },
-        deepest_slot,
-    );
-
-    try std.testing.expectEqual(
-        SlotAndHash{ .slot = 4, .hash = Hash.ZEROES },
-        fork_choice.heaviestOverallSlot(),
-    );
-}
-
-// Analogous to [test_add_votes_duplicate_greater_hash_ignored](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L2616)
-test "HeaviestSubtreeForkChoice.addVotesDuplicateGreaterHashIgnored" {
-    var prng = std.Random.DefaultPrng.init(91);
-    const random = prng.random();
-    const vote_pubkeys = [_]Pubkey{
-        Pubkey.initRandom(random),
-        Pubkey.initRandom(random),
-    };
-
-    const stake: u64 = 10;
-
-    const duplicate_fork = try setupDuplicateForks();
-    defer duplicate_fork.deinit(test_allocator);
-
-    const duplicate_leaves_descended_from_4 = duplicate_fork.duplicate_leaves_descended_from_4;
-    const duplicate_leaves_descended_from_6 = duplicate_fork.duplicate_leaves_descended_from_6;
-
-    const pubkey_votes = [_]PubkeyVote{
-        .{ .pubkey = vote_pubkeys[0], .slot_hash = duplicate_leaves_descended_from_4[0] },
-        .{ .pubkey = vote_pubkeys[1], .slot_hash = duplicate_leaves_descended_from_4[1] },
-    };
-
-    var fork_choice = duplicate_fork.fork_choice;
-    defer fork_choice.deinit();
-
-    const versioned_stakes = try testEpochStakes(
-        test_allocator,
-        &vote_pubkeys,
-        stake,
-        random,
-    );
-    defer versioned_stakes.deinit(test_allocator);
-
-    var epoch_stakes = EpochStakesMap.empty;
-    defer epoch_stakes.deinit(test_allocator);
-
-    try epoch_stakes.put(test_allocator, 0, versioned_stakes);
-
-    // duplicate_leaves_descended_from_4 are sorted, and fork choice will pick the smaller
-    // one in the event of a tie
-    const expected_best_slot_hash = duplicate_leaves_descended_from_4[0];
-    try std.testing.expectEqual(expected_best_slot_hash, try fork_choice.addVotes(
-        test_allocator,
-        &pubkey_votes,
-        &epoch_stakes,
-        &EpochSchedule.DEFAULT,
-    ));
-    // we tie break the duplicate_leaves_descended_from_6 and pick the smaller one
-    // for deepest
-    const expected_deepest_slot_hash = duplicate_leaves_descended_from_6[1];
-    try std.testing.expectEqual(
-        expected_deepest_slot_hash,
-        fork_choice.deepestOverallSlot(),
-    );
-    // Adding a duplicate vote for a validator, for another a greater bank hash,
-    // should be ignored as we prioritize the smaller bank hash. Thus nothing
-    // should change.
-    const pubkey_votes2 = [_]PubkeyVote{
-        .{ .pubkey = vote_pubkeys[0], .slot_hash = duplicate_leaves_descended_from_4[1] },
-    };
-    try std.testing.expectEqual(expected_best_slot_hash, try fork_choice.addVotes(
-        test_allocator,
-        &pubkey_votes2,
-        &epoch_stakes,
-        &EpochSchedule.DEFAULT,
-    ));
-    try std.testing.expectEqual(
-        expected_deepest_slot_hash,
-        fork_choice.deepestOverallSlot(),
-    );
-
-    // Still only has one validator voting on it
-    try std.testing.expectEqual(
-        stake,
-        fork_choice.stakeForSubtree(&duplicate_leaves_descended_from_4[1]),
-    );
-    try std.testing.expectEqual(
-        stake,
-        fork_choice.stakeForSlot(&duplicate_leaves_descended_from_4[1]),
-    );
-
-    // All common ancestors should have subtree voted stake == 2 * stake, but direct
-    // voted stake == 0
-    const expected_ancestors_stake = 2 * stake;
-    var ancestor_iter = fork_choice.ancestorIterator(duplicate_leaves_descended_from_4[1]);
-    while (ancestor_iter.next()) |ancestor| {
-        try std.testing.expectEqual(
-            expected_ancestors_stake,
-            fork_choice.stakeForSubtree(&ancestor).?,
-        );
-        try std.testing.expectEqual(
-            0,
-            fork_choice.stakeForSlot(&ancestor).?,
-        );
-    }
-}
-
-// Analogous to [test_add_votes_duplicate_smaller_hash_prioritized](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L2704)
-test "HeaviestSubtreeForkChoice.addVotesDuplicateSmallerHashPrioritized" {
-    var prng = std.Random.DefaultPrng.init(91);
-    const random = prng.random();
-    const vote_pubkeys = [_]Pubkey{
-        Pubkey.initRandom(random),
-        Pubkey.initRandom(random),
-    };
-
-    const stake: u64 = 10;
-
-    const duplicate_fork = try setupDuplicateForks();
-    defer duplicate_fork.deinit(test_allocator);
-
-    const duplicate_leaves_descended_from_4 = duplicate_fork.duplicate_leaves_descended_from_4;
-    const duplicate_leaves_descended_from_6 = duplicate_fork.duplicate_leaves_descended_from_6;
-
-    // Both voters voted on duplicate_leaves_descended_from_4[1], so thats the heaviest
-    // branch
-    const pubkey_votes = [_]PubkeyVote{
-        .{ .pubkey = vote_pubkeys[0], .slot_hash = duplicate_leaves_descended_from_4[1] },
-        .{ .pubkey = vote_pubkeys[1], .slot_hash = duplicate_leaves_descended_from_4[1] },
-    };
-
-    var fork_choice = duplicate_fork.fork_choice;
-    defer fork_choice.deinit();
-
-    const versioned_stakes = try testEpochStakes(
-        test_allocator,
-        &vote_pubkeys,
-        stake,
-        random,
-    );
-    defer versioned_stakes.deinit(test_allocator);
-
-    var epoch_stakes = EpochStakesMap.empty;
-    defer epoch_stakes.deinit(test_allocator);
-
-    try epoch_stakes.put(test_allocator, 0, versioned_stakes);
-
-    const expected_best_slot_hash = duplicate_leaves_descended_from_4[1];
-    try std.testing.expectEqual(expected_best_slot_hash, try fork_choice.addVotes(
-        test_allocator,
-        &pubkey_votes,
-        &epoch_stakes,
-        &EpochSchedule.DEFAULT,
-    ));
-    const expected_deepest_slot_hash = duplicate_leaves_descended_from_6[1];
-
-    try std.testing.expectEqual(
-        expected_deepest_slot_hash,
-        fork_choice.deepestOverallSlot(),
-    );
-
-    // BEFORE, both validators voting on this leaf
-    try std.testing.expectEqual(
-        2 * stake,
-        fork_choice.stakeForSubtree(&duplicate_leaves_descended_from_4[1]),
-    );
-    try std.testing.expectEqual(
-        2 * stake,
-        fork_choice.stakeForSlot(&duplicate_leaves_descended_from_4[1]),
-    );
-
-    // Adding a duplicate vote for a validator, for another a smaller bank hash,
-    // should be proritized and replace the vote for the greater bank hash.
-    // Now because both duplicate nodes are tied, the best leaf is the smaller one.
-    const pubkey_votes2 = [_]PubkeyVote{
-        .{ .pubkey = vote_pubkeys[0], .slot_hash = duplicate_leaves_descended_from_4[0] },
-    };
-    const expected_best_slot_hash2 = duplicate_leaves_descended_from_4[0];
-    try std.testing.expectEqual(expected_best_slot_hash2, try fork_choice.addVotes(
-        test_allocator,
-        &pubkey_votes2,
-        &epoch_stakes,
-        &EpochSchedule.DEFAULT,
-    ));
-
-    // AFTER, only one of the validators is voting on this leaf
-    try std.testing.expectEqual(
-        stake,
-        fork_choice.stakeForSubtree(&duplicate_leaves_descended_from_4[1]),
-    );
-    try std.testing.expectEqual(
-        stake,
-        fork_choice.stakeForSlot(&duplicate_leaves_descended_from_4[1]),
-    );
-    try std.testing.expectEqual(
-        expected_deepest_slot_hash,
-        fork_choice.deepestOverallSlot(),
-    );
-
-    // The other leaf now has one of the votes
-    try std.testing.expectEqual(
-        stake,
-        fork_choice.stakeForSubtree(&duplicate_leaves_descended_from_4[0]),
-    );
-    try std.testing.expectEqual(
-        stake,
-        fork_choice.stakeForSlot(&duplicate_leaves_descended_from_4[0]),
-    );
-
-    // All common ancestors should have subtree voted stake == 2 * stake, but direct
-    // voted stake == 0
-    const expected_ancestors_stake = 2 * stake;
-    var ancestor_iter = fork_choice.ancestorIterator(duplicate_leaves_descended_from_4[0]);
-    while (ancestor_iter.next()) |ancestor| {
-        try std.testing.expectEqual(
-            expected_ancestors_stake,
-            fork_choice.stakeForSubtree(&ancestor).?,
-        );
-        try std.testing.expectEqual(
-            0,
-            fork_choice.stakeForSlot(&ancestor).?,
-        );
-    }
-}
-
-// Analogous to [test_add_votes_duplicate_then_outdated](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L2821)
-test "HeaviestSubtreeForkChoice.addVotesDuplicateThenOutdated" {
-    var prng = std.Random.DefaultPrng.init(91);
-    const random = prng.random();
-    const vote_pubkeys = [_]Pubkey{
-        Pubkey.initRandom(random),
-        Pubkey.initRandom(random),
-        Pubkey.initRandom(random),
-    };
-
-    const stake: u64 = 10;
-
-    const duplicate_fork = try setupDuplicateForks();
-    defer duplicate_fork.deinit(test_allocator);
-
-    const duplicate_leaves_descended_from_4 = duplicate_fork.duplicate_leaves_descended_from_4;
-
-    const pubkey_votes = [_]PubkeyVote{
-        .{ .pubkey = vote_pubkeys[0], .slot_hash = duplicate_leaves_descended_from_4[0] },
-        .{ .pubkey = vote_pubkeys[1], .slot_hash = duplicate_leaves_descended_from_4[1] },
-    };
-
-    var fork_choice = duplicate_fork.fork_choice;
-    defer fork_choice.deinit();
-
-    const versioned_stakes = try testEpochStakes(
-        test_allocator,
-        &vote_pubkeys,
-        stake,
-        random,
-    );
-    defer versioned_stakes.deinit(test_allocator);
-
-    var epoch_stakes = EpochStakesMap.empty;
-    defer epoch_stakes.deinit(test_allocator);
-
-    try epoch_stakes.put(test_allocator, 0, versioned_stakes);
-
-    // duplicate_leaves_descended_from_4 are sorted, and fork choice will pick the smaller
-    // one in the event of a tie
-    const expected_best_slot_hash = duplicate_leaves_descended_from_4[0];
-    try std.testing.expectEqual(expected_best_slot_hash, try fork_choice.addVotes(
-        test_allocator,
-        &pubkey_votes,
-        &epoch_stakes,
-        &EpochSchedule.DEFAULT,
-    ));
-
-    // Create two children for slots greater than the duplicate slot,
-    // 1) descended from the current best slot (which also happens to be a duplicate slot)
-    // 2) another descended from a non-duplicate slot.
-    try std.testing.expectEqual(
-        duplicate_leaves_descended_from_4[0],
-        fork_choice.heaviestOverallSlot(),
-    );
-
-    // Create new child with heaviest duplicate parent
-    const duplicate_parent = duplicate_leaves_descended_from_4[0];
-    const duplicate_slot = duplicate_parent.slot;
-
-    // Create new child with non-duplicate parent
-    const nonduplicate_parent = SlotAndHash{ .slot = 2, .hash = Hash.ZEROES };
-    const higher_child_with_duplicate_parent = SlotAndHash{
-        .slot = duplicate_slot + 1,
-        .hash = Hash.initRandom(random),
-    };
-    const higher_child_with_nonduplicate_parent = SlotAndHash{
-        .slot = duplicate_slot + 2,
-        .hash = Hash.initRandom(random),
-    };
-
-    try fork_choice.addNewLeafSlot(higher_child_with_duplicate_parent, duplicate_parent);
-    try fork_choice.addNewLeafSlot(higher_child_with_nonduplicate_parent, nonduplicate_parent);
-
-    // vote_pubkeys[0] and vote_pubkeys[1] should both have their latest votes
-    // erased after a vote for a higher parent
-    const pubkey_votes2 = [_]PubkeyVote{
-        .{ .pubkey = vote_pubkeys[0], .slot_hash = higher_child_with_duplicate_parent },
-        .{ .pubkey = vote_pubkeys[1], .slot_hash = higher_child_with_nonduplicate_parent },
-        .{ .pubkey = vote_pubkeys[2], .slot_hash = higher_child_with_nonduplicate_parent },
-    };
-    const expected_best_slot_hash2 = higher_child_with_nonduplicate_parent;
-    try std.testing.expectEqual(expected_best_slot_hash2, try fork_choice.addVotes(
-        test_allocator,
-        &pubkey_votes2,
-        &epoch_stakes,
-        &EpochSchedule.DEFAULT,
-    ));
-
-    // All the stake directly voting on the duplicates have been outdated
-    for (duplicate_leaves_descended_from_4, 0..) |duplicate_leaf, i| {
-        try std.testing.expectEqual(
-            0,
-            fork_choice.stakeForSlot(&duplicate_leaf),
-        );
-
-        if (i == 0) {
-            // The subtree stake of the first duplicate however, has one vote still
-            // because it's the parent of the `higher_child_with_duplicate_parent`,
-            // which has one vote
-            try std.testing.expectEqual(
-                stake,
-                fork_choice.stakeForSubtree(&duplicate_leaf),
+            // Add/remove from new/old forks
+            try operations.put(
+                .{ .slot_hash_key = .{ .slot = 1, .hash = Hash.ZEROES }, .label = .Add },
+                UpdateOperation{ .Add = stake },
             );
-        } else {
-            try std.testing.expectEqual(
-                0,
-                fork_choice.stakeForSubtree(&duplicate_leaf),
+            try operations.put(
+                .{ .slot_hash_key = .{ .slot = 3, .hash = Hash.ZEROES }, .label = .Add },
+                UpdateOperation{ .Add = stake },
             );
-        }
-    }
-
-    // Node 4 has subtree voted stake == stake since it only has one voter on it
-    const node4 = SlotAndHash{ .slot = 4, .hash = Hash.ZEROES };
-    try std.testing.expectEqual(
-        stake,
-        fork_choice.stakeForSubtree(&node4),
-    );
-    try std.testing.expectEqual(
-        0,
-        fork_choice.stakeForSlot(&node4),
-    );
-
-    // All ancestors of 4 should have subtree voted stake == num_validators * stake,
-    // but direct voted stake == 0
-    const expected_ancestors_stake = vote_pubkeys.len * stake;
-    var ancestor_iter = fork_choice.ancestorIterator(node4);
-    while (ancestor_iter.next()) |ancestor| {
-        try std.testing.expectEqual(
-            expected_ancestors_stake,
-            fork_choice.stakeForSubtree(&ancestor).?,
-        );
-        try std.testing.expectEqual(
-            0,
-            fork_choice.stakeForSlot(&ancestor).?,
-        );
-    }
-}
-
-// Analogous to [test_add_votes_duplicate_tie](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L2518)
-test "HeaviestSubtreeForkChoice.addVotesDuplicateTie" {
-    var prng = std.Random.DefaultPrng.init(91);
-    const random = prng.random();
-    const vote_pubkeys = [_]Pubkey{
-        Pubkey.initRandom(random),
-        Pubkey.initRandom(random),
-    };
-
-    const stake: u64 = 10;
-
-    const duplicate_fork = try setupDuplicateForks();
-    defer duplicate_fork.deinit(test_allocator);
-
-    const duplicate_leaves_descended_from_4 = duplicate_fork.duplicate_leaves_descended_from_4;
-    const duplicate_leaves_descended_from_6 = duplicate_fork.duplicate_leaves_descended_from_6;
-
-    const pubkey_votes = [_]PubkeyVote{
-        .{ .pubkey = vote_pubkeys[0], .slot_hash = duplicate_leaves_descended_from_4[0] },
-        .{ .pubkey = vote_pubkeys[1], .slot_hash = duplicate_leaves_descended_from_4[1] },
-    };
-
-    var fork_choice = duplicate_fork.fork_choice;
-    defer fork_choice.deinit();
-
-    const versioned_stakes = try testEpochStakes(
-        test_allocator,
-        &vote_pubkeys,
-        stake,
-        random,
-    );
-    defer versioned_stakes.deinit(test_allocator);
-
-    var epoch_stakes = EpochStakesMap.empty;
-    defer epoch_stakes.deinit(test_allocator);
-
-    try epoch_stakes.put(test_allocator, 0, versioned_stakes);
-
-    // duplicate_leaves_descended_from_4 are sorted, and fork choice will pick the smaller
-    // one in the event of a tie
-    const expected_best_slot_hash = duplicate_leaves_descended_from_4[0];
-    try std.testing.expectEqual(expected_best_slot_hash, try fork_choice.addVotes(
-        test_allocator,
-        &pubkey_votes,
-        &epoch_stakes,
-        &EpochSchedule.DEFAULT,
-    ));
-    try std.testing.expectEqual(
-        expected_best_slot_hash,
-        fork_choice.heaviestOverallSlot(),
-    );
-
-    // we tie break the duplicate_leaves_descended_from_6 and pick the smaller one
-    // for deepest
-    const expected_deepest_slot_hash = duplicate_leaves_descended_from_6[1];
-    try std.testing.expectEqual(
-        expected_deepest_slot_hash,
-        fork_choice.deepestSlot(&SlotAndHash{ .slot = 3, .hash = Hash.ZEROES }).?,
-    );
-    try std.testing.expectEqual(
-        expected_deepest_slot_hash,
-        fork_choice.deepestOverallSlot(),
-    );
-
-    // Adding the same vote again will not do anything
-    const pubkey_votes2 = [_]PubkeyVote{
-        .{ .pubkey = vote_pubkeys[1], .slot_hash = duplicate_leaves_descended_from_4[1] },
-    };
-    try std.testing.expectEqual(expected_best_slot_hash, try fork_choice.addVotes(
-        test_allocator,
-        &pubkey_votes2,
-        &epoch_stakes,
-        &EpochSchedule.DEFAULT,
-    ));
-
-    try std.testing.expectEqual(
-        stake,
-        fork_choice.stakeForSubtree(&duplicate_leaves_descended_from_4[1]),
-    );
-    try std.testing.expectEqual(
-        stake,
-        fork_choice.stakeForSlot(&duplicate_leaves_descended_from_4[1]),
-    );
-    try std.testing.expectEqual(
-        expected_deepest_slot_hash,
-        fork_choice.deepestOverallSlot(),
-    );
-
-    // All common ancestors should have subtree voted stake == 2 * stake, but direct
-    // voted stake == 0
-    const expected_ancestors_stake = 2 * stake;
-    var ancestor_iter = fork_choice.ancestorIterator(duplicate_leaves_descended_from_4[1]);
-    while (ancestor_iter.next()) |ancestor| {
-        try std.testing.expectEqual(
-            expected_ancestors_stake,
-            fork_choice.stakeForSubtree(&ancestor).?,
-        );
-        try std.testing.expectEqual(
-            0,
-            fork_choice.stakeForSlot(&ancestor).?,
-        );
-    }
-}
-
-// Analogous to [test_add_votes_duplicate_zero_stake](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L2947)
-test "HeaviestSubtreeForkChoice.addVotesDuplicateZeroStake" {
-    var prng = std.Random.DefaultPrng.init(91);
-    const random = prng.random();
-    const vote_pubkeys = [_]Pubkey{
-        Pubkey.initRandom(random),
-        Pubkey.initRandom(random),
-    };
-
-    const stake: u64 = 0;
-
-    const duplicate_fork = try setupDuplicateForks();
-    defer duplicate_fork.deinit(test_allocator);
-
-    const duplicate_leaves_descended_from_4 = duplicate_fork.duplicate_leaves_descended_from_4;
-
-    var fork_choice = duplicate_fork.fork_choice;
-    defer fork_choice.deinit();
-
-    const versioned_stakes = try testEpochStakes(
-        test_allocator,
-        &vote_pubkeys,
-        stake,
-        random,
-    );
-    defer versioned_stakes.deinit(test_allocator);
-
-    var epoch_stakes = EpochStakesMap.empty;
-    defer epoch_stakes.deinit(test_allocator);
-
-    try epoch_stakes.put(test_allocator, 0, versioned_stakes);
-
-    // Make new vote with vote_pubkeys[0] for a higher slot
-    // Create new child with heaviest duplicate parent
-    const duplicate_parent = duplicate_leaves_descended_from_4[0];
-    const duplicate_slot = duplicate_parent.slot;
-    const higher_child_with_duplicate_parent = SlotAndHash{
-        .slot = duplicate_slot + 1,
-        .hash = Hash.initRandom(random),
-    };
-    try fork_choice.addNewLeafSlot(higher_child_with_duplicate_parent, duplicate_parent);
-
-    // Vote for pubkey 0 on one of the duplicate slots
-    const pubkey_votes = [_]PubkeyVote{
-        .{ .pubkey = vote_pubkeys[0], .slot_hash = duplicate_leaves_descended_from_4[1] },
-    };
-
-    // Stake is zero, so because duplicate_leaves_descended_from_4[0] and
-    // duplicate_leaves_descended_from_4[1] are tied, the child of the smaller
-    // node duplicate_leaves_descended_from_4[0] is the one that is picked
-    const expected_best_slot_hash = higher_child_with_duplicate_parent;
-    try std.testing.expectEqual(expected_best_slot_hash, try fork_choice.addVotes(
-        test_allocator,
-        &pubkey_votes,
-        &epoch_stakes,
-        &EpochSchedule.DEFAULT,
-    ));
-    try std.testing.expectEqual(
-        duplicate_leaves_descended_from_4[1],
-        fork_choice.latest_votes.get(vote_pubkeys[0]).?,
-    );
-
-    // Now add a vote for a higher slot, and ensure the latest votes
-    // for this pubkey were updated
-    const pubkey_votes2 = [_]PubkeyVote{
-        .{ .pubkey = vote_pubkeys[0], .slot_hash = higher_child_with_duplicate_parent },
-    };
-
-    try std.testing.expectEqual(expected_best_slot_hash, try fork_choice.addVotes(
-        test_allocator,
-        &pubkey_votes2,
-        &epoch_stakes,
-        &EpochSchedule.DEFAULT,
-    ));
-    try std.testing.expectEqual(
-        higher_child_with_duplicate_parent,
-        fork_choice.latest_votes.get(vote_pubkeys[0]).?,
-    );
-}
-
-// Analogous to [test_is_best_child](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L3015)
-test "HeaviestSubtreeForkChoice.isBestChild" {
-    var prng = std.Random.DefaultPrng.init(91);
-    const random = prng.random();
-    const vote_pubkeys = [_]Pubkey{
-        Pubkey.initRandom(random),
-        Pubkey.initRandom(random),
-        Pubkey.initRandom(random),
-    };
-
-    // Build fork structure:
-    //      slot 0
-    //        |
-    //      slot 4
-    //     /      \
-    // slot 10   slot 9
-    const tree = [_]TreeNode{
-        .{
-            SlotAndHash{ .slot = 4, .hash = Hash.ZEROES },
-            SlotAndHash{ .slot = 0, .hash = Hash.ZEROES },
-        },
-        .{
-            SlotAndHash{ .slot = 9, .hash = Hash.ZEROES },
-            SlotAndHash{ .slot = 4, .hash = Hash.ZEROES },
-        },
-        .{
-            SlotAndHash{ .slot = 10, .hash = Hash.ZEROES },
-            SlotAndHash{ .slot = 4, .hash = Hash.ZEROES },
-        },
-    };
-
-    var fork_choice = try forkChoiceForTest(
-        test_allocator,
-        tree[0..],
-    );
-    defer fork_choice.deinit();
-
-    try std.testing.expect(
-        try fork_choice.isHeaviestChild(
-            &SlotAndHash{ .slot = 0, .hash = Hash.ZEROES },
-        ),
-    );
-    try std.testing.expect(
-        try fork_choice.isHeaviestChild(
-            &SlotAndHash{ .slot = 4, .hash = Hash.ZEROES },
-        ),
-    );
-
-    // 9 is better than 10
-    try std.testing.expect(
-        try fork_choice.isHeaviestChild(
-            &SlotAndHash{ .slot = 9, .hash = Hash.ZEROES },
-        ),
-    );
-    try std.testing.expect(
-        !(try fork_choice.isHeaviestChild(&SlotAndHash{ .slot = 10, .hash = Hash.ZEROES })),
-    );
-
-    // Add new leaf 8, which is better than 9, as both have weight 0
-    try fork_choice.addNewLeafSlot(
-        SlotAndHash{ .slot = 8, .hash = Hash.ZEROES },
-        SlotAndHash{ .slot = 4, .hash = Hash.ZEROES },
-    );
-    try std.testing.expect(
-        try fork_choice.isHeaviestChild(&SlotAndHash{ .slot = 8, .hash = Hash.ZEROES }),
-    );
-    try std.testing.expect(
-        !(try fork_choice.isHeaviestChild(&SlotAndHash{ .slot = 9, .hash = Hash.ZEROES })),
-    );
-    try std.testing.expect(
-        !(try fork_choice.isHeaviestChild(&SlotAndHash{ .slot = 10, .hash = Hash.ZEROES })),
-    );
-
-    // Add vote for 9, it's the best again
-    const stake: u64 = 100;
-    const versioned_stakes = try testEpochStakes(
-        test_allocator,
-        &vote_pubkeys,
-        stake,
-        random,
-    );
-    defer versioned_stakes.deinit(test_allocator);
-
-    var epoch_stakes = EpochStakesMap.empty;
-    defer epoch_stakes.deinit(test_allocator);
-
-    try epoch_stakes.put(test_allocator, 0, versioned_stakes);
-
-    const pubkey_votes = [_]PubkeyVote{
-        .{ .pubkey = vote_pubkeys[0], .slot_hash = SlotAndHash{ .slot = 9, .hash = Hash.ZEROES } },
-    };
-
-    _ = try fork_choice.addVotes(
-        test_allocator,
-        &pubkey_votes,
-        &epoch_stakes,
-        &EpochSchedule.DEFAULT,
-    );
-
-    try std.testing.expect(
-        try fork_choice.isHeaviestChild(&SlotAndHash{ .slot = 9, .hash = Hash.ZEROES }),
-    );
-    try std.testing.expect(
-        !(try fork_choice.isHeaviestChild(&SlotAndHash{ .slot = 8, .hash = Hash.ZEROES })),
-    );
-    try std.testing.expect(
-        !(try fork_choice.isHeaviestChild(&SlotAndHash{ .slot = 10, .hash = Hash.ZEROES })),
-    );
-}
-
-// Analogous to [test_mark_invalid_then_add_new_heavier_duplicate_slot](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L3589)
-test "HeaviestSubtreeForkChoice.markInvalidThenAddNewHeavierDuplicateSlot" {
-    var prng = std.Random.DefaultPrng.init(91);
-    const random = prng.random();
-    const vote_pubkeys = [_]Pubkey{
-        Pubkey.initRandom(random),
-        Pubkey.initRandom(random),
-    };
-
-    const stake: u64 = 100;
-    // Setup a fork structure with duplicates and mark one as invalid
-    const duplicate_fork = try setupDuplicateForks();
-    defer duplicate_fork.deinit(test_allocator);
-
-    const duplicate_leaves_descended_from_4 = duplicate_fork.duplicate_leaves_descended_from_4;
-
-    var fork_choice = duplicate_fork.fork_choice;
-    defer fork_choice.deinit();
-
-    // Mark one of the duplicate leaves as invalid
-    try fork_choice.markForkInvalidCandidate(&duplicate_leaves_descended_from_4[1]);
-
-    const versioned_stakes = try testEpochStakes(
-        test_allocator,
-        &vote_pubkeys,
-        stake,
-        random,
-    );
-    defer versioned_stakes.deinit(test_allocator);
-
-    var epoch_stakes = EpochStakesMap.empty;
-    defer epoch_stakes.deinit(test_allocator);
-
-    try epoch_stakes.put(test_allocator, 0, versioned_stakes);
-
-    // If we add a new version of the duplicate slot that is not descended from the invalid
-    // candidate and votes for that duplicate slot, the new duplicate slot should be picked
-    // once it has more weight
-    const new_duplicate_hash = Hash.ZEROES;
-
-    // The hash has to be smaller in order for the votes to be counted
-    try std.testing.expect(
-        new_duplicate_hash.order(&duplicate_leaves_descended_from_4[0].hash) == .lt,
-    );
-    const duplicate_slot = duplicate_leaves_descended_from_4[0].slot;
-    const new_duplicate = SlotAndHash{ .slot = duplicate_slot, .hash = new_duplicate_hash };
-    try fork_choice.addNewLeafSlot(new_duplicate, SlotAndHash{ .slot = 3, .hash = Hash.ZEROES });
-
-    const pubkey_votes = [_]PubkeyVote{
-        .{ .pubkey = vote_pubkeys[0], .slot_hash = new_duplicate },
-        .{ .pubkey = vote_pubkeys[1], .slot_hash = new_duplicate },
-    };
-
-    _ = try fork_choice.addVotes(
-        test_allocator,
-        &pubkey_votes,
-        &epoch_stakes,
-        &EpochSchedule.DEFAULT,
-    );
-
-    try std.testing.expectEqual(
-        new_duplicate,
-        fork_choice.heaviestOverallSlot(),
-    );
-}
-
-// Analogous to [test_mark_valid_invalid_forks](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L3383)
-test "HeaviestSubtreeForkChoice.markValidInvalidForks" {
-    var prng = std.Random.DefaultPrng.init(91);
-    const random = prng.random();
-    const vote_pubkeys = [_]Pubkey{
-        Pubkey.initRandom(random),
-        Pubkey.initRandom(random),
-        Pubkey.initRandom(random),
-    };
-
-    // Create fork choice with the standard test fork structure
-    var fork_choice = try forkChoiceForTest(test_allocator, fork_tuples[0..]);
-    defer fork_choice.deinit();
-
-    const stake: u64 = 100;
-    const versioned_stakes = try testEpochStakes(
-        test_allocator,
-        &vote_pubkeys,
-        stake,
-        random,
-    );
-    defer versioned_stakes.deinit(test_allocator);
-
-    var epoch_stakes = EpochStakesMap.empty;
-    defer epoch_stakes.deinit(test_allocator);
-
-    try epoch_stakes.put(test_allocator, 0, versioned_stakes);
-
-    const pubkey_votes = [_]PubkeyVote{
-        .{ .pubkey = vote_pubkeys[0], .slot_hash = SlotAndHash{ .slot = 6, .hash = Hash.ZEROES } },
-        .{ .pubkey = vote_pubkeys[1], .slot_hash = SlotAndHash{ .slot = 6, .hash = Hash.ZEROES } },
-        .{ .pubkey = vote_pubkeys[2], .slot_hash = SlotAndHash{ .slot = 2, .hash = Hash.ZEROES } },
-    };
-    const expected_best_slot = SlotAndHash{ .slot = 6, .hash = Hash.ZEROES };
-    try std.testing.expectEqual(expected_best_slot, try fork_choice.addVotes(
-        test_allocator,
-        &pubkey_votes,
-        &epoch_stakes,
-        &EpochSchedule.DEFAULT,
-    ));
-    try std.testing.expectEqual(
-        expected_best_slot,
-        fork_choice.deepestOverallSlot(),
-    );
-
-    // Simulate a vote on slot 5
-    const last_voted_slot_hash = SlotAndHash{ .slot = 5, .hash = Hash.ZEROES };
-    var replay_tower = try createTestReplayTower(10, 0.9);
-    defer replay_tower.deinit(test_allocator);
-    _ = try replay_tower.recordBankVote(
-        test_allocator,
-        last_voted_slot_hash.slot,
-        last_voted_slot_hash.hash,
-    );
-
-    // The heaviest_slot_on_same_voted_fork() should be 6, descended from 5.
-    try std.testing.expectEqual(
-        SlotAndHash{ .slot = 6, .hash = Hash.ZEROES },
-        (try fork_choice.heaviestSlotOnSameVotedFork(&replay_tower)).?,
-    );
-
-    // Mark slot 5 as invalid
-    const invalid_candidate = last_voted_slot_hash;
-    try fork_choice.markForkInvalidCandidate(&invalid_candidate);
-    try std.testing.expect(!fork_choice.isCandidate(&invalid_candidate).?);
-
-    // The ancestor 3 is still a candidate
-    try std.testing.expect(
-        fork_choice.isCandidate(&SlotAndHash{ .slot = 3, .hash = Hash.ZEROES }).?,
-    );
-
-    // The best fork should be its ancestor 3, not the other fork at 4.
-    try std.testing.expectEqual(3, fork_choice.heaviestOverallSlot().slot);
-
-    // After marking the last vote in the tower as invalid, `heaviest_slot_on_same_voted_fork()`
-    // should instead use the deepest slot metric, which is still 6
-    try std.testing.expectEqual(
-        SlotAndHash{ .slot = 6, .hash = Hash.ZEROES },
-        (try fork_choice.heaviestSlotOnSameVotedFork(&replay_tower)).?,
-    );
-
-    // Adding another descendant to the invalid candidate won't
-    // update the best slot, even if it contains votes
-    const new_leaf7 = SlotAndHash{ .slot = 7, .hash = Hash.ZEROES };
-    try fork_choice.addNewLeafSlot(new_leaf7, SlotAndHash{ .slot = 6, .hash = Hash.ZEROES });
-    const invalid_slot_ancestor: u64 = 3;
-    try std.testing.expectEqual(
-        invalid_slot_ancestor,
-        fork_choice.heaviestOverallSlot().slot,
-    );
-    const pubkey_votes2 = [_]PubkeyVote{
-        .{ .pubkey = vote_pubkeys[0], .slot_hash = new_leaf7 },
-    };
-    try std.testing.expectEqual(
-        SlotAndHash{ .slot = invalid_slot_ancestor, .hash = Hash.ZEROES },
-        try fork_choice.addVotes(
-            test_allocator,
-            &pubkey_votes2,
-            &epoch_stakes,
-            &EpochSchedule.DEFAULT,
-        ),
-    );
-
-    // However this should update the `heaviest_slot_on_same_voted_fork` since we use
-    // deepest metric for invalid forks
-    try std.testing.expectEqual(
-        new_leaf7,
-        (try fork_choice.heaviestSlotOnSameVotedFork(&replay_tower)).?,
-    );
-
-    // Adding a descendant to the ancestor of the invalid candidate *should* update
-    // the best slot though, since the ancestor is on the heaviest fork
-    const new_leaf8 = SlotAndHash{ .slot = 8, .hash = Hash.ZEROES };
-    try fork_choice.addNewLeafSlot(
-        new_leaf8,
-        SlotAndHash{ .slot = invalid_slot_ancestor, .hash = Hash.ZEROES },
-    );
-    try std.testing.expectEqual(new_leaf8, fork_choice.heaviestOverallSlot());
-    // Should not update the `heaviest_slot_on_same_voted_fork` because the new leaf
-    // is not descended from the last vote
-    try std.testing.expectEqual(
-        new_leaf7,
-        (try fork_choice.heaviestSlotOnSameVotedFork(&replay_tower)).?,
-    );
-
-    // If we mark slot a descendant of `invalid_candidate` as valid, then that
-    // should also mark `invalid_candidate` as valid, and the best slot should
-    // be the leaf of the heaviest fork, `new_leaf_slot`.
-    var conformed_ancestors = try fork_choice.markForkValidCandidate(&invalid_candidate);
-    defer conformed_ancestors.deinit();
-
-    try std.testing.expect(fork_choice.isCandidate(&invalid_candidate).?);
-    try std.testing.expectEqual(
-        // Should pick the smaller slot of the two new equally weighted leaves
-        new_leaf7,
-        fork_choice.heaviestOverallSlot(),
-    );
-    // Should update the `heaviest_slot_on_same_voted_fork` as well
-    try std.testing.expectEqual(
-        new_leaf7,
-        (try fork_choice.heaviestSlotOnSameVotedFork(&replay_tower)).?,
-    );
-}
-
-// Analogous to [test_set_root_and_add_votes](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L1717)
-test "HeaviestSubtreeForkChoice.setRootAndAddVotes" {
-    var fork_choice = try forkChoiceForTest(test_allocator, fork_tuples[0..]);
-    defer fork_choice.deinit();
-
-    var prng = std.Random.DefaultPrng.init(91);
-    const random = prng.random();
-    const stake: u64 = 100;
-    const vote_pubkeys = [_]Pubkey{
-        Pubkey.initRandom(random),
-    };
-
-    const versioned_stakes = try testEpochStakes(
-        test_allocator,
-        &vote_pubkeys,
-        stake,
-        random,
-    );
-    defer versioned_stakes.deinit(test_allocator);
-
-    var epoch_stakes = EpochStakesMap.empty;
-    defer epoch_stakes.deinit(test_allocator);
-
-    try epoch_stakes.put(test_allocator, 0, versioned_stakes);
-
-    // Vote for slot 2
-    const pubkey_votes1 = [_]PubkeyVote{
-        .{ .pubkey = vote_pubkeys[0], .slot_hash = .{ .slot = 2, .hash = Hash.ZEROES } },
-    };
-
-    _ = try fork_choice.addVotes(
-        test_allocator,
-        &pubkey_votes1,
-        &epoch_stakes,
-        &EpochSchedule.DEFAULT,
-    );
-    try std.testing.expectEqual(4, fork_choice.heaviestOverallSlot().slot);
-
-    // Set a root
-    try fork_choice.setTreeRoot(&.{ .slot = 1, .hash = Hash.ZEROES });
-
-    // Vote again for slot 3 on a different fork than the last vote,
-    // verify this fork is now the best fork
-    const pubkey_votes2 = [_]PubkeyVote{
-        .{ .pubkey = vote_pubkeys[0], .slot_hash = .{ .slot = 3, .hash = Hash.ZEROES } },
-    };
-
-    _ = try fork_choice.addVotes(
-        test_allocator,
-        &pubkey_votes2,
-        &epoch_stakes,
-        &EpochSchedule.DEFAULT,
-    );
-
-    try std.testing.expectEqual(6, fork_choice.heaviestOverallSlot().slot);
-    try std.testing.expectEqual(
-        0,
-        fork_choice.stakeForSlot(&.{ .slot = 1, .hash = Hash.ZEROES }).?,
-    );
-    try std.testing.expectEqual(
-        stake,
-        fork_choice.stakeForSlot(&.{ .slot = 3, .hash = Hash.ZEROES }).?,
-    );
-
-    for ([_]u64{ 1, 3 }) |slot| {
-        try std.testing.expectEqual(
-            stake,
-            fork_choice.stakeForSubtree(&.{ .slot = slot, .hash = Hash.ZEROES }).?,
-        );
-    }
-
-    // Set a root at last vote
-    try fork_choice.setTreeRoot(&.{ .slot = 3, .hash = Hash.ZEROES });
-
-    // Check new leaf 7 is still propagated properly
-    try fork_choice.addNewLeafSlot(
-        .{ .slot = 7, .hash = Hash.ZEROES },
-        .{ .slot = 6, .hash = Hash.ZEROES },
-    );
-    try std.testing.expectEqual(7, fork_choice.heaviestOverallSlot().slot);
-}
-
-// Analogous to [test_split_off_on_best_path](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L4013)
-test "HeaviestSubtreeForkChoice.splitOffOnBestPath" {
-    var fork_choice = try forkChoiceForTest(test_allocator, fork_tuples[0..]);
-    defer fork_choice.deinit();
-
-    var prng = std.Random.DefaultPrng.init(91);
-    const random = prng.random();
-    const stake: u64 = 100;
-
-    const vote_pubkeys = [_]Pubkey{
-        Pubkey.initRandom(random),
-        Pubkey.initRandom(random),
-        Pubkey.initRandom(random),
-        Pubkey.initRandom(random),
-    };
-
-    const pubkey_votes = [_]PubkeyVote{
-        .{ .pubkey = vote_pubkeys[0], .slot_hash = .{ .slot = 2, .hash = Hash.ZEROES } },
-        .{ .pubkey = vote_pubkeys[1], .slot_hash = .{ .slot = 3, .hash = Hash.ZEROES } },
-        .{ .pubkey = vote_pubkeys[2], .slot_hash = .{ .slot = 5, .hash = Hash.ZEROES } },
-        .{ .pubkey = vote_pubkeys[3], .slot_hash = .{ .slot = 6, .hash = Hash.ZEROES } },
-    };
-
-    const versioned_stakes = try testEpochStakes(
-        test_allocator,
-        &vote_pubkeys,
-        stake,
-        random,
-    );
-    defer versioned_stakes.deinit(test_allocator);
-
-    var epoch_stakes = EpochStakesMap.empty;
-    defer epoch_stakes.deinit(test_allocator);
-
-    try epoch_stakes.put(test_allocator, 0, versioned_stakes);
-
-    _ = try fork_choice.addVotes(
-        test_allocator,
-        &pubkey_votes,
-        &epoch_stakes,
-        &EpochSchedule.DEFAULT,
-    );
-
-    try std.testing.expectEqual(6, fork_choice.heaviestOverallSlot().slot);
-
-    // Split off at 6
-    var split_tree_6 = try fork_choice.splitOff(test_allocator, .{ .slot = 6, .hash = Hash.ZEROES });
-    defer split_tree_6.deinit();
-    try std.testing.expectEqual(5, fork_choice.heaviestOverallSlot().slot);
-    try std.testing.expectEqual(6, split_tree_6.heaviestOverallSlot().slot);
-
-    // Split off at 3
-    var split_tree_3 = try fork_choice.splitOff(test_allocator, .{ .slot = 3, .hash = Hash.ZEROES });
-    defer split_tree_3.deinit();
-    try std.testing.expectEqual(4, fork_choice.heaviestOverallSlot().slot);
-    try std.testing.expectEqual(5, split_tree_3.heaviestOverallSlot().slot);
-
-    // Split off at 1
-    var split_tree_1 = try fork_choice.splitOff(test_allocator, .{ .slot = 1, .hash = Hash.ZEROES });
-    defer split_tree_1.deinit();
-    try std.testing.expectEqual(0, fork_choice.heaviestOverallSlot().slot);
-    try std.testing.expectEqual(4, split_tree_1.heaviestOverallSlot().slot);
-}
-
-// Analogous to [test_split_off_simple](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L3906)
-test "HeaviestSubtreeForkChoice.splitOffSimple" {
-    var fork_choice = try forkChoiceForTest(test_allocator, fork_tuples[0..]);
-    defer fork_choice.deinit();
-
-    var prng = std.Random.DefaultPrng.init(91);
-    const random = prng.random();
-    const stake: u64 = 100;
-
-    const vote_pubkeys = [_]Pubkey{
-        Pubkey.initRandom(random),
-        Pubkey.initRandom(random),
-        Pubkey.initRandom(random),
-        Pubkey.initRandom(random),
-    };
-
-    const pubkey_votes = [_]PubkeyVote{
-        .{ .pubkey = vote_pubkeys[0], .slot_hash = .{ .slot = 3, .hash = Hash.ZEROES } },
-        .{ .pubkey = vote_pubkeys[1], .slot_hash = .{ .slot = 2, .hash = Hash.ZEROES } },
-        .{ .pubkey = vote_pubkeys[2], .slot_hash = .{ .slot = 6, .hash = Hash.ZEROES } },
-        .{ .pubkey = vote_pubkeys[3], .slot_hash = .{ .slot = 4, .hash = Hash.ZEROES } },
-    };
-
-    const versioned_stakes = try testEpochStakes(
-        test_allocator,
-        &vote_pubkeys,
-        stake,
-        random,
-    );
-    defer versioned_stakes.deinit(test_allocator);
-
-    var epoch_stakes = EpochStakesMap.empty;
-    defer epoch_stakes.deinit(test_allocator);
-
-    try epoch_stakes.put(test_allocator, 0, versioned_stakes);
-
-    _ = try fork_choice.addVotes(
-        test_allocator,
-        &pubkey_votes,
-        &epoch_stakes,
-        &EpochSchedule.DEFAULT,
-    );
-
-    var tree = try fork_choice.splitOff(test_allocator, .{ .slot = 5, .hash = Hash.ZEROES });
-    defer tree.deinit();
-
-    try std.testing.expectEqual(
-        3 * stake,
-        fork_choice.stakeForSubtree(&.{ .slot = 0, .hash = Hash.ZEROES }).?,
-    );
-    try std.testing.expectEqual(
-        2 * stake,
-        fork_choice.stakeForSubtree(&.{ .slot = 2, .hash = Hash.ZEROES }).?,
-    );
-    try std.testing.expectEqual(
-        stake,
-        fork_choice.stakeForSubtree(&.{ .slot = 3, .hash = Hash.ZEROES }).?,
-    );
-    try std.testing.expectEqual(
-        null,
-        fork_choice.stakeForSubtree(&.{ .slot = 5, .hash = Hash.ZEROES }),
-    );
-    try std.testing.expectEqual(
-        null,
-        fork_choice.stakeForSubtree(&.{ .slot = 6, .hash = Hash.ZEROES }),
-    );
-    try std.testing.expectEqual(
-        stake,
-        tree.stakeForSubtree(&.{ .slot = 5, .hash = Hash.ZEROES }).?,
-    );
-    try std.testing.expectEqual(
-        stake,
-        tree.stakeForSubtree(&.{ .slot = 6, .hash = Hash.ZEROES }).?,
-    );
-
-    try std.testing.expectEqual(
-        null,
-        tree.fork_infos.get(tree.tree_root).?.parent,
-    );
-}
-
-// Analogous to [test_split_off_subtree_with_dups](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L4173)
-test "HeaviestSubtreeForkChoice.splitOffSubtreeWithDups" {
-    var prng = std.Random.DefaultPrng.init(91);
-    const random = prng.random();
-    const vote_pubkeys = [_]Pubkey{
-        Pubkey.initRandom(random),
-        Pubkey.initRandom(random),
-        Pubkey.initRandom(random),
-    };
-
-    const stake: u64 = 10;
-
-    const duplicate_fork = try setupDuplicateForks();
-    defer duplicate_fork.deinit(test_allocator);
-
-    const duplicate_leaves_descended_from_4 = duplicate_fork.duplicate_leaves_descended_from_4;
-    const duplicate_leaves_descended_from_5 = duplicate_fork.duplicate_leaves_descended_from_5;
-    const duplicate_leaves_descended_from_6 = duplicate_fork.duplicate_leaves_descended_from_6;
-
-    var fork_choice = duplicate_fork.fork_choice;
-
-    defer fork_choice.deinit();
-
-    const pubkey_votes = [_]PubkeyVote{
-        .{ .pubkey = vote_pubkeys[0], .slot_hash = duplicate_leaves_descended_from_4[0] },
-        .{ .pubkey = vote_pubkeys[1], .slot_hash = duplicate_leaves_descended_from_4[1] },
-        .{ .pubkey = vote_pubkeys[2], .slot_hash = duplicate_leaves_descended_from_5[0] },
-    };
-
-    const versioned_stakes = try testEpochStakes(
-        test_allocator,
-        &vote_pubkeys,
-        stake,
-        random,
-    );
-    defer versioned_stakes.deinit(test_allocator);
-
-    var epoch_stakes = EpochStakesMap.empty;
-    defer epoch_stakes.deinit(test_allocator);
-
-    try epoch_stakes.put(test_allocator, 0, versioned_stakes);
-
-    // duplicate_leaves_descended_from_4 are sorted, and fork choice will pick the smaller
-    // one in the event of a tie
-    const expected_best_slot_hash = duplicate_leaves_descended_from_4[0];
-
-    try std.testing.expectEqual(
-        expected_best_slot_hash,
-        try fork_choice.addVotes(
-            test_allocator,
+            try operations.put(
+                .{ .slot_hash_key = .{ .slot = 4, .hash = Hash.ZEROES }, .label = .Add },
+                UpdateOperation{ .Add = stake },
+            );
+            // Aggregate all ancestors of changed slots
+            try operations.put(
+                .{ .slot_hash_key = .{ .slot = 0, .hash = Hash.ZEROES }, .label = .Aggregate },
+                UpdateOperation.Aggregate,
+            );
+            try operations.put(
+                .{ .slot_hash_key = .{ .slot = 1, .hash = Hash.ZEROES }, .label = .Aggregate },
+                UpdateOperation.Aggregate,
+            );
+            try operations.put(
+                .{ .slot_hash_key = .{ .slot = 2, .hash = Hash.ZEROES }, .label = .Aggregate },
+                UpdateOperation.Aggregate,
+            );
+
+            break :blk operations;
+        };
+        defer expected_update_operations.deinit();
+
+        var generated_update_operations = try fork_choice.generateUpdateOperations(
+            allocator,
             &pubkey_votes,
             &epoch_stakes,
             &EpochSchedule.DEFAULT,
-        ),
-    );
+        );
+        defer generated_update_operations.deinit();
 
-    try std.testing.expectEqual(
-        expected_best_slot_hash,
-        fork_choice.heaviestOverallSlot(),
-    );
+        try std.testing.expect(
+            try isUpdateOpsEqual(
+                &expected_update_operations,
+                &generated_update_operations,
+            ),
+        );
+    }
 
-    const expected_deepest_slot_hash = duplicate_leaves_descended_from_6[1];
-    try std.testing.expectEqual(
-        expected_deepest_slot_hash,
-        fork_choice.deepestOverallSlot(),
-    );
+    // Everyone makes older/same votes, should be ignored
+    {
+        const pubkey_votes = [_]PubkeyVote{
+            .{ .pubkey = vote_pubkeys[0], .slot_hash = .{ .slot = 3, .hash = Hash.ZEROES } },
+            .{ .pubkey = vote_pubkeys[1], .slot_hash = .{ .slot = 2, .hash = Hash.ZEROES } },
+            .{ .pubkey = vote_pubkeys[2], .slot_hash = .{ .slot = 1, .hash = Hash.ZEROES } },
+        };
 
-    var tree = try fork_choice.splitOff(test_allocator, .{ .slot = 2, .hash = Hash.ZEROES });
-    defer tree.deinit();
-
-    try std.testing.expectEqual(
-        duplicate_leaves_descended_from_5[0],
-        fork_choice.heaviestOverallSlot(),
-    );
-    try std.testing.expectEqual(
-        expected_deepest_slot_hash,
-        fork_choice.deepestOverallSlot(),
-    );
-
-    try std.testing.expectEqual(
-        expected_best_slot_hash,
-        tree.heaviestOverallSlot(),
-    );
-    try std.testing.expectEqual(
-        expected_best_slot_hash,
-        tree.deepestOverallSlot(),
-    );
-}
-
-// Analogous to [test_split_off_unvoted](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L3969)
-test "HeaviestSubtreeForkChoice.splitOffUnvoted" {
-    var fork_choice = try forkChoiceForTest(test_allocator, fork_tuples[0..]);
-    defer fork_choice.deinit();
-
-    var prng = std.Random.DefaultPrng.init(91);
-    const random = prng.random();
-    const stake: u64 = 100;
-
-    const vote_pubkeys = [_]Pubkey{
-        Pubkey.initRandom(random),
-        Pubkey.initRandom(random),
-        Pubkey.initRandom(random),
-        Pubkey.initRandom(random),
-    };
-
-    const pubkey_votes = [_]PubkeyVote{
-        .{ .pubkey = vote_pubkeys[0], .slot_hash = .{ .slot = 3, .hash = Hash.ZEROES } },
-        .{ .pubkey = vote_pubkeys[1], .slot_hash = .{ .slot = 5, .hash = Hash.ZEROES } },
-        .{ .pubkey = vote_pubkeys[2], .slot_hash = .{ .slot = 6, .hash = Hash.ZEROES } },
-        .{ .pubkey = vote_pubkeys[3], .slot_hash = .{ .slot = 1, .hash = Hash.ZEROES } },
-    };
-
-    const versioned_stakes = try testEpochStakes(
-        test_allocator,
-        &vote_pubkeys,
-        stake,
-        random,
-    );
-    defer versioned_stakes.deinit(test_allocator);
-
-    var epoch_stakes = EpochStakesMap.empty;
-    defer epoch_stakes.deinit(test_allocator);
-
-    try epoch_stakes.put(test_allocator, 0, versioned_stakes);
-
-    _ = try fork_choice.addVotes(
-        test_allocator,
-        &pubkey_votes,
-        &epoch_stakes,
-        &EpochSchedule.DEFAULT,
-    );
-
-    var tree = try fork_choice.splitOff(test_allocator, .{ .slot = 2, .hash = Hash.ZEROES });
-    defer tree.deinit();
-
-    try std.testing.expectEqual(
-        4 * stake,
-        fork_choice.stakeForSubtree(&.{ .slot = 0, .hash = Hash.ZEROES }).?,
-    );
-    try std.testing.expectEqual(
-        3 * stake,
-        fork_choice.stakeForSubtree(&.{ .slot = 3, .hash = Hash.ZEROES }).?,
-    );
-    try std.testing.expectEqual(
-        null,
-        fork_choice.stakeForSubtree(&.{ .slot = 2, .hash = Hash.ZEROES }),
-    );
-    try std.testing.expectEqual(
-        null,
-        fork_choice.stakeForSubtree(&.{ .slot = 4, .hash = Hash.ZEROES }),
-    );
-    try std.testing.expectEqual(
-        0,
-        tree.stakeForSubtree(&.{ .slot = 2, .hash = Hash.ZEROES }).?,
-    );
-    try std.testing.expectEqual(
-        0,
-        tree.stakeForSubtree(&.{ .slot = 4, .hash = Hash.ZEROES }).?,
-    );
-}
-
-// Analogous to [test_split_off_with_dups](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L4118)
-test "HeaviestSubtreeForkChoice.splitOffWithDups" {
-    var prng = std.Random.DefaultPrng.init(91);
-    const random = prng.random();
-    const vote_pubkeys = [_]Pubkey{
-        Pubkey.initRandom(random),
-        Pubkey.initRandom(random),
-        Pubkey.initRandom(random),
-    };
-
-    const stake: u64 = 10;
-
-    const duplicate_fork = try setupDuplicateForks();
-    defer duplicate_fork.deinit(test_allocator);
-
-    const duplicate_leaves_descended_from_4 = duplicate_fork.duplicate_leaves_descended_from_4;
-    const duplicate_leaves_descended_from_5 = duplicate_fork.duplicate_leaves_descended_from_5;
-    const duplicate_leaves_descended_from_6 = duplicate_fork.duplicate_leaves_descended_from_6;
-
-    var fork_choice = duplicate_fork.fork_choice;
-    defer fork_choice.deinit();
-
-    const pubkey_votes = [_]PubkeyVote{
-        .{ .pubkey = vote_pubkeys[0], .slot_hash = duplicate_leaves_descended_from_4[0] },
-        .{ .pubkey = vote_pubkeys[1], .slot_hash = duplicate_leaves_descended_from_4[1] },
-        .{ .pubkey = vote_pubkeys[2], .slot_hash = duplicate_leaves_descended_from_5[0] },
-    };
-
-    const versioned_stakes = try testEpochStakes(
-        test_allocator,
-        &vote_pubkeys,
-        stake,
-        random,
-    );
-    defer versioned_stakes.deinit(test_allocator);
-
-    var epoch_stakes = EpochStakesMap.empty;
-    defer epoch_stakes.deinit(test_allocator);
-
-    try epoch_stakes.put(test_allocator, 0, versioned_stakes);
-
-    // duplicate_leaves_descended_from_4 are sorted, and fork choice will pick the smaller
-    // one in the event of a tie
-    const expected_best_slot_hash = duplicate_leaves_descended_from_4[0];
-    try std.testing.expectEqual(
-        expected_best_slot_hash,
-        try fork_choice.addVotes(
-            test_allocator,
+        var generated_update_operations = try fork_choice.generateUpdateOperations(
+            allocator,
             &pubkey_votes,
             &epoch_stakes,
             &EpochSchedule.DEFAULT,
-        ),
-    );
+        );
+        defer generated_update_operations.deinit();
+        try std.testing.expect(generated_update_operations.count() == 0);
+    }
 
-    try std.testing.expectEqual(
-        expected_best_slot_hash,
-        fork_choice.heaviestOverallSlot(),
-    );
-    const expected_deepest_slot_hash = duplicate_leaves_descended_from_6[1];
-    try std.testing.expectEqual(
-        expected_deepest_slot_hash,
-        fork_choice.deepestOverallSlot(),
-    );
+    // Some people make newer votes
+    {
+        const pubkey_votes = [_]PubkeyVote{
+            // old, ignored
+            .{ .pubkey = vote_pubkeys[0], .slot_hash = .{ .slot = 3, .hash = Hash.ZEROES } },
+            // new, switched forks
+            .{ .pubkey = vote_pubkeys[1], .slot_hash = .{ .slot = 5, .hash = Hash.ZEROES } },
+            // new, same fork
+            .{ .pubkey = vote_pubkeys[2], .slot_hash = .{ .slot = 3, .hash = Hash.ZEROES } },
+        };
 
-    var tree = try fork_choice.splitOff(test_allocator, expected_best_slot_hash);
-    defer tree.deinit();
+        var expected_update_operations = blk: {
+            var operations = UpdateOperations.init(allocator);
+            errdefer operations.deinit();
 
-    try std.testing.expectEqual(
-        duplicate_leaves_descended_from_4[1],
-        fork_choice.heaviestOverallSlot(),
-    );
-    try std.testing.expectEqual(
-        expected_deepest_slot_hash,
-        fork_choice.deepestOverallSlot(),
-    );
-    try std.testing.expectEqual(
-        expected_best_slot_hash,
-        tree.heaviestOverallSlot(),
-    );
-    try std.testing.expectEqual(
-        expected_best_slot_hash,
-        tree.deepestOverallSlot(),
-    );
-}
+            // Add/remove from new/old forks
+            try operations.put(
+                .{ .slot_hash_key = .{ .slot = 3, .hash = Hash.ZEROES }, .label = .Add },
+                UpdateOperation{ .Add = stake },
+            );
+            try operations.put(
+                .{ .slot_hash_key = .{ .slot = 5, .hash = Hash.ZEROES }, .label = .Add },
+                UpdateOperation{ .Add = stake },
+            );
+            try operations.put(
+                .{ .slot_hash_key = .{ .slot = 1, .hash = Hash.ZEROES }, .label = .Subtract },
+                UpdateOperation{ .Subtract = stake },
+            );
+            try operations.put(
+                .{ .slot_hash_key = .{ .slot = 4, .hash = Hash.ZEROES }, .label = .Subtract },
+                UpdateOperation{ .Subtract = stake },
+            );
+            // Aggregate all ancestors of changed slots
+            try operations.put(
+                .{ .slot_hash_key = .{ .slot = 0, .hash = Hash.ZEROES }, .label = .Aggregate },
+                UpdateOperation.Aggregate,
+            );
+            try operations.put(
+                .{ .slot_hash_key = .{ .slot = 1, .hash = Hash.ZEROES }, .label = .Aggregate },
+                UpdateOperation.Aggregate,
+            );
+            try operations.put(
+                .{ .slot_hash_key = .{ .slot = 2, .hash = Hash.ZEROES }, .label = .Aggregate },
+                UpdateOperation.Aggregate,
+            );
+            try operations.put(
+                .{ .slot_hash_key = .{ .slot = 3, .hash = Hash.ZEROES }, .label = .Aggregate },
+                UpdateOperation.Aggregate,
+            );
 
-// Analogous to [test_gossip_vote_doesnt_affect_fork_choice](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/replay_stage.rs#L7538)
-test "HeaviestSubtreeForkChoice.gossipVoteDoesntAffectForkChoice" {
-    var fork_choice = try forkChoiceForTest(test_allocator, fork_tuples[0..]);
-    defer fork_choice.deinit();
+            break :blk operations;
+        };
+        defer expected_update_operations.deinit();
 
-    var prng = std.Random.DefaultPrng.init(91);
-    const random = prng.random();
-    const stake: u64 = 100;
+        var generated_update_operations = try fork_choice.generateUpdateOperations(
+            allocator,
+            &pubkey_votes,
+            &epoch_stakes,
+            &EpochSchedule.DEFAULT,
+        );
+        defer generated_update_operations.deinit();
 
-    const vote_pubkeys = [_]Pubkey{
-        Pubkey.initRandom(random),
-        Pubkey.initRandom(random),
-        Pubkey.initRandom(random),
-        Pubkey.initRandom(random),
-    };
+        try std.testing.expect(
+            try isUpdateOpsEqual(
+                &expected_update_operations,
+                &generated_update_operations,
+            ),
+        );
+    }
 
-    // Add votes to make slot 4 the best slot
-    const pubkey_votes = [_]PubkeyVote{
-        .{ .pubkey = vote_pubkeys[0], .slot_hash = .{ .slot = 4, .hash = Hash.ZEROES } },
-        .{ .pubkey = vote_pubkeys[1], .slot_hash = .{ .slot = 4, .hash = Hash.ZEROES } },
-        .{ .pubkey = vote_pubkeys[2], .slot_hash = .{ .slot = 4, .hash = Hash.ZEROES } },
-        .{ .pubkey = vote_pubkeys[3], .slot_hash = .{ .slot = 4, .hash = Hash.ZEROES } },
-    };
+    // People make new votes
+    {
+        const pubkey_votes = [_]PubkeyVote{
+            // new, switch forks
+            .{ .pubkey = vote_pubkeys[0], .slot_hash = .{ .slot = 4, .hash = Hash.ZEROES } },
+            // new, same fork
+            .{ .pubkey = vote_pubkeys[1], .slot_hash = .{ .slot = 6, .hash = Hash.ZEROES } },
+            // new, same fork
+            .{ .pubkey = vote_pubkeys[2], .slot_hash = .{ .slot = 6, .hash = Hash.ZEROES } },
+        };
 
-    const versioned_stakes = try testEpochStakes(
-        test_allocator,
-        &vote_pubkeys,
-        stake,
-        random,
-    );
-    defer versioned_stakes.deinit(test_allocator);
+        var expected_update_operations = blk: {
+            var operations = UpdateOperations.init(allocator);
+            errdefer operations.deinit();
 
-    var epoch_stakes = EpochStakesMap.empty;
-    defer epoch_stakes.deinit(test_allocator);
+            // Add/remove from new/old forks
+            try operations.put(
+                .{ .slot_hash_key = .{ .slot = 4, .hash = Hash.ZEROES }, .label = .Add },
+                UpdateOperation{ .Add = stake },
+            );
+            try operations.put(
+                .{ .slot_hash_key = .{ .slot = 6, .hash = Hash.ZEROES }, .label = .Add },
+                UpdateOperation{ .Add = stake },
+            );
+            try operations.put(
+                .{ .slot_hash_key = .{ .slot = 3, .hash = Hash.ZEROES }, .label = .Subtract },
+                UpdateOperation{ .Subtract = stake },
+            );
+            try operations.put(
+                .{ .slot_hash_key = .{ .slot = 5, .hash = Hash.ZEROES }, .label = .Subtract },
+                UpdateOperation{ .Subtract = stake },
+            );
+            // Aggregate all ancestors of changed slots
+            try operations.put(
+                .{ .slot_hash_key = .{ .slot = 0, .hash = Hash.ZEROES }, .label = .Aggregate },
+                UpdateOperation.Aggregate,
+            );
+            try operations.put(
+                .{ .slot_hash_key = .{ .slot = 1, .hash = Hash.ZEROES }, .label = .Aggregate },
+                UpdateOperation.Aggregate,
+            );
+            try operations.put(
+                .{ .slot_hash_key = .{ .slot = 2, .hash = Hash.ZEROES }, .label = .Aggregate },
+                UpdateOperation.Aggregate,
+            );
+            try operations.put(
+                .{ .slot_hash_key = .{ .slot = 3, .hash = Hash.ZEROES }, .label = .Aggregate },
+                UpdateOperation.Aggregate,
+            );
+            try operations.put(
+                .{ .slot_hash_key = .{ .slot = 5, .hash = Hash.ZEROES }, .label = .Aggregate },
+                UpdateOperation.Aggregate,
+            );
 
-    try epoch_stakes.put(test_allocator, 0, versioned_stakes);
+            break :blk operations;
+        };
+        defer expected_update_operations.deinit();
 
-    _ = try fork_choice.addVotes(
-        test_allocator,
-        &pubkey_votes,
-        &epoch_stakes,
-        &EpochSchedule.DEFAULT,
-    );
+        var generated_update_operations = try fork_choice.generateUpdateOperations(
+            allocator,
+            &pubkey_votes,
+            &epoch_stakes,
+            &EpochSchedule.DEFAULT,
+        );
+        defer generated_update_operations.deinit();
 
-    // Best slot is 4
-    try std.testing.expectEqual(4, fork_choice.heaviestOverallSlot().slot);
-
-    // Create latest validator votes and add a gossip vote for slot 3
-    var latest_validator_votes = LatestValidatorVotes.empty;
-    defer latest_validator_votes.deinit(test_allocator);
-
-    const vote_pubkey = vote_pubkeys[0];
-    const vote_slot: u64 = 3;
-    const vote_hash = Hash.ZEROES;
-
-    // Add a gossip vote (is_replay_vote = false) for slot 3
-    _ = try latest_validator_votes.checkAddVote(
-        test_allocator,
-        vote_pubkey,
-        vote_slot,
-        vote_hash,
-        .replay, // is_replay_vote = false for gossip vote
-    );
-
-    // Call computeBankStats - gossip votes shouldn't affect fork choice
-    try fork_choice.computeBankStats(
-        test_allocator,
-        &epoch_stakes,
-        &EpochSchedule.DEFAULT,
-        &latest_validator_votes,
-    );
-
-    // Best slot is still 4 (gossip vote didn't affect fork choice)
-    try std.testing.expectEqual(4, fork_choice.heaviestOverallSlot().slot);
+        try std.testing.expect(
+            try isUpdateOpsEqual(
+                &expected_update_operations,
+                &generated_update_operations,
+            ),
+        );
+    }
 }
 
 pub fn forkChoiceForTest(
