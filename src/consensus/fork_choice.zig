@@ -453,33 +453,36 @@ pub const ForkChoice = struct {
         self.last_root_time = Instant.now();
     }
 
+    /// Analogous to [add_root_parent](https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L421)
+    ///
     /// Adds a new root parent to the fork choice tree. This is used when we need to
     /// insert a new slot that becomes the root of the entire tree.
     ///
-    /// It expects `root_parent.slot` to be less than `self.tree_root.slot`
-    /// and `root_parent` must not already exist in the fork choice.
+    /// # Arguments
+    /// * `root_parent` - The new root parent slot to add
     ///
-    /// Analogous to [add_root_parent](https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L421)
-    pub fn addRootParent(self: *ForkChoice, root_parent: SlotAndHash) std.mem.Allocator.Error!void {
+    /// # Preconditions
+    /// * `root_parent.slot` must be less than `self.tree_root.slot`
+    /// * `root_parent` must not already exist in the fork choice
+    pub fn addRootParent(self: *ForkChoice, root_parent: SlotAndHash) !void {
         // Assert that the new root parent has a smaller slot than the current root
         std.debug.assert(root_parent.slot < self.tree_root.slot);
         // Assert that the root parent doesn't already exist
         std.debug.assert(!self.fork_infos.contains(root_parent));
-        // Assert that the current root exists in fork_infos
-        std.debug.assert(self.fork_infos.contains(self.tree_root));
 
-        // Get the current root's fork info (safe due to previous assertion)
-        const root_info = self.fork_infos.getPtr(self.tree_root).?;
+        // Get the current root's fork info
+        const root_info = self.fork_infos.getPtr(self.tree_root) orelse
+            return error.MissingForkInfo;
 
         // Set the current root's parent to the new root parent
         root_info.parent = root_parent;
 
-        try self.fork_infos.ensureUnusedCapacity(1);
         // Create the new root parent's fork info
         var root_parent_children = SortedMap(SlotAndHash, void).init(self.allocator);
         try root_parent_children.put(self.tree_root, {});
-        self.fork_infos.putAssumeCapacityNoClobber(root_parent, .{
-            .logger = .from(self.logger),
+
+        const root_parent_info = ForkInfo{
+            .logger = self.logger.withScope(@typeName(ForkInfo)),
             .stake_for_slot = 0,
             .stake_for_subtree = root_info.stake_for_subtree,
             .height = root_info.height + 1,
@@ -490,7 +493,9 @@ pub const ForkChoice = struct {
             .parent = null,
             .latest_duplicate_ancestor = null,
             .is_duplicate_confirmed = root_info.is_duplicate_confirmed,
-        });
+        };
+
+        try self.fork_infos.put(root_parent, root_parent_info);
         self.tree_root = root_parent;
     }
 
