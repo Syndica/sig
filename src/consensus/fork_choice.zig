@@ -1410,51 +1410,11 @@ pub const ForkChoice = struct {
         };
     }
 
-    /// Updates fork choice statistics by processing new validator votes.
-    ///
-    /// Analogous to [compute_bank_stats](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L1250)
-    pub fn computeBankStats(
-        self: *ForkChoice,
-        allocator: std.mem.Allocator,
-        epoch_stakes: *const EpochStakesMap,
-        epoch_schedule: *const EpochSchedule,
-        latest_validator_votes: *LatestValidatorVotes,
-    ) !void {
-        const root = self.tree_root.slot;
-
-        var new_votes = std.ArrayListUnmanaged(PubkeyVote).empty;
-        defer new_votes.deinit(allocator);
-
-        const dirty_votest = try latest_validator_votes.takeVotesDirtySet(
-            allocator,
-            root,
-        );
-        defer allocator.free(dirty_votest);
-
-        try new_votes.ensureUnusedCapacity(allocator, dirty_votest.len);
-        for (dirty_votest) |vote_tuple| {
-            const pubkey, const slot_hash = vote_tuple;
-            new_votes.appendAssumeCapacity(.{
-                .pubkey = pubkey,
-                .slot_hash = slot_hash,
-            });
-        }
-
-        _ = try self.addVotes(
-            allocator,
-            new_votes.items,
-            epoch_stakes,
-            epoch_schedule,
-        );
-    }
-
     /// Split off the node at `slot_hash_key` and propagate the stake subtraction up to the root of the
     /// tree.
     ///
     /// Assumes that `slot_hash_key` is not the `tree_root`
     /// Returns the subtree originating from `slot_hash_key`
-    ///
-    /// Analogous to [split_off](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L581)
     pub fn splitOff(
         self: *ForkChoice,
         allocator: std.mem.Allocator,
@@ -1465,10 +1425,10 @@ pub const ForkChoice = struct {
         }
         std.debug.assert(!self.tree_root.equals(slot_hash_key));
 
-        var split_tree_root = self.fork_infos.get(slot_hash_key) orelse
+        const node_to_split_at = self.fork_infos.getPtr(slot_hash_key) orelse
             return error.SlotHashKeyNotFound;
-        const parent = split_tree_root.parent orelse
-            return error.SplitNodeIsRoot;
+        var split_tree_root = node_to_split_at.*;
+        const parent = node_to_split_at.parent orelse return error.SplitNodeIsRoot;
 
         var update_operations = UpdateOperations.init(allocator);
         defer update_operations.deinit();
