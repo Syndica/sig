@@ -1174,6 +1174,95 @@ pub const ForkChoice = struct {
             .fork_infos = &self.fork_infos,
         };
     }
+
+    /// Split off the node at `slot_hash_key` and propagate the stake subtraction up to the root of the
+    /// tree.
+    ///
+    /// Assumes that `slot_hash_key` is not the `tree_root`
+    /// Returns the subtree originating from `slot_hash_key`
+    pub fn splitOff(
+        self: *ForkChoice,
+        allocator: std.mem.Allocator,
+        slot_hash_key: SlotAndHash,
+    ) !ForkChoice {
+        if (!builtin.is_test) {
+            @compileError("splitOff should only be used in test");
+        }
+        std.debug.assert(!self.tree_root.equals(slot_hash_key));
+
+        const node_to_split_at = self.fork_infos.getPtr(slot_hash_key) orelse
+            return error.SlotHashKeyNotFound;
+        var split_tree_root = node_to_split_at.*;
+        const parent = node_to_split_at.parent orelse return error.SplitNodeIsRoot;
+
+        var update_operations = UpdateOperations.init(allocator);
+        defer update_operations.deinit();
+
+        // Insert aggregate operations up to the root
+        try self.insertAggregateOperations(&update_operations, slot_hash_key);
+
+        // Remove child link so that this slot cannot be chosen as best or deepest
+        const parent_info = self.fork_infos.getPtr(parent) orelse return error.ParentNotFound;
+        std.debug.assert(parent_info.children.orderedRemove(slot_hash_key));
+
+        // Aggregate
+        self.processUpdateOperations(&update_operations);
+
+        // Remove node + all children and add to new tree
+        var split_tree_fork_infos = std.AutoHashMap(SlotAndHash, ForkInfo).init(allocator);
+        var to_visit = std.ArrayList(SlotAndHash).init(allocator);
+        defer to_visit.deinit();
+
+        try to_visit.append(slot_hash_key);
+
+        while (to_visit.pop()) |current_node| {
+            var current_fork_info = self.fork_infos.fetchRemove(current_node) orelse
+                return error.NodeNotFound;
+
+            var iter = current_fork_info.value.children.iterator();
+            while (iter.next()) |child| {
+                try to_visit.append(child.key_ptr.*);
+            }
+
+            try split_tree_fork_infos.put(current_node, current_fork_info.value);
+        }
+
+        // Remove link from parent
+        const parent_fork_info = self.fork_infos.getPtr(parent) orelse
+            return error.ParentNotFound;
+        _ = parent_fork_info.children.swapRemoveNoSort(slot_hash_key);
+
+        // Update the root of the new tree with the proper info, now that we have finished
+        // aggregating
+        split_tree_root.parent = null;
+        try split_tree_fork_infos.put(slot_hash_key, split_tree_root);
+
+        // Split off the relevant votes to the new tree
+        var split_tree_latest_votes = try self.latest_votes.clone();
+        var it = split_tree_latest_votes.iterator();
+        while (it.next()) |entry| {
+            if (!split_tree_fork_infos.contains(entry.value_ptr.*)) {
+                _ = split_tree_latest_votes.removeByPtr(entry.key_ptr);
+            }
+        }
+
+        var it_self = self.latest_votes.iterator();
+        while (it_self.next()) |entry| {
+            if (!self.fork_infos.contains(entry.value_ptr.*)) {
+                _ = self.latest_votes.removeByPtr(entry.key_ptr);
+            }
+        }
+
+        // Create a new tree from the split
+        return ForkChoice{
+            .allocator = allocator,
+            .logger = self.logger,
+            .fork_infos = split_tree_fork_infos,
+            .latest_votes = split_tree_latest_votes,
+            .tree_root = slot_hash_key,
+            .last_root_time = Instant.now(),
+        };
+    }
 };
 
 /// [Agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L1390
