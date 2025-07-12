@@ -561,6 +561,8 @@ pub fn SortedMapUnmanagedCustom(
 
         const Inner = std.ArrayHashMapUnmanaged(K, V, config.Context, config.store_hash);
 
+        pub const Entry = Inner.Entry;
+
         pub const empty: SortedMapSelf = .{
             .inner = .empty,
             .max = null,
