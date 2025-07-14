@@ -493,7 +493,7 @@ fn testGetStakeHistory(filled: bool) !void {
     // deinitialised by transaction context
 
     {
-        const src_history_buf = try allocator.alloc(u8, sysvar.StakeHistory.SIZE_OF);
+        const src_history_buf = try allocator.alloc(u8, sysvar.StakeHistory.STORAGE_SIZE);
         defer allocator.free(src_history_buf);
         _ = try bincode.writeToSlice(src_history_buf, src_history, .{});
     }
@@ -510,7 +510,7 @@ fn testGetStakeHistory(filled: bool) !void {
         cache.deinit(allocator);
     }
 
-    var buffer = std.mem.zeroes([sysvar.StakeHistory.SIZE_OF]u8);
+    var buffer = std.mem.zeroes([sysvar.StakeHistory.STORAGE_SIZE]u8);
     const buffer_addr = 0x100000000;
     const id_addr = 0x200000000;
 
@@ -529,7 +529,7 @@ fn testGetStakeHistory(filled: bool) !void {
         id_addr,
         buffer_addr,
         0,
-        sysvar.StakeHistory.SIZE_OF,
+        sysvar.StakeHistory.STORAGE_SIZE,
     });
 
     const obj_parsed = try bincode.readFromSlice(allocator, sysvar.StakeHistory, &buffer, .{});
@@ -571,7 +571,7 @@ fn testGetSlotHashes(filled: bool) !void {
     // deinitialised by transaction context
 
     {
-        const src_hashes_buf = try allocator.alloc(u8, sysvar.SlotHashes.SIZE_OF);
+        const src_hashes_buf = try allocator.alloc(u8, sysvar.SlotHashes.STORAGE_SIZE);
         defer allocator.free(src_hashes_buf);
         _ = try bincode.writeToSlice(src_hashes_buf, src_hashes, .{});
     }
@@ -588,7 +588,7 @@ fn testGetSlotHashes(filled: bool) !void {
         cache.deinit(allocator);
     }
 
-    var buffer = std.mem.zeroes([sysvar.SlotHashes.SIZE_OF]u8);
+    var buffer = std.mem.zeroes([sysvar.SlotHashes.STORAGE_SIZE]u8);
     const buffer_addr = 0x100000000;
     const id_addr = 0x200000000;
 
@@ -607,7 +607,7 @@ fn testGetSlotHashes(filled: bool) !void {
         id_addr,
         buffer_addr,
         0,
-        sysvar.SlotHashes.SIZE_OF,
+        sysvar.SlotHashes.STORAGE_SIZE,
     });
 
     const obj_parsed = try bincode.readFromSlice(allocator, sysvar.SlotHashes, &buffer, .{});

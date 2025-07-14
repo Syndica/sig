@@ -30,7 +30,7 @@ pub const RecentBlockhashes = struct {
 
     pub const MAX_ENTRIES: u64 = 150;
 
-    pub const SIZE_OF: u64 = 6_008;
+    pub const STORAGE_SIZE: u64 = 6_008;
 
     pub fn default(allocator: Allocator) Allocator.Error!RecentBlockhashes {
         return .{ .entries = try .initCapacity(allocator, MAX_ENTRIES) };

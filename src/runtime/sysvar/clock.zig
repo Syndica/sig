@@ -39,7 +39,7 @@ pub const Clock = extern struct {
         .unix_timestamp = 0,
     };
 
-    pub const SIZE_OF: u64 = @sizeOf(Clock);
+    pub const STORAGE_SIZE: u64 = @sizeOf(Clock);
 
     pub fn initRandom(random: std.Random) Clock {
         if (!builtin.is_test) @compileError("only for testing");

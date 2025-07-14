@@ -24,7 +24,7 @@ pub const SlotHistory = struct {
     pub const ID =
         Pubkey.parseBase58String("SysvarS1otHistory11111111111111111111111111") catch unreachable;
 
-    pub const SIZE_OF: u64 = 131_097;
+    pub const STORAGE_SIZE: u64 = 131_097;
 
     pub fn default(allocator: Allocator) Allocator.Error!SlotHistory {
         var bits = try DynamicArrayBitSet(u64).initEmpty(allocator, MAX_ENTRIES);

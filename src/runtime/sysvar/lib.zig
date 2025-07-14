@@ -28,8 +28,8 @@ pub fn serialize(allocator: std.mem.Allocator, value: anytype) ![]u8 {
     try bincode.write(stream.writer(), value, .{});
 
     const T = @TypeOf(value);
-    const size_of: usize = if (@hasDecl(T, "SIZE_OF")) T.SIZE_OF else @sizeOf(T);
-    const size = @max(stream.bytes_written, size_of);
+    const STORAGE_SIZE: usize = if (@hasDecl(T, "STORAGE_SIZE")) T.STORAGE_SIZE else @sizeOf(T);
+    const size = @max(stream.bytes_written, STORAGE_SIZE);
 
     const buffer = try allocator.alloc(u8, size);
     errdefer allocator.free(buffer);
