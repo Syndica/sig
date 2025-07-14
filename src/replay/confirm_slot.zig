@@ -48,7 +48,8 @@ pub fn confirmSlot(
     verify_ticks_params: VerifyTicksParams,
 ) !*ConfirmSlotFuture {
     logger.info().log("confirming slot");
-    const future = try ConfirmSlotFuture.create(allocator, thread_pool, committer, entries, svm_params);
+    const future = try ConfirmSlotFuture
+        .create(allocator, thread_pool, committer, entries, svm_params);
     errdefer future.destroy(allocator);
 
     if (verifyTicks(logger, entries, verify_ticks_params)) |block_error| {

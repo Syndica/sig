@@ -1215,7 +1215,8 @@ pub const AccountsDB = struct {
         }
         const hash_tree = sig.utils.merkle_tree.NestedHashTree{ .items = &.{hashes} };
 
-        const hash = try sig.utils.merkle_tree.computeMerkleRoot(&hash_tree, sig.accounts_db.db.MERKLE_FANOUT);
+        const hash = try sig.utils.merkle_tree
+            .computeMerkleRoot(&hash_tree, sig.accounts_db.db.MERKLE_FANOUT);
 
         return hash.*;
     }

@@ -4,27 +4,14 @@ const replay = @import("lib.zig");
 
 const Allocator = std.mem.Allocator;
 
-const Channel = sig.sync.Channel;
-const HomogeneousThreadPool = sig.utils.thread.HomogeneousThreadPool;
-const ThreadPool = sig.sync.ThreadPool;
-
 const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 
-const TransactionError = sig.ledger.transaction_status.TransactionError;
-
-const AccountLocks = replay.account_locks.AccountLocks;
-const ConfirmSlotStatus = replay.confirm_slot.ConfirmSlotStatus;
 const ResolvedTransaction = replay.resolve_lookup.ResolvedTransaction;
-const ResolvedBatch = replay.resolve_lookup.ResolvedBatch;
-const SvmSlot = replay.svm_gateway.SvmSlot;
 
 const AccountSharedData = sig.runtime.AccountSharedData;
-const BatchAccountCache = sig.runtime.account_loader.BatchAccountCache;
 const ProcessedTransaction = sig.runtime.transaction_execution.ProcessedTransaction;
-const TransactionResult = sig.runtime.transaction_execution.TransactionResult;
-const TransactionRollbacks = sig.runtime.transaction_execution.TransactionRollbacks;
 
 /// All contained state is required to be thread-safe.
 pub const Committer = struct {
@@ -67,8 +54,10 @@ pub const Committer = struct {
 
             const recent_blockhash = &transaction.transaction.msg.recent_blockhash;
             const signature = transaction.transaction.signatures[0];
-            try self.status_cache.insert(allocator, rng.random(), recent_blockhash, &message_hash.data, slot);
-            try self.status_cache.insert(allocator, rng.random(), recent_blockhash, &signature.data, slot);
+            try self.status_cache
+                .insert(allocator, rng.random(), recent_blockhash, &message_hash.data, slot);
+            try self.status_cache
+                .insert(allocator, rng.random(), recent_blockhash, &signature.data, slot);
             // TODO: we'll need to store the actual status at some point, probably for rpc.
         }
 

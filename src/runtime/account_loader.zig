@@ -69,14 +69,15 @@ fn AccountsDb(comptime kind: AccountsDbKind) type {
             pubkey: *const Pubkey,
             ancestors: *const sig.core.Ancestors,
         ) error{ OutOfMemory, GetAccountFailedUnexpectedly }!?AccountSharedData {
-            const account: sig.core.Account = self.getAccount(pubkey, ancestors) catch |err| switch (err) {
-                error.PubkeyNotInIndex => return null,
-                error.OutOfMemory => return error.OutOfMemory,
-                error.FileIdNotFound,
-                error.InvalidOffset,
-                error.SlotNotFound,
-                => return error.GetAccountFailedUnexpectedly,
-            };
+            const account: sig.core.Account = self.getAccount(pubkey, ancestors) catch |err|
+                switch (err) {
+                    error.PubkeyNotInIndex => return null,
+                    error.OutOfMemory => return error.OutOfMemory,
+                    error.FileIdNotFound,
+                    error.InvalidOffset,
+                    error.SlotNotFound,
+                    => return error.GetAccountFailedUnexpectedly,
+                };
             defer account.deinit(self.allocator());
 
             const shared_account: AccountSharedData = .{

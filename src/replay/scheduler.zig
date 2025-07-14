@@ -240,7 +240,8 @@ test "TransactionScheduler: happy path" {
 
     var thread_pool = ThreadPool.init(.{});
     // TODO fix undefined
-    var scheduler = try TransactionScheduler.initCapacity(allocator, undefined, 10, &thread_pool, undefined);
+    var scheduler = try TransactionScheduler
+        .initCapacity(allocator, undefined, 10, &thread_pool, undefined);
     defer scheduler.deinit();
 
     var tx_arena = std.heap.ArenaAllocator.init(allocator);
@@ -284,7 +285,8 @@ test "TransactionScheduler: failed account locks" {
 
     var thread_pool = ThreadPool.init(.{});
     // TODO fix undefined
-    var scheduler = try TransactionScheduler.initCapacity(allocator, undefined, 10, &thread_pool, undefined);
+    var scheduler = try TransactionScheduler
+        .initCapacity(allocator, undefined, 10, &thread_pool, undefined);
     defer scheduler.deinit();
 
     const tx = try Transaction.initRandom(allocator, rng.random());
@@ -314,7 +316,8 @@ test "TransactionScheduler: signature verification failure" {
 
     var thread_pool = ThreadPool.init(.{});
     // TODO fix undefined
-    var scheduler = try TransactionScheduler.initCapacity(allocator, undefined, 10, &thread_pool, undefined);
+    var scheduler = try TransactionScheduler
+        .initCapacity(allocator, undefined, 10, &thread_pool, undefined);
     defer scheduler.deinit();
 
     var tx_arena = std.heap.ArenaAllocator.init(allocator);

@@ -40,7 +40,6 @@ const FeeRateGovernor = core.genesis_config.FeeRateGovernor;
 const Inflation = core.genesis_config.Inflation;
 
 const Ancestors = sig.core.Ancestors;
-const EpochStakes = core.EpochStakes;
 const EpochStakesMap = core.EpochStakesMap;
 const Stakes = core.Stakes;
 

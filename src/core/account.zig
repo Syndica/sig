@@ -4,7 +4,6 @@ const sig = @import("../sig.zig");
 const Blake3 = std.crypto.hash.Blake3;
 
 const Hash = sig.core.hash.Hash;
-const LtHash = sig.core.hash.LtHash;
 const Pubkey = sig.core.Pubkey;
 const Epoch = sig.core.Epoch;
 

@@ -8,13 +8,10 @@ const Allocator = std.mem.Allocator;
 
 const Ancestors = sig.core.Ancestors;
 const BlockhashQueue = sig.core.BlockhashQueue;
-const VersionedEpochStakes = sig.core.VersionedEpochStakes;
 const RentCollector = sig.core.rent_collector.RentCollector;
 const StatusCache = sig.core.StatusCache;
 
 const AccountsDB = sig.accounts_db.AccountsDB;
-
-const ResolvedBatch = replay.resolve_lookup.ResolvedBatch;
 
 const BatchAccountCache = sig.runtime.account_loader.BatchAccountCache;
 const ComputeBudget = sig.runtime.ComputeBudget;
