@@ -380,7 +380,7 @@ pub const ForkChoice = struct {
         self: *ForkChoice,
         allocator: std.mem.Allocator,
         pubkey_votes: []const PubkeyVote,
-        epoch_stakes: *const AutoHashMap(Epoch, VersionedEpochStakes),
+        epoch_stakes: *const std.AutoHashMapUnmanaged(Epoch, VersionedEpochStakes),
         epoch_schedule: *const EpochSchedule,
     ) !SlotAndHash {
         // Generate the set of updates
@@ -953,7 +953,7 @@ pub const ForkChoice = struct {
         self: *ForkChoice,
         allocator: std.mem.Allocator,
         pubkey_votes: []const PubkeyVote,
-        epoch_stakes: *const AutoHashMap(Epoch, VersionedEpochStakes),
+        epoch_stakes: *const std.AutoHashMapUnmanaged(Epoch, VersionedEpochStakes),
         epoch_schedule: *const EpochSchedule,
     ) !UpdateOperations {
         var update_operations = UpdateOperations.init(self.allocator);
@@ -1433,7 +1433,7 @@ pub const ForkChoice = struct {
     pub fn computeBankStats(
         self: *ForkChoice,
         allocator: std.mem.Allocator,
-        epoch_stakes: *const AutoHashMap(Epoch, VersionedEpochStakes),
+        epoch_stakes: *const std.AutoHashMapUnmanaged(Epoch, VersionedEpochStakes),
         epoch_schedule: *const EpochSchedule,
         latest_validator_votes: *LatestValidatorVotes,
     ) !void {
@@ -2048,10 +2048,10 @@ test "HeaviestSubtreeForkChoice.propagateNewLeaf" {
     );
     defer versioned_stakes.deinit(test_allocator);
 
-    var epoch_stakes = AutoHashMap(Epoch, VersionedEpochStakes).init(test_allocator);
-    defer epoch_stakes.deinit();
+    var epoch_stakes = std.AutoHashMapUnmanaged(Epoch, VersionedEpochStakes).empty;
+    defer epoch_stakes.deinit(test_allocator);
 
-    try epoch_stakes.put(0, versioned_stakes);
+    try epoch_stakes.put(test_allocator, 0, versioned_stakes);
 
     const pubkey_votes = [_]PubkeyVote{
         .{ .pubkey = vote_pubkeys[0], .slot_hash = .{ .slot = 6, .hash = Hash.ZEROES } },
@@ -2189,10 +2189,10 @@ test "HeaviestSubtreeForkChoice.propagateNewLeaf2" {
     );
     defer versioned_stakes.deinit(test_allocator);
 
-    var epoch_stakes = AutoHashMap(Epoch, VersionedEpochStakes).init(test_allocator);
-    defer epoch_stakes.deinit();
+    var epoch_stakes = std.AutoHashMapUnmanaged(Epoch, VersionedEpochStakes).empty;
+    defer epoch_stakes.deinit(test_allocator);
 
-    try epoch_stakes.put(0, versioned_stakes);
+    try epoch_stakes.put(test_allocator, 0, versioned_stakes);
 
     const pubkey_votes = [_]PubkeyVote{
         .{ .pubkey = vote_pubkeys[0], .slot_hash = .{ .slot = 4, .hash = Hash.ZEROES } },
@@ -2235,10 +2235,10 @@ test "HeaviestSubtreeForkChoice.setRootAndAddOutdatedVotes" {
     );
     defer versioned_stakes.deinit(test_allocator);
 
-    var epoch_stakes = AutoHashMap(Epoch, VersionedEpochStakes).init(test_allocator);
-    defer epoch_stakes.deinit();
+    var epoch_stakes = std.AutoHashMapUnmanaged(Epoch, VersionedEpochStakes).empty;
+    defer epoch_stakes.deinit(test_allocator);
 
-    try epoch_stakes.put(0, versioned_stakes);
+    try epoch_stakes.put(test_allocator, 0, versioned_stakes);
 
     // Vote for slot 0
     const pubkey_votes1 = [_]PubkeyVote{
@@ -2916,11 +2916,11 @@ test "HeaviestSubtreeForkChoice.generateUpdateOperations" {
     const versioned_stakes = try testEpochStakes(allocator, &vote_pubkeys, stake, random);
     defer versioned_stakes.deinit(allocator);
 
-    var epoch_stakes = AutoHashMap(Epoch, VersionedEpochStakes).init(allocator);
-    defer epoch_stakes.deinit();
+    var epoch_stakes = std.AutoHashMapUnmanaged(Epoch, VersionedEpochStakes).empty;
+    defer epoch_stakes.deinit(test_allocator);
 
-    try epoch_stakes.put(0, versioned_stakes);
-    try epoch_stakes.put(1, versioned_stakes);
+    try epoch_stakes.put(test_allocator, 0, versioned_stakes);
+    try epoch_stakes.put(test_allocator, 1, versioned_stakes);
 
     var fork_choice = try forkChoiceForTest(test_allocator, fork_tuples[0..]);
     defer fork_choice.deinit();
@@ -3179,10 +3179,10 @@ test "HeaviestSubtreeForkChoice.addRootParent" {
     );
     defer versioned_stakes.deinit(test_allocator);
 
-    var epoch_stakes = AutoHashMap(Epoch, VersionedEpochStakes).init(test_allocator);
-    defer epoch_stakes.deinit();
+    var epoch_stakes = std.AutoHashMapUnmanaged(Epoch, VersionedEpochStakes).empty;
+    defer epoch_stakes.deinit(test_allocator);
 
-    try epoch_stakes.put(0, versioned_stakes);
+    try epoch_stakes.put(test_allocator, 0, versioned_stakes);
 
     const pubkey_votes = [_]PubkeyVote{
         .{ .pubkey = vote_pubkeys[0], .slot_hash = .{
@@ -3257,10 +3257,10 @@ test "HeaviestSubtreeForkChoice.addVotes" {
     );
     defer versioned_stakes.deinit(test_allocator);
 
-    var epoch_stakes = AutoHashMap(Epoch, VersionedEpochStakes).init(test_allocator);
-    defer epoch_stakes.deinit();
+    var epoch_stakes = std.AutoHashMapUnmanaged(Epoch, VersionedEpochStakes).empty;
+    defer epoch_stakes.deinit(test_allocator);
 
-    try epoch_stakes.put(0, versioned_stakes);
+    try epoch_stakes.put(test_allocator, 0, versioned_stakes);
 
     var fork_choice = try forkChoiceForTest(test_allocator, fork_tuples[0..]);
     defer fork_choice.deinit();
@@ -3325,10 +3325,10 @@ test "HeaviestSubtreeForkChoice.addVotesDuplicateGreaterHashIgnored" {
     );
     defer versioned_stakes.deinit(test_allocator);
 
-    var epoch_stakes = AutoHashMap(Epoch, VersionedEpochStakes).init(test_allocator);
-    defer epoch_stakes.deinit();
+    var epoch_stakes = std.AutoHashMapUnmanaged(Epoch, VersionedEpochStakes).empty;
+    defer epoch_stakes.deinit(test_allocator);
 
-    try epoch_stakes.put(0, versioned_stakes);
+    try epoch_stakes.put(test_allocator, 0, versioned_stakes);
 
     // duplicate_leaves_descended_from_4 are sorted, and fork choice will pick the smaller
     // one in the event of a tie
@@ -3472,10 +3472,10 @@ test "HeaviestSubtreeForkChoice.addVotesDuplicateSmallerHashPrioritized" {
     );
     defer versioned_stakes.deinit(test_allocator);
 
-    var epoch_stakes = AutoHashMap(Epoch, VersionedEpochStakes).init(test_allocator);
-    defer epoch_stakes.deinit();
+    var epoch_stakes = std.AutoHashMapUnmanaged(Epoch, VersionedEpochStakes).empty;
+    defer epoch_stakes.deinit(test_allocator);
 
-    try epoch_stakes.put(0, versioned_stakes);
+    try epoch_stakes.put(test_allocator, 0, versioned_stakes);
 
     const expected_best_slot_hash = duplicate_leaves_descended_from_4[1];
     try std.testing.expectEqual(expected_best_slot_hash, try fork_choice.addVotes(
@@ -3591,10 +3591,10 @@ test "HeaviestSubtreeForkChoice.addVotesDuplicateThenOutdated" {
     );
     defer versioned_stakes.deinit(test_allocator);
 
-    var epoch_stakes = AutoHashMap(Epoch, VersionedEpochStakes).init(test_allocator);
-    defer epoch_stakes.deinit();
+    var epoch_stakes = std.AutoHashMapUnmanaged(Epoch, VersionedEpochStakes).empty;
+    defer epoch_stakes.deinit(test_allocator);
 
-    try epoch_stakes.put(0, versioned_stakes);
+    try epoch_stakes.put(test_allocator, 0, versioned_stakes);
 
     // duplicate_leaves_descended_from_4 are sorted, and fork choice will pick the smaller
     // one in the event of a tie
@@ -3733,10 +3733,10 @@ test "HeaviestSubtreeForkChoice.addVotesDuplicateTie" {
     );
     defer versioned_stakes.deinit(test_allocator);
 
-    var epoch_stakes = AutoHashMap(Epoch, VersionedEpochStakes).init(test_allocator);
-    defer epoch_stakes.deinit();
+    var epoch_stakes = std.AutoHashMapUnmanaged(Epoch, VersionedEpochStakes).empty;
+    defer epoch_stakes.deinit(test_allocator);
 
-    try epoch_stakes.put(0, versioned_stakes);
+    try epoch_stakes.put(test_allocator, 0, versioned_stakes);
 
     // duplicate_leaves_descended_from_4 are sorted, and fork choice will pick the smaller
     // one in the event of a tie
@@ -3834,10 +3834,10 @@ test "HeaviestSubtreeForkChoice.addVotesDuplicateZeroStake" {
     );
     defer versioned_stakes.deinit(test_allocator);
 
-    var epoch_stakes = AutoHashMap(Epoch, VersionedEpochStakes).init(test_allocator);
-    defer epoch_stakes.deinit();
+    var epoch_stakes = std.AutoHashMapUnmanaged(Epoch, VersionedEpochStakes).empty;
+    defer epoch_stakes.deinit(test_allocator);
 
-    try epoch_stakes.put(0, versioned_stakes);
+    try epoch_stakes.put(test_allocator, 0, versioned_stakes);
 
     // Make new vote with vote_pubkeys[0] for a higher slot
     // Create new child with heaviest duplicate parent
@@ -3970,10 +3970,10 @@ test "HeaviestSubtreeForkChoice.isBestChild" {
     );
     defer versioned_stakes.deinit(test_allocator);
 
-    var epoch_stakes = AutoHashMap(Epoch, VersionedEpochStakes).init(test_allocator);
-    defer epoch_stakes.deinit();
+    var epoch_stakes = std.AutoHashMapUnmanaged(Epoch, VersionedEpochStakes).empty;
+    defer epoch_stakes.deinit(test_allocator);
 
-    try epoch_stakes.put(0, versioned_stakes);
+    try epoch_stakes.put(test_allocator, 0, versioned_stakes);
 
     const pubkey_votes = [_]PubkeyVote{
         .{ .pubkey = vote_pubkeys[0], .slot_hash = SlotAndHash{ .slot = 9, .hash = Hash.ZEROES } },
@@ -4031,10 +4031,10 @@ test "HeaviestSubtreeForkChoice.markInvalidThenAddNewHeavierDuplicateSlot" {
     );
     defer versioned_stakes.deinit(test_allocator);
 
-    var epoch_stakes = AutoHashMap(Epoch, VersionedEpochStakes).init(test_allocator);
-    defer epoch_stakes.deinit();
+    var epoch_stakes = std.AutoHashMapUnmanaged(Epoch, VersionedEpochStakes).empty;
+    defer epoch_stakes.deinit(test_allocator);
 
-    try epoch_stakes.put(0, versioned_stakes);
+    try epoch_stakes.put(test_allocator, 0, versioned_stakes);
 
     // If we add a new version of the duplicate slot that is not descended from the invalid
     // candidate and votes for that duplicate slot, the new duplicate slot should be picked
@@ -4090,10 +4090,10 @@ test "HeaviestSubtreeForkChoice.markValidInvalidForks" {
     );
     defer versioned_stakes.deinit(test_allocator);
 
-    var epoch_stakes = AutoHashMap(Epoch, VersionedEpochStakes).init(test_allocator);
-    defer epoch_stakes.deinit();
+    var epoch_stakes = std.AutoHashMapUnmanaged(Epoch, VersionedEpochStakes).empty;
+    defer epoch_stakes.deinit(test_allocator);
 
-    try epoch_stakes.put(0, versioned_stakes);
+    try epoch_stakes.put(test_allocator, 0, versioned_stakes);
 
     const pubkey_votes = [_]PubkeyVote{
         .{ .pubkey = vote_pubkeys[0], .slot_hash = SlotAndHash{ .slot = 6, .hash = Hash.ZEROES } },
@@ -4231,10 +4231,10 @@ test "HeaviestSubtreeForkChoice.setRootAndAddVotes" {
     );
     defer versioned_stakes.deinit(test_allocator);
 
-    var epoch_stakes = AutoHashMap(Epoch, VersionedEpochStakes).init(test_allocator);
-    defer epoch_stakes.deinit();
+    var epoch_stakes = std.AutoHashMapUnmanaged(Epoch, VersionedEpochStakes).empty;
+    defer epoch_stakes.deinit(test_allocator);
 
-    try epoch_stakes.put(0, versioned_stakes);
+    try epoch_stakes.put(test_allocator, 0, versioned_stakes);
 
     // Vote for slot 2
     const pubkey_votes1 = [_]PubkeyVote{
@@ -4324,9 +4324,10 @@ test "HeaviestSubtreeForkChoice.splitOffOnBestPath" {
     );
     defer versioned_stakes.deinit(test_allocator);
 
-    var epoch_stakes = AutoHashMap(Epoch, VersionedEpochStakes).init(test_allocator);
-    defer epoch_stakes.deinit();
-    try epoch_stakes.put(0, versioned_stakes);
+    var epoch_stakes = std.AutoHashMapUnmanaged(Epoch, VersionedEpochStakes).empty;
+    defer epoch_stakes.deinit(test_allocator);
+
+    try epoch_stakes.put(test_allocator, 0, versioned_stakes);
 
     _ = try fork_choice.addVotes(
         test_allocator,
@@ -4387,9 +4388,10 @@ test "HeaviestSubtreeForkChoice.splitOffSimple" {
     );
     defer versioned_stakes.deinit(test_allocator);
 
-    var epoch_stakes = AutoHashMap(Epoch, VersionedEpochStakes).init(test_allocator);
-    defer epoch_stakes.deinit();
-    try epoch_stakes.put(0, versioned_stakes);
+    var epoch_stakes = std.AutoHashMapUnmanaged(Epoch, VersionedEpochStakes).empty;
+    defer epoch_stakes.deinit(test_allocator);
+
+    try epoch_stakes.put(test_allocator, 0, versioned_stakes);
 
     _ = try fork_choice.addVotes(
         test_allocator,
@@ -4476,9 +4478,10 @@ test "HeaviestSubtreeForkChoice.splitOffSubtreeWithDups" {
     );
     defer versioned_stakes.deinit(test_allocator);
 
-    var epoch_stakes = AutoHashMap(Epoch, VersionedEpochStakes).init(test_allocator);
-    defer epoch_stakes.deinit();
-    try epoch_stakes.put(0, versioned_stakes);
+    var epoch_stakes = std.AutoHashMapUnmanaged(Epoch, VersionedEpochStakes).empty;
+    defer epoch_stakes.deinit(test_allocator);
+
+    try epoch_stakes.put(test_allocator, 0, versioned_stakes);
 
     // duplicate_leaves_descended_from_4 are sorted, and fork choice will pick the smaller
     // one in the event of a tie
@@ -4558,9 +4561,10 @@ test "HeaviestSubtreeForkChoice.splitOffUnvoted" {
     );
     defer versioned_stakes.deinit(test_allocator);
 
-    var epoch_stakes = AutoHashMap(Epoch, VersionedEpochStakes).init(test_allocator);
-    defer epoch_stakes.deinit();
-    try epoch_stakes.put(0, versioned_stakes);
+    var epoch_stakes = std.AutoHashMapUnmanaged(Epoch, VersionedEpochStakes).empty;
+    defer epoch_stakes.deinit(test_allocator);
+
+    try epoch_stakes.put(test_allocator, 0, versioned_stakes);
 
     _ = try fork_choice.addVotes(
         test_allocator,
@@ -4637,9 +4641,10 @@ test "HeaviestSubtreeForkChoice.splitOffWithDups" {
     );
     defer versioned_stakes.deinit(test_allocator);
 
-    var epoch_stakes = AutoHashMap(Epoch, VersionedEpochStakes).init(test_allocator);
-    defer epoch_stakes.deinit();
-    try epoch_stakes.put(0, versioned_stakes);
+    var epoch_stakes = std.AutoHashMapUnmanaged(Epoch, VersionedEpochStakes).empty;
+    defer epoch_stakes.deinit(test_allocator);
+
+    try epoch_stakes.put(test_allocator, 0, versioned_stakes);
 
     // duplicate_leaves_descended_from_4 are sorted, and fork choice will pick the smaller
     // one in the event of a tie
@@ -4717,9 +4722,10 @@ test "HeaviestSubtreeForkChoice.gossipVoteDoesntAffectForkChoice" {
     );
     defer versioned_stakes.deinit(test_allocator);
 
-    var epoch_stakes = AutoHashMap(Epoch, VersionedEpochStakes).init(test_allocator);
-    defer epoch_stakes.deinit();
-    try epoch_stakes.put(0, versioned_stakes);
+    var epoch_stakes = std.AutoHashMapUnmanaged(Epoch, VersionedEpochStakes).empty;
+    defer epoch_stakes.deinit(test_allocator);
+
+    try epoch_stakes.put(test_allocator, 0, versioned_stakes);
 
     _ = try fork_choice.addVotes(
         test_allocator,
