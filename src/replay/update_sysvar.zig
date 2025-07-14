@@ -47,57 +47,57 @@ pub fn fillMissingEntries(
     sysvar_cache: *SysvarCache,
 ) !void {
     if (sysvar_cache.clock == null) {
-        if (getSysvarAndDataFromAccount(allocator, db, ancestors, Clock)) |sysvar_data| {
-            sysvar_cache.clock = sysvar_data.data;
+        if (try getSysvarAndDataFromAccount(allocator, db, ancestors, Clock)) |sysvar| {
+            sysvar_cache.clock = sysvar.data;
         }
     }
 
     if (sysvar_cache.epoch_schedule == null) {
-        if (getSysvarAndDataFromAccount(allocator, db, ancestors, EpochSchedule)) |sysvar_data| {
-            sysvar_cache.epoch_schedule = sysvar_data.data;
+        if (try getSysvarAndDataFromAccount(allocator, db, ancestors, EpochSchedule)) |sysvar| {
+            sysvar_cache.epoch_schedule = sysvar.data;
         }
     }
 
     if (sysvar_cache.epoch_rewards == null) {
-        if (getSysvarAndDataFromAccount(allocator, db, ancestors, EpochRewards)) |sysvar_data| {
-            sysvar_cache.epoch_rewards = sysvar_data.data;
+        if (try getSysvarAndDataFromAccount(allocator, db, ancestors, EpochRewards)) |sysvar| {
+            sysvar_cache.epoch_rewards = sysvar.data;
         }
     }
 
     if (sysvar_cache.rent == null) {
-        if (getSysvarAndDataFromAccount(allocator, db, ancestors, Rent)) |sysvar_data| {
-            sysvar_cache.rent = sysvar_data.data;
+        if (try getSysvarAndDataFromAccount(allocator, db, ancestors, Rent)) |sysvar| {
+            sysvar_cache.rent = sysvar.data;
         }
     }
 
     if (sysvar_cache.last_restart_slot == null) {
-        if (getSysvarAndDataFromAccount(allocator, db, ancestors, LastRestartSlot)) |sysvar_data| {
-            sysvar_cache.last_restart_slot = sysvar_data.data;
+        if (try getSysvarAndDataFromAccount(allocator, db, ancestors, LastRestartSlot)) |sysvar| {
+            sysvar_cache.last_restart_slot = sysvar.data;
         }
     }
 
     if (sysvar_cache.slot_hashes == null) {
-        if (getSysvarAndDataFromAccount(allocator, db, ancestors, SlotHashes)) |sysvar_data| {
-            sysvar_cache.slot_hashes = sysvar_data.data;
-            sysvar_cache.slot_hashes_obj = sysvar_data.sysvar;
+        if (try getSysvarAndDataFromAccount(allocator, db, ancestors, SlotHashes)) |sysvar| {
+            sysvar_cache.slot_hashes = sysvar.data;
+            sysvar_cache.slot_hashes_obj = sysvar.sysvar;
         }
     }
 
     if (sysvar_cache.stake_history == null) {
-        if (getSysvarAndDataFromAccount(allocator, db, ancestors, StakeHistory)) |sysvar_data| {
-            sysvar_cache.stake_history = sysvar_data.data;
-            sysvar_cache.stake_history_obj = sysvar_data.sysvar;
+        if (try getSysvarAndDataFromAccount(allocator, db, ancestors, StakeHistory)) |sysvar| {
+            sysvar_cache.stake_history = sysvar.data;
+            sysvar_cache.stake_history_obj = sysvar.sysvar;
         }
     }
 
     if (sysvar_cache.fees_obj == null) {
-        if (getSysvarFromAccount(allocator, db, ancestors, Fees)) |sysvar| {
+        if (try getSysvarFromAccount(allocator, db, ancestors, Fees)) |sysvar| {
             sysvar_cache.fees_obj = sysvar;
         }
     }
 
     if (sysvar_cache.recent_blockhashes_obj == null) {
-        if (getSysvarFromAccount(allocator, db, ancestors, RecentBlockhashes)) |sysvar| {
+        if (try getSysvarFromAccount(allocator, db, ancestors, RecentBlockhashes)) |sysvar| {
             sysvar_cache.recent_blockhashes_obj = sysvar;
         }
     }
@@ -152,7 +152,7 @@ pub fn updateLastRestartSlot(
         break :blk 0;
     };
 
-    if (getSysvarFromAccount(
+    if (try getSysvarFromAccount(
         allocator,
         deps.accounts_db,
         deps.ancestors,
@@ -174,7 +174,7 @@ pub fn updateSlotHistory(
     allocator: std.mem.Allocator,
     deps: UpdateSysvarAccountDeps,
 ) !void {
-    var slot_history: SlotHistory = getSysvarFromAccount(
+    var slot_history: SlotHistory = try getSysvarFromAccount(
         allocator,
         deps.accounts_db,
         deps.ancestors,
@@ -193,7 +193,7 @@ pub fn updateSlotHashes(
     parent_hash: Hash,
     deps: UpdateSysvarAccountDeps,
 ) !void {
-    var slot_hashes: SlotHashes = getSysvarFromAccount(
+    var slot_hashes: SlotHashes = try getSysvarFromAccount(
         allocator,
         deps.accounts_db,
         deps.ancestors,
@@ -281,11 +281,10 @@ fn updateSysvarAccount(
     sysvar: Sysvar,
     deps: UpdateSysvarAccountDeps,
 ) !void {
-    // TODO: handle errors directly
-    const maybe_old_account = deps.accounts_db.getAccountWithAncestors(
+    const maybe_old_account = try deps.accounts_db.getAccountWithAncestors(
         &Sysvar.ID,
         deps.ancestors,
-    ) catch null;
+    );
     defer if (maybe_old_account) |old_account| old_account.deinit(allocator);
 
     const new_account = try createSysvarAccount(
@@ -298,14 +297,9 @@ fn updateSysvarAccount(
     defer allocator.free(new_account.data);
 
     if (maybe_old_account) |old_account| {
-        if (new_account.lamports > old_account.lamports)
+        if (new_account.lamports != old_account.lamports)
             _ = deps.capitalization.fetchAdd(
-                new_account.lamports - old_account.lamports,
-                .monotonic,
-            )
-        else if (new_account.lamports < old_account.lamports)
-            _ = deps.capitalization.fetchSub(
-                old_account.lamports - new_account.lamports,
+                new_account.lamports -% old_account.lamports,
                 .monotonic,
             );
     } else {
@@ -325,8 +319,8 @@ fn createSysvarAccount(
     comptime Sysvar: type,
     sysvar: Sysvar,
     old_account: ?*const Account,
-) Allocator.Error!AccountSharedData {
-    // This should NEVER happen, dynamiclly sized sysvars manage there max size.
+) !AccountSharedData {
+    // This should NEVER happen, dynamiclly sized sysvars have a fixed max size.
     if (bincode.sizeOf(sysvar, .{}) > Sysvar.STORAGE_SIZE)
         std.debug.panic("sysvar data size exceeds maximum allowed size: sysvar={s}, size={}", .{
             @typeName(Sysvar),
@@ -337,9 +331,7 @@ fn createSysvarAccount(
     errdefer allocator.free(sysvar_data);
     @memset(sysvar_data, 0);
 
-    // writeToSlice may return a 'NoSpaceLeft' error. The above allocation ensures
-    // that there is enough space for serialisation.
-    _ = bincode.writeToSlice(sysvar_data, sysvar, .{}) catch unreachable;
+    _ = try bincode.writeToSlice(sysvar_data, sysvar, .{});
 
     const lamports_for_rent = rent.minimumBalance(sysvar_data.len);
     const lamports, const rent_epoch = if (old_account) |acc|
@@ -361,25 +353,17 @@ fn getSysvarAndDataFromAccount(
     accounts_db: *AccountsDb,
     ancestors: *const Ancestors,
     comptime Sysvar: type,
-) ?struct { sysvar: Sysvar, data: []const u8 } {
-    const maybe_account = accounts_db.getAccountWithAncestors(
+) !?struct { sysvar: Sysvar, data: []const u8 } {
+    const maybe_account = try accounts_db.getAccountWithAncestors(
         &Sysvar.ID,
         ancestors,
-    ) catch return null;
+    );
 
     const account = maybe_account orelse return null;
     defer account.deinit(allocator);
 
-    // TODO: how/can I read this without allocating?
-    const data = account.data.dupeAllocatedOwned(allocator) catch
-        return null;
-
-    const sysvar = bincode.readFromSlice(
-        allocator,
-        Sysvar,
-        data.owned_allocation,
-        .{},
-    ) catch {
+    const data = account.data.dupeAllocatedOwned(allocator) catch return null;
+    const sysvar = bincode.readFromSlice(allocator, Sysvar, data.owned_allocation, .{}) catch {
         data.deinit(allocator);
         return null;
     };
@@ -392,25 +376,17 @@ fn getSysvarFromAccount(
     accounts_db: *AccountsDb,
     ancestors: *const Ancestors,
     comptime Sysvar: type,
-) ?Sysvar {
-    const maybe_account = accounts_db.getAccountWithAncestors(
+) !?Sysvar {
+    const maybe_account = try accounts_db.getAccountWithAncestors(
         &Sysvar.ID,
         ancestors,
-    ) catch return null;
+    );
 
     const account = maybe_account orelse return null;
     defer account.deinit(allocator);
 
-    const data = account.data.dupeAllocatedOwned(allocator) catch
-        return null;
-    defer data.deinit(allocator);
-
-    return bincode.readFromSlice(
-        allocator,
-        Sysvar,
-        data.owned_allocation,
-        .{},
-    ) catch null;
+    var data = account.data.iterator();
+    return bincode.read(allocator, Sysvar, data.reader(), .{}) catch return null;
 }
 
 fn nextClock(
@@ -431,7 +407,7 @@ fn nextClock(
         .unix_timestamp = genesis_creation_time,
     };
 
-    const clock = getSysvarFromAccount(
+    const clock = try getSysvarFromAccount(
         allocator,
         accounts_db,
         ancestors,
