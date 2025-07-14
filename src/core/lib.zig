@@ -57,6 +57,7 @@ pub const HardFork = HardForks.HardFork;
 pub const HardForks = hard_forks.HardForks;
 pub const Hash = hash.Hash;
 pub const Instruction = instruction.Instruction;
+pub const LtHash = hash.LtHash;
 pub const Nonce = shred.Nonce;
 pub const Pubkey = pubkey.Pubkey;
 pub const ShredVersion = shred.ShredVersion;

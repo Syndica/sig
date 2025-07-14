@@ -5,9 +5,12 @@ const replay = @import("lib.zig");
 const core = sig.core;
 
 const Allocator = std.mem.Allocator;
+const assert = std.debug.assert;
 
 const ThreadPool = sig.sync.ThreadPool;
 
+const Hash = core.Hash;
+const LtHash = core.LtHash;
 const Pubkey = core.Pubkey;
 const Slot = core.Slot;
 
@@ -96,25 +99,37 @@ pub fn replayActiveSlots(state: *ReplayExecutionState) !bool {
         // results. this will change once we call the svm and process the
         // results of execution.
         const slot, const status = slot_status;
-        if (status == .confirm) {
-            // NOTE: agave does this a bit differently, it indicates that a slot
-            // was *finished*, not just processed partially.
-            processed_a_slot = true;
-            while (try status.confirm.poll() == .pending) {
-                // TODO: consider futex-based wait like ResetEvent
-                std.time.sleep(std.time.ns_per_ms);
-            }
-            state.logger.info().logf("confirmed slot {}", .{slot});
-        }
         const slot_info = state.slot_tracker.get(slot) orelse unreachable;
+        const epoch_info = state.epochs.getForSlot(slot) orelse unreachable;
+
+        if (status != .confirm) continue;
+
+        const future = status.confirm;
+        // NOTE: agave does this a bit differently, it indicates that a slot
+        // was *finished*, not just processed partially.
+        processed_a_slot = true;
+        while (try status.confirm.poll() == .pending) {
+            // TODO: consider futex-based wait like ResetEvent
+            std.time.sleep(std.time.ns_per_ms);
+        }
+
         if (slot_info.state.tickHeight() == slot_info.constants.max_tick_height) {
+            state.logger.info().logf("confirmed entire slot {}", .{slot});
             try freezeSlot(
                 state.allocator,
+                slot_info.state,
                 state.accounts_db,
                 slot,
                 &slot_info.constants.parent_hash,
-                slot_info.state,
+                &slot_info.constants.parent_lt_hash,
+                &slot_info.constants.ancestors,
+                &epoch_info.rent_collector.rent,
+                future.entries[future.entries.len - 1].hash,
+                &slot_info.constants.feature_set,
+                slot_info.constants.fee_rate_governor.lamports_per_signature,
             );
+        } else {
+            state.logger.info().logf("partially confirmed slot {}", .{slot});
         }
     }
 
@@ -288,40 +303,80 @@ fn replaySlot(state: *ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
     ) };
 }
 
+// TODO: params struct, conversion from bank, separate out hash function
 /// Analogous to [Bank::freeze](https://github.com/anza-xyz/agave/blob/b948b97d2a08850f56146074c0be9727202ceeff/runtime/src/bank.rs#L2620)
 fn freezeSlot(
     allocator: Allocator,
+    state: *sig.core.SlotState,
     accounts_db: *AccountsDB,
     slot: Slot,
-    parent_slot_hash: *const sig.core.Hash,
-    state: *sig.core.SlotState,
+    parent_slot_hash: *const Hash,
+    parent_lt_hash: *const ?LtHash,
+    ancestors: *const sig.core.Ancestors,
+    rent: *const sig.runtime.sysvar.Rent,
+    blockhash: Hash,
+    feature_set: *const std.AutoArrayHashMapUnmanaged(Pubkey, Slot),
+    lamports_per_signature: u64,
 ) !void {
-    // TODO: reconsider locking the hash for the entire function. it actually
-    // makes sense in a way, but give it some more thought.
+    // TODO: reconsider locking the hash for the entire function.
     var slot_hash = state.hash.write();
     defer slot_hash.unlock();
 
     if (slot_hash.get().* != null) return; // already frozen
 
-    // TODO: update sysvars and collect rent
-
-    const accounts_delta_hash = try accounts_db.deltaHash(allocator, slot);
-
-    const last_blockhash = blk: {
-        var q = state.blockhash_queue.read();
-        defer q.unlock();
-        break :blk q.get().last_hash orelse return error.MissingLastBlockhash;
-    };
-
     var signature_count: [8]u8 = undefined;
     std.mem.writeInt(u64, &signature_count, state.signature_count.load(.monotonic), .little);
 
-    slot_hash.mut().* = sig.core.Hash.generateSha256(.{
-        &parent_slot_hash.data,
-        &accounts_delta_hash.data,
-        &signature_count,
-        &last_blockhash.data,
-    });
+    if (feature_set.contains(sig.runtime.features.ACCOUNTS_LT_HASH)) {
+        var parent_ancestors = try ancestors.clone(allocator);
+        defer parent_ancestors.deinit(allocator);
+        assert(parent_ancestors.ancestors.swapRemove(slot));
+
+        var lt_hash = parent_lt_hash.* orelse return error.UnknownParentLtHash;
+        lt_hash.mixIn(&try accounts_db.deltaLtHash(slot, &parent_ancestors));
+        state.accounts_lt_hash.set(lt_hash);
+
+        slot_hash.mut().* = Hash.generateSha256(.{
+            &Hash.generateSha256(.{
+                &parent_slot_hash.data,
+                &signature_count,
+                &blockhash.data,
+            }).data,
+            lt_hash.bytes(),
+        });
+    } else {
+        const accounts_hash = try accounts_db.deltaMerkleHash(allocator, slot);
+        slot_hash.mut().* = Hash.generateSha256(.{
+            &parent_slot_hash.data,
+            &accounts_hash.data,
+            &signature_count,
+            &blockhash.data,
+        });
+    }
+
+    const sysvar_params = replay.update_sysvar.UpdateSysvarAccountDeps{
+        .accounts_db = accounts_db,
+        .capitalization = &state.capitalization,
+        .ancestors = ancestors,
+        .rent = rent,
+        .slot = slot,
+    };
+    try replay.update_sysvar.updateSlotHistory(allocator, sysvar_params);
+
+    {
+        var q = state.blockhash_queue.write();
+        defer q.unlock();
+        try q.mut().insertHash(
+            allocator,
+            blockhash,
+            lamports_per_signature,
+        );
+    }
+    {
+        var q = state.blockhash_queue.read();
+        defer q.unlock();
+        try replay.update_sysvar.updateRecentBlockhashes(allocator, q.get(), sysvar_params);
+    }
 
     // NOTE: agave updates hard_forks and hash_overrides here
 }

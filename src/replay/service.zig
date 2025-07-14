@@ -246,6 +246,7 @@ fn trackNewSlots(
                 .{
                     .parent_slot = parent_slot,
                     .parent_hash = parent_hash,
+                    .parent_lt_hash = parent_info.state.accounts_lt_hash.readCopy().?,
                     .block_height = parent_info.constants.block_height + 1,
                     .collector_id = leader,
                     .max_tick_height = (slot + 1) * epoch_info.ticks_per_slot,
@@ -279,7 +280,7 @@ fn trackNewSlots(
             try updateSlotHashes(allocator, parent_slot, parent_hash, sysvar_deps);
             try updateStakeHistory(allocator, .{
                 .epoch = epoch,
-                .parent_epoch = parent_epoch, // TODO
+                .parent_epoch = parent_epoch,
                 .stakes_cache = &slot_state.stakes_cache,
                 .update_sysvar_deps = sysvar_deps,
             });
@@ -309,7 +310,6 @@ fn trackNewSlots(
 }
 
 fn updateSysvarsForNewSlot() !void {
-
     // TODO move above stuff here
 }
 

@@ -173,9 +173,10 @@ test "SlotTracker.prune removes all slots less than root" {
         try tracker.put(
             allocator,
             i,
-            sig.core.SlotConstants{
+            .{
                 .parent_slot = i - 1,
                 .parent_hash = sig.core.Hash.ZEROES,
+                .parent_lt_hash = .IDENTITY,
                 .block_height = 0,
                 .collector_id = sig.core.Pubkey.ZEROES,
                 .max_tick_height = 0,

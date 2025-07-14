@@ -927,6 +927,7 @@ test "checkAndHandleNewRoot - missing slot" {
     try slot_tracker.put(testing.allocator, root.slot, .{
         .parent_slot = 0,
         .parent_hash = Hash.ZEROES,
+        .parent_lt_hash = .IDENTITY,
         .block_height = 0,
         .collector_id = Pubkey.ZEROES,
         .max_tick_height = 0,
@@ -942,7 +943,7 @@ test "checkAndHandleNewRoot - missing slot" {
         .signature_count = std.atomic.Value(u64).init(0),
         .tick_height = std.atomic.Value(u64).init(0),
         .collected_rent = std.atomic.Value(u64).init(0),
-        .accounts_lt_hash = sig.sync.Mux(LtHash).init(LtHash{
+        .accounts_lt_hash = .init(LtHash{
             .data = [_]u16{0} ** LtHash.NUM_ELEMENTS,
         }),
         .stakes_cache = .default(),
@@ -1004,6 +1005,7 @@ test "checkAndHandleNewRoot - missing hash" {
     try slot_tracker.put(testing.allocator, root.slot, .{
         .parent_slot = 0,
         .parent_hash = Hash.ZEROES,
+        .parent_lt_hash = .IDENTITY,
         .block_height = 0,
         .collector_id = Pubkey.ZEROES,
         .max_tick_height = 0,
@@ -1019,7 +1021,7 @@ test "checkAndHandleNewRoot - missing hash" {
         .signature_count = std.atomic.Value(u64).init(0),
         .tick_height = std.atomic.Value(u64).init(0),
         .collected_rent = std.atomic.Value(u64).init(0),
-        .accounts_lt_hash = sig.sync.Mux(LtHash).init(LtHash{
+        .accounts_lt_hash = .init(LtHash{
             .data = [_]u16{0} ** LtHash.NUM_ELEMENTS,
         }),
         .stakes_cache = .default(),
@@ -1138,6 +1140,7 @@ test "checkAndHandleNewRoot - success" {
     try slot_tracker.put(testing.allocator, hash2.slot, .{
         .parent_slot = hash1.slot,
         .parent_hash = Hash.ZEROES,
+        .parent_lt_hash = .IDENTITY,
         .block_height = 0,
         .collector_id = Pubkey.ZEROES,
         .max_tick_height = 0,
@@ -1153,7 +1156,7 @@ test "checkAndHandleNewRoot - success" {
         .signature_count = std.atomic.Value(u64).init(0),
         .tick_height = std.atomic.Value(u64).init(0),
         .collected_rent = std.atomic.Value(u64).init(0),
-        .accounts_lt_hash = sig.sync.Mux(LtHash).init(LtHash{
+        .accounts_lt_hash = .init(LtHash{
             .data = [_]u16{0} ** LtHash.NUM_ELEMENTS,
         }),
         .stakes_cache = .default(),
@@ -1162,6 +1165,7 @@ test "checkAndHandleNewRoot - success" {
     try slot_tracker.put(testing.allocator, hash3.slot, .{
         .parent_slot = hash2.slot,
         .parent_hash = Hash.ZEROES,
+        .parent_lt_hash = .IDENTITY,
         .block_height = 0,
         .collector_id = Pubkey.ZEROES,
         .max_tick_height = 0,
@@ -1177,7 +1181,7 @@ test "checkAndHandleNewRoot - success" {
         .signature_count = std.atomic.Value(u64).init(0),
         .tick_height = std.atomic.Value(u64).init(0),
         .collected_rent = std.atomic.Value(u64).init(0),
-        .accounts_lt_hash = sig.sync.Mux(LtHash).init(LtHash{
+        .accounts_lt_hash = .init(LtHash{
             .data = [_]u16{0} ** LtHash.NUM_ELEMENTS,
         }),
         .stakes_cache = .default(),

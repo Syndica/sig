@@ -64,6 +64,12 @@ pub const SlotConstants = struct {
     /// Hash of this Bank's parent's state
     parent_hash: Hash,
 
+    /// Lattice hash of the parent slot.
+    ///
+    /// Will be null for the first slot loaded from a snapshot, but that slot is
+    /// already hashed so it doesn't matter.
+    parent_lt_hash: ?LtHash,
+
     /// Total number of blocks produced up to this slot
     block_height: u64,
 
@@ -95,6 +101,7 @@ pub const SlotConstants = struct {
         return .{
             .parent_slot = bank_fields.parent_slot,
             .parent_hash = bank_fields.parent_hash,
+            .parent_lt_hash = null,
             .block_height = bank_fields.block_height,
             .collector_id = bank_fields.collector_id,
             .max_tick_height = bank_fields.max_tick_height,
@@ -109,6 +116,7 @@ pub const SlotConstants = struct {
         return .{
             .parent_slot = 0,
             .parent_hash = sig.core.Hash.ZEROES,
+            .parent_lt_hash = .IDENTITY,
             .block_height = 0,
             .collector_id = Pubkey.ZEROES,
             .max_tick_height = 0,
@@ -159,7 +167,7 @@ pub const SlotState = struct {
     /// The lattice hash of all accounts
     ///
     /// The value is only meaningful after freezing.
-    accounts_lt_hash: sig.sync.Mux(LtHash),
+    accounts_lt_hash: sig.sync.Mux(?LtHash),
 
     stakes_cache: sig.core.StakesCache,
 
@@ -171,7 +179,7 @@ pub const SlotState = struct {
         .signature_count = .init(0),
         .tick_height = .init(0),
         .collected_rent = .init(0),
-        .accounts_lt_hash = .init(.ZEROES),
+        .accounts_lt_hash = .init(.IDENTITY),
         .stakes_cache = .default(),
     };
 
@@ -199,7 +207,7 @@ pub const SlotState = struct {
             .signature_count = .init(bank_fields.signature_count),
             .tick_height = .init(bank_fields.tick_height),
             .collected_rent = .init(bank_fields.collected_rent),
-            .accounts_lt_hash = .init(LtHash{ .data = .{0xBAD1} ** LtHash.NUM_ELEMENTS }),
+            .accounts_lt_hash = .init(LtHash{ .data = @splat(0xBAD1) }),
             .stakes_cache = .{ .stakes = .init(stakes) },
         };
     }
