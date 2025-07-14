@@ -55,7 +55,7 @@ const UpdateOperations = SortedMap(
 
 pub const ForkWeight = u64;
 
-/// Analogous to [ForkInfo](https://github.com/anza-xyz/agave/blob/e7301b2a29d14df19c3496579cf8e271b493b3c6/core/src/consensus/heaviest_subtree_fork_choice.rs#L92)
+// Analogous to [ForkInfo](https://github.com/anza-xyz/agave/blob/e7301b2a29d14df19c3496579cf8e271b493b3c6/core/src/consensus/heaviest_subtree_fork_choice.rs#L92)
 pub const ForkInfo = struct {
     logger: ScopedLogger(@typeName(ForkInfo)),
     /// Amount of stake that has voted for exactly this slot
@@ -68,7 +68,7 @@ pub const ForkInfo = struct {
     /// Heaviest slot in the subtree rooted at this slot, does not
     /// have to be a direct child in `children`. This is the slot whose subtree
     /// is the heaviest.
-    /// Analogous to [best_slot](https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L103C5-L103C14)
+    // Analogous to [best_slot](https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L103C5-L103C14)
     heaviest_subtree_slot: SlotAndHash,
     /// Deepest slot in the subtree rooted at this slot. This is the slot
     /// with the greatest tree height. This metric does not discriminate invalid
@@ -156,7 +156,7 @@ pub const ForkInfo = struct {
     }
 };
 
-/// Analogous to [HeaviestSubtreeForkChoice](https://github.com/anza-xyz/agave/blob/e7301b2a29d14df19c3496579cf8e271b493b3c6/core/src/consensus/heaviest_subtree_fork_choice.rs#L187)
+// Analogous to [HeaviestSubtreeForkChoice](https://github.com/anza-xyz/agave/blob/e7301b2a29d14df19c3496579cf8e271b493b3c6/core/src/consensus/heaviest_subtree_fork_choice.rs#L187)
 pub const ForkChoice = struct {
     allocator: std.mem.Allocator,
     logger: ScopedLogger(@typeName(ForkChoice)),
@@ -307,14 +307,14 @@ pub const ForkChoice = struct {
         return null;
     }
 
-    /// Analogous to [best_overall_slot](https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L305)
+    // Analogous to [best_overall_slot](https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L305)
     pub fn heaviestOverallSlot(self: *const ForkChoice) SlotAndHash {
         return self.heaviestSlot(self.tree_root) orelse {
             @panic("Root must exist in tree");
         };
     }
 
-    /// Analogous to [best_slot](https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L293)
+    // Analogous to [best_slot](https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L293)
     pub fn heaviestSlot(
         self: *const ForkChoice,
         slot_hash_key: SlotAndHash, //TODO change this to reference
@@ -368,6 +368,9 @@ pub const ForkChoice = struct {
         return null;
     }
 
+    /// Add new votes, returns the best slot
+    ///
+    // Analogous to [add_votes](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L343)
     pub fn addVotes(
         self: *ForkChoice,
         allocator: std.mem.Allocator,
@@ -448,17 +451,13 @@ pub const ForkChoice = struct {
         self.last_root_time = Instant.now();
     }
 
-    /// Analogous to [add_root_parent](https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L421)
-    ///
     /// Adds a new root parent to the fork choice tree. This is used when we need to
     /// insert a new slot that becomes the root of the entire tree.
     ///
-    /// # Arguments
-    /// * `root_parent` - The new root parent slot to add
+    /// It expects `root_parent.slot` to be less than `self.tree_root.slot`
+    /// and `root_parent` must not already exist in the fork choice.
     ///
-    /// # Preconditions
-    /// * `root_parent.slot` must be less than `self.tree_root.slot`
-    /// * `root_parent` must not already exist in the fork choice
+    // Analogous to [add_root_parent](https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L421)
     pub fn addRootParent(self: *ForkChoice, root_parent: SlotAndHash) !void {
         // Assert that the new root parent has a smaller slot than the current root
         std.debug.assert(root_parent.slot < self.tree_root.slot);
@@ -731,7 +730,7 @@ pub const ForkChoice = struct {
         }
     }
 
-    /// Analogous to [is_best_child] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L499
+    // Analogous to [is_best_child] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L499
     ///
     /// Returns true if the given `maybe_heaviest_child` is the heaviest among the children
     /// of the parent. Breaks ties by slot # (lower is heavier).
@@ -916,7 +915,20 @@ pub const ForkChoice = struct {
         return reachable_set;
     }
 
-    /// Analogous to [generate_update_operations](https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L969)
+    /// Generates update operations for the fork choice tree based on new validator votes.
+    ///
+    /// This function processes a batch of validator votes and produces operations to:
+    /// 1) Remove stake from old votes (if they exist)
+    /// 2) Add stake to new votes
+    /// 3) Generate aggregate operations for affected forks
+    ///
+    /// Key invariants:
+    /// - Votes older than the current tree root are ignored (they don't affect fork choice)
+    /// - Each pubkey can only appear once in the input batch
+    /// - Only the latest vote for each validator is considered (by slot, then by smallest hash)
+    /// - Stake is only updated if the validator has stake in the vote's epoch
+    ///
+    // Analogous to [generate_update_operations](https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L969)
     fn generateUpdateOperations(
         self: *ForkChoice,
         allocator: std.mem.Allocator,
@@ -1395,6 +1407,9 @@ pub const ForkChoice = struct {
         };
     }
 
+    /// Updates fork choice statistics by processing new validator votes.
+    ///
+    // Analogous to [compute_bank_stats](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L1250)
     pub fn computeBankStats(
         self: *ForkChoice,
         allocator: std.mem.Allocator,
@@ -1433,6 +1448,8 @@ pub const ForkChoice = struct {
     ///
     /// Assumes that `slot_hash_key` is not the `tree_root`
     /// Returns the subtree originating from `slot_hash_key`
+    ///
+    // Analogous to [split_off](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L581)
     pub fn splitOff(
         self: *ForkChoice,
         allocator: std.mem.Allocator,
@@ -1995,7 +2012,6 @@ test "HeaviestSubtreeForkChoice.propagateNewLeaf" {
         try std.testing.expectEqual(9, fork_choice.deepestSlot(&item).?.slot);
     }
 
-    // Add a vote for the other branch at slot 6
     var prng = std.Random.DefaultPrng.init(91);
     const random = prng.random();
     const stake: u64 = 100;
@@ -2096,6 +2112,7 @@ test "HeaviestSubtreeForkChoice.propagateNewLeaf" {
     }
 }
 
+// Analogous to [propagateNewLeaf2](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L2035)
 test "HeaviestSubtreeForkChoice.propagateNewLeaf2" {
     // Build fork structure:
     //      slot 0
@@ -2178,6 +2195,7 @@ test "HeaviestSubtreeForkChoice.propagateNewLeaf2" {
     try std.testing.expectEqual(6, fork_choice.heaviestOverallSlot().slot);
 }
 
+// Analogous to [test_set_root_and_add_outdated_votes](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L1772)
 test "HeaviestSubtreeForkChoice.setRootAndAddOutdatedVotes" {
     var fork_choice = try forkChoiceForTest(test_allocator, fork_tuples[0..]);
     defer fork_choice.deinit();
@@ -2866,7 +2884,8 @@ test "HeaviestSubtreeForkChoice.heaviestSlotOnSameVotedFork_missing_candidate" {
     );
 }
 
-test "HeaviestSubtreeForkChoice.GenerateUpdateOperations" {
+// Analogous to [test_generate_update_operations](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L2312)
+test "HeaviestSubtreeForkChoice.generateUpdateOperations" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(91);
     const random = prng.random();
@@ -3447,6 +3466,7 @@ fn testEpochStakes(
     };
 }
 
+// Analogous to [add_root_parent](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L426)
 test "HeaviestSubtreeForkChoice.addRootParent" {
     var prng = std.Random.DefaultPrng.init(91);
     const random = prng.random();
@@ -3538,6 +3558,7 @@ test "HeaviestSubtreeForkChoice.addRootParent" {
     );
 }
 
+// Analogous to [test_add_votes](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L2493)
 test "HeaviestSubtreeForkChoice.addVotes" {
     var prng = std.Random.DefaultPrng.init(91);
     const random = prng.random();
@@ -3588,6 +3609,7 @@ test "HeaviestSubtreeForkChoice.addVotes" {
     );
 }
 
+// Analogous to [test_add_votes_duplicate_greater_hash_ignored](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L2616)
 test "HeaviestSubtreeForkChoice.addVotesDuplicateGreaterHashIgnored" {
     var prng = std.Random.DefaultPrng.init(91);
     const random = prng.random();
@@ -3687,6 +3709,7 @@ test "HeaviestSubtreeForkChoice.addVotesDuplicateGreaterHashIgnored" {
     }
 }
 
+// Analogous to [test_add_votes_duplicate_smaller_hash_prioritized](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L2704)
 test "HeaviestSubtreeForkChoice.addVotesDuplicateSmallerHashPrioritized" {
     var prng = std.Random.DefaultPrng.init(91);
     const random = prng.random();
@@ -3807,6 +3830,7 @@ test "HeaviestSubtreeForkChoice.addVotesDuplicateSmallerHashPrioritized" {
     }
 }
 
+// Analogous to [test_add_votes_duplicate_then_outdated](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L2821)
 test "HeaviestSubtreeForkChoice.addVotesDuplicateThenOutdated" {
     var prng = std.Random.DefaultPrng.init(91);
     const random = prng.random();
@@ -3948,6 +3972,7 @@ test "HeaviestSubtreeForkChoice.addVotesDuplicateThenOutdated" {
     }
 }
 
+// Analogous to [test_add_votes_duplicate_tie](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L2518)
 test "HeaviestSubtreeForkChoice.addVotesDuplicateTie" {
     var prng = std.Random.DefaultPrng.init(91);
     const random = prng.random();
@@ -4054,6 +4079,7 @@ test "HeaviestSubtreeForkChoice.addVotesDuplicateTie" {
     }
 }
 
+// Analogous to [test_add_votes_duplicate_zero_stake](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L2947)
 test "HeaviestSubtreeForkChoice.addVotesDuplicateZeroStake" {
     var prng = std.Random.DefaultPrng.init(91);
     const random = prng.random();
@@ -4136,6 +4162,7 @@ test "HeaviestSubtreeForkChoice.addVotesDuplicateZeroStake" {
     );
 }
 
+// Analogous to [test_is_best_child](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L3015)
 test "HeaviestSubtreeForkChoice.isBestChild" {
     var prng = std.Random.DefaultPrng.init(91);
     const random = prng.random();
@@ -4245,6 +4272,7 @@ test "HeaviestSubtreeForkChoice.isBestChild" {
     );
 }
 
+// Analogous to [test_mark_invalid_then_add_new_heavier_duplicate_slot](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L3589)
 test "HeaviestSubtreeForkChoice.markInvalidThenAddNewHeavierDuplicateSlot" {
     var prng = std.Random.DefaultPrng.init(91);
     const random = prng.random();
@@ -4314,6 +4342,7 @@ test "HeaviestSubtreeForkChoice.markInvalidThenAddNewHeavierDuplicateSlot" {
     );
 }
 
+// Analogous to [test_mark_valid_invalid_forks](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L3383)
 test "HeaviestSubtreeForkChoice.markValidInvalidForks" {
     var prng = std.Random.DefaultPrng.init(91);
     const random = prng.random();
@@ -4457,6 +4486,7 @@ test "HeaviestSubtreeForkChoice.markValidInvalidForks" {
     );
 }
 
+// Analogous to [test_set_root_and_add_votes](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L1717)
 test "HeaviestSubtreeForkChoice.setRootAndAddVotes" {
     var fork_choice = try forkChoiceForTest(test_allocator, fork_tuples[0..]);
     defer fork_choice.deinit();
@@ -4538,6 +4568,7 @@ test "HeaviestSubtreeForkChoice.setRootAndAddVotes" {
     try std.testing.expectEqual(7, fork_choice.heaviestOverallSlot().slot);
 }
 
+// Analogous to [test_split_off_on_best_path](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L4013)
 test "HeaviestSubtreeForkChoice.splitOffOnBestPath" {
     var fork_choice = try forkChoiceForTest(test_allocator, fork_tuples[0..]);
     defer fork_choice.deinit();
@@ -4600,6 +4631,7 @@ test "HeaviestSubtreeForkChoice.splitOffOnBestPath" {
     try std.testing.expectEqual(4, split_tree_1.heaviestOverallSlot().slot);
 }
 
+// Analogous to [test_split_off_simple](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L3906)
 test "HeaviestSubtreeForkChoice.splitOffSimple" {
     var fork_choice = try forkChoiceForTest(test_allocator, fork_tuples[0..]);
     defer fork_choice.deinit();
@@ -4679,6 +4711,7 @@ test "HeaviestSubtreeForkChoice.splitOffSimple" {
     );
 }
 
+// Analogous to [test_split_off_subtree_with_dups](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L4173)
 test "HeaviestSubtreeForkChoice.splitOffSubtreeWithDups" {
     var prng = std.Random.DefaultPrng.init(91);
     const random = prng.random();
@@ -4769,6 +4802,7 @@ test "HeaviestSubtreeForkChoice.splitOffSubtreeWithDups" {
     );
 }
 
+// Analogous to [test_split_off_unvoted](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L3969)
 test "HeaviestSubtreeForkChoice.splitOffUnvoted" {
     var fork_choice = try forkChoiceForTest(test_allocator, fork_tuples[0..]);
     defer fork_choice.deinit();
@@ -4839,6 +4873,7 @@ test "HeaviestSubtreeForkChoice.splitOffUnvoted" {
     );
 }
 
+// Analogous to [test_split_off_with_dups](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L4118)
 test "HeaviestSubtreeForkChoice.splitOffWithDups" {
     var prng = std.Random.DefaultPrng.init(91);
     const random = prng.random();
@@ -4925,6 +4960,7 @@ test "HeaviestSubtreeForkChoice.splitOffWithDups" {
     );
 }
 
+// Analogous to [test_gossip_vote_doesnt_affect_fork_choice](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/replay_stage.rs#L7538)
 test "HeaviestSubtreeForkChoice.gossipVoteDoesntAffectForkChoice" {
     var fork_choice = try forkChoiceForTest(test_allocator, fork_tuples[0..]);
     defer fork_choice.deinit();
