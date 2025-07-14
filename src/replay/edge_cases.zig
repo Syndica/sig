@@ -1816,6 +1816,68 @@ test "apply state changes slot frozen and duplicate confirmed matches frozen" {
     try std.testing.expectEqual(true, ledger_reader.isDuplicateConfirmed(duplicate_slot));
 }
 
+test "check slot agrees with cluster dead duplicate confirmed" {
+    const allocator = std.testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(13633);
+    const random = prng.random();
+
+    var test_data: TestData = try .init(allocator, .noop, random);
+    defer test_data.deinit(allocator);
+
+    const slot_tracker = test_data.slot_tracker;
+    const heaviest_subtree_fork_choice = &test_data.heaviest_subtree_fork_choice;
+    const progress = &test_data.progress;
+
+    var ledger_state: TestLedgerRwState = .init();
+    defer ledger_state.deinit();
+
+    var ledger, _, var ledger_writer =
+        try testLedgerRw(@src(), .noop, &ledger_state);
+    defer ledger.deinit();
+
+    const root = 0;
+
+    var purge_repair_slot_counter: PurgeRepairSlotCounters = .empty;
+    defer purge_repair_slot_counter.deinit(allocator);
+
+    // Mark slot 2 as duplicate confirmed
+    const slot2_hash = slot_tracker.get(2).?.state.hash.readCopy().?;
+
+    var duplicate_slots_to_repair: DuplicateSlotsToRepair = .empty;
+    defer duplicate_slots_to_repair.deinit(allocator);
+
+    var ancestor_hashes_replay_update_channel: sig.sync.Channel(AncestorHashesReplayUpdate) =
+        try .init(allocator);
+    defer ancestor_hashes_replay_update_channel.deinit();
+
+    progress.map.getPtr(2).?.is_dead = true;
+    try check_slot_agrees_with_cluster.duplicateConfirmed(
+        allocator,
+        .noop,
+        2,
+        root,
+        &ledger_writer,
+        heaviest_subtree_fork_choice,
+        &duplicate_slots_to_repair,
+        &ancestor_hashes_replay_update_channel,
+        &purge_repair_slot_counter,
+        .{
+            .duplicate_confirmed_hash = slot2_hash,
+            .slot_status = if (progress.isDead(2) orelse false) .dead else .fromHash(slot2_hash),
+        },
+    );
+
+    try std.testing.expectEqual(
+        AncestorHashesReplayUpdate{ .dead_duplicate_confirmed = 2 },
+        ancestor_hashes_replay_update_channel.tryReceive(),
+    );
+    try std.testing.expectEqual(
+        slot2_hash,
+        duplicate_slots_to_repair.get(2),
+    );
+}
+
 fn testStateDuplicateThenSlotFrozen(initial_slot_hash: ?sig.core.Hash) !void {
     const allocator = std.testing.allocator;
 
