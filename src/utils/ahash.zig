@@ -3,14 +3,16 @@ const std = @import("std");
 const AtomicU64 = std.atomic.Value(u64);
 const Random = std.Random;
 
-/// AHasher is a minimal impelementation of the AHash, a fast, DOS-resistant hash algorithm (https://github.com/tkaitchuck/aHash).
+/// AHasher is a minimal impelementation of the AHash, a fast, DOS-resistant hash algorithm
+/// https://github.com/tkaitchuck/aHash
 /// Currently, only the functionality required to replicate the agave Deduper is implemented.
 pub const AHasher = struct {
     buffer: u64,
     pad: u64,
     extra_keys: [2]u64,
 
-    // This constant comes from Kunth's prng (Empirically it works better than those from splitmix32).
+    // This constant comes from Kunth's prng (Empirically it works better than those from
+    // splitmix32).
     const MULTIPLE: u64 = 6364136223846793005;
     const ROTATE: u32 = 23;
 

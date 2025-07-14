@@ -236,7 +236,8 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                         try pubkeys_this_slot.put(pubkey.*, {});
 
                         // // NOTE: useful for debugging
-                        // std.debug.print("put account @ slot {d}: {any}\n", .{ slot, tracked_account });
+                        // std.debug.print("put account @ slot {d}: {any}\n",
+                        // .{ slot, tracked_account });
                     }
                 }
                 defer for (accounts) |account| account.deinit(allocator);

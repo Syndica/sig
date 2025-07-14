@@ -20,7 +20,8 @@ pub fn BoundedSpec(comptime spec: []const u8) type {
         /// ```zig
         /// try expectEqual("255-1".len, BoundedSpec("{d}-{d}").fmtLen(struct { u8, u1 }));
         /// // comptime field values in the struct/tuple are reflected appropriately
-        /// try expectEqual("foo-255".len, BoundedSpec("{[a]s}-{[b]d}").fmtLen(struct { comptime a: []const u8 = "foo", b: u8 }));
+        /// try expectEqual("foo-255".len, BoundedSpec("{[a]s}-{[b]d}")
+        ///     .fmtLen(struct { comptime a: []const u8 = "foo", b: u8 }));
         /// ```
         pub inline fn fmtLen(comptime Args: type) usize {
             comptime return std.fmt.count(fmt_str, maxArgs(Args));
@@ -31,9 +32,15 @@ pub fn BoundedSpec(comptime spec: []const u8) type {
         /// element type, in order to match the actual bounded length.
         /// For example:
         /// ```zig
-        /// try expectEqual("255-255".len, boundedLenValue("{d}-{d}", .{ std.math.maxInt(u8), std.math.maxInt(u8) }));
+        /// try expectEqual(
+        ///     "255-255".len,
+        ///     boundedLenValue("{d}-{d}", .{ std.math.maxInt(u8), std.math.maxInt(u8) })
+        /// );
         /// // comptime field values in the struct/tuple are reflected appropriately
-        /// try expectEqual("foo-255".len, boundedLenValue("{[a]s}-{[b]d}", .{ .a = "foo", .b = 255 }));
+        /// try expectEqual(
+        ///     "foo-255".len,
+        ///     boundedLenValue("{[a]s}-{[b]d}", .{ .a = "foo", .b = 255 })
+        /// );
         /// ```
         pub inline fn fmtLenValue(comptime args_value: anytype) usize {
             comptime return fmtLen(@TypeOf(args_value));
@@ -50,7 +57,10 @@ pub fn BoundedSpec(comptime spec: []const u8) type {
         /// Returns a bounded array string, guaranteed to be able to represent the formatted result.
         /// For example:
         /// ```zig
-        /// try expectEqualStrings("fizz.buzz", BoundedFmtSpec("{s}.{s}").fmt(.{ "foo", "buzz" }).constSlice());
+        /// try expectEqualStrings(
+        ///     "fizz.buzz",
+        ///     BoundedFmtSpec("{s}.{s}").fmt(.{ "foo", "buzz" }
+        /// ).constSlice());
         /// ```
         pub inline fn fmt(args: anytype) BoundedArray(@TypeOf(args)) {
             var out: std.BoundedArray(u8, fmtLen(@TypeOf(args))) = .{};
@@ -58,8 +68,8 @@ pub fn BoundedSpec(comptime spec: []const u8) type {
             return out;
         }
 
-        /// Clears `out`, and writes the equivalent of `fmt` to it, returning the slice (also accessible as `out.slice()`).
-        /// For example:
+        /// Clears `out`, and writes the equivalent of `fmt` to it, returning the slice (also
+        /// accessible as `out.slice()`). For example:
         /// ```zig
         /// const Spec = BoundedFmtSpec("{s}.{s}");
         /// var str: Spec.BoundedArrayValue(.{ "foo", "buzz" }) = .{};
@@ -229,7 +239,8 @@ pub const TryRealPathFmt = struct {
     }
 };
 
-/// The format string is of the form `key_fmt|value_fmt`, wherein the `|` character can be escaped in the `key_fmt` as `||`.
+/// The format string is of the form `key_fmt|value_fmt`, wherein the `|` character can be escaped
+/// in the `key_fmt` as `||`.
 pub inline fn hashMapFmt(
     hash_map: anytype,
     sep: []const u8,

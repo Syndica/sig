@@ -74,7 +74,8 @@ pub fn poseidon(
 
     // Agave handles poseidon errors in an annoying way.
     // The feature SIMPLIFY_ALT_BN_128_SYSCALL_ERROR_CODES simplifies this handling.
-    // It is acitvated on all clusters, we still check for activation here and panic if it is not active.
+    // It is acitvated on all clusters, we still check for activation here and panic
+    // if it is not active.
     // [agave] https://github.com/firedancer-io/agave/blob/66ea0a11f2f77086d33253b4028f6ae7083d78e4/programs/bpf_loader/src/syscalls/mod.rs#L1815-L1825
     var hasher = phash.Hasher.init(endianness);
     for (slices.constSlice()) |slice| {

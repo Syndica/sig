@@ -223,7 +223,9 @@ const weak_mul = struct {
     }
 
     /// Multiscalar multiplication *IN VARIABLE TIME* for public data
-    /// Computes ps0*ss0 + ps1*ss1 + ps2*ss2... faster than doing many of these operations individually
+    ///
+    /// Computes ps0*ss0 + ps1*ss1 + ps2*ss2... faster than doing many of these
+    /// operations individually
     fn mulMulti(comptime count: usize, ps: [count]Edwards25519, ss: [count][32]u8) !Edwards25519 {
         var pcs: [count][9]Edwards25519 = undefined;
 

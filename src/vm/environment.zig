@@ -313,7 +313,7 @@ pub const Environment = struct {
 
         // Alt_bn128
         // if (feature_set.active.contains(feature_set.ENABLE_ALT_BN128_SYSCALL)) {
-        //     _ = try syscalls.registerHashed(allocator, "sol_alt_bn128_group_op", altBn128GroupOp,);
+        //     _ = try syscalls.registerHashed(allocator, "sol_alt_bn128_group_op", altBn128GroupOp,
         // }
 
         // Big_mod_exp
@@ -341,7 +341,11 @@ pub const Environment = struct {
 
         // Alt_bn_128_compression
         // if (feature_set.active.contains(feature_set.ENABLE_ALT_BN_128_COMPRESSION_SYSCALL)) {
-        //     _ = try syscalls.registerHashed(allocator, "sol_alt_bn_128_compression", altBn128Compression,);
+        // _ = try syscalls.registerHashed(
+        //     allocator,
+        //     "sol_alt_bn_128_compression",
+        //     altBn128Compression,
+        // );
         // }
 
         // Sysvar Getter

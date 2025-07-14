@@ -89,8 +89,9 @@ pub fn Channel(T: type) type {
             };
         };
 
-        // NOTE: if we start seeing performance problems with the channel implementation in the future
-        // note that it's possible to pre-allocate an initial capacity of blocks in order to speed it up.
+        // NOTE: if we start seeing performance problems with the channel
+        // implementation in the future note that it's possible to pre-allocate
+        // an initial capacity of blocks in order to speed it up.
         pub fn init(allocator: Allocator) !Self {
             const first_block = try Buffer.create(allocator);
             const first_position: Position = .{
@@ -182,8 +183,8 @@ pub fn Channel(T: type) type {
                     block = channel.tail.block.load(.acquire);
                     backoff.spin();
                 } else {
-                    // We won the race, now we install the next_block and next_index for other threads
-                    // to see and unblock.
+                    // We won the race, now we install the next_block and next_index for other
+                    // threads to see and unblock.
                     if (offset + 1 == BLOCK_CAP) {
                         // We're now one over the block cap and the next slot we write to
                         // will be inside of the next block. Wrap the offset around the block,
@@ -193,10 +194,11 @@ pub fn Channel(T: type) type {
                         channel.tail.index.store(next_index, .release);
                         block.?.next.store(next_block, .release);
                     } else if (next_block) |b| {
-                        // When you win the CAS the time other threads snooze is from the CAS to the tail.index store above.
-                        // Moving allocation after the CAS increases the amount of time other threads must snooze.
-                        // Moving the allocation before the CAS lowers it, but you need to handle the install
-                        // failures by de-allocating the next_block.
+                        // When you win the CAS the time other threads snooze is from the CAS to the
+                        // tail.index store above. Moving allocation after the CAS increases the
+                        // amount of time other threads must snooze. Moving the allocation before
+                        // the CAS lowers it, but you need to handle the install failures by
+                        // de-allocating the next_block.
                         channel.allocator.destroy(b);
                     }
 
@@ -227,7 +229,8 @@ pub fn Channel(T: type) type {
             }
         }
 
-        /// Waits untli the channel potentially has items, periodically checking for the ExitCondition.
+        /// Waits untli the channel potentially has items, periodically checking for the
+        /// ExitCondition.
         /// Must be called by only one receiver thread at a time.
         pub fn waitToReceive(channel: *Self, exit: ExitCondition) error{Exit}!void {
             while (channel.isEmpty()) {
@@ -248,8 +251,8 @@ pub fn Channel(T: type) type {
                 // Shift away the meta-data bits and get the index into whichever block we're in.
                 const offset = (head >> SHIFT) % LAP;
 
-                // This means another thread has begun the process of installing a new head block and index,
-                // we just need to wait until that's done.
+                // This means another thread has begun the process of installing a new head block
+                // and index, we just need to wait until that's done.
                 if (offset == BLOCK_CAP) {
                     backoff.snooze();
                     head = channel.head.index.load(.acquire);
@@ -260,21 +263,24 @@ pub fn Channel(T: type) type {
                 // After we consume this, this will be our next head.
                 var new_head = head + (1 << SHIFT);
 
-                // A bit confusing, but this checks if the current head *doesn't* have a next block linked.
-                // It's encoded as a bit in order to be able to tell without dereferencing it.
+                // A bit confusing, but this checks if the current head *doesn't* have a next block
+                // linked. It's encoded as a bit in order to be able to tell without dereferencing
+                // it.
                 if (new_head & HAS_NEXT == 0) {
-                    // NOTE: could also be tail.index.load(.acquire), but to be safe, seq_cst RMW load
+                    // NOTE: could also be tail.index.load(.acquire),
+                    // but to be safe, seq_cst RMW load
                     const tail = channel.tail.index.fetchAdd(0, .seq_cst);
 
-                    // If the indicies are the same, the channel is empty and there's nothing to receive.
+                    // If the indicies are the same, the channel is empty
+                    // and there's nothing to receive.
                     if (head >> SHIFT == tail >> SHIFT) {
                         return null;
                     }
 
-                    // The head index must always be less than or equal to the tail index.
-                    // Using this invariance, we can prove that if the head is in a different block than
-                    // the tail, it *must* be ahead of it and in a "next" block. Hence we set the "HAS_NEXT"
-                    // bit in the index.
+                    // The head index must always be less than or equal to the tail index. Using
+                    // this invariance, we can prove that if the head is in a different block than
+                    // the tail, it *must* be ahead of it and in a "next" block. Hence we set the
+                    // "HAS_NEXT" bit in the index.
                     if ((head >> SHIFT) / LAP != (tail >> SHIFT) / LAP) {
                         new_head |= HAS_NEXT;
                     }
@@ -283,12 +289,14 @@ pub fn Channel(T: type) type {
                 // Try to install a new head index.
                 if (channel.head.index.cmpxchgWeak(head, new_head, .seq_cst, .acquire)) |h| {
                     // We lost the install race against something, the new head index is acquired,
-                    // and we update the block as it could have changed due to a new block being installed.
+                    // and we update the block as it could have changed due to a new block being
+                    // installed.
                     head = h;
                     block = channel.head.block.load(.acquire);
                     backoff.spin();
                 } else {
-                    // There is a consumer on the other end that should be installing the next block right now.
+                    // There is a consumer on the other end that should be installing the next block
+                    // right now.
                     if (offset + 1 == BLOCK_CAP) {
                         // Wait until it installs the next block and update the references.
                         const next = while (true) {
@@ -349,7 +357,8 @@ pub fn Channel(T: type) type {
                         head +%= (1 << SHIFT);
                     }
 
-                    // Calculate on which block link we're on. Between 0-31 is block 1, 32-63 is block 2, etc.
+                    // Calculate on which block link we're on.
+                    // Between 0-31 is block 1, 32-63 is block 2, etc.
                     const lap = (head >> SHIFT) / LAP;
                     // Rotates the indices to fall into the first slot.
                     // (lap * LAP) is the first index of the block we're in.

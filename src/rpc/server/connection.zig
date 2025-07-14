@@ -155,7 +155,8 @@ pub const HandleSpliceResult = enum {
     again,
     /// One or both file descriptors are not valid, or do not have proper read-write mode.
     bad_file_descriptors,
-    /// Either off_in or off_out was not NULL, but the corresponding file descriptor refers to a pipe.
+    /// Either off_in or off_out was not NULL, but the corresponding
+    /// file descriptor refers to a pipe.
     bad_fd_offset,
     /// Could be one of many reasons, see the manpage for splice.
     invalid_splice,

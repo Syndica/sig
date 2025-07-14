@@ -176,7 +176,8 @@ pub fn SwissMapUnmanaged(
             var self = init();
 
             // from ensureTotalCapacity:
-            // memory.len === n_groups * (@sizeOf([GROUP_SIZE]KeyValue) + @sizeOf([GROUP_SIZE]State))
+            // memory.len === n_groups
+            //  * (@sizeOf([GROUP_SIZE]KeyValue) + @sizeOf([GROUP_SIZE]State))
             const n_groups =
                 memory.len / (@sizeOf([GROUP_SIZE]KeyValue) + @sizeOf([GROUP_SIZE]State));
 
@@ -362,15 +363,16 @@ pub fn SwissMapUnmanaged(
                         if (match_vec[j] and eq_fn(self.groups[group_index][j].key, key)) {
                             const result = self.groups[group_index][j].value;
 
-                            // search works by searching each group starting from group_index until an empty state is found
-                            // because if theres an empty state, the key DNE
+                            // search works by searching each group starting from group_index until
+                            // an empty state is found because if theres an empty state, the key DNE
                             //
-                            // if theres an empty state in this group already, then the search would early exit anyway,
-                            // so we can change this state to 'empty' as well.
+                            // if theres an empty state in this group already, then the search would
+                            // early exit anyway, so we can change this state to 'empty' as well.
                             //
-                            // if theres no empty state in this group, then there could be additional keys in a higher group,
-                            // which if we changed this state to empty would cause the search to early exit,
-                            // so we need to change this state to 'deleted'.
+                            // if theres no empty state in this group, then there could be
+                            // additional keys in a higher group, which if we changed this state to
+                            // empty would cause the search to early exit, so we need to change this
+                            // state to 'deleted'.
                             //
                             const new_state = if (reduceOrWorkaround(EMPTY_STATE_VEC == state_vec))
                                 EMPTY_STATE
@@ -823,8 +825,10 @@ pub const BenchmarkSwissMap = struct {
         // );
 
         // // NOTE: if (speed_up < 1.0) "swissmap is slower" else "swissmap is faster";
-        // const write_speedup = @as(f32, @floatFromInt(std_write_time.asNanos())) / @as(f32, @floatFromInt(write_time.asNanos()));
-        // const read_speedup = @as(f32, @floatFromInt(std_read_time.asNanos())) / @as(f32, @floatFromInt(read_time.asNanos()));
+        // const write_speedup = @as(f32, @floatFromInt(std_write_time.asNanos()))
+        //     / @as(f32, @floatFromInt(write_time.asNanos()));
+        // const read_speedup = @as(f32, @floatFromInt(std_read_time.asNanos()))
+        //     / @as(f32, @floatFromInt(read_time.asNanos()));
 
         return .{
             .read_time = units.convertDuration(read_time),

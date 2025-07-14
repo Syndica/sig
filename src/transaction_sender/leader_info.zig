@@ -18,13 +18,18 @@ const ScopedLogger = sig.trace.log.ScopedLogger;
 const Config = sig.transaction_sender.service.Config;
 const LeaderSchedule = sig.core.leader_schedule.LeaderSchedule;
 
-/// LeaderInfo contains information about the cluster that is used to send transactions.
+/// LeaderInfo contains information about the cluster that is used to send
+/// transactions.
+///
 /// It uses the RpcClient to get the epoch info and leader schedule.
 /// It also uses the GossipTable to get the leader addresses.
+///
 /// TODO:
 /// - This struct is relatively inefficient because it makes a lot of RPC calls.
-/// - It could be moved into its own thread to make improve speed of getting leader addresses.
-/// - It's probably not a big deal for now though, because ultimately this implementation will be replaced.
+/// - It could be moved into its own thread to make improve speed of getting
+///   leader addresses.
+/// - It's probably not a big deal for now though, because ultimately this
+///   implementation will be replaced.
 pub const LeaderInfo = struct {
     allocator: Allocator,
     config: Config,

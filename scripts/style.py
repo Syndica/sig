@@ -19,7 +19,7 @@ def main():
 
     checks = [
         unused_imports,
-        line_length,
+        line_length_and_autofix,
     ]
     fails = 0
     for check in checks:
@@ -171,8 +171,12 @@ files_excluded_from_line_length_check = [
 ]
 
 
-def line_length(args, files_to_check):
-    """Enforces lines of code to be at most 100 characters long."""
+def line_length_and_autofix(args, files_to_check):
+    """
+    Enforces:
+     - lines of code must not exceed 100 characters.
+     - "// autofix" is prohibited.
+    """
 
     # map relating file paths to the number of lines that are too long
     unique_files = {}
@@ -187,20 +191,27 @@ def line_length(args, files_to_check):
             lines = f.readlines()
         for i, line in enumerate(lines):
             stripped = line.lstrip()
+
+            if "// autofix" in stripped:
+                print(f"{path}:{i + 1} contains autofix: {line}")
+
             if "// zig fmt: off" in stripped:
                 fmt_off = True
             if "// zig fmt: on" in stripped:
                 fmt_off = False
                 continue  # Don't check lines that have formatting turned off
-
             if fmt_off:
                 continue
 
-            if stripped.strip().startswith(("//", "\\" + "\\")):
+            if stripped.startswith(("//")) and (
+                "https://" in stripped
+                or stripped.startswith(("//."))
+                or stripped.startswith(("///."))
+            ):
                 continue
 
-            code_part = line.split("//", 1)[0].rstrip()
-            if len(code_part) > MAX_LINE_LENGTH + 1:  # +1 for \n
+            code_part = line.rstrip()
+            if len(code_part) > MAX_LINE_LENGTH:
                 print(f"{path}:{i + 1} is too long: {len(code_part)}")
                 lines_found += 1
                 if path not in unique_files:

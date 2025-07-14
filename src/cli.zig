@@ -103,30 +103,36 @@ pub fn CommandInfo(comptime S: type) type {
 }
 
 pub const CommandHelp = struct {
-    /// Brief description of the command to be displayed as part of the parent command's help message,
-    /// recommended but not required to be one line.
+    /// Brief description of the command to be displayed as part of the parent
+    /// command's help message, recommended but not required to be one line.
     ///
-    /// Also displayed as part of the target command's help message, just before the long description.
+    /// Also displayed as part of the target command's help message, just before
+    /// the long description.
     short: []const u8,
-    /// Long description of the command to be displayed as part of the target command's help message,
-    /// optionally applicable if a more verbose description is helpful or required.
+    /// Long description of the command to be displayed as part of the target
+    /// command's help message, optionally applicable if a more verbose
+    /// description is helpful or required.
     ///
-    /// It is recommended that this be worded in a way which is not redundant with the brief, since it
-    /// will be displayed as a paragraph that follows the brief.
+    /// It is recommended that this be worded in a way which is not redundant
+    /// with the brief, since it will be displayed as a paragraph that follows
+    /// the brief.
     long: ?[]const u8,
 };
 
-/// This struct describes everything related to a given argument within the scope of a (sub)command.
+/// This struct describes everything related to a given argument within the
+/// scope of a (sub)command.
 ///
-/// Similar to `CommandInfo`, it can be instantiated directly at the site of usage, or it can
-/// be pre-declared, which allows re-using the argument info in multiple sub-commands.
+/// Similar to `CommandInfo`, it can be instantiated directly at the site of
+/// usage, or it can be pre-declared, which allows re-using the argument info in
+/// multiple sub-commands.
 pub fn ArgumentInfo(comptime Arg: type) type {
     return struct {
-        /// A named argument will be specifiable as `--{name_override orelse field_name}(=<value>)?`,
+        /// A named argument will be specifiable as `--{name_override orelse field_name} <value>?`,
         /// irrespective of position within the scope of the (sub)command.
         ///
-        /// A positional argument will be specifiable as `{<value>}`, with respect to the position
-        /// it is declared relative to other positional arguments within the scope of the (sub)command.
+        /// A positional argument will be specifiable as `{<value>}`, with
+        /// respect to the position it is declared relative to other positional
+        /// arguments within the scope of the (sub)command.
         kind: enum { named, positional },
 
         /// Used to override the name displayed on the command line, or null
@@ -493,7 +499,8 @@ test "TestCmd" {
         };
 
         const Rpc = struct {
-            // NOTE: the `default_value` field is requried; optionals are used to be able to represent the "unspecified" state.
+            // NOTE: the `default_value` field is requried; optionals are used
+            // to be able to represent the "unspecified" state.
             single: ?bool,
 
             const cmd_info: CommandInfo(@This()) = .{

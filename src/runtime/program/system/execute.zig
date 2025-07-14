@@ -22,7 +22,8 @@ pub fn execute(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
 ) (error{OutOfMemory} || InstructionError)!void {
-    // Default compute units for the system program are applied via the declare_process_instruction macro
+    // Default compute units for the system program are applied via the
+    // declare_process_instruction macro
     // [agave] https://github.com/anza-xyz/agave/blob/v2.0.22/programs/system/src/system_processor.rs#L298
     try ic.tc.consumeCompute(system_program.COMPUTE_UNITS);
 

@@ -80,7 +80,8 @@ pub const Error = struct {
 };
 
 pub const ErrorCode = enum(i64) {
-    /// Invalid JSON was received by the server. An error occurred on the server while parsing the JSON text.
+    /// Invalid JSON was received by the server.
+    /// An error occurred on the server while parsing the JSON text.
     parse_error = -32700,
     /// The JSON sent is not a valid Request object.
     invalid_request = -32600,

@@ -487,7 +487,8 @@ pub const Instruction = union(enum(u32)) {
     }
 };
 
-/// Helper function for more concisely initializing the account lists when serializing an instruction.
+/// Helper function for more concisely initializing the account lists when
+/// serializing an instruction.
 fn accountMeta(
     pubkey: Pubkey,
     flags: enum { none, signer, writable, signer_writable },

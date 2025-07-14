@@ -15,10 +15,13 @@ pub fn readCtx(
     reader: anytype,
     params: bincode.Params,
     /// Expects void, or value/namespace with methods (implied `ctx: @TypeOf(ctx)` first parameter):
-    /// * `fn readKey(allocator: std.mem.Allocator, reader: anytype, params: bincode.Params) !Key`, or `pub const readKey = {}`.
-    /// * `fn freeKey(allocator: std.mem.Allocator, key: Key) void`, or `pub const freeKey = {}`.
-    /// * `fn readValue(allocator: std.mem.Allocator, reader: anytype, params: bincode.Params) !Value`, or `pub const readValue = {}`.
-    /// * `fn freeValue(allocator: std.mem.Allocator, value: Value) void`, or `pub const freeValue = {}`.
+    /// * fn readKey(allocator: std.mem.Allocator, reader: anytype, params: bincode.Params) !Key
+    ///   or `pub const readKey = {}`.
+    /// * fn freeKey(allocator: std.mem.Allocator, key: Key) void`, or `pub const freeKey = {}
+    /// * fn readValue(allocator: std.mem.Allocator, reader: anytype, params: bincode.Params) !Value
+    ///   or `pub const readValue = {}`.
+    /// * fn freeValue(allocator: std.mem.Allocator, value: Value) void
+    ///   or `pub const freeValue = {}`.
     ///
     /// Void is an indication to utilize default behavior.
     ctx: anytype,

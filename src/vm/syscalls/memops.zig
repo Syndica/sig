@@ -858,7 +858,7 @@ test "memset syscall" {
         // zig fmt: off
         &.{
             .{ .{ vm_addr,     0,     2,       0, 0 }, 0 }, // part of buffer
-            .{ .{ vm_addr + 2, 0,     2,       0, 0 }, 0 }, // other part of buffer (unaligned vm ptr)
+            .{ .{ vm_addr + 2, 0,     2,       0, 0 }, 0 }, // other part of buf (unaligned vm ptr)
             .{ .{ vm_addr,     1,     buf.len, 0, 0 }, 0 }, // full buffer, non-zero scalar
             .{ .{ vm_addr,     0,     0,       0, 0 }, 0 }, // empty slice
             .{ .{ vm_addr + 1, 0,     0,       0, 0 }, 0 }, // empty slice (unaligned)

@@ -361,8 +361,9 @@ pub fn eqlCustom(a: anytype, b: @TypeOf(a), comptime config_: EqlConfig) bool {
                     @typeInfo(ParamsTuple(T.eql)).@"struct".fields.len == 2 and
                     ReturnType(@TypeOf(T.eql)) == bool)
                 {
-                    const param1 = @typeInfo(@typeInfo(ParamsTuple(T.eql)).@"struct".fields[0].type);
-                    const param2 = @typeInfo(@typeInfo(ParamsTuple(T.eql)).@"struct".fields[1].type);
+                    const fields = @typeInfo(ParamsTuple(T.eql)).@"struct".fields;
+                    const param1 = @typeInfo(fields[0].type);
+                    const param2 = @typeInfo(fields[1].type);
 
                     if (param1 == .pointer and param2 == .pointer) {
                         var a_copy = a;

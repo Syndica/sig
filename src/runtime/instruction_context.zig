@@ -15,14 +15,17 @@ const InstructionInfo = sig.runtime.InstructionInfo;
 const TransactionContext = sig.runtime.TransactionContext;
 const BorrowedAccount = sig.runtime.BorrowedAccount;
 
-/// `InstructionContext` holds all information required to execute a program instruction; excluding an allocator
-/// it is the only argument passed to the program entrypoint function
+/// `InstructionContext` holds all information required to execute a program
+/// instruction; excluding an allocator it is the only argument passed to the
+/// program entrypoint function
 ///
-/// Current functionality supports the execution of a single `system_program` instruction
+/// Current functionality supports the execution of a single `system_program`
+/// instruction
 ///
 /// TODO: add features to support new program execution as required
 ///
-/// [agave] https://github.com/anza-xyz/agave/blob/c5ed1663a1218e9e088e30c81677bc88059cc62b/sdk/transaction-context/src/lib.rs#L502
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/c5ed1663a1218e9e088e30c81677bc88059cc62b/sdk/transaction-context/src/lib.rs#L502
 pub const InstructionContext = struct {
     /// Transaction context
     tc: *TransactionContext,

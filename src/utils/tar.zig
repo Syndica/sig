@@ -342,7 +342,8 @@ pub fn writeTarHeader(
         .regular => 0o666,
         // allow read, write, and traversal by anyone
         .directory => 0o777,
-        // we don't really use anything else, so just set no permissions so that it's obvious something is wrong if this somehow occurs
+        // we don't really use anything else, so just set no permissions so that it's obvious
+        // something is wrong if this somehow occurs
         else => 0,
     };
     _ = std.fmt.bufPrint(&header.mode, "{o:0>7}", .{mode}) catch unreachable;
@@ -351,7 +352,9 @@ pub fn writeTarHeader(
     try writer.writeAll(std.mem.asBytes(&header));
 }
 
-/// Returns the number of padding bytes that must be written in order to have a round 512 byte block.
+/// Returns the number of padding bytes that must be written in order to have a round 512 byte
+/// block.
+///
 /// The result is 0 if the number of bytes written already form a round 512 byte block, or if there
 /// are 0 bytes written.
 pub fn paddingBytes(

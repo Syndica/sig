@@ -41,13 +41,13 @@ pub fn execute(
             args.recent_slot,
             args.bump_seed,
         ),
-        .FreezeLookupTable => try freezeLookupTable(allocator, ic),
+        .FreezeLookupTable => try freezeLookupTable(ic),
         .ExtendLookupTable => |args| try extendLookupTable(
             allocator,
             ic,
             args.new_addresses,
         ),
-        .DeactivateLookupTable => try deactivateLookupTable(allocator, ic),
+        .DeactivateLookupTable => try deactivateLookupTable(ic),
         .CloseLookupTable => try closeLookupTable(allocator, ic),
     };
 }
@@ -221,11 +221,7 @@ fn createLookupTable(
 }
 
 // [agave] https://github.com/anza-xyz/agave/blob/8116c10021f09c806159852f65d37ffe6d5a118e/programs/address-lookup-table/src/processor.rs#L173
-fn freezeLookupTable(
-    allocator: std.mem.Allocator,
-    ic: *InstructionContext,
-) !void {
-    _ = allocator; // autofix
+fn freezeLookupTable(ic: *InstructionContext) !void {
     const AccountIndex = instruction.FreezeLookupTable.AccountIndex;
 
     // [agave] https://github.com/anza-xyz/agave/blob/8116c10021f09c806159852f65d37ffe6d5a118e/programs/address-lookup-table/src/processor.rs#L177-L182
@@ -443,11 +439,7 @@ fn extendLookupTable(
 }
 
 // [agave] https://github.com/anza-xyz/agave/blob/8116c10021f09c806159852f65d37ffe6d5a118e/programs/address-lookup-table/src/processor.rs#L343
-fn deactivateLookupTable(
-    allocator: std.mem.Allocator,
-    ic: *InstructionContext,
-) !void {
-    _ = allocator; // autofix
+fn deactivateLookupTable(ic: *InstructionContext) !void {
     const AccountIndex = instruction.DeactivateLookupTable.AccountIndex;
 
     {

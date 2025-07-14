@@ -371,7 +371,8 @@ pub const AccountFile = struct {
         };
     }
 
-    /// get the account pubkey without parsing data (a lot faster if the data field isnt used anyway)
+    /// get the account pubkey without parsing data
+    /// (a lot faster if the data field isnt used anyway)
     pub fn getAccountPubkey(self: *const Self, start_offset: usize) error{EOF}!struct {
         pubkey: *Pubkey,
         account_len: usize,

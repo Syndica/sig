@@ -159,7 +159,8 @@ pub const EpochStakes = struct {
 };
 
 /// Analogous to [Stakes](https://github.com/anza-xyz/agave/blob/1f3ef3325fb0ce08333715aa9d92f831adc4c559/runtime/src/stakes.rs#L186).
-/// It differs in that its delegation element parameterization is narrowed to only accept the specific types we actually need to implement.
+/// It differs in that its delegation element parameterization is narrowed to
+/// only accept the specific types we actually need to implement.
 pub fn Stakes(comptime delegation_type: enum {
     delegation,
     stake,

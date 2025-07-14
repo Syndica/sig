@@ -36,7 +36,8 @@ pub fn OnceCell(comptime T: type) type {
             return &self.value;
         }
 
-        /// Tries to initialize the inner value and returns pointer to it, or return error if it fails.
+        /// Tries to initialize the inner value and returns pointer to it,
+        /// or return error if it fails.
         /// Returns error if it was already initialized.
         /// Blocks while other threads are in the process of initialization.
         pub fn tryInit(self: *Self, initLogic: anytype, init_args: anytype) !*T {
@@ -74,7 +75,8 @@ pub fn OnceCell(comptime T: type) type {
         /// returns:
         /// - true if write lock is acquired.
         /// - false if write lock is not acquirable because a write was already completed.
-        /// - waits if another thread has a write in progress. if the other thread fails, this may acquire the lock.
+        /// - waits if another thread has a write in progress. if the other thread fails,
+        ///   this may acquire the lock.
         fn acquire(self: *Self) bool {
             while (self.started.cmpxchgWeak(false, true, .acquire, .monotonic)) |_| {
                 if (self.finished.load(.acquire)) {

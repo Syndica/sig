@@ -95,6 +95,7 @@ pub fn getExecutionErrorMessage(err: ExecutionError) []const u8 {
 
 pub fn convertExecutionError(err: ExecutionError) struct { i64, ExecutionErrorKind, []const u8 } {
     // zig fmt: off
+    // sig lint: off
     return switch (err) {
         EbpfError.ElfError =>                                       .{ 1, .Ebpf, "ELF error" },
         EbpfError.FunctionAlreadyRegistered =>                      .{ 2, .Ebpf, "function was already registered" },
@@ -199,6 +200,7 @@ pub fn convertExecutionError(err: ExecutionError) struct { i64, ExecutionErrorKi
         SyscallError.InvalidParameters =>                           .{ -1, .Syscall, "Invalid parameters." },
 
         // zig fmt: on
+        // sig lint: on
         else => std.debug.panic("Unexpected Sig Error: {s}\n", .{@errorName(err)}),
     };
 }
@@ -296,7 +298,8 @@ pub fn instructionErrorFromExecutionError(err: ExecutionError) InstructionError 
         error.MaxAccountsDataAllocationsExceeded => error.MaxAccountsDataAllocationsExceeded,
         error.MaxAccountsExceeded => error.MaxAccountsExceeded,
         error.MaxInstructionTraceLengthExceeded => error.MaxInstructionTraceLengthExceeded,
-        error.BuiltinProgramsMustConsumeComputeUnits => error.BuiltinProgramsMustConsumeComputeUnits,
+        error.BuiltinProgramsMustConsumeComputeUnits => //
+        error.BuiltinProgramsMustConsumeComputeUnits,
         else => std.debug.panic(
             "Cannot convert error to InstructionError: {s}\n",
             .{@errorName(err)},

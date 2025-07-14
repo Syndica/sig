@@ -2536,7 +2536,8 @@ test "updateCallerAccount: data direct mapping" {
 
             // TODO: Make sure spare capacity account data is zeroed (no data capacity atm).
             // if (size < original_data_len) {
-            //     const original_slice = callee_account.constAccountData().ptr[0..original_data_len];
+            //     const original_slice = callee_account.constAccountData()
+            //          .ptr[0..original_data_len];
             //     try std.testing.expect(std.mem.allEqual(
             //         u8,
             //         original_slice[original_data_len - size..],

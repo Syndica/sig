@@ -65,7 +65,8 @@ pub const AccountIndex = struct {
 
     /// this is the allocator used to allocate reference_memory
     reference_allocator: ReferenceAllocator,
-    /// manages reference memory throughout the life of the program (ie, manages the state of free/used AccountRefs)
+    /// manages reference memory throughout the life of the program
+    /// (ie, manages the state of free/used AccountRefs)
     reference_manager: *sig.utils.allocators.RecycleBuffer(
         AccountRef,
         AccountRef.DEFAULT,
@@ -697,8 +698,9 @@ pub const ShardedPubkeyRefMap = struct {
     }
 
     /// Get a read-safe account reference head, and its associated lock guard.
-    /// If access to many different account reference heads which are potentially in the same shard is
-    /// required, prefer instead to use `getBinFromPubkey(pubkey).read*(){.get(pubkey)}` directly.
+    /// If access to many different account reference heads which are
+    /// potentially in the same shard is required, prefer instead to use
+    /// `getBinFromPubkey(pubkey).read*(){.get(pubkey)}` directly.
     pub fn getRead(
         self: *Self,
         pubkey: *const Pubkey,
@@ -712,8 +714,9 @@ pub const ShardedPubkeyRefMap = struct {
     }
 
     /// Get a write-safe account reference head, and its associated lock guard.
-    /// If access to many different account reference heads which are potentially in the same shard is
-    /// required, prefer instead to use `getBinFromPubkey(pubkey).write*(){.get(pubkey)}` directly.
+    /// If access to many different account reference heads which are
+    /// potentially in the same shard is required, prefer instead to use
+    /// `getBinFromPubkey(pubkey).write*(){.get(pubkey)}` directly.
     pub fn getWrite(
         self: *Self,
         pubkey: *const Pubkey,

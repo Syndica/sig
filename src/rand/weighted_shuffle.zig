@@ -22,9 +22,9 @@ pub fn WeightedShuffle(comptime Int: type) type {
         zeros: std.ArrayListUnmanaged(usize),
 
         // Each tree node has FANOUT many child nodes with indices:
-        //     (index << BIT_SHIFT) + 1, (index << BIT_SHIFT) + 2, ..., (index << BIT_SHIFT) + FANOUT
+        //    (index << BIT_SHIFT) + 1, (index << BIT_SHIFT) + 2, ..., (index << BIT_SHIFT) + FANOUT
         // Conversely, for each node, the parent node is obtained by:
-        //     (index - 1) >> BIT_SHIFT
+        //    (index - 1) >> BIT_SHIFT
         const BIT_SHIFT: usize = 4;
         const FANOUT: usize = 1 << BIT_SHIFT;
         const BIT_MASK: usize = FANOUT - 1;

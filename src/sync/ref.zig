@@ -141,7 +141,8 @@ pub fn Rc(comptime T: type) type {
         /// Returns the inner value, if the `Rc` has exactly one strong reference.
         /// Otherwise, `null` is returned.
         /// This will succeed even if there are outstanding weak references.
-        /// The continued use of the pointer if the method successfully returns `T` is undefined behaviour.
+        /// The continued use of the pointer if the method successfully returns
+        /// `T` is undefined behaviour.
         pub fn tryUnwrap(self: Self) ?T {
             const ptr = self.innerPtr();
 
@@ -217,7 +218,8 @@ pub fn Rc(comptime T: type) type {
                 return self.*;
             }
 
-            /// Attempts to upgrade the weak pointer to an `Rc`, delaying dropping of the inner value if successful.
+            /// Attempts to upgrade the weak pointer to an `Rc`, delaying
+            /// dropping of the inner value if successful.
             ///
             /// Returns `null` if the inner value has since been dropped.
             pub fn upgrade(self: *Weak) ?Rc(T) {
@@ -378,7 +380,8 @@ pub fn Arc(comptime T: type) type {
         /// Returns the inner value, if the `Arc` has exactly one strong reference.
         /// Otherwise, `null` is returned.
         /// This will succeed even if there are outstanding weak references.
-        /// The continued use of the pointer if the method successfully returns `T` is undefined behaviour.
+        /// The continued use of the pointer if the method successfully returns `T`
+        /// is undefined behaviour.
         pub fn tryUnwrap(self: Self) ?T {
             const ptr = self.innerPtr();
 
@@ -454,7 +457,8 @@ pub fn Arc(comptime T: type) type {
                 return self.*;
             }
 
-            /// Attempts to upgrade the weak pointer to an `Arc`, delaying dropping of the inner value if successful.
+            /// Attempts to upgrade the weak pointer to an `Arc`, delaying
+            /// dropping of the inner value if successful.
             ///
             /// Returns `null` if the inner value has since been dropped.
             pub fn upgrade(self: *Weak) ?Arc(T) {

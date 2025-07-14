@@ -39,10 +39,12 @@ pub fn checkStatusCache(
     return null;
 }
 
-/// Requires full transaction to find nonce account in the event that the transactions recent blockhash
-/// is not in the blockhash queue within the max age. Also worth noting that Agave returns a CheckTransactionDetails
-/// struct which contains a lamports_per_signature field which is unused, hence we return only the nonce account
-/// if it exists.
+/// Requires full transaction to find nonce account in the event that the
+/// transactions recent blockhash is not in the blockhash queue within the max
+/// age. Also worth noting that Agave returns a CheckTransactionDetails struct
+/// which contains a lamports_per_signature field which is unused, hence we
+/// return only the nonce account if it exists.
+///
 /// [agave] https://github.com/firedancer-io/agave/blob/403d23b809fc513e2c4b433125c127cf172281a2/runtime/src/bank/check_transactions.rs#L105
 pub fn checkAge(
     transaction: *const RuntimeTransaction,

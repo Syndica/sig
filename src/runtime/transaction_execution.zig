@@ -106,7 +106,9 @@ pub const TransactionRollbacks = union(enum(u8)) {
             .pubkey = fee_payer.pubkey,
         };
         copied_fee_payer.account.lamports +|= fee_payer_rent_debit;
-        copied_fee_payer.account.data = undefined; // safety: overwritten before returning in all cases
+
+        // safety: overwritten before returning in all cases
+        copied_fee_payer.account.data = undefined;
 
         if (maybe_nonce) |nonce| {
             if (fee_payer.pubkey.equals(&nonce.pubkey)) {
@@ -251,9 +253,11 @@ pub fn loadAndExecuteTransaction(
         environment.status_cache,
     )) |err| return .{ .err = err };
 
-    // NOTE: in agave nonce validation occurs during check_transactions and validate_nonce_and_fee_payer.
-    // Since we do not perform check transactions at the batch level, the secondary checks may not be necessary.
-    // We will however need to return the corresponding errors which may occur in agave's validate_transaction_nonce.
+    // NOTE: in agave nonce validation occurs during check_transactions and
+    // validate_nonce_and_fee_payer. Since we do not perform check transactions
+    // at the batch level, the secondary checks may not be necessary. We will
+    // however need to return the corresponding errors which may occur in
+    // agave's validate_transaction_nonce.
     // [agave] hhttps://github.com/firedancer-io/agave/blob/403d23b809fc513e2c4b433125c127cf172281a2/svm/src/transaction_processor.rs#L632-L688
 
     // TODO: Should the compute budget program require the feature set?

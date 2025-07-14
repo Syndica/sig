@@ -32,7 +32,8 @@ pub fn execute(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
 ) (error{OutOfMemory} || InstructionError)!void {
-    // Default compute units for the system program are applied via the declare_process_instruction macro
+    // Default compute units for the system program are applied via the
+    // declare_process_instruction macro
     // [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/vote/src/vote_processor.rs#L55C40-L55C45
     try ic.tc.consumeCompute(vote_program.COMPUTE_UNITS);
 
@@ -202,7 +203,9 @@ fn executeIntializeAccount(
 
 /// [agave] https://github.com/anza-xyz/agave/blob/ddec7bdbcf308a853d464f865ae4962acbc2b9cd/programs/vote/src/vote_state/mod.rs#L884-L903
 ///
-/// Note: Versioned state is not implemented for creating new vote account, as current check in Agaave implementation
+/// Note: Versioned state is not implemented for creating new vote account, as
+/// current check in Agaave implementation
+///
 /// here https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/programs/vote/src/vote_state/mod.rs#L890-L892
 /// suggests creating only current version is supported.
 fn intializeAccount(
@@ -602,7 +605,8 @@ fn updateCommission(
             maybe_vote_state = vote_state;
             // [agave] https://github.com/anza-xyz/agave/blob/9806724b6d49dec06a9d50396adf26565d6b7745/programs/vote/src/vote_state/mod.rs#L792
             //
-            // Given a proposed new commission, returns true if this would be a commission increase, false otherwise
+            // Given a proposed new commission, returns true if this would be a
+            // commission increase, false otherwise
             break :blk commission > vote_state.commission;
         } else {
             break :blk true;
@@ -733,8 +737,9 @@ fn widthraw(
             if (vote_state.epoch_credits.getLastOrNull()) |last_epoch_credit| {
                 const current_epoch = clock.epoch;
                 const last_epoch_with_credits = last_epoch_credit.epoch;
-                // if current_epoch - last_epoch_with_credits < 2 then the validator has received credits
-                // either in the current epoch or the previous epoch. If it's >= 2 then it has been at least
+                // if current_epoch - last_epoch_with_credits < 2 then the
+                // validator has received credits either in the current epoch or
+                // the previous epoch. If it's >= 2 then it has been at least
                 // one full epoch since the validator has received credits.
                 break :blk (current_epoch -| last_epoch_with_credits) < 2;
             } else {

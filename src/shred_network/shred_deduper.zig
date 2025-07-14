@@ -62,9 +62,11 @@ pub fn ShredDeduper(comptime K: usize) type {
             return .{ byte_filter_saturated, shred_id_filter_saturated };
         }
 
-        /// Deduplicate a shred based on its raw bytes and ShredId up to a maximum number of duplicates.
-        /// Return a tuple of booleans, the first indicating whether the shred was a duplicated, and the second
-        /// indicating if it was a shred id duplicate
+        /// Deduplicate a shred based on its raw bytes and ShredId up to a maximum number of
+        /// duplicates.
+        ///
+        /// Return a tuple of booleans, the first indicating whether the shred was a duplicated, and
+        /// the second indicating if it was a shred id duplicate
         pub fn dedup(
             self: *ShredDeduper(K),
             shred_id: *const ShredId,

@@ -209,7 +209,8 @@ pub const SlotVoteTracker = struct {
         return &self.voted_slot_updates.?;
     }
 
-    /// Take the current voted slot updates, i.e. returns `self.voted_slot_updates` and sets the field to null.
+    /// Take the current voted slot updates, i.e. returns
+    /// `self.voted_slot_updates` and sets the field to null.
     pub fn takeUpdates(self: *SlotVoteTracker) ?std.ArrayListUnmanaged(Pubkey) {
         const vsu = self.voted_slot_updates orelse return null;
         self.voted_slot_updates = null;

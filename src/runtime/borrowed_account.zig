@@ -35,7 +35,8 @@ pub const BorrowedAccountContext = struct {
 ///
 /// The `borrow_context` holds the context under which the account was borrowed:
 ///    - `program_id: Pubkey`: the program which borrowed the account
-///    - `is_writable: bool`: whether the account is writable within the program instruction which borrowed the account
+///    - `is_writable: bool`: whether the account is writable within the program
+///      instruction which borrowed the account
 ///
 /// TODO: add remaining methods as required by the runtime
 ///

@@ -15,7 +15,8 @@ pub const AcceptAndServeConnectionError =
     error{SetSocketSyncError} ||
     error{SystemIoError} ||
     std.mem.Allocator.Error ||
-    // TODO: eventually remove this once we move accountsdb operations to a separate thread, and/or handle them in a way that doesn't kill the server.
+    // TODO: eventually remove this once we move accountsdb operations to a separate thread, and/or
+    // handle them in a way that doesn't kill the server.
     error{AccountsDbError};
 
 pub fn acceptAndServeConnection(server_ctx: *server.Context) AcceptAndServeConnectionError!void {
@@ -159,7 +160,8 @@ fn handleGetOrHead(
                 .content_length = archive_len,
                 .respond_options = .{},
             });
-            // flush the headers, so that if this is a head request, we can mock the response without doing unnecessary work
+            // flush the headers, so that if this is a head request, we can mock the response
+            // without doing unnecessary work
             response.flush() catch |err| switch (err) {
                 error.ConnectionResetByPeer => return,
                 else => return error.SystemIoError,
@@ -194,8 +196,8 @@ fn handleGetOrHead(
             } else {
                 std.debug.assert(response.transfer_encoding.content_length == archive_len);
                 // NOTE: in order to avoid needing to actually spend time writing the response body,
-                // just trick the API into thinking we already wrote the entire thing by setting this
-                // to 0.
+                // just trick the API into thinking we already wrote the entire thing by setting
+                // this to 0.
                 response.transfer_encoding.content_length = 0;
             }
 

@@ -31,16 +31,17 @@ pub const SocketAddr = union(enum(u8)) {
     pub const ParseIpv6Error = error{InvalidIpv6};
     pub fn parseIpv6(bytes: []const u8) ParseIpv6Error!SocketAddr {
         // https://ratfactor.com/zig/stdlib-browseable2/net.zig.html
-        // ports with IPv6 are after square brackets, but stdlib has IPv6 parsing on only the address
-        // so exploit stdlib for that portion, and parse the port afterwards.
+        // ports with IPv6 are after square brackets, but stdlib has IPv6 parsing on only the
+        // address, so exploit stdlib for that portion, and parse the port afterwards.
 
         var maybe_address: ?std.net.Ip6Address = null;
         var portt: u16 = 0;
         const maybe_right_bracket_index = std.mem.indexOf(u8, bytes, &[_]u8{']'});
         const maybe_left_bracket_index = std.mem.indexOf(u8, bytes, &[_]u8{'['});
-        // right_bracket_index + 2 should be less than the total length of bytes in order to proceed. Why?
-        // Because if the string is [2001::1]:8000, then right_bracket_index would be 8, and 10 would be the start of the port
-        //                          ~~~~~~~^++ <-- this is index + 2
+        // right_bracket_index + 2 should be less than the total length of bytes in order to proceed
+        // Why? Because if the string is [2001::1]:8000, then right_bracket_index would be 8,
+        //                               ~~~~~~~^++ <-- this is index + 2
+        // and 10 would be the start of the port.
         if (maybe_right_bracket_index) |right_bracket_index| {
             if (maybe_left_bracket_index) |left_bracket_index| {
                 const addr_str = bytes[left_bracket_index + 1 .. right_bracket_index];

@@ -785,10 +785,11 @@ pub const GossipTable = struct {
         return (10 * n_pubkeys > 9 * max_pubkey_capacity);
     }
 
-    /// removes pubkeys and their associated values until the pubkey count is less than max_pubkey_capacity.
-    /// returns the number of pubkeys removed.
+    /// removes pubkeys and their associated values until the pubkey count is
+    /// less than max_pubkey_capacity. returns the number of pubkeys removed.
     ///
-    /// NOTE: the `now` parameter is used to populate the purged field with the timestamp of the removal.
+    /// NOTE: the `now` parameter is used to populate the purged field with the
+    /// timestamp of the removal.
     pub fn attemptTrim(self: *Self, now: u64, max_pubkey_capacity: usize) error{OutOfMemory}!u64 {
         if (!self.shouldTrim(max_pubkey_capacity)) return 0;
 

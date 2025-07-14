@@ -135,22 +135,29 @@ const LastVoteRefreshTime = struct {
     last_print_time: sig.time.Instant,
 };
 
-/// Determines whether to refresh and submit an updated version of the last vote based on several conditions.
+/// Determines whether to refresh and submit an updated version of the last vote
+/// based on several conditions.
 ///
 /// A vote refresh is performed when all of the following conditions are met:
 /// 1. Validator Status:
 ///    - Not operating as a hotspare or non-voting validator
 ///    - Has attempted to vote at least once previously
 /// 2. Fork Status:
-///    - There exists a heaviest slot (`heaviest_slot_on_same_fork`) on our previously voted fork
-///    - We've successfully landed at least one vote (`latest_landed_vote_slot`) on this fork
+///    - There exists a heaviest slot (`heaviest_slot_on_same_fork`) on our
+///      previously voted fork
+///    - We've successfully landed at least one vote (`latest_landed_vote_slot`)
+///      on this fork
 /// 3. Vote Progress:
-///    - Our latest vote attempt (`last_vote_slot`) is still tracked in the progress map
-///    - The latest landed vote is older than our last vote attempt (`latest_landed_vote_slot` < `last_vote_slot`)
+///    - Our latest vote attempt (`last_vote_slot`) is still tracked in the
+///      progress map
+///    - The latest landed vote is older than our last vote attempt
+///      (`latest_landed_vote_slot` < `last_vote_slot`)
 /// 4. Block Progress:
-///    - The heaviest bank is sufficiently ahead of our last vote (by at least `REFRESH_VOTE_BLOCKHEIGHT` blocks)
+///    - The heaviest bank is sufficiently ahead of our last vote (by at least
+///      `REFRESH_VOTE_BLOCKHEIGHT` blocks)
 /// 5. Timing:
-///    - At least `MAX_VOTE_REFRESH_INTERVAL_MILLIS` milliseconds have passed since last refresh attempt
+///    - At least `MAX_VOTE_REFRESH_INTERVAL_MILLIS` milliseconds have passed
+///      since last refresh attempt
 ///
 /// If all conditions are satisfied:
 /// - Creates a new vote transaction for the same slot (`last_vote_slot`) with:
@@ -163,7 +170,8 @@ const LastVoteRefreshTime = struct {
 /// - `true` if a refreshed vote was successfully created and submitted
 /// - `false` if any condition was not met or the refresh failed
 ///
-/// Note: This is not simply resending the same vote, but creating a new distinct transaction that:
+/// Note: This is not simply resending the same vote, but creating a new
+/// distinct transaction that:
 /// - Votes for the same slot
 /// - Contains updated metadata (timestamp/blockhash)
 /// - Generates a new signature
@@ -228,15 +236,17 @@ fn maybeRefreshLastVote(
     if (last_vote_refresh_time.last_refresh_time.elapsed().asMillis() <
         MAX_VOTE_REFRESH_INTERVAL_MILLIS)
     {
-        // This avoids duplicate refresh in case there are multiple forks descending from our last voted fork
-        // It also ensures that if the first refresh fails we will continue attempting to refresh at an interval no less
-        // than MAX_VOTE_REFRESH_INTERVAL_MILLIS
+        // This avoids duplicate refresh in case there are multiple forks
+        // descending from our last voted fork It also ensures that if the first
+        // refresh fails we will continue attempting to refresh at an interval
+        // no less than MAX_VOTE_REFRESH_INTERVAL_MILLIS
         return false;
     }
 
-    // All criteria are met, refresh the last vote using the blockhash of `heaviest_bank_on_same_fork`
-    // Update timestamp for refreshed vote
-    // AUDIT: Rest of code replaces Self::refresh_last_vote in Agave
+    // AUDIT: Rest of code is Analogous to Self::refresh_last_vote in Agave
+
+    // All criteria are met, refresh the last vote using the blockhash of
+    // `heaviest_bank_on_same_fork` Update timestamp for refreshed vote
     replay_tower.refreshLastVoteTimestamp(heaviest_bank_on_same_fork);
 
     // TODO Transaction generation to be implemented.
@@ -383,12 +393,15 @@ fn checkAndHandleNewRoot(
     slot_tracker.pruneNonRooted(allocator);
 
     // TODO
-    // - Prune program cache bank_forks.read().unwrap().prune_program_cache(new_root);
+    // - Prune program cache
+    //   bank_forks.read().unwrap().prune_program_cache(new_root);
     // - Extra operations as part of setting new root:
     //   - cleare reward cache root_bank.clear_epoch_rewards_cache
     //   - extend banks banks.extend(parents.iter());
     //   - operations around snapshot_controller
-    //   - After setting a new root, prune the banks that are no longer on rooted paths self.prune_non_rooted(root, highest_super_majority_root);
+    //   - After setting a new root, prune the banks that are no longer on
+    //     rooted paths self.prune_non_rooted(root,
+    //     highest_super_majority_root);
 
     // Update the progress map.
     // Remove entries from the progress map no longer in the slot tracker.
@@ -408,11 +421,15 @@ fn checkAndHandleNewRoot(
 /// Analogous to https://github.com/anza-xyz/agave/blob/234afe489aa20a04a51b810213b945e297ef38c7/core/src/replay_stage.rs#L1029-L1118
 ///
 /// Handle fork resets in specific circumstances:
-/// - When a validator needs to switch to a different fork after voting on a fork that becomes invalid
-/// - When a block producer needs to reset their fork choice after detecting a better fork
-/// - When handling cases where the validator's current fork becomes less optimal than an alternative fork
+/// - When a validator needs to switch to a different fork after voting on a
+///   fork that becomes invalid
+/// - When a block producer needs to reset their fork choice after detecting a
+///   better fork
+/// - When handling cases where the validator's current fork becomes less
+///   optimal than an alternative fork
 ///
-/// TODO: Currently a placeholder function. Would be implemened when voting and producing blocks is supported.
+/// TODO: Currently a placeholder function. Would be implemened when voting and
+/// producing blocks is supported.
 fn resetFork(
     progress: *const ProgressMap,
     blockstore: *const BlockstoreReader,

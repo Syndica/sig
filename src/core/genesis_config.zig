@@ -44,13 +44,14 @@ pub const FeeRateGovernor = struct {
     /// cluster processing load.
     lamports_per_signature: u64 = 0,
 
-    /// The target cost of a signature when the cluster is operating around target_signatures_per_slot
-    /// signatures.
+    /// The target cost of a signature when the cluster is operating around
+    /// target_signatures_per_slot signatures.
     target_lamports_per_signature: u64,
 
-    /// Used to estimate the desired processing capacity of the cluster.  As the signatures for
-    /// recent slots are fewer/greater than this value, lamports_per_signature will decrease/increase
-    /// for the next slot.  A value of 0 disables lamports_per_signature fee adjustments.
+    /// Used to estimate the desired processing capacity of the cluster.  As the
+    /// signatures for recent slots are fewer/greater than this value,
+    /// lamports_per_signature will decrease/increase for the next slot.  A
+    /// value of 0 disables lamports_per_signature fee adjustments.
     target_signatures_per_slot: u64,
 
     min_lamports_per_signature: u64,
@@ -189,7 +190,8 @@ pub const Inflation = struct {
 };
 
 /// Analogous to [ClusterType](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/sdk/src/genesis_config.rs#L46)
-/// Explicit numbers are added to ensure we don't mess up the order of the fields and break bincode reading.
+/// Explicit numbers are added to ensure we don't mess up the order of the
+/// fields and break bincode reading.
 pub const ClusterType = union(enum(u8)) {
     Testnet = 0,
     MainnetBeta = 1,

@@ -68,9 +68,10 @@ pub const ForkInfo = struct {
     /// If the slot itself is a duplicate, this is set to the slot itself.
     latest_duplicate_ancestor: ?Slot,
     /// Set to true if this slot or a child node was duplicate confirmed.
-    /// Indicates whether this slot have been confirmed as the valid fork in the presence of duplicate slots.
-    /// It means that the network has reached consensus that this fork is the valid one,
-    /// and all competing forks for the same slot are invalid.
+    /// Indicates whether this slot have been confirmed as the valid fork in the
+    /// presence of duplicate slots. It means that the network has reached
+    /// consensus that this fork is the valid one, and all competing forks for
+    /// the same slot are invalid.
     is_duplicate_confirmed: bool,
 
     fn deinit(self: *ForkInfo) void {
@@ -133,7 +134,8 @@ pub const ForkInfo = struct {
         // Should not be marking a duplicate confirmed slot as invalid
         std.debug.assert(!self.is_duplicate_confirmed);
 
-        // Check if the newly invalid (duplicate) ancestor is greater than the current latest duplicate ancestor
+        // Check if the newly invalid (duplicate) ancestor is greater than the
+        // current latest duplicate ancestor
         const should_update = if (self.latest_duplicate_ancestor) |duplicate_ancestor|
             newly_duplicate_ancestor > duplicate_ancestor
         else
@@ -188,13 +190,16 @@ pub const ForkChoice = struct {
 
     /// [Agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L452
     ///
-    /// This function inserts a new `SlotAndHash` into the tree and ensures that the tree's properties
-    /// (such as `heaviest_slot`, `deepest_slot`, and parent-child relationships) are correctly updated.
+    /// This function inserts a new `SlotAndHash` into the tree and ensures that
+    /// the tree's properties (such as `heaviest_slot`, `deepest_slot`, and
+    /// parent-child relationships) are correctly updated.
     ///
-    /// If the new leaf already exists in the tree, the function updates the leaf's parent with the provided parent.
+    /// If the new leaf already exists in the tree, the function updates the
+    /// leaf's parent with the provided parent.
     ///
-    /// If the new leaf has a parent, the function propagates updates to the tree's `heaviest_slot` and
-    /// `deepest_slot` properties up the tree hierarchy.
+    /// If the new leaf has a parent, the function propagates updates to the
+    /// tree's `heaviest_slot` and `deepest_slot` properties up the tree
+    /// hierarchy.
     ///
     /// ### Before Adding a New Leaf
     ///
@@ -237,9 +242,10 @@ pub const ForkChoice = struct {
         // TODO implement self.print_state();
 
         if (self.fork_infos.contains(slot_hash_key)) {
-            // Comment from Agave: Can potentially happen if we repair the same version of the duplicate slot, after
-            // dumping the original version
-            // TODO: What does repair the same version of the duplicate slot, after dumping the original version mean
+            // Comment from Agave: Can potentially happen if we repair the same
+            // version of the duplicate slot, after dumping the original version
+            // TODO: What does repair the same version of the duplicate slot,
+            // after dumping the original version mean
             return;
         }
 
@@ -546,7 +552,8 @@ pub const ForkChoice = struct {
     ///                 ├── deepest_slot: (6)
     ///
     ///
-    /// Adding a new leaf (10) as a child of (4) which update the heaviest slot of (2), (1) and (0) to (10)
+    /// Adding a new leaf (10) as a child of (4) which update the heaviest slot
+    /// of (2), (1) and (0) to (10)
     ///
     ///
     /// (0)
@@ -911,9 +918,10 @@ pub const ForkChoice = struct {
                 modify_fork_validity,
                 parent_slot_hash_key,
             )) {
-                // If this parent was already inserted, we assume all the other parents have also
-                // already been inserted. This is to prevent iterating over the parents multiple times
-                // when we are aggregating leaves that have a lot of shared ancestors
+                // If this parent was already inserted, we assume all the other
+                // parents have also already been inserted. This is to prevent
+                // iterating over the parents multiple times when we are
+                // aggregating leaves that have a lot of shared ancestors
                 break;
             }
         }
@@ -1001,10 +1009,10 @@ pub const ForkChoice = struct {
                 //     │   └── (4)  <- 66%
                 //     └── (3)      <- 34%
                 //
-                //     If slot 4 is a duplicate slot, so no longer qualifies as a candidate until
-                //     the slot is confirmed, the weight of votes on slot 4 should still count towards
-                //     slot 2, otherwise we might pick slot 3 as the heaviest fork to build blocks on
-                //     instead of slot 2.
+                // If slot 4 is a duplicate slot, so no longer qualifies as a candidate until
+                // the slot is confirmed, the weight of votes on slot 4 should still count towards
+                // slot 2, otherwise we might pick slot 3 as the heaviest fork to build blocks on
+                // instead of slot 2.
 
                 // See comment above for why this check is outside of the `is_candidate` check.
 
@@ -1066,7 +1074,8 @@ pub const ForkChoice = struct {
 
     /// [Agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L1105
     ///
-    /// Adds `stake` to the stake voted at and stake voted subtree for the fork identified by `slot_hash_key`.
+    /// Adds `stake` to the stake voted at and stake voted subtree for the fork
+    /// identified by `slot_hash_key`.
     fn addSlotStake(
         self: *ForkChoice,
         slot_hash_key: *const SlotAndHash,
@@ -1082,7 +1091,8 @@ pub const ForkChoice = struct {
 
     /// [Agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L1112
     ///
-    /// Subtracts `stake` from the stake voted at and stake voted subtree for the fork identified by `slot_hash_key`.
+    /// Subtracts `stake` from the stake voted at and stake voted subtree for the
+    /// fork identified by `slot_hash_key`.
     fn subtractSlotStake(
         self: *ForkChoice,
         slot_hash_key: *const SlotAndHash,
@@ -1119,45 +1129,49 @@ pub const ForkChoice = struct {
                     //        - Slot 1'
                     //        |
                     //        - Slot 2 (10%)
-                    //
+
                     // Imagine that 90% of validators voted for Slot 1, but because of the existence
-                    // of Slot 1', Slot 1 is marked as invalid in fork choice. It is impossible to reach
-                    // the required switch threshold for these validators to switch off of Slot 1 to Slot 2.
-                    // In this case it is important for someone to build a Slot 3 off of Slot 1 that contains
-                    // the votes for Slot 1. At this point they will see that the fork off of Slot 1 is duplicate
-                    // confirmed, and the rest of the network can repair Slot 1, and mark it is a valid candidate
-                    // allowing fork choice to converge.
+                    // of Slot 1', Slot 1 is marked as invalid in fork choice. It is impossible to
+                    // reach the required switch threshold for these validators to switch off of
+                    // Slot 1 to Slot 2. In this case it is important for someone to build a Slot 3
+                    // off of Slot 1 that contains the votes for Slot 1. At this point they will see
+                    // that the fork off of Slot 1 is duplicate confirmed, and the rest of the
+                    // network can repair Slot 1, and mark it is a valid candidate allowing fork
+                    // choice to converge.
                     //
-                    // This will only occur after Slot 2 has been created, in order to resolve the following
-                    // scenario:
-                    //
+                    // This will only occur after Slot 2 has been created, in order to resolve the
+                    // following scenario:
+
                     // Scenario 2:
                     // Slot 0 - Slot 1 (30%)
                     //        |
                     //        - Slot 1' (30%)
-                    //
-                    // In this scenario only 60% of the network has voted before the duplicate proof for Slot 1 and 1'
-                    // was viewed. Neither version of the slot will reach the duplicate confirmed threshold, so it is
-                    // critical that a new fork Slot 2 from Slot 0 is created to allow the validators on Slot 1 and
-                    // Slot 1' to switch. Since the `best_slot` is an ancestor of the last vote (Slot 0 is ancestor of last
-                    // vote Slot 1 or Slot 1'), we will trigger `SwitchForkDecision::FailedSwitchDuplicateRollback`, which
-                    // will create an alternate fork off of Slot 0. Once this alternate fork is created, the `best_slot`
-                    // will be Slot 2, at which point we will be in Scenario 1 and continue building off of Slot 1 or Slot 1'.
-                    //
+
+                    // In this scenario only 60% of the network has voted before the duplicate proof
+                    // for Slot 1 and 1' was viewed. Neither version of the slot will reach the
+                    // duplicate confirmed threshold, so it is critical that a new fork Slot 2 from
+                    // Slot 0 is created to allow the validators on Slot 1 and Slot 1' to switch.
+                    // Since the `best_slot` is an ancestor of the last vote (Slot 0 is ancestor of
+                    // last vote Slot 1 or Slot 1'), we will trigger
+                    // `SwitchForkDecision::FailedSwitchDuplicateRollback`, which will create an
+                    // alternate fork off of Slot 0. Once this alternate fork is created, the
+                    // `best_slot` will be Slot 2, at which point we will be in Scenario 1 and
+                    // continue building off of Slot 1 or Slot 1'.
+
                     // For more details see the case for
-                    // `SwitchForkDecision::FailedSwitchDuplicateRollback` in `ReplayStage::select_vote_and_reset_forks`.
+                    // `SwitchForkDecision::FailedSwitchDuplicateRollback` in
+                    // `ReplayStage::select_vote_and_reset_forks`.
                     return self.deepestSlot(&last_voted_slot_hash);
                 }
             } else {
                 if (!replay_tower.isStrayLastVote()) {
-                    // Unless last vote is stray and stale, self.is_candidate(last_voted_slot_hash) must return
-                    // Some(_), justifying to panic! here.
-                    // Also, adjust_lockouts_after_replay() correctly makes last_voted_slot None,
-                    // if all saved votes are ancestors of replayed_root_slot. So this code shouldn't be
-                    // touched in that case as well.
-                    // In other words, except being stray, all other slots have been voted on while this
-                    // validator has been running, so we must be able to fetch best_slots for all of
-                    // them.
+                    // Unless last vote is stray and stale, self.is_candidate(last_voted_slot_hash)
+                    // must return Some(_), justifying to panic! here. Also,
+                    // adjust_lockouts_after_replay() correctly makes last_voted_slot None, if all
+                    // saved votes are ancestors of replayed_root_slot. So this code shouldn't be
+                    // touched in that case as well. In other words, except being stray, all other
+                    // slots have been voted on while this validator has been running, so we must be
+                    // able to fetch best_slots for all of them.
                     return error.MissingCandidate;
                 } else {
                     // fork_infos doesn't have corresponding data for the stale stray last vote,

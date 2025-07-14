@@ -285,8 +285,9 @@ pub fn HomogeneousThreadPool(comptime TaskType: type) type {
             return results;
         }
 
-        /// Like join, but it returns an error if any tasks failed, and otherwise discards task output.
-        /// This will return the first error encountered which may be inconsistent between runs.
+        /// Like join, but it returns an error if any tasks failed, and otherwise discards task
+        /// output. This will return the first error encountered which may be inconsistent between
+        /// runs.
         pub fn joinFallible(self: *Self) !void {
             defer {
                 assert(self.task_pool.reset(.retain_capacity));

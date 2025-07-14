@@ -77,7 +77,8 @@ pub const RewardInfo = struct {
     lamports: i64,
     /// Account balance in lamports after `lamports` was applied
     post_balance: u64,
-    /// Vote account commission when the reward was credited, only present for voting and staking rewards
+    /// Vote account commission when the reward was credited, only present for
+    /// voting and staking rewards
     commission: ?u8,
 };
 
@@ -380,8 +381,8 @@ pub const AccountsDbFields = struct {
     file_map: FileMap,
 
     /// NOTE: this is not a meaningful field
-    /// NOTE: at the time of writing, a test snapshots we use actually have this field set to 601 on disk,
-    /// so be sure to keep that in mind while testing.
+    /// NOTE: at the time of writing, a test snapshots we use actually have this
+    /// field set to 601 on disk, so be sure to keep that in mind while testing.
     stored_meta_write_version: u64,
 
     slot: Slot,
@@ -601,7 +602,8 @@ const TransactionError = union(enum) {
     /// Attempt to load a program that does not exist
     ProgramAccountNotFound,
 
-    /// The from `Pubkey` does not have sufficient balance to pay the fee to schedule the transaction
+    /// The from `Pubkey` does not have sufficient balance to pay the fee to
+    /// schedule the transaction
     InsufficientFundsForFee,
 
     /// This account may not be used to pay transaction fees
@@ -845,7 +847,8 @@ pub const FullSnapshotFileInfo = struct {
         InvalidExtension,
     };
 
-    /// Matches with the regex: `^snapshot-(?P<slot>[[:digit:]]+)-(?P<hash>[[:alnum:]]+)\.(?P<ext>tar\.zst)$`.
+    /// Matches with the regex:
+    /// `^snapshot-(?P<slot>[[:digit:]]+)-(?P<hash>[[:alnum:]]+)\.(?P<ext>tar\.zst)$`.
     pub fn parseFileNameTarZst(
         filename: []const u8,
     ) ParseFileNameTarZstError!FullSnapshotFileInfo {
@@ -939,7 +942,8 @@ pub const FullSnapshotFileInfo = struct {
     }
 };
 
-/// information on an incremental snapshot including the filename, base slot (full snapshot), slot, and hash
+/// information on an incremental snapshot including the filename, base slot
+/// (full snapshot), slot, and hash
 ///
 /// Analogous to [IncrementalSnapshotArchiveInfo](https://github.com/anza-xyz/agave/blob/59bf1809fe5115f0fad51e80cc0a19da1496e2e9/runtime/src/snapshot_archive_info.rs#L103)
 pub const IncrementalSnapshotFileInfo = struct {
@@ -979,7 +983,9 @@ pub const IncrementalSnapshotFileInfo = struct {
         InvalidExtension,
     };
 
-    /// Matches against regex: `^incremental-snapshot-(?P<base_slot>[[:digit:]]+)-(?P<slot>[[:digit:]]+)-(?P<hash>[[:alnum:]]+)\.(?P<ext>tar\.zst)$`.
+    /// Matches against regex:
+    /// ^incremental-snapshot-(?P<base_slot>[[:digit:]]+)-
+    ///     (?P<slot>[[:digit:]]+)-(?P<hash>[[:alnum:]]+)\.(?P<ext>tar\.zst)$
     pub fn parseFileNameTarZst(
         filename: []const u8,
     ) ParseFileNameTarZstError!IncrementalSnapshotFileInfo {
@@ -1016,7 +1022,10 @@ pub const IncrementalSnapshotFileInfo = struct {
         InvalidHash,
     };
 
-    /// Matches with the regex: `incremental-snapshot-(?P<base_slot>[[:digit:]]+)-(?P<slot>[[:digit:]]+)-(?P<hash>[[:alnum:]]+)`.
+    /// Matches with the regex:
+    /// incremental-snapshot-
+    ///     (?P<base_slot>[[:digit:]]+)-(?P<slot>[[:digit:]]+)-(?P<hash>[[:alnum:]]+)
+    ///
     /// Returns the full snapshot info based on the parsed section, and the index to the
     /// remainder of the unparsed section of `filename`, which the caller can check for
     /// the expected extension.
@@ -1187,10 +1196,12 @@ pub const SnapshotFiles = struct {
                 continue;
             }
             if (latest_incremental.slot == _incremental.slot) {
-                // TODO: if they have the same slot, that means they have different hashes, despite it being
-                // impossible for a given slot range to possess two different hashes; we have no way at this
-                // stage to unambiguously decide which of the two snapshots we want to select, since either
-                // could be valid. For now, we panic, but we should gracefully report this in some way.
+                // TODO: if they have the same slot, that means they have
+                // different hashes, despite it being impossible for a given
+                // slot range to possess two different hashes; we have no way at
+                // this stage to unambiguously decide which of the two snapshots
+                // we want to select, since either could be valid. For now, we
+                // panic, but we should gracefully report this in some way.
                 std.debug.panic("TODO: report this error gracefully in some way ({s} vs {s})", .{
                     latest_incremental.snapshotArchiveName().constSlice(),
                     _incremental.snapshotArchiveName().constSlice(),
@@ -1429,9 +1440,10 @@ pub const generate = struct {
         try sig.utils.tar.writeTarHeader(archive_writer, .directory, "accounts/", 0);
     }
 
-    /// Writes the account file header - follow this up by writing the file content to `archive_writer`,
-    /// and then follow that up with `writeAccountFilePadding(archive_writer, file_info.length)`.
-    /// Do this for each account file included in the snapshot.
+    /// Writes the account file header - follow this up by writing the file
+    /// content to `archive_writer`, and then follow that up with
+    /// `writeAccountFilePadding(archive_writer, file_info.length)`. Do this for
+    /// each account file included in the snapshot.
     pub fn writeAccountFileHeader(
         archive_writer: anytype,
         file_slot: Slot,

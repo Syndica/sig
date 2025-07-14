@@ -126,7 +126,8 @@ pub const BatchAccountCache = struct {
 
     // holds SYSVAR_INSTRUCTIONS_ID accounts, purely so we can deallocate them later. Index of each
     // one isn't intended to be meaningful.
-    // NOTE: we could take this field out, and have the caller deinit it from inside LoadedTransactionAccounts
+    // NOTE: we could take this field out, and have the caller deinit it from
+    // inside LoadedTransactionAccounts
     sysvar_instruction_account_datas: std.ArrayListUnmanaged(AccountSharedData) = .{},
 
     // NOTE: we might want to later add another field that keeps a copy of all writable accounts.
@@ -153,7 +154,8 @@ pub const BatchAccountCache = struct {
         const max_map_entries = total_account_keys: {
             var n: usize = 0;
             for (transactions) |tx| n += tx.accounts.len;
-            for (transactions) |tx| n += tx.instruction_infos.len; // for instr program owner accounts
+            // for instr program owner accounts
+            for (transactions) |tx| n += tx.instruction_infos.len;
             break :total_account_keys n;
         };
 
@@ -193,7 +195,8 @@ pub const BatchAccountCache = struct {
                     }
                 };
 
-                if (!created_new_account) std.debug.assert(account.lamports > 0); // this account should be gone?
+                // this account should be gone?
+                if (!created_new_account) std.debug.assert(account.lamports > 0);
 
                 accumulateAndCheckLoadedAccountDataSize(
                     tx_data_loaded,
@@ -275,7 +278,8 @@ pub const BatchAccountCache = struct {
     /// Reports account loading errors.
     /// By the time this is called, we have no dependency on accountsdb.
     pub fn loadTransactionAccounts(
-        // note: think we make this a *const by moving sysvar instruction account construction into init
+        // note: think we make this a *const by moving sysvar instruction
+        // account construction into init
         self: *BatchAccountCache,
         allocator: std.mem.Allocator,
         transaction: *const RuntimeTransaction,
@@ -365,10 +369,11 @@ pub const BatchAccountCache = struct {
 
             const owner_account = account: {
                 if (owner_id.equals(&runtime.ids.NATIVE_LOADER_ID)) continue;
-                if (validated_loaders.contains(owner_id.*)) continue; // only load + count owners once
+                // only load + count owners once
+                if (validated_loaders.contains(owner_id.*)) continue;
 
-                break :account (try self.loadAccount(allocator, transaction, owner_id, false)) orelse
-                    return error.InvalidProgramForExecution;
+                const maybe_acct = try self.loadAccount(allocator, transaction, owner_id, false);
+                break :account maybe_acct orelse return error.InvalidProgramForExecution;
             };
 
             if (!owner_account.account.owner.equals(&runtime.ids.NATIVE_LOADER_ID)) {

@@ -34,7 +34,8 @@ pub const Elf = struct {
     const Headers = struct {
         bytes: []const u8,
         header: elf.Elf64_Ehdr,
-        // The following fields are align(1) because there's no guarantee of alignment inside of the ELF sections.
+        // The following fields are align(1) because there's no guarantee of
+        // alignment inside of the ELF sections.
         shdrs: []align(1) const elf.Elf64_Shdr,
         phdrs: []align(1) const elf.Elf64_Phdr,
 
@@ -190,7 +191,8 @@ pub const Elf = struct {
         fn parse(headers: Headers) !Data {
             const strtab = try headers.shdrSlice(headers.header.e_shstrndx);
             for (headers.shdrs) |shdr| {
-                // Check that none of the section names are longer than the string table containing them.
+                // Check that none of the section names are longer than the
+                // string table containing them.
                 if (shdr.sh_name >= strtab.len) return error.InvalidOffset;
             }
 
@@ -524,8 +526,9 @@ pub const Elf = struct {
                 var r_offset = reloc.r_offset;
 
                 if (version.enableElfVaddr()) {
-                    // "Cache" the `phdr` in order to avoid doing a linear search for each relocation.
-                    // 99% of relocations will be in the same program section.
+                    // "Cache" the `phdr` in order to avoid doing a linear
+                    // search for each relocation. 99% of relocations will be in
+                    // the same program section.
                     const found = if (phdr) |header| found: {
                         break :found inRangeOfPhdrVm(header, r_offset);
                     } else false;
@@ -553,7 +556,8 @@ pub const Elf = struct {
 
                         const addr_slice = try safeSlice(bytes, imm_offset, 4);
                         const ref_addr = std.mem.readInt(u32, addr_slice[0..4], .little);
-                        // Make sure the relocation is referring to a symbol that's in the symbol table.
+                        // Make sure the relocation is referring to a symbol
+                        // that's in the symbol table.
                         if (reloc.r_sym() >= self.symbol_table.len) return error.UnknownSymbol;
                         const symbol = self.symbol_table[reloc.r_sym()];
                         var addr = symbol.st_value +| ref_addr;
@@ -563,9 +567,10 @@ pub const Elf = struct {
                         }
 
                         if (in_text_section or version == .v0) {
-                            // This is a LDDW instruction, which takes up the space of two regular instructions.
-                            // We need to split up the address into two 32-bit chunks, and write to each of the
-                            // slot's immediate field.
+                            // This is a LDDW instruction, which takes up the
+                            // space of two regular instructions. We need to
+                            // split up the address into two 32-bit chunks, and
+                            // write to each of the slot's immediate field.
                             {
                                 const imm_low_offset = imm_offset;
                                 const imm_slice = try safeSlice(bytes, imm_low_offset, 4);
@@ -582,8 +587,9 @@ pub const Elf = struct {
                                 );
                             }
                         } else {
-                            // This is refering to some constant outside of the .TEXT section,
-                            // so we don't need to worry about fitting the data into an immediate field.
+                            // This is refering to some constant outside of the
+                            // .TEXT section, so we don't need to worry about
+                            // fitting the data into an immediate field.
                             const imm_slice = try safeSlice(bytes, imm_offset, 8);
                             std.mem.writeInt(u64, imm_slice[0..8], addr, .little);
                         }

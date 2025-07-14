@@ -96,7 +96,8 @@ pub const Close = struct {
         recipient = 1,
         /// `[SIGNER]` The account's authority, Optional, required for initialized accounts.
         authority = 2,
-        /// `[WRITE]` The associated Program account if the account to close is a ProgramData account.
+        /// `[WRITE]` The associated Program account if the account to close is
+        /// a ProgramData account.
         program = 3,
     };
 };

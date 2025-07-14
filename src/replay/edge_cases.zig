@@ -48,13 +48,16 @@ const AncestorHashesReplayUpdate = struct {
     pub const Kind = enum {
         dead,
         dead_duplicate_confirmed,
-        /// `Slot` belongs to a fork we have pruned. We have observed that this fork is "popular" aka
-        /// reached 52+% stake through votes in turbine/gossip including votes for descendants. These
-        /// votes are hash agnostic since we have not replayed `Slot` so we can never say for certainty
-        /// that this fork has reached duplicate confirmation, but it is suspected to have. This
-        /// indicates that there is most likely a block with invalid ancestry present and thus we
-        /// collect an ancestor sample to resolve this issue. `Slot` is the deepest slot in this fork
-        /// that is popular, so any duplicate problems will be for `Slot` or one of it's ancestors.
+        /// `Slot` belongs to a fork we have pruned. We have observed that this
+        /// fork is "popular" aka reached 52+% stake through votes in
+        /// turbine/gossip including votes for descendants. These votes are hash
+        /// agnostic since we have not replayed `Slot` so we can never say for
+        /// certainty that this fork has reached duplicate confirmation, but it
+        /// is suspected to have. This indicates that there is most likely a
+        /// block with invalid ancestry present and thus we collect an ancestor
+        /// sample to resolve this issue. `Slot` is the deepest slot in this
+        /// fork that is popular, so any duplicate problems will be for `Slot`
+        /// or one of it's ancestors.
         popular_pruned_fork,
     };
 };
@@ -404,7 +407,8 @@ pub const UnfrozenGossipVerifiedVoteHashes = struct {
     const HashToVotesMap = std.AutoArrayHashMapUnmanaged(sig.core.Hash, VoteList);
     const VoteList = std.ArrayListUnmanaged(sig.core.Pubkey);
 
-    /// Update `latest_validator_votes_for_frozen_slots` if gossip has seen a newer vote for a frozen slot.
+    /// Update `latest_validator_votes_for_frozen_slots` if gossip has seen a
+    /// newer vote for a frozen slot.
     pub fn addVote(
         self: *UnfrozenGossipVerifiedVoteHashes,
         allocator: std.mem.Allocator,
@@ -414,7 +418,8 @@ pub const UnfrozenGossipVerifiedVoteHashes = struct {
         is_frozen: bool,
         latest_validator_votes_for_frozen_slots: *LatestValidatorVotesForFrozenSlots,
     ) !void {
-        // If this is a frozen slot, then we need to update the `latest_validator_votes_for_frozen_slots`
+        // If this is a frozen slot, then we need to update the
+        // `latest_validator_votes_for_frozen_slots`
         const was_added, //
         const maybe_latest_frozen_vote_slot //
         = if (is_frozen) try latest_validator_votes_for_frozen_slots.checkAddVote(
@@ -443,8 +448,8 @@ pub const UnfrozenGossipVerifiedVoteHashes = struct {
             // 1) `vote_slot` was not yet frozen
             // 2) and `vote_slot` >= than the latest frozen vote slot.
 
-            // Thus we want to record this vote for later, in case a slot with this `vote_slot` + hash gets
-            // frozen later
+            // Thus we want to record this vote for later, in case a slot with
+            // this `vote_slot` + hash gets frozen later
             const vps_gop = try self.votes_per_slot.getOrPut(allocator, vote_slot);
             errdefer if (!vps_gop.found_existing) {
                 std.debug.assert(self.votes_per_slot.orderedRemove(vps_gop.key_ptr.*));
@@ -589,7 +594,8 @@ fn processDuplicateSlots(
 
 /// Finds the duplicate confirmed hash for a slot.
 ///
-/// 1) If `maybe_slot_frozen_hash != null and isDuplicateConfirmed(maybe_slot_frozen_hash.?)`, `return maybe_slot_frozen_hash.?`
+/// 1) If `maybe_slot_frozen_hash != null and isDuplicateConfirmed(maybe_slot_frozen_hash.?)`
+///     `return maybe_slot_frozen_hash.?`
 /// 2) If `maybe_duplicate_confirmed_hash != null`, `return maybe_duplicate_confirmed_hash.?`
 /// 3) Else return null
 ///
@@ -634,7 +640,9 @@ fn getDuplicateConfirmedHash(
 }
 
 /// Analogous to [check_slot_agrees_with_cluster](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/repair/cluster_slot_state_verifier.rs#L848)
-/// NOTE: Where in agave the different modes of operation are represented as tagged union variants, here they're simply different functions inside this namespace.
+/// NOTE: Where in agave the different modes of operation are represented as
+/// tagged union variants, here they're simply different functions inside this
+/// namespace.
 const check_slot_agrees_with_cluster = struct {
     /// aka `BankFrozen` in agave.
     fn slotFrozen(
@@ -1075,8 +1083,8 @@ const check_slot_agrees_with_cluster = struct {
                 );
             },
             .unprocessed => {
-                // If the slot was not popular pruned, we would never have made it here, as the slot is
-                // yet to be replayed
+                // If the slot was not popular pruned, we would never have made
+                // it here, as the slot is yet to be replayed
                 std.debug.assert(is_popular_pruned);
                 // The cluster sample found the troublesome slot which caused this fork to be pruned
                 logger.warn().logf(

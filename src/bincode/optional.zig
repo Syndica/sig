@@ -5,8 +5,12 @@ const bincode = sig.bincode;
 pub fn defaultToNullOnEof(
     comptime T: type,
     comptime options: struct {
-        /// When this is false, the field will be encoded and decoded as a non-optional value, only reading as null on eof, and not written when it is null.
-        /// When this is true, the field will be encoded and decoded as an optional value, defaulting to null on eof while reading.
+        /// When this is false, the field will be encoded and decoded as a
+        /// non-optional value, only reading as null on eof, and not written
+        /// when it is null.
+        ///
+        /// When this is true, the field will be encoded and decoded as an
+        /// optional value, defaulting to null on eof while reading.
         encode_optional: bool = false,
 
         free: ?fn (allocator: std.mem.Allocator, data: anytype) void = null,

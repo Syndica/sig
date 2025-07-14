@@ -1835,7 +1835,8 @@ const LoadedSnapshot = struct {
 };
 
 const LoadSnapshotOptions = struct {
-    /// optional service to download a fresh snapshot from gossip. if null, will read from the snapshot_dir
+    /// optional service to download a fresh snapshot from gossip. if null, will
+    /// read from the snapshot_dir
     gossip_service: ?*GossipService,
     /// optional geyser to write snapshot data to
     geyser_writer: ?*GeyserWriter,

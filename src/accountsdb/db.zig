@@ -101,7 +101,8 @@ pub const AccountsDB = struct {
 
     /// NOTE: see accountsdb/readme.md for more details on how these are used
     file_map: RwMux(FileMap),
-    /// `file_map_fd_rw` is used to ensure files in the file_map are not closed while its held as a read-lock.
+    /// `file_map_fd_rw` is used to ensure files in the file_map are not closed
+    /// while its held as a read-lock.
     /// NOTE: see accountsdb/readme.md for more details on how these are used
     file_map_fd_rw: std.Thread.RwLock,
 
@@ -127,11 +128,18 @@ pub const AccountsDB = struct {
     /// Always `<= largest_rooted_slot`.
     largest_flushed_slot: std.atomic.Value(Slot),
 
-    /// The snapshot info from which this instance was loaded from and validated against (null if that didn't happen).
+    /// The snapshot info from which this instance was loaded from and validated
+    /// against (null if that didn't happen).
+    ///
     /// Used to potentially skip the first `computeAccountHashesAndLamports`.
     first_snapshot_load_info: RwMux(?SnapshotGenerationInfo),
-    /// Represents the largest slot info used to generate a full snapshot, and optionally an incremental snapshot relative to it, which currently exists.
-    /// It also protects access to the snapshot archive files it refers to - as in, the caller who has a lock on this has a lock on the snapshot archives.
+    /// Represents the largest slot info used to generate a full snapshot, and
+    /// optionally an incremental snapshot relative to it, which currently
+    /// exists.
+    ///
+    /// It also protects access to the snapshot archive files it refers to - as
+    /// in, the caller who has a lock on this has a lock on the snapshot
+    /// archives.
     latest_snapshot_gen_info: RwMux(?SnapshotGenerationInfo),
 
     // TODO: populate this during snapshot load
@@ -147,7 +155,8 @@ pub const AccountsDB = struct {
     pub const GossipView = struct {
         /// Used to initialize snapshot hashes to be sent to gossip.
         my_pubkey: Pubkey,
-        /// Reference to the gossip service's message push queue, used to push updates to snapshot info.
+        /// Reference to the gossip service's message push queue, used to push
+        /// updates to snapshot info.
         push_msg_queue: *sig.gossip.GossipService.PushMessageQueue,
 
         // TODO/NOTE: this will be more useful/nicer to use as a decl literal
@@ -560,12 +569,15 @@ pub const AccountsDB = struct {
         self.logger.debug().logf("mergeMultipleDBs: total time: {}", .{merge_timer.read()});
     }
 
-    /// Initializes a slice of children `AccountsDB`s, used to divide the work of loading from a snapshot.
+    /// Initializes a slice of children `AccountsDB`s, used to divide the work
+    /// of loading from a snapshot.
     ///
-    /// If successful, the caller is responsible for calling `deinitLoadingThreads(per_thread_allocator, loading_threads)`.
+    /// If successful, the caller is responsible for calling
+    /// `deinitLoadingThreads(per_thread_allocator, loading_threads)`.
     ///
-    /// On error, all resources which were allocated before encountering the error are freed, and the caller
-    /// is to assume `loaoding_threads` points to undefined memory.
+    /// On error, all resources which were allocated before encountering the
+    /// error are freed, and the caller is to assume `loaoding_threads` points
+    /// to undefined memory.
     fn initLoadingThreads(
         per_thread_allocator: std.mem.Allocator,
         /// Entirely overwritten, the caller should not assume retention of any information.
@@ -587,9 +599,11 @@ pub const AccountsDB = struct {
 
                 // dont spam the logs with init information (we set it after)
                 .logger = .noop,
-                // loading threads would never need to generate a snapshot, therefore it doesn't need a view into gossip.
+                // loading threads would never need to generate a snapshot,
+                // therefore it doesn't need a view into gossip.
                 .gossip_view = null,
-                // we set this to use the disk reference allocator if we already have one (ram allocator doesn't allocate on init)
+                // we set this to use the disk reference allocator if we already
+                // have one (ram allocator doesn't allocate on init)
                 .index_allocation = .{ .parent = &parent.account_index.reference_allocator },
             });
 
@@ -2067,8 +2081,9 @@ pub const AccountsDB = struct {
         const file_map, var file_map_lg = self.file_map.readWithLock();
         defer file_map_lg.unlock();
 
-        // lock this now such that, if under any circumstance this method was invoked twice in parallel
-        // on separate threads, there wouldn't be any overlapping work being done.
+        // lock this now such that, if under any circumstance this method was
+        // invoked twice in parallel on separate threads, there wouldn't be any
+        // overlapping work being done.
         const maybe_latest_snapshot_info: *?SnapshotGenerationInfo, //
         var latest_snapshot_info_lg //
         = self.latest_snapshot_gen_info.writeWithLock();
@@ -2277,8 +2292,9 @@ pub const AccountsDB = struct {
         const file_map, var file_map_lg = self.file_map.readWithLock();
         defer file_map_lg.unlock();
 
-        // we need to hold a lock on the full & incremental snapshot for the duration of the function
-        // to ensure we could never race if this method was invoked in parallel on different threads.
+        // we need to hold a lock on the full & incremental snapshot for the
+        // duration of the function to ensure we could never race if this method
+        // was invoked in parallel on different threads.
         const latest_snapshot_info: *SnapshotGenerationInfo, //
         var latest_snapshot_info_lg //
         = blk: {
@@ -2726,8 +2742,9 @@ pub fn getAccountPerFileEstimateFromCluster(
     };
 }
 
-/// All entries in `manifest.accounts_db_fields.file_map` must correspond to an entry in `file_map`,
-/// with the association defined by the file id (a field of the value of the former, the key of the latter).
+/// All entries in `manifest.accounts_db_fields.file_map` must correspond to an
+/// entry in `file_map`, with the association defined by the file id (a field of
+/// the value of the former, the key of the latter).
 pub fn writeSnapshotTarWithFields(
     archive_writer: anytype,
     version: sig.version.ClientVersion,
@@ -2850,12 +2867,15 @@ fn testWriteSnapshotIncremental(
 }
 
 test "testWriteSnapshot" {
-    // TODO: loading once from the full snapshot, and then a second time from the incremental snapshot,
-    // as is done in this test, isn't properly accounted for in the snapshot loading logic, since the
-    // way loading actually is handled in the validator is collapsing the full and incremental snapshots
-    // before loading.
-    // Either this test must be updated to test using the conventional loading method, or we must add
-    // a way to load from a full and then an incremental snapshot separately.
+    // TODO: loading once from the full snapshot, and then a second time from
+    // the incremental snapshot, as is done in this test, isn't properly
+    // accounted for in the snapshot loading logic, since the way loading
+    // actually is handled in the validator is collapsing the full and
+    // incremental snapshots before loading.
+    //
+    // Either this test must be updated to test using the conventional loading
+    // method, or we must add a way to load from a full and then an incremental
+    // snapshot separately.
     if (true) return error.SkipZigTest;
 
     const allocator = std.testing.allocator;
@@ -3323,8 +3343,10 @@ test "load other sysvars" {
     defer sig.bincode.free(allocator, slot_history);
 
     // // not always included in local snapshot
-    // _ = try accounts_db.getTypeFromAccount(allocator, sysvars.LastRestartSlot, &sysvars.LastRestartSlot.ID);
-    // _ = try accounts_db.getTypeFromAccount(allocator, sysvars.EpochRewards, &sysvars.EpochRewards.ID);
+    // _ = try accounts_db.getTypeFromAccount(allocator,
+    //    sysvars.LastRestartSlot, &sysvars.LastRestartSlot.ID);
+    // _ = try accounts_db.getTypeFromAccount(allocator,
+    //    sysvars.EpochRewards, &sysvars.EpochRewards.ID);
 }
 
 test "generate snapshot & update gossip snapshot hashes" {
@@ -3332,7 +3354,8 @@ test "generate snapshot & update gossip snapshot hashes" {
 
     const allocator = std.testing.allocator;
 
-    var prng = std.Random.DefaultPrng.init(123); // TODO: use `std.testing.random_seed` when we update
+    // TODO: use `std.testing.random_seed` when we update
+    var prng = std.Random.DefaultPrng.init(123);
     const random = prng.random();
 
     var tmp_dir_root = std.testing.tmpDir(.{});
@@ -3416,7 +3439,8 @@ test "generate snapshot & update gossip snapshot hashes" {
                 .from = Pubkey.fromPublicKey(&my_keypair.public_key),
                 .full = .{ .slot = full_slot, .hash = full_hash },
                 .incremental = SnapshotHashes.IncrementalSnapshotsList.EMPTY,
-                // set to zero when pushed to the queue, because it would be set in `drainPushQueueToGossipTable`.
+                // set to zero when pushed to the queue, because it would be set
+                // in `drainPushQueueToGossipTable`.
                 .wallclock = 0,
             },
             queue_item_0.SnapshotHashes,
@@ -3469,7 +3493,8 @@ test "generate snapshot & update gossip snapshot hashes" {
                         .slot = inc_slot,
                         .hash = inc_hash,
                     }),
-                    // set to zero when pushed to the queue, because it would be set in `drainPushQueueToGossipTable`.
+                    // set to zero when pushed to the queue, because it would be
+                    // set in `drainPushQueueToGossipTable`.
                     .wallclock = 0,
                 },
                 queue_item_1.SnapshotHashes,
@@ -3638,8 +3663,9 @@ pub const BenchmarkAccountsDB = struct {
         accounts: MemoryType,
         /// the index memory type (ram or disk (disk-memory allocator))
         index: MemoryType,
-        /// the number of accounts to prepopulate the index with as a multiple of n_accounts
-        /// ie, if n_accounts = 100 and n_accounts_multiple = 10, then the index will have 10x100=1000 accounts prepopulated
+        /// the number of accounts to prepopulate the index with as a multiple
+        /// of n_accounts ie, if n_accounts = 100 and n_accounts_multiple = 10,
+        /// then the index will have 10x100=1000 accounts prepopulated
         n_accounts_multiple: usize = 0,
         /// the name of the benchmark
         name: []const u8 = "",
@@ -3958,8 +3984,10 @@ pub const BenchmarkAccountsDB = struct {
             }
         };
 
-        // set up a WeightedAliasSampler to give our accounts normally distributed access probabilities.
-        // this models how some accounts are far more commonly read than others.
+        // set up a WeightedAliasSampler to give our accounts normally
+        // distributed access probabilities. this models how some accounts are
+        // far more commonly read than others.
+        //
         // TODO: is this distribution accurate? Probably not, but I don't have the data.
         const pubkeys_read_weighting = try allocator.alloc(f32, n_accounts);
         defer allocator.free(pubkeys_read_weighting);

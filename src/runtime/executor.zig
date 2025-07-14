@@ -46,9 +46,10 @@ pub fn executeNativeCpiInstruction(
     try executeInstruction(allocator, tc, instruction_info);
 }
 
-/// Push an instruction onto the instruction stack and an associated entry onto the instruction trace\
-/// Checks for reentrancy violations\
-/// Returns a reference to the pushed instruction context\
+/// Push an instruction onto the instruction stack and an associated entry onto
+/// the instruction trace.
+/// Checks for reentrancy violations.
+/// Returns a reference to the pushed instruction context.
 /// [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L471-L475
 /// [fd] https://github.com/firedancer-io/firedancer/blob/dfadb7d33683aa8711dfe837282ad0983d3173a0/src/flamenco/runtime/fd_executor.c#L1034-L1035
 pub fn pushInstruction(
@@ -66,7 +67,8 @@ pub fn pushInstruction(
     // [agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/program-runtime/src/invoke_context.rs#L245-L283
     // [fd] https://github.com/firedancer-io/firedancer/blob/dfadb7d33683aa8711dfe837282ad0983d3173a0/src/flamenco/runtime/fd_executor.c#L1048-L1070
     for (tc.instruction_stack.constSlice(), 0..) |ic, level| {
-        // If the program is on the stack, it must be the last entry otherwise it is a reentrancy violation
+        // If the program is on the stack, it must be the last entry otherwise
+        // it is a reentrancy violation
         if (program_id.equals(&ic.ixn_info.program_meta.pubkey) and
             level != tc.instruction_stack.len - 1)
         {
@@ -186,9 +188,10 @@ fn processNextInstruction(
     );
 
     native_program_fn(allocator, ic) catch |err| {
-        // This approach to failure logging is used to prevent requiring all native programs to return
-        // an ExecutionError. Instead, native programs return an InstructionError, and more granular
-        // failure logging for bpf programs is handled in the BPF executor.
+        // This approach to failure logging is used to prevent requiring all
+        // native programs to return an ExecutionError. Instead, native programs
+        // return an InstructionError, and more granular failure logging for bpf
+        // programs is handled in the BPF executor.
         if (err != InstructionError.ProgramFailedToComplete)
             try stable_log.programFailure(
                 ic.tc,

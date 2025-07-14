@@ -796,7 +796,8 @@ pub const EpochRewardStatus = union(enum) {
 pub const StartBlockHeightAndRewards = struct {
     /// the block height of the slot at which rewards distribution began
     distribution_starting_block_height: u64,
-    /// calculated epoch rewards pending distribution, outer Vec is by partition (one partition per block)
+    /// calculated epoch rewards pending distribution, outer Vec is by partition
+    /// (one partition per block)
     stake_rewards_by_partition: []const []const PartitionedStakeReward,
 
     pub fn deinit(self: StartBlockHeightAndRewards, allocator: Allocator) void {

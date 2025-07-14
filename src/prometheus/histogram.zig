@@ -61,8 +61,8 @@ pub const Histogram = struct {
     pub const metric_type: MetricType = .histogram;
 
     const ShardSync = packed struct {
-        /// The total count of events that have started to be recorded (including those that finished).
-        /// If this is larger than the shard count, it means a write is in progress.
+        /// The total count of events that have started to be recorded (including those that
+        /// finished). If this is larger than the shard count, it means a write is in progress.
         count: u63 = 0,
         /// Index of the shard currently being used for writes.
         shard: u1 = 0,

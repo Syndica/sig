@@ -29,8 +29,8 @@ pub const Instruction = struct {
         data: *const T,
     ) error{OutOfMemory}!Instruction {
         const serialized = sig.bincode.writeAlloc(allocator, data, .{}) catch
-            // reviewer's note - can we trim away bincode's use of any error? I don't think we need it,
-            // a bit annoying.
+            // reviewer's note - can we trim away bincode's use of any error? I
+            // don't think we need it, a bit annoying.
             return error.OutOfMemory;
         errdefer allocator.free(serialized);
 

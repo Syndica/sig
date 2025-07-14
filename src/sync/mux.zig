@@ -140,7 +140,7 @@ pub fn Mux(comptime T: type) type {
     };
 }
 
-/// RwMux is a `RwLock` wrapper which enforces proper access to a protected value which is moved to heap.
+/// RwMux is a `RwLock` wrapper which enforces proper access to a value shared across threads.
 pub fn RwMux(comptime T: type) type {
     return struct {
         /// Do not use! Private field.

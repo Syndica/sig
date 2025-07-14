@@ -93,7 +93,8 @@ pub const AccountsDB = struct {
     force_unpack_snapshot: bool = false,
     /// minmum download speed in megabytes per second to download a snapshot from
     min_snapshot_download_speed_mbs: u64 = 20,
-    /// force download of new snapshot, even if one exists (usually to get a more up-to-date snapshot
+    /// force download of new snapshot, even if one exists (usually to get a
+    /// more up-to-date snapshot
     force_new_snapshot_download: bool = false,
     /// estimate of the number of accounts per file (used for preallocation)
     accounts_per_file_estimate: u64 = getAccountPerFileEstimateFromCluster(.testnet) catch

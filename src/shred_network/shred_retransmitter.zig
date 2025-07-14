@@ -51,12 +51,17 @@ pub const ShredRetransmitterParams = struct {
 };
 
 /// Retransmit Service
-/// The retransmit service receives verified shreds from the shred network and retransmits them to the network.
+///
+/// The retransmit service receives verified shreds from the shred network and retransmits them to
+/// the network.
+///
 /// The retransmit service is broken down into two main components:
-/// 1. receiveShreds: runs on a single thread and receives shreds from the shred network, deduplicates them, and then packages them
-///    into RetransmitShredInfo's which are sent to a channel for further processing.
-/// 2. retransmitShreds: runs on N threads and receives RetransmitShredInfo's from the channel, computes the children to retransmit to
-///    and then constructs and sends packets to the network.
+///
+/// 1. receiveShreds: runs on a single thread and receives shreds from the shred network,
+///    deduplicates them, and then packages them into RetransmitShredInfo's which are sent to a
+///    channel for further processing.
+/// 2. retransmitShreds: runs on N threads and receives RetransmitShredInfo's from the channel,
+///    computes the children to retransmit to and then constructs and sends packets to the network.
 pub fn runShredRetransmitter(params: ShredRetransmitterParams) !void {
     errdefer {
         params.logger.info().log("retransmit service failed");
@@ -288,10 +293,13 @@ fn createAndSendRetransmitInfo(
         for (slot_shreds.items) |shred_id_and_packet| {
             try retransmit_shred_sender.send(.{
                 .slot_leader = slot_leader,
-                // CAUTION: .acquireUnsafe() is used here as the turbine_tree is guaranteed to be valid since:
-                // 1. the turbine_tree_provider has one exactly on reference to the turbine_tree after getTurbineTree
+                // CAUTION: .acquireUnsafe() is used here as the turbine_tree is guaranteed to be
+                // valid since:
+                // 1. the turbine_tree_provider has one exactly on reference to the turbine_tree
+                //    after getTurbineTree
                 // 2. each call to .aquireUnsafe() increments the reference count by 1
-                // 3. there is exactly one call to .release() per send (see RetransmitShredInfo.deinit and retransmitShreds)
+                // 3. there is exactly one call to .release() per send (see
+                //    RetransmitShredInfo.deinit and retransmitShreds)
                 .turbine_tree = turbine_tree.acquireUnsafe(),
                 .shred_id = shred_id_and_packet[0],
                 .shred_packet = shred_id_and_packet[1],
@@ -304,9 +312,10 @@ fn createAndSendRetransmitInfo(
 }
 
 /// Retransmit shreds to nodes in the network
-/// RetransmitShredInfo contains the shred_id, the shred_packet, the slot_leader, and the turbine_tree
-/// The shred_id and slot_leader are used to seed an rng for shuffling the nodes in the turbine_tree before
-/// computing the children to retransmit to.
+///
+/// RetransmitShredInfo contains the shred_id, the shred_packet, the slot_leader, and the
+/// turbine_tree. The shred_id and slot_leader are used to seed an rng for shuffling the nodes in
+/// the turbine_tree before computing the children to retransmit to.
 fn retransmitShreds(
     allocator: std.mem.Allocator,
     receiver: *Channel(RetransmitShredInfo),

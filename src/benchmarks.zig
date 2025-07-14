@@ -564,9 +564,9 @@ pub fn benchmark(
 
             // print aggregated results, eg:
             //
-            // benchmark, read_min, read_max, read_mean, read_variance, write_min, write_max, write_mean, write_variance
-            // read_write (100k), 1, 2, 3, 4, 1, 2, 3, 4
-            // read_write (200k), 1, 2, 3, 4, 1, 2, 3, 4
+            //. benchmark, read_min, read_max, read_mean, read_variance, write_min, write_max, write_mean, write_variance
+            //  read_write (100k), 1, 2, 3, 4, 1, 2, 3, 4
+            //  read_write (200k), 1, 2, 3, 4, 1, 2, 3, 4
             switch (ResultType) {
                 Duration => {
                     // print column headers

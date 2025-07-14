@@ -105,12 +105,13 @@ pub const Instruction = union(enum) {
 
     /// Changes the size of an undeployed program account.
     ///
-    /// A program account is automatically initialized when its size is first increased.
-    /// In this initial truncate, this sets the authority needed for subsequent operations.
-    /// Decreasing to size zero closes the program account and resets it into an uninitialized state.
-    /// Closing the program requires a recipient account.
-    /// Providing additional lamports upfront might be necessary to reach rent exemption.
-    /// Superflous funds are transferred to the recipient account if provided.
+    /// A program account is automatically initialized when its size is first
+    /// increased. In this initial truncate, this sets the authority needed for
+    /// subsequent operations. Decreasing to size zero closes the program
+    /// account and resets it into an uninitialized state. Closing the program
+    /// requires a recipient account. Providing additional lamports upfront
+    /// might be necessary to reach rent exemption. Superflous funds are
+    /// transferred to the recipient account if provided.
     ///
     /// # Account references
     ///   0. `[writable]` The program account to change the size of.
@@ -129,7 +130,8 @@ pub const Instruction = union(enum) {
     /// # Account references
     ///   0. `[writable]` The program account to deploy.
     ///   1. `[signer]` The authority of the program.
-    ///   2. `[writable]` Optional, an undeployed source program account to take data and lamports from.
+    ///   2. `[writable]` Optional, an undeployed source program account to take
+    ///      data and lamports from.
     deploy: Deploy,
 
     /// Undo the deployment of a program account.

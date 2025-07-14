@@ -237,7 +237,8 @@ pub fn execute(
     else
         0;
 
-    // Requested loaded accounts data size limit greater than max results in max loaded accounts data size limit
+    // Requested loaded accounts data size limit greater than max results in max
+    // loaded accounts data size limit
     const loaded_accounts_bytes = blk: {
         if (requested_loaded_accounts_data_size_limit) |max_size| {
             if (max_size[1] == 0) return .{ .err = .InvalidLoadedAccountsDataSizeLimit };

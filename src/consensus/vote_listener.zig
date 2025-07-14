@@ -308,9 +308,10 @@ fn getVoteTransactionsAfterCursor(
     return new_cursor;
 }
 
-/// NOTE: in the original agave code, this was an inline part of the `verifyVotes` function which took in a list
-/// of transactions to verify, and returned the same list with the unverified votes filtered out.
-/// We separate it out
+/// NOTE: in the original agave code, this was an inline part of the
+/// `verifyVotes` function which took in a list of transactions to verify, and
+/// returned the same list with the unverified votes filtered out. We separate
+/// it out
 fn verifyVoteTransaction(
     allocator: std.mem.Allocator,
     vote_tx: Transaction,
@@ -386,7 +387,8 @@ fn processVotesLoop(
         OptimisticConfirmationVerifier.new(blk: {
             const bank_forks, var bank_forks_lg = bank_forks_rw.readWithLock();
             defer bank_forks_lg.unlock();
-            // TODO: this is effectively what the agave code does, but could it just be `bank_forks.root_slot`?
+            // TODO: this is effectively what the agave code does, but could it just be
+            // `bank_forks.root_slot`?
             break :blk bank_forks.rootBank().slot;
         });
 
@@ -734,14 +736,15 @@ const AtomicInterval = struct {
 
     pub const ZERO: AtomicInterval = .{ .last_update = std.atomic.Value(u64).init(0) };
 
-    /// true if 'interval_time_ms' has elapsed since last time we returned true as long as it has been 'interval_time_ms' since this struct was created
+    /// true if 'interval_time_ms' has elapsed since last time we returned true as long as it has
+    /// been 'interval_time_ms' since this struct was created
     inline fn should_update(self: AtomicInterval, interval_time_ms: u64) bool {
         return self.should_update_ext(interval_time_ms, true);
     }
 
-    /// a primary use case is periodic metric reporting, potentially from different threads
-    /// true if 'interval_time_ms' has elapsed since last time we returned true
-    /// except, if skip_first=false, false until 'interval_time_ms' has elapsed since this struct was created
+    /// a primary use case is periodic metric reporting, potentially from different threads true if
+    /// 'interval_time_ms' has elapsed since last time we returned true except, if skip_first=false,
+    /// false until 'interval_time_ms' has elapsed since this struct was created
     inline fn should_update_ext(
         self: AtomicInterval,
         interval_time_ms: u64,
@@ -762,7 +765,8 @@ const BankNotification = union(enum) {
     optimistically_confirmed: Slot,
     frozen: if (false) sig.core.BankFields else noreturn,
     new_root_bank: if (false) sig.core.BankFields else noreturn,
-    /// The newly rooted slot chain including the parent slot of the oldest bank in the rooted chain.
+    /// The newly rooted slot chain including the parent slot of the oldest bank in the rooted
+    /// chain.
     new_rooted_chain: if (false) std.ArrayListUnmanaged(Slot) else noreturn,
 };
 
@@ -873,12 +877,12 @@ fn trackNewVotesAndNotifyConfirmations(
         if (bank_forks.bankHashOrNullIfFrozen(last_vote_slot)) |hash| {
             // Only accumulate intermediates if we have replayed the same version being voted on, as
             // otherwise we cannot verify the ancestry or the hashes.
-            // NOTE: this can only be performed on full tower votes, until deprecate_legacy_vote_ixs feature
-            // is active we must check the transaction type.
+            // NOTE: this can only be performed on full tower votes, until deprecate_legacy_vote_ixs
+            // feature is active we must check the transaction type.
             break :blk hash.eql(last_vote_hash) and vote.isFullTowerVote();
         } else {
-            // If we have not frozen the bank do not accumulate intermediate slots as we cannot verify
-            // the hashes.
+            // If we have not frozen the bank do not accumulate intermediate slots as we cannot
+            // verify the hashes.
             break :blk false;
         }
     };
@@ -930,16 +934,16 @@ fn trackNewVotesAndNotifyConfirmations(
 
             if (is_gossip_vote and is_new and stake > 0) {
                 senders.gossip_verified_vote_hash.send(.{ vote_pubkey, slot, hash }) catch {
-                    // WARN: the original agave code does literally just ignore this error, is that fine?
-                    // TODO: evaluate this
+                    // WARN: the original agave code does literally just ignore this error, is that
+                    // fine? TODO: evaluate this
                 };
             }
 
             if (reached_threshold_results.isSet(0)) {
                 if (senders.duplicate_confirmed_slot) |sender| {
                     sender.send(.{ slot, hash }) catch {
-                        // WARN: the original agave code does literally just ignore this error, is that fine?
-                        // TODO: evaluate this
+                        // WARN: the original agave code does literally just ignore this error, is
+                        // that fine? TODO: evaluate this
                     };
                 }
             }
@@ -973,10 +977,10 @@ fn trackNewVotesAndNotifyConfirmations(
         }
 
         if (slot < latest_vote_slot.*) {
-            // Important that we filter after the `last_vote_slot` check, as even if this vote
-            // is old, we still need to track optimistic confirmations.
-            // However it is fine to filter the rest of the slots for the propagated check tracking below,
-            // as the propagated check is able to roll up votes for descendants unlike optimistic confirmation.
+            // Important that we filter after the `last_vote_slot` check, as even if this vote is
+            // old, we still need to track optimistic confirmations. However it is fine to filter
+            // the rest of the slots for the propagated check tracking below, as the propagated
+            // check is able to roll up votes for descendants unlike optimistic confirmation.
             continue;
         }
 
@@ -1637,8 +1641,8 @@ test VoteListener {
                 const prev_vt_key, //
                 const prev_tracker: TestSlotVoteTracker //
                 = actual_trackers.items[i];
-                // the root bank slot never advances, so `progressWithNewRootBank`/`purgeStaleState` should
-                // never remove any slots. Otherwise this would be a lot harder to test.
+                // the root bank slot never advances, so `progressWithNewRootBank`/`purgeStaleState`
+                // should never remove any slots. Otherwise this would be a lot harder to test.
                 std.debug.assert(prev_vt_key == vt_key);
                 prev_tracker.deinit(allocator);
                 actual_trackers.items[i][1] = try .from(allocator, svt);

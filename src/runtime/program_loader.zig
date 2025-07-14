@@ -341,7 +341,8 @@ test "loadPrograms: load v3 program" {
     { // Bad elf
         const account = accounts.getPtr(program_data_key).?;
         const tmp_byte = account.data[bpf_loader.v3.State.PROGRAM_DATA_METADATA_SIZE + 1];
-        account.data[bpf_loader.v3.State.PROGRAM_DATA_METADATA_SIZE + 1] = 0xFF; // Corrupt the first byte of the elf
+        // Corrupt the first byte of the elf
+        account.data[bpf_loader.v3.State.PROGRAM_DATA_METADATA_SIZE + 1] = 0xFF;
         defer account.data[0] = tmp_byte;
 
         var loaded_programs = try loadPrograms(
@@ -449,7 +450,10 @@ pub fn createV3ProgramAccountData(
         program_data_metadata_bytes.len <= bpf_loader.v3.State.PROGRAM_DATA_METADATA_SIZE,
     );
 
-    @memcpy(program_data_bytes[bpf_loader.v3.State.PROGRAM_DATA_METADATA_SIZE..], program_elf_bytes);
+    @memcpy(
+        program_data_bytes[bpf_loader.v3.State.PROGRAM_DATA_METADATA_SIZE..],
+        program_elf_bytes,
+    );
 
     return .{ program_bytes, program_data_bytes };
 }

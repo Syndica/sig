@@ -89,9 +89,11 @@ pub const InnerInstruction = struct {
 };
 
 pub const CompiledInstruction = struct {
-    /// Index into the transaction keys array indicating the program account that executes this instruction.
+    /// Index into the transaction keys array indicating the program account
+    /// that executes this instruction.
     program_id_index: u8,
-    /// Ordered indices into the transaction keys array indicating which accounts to pass to the program.
+    /// Ordered indices into the transaction keys array indicating which
+    /// accounts to pass to the program.
     accounts: []const u8,
     /// The program input data.
     data: []const u8,
@@ -137,7 +139,8 @@ pub const Reward = struct {
     /// Account balance in lamports after `lamports` was applied
     post_balance: u64,
     reward_type: ?RewardType,
-    /// Vote account commission when the reward was credited, only present for voting and staking rewards
+    /// Vote account commission when the reward was credited, only present for
+    /// voting and staking rewards
     commission: ?u8,
 
     pub fn deinit(self: @This(), allocator: Allocator) void {
@@ -188,7 +191,8 @@ pub const TransactionError = union(enum) {
     /// Attempt to load a program that does not exist
     ProgramAccountNotFound,
 
-    /// The from `Pubkey` does not have sufficient balance to pay the fee to schedule the transaction
+    /// The from `Pubkey` does not have sufficient balance to pay the fee to
+    /// schedule the transaction
     InsufficientFundsForFee,
 
     /// This account may not be used to pay transaction fees
@@ -289,7 +293,8 @@ pub const TransactionError = union(enum) {
     /// Program execution is temporarily restricted on an account.
     ProgramExecutionTemporarilyRestricted: struct { account_index: u8 },
 
-    /// The total balance before the transaction does not equal the total balance after the transaction
+    /// The total balance before the transaction does not equal the total
+    /// balance after the transaction
     UnbalancedTransaction,
 
     /// Program cache hit max limit.

@@ -159,8 +159,8 @@ pub const GetAccountInfo = struct {
                 jsonParsed: noreturn,
 
                 /// This field is only set when the request object asked for `jsonParsed` encoding,
-                /// and the server couldn't find a parser, therefore falling back to simply returning
-                /// the account data in base64 encoding directly as a string.
+                /// and the server couldn't find a parser, therefore falling back to simply
+                /// returning the account data in base64 encoding directly as a string.
                 ///
                 /// [Solana documentation REF](https://solana.com/docs/rpc/http/getaccountinfo):
                 /// In the drop-down documentation for the encoding field:
@@ -469,13 +469,16 @@ pub const GetTransaction = struct {
     pub const Response = struct {
         /// the slot this transaction was processed in
         slot: Slot,
-        /// Transaction object, either in JSON format or encoded binary data, depending on encoding parameter
+        /// Transaction object, either in JSON format or encoded binary data, depending on encoding
+        /// parameter
         transaction: void,
-        /// estimated production time, as Unix timestamp (seconds since the Unix epoch) of when the transaction was processed. null if not available
+        /// estimated production time, as Unix timestamp (seconds since the Unix epoch) of when the
+        /// transaction was processed. null if not available
         blocktime: ?i64,
         /// transaction status metadata object:
         meta: void,
-        /// Transaction version. Undefined if maxSupportedTransactionVersion is not set in request params.
+        /// Transaction version.
+        /// Undefined if maxSupportedTransactionVersion is not set in request params.
         version: union(enum) { legacy, version: u8, not_defined },
     };
 };

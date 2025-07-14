@@ -91,7 +91,8 @@ const replay_stage = struct {
             }
         }
 
-        /// Order of threshold against `fraction_num / fraction_denom` without conversion to floating point.
+        /// Order of threshold against `fraction_num / fraction_denom` without
+        /// conversion to floating point.
         pub fn orderAgainstFraction(
             self: @This(),
             fraction_num: anytype,
@@ -864,39 +865,44 @@ pub const blockstore_processor = struct {
 
     /// Measures different parts of the slot confirmation processing pipeline.
     pub const ConfirmationTiming = struct {
-        /// Moment when the `ConfirmationTiming` instance was created.  Used to track the total wall
-        /// clock time from the moment the first shard for the slot is received and to the moment the
-        /// slot is complete.
+        /// Moment when the `ConfirmationTiming` instance was created.  Used to
+        /// track the total wall clock time from the moment the first shard for
+        /// the slot is received and to the moment the slot is complete.
         started: sig.time.Instant,
 
-        /// Wall clock time used by the slot confirmation code, including PoH/signature verification,
-        /// and replay.  As replay can run in parallel with the verification, this value can not be
-        /// recovered from the `replay_elapsed` and or `{poh,transaction}_verify_elapsed`.  This
-        /// includes failed cases, when `confirm_slot_entries` exist with an error.  In microseconds.
-        /// When unified scheduler is enabled, replay excludes the transaction execution, only
-        /// accounting for task creation and submission to the scheduler.
+        /// Wall clock time used by the slot confirmation code, including
+        /// PoH/signature verification, and replay.  As replay can run in
+        /// parallel with the verification, this value can not be recovered from
+        /// the `replay_elapsed` and or `{poh,transaction}_verify_elapsed`.
+        /// This includes failed cases, when `confirm_slot_entries` exist with
+        /// an error.  In microseconds. When unified scheduler is enabled,
+        /// replay excludes the transaction execution, only accounting for task
+        /// creation and submission to the scheduler.
         confirmation_elapsed: u64,
 
-        /// Wall clock time used by the entry replay code.  Does not include the PoH or the transaction
-        /// signature/precompiles verification, but can overlap with the PoH and signature verification.
-        /// In microseconds.
-        /// When unified scheduler is enabled, replay excludes the transaction execution, only
-        /// accounting for task creation and submission to the scheduler.
+        /// Wall clock time used by the entry replay code.  Does not include the
+        /// PoH or the transaction signature/precompiles verification, but can
+        /// overlap with the PoH and signature verification. In microseconds.
+        ///
+        /// When unified scheduler is enabled, replay excludes the transaction
+        /// execution, only accounting for task creation and submission to the
+        /// scheduler.
         replay_elapsed: u64,
 
         /// Wall clock times, used for the PoH verification of entries.  In microseconds.
         poh_verify_elapsed: u64,
 
-        /// Wall clock time, used for the signature verification as well as precompiles verification.
-        /// In microseconds.
+        /// Wall clock time, used for the signature verification as well as
+        /// precompiles verification. In microseconds.
         transaction_verify_elapsed: u64,
 
-        /// Wall clock time spent loading data sets (and entries) from the blockstore.  This does not
-        /// include the case when the blockstore load failed.  In microseconds.
+        /// Wall clock time spent loading data sets (and entries) from the
+        /// blockstore.  This does not include the case when the blockstore load
+        /// failed.  In microseconds.
         fetch_elapsed: u64,
 
-        /// Same as `fetch_elapsed` above, but for the case when the blockstore load fails.  In
-        /// microseconds.
+        /// Same as `fetch_elapsed` above, but for the case when the blockstore
+        /// load fails.  In microseconds.
         fetch_fail_elapsed: u64,
 
         /// `batch_execute()` measurements.
@@ -934,23 +940,26 @@ pub const blockstore_processor = struct {
 
     /// Measures times related to transaction execution in a slot.
     pub const BatchExecutionTiming = struct {
-        /// Time used by transaction execution.  Accumulated across multiple threads that are running
-        /// `execute_batch()`.
+        /// Time used by transaction execution.  Accumulated across multiple
+        /// threads that are running `execute_batch()`.
         totals: timings.ExecuteTimings,
 
         /// Wall clock time used by the transaction execution part of pipeline.
-        /// [`ConfirmationTiming::replay_elapsed`] includes this time.  In microseconds.
+        /// [`ConfirmationTiming::replay_elapsed`] includes this time.
+        /// In microseconds.
         wall_clock_us: Saturating(u64),
 
-        /// Time used to execute transactions, via `execute_batch()`, in the thread that consumed the
-        /// most time (in terms of total_thread_us) among rayon threads. Note that the slowest thread
-        /// is determined each time a given group of batches is newly processed. So, this is a coarse
-        /// approximation of wall-time single-threaded linearized metrics, discarding all metrics other
-        /// than the arbitrary set of batches mixed with various transactions, which replayed slowest
-        /// as a whole for each rayon processing session.
+        /// Time used to execute transactions, via `execute_batch()`, in the
+        /// thread that consumed the most time (in terms of total_thread_us)
+        /// among rayon threads. Note that the slowest thread is determined each
+        /// time a given group of batches is newly processed. So, this is a
+        /// coarse approximation of wall-time single-threaded linearized
+        /// metrics, discarding all metrics other than the arbitrary set of
+        /// batches mixed with various transactions, which replayed slowest as a
+        /// whole for each rayon processing session.
         ///
-        /// When unified scheduler is enabled, this field isn't maintained, because it's not batched at
-        /// all.
+        /// When unified scheduler is enabled, this field isn't maintained,
+        /// because it's not batched at all.
         slowest_thread: ThreadExecuteTimings,
 
         pub const EMPTY_ZEROES: BatchExecutionTiming = .{

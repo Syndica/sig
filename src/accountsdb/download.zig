@@ -347,7 +347,8 @@ pub fn downloadSnapshotsFromGossip(
                     inc_snapshot_uri,
                     output_dir,
                     inc_snapshot_filename.constSlice(),
-                    // NOTE: no min limit (we already downloaded the full snapshot at a good speed so this should be ok)
+                    // NOTE: no min limit (we already downloaded the full snapshot at a good speed
+                    // so this should be ok)
                     null,
                     download_buffer,
                 ) catch |err| {

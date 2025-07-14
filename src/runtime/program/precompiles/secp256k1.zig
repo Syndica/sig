@@ -29,17 +29,20 @@ comptime {
 pub const Secp256k1SignatureOffsets = packed struct {
     /// Offset to 64-byte signature plus 1-byte recovery ID.
     signature_offset: u16 = 0,
-    /// Within the transaction, the index of the instruction whose instruction data contains the signature.
+    /// Within the transaction, the index of the instruction whose instruction
+    /// data contains the signature.
     signature_instruction_idx: u8 = 0,
     /// Offset to 20-byte Ethereum address.
     eth_address_offset: u16 = 0,
-    /// Within the transaction, the index of the instruction whose instruction data contains the address.
+    /// Within the transaction, the index of the instruction whose instruction
+    /// data contains the address.
     eth_address_instruction_idx: u8 = 0,
     /// Offset to start of message data.
     message_data_offset: u16 = 0,
     /// Size of message data in bytes.
     message_data_size: u16 = 0,
-    /// Within the transaction, the index of the instruction whose instruction data contains the message.
+    /// Within the transaction, the index of the instruction whose instruction
+    /// data contains the message.
     message_instruction_idx: u8 = 0,
 
     fn asBytes(self: *const Secp256k1SignatureOffsets) []const u8 {

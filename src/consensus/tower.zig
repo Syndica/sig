@@ -6,7 +6,8 @@ const AutoHashMapUnmanaged = std.AutoHashMapUnmanaged;
 const Account = sig.core.Account;
 const AccountsDB = sig.accounts_db.AccountsDB;
 const Hash = sig.core.Hash;
-const LatestValidatorVotesForFrozenBanks = sig.consensus.latest_validator_votes.LatestValidatorVotes;
+const LatestValidatorVotesForFrozenBanks =
+    sig.consensus.latest_validator_votes.LatestValidatorVotes;
 const LockoutIntervals = sig.consensus.replay_tower.LockoutIntervals;
 const Lockout = sig.runtime.program.vote.state.Lockout;
 const VotedStakes = sig.consensus.progress_map.consensus.VotedStakes;
@@ -247,7 +248,8 @@ pub const Tower = struct {
 
         for (vote_state.votes.constSlice()) |vote| {
             if (slot != vote.slot and
-                // This means the validator is trying to vote on a fork incompatible with previous votes.
+                // This means the validator is trying to vote on a fork incompatible with previous
+                // votes.
                 !ancestors.contains(vote.slot))
             {
                 return true;
