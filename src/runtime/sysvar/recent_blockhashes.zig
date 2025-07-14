@@ -89,9 +89,8 @@ pub const RecentBlockhashes = struct {
     ) Allocator.Error!RecentBlockhashes {
         if (!builtin.is_test) @compileError("only for tests");
         std.debug.assert(entries.len <= MAX_ENTRIES);
-        var self = try RecentBlockhashes.default(allocator);
-        for (entries) |entry| self.entries.appendAssumeCapacity(entry);
-        return self;
+        const dupe = try allocator.dupe(Entry, entries);
+        return .{ .entries = .fromOwnedSlice(dupe) };
     }
 
     pub fn initRandom(allocator: Allocator, random: std.Random) Allocator.Error!RecentBlockhashes {
