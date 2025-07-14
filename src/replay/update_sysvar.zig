@@ -42,108 +42,63 @@ const failing_allocator = sig.utils.allocators.failing.allocator(.{});
 
 pub fn fillMissingEntries(
     allocator: Allocator,
-    accounts_db: *AccountsDb,
+    db: *AccountsDb,
     ancestors: *const Ancestors,
     sysvar_cache: *SysvarCache,
 ) !void {
     if (sysvar_cache.clock == null) {
-        if (getSysvarAndDataFromAccount(
-            allocator,
-            accounts_db,
-            ancestors,
-            Clock,
-        )) |sysvar_and_data| {
-            sysvar_cache.clock = sysvar_and_data.data;
+        if (getSysvarAndDataFromAccount(allocator, db, ancestors, Clock)) |sysvar_data| {
+            sysvar_cache.clock = sysvar_data.data;
         }
     }
 
     if (sysvar_cache.epoch_schedule == null) {
-        if (getSysvarAndDataFromAccount(
-            allocator,
-            accounts_db,
-            ancestors,
-            EpochSchedule,
-        )) |sysvar_and_data| {
-            sysvar_cache.epoch_schedule = sysvar_and_data.data;
+        if (getSysvarAndDataFromAccount(allocator, db, ancestors, EpochSchedule)) |sysvar_data| {
+            sysvar_cache.epoch_schedule = sysvar_data.data;
         }
     }
 
     if (sysvar_cache.epoch_rewards == null) {
-        if (getSysvarAndDataFromAccount(
-            allocator,
-            accounts_db,
-            ancestors,
-            EpochRewards,
-        )) |sysvar_and_data| {
-            sysvar_cache.epoch_rewards = sysvar_and_data.data;
+        if (getSysvarAndDataFromAccount(allocator, db, ancestors, EpochRewards)) |sysvar_data| {
+            sysvar_cache.epoch_rewards = sysvar_data.data;
         }
     }
 
     if (sysvar_cache.rent == null) {
-        if (getSysvarAndDataFromAccount(
-            allocator,
-            accounts_db,
-            ancestors,
-            Rent,
-        )) |sysvar_and_data| {
-            sysvar_cache.rent = sysvar_and_data.data;
+        if (getSysvarAndDataFromAccount(allocator, db, ancestors, Rent)) |sysvar_data| {
+            sysvar_cache.rent = sysvar_data.data;
         }
     }
 
     if (sysvar_cache.last_restart_slot == null) {
-        if (getSysvarAndDataFromAccount(
-            allocator,
-            accounts_db,
-            ancestors,
-            LastRestartSlot,
-        )) |sysvar_and_data| {
-            sysvar_cache.last_restart_slot = sysvar_and_data.data;
+        if (getSysvarAndDataFromAccount(allocator, db, ancestors, LastRestartSlot)) |sysvar_data| {
+            sysvar_cache.last_restart_slot = sysvar_data.data;
         }
     }
 
     if (sysvar_cache.slot_hashes == null) {
-        if (getSysvarAndDataFromAccount(
-            allocator,
-            accounts_db,
-            ancestors,
-            SlotHashes,
-        )) |sysvar_and_data| {
-            sysvar_cache.slot_hashes = sysvar_and_data.data;
-            sysvar_cache.slot_hashes_obj = sysvar_and_data.sysvar;
+        if (getSysvarAndDataFromAccount(allocator, db, ancestors, SlotHashes)) |sysvar_data| {
+            sysvar_cache.slot_hashes = sysvar_data.data;
+            sysvar_cache.slot_hashes_obj = sysvar_data.sysvar;
         }
     }
 
     if (sysvar_cache.stake_history == null) {
-        if (getSysvarAndDataFromAccount(
-            allocator,
-            accounts_db,
-            ancestors,
-            StakeHistory,
-        )) |sysvar_and_data| {
-            sysvar_cache.stake_history = sysvar_and_data.data;
-            sysvar_cache.stake_history_obj = sysvar_and_data.sysvar;
+        if (getSysvarAndDataFromAccount(allocator, db, ancestors, StakeHistory)) |sysvar_data| {
+            sysvar_cache.stake_history = sysvar_data.data;
+            sysvar_cache.stake_history_obj = sysvar_data.sysvar;
         }
     }
 
     if (sysvar_cache.fees_obj == null) {
-        if (getSysvarFromAccount(
-            allocator,
-            accounts_db,
-            ancestors,
-            Fees,
-        )) |fees| {
-            sysvar_cache.fees_obj = fees;
+        if (getSysvarFromAccount(allocator, db, ancestors, Fees)) |sysvar| {
+            sysvar_cache.fees_obj = sysvar;
         }
     }
 
     if (sysvar_cache.recent_blockhashes_obj == null) {
-        if (getSysvarFromAccount(
-            allocator,
-            accounts_db,
-            ancestors,
-            RecentBlockhashes,
-        )) |recent_block_hashes| {
-            sysvar_cache.recent_blockhashes_obj = recent_block_hashes;
+        if (getSysvarFromAccount(allocator, db, ancestors, RecentBlockhashes)) |sysvar| {
+            sysvar_cache.recent_blockhashes_obj = sysvar;
         }
     }
 }
@@ -180,12 +135,7 @@ pub fn updateClock(
         deps.epoch,
         deps.parent_epoch,
     );
-    try updateSysvarAccount(
-        allocator,
-        Clock,
-        clock,
-        deps.update_sysvar_deps,
-    );
+    try updateSysvarAccount(allocator, Clock, clock, deps.update_sysvar_deps);
 }
 
 pub fn updateLastRestartSlot(
@@ -234,12 +184,7 @@ pub fn updateSlotHistory(
 
     slot_history.add(deps.slot);
 
-    try updateSysvarAccount(
-        allocator,
-        SlotHistory,
-        slot_history,
-        deps,
-    );
+    try updateSysvarAccount(allocator, SlotHistory, slot_history, deps);
 }
 
 pub fn updateSlotHashes(
@@ -258,12 +203,7 @@ pub fn updateSlotHashes(
 
     slot_hashes.add(parent_slot, parent_hash);
 
-    try updateSysvarAccount(
-        allocator,
-        SlotHashes,
-        slot_hashes,
-        deps,
-    );
+    try updateSysvarAccount(allocator, SlotHashes, slot_hashes, deps);
 }
 
 pub fn updateRent(
@@ -271,12 +211,7 @@ pub fn updateRent(
     rent: Rent,
     deps: UpdateSysvarAccountDeps,
 ) !void {
-    try updateSysvarAccount(
-        allocator,
-        Rent,
-        rent,
-        deps,
-    );
+    try updateSysvarAccount(allocator, Rent, rent, deps);
 }
 
 pub fn updateEpochSchedule(
@@ -284,12 +219,7 @@ pub fn updateEpochSchedule(
     epoch_schedule: EpochSchedule,
     deps: UpdateSysvarAccountDeps,
 ) !void {
-    try updateSysvarAccount(
-        allocator,
-        EpochSchedule,
-        epoch_schedule,
-        deps,
-    );
+    try updateSysvarAccount(allocator, EpochSchedule, epoch_schedule, deps);
 }
 
 // TODO: Requires StakesCache
@@ -328,12 +258,7 @@ pub fn updateRecentBlockhashes(
     );
     defer recent_blockhashes.deinit(allocator);
 
-    try updateSysvarAccount(
-        allocator,
-        RecentBlockhashes,
-        recent_blockhashes,
-        deps,
-    );
+    try updateSysvarAccount(allocator, RecentBlockhashes, recent_blockhashes, deps);
 }
 
 pub const UpdateSysvarAccountDeps = struct {
@@ -402,13 +327,13 @@ fn createSysvarAccount(
     old_account: ?*const Account,
 ) Allocator.Error!AccountSharedData {
     // This should NEVER happen, dynamiclly sized sysvars manage there max size.
-    if (bincode.sizeOf(sysvar, .{}) > Sysvar.SIZE_OF)
+    if (bincode.sizeOf(sysvar, .{}) > Sysvar.STORAGE_SIZE)
         std.debug.panic("sysvar data size exceeds maximum allowed size: sysvar={s}, size={}", .{
             @typeName(Sysvar),
             bincode.sizeOf(sysvar, .{}),
         });
 
-    const sysvar_data = try allocator.alloc(u8, Sysvar.SIZE_OF);
+    const sysvar_data = try allocator.alloc(u8, Sysvar.STORAGE_SIZE);
     errdefer allocator.free(sysvar_data);
     @memset(sysvar_data, 0);
 
@@ -609,7 +534,7 @@ fn testCreateSysvarAccount(
     const rent = Rent.DEFAULT;
 
     const sysvar_data = try allocator.alloc(u8, @max(
-        Sysvar.SIZE_OF,
+        Sysvar.STORAGE_SIZE,
         bincode.sizeOf(sysvar, .{}),
     ));
     defer allocator.free(sysvar_data);
