@@ -20,6 +20,9 @@ const ReplayExecutionState = replay.execution.ReplayExecutionState;
 const SlotTracker = replay.trackers.SlotTracker;
 const EpochTracker = replay.trackers.EpochTracker;
 
+const LatestValidatorVotesForFrozenSlots =
+    sig.consensus.latest_validator_votes.LatestValidatorVotes;
+
 /// Number of threads to use in replay's thread pool
 const NUM_THREADS = 4;
 
@@ -170,7 +173,7 @@ fn advanceReplay(state: *ReplayState) !void {
     const processed_a_slot = try replay.execution.replayActiveSlots(&state.execution);
     if (!processed_a_slot) std.time.sleep(100 * std.time.ns_per_ms);
 
-    handleEdgeCases();
+    replay.edge_cases.handleEdgeCases();
 
     processConsensus();
 
@@ -340,19 +343,6 @@ fn getActiveFeatures(
         }
     }
     return features;
-}
-
-fn handleEdgeCases() void {
-    // TODO: process_ancestor_hashes_duplicate_slots
-
-    // TODO: process_duplicate_confirmed_slots
-
-    // TODO: process_gossip_verified_vote_hashes
-
-    // TODO: process_popular_pruned_forks
-
-    // TODO: process_duplicate_slots
-
 }
 
 fn processConsensus() void {

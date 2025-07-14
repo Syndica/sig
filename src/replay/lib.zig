@@ -2,6 +2,7 @@ pub const account_locks = @import("account_locks.zig");
 pub const commit = @import("commit.zig");
 pub const confirm_slot = @import("confirm_slot.zig");
 pub const consensus = @import("consensus.zig");
+pub const edge_cases = @import("edge_cases.zig");
 pub const execution = @import("execution.zig");
 pub const freeze = @import("freeze.zig");
 pub const resolve_lookup = @import("resolve_lookup.zig");
