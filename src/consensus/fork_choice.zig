@@ -55,7 +55,7 @@ const UpdateOperations = SortedMap(
 
 pub const ForkWeight = u64;
 
-// Analogous to [ForkInfo](https://github.com/anza-xyz/agave/blob/e7301b2a29d14df19c3496579cf8e271b493b3c6/core/src/consensus/heaviest_subtree_fork_choice.rs#L92)
+/// Analogous to [ForkInfo](https://github.com/anza-xyz/agave/blob/e7301b2a29d14df19c3496579cf8e271b493b3c6/core/src/consensus/heaviest_subtree_fork_choice.rs#L92)
 pub const ForkInfo = struct {
     logger: ScopedLogger(@typeName(ForkInfo)),
     /// Amount of stake that has voted for exactly this slot
@@ -68,7 +68,7 @@ pub const ForkInfo = struct {
     /// Heaviest slot in the subtree rooted at this slot, does not
     /// have to be a direct child in `children`. This is the slot whose subtree
     /// is the heaviest.
-    // Analogous to [best_slot](https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L103C5-L103C14)
+    /// Analogous to [best_slot](https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L103C5-L103C14)
     heaviest_subtree_slot: SlotAndHash,
     /// Deepest slot in the subtree rooted at this slot. This is the slot
     /// with the greatest tree height. This metric does not discriminate invalid
@@ -156,7 +156,7 @@ pub const ForkInfo = struct {
     }
 };
 
-// Analogous to [HeaviestSubtreeForkChoice](https://github.com/anza-xyz/agave/blob/e7301b2a29d14df19c3496579cf8e271b493b3c6/core/src/consensus/heaviest_subtree_fork_choice.rs#L187)
+/// Analogous to [HeaviestSubtreeForkChoice](https://github.com/anza-xyz/agave/blob/e7301b2a29d14df19c3496579cf8e271b493b3c6/core/src/consensus/heaviest_subtree_fork_choice.rs#L187)
 pub const ForkChoice = struct {
     allocator: std.mem.Allocator,
     logger: ScopedLogger(@typeName(ForkChoice)),
@@ -307,14 +307,14 @@ pub const ForkChoice = struct {
         return null;
     }
 
-    // Analogous to [best_overall_slot](https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L305)
+    /// Analogous to [best_overall_slot](https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L305)
     pub fn heaviestOverallSlot(self: *const ForkChoice) SlotAndHash {
         return self.heaviestSlot(self.tree_root) orelse {
             @panic("Root must exist in tree");
         };
     }
 
-    // Analogous to [best_slot](https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L293)
+    /// Analogous to [best_slot](https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L293)
     pub fn heaviestSlot(
         self: *const ForkChoice,
         slot_hash_key: SlotAndHash, //TODO change this to reference
@@ -370,7 +370,7 @@ pub const ForkChoice = struct {
 
     /// Add new votes, returns the best slot
     ///
-    // Analogous to [add_votes](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L343)
+    /// Analogous to [add_votes](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L343)
     pub fn addVotes(
         self: *ForkChoice,
         allocator: std.mem.Allocator,
@@ -457,7 +457,7 @@ pub const ForkChoice = struct {
     /// It expects `root_parent.slot` to be less than `self.tree_root.slot`
     /// and `root_parent` must not already exist in the fork choice.
     ///
-    // Analogous to [add_root_parent](https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L421)
+    /// Analogous to [add_root_parent](https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L421)
     pub fn addRootParent(self: *ForkChoice, root_parent: SlotAndHash) !void {
         // Assert that the new root parent has a smaller slot than the current root
         std.debug.assert(root_parent.slot < self.tree_root.slot);
@@ -730,7 +730,7 @@ pub const ForkChoice = struct {
         }
     }
 
-    // Analogous to [is_best_child] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L499
+    /// Analogous to [is_best_child] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L499
     ///
     /// Returns true if the given `maybe_heaviest_child` is the heaviest among the children
     /// of the parent. Breaks ties by slot # (lower is heavier).
@@ -928,7 +928,7 @@ pub const ForkChoice = struct {
     /// - Only the latest vote for each validator is considered (by slot, then by smallest hash)
     /// - Stake is only updated if the validator has stake in the vote's epoch
     ///
-    // Analogous to [generate_update_operations](https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L969)
+    /// Analogous to [generate_update_operations](https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L969)
     fn generateUpdateOperations(
         self: *ForkChoice,
         allocator: std.mem.Allocator,
@@ -1409,7 +1409,7 @@ pub const ForkChoice = struct {
 
     /// Updates fork choice statistics by processing new validator votes.
     ///
-    // Analogous to [compute_bank_stats](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L1250)
+    /// Analogous to [compute_bank_stats](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L1250)
     pub fn computeBankStats(
         self: *ForkChoice,
         allocator: std.mem.Allocator,
@@ -1449,7 +1449,7 @@ pub const ForkChoice = struct {
     /// Assumes that `slot_hash_key` is not the `tree_root`
     /// Returns the subtree originating from `slot_hash_key`
     ///
-    // Analogous to [split_off](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L581)
+    /// Analogous to [split_off](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L581)
     pub fn splitOff(
         self: *ForkChoice,
         allocator: std.mem.Allocator,
