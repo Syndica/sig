@@ -485,7 +485,7 @@ fn computeBankStats(
     progress: *ProgressMap,
     vote_tracker: *const VoteTracker,
     fork_choice: *ForkChoice,
-    latest_validator_votes_for_frozen_banks: *LatestValidatorVotesForFrozenBanks,
+    latest_validator_votes: *LatestValidatorVotesForFrozenBanks,
 ) []Slot {
     var new_stats = std.ArrayListUnmanaged(Slot).empty;
     var frozen_slots = try slot_tracker.frozenSlots(allocator);
@@ -501,15 +501,14 @@ fn computeBankStats(
                 slot_tracker.voteAccounts(),
                 ancestors,
                 progress,
-                latest_validator_votes_for_frozen_banks,
+                latest_validator_votes,
             );
 
             // Audit: The rest of the code is found in ForkChoice.compute_bank_stats in Agave
             const root = fork_choice.tree_root.slot;
             const new_votes =
-                try latest_validator_votes_for_frozen_banks.takeVotesDirtySet(allocator, root);
+                try latest_validator_votes.takeVotesDirtySet(allocator, root);
             _ = new_votes;
-            _ = computed_bank_state;
             _ = vote_tracker;
             // Notify any listeners of the votes found in this newly computed
             // bank
