@@ -3128,344 +3128,6 @@ test "HeaviestSubtreeForkChoice.generateUpdateOperations" {
     }
 }
 
-pub fn forkChoiceForTest(
-    allocator: std.mem.Allocator,
-    forks: []const TreeNode,
-) !ForkChoice {
-    if (!builtin.is_test) {
-        @compileError("initForTest should only be called in test mode");
-    }
-
-    const root = forks[0][1].?;
-    var fork_choice = try ForkChoice.init(
-        allocator,
-        .noop,
-        root,
-    );
-    errdefer fork_choice.deinit();
-
-    for (forks) |fork_tuple| {
-        const slot_hash = fork_tuple[0];
-        if (fork_choice.fork_infos.contains(slot_hash)) {
-            continue;
-        }
-        const parent_slot_hash = fork_tuple[1];
-        try fork_choice.addNewLeafSlot(slot_hash, parent_slot_hash);
-    }
-
-    return fork_choice;
-}
-
-pub const TreeNode = std.meta.Tuple(&.{ SlotAndHash, ?SlotAndHash });
-
-pub const fork_tuples = [_]TreeNode{
-    // (0)
-    // └── (1)
-    //     ├── (2)
-    //     │   └── (4)
-    //     └── (3)
-    //         └── (5)
-    //             └── (6)
-    //
-    // slot 1 is a child of slot 0
-    .{
-        SlotAndHash{ .slot = 1, .hash = Hash.ZEROES },
-        SlotAndHash{ .slot = 0, .hash = Hash.ZEROES },
-    },
-    // slot 2 is a child of slot 1
-    .{
-        SlotAndHash{ .slot = 2, .hash = Hash.ZEROES },
-        SlotAndHash{ .slot = 1, .hash = Hash.ZEROES },
-    },
-    // slot 4 is a child of slot 2
-    .{
-        SlotAndHash{ .slot = 4, .hash = Hash.ZEROES },
-        SlotAndHash{ .slot = 2, .hash = Hash.ZEROES },
-    },
-    // slot 3 is a child of slot 1
-    .{
-        SlotAndHash{ .slot = 3, .hash = Hash.ZEROES },
-        SlotAndHash{ .slot = 1, .hash = Hash.ZEROES },
-    },
-    // slot 5 is a child of slot 3
-    .{
-        SlotAndHash{ .slot = 5, .hash = Hash.ZEROES },
-        SlotAndHash{ .slot = 3, .hash = Hash.ZEROES },
-    },
-    // slot 6 is a child of slot 5
-    .{
-        SlotAndHash{ .slot = 6, .hash = Hash.ZEROES },
-        SlotAndHash{ .slot = 5, .hash = Hash.ZEROES },
-    },
-};
-
-const linear_fork_tuples = [_]TreeNode{
-    // (0)
-    // └── (1)
-    //     └── (2)
-    //         └── (3)
-    //             └── (4)
-    //                 └── (5)
-    //                     └── (6)
-    .{
-        SlotAndHash{ .slot = 1, .hash = Hash.ZEROES },
-        SlotAndHash{ .slot = 0, .hash = Hash.ZEROES },
-    },
-    // slot 2 is a child of slot 1
-    .{
-        SlotAndHash{ .slot = 2, .hash = Hash.ZEROES },
-        SlotAndHash{ .slot = 1, .hash = Hash.ZEROES },
-    },
-    // slot 3 is a child of slot 2
-    .{
-        SlotAndHash{ .slot = 3, .hash = Hash.ZEROES },
-        SlotAndHash{ .slot = 2, .hash = Hash.ZEROES },
-    },
-    // slot 4 is a child of slot 3
-    .{
-        SlotAndHash{ .slot = 4, .hash = Hash.ZEROES },
-        SlotAndHash{ .slot = 3, .hash = Hash.ZEROES },
-    },
-    // slot 5 is a child of slot 4
-    .{
-        SlotAndHash{ .slot = 5, .hash = Hash.ZEROES },
-        SlotAndHash{ .slot = 4, .hash = Hash.ZEROES },
-    },
-    // slot 6 is a child of slot 5
-    .{
-        SlotAndHash{ .slot = 6, .hash = Hash.ZEROES },
-        SlotAndHash{ .slot = 5, .hash = Hash.ZEROES },
-    },
-};
-
-fn compareSlotHashKey(_: void, a: SlotAndHash, b: SlotAndHash) bool {
-    if (a.slot == b.slot) {
-        return a.hash.order(&b.hash) == .lt;
-    }
-    return a.slot < b.slot;
-}
-
-pub fn setupDuplicateForks() !struct {
-    fork_choice: *ForkChoice,
-    duplicate_leaves_descended_from_4: []SlotAndHash,
-    duplicate_leaves_descended_from_5: []SlotAndHash,
-    duplicate_leaves_descended_from_6: []SlotAndHash,
-} {
-    // (0)
-    // └── (1)
-    //     ├── (2)
-    //     │   └── (4)
-    //     │       ├── (10)
-    //     │       └── (10)
-    //     └── (3)
-    //         └── (5)
-    //             ├── (6)
-    //             │   ├── (10)
-    //             │   └── (10)
-    //             ├── (10)
-    //             └── (10)
-    var prng = std.Random.DefaultPrng.init(91);
-    const random = prng.random();
-    // Build fork structure
-    var fork_choice = try test_allocator.create(ForkChoice);
-    errdefer test_allocator.destroy(fork_choice);
-
-    fork_choice.* = try forkChoiceForTest(
-        test_allocator,
-        fork_tuples[0..],
-    );
-
-    const duplicate_slot: u64 = 10;
-
-    // Create duplicate leaves descended from slot 4
-    var duplicate_leaves_descended_from_4 = std.ArrayList(SlotAndHash).init(test_allocator);
-    defer duplicate_leaves_descended_from_4.deinit();
-    for (0..2) |_| {
-        try duplicate_leaves_descended_from_4.append(SlotAndHash{
-            .slot = duplicate_slot,
-            .hash = Hash.initRandom(random),
-        });
-    }
-
-    // Create duplicate leaves descended from slot 5
-    var duplicate_leaves_descended_from_5 = std.ArrayList(SlotAndHash).init(test_allocator);
-    defer duplicate_leaves_descended_from_5.deinit();
-    for (0..2) |_| {
-        try duplicate_leaves_descended_from_5.append(SlotAndHash{
-            .slot = duplicate_slot,
-            .hash = Hash.initRandom(random),
-        });
-    }
-
-    // Create duplicate leaves descended from slot 6
-    var duplicate_leaves_descended_from_6 = std.ArrayList(SlotAndHash).init(test_allocator);
-    defer duplicate_leaves_descended_from_6.deinit();
-    for (0..2) |_| {
-        try duplicate_leaves_descended_from_6.append(SlotAndHash{
-            .slot = duplicate_slot,
-            .hash = Hash.initRandom(random),
-        });
-    }
-
-    std.mem.sort(SlotAndHash, duplicate_leaves_descended_from_4.items, {}, compareSlotHashKey);
-    std.mem.sort(SlotAndHash, duplicate_leaves_descended_from_5.items, {}, compareSlotHashKey);
-    std.mem.sort(SlotAndHash, duplicate_leaves_descended_from_6.items, {}, compareSlotHashKey);
-
-    // Add duplicate leaves to the fork structure
-    for (duplicate_leaves_descended_from_4.items) |duplicate_leaf| {
-        try fork_choice.addNewLeafSlot(duplicate_leaf, SlotAndHash{
-            .slot = 4,
-            .hash = Hash.ZEROES,
-        });
-    }
-    for (duplicate_leaves_descended_from_5.items) |duplicate_leaf| {
-        try fork_choice.addNewLeafSlot(duplicate_leaf, SlotAndHash{
-            .slot = 5,
-            .hash = Hash.ZEROES,
-        });
-    }
-    for (duplicate_leaves_descended_from_6.items) |duplicate_leaf| {
-        try fork_choice.addNewLeafSlot(duplicate_leaf, SlotAndHash{
-            .slot = 6,
-            .hash = Hash.ZEROES,
-        });
-    }
-
-    // Verify children of slot 4
-    var dup_children_4 = fork_choice.getChildren(&.{
-        .slot = 4,
-        .hash = Hash.ZEROES,
-    }).?;
-
-    std.mem.sort(SlotAndHash, dup_children_4.mutableKeys(), {}, compareSlotHashKey);
-    std.debug.assert(dup_children_4.keys()[0].equals(duplicate_leaves_descended_from_4.items[0]));
-    std.debug.assert(dup_children_4.keys()[1].equals(duplicate_leaves_descended_from_4.items[1]));
-
-    var dup_children_5 = std.ArrayList(SlotAndHash).init(test_allocator);
-    defer dup_children_5.deinit();
-
-    var children_5 = fork_choice.getChildren(&.{
-        .slot = 5,
-        .hash = Hash.ZEROES,
-    }).?;
-
-    for (children_5.keys()) |key| {
-        if (key.slot == duplicate_slot) {
-            dup_children_5.append(key) catch unreachable;
-        }
-    }
-
-    std.mem.sort(SlotAndHash, dup_children_5.items, {}, compareSlotHashKey);
-    std.debug.assert(dup_children_5.items[0].equals(duplicate_leaves_descended_from_5.items[0]));
-    std.debug.assert(dup_children_5.items[1].equals(duplicate_leaves_descended_from_5.items[1]));
-
-    // Verify children of slot 6
-    var dup_children_6 = std.ArrayList(SlotAndHash).init(test_allocator);
-    defer dup_children_6.deinit();
-
-    var children_6 = fork_choice.getChildren(&.{
-        .slot = 6,
-        .hash = Hash.ZEROES,
-    }).?;
-
-    for (children_6.keys()) |key| {
-        if (key.slot == duplicate_slot) {
-            dup_children_6.append(key) catch unreachable;
-        }
-    }
-
-    std.mem.sort(SlotAndHash, dup_children_6.items, {}, compareSlotHashKey);
-    std.debug.assert(dup_children_6.items[0].equals(duplicate_leaves_descended_from_6.items[0]));
-    std.debug.assert(dup_children_6.items[1].equals(duplicate_leaves_descended_from_6.items[1]));
-
-    return .{
-        .fork_choice = fork_choice,
-        .duplicate_leaves_descended_from_4 = try duplicate_leaves_descended_from_4.toOwnedSlice(),
-        .duplicate_leaves_descended_from_5 = try duplicate_leaves_descended_from_5.toOwnedSlice(),
-        .duplicate_leaves_descended_from_6 = try duplicate_leaves_descended_from_6.toOwnedSlice(),
-    };
-}
-
-fn isUpdateOpsEqual(expected: *UpdateOperations, actual: *UpdateOperations) !bool {
-    if (!builtin.is_test) {
-        @compileError("isUpdateOpsEqual should only be called in test mode");
-    }
-    const eks = expected.items()[0];
-    const gks = actual.items()[0];
-    try std.testing.expect(eks.len == gks.len);
-    for (eks) |ek| {
-        var found = false;
-        for (gks) |gk| {
-            if (ek.label == gk.label and ek.order(gk) == .eq) {
-                found = true;
-                break;
-            }
-        }
-        try std.testing.expect(found);
-    }
-
-    const eus = expected.items()[1];
-    const gus = actual.items()[1];
-    try std.testing.expect(eus.len == gus.len);
-    for (eus) |eu| {
-        var found = false;
-        for (gus) |gu| {
-            if (@intFromEnum(eu) == @intFromEnum(gu)) {
-                found = true;
-                break;
-            }
-        }
-        try std.testing.expect(found);
-    }
-    return true;
-}
-
-fn testEpochStakes(
-    allocator: std.mem.Allocator,
-    pubkeys: []const Pubkey,
-    stake: u64,
-    random: std.Random,
-) !VersionedEpochStakes {
-    if (!builtin.is_test) {
-        @compileError("testEpochStakes should only be called in test mode");
-    }
-
-    var vote_accounts = sig.core.vote_accounts.VoteAccounts{};
-    errdefer vote_accounts.deinit(allocator);
-
-    for (pubkeys) |pubkey| {
-        try vote_accounts.vote_accounts.put(
-            allocator,
-            pubkey,
-            .{
-                .stake = stake,
-                .account = try sig.core.vote_accounts.createRandomVoteAccount(
-                    allocator,
-                    random,
-                    Pubkey.initRandom(random),
-                ),
-            },
-        );
-    }
-
-    const stakes = sig.core.epoch_stakes.EpochStakesGeneric(.stake){
-        .stakes = sig.core.Stakes(.stake){
-            .vote_accounts = vote_accounts,
-            .stake_delegations = .empty,
-            .unused = 0,
-            .epoch = 0,
-            .stake_history = sig.runtime.sysvar.StakeHistory.EMPTY,
-        },
-        .epoch_authorized_voters = .empty,
-        .node_id_to_vote_accounts = .empty,
-        .total_stake = pubkeys.len * stake,
-    };
-
-    return VersionedEpochStakes{
-        .current = stakes,
-    };
-}
-
 // Analogous to [add_root_parent](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L426)
 test "HeaviestSubtreeForkChoice.addRootParent" {
     var prng = std.Random.DefaultPrng.init(91);
@@ -5033,4 +4695,342 @@ test "HeaviestSubtreeForkChoice.gossipVoteDoesntAffectForkChoice" {
 
     // Best slot is still 4 (gossip vote didn't affect fork choice)
     try std.testing.expectEqual(4, fork_choice.heaviestOverallSlot().slot);
+}
+
+pub fn forkChoiceForTest(
+    allocator: std.mem.Allocator,
+    forks: []const TreeNode,
+) !ForkChoice {
+    if (!builtin.is_test) {
+        @compileError("initForTest should only be called in test mode");
+    }
+
+    const root = forks[0][1].?;
+    var fork_choice = try ForkChoice.init(
+        allocator,
+        .noop,
+        root,
+    );
+    errdefer fork_choice.deinit();
+
+    for (forks) |fork_tuple| {
+        const slot_hash = fork_tuple[0];
+        if (fork_choice.fork_infos.contains(slot_hash)) {
+            continue;
+        }
+        const parent_slot_hash = fork_tuple[1];
+        try fork_choice.addNewLeafSlot(slot_hash, parent_slot_hash);
+    }
+
+    return fork_choice;
+}
+
+pub const TreeNode = std.meta.Tuple(&.{ SlotAndHash, ?SlotAndHash });
+
+pub const fork_tuples = [_]TreeNode{
+    // (0)
+    // └── (1)
+    //     ├── (2)
+    //     │   └── (4)
+    //     └── (3)
+    //         └── (5)
+    //             └── (6)
+    //
+    // slot 1 is a child of slot 0
+    .{
+        SlotAndHash{ .slot = 1, .hash = Hash.ZEROES },
+        SlotAndHash{ .slot = 0, .hash = Hash.ZEROES },
+    },
+    // slot 2 is a child of slot 1
+    .{
+        SlotAndHash{ .slot = 2, .hash = Hash.ZEROES },
+        SlotAndHash{ .slot = 1, .hash = Hash.ZEROES },
+    },
+    // slot 4 is a child of slot 2
+    .{
+        SlotAndHash{ .slot = 4, .hash = Hash.ZEROES },
+        SlotAndHash{ .slot = 2, .hash = Hash.ZEROES },
+    },
+    // slot 3 is a child of slot 1
+    .{
+        SlotAndHash{ .slot = 3, .hash = Hash.ZEROES },
+        SlotAndHash{ .slot = 1, .hash = Hash.ZEROES },
+    },
+    // slot 5 is a child of slot 3
+    .{
+        SlotAndHash{ .slot = 5, .hash = Hash.ZEROES },
+        SlotAndHash{ .slot = 3, .hash = Hash.ZEROES },
+    },
+    // slot 6 is a child of slot 5
+    .{
+        SlotAndHash{ .slot = 6, .hash = Hash.ZEROES },
+        SlotAndHash{ .slot = 5, .hash = Hash.ZEROES },
+    },
+};
+
+const linear_fork_tuples = [_]TreeNode{
+    // (0)
+    // └── (1)
+    //     └── (2)
+    //         └── (3)
+    //             └── (4)
+    //                 └── (5)
+    //                     └── (6)
+    .{
+        SlotAndHash{ .slot = 1, .hash = Hash.ZEROES },
+        SlotAndHash{ .slot = 0, .hash = Hash.ZEROES },
+    },
+    // slot 2 is a child of slot 1
+    .{
+        SlotAndHash{ .slot = 2, .hash = Hash.ZEROES },
+        SlotAndHash{ .slot = 1, .hash = Hash.ZEROES },
+    },
+    // slot 3 is a child of slot 2
+    .{
+        SlotAndHash{ .slot = 3, .hash = Hash.ZEROES },
+        SlotAndHash{ .slot = 2, .hash = Hash.ZEROES },
+    },
+    // slot 4 is a child of slot 3
+    .{
+        SlotAndHash{ .slot = 4, .hash = Hash.ZEROES },
+        SlotAndHash{ .slot = 3, .hash = Hash.ZEROES },
+    },
+    // slot 5 is a child of slot 4
+    .{
+        SlotAndHash{ .slot = 5, .hash = Hash.ZEROES },
+        SlotAndHash{ .slot = 4, .hash = Hash.ZEROES },
+    },
+    // slot 6 is a child of slot 5
+    .{
+        SlotAndHash{ .slot = 6, .hash = Hash.ZEROES },
+        SlotAndHash{ .slot = 5, .hash = Hash.ZEROES },
+    },
+};
+
+fn compareSlotHashKey(_: void, a: SlotAndHash, b: SlotAndHash) bool {
+    if (a.slot == b.slot) {
+        return a.hash.order(&b.hash) == .lt;
+    }
+    return a.slot < b.slot;
+}
+
+pub fn setupDuplicateForks() !struct {
+    fork_choice: *ForkChoice,
+    duplicate_leaves_descended_from_4: []SlotAndHash,
+    duplicate_leaves_descended_from_5: []SlotAndHash,
+    duplicate_leaves_descended_from_6: []SlotAndHash,
+} {
+    // (0)
+    // └── (1)
+    //     ├── (2)
+    //     │   └── (4)
+    //     │       ├── (10)
+    //     │       └── (10)
+    //     └── (3)
+    //         └── (5)
+    //             ├── (6)
+    //             │   ├── (10)
+    //             │   └── (10)
+    //             ├── (10)
+    //             └── (10)
+    var prng = std.Random.DefaultPrng.init(91);
+    const random = prng.random();
+    // Build fork structure
+    var fork_choice = try test_allocator.create(ForkChoice);
+    errdefer test_allocator.destroy(fork_choice);
+
+    fork_choice.* = try forkChoiceForTest(
+        test_allocator,
+        fork_tuples[0..],
+    );
+
+    const duplicate_slot: u64 = 10;
+
+    // Create duplicate leaves descended from slot 4
+    var duplicate_leaves_descended_from_4 = std.ArrayList(SlotAndHash).init(test_allocator);
+    defer duplicate_leaves_descended_from_4.deinit();
+    for (0..2) |_| {
+        try duplicate_leaves_descended_from_4.append(SlotAndHash{
+            .slot = duplicate_slot,
+            .hash = Hash.initRandom(random),
+        });
+    }
+
+    // Create duplicate leaves descended from slot 5
+    var duplicate_leaves_descended_from_5 = std.ArrayList(SlotAndHash).init(test_allocator);
+    defer duplicate_leaves_descended_from_5.deinit();
+    for (0..2) |_| {
+        try duplicate_leaves_descended_from_5.append(SlotAndHash{
+            .slot = duplicate_slot,
+            .hash = Hash.initRandom(random),
+        });
+    }
+
+    // Create duplicate leaves descended from slot 6
+    var duplicate_leaves_descended_from_6 = std.ArrayList(SlotAndHash).init(test_allocator);
+    defer duplicate_leaves_descended_from_6.deinit();
+    for (0..2) |_| {
+        try duplicate_leaves_descended_from_6.append(SlotAndHash{
+            .slot = duplicate_slot,
+            .hash = Hash.initRandom(random),
+        });
+    }
+
+    std.mem.sort(SlotAndHash, duplicate_leaves_descended_from_4.items, {}, compareSlotHashKey);
+    std.mem.sort(SlotAndHash, duplicate_leaves_descended_from_5.items, {}, compareSlotHashKey);
+    std.mem.sort(SlotAndHash, duplicate_leaves_descended_from_6.items, {}, compareSlotHashKey);
+
+    // Add duplicate leaves to the fork structure
+    for (duplicate_leaves_descended_from_4.items) |duplicate_leaf| {
+        try fork_choice.addNewLeafSlot(duplicate_leaf, SlotAndHash{
+            .slot = 4,
+            .hash = Hash.ZEROES,
+        });
+    }
+    for (duplicate_leaves_descended_from_5.items) |duplicate_leaf| {
+        try fork_choice.addNewLeafSlot(duplicate_leaf, SlotAndHash{
+            .slot = 5,
+            .hash = Hash.ZEROES,
+        });
+    }
+    for (duplicate_leaves_descended_from_6.items) |duplicate_leaf| {
+        try fork_choice.addNewLeafSlot(duplicate_leaf, SlotAndHash{
+            .slot = 6,
+            .hash = Hash.ZEROES,
+        });
+    }
+
+    // Verify children of slot 4
+    var dup_children_4 = fork_choice.getChildren(&.{
+        .slot = 4,
+        .hash = Hash.ZEROES,
+    }).?;
+
+    std.mem.sort(SlotAndHash, dup_children_4.mutableKeys(), {}, compareSlotHashKey);
+    std.debug.assert(dup_children_4.keys()[0].equals(duplicate_leaves_descended_from_4.items[0]));
+    std.debug.assert(dup_children_4.keys()[1].equals(duplicate_leaves_descended_from_4.items[1]));
+
+    var dup_children_5 = std.ArrayList(SlotAndHash).init(test_allocator);
+    defer dup_children_5.deinit();
+
+    var children_5 = fork_choice.getChildren(&.{
+        .slot = 5,
+        .hash = Hash.ZEROES,
+    }).?;
+
+    for (children_5.keys()) |key| {
+        if (key.slot == duplicate_slot) {
+            dup_children_5.append(key) catch unreachable;
+        }
+    }
+
+    std.mem.sort(SlotAndHash, dup_children_5.items, {}, compareSlotHashKey);
+    std.debug.assert(dup_children_5.items[0].equals(duplicate_leaves_descended_from_5.items[0]));
+    std.debug.assert(dup_children_5.items[1].equals(duplicate_leaves_descended_from_5.items[1]));
+
+    // Verify children of slot 6
+    var dup_children_6 = std.ArrayList(SlotAndHash).init(test_allocator);
+    defer dup_children_6.deinit();
+
+    var children_6 = fork_choice.getChildren(&.{
+        .slot = 6,
+        .hash = Hash.ZEROES,
+    }).?;
+
+    for (children_6.keys()) |key| {
+        if (key.slot == duplicate_slot) {
+            dup_children_6.append(key) catch unreachable;
+        }
+    }
+
+    std.mem.sort(SlotAndHash, dup_children_6.items, {}, compareSlotHashKey);
+    std.debug.assert(dup_children_6.items[0].equals(duplicate_leaves_descended_from_6.items[0]));
+    std.debug.assert(dup_children_6.items[1].equals(duplicate_leaves_descended_from_6.items[1]));
+
+    return .{
+        .fork_choice = fork_choice,
+        .duplicate_leaves_descended_from_4 = try duplicate_leaves_descended_from_4.toOwnedSlice(),
+        .duplicate_leaves_descended_from_5 = try duplicate_leaves_descended_from_5.toOwnedSlice(),
+        .duplicate_leaves_descended_from_6 = try duplicate_leaves_descended_from_6.toOwnedSlice(),
+    };
+}
+
+fn isUpdateOpsEqual(expected: *UpdateOperations, actual: *UpdateOperations) !bool {
+    if (!builtin.is_test) {
+        @compileError("isUpdateOpsEqual should only be called in test mode");
+    }
+    const eks = expected.items()[0];
+    const gks = actual.items()[0];
+    try std.testing.expect(eks.len == gks.len);
+    for (eks) |ek| {
+        var found = false;
+        for (gks) |gk| {
+            if (ek.label == gk.label and ek.order(gk) == .eq) {
+                found = true;
+                break;
+            }
+        }
+        try std.testing.expect(found);
+    }
+
+    const eus = expected.items()[1];
+    const gus = actual.items()[1];
+    try std.testing.expect(eus.len == gus.len);
+    for (eus) |eu| {
+        var found = false;
+        for (gus) |gu| {
+            if (@intFromEnum(eu) == @intFromEnum(gu)) {
+                found = true;
+                break;
+            }
+        }
+        try std.testing.expect(found);
+    }
+    return true;
+}
+
+fn testEpochStakes(
+    allocator: std.mem.Allocator,
+    pubkeys: []const Pubkey,
+    stake: u64,
+    random: std.Random,
+) !VersionedEpochStakes {
+    if (!builtin.is_test) {
+        @compileError("testEpochStakes should only be called in test mode");
+    }
+
+    var vote_accounts = sig.core.vote_accounts.VoteAccounts{};
+    errdefer vote_accounts.deinit(allocator);
+
+    for (pubkeys) |pubkey| {
+        try vote_accounts.vote_accounts.put(
+            allocator,
+            pubkey,
+            .{
+                .stake = stake,
+                .account = try sig.core.vote_accounts.createRandomVoteAccount(
+                    allocator,
+                    random,
+                    Pubkey.initRandom(random),
+                ),
+            },
+        );
+    }
+
+    const stakes = sig.core.epoch_stakes.EpochStakesGeneric(.stake){
+        .stakes = sig.core.Stakes(.stake){
+            .vote_accounts = vote_accounts,
+            .stake_delegations = .empty,
+            .unused = 0,
+            .epoch = 0,
+            .stake_history = sig.runtime.sysvar.StakeHistory.EMPTY,
+        },
+        .epoch_authorized_voters = .empty,
+        .node_id_to_vote_accounts = .empty,
+        .total_stake = pubkeys.len * stake,
+    };
+
+    return VersionedEpochStakes{
+        .current = stakes,
+    };
 }
