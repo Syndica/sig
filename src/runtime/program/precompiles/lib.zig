@@ -9,6 +9,8 @@ const Pubkey = sig.core.Pubkey;
 const Ed25519 = std.crypto.sign.Ed25519;
 const TransactionInstruction = sig.core.transaction.Instruction;
 
+const features = sig.core.features;
+
 /// https://github.com/anza-xyz/agave/blob/df063a8c6483ad1d2bbbba50ab0b7fd7290eb7f4/cost-model/src/block_cost_limits.rs#L15
 /// Cluster averaged compute unit to micro-sec conversion rate
 pub const COMPUTE_UNIT_TO_US_RATIO: u64 = 30;
@@ -18,10 +20,6 @@ pub const SIGNATURE_COST: u64 = COMPUTE_UNIT_TO_US_RATIO * 24;
 pub const SECP256K1_VERIFY_COST: u64 = COMPUTE_UNIT_TO_US_RATIO * 223;
 /// Number of compute units for one ed25519 signature verification.
 pub const ED25519_VERIFY_COST: u64 = COMPUTE_UNIT_TO_US_RATIO * 76;
-
-// TODO: should be moved to global features file
-pub const SECP256R1_FEATURE_ID =
-    Pubkey.parseBase58String("sr11RdZWgbHTHxSroPALe6zgaT5A1K9LcE4nfsZS4gi") catch unreachable;
 
 pub const PRECOMPILES = [_]Precompile{
     .{
@@ -37,7 +35,7 @@ pub const PRECOMPILES = [_]Precompile{
     .{
         .program_id = secp256r1.ID,
         .function = secp256r1.verify,
-        .required_feature = SECP256R1_FEATURE_ID,
+        .required_feature = features.ENABLE_SECP256R1_PRECOMPILE,
     },
 };
 
