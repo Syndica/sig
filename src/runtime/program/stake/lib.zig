@@ -891,7 +891,7 @@ fn split(
             split_meta.rent_exempt_reserve = validated_split_info.destination_rent_exempt_reserve;
 
             {
-                var split_account = try ic.borrowInstructionAccount(stake_account_index);
+                var split_account = try ic.borrowInstructionAccount(split_account_index);
                 defer split_account.release();
 
                 try split_account.serializeIntoAccountData(StakeStateV2{
@@ -900,10 +900,9 @@ fn split(
             }
         },
         .uninitialized => {
-            const account_metas = ic.ixn_info.account_metas.slice();
-            if (stake_account_index <= account_metas.len) return error.NotEnoughAccountKeys;
-
-            const stake_pubkey = &ic.ixn_info.account_metas.slice()[stake_account_index].pubkey;
+            const account_meta = ic.ixn_info.getAccountMetaAtIndex(stake_account_index)
+                orelse return error.NotEnoughAccountKeys;
+            const stake_pubkey = &account_meta.pubkey;
 
             const has_signer = for (signers) |signer| {
                 if (signer.equals(stake_pubkey)) break true;
@@ -912,6 +911,27 @@ fn split(
             if (!has_signer) return error.MissingRequiredSignature;
         },
         else => return error.InvalidAccountData,
+    }
+
+    // Deinitialize state upon zero balance
+    {
+        var stake_account = try ic.borrowInstructionAccount(stake_account_index);
+        defer stake_account.release();
+        if (lamports == stake_account.account.lamports) {
+            try stake_account.serializeIntoAccountData(StakeStateV2{ .uninitialized = {} });
+        }
+    }
+
+    {
+        var split_account = try ic.borrowInstructionAccount(split_account_index);
+        defer split_account.release();
+        try split_account.addLamports(lamports);
+    }
+
+    {
+        var stake_account = try ic.borrowInstructionAccount(stake_account_index);
+        defer stake_account.release();
+        try stake_account.subtractLamports(lamports);
     }
 }
 
