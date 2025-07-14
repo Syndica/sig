@@ -35,11 +35,11 @@ pub const BankForksStub = struct {
         },
     ) std.mem.Allocator.Error!BankForksStub {
         var self: BankForksStub = .{
-            .slot_tracker = try .initWithRoot(allocator, root.slot, root.constants, root.state),
-            .epoch_tracker = .{
-                .schedule = epoch_schedule,
-                .epochs = .{},
-            },
+            .slot_tracker = try .init(allocator, root.slot, .{
+                .constants = root.constants,
+                .state = root.state,
+            }),
+            .epoch_tracker = .init(epoch_schedule),
         };
         errdefer self.deinit(allocator);
 

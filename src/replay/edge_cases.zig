@@ -4,10 +4,12 @@ const replay = @import("lib.zig");
 
 const Slot = sig.core.Slot;
 const ProgressMap = sig.consensus.ProgressMap;
+const HeaviestSubtreeForkChoice = sig.consensus.HeaviestSubtreeForkChoice;
 const GossipVerifiedVoteHash = sig.consensus.vote_listener.GossipVerifiedVoteHash;
 const ThresholdConfirmedSlot = sig.consensus.vote_listener.ThresholdConfirmedSlot;
 const LatestValidatorVotes = sig.consensus.latest_validator_votes.LatestValidatorVotes;
 const AncestorHashesReplayUpdate = replay.consensus.AncestorHashesReplayUpdate;
+const SlotTracker = sig.replay.trackers.SlotTracker;
 
 const ProcessEdgeCaseTimings = struct {
     ancestor_hashes_duplicate_slots: sig.time.Duration,
@@ -195,7 +197,7 @@ pub const ClusterConfirmedHash = struct {
         slot: sig.core.Slot,
         duplicate_confirmed_slots: *const DuplicateConfirmedSlots,
         epoch_slots_frozen_slots: *const EpochSlotsFrozenSlots,
-        fork_choice: *const sig.consensus.HeaviestSubtreeForkChoice,
+        fork_choice: *const HeaviestSubtreeForkChoice,
         maybe_slot_frozen_hash: ?sig.core.Hash,
     ) ?ClusterConfirmedHash {
         const duplicate_confirmed_hash = duplicate_confirmed_slots.get(slot);
@@ -251,7 +253,7 @@ const SlotFrozenState = struct {
         frozen_hash: sig.core.Hash,
         duplicate_slots_tracker: *const DuplicateSlots,
         duplicate_confirmed_slots: *const DuplicateConfirmedSlots,
-        fork_choice: *const sig.consensus.HeaviestSubtreeForkChoice,
+        fork_choice: *const HeaviestSubtreeForkChoice,
         epoch_slots_frozen_slots: *const EpochSlotsFrozenSlots,
     ) SlotFrozenState {
         return .{
@@ -283,7 +285,7 @@ pub const DeadState = struct {
         slot: sig.core.Slot,
         duplicate_slots_tracker: *const DuplicateSlots,
         duplicate_confirmed_slots: *const DuplicateConfirmedSlots,
-        fork_choice: *const sig.consensus.HeaviestSubtreeForkChoice,
+        fork_choice: *const HeaviestSubtreeForkChoice,
         epoch_slots_frozen_slots: *const EpochSlotsFrozenSlots,
     ) DeadState {
         return .{
@@ -308,7 +310,7 @@ pub const DuplicateState = struct {
         logger: replay.service.Logger,
         slot: sig.core.Slot,
         duplicate_confirmed_slots: *const DuplicateConfirmedSlots,
-        fork_choice: *const sig.consensus.HeaviestSubtreeForkChoice,
+        fork_choice: *const HeaviestSubtreeForkChoice,
         slot_status: SlotStatus,
     ) DuplicateState {
         // We can only skip marking duplicate if this slot has already been
@@ -339,7 +341,7 @@ pub const EpochSlotsFrozenState = struct {
         slot: sig.core.Slot,
         epoch_slots_frozen_hash: sig.core.Hash,
         duplicate_confirmed_slots: *const DuplicateConfirmedSlots,
-        fork_choice: *const sig.consensus.HeaviestSubtreeForkChoice,
+        fork_choice: *const HeaviestSubtreeForkChoice,
         slot_status: SlotStatus,
         is_popular_pruned: bool,
     ) EpochSlotsFrozenState {
@@ -367,9 +369,9 @@ fn processAncestorHashesDuplicateSlots(
     ancestor_duplicate_slots_receiver: *sig.sync.Channel(AncestorDuplicateSlotToRepair),
     duplicate_confirmed_slots: *const DuplicateConfirmedSlots,
     epoch_slots_frozen_slots: *EpochSlotsFrozenSlots,
-    progress: *const sig.consensus.ProgressMap,
-    fork_choice: *sig.consensus.HeaviestSubtreeForkChoice,
-    slot_tracker_rwmux: *sig.sync.RwMux(sig.replay.trackers.SlotTracker),
+    progress: *const ProgressMap,
+    fork_choice: *HeaviestSubtreeForkChoice,
+    slot_tracker_rwmux: *sig.sync.RwMux(SlotTracker),
     duplicate_slots_to_repair: *DuplicateSlotsToRepair,
 ) !void {
     const root = root: {
@@ -436,9 +438,9 @@ fn processDuplicateConfirmedSlots(
     duplicate_confirmed_slots_receiver: *sig.sync.Channel(ThresholdConfirmedSlot),
     blockstore: *sig.ledger.LedgerResultWriter,
     duplicate_confirmed_slots: *DuplicateConfirmedSlots,
-    slot_tracker_rwmux: *sig.sync.RwMux(sig.replay.trackers.SlotTracker),
-    progress: *const sig.consensus.ProgressMap,
-    fork_choice: *sig.consensus.HeaviestSubtreeForkChoice,
+    slot_tracker_rwmux: *sig.sync.RwMux(SlotTracker),
+    progress: *const ProgressMap,
+    fork_choice: *HeaviestSubtreeForkChoice,
     duplicate_slots_to_repair: *DuplicateSlotsToRepair,
     ancestor_hashes_replay_update_sender: *sig.sync.Channel(AncestorHashesReplayUpdate),
     purge_repair_slot_counter: *PurgeRepairSlotCounters,
@@ -566,7 +568,7 @@ fn processGossipVerifiedVoteHashes(
     allocator: std.mem.Allocator,
     gossip_verified_vote_hash_receiver: *sig.sync.Channel(GossipVerifiedVoteHash),
     unfrozen_gossip_verified_vote_hashes: *UnfrozenGossipVerifiedVoteHashes,
-    heaviest_subtree_fork_choice: *const sig.consensus.HeaviestSubtreeForkChoice,
+    heaviest_subtree_fork_choice: *const HeaviestSubtreeForkChoice,
     latest_validator_votes_for_frozen_slots: *LatestValidatorVotes,
 ) !void {
     while (gossip_verified_vote_hash_receiver.tryReceive()) |pubkey_slot_hash| {
@@ -591,7 +593,7 @@ fn processGossipVerifiedVoteHashes(
 fn processPopularPrunedForks(
     logger: replay.service.Logger,
     popular_pruned_forks_receiver: *sig.sync.Channel(sig.core.Slot),
-    slot_tracker_rwmux: *sig.sync.RwMux(sig.replay.trackers.SlotTracker),
+    slot_tracker_rwmux: *sig.sync.RwMux(SlotTracker),
     ancestor_hashes_replay_update_sender: *sig.sync.Channel(AncestorHashesReplayUpdate),
 ) !void {
     const root = root: {
@@ -635,9 +637,9 @@ fn processDuplicateSlots(
     duplicate_slots_receiver: *sig.sync.Channel(sig.core.Slot),
     duplicate_slots_tracker: *DuplicateSlots,
     duplicate_confirmed_slots: *const DuplicateConfirmedSlots,
-    slot_tracker_rwmux: *sig.sync.RwMux(sig.replay.trackers.SlotTracker),
-    progress: *const sig.consensus.ProgressMap,
-    fork_choice: *sig.consensus.HeaviestSubtreeForkChoice,
+    slot_tracker_rwmux: *sig.sync.RwMux(SlotTracker),
+    progress: *const ProgressMap,
+    fork_choice: *HeaviestSubtreeForkChoice,
 ) !void {
     const MAX_BATCH_SIZE = 1024;
 
@@ -692,7 +694,7 @@ fn processDuplicateSlots(
 /// deduplicated into this function, which is why it is not quite the same.
 fn getDuplicateConfirmedHash(
     logger: replay.service.Logger,
-    fork_choice: *const sig.consensus.HeaviestSubtreeForkChoice,
+    fork_choice: *const HeaviestSubtreeForkChoice,
     slot: sig.core.Slot,
     maybe_duplicate_confirmed_hash: ?sig.core.Hash,
     maybe_slot_frozen_hash: ?sig.core.Hash,
@@ -738,7 +740,7 @@ const check_slot_agrees_with_cluster = struct {
         slot: sig.core.Slot,
         root: sig.core.Slot,
         blockstore: *sig.ledger.LedgerResultWriter,
-        fork_choice: *sig.consensus.HeaviestSubtreeForkChoice,
+        fork_choice: *HeaviestSubtreeForkChoice,
         duplicate_slots_to_repair: *DuplicateSlotsToRepair,
         purge_repair_slot_counter: *PurgeRepairSlotCounters,
         slot_frozen_state: SlotFrozenState,
@@ -850,7 +852,7 @@ const check_slot_agrees_with_cluster = struct {
         slot: sig.core.Slot,
         root: sig.core.Slot,
         blockstore: *sig.ledger.LedgerResultWriter,
-        fork_choice: *sig.consensus.HeaviestSubtreeForkChoice,
+        fork_choice: *HeaviestSubtreeForkChoice,
         duplicate_slots_to_repair: *DuplicateSlotsToRepair,
         ancestor_hashes_replay_update_sender: *sig.sync.Channel(AncestorHashesReplayUpdate),
         purge_repair_slot_counter: *PurgeRepairSlotCounters,
@@ -1010,7 +1012,7 @@ const check_slot_agrees_with_cluster = struct {
         slot: sig.core.Slot,
         root: sig.core.Slot,
         duplicate_slots_tracker: *DuplicateSlots,
-        fork_choice: *sig.consensus.HeaviestSubtreeForkChoice,
+        fork_choice: *HeaviestSubtreeForkChoice,
         duplicate_state: DuplicateState,
     ) !void {
         logger.info().logf(
@@ -1066,7 +1068,7 @@ const check_slot_agrees_with_cluster = struct {
         logger: replay.service.Logger,
         slot: sig.core.Slot,
         root: sig.core.Slot,
-        fork_choice: *sig.consensus.HeaviestSubtreeForkChoice,
+        fork_choice: *HeaviestSubtreeForkChoice,
         duplicate_slots_to_repair: *DuplicateSlotsToRepair,
         epoch_slots_frozen_slots: *EpochSlotsFrozenSlots,
         epoch_slots_frozen_state: EpochSlotsFrozenState,
@@ -1232,7 +1234,7 @@ const state_change = struct {
     /// AKA: `ResultingStateChange::BankFrozen` in agave.
     fn maybeUpdateConfirmedAndNotDupeFrozenHash(
         logger: replay.service.Logger,
-        fork_choice: *const sig.consensus.HeaviestSubtreeForkChoice,
+        fork_choice: *const HeaviestSubtreeForkChoice,
         confirmed_non_dupe_frozen_hash: *ConfirmedNonDupeFrozenHash,
         frozen_slot: u64,
         frozen_hash: sig.core.Hash,
@@ -1255,7 +1257,7 @@ const state_change = struct {
     /// AKA: `ResultingStateChange::DuplicateConfirmedSlotMatchesCluster` in agave.
     fn markAllNewConfirmedAndDuplicateSlots(
         slot: u64,
-        fork_choice: *sig.consensus.HeaviestSubtreeForkChoice,
+        fork_choice: *HeaviestSubtreeForkChoice,
         duplicate_slots_to_repair: *DuplicateSlotsToRepair,
         blockstore: *sig.ledger.LedgerResultWriter,
         purge_repair_slot_counter: *PurgeRepairSlotCounters,
@@ -1297,8 +1299,8 @@ fn descendantsDeinit(allocator: std.mem.Allocator, descendants: Descendants) voi
 }
 
 const TestData = struct {
-    slot_tracker: sig.replay.trackers.SlotTracker,
-    heaviest_subtree_fork_choice: sig.consensus.HeaviestSubtreeForkChoice,
+    slot_tracker: SlotTracker,
+    heaviest_subtree_fork_choice: HeaviestSubtreeForkChoice,
     progress: ProgressMap,
     descendants: Descendants,
 
@@ -1313,34 +1315,67 @@ const TestData = struct {
         self.progress.deinit(allocator);
     }
 
+    const SlotInfo = struct {
+        parent_slot: ?sig.core.Slot,
+        slot: sig.core.Slot,
+        hash: sig.core.Hash,
+        fork_progress_init: sig.consensus.progress_map.ForkProgress.InitParams,
+
+        fn parentSlot(self: SlotInfo) sig.core.Slot {
+            return self.parent_slot orelse (self.slot -| 1);
+        }
+
+        fn initRandom(
+            random: std.Random,
+            parent_slot: ?sig.core.Slot,
+            slot: sig.core.Slot,
+            fork_progress_init: sig.consensus.progress_map.ForkProgress.InitParams,
+        ) SlotInfo {
+            return .{
+                .parent_slot = parent_slot orelse (slot -| 1),
+                .slot = slot,
+                .hash = .initRandom(random),
+                .fork_progress_init = fork_progress_init,
+            };
+        }
+
+        fn toDummyElem(
+            self: SlotInfo,
+            slot_infos: []const SlotInfo,
+            random: std.Random,
+        ) SlotTracker.Element {
+            return .{
+                .constants = .{
+                    .parent_slot = self.parentSlot(),
+                    .parent_hash = slot_infos[self.parentSlot()].hash,
+                    .block_height = random.int(u64),
+                    .collector_id = .initRandom(random),
+                    .max_tick_height = random.int(u64),
+                    .fee_rate_governor = .initRandom(random),
+                    .epoch_reward_status = .inactive,
+                },
+                .state = .{
+                    .blockhash_queue = .init(.DEFAULT),
+                    .hash = .init(slot_infos[self.slot].hash),
+                    .capitalization = .init(random.int(u64)),
+                    .transaction_count = .init(random.int(u64)),
+                    .signature_count = .init(random.int(u64)),
+                    .tick_height = .init(random.int(u64)),
+                    .collected_rent = .init(random.int(u64)),
+                    .accounts_lt_hash = .init(.{ .data = @splat(random.int(u16)) }),
+                },
+            };
+        }
+    };
+
     fn init(
         allocator: std.mem.Allocator,
         logger: replay.service.Logger,
         random: std.Random,
     ) !TestData {
-        const SlotInfo = struct {
-            parent_slot: ?sig.core.Slot,
-            slot: sig.core.Slot,
-            hash: sig.core.Hash,
-            fork_progress_init: sig.consensus.progress_map.ForkProgress.InitParams,
-
-            fn initRandom(
-                _random: std.Random,
-                parent_slot: ?sig.core.Slot,
-                slot: sig.core.Slot,
-                fork_progress_init: sig.consensus.progress_map.ForkProgress.InitParams,
-            ) @This() {
-                return .{
-                    .parent_slot = parent_slot,
-                    .slot = slot,
-                    .hash = .initRandom(_random),
-                    .fork_progress_init = fork_progress_init,
-                };
-            }
-        };
-
+        const root_slot: Slot = 0;
         const slot_infos = [_]SlotInfo{
-            .initRandom(random, null, 0, .{
+            .initRandom(random, null, root_slot, .{
                 .now = .now(),
                 .last_entry = try .parseBase58String(
                     "5NjW2CAV6MBQYxpL4oK2CESrpdj6tkcvxP3iigAgrHyR",
@@ -1356,7 +1391,7 @@ const TestData = struct {
                 .num_blocks_on_fork = 0,
                 .num_dropped_blocks_on_fork = 0,
             }),
-            .initRandom(random, 0, 1, .{
+            .initRandom(random, root_slot, 1, .{
                 .now = .now(),
                 .last_entry = try .parseBase58String("11111111111111111111111111111111"),
                 .prev_leader_slot = null,
@@ -1382,14 +1417,17 @@ const TestData = struct {
             }),
         };
 
-        var slot_tracker: sig.replay.trackers.SlotTracker = .init(0);
+        var slot_tracker: SlotTracker = try .init(
+            allocator,
+            root_slot,
+            slot_infos[root_slot].toDummyElem(slot_infos[0..], random),
+        );
         errdefer slot_tracker.deinit(allocator);
 
-        var fork_choice: sig.consensus.HeaviestSubtreeForkChoice =
-            try .init(allocator, logger.unscoped(), .{
-                .slot = 0,
-                .hash = slot_infos[0].hash,
-            });
+        var fork_choice: HeaviestSubtreeForkChoice = try .init(allocator, logger.unscoped(), .{
+            .slot = root_slot,
+            .hash = slot_infos[root_slot].hash,
+        });
         errdefer fork_choice.deinit();
 
         var progress: ProgressMap = .INIT;
@@ -1410,30 +1448,14 @@ const TestData = struct {
                 } else null,
             );
 
-            const parent_slot = slot_info.parent_slot orelse (slot_info.slot -| 1);
-            try slot_tracker.put(
+            const gop = try slot_tracker.getOrPut(
                 allocator,
                 slot_info.slot,
-                .{
-                    .parent_slot = parent_slot,
-                    .parent_hash = slot_infos[parent_slot].hash,
-                    .block_height = 1,
-                    .collector_id = .initRandom(random),
-                    .max_tick_height = 1,
-                    .fee_rate_governor = .initRandom(random),
-                    .epoch_reward_status = .inactive,
-                },
-                .{
-                    .blockhash_queue = .init(try .initRandom(random, allocator, 0)),
-                    .hash = .init(slot_info.hash),
-                    .capitalization = .init(random.int(u64)),
-                    .transaction_count = .init(random.int(u64)),
-                    .signature_count = .init(1),
-                    .tick_height = .init(random.int(u64)),
-                    .collected_rent = .init(random.int(u64)),
-                    .accounts_lt_hash = .init(.{ .data = @splat(random.int(u16)) }),
-                },
+                slot_info.toDummyElem(slot_infos[0..], random),
             );
+            if (gop.found_existing) {
+                std.debug.assert(slot_info.slot == root_slot);
+            }
         }
 
         var descendants: Descendants = .empty;
@@ -2259,8 +2281,8 @@ test "state ancestor duplicate descendant confirmed" {
 }
 
 fn verifyAllSlotsDuplicateConfirmed(
-    slot_tracker: *sig.replay.trackers.SlotTracker,
-    heaviest_subtree_fork_choice: *sig.consensus.HeaviestSubtreeForkChoice,
+    slot_tracker: *SlotTracker,
+    heaviest_subtree_fork_choice: *HeaviestSubtreeForkChoice,
     upper_bound: Slot,
     expected_is_duplicate_confirmed: bool,
 ) !void {

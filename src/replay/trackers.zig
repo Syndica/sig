@@ -24,9 +24,16 @@ pub const SlotTracker = struct {
     slots: std.AutoArrayHashMapUnmanaged(Slot, *Element),
     root: Slot,
 
-    const Element = struct {
+    pub const Element = struct {
         constants: SlotConstants,
         state: SlotState,
+
+        fn toRef(self: *Element) Reference {
+            return .{
+                .constants = &self.constants,
+                .state = &self.state,
+            };
+        }
     };
 
     pub const Reference = struct {
@@ -34,25 +41,16 @@ pub const SlotTracker = struct {
         state: *SlotState,
     };
 
-    /// NOTE: use `initWithRoot` to initialize with the root's element initialized.
-    pub fn init(root_slot: Slot) SlotTracker {
-        return .{
-            .slots = .empty,
-            .root = root_slot,
-        };
-    }
-
-    pub fn initWithRoot(
+    pub fn init(
         allocator: std.mem.Allocator,
         root_slot: Slot,
-        constants: SlotConstants,
-        state: SlotState,
+        slot_init: Element,
     ) std.mem.Allocator.Error!SlotTracker {
         var self: SlotTracker = .{
             .root = root_slot,
             .slots = .empty,
         };
-        try self.put(allocator, root_slot, constants, state);
+        try self.put(allocator, root_slot, slot_init);
         return self;
     }
 
@@ -66,20 +64,41 @@ pub const SlotTracker = struct {
         self: *SlotTracker,
         allocator: Allocator,
         slot: Slot,
-        constants: SlotConstants,
-        state: SlotState,
-    ) std.mem.Allocator.Error!void {
+        slot_init: Element,
+    ) Allocator.Error!void {
         try self.slots.ensureUnusedCapacity(allocator, 1);
         const elem = try allocator.create(Element);
-        elem.* = .{ .constants = constants, .state = state };
+        elem.* = slot_init;
         self.slots.putAssumeCapacity(slot, elem);
     }
 
     pub fn get(self: *const SlotTracker, slot: Slot) ?Reference {
         const elem = self.slots.get(slot) orelse return null;
+        return elem.toRef();
+    }
+
+    pub const GetOrPutResult = struct {
+        found_existing: bool,
+        reference: Reference,
+    };
+
+    pub fn getOrPut(
+        self: *SlotTracker,
+        allocator: Allocator,
+        slot: Slot,
+        slot_init: Element,
+    ) Allocator.Error!GetOrPutResult {
+        if (self.get(slot)) |existing| return .{
+            .found_existing = true,
+            .reference = existing,
+        };
+        try self.slots.ensureUnusedCapacity(allocator, 1);
+        const elem = try allocator.create(Element);
+        elem.* = slot_init;
+        self.slots.putAssumeCapacityNoClobber(slot, elem);
         return .{
-            .constants = &elem.constants,
-            .state = &elem.state,
+            .found_existing = false,
+            .reference = elem.toRef(),
         };
     }
 
@@ -188,28 +207,36 @@ pub const EpochTracker = struct {
     }
 };
 
+fn testDummySlotConstants(slot: Slot) SlotConstants {
+    return .{
+        .parent_slot = slot - 1,
+        .parent_hash = .ZEROES,
+        .block_height = 0,
+        .collector_id = .ZEROES,
+        .max_tick_height = 0,
+        .fee_rate_governor = .DEFAULT,
+        .epoch_reward_status = .inactive,
+    };
+}
+
 test "SlotTracker.prune removes all slots less than root" {
     const allocator = std.testing.allocator;
-    const root = 4;
-    var tracker = SlotTracker.init(root);
+    const root_slot: Slot = 4;
+    var tracker: SlotTracker = try .init(allocator, root_slot, .{
+        .constants = testDummySlotConstants(root_slot),
+        .state = .GENESIS,
+    });
     defer tracker.deinit(allocator);
 
     // Add slots 1, 2, 3, 4, 5
-    for (1..6) |i| {
-        try tracker.put(
-            allocator,
-            i,
-            sig.core.SlotConstants{
-                .parent_slot = i - 1,
-                .parent_hash = sig.core.Hash.ZEROES,
-                .block_height = 0,
-                .collector_id = sig.core.Pubkey.ZEROES,
-                .max_tick_height = 0,
-                .fee_rate_governor = sig.core.genesis_config.FeeRateGovernor.DEFAULT,
-                .epoch_reward_status = .inactive,
-            },
-            sig.core.SlotState.GENESIS,
-        );
+    for (1..6) |slot| {
+        const gop = try tracker.getOrPut(allocator, slot, .{
+            .constants = testDummySlotConstants(slot),
+            .state = .GENESIS,
+        });
+        if (gop.found_existing) {
+            std.debug.assert(slot == root_slot);
+        }
     }
 
     // Prune slots less than root (4)
