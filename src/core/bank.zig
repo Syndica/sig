@@ -253,9 +253,14 @@ pub const EpochConstants = struct {
         self: EpochConstants,
         allocator: std.mem.Allocator,
     ) std.mem.Allocator.Error!EpochConstants {
-        var cloned = self;
-        cloned.stakes = try self.stakes.clone(allocator);
-        return cloned;
+        return .{
+            .hashes_per_tick = self.hashes_per_tick,
+            .ticks_per_slot = self.ticks_per_slot,
+            .ns_per_slot = self.ns_per_slot,
+            .genesis_creation_time = self.genesis_creation_time,
+            .slots_per_year = self.slots_per_year,
+            .stakes = try self.stakes.clone(allocator),
+        };
     }
 };
 
