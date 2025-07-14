@@ -48,11 +48,9 @@ pub fn execute(
     else |_|
         false;
 
-    const stake_instruction = try ic.ixn_info.deserializeInstruction(
-        allocator,
-        Instruction,
-    );
-    defer sig.bincode.free(allocator, stake_instruction);
+    var stake_instruction_buf: [sig.net.Packet.DATA_SIZE]u8 = undefined;
+    const stake_instruction = try ic.ixn_info.limitedDeserializeInstruction(
+        Instruction, &stake_instruction_buf);
 
     if (epoch_rewards_active and stake_instruction != .get_minimum_delegation) {
         ic.tc.custom_error = @intFromEnum(StakeError.epoch_rewards_active);
@@ -749,11 +747,16 @@ fn validateSplitAmount(
         };
     };
 
+    if (lamports == 0) return error.InsufficientFunds;
     if (lamports > source_lamports) return error.InsufficientFunds;
 
     const source_minimum_balance = source_meta.rent_exempt_reserve +| additional_required_lamports;
     const source_remaining_balance = source_lamports -| lamports;
-    if (source_remaining_balance < source_minimum_balance) return error.InsufficientFunds;
+    if (source_remaining_balance == 0) {
+        // nothing to do here, full amount if withdrawal.
+    } else if (source_remaining_balance < source_minimum_balance) {
+        return error.InsufficientFunds;
+    }
 
     const rent = try ic.tc.sysvar_cache.get(sysvar.Rent);
     const destination_rent_exempt_reserve = rent.minimumBalance(destination_data_len);
@@ -801,14 +804,14 @@ fn split(
         const stake_account = try ic.borrowInstructionAccount(stake_account_index);
         defer stake_account.release();
 
-        const stake_state = try stake_account.deserializeFromAccountData(allocator, StakeStateV2);
-
         if (lamports > stake_account.account.lamports) return error.InsufficientFunds;
-        break :state stake_state;
+        break :state try stake_account.deserializeFromAccountData(allocator, StakeStateV2);
     };
 
     switch (stake_state) {
         .stake => |*args| {
+            try args.meta.authorized.check(signers, .staker);
+
             const minimum_delegation = getMinimumDelegation(feature_set);
             const is_active = blk: {
                 const clock = try ic.tc.sysvar_cache.get(sysvar.Clock);
@@ -872,14 +875,14 @@ fn split(
                 });
             }
         },
-        .initialized => |*meta| {
+        .initialized => |meta| {
             try meta.authorized.check(signers, .staker);
             const validated_split_info = try validateSplitAmount(
                 ic,
                 stake_account_index,
                 split_account_index,
                 lamports,
-                meta,
+                &meta,
                 0,
                 false,
             );
@@ -892,7 +895,7 @@ fn split(
                 defer split_account.release();
 
                 try split_account.serializeIntoAccountData(StakeStateV2{
-                    .initialized = split_meta.*,
+                    .initialized = split_meta,
                 });
             }
         },
