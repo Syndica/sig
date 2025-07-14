@@ -3341,28 +3341,6 @@ pub fn unpackSnapshotFilePair(
     }
 }
 
-pub fn loadTestAccountsDbEmpty(
-    allocator: std.mem.Allocator,
-    use_disk: bool,
-    logger: Logger,
-    /// The directory into which the snapshots are unpacked, and
-    /// the `snapshots_dir` for the returned `AccountsDB`.
-    snapshot_dir: std.fs.Dir,
-) !AccountsDB {
-    var accounts_db = try AccountsDB.init(.{
-        .allocator = allocator,
-        .logger = logger,
-        .snapshot_dir = snapshot_dir,
-        .geyser_writer = null,
-        .gossip_view = null,
-        .index_allocation = if (use_disk) .disk else .ram,
-        .number_of_index_shards = 4,
-    });
-    errdefer accounts_db.deinit();
-
-    return accounts_db;
-}
-
 pub fn loadTestAccountsDB(
     allocator: std.mem.Allocator,
     use_disk: bool,
@@ -4511,6 +4489,28 @@ test "read/write benchmark disk" {
     });
 }
 
+pub fn loadTestAccountsDbEmpty(
+    allocator: std.mem.Allocator,
+    use_disk: bool,
+    logger: Logger,
+    /// The directory into which the snapshots are unpacked, and
+    /// the `snapshots_dir` for the returned `AccountsDB`.
+    snapshot_dir: std.fs.Dir,
+) !AccountsDB {
+    var accounts_db = try AccountsDB.init(.{
+        .allocator = allocator,
+        .logger = logger,
+        .snapshot_dir = snapshot_dir,
+        .geyser_writer = null,
+        .gossip_view = null,
+        .index_allocation = if (use_disk) .disk else .ram,
+        .number_of_index_shards = 4,
+    });
+    errdefer accounts_db.deinit();
+
+    return accounts_db;
+}
+
 test "insert multiple accounts on same slot" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(0);
@@ -4575,10 +4575,16 @@ fn expectedAccountSharedDataEqualsAccount(
     account: Account,
     print_instead_of_expect: bool,
 ) !void {
+    if (!builtin.is_test)
+        @compileError("expectedAccountSharedDataEqualsAccount is only for testing");
+
     if (print_instead_of_expect) {
         std.debug.print("expected: {any}\n", .{expected});
         std.debug.print("actual:   {any}\n\n", .{account});
     } else {
+        // we know where this data came from (not from the disk), so we can take its slice directly
+        std.debug.assert(account.data == .owned_allocation);
+
         try std.testing.expectEqual(expected.lamports, account.lamports);
         try std.testing.expectEqualSlices(u8, expected.data, account.data.owned_allocation);
         try std.testing.expectEqualSlices(u8, &expected.owner.data, &account.owner.data);
