@@ -503,13 +503,6 @@ fn computeBankStats(
                 progress,
                 latest_validator_votes,
             );
-
-            // Audit: The rest of the code is found in ForkChoice.compute_bank_stats in Agave
-            const root = fork_choice.tree_root.slot;
-            const new_votes =
-                try latest_validator_votes.takeVotesDirtySet(allocator, root);
-            _ = new_votes;
-            _ = vote_tracker;
             // Notify any listeners of the votes found in this newly computed
             // bank
             try fork_choice.computeBankStats(
@@ -518,7 +511,6 @@ fn computeBankStats(
                 epoch_schedule,
                 latest_validator_votes,
             );
-
             const fork_stats = progress.getForkStats(slot) orelse return error.MissingForkStats;
             fork_stats.fork_stake = computed_bank_state.fork_stake;
             fork_stats.total_stake = computed_bank_state.total_stake;
