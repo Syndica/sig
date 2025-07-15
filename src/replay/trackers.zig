@@ -181,15 +181,8 @@ pub const SlotTracker = struct {
 };
 
 pub const EpochTracker = struct {
-    epochs: std.AutoArrayHashMapUnmanaged(Epoch, EpochConstants),
+    epochs: std.AutoArrayHashMapUnmanaged(Epoch, EpochConstants) = .empty,
     schedule: EpochSchedule,
-
-    pub fn init(schedule: EpochSchedule) EpochTracker {
-        return .{
-            .epochs = .empty,
-            .schedule = schedule,
-        };
-    }
 
     pub fn deinit(self: EpochTracker, allocator: Allocator) void {
         var epochs = self.epochs;

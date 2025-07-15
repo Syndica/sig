@@ -39,7 +39,7 @@ pub const BankForksStub = struct {
                 .constants = root.constants,
                 .state = root.state,
             }),
-            .epoch_tracker = .init(epoch_schedule),
+            .epoch_tracker = .{ .schedule = epoch_schedule },
         };
         errdefer self.deinit(allocator);
 
@@ -1364,7 +1364,7 @@ test "vote_parser.parseVoteTransaction" {
 
 test verifyVoteTransaction {
     const allocator = std.testing.allocator;
-    var epoch_tracker: EpochTracker = .init(.DEFAULT);
+    var epoch_tracker: EpochTracker = .{ .schedule = .DEFAULT };
     defer epoch_tracker.deinit(allocator);
 
     try std.testing.expectEqual(
