@@ -25,7 +25,9 @@ pub const SlotHistory = struct {
 
     pub const STORAGE_SIZE: u64 = 131_097;
 
-    pub fn default(allocator: Allocator) Allocator.Error!SlotHistory {
+    /// Agave initialises new slot history with the first slot set.
+    /// This only impacts gensis when the slot history is not fully populated.
+    pub fn init(allocator: Allocator) Allocator.Error!SlotHistory {
         var bits = try DynamicArrayBitSet(u64).initEmpty(allocator, MAX_ENTRIES);
         bits.set(0);
         return .{
@@ -77,7 +79,7 @@ pub const SlotHistory = struct {
     }
 
     pub fn initRandom(allocator: Allocator, random: std.Random) Allocator.Error!SlotHistory {
-        var self = try SlotHistory.default(allocator);
+        var self = try SlotHistory.init(allocator);
         for (0..random.intRangeAtMost(u64, 1, MAX_ENTRIES)) |_| {
             self.add(random.intRangeAtMost(Slot, 0, 1_000));
         }

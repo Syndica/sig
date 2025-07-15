@@ -14,11 +14,7 @@ const Pubkey = sig.core.Pubkey;
 /// The first entry holds the most recent blockhash.
 /// [agave] https://github.com/anza-xyz/agave/blob/8db563d3bba4d03edf0eb2737fba87f394c32b64/sdk/sysvar/src/recent_blockhashes.rs#L99
 pub const RecentBlockhashes = struct {
-    entries: std.ArrayListUnmanaged(Entry),
-
-    pub const @"!bincode-config" = bincode.FieldConfig(RecentBlockhashes){
-        .deserializer = deserialize,
-    };
+    entries: *std.BoundedArray(Entry, MAX_ENTRIES),
 
     pub const Entry = struct {
         blockhash: Hash,
@@ -31,16 +27,18 @@ pub const RecentBlockhashes = struct {
 
     pub const STORAGE_SIZE: u64 = 6_008;
 
-    pub fn default(allocator: Allocator) Allocator.Error!RecentBlockhashes {
-        return .{ .entries = try .initCapacity(allocator, MAX_ENTRIES) };
+    pub fn init(allocator: Allocator) Allocator.Error!RecentBlockhashes {
+        const entries = try allocator.create(std.BoundedArray(Entry, MAX_ENTRIES));
+        entries.* = std.BoundedArray(Entry, MAX_ENTRIES){};
+        return .{ .entries = entries };
     }
 
     pub fn deinit(self: RecentBlockhashes, allocator: Allocator) void {
-        allocator.free(self.entries.allocatedSlice());
+        allocator.destroy(self.entries);
     }
 
     pub fn isEmpty(self: RecentBlockhashes) bool {
-        return self.entries.items.len == 0;
+        return self.entries.len == 0;
     }
 
     pub fn fromBlockhashQueue(
@@ -75,7 +73,7 @@ pub const RecentBlockhashes = struct {
 
         std.sort.heap(IndexAndEntry, entries, {}, IndexAndEntry.compareFn);
 
-        var self = try RecentBlockhashes.default(allocator);
+        var self = try RecentBlockhashes.init(allocator);
         errdefer self.deinit(allocator);
 
         for (entries) |entry| self.entries.appendAssumeCapacity(entry.entry);
@@ -89,13 +87,14 @@ pub const RecentBlockhashes = struct {
     ) Allocator.Error!RecentBlockhashes {
         if (!builtin.is_test) @compileError("only for tests");
         std.debug.assert(entries.len <= MAX_ENTRIES);
-        const dupe = try allocator.dupe(Entry, entries);
-        return .{ .entries = .fromOwnedSlice(dupe) };
+        var self = try RecentBlockhashes.init(allocator);
+        self.entries.appendSliceAssumeCapacity(entries);
+        return self;
     }
 
     pub fn initRandom(allocator: Allocator, random: std.Random) Allocator.Error!RecentBlockhashes {
         if (!builtin.is_test) @compileError("only for tests");
-        var self = try RecentBlockhashes.default(allocator);
+        var self = try RecentBlockhashes.init(allocator);
         for (0..random.intRangeAtMost(u64, 1, MAX_ENTRIES)) |_| {
             self.entries.appendAssumeCapacity(.{
                 .blockhash = Hash.initRandom(random),
@@ -103,12 +102,6 @@ pub const RecentBlockhashes = struct {
             });
         }
         return self;
-    }
-
-    pub fn deserialize(allocator: Allocator, reader: anytype, _: bincode.Params) !RecentBlockhashes {
-        var entries = try bincode.read(allocator, std.ArrayListUnmanaged(Entry), reader, .{});
-        try entries.ensureTotalCapacityPrecise(allocator, MAX_ENTRIES);
-        return .{ .entries = entries };
     }
 };
 
@@ -122,7 +115,7 @@ test "from blockhash queue" {
     const recent_blockhashes = try RecentBlockhashes.fromBlockhashQueue(allocator, &queue);
     defer recent_blockhashes.deinit(allocator);
 
-    for (recent_blockhashes.entries.items, 0..) |entry, i| {
+    for (recent_blockhashes.entries.constSlice(), 0..) |entry, i| {
         const info = queue.hash_infos.get(entry.blockhash) orelse unreachable;
         try std.testing.expectEqual(info.index, queue.last_hash_index - i);
     }
@@ -146,16 +139,16 @@ test "serialize and deserialize" {
             try bincode.readFromSlice(allocator, RecentBlockhashes, serialized, .{});
         defer deserialized.deinit(allocator);
 
-        try std.testing.expectEqual(RecentBlockhashes.MAX_ENTRIES, deserialized.entries.capacity);
+        try std.testing.expectEqual(RecentBlockhashes.MAX_ENTRIES, deserialized.entries.capacity());
         try std.testing.expectEqualSlices(
             RecentBlockhashes.Entry,
-            blockhashes.entries.items,
-            deserialized.entries.items,
+            blockhashes.entries.constSlice(),
+            deserialized.entries.constSlice(),
         );
     }
 
     {
-        var blockhashes = RecentBlockhashes{ .entries = try .initCapacity(allocator, 1) };
+        var blockhashes = try RecentBlockhashes.init(allocator);
         defer blockhashes.deinit(allocator);
         blockhashes.entries.appendAssumeCapacity(.{
             .blockhash = Hash.initRandom(random),
@@ -169,11 +162,11 @@ test "serialize and deserialize" {
             try bincode.readFromSlice(allocator, RecentBlockhashes, serialized, .{});
         defer deserialized.deinit(allocator);
 
-        try std.testing.expectEqual(RecentBlockhashes.MAX_ENTRIES, deserialized.entries.capacity);
+        try std.testing.expectEqual(RecentBlockhashes.MAX_ENTRIES, deserialized.entries.capacity());
         try std.testing.expectEqualSlices(
             RecentBlockhashes.Entry,
-            blockhashes.entries.items,
-            deserialized.entries.items,
+            blockhashes.entries.constSlice(),
+            deserialized.entries.constSlice(),
         );
     }
 }
