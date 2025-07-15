@@ -9,7 +9,6 @@ const EpochSchedule = sig.core.EpochSchedule;
 const Slot = sig.core.Slot;
 const SlotConstants = sig.core.SlotConstants;
 const SlotState = sig.core.SlotState;
-const VoteAccount = sig.core.vote_accounts.VoteAccount;
 
 /// Central registry that tracks high-level info about slots and how they fork.
 ///
