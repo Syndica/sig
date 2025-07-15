@@ -18,6 +18,9 @@ const ReplayExecutionState = replay.execution.ReplayExecutionState;
 const SlotTracker = replay.trackers.SlotTracker;
 const EpochTracker = replay.trackers.EpochTracker;
 
+const LatestValidatorVotesForFrozenSlots =
+    sig.consensus.latest_validator_votes.LatestValidatorVotes;
+
 /// Number of threads to use in replay's thread pool
 const NUM_THREADS = 4;
 
@@ -48,9 +51,20 @@ pub const ReplayDependencies = struct {
     root_slot_state: sig.core.SlotState,
 };
 
+pub const Logger = sig.trace.ScopedLogger("replay");
+
+pub const SlotData = struct {
+    duplicate_confirmed_slots: replay.edge_cases.DuplicateConfirmedSlots,
+    epoch_slots_frozen_slots: replay.edge_cases.EpochSlotsFrozenSlots,
+    duplicate_slots_to_repair: replay.edge_cases.DuplicateSlotsToRepair,
+    purge_repair_slot_counter: replay.edge_cases.PurgeRepairSlotCounters,
+    unfrozen_gossip_verified_vote_hashes: replay.edge_cases.UnfrozenGossipVerifiedVoteHashes,
+    duplicate_slots: replay.edge_cases.DuplicateSlots,
+};
+
 const ReplayState = struct {
     allocator: Allocator,
-    logger: sig.trace.ScopedLogger("replay"),
+    logger: Logger,
     thread_pool: *ThreadPool,
     slot_leaders: SlotLeaders,
     slot_tracker: *SlotTracker,
@@ -132,7 +146,7 @@ fn advanceReplay(state: *ReplayState) !void {
 
     _ = try replay.execution.replayActiveSlots(&state.execution);
 
-    handleEdgeCases();
+    _ = &replay.edge_cases.processEdgeCases;
 
     processConsensus();
 
@@ -211,19 +225,6 @@ fn trackNewSlots(
             // TODO: update_fork_propagated_threshold_from_votes
         }
     }
-}
-
-fn handleEdgeCases() void {
-    // TODO: process_ancestor_hashes_duplicate_slots
-
-    // TODO: process_duplicate_confirmed_slots
-
-    // TODO: process_gossip_verified_vote_hashes
-
-    // TODO: process_popular_pruned_forks
-
-    // TODO: process_duplicate_slots
-
 }
 
 fn processConsensus() void {

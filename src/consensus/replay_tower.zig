@@ -25,7 +25,7 @@ const UnixTimestamp = sig.core.UnixTimestamp;
 
 const HeaviestSubtreeForkChoice = sig.consensus.HeaviestSubtreeForkChoice;
 const LatestValidatorVotesForFrozenBanks =
-    sig.consensus.unimplemented.LatestValidatorVotesForFrozenBanks;
+    sig.consensus.latest_validator_votes.LatestValidatorVotes;
 const ThresholdDecision = sig.consensus.tower.ThresholdDecision;
 const ProgressMap = sig.consensus.ProgressMap;
 const Tower = sig.consensus.tower.Tower;
@@ -43,6 +43,15 @@ const SWITCH_FORK_THRESHOLD: f64 = 0.38;
 const MAX_ENTRIES: u64 = 1024 * 1024; // 1 million slots is about 5 days
 
 pub const VOTE_THRESHOLD_SIZE: f64 = 2.0 / 3.0;
+
+const VotedSlotAndPubkey = struct { slot: Slot, pubkey: Pubkey };
+pub const ExpirationSlot = Slot;
+/// TODO Should be improved.
+const HashThatShouldBeMadeBTreeMap = std.AutoArrayHashMapUnmanaged(
+    ExpirationSlot,
+    std.ArrayList(VotedSlotAndPubkey),
+);
+pub const LockoutIntervals = HashThatShouldBeMadeBTreeMap;
 
 pub const HeaviestForkFailures = union(enum) {
     LockedOut: u64,
@@ -2996,9 +3005,7 @@ test "selectVoteAndResetForks stake not found" {
     var tower = try createTestReplayTower(8, 0.66);
     defer tower.deinit(allocator);
 
-    const latest = LatestValidatorVotesForFrozenBanks{
-        .max_gossip_frozen_votes = .{},
-    };
+    const latest = LatestValidatorVotesForFrozenBanks.empty;
 
     var slot_history = try createTestSlotHistory(std.testing.allocator);
     defer slot_history.deinit(allocator);
@@ -3128,7 +3135,7 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
         &ancestors,
         &descendants,
         &fixture.progress,
-        &.{ .max_gossip_frozen_votes = .{} },
+        &LatestValidatorVotesForFrozenBanks.empty,
         &fixture.fork_choice,
         fixture.epoch_stake_map,
         &SlotHistory{ .bits = bits, .next_slot = 0 },
@@ -3149,7 +3156,7 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
         &ancestors,
         &descendants,
         &fixture.progress,
-        &.{ .max_gossip_frozen_votes = .{} },
+        &LatestValidatorVotesForFrozenBanks.empty,
         &fixture.fork_choice,
         fixture.epoch_stake_map,
         &SlotHistory{ .bits = bits, .next_slot = 0 },
@@ -3174,7 +3181,7 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
         &ancestors,
         &descendants,
         &fixture.progress,
-        &.{ .max_gossip_frozen_votes = .{} },
+        &LatestValidatorVotesForFrozenBanks.empty,
         &fixture.fork_choice,
         fixture.epoch_stake_map,
         &SlotHistory{ .bits = bits, .next_slot = 0 },
@@ -3246,7 +3253,7 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
         &ancestors2,
         &descendants2,
         &fixture.progress,
-        &.{ .max_gossip_frozen_votes = .{} },
+        &LatestValidatorVotesForFrozenBanks.empty,
         &fixture.fork_choice,
         fixture.epoch_stake_map,
         &SlotHistory{ .bits = bits, .next_slot = 0 },
@@ -3288,7 +3295,7 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
         &ancestors2,
         &descendants2,
         &fixture.progress,
-        &.{ .max_gossip_frozen_votes = .{} },
+        &LatestValidatorVotesForFrozenBanks.empty,
         &fixture.fork_choice,
         fixture.epoch_stake_map,
         &SlotHistory{ .bits = bits, .next_slot = 0 },
