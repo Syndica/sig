@@ -37,8 +37,8 @@ pub fn StakesCacheGeneric(comptime stakes_type: StakesType) type {
             return StakesT;
         }
 
-        pub fn default() Self {
-            return .{ .stakes = RwMux(StakesT).init(StakesT.DEFAULT) };
+        pub fn init(allocator: Allocator) Allocator.Error!Self {
+            return .{ .stakes = RwMux(StakesT).init(try StakesT.init(allocator)) };
         }
 
         pub fn deinit(self: *Self, allocator: Allocator) void {
@@ -137,13 +137,15 @@ pub fn Stakes(comptime stakes_type: StakesType) type {
 
         const Self = @This();
 
-        pub const DEFAULT: Self = .{
-            .vote_accounts = .{},
-            .stake_delegations = .{},
-            .unused = 0,
-            .epoch = 0,
-            .stake_history = .{},
-        };
+        pub fn init(allocator: Allocator) Allocator.Error!Self {
+            return .{
+                .vote_accounts = .{},
+                .stake_delegations = .{},
+                .unused = 0,
+                .epoch = 0,
+                .stake_history = try .init(allocator),
+            };
+        }
 
         pub fn deinit(self: *const Self, allocator: Allocator) void {
             self.vote_accounts.deinit(allocator);
@@ -192,7 +194,7 @@ pub fn Stakes(comptime stakes_type: StakesType) type {
                 if (!delegation.voter_pubkey.equals(&pubkey)) continue;
                 stake += delegation.getStake(
                     self.epoch,
-                    &self.stake_history,
+                    self.stake_history,
                     new_rate_activation_epoch,
                 );
             }
@@ -248,7 +250,7 @@ pub fn Stakes(comptime stakes_type: StakesType) type {
             const voter_pubkey = delegation.voter_pubkey;
             const stake = delegation.getStake(
                 self.epoch,
-                &self.stake_history,
+                self.stake_history,
                 new_rate_activation_epoch,
             );
 
@@ -270,7 +272,7 @@ pub fn Stakes(comptime stakes_type: StakesType) type {
                 const old_voter_pubkey = old_delegation.voter_pubkey;
                 const old_stake = old_delegation.getStake(
                     self.epoch,
-                    &self.stake_history,
+                    self.stake_history,
                     new_rate_activation_epoch,
                 );
 
@@ -295,7 +297,7 @@ pub fn Stakes(comptime stakes_type: StakesType) type {
             const removed_delegation = account.getDelegation();
             const removed_stake = removed_delegation.getStake(
                 self.epoch,
-                &self.stake_history,
+                self.stake_history,
                 new_rate_activation_epoch,
             );
 
@@ -474,7 +476,7 @@ pub const Delegation = struct {
     pub fn getStake(
         self: *const Delegation,
         epoch: Epoch,
-        stake_history: *const StakeHistory,
+        stake_history: StakeHistory,
         new_rate_activation_epoch: ?Epoch,
     ) u64 {
         return self.getClusterStake(
@@ -488,7 +490,7 @@ pub const Delegation = struct {
     pub fn getClusterStake(
         self: *const Delegation,
         epoch: Epoch,
-        history: *const StakeHistory,
+        history: StakeHistory,
         new_rate_activation_epoch: ?Epoch,
     ) ClusterStake {
         const effective_stake, const activating_stake = self.getClusterEffectiveAndActivatingStake(
@@ -559,7 +561,7 @@ pub const Delegation = struct {
     pub fn getClusterEffectiveAndActivatingStake(
         self: *const Delegation,
         epoch: Epoch,
-        history: *const StakeHistory,
+        history: StakeHistory,
         new_rate_activation_epoch: ?Epoch,
     ) struct { u64, u64 } {
         if (self.activation_epoch == std.math.maxInt(u64)) {
@@ -783,7 +785,10 @@ test "stakes basic" {
         for (0..4) |i| {
             const StakesT = Stakes(stakes_type);
 
-            var stakes_cache = StakesCacheGeneric(stakes_type).default();
+            const stake_history_empty = try StakeHistory.init(allocator);
+            defer stake_history_empty.deinit(allocator);
+
+            var stakes_cache = try StakesCacheGeneric(stakes_type).init(allocator);
             defer stakes_cache.deinit(allocator);
             {
                 const stakes: *StakesT, var guard = stakes_cache.stakes.writeWithLock();
@@ -802,7 +807,7 @@ test "stakes basic" {
                 defer stakes_guard.unlock();
                 try std.testing.expect(stakes.vote_accounts.getAccount(accs.vote_pubkey) != null);
                 try std.testing.expectEqual(
-                    stake.delegation.getStake(i, &StakeHistory.EMPTY, null),
+                    stake.delegation.getStake(i, stake_history_empty, null),
                     stakes.vote_accounts.getDelegatedStake(accs.vote_pubkey),
                 );
             }
@@ -814,7 +819,7 @@ test "stakes basic" {
                 defer stakes_guard.unlock();
                 try std.testing.expect(stakes.vote_accounts.getAccount(accs.vote_pubkey) != null);
                 try std.testing.expectEqual(
-                    stake.delegation.getStake(i, &StakeHistory.EMPTY, null),
+                    stake.delegation.getStake(i, stake_history_empty, null),
                     stakes.vote_accounts.getDelegatedStake(accs.vote_pubkey),
                 );
             }
@@ -848,7 +853,7 @@ test "stakes basic" {
                 defer stakes_guard.unlock();
                 try std.testing.expect(stakes.vote_accounts.getAccount(accs.vote_pubkey) != null);
                 try std.testing.expectEqual(
-                    stake.delegation.getStake(i, &StakeHistory.EMPTY, null),
+                    stake.delegation.getStake(i, stake_history_empty, null),
                     stakes.vote_accounts.getDelegatedStake(accs.vote_pubkey),
                 );
             }

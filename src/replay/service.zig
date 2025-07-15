@@ -13,13 +13,21 @@ const ProgressMap = sig.consensus.ProgressMap;
 const Slot = sig.core.Slot;
 const SlotLeaders = sig.core.leader_schedule.SlotLeaders;
 const SlotState = sig.core.bank.SlotState;
-
+const LedgerResultWriter = sig.ledger.result_writer.LedgerResultWriter;
 const ReplayExecutionState = replay.execution.ReplayExecutionState;
 const SlotTracker = replay.trackers.SlotTracker;
 const EpochTracker = replay.trackers.EpochTracker;
 
+const LatestValidatorVotesForFrozenSlots =
+    sig.consensus.latest_validator_votes.LatestValidatorVotes;
+
 /// Number of threads to use in replay's thread pool
 const NUM_THREADS = 4;
+
+const SWITCH_FORK_THRESHOLD: f64 = 0.38;
+const MAX_ENTRIES: u64 = 1024 * 1024; // 1 million slots is about 5 days
+const DUPLICATE_LIVENESS_THRESHOLD: f64 = 0.1;
+pub const DUPLICATE_THRESHOLD: f64 = 1.0 - SWITCH_FORK_THRESHOLD - DUPLICATE_LIVENESS_THRESHOLD;
 
 pub const ReplayDependencies = struct {
     /// Used for all allocations within the replay stage
@@ -32,6 +40,8 @@ pub const ReplayDependencies = struct {
     epoch_schedule: sig.core.EpochSchedule,
     /// Used to get the entries to validate them and execute the transactions
     blockstore_reader: *BlockstoreReader,
+    /// Used to update the ledger with consensus results
+    ledger_result_writer: *LedgerResultWriter,
     /// Used to get the entries to validate them and execute the transactions
     accounts_db: *AccountsDB,
     slot_leaders: SlotLeaders,
@@ -125,7 +135,7 @@ fn advanceReplay(state: *ReplayState) !void {
 
     _ = try replay.execution.replayActiveSlots(&state.execution);
 
-    handleEdgeCases();
+    replay.edge_cases.handleEdgeCases();
 
     processConsensus();
 
@@ -204,19 +214,6 @@ fn trackNewSlots(
             // TODO: update_fork_propagated_threshold_from_votes
         }
     }
-}
-
-fn handleEdgeCases() void {
-    // TODO: process_ancestor_hashes_duplicate_slots
-
-    // TODO: process_duplicate_confirmed_slots
-
-    // TODO: process_gossip_verified_vote_hashes
-
-    // TODO: process_popular_pruned_forks
-
-    // TODO: process_duplicate_slots
-
 }
 
 fn processConsensus() void {

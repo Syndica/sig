@@ -101,6 +101,45 @@ pub const SlotTracker = struct {
         }
         return frozen_slots;
     }
+
+    pub fn parents(
+        self: *const SlotTracker,
+        allocator: Allocator,
+        slot: Slot,
+    ) Allocator.Error![]const Slot {
+        var parents_list = std.ArrayListUnmanaged(Slot).empty;
+        errdefer parents_list.deinit(allocator);
+
+        // Parent list count cannot be more than the self.slots count.
+        try parents_list.ensureTotalCapacity(allocator, self.slots.count());
+
+        var current_slot = slot;
+        while (self.slots.get(current_slot)) |current| {
+            const parent_slot = current.constants.parent_slot;
+            parents_list.appendAssumeCapacity(parent_slot);
+
+            current_slot = parent_slot;
+        }
+
+        return try parents_list.toOwnedSlice(allocator);
+    }
+
+    /// Analogous to [prune_non_rooted](https://github.com/anza-xyz/agave/blob/441258229dfed75e45be8f99c77865f18886d4ba/runtime/src/bank_forks.rs#L591)
+    //  TODO Revisit: Currently this removes all slots less than the rooted slot.
+    // In Agave, only the slots not in the root path are removed.
+    pub fn pruneNonRooted(self: *SlotTracker, allocator: Allocator) void {
+        var slice = self.slots.entries.slice();
+        var index: usize = 0;
+        while (index < slice.len) {
+            if (slice.items(.key)[index] < self.root) {
+                allocator.destroy(slice.items(.value)[index]);
+                self.slots.swapRemoveAt(index);
+                slice = self.slots.entries.slice();
+            } else {
+                index += 1;
+            }
+        }
+    }
 };
 
 pub const EpochTracker = struct {
@@ -122,3 +161,38 @@ pub const EpochTracker = struct {
         return self.epochs.getPtr(self.schedule.getEpoch(slot));
     }
 };
+
+test "SlotTracker.prune removes all slots less than root" {
+    const allocator = std.testing.allocator;
+    const root = 4;
+    var tracker = SlotTracker.init(root);
+    defer tracker.deinit(allocator);
+
+    // Add slots 1, 2, 3, 4, 5
+    for (1..6) |i| {
+        try tracker.put(
+            allocator,
+            i,
+            sig.core.SlotConstants{
+                .parent_slot = i - 1,
+                .parent_hash = sig.core.Hash.ZEROES,
+                .block_height = 0,
+                .collector_id = sig.core.Pubkey.ZEROES,
+                .max_tick_height = 0,
+                .fee_rate_governor = sig.core.genesis_config.FeeRateGovernor.DEFAULT,
+                .epoch_reward_status = .inactive,
+            },
+            sig.core.SlotState.GENESIS,
+        );
+    }
+
+    // Prune slots less than root (4)
+    tracker.pruneNonRooted(allocator);
+
+    // Only slots 4 and 5 should remain
+    try std.testing.expect(tracker.contains(4));
+    try std.testing.expect(tracker.contains(5));
+    try std.testing.expect(!tracker.contains(1));
+    try std.testing.expect(!tracker.contains(2));
+    try std.testing.expect(!tracker.contains(3));
+}

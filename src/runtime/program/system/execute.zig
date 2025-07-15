@@ -1089,7 +1089,7 @@ test "executeWithdrawNonceAccount" {
     defer allocator.free(nonce_state_bytes);
 
     // Create Sysvars
-    const recent_blockhashes = try RecentBlockhashes.default(allocator);
+    const recent_blockhashes = try RecentBlockhashes.init(allocator);
 
     const rent = Rent.DEFAULT;
     const rent_minimum_balance = rent.minimumBalance(sig.bincode.sizeOf(nonce_state, .{}));

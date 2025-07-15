@@ -185,7 +185,7 @@ test getSysvar {
         var obj = sysvar.Clock.DEFAULT;
         const obj_addr = 0x100000000;
 
-        var buffer = std.mem.zeroes([sysvar.Clock.SIZE_OF]u8);
+        var buffer = std.mem.zeroes([sysvar.Clock.STORAGE_SIZE]u8);
         const buffer_addr = 0x200000000;
         const id_addr = 0x300000000;
 
@@ -216,7 +216,7 @@ test getSysvar {
             id_addr,
             buffer_addr,
             0,
-            sysvar.Clock.SIZE_OF,
+            sysvar.Clock.STORAGE_SIZE,
         });
 
         const obj_parsed = try bincode.readFromSlice(
@@ -238,7 +238,7 @@ test getSysvar {
         var obj = sysvar.EpochSchedule.DEFAULT;
         const obj_addr = 0x100000000;
 
-        var buffer = std.mem.zeroes([sysvar.EpochSchedule.SIZE_OF]u8);
+        var buffer = std.mem.zeroes([sysvar.EpochSchedule.STORAGE_SIZE]u8);
         const buffer_addr = 0x200000000;
         const id_addr = 0x300000000;
 
@@ -269,7 +269,7 @@ test getSysvar {
             id_addr,
             buffer_addr,
             0,
-            sysvar.EpochSchedule.SIZE_OF,
+            sysvar.EpochSchedule.STORAGE_SIZE,
         });
         const obj_parsed = try bincode.readFromSlice(
             std.testing.failing_allocator, // this shouldnt need to allocate
@@ -313,7 +313,7 @@ test getSysvar {
         var obj = src.fill(true, sysvar.Rent.DEFAULT);
         const obj_addr = 0x100000000;
 
-        var buffer = std.mem.zeroes([sysvar.Rent.SIZE_OF]u8);
+        var buffer = std.mem.zeroes([sysvar.Rent.STORAGE_SIZE]u8);
         const buffer_addr = 0x200000000;
         const id_addr = 0x300000000;
 
@@ -342,7 +342,7 @@ test getSysvar {
             id_addr,
             buffer_addr,
             0,
-            sysvar.Rent.SIZE_OF,
+            sysvar.Rent.STORAGE_SIZE,
         });
         const obj_parsed = try bincode.readFromSlice(
             std.testing.failing_allocator, // this shouldnt need to allocate
@@ -363,7 +363,7 @@ test getSysvar {
         var obj = src.fill(true, sysvar.EpochRewards.DEFAULT);
         const obj_addr = 0x100000000;
 
-        var buffer = std.mem.zeroes([sysvar.EpochRewards.SIZE_OF]u8);
+        var buffer = std.mem.zeroes([sysvar.EpochRewards.STORAGE_SIZE]u8);
         const buffer_addr = 0x200000000;
         const id_addr = 0x300000000;
 
@@ -397,7 +397,7 @@ test getSysvar {
             id_addr,
             buffer_addr,
             0,
-            sysvar.EpochRewards.SIZE_OF,
+            sysvar.EpochRewards.STORAGE_SIZE,
         });
         const obj_parsed = try bincode.readFromSlice(
             std.testing.failing_allocator, // this shouldnt need to allocate
@@ -418,7 +418,7 @@ test getSysvar {
         var obj = sysvar.LastRestartSlot.DEFAULT;
         const obj_addr = 0x100000000;
 
-        var buffer = std.mem.zeroes([sysvar.LastRestartSlot.SIZE_OF]u8);
+        var buffer = std.mem.zeroes([sysvar.LastRestartSlot.STORAGE_SIZE]u8);
         const buffer_addr = 0x200000000;
         const id_addr = 0x300000000;
 
@@ -445,7 +445,7 @@ test getSysvar {
             id_addr,
             buffer_addr,
             0,
-            sysvar.LastRestartSlot.SIZE_OF,
+            sysvar.LastRestartSlot.STORAGE_SIZE,
         });
         const obj_parsed = try bincode.readFromSlice(
             std.testing.allocator, // this shouldnt need to allocate
@@ -493,7 +493,7 @@ fn testGetStakeHistory(filled: bool) !void {
     // deinitialised by transaction context
 
     {
-        const src_history_buf = try allocator.alloc(u8, sysvar.StakeHistory.SIZE_OF);
+        const src_history_buf = try allocator.alloc(u8, sysvar.StakeHistory.STORAGE_SIZE);
         defer allocator.free(src_history_buf);
         _ = try bincode.writeToSlice(src_history_buf, src_history, .{});
     }
@@ -510,7 +510,7 @@ fn testGetStakeHistory(filled: bool) !void {
         cache.deinit(allocator);
     }
 
-    var buffer = std.mem.zeroes([sysvar.StakeHistory.SIZE_OF]u8);
+    var buffer = std.mem.zeroes([sysvar.StakeHistory.STORAGE_SIZE]u8);
     const buffer_addr = 0x100000000;
     const id_addr = 0x200000000;
 
@@ -529,7 +529,7 @@ fn testGetStakeHistory(filled: bool) !void {
         id_addr,
         buffer_addr,
         0,
-        sysvar.StakeHistory.SIZE_OF,
+        sysvar.StakeHistory.STORAGE_SIZE,
     });
 
     const obj_parsed = try bincode.readFromSlice(allocator, sysvar.StakeHistory, &buffer, .{});
@@ -537,8 +537,8 @@ fn testGetStakeHistory(filled: bool) !void {
 
     try std.testing.expectEqualSlices(
         sysvar.StakeHistory.Entry,
-        obj_parsed.entries.items,
-        src_history.entries.items,
+        obj_parsed.entries.constSlice(),
+        src_history.entries.constSlice(),
     );
 }
 
@@ -571,7 +571,7 @@ fn testGetSlotHashes(filled: bool) !void {
     // deinitialised by transaction context
 
     {
-        const src_hashes_buf = try allocator.alloc(u8, sysvar.SlotHashes.SIZE_OF);
+        const src_hashes_buf = try allocator.alloc(u8, sysvar.SlotHashes.STORAGE_SIZE);
         defer allocator.free(src_hashes_buf);
         _ = try bincode.writeToSlice(src_hashes_buf, src_hashes, .{});
     }
@@ -588,7 +588,7 @@ fn testGetSlotHashes(filled: bool) !void {
         cache.deinit(allocator);
     }
 
-    var buffer = std.mem.zeroes([sysvar.SlotHashes.SIZE_OF]u8);
+    var buffer = std.mem.zeroes([sysvar.SlotHashes.STORAGE_SIZE]u8);
     const buffer_addr = 0x100000000;
     const id_addr = 0x200000000;
 
@@ -607,7 +607,7 @@ fn testGetSlotHashes(filled: bool) !void {
         id_addr,
         buffer_addr,
         0,
-        sysvar.SlotHashes.SIZE_OF,
+        sysvar.SlotHashes.STORAGE_SIZE,
     });
 
     const obj_parsed = try bincode.readFromSlice(allocator, sysvar.SlotHashes, &buffer, .{});
@@ -615,7 +615,7 @@ fn testGetSlotHashes(filled: bool) !void {
 
     try std.testing.expectEqualSlices(
         sysvar.SlotHashes.Entry,
-        obj_parsed.entries.items,
-        src_hashes.entries.items,
+        obj_parsed.entries.constSlice(),
+        src_hashes.entries.constSlice(),
     );
 }
