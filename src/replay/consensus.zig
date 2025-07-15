@@ -483,7 +483,6 @@ fn computeBankStats(
     epoch_stakes: *const std.AutoHashMap(Epoch, VersionedEpochStakes),
     epoch_schedule: *const EpochSchedule,
     progress: *ProgressMap,
-    vote_tracker: *const VoteTracker,
     fork_choice: *ForkChoice,
     latest_validator_votes: *LatestValidatorVotesForFrozenBanks,
 ) []Slot {
@@ -492,7 +491,6 @@ fn computeBankStats(
     for (frozen_slots.keys()) |slot| {
         const fork_stat = progress.getForkStats(slot) orelse return error.MissingSlot;
         if (!fork_stat.is_computed) {
-            // Check if our tower is behind, if so adopt the on chain tower from this Bank
             // TODO Self::adopt_on_chain_tower_if_behind
             const computed_bank_state = try collectVoteLockouts(
                 allocator,
