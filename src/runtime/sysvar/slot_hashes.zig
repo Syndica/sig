@@ -12,11 +12,7 @@ const Slot = sig.core.Slot;
 
 /// [agave] https://github.com/anza-xyz/agave/blob/8db563d3bba4d03edf0eb2737fba87f394c32b64/sdk/slot-hashes/src/lib.rs#L43
 pub const SlotHashes = struct {
-    entries: std.ArrayListUnmanaged(Entry),
-
-    pub const @"!bincode-config" = bincode.FieldConfig(SlotHashes){
-        .deserializer = deserialize,
-    };
+    entries: *std.BoundedArray(Entry, MAX_ENTRIES),
 
     pub const Entry = struct {
         slot: Slot,
@@ -38,42 +34,42 @@ pub const SlotHashes = struct {
 
     pub const STORAGE_SIZE: usize = 20_488;
 
-    pub fn default(allocator: Allocator) Allocator.Error!SlotHashes {
-        return .{ .entries = try .initCapacity(allocator, MAX_ENTRIES) };
+    pub fn init(allocator: Allocator) Allocator.Error!SlotHashes {
+        const entries = try allocator.create(std.BoundedArray(Entry, MAX_ENTRIES));
+        entries.* = std.BoundedArray(Entry, MAX_ENTRIES){};
+        return .{ .entries = entries };
     }
 
     pub fn deinit(self: SlotHashes, allocator: Allocator) void {
-        allocator.free(self.entries.allocatedSlice());
+        allocator.destroy(self.entries);
     }
 
     pub fn getIndex(self: *const SlotHashes, slot: u64) ?usize {
-        return std.sort.binarySearch(Entry, self.entries.items, slot, Entry.searchCmp);
+        return std.sort.binarySearch(Entry, self.entries.constSlice(), slot, Entry.searchCmp);
     }
 
     pub fn get(self: *const SlotHashes, slot: Slot) ?Hash {
         return if (self.getIndex(slot)) |index|
-            self.entries.items[index].hash
+            self.entries.buffer[index].hash
         else
             null;
     }
 
     pub fn add(self: *SlotHashes, slot: Slot, hash: Hash) void {
-        const index = std.sort.lowerBound(Entry, self.entries.items, slot, Entry.searchCmp);
+        const index = std.sort.lowerBound(Entry, self.entries.constSlice(), slot, Entry.searchCmp);
         // If the slot is to old, do not insert. Otherwise if the entries are full, pop the last entry.
-        if (index == self.entries.capacity) {
-            return;
-        } else if (self.entries.items.len == self.entries.capacity) {
-            _ = self.entries.pop();
-        }
+        if (index == MAX_ENTRIES) return;
 
-        // If the slot already exists, update the hash
-        if (index < self.entries.items.len and
-            self.entries.items[index].slot == slot)
-        {
-            self.entries.items[index].hash = hash;
-        } else {
-            self.entries.insertAssumeCapacity(index, .{ .slot = slot, .hash = hash });
-        }
+        // If the entries are full, pop the last entry to make space for the new one.
+        if (self.entries.len == MAX_ENTRIES) _ = self.entries.pop();
+
+        // If the slot already exists update the hash, otherwise insert a new entry.
+        if (index < self.entries.len and
+            self.entries.buffer[index].slot == slot)
+            self.entries.buffer[index].hash = hash
+        else
+            // SAFETY: entries has space for at least one more entry due to popping the last entry if it was full.
+            self.entries.insert(index, .{ .slot = slot, .hash = hash }) catch unreachable;
     }
 
     pub fn initWithEntries(
@@ -82,27 +78,21 @@ pub const SlotHashes = struct {
     ) Allocator.Error!SlotHashes {
         if (!builtin.is_test) @compileError("only for testing");
         std.debug.assert(entries.len <= MAX_ENTRIES);
-        var self = try SlotHashes.default(allocator);
-        try self.entries.appendSlice(allocator, entries);
-        std.sort.heap(Entry, self.entries.items, {}, Entry.sortCmp);
+        var self = try SlotHashes.init(allocator);
+        self.entries.appendSlice(entries) catch unreachable;
+        std.sort.heap(Entry, self.entries.slice(), {}, Entry.sortCmp);
         return self;
     }
 
     pub fn initRandom(allocator: Allocator, random: std.Random) Allocator.Error!SlotHashes {
         if (!builtin.is_test) @compileError("only for testing");
-        var self = try SlotHashes.default(allocator);
+        var self = try SlotHashes.init(allocator);
         for (0..random.uintLessThan(usize, MAX_ENTRIES)) |_| self.add(
             random.intRangeAtMost(Slot, 0, 1_000),
             Hash.initRandom(random),
         );
-        std.sort.heap(Entry, self.entries.items, {}, Entry.sortCmp);
+        std.sort.heap(Entry, self.entries.slice(), {}, Entry.sortCmp);
         return self;
-    }
-
-    pub fn deserialize(allocator: Allocator, reader: anytype, _: bincode.Params) !SlotHashes {
-        var entries = try bincode.read(allocator, std.ArrayListUnmanaged(Entry), reader, .{});
-        try entries.ensureTotalCapacityPrecise(allocator, MAX_ENTRIES);
-        return .{ .entries = entries };
     }
 };
 
@@ -111,9 +101,7 @@ test "add and get" {
     var prng = std.Random.DefaultPrng.init(0);
     const random = prng.random();
 
-    var slot_hashes = SlotHashes{
-        .entries = try .initCapacity(allocator, 4),
-    };
+    var slot_hashes = try SlotHashes.init(allocator);
     defer slot_hashes.deinit(allocator);
 
     const hash_0 = Hash.initRandom(random);
@@ -143,8 +131,9 @@ test "add and get" {
             .{ .slot = 3, .hash = hash_3 },
             .{ .slot = 2, .hash = hash_2 },
             .{ .slot = 1, .hash = hash_1 },
+            .{ .slot = 0, .hash = hash_0 },
         },
-        slot_hashes.entries.items,
+        slot_hashes.entries.constSlice(),
     );
 }
 
@@ -163,16 +152,16 @@ test "serialize and deserialize" {
         const deserialized = try bincode.readFromSlice(allocator, SlotHashes, serialized, .{});
         defer deserialized.deinit(allocator);
 
-        try std.testing.expectEqual(SlotHashes.MAX_ENTRIES, deserialized.entries.capacity);
+        try std.testing.expectEqual(SlotHashes.MAX_ENTRIES, deserialized.entries.capacity());
         try std.testing.expectEqualSlices(
             SlotHashes.Entry,
-            slot_hashes.entries.items,
-            deserialized.entries.items,
+            slot_hashes.entries.constSlice(),
+            deserialized.entries.constSlice(),
         );
     }
 
     {
-        var slot_hashes = SlotHashes{ .entries = try .initCapacity(allocator, 1) };
+        var slot_hashes = try SlotHashes.init(allocator);
         defer slot_hashes.deinit(allocator);
         slot_hashes.add(0, Hash.initRandom(random));
 
@@ -182,11 +171,11 @@ test "serialize and deserialize" {
         const deserialized = try bincode.readFromSlice(allocator, SlotHashes, serialized, .{});
         defer deserialized.deinit(allocator);
 
-        try std.testing.expectEqual(SlotHashes.MAX_ENTRIES, deserialized.entries.capacity);
+        try std.testing.expectEqual(SlotHashes.MAX_ENTRIES, deserialized.entries.capacity());
         try std.testing.expectEqualSlices(
             SlotHashes.Entry,
-            slot_hashes.entries.items,
-            deserialized.entries.items,
+            slot_hashes.entries.constSlice(),
+            deserialized.entries.constSlice(),
         );
     }
 }
