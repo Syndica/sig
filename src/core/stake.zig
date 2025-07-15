@@ -185,7 +185,11 @@ pub fn Stakes(comptime stakes_type: StakesType) type {
             };
         }
 
-        pub fn calculateStake(self: *const Self, pubkey: Pubkey, new_rate_activation_epoch: ?Epoch) u64 {
+        pub fn calculateStake(
+            self: *const Self,
+            pubkey: Pubkey,
+            new_rate_activation_epoch: ?Epoch,
+        ) u64 {
             var stake: u64 = 0;
             for (self.stake_delegations.values()) |*stake_delegations| {
                 const delegation = stake_delegations.getDelegation();

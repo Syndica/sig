@@ -110,7 +110,7 @@ pub const BankForksStub = struct {
             const slot_epoch = params.epoch_schedule.getEpoch(params.slot);
             const gop = try epoch_stakes.getOrPut(allocator, slot_epoch);
             if (!gop.found_existing) {
-                gop.value_ptr.* = try sig.core.EpochStakes.initEmpty(allocator);
+                gop.value_ptr.* = try .initEmptyWithGenesisStakeHistoryEntry(allocator);
             }
 
             return .{

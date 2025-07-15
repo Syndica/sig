@@ -359,7 +359,6 @@ test trackNewSlots {
         .genesis_creation_time = 1,
         .slots_per_year = 1,
         .stakes = try .initEmptyWithGenesisStakeHistoryEntry(allocator),
-        .rent_collector = .initRandom(rng.random()),
     });
 
     const leader_schedule = sig.core.leader_schedule.LeaderSchedule{
