@@ -3058,11 +3058,6 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
     var fixture = try TestFixture.init(allocator, root);
     defer fixture.deinit(allocator);
 
-    var fp = try ForkProgress.zeroes(allocator);
-    defer fp.deinit(allocator);
-    fp.fork_stats.computed = true;
-    try fixture.progress.map.put(allocator, 0, fp);
-
     // Build fork structure:
     //
     //      slot 0
