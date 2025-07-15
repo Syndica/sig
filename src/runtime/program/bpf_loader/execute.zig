@@ -11,7 +11,7 @@ const vm = sig.vm;
 const bpf_program = sig.runtime.program.bpf;
 const system_program = sig.runtime.program.system;
 const bpf_loader_program = sig.runtime.program.bpf_loader;
-const features = sig.runtime.features;
+const features = sig.core.features;
 
 const Pubkey = sig.core.Pubkey;
 const InstructionError = sig.core.instruction.InstructionError;

@@ -87,6 +87,10 @@ pub const Hash = extern struct {
         } else .eq;
     }
 
+    pub fn bytes(self: *Hash) []u8 {
+        return &self.data;
+    }
+
     pub fn parseBase58String(str: []const u8) error{InvalidHash}!Hash {
         if (str.len > BASE58_MAX_SIZE) return error.InvalidHash;
         var encoded: std.BoundedArray(u8, BASE58_MAX_SIZE) = .{};
@@ -125,11 +129,31 @@ pub const Hash = extern struct {
     }
 };
 
+// TODO add tests
 /// A 16-bit, 1024 element lattice-based incremental hash based on blake3
 pub const LtHash = struct {
-    data: [NUM_ELEMENTS]u16,
+    data: @Vector(1024, u16),
 
-    pub const ZEROES = LtHash{ .data = .{0} ** NUM_ELEMENTS };
+    pub const IDENTITY = LtHash{ .data = @splat(0) };
 
     pub const NUM_ELEMENTS: usize = 1024;
+
+    pub fn bytes(self: *LtHash) []u8 {
+        // TODO verify this is correct
+        return @as([*]u8, @ptrCast(&self.data))[0..2048];
+    }
+
+    /// Mixes `other` into `self`
+    ///
+    /// This can be thought of as akin to 'insert'
+    pub fn mixIn(self: *LtHash, other: *const LtHash) void {
+        self.data +%= other.data;
+    }
+
+    /// Mixes `other` out of `self`
+    ///
+    /// This can be thought of as akin to 'remove'
+    pub fn mixOut(self: *LtHash, other: *const LtHash) void {
+        self.data -%= other.data;
+    }
 };

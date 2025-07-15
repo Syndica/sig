@@ -278,6 +278,14 @@ pub const AccountsDB = struct {
         }
     }
 
+    pub fn accountReader(self: *AccountsDB) sig.accounts_db.AccountReader {
+        return .{ .accounts_db = self };
+    }
+
+    pub fn accountStore(self: *AccountsDB) sig.accounts_db.AccountStore {
+        return .{ .accounts_db = self };
+    }
+
     /// easier to use load function
     pub fn loadWithDefaults(
         self: *AccountsDB,

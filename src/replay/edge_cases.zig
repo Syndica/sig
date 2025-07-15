@@ -1417,11 +1417,14 @@ const TestData = struct {
                 .{
                     .parent_slot = parent_slot,
                     .parent_hash = slot_infos[parent_slot].hash,
+                    .parent_lt_hash = .IDENTITY,
                     .block_height = 1,
                     .collector_id = .initRandom(random),
                     .max_tick_height = 1,
                     .fee_rate_governor = .initRandom(random),
                     .epoch_reward_status = .inactive,
+                    .ancestors = .{ .ancestors = .empty },
+                    .feature_set = .EMPTY,
                 },
                 .{
                     .blockhash_queue = .init(try .initRandom(random, allocator, 0)),
