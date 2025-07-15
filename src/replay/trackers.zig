@@ -182,11 +182,6 @@ pub const SlotTracker = struct {
             }
         }
     }
-
-    pub fn voteAccount(self: *const SlotTracker) VoteAccount {
-        // TODO
-        _ = self;
-    }
 };
 
 pub const EpochTracker = struct {
