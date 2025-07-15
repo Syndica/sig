@@ -179,7 +179,7 @@ pub fn updateSlotHistory(
         deps.accounts_db,
         deps.ancestors,
         SlotHistory,
-    ) orelse try SlotHistory.default(allocator);
+    ) orelse try SlotHistory.init(allocator);
     defer slot_history.deinit(allocator);
 
     slot_history.add(deps.slot);
@@ -198,7 +198,7 @@ pub fn updateSlotHashes(
         deps.accounts_db,
         deps.ancestors,
         SlotHashes,
-    ) orelse try SlotHashes.default(allocator);
+    ) orelse try SlotHashes.init(allocator);
     defer slot_hashes.deinit(allocator);
 
     slot_hashes.add(parent_slot, parent_hash);
@@ -484,8 +484,8 @@ test createSysvarAccount {
     }) |Sysvar| {
         // TODO: errdefer log for sysvar type
         // Required since default
-        const default = if (@hasDecl(Sysvar, "default"))
-            try Sysvar.default(allocator)
+        const default = if (@hasDecl(Sysvar, "init"))
+            try Sysvar.init(allocator)
         else
             Sysvar.DEFAULT;
         defer if (@hasDecl(Sysvar, "deinit")) default.deinit(allocator) else {};
@@ -592,20 +592,20 @@ test fillMissingEntries {
     try std.testing.expectEqualSlices(u8, expected.slot_hashes.?, actual.slot_hashes.?);
     try std.testing.expectEqualSlices(
         SlotHashes.Entry,
-        expected.slot_hashes_obj.?.entries.items,
-        actual.slot_hashes_obj.?.entries.items,
+        expected.slot_hashes_obj.?.entries.constSlice(),
+        actual.slot_hashes_obj.?.entries.constSlice(),
     );
     try std.testing.expectEqualSlices(u8, expected.stake_history.?, actual.stake_history.?);
     try std.testing.expectEqualSlices(
         StakeHistory.Entry,
-        expected.stake_history_obj.?.entries.items,
-        actual.stake_history_obj.?.entries.items,
+        expected.stake_history_obj.?.entries.constSlice(),
+        actual.stake_history_obj.?.entries.constSlice(),
     );
     try std.testing.expectEqual(expected.fees_obj, actual.fees_obj);
     try std.testing.expectEqualSlices(
         RecentBlockhashes.Entry,
-        expected.recent_blockhashes_obj.?.entries.items,
-        actual.recent_blockhashes_obj.?.entries.items,
+        expected.recent_blockhashes_obj.?.entries.constSlice(),
+        actual.recent_blockhashes_obj.?.entries.constSlice(),
     );
 }
 
@@ -647,10 +647,10 @@ fn initSysvarCacheWithDefaultValues(allocator: Allocator) !SysvarCache {
     const rent = Rent.DEFAULT;
     const last_restart_slot = LastRestartSlot.DEFAULT;
 
-    const slot_hashes = try SlotHashes.default(allocator);
-    const stake_history = try StakeHistory.default(allocator);
+    const slot_hashes = try SlotHashes.init(allocator);
+    const stake_history = try StakeHistory.init(allocator);
     const fees = Fees.DEFAULT;
-    const recent_blockhashes = try RecentBlockhashes.default(allocator);
+    const recent_blockhashes = try RecentBlockhashes.init(allocator);
 
     return .{
         .clock = try sysvars.serialize(allocator, clock),
@@ -724,385 +724,6 @@ fn insertSysvarCacheAccounts(
     );
 }
 
-test "updateClock" {
-    // TODO
-}
-
-test "updateLastRestartSlot" {
-    const loadTestAccountsDbEmpty = sig.accounts_db.db.loadTestAccountsDbEmpty;
-    const allocator = std.testing.allocator;
-
-    // Create values for update sysvar deps
-    var tmp_dir = std.testing.tmpDir(.{});
-    defer tmp_dir.cleanup();
-    var accounts_db = try loadTestAccountsDbEmpty(allocator, false, .noop, tmp_dir.dir);
-    defer accounts_db.deinit();
-    var capitalization = Atomic(u64).init(0);
-    var slot: Slot = 10;
-    const rent = Rent.DEFAULT;
-    var ancestors = Ancestors{};
-    defer ancestors.deinit(allocator);
-    try ancestors.ancestors.put(allocator, slot, {});
-
-    // Insert default
-    const account = try createSysvarAccount(
-        allocator,
-        &Rent.DEFAULT,
-        LastRestartSlot,
-        LastRestartSlot.DEFAULT,
-        null,
-    );
-    defer allocator.free(account.data);
-    try accounts_db.putAccount(slot, LastRestartSlot.ID, account);
-
-    // NOTE: Putting accounts on the same slot is broken, so increment slot by 1 and add it to ancestors.
-    slot = slot + 1;
-    const update_sysvar_deps = UpdateSysvarAccountDeps{
-        .accounts_db = &accounts_db,
-        .capitalization = &capitalization,
-        .ancestors = &ancestors,
-        .rent = &rent,
-        .slot = slot,
-    };
-    try ancestors.ancestors.put(allocator, slot, {});
-
-    var feature_set = FeatureSet.EMPTY;
-    defer feature_set.deinit(allocator);
-    try feature_set.active.put(allocator, features.LAST_RESTART_SLOT_SYSVAR, 0);
-
-    const new_restart_slot = slot - 5;
-
-    var hard_forks = HardForks{};
-    defer hard_forks.deinit(allocator);
-    try hard_forks.register(allocator, new_restart_slot);
-
-    _, const old_account =
-        (try getSysvarAndAccount(allocator, &accounts_db, &ancestors, LastRestartSlot)).?;
-    defer allocator.free(old_account.data);
-
-    try updateLastRestartSlot(allocator, &feature_set, &hard_forks, update_sysvar_deps);
-
-    const new_sysvar, const new_account =
-        (try getSysvarAndAccount(allocator, &accounts_db, &ancestors, LastRestartSlot)).?;
-    defer allocator.free(new_account.data);
-
-    try std.testing.expectEqual(new_restart_slot, new_sysvar.last_restart_slot);
-    try expectSysvarAccountChange(rent, old_account, new_account);
-}
-
-test "updateSlotHistory" {
-    const loadTestAccountsDbEmpty = sig.accounts_db.db.loadTestAccountsDbEmpty;
-    const allocator = std.testing.allocator;
-
-    // Create values for update sysvar deps
-    var tmp_dir = std.testing.tmpDir(.{});
-    defer tmp_dir.cleanup();
-    var accounts_db = try loadTestAccountsDbEmpty(allocator, false, .noop, tmp_dir.dir);
-    defer accounts_db.deinit();
-    var capitalization = Atomic(u64).init(0);
-    var slot: Slot = 10;
-    const rent = Rent.DEFAULT;
-    var ancestors = Ancestors{};
-    defer ancestors.deinit(allocator);
-    try ancestors.ancestors.put(allocator, slot, {});
-
-    // Insert default
-    const slot_history = try SlotHistory.default(allocator);
-    defer slot_history.deinit(allocator);
-    const account = try createSysvarAccount(
-        allocator,
-        &Rent.DEFAULT,
-        SlotHistory,
-        slot_history,
-        null,
-    );
-    defer allocator.free(account.data);
-    try accounts_db.putAccount(slot, SlotHistory.ID, account);
-
-    // NOTE: Putting accounts on the same slot is broken, so increment slot by 1 and add it to ancestors.
-    slot = slot + 1;
-    const update_sysvar_deps = UpdateSysvarAccountDeps{
-        .accounts_db = &accounts_db,
-        .capitalization = &capitalization,
-        .ancestors = &ancestors,
-        .rent = &rent,
-        .slot = slot,
-    };
-    try ancestors.ancestors.put(allocator, slot, {});
-
-    const old_sysvar, const old_account =
-        (try getSysvarAndAccount(allocator, &accounts_db, &ancestors, SlotHistory)).?;
-    defer {
-        old_sysvar.deinit(allocator);
-        allocator.free(old_account.data);
-    }
-
-    try updateSlotHistory(allocator, update_sysvar_deps);
-
-    const new_sysvar, const new_account =
-        (try getSysvarAndAccount(allocator, &accounts_db, &ancestors, SlotHistory)).?;
-    defer {
-        new_sysvar.deinit(allocator);
-        allocator.free(new_account.data);
-    }
-
-    try std.testing.expectEqual(slot, new_sysvar.newest());
-    try expectSysvarAccountChange(rent, old_account, new_account);
-}
-
-test "updateSlotHashes" {
-    const loadTestAccountsDbEmpty = sig.accounts_db.db.loadTestAccountsDbEmpty;
-    const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
-    const random = prng.random();
-
-    // Create values for update sysvar deps
-    var tmp_dir = std.testing.tmpDir(.{});
-    defer tmp_dir.cleanup();
-    var accounts_db = try loadTestAccountsDbEmpty(allocator, false, .noop, tmp_dir.dir);
-    defer accounts_db.deinit();
-    var capitalization = Atomic(u64).init(0);
-    var slot: Slot = 10;
-    const rent = Rent.DEFAULT;
-    var ancestors = Ancestors{};
-    defer ancestors.deinit(allocator);
-    try ancestors.ancestors.put(allocator, slot, {});
-
-    // Insert default
-    const slot_hashes = try SlotHashes.default(allocator);
-    defer slot_hashes.deinit(allocator);
-    const account = try createSysvarAccount(
-        allocator,
-        &Rent.DEFAULT,
-        SlotHashes,
-        slot_hashes,
-        null,
-    );
-    defer allocator.free(account.data);
-    try accounts_db.putAccount(slot, SlotHashes.ID, account);
-
-    // NOTE: Putting accounts on the same slot is broken, so increment slot by 1 and add it to ancestors.
-    slot = slot + 1;
-    const update_sysvar_deps = UpdateSysvarAccountDeps{
-        .accounts_db = &accounts_db,
-        .capitalization = &capitalization,
-        .ancestors = &ancestors,
-        .rent = &rent,
-        .slot = slot,
-    };
-    try ancestors.ancestors.put(allocator, slot, {});
-
-    const parent_slot = slot - 1;
-    const parent_hash = Hash.initRandom(random);
-
-    const old_sysvar, const old_account =
-        (try getSysvarAndAccount(allocator, &accounts_db, &ancestors, SlotHashes)).?;
-    defer {
-        old_sysvar.deinit(allocator);
-        allocator.free(old_account.data);
-    }
-
-    try updateSlotHashes(allocator, parent_slot, parent_hash, update_sysvar_deps);
-
-    const new_sysvar, const new_account =
-        (try getSysvarAndAccount(allocator, &accounts_db, &ancestors, SlotHashes)).?;
-    defer {
-        new_sysvar.deinit(allocator);
-        allocator.free(new_account.data);
-    }
-
-    try std.testing.expectEqual(parent_hash, new_sysvar.get(parent_slot));
-    try expectSysvarAccountChange(rent, old_account, new_account);
-}
-
-test "updateRent" {
-    const loadTestAccountsDbEmpty = sig.accounts_db.db.loadTestAccountsDbEmpty;
-    const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
-    const random = prng.random();
-
-    // Create values for update sysvar deps
-    var tmp_dir = std.testing.tmpDir(.{});
-    defer tmp_dir.cleanup();
-    var accounts_db = try loadTestAccountsDbEmpty(allocator, false, .noop, tmp_dir.dir);
-    defer accounts_db.deinit();
-    var capitalization = Atomic(u64).init(0);
-    var slot: Slot = 10;
-    const rent = Rent.DEFAULT;
-    var ancestors = Ancestors{};
-    defer ancestors.deinit(allocator);
-    try ancestors.ancestors.put(allocator, slot, {});
-
-    // Insert default
-    const account = try createSysvarAccount(
-        allocator,
-        &Rent.DEFAULT,
-        Rent,
-        Rent.DEFAULT,
-        null,
-    );
-    defer allocator.free(account.data);
-    try accounts_db.putAccount(slot, Rent.ID, account);
-
-    // NOTE: Putting accounts on the same slot is broken, so increment slot by 1 and add it to ancestors.
-    slot = slot + 1;
-    const update_sysvar_deps = UpdateSysvarAccountDeps{
-        .accounts_db = &accounts_db,
-        .capitalization = &capitalization,
-        .ancestors = &ancestors,
-        .rent = &rent,
-        .slot = slot,
-    };
-    try ancestors.ancestors.put(allocator, slot, {});
-
-    _, const old_account =
-        (try getSysvarAndAccount(allocator, &accounts_db, &ancestors, Rent)).?;
-    defer allocator.free(old_account.data);
-
-    const new_rent = Rent.initRandom(random);
-
-    try updateRent(allocator, new_rent, update_sysvar_deps);
-
-    const new_sysvar, const new_account =
-        (try getSysvarAndAccount(allocator, &accounts_db, &ancestors, Rent)).?;
-    defer allocator.free(new_account.data);
-
-    try std.testing.expect(std.meta.eql(new_rent, new_sysvar));
-    try expectSysvarAccountChange(rent, old_account, new_account);
-}
-
-test "updateEpochSchedule" {
-    const loadTestAccountsDbEmpty = sig.accounts_db.db.loadTestAccountsDbEmpty;
-    const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
-    const random = prng.random();
-
-    // Create values for update sysvar deps
-    var tmp_dir = std.testing.tmpDir(.{});
-    defer tmp_dir.cleanup();
-    var accounts_db = try loadTestAccountsDbEmpty(allocator, false, .noop, tmp_dir.dir);
-    defer accounts_db.deinit();
-    var capitalization = Atomic(u64).init(0);
-    var slot: Slot = 10;
-    const rent = Rent.DEFAULT;
-    var ancestors = Ancestors{};
-    defer ancestors.deinit(allocator);
-    try ancestors.ancestors.put(allocator, slot, {});
-
-    // Insert default
-    const account = try createSysvarAccount(
-        allocator,
-        &Rent.DEFAULT,
-        EpochSchedule,
-        EpochSchedule.DEFAULT,
-        null,
-    );
-    defer allocator.free(account.data);
-    try accounts_db.putAccount(slot, EpochSchedule.ID, account);
-
-    // NOTE: Putting accounts on the same slot is broken, so increment slot by 1 and add it to ancestors.
-    slot = slot + 1;
-    const update_sysvar_deps = UpdateSysvarAccountDeps{
-        .accounts_db = &accounts_db,
-        .capitalization = &capitalization,
-        .ancestors = &ancestors,
-        .rent = &rent,
-        .slot = slot,
-    };
-    try ancestors.ancestors.put(allocator, slot, {});
-
-    _, const old_account =
-        (try getSysvarAndAccount(allocator, &accounts_db, &ancestors, EpochSchedule)).?;
-    defer allocator.free(old_account.data);
-
-    const new_epoch_schedule = EpochSchedule.initRandom(random);
-
-    try updateEpochSchedule(allocator, new_epoch_schedule, update_sysvar_deps);
-
-    const new_sysvar, const new_account =
-        (try getSysvarAndAccount(allocator, &accounts_db, &ancestors, EpochSchedule)).?;
-    defer allocator.free(new_account.data);
-
-    try std.testing.expect(std.meta.eql(new_epoch_schedule, new_sysvar));
-    try expectSysvarAccountChange(rent, old_account, new_account);
-}
-
-test "updateStakeHistory" {
-    // TODO
-}
-
-test "updateRecentBlockhashes" {
-    const loadTestAccountsDbEmpty = sig.accounts_db.db.loadTestAccountsDbEmpty;
-    const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
-    const random = prng.random();
-
-    // Create values for update sysvar deps
-    var tmp_dir = std.testing.tmpDir(.{});
-    defer tmp_dir.cleanup();
-    var accounts_db = try loadTestAccountsDbEmpty(allocator, false, .noop, tmp_dir.dir);
-    defer accounts_db.deinit();
-    var capitalization = Atomic(u64).init(0);
-    var slot: Slot = 10;
-    const rent = Rent.DEFAULT;
-    var ancestors = Ancestors{};
-    defer ancestors.deinit(allocator);
-    try ancestors.ancestors.put(allocator, slot, {});
-
-    // Insert default
-    const recent_blockhashes = try RecentBlockhashes.default(allocator);
-    defer recent_blockhashes.deinit(allocator);
-    const account = try createSysvarAccount(
-        allocator,
-        &Rent.DEFAULT,
-        RecentBlockhashes,
-        recent_blockhashes,
-        null,
-    );
-    defer allocator.free(account.data);
-    try accounts_db.putAccount(slot, RecentBlockhashes.ID, account);
-
-    // NOTE: Putting accounts on the same slot is broken, so increment slot by 1 and add it to ancestors.
-    slot = slot + 1;
-    const update_sysvar_deps = UpdateSysvarAccountDeps{
-        .accounts_db = &accounts_db,
-        .capitalization = &capitalization,
-        .ancestors = &ancestors,
-        .rent = &rent,
-        .slot = slot,
-    };
-    try ancestors.ancestors.put(allocator, slot, {});
-
-    const old_sysvar, const old_account =
-        (try getSysvarAndAccount(allocator, &accounts_db, &ancestors, RecentBlockhashes)).?;
-    defer {
-        old_sysvar.deinit(allocator);
-        allocator.free(old_account.data);
-    }
-
-    var blockhash_queue = BlockhashQueue.DEFAULT;
-    defer blockhash_queue.deinit(allocator);
-
-    const new_hash = Hash.initRandom(random);
-    const new_lamports_per_signature = 1000;
-    try blockhash_queue.insertHash(allocator, new_hash, new_lamports_per_signature);
-
-    try updateRecentBlockhashes(allocator, &blockhash_queue, update_sysvar_deps);
-
-    const new_sysvar, const new_account =
-        (try getSysvarAndAccount(allocator, &accounts_db, &ancestors, RecentBlockhashes)).?;
-    defer {
-        new_sysvar.deinit(allocator);
-        allocator.free(new_account.data);
-    }
-
-    try std.testing.expectEqual(1, new_sysvar.entries.items.len);
-    const entry = new_sysvar.entries.items[0];
-    try std.testing.expectEqual(new_hash, entry.blockhash);
-    try std.testing.expectEqual(new_lamports_per_signature, entry.lamports_per_signature);
-    try expectSysvarAccountChange(rent, old_account, new_account);
-}
-
 fn expectSysvarAccountChange(rent: Rent, old: AccountSharedData, new: AccountSharedData) !void {
     if (!builtin.is_test) @compileError("only for testing");
     const minimum_for_rent = rent.minimumBalance(new.data.len);
@@ -1147,188 +768,195 @@ fn getSysvarAndAccount(
     } };
 }
 
-// TODO: This test should be equivalent to running each of the update tests individually. However,
-// it hits an error when trying to load updated sysvar accounts. Commenting out all but one sysvar
-// test block results in the test passing, but running a number of them seems to cause an issue. I
-// think something is going wrong in accounts db.
+test "update all sysvars" {
+    const loadTestAccountsDbEmpty = sig.accounts_db.db.loadTestAccountsDbEmpty;
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+    const random = prng.random();
 
-// test "update all" {
-//     const loadTestAccountsDbEmpty = sig.accounts_db.db.loadTestAccountsDbEmpty;
-//     const allocator = std.testing.allocator;
-//     var prng = std.Random.DefaultPrng.init(0);
-//     const random = prng.random();
+    // Create values for update sysvar deps
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    var accounts_db = try loadTestAccountsDbEmpty(allocator, false, .noop, tmp_dir.dir);
+    defer accounts_db.deinit();
+    var capitalization = Atomic(u64).init(0);
+    var slot: Slot = 10;
+    const rent = Rent.DEFAULT;
+    var ancestors = Ancestors{};
+    defer ancestors.deinit(allocator);
+    try ancestors.ancestors.put(allocator, slot, {});
 
-//     // Create values for update sysvar deps
-//     var tmp_dir = std.testing.tmpDir(.{});
-//     defer tmp_dir.cleanup();
-//     var accounts_db = try loadTestAccountsDbEmpty(allocator, false, .noop, tmp_dir.dir);
-//     defer accounts_db.deinit();
-//     var capitalization = Atomic(u64).init(0);
-//     var slot: Slot = 10;
-//     const rent = Rent.DEFAULT;
-//     var ancestors = Ancestors{};
-//     defer ancestors.deinit(allocator);
-//     try ancestors.ancestors.put(allocator, slot, {});
+    // Create and insert sysvar defaults
+    const initial_sysvars = try initSysvarCacheWithDefaultValues(allocator);
+    defer initial_sysvars.deinit(allocator);
+    try insertSysvarCacheAccounts(
+        allocator,
+        &accounts_db,
+        &initial_sysvars,
+        slot,
+        false,
+    );
 
-//     // Create and insert sysvar defaults
-//     const initial_sysvars = try initSysvarCacheWithDefaultValues(allocator);
-//     defer initial_sysvars.deinit(allocator);
-//     try insertSysvarCacheAccounts(
-//         allocator,
-//         &accounts_db,
-//         &initial_sysvars,
-//         slot,
-//         false,
-//     );
+    // Insert slot history default manually since it is not in the sysvar cache
+    const slot_history = try SlotHistory.init(allocator);
+    defer slot_history.deinit(allocator);
+    const account = try createSysvarAccount(
+        allocator,
+        &Rent.DEFAULT,
+        SlotHistory,
+        slot_history,
+        null,
+    );
+    defer allocator.free(account.data);
+    try accounts_db.putAccount(slot, SlotHistory.ID, account);
 
-//     // Insert slot history default manually since it is not in the sysvar cache
-//     const slot_history = try SlotHistory.default(allocator);
-//     defer slot_history.deinit(allocator);
-//     const account = try createSysvarAccount(
-//         allocator,
-//         &Rent.DEFAULT,
-//         SlotHistory,
-//         slot_history,
-//         null,
-//     );
-//     defer allocator.free(account.data);
-//     try accounts_db.putAccount(slot, SlotHistory.ID, account);
+    // NOTE: Putting accounts on the same slot is broken, so increment slot by 1 and add it to ancestors.
+    slot = slot + 1;
+    const update_sysvar_deps = UpdateSysvarAccountDeps{
+        .accounts_db = &accounts_db,
+        .capitalization = &capitalization,
+        .ancestors = &ancestors,
+        .rent = &rent,
+        .slot = slot,
+    };
+    try ancestors.ancestors.put(allocator, slot, {});
 
-//     // NOTE: Putting accounts on the same slot is broken, so increment slot by 1 and add it to ancestors.
-//     slot = slot + 1;
-//     const update_sysvar_deps = UpdateSysvarAccountDeps{
-//         .accounts_db = &accounts_db,
-//         .capitalization = &capitalization,
-//         .ancestors = &ancestors,
-//         .rent = &rent,
-//         .slot = slot,
-//     };
-//     try ancestors.ancestors.put(allocator, slot, {});
+    // TODO: updateClock
 
-//     // TODO: updateClock
+    { // updateLastRestartSlot
+        var feature_set = FeatureSet.EMPTY;
+        defer feature_set.deinit(allocator);
+        try feature_set.active.put(allocator, features.LAST_RESTART_SLOT_SYSVAR, 0);
 
-//     { // updateLastRestartSlot
-//         var feature_set = FeatureSet.EMPTY;
-//         defer feature_set.deinit(allocator);
-//         try feature_set.active.put(allocator, features.LAST_RESTART_SLOT_SYSVAR, 0);
+        const new_restart_slot = slot - 5;
 
-//         const new_restart_slot = slot - 5;
+        var hard_forks = HardForks{};
+        defer hard_forks.deinit(allocator);
+        try hard_forks.register(allocator, new_restart_slot);
 
-//         var hard_forks = HardForks{};
-//         defer hard_forks.deinit(allocator);
-//         try hard_forks.register(allocator, new_restart_slot);
+        _, const old_account =
+            (try getSysvarAndAccount(allocator, &accounts_db, &ancestors, LastRestartSlot)).?;
+        defer allocator.free(old_account.data);
 
-//         _, const old_account = (try getSysvarAndAccount(allocator, &accounts_db, &ancestors, LastRestartSlot)).?;
-//         defer allocator.free(old_account.data);
+        try updateLastRestartSlot(allocator, &feature_set, &hard_forks, update_sysvar_deps);
 
-//         try updateLastRestartSlot(allocator, &feature_set, &hard_forks, update_sysvar_deps);
+        const new_sysvar, const new_account =
+            (try getSysvarAndAccount(allocator, &accounts_db, &ancestors, LastRestartSlot)).?;
+        defer allocator.free(new_account.data);
 
-//         const new_sysvar, const new_account = (try getSysvarAndAccount(allocator, &accounts_db, &ancestors, LastRestartSlot)).?;
-//         defer allocator.free(new_account.data);
+        try std.testing.expectEqual(new_restart_slot, new_sysvar.last_restart_slot);
+        try expectSysvarAccountChange(rent, old_account, new_account);
+    }
 
-//         try std.testing.expectEqual(new_restart_slot, new_sysvar.last_restart_slot);
-//         try expectSysvarAccountChange(rent, old_account, new_account);
-//     }
+    { // updateSlotHistory
+        const old_sysvar, const old_account =
+            (try getSysvarAndAccount(allocator, &accounts_db, &ancestors, SlotHistory)).?;
+        defer {
+            old_sysvar.deinit(allocator);
+            allocator.free(old_account.data);
+        }
 
-//     { // updateSlotHistory
-//         const old_sysvar, const old_account = (try getSysvarAndAccount(allocator, &accounts_db, &ancestors, SlotHistory)).?;
-//         defer {
-//             old_sysvar.deinit(allocator);
-//             allocator.free(old_account.data);
-//         }
+        try updateSlotHistory(allocator, update_sysvar_deps);
 
-//         try updateSlotHistory(allocator, update_sysvar_deps);
+        const new_sysvar, const new_account =
+            (try getSysvarAndAccount(allocator, &accounts_db, &ancestors, SlotHistory)).?;
+        defer {
+            new_sysvar.deinit(allocator);
+            allocator.free(new_account.data);
+        }
 
-//         const new_sysvar, const new_account = (try getSysvarAndAccount(allocator, &accounts_db, &ancestors, SlotHistory)).?;
-//         defer {
-//             new_sysvar.deinit(allocator);
-//             allocator.free(new_account.data);
-//         }
+        try std.testing.expectEqual(slot, new_sysvar.newest());
+        try expectSysvarAccountChange(rent, old_account, new_account);
+    }
 
-//         try std.testing.expectEqual(slot, new_sysvar.newest());
-//         try expectSysvarAccountChange(rent, old_account, new_account);
-//     }
+    { // updateSlotHashes
+        const parent_slot = slot - 1;
+        const parent_hash = Hash.initRandom(random);
 
-// { // updateSlotHashes
-//     const parent_slot = slot - 1;
-//     const parent_hash = Hash.initRandom(random);
+        const old_sysvar, const old_account =
+            (try getSysvarAndAccount(allocator, &accounts_db, &ancestors, SlotHashes)).?;
+        defer {
+            old_sysvar.deinit(allocator);
+            allocator.free(old_account.data);
+        }
 
-//     const old_sysvar, const old_account = (try getSysvarAndAccount(allocator, &accounts_db, &ancestors, SlotHashes)).?;
-//     defer {
-//         old_sysvar.deinit(allocator);
-//         allocator.free(old_account.data);
-//     }
+        try updateSlotHashes(allocator, parent_slot, parent_hash, update_sysvar_deps);
 
-//     try updateSlotHashes(allocator, parent_slot, parent_hash, update_sysvar_deps);
+        const new_sysvar, const new_account =
+            (try getSysvarAndAccount(allocator, &accounts_db, &ancestors, SlotHashes)).?;
+        defer {
+            new_sysvar.deinit(allocator);
+            allocator.free(new_account.data);
+        }
 
-//     const new_sysvar, const new_account = (try getSysvarAndAccount(allocator, &accounts_db, &ancestors, SlotHashes)).?;
-//     defer {
-//         new_sysvar.deinit(allocator);
-//         allocator.free(new_account.data);
-//     }
+        try std.testing.expectEqual(parent_hash, new_sysvar.get(parent_slot));
+        try expectSysvarAccountChange(rent, old_account, new_account);
+    }
 
-//     try std.testing.expectEqual(parent_hash, new_sysvar.get(parent_slot));
-//     try expectSysvarAccountChange(rent, old_account, new_account);
-// }
+    { // updateRent
+        _, const old_account =
+            (try getSysvarAndAccount(allocator, &accounts_db, &ancestors, Rent)).?;
+        defer allocator.free(old_account.data);
 
-//     { // updateRent
-//         _, const old_account = (try getSysvarAndAccount(allocator, &accounts_db, &ancestors, Rent)).?;
-//         defer allocator.free(old_account.data);
+        const new_rent = Rent.initRandom(random);
 
-//         const new_rent = Rent.initRandom(random);
+        try updateRent(allocator, new_rent, update_sysvar_deps);
 
-//         try updateRent(allocator, new_rent, update_sysvar_deps);
+        const new_sysvar, const new_account =
+            (try getSysvarAndAccount(allocator, &accounts_db, &ancestors, Rent)).?;
+        defer allocator.free(new_account.data);
 
-//         const new_sysvar, const new_account = (try getSysvarAndAccount(allocator, &accounts_db, &ancestors, Rent)).?;
-//         defer allocator.free(new_account.data);
+        try std.testing.expect(std.meta.eql(new_rent, new_sysvar));
+        try expectSysvarAccountChange(rent, old_account, new_account);
+    }
 
-//         try std.testing.expect(std.meta.eql(new_rent, new_sysvar));
-//         try expectSysvarAccountChange(rent, old_account, new_account);
-//     }
+    { // updateEpochSchedule
+        _, const old_account =
+            (try getSysvarAndAccount(allocator, &accounts_db, &ancestors, EpochSchedule)).?;
+        defer allocator.free(old_account.data);
 
-//     { // updateEpochSchedule
-//         _, const old_account = (try getSysvarAndAccount(allocator, &accounts_db, &ancestors, EpochSchedule)).?;
-//         defer allocator.free(old_account.data);
+        const new_epoch_schedule = EpochSchedule.initRandom(random);
 
-//         const new_epoch_schedule = EpochSchedule.initRandom(random);
+        try updateEpochSchedule(allocator, new_epoch_schedule, update_sysvar_deps);
 
-//         try updateEpochSchedule(allocator, new_epoch_schedule, update_sysvar_deps);
+        const new_sysvar, const new_account =
+            (try getSysvarAndAccount(allocator, &accounts_db, &ancestors, EpochSchedule)).?;
+        defer allocator.free(new_account.data);
 
-//         const new_sysvar, const new_account = (try getSysvarAndAccount(allocator, &accounts_db, &ancestors, EpochSchedule)).?;
-//         defer allocator.free(new_account.data);
+        try std.testing.expect(std.meta.eql(new_epoch_schedule, new_sysvar));
+        try expectSysvarAccountChange(rent, old_account, new_account);
+    }
 
-//         try std.testing.expect(std.meta.eql(new_epoch_schedule, new_sysvar));
-//         try expectSysvarAccountChange(rent, old_account, new_account);
-//     }
+    // TODO: updateStakeHistory
 
-//     // TODO: updateStakeHistory
+    { // updateRecentBlockhashes
+        const old_sysvar, const old_account =
+            (try getSysvarAndAccount(allocator, &accounts_db, &ancestors, RecentBlockhashes)).?;
+        defer {
+            old_sysvar.deinit(allocator);
+            allocator.free(old_account.data);
+        }
 
-//     { // updateRecentBlockhashes
-//         const old_sysvar, const old_account = (try getSysvarAndAccount(allocator, &accounts_db, &ancestors, RecentBlockhashes)).?;
-//         defer {
-//             old_sysvar.deinit(allocator);
-//             allocator.free(old_account.data);
-//         }
+        var blockhash_queue = BlockhashQueue.DEFAULT;
+        defer blockhash_queue.deinit(allocator);
 
-//         var blockhash_queue = BlockhashQueue.DEFAULT;
-//         defer blockhash_queue.deinit(allocator);
+        const new_hash = Hash.initRandom(random);
+        const new_lamports_per_signature = 1000;
+        try blockhash_queue.insertHash(allocator, new_hash, new_lamports_per_signature);
 
-//         const new_hash = Hash.initRandom(random);
-//         const new_lamports_per_signature = 1000;
-//         try blockhash_queue.insertHash(allocator, new_hash, new_lamports_per_signature);
+        try updateRecentBlockhashes(allocator, &blockhash_queue, update_sysvar_deps);
 
-//         try updateRecentBlockhashes(allocator, &blockhash_queue, update_sysvar_deps);
+        const new_sysvar, const new_account =
+            (try getSysvarAndAccount(allocator, &accounts_db, &ancestors, RecentBlockhashes)).?;
+        defer {
+            new_sysvar.deinit(allocator);
+            allocator.free(new_account.data);
+        }
 
-//         const new_sysvar, const new_account = (try getSysvarAndAccount(allocator, &accounts_db, &ancestors, RecentBlockhashes)).?;
-//         defer {
-//             new_sysvar.deinit(allocator);
-//             allocator.free(new_account.data);
-//         }
-
-//         try std.testing.expectEqual(1, new_sysvar.entries.items.len);
-//         const entry = new_sysvar.entries.items[0];
-//         try std.testing.expectEqual(new_hash, entry.blockhash);
-//         try std.testing.expectEqual(new_lamports_per_signature, entry.lamports_per_signature);
-//         try expectSysvarAccountChange(rent, old_account, new_account);
-//     }
-// }
+        try std.testing.expectEqual(1, new_sysvar.entries.len);
+        const entry = new_sysvar.entries.buffer[0];
+        try std.testing.expectEqual(new_hash, entry.blockhash);
+        try std.testing.expectEqual(new_lamports_per_signature, entry.lamports_per_signature);
+        try expectSysvarAccountChange(rent, old_account, new_account);
+    }
+}

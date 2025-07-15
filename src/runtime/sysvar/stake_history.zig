@@ -11,11 +11,7 @@ const Pubkey = sig.core.Pubkey;
 
 /// [agave] https://github.com/anza-xyz/agave/blob/8db563d3bba4d03edf0eb2737fba87f394c32b64/sdk/sysvar/src/stake_history.rs#L67
 pub const StakeHistory = struct {
-    entries: std.ArrayListUnmanaged(Entry),
-
-    pub const @"!bincode-config" = bincode.FieldConfig(StakeHistory){
-        .deserializer = deserialize,
-    };
+    entries: *std.BoundedArray(Entry, MAX_ENTRIES),
 
     pub const Entry = struct {
         epoch: Epoch,
@@ -46,56 +42,57 @@ pub const StakeHistory = struct {
 
     pub const STORAGE_SIZE: u64 = 16_392;
 
-    pub fn default(allocator: Allocator) Allocator.Error!StakeHistory {
-        return .{ .entries = try .initCapacity(allocator, MAX_ENTRIES) };
+    pub fn init(allocator: Allocator) Allocator.Error!StakeHistory {
+        const entries = try allocator.create(std.BoundedArray(Entry, MAX_ENTRIES));
+        entries.* = std.BoundedArray(Entry, MAX_ENTRIES){};
+        return .{ .entries = entries };
     }
 
     pub fn deinit(self: StakeHistory, allocator: Allocator) void {
-        allocator.free(self.entries.allocatedSlice());
+        allocator.destroy(self.entries);
+    }
+
+    pub fn clone(self: StakeHistory, allocator: Allocator) Allocator.Error!StakeHistory {
+        const cloned = try StakeHistory.init(allocator);
+        cloned.entries.* = self.entries.*;
+        return cloned;
     }
 
     pub fn isEmpty(self: StakeHistory) bool {
-        return self.entries.items.len == 0;
+        return self.entries.len == 0;
     }
 
     pub fn getEntry(self: StakeHistory, epoch: Epoch) ?Entry {
         return if (std.sort.binarySearch(
             Entry,
-            self.entries.items,
+            self.entries.constSlice(),
             epoch,
             Entry.searchCmp,
-        )) |index| self.entries.items[index] else null;
+        )) |index| self.entries.buffer[index] else null;
     }
 
     pub fn initWithEntries(
         allocator: Allocator,
         entries: []const Entry,
     ) Allocator.Error!StakeHistory {
-        if (!builtin.is_test) @compileError("only available in test mode");
         std.debug.assert(entries.len <= MAX_ENTRIES);
-        var self = try StakeHistory.default(allocator);
+        var self = try StakeHistory.init(allocator);
         self.entries.appendSliceAssumeCapacity(entries);
-        std.sort.heap(Entry, self.entries.items, {}, Entry.sortCmp);
+        std.sort.heap(Entry, self.entries.slice(), {}, Entry.sortCmp);
         return self;
     }
 
     pub fn initRandom(allocator: Allocator, random: std.Random) Allocator.Error!StakeHistory {
         if (!builtin.is_test) @compileError("only available in test mode");
-        var self = try StakeHistory.default(allocator);
+        var self = try StakeHistory.init(allocator);
         for (0..random.intRangeAtMost(Epoch, 1, 1_000)) |epoch|
             self.entries.appendAssumeCapacity(.{ .epoch = epoch, .stake = .{
                 .effective = random.int(u64),
                 .activating = random.int(u64),
                 .deactivating = random.int(u64),
             } });
-        std.sort.heap(Entry, self.entries.items, {}, Entry.sortCmp);
+        std.sort.heap(Entry, self.entries.slice(), {}, Entry.sortCmp);
         return self;
-    }
-
-    pub fn deserialize(allocator: Allocator, reader: anytype, _: bincode.Params) !StakeHistory {
-        var entries = try bincode.read(allocator, std.ArrayListUnmanaged(Entry), reader, .{});
-        try entries.ensureTotalCapacityPrecise(allocator, MAX_ENTRIES);
-        return .{ .entries = entries };
     }
 };
 
@@ -114,16 +111,16 @@ test "serialize and deserialize" {
         const deserialized = try bincode.readFromSlice(allocator, StakeHistory, serialized, .{});
         defer deserialized.deinit(allocator);
 
-        try std.testing.expectEqual(StakeHistory.MAX_ENTRIES, deserialized.entries.capacity);
+        try std.testing.expectEqual(StakeHistory.MAX_ENTRIES, deserialized.entries.capacity());
         try std.testing.expectEqualSlices(
             StakeHistory.Entry,
-            stake_history.entries.items,
-            deserialized.entries.items,
+            stake_history.entries.constSlice(),
+            deserialized.entries.constSlice(),
         );
     }
 
     {
-        var stake_history = StakeHistory{ .entries = try .initCapacity(allocator, 1) };
+        var stake_history = try StakeHistory.init(allocator);
         defer stake_history.deinit(allocator);
         stake_history.entries.appendAssumeCapacity(.{
             .epoch = random.int(Epoch),
@@ -140,11 +137,11 @@ test "serialize and deserialize" {
         const deserialized = try bincode.readFromSlice(allocator, StakeHistory, serialized, .{});
         defer deserialized.deinit(allocator);
 
-        try std.testing.expectEqual(StakeHistory.MAX_ENTRIES, deserialized.entries.capacity);
+        try std.testing.expectEqual(StakeHistory.MAX_ENTRIES, deserialized.entries.capacity());
         try std.testing.expectEqualSlices(
             StakeHistory.Entry,
-            stake_history.entries.items,
-            deserialized.entries.items,
+            stake_history.entries.constSlice(),
+            deserialized.entries.constSlice(),
         );
     }
 }
