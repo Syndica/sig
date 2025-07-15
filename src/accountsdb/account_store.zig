@@ -90,15 +90,10 @@ pub const AccountStore = union(enum) {
         };
     }
 
-    pub fn put(
-        self: *ThreadSafeAccountMap,
-        slot: Slot,
-        address: Pubkey,
-        account: sig.runtime.AccountSharedData,
-    ) !void {
+    pub fn put(self: AccountStore, slot: Slot, address: Pubkey, account: AccountSharedData) !void {
         return switch (self) {
             .accounts_db => unreachable, // TODO: PR #796
-            .thread_safe_map => |map| try map.put(address, slot, account),
+            .thread_safe_map => |map| try map.put(slot, address, account),
             .noop => {},
         };
     }
