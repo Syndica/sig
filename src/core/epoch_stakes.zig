@@ -121,7 +121,9 @@ pub fn EpochStakesGeneric(comptime stakes_type: StakesType) type {
             };
         }
 
-        pub fn initEmpty(allocator: std.mem.Allocator) !EpochStakesGeneric(stakes_type) {
+        pub fn initEmptyWithGenesisStakeHistoryEntry(
+            allocator: std.mem.Allocator,
+        ) !EpochStakesGeneric(stakes_type) {
             return .{
                 .total_stake = 0,
                 .stakes = .{
