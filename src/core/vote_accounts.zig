@@ -18,6 +18,8 @@ const Clock = sig.runtime.sysvar.Clock;
 
 const failing_allocator = sig.utils.allocators.failing.allocator(.{});
 
+const deinitMapAndValues = sig.utils.collections.deinitMapAndValues;
+
 pub const StakeAndVoteAccountsMap = std.AutoArrayHashMapUnmanaged(Pubkey, StakeAndVoteAccount);
 pub const StakedNodesMap = std.AutoArrayHashMapUnmanaged(Pubkey, u64);
 
@@ -82,11 +84,9 @@ pub const VoteAccounts = struct {
     }
 
     pub fn deinit(self: *const VoteAccounts, allocator: Allocator) void {
-        for (self.vote_accounts.values()) |v| v.deinit(allocator);
-        var vote_accs = self.vote_accounts;
-        vote_accs.deinit(allocator);
-        var stake_accs = self.staked_nodes;
-        stake_accs.deinit(allocator);
+        deinitMapAndValues(allocator, self.vote_accounts);
+        var staked_nodes = self.staked_nodes;
+        staked_nodes.deinit(allocator);
     }
 
     pub fn getAccount(self: *const VoteAccounts, pubkey: Pubkey) ?VoteAccount {
@@ -97,13 +97,6 @@ pub const VoteAccounts = struct {
     pub fn getDelegatedStake(self: *const VoteAccounts, pubkey: Pubkey) u64 {
         const entry = self.vote_accounts.getPtr(pubkey) orelse return 0;
         return entry.stake;
-    }
-
-    /// NOTE: If we make `staked_nodes` nullable, this function should be changed to compute
-    /// the staked nodes if `staked_nodes` is null.
-    pub fn getStakedNodes(self: *const VoteAccounts, allocator: Allocator) !*const StakedNodesMap {
-        _ = allocator;
-        return &self.staked_nodes;
     }
 
     /// Inserts a new vote account into the `vote_accounts` map, or updates an existing one.
@@ -118,7 +111,7 @@ pub const VoteAccounts = struct {
         account: VoteAccount,
         // TODO: pass deps to compute stake
         caclulated_stake: u64,
-    ) Allocator.Error!?StakeAndVoteAccount {
+    ) !?StakeAndVoteAccount {
         errdefer account.deinit(allocator);
 
         const entry = try self.vote_accounts.getOrPut(allocator, pubkey);
@@ -127,7 +120,7 @@ pub const VoteAccounts = struct {
             const old_node_pubkey = entry.value_ptr.account.getNodePubkey();
             const new_node_pubkey = account.getNodePubkey();
             if (!new_node_pubkey.equals(&old_node_pubkey)) {
-                self.subNodeStake(old_node_pubkey, old_stake);
+                try self.subNodeStake(old_node_pubkey, old_stake);
                 try self.addNodeStake(allocator, new_node_pubkey, old_stake);
             }
             const old_entry_value = entry.value_ptr.*;
@@ -142,11 +135,11 @@ pub const VoteAccounts = struct {
 
     /// Removes the vote account identified by `pubkey` from the `vote_accounts` map, and updates
     /// the `staked_nodes` map by subtracting the stake of the removed vote account.
-    pub fn remove(self: *VoteAccounts, allocator: std.mem.Allocator, pubkey: Pubkey) void {
+    pub fn remove(self: *VoteAccounts, allocator: std.mem.Allocator, pubkey: Pubkey) !void {
         const entry: StakeAndVoteAccount = self.vote_accounts.get(pubkey) orelse return;
         defer entry.deinit(allocator);
         _ = self.vote_accounts.swapRemove(pubkey);
-        self.subNodeStake(entry.account.getNodePubkey(), entry.stake);
+        try self.subNodeStake(entry.account.getNodePubkey(), entry.stake);
     }
 
     /// Adds `delta` to the stake of the vote account identified by `pubkey`, and updates the
@@ -164,11 +157,11 @@ pub const VoteAccounts = struct {
 
     /// Subtracts `delta` from the stake of the vote account identified by `pubkey`, and updates the
     /// `staked_nodes` map. Panics if `delta` is greater than the current stake.
-    pub fn subStake(self: *VoteAccounts, pubkey: Pubkey, delta: u64) void {
+    pub fn subStake(self: *VoteAccounts, pubkey: Pubkey, delta: u64) !void {
         const entry = self.vote_accounts.getPtr(pubkey) orelse return;
-        if (entry.stake < delta) @panic("subtraction value exceeds vote account's stake");
+        if (entry.stake < delta) return error.SubStakeOverflow;
         entry.stake -= delta;
-        self.subNodeStake(entry.account.state.node_pubkey, delta);
+        try self.subNodeStake(entry.account.state.node_pubkey, delta);
     }
 
     /// Adds `stake` to an entry in `staked_nodes`. If the entry does not exist, one will be created.
@@ -189,14 +182,14 @@ pub const VoteAccounts = struct {
     }
 
     /// Subtracts `stake` from an entry in `staked_nodes`. If the entry does not exist, it will panic.
-    fn subNodeStake(self: *VoteAccounts, pubkey: Pubkey, stake: u64) void {
+    fn subNodeStake(self: *VoteAccounts, pubkey: Pubkey, stake: u64) !void {
         if (stake == 0) return;
 
         const current_stake = self.staked_nodes.getPtr(pubkey) orelse
-            @panic("pubkey not present in staked_nodes");
+            return error.NodeNotFound;
 
         switch (std.math.order(current_stake.*, stake)) {
-            .lt => @panic("subtraction value exceeds node's stake"),
+            .lt => return error.SubStakeOverflow,
             .eq => _ = self.staked_nodes.swapRemove(pubkey),
             .gt => current_stake.* -= stake,
         }
@@ -694,7 +687,7 @@ test "staked nodes" {
     for (0..256) |i| {
         const index = random.intRangeLessThan(u64, 0, accounts.items.len);
         const pubkey, _ = accounts.swapRemove(index);
-        vote_accounts.remove(allocator, pubkey);
+        try vote_accounts.remove(allocator, pubkey);
         if ((i + 1) % 32 == 0) {
             var expected_staked_nodes = try calculateStakedNodes(allocator, accounts.items);
             defer expected_staked_nodes.deinit(allocator);
@@ -713,7 +706,7 @@ test "staked nodes" {
         const old_stake = account_and_stake.stake;
         const new_stake = random.intRangeAtMost(u64, 0, 1_000_000);
         if (new_stake < old_stake) {
-            vote_accounts.subStake(pubkey, old_stake - new_stake);
+            try vote_accounts.subStake(pubkey, old_stake - new_stake);
         } else {
             try vote_accounts.addStake(allocator, pubkey, new_stake - old_stake);
         }
@@ -733,7 +726,7 @@ test "staked nodes" {
     while (accounts.items.len > 0) {
         const index = random.intRangeLessThan(u64, 0, accounts.items.len);
         const pubkey, _ = accounts.swapRemove(index);
-        vote_accounts.remove(allocator, pubkey);
+        try vote_accounts.remove(allocator, pubkey);
         if (accounts.items.len % 32 == 0) {
             var expected_staked_nodes = try calculateStakedNodes(allocator, accounts.items);
             defer expected_staked_nodes.deinit(allocator);
