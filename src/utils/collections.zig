@@ -342,6 +342,10 @@ pub fn SortedSetUnmanagedCustom(comptime T: type, comptime config: SortedMapConf
             self.map.deinit(allocator);
         }
 
+        pub fn clearRetainingCapacity(self: *SortedSetSelf) void {
+            return self.map.inner.clearRetainingCapacity();
+        }
+
         pub fn clone(
             self: SortedSetSelf,
             allocator: std.mem.Allocator,
@@ -363,6 +367,12 @@ pub fn SortedSetUnmanagedCustom(comptime T: type, comptime config: SortedMapConf
 
         pub fn orderedRemove(self: *SortedSetSelf, item: T) bool {
             return self.map.orderedRemove(item);
+        }
+
+        pub fn pop(self: *SortedSetSelf) ?T {
+            self.map.sort();
+            const kv = self.map.inner.pop() orelse return null;
+            return kv.key;
         }
 
         pub fn contains(self: SortedSetSelf, item: T) bool {
@@ -612,6 +622,10 @@ pub fn SortedMapUnmanagedCustom(
 
         pub fn get(self: SortedMapSelf, key: K) ?V {
             return self.inner.get(key);
+        }
+
+        pub fn getPtr(self: SortedMapSelf, key: K) ?*V {
+            return self.inner.getPtr(key);
         }
 
         pub fn getEntry(self: SortedMapSelf, key: K) ?Inner.Entry {

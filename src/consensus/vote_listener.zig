@@ -344,7 +344,7 @@ fn verifyVoteTransaction(
     return .verified;
 }
 
-pub const ThresholdConfirmedSlot = struct { Slot, Hash };
+pub const ThresholdConfirmedSlot = sig.core.hash.SlotAndHash;
 pub const GossipVerifiedVoteHash = struct { Pubkey, Slot, Hash };
 const VerifiedVote = struct { Pubkey, []const Slot };
 
@@ -496,8 +496,6 @@ fn processVotesOnce(
     return .ok;
 }
 
-/// TODO: remove this
-const TodoErrorSet = error{TODO};
 const ListenAndConfirmVotesError = error{
     RecvTimeoutDisconnected,
     ReadyTimeout,
@@ -964,7 +962,7 @@ fn trackNewVotesAndNotifyConfirmations(
 
             if (reached_threshold_results.isSet(0)) {
                 if (senders.duplicate_confirmed_slot) |sender| {
-                    sender.send(.{ slot, hash }) catch {
+                    sender.send(.{ .slot = slot, .hash = hash }) catch {
                         // WARN: the original agave code does literally just ignore this error, is that fine?
                         // TODO: evaluate this
                     };
@@ -972,7 +970,10 @@ fn trackNewVotesAndNotifyConfirmations(
             }
 
             if (reached_threshold_results.isSet(1)) {
-                try new_optimistic_confirmed_slots.append(allocator, .{ slot, hash });
+                try new_optimistic_confirmed_slots.append(allocator, .{
+                    .slot = slot,
+                    .hash = hash,
+                });
                 // Notify subscribers about new optimistic confirmation
                 if (senders.bank_notification) |sender| {
                     sender.send(.{ .optimistically_confirmed = slot }) catch |err| {
