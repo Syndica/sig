@@ -30,7 +30,7 @@ pub const RecentBlockhashes = struct {
 
     pub const MAX_ENTRIES: u64 = 150;
 
-    pub const SIZE_OF: u64 = 6_008;
+    pub const STORAGE_SIZE: u64 = 6_008;
 
     pub fn default(allocator: Allocator) Allocator.Error!RecentBlockhashes {
         return .{ .entries = try .initCapacity(allocator, MAX_ENTRIES) };
@@ -90,9 +90,8 @@ pub const RecentBlockhashes = struct {
     ) Allocator.Error!RecentBlockhashes {
         if (!builtin.is_test) @compileError("only for tests");
         std.debug.assert(entries.len <= MAX_ENTRIES);
-        var self = try RecentBlockhashes.default(allocator);
-        for (entries) |entry| self.entries.appendAssumeCapacity(entry);
-        return self;
+        const dupe = try allocator.dupe(Entry, entries);
+        return .{ .entries = .fromOwnedSlice(dupe) };
     }
 
     pub fn initRandom(allocator: Allocator, random: std.Random) Allocator.Error!RecentBlockhashes {

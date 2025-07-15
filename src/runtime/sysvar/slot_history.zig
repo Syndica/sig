@@ -24,8 +24,10 @@ pub const SlotHistory = struct {
     pub const ID =
         Pubkey.parseBase58String("SysvarS1otHistory11111111111111111111111111") catch unreachable;
 
-    pub const SIZE_OF: u64 = 131_097;
+    pub const STORAGE_SIZE: u64 = 131_097;
 
+    /// Agave initialises new slot history with the first slot set.
+    /// This only impacts gensis when the slot history is not fully populated.
     pub fn default(allocator: Allocator) Allocator.Error!SlotHistory {
         var bits = try DynamicArrayBitSet(u64).initEmpty(allocator, MAX_ENTRIES);
         bits.set(0);
