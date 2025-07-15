@@ -28,7 +28,6 @@ const ProgressMap = sig.consensus.progress_map.ProgressMap;
 const ForkChoice = sig.consensus.fork_choice.ForkChoice;
 const LatestValidatorVotesForFrozenBanks =
     sig.consensus.latest_validator_votes.LatestValidatorVotes;
-const VoteTracker = sig.consensus.VoteTracker;
 const VersionedEpochStakes = sig.core.VersionedEpochStakes;
 const EpochSchedule = sig.core.EpochSchedule;
 
