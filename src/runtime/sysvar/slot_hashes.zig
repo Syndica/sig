@@ -36,7 +36,7 @@ pub const SlotHashes = struct {
 
     pub const MAX_ENTRIES: usize = 512;
 
-    pub const SIZE_OF: usize = 20_488;
+    pub const STORAGE_SIZE: usize = 20_488;
 
     pub fn default(allocator: Allocator) Allocator.Error!SlotHashes {
         return .{ .entries = try .initCapacity(allocator, MAX_ENTRIES) };
