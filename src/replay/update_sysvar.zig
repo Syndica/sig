@@ -362,13 +362,13 @@ fn getSysvarAndDataFromAccount(
     const account = maybe_account orelse return null;
     defer account.deinit(allocator);
 
-    const data = account.data.dupeAllocatedOwned(allocator) catch return null;
-    const sysvar = bincode.readFromSlice(allocator, Sysvar, data.owned_allocation, .{}) catch {
-        data.deinit(allocator);
+    const data = try account.data.readAllAllocate(allocator);
+    const sysvar = bincode.readFromSlice(allocator, Sysvar, data, .{}) catch {
+        allocator.free(data);
         return null;
     };
 
-    return .{ .sysvar = sysvar, .data = data.owned_allocation };
+    return .{ .sysvar = sysvar, .data = data };
 }
 
 fn getSysvarFromAccount(
@@ -1127,22 +1127,20 @@ fn getSysvarAndAccount(
     const account = maybe_account orelse return null;
     defer account.deinit(allocator);
 
-    const data = try account.data.dupeAllocatedOwned(allocator);
-    defer data.deinit(allocator);
-
+    const data = try account.data.readAllAllocate(allocator);
     const sysvar = bincode.readFromSlice(
         allocator,
         Sysvar,
-        data.owned_allocation,
+        data,
         .{},
     ) catch {
-        data.deinit(allocator);
+        allocator.free(data);
         return null;
     };
 
     return .{ sysvar, .{
         .lamports = account.lamports,
-        .data = try allocator.dupe(u8, data.owned_allocation),
+        .data = data,
         .owner = account.owner,
         .executable = account.executable,
         .rent_epoch = account.rent_epoch,
