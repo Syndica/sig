@@ -108,12 +108,13 @@ pub const EpochSchedule = extern struct {
 
     /// Gets the epoch for which the given slot should save information about stakers. In agave
     /// this occurs during `Bank::process_new_epoch` and `Bank::_new_from_parent`. If the leader
-    /// schedule slot offset is less than the number of slots per epoch, then for some slots the
-    /// leader schedule epoch will be the same as the epoch of the slot. With current
-    /// defaults this will return the epoch immediately after the epoch of the slot.
+    /// schedule slot offset equals the number of slots per epoch (current default) this function
+    /// will always return the epoch immediately after the epoch of the given slot.
     pub fn getLeaderScheduleEpoch(self: *const EpochSchedule, slot: Slot) u64 {
-        if (slot < self.first_normal_slot) {
-            return self.getEpochAndSlotIndex(slot)[0] +| 1;
+        if (self.leader_schedule_slot_offset == self.slots_per_epoch or
+            slot < self.first_normal_slot)
+        {
+            return self.getEpoch(slot) +| 1;
         } else {
             return self.first_normal_epoch +|
                 (((slot -| self.first_normal_slot) +|
@@ -202,5 +203,14 @@ test "epoch_schedule" {
         try std.testing.expect(last_leader_schedule != 0);
         try std.testing.expect(last_epoch != 0);
         try std.testing.expectEqual(slots_per_epoch, last_slots_in_epoch);
+    }
+}
+
+test "getLeaderScheduleEpoch: leader schedule slot offset equals slots per epoch" {
+    const epoch_schedule = try EpochSchedule.custom(32, 32, true);
+    for (0..epoch_schedule.slots_per_epoch * 10) |slot| {
+        const epoch = epoch_schedule.getEpoch(slot);
+        const leader_schedule_epoch = epoch_schedule.getLeaderScheduleEpoch(slot);
+        try std.testing.expectEqual(epoch + 1, leader_schedule_epoch);
     }
 }
