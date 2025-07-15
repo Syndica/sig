@@ -460,6 +460,8 @@ fn computeBankStats(
     var new_stats = std.ArrayListUnmanaged(Slot).empty;
     var frozen_slots = try slot_tracker.frozenSlots(allocator);
     for (frozen_slots.keys()) |slot| {
+        const epoch = epoch_schedule.getEpoch(slot);
+        const epoch_stake = epoch_stakes.get(epoch) orelse return error.MissingEpochStake;
         const fork_stat = progress.getForkStats(slot) orelse return error.MissingSlot;
         if (!fork_stat.is_computed) {
             // TODO Self::adopt_on_chain_tower_if_behind
@@ -467,7 +469,7 @@ fn computeBankStats(
                 allocator,
                 .noop,
                 my_vote_pubkey,
-                slot_tracker.voteAccounts(),
+                epoch_stake.current.stakes.vote_accounts,
                 ancestors,
                 progress,
                 latest_validator_votes,
