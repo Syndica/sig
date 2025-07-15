@@ -43,7 +43,11 @@ pub const SlotTracker = struct {
 
     pub fn deinit(self: SlotTracker, allocator: Allocator) void {
         var slots = self.slots;
-        for (slots.values()) |v| allocator.destroy(v);
+        for (slots.values()) |element| {
+            element.constants.deinit(allocator);
+            element.state.deinit(allocator);
+            allocator.destroy(element);
+        }
         slots.deinit(allocator);
     }
 
@@ -183,7 +187,7 @@ test "SlotTracker.prune removes all slots less than root" {
                 .fee_rate_governor = sig.core.genesis_config.FeeRateGovernor.DEFAULT,
                 .epoch_reward_status = .inactive,
                 .ancestors = .{},
-                .feature_set = .empty,
+                .feature_set = .EMPTY,
             },
             sig.core.SlotState.GENESIS,
         );

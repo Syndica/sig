@@ -11,6 +11,7 @@ const Slot = sig.core.Slot;
 const SlotLeaders = sig.core.leader_schedule.SlotLeaders;
 const SlotState = sig.core.bank.SlotState;
 
+const AccountStore = sig.accounts_db.AccountStore;
 const AccountsDB = sig.accounts_db.AccountsDB;
 const BlockstoreDB = sig.ledger.BlockstoreDB;
 const BlockstoreReader = sig.ledger.BlockstoreReader;
@@ -44,8 +45,8 @@ pub const ReplayDependencies = struct {
     blockstore_reader: *BlockstoreReader,
     /// Used to update the ledger with consensus results
     ledger_result_writer: *LedgerResultWriter,
-    /// Used to get the entries to validate them and execute the transactions
-    accounts_db: *AccountsDB,
+    account_store: AccountStore,
+    db_for_svm: *AccountsDB, // TODO: remove this requirement from svm
     slot_leaders: SlotLeaders,
     /// The slot to start replaying from.
     root_slot: Slot,
@@ -75,7 +76,8 @@ const ReplayState = struct {
     slot_tracker: *SlotTracker,
     epochs: *EpochTracker,
     hard_forks: sig.core.HardForks, // TODO consider lifetime
-    accounts_db: *AccountsDB,
+    account_store: AccountStore,
+    db_for_svm: *AccountsDB, // TODO: remove this requirement from svm
     progress_map: *ProgressMap,
     blockstore_db: BlockstoreDB,
     execution: ReplayExecutionState,
@@ -85,20 +87,15 @@ const ReplayState = struct {
         errdefer deps.allocator.destroy(thread_pool);
         thread_pool.* = ThreadPool.init(.{ .max_threads = NUM_THREADS });
 
-        // TODO: come up with a better approach for this
-        var root_slot_constants = deps.root_slot_constants;
-        root_slot_constants.feature_set = try getActiveFeatures(
-            deps.allocator,
-            deps.accounts_db,
-            deps.root_slot,
-            &root_slot_constants.ancestors,
-        );
+        var root_slot_state = deps.root_slot_state;
+        const last_blockhash = root_slot_state.blockhash_queue.readField("last_hash") orelse
+            return error.InvalidBlockhashQueue;
 
         const slot_tracker = try deps.allocator.create(SlotTracker);
         errdefer deps.allocator.destroy(slot_tracker);
         slot_tracker.* = .init(deps.root_slot);
         try slot_tracker
-            .put(deps.allocator, deps.root_slot, root_slot_constants, deps.root_slot_state);
+            .put(deps.allocator, deps.root_slot, deps.root_slot_constants, root_slot_state);
 
         const epoch_tracker = try deps.allocator.create(EpochTracker);
         errdefer deps.allocator.destroy(epoch_tracker);
@@ -113,7 +110,7 @@ const ReplayState = struct {
             slot_tracker.root,
             try .init(deps.allocator, .{
                 .now = .now(),
-                .last_entry = .ZEROES, // TODO this is wrong
+                .last_entry = last_blockhash,
                 .prev_leader_slot = null, // non-block-producing
                 .validator_stake_info = null, // non-voting
                 .num_blocks_on_fork = 0,
@@ -129,7 +126,8 @@ const ReplayState = struct {
             .slot_tracker = slot_tracker,
             .epochs = epoch_tracker,
             .hard_forks = deps.hard_forks,
-            .accounts_db = deps.accounts_db,
+            .account_store = deps.account_store,
+            .db_for_svm = deps.db_for_svm,
             .blockstore_db = deps.blockstore_reader.db,
             .progress_map = progress_map,
             .execution = try ReplayExecutionState.init(
@@ -137,7 +135,8 @@ const ReplayState = struct {
                 deps.logger,
                 deps.my_identity,
                 thread_pool,
-                deps.accounts_db,
+                deps.account_store,
+                deps.db_for_svm,
                 deps.blockstore_reader,
                 slot_tracker,
                 epoch_tracker,
@@ -172,7 +171,8 @@ fn advanceReplay(state: *ReplayState) !void {
     state.logger.info().log("advancing replay");
     try trackNewSlots(
         state.allocator,
-        state.accounts_db,
+        state.account_store,
+        state.db_for_svm,
         &state.blockstore_db,
         state.slot_tracker,
         state.epochs,
@@ -186,7 +186,7 @@ fn advanceReplay(state: *ReplayState) !void {
 
     _ = &replay.edge_cases.processEdgeCases;
 
-    processConsensus();
+    try replay.consensus.processConsensus(null);
 
     // TODO: dump_then_repair_correct_slots
 
@@ -200,7 +200,8 @@ fn advanceReplay(state: *ReplayState) !void {
 /// [generate_new_bank_forks](https://github.com/anza-xyz/agave/blob/146ebd8be3857d530c0946003fcd58be220c3290/core/src/replay_stage.rs#L4149)
 fn trackNewSlots(
     allocator: Allocator,
-    accounts_db: *AccountsDB,
+    account_store: AccountStore,
+    db_for_svm: *AccountsDB,
     blockstore_db: *BlockstoreDB,
     slot_tracker: *SlotTracker,
     epoch_tracker: *EpochTracker,
@@ -249,7 +250,7 @@ fn trackNewSlots(
             errdefer ancestors.deinit(allocator);
             try ancestors.ancestors.put(allocator, slot, {});
 
-            var feature_set = try getActiveFeatures(allocator, accounts_db, slot, &ancestors);
+            var feature_set = try getActiveFeatures(allocator, account_store, slot, &ancestors);
             errdefer feature_set.deinit(allocator);
 
             const parent_hash = parent_info.state.hash.readCopy().?;
@@ -274,6 +275,7 @@ fn trackNewSlots(
                 },
                 slot_state,
             );
+            const slot_info = slot_tracker.get(slot) orelse unreachable; // safe, just put it
 
             const UpdateSysvarAccountDeps = replay.update_sysvar.UpdateSysvarAccountDeps;
             const updateSlotHashes = replay.update_sysvar.updateSlotHashes;
@@ -282,7 +284,7 @@ fn trackNewSlots(
             const updateLastRestartSlot = replay.update_sysvar.updateLastRestartSlot;
 
             const sysvar_deps = UpdateSysvarAccountDeps{
-                .accounts_db = accounts_db,
+                .accounts_db = db_for_svm,
                 .capitalization = &slot_state.capitalization,
                 .ancestors = &ancestors,
                 .rent = &epoch_info.rent_collector.rent,
@@ -299,13 +301,12 @@ fn trackNewSlots(
                 .update_sysvar_deps = sysvar_deps,
             });
 
-            const feature_set_struct = sig.runtime.FeatureSet{ .active = feature_set };
             var epoch_stakes_map = sig.core.EpochStakesMap.empty;
             try epoch_stakes_map.put(allocator, epoch, epoch_info.stakes); // TODO better approach
             try updateClock(
                 allocator,
                 .{
-                    .feature_set = &feature_set_struct,
+                    .feature_set = &feature_set,
                     .epoch_schedule = &epoch_tracker.schedule,
                     .epoch_stakes_map = &epoch_stakes_map,
                     .stakes_cache = &slot_state.stakes_cache,
@@ -316,30 +317,28 @@ fn trackNewSlots(
                     .update_sysvar_deps = sysvar_deps,
                 },
             );
-            try updateLastRestartSlot(allocator, &feature_set_struct, hard_forks, sysvar_deps);
+            try updateLastRestartSlot(
+                allocator,
+                &slot_info.constants.feature_set,
+                hard_forks,
+                sysvar_deps,
+            );
 
             // TODO: update_fork_propagated_threshold_from_votes
         }
     }
 }
 
-fn updateSysvarsForNewSlot() !void {
-    // TODO move above stuff here
-}
-
 // TODO: epoch boundary - handle feature activations
-fn getActiveFeatures(
+pub fn getActiveFeatures(
     allocator: Allocator,
-    accounts_db: *AccountsDB,
+    account_store: AccountStore,
     slot: Slot,
     ancestors: *const sig.core.Ancestors,
-) !std.AutoArrayHashMapUnmanaged(Pubkey, Slot) {
+) !sig.core.FeatureSet {
     var features = std.AutoArrayHashMapUnmanaged(Pubkey, Slot).empty;
-    for (sig.runtime.features.FEATURES) |pubkey| {
-        // TODO: add AccountsDB method that uses Ancestors to ensure the data is
-        // actually valid for the slot under forking conditions.
-        _ = ancestors;
-        const feature_account = try accounts_db.getAccount(&pubkey) orelse continue;
+    for (sig.core.FEATURES) |pubkey| {
+        const feature_account = try account_store.get(pubkey, ancestors) orelse continue;
         if (!feature_account.owner.equals(&sig.runtime.ids.FEATURE_PROGRAM_ID)) {
             return error.FeatureNotOwnedByFeatureProgram;
         }
@@ -353,25 +352,7 @@ fn getActiveFeatures(
             }
         }
     }
-    return features;
-}
-
-fn processConsensus() void {
-    // TODO: for each slot:
-    //           tower_duplicate_confirmed_forks
-    //           mark_slots_duplicate_confirmed
-
-    // TODO: select_forks
-
-    // TODO: check_for_vote_only_mode
-
-    // TODO: select_vote_and_reset_forks
-
-    // TODO: if vote_bank.is_none: maybe_refresh_last_vote
-
-    // TODO: handle_votable_bank
-
-    // TODO: if reset_bank: Reset onto a fork
+    return .{ .active = features };
 }
 
 test trackNewSlots {
@@ -417,7 +398,7 @@ test trackNewSlots {
         .genesis_creation_time = 1,
         .slots_per_year = 1,
         .stakes = try .initEmpty(allocator),
-        .rent_collector = undefined, // TODO
+        .rent_collector = .initRandom(rng.random()),
     });
 
     const leader_schedule = sig.core.leader_schedule.LeaderSchedule{
@@ -448,7 +429,8 @@ test trackNewSlots {
     // only the root (0) is considered frozen, so only 0 and 1 should be added at first.
     try trackNewSlots(
         allocator,
-        undefined, // TODO
+        .noop,
+        undefined,
         &blockstore_db,
         &slot_tracker,
         &epoch_tracker,
@@ -466,7 +448,8 @@ test trackNewSlots {
     // doing nothing should result in the same tracker state
     try trackNewSlots(
         allocator,
-        undefined, // TODO
+        .noop,
+        undefined,
         &blockstore_db,
         &slot_tracker,
         &epoch_tracker,
@@ -485,7 +468,8 @@ test trackNewSlots {
     slot_tracker.get(1).?.state.hash.set(.ZEROES);
     try trackNewSlots(
         allocator,
-        undefined, // TODO
+        .noop,
+        undefined,
         &blockstore_db,
         &slot_tracker,
         &epoch_tracker,
@@ -505,7 +489,8 @@ test trackNewSlots {
     slot_tracker.get(4).?.state.hash.set(.ZEROES);
     try trackNewSlots(
         allocator,
-        undefined, // TODO
+        .noop,
+        undefined,
         &blockstore_db,
         &slot_tracker,
         &epoch_tracker,

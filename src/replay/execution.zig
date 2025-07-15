@@ -11,7 +11,7 @@ const ThreadPool = sig.sync.ThreadPool;
 const Pubkey = core.Pubkey;
 const Slot = core.Slot;
 
-const AccountsDB = sig.accounts_db.AccountsDB;
+const AccountStore = sig.accounts_db.AccountStore;
 const BlockstoreReader = sig.ledger.BlockstoreReader;
 
 const ForkProgress = sig.consensus.progress_map.ForkProgress;
@@ -31,22 +31,26 @@ pub const ReplayExecutionState = struct {
     logger: sig.trace.ScopedLogger("replay-execution"),
     my_identity: Pubkey,
     vote_account: ?Pubkey,
-    accounts_db: *AccountsDB,
+
+    // borrows
+    account_store: AccountStore,
+    db_for_svm: *sig.accounts_db.AccountsDB, // TODO: remove
     thread_pool: *ThreadPool,
     blockstore_reader: *BlockstoreReader,
     slot_tracker: *SlotTracker,
     epochs: *EpochTracker,
     progress_map: *ProgressMap,
-    status_cache: sig.core.StatusCache,
 
-    // TODO distinguish borrows from owned and maybe pass down borrows separately
+    // owned
+    status_cache: sig.core.StatusCache,
 
     pub fn init(
         allocator: Allocator,
         logger: sig.trace.Logger,
         my_identity: Pubkey,
         thread_pool: *ThreadPool,
-        accounts_db: *AccountsDB,
+        account_store: AccountStore,
+        db_for_svm: *sig.accounts_db.AccountsDB,
         blockstore_reader: *BlockstoreReader,
         slot_tracker: *SlotTracker,
         epochs: *EpochTracker,
@@ -57,7 +61,8 @@ pub const ReplayExecutionState = struct {
             .logger = .from(logger),
             .my_identity = my_identity,
             .vote_account = null, // voting not currently supported
-            .accounts_db = accounts_db,
+            .account_store = account_store,
+            .db_for_svm = db_for_svm,
             .thread_pool = thread_pool,
             .blockstore_reader = blockstore_reader,
             .slot_tracker = slot_tracker,
@@ -113,7 +118,7 @@ pub fn replayActiveSlots(state: *ReplayExecutionState) !bool {
         if (slot_info.state.tickHeight() == slot_info.constants.max_tick_height) {
             state.logger.info().logf("confirmed entire slot {}", .{slot});
             try replay.freeze.freezeSlot(state.allocator, .init(
-                state.accounts_db,
+                state.db_for_svm, // TODO: name not accurate since this is not the svm. add functionality to interface
                 &epoch_info,
                 slot_info.state,
                 slot_info.constants,
@@ -252,16 +257,16 @@ fn replaySlot(state: *ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
         .max_age = sig.core.BlockhashQueue.MAX_RECENT_BLOCKHASHES / 2,
         .lamports_per_signature = slot_info.constants.fee_rate_governor.lamports_per_signature,
         .blockhash_queue = blockhash_queue,
-        .accounts_db = state.accounts_db,
+        .accounts_db = state.db_for_svm,
         .ancestors = &slot_info.constants.ancestors,
-        .feature_set = .{ .active = slot_info.constants.feature_set },
+        .feature_set = slot_info.constants.feature_set,
         .rent_collector = &epoch_info.rent_collector,
         .epoch_stakes = &epoch_info.stakes,
         .status_cache = &state.status_cache,
     };
 
     const committer = replay.commit.Committer{
-        .accounts_db = state.accounts_db,
+        .account_store = state.account_store,
         .slot_state = slot_info.state,
         .status_cache = &state.status_cache,
         .stakes_cache = &slot_info.state.stakes_cache,
@@ -285,12 +290,13 @@ fn replaySlot(state: *ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
     return .{ .confirm = try confirmSlot(
         state.allocator,
         .from(state.logger),
-        state.accounts_db,
+        state.account_store,
         state.thread_pool,
         entries,
         confirmation_progress.last_entry,
         svm_params,
         committer,
         verify_ticks_params,
+        &slot_info.constants.ancestors,
     ) };
 }

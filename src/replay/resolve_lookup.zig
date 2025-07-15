@@ -7,12 +7,13 @@ const core = sig.core;
 const Allocator = std.mem.Allocator;
 
 const Hash = core.Hash;
+const Ancestors = core.Ancestors;
 const InstructionAccount = core.instruction.InstructionAccount;
 const Pubkey = core.Pubkey;
 const Transaction = core.Transaction;
 const TransactionAddressLookup = core.transaction.AddressLookup;
 
-const AccountsDB = sig.accounts_db.AccountsDB;
+const AccountReader = sig.accounts_db.AccountReader;
 
 const AddressLookupTable = sig.runtime.program.address_lookup_table.AddressLookupTable;
 const InstructionInfo = sig.runtime.InstructionInfo;
@@ -66,17 +67,9 @@ pub const ResolvedTransaction = struct {
 
 pub fn resolveBatch(
     allocator: Allocator,
-    accounts_db: *AccountsDB,
+    account_reader: AccountReader,
     batch: []const Transaction,
-) !ResolvedBatch {
-    return resolveBatchGeneric(allocator, .accounts_db, accounts_db, batch);
-}
-
-pub fn resolveBatchGeneric(
-    allocator: Allocator,
-    comptime provider_tag: lookup_table_provider.Tag,
-    table_provider: provider_tag.T(),
-    batch: []const Transaction,
+    ancestors: *const Ancestors,
 ) !ResolvedBatch {
     var accounts = try std.ArrayListUnmanaged(LockableAccount)
         .initCapacity(allocator, Transaction.numAccounts(batch));
@@ -86,7 +79,7 @@ pub fn resolveBatchGeneric(
     errdefer allocator.free(resolved_txns);
 
     for (batch, resolved_txns) |transaction, *resolved| {
-        resolved.* = try resolveTransaction(allocator, provider_tag, table_provider, transaction);
+        resolved.* = try resolveTransaction(allocator, account_reader, transaction, ancestors);
         for (
             resolved.accounts.items(.pubkey),
             resolved.accounts.items(.is_writable),
@@ -106,17 +99,17 @@ pub fn resolveBatchGeneric(
 /// - Use `deinit` to free this struct
 fn resolveTransaction(
     allocator: Allocator,
-    comptime provider_tag: lookup_table_provider.Tag,
-    table_provider: provider_tag.T(),
+    account_reader: AccountReader,
     transaction: Transaction,
+    ancestors: *const Ancestors,
 ) !ResolvedTransaction {
     const message = transaction.msg;
 
     const lookups = try resolveLookupTableAccounts(
         allocator,
-        provider_tag,
-        table_provider,
+        account_reader,
         message.address_lookups,
+        ancestors,
     );
     defer {
         allocator.free(lookups.writable);
@@ -213,9 +206,9 @@ fn resolveTransaction(
 
 fn resolveLookupTableAccounts(
     allocator: Allocator,
-    comptime provider_tag: lookup_table_provider.Tag,
-    table_provider: provider_tag.T(),
+    account_reader: AccountReader,
     address_lookups: []const TransactionAddressLookup,
+    ancestors: *const Ancestors,
 ) !struct { writable: []const Pubkey, readonly: []const Pubkey } {
     // count number of accounts
     var total_writable: usize = 0;
@@ -235,9 +228,8 @@ fn resolveLookupTableAccounts(
 
     // handle lookup table accounts
     for (address_lookups) |lookup| {
-        const table = try lookup_table_provider
-            .get(provider_tag, table_provider, &lookup.table_address) orelse
-            return error.LookupTableNotFound;
+        const table = try getLookupTable(account_reader, lookup.table_address, ancestors) orelse
+            return error.LookupTableAccountNotFound;
 
         // resolve writable addresses
         for (lookup.writable_indexes) |index| {
@@ -262,57 +254,31 @@ fn resolveLookupTableAccounts(
     };
 }
 
-const lookup_table_provider = struct {
-    pub const Tag = enum {
-        accounts_db,
-        map,
-        noop,
-
-        fn T(self: Tag) type {
-            return switch (self) {
-                .accounts_db => *AccountsDB,
-                .map => *const std.AutoArrayHashMapUnmanaged(Pubkey, AddressLookupTable),
-                .noop => void,
-            };
-        }
-    };
-
-    fn get(
-        comptime tag: Tag,
-        table_provider: tag.T(),
-        table_address: *const Pubkey,
-    ) !?AddressLookupTable {
-        switch (tag) {
-            .accounts_db => {
-                const accounts_db: *AccountsDB = table_provider;
-                // TODO: Ensure the account comes from a valid slot by checking
-                // it against the current slot's ancestors. This won't be usable
-                // until consensus is implemented in replay, so it's not
-                // implemented yet.
-                const account = try accounts_db.getAccount(table_address) orelse return null;
-                if (account.data.len() > AddressLookupTable.MAX_SERIALIZED_SIZE) {
-                    return error.LookupTableAccountOverflow;
-                }
-                var buf: [AddressLookupTable.MAX_SERIALIZED_SIZE]u8 = undefined;
-                const account_bytes = buf[0..account.data.len()];
-                account.data.readAll(account_bytes);
-                return try AddressLookupTable.deserialize(account_bytes);
-                // NOTE: deactivated lookup tables are allowed to be used,
-                // according to agave's implementation. see here, where agave
-                // discards the value:
-                // https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/runtime/src/bank/address_lookup_table.rs#L36
-            },
-            .map => {
-                const map: *const std.AutoArrayHashMapUnmanaged(Pubkey, AddressLookupTable) =
-                    table_provider;
-                return map.get(table_address.*) orelse return null;
-            },
-            .noop => return null,
-        }
+fn getLookupTable(
+    account_reader: AccountReader,
+    table_address: Pubkey,
+    ancestors: *const Ancestors,
+) !?AddressLookupTable {
+    // TODO: Ensure the account comes from a valid slot by checking
+    // it against the current slot's ancestors. This won't be usable
+    // until consensus is implemented in replay, so it's not
+    // implemented yet.
+    const account = try account_reader.get(table_address, ancestors) orelse return null;
+    defer account.deinit(account_reader.allocator());
+    if (account.data.len() > AddressLookupTable.MAX_SERIALIZED_SIZE) {
+        return error.LookupTableAccountOverflow;
     }
-};
+    var buf: [AddressLookupTable.MAX_SERIALIZED_SIZE]u8 = undefined;
+    const account_bytes = buf[0..account.data.len()];
+    account.data.readAll(account_bytes);
+    return try AddressLookupTable.deserialize(account_bytes);
+    // NOTE: deactivated lookup tables are allowed to be used,
+    // according to agave's implementation. see here, where agave
+    // discards the value:
+    // https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/runtime/src/bank/address_lookup_table.rs#L36
+}
 
-test resolveBatchGeneric {
+test resolveBatch {
     var rng = std.Random.DefaultPrng.init(0);
 
     // concisely represents all the expected account metas within an InstructionInfo
@@ -361,10 +327,10 @@ test resolveBatchGeneric {
         },
     };
 
-    var map = std.AutoArrayHashMapUnmanaged(Pubkey, AddressLookupTable){};
-    defer map.deinit(std.testing.allocator);
-    try map.put(std.testing.allocator, lookup_table_addresses[0], lookup_tables[0]);
-    try map.put(std.testing.allocator, lookup_table_addresses[1], lookup_tables[1]);
+    var map = sig.accounts_db.ThreadSafeAccountMap.init(std.testing.allocator);
+    defer map.deinit();
+    try put(&map, lookup_table_addresses[0], lookup_tables[0]);
+    try put(&map, lookup_table_addresses[1], lookup_tables[1]);
 
     const tx = Transaction{
         .signatures = &.{},
@@ -441,7 +407,16 @@ test resolveBatchGeneric {
         },
     };
 
-    const resolved = try resolveBatchGeneric(std.testing.allocator, .map, &map, &.{tx});
+    var ancestors = Ancestors{ .ancestors = .empty };
+    defer ancestors.deinit(std.testing.allocator);
+    try ancestors.ancestors.put(std.testing.allocator, 0, {});
+
+    const resolved = try resolveBatch(
+        std.testing.allocator,
+        map.accountReader(),
+        &.{tx},
+        &ancestors,
+    );
     defer resolved.deinit(std.testing.allocator);
 
     for (
@@ -499,4 +474,26 @@ test resolveBatchGeneric {
             try std.testing.expectEqual(is_writable != 0, output_meta.is_writable);
         }
     }
+}
+
+fn put(
+    map: *sig.accounts_db.ThreadSafeAccountMap,
+    address: Pubkey,
+    lookup_table: AddressLookupTable,
+) !void {
+    var buf: [AddressLookupTable.MAX_SERIALIZED_SIZE]u8 = undefined;
+
+    try AddressLookupTable.overwriteMetaData(&buf, lookup_table.meta);
+
+    const src = std.mem.sliceAsBytes(lookup_table.addresses);
+    const dst = buf[sig.runtime.program.address_lookup_table.state.LOOKUP_TABLE_META_SIZE..];
+    @memcpy(dst[0..src.len], src);
+
+    try map.put(0, address, .{
+        .lamports = 0,
+        .data = &buf,
+        .owner = sig.runtime.program.address_lookup_table.ID,
+        .executable = false,
+        .rent_epoch = 0,
+    });
 }

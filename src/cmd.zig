@@ -1193,35 +1193,53 @@ fn validator(
     );
     defer shred_network_manager.deinit();
 
-    const epoch_stakes_map = &collapsed_manifest.bank_extra.versioned_epoch_stakes;
-    const epoch_stakes = epoch_stakes_map.get(epoch) orelse
-        return error.EpochStakesMissingFromSnapshot;
+    const replay_thread = replay: {
+        const epoch_stakes_map = &collapsed_manifest.bank_extra.versioned_epoch_stakes;
+        const epoch_stakes = epoch_stakes_map.get(epoch) orelse
+            return error.EpochStakesMissingFromSnapshot;
 
-    // TODO: errdefers
-    const replay_thread = try app_base.spawnService(
-        "replay",
-        sig.replay.service.run,
-        .{sig.replay.service.ReplayDependencies{
-            .allocator = allocator,
-            .logger = app_base.logger.unscoped(),
-            .my_identity = .{ .data = app_base.my_keypair.public_key.bytes },
-            .exit = app_base.exit,
-            .blockstore_reader = blockstore_reader,
-            .ledger_result_writer = ledger_result_writer,
-            .accounts_db = &loaded_snapshot.accounts_db,
-            .epoch_schedule = bank_fields.epoch_schedule,
-            .slot_leaders = epoch_context_manager.slotLeaders(),
-            .root_slot = bank_fields.slot,
-            .root_slot_constants = try .fromBankFields(allocator, bank_fields, .empty),
-            .root_slot_state = try .fromBankFields(allocator, bank_fields),
-            .current_epoch = epoch,
-            .current_epoch_constants = try .fromBankFields(
-                bank_fields,
-                try epoch_stakes.current.convert(allocator, .delegation),
-            ),
-            .hard_forks = try bank_fields.hard_forks.clone(allocator),
-        }},
-    );
+        var feature_set = try sig.replay.service.getActiveFeatures(
+            allocator,
+            loaded_snapshot.accounts_db.accountStore(),
+            bank_fields.slot,
+            &bank_fields.ancestors,
+        );
+        const root_slot_constants =
+            sig.core.SlotConstants.fromBankFields(allocator, bank_fields, feature_set) catch |err| {
+                feature_set.deinit(allocator);
+                return err;
+            };
+        errdefer root_slot_constants.deinit(allocator);
+
+        var root_slot_state = try sig.core.SlotState.fromBankFields(allocator, bank_fields);
+        errdefer root_slot_state.deinit(allocator);
+
+        break :replay try app_base.spawnService(
+            "replay",
+            sig.replay.service.run,
+            .{sig.replay.service.ReplayDependencies{
+                .allocator = allocator,
+                .logger = app_base.logger.unscoped(),
+                .my_identity = .{ .data = app_base.my_keypair.public_key.bytes },
+                .exit = app_base.exit,
+                .blockstore_reader = blockstore_reader,
+                .ledger_result_writer = ledger_result_writer,
+                .account_store = loaded_snapshot.accounts_db.accountStore(),
+                .db_for_svm = &loaded_snapshot.accounts_db,
+                .epoch_schedule = bank_fields.epoch_schedule,
+                .slot_leaders = epoch_context_manager.slotLeaders(),
+                .root_slot = bank_fields.slot,
+                .root_slot_constants = root_slot_constants,
+                .root_slot_state = root_slot_state,
+                .current_epoch = epoch,
+                .current_epoch_constants = try .fromBankFields(
+                    bank_fields,
+                    try epoch_stakes.current.convert(allocator, .delegation),
+                ),
+                .hard_forks = try bank_fields.hard_forks.clone(allocator),
+            }},
+        );
+    };
 
     replay_thread.join();
     rpc_epoch_ctx_service_thread.join();

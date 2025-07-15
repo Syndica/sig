@@ -15,7 +15,7 @@ const AccountsDB = sig.accounts_db.AccountsDB;
 
 const BatchAccountCache = sig.runtime.account_loader.BatchAccountCache;
 const ComputeBudget = sig.runtime.ComputeBudget;
-const FeatureSet = sig.runtime.FeatureSet;
+const FeatureSet = sig.core.FeatureSet;
 const ProcessedTransaction = sig.runtime.transaction_execution.ProcessedTransaction;
 const ProgramMap = sig.runtime.program_loader.ProgramMap;
 const RuntimeTransaction = sig.runtime.transaction_execution.RuntimeTransaction;

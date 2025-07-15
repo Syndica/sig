@@ -1424,7 +1424,7 @@ const TestData = struct {
                     .fee_rate_governor = .initRandom(random),
                     .epoch_reward_status = .inactive,
                     .ancestors = .{ .ancestors = .empty },
-                    .feature_set = .empty,
+                    .feature_set = .EMPTY,
                 },
                 .{
                     .blockhash_queue = .init(try .initRandom(allocator, random, 0)),

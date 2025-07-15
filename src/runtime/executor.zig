@@ -4,7 +4,7 @@ const sig = @import("../sig.zig");
 const ids = sig.runtime.ids;
 const program = sig.runtime.program;
 const stable_log = sig.runtime.stable_log;
-const features = sig.runtime.features;
+const features = sig.core.features;
 const bpf_loader_program = sig.runtime.program.bpf_loader;
 
 const Instruction = sig.core.instruction.Instruction;
@@ -650,7 +650,7 @@ test "popInstruction" {
 test "prepareCpiInstructionInfo" {
     const testing = sig.runtime.testing;
     const system_program = sig.runtime.program.system;
-    const FeatureSet = sig.runtime.features.FeatureSet;
+    const FeatureSet = sig.core.features.FeatureSet;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(0);

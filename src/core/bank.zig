@@ -26,6 +26,7 @@ const RwMux = sig.sync.RwMux;
 
 const BlockhashQueue = core.BlockhashQueue;
 const EpochSchedule = core.epoch_schedule.EpochSchedule;
+const FeatureSet = core.FeatureSet;
 const Hash = core.hash.Hash;
 const HardForks = core.HardForks;
 const LtHash = core.hash.LtHash;
@@ -90,12 +91,12 @@ pub const SlotConstants = struct {
     ancestors: Ancestors,
 
     /// A map of activated features to the slot when they were activated.
-    feature_set: std.AutoArrayHashMapUnmanaged(Pubkey, Slot),
+    feature_set: FeatureSet,
 
     pub fn fromBankFields(
         allocator: Allocator,
         bank_fields: *const BankFields,
-        feature_set: std.AutoArrayHashMapUnmanaged(Pubkey, Slot),
+        feature_set: FeatureSet,
     ) Allocator.Error!SlotConstants {
         return .{
             .parent_slot = bank_fields.parent_slot,
@@ -122,11 +123,12 @@ pub const SlotConstants = struct {
             .fee_rate_governor = fee_rate_governor,
             .epoch_reward_status = .inactive,
             .ancestors = .{},
-            .feature_set = .empty,
+            .feature_set = .EMPTY,
         };
     }
 
-    pub fn deinit(self: SlotConstants, allocator: Allocator) void {
+    pub fn deinit(self_const: SlotConstants, allocator: Allocator) void {
+        var self = self_const;
         self.epoch_reward_status.deinit(allocator);
         self.ancestors.deinit(allocator);
         self.feature_set.deinit(allocator);

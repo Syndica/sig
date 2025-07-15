@@ -97,14 +97,14 @@ pub const HashSlotParams = struct {
     parent_lt_hash: *const ?LtHash,
     ancestors: *const sig.core.Ancestors,
     blockhash: Hash,
-    feature_set: *const std.AutoArrayHashMapUnmanaged(Pubkey, Slot),
+    feature_set: *const sig.core.FeatureSet,
 };
 
 pub fn hashSlot(allocator: Allocator, params: HashSlotParams) !struct { ?LtHash, Hash } {
     var signature_count_bytes: [8]u8 = undefined;
     std.mem.writeInt(u64, &signature_count_bytes, params.signature_count, .little);
 
-    if (params.feature_set.contains(sig.runtime.features.ACCOUNTS_LT_HASH)) {
+    if (params.feature_set.active.contains(sig.core.features.ACCOUNTS_LT_HASH)) {
         var parent_ancestors = try params.ancestors.clone(allocator);
         defer parent_ancestors.deinit(allocator);
         assert(parent_ancestors.ancestors.swapRemove(params.slot));

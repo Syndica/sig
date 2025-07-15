@@ -15,7 +15,7 @@ const ProcessedTransaction = sig.runtime.transaction_execution.ProcessedTransact
 
 /// All contained state is required to be thread-safe.
 pub const Committer = struct {
-    accounts_db: *sig.accounts_db.AccountsDB,
+    account_store: sig.accounts_db.AccountStore,
     slot_state: *sig.core.SlotState,
     status_cache: *sig.core.StatusCache,
     stakes_cache: *sig.core.StakesCache,
@@ -68,7 +68,7 @@ pub const Committer = struct {
         for (accounts_to_store.keys(), accounts_to_store.values()) |pubkey, account| {
             // TODO: look into null value here
             try self.stakes_cache.checkAndStore(allocator, pubkey, account, null);
-            try self.accounts_db.putAccount(slot, pubkey, account);
+            try self.account_store.put(slot, pubkey, account);
         }
     }
 };

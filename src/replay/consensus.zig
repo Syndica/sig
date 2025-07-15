@@ -10,10 +10,9 @@ const SortedSet = sig.utils.collections.SortedSet;
 const ReplayTower = sig.consensus.replay_tower.ReplayTower;
 const ProgressMap = sig.consensus.progress_map.ProgressMap;
 const ForkChoice = sig.consensus.fork_choice.ForkChoice;
-const LatestValidatorVotesForFrozenBanks =
-    sig.consensus.replay_tower.LatestValidatorVotesForFrozenBanks;
+const LatestValidatorVotes = sig.consensus.latest_validator_votes.LatestValidatorVotes;
 
-const EpochStakeMap = sig.core.stake.EpochStakeMap;
+const EpochStakesMap = sig.core.EpochStakesMap;
 const BlockhashQueue = sig.core.BlockhashQueue;
 
 const SlotTracker = sig.replay.trackers.SlotTracker;
@@ -48,8 +47,8 @@ pub const ConsensusDependencies = struct {
     descendants: *const std.AutoArrayHashMapUnmanaged(u64, SortedSet(u64)),
     vote_account: Pubkey,
     slot_history: *const SlotHistory,
-    epoch_stakes: EpochStakeMap,
-    latest_validator_votes_for_frozen_banks: *const LatestValidatorVotesForFrozenBanks,
+    epoch_stakes: EpochStakesMap,
+    latest_validator_votes_for_frozen_banks: *const LatestValidatorVotes,
 };
 
 pub fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
@@ -941,7 +940,7 @@ test "checkAndHandleNewRoot - missing slot" {
         .fee_rate_governor = .initRandom(random),
         .epoch_reward_status = .inactive,
         .ancestors = .{},
-        .feature_set = .empty,
+        .feature_set = .EMPTY,
     }, .{
         .blockhash_queue = RwMux(BlockhashQueue).init(BlockhashQueue.init(10)),
         .hash = RwMux(?Hash).init(null),
@@ -1019,7 +1018,7 @@ test "checkAndHandleNewRoot - missing hash" {
         .fee_rate_governor = .initRandom(random),
         .epoch_reward_status = .inactive,
         .ancestors = .{},
-        .feature_set = .empty,
+        .feature_set = .EMPTY,
     }, .{
         .blockhash_queue = RwMux(BlockhashQueue).init(BlockhashQueue.init(10)),
         .hash = RwMux(?Hash).init(null),
@@ -1154,7 +1153,7 @@ test "checkAndHandleNewRoot - success" {
         .fee_rate_governor = .initRandom(random),
         .epoch_reward_status = .inactive,
         .ancestors = .{},
-        .feature_set = .empty,
+        .feature_set = .EMPTY,
     }, .{
         .blockhash_queue = RwMux(BlockhashQueue).init(BlockhashQueue.init(10)),
         .hash = RwMux(?Hash).init(hash2.hash),
@@ -1179,7 +1178,7 @@ test "checkAndHandleNewRoot - success" {
         .fee_rate_governor = .initRandom(random),
         .epoch_reward_status = .inactive,
         .ancestors = .{},
-        .feature_set = .empty,
+        .feature_set = .EMPTY,
     }, .{
         .blockhash_queue = RwMux(BlockhashQueue).init(BlockhashQueue.init(10)),
         .hash = RwMux(?Hash).init(hash3.hash),
