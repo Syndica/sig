@@ -106,6 +106,11 @@ pub const EpochSchedule = extern struct {
         return self.getFirstSlotInEpoch(epoch) +| self.getSlotsInEpoch(epoch) -| 1;
     }
 
+    /// Gets the epoch for which the given slot should save information about stakers. In agave
+    /// this occurs during `Bank::process_new_epoch` and `Bank::_new_from_parent`. If the leader
+    /// schedule slot offset is less than the number of slots per epoch, then for some slots the
+    /// leader schedule epoch will be the same as the epoch of the slot. With current
+    /// defaults this will return the epoch immediately after the epoch of the slot.
     pub fn getLeaderScheduleEpoch(self: *const EpochSchedule, slot: Slot) u64 {
         if (slot < self.first_normal_slot) {
             return self.getEpochAndSlotIndex(slot)[0] +| 1;
