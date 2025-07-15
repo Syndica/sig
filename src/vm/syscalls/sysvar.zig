@@ -537,8 +537,8 @@ fn testGetStakeHistory(filled: bool) !void {
 
     try std.testing.expectEqualSlices(
         sysvar.StakeHistory.Entry,
-        obj_parsed.entries.items,
-        src_history.entries.items,
+        obj_parsed.entries.constSlice(),
+        src_history.entries.constSlice(),
     );
 }
 
@@ -615,7 +615,7 @@ fn testGetSlotHashes(filled: bool) !void {
 
     try std.testing.expectEqualSlices(
         sysvar.SlotHashes.Entry,
-        obj_parsed.entries.items,
-        src_hashes.entries.items,
+        obj_parsed.entries.constSlice(),
+        src_hashes.entries.constSlice(),
     );
 }
