@@ -25,9 +25,7 @@ const createVoteAccount = sig.core.vote_accounts.createVoteAccount;
 
 const failing_allocator = sig.utils.allocators.failing.allocator(.{});
 
-pub const StakesCache = StakesCacheGeneric(.stake);
-
-fn StakesCacheGeneric(comptime stakes_type: StakesType) type {
+pub fn StakesCacheGeneric(comptime stakes_type: StakesType) type {
     const StakesT = Stakes(stakes_type);
 
     return struct {
@@ -187,11 +185,7 @@ pub fn Stakes(comptime stakes_type: StakesType) type {
             };
         }
 
-        pub fn calculateStake(
-            self: *const Self,
-            pubkey: Pubkey,
-            new_rate_activation_epoch: ?Epoch,
-        ) u64 {
+        pub fn calculateStake(self: *const Self, pubkey: Pubkey, new_rate_activation_epoch: ?Epoch) u64 {
             var stake: u64 = 0;
             for (self.stake_delegations.values()) |*stake_delegations| {
                 const delegation = stake_delegations.getDelegation();
@@ -216,15 +210,11 @@ pub fn Stakes(comptime stakes_type: StakesType) type {
             std.debug.assert(account.account.lamports > 0);
             errdefer account.deinit(allocator);
 
-            // TODO: move this function call into vote accounts insert to prevent execution
-            // on failure paths in vote_accounts.insert
-            const stake = self.calculateStake(pubkey, new_rate_activation_epoch);
-
             const maybe_old_account = try self.vote_accounts.insert(
                 allocator,
                 pubkey,
                 account,
-                stake,
+                .init(stakes_type, self, new_rate_activation_epoch),
             );
 
             if (maybe_old_account) |old_account| old_account.deinit(allocator);
@@ -343,6 +333,38 @@ pub fn Stakes(comptime stakes_type: StakesType) type {
         }
     };
 }
+
+pub const CaclulateStakeContext = struct {
+    stakes: union(enum) {
+        delegation: *const Stakes(.delegation),
+        stake: *const Stakes(.stake),
+        account: *const Stakes(.account),
+    },
+    new_rate_activation_epoch: ?Epoch,
+
+    pub fn init(
+        comptime stakes_type: StakesType,
+        stakes: *const Stakes(stakes_type),
+        new_rate_activation_epoch: ?Epoch,
+    ) CaclulateStakeContext {
+        return .{
+            .stakes = switch (stakes_type) {
+                .delegation => .{ .delegation = stakes },
+                .stake => .{ .stake = stakes },
+                .account => .{ .account = stakes },
+            },
+            .new_rate_activation_epoch = new_rate_activation_epoch,
+        };
+    }
+
+    pub fn calculateStake(self: *const CaclulateStakeContext, pubkey: Pubkey) u64 {
+        return switch (self.stakes) {
+            .delegation => |stakes| stakes.calculateStake(pubkey, self.new_rate_activation_epoch),
+            .stake => |stakes| stakes.calculateStake(pubkey, self.new_rate_activation_epoch),
+            .account => |stakes| stakes.calculateStake(pubkey, self.new_rate_activation_epoch),
+        };
+    }
+};
 
 pub const StakeAccount = struct {
     account: AccountSharedData,
