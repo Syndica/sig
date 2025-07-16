@@ -198,40 +198,40 @@ pub const Transcript = struct {
     /// NOTE: be very careful with this function, there are only a specific few
     /// usages of it. generally speaking, use the a helper function if it exists.
     pub fn appendMessage(
-        t: *Transcript,
+        self: *Transcript,
         comptime label: []const u8,
         message: []const u8,
     ) void {
         var data_len: [4]u8 = undefined;
         std.mem.writeInt(u32, &data_len, @intCast(message.len), .little);
-        t.strobe.metaAd(label, false);
-        t.strobe.metaAd(&data_len, true);
-        t.strobe.ad(message, false);
+        self.strobe.metaAd(label, false);
+        self.strobe.metaAd(&data_len, true);
+        self.strobe.ad(message, false);
     }
 
-    pub fn appendDomSep(t: *Transcript, comptime label: []const u8) void {
-        t.appendMessage("dom-sep", label);
+    pub fn appendDomSep(self: *Transcript, comptime label: []const u8) void {
+        self.appendMessage("dom-sep", label);
     }
 
     pub fn challengeBytes(
-        t: *Transcript,
+        self: *Transcript,
         comptime label: []const u8,
         destination: []u8,
     ) void {
         var data_len: [4]u8 = undefined;
         std.mem.writeInt(u32, &data_len, @intCast(destination.len), .little);
 
-        t.strobe.metaAd(label, false);
-        t.strobe.metaAd(&data_len, true);
-        t.strobe.prf(destination, false);
+        self.strobe.metaAd(label, false);
+        self.strobe.metaAd(&data_len, true);
+        self.strobe.prf(destination, false);
     }
 
     pub fn challengeScalar(
-        t: *Transcript,
+        self: *Transcript,
         comptime label: []const u8,
     ) Scalar {
         var buffer: [64]u8 = .{0} ** 64;
-        t.challengeBytes(label, &buffer);
+        self.challengeBytes(label, &buffer);
         // Specifically need reduce64 instead of Scalar.fromBytes64, since
         // we need the Barret reduction to be done with 10 limbs, not 5.
         const compressed = Ed25519.scalar.reduce64(buffer);
@@ -239,55 +239,55 @@ pub const Transcript = struct {
     }
 
     pub fn validateAndAppendPoint(
-        t: *Transcript,
+        self: *Transcript,
         comptime label: []const u8,
         point: Ristretto255,
     ) !void {
         try point.rejectIdentity();
-        t.appendPoint(label, point);
+        self.appendPoint(label, point);
     }
 
     // helper functions
 
-    pub fn appendPoint(t: *Transcript, comptime label: []const u8, point: Ristretto255) void {
-        t.appendMessage(label, &point.toBytes());
+    pub fn appendPoint(self: *Transcript, comptime label: []const u8, point: Ristretto255) void {
+        self.appendMessage(label, &point.toBytes());
     }
 
-    pub fn appendScalar(t: *Transcript, comptime label: []const u8, scalar: Scalar) void {
-        t.appendMessage(label, &scalar.toBytes());
+    pub fn appendScalar(self: *Transcript, comptime label: []const u8, scalar: Scalar) void {
+        self.appendMessage(label, &scalar.toBytes());
     }
 
     pub fn appendPubkey(
-        t: *Transcript,
+        self: *Transcript,
         comptime label: []const u8,
         pubkey: sig.zksdk.ElGamalPubkey,
     ) void {
-        t.appendPoint(label, pubkey.point);
+        self.appendPoint(label, pubkey.point);
     }
 
     pub fn appendCiphertext(
-        t: *Transcript,
+        self: *Transcript,
         comptime label: []const u8,
         ciphertext: sig.zksdk.ElGamalCiphertext,
     ) void {
         var buffer: [64]u8 = .{0} ** 64;
         @memcpy(buffer[0..32], &ciphertext.commitment.point.toBytes());
         @memcpy(buffer[32..64], &ciphertext.handle.point.toBytes());
-        t.appendMessage(label, &buffer);
+        self.appendMessage(label, &buffer);
     }
 
     pub fn appendCommitment(
-        t: *Transcript,
+        self: *Transcript,
         comptime label: []const u8,
         commitment: sig.zksdk.pedersen.Commitment,
     ) void {
-        t.appendMessage(label, &commitment.point.toBytes());
+        self.appendMessage(label, &commitment.point.toBytes());
     }
 
-    pub fn appendU64(t: *Transcript, comptime label: []const u8, x: u64) void {
+    pub fn appendU64(self: *Transcript, comptime label: []const u8, x: u64) void {
         var buffer: [8]u8 = .{0} ** 8;
         std.mem.writeInt(u64, &buffer, x, .little);
-        t.appendMessage(label, &buffer);
+        self.appendMessage(label, &buffer);
     }
 };
 
