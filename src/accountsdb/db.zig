@@ -1184,83 +1184,51 @@ pub const AccountsDB = struct {
         };
     }
 
-    /// Returns the hash of all accounts from a particular slot
+    /// Returns an iterator that iterates over every account that was modified
+    /// in the slot.
     ///
-    /// Analogous to [get_pubkey_hash_for_slot](https://github.com/anza-xyz/agave/blob/b948b97d2a08850f56146074c0be9727202ceeff/accounts-db/src/accounts_db.rs#L6871)
-    pub fn deltaMerkleHash(
-        self: *AccountsDB,
-        allocator: Allocator,
-        slot: Slot,
-    ) !Hash {
+    /// Holds the read lock on the index, so unlock it when done, and be careful
+    /// how long you hold this.
+    pub fn slotModifiedIterator(self: *AccountsDB, slot: Slot) ?SlotModifiedIterator {
         var slot_ref_map = self.account_index.slot_reference_map.read();
-        defer slot_ref_map.unlock();
 
-        const slot_references = slot_ref_map.get().get(slot) orelse return .ZEROES;
+        const slot_references = slot_ref_map.get().getPtr(slot) orelse {
+            slot_ref_map.unlock();
+            return null;
+        };
 
-        const pubkey_hashes = try allocator.alloc(
-            struct { Pubkey, Hash },
-            slot_references.refs.items.len,
-        );
-        defer allocator.free(pubkey_hashes);
-
-        for (slot_references.refs.items, pubkey_hashes) |account_ref, *pubkey_hash| {
-            const account = try self.getAccountFromRef(&account_ref);
-            pubkey_hash.* = .{ account_ref.pubkey, account.hash(Hash, &account_ref.pubkey) };
-        }
-
-        std.mem.sort(struct { Pubkey, Hash }, pubkey_hashes, {}, struct {
-            fn lt(_: void, lhs: struct { Pubkey, Hash }, rhs: struct { Pubkey, Hash }) bool {
-                return std.mem.order(u8, &lhs[0].data, &rhs[0].data) == .lt;
-            }
-        }.lt);
-
-        // TODO put more thought into the nesting - should there be multiple?
-        // is NestedHashTree the right data structure?
-        const hashes = try allocator.alloc(Hash, pubkey_hashes.len);
-        defer allocator.free(hashes);
-        for (hashes, 0..) |*h, i| {
-            h.* = pubkey_hashes[i][1];
-        }
-        const hash_tree = sig.utils.merkle_tree.NestedHashTree{ .items = &.{hashes} };
-
-        const hash = try sig.utils.merkle_tree
-            .computeMerkleRoot(&hash_tree, sig.accounts_db.db.MERKLE_FANOUT);
-
-        return hash.*;
+        return .{
+            .db = self,
+            .lock = slot_ref_map,
+            .slot_index = slot_references,
+            .cursor = 0,
+        };
     }
 
-    /// Returns the lattice hash of every account that was actually modified in the slot.
-    ///
-    /// Analogous to [get_pubkey_hash_for_slot](https://github.com/anza-xyz/agave/blob/b948b97d2a08850f56146074c0be9727202ceeff/accounts-db/src/accounts_db.rs#L6871)
-    pub fn deltaLtHash(
-        self: *AccountsDB,
-        slot: Slot,
-        parent_ancestors: *const Ancestors,
-    ) !LtHash {
-        assert(!parent_ancestors.containsSlot(slot));
-        var slot_ref_map = self.account_index.slot_reference_map.read();
-        defer slot_ref_map.unlock();
+    pub const SlotModifiedIterator = struct {
+        db: *AccountsDB,
+        lock: RwMux(AccountIndex.SlotRefMap).RLockGuard,
+        slot_index: *AccountIndex.SlotRefMapValue,
+        cursor: usize,
 
-        // TODO: consider using a thread pool
-        // TODO: consider caching old hashes
-
-        const slot_references = slot_ref_map.get().get(slot) orelse return .IDENTITY;
-
-        var hash = LtHash.IDENTITY;
-        for (slot_references.refs.items) |account_ref| {
-            const account = try self.getAccountFromRef(&account_ref);
-            if (try self.getAccountWithAncestors(&account_ref.pubkey, parent_ancestors)) |old_acct| {
-                if (!old_acct.equals(&account)) {
-                    hash.mixOut(&old_acct.hash(LtHash, &account_ref.pubkey));
-                    hash.mixIn(&account.hash(LtHash, &account_ref.pubkey));
-                }
-            } else {
-                hash.mixIn(&account.hash(LtHash, &account_ref.pubkey));
-            }
+        pub fn unlock(self: *SlotModifiedIterator) void {
+            self.cursor = std.math.maxInt(usize);
+            self.lock.unlock();
         }
 
-        return hash;
-    }
+        pub fn len(self: *SlotModifiedIterator) usize {
+            return self.slot_index.refs.items.len;
+        }
+
+        pub fn next(self: *SlotModifiedIterator) !?struct { Pubkey, Account } {
+            assert(self.cursor != std.math.maxInt(usize));
+            defer self.cursor += 1;
+            if (self.cursor > self.slot_index.refs.items.len) return null;
+            const account_ref = self.slot_index.refs.items[self.cursor];
+            const account = try self.db.getAccountFromRef(&account_ref);
+            return .{ account_ref.pubkey, account };
+        }
+    };
 
     pub const ValidateLoadFromSnapshotParams = struct {
         /// used to verify the full snapshot.

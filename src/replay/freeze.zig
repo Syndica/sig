@@ -7,12 +7,14 @@ const core = sig.core;
 const Allocator = std.mem.Allocator;
 const assert = std.debug.assert;
 
+const Ancestors = core.Ancestors;
 const Hash = core.Hash;
 const LtHash = core.LtHash;
 const Pubkey = core.Pubkey;
 const Slot = core.Slot;
 
 const AccountsDB = sig.accounts_db.AccountsDB;
+const AccountReader = sig.accounts_db.AccountReader;
 
 pub const FreezeParams = struct {
     state: *sig.core.SlotState,
@@ -22,7 +24,8 @@ pub const FreezeParams = struct {
     blockhash: Hash,
 
     pub fn init(
-        accounts_db: *AccountsDB,
+        account_reader: AccountReader,
+        db_for_svm: *AccountsDB,
         epoch: *const sig.core.EpochConstants,
         state: *sig.core.SlotState,
         constants: *const sig.core.SlotConstants,
@@ -32,7 +35,7 @@ pub const FreezeParams = struct {
         return .{
             .state = state,
             .hash_slot = .{
-                .accounts_db = accounts_db,
+                .account_reader = account_reader,
                 .slot = slot,
                 .parent_slot_hash = &constants.parent_hash,
                 .parent_lt_hash = &constants.parent_lt_hash,
@@ -42,7 +45,7 @@ pub const FreezeParams = struct {
                 .signature_count = state.signature_count.load(.monotonic),
             },
             .update_sysvar = .{
-                .accounts_db = accounts_db,
+                .accounts_db = db_for_svm,
                 .slot = slot,
                 .ancestors = &constants.ancestors,
                 .rent = &epoch.rent_collector.rent,
@@ -54,10 +57,9 @@ pub const FreezeParams = struct {
     }
 };
 
-// TODO: params struct, conversion from bank, separate out hash function
 /// Analogous to [Bank::freeze](https://github.com/anza-xyz/agave/blob/b948b97d2a08850f56146074c0be9727202ceeff/runtime/src/bank.rs#L2620)
 pub fn freezeSlot(allocator: Allocator, params: FreezeParams) !void {
-    // TODO: reconsider locking the hash for the entire function.
+    // TODO: reconsider locking the hash for the entire function. (this is how agave does it)
     var slot_hash = params.state.hash.write();
     defer slot_hash.unlock();
 
@@ -90,7 +92,7 @@ pub fn freezeSlot(allocator: Allocator, params: FreezeParams) !void {
 }
 
 pub const HashSlotParams = struct {
-    accounts_db: *AccountsDB,
+    account_reader: AccountReader,
     slot: Slot,
     signature_count: u64,
     parent_slot_hash: *const Hash,
@@ -100,6 +102,7 @@ pub const HashSlotParams = struct {
     feature_set: *const sig.core.FeatureSet,
 };
 
+/// Calculates the slot hash (known as the "bank hash" in agave)
 pub fn hashSlot(allocator: Allocator, params: HashSlotParams) !struct { ?LtHash, Hash } {
     var signature_count_bytes: [8]u8 = undefined;
     std.mem.writeInt(u64, &signature_count_bytes, params.signature_count, .little);
@@ -110,7 +113,7 @@ pub fn hashSlot(allocator: Allocator, params: HashSlotParams) !struct { ?LtHash,
         assert(parent_ancestors.ancestors.swapRemove(params.slot));
 
         var lt_hash = params.parent_lt_hash.* orelse return error.UnknownParentLtHash;
-        lt_hash.mixIn(&try params.accounts_db.deltaLtHash(params.slot, &parent_ancestors));
+        lt_hash.mixIn(&try deltaLtHash(params.account_reader, params.slot, &parent_ancestors));
 
         return .{ lt_hash, Hash.generateSha256(.{
             &Hash.generateSha256(.{
@@ -121,7 +124,7 @@ pub fn hashSlot(allocator: Allocator, params: HashSlotParams) !struct { ?LtHash,
             lt_hash.bytes(),
         }) };
     } else {
-        const accounts_hash = try params.accounts_db.deltaMerkleHash(allocator, params.slot);
+        const accounts_hash = try deltaMerkleHash(params.account_reader, allocator, params.slot);
         return .{ null, Hash.generateSha256(.{
             &params.parent_slot_hash.data,
             &accounts_hash.data,
@@ -129,4 +132,78 @@ pub fn hashSlot(allocator: Allocator, params: HashSlotParams) !struct { ?LtHash,
             &params.blockhash.data,
         }) };
     }
+}
+
+/// Returns the merkle root of all accounts modified in the slot
+pub fn deltaMerkleHash(
+    account_reader: AccountReader,
+    allocator: Allocator,
+    slot: Slot,
+) !Hash {
+    const pubkey_hashes = pkh: {
+        var iterator = account_reader.slotModifiedIterator(slot) orelse return .ZEROES;
+        defer iterator.unlock();
+
+        const pubkey_hashes = try allocator.alloc(struct { Pubkey, Hash }, iterator.len());
+        defer allocator.free(pubkey_hashes);
+
+        var i: usize = 0;
+        while (try iterator.next()) |pubkey_account| : (i += 1) {
+            const pubkey, const account = pubkey_account;
+            pubkey_hashes[i] = .{ pubkey, account.hash(Hash, &pubkey) };
+        }
+
+        break :pkh pubkey_hashes;
+    };
+
+    std.mem.sort(struct { Pubkey, Hash }, pubkey_hashes, {}, struct {
+        fn lt(_: void, lhs: struct { Pubkey, Hash }, rhs: struct { Pubkey, Hash }) bool {
+            return std.mem.order(u8, &lhs[0].data, &rhs[0].data) == .lt;
+        }
+    }.lt);
+
+    // TODO put more thought into the nesting - should there be multiple?
+    // is NestedHashTree the right data structure?
+    const hashes = try allocator.alloc(Hash, pubkey_hashes.len);
+    defer allocator.free(hashes);
+    for (hashes, 0..) |*h, j| {
+        h.* = pubkey_hashes[j][1];
+    }
+    const hash_tree = sig.utils.merkle_tree.NestedHashTree{ .items = &.{hashes} };
+
+    const hash = try sig.utils.merkle_tree
+        .computeMerkleRoot(&hash_tree, sig.accounts_db.db.MERKLE_FANOUT);
+
+    return hash.*;
+}
+
+/// Returns the lattice hash of every account that was modified in the slot.
+pub fn deltaLtHash(
+    account_reader: AccountReader,
+    slot: Slot,
+    parent_ancestors: *const Ancestors,
+) !LtHash {
+    assert(!parent_ancestors.containsSlot(slot));
+
+    // TODO: consider using a thread pool
+    // TODO: consider caching old hashes
+
+    var iterator = account_reader.slotModifiedIterator(slot) orelse return .IDENTITY;
+    defer iterator.unlock();
+
+    var hash = LtHash.IDENTITY;
+    var i: usize = 0;
+    while (try iterator.next()) |pubkey_account| : (i += 1) {
+        const pubkey, const account = pubkey_account;
+        if (try account_reader.get(pubkey, parent_ancestors)) |old_acct| {
+            if (!old_acct.equals(&account)) {
+                hash.mixOut(&old_acct.hash(LtHash, &pubkey));
+                hash.mixIn(&account.hash(LtHash, &pubkey));
+            }
+        } else {
+            hash.mixIn(&account.hash(LtHash, &pubkey));
+        }
+    }
+
+    return hash;
 }
