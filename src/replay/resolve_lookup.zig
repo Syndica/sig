@@ -477,7 +477,7 @@ fn put(
     @memcpy(dst[0..src.len], src);
 
     try map.put(0, address, .{
-        .lamports = 0,
+        .lamports = 1,
         .data = &buf,
         .owner = sig.runtime.program.address_lookup_table.ID,
         .executable = false,
