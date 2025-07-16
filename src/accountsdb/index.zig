@@ -273,8 +273,8 @@ pub const AccountIndex = struct {
         return does_exist;
     }
 
-    /// adds the reference to the index
-    /// returns if the reference was inserted (false => replacement)
+    /// adds the reference to the index if there is not a duplicate (ie, the same slot).
+    /// returns if the reference was inserted.
     pub fn indexRefIfNotDuplicateSlotAssumeCapacity(
         self: *Self,
         account_ref: *AccountRef,
@@ -294,35 +294,13 @@ pub const AccountIndex = struct {
 
         // traverse until you find the end
         var curr_ref = map_entry.value_ptr.ref_ptr;
-
-        // head is duplicate, replace head
-        if (curr_ref.slot == account_ref.slot) {
-            map_entry.value_ptr.* = .{ .ref_ptr = account_ref, .ref_index = index };
-            return false;
-        }
-
-        // NOTE: I think it's fine to leave the old ref "hanging", i.e. still findable from the
-        // slot map.
-
         while (true) {
             if (curr_ref.slot == account_ref.slot) {
-                // found a duplicate => replace entry
-                // (the runtime may want to push to the same pubkey twice in the same slot)
-
-                // SAFE: only the head should have a null prev, and we've already checked the head
-                // previously.
-                const prev = curr_ref.prev_ptr.?;
-
-                // have the linked list skip over curr
-                prev.next_ptr = account_ref;
-                prev.next_index = index;
-                account_ref.prev_ptr = prev;
-
+                // found a duplicate => dont do the insertion
                 return false;
             }
             const next_ptr = curr_ref.next_ptr orelse {
                 // end of the list => insert it here
-                account_ref.prev_ptr = curr_ref;
                 curr_ref.next_ptr = account_ref;
                 curr_ref.next_index = index;
                 return true;
