@@ -502,6 +502,18 @@ pub const AuthorizedVoters = struct {
             try writer.writeAll(&v.data);
         }
     }
+
+    pub fn equals(self: *const AuthorizedVoters, other: *const AuthorizedVoters) bool {
+        if (self.count() != other.count()) return false;
+        var self_voters = self.voters;
+        var other_voters = other.voters;
+        for (self_voters.keys()) |key| {
+            const self_value = self_voters.get(key).?;
+            const other_value = other_voters.get(key) orelse return false;
+            if (!self_value.equals(&other_value)) return false;
+        }
+        return true;
+    }
 };
 
 const CircBufV0 = struct {
@@ -905,16 +917,7 @@ pub const VoteState = struct {
         for (self.votes.items, other.votes.items) |a, b|
             if (!std.meta.eql(a, b)) return false;
 
-        if (self.voters.count() != other.voters.count()) return false;
-        // Sorted map keys requires a mutable pointer because it calls `sort` before
-        // returning keys. This is annoying, sort should be enforced when inserting.
-        var self_voters = self.voters.voters;
-        var other_voters = other.voters.voters;
-        for (self_voters.keys()) |key| {
-            const self_value = self_voters.get(key).?;
-            const other_value = other_voters.get(key) orelse return false;
-            if (!self_value.equals(&other_value)) return false;
-        }
+        if (!self.voters.equals(&other.voters)) return false;
 
         if (!self.prior_voters.equals(other.prior_voters)) return false;
 
