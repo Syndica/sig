@@ -58,6 +58,8 @@ const WeightedAliasSampler = sig.rand.WeightedAliasSampler;
 
 const RwMux = sig.sync.RwMux;
 
+const assert = std.debug.assert;
+
 const parallelUnpackZstdTarBall = sig.accounts_db.snapshots.parallelUnpackZstdTarBall;
 const spawnThreadTasks = sig.utils.thread.spawnThreadTasks;
 const printTimeEstimate = sig.time.estimate.printTimeEstimate;
@@ -1148,6 +1150,52 @@ pub const AccountsDB = struct {
             total_lamports,
         };
     }
+
+    /// Returns an iterator that iterates over every account that was modified
+    /// in the slot.
+    ///
+    /// Holds the read lock on the index, so unlock it when done, and be careful
+    /// how long you hold this.
+    pub fn slotModifiedIterator(self: *AccountsDB, slot: Slot) ?SlotModifiedIterator {
+        var slot_ref_map = self.account_index.slot_reference_map.read();
+
+        const slot_references = slot_ref_map.get().get(slot) orelse {
+            slot_ref_map.unlock();
+            return null;
+        };
+
+        return .{
+            .db = self,
+            .lock = slot_ref_map,
+            .slot_index = slot_references,
+            .cursor = 0,
+        };
+    }
+
+    pub const SlotModifiedIterator = struct {
+        db: *AccountsDB,
+        lock: RwMux(AccountIndex.SlotRefMap).RLockGuard,
+        slot_index: AccountIndex.SlotRefMapValue,
+        cursor: usize,
+
+        pub fn unlock(self: *SlotModifiedIterator) void {
+            self.cursor = std.math.maxInt(usize);
+            self.lock.unlock();
+        }
+
+        pub fn len(self: *SlotModifiedIterator) usize {
+            return self.slot_index.len;
+        }
+
+        pub fn next(self: *SlotModifiedIterator) !?struct { Pubkey, Account } {
+            assert(self.cursor != std.math.maxInt(usize));
+            defer self.cursor += 1;
+            if (self.cursor > self.slot_index.len) return null;
+            const account_ref = self.slot_index[self.cursor];
+            const account = try self.db.getAccountFromRef(&account_ref);
+            return .{ account_ref.pubkey, account };
+        }
+    };
 
     pub const ValidateLoadFromSnapshotParams = struct {
         /// used to verify the full snapshot.

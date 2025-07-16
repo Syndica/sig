@@ -47,6 +47,14 @@ pub const AccountReader = union(enum) {
             .noop => null,
         };
     }
+
+    pub fn slotModifiedIterator(self: AccountReader, slot: Slot) ?SlotModifiedIterator {
+        return switch (self) {
+            .accounts_db => |db| .{ .accounts_db = db.slotModifiedIterator(slot) orelse return null },
+            .thread_safe_map => |map| .{ .thread_safe_map = map.slotModifiedIterator(slot) orelse return null },
+            .noop => .noop,
+        };
+    }
 };
 
 /// Interface for both reading and writing accounts.
@@ -97,22 +105,72 @@ pub const AccountStore = union(enum) {
             .noop => {},
         };
     }
+
+    /// Returns an iterator that iterates over every account that was modified
+    /// in the slot.
+    ///
+    /// Holds the read lock on the index, so unlock it when done, and be careful
+    /// how long you hold this.
+    pub fn slotModifiedIterator(self: AccountStore, slot: Slot) ?SlotModifiedIterator {
+        switch (self) {
+            .accounts_db => |db| .{ .accounts_db = db.slotModifiedIterator(slot) },
+            .thread_safe_map => |map| .{ .thread_safe_map = map.slotModifiedIterator(slot) },
+            .noop => .noop,
+        }
+    }
+};
+
+pub const SlotModifiedIterator = union(enum) {
+    accounts_db: AccountsDB.SlotModifiedIterator,
+    thread_safe_map: ThreadSafeAccountMap.SlotModifiedIterator,
+    noop,
+
+    pub fn unlock(self: *SlotModifiedIterator) void {
+        return switch (self.*) {
+            inline else => |*item| item.unlock(),
+            .noop => {},
+        };
+    }
+
+    pub fn len(self: *SlotModifiedIterator) usize {
+        return switch (self.*) {
+            inline else => |*item| item.len(),
+            .noop => 0,
+        };
+    }
+
+    pub fn next(self: *SlotModifiedIterator) !?struct { Pubkey, Account } {
+        return switch (self.*) {
+            inline else => |*item| try item.next(),
+            .noop => null,
+        };
+    }
 };
 
 /// Simple implementation of AccountReader and AccountStore, mainly for tests
 pub const ThreadSafeAccountMap = struct {
     allocator: Allocator,
-    map: RwMux(std.AutoArrayHashMapUnmanaged(
+    pubkey_map: RwMux(std.AutoArrayHashMapUnmanaged(
         Pubkey,
         std.ArrayListUnmanaged(struct { Slot, AccountSharedData }),
     )),
+    slot_map: RwMux(SlotMap),
+
+    const SlotMap = std.AutoArrayHashMapUnmanaged(
+        Slot,
+        std.ArrayListUnmanaged(struct { Pubkey, AccountSharedData }),
+    );
 
     pub fn init(allocator: Allocator) ThreadSafeAccountMap {
-        return .{ .allocator = allocator, .map = .init(.empty) };
+        return .{
+            .allocator = allocator,
+            .slot_map = .init(.empty),
+            .pubkey_map = .init(.empty),
+        };
     }
 
     pub fn deinit(self: *ThreadSafeAccountMap) void {
-        const map, var lock = self.map.writeWithLock();
+        const map, var lock = self.pubkey_map.writeWithLock();
         defer lock.unlock();
 
         for (map.values()) |val| {
@@ -139,7 +197,7 @@ pub const ThreadSafeAccountMap = struct {
         address: Pubkey,
         ancestors: *const Ancestors,
     ) !?Account {
-        const map, var lock = self.map.readWithLock();
+        const map, var lock = self.pubkey_map.readWithLock();
         defer lock.unlock();
 
         const list = map.get(address) orelse return null;
@@ -152,7 +210,7 @@ pub const ThreadSafeAccountMap = struct {
     }
 
     pub fn getLatest(self: *ThreadSafeAccountMap, address: Pubkey) !?Account {
-        const map, var lock = self.map.readWithLock();
+        const map, var lock = self.pubkey_map.readWithLock();
         defer lock.unlock();
 
         const list = map.get(address) orelse return null;
@@ -179,26 +237,37 @@ pub const ThreadSafeAccountMap = struct {
         address: Pubkey,
         account: AccountSharedData,
     ) !void {
-        const map, var lock = self.map.writeWithLock();
-        defer lock.unlock();
+        const pubkey_map, var pubkey_lock = self.pubkey_map.writeWithLock();
+        defer pubkey_lock.unlock();
 
-        const gop = try map.getOrPut(self.allocator, address);
-        if (!gop.found_existing) {
-            gop.value_ptr.* = .empty;
+        const slot_map, var slot_lock = self.slot_map.writeWithLock();
+        defer slot_lock.unlock();
+
+        const pubkey_gop = try pubkey_map.getOrPut(self.allocator, address);
+        if (!pubkey_gop.found_existing) {
+            pubkey_gop.value_ptr.* = .empty;
+        }
+
+        const slot_gop = try slot_map.getOrPut(self.allocator, slot);
+        if (!slot_gop.found_existing) {
+            slot_gop.value_ptr.* = .empty;
         }
 
         const data = try self.allocator.dupe(u8, account.data);
         errdefer self.allocator.free(account.data);
 
-        try gop.value_ptr.append(self.allocator, .{ slot, .{
+        const item = AccountSharedData{
             .lamports = account.lamports,
             .data = data,
             .owner = account.owner,
             .executable = account.executable,
             .rent_epoch = account.rent_epoch,
-        } });
+        };
 
-        std.mem.sort(struct { Slot, AccountSharedData }, gop.value_ptr.items, {}, struct {
+        try pubkey_gop.value_ptr.append(self.allocator, .{ slot, item });
+        try slot_gop.value_ptr.append(self.allocator, .{ address, item });
+
+        std.mem.sort(struct { Slot, AccountSharedData }, pubkey_gop.value_ptr.items, {}, struct {
             fn lessThan(
                 _: void,
                 lhs: struct { Slot, AccountSharedData },
@@ -208,4 +277,49 @@ pub const ThreadSafeAccountMap = struct {
             }
         }.lessThan);
     }
+
+    /// Returns an iterator that iterates over every account that was modified
+    /// in the slot.
+    ///
+    /// Holds the read lock on the index, so unlock it when done, and be careful
+    /// how long you hold this.
+    pub fn slotModifiedIterator(
+        self: *ThreadSafeAccountMap,
+        slot: Slot,
+    ) ?ThreadSafeAccountMap.SlotModifiedIterator {
+        var map = self.slot_map.read();
+
+        const slot_list = map.get().get(slot) orelse return null;
+
+        return .{
+            .allocator = self.allocator,
+            .lock = map,
+            .slot_list = slot_list.items,
+            .cursor = 0,
+        };
+    }
+
+    pub const SlotModifiedIterator = struct {
+        allocator: Allocator,
+        lock: RwMux(SlotMap).RLockGuard,
+        slot_list: []const struct { Pubkey, AccountSharedData },
+        cursor: usize,
+
+        pub fn unlock(self: *ThreadSafeAccountMap.SlotModifiedIterator) void {
+            self.cursor = std.math.maxInt(usize);
+            self.lock.unlock();
+        }
+
+        pub fn len(self: ThreadSafeAccountMap.SlotModifiedIterator) usize {
+            return self.slot_list.len;
+        }
+
+        pub fn next(self: *ThreadSafeAccountMap.SlotModifiedIterator) !?struct { Pubkey, Account } {
+            std.debug.assert(self.cursor != std.math.maxInt(usize));
+            defer self.cursor += 1;
+            if (self.cursor > self.slot_list.len) return null;
+            const pubkey, const account = self.slot_list[self.cursor];
+            return .{ pubkey, try toAccount(self.allocator, account) };
+        }
+    };
 };

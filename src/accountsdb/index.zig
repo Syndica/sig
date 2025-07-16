@@ -72,7 +72,8 @@ pub const AccountIndex = struct {
         .{},
     ),
 
-    pub const SlotRefMap = std.AutoHashMap(Slot, []AccountRef);
+    pub const SlotRefMap = std.AutoHashMap(Slot, SlotRefMapValue);
+    pub const SlotRefMapValue = []AccountRef;
     pub const AllocatorConfig = union(Tag) {
         pub const Tag = ReferenceAllocator.Tag;
         ram: struct { allocator: std.mem.Allocator },

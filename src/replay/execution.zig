@@ -74,6 +74,7 @@ pub const ReplayExecutionState = struct {
 /// Analogous to [replay_active_banks](https://github.com/anza-xyz/agave/blob/3f68568060fd06f2d561ad79e8d8eb5c5136815a/core/src/replay_stage.rs#L3356)
 pub fn replayActiveSlots(state: *ReplayExecutionState) !bool {
     const active_slots = try state.slot_tracker.activeSlots(state.allocator);
+    state.logger.info().logf("{} active slots to replay", .{active_slots.len});
     if (active_slots.len == 0) {
         return false;
     }
@@ -84,23 +85,46 @@ pub fn replayActiveSlots(state: *ReplayExecutionState) !bool {
         slot_statuses.deinit(state.allocator);
     }
     for (active_slots) |slot| {
+        state.logger.info().logf("replaying slot: {}", .{slot});
         const result = try replaySlot(state, slot);
         errdefer result.deinit(state.allocator);
         try slot_statuses.append(state.allocator, .{ slot, result });
     }
+    var processed_a_slot = false;
     for (slot_statuses.items) |slot_status| {
         // NOTE: currently this just awaits the futures and discards the
         // results. this will change once we call the svm and process the
         // results of execution.
-        _, const status = slot_status;
-        while (status == .confirm and try status.confirm.poll() == .pending) {
-            std.time.sleep(std.time.ns_per_ms); // TODO: consider futex-based wait like ResetEvent
+        const slot, const status = slot_status;
+        const slot_info = state.slot_tracker.get(slot) orelse unreachable;
+
+        if (status != .confirm) continue;
+
+        const future = status.confirm;
+        // NOTE: agave does this a bit differently, it indicates that a slot
+        // was *finished*, not just processed partially.
+        processed_a_slot = true;
+        while (try status.confirm.poll() == .pending) {
+            // TODO: consider futex-based wait like ResetEvent
+            std.time.sleep(std.time.ns_per_ms);
         }
-        status.deinit(state.allocator);
+
+        if (slot_info.state.tickHeight() == slot_info.constants.max_tick_height) {
+            state.logger.info().logf("confirmed entire slot {}", .{slot});
+            try replay.freeze.freezeSlot(state.allocator, .init(
+                state.account_store.accountReader(),
+                slot_info.state,
+                slot_info.constants,
+                slot,
+                future.entries[future.entries.len - 1].hash,
+            ));
+        } else {
+            state.logger.info().logf("partially confirmed slot {}", .{slot});
+        }
     }
 
     // TODO: process_replay_results: https://github.com/anza-xyz/agave/blob/3f68568060fd06f2d561ad79e8d8eb5c5136815a/core/src/replay_stage.rs#L3443
-    return false;
+    return processed_a_slot;
 }
 
 const ReplaySlotStatus = union(enum) {
