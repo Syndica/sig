@@ -196,6 +196,10 @@ test "TransactionScheduler: happy path" {
     var rng = std.Random.DefaultPrng.init(123);
 
     var thread_pool = ThreadPool.init(.{});
+    defer {
+        thread_pool.shutdown();
+        thread_pool.deinit();
+    }
     var scheduler = try TransactionScheduler.initCapacity(allocator, 10, &thread_pool);
     defer scheduler.deinit();
 
@@ -239,6 +243,10 @@ test "TransactionScheduler: failed account locks" {
     var rng = std.Random.DefaultPrng.init(0);
 
     var thread_pool = ThreadPool.init(.{});
+    defer {
+        thread_pool.shutdown();
+        thread_pool.deinit();
+    }
     var scheduler = try TransactionScheduler.initCapacity(allocator, 10, &thread_pool);
     defer scheduler.deinit();
 
@@ -268,6 +276,10 @@ test "TransactionScheduler: signature verification failure" {
     var rng = std.Random.DefaultPrng.init(0);
 
     var thread_pool = ThreadPool.init(.{});
+    defer {
+        thread_pool.shutdown();
+        thread_pool.deinit();
+    }
     var scheduler = try TransactionScheduler.initCapacity(allocator, 10, &thread_pool);
     defer scheduler.deinit();
 
