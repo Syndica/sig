@@ -1304,6 +1304,10 @@ const TestData = struct {
     progress: ProgressMap,
     descendants: Descendants,
 
+    comptime {
+        std.debug.assert(@import("builtin").is_test);
+    }
+
     fn deinit(self: TestData, allocator: std.mem.Allocator) void {
         self.slot_tracker.deinit(allocator);
 
@@ -1339,6 +1343,8 @@ const TestData = struct {
             };
         }
 
+        /// Generates an element with a bunch of dummy data, aside from
+        /// anything described by `self`.
         fn toDummyElem(
             self: SlotInfo,
             slot_infos: []const SlotInfo,
