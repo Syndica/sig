@@ -15,7 +15,7 @@ pub const StakeHistory = struct {
 
     pub const Entry = extern struct {
         epoch: Epoch,
-        stake: ClusterStake,
+        stake: StakeState,
 
         pub fn sortCmp(_: void, a: Entry, b: Entry) bool {
             return b.epoch < a.epoch; // Sort by descending epoch
@@ -38,7 +38,7 @@ pub const StakeHistory = struct {
         }
     };
 
-    pub const ClusterStake = extern struct {
+    pub const StakeState = extern struct {
         /// Effective stake at this epoch
         effective: u64,
         /// Sum of portion of stakes not fully warmed up
