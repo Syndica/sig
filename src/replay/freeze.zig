@@ -13,7 +13,6 @@ const LtHash = core.LtHash;
 const Pubkey = core.Pubkey;
 const Slot = core.Slot;
 
-const AccountsDB = sig.accounts_db.AccountsDB;
 const AccountReader = sig.accounts_db.AccountReader;
 
 pub const FreezeParams = struct {
