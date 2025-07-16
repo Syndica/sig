@@ -160,7 +160,7 @@ fn replaySlot(state: *ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
                 return error.MissingLastHash,
             .i_am_leader = i_am_leader,
             .epoch_stakes = &epoch_info.stakes,
-            .now = sig.time.Instant.now(),
+            .now = sig.time.clock.sample(),
             .validator_vote_pubkey = state.vote_account,
         });
     }
