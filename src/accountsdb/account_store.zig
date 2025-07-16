@@ -58,35 +58,11 @@ pub const AccountStore = union(enum) {
     thread_safe_map: *ThreadSafeAccountMap,
     noop,
 
-    pub fn accountReader(self: AccountStore) AccountReader {
+    pub fn reader(self: AccountStore) AccountReader {
         return switch (self) {
             .accounts_db => |db| .{ .accounts_db = db },
             .thread_safe_map => |map| .{ .thread_safe_map = map },
             .noop => .noop,
-        };
-    }
-
-    /// use this to deinit accounts returned by get methods
-    pub fn allocator(self: AccountStore) Allocator {
-        return switch (self) {
-            .noop => sig.utils.allocators.failing.allocator(.{}),
-            inline else => |item| item.allocator,
-        };
-    }
-
-    pub fn get(self: AccountStore, address: Pubkey, ancestors: *const Ancestors) !?Account {
-        return switch (self) {
-            .accounts_db => |db| try db.getAccount(&address), // TODO: PR #796
-            .thread_safe_map => |map| try map.get(address, ancestors),
-            .noop => null,
-        };
-    }
-
-    pub fn getLatest(self: AccountStore, address: Pubkey) !?Account {
-        return switch (self) {
-            .accounts_db => |db| try db.getAccount(&address),
-            .thread_safe_map => |map| try map.getLatest(address),
-            .noop => null,
         };
     }
 
