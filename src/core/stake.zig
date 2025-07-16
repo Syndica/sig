@@ -70,29 +70,31 @@ pub fn StakesCacheGeneric(comptime stakes_type: StakesType) type {
             }
 
             if (vote_program.ID.equals(&account.owner)) {
-                if (VersionedVoteState.isCorrectSizeAndInitialized(account.data)) {
-                    const vote_account = VoteAccount.fromAccountSharedData(
-                        allocator,
-                        try account.clone(allocator),
-                    ) catch {
-                        var stakes: *StakesT, var stakes_guard = self.stakes.writeWithLock();
-                        defer stakes_guard.unlock();
-                        try stakes.removeVoteAccount(allocator, pubkey);
-                        return;
-                    };
-                    var stakes: *StakesT, var stakes_guard = self.stakes.writeWithLock();
-                    defer stakes_guard.unlock();
-                    try stakes.upsertVoteAccount(
-                        allocator,
-                        pubkey,
-                        vote_account,
-                        new_rate_activation_epoch,
-                    );
-                } else {
+                if (!VersionedVoteState.isCorrectSizeAndInitialized(account.data)) {
                     var stakes: *StakesT, var stakes_guard = self.stakes.writeWithLock();
                     defer stakes_guard.unlock();
                     try stakes.removeVoteAccount(allocator, pubkey);
+                    return;
                 }
+
+                const vote_account = VoteAccount.fromAccountSharedData(
+                    allocator,
+                    try account.clone(allocator),
+                ) catch {
+                    var stakes: *StakesT, var stakes_guard = self.stakes.writeWithLock();
+                    defer stakes_guard.unlock();
+                    try stakes.removeVoteAccount(allocator, pubkey);
+                    return;
+                };
+
+                var stakes: *StakesT, var stakes_guard = self.stakes.writeWithLock();
+                defer stakes_guard.unlock();
+                try stakes.upsertVoteAccount(
+                    allocator,
+                    pubkey,
+                    vote_account,
+                    new_rate_activation_epoch,
+                );
             } else if (stake_program.ID.equals(&account.owner)) {
                 const stake_account = StakeAccount.fromAccountSharedData(
                     allocator,
@@ -103,6 +105,7 @@ pub fn StakesCacheGeneric(comptime stakes_type: StakesType) type {
                     try stakes.removeStakeAccount(allocator, pubkey, new_rate_activation_epoch);
                     return;
                 };
+
                 var stakes: *StakesT, var stakes_guard = self.stakes.writeWithLock();
                 defer stakes_guard.unlock();
                 try stakes.upsertStakeAccount(
