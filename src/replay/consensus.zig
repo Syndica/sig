@@ -398,9 +398,16 @@ fn checkAndHandleNewRoot(
 
     // Update the progress map.
     // Remove entries from the progress map no longer in the slot tracker.
-    for (progress.map.keys()) |progress_slot| {
+    var progress_keys = progress.map.keys();
+    var index: usize = 0;
+    while (index < progress_keys.len) {
+        const progress_slot = progress_keys[index];
         if (slot_tracker.get(progress_slot) == null) {
-            _ = progress.map.swapRemove(progress_slot);
+            const removed_value = progress.map.fetchSwapRemove(progress_slot) orelse continue;
+            defer removed_value.value.deinit(allocator);
+            progress_keys = progress.map.keys();
+        } else {
+            index += 1;
         }
     }
 
