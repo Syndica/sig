@@ -190,22 +190,32 @@ pub const ThreadSafeAccountMap = struct {
         const data = try self.allocator.dupe(u8, account.data);
         errdefer self.allocator.free(account.data);
 
-        try gop.value_ptr.append(self.allocator, .{ slot, .{
+        const account_shared_data = AccountSharedData{
             .lamports = account.lamports,
             .data = data,
             .owner = account.owner,
             .executable = account.executable,
             .rent_epoch = account.rent_epoch,
-        } });
+        };
 
-        std.mem.sort(struct { Slot, AccountSharedData }, gop.value_ptr.items, {}, struct {
-            fn lessThan(
-                _: void,
-                lhs: struct { Slot, AccountSharedData },
-                rhs: struct { Slot, AccountSharedData },
-            ) bool {
-                return lhs[0] > rhs[0]; // sort descending so get methods are simpler
-            }
-        }.lessThan);
+        const versions = gop.value_ptr.items;
+
+        const index = std.sort.lowerBound(
+            struct { Slot, AccountSharedData },
+            versions,
+            slot,
+            struct {
+                fn compare(s: Slot, elem: struct { Slot, AccountSharedData }) std.math.Order {
+                    return std.math.order(elem[0], s); // sorted descending to simplify getters
+                }
+            }.compare,
+        );
+
+        if (index != versions.len and versions[index][0] == slot) {
+            self.allocator.free(versions[index][1].data);
+            versions[index] = .{ slot, account_shared_data };
+        } else {
+            try gop.value_ptr.insert(self.allocator, index, .{ slot, account_shared_data });
+        }
     }
 };
