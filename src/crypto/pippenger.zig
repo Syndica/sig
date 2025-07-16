@@ -38,9 +38,6 @@ pub fn mulMulti(
     /// Edwards25519 element, since there's no difference between the operation
     /// on Ristretto and Edwards25519, but the decoding is different.
     comptime ristretto: bool,
-    // TODO: explore accepting ristretto points here as well, not sure of the current
-    // design implications. are there any places where we're going out of our way to
-    // translate to the underlying ed25519 point?
     ed_points: []const PointType(encoded, ristretto),
     compressed_scalars: []const CompressedScalar,
 ) ReturnType(encoded, ristretto) {

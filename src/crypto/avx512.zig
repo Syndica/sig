@@ -1,4 +1,5 @@
-//! This implementation takes inspirtion from
+//! This implementation takes inspiration from:
+//! https://github.com/dalek-cryptography/curve25519-dalek/tree/c3f91f762042debf7c516c21ad9b9a2a9f4ef3b8/curve25519-dalek/src/backend/vector/ifma
 
 const std = @import("std");
 const Ed25519 = std.crypto.ecc.Edwards25519;
@@ -8,6 +9,10 @@ const u32x8 = @Vector(8, u32);
 const i32x8 = @Vector(8, i32);
 const u64x4 = @Vector(4, u64);
 
+// TODO: there's no inherent limitation from using inline assembly instead,
+// however this currently (Zig 0.14.1) crashes both LLVM and the self-hosted backend.
+// Also, should investigate whether directly using LLVM intrinsics leads to potentially
+// better codegen as opposed to inline assembly.
 extern fn @"llvm.x86.avx512.vpmadd52l.uq.256"(u64x4, u64x4, u64x4) u64x4;
 extern fn @"llvm.x86.avx512.vpmadd52h.uq.256"(u64x4, u64x4, u64x4) u64x4;
 const madd52lo = @"llvm.x86.avx512.vpmadd52l.uq.256";
@@ -48,8 +53,8 @@ pub const ExtendedPoint = struct {
         return init(ed.x, ed.y, ed.z, ed.t);
     }
 
-    pub fn toPoint(fe: ExtendedPoint) Ed25519 {
-        const reduced = fe.reduce();
+    pub fn toPoint(self: ExtendedPoint) Ed25519 {
+        const reduced = self.reduce();
         const splits = fromCached(reduced).split();
         return .{
             .x = splits[0],
@@ -59,8 +64,8 @@ pub const ExtendedPoint = struct {
         };
     }
 
-    fn split(fe: ExtendedPoint) [4]Fe {
-        const limbs = fe.limbs;
+    fn split(self: ExtendedPoint) [4]Fe {
+        const limbs = self.limbs;
         return .{
             .{ .limbs = .{ limbs[0][0], limbs[1][0], limbs[2][0], limbs[3][0], limbs[4][0] } },
             .{ .limbs = .{ limbs[0][1], limbs[1][1], limbs[2][1], limbs[3][1], limbs[4][1] } },
@@ -69,37 +74,37 @@ pub const ExtendedPoint = struct {
         };
     }
 
-    fn reduce(fe: ExtendedPoint) CachedPoint {
+    fn reduce(self: ExtendedPoint) CachedPoint {
         const mask: u64x4 = @splat((1 << 51) - 1);
         const r19: u64x4 = @splat(19);
 
-        const c0 = fe.limbs[0] >> @splat(51);
-        const c1 = fe.limbs[1] >> @splat(51);
-        const c2 = fe.limbs[2] >> @splat(51);
-        const c3 = fe.limbs[3] >> @splat(51);
-        const c4 = fe.limbs[4] >> @splat(51);
+        const c0 = self.limbs[0] >> @splat(51);
+        const c1 = self.limbs[1] >> @splat(51);
+        const c2 = self.limbs[2] >> @splat(51);
+        const c3 = self.limbs[3] >> @splat(51);
+        const c4 = self.limbs[4] >> @splat(51);
 
         return .{ .limbs = .{
-            madd52lo(fe.limbs[0] & mask, c4, r19),
-            (fe.limbs[1] & mask) + c0,
-            (fe.limbs[2] & mask) + c1,
-            (fe.limbs[3] & mask) + c2,
-            (fe.limbs[4] & mask) + c3,
+            madd52lo(self.limbs[0] & mask, c4, r19),
+            (self.limbs[1] & mask) + c0,
+            (self.limbs[2] & mask) + c1,
+            (self.limbs[3] & mask) + c2,
+            (self.limbs[4] & mask) + c3,
         } };
     }
 
-    fn add(fe: ExtendedPoint, other: ExtendedPoint) ExtendedPoint {
+    fn add(self: ExtendedPoint, other: ExtendedPoint) ExtendedPoint {
         return .{ .limbs = .{
-            fe.limbs[0] + other.limbs[0],
-            fe.limbs[1] + other.limbs[1],
-            fe.limbs[2] + other.limbs[2],
-            fe.limbs[3] + other.limbs[3],
-            fe.limbs[4] + other.limbs[4],
+            self.limbs[0] + other.limbs[0],
+            self.limbs[1] + other.limbs[1],
+            self.limbs[2] + other.limbs[2],
+            self.limbs[3] + other.limbs[3],
+            self.limbs[4] + other.limbs[4],
         } };
     }
 
-    pub fn addCached(fe: ExtendedPoint, cp: CachedPoint) ExtendedPoint {
-        var tmp = fe;
+    pub fn addCached(self: ExtendedPoint, cp: CachedPoint) ExtendedPoint {
+        var tmp = self;
         tmp = tmp.blend(tmp.diffSum(), .AB);
         tmp = tmp.reduce().mul(cp);
         tmp = tmp.shuffle(.ABDC);
@@ -111,53 +116,53 @@ pub const ExtendedPoint = struct {
         return t0.mul(t1);
     }
 
-    pub fn subCached(fe: ExtendedPoint, cp: CachedPoint) ExtendedPoint {
-        return fe.addCached(cp.negate());
+    pub fn subCached(self: ExtendedPoint, cp: CachedPoint) ExtendedPoint {
+        return self.addCached(cp.negate());
     }
 
-    fn shuffle(fe: ExtendedPoint, comptime control: Shuffle) ExtendedPoint {
+    fn shuffle(self: ExtendedPoint, comptime control: Shuffle) ExtendedPoint {
         return .{ .limbs = .{
-            shuffleLanes(control, fe.limbs[0]),
-            shuffleLanes(control, fe.limbs[1]),
-            shuffleLanes(control, fe.limbs[2]),
-            shuffleLanes(control, fe.limbs[3]),
-            shuffleLanes(control, fe.limbs[4]),
+            shuffleLanes(control, self.limbs[0]),
+            shuffleLanes(control, self.limbs[1]),
+            shuffleLanes(control, self.limbs[2]),
+            shuffleLanes(control, self.limbs[3]),
+            shuffleLanes(control, self.limbs[4]),
         } };
     }
 
-    fn blend(fe: ExtendedPoint, other: ExtendedPoint, comptime control: Lanes) ExtendedPoint {
+    fn blend(self: ExtendedPoint, other: ExtendedPoint, comptime control: Lanes) ExtendedPoint {
         return .{ .limbs = .{
-            blendLanes(control, fe.limbs[0], other.limbs[0]),
-            blendLanes(control, fe.limbs[1], other.limbs[1]),
-            blendLanes(control, fe.limbs[2], other.limbs[2]),
-            blendLanes(control, fe.limbs[3], other.limbs[3]),
-            blendLanes(control, fe.limbs[4], other.limbs[4]),
+            blendLanes(control, self.limbs[0], other.limbs[0]),
+            blendLanes(control, self.limbs[1], other.limbs[1]),
+            blendLanes(control, self.limbs[2], other.limbs[2]),
+            blendLanes(control, self.limbs[3], other.limbs[3]),
+            blendLanes(control, self.limbs[4], other.limbs[4]),
         } };
     }
 
-    fn diffSum(fe: ExtendedPoint) ExtendedPoint {
-        const tmp1 = fe.shuffle(.BADC);
-        const tmp2 = fe.blend(fe.negateLazy(), .AC);
+    fn diffSum(self: ExtendedPoint) ExtendedPoint {
+        const tmp1 = self.shuffle(.BADC);
+        const tmp2 = self.blend(self.negateLazy(), .AC);
         return tmp1.add(tmp2);
     }
 
-    fn negateLazy(fe: ExtendedPoint) ExtendedPoint {
+    fn negateLazy(self: ExtendedPoint) ExtendedPoint {
         const lo: u64x4 = @splat(0x7FFFFFFFFFFED0);
         const hi: u64x4 = @splat(0x7FFFFFFFFFFFF0);
         return .{ .limbs = .{
-            lo - fe.limbs[0],
-            hi - fe.limbs[1],
-            hi - fe.limbs[2],
-            hi - fe.limbs[3],
-            hi - fe.limbs[4],
+            lo - self.limbs[0],
+            hi - self.limbs[1],
+            hi - self.limbs[2],
+            hi - self.limbs[3],
+            hi - self.limbs[4],
         } };
     }
 
-    pub fn dbl(fe: ExtendedPoint) ExtendedPoint {
-        var tmp0 = fe.shuffle(.BADC);
-        var tmp1 = fe.add(tmp0).shuffle(.ABAB);
+    pub fn dbl(self: ExtendedPoint) ExtendedPoint {
+        var tmp0 = self.shuffle(.BADC);
+        var tmp1 = self.add(tmp0).shuffle(.ABAB);
 
-        tmp0 = fe.blend(tmp1, .D);
+        tmp0 = self.blend(tmp1, .D);
         tmp1 = tmp0.reduce().square();
 
         const S1_S1_S1_S1 = tmp1.shuffle(.AAAA);
@@ -177,8 +182,8 @@ pub const ExtendedPoint = struct {
 pub const CachedPoint = struct {
     limbs: [5]u64x4,
 
-    fn mul(a: CachedPoint, b: CachedPoint) ExtendedPoint {
-        const x = a.limbs;
+    fn mul(self: CachedPoint, b: CachedPoint) ExtendedPoint {
+        const x = self.limbs;
         const y = b.limbs;
 
         // Accumulators for terms with coeff 1
@@ -309,8 +314,8 @@ pub const CachedPoint = struct {
         } };
     }
 
-    fn mulConstants(a: CachedPoint, scalars: [4]u32) ExtendedPoint {
-        const x = a.limbs;
+    fn mulConstants(self: CachedPoint, scalars: [4]u32) ExtendedPoint {
+        const x = self.limbs;
         const y: u64x4 = scalars;
 
         const r19: u64x4 = @splat(19);
@@ -349,8 +354,8 @@ pub const CachedPoint = struct {
         } };
     }
 
-    fn square(a: CachedPoint) ExtendedPoint {
-        const x = a.limbs;
+    fn square(self: CachedPoint) ExtendedPoint {
+        const x = self.limbs;
 
         // Represent values with coeff. 2
         var z0_2: u64x4 = @splat(0);
@@ -460,29 +465,29 @@ pub const CachedPoint = struct {
         } };
     }
 
-    fn shuffle(fe: CachedPoint, comptime control: Shuffle) CachedPoint {
+    fn shuffle(self: CachedPoint, comptime control: Shuffle) CachedPoint {
         return .{ .limbs = .{
-            shuffleLanes(control, fe.limbs[0]),
-            shuffleLanes(control, fe.limbs[1]),
-            shuffleLanes(control, fe.limbs[2]),
-            shuffleLanes(control, fe.limbs[3]),
-            shuffleLanes(control, fe.limbs[4]),
+            shuffleLanes(control, self.limbs[0]),
+            shuffleLanes(control, self.limbs[1]),
+            shuffleLanes(control, self.limbs[2]),
+            shuffleLanes(control, self.limbs[3]),
+            shuffleLanes(control, self.limbs[4]),
         } };
     }
 
-    fn blend(fe: CachedPoint, other: CachedPoint, comptime control: Lanes) CachedPoint {
+    fn blend(self: CachedPoint, other: CachedPoint, comptime control: Lanes) CachedPoint {
         return .{ .limbs = .{
-            blendLanes(control, fe.limbs[0], other.limbs[0]),
-            blendLanes(control, fe.limbs[1], other.limbs[1]),
-            blendLanes(control, fe.limbs[2], other.limbs[2]),
-            blendLanes(control, fe.limbs[3], other.limbs[3]),
-            blendLanes(control, fe.limbs[4], other.limbs[4]),
+            blendLanes(control, self.limbs[0], other.limbs[0]),
+            blendLanes(control, self.limbs[1], other.limbs[1]),
+            blendLanes(control, self.limbs[2], other.limbs[2]),
+            blendLanes(control, self.limbs[3], other.limbs[3]),
+            blendLanes(control, self.limbs[4], other.limbs[4]),
         } };
     }
 
-    fn negate(fe: CachedPoint) CachedPoint {
-        const swapped = fe.shuffle(.BACD);
-        const negated = ExtendedPoint.fromCached(fe).negateLazy().reduce();
+    fn negate(self: CachedPoint) CachedPoint {
+        const swapped = self.shuffle(.BACD);
+        const negated = ExtendedPoint.fromCached(self).negateLazy().reduce();
         return swapped.blend(negated, .D);
     }
 

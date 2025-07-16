@@ -71,12 +71,7 @@ pub const ExtendedPoint = struct {
         @splat(0),
     } };
 
-    fn init(
-        x0: Fe,
-        x1: Fe,
-        x2: Fe,
-        x3: Fe,
-    ) ExtendedPoint {
+    fn init(x0: Fe, x1: Fe, x2: Fe, x3: Fe) ExtendedPoint {
         var buffer: [5]u32x8 = @splat(@splat(0));
         const low_26_bits = (@as(u64, 1) << 26) - 1;
 
@@ -109,8 +104,8 @@ pub const ExtendedPoint = struct {
         return init(p.x, p.y, p.z, p.t);
     }
 
-    pub fn toPoint(fe: ExtendedPoint) Ed25519 {
-        const splits = fe.split();
+    pub fn toPoint(self: ExtendedPoint) Ed25519 {
+        const splits = self.split();
         return .{
             .x = splits[0],
             .y = splits[1],
@@ -119,7 +114,7 @@ pub const ExtendedPoint = struct {
         };
     }
 
-    fn reduce(fe: ExtendedPoint) ExtendedPoint {
+    fn reduce(self: ExtendedPoint) ExtendedPoint {
         const masks: u32x8 = .{
             (@as(u32, 1) << 26) - 1,
             (@as(u32, 1) << 26) - 1,
@@ -131,7 +126,7 @@ pub const ExtendedPoint = struct {
             (@as(u32, 1) << 25) - 1,
         };
 
-        var v = fe.limbs;
+        var v = self.limbs;
 
         const c10 = rotatedCarryout(v[0]);
         v[0] = (v[0] & masks) + combine(@splat(0), c10);
@@ -294,14 +289,14 @@ pub const ExtendedPoint = struct {
         return (a_wide & mask) * (b_wide & mask);
     }
 
-    fn mulConstants(fe: ExtendedPoint, scalars: [4]u32) ExtendedPoint {
+    fn mulConstants(self: ExtendedPoint, scalars: [4]u32) ExtendedPoint {
         const constants: u32x8 = .{ scalars[0], 0, scalars[1], 0, scalars[2], 0, scalars[3], 0 };
 
-        const b0, const b1 = unpackPair(fe.limbs[0]);
-        const b2, const b3 = unpackPair(fe.limbs[1]);
-        const b4, const b5 = unpackPair(fe.limbs[2]);
-        const b6, const b7 = unpackPair(fe.limbs[3]);
-        const b8, const b9 = unpackPair(fe.limbs[4]);
+        const b0, const b1 = unpackPair(self.limbs[0]);
+        const b2, const b3 = unpackPair(self.limbs[1]);
+        const b4, const b5 = unpackPair(self.limbs[2]);
+        const b6, const b7 = unpackPair(self.limbs[3]);
+        const b8, const b9 = unpackPair(self.limbs[4]);
 
         return reduce64(.{
             mul32(b0, constants),
@@ -317,12 +312,12 @@ pub const ExtendedPoint = struct {
         });
     }
 
-    fn mul(fe: ExtendedPoint, other: ExtendedPoint) ExtendedPoint {
-        const x0, const x1 = unpackPair(fe.limbs[0]);
-        const x2, const x3 = unpackPair(fe.limbs[1]);
-        const x4, const x5 = unpackPair(fe.limbs[2]);
-        const x6, const x7 = unpackPair(fe.limbs[3]);
-        const x8, const x9 = unpackPair(fe.limbs[4]);
+    fn mul(self: ExtendedPoint, other: ExtendedPoint) ExtendedPoint {
+        const x0, const x1 = unpackPair(self.limbs[0]);
+        const x2, const x3 = unpackPair(self.limbs[1]);
+        const x4, const x5 = unpackPair(self.limbs[2]);
+        const x6, const x7 = unpackPair(self.limbs[3]);
+        const x8, const x9 = unpackPair(self.limbs[4]);
 
         const y0, const y1 = unpackPair(other.limbs[0]);
         const y2, const y3 = unpackPair(other.limbs[1]);
@@ -364,11 +359,11 @@ pub const ExtendedPoint = struct {
         return reduce64(.{ z0, z1, z2, z3, z4, z5, z6, z7, z8, z9 });
     }
 
-    pub fn dbl(fe: ExtendedPoint) ExtendedPoint {
-        var tmp0 = fe.shuffle(.ABAB);
+    pub fn dbl(self: ExtendedPoint) ExtendedPoint {
+        var tmp0 = self.shuffle(.ABAB);
         var tmp1 = tmp0.shuffle(.BADC);
 
-        tmp0 = fe.blend(tmp0.add(tmp1), .D);
+        tmp0 = self.blend(tmp0.add(tmp1), .D);
         tmp1 = tmp0.squareAndNegateD();
 
         const S_1 = tmp1.shuffle(.AAAA);
@@ -387,18 +382,18 @@ pub const ExtendedPoint = struct {
     }
 
     /// Splits the vector into four field elements.
-    fn split(fe: ExtendedPoint) [4]Fe {
+    fn split(self: ExtendedPoint) [4]Fe {
         var out: [4]Fe = @splat(.zero);
         for (0..5) |i| {
             // zig fmt: off
-            const a_2i  : u64 = fe.limbs[i][0];
-            const b_2i  : u64 = fe.limbs[i][1];
-            const a_2i_1: u64 = fe.limbs[i][2];
-            const b_2i_1: u64 = fe.limbs[i][3];
-            const c_2i  : u64 = fe.limbs[i][4];
-            const d_2i  : u64 = fe.limbs[i][5];
-            const c_2i_1: u64 = fe.limbs[i][6];
-            const d_2i_1: u64 = fe.limbs[i][7];
+            const a_2i  : u64 = self.limbs[i][0];
+            const b_2i  : u64 = self.limbs[i][1];
+            const a_2i_1: u64 = self.limbs[i][2];
+            const b_2i_1: u64 = self.limbs[i][3];
+            const c_2i  : u64 = self.limbs[i][4];
+            const d_2i  : u64 = self.limbs[i][5];
+            const c_2i_1: u64 = self.limbs[i][6];
+            const d_2i_1: u64 = self.limbs[i][7];
             // zig fmt: on
 
             out[0].limbs[i] = a_2i + (a_2i_1 << 26);
@@ -423,7 +418,7 @@ pub const ExtendedPoint = struct {
         ABDC,
     };
 
-    fn shuffle(fe: ExtendedPoint, comptime control: Shuffle) ExtendedPoint {
+    fn shuffle(self: ExtendedPoint, comptime control: Shuffle) ExtendedPoint {
         const S = struct {
             fn permd(x: u32x8, v: u32x8) u32x8 {
                 var result: u32x8 = undefined;
@@ -453,11 +448,11 @@ pub const ExtendedPoint = struct {
         };
 
         return .{ .limbs = .{
-            S.shuffleLanes(fe.limbs[0]),
-            S.shuffleLanes(fe.limbs[1]),
-            S.shuffleLanes(fe.limbs[2]),
-            S.shuffleLanes(fe.limbs[3]),
-            S.shuffleLanes(fe.limbs[4]),
+            S.shuffleLanes(self.limbs[0]),
+            S.shuffleLanes(self.limbs[1]),
+            S.shuffleLanes(self.limbs[2]),
+            S.shuffleLanes(self.limbs[3]),
+            S.shuffleLanes(self.limbs[4]),
         } };
     }
 
@@ -477,7 +472,7 @@ pub const ExtendedPoint = struct {
     const C_LANES: u8 = 0b0101_0000;
     const D_LANES: u8 = 0b1010_0000;
 
-    fn blend(fe: ExtendedPoint, other: ExtendedPoint, comptime control: Lanes) ExtendedPoint {
+    fn blend(self: ExtendedPoint, other: ExtendedPoint, comptime control: Lanes) ExtendedPoint {
         const S = struct {
             fn blendLanes(x: u32x8, y: u32x8) u32x8 {
                 const c = switch (control) {
@@ -501,48 +496,48 @@ pub const ExtendedPoint = struct {
         };
 
         return .{ .limbs = .{
-            S.blendLanes(fe.limbs[0], other.limbs[0]),
-            S.blendLanes(fe.limbs[1], other.limbs[1]),
-            S.blendLanes(fe.limbs[2], other.limbs[2]),
-            S.blendLanes(fe.limbs[3], other.limbs[3]),
-            S.blendLanes(fe.limbs[4], other.limbs[4]),
+            S.blendLanes(self.limbs[0], other.limbs[0]),
+            S.blendLanes(self.limbs[1], other.limbs[1]),
+            S.blendLanes(self.limbs[2], other.limbs[2]),
+            S.blendLanes(self.limbs[3], other.limbs[3]),
+            S.blendLanes(self.limbs[4], other.limbs[4]),
         } };
     }
 
     /// Given `(A, B, C, D)` computes `(-A, -B, -C, -D)` without performing a reduction.
-    fn negateLazy(fe: ExtendedPoint) ExtendedPoint {
+    fn negateLazy(self: ExtendedPoint) ExtendedPoint {
         return .{ .limbs = .{
-            P_TIMES_2_LO - fe.limbs[0],
-            P_TIMES_2_HI - fe.limbs[1],
-            P_TIMES_2_HI - fe.limbs[2],
-            P_TIMES_2_HI - fe.limbs[3],
-            P_TIMES_2_HI - fe.limbs[4],
+            P_TIMES_2_LO - self.limbs[0],
+            P_TIMES_2_HI - self.limbs[1],
+            P_TIMES_2_HI - self.limbs[2],
+            P_TIMES_2_HI - self.limbs[3],
+            P_TIMES_2_HI - self.limbs[4],
         } };
     }
 
-    fn neg(fe: ExtendedPoint) ExtendedPoint {
+    fn neg(self: ExtendedPoint) ExtendedPoint {
         const element: ExtendedPoint = .{ .limbs = .{
-            P_TIMES_16_LO - fe.limbs[0],
-            P_TIMES_16_HI - fe.limbs[1],
-            P_TIMES_16_HI - fe.limbs[2],
-            P_TIMES_16_HI - fe.limbs[3],
-            P_TIMES_16_HI - fe.limbs[4],
+            P_TIMES_16_LO - self.limbs[0],
+            P_TIMES_16_HI - self.limbs[1],
+            P_TIMES_16_HI - self.limbs[2],
+            P_TIMES_16_HI - self.limbs[3],
+            P_TIMES_16_HI - self.limbs[4],
         } };
         return element.reduce();
     }
 
-    pub fn add(fe: ExtendedPoint, other: ExtendedPoint) ExtendedPoint {
+    pub fn add(self: ExtendedPoint, other: ExtendedPoint) ExtendedPoint {
         return .{ .limbs = .{
-            fe.limbs[0] + other.limbs[0],
-            fe.limbs[1] + other.limbs[1],
-            fe.limbs[2] + other.limbs[2],
-            fe.limbs[3] + other.limbs[3],
-            fe.limbs[4] + other.limbs[4],
+            self.limbs[0] + other.limbs[0],
+            self.limbs[1] + other.limbs[1],
+            self.limbs[2] + other.limbs[2],
+            self.limbs[3] + other.limbs[3],
+            self.limbs[4] + other.limbs[4],
         } };
     }
 
-    pub fn addCached(fe: ExtendedPoint, cp: CachedPoint) ExtendedPoint {
-        var tmp = fe;
+    pub fn addCached(self: ExtendedPoint, cp: CachedPoint) ExtendedPoint {
+        var tmp = self;
 
         tmp = tmp.blend(tmp.diffSum(), .AB);
         tmp = tmp.mul(cp.element);
@@ -555,30 +550,30 @@ pub const ExtendedPoint = struct {
         return t0.mul(t1);
     }
 
-    pub fn subCached(fe: ExtendedPoint, cp: CachedPoint) ExtendedPoint {
+    pub fn subCached(self: ExtendedPoint, cp: CachedPoint) ExtendedPoint {
         const negated = cp.neg();
-        return fe.addCached(negated);
+        return self.addCached(negated);
     }
 
     /// Given `self = (A, B, C, D)`, compute `(B - A, B + A, D - C, D + C)`
-    fn diffSum(fe: ExtendedPoint) ExtendedPoint {
+    fn diffSum(self: ExtendedPoint) ExtendedPoint {
         // tmp = (B, A, D, C)
-        const tmp1 = fe.shuffle(.BADC);
+        const tmp1 = self.shuffle(.BADC);
         // tmp2 = (-A, B, -C, D)
-        const tmp2 = fe.blend(fe.negateLazy(), .AC);
+        const tmp2 = self.blend(self.negateLazy(), .AC);
         // (B - A, B + A, D - C, D + C)
         return tmp1.add(tmp2);
     }
 
     /// Square the field element and negate the result's `D` value.
-    fn squareAndNegateD(fe: ExtendedPoint) ExtendedPoint {
+    fn squareAndNegateD(self: ExtendedPoint) ExtendedPoint {
         const v19: u32x8 = .{ 19, 0, 19, 0, 19, 0, 19, 0 };
 
-        const x0, const x1 = unpackPair(fe.limbs[0]);
-        const x2, const x3 = unpackPair(fe.limbs[1]);
-        const x4, const x5 = unpackPair(fe.limbs[2]);
-        const x6, const x7 = unpackPair(fe.limbs[3]);
-        const x8, const x9 = unpackPair(fe.limbs[4]);
+        const x0, const x1 = unpackPair(self.limbs[0]);
+        const x2, const x3 = unpackPair(self.limbs[1]);
+        const x4, const x5 = unpackPair(self.limbs[2]);
+        const x6, const x7 = unpackPair(self.limbs[3]);
+        const x8, const x9 = unpackPair(self.limbs[4]);
 
         const x0_2 = x0 << @splat(1);
         const x1_2 = x1 << @splat(1);
@@ -651,8 +646,8 @@ pub const CachedPoint = struct {
         return .{ .element = x };
     }
 
-    fn neg(cp: CachedPoint) CachedPoint {
-        const swapped = cp.element.shuffle(.BACD);
+    fn neg(self: CachedPoint) CachedPoint {
+        const swapped = self.element.shuffle(.BACD);
         const element = swapped.blend(swapped.negateLazy(), .D);
         return .{ .element = element };
     }
