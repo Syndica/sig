@@ -899,3 +899,117 @@ test "stakes basic" {
         }
     }
 }
+
+test "stakes vote account disappear reappear" {
+    const VoteState = sig.runtime.program.vote.state.VoteState;
+
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+    const random = prng.random();
+
+    inline for (.{
+        StakesType.delegation,
+        StakesType.stake,
+        StakesType.account,
+    }) |stakes_type| {
+        var stakes_cache = try StakesCacheGeneric(stakes_type).init(allocator);
+        defer stakes_cache.deinit(allocator);
+
+        {
+            const stakes: *Stakes(stakes_type), var guard = stakes_cache.stakes.writeWithLock();
+            defer guard.unlock();
+            stakes.epoch = 4;
+        }
+
+        var accounts = try TestStakedNodeAccounts.init(allocator, random, 10);
+        defer accounts.deinit(allocator);
+
+        // Store vote and stake accounts
+        try stakes_cache.checkAndStore(allocator, accounts.vote_pubkey, accounts.vote_account, null);
+        try stakes_cache.checkAndStore(allocator, accounts.stake_pubkey, accounts.stake_account, null);
+
+        {
+            const stakes: *Stakes(stakes_type), var guard = stakes_cache.stakes.writeWithLock();
+            defer guard.unlock();
+
+            try std.testing.expect(stakes.vote_accounts.getAccount(accounts.vote_pubkey) != null);
+            try std.testing.expectEqual(stakes.vote_accounts.getDelegatedStake(accounts.vote_pubkey), 10);
+        }
+
+        // Zero lamports removes vote account
+        accounts.vote_account.lamports = 0;
+        try stakes_cache.checkAndStore(allocator, accounts.vote_pubkey, accounts.vote_account, null);
+
+        {
+            const stakes: *Stakes(stakes_type), var guard = stakes_cache.stakes.writeWithLock();
+            defer guard.unlock();
+
+            try std.testing.expectEqual(null, stakes.vote_accounts.getAccount(accounts.vote_pubkey));
+            try std.testing.expectEqual(stakes.vote_accounts.getDelegatedStake(accounts.vote_pubkey), 0);
+        }
+
+        // Postivie lamports re-adds vote account
+        accounts.vote_account.lamports = 1;
+        try stakes_cache.checkAndStore(allocator, accounts.vote_pubkey, accounts.vote_account, null);
+
+        {
+            const stakes: *Stakes(stakes_type), var guard = stakes_cache.stakes.writeWithLock();
+            defer guard.unlock();
+
+            try std.testing.expect(stakes.vote_accounts.getAccount(accounts.vote_pubkey) != null);
+            try std.testing.expectEqual(stakes.vote_accounts.getDelegatedStake(accounts.vote_pubkey), 10);
+        }
+
+        // Invalid data removes vote account
+        const valid_data = accounts.vote_account.data;
+        const invalid_data = try allocator.alloc(u8, accounts.vote_account.data.len + 1);
+        defer allocator.free(invalid_data);
+        @memset(invalid_data, 0);
+        @memcpy(invalid_data[0..accounts.vote_account.data.len], accounts.vote_account.data);
+        accounts.vote_account.data = invalid_data;
+
+        try stakes_cache.checkAndStore(allocator, accounts.vote_pubkey, accounts.vote_account, null);
+
+        {
+            const stakes: *Stakes(stakes_type), var guard = stakes_cache.stakes.writeWithLock();
+            defer guard.unlock();
+
+            try std.testing.expect(stakes.vote_accounts.getAccount(accounts.vote_pubkey) == null);
+            try std.testing.expectEqual(stakes.vote_accounts.getDelegatedStake(accounts.vote_pubkey), 0);
+        }
+
+        accounts.vote_account.lamports = 1;
+        accounts.vote_account.data = valid_data;
+        try stakes_cache.checkAndStore(allocator, accounts.vote_pubkey, accounts.vote_account, null);
+
+        {
+            const stakes: *Stakes(stakes_type), var guard = stakes_cache.stakes.writeWithLock();
+            defer guard.unlock();
+
+            try std.testing.expect(stakes.vote_accounts.getAccount(accounts.vote_pubkey) != null);
+            try std.testing.expectEqual(stakes.vote_accounts.getDelegatedStake(accounts.vote_pubkey), 10);
+        }
+
+        // Uninitialized vote account removes vote account
+        var vote_state = VoteState.default(allocator);
+        errdefer vote_state.deinit();
+
+        try std.testing.expect(vote_state.isUninitialized());
+
+        _ = try bincode.writeToSlice(
+            accounts.vote_account.data,
+            VersionedVoteState{ .current = vote_state },
+            .{},
+        );
+
+        try stakes_cache.checkAndStore(allocator, accounts.vote_pubkey, accounts.vote_account, null);
+
+        {
+            const stakes: *Stakes(stakes_type), var guard = stakes_cache.stakes.writeWithLock();
+            defer guard.unlock();
+
+            try std.testing.expect(stakes.vote_accounts.getAccount(accounts.vote_pubkey) == null);
+            try std.testing.expectEqual(stakes.vote_accounts.getDelegatedStake(accounts.vote_pubkey), 0);
+        }
+    }
+}
