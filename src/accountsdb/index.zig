@@ -301,6 +301,7 @@ pub const AccountIndex = struct {
             }
             const next_ptr = curr_ref.next_ptr orelse {
                 // end of the list => insert it here
+                account_ref.prev_ptr = curr_ref;
                 curr_ref.next_ptr = account_ref;
                 curr_ref.next_index = index;
                 return true;
