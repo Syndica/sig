@@ -34,7 +34,14 @@ pub const AccountReader = union(enum) {
 
     pub fn get(self: AccountReader, address: Pubkey, ancestors: *const Ancestors) !?Account {
         return switch (self) {
-            .accounts_db => |db| try db.getAccount(&address), // TODO: PR #796
+            .accounts_db => |db| {
+                const account = try db.getAccount(&address); // TODO: use ancestors after PR #796
+                if (account.lamports == 0) {
+                    account.deinit(db.allocator);
+                    return null;
+                }
+                return account;
+            },
             .thread_safe_map => |map| try map.get(address, ancestors),
             .noop => null,
         };
@@ -42,7 +49,15 @@ pub const AccountReader = union(enum) {
 
     pub fn getLatest(self: AccountReader, address: Pubkey) !?Account {
         return switch (self) {
-            .accounts_db => |db| try db.getAccount(&address),
+            .accounts_db => |db| {
+                const account = try db.getAccount(&address);
+                if (account.lamports == 0) {
+                    // TODO: implement this check in accountsdb to avoid the unnecessary allocation
+                    account.deinit(db.allocator);
+                    return null;
+                }
+                return account;
+            },
             .thread_safe_map => |map| try map.getLatest(address),
             .noop => null,
         };
@@ -119,9 +134,10 @@ pub const ThreadSafeAccountMap = struct {
         defer lock.unlock();
 
         const list = map.get(address) orelse return null;
-        for (list.items) |item| {
-            if (ancestors.ancestors.contains(item[0])) {
-                return try toAccount(self.allocator, item[1]);
+        for (list.items) |slot_account| {
+            const slot, const account = slot_account;
+            if (ancestors.ancestors.contains(slot)) {
+                return if (account.lamports == 0) null else try toAccount(self.allocator, account);
             }
         }
         return null;
