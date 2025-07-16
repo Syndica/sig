@@ -5,7 +5,7 @@ const program_loader = sig.runtime.program_loader;
 const vm = sig.vm;
 
 const program = sig.runtime.program;
-const features = sig.runtime.features;
+const features = sig.core.features;
 const Pubkey = sig.core.Pubkey;
 const ExecuteContextParams = sig.runtime.testing.ExecuteContextsParams;
 const AccountParams = ExecuteContextParams.AccountParams;
@@ -121,7 +121,7 @@ test "hello_world" {
     defer allocator.free(elf_bytes);
 
     const feature_params = &[_]FeatureParams{
-        .{ .pubkey = sig.runtime.features.ENABLE_SBPF_V3_DEPLOYMENT_AND_EXECUTION },
+        .{ .pubkey = sig.core.features.ENABLE_SBPF_V3_DEPLOYMENT_AND_EXECUTION },
     };
 
     const program_account, const environment, var program_map = try prepareBpfV3Test(
@@ -184,7 +184,7 @@ test "print_account" {
     defer allocator.free(elf_bytes);
 
     const feature_params = &[_]FeatureParams{
-        .{ .pubkey = sig.runtime.features.ENABLE_SBPF_V3_DEPLOYMENT_AND_EXECUTION },
+        .{ .pubkey = sig.core.features.ENABLE_SBPF_V3_DEPLOYMENT_AND_EXECUTION },
     };
 
     const program_account, const environment, var program_map = try prepareBpfV3Test(
@@ -251,7 +251,7 @@ test "fast_copy" {
     defer allocator.free(elf_bytes);
 
     const feature_params = &[_]FeatureParams{
-        .{ .pubkey = sig.runtime.features.ENABLE_SBPF_V3_DEPLOYMENT_AND_EXECUTION },
+        .{ .pubkey = sig.core.features.ENABLE_SBPF_V3_DEPLOYMENT_AND_EXECUTION },
     };
 
     const program_account, const environment, var program_map = try prepareBpfV3Test(
@@ -339,7 +339,7 @@ test "set_return_data" {
     defer allocator.free(elf_bytes);
 
     const feature_params = &[_]FeatureParams{
-        .{ .pubkey = sig.runtime.features.ENABLE_SBPF_V3_DEPLOYMENT_AND_EXECUTION },
+        .{ .pubkey = sig.core.features.ENABLE_SBPF_V3_DEPLOYMENT_AND_EXECUTION },
     };
 
     const program_account, const environment, var program_map = try prepareBpfV3Test(
@@ -411,7 +411,7 @@ test "program_is_not_executable" {
             .accounts = accounts,
             .compute_meter = 137,
             .feature_set = &.{
-                .{ .pubkey = sig.runtime.features.ENABLE_SBPF_V3_DEPLOYMENT_AND_EXECUTION },
+                .{ .pubkey = sig.core.features.ENABLE_SBPF_V3_DEPLOYMENT_AND_EXECUTION },
             },
         },
         .{},
@@ -451,7 +451,7 @@ test "program_invalid_account_data" {
             .accounts = accounts,
             .compute_meter = 137,
             .feature_set = &.{
-                .{ .pubkey = sig.runtime.features.ENABLE_SBPF_V3_DEPLOYMENT_AND_EXECUTION },
+                .{ .pubkey = sig.core.features.ENABLE_SBPF_V3_DEPLOYMENT_AND_EXECUTION },
             },
         },
         .{
@@ -475,7 +475,7 @@ test "program_init_vm_not_enough_compute" {
     defer allocator.free(elf_bytes);
 
     const feature_params = &[_]FeatureParams{
-        .{ .pubkey = sig.runtime.features.ENABLE_SBPF_V3_DEPLOYMENT_AND_EXECUTION },
+        .{ .pubkey = sig.core.features.ENABLE_SBPF_V3_DEPLOYMENT_AND_EXECUTION },
     };
 
     const program_account, const environment, var program_map = try prepareBpfV3Test(

@@ -3,7 +3,7 @@ const std = @import("std");
 
 const Pubkey = sig.core.Pubkey;
 const Epoch = sig.core.Epoch;
-const Rent = sig.runtime.sysvar.Rent;
+const Rent = sig.runtime.sysvar.Rent; // TODO: move this
 const AccountSharedData = sig.runtime.AccountSharedData;
 const EpochSchedule = sig.core.EpochSchedule;
 

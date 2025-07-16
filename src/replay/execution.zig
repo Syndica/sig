@@ -11,7 +11,7 @@ const ThreadPool = sig.sync.ThreadPool;
 const Pubkey = core.Pubkey;
 const Slot = core.Slot;
 
-const AccountsDB = sig.accounts_db.AccountsDB;
+const AccountStore = sig.accounts_db.AccountStore;
 const BlockstoreReader = sig.ledger.BlockstoreReader;
 
 const ForkProgress = sig.consensus.progress_map.ForkProgress;
@@ -21,6 +21,8 @@ const ConfirmSlotFuture = replay.confirm_slot.ConfirmSlotFuture;
 const EpochTracker = replay.trackers.EpochTracker;
 const SlotTracker = replay.trackers.SlotTracker;
 
+const SvmSlot = replay.svm_gateway.SvmSlot;
+
 const confirmSlot = replay.confirm_slot.confirmSlot;
 
 /// State used for replaying and validating data from blockstore/accountsdb/svm
@@ -29,34 +31,44 @@ pub const ReplayExecutionState = struct {
     logger: sig.trace.ScopedLogger("replay-execution"),
     my_identity: Pubkey,
     vote_account: ?Pubkey,
-    accounts_db: *AccountsDB,
+
+    // borrows
+    account_store: AccountStore,
+    db_for_svm: *sig.accounts_db.AccountsDB, // TODO: remove
     thread_pool: *ThreadPool,
     blockstore_reader: *BlockstoreReader,
     slot_tracker: *SlotTracker,
     epochs: *EpochTracker,
-    progress_map: ProgressMap,
+    progress_map: *ProgressMap,
+
+    // owned
+    status_cache: sig.core.StatusCache,
 
     pub fn init(
         allocator: Allocator,
         logger: sig.trace.Logger,
         my_identity: Pubkey,
         thread_pool: *ThreadPool,
-        accounts_db: *AccountsDB,
+        account_store: AccountStore,
+        db_for_svm: *sig.accounts_db.AccountsDB,
         blockstore_reader: *BlockstoreReader,
         slot_tracker: *SlotTracker,
         epochs: *EpochTracker,
+        progress_map: *ProgressMap,
     ) Allocator.Error!ReplayExecutionState {
         return .{
             .allocator = allocator,
             .logger = .from(logger),
             .my_identity = my_identity,
             .vote_account = null, // voting not currently supported
-            .accounts_db = accounts_db,
+            .account_store = account_store,
+            .db_for_svm = db_for_svm,
             .thread_pool = thread_pool,
             .blockstore_reader = blockstore_reader,
             .slot_tracker = slot_tracker,
             .epochs = epochs,
-            .progress_map = ProgressMap.INIT,
+            .progress_map = progress_map,
+            .status_cache = .DEFAULT,
         };
     }
 };
@@ -67,6 +79,7 @@ pub const ReplayExecutionState = struct {
 /// Analogous to [replay_active_banks](https://github.com/anza-xyz/agave/blob/3f68568060fd06f2d561ad79e8d8eb5c5136815a/core/src/replay_stage.rs#L3356)
 pub fn replayActiveSlots(state: *ReplayExecutionState) !bool {
     const active_slots = try state.slot_tracker.activeSlots(state.allocator);
+    state.logger.info().logf("{} active slots to replay", .{active_slots.len});
     if (active_slots.len == 0) {
         return false;
     }
@@ -77,26 +90,55 @@ pub fn replayActiveSlots(state: *ReplayExecutionState) !bool {
         slot_statuses.deinit(state.allocator);
     }
     for (active_slots) |slot| {
+        state.logger.info().logf("replaying slot: {}", .{slot});
         const result = try replaySlot(state, slot);
         errdefer result.deinit(state.allocator);
         try slot_statuses.append(state.allocator, .{ slot, result });
     }
+    var processed_a_slot = false;
     for (slot_statuses.items) |slot_status| {
         // NOTE: currently this just awaits the futures and discards the
         // results. this will change once we call the svm and process the
         // results of execution.
-        _, const status = slot_status;
-        while (status == .confirm and try status.confirm.poll() == .pending) {
-            std.time.sleep(std.time.ns_per_ms); // TODO: consider futex-based wait like ResetEvent
+        const slot, const status = slot_status;
+        const slot_info = state.slot_tracker.get(slot) orelse unreachable;
+        const epoch_info = state.epochs.getForSlot(slot) orelse unreachable;
+
+        if (status != .confirm) continue;
+
+        const future = status.confirm;
+        // NOTE: agave does this a bit differently, it indicates that a slot
+        // was *finished*, not just processed partially.
+        processed_a_slot = true;
+        while (try status.confirm.poll() == .pending) {
+            // TODO: consider futex-based wait like ResetEvent
+            std.time.sleep(std.time.ns_per_ms);
         }
-        status.deinit(state.allocator);
+
+        if (slot_info.state.tickHeight() == slot_info.constants.max_tick_height) {
+            state.logger.info().logf("confirmed entire slot {}", .{slot});
+            try replay.freeze.freezeSlot(state.allocator, .init(
+                state.account_store.accountReader(),
+                state.db_for_svm, // TODO: remove
+                &epoch_info,
+                slot_info.state,
+                slot_info.constants,
+                slot,
+                future.entries[future.entries.len - 1].hash,
+            ));
+        } else {
+            state.logger.info().logf("partially confirmed slot {}", .{slot});
+        }
     }
 
     // TODO: process_replay_results: https://github.com/anza-xyz/agave/blob/3f68568060fd06f2d561ad79e8d8eb5c5136815a/core/src/replay_stage.rs#L3443
-    return false;
+    return processed_a_slot;
 }
 
 const ReplaySlotStatus = union(enum) {
+    /// We have no entries available to verify for this slot. No work was done.
+    empty,
+
     /// The slot was previously marked as dead (not this time), which means we
     /// don't need to do anything. see here that agave also does nothing:
     /// - [replay_active_bank](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/core/src/replay_stage.rs#L3005-L3007)
@@ -177,36 +219,85 @@ fn replaySlot(state: *ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
     // out more usages of this struct.
     const confirmation_progress = &fork_progress.replay_progress.arc_ed.rwlock_ed;
 
-    const entries, const num_shreds, const slot_is_full =
-        try state.blockstore_reader.getSlotEntriesWithShredInfo(
-            state.allocator,
-            slot,
-            confirmation_progress.num_shreds,
-            false,
-        );
-    errdefer {
-        for (entries) |entry| entry.deinit(state.allocator);
-        state.allocator.free(entries);
-    }
+    const entries, const slot_is_full, const blockhash_queue = blk: {
+        const entries, const num_shreds, const slot_is_full =
+            try state.blockstore_reader.getSlotEntriesWithShredInfo(
+                state.allocator,
+                slot,
+                confirmation_progress.num_shreds,
+                false,
+            );
+        errdefer {
+            for (entries) |entry| entry.deinit(state.allocator);
+            state.allocator.free(entries);
+        }
+        state.logger.info().logf("got {} entries for slot {}", .{ entries.len, slot });
 
-    confirmation_progress.num_shreds += num_shreds;
-    confirmation_progress.num_entries += entries.len;
-    for (entries) |e| confirmation_progress.num_txs += e.transactions.len;
+        if (entries.len == 0) {
+            for (entries) |entry| entry.deinit(state.allocator);
+            state.allocator.free(entries);
+            return .empty;
+        }
+
+        confirmation_progress.num_shreds += num_shreds;
+        confirmation_progress.num_entries += entries.len;
+        for (entries) |e| confirmation_progress.num_txs += e.transactions.len;
+
+        const blockhash_queue = bhq: {
+            var bhq = slot_info.state.blockhash_queue.read();
+            defer bhq.unlock();
+            break :bhq try bhq.get().clone(state.allocator);
+        };
+        errdefer blockhash_queue.deinit(state.allocator);
+
+        break :blk .{ entries, slot_is_full, blockhash_queue };
+    };
+
+    const svm_params = SvmSlot.Params{
+        .slot = slot,
+        .max_age = sig.core.BlockhashQueue.MAX_RECENT_BLOCKHASHES / 2,
+        .lamports_per_signature = slot_info.constants.fee_rate_governor.lamports_per_signature,
+        .blockhash_queue = blockhash_queue,
+        .accounts_db = state.db_for_svm,
+        .ancestors = &slot_info.constants.ancestors,
+        .feature_set = slot_info.constants.feature_set,
+        .rent_collector = &epoch_info.rent_collector,
+        .epoch_stakes = &epoch_info.stakes,
+        .status_cache = &state.status_cache,
+    };
+
+    const committer = replay.commit.Committer{
+        .account_store = state.account_store,
+        .slot_state = slot_info.state,
+        .status_cache = &state.status_cache,
+        .stakes_cache = &slot_info.state.stakes_cache,
+    };
+
+    const verify_ticks_params = replay.confirm_slot.VerifyTicksParams{
+        .tick_height = slot_info.state.tickHeight(),
+        .max_tick_height = slot_info.constants.max_tick_height,
+        .hashes_per_tick = epoch_info.hashes_per_tick,
+        .slot = slot,
+        .slot_is_full = slot_is_full,
+        .tick_hash_count = &confirmation_progress.tick_hash_count,
+    };
+
+    var num_ticks: u64 = 0;
+    for (entries) |entry| {
+        if (entry.isTick()) num_ticks += 1;
+    }
+    _ = slot_info.state.tick_height.fetchAdd(num_ticks, .monotonic);
 
     return .{ .confirm = try confirmSlot(
         state.allocator,
         .from(state.logger),
-        state.accounts_db,
+        state.account_store,
         state.thread_pool,
         entries,
         confirmation_progress.last_entry,
-        .{
-            .tick_height = slot_info.state.tickHeight(),
-            .max_tick_height = slot_info.constants.max_tick_height,
-            .hashes_per_tick = epoch_info.hashes_per_tick,
-            .slot = slot,
-            .slot_is_full = slot_is_full,
-            .tick_hash_count = &confirmation_progress.tick_hash_count,
-        },
+        svm_params,
+        committer,
+        verify_ticks_params,
+        &slot_info.constants.ancestors,
     ) };
 }

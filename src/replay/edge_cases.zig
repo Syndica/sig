@@ -1417,14 +1417,17 @@ const TestData = struct {
                 .{
                     .parent_slot = parent_slot,
                     .parent_hash = slot_infos[parent_slot].hash,
+                    .parent_lt_hash = .IDENTITY,
                     .block_height = 1,
                     .collector_id = .initRandom(random),
                     .max_tick_height = 1,
                     .fee_rate_governor = .initRandom(random),
                     .epoch_reward_status = .inactive,
+                    .ancestors = .{ .ancestors = .empty },
+                    .feature_set = .EMPTY,
                 },
                 .{
-                    .blockhash_queue = .init(try .initRandom(random, allocator, 0)),
+                    .blockhash_queue = .init(try .initRandom(allocator, random, 0)),
                     .hash = .init(slot_info.hash),
                     .capitalization = .init(random.int(u64)),
                     .transaction_count = .init(random.int(u64)),
@@ -1432,6 +1435,7 @@ const TestData = struct {
                     .tick_height = .init(random.int(u64)),
                     .collected_rent = .init(random.int(u64)),
                     .accounts_lt_hash = .init(.{ .data = @splat(random.int(u16)) }),
+                    .stakes_cache = .default(),
                 },
             );
         }

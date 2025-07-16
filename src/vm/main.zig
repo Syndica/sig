@@ -13,11 +13,11 @@ const sbpf = sig.vm.sbpf;
 const Config = sig.vm.Config;
 const MemoryMap = memory.MemoryMap;
 const TransactionContext = sig.runtime.TransactionContext;
-const FeatureSet = sig.runtime.FeatureSet;
+const FeatureSet = sig.core.FeatureSet;
 const Hash = sig.core.Hash;
 const Rent = sig.runtime.sysvar.Rent;
 const ComputeBudget = sig.runtime.ComputeBudget;
-const EpochStakes = sig.core.stake.EpochStakes;
+const EpochStakes = sig.core.EpochStakes;
 const SysvarCache = sig.runtime.SysvarCache;
 const ProgramMap = sig.runtime.program_loader.ProgramMap;
 

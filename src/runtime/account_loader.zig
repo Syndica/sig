@@ -46,7 +46,7 @@ fn AccountsDb(comptime kind: AccountsDbKind) type {
 
         fn allocator(self: Self) std.mem.Allocator {
             return switch (kind) {
-                .AccountsDb => self.inner.accounts_db.allocator,
+                .AccountsDb => self.inner.allocator,
                 .Mocked => self.inner.allocator,
             };
         }
@@ -54,9 +54,11 @@ fn AccountsDb(comptime kind: AccountsDbKind) type {
         fn getAccount(
             self: Self,
             pubkey: *const Pubkey,
+            ancestors: *const sig.core.Ancestors,
         ) sig.accounts_db.AccountsDB.GetAccountError!sig.core.Account {
             return switch (kind) {
-                .AccountsDb => try self.inner.accounts_db.getAccount(pubkey),
+                .AccountsDb => try self.inner.getAccountWithAncestors(pubkey, ancestors) orelse
+                    return error.PubkeyNotInIndex,
                 .Mocked => self.inner.accounts.get(pubkey.*) orelse return error.PubkeyNotInIndex,
             };
         }
@@ -65,15 +67,17 @@ fn AccountsDb(comptime kind: AccountsDbKind) type {
             self: Self,
             data_allocator: std.mem.Allocator,
             pubkey: *const Pubkey,
+            ancestors: *const sig.core.Ancestors,
         ) error{ OutOfMemory, GetAccountFailedUnexpectedly }!?AccountSharedData {
-            const account: sig.core.Account = self.getAccount(pubkey) catch |err| switch (err) {
-                error.PubkeyNotInIndex => return null,
-                error.OutOfMemory => return error.OutOfMemory,
-                error.FileIdNotFound,
-                error.InvalidOffset,
-                error.SlotNotFound,
-                => return error.GetAccountFailedUnexpectedly,
-            };
+            const account: sig.core.Account = self.getAccount(pubkey, ancestors) catch |err|
+                switch (err) {
+                    error.PubkeyNotInIndex => return null,
+                    error.OutOfMemory => return error.OutOfMemory,
+                    error.FileIdNotFound,
+                    error.InvalidOffset,
+                    error.SlotNotFound,
+                    => return error.GetAccountFailedUnexpectedly,
+                };
             defer account.deinit(self.allocator());
 
             const shared_account: AccountSharedData = .{
@@ -115,6 +119,10 @@ pub const LoadedTransactionAccounts = struct {
 pub const CachedAccount = struct {
     pubkey: Pubkey,
     account: *AccountSharedData,
+
+    pub fn getAccount(self: *const CachedAccount) *const AccountSharedData {
+        return self.account;
+    }
 };
 
 /// Implements much of Agave's AccountLoader functionality. Owns the accounts it loads.
@@ -144,6 +152,7 @@ pub const BatchAccountCache = struct {
         allocator: std.mem.Allocator,
         accountsdb: accountsdb_kind.T(),
         transactions: []const RuntimeTransaction,
+        ancestors: *const sig.core.Ancestors,
     ) !BatchAccountCache {
         const accounts_db = AccountsDb(accountsdb_kind){ .inner = accountsdb };
 
@@ -181,6 +190,7 @@ pub const BatchAccountCache = struct {
                     if (try accounts_db.getAccountSharedData(
                         allocator,
                         &account_key,
+                        ancestors,
                     )) |acc| {
                         map.putAssumeCapacityNoClobber(account_key, acc);
                         break :blk acc;
@@ -229,6 +239,7 @@ pub const BatchAccountCache = struct {
                     const owner_account = try accounts_db.getAccountSharedData(
                         allocator,
                         program_owner_key,
+                        ancestors,
                     ) orelse {
                         // default account ~= account missing
                         // every account which a load is attempted on should have an entry
@@ -280,7 +291,7 @@ pub const BatchAccountCache = struct {
         allocator: std.mem.Allocator,
         transaction: *const RuntimeTransaction,
         rent_collector: *const RentCollector,
-        feature_set: *const runtime.FeatureSet,
+        feature_set: *const sig.core.FeatureSet,
         compute_budget_limits: *const ComputeBudgetLimits,
     ) error{OutOfMemory}!TransactionResult(LoadedTransactionAccounts) {
         const result = loadTransactionAccountsInner(
@@ -307,7 +318,7 @@ pub const BatchAccountCache = struct {
         allocator: std.mem.Allocator,
         transaction: *const RuntimeTransaction,
         rent_collector: *const RentCollector,
-        feature_set: *const runtime.FeatureSet,
+        feature_set: *const sig.core.FeatureSet,
         compute_budget_limits: *const ComputeBudgetLimits,
     ) LoadedTransactionAccountsError!LoadedTransactionAccounts {
         if (compute_budget_limits.loaded_accounts_bytes == 0)
@@ -358,7 +369,7 @@ pub const BatchAccountCache = struct {
             )) orelse return error.ProgramAccountNotFound;
 
             if (!feature_set.active.contains(
-                sig.runtime.features.REMOVE_ACCOUNTS_EXECUTABLE_FLAG_CHECKS,
+                sig.core.features.REMOVE_ACCOUNTS_EXECUTABLE_FLAG_CHECKS,
             ) and !program_account.account.executable) return error.InvalidProgramForExecution;
 
             const owner_id = &program_account.account.owner;
@@ -410,7 +421,7 @@ pub const BatchAccountCache = struct {
         allocator: std.mem.Allocator,
         transaction: *const RuntimeTransaction,
         rent_collector: *const RentCollector,
-        feature_set: *const runtime.FeatureSet,
+        feature_set: *const sig.core.FeatureSet,
         key: *const Pubkey,
         is_writable: bool,
     ) error{OutOfMemory}!LoadedTransactionAccount {
@@ -497,10 +508,10 @@ pub const BatchAccountCache = struct {
 pub fn collectRentFromAccount(
     account: *AccountSharedData,
     account_key: *const Pubkey,
-    feature_set: *const runtime.FeatureSet,
+    feature_set: *const sig.core.FeatureSet,
     rent_collector: *const RentCollector,
 ) CollectedInfo {
-    if (!feature_set.active.contains(runtime.features.DISABLE_RENT_FEES_COLLECTION)) {
+    if (!feature_set.active.contains(sig.core.features.DISABLE_RENT_FEES_COLLECTION)) {
         @branchHint(.unlikely); // this feature should always be enabled?
         return rent_collector.collectFromExistingAccount(account_key, account);
     }
@@ -595,7 +606,7 @@ fn constructInstructionsAccount(
 
 const TestingEnv = struct {
     rent_collector: RentCollector,
-    feature_set: runtime.FeatureSet,
+    feature_set: sig.core.FeatureSet,
     compute_budget_limits: ComputeBudgetLimits,
 };
 
@@ -603,7 +614,7 @@ fn newTestingEnv() TestingEnv {
     if (!@import("builtin").is_test) @compileError("newTestingEnv for testing only");
     return .{
         .rent_collector = sig.core.rent_collector.defaultCollector(0),
-        .feature_set = sig.runtime.FeatureSet.EMPTY,
+        .feature_set = sig.core.FeatureSet.EMPTY,
         .compute_budget_limits = ComputeBudgetLimits{
             .heap_size = 0,
             .compute_unit_limit = 0,
@@ -646,6 +657,7 @@ test "loadTransactionAccounts empty transaction" {
         allocator,
         accountsdb,
         &.{},
+        &.{ .ancestors = .empty },
     );
     defer batch_account_cache.deinit(allocator);
 
@@ -678,6 +690,7 @@ test "loadTransactionAccounts sysvar instruction" {
         allocator,
         accountsdb,
         &.{},
+        &.{ .ancestors = .empty },
     );
     defer batch_account_cache.deinit(allocator);
 
@@ -831,6 +844,7 @@ test "load accounts rent paid" {
         allocator,
         accountsdb,
         &.{tx},
+        &.{ .ancestors = .empty },
     );
     defer account_cache.deinit(allocator);
 
@@ -931,6 +945,7 @@ test "loadAccount allocations" {
                 alloc,
                 accountsdb,
                 &.{tx},
+                &.{ .ancestors = .empty },
             );
             defer batch_account_cache.deinit(alloc);
 
@@ -981,6 +996,7 @@ test "load tx too large" {
         allocator,
         accountsdb,
         &.{tx},
+        &.{ .ancestors = .empty },
     );
     defer account_cache.deinit(allocator);
 
@@ -1080,6 +1096,7 @@ test "dont double count program owner account data size" {
         allocator,
         accountsdb,
         &.{tx},
+        &.{ .ancestors = .empty },
     );
     defer account_cache.deinit(allocator);
 
@@ -1114,6 +1131,7 @@ test "load, create new account" {
         allocator,
         accountsdb,
         &.{tx},
+        &.{ .ancestors = .empty },
     );
     defer account_cache.deinit(allocator);
 
@@ -1173,6 +1191,7 @@ test "invalid program owner owner" {
         allocator,
         accountsdb,
         &.{tx},
+        &.{ .ancestors = .empty },
     );
     defer account_cache.deinit(allocator);
 
@@ -1222,6 +1241,7 @@ test "missing program owner account" {
         allocator,
         accountsdb,
         &.{tx},
+        &.{ .ancestors = .empty },
     );
     defer account_cache.deinit(allocator);
 
@@ -1263,6 +1283,7 @@ test "deallocate account" {
         allocator,
         accountsdb,
         &.{tx},
+        &.{ .ancestors = .empty },
     );
     defer account_cache.deinit(allocator);
 
