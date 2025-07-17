@@ -502,8 +502,6 @@ fn computeBankStats(
                 progress,
                 latest_validator_votes,
             );
-            // Notify any listeners of the votes found in this newly computed
-            // bank
             try fork_choice.computeBankStats(
                 allocator,
                 epoch_stakes,
