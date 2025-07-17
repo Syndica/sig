@@ -22,7 +22,7 @@
             .hash = "zstd-0.0.1-8QsqCeqhAABbGuDYc-yqJEj0qitvmq52AEg0puJT6FHu",
         },
         .rocksdb = .{
-            .url = "git+https://github.com/Syndica/rocksdb-zig#d571886e892b9bc9a5fe4ba4d484bb2b51c9f617",
+            .url = "git+https://github.com/Syndica/rocksdb-zig#70137101ad89640e0fc2e5ddbe60a26c522c7ae7",
             .hash = "rocksdb-9.7.4-z_CUTmO5AAD0CQ2ZvShSDZHjC2x9MKrTnpvbNAIU7ah0",
         },
         .lsquic = .{
