@@ -51,9 +51,20 @@ pub const ReplayDependencies = struct {
     root_slot_state: sig.core.SlotState,
 };
 
+pub const Logger = sig.trace.ScopedLogger("replay");
+
+pub const SlotData = struct {
+    duplicate_confirmed_slots: replay.edge_cases.DuplicateConfirmedSlots,
+    epoch_slots_frozen_slots: replay.edge_cases.EpochSlotsFrozenSlots,
+    duplicate_slots_to_repair: replay.edge_cases.DuplicateSlotsToRepair,
+    purge_repair_slot_counter: replay.edge_cases.PurgeRepairSlotCounters,
+    unfrozen_gossip_verified_vote_hashes: replay.edge_cases.UnfrozenGossipVerifiedVoteHashes,
+    duplicate_slots: replay.edge_cases.DuplicateSlots,
+};
+
 const ReplayState = struct {
     allocator: Allocator,
-    logger: sig.trace.ScopedLogger("replay"),
+    logger: Logger,
     thread_pool: *ThreadPool,
     slot_leaders: SlotLeaders,
     slot_tracker: *SlotTracker,
@@ -68,17 +79,16 @@ const ReplayState = struct {
 
         const slot_tracker = try deps.allocator.create(SlotTracker);
         errdefer deps.allocator.destroy(slot_tracker);
-        slot_tracker.* = .init(deps.root_slot);
-        try slot_tracker.put(
-            deps.allocator,
-            deps.root_slot,
-            deps.root_slot_constants,
-            deps.root_slot_state,
-        );
+        slot_tracker.* = try .init(deps.allocator, deps.root_slot, .{
+            .constants = deps.root_slot_constants,
+            .state = deps.root_slot_state,
+        });
+        errdefer slot_tracker.deinit(deps.allocator);
 
         const epoch_tracker = try deps.allocator.create(EpochTracker);
         errdefer deps.allocator.destroy(epoch_tracker);
         epoch_tracker.* = .{ .schedule = deps.epoch_schedule };
+        errdefer epoch_tracker.deinit(deps.allocator);
 
         return .{
             .allocator = deps.allocator,
@@ -135,7 +145,7 @@ fn advanceReplay(state: *ReplayState) !void {
 
     _ = try replay.execution.replayActiveSlots(&state.execution);
 
-    replay.edge_cases.handleEdgeCases();
+    _ = &replay.edge_cases.processEdgeCases;
 
     processConsensus();
 
@@ -193,10 +203,8 @@ fn trackNewSlots(
 
             const leader = slot_leaders.get(child_slot) orelse return error.UnknownLeader;
 
-            try slot_tracker.put(
-                allocator,
-                child_slot,
-                .{
+            try slot_tracker.put(allocator, child_slot, .{
+                .constants = .{
                     .parent_slot = parent_slot,
                     .parent_hash = parent_info.state.hash.readCopy().?,
                     .block_height = parent_info.constants.block_height + 1,
@@ -208,8 +216,8 @@ fn trackNewSlots(
                     ),
                     .epoch_reward_status = epoch_reward_status,
                 },
-                slot_state,
-            );
+                .state = slot_state,
+            });
 
             // TODO: update_fork_propagated_threshold_from_votes
         }
@@ -264,12 +272,14 @@ test trackNewSlots {
         try blockstore_db.put(sig.ledger.schema.schema.slot_meta, slot, meta);
     }
 
-    var slot_tracker = SlotTracker.init(0);
+    var slot_tracker: SlotTracker = try .init(allocator, 0, .{
+        .constants = .genesis(.DEFAULT),
+        .state = .GENESIS,
+    });
     defer slot_tracker.deinit(allocator);
-    try slot_tracker.put(allocator, 0, .genesis(.DEFAULT), .GENESIS);
     slot_tracker.get(0).?.state.hash.set(.ZEROES);
 
-    var epoch_tracker = EpochTracker{ .schedule = .DEFAULT };
+    var epoch_tracker: EpochTracker = .{ .schedule = .DEFAULT };
     defer epoch_tracker.deinit(allocator);
     try epoch_tracker.epochs.put(allocator, 0, .{
         .hashes_per_tick = 1,
