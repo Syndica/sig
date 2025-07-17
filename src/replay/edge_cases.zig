@@ -157,7 +157,7 @@ pub const PurgeRepairSlotCounters = sig.utils.collections.SortedMapUnmanaged(
 
 pub const AncestorDuplicateSlotToRepair = struct {
     /// Slot that `ancestor_hashes_service` found that needs to be repaired
-    slot_to_repair: struct { sig.core.Slot, sig.core.Hash },
+    slot_to_repair: sig.core.hash.SlotAndHash,
     /// Condition that initiated this request
     request_type: AncestorRequestType,
 };
@@ -377,7 +377,7 @@ fn processAncestorHashesDuplicateSlots(
     while (ancestor_duplicate_slots_receiver.tryReceive()) |ancestor_dupe_slot_to_repair| {
         const request_type = ancestor_dupe_slot_to_repair.request_type;
         const slot_to_repair = ancestor_dupe_slot_to_repair.slot_to_repair;
-        const epoch_slots_frozen_slot, const epoch_slots_frozen_hash = slot_to_repair;
+        const epoch_slots_frozen_slot, const epoch_slots_frozen_hash = slot_to_repair.tuple();
         logger.warn().logf(
             "{} ReplayStage notified of duplicate slot from ancestor hashes service but we " ++
                 "observed as {s}: {}",
