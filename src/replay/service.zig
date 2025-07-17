@@ -86,13 +86,16 @@ const ReplayState = struct {
 
         const slot_tracker = try deps.allocator.create(SlotTracker);
         errdefer deps.allocator.destroy(slot_tracker);
-        slot_tracker.* = .init(deps.root_slot);
-        try slot_tracker
-            .put(deps.allocator, deps.root_slot, deps.root_slot_constants, root_slot_state);
+        slot_tracker.* = try .init(deps.allocator, deps.root_slot, .{
+            .constants = deps.root_slot_constants,
+            .state = root_slot_state,
+        });
+        errdefer slot_tracker.deinit(deps.allocator);
 
         const epoch_tracker = try deps.allocator.create(EpochTracker);
         errdefer deps.allocator.destroy(epoch_tracker);
         epoch_tracker.* = .{ .schedule = deps.epoch_schedule };
+        errdefer epoch_tracker.deinit(deps.allocator);
 
         const progress_map = try deps.allocator.create(ProgressMap);
         progress_map.* = ProgressMap.INIT;
@@ -241,10 +244,8 @@ fn trackNewSlots(
 
             const parent_hash = parent_info.state.hash.readCopy().?;
 
-            try slot_tracker.put(
-                allocator,
-                slot,
-                .{
+            try slot_tracker.put(allocator, slot, .{
+                .constants = .{
                     .parent_slot = parent_slot,
                     .parent_hash = parent_hash,
                     .parent_lt_hash = parent_info.state.accounts_lt_hash.readCopy().?,
@@ -259,8 +260,8 @@ fn trackNewSlots(
                     .ancestors = ancestors,
                     .feature_set = feature_set,
                 },
-                slot_state,
-            );
+                .state = slot_state,
+            });
 
             // TODO: update_fork_propagated_threshold_from_votes
         }
@@ -322,12 +323,14 @@ test trackNewSlots {
         try blockstore_db.put(sig.ledger.schema.schema.slot_meta, slot, meta);
     }
 
-    var slot_tracker = SlotTracker.init(0);
+    var slot_tracker: SlotTracker = try .init(allocator, 0, .{
+        .constants = .genesis(.DEFAULT),
+        .state = .GENESIS,
+    });
     defer slot_tracker.deinit(allocator);
-    try slot_tracker.put(allocator, 0, .genesis(.DEFAULT), .GENESIS);
     slot_tracker.get(0).?.state.hash.set(.ZEROES);
 
-    var epoch_tracker = EpochTracker{ .schedule = .DEFAULT };
+    var epoch_tracker: EpochTracker = .{ .schedule = .DEFAULT };
     defer epoch_tracker.deinit(allocator);
     try epoch_tracker.epochs.put(allocator, 0, .{
         .hashes_per_tick = 1,
