@@ -2,10 +2,13 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 const replay = @import("lib.zig");
 
+const collections = sig.utils.collections;
+
 const Allocator = std.mem.Allocator;
 const ThreadPool = sig.sync.ThreadPool;
 
 const Pubkey = sig.core.Pubkey;
+const Hash = sig.core.Hash;
 const Slot = sig.core.Slot;
 const SlotLeaders = sig.core.leader_schedule.SlotLeaders;
 const SlotState = sig.core.bank.SlotState;
@@ -43,8 +46,8 @@ pub const ReplayDependencies = struct {
     /// Used for all allocations within the replay stage
     allocator: Allocator,
     logger: sig.trace.Logger,
-    my_identity: sig.core.Pubkey,
-    vote_identity: sig.core.Pubkey,
+    my_identity: Pubkey,
+    vote_identity: Pubkey,
     /// Tell replay when to exit
     exit: *std.atomic.Value(bool),
     /// Used in the EpochManager
@@ -76,14 +79,14 @@ pub const Senders = struct {
     /// Received by repair [ancestor_hashes_service](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/repair/ancestor_hashes_service.rs#L589)
     ancestor_hashes_replay_update: *sig.sync.Channel(AncestorHashesReplayUpdate),
 
+    pub fn destroy(self: Senders) void {
+        self.ancestor_hashes_replay_update.destroy();
+    }
+
     pub fn create(allocator: std.mem.Allocator) std.mem.Allocator.Error!Senders {
         return .{
             .ancestor_hashes_replay_update = try .create(allocator),
         };
-    }
-
-    pub fn destroy(self: Senders) void {
-        self.ancestor_hashes_replay_update.destroy();
     }
 };
 
@@ -147,12 +150,27 @@ pub const Receivers = struct {
 };
 
 pub const SlotData = struct {
-    duplicate_confirmed_slots: replay.edge_cases.DuplicateConfirmedSlots,
-    epoch_slots_frozen_slots: replay.edge_cases.EpochSlotsFrozenSlots,
-    duplicate_slots_to_repair: replay.edge_cases.DuplicateSlotsToRepair,
-    purge_repair_slot_counter: replay.edge_cases.PurgeRepairSlotCounters,
-    unfrozen_gossip_verified_vote_hashes: replay.edge_cases.UnfrozenGossipVerifiedVoteHashes,
-    duplicate_slots: replay.edge_cases.DuplicateSlots,
+    duplicate_confirmed_slots: DuplicateConfirmedSlots,
+    epoch_slots_frozen_slots: EpochSlotsFrozenSlots,
+    duplicate_slots_to_repair: DuplicateSlotsToRepair,
+    purge_repair_slot_counter: PurgeRepairSlotCounters,
+    unfrozen_gossip_verified_vote_hashes: UnfrozenGossipVerifiedVoteHashes,
+    duplicate_slots: DuplicateSlots,
+
+    /// Analogous to [DuplicateSlotsTracker](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/repair/cluster_slot_state_verifier.rs#L18)
+    pub const DuplicateSlots = collections.SortedSetUnmanaged(Slot);
+
+    /// Analogous to [DuplicateSlotsToRepair](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/repair/cluster_slot_state_verifier.rs#L19)
+    pub const DuplicateSlotsToRepair = std.AutoArrayHashMapUnmanaged(Slot, Hash);
+
+    /// Analogous to [PurgeRepairSlotCounter](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/repair/cluster_slot_state_verifier.rs#L20)
+    pub const PurgeRepairSlotCounters = collections.SortedMapUnmanaged(Slot, usize);
+
+    /// Analogous to [EpochSlotsFrozenSlots](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/repair/cluster_slot_state_verifier.rs#L22)
+    pub const EpochSlotsFrozenSlots = collections.SortedMapUnmanaged(Slot, Hash);
+
+    /// Analogous to [DuplicateConfirmedSlots](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/repair/cluster_slot_state_verifier.rs#L24)
+    pub const DuplicateConfirmedSlots = collections.SortedMapUnmanaged(Slot, Hash);
 
     pub const empty: SlotData = .{
         .duplicate_confirmed_slots = .empty,
@@ -173,6 +191,85 @@ pub const SlotData = struct {
         self.purge_repair_slot_counter.deinit(allocator);
         self.unfrozen_gossip_verified_vote_hashes.deinit(allocator);
         self.duplicate_slots.deinit(allocator);
+    }
+};
+
+/// Analogous to [UnfrozenGossipVerifiedVoteHashes](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/unfrozen_gossip_verified_vote_hashes.rs#L8)
+pub const UnfrozenGossipVerifiedVoteHashes = struct {
+    votes_per_slot: sig.utils.collections.SortedMapUnmanaged(Slot, HashToVotesMap),
+
+    const HashToVotesMap = std.AutoArrayHashMapUnmanaged(Hash, VoteList);
+    const VoteList = std.ArrayListUnmanaged(Pubkey);
+
+    pub const empty: UnfrozenGossipVerifiedVoteHashes = .{ .votes_per_slot = .empty };
+
+    pub fn deinit(self: UnfrozenGossipVerifiedVoteHashes, allocator: std.mem.Allocator) void {
+        var votes_per_slot = self.votes_per_slot;
+        for (votes_per_slot.values()) |*htvm| {
+            for (htvm.values()) |*vl| vl.deinit(allocator);
+            htvm.deinit(allocator);
+        }
+        votes_per_slot.deinit(allocator);
+    }
+
+    /// Update `latest_validator_votes_for_frozen_slots` if gossip has seen a newer vote for a frozen slot.
+    pub fn addVote(
+        self: *UnfrozenGossipVerifiedVoteHashes,
+        allocator: std.mem.Allocator,
+        vote_pubkey: Pubkey,
+        vote_slot: Slot,
+        hash: Hash,
+        is_frozen: bool,
+        latest_validator_votes_for_frozen_slots: *LatestValidatorVotes,
+    ) !void {
+        // If this is a frozen slot, then we need to update the `latest_validator_votes_for_frozen_slots`
+        const was_added, //
+        const maybe_latest_frozen_vote_slot //
+        = if (is_frozen) try latest_validator_votes_for_frozen_slots.checkAddVote(
+            allocator,
+            vote_pubkey,
+            vote_slot,
+            hash, // is_frozen
+            .gossip,
+        ) else blk: {
+            // Non-frozen banks are not inserted because
+            // we only track frozen votes in this struct
+            const vote_map = latest_validator_votes_for_frozen_slots.latestVotes(.gossip);
+            const slot = if (vote_map.get(vote_pubkey)) |entry| entry.slot else null;
+            break :blk .{ false, slot };
+        };
+
+        const vote_slot_gt_latest_frozen_slot: bool = blk: {
+            const latest_frozen_vote_slot = maybe_latest_frozen_vote_slot orelse {
+                // If there's no latest frozen vote slot yet, then we should also insert
+                break :blk true;
+            };
+            break :blk vote_slot >= latest_frozen_vote_slot;
+        };
+        if (!was_added and vote_slot_gt_latest_frozen_slot) {
+            // At this point it must be that:
+            // 1) `vote_slot` was not yet frozen
+            // 2) and `vote_slot` >= than the latest frozen vote slot.
+
+            // Thus we want to record this vote for later, in case a slot with this `vote_slot` + hash gets
+            // frozen later
+            const vps_gop = try self.votes_per_slot.getOrPut(allocator, vote_slot);
+            errdefer if (!vps_gop.found_existing) {
+                std.debug.assert(self.votes_per_slot.orderedRemove(vps_gop.key_ptr.*));
+            };
+            const hash_to_votes: *HashToVotesMap = vps_gop.value_ptr;
+
+            if (!vps_gop.found_existing) {
+                hash_to_votes.* = .empty;
+            }
+
+            const htv_gop = try hash_to_votes.getOrPut(allocator, hash);
+            errdefer if (!htv_gop.found_existing) {
+                std.debug.assert(hash_to_votes.swapRemove(htv_gop.key_ptr.*));
+            };
+
+            try htv_gop.value_ptr.append(allocator, vote_pubkey);
+        }
     }
 };
 
@@ -305,17 +402,14 @@ pub fn run(deps: ReplayDependencies) !void {
     defer state.deinit();
 
     while (!deps.exit.load(.monotonic)) {
-        try advanceReplay(&state, deps.my_identity);
+        try advanceReplay(&state);
     }
 }
 
 /// Run a single iteration of the entire replay process. Includes:
 /// - replay all active slots that have not been replayed yet
 /// - running concensus on the latest updates
-fn advanceReplay(
-    state: *ReplayState,
-    my_pubkey: sig.core.Pubkey,
-) !void {
+fn advanceReplay(state: *ReplayState) !void {
     try trackNewSlots(
         state.allocator,
         state.account_store,
@@ -329,7 +423,7 @@ fn advanceReplay(
     _ = try replay.execution.replayActiveSlots(state.executionState());
 
     _ = try replay.edge_cases.processEdgeCases(state.allocator, state.logger, .{
-        .my_pubkey = my_pubkey,
+        .my_pubkey = state.my_identity,
         .tpu_has_bank = false,
 
         .fork_choice = &state.fork_choice,
