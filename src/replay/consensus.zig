@@ -79,8 +79,9 @@ pub fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
         deps.latest_validator_votes_for_frozen_banks,
     );
     _ = newly_computed_slot_stats;
-    // TODO newly_computed_slot_stats needs to be processed by
-    // tower_duplicate_confirmed_forks and mark_slots_duplicate_confirmed
+    // TODO: for each newly_computed_slot_stats:
+    //           tower_duplicate_confirmed_forks
+    //           mark_slots_duplicate_confirmed
     const heaviest_slot = deps.fork_choice.heaviestOverallSlot().slot;
     const heaviest_slot_on_same_voted_fork =
         (try deps.fork_choice.heaviestSlotOnSameVotedFork(deps.replay_tower)) orelse null;
