@@ -12,6 +12,8 @@ const ProgressMap = sig.consensus.progress_map.ProgressMap;
 const ForkChoice = sig.consensus.fork_choice.ForkChoice;
 const LatestValidatorVotesForFrozenBanks =
     sig.consensus.latest_validator_votes.LatestValidatorVotes;
+const VersionedEpochStakes = sig.core.VersionedEpochStakes;
+const EpochSchedule = sig.core.EpochSchedule;
 
 const EpochStakeMap = sig.core.stake.EpochStakeMap;
 
@@ -31,6 +33,7 @@ const Hash = sig.core.Hash;
 const RwMux = sig.sync.RwMux;
 
 pub const isSlotDuplicateConfirmed = sig.consensus.tower.isSlotDuplicateConfirmed;
+pub const collectVoteLockouts = sig.consensus.replay_tower.collectVoteLockouts;
 
 const MAX_VOTE_REFRESH_INTERVAL_MILLIS: usize = 5000;
 
@@ -48,6 +51,8 @@ pub const ConsensusDependencies = struct {
     vote_account: Pubkey,
     slot_history: *const SlotHistory,
     epoch_stakes: EpochStakeMap,
+    // TODO this vs epoch_stakes.
+    versioned_epoch_stakes: *const std.AutoHashMap(Epoch, VersionedEpochStakes),
     latest_validator_votes_for_frozen_banks: *const LatestValidatorVotesForFrozenBanks,
 };
 
@@ -57,6 +62,21 @@ pub fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
     else
         return error.Todo;
 
+    const newly_computed_slot_stats = try computeBankStats(
+        deps.allocator,
+        deps.vote_account,
+        deps.ancestors,
+        deps.slot_tracker,
+        deps.versioned_epoch_stakes,
+        deps.epoch_tracker.schedule,
+        deps.progress_map,
+        deps.fork_choice,
+        deps.latest_validator_votes_for_frozen_banks,
+    );
+    _ = newly_computed_slot_stats;
+    // TODO: for each newly_computed_slot_stats:
+    //           tower_duplicate_confirmed_forks
+    //           mark_slots_duplicate_confirmed
     const heaviest_slot = deps.fork_choice.heaviestOverallSlot().slot;
     const heaviest_slot_on_same_voted_fork =
         (try deps.fork_choice.heaviestSlotOnSameVotedFork(deps.replay_tower)) orelse null;
@@ -440,6 +460,62 @@ fn resetFork(
     _ = last_reset_hash;
     _ = last_blockhash;
     _ = last_reset_bank_descendants;
+}
+
+fn computeBankStats(
+    allocator: std.mem.Allocator,
+    my_vote_pubkey: Pubkey,
+    ancestors: std.AutoHashMapUnmanaged(u64, SortedSet(u64)),
+    slot_tracker: *SlotTracker,
+    epoch_stakes: *const std.AutoHashMap(Epoch, VersionedEpochStakes),
+    epoch_schedule: *const EpochSchedule,
+    progress: *ProgressMap,
+    fork_choice: *ForkChoice,
+    latest_validator_votes: *LatestValidatorVotesForFrozenBanks,
+) []Slot {
+    var new_stats = std.ArrayListUnmanaged(Slot).empty;
+    var frozen_slots = try slot_tracker.frozenSlots(allocator);
+    // TODO agave sorts this by the slot first. Is this needed for the implementation to be correct?
+    // If not, then we can avoid sorting here which may be verbose given frozen_slots is a map.
+    for (frozen_slots.keys()) |slot| {
+        const epoch = epoch_schedule.getEpoch(slot);
+        const epoch_stake = epoch_stakes.get(epoch) orelse return error.MissingEpochStake;
+        const fork_stat = progress.getForkStats(slot) orelse return error.MissingSlot;
+        if (!fork_stat.is_computed) {
+            // TODO Self::adopt_on_chain_tower_if_behind
+            // Gather voting information from all vote accounts to understand the current consensus state.
+            const computed_bank_state = try collectVoteLockouts(
+                allocator,
+                .noop,
+                my_vote_pubkey,
+                epoch_stake.current.stakes.vote_accounts,
+                ancestors,
+                progress,
+                latest_validator_votes,
+            );
+            try fork_choice.computeBankStats(
+                allocator,
+                epoch_stakes,
+                epoch_schedule,
+                latest_validator_votes,
+            );
+            const fork_stats = progress.getForkStats(slot) orelse return error.MissingForkStats;
+            fork_stats.fork_stake = computed_bank_state.fork_stake;
+            fork_stats.total_stake = computed_bank_state.total_stake;
+            fork_stats.voted_stakes = computed_bank_state.voted_stakes;
+            fork_stats.lockout_intervals = computed_bank_state.lockout_intervals;
+            fork_stats.block_height = blk: {
+                const slot_info = slot_tracker.get(slot) orelse return error.MissingSlots;
+                break :blk slot_info.constants.block_height;
+            };
+            fork_stats.my_latest_landed_vote = computed_bank_state.my_latest_landed_vote;
+            fork_stats.my_latest_landed_vote = computed_bank_state.my_latest_landed_vote;
+            fork_stats.computed = true;
+
+            new_stats.append(slot);
+        }
+    }
+    return try new_stats.toOwnedSlice();
 }
 
 const testing = std.testing;
