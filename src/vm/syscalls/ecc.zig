@@ -620,7 +620,22 @@ fn altBn128Operation(
             return result;
         },
         .pairing => {
-            if (input.len % 192 != 0) return error.InvalidLength;
+            // Agave does not check that the input length is a multiple of the
+            // pair size (192 bytes). That *would* make sense, however it turns out Agave
+            // performs a useless check,
+            // https://github.com/anza-xyz/solana-sdk/blob/8eef25b054c4e5ca6d8b879744456297a187db92/bn254/src/lib.rs#L321-L327
+            //
+            // To the untrained eye this may seem like a check that `input.len()` is a multiple of
+            // the pairing size. You would be wrong! `check_rem` only returns `None`
+            // if the RHS is zero. The only way this condition will be true is if the
+            // `PAIRING_ELEMENT_LENGTH` constant were zero, which is impossible.
+            //
+            // The "correct" behaviour ends up being to *not* check the length, instead we perform
+            // a truncating integer division in the pairing syscall implementation (ensuring that
+            // the number of pairs read will always fit input size), and simply ignore the remaining
+            // bytes.
+            //
+            // if (input.len % 192 != 0) return error.InvalidLength;
 
             if (ff.bn254_pairing_syscall(input.ptr, input.len, result) != 0) {
                 return error.Unexpected;
