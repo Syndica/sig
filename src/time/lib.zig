@@ -10,3 +10,9 @@ pub const Duration = time.Duration;
 pub fn getWallclockMs() u64 {
     return @intCast(std.time.milliTimestamp());
 }
+
+pub const stake_weighted_timestamp = @import("stake_weighted_timestamp.zig");
+pub const MaxAllowableDrift = stake_weighted_timestamp.MaxAllowableDrift;
+pub const EpochStartTimestamp = stake_weighted_timestamp.EpochStartTimestamp;
+pub const calculateStakeWeightedTimestamp =
+    stake_weighted_timestamp.calculateStakeWeightedTimestamp;
