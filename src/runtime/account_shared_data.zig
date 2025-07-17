@@ -42,6 +42,31 @@ pub const AccountSharedData = struct {
         return std.mem.allEqual(u8, self.data, 0);
     }
 
+    pub fn deinit(self: *const AccountSharedData, allocator: std.mem.Allocator) void {
+        allocator.free(self.data);
+    }
+
+    pub fn clone(
+        self: AccountSharedData,
+        allocator: std.mem.Allocator,
+    ) std.mem.Allocator.Error!AccountSharedData {
+        return .{
+            .lamports = self.lamports,
+            .data = try allocator.dupe(u8, self.data),
+            .owner = self.owner,
+            .executable = self.executable,
+            .rent_epoch = self.rent_epoch,
+        };
+    }
+
+    pub fn equals(self: *const AccountSharedData, other: *const AccountSharedData) bool {
+        return self.lamports == other.lamports and
+            std.mem.eql(u8, self.data, other.data) and
+            self.owner.equals(&other.owner) and
+            self.executable == other.executable and
+            self.rent_epoch == other.rent_epoch;
+    }
+
     /// Copy the old data into the new memory
     /// If the new size is less than the old size, truncate the data
     pub fn resize(

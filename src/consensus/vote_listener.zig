@@ -987,7 +987,7 @@ fn trackOptimisticConfirmationVote(
     return .{ reached_thresholds, result == .is_new };
 }
 
-fn sumStake(sum: *u64, epoch_stakes: ?*const sig.core.stake.EpochStakes, pubkey: Pubkey) void {
+fn sumStake(sum: *u64, epoch_stakes: ?*const sig.core.EpochStakes, pubkey: Pubkey) void {
     if (epoch_stakes) |stakes| {
         sum.* += stakes.stakes.vote_accounts.getDelegatedStake(pubkey);
     }
@@ -1392,7 +1392,7 @@ test VoteListener {
     const root_slot: Slot = 0;
 
     var bank_forks_rw = sig.sync.RwMux(BankForksStub).init(blk: {
-        var stakes: sig.core.stake.EpochStakes = try .initEmpty(allocator);
+        var stakes: sig.core.EpochStakes = try .initEmptyWithGenesisStakeHistoryEntry(allocator);
         defer stakes.deinit(allocator);
         for (tracker_templates) |template| {
             _, const vote_kp, _ = template;

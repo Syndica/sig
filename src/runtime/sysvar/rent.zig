@@ -40,6 +40,12 @@ pub const Rent = extern struct {
         .burn_percent = DEFAULT_BURN_PERCENT,
     };
 
+    pub const FREE: Rent = .{
+        .lamports_per_byte_year = 0,
+        .exemption_threshold = 0,
+        .burn_percent = 0,
+    };
+
     pub const STORAGE_SIZE: u64 = @sizeOf(Rent);
 
     pub fn minimumBalance(self: Rent, data_len: usize) u64 {
