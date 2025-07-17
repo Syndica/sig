@@ -486,6 +486,7 @@ fn computeBankStats(
         const fork_stat = progress.getForkStats(slot) orelse return error.MissingSlot;
         if (!fork_stat.is_computed) {
             // TODO Self::adopt_on_chain_tower_if_behind
+            // Gather voting information from all vote accounts to understand the current consensus state.
             const computed_bank_state = try collectVoteLockouts(
                 allocator,
                 .noop,
