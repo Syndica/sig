@@ -52,6 +52,8 @@ pub const ConsensusDependencies = struct {
     vote_account: Pubkey,
     slot_history: *const SlotHistory,
     epoch_stakes: EpochStakeMap,
+    // TODO this vs epoch_stakes.
+    versioned_epoch_stakes: *const std.AutoHashMap(Epoch, VersionedEpochStakes),
     latest_validator_votes_for_frozen_banks: *const LatestValidatorVotesForFrozenBanks,
 };
 
@@ -61,6 +63,20 @@ pub fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
     else
         return error.Todo;
 
+    const newly_computed_slot_stats = try computeBankStats(
+        deps.allocator,
+        deps.vote_account,
+        deps.ancestors,
+        deps.slot_tracker,
+        deps.versioned_epoch_stakes,
+        deps.epoch_tracker.schedule,
+        deps.progress_map,
+        deps.fork_choice,
+        deps.latest_validator_votes_for_frozen_banks,
+    );
+    _ = newly_computed_slot_stats;
+    // TODO newly_computed_slot_stats needs to be processed by
+    // tower_duplicate_confirmed_forks and mark_slots_duplicate_confirmed
     const heaviest_slot = deps.fork_choice.heaviestOverallSlot().slot;
     const heaviest_slot_on_same_voted_fork =
         (try deps.fork_choice.heaviestSlotOnSameVotedFork(deps.replay_tower)) orelse null;
