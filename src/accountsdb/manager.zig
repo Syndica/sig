@@ -762,7 +762,7 @@ fn shrinkAccountFiles(
         }
 
         // update the references
-        const new_reference_block, _ = try db.account_index
+        const new_reference_block, const new_global_index = try db.account_index
             .reference_manager.allocOrExpand(accounts_alive_count);
 
         account_iter.reset();
@@ -810,10 +810,18 @@ fn shrinkAccountFiles(
             };
             // NOTE: this is ok because nothing points to this old reference memory
             // deinit old block of reference memory
-            db.account_index.reference_manager.free(slot_reference_map_entry.value_ptr.ptr);
+            db.account_index.reference_manager.free(
+                slot_reference_map_entry.value_ptr.refs.items.ptr,
+            );
 
             // point to new block
-            slot_reference_map_entry.value_ptr.* = new_reference_block;
+            slot_reference_map_entry.value_ptr.* = .{
+                .refs = .{
+                    .items = new_reference_block,
+                    .capacity = new_reference_block.len,
+                },
+                .global_index = new_global_index,
+            };
         }
 
         // queue the old account_file for deletion
@@ -888,7 +896,7 @@ fn purgeSlot(db: *AccountsDB, slot: Slot) void {
             "slot reference map not found for slot: {d}",
             .{slot},
         );
-        db.account_index.reference_manager.free(r.value.ptr);
+        db.account_index.reference_manager.free(r.value.refs.items.ptr);
     }
 
     // free the account memory
@@ -1417,7 +1425,7 @@ test "shrink account file works" {
         defer slot_reference_map_lg.unlock();
 
         const slot_mem = slot_reference_map.get(new_slot).?;
-        try std.testing.expect(slot_mem.len == accounts2.len);
+        try std.testing.expect(slot_mem.refs.items.len == accounts2.len);
     }
 
     // test: files were shrunk
@@ -1464,7 +1472,7 @@ test "shrink account file works" {
         defer slot_reference_map_lg.unlock();
 
         const slot_mem = slot_reference_map.get(slot).?;
-        try std.testing.expectEqual(1, slot_mem.len);
+        try std.testing.expectEqual(1, slot_mem.refs.items.len);
     }
 
     // last account ref should still be accessible

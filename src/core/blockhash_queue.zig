@@ -80,12 +80,13 @@ pub const BlockhashQueue = struct {
         hash: Hash,
         lamports_per_signature: u64,
     ) Allocator.Error!void {
-        std.debug.assert(self.last_hash_index == 0, "Genesis hash should be the first entry");
+        std.debug.assert(self.last_hash_index == 0);
         try self.hash_infos.put(allocator, hash, .{
             .index = 0,
             .timestamp = @intCast(std.time.milliTimestamp()),
             .lamports_per_signature = lamports_per_signature,
         });
+        self.last_hash = hash;
     }
 
     pub fn insertHash(
@@ -94,16 +95,16 @@ pub const BlockhashQueue = struct {
         hash: Hash,
         lamports_per_signature: u64,
     ) Allocator.Error!void {
-        self.last_hash_index += 1;
-
-        if (self.hash_infos.count() >= self.max_age) try self.purge();
+        const last_hash_index = self.last_hash_index + 1;
+        if (self.hash_infos.count() >= self.max_age) try self.purge(last_hash_index);
 
         try self.hash_infos.put(allocator, hash, .{
-            .index = self.last_hash_index,
+            .index = last_hash_index,
             .timestamp = @intCast(std.time.milliTimestamp()),
             .lamports_per_signature = lamports_per_signature,
         });
 
+        self.last_hash_index = last_hash_index;
         self.last_hash = hash;
     }
 
@@ -116,13 +117,13 @@ pub const BlockhashQueue = struct {
         return last_hash_index - hash_index <= @as(u64, max_age);
     }
 
-    fn purge(self: *BlockhashQueue) Allocator.Error!void {
+    fn purge(self: *BlockhashQueue, last_hash_index: u64) Allocator.Error!void {
         std.debug.assert(self.hash_infos.count() <= MAX_RECENT_BLOCKHASHES + 1);
         var keys = [_]Hash{Hash.ZEROES} ** (MAX_RECENT_BLOCKHASHES + 1);
         @memcpy(keys[0..self.hash_infos.count()], self.hash_infos.keys());
         for (keys[0..self.hash_infos.count()]) |key| {
             const hash_info = self.hash_infos.get(key) orelse unreachable;
-            if (isHashIndexValid(self.last_hash_index, self.max_age, hash_info.index)) continue;
+            if (isHashIndexValid(last_hash_index, self.max_age, hash_info.index)) continue;
             _ = self.hash_infos.swapRemove(key);
         }
     }
@@ -140,16 +141,17 @@ pub const BlockhashQueue = struct {
         for (0..max_list_entries) |_| {
             const hash = Hash.initRandom(random);
 
-            self.last_hash_index += 1;
+            const last_hash_index = self.last_hash_index + 1;
 
-            if (self.hash_infos.count() >= self.max_age) try self.purge();
+            if (self.hash_infos.count() >= self.max_age) try self.purge(last_hash_index);
 
             try self.hash_infos.put(allocator, hash, .{
-                .index = self.last_hash_index,
+                .index = last_hash_index,
                 .timestamp = timestamp,
-                .lamports_per_signature = random.intRangeAtMost(u64, 4000, 6000),
+                .lamports_per_signature = random.int(u64),
             });
 
+            self.last_hash_index = last_hash_index;
             self.last_hash = hash;
 
             timestamp += random.intRangeAtMost(u64, 1, 1_000_000);
@@ -357,4 +359,22 @@ test "get hash info if valid" {
         null,
         queue.getHashInfoIfValid(hash_list[max_age - 1], 0),
     );
+}
+
+test "initialise with genesis hash" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+
+    const max_age = 2;
+    const genesis_hash = Hash.initRandom(prng.random());
+
+    var queue = BlockhashQueue.init(max_age);
+    defer queue.deinit(allocator);
+
+    try queue.insertGenesisHash(allocator, genesis_hash, 0);
+
+    try std.testing.expectEqual(0, queue.last_hash_index);
+    try std.testing.expectEqual(genesis_hash, queue.last_hash.?);
+    try std.testing.expectEqual(1, queue.hash_infos.count());
+    try std.testing.expect(queue.isHashValidForAge(genesis_hash, 0));
 }

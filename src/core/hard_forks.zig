@@ -3,8 +3,9 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const Slot = @import("time.zig").Slot;
 
+/// TODO: It may be more efficient to store hard forks as a hash map, and only sort when required.
 pub const HardForks = struct {
-    entries: std.ArrayListUnmanaged(HardFork) = .{},
+    entries: std.ArrayListUnmanaged(HardFork) = .empty,
 
     pub const HardFork = extern struct {
         slot: Slot,
@@ -31,25 +32,19 @@ pub const HardForks = struct {
     }
 
     pub fn register(self: *HardForks, allocator: Allocator, new_slot: Slot) !void {
-        if (std.sort.binarySearch(
+        const index = std.sort.lowerBound(
             HardFork,
             self.entries.items,
             new_slot,
             HardFork.searchCmp,
-        )) |index| {
-            self.entries.items[index] = .{
-                .slot = new_slot,
-                .count = self.entries.items[index].count +| 1,
-            };
-        } else {
-            const index = std.sort.lowerBound(
-                HardFork,
-                self.entries.items,
-                new_slot,
-                HardFork.searchCmp,
-            );
+        );
+
+        if (index == self.entries.items.len)
+            try self.entries.append(allocator, .{ .slot = new_slot, .count = 1 })
+        else if (self.entries.items[index].slot == new_slot)
+            self.entries.items[index].count +|= 1
+        else
             try self.entries.insert(allocator, index, .{ .slot = new_slot, .count = 1 });
-        }
     }
 
     pub fn getHashData(self: *const HardForks, slot: Slot, parent_slot: Slot) ?[8]u8 {

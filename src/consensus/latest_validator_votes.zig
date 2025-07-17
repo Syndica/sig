@@ -52,6 +52,15 @@ pub const LatestValidatorVotes = struct {
         return false;
     }
 
+    pub const VoteKind = enum { replay, gossip };
+
+    pub fn latestVotes(self: *LatestValidatorVotes, vote_kind: VoteKind) *LatestVotes {
+        return switch (vote_kind) {
+            .replay => &self.max_replay_frozen_votes,
+            .gossip => &self.max_gossip_frozen_votes,
+        };
+    }
+
     /// Returns whether the vote was actually added, and the latest voted frozen slot.
     /// The vote won't be added, and false will be returned for case when there are newer votes
     /// for this validator compared to the vote being inserted.
@@ -63,12 +72,9 @@ pub const LatestValidatorVotes = struct {
         vote_pubkey: Pubkey,
         vote_slot: Slot,
         frozen_hash: Hash,
-        is_replay_vote: bool,
+        vote_kind: VoteKind,
     ) !struct { bool, Slot } {
-        const vote_map = if (is_replay_vote)
-            &self.max_replay_frozen_votes
-        else
-            &self.max_gossip_frozen_votes;
+        const vote_map = self.latestVotes(vote_kind);
 
         const max_frozen_vote = try vote_map.getOrPut(allocator, vote_pubkey);
         errdefer if (!max_frozen_vote.found_existing)
@@ -92,16 +98,19 @@ pub const LatestValidatorVotes = struct {
         }
 
         try max_frozen_vote.value_ptr.hashes.append(allocator, frozen_hash);
-        if (is_replay_vote) {
-            // Only record votes detected through replaying blocks,
-            // because votes in gossip are not consistently observable
-            // if the validator is replacing them.
-            const dirty_frozen_hash = try self.fork_choice_dirty_set.getOrPutValue(
-                allocator,
-                vote_pubkey,
-                .{ .slot = vote_slot, .hashes = .empty },
-            );
-            try dirty_frozen_hash.value_ptr.hashes.append(allocator, frozen_hash);
+        switch (vote_kind) {
+            .replay => {
+                // Only record votes detected through replaying blocks,
+                // because votes in gossip are not consistently observable
+                // if the validator is replacing them.
+                const dirty_frozen_hash = try self.fork_choice_dirty_set.getOrPutValue(
+                    allocator,
+                    vote_pubkey,
+                    .{ .slot = vote_slot, .hashes = .empty },
+                );
+                try dirty_frozen_hash.value_ptr.hashes.append(allocator, frozen_hash);
+            },
+            .gossip => {},
         }
         return .{ true, vote_slot };
     }
@@ -148,11 +157,15 @@ const builtin = @import("builtin");
 pub fn latestVote(
     lastest_votes: *const LatestValidatorVotes,
     pubkey: Pubkey,
-    is_replay_vote: bool,
+    vote_kind: LatestValidatorVotes.VoteKind,
 ) ?struct { slot: Slot, hashes: []const Hash } {
     if (!builtin.is_test) {
         @compileError("latestVote should only be called in test mode");
     }
+    const is_replay_vote = switch (vote_kind) {
+        .replay => true,
+        .gossip => false,
+    };
     const vote_map = if (is_replay_vote)
         &lastest_votes.max_replay_frozen_votes
     else
@@ -165,7 +178,10 @@ pub fn latestVote(
     return null;
 }
 
-fn runFrozenBanksCheckAddVoteIsReplayTest(allocator: std.mem.Allocator, is_replay_vote: bool) !void {
+fn runFrozenBanksCheckAddVoteIsReplayTest(
+    allocator: std.mem.Allocator,
+    vote_kind: LatestValidatorVotes.VoteKind,
+) !void {
     if (!builtin.is_test) {
         @compileError("runFrozenBanksCheckAddVoteIsReplayTest should only be called in test mode");
     }
@@ -196,7 +212,7 @@ fn runFrozenBanksCheckAddVoteIsReplayTest(allocator: std.mem.Allocator, is_repla
                 vote_pubkey,
                 vote_slot,
                 frozen_hash,
-                is_replay_vote,
+                vote_kind,
             );
             try testing.expectEqualDeep(
                 expected_result,
@@ -206,28 +222,29 @@ fn runFrozenBanksCheckAddVoteIsReplayTest(allocator: std.mem.Allocator, is_repla
             const latest_vote = latestVote(
                 &latest_validator_votes,
                 vote_pubkey,
-                is_replay_vote,
+                vote_kind,
             );
             try testing.expect(latest_vote != null);
             try testing.expectEqual(latest_vote.?.slot, vote_slot);
             try testing.expectEqual(latest_vote.?.hashes.len, 1);
             try testing.expectEqual(latest_vote.?.hashes[0], frozen_hash);
 
-            if (is_replay_vote) {
-                const dirty_entry =
-                    latest_validator_votes.fork_choice_dirty_set.get(
-                        vote_pubkey,
+            switch (vote_kind) {
+                .replay => {
+                    const dirty_entry =
+                        latest_validator_votes.fork_choice_dirty_set.get(vote_pubkey);
+                    try testing.expect(dirty_entry != null);
+                    try testing.expectEqual(dirty_entry.?.slot, vote_slot);
+                    try testing.expectEqual(dirty_entry.?.hashes.items.len, 1);
+                    try testing.expectEqual(dirty_entry.?.hashes.items[0], frozen_hash);
+                },
+                .gossip => {
+                    try testing.expect(
+                        !latest_validator_votes.fork_choice_dirty_set.contains(
+                            vote_pubkey,
+                        ),
                     );
-                try testing.expect(dirty_entry != null);
-                try testing.expectEqual(dirty_entry.?.slot, vote_slot);
-                try testing.expectEqual(dirty_entry.?.hashes.items.len, 1);
-                try testing.expectEqual(dirty_entry.?.hashes.items[0], frozen_hash);
-            } else {
-                try testing.expect(
-                    !latest_validator_votes.fork_choice_dirty_set.contains(
-                        vote_pubkey,
-                    ),
-                );
+                },
             }
         }
     }
@@ -241,30 +258,36 @@ fn runFrozenBanksCheckAddVoteIsReplayTest(allocator: std.mem.Allocator, is_repla
             vote_pubkey,
             vote_slot,
             duplicate_frozen_hash,
-            is_replay_vote,
+            vote_kind,
         );
         try testing.expectEqualDeep(result, .{ true, vote_slot });
 
         const latest_vote = latestVote(
             &latest_validator_votes,
             vote_pubkey,
-            is_replay_vote,
+            vote_kind,
         );
         try testing.expect(latest_vote != null);
         try testing.expectEqual(latest_vote.?.slot, vote_slot);
         try testing.expectEqualSlices(Hash, latest_vote.?.hashes, &all_frozen_hashes);
 
-        if (is_replay_vote) {
-            const dirty_entry = latest_validator_votes.fork_choice_dirty_set.get(
-                vote_pubkey,
-            );
-            try testing.expect(dirty_entry != null);
-            try testing.expectEqual(dirty_entry.?.slot, vote_slot);
-            try testing.expectEqualSlices(Hash, dirty_entry.?.hashes.items, &all_frozen_hashes);
-        } else {
-            try testing.expect(
-                !latest_validator_votes.fork_choice_dirty_set.contains(vote_pubkey),
-            );
+        switch (vote_kind) {
+            .replay => {
+                const dirty_entry =
+                    latest_validator_votes.fork_choice_dirty_set.get(vote_pubkey);
+                try testing.expect(dirty_entry != null);
+                try testing.expectEqual(dirty_entry.?.slot, vote_slot);
+                try testing.expectEqualSlices(
+                    Hash,
+                    dirty_entry.?.hashes.items,
+                    &all_frozen_hashes,
+                );
+            },
+            .gossip => {
+                try testing.expect(
+                    !latest_validator_votes.fork_choice_dirty_set.contains(vote_pubkey),
+                );
+            },
         }
     }
 
@@ -277,13 +300,13 @@ fn runFrozenBanksCheckAddVoteIsReplayTest(allocator: std.mem.Allocator, is_repla
             vote_pubkey,
             vote_slot,
             new_frozen_hash,
-            is_replay_vote,
+            vote_kind,
         );
         try testing.expectEqual(result, .{ true, vote_slot });
         const latest_vote = latestVote(
             &latest_validator_votes,
             vote_pubkey,
-            is_replay_vote,
+            vote_kind,
         );
         try testing.expectEqual(latest_vote.?.slot, vote_slot);
         try testing.expectEqual(
@@ -291,20 +314,21 @@ fn runFrozenBanksCheckAddVoteIsReplayTest(allocator: std.mem.Allocator, is_repla
             new_frozen_hash,
         );
 
-        if (is_replay_vote) {
-            const dirty_entry =
-                latest_validator_votes.fork_choice_dirty_set.get(
-                    vote_pubkey,
+        switch (vote_kind) {
+            .replay => {
+                const dirty_entry =
+                    latest_validator_votes.fork_choice_dirty_set.get(vote_pubkey);
+                try testing.expectEqual(dirty_entry.?.slot, vote_slot);
+                try testing.expectEqual(
+                    dirty_entry.?.hashes.items[dirty_entry.?.hashes.items.len - 1],
+                    new_frozen_hash,
                 );
-            try testing.expectEqual(dirty_entry.?.slot, vote_slot);
-            try testing.expectEqual(
-                dirty_entry.?.hashes.items[dirty_entry.?.hashes.items.len - 1],
-                new_frozen_hash,
-            );
-        } else {
-            try testing.expect(
-                !latest_validator_votes.fork_choice_dirty_set.contains(vote_pubkey),
-            );
+            },
+            .gossip => {
+                try testing.expect(
+                    !latest_validator_votes.fork_choice_dirty_set.contains(vote_pubkey),
+                );
+            },
         }
     }
 
@@ -319,30 +343,32 @@ fn runFrozenBanksCheckAddVoteIsReplayTest(allocator: std.mem.Allocator, is_repla
             new_vote_pubkey,
             vote_slot,
             new_frozen_hash2,
-            is_replay_vote,
+            vote_kind,
         );
         try testing.expectEqual(result, .{ true, vote_slot });
         const latest_vote = latestVote(
             &latest_validator_votes,
             new_vote_pubkey,
-            is_replay_vote,
+            vote_kind,
         );
         try testing.expectEqual(latest_vote.?.slot, vote_slot);
         try testing.expectEqual(latest_vote.?.hashes[0], new_frozen_hash2);
 
-        if (is_replay_vote) {
-            const dirty_entry = latest_validator_votes.fork_choice_dirty_set.get(
-                new_vote_pubkey,
-            );
-            try testing.expect(dirty_entry != null);
-            try testing.expectEqual(dirty_entry.?.slot, vote_slot);
-            try testing.expectEqual(dirty_entry.?.hashes.items[0], new_frozen_hash2);
-        } else {
-            try testing.expect(
-                !latest_validator_votes.fork_choice_dirty_set.contains(
-                    new_vote_pubkey,
-                ),
-            );
+        switch (vote_kind) {
+            .replay => {
+                const dirty_entry =
+                    latest_validator_votes.fork_choice_dirty_set.get(new_vote_pubkey);
+                try testing.expect(dirty_entry != null);
+                try testing.expectEqual(dirty_entry.?.slot, vote_slot);
+                try testing.expectEqual(dirty_entry.?.hashes.items[0], new_frozen_hash2);
+            },
+            .gossip => {
+                try testing.expect(
+                    !latest_validator_votes.fork_choice_dirty_set.contains(
+                        new_vote_pubkey,
+                    ),
+                );
+            },
         }
     }
 }
@@ -352,7 +378,7 @@ fn setupDirtySet(
     random: std.Random,
     lvvfb: *LatestValidatorVotes,
     num_validators: u64,
-    is_replay: bool,
+    vote_kind: LatestValidatorVotes.VoteKind,
 ) !std.ArrayList(struct { Pubkey, SlotAndHash }) {
     if (!builtin.is_test) {
         @compileError("setupDirtySet should only be called in test mode");
@@ -371,7 +397,7 @@ fn setupDirtySet(
             vote_pubkey,
             vote_slot,
             frozen_hash1,
-            is_replay,
+            vote_kind,
         );
         // This vote slot was frozen, and is the highest slot inserted thus far,
         // so the highest vote should be Some(vote_slot)
@@ -384,20 +410,26 @@ fn setupDirtySet(
             vote_pubkey,
             vote_slot,
             frozen_hash2,
-            is_replay,
+            vote_kind,
         );
         try std.testing.expectEqual(.{ true, vote_slot }, check2);
 
-        if (is_replay) {
-            try result.append(.{ vote_pubkey, .{ .slot = vote_slot, .hash = frozen_hash1 } });
-            try result.append(.{ vote_pubkey, .{ .slot = vote_slot, .hash = frozen_hash2 } });
+        switch (vote_kind) {
+            .replay => {
+                try result.append(.{ vote_pubkey, .{ .slot = vote_slot, .hash = frozen_hash1 } });
+                try result.append(.{ vote_pubkey, .{ .slot = vote_slot, .hash = frozen_hash2 } });
+            },
+            .gossip => {},
         }
     }
 
     return result;
 }
 
-fn runFrozenBanksTakeVotesDirtySet(allocator: std.mem.Allocator, is_replay: bool) !void {
+fn runFrozenBanksTakeVotesDirtySet(
+    allocator: std.mem.Allocator,
+    vote_kind: LatestValidatorVotes.VoteKind,
+) !void {
     if (!@import("builtin").is_test) {
         @compileError("runFrozenBanksTakeVotesDirtySet should only be called in test mode");
     }
@@ -417,7 +449,7 @@ fn runFrozenBanksTakeVotesDirtySet(allocator: std.mem.Allocator, is_replay: bool
             random,
             &latest_validator_votes,
             num_validators,
-            is_replay,
+            vote_kind,
         );
         defer expected_dirty_set.deinit();
 
@@ -449,7 +481,7 @@ fn runFrozenBanksTakeVotesDirtySet(allocator: std.mem.Allocator, is_replay: bool
             random,
             &latest_validator_votes,
             num_validators,
-            is_replay,
+            vote_kind,
         );
         defer dirty_set.deinit();
 
@@ -510,19 +542,19 @@ fn sortPubkeySlotAndHash(slice: []struct { Pubkey, SlotAndHash }) void {
 }
 
 test "latest validator votes check add vote is replay" {
-    try runFrozenBanksCheckAddVoteIsReplayTest(std.testing.allocator, true);
+    try runFrozenBanksCheckAddVoteIsReplayTest(std.testing.allocator, .replay);
 }
 
 test "latest validator votes check add vote is not replay" {
-    try runFrozenBanksCheckAddVoteIsReplayTest(std.testing.allocator, false);
+    try runFrozenBanksCheckAddVoteIsReplayTest(std.testing.allocator, .gossip);
 }
 
 test "latest validator votes take votes dirty set is replay" {
-    try runFrozenBanksTakeVotesDirtySet(std.testing.allocator, true);
+    try runFrozenBanksTakeVotesDirtySet(std.testing.allocator, .replay);
 }
 
 test "latest validator votes take votes dirty set is not replay" {
-    try runFrozenBanksTakeVotesDirtySet(std.testing.allocator, false);
+    try runFrozenBanksTakeVotesDirtySet(std.testing.allocator, .gossip);
 }
 
 test "latest validator votes for frozen banks add replay and gossip vote" {
@@ -537,15 +569,15 @@ test "latest validator votes for frozen banks add replay and gossip vote" {
     const vote_pubkey = Pubkey.initRandom(random);
     const vote_slot = 1;
     const frozen_hash = Hash.initRandom(random);
-    var is_replay_vote = false;
 
+    // Votes from gossip
     {
         const result = try latest_validator_votes.checkAddVote(
             allocator,
             vote_pubkey,
             vote_slot,
             frozen_hash,
-            is_replay_vote,
+            .gossip,
         );
         try std.testing.expectEqualDeep(
             .{ true, vote_slot },
@@ -558,7 +590,7 @@ test "latest validator votes for frozen banks add replay and gossip vote" {
         const latest_vote = latestVote(
             &latest_validator_votes,
             vote_pubkey,
-            is_replay_vote,
+            .gossip,
         );
         try std.testing.expectEqual(latest_vote.?.slot, vote_slot);
         try std.testing.expectEqual(latest_vote.?.hashes.len, 1);
@@ -570,7 +602,7 @@ test "latest validator votes for frozen banks add replay and gossip vote" {
         const latest_vote = latestVote(
             &latest_validator_votes,
             vote_pubkey,
-            !is_replay_vote,
+            .replay,
         );
         try std.testing.expectEqual(null, latest_vote);
 
@@ -580,14 +612,13 @@ test "latest validator votes for frozen banks add replay and gossip vote" {
     }
 
     // Next simulate vote from replay
-    is_replay_vote = true;
     {
         const result = try latest_validator_votes.checkAddVote(
             allocator,
             vote_pubkey,
             vote_slot,
             frozen_hash,
-            is_replay_vote,
+            .replay,
         );
         try std.testing.expectEqualDeep(
             .{ true, vote_slot },
@@ -600,7 +631,7 @@ test "latest validator votes for frozen banks add replay and gossip vote" {
         const latest_vote = latestVote(
             &latest_validator_votes,
             vote_pubkey,
-            is_replay_vote,
+            .replay,
         );
         try std.testing.expectEqual(latest_vote.?.slot, vote_slot);
         try std.testing.expectEqual(latest_vote.?.hashes.len, 1);
@@ -610,7 +641,7 @@ test "latest validator votes for frozen banks add replay and gossip vote" {
         const latest_vote = latestVote(
             &latest_validator_votes,
             vote_pubkey,
-            !is_replay_vote,
+            .gossip,
         );
         try std.testing.expectEqual(latest_vote.?.slot, vote_slot);
         try std.testing.expectEqual(latest_vote.?.hashes.len, 1);

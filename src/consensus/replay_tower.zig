@@ -1682,7 +1682,7 @@ pub fn collectVoteLockouts(
                     key,
                     last_landed_voted_slot,
                     frozen_hash,
-                    true,
+                    .replay, // TODO: dadepo check
                 );
             }
         }
@@ -4226,7 +4226,8 @@ pub const TestFixture = struct {
         allocator: std.mem.Allocator,
         random: std.Random,
     ) !void {
-        var epoch_stakes = try EpochStakes.initEmpty(allocator);
+        var epoch_stakes =
+            try EpochStakes.initEmptyWithGenesisStakeHistoryEntry(allocator);
         epoch_stakes.total_stake = 1000;
         epoch_stakes.stakes.deinit(allocator);
         epoch_stakes.stakes = try Stakes(.delegation).initRandom(
