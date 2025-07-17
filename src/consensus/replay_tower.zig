@@ -4,7 +4,6 @@ const sig = @import("../sig.zig");
 const AutoHashMapUnmanaged = std.AutoHashMapUnmanaged;
 const AutoArrayHashMapUnmanaged = std.AutoArrayHashMapUnmanaged;
 
-const AccountsDB = sig.accounts_db.AccountsDB;
 const BlockTimestamp = sig.runtime.program.vote.state.BlockTimestamp;
 const Hash = sig.core.Hash;
 const Lockout = sig.runtime.program.vote.state.Lockout;
