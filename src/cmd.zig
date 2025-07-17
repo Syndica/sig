@@ -1101,20 +1101,9 @@ fn validator(
         max_root,
     );
 
-    const ledger_writer = try allocator.create(sig.ledger.LedgerResultWriter);
+    const ledger_writer = try allocator.create(LedgerResultWriter);
     defer allocator.destroy(ledger_writer);
     ledger_writer.* = try .init(
-        allocator,
-        app_base.logger.unscoped(),
-        ledger_db,
-        app_base.metrics_registry,
-        lowest_cleanup_slot,
-        max_root,
-    );
-
-    const ledger_result_writer = try allocator.create(LedgerResultWriter);
-    defer allocator.destroy(ledger_result_writer);
-    ledger_result_writer.* = try LedgerResultWriter.init(
         allocator,
         app_base.logger.unscoped(),
         ledger_db,
