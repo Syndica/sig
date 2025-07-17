@@ -1225,7 +1225,7 @@ test "alt_bn128 add" {
     const allocator = std.testing.allocator;
 
     var prng = std.Random.DefaultPrng.init(0);
-    var tc = try sig.runtime.testing.createTransactionContext(
+    var cache, var tc = try sig.runtime.testing.createTransactionContext(
         allocator,
         prng.random(),
         .{ .accounts = &.{.{
@@ -1233,7 +1233,10 @@ test "alt_bn128 add" {
             .owner = sig.runtime.ids.NATIVE_LOADER_ID,
         }}, .compute_meter = 334 },
     );
-    defer sig.runtime.testing.deinitTransactionContext(allocator, tc);
+    defer {
+        sig.runtime.testing.deinitTransactionContext(allocator, tc);
+        cache.deinit(allocator);
+    }
 
     const input: []const u8 = &.{
         0x18, 0xb1, 0x8a, 0xcf, 0xb4, 0xc2, 0xc3, 0x2,  0x76, 0xdb, 0x54,
@@ -1291,7 +1294,7 @@ test "alt_bn128 mul" {
     const allocator = std.testing.allocator;
 
     var prng = std.Random.DefaultPrng.init(0);
-    var tc = try sig.runtime.testing.createTransactionContext(
+    var cache, var tc = try sig.runtime.testing.createTransactionContext(
         allocator,
         prng.random(),
         .{ .accounts = &.{.{
@@ -1299,7 +1302,10 @@ test "alt_bn128 mul" {
             .owner = sig.runtime.ids.NATIVE_LOADER_ID,
         }}, .compute_meter = 3_840 },
     );
-    defer sig.runtime.testing.deinitTransactionContext(allocator, tc);
+    defer {
+        sig.runtime.testing.deinitTransactionContext(allocator, tc);
+        cache.deinit(allocator);
+    }
 
     const input: []const u8 = &.{
         0x2b, 0xd3, 0xe6, 0xd0, 0xf3, 0xb1, 0x42, 0x92, 0x4f, 0x5c, 0xa7, 0xb4,
@@ -1353,7 +1359,7 @@ test "alt_bn128 pairing" {
     const allocator = std.testing.allocator;
 
     var prng = std.Random.DefaultPrng.init(0);
-    var tc = try sig.runtime.testing.createTransactionContext(
+    var cache, var tc = try sig.runtime.testing.createTransactionContext(
         allocator,
         prng.random(),
         .{ .accounts = &.{.{
@@ -1361,7 +1367,10 @@ test "alt_bn128 pairing" {
             .owner = sig.runtime.ids.NATIVE_LOADER_ID,
         }}, .compute_meter = 48_986 },
     );
-    defer sig.runtime.testing.deinitTransactionContext(allocator, tc);
+    defer {
+        sig.runtime.testing.deinitTransactionContext(allocator, tc);
+        cache.deinit(allocator);
+    }
 
     const input: []const u8 = &.{
         0x1c, 0x76, 0x47, 0x6f, 0x4d, 0xef, 0x4b, 0xb9, 0x45, 0x41, 0xd5, 0x7e,
@@ -1437,7 +1446,7 @@ test "alt_bn128 g1 compress/decompress" {
     const allocator = std.testing.allocator;
 
     var prng = std.Random.DefaultPrng.init(0);
-    var tc = try sig.runtime.testing.createTransactionContext(
+    var cache, var tc = try sig.runtime.testing.createTransactionContext(
         allocator,
         prng.random(),
         .{ .accounts = &.{.{
@@ -1445,7 +1454,10 @@ test "alt_bn128 g1 compress/decompress" {
             .owner = sig.runtime.ids.NATIVE_LOADER_ID,
         }}, .compute_meter = 628 * 2 },
     );
-    defer sig.runtime.testing.deinitTransactionContext(allocator, tc);
+    defer {
+        sig.runtime.testing.deinitTransactionContext(allocator, tc);
+        cache.deinit(allocator);
+    }
 
     const input_addr = 0x100000000;
     const result_point_addr = 0x200000000;
@@ -1497,7 +1509,7 @@ test "alt_bn128 g2 compress/decompress" {
     const allocator = std.testing.allocator;
 
     var prng = std.Random.DefaultPrng.init(0);
-    var tc = try sig.runtime.testing.createTransactionContext(
+    var cache, var tc = try sig.runtime.testing.createTransactionContext(
         allocator,
         prng.random(),
         .{ .accounts = &.{.{
@@ -1505,7 +1517,10 @@ test "alt_bn128 g2 compress/decompress" {
             .owner = sig.runtime.ids.NATIVE_LOADER_ID,
         }}, .compute_meter = 13_896 * 2 },
     );
-    defer sig.runtime.testing.deinitTransactionContext(allocator, tc);
+    defer {
+        sig.runtime.testing.deinitTransactionContext(allocator, tc);
+        cache.deinit(allocator);
+    }
 
     const input_addr = 0x100000000;
     const result_point_addr = 0x200000000;
