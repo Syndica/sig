@@ -810,7 +810,7 @@ test "serializeParameters" {
                 },
             );
             defer {
-                deinitTransactionContext(allocator, tc);
+                deinitTransactionContext(allocator, &tc);
                 cache.deinit(allocator);
             }
 

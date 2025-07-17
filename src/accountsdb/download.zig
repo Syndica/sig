@@ -212,7 +212,7 @@ pub fn downloadSnapshotsFromGossip(
     var function_duration = try std.time.Timer.start();
     var download_attempts: u64 = 0;
     while (true) {
-        std.time.sleep(5 * std.time.ns_per_s); // wait while gossip table updates
+        std.Thread.sleep(5 * std.time.ns_per_s); // wait while gossip table updates
 
         if (download_attempts > max_number_of_download_attempts) {
             logger.err().logf(

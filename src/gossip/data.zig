@@ -2062,7 +2062,7 @@ test "LegacyContactInfo <-> ContactInfo roundtrip" {
     defer ci.deinit();
     const end = LegacyContactInfo.fromContactInfo(&ci);
 
-    try std.testing.expect(std.meta.eql(start, end));
+    try std.testing.expectEqual(start, end);
 }
 
 test "sanitize valid ContactInfo works" {

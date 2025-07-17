@@ -452,7 +452,7 @@ fn readRandomAccounts(
             const tracked_pubkeys = tracked_accounts.keys();
             if (tracked_pubkeys.len == 0) {
                 // wait for some accounts to exist
-                std.time.sleep(std.time.ns_per_s);
+                std.Thread.sleep(std.time.ns_per_s);
                 continue;
             }
 

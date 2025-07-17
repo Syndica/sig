@@ -520,7 +520,7 @@ pub const FrameManager = struct {
                 entry.value_ptr.* = frame_ref.index;
                 eviction_lfu.key[frame_ref.index] = key;
 
-                std.debug.assert(!std.meta.eql(evicted_key, key)); // inserted key we just evicted
+                std.debug.assert(evicted_key != key); // inserted key we just evicted
 
                 const removed = frame_map.swapRemove(evicted_key);
                 std.debug.assert(removed); // evicted key was not in map

@@ -76,7 +76,7 @@ fn testAsmWithMemory(
         .{ .compute_meter = expected[1] },
     );
     defer {
-        deinitTranactionContext(allocator, tc);
+        deinitTranactionContext(allocator, &tc);
         cache.deinit(allocator);
     }
 
@@ -1909,7 +1909,7 @@ test "pqr" {
         .{ .compute_meter = 6 },
     );
     defer {
-        deinitTranactionContext(allocator, tc);
+        deinitTranactionContext(allocator, &tc);
         cache.deinit(allocator);
     }
 
@@ -2057,7 +2057,7 @@ test "pqr divide by zero" {
             .{ .compute_meter = 2 },
         );
         defer {
-            deinitTranactionContext(allocator, tc);
+            deinitTranactionContext(allocator, &tc);
             cache.deinit(allocator);
         }
 
@@ -2343,7 +2343,7 @@ pub fn testElfWithSyscalls(
         },
     );
     defer {
-        sig.runtime.testing.deinitTransactionContext(allocator, tc);
+        sig.runtime.testing.deinitTransactionContext(allocator, &tc);
         cache.deinit(allocator);
     }
 
@@ -2954,7 +2954,7 @@ pub fn testSyscall(
         .compute_meter = config.compute_meter,
     });
     defer {
-        sig.runtime.testing.deinitTransactionContext(allocator, tc);
+        sig.runtime.testing.deinitTransactionContext(allocator, &tc);
         cache.deinit(allocator);
     }
 

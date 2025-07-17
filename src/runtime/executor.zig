@@ -429,7 +429,7 @@ test "pushInstruction" {
         },
     );
     defer {
-        testing.deinitTransactionContext(allocator, tc);
+        testing.deinitTransactionContext(allocator, &tc);
         cache.deinit(allocator);
     }
 
@@ -517,7 +517,7 @@ test "processNextInstruction" {
         },
     );
     defer {
-        testing.deinitTransactionContext(allocator, tc);
+        testing.deinitTransactionContext(allocator, &tc);
         cache.deinit(allocator);
     }
 
@@ -583,7 +583,7 @@ test "popInstruction" {
         },
     );
     defer {
-        testing.deinitTransactionContext(allocator, tc);
+        testing.deinitTransactionContext(allocator, &tc);
         cache.deinit(allocator);
     }
 
@@ -670,7 +670,7 @@ test "prepareCpiInstructionInfo" {
         },
     );
     defer {
-        testing.deinitTransactionContext(allocator, tc);
+        testing.deinitTransactionContext(allocator, &tc);
         cache.deinit(allocator);
     }
 
@@ -823,7 +823,7 @@ test "sumAccountLamports" {
         },
     );
     defer {
-        testing.deinitTransactionContext(allocator, tc);
+        testing.deinitTransactionContext(allocator, &tc);
         cache.deinit(allocator);
     }
 

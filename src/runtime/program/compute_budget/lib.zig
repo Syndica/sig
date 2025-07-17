@@ -55,7 +55,7 @@ test "compute_budget Instruction" {
     );
     const tc = &tx[1];
     defer {
-        sig.runtime.testing.deinitTransactionContext(allocator, tc.*);
+        sig.runtime.testing.deinitTransactionContext(allocator, tc);
         tx[0].deinit(allocator);
     }
 

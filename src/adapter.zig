@@ -109,7 +109,7 @@ pub const RpcEpochContextService = struct {
                 result catch |e|
                     self.logger.err().logf("failed to refresh epoch context via rpc: {}", .{e});
             }
-            std.time.sleep(100 * std.time.ns_per_ms);
+            std.Thread.sleep(100 * std.time.ns_per_ms);
             i += 1;
         }
     }

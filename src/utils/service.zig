@@ -215,7 +215,7 @@ pub fn runService(
 
         // sleep before looping, if necessary
         last_iteration = timer.lap();
-        std.time.sleep(@max(
+        std.Thread.sleep(@max(
             config.min_pause_ns,
             config.min_loop_duration_ns -| last_iteration,
         ));
