@@ -480,6 +480,8 @@ fn computeBankStats(
 ) []Slot {
     var new_stats = std.ArrayListUnmanaged(Slot).empty;
     var frozen_slots = try slot_tracker.frozenSlots(allocator);
+    // TODO agave sorts this by the slot first. Is this needed for the implementation to be correct?
+    // If not, then we can avoid sorting here which may be verbose given frozen_slots is a map.
     for (frozen_slots.keys()) |slot| {
         const epoch = epoch_schedule.getEpoch(slot);
         const epoch_stake = epoch_stakes.get(epoch) orelse return error.MissingEpochStake;
