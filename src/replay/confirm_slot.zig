@@ -314,6 +314,10 @@ pub const BlockError = enum {
 
 test "happy path: trivial case" {
     var thread_pool = ThreadPool.init(.{});
+    defer {
+        thread_pool.shutdown();
+        thread_pool.deinit();
+    }
     var tick_hash_count: u64 = 0;
 
     const future = try confirmSlot(
@@ -344,6 +348,10 @@ test "happy path: partial slot" {
     const allocator = std.testing.allocator;
 
     var thread_pool = ThreadPool.init(.{});
+    defer {
+        thread_pool.shutdown();
+        thread_pool.deinit();
+    }
     var tick_hash_count: u64 = 0;
 
     const poh, const entry_array = try sig.core.poh.testPoh(true);
@@ -378,6 +386,10 @@ test "happy path: full slot" {
     const allocator = std.testing.allocator;
 
     var thread_pool = ThreadPool.init(.{});
+    defer {
+        thread_pool.shutdown();
+        thread_pool.deinit();
+    }
     var tick_hash_count: u64 = 0;
 
     const poh, const entry_array = try sig.core.poh.testPoh(true);
@@ -412,6 +424,10 @@ test "fail: full slot not marked full -> .InvalidLastTick" {
     const allocator = std.testing.allocator;
 
     var thread_pool = ThreadPool.init(.{});
+    defer {
+        thread_pool.shutdown();
+        thread_pool.deinit();
+    }
     var tick_hash_count: u64 = 0;
 
     const poh, const entry_array = try sig.core.poh.testPoh(true);
@@ -449,6 +465,10 @@ test "fail: no trailing tick at max height -> .TrailingEntry" {
     const allocator = std.testing.allocator;
 
     var thread_pool = ThreadPool.init(.{});
+    defer {
+        thread_pool.shutdown();
+        thread_pool.deinit();
+    }
     var tick_hash_count: u64 = 0;
 
     const poh, const entry_array = try sig.core.poh.testPoh(true);
@@ -486,6 +506,10 @@ test "fail: invalid poh chain" {
     const allocator = std.testing.allocator;
 
     var thread_pool = ThreadPool.init(.{});
+    defer {
+        thread_pool.shutdown();
+        thread_pool.deinit();
+    }
     var tick_hash_count: u64 = 0;
 
     const poh, var entry_array = try sig.core.poh.testPoh(true);
@@ -526,6 +550,10 @@ test "fail: sigverify" {
     const allocator = std.testing.allocator;
 
     var thread_pool = ThreadPool.init(.{});
+    defer {
+        thread_pool.shutdown();
+        thread_pool.deinit();
+    }
     var tick_hash_count: u64 = 0;
 
     const poh, var entry_array = try sig.core.poh.testPoh(false);

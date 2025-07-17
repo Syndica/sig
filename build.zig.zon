@@ -18,16 +18,16 @@
             .hash = "httpz-0.0.0-PNVzrJ-0BgAp8WPkVfsFGNPRlRpBoU-8w0LxMDXBp37t",
         },
         .zstd = .{
-            .url = "git+https://github.com/Syndica/zstd.zig#d8fb9959e34eab8cc92fb2364e1814246b35f61e",
-            .hash = "zstd-0.0.1-8QsqCQOhAAAb1-CVSg161GorCrXDtEWMGJfld2Ymgra6",
+            .url = "git+https://github.com/Syndica/zstd.zig#b03df5a8b1b4ea1423e8cb2701024f469faadb71",
+            .hash = "zstd-0.0.1-8QsqCeqhAABbGuDYc-yqJEj0qitvmq52AEg0puJT6FHu",
         },
         .rocksdb = .{
-            .url = "git+https://github.com/Syndica/rocksdb-zig#30d74945eb01a5162fe4642615f40c63062b0507",
-            .hash = "rocksdb-9.7.4-z_CUThu4AAANnxXa3N8NHS6Ll9DdwjVHfFgcDggA4yK4",
+            .url = "git+https://github.com/Syndica/rocksdb-zig#70137101ad89640e0fc2e5ddbe60a26c522c7ae7",
+            .hash = "rocksdb-9.7.4-z_CUTmO5AAD0CQ2ZvShSDZHjC2x9MKrTnpvbNAIU7ah0",
         },
         .lsquic = .{
-            .url = "git+https://github.com/Syndica/lsquic#5fe3cd59be4f891e4fdb5598f4b265824d771211",
-            .hash = "lsquic-0.1.0-oZGGDUqdHQGUkmpUvZT5RmJ07lE-EoX7vfYFVFePmS9P",
+            .url = "git+https://github.com/Syndica/lsquic#3a062c7346e88b32ef7b203d3d3880b76335edc7",
+            .hash = "lsquic-0.1.0-oZGGDdOZHQFsyhwdJq9eAB2GFIPzpNm90y4-8ncaYNku",
         },
         .xev = .{
             .url = "git+https://github.com/Syndica/libxev#bfb37ec5ad81a92f3fdc41f0d36e605a0490374d",
