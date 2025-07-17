@@ -852,7 +852,7 @@ pub const Elf = struct {
         bytes: []u8,
         headers: Headers,
         data: Data,
-        real_sbpf_version: sbpf.Version,
+        sbpf_version: sbpf.Version,
         config: Config,
     ) !Elf {
         const header = headers.header;
@@ -940,7 +940,7 @@ pub const Elf = struct {
             .headers = headers,
             .data = data,
             .entry_pc = entry_pc,
-            .version = real_sbpf_version,
+            .version = sbpf_version,
             .function_registry = .{},
             .config = config,
             .ro_section = ro_section,
@@ -988,33 +988,35 @@ pub const Elf = struct {
         bytes: []u8,
         headers: Headers,
         data: Data,
-        real_sbpf_version: sbpf.Version,
+        sbpf_version: sbpf.Version,
         config: Config,
         loader: *const Registry(Syscall),
     ) !Elf {
-        const sbpf_version: sbpf.Version = switch (headers.header.e_flags) {
+        // Lenient parsing uses the v0 sbpf.Version parsing which differs from v1+ version passed in
+        // https://github.com/anza-xyz/sbpf/blob/v0.10.0/src/elf.rs#L626-L630
+        const version: sbpf.Version = switch (headers.header.e_flags) {
             sbpf.EM_SBPF_V1 => .reserved,
             else => .v0,
         };
 
-        try validate(bytes, headers, data, sbpf_version, config);
+        try validate(bytes, headers, data, version, config);
 
         const text_section = data.getShdrByName(headers, ".text") orelse
             return error.NoTextSection;
 
         // Double check text_section bounds
         const text_section_vaddr =
-            if (sbpf_version.enableElfVaddr() and text_section.sh_addr >= memory.RODATA_START)
+            if (version.enableElfVaddr() and text_section.sh_addr >= memory.RODATA_START)
                 text_section.sh_addr
             else
                 text_section.sh_addr +| memory.RODATA_START;
         const text_section_vaddr_end =
-            if (sbpf_version.rejectRodataStackOverlap())
+            if (version.rejectRodataStackOverlap())
                 text_section_vaddr +| text_section.sh_size
             else
                 text_section_vaddr;
         if (config.reject_broken_elfs and
-            !sbpf_version.enableElfVaddr() and
+            !version.enableElfVaddr() and
             text_section.sh_addr != text_section.sh_offset or
             text_section_vaddr_end > memory.STACK_START) return error.ValueOutOfBounds;
 
@@ -1027,14 +1029,14 @@ pub const Elf = struct {
             bytes,
             loader,
             &function_registry,
-            sbpf_version,
+            version,
             config,
         );
 
         const offset = headers.header.e_entry -| text_section.sh_addr;
         const entry_pc = std.math.divExact(u64, offset, 8) catch return error.InvalidEntrypoint;
 
-        if (!sbpf_version.enableStaticSyscalls()) {
+        if (!version.enableStaticSyscalls()) {
             const hash = sbpf.hashSymbolName("entrypoint");
             if (function_registry.map.fetchOrderedRemove(hash)) |entry| {
                 allocator.free(entry.value.name);
@@ -1044,7 +1046,7 @@ pub const Elf = struct {
         _ = try function_registry.registerHashedLegacy(
             allocator,
             loader,
-            !sbpf_version.enableStaticSyscalls(),
+            !version.enableStaticSyscalls(),
             "entrypoint",
             entry_pc,
         );
@@ -1053,7 +1055,7 @@ pub const Elf = struct {
             allocator,
             headers,
             config,
-            sbpf_version,
+            version,
         );
         errdefer ro_section.deinit(allocator);
 
@@ -1062,7 +1064,7 @@ pub const Elf = struct {
             .headers = headers,
             .data = data,
             .entry_pc = entry_pc,
-            .version = real_sbpf_version,
+            .version = sbpf_version,
             .function_registry = function_registry,
             .config = config,
             .ro_section = ro_section,
