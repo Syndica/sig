@@ -1682,7 +1682,7 @@ pub fn collectVoteLockouts(
                     key,
                     last_landed_voted_slot,
                     frozen_hash,
-                    true,
+                    .replay, // TODO: dadepo check
                 );
             }
         }
@@ -4133,8 +4133,7 @@ pub const TestFixture = struct {
         {
             var it = self.epoch_stake_map.iterator();
             while (it.next()) |entry| {
-                entry.value_ptr.stakes.deinit(allocator);
-                entry.value_ptr.epoch_authorized_voters.deinit(allocator);
+                entry.value_ptr.deinit(allocator);
             }
             self.epoch_stake_map.deinit(allocator);
         }
