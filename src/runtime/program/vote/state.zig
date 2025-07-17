@@ -5050,7 +5050,6 @@ test "state.VoteState.checkAndFilterProposedVoteState slot hashes mismatch" {
     try std.testing.expectEqual(VoteError.slot_hash_mismatch, maybe_error);
 }
 
-// TODO: dadepo check
 pub fn processSlotVoteUnchecked(
     allocator: std.mem.Allocator,
     vote_state: *VoteState,
