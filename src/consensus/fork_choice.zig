@@ -1442,19 +1442,20 @@ pub const ForkChoice = struct {
         var new_votes = std.ArrayListUnmanaged(PubkeyVote).empty;
         defer new_votes.deinit(allocator);
 
-        const news = try latest_validator_votes.takeVotesDirtySet(
+        const new_vs = try latest_validator_votes.takeVotesDirtySet(
             allocator,
             root,
         );
-        defer allocator.free(news);
+        defer allocator.free(new_vs);
 
-        for (news) |vote_tuple| {
+        for (new_vs) |vote_tuple| {
             try new_votes.append(allocator, .{
                 .pubkey = vote_tuple[0],
                 .slot_hash = vote_tuple[1],
             });
         }
 
+        // TODO revisit. Used for logging in Agave?
         _ = try self.addVotes(
             allocator,
             new_votes.items,
