@@ -1474,11 +1474,14 @@ test "simple usage" {
             .constants = .{
                 .parent_slot = 0,
                 .parent_hash = .ZEROES,
+                .parent_lt_hash = .IDENTITY,
                 .block_height = 1,
                 .collector_id = .ZEROES,
                 .max_tick_height = 1,
                 .fee_rate_governor = .DEFAULT,
                 .epoch_reward_status = .inactive,
+                .ancestors = .{ .ancestors = .empty },
+                .feature_set = .{ .active = .empty },
             },
             .state = .GENESIS,
             .epoch_constants = .{
@@ -1488,6 +1491,7 @@ test "simple usage" {
                 .genesis_creation_time = 1,
                 .slots_per_year = 1,
                 .stakes = stakes,
+                .rent_collector = undefined,
             },
         });
     });
@@ -1572,11 +1576,14 @@ test "check trackers" {
             .constants = .{
                 .parent_slot = 0,
                 .parent_hash = .ZEROES,
+                .parent_lt_hash = .IDENTITY,
                 .block_height = 1,
                 .collector_id = .ZEROES,
                 .max_tick_height = 1,
                 .fee_rate_governor = .DEFAULT,
                 .epoch_reward_status = .inactive,
+                .ancestors = .{ .ancestors = .empty },
+                .feature_set = .{ .active = .empty },
             },
             .state = .GENESIS,
             .epoch_constants = .{
@@ -1586,6 +1593,7 @@ test "check trackers" {
                 .genesis_creation_time = 1,
                 .slots_per_year = 1,
                 .stakes = stakes,
+                .rent_collector = undefined,
             },
         });
     });

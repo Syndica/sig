@@ -2,12 +2,12 @@ const builtin = @import("builtin");
 const std = @import("std");
 const sig = @import("../../../sig.zig");
 
-const features = sig.runtime.features;
+const features = sig.core.features;
 const builtin_costs = sig.runtime.program.builtin_costs;
 
 const Pubkey = sig.core.Pubkey;
 const InstructionError = sig.core.instruction.InstructionError;
-const FeatureSet = sig.runtime.FeatureSet;
+const FeatureSet = sig.core.FeatureSet;
 const InstructionContext = sig.runtime.InstructionContext;
 const InstructionInfo = sig.runtime.InstructionInfo;
 const TransactionError = sig.ledger.transaction_status.TransactionError;

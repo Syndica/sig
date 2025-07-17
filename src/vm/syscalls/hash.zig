@@ -3,7 +3,7 @@ const std = @import("std");
 const phash = @import("poseidon");
 const sig = @import("../../sig.zig");
 
-const features = sig.runtime.features;
+const features = sig.core.features;
 
 const MemoryMap = sig.vm.memory.MemoryMap;
 const RegisterMap = sig.vm.interpreter.RegisterMap;

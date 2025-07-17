@@ -11,7 +11,7 @@ const ReplayTower = sig.consensus.replay_tower.ReplayTower;
 const ProgressMap = sig.consensus.progress_map.ProgressMap;
 const ForkChoice = sig.consensus.fork_choice.ForkChoice;
 const LatestValidatorVotesForFrozenBanks =
-    sig.consensus.unimplemented.LatestValidatorVotesForFrozenBanks;
+    sig.consensus.latest_validator_votes.LatestValidatorVotes;
 
 const EpochStakeMap = sig.core.stake.EpochStakeMap;
 
@@ -27,6 +27,7 @@ const SlotAndHash = sig.core.hash.SlotAndHash;
 const Slot = sig.core.Slot;
 const Epoch = sig.core.Epoch;
 const Hash = sig.core.Hash;
+const LtHash = sig.core.LtHash;
 
 const RwMux = sig.sync.RwMux;
 
@@ -940,11 +941,14 @@ test "checkAndHandleNewRoot - missing slot" {
         .constants = .{
             .parent_slot = 0,
             .parent_hash = .ZEROES,
+            .parent_lt_hash = .IDENTITY,
             .block_height = 0,
             .collector_id = .ZEROES,
             .max_tick_height = 0,
             .fee_rate_governor = .initRandom(random),
             .epoch_reward_status = .inactive,
+            .ancestors = .{},
+            .feature_set = .EMPTY,
         },
         .state = .{
             .blockhash_queue = .init(.init(10)),
@@ -954,7 +958,9 @@ test "checkAndHandleNewRoot - missing slot" {
             .signature_count = .init(0),
             .tick_height = .init(0),
             .collected_rent = .init(0),
-            .accounts_lt_hash = .init(.ZEROES),
+            .accounts_lt_hash = .init(LtHash{
+                .data = [_]u16{0} ** LtHash.NUM_ELEMENTS,
+            }),
         },
     });
 
@@ -1015,11 +1021,14 @@ test "checkAndHandleNewRoot - missing hash" {
         .constants = .{
             .parent_slot = 0,
             .parent_hash = .ZEROES,
+            .parent_lt_hash = .IDENTITY,
             .block_height = 0,
             .collector_id = .ZEROES,
             .max_tick_height = 0,
             .fee_rate_governor = .initRandom(random),
             .epoch_reward_status = .inactive,
+            .ancestors = .{},
+            .feature_set = .EMPTY,
         },
         .state = .{
             .blockhash_queue = .init(.init(10)),
@@ -1029,7 +1038,9 @@ test "checkAndHandleNewRoot - missing hash" {
             .signature_count = .init(0),
             .tick_height = .init(0),
             .collected_rent = .init(0),
-            .accounts_lt_hash = .init(.ZEROES),
+            .accounts_lt_hash = .init(.{
+                .data = [_]u16{0} ** LtHash.NUM_ELEMENTS,
+            }),
         },
     });
 
@@ -1147,11 +1158,14 @@ test "checkAndHandleNewRoot - success" {
         .constants = .{
             .parent_slot = hash1.slot,
             .parent_hash = .ZEROES,
+            .parent_lt_hash = .IDENTITY,
             .block_height = 0,
             .collector_id = .ZEROES,
             .max_tick_height = 0,
             .fee_rate_governor = .initRandom(random),
             .epoch_reward_status = .inactive,
+            .ancestors = .{},
+            .feature_set = .EMPTY,
         },
         .state = .{
             .blockhash_queue = .init(.init(10)),
@@ -1161,19 +1175,24 @@ test "checkAndHandleNewRoot - success" {
             .signature_count = .init(0),
             .tick_height = .init(0),
             .collected_rent = .init(0),
-            .accounts_lt_hash = .init(.ZEROES),
+            .accounts_lt_hash = .init(.{
+                .data = [_]u16{0} ** LtHash.NUM_ELEMENTS,
+            }),
         },
     });
 
     try slot_tracker.put(testing.allocator, hash3.slot, .{
         .constants = .{
             .parent_slot = hash2.slot,
-            .parent_hash = .ZEROES,
+            .parent_hash = Hash.ZEROES,
+            .parent_lt_hash = .IDENTITY,
             .block_height = 0,
-            .collector_id = .ZEROES,
+            .collector_id = Pubkey.ZEROES,
             .max_tick_height = 0,
             .fee_rate_governor = .initRandom(random),
             .epoch_reward_status = .inactive,
+            .ancestors = .{},
+            .feature_set = .EMPTY,
         },
         .state = .{
             .blockhash_queue = .init(.init(10)),
@@ -1183,7 +1202,9 @@ test "checkAndHandleNewRoot - success" {
             .signature_count = .init(0),
             .tick_height = .init(0),
             .collected_rent = .init(0),
-            .accounts_lt_hash = .init(.ZEROES),
+            .accounts_lt_hash = .init(.{
+                .data = [_]u16{0} ** LtHash.NUM_ELEMENTS,
+            }),
         },
     });
 

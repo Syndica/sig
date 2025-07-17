@@ -1,10 +1,10 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 
-const features = sig.runtime.features;
+const features = sig.core.features;
 const syscalls = sig.vm.syscalls;
 
-const FeatureSet = sig.runtime.FeatureSet;
+const FeatureSet = sig.core.FeatureSet;
 const ComputeBudget = sig.runtime.ComputeBudget;
 const Config = sig.vm.Config;
 const SbpfVersion = sig.vm.sbpf.Version;
