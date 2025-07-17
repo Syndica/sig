@@ -89,6 +89,12 @@ pub const ForkInfo = struct {
         self.children.deinit();
     }
 
+    /// Returns if this node has been explicitly marked as a duplicate slot
+    fn isUnconfirmedDuplicate(self: *const ForkInfo, my_slot: Slot) bool {
+        const ancestor = self.latest_duplicate_ancestor orelse return false;
+        return ancestor == my_slot;
+    }
+
     /// Returns true if the fork rooted at this node is included in fork choice
     fn isCandidate(self: *const ForkInfo) bool {
         return self.latest_duplicate_ancestor == null;
@@ -240,7 +246,6 @@ pub const ForkChoice = struct {
         slot_hash_key: SlotAndHash,
         maybe_parent: ?SlotAndHash,
     ) !void {
-        errdefer self.deinit();
         // TODO implement self.print_state();
 
         if (self.fork_infos.contains(slot_hash_key)) {
@@ -494,13 +499,20 @@ pub const ForkChoice = struct {
     }
 
     pub fn isDuplicateConfirmed(
-        self: *ForkChoice,
+        self: ForkChoice,
         slot_hash_key: *const SlotAndHash,
     ) ?bool {
         if (self.fork_infos.get(slot_hash_key.*)) |fork_info| {
             return fork_info.is_duplicate_confirmed;
         }
         return null;
+    }
+
+    /// Returns if the exact node with the specified key has been explicitly marked as a duplicate
+    /// slot (doesn't count ancestors being marked as duplicate).
+    pub fn isUnconfirmedDuplicate(self: ForkChoice, slot_hash_key: *const SlotAndHash) ?bool {
+        const fork_info = self.fork_infos.get(slot_hash_key.*) orelse return null;
+        return fork_info.isUnconfirmedDuplicate(slot_hash_key.slot);
     }
 
     /// [Agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L1358
@@ -833,7 +845,15 @@ pub const ForkChoice = struct {
         return fork_info.children;
     }
 
-    fn isCandidate(
+    pub fn latestInvalidAncestor(
+        self: *const ForkChoice,
+        slot_hash_key: *const SlotAndHash,
+    ) ?Slot {
+        const fork_info = self.fork_infos.getPtr(slot_hash_key.*) orelse return null;
+        return fork_info.latest_duplicate_ancestor;
+    }
+
+    pub fn isCandidate(
         self: *const ForkChoice,
         slot_hash_key: *const SlotAndHash,
     ) ?bool {
@@ -4688,7 +4708,7 @@ test "HeaviestSubtreeForkChoice.gossipVoteDoesntAffectForkChoice" {
         vote_pubkey,
         vote_slot,
         vote_hash,
-        false, // is_replay_vote = false for gossip vote
+        .replay, // is_replay_vote = false for gossip vote
     );
 
     // Call computeBankStats - gossip votes shouldn't affect fork choice
@@ -5029,7 +5049,7 @@ fn testEpochStakes(
             .stake_delegations = .empty,
             .unused = 0,
             .epoch = 0,
-            .stake_history = sig.runtime.sysvar.StakeHistory.EMPTY,
+            .stake_history = try .init(allocator),
         },
         .epoch_authorized_voters = .empty,
         .node_id_to_vote_accounts = .empty,

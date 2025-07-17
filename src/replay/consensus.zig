@@ -14,7 +14,7 @@ const LatestValidatorVotesForFrozenBanks =
     sig.consensus.latest_validator_votes.LatestValidatorVotes;
 
 const EpochStakeMap = sig.core.stake.EpochStakeMap;
-const BlockhashQueue = sig.core.blockhash_queue.BlockhashQueue;
+const BlockhashQueue = sig.core.BlockhashQueue;
 
 const SlotTracker = sig.replay.trackers.SlotTracker;
 const EpochTracker = sig.replay.trackers.EpochTracker;

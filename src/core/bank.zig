@@ -385,11 +385,10 @@ pub const BankFields = struct {
 
     pub fn getStakedNodes(
         self: *const BankFields,
-        allocator: std.mem.Allocator,
         epoch: Epoch,
     ) !*const std.AutoArrayHashMapUnmanaged(Pubkey, u64) {
         const epoch_stakes = self.epoch_stakes.getPtr(epoch) orelse return error.NoEpochStakes;
-        return epoch_stakes.stakes.vote_accounts.getStakedNodes(allocator);
+        return &epoch_stakes.stakes.vote_accounts.staked_nodes;
     }
 
     /// Returns the leader schedule for this bank's epoch
@@ -408,7 +407,7 @@ pub const BankFields = struct {
         epoch: Epoch,
     ) !core.leader_schedule.LeaderSchedule {
         const slots_in_epoch = self.epoch_schedule.getSlotsInEpoch(self.epoch);
-        const staked_nodes = try self.getStakedNodes(allocator, epoch);
+        const staked_nodes = try self.getStakedNodes(epoch);
         return .{
             .allocator = allocator,
             .slot_leaders = try core.leader_schedule.LeaderSchedule.fromStakedNodes(

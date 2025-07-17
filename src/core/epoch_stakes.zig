@@ -66,7 +66,7 @@ pub fn epochStakeMapRandom(
     min_list_entries: usize,
     max_list_entries: usize,
 ) Allocator.Error!EpochStakesMapGeneric(stakes_type) {
-    var map: EpochStakesMapGeneric(stakes_type) = .{};
+    var map: EpochStakesMapGeneric(stakes_type) = .empty;
     errdefer deinitMapAndValues(allocator, map);
 
     const map_len = random.intRangeAtMost(usize, min_list_entries, max_list_entries);
@@ -78,8 +78,7 @@ pub fn epochStakeMapRandom(
             if (gop.found_existing) continue;
             break gop.value_ptr;
         };
-        value_ptr.* =
-            try EpochStakesGeneric(stakes_type).initRandom(allocator, random, max_list_entries);
+        value_ptr.* = try .initRandom(allocator, random, max_list_entries);
     }
 
     return map;
@@ -121,12 +120,14 @@ pub fn EpochStakesGeneric(comptime stakes_type: StakesType) type {
             };
         }
 
-        pub fn initEmpty(allocator: std.mem.Allocator) !EpochStakesGeneric(stakes_type) {
+        pub fn initEmptyWithGenesisStakeHistoryEntry(
+            allocator: std.mem.Allocator,
+        ) !EpochStakesGeneric(stakes_type) {
             return .{
                 .total_stake = 0,
                 .stakes = .{
                     .vote_accounts = .{},
-                    .stake_delegations = .{},
+                    .stake_delegations = .empty,
                     .unused = 0,
                     .epoch = 0,
                     .stake_history = try StakeHistory.initWithEntries(allocator, &.{.{
@@ -138,8 +139,8 @@ pub fn EpochStakesGeneric(comptime stakes_type: StakesType) type {
                         },
                     }}),
                 },
-                .node_id_to_vote_accounts = .{},
-                .epoch_authorized_voters = .{},
+                .node_id_to_vote_accounts = .empty,
+                .epoch_authorized_voters = .empty,
             };
         }
 

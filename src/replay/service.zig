@@ -18,6 +18,9 @@ const ReplayExecutionState = replay.execution.ReplayExecutionState;
 const SlotTracker = replay.trackers.SlotTracker;
 const EpochTracker = replay.trackers.EpochTracker;
 
+const LatestValidatorVotesForFrozenSlots =
+    sig.consensus.latest_validator_votes.LatestValidatorVotes;
+
 /// Number of threads to use in replay's thread pool
 const NUM_THREADS = 4;
 
@@ -132,7 +135,7 @@ fn advanceReplay(state: *ReplayState) !void {
 
     _ = try replay.execution.replayActiveSlots(&state.execution);
 
-    handleEdgeCases();
+    replay.edge_cases.handleEdgeCases();
 
     processConsensus();
 
@@ -213,19 +216,6 @@ fn trackNewSlots(
     }
 }
 
-fn handleEdgeCases() void {
-    // TODO: process_ancestor_hashes_duplicate_slots
-
-    // TODO: process_duplicate_confirmed_slots
-
-    // TODO: process_gossip_verified_vote_hashes
-
-    // TODO: process_popular_pruned_forks
-
-    // TODO: process_duplicate_slots
-
-}
-
 fn processConsensus() void {
     // TODO: for each slot:
     //           tower_duplicate_confirmed_forks
@@ -287,7 +277,7 @@ test trackNewSlots {
         .ns_per_slot = 1,
         .genesis_creation_time = 1,
         .slots_per_year = 1,
-        .stakes = try .initEmpty(allocator),
+        .stakes = try .initEmptyWithGenesisStakeHistoryEntry(allocator),
     });
 
     const leader_schedule = sig.core.leader_schedule.LeaderSchedule{

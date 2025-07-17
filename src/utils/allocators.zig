@@ -188,7 +188,7 @@ pub fn RecycleBuffer(comptime T: type, default_init: T, config: struct {
                             continue;
                         },
                         // not able to recycle anything, so we break to expand the capacity
-                        error.AllocFailed => break,
+                        error.AllocFailed, error.AllocTooBig => break,
                         else => return err,
                     }
                 };
