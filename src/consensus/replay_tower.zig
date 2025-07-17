@@ -1682,7 +1682,7 @@ pub fn collectVoteLockouts(
                     key,
                     last_landed_voted_slot,
                     frozen_hash,
-                    .replay, // TODO: dadepo check
+                    .replay,
                 );
             }
         }
