@@ -3058,11 +3058,6 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
     var fixture = try TestFixture.init(allocator, root);
     defer fixture.deinit(allocator);
 
-    var fp = try ForkProgress.zeroes(allocator);
-    defer fp.deinit(allocator);
-    fp.fork_stats.computed = true;
-    try fixture.progress.map.put(allocator, 0, fp);
-
     // Build fork structure:
     //
     //      slot 0
@@ -3478,7 +3473,7 @@ pub const TestFixture = struct {
 
     pub fn deinit(self: *TestFixture, allocator: std.mem.Allocator) void {
         self.fork_choice.deinit();
-        self.progress.map.deinit(allocator);
+        self.progress.deinit(allocator);
 
         {
             var it = self.epoch_stake_map.iterator();
@@ -3536,10 +3531,9 @@ pub const TestFixture = struct {
             try self.fork_choice.addNewLeafSlot(tree[0], tree[1]);
             // Populate progress map
             var fp = try ForkProgress.zeroes(allocator);
-            defer fp.deinit(allocator);
             fp.fork_stats.computed = true;
             fp.fork_stats.my_latest_landed_vote = null;
-            _ = try self.progress.map.getOrPutValue(
+            try self.progress.map.putNoClobber(
                 allocator,
                 tree[0].slot,
                 fp,
