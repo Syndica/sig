@@ -105,23 +105,6 @@ pub const AccountStore = union(enum) {
             .noop => {},
         };
     }
-
-    /// Returns an iterator that iterates over every account that was modified
-    /// in the slot.
-    ///
-    /// Holds the read lock on the index, so unlock it when done, and be careful
-    /// how long you hold this.
-    pub fn slotModifiedIterator(self: AccountStore, slot: Slot) ?SlotModifiedIterator {
-        return switch (self) {
-            .accounts_db => |db| .{
-                .accounts_db = db.slotModifiedIterator(slot) orelse return null,
-            },
-            .thread_safe_map => |map| .{
-                .thread_safe_map = map.slotModifiedIterator(slot) orelse return null,
-            },
-            .noop => .noop,
-        };
-    }
 };
 
 pub const SlotModifiedIterator = union(enum) {
