@@ -64,7 +64,9 @@ pub const Hash = extern struct {
     fn update(hasher: *Sha256, data: anytype) void {
         const T = @TypeOf(data);
 
-        if (@typeInfo(T) == .@"struct") {
+        if (T == Hash or T == *const Hash or T == *Hash) {
+            hasher.update(&data.data);
+        } else if (@typeInfo(T) == .@"struct") {
             inline for (data) |val| update(hasher, val);
         } else if (std.meta.Elem(T) == u8) switch (@typeInfo(T)) {
             .array => hasher.update(&data),

@@ -96,6 +96,21 @@ pub fn hashSlot(allocator: Allocator, params: HashSlotParams) !struct { ?LtHash,
     var signature_count_bytes: [8]u8 = undefined;
     std.mem.writeInt(u64, &signature_count_bytes, params.signature_count, .little);
 
+    const initial_hash =
+        if (params.feature_set.active.contains(sig.core.features.REMOVE_ACCOUNTS_DELTA_HASH))
+            Hash.generateSha256(.{
+                params.parent_slot_hash,
+                try deltaMerkleHash(params.account_reader, allocator, params.slot),
+                &signature_count_bytes,
+                params.blockhash,
+            })
+        else
+            Hash.generateSha256(.{
+                params.parent_slot_hash,
+                &signature_count_bytes,
+                params.blockhash,
+            });
+
     if (params.feature_set.active.contains(sig.core.features.ACCOUNTS_LT_HASH)) {
         var parent_ancestors = try params.ancestors.clone(allocator);
         defer parent_ancestors.deinit(allocator);
@@ -104,22 +119,9 @@ pub fn hashSlot(allocator: Allocator, params: HashSlotParams) !struct { ?LtHash,
         var lt_hash = params.parent_lt_hash.* orelse return error.UnknownParentLtHash;
         lt_hash.mixIn(&try deltaLtHash(params.account_reader, params.slot, &parent_ancestors));
 
-        return .{ lt_hash, Hash.generateSha256(.{
-            &Hash.generateSha256(.{
-                &params.parent_slot_hash.data,
-                &signature_count_bytes,
-                &params.blockhash.data,
-            }).data,
-            lt_hash.bytes(),
-        }) };
+        return .{ lt_hash, Hash.generateSha256(.{ initial_hash, lt_hash.bytes() }) };
     } else {
-        const accounts_hash = try deltaMerkleHash(params.account_reader, allocator, params.slot);
-        return .{ null, Hash.generateSha256(.{
-            &params.parent_slot_hash.data,
-            &accounts_hash.data,
-            &signature_count_bytes,
-            &params.blockhash.data,
-        }) };
+        return .{ null, initial_hash };
     }
 }
 
@@ -174,8 +176,8 @@ pub fn deltaLtHash(
 ) !LtHash {
     assert(!parent_ancestors.ancestors.contains(slot));
 
-    // TODO: consider using a thread pool
-    // TODO: consider caching old hashes
+    // TODO: perf - consider using a thread pool
+    // TODO: perf - consider caching old hashes
 
     var iterator = account_reader.slotModifiedIterator(slot) orelse return .IDENTITY;
     defer iterator.unlock();
