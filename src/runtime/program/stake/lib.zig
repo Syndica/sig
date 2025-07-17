@@ -8,9 +8,11 @@ const program = @import("lib.zig");
 const runtime = sig.runtime;
 const sysvar = runtime.sysvar;
 
+const features = sig.core.features;
 const Pubkey = sig.core.Pubkey;
 const Epoch = sig.core.Epoch;
 const Slot = sig.core.Slot;
+const FeatureSet = sig.core.FeatureSet;
 
 const Pubkey = sig.core.Pubkey;
 const InstructionError = sig.core.instruction.InstructionError;
@@ -344,7 +346,7 @@ pub fn execute(
         },
         .move_stake => |lamports| {
             if (!ic.tc.feature_set.active.contains(
-                runtime.features.MOVE_STAKE_AND_MOVE_LAMPORTS_IXS,
+                features.MOVE_STAKE_AND_MOVE_LAMPORTS_IXS,
             )) return error.InvalidInstructionData;
 
             try ic.ixn_info.checkNumberOfAccounts(3);
@@ -352,7 +354,7 @@ pub fn execute(
         },
         .move_lamports => |lamports| {
             if (!ic.tc.feature_set.active.contains(
-                runtime.features.MOVE_STAKE_AND_MOVE_LAMPORTS_IXS,
+                features.MOVE_STAKE_AND_MOVE_LAMPORTS_IXS,
             )) return error.InvalidInstructionData;
 
             try ic.ixn_info.checkNumberOfAccounts(3);
@@ -543,9 +545,9 @@ fn authorizeWithSeed(
     );
 }
 
-fn getMinimumDelegation(feature_set: *const runtime.FeatureSet) u64 {
+fn getMinimumDelegation(feature_set: *const FeatureSet) u64 {
     return if (feature_set.active.contains(
-        runtime.features.STAKE_RAISE_MINIMUM_DELEGATION_TO_1_SOL,
+        features.STAKE_RAISE_MINIMUM_DELEGATION_TO_1_SOL,
     ))
         1_000_000_000
     else
@@ -558,7 +560,7 @@ fn validateDelegatedAmount(
     ic: *InstructionContext,
     account: *const BorrowedAccount,
     meta: *const StakeStateV2.Meta,
-    feature_set: *const runtime.FeatureSet,
+    feature_set: *const FeatureSet,
 ) InstructionError!ValidatedDelegatedInfo {
     const stake_amount = account.account.lamports -| meta.rent_exempt_reserve;
     if (stake_amount < getMinimumDelegation(feature_set)) {
@@ -635,7 +637,7 @@ fn delegate(
     clock: *const sysvar.Clock,
     stake_history: *const sysvar.StakeHistory,
     signers: []const Pubkey,
-    feature_set: *const runtime.FeatureSet,
+    feature_set: *const FeatureSet,
 ) (error{OutOfMemory} || InstructionError)!void {
     const vote_pubkey, const vote_state = blk: {
         const vote_account = try ic.borrowInstructionAccount(vote_account_index);
@@ -785,7 +787,7 @@ fn split(
     lamports: u64,
     split_account_index: u16,
     signers: []const Pubkey,
-    feature_set: *const runtime.FeatureSet,
+    feature_set: *const FeatureSet,
 ) (error{OutOfMemory} || InstructionError)!void {
     const split_lamport_balance = balance: {
         const split_account = try ic.borrowInstructionAccount(split_account_index);
