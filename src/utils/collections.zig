@@ -291,6 +291,17 @@ pub fn SortedSetCustom(comptime T: type, comptime config: SortedMapConfig(T)) ty
             try self.map.put(item, {});
         }
 
+        pub fn putAssumeCapacity(self: *SortedSetSelf, item: T) void {
+            return self.map.putAssumeCapacity(item, {});
+        }
+
+        pub fn ensureUnusedCapacity(
+            self: *SortedSetSelf,
+            new_unused_capacity: usize,
+        ) std.mem.Allocator.Error!void {
+            try self.map.ensureUnusedCapacity(new_unused_capacity);
+        }
+
         pub fn orderedRemove(self: *SortedSetSelf, item: T) bool {
             return self.map.orderedRemove(item);
         }
@@ -461,6 +472,17 @@ pub fn SortedMapCustom(
 
         pub fn put(self: *SortedMapSelf, key: K, value: V) std.mem.Allocator.Error!void {
             try self.unmanaged.put(self.allocator, key, value);
+        }
+
+        pub fn putAssumeCapacity(self: *SortedMapSelf, key: K, value: V) void {
+            return self.unmanaged.putAssumeCapacity(key, value);
+        }
+
+        pub fn ensureUnusedCapacity(
+            self: *SortedMapSelf,
+            new_unused_capacity: usize,
+        ) std.mem.Allocator.Error!void {
+            try self.unmanaged.ensureUnusedCapacity(self.allocator, new_unused_capacity);
         }
 
         pub fn orderedRemove(self: *SortedMapSelf, key: K) bool {
@@ -677,6 +699,18 @@ pub fn SortedMapUnmanagedCustom(
             gop.key_ptr.* = key;
             gop.value_ptr.* = value;
             return result;
+        }
+
+        pub fn putAssumeCapacity(self: *SortedMapSelf, key: K, value: V) void {
+            self.inner.putAssumeCapacity(key, value);
+        }
+
+        pub fn ensureUnusedCapacity(
+            self: *SortedMapSelf,
+            allocator: std.mem.Allocator,
+            new_unused_capacity: usize,
+        ) std.mem.Allocator.Error!void {
+            try self.inner.ensureUnusedCapacity(allocator, new_unused_capacity);
         }
 
         pub fn orderedRemove(self: *SortedMapSelf, key: K) bool {

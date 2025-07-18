@@ -694,7 +694,6 @@ pub const VoteAccounts = struct {
                         rand,
                         ctx.allocator,
                         ctx.max_list_entries,
-                        error{ RandomError1, RandomError2, RandomError3 },
                     );
                     errdefer vote_account.deinit(ctx.allocator);
                     return .{ rand.int(u64), vote_account };
@@ -737,30 +736,30 @@ pub const VoteAccounts = struct {
 
 pub const VoteAccount = struct {
     account: Account,
-    vote_state: ?anyerror!VoteState = null,
+    vote_state: ?error{DeserializeError}!VoteState = null,
 
     pub const @"!bincode-config:vote_state" =
-        bincode.FieldConfig(?anyerror!VoteState){ .skip = true };
+        bincode.FieldConfig(?error{DeserializeError}!VoteState){ .skip = true };
 
-    pub fn deinit(vote_account: VoteAccount, allocator: Allocator) void {
-        vote_account.account.deinit(allocator);
+    pub fn deinit(self: VoteAccount, allocator: Allocator) void {
+        self.account.deinit(allocator);
     }
 
     pub fn clone(
-        vote_account: VoteAccount,
+        self: VoteAccount,
         allocator: Allocator,
     ) Allocator.Error!VoteAccount {
-        const account = try vote_account.account.cloneOwned(allocator);
+        const account = try self.account.cloneOwned(allocator);
         errdefer account.deinit(allocator);
         return .{
             .account = account,
-            .vote_state = vote_account.vote_state,
+            .vote_state = self.vote_state,
         };
     }
 
-    pub fn voteState(self: *@This()) !VoteState {
+    pub fn voteState(self: *VoteAccount) error{DeserializeError}!VoteState {
         if (self.vote_state) |vs| {
-            return vs;
+            return vs catch error.DeserializeError;
         }
         const assert_alloc = sig.utils.allocators.failing.allocator(.{
             .alloc = .assert,
@@ -774,7 +773,7 @@ pub const VoteAccount = struct {
             VoteState,
             data_iter.reader(),
             .{},
-        );
+        ) catch error.DeserializeError;
         self.vote_state = vote_state;
         return vote_state;
     }
@@ -783,16 +782,15 @@ pub const VoteAccount = struct {
         random: std.Random,
         allocator: Allocator,
         max_list_entries: usize,
-        comptime RandomErrorSet: type,
     ) Allocator.Error!VoteAccount {
         const account =
             try Account.initRandom(allocator, random, random.uintAtMost(usize, max_list_entries));
         errdefer account.deinit(allocator);
 
-        const vote_state: ?anyerror!VoteState =
+        const vote_state: ?error{DeserializeError}!VoteState =
             switch (random.enumValue(enum { null, err, value })) {
                 .null => null,
-                .err => @as(anyerror!VoteState, sig.rand.errorValue(random, RandomErrorSet)),
+                .err => @as(error{DeserializeError}!VoteState, error.DeserializeError),
                 .value => VoteState.initRandom(random),
             };
 
