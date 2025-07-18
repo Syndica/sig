@@ -153,10 +153,11 @@ pub fn execute(
             );
         },
         .merge => {
-            // NOTE agave gets this borrwed account and drops it, not doing anything with it?
+            // NOTE agave gets this borrowed account and drops it, not doing anything with it?
             const clock, const stake_history = blk: {
                 var me = try getStakeAccount(ic);
                 defer me.release();
+                try ic.ixn_info.checkNumberOfAccounts(2);
 
                 const clock = try ic.getSysvarWithAccountCheck(sysvar.Clock, 2);
                 const stake_history = try ic.getSysvarWithAccountCheck(sysvar.StakeHistory, 3);
@@ -1241,7 +1242,7 @@ fn merge(
         try stake_account.serializeIntoAccountData(merged_state);
     }
 
-    try source_account.serializeIntoAccountData(StakeStateV2.initialized);
+    try source_account.serializeIntoAccountData(StakeStateV2.uninitialized);
 
     const lamports = source_account.account.lamports;
     try source_account.subtractLamports(lamports);
