@@ -85,9 +85,21 @@ pub const Tower = struct {
         fork_root: Slot,
         accounts_db: sig.accounts_db.AccountReader,
     ) !void {
-        const vote_account = (accounts_db.getLatest(vote_account_pubkey.*) catch null) orelse {
-            self.initializeRoot(fork_root);
-            return;
+        const vote_account = blk: {
+            const maybe_vote_account =
+                accounts_db.getLatest(vote_account_pubkey.*) catch |err| switch (err) {
+                    error.OutOfMemory,
+                    => |e| return e,
+                    error.InvalidOffset,
+                    error.FileIdNotFound,
+                    error.SlotNotFound,
+                    error.PubkeyNotInIndex,
+                    => null,
+                };
+            break :blk maybe_vote_account orelse {
+                self.initializeRoot(fork_root);
+                return;
+            };
         };
 
         const vote_state = try stateFromAccount(
