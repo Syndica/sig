@@ -436,17 +436,18 @@ pub const AccountFile = struct {
         std.debug.assert(header_byte_len <= max_header_buf_len);
 
         var offset_restarted = start_offset;
-        const read = try self.getSlice(
-            metadata_allocator,
-            buffer_pool,
-            &offset_restarted,
-            header_byte_len,
-        );
-        std.debug.assert(offset == offset_restarted);
-        defer read.deinit(metadata_allocator);
-
         var buf: [max_header_buf_len]u8 = undefined;
-        read.readAll(buf[0..header_byte_len]);
+        {
+            const read = try self.getSlice(
+                metadata_allocator,
+                buffer_pool,
+                &offset_restarted,
+                header_byte_len,
+            );
+            defer read.deinit(metadata_allocator);
+            std.debug.assert(offset == offset_restarted);
+            read.readAll(buf[0..header_byte_len]);
+        }
 
         var store_info: AccountInFile.StorageInfo = undefined;
         @memcpy(
