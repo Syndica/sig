@@ -772,7 +772,9 @@ pub const AccountsDB = struct {
                 var iter = accounts_file.iterator(self.allocator, &self.buffer_pool);
                 while (try iter.nextNoData()) |account| {
                     n_accounts += 1;
-                    shard_counts[self.account_index.pubkey_ref_map.shard_calculator.index(account.pubkey())] += 1;
+                    shard_counts[
+                        self.account_index.pubkey_ref_map.shard_calculator.index(account.pubkey())
+                    ] += 1;
                 }
                 break :blk n_accounts;
             };
