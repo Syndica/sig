@@ -1,7 +1,7 @@
 const sig = @import("../../../sig.zig");
-
 const state = @import("state.zig");
 
+const bincode = sig.bincode;
 const Pubkey = sig.core.Pubkey;
 const Epoch = sig.core.Epoch;
 
@@ -271,6 +271,8 @@ pub const AuthorizeCheckedWithSeedArgs = struct {
     stake_authorize: StakeAuthorize,
     authority_seed: []const u8, // is there a fixed upper bound here?
     authority_owner: Pubkey,
+
+    pub const @"!bincode-config:authority_seed" = bincode.utf8StringCodec([]const u8);
 };
 
 pub const AuthorizeWithSeedArgs = struct {
@@ -278,6 +280,8 @@ pub const AuthorizeWithSeedArgs = struct {
     stake_authorize: StakeAuthorize,
     authority_seed: []const u8, // is there a fixed upper bound here?
     authority_owner: Pubkey,
+
+    pub const @"!bincode-config:authority_seed" = bincode.utf8StringCodec([]const u8);
 };
 
 pub const LockupCheckedArgs = struct {
