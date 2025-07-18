@@ -12,6 +12,7 @@ const SlotLeaders = sig.core.leader_schedule.SlotLeaders;
 const SlotState = sig.core.bank.SlotState;
 
 const AccountStore = sig.accounts_db.AccountStore;
+const AccountReader = sig.accounts_db.AccountReader;
 const AccountsDB = sig.accounts_db.AccountsDB;
 const BlockstoreDB = sig.ledger.BlockstoreDB;
 const BlockstoreReader = sig.ledger.BlockstoreReader;
@@ -250,7 +251,12 @@ fn trackNewSlots(
             errdefer ancestors.deinit(allocator);
             try ancestors.ancestors.put(allocator, slot, {});
 
-            var feature_set = try getActiveFeatures(allocator, account_store, slot, &ancestors);
+            var feature_set = try getActiveFeatures(
+                allocator,
+                account_store.reader(),
+                slot,
+                &ancestors,
+            );
             errdefer feature_set.deinit(allocator);
 
             const parent_hash = parent_info.state.hash.readCopy().?;
@@ -332,13 +338,13 @@ fn trackNewSlots(
 // TODO: epoch boundary - handle feature activations
 pub fn getActiveFeatures(
     allocator: Allocator,
-    account_store: AccountStore,
+    account_reader: AccountReader,
     slot: Slot,
     ancestors: *const sig.core.Ancestors,
 ) !sig.core.FeatureSet {
     var features = std.AutoArrayHashMapUnmanaged(Pubkey, Slot).empty;
     for (sig.core.FEATURES) |pubkey| {
-        const feature_account = try account_store.get(pubkey, ancestors) orelse continue;
+        const feature_account = try account_reader.get(pubkey, ancestors) orelse continue;
         if (!feature_account.owner.equals(&sig.runtime.ids.FEATURE_PROGRAM_ID)) {
             return error.FeatureNotOwnedByFeatureProgram;
         }

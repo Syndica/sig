@@ -118,7 +118,7 @@ pub fn replayActiveSlots(state: *ReplayExecutionState) !bool {
         if (slot_info.state.tickHeight() == slot_info.constants.max_tick_height) {
             state.logger.info().logf("confirmed entire slot {}", .{slot});
             try replay.freeze.freezeSlot(state.allocator, .init(
-                state.account_store.accountReader(),
+                state.account_store.reader(),
                 state.db_for_svm, // TODO: remove
                 &epoch_info,
                 slot_info.state,

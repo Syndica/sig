@@ -1200,7 +1200,7 @@ fn validator(
 
         var feature_set = try sig.replay.service.getActiveFeatures(
             allocator,
-            loaded_snapshot.accounts_db.accountStore(),
+            loaded_snapshot.accounts_db.accountReader(),
             bank_fields.slot,
             &bank_fields.ancestors,
         );

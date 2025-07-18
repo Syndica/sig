@@ -34,7 +34,14 @@ pub const AccountReader = union(enum) {
 
     pub fn get(self: AccountReader, address: Pubkey, ancestors: *const Ancestors) !?Account {
         return switch (self) {
-            .accounts_db => |db| try db.getAccount(&address), // TODO: PR #796
+            .accounts_db => |db| {
+                const account = try db.getAccount(&address) orelse return null; // TODO: use ancestors after PR #796
+                if (account.lamports == 0) {
+                    account.deinit(db.allocator);
+                    return null;
+                }
+                return account;
+            },
             .thread_safe_map => |map| try map.get(address, ancestors),
             .noop => null,
         };
@@ -42,7 +49,15 @@ pub const AccountReader = union(enum) {
 
     pub fn getLatest(self: AccountReader, address: Pubkey) !?Account {
         return switch (self) {
-            .accounts_db => |db| try db.getAccount(&address),
+            .accounts_db => |db| {
+                const account = try db.getAccount(&address) orelse return null;
+                if (account.lamports == 0) {
+                    // TODO: implement this check in accountsdb to avoid the unnecessary allocation
+                    account.deinit(db.allocator);
+                    return null;
+                }
+                return account;
+            },
             .thread_safe_map => |map| try map.getLatest(address),
             .noop => null,
         };
@@ -75,35 +90,11 @@ pub const AccountStore = union(enum) {
     thread_safe_map: *ThreadSafeAccountMap,
     noop,
 
-    pub fn accountReader(self: AccountStore) AccountReader {
+    pub fn reader(self: AccountStore) AccountReader {
         return switch (self) {
             .accounts_db => |db| .{ .accounts_db = db },
             .thread_safe_map => |map| .{ .thread_safe_map = map },
             .noop => .noop,
-        };
-    }
-
-    /// use this to deinit accounts returned by get methods
-    pub fn allocator(self: AccountStore) Allocator {
-        return switch (self) {
-            .noop => sig.utils.allocators.failing.allocator(.{}),
-            inline else => |item| item.allocator,
-        };
-    }
-
-    pub fn get(self: AccountStore, address: Pubkey, ancestors: *const Ancestors) !?Account {
-        return switch (self) {
-            .accounts_db => |db| try db.getAccount(&address), // TODO: PR #796
-            .thread_safe_map => |map| try map.get(address, ancestors),
-            .noop => null,
-        };
-    }
-
-    pub fn getLatest(self: AccountStore, address: Pubkey) !?Account {
-        return switch (self) {
-            .accounts_db => |db| try db.getAccount(&address),
-            .thread_safe_map => |map| try map.getLatest(address),
-            .noop => null,
         };
     }
 
@@ -227,9 +218,10 @@ pub const ThreadSafeAccountMap = struct {
         defer lock.unlock();
 
         const list = map.get(address) orelse return null;
-        for (list.items) |item| {
-            if (ancestors.ancestors.contains(item[0])) {
-                return try toAccount(self.allocator, item[1]);
+        for (list.items) |slot_account| {
+            const slot, const account = slot_account;
+            if (ancestors.ancestors.contains(slot)) {
+                return if (account.lamports == 0) null else try toAccount(self.allocator, account);
             }
         }
         return null;
@@ -266,7 +258,7 @@ pub const ThreadSafeAccountMap = struct {
         const data = try self.allocator.dupe(u8, account.data);
         errdefer self.allocator.free(account.data);
 
-        const item = AccountSharedData{
+        const account_shared_data = AccountSharedData{
             .lamports = account.lamports,
             .data = data,
             .owner = account.owner,
@@ -274,7 +266,7 @@ pub const ThreadSafeAccountMap = struct {
             .rent_epoch = account.rent_epoch,
         };
 
-        {
+        slot_map: {
             const slot_map, var slot_lock = self.slot_map.writeWithLock();
             defer slot_lock.unlock();
 
@@ -283,28 +275,45 @@ pub const ThreadSafeAccountMap = struct {
                 slot_gop.value_ptr.* = .empty;
             }
 
-            try slot_gop.value_ptr.append(self.allocator, .{ address, item });
+            for (slot_gop.value_ptr.items) |*pubkey_account| {
+                if (pubkey_account[0].equals(&address)) {
+                    self.allocator.free(pubkey_account[1].data);
+                    pubkey_account[1] = account_shared_data;
+                    break :slot_map;
+                }
+            }
+
+            try slot_gop.value_ptr.append(self.allocator, .{ address, account_shared_data });
         }
 
         {
             const pubkey_map, var pubkey_lock = self.pubkey_map.writeWithLock();
             defer pubkey_lock.unlock();
 
-            const pubkey_gop = try pubkey_map.getOrPut(self.allocator, address);
-            if (!pubkey_gop.found_existing) {
-                pubkey_gop.value_ptr.* = .empty;
+            const gop = try pubkey_map.getOrPut(self.allocator, address);
+            if (!gop.found_existing) {
+                gop.value_ptr.* = .empty;
             }
 
-            try pubkey_gop.value_ptr.append(self.allocator, .{ slot, item });
-            std.mem.sort(struct { Slot, AccountSharedData }, pubkey_gop.value_ptr.items, {}, struct {
-                fn lessThan(
-                    _: void,
-                    lhs: struct { Slot, AccountSharedData },
-                    rhs: struct { Slot, AccountSharedData },
-                ) bool {
-                    return lhs[0] > rhs[0]; // sort descending so get methods are simpler
-                }
-            }.lessThan);
+            const versions = gop.value_ptr.items;
+
+            const index = std.sort.lowerBound(
+                struct { Slot, AccountSharedData },
+                versions,
+                slot,
+                struct {
+                    fn compare(s: Slot, elem: struct { Slot, AccountSharedData }) std.math.Order {
+                        return std.math.order(elem[0], s); // sorted descending to simplify getters
+                    }
+                }.compare,
+            );
+
+            if (index != versions.len and versions[index][0] == slot) {
+                self.allocator.free(versions[index][1].data);
+                versions[index] = .{ slot, account_shared_data };
+            } else {
+                try gop.value_ptr.insert(self.allocator, index, .{ slot, account_shared_data });
+            }
         }
     }
 
