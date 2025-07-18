@@ -36,17 +36,17 @@ pub const EpochSchedule = extern struct {
     /// Basically: `MINIMUM_SLOTS_PER_EPOCH * (2.pow(first_normal_epoch) - 1)`.
     first_normal_slot: core.Slot,
 
-    pub const ID =
-        core.Pubkey.parseBase58String("SysvarEpochSchedu1e111111111111111111111111") catch
-            unreachable;
+    pub const ID = core.Pubkey.parseBase58String(
+        "SysvarEpochSchedu1e111111111111111111111111",
+    ) catch unreachable;
+
+    pub const SIZE_OF: u64 = @sizeOf(EpochSchedule);
 
     pub const DEFAULT = EpochSchedule.custom(
         DEFAULT_SLOTS_PER_EPOCH,
         DEFAULT_LEADER_SCHEDULE_SLOT_OFFSET,
         true,
-    ) catch unreachable;
-
-    pub const SIZE_OF: u64 = @sizeOf(EpochSchedule);
+    );
 
     pub fn getEpoch(self: *const EpochSchedule, slot: Slot) Epoch {
         return self.getEpochAndSlotIndex(slot)[0];
@@ -120,12 +120,13 @@ pub const EpochSchedule = extern struct {
         slots_per_epoch: u64,
         leader_schedule_slot_offset: u64,
         warmup: bool,
-    ) !EpochSchedule {
+    ) EpochSchedule {
         std.debug.assert(slots_per_epoch >= MINIMUM_SLOTS_PER_EPOCH);
         var first_normal_epoch: Epoch = 0;
         var first_normal_slot: Slot = 0;
         if (warmup) {
-            const next_power_of_two = try std.math.ceilPowerOfTwo(u64, slots_per_epoch);
+            std.debug.assert(slots_per_epoch <= std.math.maxInt(u63));
+            const next_power_of_two = std.math.ceilPowerOfTwoAssert(u64, slots_per_epoch);
             const log2_slots_per_epoch = @ctz(next_power_of_two) -| @ctz(MINIMUM_SLOTS_PER_EPOCH);
             first_normal_epoch = log2_slots_per_epoch;
             first_normal_slot = next_power_of_two -| MINIMUM_SLOTS_PER_EPOCH;
@@ -152,7 +153,7 @@ pub const EpochSchedule = extern struct {
 
 test "epoch_schedule" {
     for (MINIMUM_SLOTS_PER_EPOCH..MINIMUM_SLOTS_PER_EPOCH * 16) |slots_per_epoch| {
-        const epoch_schedule = try EpochSchedule.custom(
+        const epoch_schedule = EpochSchedule.custom(
             slots_per_epoch,
             slots_per_epoch / 2,
             true,
