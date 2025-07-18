@@ -173,7 +173,9 @@ fn advanceReplay(state: *ReplayState) !void {
 
     _ = &replay.edge_cases.processEdgeCases;
 
-    try replay.consensus.processConsensus(null);
+    // ignore errors in consensus since they are expected until the inputs are provided
+    replay.consensus.processConsensus(null) catch |e|
+        state.logger.err().logf("consensus failed with an error: {}", .{e});
 
     // TODO: dump_then_repair_correct_slots
 
