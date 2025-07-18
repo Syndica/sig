@@ -4111,11 +4111,18 @@ pub const TestFixture = struct {
     descendants: AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)) = .{},
     progress: ProgressMap = ProgressMap.INIT,
     epoch_stake_map: EpochStakesMap,
+    node_pubkeys: std.ArrayListUnmanaged(Pubkey),
+    vote_pubkeys: std.ArrayListUnmanaged(Pubkey),
 
-    pub fn init(allocator: std.mem.Allocator, root: SlotAndHash) !TestFixture {
+    pub fn init(
+        allocator: std.mem.Allocator,
+        root: SlotAndHash,
+    ) !TestFixture {
         return .{
             .fork_choice = try HeaviestSubtreeForkChoice.init(allocator, .noop, root),
             .epoch_stake_map = .{},
+            .node_pubkeys = .empty,
+            .vote_pubkeys = .empty,
         };
     }
 
@@ -4166,6 +4173,33 @@ pub const TestFixture = struct {
             else
                 heaviest_on_same_fork.?.slot,
         };
+    }
+
+    pub fn fill_keys(
+        self: *TestFixture,
+        allocator: std.mem.Allocator,
+        random: std.Random,
+        num_keypairs: usize,
+    ) !void {
+        self.node_pubkeys.deinit(allocator);
+        self.vote_pubkeys.deinit(allocator);
+
+        var node_pubkeys = try std.ArrayListUnmanaged(Pubkey).initCapacity(
+            allocator,
+            num_keypairs,
+        );
+        var vote_pubkeys = try std.ArrayListUnmanaged(Pubkey).initCapacity(
+            allocator,
+            num_keypairs,
+        );
+
+        for (0..num_keypairs) |_| {
+            try node_pubkeys.append(allocator, Pubkey.initRandom(random));
+            try vote_pubkeys.append(allocator, Pubkey.initRandom(random));
+        }
+
+        self.node_pubkeys = node_pubkeys;
+        self.vote_pubkeys = vote_pubkeys;
     }
 
     pub fn fill_fork(
