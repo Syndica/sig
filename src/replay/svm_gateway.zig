@@ -116,10 +116,10 @@ pub const SvmSlot = struct {
             true, // TODO: should this be false?
         );
 
-        const programs =
+        var programs =
             try loadPrograms(allocator, &accounts.account_cache, &vm_environment, params.slot);
         errdefer {
-            for (programs.values()) |program| program.deinit(allocator);
+            for (programs.values()) |*program| program.deinit(allocator);
             programs.deinit(allocator);
         }
 

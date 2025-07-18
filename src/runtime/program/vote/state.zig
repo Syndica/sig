@@ -502,6 +502,18 @@ pub const AuthorizedVoters = struct {
             try writer.writeAll(&v.data);
         }
     }
+
+    pub fn equals(self: *const AuthorizedVoters, other: *const AuthorizedVoters) bool {
+        if (self.count() != other.count()) return false;
+        var self_voters = self.voters;
+        var other_voters = other.voters;
+        for (self_voters.keys()) |key| {
+            const self_value = self_voters.get(key).?;
+            const other_value = other_voters.get(key) orelse return false;
+            if (!self_value.equals(&other_value)) return false;
+        }
+        return true;
+    }
 };
 
 const CircBufV0 = struct {
@@ -905,16 +917,7 @@ pub const VoteState = struct {
         for (self.votes.items, other.votes.items) |a, b|
             if (!std.meta.eql(a, b)) return false;
 
-        if (self.voters.count() != other.voters.count()) return false;
-        // Sorted map keys requires a mutable pointer because it calls `sort` before
-        // returning keys. This is annoying, sort should be enforced when inserting.
-        var self_voters = self.voters.voters;
-        var other_voters = other.voters.voters;
-        for (self_voters.keys()) |key| {
-            const self_value = self_voters.get(key).?;
-            const other_value = other_voters.get(key) orelse return false;
-            if (!self_value.equals(&other_value)) return false;
-        }
+        if (!self.voters.equals(&other.voters)) return false;
 
         if (!self.prior_voters.equals(other.prior_voters)) return false;
 
@@ -1115,7 +1118,7 @@ pub const VoteState = struct {
         slot_hashes: *const SlotHashes,
     ) (error{OutOfMemory} || InstructionError)!?VoteError {
         const vote_hash = vote.hash;
-        const slot_hash_entries = slot_hashes.entries.items;
+        const slot_hash_entries = slot_hashes.entries.constSlice();
 
         // index into the vote's slots, starting at the oldest slot
         var i: usize = 0;
@@ -1294,7 +1297,7 @@ pub const VoteState = struct {
             return VoteError.empty_slots;
         }
 
-        const slot_hash_entries = slot_hashes.entries.items;
+        const slot_hash_entries = slot_hashes.entries.constSlice();
         const earliest_slot_in_history = if (slot_hash_entries.len != 0)
             slot_hash_entries[slot_hash_entries.len - 1].slot
         else
@@ -1457,7 +1460,7 @@ pub const VoteState = struct {
         proposed_hash: Hash,
         slot_hashes: *const SlotHashes,
     ) (error{OutOfMemory} || InstructionError)!?VoteError {
-        const slot_hash_entries = slot_hashes.entries.items;
+        const slot_hash_entries = slot_hashes.entries.constSlice();
 
         if (proposed_lockouts.items.len == 0) {
             return VoteError.empty_slots;
@@ -2972,7 +2975,7 @@ test "state.VoteState.processVote process missed votes" {
 
     const vote = Vote{ .slots = &slots, .hash = Hash.ZEROES, .timestamp = null };
 
-    var slot_hashes = try SlotHashes.default(allocator);
+    var slot_hashes = try SlotHashes.init(allocator);
     defer slot_hashes.deinit(allocator);
 
     var iter = std.mem.reverseIterator(vote.slots);
@@ -3074,7 +3077,7 @@ test "state.VoteState filter old votes" {
     // Vote with only some slots older than the SlotHashes history should
     // filter out those older slots
     const vote_slot = 2;
-    const vote_slot_hash = for (slot_hashes.entries.items) |entry| {
+    const vote_slot_hash = for (slot_hashes.entries.constSlice()) |entry| {
         if (entry.slot == vote_slot) {
             break entry.hash;
         }
@@ -3110,7 +3113,7 @@ test "state.VoteState.processVote empty slot hashes" {
         .timestamp = null,
     };
 
-    const slot_hashes = try SlotHashes.default(allocator);
+    const slot_hashes = try SlotHashes.init(allocator);
     defer slot_hashes.deinit(allocator);
 
     const result = try vote_state.checkSlotsAreValid(&vote, vote.slots, &slot_hashes);
@@ -3349,7 +3352,7 @@ test "state.VoteState.processVote empty slots" {
         .timestamp = null,
     };
 
-    const slot_hashes = try SlotHashes.default(allocator);
+    const slot_hashes = try SlotHashes.init(allocator);
     defer slot_hashes.deinit(allocator);
 
     const maybe_error = try vote_state.processVote(
@@ -4381,7 +4384,7 @@ test "state.VoteState.checkAndFilterProposedVoteState slots not ordered" {
 
     const vote_slot = 3;
     const vote_slot_hash = blk: {
-        for (slot_hashes.entries.items) |item| {
+        for (slot_hashes.entries.constSlice()) |item| {
             if (item.slot == vote_slot) {
                 break :blk item.hash;
             }
@@ -4464,7 +4467,7 @@ test "state.VoteState.checkAndFilterProposedVoteState older than history slots f
 
     const vote_slot = 12;
     const vote_slot_hash = blk: {
-        for (slot_hashes.entries.items) |item| {
+        for (slot_hashes.entries.constSlice()) |item| {
             if (item.slot == vote_slot) {
                 break :blk item.hash;
             }
@@ -4543,7 +4546,7 @@ test "state.VoteState.checkAndFilterProposedVoteState older than history slots n
 
     const vote_slot = 12;
     const vote_slot_hash = blk: {
-        for (slot_hashes.entries.items) |item| {
+        for (slot_hashes.entries.constSlice()) |item| {
             if (item.slot == vote_slot) {
                 break :blk item.hash;
             }
@@ -4629,7 +4632,7 @@ test "state.VoteState.checkAndFilterProposedVoteState older history slots filter
 
     const vote_slot = 14;
     const vote_slot_hash = blk: {
-        for (slot_hashes.entries.items) |item| {
+        for (slot_hashes.entries.constSlice()) |item| {
             if (item.slot == vote_slot) {
                 break :blk item.hash;
             }
@@ -4708,7 +4711,7 @@ test "state.VoteState.checkAndFilterProposedVoteState slot not on fork" {
     // errors
     const vote_slot = vote_state.votes.getLast().lockout.slot + 2;
     const vote_slot_hash = blk: {
-        for (slot_hashes.entries.items) |item| {
+        for (slot_hashes.entries.constSlice()) |item| {
             if (item.slot == vote_slot) {
                 break :blk item.hash;
             }
@@ -4784,9 +4787,9 @@ test "state.VoteState.checkAndFilterProposedVoteState root on different fork" {
     // Have to vote for a slot greater than the last vote in the vote state to avoid VoteTooOld
     // errors, but also this slot must be present in SlotHashes
     const vote_slot = 8;
-    try std.testing.expectEqual(slot_hashes.entries.items[0].slot, vote_slot);
+    try std.testing.expectEqual(slot_hashes.entries.buffer[0].slot, vote_slot);
     const vote_slot_hash = blk: {
-        for (slot_hashes.entries.items) |item| {
+        for (slot_hashes.entries.constSlice()) |item| {
             if (item.slot == vote_slot) {
                 break :blk item.hash;
             }
@@ -4833,7 +4836,7 @@ test "state.VoteState.checkAndFilterProposedVoteState slot newer than slot histo
     // 2) The slot is greater than the newest slot in the slot history
     // Thus this slot is not part of the fork and the update should be rejected
     // with error `SlotsMismatch`
-    const missing_vote_slot = slot_hashes.entries.items[0].slot + 1;
+    const missing_vote_slot = slot_hashes.entries.buffer[0].slot + 1;
 
     const vote_slot_hash = Hash.initRandom(random);
 
@@ -4879,7 +4882,7 @@ test "state.VoteState.checkAndFilterProposedVoteState slot all slot hases in upd
     const vote_slot = vote_state.votes.getLast().lockout.slot + 2;
 
     const vote_slot_hash = blk: {
-        for (slot_hashes.entries.items) |item| {
+        for (slot_hashes.entries.constSlice()) |item| {
             if (item.slot == vote_slot) {
                 break :blk item.hash;
             }
@@ -4953,7 +4956,7 @@ test "state.VoteState.checkAndFilterProposedVoteState some slot hashes in update
     const vote_slot = vote_state.votes.getLast().lockout.slot + 2;
 
     const vote_slot_hash = blk: {
-        for (slot_hashes.entries.items) |item| {
+        for (slot_hashes.entries.constSlice()) |item| {
             if (item.slot == vote_slot) {
                 break :blk item.hash;
             }
@@ -5198,7 +5201,7 @@ fn buildSlotHashes(
         @panic("buildSlotHashes should only be called in test mode");
     }
 
-    var result = try SlotHashes.default(allocator);
+    var result = try SlotHashes.init(allocator);
     errdefer result.deinit(allocator);
 
     var iter = std.mem.reverseIterator(slots);
@@ -5227,7 +5230,7 @@ fn buildVoteState(
         const last_vote_slot = vote_slots[vote_slots.len - 1];
         var vote_hash: Hash = undefined;
 
-        for (slot_hashes.entries.items) |slot_hash| {
+        for (slot_hashes.entries.constSlice()) |slot_hash| {
             if (slot_hash.slot == last_vote_slot) {
                 vote_hash = slot_hash.hash;
                 break;
@@ -5333,8 +5336,8 @@ fn runTestCheckAndFilterProposedVoteStateOlderThanHistoryRoot(
     vote_state.root_slot = current_vote_state_root;
 
     var j: usize = 0;
-    while (j < slot_hashes.entries.items.len) {
-        if (slot_hashes.entries.items[j].slot < earliest_slot_in_history) {
+    while (j < slot_hashes.entries.len) {
+        if (slot_hashes.entries.buffer[j].slot < earliest_slot_in_history) {
             _ = slot_hashes.entries.orderedRemove(j);
         } else {
             j += 1;
@@ -5346,7 +5349,7 @@ fn runTestCheckAndFilterProposedVoteStateOlderThanHistoryRoot(
         proposed_slots_and_lockouts.len - 1
     ].slot;
     var proposed_hash: ?Hash = null;
-    for (slot_hashes.entries.items) |slot_hash| {
+    for (slot_hashes.entries.constSlice()) |slot_hash| {
         if (slot_hash.slot == last_proposed_slot) {
             proposed_hash = slot_hash.hash;
             break;

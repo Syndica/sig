@@ -2025,6 +2025,37 @@ pub const AccountsDB = struct {
             });
         }
 
+        // look for existing account at this slot and overwrite in-place if present.
+        search_and_overwrite: {
+            const head_ref, var lock = self.account_index.pubkey_ref_map.getRead(&pubkey) orelse
+                break :search_and_overwrite;
+            defer lock.unlock();
+
+            const min_slot = if (slot == 0) null else slot - 1;
+            const ref = slotListMaxWithinBounds(head_ref.ref_ptr, min_slot, slot) orelse
+                break :search_and_overwrite;
+
+            if (ref.location != .UnrootedMap) {
+                return error.CannotWriteRootedSlot;
+            }
+
+            const index = ref.location.UnrootedMap.index;
+
+            const unrooted_accounts, var unrooted_lock = self.unrooted_accounts.readWithLock();
+            defer unrooted_lock.unlock();
+
+            const slot_list = unrooted_accounts.get(ref.slot) orelse return error.SlotNotFound;
+            const slot_accounts: []Account = slot_list.items(.account);
+
+            const old_account = slot_accounts[index];
+            slot_accounts[index] = duplicated;
+            inserted_duplicate = true;
+            old_account.deinit(self.allocator);
+
+            // no need to insert/reindex if we were able to overwrite an existing account
+            return;
+        }
+
         {
             const unrooted_accounts, var unrooted_accounts_lg =
                 self.unrooted_accounts.writeWithLock();
@@ -2127,7 +2158,6 @@ pub const AccountsDB = struct {
             }
 
             // insert + check if inserted
-            var accounts_dead_count: u64 = 0;
             for (0.., reference_buf[0..new_len]) |i, *ref| {
                 if (i < old_refs.len) continue;
 
@@ -2136,24 +2166,24 @@ pub const AccountsDB = struct {
                     global_ref_index + i,
                 );
                 if (!was_inserted) {
-                    accounts_dead_count += 1;
                     self.logger.warn().logf(
                         "account was not referenced because its slot was a duplicate: {any}",
                         .{.{ .slot = ref.slot, .pubkey = ref.pubkey }},
                     );
+                    // TODO: Make this error actually impossible to reach.
+                    // Hitting this error means the account was added to
+                    // accountsdb but not indexed, which is a big problem and
+                    // will likely break consensus immediately. Ideally this
+                    // would be unreachable, but technically a race is possible
+                    // if multiple threads call putAccount for the same pubkey
+                    // in the same slot. Replay won't do this, but we still want
+                    // accountsdb to be safe without relying on that assumption.
+                    // This may require significant changes to how accountsdb's
+                    // internal data structures are locked.
+                    return error.InsertIndexFailed;
                 }
 
                 std.debug.assert(self.account_index.exists(&pubkeys[i - old_refs.len], slot));
-            }
-
-            if (accounts_dead_count != 0) {
-                const dead_accounts, var dead_accounts_lg =
-                    self.dead_accounts_counter.writeWithLock();
-                defer dead_accounts_lg.unlock();
-
-                const entry = try dead_accounts.getOrPut(slot);
-                if (!entry.found_existing) entry.value_ptr.* = 0;
-                entry.value_ptr.* += accounts_dead_count;
             }
 
             // free old ref
@@ -2183,7 +2213,6 @@ pub const AccountsDB = struct {
             }
 
             // insert + check if inserted
-            var accounts_dead_count: u64 = 0;
             for (0.., slot_entry.value_ptr.refs.items) |i, *ref| {
                 if (i < old_refs.len) continue;
 
@@ -2192,11 +2221,13 @@ pub const AccountsDB = struct {
                     slot_entry.value_ptr.global_index + i,
                 );
                 if (!was_inserted) {
-                    accounts_dead_count += 1;
                     self.logger.warn().logf(
                         "account was not referenced because its slot was a duplicate: {any}",
                         .{.{ .slot = ref.slot, .pubkey = ref.pubkey }},
                     );
+                    // TODO: ideally this should be unreachable. see comment
+                    // above for more context about this error.
+                    return error.InsertIndexFailed;
                 }
 
                 std.debug.assert(self.account_index.exists(&pubkeys[i - old_refs.len], slot));
@@ -2834,27 +2865,22 @@ pub const AccountsDB = struct {
         try self.snapshot_dir.deleteFile(file_name);
     }
 
-    inline fn slotSatisfiesMax(
-        slot: Slot,
-        max_slot: ?Slot,
-    ) bool {
+    /// inclusive bound
+    inline fn slotSatisfiesMax(slot: Slot, max_slot: ?Slot) bool {
         if (max_slot) |max| return slot <= max;
         return true;
     }
 
-    inline fn slotSatisfiesMin(
-        slot: Slot,
-        min_slot: ?Slot,
-    ) bool {
+    /// exclusive bound
+    inline fn slotSatisfiesMin(slot: Slot, min_slot: ?Slot) bool {
         if (min_slot) |min| return slot > min;
         return true;
     }
 
-    inline fn slotInRange(
-        slot: Slot,
-        min_slot: ?Slot,
-        max_slot: ?Slot,
-    ) bool {
+    /// Checks if slot is in range (min, max]
+    ///
+    /// This is exclusive of the min and inclusive of the max
+    inline fn slotInRange(slot: Slot, min_slot: ?Slot, max_slot: ?Slot) bool {
         return slotSatisfiesMax(slot, max_slot) and slotSatisfiesMin(slot, min_slot);
     }
 };
@@ -4638,6 +4664,7 @@ test "insert account on multiple slots" {
                 \\    slot:      {}
                 \\    ancestors: {any}
                 \\    pubkey:    {}
+                \\
             ,
                 .{ i, j, num_slots_to_insert, slot, ancestors.ancestors.keys(), pubkey },
             );

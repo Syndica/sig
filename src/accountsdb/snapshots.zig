@@ -584,7 +584,7 @@ pub const Manifest = struct {
 
     pub fn getStakedNodes(
         self: *const Manifest,
-        allocator: std.mem.Allocator,
+        _: std.mem.Allocator, // TODO: figure out if this is needed to combine or we just use one
         epoch: Epoch,
     ) !*const std.AutoArrayHashMapUnmanaged(Pubkey, u64) {
         // TODO verify that this fallback approach is correct. maybe it should be:
@@ -592,9 +592,9 @@ pub const Manifest = struct {
         // - combine stakes from both?
         return if (self.bank_fields.epoch_stakes.getPtr(epoch)) |es| blk: {
             if (true) unreachable; // TODO for debugging, remove me
-            break :blk try es.stakes.vote_accounts.stakedNodes(allocator);
+            break :blk &es.stakes.vote_accounts.staked_nodes;
         } else if (self.bank_extra.versioned_epoch_stakes.getPtr(epoch)) |es|
-            try es.current.stakes.vote_accounts.stakedNodes(allocator)
+            &es.current.stakes.vote_accounts.staked_nodes
         else
             return error.NoEpochStakes;
     }

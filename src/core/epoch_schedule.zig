@@ -40,13 +40,13 @@ pub const EpochSchedule = extern struct {
         "SysvarEpochSchedu1e111111111111111111111111",
     ) catch unreachable;
 
-    pub const SIZE_OF: u64 = @sizeOf(EpochSchedule);
+    pub const STORAGE_SIZE: u64 = @sizeOf(EpochSchedule);
 
-    pub const DEFAULT = EpochSchedule.custom(
-        DEFAULT_SLOTS_PER_EPOCH,
-        DEFAULT_LEADER_SCHEDULE_SLOT_OFFSET,
-        true,
-    );
+    pub const DEFAULT: EpochSchedule = .custom(.{
+        .slots_per_epoch = DEFAULT_SLOTS_PER_EPOCH,
+        .leader_schedule_slot_offset = DEFAULT_LEADER_SCHEDULE_SLOT_OFFSET,
+        .warmup = true,
+    });
 
     pub fn getEpoch(self: *const EpochSchedule, slot: Slot) Epoch {
         return self.getEpochAndSlotIndex(slot)[0];
@@ -106,9 +106,25 @@ pub const EpochSchedule = extern struct {
         return self.getFirstSlotInEpoch(epoch) +| self.getSlotsInEpoch(epoch) -| 1;
     }
 
-    pub fn getLeaderScheduleEpoch(self: *const EpochSchedule, slot: Slot) u64 {
-        if (slot < self.first_normal_slot) {
-            return self.getEpochAndSlotIndex(slot)[0] +| 1;
+    /// Gets the epoch for which the stakes from the current slot could
+    /// potentially be used to defined the "epoch staked nodes," which are used
+    /// to calculate the leader schedule.
+    ///
+    /// In agave this occurs during `Bank::process_new_epoch` and
+    /// `Bank::_new_from_parent`. If the leader schedule slot offset equals the
+    /// number of slots per epoch (current default) this function will always
+    /// return the epoch immediately after the epoch of the given slot.
+    ///
+    /// If this slot is the first slot on its fork that could potentially be
+    /// used to defined a particular epoch's "epoch staked nodes," then this
+    /// will be the slot that is used for that purpose. All future slots on the
+    /// same fork will *not* be used for that epoch, even if they do return the
+    /// same Epoch number from this function.
+    pub fn getLeaderScheduleEpoch(self: *const EpochSchedule, slot: Slot) Epoch {
+        if (self.leader_schedule_slot_offset == self.slots_per_epoch or
+            slot < self.first_normal_slot)
+        {
+            return self.getEpoch(slot) +| 1;
         } else {
             return self.first_normal_epoch +|
                 (((slot -| self.first_normal_slot) +|
@@ -117,10 +133,17 @@ pub const EpochSchedule = extern struct {
     }
 
     pub fn custom(
-        slots_per_epoch: u64,
-        leader_schedule_slot_offset: u64,
-        warmup: bool,
+        params: struct {
+            /// Only permits up to 2^63-1 as a value if `warmup = true`.
+            slots_per_epoch: u64,
+            leader_schedule_slot_offset: u64,
+            warmup: bool,
+        },
     ) EpochSchedule {
+        const slots_per_epoch = params.slots_per_epoch;
+        const leader_schedule_slot_offset = params.leader_schedule_slot_offset;
+        const warmup = params.warmup;
+
         std.debug.assert(slots_per_epoch >= MINIMUM_SLOTS_PER_EPOCH);
         var first_normal_epoch: Epoch = 0;
         var first_normal_slot: Slot = 0;
@@ -153,11 +176,11 @@ pub const EpochSchedule = extern struct {
 
 test "epoch_schedule" {
     for (MINIMUM_SLOTS_PER_EPOCH..MINIMUM_SLOTS_PER_EPOCH * 16) |slots_per_epoch| {
-        const epoch_schedule = EpochSchedule.custom(
-            slots_per_epoch,
-            slots_per_epoch / 2,
-            true,
-        );
+        const epoch_schedule = EpochSchedule.custom(.{
+            .slots_per_epoch = slots_per_epoch,
+            .leader_schedule_slot_offset = slots_per_epoch / 2,
+            .warmup = true,
+        });
 
         try std.testing.expectEqual(epoch_schedule.getFirstSlotInEpoch(0), 0);
         try std.testing.expectEqual(
@@ -198,5 +221,18 @@ test "epoch_schedule" {
         try std.testing.expect(last_leader_schedule != 0);
         try std.testing.expect(last_epoch != 0);
         try std.testing.expectEqual(slots_per_epoch, last_slots_in_epoch);
+    }
+}
+
+test "getLeaderScheduleEpoch: leader schedule slot offset equals slots per epoch" {
+    const epoch_schedule = EpochSchedule.custom(.{
+        .slots_per_epoch = 32,
+        .leader_schedule_slot_offset = 32,
+        .warmup = true,
+    });
+    for (0..epoch_schedule.slots_per_epoch * 10) |slot| {
+        const epoch = epoch_schedule.getEpoch(slot);
+        const leader_schedule_epoch = epoch_schedule.getLeaderScheduleEpoch(slot);
+        try std.testing.expectEqual(epoch + 1, leader_schedule_epoch);
     }
 }

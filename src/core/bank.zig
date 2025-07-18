@@ -172,22 +172,24 @@ pub const SlotState = struct {
 
     stakes_cache: sig.core.StakesCache,
 
-    pub const GENESIS = SlotState{
-        .blockhash_queue = .init(.DEFAULT),
-        .hash = .init(null),
-        .capitalization = .init(0),
-        .transaction_count = .init(0),
-        .signature_count = .init(0),
-        .tick_height = .init(0),
-        .collected_rent = .init(0),
-        .accounts_lt_hash = .init(.IDENTITY),
-        .stakes_cache = .default(),
-    };
-
     pub fn deinit(self: *SlotState, allocator: Allocator) void {
         var blockhash_queue = self.blockhash_queue.write();
         defer blockhash_queue.unlock();
         blockhash_queue.get().deinit(allocator);
+    }
+
+    pub fn genesis(allocator: Allocator) Allocator.Error!SlotState {
+        return .{
+            .blockhash_queue = .init(.DEFAULT),
+            .hash = .init(null),
+            .capitalization = .init(0),
+            .transaction_count = .init(0),
+            .signature_count = .init(0),
+            .tick_height = .init(0),
+            .collected_rent = .init(0),
+            .accounts_lt_hash = .init(.IDENTITY),
+            .stakes_cache = try .init(allocator),
+        };
     }
 
     pub fn fromBankFields(

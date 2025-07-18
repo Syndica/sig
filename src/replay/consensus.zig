@@ -961,7 +961,7 @@ test "checkAndHandleNewRoot - missing slot" {
             .accounts_lt_hash = .init(LtHash{
                 .data = [_]u16{0} ** LtHash.NUM_ELEMENTS,
             }),
-            .stakes_cache = .default(),
+            .stakes_cache = try .init(testing.allocator),
         },
     });
 
@@ -1042,7 +1042,7 @@ test "checkAndHandleNewRoot - missing hash" {
             .accounts_lt_hash = .init(.{
                 .data = [_]u16{0} ** LtHash.NUM_ELEMENTS,
             }),
-            .stakes_cache = .default(),
+            .stakes_cache = try .init(testing.allocator),
         },
     });
 
@@ -1180,7 +1180,7 @@ test "checkAndHandleNewRoot - success" {
             .accounts_lt_hash = .init(.{
                 .data = [_]u16{0} ** LtHash.NUM_ELEMENTS,
             }),
-            .stakes_cache = .default(),
+            .stakes_cache = try .init(testing.allocator),
         },
     });
 
@@ -1208,7 +1208,7 @@ test "checkAndHandleNewRoot - success" {
             .accounts_lt_hash = .init(.{
                 .data = [_]u16{0} ** LtHash.NUM_ELEMENTS,
             }),
-            .stakes_cache = .default(),
+            .stakes_cache = try .init(testing.allocator),
         },
     });
 

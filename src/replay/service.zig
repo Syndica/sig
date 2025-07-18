@@ -393,7 +393,7 @@ test trackNewSlots {
 
     var slot_tracker: SlotTracker = try .init(allocator, 0, .{
         .constants = .genesis(.DEFAULT),
-        .state = .GENESIS,
+        .state = try .genesis(allocator),
     });
     defer slot_tracker.deinit(allocator);
     slot_tracker.get(0).?.state.hash.set(.ZEROES);
@@ -406,7 +406,7 @@ test trackNewSlots {
         .ns_per_slot = 1,
         .genesis_creation_time = 1,
         .slots_per_year = 1,
-        .stakes = try .initEmpty(allocator),
+        .stakes = try .initEmptyWithGenesisStakeHistoryEntry(allocator),
         .rent_collector = .initRandom(rng.random()),
     });
 

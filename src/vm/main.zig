@@ -46,7 +46,7 @@ pub fn main() !void {
     const bytes = try input_file.readToEndAlloc(gpa, sbpf.MAX_FILE_SIZE);
     defer gpa.free(bytes);
 
-    const epoch_stakes = try EpochStakes.initEmpty(gpa);
+    const epoch_stakes = try EpochStakes.initEmptyWithGenesisStakeHistoryEntry(gpa);
     defer epoch_stakes.deinit(gpa);
 
     var tc: TransactionContext = .{

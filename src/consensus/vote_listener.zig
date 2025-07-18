@@ -1466,7 +1466,7 @@ test "simple usage" {
     const allocator = std.testing.allocator;
 
     var bank_forks_rw = sig.sync.RwMux(BankForksStub).init(blk: {
-        var stakes: sig.core.EpochStakes = try .initEmpty(allocator);
+        var stakes: sig.core.EpochStakes = try .initEmptyWithGenesisStakeHistoryEntry(allocator);
         defer stakes.deinit(allocator);
 
         break :blk try .init(allocator, .DEFAULT, .{
@@ -1483,7 +1483,7 @@ test "simple usage" {
                 .ancestors = .{ .ancestors = .empty },
                 .feature_set = .{ .active = .empty },
             },
-            .state = .GENESIS,
+            .state = try .genesis(allocator),
             .epoch_constants = .{
                 .hashes_per_tick = 1,
                 .ticks_per_slot = 1,
@@ -1563,7 +1563,7 @@ test "check trackers" {
     const root_slot: Slot = 0;
 
     var bank_forks_rw = sig.sync.RwMux(BankForksStub).init(blk: {
-        var stakes: sig.core.EpochStakes = try .initEmpty(allocator);
+        var stakes: sig.core.EpochStakes = try .initEmptyWithGenesisStakeHistoryEntry(allocator);
         defer stakes.deinit(allocator);
         for (tracker_templates) |template| {
             _, const vote_kp, _ = template;
@@ -1585,7 +1585,7 @@ test "check trackers" {
                 .ancestors = .{ .ancestors = .empty },
                 .feature_set = .{ .active = .empty },
             },
-            .state = .GENESIS,
+            .state = try .genesis(allocator),
             .epoch_constants = .{
                 .hashes_per_tick = 1,
                 .ticks_per_slot = 1,

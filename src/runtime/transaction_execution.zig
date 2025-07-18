@@ -449,7 +449,7 @@ test "loadAndExecuteTransactions: no transactions" {
         10,
     );
     defer blockhash_queue.deinit(allocator);
-    const epoch_stakes: EpochStakes = try EpochStakes.initEmpty(allocator);
+    const epoch_stakes = try EpochStakes.initEmptyWithGenesisStakeHistoryEntry(allocator);
     defer epoch_stakes.deinit(allocator);
     const vm_environment = vm.Environment{};
     defer vm_environment.deinit(allocator);
@@ -524,7 +524,7 @@ test "loadAndExecuteTransactions: invalid compute budget instruction" {
     var account_cache = BatchAccountCache{};
     defer account_cache.deinit(allocator);
 
-    const epoch_stakes = try EpochStakes.initEmpty(allocator);
+    const epoch_stakes = try EpochStakes.initEmptyWithGenesisStakeHistoryEntry(allocator);
     defer epoch_stakes.deinit(allocator);
 
     var status_cache = StatusCache.DEFAULT;
@@ -699,7 +699,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
     );
     defer blockhash_queue.deinit(allocator);
 
-    const epoch_stakes = try EpochStakes.initEmpty(allocator);
+    const epoch_stakes = try EpochStakes.initEmptyWithGenesisStakeHistoryEntry(allocator);
     defer epoch_stakes.deinit(allocator);
 
     const environment = TransactionExecutionEnvironment{
