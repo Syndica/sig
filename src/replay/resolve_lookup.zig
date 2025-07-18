@@ -51,11 +51,21 @@ pub const ResolvedTransaction = struct {
     }
 };
 
+pub const ResolveBatchError = error{
+    Overflow,
+    OutOfMemory,
+    UnsupportedVersion,
+    AddressLookupTableNotFound,
+    InvalidAddressLookupTableOwner,
+    InvalidAddressLookupTableData,
+    InvalidAddressLookupTableIndex,
+};
+
 pub fn resolveBatch(
     allocator: Allocator,
     accounts_db: *AccountsDB,
     batch: []const Transaction,
-) !ResolvedBatch {
+) ResolveBatchError!ResolvedBatch {
     return resolveBatchGeneric(allocator, .accounts_db, accounts_db, batch);
 }
 
@@ -64,7 +74,7 @@ pub fn resolveBatchGeneric(
     comptime provider_tag: lookup_table_provider.Tag,
     table_provider: provider_tag.T(),
     batch: []const Transaction,
-) !ResolvedBatch {
+) ResolveBatchError!ResolvedBatch {
     var accounts = try std.ArrayListUnmanaged(LockableAccount)
         .initCapacity(allocator, Transaction.numAccounts(batch));
     errdefer accounts.deinit(allocator);
@@ -96,7 +106,7 @@ fn resolveTransaction(
     comptime provider_tag: lookup_table_provider.Tag,
     table_provider: provider_tag.T(),
     transaction: Transaction,
-) !ResolvedTransaction {
+) ResolveBatchError!ResolvedTransaction {
     const message = transaction.msg;
 
     const lookups = try resolveLookupTableAccounts(
@@ -175,12 +185,12 @@ fn resolveTransaction(
                 .is_signer = false,
                 .is_writable = false,
             } else {
-                return error.InvalidAccountIndex;
+                return error.InvalidAddressLookupTableIndex;
             };
         }
 
         if (input_ix.program_index >= message.account_keys.len) {
-            return error.InvalidAccountIndex;
+            return error.InvalidAddressLookupTableIndex;
         }
         output_ix.* = .{
             .program_meta = ProgramMeta{
@@ -228,7 +238,7 @@ fn resolveLookupTableAccounts(
         // resolve writable addresses
         for (lookup.writable_indexes) |index| {
             if (table.addresses.len < index + 1) {
-                return error.LookupTableAccountTooSmall;
+                return error.InvalidAddressLookupTableIndex;
             }
             writable_accounts.appendAssumeCapacity(table.addresses[index]);
         }
@@ -236,7 +246,7 @@ fn resolveLookupTableAccounts(
         // resolve readonly addresses
         for (lookup.readonly_indexes) |index| {
             if (table.addresses.len < index + 1) {
-                return error.LookupTableAccountTooSmall;
+                return error.InvalidAddressLookupTableIndex;
             }
             readonly_accounts.appendAssumeCapacity(table.addresses[index]);
         }
@@ -267,7 +277,7 @@ const lookup_table_provider = struct {
         comptime tag: Tag,
         table_provider: tag.T(),
         table_address: *const Pubkey,
-    ) !AddressLookupTable {
+    ) ResolveBatchError!AddressLookupTable {
         switch (tag) {
             .accounts_db => {
                 const accounts_db: *AccountsDB = table_provider;
@@ -275,14 +285,24 @@ const lookup_table_provider = struct {
                 // it against the current slot's ancestors. This won't be usable
                 // until consensus is implemented in replay, so it's not
                 // implemented yet.
-                const account = try accounts_db.getAccount(table_address);
+                const account = accounts_db.getAccount(table_address) catch {
+                    std.debug.print("Failed to get account for lookup table: {}\n", .{table_address.*});
+                    return error.AddressLookupTableNotFound;
+                };
+                defer account.deinit(accounts_db.allocator);
+
+                if (!account.owner.equals(&sig.runtime.program.address_lookup_table.ID)) {
+                    return error.InvalidAddressLookupTableOwner;
+                }
                 if (account.data.len() > AddressLookupTable.MAX_SERIALIZED_SIZE) {
-                    return error.LookupTableAccountOverflow;
+                    return error.InvalidAddressLookupTableData;
                 }
                 var buf: [AddressLookupTable.MAX_SERIALIZED_SIZE]u8 = undefined;
                 const account_bytes = buf[0..account.data.len()];
                 account.data.readAll(account_bytes);
-                return try AddressLookupTable.deserialize(account_bytes);
+                return AddressLookupTable.deserialize(account_bytes) catch {
+                    return error.InvalidAddressLookupTableData;
+                };
                 // NOTE: deactivated lookup tables are allowed to be used,
                 // according to agave's implementation. see here, where agave
                 // discards the value:
@@ -291,9 +311,9 @@ const lookup_table_provider = struct {
             .map => {
                 const map: *const std.AutoArrayHashMapUnmanaged(Pubkey, AddressLookupTable) =
                     table_provider;
-                return map.get(table_address.*) orelse return error.PubkeyNotInIndex;
+                return map.get(table_address.*) orelse return error.AddressLookupTableNotFound;
             },
-            .noop => return error.PubkeyNotInIndex,
+            .noop => return error.AddressLookupTableNotFound,
         }
     }
 };

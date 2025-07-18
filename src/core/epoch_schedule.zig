@@ -40,7 +40,7 @@ pub const EpochSchedule = extern struct {
         "SysvarEpochSchedu1e111111111111111111111111",
     ) catch unreachable;
 
-    pub const STORAGE_SIZE: u64 = @sizeOf(EpochSchedule);
+    pub const STORAGE_SIZE: u64 = 33;
 
     pub const DEFAULT: EpochSchedule = .custom(.{
         .slots_per_epoch = DEFAULT_SLOTS_PER_EPOCH,
