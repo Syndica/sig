@@ -289,7 +289,6 @@ pub const GenesisConfig = struct {
 
 fn yearsAsSlots(years: f64, tick_duration: RustDuration, ticks_per_slot: u64) f64 {
     const SECONDS_PER_YEAR: f64 = 365.242_199 * 24.0 * 60.0 * 60.0;
-
     const SLOTS_PER_YEAR = SECONDS_PER_YEAR *
         (1_000_000_000.0 / @as(f64, @floatFromInt(tick_duration.asNanos()))) /
         @as(f64, @floatFromInt(ticks_per_slot));
