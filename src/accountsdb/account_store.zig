@@ -48,10 +48,19 @@ pub const AccountReader = union(enum) {
         };
     }
 
+    /// Returns an iterator that iterates over every account that was modified
+    /// in the slot.
+    ///
+    /// Holds the read lock on the index, so unlock it when done, and be careful
+    /// how long you hold this.
     pub fn slotModifiedIterator(self: AccountReader, slot: Slot) ?SlotModifiedIterator {
         return switch (self) {
-            .accounts_db => |db| .{ .accounts_db = db.slotModifiedIterator(slot) orelse return null },
-            .thread_safe_map => |map| .{ .thread_safe_map = map.slotModifiedIterator(slot) orelse return null },
+            .accounts_db => |db| .{
+                .accounts_db = db.slotModifiedIterator(slot) orelse return null,
+            },
+            .thread_safe_map => |map| .{
+                .thread_safe_map = map.slotModifiedIterator(slot) orelse return null,
+            },
             .noop => .noop,
         };
     }
@@ -112,11 +121,15 @@ pub const AccountStore = union(enum) {
     /// Holds the read lock on the index, so unlock it when done, and be careful
     /// how long you hold this.
     pub fn slotModifiedIterator(self: AccountStore, slot: Slot) ?SlotModifiedIterator {
-        switch (self) {
-            .accounts_db => |db| .{ .accounts_db = db.slotModifiedIterator(slot) },
-            .thread_safe_map => |map| .{ .thread_safe_map = map.slotModifiedIterator(slot) },
+        return switch (self) {
+            .accounts_db => |db| .{
+                .accounts_db = db.slotModifiedIterator(slot) orelse return null,
+            },
+            .thread_safe_map => |map| .{
+                .thread_safe_map = map.slotModifiedIterator(slot) orelse return null,
+            },
             .noop => .noop,
-        }
+        };
     }
 };
 
@@ -170,18 +183,31 @@ pub const ThreadSafeAccountMap = struct {
     }
 
     pub fn deinit(self: *ThreadSafeAccountMap) void {
-        const map, var lock = self.pubkey_map.writeWithLock();
-        defer lock.unlock();
+        {
+            const map, var lock = self.pubkey_map.writeWithLock();
+            defer lock.unlock();
 
-        for (map.values()) |val| {
-            var list = val;
-            for (list.items) |item| {
-                self.allocator.free(item[1].data);
+            for (map.values()) |val| {
+                var list = val;
+                for (list.items) |item| {
+                    self.allocator.free(item[1].data);
+                }
+                list.deinit(self.allocator);
             }
-            list.deinit(self.allocator);
-        }
 
-        map.deinit(self.allocator);
+            map.deinit(self.allocator);
+        }
+        {
+            const map, var lock = self.slot_map.writeWithLock();
+            defer lock.unlock();
+
+            for (map.values()) |val| {
+                var list = val;
+                list.deinit(self.allocator);
+            }
+
+            map.deinit(self.allocator);
+        }
     }
 
     pub fn accountStore(self: *ThreadSafeAccountMap) AccountStore {
@@ -237,22 +263,6 @@ pub const ThreadSafeAccountMap = struct {
         address: Pubkey,
         account: AccountSharedData,
     ) !void {
-        const pubkey_map, var pubkey_lock = self.pubkey_map.writeWithLock();
-        defer pubkey_lock.unlock();
-
-        const slot_map, var slot_lock = self.slot_map.writeWithLock();
-        defer slot_lock.unlock();
-
-        const pubkey_gop = try pubkey_map.getOrPut(self.allocator, address);
-        if (!pubkey_gop.found_existing) {
-            pubkey_gop.value_ptr.* = .empty;
-        }
-
-        const slot_gop = try slot_map.getOrPut(self.allocator, slot);
-        if (!slot_gop.found_existing) {
-            slot_gop.value_ptr.* = .empty;
-        }
-
         const data = try self.allocator.dupe(u8, account.data);
         errdefer self.allocator.free(account.data);
 
@@ -264,18 +274,38 @@ pub const ThreadSafeAccountMap = struct {
             .rent_epoch = account.rent_epoch,
         };
 
-        try pubkey_gop.value_ptr.append(self.allocator, .{ slot, item });
-        try slot_gop.value_ptr.append(self.allocator, .{ address, item });
+        {
+            const slot_map, var slot_lock = self.slot_map.writeWithLock();
+            defer slot_lock.unlock();
 
-        std.mem.sort(struct { Slot, AccountSharedData }, pubkey_gop.value_ptr.items, {}, struct {
-            fn lessThan(
-                _: void,
-                lhs: struct { Slot, AccountSharedData },
-                rhs: struct { Slot, AccountSharedData },
-            ) bool {
-                return lhs[0] > rhs[0]; // sort descending so get methods are simpler
+            const slot_gop = try slot_map.getOrPut(self.allocator, slot);
+            if (!slot_gop.found_existing) {
+                slot_gop.value_ptr.* = .empty;
             }
-        }.lessThan);
+
+            try slot_gop.value_ptr.append(self.allocator, .{ address, item });
+        }
+
+        {
+            const pubkey_map, var pubkey_lock = self.pubkey_map.writeWithLock();
+            defer pubkey_lock.unlock();
+
+            const pubkey_gop = try pubkey_map.getOrPut(self.allocator, address);
+            if (!pubkey_gop.found_existing) {
+                pubkey_gop.value_ptr.* = .empty;
+            }
+
+            try pubkey_gop.value_ptr.append(self.allocator, .{ slot, item });
+            std.mem.sort(struct { Slot, AccountSharedData }, pubkey_gop.value_ptr.items, {}, struct {
+                fn lessThan(
+                    _: void,
+                    lhs: struct { Slot, AccountSharedData },
+                    rhs: struct { Slot, AccountSharedData },
+                ) bool {
+                    return lhs[0] > rhs[0]; // sort descending so get methods are simpler
+                }
+            }.lessThan);
+        }
     }
 
     /// Returns an iterator that iterates over every account that was modified

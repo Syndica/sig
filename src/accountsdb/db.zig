@@ -1494,7 +1494,7 @@ pub const AccountsDB = struct {
                         account_hash = switch (account) {
                             .file => |in_file_account| blk: {
                                 var iter = in_file_account.data.iterator();
-                                var hash: Hash = .ZEROES;
+                                var hash = Hash.ZEROES;
                                 sig.core.account.hashAccount(
                                     in_file_account.lamports().*,
                                     &iter,
