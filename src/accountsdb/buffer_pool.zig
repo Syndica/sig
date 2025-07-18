@@ -1121,7 +1121,7 @@ pub const AccountDataHandle = union(enum) {
         writer: anytype,
         read_handle: anytype,
         params: bincode.Params,
-    ) anyerror!void {
+    ) !void {
         // we want to serialise it as if it's a slice
         try bincode.write(writer, @as(u64, read_handle.len()), params);
 
@@ -1135,12 +1135,12 @@ pub const AccountDataHandle = union(enum) {
         alloc: std.mem.Allocator,
         reader: anytype,
         params: bincode.Params,
-    ) anyerror!AccountDataHandle {
+    ) !AccountDataHandle {
         const data = try bincode.read(alloc, []u8, reader, params);
         return AccountDataHandle.initAllocatedOwned(data);
     }
 
-    fn bincodeFree(allocator: std.mem.Allocator, read_handle: anytype) void {
+    fn bincodeFree(allocator: std.mem.Allocator, read_handle: AccountDataHandle) void {
         read_handle.deinit(allocator);
     }
 };
