@@ -24,7 +24,7 @@ pub const ShredVersion = struct {
     pub fn computeShredVersion(genesis_hash: Hash, maybe_hard_forks: ?HardForks) u16 {
         var hash = genesis_hash;
         if (maybe_hard_forks) |hard_forks| {
-            for (hard_forks.forks.items) |*hard_fork| {
+            for (hard_forks.entries.items) |*hard_fork| {
                 hash = Hash.extendAndHash(
                     hash,
                     std.mem.asBytes(hard_fork),

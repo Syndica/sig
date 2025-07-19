@@ -1,3 +1,5 @@
+const builtin = @import("builtin");
+const std = @import("std");
 const sig = @import("../../sig.zig");
 
 const Hash = sig.core.Hash;
@@ -46,4 +48,19 @@ pub const EpochRewards = extern struct {
         .distributed_rewards = 0,
         .active = false,
     };
+
+    pub const STORAGE_SIZE: u64 = @sizeOf(EpochRewards);
+
+    pub fn initRandom(random: std.Random) EpochRewards {
+        if (!builtin.is_test) @compileError("only for testing");
+        return .{
+            .distribution_starting_block_height = random.int(u64),
+            .num_partitions = random.int(u64),
+            .parent_blockhash = Hash.initRandom(random),
+            .total_points = random.int(u128),
+            .total_rewards = random.int(u64),
+            .distributed_rewards = random.int(u64),
+            .active = random.boolean(),
+        };
+    }
 };
