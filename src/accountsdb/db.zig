@@ -790,7 +790,7 @@ pub const AccountsDB = struct {
             // index the account file
             var slot_references = AccountIndex.SlotRefMapValue{
                 .global_index = ref_global_index,
-                .refs = std.ArrayListUnmanaged(AccountRef).initBuffer(references_buf),
+                .refs = .initBuffer(references_buf),
             };
 
             indexAndValidateAccountFile(
@@ -1933,14 +1933,13 @@ pub const AccountsDB = struct {
         }
 
         if (self.geyser_writer) |geyser_writer| {
-            const data_versioned = sig.geyser.core.VersionedAccountPayload{
+            try geyser_writer.writePayloadToPipe(.{
                 .AccountPayloadV1 = .{
                     .accounts = &.{duplicated},
                     .pubkeys = &.{pubkey},
                     .slot = slot,
                 },
-            };
-            try geyser_writer.writePayloadToPipe(data_versioned);
+            });
         }
 
         {
@@ -1963,11 +1962,10 @@ pub const AccountsDB = struct {
             const ref = slotListMaxWithinBounds(head_ref.ref_ptr, min_slot, slot) orelse
                 break :search_and_overwrite;
 
-            if (ref.location != .UnrootedMap) {
-                return error.CannotWriteRootedSlot;
-            }
-
-            const index = ref.location.UnrootedMap.index;
+            const index = switch (ref.location) {
+                .UnrootedMap => |location| location.index,
+                else => return error.CannotWriteRootedSlot,
+            };
 
             const unrooted_accounts, var unrooted_lock = self.unrooted_accounts.readWithLock();
             defer unrooted_lock.unlock();
@@ -1991,7 +1989,7 @@ pub const AccountsDB = struct {
 
             const entry = try unrooted_accounts.getOrPut(slot);
 
-            if (!entry.found_existing) entry.value_ptr.* = .{};
+            if (!entry.found_existing) entry.value_ptr.* = .empty;
             try entry.value_ptr.append(
                 self.allocator,
                 .{ .account = duplicated, .pubkey = pubkey },
@@ -2207,7 +2205,7 @@ pub const AccountsDB = struct {
             defer unrooted_accounts_lg.unlock();
 
             const entry = try unrooted_accounts.getOrPut(slot);
-            if (!entry.found_existing) entry.value_ptr.* = .{};
+            if (!entry.found_existing) entry.value_ptr.* = .empty;
             try entry.value_ptr.ensureUnusedCapacity(self.allocator, pubkeys.len);
             for (pubkeys, accounts_duped) |pubkey, account| {
                 entry.value_ptr.appendAssumeCapacity(.{ .account = account, .pubkey = pubkey });
@@ -3498,7 +3496,7 @@ test "write and read an account (write single + read with ancestors)" {
         var data_2 = [_]u8{ 0, 1, 0, 1 };
 
         const test_account_2 = Account{
-            .data = AccountDataHandle.initAllocated(&data_2),
+            .data = .initAllocated(&data_2),
             .executable = true,
             .lamports = 1000,
             .owner = Pubkey.ZEROES,
@@ -4548,7 +4546,7 @@ test "insert multiple accounts on multiple slots" {
         try ancestors.ancestors.put(allocator, slot, {});
 
         const pubkey = Pubkey.initRandom(random);
-        errdefer std.debug.print(
+        errdefer std.log.err(
             "Failed to insert and load account: i={}, slot={}, ancestors={any} pubkey={}\n",
             .{ i, slot, ancestors.ancestors.keys(), pubkey },
         );
@@ -4591,7 +4589,7 @@ test "insert account on multiple slots" {
             defer ancestors.deinit(allocator);
             try ancestors.ancestors.put(allocator, slot, {});
 
-            errdefer std.debug.print(
+            errdefer std.log.err(
                 \\Failed to insert and load account: i={}
                 \\    j:         {}/{}
                 \\    slot:      {}
@@ -4700,7 +4698,7 @@ test "insert many duplicate individual accounts, get latest with ancestors" {
     var expected_latest: [pubkey_count]?struct {
         slot: Slot,
         account: sig.runtime.AccountSharedData,
-    } = .{null} ** pubkey_count;
+    } = @splat(null);
 
     for (0..pubkey_count) |i| {
         const pubkey = pubkeys[i];
