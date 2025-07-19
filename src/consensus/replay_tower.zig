@@ -1313,7 +1313,7 @@ pub const ReplayTower = struct {
 
         // Check leader slot propagation
         const propagation_confirmed = is_leader_slot or
-            (try progress.getLeaderPropagationSlotMustExist(candidate_vote_bank_slot))[0];
+            progress.leaderSlotIsPropagated(candidate_vote_bank_slot) orelse true;
         if (!propagation_confirmed) {
             try failure_reasons.append(allocator, .{ .NoPropagatedConfirmation = .{
                 .slot = candidate_vote_bank_slot,

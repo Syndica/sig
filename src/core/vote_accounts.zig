@@ -341,12 +341,12 @@ pub const VoteAccount = struct {
 
         const account = try createVoteAccount(
             allocator,
-            node_pubkey orelse Pubkey.initRandom(random),
-            Pubkey.initRandom(random),
-            Pubkey.initRandom(random),
+            node_pubkey orelse .initRandom(random),
+            .initRandom(random),
+            .initRandom(random),
             random.int(u8),
             random.intRangeAtMost(u64, 1, 1_000_000),
-            Clock.initRandom(random),
+            .initRandom(random),
         );
 
         return VoteAccount.fromAccountSharedData(
