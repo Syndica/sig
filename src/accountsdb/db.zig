@@ -2017,12 +2017,16 @@ pub const AccountsDB = struct {
         defer lock.unlock();
 
         const slot_entry = try slot_ref_map.getOrPut(slot);
-        if (!slot_entry.found_existing) slot_entry.value_ptr.* = .{
-            .refs = .{},
-            .global_index = undefined,
-        };
 
+        if (!slot_entry.found_existing) {
+            // no entry means realloc always needed, value set in realloc_needed block
+            slot_entry.value_ptr.* = .{
+                .refs = .empty,
+                .global_index = std.math.maxInt(u64), // u64-max == invalid value / replaced soon
+            };
+        }
         const realloc_needed = slot_entry.value_ptr.refs.unusedCapacitySlice().len < pubkeys.len;
+        if (!slot_entry.found_existing) std.debug.assert(realloc_needed);
 
         const old_refs = slot_entry.value_ptr.refs.items;
         const new_len = old_refs.len + pubkeys.len;
@@ -2125,6 +2129,9 @@ pub const AccountsDB = struct {
             };
         } else {
             // no realloc necessary
+
+            // guard against invalid slot entry
+            std.debug.assert(slot_entry.value_ptr.global_index != std.math.maxInt(u64));
 
             slot_entry.value_ptr.refs.items.len = new_len;
 
