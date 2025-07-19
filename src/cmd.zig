@@ -1224,7 +1224,7 @@ fn validator(
             sig.replay.service.run,
             .{sig.replay.service.ReplayDependencies{
                 .allocator = allocator,
-                .logger = app_base.logger.unscoped(),
+                .logger = .from(app_base.logger),
                 .my_identity = .fromPublicKey(&app_base.my_keypair.public_key),
                 .vote_identity = .fromPublicKey(&app_base.my_keypair.public_key), // TODO: is this fine, or do we need a separate identity for the vote account?
                 .exit = app_base.exit,

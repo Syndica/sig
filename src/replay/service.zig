@@ -45,7 +45,7 @@ pub const Logger = sig.trace.ScopedLogger("replay");
 pub const ReplayDependencies = struct {
     /// Used for all allocations within the replay stage
     allocator: Allocator,
-    logger: sig.trace.Logger,
+    logger: Logger,
     my_identity: Pubkey,
     vote_identity: Pubkey,
     /// Tell replay when to exit
@@ -318,18 +318,20 @@ const ReplayState = struct {
             .state = deps.root.state,
         });
         errdefer slot_tracker.deinit(allocator);
-        const root_slot_ref = slot_tracker.get(deps.root.slot).?;
 
-        // TODO: need to initialize progress and fork_choice properly:
-        // both initialized inside replay, outside the mainloop, at the same time
-        // using [`initialize_progress_and_fork_choice_with_locked_bank_forks`](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/replay_stage.rs#L637)
-        const progress: ProgressMap = .INIT;
+        var epoch_tracker: EpochTracker = .{ .schedule = deps.epoch_schedule };
+        errdefer epoch_tracker.deinit(allocator);
+
+        const progress, const fork_choice = try initProgressAndForkChoiceWithLockedSlotForks(
+            allocator,
+            deps.logger,
+            &slot_tracker,
+            &epoch_tracker,
+            deps.my_identity,
+            deps.vote_identity,
+            deps.ledger.reader.*,
+        );
         errdefer progress.deinit(allocator);
-
-        const fork_choice: HeaviestSubtreeForkChoice = try .init(allocator, deps.logger, .{
-            .slot = deps.root.slot,
-            .hash = root_slot_ref.state.hash.readCopy().?,
-        });
         errdefer fork_choice.deinit();
 
         // TODO(ink): in agave replay_tower isn't created directly in replay,
@@ -344,7 +346,7 @@ const ReplayState = struct {
         //     - replay_config to [ReplayStage](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/replay_stage.rs#L563)
         const replay_tower: sig.consensus.ReplayTower = try .init(
             allocator,
-            deps.logger,
+            .from(deps.logger),
             deps.my_identity,
             deps.vote_identity,
             deps.root.slot,
@@ -364,7 +366,7 @@ const ReplayState = struct {
             .thread_pool = .init(.{ .max_threads = NUM_THREADS }),
 
             .slot_tracker = slot_tracker,
-            .epochs = .{ .schedule = deps.epoch_schedule },
+            .epochs = epoch_tracker,
 
             .progress = progress,
             .fork_choice = fork_choice,
@@ -395,6 +397,105 @@ const ReplayState = struct {
         };
     }
 };
+
+/// Analogous to [`initialize_progress_and_fork_choice_with_locked_bank_forks`](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/replay_stage.rs#L637)
+fn initProgressAndForkChoiceWithLockedSlotForks(
+    allocator: std.mem.Allocator,
+    logger: Logger,
+    slot_tracker: *const SlotTracker,
+    epoch_tracker: *const EpochTracker,
+    my_pubkey: Pubkey,
+    vote_account: Pubkey,
+    blockstore: BlockstoreReader,
+) !struct { ProgressMap, HeaviestSubtreeForkChoice } {
+    const root_slot, const root_hash = blk: {
+        const root = slot_tracker.getRoot();
+        const root_slot = slot_tracker.root;
+        const root_hash = root.state.hash.readCopy();
+        break :blk .{ root_slot, root_hash.? };
+    };
+
+    var frozen_slots = try slot_tracker.frozenSlots(allocator);
+    defer frozen_slots.deinit(allocator);
+    const FrozenSlotsSortCtx = struct {
+        slots: []const Slot,
+        pub fn lessThan(ctx: @This(), a_index: usize, b_index: usize) bool {
+            return ctx.slots[a_index] < ctx.slots[b_index];
+        }
+    };
+    frozen_slots.sort(FrozenSlotsSortCtx{ .slots = frozen_slots.keys() });
+
+    var progress: ProgressMap = .INIT;
+    errdefer progress.deinit(allocator);
+
+    // Initialize progress map with any root slots
+    for (frozen_slots.keys(), frozen_slots.values()) |slot, ref| {
+        const prev_leader_slot = progress.getSlotPrevLeaderSlot(ref.constants.parent_slot);
+        try progress.map.ensureUnusedCapacity(allocator, 1);
+        progress.map.putAssumeCapacity(slot, try .initFromInfo(allocator, .{
+            .slot_info = ref,
+            .epoch_stakes = &epoch_tracker.getPtrForSlot(slot).?.stakes,
+            .now = .now(),
+            .validator_identity = &my_pubkey,
+            .validator_vote_pubkey = &vote_account,
+            .prev_leader_slot = prev_leader_slot,
+            .num_blocks_on_fork = 0,
+            .num_dropped_blocks_on_fork = 0,
+        }));
+    }
+
+    // Given a root and a list of `frozen_slots` sorted smallest to greatest by slot,
+    // initialize a new HeaviestSubtreeForkChoice
+    //
+    // Analogous to [`new_from_frozen_banks`](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/consensus/heaviest_subtree_fork_choice.rs#L235)
+    var heaviest_subtree_fork_choice = fork_choice: {
+        var heaviest_subtree_fork_choice: HeaviestSubtreeForkChoice =
+            try .init(allocator, logger.unscoped(), .{
+                .slot = root_slot,
+                .hash = root_hash,
+            });
+
+        var prev_slot = root_slot;
+        for (frozen_slots.keys(), frozen_slots.values()) |slot, info| {
+            const frozen_hash = info.state.hash.readCopy().?;
+            if (slot > root_slot) {
+                // Make sure the list is sorted
+                std.debug.assert(slot > prev_slot);
+                prev_slot = slot;
+                const parent_bank_hash = info.constants.parent_hash;
+                try heaviest_subtree_fork_choice.addNewLeafSlot(
+                    .{ .slot = slot, .hash = frozen_hash },
+                    .{ .slot = info.constants.parent_slot, .hash = parent_bank_hash },
+                );
+            }
+        }
+
+        break :fork_choice heaviest_subtree_fork_choice;
+    };
+    errdefer heaviest_subtree_fork_choice.deinit();
+
+    var duplicate_slots = try blockstore.db.iterator(
+        sig.ledger.schema.schema.duplicate_slots,
+        .forward,
+        // It is important that the root bank is not marked as duplicate on initialization.
+        // Although this bank could contain a duplicate proof, the fact that it was rooted
+        // either during a previous run or artificially means that we should ignore any
+        // duplicate proofs for the root slot, thus we start consuming duplicate proofs
+        // from the root slot + 1
+        root_slot +| 1,
+    );
+    defer duplicate_slots.deinit();
+
+    while (try duplicate_slots.nextKey()) |slot| {
+        const ref = slot_tracker.get(slot) orelse continue;
+        try heaviest_subtree_fork_choice.markForkInvalidCandidate(&.{
+            .slot = slot,
+            .hash = ref.state.hash.readCopy().?,
+        });
+    }
+
+    return .{ progress, heaviest_subtree_fork_choice };
+}
 
 /// Run the replay service indefinitely.
 pub fn run(deps: ReplayDependencies) !void {
