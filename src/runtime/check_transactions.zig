@@ -2,7 +2,7 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 
 const Hash = sig.core.Hash;
-const Ancestors = sig.core.status_cache.Ancestors;
+const Ancestors = sig.core.Ancestors;
 const BlockhashQueue = sig.core.bank.BlockhashQueue;
 const Pubkey = sig.core.Pubkey;
 const RentCollector = sig.core.rent_collector.RentCollector;

@@ -26,8 +26,15 @@ pub const AccountRef = struct {
     // NOTE: next_index is kept in sync to point to the same data as next_ptr.
     next_index: ?u64 = null,
 
+    // NOTE: used purely so that we can realloc slices of AccountRefs and fix up the next(ptr+index).
+    // this isn't serialised - it is inferred from next_index.
+    prev_ptr: ?*AccountRef = null,
+
     // we dont want recursion in bincode
     pub const @"!bincode-config:next_ptr" = sig.bincode.FieldConfig(?*AccountRef){
+        .skip = true,
+    };
+    pub const @"!bincode-config:prev_ptr" = sig.bincode.FieldConfig(?*AccountRef){
         .skip = true,
     };
 
@@ -72,7 +79,13 @@ pub const AccountIndex = struct {
         .{},
     ),
 
-    pub const SlotRefMap = std.AutoHashMap(Slot, []AccountRef);
+    pub const SlotRefMapValue = struct {
+        refs: std.ArrayListUnmanaged(AccountRef),
+        global_index: u64,
+    };
+
+    // NOTE: this arraylist's memory is managed by the ReferenceManger - cannot use the allocator interface
+    pub const SlotRefMap = std.AutoHashMap(Slot, SlotRefMapValue);
     pub const AllocatorConfig = union(Tag) {
         pub const Tag = ReferenceAllocator.Tag;
         ram: struct { allocator: std.mem.Allocator },
@@ -262,17 +275,22 @@ pub const AccountIndex = struct {
 
     /// adds the reference to the index if there is not a duplicate (ie, the same slot).
     /// returns if the reference was inserted.
-    pub fn indexRefIfNotDuplicateSlotAssumeCapacity(
+    pub fn indexRefIfNotDuplicateSlot(
         self: *Self,
         account_ref: *AccountRef,
         index: u64,
-    ) bool {
+    ) std.mem.Allocator.Error!bool {
         // NOTE: the lock on the shard also locks the reference map
         const shard_map, var shard_map_lg =
             self.pubkey_ref_map.getShard(&account_ref.pubkey).writeWithLock();
         defer shard_map_lg.unlock();
 
-        // init value if dne or append to end of the linked-list
+        if (shard_map.capacity() < shard_map.count() + 1) {
+            // caller is generally expected to ensure capacity first
+            self.logger.info().log("index: shard growing unexpectedly");
+            try shard_map.ensureTotalCapacity(shard_map.capacity() + 1);
+        }
+
         const map_entry = shard_map.getOrPutAssumeCapacity(account_ref.pubkey);
         if (!map_entry.found_existing) {
             map_entry.value_ptr.* = .{ .ref_ptr = account_ref, .ref_index = index };
@@ -288,6 +306,7 @@ pub const AccountIndex = struct {
             }
             const next_ptr = curr_ref.next_ptr orelse {
                 // end of the list => insert it here
+                account_ref.prev_ptr = curr_ref;
                 curr_ref.next_ptr = account_ref;
                 curr_ref.next_index = index;
                 return true;
@@ -319,6 +338,7 @@ pub const AccountIndex = struct {
             curr_ref = next_ref;
         }
 
+        account_ref.prev_ptr = curr_ref;
         curr_ref.next_ptr = account_ref;
         curr_ref.next_index = index;
     }
@@ -426,9 +446,10 @@ pub const AccountIndex = struct {
         // update the pointers of the references
         self.logger.info().log("organizing manager memory");
         for (references) |*ref| {
-            if (ref.next_index != null) {
-                ref.next_ptr = &references[ref.next_index.?];
-            }
+            const next_index = ref.next_index orelse continue;
+
+            ref.next_ptr = &references[next_index];
+            references[next_index].prev_ptr = ref;
         }
 
         // load the records
