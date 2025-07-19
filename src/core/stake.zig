@@ -659,7 +659,6 @@ pub const VoteAccounts = struct {
         return &self.staked_nodes.?;
     }
 
-    /// NOTE: in the original agave code, this method returns 0 instead of null.
     pub fn getDelegatedStake(self: VoteAccounts, pubkey: Pubkey) u64 {
         const stake, _ = self.accounts.get(pubkey) orelse return 0;
         return stake;
