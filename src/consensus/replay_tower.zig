@@ -38,8 +38,6 @@ const LockoutIntervals = sig.consensus.progress_map.LockoutIntervals;
 
 const stateFromAccount = sig.consensus.tower.stateFromAccount;
 
-const stateFromAccount = sig.consensus.tower.stateFromAccount;
-
 const Stake = u64;
 
 const MAX_LOCKOUT_HISTORY = sig.consensus.tower.MAX_LOCKOUT_HISTORY;
@@ -55,13 +53,6 @@ pub const DUPLICATE_THRESHOLD: f64 = 1.0 - SWITCH_FORK_THRESHOLD - DUPLICATE_LIV
 pub const VOTE_THRESHOLD_SIZE: f64 = 2.0 / 3.0;
 pub const ExpirationSlot = Slot;
 const VotedSlotAndPubkey = struct { slot: Slot, pubkey: Pubkey };
-
-/// TODO Should be improved.
-const HashThatShouldBeMadeBTreeMap = std.AutoArrayHashMapUnmanaged(
-    ExpirationSlot,
-    std.ArrayList(VotedSlotAndPubkey),
-);
-pub const LockoutIntervals = HashThatShouldBeMadeBTreeMap;
 
 const ComputedBankState = struct {
     /// Maps each validator (by their Pubkey) to the amount of stake they have voted
@@ -1632,7 +1623,7 @@ pub fn collectVoteLockouts(
 
     // Tree of intervals of lockouts of the form [slot, slot + slot.lockout],
     // keyed by end of the range
-    var lockout_intervals = LockoutIntervals.empty;
+    var lockout_intervals = LockoutIntervals.EMPTY;
     errdefer lockout_intervals.deinit(allocator);
 
     var my_latest_landed_vote: ?Slot = null;
@@ -1656,12 +1647,12 @@ pub fn collectVoteLockouts(
         );
 
         for (vote_state.votes.constSlice()) |vote| {
-            const interval = try lockout_intervals
+            const interval = try lockout_intervals.map
                 .getOrPut(allocator, vote.lastLockedOutSlot());
             if (!interval.found_existing) {
-                interval.value_ptr.* = std.ArrayList(VotedSlotAndPubkey).init(allocator);
+                interval.value_ptr.* = LockoutIntervals.EntryList.empty;
             }
-            try interval.value_ptr.*.append(.{ .slot = vote.slot, .pubkey = key });
+            try interval.value_ptr.*.append(allocator, .{ vote.slot, key });
         }
 
         // Vote account for this validator
