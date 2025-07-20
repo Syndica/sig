@@ -3721,7 +3721,7 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
         .{ hash4, hash3 },
     });
 
-    try fixture.fill_fork(allocator, .{ .root = root, .data = trees1 }, .active);
+    try fixture.fill_fork(allocator, .{ .root = root, .data = trees1 }, false);
     try fixture.fill_epoch_stake_random(allocator, random);
 
     var tmp_dir_root = std.testing.tmpDir(.{});
@@ -3867,7 +3867,7 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
         .{ hash10, hash6 },
     });
 
-    try fixture.fill_fork(allocator, .{ .root = hash5, .data = trees }, .active);
+    try fixture.fill_fork(allocator, .{ .root = hash5, .data = trees }, false);
 
     var ancestors2: AutoArrayHashMapUnmanaged(u64, SortedSet(u64)) = .{};
     defer ancestors2.deinit(allocator);
@@ -4207,19 +4207,17 @@ pub const TestFixture = struct {
         self: *TestFixture,
         allocator: std.mem.Allocator,
         input_tree: Tree,
-        frozen_state: enum { frozen, active },
+        is_frozen: bool,
     ) !void {
         // Add root to progress map.
-        {
-            try self.progress.map.ensureUnusedCapacity(allocator, 1);
-            const prev_root = self.progress.map.fetchPutAssumeCapacity(input_tree.root.slot, fp: {
-                var root_fp = try ForkProgress.zeroes(allocator);
-                root_fp.fork_stats.computed = true;
-                root_fp.fork_stats.my_latest_landed_vote = null;
-                break :fp root_fp;
-            });
-            if (prev_root) |kv| kv.value.deinit(allocator);
-        }
+        var root_fp = try ForkProgress.zeroes(allocator);
+        root_fp.fork_stats.computed = true;
+        root_fp.fork_stats.my_latest_landed_vote = null;
+        try self.progress.map.putNoClobber(
+            allocator,
+            input_tree.root.slot,
+            root_fp,
+        );
         // TODO check that root fork exist already and it is being extended
         for (input_tree.data.constSlice()) |tree| {
             const parent_slot = blk: {
@@ -4230,40 +4228,40 @@ pub const TestFixture = struct {
                 const p = tree[1] orelse break :blk Hash.ZEROES;
                 break :blk p.hash;
             };
-
-            {
-                var constants = try sig.core.SlotConstants.genesis(allocator, .DEFAULT);
-                errdefer constants.deinit(allocator);
-
-                var state = sig.core.SlotState.GENESIS;
-                errdefer state.deinit(allocator);
-
-                constants.parent_slot = parent_slot;
-                constants.parent_hash = parent_hash;
-                constants.block_height = tree[0].slot + 1;
-                state.hash = .init(tree[0].hash);
-
-                try self.slot_tracker.put(
-                    allocator,
-                    tree[0].slot,
-                    .{ .constants = constants, .state = state },
-                );
-            }
-
+            const element: SlotTracker.Element = .{
+                .constants = .{
+                    .parent_slot = parent_slot,
+                    .parent_hash = parent_hash,
+                    .block_height = tree[0].slot + 1,
+                    .collector_id = Pubkey.ZEROES,
+                    .max_tick_height = 100,
+                    .fee_rate_governor = .DEFAULT,
+                    .epoch_reward_status = .inactive,
+                },
+                .state = .{
+                    .blockhash_queue = .init(.DEFAULT),
+                    .hash = .init(null),
+                    .capitalization = .init(100),
+                    .transaction_count = .init(100),
+                    .signature_count = .init(100),
+                    .tick_height = .init(100),
+                    .collected_rent = .init(100),
+                    .accounts_lt_hash = .init(.{ .data = @splat(100) }),
+                },
+            };
+            try self.slot_tracker.put(allocator, tree[0].slot, element);
             // Populate forkchoice
             try self.fork_choice.addNewLeafSlot(tree[0], tree[1]);
             // Populate progress map
-            {
-                try self.progress.map.ensureUnusedCapacity(allocator, 1);
-                const prev_root = self.progress.map.fetchPutAssumeCapacity(tree[0].slot, fp: {
-                    var root_fp = try ForkProgress.zeroes(allocator);
-                    root_fp.fork_stats.computed = false;
-                    root_fp.fork_stats.my_latest_landed_vote = null;
-                    break :fp root_fp;
-                });
-                if (prev_root) |kv| kv.value.deinit(allocator);
-            }
-            if (frozen_state == .frozen) {
+            var fp = try ForkProgress.zeroes(allocator);
+            fp.fork_stats.computed = true;
+            fp.fork_stats.my_latest_landed_vote = null;
+            try self.progress.map.putNoClobber(
+                allocator,
+                tree[0].slot,
+                fp,
+            );
+            if (is_frozen) {
                 // new_bank.freeze();
                 const new_slot = self.slot_tracker.get(parent_slot) orelse continue;
                 new_slot.state.hash = .init(parent_hash);

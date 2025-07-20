@@ -632,7 +632,7 @@ test "maybeRefreshLastVote - latest landed vote newer than last vote" {
     try fixture.fill_fork(
         testing.allocator,
         .{ .root = root, .data = trees1 },
-        .active,
+        false,
     );
 
     // Update fork stat
@@ -710,7 +710,7 @@ test "maybeRefreshLastVote - non voting validator" {
     try fixture.fill_fork(
         testing.allocator,
         .{ .root = root, .data = trees1 },
-        .active,
+        false,
     );
 
     // Update fork stat
@@ -790,7 +790,7 @@ test "maybeRefreshLastVote - hotspare validator" {
     try fixture.fill_fork(
         testing.allocator,
         .{ .root = root, .data = trees1 },
-        .active,
+        false,
     );
 
     // Update fork stat
@@ -870,7 +870,7 @@ test "maybeRefreshLastVote - refresh interval not elapsed" {
     try fixture.fill_fork(
         testing.allocator,
         .{ .root = root, .data = trees1 },
-        .active,
+        false,
     );
 
     // Update fork stat
@@ -953,7 +953,7 @@ test "maybeRefreshLastVote - successfully refreshed and mark last_vote_tx_blockh
     try fixture.fill_fork(
         testing.allocator,
         .{ .root = root, .data = trees1 },
-        .active,
+        false,
     );
 
     // Update fork stat
@@ -1229,7 +1229,7 @@ test "checkAndHandleNewRoot - success" {
     try fixture.fill_fork(
         testing.allocator,
         .{ .root = root, .data = trees1 },
-        .active,
+        false,
     );
 
     var db = try TestDB.init(@src());
