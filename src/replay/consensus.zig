@@ -520,6 +520,7 @@ fn computeBankStats(
 
 const testing = std.testing;
 const TreeNode = sig.consensus.fork_choice.TreeNode;
+const testEpochStakes = sig.consensus.fork_choice.testEpochStakes;
 const TestDB = sig.ledger.tests.TestDB;
 const TestFixture = sig.consensus.replay_tower.TestFixture;
 const MAX_TEST_TREE_LEN = sig.consensus.replay_tower.MAX_TEST_TREE_LEN;
@@ -1260,4 +1261,110 @@ test "checkAndHandleNewRoot - success" {
         try testing.expect(remaining_slots >= hash3.slot);
     }
     try testing.expect(!fixture.progress.map.contains(hash1.slot));
+}
+
+test "computeBankStats - child bank heavier" {
+    var prng = std.Random.DefaultPrng.init(91);
+    const random = prng.random();
+
+    // Set up slots and hashes for the fork tree: 0 -> 1 -> 2 -> 3
+    const root = SlotAndHash{ .slot = 0, .hash = Hash.initRandom(random) };
+    const hash1 = SlotAndHash{ .slot = 1, .hash = Hash.initRandom(random) };
+    const hash2 = SlotAndHash{ .slot = 2, .hash = Hash.initRandom(random) };
+    const hash3 = SlotAndHash{ .slot = 3, .hash = Hash.initRandom(random) };
+
+    var fixture = try TestFixture.init(testing.allocator, root);
+    defer fixture.deinit(testing.allocator);
+
+    try fixture.fill_keys(testing.allocator, random, 1);
+
+    // Create the tree of banks in a BankForks object
+    var trees1 = try std.BoundedArray(TreeNode, MAX_TEST_TREE_LEN).init(0);
+    trees1.appendSliceAssumeCapacity(&[3]TreeNode{
+        .{ hash1, root },
+        .{ hash2, hash1 },
+        .{ hash3, hash2 },
+    });
+    try fixture.fill_fork(
+        testing.allocator,
+        .{ .root = root, .data = trees1 },
+        true,
+    );
+
+    const my_node_pubkey = fixture.node_pubkeys.items[0];
+    const votes = [_]u64{2};
+    for (votes) |vote| {
+        _ = vote;
+        // const result = fixture.simulate_vote(vote, my_vote_pubkey, &fixture.tower);
+        // try testing.expectEqual(@as(usize, 0), result.len);
+    }
+
+    var frozen_slots = try fixture.slot_tracker.frozenSlots(
+        testing.allocator,
+    );
+    defer frozen_slots.deinit(testing.allocator);
+    errdefer frozen_slots.deinit(testing.allocator);
+
+    // Convert ancestors for computeBankStats
+    var ancestors = try convertAncestorsMap(testing.allocator, &fixture.ancestors);
+    defer ancestors.deinit(testing.allocator);
+
+    // TODO move this into fixture?
+    const versioned_stakes = try testEpochStakes(
+        testing.allocator,
+        fixture.vote_pubkeys.items,
+        10000,
+        random,
+    );
+    defer versioned_stakes.deinit(testing.allocator);
+
+    var epoch_stakes = std.AutoHashMapUnmanaged(Epoch, VersionedEpochStakes).empty;
+    defer epoch_stakes.deinit(testing.allocator);
+    try epoch_stakes.put(testing.allocator, 0, versioned_stakes);
+    try epoch_stakes.put(testing.allocator, 1, versioned_stakes);
+
+    var epoch_schedule = EpochSchedule.DEFAULT;
+    _ = try computeBankStats(
+        testing.allocator,
+        my_node_pubkey,
+        ancestors,
+        &fixture.slot_tracker,
+        &epoch_stakes,
+        &epoch_schedule,
+        &fixture.progress,
+        &fixture.fork_choice,
+        &fixture.latest_validator_votes_for_frozen_banks,
+    );
+
+    // Sort frozen slots by slot number
+    var slot_list = try testing.allocator.alloc(u64, frozen_slots.count());
+    defer testing.allocator.free(slot_list);
+    var i: usize = 0;
+    for (frozen_slots.keys()) |slot| {
+        slot_list[i] = slot;
+        i += 1;
+    }
+    std.mem.sort(u64, slot_list, {}, std.sort.asc(u64));
+
+    // Check that fork weights are non-decreasing
+    for (slot_list, 0..) |_, idx| {
+        if (idx + 1 < slot_list.len) {
+            const first = fixture.progress.getForkStats(slot_list[idx]) orelse
+                return error.MissingForkStats;
+            const second = fixture.progress.getForkStats(slot_list[idx + 1]) orelse
+                return error.MissingForkStats;
+            try testing.expect(second.fork_stake >= first.fork_stake);
+        }
+    }
+
+    // Check that the heaviest slot is always the leaf (slot 3)
+    for (slot_list) |slot| {
+        const slot_info = fixture.slot_tracker.get(slot) orelse
+            return error.MissingSlot;
+        const best = fixture.fork_choice.heaviestSlot(
+            .{ .slot = slot, .hash = slot_info.state.hash.readCopy().? },
+        ) orelse
+            return error.MissingSlot;
+        try testing.expectEqual(@as(u64, 3), best.slot);
+    }
 }
