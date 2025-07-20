@@ -5016,7 +5016,7 @@ fn isUpdateOpsEqual(expected: *UpdateOperations, actual: *UpdateOperations) !boo
     return true;
 }
 
-fn testEpochStakes(
+pub fn testEpochStakes(
     allocator: std.mem.Allocator,
     pubkeys: []const Pubkey,
     stake: u64,
