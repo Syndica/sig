@@ -4104,31 +4104,63 @@ fn fillProgressMapForkStats(
 }
 
 pub const MAX_TEST_TREE_LEN = 100;
+const SlotTracker = sig.replay.trackers.SlotTracker;
 const Tree = struct { root: SlotAndHash, data: std.BoundedArray(TreeNode, MAX_TEST_TREE_LEN) };
 pub const TestFixture = struct {
+    slot_tracker: SlotTracker,
     fork_choice: HeaviestSubtreeForkChoice,
     ancestors: AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)) = .{},
     descendants: AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)) = .{},
     progress: ProgressMap = ProgressMap.INIT,
     epoch_stake_map: EpochStakesMap,
+    versioned_epoch_stake_map: EpochStakesMap,
     node_pubkeys: std.ArrayListUnmanaged(Pubkey),
     vote_pubkeys: std.ArrayListUnmanaged(Pubkey),
+    latest_validator_votes_for_frozen_banks: LatestValidatorVotesForFrozenBanks,
 
     pub fn init(
         allocator: std.mem.Allocator,
         root: SlotAndHash,
     ) !TestFixture {
+        const element: SlotTracker.Element = .{
+            .constants = .{
+                .parent_slot = root.slot,
+                .parent_hash = root.hash,
+                .block_height = 0,
+                .collector_id = Pubkey.ZEROES,
+                .max_tick_height = 100,
+                .fee_rate_governor = .DEFAULT,
+                .epoch_reward_status = .inactive,
+            },
+            .state = .{
+                .blockhash_queue = .init(.DEFAULT),
+                .hash = .init(root.hash),
+                .capitalization = .init(100),
+                .transaction_count = .init(100),
+                .signature_count = .init(100),
+                .tick_height = .init(100),
+                .collected_rent = .init(100),
+                .accounts_lt_hash = .init(.{ .data = @splat(100) }),
+            },
+        };
+
         return .{
+            .slot_tracker = try SlotTracker.init(allocator, root.slot, element),
             .fork_choice = try HeaviestSubtreeForkChoice.init(allocator, .noop, root),
             .epoch_stake_map = .{},
             .node_pubkeys = .empty,
             .vote_pubkeys = .empty,
+            .versioned_epoch_stake_map = .empty,
+            .latest_validator_votes_for_frozen_banks = .empty,
         };
     }
 
     pub fn deinit(self: *TestFixture, allocator: std.mem.Allocator) void {
         self.fork_choice.deinit();
         self.progress.deinit(allocator);
+        self.slot_tracker.deinit(allocator);
+        self.node_pubkeys.deinit(allocator);
+        self.vote_pubkeys.deinit(allocator);
 
         {
             var it = self.epoch_stake_map.iterator();
