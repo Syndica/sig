@@ -484,29 +484,31 @@ fn computeBankStats(
     my_vote_pubkey: Pubkey,
     ancestors: std.AutoHashMapUnmanaged(u64, SortedSet(u64)),
     slot_tracker: *SlotTracker,
-    epoch_stakes: *const std.AutoHashMap(Epoch, VersionedEpochStakes),
+    epoch_stakes: *const std.AutoHashMapUnmanaged(Epoch, VersionedEpochStakes),
     epoch_schedule: *const EpochSchedule,
     progress: *ProgressMap,
     fork_choice: *ForkChoice,
     latest_validator_votes: *LatestValidatorVotesForFrozenBanks,
-) []Slot {
+) ![]Slot {
     var new_stats = std.ArrayListUnmanaged(Slot).empty;
     var frozen_slots = try slot_tracker.frozenSlots(allocator);
+    defer frozen_slots.deinit(allocator);
     // TODO agave sorts this by the slot first. Is this needed for the implementation to be correct?
     // If not, then we can avoid sorting here which may be verbose given frozen_slots is a map.
     for (frozen_slots.keys()) |slot| {
         const epoch = epoch_schedule.getEpoch(slot);
         const epoch_stake = epoch_stakes.get(epoch) orelse return error.MissingEpochStake;
         const fork_stat = progress.getForkStats(slot) orelse return error.MissingSlot;
-        if (!fork_stat.is_computed) {
+        if (!fork_stat.computed) {
             // TODO Self::adopt_on_chain_tower_if_behind
             // Gather voting information from all vote accounts to understand the current consensus state.
             const computed_bank_state = try collectVoteLockouts(
                 allocator,
                 .noop,
-                my_vote_pubkey,
-                epoch_stake.current.stakes.vote_accounts,
-                ancestors,
+                &my_vote_pubkey,
+                slot,
+                &epoch_stake.current.stakes.vote_accounts.vote_accounts,
+                &ancestors,
                 progress,
                 latest_validator_votes,
             );
@@ -529,10 +531,10 @@ fn computeBankStats(
             fork_stats.my_latest_landed_vote = computed_bank_state.my_latest_landed_vote;
             fork_stats.computed = true;
 
-            new_stats.append(slot);
+            try new_stats.append(allocator, slot);
         }
     }
-    return try new_stats.toOwnedSlice();
+    return try new_stats.toOwnedSlice(allocator);
 }
 
 const testing = std.testing;
