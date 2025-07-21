@@ -5,6 +5,7 @@ pub const blockhash_queue = @import("blockhash_queue.zig");
 pub const entry = @import("entry.zig");
 pub const epoch_context = @import("epoch_context.zig");
 pub const epoch_schedule = @import("epoch_schedule.zig");
+pub const features = @import("features.zig");
 pub const genesis_config = @import("genesis_config.zig");
 pub const hard_forks = @import("hard_forks.zig");
 pub const hash = @import("hash.zig");
@@ -30,11 +31,13 @@ pub const EpochConstants = bank.EpochConstants;
 pub const EpochContext = epoch_context.EpochContext;
 pub const EpochSchedule = epoch_schedule.EpochSchedule;
 pub const EpochStakes = stake.EpochStakes;
+pub const FeatureSet = features.FeatureSet;
 pub const GenesisConfig = genesis_config.GenesisConfig;
 pub const HardFork = HardForks.HardFork;
 pub const HardForks = hard_forks.HardForks;
 pub const Hash = hash.Hash;
 pub const Instruction = instruction.Instruction;
+pub const LtHash = hash.LtHash;
 pub const Nonce = shred.Nonce;
 pub const Pubkey = pubkey.Pubkey;
 pub const ShredVersion = shred.ShredVersion;
@@ -49,3 +52,5 @@ pub const Slot = time.Slot;
 pub const UnixTimestamp = time.UnixTimestamp;
 
 pub const Cluster = enum { mainnet, testnet, devnet, localnet };
+
+pub const FEATURES = features.FEATURES;

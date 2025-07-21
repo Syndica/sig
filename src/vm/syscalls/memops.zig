@@ -9,7 +9,7 @@ const RegisterMap = sig.vm.interpreter.RegisterMap;
 const Error = syscalls.Error;
 const MemoryMap = sig.vm.memory.MemoryMap;
 const TransactionContext = sig.runtime.transaction_context.TransactionContext;
-const features = sig.runtime.features;
+const features = sig.core.features;
 const SerializedAccountMetadata = sig.runtime.program.bpf.serialize.SerializedAccountMeta;
 
 const MemoryChunkIterator = struct {

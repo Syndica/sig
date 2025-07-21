@@ -23,7 +23,7 @@ const Rent = sig.runtime.sysvar.Rent;
 const Clock = sig.runtime.sysvar.Clock;
 const EpochSchedule = sig.core.EpochSchedule;
 const SlotHashes = sig.runtime.sysvar.SlotHashes;
-const features = sig.runtime.features;
+const features = sig.core.features;
 
 const VoteProgramInstruction = vote_instruction.Instruction;
 

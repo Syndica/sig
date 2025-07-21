@@ -11,7 +11,7 @@ const Hash = sig.core.Hash;
 const Slot = sig.core.Slot;
 const EpochStakes = sig.core.stake.EpochStakes;
 
-const FeatureSet = sig.runtime.FeatureSet;
+const FeatureSet = sig.core.FeatureSet;
 const InstructionInfo = sig.runtime.InstructionInfo;
 const LogCollector = sig.runtime.LogCollector;
 const SysvarCache = sig.runtime.SysvarCache;

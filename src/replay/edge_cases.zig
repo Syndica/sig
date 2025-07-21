@@ -1353,12 +1353,15 @@ const TestData = struct {
             return .{
                 .constants = .{
                     .parent_slot = self.parentSlot(),
+                    .parent_lt_hash = .initRandom(random),
                     .parent_hash = slot_infos[self.parentSlot()].hash,
                     .block_height = random.int(u64),
                     .collector_id = .initRandom(random),
                     .max_tick_height = random.int(u64),
                     .fee_rate_governor = .initRandom(random),
                     .epoch_reward_status = .inactive,
+                    .ancestors = .{ .ancestors = .empty },
+                    .feature_set = .{ .active = .empty },
                 },
                 .state = .{
                     .blockhash_queue = .init(.DEFAULT),
