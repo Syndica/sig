@@ -80,8 +80,9 @@ const ComputedBankState = struct {
 
     pub fn deinit(self: *ComputedBankState, allocator: std.mem.Allocator) void {
         self.voted_stakes.deinit(allocator);
-        for (self.lockout_intervals.values()) |value| {
-            value.deinit();
+        for (self.lockout_intervals.map.values()) |value| {
+            var mut_value = value;
+            mut_value.deinit(allocator);
         }
         self.lockout_intervals.deinit(allocator);
     }
