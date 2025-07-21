@@ -1246,7 +1246,7 @@ test "checkAndHandleNewRoot - success" {
         &max_root,
     );
 
-    try testing.expectEqual(3, fixture.progress.map.count());
+    try testing.expectEqual(4, fixture.progress.map.count());
     try testing.expect(fixture.progress.map.contains(hash1.slot));
     try checkAndHandleNewRoot(
         testing.allocator,
