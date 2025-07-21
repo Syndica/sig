@@ -1703,9 +1703,7 @@ pub fn collectVoteLockouts(
         // a vote for a slot >= bank_slot, so we are guaranteed that the last vote in
         // this vote stack is the simulated vote, so this fetch should be sufficient
         // to find the last unsimulated vote.
-        std.debug.assert(
-            if (vote_state.nthRecentLockout(0)) |l| l.slot == bank_slot else false,
-        );
+        std.debug.assert(vote_state.nthRecentLockout(0).?.slot == bank_slot);
 
         if (vote_state.nthRecentLockout(1)) |vote| {
             // Update all the parents of this last vote with the stake of this vote account
