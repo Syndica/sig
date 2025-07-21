@@ -1388,3 +1388,77 @@ test "computeBankStats - child bank heavier" {
         try testing.expectEqual(@as(u64, 3), best.slot);
     }
 }
+
+test "computeBankStats - same weight selects lower slot" {
+    var prng = std.Random.DefaultPrng.init(42);
+    const random = prng.random();
+
+    // Set up slots and hashes for the fork tree: 0 -> 1, 0 -> 2
+    const root = SlotAndHash{ .slot = 0, .hash = Hash.initRandom(random) };
+    const hash1 = SlotAndHash{ .slot = 1, .hash = Hash.initRandom(random) };
+    const hash2 = SlotAndHash{ .slot = 2, .hash = Hash.initRandom(random) };
+
+    var fixture = try TestFixture.init(testing.allocator, root);
+    defer fixture.deinit(testing.allocator);
+
+    try fixture.fill_keys(testing.allocator, random, 1);
+    const my_vote_pubkey = fixture.vote_pubkeys.items[0];
+
+    // Create the tree: root -> 1, root -> 2
+    var trees1 = try std.BoundedArray(TreeNode, MAX_TEST_TREE_LEN).init(0);
+    trees1.appendSliceAssumeCapacity(&[_]TreeNode{
+        .{ hash1, root },
+        .{ hash2, root },
+    });
+    try fixture.fill_fork(
+        testing.allocator,
+        .{ .root = root, .data = trees1 },
+        true,
+    );
+
+    var ancestors = try convertAncestorsMap(testing.allocator, &fixture.ancestors);
+    defer ancestors.deinit(testing.allocator);
+
+    const versioned_stakes = try testEpochStakes(
+        testing.allocator,
+        fixture.vote_pubkeys.items,
+        10000,
+        random,
+    );
+    defer versioned_stakes.deinit(testing.allocator);
+
+    var epoch_stakes = std.AutoHashMapUnmanaged(Epoch, VersionedEpochStakes).empty;
+    defer epoch_stakes.deinit(testing.allocator);
+    try epoch_stakes.put(testing.allocator, 0, versioned_stakes);
+    try epoch_stakes.put(testing.allocator, 1, versioned_stakes);
+
+    var epoch_schedule = EpochSchedule.DEFAULT;
+    _ = try computeBankStats(
+        testing.allocator,
+        my_vote_pubkey,
+        ancestors,
+        &fixture.slot_tracker,
+        &epoch_stakes,
+        &epoch_schedule,
+        &fixture.progress,
+        &fixture.fork_choice,
+        &fixture.latest_validator_votes_for_frozen_banks,
+    );
+
+    // Check that stake for slot 1 and slot 2 is equal
+    const bank1 = fixture.slot_tracker.get(1).?;
+    const bank2 = fixture.slot_tracker.get(2).?;
+
+    const stake1 = fixture.fork_choice.stakeForSubtree(
+        &.{ .slot = 1, .hash = bank1.state.hash.readCopy().? },
+    ).?;
+    const stake2 = fixture.fork_choice.stakeForSubtree(
+        &.{ .slot = 2, .hash = bank2.state.hash.readCopy().? },
+    ).?;
+    try testing.expectEqual(stake1, stake2);
+
+    // Select the heaviest bank
+    const heaviest = fixture.fork_choice.heaviestOverallSlot();
+    // Should pick the lower of the two equally weighted banks
+    try testing.expectEqual(@as(u64, 1), heaviest.slot);
+}
