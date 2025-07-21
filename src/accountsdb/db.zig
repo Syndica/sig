@@ -279,6 +279,14 @@ pub const AccountsDB = struct {
         }
     }
 
+    pub fn accountReader(self: *AccountsDB) sig.accounts_db.AccountReader {
+        return .{ .accounts_db = self };
+    }
+
+    pub fn accountStore(self: *AccountsDB) sig.accounts_db.AccountStore {
+        return .{ .accounts_db = self };
+    }
+
     /// easier to use load function
     pub fn loadWithDefaults(
         self: *AccountsDB,
@@ -1444,16 +1452,19 @@ pub const AccountsDB = struct {
                         account_hash = switch (account) {
                             .file => |in_file_account| blk: {
                                 var iter = in_file_account.data.iterator();
-                                break :blk sig.core.account.hashAccount(
+                                var hash = Hash.ZEROES;
+                                sig.core.account.hashAccount(
                                     in_file_account.lamports().*,
                                     &iter,
                                     &in_file_account.owner().data,
                                     in_file_account.executable().*,
                                     in_file_account.rent_epoch().*,
                                     &in_file_account.pubkey().data,
+                                    &hash.data,
                                 );
+                                break :blk hash;
                             },
-                            .unrooted_map => |unrooted_account| unrooted_account.hash(&key),
+                            .unrooted_map => |unrooted_account| unrooted_account.hash(Hash, &key),
                         };
                     }
                 }

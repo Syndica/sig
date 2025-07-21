@@ -2,7 +2,7 @@ const std = @import("std");
 const sig = @import("../../../sig.zig");
 
 const vm = sig.vm;
-const features = sig.runtime.features;
+const features = sig.core.features;
 const serialize = sig.runtime.program.bpf.serialize;
 const stable_log = sig.runtime.stable_log;
 
