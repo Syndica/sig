@@ -2,6 +2,8 @@
 const std = @import("std");
 const sig = @import("../../sig.zig");
 
+const Allocator = std.mem.Allocator;
+
 const Slot = sig.core.Slot;
 const Pubkey = sig.core.Pubkey;
 const DynamicArrayBitSet = sig.bloom.bit_set.DynamicArrayBitSet;
@@ -22,8 +24,21 @@ pub const SlotHistory = struct {
     pub const ID =
         Pubkey.parseBase58String("SysvarS1otHistory11111111111111111111111111") catch unreachable;
 
-    pub fn deinit(self: SlotHistory, allocator: std.mem.Allocator) void {
-        sig.bincode.free(allocator, self);
+    pub const STORAGE_SIZE: u64 = 131_097;
+
+    /// Agave initialises new slot history with the first slot set.
+    /// This only impacts gensis when the slot history is not fully populated.
+    pub fn init(allocator: Allocator) Allocator.Error!SlotHistory {
+        var bits = try DynamicArrayBitSet(u64).initEmpty(allocator, MAX_ENTRIES);
+        bits.set(0);
+        return .{
+            .bits = bits,
+            .next_slot = 1,
+        };
+    }
+
+    pub fn deinit(self: SlotHistory, allocator: Allocator) void {
+        self.bits.deinit(allocator);
     }
 
     pub fn add(self: *SlotHistory, slot: u64) void {
@@ -62,5 +77,13 @@ pub const SlotHistory = struct {
 
     pub fn oldest(self: *const SlotHistory) Slot {
         return self.next_slot -| MAX_ENTRIES;
+    }
+
+    pub fn initRandom(allocator: Allocator, random: std.Random) Allocator.Error!SlotHistory {
+        var self = try SlotHistory.init(allocator);
+        for (0..random.intRangeAtMost(u64, 1, MAX_ENTRIES)) |_| {
+            self.add(random.intRangeAtMost(Slot, 0, 1_000));
+        }
+        return self;
     }
 };

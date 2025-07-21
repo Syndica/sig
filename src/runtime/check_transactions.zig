@@ -3,7 +3,7 @@ const sig = @import("../sig.zig");
 
 const Hash = sig.core.Hash;
 const Ancestors = sig.core.Ancestors;
-const BlockhashQueue = sig.core.bank.BlockhashQueue;
+const BlockhashQueue = sig.core.BlockhashQueue;
 const Pubkey = sig.core.Pubkey;
 const RentCollector = sig.core.rent_collector.RentCollector;
 const AccountMeta = sig.core.instruction.InstructionAccount;
@@ -52,7 +52,7 @@ pub fn checkAge(
     next_durable_nonce: *const Hash,
     next_lamports_per_signature: u64,
 ) TransactionResult(?CachedAccount) {
-    if (blockhash_queue.getHashInfoIfValid(&transaction.recent_blockhash, max_age) != null) {
+    if (blockhash_queue.getHashInfoIfValid(transaction.recent_blockhash, max_age) != null) {
         return .{ .ok = null };
     }
 
@@ -322,15 +322,13 @@ fn checkLoadAndAdvanceMessageNonceAccount(
         batch_account_cache,
     ) orelse return null;
 
-    const previous_lamports_per_signature = nonce_data.fee_calculator.lamports_per_signature;
+    const previous_lamports_per_signature = nonce_data.lamports_per_signature;
     const next_nonce_state = NonceVersions{
         .current = NonceState{
             .initialized = .{
                 .authority = nonce_data.authority,
                 .durable_nonce = next_durable_nonce.*,
-                .fee_calculator = .{
-                    .lamports_per_signature = next_lamports_per_signature,
-                },
+                .lamports_per_signature = next_lamports_per_signature,
             },
         },
     };
@@ -529,7 +527,7 @@ test "checkAge: nonce account" {
                 .initialized = .{
                     .authority = nonce_authority_key,
                     .durable_nonce = recent_blockhash,
-                    .fee_calculator = .{ .lamports_per_signature = 5000 },
+                    .lamports_per_signature = 5000,
                 },
             } },
             .{},
@@ -598,7 +596,7 @@ test "checkAge: nonce account" {
     var blockhash_queue = BlockhashQueue{
         .last_hash = null,
         .max_age = 0,
-        .ages = .{},
+        .hash_infos = .{},
         .last_hash_index = 0,
     };
 
@@ -636,7 +634,7 @@ test "checkAge: nonce account" {
             );
             try std.testing.expectEqual(
                 5001,
-                nv.getState().initialized.fee_calculator.lamports_per_signature,
+                nv.getState().initialized.lamports_per_signature,
             );
         },
         .err => return error.ExpectedOk,
