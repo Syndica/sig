@@ -1466,7 +1466,7 @@ test "simple usage" {
     const allocator = std.testing.allocator;
 
     var bank_forks_rw = sig.sync.RwMux(BankForksStub).init(blk: {
-        var stakes: sig.core.stake.EpochStakes = try .initEmpty(allocator);
+        var stakes: sig.core.EpochStakes = try .initEmptyWithGenesisStakeHistoryEntry(allocator);
         defer stakes.deinit(allocator);
 
         break :blk try .init(allocator, .DEFAULT, .{
