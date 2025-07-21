@@ -1651,7 +1651,6 @@ pub fn collectVoteLockouts(
         );
 
         var vote_state = try TowerVoteState.fromAccount(
-            allocator,
             &vote_account,
         );
 
