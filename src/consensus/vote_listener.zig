@@ -1513,9 +1513,6 @@ test "vote_parser.parseVoteTransaction" {
 test verifyVoteTransaction {
     const allocator = std.testing.allocator;
 
-    var prng = std.Random.DefaultPrng.init(17287);
-    const random = prng.random();
-
     const bank_forks: BankForksStub = bf: {
         var stakes: sig.core.EpochStakes = try .initEmptyWithGenesisStakeHistoryEntry(allocator);
         defer stakes.deinit(allocator);
@@ -1525,7 +1522,7 @@ test verifyVoteTransaction {
             .constants = .{
                 .parent_slot = 0,
                 .parent_hash = .ZEROES,
-                .parent_lt_hash = .IDENTITY,
+                .parent_lt_hash = null,
                 .block_height = 1,
                 .collector_id = .ZEROES,
                 .max_tick_height = 1,
@@ -1542,7 +1539,7 @@ test verifyVoteTransaction {
                 .genesis_creation_time = 1,
                 .slots_per_year = 1,
                 .stakes = stakes,
-                .rent_collector = .initRandom(random),
+                .rent_collector = .testDefault(0),
             },
         });
     };
