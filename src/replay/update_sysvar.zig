@@ -7,7 +7,7 @@ const Atomic = std.atomic.Value;
 
 const bincode = sig.bincode;
 const sysvars = sig.runtime.sysvar;
-const features = sig.runtime.features;
+const features = sig.core.features;
 
 const AccountsDb = sig.accounts_db.AccountsDB;
 
@@ -24,7 +24,7 @@ const SlotState = sig.core.SlotState;
 const StakesCache = sig.core.StakesCache;
 
 const AccountSharedData = sig.runtime.AccountSharedData;
-const FeatureSet = sig.runtime.FeatureSet;
+const FeatureSet = sig.core.FeatureSet;
 const SysvarCache = sig.runtime.SysvarCache;
 
 const Clock = sysvars.Clock;
