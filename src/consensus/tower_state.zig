@@ -10,31 +10,18 @@ pub const TowerVoteState = struct {
     root_slot: ?Slot = null,
     votes: std.BoundedArray(Lockout, MAX_LOCKOUT_HISTORY) = .{},
 
-    pub fn fromAccount(allocator: std.mem.Allocator, account: *const VoteAccount) !TowerVoteState {
+    pub fn fromAccount(account: *const VoteAccount) !TowerVoteState {
         const vote_state = account.state;
-        var lockouts = try std.ArrayListUnmanaged(Lockout).initCapacity(
-            allocator,
-            vote_state.votes.items.len,
-        );
+        var lockouts: std.BoundedArray(Lockout, MAX_LOCKOUT_HISTORY) = .{};
         for (vote_state.votes.items) |landed| {
-            try lockouts.append(
-                allocator,
-                Lockout{
-                    .slot = landed.lockout.slot,
-                    .confirmation_count = landed.lockout.confirmation_count,
-                },
-            );
+            try lockouts.append(.{
+                .slot = landed.lockout.slot,
+                .confirmation_count = landed.lockout.confirmation_count,
+            });
         }
-
-        const owned_slice = try lockouts.toOwnedSlice(allocator);
-        defer allocator.free(owned_slice);
-
         return .{
             .root_slot = vote_state.root_slot,
-            .votes = try std.BoundedArray(
-                Lockout,
-                MAX_LOCKOUT_HISTORY,
-            ).fromSlice(owned_slice),
+            .votes = lockouts,
         };
     }
 
