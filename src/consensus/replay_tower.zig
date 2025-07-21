@@ -4265,7 +4265,7 @@ pub const TestFixture = struct {
                 },
                 .state = .{
                     .blockhash_queue = .init(.DEFAULT),
-                    .hash = .init(null),
+                    .hash = .init(tree[0].hash),
                     .capitalization = .init(100),
                     .transaction_count = .init(100),
                     .signature_count = .init(100),
