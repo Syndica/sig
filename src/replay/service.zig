@@ -273,7 +273,7 @@ pub fn getActiveFeatures(
     allocator: Allocator,
     account_reader: AccountReader,
     slot: Slot,
-    ancestors: *const sig.core.status_cache.Ancestors,
+    ancestors: *const sig.core.Ancestors,
 ) !sig.core.FeatureSet {
     var features = std.AutoArrayHashMapUnmanaged(Pubkey, Slot).empty;
     for (sig.core.FEATURES) |pubkey| {
