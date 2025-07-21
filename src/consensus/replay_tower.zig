@@ -1757,13 +1757,16 @@ pub fn lastVotedSlotInBank(
     allocator: std.mem.Allocator,
     accounts_db: *AccountsDB,
     vote_account_pubkey: *const Pubkey,
-) ?Slot {
+) !?Slot {
     const vote_account = accounts_db.getAccount(vote_account_pubkey) catch return null;
     const vote_state = stateFromAccount(
         allocator,
         &vote_account,
         vote_account_pubkey,
-    ) catch return null;
+    ) catch |err| switch (err) {
+        error.OutOfMemory => |e| return e,
+        error.BincodeError => return null,
+    };
     return vote_state.lastVotedSlot();
 }
 
