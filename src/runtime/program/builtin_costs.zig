@@ -3,11 +3,11 @@
 const std = @import("std");
 const sig = @import("../../sig.zig");
 
-const features = sig.runtime.features;
+const features = sig.core.features;
 const programs = sig.runtime.program;
 
 const Pubkey = sig.core.Pubkey;
-const FeatureSet = sig.runtime.FeatureSet;
+const FeatureSet = sig.core.FeatureSet;
 
 pub const TOTAL_COUNT_BUILTINS: usize = 12;
 pub const BUILTIN_COSTS = initBuiltinCosts();

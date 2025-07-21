@@ -275,17 +275,22 @@ pub const AccountIndex = struct {
 
     /// adds the reference to the index if there is not a duplicate (ie, the same slot).
     /// returns if the reference was inserted.
-    pub fn indexRefIfNotDuplicateSlotAssumeCapacity(
+    pub fn indexRefIfNotDuplicateSlot(
         self: *Self,
         account_ref: *AccountRef,
         index: u64,
-    ) bool {
+    ) std.mem.Allocator.Error!bool {
         // NOTE: the lock on the shard also locks the reference map
         const shard_map, var shard_map_lg =
             self.pubkey_ref_map.getShard(&account_ref.pubkey).writeWithLock();
         defer shard_map_lg.unlock();
 
-        // init value if dne or append to end of the linked-list
+        if (shard_map.capacity() < shard_map.count() + 1) {
+            // caller is generally expected to ensure capacity first
+            self.logger.info().log("index: shard growing unexpectedly");
+            try shard_map.ensureTotalCapacity(shard_map.capacity() + 1);
+        }
+
         const map_entry = shard_map.getOrPutAssumeCapacity(account_ref.pubkey);
         if (!map_entry.found_existing) {
             map_entry.value_ptr.* = .{ .ref_ptr = account_ref, .ref_index = index };

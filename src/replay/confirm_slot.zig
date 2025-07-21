@@ -9,12 +9,13 @@ const Allocator = std.mem.Allocator;
 const HomogeneousThreadPool = sig.utils.thread.HomogeneousThreadPool;
 const ThreadPool = sig.sync.ThreadPool;
 
+const Ancestors = core.Ancestors;
 const Entry = core.Entry;
 const Hash = core.Hash;
 const Slot = core.Slot;
 const TransactionError = sig.ledger.transaction_status.TransactionError;
 
-const AccountsDB = sig.accounts_db.AccountsDB;
+const AccountStore = sig.accounts_db.AccountStore;
 
 const TransactionScheduler = replay.scheduler.TransactionScheduler;
 const resolveBatch = replay.resolve_lookup.resolveBatch;
@@ -36,11 +37,12 @@ const ScopedLogger = sig.trace.ScopedLogger("replay-confirm-slot");
 pub fn confirmSlot(
     allocator: Allocator,
     logger: ScopedLogger,
-    accounts_db: *AccountsDB,
+    account_store: AccountStore,
     thread_pool: *ThreadPool,
     entries: []const Entry,
     last_entry: Hash,
     verify_ticks_params: VerifyTicksParams,
+    ancestors: *const Ancestors,
 ) !*ConfirmSlotFuture {
     const future = try ConfirmSlotFuture.create(allocator, thread_pool, entries);
     errdefer future.destroy(allocator);
@@ -51,7 +53,7 @@ pub fn confirmSlot(
     }
 
     try startPohVerify(allocator, &future.poh_verifier, last_entry, entries);
-    try scheduleTransactionBatches(allocator, &future.scheduler, accounts_db, entries);
+    try scheduleTransactionBatches(allocator, &future.scheduler, account_store, entries, ancestors);
 
     _ = try future.poll(); // starts batch execution. poll result is cached inside future
 
@@ -84,14 +86,20 @@ fn startPohVerify(
 fn scheduleTransactionBatches(
     allocator: Allocator,
     scheduler: *TransactionScheduler,
-    accounts_db: *AccountsDB,
+    account_store: AccountStore,
     entries: []const Entry,
+    ancestors: *const Ancestors,
 ) !void {
     var total_transactions: usize = 0;
     for (entries) |entry| {
         total_transactions += entry.transactions.len;
 
-        const batch = try resolveBatch(allocator, accounts_db, entry.transactions);
+        const batch = try resolveBatch(
+            allocator,
+            account_store.reader(),
+            entry.transactions,
+            ancestors,
+        );
         errdefer batch.deinit(allocator);
 
         scheduler.addBatchAssumeCapacity(batch);
@@ -306,12 +314,16 @@ pub const BlockError = enum {
 
 test "happy path: trivial case" {
     var thread_pool = ThreadPool.init(.{});
+    defer {
+        thread_pool.shutdown();
+        thread_pool.deinit();
+    }
     var tick_hash_count: u64 = 0;
 
     const future = try confirmSlot(
         std.testing.allocator,
         .FOR_TESTS,
-        undefined,
+        .noop,
         &thread_pool,
         &.{},
         .ZEROES,
@@ -323,6 +335,7 @@ test "happy path: trivial case" {
             .slot_is_full = false,
             .tick_hash_count = &tick_hash_count,
         },
+        &.{ .ancestors = .empty },
     );
     defer future.destroy(std.testing.allocator);
 
@@ -335,6 +348,10 @@ test "happy path: partial slot" {
     const allocator = std.testing.allocator;
 
     var thread_pool = ThreadPool.init(.{});
+    defer {
+        thread_pool.shutdown();
+        thread_pool.deinit();
+    }
     var tick_hash_count: u64 = 0;
 
     const poh, const entry_array = try sig.core.poh.testPoh(true);
@@ -356,6 +373,7 @@ test "happy path: partial slot" {
             .slot_is_full = false,
             .tick_hash_count = &tick_hash_count,
         },
+        &.{ .ancestors = .empty },
     );
     defer future.destroy(std.testing.allocator);
 
@@ -368,6 +386,10 @@ test "happy path: full slot" {
     const allocator = std.testing.allocator;
 
     var thread_pool = ThreadPool.init(.{});
+    defer {
+        thread_pool.shutdown();
+        thread_pool.deinit();
+    }
     var tick_hash_count: u64 = 0;
 
     const poh, const entry_array = try sig.core.poh.testPoh(true);
@@ -389,6 +411,7 @@ test "happy path: full slot" {
             .slot_is_full = true,
             .tick_hash_count = &tick_hash_count,
         },
+        &.{ .ancestors = .empty },
     );
     defer future.destroy(std.testing.allocator);
 
@@ -401,6 +424,10 @@ test "fail: full slot not marked full -> .InvalidLastTick" {
     const allocator = std.testing.allocator;
 
     var thread_pool = ThreadPool.init(.{});
+    defer {
+        thread_pool.shutdown();
+        thread_pool.deinit();
+    }
     var tick_hash_count: u64 = 0;
 
     const poh, const entry_array = try sig.core.poh.testPoh(true);
@@ -422,6 +449,7 @@ test "fail: full slot not marked full -> .InvalidLastTick" {
             .slot_is_full = false,
             .tick_hash_count = &tick_hash_count,
         },
+        &.{ .ancestors = .empty },
     );
     defer future.destroy(std.testing.allocator);
 
@@ -437,6 +465,10 @@ test "fail: no trailing tick at max height -> .TrailingEntry" {
     const allocator = std.testing.allocator;
 
     var thread_pool = ThreadPool.init(.{});
+    defer {
+        thread_pool.shutdown();
+        thread_pool.deinit();
+    }
     var tick_hash_count: u64 = 0;
 
     const poh, const entry_array = try sig.core.poh.testPoh(true);
@@ -458,6 +490,7 @@ test "fail: no trailing tick at max height -> .TrailingEntry" {
             .slot_is_full = false,
             .tick_hash_count = &tick_hash_count,
         },
+        &.{ .ancestors = .empty },
     );
     defer future.destroy(std.testing.allocator);
 
@@ -473,6 +506,10 @@ test "fail: invalid poh chain" {
     const allocator = std.testing.allocator;
 
     var thread_pool = ThreadPool.init(.{});
+    defer {
+        thread_pool.shutdown();
+        thread_pool.deinit();
+    }
     var tick_hash_count: u64 = 0;
 
     const poh, var entry_array = try sig.core.poh.testPoh(true);
@@ -497,6 +534,7 @@ test "fail: invalid poh chain" {
             .slot_is_full = true,
             .tick_hash_count = &tick_hash_count,
         },
+        &.{ .ancestors = .empty },
     );
     defer future.destroy(std.testing.allocator);
 
@@ -512,6 +550,10 @@ test "fail: sigverify" {
     const allocator = std.testing.allocator;
 
     var thread_pool = ThreadPool.init(.{});
+    defer {
+        thread_pool.shutdown();
+        thread_pool.deinit();
+    }
     var tick_hash_count: u64 = 0;
 
     const poh, var entry_array = try sig.core.poh.testPoh(false);
@@ -533,6 +575,7 @@ test "fail: sigverify" {
             .slot_is_full = true,
             .tick_hash_count = &tick_hash_count,
         },
+        &.{ .ancestors = .empty },
     );
     defer future.destroy(std.testing.allocator);
 

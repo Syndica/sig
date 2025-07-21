@@ -1,7 +1,12 @@
+const std = @import("std");
 const sig = @import("../sig.zig");
 
+const Blake3 = std.crypto.hash.Blake3;
+
+const Hash = sig.core.hash.Hash;
 const Pubkey = sig.core.Pubkey;
 const Epoch = sig.core.Epoch;
+
 const AccountInFile = sig.accounts_db.accounts_file.AccountInFile;
 const AccountDataHandle = sig.accounts_db.buffer_pool.AccountDataHandle;
 
@@ -71,17 +76,22 @@ pub const Account = struct {
         );
     }
 
-    /// computes the hash of the account
-    pub fn hash(self: *const Account, pubkey: *const Pubkey) Hash {
+    /// computes the blake3 hash of the account
+    pub fn hash(self: *const Account, HashType: type, pubkey: *const Pubkey) HashType {
+        var the_hash: HashType = .{ .data = undefined };
+
         var iter = self.data.iterator();
-        return hashAccount(
+        hashAccount(
             self.lamports,
             &iter,
             &self.owner.data,
             self.executable,
             self.rent_epoch,
             &pubkey.data,
+            the_hash.bytes(),
         );
+
+        return the_hash;
     }
 
     /// writes account to buf in snapshot format
@@ -103,7 +113,7 @@ pub const Account = struct {
         };
         offset += account_info.writeToBuf(buf[offset..]);
 
-        const account_hash = self.hash(pubkey);
+        const account_hash = self.hash(Hash, pubkey);
         @memcpy(buf[offset..(offset + 32)], &account_hash.data);
         offset += 32;
         offset = std.mem.alignForward(usize, offset, @sizeOf(u64));
@@ -128,10 +138,6 @@ pub fn writeIntLittleMem(
     return x_size;
 }
 
-const std = @import("std");
-const Blake3 = std.crypto.hash.Blake3;
-const Hash = @import("hash.zig").Hash;
-
 pub fn hashAccount(
     lamports: u64,
     data: *AccountDataHandle.Iterator,
@@ -139,9 +145,9 @@ pub fn hashAccount(
     executable: bool,
     rent_epoch: u64,
     address_pubkey_data: []const u8,
-) Hash {
+    out_slice: []u8,
+) void {
     var hasher = Blake3.init(.{});
-    var hash_buf: [32]u8 = undefined;
 
     var int_buf: [8]u8 = undefined;
     std.mem.writeInt(u64, &int_buf, lamports, .little);
@@ -163,12 +169,7 @@ pub fn hashAccount(
     hasher.update(owner_pubkey_data);
     hasher.update(address_pubkey_data);
 
-    hasher.final(&hash_buf);
-    const hash = Hash{
-        .data = hash_buf,
-    };
-
-    return hash;
+    hasher.final(out_slice);
 }
 
 test "core.account: test account hash matches rust" {
@@ -182,14 +183,16 @@ test "core.account: test account hash matches rust" {
     };
     const pubkey = Pubkey.ZEROES;
 
+    var hash_buf: [32]u8 = undefined;
     var iter = account.data.iterator();
-    const hash = hashAccount(
+    hashAccount(
         account.lamports,
         &iter,
         &account.owner.data,
         account.executable,
         account.rent_epoch,
         &pubkey.data,
+        &hash_buf,
     );
 
     const expected_hash: [32]u8 = .{
@@ -198,5 +201,5 @@ test "core.account: test account hash matches rust" {
         163, 187, 252, 155, 24,  253, 158, 13, 86,
         100, 103, 89,  232, 28,
     };
-    try std.testing.expect(std.mem.eql(u8, &expected_hash, &hash.data));
+    try std.testing.expectEqualSlices(u8, &expected_hash, &hash_buf);
 }
