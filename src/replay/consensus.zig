@@ -503,7 +503,8 @@ fn computeBankStats(
             fork_stats.fork_stake = computed_bank_state.fork_stake;
             fork_stats.total_stake = computed_bank_state.total_stake;
             fork_stats.voted_stakes = computed_bank_state.voted_stakes;
-            fork_stats.lockout_intervals = computed_bank_state.lockout_intervals;
+            fork_stats.lockout_intervals =
+                try computed_bank_state.lockout_intervals.clone(allocator);
             fork_stats.block_height = blk: {
                 const slot_info = slot_tracker.get(slot) orelse return error.MissingSlots;
                 break :blk slot_info.constants.block_height;
