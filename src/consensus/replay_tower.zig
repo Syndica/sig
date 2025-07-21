@@ -4238,13 +4238,17 @@ pub const TestFixture = struct {
         is_frozen: bool,
     ) !void {
         // Add root to progress map.
-        const gop_root = try self.progress.map.getOrPut(allocator, input_tree.root.slot);
-        if (!gop_root.found_existing) {
-            var root_fp = try ForkProgress.zeroes(allocator);
-            root_fp.fork_stats.computed = true;
-            root_fp.fork_stats.my_latest_landed_vote = null;
-            gop_root.value_ptr.* = root_fp;
+        const gop_root = try self.progress.map.getOrPut(
+            allocator,
+            input_tree.root.slot,
+        );
+        if (gop_root.found_existing) {
+            gop_root.value_ptr.deinit(allocator);
         }
+        var root_fp = try ForkProgress.zeroes(allocator);
+        root_fp.fork_stats.computed = true;
+        root_fp.fork_stats.my_latest_landed_vote = null;
+        gop_root.value_ptr.* = root_fp;
         // TODO check that root fork exist already and it is being extended
         for (input_tree.data.constSlice()) |tree| {
             const parent_slot = blk: {
@@ -4280,13 +4284,17 @@ pub const TestFixture = struct {
             // Populate forkchoice
             try self.fork_choice.addNewLeafSlot(tree[0], tree[1]);
             // Populate progress map
-            const gop = try self.progress.map.getOrPut(allocator, tree[0].slot);
-            if (!gop.found_existing) {
-                var fp = try ForkProgress.zeroes(allocator);
-                fp.fork_stats.computed = true;
-                fp.fork_stats.my_latest_landed_vote = null;
-                gop.value_ptr.* = fp;
+            const gop = try self.progress.map.getOrPut(
+                allocator,
+                tree[0].slot,
+            );
+            if (gop.found_existing) {
+                gop.value_ptr.deinit(allocator);
             }
+            var fp = try ForkProgress.zeroes(allocator);
+            fp.fork_stats.computed = true;
+            fp.fork_stats.my_latest_landed_vote = null;
+            gop.value_ptr.* = fp;
             if (is_frozen) {
                 // new_bank.freeze();
                 const new_slot = self.slot_tracker.get(parent_slot) orelse continue;
