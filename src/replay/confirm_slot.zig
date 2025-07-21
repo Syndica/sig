@@ -9,7 +9,7 @@ const Allocator = std.mem.Allocator;
 const HomogeneousThreadPool = sig.utils.thread.HomogeneousThreadPool;
 const ThreadPool = sig.sync.ThreadPool;
 
-const Ancestors = core.status_cache.Ancestors;
+const Ancestors = core.Ancestors;
 const Entry = core.Entry;
 const Hash = core.Hash;
 const Slot = core.Slot;

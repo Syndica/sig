@@ -6,7 +6,7 @@ const core = sig.core;
 
 const Allocator = std.mem.Allocator;
 
-const Ancestors = core.status_cache.Ancestors;
+const Ancestors = core.Ancestors;
 const InstructionAccount = core.instruction.InstructionAccount;
 const Pubkey = core.Pubkey;
 const Transaction = core.Transaction;
