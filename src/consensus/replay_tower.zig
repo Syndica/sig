@@ -1659,9 +1659,9 @@ pub fn collectVoteLockouts(
             const interval = try lockout_intervals
                 .getOrPut(allocator, vote.lastLockedOutSlot());
             if (!interval.found_existing) {
-                interval.value_ptr.* = std.ArrayList(VotedSlotAndPubkey).init(allocator);
+                interval.value_ptr.* = .init(allocator);
             }
-            try interval.value_ptr.*.append(.{ .slot = vote.slot, .pubkey = key });
+            try interval.value_ptr.append(.{ .slot = vote.slot, .pubkey = key });
         }
 
         // Vote account for this validator
