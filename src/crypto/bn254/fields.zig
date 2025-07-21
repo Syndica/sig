@@ -28,7 +28,7 @@ pub const Fp = struct {
         const p_limbs: [4]u64 = @bitCast(p);
 
         const p_minus_2: u256 = p - 2;
-        const p_minus_one_half: u256 = 0x183227397098d014dc2822db40c0ac2ecbc0b548b438e5469e10460b6c3e7ea3;
+        const p_minus_1_half = 0x183227397098d014dc2822db40c0ac2ecbc0b548b438e5469e10460b6c3e7ea3;
 
         pub const b_mont: Fp = fromInt(3);
         const p_minus_one_mont: Fp = fromInt(p - 1);
@@ -37,11 +37,36 @@ pub const Fp = struct {
         const sqrt_exp: u256 = 0x0c19139cb84c680a6e14116da060561765e05aa45a1c72a34f082305b61f3f51;
 
         pub const frob_gamma2_mont: [5]Fp = .{
-            .{ .limbs = .{ 0xca8d800500fa1bf2, 0xf0c5d61468b39769, 0x0e201271ad0d4418, 0x04290f65bad856e6 } },
-            .{ .limbs = .{ 0x3350c88e13e80b9c, 0x7dce557cdb5e56b9, 0x6001b4b8b615564a, 0x2682e617020217e0 } },
-            .{ .limbs = .{ 0x68c3488912edefaa, 0x8d087f6872aabf4f, 0x51e1a24709081231, 0x2259d6b14729c0fa } },
-            .{ .limbs = .{ 0x71930c11d782e155, 0xa6bb947cffbe3323, 0xaa303344d4741444, 0x2c3b3f0d26594943 } },
-            .{ .limbs = .{ 0x08cfc388c494f1ab, 0x19b315148d1373d4, 0x584e90fdcb6c0213, 0x09e1685bdf2f8849 } },
+            .{ .limbs = .{
+                0xca8d800500fa1bf2,
+                0xf0c5d61468b39769,
+                0x0e201271ad0d4418,
+                0x04290f65bad856e6,
+            } },
+            .{ .limbs = .{
+                0x3350c88e13e80b9c,
+                0x7dce557cdb5e56b9,
+                0x6001b4b8b615564a,
+                0x2682e617020217e0,
+            } },
+            .{ .limbs = .{
+                0x68c3488912edefaa,
+                0x8d087f6872aabf4f,
+                0x51e1a24709081231,
+                0x2259d6b14729c0fa,
+            } },
+            .{ .limbs = .{
+                0x71930c11d782e155,
+                0xa6bb947cffbe3323,
+                0xaa303344d4741444,
+                0x2c3b3f0d26594943,
+            } },
+            .{ .limbs = .{
+                0x08cfc388c494f1ab,
+                0x19b315148d1373d4,
+                0x584e90fdcb6c0213,
+                0x09e1685bdf2f8849,
+            } },
         };
 
         pub const x: u256 = 0x44e992b44a6909f1;
@@ -107,7 +132,7 @@ pub const Fp = struct {
 
     pub fn isNegative(f: Fp) bool {
         const x: u256 = @bitCast(f.limbs);
-        return x > constants.p_minus_one_half;
+        return x > constants.p_minus_1_half;
     }
 
     pub fn eql(a: Fp, b: Fp) bool {
@@ -267,32 +292,86 @@ pub const Fp2 = struct {
             // coeff_b = 3
             // twist = Fp2(9, 1)
             // twist_b_mont = coeff_b * twist.inverse()
-            .c0 = .{ .limbs = .{ 0x3bf938e377b802a8, 0x020b1b273633535d, 0x26b7edf049755260, 0x2514c6324384a86d } },
-            .c1 = .{ .limbs = .{ 0x38e7ecccd1dcff67, 0x65f0b37d93ce0d3e, 0xd749d0dd22ac00aa, 0x0141b9ce4a688d4d } },
+            .c0 = .{ .limbs = .{
+                0x3bf938e377b802a8,
+                0x020b1b273633535d,
+                0x26b7edf049755260,
+                0x2514c6324384a86d,
+            } },
+            .c1 = .{ .limbs = .{
+                0x38e7ecccd1dcff67,
+                0x65f0b37d93ce0d3e,
+                0xd749d0dd22ac00aa,
+                0x0141b9ce4a688d4d,
+            } },
         };
 
-        pub const frob_gamma1_mont: [5]Fp2 = .{
-            .{
-                .c0 = .{ .limbs = .{ 0xaf9ba69633144907, 0xca6b1d7387afb78a, 0x11bded5ef08a2087, 0x02f34d751a1f3a7c } },
-                .c1 = .{ .limbs = .{ 0xa222ae234c492d72, 0xd00f02a4565de15b, 0xdc2ff3a253dfc926, 0x10a75716b3899551 } },
-            },
-            .{
-                .c0 = .{ .limbs = .{ 0xb5773b104563ab30, 0x347f91c8a9aa6454, 0x7a007127242e0991, 0x1956bcd8118214ec } },
-                .c1 = .{ .limbs = .{ 0x6e849f1ea0aa4757, 0xaa1c7b6d89f89141, 0xb6e713cdfae0ca3a, 0x26694fbb4e82ebc3 } },
-            },
-            .{
-                .c0 = .{ .limbs = .{ 0xe4bbdd0c2936b629, 0xbb30f162e133bacb, 0x31a9d1b6f9645366, 0x253570bea500f8dd } },
-                .c1 = .{ .limbs = .{ 0xa1d77ce45ffe77c7, 0x07affd117826d1db, 0x6d16bd27bb7edc6b, 0x2c87200285defecc } },
-            },
-            .{
-                .c0 = .{ .limbs = .{ 0x7361d77f843abe92, 0xa5bb2bd3273411fb, 0x9c941f314b3e2399, 0x15df9cddbb9fd3ec } },
-                .c1 = .{ .limbs = .{ 0x5dddfd154bd8c949, 0x62cb29a5a4445b60, 0x37bc870a0c7dd2b9, 0x24830a9d3171f0fd } },
-            },
-            .{
-                .c0 = .{ .limbs = .{ 0xc970692f41690fe7, 0xe240342127694b0b, 0x32bee66b83c459e8, 0x12aabced0ab08841 } },
-                .c1 = .{ .limbs = .{ 0x0d485d2340aebfa9, 0x05193418ab2fcc57, 0xd3b0a40b8a4910f5, 0x2f21ebb535d2925a } },
-            },
-        };
+        pub const frob_gamma1_mont: [5]Fp2 = .{ .{
+            .c0 = .{ .limbs = .{
+                0xaf9ba69633144907,
+                0xca6b1d7387afb78a,
+                0x11bded5ef08a2087,
+                0x02f34d751a1f3a7c,
+            } },
+            .c1 = .{ .limbs = .{
+                0xa222ae234c492d72,
+                0xd00f02a4565de15b,
+                0xdc2ff3a253dfc926,
+                0x10a75716b3899551,
+            } },
+        }, .{
+            .c0 = .{ .limbs = .{
+                0xb5773b104563ab30,
+                0x347f91c8a9aa6454,
+                0x7a007127242e0991,
+                0x1956bcd8118214ec,
+            } },
+            .c1 = .{ .limbs = .{
+                0x6e849f1ea0aa4757,
+                0xaa1c7b6d89f89141,
+                0xb6e713cdfae0ca3a,
+                0x26694fbb4e82ebc3,
+            } },
+        }, .{
+            .c0 = .{ .limbs = .{
+                0xe4bbdd0c2936b629,
+                0xbb30f162e133bacb,
+                0x31a9d1b6f9645366,
+                0x253570bea500f8dd,
+            } },
+            .c1 = .{ .limbs = .{
+                0xa1d77ce45ffe77c7,
+                0x07affd117826d1db,
+                0x6d16bd27bb7edc6b,
+                0x2c87200285defecc,
+            } },
+        }, .{
+            .c0 = .{ .limbs = .{
+                0x7361d77f843abe92,
+                0xa5bb2bd3273411fb,
+                0x9c941f314b3e2399,
+                0x15df9cddbb9fd3ec,
+            } },
+            .c1 = .{ .limbs = .{
+                0x5dddfd154bd8c949,
+                0x62cb29a5a4445b60,
+                0x37bc870a0c7dd2b9,
+                0x24830a9d3171f0fd,
+            } },
+        }, .{
+            .c0 = .{ .limbs = .{
+                0xc970692f41690fe7,
+                0xe240342127694b0b,
+                0x32bee66b83c459e8,
+                0x12aabced0ab08841,
+            } },
+            .c1 = .{ .limbs = .{
+                0x0d485d2340aebfa9,
+                0x05193418ab2fcc57,
+                0xd3b0a40b8a4910f5,
+                0x2f21ebb535d2925a,
+            } },
+        } };
     };
 
     pub fn fromBytes(input: *const [64]u8, maybe_flags: ?*Flags) !Fp2 {
@@ -440,7 +519,7 @@ pub const Fp2 = struct {
             r.c0 = t;
         } else {
             a0.add(alpha, .one);
-            const x1 = a0.pow(Fp.constants.p_minus_one_half);
+            const x1 = a0.pow(Fp.constants.p_minus_1_half);
             r.mul(x1, x0);
         }
     }
