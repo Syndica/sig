@@ -9,6 +9,7 @@ test {
     refAllDeclsRecursive(sig.runtime.sysvar, 3);
     refAllDeclsRecursive(sig.vm, 3);
     refAllDeclsRecursive(sig.consensus, 3);
+    refAllDeclsRecursive(sig.crypto, 2);
 }
 
 /// Like std.testing.refAllDeclsRecursive, except:

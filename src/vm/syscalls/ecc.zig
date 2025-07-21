@@ -1,9 +1,9 @@
 //! Syscalls that work with Elliptic Curves
 
 const std = @import("std");
-const ff = @import("ff");
 const sig = @import("../../sig.zig");
 
+const bn254 = sig.crypto.bn254;
 const features = sig.core.features;
 
 const MemoryMap = sig.vm.memory.MemoryMap;
@@ -564,21 +564,21 @@ pub fn altBn128Compression(
 
     // Largest result is 128-bytes from g2_decompress.
     var result: [128]u8 = undefined;
-    if (switch (group_op) {
+    (switch (group_op) {
         // zig fmt: off
-        .g1_compress   => ff.bn254_compress_g1_syscall(  input[0..64],  result[0..32]),
-        .g1_decompress => ff.bn254_decompress_g1_syscall(input[0..32],  result[0..64]),
-        .g2_compress   => ff.bn254_compress_g2_syscall(  input[0..128], result[0..64]),
-        .g2_decompress => ff.bn254_decompress_g2_syscall(input[0..64],  result[0..128]),
+        .g1_compress   => bn254.G1.compress(  result[0..32],  input[0..64] ),
+        .g1_decompress => bn254.G1.decompress(result[0..64],  input[0..32] ),
+        .g2_compress   => bn254.G2.compress(  result[0..64],  input[0..128]),
+        .g2_decompress => bn254.G2.decompress(result[0..128], input[0..64] ),
         // zig fmt: on
-    } != 0) {
+    }) catch {
         if (tc.feature_set.active.contains(
             features.SIMPLIFY_ALT_BN128_SYSCALL_ERROR_CODES,
         )) {
             registers.set(.r0, 1);
             return;
         } else @panic("SIMPLIFY_ALT_BN_128_SYSCALL_ERROR_CODES not active");
-    }
+    };
 
     @memcpy(call_result, result[0..output_length]);
 }
@@ -586,8 +586,8 @@ pub fn altBn128Compression(
 fn altBn128Operation(
     group_op: AltBn128GroupOp,
     input: []const u8,
-    result: *[64]u8,
-    fix_length_check: bool,
+    out: *[64]u8,
+    feature_set: *const features.FeatureSet,
 ) ![]const u8 {
     switch (group_op) {
         .add => {
@@ -597,12 +597,10 @@ fn altBn128Operation(
             var buffer: [128]u8 = .{0} ** 128;
             @memcpy(buffer[0..input.len], input);
 
-            if (ff.bn254_add_syscall(&buffer, result) != 0) {
-                return error.Unexpected;
-            }
+            try bn254.addSyscall(out, &buffer);
 
             // Writes 64-bytes.
-            return result;
+            return out;
         },
         .mul => {
             const expected_size: usize = if (fix_length_check) 96 else 128;
@@ -612,12 +610,10 @@ fn altBn128Operation(
             var buffer: [96]u8 = .{0} ** 96;
             @memcpy(buffer[0..@min(input.len, 96)], input.ptr);
 
-            if (ff.bn254_mul_syscall(&buffer, result) != 0) {
-                return error.Unexpected;
-            }
+            try bn254.mulSyscall(out, &buffer);
 
             // Writes 64-bytes.
-            return result;
+            return out;
         },
         .pairing => {
             // Agave does not check that the input length is a multiple of the
@@ -637,12 +633,10 @@ fn altBn128Operation(
             //
             // if (input.len % 192 != 0) return error.InvalidLength;
 
-            if (ff.bn254_pairing_syscall(input.ptr, input.len, result) != 0) {
-                return error.Unexpected;
-            }
+            try bn254.pairingSyscall(out[0..32], input);
 
             // Writes to the first 32-bytes.
-            return result[0..32];
+            return out[0..32];
         },
         .sub => unreachable,
     }
