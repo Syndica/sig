@@ -1013,12 +1013,12 @@ pub const ForkChoice = struct {
             if (try self.latest_votes.fetchPut(pubkey, new_vote_slot_hash)) |old_latest_vote| {
                 const old_latest_vote_slot = old_latest_vote.value.slot;
                 const old_latest_vote_hash = old_latest_vote.value.hash;
-                std.debug.assert(if (new_vote_slot == old_latest_vote_slot)
+                if (new_vote_slot == old_latest_vote_slot)
                     // If the slots are equal, then the new
                     // vote must be for a smaller hash
-                    new_vote_hash.order(&old_latest_vote_hash) == .lt
+                    std.debug.assert(new_vote_hash.order(&old_latest_vote_hash) == .lt)
                 else
-                    new_vote_slot > old_latest_vote_slot);
+                    std.debug.assert(new_vote_slot > old_latest_vote_slot);
 
                 const epoch = epoch_schedule.getEpoch(old_latest_vote_slot);
                 const stake_update = stake_update: {
