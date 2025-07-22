@@ -442,3 +442,81 @@ test "AccountStore does not return 0-lamport accounts from accountsdb" {
     try std.testing.expectEqual(null, try slot_reader.get(zero_lamport_address));
     try std.testing.expectEqual(1, (try slot_reader.get(one_lamport_address)).?.lamports);
 }
+
+test ThreadSafeAccountMap {
+    const allocator = std.testing.allocator;
+
+    var prng: std.Random.DefaultPrng = .init(3653);
+    const random = prng.random();
+
+    var tsm: ThreadSafeAccountMap = .init(allocator);
+    defer tsm.deinit();
+
+    const account_store = tsm.accountStore();
+    const account_reader = tsm.accountReader();
+
+    var ancestors1: Ancestors = .{};
+    defer ancestors1.deinit(allocator);
+    const slot1: Slot = 1;
+    const addr1: Pubkey = .initRandom(random);
+    try ancestors1.ancestors.put(allocator, slot1, {});
+
+    var expected_data: [128]u8 = undefined;
+    random.bytes(&expected_data);
+    const expected_account: AccountSharedData = .{
+        .lamports = random.int(u64),
+        .data = &expected_data,
+        .owner = .initRandom(random),
+        .executable = random.boolean(),
+        .rent_epoch = random.int(sig.core.Epoch),
+    };
+    try account_store.put(slot1, addr1, expected_account);
+
+    try expectAccount(account_reader, addr1, null, sharedToCoreAccount(expected_account));
+    try expectAccount(account_reader, addr1, ancestors1, sharedToCoreAccount(expected_account));
+}
+
+fn expectAccount(
+    account_reader: AccountReader,
+    address: Pubkey,
+    maybe_ancestors: ?Ancestors,
+    expected: ?sig.core.Account,
+) !void {
+    const actual = if (maybe_ancestors) |*ancestors|
+        try account_reader.forSlot(ancestors).get(address)
+    else
+        try account_reader.getLatest(address);
+    defer if (actual) |actual_account| actual_account.deinit(account_reader.allocator());
+
+    if ((expected == null) != (actual == null)) {
+        try std.testing.expectEqual(expected, actual);
+        unreachable; // the `try` above is guaranteed to return an error
+    }
+
+    const expected_account = expected orelse return;
+    const actual_account = actual.?; // if the above is non-null, this is also non-null
+
+    try std.testing.expectEqual(expected_account.lamports, actual_account.lamports);
+    try std.testing.expectEqual(expected_account.owner, actual_account.owner);
+    try std.testing.expectEqual(expected_account.executable, actual_account.executable);
+    try std.testing.expectEqual(expected_account.rent_epoch, actual_account.rent_epoch);
+
+    const expected_data = try expected_account.data.readAllAllocate(std.testing.allocator);
+    defer std.testing.allocator.free(expected_data);
+
+    const actual_data = try actual_account.data.readAllAllocate(std.testing.allocator);
+    defer std.testing.allocator.free(actual_data);
+
+    try std.testing.expectEqualSlices(u8, expected_data, actual_data);
+}
+
+fn sharedToCoreAccount(account: AccountSharedData) sig.core.Account {
+    if (!@import("builtin").is_test) @compileError("Not allowed outside of tests.");
+    return .{
+        .lamports = account.lamports,
+        .data = .{ .unowned_allocation = account.data },
+        .owner = account.owner,
+        .executable = account.executable,
+        .rent_epoch = account.rent_epoch,
+    };
+}
