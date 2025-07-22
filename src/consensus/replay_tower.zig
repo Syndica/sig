@@ -1646,7 +1646,7 @@ pub fn collectVoteLockouts(
             const interval = try lockout_intervals.map
                 .getOrPut(allocator, vote.lastLockedOutSlot());
             if (!interval.found_existing) {
-                interval.value_ptr.* = .init(allocator);
+                interval.value_ptr.* = .empty;
             }
             try interval.value_ptr.append(.{ .slot = vote.slot, .pubkey = key });
         }
