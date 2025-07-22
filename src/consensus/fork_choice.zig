@@ -1483,10 +1483,10 @@ pub const ForkChoice = struct {
         }
         std.debug.assert(!self.tree_root.equals(slot_hash_key));
 
-        const node_to_split_at = self.fork_infos.getPtr(slot_hash_key) orelse
+        var split_tree_root = self.fork_infos.get(slot_hash_key) orelse
             return error.SlotHashKeyNotFound;
-        var split_tree_root = node_to_split_at.*;
-        const parent = node_to_split_at.parent orelse return error.SplitNodeIsRoot;
+        const parent = split_tree_root.parent orelse
+            return error.SplitNodeIsRoot;
 
         var update_operations = UpdateOperations.init(allocator);
         defer update_operations.deinit();
