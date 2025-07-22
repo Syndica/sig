@@ -1651,7 +1651,6 @@ pub fn collectVoteLockouts(
         );
 
         var vote_state = try TowerVoteState.fromAccount(
-            allocator,
             &vote_account,
         );
 
@@ -1659,9 +1658,9 @@ pub fn collectVoteLockouts(
             const interval = try lockout_intervals
                 .getOrPut(allocator, vote.lastLockedOutSlot());
             if (!interval.found_existing) {
-                interval.value_ptr.* = std.ArrayList(VotedSlotAndPubkey).init(allocator);
+                interval.value_ptr.* = .init(allocator);
             }
-            try interval.value_ptr.*.append(.{ .slot = vote.slot, .pubkey = key });
+            try interval.value_ptr.append(.{ .slot = vote.slot, .pubkey = key });
         }
 
         // Vote account for this validator
@@ -1715,9 +1714,7 @@ pub fn collectVoteLockouts(
         // a vote for a slot >= bank_slot, so we are guaranteed that the last vote in
         // this vote stack is the simulated vote, so this fetch should be sufficient
         // to find the last unsimulated vote.
-        std.debug.assert(
-            if (vote_state.nthRecentLockout(0)) |l| l.slot == bank_slot else false,
-        );
+        std.debug.assert(vote_state.nthRecentLockout(0).?.slot == bank_slot);
 
         if (vote_state.nthRecentLockout(1)) |vote| {
             // Update all the parents of this last vote with the stake of this vote account
@@ -1743,8 +1740,8 @@ pub fn collectVoteLockouts(
     // simulated votes, the voted_stake for `bank_slot` is not populated.
     // Therefore, we use the voted_stake for the parent of bank_slot as the
     // `fork_stake` instead.
-    const fork_stake = blk: {
-        var bank_ancestors = ancestors.get(bank_slot) orelse break :blk @as(u64, 0);
+    const fork_stake: u64 = blk: {
+        var bank_ancestors = ancestors.get(bank_slot) orelse break :blk 0;
         var max_parent: ?Slot = null;
         for (bank_ancestors.items()) |slot| {
             if (max_parent == null or slot > max_parent.?) {
@@ -1752,9 +1749,9 @@ pub fn collectVoteLockouts(
             }
         }
         if (max_parent) |parent| {
-            break :blk voted_stakes.get(parent) orelse @as(u64, 0);
+            break :blk voted_stakes.get(parent) orelse 0;
         } else {
-            break :blk @as(u64, 0);
+            break :blk 0;
         }
     };
 
@@ -1771,13 +1768,16 @@ pub fn lastVotedSlotInBank(
     allocator: std.mem.Allocator,
     accounts_db: *AccountsDB,
     vote_account_pubkey: *const Pubkey,
-) ?Slot {
+) !?Slot {
     const vote_account = accounts_db.getAccount(vote_account_pubkey) catch return null;
     const vote_state = stateFromAccount(
         allocator,
         &vote_account,
         vote_account_pubkey,
-    ) catch return null;
+    ) catch |err| switch (err) {
+        error.OutOfMemory => |e| return e,
+        error.BincodeError => return null,
+    };
     return vote_state.lastVotedSlot();
 }
 
