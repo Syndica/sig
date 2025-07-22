@@ -1458,7 +1458,6 @@ pub const ForkChoice = struct {
             });
         }
 
-        // TODO revisit. Used for logging in Agave?
         _ = try self.addVotes(
             allocator,
             new_votes.items,
