@@ -1443,16 +1443,18 @@ pub const ForkChoice = struct {
         var new_votes = std.ArrayListUnmanaged(PubkeyVote).empty;
         defer new_votes.deinit(allocator);
 
-        const news = try latest_validator_votes.takeVotesDirtySet(
+        const dirty_votest = try latest_validator_votes.takeVotesDirtySet(
             allocator,
             root,
         );
-        defer allocator.free(news);
+        defer allocator.free(dirty_votest);
 
-        for (news) |vote_tuple| {
-            try new_votes.append(allocator, .{
-                .pubkey = vote_tuple[0],
-                .slot_hash = vote_tuple[1],
+        try new_votes.ensureUnusedCapacity(allocator, dirty_votest.len);
+        for (dirty_votest) |vote_tuple| {
+            const pubkey, const slot_hash = vote_tuple;
+            new_votes.appendAssumeCapacity(.{
+                .pubkey = pubkey,
+                .slot_hash = slot_hash,
             });
         }
 
