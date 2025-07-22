@@ -476,12 +476,12 @@ pub const ForkChoice = struct {
         // Set the current root's parent to the new root parent
         root_info.parent = root_parent;
 
+        try self.fork_infos.ensureUnusedCapacity(1);
         // Create the new root parent's fork info
         var root_parent_children = SortedMap(SlotAndHash, void).init(self.allocator);
         try root_parent_children.put(self.tree_root, {});
-
-        const root_parent_info = ForkInfo{
-            .logger = self.logger.withScope(@typeName(ForkInfo)),
+        self.fork_infos.putAssumeCapacityNoClobber(root_parent, .{
+            .logger = .from(self.logger),
             .stake_for_slot = 0,
             .stake_for_subtree = root_info.stake_for_subtree,
             .height = root_info.height + 1,
@@ -492,9 +492,7 @@ pub const ForkChoice = struct {
             .parent = null,
             .latest_duplicate_ancestor = null,
             .is_duplicate_confirmed = root_info.is_duplicate_confirmed,
-        };
-
-        try self.fork_infos.put(root_parent, root_parent_info);
+        });
         self.tree_root = root_parent;
     }
 
