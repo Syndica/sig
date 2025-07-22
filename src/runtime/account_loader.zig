@@ -895,8 +895,8 @@ test "constructInstructionsAccount" {
 test "loadAccount allocations" {
     const NATIVE_LOADER_ID = runtime.ids.NATIVE_LOADER_ID;
 
-    const checkFn = struct {
-        fn f(allocator: Allocator) !void {
+    const helper = struct {
+        fn check(allocator: Allocator) !void {
             var accountsdb = std.AutoArrayHashMapUnmanaged(Pubkey, sig.core.Account).empty;
             defer accountsdb.deinit(allocator);
 
@@ -928,9 +928,9 @@ test "loadAccount allocations" {
             try std.testing.expectEqual(1, account.account.lamports);
             try std.testing.expectEqual(true, account.account.executable);
         }
-    }.f;
+    };
 
-    try std.testing.checkAllAllocationFailures(std.testing.allocator, checkFn, .{});
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, helper.check, .{});
 }
 
 test "load tx too large" {
