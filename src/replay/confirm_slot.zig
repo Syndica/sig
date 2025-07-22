@@ -5,6 +5,7 @@ const replay = @import("lib.zig");
 const core = sig.core;
 
 const Allocator = std.mem.Allocator;
+const Atomic = std.atomic.Value;
 
 const HomogeneousThreadPool = sig.utils.thread.HomogeneousThreadPool;
 const ThreadPool = sig.sync.ThreadPool;
@@ -21,6 +22,7 @@ const Committer = replay.commit.Committer;
 const SvmSlot = replay.svm_gateway.SvmSlot;
 const TransactionScheduler = replay.scheduler.TransactionScheduler;
 
+const verifyPoh = core.entry.verifyPoh;
 const resolveBatch = replay.resolve_lookup.resolveBatch;
 
 const assert = std.debug.assert;
@@ -59,7 +61,7 @@ pub fn confirmSlot(
         return future;
     }
 
-    try startPohVerify(allocator, &future.poh_verifier, last_entry, entries);
+    try startPohVerify(allocator, &future.poh_verifier, last_entry, entries, &future.exit);
     try scheduleTransactionBatches(allocator, &future.scheduler, account_store, entries, ancestors);
 
     _ = try future.poll(); // starts batch execution. poll result is cached inside future
@@ -73,6 +75,7 @@ fn startPohVerify(
     pool: *HomogeneousThreadPool(PohTask),
     initial_hash: Hash,
     entries: []const Entry,
+    exit: *Atomic(bool),
 ) Allocator.Error!void {
     if (entries.len == 0) return;
     const num_tasks = if (pool.max_concurrent_tasks) |max| @min(max, entries.len) else entries.len;
@@ -84,6 +87,7 @@ fn startPohVerify(
             .allocator = allocator,
             .initial_hash = batch_initial_hash,
             .entries = entries[i * entries_per_task .. end],
+            .exit = exit,
         }));
         batch_initial_hash = entries[end - 1].hash;
     }
@@ -128,6 +132,9 @@ pub const ConfirmSlotStatus = union(enum) {
 pub const ConfirmSlotFuture = struct {
     scheduler: TransactionScheduler,
     poh_verifier: HomogeneousThreadPool(PohTask),
+    /// Set to true as soon as something fails.
+    exit: Atomic(bool),
+
     entries: []const Entry,
 
     /// The current status to return on poll, unless something has changed.
@@ -143,28 +150,34 @@ pub const ConfirmSlotFuture = struct {
         entries: []const Entry,
         svm_params: SvmSlot.Params,
     ) !*ConfirmSlotFuture {
-        var scheduler = try TransactionScheduler
-            .initCapacity(allocator, committer, entries.len, thread_pool, svm_params);
-        errdefer scheduler.deinit();
-
         const poh_verifier = try HomogeneousThreadPool(PohTask)
             .initBorrowed(allocator, thread_pool, thread_pool.max_threads);
         errdefer poh_verifier.deinit(allocator);
 
         const future = try allocator.create(ConfirmSlotFuture);
-        errdefer allocator.free(future);
+        errdefer allocator.destroy(future);
 
         future.* = ConfirmSlotFuture{
             .poh_verifier = poh_verifier,
-            .scheduler = scheduler,
+            .scheduler = undefined,
             .entries = entries,
             .status = .pending,
+            .exit = .init(false),
         };
+
+        future.scheduler = try TransactionScheduler
+            .initCapacity(allocator, committer, entries.len, thread_pool, svm_params, &future.exit);
 
         return future;
     }
 
     pub fn destroy(self: *ConfirmSlotFuture, allocator: Allocator) void {
+        self.exit.store(true, .monotonic);
+        const exited_scheduler = self.scheduler.thread_pool.joinForDeinit(.fromMillis(100));
+        const exited_poh = self.poh_verifier.joinForDeinit(.fromMillis(100));
+        if (!exited_scheduler or !exited_poh) {
+            @panic("Failed to deinit ConfirmSlotFuture due to hanging threads.");
+        }
         self.scheduler.deinit();
         self.poh_verifier.deinit(allocator);
         for (self.entries) |entry| entry.deinit(allocator);
@@ -179,8 +192,7 @@ pub const ConfirmSlotFuture = struct {
                 for (try self.pollEach()) |status| switch (status) {
                     .pending => pending = true,
                     .err => |err| if (self.status_when_done == .done) {
-                        // TODO: notify poh threads to exit
-                        self.scheduler.exit.store(true, .monotonic);
+                        self.exit.store(true, .monotonic);
                         self.status_when_done = .{ .err = err };
                     },
                     .done => {},
@@ -209,9 +221,20 @@ const PohTask = struct {
     allocator: Allocator,
     initial_hash: Hash,
     entries: []const Entry,
+    exit: *Atomic(bool),
 
     pub fn run(self: *PohTask) !void {
-        if (!try core.entry.verifyPoh(self.entries, self.allocator, null, self.initial_hash)) {
+        const success = verifyPoh(
+            self.entries,
+            self.allocator,
+            self.initial_hash,
+            .{ .exit = self.exit },
+        ) catch |e| {
+            self.exit.store(true, .monotonic);
+            return e;
+        };
+        if (!success) {
+            self.exit.store(true, .monotonic);
             return error.PohVerifyFailed;
         }
     }

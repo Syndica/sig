@@ -1,4 +1,5 @@
 const std = @import("std");
+const sig = @import("../sig.zig");
 
 const Allocator = std.mem.Allocator;
 const Condition = std.Thread.Condition;
@@ -196,12 +197,14 @@ pub fn HomogeneousThreadPool(comptime TaskType: type) type {
         /// join before calling this
         pub fn deinit(const_self: Self, schedule_allocator: Allocator) void {
             var self = const_self;
+            if (self.tasks.items.len != 0) {
+                @panic("Did not join before deiniting thread pool.");
+            }
             if (self.pool_allocator) |pool_allocator| {
                 self.pool.shutdown();
                 self.pool.deinit();
                 pool_allocator.destroy(self.pool);
             }
-            assert(0 == self.tasks.items.len);
             self.tasks.deinit(schedule_allocator);
             assert(self.task_pool.reset(.free_all));
         }
@@ -209,11 +212,7 @@ pub fn HomogeneousThreadPool(comptime TaskType: type) type {
         /// Blocks until the task is scheduled. It will be immediate unless
         /// you've already scheduled max_concurrent_tasks and none have
         /// finished.
-        pub fn schedule(
-            self: *Self,
-            allocator: Allocator,
-            typed_task: TaskType,
-        ) !void {
+        pub fn schedule(self: *Self, allocator: Allocator, typed_task: TaskType) !void {
             while (true) {
                 if (try self.trySchedule(allocator, typed_task)) return;
                 try std.Thread.yield();
@@ -295,6 +294,20 @@ pub fn HomogeneousThreadPool(comptime TaskType: type) type {
 
             for (self.tasks.items) |task| task.join();
             for (self.tasks.items) |task| _ = try task.result;
+        }
+
+        /// - Attempt to join and clean up all tasks.
+        /// - Discard the results of the threads as we're doing this purely for cleanup.
+        /// - Returns whether we successfully joined.
+        pub fn joinForDeinit(self: *Self, timeout: sig.time.Duration) bool {
+            var timer = sig.time.Timer.start() catch unreachable;
+            while (self.pollFallible() == .pending) {
+                std.Thread.yield() catch std.atomic.spinLoopHint();
+                if (timer.read().gt(timeout)) {
+                    return false;
+                }
+            }
+            return true;
         }
     };
 }

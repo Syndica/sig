@@ -3,6 +3,7 @@ const sig = @import("../sig.zig");
 const replay = @import("lib.zig");
 
 const Allocator = std.mem.Allocator;
+const Atomic = std.atomic.Value;
 
 const Channel = sig.sync.Channel;
 const HomogeneousThreadPool = sig.utils.thread.HomogeneousThreadPool;
@@ -34,7 +35,7 @@ pub fn processBatch(
     svm_params: SvmSlot.Params,
     committer: Committer,
     transactions: []const ResolvedTransaction,
-    exit: *std.atomic.Value(bool),
+    exit: *Atomic(bool),
 ) !?TransactionError {
     const results = try allocator.alloc(struct { Hash, ProcessedTransaction }, transactions.len);
     defer allocator.free(results);
@@ -44,7 +45,7 @@ pub fn processBatch(
 
     for (transactions, 0..) |transaction, i| {
         if (exit.load(.monotonic)) {
-            return null;
+            return error.Exit;
         }
         const hash = transaction.transaction.verifyAndHashMessage() catch return .SignatureFailure;
         const runtime_transaction = transaction.toRuntimeTransaction(hash);
@@ -85,7 +86,7 @@ pub const TransactionScheduler = struct {
     /// The number of batches that a result has been received over the channel for.
     batches_finished: usize,
     /// triggered as soon as a single transaction fails
-    exit: std.atomic.Value(bool),
+    exit: *Atomic(bool),
     /// if non-null, a failure was already recorded and will be returned for every poll
     failure: ?replay.confirm_slot.ConfirmSlotError,
     svm_params: SvmSlot.Params,
@@ -98,6 +99,7 @@ pub const TransactionScheduler = struct {
         batch_capacity: usize,
         thread_pool: *ThreadPool,
         svm_params: SvmSlot.Params,
+        exit: *Atomic(bool),
     ) !TransactionScheduler {
         var batches = try std.ArrayListUnmanaged(ResolvedBatch)
             .initCapacity(allocator, batch_capacity);
@@ -119,7 +121,7 @@ pub const TransactionScheduler = struct {
             .locks = .{},
             .batches_started = 0,
             .batches_finished = 0,
-            .exit = std.atomic.Value(bool).init(false),
+            .exit = exit,
             .failure = null,
             .svm_params = svm_params,
         };
@@ -200,7 +202,7 @@ pub const TransactionScheduler = struct {
                 .batch_index = self.batches_started,
                 .transactions = batch.transactions,
                 .results = &self.results,
-                .exit = &self.exit,
+                .exit = self.exit,
             }));
             self.batches_started += 1;
         }
@@ -215,7 +217,7 @@ const ProcessBatchTask = struct {
     batch_index: usize,
     transactions: []const ResolvedTransaction,
     results: *Channel(TransactionScheduler.BatchResult),
-    exit: *std.atomic.Value(bool),
+    exit: *Atomic(bool),
 
     pub fn run(self: *ProcessBatchTask) !void {
         const result = try processBatch(
@@ -246,7 +248,7 @@ test "TransactionScheduler: happy path" {
 
     // TODO fix undefined
     var scheduler = try TransactionScheduler
-        .initCapacity(allocator, undefined, 10, &thread_pool, undefined);
+        .initCapacity(allocator, undefined, 10, &thread_pool, undefined, undefined);
     defer scheduler.deinit();
 
     var tx_arena = std.heap.ArenaAllocator.init(allocator);
@@ -311,7 +313,7 @@ test "TransactionScheduler: failed account locks" {
 
     // TODO fix undefined
     var scheduler = try TransactionScheduler
-        .initCapacity(allocator, undefined, 10, &thread_pool, undefined);
+        .initCapacity(allocator, undefined, 10, &thread_pool, undefined, undefined);
     defer scheduler.deinit();
 
     const tx = try Transaction.initRandom(allocator, rng.random());
@@ -352,7 +354,7 @@ test "TransactionScheduler: signature verification failure" {
 
     // TODO fix undefined
     var scheduler = try TransactionScheduler
-        .initCapacity(allocator, undefined, 10, &thread_pool, undefined);
+        .initCapacity(allocator, undefined, 10, &thread_pool, undefined, undefined);
     defer scheduler.deinit();
 
     var tx_arena = std.heap.ArenaAllocator.init(allocator);
