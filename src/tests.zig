@@ -1,7 +1,7 @@
 const std = @import("std");
 const sig = @import("sig.zig");
 
-test "core" {
+test {
     @setEvalBranchQuota(10_000);
     refAllDeclsRecursive(sig, 2);
     refAllDeclsRecursive(sig.ledger, 2);
