@@ -18,6 +18,32 @@ const AccountSharedData = sig.runtime.AccountSharedData;
 
 const AccountsDB = accounts_db.AccountsDB;
 
+/// Interface for both reading and writing accounts.
+///
+/// Do not use this unless you need to *write* into the database generically.
+/// Otherwise use AccountReader if you only need to read accounts.
+pub const AccountStore = union(enum) {
+    accounts_db: *AccountsDB,
+    thread_safe_map: *ThreadSafeAccountMap,
+    noop,
+
+    pub fn reader(self: AccountStore) AccountReader {
+        return switch (self) {
+            .accounts_db => |db| .{ .accounts_db = db },
+            .thread_safe_map => |map| .{ .thread_safe_map = map },
+            .noop => .noop,
+        };
+    }
+
+    pub fn put(self: AccountStore, slot: Slot, address: Pubkey, account: AccountSharedData) !void {
+        return switch (self) {
+            .accounts_db => |db| db.putAccount(slot, address, account),
+            .thread_safe_map => |map| try map.put(slot, address, account),
+            .noop => {},
+        };
+    }
+};
+
 /// Interface for only reading accounts
 pub const AccountReader = union(enum) {
     accounts_db: *AccountsDB,
@@ -32,18 +58,11 @@ pub const AccountReader = union(enum) {
         };
     }
 
-    pub fn get(self: AccountReader, address: Pubkey, ancestors: *const Ancestors) !?Account {
+    pub fn fork(self: AccountReader, ancestors: *const Ancestors) ForkAccountReader {
         return switch (self) {
-            .accounts_db => |db| {
-                const account = try db.getAccount(&address); // TODO: use ancestors after PR #796
-                if (account.lamports == 0) {
-                    account.deinit(db.allocator);
-                    return null;
-                }
-                return account;
-            },
-            .thread_safe_map => |map| try map.get(address, ancestors),
-            .noop => null,
+            .accounts_db => |db| .{ .accounts_db = .{ db, ancestors } },
+            .thread_safe_map => |map| .{ .thread_safe_map = .{ map, ancestors } },
+            .noop => .noop,
         };
     }
 
@@ -64,28 +83,37 @@ pub const AccountReader = union(enum) {
     }
 };
 
-/// Interface for both reading and writing accounts.
-///
-/// Do not use this unless you need to *write* into the database generically.
-/// Otherwise use AccountReader if you only need to read accounts.
-pub const AccountStore = union(enum) {
-    accounts_db: *AccountsDB,
-    thread_safe_map: *ThreadSafeAccountMap,
+/// Interface for only reading accounts that exist on a particular fork.
+pub const ForkAccountReader = union(enum) {
+    accounts_db: struct { *AccountsDB, *const Ancestors },
+    thread_safe_map: struct { *ThreadSafeAccountMap, *const Ancestors },
+    simple_map: struct { Allocator, *const std.AutoArrayHashMapUnmanaged(Pubkey, Account) },
     noop,
 
-    pub fn reader(self: AccountStore) AccountReader {
+    /// use this to deinit accounts returned by get methods
+    pub fn allocator(self: ForkAccountReader) Allocator {
         return switch (self) {
-            .accounts_db => |db| .{ .accounts_db = db },
-            .thread_safe_map => |map| .{ .thread_safe_map = map },
-            .noop => .noop,
+            .noop => sig.utils.allocators.failing.allocator(.{}),
+            .simple_map => |item| item[0],
+            inline else => |item| item[0].allocator,
         };
     }
 
-    pub fn put(self: AccountStore, slot: Slot, address: Pubkey, account: AccountSharedData) !void {
+    pub fn get(self: ForkAccountReader, address: Pubkey) !?Account {
         return switch (self) {
-            .accounts_db => unreachable, // TODO: PR #796
-            .thread_safe_map => |map| try map.put(slot, address, account),
-            .noop => {},
+            .accounts_db => |pair| {
+                const db, const ancestors = pair;
+                const account = try db.getAccountWithAncestors(&address, ancestors) orelse
+                    return null;
+                if (account.lamports == 0) {
+                    account.deinit(db.allocator);
+                    return null;
+                }
+                return account;
+            },
+            .thread_safe_map => |pair| try pair[0].get(address, pair[1]),
+            .simple_map => |pair| pair[1].get(address),
+            .noop => null,
         };
     }
 };

@@ -96,9 +96,8 @@ fn scheduleTransactionBatches(
 
         const batch = try resolveBatch(
             allocator,
-            account_store.reader(),
+            account_store.reader().fork(ancestors),
             entry.transactions,
-            ancestors,
         );
         errdefer batch.deinit(allocator);
 

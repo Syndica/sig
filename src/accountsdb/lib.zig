@@ -12,6 +12,7 @@ pub const swiss_map = @import("swiss_map.zig");
 
 pub const AccountStore = account_store.AccountStore;
 pub const AccountReader = account_store.AccountReader;
+pub const ForkAccountReader = account_store.ForkAccountReader;
 pub const ThreadSafeAccountMap = account_store.ThreadSafeAccountMap;
 
 pub const AccountsDB = db.AccountsDB;
