@@ -523,13 +523,13 @@ pub fn SortedMapCustom(
 
         fn bincodeSerialize(
             writer: anytype,
-            data: anytype,
+            data: SortedMapSelf,
             params: sig.bincode.Params,
         ) !void {
             try sig.bincode.write(writer, data.unmanaged, params);
         }
 
-        fn bincodeFree(_: std.mem.Allocator, data: anytype) void {
+        fn bincodeFree(_: std.mem.Allocator, data: SortedMapSelf) void {
             data.deinit();
         }
     };
