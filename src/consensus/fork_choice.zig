@@ -994,9 +994,12 @@ pub const ForkChoice = struct {
             // then allow processing to continue as this is a duplicate version
             // of the same slot.
             if (pubkey_latest_vote) |latest_vote| {
-                if (new_vote_slot < latest_vote.slot or
-                    (new_vote_slot == latest_vote.slot and
-                        new_vote_hash.order(&latest_vote.hash) != .lt))
+                if (new_vote_slot < latest_vote.slot) {
+                    continue;
+                }
+
+                if (new_vote_slot == latest_vote.slot and
+                    new_vote_hash.order(&latest_vote.hash) != .lt)
                 {
                     continue;
                 }
