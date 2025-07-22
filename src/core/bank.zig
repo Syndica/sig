@@ -40,14 +40,13 @@ const UnixTimestamp = core.time.UnixTimestamp;
 const FeeRateGovernor = core.genesis_config.FeeRateGovernor;
 const Inflation = core.genesis_config.Inflation;
 
-const EpochStakes = core.stake.EpochStakes;
-const EpochStakeMap = core.stake.EpochStakeMap;
-const Stakes = core.stake.Stakes;
-const epochStakeMapClone = core.stake.epochStakeMapClone;
-const epochStakeMapDeinit = core.stake.epochStakeMapDeinit;
-const epochStakeMapRandom = core.stake.epochStakeMapRandom;
-
 const Ancestors = sig.core.Ancestors;
+const EpochStakes = core.EpochStakes;
+const EpochStakesMap = core.EpochStakesMap;
+const Stakes = core.Stakes;
+
+const deinitMapAndValues = sig.utils.collections.deinitMapAndValues;
+const cloneMapAndValues = sig.utils.collections.cloneMapAndValues;
 
 /// Information about a slot that is determined when the slot is initialized and
 /// then never changes.
@@ -352,7 +351,7 @@ pub const BankFields = struct {
     inflation: Inflation,
     stakes: Stakes(.delegation),
     unused_accounts: UnusedAccounts,
-    epoch_stakes: EpochStakeMap,
+    epoch_stakes: EpochStakesMap,
     is_delta: bool,
 
     pub fn deinit(
@@ -370,7 +369,7 @@ pub const BankFields = struct {
 
         bank_fields.unused_accounts.deinit(allocator);
 
-        epochStakeMapDeinit(bank_fields.epoch_stakes, allocator);
+        deinitMapAndValues(allocator, bank_fields.epoch_stakes);
     }
 
     pub fn clone(
@@ -392,8 +391,8 @@ pub const BankFields = struct {
         const unused_accounts = try bank_fields.unused_accounts.clone(allocator);
         errdefer unused_accounts.deinit(allocator);
 
-        const epoch_stakes = try epochStakeMapClone(bank_fields.epoch_stakes, allocator);
-        errdefer epochStakeMapDeinit(epoch_stakes, allocator);
+        const epoch_stakes = try cloneMapAndValues(allocator, bank_fields.epoch_stakes);
+        errdefer deinitMapAndValues(allocator, epoch_stakes);
 
         var cloned = bank_fields.*;
         cloned.blockhash_queue = blockhash_queue;
@@ -449,11 +448,10 @@ pub const BankFields = struct {
 
     pub fn getStakedNodes(
         self: *const BankFields,
-        allocator: std.mem.Allocator,
         epoch: Epoch,
     ) !*const std.AutoArrayHashMapUnmanaged(Pubkey, u64) {
         const epoch_stakes = self.epoch_stakes.getPtr(epoch) orelse return error.NoEpochStakes;
-        return epoch_stakes.stakes.vote_accounts.stakedNodes(allocator);
+        return &epoch_stakes.stakes.vote_accounts.staked_nodes;
     }
 
     /// Returns the leader schedule for this bank's epoch
@@ -472,7 +470,7 @@ pub const BankFields = struct {
         epoch: Epoch,
     ) !core.leader_schedule.LeaderSchedule {
         const slots_in_epoch = self.epoch_schedule.getSlotsInEpoch(self.epoch);
-        const staked_nodes = try self.getStakedNodes(allocator, epoch);
+        const staked_nodes = try self.getStakedNodes(epoch);
         return .{
             .allocator = allocator,
             .slot_leaders = try core.leader_schedule.LeaderSchedule.fromStakedNodes(
@@ -506,8 +504,14 @@ pub const BankFields = struct {
         const unused_accounts = try UnusedAccounts.initRandom(random, allocator, max_list_entries);
         errdefer unused_accounts.deinit(allocator);
 
-        const epoch_stakes = try epochStakeMapRandom(random, allocator, 1, max_list_entries);
-        errdefer epochStakeMapDeinit(epoch_stakes, allocator);
+        const epoch_stakes = try sig.core.epoch_stakes.epochStakeMapRandom(
+            allocator,
+            random,
+            .delegation,
+            1,
+            max_list_entries,
+        );
+        errdefer deinitMapAndValues(allocator, epoch_stakes);
 
         return .{
             .blockhash_queue = blockhash_queue,
