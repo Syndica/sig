@@ -893,15 +893,14 @@ test "constructInstructionsAccount" {
 }
 
 test "loadAccount allocations" {
-    const allocator = std.testing.allocator;
     const NATIVE_LOADER_ID = runtime.ids.NATIVE_LOADER_ID;
 
     const checkFn = struct {
-        fn f(alloc: Allocator) !void {
+        fn f(allocator: Allocator) !void {
             var accountsdb = std.AutoArrayHashMapUnmanaged(Pubkey, sig.core.Account).empty;
             defer accountsdb.deinit(allocator);
 
-            try accountsdb.put(alloc, NATIVE_LOADER_ID, .{
+            try accountsdb.put(allocator, NATIVE_LOADER_ID, .{
                 .data = .{ .empty = .{ .len = 0 } },
                 .lamports = 1,
                 .executable = true,
@@ -909,18 +908,18 @@ test "loadAccount allocations" {
                 .rent_epoch = 0,
             });
 
-            var tx = try emptyTxWithKeys(alloc, &.{NATIVE_LOADER_ID});
-            defer tx.accounts.deinit(alloc);
+            var tx = try emptyTxWithKeys(allocator, &.{NATIVE_LOADER_ID});
+            defer tx.accounts.deinit(allocator);
 
             var batch_account_cache = try BatchAccountCache.initFromAccountsDb(
-                alloc,
+                allocator,
                 .{ .simple_map = .{ allocator, &accountsdb } },
                 &.{tx},
             );
-            defer batch_account_cache.deinit(alloc);
+            defer batch_account_cache.deinit(allocator);
 
             const account = (try batch_account_cache.loadAccount(
-                alloc,
+                allocator,
                 &tx,
                 &NATIVE_LOADER_ID,
                 false,
@@ -931,7 +930,7 @@ test "loadAccount allocations" {
         }
     }.f;
 
-    try std.testing.checkAllAllocationFailures(allocator, checkFn, .{});
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, checkFn, .{});
 }
 
 test "load tx too large" {
