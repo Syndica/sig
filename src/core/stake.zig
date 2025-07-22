@@ -96,7 +96,7 @@ pub fn StakesCacheGeneric(comptime stakes_type: StakesType) type {
                     new_rate_activation_epoch,
                 );
             } else if (stake_program.ID.equals(&account.owner)) {
-                const stake_account = StakeAccount.fromAccountSharedData(
+                const stake_account = StakeAccount.init(
                     allocator,
                     try account.clone(allocator),
                 ) catch {
@@ -402,31 +402,14 @@ pub const CaclulateStakeContext = struct {
 
 pub const StakeAccount = struct {
     account: AccountSharedData,
-    state: StakeStateV2,
-
-    pub fn deinit(self: *const StakeAccount, allocator: Allocator) void {
-        self.account.deinit(allocator);
-    }
-
-    pub fn clone(self: *const StakeAccount, allocator: Allocator) Allocator.Error!StakeAccount {
-        return .{
-            .account = try self.account.clone(allocator),
-            .state = self.state,
-        };
-    }
-
-    pub fn getDelegation(self: StakeAccount) Delegation {
-        return self.state.getDelegation() orelse
-            @panic("StakeAccount does not have a delegation");
-    }
-
-    pub fn getStake(self: StakeAccount) Stake {
-        return self.state.getStake() orelse
-            @panic("StakeAccount does not have a stake");
-    }
+    // When initializing the `StakeAccount` we require that the `StakeStateV2` contained in the
+    // account data is the `stake` variant which contains `meta: Meta, stake: Stake, flags: StakeFlags`.
+    // For now, only the `Stake` field of the `stake variant is used, if in future we require the `Meta` or `Flags`
+    // we can simply add them in the initialisation method.
+    stake: Stake,
 
     /// Takes ownership of `account`.
-    pub fn fromAccountSharedData(allocator: Allocator, account: AccountSharedData) !StakeAccount {
+    pub fn init(allocator: Allocator, account: AccountSharedData) !StakeAccount {
         errdefer account.deinit(allocator);
 
         if (!stake_program.ID.equals(&account.owner)) return error.InvalidOwner;
@@ -438,12 +421,31 @@ pub const StakeAccount = struct {
             .{},
         );
 
-        if (state.getDelegation() == null) return error.NoDelegation;
+        const stake = state.getStake() orelse return error.InvalidData;
 
         return .{
             .account = account,
-            .state = state,
+            .stake = stake,
         };
+    }
+
+    pub fn deinit(self: *const StakeAccount, allocator: Allocator) void {
+        self.account.deinit(allocator);
+    }
+
+    pub fn clone(self: *const StakeAccount, allocator: Allocator) Allocator.Error!StakeAccount {
+        return .{
+            .account = try self.account.clone(allocator),
+            .stake = self.stake,
+        };
+    }
+
+    pub fn getDelegation(self: StakeAccount) Delegation {
+        return self.stake.delegation;
+    }
+
+    pub fn getStake(self: StakeAccount) Stake {
+        return self.stake;
     }
 };
 
