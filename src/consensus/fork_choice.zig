@@ -1021,13 +1021,13 @@ pub const ForkChoice = struct {
                     new_vote_slot > old_latest_vote_slot);
 
                 const epoch = epoch_schedule.getEpoch(old_latest_vote_slot);
-                const stake_update = if (epoch_stakes.get(epoch)) |stakes| blk: {
+                const stake_update = stake_update: {
+                    const stakes = epoch_stakes.get(epoch) orelse
+                        break :stake_update 0;
                     const stake_and_vote_account =
                         stakes.current.stakes.vote_accounts.vote_accounts.get(pubkey) orelse
-                        break :blk 0;
-                    break :blk stake_and_vote_account.stake;
-                } else blk: {
-                    break :blk 0;
+                        break :stake_update 0;
+                    break :stake_update stake_and_vote_account.stake;
                 };
 
                 if (stake_update > 0) {
@@ -1056,13 +1056,13 @@ pub const ForkChoice = struct {
             {
                 // Add this pubkey stake to new fork
                 const epoch = epoch_schedule.getEpoch(new_vote_slot_hash.slot);
-                const stake_update = if (epoch_stakes.get(epoch)) |stakes| blk: {
+                const stake_update = stake_update: {
+                    const stakes = epoch_stakes.get(epoch) orelse
+                        break :stake_update 0;
                     const stake_and_vote_account =
                         stakes.current.stakes.vote_accounts.vote_accounts.get(pubkey) orelse
-                        break :blk 0;
-                    break :blk stake_and_vote_account.stake;
-                } else blk: {
-                    break :blk 0;
+                        break :stake_update 0;
+                    break :stake_update stake_and_vote_account.stake;
                 };
 
                 const add_op = UpdateOperation{ .Add = stake_update };
