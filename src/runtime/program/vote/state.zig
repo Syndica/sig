@@ -341,7 +341,11 @@ pub const AuthorizedVoters = struct {
         .serializer = serialize,
     };
 
-    pub fn init(allocator: std.mem.Allocator, epoch: Epoch, pubkey: Pubkey) !AuthorizedVoters {
+    pub fn init(
+        allocator: std.mem.Allocator,
+        epoch: Epoch,
+        pubkey: Pubkey,
+    ) std.mem.Allocator.Error!AuthorizedVoters {
         var authorized_voters = SortedMap(Epoch, Pubkey).init(allocator);
         try authorized_voters.put(epoch, pubkey);
         return AuthorizedVoters{ .voters = authorized_voters };
@@ -349,6 +353,10 @@ pub const AuthorizedVoters = struct {
 
     pub fn deinit(self: AuthorizedVoters) void {
         self.voters.deinit();
+    }
+
+    pub fn clone(self: *const AuthorizedVoters) std.mem.Allocator.Error!AuthorizedVoters {
+        return .{ .voters = try self.voters.clone() };
     }
 
     pub fn count(self: *const AuthorizedVoters) usize {
@@ -494,6 +502,18 @@ pub const AuthorizedVoters = struct {
             try writer.writeAll(&v.data);
         }
     }
+
+    pub fn equals(self: *const AuthorizedVoters, other: *const AuthorizedVoters) bool {
+        if (self.count() != other.count()) return false;
+        var self_voters = self.voters;
+        var other_voters = other.voters;
+        for (self_voters.keys()) |key| {
+            const self_value = self_voters.get(key).?;
+            const other_value = other_voters.get(key) orelse return false;
+            if (!self_value.equals(&other_value)) return false;
+        }
+        return true;
+    }
 };
 
 const CircBufV0 = struct {
@@ -542,6 +562,21 @@ const CircBufV1 = struct {
         }
         return if (self.idx < self.buf.len) self.buf[self.idx] else null;
     }
+
+    pub fn equals(self: CircBufV1, other: CircBufV1) bool {
+        if (self.is_empty != other.is_empty) return false;
+        if (self.is_empty) return true;
+
+        var self_idx = self.idx;
+        var other_idx = other.idx;
+        for (0..MAX_PRIOR_VOTERS) |_| {
+            if (!std.meta.eql(self.buf[self_idx], other.buf[other_idx])) return false;
+            self_idx = (self_idx + 1) % MAX_PRIOR_VOTERS;
+            other_idx = (other_idx + 1) % MAX_PRIOR_VOTERS;
+        }
+
+        return true;
+    }
 };
 
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/vote_state_versions.rs#L20
@@ -574,6 +609,11 @@ pub const VoteStateVersions = union(enum) {
             .v1_14_11 => |vote_state| vote_state.deinit(),
             .current => |vote_state| vote_state.deinit(),
         }
+    }
+
+    pub fn isCorrectSizeAndInitialized(data: []const u8) bool {
+        return VoteState.isCorrectSizeAndInitialized(data) or
+            VoteState1_14_11.isCorrectSizeAndInitialized(data);
     }
 
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/vote_state_versions.rs#L31
@@ -721,6 +761,9 @@ pub const VoteState1_14_11 = struct {
     /// when votes.len() is MAX_LOCKOUT_HISTORY.
     pub const MAX_VOTE_STATE_SIZE: usize = 3731;
 
+    // Offset of VoteState1_4_11::prior_voters, for determining initialization status without deserialization
+    const DEFAULT_PRIOR_VOTERS_OFFSET: usize = 82;
+
     pub fn init(
         allocator: std.mem.Allocator,
         node_pubkey: Pubkey,
@@ -752,6 +795,14 @@ pub const VoteState1_14_11 = struct {
         self.votes.deinit();
         self.voters.deinit();
         self.epoch_credits.deinit();
+    }
+
+    pub fn isCorrectSizeAndInitialized(data: []const u8) bool {
+        return data.len == MAX_VOTE_STATE_SIZE and !std.mem.eql(
+            u8,
+            data[4 .. 4 + DEFAULT_PRIOR_VOTERS_OFFSET],
+            &([_]u8{0} ** DEFAULT_PRIOR_VOTERS_OFFSET),
+        );
     }
 };
 
@@ -791,6 +842,9 @@ pub const VoteState = struct {
     /// when votes.len() is MAX_LOCKOUT_HISTORY.
     pub const MAX_VOTE_STATE_SIZE: usize = 3762;
 
+    // Offset of VoteState::prior_voters, for determining initialization status without deserialization
+    const DEFAULT_PRIOR_VOTERS_OFFSET: usize = 114;
+
     pub fn default(allocator: std.mem.Allocator) VoteState {
         return .{
             .node_pubkey = Pubkey.ZEROES,
@@ -814,14 +868,12 @@ pub const VoteState = struct {
         withdrawer: Pubkey,
         commission: u8,
         clock: Clock,
-    ) !VoteState {
-        const authorized_voters = AuthorizedVoters.init(
+    ) std.mem.Allocator.Error!VoteState {
+        const authorized_voters = try AuthorizedVoters.init(
             allocator,
             clock.epoch,
             authorized_voter,
-        ) catch {
-            return InstructionError.Custom;
-        };
+        );
 
         return .{
             .node_pubkey = node_pubkey,
@@ -842,9 +894,55 @@ pub const VoteState = struct {
         self.epoch_credits.deinit();
     }
 
+    pub fn clone(self: VoteState) std.mem.Allocator.Error!VoteState {
+        const votes = try self.votes.clone();
+        errdefer votes.deinit();
+        const voters = try self.voters.clone();
+        errdefer voters.deinit();
+        return .{
+            .node_pubkey = self.node_pubkey,
+            .withdrawer = self.withdrawer,
+            .commission = self.commission,
+            .votes = votes,
+            .root_slot = self.root_slot,
+            .voters = voters,
+            .prior_voters = self.prior_voters,
+            .epoch_credits = try self.epoch_credits.clone(),
+            .last_timestamp = self.last_timestamp,
+        };
+    }
+
+    pub fn equals(self: *const VoteState, other: *const VoteState) bool {
+        if (self.votes.items.len != other.votes.items.len) return false;
+        for (self.votes.items, other.votes.items) |a, b|
+            if (!std.meta.eql(a, b)) return false;
+
+        if (!self.voters.equals(&other.voters)) return false;
+
+        if (!self.prior_voters.equals(other.prior_voters)) return false;
+
+        if (self.epoch_credits.items.len != other.epoch_credits.items.len) return false;
+        for (self.epoch_credits.items, other.epoch_credits.items) |a, b|
+            if (!std.meta.eql(a, b)) return false;
+
+        return self.node_pubkey.equals(&other.node_pubkey) and
+            self.withdrawer.equals(&other.withdrawer) and
+            self.commission == other.commission and
+            self.root_slot == other.root_slot and
+            std.meta.eql(self.last_timestamp, other.last_timestamp);
+    }
+
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/vote_state_versions.rs#L84
     pub fn isUninitialized(self: VoteState) bool {
         return self.voters.count() == 0;
+    }
+
+    pub fn isCorrectSizeAndInitialized(data: []const u8) bool {
+        return data.len == MAX_VOTE_STATE_SIZE and !std.mem.eql(
+            u8,
+            data[4 .. 4 + DEFAULT_PRIOR_VOTERS_OFFSET],
+            &([_]u8{0} ** DEFAULT_PRIOR_VOTERS_OFFSET),
+        );
     }
 
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/mod.rs#L862

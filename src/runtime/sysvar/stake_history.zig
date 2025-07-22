@@ -15,7 +15,7 @@ pub const StakeHistory = struct {
 
     pub const Entry = struct {
         epoch: Epoch,
-        stake: ClusterStake,
+        stake: StakeState,
 
         pub fn sortCmp(_: void, a: Entry, b: Entry) bool {
             return b.epoch < a.epoch; // Sort by descending epoch
@@ -24,9 +24,21 @@ pub const StakeHistory = struct {
         pub fn searchCmp(epoch: u64, b: Entry) std.math.Order {
             return std.math.order(b.epoch, epoch);
         }
+
+        pub fn initRandom(random: std.Random) Entry {
+            if (!builtin.is_test) @compileError("only for testing");
+            return .{
+                .epoch = random.int(Epoch),
+                .stake = .{
+                    .effective = random.int(u64),
+                    .activating = random.int(u64),
+                    .deactivating = random.int(u64),
+                },
+            };
+        }
     };
 
-    pub const ClusterStake = struct {
+    pub const StakeState = struct {
         /// Effective stake at this epoch
         effective: u64,
         /// Sum of portion of stakes not fully warmed up
@@ -83,14 +95,18 @@ pub const StakeHistory = struct {
     }
 
     pub fn initRandom(allocator: Allocator, random: std.Random) Allocator.Error!StakeHistory {
-        if (!builtin.is_test) @compileError("only available in test mode");
+        // TODO: Uncomment once not required by bank init random
+        // if (!builtin.is_test) @compileError("only for testing");
         var self = try StakeHistory.init(allocator);
-        for (0..random.intRangeAtMost(Epoch, 1, 1_000)) |epoch|
-            self.entries.appendAssumeCapacity(.{ .epoch = epoch, .stake = .{
-                .effective = random.int(u64),
-                .activating = random.int(u64),
-                .deactivating = random.int(u64),
-            } });
+        for (0..random.uintLessThan(Epoch, MAX_ENTRIES)) |_|
+            self.entries.appendAssumeCapacity(.{
+                .epoch = random.int(u64),
+                .stake = .{
+                    .effective = random.int(u64),
+                    .activating = random.int(u64),
+                    .deactivating = random.int(u64),
+                },
+            });
         std.sort.heap(Entry, self.entries.slice(), {}, Entry.sortCmp);
         return self;
     }

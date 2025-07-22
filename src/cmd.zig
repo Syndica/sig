@@ -1122,7 +1122,7 @@ fn validator(
     const epoch_schedule = bank_fields.epoch_schedule;
     const epoch = bank_fields.epoch;
     const staked_nodes =
-        try bank_fields.getStakedNodes(allocator, epoch);
+        try bank_fields.getStakedNodes(epoch);
 
     var epoch_context_manager = try sig.adapter.EpochContextManager.init(
         allocator,

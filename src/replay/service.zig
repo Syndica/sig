@@ -336,7 +336,7 @@ test trackNewSlots {
         .ns_per_slot = 1,
         .genesis_creation_time = 1,
         .slots_per_year = 1,
-        .stakes = try .initEmpty(allocator),
+        .stakes = try .initEmptyWithGenesisStakeHistoryEntry(allocator),
         .rent_collector = .initRandom(rng.random()),
     });
 
