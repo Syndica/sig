@@ -120,10 +120,7 @@ pub const UpdateClockDeps = struct {
     update_sysvar_deps: UpdateSysvarAccountDeps,
 };
 
-pub fn updateClock(
-    allocator: std.mem.Allocator,
-    deps: UpdateClockDeps,
-) !void {
+pub fn updateClock(allocator: std.mem.Allocator, deps: UpdateClockDeps) !void {
     const clock = try nextClock(
         allocator,
         deps.feature_set,
@@ -173,10 +170,7 @@ pub fn updateLastRestartSlot(
     );
 }
 
-pub fn updateSlotHistory(
-    allocator: std.mem.Allocator,
-    deps: UpdateSysvarAccountDeps,
-) !void {
+pub fn updateSlotHistory(allocator: std.mem.Allocator, deps: UpdateSysvarAccountDeps) !void {
     var slot_history: SlotHistory = try getSysvarFromAccount(
         allocator,
         deps.accounts_db,
@@ -209,11 +203,7 @@ pub fn updateSlotHashes(
     try updateSysvarAccount(allocator, SlotHashes, slot_hashes, deps);
 }
 
-pub fn updateRent(
-    allocator: std.mem.Allocator,
-    rent: Rent,
-    deps: UpdateSysvarAccountDeps,
-) !void {
+pub fn updateRent(allocator: std.mem.Allocator, rent: Rent, deps: UpdateSysvarAccountDeps) !void {
     try updateSysvarAccount(allocator, Rent, rent, deps);
 }
 
