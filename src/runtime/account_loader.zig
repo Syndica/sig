@@ -632,7 +632,7 @@ test "loadTransactionAccounts empty transaction" {
 
     var batch_account_cache = try BatchAccountCache.initFromAccountsDb(
         allocator,
-        .{ .simple_map = .{ allocator, &accountsdb } },
+        .{ .simple_map = &accountsdb },
         &.{},
     );
     defer batch_account_cache.deinit(allocator);
@@ -663,7 +663,7 @@ test "loadTransactionAccounts sysvar instruction" {
 
     var batch_account_cache = try BatchAccountCache.initFromAccountsDb(
         allocator,
-        .{ .simple_map = .{ allocator, &accountsdb } },
+        .{ .simple_map = &accountsdb },
         &.{},
     );
     defer batch_account_cache.deinit(allocator);
@@ -815,7 +815,7 @@ test "load accounts rent paid" {
 
     var account_cache = try BatchAccountCache.initFromAccountsDb(
         allocator,
-        .{ .simple_map = .{ allocator, &accountsdb } },
+        .{ .simple_map = &accountsdb },
         &.{tx},
     );
     defer account_cache.deinit(allocator);
@@ -913,7 +913,7 @@ test "loadAccount allocations" {
 
             var batch_account_cache = try BatchAccountCache.initFromAccountsDb(
                 allocator,
-                .{ .simple_map = .{ allocator, &accountsdb } },
+                .{ .simple_map = &accountsdb },
                 &.{tx},
             );
             defer batch_account_cache.deinit(allocator);
@@ -962,7 +962,7 @@ test "load tx too large" {
 
     var account_cache = try BatchAccountCache.initFromAccountsDb(
         allocator,
-        .{ .simple_map = .{ allocator, &accountsdb } },
+        .{ .simple_map = &accountsdb },
         &.{tx},
     );
     defer account_cache.deinit(allocator);
@@ -1060,7 +1060,7 @@ test "dont double count program owner account data size" {
 
     var account_cache = try BatchAccountCache.initFromAccountsDb(
         allocator,
-        .{ .simple_map = .{ allocator, &accountsdb } },
+        .{ .simple_map = &accountsdb },
         &.{tx},
     );
     defer account_cache.deinit(allocator);
@@ -1093,7 +1093,7 @@ test "load, create new account" {
 
     var account_cache = try BatchAccountCache.initFromAccountsDb(
         allocator,
-        .{ .simple_map = .{ allocator, &accountsdb } },
+        .{ .simple_map = &accountsdb },
         &.{tx},
     );
     defer account_cache.deinit(allocator);
@@ -1151,7 +1151,7 @@ test "invalid program owner owner" {
 
     var account_cache = try BatchAccountCache.initFromAccountsDb(
         allocator,
-        .{ .simple_map = .{ allocator, &accountsdb } },
+        .{ .simple_map = &accountsdb },
         &.{tx},
     );
     defer account_cache.deinit(allocator);
@@ -1199,7 +1199,7 @@ test "missing program owner account" {
 
     var account_cache = try BatchAccountCache.initFromAccountsDb(
         allocator,
-        .{ .simple_map = .{ allocator, &accountsdb } },
+        .{ .simple_map = &accountsdb },
         &.{tx},
     );
     defer account_cache.deinit(allocator);
@@ -1240,7 +1240,7 @@ test "deallocate account" {
 
     var account_cache = try BatchAccountCache.initFromAccountsDb(
         allocator,
-        .{ .simple_map = .{ allocator, &accountsdb } },
+        .{ .simple_map = &accountsdb },
         &.{tx},
     );
     defer account_cache.deinit(allocator);
@@ -1325,7 +1325,7 @@ test "load v3 program" {
 
     var account_cache = try BatchAccountCache.initFromAccountsDb(
         allocator,
-        .{ .simple_map = .{ allocator, &accountsdb } },
+        .{ .simple_map = &accountsdb },
         &.{tx},
     );
     defer account_cache.deinit(allocator);

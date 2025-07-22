@@ -87,14 +87,19 @@ pub const AccountReader = union(enum) {
 pub const SlotAccountReader = union(enum) {
     accounts_db: struct { *AccountsDB, *const Ancestors },
     thread_safe_map: struct { *ThreadSafeAccountMap, *const Ancestors },
-    simple_map: struct { Allocator, *const std.AutoArrayHashMapUnmanaged(Pubkey, Account) },
+    /// Should only store borrowed accounts, or else it will panic on deinit.
+    simple_map: *const std.AutoArrayHashMapUnmanaged(Pubkey, Account),
     noop,
 
     /// use this to deinit accounts returned by get methods
     pub fn allocator(self: SlotAccountReader) Allocator {
         return switch (self) {
             .noop => sig.utils.allocators.failing.allocator(.{}),
-            .simple_map => |item| item[0],
+            .simple_map => sig.utils.allocators.failing.allocator(.{
+                .alloc = .panics,
+                .resize = .panics,
+                .free = .panics,
+            }),
             inline else => |item| item[0].allocator,
         };
     }
@@ -112,7 +117,7 @@ pub const SlotAccountReader = union(enum) {
                 return account;
             },
             .thread_safe_map => |pair| try pair[0].get(address, pair[1]),
-            .simple_map => |pair| pair[1].get(address),
+            .simple_map => |pair| pair.get(address),
             .noop => null,
         };
     }
