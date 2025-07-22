@@ -15,8 +15,6 @@ const LatestValidatorVotesForFrozenBanks =
 const VersionedEpochStakes = sig.core.VersionedEpochStakes;
 const EpochSchedule = sig.core.EpochSchedule;
 
-const EpochStakeMap = sig.core.stake.EpochStakeMap;
-
 const SlotTracker = sig.replay.trackers.SlotTracker;
 const EpochTracker = sig.replay.trackers.EpochTracker;
 const BlockstoreReader = sig.ledger.BlockstoreReader;
@@ -50,9 +48,7 @@ pub const ConsensusDependencies = struct {
     descendants: *const std.AutoArrayHashMapUnmanaged(u64, SortedSet(u64)),
     vote_account: Pubkey,
     slot_history: *const SlotHistory,
-    epoch_stakes: EpochStakeMap,
-    // TODO this vs epoch_stakes.
-    versioned_epoch_stakes: *const std.AutoHashMap(Epoch, VersionedEpochStakes),
+    epoch_stakes: *const std.AutoHashMap(Epoch, VersionedEpochStakes),
     latest_validator_votes_for_frozen_banks: *const LatestValidatorVotesForFrozenBanks,
 };
 
@@ -67,7 +63,7 @@ pub fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
         deps.vote_account,
         deps.ancestors,
         deps.slot_tracker,
-        deps.versioned_epoch_stakes,
+        deps.epoch_stakes,
         deps.epoch_tracker.schedule,
         deps.progress_map,
         deps.fork_choice,
