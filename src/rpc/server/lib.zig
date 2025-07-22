@@ -8,7 +8,7 @@
 
 const server = @import("server.zig");
 
-test "rpc" {
+test {
     _ = server;
 }
 

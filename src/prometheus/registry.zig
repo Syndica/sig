@@ -498,6 +498,6 @@ test "prometheus.registry: options" {
     }
 }
 
-test "registery" {
+test {
     testing.refAllDecls(@This());
 }
