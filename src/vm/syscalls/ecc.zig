@@ -487,9 +487,7 @@ pub fn altBn128GroupOp(
         group_op,
         input,
         &result,
-        tc.feature_set.active.contains(
-            features.FIX_ALT_BN128_MULTIPLICATION_INPUT_LENGTH,
-        ),
+        tc.feature_set,
     ) catch {
         if (tc.feature_set.active.contains(
             features.SIMPLIFY_ALT_BN128_SYSCALL_ERROR_CODES,
@@ -603,7 +601,9 @@ fn altBn128Operation(
             return out;
         },
         .mul => {
-            const expected_size: usize = if (fix_length_check) 96 else 128;
+            const expected_size: usize = if (feature_set.active.contains(
+                features.FIX_ALT_BN128_MULTIPLICATION_INPUT_LENGTH,
+            )) 96 else 128;
             if (input.len > expected_size) return error.InvalidLength;
 
             // Copy over 96-bytes, padding out with zeroes if needed.
