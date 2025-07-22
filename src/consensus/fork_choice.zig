@@ -476,12 +476,12 @@ pub const ForkChoice = struct {
         // Set the current root's parent to the new root parent
         root_info.parent = root_parent;
 
+        try self.fork_infos.ensureUnusedCapacity(1);
         // Create the new root parent's fork info
         var root_parent_children = SortedMap(SlotAndHash, void).init(self.allocator);
         try root_parent_children.put(self.tree_root, {});
-
-        const root_parent_info = ForkInfo{
-            .logger = self.logger.withScope(@typeName(ForkInfo)),
+        self.fork_infos.putAssumeCapacityNoClobber(root_parent, .{
+            .logger = .from(self.logger),
             .stake_for_slot = 0,
             .stake_for_subtree = root_info.stake_for_subtree,
             .height = root_info.height + 1,
@@ -492,9 +492,7 @@ pub const ForkChoice = struct {
             .parent = null,
             .latest_duplicate_ancestor = null,
             .is_duplicate_confirmed = root_info.is_duplicate_confirmed,
-        };
-
-        try self.fork_infos.put(root_parent, root_parent_info);
+        });
         self.tree_root = root_parent;
     }
 
@@ -996,9 +994,12 @@ pub const ForkChoice = struct {
             // then allow processing to continue as this is a duplicate version
             // of the same slot.
             if (pubkey_latest_vote) |latest_vote| {
-                if (new_vote_slot < latest_vote.slot or
-                    (new_vote_slot == latest_vote.slot and
-                        new_vote_hash.order(&latest_vote.hash) != .lt))
+                if (new_vote_slot < latest_vote.slot) {
+                    continue;
+                }
+
+                if (new_vote_slot == latest_vote.slot and
+                    new_vote_hash.order(&latest_vote.hash) != .lt)
                 {
                     continue;
                 }
@@ -1012,21 +1013,21 @@ pub const ForkChoice = struct {
             if (try self.latest_votes.fetchPut(pubkey, new_vote_slot_hash)) |old_latest_vote| {
                 const old_latest_vote_slot = old_latest_vote.value.slot;
                 const old_latest_vote_hash = old_latest_vote.value.hash;
-                std.debug.assert(if (new_vote_slot == old_latest_vote_slot)
+                if (new_vote_slot == old_latest_vote_slot)
                     // If the slots are equal, then the new
                     // vote must be for a smaller hash
-                    new_vote_hash.order(&old_latest_vote_hash) == .lt
+                    std.debug.assert(new_vote_hash.order(&old_latest_vote_hash) == .lt)
                 else
-                    new_vote_slot > old_latest_vote_slot);
+                    std.debug.assert(new_vote_slot > old_latest_vote_slot);
 
                 const epoch = epoch_schedule.getEpoch(old_latest_vote_slot);
-                const stake_update = if (epoch_stakes.get(epoch)) |stakes| blk: {
+                const stake_update = stake_update: {
+                    const stakes = epoch_stakes.get(epoch) orelse
+                        break :stake_update 0;
                     const stake_and_vote_account =
                         stakes.current.stakes.vote_accounts.vote_accounts.get(pubkey) orelse
-                        break :blk 0;
-                    break :blk stake_and_vote_account.stake;
-                } else blk: {
-                    break :blk 0;
+                        break :stake_update 0;
+                    break :stake_update stake_and_vote_account.stake;
                 };
 
                 if (stake_update > 0) {
@@ -1055,13 +1056,13 @@ pub const ForkChoice = struct {
             {
                 // Add this pubkey stake to new fork
                 const epoch = epoch_schedule.getEpoch(new_vote_slot_hash.slot);
-                const stake_update = if (epoch_stakes.get(epoch)) |stakes| blk: {
+                const stake_update = stake_update: {
+                    const stakes = epoch_stakes.get(epoch) orelse
+                        break :stake_update 0;
                     const stake_and_vote_account =
                         stakes.current.stakes.vote_accounts.vote_accounts.get(pubkey) orelse
-                        break :blk 0;
-                    break :blk stake_and_vote_account.stake;
-                } else blk: {
-                    break :blk 0;
+                        break :stake_update 0;
+                    break :stake_update stake_and_vote_account.stake;
                 };
 
                 const add_op = UpdateOperation{ .Add = stake_update };
@@ -1442,16 +1443,18 @@ pub const ForkChoice = struct {
         var new_votes = std.ArrayListUnmanaged(PubkeyVote).empty;
         defer new_votes.deinit(allocator);
 
-        const new_vs = try latest_validator_votes.takeVotesDirtySet(
+        const dirty_votest = try latest_validator_votes.takeVotesDirtySet(
             allocator,
             root,
         );
-        defer allocator.free(new_vs);
+        defer allocator.free(dirty_votest);
 
-        for (new_vs) |vote_tuple| {
-            try new_votes.append(allocator, .{
-                .pubkey = vote_tuple[0],
-                .slot_hash = vote_tuple[1],
+        try new_votes.ensureUnusedCapacity(allocator, dirty_votest.len);
+        for (dirty_votest) |vote_tuple| {
+            const pubkey, const slot_hash = vote_tuple;
+            new_votes.appendAssumeCapacity(.{
+                .pubkey = pubkey,
+                .slot_hash = slot_hash,
             });
         }
 
@@ -1481,10 +1484,10 @@ pub const ForkChoice = struct {
         }
         std.debug.assert(!self.tree_root.equals(slot_hash_key));
 
-        const node_to_split_at = self.fork_infos.getPtr(slot_hash_key) orelse
+        var split_tree_root = self.fork_infos.get(slot_hash_key) orelse
             return error.SlotHashKeyNotFound;
-        var split_tree_root = node_to_split_at.*;
-        const parent = node_to_split_at.parent orelse return error.SplitNodeIsRoot;
+        const parent = split_tree_root.parent orelse
+            return error.SplitNodeIsRoot;
 
         var update_operations = UpdateOperations.init(allocator);
         defer update_operations.deinit();
@@ -2579,11 +2582,9 @@ test "HeaviestSubtreeForkChoice.isHeaviestChild" {
 test "HeaviestSubtreeForkChoice.addNewLeafSlot_duplicate" {
     var prng = std.Random.DefaultPrng.init(91);
     const random = prng.random();
+
     const duplicate_fork = try setupDuplicateForks();
-    defer test_allocator.destroy(duplicate_fork.fork_choice);
-    defer test_allocator.free(duplicate_fork.duplicate_leaves_descended_from_4);
-    defer test_allocator.free(duplicate_fork.duplicate_leaves_descended_from_5);
-    defer test_allocator.free(duplicate_fork.duplicate_leaves_descended_from_6);
+    defer duplicate_fork.deinit(test_allocator);
 
     var fork_choice = duplicate_fork.fork_choice;
     defer fork_choice.deinit();
@@ -3301,13 +3302,10 @@ test "HeaviestSubtreeForkChoice.addVotesDuplicateGreaterHashIgnored" {
         Pubkey.initRandom(random),
     };
 
-    const duplicate_fork = try setupDuplicateForks();
     const stake: u64 = 10;
 
-    defer test_allocator.destroy(duplicate_fork.fork_choice);
-    defer test_allocator.free(duplicate_fork.duplicate_leaves_descended_from_4);
-    defer test_allocator.free(duplicate_fork.duplicate_leaves_descended_from_5);
-    defer test_allocator.free(duplicate_fork.duplicate_leaves_descended_from_6);
+    const duplicate_fork = try setupDuplicateForks();
+    defer duplicate_fork.deinit(test_allocator);
 
     const duplicate_leaves_descended_from_4 = duplicate_fork.duplicate_leaves_descended_from_4;
     const duplicate_leaves_descended_from_6 = duplicate_fork.duplicate_leaves_descended_from_6;
@@ -3401,13 +3399,10 @@ test "HeaviestSubtreeForkChoice.addVotesDuplicateSmallerHashPrioritized" {
         Pubkey.initRandom(random),
     };
 
-    const duplicate_fork = try setupDuplicateForks();
     const stake: u64 = 10;
 
-    defer test_allocator.destroy(duplicate_fork.fork_choice);
-    defer test_allocator.free(duplicate_fork.duplicate_leaves_descended_from_4);
-    defer test_allocator.free(duplicate_fork.duplicate_leaves_descended_from_5);
-    defer test_allocator.free(duplicate_fork.duplicate_leaves_descended_from_6);
+    const duplicate_fork = try setupDuplicateForks();
+    defer duplicate_fork.deinit(test_allocator);
 
     const duplicate_leaves_descended_from_4 = duplicate_fork.duplicate_leaves_descended_from_4;
     const duplicate_leaves_descended_from_6 = duplicate_fork.duplicate_leaves_descended_from_6;
@@ -3523,13 +3518,10 @@ test "HeaviestSubtreeForkChoice.addVotesDuplicateThenOutdated" {
         Pubkey.initRandom(random),
     };
 
-    const duplicate_fork = try setupDuplicateForks();
     const stake: u64 = 10;
 
-    defer test_allocator.destroy(duplicate_fork.fork_choice);
-    defer test_allocator.free(duplicate_fork.duplicate_leaves_descended_from_4);
-    defer test_allocator.free(duplicate_fork.duplicate_leaves_descended_from_5);
-    defer test_allocator.free(duplicate_fork.duplicate_leaves_descended_from_6);
+    const duplicate_fork = try setupDuplicateForks();
+    defer duplicate_fork.deinit(test_allocator);
 
     const duplicate_leaves_descended_from_4 = duplicate_fork.duplicate_leaves_descended_from_4;
 
@@ -3664,13 +3656,10 @@ test "HeaviestSubtreeForkChoice.addVotesDuplicateTie" {
         Pubkey.initRandom(random),
     };
 
-    const duplicate_fork = try setupDuplicateForks();
     const stake: u64 = 10;
 
-    defer test_allocator.destroy(duplicate_fork.fork_choice);
-    defer test_allocator.free(duplicate_fork.duplicate_leaves_descended_from_4);
-    defer test_allocator.free(duplicate_fork.duplicate_leaves_descended_from_5);
-    defer test_allocator.free(duplicate_fork.duplicate_leaves_descended_from_6);
+    const duplicate_fork = try setupDuplicateForks();
+    defer duplicate_fork.deinit(test_allocator);
 
     const duplicate_leaves_descended_from_4 = duplicate_fork.duplicate_leaves_descended_from_4;
     const duplicate_leaves_descended_from_6 = duplicate_fork.duplicate_leaves_descended_from_6;
@@ -3771,13 +3760,10 @@ test "HeaviestSubtreeForkChoice.addVotesDuplicateZeroStake" {
         Pubkey.initRandom(random),
     };
 
-    const duplicate_fork = try setupDuplicateForks();
     const stake: u64 = 0;
 
-    defer test_allocator.destroy(duplicate_fork.fork_choice);
-    defer test_allocator.free(duplicate_fork.duplicate_leaves_descended_from_4);
-    defer test_allocator.free(duplicate_fork.duplicate_leaves_descended_from_5);
-    defer test_allocator.free(duplicate_fork.duplicate_leaves_descended_from_6);
+    const duplicate_fork = try setupDuplicateForks();
+    defer duplicate_fork.deinit(test_allocator);
 
     const duplicate_leaves_descended_from_4 = duplicate_fork.duplicate_leaves_descended_from_4;
 
@@ -3964,14 +3950,10 @@ test "HeaviestSubtreeForkChoice.markInvalidThenAddNewHeavierDuplicateSlot" {
         Pubkey.initRandom(random),
     };
 
+    const stake: u64 = 100;
     // Setup a fork structure with duplicates and mark one as invalid
     const duplicate_fork = try setupDuplicateForks();
-    const stake: u64 = 100;
-
-    defer test_allocator.destroy(duplicate_fork.fork_choice);
-    defer test_allocator.free(duplicate_fork.duplicate_leaves_descended_from_4);
-    defer test_allocator.free(duplicate_fork.duplicate_leaves_descended_from_5);
-    defer test_allocator.free(duplicate_fork.duplicate_leaves_descended_from_6);
+    defer duplicate_fork.deinit(test_allocator);
 
     const duplicate_leaves_descended_from_4 = duplicate_fork.duplicate_leaves_descended_from_4;
 
@@ -4406,13 +4388,10 @@ test "HeaviestSubtreeForkChoice.splitOffSubtreeWithDups" {
         Pubkey.initRandom(random),
     };
 
-    const duplicate_fork = try setupDuplicateForks();
     const stake: u64 = 10;
 
-    defer test_allocator.destroy(duplicate_fork.fork_choice);
-    defer test_allocator.free(duplicate_fork.duplicate_leaves_descended_from_4);
-    defer test_allocator.free(duplicate_fork.duplicate_leaves_descended_from_5);
-    defer test_allocator.free(duplicate_fork.duplicate_leaves_descended_from_6);
+    const duplicate_fork = try setupDuplicateForks();
+    defer duplicate_fork.deinit(test_allocator);
 
     const duplicate_leaves_descended_from_4 = duplicate_fork.duplicate_leaves_descended_from_4;
     const duplicate_leaves_descended_from_5 = duplicate_fork.duplicate_leaves_descended_from_5;
@@ -4570,13 +4549,10 @@ test "HeaviestSubtreeForkChoice.splitOffWithDups" {
         Pubkey.initRandom(random),
     };
 
-    const duplicate_fork = try setupDuplicateForks();
     const stake: u64 = 10;
 
-    defer test_allocator.destroy(duplicate_fork.fork_choice);
-    defer test_allocator.free(duplicate_fork.duplicate_leaves_descended_from_4);
-    defer test_allocator.free(duplicate_fork.duplicate_leaves_descended_from_5);
-    defer test_allocator.free(duplicate_fork.duplicate_leaves_descended_from_6);
+    const duplicate_fork = try setupDuplicateForks();
+    defer duplicate_fork.deinit(test_allocator);
 
     const duplicate_leaves_descended_from_4 = duplicate_fork.duplicate_leaves_descended_from_4;
     const duplicate_leaves_descended_from_5 = duplicate_fork.duplicate_leaves_descended_from_5;
@@ -4846,6 +4822,12 @@ pub fn setupDuplicateForks() !struct {
     duplicate_leaves_descended_from_4: []SlotAndHash,
     duplicate_leaves_descended_from_5: []SlotAndHash,
     duplicate_leaves_descended_from_6: []SlotAndHash,
+    pub fn deinit(self: @This(), allocator: std.mem.Allocator) void {
+        allocator.destroy(self.fork_choice);
+        allocator.free(self.duplicate_leaves_descended_from_4);
+        allocator.free(self.duplicate_leaves_descended_from_5);
+        allocator.free(self.duplicate_leaves_descended_from_6);
+    }
 } {
     // (0)
     // └── (1)
