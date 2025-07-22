@@ -4,7 +4,6 @@ const runtime = sig.runtime;
 
 const Allocator = std.mem.Allocator;
 
-const Ancestors = sig.core.Ancestors;
 const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 const RentCollector = sig.core.rent_collector.RentCollector;
@@ -13,7 +12,6 @@ const CollectedInfo = sig.core.rent_collector.CollectedInfo;
 const AccountMeta = sig.core.instruction.InstructionAccount;
 
 const ForkAccountReader = sig.accounts_db.ForkAccountReader;
-const ThreadSafeAccountMap = sig.accounts_db.ThreadSafeAccountMap;
 
 const AccountSharedData = runtime.AccountSharedData;
 const ComputeBudgetLimits = runtime.program.compute_budget.ComputeBudgetLimits;
@@ -1241,7 +1239,11 @@ test "deallocate account" {
 
     // load with the account being alive
 
-    var account_cache = try BatchAccountCache.initFromAccountsDb(allocator, .{ .simple_map = .{ allocator, &accountsdb } }, &.{tx});
+    var account_cache = try BatchAccountCache.initFromAccountsDb(
+        allocator,
+        .{ .simple_map = .{ allocator, &accountsdb } },
+        &.{tx},
+    );
     defer account_cache.deinit(allocator);
 
     try std.testing.expect(account_cache.account_cache.get(dying_account).?.data.len > 0);
@@ -1322,7 +1324,11 @@ test "load v3 program" {
         },
     };
 
-    var account_cache = try BatchAccountCache.initFromAccountsDb(allocator, .{ .simple_map = .{ allocator, &accountsdb } }, &.{tx});
+    var account_cache = try BatchAccountCache.initFromAccountsDb(
+        allocator,
+        .{ .simple_map = .{ allocator, &accountsdb } },
+        &.{tx},
+    );
     defer account_cache.deinit(allocator);
 
     const loaded_accounts = try account_cache.loadTransactionAccountsInner(
