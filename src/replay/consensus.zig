@@ -35,20 +35,6 @@ const BlockhashQueue = sig.core.blockhash_queue.BlockhashQueue;
 const SlotTracker = sig.replay.trackers.SlotTracker;
 const EpochTracker = sig.replay.trackers.EpochTracker;
 
-fn convertAncestorsMap(
-    allocator: std.mem.Allocator,
-    src: *const std.AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)),
-) !std.AutoHashMapUnmanaged(u64, SortedSet(u64)) {
-    var dst = std.AutoHashMapUnmanaged(u64, SortedSet(u64)).empty;
-    try dst.ensureTotalCapacity(allocator, @intCast(src.count()));
-    var it = src.iterator();
-    while (it.next()) |entry| {
-        // If Slot is not u64, use @intCast(u64, entry.key_ptr.*)
-        try dst.put(allocator, entry.key_ptr.*, entry.value_ptr.*);
-    }
-    return dst;
-}
-
 pub const isSlotDuplicateConfirmed = sig.consensus.tower.isSlotDuplicateConfirmed;
 pub const collectVoteLockouts = sig.consensus.replay_tower.collectVoteLockouts;
 
@@ -1462,4 +1448,21 @@ test "computeBankStats - same weight selects lower slot" {
     const heaviest = fixture.fork_choice.heaviestOverallSlot();
     // Should pick the lower of the two equally weighted banks
     try testing.expectEqual(@as(u64, 1), heaviest.slot);
+}
+
+const builtin = @import("builtin");
+fn convertAncestorsMap(
+    allocator: std.mem.Allocator,
+    src: *const std.AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)),
+) !std.AutoHashMapUnmanaged(u64, SortedSet(u64)) {
+    if (!builtin.is_test) {
+        @compileError("convertAncestorsMap should only be called in test mode");
+    }
+    var dst = std.AutoHashMapUnmanaged(u64, SortedSet(u64)).empty;
+    try dst.ensureTotalCapacity(allocator, @intCast(src.count()));
+    var it = src.iterator();
+    while (it.next()) |entry| {
+        try dst.put(allocator, entry.key_ptr.*, entry.value_ptr.*);
+    }
+    return dst;
 }
