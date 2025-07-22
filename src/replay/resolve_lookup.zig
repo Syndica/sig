@@ -12,7 +12,7 @@ const Pubkey = core.Pubkey;
 const Transaction = core.Transaction;
 const TransactionAddressLookup = core.transaction.AddressLookup;
 
-const ForkAccountReader = sig.accounts_db.ForkAccountReader;
+const SlotAccountReader = sig.accounts_db.SlotAccountReader;
 
 const AddressLookupTable = sig.runtime.program.address_lookup_table.AddressLookupTable;
 const InstructionInfo = sig.runtime.InstructionInfo;
@@ -54,7 +54,7 @@ pub const ResolvedTransaction = struct {
 
 pub fn resolveBatch(
     allocator: Allocator,
-    account_reader: ForkAccountReader,
+    account_reader: SlotAccountReader,
     batch: []const Transaction,
 ) !ResolvedBatch {
     var accounts = try std.ArrayListUnmanaged(LockableAccount)
@@ -85,7 +85,7 @@ pub fn resolveBatch(
 /// - Use `deinit` to free this struct
 fn resolveTransaction(
     allocator: Allocator,
-    account_reader: ForkAccountReader,
+    account_reader: SlotAccountReader,
     transaction: Transaction,
 ) !ResolvedTransaction {
     const message = transaction.msg;
@@ -190,7 +190,7 @@ fn resolveTransaction(
 
 fn resolveLookupTableAccounts(
     allocator: Allocator,
-    account_reader: ForkAccountReader,
+    account_reader: SlotAccountReader,
     address_lookups: []const TransactionAddressLookup,
 ) !struct { writable: []const Pubkey, readonly: []const Pubkey } {
     // count number of accounts
@@ -238,7 +238,7 @@ fn resolveLookupTableAccounts(
 }
 
 fn getLookupTable(
-    account_reader: ForkAccountReader,
+    account_reader: SlotAccountReader,
     table_address: Pubkey,
 ) !?AddressLookupTable {
     // TODO: Ensure the account comes from a valid slot by checking
@@ -395,7 +395,7 @@ test resolveBatch {
 
     const resolved = try resolveBatch(
         std.testing.allocator,
-        map.accountReader().fork(&ancestors),
+        map.accountReader().forSlot(&ancestors),
         &.{tx},
     );
     defer resolved.deinit(std.testing.allocator);

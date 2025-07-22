@@ -58,7 +58,7 @@ pub const AccountReader = union(enum) {
         };
     }
 
-    pub fn fork(self: AccountReader, ancestors: *const Ancestors) ForkAccountReader {
+    pub fn forSlot(self: AccountReader, ancestors: *const Ancestors) SlotAccountReader {
         return switch (self) {
             .accounts_db => |db| .{ .accounts_db = .{ db, ancestors } },
             .thread_safe_map => |map| .{ .thread_safe_map = .{ map, ancestors } },
@@ -83,15 +83,15 @@ pub const AccountReader = union(enum) {
     }
 };
 
-/// Interface for only reading accounts that exist on a particular fork.
-pub const ForkAccountReader = union(enum) {
+/// Interface for only reading accounts that should be visible for a particular slot.
+pub const SlotAccountReader = union(enum) {
     accounts_db: struct { *AccountsDB, *const Ancestors },
     thread_safe_map: struct { *ThreadSafeAccountMap, *const Ancestors },
     simple_map: struct { Allocator, *const std.AutoArrayHashMapUnmanaged(Pubkey, Account) },
     noop,
 
     /// use this to deinit accounts returned by get methods
-    pub fn allocator(self: ForkAccountReader) Allocator {
+    pub fn allocator(self: SlotAccountReader) Allocator {
         return switch (self) {
             .noop => sig.utils.allocators.failing.allocator(.{}),
             .simple_map => |item| item[0],
@@ -99,7 +99,7 @@ pub const ForkAccountReader = union(enum) {
         };
     }
 
-    pub fn get(self: ForkAccountReader, address: Pubkey) !?Account {
+    pub fn get(self: SlotAccountReader, address: Pubkey) !?Account {
         return switch (self) {
             .accounts_db => |pair| {
                 const db, const ancestors = pair;

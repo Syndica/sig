@@ -11,7 +11,7 @@ const RENT_EXEMPT_RENT_EPOCH = sig.core.rent_collector.RENT_EXEMPT_RENT_EPOCH;
 const CollectedInfo = sig.core.rent_collector.CollectedInfo;
 const AccountMeta = sig.core.instruction.InstructionAccount;
 
-const ForkAccountReader = sig.accounts_db.ForkAccountReader;
+const SlotAccountReader = sig.accounts_db.SlotAccountReader;
 
 const AccountSharedData = runtime.AccountSharedData;
 const ComputeBudgetLimits = runtime.program.compute_budget.ComputeBudgetLimits;
@@ -73,7 +73,7 @@ pub const BatchAccountCache = struct {
     /// No rent collection is performed.
     pub fn initFromAccountsDb(
         allocator: Allocator,
-        account_reader: ForkAccountReader,
+        account_reader: SlotAccountReader,
         transactions: []const RuntimeTransaction,
     ) !BatchAccountCache {
         // we assume the largest is allowed
@@ -459,7 +459,7 @@ pub const BatchAccountCache = struct {
 
 fn getAccountSharedData(
     allocator: Allocator,
-    reader: ForkAccountReader,
+    reader: SlotAccountReader,
     pubkey: Pubkey,
 ) error{ OutOfMemory, GetAccountFailedUnexpectedly }!?AccountSharedData {
     const account: sig.core.Account = reader.get(pubkey) catch |err| switch (err) {

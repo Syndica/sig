@@ -1181,7 +1181,7 @@ fn validator(
     const replay_thread = replay: {
         var feature_set = try sig.replay.service.getActiveFeatures(
             allocator,
-            loaded_snapshot.accounts_db.accountReader().fork(&bank_fields.ancestors),
+            loaded_snapshot.accounts_db.accountReader().forSlot(&bank_fields.ancestors),
             bank_fields.slot,
         );
         const root_slot_constants =

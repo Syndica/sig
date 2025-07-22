@@ -7,7 +7,7 @@ const Allocator = std.mem.Allocator;
 const ThreadPool = sig.sync.ThreadPool;
 
 const AccountStore = sig.accounts_db.account_store.AccountStore;
-const ForkAccountReader = sig.accounts_db.account_store.ForkAccountReader;
+const SlotAccountReader = sig.accounts_db.account_store.SlotAccountReader;
 const BlockstoreDB = sig.ledger.BlockstoreDB;
 const BlockstoreReader = sig.ledger.BlockstoreReader;
 const ProgressMap = sig.consensus.ProgressMap;
@@ -236,7 +236,7 @@ fn trackNewSlots(
 
             var feature_set = try getActiveFeatures(
                 allocator,
-                account_store.reader().fork(&ancestors),
+                account_store.reader().forSlot(&ancestors),
                 slot,
             );
             errdefer feature_set.deinit(allocator);
@@ -270,7 +270,7 @@ fn trackNewSlots(
 // TODO: epoch boundary - handle feature activations
 pub fn getActiveFeatures(
     allocator: Allocator,
-    account_reader: ForkAccountReader,
+    account_reader: SlotAccountReader,
     slot: Slot,
 ) !sig.core.FeatureSet {
     var features = std.AutoArrayHashMapUnmanaged(Pubkey, Slot).empty;
