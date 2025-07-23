@@ -66,6 +66,7 @@ pub const AccountReader = union(enum) {
         };
     }
 
+    /// Deinit all returned accounts using `account_reader.allocator()`
     pub fn getLatest(self: AccountReader, address: Pubkey) !?Account {
         return switch (self) {
             .accounts_db => |db| {
@@ -90,7 +91,7 @@ pub const AccountReader = union(enum) {
 ///      1
 ///     / \
 ///    2   3
-///   /   / \ 
+///   /   / \
 ///  4   5   6
 ///           \
 ///            7
@@ -104,16 +105,19 @@ pub const AccountReader = union(enum) {
 /// then you'll get the version of the account from slot 6.
 pub const SlotAccountReader = union(enum) {
     accounts_db: struct { *AccountsDB, *const Ancestors },
+    /// Contains many versions of accounts and becomes fork-aware using
+    /// ancestors, like accountsdb.
     thread_safe_map: struct { *ThreadSafeAccountMap, *const Ancestors },
+    /// Only stores the current slot's version of each account.
     /// Should only store borrowed accounts, or else it will panic on deinit.
-    simple_map: *const std.AutoArrayHashMapUnmanaged(Pubkey, Account),
+    single_version_map: *const std.AutoArrayHashMapUnmanaged(Pubkey, Account),
     noop,
 
     /// use this to deinit accounts returned by get methods
     pub fn allocator(self: SlotAccountReader) Allocator {
         return switch (self) {
             .noop => sig.utils.allocators.failing.allocator(.{}),
-            .simple_map => sig.utils.allocators.failing.allocator(.{
+            .single_version_map => sig.utils.allocators.failing.allocator(.{
                 .alloc = .panics,
                 .resize = .panics,
                 .free = .panics,
@@ -122,6 +126,7 @@ pub const SlotAccountReader = union(enum) {
         };
     }
 
+    /// Deinit all returned accounts using `account_reader.allocator()`
     pub fn get(self: SlotAccountReader, address: Pubkey) !?Account {
         return switch (self) {
             .accounts_db => |pair| {
@@ -135,7 +140,7 @@ pub const SlotAccountReader = union(enum) {
                 return account;
             },
             .thread_safe_map => |pair| try pair[0].get(address, pair[1]),
-            .simple_map => |pair| pair.get(address),
+            .single_version_map => |pair| pair.get(address),
             .noop => null,
         };
     }
