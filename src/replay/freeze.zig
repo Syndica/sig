@@ -197,7 +197,7 @@ pub fn deltaLtHash(
     var i: usize = 0;
     while (try iterator.next()) |pubkey_account| : (i += 1) {
         const pubkey, const account = pubkey_account;
-        if (try account_reader.get(pubkey, parent_ancestors)) |old_acct| {
+        if (try account_reader.forSlot(parent_ancestors).get(pubkey)) |old_acct| {
             if (!old_acct.equals(&account)) {
                 hash.mixOut(&old_acct.hash(LtHash, &pubkey));
                 hash.mixIn(&account.hash(LtHash, &pubkey));

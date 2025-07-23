@@ -1200,9 +1200,8 @@ fn validator(
 
         var feature_set = try sig.replay.service.getActiveFeatures(
             allocator,
-            loaded_snapshot.accounts_db.accountReader(),
+            loaded_snapshot.accounts_db.accountReader().forSlot(&bank_fields.ancestors),
             bank_fields.slot,
-            &bank_fields.ancestors,
         );
         const root_slot_constants =
             sig.core.SlotConstants.fromBankFields(allocator, bank_fields, feature_set) catch |err| {

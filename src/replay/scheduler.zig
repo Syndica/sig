@@ -288,28 +288,13 @@ test "TransactionScheduler: happy path" {
     };
 
     {
-        const batch1 = try resolveBatch(
-            allocator,
-            .noop,
-            transactions[0..3],
-            &.{ .ancestors = .empty },
-        );
+        const batch1 = try resolveBatch(allocator, .noop, transactions[0..3]);
         errdefer batch1.deinit(allocator);
 
-        const batch1_dupe = try resolveBatch(
-            allocator,
-            .noop,
-            transactions[0..3],
-            &.{ .ancestors = .empty },
-        );
+        const batch1_dupe = try resolveBatch(allocator, .noop, transactions[0..3]);
         errdefer batch1_dupe.deinit(allocator);
 
-        const batch2 = try resolveBatch(
-            allocator,
-            .noop,
-            transactions[3..6],
-            &.{ .ancestors = .empty },
-        );
+        const batch2 = try resolveBatch(allocator, .noop, transactions[3..6]);
         errdefer batch2.deinit(allocator);
 
         scheduler.addBatchAssumeCapacity(batch1);
@@ -347,12 +332,7 @@ test "TransactionScheduler: failed account locks" {
     const unresolved_batch = [_]Transaction{ tx, tx };
 
     {
-        const batch1 = try resolveBatch(
-            allocator,
-            .noop,
-            &unresolved_batch,
-            &.{ .ancestors = .empty },
-        );
+        const batch1 = try resolveBatch(allocator, .noop, &unresolved_batch);
         errdefer batch1.deinit(allocator);
 
         scheduler.addBatchAssumeCapacity(batch1);
@@ -399,20 +379,10 @@ test "TransactionScheduler: signature verification failure" {
     transactions[5].signatures = replaced_sigs;
 
     {
-        const batch1 = try resolveBatch(
-            allocator,
-            .noop,
-            transactions[0..3],
-            &.{ .ancestors = .empty },
-        );
+        const batch1 = try resolveBatch(allocator, .noop, transactions[0..3]);
         errdefer batch1.deinit(allocator);
 
-        const batch2 = try resolveBatch(
-            allocator,
-            .noop,
-            transactions[3..6],
-            &.{ .ancestors = .empty },
-        );
+        const batch2 = try resolveBatch(allocator, .noop, transactions[3..6]);
         errdefer batch2.deinit(allocator);
 
         scheduler.addBatchAssumeCapacity(batch1);

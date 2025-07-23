@@ -14,9 +14,12 @@ const SlotState = sig.core.bank.SlotState;
 const AccountStore = sig.accounts_db.AccountStore;
 const AccountReader = sig.accounts_db.AccountReader;
 const AccountsDB = sig.accounts_db.AccountsDB;
+const SlotAccountReader = sig.accounts_db.account_store.SlotAccountReader;
+
 const BlockstoreDB = sig.ledger.BlockstoreDB;
 const BlockstoreReader = sig.ledger.BlockstoreReader;
 const LedgerResultWriter = sig.ledger.result_writer.LedgerResultWriter;
+
 const ProgressMap = sig.consensus.ProgressMap;
 const ReplayExecutionState = replay.execution.ReplayExecutionState;
 const SlotTracker = replay.trackers.SlotTracker;
@@ -258,9 +261,8 @@ fn trackNewSlots(
 
             var feature_set = try getActiveFeatures(
                 allocator,
-                account_store.reader(),
+                account_store.reader().forSlot(&ancestors),
                 slot,
-                &ancestors,
             );
             errdefer feature_set.deinit(allocator);
 
@@ -341,13 +343,12 @@ fn trackNewSlots(
 // TODO: epoch boundary - handle feature activations
 pub fn getActiveFeatures(
     allocator: Allocator,
-    account_reader: AccountReader,
+    account_reader: SlotAccountReader,
     slot: Slot,
-    ancestors: *const sig.core.Ancestors,
 ) !sig.core.FeatureSet {
     var features = std.AutoArrayHashMapUnmanaged(Pubkey, Slot).empty;
     for (sig.core.FEATURES) |pubkey| {
-        const feature_account = try account_reader.get(pubkey, ancestors) orelse continue;
+        const feature_account = try account_reader.get(pubkey) orelse continue;
         if (!feature_account.owner.equals(&sig.runtime.ids.FEATURE_PROGRAM_ID)) {
             return error.FeatureNotOwnedByFeatureProgram;
         }
@@ -362,6 +363,22 @@ pub fn getActiveFeatures(
         }
     }
     return .{ .active = features };
+}
+
+test "getActiveFeatures rejects wrong ownership" {
+    const allocator = std.testing.allocator;
+    var accounts = std.AutoArrayHashMapUnmanaged(Pubkey, sig.core.Account).empty;
+    defer accounts.deinit(allocator);
+
+    var acct: sig.core.Account = undefined;
+    acct.owner = Pubkey.ZEROES;
+
+    try accounts.put(allocator, sig.core.features.SYSTEM_TRANSFER_ZERO_CHECK, acct);
+
+    try std.testing.expectError(
+        error.FeatureNotOwnedByFeatureProgram,
+        getActiveFeatures(allocator, .{ .single_version_map = &accounts }, 0),
+    );
 }
 
 test trackNewSlots {

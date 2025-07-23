@@ -99,11 +99,9 @@ pub const SvmSlot = struct {
             unhashed.* = tx.toRuntimeTransaction(.ZEROES);
         }
         const accounts = try BatchAccountCache.initFromAccountsDb(
-            .AccountsDb,
             allocator,
-            params.accounts_db,
+            params.accounts_db.accountReader().forSlot(params.ancestors), // TODO
             unhashed_transactions_for_account_loader,
-            params.ancestors,
         );
 
         const budget = ComputeBudget.default(1_400_000); // TODO should this be dynamic?
