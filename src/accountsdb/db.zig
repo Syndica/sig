@@ -1231,7 +1231,7 @@ pub const AccountsDB = struct {
         pub fn next(self: *SlotModifiedIterator) !?struct { Pubkey, Account } {
             assert(self.cursor != std.math.maxInt(usize));
             defer self.cursor += 1;
-            if (self.cursor > self.slot_index.refs.items.len) return null;
+            if (self.cursor >= self.slot_index.refs.items.len) return null;
             const account_ref = self.slot_index.refs.items[self.cursor];
             const account = try self.db.getAccountFromRef(&account_ref);
             return .{ account_ref.pubkey, account };
