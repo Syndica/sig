@@ -97,7 +97,7 @@ pub const HashSlotParams = struct {
     signature_count: u64,
     parent_slot_hash: *const Hash,
     parent_lt_hash: *const ?LtHash,
-    ancestors: *const sig.core.Ancestors,
+    ancestors: *const Ancestors,
     blockhash: Hash,
     feature_set: *const sig.core.FeatureSet,
 };
