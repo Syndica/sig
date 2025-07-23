@@ -222,10 +222,7 @@ pub const UpdateStakeHistoryDeps = struct {
     update_sysvar_deps: UpdateSysvarAccountDeps,
 };
 
-pub fn updateStakeHistory(
-    allocator: std.mem.Allocator,
-    deps: UpdateStakeHistoryDeps,
-) !void {
+pub fn updateStakeHistory(allocator: std.mem.Allocator, deps: UpdateStakeHistoryDeps) !void {
     if (deps.parent_epoch) |e| if (e == deps.epoch) return;
     const stakes: *const StakesCache.T(), var guard = deps.stakes_cache.stakes.readWithLock();
     defer guard.unlock();
