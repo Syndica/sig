@@ -520,6 +520,6 @@ const SharedHashMap = struct {
     }
 };
 
-test "db" {
+test {
     _ = &database.interface.testDatabase(SharedHashMapDB);
 }
