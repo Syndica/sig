@@ -472,6 +472,7 @@ fn computeBankStats(
     latest_validator_votes: *LatestValidatorVotesForFrozenBanks,
 ) ![]Slot {
     var new_stats = std.ArrayListUnmanaged(Slot).empty;
+    errdefer new_stats.deinit(allocator);
     var frozen_slots = try slot_tracker.frozenSlots(allocator);
     defer frozen_slots.deinit(allocator);
     // TODO agave sorts this by the slot first. Is this needed for the implementation to be correct?
@@ -1325,7 +1326,7 @@ test "computeBankStats - child bank heavier" {
     try epoch_stakes.put(testing.allocator, 0, versioned_stakes);
     try epoch_stakes.put(testing.allocator, 1, versioned_stakes);
 
-    var epoch_schedule = EpochSchedule.DEFAULT;
+    const epoch_schedule = EpochSchedule.DEFAULT;
     _ = try computeBankStats(
         testing.allocator,
         my_node_pubkey,
@@ -1339,7 +1340,7 @@ test "computeBankStats - child bank heavier" {
     );
 
     // Sort frozen slots by slot number
-    var slot_list = try testing.allocator.alloc(u64, frozen_slots.count());
+    const slot_list = try testing.allocator.alloc(u64, frozen_slots.count());
     defer testing.allocator.free(slot_list);
     var i: usize = 0;
     for (frozen_slots.keys()) |slot| {
@@ -1367,7 +1368,7 @@ test "computeBankStats - child bank heavier" {
             .{ .slot = slot, .hash = slot_info.state.hash.readCopy().? },
         ) orelse
             return error.MissingSlot;
-        try testing.expectEqual(@as(u64, 3), best.slot);
+        try testing.expectEqual(3, best.slot);
     }
 }
 
@@ -1414,7 +1415,7 @@ test "computeBankStats - same weight selects lower slot" {
     try epoch_stakes.put(testing.allocator, 0, versioned_stakes);
     try epoch_stakes.put(testing.allocator, 1, versioned_stakes);
 
-    var epoch_schedule = EpochSchedule.DEFAULT;
+    const epoch_schedule = EpochSchedule.DEFAULT;
     _ = try computeBankStats(
         testing.allocator,
         my_vote_pubkey,
