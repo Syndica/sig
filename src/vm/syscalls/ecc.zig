@@ -377,52 +377,6 @@ pub fn curveMultiscalarMul(
     }
 }
 
-/// Batches scalar multiplication to the nearest power of 2 number of scalars.
-///
-/// TODO: Explore fixed-length padding with identies, if that's faster?
-fn multiScalarMultiply(comptime T: type, scalars: []const [32]u8, point_data: []const [32]u8) !T {
-    std.debug.assert(scalars.len == point_data.len);
-    std.debug.assert(scalars.len <= 512);
-
-    for (scalars) |scalar| {
-        try Edwards25519.scalar.rejectNonCanonical(scalar);
-    }
-
-    var points: std.BoundedArray(Edwards25519, 512) = .{};
-    for (point_data) |encoded| {
-        const point = try T.fromBytes(encoded);
-        points.appendAssumeCapacity(switch (T) {
-            Edwards25519 => point,
-            Ristretto255 => point.p,
-            else => unreachable,
-        });
-    }
-
-    var length = scalars.len;
-    var accumulator = Edwards25519.identityElement;
-    while (length > 0) {
-        switch (std.math.floorPowerOfTwo(u64, length)) {
-            inline 1, 2, 4, 8, 16, 32, 64, 128, 256, 512 => |N| {
-                const current = scalars.len - length;
-                const segment = weak_mul.mulMulti(
-                    N,
-                    points.constSlice()[current..][0..N].*,
-                    scalars[current..][0..N].*,
-                );
-                accumulator = accumulator.add(segment);
-                length -= N;
-            },
-            else => unreachable,
-        }
-    }
-
-    return switch (T) {
-        Ristretto255 => .{ .p = accumulator },
-        Edwards25519 => accumulator,
-        else => unreachable,
-    };
-}
-
 const AltBn128GroupOp = enum(u8) {
     add = 0,
     sub = 1,
