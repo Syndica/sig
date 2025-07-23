@@ -53,7 +53,7 @@ pub fn confirmSlot(
 ) !*ConfirmSlotFuture {
     logger.info().log("confirming slot");
     const future = try ConfirmSlotFuture
-        .create(allocator, thread_pool, committer, entries, svm_params);
+        .create(allocator, logger, thread_pool, committer, entries, svm_params);
     errdefer future.destroy(allocator);
 
     if (verifyTicks(logger, entries, verify_ticks_params)) |block_error| {
@@ -61,7 +61,7 @@ pub fn confirmSlot(
         return future;
     }
 
-    try startPohVerify(allocator, &future.poh_verifier, last_entry, entries, &future.exit);
+    try startPohVerify(allocator, logger, &future.poh_verifier, last_entry, entries, &future.exit);
     try scheduleTransactionBatches(allocator, &future.scheduler, account_store, entries, ancestors);
 
     _ = try future.poll(); // starts batch execution. poll result is cached inside future
@@ -72,6 +72,7 @@ pub fn confirmSlot(
 /// schedule poh verification asynchronously
 fn startPohVerify(
     allocator: Allocator,
+    logger: ScopedLogger,
     pool: *HomogeneousThreadPool(PohTask),
     initial_hash: Hash,
     entries: []const Entry,
@@ -85,6 +86,7 @@ fn startPohVerify(
         const end = if (i == num_tasks - 1) entries.len else (i + 1) * entries_per_task;
         assert(try pool.trySchedule(allocator, .{
             .allocator = allocator,
+            .logger = logger,
             .initial_hash = batch_initial_hash,
             .entries = entries[i * entries_per_task .. end],
             .exit = exit,
@@ -145,6 +147,7 @@ pub const ConfirmSlotFuture = struct {
 
     fn create(
         allocator: Allocator,
+        logger: ScopedLogger,
         thread_pool: *ThreadPool,
         committer: Committer,
         entries: []const Entry,
@@ -165,8 +168,15 @@ pub const ConfirmSlotFuture = struct {
             .exit = .init(false),
         };
 
-        future.scheduler = try TransactionScheduler
-            .initCapacity(allocator, committer, entries.len, thread_pool, svm_params, &future.exit);
+        future.scheduler = try TransactionScheduler.initCapacity(
+            allocator,
+            .from(logger),
+            committer,
+            entries.len,
+            thread_pool,
+            svm_params,
+            &future.exit,
+        );
 
         return future;
     }
@@ -219,6 +229,7 @@ pub const ConfirmSlotFuture = struct {
 
 const PohTask = struct {
     allocator: Allocator,
+    logger: ScopedLogger,
     initial_hash: Hash,
     entries: []const Entry,
     exit: *Atomic(bool),
@@ -230,10 +241,14 @@ const PohTask = struct {
             self.initial_hash,
             .{ .exit = self.exit },
         ) catch |e| {
+            if (e != error.Exit) {
+                self.logger.err().logf("poh verification failed with error: {}", .{e});
+            }
             self.exit.store(true, .monotonic);
             return e;
         };
         if (!success) {
+            self.logger.err().log("poh verification failed");
             self.exit.store(true, .monotonic);
             return error.PohVerifyFailed;
         }

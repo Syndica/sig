@@ -76,6 +76,7 @@ pub fn processBatch(
 /// This should only be used in a single thread at a time.
 pub const TransactionScheduler = struct {
     allocator: Allocator,
+    logger: ScopedLogger,
     committer: Committer,
     batches: std.ArrayListUnmanaged(ResolvedBatch),
     thread_pool: HomogeneousThreadPool(ProcessBatchTask),
@@ -95,6 +96,7 @@ pub const TransactionScheduler = struct {
 
     pub fn initCapacity(
         allocator: Allocator,
+        logger: ScopedLogger,
         committer: Committer,
         batch_capacity: usize,
         thread_pool: *ThreadPool,
@@ -114,6 +116,7 @@ pub const TransactionScheduler = struct {
 
         return .{
             .allocator = allocator,
+            .logger = logger,
             .committer = committer,
             .batches = batches,
             .thread_pool = pool,
@@ -197,6 +200,7 @@ pub const TransactionScheduler = struct {
             // HomogeneousThreadPool.initBorrowed
             assert(try self.thread_pool.trySchedule(self.allocator, .{
                 .allocator = self.allocator,
+                .logger = self.logger,
                 .committer = self.committer,
                 .svm_slot = self.svm_params,
                 .batch_index = self.batches_started,
@@ -212,6 +216,7 @@ pub const TransactionScheduler = struct {
 
 const ProcessBatchTask = struct {
     allocator: Allocator,
+    logger: ScopedLogger,
     svm_slot: SvmSlot.Params,
     committer: Committer,
     batch_index: usize,
@@ -228,7 +233,10 @@ const ProcessBatchTask = struct {
             self.exit,
         );
 
-        if (result != null) self.exit.store(true, .monotonic);
+        if (result) |err| {
+            self.logger.err().logf("batch failed due to transaction error: {}", .{err});
+            self.exit.store(true, .monotonic);
+        }
         try self.results.send(.{ .batch_index = self.batch_index, .maybe_err = result });
     }
 };
@@ -248,7 +256,7 @@ test "TransactionScheduler: happy path" {
 
     // TODO fix undefined
     var scheduler = try TransactionScheduler
-        .initCapacity(allocator, undefined, 10, &thread_pool, undefined, undefined);
+        .initCapacity(allocator, .FOR_TESTS, undefined, 10, &thread_pool, undefined, undefined);
     defer scheduler.deinit();
 
     var tx_arena = std.heap.ArenaAllocator.init(allocator);
@@ -313,7 +321,7 @@ test "TransactionScheduler: failed account locks" {
 
     // TODO fix undefined
     var scheduler = try TransactionScheduler
-        .initCapacity(allocator, undefined, 10, &thread_pool, undefined, undefined);
+        .initCapacity(allocator, .FOR_TESTS, undefined, 10, &thread_pool, undefined, undefined);
     defer scheduler.deinit();
 
     const tx = try Transaction.initRandom(allocator, rng.random());
@@ -354,7 +362,7 @@ test "TransactionScheduler: signature verification failure" {
 
     // TODO fix undefined
     var scheduler = try TransactionScheduler
-        .initCapacity(allocator, undefined, 10, &thread_pool, undefined, undefined);
+        .initCapacity(allocator, .FOR_TESTS, undefined, 10, &thread_pool, undefined, undefined);
     defer scheduler.deinit();
 
     var tx_arena = std.heap.ArenaAllocator.init(allocator);
