@@ -9,7 +9,7 @@ const sig = @import("../../sig.zig");
 const table = @import("table");
 pub const InnerProductProof = @import("ipp.zig").Proof; // pub so tests can run
 
-const pippenger = sig.crypto.pippenger;
+const pippenger = sig.crypto.ed25519.pippenger;
 const pedersen = sig.zksdk.pedersen;
 const Edwards25519 = std.crypto.ecc.Edwards25519;
 const Ristretto255 = std.crypto.ecc.Ristretto255;
@@ -447,8 +447,7 @@ pub fn Proof(bit_size: comptime_int) type {
         }
 
         fn sumOfPowers(n: u64, x: Scalar) Scalar {
-            // TODO: use O(2log(n)) algorithm instead when `n` is a power of
-            // two
+            // TODO: use O(2log(n)) algorithm instead when `n` is a power of two
             var acc = ZERO;
             var next_exp = ONE;
             for (0..n) |_| {

@@ -8,6 +8,7 @@ const Ristretto255 = std.crypto.ecc.Ristretto255;
 const Scalar = std.crypto.ecc.Edwards25519.scalar.Scalar;
 const weak_mul = sig.vm.syscalls.ecc.weak_mul;
 const Transcript = sig.zksdk.Transcript;
+const pippenger = sig.crypto.ed25519.pippenger;
 const bp = sig.zksdk.bulletproofs;
 
 /// Inner-Product (Sub)Proof
@@ -115,7 +116,7 @@ pub fn Proof(bit_size: comptime_int) type {
                 points.appendAssumeCapacity(Q.p);
 
                 const L: Ristretto255 = .{
-                    .p = sig.crypto.pippenger.mulMulti(
+                    .p = pippenger.mulMulti(
                         257, // 128 + 128 + 1
                         false,
                         false,
@@ -146,7 +147,7 @@ pub fn Proof(bit_size: comptime_int) type {
                 points.appendAssumeCapacity(Q.p);
 
                 const R: Ristretto255 = .{
-                    .p = sig.crypto.pippenger.mulMulti(
+                    .p = pippenger.mulMulti(
                         257, // 128 + 128 + 1
                         false,
                         false,
@@ -245,7 +246,7 @@ pub fn Proof(bit_size: comptime_int) type {
             for (self.L_vec) |l| points.appendAssumeCapacity(l);
             for (self.R_vec) |r| points.appendAssumeCapacity(r);
 
-            const check = sig.crypto.pippenger.mulMulti(
+            const check = pippenger.mulMulti(
                 max_elements,
                 false,
                 true,

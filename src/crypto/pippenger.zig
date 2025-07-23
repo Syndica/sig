@@ -9,8 +9,8 @@ const Ed25519 = crypto.ecc.Edwards25519;
 const Ristretto255 = crypto.ecc.Ristretto255;
 const CompressedScalar = Ed25519.scalar.CompressedScalar;
 
-const ExtendedPoint = sig.crypto.ExtendedPoint;
-const CachedPoint = sig.crypto.CachedPoint;
+const ExtendedPoint = sig.crypto.ed25519.ExtendedPoint;
+const CachedPoint = sig.crypto.ed25519.CachedPoint;
 
 fn ReturnType(encoded: bool, ristretto: bool) type {
     const Base = if (ristretto) Ristretto255 else Ed25519;

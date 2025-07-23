@@ -847,7 +847,7 @@ fn testVerifyProofWithContext(
     fail_data[0] = @intFromEnum(instruction);
     @memcpy(fail_data[1..], &fail_proof_data.toBytes());
 
-    var prng = std.Random.DefaultPrng.init(12391239);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     const context_state_key = sig.core.Pubkey.initRandom(random);
@@ -966,7 +966,7 @@ fn testCloseState(
     instruction: zk_elgamal.ProofInstruction,
     success_proof_data: Proof,
 ) !void {
-    var prng = std.Random.DefaultPrng.init(12391239);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     const context_state_key = sig.core.Pubkey.initRandom(random);

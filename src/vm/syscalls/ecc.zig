@@ -355,13 +355,16 @@ pub fn curveMultiscalarMul(
                 };
             }
 
-            const msm = sig.crypto.pippenger.mulMulti(
+            const msm = sig.crypto.ed25519.pippenger.mulMulti(
                 512,
                 true,
                 id == .ristretto,
                 point_data,
                 scalars,
-            ) catch return registers.set(.r0, 1);
+            ) catch {
+                registers.set(.r0, 1);
+                return;
+            };
 
             const result_point_data = try memory_map.translateType(
                 [32]u8,
