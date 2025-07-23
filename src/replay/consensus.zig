@@ -28,6 +28,8 @@ const ProgressMap = sig.consensus.progress_map.ProgressMap;
 const ForkChoice = sig.consensus.fork_choice.ForkChoice;
 const LatestValidatorVotesForFrozenBanks =
     sig.consensus.latest_validator_votes.LatestValidatorVotes;
+const EpochSchedule = sig.core.EpochSchedule;
+const EpochStakesMap = sig.core.EpochStakesMap;
 
 const SlotTracker = sig.replay.trackers.SlotTracker;
 const EpochTracker = sig.replay.trackers.EpochTracker;
@@ -50,8 +52,8 @@ pub const ConsensusDependencies = struct {
     descendants: *const std.AutoArrayHashMapUnmanaged(u64, SortedSet(u64)),
     vote_account: Pubkey,
     slot_history: *const SlotHistory,
-    epoch_stakes: *const std.AutoHashMap(Epoch, VersionedEpochStakes),
-    latest_validator_votes_for_frozen_banks: *const LatestValidatorVotesForFrozenBanks,
+    epoch_stakes: *const EpochStakesMap,
+    latest_validator_votes_for_frozen_banks: *LatestValidatorVotesForFrozenBanks,
 };
 
 pub fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
@@ -66,7 +68,7 @@ pub fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
         deps.ancestors,
         deps.slot_tracker,
         deps.epoch_stakes,
-        deps.epoch_tracker.schedule,
+        &deps.epoch_tracker.schedule,
         deps.progress_map,
         deps.fork_choice,
         deps.latest_validator_votes_for_frozen_banks,
@@ -463,9 +465,9 @@ fn resetFork(
 fn computeBankStats(
     allocator: std.mem.Allocator,
     my_vote_pubkey: Pubkey,
-    ancestors: std.AutoHashMapUnmanaged(u64, SortedSet(u64)),
+    ancestors: *const std.AutoHashMapUnmanaged(u64, SortedSet(u64)),
     slot_tracker: *SlotTracker,
-    epoch_stakes: *const std.AutoHashMapUnmanaged(Epoch, VersionedEpochStakes),
+    epoch_stakes: *const EpochStakesMap,
     epoch_schedule: *const EpochSchedule,
     progress: *ProgressMap,
     fork_choice: *ForkChoice,
@@ -489,8 +491,8 @@ fn computeBankStats(
                 .noop,
                 &my_vote_pubkey,
                 slot,
-                &epoch_stake.current.stakes.vote_accounts.vote_accounts,
-                &ancestors,
+                &epoch_stake.stakes.vote_accounts.vote_accounts,
+                ancestors,
                 progress,
                 latest_validator_votes,
             );
@@ -1321,7 +1323,7 @@ test "computeBankStats - child bank heavier" {
     );
     defer versioned_stakes.deinit(testing.allocator);
 
-    var epoch_stakes = std.AutoHashMapUnmanaged(Epoch, VersionedEpochStakes).empty;
+    var epoch_stakes = EpochStakesMap.empty;
     defer epoch_stakes.deinit(testing.allocator);
     try epoch_stakes.put(testing.allocator, 0, versioned_stakes);
     try epoch_stakes.put(testing.allocator, 1, versioned_stakes);
@@ -1330,7 +1332,7 @@ test "computeBankStats - child bank heavier" {
     _ = try computeBankStats(
         testing.allocator,
         my_node_pubkey,
-        ancestors,
+        &ancestors,
         &fixture.slot_tracker,
         &epoch_stakes,
         &epoch_schedule,
@@ -1410,7 +1412,7 @@ test "computeBankStats - same weight selects lower slot" {
     );
     defer versioned_stakes.deinit(testing.allocator);
 
-    var epoch_stakes = std.AutoHashMapUnmanaged(Epoch, VersionedEpochStakes).empty;
+    var epoch_stakes = EpochStakesMap.empty;
     defer epoch_stakes.deinit(testing.allocator);
     try epoch_stakes.put(testing.allocator, 0, versioned_stakes);
     try epoch_stakes.put(testing.allocator, 1, versioned_stakes);
@@ -1419,7 +1421,7 @@ test "computeBankStats - same weight selects lower slot" {
     _ = try computeBankStats(
         testing.allocator,
         my_vote_pubkey,
-        ancestors,
+        &ancestors,
         &fixture.slot_tracker,
         &epoch_stakes,
         &epoch_schedule,
