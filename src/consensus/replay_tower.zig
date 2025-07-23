@@ -4222,17 +4222,14 @@ pub const TestFixture = struct {
         is_frozen: bool,
     ) !void {
         // Add root to progress map.
-        const gop_root = try self.progress.map.getOrPut(
-            allocator,
-            input_tree.root.slot,
-        );
-        if (gop_root.found_existing) {
-            gop_root.value_ptr.deinit(allocator);
-        }
-        var root_fp = try ForkProgress.zeroes(allocator);
-        root_fp.fork_stats.computed = true;
-        root_fp.fork_stats.my_latest_landed_vote = null;
-        gop_root.value_ptr.* = root_fp;
+        try self.progress.map.ensureUnusedCapacity(allocator, 1);
+        const prev_root = self.progress.map.fetchPutAssumeCapacity(input_tree.root.slot, fp: {
+            var root_fp = try ForkProgress.zeroes(allocator);
+            root_fp.fork_stats.computed = true;
+            root_fp.fork_stats.my_latest_landed_vote = null;
+            break :fp root_fp;
+        });
+        if (prev_root) |kv| kv.value.deinit(allocator);
         // TODO check that root fork exist already and it is being extended
         for (input_tree.data.constSlice()) |tree| {
             const parent_slot = blk: {
