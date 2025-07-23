@@ -3724,7 +3724,7 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
         .{ hash4, hash3 },
     });
 
-    try fixture.fill_fork(allocator, .{ .root = root, .data = trees1 }, false);
+    try fixture.fill_fork(allocator, .{ .root = root, .data = trees1 }, .active);
     try fixture.fill_epoch_stake_random(allocator, random);
 
     var tmp_dir_root = std.testing.tmpDir(.{});
@@ -3870,7 +3870,7 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
         .{ hash10, hash6 },
     });
 
-    try fixture.fill_fork(allocator, .{ .root = hash5, .data = trees }, false);
+    try fixture.fill_fork(allocator, .{ .root = hash5, .data = trees }, .active);
 
     var ancestors2: AutoHashMapUnmanaged(u64, SortedSet(u64)) = .{};
     defer ancestors2.deinit(allocator);
@@ -4225,7 +4225,7 @@ pub const TestFixture = struct {
         self: *TestFixture,
         allocator: std.mem.Allocator,
         input_tree: Tree,
-        is_frozen: bool,
+        frozen_state: enum { frozen, active },
     ) !void {
         // Add root to progress map.
         {
@@ -4283,7 +4283,7 @@ pub const TestFixture = struct {
                 });
                 if (prev_root) |kv| kv.value.deinit(allocator);
             }
-            if (is_frozen) {
+            if (frozen_state == .frozen) {
                 // new_bank.freeze();
                 const new_slot = self.slot_tracker.get(parent_slot) orelse continue;
                 new_slot.state.hash = .init(parent_hash);
