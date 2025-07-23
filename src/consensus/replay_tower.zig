@@ -1356,7 +1356,7 @@ pub const ReplayTower = struct {
         progress: *const ProgressMap,
         latest_validator_votes_for_frozen_banks: *const LatestValidatorVotesForFrozenBanks,
         fork_choice: *const HeaviestSubtreeForkChoice,
-        epoch_stakes: EpochStakesMap,
+        epoch_stakes: *const EpochStakesMap,
         slot_history: *const SlotHistory,
     ) !SelectVoteAndResetForkResult {
         // Initialize result with failure list
@@ -3663,7 +3663,7 @@ test "selectVoteAndResetForks stake not found" {
             &ProgressMap.INIT,
             &latest,
             &fork_choice,
-            .{},
+            &.empty,
             &slot_history,
         ),
     );
@@ -3774,7 +3774,7 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
         &fixture.progress,
         &LatestValidatorVotesForFrozenBanks.empty,
         &fixture.fork_choice,
-        fixture.epoch_stake_map,
+        &fixture.epoch_stakes,
         &SlotHistory{ .bits = bits, .next_slot = 0 },
     );
     try std.testing.expectEqual(4, result.reset_slot.?);
@@ -3795,7 +3795,7 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
         &fixture.progress,
         &LatestValidatorVotesForFrozenBanks.empty,
         &fixture.fork_choice,
-        fixture.epoch_stake_map,
+        &fixture.epoch_stakes,
         &SlotHistory{ .bits = bits, .next_slot = 0 },
     );
 
@@ -3820,7 +3820,7 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
         &fixture.progress,
         &LatestValidatorVotesForFrozenBanks.empty,
         &fixture.fork_choice,
-        fixture.epoch_stake_map,
+        &fixture.epoch_stakes,
         &SlotHistory{ .bits = bits, .next_slot = 0 },
     );
 
@@ -3892,7 +3892,7 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
         &fixture.progress,
         &LatestValidatorVotesForFrozenBanks.empty,
         &fixture.fork_choice,
-        fixture.epoch_stake_map,
+        &fixture.epoch_stakes,
         &SlotHistory{ .bits = bits, .next_slot = 0 },
     );
 
@@ -3935,7 +3935,7 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
         &fixture.progress,
         &LatestValidatorVotesForFrozenBanks.empty,
         &fixture.fork_choice,
-        fixture.epoch_stake_map,
+        &fixture.epoch_stakes,
         &SlotHistory{ .bits = bits, .next_slot = 0 },
     );
 
@@ -4107,8 +4107,7 @@ pub const TestFixture = struct {
     ancestors: AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)) = .{},
     descendants: AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)) = .{},
     progress: ProgressMap = ProgressMap.INIT,
-    epoch_stake_map: EpochStakesMap,
-    versioned_epoch_stake_map: EpochStakesMap,
+    epoch_stakes: EpochStakesMap,
     node_pubkeys: std.ArrayListUnmanaged(Pubkey),
     vote_pubkeys: std.ArrayListUnmanaged(Pubkey),
     latest_validator_votes_for_frozen_banks: LatestValidatorVotesForFrozenBanks,
@@ -4145,10 +4144,9 @@ pub const TestFixture = struct {
         return .{
             .slot_tracker = try SlotTracker.init(allocator, root.slot, element),
             .fork_choice = try HeaviestSubtreeForkChoice.init(allocator, .noop, root),
-            .epoch_stake_map = .{},
             .node_pubkeys = .empty,
             .vote_pubkeys = .empty,
-            .versioned_epoch_stake_map = .empty,
+            .epoch_stakes = .{},
             .latest_validator_votes_for_frozen_banks = .empty,
         };
     }
@@ -4161,11 +4159,11 @@ pub const TestFixture = struct {
         self.vote_pubkeys.deinit(allocator);
 
         {
-            var it = self.epoch_stake_map.iterator();
+            var it = self.epoch_stakes.iterator();
             while (it.next()) |entry| {
                 entry.value_ptr.deinit(allocator);
             }
-            self.epoch_stake_map.deinit(allocator);
+            self.epoch_stakes.deinit(allocator);
         }
 
         {
@@ -4337,8 +4335,8 @@ pub const TestFixture = struct {
         );
 
         // Always resest for now.
-        self.epoch_stake_map = .{};
-        try self.epoch_stake_map.put(allocator, 0, epoch_stakes);
+        self.epoch_stakes = .{};
+        try self.epoch_stakes.put(allocator, 0, epoch_stakes);
     }
 };
 
