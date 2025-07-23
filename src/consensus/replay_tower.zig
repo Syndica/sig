@@ -3671,7 +3671,8 @@ const ForkStats = sig.consensus.progress_map.ForkStats;
 const ForkProgress = sig.consensus.progress_map.ForkProgress;
 const EpochStakes = sig.core.EpochStakes;
 const Stakes = sig.core.Stakes;
-const splitOff = sig.consensus.fork_choice.splitOff;
+const Ancestors = sig.core.Ancestors;
+const FeatureSet = sig.core.FeatureSet;
 
 test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
     const allocator = std.testing.allocator;
@@ -4115,6 +4116,9 @@ pub const TestFixture = struct {
     ) !TestFixture {
         const element: SlotTracker.Element = .{
             .constants = .{
+                .ancestors = Ancestors{ .ancestors = .empty },
+                .feature_set = FeatureSet.EMPTY,
+                .parent_lt_hash = null,
                 .parent_slot = root.slot,
                 .parent_hash = root.hash,
                 .block_height = 0,
@@ -4244,6 +4248,9 @@ pub const TestFixture = struct {
             };
             const element: SlotTracker.Element = .{
                 .constants = .{
+                    .ancestors = Ancestors{ .ancestors = .empty },
+                    .feature_set = FeatureSet.EMPTY,
+                    .parent_lt_hash = null,
                     .parent_slot = parent_slot,
                     .parent_hash = parent_hash,
                     .block_height = tree[0].slot + 1,
