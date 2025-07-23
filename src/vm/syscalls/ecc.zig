@@ -3,6 +3,7 @@
 const std = @import("std");
 const sig = @import("../../sig.zig");
 
+const bn254 = sig.crypto.bn254;
 const features = sig.core.features;
 
 const MemoryMap = sig.vm.memory.MemoryMap;
@@ -405,6 +406,240 @@ fn multiScalarMultiply(comptime T: type, scalars: []const [32]u8, point_data: []
         Edwards25519 => accumulator,
         else => unreachable,
     };
+}
+
+const AltBn128GroupOp = enum(u8) {
+    add = 0,
+    sub = 1,
+    mul = 2,
+    pairing = 3,
+
+    fn wrap(id: u64) ?AltBn128GroupOp {
+        if (id > 3) return null;
+        return @enumFromInt(id);
+    }
+};
+
+const AltBn128CompressionOp = enum(u8) {
+    g1_compress = 0,
+    g1_decompress = 1,
+    g2_compress = 2,
+    g2_decompress = 3,
+
+    fn wrap(id: u64) ?AltBn128CompressionOp {
+        if (id > 3) return null;
+        return @enumFromInt(id);
+    }
+};
+
+/// [agave] https://github.com/anza-xyz/agave/blob/b11ca828cfc658b93cb86a6c5c70561875abe237/programs/bpf_loader/src/syscalls/mod.rs#L1687-L1789
+pub fn altBn128GroupOp(
+    tc: *TransactionContext,
+    memory_map: *MemoryMap,
+    registers: *RegisterMap,
+) Error!void {
+    const attribute_id = registers.get(.r1);
+    const input_addr = registers.get(.r2);
+    const input_size = registers.get(.r3);
+    const result_addr = registers.get(.r4);
+
+    const group_op = AltBn128GroupOp.wrap(attribute_id) orelse {
+        return SyscallError.InvalidAttribute;
+    };
+
+    const cb = tc.compute_budget;
+    const cost, const output_length: u32 = switch (group_op) {
+        .add => .{ cb.alt_bn128_addition_cost, 64 },
+        .mul => .{ cb.alt_bn128_multiplication_cost, 64 },
+        .pairing => blk: {
+            const elem_length = input_size / 192;
+            const cost = cb.alt_bn128_pairing_one_pair_cost_first +|
+                (cb.alt_bn128_pairing_one_pair_cost_other *| (elem_length -| 1)) +|
+                cb.sha256_base_cost +|
+                input_size +|
+                32;
+            break :blk .{ cost, 32 };
+        },
+        .sub => return SyscallError.InvalidAttribute,
+    };
+
+    try tc.consumeCompute(cost);
+
+    const input = try memory_map.translateSlice(
+        u8,
+        .constant,
+        input_addr,
+        input_size,
+        tc.getCheckAligned(),
+    );
+
+    const call_result = try memory_map.translateSlice(
+        u8,
+        .mutable,
+        result_addr,
+        output_length,
+        tc.getCheckAligned(),
+    );
+
+    // 64-bytes is the largest result we'll need.
+    var result: [64]u8 = undefined;
+    const result_point = altBn128Operation(
+        group_op,
+        input,
+        &result,
+        tc.feature_set,
+    ) catch {
+        if (tc.feature_set.active.contains(
+            features.SIMPLIFY_ALT_BN128_SYSCALL_ERROR_CODES,
+        )) {
+            registers.set(.r0, 1);
+            return;
+        } else @panic("SIMPLIFY_ALT_BN_128_SYSCALL_ERROR_CODES not active");
+    };
+    // Can never happen after SIMPLIFY_ALT_BN128_SYSCALL_ERROR_CODES, which should always be enabled now.
+    std.debug.assert(result_point.len == output_length);
+
+    @memcpy(call_result, result_point);
+}
+
+pub fn altBn128Compression(
+    tc: *TransactionContext,
+    memory_map: *MemoryMap,
+    registers: *RegisterMap,
+) Error!void {
+    const attribute_id = registers.get(.r1);
+    const input_addr = registers.get(.r2);
+    const input_size = registers.get(.r3);
+    const result_addr = registers.get(.r4);
+
+    const group_op = AltBn128CompressionOp.wrap(attribute_id) orelse {
+        return error.InvalidAttribute;
+    };
+
+    const cb = tc.compute_budget;
+    const base_cost = cb.syscall_base_cost;
+    const cost, const output_length: u32 = switch (group_op) {
+        // zig fmt: off
+        .g1_compress   => .{ base_cost +| cb.alt_bn128_g1_compress,   32 },
+        .g1_decompress => .{ base_cost +| cb.alt_bn128_g1_decompress, 64 },
+        .g2_compress   => .{ base_cost +| cb.alt_bn128_g2_compress,   64 },
+        .g2_decompress => .{ base_cost +| cb.alt_bn128_g2_decompress, 128 },
+        // zig fmt: on
+    };
+
+    try tc.consumeCompute(cost);
+
+    const input = try memory_map.translateSlice(
+        u8,
+        .constant,
+        input_addr,
+        input_size,
+        tc.getCheckAligned(),
+    );
+    const call_result = try memory_map.translateSlice(
+        u8,
+        .mutable,
+        result_addr,
+        output_length,
+        tc.getCheckAligned(),
+    );
+
+    const needed_input_size: u32 = switch (group_op) {
+        .g1_compress => 64,
+        .g1_decompress => 32,
+        .g2_compress => 128,
+        .g2_decompress => 64,
+    };
+    // Must be exactly the correct length.
+    if (input_size != needed_input_size) {
+        if (tc.feature_set.active.contains(
+            features.SIMPLIFY_ALT_BN128_SYSCALL_ERROR_CODES,
+        )) {
+            registers.set(.r0, 1);
+            return;
+        } else @panic("SIMPLIFY_ALT_BN_128_SYSCALL_ERROR_CODES not active");
+    }
+
+    // Largest result is 128-bytes from g2_decompress.
+    var result: [128]u8 = undefined;
+    (switch (group_op) {
+        // zig fmt: off
+        .g1_compress   => bn254.G1.compress(  result[0..32],  input[0..64] ),
+        .g1_decompress => bn254.G1.decompress(result[0..64],  input[0..32] ),
+        .g2_compress   => bn254.G2.compress(  result[0..64],  input[0..128]),
+        .g2_decompress => bn254.G2.decompress(result[0..128], input[0..64] ),
+        // zig fmt: on
+    }) catch {
+        if (tc.feature_set.active.contains(
+            features.SIMPLIFY_ALT_BN128_SYSCALL_ERROR_CODES,
+        )) {
+            registers.set(.r0, 1);
+            return;
+        } else @panic("SIMPLIFY_ALT_BN_128_SYSCALL_ERROR_CODES not active");
+    };
+
+    @memcpy(call_result, result[0..output_length]);
+}
+
+fn altBn128Operation(
+    group_op: AltBn128GroupOp,
+    input: []const u8,
+    out: *[64]u8,
+    feature_set: *const features.FeatureSet,
+) ![]const u8 {
+    switch (group_op) {
+        .add => {
+            if (input.len > 128) return error.InvalidLength;
+
+            // Pad the end with zeroes.
+            var buffer: [128]u8 = .{0} ** 128;
+            @memcpy(buffer[0..input.len], input);
+
+            try bn254.addSyscall(out, &buffer);
+
+            // Writes 64-bytes.
+            return out;
+        },
+        .mul => {
+            const expected_size: usize = if (feature_set.active.contains(
+                features.FIX_ALT_BN128_MULTIPLICATION_INPUT_LENGTH,
+            )) 96 else 128;
+            if (input.len > expected_size) return error.InvalidLength;
+
+            // Copy over 96-bytes, padding out with zeroes if needed.
+            var buffer: [96]u8 = .{0} ** 96;
+            @memcpy(buffer[0..@min(input.len, 96)], input.ptr);
+
+            try bn254.mulSyscall(out, &buffer);
+
+            // Writes 64-bytes.
+            return out;
+        },
+        .pairing => {
+            // Agave does not check that the input length is a multiple of the
+            // pair size (192 bytes). That *would* make sense, however it turns out Agave
+            // performs a useless check,
+            // https://github.com/anza-xyz/solana-sdk/blob/8eef25b054c4e5ca6d8b879744456297a187db92/bn254/src/lib.rs#L321-L327
+            //
+            // To the untrained eye this may seem like a check that `input.len()` is a multiple of
+            // the pairing size. You would be wrong! `check_rem` only returns `None`
+            // if the RHS is zero. The only way this condition will be true is if the
+            // `PAIRING_ELEMENT_LENGTH` constant were zero, which is impossible.
+            //
+            // The "correct" behaviour ends up being to *not* check the length, instead we perform
+            // a truncating integer division in the pairing syscall implementation (ensuring that
+            // the number of pairs read will always fit input size), and simply ignore the remaining
+            // bytes.
+            //
+            // if (input.len % 192 != 0) return error.InvalidLength;
+
+            try bn254.pairingSyscall(out[0..32], input);
+
+            // Writes to the first 32-bytes.
+            return out[0..32];
+        },
+        .sub => unreachable,
+    }
 }
 
 test "edwards curve point validation" {
@@ -993,4 +1228,359 @@ test "multiscalar multiplication large" {
             curveMultiscalarMul(&tc, &memory_map, &registers),
         );
     }
+}
+
+test "alt_bn128 add" {
+    const allocator = std.testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(0);
+    var cache, var tc = try sig.runtime.testing.createTransactionContext(
+        allocator,
+        prng.random(),
+        .{ .accounts = &.{.{
+            .pubkey = sig.core.Pubkey.initRandom(prng.random()),
+            .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+        }}, .compute_meter = 334 },
+    );
+    defer {
+        sig.runtime.testing.deinitTransactionContext(allocator, tc);
+        cache.deinit(allocator);
+    }
+
+    const input: []const u8 = &.{
+        0x18, 0xb1, 0x8a, 0xcf, 0xb4, 0xc2, 0xc3, 0x2,  0x76, 0xdb, 0x54,
+        0x11, 0x36, 0x8e, 0x71, 0x85, 0xb3, 0x11, 0xdd, 0x12, 0x46, 0x91,
+        0x61, 0xc,  0x5d, 0x3b, 0x74, 0x3,  0x4e, 0x9,  0x3d, 0xc9, 0x6,
+        0x3c, 0x90, 0x9c, 0x47, 0x20, 0x84, 0xc,  0xb5, 0x13, 0x4c, 0xb9,
+        0xf5, 0x9f, 0xa7, 0x49, 0x75, 0x57, 0x96, 0x81, 0x96, 0x58, 0xd3,
+        0x2e, 0xfc, 0xd,  0x28, 0x81, 0x98, 0xf3, 0x72, 0x66, 0x7,  0xc2,
+        0xb7, 0xf5, 0x8a, 0x84, 0xbd, 0x61, 0x45, 0xf0, 0xc,  0x9c, 0x2b,
+        0xc0, 0xbb, 0x1a, 0x18, 0x7f, 0x20, 0xff, 0x2c, 0x92, 0x96, 0x3a,
+        0x88, 0x1,  0x9e, 0x7c, 0x6a, 0x1,  0x4e, 0xed, 0x6,  0x61, 0x4e,
+        0x20, 0xc1, 0x47, 0xe9, 0x40, 0xf2, 0xd7, 0xd,  0xa3, 0xf7, 0x4c,
+        0x9a, 0x17, 0xdf, 0x36, 0x17, 0x6,  0xa4, 0x48, 0x5c, 0x74, 0x2b,
+        0xd6, 0x78, 0x84, 0x78, 0xfa, 0x17, 0xd7,
+    };
+    const input_addr = 0x100000000;
+
+    var result_point: [64]u8 = undefined;
+    const result_point_addr = 0x200000000;
+
+    var registers = sig.vm.interpreter.RegisterMap.initFill(0);
+    var memory_map = try MemoryMap.init(allocator, &.{
+        memory.Region.init(.constant, input, input_addr),
+        memory.Region.init(.mutable, &result_point, result_point_addr),
+    }, .v3, .{});
+    defer memory_map.deinit(allocator);
+
+    registers.set(.r1, 0); // ADD
+    registers.set(.r2, input_addr);
+    registers.set(.r3, input.len);
+    registers.set(.r4, result_point_addr);
+
+    try altBn128GroupOp(&tc, &memory_map, &registers);
+
+    try std.testing.expectEqualSlices(
+        u8,
+        &.{
+            0x22, 0x43, 0x52, 0x5c, 0x5e, 0xfd, 0x4b, 0x9c, 0x3d, 0x3c, 0x45,
+            0xac, 0xc,  0xa3, 0xfe, 0x4d, 0xd8, 0x5e, 0x83, 0xa,  0x4c, 0xe6,
+            0xb6, 0x5f, 0xa1, 0xee, 0xae, 0xe2, 0x2,  0x83, 0x97, 0x3,  0x30,
+            0x1d, 0x1d, 0x33, 0xbe, 0x6d, 0xa8, 0xe5, 0x9,  0xdf, 0x21, 0xcc,
+            0x35, 0x96, 0x47, 0x23, 0x18, 0xe,  0xed, 0x75, 0x32, 0x53, 0x7d,
+            0xb9, 0xae, 0x5e, 0x7d, 0x48, 0xf1, 0x95, 0xc9, 0x15,
+        },
+        &result_point,
+    );
+
+    try std.testing.expectError(
+        error.ComputationalBudgetExceeded,
+        altBn128GroupOp(&tc, &memory_map, &registers),
+    );
+}
+
+test "alt_bn128 mul" {
+    const allocator = std.testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(0);
+    var cache, var tc = try sig.runtime.testing.createTransactionContext(
+        allocator,
+        prng.random(),
+        .{ .accounts = &.{.{
+            .pubkey = sig.core.Pubkey.initRandom(prng.random()),
+            .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+        }}, .compute_meter = 3_840 },
+    );
+    defer {
+        sig.runtime.testing.deinitTransactionContext(allocator, tc);
+        cache.deinit(allocator);
+    }
+
+    const input: []const u8 = &.{
+        0x2b, 0xd3, 0xe6, 0xd0, 0xf3, 0xb1, 0x42, 0x92, 0x4f, 0x5c, 0xa7, 0xb4,
+        0x9c, 0xe5, 0xb9, 0xd5, 0x4c, 0x47, 0x3,  0xd7, 0xae, 0x56, 0x48, 0xe6,
+        0x1d, 0x2,  0x26, 0x8b, 0x1a, 0xa,  0x9f, 0xb7, 0x21, 0x61, 0x1c, 0xe0,
+        0xa6, 0xaf, 0x85, 0x91, 0x5e, 0x2f, 0x1d, 0x70, 0x30, 0x9,  0x9,  0xce,
+        0x2e, 0x49, 0xdf, 0xad, 0x4a, 0x46, 0x19, 0xc8, 0x39, 0xc,  0xae, 0x66,
+        0xce, 0xfd, 0xb2, 0x4,  0x0,  0x0,  0x0,  0x0,  0x0,  0x0,  0x0,  0x0,
+        0x0,  0x0,  0x0,  0x0,  0x0,  0x0,  0x0,  0x0,  0x0,  0x0,  0x0,  0x0,
+        0x0,  0x0,  0x0,  0x0,  0x11, 0x13, 0x8c, 0xe7, 0x50, 0xfa, 0x15, 0xc2,
+    };
+    const input_addr = 0x100000000;
+
+    var result_point: [64]u8 = undefined;
+    const result_point_addr = 0x200000000;
+
+    var registers = sig.vm.interpreter.RegisterMap.initFill(0);
+    var memory_map = try MemoryMap.init(allocator, &.{
+        memory.Region.init(.constant, input, input_addr),
+        memory.Region.init(.mutable, &result_point, result_point_addr),
+    }, .v3, .{});
+    defer memory_map.deinit(allocator);
+
+    registers.set(.r1, 2); // MUL
+    registers.set(.r2, input_addr);
+    registers.set(.r3, input.len);
+    registers.set(.r4, result_point_addr);
+
+    try altBn128GroupOp(&tc, &memory_map, &registers);
+
+    try std.testing.expectEqualSlices(
+        u8,
+        &.{
+            0x7,  0xa,  0x8d, 0x6a, 0x98, 0x21, 0x53, 0xca, 0xe4, 0xbe, 0x29,
+            0xd4, 0x34, 0xe8, 0xfa, 0xef, 0x8a, 0x47, 0xb2, 0x74, 0xa0, 0x53,
+            0xf5, 0xa4, 0xee, 0x2a, 0x6c, 0x9c, 0x13, 0xc3, 0x1e, 0x5c, 0x3,
+            0x1b, 0x8c, 0xe9, 0x14, 0xeb, 0xa3, 0xa9, 0xff, 0xb9, 0x89, 0xf9,
+            0xcd, 0xd5, 0xb0, 0xf0, 0x19, 0x43, 0x7,  0x4b, 0xf4, 0xf0, 0xf3,
+            0x15, 0x69, 0xe,  0xc3, 0xce, 0xc6, 0x98, 0x1a, 0xfc,
+        },
+        &result_point,
+    );
+
+    try std.testing.expectError(
+        error.ComputationalBudgetExceeded,
+        altBn128GroupOp(&tc, &memory_map, &registers),
+    );
+}
+
+test "alt_bn128 pairing" {
+    const allocator = std.testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(0);
+    var cache, var tc = try sig.runtime.testing.createTransactionContext(
+        allocator,
+        prng.random(),
+        .{ .accounts = &.{.{
+            .pubkey = sig.core.Pubkey.initRandom(prng.random()),
+            .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+        }}, .compute_meter = 48_986 },
+    );
+    defer {
+        sig.runtime.testing.deinitTransactionContext(allocator, tc);
+        cache.deinit(allocator);
+    }
+
+    const input: []const u8 = &.{
+        0x1c, 0x76, 0x47, 0x6f, 0x4d, 0xef, 0x4b, 0xb9, 0x45, 0x41, 0xd5, 0x7e,
+        0xbb, 0xa1, 0x19, 0x33, 0x81, 0xff, 0xa7, 0xaa, 0x76, 0xad, 0xa6, 0x64,
+        0xdd, 0x31, 0xc1, 0x60, 0x24, 0xc4, 0x3f, 0x59, 0x30, 0x34, 0xdd, 0x29,
+        0x20, 0xf6, 0x73, 0xe2, 0x4,  0xfe, 0xe2, 0x81, 0x1c, 0x67, 0x87, 0x45,
+        0xfc, 0x81, 0x9b, 0x55, 0xd3, 0xe9, 0xd2, 0x94, 0xe4, 0x5c, 0x9b, 0x3,
+        0xa7, 0x6a, 0xef, 0x41, 0x20, 0x9d, 0xd1, 0x5e, 0xbf, 0xf5, 0xd4, 0x6c,
+        0x4b, 0xd8, 0x88, 0xe5, 0x1a, 0x93, 0xcf, 0x99, 0xa7, 0x32, 0x96, 0x36,
+        0xc6, 0x35, 0x14, 0x39, 0x6b, 0x4a, 0x45, 0x20, 0x3,  0xa3, 0x5b, 0xf7,
+        0x4,  0xbf, 0x11, 0xca, 0x1,  0x48, 0x3b, 0xfa, 0x8b, 0x34, 0xb4, 0x35,
+        0x61, 0x84, 0x8d, 0x28, 0x90, 0x59, 0x60, 0x11, 0x4c, 0x8a, 0xc0, 0x40,
+        0x49, 0xaf, 0x4b, 0x63, 0x15, 0xa4, 0x16, 0x78, 0x2b, 0xb8, 0x32, 0x4a,
+        0xf6, 0xcf, 0xc9, 0x35, 0x37, 0xa2, 0xad, 0x1a, 0x44, 0x5c, 0xfd, 0xc,
+        0xa2, 0xa7, 0x1a, 0xcd, 0x7a, 0xc4, 0x1f, 0xad, 0xbf, 0x93, 0x3c, 0x2a,
+        0x51, 0xbe, 0x34, 0x4d, 0x12, 0xa,  0x2a, 0x4c, 0xf3, 0xc,  0x1b, 0xf9,
+        0x84, 0x5f, 0x20, 0xc6, 0xfe, 0x39, 0xe0, 0x7e, 0xa2, 0xcc, 0xe6, 0x1f,
+        0xc,  0x9b, 0xb0, 0x48, 0x16, 0x5f, 0xe5, 0xe4, 0xde, 0x87, 0x75, 0x50,
+        0x11, 0x1e, 0x12, 0x9f, 0x1c, 0xf1, 0x9,  0x77, 0x10, 0xd4, 0x1c, 0x4a,
+        0xc7, 0xf,  0xcd, 0xfa, 0x5b, 0xa2, 0x2,  0x3c, 0x6f, 0xf1, 0xcb, 0xea,
+        0xc3, 0x22, 0xde, 0x49, 0xd1, 0xb6, 0xdf, 0x7c, 0x20, 0x32, 0xc6, 0x1a,
+        0x83, 0xe,  0x3c, 0x17, 0x28, 0x6d, 0xe9, 0x46, 0x2b, 0xf2, 0x42, 0xfc,
+        0xa2, 0x88, 0x35, 0x85, 0xb9, 0x38, 0x70, 0xa7, 0x38, 0x53, 0xfa, 0xce,
+        0x6a, 0x6b, 0xf4, 0x11, 0x19, 0x8e, 0x93, 0x93, 0x92, 0xd,  0x48, 0x3a,
+        0x72, 0x60, 0xbf, 0xb7, 0x31, 0xfb, 0x5d, 0x25, 0xf1, 0xaa, 0x49, 0x33,
+        0x35, 0xa9, 0xe7, 0x12, 0x97, 0xe4, 0x85, 0xb7, 0xae, 0xf3, 0x12, 0xc2,
+        0x18, 0x0,  0xde, 0xef, 0x12, 0x1f, 0x1e, 0x76, 0x42, 0x6a, 0x0,  0x66,
+        0x5e, 0x5c, 0x44, 0x79, 0x67, 0x43, 0x22, 0xd4, 0xf7, 0x5e, 0xda, 0xdd,
+        0x46, 0xde, 0xbd, 0x5c, 0xd9, 0x92, 0xf6, 0xed, 0x9,  0x6,  0x89, 0xd0,
+        0x58, 0x5f, 0xf0, 0x75, 0xec, 0x9e, 0x99, 0xad, 0x69, 0xc,  0x33, 0x95,
+        0xbc, 0x4b, 0x31, 0x33, 0x70, 0xb3, 0x8e, 0xf3, 0x55, 0xac, 0xda, 0xdc,
+        0xd1, 0x22, 0x97, 0x5b, 0x12, 0xc8, 0x5e, 0xa5, 0xdb, 0x8c, 0x6d, 0xeb,
+        0x4a, 0xab, 0x71, 0x80, 0x8d, 0xcb, 0x40, 0x8f, 0xe3, 0xd1, 0xe7, 0x69,
+        0xc,  0x43, 0xd3, 0x7b, 0x4c, 0xe6, 0xcc, 0x1,  0x66, 0xfa, 0x7d, 0xaa,
+    };
+    const input_addr = 0x100000000;
+
+    var result_point: [32]u8 = undefined;
+    const result_point_addr = 0x200000000;
+
+    var registers = sig.vm.interpreter.RegisterMap.initFill(0);
+    var memory_map = try MemoryMap.init(allocator, &.{
+        memory.Region.init(.constant, input, input_addr),
+        memory.Region.init(.mutable, &result_point, result_point_addr),
+    }, .v3, .{});
+    defer memory_map.deinit(allocator);
+
+    registers.set(.r1, 3); // PAIRING
+    registers.set(.r2, input_addr);
+    registers.set(.r3, input.len);
+    registers.set(.r4, result_point_addr);
+
+    try altBn128GroupOp(&tc, &memory_map, &registers);
+
+    try std.testing.expectEqualSlices(
+        u8,
+        &.{
+            // Is a valid pairing.
+            0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
+            0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
+            0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1,
+        },
+        &result_point,
+    );
+
+    try std.testing.expectError(
+        error.ComputationalBudgetExceeded,
+        altBn128GroupOp(&tc, &memory_map, &registers),
+    );
+}
+
+test "alt_bn128 g1 compress/decompress" {
+    const allocator = std.testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(0);
+    var cache, var tc = try sig.runtime.testing.createTransactionContext(
+        allocator,
+        prng.random(),
+        .{ .accounts = &.{.{
+            .pubkey = sig.core.Pubkey.initRandom(prng.random()),
+            .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+        }}, .compute_meter = 628 * 2 },
+    );
+    defer {
+        sig.runtime.testing.deinitTransactionContext(allocator, tc);
+        cache.deinit(allocator);
+    }
+
+    const input_addr = 0x100000000;
+    const result_point_addr = 0x200000000;
+
+    var buffer: [64]u8 = undefined;
+
+    inline for (.{ &.{
+        45,  206, 255, 166, 152, 55,  128, 138, 79,  217, 145, 164, 25,  74,  120, 234, 234, 217,
+        68,  149, 162, 44,  133, 120, 184, 205, 12,  44,  175, 98,  168, 172, 20,  24,  216, 15,
+        209, 175, 106, 75,  147, 236, 90,  101, 123, 219, 245, 151, 209, 202, 218, 104, 148, 8,
+        32,  254, 243, 191, 218, 122, 42,  81,  193, 84,
+    }, &.{
+        45,  206, 255, 166, 152, 55,  128, 138, 79, 217, 145, 164, 25,  74,  120, 234, 234, 217,
+        68,  149, 162, 44,  133, 120, 184, 205, 12, 44,  175, 98,  168, 172, 28,  75,  118, 99,
+        15,  130, 53,  222, 36,  99,  235, 81,  5,  165, 98,  197, 197, 182, 144, 40,  212, 105,
+        169, 142, 72,  96,  177, 156, 174, 43,  59, 243,
+    } }) |entry| {
+        var registers = sig.vm.interpreter.RegisterMap.initFill(0);
+        var memory_map = try MemoryMap.init(allocator, &.{
+            memory.Region.init(.constant, entry, input_addr),
+            memory.Region.init(.mutable, &buffer, result_point_addr),
+        }, .v3, .{});
+        defer memory_map.deinit(allocator);
+
+        {
+            registers.set(.r1, 0); // g1_compress
+            registers.set(.r2, input_addr);
+            registers.set(.r3, entry.len);
+            registers.set(.r4, result_point_addr);
+
+            try altBn128Compression(&tc, &memory_map, &registers);
+        }
+        {
+            registers.set(.r1, 1); // g1_decompress
+            registers.set(.r2, result_point_addr);
+            registers.set(.r3, 32);
+            registers.set(.r4, result_point_addr);
+
+            try altBn128Compression(&tc, &memory_map, &registers);
+        }
+
+        try std.testing.expectEqualSlices(u8, entry, &buffer);
+    }
+
+    try std.testing.expectEqual(0, tc.compute_meter);
+}
+
+test "alt_bn128 g2 compress/decompress" {
+    const allocator = std.testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(0);
+    var cache, var tc = try sig.runtime.testing.createTransactionContext(
+        allocator,
+        prng.random(),
+        .{ .accounts = &.{.{
+            .pubkey = sig.core.Pubkey.initRandom(prng.random()),
+            .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+        }}, .compute_meter = 13_896 * 2 },
+    );
+    defer {
+        sig.runtime.testing.deinitTransactionContext(allocator, tc);
+        cache.deinit(allocator);
+    }
+
+    const input_addr = 0x100000000;
+    const result_point_addr = 0x200000000;
+
+    inline for (.{ &.{
+        40,  57,  233, 205, 180, 46,  35,  111, 215, 5,   23,  93,  12,  71,  118, 225, 7,   46,
+        247, 147, 47,  130, 106, 189, 184, 80,  146, 103, 141, 52,  242, 25,  0,   203, 124, 176,
+        110, 34,  151, 212, 66,  180, 238, 151, 236, 189, 133, 209, 17,  137, 205, 183, 168, 196,
+        92,  159, 75,  174, 81,  168, 18,  86,  176, 56,  16,  26,  210, 20,  18,  81,  122, 142,
+        104, 62,  251, 169, 98,  141, 21,  253, 50,  130, 182, 15,  33,  109, 228, 31,  79,  183,
+        88,  147, 174, 108, 4,   22,  14,  129, 168, 6,   80,  246, 254, 100, 218, 131, 94,  49,
+        247, 211, 3,   245, 22,  200, 177, 91,  60,  144, 147, 174, 90,  17,  19,  189, 62,  147,
+        152, 18,
+    }, &.{
+        40,  57,  233, 205, 180, 46,  35,  111, 215, 5,   23,  93,  12,  71,  118, 225, 7,   46,
+        247, 147, 47,  130, 106, 189, 184, 80,  146, 103, 141, 52,  242, 25,  0,   203, 124, 176,
+        110, 34,  151, 212, 66,  180, 238, 151, 236, 189, 133, 209, 17,  137, 205, 183, 168, 196,
+        92,  159, 75,  174, 81,  168, 18,  86,  176, 56,  32,  73,  124, 94,  206, 224, 37,  155,
+        80,  17,  74,  13,  30,  244, 66,  96,  100, 254, 180, 130, 71,  3,   230, 109, 236, 105,
+        51,  131, 42,  16,  249, 49,  33,  226, 166, 108, 144, 58,  161, 196, 221, 204, 231, 132,
+        137, 174, 84,  104, 128, 184, 185, 54,  43,  225, 54,  222, 226, 15,  120, 89,  153, 233,
+        101, 53,
+    } }) |entry| {
+        var buffer: [128]u8 = undefined;
+
+        var registers = sig.vm.interpreter.RegisterMap.initFill(0);
+        var memory_map = try MemoryMap.init(allocator, &.{
+            memory.Region.init(.constant, entry, input_addr),
+            memory.Region.init(.mutable, &buffer, result_point_addr),
+        }, .v3, .{});
+        defer memory_map.deinit(allocator);
+
+        {
+            registers.set(.r1, 2); // g2_compress
+            registers.set(.r2, input_addr);
+            registers.set(.r3, entry.len);
+            registers.set(.r4, result_point_addr);
+
+            try altBn128Compression(&tc, &memory_map, &registers);
+        }
+        {
+            registers.set(.r1, 3); // g2_decompress
+            registers.set(.r2, result_point_addr);
+            registers.set(.r3, 64);
+            registers.set(.r4, result_point_addr);
+
+            try altBn128Compression(&tc, &memory_map, &registers);
+        }
+
+        try std.testing.expectEqualSlices(u8, entry, &buffer);
+    }
+
+    try std.testing.expectEqual(0, tc.compute_meter);
 }

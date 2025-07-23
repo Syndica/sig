@@ -168,6 +168,9 @@ files_excluded_from_line_length_check = [
     "src/transaction_sender/mock_transfer_generator.zig",
     "src/transaction_sender/service.zig",
     "src/transaction_sender/transaction_pool.zig",
+
+    # Generated file, will not conform to style guide.
+    "src/crypto/bn254/bn254_64.zig",
 ]
 
 
