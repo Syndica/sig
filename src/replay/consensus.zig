@@ -628,7 +628,7 @@ test "maybeRefreshLastVote - latest landed vote newer than last vote" {
     try fixture.fill_fork(
         testing.allocator,
         .{ .root = root, .data = trees1 },
-        false,
+        .active,
     );
 
     // Update fork stat
@@ -706,7 +706,7 @@ test "maybeRefreshLastVote - non voting validator" {
     try fixture.fill_fork(
         testing.allocator,
         .{ .root = root, .data = trees1 },
-        false,
+        .active,
     );
 
     // Update fork stat
@@ -786,7 +786,7 @@ test "maybeRefreshLastVote - hotspare validator" {
     try fixture.fill_fork(
         testing.allocator,
         .{ .root = root, .data = trees1 },
-        false,
+        .active,
     );
 
     // Update fork stat
@@ -866,7 +866,7 @@ test "maybeRefreshLastVote - refresh interval not elapsed" {
     try fixture.fill_fork(
         testing.allocator,
         .{ .root = root, .data = trees1 },
-        false,
+        .active,
     );
 
     // Update fork stat
@@ -949,7 +949,7 @@ test "maybeRefreshLastVote - successfully refreshed and mark last_vote_tx_blockh
     try fixture.fill_fork(
         testing.allocator,
         .{ .root = root, .data = trees1 },
-        false,
+        .active,
     );
 
     // Update fork stat
@@ -1280,7 +1280,7 @@ test "checkAndHandleNewRoot - success" {
     try fixture.fill_fork(
         testing.allocator,
         .{ .root = root, .data = trees1 },
-        false,
+        .active,
     );
 
     var db = try TestDB.init(@src());
@@ -1343,7 +1343,7 @@ test "computeBankStats - child bank heavier" {
     try fixture.fill_fork(
         testing.allocator,
         .{ .root = root, .data = trees1 },
-        true,
+        .active,
     );
 
     const my_node_pubkey = fixture.node_pubkeys.items[0];
@@ -1448,7 +1448,7 @@ test "computeBankStats - same weight selects lower slot" {
     try fixture.fill_fork(
         testing.allocator,
         .{ .root = root, .data = trees1 },
-        true,
+        .active,
     );
 
     var ancestors = try convertAncestorsMap(testing.allocator, &fixture.ancestors);
