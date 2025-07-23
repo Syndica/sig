@@ -154,11 +154,9 @@ pub const SvmSlot = struct {
         const last_blockhash = self.params.blockhash_queue.last_hash orelse
             return error.MissingLastBlockhash;
 
-        const last_blockhash_info = self.params.blockhash_queue
-            .getHashInfoIfValid(last_blockhash, self.params.max_age) orelse
+        const last_lamports_per_signature = self.params.blockhash_queue
+            .getLamportsPerSignature(last_blockhash) orelse
             return error.MissingLastBlockhashInfo;
-
-        const last_lamports_per_signature = last_blockhash_info.lamports_per_signature;
 
         return .{
             .ancestors = self.params.ancestors,
