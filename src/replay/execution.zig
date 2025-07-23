@@ -11,7 +11,7 @@ const ThreadPool = sig.sync.ThreadPool;
 const Pubkey = core.Pubkey;
 const Slot = core.Slot;
 
-const AccountsDB = sig.accounts_db.AccountsDB;
+const AccountStore = sig.accounts_db.AccountStore;
 const BlockstoreReader = sig.ledger.BlockstoreReader;
 
 const ForkProgress = sig.consensus.progress_map.ForkProgress;
@@ -29,34 +29,41 @@ pub const ReplayExecutionState = struct {
     logger: sig.trace.ScopedLogger("replay-execution"),
     my_identity: Pubkey,
     vote_account: ?Pubkey,
-    accounts_db: *AccountsDB,
+
+    // borrows
+    account_store: AccountStore,
     thread_pool: *ThreadPool,
     blockstore_reader: *BlockstoreReader,
     slot_tracker: *SlotTracker,
     epochs: *EpochTracker,
-    progress_map: ProgressMap,
+    progress_map: *ProgressMap,
+
+    // owned
+    status_cache: sig.core.StatusCache,
 
     pub fn init(
         allocator: Allocator,
         logger: sig.trace.Logger,
         my_identity: Pubkey,
         thread_pool: *ThreadPool,
-        accounts_db: *AccountsDB,
+        account_store: AccountStore,
         blockstore_reader: *BlockstoreReader,
         slot_tracker: *SlotTracker,
         epochs: *EpochTracker,
+        progress_map: *ProgressMap,
     ) Allocator.Error!ReplayExecutionState {
         return .{
             .allocator = allocator,
             .logger = .from(logger),
             .my_identity = my_identity,
             .vote_account = null, // voting not currently supported
-            .accounts_db = accounts_db,
+            .account_store = account_store,
             .thread_pool = thread_pool,
             .blockstore_reader = blockstore_reader,
             .slot_tracker = slot_tracker,
             .epochs = epochs,
-            .progress_map = ProgressMap.INIT,
+            .progress_map = progress_map,
+            .status_cache = .default(),
         };
     }
 };
@@ -196,7 +203,7 @@ fn replaySlot(state: *ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
     return .{ .confirm = try confirmSlot(
         state.allocator,
         .from(state.logger),
-        state.accounts_db,
+        state.account_store,
         state.thread_pool,
         entries,
         confirmation_progress.last_entry,
@@ -208,5 +215,6 @@ fn replaySlot(state: *ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
             .slot_is_full = slot_is_full,
             .tick_hash_count = &confirmation_progress.tick_hash_count,
         },
+        &slot_info.constants.ancestors,
     ) };
 }

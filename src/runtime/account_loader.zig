@@ -316,7 +316,7 @@ pub const BatchAccountCache = struct {
         allocator: std.mem.Allocator,
         transaction: *const RuntimeTransaction,
         rent_collector: *const RentCollector,
-        feature_set: *const runtime.FeatureSet,
+        feature_set: *const sig.core.FeatureSet,
         compute_budget_limits: *const ComputeBudgetLimits,
     ) error{OutOfMemory}!TransactionResult(LoadedTransactionAccounts) {
         const result = loadTransactionAccountsInner(
@@ -343,7 +343,7 @@ pub const BatchAccountCache = struct {
         allocator: std.mem.Allocator,
         transaction: *const RuntimeTransaction,
         rent_collector: *const RentCollector,
-        feature_set: *const runtime.FeatureSet,
+        feature_set: *const sig.core.FeatureSet,
         compute_budget_limits: *const ComputeBudgetLimits,
     ) LoadedTransactionAccountsError!LoadedTransactionAccounts {
         if (compute_budget_limits.loaded_accounts_bytes == 0)
@@ -394,7 +394,7 @@ pub const BatchAccountCache = struct {
             )) orelse return error.ProgramAccountNotFound;
 
             if (!feature_set.active.contains(
-                sig.runtime.features.REMOVE_ACCOUNTS_EXECUTABLE_FLAG_CHECKS,
+                sig.core.features.REMOVE_ACCOUNTS_EXECUTABLE_FLAG_CHECKS,
             ) and !program_account.account.executable) return error.InvalidProgramForExecution;
 
             const owner_id = &program_account.account.owner;
@@ -446,7 +446,7 @@ pub const BatchAccountCache = struct {
         allocator: std.mem.Allocator,
         transaction: *const RuntimeTransaction,
         rent_collector: *const RentCollector,
-        feature_set: *const runtime.FeatureSet,
+        feature_set: *const sig.core.FeatureSet,
         key: *const Pubkey,
         is_writable: bool,
     ) error{OutOfMemory}!LoadedTransactionAccount {
@@ -533,10 +533,10 @@ pub const BatchAccountCache = struct {
 pub fn collectRentFromAccount(
     account: *AccountSharedData,
     account_key: *const Pubkey,
-    feature_set: *const runtime.FeatureSet,
+    feature_set: *const sig.core.FeatureSet,
     rent_collector: *const RentCollector,
 ) CollectedInfo {
-    if (!feature_set.active.contains(runtime.features.DISABLE_RENT_FEES_COLLECTION)) {
+    if (!feature_set.active.contains(sig.core.features.DISABLE_RENT_FEES_COLLECTION)) {
         @branchHint(.unlikely); // this feature should always be enabled?
         return rent_collector.collectFromExistingAccount(account_key, account);
     }
@@ -631,7 +631,7 @@ fn constructInstructionsAccount(
 
 const TestingEnv = struct {
     rent_collector: RentCollector,
-    feature_set: runtime.FeatureSet,
+    feature_set: sig.core.FeatureSet,
     compute_budget_limits: ComputeBudgetLimits,
 };
 
@@ -639,7 +639,7 @@ fn newTestingEnv() TestingEnv {
     if (!@import("builtin").is_test) @compileError("newTestingEnv for testing only");
     return .{
         .rent_collector = sig.core.rent_collector.defaultCollector(0),
-        .feature_set = sig.runtime.FeatureSet.EMPTY,
+        .feature_set = sig.core.FeatureSet.EMPTY,
         .compute_budget_limits = ComputeBudgetLimits{
             .heap_size = 0,
             .compute_unit_limit = 0,

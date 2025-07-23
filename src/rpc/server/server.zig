@@ -13,7 +13,7 @@ pub const requests = @import("requests.zig");
 pub const basic = @import("basic.zig");
 pub const LinuxIoUring = @import("linux_io_uring.zig").LinuxIoUring;
 
-comptime {
+test {
     _ = connection;
     _ = requests;
 

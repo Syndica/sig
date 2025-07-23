@@ -56,7 +56,11 @@ pub const SlotTracker = struct {
 
     pub fn deinit(self: SlotTracker, allocator: Allocator) void {
         var slots = self.slots;
-        for (slots.values()) |v| allocator.destroy(v);
+        for (slots.values()) |element| {
+            element.constants.deinit(allocator);
+            element.state.deinit(allocator);
+            allocator.destroy(element);
+        }
         slots.deinit(allocator);
     }
 
@@ -204,11 +208,14 @@ fn testDummySlotConstants(slot: Slot) SlotConstants {
     return .{
         .parent_slot = slot - 1,
         .parent_hash = .ZEROES,
+        .parent_lt_hash = .IDENTITY,
         .block_height = 0,
         .collector_id = .ZEROES,
         .max_tick_height = 0,
         .fee_rate_governor = .DEFAULT,
         .epoch_reward_status = .inactive,
+        .ancestors = .{ .ancestors = .empty },
+        .feature_set = .{ .active = .empty },
     };
 }
 

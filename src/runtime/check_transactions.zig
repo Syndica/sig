@@ -13,7 +13,7 @@ const AccountSharedData = sig.runtime.AccountSharedData;
 const BatchAccountCache = sig.runtime.account_loader.BatchAccountCache;
 const CachedAccount = sig.runtime.account_loader.CachedAccount;
 const ComputeBudgetLimits = sig.runtime.program.compute_budget.ComputeBudgetLimits;
-const FeatureSet = sig.runtime.FeatureSet;
+const FeatureSet = sig.core.FeatureSet;
 const NonceData = sig.runtime.nonce.Data;
 const NonceState = sig.runtime.nonce.State;
 const NonceVersions = sig.runtime.nonce.Versions;
@@ -85,7 +85,7 @@ pub fn checkFeePayer(
     TransactionRollbacks,
 }) {
     const enable_secp256r1 = feature_set.active.contains(
-        sig.runtime.features.ENABLE_SECP256R1_PRECOMPILE,
+        sig.core.features.ENABLE_SECP256R1_PRECOMPILE,
     );
 
     const fee_payer_key = transaction.accounts.items(.pubkey)[0];
@@ -680,7 +680,7 @@ test "checkFeePayer: happy path fee payer only" {
         &ComputeBudgetLimits.DEFAULT,
         null,
         &sig.core.rent_collector.defaultCollector(10),
-        &sig.runtime.FeatureSet.EMPTY,
+        &sig.core.FeatureSet.EMPTY,
         5000,
     );
 
@@ -741,7 +741,7 @@ test "checkFeePayer: happy path with same nonce and fee payer" {
         &ComputeBudgetLimits.DEFAULT,
         .{ .pubkey = transaction.fee_payer, .account = &nonce_account },
         &sig.core.rent_collector.defaultCollector(10),
-        &sig.runtime.FeatureSet.EMPTY,
+        &sig.core.FeatureSet.EMPTY,
         5000,
     );
 
@@ -804,7 +804,7 @@ test "checkFeePayer: happy path with separate nonce and fee payer" {
         &ComputeBudgetLimits.DEFAULT,
         .{ .pubkey = Pubkey.initRandom(prng.random()), .account = &nonce_account },
         &sig.core.rent_collector.defaultCollector(10),
-        &sig.runtime.FeatureSet.EMPTY,
+        &sig.core.FeatureSet.EMPTY,
         5000,
     );
 

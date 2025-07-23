@@ -8,7 +8,7 @@
 
 const server = @import("server.zig");
 
-comptime {
+test {
     _ = server;
 }
 

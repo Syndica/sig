@@ -63,7 +63,7 @@ fn createLookupTable(
 
     const has_relax_authority_signer_check_for_lookup_table_creation =
         ic.tc.feature_set.active.contains(
-            runtime.features.RELAX_AUTHORITY_SIGNER_CHECK_FOR_LOOKUP_TABLE_CREATION,
+            sig.core.features.RELAX_AUTHORITY_SIGNER_CHECK_FOR_LOOKUP_TABLE_CREATION,
         );
 
     // [agave] https://github.com/anza-xyz/agave/blob/8116c10021f09c806159852f65d37ffe6d5a118e/programs/address-lookup-table/src/processor.rs#L59
