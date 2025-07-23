@@ -4210,25 +4210,15 @@ pub const TestFixture = struct {
         random: std.Random,
         num_keypairs: usize,
     ) !void {
-        self.node_pubkeys.deinit(allocator);
-        self.vote_pubkeys.deinit(allocator);
+        self.node_pubkeys.clearRetainingCapacity();
+        self.vote_pubkeys.clearRetainingCapacity();
 
-        var node_pubkeys = try std.ArrayListUnmanaged(Pubkey).initCapacity(
-            allocator,
-            num_keypairs,
-        );
-        var vote_pubkeys = try std.ArrayListUnmanaged(Pubkey).initCapacity(
-            allocator,
-            num_keypairs,
-        );
-
+        try self.node_pubkeys.ensureTotalCapacityPrecise(allocator, num_keypairs);
+        try self.vote_pubkeys.ensureTotalCapacityPrecise(allocator, num_keypairs);
         for (0..num_keypairs) |_| {
-            try node_pubkeys.append(allocator, Pubkey.initRandom(random));
-            try vote_pubkeys.append(allocator, Pubkey.initRandom(random));
+            self.node_pubkeys.appendAssumeCapacity(.initRandom(random));
+            self.vote_pubkeys.appendAssumeCapacity(.initRandom(random));
         }
-
-        self.node_pubkeys = node_pubkeys;
-        self.vote_pubkeys = vote_pubkeys;
     }
 
     pub fn fill_fork(
