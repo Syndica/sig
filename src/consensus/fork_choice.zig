@@ -463,15 +463,16 @@ pub const ForkChoice = struct {
     /// and `root_parent` must not already exist in the fork choice.
     ///
     /// Analogous to [add_root_parent](https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L421)
-    pub fn addRootParent(self: *ForkChoice, root_parent: SlotAndHash) !void {
+    pub fn addRootParent(self: *ForkChoice, root_parent: SlotAndHash) std.mem.Allocator.Error!void {
         // Assert that the new root parent has a smaller slot than the current root
         std.debug.assert(root_parent.slot < self.tree_root.slot);
         // Assert that the root parent doesn't already exist
         std.debug.assert(!self.fork_infos.contains(root_parent));
+        // Assert that the current root exists in fork_infos
+        std.debug.assert(self.fork_infos.contains(self.tree_root));
 
-        // Get the current root's fork info
-        const root_info = self.fork_infos.getPtr(self.tree_root) orelse
-            return error.MissingForkInfo;
+        // Get the current root's fork info (safe due to previous assertion)
+        const root_info = self.fork_infos.getPtr(self.tree_root).?;
 
         // Set the current root's parent to the new root parent
         root_info.parent = root_parent;
