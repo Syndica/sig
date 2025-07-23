@@ -25,9 +25,9 @@ pub const BlockhashQueue = struct {
     pub const MAX_RECENT_BLOCKHASHES = 300;
 
     pub const BlockhashInfo = struct {
+        lamports_per_signature: u64,
         index: u64,
         timestamp: u64,
-        lamports_per_signature: u64,
     };
 
     pub fn init(max_age: usize) BlockhashQueue {
@@ -70,7 +70,13 @@ pub const BlockhashQueue = struct {
 
     pub fn getHashInfoIfValid(self: BlockhashQueue, hash: Hash, max_age: usize) ?BlockhashInfo {
         const hash_info = self.hash_infos.get(hash) orelse return null;
-        if (!isHashIndexValid(self.last_hash_index, max_age, hash_info.index)) return null;
+        if (!isHashIndexValid(self.last_hash_index, max_age, hash_info.index)) {
+            std.log.err(
+                "invalid hash index: {}, {}, {}",
+                .{ self.last_hash_index, max_age, hash_info.index },
+            );
+            return null;
+        }
         return hash_info;
     }
 
