@@ -36,7 +36,7 @@ pub fn processBatch(
     committer: Committer,
     transactions: []const ResolvedTransaction,
     exit: *Atomic(bool),
-) !?TransactionError {
+) !BatchResult {
     const results = try allocator.alloc(struct { Hash, ProcessedTransaction }, transactions.len);
     defer allocator.free(results);
 
@@ -45,20 +45,30 @@ pub fn processBatch(
 
     for (transactions, 0..) |transaction, i| {
         if (exit.load(.monotonic)) {
-            return error.Exit;
+            return .exit;
         }
-        const hash = transaction.transaction.verifyAndHashMessage() catch return .SignatureFailure;
+        const hash = transaction.transaction.verifyAndHashMessage() catch
+            return .{ .failure = .SignatureFailure };
         const runtime_transaction = transaction.toRuntimeTransaction(hash);
 
         switch (try executeTransaction(allocator, &svm_slot, &runtime_transaction)) {
             .ok => |result| results[i] = .{ hash, result },
-            .err => |err| return err,
+            .err => |err| return .{ .failure = err },
         }
     }
     try committer.commitTransactions(allocator, svm_slot.params.slot, transactions, results);
 
-    return null;
+    return .success;
 }
+
+const BatchResult = union(enum) {
+    /// The batch completed with acceptable results.
+    success,
+    /// This batch had an error that indicates an invalid block
+    failure: TransactionError,
+    /// Termination was exited due to a failure in another thread.
+    exit,
+};
 
 /// Batches transactions and executes them on a thread pool.
 ///
@@ -80,7 +90,7 @@ pub const TransactionScheduler = struct {
     committer: Committer,
     batches: std.ArrayListUnmanaged(ResolvedBatch),
     thread_pool: HomogeneousThreadPool(ProcessBatchTask),
-    results: Channel(BatchResult),
+    results: Channel(BatchMessage),
     locks: AccountLocks,
     /// The number of batches that have been scheduled with thread_pool.trySchedule.
     batches_started: usize,
@@ -92,7 +102,10 @@ pub const TransactionScheduler = struct {
     failure: ?replay.confirm_slot.ConfirmSlotError,
     svm_params: SvmSlot.Params,
 
-    const BatchResult = struct { batch_index: usize, maybe_err: ?TransactionError };
+    const BatchMessage = struct {
+        batch_index: usize,
+        result: BatchResult,
+    };
 
     pub fn initCapacity(
         allocator: Allocator,
@@ -111,7 +124,7 @@ pub const TransactionScheduler = struct {
             .initBorrowed(allocator, thread_pool, null);
         errdefer pool.deinit(allocator);
 
-        var channel = try Channel(BatchResult).init(allocator);
+        var channel = try Channel(BatchMessage).init(allocator);
         errdefer channel.deinit();
 
         return .{
@@ -152,12 +165,16 @@ pub const TransactionScheduler = struct {
 
     pub fn poll(self: *TransactionScheduler) !ConfirmSlotStatus {
         // collect results
-        while (self.results.tryReceive()) |result| {
-            assert(0 == self.locks.unlock(self.batches.items[result.batch_index].accounts));
+        while (self.results.tryReceive()) |message| {
+            assert(0 == self.locks.unlock(self.batches.items[message.batch_index].accounts));
             self.batches_finished += 1;
-            if (result.maybe_err) |err| {
-                self.exit.store(true, .monotonic);
-                self.failure = .{ .invalid_transaction = err };
+            switch (message.result) {
+                .success => {},
+                .failure => |err| {
+                    self.exit.store(true, .monotonic);
+                    self.failure = .{ .invalid_transaction = err };
+                },
+                .exit => {},
             }
         }
 
@@ -221,7 +238,7 @@ const ProcessBatchTask = struct {
     committer: Committer,
     batch_index: usize,
     transactions: []const ResolvedTransaction,
-    results: *Channel(TransactionScheduler.BatchResult),
+    results: *Channel(TransactionScheduler.BatchMessage),
     exit: *Atomic(bool),
 
     pub fn run(self: *ProcessBatchTask) !void {
@@ -233,11 +250,11 @@ const ProcessBatchTask = struct {
             self.exit,
         );
 
-        if (result) |err| {
-            self.logger.err().logf("batch failed due to transaction error: {}", .{err});
+        if (result == .failure) {
+            self.logger.err().logf("batch failed due to transaction error: {}", .{result.failure});
             self.exit.store(true, .monotonic);
         }
-        try self.results.send(.{ .batch_index = self.batch_index, .maybe_err = result });
+        try self.results.send(.{ .batch_index = self.batch_index, .result = result });
     }
 };
 
