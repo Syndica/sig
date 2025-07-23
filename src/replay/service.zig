@@ -275,7 +275,7 @@ pub fn getActiveFeatures(
     allocator: Allocator,
     account_reader: AccountReader,
     slot: Slot,
-    ancestors: *const sig.core.status_cache.Ancestors,
+    ancestors: *const sig.core.Ancestors,
 ) !sig.core.FeatureSet {
     var features = std.AutoArrayHashMapUnmanaged(Pubkey, Slot).empty;
     for (sig.core.FEATURES) |pubkey| {
@@ -340,7 +340,7 @@ test trackNewSlots {
         .ns_per_slot = 1,
         .genesis_creation_time = 1,
         .slots_per_year = 1,
-        .stakes = try .initEmpty(allocator),
+        .stakes = try .initEmptyWithGenesisStakeHistoryEntry(allocator),
         .rent_collector = .initRandom(rng.random()),
     });
 

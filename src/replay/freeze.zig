@@ -7,7 +7,7 @@ const core = sig.core;
 const Allocator = std.mem.Allocator;
 const assert = std.debug.assert;
 
-const Ancestors = core.status_cache.Ancestors;
+const Ancestors = core.Ancestors;
 const Hash = core.Hash;
 const LtHash = core.LtHash;
 const Pubkey = core.Pubkey;
@@ -86,7 +86,7 @@ pub const HashSlotParams = struct {
     signature_count: u64,
     parent_slot_hash: *const Hash,
     parent_lt_hash: *const ?LtHash,
-    ancestors: *const sig.core.status_cache.Ancestors,
+    ancestors: *const Ancestors,
     blockhash: Hash,
     feature_set: *const sig.core.FeatureSet,
 };

@@ -13,7 +13,7 @@ const ForkChoice = sig.consensus.fork_choice.ForkChoice;
 const LatestValidatorVotesForFrozenBanks =
     sig.consensus.latest_validator_votes.LatestValidatorVotes;
 
-const EpochStakeMap = sig.core.stake.EpochStakeMap;
+const EpochStakesMap = sig.core.EpochStakesMap;
 
 const SlotTracker = sig.replay.trackers.SlotTracker;
 const EpochTracker = sig.replay.trackers.EpochTracker;
@@ -48,7 +48,7 @@ pub const ConsensusDependencies = struct {
     descendants: *const std.AutoArrayHashMapUnmanaged(u64, SortedSet(u64)),
     vote_account: Pubkey,
     slot_history: *const SlotHistory,
-    epoch_stakes: EpochStakeMap,
+    epoch_stakes: EpochStakesMap,
     latest_validator_votes_for_frozen_banks: *const LatestValidatorVotesForFrozenBanks,
 };
 

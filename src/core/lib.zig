@@ -1,8 +1,11 @@
 pub const account = @import("account.zig");
+pub const ancestors = @import("ancestors.zig");
 pub const bank = @import("bank.zig");
+pub const blockhash_queue = @import("blockhash_queue.zig");
 pub const entry = @import("entry.zig");
 pub const epoch_context = @import("epoch_context.zig");
 pub const epoch_schedule = @import("epoch_schedule.zig");
+pub const epoch_stakes = @import("epoch_stakes.zig");
 pub const features = @import("features.zig");
 pub const genesis_config = @import("genesis_config.zig");
 pub const hard_forks = @import("hard_forks.zig");
@@ -18,9 +21,33 @@ pub const stake = @import("stake.zig");
 pub const status_cache = @import("status_cache.zig");
 pub const time = @import("time.zig");
 pub const transaction = @import("transaction.zig");
+pub const vote_accounts = @import("vote_accounts.zig");
+
+/// TODO: Change EpochStakes to use EpochStakes(.stake) everywhere except in the `epoch_stakes` field
+/// of `BankFields` for serialization purposes. When initialising an epoch stakes for production we
+/// will need to load the accounts from accounts db to convert from `EpochStakes(.delegation)` to
+/// `EpochStakes(.stake)`. Because we need to load the `credits_observed` value which is contained in
+/// the stake account data which is a serialized `StakesStateV2`. This process also validates that
+/// the stake accounts are valid.
+/// NOTE: In the short term we may be able to get away with using `EpochStakes(.delegation)` if
+/// we are not yet using the `credits_observed` value in the epoch stakes anywhere.
+pub const EpochStakes = epoch_stakes.EpochStakesGeneric(.delegation);
+pub const EpochStakesMap = epoch_stakes.EpochStakesMapGeneric(.delegation);
+/// TODO: Move to serialization module, it is not required elsewhere.
+pub const VersionedEpochStakes = epoch_stakes.VersionedEpochStakes;
+
+/// TODO: The `StakesCache` should ultimately be either a `.stake` or `.account` variant. This
+/// change requires populating the `StakesCache` loading accounts from the accounts db, deserializing
+/// the account state, and creating either a `Stake` or `StakeAccount`. For now we will use the
+/// `.delegation` variant for simplicity.
+pub const StakesCache = stake.StakesCacheGeneric(.delegation);
+pub const StakesType = stake.StakesType;
+pub const Stakes = stake.Stakes;
 
 pub const Account = account.Account;
+pub const Ancestors = ancestors.Ancestors;
 pub const BankFields = bank.BankFields;
+pub const BlockhashQueue = blockhash_queue.BlockhashQueue;
 pub const ClusterType = genesis_config.ClusterType;
 pub const Entry = entry.Entry;
 pub const EpochConstants = bank.EpochConstants;
@@ -28,7 +55,7 @@ pub const EpochContext = epoch_context.EpochContext;
 pub const EpochSchedule = epoch_schedule.EpochSchedule;
 pub const FeatureSet = features.FeatureSet;
 pub const GenesisConfig = genesis_config.GenesisConfig;
-pub const HardFork = HardForks.Fork;
+pub const HardFork = HardForks.HardFork;
 pub const HardForks = hard_forks.HardForks;
 pub const Hash = hash.Hash;
 pub const Instruction = instruction.Instruction;

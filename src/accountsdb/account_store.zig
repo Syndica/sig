@@ -10,7 +10,7 @@ const Allocator = std.mem.Allocator;
 const RwMux = sig.sync.RwMux;
 
 const Account = sig.core.Account;
-const Ancestors = sig.core.status_cache.Ancestors;
+const Ancestors = sig.core.Ancestors;
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 
