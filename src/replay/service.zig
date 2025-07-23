@@ -292,6 +292,22 @@ pub fn getActiveFeatures(
     return .{ .active = features };
 }
 
+test "getActiveFeatures rejects wrong ownership" {
+    const allocator = std.testing.allocator;
+    var accounts = std.AutoArrayHashMapUnmanaged(Pubkey, sig.core.Account).empty;
+    defer accounts.deinit(allocator);
+
+    var acct: sig.core.Account = undefined;
+    acct.owner = Pubkey.ZEROES;
+
+    try accounts.put(allocator, sig.core.features.SYSTEM_TRANSFER_ZERO_CHECK, acct);
+
+    try std.testing.expectError(
+        error.FeatureNotOwnedByFeatureProgram,
+        getActiveFeatures(allocator, .{ .single_version_map = &accounts }, 0),
+    );
+}
+
 test trackNewSlots {
     const allocator = std.testing.allocator;
     var rng = std.Random.DefaultPrng.init(0);
