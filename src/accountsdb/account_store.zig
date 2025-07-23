@@ -83,7 +83,25 @@ pub const AccountReader = union(enum) {
     }
 };
 
-/// Interface for only reading accounts that should be visible for a particular slot.
+/// Interface for reading any account as it should appear during a particular slot.
+///
+/// For example, let's say the cluster has the following forking scenario:
+///
+///      1
+///     / \
+///    2   3
+///   /   / \ 
+///  4   5   6
+///           \
+///            7
+///
+/// A SlotAccountReader will be specialized for *one* of these slots. For
+/// example, let's say you have the SlotAccountReader that's specialized for
+/// slot 6, and you're using it to `get` an account was modified in slots 1, 2,
+/// 3, 4, 5, and 7 (every slot except 6). It will return the version of the
+/// account from slot 3 because it's the latest version on the current fork
+/// that's less than or equal to slot 6. If the account was modified in slot 6,
+/// then you'll get the version of the account from slot 6.
 pub const SlotAccountReader = union(enum) {
     accounts_db: struct { *AccountsDB, *const Ancestors },
     thread_safe_map: struct { *ThreadSafeAccountMap, *const Ancestors },
