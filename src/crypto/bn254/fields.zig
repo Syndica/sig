@@ -28,13 +28,11 @@ pub const Fp = struct {
         const p_limbs: [4]u64 = @bitCast(p);
 
         const p_minus_2: u256 = p - 2;
-        const p_minus_1_half = 0x183227397098d014dc2822db40c0ac2ecbc0b548b438e5469e10460b6c3e7ea3;
+        const p_minus_1_half = (p - 1) / 2;
+        const sqrt_exp: u256 = (p - 3) / 4;
 
         pub const b_mont: Fp = fromInt(3);
         const p_minus_one_mont: Fp = fromInt(p - 1);
-
-        /// (p-3)/4
-        const sqrt_exp: u256 = 0x0c19139cb84c680a6e14116da060561765e05aa45a1c72a34f082305b61f3f51;
 
         pub const frob_gamma2_mont: [5]Fp = .{
             .{ .limbs = .{
