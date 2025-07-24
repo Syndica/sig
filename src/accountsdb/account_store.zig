@@ -482,6 +482,7 @@ fn expectAccount(
     maybe_ancestors: ?Ancestors,
     expected: ?sig.core.Account,
 ) !void {
+    if (!@import("builtin").is_test) @compileError("Not allowed outside of tests.");
     const actual = if (maybe_ancestors) |*ancestors|
         try account_reader.forSlot(ancestors).get(address)
     else
