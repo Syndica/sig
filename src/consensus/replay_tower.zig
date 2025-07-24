@@ -1607,7 +1607,7 @@ pub fn collectVoteLockouts(
     vote_account_pubkey: *const Pubkey,
     bank_slot: Slot,
     vote_accounts: *const StakeAndVoteAccountsMap,
-    ancestors: *const AutoHashMapUnmanaged(Slot, SortedSet(Slot)),
+    ancestors: *const AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)),
     progress_map: *const ProgressMap,
     latest_validator_votes_for_frozen_banks: *LatestValidatorVotesForFrozenBanks,
 ) !ComputedBankState {
@@ -1773,7 +1773,7 @@ pub fn populateAncestorVotedStakes(
     allocator: std.mem.Allocator,
     voted_stakes: *VotedStakes,
     vote_slots: []const Slot,
-    ancestors: *const AutoHashMapUnmanaged(Slot, SortedSet(Slot)),
+    ancestors: *const AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)),
 ) !void {
     // If there's no ancestors, that means this slot must be from before the current root,
     // in which case the lockouts won't be calculated in bank_weight anyways, so ignore
@@ -1794,7 +1794,7 @@ fn updateAncestorVotedStakes(
     voted_stakes: *VotedStakes,
     voted_slot: Slot,
     voted_stake: u64,
-    ancestors: *const AutoHashMapUnmanaged(Slot, SortedSet(Slot)),
+    ancestors: *const AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)),
 ) !void {
     // If there's no ancestors, that means this slot must be from
     // before the current root, so ignore this slot
@@ -1868,7 +1868,7 @@ test "check_vote_threshold_forks" {
     var prng = std.Random.DefaultPrng.init(19);
     const random = prng.random();
     // Create the ancestor relationships
-    var ancestors = std.AutoHashMapUnmanaged(u64, SortedSet(Slot)).empty;
+    var ancestors = std.AutoArrayHashMapUnmanaged(u64, SortedSet(Slot)).empty;
     defer {
         var it = ancestors.iterator();
         while (it.next()) |entry| {
@@ -2042,7 +2042,7 @@ test "collect vote lockouts root" {
     );
     defer replay_tower.deinit(allocator);
 
-    var ancestors = std.AutoHashMapUnmanaged(u64, SortedSet(Slot)).empty;
+    var ancestors = std.AutoArrayHashMapUnmanaged(u64, SortedSet(Slot)).empty;
     defer {
         var it = ancestors.iterator();
         while (it.next()) |entry| {
@@ -2161,7 +2161,7 @@ test "collect vote lockouts sums" {
     }
 
     // ancestors: slot 1 has ancestor 0, slot 0 has no ancestors
-    var ancestors = std.AutoHashMapUnmanaged(u64, SortedSet(Slot)).empty;
+    var ancestors = std.AutoArrayHashMapUnmanaged(u64, SortedSet(Slot)).empty;
     defer {
         var it = ancestors.iterator();
         while (it.next()) |entry| {

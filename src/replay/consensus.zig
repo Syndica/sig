@@ -465,7 +465,7 @@ fn resetFork(
 fn computeBankStats(
     allocator: std.mem.Allocator,
     my_vote_pubkey: Pubkey,
-    ancestors: *const std.AutoHashMapUnmanaged(u64, SortedSet(u64)),
+    ancestors: *const std.AutoArrayHashMapUnmanaged(u64, SortedSet(u64)),
     slot_tracker: *SlotTracker,
     epoch_stakes: *const EpochStakesMap,
     epoch_schedule: *const EpochSchedule,
@@ -1310,10 +1310,6 @@ test "computeBankStats - child bank heavier" {
     defer frozen_slots.deinit(testing.allocator);
     errdefer frozen_slots.deinit(testing.allocator);
 
-    // Convert ancestors for computeBankStats
-    var ancestors = try convertAncestorsMap(testing.allocator, &fixture.ancestors);
-    defer ancestors.deinit(testing.allocator);
-
     // TODO move this into fixture?
     const versioned_stakes = try testEpochStakes(
         testing.allocator,
@@ -1332,7 +1328,7 @@ test "computeBankStats - child bank heavier" {
     _ = try computeBankStats(
         testing.allocator,
         my_node_pubkey,
-        &ancestors,
+        &fixture.ancestors,
         &fixture.slot_tracker,
         &epoch_stakes,
         &epoch_schedule,
@@ -1401,9 +1397,6 @@ test "computeBankStats - same weight selects lower slot" {
         .active,
     );
 
-    var ancestors = try convertAncestorsMap(testing.allocator, &fixture.ancestors);
-    defer ancestors.deinit(testing.allocator);
-
     const versioned_stakes = try testEpochStakes(
         testing.allocator,
         fixture.vote_pubkeys.items,
@@ -1421,7 +1414,7 @@ test "computeBankStats - same weight selects lower slot" {
     _ = try computeBankStats(
         testing.allocator,
         my_vote_pubkey,
-        &ancestors,
+        &fixture.ancestors,
         &fixture.slot_tracker,
         &epoch_stakes,
         &epoch_schedule,
@@ -1446,21 +1439,4 @@ test "computeBankStats - same weight selects lower slot" {
     const heaviest = fixture.fork_choice.heaviestOverallSlot();
     // Should pick the lower of the two equally weighted banks
     try testing.expectEqual(@as(u64, 1), heaviest.slot);
-}
-
-const builtin = @import("builtin");
-fn convertAncestorsMap(
-    allocator: std.mem.Allocator,
-    src: *const std.AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)),
-) !std.AutoHashMapUnmanaged(u64, SortedSet(u64)) {
-    if (!builtin.is_test) {
-        @compileError("convertAncestorsMap should only be called in test mode");
-    }
-    var dst = std.AutoHashMapUnmanaged(u64, SortedSet(u64)).empty;
-    try dst.ensureTotalCapacity(allocator, @intCast(src.count()));
-    var it = src.iterator();
-    while (it.next()) |entry| {
-        try dst.put(allocator, entry.key_ptr.*, entry.value_ptr.*);
-    }
-    return dst;
 }
