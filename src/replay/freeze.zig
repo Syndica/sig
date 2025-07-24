@@ -121,13 +121,13 @@ pub fn hashSlot(allocator: Allocator, params: HashSlotParams) !struct { ?LtHash,
         if (params.feature_set.active.contains(sig.core.features.REMOVE_ACCOUNTS_DELTA_HASH))
             Hash.generateSha256(.{
                 params.parent_slot_hash,
-                try deltaMerkleHash(params.account_reader, allocator, params.slot),
                 &signature_count_bytes,
                 params.blockhash,
             })
         else
             Hash.generateSha256(.{
                 params.parent_slot_hash,
+                try deltaMerkleHash(params.account_reader, allocator, params.slot),
                 &signature_count_bytes,
                 params.blockhash,
             });
