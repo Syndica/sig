@@ -1210,7 +1210,15 @@ fn merge(
     defer source_account.release();
 
     if (!source_account.account.owner.equals(&ID)) return error.IncorrectProgramId;
-    if (stake_account_index == source_account_index) return error.InvalidArgument;
+    
+    {
+        const stake_meta = ic.ixn_info.getAccountMetaAtIndex(stake_account_index) 
+            orelse return error.NotEnoughAccountKeys;
+        const source_meta = ic.ixn_info.getAccountMetaAtIndex(source_account_index) 
+            orelse return error.NotEnoughAccountKeys;
+        if (stake_meta.index_in_transaction == source_meta.index_in_transaction)
+            return error.InvalidArgument;
+    }
 
     var stake_account = try ic.borrowInstructionAccount(stake_account_index);
     defer stake_account.release();
