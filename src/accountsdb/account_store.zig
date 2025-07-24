@@ -18,52 +18,6 @@ const AccountSharedData = sig.runtime.AccountSharedData;
 
 const AccountsDB = accounts_db.AccountsDB;
 
-/// Interface for only reading accounts
-pub const AccountReader = union(enum) {
-    accounts_db: *AccountsDB,
-    thread_safe_map: *ThreadSafeAccountMap,
-    noop,
-
-    /// use this to deinit accounts returned by get methods
-    pub fn allocator(self: AccountReader) Allocator {
-        return switch (self) {
-            .noop => sig.utils.allocators.failing.allocator(.{}),
-            inline else => |item| item.allocator,
-        };
-    }
-
-    pub fn get(self: AccountReader, address: Pubkey, ancestors: *const Ancestors) !?Account {
-        return switch (self) {
-            .accounts_db => |db| {
-                const account = try db.getAccount(&address); // TODO: use ancestors after PR #796
-                if (account.lamports == 0) {
-                    account.deinit(db.allocator);
-                    return null;
-                }
-                return account;
-            },
-            .thread_safe_map => |map| try map.get(address, ancestors),
-            .noop => null,
-        };
-    }
-
-    pub fn getLatest(self: AccountReader, address: Pubkey) !?Account {
-        return switch (self) {
-            .accounts_db => |db| {
-                const account = try db.getAccount(&address);
-                if (account.lamports == 0) {
-                    // TODO: implement this check in accountsdb to avoid the unnecessary allocation
-                    account.deinit(db.allocator);
-                    return null;
-                }
-                return account;
-            },
-            .thread_safe_map => |map| try map.getLatest(address),
-            .noop => null,
-        };
-    }
-};
-
 /// Interface for both reading and writing accounts.
 ///
 /// Do not use this unless you need to *write* into the database generically.
@@ -83,9 +37,111 @@ pub const AccountStore = union(enum) {
 
     pub fn put(self: AccountStore, slot: Slot, address: Pubkey, account: AccountSharedData) !void {
         return switch (self) {
-            .accounts_db => unreachable, // TODO: PR #796
+            .accounts_db => |db| db.putAccount(slot, address, account),
             .thread_safe_map => |map| try map.put(slot, address, account),
             .noop => {},
+        };
+    }
+};
+
+/// Interface for only reading accounts
+pub const AccountReader = union(enum) {
+    accounts_db: *AccountsDB,
+    thread_safe_map: *ThreadSafeAccountMap,
+    noop,
+
+    /// use this to deinit accounts returned by get methods
+    pub fn allocator(self: AccountReader) Allocator {
+        return switch (self) {
+            .noop => sig.utils.allocators.failing.allocator(.{}),
+            inline else => |item| item.allocator,
+        };
+    }
+
+    pub fn forSlot(self: AccountReader, ancestors: *const Ancestors) SlotAccountReader {
+        return switch (self) {
+            .accounts_db => |db| .{ .accounts_db = .{ db, ancestors } },
+            .thread_safe_map => |map| .{ .thread_safe_map = .{ map, ancestors } },
+            .noop => .noop,
+        };
+    }
+
+    /// Deinit all returned accounts using `account_reader.allocator()`
+    pub fn getLatest(self: AccountReader, address: Pubkey) !?Account {
+        return switch (self) {
+            .accounts_db => |db| {
+                const account = try db.getAccount(&address);
+                if (account.lamports == 0) {
+                    // TODO: implement this check in accountsdb to avoid the unnecessary allocation
+                    account.deinit(db.allocator);
+                    return null;
+                }
+                return account;
+            },
+            .thread_safe_map => |map| try map.getLatest(address),
+            .noop => null,
+        };
+    }
+};
+
+/// Interface for reading any account as it should appear during a particular slot.
+///
+/// For example, let's say the cluster has the following forking scenario:
+///
+///      1
+///     / \
+///    2   3
+///   /   / \
+///  4   5   6
+///           \
+///            7
+///
+/// A SlotAccountReader will be specialized for *one* of these slots. For
+/// example, let's say you have the SlotAccountReader that's specialized for
+/// slot 6, and you're using it to `get` an account was modified in slots 1, 2,
+/// 3, 4, 5, and 7 (every slot except 6). It will return the version of the
+/// account from slot 3 because it's the latest version on the current fork
+/// that's less than or equal to slot 6. If the account was modified in slot 6,
+/// then you'll get the version of the account from slot 6.
+pub const SlotAccountReader = union(enum) {
+    accounts_db: struct { *AccountsDB, *const Ancestors },
+    /// Contains many versions of accounts and becomes fork-aware using
+    /// ancestors, like accountsdb.
+    thread_safe_map: struct { *ThreadSafeAccountMap, *const Ancestors },
+    /// Only stores the current slot's version of each account.
+    /// Should only store borrowed accounts, or else it will panic on deinit.
+    single_version_map: *const std.AutoArrayHashMapUnmanaged(Pubkey, Account),
+    noop,
+
+    /// use this to deinit accounts returned by get methods
+    pub fn allocator(self: SlotAccountReader) Allocator {
+        return switch (self) {
+            .noop => sig.utils.allocators.failing.allocator(.{}),
+            .single_version_map => sig.utils.allocators.failing.allocator(.{
+                .alloc = .panics,
+                .resize = .panics,
+                .free = .panics,
+            }),
+            inline else => |item| item[0].allocator,
+        };
+    }
+
+    /// Deinit all returned accounts using `account_reader.allocator()`
+    pub fn get(self: SlotAccountReader, address: Pubkey) !?Account {
+        return switch (self) {
+            .accounts_db => |pair| {
+                const db, const ancestors = pair;
+                const account = try db.getAccountWithAncestors(&address, ancestors) orelse
+                    return null;
+                if (account.lamports == 0) {
+                    account.deinit(db.allocator);
+                    return null;
+                }
+                return account;
+            },
+            .thread_safe_map => |pair| try pair[0].get(address, pair[1]),
+            .single_version_map => |pair| pair.get(address),
+            .noop => null,
         };
     }
 };
@@ -211,3 +267,43 @@ pub const ThreadSafeAccountMap = struct {
         }
     }
 };
+
+test "AccountStore does not return 0-lamport accounts from accountsdb" {
+    var db, var dir = try AccountsDB.initForTest(std.testing.allocator);
+    defer {
+        db.deinit();
+        dir.cleanup();
+    }
+
+    const zero_lamport_address = Pubkey.ZEROES;
+    const one_lamport_address = Pubkey{ .data = @splat(9) };
+
+    try db.putAccount(0, zero_lamport_address, .{
+        .lamports = 0,
+        .data = &.{},
+        .owner = .ZEROES,
+        .executable = false,
+        .rent_epoch = 0,
+    });
+
+    try db.putAccount(0, one_lamport_address, .{
+        .lamports = 1,
+        .data = &.{},
+        .owner = .ZEROES,
+        .executable = false,
+        .rent_epoch = 0,
+    });
+
+    const reader = db.accountReader();
+
+    try std.testing.expectEqual(null, try reader.getLatest(zero_lamport_address));
+    try std.testing.expectEqual(1, (try reader.getLatest(one_lamport_address)).?.lamports);
+
+    var ancestors = Ancestors{};
+    defer ancestors.deinit(std.testing.allocator);
+    try ancestors.ancestors.put(std.testing.allocator, 0, {});
+    const slot_reader = db.accountReader().forSlot(&ancestors);
+
+    try std.testing.expectEqual(null, try slot_reader.get(zero_lamport_address));
+    try std.testing.expectEqual(1, (try slot_reader.get(one_lamport_address)).?.lamports);
+}
