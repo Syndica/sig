@@ -267,3 +267,43 @@ pub const ThreadSafeAccountMap = struct {
         }
     }
 };
+
+test "AccountStore does not return 0-lamport accounts from accountsdb" {
+    var db, var dir = try AccountsDB.initForTest(std.testing.allocator);
+    defer {
+        db.deinit();
+        dir.cleanup();
+    }
+
+    const zero_lamport_address = Pubkey.ZEROES;
+    const one_lamport_address = Pubkey{ .data = @splat(9) };
+
+    try db.putAccount(0, zero_lamport_address, .{
+        .lamports = 0,
+        .data = &.{},
+        .owner = .ZEROES,
+        .executable = false,
+        .rent_epoch = 0,
+    });
+
+    try db.putAccount(0, one_lamport_address, .{
+        .lamports = 1,
+        .data = &.{},
+        .owner = .ZEROES,
+        .executable = false,
+        .rent_epoch = 0,
+    });
+
+    const reader = db.accountReader();
+
+    try std.testing.expectEqual(null, try reader.getLatest(zero_lamport_address));
+    try std.testing.expectEqual(1, (try reader.getLatest(one_lamport_address)).?.lamports);
+
+    var ancestors = Ancestors{};
+    defer ancestors.deinit(std.testing.allocator);
+    try ancestors.ancestors.put(std.testing.allocator, 0, {});
+    const slot_reader = db.accountReader().forSlot(&ancestors);
+
+    try std.testing.expectEqual(null, try slot_reader.get(zero_lamport_address));
+    try std.testing.expectEqual(1, (try slot_reader.get(one_lamport_address)).?.lamports);
+}
