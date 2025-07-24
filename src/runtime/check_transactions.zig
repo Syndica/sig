@@ -153,7 +153,7 @@ const SignatureCounts = struct {
     ) u64 {
         var n_signatures: u64 = 0;
         for (transaction.instruction_infos) |instr_info| {
-            if (instr_info.program_meta.pubkey.equals(precompile)) continue;
+            if (!instr_info.program_meta.pubkey.equals(precompile)) continue;
             if (instr_info.instruction_data.len == 0) continue;
             n_signatures += instr_info.instruction_data[0];
         }
