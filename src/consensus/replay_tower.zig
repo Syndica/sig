@@ -1,7 +1,6 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 
-const AutoHashMapUnmanaged = std.AutoHashMapUnmanaged;
 const AutoArrayHashMapUnmanaged = std.AutoArrayHashMapUnmanaged;
 
 const AccountsDB = sig.accounts_db.AccountsDB;
@@ -362,7 +361,7 @@ pub const ReplayTower = struct {
         candidate_slot: Slot,
         last_voted_slot: Slot,
         switch_slot: Slot,
-        ancestors: *const AutoHashMapUnmanaged(Slot, SortedSet(Slot)),
+        ancestors: *const AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)),
         last_vote_ancestors: *const SortedSet(Slot),
     ) ?bool {
 
@@ -443,7 +442,7 @@ pub const ReplayTower = struct {
         self: *const ReplayTower,
         allocator: std.mem.Allocator,
         switch_slot: Slot,
-        ancestors: *const AutoHashMapUnmanaged(Slot, SortedSet(Slot)),
+        ancestors: *const AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)),
         descendants: *const AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)),
         progress: *const ProgressMap,
         total_stake: u64,
@@ -767,7 +766,7 @@ pub const ReplayTower = struct {
         self: *ReplayTower,
         allocator: std.mem.Allocator,
         switch_slot: Slot,
-        ancestors: *const AutoHashMapUnmanaged(Slot, SortedSet(Slot)),
+        ancestors: *const AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)),
         descendants: *const AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)),
         progress: *const ProgressMap,
         total_stake: u64,
@@ -1351,7 +1350,7 @@ pub const ReplayTower = struct {
         heaviest_slot: Slot,
         heaviest_slot_on_same_voted_fork: ?Slot,
         heaviest_epoch: Epoch,
-        ancestors: *const AutoHashMapUnmanaged(u64, SortedSet(u64)),
+        ancestors: *const AutoArrayHashMapUnmanaged(u64, SortedSet(u64)),
         descendants: *const AutoArrayHashMapUnmanaged(u64, SortedSet(u64)),
         progress: *const ProgressMap,
         latest_validator_votes_for_frozen_banks: *const LatestValidatorVotesForFrozenBanks,
@@ -1490,7 +1489,7 @@ pub fn selectCandidatesFailedSwitchDuplicateRollback(
 /// * `slot_b` is not in `ancestors`
 /// * There is no common ancestor of slot_a and slot_b in `ancestors`
 fn greatestCommonAncestor(
-    ancestors: *const AutoHashMapUnmanaged(
+    ancestors: *const AutoArrayHashMapUnmanaged(
         Slot,
         SortedSet(Slot),
     ),
@@ -1523,7 +1522,7 @@ fn greatestCommonAncestor(
 fn isDescendantSlot(
     maybe_descendant: Slot,
     slot: Slot,
-    ancestors: *const AutoHashMapUnmanaged(Slot, SortedSet(Slot)),
+    ancestors: *const AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)),
 ) ?bool {
     return if (ancestors.get(maybe_descendant)) |candidate_slot_ancestors|
         candidate_slot_ancestors.contains(slot)
@@ -1610,7 +1609,7 @@ pub fn collectVoteLockouts(
     vote_account_pubkey: *const Pubkey,
     bank_slot: Slot,
     vote_accounts: *const StakeAndVoteAccountsMap,
-    ancestors: *const AutoHashMapUnmanaged(Slot, SortedSet(Slot)),
+    ancestors: *const AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)),
     progress_map: *const ProgressMap,
     latest_validator_votes_for_frozen_banks: *LatestValidatorVotesForFrozenBanks,
 ) !ComputedBankState {
@@ -1776,7 +1775,7 @@ pub fn populateAncestorVotedStakes(
     allocator: std.mem.Allocator,
     voted_stakes: *VotedStakes,
     vote_slots: []const Slot,
-    ancestors: *const AutoHashMapUnmanaged(Slot, SortedSet(Slot)),
+    ancestors: *const AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)),
 ) !void {
     // If there's no ancestors, that means this slot must be from before the current root,
     // in which case the lockouts won't be calculated in bank_weight anyways, so ignore
@@ -1797,7 +1796,7 @@ fn updateAncestorVotedStakes(
     voted_stakes: *VotedStakes,
     voted_slot: Slot,
     voted_stake: u64,
-    ancestors: *const AutoHashMapUnmanaged(Slot, SortedSet(Slot)),
+    ancestors: *const AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)),
 ) !void {
     // If there's no ancestors, that means this slot must be from
     // before the current root, so ignore this slot
@@ -1871,7 +1870,7 @@ test "check_vote_threshold_forks" {
     var prng = std.Random.DefaultPrng.init(19);
     const random = prng.random();
     // Create the ancestor relationships
-    var ancestors = std.AutoHashMapUnmanaged(u64, SortedSet(Slot)).empty;
+    var ancestors = std.AutoArrayHashMapUnmanaged(u64, SortedSet(Slot)).empty;
     defer {
         var it = ancestors.iterator();
         while (it.next()) |entry| {
@@ -2045,7 +2044,7 @@ test "collect vote lockouts root" {
     );
     defer replay_tower.deinit(allocator);
 
-    var ancestors = std.AutoHashMapUnmanaged(u64, SortedSet(Slot)).empty;
+    var ancestors = std.AutoArrayHashMapUnmanaged(u64, SortedSet(Slot)).empty;
     defer {
         var it = ancestors.iterator();
         while (it.next()) |entry| {
@@ -2164,7 +2163,7 @@ test "collect vote lockouts sums" {
     }
 
     // ancestors: slot 1 has ancestor 0, slot 0 has no ancestors
-    var ancestors = std.AutoHashMapUnmanaged(u64, SortedSet(Slot)).empty;
+    var ancestors = std.AutoArrayHashMapUnmanaged(u64, SortedSet(Slot)).empty;
     defer {
         var it = ancestors.iterator();
         while (it.next()) |entry| {
@@ -3533,7 +3532,7 @@ test "greatestCommonAncestor" {
 
     // Test case: Basic common ancestor
     {
-        var ancestors = AutoHashMapUnmanaged(Slot, SortedSet(Slot)){};
+        var ancestors = std.AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)){};
         defer {
             var it = ancestors.iterator();
             while (it.next()) |entry| {
@@ -3554,7 +3553,7 @@ test "greatestCommonAncestor" {
 
     // Test case: No common ancestor
     {
-        var ancestors = AutoHashMapUnmanaged(Slot, SortedSet(Slot)){};
+        var ancestors = std.AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)){};
         defer {
             var it = ancestors.iterator();
             while (it.next()) |entry| {
@@ -3574,7 +3573,7 @@ test "greatestCommonAncestor" {
 
     // Test case: One empty ancestor set
     {
-        var ancestors = AutoHashMapUnmanaged(Slot, SortedSet(Slot)){};
+        var ancestors = std.AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)){};
         defer {
             var it = ancestors.iterator();
             while (it.next()) |entry| {
@@ -3594,7 +3593,7 @@ test "greatestCommonAncestor" {
 
     // Test case: Missing slots
     {
-        var ancestors = AutoHashMapUnmanaged(Slot, SortedSet(Slot)){};
+        var ancestors = std.AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)){};
         defer {
             var it = ancestors.iterator();
             while (it.next()) |entry| {
@@ -3613,7 +3612,7 @@ test "greatestCommonAncestor" {
 
     // Test case: Multiple common ancestors (should pick greatest)
     {
-        var ancestors = AutoHashMapUnmanaged(Slot, SortedSet(Slot)){};
+        var ancestors = std.AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)){};
         defer {
             var it = ancestors.iterator();
             while (it.next()) |entry| {
@@ -3754,7 +3753,7 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
     );
     defer replay_tower.deinit(allocator);
 
-    var ancestors: AutoHashMapUnmanaged(u64, SortedSet(u64)) = .{};
+    var ancestors: AutoArrayHashMapUnmanaged(u64, SortedSet(u64)) = .{};
     defer ancestors.deinit(allocator);
     for (fixture.ancestors.keys(), fixture.ancestors.values()) |key, value| {
         try ancestors.put(allocator, key, value);
@@ -3870,7 +3869,7 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
 
     try fixture.fill_fork(allocator, .{ .root = hash5, .data = trees }, .active);
 
-    var ancestors2: AutoHashMapUnmanaged(u64, SortedSet(u64)) = .{};
+    var ancestors2: AutoArrayHashMapUnmanaged(u64, SortedSet(u64)) = .{};
     defer ancestors2.deinit(allocator);
     for (fixture.ancestors.keys(), fixture.ancestors.values()) |key, value| {
         try ancestors2.put(allocator, key, value);
