@@ -1603,7 +1603,7 @@ fn optimisticallyBypassVoteStakeThresholdCheck(
 
 pub fn collectVoteLockouts(
     allocator: std.mem.Allocator,
-    logger: Logger,
+    logger: ScopedLogger("replay_tower"),
     vote_account_pubkey: *const Pubkey,
     bank_slot: Slot,
     vote_accounts: *const StakeAndVoteAccountsMap,
