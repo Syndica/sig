@@ -240,12 +240,12 @@ pub const AccountsDB = struct {
         };
     }
 
-    /// Returns a lean version of AccountsDB that can be initialized in under 
+    /// Returns a lean version of AccountsDB that can be initialized in under
     /// 1 ms during tests and you can put + get accounts in it.
     ///
     /// May be lacking some functionality for more advanced test cases like
     /// loading a snapshot.
-    /// 
+    ///
     /// Returns a tmpdir that you should cleanup alongside AccountsDB
     pub fn initForTest(allocator: std.mem.Allocator) !struct { AccountsDB, std.testing.TmpDir } {
         var tmp_dir = std.testing.tmpDir(.{});
