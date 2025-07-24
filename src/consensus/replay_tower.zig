@@ -158,14 +158,14 @@ pub const ReplayTower = struct {
         node_pubkey: Pubkey,
         vote_account_pubkey: Pubkey,
         fork_root: Slot,
-        accounts_db: sig.accounts_db.AccountReader,
+        account_reader: sig.accounts_db.AccountReader,
     ) !ReplayTower {
         var tower = Tower.init(logger.unscoped());
         try tower.initializeLockoutsFromBank(
             allocator,
             &vote_account_pubkey,
             fork_root,
-            accounts_db,
+            account_reader,
         );
 
         return .{
