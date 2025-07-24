@@ -1650,9 +1650,7 @@ pub fn collectVoteLockouts(
             .{ vote_account_pubkey, key, voted_stake },
         );
 
-        var vote_state = try TowerVoteState.fromAccount(
-            &vote_account,
-        );
+        var vote_state = try TowerVoteState.fromAccount(&vote_account);
 
         for (vote_state.votes.constSlice()) |vote| {
             const interval = try lockout_intervals
