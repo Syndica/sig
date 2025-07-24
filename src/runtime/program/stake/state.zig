@@ -244,24 +244,28 @@ pub const StakeStateV2 = union(enum) {
                 new_rate_activation_epoch,
             );
 
-            if (target_epoch < self.deactivation_epoch) return .{
-                .effective = effective_stake,
-                .activating = activating_stake,
-            };
+            // de-activate some portion if necessary
+            if (target_epoch < self.deactivation_epoch) {
+                if (activating_stake == 0) {
+                    return .{ .effective = effective_stake };
+                }
+                return .{
+                    .effective = effective_stake,
+                    .activating = activating_stake,
+                };
+            }
 
-            if (target_epoch == self.deactivation_epoch) return .{
-                .deactivating = effective_stake,
-            };
+            if (target_epoch == self.deactivation_epoch) {
+                return .{ .deactivating = effective_stake };
+            }
 
             const entry = history.getEntry(self.deactivation_epoch) orelse
                 return .{};
-
             var prev_epoch = self.deactivation_epoch;
             var prev_cluster_stake = entry;
 
-            var current_epoch = prev_epoch + 1;
+            var current_epoch = prev_epoch;
             var current_effective_stake = effective_stake;
-
             while (true) {
                 current_epoch = prev_epoch + 1;
                 if (prev_cluster_stake.deactivating == 0) break;
@@ -279,10 +283,10 @@ pub const StakeStateV2 = union(enum) {
                     @floatFromInt(prev_cluster_stake.effective),
                 ) * warmup_cooldown_rate;
 
-                const newly_not_effective_stake: u64 = std.math.lossyCast(
+                const newly_not_effective_stake: u64 = @max(1, std.math.lossyCast(
                     u64,
-                    @max(1, weight * newly_not_effective_cluster_take),
-                );
+                    weight * newly_not_effective_cluster_take,
+                ));
 
                 current_effective_stake = current_effective_stake -| newly_not_effective_stake;
                 if (current_effective_stake == 0) break;
