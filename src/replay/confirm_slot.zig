@@ -5,6 +5,7 @@ const replay = @import("lib.zig");
 const core = sig.core;
 
 const Allocator = std.mem.Allocator;
+const Atomic = std.atomic.Value;
 
 const HomogeneousThreadPool = sig.utils.thread.HomogeneousThreadPool;
 const ThreadPool = sig.sync.ThreadPool;
@@ -17,7 +18,11 @@ const TransactionError = sig.ledger.transaction_status.TransactionError;
 
 const AccountStore = sig.accounts_db.AccountStore;
 
+const Committer = replay.commit.Committer;
+const SvmSlot = replay.svm_gateway.SvmSlot;
 const TransactionScheduler = replay.scheduler.TransactionScheduler;
+
+const verifyPoh = core.entry.verifyPoh;
 const resolveBatch = replay.resolve_lookup.resolveBatch;
 
 const assert = std.debug.assert;
@@ -41,10 +46,14 @@ pub fn confirmSlot(
     thread_pool: *ThreadPool,
     entries: []const Entry,
     last_entry: Hash,
+    svm_params: SvmSlot.Params,
+    committer: Committer,
     verify_ticks_params: VerifyTicksParams,
     ancestors: *const Ancestors,
 ) !*ConfirmSlotFuture {
-    const future = try ConfirmSlotFuture.create(allocator, thread_pool, entries);
+    logger.info().log("confirming slot");
+    const future = try ConfirmSlotFuture
+        .create(allocator, logger, thread_pool, committer, entries, svm_params);
     errdefer future.destroy(allocator);
 
     if (verifyTicks(logger, entries, verify_ticks_params)) |block_error| {
@@ -52,7 +61,7 @@ pub fn confirmSlot(
         return future;
     }
 
-    try startPohVerify(allocator, &future.poh_verifier, last_entry, entries);
+    try startPohVerify(allocator, logger, &future.poh_verifier, last_entry, entries, &future.exit);
     try scheduleTransactionBatches(allocator, &future.scheduler, account_store, entries, ancestors);
 
     _ = try future.poll(); // starts batch execution. poll result is cached inside future
@@ -63,9 +72,11 @@ pub fn confirmSlot(
 /// schedule poh verification asynchronously
 fn startPohVerify(
     allocator: Allocator,
+    logger: ScopedLogger,
     pool: *HomogeneousThreadPool(PohTask),
     initial_hash: Hash,
     entries: []const Entry,
+    exit: *Atomic(bool),
 ) Allocator.Error!void {
     if (entries.len == 0) return;
     const num_tasks = if (pool.max_concurrent_tasks) |max| @min(max, entries.len) else entries.len;
@@ -75,8 +86,10 @@ fn startPohVerify(
         const end = if (i == num_tasks - 1) entries.len else (i + 1) * entries_per_task;
         assert(try pool.trySchedule(allocator, .{
             .allocator = allocator,
+            .logger = logger,
             .initial_hash = batch_initial_hash,
             .entries = entries[i * entries_per_task .. end],
+            .exit = exit,
         }));
         batch_initial_hash = entries[end - 1].hash;
     }
@@ -96,9 +109,8 @@ fn scheduleTransactionBatches(
 
         const batch = try resolveBatch(
             allocator,
-            account_store.reader(),
+            account_store.reader().forSlot(ancestors),
             entry.transactions,
-            ancestors,
         );
         errdefer batch.deinit(allocator);
 
@@ -121,6 +133,9 @@ pub const ConfirmSlotStatus = union(enum) {
 pub const ConfirmSlotFuture = struct {
     scheduler: TransactionScheduler,
     poh_verifier: HomogeneousThreadPool(PohTask),
+    /// Set to true as soon as something fails.
+    exit: Atomic(bool),
+
     entries: []const Entry,
 
     /// The current status to return on poll, unless something has changed.
@@ -131,30 +146,47 @@ pub const ConfirmSlotFuture = struct {
 
     fn create(
         allocator: Allocator,
+        logger: ScopedLogger,
         thread_pool: *ThreadPool,
+        committer: Committer,
         entries: []const Entry,
+        svm_params: SvmSlot.Params,
     ) !*ConfirmSlotFuture {
-        var scheduler = try TransactionScheduler.initCapacity(allocator, entries.len, thread_pool);
-        errdefer scheduler.deinit();
-
         const poh_verifier = try HomogeneousThreadPool(PohTask)
             .initBorrowed(allocator, thread_pool, thread_pool.max_threads);
         errdefer poh_verifier.deinit(allocator);
 
         const future = try allocator.create(ConfirmSlotFuture);
-        errdefer allocator.free(future);
+        errdefer allocator.destroy(future);
 
         future.* = ConfirmSlotFuture{
             .poh_verifier = poh_verifier,
-            .scheduler = scheduler,
+            .scheduler = undefined,
             .entries = entries,
             .status = .pending,
+            .exit = .init(false),
         };
+
+        future.scheduler = try TransactionScheduler.initCapacity(
+            allocator,
+            .from(logger),
+            committer,
+            entries.len,
+            thread_pool,
+            svm_params,
+            &future.exit,
+        );
 
         return future;
     }
 
     pub fn destroy(self: *ConfirmSlotFuture, allocator: Allocator) void {
+        self.exit.store(true, .monotonic);
+        const exited_scheduler = self.scheduler.thread_pool.joinForDeinit(.fromMillis(100));
+        const exited_poh = self.poh_verifier.joinForDeinit(.fromMillis(100));
+        if (!exited_scheduler or !exited_poh) {
+            @panic("Failed to deinit ConfirmSlotFuture due to hanging threads.");
+        }
         self.scheduler.deinit();
         self.poh_verifier.deinit(allocator);
         for (self.entries) |entry| entry.deinit(allocator);
@@ -169,8 +201,7 @@ pub const ConfirmSlotFuture = struct {
                 for (try self.pollEach()) |status| switch (status) {
                     .pending => pending = true,
                     .err => |err| if (self.status_when_done == .done) {
-                        // TODO: notify poh threads to exit
-                        self.scheduler.exit.store(true, .monotonic);
+                        self.exit.store(true, .monotonic);
                         self.status_when_done = .{ .err = err };
                     },
                     .done => {},
@@ -197,11 +228,27 @@ pub const ConfirmSlotFuture = struct {
 
 const PohTask = struct {
     allocator: Allocator,
+    logger: ScopedLogger,
     initial_hash: Hash,
     entries: []const Entry,
+    exit: *Atomic(bool),
 
     pub fn run(self: *PohTask) !void {
-        if (!try core.entry.verifyPoh(self.entries, self.allocator, null, self.initial_hash)) {
+        const success = verifyPoh(
+            self.entries,
+            self.allocator,
+            self.initial_hash,
+            .{ .exit = self.exit },
+        ) catch |e| {
+            if (e != error.Exit) {
+                self.logger.err().logf("poh verification failed with error: {}", .{e});
+            }
+            self.exit.store(true, .monotonic);
+            return e;
+        };
+        if (!success) {
+            self.logger.err().log("poh verification failed");
+            self.exit.store(true, .monotonic);
             return error.PohVerifyFailed;
         }
     }
@@ -327,6 +374,8 @@ test "happy path: trivial case" {
         &thread_pool,
         &.{},
         .ZEROES,
+        undefined, // TODO
+        undefined, // TODO
         .{
             .hashes_per_tick = 0,
             .slot = 0,
@@ -365,6 +414,8 @@ test "happy path: partial slot" {
         &thread_pool,
         try allocator.dupe(Entry, entries[0 .. entries.len - 1]),
         .ZEROES,
+        undefined, // TODO
+        undefined, // TODO
         .{
             .hashes_per_tick = poh.hashes_per_tick,
             .slot = 0,
@@ -403,6 +454,8 @@ test "happy path: full slot" {
         &thread_pool,
         try allocator.dupe(Entry, entries),
         .ZEROES,
+        undefined, // TODO
+        undefined, // TODO
         .{
             .hashes_per_tick = poh.hashes_per_tick,
             .slot = 0,
@@ -441,6 +494,8 @@ test "fail: full slot not marked full -> .InvalidLastTick" {
         &thread_pool,
         try allocator.dupe(Entry, entries),
         .ZEROES,
+        undefined, // TODO
+        undefined, // TODO
         .{
             .hashes_per_tick = poh.hashes_per_tick,
             .slot = 0,
@@ -482,6 +537,8 @@ test "fail: no trailing tick at max height -> .TrailingEntry" {
         &thread_pool,
         try allocator.dupe(Entry, entries[0 .. entries.len - 1]),
         .ZEROES,
+        undefined, // TODO
+        undefined, // TODO
         .{
             .hashes_per_tick = poh.hashes_per_tick,
             .slot = 0,
@@ -526,6 +583,8 @@ test "fail: invalid poh chain" {
         &thread_pool,
         try allocator.dupe(Entry, entries),
         .ZEROES,
+        undefined, // TODO
+        undefined, // TODO
         .{
             .hashes_per_tick = poh.hashes_per_tick,
             .slot = 0,
@@ -567,6 +626,8 @@ test "fail: sigverify" {
         &thread_pool,
         try allocator.dupe(Entry, entries),
         .ZEROES,
+        undefined, // TODO
+        undefined, // TODO
         .{
             .hashes_per_tick = poh.hashes_per_tick,
             .slot = 0,

@@ -205,8 +205,8 @@ test Poh {
     defer for (entries) |entry| entry.deinit(allocator);
 
     try std.testing.expectEqual(7, entries.len);
-    try std.testing.expect(try sig.core.entry.verifyPoh(entries, allocator, null, .ZEROES));
+    try std.testing.expect(try sig.core.entry.verifyPoh(entries, allocator, .ZEROES, .{}));
 
     entries[1].hash = .ZEROES;
-    try std.testing.expect(!try sig.core.entry.verifyPoh(entries, allocator, null, .ZEROES));
+    try std.testing.expect(!try sig.core.entry.verifyPoh(entries, allocator, .ZEROES, .{}));
 }

@@ -10,10 +10,10 @@ const SortedSet = sig.utils.collections.SortedSet;
 const ReplayTower = sig.consensus.replay_tower.ReplayTower;
 const ProgressMap = sig.consensus.progress_map.ProgressMap;
 const ForkChoice = sig.consensus.fork_choice.ForkChoice;
-const LatestValidatorVotesForFrozenBanks =
-    sig.consensus.latest_validator_votes.LatestValidatorVotes;
+const LatestValidatorVotes = sig.consensus.latest_validator_votes.LatestValidatorVotes;
 
 const EpochStakesMap = sig.core.EpochStakesMap;
+const BlockhashQueue = sig.core.BlockhashQueue;
 
 const SlotTracker = sig.replay.trackers.SlotTracker;
 const EpochTracker = sig.replay.trackers.EpochTracker;
@@ -49,7 +49,7 @@ pub const ConsensusDependencies = struct {
     vote_account: Pubkey,
     slot_history: *const SlotHistory,
     epoch_stakes: EpochStakesMap,
-    latest_validator_votes_for_frozen_banks: *const LatestValidatorVotesForFrozenBanks,
+    latest_validator_votes_for_frozen_banks: *const LatestValidatorVotes,
 };
 
 pub fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
@@ -961,6 +961,7 @@ test "checkAndHandleNewRoot - missing slot" {
             .accounts_lt_hash = .init(LtHash{
                 .data = [_]u16{0} ** LtHash.NUM_ELEMENTS,
             }),
+            .stakes_cache = try .init(testing.allocator),
         },
     });
 
@@ -1041,6 +1042,7 @@ test "checkAndHandleNewRoot - missing hash" {
             .accounts_lt_hash = .init(.{
                 .data = [_]u16{0} ** LtHash.NUM_ELEMENTS,
             }),
+            .stakes_cache = try .init(testing.allocator),
         },
     });
 
@@ -1178,6 +1180,7 @@ test "checkAndHandleNewRoot - success" {
             .accounts_lt_hash = .init(.{
                 .data = [_]u16{0} ** LtHash.NUM_ELEMENTS,
             }),
+            .stakes_cache = try .init(testing.allocator),
         },
     });
 
@@ -1205,6 +1208,7 @@ test "checkAndHandleNewRoot - success" {
             .accounts_lt_hash = .init(.{
                 .data = [_]u16{0} ** LtHash.NUM_ELEMENTS,
             }),
+            .stakes_cache = try .init(testing.allocator),
         },
     });
 
