@@ -83,11 +83,11 @@ pub const Tower = struct {
         allocator: std.mem.Allocator,
         vote_account_pubkey: *const Pubkey,
         fork_root: Slot,
-        accounts_db: sig.accounts_db.AccountReader,
+        account_reader: sig.accounts_db.AccountReader,
     ) !void {
         const vote_account = blk: {
             const maybe_vote_account =
-                accounts_db.getLatest(vote_account_pubkey.*) catch |err| switch (err) {
+                account_reader.getLatest(vote_account_pubkey.*) catch |err| switch (err) {
                     error.OutOfMemory,
                     => |e| return e,
                     error.InvalidOffset,
