@@ -7,6 +7,8 @@ const core = sig.core;
 const Allocator = std.mem.Allocator;
 const assert = std.debug.assert;
 
+const Logger = sig.trace.ScopedLogger(@typeName(@This()));
+
 const Ancestors = core.Ancestors;
 const Hash = core.Hash;
 const LtHash = core.LtHash;
@@ -17,6 +19,7 @@ const AccountsDB = sig.accounts_db.AccountsDB;
 const AccountReader = sig.accounts_db.AccountReader;
 
 pub const FreezeParams = struct {
+    logger: Logger,
     state: *sig.core.SlotState,
     hash_slot: HashSlotParams,
     update_sysvar: replay.update_sysvar.UpdateSysvarAccountDeps,
@@ -24,6 +27,7 @@ pub const FreezeParams = struct {
     blockhash: Hash,
 
     pub fn init(
+        logger: Logger,
         account_reader: AccountReader,
         db_for_svm: *AccountsDB,
         epoch: *const sig.core.EpochConstants,
@@ -33,6 +37,7 @@ pub const FreezeParams = struct {
         blockhash: Hash,
     ) FreezeParams {
         return .{
+            .logger = logger,
             .state = state,
             .hash_slot = .{
                 .account_reader = account_reader,
@@ -87,6 +92,11 @@ pub fn freezeSlot(allocator: Allocator, params: FreezeParams) !void {
         defer q.unlock();
         try replay.update_sysvar.updateRecentBlockhashes(allocator, q.get(), params.update_sysvar);
     }
+
+    params.logger.info().logf(
+        "froze slot {} with hash {s}",
+        .{ params.hash_slot.slot, slot_hash.get().*.?.base58String().slice() },
+    );
 
     // NOTE: agave updates hard_forks and hash_overrides here
 }
