@@ -146,7 +146,7 @@ pub fn curveGroupOp(
     }
 }
 
-const weak_mul = struct {
+pub const weak_mul = struct {
     inline fn cMov(p: *Edwards25519, a: Edwards25519, c: u64) void {
         p.x.cMov(a.x, c);
         p.y.cMov(a.y, c);
@@ -163,7 +163,7 @@ const weak_mul = struct {
         return t;
     }
 
-    fn pcMul16(pc: *const [16]Edwards25519, s: [32]u8, comptime vartime: bool) !Edwards25519 {
+    fn pcMul16(pc: *const [16]Edwards25519, s: [32]u8, comptime vartime: bool) Edwards25519 {
         var q = Edwards25519.identityElement;
         var pos: usize = 252;
         while (true) : (pos -= 4) {
@@ -217,7 +217,8 @@ const weak_mul = struct {
         break :pc precompute(Edwards25519.basePoint, 15);
     };
 
-    fn mul(p: Edwards25519, s: [32]u8) !Edwards25519 {
+    /// NOTE: Does not perform checks for weak points!
+    pub fn mul(p: Edwards25519, s: [32]u8) Edwards25519 {
         const xpc = if (p.is_base) basePointPc else precompute(p, 15);
         // xpc[4].rejectIdentity() catch return error.WeakPublicKey;
         return pcMul16(&xpc, s, false);
@@ -225,7 +226,13 @@ const weak_mul = struct {
 
     /// Multiscalar multiplication *IN VARIABLE TIME* for public data
     /// Computes ps0*ss0 + ps1*ss1 + ps2*ss2... faster than doing many of these operations individually
-    fn mulMulti(comptime count: usize, ps: [count]Edwards25519, ss: [count][32]u8) !Edwards25519 {
+    ///
+    /// NOTE: Does not perform checks for weak points!
+    pub fn mulMulti(
+        comptime count: usize,
+        ps: [count]Edwards25519,
+        ss: [count][32]u8,
+    ) Edwards25519 {
         var pcs: [count][9]Edwards25519 = undefined;
 
         var bpc: [9]Edwards25519 = undefined;
@@ -283,7 +290,7 @@ fn groupOp(comptime T: type, group_op: GroupOp, left: [32]u8, right: [32]u8) !T 
             const input_point = try T.fromBytes(right);
             return switch (T) {
                 Edwards25519 => weak_mul.mul(input_point, left),
-                Ristretto255 => .{ .p = try weak_mul.mul(input_point.p, left) },
+                Ristretto255 => .{ .p = weak_mul.mul(input_point.p, left) },
                 else => unreachable,
             };
         },
@@ -341,12 +348,20 @@ pub fn curveMultiscalarMul(
 
     switch (curve_id) {
         inline .edwards, .ristretto => |id| {
-            const T = switch (id) {
-                .edwards => Edwards25519,
-                .ristretto => Ristretto255,
-            };
+            for (scalars) |scalar| {
+                Edwards25519.scalar.rejectNonCanonical(scalar) catch {
+                    registers.set(.r0, 1);
+                    return;
+                };
+            }
 
-            const result = multiScalarMultiply(T, scalars, point_data) catch {
+            const msm = sig.crypto.ed25519.pippenger.mulMulti(
+                512,
+                true,
+                id == .ristretto,
+                point_data,
+                scalars,
+            ) catch {
                 registers.set(.r0, 1);
                 return;
             };
@@ -357,55 +372,9 @@ pub fn curveMultiscalarMul(
                 result_point_addr,
                 tc.getCheckAligned(),
             );
-            result_point_data.* = result.toBytes();
+            result_point_data.* = msm.toBytes();
         },
     }
-}
-
-/// Batches scalar multiplication to the nearest power of 2 number of scalars.
-///
-/// TODO: Explore fixed-length padding with identies, if that's faster?
-fn multiScalarMultiply(comptime T: type, scalars: []const [32]u8, point_data: []const [32]u8) !T {
-    std.debug.assert(scalars.len == point_data.len);
-    std.debug.assert(scalars.len <= 512);
-
-    for (scalars) |scalar| {
-        try Edwards25519.scalar.rejectNonCanonical(scalar);
-    }
-
-    var points: std.BoundedArray(Edwards25519, 512) = .{};
-    for (point_data) |encoded| {
-        const point = try T.fromBytes(encoded);
-        points.appendAssumeCapacity(switch (T) {
-            Edwards25519 => point,
-            Ristretto255 => point.p,
-            else => unreachable,
-        });
-    }
-
-    var length = scalars.len;
-    var accumulator = Edwards25519.identityElement;
-    while (length > 0) {
-        switch (std.math.floorPowerOfTwo(u64, length)) {
-            inline 1, 2, 4, 8, 16, 32, 64, 128, 256, 512 => |N| {
-                const current = scalars.len - length;
-                const segment = try weak_mul.mulMulti(
-                    N,
-                    points.constSlice()[current..][0..N].*,
-                    scalars[current..][0..N].*,
-                );
-                accumulator = accumulator.add(segment);
-                length -= N;
-            },
-            else => unreachable,
-        }
-    }
-
-    return switch (T) {
-        Ristretto255 => .{ .p = accumulator },
-        Edwards25519 => accumulator,
-        else => unreachable,
-    };
 }
 
 const AltBn128GroupOp = enum(u8) {
@@ -669,8 +638,8 @@ test "edwards curve point validation" {
         // zig fmt: off
         &.{
             .{ .{ 0, valid_bytes_addr,   0, 0, 0 }, 0 }, // success
-            .{ .{ 0, invalid_bytes_addr, 0, 0, 0}, 1 }, // failed
-            .{ .{ 5, valid_bytes_addr,   0, 0, 0}, 1 }, // invalid curve ID
+            .{ .{ 0, invalid_bytes_addr, 0, 0, 0 }, 1 }, // failed
+            .{ .{ 5, valid_bytes_addr,   0, 0, 0 }, 1 }, // invalid curve ID
             .{ .{ 0, valid_bytes_addr,   0, 0, 0 }, error.ComputationalBudgetExceeded },
         },
         // zig fmt: on
@@ -720,30 +689,30 @@ test "edwards curve group operations" {
     const allocator = std.testing.allocator;
 
     const left_point = [_]u8{
-        33,  124, 71, 170, 117, 69,  151, 247, 59,  12, 95,  125, 133,
-        166, 64,  5,  2,   27,  90,  27,  200, 167, 59, 164, 52,  54,
-        52,  200, 29, 13,  34,  213,
+        33,  124, 71,  170, 117, 69,  151, 247, 59, 12,  95,
+        125, 133, 166, 64,  5,   2,   27,  90,  27, 200, 167,
+        59,  164, 52,  54,  52,  200, 29,  13,  34, 213,
     };
     const left_point_addr = 0x100000000;
 
     const right_point = [_]u8{
-        70,  222, 137, 221, 253, 204, 71,  51,  78, 8,   124, 1,   67,
-        200, 102, 225, 122, 228, 111, 183, 129, 14, 131, 210, 212, 95,
-        109, 246, 55,  10,  159, 91,
+        70,  222, 137, 221, 253, 204, 71,  51,  78,  8,   124,
+        1,   67,  200, 102, 225, 122, 228, 111, 183, 129, 14,
+        131, 210, 212, 95,  109, 246, 55,  10,  159, 91,
     };
     const right_point_addr = 0x200000000;
 
     const scalar = [_]u8{
-        254, 198, 23,  138, 67,  243, 184, 110, 236, 115, 236, 205, 205,
-        215, 79,  114, 45,  250, 78,  137, 3,   107, 136, 237, 49,  126,
-        117, 223, 37,  191, 88,  6,
+        254, 198, 23,  138, 67,  243, 184, 110, 236, 115, 236,
+        205, 205, 215, 79,  114, 45,  250, 78,  137, 3,   107,
+        136, 237, 49,  126, 117, 223, 37,  191, 88,  6,
     };
     const scalar_addr = 0x300000000;
 
     const invalid_point = [_]u8{
-        120, 140, 152, 233, 41,  227, 203, 27, 87,  115, 25,  251, 219,
-        5,   84,  148, 117, 38,  84,  60,  87, 144, 161, 146, 42,  34,
-        91,  155, 158, 189, 121, 79,
+        120, 140, 152, 233, 41,  227, 203, 27,  87,  115, 25,
+        251, 219, 5,   84,  148, 117, 38,  84,  60,  87,  144,
+        161, 146, 42,  34,  91,  155, 158, 189, 121, 79,
     };
     const invalid_point_addr = 0x400000000;
 
