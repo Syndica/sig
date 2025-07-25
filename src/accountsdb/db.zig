@@ -1156,9 +1156,9 @@ pub const AccountsDB = struct {
         defer zone.deinit();
 
         var timer = try sig.time.Timer.start();
-        // TODO: make cli arg
-        const n_threads = @as(u32, @truncate(try std.Thread.getCpuCount()));
-        // const n_threads = 4;
+
+        // going higher will only lead to more contention in the buffer pool reads
+        const n_threads = @min(6, @as(u32, @truncate(try std.Thread.getCpuCount())));
 
         // alloc the result
         const hashes = try self.allocator.alloc(std.ArrayListUnmanaged(Hash), n_threads);
