@@ -242,6 +242,31 @@ pub const AccountsDB = struct {
         };
     }
 
+    /// Returns a lean version of AccountsDB that can be initialized in under
+    /// 1 ms during tests and you can put + get accounts in it.
+    ///
+    /// May be lacking some functionality for more advanced test cases like
+    /// loading a snapshot.
+    ///
+    /// Returns a tmpdir that you should cleanup alongside AccountsDB
+    pub fn initForTest(allocator: std.mem.Allocator) !struct { AccountsDB, std.testing.TmpDir } {
+        var tmp_dir = std.testing.tmpDir(.{});
+        errdefer tmp_dir.cleanup();
+        return .{
+            try .init(.{
+                .allocator = allocator,
+                .logger = .FOR_TESTS,
+                .snapshot_dir = tmp_dir.dir,
+                .index_allocation = .ram,
+                .number_of_index_shards = 1,
+                .geyser_writer = null,
+                .gossip_view = null,
+                .buffer_pool_frames = 2,
+            }),
+            tmp_dir,
+        };
+    }
+
     pub fn deinit(self: *AccountsDB) void {
         const zone = tracy.initZone(@src(), .{ .name = "accountsdb deinit" });
         defer zone.deinit();
