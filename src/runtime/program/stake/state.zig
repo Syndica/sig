@@ -237,7 +237,7 @@ pub const StakeStateV2 = union(enum) {
             target_epoch: Epoch,
             history: *const sysvar.StakeHistory,
             new_rate_activation_epoch: ?Epoch,
-        ) sysvar.StakeHistory.EntryNoEpoch {
+        ) sysvar.StakeHistory.StakeState {
             const effective_stake, const activating_stake = self.stakeAndActivating(
                 target_epoch,
                 history,
@@ -262,7 +262,7 @@ pub const StakeStateV2 = union(enum) {
             const entry = history.getEntry(self.deactivation_epoch) orelse
                 return .{};
             var prev_epoch = self.deactivation_epoch;
-            var prev_cluster_stake = entry;
+            var prev_cluster_stake = entry.stake;
 
             var current_epoch = prev_epoch;
             var current_effective_stake = effective_stake;
@@ -292,9 +292,9 @@ pub const StakeStateV2 = union(enum) {
                 if (current_effective_stake == 0) break;
                 if (current_epoch >= target_epoch) break;
 
-                const current_cluster_stake = history.getEntry(current_epoch) orelse break;
+                const current_cluster = history.getEntry(current_epoch) orelse break;
                 prev_epoch = current_epoch;
-                prev_cluster_stake = current_cluster_stake;
+                prev_cluster_stake = current_cluster.stake;
             }
 
             return .{ .deactivating = current_effective_stake };
@@ -318,7 +318,7 @@ pub const StakeStateV2 = union(enum) {
                 return .{ delegated_stake, 0 };
 
             var prev_epoch = self.activation_epoch;
-            var prev_cluster_stake = entry;
+            var prev_cluster_stake = entry.stake;
 
             var current_epoch: Epoch = prev_epoch + 1;
             var current_effective_stake: u64 = 0;
@@ -355,9 +355,9 @@ pub const StakeStateV2 = union(enum) {
                     break;
                 }
 
-                const current_cluster_stake = history.getEntry(current_epoch) orelse break;
+                const current_cluster = history.getEntry(current_epoch) orelse break;
                 prev_epoch = current_epoch;
-                prev_cluster_stake = current_cluster_stake;
+                prev_cluster_stake = current_cluster.stake;
             }
 
             return .{ current_effective_stake, delegated_stake - current_effective_stake };
