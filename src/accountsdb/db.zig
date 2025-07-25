@@ -802,7 +802,11 @@ pub const AccountsDB = struct {
             const n_accounts_this_slot = blk: {
                 var n_accounts: usize = 0;
 
-                var iter = accounts_file.iterator(self.allocator, &self.buffer_pool);
+                var buffer_pool_frame_buf: [@sizeOf(u32) * 3]u8 = undefined;
+                var fba = std.heap.FixedBufferAllocator.init(&buffer_pool_frame_buf);
+                const frame_allocator = fba.allocator();
+
+                var iter = accounts_file.iterator(frame_allocator, &self.buffer_pool);
                 while (try iter.nextNoData()) |account| {
                     n_accounts += 1;
                     shard_counts[
