@@ -13,10 +13,6 @@ const Slot = sig.core.Slot;
 const SlotLeaders = sig.core.leader_schedule.SlotLeaders;
 const SlotState = sig.core.bank.SlotState;
 
-const AccountStore = sig.accounts_db.account_store.AccountStore;
-const AccountReader = sig.accounts_db.account_store.AccountReader;
-const SlotAccountReader = sig.accounts_db.account_store.SlotAccountReader;
-
 const BlockstoreDB = sig.ledger.BlockstoreDB;
 const BlockstoreReader = sig.ledger.BlockstoreReader;
 
@@ -52,7 +48,7 @@ pub const ReplayDependencies = struct {
     exit: *std.atomic.Value(bool),
     /// Used in the EpochManager
     epoch_schedule: sig.core.EpochSchedule,
-    account_store: AccountStore,
+    account_store: sig.accounts_db.AccountStore,
     /// Reader used to get the entries to validate them and execute the transactions
     /// Writer used to update the ledger with consensus results
     ledger: LedgerRef,
@@ -278,7 +274,7 @@ const ReplayState = struct {
     logger: Logger,
     slot_leaders: SlotLeaders,
     ledger: LedgerRef,
-    account_store: AccountStore,
+    account_store: sig.accounts_db.AccountStore,
 
     my_identity: Pubkey,
 
@@ -555,8 +551,8 @@ fn advanceReplay(state: *ReplayState) !void {
 /// [generate_new_bank_forks](https://github.com/anza-xyz/agave/blob/146ebd8be3857d530c0946003fcd58be220c3290/core/src/replay_stage.rs#L4149)
 fn trackNewSlots(
     allocator: Allocator,
-    account_store: AccountStore,
-    ledger_db: *LedgerDB,
+    account_store: sig.accounts_db.AccountStore,
+    blockstore_db: *sig.ledger.BlockstoreDB,
     slot_tracker: *SlotTracker,
     epoch_tracker: *EpochTracker,
     slot_leaders: SlotLeaders,
@@ -677,7 +673,7 @@ fn newSlotFromParent(
 // TODO: epoch boundary - handle feature activations
 pub fn getActiveFeatures(
     allocator: Allocator,
-    account_reader: SlotAccountReader,
+    account_reader: sig.accounts_db.SlotAccountReader,
     slot: Slot,
 ) !sig.core.FeatureSet {
     var features: sig.core.FeatureSet = .ALL_DISABLED;
