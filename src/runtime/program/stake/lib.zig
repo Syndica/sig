@@ -52,7 +52,9 @@ pub fn execute(
 
     var stake_instruction_buf: [sig.net.Packet.DATA_SIZE]u8 = undefined;
     const stake_instruction = try ic.ixn_info.limitedDeserializeInstruction(
-        Instruction, &stake_instruction_buf);
+        Instruction,
+        &stake_instruction_buf,
+    );
 
     if (epoch_rewards_active and stake_instruction != .get_minimum_delegation) {
         ic.tc.custom_error = @intFromEnum(StakeError.epoch_rewards_active);
@@ -712,7 +714,7 @@ fn getStakeStatus(
     ic: *InstructionContext,
     stake: *const StakeStateV2.Stake,
     clock: *const sysvar.Clock,
-) InstructionError!sysvar.StakeHistory.EntryNoEpoch {
+) InstructionError!sysvar.StakeHistory.StakeState {
     const stake_history = try ic.tc.sysvar_cache.get(sysvar.StakeHistory);
     return stake.delegation.stakeActivatingAndDeactivating(
         clock.epoch,
@@ -903,8 +905,8 @@ fn split(
             }
         },
         .uninitialized => {
-            const account_meta = ic.ixn_info.getAccountMetaAtIndex(stake_account_index)
-                orelse return error.NotEnoughAccountKeys;
+            const account_meta = ic.ixn_info.getAccountMetaAtIndex(stake_account_index) orelse
+                return error.NotEnoughAccountKeys;
             const stake_pubkey = &account_meta.pubkey;
 
             const has_signer = for (signers) |signer| {
@@ -1210,12 +1212,12 @@ fn merge(
     defer source_account.release();
 
     if (!source_account.account.owner.equals(&ID)) return error.IncorrectProgramId;
-    
+
     {
-        const stake_meta = ic.ixn_info.getAccountMetaAtIndex(stake_account_index) 
-            orelse return error.NotEnoughAccountKeys;
-        const source_meta = ic.ixn_info.getAccountMetaAtIndex(source_account_index) 
-            orelse return error.NotEnoughAccountKeys;
+        const stake_meta = ic.ixn_info.getAccountMetaAtIndex(stake_account_index) orelse
+            return error.NotEnoughAccountKeys;
+        const source_meta = ic.ixn_info.getAccountMetaAtIndex(source_account_index) orelse
+            return error.NotEnoughAccountKeys;
         if (stake_meta.index_in_transaction == source_meta.index_in_transaction)
             return error.InvalidArgument;
     }
