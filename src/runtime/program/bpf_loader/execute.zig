@@ -1525,6 +1525,18 @@ pub fn deployProgram(
     };
     defer environment.deinit(allocator);
 
+    // Deployment of programs with sol_alloc_free is disabled.
+    {
+        const loader_map = &environment.loader.map;
+        for (loader_map.values(), 0..) |entry, i| {
+            if (std.mem.eql(u8, entry.name, "sol_alloc_free_")) {
+                loader_map.swapRemoveAt(i);
+                allocator.free(entry.name); // was allocator.dupe()'d internally
+                break;
+            }
+        }
+    }
+
     // Copy the program data to a new buffer
     const source = try allocator.dupe(u8, data);
     defer allocator.free(source);
