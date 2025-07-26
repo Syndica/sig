@@ -1,6 +1,8 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 
+const Allocator = std.mem.Allocator;
+
 const Hash = sig.core.Hash;
 const Ancestors = sig.core.Ancestors;
 const BlockhashQueue = sig.core.BlockhashQueue;
@@ -12,6 +14,7 @@ const account_loader = sig.runtime.account_loader;
 const AccountSharedData = sig.runtime.AccountSharedData;
 const BatchAccountCache = sig.runtime.account_loader.BatchAccountCache;
 const CachedAccount = sig.runtime.account_loader.CachedAccount;
+const CopiedAccount = sig.runtime.transaction_execution.CopiedAccount;
 const ComputeBudgetLimits = sig.runtime.program.compute_budget.ComputeBudgetLimits;
 const FeatureSet = sig.core.FeatureSet;
 const NonceData = sig.runtime.nonce.Data;
@@ -45,18 +48,20 @@ pub fn checkStatusCache(
 /// if it exists.
 /// [agave] https://github.com/firedancer-io/agave/blob/403d23b809fc513e2c4b433125c127cf172281a2/runtime/src/bank/check_transactions.rs#L105
 pub fn checkAge(
+    allocator: Allocator,
     transaction: *const RuntimeTransaction,
     batch_account_cache: *const BatchAccountCache,
     blockhash_queue: *const BlockhashQueue,
     max_age: u64,
     next_durable_nonce: *const Hash,
     next_lamports_per_signature: u64,
-) TransactionResult(?CachedAccount) {
+) error{OutOfMemory}!TransactionResult(?CopiedAccount) {
     if (blockhash_queue.getHashInfoIfValid(transaction.recent_blockhash, max_age) != null) {
         return .{ .ok = null };
     }
 
-    if (checkLoadAndAdvanceMessageNonceAccount(
+    if (try checkLoadAndAdvanceMessageNonceAccount(
+        allocator,
         transaction,
         next_durable_nonce,
         next_lamports_per_signature,
@@ -72,11 +77,12 @@ pub fn checkAge(
 /// [agave] https://github.com/anza-xyz/agave/blob/d70b1714b1153674c16e2b15b68790d274dfe953/svm/src/transaction_processor.rs#L557
 pub fn checkFeePayer(
     /// same allocator as batch account cache
-    allocator: std.mem.Allocator,
+    allocator: Allocator,
     transaction: *const RuntimeTransaction,
     batch_account_cache: *BatchAccountCache,
     compute_budget_limits: *const ComputeBudgetLimits,
-    nonce_account: ?CachedAccount,
+    /// Takes ownership of this
+    nonce_account: ?CopiedAccount,
     rent_collector: *const RentCollector,
     feature_set: *const FeatureSet,
     lamports_per_signature: u64,
@@ -84,6 +90,9 @@ pub fn checkFeePayer(
     FeeDetails,
     TransactionRollbacks,
 }) {
+    var nonce_account_is_owned = true;
+    defer if (nonce_account_is_owned) if (nonce_account) |na| allocator.free(na.account.data);
+
     const enable_secp256r1 = feature_set.active.contains(
         sig.core.features.ENABLE_SECP256R1_PRECOMPILE,
     );
@@ -128,7 +137,8 @@ pub fn checkFeePayer(
         fee_details.total(),
     )) |validation_error| return .{ .err = validation_error };
 
-    const rollback_accounts = try TransactionRollbacks.new(
+    nonce_account_is_owned = false;
+    const rollback_accounts = try TransactionRollbacks.init(
         allocator,
         nonce_account,
         cached_fee_payer_account,
@@ -310,11 +320,12 @@ fn getSystemAccountKind(account: *const AccountSharedData) ?SystemAccountKind {
 }
 
 fn checkLoadAndAdvanceMessageNonceAccount(
+    allocator: Allocator,
     transaction: *const RuntimeTransaction,
     next_durable_nonce: *const Hash,
     next_lamports_per_signature: u64,
     batch_account_cache: *const BatchAccountCache,
-) ?struct { CachedAccount, u64 } {
+) error{OutOfMemory}!?struct { CopiedAccount, u64 } {
     if (transaction.recent_blockhash.eql(next_durable_nonce.*)) return null;
 
     const cached_account, const nonce_data = loadMessageNonceAccount(
@@ -333,13 +344,15 @@ fn checkLoadAndAdvanceMessageNonceAccount(
         },
     };
 
-    var serialize_buf: [NonceVersions.SERIALIZED_SIZE]u8 = undefined;
-    const new_data = sig.bincode.writeToSlice(&serialize_buf, next_nonce_state, .{}) catch
-        return null;
+    const new_data = sig.bincode.writeAlloc(allocator, next_nonce_state, .{}) catch |e| switch (e) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return null,
+    };
 
-    @memcpy(cached_account.account.data, new_data);
-
-    return .{ cached_account, previous_lamports_per_signature };
+    return .{
+        CopiedAccount.init(cached_account, new_data, cached_account.account.lamports),
+        previous_lamports_per_signature,
+    };
 }
 
 fn loadMessageNonceAccount(
@@ -479,7 +492,8 @@ test "checkAge: recent blockhash" {
         for (0..max_age) |_| {
             blockhash_queue.last_hash_index += 1;
 
-            const result = checkAge(
+            const result = try checkAge(
+                allocator,
                 &transaction,
                 &BatchAccountCache{},
                 &blockhash_queue,
@@ -495,7 +509,8 @@ test "checkAge: recent blockhash" {
     { // Check invalid recent blockhash err
         blockhash_queue.last_hash_index += 1;
 
-        const result = checkAge(
+        const result = try checkAge(
+            allocator,
             &transaction,
             &BatchAccountCache{},
             &blockhash_queue,
@@ -600,7 +615,8 @@ test "checkAge: nonce account" {
         .last_hash_index = 0,
     };
 
-    const result = checkAge(
+    const result = try checkAge(
+        allocator,
         &transaction,
         &account_cache,
         &blockhash_queue,
@@ -608,6 +624,7 @@ test "checkAge: nonce account" {
         &next_durable_nonce,
         5001,
     );
+    defer if (result.ok) |account| allocator.free(account.account.data);
 
     switch (result) {
         .ok => |ca| {
@@ -725,21 +742,20 @@ test "checkFeePayer: happy path with same nonce and fee payer" {
         .rent_epoch = 0,
     });
 
-    var nonce_account = AccountSharedData{
+    const nonce_account = AccountSharedData{
         .lamports = 1_000,
         .owner = sig.runtime.program.system.ID,
         .data = try allocator.dupe(u8, &.{ 0, 0, 0, 0 }),
         .executable = false,
         .rent_epoch = 0,
     };
-    defer allocator.free(nonce_account.data);
 
     const result = try checkFeePayer(
         allocator,
         &transaction,
         &account_cache,
         &ComputeBudgetLimits.DEFAULT,
-        .{ .pubkey = transaction.fee_payer, .account = &nonce_account },
+        .{ .pubkey = transaction.fee_payer, .account = nonce_account },
         &sig.core.rent_collector.defaultCollector(10),
         &sig.core.FeatureSet.EMPTY,
         5000,
@@ -788,21 +804,20 @@ test "checkFeePayer: happy path with separate nonce and fee payer" {
         .rent_epoch = 0,
     });
 
-    var nonce_account = AccountSharedData{
+    const nonce_account = AccountSharedData{
         .lamports = 1_000,
         .owner = sig.runtime.program.system.ID,
         .data = try allocator.dupe(u8, &.{ 0, 0, 0, 0 }),
         .executable = false,
         .rent_epoch = 0,
     };
-    defer allocator.free(nonce_account.data);
 
     const result = try checkFeePayer(
         allocator,
         &transaction,
         &account_cache,
         &ComputeBudgetLimits.DEFAULT,
-        .{ .pubkey = Pubkey.initRandom(prng.random()), .account = &nonce_account },
+        .{ .pubkey = Pubkey.initRandom(prng.random()), .account = nonce_account },
         &sig.core.rent_collector.defaultCollector(10),
         &sig.core.FeatureSet.EMPTY,
         5000,
