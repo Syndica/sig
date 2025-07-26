@@ -407,6 +407,18 @@ pub const LedgerResultWriter = struct {
         try self.db.commit(&write_batch);
     }
 
+    pub fn insertOptimisticSlot(
+        self: LedgerResultWriter,
+        slot: Slot,
+        hash: Hash,
+        timestamp_ms: sig.core.UnixTimestamp,
+    ) !void {
+        try self.db.put(schema.optimistic_slots, slot, .{ .V0 = .{
+            .hash = hash,
+            .timestamp = timestamp_ms,
+        } });
+    }
+
     fn isRoot(self: *LedgerResultWriter, slot: Slot) !bool {
         return try self.db.get(self.allocator, schema.rooted_slots, slot) orelse false;
     }

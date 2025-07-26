@@ -178,16 +178,20 @@ pub const RentCollector = struct {
         if (sig.runtime.ids.Incinerator.equals(address)) return;
         if (!transitionAllowed(pre, post)) return error.InsufficientFundsForRent;
     }
+
+    pub fn testDefault(epoch: Epoch) RentCollector {
+        if (!@import("builtin").is_test) @compileError("default for test usage only");
+        return .{
+            .epoch = epoch,
+            .epoch_schedule = .DEFAULT,
+            .slots_per_year = 78892314.983999997, // [agave] GenesisConfig::default().slots_per_year()
+            .rent = .DEFAULT,
+        };
+    }
 };
 
 pub fn defaultCollector(epoch: Epoch) RentCollector {
-    if (!@import("builtin").is_test) @compileError("defaultCollector for test usage only");
-    return .{
-        .epoch = epoch,
-        .epoch_schedule = sig.core.EpochSchedule.DEFAULT,
-        .slots_per_year = 78892314.983999997, // [agave] GenesisConfig::default().slots_per_year()
-        .rent = sig.runtime.sysvar.Rent.DEFAULT,
-    };
+    return .testDefault(epoch);
 }
 
 test "calculate rent result" {
