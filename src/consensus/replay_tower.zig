@@ -4,7 +4,6 @@ const sig = @import("../sig.zig");
 const AutoHashMapUnmanaged = std.AutoHashMapUnmanaged;
 const AutoArrayHashMapUnmanaged = std.AutoArrayHashMapUnmanaged;
 
-const AccountsDB = sig.accounts_db.AccountsDB;
 const BlockTimestamp = sig.runtime.program.vote.state.BlockTimestamp;
 const Hash = sig.core.Hash;
 const Lockout = sig.runtime.program.vote.state.Lockout;
@@ -135,14 +134,14 @@ pub const ReplayTower = struct {
         node_pubkey: Pubkey,
         vote_account_pubkey: Pubkey,
         fork_root: Slot,
-        accounts_db: *AccountsDB,
+        account_reader: sig.accounts_db.AccountReader,
     ) !ReplayTower {
         var tower = Tower.init(logger.unscoped());
         try tower.initializeLockoutsFromBank(
             allocator,
             &vote_account_pubkey,
             fork_root,
-            accounts_db,
+            account_reader,
         );
 
         return .{
@@ -159,7 +158,7 @@ pub const ReplayTower = struct {
         };
     }
 
-    pub fn deinit(self: *ReplayTower, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: ReplayTower, allocator: std.mem.Allocator) void {
         self.last_vote.deinit(allocator);
     }
 
@@ -1290,7 +1289,7 @@ pub const ReplayTower = struct {
 
         // Check leader slot propagation
         const propagation_confirmed = is_leader_slot or
-            (try progress.getLeaderPropagationSlotMustExist(candidate_vote_bank_slot))[0];
+            progress.leaderSlotIsPropagated(candidate_vote_bank_slot) orelse true;
         if (!propagation_confirmed) {
             try failure_reasons.append(allocator, .{ .NoPropagatedConfirmation = .{
                 .slot = candidate_vote_bank_slot,
@@ -3108,7 +3107,7 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
         Pubkey.ZEROES,
         Pubkey.ZEROES,
         root.slot,
-        &accountsdb,
+        accountsdb.accountReader(),
     );
     defer replay_tower.deinit(allocator);
 

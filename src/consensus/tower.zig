@@ -92,11 +92,23 @@ pub const Tower = struct {
         allocator: std.mem.Allocator,
         vote_account_pubkey: *const Pubkey,
         fork_root: Slot,
-        accounts_db: *AccountsDB,
+        account_reader: sig.accounts_db.AccountReader,
     ) !void {
-        const vote_account = accounts_db.getAccount(vote_account_pubkey) catch {
-            self.initializeRoot(fork_root);
-            return;
+        const vote_account = blk: {
+            const maybe_vote_account =
+                account_reader.getLatest(vote_account_pubkey.*) catch |err| switch (err) {
+                    error.OutOfMemory,
+                    => |e| return e,
+                    error.InvalidOffset,
+                    error.FileIdNotFound,
+                    error.SlotNotFound,
+                    error.PubkeyNotInIndex,
+                    => null,
+                };
+            break :blk maybe_vote_account orelse {
+                self.initializeRoot(fork_root);
+                return;
+            };
         };
 
         const vote_state = try stateFromAccount(
