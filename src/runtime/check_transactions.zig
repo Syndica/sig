@@ -74,7 +74,14 @@ pub fn checkAge(
     return .{ .err = .BlockhashNotFound };
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/d70b1714b1153674c16e2b15b68790d274dfe953/svm/src/transaction_processor.rs#L557
+/// Checks that the payer can pay the fee and rent, AND mutates the underlying
+/// account in the cache to collect both.
+///
+/// Returns the rollback accounts for the transaction, which includes a snapshot
+/// of the fee payer after collecting fees (but not rent) and the copied nonce
+/// account with its nonce already advanced.
+///
+/// Analogous to [validate_transaction_fee_payer](https://github.com/anza-xyz/agave/blob/d70b1714b1153674c16e2b15b68790d274dfe953/svm/src/transaction_processor.rs#L557)
 pub fn checkFeePayer(
     /// same allocator as batch account cache
     allocator: Allocator,
