@@ -4478,6 +4478,7 @@ pub fn loadTestAccountsDbEmpty(
         .gossip_view = null,
         .index_allocation = if (use_disk) .disk else .ram,
         .number_of_index_shards = 4,
+        .buffer_pool_frames = 1024,
     });
     errdefer accounts_db.deinit();
 
