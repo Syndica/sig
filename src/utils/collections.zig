@@ -465,7 +465,7 @@ pub fn SortedMapCustom(
         pub fn getOrPut(
             self: *SortedMapSelf,
             key: K,
-        ) std.mem.Allocator.Error!Unmanaged.Inner.GetOrPutResult {
+        ) std.mem.Allocator.Error!Unmanaged.GetOrPutResult {
             return self.unmanaged.getOrPut(self.allocator, key);
         }
 
@@ -651,18 +651,20 @@ pub fn SortedMapUnmanagedCustom(
             return was_removed;
         }
 
-        pub fn getOrPut(
+        pub fn ensureTotalCapacity(
             self: *SortedMapSelf,
             allocator: std.mem.Allocator,
-            key: K,
-        ) std.mem.Allocator.Error!Inner.GetOrPutResult {
-            const result = try self.inner.getOrPut(allocator, key);
-            if (self.max == null or order(key, self.max.?) == .gt) {
-                self.max = key;
-            } else {
-                self.is_sorted = false;
-            }
-            return result;
+            new_capacity: usize,
+        ) std.mem.Allocator.Error!void {
+            try self.inner.ensureTotalCapacity(allocator, new_capacity);
+        }
+
+        pub fn ensureUnusedCapacity(
+            self: *SortedMapSelf,
+            allocator: std.mem.Allocator,
+            additional_capacity: usize,
+        ) std.mem.Allocator.Error!void {
+            try self.inner.ensureUnusedCapacity(allocator, additional_capacity);
         }
 
         pub fn put(
@@ -671,7 +673,34 @@ pub fn SortedMapUnmanagedCustom(
             key: K,
             value: V,
         ) std.mem.Allocator.Error!void {
-            try self.inner.put(allocator, key, value);
+            const gop = try self.getOrPut(allocator, key);
+            gop.value_ptr.* = value;
+        }
+
+        pub fn putAssumeCapacity(self: *SortedMapSelf, key: K, value: V) void {
+            const gop = self.getOrPutAssumeCapacity(key);
+            gop.value_ptr.* = value;
+        }
+
+        pub const GetOrPutResult = Inner.GetOrPutResult;
+
+        pub fn getOrPut(
+            self: *SortedMapSelf,
+            allocator: std.mem.Allocator,
+            key: K,
+        ) std.mem.Allocator.Error!GetOrPutResult {
+            const gop = try self.inner.getOrPut(allocator, key);
+            if (!gop.found_existing) self.checkIfNewMax(key);
+            return gop;
+        }
+
+        pub fn getOrPutAssumeCapacity(self: *SortedMapSelf, key: K) GetOrPutResult {
+            const gop = self.inner.getOrPutAssumeCapacity(key);
+            if (!gop.found_existing) self.checkIfNewMax(key);
+            return gop;
+        }
+
+        fn checkIfNewMax(self: *SortedMapSelf, key: K) void {
             if (self.max == null or order(key, self.max.?) == .gt) {
                 self.max = key;
             } else {
