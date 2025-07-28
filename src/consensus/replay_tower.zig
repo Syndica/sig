@@ -1601,6 +1601,9 @@ fn optimisticallyBypassVoteStakeThresholdCheck(
     return false;
 }
 
+/// Collects and aggregates vote lockout information from all validator vote accounts to compute
+/// aggregated vote lockouts, but also total stake distribution, fork-specific stake, and latest validator votes for frozen banks.
+/// Analogous to [collect_vote_lockouts]https://github.com/anza-xyz/agave/blob/91520c7095c4db968fe666b80a1b80dfef1bd909/core/src/consensus.rs#L389
 pub fn collectVoteLockouts(
     allocator: std.mem.Allocator,
     logger: ScopedLogger("replay_tower"),
