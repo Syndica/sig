@@ -2,12 +2,15 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 
 const replay = sig.replay;
+const consensus = @import("lib.zig");
 
 const Slot = sig.core.Slot;
 const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
-const PubkeyArraySet = std.AutoArrayHashMapUnmanaged(Pubkey, void);
+const ThresholdDecision = sig.consensus.tower.ThresholdDecision;
 
+const Stake = u64;
+const PubkeyArraySet = std.AutoArrayHashMapUnmanaged(Pubkey, void);
 
 /// TODO: merge into real replay stage when it exists?
 const replay_stage = struct {
@@ -446,8 +449,8 @@ pub const ValidatorStakeInfo = struct {
 };
 
 pub const ForkStats = struct {
-    fork_stake: consensus.Stake,
-    total_stake: consensus.Stake,
+    fork_stake: Stake,
+    total_stake: Stake,
     block_height: u64,
     has_voted: bool,
     is_recent: bool,
@@ -461,7 +464,7 @@ pub const ForkStats = struct {
     slot_hash: Hash,
     my_latest_landed_vote: ?Slot,
 
-    pub const VoteThreshold = std.ArrayListUnmanaged(consensus.ThresholdDecision);
+    pub const VoteThreshold = std.ArrayListUnmanaged(ThresholdDecision);
 
     pub const EMPTY_ZEROES: ForkStats = .{
         .fork_stake = 0,
@@ -534,7 +537,7 @@ pub const PropagatedStats = struct {
     is_propagated: bool,
     is_leader_slot: bool,
     prev_leader_slot: ?Slot,
-    slot_vote_tracker: ?cluster_info_vote_listener.SlotVoteTracker,
+    slot_vote_tracker: ?consensus.vote_tracker.SlotVoteTracker,
     cluster_slot_pubkeys: ?cluser_slots_service.SlotPubkeys,
     total_epoch_stake: u64,
 
@@ -572,7 +575,7 @@ pub const PropagatedStats = struct {
         var propagated_node_ids = try self.propagated_node_ids.clone(allocator);
         errdefer propagated_node_ids.deinit(allocator);
 
-        const maybe_slot_vote_tracker: ?cluster_info_vote_listener.SlotVoteTracker = blk: {
+        const maybe_slot_vote_tracker: ?consensus.vote_tracker.SlotVoteTracker = blk: {
             const svt = self.slot_vote_tracker orelse break :blk null;
             break :blk try svt.clone(allocator);
         };
@@ -675,19 +678,14 @@ pub const RetransmitInfo = struct {
 };
 
 pub const LockoutIntervals = struct {
-    map: HashThatShouldBeMadeBTreeMap,
-
-    /// TODO: replace this with a BTree map. In the meantime, just have to
-    /// manually keep this sorted.
-    pub const HashThatShouldBeMadeBTreeMap =
-        std.AutoArrayHashMapUnmanaged(ExpirationSlot, EntryList);
+    map: sig.utils.collections.SortedMapUnmanaged(ExpirationSlot, EntryList),
 
     pub const EntryList = std.ArrayListUnmanaged(EntryElement);
     pub const EntryElement = struct { VotedSlot, Pubkey };
     pub const VotedSlot = Slot;
     pub const ExpirationSlot = Slot;
 
-    pub const EMPTY: LockoutIntervals = .{ .map = .{} };
+    pub const EMPTY: LockoutIntervals = .{ .map = .empty };
 
     pub fn deinit(self: LockoutIntervals, allocator: std.mem.Allocator) void {
         var btree = self.map;
@@ -702,134 +700,18 @@ pub const LockoutIntervals = struct {
         var cloned: LockoutIntervals = EMPTY;
         errdefer cloned.deinit(allocator);
 
+        const key_list, const val_list = blk: {
+            var copy = self.map;
+            break :blk copy.items();
+        };
+
         try cloned.map.ensureTotalCapacity(allocator, self.map.count());
-        for (self.map.keys(), self.map.values()) |k, v| {
+        for (key_list, val_list) |k, v| {
             cloned.map.putAssumeCapacity(k, try v.clone(allocator));
         }
 
         return cloned;
     }
-};
-
-pub const consensus = struct {
-    pub const Stake = u64;
-    pub const VotedStakes = std.AutoArrayHashMapUnmanaged(Slot, Stake);
-
-    pub const ThresholdDecision = union(enum) {
-        passed_threshold,
-        failed_threshold: FailedThreshold,
-
-        /// NOTE: this is a tuple in the original rust code
-        pub const FailedThreshold = struct {
-            vote_depth: u64,
-            observed_stake: u64,
-        };
-
-        /// #[default]
-        pub const DEFAULT: ThresholdDecision = .passed_threshold;
-
-        pub fn eql(self: ThresholdDecision, other: ThresholdDecision) bool {
-            return std.meta.eql(self, other);
-        }
-    };
-
-    pub const VoteStakeTracker = struct {
-        voted: PubkeyArraySet,
-        stake: u64,
-
-        pub fn deinit(self: VoteStakeTracker, allocator: std.mem.Allocator) void {
-            var voted = self.voted;
-            voted.deinit(allocator);
-        }
-
-        pub fn clone(
-            self: VoteStakeTracker,
-            allocator: std.mem.Allocator,
-        ) std.mem.Allocator.Error!VoteStakeTracker {
-            var voted = try self.voted.clone(allocator);
-            errdefer voted.deinit(allocator);
-
-            return .{
-                .voted = voted,
-                .stake = self.stake,
-            };
-        }
-    };
-};
-
-pub const cluster_info_vote_listener = struct {
-    pub const SlotVoteTracker = struct {
-        /// Maps pubkeys that have voted for this slot
-        /// to whether or not we've seen the vote on gossip.
-        /// True if seen on gossip, false if only seen in replay.
-        voted: Voted,
-        optimistic_votes_tracker: OptimisticVotesTracker,
-        voted_slot_updates: ?std.ArrayListUnmanaged(Pubkey),
-        gossip_only_stake: u64,
-
-        pub const Voted = std.AutoArrayHashMapUnmanaged(Pubkey, bool);
-
-        pub fn deinit(self: SlotVoteTracker, allocator: std.mem.Allocator) void {
-            var voted = self.voted;
-            voted.deinit(allocator);
-
-            self.optimistic_votes_tracker.deinit(allocator);
-
-            var maybe_voted_slot_updates = self.voted_slot_updates;
-            if (maybe_voted_slot_updates) |*vsu| vsu.deinit(allocator);
-        }
-
-        pub fn clone(
-            self: SlotVoteTracker,
-            allocator: std.mem.Allocator,
-        ) std.mem.Allocator.Error!SlotVoteTracker {
-            var voted = try self.voted.clone(allocator);
-            errdefer voted.deinit(allocator);
-
-            const optimistic_votes_tracker = try self.optimistic_votes_tracker.clone(allocator);
-            errdefer optimistic_votes_tracker.deinit(allocator);
-
-            var voted_slot_updates: ?std.ArrayListUnmanaged(Pubkey) = blk: {
-                const vsu = self.voted_slot_updates orelse break :blk null;
-                break :blk try vsu.clone(allocator);
-            };
-            errdefer if (voted_slot_updates) |*vsu| vsu.deinit(allocator);
-
-            return .{
-                .voted = voted,
-                .optimistic_votes_tracker = optimistic_votes_tracker,
-                .voted_slot_updates = voted_slot_updates,
-                .gossip_only_stake = self.gossip_only_stake,
-            };
-        }
-    };
-
-    pub const OptimisticVotesTracker = struct {
-        map: std.AutoArrayHashMapUnmanaged(Hash, consensus.VoteStakeTracker),
-
-        pub const EMPTY: OptimisticVotesTracker = .{ .map = .empty };
-
-        pub fn deinit(self: OptimisticVotesTracker, allocator: std.mem.Allocator) void {
-            for (self.map.values()) |vst| vst.deinit(allocator);
-            var map = self.map;
-            map.deinit(allocator);
-        }
-
-        pub fn clone(
-            self: OptimisticVotesTracker,
-            allocator: std.mem.Allocator,
-        ) std.mem.Allocator.Error!OptimisticVotesTracker {
-            var cloned_ovt = OptimisticVotesTracker.EMPTY;
-            errdefer cloned_ovt.deinit(allocator);
-
-            try cloned_ovt.map.ensureTotalCapacity(allocator, self.map.count());
-            for (self.map.keys(), self.map.values()) |k, v| {
-                cloned_ovt.map.putAssumeCapacity(k, try v.clone(allocator));
-            }
-
-            return cloned_ovt;
-        }
-    };
 };
 
 pub const cluser_slots_service = struct {
@@ -1821,19 +1703,23 @@ fn forkStatsInitRandom(
         },
     },
 ) std.mem.Allocator.Error!ForkStats {
-    const ThresholdDecision = consensus.ThresholdDecision;
-
     const vote_threshold = try allocator.alloc(ThresholdDecision, params.vote_threshold_len);
     errdefer allocator.free(vote_threshold);
 
     for (vote_threshold) |*vt| {
         const Tag = @typeInfo(ThresholdDecision).@"union".tag_type.?;
         vt.* = switch (random.enumValueWithIndex(Tag, u1)) {
-            inline .passed_threshold => |tag| tag,
-            inline .failed_threshold => |tag| @unionInit(ThresholdDecision, @tagName(tag), .{
-                .vote_depth = random.int(u64),
-                .observed_stake = random.int(u64),
-            }),
+            inline .passed, .failed => |tag| @unionInit(
+                ThresholdDecision,
+                @tagName(tag),
+                switch (tag) {
+                    .passed => {},
+                    .failed => .{
+                        .vote_depth = random.int(u64),
+                        .observed_stake = random.int(u64),
+                    },
+                },
+            ),
         };
     }
 
@@ -1842,7 +1728,7 @@ fn forkStatsInitRandom(
     try voted_stakes.ensureTotalCapacity(allocator, params.vote_threshold_len);
     for (0..params.voted_stakes_len) |_| voted_stakes.putAssumeCapacity(
         random.int(Slot),
-        random.int(consensus.Stake),
+        random.int(Stake),
     );
 
     const lockout_intervals = try lockoutIntervalsInitRandom(allocator, random, .{
@@ -1853,8 +1739,8 @@ fn forkStatsInitRandom(
     errdefer lockout_intervals.deinit(allocator);
 
     return .{
-        .fork_stake = random.int(consensus.Stake),
-        .total_stake = random.int(consensus.Stake),
+        .fork_stake = random.int(Stake),
+        .total_stake = random.int(Stake),
         .block_height = random.int(u64),
         .has_voted = random.boolean(),
         .is_recent = random.boolean(),
@@ -1916,8 +1802,8 @@ pub fn slotVoteTrackerInitRandom(
         },
         voted_slot_updates_len: ?u32,
     },
-) std.mem.Allocator.Error!cluster_info_vote_listener.SlotVoteTracker {
-    const SlotVoteTracker = cluster_info_vote_listener.SlotVoteTracker;
+) std.mem.Allocator.Error!consensus.vote_tracker.SlotVoteTracker {
+    const SlotVoteTracker = consensus.vote_tracker.SlotVoteTracker;
 
     var voted: SlotVoteTracker.Voted = .empty;
     errdefer voted.deinit(allocator);
@@ -1926,7 +1812,7 @@ pub fn slotVoteTrackerInitRandom(
         voted.putAssumeCapacity(.initRandom(random), random.boolean());
     }
 
-    var ovt: cluster_info_vote_listener.OptimisticVotesTracker = .EMPTY;
+    var ovt: consensus.vote_tracker.OptimisticVotesTracker = .EMPTY;
     errdefer ovt.deinit(allocator);
     try ovt.map.ensureTotalCapacity(allocator, params.optimistic_tracker_len);
     for (0..params.optimistic_tracker_len) |_| {
