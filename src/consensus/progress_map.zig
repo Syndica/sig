@@ -136,23 +136,27 @@ pub const ProgressMap = struct {
         return result;
     }
 
+    pub fn getForkProgress(self: *const ProgressMap, slot: Slot) ?*ForkProgress {
+        return self.map.getPtr(slot);
+    }
+
     pub fn getPropagatedStats(self: *const ProgressMap, slot: Slot) ?*PropagatedStats {
-        const fork_progress = self.map.getPtr(slot) orelse return null;
+        const fork_progress = self.getForkProgress(slot) orelse return null;
         return &fork_progress.propagated_stats;
     }
 
     pub fn getForkStats(self: *const ProgressMap, slot: Slot) ?*ForkStats {
-        const fork_progress = self.map.getPtr(slot) orelse return null;
+        const fork_progress = self.getForkProgress(slot) orelse return null;
         return &fork_progress.fork_stats;
     }
 
     pub fn isDead(self: *const ProgressMap, slot: Slot) ?bool {
-        const fork_progress = self.map.getPtr(slot) orelse return null;
+        const fork_progress = self.getForkProgress(slot) orelse return null;
         return fork_progress.is_dead;
     }
 
     pub fn getHash(self: *const ProgressMap, slot: Slot) ?Hash {
-        const fork_progress = self.map.get(slot) orelse return null;
+        const fork_progress = self.getForkProgress(slot) orelse return null;
         return fork_progress.fork_stats.slot_hash;
     }
 
@@ -1641,8 +1645,70 @@ fn testForkProgressIsPropagatedOnInit(expected: bool, params: ForkProgress.InitP
 }
 
 test "is_propagated" {
-    // TODO: implement the "test_is_propagated" from agave after implementing missing methods
-    return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+
+    var progress_map: ProgressMap = .INIT;
+    defer progress_map.deinit(allocator);
+
+    try std.testing.expectEqual(null, progress_map.leaderSlotIsPropagated(8));
+    try std.testing.expectEqual(null, progress_map.leaderSlotIsPropagated(9));
+    try std.testing.expectEqual(null, progress_map.leaderSlotIsPropagated(10));
+
+    // Insert new ForkProgress for slot 10 (not a leader slot) and its
+    // previous leader slot 9 (leader slot)
+    // try progress_map.map.put(allocator, 10, ForkProgress.init(allocator, Hash.default(), 9, null, 0, 0));
+    try progress_map.map.ensureUnusedCapacity(allocator, 1);
+    progress_map.map.putAssumeCapacity(10, try .init(allocator, .{
+        .now = .now(),
+        .last_entry = .ZEROES,
+        .prev_leader_slot = 9,
+        .validator_stake_info = null,
+        .num_blocks_on_fork = 0,
+        .num_dropped_blocks_on_fork = 0,
+    }));
+
+    try progress_map.map.ensureUnusedCapacity(allocator, 1);
+    progress_map.map.putAssumeCapacity(9, try .init(allocator, .{
+        .now = .now(),
+        .last_entry = .ZEROES,
+        .prev_leader_slot = null,
+        .validator_stake_info = .DEFAULT,
+        .num_blocks_on_fork = 0,
+        .num_dropped_blocks_on_fork = 0,
+    }));
+
+    // null of these slot have parents which are confirmed
+    try std.testing.expectEqual(false, progress_map.leaderSlotIsPropagated(9));
+    try std.testing.expectEqual(false, progress_map.leaderSlotIsPropagated(10));
+
+    // Insert new ForkProgress for slot 8 with no previous leader.
+    // The previous leader before 8, slot 7, does not exist in
+    // progress map, so is_propagated(8) should return true as
+    // this implies the parent is rooted
+    try progress_map.map.ensureUnusedCapacity(allocator, 1);
+    progress_map.map.putAssumeCapacity(8, try .init(allocator, .{
+        .now = .now(),
+        .last_entry = .ZEROES,
+        .prev_leader_slot = 7,
+        .validator_stake_info = null,
+        .num_blocks_on_fork = 0,
+        .num_dropped_blocks_on_fork = 0,
+    }));
+    try std.testing.expectEqual(true, progress_map.leaderSlotIsPropagated(8));
+
+    // If we set the is_propagated = true, is_propagated should return true
+    progress_map.getPropagatedStats(9).?.is_propagated = true;
+    try std.testing.expectEqual(true, progress_map.leaderSlotIsPropagated(9));
+    try std.testing.expect(progress_map.getForkProgress(9).?.propagated_stats.is_propagated);
+
+    // Because slot 9 is now confirmed, then slot 10 is also confirmed b/c 9
+    // is the last leader slot before 10
+    try std.testing.expectEqual(true, progress_map.leaderSlotIsPropagated(10));
+
+    // If we make slot 10 a leader slot though, even though its previous
+    // leader slot 9 has been confirmed, slot 10 itself is not confirmed
+    progress_map.getPropagatedStats(10).?.is_leader_slot = true;
+    try std.testing.expectEqual(false, progress_map.leaderSlotIsPropagated(10));
 }
 
 /// NOTE: Used in tests for generating dummy data.
