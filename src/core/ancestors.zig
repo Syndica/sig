@@ -10,6 +10,8 @@ pub const Ancestors = struct {
     // agave uses a "RollingBitField" which seems to be just an optimisation for a set
     ancestors: Map = .{},
 
+    pub const EMPTY: Ancestors = .{ .ancestors = .empty };
+
     pub const Map = HashMap(Slot, void);
 
     pub fn containsSlot(self: *const Ancestors, slot: Slot) bool {
