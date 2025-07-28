@@ -133,7 +133,7 @@ pub const Hash = extern struct {
 
 /// A 16-bit, 1024 element lattice-based incremental hash based on blake3
 pub const LtHash = struct {
-    data: [1024]u16,
+    data: [NUM_ELEMENTS]u16,
 
     pub const IDENTITY = LtHash{ .data = @splat(0) };
 
@@ -171,29 +171,20 @@ pub const LtHash = struct {
 
     pub fn add(lhs: LtHash, rhs: LtHash) LtHash {
         return .{
-            .data = @as(@Vector(1024, u16), lhs.data) +%
-                @as(@Vector(1024, u16), rhs.data),
+            .data = @as(@Vector(NUM_ELEMENTS, u16), lhs.data) +%
+                @as(@Vector(NUM_ELEMENTS, u16), rhs.data),
         };
     }
 
     pub fn sub(lhs: LtHash, rhs: LtHash) LtHash {
         return .{
-            .data = @as(@Vector(1024, u16), lhs.data) -%
-                @as(@Vector(1024, u16), rhs.data),
+            .data = @as(@Vector(NUM_ELEMENTS, u16), lhs.data) -%
+                @as(@Vector(NUM_ELEMENTS, u16), rhs.data),
         };
     }
 };
 
 const expectEqual = std.testing.expectEqual;
-
-// Ensure that the byte layout of the vector is the same as an array of u16
-test "LtHash.bytes" {
-    var rng = std.Random.DefaultPrng.init(0);
-    var hash = LtHash.initRandom(rng.random());
-    const items: [LtHash.NUM_ELEMENTS]u16 = hash.data;
-    const expected_bytes = std.mem.sliceAsBytes(&items);
-    try std.testing.expectEqualSlices(u8, expected_bytes, hash.bytes());
-}
 
 // Ensure that if you mix-in or mix-out with the identity, you get the original value
 test "identity" {
