@@ -9,7 +9,6 @@ const Hash = sig.core.Hash;
 const LatestValidatorVotesForFrozenBanks = sig.consensus.latest_validator_votes.LatestValidatorVotes;
 const LockoutIntervals = sig.consensus.replay_tower.LockoutIntervals;
 const Lockout = sig.runtime.program.vote.state.Lockout;
-const VotedStakes = sig.consensus.progress_map.consensus.VotedStakes;
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 const SortedSet = sig.utils.collections.SortedSetUnmanaged;
@@ -31,6 +30,9 @@ pub const Stake = u64;
 
 pub const VotedSlot = Slot;
 
+/// Analogous to [VotedStakes](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/consensus.rs#L169)
+pub const VotedStakes = std.AutoArrayHashMapUnmanaged(Slot, Stake);
+
 const ComputedBankState = struct {
     /// Maps each validator (by their Pubkey) to the amount of stake they have voted
     /// with on this fork. Helps determine who has already committed to this
@@ -48,13 +50,16 @@ const ComputedBankState = struct {
 };
 
 pub const ThresholdDecision = union(enum) {
-    passed_threshold,
-    failed_threshold: struct {
-        // vote depth
-        u64,
-        // Observed stake
-        u64,
-    },
+    passed,
+    failed: FailedThreshold,
+
+    /// NOTE: this is a tuple in the original rust code
+    pub const FailedThreshold = struct {
+        vote_depth: u64,
+        observed_stake: u64,
+    };
+
+    pub const DEFAULT: ThresholdDecision = .passed;
 };
 
 pub const TowerError = error{
