@@ -287,6 +287,8 @@ const ReplayState = struct {
     status_cache: sig.core.StatusCache,
     slot_data: SlotData,
 
+    arena_state: std.heap.ArenaAllocator.State,
+
     thread_pool: ThreadPool,
     senders: Senders,
     receivers: Receivers,
@@ -370,6 +372,8 @@ const ReplayState = struct {
             .latest_validator_votes = .empty,
             .status_cache = .empty,
             .slot_data = .empty,
+
+            .arena_state = .{},
 
             .senders = deps.senders,
             .receivers = deps.receivers,
@@ -507,8 +511,18 @@ pub fn run(deps: ReplayDependencies) !void {
 /// - replay all active slots that have not been replayed yet
 /// - running concensus on the latest updates
 fn advanceReplay(state: *ReplayState) !void {
+    const allocator = state.allocator;
+    const logger = state.logger;
+
+    var arena_state = state.arena_state.promote(allocator);
+    defer {
+        _ = arena_state.reset(.retain_capacity);
+        state.arena_state = arena_state.state;
+    }
+    const arena = arena_state.allocator();
+
     try trackNewSlots(
-        state.allocator,
+        allocator,
         state.account_store,
         &state.ledger.db,
         &state.slot_tracker,
@@ -519,7 +533,7 @@ fn advanceReplay(state: *ReplayState) !void {
 
     _ = try replay.execution.replayActiveSlots(state.executionState());
 
-    _ = try replay.edge_cases.processEdgeCases(state.allocator, state.logger, .{
+    _ = try replay.edge_cases.processEdgeCases(allocator, logger, .{
         .my_pubkey = state.my_identity,
         .tpu_has_bank = false,
 
@@ -535,9 +549,63 @@ fn advanceReplay(state: *ReplayState) !void {
         .receivers = state.receivers,
     });
 
-    // ignore errors in consensus since they are expected until the inputs are provided
-    replay.consensus.processConsensus(null) catch |e|
+    const SlotSet = sig.utils.collections.SortedSetUnmanaged(Slot);
+
+    // arena-allocated
+    var ancestors: std.AutoArrayHashMapUnmanaged(Slot, SlotSet) = .empty;
+    var descendants: std.AutoArrayHashMapUnmanaged(Slot, SlotSet) = .empty;
+    for (
+        state.slot_tracker.slots.keys(),
+        state.slot_tracker.slots.values(),
+    ) |slot, info| {
+        const slot_ancestors = &info.constants.ancestors.ancestors;
+        const ancestor_gop = try ancestors.getOrPutValue(arena, slot, .empty);
+        try ancestor_gop.value_ptr.map.inner.ensureUnusedCapacity(arena, slot_ancestors.count());
+        for (slot_ancestors.keys()) |ancestor_slot| {
+            try ancestor_gop.value_ptr.put(arena, ancestor_slot);
+            const descendants_gop = try descendants.getOrPutValue(arena, ancestor_slot, .empty);
+            try descendants_gop.value_ptr.put(arena, slot);
+        }
+    }
+
+    const SlotHistory = sig.runtime.sysvar.SlotHistory;
+    const slot_history: SlotHistory = sh: {
+        const account_reader = state.account_store.reader();
+
+        const maybe_account = try account_reader.getLatest(SlotHistory.ID); // TODO: do we need to scope this with `forSlot` or anything?
+        const account = maybe_account orelse return error.MissingSlotHistoryAccount;
+        defer account.deinit(account_reader.allocator());
+
+        var data_iter = account.data.iterator();
+        const slot_history = try sig.bincode.read(arena, SlotHistory, data_iter.reader(), .{});
+        errdefer slot_history.deinit(arena);
+
+        if (data_iter.bytesRemaining() != 0) {
+            return error.TrailingBytesInSlotHistory;
+        }
+
+        break :sh slot_history;
+    };
+    defer slot_history.deinit(arena);
+
+    replay.consensus.processConsensus(.{
+        .allocator = allocator,
+        .replay_tower = &state.replay_tower,
+        .progress_map = &state.progress,
+        .slot_tracker = &state.slot_tracker,
+        .epoch_tracker = &state.epochs,
+        .fork_choice = &state.fork_choice,
+        .blockstore_reader = state.ledger.reader,
+        .ledger_result_writer = state.ledger.writer,
+        .ancestors = &ancestors,
+        .descendants = &descendants,
+        .vote_account = state.my_identity, // TODO: use explicitly distinct vote authority
+        .slot_history = &slot_history,
+        .latest_validator_votes_for_frozen_banks = &state.latest_validator_votes,
+    }) catch |e| {
+        // ignore errors in consensus since they are expected until the inputs are provided
         state.logger.err().logf("consensus failed with an error: {}", .{e});
+    };
 
     // TODO: dump_then_repair_correct_slots
 

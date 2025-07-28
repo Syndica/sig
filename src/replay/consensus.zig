@@ -5,7 +5,7 @@ const Allocator = std.mem.Allocator;
 const AtomicBool = std.atomic.Value(bool);
 
 const RwMux = sig.sync.RwMux;
-const SortedSet = sig.utils.collections.SortedSet;
+const SortedSetUnmanaged = sig.utils.collections.SortedSetUnmanaged;
 
 const Epoch = sig.core.Epoch;
 const EpochStakesMap = sig.core.EpochStakesMap;
@@ -88,19 +88,21 @@ pub fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
     const heaviest_slot_on_same_voted_fork =
         (try deps.fork_choice.heaviestSlotOnSameVotedFork(deps.replay_tower)) orelse null;
 
-    const heaviest_epoch: Epoch = deps.epoch_tracker.schedule.getEpoch(heaviest_slot);
-
     const now = sig.time.Instant.now();
     var last_vote_refresh_time: LastVoteRefreshTime = .{
         .last_refresh_time = now,
         .last_print_time = now,
     };
 
+    const epoch_stake = blk: {
+        const epoch_consts = deps.epoch_tracker.getForSlot(heaviest_slot) orelse
+            return error.StakeNotFound;
+        break :blk epoch_consts.stakes;
+    };
     const vote_and_reset_forks = try deps.replay_tower.selectVoteAndResetForks(
         deps.allocator,
         heaviest_slot,
         if (heaviest_slot_on_same_voted_fork) |h| h.slot else null,
-        heaviest_epoch,
         deps.ancestors,
         deps.descendants,
         deps.progress_map,
