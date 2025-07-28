@@ -1779,7 +1779,7 @@ test "check slot agrees with cluster dead duplicate confirmed" {
         try .init(allocator);
     defer ancestor_hashes_replay_update_channel.deinit();
 
-    progress.map.getPtr(2).?.is_dead = true;
+    progress.getForkProgress(2).?.is_dead = true;
     try check_slot_agrees_with_cluster.duplicateConfirmed(
         allocator,
         .noop,

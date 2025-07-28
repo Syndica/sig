@@ -643,11 +643,8 @@ pub const ReplayTower = struct {
             // finding any lockout intervals in the `lockout_intervals` tree
             // for this bank that contain `last_vote`.
 
-            var lockout_intervals = progress
-                .map
-                .get(candidate_slot).?
-                .fork_stats
-                .lockout_intervals;
+            const lockout_intervals =
+                &progress.getForkProgress(candidate_slot).?.fork_stats.lockout_intervals;
 
             if (lockout_intervals.map.count() == 0) {
                 continue;

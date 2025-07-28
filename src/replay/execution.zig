@@ -158,7 +158,7 @@ fn replaySlot(state: ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
 
     if (!progress_get_or_put.found_existing) {
         const parent_slot = slot_info.constants.parent_slot;
-        const parent = state.progress_map.map.getPtr(parent_slot) orelse
+        const parent = state.progress_map.getForkProgress(parent_slot) orelse
             return error.MissingParentProgress;
 
         progress_get_or_put.value_ptr.* = try ForkProgress.initFromParent(state.allocator, .{
