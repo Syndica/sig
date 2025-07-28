@@ -9,16 +9,6 @@ const Pubkey = sig.core.Pubkey;
 const PubkeyArraySet = std.AutoArrayHashMapUnmanaged(Pubkey, void);
 const ThresholdDecision = sig.consensus.tower.ThresholdDecision;
 
-/// TODO: any uses of these types are to be evaluated in their context, and
-/// the actual required semantics are to be determined later.
-const stubs = struct {
-    fn Arc(comptime T: type) type {
-        return struct { arc_ed: T };
-    }
-    fn RwLock(comptime T: type) type {
-        return struct { rwlock_ed: T };
-    }
-};
 
 /// TODO: merge into real replay stage when it exists?
 const replay_stage = struct {
@@ -217,8 +207,8 @@ pub const ForkProgress = struct {
     fork_stats: ForkStats,
     propagated_stats: PropagatedStats,
     // TODO Remove replay_stats? Does not look like it is used to make any application decision, just logging.
-    replay_stats: stubs.Arc(stubs.RwLock(blockstore_processor.ReplaySlotStats)),
-    replay_progress: stubs.Arc(stubs.RwLock(blockstore_processor.ConfirmationProgress)),
+    replay_stats: blockstore_processor.ReplaySlotStats,
+    replay_progress: blockstore_processor.ConfirmationProgress,
     retransmit_info: RetransmitInfo,
 
     // NOTE: `num_blocks_on_fork` and `num_dropped_blocks_on_fork` only
@@ -231,7 +221,7 @@ pub const ForkProgress = struct {
     pub fn deinit(self: ForkProgress, allocator: std.mem.Allocator) void {
         self.fork_stats.deinit(allocator);
         self.propagated_stats.deinit(allocator);
-        self.replay_stats.arc_ed.rwlock_ed.deinit(allocator);
+        self.replay_stats.deinit(allocator);
     }
 
     pub fn clone(
@@ -244,14 +234,14 @@ pub const ForkProgress = struct {
         const propagated_stats = try self.propagated_stats.clone(allocator);
         errdefer propagated_stats.deinit(allocator);
 
-        const replay_stats = try self.replay_stats.arc_ed.rwlock_ed.clone(allocator);
+        const replay_stats = try self.replay_stats.clone(allocator);
         errdefer replay_stats.deinit(allocator);
 
         return .{
             .is_dead = self.is_dead,
             .fork_stats = fork_stats,
             .propagated_stats = propagated_stats,
-            .replay_stats = .{ .arc_ed = .{ .rwlock_ed = replay_stats } },
+            .replay_stats = replay_stats,
             .replay_progress = self.replay_progress,
             .retransmit_info = self.retransmit_info,
             .num_blocks_on_fork = self.num_blocks_on_fork,
@@ -401,7 +391,7 @@ pub const ForkProgress = struct {
         const total_epoch_stake: u64 //
         = blk: {
             const info = params.validator_stake_info orelse
-                break :blk .{ false, 0, .{}, false, 0 };
+                break :blk .{ false, 0, .empty, false, 0 };
             break :blk .{
                 true,
                 info.stake,
@@ -415,12 +405,8 @@ pub const ForkProgress = struct {
         return .{
             .is_dead = false,
             .fork_stats = .EMPTY_ZEROES,
-            .replay_stats = .{ .arc_ed = .{
-                .rwlock_ed = .initEmptyZeroes(params.now),
-            } },
-            .replay_progress = .{ .arc_ed = .{
-                .rwlock_ed = .init(params.last_entry),
-            } },
+            .replay_stats = .initEmptyZeroes(params.now),
+            .replay_progress = .init(params.last_entry),
             .num_blocks_on_fork = params.num_blocks_on_fork,
             .num_dropped_blocks_on_fork = params.num_dropped_blocks_on_fork,
             .propagated_stats = .{
@@ -550,8 +536,8 @@ pub const PropagatedStats = struct {
     is_propagated: bool,
     is_leader_slot: bool,
     prev_leader_slot: ?Slot,
-    slot_vote_tracker: ?stubs.Arc(stubs.RwLock(cluster_info_vote_listener.SlotVoteTracker)),
-    cluster_slot_pubkeys: ?stubs.Arc(stubs.RwLock(cluser_slots_service.SlotPubkeys)),
+    slot_vote_tracker: ?cluster_info_vote_listener.SlotVoteTracker,
+    cluster_slot_pubkeys: ?cluser_slots_service.SlotPubkeys,
     total_epoch_stake: u64,
 
     pub const EMPTY_ZEROES: PropagatedStats = .{
@@ -573,8 +559,8 @@ pub const PropagatedStats = struct {
         var propagated_node_ids = self.propagated_node_ids;
         propagated_node_ids.deinit(allocator);
 
-        if (self.slot_vote_tracker) |svt| svt.arc_ed.rwlock_ed.deinit(allocator);
-        var maybe_csp = if (self.cluster_slot_pubkeys) |csp| csp.arc_ed.rwlock_ed else null;
+        if (self.slot_vote_tracker) |svt| svt.deinit(allocator);
+        var maybe_csp = if (self.cluster_slot_pubkeys) |csp| csp else null;
         if (maybe_csp) |*csp| csp.deinit(allocator);
     }
 
@@ -590,13 +576,13 @@ pub const PropagatedStats = struct {
 
         const maybe_slot_vote_tracker: ?cluster_info_vote_listener.SlotVoteTracker = blk: {
             const svt = self.slot_vote_tracker orelse break :blk null;
-            break :blk try svt.arc_ed.rwlock_ed.clone(allocator);
+            break :blk try svt.clone(allocator);
         };
         errdefer if (maybe_slot_vote_tracker) |svt| svt.deinit(allocator);
 
         var maybe_cluster_slot_pubkeys: ?cluser_slots_service.SlotPubkeys = blk: {
             const csp = self.cluster_slot_pubkeys orelse break :blk null;
-            break :blk try csp.arc_ed.rwlock_ed.clone(allocator);
+            break :blk try csp.clone(allocator);
         };
         errdefer if (maybe_cluster_slot_pubkeys) |*svt| svt.deinit(allocator);
 
@@ -607,12 +593,8 @@ pub const PropagatedStats = struct {
             .is_propagated = self.is_propagated,
             .is_leader_slot = self.is_leader_slot,
             .prev_leader_slot = self.prev_leader_slot,
-            .slot_vote_tracker = if (maybe_slot_vote_tracker) |svt| .{
-                .arc_ed = .{ .rwlock_ed = svt },
-            } else null,
-            .cluster_slot_pubkeys = if (maybe_cluster_slot_pubkeys) |csp| .{
-                .arc_ed = .{ .rwlock_ed = csp },
-            } else null,
+            .slot_vote_tracker = if (maybe_slot_vote_tracker) |svt| svt else null,
+            .cluster_slot_pubkeys = if (maybe_cluster_slot_pubkeys) |csp| csp else null,
             .total_epoch_stake = self.total_epoch_stake,
         };
     }
@@ -1273,7 +1255,7 @@ test "ForkProgress.init" {
         .total_epoch_stake = epoch_consts.stakes.total_stake,
     };
 
-    var expected_propagated_validators: PubkeyArraySet = .{};
+    var expected_propagated_validators: PubkeyArraySet = .empty;
     defer expected_propagated_validators.deinit(allocator);
     try expected_propagated_validators.put(allocator, vsi.validator_vote_pubkey, {});
 
@@ -1292,12 +1274,8 @@ test "ForkProgress.init" {
     const expected: ForkProgress = .{
         .is_dead = false,
         .fork_stats = expected_fork_stats,
-        .replay_stats = .{ .arc_ed = .{
-            .rwlock_ed = .initEmptyZeroes(now),
-        } },
-        .replay_progress = .{ .arc_ed = .{
-            .rwlock_ed = .init(bhq_last_hash.?),
-        } },
+        .replay_stats = .initEmptyZeroes(now),
+        .replay_progress = .init(bhq_last_hash.?),
         .num_blocks_on_fork = 15,
         .num_dropped_blocks_on_fork = 16,
         .propagated_stats = .{
@@ -1728,8 +1706,8 @@ fn forkProgressInitRandom(
             .is_propagated = random.boolean(),
             .is_leader_slot = random.boolean(),
             .prev_leader_slot = if (random.boolean()) random.int(Slot) else null,
-            .slot_vote_tracker = .{ .arc_ed = .{ .rwlock_ed = slot_vote_tracker } },
-            .cluster_slot_pubkeys = .{ .arc_ed = .{ .rwlock_ed = cluster_slot_pubkeys } },
+            .slot_vote_tracker = slot_vote_tracker,
+            .cluster_slot_pubkeys = cluster_slot_pubkeys,
             .total_epoch_stake = random.int(u64),
         };
     };
@@ -1766,8 +1744,8 @@ fn forkProgressInitRandom(
         .is_dead = random.boolean(),
         .fork_stats = fork_stats,
         .propagated_stats = propagated_stats,
-        .replay_stats = .{ .arc_ed = .{ .rwlock_ed = replay_stats } },
-        .replay_progress = .{ .arc_ed = .{ .rwlock_ed = replay_progress } },
+        .replay_stats = replay_stats,
+        .replay_progress = replay_progress,
         .retransmit_info = .{
             .retry_time = .UNIX_EPOCH,
             .retry_iteration = random.int(u32),
@@ -1783,7 +1761,7 @@ fn pubkeyArraySetInitRandom(
     random: std.Random,
     len: u32,
 ) std.mem.Allocator.Error!PubkeyArraySet {
-    var pubkey_set: PubkeyArraySet = .{};
+    var pubkey_set: PubkeyArraySet = .empty;
     errdefer pubkey_set.deinit(allocator);
     try pubkey_set.ensureTotalCapacity(allocator, len);
     for (0..len) |_| while (true) {
