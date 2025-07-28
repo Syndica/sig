@@ -32,7 +32,7 @@ const ProgressMap = sig.consensus.ProgressMap;
 const Tower = sig.consensus.tower.Tower;
 const TowerError = sig.consensus.tower.TowerError;
 const VoteTransaction = sig.consensus.vote_transaction.VoteTransaction;
-const VotedStakes = sig.consensus.progress_map.consensus.VotedStakes;
+const VotedStakes = sig.consensus.VotedStakes;
 const LockoutIntervals = sig.consensus.progress_map.LockoutIntervals;
 
 const stateFromAccount = sig.consensus.tower.stateFromAccount;
@@ -886,7 +886,7 @@ pub const ReplayTower = struct {
                 total_stake,
             );
 
-            if (std.mem.eql(u8, @tagName(vote_threshold), "failed_threshold")) {
+            if (vote_threshold == .failed) {
                 threshold_decisions[index] = vote_threshold;
                 index += 1;
             }
@@ -1333,10 +1333,10 @@ pub const ReplayTower = struct {
         // Check vote thresholds
         var threshold_passed = true;
         for (vote_thresholds.items) |threshold_failure| {
-            if (threshold_failure != .failed_threshold) continue;
+            if (threshold_failure != .failed) continue;
 
-            const vote_depth = threshold_failure.failed_threshold.vote_depth;
-            const fork_stake = threshold_failure.failed_threshold.observed_stake;
+            const vote_depth = threshold_failure.failed.vote_depth;
+            const fork_stake = threshold_failure.failed.observed_stake;
             try failure_reasons.append(allocator, .{ .FailedThreshold = .{
                 .slot = candidate_vote_bank_slot,
                 .vote_depth = vote_depth,
@@ -1588,14 +1588,15 @@ fn checkVoteStakeThreshold(
 ) ThresholdDecision {
     const threshold_vote = maybe_threshold_vote orelse {
         // Tower isn't that deep.
-        return .passed_threshold;
+        return .passed;
     };
 
     const fork_stake = voted_stakes.get(threshold_vote.slot) orelse {
         // We haven't seen any votes on this fork yet, so no stake
-        return .{
-            .failed_threshold = .{ .vote_depth = threshold_depth, .observed_stake = 0 },
-        };
+        return .{ .failed = .{
+            .vote_depth = threshold_depth,
+            .observed_stake = 0,
+        } };
     };
 
     const lockout = @as(f64, @floatFromInt(fork_stake)) / @as(
@@ -1620,12 +1621,13 @@ fn checkVoteStakeThreshold(
         tower_before_applying_vote,
         threshold_vote,
     ) or lockout > threshold_size) {
-        return .passed_threshold;
+        return .passed;
     }
 
-    return .{
-        .failed_threshold = .{ .vote_depth = threshold_depth, .observed_stake = 0 },
-    };
+    return .{ .failed = .{
+        .vote_depth = threshold_depth,
+        .observed_stake = 0,
+    } };
 }
 
 // Optimistically skip the stake check if casting a vote would not increase
@@ -4109,7 +4111,7 @@ pub fn createTestReplayTower(
 fn isSlotConfirmed(
     replay_tower: *const ReplayTower,
     slot: Slot,
-    voted_stakes: *const sig.consensus.progress_map.consensus.VotedStakes,
+    voted_stakes: *const sig.consensus.VotedStakes,
     total_stake: u64,
 ) bool {
     if (!builtin.is_test) {

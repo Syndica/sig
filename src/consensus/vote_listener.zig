@@ -2124,11 +2124,11 @@ const TestSlotVoteTracker = struct {
         defer for (ovt.items) |slot_vst| slot_vst[1].deinit(allocator);
         try ovt.ensureTotalCapacityPrecise(
             allocator,
-            svt.optimistic_votes_tracker.count(),
+            svt.optimistic_votes_tracker.map.count(),
         );
         for (
-            svt.optimistic_votes_tracker.keys(),
-            svt.optimistic_votes_tracker.values(),
+            svt.optimistic_votes_tracker.map.keys(),
+            svt.optimistic_votes_tracker.map.values(),
         ) |key, val| {
             ovt.appendAssumeCapacity(.{ key, try .from(allocator, &val) });
         }
