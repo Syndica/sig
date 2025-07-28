@@ -119,8 +119,7 @@ pub fn replayActiveSlots(state: *ReplayExecutionState) !bool {
             state.logger.info().logf("confirmed entire slot {}", .{slot});
             try replay.freeze.freezeSlot(state.allocator, .init(
                 .from(state.logger),
-                state.account_store.reader(),
-                state.db_for_svm, // TODO: remove
+                state.account_store,
                 &epoch_info,
                 slot_info.state,
                 slot_info.constants,
@@ -259,7 +258,7 @@ fn replaySlot(state: *ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
         .max_age = sig.core.BlockhashQueue.MAX_RECENT_BLOCKHASHES / 2,
         .lamports_per_signature = slot_info.constants.fee_rate_governor.lamports_per_signature,
         .blockhash_queue = blockhash_queue,
-        .accounts_db = state.db_for_svm,
+        .account_reader = state.account_store.reader().forSlot(&slot_info.constants.ancestors),
         .ancestors = &slot_info.constants.ancestors,
         .feature_set = slot_info.constants.feature_set,
         .rent_collector = &epoch_info.rent_collector,

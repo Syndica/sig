@@ -94,36 +94,29 @@ pub const TransactionRollbacks = union(enum(u8)) {
     same_nonce_and_fee_payer: CopiedAccount,
     separate_nonce_and_fee_payer: [2]CopiedAccount,
 
-    pub fn new(
+    pub fn init(
         allocator: std.mem.Allocator,
-        maybe_nonce: ?CachedAccount,
+        /// Takes ownership of this
+        maybe_nonce: ?CopiedAccount,
         fee_payer: CachedAccount,
         fee_payer_rent_debit: u64,
         fee_payer_rent_epoch: sig.core.Epoch,
     ) error{OutOfMemory}!TransactionRollbacks {
-        var copied_fee_payer: CopiedAccount = .{
-            .account = fee_payer.account.*,
-            .pubkey = fee_payer.pubkey,
-        };
-        copied_fee_payer.account.lamports +|= fee_payer_rent_debit;
-        copied_fee_payer.account.data = undefined; // safety: overwritten before returning in all cases
+        const payer_lamports = fee_payer.account.lamports +| fee_payer_rent_debit;
 
         if (maybe_nonce) |nonce| {
+            errdefer allocator.free(nonce.account.data);
             if (fee_payer.pubkey.equals(&nonce.pubkey)) {
-                copied_fee_payer.account.data = try allocator.dupe(u8, nonce.account.data);
-                return .{ .same_nonce_and_fee_payer = copied_fee_payer };
+                const account = CopiedAccount.init(fee_payer, nonce.account.data, payer_lamports);
+                return .{ .same_nonce_and_fee_payer = account };
             } else {
-                var copied_nonce = CopiedAccount{
-                    .pubkey = nonce.pubkey,
-                    .account = nonce.account.*,
-                };
-                copied_nonce.account.data = try allocator.dupe(u8, nonce.account.data);
-                errdefer allocator.free(copied_nonce.account.data);
-                copied_fee_payer.account.data = try allocator.dupe(u8, fee_payer.account.data);
-                return .{ .separate_nonce_and_fee_payer = .{ copied_nonce, copied_fee_payer } };
+                const payer_data = try allocator.dupe(u8, fee_payer.account.data);
+                const payer = CopiedAccount.init(fee_payer, payer_data, payer_lamports);
+                return .{ .separate_nonce_and_fee_payer = .{ nonce, payer } };
             }
         } else {
-            copied_fee_payer.account.data = try allocator.dupe(u8, fee_payer.account.data);
+            const payer_data = try allocator.dupe(u8, fee_payer.account.data);
+            var copied_fee_payer = CopiedAccount.init(fee_payer, payer_data, payer_lamports);
             copied_fee_payer.account.rent_epoch = fee_payer_rent_epoch;
             return .{ .fee_payer_only = copied_fee_payer };
         }
@@ -152,6 +145,19 @@ pub const TransactionRollbacks = union(enum(u8)) {
 pub const CopiedAccount = struct {
     pubkey: Pubkey,
     account: AccountSharedData,
+
+    pub fn init(cached_account: CachedAccount, data: []u8, lamports: u64) CopiedAccount {
+        return .{
+            .pubkey = cached_account.pubkey,
+            .account = .{
+                .data = data,
+                .lamports = lamports,
+                .owner = cached_account.account.owner,
+                .executable = cached_account.account.executable,
+                .rent_epoch = cached_account.account.rent_epoch,
+            },
+        };
+    }
 
     pub fn getAccount(self: *const CopiedAccount) *const AccountSharedData {
         return &self.account;
@@ -258,7 +264,8 @@ pub fn loadAndExecuteTransaction(
     config: *const TransactionExecutionConfig,
     program_map: *const ProgramMap,
 ) error{OutOfMemory}!TransactionResult(ProcessedTransaction) {
-    const check_age_result = sig.runtime.check_transactions.checkAge(
+    const check_age_result = try sig.runtime.check_transactions.checkAge(
+        allocator,
         transaction,
         batch_account_cache,
         environment.blockhash_queue,
@@ -267,9 +274,11 @@ pub fn loadAndExecuteTransaction(
         environment.next_lamports_per_signature,
     );
     const maybe_nonce_info = switch (check_age_result) {
-        .ok => |cached_account| cached_account,
+        .ok => |copied_account| copied_account,
         .err => |err| return .{ .err = err },
     };
+    var nonce_account_is_owned = true;
+    defer if (nonce_account_is_owned) if (maybe_nonce_info) |n| allocator.free(n.account.data);
 
     if (sig.runtime.check_transactions.checkStatusCache(
         &transaction.msg_hash,
@@ -293,6 +302,7 @@ pub fn loadAndExecuteTransaction(
         .err => |err| return .{ .err = err },
     };
 
+    nonce_account_is_owned = false;
     const check_fee_payer_result = try sig.runtime.check_transactions.checkFeePayer(
         allocator,
         transaction,
@@ -307,6 +317,7 @@ pub fn loadAndExecuteTransaction(
         .ok => |result| result,
         .err => |err| return .{ .err = err },
     };
+    errdefer rollbacks.deinit(allocator);
 
     const loaded_accounts_result = try batch_account_cache.loadTransactionAccounts(
         allocator,

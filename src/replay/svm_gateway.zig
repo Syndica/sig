@@ -11,7 +11,7 @@ const BlockhashQueue = sig.core.BlockhashQueue;
 const RentCollector = sig.core.rent_collector.RentCollector;
 const StatusCache = sig.core.StatusCache;
 
-const AccountsDB = sig.accounts_db.AccountsDB;
+const SlotAccountReader = sig.accounts_db.SlotAccountReader;
 
 const BatchAccountCache = sig.runtime.account_loader.BatchAccountCache;
 const ComputeBudget = sig.runtime.ComputeBudget;
@@ -71,7 +71,7 @@ pub const SvmSlot = struct {
         blockhash_queue: BlockhashQueue,
 
         /// used to initialize the batch account cache and program map
-        accounts_db: *AccountsDB,
+        account_reader: SlotAccountReader,
 
         // Borrowed values to pass by reference into the SVM.
         ancestors: *const Ancestors,
@@ -100,7 +100,7 @@ pub const SvmSlot = struct {
         }
         const accounts = try BatchAccountCache.initFromAccountsDb(
             allocator,
-            params.accounts_db.accountReader().forSlot(params.ancestors), // TODO
+            params.account_reader,
             unhashed_transactions_for_account_loader,
         );
 
@@ -124,8 +124,7 @@ pub const SvmSlot = struct {
         var sysvar_cache = SysvarCache{};
         try replay.update_sysvar.fillMissingSysvarCacheEntries(
             allocator,
-            params.accounts_db,
-            params.ancestors,
+            params.account_reader,
             &sysvar_cache,
         );
 

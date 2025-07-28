@@ -179,7 +179,6 @@ fn advanceReplay(state: *ReplayState) !void {
     try trackNewSlots(
         state.allocator,
         state.account_store,
-        state.db_for_svm,
         &state.blockstore_db,
         state.slot_tracker,
         state.epochs,
@@ -210,7 +209,6 @@ fn advanceReplay(state: *ReplayState) !void {
 fn trackNewSlots(
     allocator: Allocator,
     account_store: AccountStore,
-    db_for_svm: *AccountsDB,
     blockstore_db: *BlockstoreDB,
     slot_tracker: *SlotTracker,
     epoch_tracker: *EpochTracker,
@@ -295,7 +293,7 @@ fn trackNewSlots(
             const updateLastRestartSlot = replay.update_sysvar.updateLastRestartSlot;
 
             const sysvar_deps = UpdateSysvarAccountDeps{
-                .accounts_db = db_for_svm,
+                .account_store = account_store,
                 .capitalization = &slot_state.capitalization,
                 .ancestors = &ancestors,
                 .rent = &epoch_info.rent_collector.rent,
@@ -458,7 +456,6 @@ test trackNewSlots {
     try trackNewSlots(
         allocator,
         .noop,
-        undefined,
         &blockstore_db,
         &slot_tracker,
         &epoch_tracker,
@@ -477,7 +474,6 @@ test trackNewSlots {
     try trackNewSlots(
         allocator,
         .noop,
-        undefined,
         &blockstore_db,
         &slot_tracker,
         &epoch_tracker,
@@ -497,7 +493,6 @@ test trackNewSlots {
     try trackNewSlots(
         allocator,
         .noop,
-        undefined,
         &blockstore_db,
         &slot_tracker,
         &epoch_tracker,
@@ -518,7 +513,6 @@ test trackNewSlots {
     try trackNewSlots(
         allocator,
         .noop,
-        undefined,
         &blockstore_db,
         &slot_tracker,
         &epoch_tracker,

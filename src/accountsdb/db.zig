@@ -806,7 +806,7 @@ pub const AccountsDB = struct {
             const n_accounts_this_slot = blk: {
                 var n_accounts: usize = 0;
 
-                var iter = accounts_file.iterator(self.allocator, &self.buffer_pool);
+                var iter = accounts_file.iterator(&self.buffer_pool);
                 while (try iter.nextNoData()) |account| {
                     n_accounts += 1;
                     shard_counts[
@@ -1156,9 +1156,9 @@ pub const AccountsDB = struct {
         defer zone.deinit();
 
         var timer = try sig.time.Timer.start();
-        // TODO: make cli arg
-        const n_threads = @as(u32, @truncate(try std.Thread.getCpuCount()));
-        // const n_threads = 4;
+
+        // going higher will only lead to more contention in the buffer pool reads
+        const n_threads = @min(6, @as(u32, @truncate(try std.Thread.getCpuCount())));
 
         // alloc the result
         const hashes = try self.allocator.alloc(std.ArrayListUnmanaged(Hash), n_threads);
@@ -1966,11 +1966,8 @@ pub const AccountsDB = struct {
             // we update the bank hash stats while locking the file map to avoid
             // reading accounts from the file map and getting inaccurate/stale
             // bank hash stats.
-            var account_iter = account_file.iterator(
-                frame_allocator,
-                &self.buffer_pool,
-            );
-            while (try account_iter.next()) |account_in_file| {
+            var account_iter = account_file.iterator(&self.buffer_pool);
+            while (try account_iter.next(frame_allocator)) |account_in_file| {
                 defer {
                     account_in_file.deinit(frame_allocator);
                     fba.reset();
@@ -4534,37 +4531,14 @@ test "read/write benchmark disk" {
     });
 }
 
-pub fn loadTestAccountsDbEmpty(
-    allocator: std.mem.Allocator,
-    use_disk: bool,
-    logger: Logger,
-    /// The directory into which the snapshots are unpacked, and
-    /// the `snapshots_dir` for the returned `AccountsDB`.
-    snapshot_dir: std.fs.Dir,
-) !AccountsDB {
-    var accounts_db = try AccountsDB.init(.{
-        .allocator = allocator,
-        .logger = logger,
-        .snapshot_dir = snapshot_dir,
-        .geyser_writer = null,
-        .gossip_view = null,
-        .index_allocation = if (use_disk) .disk else .ram,
-        .number_of_index_shards = 4,
-    });
-    errdefer accounts_db.deinit();
-
-    return accounts_db;
-}
-
 test "insert multiple accounts on same slot" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(0);
     const random = prng.random();
 
     // Initialize empty accounts db
-    var tmp_dir = std.testing.tmpDir(.{});
+    var accounts_db, var tmp_dir = try AccountsDB.initForTest(allocator);
     defer tmp_dir.cleanup();
-    var accounts_db = try loadTestAccountsDbEmpty(allocator, false, .noop, tmp_dir.dir);
     defer accounts_db.deinit();
 
     // Set initial slot
@@ -4643,9 +4617,8 @@ test "insert multiple accounts on multiple slots" {
     var prng = std.Random.DefaultPrng.init(0);
     const random = prng.random();
 
-    var tmp_dir = std.testing.tmpDir(.{});
+    var accounts_db, var tmp_dir = try AccountsDB.initForTest(allocator);
     defer tmp_dir.cleanup();
-    var accounts_db = try loadTestAccountsDbEmpty(allocator, false, .noop, tmp_dir.dir);
     defer accounts_db.deinit();
 
     const slots = [_]Slot{ 5, 9, 10, 11, 12 };
@@ -4683,9 +4656,8 @@ test "insert account on multiple slots" {
     var prng = std.Random.DefaultPrng.init(0);
     const random = prng.random();
 
-    var tmp_dir = std.testing.tmpDir(.{});
+    var accounts_db, var tmp_dir = try AccountsDB.initForTest(allocator);
     defer tmp_dir.cleanup();
-    var accounts_db = try loadTestAccountsDbEmpty(allocator, false, .noop, tmp_dir.dir);
     defer accounts_db.deinit();
 
     const slots = [_]Slot{ 5, 9, 10, 11, 12 };
@@ -4733,9 +4705,8 @@ test "missing ancestor returns null" {
     var prng = std.Random.DefaultPrng.init(5083);
     const random = prng.random();
 
-    var tmp_dir = std.testing.tmpDir(.{});
+    var accounts_db, var tmp_dir = try AccountsDB.initForTest(allocator);
     defer tmp_dir.cleanup();
-    var accounts_db = try loadTestAccountsDbEmpty(allocator, false, .noop, tmp_dir.dir);
     defer accounts_db.deinit();
 
     const slot: Slot = 15;
@@ -4756,9 +4727,8 @@ test "overwrite account in same slot" {
     var prng = std.Random.DefaultPrng.init(5083);
     const random = prng.random();
 
-    var tmp_dir = std.testing.tmpDir(.{});
+    var accounts_db, var tmp_dir = try AccountsDB.initForTest(allocator);
     defer tmp_dir.cleanup();
-    var accounts_db = try loadTestAccountsDbEmpty(allocator, false, .noop, tmp_dir.dir);
     defer accounts_db.deinit();
 
     const slot: Slot = 15;
@@ -4789,10 +4759,8 @@ test "insert many duplicate individual accounts, get latest with ancestors" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
     const random = prng.random();
-
-    var tmp_dir = std.testing.tmpDir(.{});
+    var accounts_db, var tmp_dir = try AccountsDB.initForTest(allocator);
     defer tmp_dir.cleanup();
-    var accounts_db = try loadTestAccountsDbEmpty(allocator, false, .noop, tmp_dir.dir);
     defer accounts_db.deinit();
 
     const pubkey_count = 50;

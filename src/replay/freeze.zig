@@ -15,7 +15,7 @@ const LtHash = core.LtHash;
 const Pubkey = core.Pubkey;
 const Slot = core.Slot;
 
-const AccountsDB = sig.accounts_db.AccountsDB;
+const AccountStore = sig.accounts_db.AccountStore;
 const AccountReader = sig.accounts_db.AccountReader;
 
 pub const FreezeParams = struct {
@@ -28,8 +28,7 @@ pub const FreezeParams = struct {
 
     pub fn init(
         logger: Logger,
-        account_reader: AccountReader,
-        db_for_svm: *AccountsDB,
+        account_store: AccountStore,
         epoch: *const sig.core.EpochConstants,
         state: *sig.core.SlotState,
         constants: *const sig.core.SlotConstants,
@@ -40,7 +39,7 @@ pub const FreezeParams = struct {
             .logger = logger,
             .state = state,
             .hash_slot = .{
-                .account_reader = account_reader,
+                .account_reader = account_store.reader(),
                 .slot = slot,
                 .parent_slot_hash = &constants.parent_hash,
                 .parent_lt_hash = &constants.parent_lt_hash,
@@ -50,7 +49,7 @@ pub const FreezeParams = struct {
                 .signature_count = state.signature_count.load(.monotonic),
             },
             .update_sysvar = .{
-                .accounts_db = db_for_svm,
+                .account_store = account_store,
                 .slot = slot,
                 .ancestors = &constants.ancestors,
                 .rent = &epoch.rent_collector.rent,

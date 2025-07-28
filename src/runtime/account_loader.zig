@@ -503,7 +503,7 @@ pub fn collectRentFromAccount(
             account.lamports,
             account.data.len,
             account.rent_epoch,
-        ) != .Exempt)
+        ) == .Exempt)
     {
         account.rent_epoch = RENT_EXEMPT_RENT_EPOCH;
     }
