@@ -97,6 +97,7 @@ pub fn replayActiveSlots(state: *ReplayExecutionState) !bool {
         // results of execution.
         const slot, const status = slot_status;
         const slot_info = state.slot_tracker.get(slot) orelse unreachable;
+        const epoch_info = state.epochs.getForSlot(slot) orelse unreachable;
 
         if (status != .confirm) continue;
 
@@ -112,7 +113,9 @@ pub fn replayActiveSlots(state: *ReplayExecutionState) !bool {
         if (slot_info.state.tickHeight() == slot_info.constants.max_tick_height) {
             state.logger.info().logf("confirmed entire slot {}", .{slot});
             try replay.freeze.freezeSlot(state.allocator, .init(
-                state.account_store.reader(),
+                .from(state.logger),
+                state.account_store,
+                &epoch_info,
                 slot_info.state,
                 slot_info.constants,
                 slot,

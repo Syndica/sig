@@ -7,31 +7,43 @@ const core = sig.core;
 const Allocator = std.mem.Allocator;
 const assert = std.debug.assert;
 
+const Logger = sig.trace.ScopedLogger(@typeName(@This()));
+
 const Ancestors = core.Ancestors;
 const Hash = core.Hash;
 const LtHash = core.LtHash;
 const Pubkey = core.Pubkey;
 const Slot = core.Slot;
 
+const AccountStore = sig.accounts_db.AccountStore;
 const AccountReader = sig.accounts_db.AccountReader;
 
+const UpdateSysvarAccountDeps = replay.update_sysvar.UpdateSysvarAccountDeps;
+const updateSlotHistory = replay.update_sysvar.updateSlotHistory;
+const updateRecentBlockhashes = replay.update_sysvar.updateRecentBlockhashes;
+
 pub const FreezeParams = struct {
+    logger: Logger,
     state: *sig.core.SlotState,
     hash_slot: HashSlotParams,
+    update_sysvar: UpdateSysvarAccountDeps,
     lamports_per_signature: u64,
     blockhash: Hash,
 
     pub fn init(
-        account_reader: AccountReader,
+        logger: Logger,
+        account_store: AccountStore,
+        epoch: *const sig.core.EpochConstants,
         state: *sig.core.SlotState,
         constants: *const sig.core.SlotConstants,
         slot: Slot,
         blockhash: Hash,
     ) FreezeParams {
         return .{
+            .logger = logger,
             .state = state,
             .hash_slot = .{
-                .account_reader = account_reader,
+                .account_reader = account_store.reader(),
                 .slot = slot,
                 .parent_slot_hash = &constants.parent_hash,
                 .parent_lt_hash = &constants.parent_lt_hash,
@@ -39,6 +51,13 @@ pub const FreezeParams = struct {
                 .blockhash = blockhash,
                 .feature_set = &constants.feature_set,
                 .signature_count = state.signature_count.load(.monotonic),
+            },
+            .update_sysvar = .{
+                .account_store = account_store,
+                .slot = slot,
+                .ancestors = &constants.ancestors,
+                .rent = &epoch.rent_collector.rent,
+                .capitalization = &state.capitalization,
             },
             .blockhash = blockhash,
             .lamports_per_signature = constants.fee_rate_governor.lamports_per_signature,
@@ -54,25 +73,29 @@ pub fn freezeSlot(allocator: Allocator, params: FreezeParams) !void {
 
     if (slot_hash.get().* != null) return; // already frozen
 
+    try updateSlotHistory(allocator, params.update_sysvar);
+    {
+        var q = params.state.blockhash_queue.write();
+        defer q.unlock();
+        try q.mut().insertHash(
+            allocator,
+            params.blockhash,
+            params.lamports_per_signature,
+        );
+    }
+    {
+        var q = params.state.blockhash_queue.read();
+        defer q.unlock();
+        try updateRecentBlockhashes(allocator, q.get(), params.update_sysvar);
+    }
+
     const maybe_lt_hash, slot_hash.mut().* = try hashSlot(allocator, params.hash_slot);
     if (maybe_lt_hash) |lt_hash| params.state.accounts_lt_hash.set(lt_hash);
 
-    // TODO: after PR #801
-    // try replay.update_sysvar.updateSlotHistory(allocator, params.update_sysvar);
-    // {
-    //     var q = params.state.blockhash_queue.write();
-    //     defer q.unlock();
-    //     try q.mut().insertHash(
-    //         allocator,
-    //         params.blockhash,
-    //         params.lamports_per_signature,
-    //     );
-    // }
-    // {
-    //     var q = params.state.blockhash_queue.read();
-    //     defer q.unlock();
-    //     try replay.update_sysvar.updateRecentBlockhashes(allocator, q.get(), params.update_sysvar);
-    // }
+    params.logger.info().logf(
+        "froze slot {} with hash {s}",
+        .{ params.hash_slot.slot, slot_hash.get().*.?.base58String().slice() },
+    );
 
     // NOTE: agave updates hard_forks and hash_overrides here
 }
@@ -123,11 +146,7 @@ pub fn hashSlot(allocator: Allocator, params: HashSlotParams) !struct { ?LtHash,
 }
 
 /// Returns the merkle root of all accounts modified in the slot
-pub fn deltaMerkleHash(
-    account_reader: AccountReader,
-    allocator: Allocator,
-    slot: Slot,
-) !Hash {
+pub fn deltaMerkleHash(account_reader: AccountReader, allocator: Allocator, slot: Slot) !Hash {
     const pubkey_hashes = pkh: {
         var iterator = account_reader.slotModifiedIterator(slot) orelse return .ZEROES;
         defer iterator.unlock();
@@ -171,7 +190,7 @@ pub fn deltaLtHash(
     slot: Slot,
     parent_ancestors: *const Ancestors,
 ) !LtHash {
-    assert(!parent_ancestors.ancestors.contains(slot));
+    assert(!parent_ancestors.containsSlot(slot));
 
     // TODO: perf - consider using a thread pool
     // TODO: perf - consider caching old hashes
