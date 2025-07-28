@@ -5,7 +5,6 @@ const Account = sig.core.Account;
 const AccountsDB = sig.accounts_db.AccountsDB;
 const LockoutIntervals = sig.consensus.replay_tower.LockoutIntervals;
 const Lockout = sig.runtime.program.vote.state.Lockout;
-const VotedStakes = sig.consensus.progress_map.consensus.VotedStakes;
 const Ancestors = sig.core.Ancestors;
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
@@ -19,6 +18,9 @@ pub const MAX_LOCKOUT_HISTORY = sig.runtime.program.vote.state.MAX_LOCKOUT_HISTO
 pub const Stake = u64;
 
 pub const VotedSlot = Slot;
+
+/// Analogous to [VotedStakes](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/consensus.rs#L169)
+pub const VotedStakes = std.AutoArrayHashMapUnmanaged(Slot, Stake);
 
 const ComputedBankState = struct {
     /// Maps each validator (by their Pubkey) to the amount of stake they have voted
@@ -37,8 +39,8 @@ const ComputedBankState = struct {
 };
 
 pub const ThresholdDecision = union(enum) {
-    passed_threshold,
-    failed_threshold: FailedThreshold,
+    passed,
+    failed: FailedThreshold,
 
     pub const FailedThreshold = struct {
         vote_depth: u64,
