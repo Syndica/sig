@@ -1804,7 +1804,8 @@ fn updateAncestorVotedStakes(
     }
 }
 
-pub fn isSlotDuplicateConfirmed(
+/// Analogous to [is_slot_duplicate_confirmed](https://github.com/anza-xyz/agave/blob/91520c7095c4db968fe666b80a1b80dfef1bd909/core/src/consensus.rs#L540)
+pub fn isDuplicateSlotConfirmed(
     slot: Slot,
     voted_stakes: *const VotedStakes,
     total_stake: Stake,
@@ -1824,7 +1825,7 @@ test "is slot duplicate confirmed not enough stake failure" {
 
     stakes.putAssumeCapacity(0, 52);
 
-    const result = isSlotDuplicateConfirmed(
+    const result = isDuplicateSlotConfirmed(
         0,
         &stakes,
         100,
@@ -1836,7 +1837,7 @@ test "is slot duplicate confirmed unknown slot" {
     var stakes = VotedStakes.empty;
     defer stakes.deinit(std.testing.allocator);
 
-    const result = isSlotDuplicateConfirmed(
+    const result = isDuplicateSlotConfirmed(
         0,
         &stakes,
         100,
@@ -1851,7 +1852,7 @@ test "is slot duplicate confirmed pass" {
 
     stakes.putAssumeCapacity(0, 53);
 
-    const result = isSlotDuplicateConfirmed(
+    const result = isDuplicateSlotConfirmed(
         0,
         &stakes,
         100,
