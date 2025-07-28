@@ -88,7 +88,7 @@ pub const Environment = struct {
     pub fn initV1Loader(
         allocator: std.mem.Allocator,
         feature_set: *const FeatureSet,
-        is_deploy: bool,
+        reject_deployment_of_broken_elfs: bool,
     ) !Registry(Syscall) {
         // Register syscalls
         var loader = Registry(Syscall){};
@@ -109,10 +109,13 @@ pub const Environment = struct {
         );
 
         // Alloc Free
-        if (!is_deploy) {
+        const disable_alloc_free = reject_deployment_of_broken_elfs and
+            feature_set.active.contains(features.DISABLE_DEPLOY_OF_ALLOC_FREE_SYSCALL);
+
+        if (!disable_alloc_free) {
             _ = try loader.registerHashed(
                 allocator,
-                "sol_alloc_free",
+                "sol_alloc_free_",
                 syscalls.allocFree,
             );
         }
