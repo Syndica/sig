@@ -70,9 +70,6 @@ pub fn freezeSlot(allocator: Allocator, params: FreezeParams) !void {
 
     if (slot_hash.get().* != null) return; // already frozen
 
-    var signature_count: [8]u8 = undefined;
-    std.mem.writeInt(u64, &signature_count, params.state.signature_count.load(.monotonic), .little);
-
     const maybe_lt_hash, slot_hash.mut().* = try hashSlot(allocator, params.hash_slot);
     if (maybe_lt_hash) |lt_hash| params.state.accounts_lt_hash.set(lt_hash);
 
@@ -138,7 +135,7 @@ pub fn hashSlot(allocator: Allocator, params: HashSlotParams) !struct { ?LtHash,
         assert(parent_ancestors.ancestors.swapRemove(params.slot));
 
         var lt_hash = params.parent_lt_hash.* orelse return error.UnknownParentLtHash;
-        lt_hash.mixIn(&try deltaLtHash(params.account_reader, params.slot, &parent_ancestors));
+        lt_hash.mixIn(try deltaLtHash(params.account_reader, params.slot, &parent_ancestors));
 
         return .{ lt_hash, Hash.generateSha256(.{ initial_hash, lt_hash.bytes() }) };
     } else {
@@ -209,11 +206,11 @@ pub fn deltaLtHash(
         const pubkey, const account = pubkey_account;
         if (try account_reader.forSlot(parent_ancestors).get(pubkey)) |old_acct| {
             if (!old_acct.equals(&account)) {
-                hash.mixOut(&old_acct.hash(LtHash, &pubkey));
-                hash.mixIn(&account.hash(LtHash, &pubkey));
+                hash.mixOut(old_acct.hash(LtHash, &pubkey));
+                hash.mixIn(account.hash(LtHash, &pubkey));
             }
         } else {
-            hash.mixIn(&account.hash(LtHash, &pubkey));
+            hash.mixIn(account.hash(LtHash, &pubkey));
         }
     }
 

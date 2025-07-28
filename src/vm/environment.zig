@@ -312,9 +312,21 @@ pub const Environment = struct {
         }
 
         // Alt_bn128
-        // if (feature_set.active.contains(feature_set.ENABLE_ALT_BN128_SYSCALL)) {
-        //     _ = try syscalls.registerHashed(allocator, "sol_alt_bn128_group_op", altBn128GroupOp,);
-        // }
+        if (feature_set.active.contains(features.ENABLE_ALT_BN128_SYSCALL)) {
+            _ = try loader.registerHashed(
+                allocator,
+                "sol_alt_bn128_group_op",
+                syscalls.ecc.altBn128GroupOp,
+            );
+        }
+
+        if (feature_set.active.contains(features.ENABLE_ALT_BN128_COMPRESSION_SYSCALL)) {
+            _ = try loader.registerHashed(
+                allocator,
+                "sol_alt_bn128_compression",
+                syscalls.ecc.altBn128Compression,
+            );
+        }
 
         // Big_mod_exp
         // if (feature_set.active.contains(feature_set.ENABLE_BIG_MOD_EXP_SYSCALL)) {
