@@ -580,6 +580,7 @@ fn deserializeParametersUnaligned(
                         if (can_data_be_mutated) |err| return err;
                     }
                 }
+                start += pre_len;
             }
         }
 
@@ -656,13 +657,13 @@ fn deserializeParametersAligned(
             if (copy_account_data) {
                 if (start + post_len > memory.len) return InstructionError.InvalidArgument;
                 const data = memory[start .. start + post_len];
-                const can_data_be_resized =
+                const data_update_err: ?InstructionError =
                     borrowed_account.checkCanSetDataLength(
                         ic.tc.accounts_resize_delta,
                         post_len,
-                    );
-                const can_data_be_mutated = borrowed_account.checkDataIsMutable();
-                if (can_data_be_resized == null and can_data_be_mutated == null) {
+                    ) orelse borrowed_account.checkDataIsMutable();
+
+                if (data_update_err == null) {
                     try borrowed_account.setDataFromSlice(
                         allocator,
                         &ic.tc.accounts_resize_delta,
@@ -670,21 +671,21 @@ fn deserializeParametersAligned(
                     );
                 } else {
                     if (!std.mem.eql(u8, borrowed_account.account.data, data)) {
-                        if (can_data_be_resized) |err| return err;
-                        if (can_data_be_mutated) |err| return err;
+                        if (data_update_err) |err| return err;
                     }
                 }
+                start += pre_len; // data
             } else {
                 start += BPF_ALIGN_OF_U128 -| alignment_offset;
                 if (start + post_len > memory.len) return InstructionError.InvalidArgument;
                 const data = memory[start .. start + post_len];
-                const can_data_be_resized =
+                const data_update_err: ?InstructionError =
                     borrowed_account.checkCanSetDataLength(
                         ic.tc.accounts_resize_delta,
                         post_len,
-                    );
-                const can_data_be_mutated = borrowed_account.checkDataIsMutable();
-                if (can_data_be_resized == null and can_data_be_mutated == null) {
+                    ) orelse borrowed_account.checkDataIsMutable();
+
+                if (data_update_err == null) {
                     try borrowed_account.setDataLength(
                         allocator,
                         &ic.tc.accounts_resize_delta,
@@ -706,8 +707,7 @@ fn deserializeParametersAligned(
                     }
                 } else {
                     if (borrowed_account.constAccountData().len != post_len) {
-                        if (can_data_be_resized) |err| return err;
-                        if (can_data_be_mutated) |err| return err;
+                        if (data_update_err) |err| return err;
                     }
                 }
             }
