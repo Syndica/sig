@@ -335,42 +335,42 @@ workflows:
       - build_linux_release:
           requires:
             - setup_zig_linux
-      # - build_linux:
-      #     requires:
-      #       - setup_zig_linux
-      # - build_and_test_hashmap:
-      #     requires:
-      #       - build_linux
-      # - test_linux:
-      #     requires:
-      #       - build_linux
-      # - test_kcov_linux:
-      #     requires:
-      #       - setup_zig_linux
-      # - gossip:
-      #     requires:
-      #       - build_linux_release
-      # - gossip_service_fuzz:
-      #     requires:
-      #       - build_linux_release
-      # - gossip_table_fuzz:
-      #     requires:
-      #       - build_linux_release
-      # - allocators_fuzz:
-      #     requires:
-      #       - build_linux_release
-      # - ledger_fuzz:
-      #     requires:
-      #       - build_linux_release
+      - build_linux:
+          requires:
+            - setup_zig_linux
+      - build_and_test_hashmap:
+          requires:
+            - build_linux
+      - test_linux:
+          requires:
+            - build_linux
+      - test_kcov_linux:
+          requires:
+            - setup_zig_linux
+      - gossip:
+          requires:
+            - build_linux_release
+      - gossip_service_fuzz:
+          requires:
+            - build_linux_release
+      - gossip_table_fuzz:
+          requires:
+            - build_linux_release
+      - allocators_fuzz:
+          requires:
+            - build_linux_release
+      - ledger_fuzz:
+          requires:
+            - build_linux_release
       - solana_conformance:
           requires:
             - build_linux_release
 
-  # check_macos:
-  #   jobs:
-  #     - setup_zig:
-  #         name: setup_zig_macos
-  #         target: "aarch64-macos"
-  #     - build_and_test_macos:
-  #         requires:
-  #           - setup_zig_macos
+  check_macos:
+    jobs:
+      - setup_zig:
+          name: setup_zig_macos
+          target: "aarch64-macos"
+      - build_and_test_macos:
+          requires:
+            - setup_zig_macos
