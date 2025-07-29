@@ -1672,7 +1672,8 @@ pub fn collectVoteLockouts(
         }
         const start_root = vote_state.root_slot;
 
-        // Add the last vote to update the `heaviest_subtree_fork_choice`
+        // Track the last vote in latest validator votes for latest frozen states
+        // so that it can be used to update the fork choice.
         if (vote_state.lastVotedSlot()) |last_landed_voted_slot| {
             if (progress_map.getHash(last_landed_voted_slot)) |frozen_hash| {
                 _ = try latest_validator_votes_for_frozen_banks.checkAddVote(
