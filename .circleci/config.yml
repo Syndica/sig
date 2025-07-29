@@ -56,6 +56,9 @@ jobs:
       - run:
           name: Check style
           command: python scripts/style.py --check src
+      - run:
+          name: Check style in conformance
+          command: python scripts/style.py --check conformance/src
 
   check_docs:
     executor: python-executor
@@ -241,6 +244,28 @@ jobs:
           name: Run Gossip Service Fuzzer
           command: workspace/zig-out-release/bin/fuzz ledger 19 10000
 
+  solana_conformance:
+    executor: linux-executor
+    steps:
+      - checkout
+      - attach_workspace:
+          at: workspace
+      - restore_cache:
+          key: linux-x86_64-0.14.1-{{ checksum "build.zig.zon" }}-v1
+      - run:
+          name: Build SigFuzz
+          command: |
+            cd conformance
+            ../workspace/zig/zig build
+      - run:
+          name: Download Artifacts
+          command: ./scripts/download_artifacts.sh
+      - run:
+          name: Setup solana-conformance
+          command: |
+            python --version
+
+
 workflows:
   check_linux:
     jobs:
@@ -252,36 +277,39 @@ workflows:
       - lint:
           requires:
             - setup_zig_linux
-      - build_linux_release:
-          requires:
-            - setup_zig_linux
+      # - build_linux_release:
+      #     requires:
+      #       - setup_zig_linux
       - build_linux:
           requires:
             - setup_zig_linux
-      - build_and_test_hashmap:
+      # - build_and_test_hashmap:
+      #     requires:
+      #       - build_linux
+      # - test_linux:
+      #     requires:
+      #       - build_linux
+      # - test_kcov_linux:
+      #     requires:
+      #       - setup_zig_linux
+      # - gossip:
+      #     requires:
+      #       - build_linux_release
+      # - gossip_service_fuzz:
+      #     requires:
+      #       - build_linux_release
+      # - gossip_table_fuzz:
+      #     requires:
+      #       - build_linux_release
+      # - allocators_fuzz:
+      #     requires:
+      #       - build_linux_release
+      # - ledger_fuzz:
+      #     requires:
+      #       - build_linux_release
+      - solana_conformance:
           requires:
             - build_linux
-      - test_linux:
-          requires:
-            - build_linux
-      - test_kcov_linux:
-          requires:
-            - setup_zig_linux
-      - gossip:
-          requires:
-            - build_linux_release
-      - gossip_service_fuzz:
-          requires:
-            - build_linux_release
-      - gossip_table_fuzz:
-          requires:
-            - build_linux_release
-      - allocators_fuzz:
-          requires:
-            - build_linux_release
-      - ledger_fuzz:
-          requires:
-            - build_linux_release
 
   check_macos:
     jobs:

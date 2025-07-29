@@ -1,0 +1,15 @@
+.{
+    .name = .sig_fuzz,
+    .version = "0.1.0",
+    .paths = .{""},
+    .fingerprint = 0xdf162ceee1635531,
+    .minimum_zig_version = "0.14.1",
+    .dependencies = .{
+        .sig = .{ .path = "../" },
+        .pb = .{
+            .url = "git+https://github.com/Rexicon226/zig-protobuf#4a11b59f6e668f97e4d0f0bfa86a4cf805a9b86e",
+            .hash = "protobuf-2.0.0-0e82aiacGwDJs2XReVH5wmkc9AJ40bS2IxfvooQwZEId",
+            .lazy = true,
+        },
+    },
+}
