@@ -1684,7 +1684,6 @@ pub fn collectVoteLockouts(
         if (start_root != vote_state.root_slot) {
             if (start_root) |root| {
                 const lockout = Lockout{ .slot = root, .confirmation_count = MAX_LOCKOUT_HISTORY };
-                logger.trace().logf("ROOT: {}", .{lockout.slot});
                 try vote_slots.put(lockout.slot);
             }
         }
