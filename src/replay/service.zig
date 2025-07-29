@@ -2,13 +2,10 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 const replay = @import("lib.zig");
 
-const collections = sig.utils.collections;
-
 const Allocator = std.mem.Allocator;
 const ThreadPool = sig.sync.ThreadPool;
 
 const Pubkey = sig.core.Pubkey;
-const Hash = sig.core.Hash;
 const Slot = sig.core.Slot;
 const SlotLeaders = sig.core.leader_schedule.SlotLeaders;
 const SlotState = sig.core.bank.SlotState;
@@ -145,130 +142,6 @@ pub const Receivers = struct {
     }
 };
 
-pub const SlotData = struct {
-    duplicate_confirmed_slots: DuplicateConfirmedSlots,
-    epoch_slots_frozen_slots: EpochSlotsFrozenSlots,
-    duplicate_slots_to_repair: DuplicateSlotsToRepair,
-    purge_repair_slot_counter: PurgeRepairSlotCounters,
-    unfrozen_gossip_verified_vote_hashes: UnfrozenGossipVerifiedVoteHashes,
-    duplicate_slots: DuplicateSlots,
-
-    /// Analogous to [DuplicateSlotsTracker](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/repair/cluster_slot_state_verifier.rs#L18)
-    pub const DuplicateSlots = collections.SortedSetUnmanaged(Slot);
-
-    /// Analogous to [DuplicateSlotsToRepair](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/repair/cluster_slot_state_verifier.rs#L19)
-    pub const DuplicateSlotsToRepair = std.AutoArrayHashMapUnmanaged(Slot, Hash);
-
-    /// Analogous to [PurgeRepairSlotCounter](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/repair/cluster_slot_state_verifier.rs#L20)
-    pub const PurgeRepairSlotCounters = collections.SortedMapUnmanaged(Slot, usize);
-
-    /// Analogous to [EpochSlotsFrozenSlots](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/repair/cluster_slot_state_verifier.rs#L22)
-    pub const EpochSlotsFrozenSlots = collections.SortedMapUnmanaged(Slot, Hash);
-
-    /// Analogous to [DuplicateConfirmedSlots](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/repair/cluster_slot_state_verifier.rs#L24)
-    pub const DuplicateConfirmedSlots = collections.SortedMapUnmanaged(Slot, Hash);
-
-    pub const empty: SlotData = .{
-        .duplicate_confirmed_slots = .empty,
-        .epoch_slots_frozen_slots = .empty,
-        .duplicate_slots_to_repair = .empty,
-        .purge_repair_slot_counter = .empty,
-        .unfrozen_gossip_verified_vote_hashes = .empty,
-        .duplicate_slots = .empty,
-    };
-
-    pub fn deinit(self: SlotData, allocator: std.mem.Allocator) void {
-        self.duplicate_confirmed_slots.deinit(allocator);
-        self.epoch_slots_frozen_slots.deinit(allocator);
-
-        var duplicate_slots_to_repair = self.duplicate_slots_to_repair;
-        duplicate_slots_to_repair.deinit(allocator);
-
-        self.purge_repair_slot_counter.deinit(allocator);
-        self.unfrozen_gossip_verified_vote_hashes.deinit(allocator);
-        self.duplicate_slots.deinit(allocator);
-    }
-};
-
-/// Analogous to [UnfrozenGossipVerifiedVoteHashes](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/unfrozen_gossip_verified_vote_hashes.rs#L8)
-pub const UnfrozenGossipVerifiedVoteHashes = struct {
-    votes_per_slot: sig.utils.collections.SortedMapUnmanaged(Slot, HashToVotesMap),
-
-    const HashToVotesMap = std.AutoArrayHashMapUnmanaged(Hash, VoteList);
-    const VoteList = std.ArrayListUnmanaged(Pubkey);
-
-    pub const empty: UnfrozenGossipVerifiedVoteHashes = .{ .votes_per_slot = .empty };
-
-    pub fn deinit(self: UnfrozenGossipVerifiedVoteHashes, allocator: std.mem.Allocator) void {
-        var votes_per_slot = self.votes_per_slot;
-        for (votes_per_slot.values()) |*htvm| {
-            for (htvm.values()) |*vl| vl.deinit(allocator);
-            htvm.deinit(allocator);
-        }
-        votes_per_slot.deinit(allocator);
-    }
-
-    /// Update `latest_validator_votes_for_frozen_slots` if gossip has seen a newer vote for a frozen slot.
-    pub fn addVote(
-        self: *UnfrozenGossipVerifiedVoteHashes,
-        allocator: std.mem.Allocator,
-        vote_pubkey: Pubkey,
-        vote_slot: Slot,
-        hash: Hash,
-        is_frozen: bool,
-        latest_validator_votes_for_frozen_slots: *LatestValidatorVotes,
-    ) !void {
-        // If this is a frozen slot, then we need to update the `latest_validator_votes_for_frozen_slots`
-        const was_added, //
-        const maybe_latest_frozen_vote_slot //
-        = if (is_frozen) try latest_validator_votes_for_frozen_slots.checkAddVote(
-            allocator,
-            vote_pubkey,
-            vote_slot,
-            hash, // is_frozen
-            .gossip,
-        ) else blk: {
-            // Non-frozen banks are not inserted because
-            // we only track frozen votes in this struct
-            const vote_map = latest_validator_votes_for_frozen_slots.latestVotes(.gossip);
-            const slot = if (vote_map.get(vote_pubkey)) |entry| entry.slot else null;
-            break :blk .{ false, slot };
-        };
-
-        const vote_slot_gt_latest_frozen_slot: bool = blk: {
-            const latest_frozen_vote_slot = maybe_latest_frozen_vote_slot orelse {
-                // If there's no latest frozen vote slot yet, then we should also insert
-                break :blk true;
-            };
-            break :blk vote_slot >= latest_frozen_vote_slot;
-        };
-        if (!was_added and vote_slot_gt_latest_frozen_slot) {
-            // At this point it must be that:
-            // 1) `vote_slot` was not yet frozen
-            // 2) and `vote_slot` >= than the latest frozen vote slot.
-
-            // Thus we want to record this vote for later, in case a slot with this `vote_slot` + hash gets
-            // frozen later
-            const vps_gop = try self.votes_per_slot.getOrPut(allocator, vote_slot);
-            errdefer if (!vps_gop.found_existing) {
-                std.debug.assert(self.votes_per_slot.orderedRemove(vps_gop.key_ptr.*));
-            };
-            const hash_to_votes: *HashToVotesMap = vps_gop.value_ptr;
-
-            if (!vps_gop.found_existing) {
-                hash_to_votes.* = .empty;
-            }
-
-            const htv_gop = try hash_to_votes.getOrPut(allocator, hash);
-            errdefer if (!htv_gop.found_existing) {
-                std.debug.assert(hash_to_votes.swapRemove(htv_gop.key_ptr.*));
-            };
-
-            try htv_gop.value_ptr.append(allocator, vote_pubkey);
-        }
-    }
-};
-
 const ReplayState = struct {
     allocator: Allocator,
     logger: Logger,
@@ -285,7 +158,7 @@ const ReplayState = struct {
     replay_tower: sig.consensus.ReplayTower,
     latest_validator_votes: LatestValidatorVotes,
     status_cache: sig.core.StatusCache,
-    slot_data: SlotData,
+    slot_data: replay.edge_cases.SlotData,
 
     arena_state: std.heap.ArenaAllocator.State,
 
