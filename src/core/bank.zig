@@ -171,6 +171,12 @@ pub const SlotState = struct {
     /// The value is only meaningful after freezing.
     accounts_lt_hash: sig.sync.Mux(?LtHash),
 
+    /// 50% burned, 50% paid to leader
+    collected_transaction_fees: Atomic(u64),
+
+    /// 100% paid to leader
+    collected_priority_fees: Atomic(u64),
+
     pub const GENESIS = SlotState{
         .blockhash_queue = .init(.DEFAULT),
         .hash = .init(null),
@@ -180,6 +186,8 @@ pub const SlotState = struct {
         .tick_height = .init(0),
         .collected_rent = .init(0),
         .accounts_lt_hash = .init(.IDENTITY),
+        .collected_transaction_fees = .init(0),
+        .collected_priority_fees = .init(0),
     };
 
     pub fn deinit(self: *SlotState, allocator: Allocator) void {
@@ -280,7 +288,8 @@ pub const EpochConstants = struct {
             .ns_per_slot = genesis_config.nsPerSlot(),
             .genesis_creation_time = genesis_config.creation_time,
             .slots_per_year = genesis_config.slotsPerYear(),
-            .stakes = try .initEmpty(allocator),
+            .stakes = try .initEmptyWithGenesisStakeHistoryEntry(allocator),
+            .rent_collector = .DEFAULT,
         };
     }
 

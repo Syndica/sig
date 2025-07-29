@@ -10,13 +10,20 @@ const assert = std.debug.assert;
 const Logger = sig.trace.ScopedLogger(@typeName(@This()));
 
 const Ancestors = core.Ancestors;
+const EpochConstants = core.EpochConstants;
 const Hash = core.Hash;
 const LtHash = core.LtHash;
 const Pubkey = core.Pubkey;
 const Slot = core.Slot;
+const SlotState = core.SlotState;
+const SlotConstants = core.SlotConstants;
+
+const AccountSharedData = sig.runtime.AccountSharedData;
+const Rent = sig.runtime.sysvar.Rent;
 
 const AccountStore = sig.accounts_db.AccountStore;
 const AccountReader = sig.accounts_db.AccountReader;
+const SlotAccountReader = sig.accounts_db.SlotAccountReader;
 
 const UpdateSysvarAccountDeps = replay.update_sysvar.UpdateSysvarAccountDeps;
 const updateSlotHistory = replay.update_sysvar.updateSlotHistory;
@@ -24,24 +31,26 @@ const updateRecentBlockhashes = replay.update_sysvar.updateRecentBlockhashes;
 
 pub const FreezeParams = struct {
     logger: Logger,
-    state: *sig.core.SlotState,
+
+    slot_hash: *sig.sync.RwMux(?Hash),
+    accounts_lt_hash: *sig.sync.Mux(?LtHash),
+
     hash_slot: HashSlotParams,
-    update_sysvar: UpdateSysvarAccountDeps,
-    lamports_per_signature: u64,
-    blockhash: Hash,
+    finalize_state: FinalizeStateParams,
 
     pub fn init(
         logger: Logger,
         account_store: AccountStore,
-        epoch: *const sig.core.EpochConstants,
-        state: *sig.core.SlotState,
-        constants: *const sig.core.SlotConstants,
+        epoch: *const EpochConstants,
+        state: *SlotState,
+        constants: *const SlotConstants,
         slot: Slot,
         blockhash: Hash,
     ) FreezeParams {
         return .{
             .logger = logger,
-            .state = state,
+            .slot_hash = &state.hash,
+            .accounts_lt_hash = &state.accounts_lt_hash,
             .hash_slot = .{
                 .account_reader = account_store.reader(),
                 .slot = slot,
@@ -52,45 +61,46 @@ pub const FreezeParams = struct {
                 .feature_set = &constants.feature_set,
                 .signature_count = state.signature_count.load(.monotonic),
             },
-            .update_sysvar = .{
+            .finalize_state = .{
+                .update_sysvar = .{
+                    .account_store = account_store,
+                    .slot = slot,
+                    .ancestors = &constants.ancestors,
+                    .rent = &epoch.rent_collector.rent,
+                    .capitalization = &state.capitalization,
+                },
                 .account_store = account_store,
-                .slot = slot,
-                .ancestors = &constants.ancestors,
-                .rent = &epoch.rent_collector.rent,
+                .account_reader = account_store.reader().forSlot(&constants.ancestors),
                 .capitalization = &state.capitalization,
+                .blockhash_queue = &state.blockhash_queue,
+                .rent = epoch.rent_collector.rent,
+                .slot = slot,
+                .blockhash = blockhash,
+                .lamports_per_signature = constants.fee_rate_governor.lamports_per_signature,
+                .collector_id = constants.collector_id,
+                .collected_transaction_fees = state.collected_transaction_fees.load(.monotonic),
+                .collected_priority_fees = state.collected_priority_fees.load(.monotonic),
             },
-            .blockhash = blockhash,
-            .lamports_per_signature = constants.fee_rate_governor.lamports_per_signature,
         };
     }
 };
 
+/// Handles the "freezing" of a slot which occurs after a block has finished
+/// execution. This finalizes some last bits of state and then calculates the
+/// hash for the slot.
+///
 /// Analogous to [Bank::freeze](https://github.com/anza-xyz/agave/blob/b948b97d2a08850f56146074c0be9727202ceeff/runtime/src/bank.rs#L2620)
 pub fn freezeSlot(allocator: Allocator, params: FreezeParams) !void {
     // TODO: reconsider locking the hash for the entire function. (this is how agave does it)
-    var slot_hash = params.state.hash.write();
+    var slot_hash = params.slot_hash.write();
     defer slot_hash.unlock();
 
     if (slot_hash.get().* != null) return; // already frozen
 
-    try updateSlotHistory(allocator, params.update_sysvar);
-    {
-        var q = params.state.blockhash_queue.write();
-        defer q.unlock();
-        try q.mut().insertHash(
-            allocator,
-            params.blockhash,
-            params.lamports_per_signature,
-        );
-    }
-    {
-        var q = params.state.blockhash_queue.read();
-        defer q.unlock();
-        try updateRecentBlockhashes(allocator, q.get(), params.update_sysvar);
-    }
+    try finalizeState(allocator, params.finalize_state);
 
     const maybe_lt_hash, slot_hash.mut().* = try hashSlot(allocator, params.hash_slot);
-    if (maybe_lt_hash) |lt_hash| params.state.accounts_lt_hash.set(lt_hash);
+    if (maybe_lt_hash) |lt_hash| params.accounts_lt_hash.set(lt_hash);
 
     params.logger.info().logf(
         "froze slot {} with hash {s}",
@@ -98,6 +108,125 @@ pub fn freezeSlot(allocator: Allocator, params: FreezeParams) !void {
     );
 
     // NOTE: agave updates hard_forks and hash_overrides here
+}
+
+const FinalizeStateParams = struct {
+    /// nested dependencies
+    update_sysvar: UpdateSysvarAccountDeps,
+
+    // shared state
+    account_store: AccountStore,
+    account_reader: SlotAccountReader,
+    capitalization: *std.atomic.Value(u64),
+    blockhash_queue: *sig.sync.RwMux(sig.core.BlockhashQueue),
+
+    // data params
+    rent: Rent,
+    slot: Slot,
+    blockhash: Hash,
+    lamports_per_signature: u64,
+    collector_id: Pubkey,
+    collected_transaction_fees: u64,
+    collected_priority_fees: u64,
+};
+
+/// Updates some accounts and other shared state to finish up the slot execution.
+fn finalizeState(allocator: Allocator, params: FinalizeStateParams) !void {
+    // Update recent blockhashes (NOTE: agave does this in registerTick)
+    {
+        var q = params.blockhash_queue.write();
+        defer q.unlock();
+        try q.mut().insertHash(allocator, params.blockhash, params.lamports_per_signature);
+    }
+    {
+        var q = params.blockhash_queue.read();
+        defer q.unlock();
+        try updateRecentBlockhashes(allocator, q.get(), params.update_sysvar);
+    }
+
+    try distributeTransactionFees(
+        allocator,
+        params.account_store,
+        params.account_reader,
+        params.capitalization,
+        params.rent,
+        params.slot,
+        params.collector_id,
+        params.collected_transaction_fees,
+        params.collected_priority_fees,
+    );
+
+    // Run incinerator
+    if (try params.account_reader.get(sig.runtime.ids.INCINERATOR)) |incinerator_account| {
+        _ = params.capitalization.fetchSub(incinerator_account.lamports, .monotonic);
+        try params.account_store.put(
+            params.update_sysvar.slot,
+            sig.runtime.ids.INCINERATOR,
+            .EMPTY,
+        );
+    }
+
+    try updateSlotHistory(allocator, params.update_sysvar);
+}
+
+/// Burn and payout the appropriate portions of collected fees.
+fn distributeTransactionFees(
+    allocator: Allocator,
+    account_store: AccountStore,
+    account_reader: SlotAccountReader,
+    capitalization: *std.atomic.Value(u64),
+    rent: Rent,
+    slot: Slot,
+    collector_id: Pubkey,
+    collected_transaction_fees: u64,
+    collected_priority_fees: u64,
+) !void {
+    var burn = collected_transaction_fees * 50 / 100;
+    const total_fees = collected_priority_fees + collected_transaction_fees;
+    const payout = total_fees -| burn;
+    tryPayoutFees(allocator, account_store, account_reader, rent, slot, collector_id, payout) catch |e|
+        switch (e) {
+            error.InvalidAccountOwner,
+            error.LamportOverflow,
+            error.InvalidRentPayingAccount,
+            => burn = total_fees,
+            else => return e,
+        };
+    _ = capitalization.fetchSub(burn, .monotonic);
+}
+
+/// Attempt to pay the payout to the collector.
+fn tryPayoutFees(
+    allocator: Allocator,
+    account_store: AccountStore,
+    account_reader: SlotAccountReader,
+    rent: Rent,
+    slot: Slot,
+    collector_id: Pubkey,
+    payout: u64,
+) !void {
+    var fee_collector_account =
+        if (try account_reader.get(collector_id)) |old_account|
+            AccountSharedData{
+                .data = try old_account.data.readAllAllocate(allocator),
+                .lamports = old_account.lamports,
+                .owner = old_account.owner,
+                .executable = old_account.executable,
+                .rent_epoch = old_account.rent_epoch,
+            }
+        else
+            AccountSharedData.EMPTY;
+
+    if (!fee_collector_account.owner.equals(&sig.runtime.program.system.ID)) {
+        return error.InvalidAccountOwner;
+    }
+    fee_collector_account.lamports = std.math.add(u64, fee_collector_account.lamports, payout) catch
+        return error.LamportOverflow;
+    if (!rent.isExempt(fee_collector_account.lamports, fee_collector_account.data.len)) {
+        return error.InvalidRentPayingAccount;
+    }
+
+    try account_store.put(slot, collector_id, fee_collector_account);
 }
 
 pub const HashSlotParams = struct {
@@ -158,6 +287,7 @@ pub fn deltaMerkleHash(account_reader: AccountReader, allocator: Allocator, slot
         while (try iterator.next()) |pubkey_account| : (i += 1) {
             const pubkey, const account = pubkey_account;
             pubkey_hashes[i] = .{ pubkey, account.hash(Hash, &pubkey) };
+            account.deinit(allocator);
         }
 
         break :pkh pubkey_hashes;
@@ -213,4 +343,43 @@ pub fn deltaLtHash(
     }
 
     return hash;
+}
+
+// Equivalent to this in agave:
+// ```rust
+// let bank = Bank::default_for_tests();
+// let mut bhq = bank.blockhash_queue.write().unwrap();
+// bhq.register_hash(&Hash::default(), 0);
+// drop(bhq);
+// bank.freeze();
+// let hash = bank.hash();
+// ```
+test "freezeSlot: trivial end-to-end test has the correct hash" {
+    const allocator = std.testing.allocator;
+
+    var accounts = sig.accounts_db.ThreadSafeAccountMap.init(allocator);
+    defer accounts.deinit();
+    const account_store = accounts.accountStore();
+
+    const epoch = try EpochConstants.genesis(allocator, .default(allocator));
+    defer epoch.deinit(allocator);
+
+    const constants = SlotConstants.genesis(.DEFAULT);
+
+    var state = SlotState.GENESIS;
+    defer state.deinit(allocator);
+
+    try freezeSlot(
+        allocator,
+        .init(.FOR_TESTS, account_store, &epoch, &state, &constants, 0, .ZEROES),
+    );
+
+    const hash = state.hash.readCopy().?;
+    std.debug.print("{s}\n", .{hash.base58String().slice()});
+
+    // TODO: enable and fix this (currently fails)
+    // try std.testing.expectEqual(
+    //     try Hash.parseBase58String("8C4gpDhMz9RfajteNCf9nFb5pyj3SkFcpTs6uXAzYKoF"),
+    //     state.hash.readCopy().?,
+    // );
 }

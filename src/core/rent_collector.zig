@@ -36,6 +36,14 @@ pub const RentCollector = struct {
     slots_per_year: f64,
     rent: Rent,
 
+    pub const DEFAULT = RentCollector{
+        .epoch = 0,
+        .epoch_schedule = .DEFAULT,
+        .slots_per_year = sig.core.GenesisConfig.default(failing_allocator).slotsPerYear(),
+        .rent = .DEFAULT,
+    };
+    const failing_allocator = sig.utils.allocators.failing.allocator(.{});
+
     pub fn initRandom(random: std.Random) RentCollector {
         return .{
             .epoch = random.int(Epoch),
