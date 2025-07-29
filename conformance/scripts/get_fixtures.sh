@@ -1,6 +1,8 @@
 #!/bin/bash
 
 PASSING_DIRS=(
+    "elf_loader/fixtures"
+
     "syscall/fixtures/abort"
     "syscall/fixtures/alt_bn128"
     "syscall/fixtures/blake3"
