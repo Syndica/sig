@@ -28,6 +28,9 @@ pub fn build(b: *std.Build) void {
         .include_directories = &.{"protosol/proto"},
     });
 
+    const proto_step = b.step("protobuf", "Generate the `protosol` directory");
+    proto_step.dependOn(&protoc_step.step);
+
     const lib = b.addLibrary(.{
         .name = "solfuzz_sig",
         .linkage = .dynamic,
@@ -44,6 +47,5 @@ pub fn build(b: *std.Build) void {
     });
 
     lib.root_module.fuzz = true;
-    lib.step.dependOn(&protoc_step.step);
     b.installArtifact(lib);
 }
