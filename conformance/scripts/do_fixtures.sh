@@ -1,3 +1,5 @@
+#!/bin/bash
+
 cd solana-conformance
 source test_suite_env/bin/activate
 

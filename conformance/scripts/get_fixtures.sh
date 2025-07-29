@@ -27,8 +27,8 @@ PASSING_DIRS=(
     "instr/fixtures/zk_sdk"
 
     # "vm_interp/fixtures/latest"
-    # "vm_interp/fixtures/v0"
-    # "vm_interp/fixtures/v1"
+    "vm_interp/fixtures/v0"
+    "vm_interp/fixtures/v1"
     # "vm_interp/fixtures/v2"
     # "vm_interp/fixtures/v3"
 
