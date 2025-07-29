@@ -108,7 +108,7 @@ pub const RentCollector = struct {
     }
 
     pub fn shouldCollectRent(address: *const Pubkey, executable: bool) bool {
-        return !(executable or address.equals(&sig.runtime.ids.Incinerator));
+        return !(executable or address.equals(&sig.runtime.ids.INCINERATOR));
     }
 
     pub fn getRentDue(
@@ -175,7 +175,7 @@ pub const RentCollector = struct {
         post: RentState,
         address: *const Pubkey,
     ) error{InsufficientFundsForRent}!void {
-        if (sig.runtime.ids.Incinerator.equals(address)) return;
+        if (sig.runtime.ids.INCINERATOR.equals(address)) return;
         if (!transitionAllowed(pre, post)) return error.InsufficientFundsForRent;
     }
 };
@@ -227,7 +227,7 @@ test "calculate rent result" {
     account.executable = false;
     try std.testing.expectEqual(
         .Exempt,
-        collector.calculateRentResult(&sig.runtime.ids.Incinerator, account),
+        collector.calculateRentResult(&sig.runtime.ids.INCINERATOR, account),
     );
     {
         var account_clone = account;
@@ -236,7 +236,7 @@ test "calculate rent result" {
 
         try std.testing.expectEqual(
             CollectedInfo.NoneCollected,
-            collector.collectFromExistingAccount(&sig.runtime.ids.Incinerator, &account_clone),
+            collector.collectFromExistingAccount(&sig.runtime.ids.INCINERATOR, &account_clone),
         );
         try std.testing.expectEqualDeep(account_expected, account_clone);
     }
