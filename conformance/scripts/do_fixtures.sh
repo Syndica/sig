@@ -14,4 +14,4 @@ solana-test-suite create-fixtures \
 echo "Running fixtures"
 solana-test-suite exec-fixtures \
 -t ../conformance/zig-out/lib/libsolfuzz_sig.so \
--i test_fixtures/
+-i test_fixtures/ | tee /dev/tty | grep "Failed: 0,"
