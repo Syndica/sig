@@ -1705,7 +1705,7 @@ pub fn collectVoteLockouts(
         }
 
         // The last vote in the vote stack is a simulated vote on bank_slot, which
-        // we added to the vote stack earlier in this function by calling processVote().
+        // we added to the vote stack earlier in this function by calling processNextVoteSlot().
         // We don't want to update the ancestors stakes of this vote b/c it does not
         // represent an actual vote by the validator.
 
