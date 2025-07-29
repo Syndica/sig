@@ -272,7 +272,7 @@ jobs:
             mv ../workspace/conformance-release/lib/libsolfuzz_sig.so zig-out/lib
       - run:
           name: Download Artifacts
-          command: ./scripts/download_artifacts.sh
+          command: ./conformance/scripts/download_artifacts.sh
       - run:
           name: Setup solana-conformance
           command: |
@@ -314,12 +314,8 @@ jobs:
             - test-vectors/
       - run:
           name: Run Fixtures
-          command: |
-            split_tests=$(./conformance/scripts/get_fixtures.sh | circleci tests split)
-            echo "$split_tests" > tests-to-run.txt
-            mkdir test-inputs/
-            xargs -a tests-to-run.txt cp -t test-inputs/
-            ./conformance/scripts/do_fixtures.sh
+          command: ./conformance/scripts/fixtures.sh
+            
             
 workflows:
   check_linux:

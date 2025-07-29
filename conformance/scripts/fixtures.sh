@@ -67,6 +67,32 @@ PASSING_DIRS=(
     # "vm_interp/fixtures/v3"
 )
 
+FIXTURES=()
+
 for dir in "${PASSING_DIRS[@]}"; do
-  find "./test-vectors/$dir" -type f -name '*.fix'
+  while IFS= read -r -d '' file; do
+    FIXTURES+=("$file")
+  done < <(find "./test-vectors/$dir" -type f -name '*.fix' -print0)
 done
+
+mkdir -p test-inputs/
+printf "%s\n" "${FIXTURES[@]}" \
+  | circleci tests split \
+  | xargs -d '\n' -I{} cp "{}" test-inputs/
+
+
+cd solana-conformance
+source test_suite_env/bin/activate
+
+export LD_PRELOAD=/lib/x86_64-linux-gnu/libasan.so.8
+export ASAN_OPTIONS=detect_leaks=0
+
+echo "Generating fixtures"
+solana-test-suite create-fixtures \
+-s ../libsolfuzz_agave.so \
+-i "../test-inputs"
+
+echo "Running fixtures"
+solana-test-suite exec-fixtures \
+-t ../conformance/zig-out/lib/libsolfuzz_sig.so \
+-i test_fixtures/ | tee /dev/tty | grep -q "Failed: 0,"
