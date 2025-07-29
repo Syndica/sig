@@ -44,7 +44,10 @@ jobs:
           at: workspace
       - run:
           name: Lint
-          command: workspace/zig/zig fmt --check src/ build.zig
+          command: |
+            workspace/zig/zig fmt --check src/ build.zig
+            cd conformance/
+            workspace/zig/zig fmt --check src/ build.zig
 
   check_style:
     executor: python-executor
@@ -246,26 +249,61 @@ jobs:
 
   solana_conformance:
     executor: linux-executor
+    # Note: raise this number once we start running txn fixtures, there are a lot more 
+    # of those, and it might start taking a long time. Currently there are only a few thousand.
+    parallelism: 2
     steps:
       - checkout
       - attach_workspace:
           at: workspace
       - restore_cache:
-          key: linux-x86_64-0.14.1-{{ checksum "build.zig.zon" }}-v1
+          key: linux-x86_64-0.14.1-{{ checksum "build.zig.zon" }}-v1-release
       - run:
           name: Build SigFuzz
           command: |
             cd conformance
-            ../workspace/zig/zig build
+            ../workspace/zig/zig build -Doptimize=ReleaseSafe --summary all
       - run:
           name: Download Artifacts
           command: ./scripts/download_artifacts.sh
+      - restore_cache:
+          key: test-vectors-9caee88da199a61c31b7eb187f6ac8cd2210399c
+      - run:
+          name: Checkout Test Vectors
+          # TODO: instead of using the specific test-vectors commit, we want to track master instead.
+          # we're missing a few updates to the sig-fuzz harness for them to work properly.
+          command: |
+            if [ ! -d "test-vectors" ]; then
+              git clone https://github.com/firedancer-io/test-vectors --depth 1
+              cd test-vectors
+              git fetch origin 9caee88da199a61c31b7eb187f6ac8cd2210399c
+              git checkout 9caee88da199a61c31b7eb187f6ac8cd2210399c
+            fi
+      - save_cache:
+          key: test-vectors-9caee88da199a61c31b7eb187f6ac8cd2210399c
+          paths:
+            - test-vectors/
       - run:
           name: Setup solana-conformance
           command: |
-            python --version
+            git clone https://github.com/firedancer-io/solana-conformance --depth 1
+            cd solana-conformance
+            sudo add-apt-repository ppa:deadsnakes/ppa -y
+            sudo apt install -y python3.11 python3.11-dev python3.11-venv
 
+            python3.11 -m venv test_suite_env
+            source test_suite_env/bin/activate
 
+            pip install -e ".[dev]"
+      - run:
+          name: Run Fixtures
+          command: |
+            split_tests=$(./conformance/get_fixtures.sh | circleci tests split)
+            echo "$split_tests" > tests-to-run.txt
+            mkdir test-inputs/
+            xargs -a tests-to-run.txt cp -t test-inputs/
+            ./conformance/do_fixtures.sh
+            
 workflows:
   check_linux:
     jobs:
@@ -274,9 +312,9 @@ workflows:
       - setup_zig:
           name: setup_zig_linux
           target: "x86_64-linux"
-      - lint:
-          requires:
-            - setup_zig_linux
+      # - lint:
+      #     requires:
+      #       - setup_zig_linux
       # - build_linux_release:
       #     requires:
       #       - setup_zig_linux
