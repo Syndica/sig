@@ -12,7 +12,7 @@ const Pubkey = core.Pubkey;
 const Transaction = core.Transaction;
 const TransactionAddressLookup = core.transaction.AddressLookup;
 
-const AccountReader = sig.accounts_db.AccountReader;
+const SlotAccountReader = sig.accounts_db.SlotAccountReader;
 
 const AddressLookupTable = sig.runtime.program.address_lookup_table.AddressLookupTable;
 const InstructionInfo = sig.runtime.InstructionInfo;
@@ -54,9 +54,8 @@ pub const ResolvedTransaction = struct {
 
 pub fn resolveBatch(
     allocator: Allocator,
-    account_reader: AccountReader,
+    account_reader: SlotAccountReader,
     batch: []const Transaction,
-    ancestors: *const Ancestors,
 ) !ResolvedBatch {
     var accounts = try std.ArrayListUnmanaged(LockableAccount)
         .initCapacity(allocator, Transaction.numAccounts(batch));
@@ -66,7 +65,7 @@ pub fn resolveBatch(
     errdefer allocator.free(resolved_txns);
 
     for (batch, resolved_txns) |transaction, *resolved| {
-        resolved.* = try resolveTransaction(allocator, account_reader, transaction, ancestors);
+        resolved.* = try resolveTransaction(allocator, account_reader, transaction);
         for (
             resolved.accounts.items(.pubkey),
             resolved.accounts.items(.is_writable),
@@ -86,9 +85,8 @@ pub fn resolveBatch(
 /// - Use `deinit` to free this struct
 fn resolveTransaction(
     allocator: Allocator,
-    account_reader: AccountReader,
+    account_reader: SlotAccountReader,
     transaction: Transaction,
-    ancestors: *const Ancestors,
 ) !ResolvedTransaction {
     const message = transaction.msg;
 
@@ -96,7 +94,6 @@ fn resolveTransaction(
         allocator,
         account_reader,
         message.address_lookups,
-        ancestors,
     );
     defer {
         allocator.free(lookups.writable);
@@ -193,9 +190,8 @@ fn resolveTransaction(
 
 fn resolveLookupTableAccounts(
     allocator: Allocator,
-    account_reader: AccountReader,
+    account_reader: SlotAccountReader,
     address_lookups: []const TransactionAddressLookup,
-    ancestors: *const Ancestors,
 ) !struct { writable: []const Pubkey, readonly: []const Pubkey } {
     // count number of accounts
     var total_writable: usize = 0;
@@ -215,7 +211,7 @@ fn resolveLookupTableAccounts(
 
     // handle lookup table accounts
     for (address_lookups) |lookup| {
-        const table = try getLookupTable(account_reader, lookup.table_address, ancestors) orelse
+        const table = try getLookupTable(account_reader, lookup.table_address) orelse
             return error.LookupTableAccountNotFound;
 
         // resolve writable addresses
@@ -242,15 +238,14 @@ fn resolveLookupTableAccounts(
 }
 
 fn getLookupTable(
-    account_reader: AccountReader,
+    account_reader: SlotAccountReader,
     table_address: Pubkey,
-    ancestors: *const Ancestors,
 ) !?AddressLookupTable {
     // TODO: Ensure the account comes from a valid slot by checking
     // it against the current slot's ancestors. This won't be usable
     // until consensus is implemented in replay, so it's not
     // implemented yet.
-    const account = try account_reader.get(table_address, ancestors) orelse return null;
+    const account = try account_reader.get(table_address) orelse return null;
     defer account.deinit(account_reader.allocator());
     if (account.data.len() > AddressLookupTable.MAX_SERIALIZED_SIZE) {
         return error.LookupTableAccountOverflow;
@@ -400,9 +395,8 @@ test resolveBatch {
 
     const resolved = try resolveBatch(
         std.testing.allocator,
-        map.accountReader(),
+        map.accountReader().forSlot(&ancestors),
         &.{tx},
-        &ancestors,
     );
     defer resolved.deinit(std.testing.allocator);
 

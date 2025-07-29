@@ -9,38 +9,33 @@ const Duration = sig.time.Duration;
 
 pub const BenchTimeUnit = enum {
     nanos,
+    micros,
     millis,
     seconds,
 
     pub fn convertDuration(self: BenchTimeUnit, duration: Duration) u64 {
         return switch (self) {
             .nanos => duration.asNanos(),
+            .micros => duration.asMicros(),
             .millis => duration.asMillis(),
             .seconds => duration.asSecs(),
-        };
-    }
-
-    pub fn toString(self: BenchTimeUnit) []const u8 {
-        return switch (self) {
-            .nanos => "nanos",
-            .millis => "millis",
-            .seconds => "seconds",
         };
     }
 };
 
 const Benchmark = enum {
     all,
-    accounts_db,
     accounts_db_readwrite,
     accounts_db_snapshot, // expensive
+    accounts_db,
     bincode,
     geyser,
     gossip,
     ledger,
+    socket_utils,
     swissmap,
     sync,
-    socket_utils,
+    zksdk,
 };
 
 fn exitWithUsage() noreturn {
@@ -354,6 +349,17 @@ pub fn main() !void {
         try @import("geyser/lib.zig").benchmark.runBenchmark(logger);
     }
 
+    if (filter == .zksdk or run_all_benchmarks) {
+        try benchmark(
+            allocator,
+            logger,
+            @import("zksdk/benchmarks.zig").Benchmark,
+            max_time_per_bench,
+            .micros,
+            &maybe_metrics,
+        );
+    }
+
     // save metrics
     if (collect_metrics) {
         try saveMetricsJson(
@@ -599,7 +605,7 @@ pub fn benchmark(
                         errdefer allocator.free(name);
                         const metric: Metric = .{
                             .name = name,
-                            .unit = time_unit.toString(),
+                            .unit = @tagName(time_unit),
                             .value = max,
                             .allocator = allocator,
                         };
@@ -689,7 +695,7 @@ pub fn benchmark(
                             };
                             const metric: Metric = .{
                                 .name = name,
-                                .unit = time_unit.toString(),
+                                .unit = @tagName(time_unit),
                                 .value = value,
                                 .allocator = allocator,
                             };
