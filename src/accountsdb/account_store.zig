@@ -395,7 +395,7 @@ pub const ThreadSafeAccountMap = struct {
         pub fn next(self: *ThreadSafeAccountMap.SlotModifiedIterator) !?struct { Pubkey, Account } {
             std.debug.assert(self.cursor != std.math.maxInt(usize));
             defer self.cursor += 1;
-            if (self.cursor > self.slot_list.len) return null;
+            if (self.cursor >= self.slot_list.len) return null;
             const pubkey, const account = self.slot_list[self.cursor];
             return .{ pubkey, try toAccount(self.allocator, account) };
         }
