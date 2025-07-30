@@ -133,6 +133,31 @@ pub const TransactionRollbacks = union(enum(u8)) {
             },
         }
     }
+
+    /// Number of accounts tracked for rollback
+    ///
+    /// Analogous to [count](https://github.com/anza-xyz/agave/blob/10fe1eb29aac9c236fd72d08ae60a3ef61ee8353/svm/src/rollback_accounts.rs#L80).
+    pub fn count(self: *const TransactionRollbacks) usize {
+        return switch (self.*) {
+            .fee_payer_only, .same_nonce_and_fee_payer => 1,
+            .separate_nonce_and_fee_payer => 2,
+        };
+    }
+
+    /// Size of accounts tracked for rollback, used when calculating
+    /// the actual cost of transaction processing in the cost model.
+    ///
+    /// Analogous to [data_size](https://github.com/anza-xyz/agave/blob/10fe1eb29aac9c236fd72d08ae60a3ef61ee8353/svm/src/rollback_accounts.rs#L89).
+    pub fn dataSize(self: *const TransactionRollbacks) usize {
+        return switch (self.*) {
+            .fee_payer_only => |fee_payer_account| fee_payer_account.account.data.len,
+            .same_nonce_and_fee_payer => |nonce| nonce.account.data.len,
+            .separate_nonce_and_fee_payer => |pair| blk: {
+                const nonce, const fee_payer_account = pair;
+                break :blk fee_payer_account.account.data.len +| nonce.account.data.len;
+            },
+        };
+    }
 };
 
 pub const CopiedAccount = struct {
@@ -187,6 +212,22 @@ pub const ProcessedTransaction = union(enum(u8)) {
             },
             else => {},
         }
+    }
+
+    /// Analogous to [executed_units](https://github.com/anza-xyz/agave/blob/10fe1eb29aac9c236fd72d08ae60a3ef61ee8353/svm/src/transaction_processing_result.rs#L91).
+    pub fn executedUnits(self: *const ProcessedTransaction) ?u64 {
+        return switch (self.*) {
+            .executed => |executed| executed.executed_transaction.compute_meter,
+            .fees_only => null,
+        };
+    }
+
+    /// Analogous to [loaded_accounts_data_size](https://github.com/anza-xyz/agave/blob/10fe1eb29aac9c236fd72d08ae60a3ef61ee8353/svm/src/transaction_processing_result.rs#L97).
+    pub fn loadedAccountsDataSize(self: *const ProcessedTransaction) u32 {
+        return switch (self.*) {
+            .executed => |context| context.loaded_accounts.loaded_accounts_data_size,
+            .fees_only => |fees_only| @intCast(fees_only.rollbacks.dataSize()),
+        };
     }
 };
 
