@@ -337,6 +337,8 @@ pub fn execute(
         .deactivate_delinquent => {
             var me = try getStakeAccount(ic);
             defer me.release();
+
+            try ic.ixn_info.checkNumberOfAccounts(3);
             const clock = try ic.tc.sysvar_cache.get(sysvar.Clock);
 
             try deactivateDelinquent(allocator, ic, &me, 1, 2, clock.epoch);
@@ -522,25 +524,26 @@ fn authorizeWithSeed(
     const meta = ic.ixn_info.getAccountMetaAtIndex(authority_base_index) orelse
         return error.MissingAccount;
 
-    const signers = if (meta.is_signer)
-        &.{
-            sig.runtime.pubkey_utils.createWithSeed(
-                meta.pubkey,
-                authority_seed,
-                authority_owner.*,
-            ) catch |err| {
-                ic.tc.custom_error = @intFromError(err);
-                return error.Custom;
-            },
-        }
-    else
-        &.{};
+    var signers: std.BoundedArray(Pubkey, 1) = .{};
+    if (meta.is_signer) {
+        const account = ic.tc.getAccountAtIndex(meta.index_in_transaction) orelse
+            return error.NotEnoughAccountKeys;
+
+        signers.appendAssumeCapacity(sig.runtime.pubkey_utils.createWithSeed(
+            account.pubkey,
+            authority_seed,
+            authority_owner.*,
+        ) catch {
+            // ic.tc.custom_error = @intFromError(err);
+            return error.Custom;
+        });
+    }
 
     return try authorize(
         allocator,
         ic,
         stake_account,
-        signers,
+        signers.constSlice(),
         new_authority,
         stake_authorize,
         clock,
@@ -645,6 +648,11 @@ fn delegate(
     const vote_pubkey, const vote_state = blk: {
         const vote_account = try ic.borrowInstructionAccount(vote_account_index);
         defer vote_account.release();
+
+        if (!vote_account.account.owner.equals(&sig.runtime.program.vote.ID)) {
+            return error.IncorrectProgramId;
+        }
+
         break :blk .{
             vote_account.pubkey,
             // weirdness: error handling for this is done later
@@ -1121,9 +1129,9 @@ const MergeKind = union(enum) {
     ) (error{OutOfMemory} || InstructionError)!?StakeStateV2 {
         try metasCanMerge(ic, &self.meta(), &source.meta(), clock);
 
-        {
-            const self_stake = self.activeStake() orelse return null;
-            const source_stake = source.activeStake() orelse return null;
+        blk: {
+            const self_stake = self.activeStake() orelse break :blk;
+            const source_stake = source.activeStake() orelse break :blk;
             try activeDelegationsCanMerge(
                 ic,
                 &self_stake.delegation,
@@ -1454,15 +1462,20 @@ fn acceptableReferenceEpochCredits(
     epoch_credits: []const runtime.program.vote.state.EpochCredit,
     current_epoch: Epoch,
 ) bool {
-    const epoch_index = sub(epoch_credits.len, 5) orelse return false;
+    const epoch_index = sub(
+        epoch_credits.len,
+        MINIMUM_DELINQUENT_EPOCHS_FOR_DEACTIVATION,
+    ) orelse return false;
 
     var epoch = current_epoch;
 
-    var i = epoch_credits.len - 1;
-    while (i >= epoch_index) : (i -|= 1) {
-        if (epoch_credits[i].epoch != epoch) return false;
+    const slice = epoch_credits[epoch_index..];
+    for (0..slice.len) |i| {
+        const vote_epoch = slice[slice.len - i - 1].epoch;
+        if (vote_epoch != epoch) return false;
         epoch -|= 1;
     }
+
     return true;
 }
 
