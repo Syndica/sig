@@ -78,10 +78,12 @@ pub const Account = struct {
     }
 
     pub fn ltHash(self: *const Account, pubkey: Pubkey) LtHash {
+        if (self.lamports == 0) return .IDENTITY;
         return self.doHash(LtHash, pubkey, false);
     }
 
     pub fn hash(self: *const Account, pubkey: Pubkey) Hash {
+        if (self.lamports == 0) return .ZEROES;
         return self.doHash(Hash, pubkey, true);
     }
 
