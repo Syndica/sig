@@ -56,7 +56,6 @@ const InstructionTrace = TransactionContext.InstructionTrace;
 pub const RuntimeTransaction = struct {
     signature_count: u64,
     fee_payer: Pubkey,
-    version: sig.core.transaction.Version,
     msg_hash: Hash,
     recent_blockhash: Hash,
     instruction_infos: []const InstructionInfo,
