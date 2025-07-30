@@ -41,7 +41,7 @@ pub const COMPUTE_UNITS = 750;
 pub fn execute(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
-) (error{OutOfMemory} || InstructionError)!void { 
+) (error{OutOfMemory} || InstructionError)!void {
     // agave: consumed in declare_process_instruction
     try ic.tc.consumeCompute(program.COMPUTE_UNITS);
 
