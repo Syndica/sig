@@ -1,4 +1,5 @@
 const std = @import("std");
+const protobuf = @import("pb");
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
@@ -12,12 +13,7 @@ pub fn build(b: *std.Build) void {
         .force_pic = true,
     });
 
-    const pb = b.lazyDependency("pb", .{
-        .target = target,
-        .optimize = optimize,
-    }) orelse return;
-    const protobuf = b.lazyImport(@This(), "pb") orelse return;
-
+    const pb = b.dependency("pb", .{ .target = target, .optimize = optimize });
     var protoc_step = protobuf.RunProtocStep.create(b, pb.builder, target, .{
         .destination_directory = b.path("src/proto"),
         .source_files = &.{

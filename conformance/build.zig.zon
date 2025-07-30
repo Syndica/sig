@@ -9,7 +9,6 @@
         .pb = .{
             .url = "git+https://github.com/Rexicon226/zig-protobuf#4a11b59f6e668f97e4d0f0bfa86a4cf805a9b86e",
             .hash = "protobuf-2.0.0-0e82aiacGwDJs2XReVH5wmkc9AJ40bS2IxfvooQwZEId",
-            .lazy = true,
         },
     },
 }
