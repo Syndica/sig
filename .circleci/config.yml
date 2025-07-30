@@ -230,7 +230,7 @@ jobs:
       - attach_workspace:
           at: workspace
       - run:
-          name: Run Gossip Service Fuzzer
+          name: Run Gossip Table Fuzzer
           command: workspace/zig-out-release/bin/fuzz gossip_table 19 100000
 
   allocators_fuzz:
@@ -240,7 +240,7 @@ jobs:
       - attach_workspace:
           at: workspace
       - run:
-          name: Run Gossip Service Fuzzer
+          name: Run Allocatrs Fuzzer
           command: workspace/zig-out-release/bin/fuzz allocators 19 10000
 
   ledger_fuzz:
@@ -250,7 +250,7 @@ jobs:
       - attach_workspace:
           at: workspace
       - run:
-          name: Run Gossip Service Fuzzer
+          name: Run Ledger Fuzzer
           command: workspace/zig-out-release/bin/fuzz ledger 19 10000
 
   solana_conformance:
