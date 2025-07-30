@@ -147,7 +147,7 @@ pub fn Database(comptime Impl: type) type {
         };
 
         pub fn iterator(
-            self: *Self,
+            self: Self,
             comptime cf: ColumnFamily,
             comptime direction: IteratorDirection,
             start: ?cf.Key,

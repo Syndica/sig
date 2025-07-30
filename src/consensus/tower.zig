@@ -12,7 +12,7 @@ const Lockout = sig.runtime.program.vote.state.Lockout;
 const VotedStakes = sig.consensus.progress_map.consensus.VotedStakes;
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
-const SortedSet = sig.utils.collections.SortedSet;
+const SortedSet = sig.utils.collections.SortedSetUnmanaged;
 const TowerStorage = sig.consensus.tower_storage.TowerStorage;
 const TowerVoteState = sig.consensus.tower_state.TowerVoteState;
 const Vote = sig.runtime.program.vote.state.Vote;
@@ -92,11 +92,23 @@ pub const Tower = struct {
         allocator: std.mem.Allocator,
         vote_account_pubkey: *const Pubkey,
         fork_root: Slot,
-        accounts_db: *AccountsDB,
+        account_reader: sig.accounts_db.AccountReader,
     ) !void {
-        const vote_account = accounts_db.getAccount(vote_account_pubkey) catch {
-            self.initializeRoot(fork_root);
-            return;
+        const vote_account = blk: {
+            const maybe_vote_account =
+                account_reader.getLatest(vote_account_pubkey.*) catch |err| switch (err) {
+                    error.OutOfMemory,
+                    => |e| return e,
+                    error.InvalidOffset,
+                    error.FileIdNotFound,
+                    error.SlotNotFound,
+                    error.PubkeyNotInIndex,
+                    => null,
+                };
+            break :blk maybe_vote_account orelse {
+                self.initializeRoot(fork_root);
+                return;
+            };
         };
 
         const vote_state = try stateFromAccount(
@@ -457,6 +469,7 @@ fn stateFromAccount(
 }
 
 pub fn populateAncestorVotedStakes(
+    allocator: std.mem.Allocator,
     voted_stakes: *SortedSet(Slot),
     vote_slots: []const Slot,
     ancestors: *const AutoHashMapUnmanaged(Slot, SortedSet(Slot)),
@@ -466,9 +479,9 @@ pub fn populateAncestorVotedStakes(
     // this slot
     for (vote_slots) |vote_slot| {
         if (ancestors.getPtr(vote_slot)) |maybe_slot_ancestors| {
-            try voted_stakes.put(vote_slot);
+            try voted_stakes.put(allocator, vote_slot);
             for (maybe_slot_ancestors.items()) |slot| {
-                _ = try voted_stakes.put(slot);
+                _ = try voted_stakes.put(allocator, slot);
             }
         }
     }

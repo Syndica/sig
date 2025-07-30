@@ -38,9 +38,12 @@ pub const StatusCache = struct {
 
     const MAX_CACHE_ENTRIES = sig.accounts_db.snapshots.MAX_RECENT_BLOCKHASHES;
 
-    pub fn default() StatusCache {
-        return .{ .cache = .{}, .roots = .{}, .slot_deltas = .{}, .min_root = null };
-    }
+    pub const empty: StatusCache = .{
+        .cache = .empty,
+        .roots = .empty,
+        .slot_deltas = .empty,
+        .min_root = null,
+    };
 
     pub fn deinit(self: *StatusCache, allocator: std.mem.Allocator) void {
         self.roots.deinit(allocator);
@@ -215,7 +218,7 @@ test "status cache empty" {
     const signature = sig.core.Signature.ZEROES;
     const block_hash = Hash.ZEROES;
 
-    var status_cache = StatusCache.default();
+    var status_cache: StatusCache = .empty;
 
     try std.testing.expectEqual(
         null,
@@ -240,7 +243,7 @@ test "status cache find with ancestor fork" {
     };
     defer ancestors.ancestors.deinit(allocator);
 
-    var status_cache = StatusCache.default();
+    var status_cache: StatusCache = .empty;
     defer status_cache.deinit(allocator);
 
     try status_cache.insert(allocator, random, &blockhash, &signature.data, 0);
@@ -261,7 +264,7 @@ test "status cache find without ancestor fork" {
 
     var ancestors: Ancestors = .{};
 
-    var status_cache = StatusCache.default();
+    var status_cache: StatusCache = .empty;
     defer status_cache.deinit(allocator);
 
     try status_cache.insert(allocator, random, &blockhash, &signature.data, 1);
@@ -282,7 +285,7 @@ test "status cache find with root ancestor fork" {
 
     var ancestors: Ancestors = .{};
 
-    var status_cache = StatusCache.default();
+    var status_cache: StatusCache = .empty;
     defer status_cache.deinit(allocator);
 
     try status_cache.insert(allocator, random, &blockhash, &signature.data, 0);
@@ -307,7 +310,7 @@ test "status cache insert picks latest blockhash fork" {
     };
     defer ancestors.ancestors.deinit(allocator);
 
-    var status_cache = StatusCache.default();
+    var status_cache: StatusCache = .empty;
     defer status_cache.deinit(allocator);
 
     try status_cache.insert(allocator, random, &blockhash, &signature.data, 0);
@@ -330,7 +333,7 @@ test "status cache root expires" {
 
     var ancestors: Ancestors = .{};
 
-    var status_cache = StatusCache.default();
+    var status_cache: StatusCache = .empty;
     defer status_cache.deinit(allocator);
 
     try status_cache.insert(allocator, random, &blockhash, &signature.data, 0);
