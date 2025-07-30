@@ -1772,17 +1772,20 @@ test "initialize" {
     var prng = std.Random.DefaultPrng.init(5083);
     const random = prng.random();
 
-    const sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
+    const sysvar_cache_without_slot_hashes = ExecuteContextsParams.SysvarCacheParams{
         .clock = runtime.sysvar.Clock.DEFAULT,
-        .slot_hashes = try runtime.sysvar.SlotHashes.initWithEntries(
-            allocator,
-            &.{.{ .slot = std.math.maxInt(Slot), .hash = sig.core.Hash.ZEROES }},
-        ),
+        .slot_hashes = undefined,
         .rent = runtime.sysvar.Rent.DEFAULT,
         .epoch_rewards = .DEFAULT,
     };
 
     {
+        var sysvar_cache = sysvar_cache_without_slot_hashes;
+        sysvar_cache.slot_hashes = try runtime.sysvar.SlotHashes.initWithEntries(
+            allocator,
+            &.{.{ .slot = std.math.maxInt(Slot), .hash = sig.core.Hash.ZEROES }},
+        );
+
         const accounts: []const ExecuteContextsParams.AccountParams = &.{
             .{ .pubkey = Pubkey.initRandom(random), .owner = ID },
             .{ .pubkey = sysvar.Rent.ID },
@@ -1794,7 +1797,7 @@ test "initialize" {
             allocator,
             ID,
             Instruction{ .initialize = .{ Authorized.DEFAULT, Lockup.DEFAULT } },
-            &.{ 
+            &.{
                 .{ .index_in_transaction = 0 },
                 .{ .index_in_transaction = 1 },
                 .{ .index_in_transaction = 2 },
@@ -1806,6 +1809,19 @@ test "initialize" {
 
     // success
     {
+        var sysvar_cache = sysvar_cache_without_slot_hashes;
+        sysvar_cache.slot_hashes = try runtime.sysvar.SlotHashes.initWithEntries(
+            allocator,
+            &.{.{ .slot = std.math.maxInt(Slot), .hash = sig.core.Hash.ZEROES }},
+        );
+
+        // Hacky duplicate to avoid slot_hashes double free from storing same ref.
+        var expected_sysvar_cache = sysvar_cache_without_slot_hashes;
+        expected_sysvar_cache.slot_hashes = try runtime.sysvar.SlotHashes.initWithEntries(
+            allocator,
+            &.{.{ .slot = std.math.maxInt(Slot), .hash = sig.core.Hash.ZEROES }},
+        );
+
         var buf: [StakeStateV2.SIZE]u8 = @splat(0);
         _ = try sig.bincode.writeToSlice(&buf, StakeStateV2.uninitialized, .{});
 
@@ -1857,7 +1873,7 @@ test "initialize" {
             .{
                 .accounts = after_accounts,
                 .compute_meter = 10_000 - COMPUTE_UNITS,
-                .sysvar_cache = sysvar_cache,
+                .sysvar_cache = expected_sysvar_cache,
             },
             .{},
         );
