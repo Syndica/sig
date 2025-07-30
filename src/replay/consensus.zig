@@ -4,32 +4,33 @@ const sig = @import("../sig.zig");
 const Allocator = std.mem.Allocator;
 const AtomicBool = std.atomic.Value(bool);
 
+const RwMux = sig.sync.RwMux;
+const SortedSet = sig.utils.collections.SortedSet;
+
+const Epoch = sig.core.Epoch;
+const EpochStakesMap = sig.core.EpochStakesMap;
+const Hash = sig.core.Hash;
+const LtHash = sig.core.LtHash;
+const Pubkey = sig.core.Pubkey;
+const Slot = sig.core.Slot;
+const SlotAndHash = sig.core.hash.SlotAndHash;
+const SlotState = sig.core.SlotState;
+const SlotConstants = sig.core.SlotConstants;
+const Transaction = sig.core.transaction.Transaction;
+
+const BlockstoreReader = sig.ledger.BlockstoreReader;
 const LedgerResultWriter = sig.ledger.result_writer.LedgerResultWriter;
 
-const SortedSet = sig.utils.collections.SortedSet;
+const SlotHistory = sig.runtime.sysvar.SlotHistory;
+
 const ReplayTower = sig.consensus.replay_tower.ReplayTower;
 const ProgressMap = sig.consensus.progress_map.ProgressMap;
 const ForkChoice = sig.consensus.fork_choice.ForkChoice;
 const LatestValidatorVotesForFrozenBanks =
     sig.consensus.latest_validator_votes.LatestValidatorVotes;
 
-const EpochStakesMap = sig.core.EpochStakesMap;
-
 const SlotTracker = sig.replay.trackers.SlotTracker;
 const EpochTracker = sig.replay.trackers.EpochTracker;
-const BlockstoreReader = sig.ledger.BlockstoreReader;
-
-const SlotHistory = sig.runtime.sysvar.SlotHistory;
-
-const Transaction = sig.core.transaction.Transaction;
-const Pubkey = sig.core.Pubkey;
-const SlotAndHash = sig.core.hash.SlotAndHash;
-const Slot = sig.core.Slot;
-const Epoch = sig.core.Epoch;
-const Hash = sig.core.Hash;
-const LtHash = sig.core.LtHash;
-
-const RwMux = sig.sync.RwMux;
 
 pub const isSlotDuplicateConfirmed = sig.consensus.tower.isSlotDuplicateConfirmed;
 
@@ -938,32 +939,8 @@ test "checkAndHandleNewRoot - missing slot" {
     }
 
     try slot_tracker.put(testing.allocator, root.slot, .{
-        .constants = .{
-            .parent_slot = 0,
-            .parent_hash = .ZEROES,
-            .parent_lt_hash = .IDENTITY,
-            .block_height = 0,
-            .collector_id = .ZEROES,
-            .max_tick_height = 0,
-            .fee_rate_governor = .initRandom(random),
-            .epoch_reward_status = .inactive,
-            .ancestors = .{},
-            .feature_set = .EMPTY,
-        },
-        .state = .{
-            .blockhash_queue = .init(.init(10)),
-            .hash = .init(null),
-            .capitalization = .init(0),
-            .transaction_count = .init(0),
-            .signature_count = .init(0),
-            .tick_height = .init(0),
-            .collected_rent = .init(0),
-            .accounts_lt_hash = .init(LtHash{
-                .data = [_]u16{0} ** LtHash.NUM_ELEMENTS,
-            }),
-            .collected_transaction_fees = .init(0),
-            .collected_priority_fees = .init(0),
-        },
+        .constants = .genesis(.initRandom(random)),
+        .state = .GENESIS,
     });
 
     const logger = .noop;
@@ -1020,32 +997,8 @@ test "checkAndHandleNewRoot - missing hash" {
     }
 
     try slot_tracker.put(testing.allocator, root.slot, .{
-        .constants = .{
-            .parent_slot = 0,
-            .parent_hash = .ZEROES,
-            .parent_lt_hash = .IDENTITY,
-            .block_height = 0,
-            .collector_id = .ZEROES,
-            .max_tick_height = 0,
-            .fee_rate_governor = .initRandom(random),
-            .epoch_reward_status = .inactive,
-            .ancestors = .{},
-            .feature_set = .EMPTY,
-        },
-        .state = .{
-            .blockhash_queue = .init(.init(10)),
-            .hash = .init(null),
-            .capitalization = .init(0),
-            .transaction_count = .init(0),
-            .signature_count = .init(0),
-            .tick_height = .init(0),
-            .collected_rent = .init(0),
-            .accounts_lt_hash = .init(.{
-                .data = [_]u16{0} ** LtHash.NUM_ELEMENTS,
-            }),
-            .collected_transaction_fees = .init(0),
-            .collected_priority_fees = .init(0),
-        },
+        .constants = .genesis(.initRandom(random)),
+        .state = .GENESIS,
     });
 
     const logger = .noop;
@@ -1158,62 +1111,21 @@ test "checkAndHandleNewRoot - success" {
         slot_tracker.slots.deinit(testing.allocator);
     }
 
+    var constants2 = SlotConstants.genesis(.initRandom(random));
+    var constants3 = SlotConstants.genesis(.initRandom(random));
+    var state2 = SlotState.GENESIS;
+    var state3 = SlotState.GENESIS;
+    constants2.parent_slot = hash1.slot;
+    constants3.parent_slot = hash2.slot;
+    state2.hash = .init(hash2.hash);
+    state3.hash = .init(hash3.hash);
     try slot_tracker.put(testing.allocator, hash2.slot, .{
-        .constants = .{
-            .parent_slot = hash1.slot,
-            .parent_hash = .ZEROES,
-            .parent_lt_hash = .IDENTITY,
-            .block_height = 0,
-            .collector_id = .ZEROES,
-            .max_tick_height = 0,
-            .fee_rate_governor = .initRandom(random),
-            .epoch_reward_status = .inactive,
-            .ancestors = .{},
-            .feature_set = .EMPTY,
-        },
-        .state = .{
-            .blockhash_queue = .init(.init(10)),
-            .hash = .init(hash2.hash),
-            .capitalization = .init(0),
-            .transaction_count = .init(0),
-            .signature_count = .init(0),
-            .tick_height = .init(0),
-            .collected_rent = .init(0),
-            .accounts_lt_hash = .init(.{
-                .data = [_]u16{0} ** LtHash.NUM_ELEMENTS,
-            }),
-            .collected_transaction_fees = .init(0),
-            .collected_priority_fees = .init(0),
-        },
+        .constants = constants2,
+        .state = state2,
     });
-
     try slot_tracker.put(testing.allocator, hash3.slot, .{
-        .constants = .{
-            .parent_slot = hash2.slot,
-            .parent_hash = Hash.ZEROES,
-            .parent_lt_hash = .IDENTITY,
-            .block_height = 0,
-            .collector_id = Pubkey.ZEROES,
-            .max_tick_height = 0,
-            .fee_rate_governor = .initRandom(random),
-            .epoch_reward_status = .inactive,
-            .ancestors = .{},
-            .feature_set = .EMPTY,
-        },
-        .state = .{
-            .blockhash_queue = .init(.init(10)),
-            .hash = .init(hash3.hash),
-            .capitalization = .init(0),
-            .transaction_count = .init(0),
-            .signature_count = .init(0),
-            .tick_height = .init(0),
-            .collected_rent = .init(0),
-            .accounts_lt_hash = .init(.{
-                .data = [_]u16{0} ** LtHash.NUM_ELEMENTS,
-            }),
-            .collected_transaction_fees = .init(0),
-            .collected_priority_fees = .init(0),
-        },
+        .constants = constants3,
+        .state = state3,
     });
 
     // Add some entries to progress map that should be removed
