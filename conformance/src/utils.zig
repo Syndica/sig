@@ -17,9 +17,39 @@ const SysvarCache = sig.runtime.SysvarCache;
 const EpochStakes = sig.core.EpochStakes;
 const ProgramMap = sig.runtime.program_loader.ProgramMap;
 
+const intFromInstructionError = sig.core.instruction.intFromInstructionError;
+
 const Pubkey = sig.core.Pubkey;
 
-const intFromInstructionError = sig.core.instruction.intFromInstructionError;
+const Converted = struct {
+    err: u32,
+    instruction_error: u32,
+    custom_error: u32,
+    instruction_index: u32,
+};
+
+pub fn convertTransactionError(err: sig.ledger.transaction_status.TransactionError) Converted {
+    const instruction_error_num, //
+    const custom_error_num, //
+    const instruction_error_index = switch (err) {
+        .InstructionError => |p| b: {
+            const index, const instruction_error = p;
+            const instruction_error_num: u32 = @intFromEnum(instruction_error) + 1;
+            const custom_error_num: u32 = switch (instruction_error) {
+                .Custom => |v| v,
+                else => 0,
+            };
+            break :b .{ instruction_error_num, custom_error_num, index };
+        },
+        else => .{ 0, 0, 0 },
+    };
+    return .{
+        .err = @intFromEnum(err) + 1,
+        .instruction_error = instruction_error_num,
+        .custom_error = custom_error_num,
+        .instruction_index = instruction_error_index,
+    };
+}
 
 pub fn createTransactionContext(
     allocator: std.mem.Allocator,
@@ -377,7 +407,7 @@ pub fn createInstrEffects(
     result: ?InstructionError,
 ) !pb.InstrEffects {
     return pb.InstrEffects{
-        .result = intFromResult(result),
+        .result = if (result) |err| intFromInstructionError(err) else 0,
         .custom_err = tc.custom_error orelse 0,
         .modified_accounts = try modifiedAccounts(allocator, tc),
         .cu_avail = tc.compute_meter,
@@ -386,13 +416,6 @@ pub fn createInstrEffects(
             allocator,
         ),
     };
-}
-
-fn intFromResult(result: ?InstructionError) i32 {
-    return if (result) |err|
-        intFromInstructionError(err)
-    else
-        0;
 }
 
 fn modifiedAccounts(
