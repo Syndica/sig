@@ -1642,12 +1642,12 @@ pub fn collectVoteLockouts(
         var vote_state = try TowerVoteState.fromAccount(&vote.account);
 
         for (vote_state.votes.constSlice()) |lockout_vote| {
-            const interval = try lockout_intervals
+            const interval = try lockout_intervals.map
                 .getOrPut(allocator, lockout_vote.lastLockedOutSlot());
             if (!interval.found_existing) {
                 interval.value_ptr.* = .empty;
             }
-            try interval.value_ptr.append(.{ .slot = lockout_vote.slot, .pubkey = vote_address });
+            try interval.value_ptr.append(allocator, .{ lockout_vote.slot, vote_address });
         }
 
         // Vote account for this validator
