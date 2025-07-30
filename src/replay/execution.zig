@@ -312,17 +312,15 @@ fn processReplayResults(
         if (status != .confirm) {
             continue;
         }
-        if (status == .confirm) {
-            const slot_info = state.slot_tracker.get(slot) orelse continue;
-            while (try status.confirm.poll() == .pending) {
-                std.time.sleep(std.time.ns_per_ms);
-            }
-            if (slot_info.state.tickHeight() == slot_info.constants.max_tick_height) {
-                // TODO
-                did_complete_slot = true;
-            } else {
-                // TODO log?
-            }
+        const slot_info = state.slot_tracker.get(slot) orelse continue;
+        while (try status.confirm.poll() == .pending) {
+            std.time.sleep(std.time.ns_per_ms);
+        }
+        if (slot_info.state.tickHeight() == slot_info.constants.max_tick_height) {
+            // TODO
+            did_complete_slot = true;
+        } else {
+            // TODO log?
         }
     }
 }
