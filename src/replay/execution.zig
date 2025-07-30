@@ -131,7 +131,7 @@ pub fn replayActiveSlots(state: *ReplayExecutionState) !bool {
         }
     }
 
-    // TODO: process_replay_results: https://github.com/anza-xyz/agave/blob/3f68568060fd06f2d561ad79e8d8eb5c5136815a/core/src/replay_stage.rs#L3443
+    try processReplayResults(state, &slot_statuses);
     return processed_a_slot;
 }
 
@@ -300,4 +300,32 @@ fn replaySlot(state: *ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
         verify_ticks_params,
         &slot_info.constants.ancestors,
     ) };
+}
+
+fn processReplayResults(
+    state: *ReplayExecutionState,
+    slot_statuses: *const std.ArrayListUnmanaged(struct { Slot, ReplaySlotStatus }),
+) !void {
+    var did_complete_slot = false;
+    for (slot_statuses.items) |slot_status| {
+        const slot, const status = slot_status;
+        if (status == .dead or status == .empty) {
+            continue;
+        }
+        if (status == .leader) {
+            continue;
+        }
+        if (status == .confirm) {
+            const slot_info = state.slot_tracker.get(slot) orelse continue;
+            while (try status.confirm.poll() == .pending) {
+                std.time.sleep(std.time.ns_per_ms);
+            }
+            if (slot_info.state.tickHeight() == slot_info.constants.max_tick_height) {
+                // TODO
+                did_complete_slot = true;
+            } else {
+                // TODO log?
+            }
+        }
+    }
 }
