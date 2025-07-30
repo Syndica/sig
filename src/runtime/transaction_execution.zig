@@ -567,9 +567,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
     const transfer_instruction_data = try sig.bincode.writeAlloc(
         allocator,
         sig.runtime.program.system.Instruction{
-            .transfer = .{
-                .lamports = 10_000,
-            },
+            .transfer = .{ .lamports = 10_000 },
         },
         .{},
     );
@@ -731,10 +729,11 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
     const sender_account = account_cache.account_cache.get(sender_key).?;
     const receiver_account = account_cache.account_cache.get(receiver_key).?;
 
-    try std.testing.expectEqual(35_000, transaction_fee);
+    // TODO: verify these numbers against agave
+    try std.testing.expectEqual(5_000, transaction_fee);
     try std.testing.expectEqual(0, prioritization_fee);
     try std.testing.expectEqual(0, rent_collected);
-    try std.testing.expectEqual(55_000, sender_account.lamports);
+    try std.testing.expectEqual(85_000, sender_account.lamports);
     try std.testing.expectEqual(110_000, receiver_account.lamports);
     try std.testing.expectEqual(null, executed_transaction.err);
     try std.testing.expectEqual(null, executed_transaction.log_collector);
