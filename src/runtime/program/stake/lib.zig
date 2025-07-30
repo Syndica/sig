@@ -1774,9 +1774,10 @@ test "initialize" {
 
     const sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
         .clock = runtime.sysvar.Clock.DEFAULT,
-        .slot_hashes = runtime.sysvar.SlotHashes{
-            .entries = &.{.{ std.math.maxInt(Slot), sig.core.Hash.ZEROES }},
-        },
+        .slot_hashes = try runtime.sysvar.SlotHashes.initWithEntries(
+            allocator,
+            &.{.{ .slot = std.math.maxInt(Slot), .hash = sig.core.Hash.ZEROES }},
+        ),
         .rent = runtime.sysvar.Rent.DEFAULT,
         .epoch_rewards = .DEFAULT,
     };
@@ -1793,7 +1794,11 @@ test "initialize" {
             allocator,
             ID,
             Instruction{ .initialize = .{ Authorized.DEFAULT, Lockup.DEFAULT } },
-            &.{ .{}, .{ .index_in_transaction = 1 }, .{ .index_in_transaction = 2 } },
+            &.{ 
+                .{ .index_in_transaction = 0 },
+                .{ .index_in_transaction = 1 },
+                .{ .index_in_transaction = 2 },
+            },
             .{ .accounts = accounts, .compute_meter = 10_000, .sysvar_cache = sysvar_cache },
             .{},
         );
@@ -1840,7 +1845,7 @@ test "initialize" {
             ID,
             Instruction{ .initialize = .{ Authorized.DEFAULT, Lockup.DEFAULT } },
             &.{
-                .{ .is_writable = true },
+                .{ .index_in_transaction = 0, .is_writable = true },
                 .{ .index_in_transaction = 1 },
                 .{ .index_in_transaction = 2 },
             },
