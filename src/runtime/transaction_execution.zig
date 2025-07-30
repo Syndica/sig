@@ -179,10 +179,11 @@ pub const ProcessedTransaction = union(enum(u8)) {
         executed_transaction: ExecutedTransaction,
     },
 
-    pub fn deinit(self: ProcessedTransaction, allocator: std.mem.Allocator) void {
-        switch (self) {
-            .executed => |executed| {
+    pub fn deinit(self: *ProcessedTransaction, allocator: std.mem.Allocator) void {
+        switch (self.*) {
+            .executed => |*executed| {
                 executed.executed_transaction.deinit(allocator);
+                executed.rollbacks.deinit(allocator);
             },
             else => {},
         }
@@ -204,12 +205,13 @@ pub fn loadAndExecuteTransactions(
     environment: *const TransactionExecutionEnvironment,
     config: *const TransactionExecutionConfig,
 ) error{OutOfMemory}![]TransactionResult(ProcessedTransaction) {
-    const program_map = try program_loader.loadPrograms(
+    var program_map = try program_loader.loadPrograms(
         allocator,
         &batch_account_cache.account_cache,
         environment.vm_environment,
         environment.slot,
     );
+    defer program_map.deinit(allocator);
 
     const transaction_results = try allocator.alloc(
         TransactionResult(ProcessedTransaction),
