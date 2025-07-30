@@ -116,6 +116,7 @@ pub fn verifyTransaction(
     for (instrs) |*instr| instr.instruction_data = try allocator.dupe(u8, instr.instruction_data);
 
     return .{ .ok = .{
+        .version = transaction.version,
         .signature_count = resolved_txn.transaction.signatures.len,
         .fee_payer = resolved_txn.transaction.msg.account_keys[0],
         .msg_hash = msg_hash,

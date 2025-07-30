@@ -691,8 +691,6 @@ fn executeTxnContext(allocator: std.mem.Allocator, pb_txn_ctx: pb.TxnContext, em
         const recent_blockhashes = sysvar_cache.get(RecentBlockhashes) catch
             break :blk null;
 
-        std.debug.print("recent_blockhashes: {any}\n", .{recent_blockhashes.entries.constSlice()});
-
         const first_entry = recent_blockhashes.getFirst() orelse
             break :blk null;
 
@@ -701,7 +699,6 @@ fn executeTxnContext(allocator: std.mem.Allocator, pb_txn_ctx: pb.TxnContext, em
         else
             null;
     } orelse fee_rate_govenor.lamports_per_signature;
-    std.debug.print("lamports_per_signature: {d}\n", .{lamports_per_signature});
 
     // Register blockhashes and update recent blockhashes sysvar
     for (blockhashes) |blockhash| {
@@ -777,9 +774,6 @@ fn executeTxnContext(allocator: std.mem.Allocator, pb_txn_ctx: pb.TxnContext, em
     const current_epoch_stakes = try EpochStakes.init(allocator);
     defer current_epoch_stakes.deinit(allocator);
 
-    const acc = accounts.account_cache.get(Pubkey.parseBase58String("6CdPUpVZW1aXCK9gfNSjxnrySvH5mGgDdiuerUYeSRxq") catch unreachable).?;
-    std.debug.print("acc.data: {any}\n", .{acc.data});
-
     const environment = TransactionExecutionEnvironment{
         .ancestors = &ancestors,
         .feature_set = &feature_set,
@@ -812,7 +806,6 @@ fn executeTxnContext(allocator: std.mem.Allocator, pb_txn_ctx: pb.TxnContext, em
         &environment,
         &config,
     );
-
     defer {
         switch (txn_results[0]) {
             .ok => |*r| r.deinit(allocator),
@@ -821,12 +814,20 @@ fn executeTxnContext(allocator: std.mem.Allocator, pb_txn_ctx: pb.TxnContext, em
         allocator.free(txn_results);
     }
 
-    std.debug.print("txn_results: {any}\n", .{txn_results[0].ok.executed});
-
-    return try serializeOutput(allocator, txn_results[0]);
+    return try serializeOutput(
+        allocator,
+        txn_results[0],
+        runtime_transaction,
+        pb_txn_ctx,
+    );
 }
 
-fn serializeOutput(allocator: std.mem.Allocator, result: TransactionResult) !pb.TxnResult {
+fn serializeOutput(
+    allocator: std.mem.Allocator,
+    result: TransactionResult,
+    sanitized: RuntimeTransaction,
+    tx_ctx: pb.TxnContext,
+) !pb.TxnResult {
     switch (result) {
         .ok => |txn| {
             if (txn == .fees_only) @panic("TODO");
@@ -841,7 +842,27 @@ fn serializeOutput(allocator: std.mem.Allocator, result: TransactionResult) !pb.
                         var acc_states: std.ArrayList(pb.AcctState) = .init(allocator);
                         errdefer acc_states.deinit();
 
-                        for (executed_txn.loaded_accounts.accounts.constSlice()) |acc| {
+                        var loaded_account_keys: std.AutoHashMapUnmanaged(Pubkey, void) = .empty;
+                        defer loaded_account_keys.deinit(allocator);
+
+                        const tx = tx_ctx.tx.?;
+                        for (tx.message.?.account_keys.items) |key| {
+                            const pubkey: Pubkey = .{ .data = key.getSlice()[0..32].* };
+                            try loaded_account_keys.put(allocator, pubkey, {});
+                        }
+                        switch (sanitized.version) {
+                            .v0 => {
+                                try loaded_account_keys.ensureUnusedCapacity(allocator, 2);
+                                // TODO: add the readonly and writeable loaded accounts here also
+                            },
+                            .legacy => {},
+                        }
+
+                        for (executed_txn.loaded_accounts.accounts.constSlice(), 0..) |acc, i| {
+                            if (!sanitized.accounts.get(i).is_writable) continue;
+                            // Only keep accounts that were passed in as account_keys or as ALUT accounts
+                            if (!loaded_account_keys.contains(acc.pubkey)) continue;
+
                             try acc_states.append(.{
                                 .address = try .copy(&acc.pubkey.data, allocator),
                                 .lamports = acc.account.lamports,
@@ -1041,7 +1062,6 @@ fn loadTransactionMesssage(
             .readonly_indexes = readonly_indexes,
         };
     }
-    std.debug.print("lookups {any}\n", .{address_lookups});
 
     const header = message.header orelse pb.MessageHeader{
         .num_required_signatures = 1,

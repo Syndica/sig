@@ -140,7 +140,7 @@ test "verify ed25519" {
     }
 
     {
-        const bad_ed25519_tx = std.mem.zeroInit(sig.core.Transaction, .{
+        const bad_ed25519_tx: sig.core.Transaction = .{
             .msg = .{
                 .account_keys = &.{ed25519.ID},
                 .instructions = &[_]TransactionInstruction{
@@ -150,9 +150,15 @@ test "verify ed25519" {
                         .data = "hello",
                     },
                 },
+                .signature_count = 0,
+                .readonly_signed_count = 0,
+                .readonly_unsigned_count = 0,
+                .recent_blockhash = .ZEROES,
+                .address_lookups = &.{},
             },
             .version = .legacy,
-        });
+            .signatures = &.{},
+        };
         const actual = try verifyPrecompiles(
             std.testing.allocator,
             bad_ed25519_tx,
@@ -230,7 +236,7 @@ test "verify cost" {
 }
 
 test "verify secp256k1" {
-    const bad_secp256k1_tx = std.mem.zeroInit(sig.core.Transaction, .{
+    const bad_secp256k1_tx: sig.core.Transaction = .{
         .msg = .{
             .account_keys = &.{secp256k1.ID},
             .instructions = &[_]TransactionInstruction{
@@ -240,9 +246,15 @@ test "verify secp256k1" {
                     .data = "hello",
                 },
             },
+            .signature_count = 0,
+            .readonly_signed_count = 0,
+            .readonly_unsigned_count = 0,
+            .recent_blockhash = .ZEROES,
+            .address_lookups = &.{},
         },
         .version = .legacy,
-    });
+        .signatures = &.{},
+    };
 
     const actual = try verifyPrecompiles(
         std.testing.allocator,
