@@ -1,5 +1,4 @@
 const sig = @import("sig");
-const std = @import("std");
 
 const program = sig.runtime.program;
 const features = sig.core.features;

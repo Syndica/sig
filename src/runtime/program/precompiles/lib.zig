@@ -183,7 +183,11 @@ test "verify ed25519" {
             .msg = .{
                 .account_keys = &.{ed25519.ID},
                 .instructions = &.{
-                    .{ .program_index = 0, .account_indexes = &.{0}, .data = ed25519_instruction.data },
+                    .{
+                        .program_index = 0,
+                        .account_indexes = &.{0},
+                        .data = ed25519_instruction.data,
+                    },
                 },
                 .signature_count = 1,
                 .readonly_signed_count = 1,

@@ -3,34 +3,11 @@ const sig = @import("sig");
 const std = @import("std");
 const utils = @import("utils.zig");
 
-const sysvar = sig.runtime.sysvar;
 const features = sig.core.features;
 
-const Hash = sig.core.Hash;
-const Signature = sig.core.Signature;
 const Transaction = sig.core.Transaction;
-const AccountSharedData = sig.runtime.AccountSharedData;
 
-const Ancestors = sig.core.status_cache.Ancestors;
-const Pubkey = sig.core.Pubkey;
-const InstructionError = sig.core.instruction.InstructionError;
-const TransactionContext = sig.runtime.transaction_context.TransactionContext;
-const TransactionVersion = sig.core.transaction.Version;
-const TransactionMessage = sig.core.transaction.Message;
-const TransactionInstruction = sig.core.transaction.Instruction;
-const TransactionAddressLookup = sig.core.transaction.AddressLookup;
-const FeeRateGovernor = sig.core.FeeRateGovernor;
-const GenesisConfig = sig.core.GenesisConfig;
-const Inflation = sig.core.Inflation;
-const PohConfig = sig.core.PohConfig;
-const SysvarCache = sig.runtime.SysvarCache;
 const RuntimeTransaction = sig.runtime.transaction_execution.RuntimeTransaction;
-const TransactionExecutionEnvironment = sig.runtime.transaction_execution.TransactionExecutionEnvironment;
-const TransactionExecutionConfig = sig.runtime.transaction_execution.TransactionExecutionConfig;
-const BatchAccountCache = sig.runtime.account_loader.BatchAccountCache;
-const loadAndExecuteTransaction = sig.runtime.transaction_execution.loadAndExecuteTransaction;
-
-const EMIT_LOGS = false;
 
 const VerifyTransactionResult = union(enum(u8)) {
     ok: RuntimeTransaction,
@@ -38,7 +15,6 @@ const VerifyTransactionResult = union(enum(u8)) {
 };
 
 const FeatureSet = sig.core.features.FeatureSet;
-const AccountsDb = sig.accounts_db.AccountsDB;
 const SlotAccountReader = sig.accounts_db.SlotAccountReader;
 
 pub fn verifyTransaction(

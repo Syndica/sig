@@ -1,60 +1,22 @@
-const pb = @import("proto/org/solana/sealevel/v1.pb.zig");
 const sig = @import("sig");
 const std = @import("std");
 
 const builtins = @import("builtins.zig");
-const verify_transaction = @import("verify_transaction.zig");
 
 const Allocator = std.mem.Allocator;
-const Atomic = std.atomic.Value;
 
 const bincode = sig.bincode;
 const features = sig.core.features;
 const program = sig.runtime.program;
-const sysvars = sig.runtime.sysvar;
-const vm = sig.vm;
-const update_sysvar = sig.replay.update_sysvar;
 
 const AccountsDb = sig.accounts_db.AccountsDB;
 
 const Account = sig.core.Account;
-const Ancestors = sig.core.Ancestors;
-const BlockhashQueue = sig.core.BlockhashQueue;
-const Epoch = sig.core.Epoch;
-const EpochStakes = sig.core.EpochStakes;
-const EpochStakesMap = sig.core.EpochStakesMap;
-const FeeRateGovernor = sig.core.FeeRateGovernor;
-const GenesisConfig = sig.core.GenesisConfig;
-const Hash = sig.core.Hash;
-const HardForks = sig.core.HardForks;
 const Pubkey = sig.core.Pubkey;
-const RentCollector = sig.core.rent_collector.RentCollector;
 const Slot = sig.core.Slot;
-const Signature = sig.core.Signature;
-const StatusCache = sig.core.StatusCache;
-const StakesCache = sig.core.StakesCache;
-const Transaction = sig.core.Transaction;
-const TransactionVersion = sig.core.transaction.Version;
-const TransactionMessage = sig.core.transaction.Message;
-const TransactionInstruction = sig.core.transaction.Instruction;
-const TransactionAddressLookup = sig.core.transaction.AddressLookup;
 
 const AccountSharedData = sig.runtime.AccountSharedData;
-const Clock = sig.runtime.sysvar.Clock;
-const ComputeBudget = sig.runtime.ComputeBudget;
-const EpochSchedule = sig.runtime.sysvar.EpochSchedule;
 const FeatureSet = sig.core.features.FeatureSet;
-const LastRestartSlot = sig.runtime.sysvar.LastRestartSlot;
-const RecentBlockhashes = sig.runtime.sysvar.RecentBlockhashes;
-const Rent = sig.runtime.sysvar.Rent;
-const SlotHashes = sig.runtime.sysvar.SlotHashes;
-const StakeHistory = sig.runtime.sysvar.StakeHistory;
-const SysvarCache = sig.runtime.SysvarCache;
-const RuntimeTransaction = sig.runtime.transaction_execution.RuntimeTransaction;
-
-const loadTestAccountsDB = sig.accounts_db.db.loadTestAccountsDbEmpty;
-const fillMissingSysvarCacheEntries = sig.replay.update_sysvar.fillMissingSysvarCacheEntries;
-const deinitMapAndValues = sig.utils.collections.deinitMapAndValues;
 
 const failing_allocator = sig.utils.allocators.failing.allocator(.{});
 
@@ -80,7 +42,10 @@ pub fn applyFeatureActivations(
         const db_account = try tryGetAccount(accounts_db, feature_id) orelse continue;
         defer db_account.deinit(allocator);
 
-        const activation_slot = try featureActivationSlotFromAccount(allocator, db_account) orelse continue;
+        const activation_slot = try featureActivationSlotFromAccount(
+            allocator,
+            db_account,
+        ) orelse continue;
 
         const account = try accountSharedDataFromAccount(allocator, &db_account);
         defer account.deinit(allocator);
@@ -102,7 +67,8 @@ pub fn applyFeatureActivations(
 
     const is_disjoint = blk: {
         const full_inflation_features = try feature_set.fullInflationFeaturesEnabled(allocator);
-        const smaller, const larger = if (new_feature_activations.count() <= full_inflation_features.count())
+        const predicate = new_feature_activations.count() <= full_inflation_features.count();
+        const smaller, const larger = if (predicate)
             .{ new_feature_activations, full_inflation_features }
         else
             .{ full_inflation_features, new_feature_activations };
