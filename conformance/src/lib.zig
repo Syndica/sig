@@ -3,9 +3,9 @@ const std = @import("std");
 comptime {
     _ = @import("elf.zig");
     _ = @import("shred_parse.zig");
-    _ = @import("instr_execute_v1.zig");
+    _ = @import("instruction_execute.zig");
     _ = @import("vm_interp.zig");
-    _ = @import("vm_syscall_execute_v1.zig");
+    _ = @import("vm_syscall.zig");
 }
 
 pub const std_options: std.Options = .{
