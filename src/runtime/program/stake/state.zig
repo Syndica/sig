@@ -256,7 +256,11 @@ pub const StakeStateV2 = union(enum) {
             }
 
             if (target_epoch == self.deactivation_epoch) {
-                return .{ .deactivating = effective_stake };
+                // yes.. with_deactivating sets both
+                return .{
+                    .effective = effective_stake,
+                    .deactivating = effective_stake,
+                };
             }
 
             const entry = history.getEntry(self.deactivation_epoch) orelse
