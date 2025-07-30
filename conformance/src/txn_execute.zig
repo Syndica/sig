@@ -67,11 +67,11 @@ const bank_methods = @import("bank_methods.zig");
 const Allocator = std.mem.Allocator;
 const Atomic = std.atomic.Value;
 
-const bincode = sig.bincode;
 const features = sig.core.features;
 const program = sig.runtime.program;
 const sysvars = sig.runtime.sysvar;
 const vm = sig.vm;
+const transaction_execution = sig.runtime.transaction_execution;
 const update_sysvar = sig.replay.update_sysvar;
 
 const AccountsDb = sig.accounts_db.AccountsDB;
@@ -100,27 +100,27 @@ const TransactionAddressLookup = sig.core.transaction.AddressLookup;
 
 const AccountSharedData = sig.runtime.AccountSharedData;
 const BatchAccountCache = sig.runtime.account_loader.BatchAccountCache;
-const Clock = sig.runtime.sysvar.Clock;
 const ComputeBudget = sig.runtime.ComputeBudget;
 const EpochRewards = sig.runtime.sysvar.EpochRewards;
 const EpochSchedule = sig.runtime.sysvar.EpochSchedule;
 const FeatureSet = sig.core.features.FeatureSet;
-const LastRestartSlot = sig.runtime.sysvar.LastRestartSlot;
 const RecentBlockhashes = sig.runtime.sysvar.RecentBlockhashes;
 const Rent = sig.runtime.sysvar.Rent;
-const SlotHashes = sig.runtime.sysvar.SlotHashes;
-const StakeHistory = sig.runtime.sysvar.StakeHistory;
 const SysvarCache = sig.runtime.SysvarCache;
-const RuntimeTransaction = sig.runtime.transaction_execution.RuntimeTransaction;
-const TransactionExecutionEnvironment = sig.runtime.transaction_execution.TransactionExecutionEnvironment;
-const TransactionResult = sig.runtime.transaction_execution.TransactionResult(sig.runtime.transaction_execution.ProcessedTransaction);
+const RuntimeTransaction = transaction_execution.RuntimeTransaction;
+const TransactionExecutionEnvironment = transaction_execution.TransactionExecutionEnvironment;
+const ProcessedTransaction = transaction_execution.ProcessedTransaction;
+const TransactionResult = transaction_execution.TransactionResult(ProcessedTransaction);
 
-const loadAndExecuteTransactions = sig.runtime.transaction_execution.loadAndExecuteTransactions;
+const loadAndExecuteTransactions = transaction_execution.loadAndExecuteTransactions;
 const loadTestAccountsDB = sig.accounts_db.db.loadTestAccountsDbEmpty;
-const fillMissingSysvarCacheEntries = sig.replay.update_sysvar.fillMissingSysvarCacheEntries;
 const deinitMapAndValues = sig.utils.collections.deinitMapAndValues;
 
-fn executeTxnContext(allocator: std.mem.Allocator, pb_txn_ctx: pb.TxnContext, emit_logs: bool) !pb.TxnResult {
+fn executeTxnContext(
+    allocator: std.mem.Allocator,
+    pb_txn_ctx: pb.TxnContext,
+    emit_logs: bool,
+) !pb.TxnResult {
     errdefer |err| {
         std.debug.print("executeTxnContext: {s}\n", .{@errorName(err)});
         if (@errorReturnTrace()) |tr| std.debug.dumpStackTrace(tr.*);
@@ -400,7 +400,12 @@ fn executeTxnContext(allocator: std.mem.Allocator, pb_txn_ctx: pb.TxnContext, em
         try update_sysvar.updateRent(allocator, genesis_config.rent, update_sysvar_deps);
         try update_sysvar.updateEpochSchedule(allocator, epoch_schedule, update_sysvar_deps);
         try update_sysvar.updateRecentBlockhashes(allocator, &blockhash_queue, update_sysvar_deps);
-        try update_sysvar.updateLastRestartSlot(allocator, &feature_set, &hard_forks, update_sysvar_deps);
+        try update_sysvar.updateLastRestartSlot(
+            allocator,
+            &feature_set,
+            &hard_forks,
+            update_sysvar_deps,
+        );
 
         // NOTE: Agave fills the sysvar cache here, we should not need for txn fuzzing as the sysvar cache is only used in the SVM, so we can
         // populate immediately before executing transactions. (I think....)
@@ -429,7 +434,7 @@ fn executeTxnContext(allocator: std.mem.Allocator, pb_txn_ctx: pb.TxnContext, em
     // TODO: use `hashSlot` to compute the slot hash after merging dnut/replay/freeze into harnew/txn-fuzzing-dbg
     // bank.rehash();
     // const slot_hash = Hash.ZEROES;
-    const slot_hash = Hash.parseBase58String("6AavNxZpjzFwkHto1bfh5WcS4xLiUKecVoVCcskVY6H") catch unreachable;
+    const slot_hash = try Hash.parseBase58String("6AavNxZpjzFwkHto1bfh5WcS4xLiUKecVoVCcskVY6H");
 
     parent_slot = slot;
     parent_hash = slot_hash;
@@ -517,15 +522,19 @@ fn executeTxnContext(allocator: std.mem.Allocator, pb_txn_ctx: pb.TxnContext, em
                 // an entry for the parent epoch with zero stakes.
                 // https://github.com/firedancer-io/agave/blob/10fe1eb29aac9c236fd72d08ae60a3ef61ee8353/runtime/src/stakes.rs#L297
                 {
-                    const stakes: *StakesCache.T(), var stakes_guard = stakes_cache.stakes.writeWithLock();
+                    const stakes: *StakesCache.T(), //
+                    var stakes_guard = stakes_cache.stakes.writeWithLock();
                     defer stakes_guard.unlock();
                     stakes.epoch = epoch;
                     std.debug.assert(stakes.stake_history.entries.len == 0);
-                    stakes.stake_history.entries.appendAssumeCapacity(.{ .epoch = parent_epoch, .stake = .{
-                        .effective = 0,
-                        .activating = 0,
-                        .deactivating = 0,
-                    } });
+                    stakes.stake_history.entries.appendAssumeCapacity(.{
+                        .epoch = parent_epoch,
+                        .stake = .{
+                            .effective = 0,
+                            .activating = 0,
+                            .deactivating = 0,
+                        },
+                    });
                 }
 
                 const leader_schedule_epoch = epoch_schedule.getLeaderScheduleEpoch(slot);
@@ -615,7 +624,12 @@ fn executeTxnContext(allocator: std.mem.Allocator, pb_txn_ctx: pb.TxnContext, em
                     .ns_per_slot = @intCast(genesis_config.nsPerSlot()),
                     .update_sysvar_deps = update_sysvar_deps,
                 });
-                try update_sysvar.updateLastRestartSlot(allocator, &feature_set, &hard_forks, update_sysvar_deps);
+                try update_sysvar.updateLastRestartSlot(
+                    allocator,
+                    &feature_set,
+                    &hard_forks,
+                    update_sysvar_deps,
+                );
             }
 
             // Get num accounts modified by this slot if accounts lt hash enabled
@@ -730,7 +744,12 @@ fn executeTxnContext(allocator: std.mem.Allocator, pb_txn_ctx: pb.TxnContext, em
     // Initialize and populate the sysvar cache
     var sysvar_cache = SysvarCache{};
     defer sysvar_cache.deinit(allocator);
-    try update_sysvar.fillMissingSysvarCacheEntries(allocator, &accounts_db, &ancestors, &sysvar_cache);
+    try update_sysvar.fillMissingSysvarCacheEntries(
+        allocator,
+        &accounts_db,
+        &ancestors,
+        &sysvar_cache,
+    );
 
     // Load transaction from protobuf context
     const transaction = try loadTransaction(allocator, &pb_txn_ctx);
@@ -785,7 +804,9 @@ fn executeTxnContext(allocator: std.mem.Allocator, pb_txn_ctx: pb.TxnContext, em
         .slot = slot,
         .max_age = 150,
         .last_blockhash = blockhash_queue.last_hash.?,
-        .next_durable_nonce = sig.runtime.nonce.initDurableNonceFromHash(blockhash_queue.last_hash.?),
+        .next_durable_nonce = sig.runtime.nonce.initDurableNonceFromHash(
+            blockhash_queue.last_hash.?,
+        ),
 
         // TODO: these values are highly suspicious, we need to note down somewhere how exactly agave
         // juggles the many different versions of lamports_per_signature.
@@ -837,7 +858,10 @@ fn serializeOutput(
                 // InstructionError, which seems wrong. Not to mention that we don't have a way
                 // to access *which* instruction in the transaction is the one that errored.
                 .status = if (executed_txn.executed_transaction.err != null) 9 else 0,
-                .instruction_error = if (executed_txn.executed_transaction.err) |err| @intFromEnum(err) + 1 else 0,
+                .instruction_error = if (executed_txn.executed_transaction.err) |err|
+                    @intFromEnum(err) + 1
+                else
+                    0,
 
                 .resulting_state = .{
                     .acct_states = a: {
@@ -1057,11 +1081,17 @@ fn loadTransactionMesssage(
     );
     for (address_lookups, message.address_table_lookups.items) |*lookup, pb_lookup| {
         const writable_indexes = try allocator.alloc(u8, pb_lookup.writable_indexes.items.len);
-        for (writable_indexes, pb_lookup.writable_indexes.items) |*writable_index, pb_writable_index|
+        for (
+            writable_indexes,
+            pb_lookup.writable_indexes.items,
+        ) |*writable_index, pb_writable_index|
             writable_index.* = @truncate(pb_writable_index);
 
         const readonly_indexes = try allocator.alloc(u8, pb_lookup.readonly_indexes.items.len);
-        for (readonly_indexes, pb_lookup.readonly_indexes.items) |*readonly_index, pb_readonly_index|
+        for (
+            readonly_indexes,
+            pb_lookup.readonly_indexes.items,
+        ) |*readonly_index, pb_readonly_index|
             readonly_index.* = @truncate(pb_readonly_index);
 
         lookup.* = TransactionAddressLookup{
@@ -1189,7 +1219,10 @@ const State = struct {
 };
 
 fn writeState(allocator: Allocator, state: State) !void {
-    var file = std.fs.cwd().openFile("output-state-sig.txt", .{ .mode = .read_write }) catch |err| switch (err) {
+    var file = std.fs.cwd().openFile(
+        "output-state-sig.txt",
+        .{ .mode = .read_write },
+    ) catch |err| switch (err) {
         error.FileNotFound => try std.fs.cwd().createFile("output-state-sig.txt", .{}),
         else => return err,
     };
@@ -1226,21 +1259,31 @@ fn writeAccounts(
             const data = try account.data.dupeAllocatedOwned(allocator);
             defer data.deinit(allocator);
 
-            try writer.print("  {}: slot={}, lamports={}, owner={}, executable={}, rent_epoch={}", .{
-                pubkey,
-                slot,
-                account.lamports,
-                account.owner,
-                account.executable,
-                account.rent_epoch,
-            });
+            try writer.print(
+                "  {}: slot={}, lamports={}, owner={}, executable={}, rent_epoch={}",
+                .{
+                    pubkey,
+                    slot,
+                    account.lamports,
+                    account.owner,
+                    account.executable,
+                    account.rent_epoch,
+                },
+            );
 
             try writeSlice(allocator, writer, ", data=", "\n", u8, data.owned_allocation);
         }
     }
 }
 
-fn writeSlice(allocator: Allocator, writer: anytype, prefix: []const u8, suffix: []const u8, comptime T: type, slice: []const T) !void {
+fn writeSlice(
+    allocator: Allocator,
+    writer: anytype,
+    prefix: []const u8,
+    suffix: []const u8,
+    comptime T: type,
+    slice: []const T,
+) !void {
     const str = try std.fmt.allocPrint(allocator, "{any}", .{slice[0..@min(slice.len, 512)]});
     defer allocator.free(str);
     str[1] = '[';
@@ -1282,7 +1325,10 @@ pub fn createPbInstructions(
     allocator: std.mem.Allocator,
     instructions: []const PbInstructionsParams,
 ) !std.ArrayList(pb.CompiledInstruction) {
-    var result = try std.ArrayList(pb.CompiledInstruction).initCapacity(allocator, instructions.len);
+    var result = try std.ArrayList(pb.CompiledInstruction).initCapacity(
+        allocator,
+        instructions.len,
+    );
     for (instructions) |instruction| {
         var accounts = std.ArrayList(u32).init(allocator);
         try accounts.appendSlice(instruction.accounts);
@@ -1306,7 +1352,10 @@ pub fn createPbAddressLookupTables(
     allocator: std.mem.Allocator,
     lookup_tables: []const PbAddressLookupTablesParams,
 ) !std.ArrayList(pb.MessageAddressTableLookup) {
-    var result = try std.ArrayList(pb.MessageAddressTableLookup).initCapacity(allocator, lookup_tables.len);
+    var result = try std.ArrayList(pb.MessageAddressTableLookup).initCapacity(
+        allocator,
+        lookup_tables.len,
+    );
     for (lookup_tables) |lookup_table| {
         var writable_indexes = std.ArrayList(u32).init(allocator);
         try writable_indexes.appendSlice(lookup_table.writable_indexes);

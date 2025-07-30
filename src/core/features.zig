@@ -25,7 +25,10 @@ pub const FeatureSet = struct {
         return feature_set;
     }
 
-    pub fn fullInflationFeaturesEnabled(self: *const FeatureSet, allocator: std.mem.Allocator) !std.AutoArrayHashMapUnmanaged(Pubkey, void) {
+    pub fn fullInflationFeaturesEnabled(
+        self: *const FeatureSet,
+        allocator: std.mem.Allocator,
+    ) !std.AutoArrayHashMapUnmanaged(Pubkey, void) {
         var result = std.AutoArrayHashMapUnmanaged(Pubkey, void){};
         errdefer result.deinit(allocator);
 
