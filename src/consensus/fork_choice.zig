@@ -968,15 +968,8 @@ pub const ForkChoice = struct {
             const new_vote_hash = new_vote_slot_hash.hash;
 
             if (new_vote_slot < self.tree_root.slot) {
-                // If the new vote is less than the root we can ignore it. This is because there
-                // are two cases. Either:
-                // 1) The validator's latest vote was bigger than the new vote, so we can ignore it
-                // 2) The validator's latest vote was less than the new vote, then the validator's latest
-                // vote was also less than root. This means either every node in the current tree has the
-                // validators stake counted toward it (if the latest vote was an ancestor of the current root),
-                // OR every node doesn't have this validator's vote counting toward it (if the latest vote
-                // was not an ancestor of the current root). Thus this validator is essentially a no-op
-                // and won't affect fork choice.
+                // Votes for slots older than the root are irrelevant
+                // because the root represents finalized consensus.
                 continue;
             }
 
@@ -986,40 +979,36 @@ pub const ForkChoice = struct {
             }
             try observed_pubkeys.put(allocator, pubkey, new_vote_slot);
 
-            const pubkey_latest_vote = self.latest_votes.getPtr(pubkey);
+            // Single lookup that handles both existing and new entries
+            const entry = try self.latest_votes.getOrPut(pubkey);
+            if (entry.found_existing) {
+                const old_latest_vote = entry.value_ptr.*;
+                const old_latest_vote_slot = old_latest_vote.slot;
+                const old_latest_vote_hash = old_latest_vote.hash;
 
-            // Filter out any votes or slots < any slot this pubkey has
-            // already voted for, we only care about the latest votes.
-            //
-            // If the new vote is for the same slot, but a different, smaller hash,
-            // then allow processing to continue as this is a duplicate version
-            // of the same slot.
-            if (pubkey_latest_vote) |latest_vote| {
-                if (new_vote_slot < latest_vote.slot) {
+                // Filter out any votes or slots < any slot this pubkey has
+                // already voted for, we only care about the latest votes.
+                //
+                // If the new vote is for the same slot, but a different, smaller hash,
+                // then allow processing to continue as this is a duplicate version
+                // of the same slot.
+                if (new_vote_slot < old_latest_vote_slot) {
                     continue;
                 }
 
-                if (new_vote_slot == latest_vote.slot and
-                    new_vote_hash.order(&latest_vote.hash) != .lt)
+                if (new_vote_slot == old_latest_vote_slot and
+                    new_vote_hash.order(&old_latest_vote_hash) != .lt)
                 {
                     continue;
                 }
-            }
 
-            // We either:
-            // 1) don't have a vote yet for this pubkey,
-            // 2) or the new vote slot is bigger than the old vote slot
-            // 3) or the new vote slot == old_vote slot, but for a smaller bank hash.
-            // In all cases, we need to remove this pubkey stake from the previous fork
-            if (try self.latest_votes.fetchPut(pubkey, new_vote_slot_hash)) |old_latest_vote| {
-                const old_latest_vote_slot = old_latest_vote.value.slot;
-                const old_latest_vote_hash = old_latest_vote.value.hash;
-                if (new_vote_slot == old_latest_vote_slot)
+                if (new_vote_slot == old_latest_vote_slot) {
                     // If the slots are equal, then the new
                     // vote must be for a smaller hash
-                    std.debug.assert(new_vote_hash.order(&old_latest_vote_hash) == .lt)
-                else
+                    std.debug.assert(new_vote_hash.order(&old_latest_vote_hash) == .lt);
+                } else {
                     std.debug.assert(new_vote_slot > old_latest_vote_slot);
+                }
 
                 const epoch = epoch_schedule.getEpoch(old_latest_vote_slot);
                 const stake_update = stake_update: {
@@ -1034,7 +1023,7 @@ pub const ForkChoice = struct {
                 if (stake_update > 0) {
                     const subtract_op = UpdateOperation{ .Subtract = stake_update };
                     const subtract_label = SlotAndHashLabel{
-                        .slot_hash_key = old_latest_vote.value,
+                        .slot_hash_key = old_latest_vote,
                         .label = .Subtract,
                     };
 
@@ -1049,23 +1038,26 @@ pub const ForkChoice = struct {
 
                     try self.insertAggregateOperations(
                         &update_operations,
-                        old_latest_vote.value,
+                        old_latest_vote,
                     );
                 }
             }
 
-            {
-                // Add this pubkey stake to new fork
-                const epoch = epoch_schedule.getEpoch(new_vote_slot_hash.slot);
-                const stake_update = stake_update: {
-                    const stakes = epoch_stakes.get(epoch) orelse
-                        break :stake_update 0;
-                    const stake_and_vote_account =
-                        stakes.current.stakes.vote_accounts.vote_accounts.get(pubkey) orelse
-                        break :stake_update 0;
-                    break :stake_update stake_and_vote_account.stake;
-                };
+            // Update to new vote (whether new entry or replacing old)
+            entry.value_ptr.* = new_vote_slot_hash;
 
+            // Add this pubkey stake to new fork
+            const epoch = epoch_schedule.getEpoch(new_vote_slot_hash.slot);
+            const stake_update = stake_update: {
+                const stakes = epoch_stakes.get(epoch) orelse
+                    break :stake_update 0;
+                const stake_and_vote_account =
+                    stakes.current.stakes.vote_accounts.vote_accounts.get(pubkey) orelse
+                    break :stake_update 0;
+                break :stake_update stake_and_vote_account.stake;
+            };
+
+            if (stake_update > 0) {
                 const add_op = UpdateOperation{ .Add = stake_update };
                 const add_label = SlotAndHashLabel{
                     .slot_hash_key = new_vote_slot_hash,
