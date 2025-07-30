@@ -41,7 +41,7 @@ pub const COMPUTE_UNITS = 750;
 pub fn execute(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
-) (error{OutOfMemory} || InstructionError)!void {
+) (error{OutOfMemory} || InstructionError)!void { 
     // agave: consumed in declare_process_instruction
     try ic.tc.consumeCompute(program.COMPUTE_UNITS);
 
@@ -533,8 +533,8 @@ fn authorizeWithSeed(
             account.pubkey,
             authority_seed,
             authority_owner.*,
-        ) catch {
-            // ic.tc.custom_error = @intFromError(err);
+        ) catch |err| {
+            ic.tc.custom_error = sig.runtime.pubkey_utils.mapError(err);
             return error.Custom;
         });
     }
@@ -976,7 +976,7 @@ fn stakeWeightedCreditsObserved(
 ) ?u64 {
     if (stake.credits_observed == absorbed_credits_observed) return stake.credits_observed;
 
-    const total_stake = add(@as(u128, stake.delegation.stake), absorbed_lamports) orelse
+    const total_stake: u128 = add(stake.delegation.stake, absorbed_lamports) orelse
         return null;
 
     const stake_weighted_credits = mul(
