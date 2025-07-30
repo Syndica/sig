@@ -240,6 +240,31 @@ pub const AccountsDB = struct {
         };
     }
 
+    /// Returns a lean version of AccountsDB that can be initialized in under
+    /// 1 ms during tests and you can put + get accounts in it.
+    ///
+    /// May be lacking some functionality for more advanced test cases like
+    /// loading a snapshot.
+    ///
+    /// Returns a tmpdir that you should cleanup alongside AccountsDB
+    pub fn initForTest(allocator: std.mem.Allocator) !struct { AccountsDB, std.testing.TmpDir } {
+        var tmp_dir = std.testing.tmpDir(.{});
+        errdefer tmp_dir.cleanup();
+        return .{
+            try .init(.{
+                .allocator = allocator,
+                .logger = .FOR_TESTS,
+                .snapshot_dir = tmp_dir.dir,
+                .index_allocation = .ram,
+                .number_of_index_shards = 1,
+                .geyser_writer = null,
+                .gossip_view = null,
+                .buffer_pool_frames = 2,
+            }),
+            tmp_dir,
+        };
+    }
+
     pub fn deinit(self: *AccountsDB) void {
         const zone = tracy.initZone(@src(), .{ .name = "accountsdb deinit" });
         defer zone.deinit();
@@ -777,7 +802,7 @@ pub const AccountsDB = struct {
             const n_accounts_this_slot = blk: {
                 var n_accounts: usize = 0;
 
-                var iter = accounts_file.iterator(self.allocator, &self.buffer_pool);
+                var iter = accounts_file.iterator(&self.buffer_pool);
                 while (try iter.nextNoData()) |account| {
                     n_accounts += 1;
                     shard_counts[
@@ -1127,9 +1152,9 @@ pub const AccountsDB = struct {
         defer zone.deinit();
 
         var timer = try sig.time.Timer.start();
-        // TODO: make cli arg
-        const n_threads = @as(u32, @truncate(try std.Thread.getCpuCount()));
-        // const n_threads = 4;
+
+        // going higher will only lead to more contention in the buffer pool reads
+        const n_threads = @min(6, @as(u32, @truncate(try std.Thread.getCpuCount())));
 
         // alloc the result
         const hashes = try self.allocator.alloc(std.ArrayListUnmanaged(Hash), n_threads);
@@ -1872,11 +1897,8 @@ pub const AccountsDB = struct {
             // we update the bank hash stats while locking the file map to avoid
             // reading accounts from the file map and getting inaccurate/stale
             // bank hash stats.
-            var account_iter = account_file.iterator(
-                frame_allocator,
-                &self.buffer_pool,
-            );
-            while (try account_iter.next()) |account_in_file| {
+            var account_iter = account_file.iterator(&self.buffer_pool);
+            while (try account_iter.next(frame_allocator)) |account_in_file| {
                 defer {
                     account_in_file.deinit(frame_allocator);
                     fba.reset();

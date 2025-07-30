@@ -33,6 +33,10 @@ pub fn StakesCacheGeneric(comptime stakes_type: StakesType) type {
 
         const Self = @This();
 
+        pub fn T() type {
+            return StakesT;
+        }
+
         pub fn init(allocator: Allocator) Allocator.Error!Self {
             return .{ .stakes = RwMux(StakesT).init(try StakesT.init(allocator)) };
         }

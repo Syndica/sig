@@ -1603,9 +1603,12 @@ fn optimisticallyBypassVoteStakeThresholdCheck(
     return false;
 }
 
+/// Collects and aggregates vote lockout information from all validator vote accounts to compute
+/// aggregated vote lockouts, but also total stake distribution, fork-specific stake, and latest validator votes for frozen banks.
+/// Analogous to [collect_vote_lockouts]https://github.com/anza-xyz/agave/blob/91520c7095c4db968fe666b80a1b80dfef1bd909/core/src/consensus.rs#L389
 pub fn collectVoteLockouts(
     allocator: std.mem.Allocator,
-    logger: Logger,
+    logger: ScopedLogger("replay_tower"),
     vote_account_pubkey: *const Pubkey,
     bank_slot: Slot,
     vote_accounts: *const StakeAndVoteAccountsMap,
@@ -1627,34 +1630,30 @@ pub fn collectVoteLockouts(
 
     var my_latest_landed_vote: ?Slot = null;
 
-    for (vote_accounts.keys(), vote_accounts.values()) |key, value| {
-        const voted_stake = value.stake;
-        const vote_account = value.account;
+    for (vote_accounts.keys(), vote_accounts.values()) |vote_address, vote| {
         // Skip accounts with no stake.
-        if (voted_stake == 0) {
+        if (vote.stake == 0) {
             continue;
         }
 
         logger.trace().logf(
             "{} {} with stake {}",
-            .{ vote_account_pubkey, key, voted_stake },
+            .{ vote_account_pubkey, vote_address, vote.stake },
         );
 
-        var vote_state = try TowerVoteState.fromAccount(
-            &vote_account,
-        );
+        var vote_state = try TowerVoteState.fromAccount(&vote.account);
 
-        for (vote_state.votes.constSlice()) |vote| {
-            const interval = try lockout_intervals.map
-                .getOrPut(allocator, vote.lastLockedOutSlot());
+        for (vote_state.votes.constSlice()) |lockout_vote| {
+            const interval = try lockout_intervals
+                .getOrPut(allocator, lockout_vote.lastLockedOutSlot());
             if (!interval.found_existing) {
                 interval.value_ptr.* = .empty;
             }
-            try interval.value_ptr.append(allocator, .{ vote.slot, key });
+            try interval.value_ptr.append(.{ .slot = lockout_vote.slot, .pubkey = vote_address });
         }
 
         // Vote account for this validator
-        if (key.equals(vote_account_pubkey)) {
+        if (vote_address.equals(vote_account_pubkey)) {
             my_latest_landed_vote = if (vote_state.nthRecentLockout(0)) |l| l.slot else null;
             logger.debug().logf("vote state {any}", .{vote_state});
             const observed_slot = if (vote_state.nthRecentLockout(0)) |l| l.slot else 0;
@@ -1663,12 +1662,13 @@ pub fn collectVoteLockouts(
         }
         const start_root = vote_state.root_slot;
 
-        // Add the last vote to update the `heaviest_subtree_fork_choice`
+        // Track the last vote in latest validator votes for latest frozen states
+        // so that it can be used to update the fork choice.
         if (vote_state.lastVotedSlot()) |last_landed_voted_slot| {
             if (progress_map.getHash(last_landed_voted_slot)) |frozen_hash| {
                 _ = try latest_validator_votes_for_frozen_banks.checkAddVote(
                     allocator,
-                    key,
+                    vote_address,
                     last_landed_voted_slot,
                     frozen_hash,
                     .replay,
@@ -1679,24 +1679,23 @@ pub fn collectVoteLockouts(
         // Simulate next vote and extract vote slots using the provided bank slot.
         try vote_state.processNextVoteSlot(bank_slot);
 
-        for (vote_state.votes.constSlice()) |vote| {
-            try vote_slots.put(vote.slot);
+        for (vote_state.votes.constSlice()) |lockout_vote| {
+            try vote_slots.put(lockout_vote.slot);
         }
 
         if (start_root != vote_state.root_slot) {
             if (start_root) |root| {
-                const vote = Lockout{ .slot = root, .confirmation_count = MAX_LOCKOUT_HISTORY };
-                logger.trace().logf("ROOT: {}", .{vote.slot});
-                try vote_slots.put(vote.slot);
+                const lockout = Lockout{ .slot = root, .confirmation_count = MAX_LOCKOUT_HISTORY };
+                try vote_slots.put(lockout.slot);
             }
         }
         if (vote_state.root_slot) |root| {
-            const vote = Lockout{ .slot = root, .confirmation_count = MAX_LOCKOUT_HISTORY };
-            try vote_slots.put(vote.slot);
+            const lockout = Lockout{ .slot = root, .confirmation_count = MAX_LOCKOUT_HISTORY };
+            try vote_slots.put(lockout.slot);
         }
 
         // The last vote in the vote stack is a simulated vote on bank_slot, which
-        // we added to the vote stack earlier in this function by calling processVote().
+        // we added to the vote stack earlier in this function by calling processNextVoteSlot().
         // We don't want to update the ancestors stakes of this vote b/c it does not
         // represent an actual vote by the validator.
 
@@ -1706,17 +1705,17 @@ pub fn collectVoteLockouts(
         // to find the last unsimulated vote.
         std.debug.assert(vote_state.nthRecentLockout(0).?.slot == bank_slot);
 
-        if (vote_state.nthRecentLockout(1)) |vote| {
+        if (vote_state.nthRecentLockout(1)) |lockout| {
             // Update all the parents of this last vote with the stake of this vote account
             try updateAncestorVotedStakes(
                 allocator,
                 &voted_stakes,
-                vote.slot,
-                voted_stake,
+                lockout.slot,
+                vote.stake,
                 ancestors,
             );
         }
-        total_stake += voted_stake;
+        total_stake += vote.stake;
     }
 
     try populateAncestorVotedStakes(
@@ -1810,7 +1809,8 @@ fn updateAncestorVotedStakes(
     }
 }
 
-pub fn isSlotDuplicateConfirmed(
+/// Analogous to [is_slot_duplicate_confirmed](https://github.com/anza-xyz/agave/blob/91520c7095c4db968fe666b80a1b80dfef1bd909/core/src/consensus.rs#L540)
+pub fn isDuplicateSlotConfirmed(
     slot: Slot,
     voted_stakes: *const VotedStakes,
     total_stake: Stake,
@@ -1830,7 +1830,7 @@ test "is slot duplicate confirmed not enough stake failure" {
 
     stakes.putAssumeCapacity(0, 52);
 
-    const result = isSlotDuplicateConfirmed(
+    const result = isDuplicateSlotConfirmed(
         0,
         &stakes,
         100,
@@ -1842,7 +1842,7 @@ test "is slot duplicate confirmed unknown slot" {
     var stakes = VotedStakes.empty;
     defer stakes.deinit(std.testing.allocator);
 
-    const result = isSlotDuplicateConfirmed(
+    const result = isDuplicateSlotConfirmed(
         0,
         &stakes,
         100,
@@ -1857,7 +1857,7 @@ test "is slot duplicate confirmed pass" {
 
     stakes.putAssumeCapacity(0, 53);
 
-    const result = isSlotDuplicateConfirmed(
+    const result = isDuplicateSlotConfirmed(
         0,
         &stakes,
         100,

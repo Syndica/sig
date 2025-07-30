@@ -32,7 +32,7 @@ pub fn poseidon(
     const result_addr = registers.get(.r5);
 
     if (len > 12) {
-        try tc.log("Poseidon hashing {} sequences is not supported", .{len});
+        try tc.log("Poseidon hashing {d} sequences is not supported", .{len});
         return error.InvalidLength;
     }
 

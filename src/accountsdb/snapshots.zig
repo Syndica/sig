@@ -1467,6 +1467,9 @@ pub fn parallelUnpackZstdTarBall(
 
     const file_size = (try file.stat()).size;
 
+    // calling posix.mmap on a zero-sized file will cause illegal behaviour
+    if (file_size == 0) return error.ZeroSizedTarball;
+
     // TODO: improve `zstd.Reader` to be capable of sourcing a stream of bytes
     // rather than a fixed slice of bytes, so we don't have to load the entire
     // snapshot file into memory.

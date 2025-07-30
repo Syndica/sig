@@ -403,7 +403,7 @@ fn cleanAccountFiles(
             break :blk file_map.get(file_id).?;
         };
 
-        var account_iter = account_file.iterator(db.allocator, &db.buffer_pool);
+        var account_iter = account_file.iterator(&db.buffer_pool);
         while (try account_iter.nextNoData()) |account| {
             defer account.deinit(db.allocator);
             const pubkey = account.pubkey().*;
@@ -673,7 +673,7 @@ fn shrinkAccountFiles(
 
         var accounts_alive_size: u64 = 0;
         var accounts_dead_size: u64 = 0;
-        var account_iter = shrink_account_file.iterator(db.allocator, &db.buffer_pool);
+        var account_iter = shrink_account_file.iterator(&db.buffer_pool);
         while (try account_iter.nextNoData()) |*account_in_file| {
             defer account_in_file.deinit(db.allocator);
 
@@ -734,7 +734,7 @@ fn shrinkAccountFiles(
         var offset: usize = 0;
         for (is_alive_flags.items) |is_alive| {
             // SAFE: we know is_alive_flags is the same length as the account_iter
-            const account = (try account_iter.next()).?;
+            const account = (try account_iter.next(db.allocator)).?;
             defer account.deinit(db.allocator);
             if (is_alive) {
                 try account_file_buf.resize(account.getSizeInFile());
