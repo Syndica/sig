@@ -67,7 +67,15 @@ PASSING_DIRS=(
     # "vm_interp/fixtures/v3"
 )
 
-FIXTURES=()
+PASSING_TXN_FIXTURES=(
+    "./test-vectors/txn/fixtures/programs/0103115bd3ec4f27fcf4dbd7cee22a530e68f797_2135631.fix"
+    "./test-vectors/txn/fixtures/programs/0183b6cda71f09f58bcb5164828a9597a839869d_2211742.fix"
+    "./test-vectors/txn/fixtures/programs/019cd344312d03b3abd6414315b0ccf5dd722cad_265678.fix"
+    "./test-vectors/txn/fixtures/programs/01c457becc9df90ae0e14a274b1d803b343a9e86_265678.fix"
+    "./test-vectors/txn/fixtures/programs/01d7494b4d7dd492421e8267de2a5a70ab86ab22_553257.fix"
+)
+
+FIXTURES=("${PASSING_TXN_FIXTURES[@]}")
 
 for dir in "${PASSING_DIRS[@]}"; do
   while IFS= read -r -d '' file; do
@@ -79,7 +87,6 @@ mkdir -p test-inputs/
 printf "%s\n" "${FIXTURES[@]}" \
   | circleci tests split \
   | xargs -d '\n' -I{} cp "{}" test-inputs/
-
 
 cd solana-conformance
 source test_suite_env/bin/activate
