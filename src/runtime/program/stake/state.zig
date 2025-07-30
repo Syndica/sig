@@ -281,15 +281,14 @@ pub const StakeStateV2 = union(enum) {
                     current_epoch,
                     new_rate_activation_epoch,
                 );
-
-                const newly_not_effective_cluster_take = @as(
+                const newly_not_effective_cluster_stake = @as(
                     f64,
                     @floatFromInt(prev_cluster_stake.effective),
                 ) * warmup_cooldown_rate;
 
                 const newly_not_effective_stake: u64 = @max(1, std.math.lossyCast(
                     u64,
-                    weight * newly_not_effective_cluster_take,
+                    weight * newly_not_effective_cluster_stake,
                 ));
 
                 current_effective_stake = current_effective_stake -| newly_not_effective_stake;
@@ -301,7 +300,10 @@ pub const StakeStateV2 = union(enum) {
                 prev_cluster_stake = current_cluster.stake;
             }
 
-            return .{ .deactivating = current_effective_stake };
+            return .{
+                .effective = current_effective_stake,
+                .deactivating = current_effective_stake,
+            };
         }
 
         /// returned tuple is (effective, activating) stake
