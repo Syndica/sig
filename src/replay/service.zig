@@ -12,7 +12,6 @@ const SlotLeaders = sig.core.leader_schedule.SlotLeaders;
 const SlotState = sig.core.bank.SlotState;
 
 const AccountStore = sig.accounts_db.AccountStore;
-const AccountReader = sig.accounts_db.AccountReader;
 const AccountsDB = sig.accounts_db.AccountsDB;
 const SlotAccountReader = sig.accounts_db.account_store.SlotAccountReader;
 

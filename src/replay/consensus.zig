@@ -13,7 +13,6 @@ const ForkChoice = sig.consensus.fork_choice.ForkChoice;
 const LatestValidatorVotes = sig.consensus.latest_validator_votes.LatestValidatorVotes;
 
 const EpochStakesMap = sig.core.EpochStakesMap;
-const BlockhashQueue = sig.core.BlockhashQueue;
 
 const SlotTracker = sig.replay.trackers.SlotTracker;
 const EpochTracker = sig.replay.trackers.EpochTracker;
@@ -27,7 +26,6 @@ const SlotAndHash = sig.core.hash.SlotAndHash;
 const Slot = sig.core.Slot;
 const Epoch = sig.core.Epoch;
 const Hash = sig.core.Hash;
-const LtHash = sig.core.LtHash;
 
 const RwMux = sig.sync.RwMux;
 
