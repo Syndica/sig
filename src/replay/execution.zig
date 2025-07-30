@@ -101,10 +101,10 @@ pub fn replayActiveSlots(state: *ReplayExecutionState) !bool {
         // results. this will change once we call the svm and process the
         // results of execution.
         const slot, const status = slot_status;
+        if (status != .confirm) continue;
+
         const slot_info = state.slot_tracker.get(slot) orelse unreachable;
         const epoch_info = state.epochs.getForSlot(slot) orelse unreachable;
-
-        if (status != .confirm) continue;
 
         const future = status.confirm;
         // NOTE: agave does this a bit differently, it indicates that a slot
