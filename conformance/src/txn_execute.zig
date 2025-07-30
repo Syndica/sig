@@ -184,7 +184,7 @@ fn executeTxnContext(allocator: std.mem.Allocator, pb_txn_ctx: pb.TxnContext, em
     var compute_budget = ComputeBudget.DEFAULT;
     compute_budget.compute_unit_limit = compute_budget.compute_unit_limit;
 
-    var fee_rate_govenor = FeeRateGovernor.DEFAULT;
+    var fee_rate_governor = FeeRateGovernor.DEFAULT;
 
     var blockhash_queue = BlockhashQueue.DEFAULT;
     defer blockhash_queue.deinit(allocator);
@@ -217,7 +217,7 @@ fn executeTxnContext(allocator: std.mem.Allocator, pb_txn_ctx: pb.TxnContext, em
         // https://github.com/firedancer-io/agave/blob/10fe1eb29aac9c236fd72d08ae60a3ef61ee8353/runtime/src/bank.rs#L2727
         {
             // Set the feee rate governor
-            fee_rate_govenor = genesis_config.fee_rate_governor;
+            fee_rate_governor = genesis_config.fee_rate_governor;
 
             // Insert genesis config accounts
             var genesis_account_iterator = genesis_config.accounts.iterator();
@@ -244,7 +244,7 @@ fn executeTxnContext(allocator: std.mem.Allocator, pb_txn_ctx: pb.TxnContext, em
             try blockhash_queue.insertGenesisHash(
                 allocator,
                 blockhashes[0], // genesis_config.hash() for production
-                fee_rate_govenor.lamports_per_signature,
+                fee_rate_governor.lamports_per_signature,
             );
 
             // Set misc bank fields
@@ -450,8 +450,8 @@ fn executeTxnContext(allocator: std.mem.Allocator, pb_txn_ctx: pb.TxnContext, em
             // const status_cache = parent.status_cache.clone();
 
             // Derive new fee rate governor
-            fee_rate_govenor = FeeRateGovernor.initDerived(
-                &fee_rate_govenor,
+            fee_rate_governor = FeeRateGovernor.initDerived(
+                &fee_rate_governor,
                 0, // parent.signature_count()
             );
 
@@ -671,9 +671,8 @@ fn executeTxnContext(allocator: std.mem.Allocator, pb_txn_ctx: pb.TxnContext, em
 
     // Get lamports per signature from first entry in recent blockhashes
     const lamports_per_signature = blk: {
-        var sysvar_cache = SysvarCache{};
+        var sysvar_cache: SysvarCache = .{};
         defer sysvar_cache.deinit(allocator);
-
         try update_sysvar.fillMissingSysvarCacheEntries(
             allocator,
             &accounts_db,
@@ -681,17 +680,13 @@ fn executeTxnContext(allocator: std.mem.Allocator, pb_txn_ctx: pb.TxnContext, em
             &sysvar_cache,
         );
 
-        const recent_blockhashes = sysvar_cache.get(RecentBlockhashes) catch
-            break :blk null;
-
-        const first_entry = recent_blockhashes.getFirst() orelse
-            break :blk null;
-
+        const recent_blockhashes = sysvar_cache.get(RecentBlockhashes) catch break :blk null;
+        const first_entry = recent_blockhashes.getFirst() orelse break :blk null;
         break :blk if (first_entry.lamports_per_signature != 0)
             first_entry.lamports_per_signature
         else
             null;
-    } orelse fee_rate_govenor.lamports_per_signature;
+    } orelse fee_rate_governor.lamports_per_signature;
 
     // Register blockhashes and update recent blockhashes sysvar
     for (blockhashes) |blockhash| {
@@ -782,8 +777,11 @@ fn executeTxnContext(allocator: std.mem.Allocator, pb_txn_ctx: pb.TxnContext, em
         .max_age = 150,
         .last_blockhash = blockhash_queue.last_hash.?,
         .next_durable_nonce = sig.runtime.nonce.initDurableNonceFromHash(blockhash_queue.last_hash.?),
-        .next_lamports_per_signature = 5000,
-        .last_lamports_per_signature = 5000,
+
+        // TODO: these values are highly suspicious, we need to note down somewhere how exactly agave
+        // juggles the many different versions of lamports_per_signature.
+        .next_lamports_per_signature = lamports_per_signature,
+        .last_lamports_per_signature = lamports_per_signature,
         .lamports_per_signature = 5000,
     };
 
@@ -806,6 +804,8 @@ fn executeTxnContext(allocator: std.mem.Allocator, pb_txn_ctx: pb.TxnContext, em
         }
         allocator.free(txn_results);
     }
+
+    std.debug.print("result: {any}\n", .{txn_results[0]});
 
     return try serializeOutput(
         allocator,
