@@ -599,15 +599,6 @@ pub fn printPbVmContext(ctx: pb.VmContext) !void {
         ",\n\trodata_text_section_length: {}",
         .{ctx.rodata_text_section_length},
     );
-    try writer.writeAll(",\n\tinput_data_regions: [");
-    for (ctx.input_data_regions.items) |region| {
-        try writer.writeAll("\n\t\tInputDataRegion {");
-        try std.fmt.format(writer, "\n\t\t\toffset: {}", .{region.offset});
-        try std.fmt.format(writer, ",\n\t\t\tcontent: {any}", .{region.content.getSlice()});
-        try std.fmt.format(writer, ",\n\t\t\tis_writable: {}", .{region.is_writable});
-        try writer.writeAll("\n\t\t},\n");
-    }
-    try writer.writeAll("\t],");
     try std.fmt.format(writer, "\n\tr0: {}", .{ctx.r0});
     try std.fmt.format(writer, ",\n\tr1: {}", .{ctx.r1});
     try std.fmt.format(writer, ",\n\tr2: {}", .{ctx.r2});
@@ -661,8 +652,6 @@ pub fn printPbSyscallContext(pb_syscall_ctx: pb.SyscallContext) !void {
     try printPbInstrContext(pb_instr);
     try printPbVmContext(pb_vm);
     try printPbSyscallInvocation(pb_syscall_invocation);
-    if (pb_syscall_ctx.exec_effects) |exec_effects|
-        try printPbInstrEffects(exec_effects);
 }
 
 pub fn printPbSyscallEffects(ctx: pb.SyscallEffects) !void {

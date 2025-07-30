@@ -178,7 +178,7 @@ fn executeTxnContext(allocator: std.mem.Allocator, pb_txn_ctx: pb.TxnContext, em
     var parent_hash: Hash = Hash.ZEROES;
     var epoch_schedule: EpochSchedule = undefined;
 
-    var ancestors = Ancestors{};
+    var ancestors: Ancestors = .{};
     defer ancestors.deinit(allocator);
 
     var compute_budget = ComputeBudget.DEFAULT;
@@ -189,19 +189,19 @@ fn executeTxnContext(allocator: std.mem.Allocator, pb_txn_ctx: pb.TxnContext, em
     var blockhash_queue = BlockhashQueue.DEFAULT;
     defer blockhash_queue.deinit(allocator);
 
-    var epoch_stakes_map = EpochStakesMap{};
+    var epoch_stakes_map: EpochStakesMap = .{};
     defer deinitMapAndValues(allocator, epoch_stakes_map);
 
-    var hard_forks = HardForks{};
+    var hard_forks: HardForks = .{};
     defer hard_forks.deinit(allocator);
 
     var stakes_cache = try StakesCache.init(allocator);
     defer stakes_cache.deinit(allocator);
 
-    var vm_environment = vm.Environment{};
+    var vm_environment: vm.Environment = .{};
     defer vm_environment.deinit(allocator);
 
-    var capitalization = Atomic(u64).init(0);
+    var capitalization: Atomic(u64) = .init(0);
 
     // Bank::new_with_paths(...)
     // https://github.com/firedancer-io/agave/blob/10fe1eb29aac9c236fd72d08ae60a3ef61ee8353/runtime/src/bank.rs#L1162
@@ -740,7 +740,7 @@ fn executeTxnContext(allocator: std.mem.Allocator, pb_txn_ctx: pb.TxnContext, em
         allocator,
         transaction,
         &feature_set,
-        &accounts_db,
+        accounts_db.accountReader().forSlot(&ancestors),
     )) {
         .ok => |txn| txn,
         .err => |err| return err,
@@ -752,17 +752,10 @@ fn executeTxnContext(allocator: std.mem.Allocator, pb_txn_ctx: pb.TxnContext, em
         accs.deinit(allocator);
     }
 
-    // Return after verification, batch account loader not working as expected with zero lamport
-    // accounts. We should consider merging changes from dnut/replay/commit for transaction
-    // execution and dependency management.
-    // if (true) return .{};
-
     // Create batch account cache from accounts db
-    // Currently broken on harnew/txn-fuzzing-dbg -- zero lamport accounts handled incorrectly
     var accounts = try BatchAccountCache.initFromAccountsDb(
-        .AccountsDb,
         allocator,
-        &accounts_db,
+        accounts_db.accountReader().forSlot(&ancestors),
         &.{runtime_transaction},
     );
     defer accounts.deinit(allocator);
