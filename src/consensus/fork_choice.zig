@@ -1041,7 +1041,7 @@ pub const ForkChoice = struct {
                 const stakes = epoch_stakes.get(epoch) orelse
                     break :stake_update 0;
                 const stake_and_vote_account =
-                    stakes.current.stakes.vote_accounts.vote_accounts.get(pubkey) orelse
+                    stakes.stakes.vote_accounts.vote_accounts.get(pubkey) orelse
                     break :stake_update 0;
                 break :stake_update stake_and_vote_account.stake;
             };
