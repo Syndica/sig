@@ -212,6 +212,8 @@ pub const SlotState = struct {
             .tick_height = .init(bank_fields.tick_height),
             .collected_rent = .init(bank_fields.collected_rent),
             .accounts_lt_hash = .init(LtHash{ .data = @splat(0xBAD1) }),
+            .collected_transaction_fees = .init(0),
+            .collected_priority_fees = .init(0),
         };
     }
 
@@ -233,6 +235,8 @@ pub const SlotState = struct {
             .tick_height = .init(parent.tick_height.load(.monotonic)),
             .collected_rent = .init(0),
             .accounts_lt_hash = .init(parent.accounts_lt_hash.readCopy()),
+            .collected_transaction_fees = .init(0),
+            .collected_priority_fees = .init(0),
         };
     }
 

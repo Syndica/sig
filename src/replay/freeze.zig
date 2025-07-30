@@ -184,7 +184,15 @@ fn distributeTransactionFees(
     var burn = collected_transaction_fees * 50 / 100;
     const total_fees = collected_priority_fees + collected_transaction_fees;
     const payout = total_fees -| burn;
-    tryPayoutFees(allocator, account_store, account_reader, rent, slot, collector_id, payout) catch |e|
+    tryPayoutFees(
+        allocator,
+        account_store,
+        account_reader,
+        rent,
+        slot,
+        collector_id,
+        payout,
+    ) catch |e|
         switch (e) {
             error.InvalidAccountOwner,
             error.LamportOverflow,

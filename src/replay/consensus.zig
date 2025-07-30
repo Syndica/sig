@@ -961,6 +961,8 @@ test "checkAndHandleNewRoot - missing slot" {
             .accounts_lt_hash = .init(LtHash{
                 .data = [_]u16{0} ** LtHash.NUM_ELEMENTS,
             }),
+            .collected_transaction_fees = .init(0),
+            .collected_priority_fees = .init(0),
         },
     });
 
@@ -1041,6 +1043,8 @@ test "checkAndHandleNewRoot - missing hash" {
             .accounts_lt_hash = .init(.{
                 .data = [_]u16{0} ** LtHash.NUM_ELEMENTS,
             }),
+            .collected_transaction_fees = .init(0),
+            .collected_priority_fees = .init(0),
         },
     });
 
@@ -1178,6 +1182,8 @@ test "checkAndHandleNewRoot - success" {
             .accounts_lt_hash = .init(.{
                 .data = [_]u16{0} ** LtHash.NUM_ELEMENTS,
             }),
+            .collected_transaction_fees = .init(0),
+            .collected_priority_fees = .init(0),
         },
     });
 
@@ -1205,6 +1211,8 @@ test "checkAndHandleNewRoot - success" {
             .accounts_lt_hash = .init(.{
                 .data = [_]u16{0} ** LtHash.NUM_ELEMENTS,
             }),
+            .collected_transaction_fees = .init(0),
+            .collected_priority_fees = .init(0),
         },
     });
 
