@@ -1,6 +1,7 @@
 const pb = @import("proto/org/solana/sealevel/v1.pb.zig");
 const sig = @import("sig");
 const std = @import("std");
+const utils = @import("utils.zig");
 
 const sysvar = sig.runtime.sysvar;
 const features = sig.core.features;
@@ -65,23 +66,13 @@ pub fn verifyTransaction(
         );
         if (maybe_verify_error) |verify_error| {
             std.debug.print("Precompile verification failed\n", .{});
-            const instr_err, const instr_idx, const custom_err = switch (verify_error) {
-                .InstructionError => |err| blk: {
-                    const instr_err = sig.core.instruction.intFromInstructionErrorEnum(err[1]);
-                    const custom_err = switch (err[1]) {
-                        .Custom => |e| e,
-                        else => 0,
-                    };
-                    break :blk .{ instr_err, err[0], custom_err };
-                },
-                else => .{ 0, 0, 0 },
-            };
+            const converted = utils.convertTransactionError(verify_error);
             return .{ .err = .{
                 .sanitization_error = true,
-                .status = transactionErrorToInt(verify_error),
-                .instruction_error = instr_err,
-                .instruction_error_index = instr_idx,
-                .custom_error = custom_err,
+                .status = converted.err,
+                .instruction_error = converted.instruction_error,
+                .instruction_error_index = converted.instruction_index,
+                .custom_error = converted.custom_error,
             } };
         }
     }
@@ -135,44 +126,5 @@ fn verifyErrorToInt(err: sig.core.transaction.Transaction.VerifyError) u32 {
 }
 
 fn transactionErrorToInt(err: sig.ledger.transaction_status.TransactionError) u32 {
-    return switch (err) {
-        .AccountInUse => 1,
-        .AccountLoadedTwice => 2,
-        .AccountNotFound => 3,
-        .ProgramAccountNotFound => 4,
-        .InsufficientFundsForFee => 5,
-        .InvalidAccountForFee => 6,
-        .AlreadyProcessed => 7,
-        .BlockhashNotFound => 8,
-        .InstructionError => |_| 9,
-        .CallChainTooDeep => 10,
-        .MissingSignatureForFee => 11,
-        .InvalidAccountIndex => 12,
-        .SignatureFailure => 13,
-        .InvalidProgramForExecution => 14,
-        .SanitizeFailure => 15,
-        .ClusterMaintenance => 16,
-        .AccountBorrowOutstanding => 17,
-        .WouldExceedMaxBlockCostLimit => 18,
-        .UnsupportedVersion => 19,
-        .InvalidWritableAccount => 20,
-        .WouldExceedMaxAccountCostLimit => 21,
-        .WouldExceedAccountDataBlockLimit => 22,
-        .TooManyAccountLocks => 23,
-        .AddressLookupTableNotFound => 24,
-        .InvalidAddressLookupTableOwner => 25,
-        .InvalidAddressLookupTableData => 26,
-        .InvalidAddressLookupTableIndex => 27,
-        .InvalidRentPayingAccount => 28,
-        .WouldExceedMaxVoteCostLimit => 29,
-        .WouldExceedAccountDataTotalLimit => 30,
-        .DuplicateInstruction => |_| 31,
-        .InsufficientFundsForRent => |_| 32,
-        .MaxLoadedAccountsDataSizeExceeded => 33,
-        .InvalidLoadedAccountsDataSizeLimit => 34,
-        .ResanitizationNeeded => 35,
-        .ProgramExecutionTemporarilyRestricted => |_| 36,
-        .UnbalancedTransaction => 37,
-        .ProgramCacheHitMaxLimit => 38,
-    };
+    return @intFromEnum(err) + 1;
 }

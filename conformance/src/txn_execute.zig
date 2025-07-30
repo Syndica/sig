@@ -1,6 +1,7 @@
 const pb = @import("proto/org/solana/sealevel/v1.pb.zig");
 const sig = @import("sig");
 const std = @import("std");
+const utils = @import("utils.zig");
 
 const EMIT_LOGS = false;
 const STACK_SIZE = 32 * 1024 * 1024;
@@ -915,19 +916,15 @@ fn serializeOutput(
         },
         // TODO: 008651fd6d7efed350fa33eeba912cb6e670eb7c_265678.fix
         .err => |err| {
-            const status, //
-            const instr_error, //
-            const custom_error, //
-            const instr_error_index = convertTransactionError(err);
-
+            const converted = utils.convertTransactionError(err);
             return .{
                 .executed = false,
                 .sanitization_error = true,
 
-                .status = status,
-                .instruction_error = instr_error,
-                .custom_error = custom_error,
-                .instruction_error_index = instr_error_index,
+                .status = converted.err,
+                .instruction_error = converted.instruction_error,
+                .custom_error = converted.custom_error,
+                .instruction_error_index = converted.instruction_index,
 
                 .fee_details = null,
                 .resulting_state = null,
@@ -936,44 +933,6 @@ fn serializeOutput(
             };
         },
     }
-}
-
-fn convertTransactionError(
-    err: sig.ledger.transaction_status.TransactionError,
-) struct { u32, u32, u32, u32 } {
-    const instr_err_num, const custom_err_num, const instr_err_index = switch (err) {
-        .InstructionError => |p| b: {
-            const index, const instruction_error = p;
-            var instr_error_num: u32 = 0;
-            _ = bincode.writeToSlice(
-                std.mem.asBytes(&instr_error_num),
-                @intFromEnum(instruction_error),
-                .{},
-            ) catch {
-                instr_error_num = 0;
-            };
-            const custom_error_num: u32 = switch (instruction_error) {
-                .Custom => |v| v,
-                else => 0,
-            };
-            break :b .{ instr_error_num + 1, custom_error_num, index };
-        },
-        else => .{ 0, 0, 0 },
-    };
-    var txn_err_num: u32 = 0;
-    _ = bincode.writeToSlice(
-        std.mem.asBytes(&txn_err_num),
-        @intFromEnum(err),
-        .{},
-    ) catch {
-        txn_err_num = 0;
-    };
-    return .{
-        txn_err_num + 1,
-        instr_err_num,
-        custom_err_num,
-        instr_err_index,
-    };
 }
 
 fn parseHash(bytes: []const u8) !Hash {
