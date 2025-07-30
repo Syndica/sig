@@ -1098,7 +1098,7 @@ pub const ForkChoice = struct {
     ) void {
         // Iterate through the update operations from greatest to smallest slot
         // Sort the map to ensure keys are in order
-
+        update_operations.sort();
         const keys, const values = update_operations.items();
 
         // Iterate through the update operations from greatest to smallest slot
