@@ -348,7 +348,6 @@ pub const ThreadSafeAccountMap = struct {
             );
 
             if (index != versions.len and versions[index][0] == slot) {
-                self.allocator.free(versions[index][1].data);
                 versions[index] = .{ slot, account_shared_data };
             } else {
                 try gop.value_ptr.insert(self.allocator, index, .{ slot, account_shared_data });
