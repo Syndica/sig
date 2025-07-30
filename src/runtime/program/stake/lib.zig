@@ -978,7 +978,7 @@ fn stakeWeightedCreditsObserved(
     const total_stake = add(@as(u128, stake.delegation.stake), absorbed_lamports) orelse
         return null;
 
-    const stake_weighted_credits = add(
+    const stake_weighted_credits = mul(
         @as(u128, stake.credits_observed),
         stake.delegation.stake,
     ) orelse return null;
@@ -1641,6 +1641,7 @@ fn moveStake(
     }
 }
 
+// Intentionally mispelled Obserbed to not conflict with the one in MergeKind
 fn mergeDelegationStakeAndCreditsObserbed(
     stake: *StakeStateV2.Stake,
     absorbed_lamports: u64,
