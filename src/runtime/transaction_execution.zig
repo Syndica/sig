@@ -56,6 +56,7 @@ const InstructionTrace = TransactionContext.InstructionTrace;
 pub const RuntimeTransaction = struct {
     signature_count: u64,
     fee_payer: Pubkey,
+    version: sig.core.transaction.Version,
     msg_hash: Hash,
     recent_blockhash: Hash,
     instruction_infos: []const InstructionInfo,
@@ -541,9 +542,9 @@ test "loadAndExecuteTransactions: invalid compute budget instruction" {
         },
     );
     defer {
-        for (results) |result| {
-            switch (result) {
-                .ok => |ok| ok.deinit(allocator),
+        for (results) |*result| {
+            switch (result.*) {
+                .ok => |*ok| ok.deinit(allocator),
                 .err => |err| err.deinit(allocator),
             }
         }
@@ -719,7 +720,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
         &ProgramMap{},
     );
 
-    const processed_transaction = result.ok;
+    var processed_transaction = result.ok;
     defer processed_transaction.deinit(allocator);
 
     const executed_transaction = processed_transaction.executed.executed_transaction;
