@@ -813,33 +813,13 @@ fn executeTxnContext(allocator: std.mem.Allocator, pb_txn_ctx: pb.TxnContext, em
         allocator.free(txn_results);
     }
 
-    // TODO: this is already computed through verifyTransaction -> resolveBatch -> resolveTransaction,
-    // figure out a cleaner way to just access those accounts instead of re-computing this.
-    const table_accounts = try sig.replay.resolve_lookup.resolveLookupTableAccounts(
-        allocator,
-        accounts_db.accountReader().forSlot(&ancestors),
-        transaction.msg.address_lookups,
-    );
-    defer {
-        allocator.free(table_accounts.writable);
-        allocator.free(table_accounts.readonly);
-    }
-
-    return try serializeOutput(
-        allocator,
-        txn_results[0],
-        runtime_transaction,
-        pb_txn_ctx,
-        table_accounts,
-    );
+    return try serializeOutput(allocator, txn_results[0], runtime_transaction);
 }
 
 fn serializeOutput(
     allocator: std.mem.Allocator,
     result: TransactionResult,
     sanitized: RuntimeTransaction,
-    tx_ctx: pb.TxnContext,
-    table_accounts: anytype,
 ) !pb.TxnResult {
     switch (result) {
         .ok => |txn| {
@@ -866,28 +846,12 @@ fn serializeOutput(
                         var loaded_account_keys: std.AutoHashMapUnmanaged(Pubkey, void) = .empty;
                         defer loaded_account_keys.deinit(allocator);
 
-                        const tx = tx_ctx.tx.?;
-                        for (tx.message.?.account_keys.items) |key| {
-                            const pubkey: Pubkey = .{ .data = key.getSlice()[0..32].* };
-                            try loaded_account_keys.put(allocator, pubkey, {});
-                        }
-                        switch (sanitized.version) {
-                            .v0 => {
-                                try loaded_account_keys.ensureUnusedCapacity(
-                                    allocator,
-                                    @intCast(table_accounts.writable.len + table_accounts.readonly.len),
-                                );
-
-                                for (table_accounts.writable) |key| loaded_account_keys.putAssumeCapacity(key, {});
-                                for (table_accounts.readonly) |key| loaded_account_keys.putAssumeCapacity(key, {});
-                            },
-                            .legacy => {},
-                        }
-
                         for (executed_txn.loaded_accounts.accounts.constSlice(), 0..) |acc, i| {
                             if (!sanitized.accounts.get(i).is_writable) continue;
                             // Only keep accounts that were passed in as account_keys or as ALUT accounts
-                            if (!loaded_account_keys.contains(acc.pubkey)) continue;
+                            for (sanitized.accounts.items(.pubkey)) |key| {
+                                if (key.equals(&acc.pubkey)) break;
+                            } else continue;
 
                             try acc_states.append(.{
                                 .address = try .copy(&acc.pubkey.data, allocator),
