@@ -417,7 +417,8 @@ test "freezeSlot: trivial e2e merkle hash test" {
 test "freezeSlot: trivial e2e lattice hash test" {
     const allocator = std.testing.allocator;
 
-    var accounts = sig.accounts_db.ThreadSafeAccountMap.init(allocator);
+    var accounts, var tmp_dir = try sig.accounts_db.AccountsDB.initForTest(allocator);
+    defer tmp_dir.cleanup();
     defer accounts.deinit();
     const account_store = accounts.accountStore();
 
