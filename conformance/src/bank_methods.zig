@@ -227,6 +227,7 @@ fn applyBuiltinProgramFeatureTransitions(
 }
 
 fn migrateBuiltinProgramToCoreBpf() !void {
+    // TODO
     return error.MigrateBuiltinProgramToCoreBpfNotImplemented;
 }
 
