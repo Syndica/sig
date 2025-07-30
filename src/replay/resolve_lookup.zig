@@ -188,7 +188,7 @@ fn resolveTransaction(
     };
 }
 
-fn resolveLookupTableAccounts(
+pub fn resolveLookupTableAccounts(
     allocator: Allocator,
     account_reader: SlotAccountReader,
     address_lookups: []const TransactionAddressLookup,

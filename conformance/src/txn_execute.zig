@@ -812,13 +812,24 @@ fn executeTxnContext(allocator: std.mem.Allocator, pb_txn_ctx: pb.TxnContext, em
         allocator.free(txn_results);
     }
 
-    std.debug.print("result: {any}\n", .{txn_results[0]});
+    // TODO: this is already computed through verifyTransaction -> resolveBatch -> resolveTransaction,
+    // figure out a cleaner way to just access those accounts instead of re-computing this.
+    const table_accounts = try sig.replay.resolve_lookup.resolveLookupTableAccounts(
+        allocator,
+        accounts_db.accountReader().forSlot(&ancestors),
+        transaction.msg.address_lookups,
+    );
+    defer {
+        allocator.free(table_accounts.writable);
+        allocator.free(table_accounts.readonly);
+    }
 
     return try serializeOutput(
         allocator,
         txn_results[0],
         runtime_transaction,
         pb_txn_ctx,
+        table_accounts,
     );
 }
 
@@ -827,6 +838,7 @@ fn serializeOutput(
     result: TransactionResult,
     sanitized: RuntimeTransaction,
     tx_ctx: pb.TxnContext,
+    table_accounts: anytype,
 ) !pb.TxnResult {
     switch (result) {
         .ok => |txn| {
@@ -837,6 +849,14 @@ fn serializeOutput(
                 .executed = true,
                 .sanitization_error = false,
                 .is_ok = executed_txn.executed_transaction.err == null,
+
+                // TODO: just hardcoding InstructionError for now, can something else happen?
+                // our current design assumes that the transaction execution can only return
+                // InstructionError, which seems wrong. Not to mention that we don't have a way
+                // to access *which* instruction in the transaction is the one that errored.
+                .status = if (executed_txn.executed_transaction.err != null) 9 else 0,
+                .instruction_error = if (executed_txn.executed_transaction.err) |err| @intFromEnum(err) + 1 else 0,
+
                 .resulting_state = .{
                     .acct_states = a: {
                         var acc_states: std.ArrayList(pb.AcctState) = .init(allocator);
@@ -852,8 +872,13 @@ fn serializeOutput(
                         }
                         switch (sanitized.version) {
                             .v0 => {
-                                try loaded_account_keys.ensureUnusedCapacity(allocator, 2);
-                                // TODO: add the readonly and writeable loaded accounts here also
+                                try loaded_account_keys.ensureUnusedCapacity(
+                                    allocator,
+                                    @intCast(table_accounts.writable.len + table_accounts.readonly.len),
+                                );
+
+                                for (table_accounts.writable) |key| loaded_account_keys.putAssumeCapacity(key, {});
+                                for (table_accounts.readonly) |key| loaded_account_keys.putAssumeCapacity(key, {});
                             },
                             .legacy => {},
                         }
@@ -888,8 +913,67 @@ fn serializeOutput(
                 .loaded_accounts_data_size = executed_txn.loaded_accounts.loaded_accounts_data_size,
             };
         },
-        .err => @panic("TODO"),
+        // TODO: 008651fd6d7efed350fa33eeba912cb6e670eb7c_265678.fix
+        .err => |err| {
+            const status, //
+            const instr_error, //
+            const custom_error, //
+            const instr_error_index = convertTransactionError(err);
+
+            return .{
+                .executed = false,
+                .sanitization_error = true,
+
+                .status = status,
+                .instruction_error = instr_error,
+                .custom_error = custom_error,
+                .instruction_error_index = instr_error_index,
+
+                .fee_details = null,
+                .resulting_state = null,
+                .loaded_accounts_data_size = 0,
+                .rent = 0,
+            };
+        },
     }
+}
+
+fn convertTransactionError(
+    err: sig.ledger.transaction_status.TransactionError,
+) struct { u32, u32, u32, u32 } {
+    const instr_err_num, const custom_err_num, const instr_err_index = switch (err) {
+        .InstructionError => |p| b: {
+            const index, const instruction_error = p;
+            var instr_error_num: u32 = 0;
+            _ = bincode.writeToSlice(
+                std.mem.asBytes(&instr_error_num),
+                @intFromEnum(instruction_error),
+                .{},
+            ) catch {
+                instr_error_num = 0;
+            };
+            const custom_error_num: u32 = switch (instruction_error) {
+                .Custom => |v| v,
+                else => 0,
+            };
+            break :b .{ instr_error_num + 1, custom_error_num, index };
+        },
+        else => .{ 0, 0, 0 },
+    };
+    var txn_err_num: u32 = 0;
+    _ = bincode.writeToSlice(
+        std.mem.asBytes(&txn_err_num),
+        @intFromEnum(err),
+        .{},
+    ) catch {
+        txn_err_num = 0;
+    };
+    return .{
+        txn_err_num + 1,
+        instr_err_num,
+        custom_err_num,
+        instr_err_index,
+    };
 }
 
 fn parseHash(bytes: []const u8) !Hash {
