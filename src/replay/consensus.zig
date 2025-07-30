@@ -10,7 +10,6 @@ const SortedSet = sig.utils.collections.SortedSet;
 const Epoch = sig.core.Epoch;
 const EpochStakesMap = sig.core.EpochStakesMap;
 const Hash = sig.core.Hash;
-const LtHash = sig.core.LtHash;
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 const SlotAndHash = sig.core.hash.SlotAndHash;
