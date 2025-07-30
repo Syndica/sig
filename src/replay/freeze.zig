@@ -289,7 +289,7 @@ pub fn deltaMerkleHash(account_reader: AccountReader, allocator: Allocator, slot
         defer iterator.unlock();
 
         const pubkey_hashes = try allocator.alloc(struct { Pubkey, Hash }, iterator.len());
-        defer allocator.free(pubkey_hashes);
+        errdefer allocator.free(pubkey_hashes);
 
         var i: usize = 0;
         while (try iterator.next()) |pubkey_account| : (i += 1) {
@@ -300,6 +300,7 @@ pub fn deltaMerkleHash(account_reader: AccountReader, allocator: Allocator, slot
 
         break :pkh pubkey_hashes;
     };
+    defer allocator.free(pubkey_hashes);
 
     std.mem.sort(struct { Pubkey, Hash }, pubkey_hashes, {}, struct {
         fn lt(_: void, lhs: struct { Pubkey, Hash }, rhs: struct { Pubkey, Hash }) bool {
@@ -311,8 +312,8 @@ pub fn deltaMerkleHash(account_reader: AccountReader, allocator: Allocator, slot
     // is NestedHashTree the right data structure?
     const hashes = try allocator.alloc(Hash, pubkey_hashes.len);
     defer allocator.free(hashes);
-    for (hashes, 0..) |*h, j| {
-        h.* = pubkey_hashes[j][1];
+    for (hashes, pubkey_hashes) |*h, pubkey_hash| {
+        h.* = pubkey_hash[1];
     }
     const hash_tree = sig.utils.merkle_tree.NestedHashTree{ .items = &.{hashes} };
 
@@ -382,12 +383,8 @@ test "freezeSlot: trivial end-to-end test has the correct hash" {
         .init(.FOR_TESTS, account_store, &epoch, &state, &constants, 0, .ZEROES),
     );
 
-    const hash = state.hash.readCopy().?;
-    std.debug.print("{s}\n", .{hash.base58String().slice()});
-
-    // TODO: enable and fix this (currently fails)
-    // try std.testing.expectEqual(
-    //     try Hash.parseBase58String("8C4gpDhMz9RfajteNCf9nFb5pyj3SkFcpTs6uXAzYKoF"),
-    //     state.hash.readCopy().?,
-    // );
+    try std.testing.expectEqual(
+        try Hash.parseBase58String("8C4gpDhMz9RfajteNCf9nFb5pyj3SkFcpTs6uXAzYKoF"),
+        state.hash.readCopy().?,
+    );
 }
