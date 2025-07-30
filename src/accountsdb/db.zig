@@ -44,7 +44,6 @@ const ShardedPubkeyRefMap = sig.accounts_db.index.ShardedPubkeyRefMap;
 const Account = sig.core.Account;
 const Ancestors = sig.core.Ancestors;
 const Hash = sig.core.Hash;
-const LtHash = sig.core.LtHash;
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 
