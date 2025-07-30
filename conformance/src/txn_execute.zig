@@ -815,7 +815,7 @@ fn executeTxnContext(allocator: std.mem.Allocator, pb_txn_ctx: pb.TxnContext, em
 
     defer {
         switch (txn_results[0]) {
-            .ok => |r| r.deinit(allocator),
+            .ok => |*r| r.deinit(allocator),
             .err => |e| std.debug.print("Transaction execution error: {any}\n", .{e}),
         }
         allocator.free(txn_results);
@@ -1608,8 +1608,16 @@ fn sampleTxnContext(allocator: std.mem.Allocator) !pb.TxnContext {
     };
 
     return pb.TxnContext{
-        .slot_ctx = pb.SlotContext{ .slot = pb_slot },
-        .epoch_ctx = .{ .features = .{ .features = pb_features } },
+        .slot_ctx = .{ .slot = pb_slot },
+        .epoch_ctx = .{
+            .features = .{ .features = pb_features },
+            .new_stake_accounts = .init(allocator),
+            .stake_accounts = .init(allocator),
+            .new_vote_accounts = .init(allocator),
+            .vote_accounts_t = .init(allocator),
+            .vote_accounts_t_1 = .init(allocator),
+            .vote_accounts_t_2 = .init(allocator),
+        },
         .blockhash_queue = pb_blockhashes,
         .account_shared_data = pb_accounts,
         .tx = pb_tx,
