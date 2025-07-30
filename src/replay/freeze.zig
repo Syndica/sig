@@ -3,6 +3,7 @@ const sig = @import("../sig.zig");
 const replay = @import("lib.zig");
 
 const core = sig.core;
+const features = sig.core.features;
 
 const Allocator = std.mem.Allocator;
 const assert = std.debug.assert;
@@ -294,7 +295,7 @@ pub fn deltaMerkleHash(account_reader: AccountReader, allocator: Allocator, slot
         var i: usize = 0;
         while (try iterator.next()) |pubkey_account| : (i += 1) {
             const pubkey, const account = pubkey_account;
-            pubkey_hashes[i] = .{ pubkey, account.hash(Hash, &pubkey) };
+            pubkey_hashes[i] = .{ pubkey, account.hash(pubkey) };
             account.deinit(allocator);
         }
 
@@ -341,13 +342,15 @@ pub fn deltaLtHash(
     var i: usize = 0;
     while (try iterator.next()) |pubkey_account| : (i += 1) {
         const pubkey, const account = pubkey_account;
+        defer account.deinit(account_reader.allocator());
         if (try account_reader.forSlot(parent_ancestors).get(pubkey)) |old_acct| {
+            defer old_acct.deinit(account_reader.allocator());
             if (!old_acct.equals(&account)) {
-                hash.mixOut(old_acct.hash(LtHash, &pubkey));
-                hash.mixIn(account.hash(LtHash, &pubkey));
+                hash.mixOut(old_acct.ltHash(pubkey));
+                hash.mixIn(account.ltHash(pubkey));
             }
         } else {
-            hash.mixIn(account.hash(LtHash, &pubkey));
+            hash.mixIn(account.ltHash(pubkey));
         }
     }
 
@@ -357,13 +360,16 @@ pub fn deltaLtHash(
 // Equivalent to this in agave:
 // ```rust
 // let bank = Bank::default_for_tests();
-// let mut bhq = bank.blockhash_queue.write().unwrap();
-// bhq.register_hash(&Hash::default(), 0);
-// drop(bhq);
+//
+// let mut w_blockhash_queue = bank.blockhash_queue.write().unwrap();
+// w_blockhash_queue.register_hash(&Hash::default(), 0);
+// bank.update_recent_blockhashes_locked(&w_blockhash_queue);
+// drop(w_blockhash_queue);
+//
 // bank.freeze();
-// let hash = bank.hash();
+// println!("{}", bank.hash());
 // ```
-test "freezeSlot: trivial end-to-end test has the correct hash" {
+test "freezeSlot: trivial e2e merkle hash test" {
     const allocator = std.testing.allocator;
 
     var accounts = sig.accounts_db.ThreadSafeAccountMap.init(allocator);
@@ -373,7 +379,8 @@ test "freezeSlot: trivial end-to-end test has the correct hash" {
     const epoch = try EpochConstants.genesis(allocator, .default(allocator));
     defer epoch.deinit(allocator);
 
-    const constants = SlotConstants.genesis(.DEFAULT);
+    const constants = try SlotConstants.genesis(allocator, .DEFAULT);
+    defer constants.deinit(allocator);
 
     var state = SlotState.GENESIS;
     defer state.deinit(allocator);
@@ -385,6 +392,53 @@ test "freezeSlot: trivial end-to-end test has the correct hash" {
 
     try std.testing.expectEqual(
         try Hash.parseBase58String("8C4gpDhMz9RfajteNCf9nFb5pyj3SkFcpTs6uXAzYKoF"),
+        state.hash.readCopy().?,
+    );
+}
+
+// Equivalent to this in agave:
+// ```rust
+// let mut bank = Bank::default_for_tests();
+//
+// let mut features = FeatureSet::default();
+// features.activate(&feature_set::accounts_lt_hash::id(), 0);
+// features.activate(&feature_set::remove_accounts_delta_hash::id(), 0);
+// bank.feature_set = Arc::new(features);
+//
+// let mut w_blockhash_queue = bank.blockhash_queue.write().unwrap();
+// w_blockhash_queue.register_hash(&Hash::default(), 0);
+// bank.update_recent_blockhashes_locked(&w_blockhash_queue);
+// drop(w_blockhash_queue);
+//
+// bank.freeze();
+//
+// println!("{}", bank.hash());
+// ```
+test "freezeSlot: trivial e2e lattice hash test" {
+    const allocator = std.testing.allocator;
+
+    var accounts = sig.accounts_db.ThreadSafeAccountMap.init(allocator);
+    defer accounts.deinit();
+    const account_store = accounts.accountStore();
+
+    const epoch = try EpochConstants.genesis(allocator, .default(allocator));
+    defer epoch.deinit(allocator);
+
+    var constants = try SlotConstants.genesis(allocator, .DEFAULT);
+    defer constants.deinit(allocator);
+    try constants.feature_set.active.put(allocator, features.ACCOUNTS_LT_HASH, 0);
+    try constants.feature_set.active.put(allocator, features.REMOVE_ACCOUNTS_DELTA_HASH, 0);
+
+    var state = SlotState.GENESIS;
+    defer state.deinit(allocator);
+
+    try freezeSlot(
+        allocator,
+        .init(.FOR_TESTS, account_store, &epoch, &state, &constants, 0, .ZEROES),
+    );
+
+    try std.testing.expectEqual(
+        try Hash.parseBase58String("B513RgkSxeiHv4hJ3aaBfkoveWKeB6575S3CtG64AirS"),
         state.hash.readCopy().?,
     );
 }

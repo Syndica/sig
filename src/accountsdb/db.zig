@@ -1537,7 +1537,7 @@ pub const AccountsDB = struct {
                                 );
                                 break :blk hash;
                             },
-                            .unrooted_map => |unrooted_account| unrooted_account.hash(Hash, &key),
+                            .unrooted_map => |unrooted_account| unrooted_account.hash(key),
                         };
                     }
                 }

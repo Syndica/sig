@@ -937,8 +937,10 @@ test "checkAndHandleNewRoot - missing slot" {
         slot_tracker.slots.deinit(testing.allocator);
     }
 
+    const constants = try SlotConstants.genesis(testing.allocator, .initRandom(random));
+    defer constants.deinit(testing.allocator);
     try slot_tracker.put(testing.allocator, root.slot, .{
-        .constants = .genesis(.initRandom(random)),
+        .constants = constants,
         .state = .GENESIS,
     });
 
@@ -995,8 +997,10 @@ test "checkAndHandleNewRoot - missing hash" {
         slot_tracker.slots.deinit(testing.allocator);
     }
 
+    const constants = try SlotConstants.genesis(testing.allocator, .initRandom(random));
+    defer constants.deinit(testing.allocator);
     try slot_tracker.put(testing.allocator, root.slot, .{
-        .constants = .genesis(.initRandom(random)),
+        .constants = constants,
         .state = .GENESIS,
     });
 
@@ -1110,8 +1114,10 @@ test "checkAndHandleNewRoot - success" {
         slot_tracker.slots.deinit(testing.allocator);
     }
 
-    var constants2 = SlotConstants.genesis(.initRandom(random));
-    var constants3 = SlotConstants.genesis(.initRandom(random));
+    var constants2 = try SlotConstants.genesis(testing.allocator, .initRandom(random));
+    defer constants2.deinit(testing.allocator);
+    var constants3 = try SlotConstants.genesis(testing.allocator, .initRandom(random));
+    defer constants3.deinit(testing.allocator);
     var state2 = SlotState.GENESIS;
     var state3 = SlotState.GENESIS;
     constants2.parent_slot = hash1.slot;

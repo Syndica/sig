@@ -113,7 +113,12 @@ pub const SlotConstants = struct {
         };
     }
 
-    pub fn genesis(fee_rate_governor: sig.core.genesis_config.FeeRateGovernor) SlotConstants {
+    pub fn genesis(
+        allocator: Allocator,
+        fee_rate_governor: sig.core.genesis_config.FeeRateGovernor,
+    ) Allocator.Error!SlotConstants {
+        var ancestors = Ancestors{};
+        try ancestors.ancestors.put(allocator, 0, {});
         return .{
             .parent_slot = 0,
             .parent_hash = sig.core.Hash.ZEROES,
@@ -123,7 +128,7 @@ pub const SlotConstants = struct {
             .max_tick_height = 0,
             .fee_rate_governor = fee_rate_governor,
             .epoch_reward_status = .inactive,
-            .ancestors = .{},
+            .ancestors = ancestors,
             .feature_set = .EMPTY,
         };
     }

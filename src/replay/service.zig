@@ -340,7 +340,7 @@ test trackNewSlots {
     }
 
     var slot_tracker: SlotTracker = try .init(allocator, 0, .{
-        .constants = .genesis(.DEFAULT),
+        .constants = try .genesis(allocator, .DEFAULT),
         .state = .GENESIS,
     });
     defer slot_tracker.deinit(allocator);
