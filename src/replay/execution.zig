@@ -309,10 +309,7 @@ fn processReplayResults(
     var did_complete_slot = false;
     for (slot_statuses.items) |slot_status| {
         const slot, const status = slot_status;
-        if (status == .dead or status == .empty) {
-            continue;
-        }
-        if (status == .leader) {
+        if (status != .confirm) {
             continue;
         }
         if (status == .confirm) {
