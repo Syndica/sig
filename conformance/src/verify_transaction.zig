@@ -38,12 +38,13 @@ const VerifyTransactionResult = union(enum(u8)) {
 
 const FeatureSet = sig.core.features.FeatureSet;
 const AccountsDb = sig.accounts_db.AccountsDB;
+const SlotAccountReader = sig.accounts_db.SlotAccountReader;
 
 pub fn verifyTransaction(
     allocator: std.mem.Allocator,
     transaction: Transaction,
     feature_set: *const FeatureSet,
-    accounts_db: *AccountsDb,
+    account_reader: SlotAccountReader,
 ) !VerifyTransactionResult {
     const serialized_msg = transaction.msg.serializeBounded(
         transaction.version,
@@ -87,18 +88,19 @@ pub fn verifyTransaction(
 
     const resolved_batch = sig.replay.resolve_lookup.resolveBatch(
         allocator,
-        // NOTE: Need ancestors to load with fixed root
-        accounts_db,
+        account_reader,
         &.{transaction},
     ) catch |err| {
         const err_code = switch (err) {
             error.Overflow => 123456,
             error.OutOfMemory => return error.OutOfMemory,
-            error.UnsupportedVersion => transactionErrorToInt(.UnsupportedVersion),
-            error.AddressLookupTableNotFound => transactionErrorToInt(.AddressLookupTableNotFound),
-            error.InvalidAddressLookupTableOwner => transactionErrorToInt(.InvalidAddressLookupTableOwner),
-            error.InvalidAddressLookupTableData => transactionErrorToInt(.InvalidAddressLookupTableData),
-            error.InvalidAddressLookupTableIndex => transactionErrorToInt(.InvalidAddressLookupTableIndex),
+            else => @panic("TODO: unsure how to handle errors here atm"),
+            // TODO: doesn't exist in the error set yet, missing some logic?
+            // error.UnsupportedVersion => transactionErrorToInt(.UnsupportedVersion),
+            // error.AddressLookupTableNotFound => transactionErrorToInt(.AddressLookupTableNotFound),
+            // error.InvalidAddressLookupTableOwner => transactionErrorToInt(.InvalidAddressLookupTableOwner),
+            // error.InvalidAddressLookupTableData => transactionErrorToInt(.InvalidAddressLookupTableData),
+            // error.InvalidAddressLookupTableIndex => transactionErrorToInt(.InvalidAddressLookupTableIndex),
         };
         std.debug.print("resolve_lookup.resolveBatch failed\n", .{});
         return .{ .err = .{

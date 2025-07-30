@@ -25,7 +25,7 @@ pub fn build(b: *std.Build) void {
         .include_directories = &.{"protosol/proto"},
     });
 
-    // current commit: 251258e36f56a121ba297cd0e5ac7e0d96d22411
+    // current commit: b7ba4dae8ce07e6abdbe5902f4a14ac43e2b40cf
     const proto_step = b.step("protobuf", "Generate the `protosol` directory");
     proto_step.dependOn(&protoc_step.step);
 
