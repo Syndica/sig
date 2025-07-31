@@ -4,6 +4,8 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 const bincode = sig.bincode;
 
+const Allocator = std.mem.Allocator;
+
 const AutoHashMap = std.AutoHashMap;
 const Account = sig.core.Account;
 const Epoch = sig.core.Epoch;
@@ -36,6 +38,15 @@ pub const PohConfig = struct {
     /// None enables "Low power mode", which makes the validator sleep
     /// for `target_tick_duration` instead of hashing
     hashes_per_tick: ?u64,
+
+    pub const DEFAULT = PohConfig{
+        .target_tick_duration = .{
+            .secs = 0,
+            .nanos = 1_000_000_000 / sig.core.time.DEFAULT_TICKS_PER_SECOND,
+        },
+        .target_tick_count = null,
+        .hashes_per_tick = null,
+    };
 };
 
 /// Analogous to [FeeRateGovernor](https://github.com/anza-xyz/agave/blob/ec9bd798492c3b15d62942f2d9b5923b99042350/sdk/program/src/fee_calculator.rs#L55)
@@ -176,6 +187,15 @@ pub const Inflation = struct {
     /// DEPRECATED, this field is currently unused
     __unused: f64,
 
+    pub const DEFAULT = Inflation{
+        .initial = 0.08,
+        .terminal = 0.015,
+        .taper = 0.15,
+        .foundation = 0.05,
+        .foundation_term = 7.0,
+        .__unused = 0.0,
+    };
+
     pub fn initRandom(random: std.Random) Inflation {
         return .{
             .initial = random.float(f64),
@@ -229,17 +249,32 @@ pub const GenesisConfig = struct {
     /// network runlevel
     cluster_type: ClusterType,
 
-    pub fn init(
-        allocator: std.mem.Allocator,
-        genesis_path: []const u8,
-    ) !GenesisConfig {
+    pub fn init(allocator: Allocator, genesis_path: []const u8) !GenesisConfig {
         var file = try std.fs.cwd().openFile(genesis_path, .{});
         defer file.close();
 
         return try bincode.read(allocator, GenesisConfig, file.reader(), .{});
     }
 
-    pub fn deinit(self: GenesisConfig, allocator: std.mem.Allocator) void {
+    pub fn default(allocator: Allocator) GenesisConfig {
+        return .{
+            .creation_time = 0,
+            .accounts = .init(allocator),
+            .native_instruction_processors = .init(allocator),
+            .rewards_pools = .init(allocator),
+            .ticks_per_slot = sig.core.time.DEFAULT_TICKS_PER_SLOT,
+            .unused = 1024,
+            .poh_config = .DEFAULT,
+            .inflation = .DEFAULT,
+            .__backwards_compat_with_v0_23 = 0,
+            .fee_rate_governor = .DEFAULT,
+            .rent = .DEFAULT,
+            .epoch_schedule = .DEFAULT,
+            .cluster_type = .Development,
+        };
+    }
+
+    pub fn deinit(self: GenesisConfig, allocator: Allocator) void {
         bincode.free(allocator, self);
     }
 
@@ -256,8 +291,8 @@ fn yearsAsSlots(years: f64, tick_duration: RustDuration, ticks_per_slot: u64) f6
     const SECONDS_PER_YEAR: f64 = 365.242_199 * 24.0 * 60.0 * 60.0;
 
     const SLOTS_PER_YEAR = SECONDS_PER_YEAR *
-        (1_000_000_000.0 / @as(f64, tick_duration.asNanos())) /
-        @as(f64, ticks_per_slot);
+        (1_000_000_000.0 / @as(f64, @floatFromInt(tick_duration.asNanos()))) /
+        @as(f64, @floatFromInt(ticks_per_slot));
 
     return years * SLOTS_PER_YEAR;
 }
