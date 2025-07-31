@@ -1685,13 +1685,11 @@ pub fn collectVoteLockouts(
 
         if (start_root != vote_state.root_slot) {
             if (start_root) |root| {
-                const lockout = Lockout{ .slot = root, .confirmation_count = MAX_LOCKOUT_HISTORY };
-                try vote_slots.put(lockout.slot);
+                try vote_slots.put(root);
             }
         }
         if (vote_state.root_slot) |root| {
-            const lockout = Lockout{ .slot = root, .confirmation_count = MAX_LOCKOUT_HISTORY };
-            try vote_slots.put(lockout.slot);
+            try vote_slots.put(root);
         }
 
         // The last vote in the vote stack is a simulated vote on bank_slot, which
@@ -4115,33 +4113,26 @@ pub const TestFixture = struct {
         allocator: std.mem.Allocator,
         root: SlotAndHash,
     ) !TestFixture {
-        const element: SlotTracker.Element = .{
-            .constants = .{
-                .ancestors = Ancestors{ .ancestors = .empty },
-                .feature_set = FeatureSet.EMPTY,
-                .parent_lt_hash = null,
-                .parent_slot = root.slot,
-                .parent_hash = root.hash,
-                .block_height = 0,
-                .collector_id = Pubkey.ZEROES,
-                .max_tick_height = 100,
-                .fee_rate_governor = .DEFAULT,
-                .epoch_reward_status = .inactive,
-            },
-            .state = .{
-                .blockhash_queue = .init(.DEFAULT),
-                .hash = .init(root.hash),
-                .capitalization = .init(100),
-                .transaction_count = .init(100),
-                .signature_count = .init(100),
-                .tick_height = .init(100),
-                .collected_rent = .init(100),
-                .accounts_lt_hash = .init(.{ .data = @splat(100) }),
-            },
+        const slot_tracker = st: {
+            var constants = try sig.core.SlotConstants.genesis(allocator, .DEFAULT);
+            errdefer constants.deinit(allocator);
+
+            var state = sig.core.SlotState.GENESIS;
+            errdefer state.deinit(allocator);
+
+            constants.parent_slot = root.slot -| 1;
+            state.hash = .init(root.hash);
+
+            break :st try SlotTracker.init(
+                allocator,
+                root.slot,
+                .{ .constants = constants, .state = state },
+            );
         };
+        errdefer slot_tracker.deinit(allocator);
 
         return .{
-            .slot_tracker = try SlotTracker.init(allocator, root.slot, element),
+            .slot_tracker = slot_tracker,
             .fork_choice = try HeaviestSubtreeForkChoice.init(allocator, .noop, root),
             .node_pubkeys = .empty,
             .vote_pubkeys = .empty,
@@ -4246,31 +4237,26 @@ pub const TestFixture = struct {
                 const p = tree[1] orelse break :blk Hash.ZEROES;
                 break :blk p.hash;
             };
-            const element: SlotTracker.Element = .{
-                .constants = .{
-                    .ancestors = Ancestors{ .ancestors = .empty },
-                    .feature_set = FeatureSet.EMPTY,
-                    .parent_lt_hash = null,
-                    .parent_slot = parent_slot,
-                    .parent_hash = parent_hash,
-                    .block_height = tree[0].slot + 1,
-                    .collector_id = Pubkey.ZEROES,
-                    .max_tick_height = 100,
-                    .fee_rate_governor = .DEFAULT,
-                    .epoch_reward_status = .inactive,
-                },
-                .state = .{
-                    .blockhash_queue = .init(.DEFAULT),
-                    .hash = .init(tree[0].hash),
-                    .capitalization = .init(100),
-                    .transaction_count = .init(100),
-                    .signature_count = .init(100),
-                    .tick_height = .init(100),
-                    .collected_rent = .init(100),
-                    .accounts_lt_hash = .init(.{ .data = @splat(100) }),
-                },
-            };
-            try self.slot_tracker.put(allocator, tree[0].slot, element);
+
+            {
+                var constants = try sig.core.SlotConstants.genesis(allocator, .DEFAULT);
+                errdefer constants.deinit(allocator);
+
+                var state = sig.core.SlotState.GENESIS;
+                errdefer state.deinit(allocator);
+
+                constants.parent_slot = parent_slot;
+                constants.parent_hash = parent_hash;
+                constants.block_height = tree[0].slot + 1;
+                state.hash = .init(tree[0].hash);
+
+                try self.slot_tracker.put(
+                    allocator,
+                    tree[0].slot,
+                    .{ .constants = constants, .state = state },
+                );
+            }
+
             // Populate forkchoice
             try self.fork_choice.addNewLeafSlot(tree[0], tree[1]);
             // Populate progress map

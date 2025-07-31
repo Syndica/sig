@@ -34,9 +34,14 @@ pub fn NestedList(comptime T: type) type {
 
 pub const NestedHashTree = NestedList(Hash);
 
-pub fn computeMerkleRoot(self: *const NestedHashTree, fanout: usize) !*Hash {
+pub fn computeMerkleRoot(self: *const NestedHashTree, fanout: usize) !Hash {
     var length = self.len();
-    if (length == 0) return error.EmptyHashList;
+
+    if (length == 0) return comptime empty: {
+        @setEvalBranchQuota(3187);
+        var hasher = Sha256.init(.{});
+        break :empty .{ .data = hasher.finalResult() };
+    };
 
     while (true) {
         const chunks = try std.math.divCeil(usize, length, fanout);
@@ -57,7 +62,7 @@ pub fn computeMerkleRoot(self: *const NestedHashTree, fanout: usize) !*Hash {
         }
         length = index;
         if (length == 1) {
-            return self.getValue(0);
+            return self.getValue(0).*;
         }
     }
 }

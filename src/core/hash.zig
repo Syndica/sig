@@ -64,7 +64,9 @@ pub const Hash = extern struct {
     fn update(hasher: *Sha256, data: anytype) void {
         const T = @TypeOf(data);
 
-        if (@typeInfo(T) == .@"struct") {
+        if (T == Hash or T == *const Hash or T == *Hash) {
+            hasher.update(&data.data);
+        } else if (@typeInfo(T) == .@"struct") {
             inline for (data) |val| update(hasher, val);
         } else if (std.meta.Elem(T) == u8) switch (@typeInfo(T)) {
             .array => hasher.update(&data),
@@ -131,7 +133,7 @@ pub const Hash = extern struct {
 
 /// A 16-bit, 1024 element lattice-based incremental hash based on blake3
 pub const LtHash = struct {
-    data: @Vector(1024, u16),
+    data: [NUM_ELEMENTS]u16,
 
     pub const IDENTITY = LtHash{ .data = @splat(0) };
 
@@ -150,53 +152,55 @@ pub const LtHash = struct {
     }
 
     pub fn bytes(self: *LtHash) []u8 {
-        return @as([*]u8, @ptrCast(&self.data))[0..2048];
+        return @ptrCast(&self.data);
     }
 
     /// Mixes `other` into `self`
     ///
     /// This can be thought of as 'insert'
-    pub fn mixIn(self: *LtHash, other: *const LtHash) void {
-        self.data +%= other.data;
+    pub fn mixIn(self: *LtHash, other: LtHash) void {
+        self.* = self.add(other);
     }
 
     /// Mixes `other` out of `self`
     ///
     /// This can be thought of as 'remove'
-    pub fn mixOut(self: *LtHash, other: *const LtHash) void {
-        self.data -%= other.data;
+    pub fn mixOut(self: *LtHash, other: LtHash) void {
+        self.* = self.sub(other);
+    }
+
+    const Vector = @Vector(vec_len, u16);
+    const vec_len = std.simd.suggestVectorLength(u16) orelse 4;
+
+    pub fn add(lhs: LtHash, rhs: LtHash) LtHash {
+        var data: [NUM_ELEMENTS]u16 = undefined;
+        inline for (0..NUM_ELEMENTS / vec_len) |N| {
+            const lhs_v: Vector = lhs.data[N * vec_len ..][0..vec_len].*;
+            const rhs_v: Vector = rhs.data[N * vec_len ..][0..vec_len].*;
+            data[N * vec_len ..][0..vec_len].* = lhs_v +% rhs_v;
+        }
+        return .{ .data = data };
+    }
+
+    pub fn sub(lhs: LtHash, rhs: LtHash) LtHash {
+        var data: [NUM_ELEMENTS]u16 = undefined;
+        inline for (0..NUM_ELEMENTS / vec_len) |N| {
+            const lhs_v: Vector = lhs.data[N * vec_len ..][0..vec_len].*;
+            const rhs_v: Vector = rhs.data[N * vec_len ..][0..vec_len].*;
+            data[N * vec_len ..][0..vec_len].* = lhs_v -% rhs_v;
+        }
+        return .{ .data = data };
     }
 };
 
 const expectEqual = std.testing.expectEqual;
 
-// Ensure that the byte layout of the vector is the same as an array of u16
-test "LtHash.bytes" {
-    var rng = std.Random.DefaultPrng.init(0);
-    var hash = LtHash.initRandom(rng.random());
-    const items: [LtHash.NUM_ELEMENTS]u16 = hash.data;
-    const expected_bytes = std.mem.sliceAsBytes(&items);
-    try std.testing.expectEqualSlices(u8, expected_bytes, hash.bytes());
-}
-
-fn add(lhs: LtHash, rhs: LtHash) LtHash {
-    var self = lhs;
-    self.mixIn(&rhs);
-    return self;
-}
-
-fn sub(lhs: LtHash, rhs: LtHash) LtHash {
-    var self = lhs;
-    self.mixOut(&rhs);
-    return self;
-}
-
 // Ensure that if you mix-in or mix-out with the identity, you get the original value
 test "identity" {
     var rng = std.Random.DefaultPrng.init(0);
     const a = LtHash.initRandom(rng.random());
-    try expectEqual(a, add(a, LtHash.IDENTITY));
-    try expectEqual(a, sub(a, LtHash.IDENTITY));
+    try expectEqual(a, a.add(LtHash.IDENTITY));
+    try expectEqual(a, a.sub(LtHash.IDENTITY));
 }
 
 // Ensure that if you mix-in then mix-out a hash, you get the original value
@@ -204,8 +208,8 @@ test "inverse" {
     var rng = std.Random.DefaultPrng.init(1);
     const a = LtHash.initRandom(rng.random());
     const b = LtHash.initRandom(rng.random());
-    try expectEqual(a, sub(add(a, b), b));
-    try expectEqual(a, add(sub(a, b), b));
+    try expectEqual(a, a.add(b).sub(b));
+    try expectEqual(a, a.sub(b).add(b));
 }
 
 // Ensure that mixing is commutative
@@ -213,7 +217,7 @@ test "commutative" {
     var rng = std.Random.DefaultPrng.init(2);
     const a = LtHash.initRandom(rng.random());
     const b = LtHash.initRandom(rng.random());
-    try expectEqual(add(a, b), add(b, a));
+    try expectEqual(a.add(b), b.add(a));
 }
 
 // Ensure that mixing is associative
@@ -222,7 +226,7 @@ test "associative" {
     const a = LtHash.initRandom(rng.random());
     const b = LtHash.initRandom(rng.random());
     const c = LtHash.initRandom(rng.random());
-    try expectEqual(add(add(a, b), c), add(a, add(b, c)));
+    try expectEqual(a.add(b).add(c), a.add(b.add(c)));
 }
 
 // Ensure that mixing out respects distribution
@@ -232,7 +236,7 @@ test "distribute" {
     const b = LtHash.initRandom(rng.random());
     const c = LtHash.initRandom(rng.random());
     const d = LtHash.initRandom(rng.random());
-    try expectEqual(sub(sub(sub(a, b), c), d), sub(a, add(b, add(c, d))));
+    try expectEqual(a.sub(b).sub(c).sub(d), a.sub(b.add(c.add(d))));
 }
 
 // Ensure the correct lattice hash and checksum values are produced

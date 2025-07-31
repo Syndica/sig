@@ -111,6 +111,12 @@ pub fn Mux(comptime T: type) type {
             return .{ t, lock_guard };
         }
 
+        pub fn set(self: *Self, item: T) void {
+            self.private.m.lock();
+            defer self.private.m.unlock();
+            self.private.v = item;
+        }
+
         /// `lock` returns a `LockGuard` after acquiring `Mutex` lock
         pub fn lock(self: *Self) LockGuard {
             self.private.m.lock();

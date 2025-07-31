@@ -992,22 +992,11 @@ pub const ForkChoice = struct {
                 // If the new vote is for the same slot, but a different, smaller hash,
                 // then allow processing to continue as this is a duplicate version
                 // of the same slot.
-                if (new_vote_slot < old_latest_vote_slot) {
-                    continue;
-                }
-
-                if (new_vote_slot == old_latest_vote_slot and
-                    new_vote_hash.order(&old_latest_vote_hash) != .lt)
+                if (new_vote_slot < old_latest_vote_slot or
+                    new_vote_slot == old_latest_vote_slot and
+                        new_vote_hash.order(&old_latest_vote_hash) != .lt)
                 {
                     continue;
-                }
-
-                if (new_vote_slot == old_latest_vote_slot) {
-                    // If the slots are equal, then the new
-                    // vote must be for a smaller hash
-                    std.debug.assert(new_vote_hash.order(&old_latest_vote_hash) == .lt);
-                } else {
-                    std.debug.assert(new_vote_slot > old_latest_vote_slot);
                 }
 
                 const epoch = epoch_schedule.getEpoch(old_latest_vote_slot);
