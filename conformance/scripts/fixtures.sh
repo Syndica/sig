@@ -68,6 +68,9 @@ PASSING_DIRS=(
 )
 
 PASSING_TXN_FIXTURES=(
+    "./test-vectors/txn/fixtures/programs/00a835fb60b24a1b7712abddb7ba5a548fee0418_265678.fix"
+    "./test-vectors/txn/fixtures/programs/01525f9b176afe344b3b13d9c245704c03de6914_265678.fix"
+    "./test-vectors/txn/fixtures/programs/0179c4cbb9a7110eb246247ca09517720f960904_2194958.fix"
     "./test-vectors/txn/fixtures/programs/00c2dcfbd00415d3c531a19ef26901f64261e339_265678.fix"
     "./test-vectors/txn/fixtures/programs/010e42e1d45c642f8739cf5aead3d7574d9047ed_265678.fix"
     "./test-vectors/txn/fixtures/programs/012c43064dff9a35dc033f7a83bc755574b0a255_265678.fix"
