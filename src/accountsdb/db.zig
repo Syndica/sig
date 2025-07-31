@@ -1210,7 +1210,7 @@ pub const AccountsDB = struct {
         }
 
         return .{
-            accounts_hash.*,
+            accounts_hash,
             total_lamports,
         };
     }

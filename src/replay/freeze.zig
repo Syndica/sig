@@ -320,7 +320,7 @@ pub fn deltaMerkleHash(account_reader: AccountReader, allocator: Allocator, slot
     const hash = try sig.utils.merkle_tree
         .computeMerkleRoot(&hash_tree, sig.accounts_db.db.MERKLE_FANOUT);
 
-    return hash.*;
+    return hash;
 }
 
 /// Returns the lattice hash of every account that was modified in the slot.
@@ -354,6 +354,17 @@ pub fn deltaLtHash(
     }
 
     return hash;
+}
+
+test "deltaLtHash is identity for 0 accounts" {
+    try std.testing.expectEqual(LtHash.IDENTITY, try deltaLtHash(.noop, 0, &Ancestors{}));
+}
+
+test "deltaMerkleHash for 0 accounts" {
+    try std.testing.expectEqual(
+        try Hash.parseBase58String("GKot5hBsd81kMupNCXHaqbhv3huEbxAFMLnpcX2hniwn"),
+        try deltaMerkleHash(.noop, sig.utils.allocators.failing.allocator(.{}), 0),
+    );
 }
 
 // Equivalent to this in agave:
