@@ -193,14 +193,13 @@ fn distributeTransactionFees(
         slot,
         collector_id,
         payout,
-    ) catch |e|
-        switch (e) {
-            error.InvalidAccountOwner,
-            error.LamportOverflow,
-            error.InvalidRentPayingAccount,
-            => burn = total_fees,
-            else => return e,
-        };
+    ) catch |e| switch (e) {
+        error.InvalidAccountOwner,
+        error.LamportOverflow,
+        error.InvalidRentPayingAccount,
+        => burn = total_fees,
+        else => return e,
+    };
     _ = capitalization.fetchSub(burn, .monotonic);
 }
 
