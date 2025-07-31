@@ -3677,8 +3677,6 @@ const ForkStats = sig.consensus.progress_map.ForkStats;
 const ForkProgress = sig.consensus.progress_map.ForkProgress;
 const EpochStakes = sig.core.EpochStakes;
 const Stakes = sig.core.Stakes;
-const Ancestors = sig.core.Ancestors;
-const FeatureSet = sig.core.FeatureSet;
 
 test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
     const allocator = std.testing.allocator;
