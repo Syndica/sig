@@ -183,6 +183,7 @@ pub const ExecutedTransaction = struct {
     log_collector: ?LogCollector,
     instruction_trace: ?InstructionTrace,
     return_data: ?TransactionReturnData,
+    compute_limit: u64,
     compute_meter: u64,
     accounts_data_len_delta: i64,
 
@@ -217,7 +218,11 @@ pub const ProcessedTransaction = union(enum(u8)) {
     /// Analogous to [executed_units](https://github.com/anza-xyz/agave/blob/10fe1eb29aac9c236fd72d08ae60a3ef61ee8353/svm/src/transaction_processing_result.rs#L91).
     pub fn executedUnits(self: *const ProcessedTransaction) ?u64 {
         return switch (self.*) {
-            .executed => |executed| executed.executed_transaction.compute_meter,
+            .executed => |executed| {
+                const compute_start = executed.executed_transaction.compute_limit;
+                const compute_remain = executed.executed_transaction.compute_meter;
+                return compute_start - compute_remain;
+            },
             .fees_only => null,
         };
     }
@@ -453,6 +458,7 @@ pub fn executeTransaction(
         .log_collector = tc.takeLogCollector(),
         .instruction_trace = tc.instruction_trace,
         .return_data = tc.takeReturnData(),
+        .compute_limit = compute_budget.compute_unit_limit,
         .compute_meter = tc.compute_meter,
         .accounts_data_len_delta = tc.accounts_resize_delta,
     };

@@ -967,7 +967,7 @@ fn serializeOutput(
                     .prioritization_fee = fees.prioritization_fee,
                 },
                 // TODO: obviously hard coded number. compute_meter counts how many units left instead of how many units consumed
-                .executed_units = 200_000 - (txn.executedUnits() orelse 200_000),
+                .executed_units = txn.executedUnits() orelse 0,
                 .loaded_accounts_data_size = txn.loadedAccountsDataSize(),
             };
         },
