@@ -3681,7 +3681,6 @@ const ForkStats = sig.consensus.progress_map.ForkStats;
 const ForkProgress = sig.consensus.progress_map.ForkProgress;
 const EpochStakes = sig.core.EpochStakes;
 const Stakes = sig.core.Stakes;
-const splitOff = sig.consensus.fork_choice.splitOff;
 
 test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
     const allocator = std.testing.allocator;
@@ -3926,7 +3925,8 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
         else => try std.testing.expect(false), // Fail if not LockedOut
     }
 
-    try splitOff(allocator, &fixture.fork_choice, hash6);
+    var split = try fixture.fork_choice.splitOff(allocator, hash6);
+    defer split.deinit();
 
     const forks5 = try fixture.select_fork_slots(&replay_tower);
 
@@ -4218,11 +4218,8 @@ pub const TestFixture = struct {
         allocator: std.mem.Allocator,
         random: std.Random,
     ) !void {
-        var epoch_stakes: EpochStakes = try EpochStakes.initRandom(
-            allocator,
-            random,
-            1,
-        );
+        var epoch_stakes =
+            try EpochStakes.initEmptyWithGenesisStakeHistoryEntry(allocator);
         epoch_stakes.total_stake = 1000;
         epoch_stakes.stakes.deinit(allocator);
         epoch_stakes.stakes = try Stakes(.delegation).initRandom(
