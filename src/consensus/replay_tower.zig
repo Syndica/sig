@@ -1683,13 +1683,11 @@ pub fn collectVoteLockouts(
 
         if (start_root != vote_state.root_slot) {
             if (start_root) |root| {
-                const lockout = Lockout{ .slot = root, .confirmation_count = MAX_LOCKOUT_HISTORY };
-                try vote_slots.put(lockout.slot);
+                try vote_slots.put(root);
             }
         }
         if (vote_state.root_slot) |root| {
-            const lockout = Lockout{ .slot = root, .confirmation_count = MAX_LOCKOUT_HISTORY };
-            try vote_slots.put(lockout.slot);
+            try vote_slots.put(root);
         }
 
         // The last vote in the vote stack is a simulated vote on bank_slot, which
