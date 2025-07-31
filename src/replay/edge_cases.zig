@@ -1361,7 +1361,7 @@ const TestData = struct {
                     .fee_rate_governor = .initRandom(random),
                     .epoch_reward_status = .inactive,
                     .ancestors = .{ .ancestors = .empty },
-                    .feature_set = .{ .active = .empty },
+                    .feature_set = .ALL_DISABLED,
                 },
                 .state = .{
                     .blockhash_queue = .init(.DEFAULT),

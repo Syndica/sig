@@ -254,7 +254,7 @@ pub fn hashSlot(allocator: Allocator, params: HashSlotParams) !struct { ?LtHash,
     std.mem.writeInt(u64, &signature_count_bytes, params.signature_count, .little);
 
     const initial_hash =
-        if (params.feature_set.active.contains(sig.core.features.REMOVE_ACCOUNTS_DELTA_HASH))
+        if (params.feature_set.active(.remove_accounts_delta_hash, params.slot))
             Hash.generateSha256(.{
                 params.parent_slot_hash,
                 &signature_count_bytes,
@@ -268,7 +268,7 @@ pub fn hashSlot(allocator: Allocator, params: HashSlotParams) !struct { ?LtHash,
                 params.blockhash,
             });
 
-    if (params.feature_set.active.contains(sig.core.features.ACCOUNTS_LT_HASH)) {
+    if (params.feature_set.active(.accounts_lt_hash, params.slot)) {
         var parent_ancestors = try params.ancestors.clone(allocator);
         defer parent_ancestors.deinit(allocator);
         assert(parent_ancestors.ancestors.swapRemove(params.slot));
@@ -437,8 +437,8 @@ test "freezeSlot: trivial e2e lattice hash test" {
 
     var constants = try SlotConstants.genesis(allocator, .DEFAULT);
     defer constants.deinit(allocator);
-    try constants.feature_set.active.put(allocator, features.ACCOUNTS_LT_HASH, 0);
-    try constants.feature_set.active.put(allocator, features.REMOVE_ACCOUNTS_DELTA_HASH, 0);
+    constants.feature_set.setSlot(.accounts_lt_hash, 0);
+    constants.feature_set.setSlot(.remove_accounts_delta_hash, 0);
 
     var state = SlotState.GENESIS;
     defer state.deinit(allocator);

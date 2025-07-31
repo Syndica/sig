@@ -76,7 +76,7 @@ pub const EpochSchedule = extern struct {
         }
     }
 
-    pub fn getSlotsInEpoch(self: *const EpochSchedule, epoch: Epoch) Slot {
+    pub fn getSlotsInEpoch(self: *const EpochSchedule, epoch: Epoch) u64 {
         comptime std.debug.assert(std.math.isPowerOfTwo(MINIMUM_SLOTS_PER_EPOCH));
         return if (epoch < self.first_normal_epoch)
             @as(Slot, 1) <<| epoch +| @ctz(MINIMUM_SLOTS_PER_EPOCH)

@@ -1179,16 +1179,16 @@ fn validator(
     defer shred_network_manager.deinit();
 
     const replay_thread = replay: {
-        var feature_set = try sig.replay.service.getActiveFeatures(
+        const feature_set = try sig.replay.service.getActiveFeatures(
             allocator,
             loaded_snapshot.accounts_db.accountReader().forSlot(&bank_fields.ancestors),
             bank_fields.slot,
         );
-        const root_slot_constants =
-            sig.core.SlotConstants.fromBankFields(allocator, bank_fields, feature_set) catch |err| {
-                feature_set.deinit(allocator);
-                return err;
-            };
+        const root_slot_constants = try sig.core.SlotConstants.fromBankFields(
+            allocator,
+            bank_fields,
+            feature_set,
+        );
         errdefer root_slot_constants.deinit(allocator);
 
         var root_slot_state = try sig.core.SlotState.fromBankFields(allocator, bank_fields);
