@@ -2160,7 +2160,6 @@ pub const AccountsDB = struct {
             }
 
             // insert + check if inserted
-            var accounts_dead_count: u64 = 0;
             for (0.., reference_buf[0..new_len]) |i, *ref| {
                 if (i < old_refs.len) continue;
 
@@ -2169,7 +2168,6 @@ pub const AccountsDB = struct {
                     global_ref_index + i,
                 );
                 if (!was_inserted) {
-                    accounts_dead_count += 1;
                     self.logger.warn().logf(
                         "account was not referenced because its slot was a duplicate: {any}",
                         .{.{ .slot = ref.slot, .pubkey = ref.pubkey }},
@@ -2188,16 +2186,6 @@ pub const AccountsDB = struct {
                 }
 
                 std.debug.assert(self.account_index.exists(&pubkeys[i - old_refs.len], slot));
-            }
-
-            if (accounts_dead_count != 0) {
-                const dead_accounts, var dead_accounts_lg =
-                    self.dead_accounts_counter.writeWithLock();
-                defer dead_accounts_lg.unlock();
-
-                const entry = try dead_accounts.getOrPut(slot);
-                if (!entry.found_existing) entry.value_ptr.* = 0;
-                entry.value_ptr.* += accounts_dead_count;
             }
 
             // free old ref
