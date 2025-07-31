@@ -50,7 +50,6 @@ pub const ReplayDependencies = struct {
     /// Used to update the ledger with consensus results
     ledger_result_writer: *LedgerResultWriter,
     account_store: AccountStore,
-    db_for_svm: *AccountsDB, // TODO: remove this requirement from svm
     slot_leaders: SlotLeaders,
     /// The slot to start replaying from.
     root_slot: Slot,
@@ -79,9 +78,8 @@ const ReplayState = struct {
     slot_leaders: SlotLeaders,
     slot_tracker: *SlotTracker,
     epochs: *EpochTracker,
-    hard_forks: sig.core.HardForks, // TODO consider lifetime
+    hard_forks: sig.core.HardForks,
     account_store: AccountStore,
-    db_for_svm: *AccountsDB, // TODO: remove this requirement from svm
     progress_map: *ProgressMap,
     blockstore_db: BlockstoreDB,
     execution: ReplayExecutionState,
@@ -134,7 +132,6 @@ const ReplayState = struct {
             .epochs = epoch_tracker,
             .hard_forks = deps.hard_forks,
             .account_store = deps.account_store,
-            .db_for_svm = deps.db_for_svm,
             .blockstore_db = deps.blockstore_reader.db,
             .progress_map = progress_map,
             .execution = try ReplayExecutionState.init(
@@ -143,7 +140,6 @@ const ReplayState = struct {
                 deps.my_identity,
                 thread_pool,
                 deps.account_store,
-                deps.db_for_svm,
                 deps.blockstore_reader,
                 slot_tracker,
                 epoch_tracker,
@@ -160,6 +156,7 @@ const ReplayState = struct {
         self.allocator.destroy(self.slot_tracker);
         self.epochs.deinit(self.allocator);
         self.allocator.destroy(self.epochs);
+        self.hard_forks.deinit(self.allocator);
     }
 };
 

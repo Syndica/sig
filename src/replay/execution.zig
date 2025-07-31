@@ -34,7 +34,6 @@ pub const ReplayExecutionState = struct {
 
     // borrows
     account_store: AccountStore,
-    db_for_svm: *sig.accounts_db.AccountsDB, // TODO: remove
     thread_pool: *ThreadPool,
     blockstore_reader: *BlockstoreReader,
     slot_tracker: *SlotTracker,
@@ -50,7 +49,6 @@ pub const ReplayExecutionState = struct {
         my_identity: Pubkey,
         thread_pool: *ThreadPool,
         account_store: AccountStore,
-        db_for_svm: *sig.accounts_db.AccountsDB,
         blockstore_reader: *BlockstoreReader,
         slot_tracker: *SlotTracker,
         epochs: *EpochTracker,
@@ -62,7 +60,6 @@ pub const ReplayExecutionState = struct {
             .my_identity = my_identity,
             .vote_account = null, // voting not currently supported
             .account_store = account_store,
-            .db_for_svm = db_for_svm,
             .thread_pool = thread_pool,
             .blockstore_reader = blockstore_reader,
             .slot_tracker = slot_tracker,

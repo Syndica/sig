@@ -131,7 +131,6 @@ pub const Hash = extern struct {
     }
 };
 
-// TODO add tests
 /// A 16-bit, 1024 element lattice-based incremental hash based on blake3
 pub const LtHash = struct {
     data: [NUM_ELEMENTS]u16,

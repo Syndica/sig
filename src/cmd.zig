@@ -1224,7 +1224,6 @@ fn validator(
                 .blockstore_reader = blockstore_reader,
                 .ledger_result_writer = ledger_result_writer,
                 .account_store = loaded_snapshot.accounts_db.accountStore(),
-                .db_for_svm = &loaded_snapshot.accounts_db,
                 .epoch_schedule = bank_fields.epoch_schedule,
                 .slot_leaders = epoch_context_manager.slotLeaders(),
                 .root_slot = bank_fields.slot,
