@@ -164,10 +164,12 @@ test "serialize and deserialize" {
         const serialized = try bincode.writeAlloc(allocator, blockhashes, .{});
         defer allocator.free(serialized);
 
-        std.debug.print("serialized: {any}\n", .{serialized[0..16]});
-
-        const deserialized =
-            try bincode.readFromSlice(allocator, RecentBlockhashes, serialized, .{});
+        const deserialized = try bincode.readFromSlice(
+            allocator,
+            RecentBlockhashes,
+            serialized,
+            .{},
+        );
         defer deserialized.deinit(allocator);
 
         try std.testing.expectEqual(RecentBlockhashes.MAX_ENTRIES, deserialized.entries.capacity());

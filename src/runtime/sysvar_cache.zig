@@ -52,11 +52,6 @@ pub const SysvarCache = struct {
             recent_blockhashes_obj.deinit(allocator);
     }
 
-    pub fn reset(self: *SysvarCache, allocator: std.mem.Allocator) void {
-        self.deinit(allocator);
-        self.* = .{};
-    }
-
     /// Returns the sysvar as an object if it is supported
     /// Replaces the sysvar object getters in Agave
     pub fn get(
