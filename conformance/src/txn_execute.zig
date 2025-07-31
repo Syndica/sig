@@ -2,6 +2,7 @@ const pb = @import("proto/org/solana/sealevel/v1.pb.zig");
 const sig = @import("sig");
 const std = @import("std");
 const utils = @import("utils.zig");
+const protobuf = @import("protobuf");
 
 const EMIT_LOGS = false;
 const TOGGLE_DIRECT_MAPPING = false;
@@ -845,40 +846,58 @@ fn serializeOutput(
 ) !pb.TxnResult {
     switch (result) {
         .ok => |txn| {
-            if (txn == .fees_only) @panic("TODO");
-            const executed_txn = txn.executed;
+            const is_ok = switch (txn) {
+                .executed => |executed| executed.executed_transaction.err == null,
+                .fees_only => false,
+            };
 
-            return .{
-                .executed = true,
-                .sanitization_error = false,
-                .is_ok = executed_txn.executed_transaction.err == null,
+            // TODO: just hardcoding InstructionError for now, can something else happen?
+            // our current design assumes that the transaction execution can only return
+            // InstructionError, which seems wrong. Not to mention that we don't have a way
+            // to access *which* instruction in the transaction is the one that errored.
+            const status: u32, const instr_err: u32 = switch (txn) {
+                .executed => |executed| .{
+                    if (executed.executed_transaction.err != null) 9 else 0,
+                    if (executed.executed_transaction.err) |instr_err|
+                        @intFromEnum(instr_err) + 1
+                    else
+                        0,
+                },
+                .fees_only => |fees_only| fees_only: {
+                    const err_codes = utils.convertTransactionError(fees_only.err);
+                    break :fees_only .{
+                        err_codes.err,
+                        err_codes.instruction_error,
+                    };
+                },
+            };
 
-                // TODO: just hardcoding InstructionError for now, can something else happen?
-                // our current design assumes that the transaction execution can only return
-                // InstructionError, which seems wrong. Not to mention that we don't have a way
-                // to access *which* instruction in the transaction is the one that errored.
-                .status = if (executed_txn.executed_transaction.err != null) 9 else 0,
-                .instruction_error = if (executed_txn.executed_transaction.err) |err|
-                    @intFromEnum(err) + 1
-                else
-                    0,
+            const rent = switch (txn) {
+                .executed => |executed_txn| executed_txn.loaded_accounts.rent_collected,
+                .fees_only => 0,
+            };
 
-                .resulting_state = .{
-                    .acct_states = a: {
-                        var acc_states: std.ArrayList(pb.AcctState) = .init(allocator);
-                        errdefer acc_states.deinit();
+            const fees = switch (txn) {
+                .fees_only => |fees_only| fees_only.fees,
+                .executed => |executed| executed.fees,
+            };
 
-                        var loaded_account_keys: std.AutoHashMapUnmanaged(Pubkey, void) = .empty;
-                        defer loaded_account_keys.deinit(allocator);
+            const resulting_state: pb.ResultingState = .{
+                .rent_debits = .init(allocator),
+                .transaction_rent = rent,
+                .acct_states = switch (txn) {
+                    .executed => |executed| acct_states: {
+                        var acct_states: std.ArrayList(pb.AcctState) = .init(allocator);
+                        errdefer acct_states.deinit();
 
-                        for (executed_txn.loaded_accounts.accounts.constSlice(), 0..) |acc, i| {
+                        for (executed.loaded_accounts.accounts.constSlice(), 0..) |acc, i| {
                             if (!sanitized.accounts.get(i).is_writable) continue;
                             // Only keep accounts that were passed in as account_keys or as ALUT accounts
                             for (sanitized.accounts.items(.pubkey)) |key| {
                                 if (key.equals(&acc.pubkey)) break;
                             } else continue;
 
-                            try acc_states.append(.{
+                            try acct_states.append(.{
                                 .address = try .copy(&acc.pubkey.data, allocator),
                                 .lamports = acc.account.lamports,
                                 .data = try .copy(acc.account.data, allocator),
@@ -889,18 +908,66 @@ fn serializeOutput(
                             });
                         }
 
-                        break :a acc_states;
+                        break :acct_states acct_states;
                     },
-                    .rent_debits = .init(allocator),
-                    .transaction_rent = executed_txn.loaded_accounts.rent_collected,
+                    .fees_only => |fees_only| acct_states: {
+                        var acct_states: std.ArrayList(pb.AcctState) = .init(allocator);
+                        errdefer acct_states.deinit();
+                        errdefer for (acct_states.items) |acct_state| acct_state.deinit();
+                        try acct_states.ensureTotalCapacityPrecise(fees_only.rollbacks.count());
+
+                        const fee_payer_address = sanitized.fee_payer;
+                        switch (fees_only.rollbacks) {
+                            .fee_payer_only => |fee_payer_account| {
+                                acct_states.appendAssumeCapacity(try sharedAccountToState(
+                                    allocator,
+                                    fee_payer_address,
+                                    fee_payer_account.account,
+                                ));
+                            },
+                            .same_nonce_and_fee_payer => |nonce| {
+                                acct_states.appendAssumeCapacity(try sharedAccountToState(
+                                    allocator,
+                                    nonce.pubkey,
+                                    nonce.account,
+                                ));
+                            },
+                            .separate_nonce_and_fee_payer => |pair| {
+                                const nonce, const fee_payer_account = pair;
+                                acct_states.appendAssumeCapacity(try sharedAccountToState(
+                                    allocator,
+                                    fee_payer_address,
+                                    fee_payer_account.account,
+                                ));
+                                acct_states.appendAssumeCapacity(try sharedAccountToState(
+                                    allocator,
+                                    nonce.pubkey,
+                                    nonce.account,
+                                ));
+                            },
+                        }
+                        break :acct_states acct_states;
+                    },
                 },
+            };
+
+            return .{
+                .executed = true,
+                .sanitization_error = false,
+                .is_ok = is_ok,
+                .rent = rent,
+
+                .status = status,
+                .instruction_error = instr_err,
+
+                .resulting_state = resulting_state,
                 .fee_details = .{
-                    .transaction_fee = executed_txn.fees.transaction_fee,
-                    .prioritization_fee = executed_txn.fees.prioritization_fee,
+                    .transaction_fee = fees.transaction_fee,
+                    .prioritization_fee = fees.prioritization_fee,
                 },
                 // TODO: obviously hard coded number. compute_meter counts how many units left instead of how many units consumed
-                .executed_units = 200000 - executed_txn.executed_transaction.compute_meter,
-                .loaded_accounts_data_size = executed_txn.loaded_accounts.loaded_accounts_data_size,
+                .executed_units = 200_000 - (txn.executedUnits() orelse 200_000),
+                .loaded_accounts_data_size = txn.loadedAccountsDataSize(),
             };
         },
         // TODO: 008651fd6d7efed350fa33eeba912cb6e670eb7c_265678.fix
@@ -922,6 +989,31 @@ fn serializeOutput(
             };
         },
     }
+}
+
+fn sharedAccountToState(
+    allocator: std.mem.Allocator,
+    address: Pubkey,
+    value: sig.runtime.AccountSharedData,
+) !pb.AcctState {
+    const address_duped: protobuf.ManagedString = try .copy(&address.data, allocator);
+    errdefer address_duped.deinit();
+
+    const data_duped: protobuf.ManagedString = try .copy(value.data, allocator);
+    errdefer data_duped.deinit();
+
+    const owner_duped: protobuf.ManagedString = try .copy(&value.owner.data, allocator);
+    errdefer owner_duped.deinit();
+
+    return .{
+        .address = address_duped,
+        .lamports = value.lamports,
+        .data = data_duped,
+        .executable = value.executable,
+        .rent_epoch = value.rent_epoch,
+        .owner = owner_duped,
+        .seed_addr = null,
+    };
 }
 
 fn parseHash(bytes: []const u8) !Hash {
