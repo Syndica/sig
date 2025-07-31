@@ -348,7 +348,6 @@ pub const ThreadSafeAccountMap = struct {
             );
 
             if (index != versions.len and versions[index][0] == slot) {
-                self.allocator.free(versions[index][1].data);
                 versions[index] = .{ slot, account_shared_data };
             } else {
                 try gop.value_ptr.insert(self.allocator, index, .{ slot, account_shared_data });
@@ -395,7 +394,7 @@ pub const ThreadSafeAccountMap = struct {
         pub fn next(self: *ThreadSafeAccountMap.SlotModifiedIterator) !?struct { Pubkey, Account } {
             std.debug.assert(self.cursor != std.math.maxInt(usize));
             defer self.cursor += 1;
-            if (self.cursor > self.slot_list.len) return null;
+            if (self.cursor >= self.slot_list.len) return null;
             const pubkey, const account = self.slot_list[self.cursor];
             return .{ pubkey, try toAccount(self.allocator, account) };
         }

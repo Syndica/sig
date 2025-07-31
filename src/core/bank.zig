@@ -112,7 +112,12 @@ pub const SlotConstants = struct {
         };
     }
 
-    pub fn genesis(fee_rate_governor: sig.core.genesis_config.FeeRateGovernor) SlotConstants {
+    pub fn genesis(
+        allocator: Allocator,
+        fee_rate_governor: sig.core.genesis_config.FeeRateGovernor,
+    ) Allocator.Error!SlotConstants {
+        var ancestors = Ancestors{};
+        try ancestors.ancestors.put(allocator, 0, {});
         return .{
             .parent_slot = 0,
             .parent_hash = sig.core.Hash.ZEROES,
@@ -122,7 +127,7 @@ pub const SlotConstants = struct {
             .max_tick_height = 0,
             .fee_rate_governor = fee_rate_governor,
             .epoch_reward_status = .inactive,
-            .ancestors = .{},
+            .ancestors = ancestors,
             .feature_set = .EMPTY,
         };
     }
@@ -172,6 +177,12 @@ pub const SlotState = struct {
 
     stakes_cache: sig.core.StakesCache,
 
+    /// 50% burned, 50% paid to leader
+    collected_transaction_fees: Atomic(u64),
+
+    /// 100% paid to leader
+    collected_priority_fees: Atomic(u64),
+
     pub fn deinit(self: *SlotState, allocator: Allocator) void {
         var blockhash_queue = self.blockhash_queue.write();
         defer blockhash_queue.unlock();
@@ -189,6 +200,8 @@ pub const SlotState = struct {
             .collected_rent = .init(0),
             .accounts_lt_hash = .init(.IDENTITY),
             .stakes_cache = try .init(allocator),
+            .collected_transaction_fees = .init(0),
+            .collected_priority_fees = .init(0),
         };
     }
 
@@ -212,6 +225,8 @@ pub const SlotState = struct {
             .collected_rent = .init(bank_fields.collected_rent),
             .accounts_lt_hash = .init(LtHash{ .data = @splat(0xBAD1) }),
             .stakes_cache = .{ .stakes = .init(stakes) },
+            .collected_transaction_fees = .init(0),
+            .collected_priority_fees = .init(0),
         };
     }
 
@@ -241,6 +256,8 @@ pub const SlotState = struct {
             .collected_rent = .init(0),
             .accounts_lt_hash = .init(parent.accounts_lt_hash.readCopy()),
             .stakes_cache = .{ .stakes = .init(stakes) },
+            .collected_transaction_fees = .init(0),
+            .collected_priority_fees = .init(0),
         };
     }
 
@@ -296,7 +313,8 @@ pub const EpochConstants = struct {
             .ns_per_slot = genesis_config.nsPerSlot(),
             .genesis_creation_time = genesis_config.creation_time,
             .slots_per_year = genesis_config.slotsPerYear(),
-            .stakes = try .initEmpty(allocator),
+            .stakes = try .initEmptyWithGenesisStakeHistoryEntry(allocator),
+            .rent_collector = .DEFAULT,
         };
     }
 

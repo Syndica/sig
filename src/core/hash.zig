@@ -170,18 +170,27 @@ pub const LtHash = struct {
         self.* = self.sub(other);
     }
 
+    const Vector = @Vector(vec_len, u16);
+    const vec_len = std.simd.suggestVectorLength(u16) orelse 4;
+
     pub fn add(lhs: LtHash, rhs: LtHash) LtHash {
-        return .{
-            .data = @as(@Vector(NUM_ELEMENTS, u16), lhs.data) +%
-                @as(@Vector(NUM_ELEMENTS, u16), rhs.data),
-        };
+        var data: [NUM_ELEMENTS]u16 = undefined;
+        inline for (0..NUM_ELEMENTS / vec_len) |N| {
+            const lhs_v: Vector = lhs.data[N * vec_len ..][0..vec_len].*;
+            const rhs_v: Vector = rhs.data[N * vec_len ..][0..vec_len].*;
+            data[N * vec_len ..][0..vec_len].* = lhs_v +% rhs_v;
+        }
+        return .{ .data = data };
     }
 
     pub fn sub(lhs: LtHash, rhs: LtHash) LtHash {
-        return .{
-            .data = @as(@Vector(NUM_ELEMENTS, u16), lhs.data) -%
-                @as(@Vector(NUM_ELEMENTS, u16), rhs.data),
-        };
+        var data: [NUM_ELEMENTS]u16 = undefined;
+        inline for (0..NUM_ELEMENTS / vec_len) |N| {
+            const lhs_v: Vector = lhs.data[N * vec_len ..][0..vec_len].*;
+            const rhs_v: Vector = rhs.data[N * vec_len ..][0..vec_len].*;
+            data[N * vec_len ..][0..vec_len].* = lhs_v -% rhs_v;
+        }
+        return .{ .data = data };
     }
 };
 
