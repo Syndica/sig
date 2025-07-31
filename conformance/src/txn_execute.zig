@@ -707,7 +707,12 @@ fn executeTxnContext(
         );
 
         const recent_blockhashes = sysvar_cache.get(RecentBlockhashes) catch break :blk null;
-        const first_entry = recent_blockhashes.getFirst() orelse break :blk null;
+        // const first_entry = recent_blockhashes.getFirst() orelse break :blk null;
+        const first_entry = if (recent_blockhashes.entries.len == 0)
+            break :blk null
+        else
+            recent_blockhashes.entries.buffer[0];
+
         break :blk if (first_entry.lamports_per_signature != 0)
             first_entry.lamports_per_signature
         else

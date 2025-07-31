@@ -42,10 +42,10 @@ pub const RecentBlockhashes = struct {
         return self.entries.len == 0;
     }
 
-    pub fn getFirst(self: *const RecentBlockhashes) ?Entry {
-        if (self.entries.len == 0) return null;
-        return self.entries.buffer[0];
-    }
+    // pub fn getFirst(self: *const RecentBlockhashes) ?Entry {
+    //     if (self.entries.len == 0) return null;
+    //     return self.entries.buffer[0];
+    // }
 
     pub fn fromBlockhashQueue(
         allocator: Allocator,
