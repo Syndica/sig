@@ -312,15 +312,52 @@ fn processReplayResults(
         if (status != .confirm) {
             continue;
         }
-        const slot_info = state.slot_tracker.get(slot) orelse continue;
+        const slot_info = state.slot_tracker.get(slot) orelse return error.MissingSlotInTracker;
+        // TODO is the polling needed? Should have been done at this point
         while (try status.confirm.poll() == .pending) {
             std.time.sleep(std.time.ns_per_ms);
         }
+
         if (slot_info.state.tickHeight() == slot_info.constants.max_tick_height) {
-            // TODO
+            // TODO Maybe add the timing?
+            // TODO add bank.wait_for_completed_scheduler()
+
+            // Get bank progress from progress map
+            const bank_progress = state.progress_map.map.getPtr(slot) orelse return error.MissingBankProgress;
+
+            // Check if we are the leader for this block
+            const is_leader_block = slot_info.constants.collector_id.equals(&state.my_identity);
+
+            const block_id = if (!is_leader_block) blk: {
+                // If the block does not have at least DATA_SHREDS_PER_FEC_BLOCK correctly retransmitted
+                // shreds in the last FEC set, mark it dead. No reason to perform this check on our leader block.
+                // TODO
+
+                break :blk null;
+            } else null;
+
+            // Freeze the slot
+            try replay.freeze.freezeSlot(state.allocator, .init(
+                .from(state.logger),
+                state.account_store,
+                state.epochs.getForSlot(slot) orelse return error.MissingEpoch,
+                slot_info.state,
+                slot_info.constants,
+                slot,
+                status.confirm.entries[status.confirm.entries.len - 1].hash,
+            ));
+
+            // Log bank frozen event
+            state.logger.info().logf("bank_frozen slot={} hash={}", .{ slot, slot_info.state.hash.readCopy() });
+
+            // Log completion debug info
+            const confirmation_progress = &bank_progress.replay_progress.arc_ed.rwlock_ed;
+            state.logger.debug().logf("slot {} has completed replay from blockstore, num_txs={} num_entries={} num_shreds={}", .{ slot, confirmation_progress.num_txs, confirmation_progress.num_entries, confirmation_progress.num_shreds });
+
             did_complete_slot = true;
-        } else {
-            // TODO log?
+
+            // TODO: Add cluster slots update sender, cost update sender,
+            // heaviest subtree fork choice updates, notifications, etc.
         }
     }
 }
