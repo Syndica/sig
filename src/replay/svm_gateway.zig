@@ -29,7 +29,7 @@ const initDurableNonceFromHash = sig.runtime.nonce.initDurableNonceFromHash;
 
 pub fn executeTransaction(
     allocator: Allocator,
-    svm_slot: *SvmSlot,
+    svm_slot: *SvmGateway,
     transaction: *const RuntimeTransaction,
 ) !TransactionResult(ProcessedTransaction) {
     return try sig.runtime.transaction_execution.loadAndExecuteTransaction(
@@ -42,11 +42,10 @@ pub fn executeTransaction(
     );
 }
 
-// TODO: rename this struct
 /// State that needs to be initialized once per batch for the SVM
 ///
 /// This is intended for read-only use across multiple threads simultaneously.
-pub const SvmSlot = struct {
+pub const SvmGateway = struct {
     params: Params,
 
     /// Data initialized and owned by this struct that will be passed by
@@ -85,7 +84,7 @@ pub const SvmSlot = struct {
         allocator: Allocator,
         batch: []const replay.resolve_lookup.ResolvedTransaction,
         params: Params,
-    ) !SvmSlot {
+    ) !SvmGateway {
         // these transactions have the incorrect hash but are otherwise valid.
         // they're all being grouped together just for the account loader. the hash
         // is not actually used by the account loader, so it doesn't matter.
@@ -140,14 +139,14 @@ pub const SvmSlot = struct {
         };
     }
 
-    pub fn deinit(self: *const SvmSlot, allocator: Allocator) void {
+    pub fn deinit(self: *const SvmGateway, allocator: Allocator) void {
         _ = self; // autofix
         _ = allocator; // autofix
         // self.params.blockhash_queue.deinit(allocator); // TODO fix leak
         // TODO self.state
     }
 
-    pub fn environment(self: *const SvmSlot) !TransactionExecutionEnvironment {
+    pub fn environment(self: *const SvmGateway) !TransactionExecutionEnvironment {
         const last_blockhash = self.params.blockhash_queue.last_hash orelse
             return error.MissingLastBlockhash;
 

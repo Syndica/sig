@@ -21,7 +21,7 @@ const ConfirmSlotFuture = replay.confirm_slot.ConfirmSlotFuture;
 const EpochTracker = replay.trackers.EpochTracker;
 const SlotTracker = replay.trackers.SlotTracker;
 
-const SvmSlot = replay.svm_gateway.SvmSlot;
+const SvmGateway = replay.svm_gateway.SvmGateway;
 
 const confirmSlot = replay.confirm_slot.confirmSlot;
 
@@ -253,7 +253,7 @@ fn replaySlot(state: *ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
         break :blk .{ entries, slot_is_full, blockhash_queue };
     };
 
-    const svm_params = SvmSlot.Params{
+    const svm_params = SvmGateway.Params{
         .slot = slot,
         .max_age = sig.core.BlockhashQueue.MAX_RECENT_BLOCKHASHES / 2,
         .lamports_per_signature = slot_info.constants.fee_rate_governor.lamports_per_signature,

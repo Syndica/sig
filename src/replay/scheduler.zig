@@ -18,7 +18,7 @@ const Committer = replay.commit.Committer;
 const ConfirmSlotStatus = replay.confirm_slot.ConfirmSlotStatus;
 const ResolvedTransaction = replay.resolve_lookup.ResolvedTransaction;
 const ResolvedBatch = replay.resolve_lookup.ResolvedBatch;
-const SvmSlot = replay.svm_gateway.SvmSlot;
+const SvmGateway = replay.svm_gateway.SvmGateway;
 
 const ProcessedTransaction = sig.runtime.transaction_execution.ProcessedTransaction;
 
@@ -32,7 +32,7 @@ const assert = std.debug.assert;
 /// executing them with the SVM.
 pub fn processBatch(
     allocator: Allocator,
-    svm_params: SvmSlot.Params,
+    svm_params: SvmGateway.Params,
     committer: Committer,
     transactions: []const ResolvedTransaction,
     exit: *Atomic(bool),
@@ -40,7 +40,7 @@ pub fn processBatch(
     const results = try allocator.alloc(struct { Hash, ProcessedTransaction }, transactions.len);
     defer allocator.free(results);
 
-    var svm_slot = try SvmSlot.init(allocator, transactions, svm_params);
+    var svm_slot = try SvmGateway.init(allocator, transactions, svm_params);
     defer svm_slot.deinit(allocator);
 
     for (transactions, 0..) |transaction, i| {
@@ -100,7 +100,7 @@ pub const TransactionScheduler = struct {
     exit: *Atomic(bool),
     /// if non-null, a failure was already recorded and will be returned for every poll
     failure: ?replay.confirm_slot.ConfirmSlotError,
-    svm_params: SvmSlot.Params,
+    svm_params: SvmGateway.Params,
 
     const BatchMessage = struct {
         batch_index: usize,
@@ -113,7 +113,7 @@ pub const TransactionScheduler = struct {
         committer: Committer,
         batch_capacity: usize,
         thread_pool: *ThreadPool,
-        svm_params: SvmSlot.Params,
+        svm_params: SvmGateway.Params,
         exit: *Atomic(bool),
     ) !TransactionScheduler {
         var batches = try std.ArrayListUnmanaged(ResolvedBatch)
@@ -234,7 +234,7 @@ pub const TransactionScheduler = struct {
 const ProcessBatchTask = struct {
     allocator: Allocator,
     logger: ScopedLogger,
-    svm_slot: SvmSlot.Params,
+    svm_slot: SvmGateway.Params,
     committer: Committer,
     batch_index: usize,
     transactions: []const ResolvedTransaction,
