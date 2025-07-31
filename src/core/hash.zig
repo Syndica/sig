@@ -191,6 +191,18 @@ pub const LtHash = struct {
         }
         return .{ .data = data };
     }
+
+    pub fn format(
+        lt_hash: LtHash,
+        comptime _: []const u8,
+        _: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
+        const encoded_len = comptime std.base64.standard.Encoder.calcSize(NUM_ELEMENTS * 2);
+        var buffer: [encoded_len]u8 = undefined;
+        const encoded = std.base64.standard.Encoder.encode(&buffer, @ptrCast(&lt_hash.data));
+        try writer.writeAll(encoded);
+    }
 };
 
 const expectEqual = std.testing.expectEqual;

@@ -364,7 +364,7 @@ fn executeTxnContext(
         }
 
         const update_sysvar_deps = update_sysvar.UpdateSysvarAccountDeps{
-            .accounts_db = &accounts_db,
+            .account_store = accounts_db.accountStore(),
             .capitalization = &capitalization,
             .ancestors = &ancestors,
             .rent = &genesis_config.rent,
@@ -425,10 +425,20 @@ fn executeTxnContext(
     // let mut bank = bank_forks.read().unwrap().root_bank();
     //     Just gets the root bank
 
-    // TODO: use `hashSlot` to compute the slot hash after merging dnut/replay/freeze into harnew/txn-fuzzing-dbg
-    // bank.rehash();
-    // const slot_hash = Hash.ZEROES;
-    const slot_hash = try Hash.parseBase58String("6AavNxZpjzFwkHto1bfh5WcS4xLiUKecVoVCcskVY6H");
+    const parent_lt_hash: ?sig.core.LtHash = .IDENTITY;
+    const lt_hash, const slot_hash = try sig.replay.freeze.hashSlot(allocator, .{
+        .account_reader = accounts_db.accountReader(),
+        .slot = slot,
+        // At this point, Agave has not modified the signature count.
+        // It's changed when the transaction is processesed and when it's committed.
+        .signature_count = 0,
+        .parent_lt_hash = &parent_lt_hash,
+        .parent_slot_hash = &parent_hash,
+        .blockhash = blockhash_queue.last_hash.?,
+        .ancestors = &ancestors,
+        .feature_set = &feature_set,
+    });
+    _ = lt_hash;
 
     parent_slot = slot;
     parent_hash = slot_hash;
@@ -555,8 +565,8 @@ fn executeTxnContext(
                     .distributed_rewards = 0,
                     .active = true,
                 };
-                try update_sysvar.updateSysvarAccount(allocator, EpochRewards, epoch_rewards, .{
-                    .accounts_db = &accounts_db,
+                try update_sysvar.updateSysvarAccount(EpochRewards, allocator, epoch_rewards, .{
+                    .account_store = accounts_db.accountStore(),
                     .ancestors = &ancestors,
                     .capitalization = &capitalization,
                     .rent = &genesis_config.rent,
@@ -584,8 +594,8 @@ fn executeTxnContext(
 
             // Update sysvars
             {
-                const update_sysvar_deps = update_sysvar.UpdateSysvarAccountDeps{
-                    .accounts_db = &accounts_db,
+                const update_sysvar_deps: update_sysvar.UpdateSysvarAccountDeps = .{
+                    .account_store = accounts_db.accountStore(),
                     .capitalization = &capitalization,
                     .ancestors = &ancestors,
                     .rent = &genesis_config.rent,
@@ -675,7 +685,7 @@ fn executeTxnContext(
     // Update epoch schedule and rent to minimum rent exempt balance
     {
         const update_sysvar_deps = update_sysvar.UpdateSysvarAccountDeps{
-            .accounts_db = &accounts_db,
+            .account_store = accounts_db.accountStore(),
             .capitalization = &capitalization,
             .ancestors = &ancestors,
             .rent = &genesis_config.rent,
@@ -692,8 +702,7 @@ fn executeTxnContext(
         defer sysvar_cache.deinit(allocator);
         try update_sysvar.fillMissingSysvarCacheEntries(
             allocator,
-            &accounts_db,
-            &ancestors,
+            accounts_db.accountReader().forSlot(&ancestors),
             &sysvar_cache,
         );
 
@@ -710,7 +719,7 @@ fn executeTxnContext(
         try blockhash_queue.insertHash(allocator, blockhash, lamports_per_signature);
     }
     const update_sysvar_deps = update_sysvar.UpdateSysvarAccountDeps{
-        .accounts_db = &accounts_db,
+        .account_store = accounts_db.accountStore(),
         .capitalization = &capitalization,
         .ancestors = &ancestors,
         .rent = &genesis_config.rent,
@@ -740,8 +749,7 @@ fn executeTxnContext(
     defer sysvar_cache.deinit(allocator);
     try update_sysvar.fillMissingSysvarCacheEntries(
         allocator,
-        &accounts_db,
-        &ancestors,
+        accounts_db.accountReader().forSlot(&ancestors),
         &sysvar_cache,
     );
 
