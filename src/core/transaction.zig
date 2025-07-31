@@ -281,6 +281,8 @@ pub const Message = struct {
     readonly_unsigned_count: u8,
 
     /// Addresses of accounts loaded by this transaction.
+    ///
+    /// [ writable signers | readonly signers | writable non-signers | readonly non-signers ]
     account_keys: []const Pubkey,
 
     /// The blockhash of a recent block.
