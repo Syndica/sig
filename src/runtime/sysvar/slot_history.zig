@@ -21,8 +21,7 @@ pub const SlotHistory = struct {
 
     pub const @"!bincode-config:bits" = BitVecConfig(u64);
 
-    pub const ID =
-        Pubkey.parseBase58String("SysvarS1otHistory11111111111111111111111111") catch unreachable;
+    pub const ID: Pubkey = .parse("SysvarS1otHistory11111111111111111111111111");
 
     pub const STORAGE_SIZE: u64 = 131_097;
 

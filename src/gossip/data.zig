@@ -1767,9 +1767,7 @@ test "contact info bincode serialize matches rust bincode" {
 
     // Build identical Sig contact info
     var sig_contact_info = ContactInfo{
-        .pubkey = Pubkey.parseBase58String(
-            "4NftWecdfGcYZMJahnAAX5Cw1PLGLZhYFB19wL6AkXqW",
-        ) catch unreachable,
+        .pubkey = .parse("4NftWecdfGcYZMJahnAAX5Cw1PLGLZhYFB19wL6AkXqW"),
         .wallclock = 1721060646885,
         .outset = 1721060141617172,
         .shred_version = 0,
@@ -1779,19 +1777,19 @@ test "contact info bincode serialize matches rust bincode" {
         .extensions = ArrayList(Extension).init(testing.allocator),
     };
     defer sig_contact_info.deinit();
-    sig_contact_info.addrs.append(IpAddr.newIpv4(127, 0, 0, 1)) catch unreachable;
-    sig_contact_info.sockets.append(.{ .key = .turbine_recv, .index = 0, .offset = 8001 }) catch unreachable;
-    sig_contact_info.sockets.append(.{ .key = .turbine_recv_quic, .index = 0, .offset = 1 }) catch unreachable;
-    sig_contact_info.sockets.append(.{ .key = .tpu, .index = 0, .offset = 1 }) catch unreachable;
-    sig_contact_info.sockets.append(.{ .key = .tpu_forwards, .index = 0, .offset = 1 }) catch unreachable;
-    sig_contact_info.sockets.append(.{ .key = .tpu_vote, .index = 0, .offset = 1 }) catch unreachable;
-    sig_contact_info.sockets.append(.{ .key = .repair, .index = 0, .offset = 1 }) catch unreachable;
-    sig_contact_info.sockets.append(.{ .key = .serve_repair, .index = 0, .offset = 2 }) catch unreachable;
-    sig_contact_info.sockets.append(.{ .key = .tpu_quic, .index = 0, .offset = 1 }) catch unreachable;
-    sig_contact_info.sockets.append(.{ .key = .tpu_forwards_quic, .index = 0, .offset = 1 }) catch unreachable;
-    sig_contact_info.sockets.append(.{ .key = .rpc, .index = 0, .offset = 889 }) catch unreachable;
-    sig_contact_info.sockets.append(.{ .key = .rpc_pubsub, .index = 0, .offset = 1 }) catch unreachable;
-    sig_contact_info.sockets.append(.{ .key = .gossip, .index = 0, .offset = 11780 }) catch unreachable;
+    try sig_contact_info.addrs.append(IpAddr.newIpv4(127, 0, 0, 1));
+    try sig_contact_info.sockets.append(.{ .key = .turbine_recv, .index = 0, .offset = 8001 });
+    try sig_contact_info.sockets.append(.{ .key = .turbine_recv_quic, .index = 0, .offset = 1 });
+    try sig_contact_info.sockets.append(.{ .key = .tpu, .index = 0, .offset = 1 });
+    try sig_contact_info.sockets.append(.{ .key = .tpu_forwards, .index = 0, .offset = 1 });
+    try sig_contact_info.sockets.append(.{ .key = .tpu_vote, .index = 0, .offset = 1 });
+    try sig_contact_info.sockets.append(.{ .key = .repair, .index = 0, .offset = 1 });
+    try sig_contact_info.sockets.append(.{ .key = .serve_repair, .index = 0, .offset = 2 });
+    try sig_contact_info.sockets.append(.{ .key = .tpu_quic, .index = 0, .offset = 1 });
+    try sig_contact_info.sockets.append(.{ .key = .tpu_forwards_quic, .index = 0, .offset = 1 });
+    try sig_contact_info.sockets.append(.{ .key = .rpc, .index = 0, .offset = 889 });
+    try sig_contact_info.sockets.append(.{ .key = .rpc_pubsub, .index = 0, .offset = 1 });
+    try sig_contact_info.sockets.append(.{ .key = .gossip, .index = 0, .offset = 11780 });
     sig_contact_info.buildCache();
 
     // Check that the cache is built correctly
@@ -1949,7 +1947,7 @@ test "RestartHeaviestFork serialization matches rust" {
     var rust_bytes = [_]u8{ 82, 182, 93, 119, 193, 123, 4, 235, 68, 64, 82, 233, 51, 34, 232, 123, 245, 237, 236, 142, 251, 1, 123, 124, 26, 40, 219, 84, 165, 116, 208, 63, 19, 0, 0, 0, 0, 0, 0, 0, 12, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 11, 0, 0, 0, 0, 0, 0, 0, 20, 0 };
 
     const x = RestartHeaviestFork{
-        .from = try Pubkey.parseBase58String("6ZsiX6YcwEa93yWtVwGRiK8Ceoxq2VieVh2pvEiUtpCW"),
+        .from = .parse("6ZsiX6YcwEa93yWtVwGRiK8Ceoxq2VieVh2pvEiUtpCW"),
         .wallclock = 19,
         .last_slot = 12,
         .observed_stake = 11,
@@ -1975,7 +1973,7 @@ test "RestartLastVotedForkSlots serialization matches rust" {
     };
 
     const data = RestartLastVotedForkSlots{
-        .from = try Pubkey.parseBase58String("6ZsiX6YcwEa93yWtVwGRiK8Ceoxq2VieVh2pvEiUtpCW"),
+        .from = .parse("6ZsiX6YcwEa93yWtVwGRiK8Ceoxq2VieVh2pvEiUtpCW"),
         .wallclock = 0,
         .last_voted_slot = 0,
         .last_voted_hash = Hash.ZEROES,

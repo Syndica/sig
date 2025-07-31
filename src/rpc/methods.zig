@@ -387,7 +387,7 @@ pub const GetLeaderSchedule = struct {
                 for (value.array.items, 0..) |slot, i| {
                     slots[i] = @intCast(slot.integer);
                 }
-                const pubkey = Pubkey.parseBase58String(key) catch return error.InvalidNumber;
+                const pubkey = Pubkey.parseRuntime(key) catch return error.InvalidNumber;
                 try map.put(allocator, pubkey, slots);
             }
 

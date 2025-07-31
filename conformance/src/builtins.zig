@@ -7,13 +7,13 @@ const Pubkey = sig.core.Pubkey;
 
 // Live source buffer accounts for builtin migrations
 const STAKE_PROGRAM_SOURCE_BUFFER_ADDRESS =
-    Pubkey.parseBase58String("8t3vv6v99tQA6Gp7fVdsBH66hQMaswH5qsJVqJqo8xvG") catch unreachable;
+    Pubkey.parseRuntime("8t3vv6v99tQA6Gp7fVdsBH66hQMaswH5qsJVqJqo8xvG") catch unreachable;
 const CONFIG_PROGRAM_SOURCE_BUFFER_ADDRESS =
-    Pubkey.parseBase58String("BuafH9fBv62u6XjzrzS4ZjAE8963ejqF5rt1f8Uga4Q3") catch unreachable;
+    Pubkey.parseRuntime("BuafH9fBv62u6XjzrzS4ZjAE8963ejqF5rt1f8Uga4Q3") catch unreachable;
 const ADDRESS_LOOKUP_TABLE_SOURCE_BUFFER_ADDRESS =
-    Pubkey.parseBase58String("AhXWrD9BBUYcKjtpA3zuiiZG4ysbo6C6wjHo1QhERk6A") catch unreachable;
+    Pubkey.parseRuntime("AhXWrD9BBUYcKjtpA3zuiiZG4ysbo6C6wjHo1QhERk6A") catch unreachable;
 const FEATURE_PROGRAM_SOURCE_BUFFER_ADDRESSS =
-    Pubkey.parseBase58String("3D3ydPWvmEszrSjrickCtnyRSJm1rzbbSsZog8Ub6vLh") catch unreachable;
+    Pubkey.parseRuntime("3D3ydPWvmEszrSjrickCtnyRSJm1rzbbSsZog8Ub6vLh") catch unreachable;
 
 /// Configuration for migrating a built-in program to Core BPF.
 pub const CoreBpfMigrationConfig = struct {

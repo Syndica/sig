@@ -36,7 +36,13 @@ pub const Pubkey = extern struct {
         return self.equals(&ZEROES);
     }
 
-    pub fn parseBase58String(str: []const u8) error{ InvalidLength, InvalidPubkey }!Pubkey {
+    pub inline fn parse(comptime str: []const u8) Pubkey {
+        comptime {
+            return parseRuntime(str) catch @compileError("failed to parse pubkey");
+        }
+    }
+
+    pub fn parseRuntime(str: []const u8) error{ InvalidLength, InvalidPubkey }!Pubkey {
         if (str.len > BASE58_MAX_SIZE) return error.InvalidLength;
         var encoded: std.BoundedArray(u8, BASE58_MAX_SIZE) = .{};
         encoded.appendSliceAssumeCapacity(str);
@@ -77,7 +83,7 @@ pub const Pubkey = extern struct {
         _: std.json.ParseOptions,
     ) std.json.ParseError(@TypeOf(source.*))!Pubkey {
         return switch (try source.next()) {
-            .string => |str| parseBase58String(str) catch error.UnexpectedToken,
+            .string => |str| parseRuntime(str) catch error.UnexpectedToken,
             else => error.UnexpectedToken,
         };
     }
@@ -88,7 +94,7 @@ pub const Pubkey = extern struct {
         _: std.json.ParseOptions,
     ) std.json.ParseFromValueError!Pubkey {
         return switch (source) {
-            .string => |str| parseBase58String(str) catch |err| switch (err) {
+            .string => |str| parseRuntime(str) catch |err| switch (err) {
                 error.InvalidPubkey => error.InvalidCharacter,
                 error.InvalidLength => error.LengthMismatch,
             },

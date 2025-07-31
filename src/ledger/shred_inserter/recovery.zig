@@ -398,6 +398,31 @@ test "recover mainnet shreds - end to end" {
     }
 }
 
+const expected_leader =
+    "ksnjzXzraR5hWthnKAWVgJkDBUoRX8CHpLttYs2sAmhPFvh6Ga6HMTLMKRi45p1PfLevfm272ANmwTBEvGwW19m";
+const expected_metadata: RecoveryMetadata = .{
+    .common_header = .{
+        .leader_signature = .parse(expected_leader),
+        .variant = .{
+            .shred_type = .code,
+            .proof_size = 5,
+            .chained = false,
+            .resigned = false,
+        },
+        .slot = 284737905,
+        .index = 483,
+        .version = 50093,
+        .erasure_set_index = 483,
+    },
+    .code_header = .{
+        .num_data_shreds = 7,
+        .num_code_shreds = 21,
+        .erasure_code_index = 0,
+    },
+    .retransmitter_signature = null,
+    .chained_merkle_root = null,
+};
+
 test "recover mainnet shreds - metadata is correct" {
     const shreds = try toShreds(&mainnet_shreds);
     defer deinitShreds(std.testing.allocator, shreds);
@@ -455,36 +480,6 @@ test "recover mainnet shreds - construct shreds from shards" {
         i += 1;
     }
 }
-
-const expected_metadata = blk: {
-    @setEvalBranchQuota(10_000);
-
-    break :blk RecoveryMetadata{
-        .common_header = CommonHeader{
-            .leader_signature = Signature.parseBase58String(
-                "ksnjzXzraR5hWthnKAWVgJkDBUoRX8CHpLttYs2s" ++
-                    "AmhPFvh6Ga6HMTLMKRi45p1PfLevfm272ANmwTBEvGwW19m",
-            ) catch unreachable,
-            .variant = .{
-                .shred_type = .code,
-                .proof_size = 5,
-                .chained = false,
-                .resigned = false,
-            },
-            .slot = 284737905,
-            .index = 483,
-            .version = 50093,
-            .erasure_set_index = 483,
-        },
-        .code_header = CodeHeader{
-            .num_data_shreds = 7,
-            .num_code_shreds = 21,
-            .erasure_code_index = 0,
-        },
-        .retransmitter_signature = null,
-        .chained_merkle_root = null,
-    };
-};
 
 fn toShreds(payloads: []const []const u8) ![]const Shred {
     var shreds = try std.ArrayList(Shred).initCapacity(std.testing.allocator, payloads.len);

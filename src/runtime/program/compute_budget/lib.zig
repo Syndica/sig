@@ -23,8 +23,7 @@ const MIN_HEAP_FRAME_BYTES: u32 = HEAP_LENGTH;
 const MAX_COMPUTE_UNIT_LIMIT: u32 = 1_400_000;
 pub const MAX_LOADED_ACCOUNTS_DATA_SIZE_BYTES = 64 * 1024 * 1024;
 
-pub const ID =
-    Pubkey.parseBase58String("ComputeBudget111111111111111111111111111111") catch unreachable;
+pub const ID: Pubkey = .parse("ComputeBudget111111111111111111111111111111");
 
 pub const COMPUTE_UNITS = 150;
 

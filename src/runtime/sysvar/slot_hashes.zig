@@ -27,8 +27,7 @@ pub const SlotHashes = struct {
         }
     };
 
-    pub const ID =
-        Pubkey.parseBase58String("SysvarS1otHashes111111111111111111111111111") catch unreachable;
+    pub const ID: Pubkey = .parse("SysvarS1otHashes111111111111111111111111111");
 
     pub const MAX_ENTRIES: usize = 512;
 
