@@ -95,6 +95,15 @@ pub fn EpochStakesGeneric(comptime stakes_type: StakesType) type {
 
         const Self = @This();
 
+        pub fn init(allocator: Allocator) Allocator.Error!Self {
+            return .{
+                .stakes = try .init(allocator),
+                .total_stake = 0,
+                .node_id_to_vote_accounts = .{},
+                .epoch_authorized_voters = .{},
+            };
+        }
+
         pub fn deinit(self: Self, allocator: Allocator) void {
             self.stakes.deinit(allocator);
             deinitMapAndValues(allocator, self.node_id_to_vote_accounts);
