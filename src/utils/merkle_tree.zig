@@ -37,10 +37,11 @@ pub const NestedHashTree = NestedList(Hash);
 pub fn computeMerkleRoot(self: *const NestedHashTree, fanout: usize) !Hash {
     var length = self.len();
 
-    if (length == 0) {
+    if (length == 0) return comptime empty: {
+        @setEvalBranchQuota(3187);
         var hasher = Sha256.init(.{});
-        return .{ .data = hasher.finalResult() };
-    }
+        break :empty .{ .data = hasher.finalResult() };
+    };
 
     while (true) {
         const chunks = try std.math.divCeil(usize, length, fanout);
