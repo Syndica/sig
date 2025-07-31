@@ -29,16 +29,16 @@ const initDurableNonceFromHash = sig.runtime.nonce.initDurableNonceFromHash;
 
 pub fn executeTransaction(
     allocator: Allocator,
-    svm_slot: *SvmGateway,
+    svm_gateway: *SvmGateway,
     transaction: *const RuntimeTransaction,
 ) !TransactionResult(ProcessedTransaction) {
     return try sig.runtime.transaction_execution.loadAndExecuteTransaction(
         allocator,
         transaction,
-        &svm_slot.state.accounts,
-        &try svm_slot.environment(),
+        &svm_gateway.state.accounts,
+        &try svm_gateway.environment(),
         &.{ .log = true, .log_messages_byte_limit = null },
-        &svm_slot.state.programs,
+        &svm_gateway.state.programs,
     );
 }
 

@@ -40,8 +40,8 @@ pub fn processBatch(
     const results = try allocator.alloc(struct { Hash, ProcessedTransaction }, transactions.len);
     defer allocator.free(results);
 
-    var svm_slot = try SvmGateway.init(allocator, transactions, svm_params);
-    defer svm_slot.deinit(allocator);
+    var svm_gateway = try SvmGateway.init(allocator, transactions, svm_params);
+    defer svm_gateway.deinit(allocator);
 
     for (transactions, 0..) |transaction, i| {
         if (exit.load(.monotonic)) {
@@ -51,12 +51,12 @@ pub fn processBatch(
             return .{ .failure = .SignatureFailure };
         const runtime_transaction = transaction.toRuntimeTransaction(hash);
 
-        switch (try executeTransaction(allocator, &svm_slot, &runtime_transaction)) {
+        switch (try executeTransaction(allocator, &svm_gateway, &runtime_transaction)) {
             .ok => |result| results[i] = .{ hash, result },
             .err => |err| return .{ .failure = err },
         }
     }
-    try committer.commitTransactions(allocator, svm_slot.params.slot, transactions, results);
+    try committer.commitTransactions(allocator, svm_gateway.params.slot, transactions, results);
 
     return .success;
 }
@@ -219,7 +219,7 @@ pub const TransactionScheduler = struct {
                 .allocator = self.allocator,
                 .logger = self.logger,
                 .committer = self.committer,
-                .svm_slot = self.svm_params,
+                .svm_params = self.svm_params,
                 .batch_index = self.batches_started,
                 .transactions = batch.transactions,
                 .results = &self.results,
@@ -234,7 +234,7 @@ pub const TransactionScheduler = struct {
 const ProcessBatchTask = struct {
     allocator: Allocator,
     logger: ScopedLogger,
-    svm_slot: SvmGateway.Params,
+    svm_params: SvmGateway.Params,
     committer: Committer,
     batch_index: usize,
     transactions: []const ResolvedTransaction,
@@ -244,7 +244,7 @@ const ProcessBatchTask = struct {
     pub fn run(self: *ProcessBatchTask) !void {
         const result = try processBatch(
             self.allocator,
-            self.svm_slot,
+            self.svm_params,
             self.committer,
             self.transactions,
             self.exit,
