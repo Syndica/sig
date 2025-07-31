@@ -42,15 +42,10 @@ pub fn applyFeatureActivations(
         const db_account = try tryGetAccount(accounts_db, feature_id) orelse continue;
         defer db_account.deinit(allocator);
 
-        const activation_slot = try featureActivationSlotFromAccount(
-            allocator,
-            db_account,
-        ) orelse continue;
-
         const account = try accountSharedDataFromAccount(allocator, &db_account);
         defer account.deinit(allocator);
 
-        _ = try bincode.writeToSlice(account.data, activation_slot, .{});
+        _ = try bincode.writeToSlice(account.data, slot, .{});
 
         try accounts_db.putAccount(slot, feature_id, account);
     }

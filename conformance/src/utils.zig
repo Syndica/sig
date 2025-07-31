@@ -29,26 +29,26 @@ const Converted = struct {
 };
 
 pub fn convertTransactionError(err: sig.ledger.transaction_status.TransactionError) Converted {
-    const instruction_error_num, //
-    const custom_error_num, //
-    const instruction_error_index = switch (err) {
-        .InstructionError => |p| b: {
+    switch (err) {
+        .InstructionError => |p| {
             const index, const instruction_error = p;
-            const instruction_error_num: u32 = @intFromEnum(instruction_error) + 1;
-            const custom_error_num: u32 = switch (instruction_error) {
-                .Custom => |v| v,
-                else => 0,
+            return .{
+                .err = @intFromEnum(err) + 1,
+                .instruction_error = @intFromEnum(instruction_error) + 1,
+                .custom_error = switch (instruction_error) {
+                    .Custom => |v| v,
+                    else => 0,
+                },
+                .instruction_index = index,
             };
-            break :b .{ instruction_error_num, custom_error_num, index };
         },
-        else => .{ 0, 0, 0 },
-    };
-    return .{
-        .err = @intFromEnum(err) + 1,
-        .instruction_error = instruction_error_num,
-        .custom_error = custom_error_num,
-        .instruction_index = instruction_error_index,
-    };
+        else => return .{
+            .err = @intFromEnum(err) + 1,
+            .instruction_error = 0,
+            .custom_error = 0,
+            .instruction_index = 0,
+        },
+    }
 }
 
 pub fn createTransactionContext(
