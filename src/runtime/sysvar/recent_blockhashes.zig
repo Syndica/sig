@@ -21,8 +21,7 @@ pub const RecentBlockhashes = struct {
         lamports_per_signature: u64,
     };
 
-    pub const ID =
-        Pubkey.parseBase58String("SysvarRecentB1ockHashes11111111111111111111") catch unreachable;
+    pub const ID: Pubkey = .parse("SysvarRecentB1ockHashes11111111111111111111");
 
     pub const MAX_ENTRIES: u64 = 150;
 

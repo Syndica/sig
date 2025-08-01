@@ -44,7 +44,13 @@ pub const Signature = struct {
         return std.mem.eql(u8, self.data[0..], other.data[0..]);
     }
 
-    pub fn parseBase58String(str: []const u8) error{InvalidSignature}!Signature {
+    pub inline fn parse(comptime str: []const u8) Signature {
+        comptime {
+            return parseRuntime(str) catch @compileError("failed to parse signature");
+        }
+    }
+
+    pub fn parseRuntime(str: []const u8) error{InvalidSignature}!Signature {
         if (str.len > BASE58_MAX_SIZE) return error.InvalidSignature;
         var encoded: std.BoundedArray(u8, BASE58_MAX_SIZE) = .{};
         encoded.appendSliceAssumeCapacity(str);
@@ -86,7 +92,7 @@ pub const Signature = struct {
     ) !Signature {
         const value = try std.json.Value.jsonParse(allocator, source, options);
         return if (value == .string)
-            parseBase58String(value.string) catch return error.InvalidNumber
+            parseRuntime(value.string) catch return error.InvalidNumber
         else
             error.UnexpectedToken;
     }

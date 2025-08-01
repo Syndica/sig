@@ -154,17 +154,15 @@ test "sign/verify PruneData with prefix" {
         230, 102, 29,  182, 139, 6,   61,  35,  28,  233, 6,   63, 229,
     }));
     const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
-    const expected_pubkey = try Pubkey.parseBase58String(
-        "5zYQ7PqYa81fw3rXAYUtmUcoL9TFwG67wcE9LW8hwtfE",
-    );
+    const expected_pubkey: Pubkey = .parse("5zYQ7PqYa81fw3rXAYUtmUcoL9TFwG67wcE9LW8hwtfE");
     try std.testing.expectEqual(expected_pubkey.data, pubkey.data);
 
-    const prune1 = try Pubkey.parseBase58String("1111111QLbz7JHiBTspS962RLKV8GndWFwiEaqKM");
-    const prune2 = try Pubkey.parseBase58String("1111111ogCyDbaRMvkdsHB3qfdyFYaG1WtRUAfdh");
-    const prune3 = try Pubkey.parseBase58String("11111112D1oxKts8YPdTJRG5FzxTNpMtWmq8hkVx3");
-    const destination = try Pubkey.parseBase58String("11111112cMQwSC9qirWGjZM6gLGwW69X22mqwLLGP");
+    const prune1: Pubkey = .parse("1111111QLbz7JHiBTspS962RLKV8GndWFwiEaqKM");
+    const prune2: Pubkey = .parse("1111111ogCyDbaRMvkdsHB3qfdyFYaG1WtRUAfdh");
+    const prune3: Pubkey = .parse("11111112D1oxKts8YPdTJRG5FzxTNpMtWmq8hkVx3");
+    const destination: Pubkey = .parse("11111112cMQwSC9qirWGjZM6gLGwW69X22mqwLLGP");
 
-    const expected_signature = try Signature.parseBase58String(
+    const expected_signature: Signature = .parse(
         "XjXQxG6vhrfPPQtddCgkfmKsH69YoUvG6GTrQfvmB73GUTjXCL5VDBE3Na94e4uT2MWPTBP3cinVdpHdBb9zAxY",
     );
 

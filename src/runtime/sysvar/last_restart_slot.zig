@@ -10,8 +10,7 @@ pub const LastRestartSlot = extern struct {
     /// The last restart `Slot`.
     last_restart_slot: Slot,
 
-    pub const ID =
-        Pubkey.parseBase58String("SysvarLastRestartS1ot1111111111111111111111") catch unreachable;
+    pub const ID: Pubkey = .parse("SysvarLastRestartS1ot1111111111111111111111");
 
     pub const DEFAULT = LastRestartSlot{
         .last_restart_slot = 0,

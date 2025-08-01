@@ -51,7 +51,7 @@ pub fn main() !void {
 
     var tc: TransactionContext = .{
         .allocator = gpa,
-        .feature_set = &FeatureSet.EMPTY,
+        .feature_set = &FeatureSet.ALL_DISABLED,
         .epoch_stakes = &epoch_stakes,
         .sysvar_cache = &SysvarCache{},
         .vm_environment = &vm.Environment{},
@@ -70,10 +70,11 @@ pub fn main() !void {
         .prev_blockhash = Hash.ZEROES,
         .prev_lamports_per_signature = 0,
         .compute_budget = ComputeBudget.default(1_400_000),
+        .slot = 0,
     };
     defer tc.deinit();
 
-    var loader = try sig.vm.Environment.initV1Loader(gpa, &FeatureSet.EMPTY, true);
+    var loader = try sig.vm.Environment.initV1Loader(gpa, &FeatureSet.ALL_DISABLED, 0, true);
     defer loader.deinit(gpa);
 
     const config: Config = .{

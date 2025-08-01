@@ -6,7 +6,6 @@ const utils = @import("utils.zig");
 
 const serialize = sig.runtime.program.bpf.serialize;
 const executor = sig.runtime.executor;
-const features = sig.core.features;
 const SyscallContext = pb.SyscallContext;
 const Pubkey = sig.core.Pubkey;
 const svm = sig.vm;
@@ -61,6 +60,8 @@ fn executeVmTest(
     var instr_context = syscall_context.instr_ctx.?;
     const vm_context = syscall_context.vm_ctx.?;
 
+    const slot = if (instr_context.slot_context) |slot_ctx| slot_ctx.slot else 0;
+
     for (instr_context.accounts.items) |acc| {
         if (std.mem.eql(
             u8,
@@ -75,14 +76,12 @@ fn executeVmTest(
     }
 
     var feature_set = try allocator.create(sig.core.FeatureSet);
-    feature_set.* = try utils.createFeatureSet(allocator, instr_context);
+    feature_set.* = try utils.createFeatureSet(instr_context);
     var tc: sig.runtime.TransactionContext = undefined;
     try utils.createTransactionContext(
         allocator,
         instr_context,
-        .{
-            .feature_set = feature_set,
-        },
+        .{ .feature_set = feature_set },
         &tc,
     );
     defer utils.deinitTransactionContext(allocator, tc);
@@ -94,11 +93,11 @@ fn executeVmTest(
         else => .v0,
     };
     if (sbpf_version.gte(.v1)) {
-        try feature_set.active.put(allocator, features.BPF_ACCOUNT_DATA_DIRECT_MAPPING, 0);
+        feature_set.setSlot(.bpf_account_data_direct_mapping, 0);
     }
 
     const direct_mapping = sbpf_version.gte(.v1) or
-        feature_set.active.contains(features.BPF_ACCOUNT_DATA_DIRECT_MAPPING);
+        feature_set.active(.bpf_account_data_direct_mapping, slot);
 
     if (instr_context.program_id.getSlice().len != Pubkey.SIZE) return error.OutOfBounds;
     const instr_info = try utils.createInstructionInfo(
@@ -122,8 +121,9 @@ fn executeVmTest(
         .enable_instruction_tracing = true,
     };
 
-    const mask_out_rent_epoch_in_vm_serialization = tc.feature_set.active.contains(
-        features.MASK_OUT_RENT_EPOCH_IN_VM_SERIALIZATION,
+    const mask_out_rent_epoch_in_vm_serialization = tc.feature_set.active(
+        .mask_out_rent_epoch_in_vm_serialization,
+        slot,
     );
     var parameter_bytes, var regions, const accounts_metadata = try serialize.serializeParameters(
         allocator,
@@ -143,6 +143,7 @@ fn executeVmTest(
     var syscall_registry = try createSyscallRegistry(
         allocator,
         feature_set,
+        slot,
         false,
     );
     defer syscall_registry.deinit(allocator);
@@ -367,98 +368,97 @@ fn stub(
 pub fn createSyscallRegistry(
     allocator: std.mem.Allocator,
     feature_set: *const sig.core.FeatureSet,
+    slot: sig.core.Slot,
     is_deploy: bool,
-) !svm.Registry(svm.Syscall) {
+) !Registry(svm.Syscall) {
     // Register syscalls
-    var registry = svm.Registry(svm.Syscall){};
-    errdefer registry.deinit(allocator);
+    var loader = Registry(svm.Syscall){};
+    errdefer loader.deinit(allocator);
 
     // Abort
-    _ = try registry.registerHashed(
+    _ = try loader.registerHashed(
         allocator,
         "abort",
         stub,
     );
 
     // Panic
-    _ = try registry.registerHashed(
+    _ = try loader.registerHashed(
         allocator,
         "sol_panic_",
         stub,
     );
 
     // Alloc Free
+
     if (!is_deploy) {
-        _ = try registry.registerHashed(
+        _ = try loader.registerHashed(
             allocator,
-            "sol_alloc_free",
+            "sol_alloc_free_",
             stub,
         );
     }
 
     // Logging
-    _ = try registry.registerHashed(
+    _ = try loader.registerHashed(
         allocator,
         "sol_log_",
         stub,
     );
 
-    _ = try registry.registerHashed(
+    _ = try loader.registerHashed(
         allocator,
         "sol_log_64_",
         stub,
     );
 
-    _ = try registry.registerHashed(
+    _ = try loader.registerHashed(
         allocator,
         "sol_log_pubkey",
         stub,
     );
 
-    _ = try registry.registerHashed(
+    _ = try loader.registerHashed(
         allocator,
         "sol_log_compute_units_",
         stub,
     );
 
     // Log Data
-    _ = try registry.registerHashed(
+    _ = try loader.registerHashed(
         allocator,
         "sol_log_data",
         stub,
     );
 
     // Program derived addresses
-    _ = try registry.registerHashed(
+    _ = try loader.registerHashed(
         allocator,
         "sol_create_program_address",
         stub,
     );
-    _ = try registry.registerHashed(
+    _ = try loader.registerHashed(
         allocator,
         "sol_try_find_program_address",
         stub,
     );
 
     // Sha256, Keccak256, Secp256k1Recover
-    _ = try registry.registerHashed(
+    _ = try loader.registerHashed(
         allocator,
         "sol_sha256",
         stub,
     );
-    _ = try registry.registerHashed(
+    _ = try loader.registerHashed(
         allocator,
         "sol_keccak256",
         stub,
     );
-    _ = try registry.registerHashed(
-        allocator,
-        "sol_secp256k1_recover",
-        stub,
-    );
+    // _ = try stub,
+
     // Blake3
-    if (feature_set.active.contains(features.BLAKE3_SYSCALL_ENABLED)) {
-        _ = try registry.registerHashed(
+    if (feature_set.active(.blake3_syscall_enabled, slot)) {
+        _ = try loader.registerHashed(
             allocator,
             "sol_blake3",
             stub,
@@ -466,18 +466,18 @@ pub fn createSyscallRegistry(
     }
 
     // Elliptic Curve
-    if (feature_set.active.contains(features.CURVE25519_SYSCALL_ENABLED)) {
-        _ = try registry.registerHashed(
+    if (feature_set.active(.curve25519_syscall_enabled, slot)) {
+        _ = try loader.registerHashed(
             allocator,
             "sol_curve_validate_point",
             stub,
         );
-        _ = try registry.registerHashed(
+        _ = try loader.registerHashed(
             allocator,
             "sol_curve_group_op",
             stub,
         );
-        _ = try registry.registerHashed(
+        _ = try loader.registerHashed(
             allocator,
             "sol_curve_multiscalar_mul",
             stub,
@@ -485,171 +485,165 @@ pub fn createSyscallRegistry(
     }
 
     // Sysvars
-    _ = try registry.registerHashed(
+    _ = try loader.registerHashed(
         allocator,
         "sol_get_clock_sysvar",
         stub,
     );
-    _ = try registry.registerHashed(
+    _ = try loader.registerHashed(
         allocator,
         "sol_get_epoch_schedule_sysvar",
         stub,
     );
-    if (!feature_set.active.contains(features.DISABLE_FEES_SYSVAR)) {
-        _ = try registry.registerHashed(
+    if (!feature_set.active(.disable_fees_sysvar, slot)) {
+        _ = try loader.registerHashed(
             allocator,
             "sol_get_fees_sysvar",
             stub,
         );
     }
-    _ = try registry.registerHashed(
+    _ = try loader.registerHashed(
         allocator,
         "sol_get_rent_sysvar",
         stub,
     );
-    if (feature_set.active.contains(features.LAST_RESTART_SLOT_SYSVAR)) {
-        _ = try registry.registerHashed(
+    if (feature_set.active(.last_restart_slot_sysvar, slot)) {
+        _ = try loader.registerHashed(
             allocator,
             "sol_get_last_restart_slot",
             stub,
         );
     }
-    _ = try registry.registerHashed(
+
+    _ = try loader.registerHashed(
         allocator,
         "sol_get_epoch_rewards_sysvar",
         stub,
     );
 
     // Memory
-    _ = try registry.registerHashed(
+    _ = try loader.registerHashed(
         allocator,
         "sol_memcpy_",
         stub,
     );
 
-    _ = try registry.registerHashed(
+    _ = try loader.registerHashed(
         allocator,
         "sol_memmove_",
         stub,
     );
 
-    _ = try registry.registerHashed(
+    _ = try loader.registerHashed(
         allocator,
         "sol_memset_",
         stub,
     );
 
-    _ = try registry.registerHashed(
+    _ = try loader.registerHashed(
         allocator,
         "sol_memcmp_",
         stub,
     );
 
-    // Processed Sibling
-    _ = try registry.registerHashed(
+    _ = try loader.registerHashed(
         allocator,
         "sol_get_processed_sibling_instruction",
         stub,
     );
 
     // Stack Height
-    _ = try registry.registerHashed(
+    _ = try loader.registerHashed(
         allocator,
         "sol_get_stack_height",
         stub,
     );
 
     // Return Data
-    _ = try registry.registerHashed(
+    _ = try loader.registerHashed(
         allocator,
         "sol_set_return_data",
         stub,
     );
-    // _ = try registry.registerHashed(allocator, "sol_get_return_data", getReturnData,);
+    _ = try loader.registerHashed(
+        allocator,
+        "sol_get_return_data",
+        stub,
+    );
 
     // Cross Program Invocation
-    _ = try registry.registerHashed(
+    _ = try loader.registerHashed(
         allocator,
         "sol_invoke_signed_c",
         stub,
     );
-    _ = try registry.registerHashed(
+    _ = try loader.registerHashed(
         allocator,
         "sol_invoke_signed_rust",
         stub,
     );
 
     // Memory Allocator
-    if (!feature_set.active.contains(features.DISABLE_DEPLOY_OF_ALLOC_FREE_SYSCALL)) {
-        _ = try registry.registerHashed(
+    if (!feature_set.active(.disable_deploy_of_alloc_free_syscall, slot)) {
+        _ = try loader.registerHashed(
             allocator,
             "sol_alloc_free_",
             stub,
         );
     }
 
-    // Alt_bn128
-    if (feature_set.active.contains(features.ENABLE_ALT_BN128_SYSCALL)) {
-        _ = try registry.registerHashed(
+    // Alt-bn128
+    if (feature_set.active(.enable_alt_bn128_syscall, slot)) {
+        _ = try loader.registerHashed(
             allocator,
             "sol_alt_bn128_group_op",
             stub,
         );
     }
-
-    // Big_mod_exp
-    if (feature_set.active.contains(features.ENABLE_BIG_MOD_EXP_SYSCALL)) {
-        _ = try registry.registerHashed(
-            allocator,
-            "sol_big_mod_exp",
-            stub,
-        );
-    }
-
-    // Poseidon
-    if (feature_set.active.contains(features.ENABLE_POSEIDON_SYSCALL)) {
-        _ = try registry.registerHashed(
-            allocator,
-            "sol_poseidon",
-            stub,
-        );
-    }
-
-    // Remaining Compute Units
-    if (feature_set.active.contains(features.REMAINING_COMPUTE_UNITS_SYSCALL_ENABLED)) {
-        _ = try registry.registerHashed(
-            allocator,
-            "sol_remaining_compute_units",
-            stub,
-        );
-    }
-
-    // Alt_bn_128_compression
-    if (feature_set.active.contains(features.ENABLE_ALT_BN128_COMPRESSION_SYSCALL)) {
-        _ = try registry.registerHashed(
+    if (feature_set.active(.enable_alt_bn128_compression_syscall, slot)) {
+        _ = try loader.registerHashed(
             allocator,
             "sol_alt_bn128_compression",
             stub,
         );
     }
 
-    // Sysvar Getter
-    if (feature_set.active.contains(features.GET_SYSVAR_SYSCALL_ENABLED)) {
-        _ = try registry.registerHashed(
+    // Big_mod_exp
+    // if (feature_set.active(feature_set.ENABLE_BIG_MOD_EXP_SYSCALL, slot)) {
+    //     _ = try stub,
+    // }
+
+    if (feature_set.active(.enable_poseidon_syscall, slot)) {
+        _ = try loader.registerHashed(
+            allocator,
+            "sol_poseidon",
+            stub,
+        );
+    }
+
+    if (feature_set.active(.remaining_compute_units_syscall_enabled, slot)) {
+        _ = try loader.registerHashed(
+            allocator,
+            "sol_remaining_compute_units",
+            stub,
+        );
+    }
+
+    if (feature_set.active(.get_sysvar_syscall_enabled, slot)) {
+        _ = try loader.registerHashed(
             allocator,
             "sol_get_sysvar",
             stub,
         );
     }
 
-    // Get Epoch Stake
-    if (feature_set.active.contains(features.ENABLE_GET_EPOCH_STAKE_SYSCALL)) {
-        _ = try registry.registerHashed(
+    if (feature_set.active(.enable_get_epoch_stake_syscall, slot)) {
+        _ = try loader.registerHashed(
             allocator,
             "sol_get_epoch_stake",
             stub,
         );
     }
 
-    return registry;
+    return loader;
 }

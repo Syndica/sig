@@ -23,7 +23,6 @@ const Rent = sig.runtime.sysvar.Rent;
 const Clock = sig.runtime.sysvar.Clock;
 const EpochSchedule = sig.core.EpochSchedule;
 const SlotHashes = sig.runtime.sysvar.SlotHashes;
-const features = sig.core.features;
 
 const VoteProgramInstruction = vote_instruction.Instruction;
 
@@ -589,9 +588,7 @@ fn updateCommission(
     var maybe_vote_state: ?VoteState = null;
 
     const enforce_commission_update_rule = blk: {
-        if (ic.tc.feature_set.active.contains(
-            features.ALLOW_COMMISSION_DECREASE_AT_ANY_TIME,
-        )) {
+        if (ic.tc.feature_set.active(.allow_commission_decrease_at_any_time, ic.tc.slot)) {
             const versioned_state = vote_account.deserializeFromAccountData(
                 allocator,
                 VoteStateVersions,
@@ -609,11 +606,10 @@ fn updateCommission(
         }
     };
 
-    if (enforce_commission_update_rule and
-        ic.tc.feature_set.active.contains(
-            features.COMMISSION_UPDATES_ONLY_ALLOWED_IN_FIRST_HALF_OF_EPOCH,
-        ))
-    {
+    if (enforce_commission_update_rule and ic.tc.feature_set.active(
+        .commission_updates_only_allowed_in_first_half_of_epoch,
+        ic.tc.slot,
+    )) {
         if (!isCommissionUpdateAllowed(clock.slot, &epoch_schedule)) {
             // Clean up before returning, if we have a vote_state already.
             if (maybe_vote_state) |*vote_state| {
@@ -780,12 +776,8 @@ fn executeProcessVoteWithAccount(
     vote_account: *BorrowedAccount,
     vote: Vote,
 ) (error{OutOfMemory} || InstructionError)!void {
-    if (ic.tc.feature_set.active.contains(
-        features.DEPRECATE_LEGACY_VOTE_IXS,
-    ) and
-        ic.tc.feature_set.active.contains(
-            features.ENABLE_TOWER_SYNC_IX,
-        ))
+    if (ic.tc.feature_set.active(.deprecate_legacy_vote_ixs, ic.tc.slot) and
+        ic.tc.feature_set.active(.enable_tower_sync_ix, ic.tc.slot))
     {
         return InstructionError.InvalidInstructionData;
     }
@@ -873,8 +865,8 @@ fn executeUpdateVoteState(
     vote_state_update: VoteStateUpdate,
 ) (error{OutOfMemory} || InstructionError)!void {
     var vote_state_update_mut = vote_state_update;
-    if (ic.tc.feature_set.active.contains(features.DEPRECATE_LEGACY_VOTE_IXS) and
-        ic.tc.feature_set.active.contains(features.ENABLE_TOWER_SYNC_IX))
+    if (ic.tc.feature_set.active(.deprecate_legacy_vote_ixs, ic.tc.slot) and
+        ic.tc.feature_set.active(.enable_tower_sync_ix, ic.tc.slot))
     {
         return InstructionError.InvalidInstructionData;
     }
@@ -939,7 +931,7 @@ fn executeTowerSync(
     tower_sync: TowerSync,
 ) (error{OutOfMemory} || InstructionError)!void {
     var tower_sync_mut = tower_sync;
-    if (!ic.tc.feature_set.active.contains(features.ENABLE_TOWER_SYNC_IX)) {
+    if (!ic.tc.feature_set.active(.enable_tower_sync_ix, ic.tc.slot)) {
         return InstructionError.InvalidInstructionData;
     }
 
@@ -2213,11 +2205,11 @@ test "vote_program: update_commission increasing commission" {
             },
             .feature_set = &.{
                 .{
-                    .pubkey = features.ALLOW_COMMISSION_DECREASE_AT_ANY_TIME,
+                    .feature = .allow_commission_decrease_at_any_time,
                     .slot = 0,
                 },
                 .{
-                    .pubkey = features.COMMISSION_UPDATES_ONLY_ALLOWED_IN_FIRST_HALF_OF_EPOCH,
+                    .feature = .commission_updates_only_allowed_in_first_half_of_epoch,
                     .slot = 0,
                 },
             },
@@ -2324,11 +2316,11 @@ test "vote_program: update_commission decreasing commission" {
             },
             .feature_set = &.{
                 .{
-                    .pubkey = features.ALLOW_COMMISSION_DECREASE_AT_ANY_TIME,
+                    .feature = .allow_commission_decrease_at_any_time,
                     .slot = 0,
                 },
                 .{
-                    .pubkey = features.COMMISSION_UPDATES_ONLY_ALLOWED_IN_FIRST_HALF_OF_EPOCH,
+                    .feature = .commission_updates_only_allowed_in_first_half_of_epoch,
                     .slot = 0,
                 },
             },
@@ -2537,11 +2529,11 @@ test "vote_program: update_commission error commission update too late failure" 
             },
             .feature_set = &.{
                 .{
-                    .pubkey = features.ALLOW_COMMISSION_DECREASE_AT_ANY_TIME,
+                    .feature = .allow_commission_decrease_at_any_time,
                     .slot = 0,
                 },
                 .{
-                    .pubkey = features.COMMISSION_UPDATES_ONLY_ALLOWED_IN_FIRST_HALF_OF_EPOCH,
+                    .feature = .commission_updates_only_allowed_in_first_half_of_epoch,
                     .slot = 0,
                 },
             },
@@ -2653,11 +2645,11 @@ test "vote_program: update_commission missing signature" {
             },
             .feature_set = &.{
                 .{
-                    .pubkey = features.ALLOW_COMMISSION_DECREASE_AT_ANY_TIME,
+                    .feature = .allow_commission_decrease_at_any_time,
                     .slot = 0,
                 },
                 .{
-                    .pubkey = features.COMMISSION_UPDATES_ONLY_ALLOWED_IN_FIRST_HALF_OF_EPOCH,
+                    .feature = .commission_updates_only_allowed_in_first_half_of_epoch,
                     .slot = 0,
                 },
             },
@@ -4371,7 +4363,7 @@ test "vote_program: tower sync" {
             },
             .feature_set = &.{
                 .{
-                    .pubkey = features.ENABLE_TOWER_SYNC_IX,
+                    .feature = .enable_tower_sync_ix,
                     .slot = 0,
                 },
             },
@@ -4518,7 +4510,7 @@ test "vote_program: tower sync switch" {
             },
             .feature_set = &.{
                 .{
-                    .pubkey = features.ENABLE_TOWER_SYNC_IX,
+                    .feature = .enable_tower_sync_ix,
                     .slot = 0,
                 },
             },

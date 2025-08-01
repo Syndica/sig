@@ -34,6 +34,9 @@ pub const MAX_INSTRUCTION_STACK_DEPTH = 5;
 pub const TransactionContext = struct {
     allocator: std.mem.Allocator,
 
+    /// The slot number this transaction is being executed in. Used for feature gate activations.
+    slot: sig.core.Slot,
+
     // These data structures exist beyond the lifetime of the TransactionContext.
     // These exist per-epoch.
     feature_set: *const FeatureSet,

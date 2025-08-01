@@ -28,8 +28,7 @@ pub const Clock = extern struct {
     /// [oracle]: https://docs.solanalabs.com/implemented-proposals/validator-timestamp-oracle
     unix_timestamp: i64,
 
-    pub const ID =
-        Pubkey.parseBase58String("SysvarC1ock11111111111111111111111111111111") catch unreachable;
+    pub const ID: Pubkey = .parse("SysvarC1ock11111111111111111111111111111111");
 
     pub const DEFAULT = Clock{
         .slot = 0,

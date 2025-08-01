@@ -58,7 +58,7 @@ fn testResponse(
 }
 
 test GetAccountInfo {
-    const pubkey = try Pubkey.parseBase58String("Bkd9xbHF7JgwXmEib6uU3y582WaPWWiasPxzMesiBwWm");
+    const pubkey: Pubkey = .parse("Bkd9xbHF7JgwXmEib6uU3y582WaPWWiasPxzMesiBwWm");
     try testRequest(
         .getAccountInfo,
         .{ .pubkey = pubkey },
@@ -73,7 +73,7 @@ test GetAccountInfo {
                 .data = .{ .json_parsed_base64_fallback = "" },
                 .executable = false,
                 .lamports = 963849100,
-                .owner = try Pubkey.parseBase58String("11111111111111111111111111111111"),
+                .owner = .parse("11111111111111111111111111111111"),
                 .rentEpoch = 18446744073709551615,
                 .space = 0,
             },
@@ -95,7 +95,7 @@ test GetAccountInfo {
 test GetBalance {
     try testRequest(
         .getBalance,
-        .{ .pubkey = try Pubkey.parseBase58String("Bkd9xbHF7JgwXmEib6uU3y582WaPWWiasPxzMesiBwWm") },
+        .{ .pubkey = .parse("Bkd9xbHF7JgwXmEib6uU3y582WaPWWiasPxzMesiBwWm") },
         \\{"jsonrpc":"2.0","id":1,"method":"getBalance","params":["Bkd9xbHF7JgwXmEib6uU3y582WaPWWiasPxzMesiBwWm"]}
         ,
     );
@@ -203,12 +203,12 @@ test GetLeaderSchedule {
     try std.testing.expectEqualSlices(
         u64,
         &.{ 1, 3 },
-        result.value.get(try Pubkey.parseBase58String("111uPd5xQyRHSmPzFJuHNUiuHbF55QXsuEbmqxE4ro")).?,
+        result.value.get(.parse("111uPd5xQyRHSmPzFJuHNUiuHbF55QXsuEbmqxE4ro")).?,
     );
     try std.testing.expectEqualSlices(
         u64,
         &.{ 2, 4 },
-        result.value.get(try Pubkey.parseBase58String("123vij84ecQEKUvQ7gYMKxKwKF6PbYSzCzzURYA4xULY")).?,
+        result.value.get(.parse("123vij84ecQEKUvQ7gYMKxKwKF6PbYSzCzzURYA4xULY")).?,
     );
 }
 
@@ -223,10 +223,10 @@ test GetLeaderSchedule {
 test GetSignatureStatuses {
     var signatures = try std.testing.allocator.alloc(Signature, 2);
     defer std.testing.allocator.free(signatures);
-    signatures[0] = try Signature.parseBase58String(
+    signatures[0] = .parse(
         "56H13bd79hzZa67gMACJYsKxb5MdfqHhe3ceEKHuBEa7hgjMgAA4Daivx68gBFUa92pxMnhCunngcP3dpVnvczGp",
     );
-    signatures[1] = try Signature.parseBase58String(
+    signatures[1] = .parse(
         "4K6Gjut37p3ajRtsN2s6q1Miywit8VyP7bAYLfVSkripdNJkF3bL6BWG7dauzZGMr3jfsuFaPR91k2NuuCc7EqAz",
     );
     try testRequest(.getSignatureStatuses, .{ .signatures = signatures },
@@ -290,10 +290,10 @@ test GetVoteAccounts {
                 .commission = 0,
                 .epochVoteAccount = true,
                 .epochCredits = &.{ .{ 1, 64, 0 }, .{ 2, 192, 64 } },
-                .nodePubkey = try Pubkey.parseBase58String("B97CCUW3AEZFGy6uUg6zUdnNYvnVq5VG8PUtb2HayTDD"),
+                .nodePubkey = .parse("B97CCUW3AEZFGy6uUg6zUdnNYvnVq5VG8PUtb2HayTDD"),
                 .lastVote = 147,
                 .activatedStake = 42,
-                .votePubkey = try Pubkey.parseBase58String("3ZT31jkAGhUaw8jsy4bTknwBMP8i4Eueh52By4zXcsVw"),
+                .votePubkey = .parse("3ZT31jkAGhUaw8jsy4bTknwBMP8i4Eueh52By4zXcsVw"),
                 .rootSlot = 100,
             }},
             .delinquent = &.{},

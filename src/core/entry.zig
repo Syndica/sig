@@ -178,8 +178,7 @@ test "Entry serialization and deserialization" {
 pub const test_entry = struct {
     pub const as_struct = Entry{
         .num_hashes = 149218308,
-        .hash = sig.core.Hash
-            .parseBase58String("G8T3smgLc4XavAtxScD3u4FTAqPtwbFCEJKwJbfoECcd") catch unreachable,
+        .hash = .parse("G8T3smgLc4XavAtxScD3u4FTAqPtwbFCEJKwJbfoECcd"),
         .transactions = &.{
             sig.core.transaction.transaction_v0_example.as_struct,
             sig.core.transaction.transaction_v0_example.as_struct,
@@ -280,14 +279,14 @@ test hashTransactions {
     defer for (transactions) |tx| tx.deinit(std.testing.allocator);
 
     try std.testing.expectEqual(
-        try Hash.parseBase58String("2Gd4Mp8gCqSNCbmZXZVhrEo5A9qLM9BrmiWwzvvsLH4A"),
+        Hash.parse("2Gd4Mp8gCqSNCbmZXZVhrEo5A9qLM9BrmiWwzvvsLH4A"),
         hashTransactions(std.testing.allocator, null, &transactions),
     );
 
     std.mem.swap(Transaction, &transactions[0], &transactions[1]);
 
     try std.testing.expectEqual(
-        try Hash.parseBase58String("4yK3bxwdLmPQjDiLRH1XYZeYjXhuTmf8HUTYXMwwTcrJ"),
+        Hash.parse("4yK3bxwdLmPQjDiLRH1XYZeYjXhuTmf8HUTYXMwwTcrJ"),
         hashTransactions(std.testing.allocator, null, &transactions),
     );
 }

@@ -2,7 +2,6 @@ const builtin = @import("builtin");
 const std = @import("std");
 const sig = @import("../../../sig.zig");
 
-const features = sig.core.features;
 const builtin_costs = sig.runtime.program.builtin_costs;
 
 const Pubkey = sig.core.Pubkey;
@@ -23,8 +22,7 @@ const MIN_HEAP_FRAME_BYTES: u32 = HEAP_LENGTH;
 const MAX_COMPUTE_UNIT_LIMIT: u32 = 1_400_000;
 pub const MAX_LOADED_ACCOUNTS_DATA_SIZE_BYTES = 64 * 1024 * 1024;
 
-pub const ID =
-    Pubkey.parseBase58String("ComputeBudget111111111111111111111111111111") catch unreachable;
+pub const ID: Pubkey = .parse("ComputeBudget111111111111111111111111111111");
 
 pub const COMPUTE_UNITS = 150;
 
@@ -114,6 +112,7 @@ const ComputeBudgetInstruction = union(enum(u32)) {
 pub fn execute(
     instructions: []const InstructionInfo,
     feature_set: *const FeatureSet,
+    slot: sig.core.Slot,
 ) TransactionResult(ComputeBudgetLimits) {
     var requested_compute_unit_limit: ?struct { u8, u32 } = null;
     var requested_compute_unit_price: ?struct { u8, u64 } = null;
@@ -132,14 +131,10 @@ pub fn execute(
 
         if (isComputeBudgetProgram(&is_compute_budget_cache, program_index, program_id)) {
             const invalid_instruction_data_error: TransactionResult(ComputeBudgetLimits) = .{
-                .err = .{
-                    .InstructionError = .{ @intCast(index), .InvalidInstructionData },
-                },
+                .err = .{ .InstructionError = .{ @intCast(index), .InvalidInstructionData } },
             };
             const duplicate_instruction_error: TransactionResult(ComputeBudgetLimits) = .{
-                .err = .{
-                    .DuplicateInstruction = @intCast(index),
-                },
+                .err = .{ .DuplicateInstruction = @intCast(index) },
             };
 
             const instruction = instr.deserializeInstruction(
@@ -225,6 +220,7 @@ pub fn execute(
     else
         defaultComputeUnitLimit(
             feature_set,
+            slot,
             num_non_compute_budget_instructions,
             num_non_builtin_instructions,
             num_non_migratable_builtin_instructions,
@@ -263,17 +259,19 @@ fn isComputeBudgetProgram(cache: []?bool, index: usize, program_id: Pubkey) bool
 
 fn defaultComputeUnitLimit(
     feature_set: *const FeatureSet,
+    slot: sig.core.Slot,
     num_non_compute_budget_instructions: u32,
     num_non_builtin_instructions: u32,
     num_non_migratable_builtin_instructions: u32,
     migrating_builtin_counts: []u16,
 ) u32 {
-    if (feature_set.active.contains(features.RESERVE_MINIMAL_CUS_FOR_BUILTIN_INSTRUCTIONS)) {
+    if (feature_set.active(.reserve_minimal_cus_for_builtin_instructions, slot)) {
         var num_migrated: u32 = 0;
         var num_not_migrated: u32 = 0;
         for (migrating_builtin_counts, 0..) |count, index| {
-            if (count > 0 and feature_set.active.contains(
+            if (count > 0 and feature_set.active(
                 builtin_costs.getMigrationFeatureId(index),
+                slot,
             ))
                 num_migrated += count
             else
@@ -333,7 +331,6 @@ fn testComputeBudgetLimits(
             if (instr.program_meta.pubkey.equals(&ID))
                 allocator.free(instr.instruction_data);
         }
-        feature_set.deinit(allocator);
     }
 
     const indexed_instructions = try allocator.alloc(
@@ -347,7 +344,7 @@ fn testComputeBudgetLimits(
         indexed_instructions[index].program_meta.index_in_transaction = @intCast(index);
     }
 
-    const result = execute(indexed_instructions, &feature_set);
+    const result = execute(indexed_instructions, &feature_set, 0);
 
     switch (result) {
         .ok => |actual| {
@@ -419,14 +416,14 @@ test execute {
     // Units
     try testComputeBudgetLimits(
         allocator,
-        FeatureSet.EMPTY,
+        .ALL_DISABLED,
         &.{},
         .{ .compute_unit_limit = 0 },
     );
 
     try testComputeBudgetLimits(
         allocator,
-        FeatureSet.EMPTY,
+        .ALL_DISABLED,
         &.{
             try computeBudgetInstructionInfo(
                 allocator,
@@ -439,7 +436,7 @@ test execute {
 
     try testComputeBudgetLimits(
         allocator,
-        FeatureSet.EMPTY,
+        .ALL_DISABLED,
         &.{
             try computeBudgetInstructionInfo(
                 allocator,
@@ -452,7 +449,7 @@ test execute {
 
     try testComputeBudgetLimits(
         allocator,
-        FeatureSet.EMPTY,
+        .ALL_DISABLED,
         &.{
             emptyInstructionInfo(prng.random()),
             try computeBudgetInstructionInfo(
@@ -465,7 +462,7 @@ test execute {
 
     try testComputeBudgetLimits(
         allocator,
-        FeatureSet.EMPTY,
+        .ALL_DISABLED,
         &.{
             emptyInstructionInfo(prng.random()),
             emptyInstructionInfo(prng.random()),
@@ -480,7 +477,7 @@ test execute {
 
     try testComputeBudgetLimits(
         allocator,
-        FeatureSet.EMPTY,
+        .ALL_DISABLED,
         &.{
             try computeBudgetInstructionInfo(
                 allocator,
@@ -497,7 +494,7 @@ test execute {
     // Heap Size
     try testComputeBudgetLimits(
         allocator,
-        FeatureSet.EMPTY,
+        .ALL_DISABLED,
         &.{
             try computeBudgetInstructionInfo(
                 allocator,
@@ -513,7 +510,7 @@ test execute {
 
     try testComputeBudgetLimits(
         allocator,
-        try FeatureSet.allEnabled(allocator),
+        .ALL_ENABLED_AT_GENESIS,
         &.{
             try computeBudgetInstructionInfo(
                 allocator,
@@ -530,7 +527,7 @@ test execute {
 
     try testComputeBudgetLimits(
         allocator,
-        FeatureSet.EMPTY,
+        .ALL_DISABLED,
         &.{
             try computeBudgetInstructionInfo(
                 allocator,
@@ -545,7 +542,7 @@ test execute {
 
     try testComputeBudgetLimits(
         allocator,
-        FeatureSet.EMPTY,
+        .ALL_DISABLED,
         &.{
             try computeBudgetInstructionInfo(
                 allocator,
@@ -560,7 +557,7 @@ test execute {
 
     try testComputeBudgetLimits(
         allocator,
-        FeatureSet.EMPTY,
+        .ALL_DISABLED,
         &.{
             try computeBudgetInstructionInfo(
                 allocator,
@@ -575,7 +572,7 @@ test execute {
 
     try testComputeBudgetLimits(
         allocator,
-        FeatureSet.EMPTY,
+        .ALL_DISABLED,
         &.{
             emptyInstructionInfo(prng.random()),
             try computeBudgetInstructionInfo(
@@ -593,7 +590,7 @@ test execute {
 
     try testComputeBudgetLimits(
         allocator,
-        try FeatureSet.allEnabled(allocator),
+        .ALL_ENABLED_AT_GENESIS,
         &.{
             emptyInstructionInfo(prng.random()),
             try computeBudgetInstructionInfo(
@@ -612,7 +609,7 @@ test execute {
 
     try testComputeBudgetLimits(
         allocator,
-        FeatureSet.EMPTY,
+        .ALL_DISABLED,
         &.{
             emptyInstructionInfo(prng.random()),
             emptyInstructionInfo(prng.random()),
@@ -629,7 +626,7 @@ test execute {
 
     try testComputeBudgetLimits(
         allocator,
-        FeatureSet.EMPTY,
+        .ALL_DISABLED,
         &.{
             emptyInstructionInfo(prng.random()),
             emptyInstructionInfo(prng.random()),
@@ -645,7 +642,7 @@ test execute {
 
     try testComputeBudgetLimits(
         allocator,
-        FeatureSet.EMPTY,
+        .ALL_DISABLED,
         &.{
             emptyInstructionInfo(prng.random()),
             try computeBudgetInstructionInfo(
@@ -670,7 +667,7 @@ test execute {
 
     try testComputeBudgetLimits(
         allocator,
-        FeatureSet.EMPTY,
+        .ALL_DISABLED,
         &.{
             emptyInstructionInfo(prng.random()),
             try computeBudgetInstructionInfo(
@@ -695,7 +692,7 @@ test execute {
 
     try testComputeBudgetLimits(
         allocator,
-        FeatureSet.EMPTY,
+        .ALL_DISABLED,
         &.{
             emptyInstructionInfo(prng.random()),
             try computeBudgetInstructionInfo(
@@ -714,7 +711,7 @@ test execute {
 
     try testComputeBudgetLimits(
         allocator,
-        FeatureSet.EMPTY,
+        .ALL_DISABLED,
         &.{
             emptyInstructionInfo(prng.random()),
             try computeBudgetInstructionInfo(
@@ -733,7 +730,7 @@ test execute {
 
     try testComputeBudgetLimits(
         allocator,
-        FeatureSet.EMPTY,
+        .ALL_DISABLED,
         &.{
             emptyInstructionInfo(prng.random()),
             try computeBudgetInstructionInfo(
@@ -753,7 +750,7 @@ test execute {
     // Loaded Accounts Data Size Limit
     try testComputeBudgetLimits(
         allocator,
-        FeatureSet.EMPTY,
+        .ALL_DISABLED,
         &.{
             try computeBudgetInstructionInfo(
                 allocator,
@@ -769,7 +766,7 @@ test execute {
 
     try testComputeBudgetLimits(
         allocator,
-        try FeatureSet.allEnabled(allocator),
+        .ALL_ENABLED_AT_GENESIS,
         &.{
             try computeBudgetInstructionInfo(
                 allocator,
@@ -784,7 +781,7 @@ test execute {
         },
     );
 
-    try testComputeBudgetLimits(allocator, FeatureSet.EMPTY, &.{
+    try testComputeBudgetLimits(allocator, .ALL_DISABLED, &.{
         try computeBudgetInstructionInfo(
             allocator,
             .{ .set_loaded_accounts_data_size_limit = MAX_LOADED_ACCOUNTS_DATA_SIZE_BYTES + 1 },
@@ -797,7 +794,7 @@ test execute {
 
     try testComputeBudgetLimits(
         allocator,
-        try FeatureSet.allEnabled(allocator),
+        .ALL_ENABLED_AT_GENESIS,
         &.{
             try computeBudgetInstructionInfo(
                 allocator,
@@ -814,7 +811,7 @@ test execute {
 
     try testComputeBudgetLimits(
         allocator,
-        FeatureSet.EMPTY,
+        .ALL_DISABLED,
         &.{
             emptyInstructionInfo(prng.random()),
         },
@@ -826,7 +823,7 @@ test execute {
 
     try testComputeBudgetLimits(
         allocator,
-        FeatureSet.EMPTY,
+        .ALL_DISABLED,
         &.{
             emptyInstructionInfo(prng.random()),
             try computeBudgetInstructionInfo(

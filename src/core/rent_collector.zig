@@ -47,9 +47,9 @@ pub const RentCollector = struct {
     pub fn initRandom(random: std.Random) RentCollector {
         return .{
             .epoch = random.int(Epoch),
-            .epoch_schedule = EpochSchedule.initRandom(random),
+            .epoch_schedule = .initRandom(random),
             .slots_per_year = random.float(f64),
-            .rent = Rent.initRandom(random),
+            .rent = .initRandom(random),
         };
     }
 

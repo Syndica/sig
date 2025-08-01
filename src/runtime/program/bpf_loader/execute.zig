@@ -11,7 +11,6 @@ const vm = sig.vm;
 const bpf_program = sig.runtime.program.bpf;
 const system_program = sig.runtime.program.system;
 const bpf_loader_program = sig.runtime.program.bpf_loader;
-const features = sig.core.features;
 
 const Pubkey = sig.core.Pubkey;
 const InstructionError = sig.core.instruction.InstructionError;
@@ -21,8 +20,7 @@ const TransactionContext = sig.runtime.TransactionContext;
 const V3State = sig.runtime.program.bpf_loader.v3.State;
 
 // [agave] https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/programs/bpf_loader/src/lib.rs#L399-L401
-const migration_authority =
-    Pubkey.parseBase58String("3Scf35jMNk2xXBD6areNjgMtXgp5ZspDhms8vdcbzC42") catch unreachable;
+const migration_authority: Pubkey = .parse("3Scf35jMNk2xXBD6areNjgMtXgp5ZspDhms8vdcbzC42");
 
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L300
 pub fn execute(
@@ -57,9 +55,7 @@ pub fn execute(
             try ic.tc.consumeCompute(bpf_loader_program.v4.COMPUTE_UNITS);
             return executeBpfLoaderV4ProgramInstruction(allocator, ic);
         } else {
-            if (ic.tc.feature_set.active.contains(
-                features.REMOVE_ACCOUNTS_EXECUTABLE_FLAG_CHECKS,
-            )) {
+            if (ic.tc.feature_set.active(.remove_accounts_executable_flag_checks, ic.tc.slot)) {
                 return InstructionError.UnsupportedProgramId;
             }
             return InstructionError.IncorrectProgramId;
@@ -831,9 +827,7 @@ pub fn executeV3SetAuthorityChecked(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
 ) (error{OutOfMemory} || InstructionError)!void {
-    if (!ic.tc.feature_set.active.contains(
-        features.ENABLE_BPF_LOADER_SET_AUTHORITY_CHECKED_IX,
-    )) {
+    if (!ic.tc.feature_set.active(.enable_bpf_loader_set_authority_checked_ix, ic.tc.slot)) {
         return InstructionError.InvalidInstructionData;
     }
 
@@ -1077,7 +1071,7 @@ pub fn executeV3ExtendProgram(
     ic: *InstructionContext,
     additional_bytes: u32,
 ) (error{OutOfMemory} || InstructionError)!void {
-    if (ic.tc.feature_set.active.contains(features.ENABLE_EXTEND_PROGRAM_CHECKED)) {
+    if (ic.tc.feature_set.active(.enable_extend_program_checked, ic.tc.slot)) {
         try ic.tc.log("ExtendProgram was superseded by ExtendProgramChecked", .{});
         return InstructionError.InvalidInstructionData;
     }
@@ -1090,7 +1084,7 @@ pub fn executeV3ExtendProgramChecked(
     ic: *InstructionContext,
     additional_bytes: u32,
 ) (error{OutOfMemory} || InstructionError)!void {
-    if (!ic.tc.feature_set.active.contains(features.ENABLE_EXTEND_PROGRAM_CHECKED)) {
+    if (!ic.tc.feature_set.active(.enable_extend_program_checked, ic.tc.slot)) {
         return InstructionError.InvalidInstructionData;
     }
     try commonExtendProgram(allocator, ic, additional_bytes, true);
@@ -1287,9 +1281,7 @@ pub fn executeV3Migrate(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
 ) (error{OutOfMemory} || InstructionError)!void {
-    if (!ic.tc.feature_set.active.contains(
-        features.ENABLE_LOADER_V4,
-    )) {
+    if (!ic.tc.feature_set.active(.enable_loader_v4, ic.tc.slot)) {
         return InstructionError.InvalidInstructionData;
     }
 
@@ -1517,6 +1509,7 @@ pub fn deployProgram(
         allocator,
         tc.feature_set,
         &tc.compute_budget,
+        tc.slot,
         false,
         true,
     ) catch |err| {
@@ -2128,7 +2121,10 @@ test "executeV3SetAuthorityChecked" {
             },
             .compute_meter = bpf_loader_program.v3.COMPUTE_UNITS,
             .feature_set = &.{
-                .{ .pubkey = features.ENABLE_BPF_LOADER_SET_AUTHORITY_CHECKED_IX, .slot = 0 },
+                .{
+                    .feature = .enable_bpf_loader_set_authority_checked_ix,
+                    .slot = 0,
+                },
             },
         },
         .{
@@ -2204,7 +2200,10 @@ test "executeV3SetAuthorityChecked" {
             },
             .compute_meter = bpf_loader_program.v3.COMPUTE_UNITS,
             .feature_set = &.{
-                .{ .pubkey = features.ENABLE_BPF_LOADER_SET_AUTHORITY_CHECKED_IX, .slot = 0 },
+                .{
+                    .feature = .enable_bpf_loader_set_authority_checked_ix,
+                    .slot = 0,
+                },
             },
         },
         .{
@@ -2825,7 +2824,7 @@ test "executeV3ExtendProgram" {
                     .feature_set = if (check_authority)
                         &.{
                             .{
-                                .pubkey = features.ENABLE_EXTEND_PROGRAM_CHECKED,
+                                .feature = .enable_extend_program_checked,
                                 .slot = 0,
                             },
                         }
@@ -2890,7 +2889,7 @@ test "executeV3ExtendProgram" {
                 },
                 .feature_set = &.{
                     .{
-                        .pubkey = features.ENABLE_EXTEND_PROGRAM_CHECKED,
+                        .feature = .enable_extend_program_checked,
                         .slot = 0,
                     },
                 },
@@ -3055,7 +3054,10 @@ test "executeV3Migrate" {
             },
             .compute_meter = compute_units,
             .feature_set = &.{
-                .{ .pubkey = features.ENABLE_LOADER_V4, .slot = 0 },
+                .{
+                    .feature = .enable_loader_v4,
+                    .slot = 0,
+                },
             },
             .sysvar_cache = .{
                 .rent = sysvar.Rent.DEFAULT,

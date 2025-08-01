@@ -3,7 +3,6 @@ const pb = @import("proto/org/solana/sealevel/v1.pb.zig");
 const sig = @import("sig");
 const utils = @import("utils.zig");
 
-const features = sig.core.features;
 const executor = sig.runtime.executor;
 const serialize = sig.runtime.program.bpf.serialize;
 const syscalls = sig.vm.syscalls;
@@ -122,14 +121,16 @@ fn executeSyscall(
     var syscall_registry = try sig.vm.Environment.initV1Loader(
         allocator,
         tc.feature_set,
+        tc.slot,
         false,
     );
     defer syscall_registry.deinit(allocator);
 
     const reject_broken_elfs = true;
     const debugging_features = false;
-    const direct_mapping = tc.feature_set.active.contains(
-        features.BPF_ACCOUNT_DATA_DIRECT_MAPPING,
+    const direct_mapping = tc.feature_set.active(
+        .bpf_account_data_direct_mapping,
+        tc.slot,
     );
     const config = VmConfig{
         .max_call_depth = tc.compute_budget.max_call_depth,
@@ -196,8 +197,9 @@ fn executeSyscall(
         .from_asm = false,
     };
 
-    const mask_out_rent_epoch_in_vm_serialization = tc.feature_set.active.contains(
-        features.MASK_OUT_RENT_EPOCH_IN_VM_SERIALIZATION,
+    const mask_out_rent_epoch_in_vm_serialization = tc.feature_set.active(
+        .mask_out_rent_epoch_in_vm_serialization,
+        tc.slot,
     );
     var parameter_bytes, var regions, const accounts_metadata = try serialize.serializeParameters(
         allocator,

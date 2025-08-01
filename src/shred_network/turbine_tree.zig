@@ -809,9 +809,7 @@ test "agave: get retransmit nodes round trip" {
 
 test "agave-equivalence: get seeeded rng" {
     {
-        const pubkey = try Pubkey.parseBase58String(
-            "57fFnkGGWzfnhmQEqbCBtZoYnNh26QxFa3FXZJhLmA19",
-        );
+        const pubkey: Pubkey = .parse("57fFnkGGWzfnhmQEqbCBtZoYnNh26QxFa3FXZJhLmA19");
         const shred_id = ShredId{ .slot = 1_013, .index = 10, .shred_type = .data };
         var chacha = TurbineTree.getSeededRng(pubkey, shred_id);
         const rng = chacha.random();
@@ -820,9 +818,7 @@ test "agave-equivalence: get seeeded rng" {
         try std.testing.expectEqual(3913197096749217054, rng.int(u64));
     }
     {
-        const pubkey = try Pubkey.parseBase58String(
-            "3qChSzvc79TAKbd7jM8uAGHzeNh6PTjvQR8WPFiftNUq",
-        );
+        const pubkey: Pubkey = .parse("3qChSzvc79TAKbd7jM8uAGHzeNh6PTjvQR8WPFiftNUq");
         const shred_id = ShredId{ .slot = 200_378, .index = 0, .shred_type = .data };
         var chacha = TurbineTree.getSeededRng(pubkey, shred_id);
         const rng = chacha.random();

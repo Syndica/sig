@@ -8,8 +8,7 @@ const precompile_programs = sig.runtime.program.precompiles;
 const PrecompileProgramError = precompile_programs.PrecompileProgramError;
 const Ed25519 = std.crypto.sign.Ed25519;
 
-pub const ID =
-    Pubkey.parseBase58String("Ed25519SigVerify111111111111111111111111111") catch unreachable;
+pub const ID: Pubkey = .parse("Ed25519SigVerify111111111111111111111111111");
 
 pub const ED25519_DATA_START = ED25519_SIGNATURE_OFFSETS_SERIALIZED_SIZE +
     ED25519_SIGNATURE_OFFSETS_START;

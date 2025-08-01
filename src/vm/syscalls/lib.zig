@@ -909,7 +909,8 @@ test createProgramAddress {
         false,
     );
     try std.testing.expect(
-        (try Pubkey.parseBase58String("BwqrghZA2htAcqq8dzP1WDAhTXYTYWj7CHxF5j7TDBAe")).equals(&pk),
+        Pubkey.parse("BwqrghZA2htAcqq8dzP1WDAhTXYTYWj7CHxF5j7TDBAe")
+            .equals(&pk),
     );
 
     pk, _ = try callProgramAddressSyscall(
@@ -921,7 +922,8 @@ test createProgramAddress {
         false,
     );
     try std.testing.expect(
-        (try Pubkey.parseBase58String("13yWmRpaTR4r5nAktwLqMpRNr28tnVUZw26rTvPSSB19")).equals(&pk),
+        Pubkey.parse("13yWmRpaTR4r5nAktwLqMpRNr28tnVUZw26rTvPSSB19")
+            .equals(&pk),
     );
 
     pk, _ = try callProgramAddressSyscall(
@@ -933,10 +935,11 @@ test createProgramAddress {
         false,
     );
     try std.testing.expect(
-        (try Pubkey.parseBase58String("2fnQrngrQT4SeLcdToJAD96phoEjNL2man2kfRLCASVk")).equals(&pk),
+        Pubkey.parse("2fnQrngrQT4SeLcdToJAD96phoEjNL2man2kfRLCASVk")
+            .equals(&pk),
     );
 
-    const seed_pk = try Pubkey.parseBase58String("SeedPubey1111111111111111111111111111111111");
+    const seed_pk: Pubkey = .parse("SeedPubey1111111111111111111111111111111111");
     pk, _ = try callProgramAddressSyscall(
         allocator,
         &tc,
@@ -946,7 +949,8 @@ test createProgramAddress {
         false,
     );
     try std.testing.expect(
-        (try Pubkey.parseBase58String("976ymqVnfE32QFe6NfGDctSvVa36LWnvYxhU6G2232YL")).equals(&pk),
+        Pubkey.parse("976ymqVnfE32QFe6NfGDctSvVa36LWnvYxhU6G2232YL")
+            .equals(&pk),
     );
 
     const pk_a, _ = try callProgramAddressSyscall(
