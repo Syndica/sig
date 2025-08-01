@@ -105,16 +105,20 @@ pub const InstructionInfo = struct {
         return signers;
     }
 
+    pub fn instructionDataToDeserialize(self: *const InstructionInfo) []const u8 {
+        return self.instruction_data[0..@min(
+            self.instruction_data.len,
+            Transaction.MAX_BYTES,
+        )];
+    }
+
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/program_utils.rs#L9
     pub fn deserializeInstruction(
         self: *const InstructionInfo,
         allocator: std.mem.Allocator,
         comptime T: type,
     ) InstructionError!T {
-        var fbs = std.io.fixedBufferStream(self.instruction_data[0..@min(
-            self.instruction_data.len,
-            Transaction.MAX_BYTES,
-        )]);
+        var fbs = std.io.fixedBufferStream(self.instructionDataToDeserialize());
         const data = bincode.read(allocator, T, fbs.reader(), .{}) catch {
             return InstructionError.InvalidInstructionData;
         };
@@ -128,11 +132,7 @@ pub const InstructionInfo = struct {
         comptime T: type,
         alloc_buf: []u8,
     ) InstructionError!T {
-        var fbs = std.io.fixedBufferStream(self.instruction_data[0..@min(
-            self.instruction_data.len,
-            Transaction.MAX_BYTES,
-        )]);
-
+        var fbs = std.io.fixedBufferStream(self.instructionDataToDeserialize());
         var fba = std.heap.FixedBufferAllocator.init(alloc_buf);
         return bincode.read(fba.allocator(), T, fbs.reader(), .{}) catch {
             return InstructionError.InvalidInstructionData;
