@@ -320,7 +320,8 @@ fn processReplayResults(
             // TODO add bank.wait_for_completed_scheduler()
 
             // Get bank progress from progress map
-            const bank_progress = state.progress_map.map.getPtr(slot) orelse return error.MissingBankProgress;
+            const bank_progress = state.progress_map.map.getPtr(slot) orelse
+                return error.MissingBankProgress;
 
             // Check if we are the leader for this block
             const is_leader_block = slot_info.constants.collector_id.equals(&state.my_identity);
@@ -345,11 +346,24 @@ fn processReplayResults(
             ));
 
             // Log bank frozen event
-            state.logger.info().logf("bank_frozen slot={} hash={}", .{ slot, slot_info.state.hash.readCopy() });
+            state.logger.info().logf(
+                "bank_frozen slot={} hash={}",
+                .{ slot, slot_info.state.hash.readCopy() },
+            );
 
             // Log completion debug info
             const confirmation_progress = &bank_progress.replay_progress.arc_ed.rwlock_ed;
-            state.logger.debug().logf("slot {} has completed replay from blockstore, num_txs={} num_entries={} num_shreds={}", .{ slot, confirmation_progress.num_txs, confirmation_progress.num_entries, confirmation_progress.num_shreds });
+            state.logger.debug().logf(
+                \\ slot {} has completed replay from blockstore,
+                \\ num_txs={} num_entries={} num_shreds={}
+            ,
+                .{
+                    slot,
+                    confirmation_progress.num_txs,
+                    confirmation_progress.num_entries,
+                    confirmation_progress.num_shreds,
+                },
+            );
 
             did_complete_slot = true;
 
