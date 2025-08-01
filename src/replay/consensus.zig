@@ -499,7 +499,6 @@ fn computeBankStats(
             fork_stats.my_latest_landed_vote = computed_bank_state.my_latest_landed_vote;
             fork_stats.my_latest_landed_vote = computed_bank_state.my_latest_landed_vote;
             fork_stats.computed = true;
-
             try new_stats.append(allocator, slot);
         }
     }
@@ -1312,7 +1311,7 @@ test "computeBankStats - child bank heavier" {
     try epoch_stakes.put(testing.allocator, 1, versioned_stakes);
 
     const epoch_schedule = EpochSchedule.DEFAULT;
-    _ = try computeBankStats(
+    const newly_computed_slot_stats = try computeBankStats(
         testing.allocator,
         my_node_pubkey,
         ancestors,
@@ -1323,6 +1322,7 @@ test "computeBankStats - child bank heavier" {
         &fixture.fork_choice,
         &fixture.latest_validator_votes_for_frozen_banks,
     );
+    defer testing.allocator.free(newly_computed_slot_stats);
 
     // Sort frozen slots by slot number
     const slot_list = try testing.allocator.alloc(u64, frozen_slots.count());
@@ -1401,7 +1401,7 @@ test "computeBankStats - same weight selects lower slot" {
     try epoch_stakes.put(testing.allocator, 1, versioned_stakes);
 
     const epoch_schedule = EpochSchedule.DEFAULT;
-    _ = try computeBankStats(
+    const newly_computed_slot_stats = try computeBankStats(
         testing.allocator,
         my_vote_pubkey,
         ancestors,
@@ -1412,6 +1412,7 @@ test "computeBankStats - same weight selects lower slot" {
         &fixture.fork_choice,
         &fixture.latest_validator_votes_for_frozen_banks,
     );
+    defer testing.allocator.free(newly_computed_slot_stats);
 
     // Check that stake for slot 1 and slot 2 is equal
     const bank1 = fixture.slot_tracker.get(1).?;
