@@ -214,8 +214,8 @@ pub const StatusCache = struct {
 test "status cache (de)serialize Ancestors" {
     const allocator = std.testing.allocator;
 
-    var ancestors: Ancestors = .{
-        .ancestors = try Ancestors.Map.init(allocator, &.{ 1, 2, 3, 4 }, &.{}),
+    var ancestors = Ancestors{
+        .ancestors = try .init(allocator, &.{ 1, 2, 3, 4 }, &.{}),
     };
     defer ancestors.deinit(allocator);
 

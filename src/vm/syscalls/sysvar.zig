@@ -185,7 +185,7 @@ test getSysvar {
         var obj = sysvar.Clock.DEFAULT;
         const obj_addr = 0x100000000;
 
-        var buffer = std.mem.zeroes([@sizeOf(sysvar.Clock)]u8);
+        var buffer = std.mem.zeroes([sysvar.Clock.STORAGE_SIZE]u8);
         const buffer_addr = 0x200000000;
         const id_addr = 0x300000000;
 
@@ -216,7 +216,7 @@ test getSysvar {
             id_addr,
             buffer_addr,
             0,
-            @sizeOf(sysvar.Clock),
+            sysvar.Clock.STORAGE_SIZE,
         });
 
         const obj_parsed = try bincode.readFromSlice(
@@ -238,7 +238,7 @@ test getSysvar {
         var obj = sysvar.EpochSchedule.DEFAULT;
         const obj_addr = 0x100000000;
 
-        var buffer = std.mem.zeroes([@sizeOf(sysvar.EpochSchedule)]u8);
+        var buffer = std.mem.zeroes([sysvar.EpochSchedule.STORAGE_SIZE]u8);
         const buffer_addr = 0x200000000;
         const id_addr = 0x300000000;
 
@@ -269,7 +269,7 @@ test getSysvar {
             id_addr,
             buffer_addr,
             0,
-            @sizeOf(sysvar.EpochSchedule),
+            sysvar.EpochSchedule.STORAGE_SIZE,
         });
         const obj_parsed = try bincode.readFromSlice(
             std.testing.failing_allocator, // this shouldnt need to allocate
@@ -313,7 +313,7 @@ test getSysvar {
         var obj = src.fill(true, sysvar.Rent.DEFAULT);
         const obj_addr = 0x100000000;
 
-        var buffer = std.mem.zeroes([@sizeOf(sysvar.Rent)]u8);
+        var buffer = std.mem.zeroes([sysvar.Rent.STORAGE_SIZE]u8);
         const buffer_addr = 0x200000000;
         const id_addr = 0x300000000;
 
@@ -342,7 +342,7 @@ test getSysvar {
             id_addr,
             buffer_addr,
             0,
-            @sizeOf(sysvar.Rent),
+            sysvar.Rent.STORAGE_SIZE,
         });
         const obj_parsed = try bincode.readFromSlice(
             std.testing.failing_allocator, // this shouldnt need to allocate
@@ -363,7 +363,7 @@ test getSysvar {
         var obj = src.fill(true, sysvar.EpochRewards.DEFAULT);
         const obj_addr = 0x100000000;
 
-        var buffer = std.mem.zeroes([@sizeOf(sysvar.EpochRewards)]u8);
+        var buffer = std.mem.zeroes([sysvar.EpochRewards.STORAGE_SIZE]u8);
         const buffer_addr = 0x200000000;
         const id_addr = 0x300000000;
 
@@ -397,7 +397,7 @@ test getSysvar {
             id_addr,
             buffer_addr,
             0,
-            @sizeOf(sysvar.EpochRewards),
+            sysvar.EpochRewards.STORAGE_SIZE,
         });
         const obj_parsed = try bincode.readFromSlice(
             std.testing.failing_allocator, // this shouldnt need to allocate
@@ -418,7 +418,7 @@ test getSysvar {
         var obj = sysvar.LastRestartSlot.DEFAULT;
         const obj_addr = 0x100000000;
 
-        var buffer = std.mem.zeroes([@sizeOf(sysvar.LastRestartSlot)]u8);
+        var buffer = std.mem.zeroes([sysvar.LastRestartSlot.STORAGE_SIZE]u8);
         const buffer_addr = 0x200000000;
         const id_addr = 0x300000000;
 
@@ -445,7 +445,7 @@ test getSysvar {
             id_addr,
             buffer_addr,
             0,
-            @sizeOf(sysvar.LastRestartSlot),
+            sysvar.LastRestartSlot.STORAGE_SIZE,
         });
         const obj_parsed = try bincode.readFromSlice(
             std.testing.allocator, // this shouldnt need to allocate

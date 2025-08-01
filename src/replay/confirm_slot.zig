@@ -19,7 +19,7 @@ const TransactionError = sig.ledger.transaction_status.TransactionError;
 const AccountStore = sig.accounts_db.AccountStore;
 
 const Committer = replay.commit.Committer;
-const SvmSlot = replay.svm_gateway.SvmSlot;
+const SvmGateway = replay.svm_gateway.SvmGateway;
 const TransactionScheduler = replay.scheduler.TransactionScheduler;
 
 const verifyPoh = core.entry.verifyPoh;
@@ -46,7 +46,7 @@ pub fn confirmSlot(
     thread_pool: *ThreadPool,
     entries: []const Entry,
     last_entry: Hash,
-    svm_params: SvmSlot.Params,
+    svm_params: SvmGateway.Params,
     committer: Committer,
     verify_ticks_params: VerifyTicksParams,
     ancestors: *const Ancestors,
@@ -150,7 +150,7 @@ pub const ConfirmSlotFuture = struct {
         thread_pool: *ThreadPool,
         committer: Committer,
         entries: []const Entry,
-        svm_params: SvmSlot.Params,
+        svm_params: SvmGateway.Params,
     ) !*ConfirmSlotFuture {
         const poh_verifier = try HomogeneousThreadPool(PohTask)
             .initBorrowed(allocator, thread_pool, thread_pool.max_threads);

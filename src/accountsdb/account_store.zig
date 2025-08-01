@@ -132,6 +132,7 @@ pub const SlotModifiedIterator = union(enum) {
 ///
 /// For example, let's say the cluster has the following forking scenario:
 ///
+/// ```
 ///      1
 ///     / \
 ///    2   3
@@ -139,6 +140,7 @@ pub const SlotModifiedIterator = union(enum) {
 ///  4   5   6
 ///           \
 ///            7
+///```
 ///
 /// A SlotAccountReader will be specialized for *one* of these slots. For
 /// example, let's say you have the SlotAccountReader that's specialized for
@@ -348,7 +350,6 @@ pub const ThreadSafeAccountMap = struct {
             );
 
             if (index != versions.len and versions[index][0] == slot) {
-                self.allocator.free(versions[index][1].data);
                 versions[index] = .{ slot, account_shared_data };
             } else {
                 try gop.value_ptr.insert(self.allocator, index, .{ slot, account_shared_data });
@@ -395,7 +396,7 @@ pub const ThreadSafeAccountMap = struct {
         pub fn next(self: *ThreadSafeAccountMap.SlotModifiedIterator) !?struct { Pubkey, Account } {
             std.debug.assert(self.cursor != std.math.maxInt(usize));
             defer self.cursor += 1;
-            if (self.cursor > self.slot_list.len) return null;
+            if (self.cursor >= self.slot_list.len) return null;
             const pubkey, const account = self.slot_list[self.cursor];
             return .{ pubkey, try toAccount(self.allocator, account) };
         }

@@ -336,7 +336,7 @@ pub const BatchAccountCache = struct {
                 if (validated_loaders.contains(owner_id.*)) continue; // only load + count owners once
 
                 break :account (try self.loadAccount(allocator, transaction, owner_id, false)) orelse
-                    return error.InvalidProgramForExecution;
+                    return error.ProgramAccountNotFound;
             };
 
             if (!owner_account.account.owner.equals(&runtime.ids.NATIVE_LOADER_ID)) {
@@ -1216,7 +1216,7 @@ test "missing program owner account" {
         &env.compute_budget_limits,
     );
 
-    try std.testing.expectError(error.InvalidProgramForExecution, loaded_accounts_result);
+    try std.testing.expectError(error.ProgramAccountNotFound, loaded_accounts_result);
 }
 
 test "deallocate account" {

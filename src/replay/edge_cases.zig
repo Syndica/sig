@@ -1376,6 +1376,8 @@ const TestData = struct {
                     .collected_rent = .init(random.int(u64)),
                     .accounts_lt_hash = .init(.{ .data = @splat(random.int(u16)) }),
                     .stakes_cache = try .init(allocator),
+                    .collected_transaction_fees = .init(random.int(u64)),
+                    .collected_priority_fees = .init(random.int(u64)),
                 },
             };
         }

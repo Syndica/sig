@@ -44,6 +44,67 @@ const calculateStakeWeightedTimestamp = sig.time.calculateStakeWeightedTimestamp
 
 const failing_allocator = sig.utils.allocators.failing.allocator(.{});
 
+/// Updates all the sysvars that must be updated when a new slot is initialized
+/// based on a pre-existing parent slot that has already been handled.
+///
+/// This is analogous to the *portion* of agave's Bank::new_from_parent that is
+/// responsible for sysvar updates.
+///
+/// To initialize the slot constants and state, see newSlotFromParent.
+pub fn updateSysvarsForNewSlot(
+    allocator: Allocator,
+    account_store: AccountStore,
+    epoch_info: *const sig.core.EpochConstants,
+    epoch_schedule: sig.core.EpochSchedule,
+    constants: *const sig.core.SlotConstants,
+    state: *sig.core.SlotState,
+    slot: Slot,
+    hard_forks: *const sig.core.HardForks,
+) !void {
+    const epoch = epoch_schedule.getEpoch(slot);
+
+    const sysvar_deps = UpdateSysvarAccountDeps{
+        .account_store = account_store,
+        .capitalization = &state.capitalization,
+        .ancestors = &constants.ancestors,
+        .rent = &epoch_info.rent_collector.rent,
+        .slot = slot,
+    };
+
+    const parent_epoch = if (epoch == 0) null else epoch - 1; // TODO: verify this
+
+    try updateSlotHashes(allocator, constants.parent_slot, constants.parent_hash, sysvar_deps);
+    try updateStakeHistory(allocator, .{
+        .epoch = epoch,
+        .parent_epoch = parent_epoch,
+        .stakes_cache = &state.stakes_cache,
+        .update_sysvar_deps = sysvar_deps,
+    });
+
+    var epoch_stakes_map = sig.core.EpochStakesMap.empty;
+    try epoch_stakes_map.put(allocator, epoch, epoch_info.stakes); // TODO better approach
+    try updateClock(
+        allocator,
+        .{
+            .feature_set = &constants.feature_set,
+            .epoch_schedule = &epoch_schedule,
+            .epoch_stakes_map = &epoch_stakes_map,
+            .stakes_cache = &state.stakes_cache,
+            .epoch = epoch, // TODO: redundant with passing schedule and slot
+            .parent_epoch = parent_epoch,
+            .genesis_creation_time = undefined, // TODO
+            .ns_per_slot = undefined, // TODO
+            .update_sysvar_deps = sysvar_deps,
+        },
+    );
+    try updateLastRestartSlot(
+        allocator,
+        &constants.feature_set,
+        hard_forks,
+        sysvar_deps,
+    );
+}
+
 pub fn fillMissingSysvarCacheEntries(
     allocator: Allocator,
     account_reader: SlotAccountReader,
@@ -258,7 +319,7 @@ pub const UpdateSysvarAccountDeps = struct {
 /// created which inherits the lamports and rent epoch from the old account if it exists. The new
 /// account lamports are then adjusted to ensure rent exemption. The new account is written back
 /// to accounts db, and the slot capitalization is updated to reflect the change in account lamports.
-fn updateSysvarAccount(
+pub fn updateSysvarAccount(
     comptime Sysvar: type,
     allocator: Allocator,
     sysvar: Sysvar,

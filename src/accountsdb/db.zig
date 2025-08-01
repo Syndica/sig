@@ -315,6 +315,30 @@ pub const AccountsDB = struct {
         return .{ .accounts_db = self };
     }
 
+    pub fn getAllPubkeysSorted(self: *AccountsDB, allocator: std.mem.Allocator) ![]const Pubkey {
+        var pubkeys = std.ArrayListUnmanaged(Pubkey){};
+        errdefer pubkeys.deinit(allocator);
+
+        for (self.account_index.pubkey_ref_map.shards) |*shard| {
+            const shard_map, var shard_lg = shard.readWithLock();
+            defer shard_lg.unlock();
+            var shard_map_iter = shard_map.iterator();
+            while (shard_map_iter.next()) |entry| {
+                // NOTE: we use the pubkey from the entry key, not the value
+                // because the value is a reference head, which is not a pubkey.
+                try pubkeys.append(allocator, entry.key_ptr.*);
+            }
+        }
+
+        std.sort.heap(Pubkey, pubkeys.items, {}, struct {
+            pub fn sortCmp(_: void, lhs: Pubkey, rhs: Pubkey) bool {
+                return std.mem.order(u8, &lhs.data, &rhs.data) != .gt;
+            }
+        }.sortCmp);
+
+        return pubkeys.toOwnedSlice(allocator);
+    }
+
     /// easier to use load function
     pub fn loadWithDefaults(
         self: *AccountsDB,
@@ -1211,7 +1235,7 @@ pub const AccountsDB = struct {
         }
 
         return .{
-            accounts_hash.*,
+            accounts_hash,
             total_lamports,
         };
     }
@@ -1538,7 +1562,7 @@ pub const AccountsDB = struct {
                                 );
                                 break :blk hash;
                             },
-                            .unrooted_map => |unrooted_account| unrooted_account.hash(Hash, &key),
+                            .unrooted_map => |unrooted_account| unrooted_account.hash(key),
                         };
                     }
                 }
@@ -1808,6 +1832,21 @@ pub const AccountsDB = struct {
         const account = try self.getAccountFromRef(max_ref);
 
         return account;
+    }
+
+    pub fn getSlotAndAccount(
+        self: *AccountsDB,
+        pubkey: *const Pubkey,
+    ) GetAccountError!struct { Slot, Account } {
+        const head_ref, var lock = self.account_index.pubkey_ref_map.getRead(pubkey) orelse
+            return error.PubkeyNotInIndex;
+        defer lock.unlock();
+
+        // NOTE: this will always be a safe unwrap since both bounds are null
+        const max_ref = slotListMaxWithinBounds(head_ref.ref_ptr, null, null).?;
+        const account = try self.getAccountFromRef(max_ref);
+
+        return .{ max_ref.slot, account };
     }
 
     /// gets an account given an associated pubkey. mut ref is required for locks.

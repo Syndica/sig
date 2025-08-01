@@ -18,7 +18,7 @@ const Committer = replay.commit.Committer;
 const ConfirmSlotStatus = replay.confirm_slot.ConfirmSlotStatus;
 const ResolvedTransaction = replay.resolve_lookup.ResolvedTransaction;
 const ResolvedBatch = replay.resolve_lookup.ResolvedBatch;
-const SvmSlot = replay.svm_gateway.SvmSlot;
+const SvmGateway = replay.svm_gateway.SvmGateway;
 
 const ProcessedTransaction = sig.runtime.transaction_execution.ProcessedTransaction;
 
@@ -32,7 +32,7 @@ const assert = std.debug.assert;
 /// executing them with the SVM.
 pub fn processBatch(
     allocator: Allocator,
-    svm_params: SvmSlot.Params,
+    svm_params: SvmGateway.Params,
     committer: Committer,
     transactions: []const ResolvedTransaction,
     exit: *Atomic(bool),
@@ -40,8 +40,8 @@ pub fn processBatch(
     const results = try allocator.alloc(struct { Hash, ProcessedTransaction }, transactions.len);
     defer allocator.free(results);
 
-    var svm_slot = try SvmSlot.init(allocator, transactions, svm_params);
-    defer svm_slot.deinit(allocator);
+    var svm_gateway = try SvmGateway.init(allocator, transactions, svm_params);
+    defer svm_gateway.deinit(allocator);
 
     for (transactions, 0..) |transaction, i| {
         if (exit.load(.monotonic)) {
@@ -51,12 +51,12 @@ pub fn processBatch(
             return .{ .failure = .SignatureFailure };
         const runtime_transaction = transaction.toRuntimeTransaction(hash);
 
-        switch (try executeTransaction(allocator, &svm_slot, &runtime_transaction)) {
+        switch (try executeTransaction(allocator, &svm_gateway, &runtime_transaction)) {
             .ok => |result| results[i] = .{ hash, result },
             .err => |err| return .{ .failure = err },
         }
     }
-    try committer.commitTransactions(allocator, svm_slot.params.slot, transactions, results);
+    try committer.commitTransactions(allocator, svm_gateway.params.slot, transactions, results);
 
     return .success;
 }
@@ -100,7 +100,7 @@ pub const TransactionScheduler = struct {
     exit: *Atomic(bool),
     /// if non-null, a failure was already recorded and will be returned for every poll
     failure: ?replay.confirm_slot.ConfirmSlotError,
-    svm_params: SvmSlot.Params,
+    svm_params: SvmGateway.Params,
 
     const BatchMessage = struct {
         batch_index: usize,
@@ -113,7 +113,7 @@ pub const TransactionScheduler = struct {
         committer: Committer,
         batch_capacity: usize,
         thread_pool: *ThreadPool,
-        svm_params: SvmSlot.Params,
+        svm_params: SvmGateway.Params,
         exit: *Atomic(bool),
     ) !TransactionScheduler {
         var batches = try std.ArrayListUnmanaged(ResolvedBatch)
@@ -219,7 +219,7 @@ pub const TransactionScheduler = struct {
                 .allocator = self.allocator,
                 .logger = self.logger,
                 .committer = self.committer,
-                .svm_slot = self.svm_params,
+                .svm_params = self.svm_params,
                 .batch_index = self.batches_started,
                 .transactions = batch.transactions,
                 .results = &self.results,
@@ -234,7 +234,7 @@ pub const TransactionScheduler = struct {
 const ProcessBatchTask = struct {
     allocator: Allocator,
     logger: ScopedLogger,
-    svm_slot: SvmSlot.Params,
+    svm_params: SvmGateway.Params,
     committer: Committer,
     batch_index: usize,
     transactions: []const ResolvedTransaction,
@@ -244,7 +244,7 @@ const ProcessBatchTask = struct {
     pub fn run(self: *ProcessBatchTask) !void {
         const result = try processBatch(
             self.allocator,
-            self.svm_slot,
+            self.svm_params,
             self.committer,
             self.transactions,
             self.exit,
