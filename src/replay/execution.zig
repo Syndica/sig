@@ -355,7 +355,7 @@ fn processReplayResults(
             try replay.freeze.freezeSlot(replay_result.allocator, .init(
                 .from(replay_result.logger),
                 replay_result.account_store,
-                replay_result.epochs.getForSlot(slot) orelse return error.MissingEpoch,
+                &(replay_result.epochs.getForSlot(slot) orelse return error.MissingEpoch),
                 slot_info.state,
                 slot_info.constants,
                 slot,
