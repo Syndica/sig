@@ -319,7 +319,7 @@ pub const UpdateSysvarAccountDeps = struct {
 /// created which inherits the lamports and rent epoch from the old account if it exists. The new
 /// account lamports are then adjusted to ensure rent exemption. The new account is written back
 /// to accounts db, and the slot capitalization is updated to reflect the change in account lamports.
-fn updateSysvarAccount(
+pub fn updateSysvarAccount(
     comptime Sysvar: type,
     allocator: Allocator,
     sysvar: Sysvar,

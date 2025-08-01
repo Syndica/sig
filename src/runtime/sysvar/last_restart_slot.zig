@@ -17,7 +17,7 @@ pub const LastRestartSlot = extern struct {
         .last_restart_slot = 0,
     };
 
-    pub const STORAGE_SIZE: u64 = @sizeOf(LastRestartSlot);
+    pub const STORAGE_SIZE: u64 = 8;
 
     pub fn initRandom(random: std.Random) LastRestartSlot {
         if (!builtin.is_test) @compileError("only for testing");

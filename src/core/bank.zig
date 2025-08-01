@@ -556,25 +556,14 @@ pub fn ancestorsRandom(
     allocator: std.mem.Allocator,
     max_list_entries: usize,
 ) std.mem.Allocator.Error!Ancestors {
-    var ancestors = Ancestors.Map.Managed.init(allocator);
-    errdefer ancestors.deinit();
+    var ancestors = Ancestors{};
+    errdefer ancestors.deinit(allocator);
 
-    try sig.rand.fillHashmapWithRng(
-        &ancestors,
-        random,
-        random.uintAtMost(usize, max_list_entries),
-        struct {
-            pub fn randomKey(rand: std.Random) !Slot {
-                return rand.int(Slot);
-            }
-            pub fn randomValue(rand: std.Random) !void {
-                _ = rand;
-                return {};
-            }
-        },
-    );
+    for (0..random.uintAtMost(usize, max_list_entries)) |_| {
+        try ancestors.addSlot(allocator, random.int(Slot));
+    }
 
-    return .{ .ancestors = ancestors.unmanaged };
+    return ancestors;
 }
 
 /// Analogous to [UnusedAccounts](https://github.com/anza-xyz/agave/blob/2de7b565e8b1101824a5e3bac74f3a8cce88ea72/runtime/src/serde_snapshot.rs#L123)

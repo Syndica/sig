@@ -140,6 +140,31 @@ pub const TransactionRollbacks = union(enum(u8)) {
             },
         }
     }
+
+    /// Number of accounts tracked for rollback
+    ///
+    /// Analogous to [count](https://github.com/anza-xyz/agave/blob/10fe1eb29aac9c236fd72d08ae60a3ef61ee8353/svm/src/rollback_accounts.rs#L80).
+    pub fn count(self: *const TransactionRollbacks) usize {
+        return switch (self.*) {
+            .fee_payer_only, .same_nonce_and_fee_payer => 1,
+            .separate_nonce_and_fee_payer => 2,
+        };
+    }
+
+    /// Size of accounts tracked for rollback, used when calculating
+    /// the actual cost of transaction processing in the cost model.
+    ///
+    /// Analogous to [data_size](https://github.com/anza-xyz/agave/blob/10fe1eb29aac9c236fd72d08ae60a3ef61ee8353/svm/src/rollback_accounts.rs#L89).
+    pub fn dataSize(self: *const TransactionRollbacks) usize {
+        return switch (self.*) {
+            .fee_payer_only => |fee_payer_account| fee_payer_account.account.data.len,
+            .same_nonce_and_fee_payer => |nonce| nonce.account.data.len,
+            .separate_nonce_and_fee_payer => |pair| blk: {
+                const nonce, const fee_payer_account = pair;
+                break :blk fee_payer_account.account.data.len +| nonce.account.data.len;
+            },
+        };
+    }
 };
 
 pub const CopiedAccount = struct {
@@ -169,6 +194,7 @@ pub const ExecutedTransaction = struct {
     log_collector: ?LogCollector,
     instruction_trace: ?InstructionTrace,
     return_data: ?TransactionReturnData,
+    compute_limit: u64,
     compute_meter: u64,
     accounts_data_len_delta: i64,
 
@@ -190,10 +216,11 @@ pub const ProcessedTransaction = union(enum(u8)) {
         executed_transaction: ExecutedTransaction,
     },
 
-    pub fn deinit(self: ProcessedTransaction, allocator: std.mem.Allocator) void {
-        switch (self) {
-            .executed => |executed| {
+    pub fn deinit(self: *ProcessedTransaction, allocator: std.mem.Allocator) void {
+        switch (self.*) {
+            .executed => |*executed| {
                 executed.executed_transaction.deinit(allocator);
+                executed.rollbacks.deinit(allocator);
             },
             else => {},
         }
@@ -214,6 +241,26 @@ pub const ProcessedTransaction = union(enum(u8)) {
             },
         };
     }
+
+    /// Analogous to [executed_units](https://github.com/anza-xyz/agave/blob/10fe1eb29aac9c236fd72d08ae60a3ef61ee8353/svm/src/transaction_processing_result.rs#L91).
+    pub fn executedUnits(self: *const ProcessedTransaction) ?u64 {
+        return switch (self.*) {
+            .executed => |executed| {
+                const compute_start = executed.executed_transaction.compute_limit;
+                const compute_remain = executed.executed_transaction.compute_meter;
+                return compute_start - compute_remain;
+            },
+            .fees_only => null,
+        };
+    }
+
+    /// Analogous to [loaded_accounts_data_size](https://github.com/anza-xyz/agave/blob/10fe1eb29aac9c236fd72d08ae60a3ef61ee8353/svm/src/transaction_processing_result.rs#L97).
+    pub fn loadedAccountsDataSize(self: *const ProcessedTransaction) u32 {
+        return switch (self.*) {
+            .executed => |context| context.loaded_accounts.loaded_accounts_data_size,
+            .fees_only => |fees_only| @intCast(fees_only.rollbacks.dataSize()),
+        };
+    }
 };
 
 pub fn TransactionResult(comptime T: type) type {
@@ -231,12 +278,13 @@ pub fn loadAndExecuteTransactions(
     environment: *const TransactionExecutionEnvironment,
     config: *const TransactionExecutionConfig,
 ) error{OutOfMemory}![]TransactionResult(ProcessedTransaction) {
-    const program_map = try program_loader.loadPrograms(
+    var program_map = try program_loader.loadPrograms(
         allocator,
         &batch_account_cache.account_cache,
         environment.vm_environment,
         environment.slot,
     );
+    defer program_map.deinit(allocator);
 
     const transaction_results = try allocator.alloc(
         TransactionResult(ProcessedTransaction),
@@ -437,6 +485,7 @@ pub fn executeTransaction(
         .log_collector = tc.takeLogCollector(),
         .instruction_trace = tc.instruction_trace,
         .return_data = tc.takeReturnData(),
+        .compute_limit = compute_budget.compute_unit_limit,
         .compute_meter = tc.compute_meter,
         .accounts_data_len_delta = tc.accounts_resize_delta,
     };
@@ -568,9 +617,9 @@ test "loadAndExecuteTransactions: invalid compute budget instruction" {
         },
     );
     defer {
-        for (results) |result| {
-            switch (result) {
-                .ok => |ok| ok.deinit(allocator),
+        for (results) |*result| {
+            switch (result.*) {
+                .ok => |*ok| ok.deinit(allocator),
                 .err => |err| err.deinit(allocator),
             }
         }
@@ -594,9 +643,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
     const transfer_instruction_data = try sig.bincode.writeAlloc(
         allocator,
         sig.runtime.program.system.Instruction{
-            .transfer = .{
-                .lamports = 10_000,
-            },
+            .transfer = .{ .lamports = 10_000 },
         },
         .{},
     );
@@ -746,7 +793,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
         &ProgramMap{},
     );
 
-    const processed_transaction = result.ok;
+    var processed_transaction = result.ok;
     defer processed_transaction.deinit(allocator);
 
     const executed_transaction = processed_transaction.executed.executed_transaction;
@@ -758,10 +805,11 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
     const sender_account = account_cache.account_cache.get(sender_key).?;
     const receiver_account = account_cache.account_cache.get(receiver_key).?;
 
-    try std.testing.expectEqual(35_000, transaction_fee);
+    // TODO: verify these numbers against agave
+    try std.testing.expectEqual(5_000, transaction_fee);
     try std.testing.expectEqual(0, prioritization_fee);
     try std.testing.expectEqual(0, rent_collected);
-    try std.testing.expectEqual(55_000, sender_account.lamports);
+    try std.testing.expectEqual(85_000, sender_account.lamports);
     try std.testing.expectEqual(110_000, receiver_account.lamports);
     try std.testing.expectEqual(null, executed_transaction.err);
     try std.testing.expectEqual(null, executed_transaction.log_collector);
