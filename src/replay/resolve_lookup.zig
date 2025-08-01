@@ -59,7 +59,7 @@ pub const ResolvedTransaction = struct {
             .fee_payer = self.transaction.msg.account_keys[0],
             .msg_hash = message_hash,
             .recent_blockhash = self.transaction.msg.recent_blockhash,
-            .instruction_infos = self.instructions,
+            .instructions = self.instructions,
             .accounts = self.accounts,
         };
     }

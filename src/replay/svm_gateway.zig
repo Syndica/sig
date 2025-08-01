@@ -85,23 +85,15 @@ pub const SvmGateway = struct {
         batch: []const replay.resolve_lookup.ResolvedTransaction,
         params: Params,
     ) !SvmGateway {
-        // these transactions have the incorrect hash but are otherwise valid.
-        // they're all being grouped together just for the account loader. the hash
-        // is not actually used by the account loader, so it doesn't matter.
-        //
-        // TODO: minimize dependencies of BatchAccountCache so it doesn't require
-        // the transaction hash.
-        const unhashed_transactions_for_account_loader =
-            try allocator.alloc(RuntimeTransaction, batch.len);
-        defer allocator.free(unhashed_transactions_for_account_loader);
-        for (batch, unhashed_transactions_for_account_loader) |tx, *unhashed| {
-            unhashed.* = tx.toRuntimeTransaction(.ZEROES);
+        var accounts = try BatchAccountCache.initSufficientCapacity(allocator, batch);
+        for (batch) |transaction| {
+            try accounts.load(
+                allocator,
+                params.account_reader,
+                &transaction.accounts,
+                transaction.instructions,
+            );
         }
-        const accounts = try BatchAccountCache.initFromAccountsDb(
-            allocator,
-            params.account_reader,
-            unhashed_transactions_for_account_loader,
-        );
 
         const budget = ComputeBudget.default(1_400_000); // TODO should this be dynamic?
 
