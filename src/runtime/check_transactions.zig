@@ -35,7 +35,7 @@ pub fn checkStatusCache(
     msg_hash: *const Hash,
     recent_blockhash: *const Hash,
     ancestors: *const Ancestors,
-    status_cache: *const sig.core.StatusCache,
+    status_cache: *sig.core.StatusCache,
 ) ?TransactionError {
     if (status_cache.getStatus(&msg_hash.data, recent_blockhash, ancestors) != null)
         return .AlreadyProcessed;
@@ -169,7 +169,7 @@ const SignatureCounts = struct {
         precompile: *const Pubkey,
     ) u64 {
         var n_signatures: u64 = 0;
-        for (transaction.instruction_infos) |instr_info| {
+        for (transaction.instructions) |instr_info| {
             if (!instr_info.program_meta.pubkey.equals(precompile)) continue;
             if (instr_info.instruction_data.len == 0) continue;
             n_signatures += instr_info.instruction_data[0];
@@ -373,7 +373,7 @@ fn loadMessageNonceAccount(
     const nonce_data = verifyNonceAccount(nonce_account.*, &transaction.recent_blockhash) orelse
         return null;
 
-    const signers = transaction.instruction_infos[
+    const signers = transaction.instructions[
         NONCED_TX_MARKER_IX_INDEX
     ].getSigners();
 
@@ -407,8 +407,8 @@ fn verifyNonceAccount(account: AccountSharedData, recent_blockhash: *const Hash)
 // [agave] https://github.com/anza-xyz/agave/blob/eb416825349ca376fa13249a0267cf7b35701938/svm-transaction/src/svm_message.rs#L84
 /// If the message uses a durable nonce, return the pubkey of the nonce account
 fn getDurableNonce(transaction: *const RuntimeTransaction) ?Pubkey {
-    if (transaction.instruction_infos.len <= 0) return null;
-    const instruction = transaction.instruction_infos[NONCED_TX_MARKER_IX_INDEX];
+    if (transaction.instructions.len <= 0) return null;
+    const instruction = transaction.instructions[NONCED_TX_MARKER_IX_INDEX];
 
     const serialized_size = 4;
     if (instruction.instruction_data.len < serialized_size) return null;
@@ -442,7 +442,7 @@ test checkStatusCache {
     var ancestors = Ancestors{};
     defer ancestors.deinit(allocator);
 
-    var status_cache = sig.core.StatusCache.default();
+    var status_cache = sig.core.StatusCache.DEFAULT;
     defer status_cache.deinit(allocator);
 
     const msg_hash = Hash.generateSha256("msg hash");
@@ -485,7 +485,7 @@ test "checkAge: recent blockhash" {
         .fee_payer = Pubkey.ZEROES,
         .msg_hash = Hash.ZEROES,
         .recent_blockhash = recent_blockhash,
-        .instruction_infos = &.{},
+        .instructions = &.{},
     };
 
     var blockhash_queue = try BlockhashQueue.initWithSingleEntry(
@@ -589,7 +589,7 @@ test "checkAge: nonce account" {
         .fee_payer = Pubkey.ZEROES,
         .msg_hash = Hash.ZEROES,
         .recent_blockhash = recent_blockhash,
-        .instruction_infos = &.{.{
+        .instructions = &.{.{
             .program_meta = .{ .pubkey = sig.runtime.program.system.ID, .index_in_transaction = 0 },
             .account_metas = try sig.runtime.InstructionInfo.AccountMetas.fromSlice(&.{
                 .{
@@ -677,7 +677,7 @@ test "checkFeePayer: happy path fee payer only" {
         .fee_payer = Pubkey.initRandom(prng.random()),
         .msg_hash = Hash.ZEROES,
         .recent_blockhash = recent_blockhash,
-        .instruction_infos = &.{},
+        .instructions = &.{},
     };
     defer transaction.accounts.deinit(allocator);
 
@@ -729,7 +729,7 @@ test "checkFeePayer: happy path with same nonce and fee payer" {
         .fee_payer = Pubkey.initRandom(prng.random()),
         .msg_hash = Hash.ZEROES,
         .recent_blockhash = recent_blockhash,
-        .instruction_infos = &.{},
+        .instructions = &.{},
     };
     defer transaction.accounts.deinit(allocator);
 
@@ -791,7 +791,7 @@ test "checkFeePayer: happy path with separate nonce and fee payer" {
         .fee_payer = Pubkey.initRandom(prng.random()),
         .msg_hash = Hash.ZEROES,
         .recent_blockhash = recent_blockhash,
-        .instruction_infos = &.{},
+        .instructions = &.{},
     };
     defer transaction.accounts.deinit(allocator);
 

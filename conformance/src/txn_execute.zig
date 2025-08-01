@@ -773,8 +773,8 @@ fn executeTxnContext(
         .err => |err| return err,
     };
     defer {
-        for (runtime_transaction.instruction_infos) |info| info.deinit(allocator);
-        allocator.free(runtime_transaction.instruction_infos);
+        for (runtime_transaction.instructions) |info| info.deinit(allocator);
+        allocator.free(runtime_transaction.instructions);
         var accs = runtime_transaction.accounts;
         accs.deinit(allocator);
     }

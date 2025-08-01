@@ -78,12 +78,19 @@ pub fn verifyTickHashCount(
 pub fn verifyPoh(
     entries: []const Entry,
     allocator: Allocator,
-    preallocated_nodes: ?*std.ArrayListUnmanaged(Hash),
     initial_hash: Hash,
-) Allocator.Error!bool {
+    /// Items you may include to optimize this function.
+    optional: struct {
+        /// Recycle a list from a prior execution to avoid unnecessary allocations.
+        preallocated_nodes: ?*std.ArrayListUnmanaged(Hash) = null,
+        /// return error.Exit when set to true by another thread.
+        exit: ?*const std.atomic.Value(bool) = null,
+    },
+) (Allocator.Error || error{Exit})!bool {
     var current_hash = initial_hash;
 
     for (entries) |entry| {
+        if (optional.exit) |exit| if (exit.load(.monotonic)) return error.Exit;
         if (entry.num_hashes == 0) continue;
 
         for (1..entry.num_hashes) |_| {
@@ -92,7 +99,7 @@ pub fn verifyPoh(
 
         if (entry.transactions.len > 0) {
             const mixin =
-                try hashTransactions(allocator, preallocated_nodes, entry.transactions);
+                try hashTransactions(allocator, optional.preallocated_nodes, entry.transactions);
             current_hash = current_hash.extendAndHash(&mixin.data);
         } else {
             current_hash = Hash.generateSha256(&current_hash.data);

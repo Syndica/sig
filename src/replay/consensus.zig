@@ -25,8 +25,7 @@ const SlotHistory = sig.runtime.sysvar.SlotHistory;
 const ReplayTower = sig.consensus.replay_tower.ReplayTower;
 const ProgressMap = sig.consensus.progress_map.ProgressMap;
 const ForkChoice = sig.consensus.fork_choice.ForkChoice;
-const LatestValidatorVotesForFrozenBanks =
-    sig.consensus.latest_validator_votes.LatestValidatorVotes;
+const LatestValidatorVotes = sig.consensus.latest_validator_votes.LatestValidatorVotes;
 
 const SlotTracker = sig.replay.trackers.SlotTracker;
 const EpochTracker = sig.replay.trackers.EpochTracker;
@@ -49,7 +48,7 @@ pub const ConsensusDependencies = struct {
     vote_account: Pubkey,
     slot_history: *const SlotHistory,
     epoch_stakes: EpochStakesMap,
-    latest_validator_votes_for_frozen_banks: *const LatestValidatorVotesForFrozenBanks,
+    latest_validator_votes_for_frozen_banks: *const LatestValidatorVotes,
 };
 
 pub fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
@@ -939,9 +938,11 @@ test "checkAndHandleNewRoot - missing slot" {
 
     const constants = try SlotConstants.genesis(testing.allocator, .initRandom(random));
     defer constants.deinit(testing.allocator);
+    var state = try SlotState.genesis(testing.allocator);
+    defer state.deinit(testing.allocator);
     try slot_tracker.put(testing.allocator, root.slot, .{
         .constants = constants,
-        .state = .GENESIS,
+        .state = state,
     });
 
     const logger = .noop;
@@ -999,9 +1000,11 @@ test "checkAndHandleNewRoot - missing hash" {
 
     const constants = try SlotConstants.genesis(testing.allocator, .initRandom(random));
     defer constants.deinit(testing.allocator);
+    var state = try SlotState.genesis(testing.allocator);
+    defer state.deinit(testing.allocator);
     try slot_tracker.put(testing.allocator, root.slot, .{
         .constants = constants,
-        .state = .GENESIS,
+        .state = state,
     });
 
     const logger = .noop;
@@ -1118,8 +1121,10 @@ test "checkAndHandleNewRoot - success" {
     defer constants2.deinit(testing.allocator);
     var constants3 = try SlotConstants.genesis(testing.allocator, .initRandom(random));
     defer constants3.deinit(testing.allocator);
-    var state2 = SlotState.GENESIS;
-    var state3 = SlotState.GENESIS;
+    var state2 = try SlotState.genesis(testing.allocator);
+    defer state2.deinit(testing.allocator);
+    var state3 = try SlotState.genesis(testing.allocator);
+    defer state3.deinit(testing.allocator);
     constants2.parent_slot = hash1.slot;
     constants3.parent_slot = hash2.slot;
     state2.hash = .init(hash2.hash);
