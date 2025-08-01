@@ -173,7 +173,7 @@ pub const TransactionReturnData = struct {
     }
 };
 
-pub const TransactionError = union(enum) {
+pub const TransactionError = union(enum(u32)) {
     /// An account is already being processed in another transaction in a way
     /// that does not support parallelism
     AccountInUse,

@@ -12,8 +12,7 @@ const Epoch = sig.core.Epoch;
 const EpochSchedule = sig.core.EpochSchedule;
 const Pubkey = sig.core.Pubkey;
 const UnixTimestamp = sig.core.UnixTimestamp;
-
-pub const Rent = sig.runtime.sysvar.Rent;
+const Rent = sig.runtime.sysvar.Rent;
 
 pub const String = std.ArrayList(u8);
 
@@ -72,10 +71,10 @@ pub const FeeRateGovernor = struct {
 
     pub const @"!bincode-config:lamports_per_signature" = bincode.FieldConfig(u64){ .skip = true };
 
-    pub const DEFAULT = FeeRateGovernor{
+    pub const DEFAULT: FeeRateGovernor = .{
         .lamports_per_signature = 0,
         .target_lamports_per_signature = 10_000,
-        .target_signatures_per_slot = 50 * 400,
+        .target_signatures_per_slot = 20_000,
         .min_lamports_per_signature = 0,
         .max_lamports_per_signature = 0,
         .burn_percent = 50,
@@ -289,7 +288,6 @@ pub const GenesisConfig = struct {
 
 fn yearsAsSlots(years: f64, tick_duration: RustDuration, ticks_per_slot: u64) f64 {
     const SECONDS_PER_YEAR: f64 = 365.242_199 * 24.0 * 60.0 * 60.0;
-
     const SLOTS_PER_YEAR = SECONDS_PER_YEAR *
         (1_000_000_000.0 / @as(f64, @floatFromInt(tick_duration.asNanos()))) /
         @as(f64, @floatFromInt(ticks_per_slot));

@@ -291,7 +291,7 @@ pub fn intFromInstructionError(err: InstructionError) i32 {
     }
 }
 
-pub const InstructionErrorEnum = union(enum) {
+pub const InstructionErrorEnum = union(enum(u32)) {
     /// Deprecated! Use CustomError instead!
     /// The program instruction returned an error
     GenericError,

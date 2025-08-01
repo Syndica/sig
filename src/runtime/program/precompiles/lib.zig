@@ -9,6 +9,8 @@ const Pubkey = sig.core.Pubkey;
 const Ed25519 = std.crypto.sign.Ed25519;
 const TransactionInstruction = sig.core.transaction.Instruction;
 
+const features = sig.core.features;
+
 /// https://github.com/anza-xyz/agave/blob/df063a8c6483ad1d2bbbba50ab0b7fd7290eb7f4/cost-model/src/block_cost_limits.rs#L15
 /// Cluster averaged compute unit to micro-sec conversion rate
 pub const COMPUTE_UNIT_TO_US_RATIO: u64 = 30;
@@ -18,10 +20,6 @@ pub const SIGNATURE_COST: u64 = COMPUTE_UNIT_TO_US_RATIO * 24;
 pub const SECP256K1_VERIFY_COST: u64 = COMPUTE_UNIT_TO_US_RATIO * 223;
 /// Number of compute units for one ed25519 signature verification.
 pub const ED25519_VERIFY_COST: u64 = COMPUTE_UNIT_TO_US_RATIO * 76;
-
-// TODO: should be moved to global features file
-pub const SECP256R1_FEATURE_ID =
-    Pubkey.parseBase58String("sr11RdZWgbHTHxSroPALe6zgaT5A1K9LcE4nfsZS4gi") catch unreachable;
 
 pub const PRECOMPILES = [_]Precompile{
     .{
@@ -37,7 +35,7 @@ pub const PRECOMPILES = [_]Precompile{
     .{
         .program_id = secp256r1.ID,
         .function = secp256r1.verify,
-        .required_feature = SECP256R1_FEATURE_ID,
+        .required_feature = features.ENABLE_SECP256R1_PRECOMPILE,
     },
 };
 
@@ -71,16 +69,18 @@ pub fn verifyPrecompilesComputeCost(
         n_ed25519_instruction_signatures *| ED25519_VERIFY_COST;
 }
 
+const TransactionError = sig.ledger.transaction_status.TransactionError;
+
 pub fn verifyPrecompiles(
     allocator: std.mem.Allocator,
     transaction: sig.core.Transaction,
-    feature_set: sig.core.FeatureSet,
-) (PrecompileProgramError || error{OutOfMemory})!void {
+    feature_set: *const sig.core.FeatureSet,
+) error{OutOfMemory}!?TransactionError {
     // could remove this alloc by passing in the transaction in directly, but maybe less clean
     var instruction_datas: ?[]const []const u8 = null;
     defer if (instruction_datas) |instr_datas| allocator.free(instr_datas);
 
-    for (transaction.msg.instructions) |instruction| {
+    for (transaction.msg.instructions, 0..) |instruction, index| {
         const program_id = transaction.msg.account_keys[instruction.program_index];
         for (PRECOMPILES) |precompile| {
             if (!precompile.program_id.equals(&program_id)) continue;
@@ -96,9 +96,16 @@ pub fn verifyPrecompiles(
                 break :blk buf;
             };
 
-            try precompile.function(instruction.data, datas);
+            precompile.function(instruction.data, datas) catch {
+                return .{
+                    // TODO: Map verify error to int for custom error
+                    .InstructionError = .{ @intCast(index), .{ .Custom = 0 } },
+                };
+            };
         }
     }
+
+    return null;
 }
 
 pub const PrecompileFn = fn (
@@ -123,55 +130,81 @@ pub const PrecompileProgramError = error{
 };
 
 test "verify ed25519" {
-    try verifyPrecompiles(
-        std.testing.allocator,
-        sig.core.Transaction.EMPTY,
-        sig.core.FeatureSet.EMPTY,
-    );
+    {
+        const actual = try verifyPrecompiles(
+            std.testing.allocator,
+            sig.core.Transaction.EMPTY,
+            &sig.core.FeatureSet.EMPTY,
+        );
+        try std.testing.expectEqual(null, actual);
+    }
 
-    const bad_ed25519_tx = std.mem.zeroInit(sig.core.Transaction, .{
-        .msg = .{
-            .account_keys = &.{ed25519.ID},
-            .instructions = &[_]TransactionInstruction{
-                .{
-                    .program_index = 0,
-                    .account_indexes = &.{0},
-                    .data = "hello",
+    {
+        const bad_ed25519_tx: sig.core.Transaction = .{
+            .msg = .{
+                .account_keys = &.{ed25519.ID},
+                .instructions = &[_]TransactionInstruction{
+                    .{
+                        .program_index = 0,
+                        .account_indexes = &.{0},
+                        .data = "hello",
+                    },
                 },
+                .signature_count = 0,
+                .readonly_signed_count = 0,
+                .readonly_unsigned_count = 0,
+                .recent_blockhash = .ZEROES,
+                .address_lookups = &.{},
             },
-        },
-        .version = .legacy,
-    });
+            .version = .legacy,
+            .signatures = &.{},
+        };
+        const actual = try verifyPrecompiles(
+            std.testing.allocator,
+            bad_ed25519_tx,
+            &sig.core.FeatureSet.EMPTY,
+        );
+        try std.testing.expectEqual(
+            TransactionError{ .InstructionError = .{ 0, .{ .Custom = 0 } } },
+            actual,
+        );
+    }
 
-    try std.testing.expectError(
-        error.InvalidInstructionDataSize,
-        verifyPrecompiles(std.testing.allocator, bad_ed25519_tx, sig.core.FeatureSet.EMPTY),
-    );
+    {
+        const keypair = Ed25519.KeyPair.generate();
+        const ed25519_instruction = try ed25519.newInstruction(
+            std.testing.allocator,
+            keypair,
+            "hello!",
+        );
+        defer std.testing.allocator.free(ed25519_instruction.data);
 
-    const keypair = Ed25519.KeyPair.generate();
-    const ed25519_instruction = try ed25519.newInstruction(
-        std.testing.allocator,
-        keypair,
-        "hello!",
-    );
-    defer std.testing.allocator.free(ed25519_instruction.data);
-
-    const ed25519_tx: sig.core.Transaction = .{
-        .msg = .{
-            .account_keys = &.{ed25519.ID},
-            .instructions = &.{
-                .{ .program_index = 0, .account_indexes = &.{0}, .data = ed25519_instruction.data },
+        const ed25519_tx: sig.core.Transaction = .{
+            .msg = .{
+                .account_keys = &.{ed25519.ID},
+                .instructions = &.{
+                    .{
+                        .program_index = 0,
+                        .account_indexes = &.{0},
+                        .data = ed25519_instruction.data,
+                    },
+                },
+                .signature_count = 1,
+                .readonly_signed_count = 1,
+                .readonly_unsigned_count = 0,
+                .recent_blockhash = sig.core.Hash.ZEROES,
             },
-            .signature_count = 1,
-            .readonly_signed_count = 1,
-            .readonly_unsigned_count = 0,
-            .recent_blockhash = sig.core.Hash.ZEROES,
-        },
-        .version = .legacy,
-        .signatures = &.{},
-    };
+            .version = .legacy,
+            .signatures = &.{},
+        };
 
-    try verifyPrecompiles(std.testing.allocator, ed25519_tx, sig.core.FeatureSet.EMPTY);
+        const actual = try verifyPrecompiles(
+            std.testing.allocator,
+            ed25519_tx,
+            &sig.core.FeatureSet.EMPTY,
+        );
+        try std.testing.expectEqual(null, actual);
+    }
 }
 
 test "verify cost" {
@@ -207,7 +240,7 @@ test "verify cost" {
 }
 
 test "verify secp256k1" {
-    const bad_secp256k1_tx = std.mem.zeroInit(sig.core.Transaction, .{
+    const bad_secp256k1_tx: sig.core.Transaction = .{
         .msg = .{
             .account_keys = &.{secp256k1.ID},
             .instructions = &[_]TransactionInstruction{
@@ -217,12 +250,23 @@ test "verify secp256k1" {
                     .data = "hello",
                 },
             },
+            .signature_count = 0,
+            .readonly_signed_count = 0,
+            .readonly_unsigned_count = 0,
+            .recent_blockhash = .ZEROES,
+            .address_lookups = &.{},
         },
         .version = .legacy,
-    });
+        .signatures = &.{},
+    };
 
-    try std.testing.expectError(
-        error.InvalidInstructionDataSize,
-        verifyPrecompiles(std.testing.allocator, bad_secp256k1_tx, sig.core.FeatureSet.EMPTY),
+    const actual = try verifyPrecompiles(
+        std.testing.allocator,
+        bad_secp256k1_tx,
+        &sig.core.FeatureSet.EMPTY,
+    );
+    try std.testing.expectEqual(
+        TransactionError{ .InstructionError = .{ 0, .{ .Custom = 0 } } },
+        actual,
     );
 }

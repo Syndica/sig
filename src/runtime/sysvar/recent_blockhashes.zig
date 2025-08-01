@@ -16,7 +16,7 @@ const Pubkey = sig.core.Pubkey;
 pub const RecentBlockhashes = struct {
     entries: *std.BoundedArray(Entry, MAX_ENTRIES),
 
-    pub const Entry = struct {
+    pub const Entry = extern struct {
         blockhash: Hash,
         lamports_per_signature: u64,
     };
@@ -41,6 +41,11 @@ pub const RecentBlockhashes = struct {
     pub fn isEmpty(self: RecentBlockhashes) bool {
         return self.entries.len == 0;
     }
+
+    // pub fn getFirst(self: *const RecentBlockhashes) ?Entry {
+    //     if (self.entries.len == 0) return null;
+    //     return self.entries.buffer[0];
+    // }
 
     pub fn fromBlockhashQueue(
         allocator: Allocator,
@@ -159,8 +164,12 @@ test "serialize and deserialize" {
         const serialized = try bincode.writeAlloc(allocator, blockhashes, .{});
         defer allocator.free(serialized);
 
-        const deserialized =
-            try bincode.readFromSlice(allocator, RecentBlockhashes, serialized, .{});
+        const deserialized = try bincode.readFromSlice(
+            allocator,
+            RecentBlockhashes,
+            serialized,
+            .{},
+        );
         defer deserialized.deinit(allocator);
 
         try std.testing.expectEqual(RecentBlockhashes.MAX_ENTRIES, deserialized.entries.capacity());

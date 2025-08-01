@@ -132,6 +132,7 @@ pub const SlotModifiedIterator = union(enum) {
 ///
 /// For example, let's say the cluster has the following forking scenario:
 ///
+/// ```
 ///      1
 ///     / \
 ///    2   3
@@ -139,6 +140,7 @@ pub const SlotModifiedIterator = union(enum) {
 ///  4   5   6
 ///           \
 ///            7
+///```
 ///
 /// A SlotAccountReader will be specialized for *one* of these slots. For
 /// example, let's say you have the SlotAccountReader that's specialized for

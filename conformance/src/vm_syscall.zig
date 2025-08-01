@@ -199,13 +199,12 @@ fn executeSyscall(
     const mask_out_rent_epoch_in_vm_serialization = tc.feature_set.active.contains(
         features.MASK_OUT_RENT_EPOCH_IN_VM_SERIALIZATION,
     );
-    var parameter_bytes, var regions, const accounts_metadata =
-        try serialize.serializeParameters(
-            allocator,
-            ic,
-            !direct_mapping,
-            mask_out_rent_epoch_in_vm_serialization,
-        );
+    var parameter_bytes, var regions, const accounts_metadata = try serialize.serializeParameters(
+        allocator,
+        ic,
+        !direct_mapping,
+        mask_out_rent_epoch_in_vm_serialization,
+    );
     defer {
         parameter_bytes.deinit(allocator);
         regions.deinit(allocator);
@@ -224,10 +223,10 @@ fn executeSyscall(
     defer allocator.free(stack);
     @memset(stack, 0);
 
-    var mm_regions: std.ArrayListUnmanaged(memory.Region) = .{};
-    defer mm_regions.deinit(allocator);
+    var input_memory_regions: std.ArrayListUnmanaged(memory.Region) = .{};
+    defer input_memory_regions.deinit(allocator);
 
-    try mm_regions.appendSlice(allocator, &.{
+    try input_memory_regions.appendSlice(allocator, &.{
         memory.Region.init(.constant, rodata, memory.RODATA_START),
         memory.Region.initGapped(
             .mutable,
@@ -237,41 +236,11 @@ fn executeSyscall(
         ),
         memory.Region.init(.mutable, heap, memory.HEAP_START),
     });
-    try mm_regions.appendSlice(allocator, regions.items);
-    const fixture_input_region_start = mm_regions.items.len;
-
-    var input_data_offset: u64 = 0;
-    for (pb_vm.input_data_regions.items) |input_region| {
-        if (input_region.content.isEmpty()) continue;
-
-        const copy = input_region.content.getSlice();
-        const duped = try allocator.alignedAlloc(u8, host_align, copy.len);
-        @memcpy(duped, copy);
-
-        if (input_region.is_writable) {
-            try mm_regions.append(
-                allocator,
-                memory.Region.init(.mutable, duped, memory.INPUT_START + input_data_offset),
-            );
-        } else {
-            try mm_regions.append(
-                allocator,
-                memory.Region.init(.constant, duped, memory.INPUT_START + input_data_offset),
-            );
-        }
-        input_data_offset += input_region.content.getSlice().len;
-    }
-    defer {
-        for (mm_regions.items, 0..) |region, i| {
-            if (i >= fixture_input_region_start) {
-                allocator.free(region.constSlice());
-            }
-        }
-    }
+    try input_memory_regions.appendSlice(allocator, regions.items);
 
     const memory_map = try memory.MemoryMap.init(
         allocator,
-        mm_regions.items,
+        input_memory_regions.items,
         .v0,
         config,
     );

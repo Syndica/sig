@@ -24,8 +24,27 @@ pub const FeatureSet = struct {
         for (FEATURES) |feature| try feature_set.active.put(allocator, feature, 0);
         return feature_set;
     }
-};
 
+    pub fn fullInflationFeaturesEnabled(
+        self: *const FeatureSet,
+        allocator: std.mem.Allocator,
+    ) !std.AutoArrayHashMapUnmanaged(Pubkey, void) {
+        var result = std.AutoArrayHashMapUnmanaged(Pubkey, void){};
+        errdefer result.deinit(allocator);
+
+        for (FULL_INFLATION_FEATURE_PAIRS) |pair| {
+            if (self.active.contains(pair.vote_id) and self.active.contains(pair.enable_id)) {
+                try result.put(allocator, pair.enable_id, {});
+            }
+        }
+
+        if (self.active.contains(FULL_INFLATION_DEVNET_AND_TESTNET)) {
+            try result.put(allocator, FULL_INFLATION_DEVNET_AND_TESTNET, {});
+        }
+
+        return result;
+    }
+};
 pub const DEPRECATE_REWARDS_SYSVAR =
     Pubkey.parseBase58String("GaBtBJvmS4Arjj5W1NmFcyvPjsHN38UGYDq2MDwbs9Qu") catch unreachable;
 
@@ -435,7 +454,7 @@ pub const ENABLE_TURBINE_FANOUT_EXPERIMENTS =
     Pubkey.parseBase58String("D31EFnLgdiysi84Woo3of4JMu7VmasUS3Z7j9HYXCeLY") catch unreachable;
 
 pub const DISABLE_TURBINE_FANOUT_EXPERIMENTS =
-    Pubkey.parseBase58String("Gz1aLrbeQ4Q6PTSafCZcGWZXz91yVRi7ASFzFEr1U4sa") catch unreachable;
+    Pubkey.parseBase58String("turbnbNRp22nwZCmgVVXFSshz7H7V23zMzQgA46YpmQ") catch unreachable;
 
 pub const MOVE_SERIALIZED_LEN_PTR_IN_CPI =
     Pubkey.parseBase58String("74CoWuBmt3rUVUrCb2JiSTvh6nXyBWUsK4SaMj3CtE3T") catch unreachable;
@@ -468,7 +487,7 @@ pub const APPLY_COST_TRACKER_DURING_REPLAY =
     Pubkey.parseBase58String("2ry7ygxiYURULZCrypHhveanvP5tzZ4toRwVp89oCNSj") catch unreachable;
 
 pub const BPF_ACCOUNT_DATA_DIRECT_MAPPING =
-    Pubkey.parseBase58String("AjX3A4Nv2rzUuATEUWLP4rrBaBropyUnHxEvFDj1dKbx") catch unreachable;
+    Pubkey.parseBase58String("1ncomp1ete111111111111111111111111111111111") catch unreachable;
 
 pub const ADD_SET_TX_LOADED_ACCOUNTS_DATA_SIZE_INSTRUCTION =
     Pubkey.parseBase58String("G6vbf1UBok8MWb8m25ex86aoQHeKTzDKzuZADHkShqm6") catch unreachable;
@@ -522,7 +541,7 @@ pub const REMAINING_COMPUTE_UNITS_SYSCALL_ENABLED =
     Pubkey.parseBase58String("5TuppMutoyzhUSfuYdhgzD47F92GL1g89KpCZQKqedxP") catch unreachable;
 
 pub const ENABLE_LOADER_V4 =
-    Pubkey.parseBase58String("8Cb77yHjPWe9wuWUfXeh6iszFGCDGNCoFk3tprViYHNm") catch unreachable;
+    Pubkey.parseBase58String("2aQJYqER2aKyb3cZw22v4SL2xMX7vwXBRWfvS4pTrtED") catch unreachable;
 
 pub const REQUIRE_RENT_EXEMPT_SPLIT_DESTINATION =
     Pubkey.parseBase58String("D2aip4BBr8NPWtU9vLrwrBvbuaQ8w1zV38zFLxx4pfBV") catch unreachable;
@@ -627,7 +646,7 @@ pub const ZK_ELGAMAL_PROOF_PROGRAM_ENABLED =
     Pubkey.parseBase58String("zkhiy5oLowR7HY4zogXjCjeMXyruLqBwSWH21qcFtnv") catch unreachable;
 
 pub const VERIFY_RETRANSMITTER_SIGNATURE =
-    Pubkey.parseBase58String("BZ5g4hRbu5hLQQBdPyo2z9icGyJ8Khiyj3QS6dhWijTb") catch unreachable;
+    Pubkey.parseBase58String("51VCKU5eV6mcTc9q9ArfWELU2CqDoi13hdAjr6fHMdtv") catch unreachable;
 
 pub const MOVE_STAKE_AND_MOVE_LAMPORTS_IXS =
     Pubkey.parseBase58String("7bTK6Jis8Xpfrs8ZoUfiMDPazTcdPcTWheZFJTA5Z6X4") catch unreachable;
@@ -645,7 +664,7 @@ pub const ENABLE_TRANSACTION_LOADING_FAILURE_FEES =
     Pubkey.parseBase58String("PaymEPK2oqwT9TXAVfadjztH2H6KfLEB9Hhd5Q5frvP") catch unreachable;
 
 pub const ENABLE_TURBINE_EXTENDED_FANOUT_EXPERIMENTS =
-    Pubkey.parseBase58String("BZn14Liea52wtBwrXUxTv6vojuTTmfc7XGEDTXrvMD7b") catch unreachable;
+    Pubkey.parseBase58String("turbRpTzBzDU6PJmWvRTbcJXXGxUs19CvQamUrRD9bN") catch unreachable;
 
 pub const DEPRECATE_LEGACY_VOTE_IXS =
     Pubkey.parseBase58String("depVvnQ2UysGrhwdiwU42tCadZL8GcBb1i2GYhMopQv") catch unreachable;
@@ -699,22 +718,10 @@ pub const RAISE_BLOCK_LIMITS_TO_50M =
     Pubkey.parseBase58String("5oMCU3JPaFLr8Zr4ct7yFA7jdk6Mw1RmB8K4u9ZbS42z") catch unreachable;
 
 pub const DROP_UNCHAINED_MERKLE_SHREDS =
-    Pubkey.parseBase58String("3A9WtMU4aHuryD3VN7SFKdfXto8HStLb1Jj6HjkgfnGL") catch unreachable;
-
-pub const RELAX_INTRABATCH_ACCOUNT_LOCKS =
-    Pubkey.parseBase58String("EbAhnReKK8Sf88CvAfAXbgKji8DV48rsp4q2sgHqgWef") catch unreachable;
-
-pub const CREATE_SLASHING_PROGRAM =
-    Pubkey.parseBase58String("sProgVaNWkYdP2eTRAy1CPrgb3b9p8yXCASrPEqo6VJ") catch unreachable;
+    Pubkey.parseBase58String("5KLGJSASDVxKPjLCDWNtnABLpZjsQSrYZ8HKwcEdAMC8") catch unreachable;
 
 pub const DISABLE_PARTITIONED_RENT_COLLECTION =
     Pubkey.parseBase58String("2B2SBNbUcr438LtGXNcJNBP2GBSxjx81F945SdSkUSfC") catch unreachable;
-
-pub const ENABLE_VOTE_ADDRESS_LEADER_SCHEDULE =
-    Pubkey.parseBase58String("5JsG4NWH8Jbrqdd8uL6BNwnyZK3dQSoieRXG5vmofj9y") catch unreachable;
-
-pub const REQUIRE_STATIC_NONCE_ACCOUNT =
-    Pubkey.parseBase58String("7VVhpg5oAjAmnmz1zCcSHb2Z9ecZB2FQqpnEwReka9Zm") catch unreachable;
 
 pub const RAISE_BLOCK_LIMITS_TO_60M =
     Pubkey.parseBase58String("6oMCUgfY6BzZ6jwB681J6ju5Bh6CjVXbd7NeWYqiXBSu") catch unreachable;
@@ -727,6 +734,18 @@ pub const ENSHRINE_SLASHING_PROGRAM =
 
 pub const ENABLE_EXTEND_PROGRAM_CHECKED =
     Pubkey.parseBase58String("2oMRZEDWT2tqtYMofhmmfQ8SsjqUFzT6sYXppQDavxwz") catch unreachable;
+
+pub const FORMALIZE_LOADED_TRANSACTION_DATA_SIZE =
+    Pubkey.parseBase58String("DeS7sR48ZcFTUmt5FFEVDr1v1bh73aAbZiZq3SYr8Eh8") catch unreachable;
+
+pub const ALPENGLOW =
+    Pubkey.parseBase58String("mustRekeyVm2QHYB3JPefBiU4BY3Z6JkW2k3Scw5GWP") catch unreachable;
+
+pub const DISABLE_ZK_ELGAMAL_PROOF_PROGRAM =
+    Pubkey.parseBase58String("zkdoVwnSFnSLtGJG7irJPEYUpmb4i7sGMGcnN6T9rnC") catch unreachable;
+
+pub const REENABLE_ZK_ELGAMAL_PROOF_PROGRAM =
+    Pubkey.parseBase58String("zkemPXcuM3G4wpMDZ36Cpw34EjUpvm1nuioiSGbGZPR") catch unreachable;
 
 pub const FEATURES = [_]Pubkey{
     DEPRECATE_REWARDS_SYSVAR,
@@ -954,13 +973,23 @@ pub const FEATURES = [_]Pubkey{
     RESERVE_MINIMAL_CUS_FOR_BUILTIN_INSTRUCTIONS,
     RAISE_BLOCK_LIMITS_TO_50M,
     DROP_UNCHAINED_MERKLE_SHREDS,
-    RELAX_INTRABATCH_ACCOUNT_LOCKS,
-    CREATE_SLASHING_PROGRAM,
     DISABLE_PARTITIONED_RENT_COLLECTION,
-    ENABLE_VOTE_ADDRESS_LEADER_SCHEDULE,
-    REQUIRE_STATIC_NONCE_ACCOUNT,
     RAISE_BLOCK_LIMITS_TO_60M,
     MASK_OUT_RENT_EPOCH_IN_VM_SERIALIZATION,
     ENSHRINE_SLASHING_PROGRAM,
     ENABLE_EXTEND_PROGRAM_CHECKED,
+    FORMALIZE_LOADED_TRANSACTION_DATA_SIZE,
+    ALPENGLOW,
+    DISABLE_ZK_ELGAMAL_PROOF_PROGRAM,
+    REENABLE_ZK_ELGAMAL_PROOF_PROGRAM,
 };
+
+pub const FullInflationPair = struct {
+    vote_id: Pubkey,
+    enable_id: Pubkey,
+};
+
+pub const FULL_INFLATION_FEATURE_PAIRS = [_]FullInflationPair{.{
+    .vote_id = FULL_INFLATION_MAINNET_VOTE,
+    .enable_id = FULL_INFLATION_MAINNET_ENABLE,
+}};

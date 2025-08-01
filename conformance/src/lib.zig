@@ -6,6 +6,7 @@ comptime {
     _ = @import("instruction_execute.zig");
     _ = @import("vm_interp.zig");
     _ = @import("vm_syscall.zig");
+    _ = @import("txn_execute.zig");
 }
 
 pub const std_options: std.Options = .{

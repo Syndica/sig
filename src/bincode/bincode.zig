@@ -524,10 +524,7 @@ pub fn writeWithConfig(
                         };
                     }
                 },
-                .fixed => return switch (params.endian) {
-                    .little => writer.writeInt(T, data, .little),
-                    .big => writer.writeInt(T, data, .big),
-                },
+                .fixed => return writer.writeInt(T, data, params.endian),
             }
         },
         else => {},

@@ -14,7 +14,7 @@ const Slot = sig.core.Slot;
 pub const SlotHashes = struct {
     entries: *std.BoundedArray(Entry, MAX_ENTRIES),
 
-    pub const Entry = struct {
+    pub const Entry = extern struct {
         slot: Slot,
         hash: Hash,
 

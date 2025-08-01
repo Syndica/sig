@@ -281,6 +281,8 @@ pub const Message = struct {
     readonly_unsigned_count: u8,
 
     /// Addresses of accounts loaded by this transaction.
+    ///
+    /// [ writable signers | readonly signers | writable non-signers | readonly non-signers ]
     account_keys: []const Pubkey,
 
     /// The blockhash of a recent block.
@@ -391,14 +393,47 @@ pub const Message = struct {
         return index < self.signature_count;
     }
 
+    const RESERVED_ACCOUNTS: []const Pubkey = &.{
+        // builtin programs
+        sig.runtime.program.bpf_loader.v2.ID,
+        sig.runtime.program.bpf_loader.v1.ID,
+        sig.runtime.program.bpf_loader.v3.ID,
+        sig.runtime.program.config.ID,
+
+        sig.runtime.ids.FEATURE_PROGRAM_ID,
+        sig.runtime.ids.CONFIG_PROGRAM_STAKE_CONFIG_ID,
+        sig.runtime.program.stake.ID,
+        sig.runtime.program.system.ID,
+        sig.runtime.program.vote.ID,
+        sig.runtime.program.zk_elgamal.ID,
+        sig.runtime.ids.ZK_TOKEN_PROOF_PROGRAM_ID,
+
+        // sysvars
+        sig.runtime.sysvar.Clock.ID,
+        sig.runtime.sysvar.EpochSchedule.ID,
+        sig.runtime.sysvar.Fees.ID,
+        sig.runtime.ids.SYSVAR_INSTRUCTIONS_ID,
+        sig.runtime.sysvar.RecentBlockhashes.ID,
+        sig.runtime.sysvar.Rent.ID,
+        sig.runtime.ids.SYSVAR_REWARDS_ID,
+        sig.runtime.sysvar.SlotHashes.ID,
+        sig.runtime.sysvar.SlotHistory.ID,
+        sig.runtime.sysvar.StakeHistory.ID,
+
+        // other
+        sig.runtime.ids.NATIVE_LOADER_ID,
+    };
+
     pub fn isWritable(self: Message, index: usize) bool {
         const is_readonly_signed =
             index < self.signature_count and
             index >= self.signature_count - self.readonly_signed_count;
-
         const is_readonly_unsigned = index >= self.account_keys.len - self.readonly_unsigned_count;
+        const is_writable = !(is_readonly_signed or is_readonly_unsigned);
 
-        return !(is_readonly_signed or is_readonly_unsigned);
+        return is_writable and for (RESERVED_ACCOUNTS) |reserved| {
+            if (reserved.equals(&self.account_keys[index])) break false;
+        } else true;
     }
 
     /// Returns the serialized message as a bounded array.
