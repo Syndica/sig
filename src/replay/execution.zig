@@ -41,6 +41,7 @@ pub const ReplayExecutionState = struct {
     slot_tracker: *SlotTracker,
     epochs: *EpochTracker,
     progress_map: *ProgressMap,
+    fork_choice: *HeaviestSubtreeForkChoice,
 
     // owned
     status_cache: sig.core.StatusCache,
@@ -55,6 +56,7 @@ pub const ReplayExecutionState = struct {
         slot_tracker: *SlotTracker,
         epochs: *EpochTracker,
         progress_map: *ProgressMap,
+        fork_choice: *HeaviestSubtreeForkChoice,
     ) Allocator.Error!ReplayExecutionState {
         return .{
             .allocator = allocator,
@@ -67,6 +69,7 @@ pub const ReplayExecutionState = struct {
             .slot_tracker = slot_tracker,
             .epochs = epochs,
             .progress_map = progress_map,
+            .fork_choice = fork_choice,
             .status_cache = .DEFAULT,
         };
     }
@@ -302,15 +305,14 @@ fn replaySlot(state: *ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
 }
 
 fn processReplayResults(
-    replay_result: *ReplayExecutionState,
+    replay_state: *ReplayExecutionState,
     slot_statuses: *const std.ArrayListUnmanaged(struct { Slot, ReplaySlotStatus }),
-    fork_choice: *HeaviestSubtreeForkChoice,
 ) !bool {
     var did_complete_slot = false;
     var tx_count: usize = 0;
     for (slot_statuses.items) |slot_status| {
         const slot, const status = slot_status;
-        var slot_info = replay_result.slot_tracker.get(slot) orelse
+        var slot_info = replay_state.slot_tracker.get(slot) orelse
             return error.MissingSlotInTracker;
 
         switch (status) {
@@ -331,7 +333,7 @@ fn processReplayResults(
             // TODO add bank.wait_for_completed_scheduler()
 
             // Get bank progress from progress map
-            var progress = replay_result.progress_map.map.getPtr(slot) orelse
+            var progress = replay_state.progress_map.map.getPtr(slot) orelse
                 return error.MissingBankProgress;
 
             // TODO Update bank_progress.replay_stats
@@ -339,7 +341,7 @@ fn processReplayResults(
 
             // Check if we are the leader for this block
             const is_leader_block =
-                slot_info.constants.collector_id.equals(&replay_result.my_identity);
+                slot_info.constants.collector_id.equals(&replay_state.my_identity);
 
             const block_id: ?Hash = if (!is_leader_block) blk: {
                 // If the block does not have at least DATA_SHREDS_PER_FEC_BLOCK correctly retransmitted
@@ -352,10 +354,10 @@ fn processReplayResults(
 
             // Freeze the bank before sending to any auxiliary threads
             // that may expect to be operating on a frozen bank
-            try replay.freeze.freezeSlot(replay_result.allocator, .init(
-                .from(replay_result.logger),
-                replay_result.account_store,
-                &(replay_result.epochs.getForSlot(slot) orelse return error.MissingEpoch),
+            try replay.freeze.freezeSlot(replay_state.allocator, .init(
+                .from(replay_state.logger),
+                replay_state.account_store,
+                &(replay_state.epochs.getForSlot(slot) orelse return error.MissingEpoch),
                 slot_info.state,
                 slot_info.constants,
                 slot,
@@ -374,7 +376,7 @@ fn processReplayResults(
             // Needs to be updated before `check_slot_agrees_with_cluster()` so that
             // any updates in `check_slot_agrees_with_cluster()` on fork choice take
             // effect
-            try fork_choice.addNewLeafSlot(
+            try replay_state.fork_choice.addNewLeafSlot(
                 .{
                     .slot = slot,
                     .hash = slot_info.state.hash,
@@ -384,7 +386,7 @@ fn processReplayResults(
                     .hash = slot_info.constants.parent_hash,
                 },
             );
-            
+
             progress.fork_stats.bank_hash = slot_info.state.hash;
             // TODO check_slot_agrees_with_cluster: BankFrozen
             // TODO Update duplicate_slots_tracker
