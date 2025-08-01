@@ -17,6 +17,7 @@ const BlockstoreReader = sig.ledger.BlockstoreReader;
 
 const ForkProgress = sig.consensus.progress_map.ForkProgress;
 const ProgressMap = sig.consensus.ProgressMap;
+const HeaviestSubtreeForkChoice = sig.consensus.HeaviestSubtreeForkChoice;
 
 const ConfirmSlotFuture = replay.confirm_slot.ConfirmSlotFuture;
 const EpochTracker = replay.trackers.EpochTracker;
@@ -357,23 +358,21 @@ fn processReplayResults(
                 status.confirm.entries[status.confirm.entries.len - 1].hash,
             ));
 
-            // Log bank frozen event
-            replay_result.logger.info().logf(
-                "bank_frozen slot={} hash={}",
-                .{ slot, slot_info.state.hash.readCopy() },
-            );
+            did_complete_slot = true;
 
-            // Log completion debug info
-            const confirmation_progress = &bank_progress.replay_progress.arc_ed.rwlock_ed;
-            replay_result.logger.debug().logf(
-                \\ slot {} has completed replay from blockstore,
-                \\ num_txs={} num_entries={} num_shreds={}
-            ,
+            std.debug.assert(!slot_info.state.hash.readCopy().?.eql(Hash.ZEROES));
+
+            // Needs to be updated before `check_slot_agrees_with_cluster()` so that
+            // any updates in `check_slot_agrees_with_cluster()` on fork choice take
+            // effect
+            try fork_choice.addNewLeafSlot(
                 .{
-                    slot,
-                    confirmation_progress.num_txs,
-                    confirmation_progress.num_entries,
-                    confirmation_progress.num_shreds,
+                    .slot = slot,
+                    .hash = slot_info.state.hash,
+                },
+                .{
+                    .slot = slot_info.constants.parent_slot,
+                    .hash = slot_info.constants.parent_hash,
                 },
             );
 
