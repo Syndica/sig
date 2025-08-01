@@ -333,6 +333,9 @@ fn processReplayResults(
             var progress = replay_result.progress_map.map.getPtr(slot) orelse
                 return error.MissingBankProgress;
 
+            // TODO Update bank_progress.replay_stats
+            // TODO Also update mark_dead_slot in an error path?
+
             // Check if we are the leader for this block
             const is_leader_block =
                 slot_info.constants.collector_id.equals(&replay_result.my_identity);
@@ -340,14 +343,14 @@ fn processReplayResults(
             const block_id: ?Hash = if (!is_leader_block) blk: {
                 // If the block does not have at least DATA_SHREDS_PER_FEC_BLOCK correctly retransmitted
                 // shreds in the last FEC set, mark it dead. No reason to perform this check on our leader block.
-                // TODO
-
+                // TODO Also update mark_dead_slot in an error path?
                 break :blk null;
             } else null;
 
             slot_info.state.hash = .init(block_id);
 
-            // Freeze the slot
+            // Freeze the bank before sending to any auxiliary threads
+            // that may expect to be operating on a frozen bank
             try replay.freeze.freezeSlot(replay_result.allocator, .init(
                 .from(replay_result.logger),
                 replay_result.account_store,
@@ -359,6 +362,11 @@ fn processReplayResults(
             ));
 
             did_complete_slot = true;
+
+            // TODO Send things out via a couple of senders
+            // TODO cluster_slots_update_sender;
+            // TODO transaction_status_sender;
+            // TODO cost_update_sender;
 
             std.debug.assert(!slot_info.state.hash.readCopy().?.eql(Hash.ZEROES));
 
@@ -375,11 +383,14 @@ fn processReplayResults(
                     .hash = slot_info.constants.parent_hash,
                 },
             );
-
-            did_complete_slot = true;
-
-            // TODO: Add cluster slots update sender, cost update sender,
-            // heaviest subtree fork choice updates, notifications, etc.
+            
+            progress.fork_stats.bank_hash = slot_info.state.hash;
+            // TODO check_slot_agrees_with_cluster: BankFrozen
+            // TODO Update duplicate_slots_tracker
+            // TODO check_slot_agrees_with_cluster: Duplicate
+            // TODO bank_notification_sender
+            // TODO Move unfrozen_gossip_verified_vote_hashes to latest_validator_votes_for_frozen_banks
+            // TODO block_metadata_notifier
         }
     }
 }
