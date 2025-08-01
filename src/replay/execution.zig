@@ -304,7 +304,8 @@ fn replaySlot(state: *ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
 fn processReplayResults(
     replay_result: *ReplayExecutionState,
     slot_statuses: *const std.ArrayListUnmanaged(struct { Slot, ReplaySlotStatus }),
-) !void {
+    fork_choice: *HeaviestSubtreeForkChoice,
+) !bool {
     var did_complete_slot = false;
     var tx_count: usize = 0;
     for (slot_statuses.items) |slot_status| {
@@ -393,4 +394,6 @@ fn processReplayResults(
             // TODO block_metadata_notifier
         }
     }
+
+    return did_complete_slot;
 }
