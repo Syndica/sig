@@ -10,6 +10,7 @@ const ThreadPool = sig.sync.ThreadPool;
 
 const Pubkey = core.Pubkey;
 const Slot = core.Slot;
+const Hash = sig.core.Hash;
 
 const AccountStore = sig.accounts_db.AccountStore;
 const BlockstoreReader = sig.ledger.BlockstoreReader;
@@ -300,33 +301,42 @@ fn replaySlot(state: *ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
 }
 
 fn processReplayResults(
-    state: *ReplayExecutionState,
+    replay_result: *ReplayExecutionState,
     slot_statuses: *const std.ArrayListUnmanaged(struct { Slot, ReplaySlotStatus }),
 ) !void {
     var did_complete_slot = false;
+    var tx_count: usize = 0;
     for (slot_statuses.items) |slot_status| {
         const slot, const status = slot_status;
-        if (status != .confirm) {
-            continue;
-        }
-        const slot_info = state.slot_tracker.get(slot) orelse return error.MissingSlotInTracker;
-        // TODO is the polling needed? Should have been done at this point
-        while (try status.confirm.poll() == .pending) {
-            std.time.sleep(std.time.ns_per_ms);
+        const slot_info = replay_result.slot_tracker.get(slot) orelse
+            return error.MissingSlotInTracker;
+
+        switch (status) {
+            .confirm => |confirm_slot_future| {
+                // TODO is the polling needed? Should have been done at this point
+                while (try confirm_slot_future.poll() == .pending) {
+                    std.time.sleep(std.time.ns_per_ms);
+                }
+                for (confirm_slot_future.entries) |entry| {
+                    tx_count += entry.transactions.len;
+                }
+            },
+            // QA: Should mark_dead_slot be called here?
+            else => return,
         }
 
         if (slot_info.state.tickHeight() == slot_info.constants.max_tick_height) {
-            // TODO Maybe add the timing?
             // TODO add bank.wait_for_completed_scheduler()
 
             // Get bank progress from progress map
-            const bank_progress = state.progress_map.map.getPtr(slot) orelse
+            const bank_progress = replay_result.progress_map.map.getPtr(slot) orelse
                 return error.MissingBankProgress;
 
             // Check if we are the leader for this block
-            const is_leader_block = slot_info.constants.collector_id.equals(&state.my_identity);
+            const is_leader_block =
+                slot_info.constants.collector_id.equals(&replay_result.my_identity);
 
-            const block_id = if (!is_leader_block) blk: {
+            const block_id: ?Hash = if (!is_leader_block) blk: {
                 // If the block does not have at least DATA_SHREDS_PER_FEC_BLOCK correctly retransmitted
                 // shreds in the last FEC set, mark it dead. No reason to perform this check on our leader block.
                 // TODO
@@ -334,11 +344,13 @@ fn processReplayResults(
                 break :blk null;
             } else null;
 
+            _ = block_id;
+
             // Freeze the slot
-            try replay.freeze.freezeSlot(state.allocator, .init(
-                .from(state.logger),
-                state.account_store,
-                state.epochs.getForSlot(slot) orelse return error.MissingEpoch,
+            try replay.freeze.freezeSlot(replay_result.allocator, .init(
+                .from(replay_result.logger),
+                replay_result.account_store,
+                replay_result.epochs.getForSlot(slot) orelse return error.MissingEpoch,
                 slot_info.state,
                 slot_info.constants,
                 slot,
@@ -346,14 +358,14 @@ fn processReplayResults(
             ));
 
             // Log bank frozen event
-            state.logger.info().logf(
+            replay_result.logger.info().logf(
                 "bank_frozen slot={} hash={}",
                 .{ slot, slot_info.state.hash.readCopy() },
             );
 
             // Log completion debug info
             const confirmation_progress = &bank_progress.replay_progress.arc_ed.rwlock_ed;
-            state.logger.debug().logf(
+            replay_result.logger.debug().logf(
                 \\ slot {} has completed replay from blockstore,
                 \\ num_txs={} num_entries={} num_shreds={}
             ,
