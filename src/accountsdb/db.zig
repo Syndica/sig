@@ -2039,9 +2039,7 @@ pub const AccountsDB = struct {
         account: sig.runtime.AccountSharedData,
     ) !void {
         const duplicated = Account{
-            .data = .{
-                .owned_allocation = try self.allocator.dupe(u8, account.data),
-            },
+            .data = .{ .owned_allocation = try self.allocator.dupe(u8, account.data) },
             .executable = account.executable,
             .lamports = account.lamports,
             .owner = account.owner,
