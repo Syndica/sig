@@ -21,9 +21,12 @@ const BlockstoreReader = sig.ledger.BlockstoreReader;
 const LedgerResultWriter = sig.ledger.result_writer.LedgerResultWriter;
 
 const ProgressMap = sig.consensus.ProgressMap;
+
 const ReplayExecutionState = replay.execution.ReplayExecutionState;
 const SlotTracker = replay.trackers.SlotTracker;
 const EpochTracker = replay.trackers.EpochTracker;
+
+const updateSysvarsForNewSlot = replay.update_sysvar.updateSysvarsForNewSlot;
 
 const LatestValidatorVotesForFrozenSlots =
     sig.consensus.latest_validator_votes.LatestValidatorVotes;
@@ -237,102 +240,91 @@ fn trackNewSlots(
         for (children.items) |slot| {
             if (slot_tracker.contains(slot)) continue;
 
-            const epoch = epoch_tracker.schedule.getEpoch(slot);
             const epoch_info = epoch_tracker.getPtrForSlot(slot) orelse
                 return error.MissingEpoch;
 
-            var slot_state = try SlotState.fromFrozenParent(allocator, parent_info.state);
-            errdefer slot_state.deinit(allocator);
-
-            const epoch_reward_status = try parent_info.constants.epoch_reward_status
-                .clone(allocator);
-            errdefer epoch_reward_status.deinit(allocator);
-
-            const leader = slot_leaders.get(slot) orelse return error.UnknownLeader;
-
-            var ancestors = try parent_info.constants.ancestors.clone(allocator);
-            errdefer ancestors.deinit(allocator);
-            try ancestors.ancestors.put(allocator, slot, {});
-
-            var feature_set = try getActiveFeatures(
+            const constants, var state = try newSlotFromParent(
                 allocator,
-                account_store.reader().forSlot(&ancestors),
+                account_store.reader(),
+                epoch_info.ticks_per_slot,
+                parent_slot,
+                parent_info.constants,
+                parent_info.state,
+                slot_leaders.get(slot) orelse return error.UnknownLeader,
                 slot,
             );
-            errdefer feature_set.deinit(allocator);
+            errdefer constants.deinit(allocator);
+            errdefer state.deinit(allocator);
 
-            const parent_hash = parent_info.state.hash.readCopy().?;
-
-            try slot_tracker.put(allocator, slot, .{
-                .constants = .{
-                    .parent_slot = parent_slot,
-                    .parent_hash = parent_hash,
-                    .parent_lt_hash = parent_info.state.accounts_lt_hash.readCopy().?,
-                    .block_height = parent_info.constants.block_height + 1,
-                    .collector_id = leader,
-                    .max_tick_height = (slot + 1) * epoch_info.ticks_per_slot,
-                    .fee_rate_governor = .initDerived(
-                        &parent_info.constants.fee_rate_governor,
-                        parent_info.state.signature_count.load(.monotonic),
-                    ),
-                    .epoch_reward_status = epoch_reward_status,
-                    .ancestors = ancestors,
-                    .feature_set = feature_set,
-                },
-                .state = slot_state,
-            });
-            const slot_info = slot_tracker.get(slot) orelse unreachable; // safe, just put it
-
-            const UpdateSysvarAccountDeps = replay.update_sysvar.UpdateSysvarAccountDeps;
-            const updateSlotHashes = replay.update_sysvar.updateSlotHashes;
-            const updateStakeHistory = replay.update_sysvar.updateStakeHistory;
-            const updateClock = replay.update_sysvar.updateClock;
-            const updateLastRestartSlot = replay.update_sysvar.updateLastRestartSlot;
-
-            const sysvar_deps = UpdateSysvarAccountDeps{
-                .account_store = account_store,
-                .capitalization = &slot_state.capitalization,
-                .ancestors = &ancestors,
-                .rent = &epoch_info.rent_collector.rent,
-                .slot = slot,
-            };
-
-            const parent_epoch = if (epoch == 0) null else epoch - 1; // TODO: verify this
-
-            try updateSlotHashes(allocator, parent_slot, parent_hash, sysvar_deps);
-            try updateStakeHistory(allocator, .{
-                .epoch = epoch,
-                .parent_epoch = parent_epoch,
-                .stakes_cache = &slot_state.stakes_cache,
-                .update_sysvar_deps = sysvar_deps,
-            });
-
-            var epoch_stakes_map = sig.core.EpochStakesMap.empty;
-            try epoch_stakes_map.put(allocator, epoch, epoch_info.stakes); // TODO better approach
-            try updateClock(
+            try updateSysvarsForNewSlot(
                 allocator,
-                .{
-                    .feature_set = &feature_set,
-                    .epoch_schedule = &epoch_tracker.schedule,
-                    .epoch_stakes_map = &epoch_stakes_map,
-                    .stakes_cache = &slot_state.stakes_cache,
-                    .epoch = epoch, // TODO: redundant with passing schedule and slot
-                    .parent_epoch = parent_epoch,
-                    .genesis_creation_time = undefined, // TODO
-                    .ns_per_slot = undefined, // TODO
-                    .update_sysvar_deps = sysvar_deps,
-                },
-            );
-            try updateLastRestartSlot(
-                allocator,
-                &slot_info.constants.feature_set,
+                account_store,
+                epoch_info,
+                epoch_tracker.schedule,
+                &constants,
+                &state,
+                slot,
                 hard_forks,
-                sysvar_deps,
             );
+
+            try slot_tracker.put(allocator, slot, .{ .constants = constants, .state = state });
 
             // TODO: update_fork_propagated_threshold_from_votes
         }
     }
+}
+
+/// Initializes the SlotConstants and SlotState from their parents and other
+/// dependencies.
+///
+/// This is analogous to the *portion* of agave's Bank::new_from_parent that is
+/// responsible for creating the actual bank struct.
+///
+/// For the relevant updates to accountsdb to set sysvars, see
+/// updateSysvarsForNewSlot
+fn newSlotFromParent(
+    allocator: Allocator,
+    account_reader: AccountReader,
+    ticks_in_slot: u64,
+    parent_slot: Slot,
+    parent_constants: *const sig.core.SlotConstants,
+    parent_state: *SlotState,
+    leader: Pubkey,
+    slot: Slot,
+) !struct { sig.core.SlotConstants, SlotState } {
+    var state = try SlotState.fromFrozenParent(allocator, parent_state);
+    errdefer state.deinit(allocator);
+
+    const epoch_reward_status = try parent_constants.epoch_reward_status
+        .clone(allocator);
+    errdefer epoch_reward_status.deinit(allocator);
+
+    var ancestors = try parent_constants.ancestors.clone(allocator);
+    errdefer ancestors.deinit(allocator);
+    try ancestors.ancestors.put(allocator, slot, {});
+
+    var feature_set = try getActiveFeatures(allocator, account_reader.forSlot(&ancestors), slot);
+    errdefer feature_set.deinit(allocator);
+
+    const parent_hash = parent_state.hash.readCopy().?;
+
+    const constants = sig.core.SlotConstants{
+        .parent_slot = parent_slot,
+        .parent_hash = parent_hash,
+        .parent_lt_hash = parent_state.accounts_lt_hash.readCopy().?,
+        .block_height = parent_constants.block_height + 1,
+        .collector_id = leader,
+        .max_tick_height = (slot + 1) * ticks_in_slot,
+        .fee_rate_governor = .initDerived(
+            &parent_constants.fee_rate_governor,
+            parent_state.signature_count.load(.monotonic),
+        ),
+        .epoch_reward_status = epoch_reward_status,
+        .ancestors = ancestors,
+        .feature_set = feature_set,
+    };
+
+    return .{ constants, state };
 }
 
 // TODO: epoch boundary - handle feature activations
