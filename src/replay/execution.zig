@@ -308,7 +308,7 @@ fn processReplayResults(
     var tx_count: usize = 0;
     for (slot_statuses.items) |slot_status| {
         const slot, const status = slot_status;
-        const slot_info = replay_result.slot_tracker.get(slot) orelse
+        var slot_info = replay_result.slot_tracker.get(slot) orelse
             return error.MissingSlotInTracker;
 
         switch (status) {
@@ -329,7 +329,7 @@ fn processReplayResults(
             // TODO add bank.wait_for_completed_scheduler()
 
             // Get bank progress from progress map
-            const bank_progress = replay_result.progress_map.map.getPtr(slot) orelse
+            var progress = replay_result.progress_map.map.getPtr(slot) orelse
                 return error.MissingBankProgress;
 
             // Check if we are the leader for this block
@@ -344,7 +344,7 @@ fn processReplayResults(
                 break :blk null;
             } else null;
 
-            _ = block_id;
+            slot_info.state.hash = .init(block_id);
 
             // Freeze the slot
             try replay.freeze.freezeSlot(replay_result.allocator, .init(
