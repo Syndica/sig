@@ -58,7 +58,7 @@ pub const RuntimeTransaction = struct {
     fee_payer: Pubkey,
     msg_hash: Hash,
     recent_blockhash: Hash,
-    instruction_infos: []const InstructionInfo,
+    instructions: []const InstructionInfo,
     accounts: std.MultiArrayList(AccountMeta) = .{},
 };
 
@@ -342,7 +342,7 @@ pub fn loadAndExecuteTransaction(
 
     // TODO: Should the compute budget program require the feature set?
     const compute_budget_result = compute_budget_program.execute(
-        transaction.instruction_infos,
+        transaction.instructions,
         environment.feature_set,
     );
     const compute_budget_limits = switch (compute_budget_result) {
@@ -460,7 +460,7 @@ pub fn executeTransaction(
     };
 
     var maybe_instruction_error: ?InstructionError = null;
-    for (transaction.instruction_infos) |instruction_info| {
+    for (transaction.instructions) |instruction_info| {
         executor.executeInstruction(
             allocator,
             &tc,
@@ -564,7 +564,7 @@ test "loadAndExecuteTransactions: invalid compute budget instruction" {
         .fee_payer = Pubkey.ZEROES,
         .msg_hash = Hash.ZEROES,
         .recent_blockhash = recent_blockhash,
-        .instruction_infos = &.{.{
+        .instructions = &.{.{
             .program_meta = .{
                 .pubkey = sig.runtime.program.compute_budget.ID,
                 .index_in_transaction = 0,
@@ -672,7 +672,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
         .fee_payer = sender_key,
         .msg_hash = Hash.initRandom(prng.random()),
         .recent_blockhash = recent_blockhash,
-        .instruction_infos = &.{.{
+        .instructions = &.{.{
             .program_meta = .{
                 .pubkey = sig.runtime.program.system.ID,
                 .index_in_transaction = 2,
