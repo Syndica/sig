@@ -309,7 +309,7 @@ fn processReplayResults(
     replay_state: *ReplayExecutionState,
     slot_statuses: *const std.ArrayListUnmanaged(struct { Slot, ReplaySlotStatus }),
 ) !bool {
-    var did_complete_slot = false;
+    var processed_a_slot = false;
     var tx_count: usize = 0;
     for (slot_statuses.items) |slot_status| {
         const slot, const status = slot_status;
@@ -365,7 +365,7 @@ fn processReplayResults(
                 status.confirm.entries[status.confirm.entries.len - 1].hash,
             ));
 
-            did_complete_slot = true;
+            processed_a_slot = true;
 
             // TODO Send things out via a couple of senders
             // TODO cluster_slots_update_sender;
@@ -398,5 +398,5 @@ fn processReplayResults(
         }
     }
 
-    return did_complete_slot;
+    return processed_a_slot;
 }
