@@ -10,6 +10,8 @@ const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 const SlotLeaders = sig.core.leader_schedule.SlotLeaders;
 const SlotState = sig.core.bank.SlotState;
+const SlotAndHash = sig.core.hash.SlotAndHash;
+const Hash = sig.core.Hash;
 
 const AccountStore = sig.accounts_db.AccountStore;
 const AccountReader = sig.accounts_db.AccountReader;
@@ -20,6 +22,7 @@ const BlockstoreReader = sig.ledger.BlockstoreReader;
 const LedgerResultWriter = sig.ledger.result_writer.LedgerResultWriter;
 
 const ProgressMap = sig.consensus.ProgressMap;
+const HeaviestSubtreeForkChoice = sig.consensus.HeaviestSubtreeForkChoice;
 
 const ReplayExecutionState = replay.execution.ReplayExecutionState;
 const SlotTracker = replay.trackers.SlotTracker;
@@ -29,6 +32,9 @@ const updateSysvarsForNewSlot = replay.update_sysvar.updateSysvarsForNewSlot;
 
 const LatestValidatorVotesForFrozenSlots =
     sig.consensus.latest_validator_votes.LatestValidatorVotes;
+
+const DuplicateSlots = replay.edge_cases.DuplicateSlots;
+const DuplicateConfirmedSlots = replay.edge_cases.DuplicateConfirmedSlots;
 
 /// Number of threads to use in replay's thread pool
 const NUM_THREADS = 4;
@@ -125,6 +131,21 @@ const ReplayState = struct {
             }),
         );
 
+        // TODO: Replace these with actual init.
+        var fork_choice = HeaviestSubtreeForkChoice{
+            .allocator = deps.allocator,
+            .logger = .noop,
+            .fork_infos = std.AutoHashMap(
+                SlotAndHash,
+                sig.consensus.fork_choice.ForkInfo,
+            ).init(deps.allocator),
+            .latest_votes = std.AutoHashMap(Pubkey, SlotAndHash).init(deps.allocator),
+            .tree_root = .{ .slot = 0, .hash = Hash.ZEROES },
+            .last_root_time = sig.time.Instant.now(),
+        };
+        var duplicate_slot_tracker = DuplicateSlots.empty;
+        var duplicate_confirmed_slots = DuplicateConfirmedSlots.empty;
+
         return .{
             .allocator = deps.allocator,
             .logger = .from(deps.logger),
@@ -146,6 +167,9 @@ const ReplayState = struct {
                 slot_tracker,
                 epoch_tracker,
                 progress_map,
+                &fork_choice,
+                &duplicate_slot_tracker,
+                &duplicate_confirmed_slots,
             ),
         };
     }

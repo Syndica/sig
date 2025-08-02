@@ -22,6 +22,11 @@ const HeaviestSubtreeForkChoice = sig.consensus.HeaviestSubtreeForkChoice;
 const ConfirmSlotFuture = replay.confirm_slot.ConfirmSlotFuture;
 const EpochTracker = replay.trackers.EpochTracker;
 const SlotTracker = replay.trackers.SlotTracker;
+const DuplicateSlots = replay.edge_cases.DuplicateSlots;
+const DuplicateState = replay.edge_cases.DuplicateState;
+const DuplicateConfirmedSlots = replay.edge_cases.DuplicateConfirmedSlots;
+
+const check_slot_agrees_with_cluster = replay.edge_cases.check_slot_agrees_with_cluster;
 
 const SvmGateway = replay.svm_gateway.SvmGateway;
 
@@ -42,6 +47,8 @@ pub const ReplayExecutionState = struct {
     epochs: *EpochTracker,
     progress_map: *ProgressMap,
     fork_choice: *HeaviestSubtreeForkChoice,
+    duplicate_slots_tracker: *DuplicateSlots,
+    duplicate_confirmed_slots: *DuplicateConfirmedSlots,
 
     // owned
     status_cache: sig.core.StatusCache,
@@ -57,6 +64,8 @@ pub const ReplayExecutionState = struct {
         epochs: *EpochTracker,
         progress_map: *ProgressMap,
         fork_choice: *HeaviestSubtreeForkChoice,
+        duplicate_slots_tracker: *DuplicateSlots,
+        duplicate_confirmed_slots: *DuplicateConfirmedSlots,
     ) Allocator.Error!ReplayExecutionState {
         return .{
             .allocator = allocator,
@@ -70,6 +79,8 @@ pub const ReplayExecutionState = struct {
             .epochs = epochs,
             .progress_map = progress_map,
             .fork_choice = fork_choice,
+            .duplicate_slots_tracker = duplicate_slots_tracker,
+            .duplicate_confirmed_slots = duplicate_confirmed_slots,
             .status_cache = .DEFAULT,
         };
     }
@@ -318,7 +329,6 @@ fn processReplayResults(
 
         switch (status) {
             .confirm => |confirm_slot_future| {
-                // TODO is the polling needed? Should have been done at this point
                 while (try confirm_slot_future.poll() == .pending) {
                     std.time.sleep(std.time.ns_per_ms);
                 }
@@ -327,7 +337,7 @@ fn processReplayResults(
                 }
             },
             // QA: Should mark_dead_slot be called here?
-            else => return,
+            else => return false,
         }
 
         if (slot_info.state.tickHeight() == slot_info.constants.max_tick_height) {
@@ -380,7 +390,7 @@ fn processReplayResults(
             try replay_state.fork_choice.addNewLeafSlot(
                 .{
                     .slot = slot,
-                    .hash = slot_info.state.hash,
+                    .hash = slot_info.state.hash.readCopy() orelse return error.MissingHash,
                 },
                 .{
                     .slot = slot_info.constants.parent_slot,
@@ -388,10 +398,33 @@ fn processReplayResults(
                 },
             );
 
-            progress.fork_stats.bank_hash = slot_info.state.hash;
+            progress.fork_stats.bank_hash = slot_info.state.hash.readCopy() orelse
+                return error.MissingHash;
             // TODO check_slot_agrees_with_cluster: BankFrozen
-            // TODO Update duplicate_slots_tracker
-            // TODO check_slot_agrees_with_cluster: Duplicate
+
+            // If we previously marked this slot as duplicate in blockstore, let the state machine know
+            if (replay_state.duplicate_slots_tracker.contains(slot) and
+                try replay_state.blockstore_reader.getDuplicateSlot(slot) != null)
+            {
+                const duplicate_state: DuplicateState = .fromState(
+                    .from(replay_state.logger),
+                    slot,
+                    replay_state.duplicate_confirmed_slots,
+                    replay_state.fork_choice,
+                    .fromHash(slot_info.state.hash.readCopy()),
+                );
+
+                try check_slot_agrees_with_cluster.duplicate(
+                    replay_state.allocator,
+                    .from(replay_state.logger),
+                    slot,
+                    slot_info.constants.parent_slot,
+                    replay_state.duplicate_slots_tracker,
+                    replay_state.fork_choice,
+                    duplicate_state,
+                );
+            }
+
             // TODO bank_notification_sender
             // TODO Move unfrozen_gossip_verified_vote_hashes to latest_validator_votes_for_frozen_banks
             // TODO block_metadata_notifier
