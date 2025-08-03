@@ -244,7 +244,7 @@ pub const SlotStatus = union(enum) {
     }
 };
 
-const SlotFrozenState = struct {
+pub const SlotFrozenState = struct {
     frozen_hash: sig.core.Hash,
     cluster_confirmed_hash: ?ClusterConfirmedHash,
     is_slot_duplicate: bool,
@@ -736,7 +736,7 @@ fn getDuplicateConfirmedHash(
 /// NOTE: Where in agave the different modes of operation are represented as tagged union variants, here they're simply different functions inside this namespace.
 pub const check_slot_agrees_with_cluster = struct {
     /// aka `BankFrozen` in agave.
-    fn slotFrozen(
+    pub fn slotFrozen(
         allocator: std.mem.Allocator,
         logger: replay.service.Logger,
         slot: sig.core.Slot,

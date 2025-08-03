@@ -24,7 +24,11 @@ const EpochTracker = replay.trackers.EpochTracker;
 const SlotTracker = replay.trackers.SlotTracker;
 const DuplicateSlots = replay.edge_cases.DuplicateSlots;
 const DuplicateState = replay.edge_cases.DuplicateState;
+const SlotFrozenState = replay.edge_cases.SlotFrozenState;
+const DuplicateSlotsToRepair = replay.edge_cases.DuplicateSlotsToRepair;
 const DuplicateConfirmedSlots = replay.edge_cases.DuplicateConfirmedSlots;
+const PurgeRepairSlotCounters = replay.edge_cases.PurgeRepairSlotCounters;
+const EpochSlotsFrozenSlots = replay.edge_cases.EpochSlotsFrozenSlots;
 
 const check_slot_agrees_with_cluster = replay.edge_cases.check_slot_agrees_with_cluster;
 
@@ -43,12 +47,16 @@ pub const ReplayExecutionState = struct {
     account_store: AccountStore,
     thread_pool: *ThreadPool,
     blockstore_reader: *BlockstoreReader,
+    ledger_result_writer: *sig.ledger.LedgerResultWriter,
     slot_tracker: *SlotTracker,
     epochs: *EpochTracker,
     progress_map: *ProgressMap,
     fork_choice: *HeaviestSubtreeForkChoice,
     duplicate_slots_tracker: *DuplicateSlots,
     duplicate_confirmed_slots: *DuplicateConfirmedSlots,
+    epoch_slots_frozen_slots: *const EpochSlotsFrozenSlots,
+    duplicate_slots_to_repair: *DuplicateSlotsToRepair,
+    purge_repair_slot_counter: *PurgeRepairSlotCounters,
 
     // owned
     status_cache: sig.core.StatusCache,
@@ -60,12 +68,16 @@ pub const ReplayExecutionState = struct {
         thread_pool: *ThreadPool,
         account_store: AccountStore,
         blockstore_reader: *BlockstoreReader,
+        ledger_result_writer: *sig.ledger.LedgerResultWriter,
         slot_tracker: *SlotTracker,
         epochs: *EpochTracker,
         progress_map: *ProgressMap,
         fork_choice: *HeaviestSubtreeForkChoice,
         duplicate_slots_tracker: *DuplicateSlots,
         duplicate_confirmed_slots: *DuplicateConfirmedSlots,
+        epoch_slots_frozen_slots: *const EpochSlotsFrozenSlots,
+        duplicate_slots_to_repair: *DuplicateSlotsToRepair,
+        purge_repair_slot_counter: *PurgeRepairSlotCounters,
     ) Allocator.Error!ReplayExecutionState {
         return .{
             .allocator = allocator,
@@ -75,12 +87,16 @@ pub const ReplayExecutionState = struct {
             .account_store = account_store,
             .thread_pool = thread_pool,
             .blockstore_reader = blockstore_reader,
+            .ledger_result_writer = ledger_result_writer,
             .slot_tracker = slot_tracker,
             .epochs = epochs,
             .progress_map = progress_map,
             .fork_choice = fork_choice,
             .duplicate_slots_tracker = duplicate_slots_tracker,
             .duplicate_confirmed_slots = duplicate_confirmed_slots,
+            .epoch_slots_frozen_slots = epoch_slots_frozen_slots,
+            .duplicate_slots_to_repair = duplicate_slots_to_repair,
+            .purge_repair_slot_counter = purge_repair_slot_counter,
             .status_cache = .DEFAULT,
         };
     }
@@ -400,7 +416,28 @@ fn processReplayResults(
 
             progress.fork_stats.bank_hash = slot_info.state.hash.readCopy() orelse
                 return error.MissingHash;
-            // TODO check_slot_agrees_with_cluster: BankFrozen
+
+            const slot_frozen_state: SlotFrozenState = .fromState(
+                .noop,
+                slot,
+                slot_info.state.hash.readCopy() orelse
+                    return error.MissingHash,
+                replay_state.duplicate_slots_tracker,
+                replay_state.duplicate_confirmed_slots,
+                replay_state.fork_choice,
+                replay_state.epoch_slots_frozen_slots,
+            );
+            try check_slot_agrees_with_cluster.slotFrozen(
+                replay_state.allocator,
+                .from(replay_state.logger),
+                slot,
+                replay_state.slot_tracker.root,
+                replay_state.ledger_result_writer,
+                replay_state.fork_choice,
+                replay_state.duplicate_slots_to_repair,
+                replay_state.purge_repair_slot_counter,
+                slot_frozen_state,
+            );
 
             // If we previously marked this slot as duplicate in blockstore, let the state machine know
             if (replay_state.duplicate_slots_tracker.contains(slot) and

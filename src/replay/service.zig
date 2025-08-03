@@ -35,6 +35,9 @@ const LatestValidatorVotesForFrozenSlots =
 
 const DuplicateSlots = replay.edge_cases.DuplicateSlots;
 const DuplicateConfirmedSlots = replay.edge_cases.DuplicateConfirmedSlots;
+const DuplicateSlotsToRepair = replay.edge_cases.DuplicateSlotsToRepair;
+const EpochSlotsFrozenSlots = replay.edge_cases.EpochSlotsFrozenSlots;
+const PurgeRepairSlotCounters = replay.edge_cases.PurgeRepairSlotCounters;
 
 /// Number of threads to use in replay's thread pool
 const NUM_THREADS = 4;
@@ -145,6 +148,9 @@ const ReplayState = struct {
         };
         var duplicate_slot_tracker = DuplicateSlots.empty;
         var duplicate_confirmed_slots = DuplicateConfirmedSlots.empty;
+        var epoch_slots_frozen_slots = EpochSlotsFrozenSlots.empty;
+        var duplicate_slots_to_repair = DuplicateSlotsToRepair.empty;
+        var purge_replair_slot_counter = PurgeRepairSlotCounters.empty;
 
         return .{
             .allocator = deps.allocator,
@@ -164,12 +170,16 @@ const ReplayState = struct {
                 thread_pool,
                 deps.account_store,
                 deps.blockstore_reader,
+                deps.ledger_result_writer,
                 slot_tracker,
                 epoch_tracker,
                 progress_map,
                 &fork_choice,
                 &duplicate_slot_tracker,
                 &duplicate_confirmed_slots,
+                &epoch_slots_frozen_slots,
+                &duplicate_slots_to_repair,
+                &purge_replair_slot_counter,
             ),
         };
     }
