@@ -343,6 +343,9 @@ fn processReplayResults(
         var slot_info = replay_state.slot_tracker.get(slot) orelse
             return error.MissingSlotInTracker;
 
+        const parent_slot = slot_info.constants.parent_slot;
+        const parent_hash = slot_info.constants.parent_hash;
+
         switch (status) {
             .confirm => |confirm_slot_future| {
                 while (try confirm_slot_future.poll() == .pending) {
@@ -398,7 +401,9 @@ fn processReplayResults(
             // TODO transaction_status_sender;
             // TODO cost_update_sender;
 
-            std.debug.assert(!slot_info.state.hash.readCopy().?.eql(Hash.ZEROES));
+            const hash = slot_info.state.hash.readCopy() orelse
+                return error.MissingHash;
+            std.debug.assert(!hash.eql(Hash.ZEROES));
 
             // Needs to be updated before `check_slot_agrees_with_cluster()` so that
             // any updates in `check_slot_agrees_with_cluster()` on fork choice take
@@ -406,22 +411,20 @@ fn processReplayResults(
             try replay_state.fork_choice.addNewLeafSlot(
                 .{
                     .slot = slot,
-                    .hash = slot_info.state.hash.readCopy() orelse return error.MissingHash,
+                    .hash = hash,
                 },
                 .{
-                    .slot = slot_info.constants.parent_slot,
-                    .hash = slot_info.constants.parent_hash,
+                    .slot = parent_slot,
+                    .hash = parent_hash,
                 },
             );
 
-            progress.fork_stats.bank_hash = slot_info.state.hash.readCopy() orelse
-                return error.MissingHash;
+            progress.fork_stats.bank_hash = hash;
 
             const slot_frozen_state: SlotFrozenState = .fromState(
                 .noop,
                 slot,
-                slot_info.state.hash.readCopy() orelse
-                    return error.MissingHash,
+                hash,
                 replay_state.duplicate_slots_tracker,
                 replay_state.duplicate_confirmed_slots,
                 replay_state.fork_choice,
@@ -448,14 +451,14 @@ fn processReplayResults(
                     slot,
                     replay_state.duplicate_confirmed_slots,
                     replay_state.fork_choice,
-                    .fromHash(slot_info.state.hash.readCopy()),
+                    .fromHash(hash),
                 );
 
                 try check_slot_agrees_with_cluster.duplicate(
                     replay_state.allocator,
                     .from(replay_state.logger),
                     slot,
-                    slot_info.constants.parent_slot,
+                    parent_slot,
                     replay_state.duplicate_slots_tracker,
                     replay_state.fork_choice,
                     duplicate_state,
