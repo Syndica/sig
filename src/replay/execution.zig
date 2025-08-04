@@ -18,6 +18,7 @@ const BlockstoreReader = sig.ledger.BlockstoreReader;
 const ForkProgress = sig.consensus.progress_map.ForkProgress;
 const ProgressMap = sig.consensus.ProgressMap;
 const HeaviestSubtreeForkChoice = sig.consensus.HeaviestSubtreeForkChoice;
+const LatestValidatorVotes = sig.consensus.latest_validator_votes.LatestValidatorVotes;
 
 const ConfirmSlotFuture = replay.confirm_slot.ConfirmSlotFuture;
 const EpochTracker = replay.trackers.EpochTracker;
@@ -29,6 +30,7 @@ const DuplicateSlotsToRepair = replay.edge_cases.DuplicateSlotsToRepair;
 const DuplicateConfirmedSlots = replay.edge_cases.DuplicateConfirmedSlots;
 const PurgeRepairSlotCounters = replay.edge_cases.PurgeRepairSlotCounters;
 const EpochSlotsFrozenSlots = replay.edge_cases.EpochSlotsFrozenSlots;
+const UnfrozenGossipVerifiedVoteHashes = replay.edge_cases.UnfrozenGossipVerifiedVoteHashes;
 
 const check_slot_agrees_with_cluster = replay.edge_cases.check_slot_agrees_with_cluster;
 
@@ -53,6 +55,8 @@ pub const ReplayExecutionState = struct {
     progress_map: *ProgressMap,
     fork_choice: *HeaviestSubtreeForkChoice,
     duplicate_slots_tracker: *DuplicateSlots,
+    unfrozen_gossip_verified_vote_hashes: *UnfrozenGossipVerifiedVoteHashes,
+    latest_validator_votes_for_frozen_banks: *LatestValidatorVotes,
     duplicate_confirmed_slots: *DuplicateConfirmedSlots,
     epoch_slots_frozen_slots: *const EpochSlotsFrozenSlots,
     duplicate_slots_to_repair: *DuplicateSlotsToRepair,
@@ -74,6 +78,8 @@ pub const ReplayExecutionState = struct {
         progress_map: *ProgressMap,
         fork_choice: *HeaviestSubtreeForkChoice,
         duplicate_slots_tracker: *DuplicateSlots,
+        unfrozen_gossip_verified_vote_hashes: *UnfrozenGossipVerifiedVoteHashes,
+        latest_validator_votes_for_frozen_banks: *LatestValidatorVotes,
         duplicate_confirmed_slots: *DuplicateConfirmedSlots,
         epoch_slots_frozen_slots: *const EpochSlotsFrozenSlots,
         duplicate_slots_to_repair: *DuplicateSlotsToRepair,
@@ -93,6 +99,8 @@ pub const ReplayExecutionState = struct {
             .progress_map = progress_map,
             .fork_choice = fork_choice,
             .duplicate_slots_tracker = duplicate_slots_tracker,
+            .unfrozen_gossip_verified_vote_hashes = unfrozen_gossip_verified_vote_hashes,
+            .latest_validator_votes_for_frozen_banks = latest_validator_votes_for_frozen_banks,
             .duplicate_confirmed_slots = duplicate_confirmed_slots,
             .epoch_slots_frozen_slots = epoch_slots_frozen_slots,
             .duplicate_slots_to_repair = duplicate_slots_to_repair,
@@ -466,7 +474,29 @@ fn processReplayResults(
             }
 
             // TODO bank_notification_sender
-            // TODO Move unfrozen_gossip_verified_vote_hashes to latest_validator_votes_for_frozen_banks
+
+            // Move unfrozen_gossip_verified_vote_hashes entries to latest_validator_votes_for_frozen_banks
+            if (replay_state.unfrozen_gossip_verified_vote_hashes.votes_per_slot
+                .get(slot)) |slot_hashes_const|
+            {
+                var slot_hashes = slot_hashes_const;
+                if (slot_hashes.fetchSwapRemove(hash)) |kv| {
+                    var new_frozen_voters = kv.value;
+                    defer new_frozen_voters.deinit(replay_state.allocator);
+                    for (new_frozen_voters.items) |pubkey| {
+                        _ = try replay_state.latest_validator_votes_for_frozen_banks.checkAddVote(
+                            replay_state.allocator,
+                            pubkey,
+                            slot,
+                            hash,
+                            .replay,
+                        );
+                    }
+                }
+                // If `slot_hashes` becomes empty, it'll be removed by `setRoot()` later
+            }
+
+            // TODO block_metadata_notifier
             // TODO block_metadata_notifier
         }
     }

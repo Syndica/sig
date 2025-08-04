@@ -38,6 +38,7 @@ const DuplicateConfirmedSlots = replay.edge_cases.DuplicateConfirmedSlots;
 const DuplicateSlotsToRepair = replay.edge_cases.DuplicateSlotsToRepair;
 const EpochSlotsFrozenSlots = replay.edge_cases.EpochSlotsFrozenSlots;
 const PurgeRepairSlotCounters = replay.edge_cases.PurgeRepairSlotCounters;
+const UnfrozenGossipVerifiedVoteHashes = replay.edge_cases.UnfrozenGossipVerifiedVoteHashes;
 
 /// Number of threads to use in replay's thread pool
 const NUM_THREADS = 4;
@@ -152,6 +153,11 @@ const ReplayState = struct {
         var duplicate_slots_to_repair = DuplicateSlotsToRepair.empty;
         var purge_replair_slot_counter = PurgeRepairSlotCounters.empty;
 
+        var unfrozen_gossip_verified_vote_hashes = UnfrozenGossipVerifiedVoteHashes{
+            .votes_per_slot = .empty,
+        };
+        var latest_validator_votes_for_frozen_banks = LatestValidatorVotesForFrozenSlots.empty;
+
         return .{
             .allocator = deps.allocator,
             .logger = .from(deps.logger),
@@ -176,6 +182,8 @@ const ReplayState = struct {
                 progress_map,
                 &fork_choice,
                 &duplicate_slot_tracker,
+                &unfrozen_gossip_verified_vote_hashes,
+                &latest_validator_votes_for_frozen_banks,
                 &duplicate_confirmed_slots,
                 &epoch_slots_frozen_slots,
                 &duplicate_slots_to_repair,
