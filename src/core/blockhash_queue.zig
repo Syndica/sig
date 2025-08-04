@@ -71,10 +71,6 @@ pub const BlockhashQueue = struct {
     pub fn getHashInfoIfValid(self: BlockhashQueue, hash: Hash, max_age: usize) ?BlockhashInfo {
         const hash_info = self.hash_infos.get(hash) orelse return null;
         if (!isHashIndexValid(self.last_hash_index, max_age, hash_info.index)) {
-            std.log.err(
-                "invalid hash index: {}, {}, {}",
-                .{ self.last_hash_index, max_age, hash_info.index },
-            );
             return null;
         }
         return hash_info;
