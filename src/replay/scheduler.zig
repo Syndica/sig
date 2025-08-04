@@ -196,7 +196,10 @@ pub const TransactionScheduler = struct {
                 }
             },
             .pending => return .pending,
-            .err => |err| return err,
+            .err => |err| {
+                self.logger.err().logf("transaction batch processor failed with error: {}", .{err});
+                return err;
+            },
         }
     }
 

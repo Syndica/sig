@@ -132,10 +132,11 @@ pub const SvmGateway = struct {
     }
 
     pub fn deinit(self: *const SvmGateway, allocator: Allocator) void {
-        _ = self; // autofix
-        _ = allocator; // autofix
         // self.params.blockhash_queue.deinit(allocator); // TODO fix leak
         // TODO self.state
+        self.state.vm_environment.deinit(allocator);
+        var accounts = self.state.accounts;
+        accounts.deinit(allocator);
     }
 
     pub fn environment(self: *const SvmGateway) !TransactionExecutionEnvironment {
