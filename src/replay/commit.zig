@@ -59,7 +59,7 @@ pub const Committer = struct {
                 .insert(allocator, rng.random(), recent_blockhash, &message_hash.data, slot);
             try self.status_cache
                 .insert(allocator, rng.random(), recent_blockhash, &signature.data, slot);
-            // TODO: we'll need to store the actual status at some point, probably for rpc.
+            // NOTE: we'll need to store the actual status at some point, probably for rpc.
         }
 
         _ = self.slot_state.transaction_count.fetchAdd(tx_results.len, .monotonic);
