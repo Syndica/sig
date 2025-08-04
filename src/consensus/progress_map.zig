@@ -1359,7 +1359,6 @@ test "ForkProgress.init" {
     });
     defer actual_init_from_bank.deinit(allocator);
 
-    const epoch_stakes = try sig.core.EpochStakes.initRandom(allocator, random, 10);
     const actual_init_from_parent = try ForkProgress.initFromParent(allocator, .{
         .now = now,
         .slot = bank.data.slot + 1,
@@ -1369,7 +1368,12 @@ test "ForkProgress.init" {
         .slot_hash = bank.data.hash,
         .last_entry = bank.data.blockhash_queue.last_hash.?,
         .i_am_leader = true,
-        .epoch_stakes = &epoch_stakes,
+        .epoch_stakes = &.{
+            .stakes = bank.data.stakes,
+            .total_stake = bank.totalEpochStake(),
+            .node_id_to_vote_accounts = .empty,
+            .epoch_authorized_voters = .empty,
+        },
     });
     defer actual_init_from_parent.deinit(allocator);
 
