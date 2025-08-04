@@ -4509,7 +4509,8 @@ pub const BenchmarkAccountsDB = struct {
             var i: usize = 0;
             while (i < n_accounts) : (i += 1) {
                 const pubkey_idx = indexer.sample();
-                const account = try accounts_db.getAccountLatest(&pubkeys[pubkey_idx]) orelse unreachable;
+                const account = try accounts_db.getAccountLatest(&pubkeys[pubkey_idx]) orelse
+                    unreachable;
                 account.deinit(allocator);
             }
         }
@@ -4520,7 +4521,8 @@ pub const BenchmarkAccountsDB = struct {
         var i: usize = 0;
         while (i < do_read_count) : (i += 1) {
             const pubkey_idx = indexer.sample();
-            const account = try accounts_db.getAccountLatest(&pubkeys[pubkey_idx]) orelse unreachable;
+            const account = try accounts_db.getAccountLatest(&pubkeys[pubkey_idx]) orelse
+                unreachable;
             defer account.deinit(allocator);
             if (account.data.len() != (pubkey_idx % 1_000)) std.debug.panic(
                 "account data len dnm {}: {} != {}",
