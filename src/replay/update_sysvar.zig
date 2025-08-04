@@ -94,8 +94,8 @@ pub fn updateSysvarsForNewSlot(
             .stakes_cache = &state.stakes_cache,
             .epoch = epoch, // TODO: redundant with passing schedule and slot
             .parent_epoch = parent_epoch,
-            .genesis_creation_time = undefined, // TODO
-            .ns_per_slot = undefined, // TODO
+            .genesis_creation_time = epoch_info.genesis_creation_time,
+            .ns_per_slot = epoch_info.ns_per_slot,
             .update_sysvar_deps = sysvar_deps,
         },
     );
