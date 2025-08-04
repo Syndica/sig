@@ -363,8 +363,7 @@ fn processReplayResults(
                     tx_count += entry.transactions.len;
                 }
             },
-            // QA: Should mark_dead_slot be called here?
-            else => return false,
+            else => continue,
         }
 
         if (slot_info.state.tickHeight() == slot_info.constants.max_tick_height) {
