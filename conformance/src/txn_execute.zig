@@ -1003,7 +1003,6 @@ fn serializeOutput(
                 .loaded_accounts_data_size = txn.loadedAccountsDataSize(),
             };
         },
-        // TODO: 008651fd6d7efed350fa33eeba912cb6e670eb7c_265678.fix
         .err => |err| {
             const converted = utils.convertTransactionError(err);
             return .{

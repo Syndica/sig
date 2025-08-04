@@ -61,13 +61,11 @@ pub fn execute(_: std.mem.Allocator, ic: *InstructionContext) InstructionError!v
 // https://github.com/firedancer-io/firedancer/blob/af74882ffb2c24783a82718dbc5111a94e1b5f6f/src/flamenco/runtime/program/fd_precompiles.c#L227
 // https://github.com/anza-xyz/agave/blob/a8aef04122068ec36a7af0721e36ee58efa0bef2/sdk/src/secp256k1_instruction.rs#L925
 pub fn verify(
-    current_instruction_data: []const u8,
+    data: []const u8,
     all_instruction_datas: []const []const u8,
     _: *const FeatureSet,
     _: Slot,
 ) PrecompileProgramError!void {
-    const data = current_instruction_data;
-
     if (data.len < SECP256K1_DATA_START) {
         if (data.len == 1 and data[0] == 0) return; // success
         return error.InvalidInstructionDataSize;
