@@ -45,6 +45,7 @@ pub const FeatureSet = struct {
         return result;
     }
 };
+
 pub const DEPRECATE_REWARDS_SYSVAR =
     Pubkey.parseBase58String("GaBtBJvmS4Arjj5W1NmFcyvPjsHN38UGYDq2MDwbs9Qu") catch unreachable;
 
@@ -541,7 +542,7 @@ pub const REMAINING_COMPUTE_UNITS_SYSCALL_ENABLED =
     Pubkey.parseBase58String("5TuppMutoyzhUSfuYdhgzD47F92GL1g89KpCZQKqedxP") catch unreachable;
 
 pub const ENABLE_LOADER_V4 =
-    Pubkey.parseBase58String("2aQJYqER2aKyb3cZw22v4SL2xMX7vwXBRWfvS4pTrtED") catch unreachable;
+    Pubkey.parseBase58String("G8yMNsNUd4p3VB22ycrPEB1qRgepCFeFpAqD2Lr66s36") catch unreachable;
 
 pub const REQUIRE_RENT_EXEMPT_SPLIT_DESTINATION =
     Pubkey.parseBase58String("D2aip4BBr8NPWtU9vLrwrBvbuaQ8w1zV38zFLxx4pfBV") catch unreachable;

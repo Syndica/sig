@@ -173,6 +173,17 @@ fn applyBuiltinProgramFeatureTransitions(
         const feature_id = precompile.required_feature orelse continue;
         if (!feature_set.active.contains(feature_id)) continue;
 
+        const maybe_account = accounts_db.getAccount(&precompile.program_id) catch |err| switch (err) {
+            error.PubkeyNotInIndex => null,
+            else => return err,
+        };
+        defer if (maybe_account) |account| account.deinit(allocator);
+
+        // If account is present and executable, do nothing. Otherwise burn and purge, then create a new account.
+        if (maybe_account) |account| if (account.executable) return;
+
+        // TODO: burn_and_purge_account
+
         try accounts_db.putAccount(
             slot,
             precompile.program_id,
