@@ -1124,7 +1124,7 @@ test "clean to shrink account file works with zero-lamports" {
     // slot 500 will be fully dead because its all zero lamports
     try std.testing.expectEqual(1, delete_account_files.count());
 
-    var account = try accounts_db.getAccountDeprecated(&pubkey_remain);
+    var account = try accounts_db.getAccountLatest(&pubkey_remain) orelse unreachable;
     defer account.deinit(allocator);
 }
 
@@ -1476,6 +1476,6 @@ test "shrink account file works" {
     }
 
     // last account ref should still be accessible
-    const account = try accounts_db.getAccountDeprecated(&pubkey_remain);
+    const account = try accounts_db.getAccountLatest(&pubkey_remain) orelse unreachable;
     account.deinit(allocator);
 }

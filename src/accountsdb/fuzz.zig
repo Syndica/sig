@@ -463,7 +463,9 @@ fn readRandomAccounts(
         }
 
         for (pubkeys) |pubkey| {
-            const account = db.getAccountDeprecated(&pubkey) catch continue;
+            const account = db.getAccountLatest(&pubkey) catch |e|
+                std.debug.panic("getAccount failed with error: {}", .{e}) orelse
+                continue;
             defer account.deinit(db.allocator);
         }
     }

@@ -761,7 +761,7 @@ fn insertSysvarCacheAccounts(
         RecentBlockhashes,
     }) |Sysvar| {
         const old_account = if (inherit_from_old_account)
-            accounts_db.getAccount(&Sysvar.ID) catch null
+            accounts_db.getAccountLatest(&Sysvar.ID) catch null
         else
             null;
         defer if (old_account) |acc| acc.deinit(allocator) else {};
