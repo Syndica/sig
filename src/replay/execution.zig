@@ -348,11 +348,6 @@ fn processReplayResults(
     var tx_count: usize = 0;
     for (slot_statuses.items) |slot_status| {
         const slot, const status = slot_status;
-        var slot_info = replay_state.slot_tracker.get(slot) orelse
-            return error.MissingSlotInTracker;
-
-        const parent_slot = slot_info.constants.parent_slot;
-        const parent_hash = slot_info.constants.parent_hash;
 
         switch (status) {
             .confirm => |confirm_slot_future| {
@@ -365,6 +360,12 @@ fn processReplayResults(
             },
             else => continue,
         }
+
+        var slot_info = replay_state.slot_tracker.get(slot) orelse
+            return error.MissingSlotInTracker;
+
+        const parent_slot = slot_info.constants.parent_slot;
+        const parent_hash = slot_info.constants.parent_hash;
 
         if (slot_info.state.tickHeight() == slot_info.constants.max_tick_height) {
             // TODO add bank.wait_for_completed_scheduler()
