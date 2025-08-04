@@ -62,6 +62,7 @@ pub fn updateSysvarsForNewSlot(
     hard_forks: *const sig.core.HardForks,
 ) !void {
     const epoch = epoch_schedule.getEpoch(slot);
+    const parent_epoch = epoch_schedule.getEpoch(constants.parent_slot);
 
     const sysvar_deps = UpdateSysvarAccountDeps{
         .account_store = account_store,
@@ -70,8 +71,6 @@ pub fn updateSysvarsForNewSlot(
         .rent = &epoch_info.rent_collector.rent,
         .slot = slot,
     };
-
-    const parent_epoch = if (epoch == 0) null else epoch - 1; // TODO: verify this
 
     try updateSlotHashes(allocator, constants.parent_slot, constants.parent_hash, sysvar_deps);
     try updateStakeHistory(allocator, .{
