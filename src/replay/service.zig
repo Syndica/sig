@@ -412,7 +412,7 @@ test trackNewSlots {
         .genesis_creation_time = 1,
         .slots_per_year = 1,
         .stakes = try .initEmptyWithGenesisStakeHistoryEntry(allocator),
-        .rent_collector = .initRandom(rng.random()),
+        .rent_collector = .DEFAULT,
     });
 
     const leader_schedule = sig.core.leader_schedule.LeaderSchedule{
@@ -440,6 +440,8 @@ test trackNewSlots {
     // slot tracker should start with only 0
     try expectSlotTracker(&slot_tracker, leader_schedule, &.{.{ 0, 0 }}, &.{ 1, 2, 3, 4, 5, 6 });
 
+    const hard_forks = sig.core.HardForks{};
+
     // only the root (0) is considered frozen, so only 0 and 1 should be added at first.
     try trackNewSlots(
         allocator,
@@ -448,7 +450,7 @@ test trackNewSlots {
         &slot_tracker,
         &epoch_tracker,
         slot_leaders,
-        undefined,
+        &hard_forks,
         undefined,
     );
     try expectSlotTracker(
@@ -466,7 +468,7 @@ test trackNewSlots {
         &slot_tracker,
         &epoch_tracker,
         slot_leaders,
-        undefined,
+        &hard_forks,
         undefined,
     );
     try expectSlotTracker(
@@ -485,7 +487,7 @@ test trackNewSlots {
         &slot_tracker,
         &epoch_tracker,
         slot_leaders,
-        undefined,
+        &hard_forks,
         undefined,
     );
     try expectSlotTracker(
@@ -505,7 +507,7 @@ test trackNewSlots {
         &slot_tracker,
         &epoch_tracker,
         slot_leaders,
-        undefined,
+        &hard_forks,
         undefined,
     );
     try expectSlotTracker(

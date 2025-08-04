@@ -82,7 +82,9 @@ pub fn updateSysvarsForNewSlot(
     });
 
     var epoch_stakes_map = sig.core.EpochStakesMap.empty;
+    defer epoch_stakes_map.deinit(allocator);
     try epoch_stakes_map.put(allocator, epoch, epoch_info.stakes); // TODO better approach
+
     try updateClock(
         allocator,
         .{
