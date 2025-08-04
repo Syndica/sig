@@ -132,9 +132,9 @@ pub fn testPoh(valid_signatures: bool) !struct { Poh, std.BoundedArray(sig.core.
     }
 
     const transactions = [_]Transaction{
-        try Transaction.initRandom(allocator, rng.random()),
-        try Transaction.initRandom(allocator, rng.random()),
         a_transaction,
+        try Transaction.initRandom(allocator, rng.random()),
+        try Transaction.initRandom(allocator, rng.random()),
         try Transaction.initRandom(allocator, rng.random()),
         try Transaction.initRandom(allocator, rng.random()),
         try Transaction.initRandom(allocator, rng.random()),

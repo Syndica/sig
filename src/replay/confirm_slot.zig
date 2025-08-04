@@ -420,6 +420,7 @@ test "happy path: partial slot" {
 
     const poh, const entry_array = try sig.core.poh.testPoh(true);
     const entries: []const sig.core.Entry = entry_array.slice();
+    for (entries) |e| try state.makeTransactionsPassable(allocator, e.transactions);
 
     const future = try confirmSlot(
         std.testing.allocator,
@@ -445,7 +446,6 @@ test "happy path: partial slot" {
     const result = try testAwait(future);
     errdefer std.log.err("failed with: {any}\n", .{result});
 
-    if (true) return; // TODO: fix this test
     try std.testing.expectEqual(.done, result);
 }
 
@@ -464,6 +464,7 @@ test "happy path: full slot" {
 
     const poh, const entry_array = try sig.core.poh.testPoh(true);
     const entries: []const sig.core.Entry = entry_array.slice();
+    for (entries) |e| try state.makeTransactionsPassable(allocator, e.transactions);
 
     const future = try confirmSlot(
         std.testing.allocator,
@@ -490,7 +491,6 @@ test "happy path: full slot" {
     const result = try testAwait(future);
     errdefer std.log.err("failed with: {any}\n", .{result});
 
-    if (true) return; // TODO: fix this test
     try std.testing.expectEqual(.done, result);
 }
 
@@ -509,6 +509,7 @@ test "fail: full slot not marked full -> .InvalidLastTick" {
 
     const poh, const entry_array = try sig.core.poh.testPoh(true);
     const entries: []const sig.core.Entry = entry_array.slice();
+    for (entries) |e| try state.makeTransactionsPassable(allocator, e.transactions);
 
     const future = try confirmSlot(
         std.testing.allocator,
@@ -554,6 +555,7 @@ test "fail: no trailing tick at max height -> .TrailingEntry" {
 
     const poh, const entry_array = try sig.core.poh.testPoh(true);
     const entries: []const sig.core.Entry = entry_array.slice();
+    for (entries) |e| try state.makeTransactionsPassable(allocator, e.transactions);
 
     const future = try confirmSlot(
         std.testing.allocator,
@@ -599,6 +601,7 @@ test "fail: invalid poh chain" {
 
     const poh, var entry_array = try sig.core.poh.testPoh(true);
     const entries: []sig.core.Entry = entry_array.slice();
+    for (entries) |e| try state.makeTransactionsPassable(allocator, e.transactions);
 
     // break the hash chain
     entries[0].hash.data[0] +%= 1;
@@ -647,6 +650,7 @@ test "fail: sigverify" {
 
     const poh, var entry_array = try sig.core.poh.testPoh(false);
     const entries: []sig.core.Entry = entry_array.slice();
+    for (entries) |e| try state.makeTransactionsPassable(allocator, e.transactions);
 
     const future = try confirmSlot(
         std.testing.allocator,
@@ -672,7 +676,6 @@ test "fail: sigverify" {
     const result = try testAwait(future);
     errdefer std.log.err("failed with: {any}\n", .{result});
 
-    if (true) return; // TODO: fix this test
     try std.testing.expectEqual(
         ConfirmSlotStatus{ .err = .{ .invalid_transaction = .SignatureFailure } },
         result,
@@ -708,6 +711,9 @@ pub const TestState = struct {
     slot_state: sig.core.SlotState,
     stakes_cache: sig.core.StakesCache,
 
+    // scheduler
+    exit: Atomic(bool),
+
     pub fn init(allocator: Allocator) !TestState {
         const epoch_stakes = try sig.core.EpochStakes.init(allocator);
         errdefer epoch_stakes.deinit(allocator);
@@ -718,16 +724,20 @@ pub const TestState = struct {
         var stakes_cache = try sig.core.StakesCache.init(allocator);
         errdefer stakes_cache.deinit(allocator);
 
-        var blockhash_queue = sig.core.BlockhashQueue.init(0);
+        const max_age = sig.core.BlockhashQueue.MAX_RECENT_BLOCKHASHES / 2;
+        var blockhash_queue = sig.core.BlockhashQueue.init(max_age);
         errdefer blockhash_queue.deinit(allocator);
         try blockhash_queue.insertGenesisHash(allocator, .ZEROES, 1);
+
+        var ancestors = Ancestors{};
+        try ancestors.addSlot(allocator, 0);
 
         return .{
             .account_map = sig.accounts_db.ThreadSafeAccountMap.init(allocator),
             .status_cache = .DEFAULT,
-            .ancestors = .{},
+            .ancestors = ancestors,
             .slot = 0,
-            .max_age = sig.core.BlockhashQueue.MAX_RECENT_BLOCKHASHES / 2,
+            .max_age = max_age,
             .lamports_per_signature = 1,
             .blockhash_queue = blockhash_queue,
             .feature_set = .EMPTY,
@@ -735,6 +745,7 @@ pub const TestState = struct {
             .epoch_stakes = epoch_stakes,
             .slot_state = slot_state,
             .stakes_cache = stakes_cache,
+            .exit = .init(false),
         };
     }
 
@@ -747,6 +758,10 @@ pub const TestState = struct {
         self.epoch_stakes.deinit(allocator);
         self.slot_state.deinit(allocator);
         self.stakes_cache.deinit(allocator);
+    }
+
+    pub fn accountStore(self: *TestState) AccountStore {
+        return self.account_map.accountStore();
     }
 
     pub fn svmParams(self: *TestState) SvmGateway.Params {
@@ -771,5 +786,22 @@ pub const TestState = struct {
             .status_cache = &self.status_cache,
             .stakes_cache = &self.stakes_cache,
         };
+    }
+
+    /// This makes it so the svm will not return an error for these
+    /// transactions. It doesn't mean the transactions themselves will succeed,
+    /// but they will at least execute as if they are legally allowed in the
+    /// block.
+    pub fn makeTransactionsPassable(
+        self: *TestState,
+        allocator: Allocator,
+        transactions: []const sig.core.Transaction,
+    ) Allocator.Error!void {
+        for (transactions) |transaction| {
+            try self.blockhash_queue.insertHash(allocator, transaction.msg.recent_blockhash, 1);
+            var account = sig.runtime.AccountSharedData.EMPTY;
+            account.lamports = 1_000;
+            try self.account_map.put(self.slot, transaction.msg.account_keys[0], account);
+        }
     }
 };

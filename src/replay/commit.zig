@@ -30,6 +30,7 @@ pub const Committer = struct {
         var rng = std.Random.DefaultPrng.init(slot + transactions.len);
 
         var accounts_to_store = std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData).empty;
+        defer accounts_to_store.deinit(allocator);
 
         var signature_count: usize = 0;
         var rent_collected: u64 = 0;
