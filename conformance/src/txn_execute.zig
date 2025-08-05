@@ -383,7 +383,7 @@ fn executeTxnContext(
         try update_sysvar.updateClock(allocator, .{
             .feature_set = &feature_set,
             .epoch_schedule = &epoch_schedule,
-            .epoch_stakes = &epoch_stakes_map.get(epoch).?,
+            .epoch_stakes = epoch_stakes_map.getPtr(epoch).?,
             .stakes_cache = &stakes_cache,
             .epoch = epoch,
             .parent_slots_epoch = null, // no parent yet
@@ -620,7 +620,7 @@ fn executeTxnContext(
                 try update_sysvar.updateClock(allocator, .{
                     .feature_set = &feature_set,
                     .epoch_schedule = &epoch_schedule,
-                    .epoch_stakes = &epoch_stakes_map.get(epoch).?,
+                    .epoch_stakes = epoch_stakes_map.getPtr(epoch).?,
                     .stakes_cache = &stakes_cache,
                     .epoch = epoch,
                     .parent_slots_epoch = parent_slots_epoch,
