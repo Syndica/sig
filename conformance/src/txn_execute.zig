@@ -375,7 +375,7 @@ fn executeTxnContext(
             allocator,
             .{
                 .epoch = epoch,
-                .parent_epoch = null, // no parent yet
+                .parent_slots_epoch = null, // no parent yet
                 .stakes_cache = &stakes_cache,
                 .update_sysvar_deps = update_sysvar_deps,
             },
@@ -386,7 +386,7 @@ fn executeTxnContext(
             .epoch_stakes_map = &epoch_stakes_map,
             .stakes_cache = &stakes_cache,
             .epoch = epoch,
-            .parent_epoch = null, // no parent yet
+            .parent_slots_epoch = null, // no parent yet
             .genesis_creation_time = genesis_config.creation_time,
             .ns_per_slot = @intCast(genesis_config.nsPerSlot()),
             .update_sysvar_deps = update_sysvar_deps,
@@ -442,7 +442,7 @@ fn executeTxnContext(
 
     parent_slot = slot;
     parent_hash = slot_hash;
-    const parent_epoch = epoch;
+    const parent_slots_epoch = epoch;
 
     slot = loadSlot(&pb_txn_ctx);
     if (slot > 0) {
@@ -510,7 +510,7 @@ fn executeTxnContext(
             try ancestors.addSlot(allocator, slot);
 
             // Update epoch
-            if (parent_epoch < epoch) {
+            if (parent_slots_epoch < epoch) {
                 // Bank::process_new_epoch(...)
 
                 try bank_methods.applyFeatureActivations(
@@ -532,7 +532,7 @@ fn executeTxnContext(
                     stakes.epoch = epoch;
                     std.debug.assert(stakes.stake_history.entries.len == 0);
                     stakes.stake_history.entries.appendAssumeCapacity(.{
-                        .epoch = parent_epoch,
+                        .epoch = parent_slots_epoch,
                         .stake = .{
                             .effective = 0,
                             .activating = 0,
@@ -612,7 +612,7 @@ fn executeTxnContext(
                     allocator,
                     .{
                         .epoch = epoch,
-                        .parent_epoch = parent_epoch,
+                        .parent_slots_epoch = parent_slots_epoch,
                         .stakes_cache = &stakes_cache,
                         .update_sysvar_deps = update_sysvar_deps,
                     },
@@ -623,7 +623,7 @@ fn executeTxnContext(
                     .epoch_stakes_map = &epoch_stakes_map,
                     .stakes_cache = &stakes_cache,
                     .epoch = epoch,
-                    .parent_epoch = parent_epoch,
+                    .parent_slots_epoch = parent_slots_epoch,
                     .genesis_creation_time = genesis_config.creation_time,
                     .ns_per_slot = @intCast(genesis_config.nsPerSlot()),
                     .update_sysvar_deps = update_sysvar_deps,
