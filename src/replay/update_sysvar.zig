@@ -91,7 +91,7 @@ pub fn updateSysvarsForNewSlot(
             .epoch_schedule = &epoch_schedule,
             .epoch_stakes_map = &epoch_stakes_map,
             .stakes_cache = &state.stakes_cache,
-            .epoch = epoch, // TODO: redundant with passing schedule and slot
+            .epoch = epoch,
             .parent_slots_epoch = parent_slots_epoch,
             .genesis_creation_time = epoch_info.genesis_creation_time,
             .ns_per_slot = @intCast(epoch_info.ns_per_slot),
