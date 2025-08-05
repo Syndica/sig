@@ -513,7 +513,6 @@ fn computeBankStats(
                 break :blk slot_info.constants.block_height;
             };
             fork_stats.my_latest_landed_vote = computed_bank_state.my_latest_landed_vote;
-            fork_stats.my_latest_landed_vote = computed_bank_state.my_latest_landed_vote;
             fork_stats.computed = true;
             try new_stats.append(allocator, slot);
         }
