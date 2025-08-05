@@ -241,12 +241,15 @@ pub const BatchAccountCache = struct {
         }
     }
 
-    pub fn deinit(self: *BatchAccountCache, allocator: Allocator) void {
-        for (self.account_cache.values()) |account|
+    pub fn deinit(self_const: BatchAccountCache, allocator: Allocator) void {
+        var self = self_const;
+        for (self.account_cache.values()) |account| {
             allocator.free(account.data);
+        }
         self.account_cache.deinit(allocator);
-        for (self.sysvar_instruction_account_datas.items) |account|
+        for (self.sysvar_instruction_account_datas.items) |account| {
             allocator.free(account.data);
+        }
         self.sysvar_instruction_account_datas.deinit(allocator);
     }
 
