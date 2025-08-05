@@ -133,6 +133,7 @@ pub fn execute(
         .ok => |status| if (status != 0) {
             const execution_error = sig.vm.executionErrorFromStatusCode(status);
             if (execution_error == error.Custom) ic.tc.custom_error = @intCast(status);
+            if (execution_error == error.GenericError) ic.tc.custom_error = 0;
             maybe_execute_error = execution_error;
         },
         .err => |err| {
