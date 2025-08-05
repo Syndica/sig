@@ -141,7 +141,10 @@ pub const BatchAccountCache = struct {
 
             for (tx.instruction_infos) |instr| {
                 const program_key = instr.program_meta.pubkey;
-                if (program_key.equals(&runtime.ids.NATIVE_LOADER_ID)) continue;
+
+                if (program_key.equals(&runtime.ids.NATIVE_LOADER_ID) or
+                    program_key.equals(&runtime.ids.SYSVAR_INSTRUCTIONS_ID)) continue;
+
                 const program_account = map.get(program_key) orelse
                     unreachable; // safe: we loaded all accounts in the previous loop
 
@@ -183,9 +186,10 @@ pub const BatchAccountCache = struct {
         // load v3 loader's ProgramData accounts.
         for (transactions) |tx| {
             for (tx.instruction_infos) |instr| {
-                const program_key = tx.accounts.items(
-                    .pubkey,
-                )[instr.program_meta.index_in_transaction];
+                const program_key = instr.program_meta.pubkey;
+
+                if (program_key.equals(&runtime.ids.NATIVE_LOADER_ID) or
+                    program_key.equals(&runtime.ids.SYSVAR_INSTRUCTIONS_ID)) continue;
 
                 const program_account = map.get(program_key) orelse
                     unreachable; // safe: we loaded all accounts in the previous loop
