@@ -120,8 +120,6 @@ pub const BatchAccountCache = struct {
                     }
                 };
 
-                if (!created_new_account) std.debug.assert(account.lamports > 0); // this account should be gone?
-
                 accumulateAndCheckLoadedAccountDataSize(
                     tx_data_loaded,
                     account.data.len,
@@ -478,6 +476,9 @@ fn getAccountSharedData(
         => return error.GetAccountFailedUnexpectedly,
     } orelse return null;
     defer account.deinit(reader.allocator());
+
+    // NOTE: Tmp fix since accounts DB should not return accounts with 0 lamports.
+    if (account.lamports == 0) return null;
 
     const shared_account: AccountSharedData = .{
         .data = try account.data.readAllAllocate(allocator),
