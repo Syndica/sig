@@ -165,12 +165,12 @@ fn resolveTransaction(
                 .is_signer = false,
                 .is_writable = false,
             } else {
-                return error.InvalidAccountIndex;
+                return error.InvalidAddressLookupTableIndex;
             };
         }
 
         if (input_ix.program_index >= message.account_keys.len) {
-            return error.InvalidAccountIndex;
+            return error.InvalidAddressLookupTableIndex;
         }
         output_ix.* = .{
             .program_meta = ProgramMeta{
@@ -211,13 +211,12 @@ fn resolveLookupTableAccounts(
 
     // handle lookup table accounts
     for (address_lookups) |lookup| {
-        const table = try getLookupTable(account_reader, lookup.table_address) orelse
-            return error.LookupTableAccountNotFound;
+        const table = try getLookupTable(account_reader, lookup.table_address);
 
         // resolve writable addresses
         for (lookup.writable_indexes) |index| {
             if (table.addresses.len < index + 1) {
-                return error.LookupTableAccountTooSmall;
+                return error.InvalidAddressLookupTableIndex;
             }
             writable_accounts.appendAssumeCapacity(table.addresses[index]);
         }
@@ -225,7 +224,7 @@ fn resolveLookupTableAccounts(
         // resolve readonly addresses
         for (lookup.readonly_indexes) |index| {
             if (table.addresses.len < index + 1) {
-                return error.LookupTableAccountTooSmall;
+                return error.InvalidAddressLookupTableIndex;
             }
             readonly_accounts.appendAssumeCapacity(table.addresses[index]);
         }
@@ -240,20 +239,31 @@ fn resolveLookupTableAccounts(
 fn getLookupTable(
     account_reader: SlotAccountReader,
     table_address: Pubkey,
-) !?AddressLookupTable {
+) !AddressLookupTable {
     // TODO: Ensure the account comes from a valid slot by checking
     // it against the current slot's ancestors. This won't be usable
     // until consensus is implemented in replay, so it's not
     // implemented yet.
-    const account = try account_reader.get(table_address) orelse return null;
+    const account = try account_reader.get(table_address) orelse
+        return error.AddressLookupTableNotFound;
     defer account.deinit(account_reader.allocator());
-    if (account.data.len() > AddressLookupTable.MAX_SERIALIZED_SIZE) {
-        return error.LookupTableAccountOverflow;
+
+    if (!account.owner.equals(&sig.runtime.program.address_lookup_table.ID)) {
+        return error.InvalidAddressLookupTableOwner;
     }
+
+    if (account.data.len() > AddressLookupTable.MAX_SERIALIZED_SIZE) {
+        return error.InvalidAddressLookupTableData;
+    }
+
     var buf: [AddressLookupTable.MAX_SERIALIZED_SIZE]u8 = undefined;
     const account_bytes = buf[0..account.data.len()];
     account.data.readAll(account_bytes);
-    return try AddressLookupTable.deserialize(account_bytes);
+
+    return AddressLookupTable.deserialize(account_bytes) catch {
+        return error.InvalidAddressLookupTableData;
+    };
+
     // NOTE: deactivated lookup tables are allowed to be used,
     // according to agave's implementation. see here, where agave
     // discards the value:
