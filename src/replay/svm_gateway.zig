@@ -54,8 +54,6 @@ pub const SvmGateway = struct {
         sysvar_cache: SysvarCache,
         vm_environment: vm.Environment,
         next_vm_environment: ?vm.Environment,
-        // TODO figure out how to share this safely across threads so this
-        // struct doesn't need to be created once per batch
         accounts: BatchAccountCache,
         programs: ProgramMap,
     },
@@ -95,12 +93,13 @@ pub const SvmGateway = struct {
             );
         }
 
-        const budget = ComputeBudget.default(1_400_000); // TODO should this be dynamic?
-
         const vm_environment = try vm.Environment.initV1(
             allocator,
             &params.feature_set,
-            &budget,
+            // This does not actually set the compute budget. it's only used to
+            // set that max call depth and stack frame size. the actual compute
+            // budgets are determined per transaction.
+            &ComputeBudget.default(1_400_000),
             false,
             true, // TODO: should this be false?
         );
