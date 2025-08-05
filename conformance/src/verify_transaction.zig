@@ -41,7 +41,6 @@ pub fn verifyTransaction(
             feature_set,
         );
         if (maybe_verify_error) |verify_error| {
-            std.debug.print("Precompile verification failed\n", .{});
             const converted = utils.convertTransactionError(verify_error);
             return .{ .err = .{
                 .sanitization_error = true,
@@ -59,7 +58,6 @@ pub fn verifyTransaction(
         &.{transaction},
     ) catch |err| {
         const err_code = switch (err) {
-            error.Overflow => 123456,
             error.OutOfMemory => return error.OutOfMemory,
             else => @panic("TODO: unsure how to handle errors here atm"),
             // TODO: doesn't exist in the error set yet, missing some logic?
@@ -69,7 +67,6 @@ pub fn verifyTransaction(
             // error.InvalidAddressLookupTableData => transactionErrorToInt(.InvalidAddressLookupTableData),
             // error.InvalidAddressLookupTableIndex => transactionErrorToInt(.InvalidAddressLookupTableIndex),
         };
-        std.debug.print("resolve_lookup.resolveBatch failed\n", .{});
         return .{ .err = .{
             .sanitization_error = true,
             .status = err_code,
