@@ -372,7 +372,6 @@ fn processReplayResults(
             var progress = replay_state.progress_map.map.getPtr(slot) orelse
                 return error.MissingBankProgress;
 
-            // TODO Update bank_progress.replay_stats
             // TODO Also update mark_dead_slot in an error path?
 
             // Check if we are the leader for this block
