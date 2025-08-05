@@ -1217,6 +1217,40 @@ pub const BlockstoreReader = struct {
     }
 
     // pub fn is_last_fec_set_full missing ???
+    // Temporary method to return the block id without all the checks implememented in Agave.
+    pub fn lastFecSetUnchecked(
+        self: *Self,
+        slot: Slot,
+    ) !?Hash {
+        const slot_meta: SlotMeta = (try self.db.get(
+            self.allocator,
+            schema.slot_meta,
+            slot,
+        )) orelse return null;
+
+        const maybe_last_shred_index = slot_meta.last_index;
+        const last_shred_index = maybe_last_shred_index orelse return null;
+
+        const start_index = std.math.sub(u64, last_shred_index, 31) catch return null;
+
+        if (start_index > std.math.maxInt(u32)) {
+            return error.ValueTooLarge;
+        }
+        const start_index_u32: u32 = @intCast(start_index);
+
+        if (last_shred_index > std.math.maxInt(u32)) {
+            return error.ValueTooLarge;
+        }
+        const last_shred_index_u32: u32 = @intCast(last_shred_index);
+
+        const entries = try self.getEntriesInDataBlock(
+            slot,
+            start_index_u32,
+            last_shred_index_u32,
+            &slot_meta,
+        );
+        return if (entries.len > 0) entries[entries.len - 1].hash else null;
+    }
 
     /// Returns a mapping from each elements of `slots` to a list of the
     /// element's children slots.

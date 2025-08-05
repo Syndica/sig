@@ -352,7 +352,7 @@ fn processReplayResults(
         switch (status) {
             .confirm => |confirm_slot_future| {
                 while (try confirm_slot_future.poll() == .pending) {
-                    // TODO: Potential for infinity loop here? Is this guaranteed
+                    // TODO: Potential for infinite loop here? Is this guaranteed
                     // to return non-pending at some point?
                     std.time.sleep(std.time.ns_per_ms);
                 } else {
@@ -389,9 +389,16 @@ fn processReplayResults(
             const block_id: ?Hash = if (!is_leader_block) blk: {
                 // If the block does not have at least DATA_SHREDS_PER_FEC_BLOCK correctly retransmitted
                 // shreds in the last FEC set, mark it dead. No reason to perform this check on our leader block.
-                // TODO Also update mark_dead_slot in an error path?
-                break :blk null;
-            } else null;
+                // TODO add blockstore.check_last_fec_set_and_get_block_id ie with the checks.
+                break :blk try replay_state.blockstore_reader.lastFecSetUnchecked(slot);
+            } else {
+                try markDeadSlot(
+                    slot,
+                    replay_state.progress_map,
+                    replay_state.ledger_result_writer,
+                );
+                continue;
+            };
 
             slot_info.state.hash = .init(block_id);
 
@@ -435,7 +442,7 @@ fn processReplayResults(
             progress.fork_stats.bank_hash = hash;
 
             const slot_frozen_state: SlotFrozenState = .fromState(
-                .noop,
+                .from(replay_state.logger),
                 slot,
                 hash,
                 replay_state.duplicate_slots_tracker,
