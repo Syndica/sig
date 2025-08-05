@@ -82,7 +82,9 @@ pub fn updateSysvarsForNewSlot(
     });
 
     var epoch_stakes_map = sig.core.EpochStakesMap.empty;
+    defer epoch_stakes_map.deinit(allocator);
     try epoch_stakes_map.put(allocator, epoch, epoch_info.stakes); // TODO better approach
+
     try updateClock(
         allocator,
         .{
@@ -92,8 +94,8 @@ pub fn updateSysvarsForNewSlot(
             .stakes_cache = &state.stakes_cache,
             .epoch = epoch, // TODO: redundant with passing schedule and slot
             .parent_epoch = parent_epoch,
-            .genesis_creation_time = undefined, // TODO
-            .ns_per_slot = undefined, // TODO
+            .genesis_creation_time = epoch_info.genesis_creation_time,
+            .ns_per_slot = @intCast(epoch_info.ns_per_slot),
             .update_sysvar_deps = sysvar_deps,
         },
     );
@@ -759,7 +761,7 @@ fn insertSysvarCacheAccounts(
         RecentBlockhashes,
     }) |Sysvar| {
         const old_account = if (inherit_from_old_account)
-            accounts_db.getAccount(&Sysvar.ID) catch null
+            accounts_db.getAccountLatest(&Sysvar.ID) catch null
         else
             null;
         defer if (old_account) |acc| acc.deinit(allocator) else {};

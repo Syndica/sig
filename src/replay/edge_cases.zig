@@ -1463,13 +1463,12 @@ const TestData = struct {
                 } else null,
             );
 
-            const gop = try slot_tracker.getOrPut(
-                allocator,
-                slot_info.slot,
-                try slot_info.toDummyElem(allocator, slot_infos[0..], random),
-            );
+            var elem = try slot_info.toDummyElem(allocator, slot_infos[0..], random);
+            const gop = try slot_tracker.getOrPut(allocator, slot_info.slot, elem);
             if (gop.found_existing) {
                 std.debug.assert(slot_info.slot == root_slot);
+                elem.state.deinit(allocator);
+                elem.constants.deinit(allocator);
             }
         }
 

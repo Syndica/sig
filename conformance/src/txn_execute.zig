@@ -797,10 +797,12 @@ fn executeTxnContext(
     const current_epoch_stakes = try EpochStakes.init(allocator);
     defer current_epoch_stakes.deinit(allocator);
 
+    var status_cache = StatusCache.DEFAULT;
+
     const environment = TransactionExecutionEnvironment{
         .ancestors = &ancestors,
         .feature_set = &feature_set,
-        .status_cache = &StatusCache.default(),
+        .status_cache = &status_cache,
         .sysvar_cache = &sysvar_cache,
         .rent_collector = &rent_collector,
         .blockhash_queue = &blockhash_queue,

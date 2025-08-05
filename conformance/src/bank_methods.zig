@@ -245,7 +245,7 @@ fn tryGetAccount(
     accounts_db: *AccountsDb,
     pubkey: Pubkey,
 ) !?Account {
-    return accounts_db.getAccount(&pubkey) catch |err| switch (err) {
+    return accounts_db.getAccountLatest(&pubkey) catch |err| switch (err) {
         error.PubkeyNotInIndex => null,
         else => error.AccountsDbInternal,
     };

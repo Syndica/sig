@@ -184,7 +184,9 @@ pub const SlotState = struct {
     collected_priority_fees: Atomic(u64),
 
     pub fn deinit(self: *SlotState, allocator: Allocator) void {
-        var blockhash_queue = self.blockhash_queue.write();
+        self.stakes_cache.deinit(allocator);
+
+        var blockhash_queue = self.blockhash_queue.tryWrite() orelse unreachable;
         defer blockhash_queue.unlock();
         blockhash_queue.get().deinit(allocator);
     }

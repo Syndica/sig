@@ -1766,7 +1766,7 @@ pub fn lastVotedSlotInBank(
     accounts_db: *AccountsDB,
     vote_account_pubkey: *const Pubkey,
 ) !?Slot {
-    const vote_account = try accounts_db.getAccount(vote_account_pubkey) orelse return null;
+    const vote_account = try accounts_db.getAccountLatest(vote_account_pubkey) orelse return null;
     const vote_state = stateFromAccount(
         allocator,
         &vote_account,

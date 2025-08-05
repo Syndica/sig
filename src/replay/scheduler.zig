@@ -196,7 +196,10 @@ pub const TransactionScheduler = struct {
                 }
             },
             .pending => return .pending,
-            .err => |err| return err,
+            .err => |err| {
+                self.logger.err().logf("transaction batch processor failed with error: {}", .{err});
+                return err;
+            },
         }
     }
 
@@ -265,16 +268,14 @@ test "TransactionScheduler: happy path" {
 
     var rng = std.Random.DefaultPrng.init(123);
 
+    var state = try replay.confirm_slot.TestState.init(allocator);
+    defer state.deinit(allocator);
+
     var thread_pool = ThreadPool.init(.{});
     defer {
         thread_pool.shutdown();
         thread_pool.deinit();
     }
-
-    // TODO fix undefined
-    var scheduler = try TransactionScheduler
-        .initCapacity(allocator, .FOR_TESTS, undefined, 10, &thread_pool, undefined, undefined);
-    defer scheduler.deinit();
 
     var tx_arena = std.heap.ArenaAllocator.init(allocator);
     defer tx_arena.deinit();
@@ -286,6 +287,73 @@ test "TransactionScheduler: happy path" {
         try .initRandom(tx_arena.allocator(), rng.random()),
         try .initRandom(tx_arena.allocator(), rng.random()),
     };
+    try state.makeTransactionsPassable(allocator, &transactions);
+
+    var scheduler = try TransactionScheduler
+        .initCapacity(
+        allocator,
+        .FOR_TESTS,
+        state.committer(),
+        10,
+        &thread_pool,
+        state.svmParams(),
+        &state.exit,
+    );
+    defer scheduler.deinit();
+
+    {
+        const batch1 = try resolveBatch(allocator, .noop, transactions[0..3]);
+        errdefer batch1.deinit(allocator);
+
+        const batch2 = try resolveBatch(allocator, .noop, transactions[3..6]);
+        errdefer batch2.deinit(allocator);
+
+        scheduler.addBatchAssumeCapacity(batch1);
+        scheduler.addBatchAssumeCapacity(batch2);
+    }
+
+    try std.testing.expectEqual(.done, try replay.confirm_slot.testAwait(&scheduler));
+}
+
+test "TransactionScheduler: duplicate batch passes through to svm" {
+    const allocator = std.testing.allocator;
+    const Transaction = sig.core.Transaction;
+    const resolveBatch = replay.resolve_lookup.resolveBatch;
+
+    var rng = std.Random.DefaultPrng.init(123);
+
+    var state = try replay.confirm_slot.TestState.init(allocator);
+    defer state.deinit(allocator);
+
+    var thread_pool = ThreadPool.init(.{});
+    defer {
+        thread_pool.shutdown();
+        thread_pool.deinit();
+    }
+
+    var tx_arena = std.heap.ArenaAllocator.init(allocator);
+    defer tx_arena.deinit();
+    const transactions = [_]Transaction{
+        try .initRandom(tx_arena.allocator(), rng.random()),
+        try .initRandom(tx_arena.allocator(), rng.random()),
+        try .initRandom(tx_arena.allocator(), rng.random()),
+        try .initRandom(tx_arena.allocator(), rng.random()),
+        try .initRandom(tx_arena.allocator(), rng.random()),
+        try .initRandom(tx_arena.allocator(), rng.random()),
+    };
+    try state.makeTransactionsPassable(allocator, &transactions);
+
+    var scheduler = try TransactionScheduler
+        .initCapacity(
+        allocator,
+        .noop,
+        state.committer(),
+        10,
+        &thread_pool,
+        state.svmParams(),
+        &state.exit,
+    );
+    defer scheduler.deinit();
 
     {
         const batch1 = try resolveBatch(allocator, .noop, transactions[0..3]);
@@ -294,18 +362,17 @@ test "TransactionScheduler: happy path" {
         const batch1_dupe = try resolveBatch(allocator, .noop, transactions[0..3]);
         errdefer batch1_dupe.deinit(allocator);
 
-        const batch2 = try resolveBatch(allocator, .noop, transactions[3..6]);
-        errdefer batch2.deinit(allocator);
-
         scheduler.addBatchAssumeCapacity(batch1);
-        scheduler.addBatchAssumeCapacity(batch2);
 
         // should be no failures on account collision with the first time this batch was scheduled.
         // scheduler should just know to run it separately
         scheduler.addBatchAssumeCapacity(batch1_dupe);
     }
 
-    try std.testing.expectEqual(.done, try replay.confirm_slot.testAwait(&scheduler));
+    try std.testing.expectEqual(
+        ConfirmSlotStatus{ .err = .{ .invalid_transaction = .AlreadyProcessed } },
+        try replay.confirm_slot.testAwait(&scheduler),
+    );
 }
 
 test "TransactionScheduler: failed account locks" {
@@ -315,21 +382,32 @@ test "TransactionScheduler: failed account locks" {
 
     var rng = std.Random.DefaultPrng.init(0);
 
+    var state = try replay.confirm_slot.TestState.init(allocator);
+    defer state.deinit(allocator);
+
     var thread_pool = ThreadPool.init(.{});
     defer {
         thread_pool.shutdown();
         thread_pool.deinit();
     }
 
-    // TODO fix undefined
-    var scheduler = try TransactionScheduler
-        .initCapacity(allocator, .FOR_TESTS, undefined, 10, &thread_pool, undefined, undefined);
-    defer scheduler.deinit();
-
     const tx = try Transaction.initRandom(allocator, rng.random());
     defer tx.deinit(allocator);
 
     const unresolved_batch = [_]Transaction{ tx, tx };
+    try state.makeTransactionsPassable(allocator, &unresolved_batch);
+
+    var scheduler = try TransactionScheduler
+        .initCapacity(
+        allocator,
+        .FOR_TESTS,
+        state.committer(),
+        10,
+        &thread_pool,
+        state.svmParams(),
+        &state.exit,
+    );
+    defer scheduler.deinit();
 
     {
         const batch1 = try resolveBatch(allocator, .noop, &unresolved_batch);
@@ -351,16 +429,14 @@ test "TransactionScheduler: signature verification failure" {
 
     var rng = std.Random.DefaultPrng.init(0);
 
+    var state = try replay.confirm_slot.TestState.init(allocator);
+    defer state.deinit(allocator);
+
     var thread_pool = ThreadPool.init(.{});
     defer {
         thread_pool.shutdown();
         thread_pool.deinit();
     }
-
-    // TODO fix undefined
-    var scheduler = try TransactionScheduler
-        .initCapacity(allocator, .FOR_TESTS, undefined, 10, &thread_pool, undefined, undefined);
-    defer scheduler.deinit();
 
     var tx_arena = std.heap.ArenaAllocator.init(allocator);
     defer tx_arena.deinit();
@@ -372,6 +448,19 @@ test "TransactionScheduler: signature verification failure" {
         try .initRandom(tx_arena.allocator(), rng.random()),
         try .initRandom(tx_arena.allocator(), rng.random()),
     };
+    try state.makeTransactionsPassable(allocator, &transactions);
+
+    var scheduler = try TransactionScheduler
+        .initCapacity(
+        allocator,
+        .noop,
+        state.committer(),
+        10,
+        &thread_pool,
+        state.svmParams(),
+        &state.exit,
+    );
+    defer scheduler.deinit();
 
     const replaced_sigs = try tx_arena.allocator()
         .dupe(sig.core.Signature, transactions[5].signatures);
