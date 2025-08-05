@@ -698,20 +698,20 @@ fn executeTxnContext(
 
     // Get lamports per signature from first entry in recent blockhashes
     const lamports_per_signature = blk: {
-        var sysvar_cache: SysvarCache = .{};
-        defer sysvar_cache.deinit(allocator);
-        try update_sysvar.fillMissingSysvarCacheEntries(
-            allocator,
-            accounts_db.accountReader().forSlot(&ancestors),
-            &sysvar_cache,
-        );
+        const account = try accounts_db.getAccountWithAncestors(
+            &RecentBlockhashes.ID,
+            &ancestors,
+        ) orelse break :blk null;
+        defer account.deinit(allocator);
 
-        const recent_blockhashes = sysvar_cache.get(RecentBlockhashes) catch break :blk null;
-        // const first_entry = recent_blockhashes.getFirst() orelse break :blk null;
-        const first_entry = if (recent_blockhashes.entries.len == 0)
-            break :blk null
-        else
-            recent_blockhashes.entries.buffer[0];
+        var data = account.data.iterator();
+        const reader = data.reader();
+
+        const len = try sig.bincode.readInt(u64, reader, .{});
+
+        if (len == 0) break :blk null;
+
+        const first_entry = try sig.bincode.read(allocator, RecentBlockhashes.Entry, reader, .{});
 
         break :blk if (first_entry.lamports_per_signature != 0)
             first_entry.lamports_per_signature
