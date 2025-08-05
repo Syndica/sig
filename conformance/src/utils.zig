@@ -21,11 +21,18 @@ const intFromInstructionError = sig.core.instruction.intFromInstructionError;
 
 const Pubkey = sig.core.Pubkey;
 
-const Converted = struct {
+pub const Converted = struct {
     err: u32,
     instruction_error: u32,
     custom_error: u32,
     instruction_index: u32,
+
+    pub const default: Converted = .{
+        .err = 0,
+        .instruction_error = 0,
+        .custom_error = 0,
+        .instruction_index = 0,
+    };
 };
 
 pub fn convertTransactionError(err: sig.ledger.transaction_status.TransactionError) Converted {

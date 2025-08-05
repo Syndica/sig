@@ -857,25 +857,19 @@ fn serializeOutput(
                 .fees_only => false,
             };
 
-            // TODO: just hardcoding InstructionError for now, can something else happen?
-            // our current design assumes that the transaction execution can only return
-            // InstructionError, which seems wrong. Not to mention that we don't have a way
-            // to access *which* instruction in the transaction is the one that errored.
-            const status: u32, const instr_err: u32 = switch (txn) {
-                .executed => |executed| .{
-                    if (executed.executed_transaction.err != null) 9 else 0,
-                    if (executed.executed_transaction.err) |instr_err|
-                        @intFromEnum(instr_err) + 1
-                    else
-                        0,
-                },
-                .fees_only => |fees_only| fees_only: {
-                    const err_codes = utils.convertTransactionError(fees_only.err);
-                    break :fees_only .{
-                        err_codes.err,
-                        err_codes.instruction_error,
-                    };
-                },
+            const converted: utils.Converted = switch (txn) {
+                .executed => |executed| if (executed.executed_transaction.err) |instr_err| .{
+                    // hardcode InstructionError, since nothing else could be returned from executeTransaction
+                    .err = 9,
+                    .instruction_error = @intFromEnum(instr_err) + 1,
+                    // TODO: special case for precompile failures
+                    .custom_error = switch (instr_err) {
+                        .Custom => |v| v,
+                        else => 0,
+                    },
+                    .instruction_index = @intCast(executed.executed_transaction.instruction_trace.?.len),
+                } else .default,
+                .fees_only => |fees_only| utils.convertTransactionError(fees_only.err),
             };
 
             const rent = switch (txn) {
@@ -963,8 +957,10 @@ fn serializeOutput(
                 .is_ok = is_ok,
                 .rent = rent,
 
-                .status = status,
-                .instruction_error = instr_err,
+                .status = converted.err,
+                .instruction_error = converted.instruction_error,
+                .instruction_error_index = converted.instruction_index,
+                .custom_error = converted.custom_error,
 
                 .resulting_state = resulting_state,
                 .fee_details = .{
