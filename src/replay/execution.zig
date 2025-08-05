@@ -368,8 +368,6 @@ fn processReplayResults(
         const parent_hash = slot_info.constants.parent_hash;
 
         if (slot_info.state.tickHeight() == slot_info.constants.max_tick_height) {
-            // TODO add bank.wait_for_completed_scheduler()
-
             // Get bank progress from progress map
             var progress = replay_state.progress_map.map.getPtr(slot) orelse
                 return error.MissingBankProgress;
@@ -405,9 +403,9 @@ fn processReplayResults(
             processed_a_slot = true;
 
             // TODO Send things out via a couple of senders
-            // TODO cluster_slots_update_sender;
-            // TODO transaction_status_sender;
-            // TODO cost_update_sender;
+            // - cluster_slots_update_sender;
+            // - transaction_status_sender;
+            // - cost_update_sender;
 
             const hash = slot_info.state.hash.readCopy() orelse
                 return error.MissingHash;
