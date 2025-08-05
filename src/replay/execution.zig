@@ -352,7 +352,17 @@ fn processReplayResults(
         switch (status) {
             .confirm => |confirm_slot_future| {
                 while (try confirm_slot_future.poll() == .pending) {
+                    // TODO: Potential for infinity loop here? Is this guaranteed
+                    // to return non-pending at some point?
                     std.time.sleep(std.time.ns_per_ms);
+                } else {
+                    if (try confirm_slot_future.poll() == .err) {
+                        try markDeadSlot(
+                            slot,
+                            replay_state.progress_map,
+                            replay_state.ledger_result_writer,
+                        );
+                    }
                 }
                 for (confirm_slot_future.entries) |entry| {
                     tx_count += entry.transactions.len;
@@ -371,8 +381,6 @@ fn processReplayResults(
             // Get bank progress from progress map
             var progress = replay_state.progress_map.map.getPtr(slot) orelse
                 return error.MissingBankProgress;
-
-            // TODO Also update mark_dead_slot in an error path?
 
             // Check if we are the leader for this block
             const is_leader_block =
@@ -499,4 +507,17 @@ fn processReplayResults(
     }
 
     return processed_a_slot;
+}
+
+fn markDeadSlot(
+    dead_slot: Slot,
+    progress_map: *ProgressMap,
+    ledger_result_writer: *sig.ledger.LedgerResultWriter,
+) !void {
+    // TODO add getForkProgress
+    var fork_progress = progress_map.map.getPtr(dead_slot) orelse
+        return error.MissingBankProgress;
+    fork_progress.is_dead = true;
+    try ledger_result_writer.setDeadSlot(dead_slot);
+    // TODO Add and update slot stats blockstore.slots_stats.mark_dead(slot);
 }
