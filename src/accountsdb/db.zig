@@ -2147,17 +2147,15 @@ pub const AccountsDB = struct {
 
         const slot_entry = try slot_ref_map.getOrPut(slot);
 
-        if (!slot_entry.found_existing) {
-            // no entry means realloc always needed, value set in realloc_needed block
-            slot_entry.value_ptr.* = .{
-                .refs = .empty,
-                .global_index = std.math.maxInt(u64), // u64-max == invalid value / replaced soon
-            };
-        }
-        const realloc_needed = slot_entry.value_ptr.refs.unusedCapacitySlice().len < pubkeys.len;
-        if (!slot_entry.found_existing) std.debug.assert(realloc_needed);
+        // no entry => realloc always needed
+        const realloc_needed = !slot_entry.found_existing or
+            slot_entry.value_ptr.refs.unusedCapacitySlice().len < pubkeys.len;
 
-        const old_refs = slot_entry.value_ptr.refs.items;
+        const old_refs = if (!slot_entry.found_existing)
+            &.{}
+        else
+            slot_entry.value_ptr.refs.items;
+
         const new_len = old_refs.len + pubkeys.len;
 
         if (realloc_needed) {
@@ -2166,24 +2164,22 @@ pub const AccountsDB = struct {
             // round up the size a little, so we don't realloc every time
             const new_capacity = std.math.ceilPowerOfTwo(usize, new_len) catch new_len;
 
-            const reference_buf, const global_ref_index = try self.account_index
+            const new_ref_buf, const global_ref_index = try self.account_index
                 .reference_manager.allocOrExpand(new_capacity);
 
-            slot_entry.value_ptr.global_index = global_ref_index;
-
-            @memset(reference_buf, .DEFAULT);
-            for (0.., reference_buf[0..new_len]) |i, *ref| {
+            @memset(new_ref_buf, .DEFAULT);
+            for (0.., new_ref_buf[0..new_len]) |i, *new_ref| {
                 if (i < old_refs.len) {
-                    ref.* = old_refs[i];
+                    new_ref.* = old_refs[i];
 
                     // go back to prev & rewrite its next to make it valid again (we're moving these accountrefs)
-                    if (ref.prev_ptr) |prev| {
-                        prev.next_ptr = ref;
+                    if (new_ref.prev_ptr) |prev| {
+                        prev.next_ptr = new_ref;
                         prev.next_index = global_ref_index + i;
                     }
                 } else {
                     // new ref
-                    ref.* = AccountRef{
+                    new_ref.* = AccountRef{
                         .pubkey = pubkeys[i - old_refs.len],
                         .slot = slot,
                         .location = .{ .UnrootedMap = .{ .index = i } },
@@ -2193,41 +2189,41 @@ pub const AccountsDB = struct {
 
             // fix up any copied references' heads
             {
-                for (0.., reference_buf[0..old_refs.len]) |i, *ref| {
+                for (0.., new_ref_buf[0..old_refs.len]) |i, *new_ref| {
                     const shard_map: *ShardedPubkeyRefMap.PubkeyRefMap, var shard_map_lg =
-                        self.account_index.pubkey_ref_map.getShard(&ref.pubkey).writeWithLock();
+                        self.account_index.pubkey_ref_map.getShard(&new_ref.pubkey).writeWithLock();
                     defer shard_map_lg.unlock();
 
                     // if we just moved an accountref which is the head, fix up the head
-                    if (shard_map.getPtr(ref.pubkey)) |head| {
-                        if (head.ref_ptr.slot == ref.slot and
-                            head.ref_ptr.pubkey.equals(&ref.pubkey))
+                    if (shard_map.getPtr(new_ref.pubkey)) |head| {
+                        if (head.ref_ptr.slot == new_ref.slot and
+                            head.ref_ptr.pubkey.equals(&new_ref.pubkey))
                         {
                             head.ref_index = global_ref_index + i;
-                            head.ref_ptr = ref;
+                            head.ref_ptr = new_ref;
                         }
                     }
 
-                    const head = shard_map.getPtr(ref.pubkey) orelse continue;
-                    if (head.ref_ptr.slot == ref.slot and head.ref_ptr.pubkey.equals(&ref.pubkey)) {
+                    const head = shard_map.getPtr(new_ref.pubkey) orelse continue;
+                    if (head.ref_ptr.slot == new_ref.slot and head.ref_ptr.pubkey.equals(&new_ref.pubkey)) {
                         head.ref_index = global_ref_index + i;
-                        head.ref_ptr = ref;
+                        head.ref_ptr = new_ref;
                     }
                 }
             }
 
             // insert + check if inserted
-            for (0.., reference_buf[0..new_len]) |i, *ref| {
+            for (0.., new_ref_buf[0..new_len]) |i, *new_ref| {
                 if (i < old_refs.len) continue;
 
                 const was_inserted = try self.account_index.indexRefIfNotDuplicateSlot(
-                    ref,
+                    new_ref,
                     global_ref_index + i,
                 );
                 if (!was_inserted) {
                     self.logger.warn().logf(
                         "account was not referenced because its slot was a duplicate: {any}",
-                        .{.{ .slot = ref.slot, .pubkey = ref.pubkey }},
+                        .{.{ .slot = new_ref.slot, .pubkey = new_ref.pubkey }},
                     );
                     // TODO: Make this error actually impossible to reach.
                     // Hitting this error means the account was added to
@@ -2245,17 +2241,18 @@ pub const AccountsDB = struct {
                 std.debug.assert(self.account_index.exists(&pubkeys[i - old_refs.len], slot));
             }
 
-            // free old ref
-            if (slot_entry.found_existing) {
-                self.account_index.reference_manager.free(slot_entry.value_ptr.refs.items.ptr);
-            }
+            // replace + free old ref
+            const old_ref_ptr = slot_entry.value_ptr.refs.items.ptr;
             slot_entry.value_ptr.* = .{
                 .global_index = global_ref_index,
                 .refs = .{
                     .capacity = new_capacity,
-                    .items = reference_buf[0..new_len],
+                    .items = new_ref_buf[0..new_len],
                 },
             };
+            if (slot_entry.found_existing) {
+                self.account_index.reference_manager.free(old_ref_ptr);
+            }
         } else {
             // no realloc necessary
 
