@@ -2099,7 +2099,9 @@ pub const AccountsDB = struct {
             const old_account = slot_accounts[index];
             slot_accounts[index] = duplicated;
             inserted_duplicate = true;
-            old_account.deinit(self.allocator);
+
+            _ = old_account; // TODO: deinit later
+            // old_account.deinit(self.allocator);
 
             // no need to insert/reindex if we were able to overwrite an existing account
             return;
