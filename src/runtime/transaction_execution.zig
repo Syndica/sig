@@ -211,7 +211,9 @@ pub const ProcessedTransaction = union(enum(u8)) {
                 executed.executed_transaction.deinit(allocator);
                 executed.rollbacks.deinit(allocator);
             },
-            else => {},
+            .fees_only => |*fees_only| {
+                fees_only.rollbacks.deinit(allocator);
+            },
         }
     }
 

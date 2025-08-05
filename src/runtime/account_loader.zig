@@ -445,11 +445,7 @@ pub const BatchAccountCache = struct {
         } else self.account_cache.getPtr(key.*);
 
         const account = maybe_account orelse unreachable;
-        if (account.lamports == 0) {
-            // a previous instr deallocated this account
-            allocator.free(account.data);
-            return null;
-        }
+        if (account.lamports == 0) return null;
 
         // agave "inspects" the account here, which caches the initial state of writeable accounts
         // TODO: we should probably do this at init time
