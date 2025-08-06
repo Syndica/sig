@@ -58,10 +58,18 @@ pub fn verifyTransaction(
         &.{transaction},
     ) catch |err| {
         const err_code = switch (err) {
-            error.AddressLookupTableNotFound => transactionErrorToInt(.AddressLookupTableNotFound),
-            error.InvalidAddressLookupTableOwner => transactionErrorToInt(.InvalidAddressLookupTableOwner),
-            error.InvalidAddressLookupTableData => transactionErrorToInt(.InvalidAddressLookupTableData),
-            error.InvalidAddressLookupTableIndex => transactionErrorToInt(.InvalidAddressLookupTableIndex),
+            error.AddressLookupTableNotFound => transactionErrorToInt(
+                .AddressLookupTableNotFound,
+            ),
+            error.InvalidAddressLookupTableOwner => transactionErrorToInt(
+                .InvalidAddressLookupTableOwner,
+            ),
+            error.InvalidAddressLookupTableData => transactionErrorToInt(
+                .InvalidAddressLookupTableData,
+            ),
+            error.InvalidAddressLookupTableIndex => transactionErrorToInt(
+                .InvalidAddressLookupTableIndex,
+            ),
             else => std.debug.panic("Unexpected error: {s}\n", .{@errorName(err)}),
         };
         return .{ .err = .{
