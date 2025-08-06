@@ -243,6 +243,13 @@ fn replaySlot(state: *ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
         break :blk .{ entries, slot_is_full };
     };
 
+    const new_rate_activation_epoch =
+        if (slot_info.constants.feature_set.active
+            .get(sig.core.features.REDUCE_STAKE_WARMUP_COOLDOWN)) |active_slot|
+            state.epochs.schedule.getEpoch(active_slot)
+        else
+            null;
+
     const svm_params = SvmGateway.Params{
         .slot = slot,
         .max_age = sig.core.BlockhashQueue.MAX_RECENT_BLOCKHASHES / 2,
@@ -261,6 +268,7 @@ fn replaySlot(state: *ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
         .slot_state = slot_info.state,
         .status_cache = &state.status_cache,
         .stakes_cache = &slot_info.state.stakes_cache,
+        .new_rate_activation_epoch = new_rate_activation_epoch,
     };
 
     const verify_ticks_params = replay.confirm_slot.VerifyTicksParams{

@@ -19,6 +19,7 @@ pub const Committer = struct {
     slot_state: *sig.core.SlotState,
     status_cache: *sig.core.StatusCache,
     stakes_cache: *sig.core.StakesCache,
+    new_rate_activation_epoch: ?sig.core.Epoch,
 
     pub fn commitTransactions(
         self: Committer,
@@ -67,8 +68,12 @@ pub const Committer = struct {
         _ = self.slot_state.collected_rent.fetchAdd(rent_collected, .monotonic);
 
         for (accounts_to_store.keys(), accounts_to_store.values()) |pubkey, account| {
-            // TODO: look into null value here
-            try self.stakes_cache.checkAndStore(allocator, pubkey, account, null);
+            try self.stakes_cache.checkAndStore(
+                allocator,
+                pubkey,
+                account,
+                self.new_rate_activation_epoch,
+            );
             try self.account_store.put(slot, pubkey, account);
         }
     }

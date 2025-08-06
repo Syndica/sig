@@ -787,6 +787,7 @@ pub const TestState = struct {
             .slot_state = &self.slot_state,
             .status_cache = &self.status_cache,
             .stakes_cache = &self.stakes_cache,
+            .new_rate_activation_epoch = null,
         };
     }
 
