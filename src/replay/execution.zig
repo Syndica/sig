@@ -351,18 +351,29 @@ pub fn processReplayResults(
 
         switch (status) {
             .confirm => |confirm_slot_future| {
+                // Add timeout to prevent infinite loop
+                const timeout = 30 * std.time.ns_per_s; // 30 second timeout
+                const start_time = std.time.nanoTimestamp();
+
                 while (try confirm_slot_future.poll() == .pending) {
-                    // TODO: Potential for infinite loop here? Is this guaranteed
-                    // to return non-pending at some point?
-                    std.time.sleep(std.time.ns_per_ms);
-                } else {
-                    if (try confirm_slot_future.poll() == .err) {
+                    if (std.time.nanoTimestamp() - start_time > timeout) {
+                        replay_state.logger.err("Timeout waiting for slot confirmation", .{});
                         try markDeadSlot(
                             slot,
                             replay_state.progress_map,
                             replay_state.ledger_result_writer,
                         );
+                        continue;
                     }
+                    std.time.sleep(10 * std.time.ns_per_ms);
+                }
+                if (try confirm_slot_future.poll() == .err) {
+                    try markDeadSlot(
+                        slot,
+                        replay_state.progress_map,
+                        replay_state.ledger_result_writer,
+                    );
+                    continue;
                 }
                 for (confirm_slot_future.entries) |entry| {
                     tx_count += entry.transactions.len;
@@ -462,8 +473,7 @@ pub fn processReplayResults(
                 slot_frozen_state,
             );
 
-            // If we previously marked this slot as duplicate in blockstore, let the state machine know
-            if (replay_state.duplicate_slots_tracker.contains(slot) and
+            if (!replay_state.duplicate_slots_tracker.contains(slot) and
                 try replay_state.blockstore_reader.getDuplicateSlot(slot) != null)
             {
                 const duplicate_state: DuplicateState = .fromState(
