@@ -867,9 +867,7 @@ fn serializeOutput(
                         .Custom => |v| v,
                         else => 0,
                     },
-                    .instruction_index = @intCast(
-                        executed.executed_transaction.instruction_trace.?.len -| 1,
-                    ),
+                    .instruction_index = executed.executed_transaction.err_index.?,
                 } else .default,
                 .fees_only => |fees_only| utils.convertTransactionError(fees_only.err),
             };

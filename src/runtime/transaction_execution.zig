@@ -180,6 +180,7 @@ pub const CopiedAccount = struct {
 
 pub const ExecutedTransaction = struct {
     err: ?InstructionErrorEnum,
+    err_index: ?u32,
     log_collector: ?LogCollector,
     instruction_trace: ?InstructionTrace,
     return_data: ?TransactionReturnData,
@@ -435,6 +436,8 @@ pub fn executeTransaction(
     };
 
     var maybe_instruction_error: ?InstructionError = null;
+    var instruction_index: u32 = 0;
+
     for (transaction.instruction_infos) |instruction_info| {
         executor.executeInstruction(
             allocator,
@@ -447,6 +450,7 @@ pub fn executeTransaction(
             }
             break;
         };
+        instruction_index += 1;
     }
 
     const instruction_error = if (maybe_instruction_error) |instruction_error|
@@ -457,6 +461,7 @@ pub fn executeTransaction(
 
     return .{
         .err = instruction_error,
+        .err_index = if (maybe_instruction_error) |_| instruction_index else 0,
         .log_collector = tc.takeLogCollector(),
         .instruction_trace = tc.instruction_trace,
         .return_data = tc.takeReturnData(),
