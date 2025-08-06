@@ -604,52 +604,32 @@ fn createTestReplayState(allocator: Allocator) !ReplayExecutionState {
 
     var thread_pool = ThreadPool.init(.{});
 
-    const blockstore_reader = try allocator.create(BlockstoreReader);
     const mock_lowest_cleanup_slot = try allocator.create(sig.sync.RwMux(Slot));
     mock_lowest_cleanup_slot.* = sig.sync.RwMux(Slot).init(0);
 
     const mock_max_root = try allocator.create(std.atomic.Value(u64));
     mock_max_root.* = std.atomic.Value(u64).init(0);
 
-    blockstore_reader.* = undefined; // We won't actually use this in our tests
+    const blockstore_reader = try allocator.create(BlockstoreReader);
+    blockstore_reader.* = BlockstoreReader{
+        .allocator = allocator,
+        .logger = .noop,
+        .db = undefined, // Mock database
+        .lowest_cleanup_slot = mock_lowest_cleanup_slot,
+        .max_root = mock_max_root,
+        .rpc_api_metrics = undefined,
+        .metrics = undefined,
+    };
 
     const ledger_result_writer = try allocator.create(sig.ledger.LedgerResultWriter);
     ledger_result_writer.* = undefined; // Mock
 
     const slot_tracker = try allocator.create(SlotTracker);
-    const mock_slot_constants = try allocator.create(sig.core.SlotConstants);
-    mock_slot_constants.* = sig.core.SlotConstants{
-        .parent_slot = 0,
-        .parent_hash = Hash.ZEROES,
-        .parent_lt_hash = null,
-        .block_height = 0,
-        .collector_id = Pubkey.ZEROES,
-        .max_tick_height = 64,
-        .fee_rate_governor = undefined,
-        .epoch_reward_status = .inactive,
-        .ancestors = undefined,
-        .feature_set = undefined,
+    // Create a minimal SlotTracker with an empty slots map
+    slot_tracker.* = SlotTracker{
+        .slots = .empty,
+        .root = 0,
     };
-
-    const mock_slot_state = try allocator.create(sig.core.SlotState);
-    mock_slot_state.* = sig.core.SlotState{
-        .hash = sig.sync.RwMux(?Hash).init(null),
-        .tick_height = std.atomic.Value(u64).init(0),
-        .blockhash_queue = undefined,
-        .stakes_cache = undefined,
-        .capitalization = std.atomic.Value(u64).init(0),
-        .transaction_count = std.atomic.Value(u64).init(0),
-        .signature_count = std.atomic.Value(u64).init(0),
-        .collected_rent = std.atomic.Value(u64).init(0),
-        .accounts_lt_hash = sig.sync.Mux(?sig.core.LtHash).init(null),
-        .collected_transaction_fees = std.atomic.Value(u64).init(0),
-        .collected_priority_fees = std.atomic.Value(u64).init(0),
-    };
-
-    slot_tracker.* = try SlotTracker.init(allocator, 0, .{
-        .constants = mock_slot_constants.*,
-        .state = mock_slot_state.*,
-    });
 
     const epochs = try allocator.create(EpochTracker);
     epochs.* = EpochTracker{
@@ -719,7 +699,8 @@ fn cleanupTestReplayState(allocator: Allocator, state: *ReplayExecutionState) vo
 
     allocator.destroy(state.ledger_result_writer);
 
-    state.slot_tracker.deinit(allocator);
+    // SlotTracker cleanup - deinit the slots map
+    state.slot_tracker.slots.deinit(allocator);
     allocator.destroy(state.slot_tracker);
 
     allocator.destroy(state.epochs);
