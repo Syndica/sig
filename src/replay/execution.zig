@@ -616,19 +616,16 @@ fn createTestReplayState(allocator: Allocator) !ReplayExecutionState {
 
     var thread_pool = ThreadPool.init(.{});
 
-    const mock_lowest_cleanup_slot = try allocator.create(sig.sync.RwMux(Slot));
-    mock_lowest_cleanup_slot.* = sig.sync.RwMux(Slot).init(0);
+    var mock_lowest_cleanup_slot = sig.sync.RwMux(Slot).init(0);
 
-    const mock_max_root = try allocator.create(std.atomic.Value(u64));
-    mock_max_root.* = std.atomic.Value(u64).init(0);
+    var mock_max_root = std.atomic.Value(u64).init(0);
 
-    const blockstore_reader = try allocator.create(BlockstoreReader);
-    blockstore_reader.* = BlockstoreReader{
+    var blockstore_reader = BlockstoreReader{
         .allocator = allocator,
         .logger = .noop,
         .db = undefined, // Mock database
-        .lowest_cleanup_slot = mock_lowest_cleanup_slot,
-        .max_root = mock_max_root,
+        .lowest_cleanup_slot = &mock_lowest_cleanup_slot,
+        .max_root = &mock_max_root,
         .rpc_api_metrics = undefined,
         .metrics = undefined,
     };
@@ -636,49 +633,30 @@ fn createTestReplayState(allocator: Allocator) !ReplayExecutionState {
     const ledger_result_writer = try allocator.create(sig.ledger.LedgerResultWriter);
     ledger_result_writer.* = undefined; // Mock
 
-    const slot_tracker = try allocator.create(SlotTracker);
-    // Create a minimal SlotTracker with an empty slots map
-    slot_tracker.* = SlotTracker{
+    var slot_tracker = SlotTracker{
         .slots = .empty,
         .root = 0,
     };
 
-    const epochs = try allocator.create(EpochTracker);
-    epochs.* = EpochTracker{
+    var epochs = EpochTracker{
         .epochs = .empty,
         .schedule = undefined,
     };
 
-    const progress_map = try allocator.create(ProgressMap);
-    progress_map.* = ProgressMap.INIT;
+    var progress = ProgressMap.INIT;
 
-    const fork_choice = try allocator.create(HeaviestSubtreeForkChoice);
-    fork_choice.* = try HeaviestSubtreeForkChoice.init(allocator, .noop, .{
+    var fork_choice = try HeaviestSubtreeForkChoice.init(allocator, .noop, .{
         .slot = 0,
         .hash = Hash.ZEROES,
     });
 
-    const duplicate_slots_tracker = try allocator.create(DuplicateSlots);
-    duplicate_slots_tracker.* = .empty;
-
-    const unfrozen_gossip_verified_vote_hashes =
-        try allocator.create(UnfrozenGossipVerifiedVoteHashes);
-    unfrozen_gossip_verified_vote_hashes.* = .{ .votes_per_slot = .empty };
-
-    const latest_validator_votes_for_frozen_banks = try allocator.create(LatestValidatorVotes);
-    latest_validator_votes_for_frozen_banks.* = LatestValidatorVotes.empty;
-
-    const duplicate_confirmed_slots = try allocator.create(DuplicateConfirmedSlots);
-    duplicate_confirmed_slots.* = .empty;
-
-    const epoch_slots_frozen_slots = try allocator.create(EpochSlotsFrozenSlots);
-    epoch_slots_frozen_slots.* = .empty;
-
-    const duplicate_slots_to_repair = try allocator.create(DuplicateSlotsToRepair);
-    duplicate_slots_to_repair.* = .empty;
-
-    const purge_repair_slot_counter = try allocator.create(PurgeRepairSlotCounters);
-    purge_repair_slot_counter.* = .empty;
+    var duplicate_slots_tracker = DuplicateSlots.empty;
+    var unfrozen_gossip_verified_vote_hashes = UnfrozenGossipVerifiedVoteHashes{ .votes_per_slot = .empty };
+    var latest_validator_votes_for_frozen_banks = LatestValidatorVotes.empty;
+    var duplicate_confirmed_slots = DuplicateConfirmedSlots.empty;
+    var epoch_slots_frozen_slots = EpochSlotsFrozenSlots.empty;
+    var duplicate_slots_to_repair = DuplicateSlotsToRepair.empty;
+    var purge_repair_slot_counter = PurgeRepairSlotCounters.empty;
 
     return ReplayExecutionState.init(
         allocator,
@@ -686,31 +664,25 @@ fn createTestReplayState(allocator: Allocator) !ReplayExecutionState {
         Pubkey.initRandom(std.crypto.random),
         &thread_pool,
         account_store,
-        blockstore_reader,
+        &blockstore_reader,
         ledger_result_writer,
-        slot_tracker,
-        epochs,
-        progress_map,
-        fork_choice,
-        duplicate_slots_tracker,
-        unfrozen_gossip_verified_vote_hashes,
-        latest_validator_votes_for_frozen_banks,
-        duplicate_confirmed_slots,
-        epoch_slots_frozen_slots,
-        duplicate_slots_to_repair,
-        purge_repair_slot_counter,
+        &slot_tracker,
+        &epochs,
+        &progress,
+        &fork_choice,
+        &duplicate_slots_tracker,
+        &unfrozen_gossip_verified_vote_hashes,
+        &latest_validator_votes_for_frozen_banks,
+        &duplicate_confirmed_slots,
+        &epoch_slots_frozen_slots,
+        &duplicate_slots_to_repair,
+        &purge_repair_slot_counter,
     );
 }
 
 fn cleanupTestReplayState(allocator: Allocator, state: *ReplayExecutionState) void {
     state.thread_pool.shutdown();
     state.thread_pool.deinit();
-
-    allocator.destroy(state.blockstore_reader.lowest_cleanup_slot);
-    allocator.destroy(state.blockstore_reader.max_root);
-    allocator.destroy(state.blockstore_reader);
-    allocator.destroy(state.epochs);
-    allocator.destroy(state.ledger_result_writer);
 
     state.slot_tracker.slots.deinit(allocator);
     state.progress_map.deinit(allocator);
