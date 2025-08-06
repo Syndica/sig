@@ -722,13 +722,7 @@ test "loadTransactionAccounts sysvar instruction" {
     try std.testing.expect(cached_account.account.data.len > 0);
     try std.testing.expectEqual(0, tx_accounts.rent_collected);
     try std.testing.expectEqual(0, tx_accounts.loaded_accounts_data_size);
-    try std.testing.expectEqual(1, tx_accounts.rent_debits.len);
-    const rent_debit: RentDebit = tx_accounts.rent_debits.slice()[0];
-
-    // maybe interesting? Most program accounts have 1 lamports. But this one is even less "real"
-    // than the others
-    try std.testing.expectEqual(0, rent_debit.rent_balance);
-    try std.testing.expectEqual(0, rent_debit.rent_collected);
+    try std.testing.expectEqual(0, tx_accounts.rent_debits.len);
 }
 
 test "accumulated size" {
