@@ -167,7 +167,7 @@ pub fn fillMissingSysvarCacheEntries(
 pub const UpdateClockDeps = struct {
     feature_set: *const FeatureSet,
     epoch_schedule: *const EpochSchedule,
-    epoch_stakes: *const EpochStakes,
+    epoch_stakes: ?*const EpochStakes,
     stakes_cache: *StakesCache,
 
     epoch: Epoch,
@@ -425,7 +425,7 @@ fn nextClock(
     feature_set: *const FeatureSet,
     epoch_schedule: *const EpochSchedule,
     stakes_cache: *StakesCache,
-    epoch_stakes: *const EpochStakes,
+    maybe_epoch_stakes: ?*const EpochStakes,
     ns_per_slot: u64,
     genesis_creation_time: i64,
     account_reader: SlotAccountReader,
@@ -445,21 +445,23 @@ fn nextClock(
 
     var unix_timestamp = clock.unix_timestamp;
 
-    if (try getTimestampEstimate(
-        allocator,
-        feature_set,
-        stakes_cache,
-        epoch_stakes,
-        slot,
-        epoch_schedule.slots_per_epoch,
-        ns_per_slot,
-        MaxAllowableDrift.DEFAULT,
-        .{
-            .slot = epoch_schedule.getFirstSlotInEpoch(parent_slots_epoch orelse epoch),
-            .timestamp = clock.epoch_start_timestamp,
-        },
-    )) |timestamp_estimate| {
-        if (timestamp_estimate > unix_timestamp) unix_timestamp = timestamp_estimate;
+    if (maybe_epoch_stakes) |epoch_stakes| {
+        if (try getTimestampEstimate(
+            allocator,
+            feature_set,
+            stakes_cache,
+            epoch_stakes,
+            slot,
+            epoch_schedule.slots_per_epoch,
+            ns_per_slot,
+            MaxAllowableDrift.DEFAULT,
+            .{
+                .slot = epoch_schedule.getFirstSlotInEpoch(parent_slots_epoch orelse epoch),
+                .timestamp = clock.epoch_start_timestamp,
+            },
+        )) |timestamp_estimate| {
+            if (timestamp_estimate > unix_timestamp) unix_timestamp = timestamp_estimate;
+        }
     }
 
     const epoch_start_timestamp = if (parent_slots_epoch != null and parent_slots_epoch.? != epoch)
