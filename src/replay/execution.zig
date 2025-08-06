@@ -357,7 +357,6 @@ pub fn processReplayResults(
 
                 while (try confirm_slot_future.poll() == .pending) {
                     if (std.time.nanoTimestamp() - start_time > timeout) {
-                        replay_state.logger.err("Timeout waiting for slot confirmation", .{});
                         try markDeadSlot(
                             slot,
                             replay_state.progress_map,
@@ -397,19 +396,20 @@ pub fn processReplayResults(
             const is_leader_block =
                 slot_info.constants.collector_id.equals(&replay_state.my_identity);
 
-            const block_id: ?Hash = if (!is_leader_block) blk: {
+            const block_id: ?Hash = if (!is_leader_block)
                 // If the block does not have at least DATA_SHREDS_PER_FEC_BLOCK correctly retransmitted
                 // shreds in the last FEC set, mark it dead. No reason to perform this check on our leader block.
                 // TODO add blockstore.check_last_fec_set_and_get_block_id ie with the checks.
-                break :blk try replay_state.blockstore_reader.lastFecSetUnchecked(slot);
-            } else {
-                try markDeadSlot(
-                    slot,
-                    replay_state.progress_map,
-                    replay_state.ledger_result_writer,
-                );
-                continue;
-            };
+                replay_state.blockstore_reader.lastFecSetUnchecked(slot) catch {
+                    try markDeadSlot(
+                        slot,
+                        replay_state.progress_map,
+                        replay_state.ledger_result_writer,
+                    );
+                    continue;
+                }
+            else
+                null;
 
             slot_info.state.hash = .init(block_id);
 
