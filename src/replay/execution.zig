@@ -22,8 +22,6 @@ const LatestValidatorVotes = sig.consensus.latest_validator_votes.LatestValidato
 
 const ConfirmSlotFuture = replay.confirm_slot.ConfirmSlotFuture;
 
-const VotingKeypair = replay.voting_keypair.VotingKeypair;
-
 const EpochTracker = replay.trackers.EpochTracker;
 const SlotTracker = replay.trackers.SlotTracker;
 const DuplicateSlots = replay.edge_cases.DuplicateSlots;
@@ -541,7 +539,11 @@ const MockConfirmSlotFuture = struct {
 
     const Self = @This();
 
-    pub fn init(allocator: Allocator, status: replay.confirm_slot.ConfirmSlotStatus, num_entries: usize) !*Self {
+    pub fn init(
+        allocator: Allocator,
+        status: replay.confirm_slot.ConfirmSlotStatus,
+        num_entries: usize,
+    ) !*Self {
         const future = try allocator.create(Self);
 
         // Create mock entries
@@ -649,7 +651,8 @@ fn createTestReplayState(allocator: Allocator) !ReplayExecutionState {
     const duplicate_slots_tracker = try allocator.create(DuplicateSlots);
     duplicate_slots_tracker.* = .empty;
 
-    const unfrozen_gossip_verified_vote_hashes = try allocator.create(UnfrozenGossipVerifiedVoteHashes);
+    const unfrozen_gossip_verified_vote_hashes =
+        try allocator.create(UnfrozenGossipVerifiedVoteHashes);
     unfrozen_gossip_verified_vote_hashes.* = .{ .votes_per_slot = .empty };
 
     const latest_validator_votes_for_frozen_banks = try allocator.create(LatestValidatorVotes);
@@ -808,7 +811,12 @@ test "processReplayResults: confirm slot with failed future marks slot dead" {
     const slot: Slot = 100;
 
     // Create a failed confirm slot future
-    const mock_future = try MockConfirmSlotFuture.init(allocator, .{ .err = .{ .invalid_block = .InvalidEntryHash } }, 1);
+    const mock_future =
+        try MockConfirmSlotFuture.init(
+            allocator,
+            .{ .err = .{ .invalid_block = .InvalidEntryHash } },
+            1,
+        );
     defer mock_future.destroy(allocator);
 
     var slot_statuses = std.ArrayListUnmanaged(struct { Slot, ReplaySlotStatus }){};
