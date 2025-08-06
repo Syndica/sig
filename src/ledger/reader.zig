@@ -1230,8 +1230,8 @@ pub const BlockstoreReader = struct {
 
         const maybe_last_shred_index = slot_meta.last_index;
         const last_shred_index = maybe_last_shred_index orelse return null;
-
-        const start_index = std.math.sub(u64, last_shred_index, 31) catch return null;
+        const MINIMUM_INDEX: u64 = 31;
+        const start_index = std.math.sub(u64, last_shred_index, MINIMUM_INDEX) catch return null;
 
         if (start_index > std.math.maxInt(u32)) {
             return error.ValueTooLarge;
@@ -2426,4 +2426,84 @@ test "getDataShred" {
 
     const shred_payload_2 = shreds.items[0].payload();
     try std.testing.expectEqualSlices(u8, shred_payload, shred_payload_2);
+}
+
+test "lastFecSetUnchecked" {
+    const allocator = std.testing.allocator;
+    const logger = .noop;
+    var registry = sig.prometheus.Registry(.{}).init(allocator);
+    defer registry.deinit();
+
+    var db = try TestDB.init(@src());
+    defer db.deinit();
+
+    var lowest_cleanup_slot = RwMux(Slot).init(0);
+    var max_root = std.atomic.Value(Slot).init(0);
+    var reader = try BlockstoreReader.init(
+        allocator,
+        logger,
+        db,
+        &registry,
+        &lowest_cleanup_slot,
+        &max_root,
+    );
+
+    const test_slot: Slot = 42;
+
+    // Test case 1: No slot meta exists
+    {
+        const result = try reader.lastFecSetUnchecked(test_slot);
+        try std.testing.expectEqual(@as(?Hash, null), result);
+    }
+
+    // Test case 2: Slot meta exists but no last_index
+    {
+        var slot_meta = SlotMeta.init(allocator, test_slot, null);
+        defer slot_meta.deinit();
+        slot_meta.last_index = null;
+
+        var write_batch = try db.initWriteBatch();
+        defer write_batch.deinit();
+        try write_batch.put(schema.slot_meta, test_slot, slot_meta);
+        try db.commit(&write_batch);
+
+        const result = try reader.lastFecSetUnchecked(test_slot);
+        try std.testing.expectEqual(@as(?Hash, null), result);
+    }
+
+    // Test case 3: Slot meta exists with last_index, but start_index would underflow
+    {
+        var slot_meta = SlotMeta.init(allocator, test_slot, null);
+        defer slot_meta.deinit();
+        slot_meta.last_index = 10; // Less than 31, so start_index would underflow
+
+        var write_batch = try db.initWriteBatch();
+        defer write_batch.deinit();
+        try write_batch.put(schema.slot_meta, test_slot, slot_meta);
+        try db.commit(&write_batch);
+
+        const result = try reader.lastFecSetUnchecked(test_slot);
+        try std.testing.expectEqual(@as(?Hash, null), result);
+    }
+
+    // Test case 4: Valid scenario - test when getEntriesInDataBlock would fail due to missing shreds
+    {
+        const test_slot3: Slot = 44;
+        const last_index: u64 = 50;
+
+        var slot_meta = SlotMeta.init(allocator, test_slot3, null);
+        defer slot_meta.deinit();
+        slot_meta.last_index = last_index;
+
+        // Store slot meta first
+        var write_batch = try db.initWriteBatch();
+        defer write_batch.deinit();
+        try write_batch.put(schema.slot_meta, test_slot3, slot_meta);
+        try db.commit(&write_batch);
+
+        // This should fail because there are no actual data shreds, but we expect it to handle the error gracefully
+        // The method should return an error when it can't find the necessary shreds
+        const result = reader.lastFecSetUnchecked(test_slot3);
+        try std.testing.expectError(error.CorruptedBlockstore, result);
+    }
 }
