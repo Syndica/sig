@@ -16,7 +16,6 @@ const SlotAccountReader = sig.accounts_db.SlotAccountReader;
 
 const AddressLookupTable = sig.runtime.program.address_lookup_table.AddressLookupTable;
 const InstructionInfo = sig.runtime.InstructionInfo;
-const AccountMeta = sig.runtime.InstructionInfo.AccountMeta;
 const ProgramMeta = sig.runtime.InstructionInfo.ProgramMeta;
 
 const LockableAccount = sig.replay.account_locks.LockableAccount;
