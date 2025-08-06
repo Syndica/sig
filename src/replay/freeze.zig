@@ -274,10 +274,9 @@ pub fn hashSlot(allocator: Allocator, params: HashSlotParams) !struct { ?LtHash,
         assert(parent_ancestors.ancestors.swapRemove(params.slot));
 
         var lt_hash = params.parent_lt_hash.* orelse return error.UnknownParentLtHash;
-        const hash = Hash.generateSha256(.{ initial_hash, lt_hash.bytes() });
         lt_hash.mixIn(try deltaLtHash(params.account_reader, params.slot, &parent_ancestors));
 
-        return .{ lt_hash, hash };
+        return .{ lt_hash, Hash.generateSha256(.{ initial_hash, lt_hash.bytes() }) };
     } else {
         return .{ null, initial_hash };
     }

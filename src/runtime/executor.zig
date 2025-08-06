@@ -326,10 +326,7 @@ pub fn prepareCpiInstructionInfo(
     }
 
     // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L415-L425
-    var instruction_accounts = std.BoundedArray(
-        InstructionInfo.AccountMeta,
-        InstructionInfo.MAX_ACCOUNT_METAS,
-    ){};
+    var instruction_accounts = InstructionInfo.AccountMetas{};
     for (deduped_indexes.slice()) |index| {
         const deduped_account = deduped_account_metas.buffer[index];
         instruction_accounts.appendAssumeCapacity(.{

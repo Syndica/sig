@@ -69,6 +69,7 @@ const Allocator = std.mem.Allocator;
 const Atomic = std.atomic.Value;
 
 const features = sig.core.features;
+const freeze = sig.replay.freeze;
 const program = sig.runtime.program;
 const sysvars = sig.runtime.sysvar;
 const vm = sig.vm;
@@ -425,20 +426,12 @@ fn executeTxnContext(
     // let mut bank = bank_forks.read().unwrap().root_bank();
     //     Just gets the root bank
 
-    const parent_lt_hash: ?sig.core.LtHash = .IDENTITY;
-    const lt_hash, const slot_hash = try sig.replay.freeze.hashSlot(allocator, .{
-        .account_reader = accounts_db.accountReader(),
-        .slot = slot,
-        // At this point, Agave has not modified the signature count.
-        // It's changed when the transaction is processesed and when it's committed.
-        .signature_count = 0,
-        .parent_lt_hash = &parent_lt_hash,
-        .parent_slot_hash = &parent_hash,
-        .blockhash = blockhash_queue.last_hash.?,
-        .ancestors = &ancestors,
-        .feature_set = &feature_set,
-    });
-    _ = lt_hash;
+    const slot_hash = try hashSlot(
+        allocator,
+        blockhash_queue.last_hash.?,
+        &feature_set,
+        accounts_db.accountReader(),
+    );
 
     parent_slot = slot;
     parent_hash = slot_hash;
@@ -1298,6 +1291,39 @@ fn accountFromAccountSharedData(
         .executable = account.executable,
         .rent_epoch = account.rent_epoch,
     };
+}
+
+/// A copy of sig hashSlot which is customized to match the behaviour of bank.rehash in solfuzz-agave.
+/// Specifically if accounts lt hash is enabled, the returned hash is the initial hash combined with
+/// the identity hash, as there is not parent lt hash in the txn fuzzing context.
+pub fn hashSlot(
+    allocator: Allocator,
+    blockhash: Hash,
+    feature_set: *const FeatureSet,
+    account_reader: sig.accounts_db.AccountReader,
+) !Hash {
+    var signature_count_bytes: [8]u8 = undefined;
+    std.mem.writeInt(u64, &signature_count_bytes, 0, .little);
+
+    const initial_hash =
+        if (feature_set.active.contains(sig.core.features.REMOVE_ACCOUNTS_DELTA_HASH))
+            Hash.generateSha256(.{
+                Hash.ZEROES,
+                &signature_count_bytes,
+                blockhash,
+            })
+        else
+            Hash.generateSha256(.{
+                Hash.ZEROES,
+                try freeze.deltaMerkleHash(account_reader, allocator, 0),
+                &signature_count_bytes,
+                blockhash,
+            });
+
+    return if (feature_set.active.contains(sig.core.features.ACCOUNTS_LT_HASH))
+        Hash.generateSha256(.{ initial_hash, sig.core.hash.LtHash.IDENTITY.constBytes() })
+    else
+        initial_hash;
 }
 
 const State = struct {

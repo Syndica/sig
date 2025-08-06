@@ -200,6 +200,10 @@ pub fn serializeParameters(
     copy_account_data: bool,
     mask_out_rent_epoch_in_vm_serialization: bool,
 ) (error{OutOfMemory} || InstructionError)!SerializeReturn {
+    if (ic.ixn_info.account_metas.len > InstructionInfo.MAX_ACCOUNT_METAS) {
+        return error.MaxAccountsExceeded;
+    }
+
     const is_loader_v1 = blk: {
         const program_account = try ic.borrowProgramAccount();
         defer program_account.release();

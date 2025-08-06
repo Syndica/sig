@@ -263,10 +263,7 @@ pub fn createInstructionInfo(
         return error.CouldNotFindProgram;
     };
 
-    var account_metas = std.BoundedArray(
-        InstructionInfo.AccountMeta,
-        InstructionInfo.MAX_ACCOUNT_METAS,
-    ){};
+    var account_metas = InstructionInfo.AccountMetas{};
 
     for (pb_instruction_accounts, 0..) |acc, idx| {
         if (acc.index >= tc.accounts.len)

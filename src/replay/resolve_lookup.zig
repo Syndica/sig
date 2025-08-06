@@ -129,8 +129,7 @@ fn resolveTransaction(
     const instructions = try allocator.alloc(InstructionInfo, message.instructions.len);
     errdefer allocator.free(instructions);
     for (message.instructions, instructions) |input_ix, *output_ix| {
-        var account_metas =
-            std.BoundedArray(AccountMeta, InstructionInfo.MAX_ACCOUNT_METAS){};
+        var account_metas = InstructionInfo.AccountMetas{};
         var seen = std.bit_set.ArrayBitSet(usize, 256).initEmpty();
         for (input_ix.account_indexes, 0..) |index, i| {
             // find first usage of this account in this instruction
@@ -143,7 +142,7 @@ fn resolveTransaction(
             seen.set(index);
 
             // expand the account metadata
-            (try account_metas.addOne()).* = if (index < lookups_start) .{
+            (account_metas.addOne() catch break).* = if (index < lookups_start) .{
                 .pubkey = message.account_keys[index],
                 .index_in_transaction = index,
                 .index_in_caller = index,
