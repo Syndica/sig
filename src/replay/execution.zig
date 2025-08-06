@@ -709,41 +709,20 @@ fn cleanupTestReplayState(allocator: Allocator, state: *ReplayExecutionState) vo
     allocator.destroy(state.blockstore_reader.lowest_cleanup_slot);
     allocator.destroy(state.blockstore_reader.max_root);
     allocator.destroy(state.blockstore_reader);
-
+    allocator.destroy(state.epochs);
     allocator.destroy(state.ledger_result_writer);
 
-    // SlotTracker cleanup - deinit the slots map
     state.slot_tracker.slots.deinit(allocator);
-    allocator.destroy(state.slot_tracker);
-
-    allocator.destroy(state.epochs);
-
     state.progress_map.deinit(allocator);
-    allocator.destroy(state.progress_map);
-
     state.fork_choice.deinit();
-    allocator.destroy(state.fork_choice);
 
     state.duplicate_slots_tracker.deinit(allocator);
-    allocator.destroy(state.duplicate_slots_tracker);
-
     state.unfrozen_gossip_verified_vote_hashes.votes_per_slot.deinit(allocator);
-    allocator.destroy(state.unfrozen_gossip_verified_vote_hashes);
-
     state.latest_validator_votes_for_frozen_banks.deinit(allocator);
-    allocator.destroy(state.latest_validator_votes_for_frozen_banks);
-
     state.duplicate_confirmed_slots.deinit(allocator);
-    allocator.destroy(state.duplicate_confirmed_slots);
-
     state.epoch_slots_frozen_slots.deinit(allocator);
-    allocator.destroy(state.epoch_slots_frozen_slots);
-
     state.duplicate_slots_to_repair.deinit(allocator);
-    allocator.destroy(state.duplicate_slots_to_repair);
-
     state.purge_repair_slot_counter.deinit(allocator);
-    allocator.destroy(state.purge_repair_slot_counter);
 }
 
 test "processReplayResults: empty slot statuses" {
