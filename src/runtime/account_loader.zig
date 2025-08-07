@@ -403,6 +403,7 @@ pub const BatchAccountCache = struct {
 
             const result = self.account_cache.getOrPutAssumeCapacity(key.*);
             std.debug.assert(result.found_existing);
+            allocator.free(result.value_ptr.data);
 
             result.value_ptr.* = account;
 
