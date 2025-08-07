@@ -634,8 +634,6 @@ pub fn printPbVmContext(ctx: pb.VmContext) !void {
     try std.fmt.format(writer, ",\n\tr9: {}", .{ctx.r9});
     try std.fmt.format(writer, ",\n\tr10: {}", .{ctx.r10});
     try std.fmt.format(writer, ",\n\tr11: {}", .{ctx.r11});
-    try std.fmt.format(writer, ",\n\tcheck_align: {}", .{ctx.check_align});
-    try std.fmt.format(writer, ",\n\tcheck_size: {}", .{ctx.check_size});
     try std.fmt.format(writer, ",\n\tentry_pc: {}", .{ctx.entry_pc});
     try std.fmt.format(writer, ",\n\tcall_whitelist: {any}", .{ctx.call_whitelist.getSlice()});
     try std.fmt.format(writer, ",\n\ttracing_enabled: {}", .{ctx.tracing_enabled});
