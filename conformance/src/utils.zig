@@ -21,7 +21,7 @@ const intFromInstructionError = sig.core.instruction.intFromInstructionError;
 
 const Pubkey = sig.core.Pubkey;
 
-const Converted = struct {
+pub const Converted = struct {
     err: u32,
     instruction_error: u32,
     custom_error: u32,

@@ -179,7 +179,7 @@ pub const CopiedAccount = struct {
 };
 
 pub const ExecutedTransaction = struct {
-    err: ?InstructionErrorEnum,
+    err: ?InstrErrInfo,
     log_collector: ?LogCollector,
     instruction_trace: ?InstructionTrace,
     return_data: ?TransactionReturnData,
@@ -190,6 +190,15 @@ pub const ExecutedTransaction = struct {
     pub fn deinit(self: ExecutedTransaction, allocator: std.mem.Allocator) void {
         if (self.log_collector) |lc| lc.deinit(allocator);
     }
+
+    pub const InstrErrInfo = struct {
+        index: u8,
+        value: InstructionErrorEnum,
+
+        pub fn toTransactionError(self: InstrErrInfo) TransactionError {
+            return .{ .InstructionError = .{ self.index, self.value } };
+        }
+    };
 };
 
 pub const ProcessedTransaction = union(enum(u8)) {
@@ -432,29 +441,34 @@ pub fn executeTransaction(
         .prev_lamports_per_signature = environment.last_lamports_per_signature,
     };
 
-    var maybe_instruction_error: ?InstructionError = null;
-    for (transaction.instruction_infos) |instruction_info| {
-        executor.executeInstruction(
-            allocator,
-            &tc,
-            instruction_info,
-        ) catch |err| {
-            switch (err) {
+    const maybe_instruction_error_info: ?struct { usize, InstructionError } =
+        for (transaction.instruction_infos, 0..) |instruction_info, i| {
+            executor.executeInstruction(
+                allocator,
+                &tc,
+                instruction_info,
+            ) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
-                else => |e| maybe_instruction_error = e,
-            }
-            break;
-        };
-    }
+                else => |e| break .{ i, e },
+            };
+        } else null;
 
-    const instruction_error = if (maybe_instruction_error) |instruction_error|
-        InstructionErrorEnum.fromError(instruction_error, tc.custom_error, null) catch |err|
-            std.debug.panic("Failed to convert error: instruction_error{}", .{err})
-    else
-        null;
+    const instr_err: ?ExecutedTransaction.InstrErrInfo = tx_err: {
+        const instr_err_index, const instr_err =
+            maybe_instruction_error_info orelse break :tx_err null;
+        const instruction_error = InstructionErrorEnum.fromError(
+            instr_err,
+            tc.custom_error,
+            null,
+        ) catch |err| std.debug.panic("Failed to convert error: {}", .{err});
+        break :tx_err .{
+            .index = @intCast(instr_err_index),
+            .value = instruction_error,
+        };
+    };
 
     return .{
-        .err = instruction_error,
+        .err = instr_err,
         .log_collector = tc.takeLogCollector(),
         .instruction_trace = tc.instruction_trace,
         .return_data = tc.takeReturnData(),
