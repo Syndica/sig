@@ -783,6 +783,7 @@ pub const TestState = struct {
 
     pub fn committer(self: *TestState) Committer {
         return .{
+            .logger = .FOR_TESTS,
             .account_store = self.account_map.accountStore(),
             .slot_state = &self.slot_state,
             .status_cache = &self.status_cache,

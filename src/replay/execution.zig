@@ -264,6 +264,7 @@ fn replaySlot(state: *ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
     };
 
     const committer = replay.commit.Committer{
+        .logger = .from(state.logger),
         .account_store = state.account_store,
         .slot_state = slot_info.state,
         .status_cache = &state.status_cache,

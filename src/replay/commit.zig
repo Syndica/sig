@@ -4,6 +4,8 @@ const replay = @import("lib.zig");
 
 const Allocator = std.mem.Allocator;
 
+const Logger = sig.trace.ScopedLogger("replay.committer");
+
 const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
@@ -15,6 +17,7 @@ const ProcessedTransaction = sig.runtime.transaction_execution.ProcessedTransact
 
 /// All contained state is required to be thread-safe.
 pub const Committer = struct {
+    logger: Logger,
     account_store: sig.accounts_db.AccountStore,
     slot_state: *sig.core.SlotState,
     status_cache: *sig.core.StatusCache,
@@ -44,7 +47,15 @@ pub const Committer = struct {
             switch (tx_result.accounts()) {
                 inline else => |accounts| for (accounts) |account| {
                     const gop = try accounts_to_store.getOrPut(allocator, account.pubkey);
-                    if (gop.found_existing) return error.AccountLockViolation;
+                    if (gop.found_existing) {
+                        self.logger.err()
+                            .logf("multiple writes in a batch for address: {}\n", .{account.pubkey});
+                        return error.MultipleWritesInBatch;
+                        // this error most likely indicates a bug in the SVM or
+                        // the account locking code, since the account locks
+                        // should have already been checked before reaching this
+                        // point.
+                    }
                     gop.value_ptr.* = account.getAccount().*;
                 },
             }
