@@ -1131,7 +1131,7 @@ fn validator(
     const epoch_schedule = bank_fields.epoch_schedule;
     const epoch = bank_fields.epoch;
 
-    const staked_nodes = try collapsed_manifest.getStakedNodes(allocator, epoch);
+    const staked_nodes = try collapsed_manifest.epochStakes(epoch);
     var epoch_context_manager = try sig.adapter.EpochContextManager.init(allocator, epoch_schedule);
     defer epoch_context_manager.deinit();
     try epoch_context_manager.contexts.realign(epoch);
