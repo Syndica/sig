@@ -105,6 +105,18 @@ fn resolveTransaction(
     const readable_lookups_start = lookups.writable.len + lookups_start;
     const lookups_end = lookups.readonly.len + readable_lookups_start;
 
+    // Check if the UpgradeableLoader ID is present in any of the accounts (needed for is_writable).
+    const is_upgradeable_loader_present =
+        blk: for ([_][]const Pubkey{
+            message.account_keys,
+            lookups.writable,
+            lookups.readonly,
+        }) |accounts| {
+            for (accounts) |pubkey|
+                if (pubkey.equals(&sig.runtime.program.bpf_loader.v3.ID))
+                    break :blk true;
+        } else false;
+
     // construct accounts
     var accounts = std.MultiArrayList(InstructionAccount){};
     try accounts.ensureTotalCapacity(allocator, lookups_end);
@@ -112,7 +124,7 @@ fn resolveTransaction(
     for (message.account_keys, 0..) |pubkey, i| accounts.appendAssumeCapacity(.{
         .pubkey = pubkey,
         .is_signer = message.isSigner(i),
-        .is_writable = message.isWritable(i),
+        .is_writable = message.isWritable(i, is_upgradeable_loader_present),
     });
     for (lookups.writable) |pubkey| accounts.appendAssumeCapacity(.{
         .pubkey = pubkey,
@@ -124,58 +136,6 @@ fn resolveTransaction(
         .is_signer = false,
         .is_writable = false,
     });
-
-    // Fixup is_writable on message.account_keys, now having accumulated all accounts.
-    const is_upgradeable_loader_present = for (accounts.items(.pubkey)) |key| {
-        if (key.equals(&sig.runtime.program.bpf_loader.v3.ID)) break true;
-    } else false;
-
-    const RESERVED_ACCOUNTS: []const Pubkey = &.{
-        // builtin programs
-        sig.runtime.program.bpf_loader.v2.ID,
-        sig.runtime.program.bpf_loader.v1.ID,
-        sig.runtime.program.bpf_loader.v3.ID,
-        sig.runtime.program.config.ID,
-
-        sig.runtime.ids.FEATURE_PROGRAM_ID,
-        sig.runtime.ids.CONFIG_PROGRAM_STAKE_CONFIG_ID,
-        sig.runtime.program.stake.ID,
-        sig.runtime.program.system.ID,
-        sig.runtime.program.vote.ID,
-        sig.runtime.program.zk_elgamal.ID,
-        sig.runtime.ids.ZK_TOKEN_PROOF_PROGRAM_ID,
-
-        // sysvars
-        sig.runtime.sysvar.Clock.ID,
-        sig.runtime.sysvar.EpochSchedule.ID,
-        sig.runtime.sysvar.Fees.ID,
-        sig.runtime.ids.SYSVAR_INSTRUCTIONS_ID,
-        sig.runtime.sysvar.RecentBlockhashes.ID,
-        sig.runtime.sysvar.Rent.ID,
-        sig.runtime.ids.SYSVAR_REWARDS_ID,
-        sig.runtime.sysvar.SlotHashes.ID,
-        sig.runtime.sysvar.SlotHistory.ID,
-        sig.runtime.sysvar.StakeHistory.ID,
-
-        // other
-        sig.runtime.ids.NATIVE_LOADER_ID,
-    };
-
-    // https://github.com/anza-xyz/solana-sdk/blob/5ff67c1a53c10e16689e377f98a92ba3afd6bb7c/message/src/versions/v0/loaded.rs#L139
-    for (accounts.items(.is_writable), accounts.items(.pubkey), 0..) |*is_writable, pubkey, i| {
-        if (is_writable.*) {
-            const is_key_called_as_program = for (message.instructions) |ix| {
-                if (ix.program_index == i) break true;
-            } else false;
-
-            const is_reserved = for (RESERVED_ACCOUNTS) |*reserved_key| {
-                if (pubkey.equals(reserved_key)) break true;
-            } else false;
-
-            const demote_program_id = is_key_called_as_program and !is_upgradeable_loader_present;
-            is_writable.* = !(is_reserved or demote_program_id);
-        }
-    }
 
     // construct instructions
     const instructions = try allocator.alloc(InstructionInfo, message.instructions.len);

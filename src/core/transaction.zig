@@ -393,12 +393,61 @@ pub const Message = struct {
         return index < self.signature_count;
     }
 
-    pub fn isWritable(self: Message, index: usize) bool {
+    /// https://github.com/anza-xyz/solana-sdk/blob/5ff67c1a53c10e16689e377f98a92ba3afd6bb7c/message/src/versions/v0/loaded.rs#L118
+    fn isWritableIndex(self: Message, index: usize) bool {
         const is_readonly_signed =
             index < self.signature_count and
             index >= self.signature_count - self.readonly_signed_count;
         const is_readonly_unsigned = index >= self.account_keys.len - self.readonly_unsigned_count;
         return !(is_readonly_signed or is_readonly_unsigned);
+    }
+
+    const RESERVED_ACCOUNTS: []const Pubkey = &.{
+        // builtin programs
+        sig.runtime.program.bpf_loader.v2.ID,
+        sig.runtime.program.bpf_loader.v1.ID,
+        sig.runtime.program.bpf_loader.v3.ID,
+        sig.runtime.program.config.ID,
+
+        sig.runtime.ids.FEATURE_PROGRAM_ID,
+        sig.runtime.ids.CONFIG_PROGRAM_STAKE_CONFIG_ID,
+        sig.runtime.program.stake.ID,
+        sig.runtime.program.system.ID,
+        sig.runtime.program.vote.ID,
+        sig.runtime.program.zk_elgamal.ID,
+        sig.runtime.ids.ZK_TOKEN_PROOF_PROGRAM_ID,
+
+        // sysvars
+        sig.runtime.sysvar.Clock.ID,
+        sig.runtime.sysvar.EpochSchedule.ID,
+        sig.runtime.sysvar.Fees.ID,
+        sig.runtime.ids.SYSVAR_INSTRUCTIONS_ID,
+        sig.runtime.sysvar.RecentBlockhashes.ID,
+        sig.runtime.sysvar.Rent.ID,
+        sig.runtime.ids.SYSVAR_REWARDS_ID,
+        sig.runtime.sysvar.SlotHashes.ID,
+        sig.runtime.sysvar.SlotHistory.ID,
+        sig.runtime.sysvar.StakeHistory.ID,
+
+        // other
+        sig.runtime.ids.NATIVE_LOADER_ID,
+    };
+    
+    /// `is_upgradeable_loader_present` checks if v3 ID is in account_keys + ALUT keys.
+    /// https://github.com/anza-xyz/solana-sdk/blob/5ff67c1a53c10e16689e377f98a92ba3afd6bb7c/message/src/versions/v0/loaded.rs#L139
+    pub fn isWritable(self: Message, index: usize, is_upgradeable_loader_present: bool) bool {
+        return self.isWritableIndex(index) and {
+            const is_key_called_as_program = for (self.instructions) |ixn| {
+                if (ixn.program_index == index) break true;
+            } else false;
+
+            const is_reserved = for (RESERVED_ACCOUNTS) |reserved_key| {
+                if (reserved_key.equals(&self.account_keys[index])) break true;
+            } else false;
+
+            const demote_program_id = is_key_called_as_program and !is_upgradeable_loader_present;
+            return !(is_reserved or demote_program_id);
+        };
     }
 
     /// Returns the serialized message as a bounded array.
