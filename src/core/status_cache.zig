@@ -166,21 +166,23 @@ pub const StatusCache = struct {
         var cache = self.cache.write();
         defer cache.unlock();
 
-        const cache_entries = cache.mut().entries.slice();
+        var cache_entries = cache.mut().entries.slice();
 
-        var n_removed: usize = 0;
-        for (cache_entries.items(.key), cache_entries.items(.value), 0..) |key, highest_fork, i| {
-            if (i >= cache_entries.len - n_removed) continue; // don't try to remove things twice!
+        var i: usize = 0;
+        while (i < cache.mut().count()) {
+            const key = cache_entries.items(.key)[i];
+            const highest_fork = cache_entries.items(.value)[i];
 
             if (highest_fork.slot <= min_root) {
-                // TODO: i think this is a bug. it modifies the slice we're iterating over.
                 var purged_fork: HighestFork = (cache.mut().fetchOrderedRemove(key) orelse
                     unreachable).value; // we just found this key!
 
                 for (purged_fork.key_map.values()) |*fork_status| fork_status.deinit(allocator);
                 purged_fork.key_map.deinit(allocator);
 
-                n_removed += 1;
+                cache_entries = cache.mut().entries.slice();
+            } else {
+                i += 1;
             }
         }
     }

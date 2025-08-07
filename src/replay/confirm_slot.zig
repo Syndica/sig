@@ -702,7 +702,7 @@ pub const TestState = struct {
     slot: u64,
     max_age: u64,
     lamports_per_signature: u64,
-    blockhash_queue: sig.core.BlockhashQueue,
+    blockhash_queue: sig.sync.RwMux(sig.core.BlockhashQueue),
     feature_set: sig.core.FeatureSet,
     rent_collector: sig.core.RentCollector,
     epoch_stakes: sig.core.EpochStakes,
@@ -739,7 +739,7 @@ pub const TestState = struct {
             .slot = 0,
             .max_age = max_age,
             .lamports_per_signature = 1,
-            .blockhash_queue = blockhash_queue,
+            .blockhash_queue = .init(blockhash_queue),
             .feature_set = .EMPTY,
             .rent_collector = .DEFAULT,
             .epoch_stakes = epoch_stakes,
@@ -753,7 +753,9 @@ pub const TestState = struct {
         self.account_map.deinit();
         self.status_cache.deinit(allocator);
         self.ancestors.deinit(allocator);
-        self.blockhash_queue.deinit(allocator);
+        var bhq = self.blockhash_queue.tryWrite() orelse unreachable;
+        bhq.get().deinit(allocator);
+        bhq.unlock();
         self.feature_set.deinit(allocator);
         self.epoch_stakes.deinit(allocator);
         self.slot_state.deinit(allocator);
@@ -769,7 +771,7 @@ pub const TestState = struct {
             .slot = self.slot,
             .max_age = self.max_age,
             .lamports_per_signature = self.lamports_per_signature,
-            .blockhash_queue = self.blockhash_queue,
+            .blockhash_queue = &self.blockhash_queue,
             .account_reader = self.account_map.accountReader().forSlot(&self.ancestors),
             .ancestors = &self.ancestors,
             .feature_set = self.feature_set,
@@ -781,10 +783,12 @@ pub const TestState = struct {
 
     pub fn committer(self: *TestState) Committer {
         return .{
+            .logger = .FOR_TESTS,
             .account_store = self.account_map.accountStore(),
             .slot_state = &self.slot_state,
             .status_cache = &self.status_cache,
             .stakes_cache = &self.stakes_cache,
+            .new_rate_activation_epoch = null,
         };
     }
 
@@ -797,8 +801,10 @@ pub const TestState = struct {
         allocator: Allocator,
         transactions: []const sig.core.Transaction,
     ) Allocator.Error!void {
+        var bhq = self.blockhash_queue.write();
+        defer bhq.unlock();
         for (transactions) |transaction| {
-            try self.blockhash_queue.insertHash(allocator, transaction.msg.recent_blockhash, 1);
+            try bhq.mut().insertHash(allocator, transaction.msg.recent_blockhash, 1);
             var account = sig.runtime.AccountSharedData.EMPTY;
             account.lamports = 1_000;
             try self.account_map.put(self.slot, transaction.msg.account_keys[0], account);

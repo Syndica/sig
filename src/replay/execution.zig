@@ -221,7 +221,7 @@ fn replaySlot(state: *ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
     // out more usages of this struct.
     const confirmation_progress = &fork_progress.replay_progress.arc_ed.rwlock_ed;
 
-    const entries, const slot_is_full, const blockhash_queue = blk: {
+    const entries, const slot_is_full = blk: {
         const entries, const num_shreds, const slot_is_full =
             try state.blockstore_reader.getSlotEntriesWithShredInfo(
                 state.allocator,
@@ -245,21 +245,21 @@ fn replaySlot(state: *ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
         confirmation_progress.num_entries += entries.len;
         for (entries) |e| confirmation_progress.num_txs += e.transactions.len;
 
-        const blockhash_queue = bhq: {
-            var bhq = slot_info.state.blockhash_queue.read();
-            defer bhq.unlock();
-            break :bhq try bhq.get().clone(state.allocator);
-        };
-        errdefer blockhash_queue.deinit(state.allocator);
-
-        break :blk .{ entries, slot_is_full, blockhash_queue };
+        break :blk .{ entries, slot_is_full };
     };
+
+    const new_rate_activation_epoch =
+        if (slot_info.constants.feature_set.active
+            .get(sig.core.features.REDUCE_STAKE_WARMUP_COOLDOWN)) |active_slot|
+            state.epochs.schedule.getEpoch(active_slot)
+        else
+            null;
 
     const svm_params = SvmGateway.Params{
         .slot = slot,
         .max_age = sig.core.BlockhashQueue.MAX_RECENT_BLOCKHASHES / 2,
         .lamports_per_signature = slot_info.constants.fee_rate_governor.lamports_per_signature,
-        .blockhash_queue = blockhash_queue,
+        .blockhash_queue = &slot_info.state.blockhash_queue,
         .account_reader = state.account_store.reader().forSlot(&slot_info.constants.ancestors),
         .ancestors = &slot_info.constants.ancestors,
         .feature_set = slot_info.constants.feature_set,
@@ -269,10 +269,12 @@ fn replaySlot(state: *ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
     };
 
     const committer = replay.commit.Committer{
+        .logger = .from(state.logger),
         .account_store = state.account_store,
         .slot_state = slot_info.state,
         .status_cache = &state.status_cache,
         .stakes_cache = &slot_info.state.stakes_cache,
+        .new_rate_activation_epoch = new_rate_activation_epoch,
     };
 
     const verify_ticks_params = replay.confirm_slot.VerifyTicksParams{

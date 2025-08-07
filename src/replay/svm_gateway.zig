@@ -54,10 +54,14 @@ pub const SvmGateway = struct {
         sysvar_cache: SysvarCache,
         vm_environment: vm.Environment,
         next_vm_environment: ?vm.Environment,
-        // TODO figure out how to share this safely across threads so this
-        // struct doesn't need to be created once per batch
         accounts: BatchAccountCache,
         programs: ProgramMap,
+
+        /// This is an ugly solution, but it doesn't actually lead to any issues
+        /// with contention due to how replay works. Long term, this will be
+        /// resolved by moving BlockhashQueue to SlotConstants so we don't need
+        /// a lock, but this requires some rework of the slot freezing logic.
+        blockhash_queue: sig.sync.RwMux(BlockhashQueue).RLockGuard,
     },
 
     pub const Params = struct {
@@ -66,13 +70,11 @@ pub const SvmGateway = struct {
         max_age: u64,
         lamports_per_signature: u64,
 
-        /// Owned by this struct: Params
-        blockhash_queue: BlockhashQueue,
-
         /// used to initialize the batch account cache and program map
         account_reader: SlotAccountReader,
 
         // Borrowed values to pass by reference into the SVM.
+        blockhash_queue: *sig.sync.RwMux(BlockhashQueue),
         ancestors: *const Ancestors,
         feature_set: FeatureSet,
         rent_collector: *const RentCollector,
@@ -95,12 +97,13 @@ pub const SvmGateway = struct {
             );
         }
 
-        const budget = ComputeBudget.default(1_400_000); // TODO should this be dynamic?
-
         const vm_environment = try vm.Environment.initV1(
             allocator,
             &params.feature_set,
-            &budget,
+            // This does not actually set the compute budget. it's only used to
+            // set that max call depth and stack frame size. the actual compute
+            // budgets are determined per transaction.
+            &ComputeBudget.default(1_400_000),
             false,
             true, // TODO: should this be false?
         );
@@ -127,23 +130,33 @@ pub const SvmGateway = struct {
                 .next_vm_environment = null, // TODO epoch boundary
                 .accounts = accounts,
                 .programs = programs,
+                .blockhash_queue = params.blockhash_queue.tryRead() orelse
+                    // blockhash queue is only written when freezing a slot,
+                    // which comes *after* executing all transactions, not
+                    // concurrently (with this struct's existence).
+                    unreachable,
             },
         };
     }
 
     pub fn deinit(self: *const SvmGateway, allocator: Allocator) void {
-        // self.params.blockhash_queue.deinit(allocator); // TODO fix leak
-        // TODO self.state
+        var bhq = self.state.blockhash_queue;
+        bhq.unlock();
+
+        self.state.sysvar_cache.deinit(allocator);
         self.state.vm_environment.deinit(allocator);
-        var accounts = self.state.accounts;
-        accounts.deinit(allocator);
+        self.state.accounts.deinit(allocator);
+        if (self.state.next_vm_environment) |next_vm| next_vm.deinit(allocator);
+
+        var programs = self.state.programs;
+        programs.deinit(allocator);
     }
 
     pub fn environment(self: *const SvmGateway) !TransactionExecutionEnvironment {
-        const last_blockhash = self.params.blockhash_queue.last_hash orelse
+        const last_blockhash = self.state.blockhash_queue.get().last_hash orelse
             return error.MissingLastBlockhash;
 
-        const last_lamports_per_signature = self.params.blockhash_queue
+        const last_lamports_per_signature = self.state.blockhash_queue.get()
             .getLamportsPerSignature(last_blockhash) orelse
             return error.MissingLastBlockhashInfo;
 
@@ -153,7 +166,7 @@ pub const SvmGateway = struct {
             .status_cache = self.params.status_cache,
             .sysvar_cache = &self.state.sysvar_cache,
             .rent_collector = self.params.rent_collector,
-            .blockhash_queue = &self.params.blockhash_queue,
+            .blockhash_queue = self.state.blockhash_queue.get(),
             .epoch_stakes = self.params.epoch_stakes,
             .vm_environment = &self.state.vm_environment,
             .next_vm_environment = if (self.state.next_vm_environment) |env| &env else null,

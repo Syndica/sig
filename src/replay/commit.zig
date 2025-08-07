@@ -4,6 +4,8 @@ const replay = @import("lib.zig");
 
 const Allocator = std.mem.Allocator;
 
+const Logger = sig.trace.ScopedLogger("replay.committer");
+
 const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
@@ -15,10 +17,12 @@ const ProcessedTransaction = sig.runtime.transaction_execution.ProcessedTransact
 
 /// All contained state is required to be thread-safe.
 pub const Committer = struct {
+    logger: Logger,
     account_store: sig.accounts_db.AccountStore,
     slot_state: *sig.core.SlotState,
     status_cache: *sig.core.StatusCache,
     stakes_cache: *sig.core.StakesCache,
+    new_rate_activation_epoch: ?sig.core.Epoch,
 
     pub fn commitTransactions(
         self: Committer,
@@ -43,7 +47,15 @@ pub const Committer = struct {
             switch (tx_result.accounts()) {
                 inline else => |accounts| for (accounts) |account| {
                     const gop = try accounts_to_store.getOrPut(allocator, account.pubkey);
-                    if (gop.found_existing) return error.AccountLockViolation;
+                    if (gop.found_existing) {
+                        self.logger.err()
+                            .logf("multiple writes in a batch for address: {}\n", .{account.pubkey});
+                        return error.MultipleWritesInBatch;
+                        // this error most likely indicates a bug in the SVM or
+                        // the account locking code, since the account locks
+                        // should have already been checked before reaching this
+                        // point.
+                    }
                     gop.value_ptr.* = account.getAccount().*;
                 },
             }
@@ -59,7 +71,7 @@ pub const Committer = struct {
                 .insert(allocator, rng.random(), recent_blockhash, &message_hash.data, slot);
             try self.status_cache
                 .insert(allocator, rng.random(), recent_blockhash, &signature.data, slot);
-            // TODO: we'll need to store the actual status at some point, probably for rpc.
+            // NOTE: we'll need to store the actual status at some point, probably for rpc.
         }
 
         _ = self.slot_state.transaction_count.fetchAdd(tx_results.len, .monotonic);
@@ -67,8 +79,12 @@ pub const Committer = struct {
         _ = self.slot_state.collected_rent.fetchAdd(rent_collected, .monotonic);
 
         for (accounts_to_store.keys(), accounts_to_store.values()) |pubkey, account| {
-            // TODO: look into null value here
-            try self.stakes_cache.checkAndStore(allocator, pubkey, account, null);
+            try self.stakes_cache.checkAndStore(
+                allocator,
+                pubkey,
+                account,
+                self.new_rate_activation_epoch,
+            );
             try self.account_store.put(slot, pubkey, account);
         }
     }

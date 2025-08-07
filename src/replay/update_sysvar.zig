@@ -17,7 +17,7 @@ const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 const Ancestors = sig.core.Ancestors;
 const Account = sig.core.Account;
-const EpochStakesMap = sig.core.EpochStakesMap;
+const EpochStakes = sig.core.EpochStakes;
 const HardForks = sig.core.HardForks;
 const BlockhashQueue = sig.core.BlockhashQueue;
 const Slot = sig.core.Slot;
@@ -62,6 +62,7 @@ pub fn updateSysvarsForNewSlot(
     hard_forks: *const sig.core.HardForks,
 ) !void {
     const epoch = epoch_schedule.getEpoch(slot);
+    const parent_slots_epoch = epoch_schedule.getEpoch(constants.parent_slot);
 
     const sysvar_deps = UpdateSysvarAccountDeps{
         .account_store = account_store,
@@ -71,29 +72,23 @@ pub fn updateSysvarsForNewSlot(
         .slot = slot,
     };
 
-    const parent_epoch = if (epoch == 0) null else epoch - 1; // TODO: verify this
-
     try updateSlotHashes(allocator, constants.parent_slot, constants.parent_hash, sysvar_deps);
     try updateStakeHistory(allocator, .{
         .epoch = epoch,
-        .parent_epoch = parent_epoch,
+        .parent_slots_epoch = parent_slots_epoch,
         .stakes_cache = &state.stakes_cache,
         .update_sysvar_deps = sysvar_deps,
     });
-
-    var epoch_stakes_map = sig.core.EpochStakesMap.empty;
-    defer epoch_stakes_map.deinit(allocator);
-    try epoch_stakes_map.put(allocator, epoch, epoch_info.stakes); // TODO better approach
 
     try updateClock(
         allocator,
         .{
             .feature_set = &constants.feature_set,
             .epoch_schedule = &epoch_schedule,
-            .epoch_stakes_map = &epoch_stakes_map,
+            .epoch_stakes = &epoch_info.stakes,
             .stakes_cache = &state.stakes_cache,
-            .epoch = epoch, // TODO: redundant with passing schedule and slot
-            .parent_epoch = parent_epoch,
+            .epoch = epoch,
+            .parent_slots_epoch = parent_slots_epoch,
             .genesis_creation_time = epoch_info.genesis_creation_time,
             .ns_per_slot = @intCast(epoch_info.ns_per_slot),
             .update_sysvar_deps = sysvar_deps,
@@ -172,11 +167,11 @@ pub fn fillMissingSysvarCacheEntries(
 pub const UpdateClockDeps = struct {
     feature_set: *const FeatureSet,
     epoch_schedule: *const EpochSchedule,
-    epoch_stakes_map: *const EpochStakesMap,
+    epoch_stakes: ?*const EpochStakes,
     stakes_cache: *StakesCache,
 
     epoch: Epoch,
-    parent_epoch: ?Epoch,
+    parent_slots_epoch: ?Epoch,
     genesis_creation_time: i64,
     ns_per_slot: u64,
 
@@ -189,13 +184,13 @@ pub fn updateClock(allocator: Allocator, deps: UpdateClockDeps) !void {
         deps.feature_set,
         deps.epoch_schedule,
         deps.stakes_cache,
-        deps.epoch_stakes_map,
+        deps.epoch_stakes,
         deps.ns_per_slot,
         deps.genesis_creation_time,
         deps.update_sysvar_deps.account_store.reader().forSlot(deps.update_sysvar_deps.ancestors),
         deps.update_sysvar_deps.slot,
         deps.epoch,
-        deps.parent_epoch,
+        deps.parent_slots_epoch,
     );
     try updateSysvarAccount(Clock, allocator, clock, deps.update_sysvar_deps);
 }
@@ -276,13 +271,13 @@ pub fn updateEpochSchedule(
 
 pub const UpdateStakeHistoryDeps = struct {
     epoch: Epoch,
-    parent_epoch: ?Epoch,
+    parent_slots_epoch: ?Epoch,
     stakes_cache: *StakesCache,
     update_sysvar_deps: UpdateSysvarAccountDeps,
 };
 
 pub fn updateStakeHistory(allocator: Allocator, deps: UpdateStakeHistoryDeps) !void {
-    if (deps.parent_epoch) |e| if (e == deps.epoch) return;
+    if (deps.parent_slots_epoch) |e| if (e == deps.epoch) return;
     const stakes: *const StakesCache.T(), var guard = deps.stakes_cache.stakes.readWithLock();
     defer guard.unlock();
     try updateSysvarAccount(
@@ -430,13 +425,13 @@ fn nextClock(
     feature_set: *const FeatureSet,
     epoch_schedule: *const EpochSchedule,
     stakes_cache: *StakesCache,
-    epoch_stakes_map: *const EpochStakesMap,
+    maybe_epoch_stakes: ?*const EpochStakes,
     ns_per_slot: u64,
     genesis_creation_time: i64,
     account_reader: SlotAccountReader,
     slot: Slot,
     epoch: Epoch,
-    parent_epoch: ?Epoch,
+    parent_slots_epoch: ?Epoch,
 ) !Clock {
     if (slot == 0) return .{
         .slot = slot,
@@ -450,25 +445,26 @@ fn nextClock(
 
     var unix_timestamp = clock.unix_timestamp;
 
-    if (try getTimestampEstimate(
-        allocator,
-        feature_set,
-        stakes_cache,
-        epoch_stakes_map,
-        slot,
-        epoch,
-        epoch_schedule.slots_per_epoch,
-        ns_per_slot,
-        MaxAllowableDrift.DEFAULT,
-        .{
-            .slot = epoch_schedule.getFirstSlotInEpoch(parent_epoch orelse epoch),
-            .timestamp = clock.epoch_start_timestamp,
-        },
-    )) |timestamp_estimate| {
-        if (timestamp_estimate > unix_timestamp) unix_timestamp = timestamp_estimate;
+    if (maybe_epoch_stakes) |epoch_stakes| {
+        if (try getTimestampEstimate(
+            allocator,
+            feature_set,
+            stakes_cache,
+            epoch_stakes,
+            slot,
+            epoch_schedule.slots_per_epoch,
+            ns_per_slot,
+            MaxAllowableDrift.DEFAULT,
+            .{
+                .slot = epoch_schedule.getFirstSlotInEpoch(parent_slots_epoch orelse epoch),
+                .timestamp = clock.epoch_start_timestamp,
+            },
+        )) |timestamp_estimate| {
+            if (timestamp_estimate > unix_timestamp) unix_timestamp = timestamp_estimate;
+        }
     }
 
-    const epoch_start_timestamp = if (parent_epoch != null and parent_epoch.? != epoch)
+    const epoch_start_timestamp = if (parent_slots_epoch != null and parent_slots_epoch.? != epoch)
         unix_timestamp
     else
         clock.epoch_start_timestamp;
@@ -486,9 +482,8 @@ fn getTimestampEstimate(
     allocator: Allocator,
     feature_set: *const FeatureSet,
     stakes_cache: *StakesCache,
-    epoch_stakes_map: *const EpochStakesMap,
+    epoch_stakes: *const EpochStakes,
     slot: Slot,
-    epoch: Epoch,
     slots_per_epoch: Slot,
     ns_per_slot: u64,
     max_allowable_drift: MaxAllowableDrift,
@@ -519,8 +514,6 @@ fn getTimestampEstimate(
         break :blk recent_timestamps;
     };
     defer allocator.free(recent_timestamps.allocatedSlice());
-
-    const epoch_stakes = epoch_stakes_map.get(epoch) orelse return null;
 
     return calculateStakeWeightedTimestamp(
         allocator,
@@ -893,18 +886,18 @@ test "update all sysvars" {
         const feature_set = FeatureSet.EMPTY;
         defer feature_set.deinit(allocator);
         const epoch_schedule = EpochSchedule.DEFAULT;
-        var epoch_stakes_map = EpochStakesMap{};
-        defer epoch_stakes_map.deinit(allocator);
+        const epoch_stakes = try EpochStakes.init(allocator);
+        defer epoch_stakes.deinit(allocator);
         var stakes_cache = try StakesCache.init(allocator);
         defer stakes_cache.deinit(allocator);
 
         try updateClock(allocator, .{
             .feature_set = &feature_set,
             .epoch_schedule = &epoch_schedule,
-            .epoch_stakes_map = &epoch_stakes_map,
+            .epoch_stakes = &epoch_stakes,
             .stakes_cache = &stakes_cache,
             .epoch = epoch_schedule.getEpoch(slot),
-            .parent_epoch = null,
+            .parent_slots_epoch = null,
             .genesis_creation_time = 0,
             .ns_per_slot = 0,
             .update_sysvar_deps = update_sysvar_deps,
@@ -1052,7 +1045,7 @@ test "update all sysvars" {
 
         try updateStakeHistory(allocator, .{
             .epoch = 1,
-            .parent_epoch = null,
+            .parent_slots_epoch = null,
             .stakes_cache = &stakes_cache,
             .update_sysvar_deps = update_sysvar_deps,
         });

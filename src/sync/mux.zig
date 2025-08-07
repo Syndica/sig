@@ -297,6 +297,15 @@ pub fn RwMux(comptime T: type) type {
             };
         }
 
+        /// `tryRead` returns a `RLockGuard` after acquiring a `read` lock
+        pub fn tryRead(self: *Self) ?RLockGuard {
+            if (!self.private.r.tryLockShared()) return null;
+            return .{
+                .private = &self.private,
+                .valid = true,
+            };
+        }
+
         pub fn readWithLock(self: *Self) struct { Const(T), RLockGuard } {
             var lock_guard = self.read();
             const t = lock_guard.get();
