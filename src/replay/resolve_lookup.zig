@@ -486,3 +486,89 @@ fn put(
         .rent_epoch = 0,
     });
 }
+
+test getLookupTable {
+    const allocator = std.testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(0);
+    const random = prng.random();
+
+    var map = sig.accounts_db.ThreadSafeAccountMap.init(allocator);
+    defer map.deinit();
+
+    var ancestors = sig.core.Ancestors{};
+    defer ancestors.deinit(allocator);
+    try ancestors.addSlot(allocator, 0);
+
+    const account_reader = map.accountReader().forSlot(&ancestors);
+
+    { // Invalid owner
+        const pubkey = Pubkey.initRandom(random);
+
+        try map.put(0, pubkey, .{
+            .lamports = 1,
+            .data = &.{},
+            .owner = Pubkey.initRandom(random),
+            .executable = false,
+            .rent_epoch = 0,
+        });
+
+        try std.testing.expectError(
+            error.InvalidAddressLookupTableOwner,
+            getLookupTable(account_reader, pubkey),
+        );
+    }
+
+    { // Size too large
+        const pubkey = Pubkey.initRandom(random);
+        const data = try allocator.alloc(u8, AddressLookupTable.MAX_SERIALIZED_SIZE + 1);
+        defer allocator.free(data);
+
+        try map.put(0, pubkey, .{
+            .lamports = 1,
+            .data = data,
+            .owner = sig.runtime.program.address_lookup_table.ID,
+            .executable = false,
+            .rent_epoch = 0,
+        });
+
+        try std.testing.expectError(
+            error.InvalidAddressLookupTableData,
+            getLookupTable(account_reader, pubkey),
+        );
+    }
+
+    { // Data invalid
+        const pubkey = Pubkey.initRandom(random);
+        const data = try allocator.alloc(u8, AddressLookupTable.MAX_SERIALIZED_SIZE);
+        defer allocator.free(data);
+
+        try map.put(0, pubkey, .{
+            .lamports = 1,
+            .data = data,
+            .owner = sig.runtime.program.address_lookup_table.ID,
+            .executable = false,
+            .rent_epoch = 0,
+        });
+
+        try std.testing.expectError(
+            error.InvalidAddressLookupTableData,
+            getLookupTable(account_reader, pubkey),
+        );
+    }
+
+    {
+        const pubkey = Pubkey.initRandom(random);
+        const lookup_table = AddressLookupTable{
+            .meta = .{},
+            .addresses = &.{Pubkey.initRandom(random)},
+        };
+
+        try put(&map, pubkey, lookup_table);
+
+        const loaded_lookup_table = try getLookupTable(account_reader, pubkey);
+
+        try std.testing.expectEqual(lookup_table.meta, loaded_lookup_table.meta);
+        try std.testing.expect(lookup_table.addresses[0].equals(&loaded_lookup_table.addresses[0]));
+    }
+}
