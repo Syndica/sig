@@ -43,7 +43,7 @@ pub fn Database(comptime Impl: type) type {
         }
 
         pub fn put(
-            self: *Self,
+            self: Self,
             comptime cf: ColumnFamily,
             key: cf.Key,
             value: cf.Value,
