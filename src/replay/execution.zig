@@ -133,42 +133,6 @@ pub fn replayActiveSlots(state: *ReplayExecutionState) !bool {
         try slot_statuses.append(state.allocator, .{ slot, result });
     }
     var processed_a_slot = false;
-    // TODO this should be part of processReplayResults
-    // for (slot_statuses.items) |slot_status| {
-    //     // NOTE: currently this just awaits the futures and discards the
-    //     // results. this will change once we call the svm and process the
-    //     // results of execution.
-    //     const slot, const status = slot_status;
-    //     if (status != .confirm) continue;
-
-    //     const slot_info = state.slot_tracker.get(slot) orelse unreachable;
-    //     const epoch_info = state.epochs.getForSlot(slot) orelse unreachable;
-
-    //     const future = status.confirm;
-    //     // NOTE: agave does this a bit differently, it indicates that a slot
-    //     // was *finished*, not just processed partially.
-    //     processed_a_slot = true;
-    //     while (try status.confirm.poll() == .pending) {
-    //         // TODO: consider futex-based wait like ResetEvent
-    //         std.time.sleep(std.time.ns_per_ms);
-    //     }
-
-    //     if (slot_info.state.tickHeight() == slot_info.constants.max_tick_height) {
-    //         state.logger.info().logf("confirmed entire slot {}", .{slot});
-    //         try replay.freeze.freezeSlot(state.allocator, .init(
-    //             .from(state.logger),
-    //             state.account_store,
-    //             &epoch_info,
-    //             slot_info.state,
-    //             slot_info.constants,
-    //             slot,
-    //             future.entries[future.entries.len - 1].hash,
-    //         ));
-    //     } else {
-    //         state.logger.info().logf("partially confirmed slot {}", .{slot});
-    //     }
-    // }
-
     processed_a_slot = try processReplayResults(state, &slot_statuses);
     return processed_a_slot;
 }
