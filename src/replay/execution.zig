@@ -309,50 +309,45 @@ pub fn processReplayResults(
     slot_statuses: *const std.ArrayListUnmanaged(struct { Slot, ReplaySlotStatus }),
 ) !bool {
     var processed_a_slot = false;
-    var tx_count: usize = 0;
+    // Agave does a transaction count here but it looks redundant as the count is not used.
     for (slot_statuses.items) |slot_status| {
         const slot, const status = slot_status;
 
-        switch (status) {
-            .confirm => |confirm_slot_future| {
-                // Add timeout to prevent infinite loop
-                const timeout = 30 * std.time.ns_per_s; // 30 second timeout
-                const start_time = std.time.nanoTimestamp();
-
-                while (try confirm_slot_future.poll() == .pending) {
-                    if (std.time.nanoTimestamp() - start_time > timeout) {
-                        try markDeadSlot(
-                            slot,
-                            replay_state.progress_map,
-                            replay_state.ledger_result_writer,
-                        );
-                        continue;
+        // Agave does not return the entries in result.
+        // We do but what should they be used for?
+        _ = switch (status) {
+            .confirm => |confirm_slot_future| blk: {
+                var attempts: u8 = 0;
+                while (attempts < 3) : (attempts += 1) {
+                    switch (try confirm_slot_future.poll()) {
+                        .err => {
+                            try markDeadSlot(
+                                slot,
+                                replay_state.progress_map,
+                                replay_state.ledger_result_writer,
+                            );
+                            break :blk null;
+                        },
+                        .done => break :blk confirm_slot_future.entries,
+                        .pending => {
+                            if (attempts < 2) {
+                                std.time.sleep(std.time.ns_per_ms);
+                            }
+                        },
                     }
-                    std.time.sleep(10 * std.time.ns_per_ms);
                 }
-                if (try confirm_slot_future.poll() == .err) {
-                    try markDeadSlot(
-                        slot,
-                        replay_state.progress_map,
-                        replay_state.ledger_result_writer,
-                    );
-                    continue;
-                }
-                for (confirm_slot_future.entries) |entry| {
-                    tx_count += entry.transactions.len;
-                }
+                continue;
             },
             else => continue,
-        }
+        };
 
         var slot_info = replay_state.slot_tracker.get(slot) orelse
             return error.MissingSlotInTracker;
 
-        const parent_slot = slot_info.constants.parent_slot;
-        const parent_hash = slot_info.constants.parent_hash;
-
         if (slot_info.state.tickHeight() == slot_info.constants.max_tick_height) {
-            // Get bank progress from progress map
+            // We skip tracking batch_execute as it does in Agave
+            const parent_slot = slot_info.constants.parent_slot;
+            const parent_hash = slot_info.constants.parent_hash;
             var progress = replay_state.progress_map.map.getPtr(slot) orelse
                 return error.MissingBankProgress;
 
@@ -364,6 +359,10 @@ pub fn processReplayResults(
                 // If the block does not have at least DATA_SHREDS_PER_FEC_BLOCK correctly retransmitted
                 // shreds in the last FEC set, mark it dead. No reason to perform this check on our leader block.
                 // TODO add blockstore.check_last_fec_set_and_get_block_id ie with the checks.
+
+                // TODO Question should the block_id (hash) be retrieved
+                // via slot_status[1].entries[last_index].hash?
+
                 replay_state.blockstore_reader.lastFecSetUnchecked(slot) catch {
                     try markDeadSlot(
                         slot,
@@ -615,7 +614,9 @@ fn createTestReplayState(allocator: Allocator) !ReplayExecutionState {
     });
 
     var duplicate_slots_tracker = DuplicateSlots.empty;
-    var unfrozen_gossip_verified_vote_hashes = UnfrozenGossipVerifiedVoteHashes{ .votes_per_slot = .empty };
+    var unfrozen_gossip_verified_vote_hashes = UnfrozenGossipVerifiedVoteHashes{
+        .votes_per_slot = .empty,
+    };
     var latest_validator_votes_for_frozen_banks = LatestValidatorVotes.empty;
     var duplicate_confirmed_slots = DuplicateConfirmedSlots.empty;
     var epoch_slots_frozen_slots = EpochSlotsFrozenSlots.empty;
