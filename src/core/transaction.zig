@@ -432,7 +432,7 @@ pub const Message = struct {
         // other
         sig.runtime.ids.NATIVE_LOADER_ID,
     };
-    
+
     /// `is_upgradeable_loader_present` checks if v3 ID is in account_keys + ALUT keys.
     /// https://github.com/anza-xyz/solana-sdk/blob/5ff67c1a53c10e16689e377f98a92ba3afd6bb7c/message/src/versions/v0/loaded.rs#L139
     pub fn isWritable(self: Message, index: usize, is_upgradeable_loader_present: bool) bool {
