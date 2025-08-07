@@ -94,7 +94,7 @@ pub fn verify(
         };
         // https://docs.rs/libsecp256k1/0.6.0/src/libsecp256k1/lib.rs.html#674-680
 
-        const signature: *const Ecdsa.Signature = @ptrCast(
+        const signature: *const sig.crypto.EcdsaSignature = @ptrCast(
             signature_slice[0..SECP256K1_SIGNATURE_SERIALIZED_SIZE],
         );
 
@@ -119,7 +119,7 @@ pub fn verify(
             std.debug.assert(Keccak256.digest_length == 32);
         }
 
-        const pubkey = try recoverSecp256k1Pubkey(&msg_hash, signature, recovery_id);
+        const pubkey = try recoverSecp256k1Pubkey(&msg_hash, &signature.to(), recovery_id);
         const recovered_eth_address = constructEthAddress(&pubkey);
 
         if (!std.mem.eql(u8, eth_address, &recovered_eth_address)) {
@@ -142,7 +142,7 @@ fn getInstructionData(
 
 // https://docs.rs/libsecp256k1/0.6.0/src/libsecp256k1/lib.rs.html#764-770
 // https://github.com/firedancer-io/firedancer/blob/341bba05a3a7ca18d3d550d6b58c1b6a9207184f/src/ballet/secp256k1/fd_secp256k1.c#L7
-fn recoverSecp256k1Pubkey(
+pub fn recoverSecp256k1Pubkey(
     message_hash: *const [Keccak256.digest_length]u8,
     signature: *const Ecdsa.Signature,
     recovery_id: u2,
@@ -187,9 +187,7 @@ fn recoverSecp256k1Pubkey(
 ///   new tab). You get a public address for your account by
 ///   taking the last 20 bytes of the Keccak-256 hash of the
 ///   public key
-fn constructEthAddress(
-    pubkey: *const Ecdsa.PublicKey,
-) [SECP256K1_ETH_ADDRESS_SERIALIZED_SIZE]u8 {
+fn constructEthAddress(pubkey: *const Ecdsa.PublicKey) [SECP256K1_ETH_ADDRESS_SERIALIZED_SIZE]u8 {
     var pubkey_hash: [Keccak256.digest_length]u8 = undefined;
     const serialised_pubkey = pubkey.toUncompressedSec1();
     Keccak256.hash(serialised_pubkey[1..], &pubkey_hash, .{});
