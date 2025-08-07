@@ -113,6 +113,8 @@ const TransactionExecutionEnvironment = transaction_execution.TransactionExecuti
 const ProcessedTransaction = transaction_execution.ProcessedTransaction;
 const TransactionResult = transaction_execution.TransactionResult(ProcessedTransaction);
 
+const TransactionError = sig.ledger.transaction_status.TransactionError;
+
 const loadAndExecuteTransactions = transaction_execution.loadAndExecuteTransactions;
 const deinitMapAndValues = sig.utils.collections.deinitMapAndValues;
 
@@ -857,25 +859,34 @@ fn serializeOutput(
                 .fees_only => false,
             };
 
-            // TODO: just hardcoding InstructionError for now, can something else happen?
-            // our current design assumes that the transaction execution can only return
-            // InstructionError, which seems wrong. Not to mention that we don't have a way
-            // to access *which* instruction in the transaction is the one that errored.
-            const status: u32, const instr_err: u32 = switch (txn) {
-                .executed => |executed| .{
-                    if (executed.executed_transaction.err != null) 9 else 0,
-                    if (executed.executed_transaction.err) |instr_err|
-                        @intFromEnum(instr_err) + 1
+            const converted = blk: {
+                // https://github.com/firedancer-io/solfuzz-agave/blob/agave-v2.2.13/src/txn_fuzzer.rs#L208-L210
+                //
+                // TODO: just hardcoding InstructionError for now, can something else happen?
+                // our current design assumes that the transaction execution can only return
+                // InstructionError, which seems wrong. Not to mention that we don't have a way
+                // to access *which* instruction in the transaction is the one that errored.
+                const txn_error: TransactionError = switch (txn) {
+                    .executed => |executed| if (executed.executed_transaction.err) |instr_err_enum|
+                        .{ .InstructionError = .{ 0, instr_err_enum } }
                     else
-                        0,
-                },
-                .fees_only => |fees_only| fees_only: {
-                    const err_codes = utils.convertTransactionError(fees_only.err);
-                    break :fees_only .{
-                        err_codes.err,
-                        err_codes.instruction_error,
-                    };
-                },
+                        break :blk std.mem.zeroes(utils.Converted),
+                    .fees_only => |fees_only| fees_only.err,
+                };
+
+                // Set custom err to 0 if the failing instruction is a precompile
+                var converted = utils.convertTransactionError(txn_error);
+                if (converted.instruction_index < sanitized.instruction_infos.len) {
+                    const ixn_info = &sanitized.instruction_infos[converted.instruction_index];
+                    for (sig.runtime.program.precompiles.PRECOMPILES) |precompile| {
+                        if (precompile.program_id.equals(&ixn_info.program_meta.pubkey)) {
+                            converted.custom_error = 0;
+                            break;
+                        }
+                    }
+                }
+
+                break :blk converted;
             };
 
             const rent = switch (txn) {
@@ -963,8 +974,10 @@ fn serializeOutput(
                 .is_ok = is_ok,
                 .rent = rent,
 
-                .status = status,
-                .instruction_error = instr_err,
+                .status = converted.err,
+                .instruction_error = converted.instruction_error,
+                .custom_error = converted.custom_error,
+                .instruction_error_index = converted.instruction_index,
 
                 .resulting_state = resulting_state,
                 .fee_details = .{
