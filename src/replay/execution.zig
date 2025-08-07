@@ -37,6 +37,8 @@ const check_slot_agrees_with_cluster = replay.edge_cases.check_slot_agrees_with_
 
 const SvmGateway = replay.svm_gateway.SvmGateway;
 
+const SvmGateway = replay.svm_gateway.SvmGateway;
+
 const confirmSlot = replay.confirm_slot.confirmSlot;
 /// State used for replaying and validating data from blockstore/accountsdb/svm
 pub const ReplayExecutionState = struct {
