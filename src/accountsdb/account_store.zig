@@ -70,7 +70,7 @@ pub const AccountReader = union(enum) {
     pub fn getLatest(self: AccountReader, address: Pubkey) !?Account {
         return switch (self) {
             .accounts_db => |db| {
-                const account = try db.getAccount(&address);
+                const account = try db.getAccountLatest(&address) orelse return null;
                 if (account.lamports == 0) {
                     // TODO: implement this check in accountsdb to avoid the unnecessary allocation
                     account.deinit(db.allocator);

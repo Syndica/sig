@@ -114,12 +114,7 @@ pub const BasicShredTracker = struct {
             for (parent_slot + 1..slot) |slot_to_skip| {
                 const monitored_slot_to_skip = self.observeSlot(slot_to_skip) catch continue;
                 if (!monitored_slot_to_skip.is_complete) {
-                    monitored_slot_to_skip.is_complete = true;
-                    if (slot_to_skip > self.max_slot_processed) {
-                        self.max_slot_processed = slot_to_skip;
-                        self.metrics.max_slot_processed.set(slot_to_skip);
-                    }
-                    if (slot_to_skip == new_bottom) new_bottom += 1;
+                    monitored_slot_to_skip.is_skipped = true;
                 }
             }
         }
@@ -170,7 +165,7 @@ pub const BasicShredTracker = struct {
     pub fn identifyMissing(
         self: *Self,
         slot_reports: *MultiSlotReport,
-        timestamp: Instant,
+        now: Instant,
     ) (Allocator.Error || SlotOutOfBounds)!bool {
         if (self.start_slot == null) return false;
         self.mux.lock();
@@ -181,20 +176,63 @@ pub const BasicShredTracker = struct {
         const last_slot_to_check = @max(self.max_slot_processed, self.current_bottom_slot);
         for (self.current_bottom_slot..last_slot_to_check + 1) |slot| {
             const monitored_slot = try self.getMonitoredSlot(slot);
-            if (timestamp.elapsedSince(monitored_slot.first_received_timestamp)
+
+            if (now.elapsedSince(monitored_slot.first_received_timestamp)
                 .lt(MIN_SLOT_AGE_TO_REPORT_AS_MISSING))
                 continue;
-            var slot_report = try slot_reports.addOne();
-            slot_report.slot = slot;
-            try monitored_slot.identifyMissing(&slot_report.missing_shreds);
-            if (slot_report.missing_shreds.items.len > 0) {
-                found_an_incomplete_slot = true;
+
+            if (!self.slotShouldBeSkipped(monitored_slot, slot, last_slot_to_check, now)) {
+                var slot_report = try slot_reports.addOne();
+                slot_report.slot = slot;
+                try monitored_slot.identifyMissing(&slot_report.missing_shreds);
+                if (slot_report.missing_shreds.items.len > 0) {
+                    found_an_incomplete_slot = true;
+                }
             }
+
             if (!found_an_incomplete_slot) {
-                self.setBottom(slot);
+                self.setBottom(slot + 1);
             }
         }
         return true;
+    }
+
+    /// assumes lock is held
+    ///
+    /// skip the slot if:
+    /// - marked as skipped by another slot
+    /// - there are at least 32 more slots we've received after this one
+    /// - 80% of those are complete or skipped
+    /// - it has been at least 10 seconds since we received any shreds for this
+    ///   slot
+    ///
+    /// the implication is that we'll stop repairing this slot because the
+    /// cluster has selected a fork that doesn't include the slot, and we won't
+    /// ever be able to repair it.
+    ///
+    /// This is only a temporary solution to make repair slightly more
+    /// fork-aware and handle the uncertainty of skipped slots more robustly.
+    /// - in the long term, we should only skip slots that our own consensus
+    ///   tells us to skip, and no others.
+    /// - in the short term, maybe this can be optimized somehow to avoid so
+    ///   much looping.
+    fn slotShouldBeSkipped(
+        self: *Self,
+        slot_in_question: *MonitoredSlot,
+        this_slot: Slot,
+        top_slot: Slot,
+        now: Instant,
+    ) bool {
+        const total_slots_tracked = top_slot -| this_slot;
+        if (!slot_in_question.is_skipped or total_slots_tracked < 32)
+            return false;
+        var num_complete: f64 = 0;
+        for (this_slot + 1..top_slot + 1) |slot_to_check| {
+            const ms_to_check = self.getMonitoredSlot(slot_to_check) catch unreachable;
+            if (ms_to_check.is_complete or ms_to_check.is_skipped) num_complete += 1.0;
+        }
+        return num_complete / @as(f64, @floatFromInt(total_slots_tracked)) > 0.8 and
+            now.elapsedSince(slot_in_question.last_unique_received_timestamp).asSecs() > 10;
     }
 
     /// assumes lock is held
@@ -280,7 +318,11 @@ const MonitoredSlot = struct {
     max_seen: ?u32 = null,
     last_shred: ?u32 = null,
     first_received_timestamp: Instant = Instant.UNIX_EPOCH,
+    last_unique_received_timestamp: Instant = Instant.UNIX_EPOCH,
     is_complete: bool = false,
+    /// this just means we've identified that another slot that claims to be
+    /// skipping this one. it doesn't mean this slot is definitely being skipped.
+    is_skipped: bool = false,
     parent_slot: ?Slot = null,
     unique_observed_count: u32 = 0,
 
@@ -289,7 +331,10 @@ const MonitoredSlot = struct {
     /// returns if the slot is *definitely* complete (there may be false negatives)
     pub fn record(self: *Self, shred_index: u32, is_last_in_slot: bool, timestamp: Instant) bool {
         if (self.is_complete) return false;
-        if (!bit_set.setAndWasSet(&self.shreds, shred_index)) self.unique_observed_count += 1;
+        if (!bit_set.setAndWasSet(&self.shreds, shred_index)) {
+            self.last_unique_received_timestamp = timestamp;
+            self.unique_observed_count += 1;
+        }
 
         if (is_last_in_slot) if (self.last_shred) |old_last| {
             self.last_shred = @min(old_last, shred_index);

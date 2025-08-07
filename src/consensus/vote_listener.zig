@@ -1483,7 +1483,7 @@ test "simple usage" {
                 .ancestors = .{ .ancestors = .empty },
                 .feature_set = .{ .active = .empty },
             },
-            .state = .GENESIS,
+            .state = try .genesis(allocator),
             .epoch_constants = .{
                 .hashes_per_tick = 1,
                 .ticks_per_slot = 1,
@@ -1585,7 +1585,7 @@ test "check trackers" {
                 .ancestors = .{ .ancestors = .empty },
                 .feature_set = .{ .active = .empty },
             },
-            .state = .GENESIS,
+            .state = try .genesis(allocator),
             .epoch_constants = .{
                 .hashes_per_tick = 1,
                 .ticks_per_slot = 1,

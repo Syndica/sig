@@ -581,6 +581,40 @@ pub const Manifest = struct {
     ) !Manifest {
         return try bincode.read(allocator, Manifest, reader, .{});
     }
+
+    pub fn epochStakes(
+        self: *const Manifest,
+        epoch: Epoch,
+    ) !*const std.AutoArrayHashMapUnmanaged(Pubkey, u64) {
+        if (self.bank_fields.epoch_stakes.getPtr(epoch)) |_| {
+            // Agave simply ignores this field. I've added this log message just
+            // as a sanity check, but I don't expect to ever see it.
+            std.log.warn("ignoring deprecated epoch stakes", .{});
+        }
+        return if (self.bank_extra.versioned_epoch_stakes.getPtr(epoch)) |es|
+            &es.current.stakes.vote_accounts.staked_nodes
+        else
+            return error.NoEpochStakes;
+    }
+
+    /// Returns the leader schedule for an arbitrary epoch.
+    /// Only works if the bank is aware of the staked nodes for that epoch.
+    pub fn leaderSchedule(
+        self: *const Manifest,
+        allocator: std.mem.Allocator,
+        /// Default is the bank's epoch.
+        custom_epoch: ?Epoch,
+    ) !sig.core.leader_schedule.LeaderSchedule {
+        const epoch = custom_epoch orelse self.bank_fields.epoch;
+        const slots_in_epoch =
+            self.bank_fields.epoch_schedule.getSlotsInEpoch(self.bank_fields.epoch);
+        const staked_nodes = try self.epochStakes(epoch);
+        return .{
+            .allocator = allocator,
+            .slot_leaders = try sig.core.leader_schedule.LeaderSchedule
+                .fromStakedNodes(allocator, epoch, slots_in_epoch, staked_nodes),
+        };
+    }
 };
 
 /// Analogous to [TransactionError](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/sdk/src/transaction/error.rs#L14)

@@ -85,7 +85,7 @@ pub const Tower = struct {
         fork_root: Slot,
         accounts_db: *AccountsDB,
     ) !void {
-        const vote_account = accounts_db.getAccount(vote_account_pubkey) catch {
+        const vote_account = try accounts_db.getAccountLatest(vote_account_pubkey) orelse {
             self.initializeRoot(fork_root);
             return;
         };
@@ -278,8 +278,9 @@ pub fn lastVotedSlotInBank(
     allocator: std.mem.Allocator,
     accounts_db: *AccountsDB,
     vote_account_pubkey: *const Pubkey,
-) ?Slot {
-    const vote_account = accounts_db.getAccount(vote_account_pubkey) catch return null;
+) !?Slot {
+    const vote_account = try accounts_db.getAccountLatest(vote_account_pubkey) orelse
+        return null;
     const vote_state = stateFromAccount(
         allocator,
         &vote_account,

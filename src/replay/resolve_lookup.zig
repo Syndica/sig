@@ -6,6 +6,7 @@ const core = sig.core;
 
 const Allocator = std.mem.Allocator;
 
+const Hash = core.Hash;
 const Ancestors = core.Ancestors;
 const InstructionAccount = core.instruction.InstructionAccount;
 const Pubkey = core.Pubkey;
@@ -18,6 +19,7 @@ const AddressLookupTable = sig.runtime.program.address_lookup_table.AddressLooku
 const InstructionInfo = sig.runtime.InstructionInfo;
 const AccountMeta = sig.runtime.InstructionInfo.AccountMeta;
 const ProgramMeta = sig.runtime.InstructionInfo.ProgramMeta;
+const RuntimeTransaction = sig.runtime.transaction_execution.RuntimeTransaction;
 
 const LockableAccount = sig.replay.account_locks.LockableAccount;
 
@@ -49,6 +51,17 @@ pub const ResolvedTransaction = struct {
         var acc = self.accounts;
         acc.deinit(allocator);
         allocator.free(self.instructions);
+    }
+
+    pub fn toRuntimeTransaction(self: ResolvedTransaction, message_hash: Hash) RuntimeTransaction {
+        return .{
+            .signature_count = self.transaction.signatures.len,
+            .fee_payer = self.transaction.msg.account_keys[0],
+            .msg_hash = message_hash,
+            .recent_blockhash = self.transaction.msg.recent_blockhash,
+            .instructions = self.instructions,
+            .accounts = self.accounts,
+        };
     }
 };
 

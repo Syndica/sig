@@ -84,7 +84,7 @@ pub fn verifyTransaction(
         .fee_payer = resolved_txn.transaction.msg.account_keys[0],
         .msg_hash = msg_hash,
         .recent_blockhash = resolved_txn.transaction.msg.recent_blockhash,
-        .instruction_infos = instrs,
+        .instructions = instrs,
         .accounts = try resolved_txn.accounts.clone(allocator),
     } };
 }
