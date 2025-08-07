@@ -210,7 +210,8 @@ pub const BasicShredTracker = struct {
     /// cluster has selected a fork that doesn't include the slot, and we won't
     /// ever be able to repair it.
     ///
-    /// TODO this function should be significantly reworked:
+    /// This is only a temporary solution to make repair slightly more
+    /// fork-aware and handle the uncertainty of skipped slots more robustly.
     /// - in the long term, we should only skip slots that our own consensus
     ///   tells us to skip, and no others.
     /// - in the short term, maybe this can be optimized somehow to avoid so
