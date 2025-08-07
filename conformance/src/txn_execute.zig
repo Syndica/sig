@@ -861,14 +861,12 @@ fn serializeOutput(
 
             const converted = blk: {
                 // https://github.com/firedancer-io/solfuzz-agave/blob/agave-v2.2.13/src/txn_fuzzer.rs#L208-L210
-                //
-                // TODO: just hardcoding InstructionError for now, can something else happen?
-                // our current design assumes that the transaction execution can only return
-                // InstructionError, which seems wrong. Not to mention that we don't have a way
-                // to access *which* instruction in the transaction is the one that errored.
                 const txn_error: TransactionError = switch (txn) {
                     .executed => |executed| if (executed.executed_transaction.err) |instr_err_enum|
-                        .{ .InstructionError = .{ 0, instr_err_enum } }
+                        .{ .InstructionError = .{
+                            executed.executed_transaction.err_index,
+                            instr_err_enum,
+                        } }
                     else
                         break :blk std.mem.zeroes(utils.Converted),
                     .fees_only => |fees_only| fees_only.err,
