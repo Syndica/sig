@@ -4158,6 +4158,7 @@ pub const TestFixture = struct {
         self.slot_tracker.deinit(allocator);
         self.node_pubkeys.deinit(allocator);
         self.vote_pubkeys.deinit(allocator);
+        self.latest_validator_votes_for_frozen_banks.deinit(allocator);
 
         {
             var it = self.epoch_stakes.iterator();

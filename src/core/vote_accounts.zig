@@ -14,6 +14,8 @@ const AccountSharedData = sig.runtime.AccountSharedData;
 
 const VoteState = sig.runtime.program.vote.state.VoteState;
 const VoteStateVersions = sig.runtime.program.vote.state.VoteStateVersions;
+const LandedVote = sig.runtime.program.vote.state.LandedVote;
+const Lockout = sig.runtime.program.vote.state.Lockout;
 
 const Clock = sig.runtime.sysvar.Clock;
 
@@ -384,7 +386,7 @@ pub fn createVoteAccount(
     };
     errdefer allocator.free(vote_account.data);
 
-    const vote_state = try VoteState.init(
+    var vote_state = try VoteState.init(
         allocator,
         node_pubkey,
         authorized_voter,
@@ -393,6 +395,16 @@ pub fn createVoteAccount(
         clock orelse Clock.DEFAULT,
     );
     defer vote_state.deinit();
+
+    try vote_state.votes.append(
+        LandedVote{
+            .latency = 0,
+            .lockout = Lockout{
+                .slot = 0,
+                .confirmation_count = 1,
+            },
+        },
+    );
 
     _ = bincode.writeToSlice(
         vote_account.data,
