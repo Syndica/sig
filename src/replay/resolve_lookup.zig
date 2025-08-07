@@ -105,18 +105,6 @@ fn resolveTransaction(
     const readable_lookups_start = lookups.writable.len + lookups_start;
     const lookups_end = lookups.readonly.len + readable_lookups_start;
 
-    // Check if the UpgradeableLoader ID is present in any of the accounts (needed for is_writable).
-    const is_upgradeable_loader_present =
-        blk: for ([_][]const Pubkey{
-            message.account_keys,
-            lookups.writable,
-            lookups.readonly,
-        }) |accounts| {
-            for (accounts) |pubkey|
-                if (pubkey.equals(&sig.runtime.program.bpf_loader.v3.ID))
-                    break :blk true;
-        } else false;
-
     // construct accounts
     var accounts = std.MultiArrayList(InstructionAccount){};
     try accounts.ensureTotalCapacity(allocator, lookups_end);
@@ -124,12 +112,12 @@ fn resolveTransaction(
     for (message.account_keys, 0..) |pubkey, i| accounts.appendAssumeCapacity(.{
         .pubkey = pubkey,
         .is_signer = message.isSigner(i),
-        .is_writable = message.isWritable(i, is_upgradeable_loader_present),
+        .is_writable = message.isWritable(i, lookups),
     });
-    for (lookups.writable) |pubkey| accounts.appendAssumeCapacity(.{
+    for (lookups.writable, 0..) |pubkey, i| accounts.appendAssumeCapacity(.{
         .pubkey = pubkey,
         .is_signer = false,
-        .is_writable = true,
+        .is_writable = message.isWritable(message.account_keys.len + i, lookups),
     });
     for (lookups.readonly) |pubkey| accounts.appendAssumeCapacity(.{
         .pubkey = pubkey,
@@ -187,11 +175,16 @@ fn resolveTransaction(
     };
 }
 
+pub const LookupTableAccounts = struct {
+    writable: []const Pubkey,
+    readonly: []const Pubkey,
+};
+
 fn resolveLookupTableAccounts(
     allocator: Allocator,
     account_reader: SlotAccountReader,
     address_lookups: []const TransactionAddressLookup,
-) !struct { writable: []const Pubkey, readonly: []const Pubkey } {
+) !LookupTableAccounts {
     // count number of accounts
     var total_writable: usize = 0;
     var total_readonly: usize = 0;

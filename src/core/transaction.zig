@@ -9,6 +9,8 @@ const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 const Signature = sig.core.Signature;
 
+const LookupTableAccounts = sig.replay.resolve_lookup.LookupTableAccounts;
+
 const shortVecConfig = sig.bincode.shortvec.sliceConfig;
 
 pub const Transaction = struct {
@@ -393,15 +395,6 @@ pub const Message = struct {
         return index < self.signature_count;
     }
 
-    /// https://github.com/anza-xyz/solana-sdk/blob/5ff67c1a53c10e16689e377f98a92ba3afd6bb7c/message/src/versions/v0/loaded.rs#L118
-    fn isWritableIndex(self: Message, index: usize) bool {
-        const is_readonly_signed =
-            index < self.signature_count and
-            index >= self.signature_count - self.readonly_signed_count;
-        const is_readonly_unsigned = index >= self.account_keys.len - self.readonly_unsigned_count;
-        return !(is_readonly_signed or is_readonly_unsigned);
-    }
-
     const RESERVED_ACCOUNTS: []const Pubkey = &.{
         // builtin programs
         sig.runtime.program.bpf_loader.v2.ID,
@@ -433,21 +426,47 @@ pub const Message = struct {
         sig.runtime.ids.NATIVE_LOADER_ID,
     };
 
-    /// `is_upgradeable_loader_present` checks if v3 ID is in account_keys + ALUT keys.
-    /// https://github.com/anza-xyz/solana-sdk/blob/5ff67c1a53c10e16689e377f98a92ba3afd6bb7c/message/src/versions/v0/loaded.rs#L139
-    pub fn isWritable(self: Message, index: usize, is_upgradeable_loader_present: bool) bool {
-        return self.isWritableIndex(index) and {
-            const is_key_called_as_program = for (self.instructions) |ixn| {
-                if (ixn.program_index == index) break true;
-            } else false;
-
-            const is_reserved = for (RESERVED_ACCOUNTS) |reserved_key| {
-                if (reserved_key.equals(&self.account_keys[index])) break true;
-            } else false;
-
-            const demote_program_id = is_key_called_as_program and !is_upgradeable_loader_present;
-            return !(is_reserved or demote_program_id);
+    /// https://github.com/anza-xyz/solana-sdk/blob/5ff67c1a53c10e16689e377f98a92ba3afd6bb7c/message/src/versions/v0/loaded.rs#L118-L150
+    pub fn isWritable(self: Message, index: usize, lookups: LookupTableAccounts) bool {
+        const pubkey = blk: {
+            if (index < self.account_keys.len) {
+                if (index >= self.signature_count) {
+                    // check if signed readable
+                    if (index >= self.account_keys.len - self.readonly_unsigned_count) return false;
+                } else {
+                    // check if unsigned readable
+                    if (index >= self.signature_count - self.readonly_signed_count) return false;
+                }
+                break :blk self.account_keys[index];
+            } else if (index < self.account_keys.len + lookups.writable.len) {
+                // lookups.writable
+                break :blk lookups.writable[index - self.account_keys.len];
+            } else {
+                // lookups.readable
+                return false;
+            }
         };
+
+        const is_upgradeable_loader_present = blk: for ([_][]const Pubkey{
+            self.account_keys,
+            lookups.writable,
+            lookups.readonly,
+        }) |accounts| {
+            for (accounts) |account_key|
+                if (account_key.equals(&sig.runtime.program.bpf_loader.v3.ID))
+                    break :blk true;
+        } else false;
+
+        const is_key_called_as_program = for (self.instructions) |ixn| {
+            if (ixn.program_index == index) break true;
+        } else false;
+
+        const is_reserved = for (RESERVED_ACCOUNTS) |reserved_key| {
+            if (reserved_key.equals(&pubkey)) break true;
+        } else false;
+
+        const demote_program_id = is_key_called_as_program and !is_upgradeable_loader_present;
+        return !(is_reserved or demote_program_id);
     }
 
     /// Returns the serialized message as a bounded array.
