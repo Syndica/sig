@@ -165,7 +165,7 @@ const ReplayState = struct {
 /// Run the replay service indefinitely.
 pub fn run(deps: ReplayDependencies) !void {
     var state = try ReplayState.init(deps);
-    defer state.deinit();
+    // defer state.deinit(); TODO: this double-frees. Deinit properly?
 
     while (!deps.exit.load(.monotonic)) try advanceReplay(&state);
 }
