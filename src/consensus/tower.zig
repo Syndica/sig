@@ -38,16 +38,6 @@ const ComputedBankState = struct {
     my_latest_landed_vote: ?Slot,
 };
 
-pub const ThresholdDecision = union(enum) {
-    passed_threshold,
-    failed_threshold: struct {
-        // vote depth
-        u64,
-        // Observed stake
-        u64,
-    },
-};
-
 pub const TowerError = error{
     IoError,
     SerializeError,
