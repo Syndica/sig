@@ -50,7 +50,6 @@ pub const ConsensusDependencies = struct {
     descendants: *const std.AutoArrayHashMapUnmanaged(u64, SortedSet(u64)),
     vote_account: Pubkey,
     slot_history: *const SlotHistory,
-    epoch_stakes: *const EpochStakesMap,
     latest_validator_votes_for_frozen_banks: *LatestValidatorVotesForFrozenBanks,
 };
 
@@ -60,13 +59,23 @@ pub fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
     else
         return error.Todo;
 
+    var epoch_stakes_map: EpochStakesMap = .empty;
+    errdefer epoch_stakes_map.deinit(deps.allocator);
+
+    try epoch_stakes_map.ensureTotalCapacity(deps.allocator, deps.epoch_tracker.epochs.count());
+    defer epoch_stakes_map.deinit(deps.allocator);
+
+    for (deps.epoch_tracker.epochs.keys(), deps.epoch_tracker.epochs.values()) |key, constants| {
+        epoch_stakes_map.putAssumeCapacity(key, constants.stakes);
+    }
+
     const newly_computed_slot_stats = try computeBankStats(
         deps.allocator,
         deps.vote_account,
         deps.ancestors,
         deps.slot_tracker,
-        deps.epoch_stakes,
         &deps.epoch_tracker.schedule,
+        &epoch_stakes_map,
         deps.progress_map,
         deps.fork_choice,
         deps.latest_validator_votes_for_frozen_banks,
@@ -97,7 +106,7 @@ pub fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
         deps.progress_map,
         deps.latest_validator_votes_for_frozen_banks,
         deps.fork_choice,
-        deps.epoch_stakes,
+        &epoch_stakes_map,
         deps.slot_history,
     );
     const maybe_voted_slot = vote_and_reset_forks.vote_slot;
@@ -465,8 +474,8 @@ fn computeBankStats(
     my_vote_pubkey: Pubkey,
     ancestors: *const std.AutoArrayHashMapUnmanaged(u64, SortedSet(u64)),
     slot_tracker: *SlotTracker,
-    epoch_stakes: *const EpochStakesMap,
     epoch_schedule: *const EpochSchedule,
+    epoch_stakes_map: *const EpochStakesMap,
     progress: *ProgressMap,
     fork_choice: *ForkChoice,
     latest_validator_votes: *LatestValidatorVotesForFrozenBanks,
@@ -479,7 +488,7 @@ fn computeBankStats(
     // If not, then we can avoid sorting here which may be verbose given frozen_slots is a map.
     for (frozen_slots.keys()) |slot| {
         const epoch = epoch_schedule.getEpoch(slot);
-        const epoch_stake = epoch_stakes.get(epoch) orelse return error.MissingEpochStake;
+        const epoch_stakes = epoch_stakes_map.get(epoch) orelse return error.MissingEpochStakes;
         const fork_stat = progress.getForkStats(slot) orelse return error.MissingSlot;
         if (!fork_stat.computed) {
             // TODO Self::adopt_on_chain_tower_if_behind
@@ -489,14 +498,15 @@ fn computeBankStats(
                 .noop,
                 &my_vote_pubkey,
                 slot,
-                &epoch_stake.stakes.vote_accounts.vote_accounts,
+                &epoch_stakes.stakes.vote_accounts.vote_accounts,
                 ancestors,
                 progress,
                 latest_validator_votes,
             );
+
             try fork_choice.computeBankStats(
                 allocator,
-                epoch_stakes,
+                epoch_stakes_map,
                 epoch_schedule,
                 latest_validator_votes,
             );
@@ -524,6 +534,7 @@ const TestDB = sig.ledger.tests.TestDB;
 const TestFixture = sig.consensus.replay_tower.TestFixture;
 const MAX_TEST_TREE_LEN = sig.consensus.replay_tower.MAX_TEST_TREE_LEN;
 const Lockout = sig.runtime.program.vote.state.Lockout;
+
 const createTestReplayTower = sig.consensus.replay_tower.createTestReplayTower;
 
 test "maybeRefreshLastVote - no heaviest slot on same fork" {
@@ -1324,8 +1335,8 @@ test "computeBankStats - child bank heavier" {
         my_node_pubkey,
         &fixture.ancestors,
         &fixture.slot_tracker,
-        &epoch_stakes,
         &epoch_schedule,
+        &epoch_stakes,
         &fixture.progress,
         &fixture.fork_choice,
         &fixture.latest_validator_votes_for_frozen_banks,
@@ -1411,8 +1422,8 @@ test "computeBankStats - same weight selects lower slot" {
         my_vote_pubkey,
         &fixture.ancestors,
         &fixture.slot_tracker,
-        &epoch_stakes,
         &epoch_schedule,
+        &epoch_stakes,
         &fixture.progress,
         &fixture.fork_choice,
         &fixture.latest_validator_votes_for_frozen_banks,
