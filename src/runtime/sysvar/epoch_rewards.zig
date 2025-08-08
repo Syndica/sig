@@ -36,8 +36,7 @@ pub const EpochRewards = extern struct {
     /// active
     active: bool,
 
-    pub const ID =
-        Pubkey.parseBase58String("SysvarEpochRewards1111111111111111111111111") catch unreachable;
+    pub const ID: Pubkey = .parse("SysvarEpochRewards1111111111111111111111111");
 
     pub const DEFAULT = EpochRewards{
         .distribution_starting_block_height = 0,

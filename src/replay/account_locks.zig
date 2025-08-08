@@ -133,14 +133,14 @@ const expectError = std.testing.expectError;
 const expectEqual = std.testing.expectEqual;
 
 const test_keys = [_]Pubkey{
-    Pubkey.parseBase58String("3Thhhj3omvVFfbhEHdFe8djwDZT5oS6BQ4k5KrZkYt1r") catch unreachable,
-    Pubkey.parseBase58String("DttWaMuVvTiduZRnguLF7jNxTgiMBZ1hyAumKUiL2KRL") catch unreachable,
-    Pubkey.parseBase58String("9fRXX5Bj3XWfCHtVkYtQVvMnAfoy4KjcpgHTBSmymzRu") catch unreachable,
-    Pubkey.parseBase58String("5BUYHtAdv2rUM73A8iEWQ4hcVQXCRE8VrQFR39DKaWW8") catch unreachable,
-    Pubkey.parseBase58String("9jo7RYY8HgxpU3Zs5zPFyRAkcUtx8J5RHc2fN9Btxfmi") catch unreachable,
-    Pubkey.parseBase58String("FZgqDx8Guf649hif1WVuTb6mTV2LhotUFE12PYveAbC8") catch unreachable,
-    Pubkey.parseBase58String("JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4") catch unreachable,
-    Pubkey.parseBase58String("pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA") catch unreachable,
+    .parse("3Thhhj3omvVFfbhEHdFe8djwDZT5oS6BQ4k5KrZkYt1r"),
+    .parse("DttWaMuVvTiduZRnguLF7jNxTgiMBZ1hyAumKUiL2KRL"),
+    .parse("9fRXX5Bj3XWfCHtVkYtQVvMnAfoy4KjcpgHTBSmymzRu"),
+    .parse("5BUYHtAdv2rUM73A8iEWQ4hcVQXCRE8VrQFR39DKaWW8"),
+    .parse("9jo7RYY8HgxpU3Zs5zPFyRAkcUtx8J5RHc2fN9Btxfmi"),
+    .parse("FZgqDx8Guf649hif1WVuTb6mTV2LhotUFE12PYveAbC8"),
+    .parse("JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4"),
+    .parse("pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA"),
 };
 
 test "lockStrict + lockPermissive + unlock: simple happy paths and failure modes" {

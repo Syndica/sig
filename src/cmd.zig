@@ -1198,16 +1198,16 @@ fn validator(
         const epoch_stakes = epoch_stakes_map.get(epoch) orelse
             return error.EpochStakesMissingFromSnapshot;
 
-        var feature_set = try sig.replay.service.getActiveFeatures(
+        const feature_set = try sig.replay.service.getActiveFeatures(
             allocator,
             loaded_snapshot.accounts_db.accountReader().forSlot(&bank_fields.ancestors),
             bank_fields.slot,
         );
-        const root_slot_constants =
-            sig.core.SlotConstants.fromBankFields(allocator, bank_fields, feature_set) catch |err| {
-                feature_set.deinit(allocator);
-                return err;
-            };
+        const root_slot_constants = try sig.core.SlotConstants.fromBankFields(
+            allocator,
+            bank_fields,
+            feature_set,
+        );
         errdefer root_slot_constants.deinit(allocator);
 
         var root_slot_state = try sig.core.SlotState.fromBankFields(allocator, bank_fields);
@@ -2098,10 +2098,8 @@ fn getTrustedValidators(allocator: std.mem.Allocator, cfg: config.Cmd) !?std.Arr
             allocator,
             cfg.gossip.trusted_validators.len,
         );
-        for (cfg.gossip.trusted_validators) |trusted_validator_str| {
-            trusted_validators.?.appendAssumeCapacity(
-                try Pubkey.parseBase58String(trusted_validator_str),
-            );
+        for (cfg.gossip.trusted_validators) |trusted_validator| {
+            trusted_validators.?.appendAssumeCapacity(try Pubkey.parseRuntime(trusted_validator));
         }
     }
     return trusted_validators;

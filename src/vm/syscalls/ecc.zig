@@ -4,7 +4,6 @@ const std = @import("std");
 const sig = @import("../../sig.zig");
 
 const bn254 = sig.crypto.bn254;
-const features = sig.core.features;
 
 const MemoryMap = sig.vm.memory.MemoryMap;
 const RegisterMap = sig.vm.interpreter.RegisterMap;
@@ -12,9 +11,14 @@ const TransactionContext = sig.runtime.TransactionContext;
 const Error = sig.vm.syscalls.Error;
 const SyscallError = sig.vm.SyscallError;
 const memory = sig.vm.memory;
+const FeatureSet = sig.core.FeatureSet;
 
 const Edwards25519 = std.crypto.ecc.Edwards25519;
 const Ristretto255 = std.crypto.ecc.Ristretto255;
+
+const Keccak256 = std.crypto.hash.sha3.Keccak256;
+const Secp256k1 = std.crypto.ecc.Secp256k1;
+const Ecdsa = std.crypto.sign.ecdsa.Ecdsa(Secp256k1, Keccak256);
 
 pub const CurveId = enum(u64) {
     edwards = 0,
@@ -44,7 +48,7 @@ pub fn curvePointValidation(
     registers: *RegisterMap,
 ) Error!void {
     const curve_id = CurveId.wrap(registers.get(.r1)) orelse {
-        if (tc.feature_set.active.contains(features.ABORT_ON_INVALID_CURVE)) {
+        if (tc.feature_set.active(.abort_on_invalid_curve, tc.slot)) {
             return SyscallError.InvalidAttribute;
         } else {
             registers.set(.r0, 1);
@@ -81,7 +85,7 @@ pub fn curveGroupOp(
     registers: *RegisterMap,
 ) Error!void {
     const curve_id = CurveId.wrap(registers.get(.r1)) orelse {
-        if (tc.feature_set.active.contains(features.ABORT_ON_INVALID_CURVE)) {
+        if (tc.feature_set.active(.abort_on_invalid_curve, tc.slot)) {
             return SyscallError.InvalidAttribute;
         } else {
             registers.set(.r0, 1);
@@ -89,7 +93,7 @@ pub fn curveGroupOp(
         }
     };
     const group_op = GroupOp.wrap(registers.get(.r2)) orelse {
-        if (tc.feature_set.active.contains(features.ABORT_ON_INVALID_CURVE)) {
+        if (tc.feature_set.active(.abort_on_invalid_curve, tc.slot)) {
             return SyscallError.InvalidAttribute;
         } else {
             registers.set(.r0, 1);
@@ -312,7 +316,7 @@ pub fn curveMultiscalarMul(
     if (points_len > 512) return SyscallError.InvalidLength;
 
     const curve_id = CurveId.wrap(attribute_id) orelse {
-        if (tc.feature_set.active.contains(features.ABORT_ON_INVALID_CURVE)) {
+        if (tc.feature_set.active(.abort_on_invalid_curve, tc.slot)) {
             return SyscallError.InvalidAttribute;
         } else {
             registers.set(.r0, 1);
@@ -457,10 +461,9 @@ pub fn altBn128GroupOp(
         input,
         &result,
         tc.feature_set,
+        tc.slot,
     ) catch {
-        if (tc.feature_set.active.contains(
-            features.SIMPLIFY_ALT_BN128_SYSCALL_ERROR_CODES,
-        )) {
+        if (tc.feature_set.active(.simplify_alt_bn128_syscall_error_codes, tc.slot)) {
             registers.set(.r0, 1);
             return;
         } else @panic("SIMPLIFY_ALT_BN_128_SYSCALL_ERROR_CODES not active");
@@ -521,9 +524,7 @@ pub fn altBn128Compression(
     };
     // Must be exactly the correct length.
     if (input_size != needed_input_size) {
-        if (tc.feature_set.active.contains(
-            features.SIMPLIFY_ALT_BN128_SYSCALL_ERROR_CODES,
-        )) {
+        if (tc.feature_set.active(.simplify_alt_bn128_syscall_error_codes, tc.slot)) {
             registers.set(.r0, 1);
             return;
         } else @panic("SIMPLIFY_ALT_BN_128_SYSCALL_ERROR_CODES not active");
@@ -539,9 +540,7 @@ pub fn altBn128Compression(
         .g2_decompress => bn254.G2.decompress(result[0..128], input[0..64] ),
         // zig fmt: on
     }) catch {
-        if (tc.feature_set.active.contains(
-            features.SIMPLIFY_ALT_BN128_SYSCALL_ERROR_CODES,
-        )) {
+        if (tc.feature_set.active(.simplify_alt_bn128_syscall_error_codes, tc.slot)) {
             registers.set(.r0, 1);
             return;
         } else @panic("SIMPLIFY_ALT_BN_128_SYSCALL_ERROR_CODES not active");
@@ -554,7 +553,8 @@ fn altBn128Operation(
     group_op: AltBn128GroupOp,
     input: []const u8,
     out: *[64]u8,
-    feature_set: *const features.FeatureSet,
+    feature_set: *const FeatureSet,
+    slot: sig.core.Slot,
 ) ![]const u8 {
     switch (group_op) {
         .add => {
@@ -570,8 +570,9 @@ fn altBn128Operation(
             return out;
         },
         .mul => {
-            const expected_size: usize = if (feature_set.active.contains(
-                features.FIX_ALT_BN128_MULTIPLICATION_INPUT_LENGTH,
+            const expected_size: usize = if (feature_set.active(
+                .fix_alt_bn128_multiplication_input_length,
+                slot,
             )) 96 else 128;
             if (input.len > expected_size) return error.InvalidLength;
 
@@ -609,6 +610,55 @@ fn altBn128Operation(
         },
         .sub => unreachable,
     }
+}
+
+pub fn secp256k1Recover(
+    tc: *TransactionContext,
+    memory_map: *MemoryMap,
+    registers: *RegisterMap,
+) Error!void {
+    const hash_addr = registers.get(.r1);
+    const recovery_id_val = registers.get(.r2);
+    const signature_addr = registers.get(.r3);
+    const result_addr = registers.get(.r4);
+
+    const cost = tc.compute_budget.secp256k1_recover_cost;
+    try tc.consumeCompute(cost);
+
+    const hash = try memory_map.translateType(
+        [32]u8,
+        .constant,
+        hash_addr,
+        tc.getCheckAligned(),
+    );
+    const signature = try memory_map.translateType(
+        sig.crypto.EcdsaSignature,
+        .constant,
+        signature_addr,
+        tc.getCheckAligned(),
+    );
+    const recovery_result = try memory_map.translateSlice(
+        u8,
+        .mutable,
+        result_addr,
+        64,
+        tc.getCheckAligned(),
+    );
+
+    if (recovery_id_val >= 4) {
+        registers.set(.r0, 2); // InvalidRecoveryId
+        return;
+    }
+
+    const pubkey = sig.runtime.program.precompiles.secp256k1.recoverSecp256k1Pubkey(
+        hash,
+        &signature.to(),
+        @intCast(recovery_id_val),
+    ) catch {
+        registers.set(.r0, 3); // InvalidSignature
+        return;
+    };
+    @memcpy(recovery_result, pubkey.toUncompressedSec1()[1..65]);
 }
 
 test "edwards curve point validation" {
@@ -1550,6 +1600,241 @@ test "alt_bn128 g2 compress/decompress" {
 
         try std.testing.expectEqualSlices(u8, entry, &buffer);
     }
+
+    try std.testing.expectEqual(0, tc.compute_meter);
+}
+
+test "alt_bn128 compression failure cases" {
+    const allocator = std.testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(0);
+    var cache, var tc = try sig.runtime.testing.createTransactionContext(
+        allocator,
+        prng.random(),
+        .{
+            .accounts = &.{.{
+                .pubkey = sig.core.Pubkey.initRandom(prng.random()),
+                .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+            }},
+            // one compress + two decompress + (3 * base_cost)
+            .compute_meter = 86 + (13_610 * 2) + 300,
+            .feature_set = &.{.{
+                .feature = .simplify_alt_bn128_syscall_error_codes,
+                .slot = 0,
+            }},
+        },
+    );
+    defer {
+        sig.runtime.testing.deinitTransactionContext(allocator, tc);
+        cache.deinit(allocator);
+    }
+
+    const input_addr = 0x100000000;
+    const result_point_addr = 0x200000000;
+
+    const entry: [128]u8 = .{
+        40,  57,  233, 205, 180, 46,  35,  111, 215, 5,   23,  93,  12,  71,  118, 225, 7,   46,
+        247, 147, 47,  130, 106, 189, 184, 80,  146, 103, 141, 52,  242, 25,  0,   203, 124, 176,
+        110, 34,  151, 212, 66,  180, 238, 151, 236, 189, 133, 209, 17,  137, 205, 183, 168, 196,
+        92,  159, 75,  174, 81,  168, 18,  86,  176, 56,  16,  26,  210, 20,  18,  81,  122, 142,
+        104, 62,  251, 169, 98,  141, 21,  253, 50,  130, 182, 15,  33,  109, 228, 31,  79,  183,
+        88,  147, 174, 108, 4,   22,  14,  129, 168, 6,   80,  246, 254, 100, 218, 131, 94,  49,
+        247, 211, 3,   245, 22,  200, 177, 91,  60,  144, 147, 174, 90,  17,  19,  189, 62,  147,
+        152, 18,
+    };
+    var buffer: [128]u8 = undefined;
+
+    var registers = sig.vm.interpreter.RegisterMap.initFill(0);
+    var memory_map = try MemoryMap.init(allocator, &.{
+        memory.Region.init(.constant, &entry, input_addr),
+        memory.Region.init(.mutable, &buffer, result_point_addr),
+    }, .v3, .{});
+    defer memory_map.deinit(allocator);
+
+    // failure case: invalid data passed to decompress
+
+    {
+        registers.set(.r1, 2); // g2_compress
+        registers.set(.r2, input_addr);
+        registers.set(.r3, entry.len);
+        registers.set(.r4, result_point_addr);
+
+        try altBn128Compression(&tc, &memory_map, &registers);
+    }
+
+    // oh no, something bad happened to the data!
+    buffer[3] = 20;
+
+    {
+        registers.set(.r1, 3); // g2_decompress
+        registers.set(.r2, result_point_addr);
+        registers.set(.r3, 64);
+        registers.set(.r4, result_point_addr);
+
+        try altBn128Compression(&tc, &memory_map, &registers);
+
+        // make sure 1 was written as the output
+        try std.testing.expectEqual(1, registers.get(.r0));
+    }
+
+    // failure case: incorrect input length
+
+    {
+        registers.set(.r1, 3); // g2_decompress
+        registers.set(.r2, result_point_addr);
+        // wrong length! we choose a smaller length rather than a
+        // larger one to avid out of bounds access violation
+        registers.set(.r3, 32);
+        registers.set(.r4, result_point_addr);
+
+        try altBn128Compression(&tc, &memory_map, &registers);
+
+        // make sure 1 was written as the output
+        try std.testing.expectEqual(1, registers.get(.r0));
+    }
+
+    // make sure the compute was still taken
+    try std.testing.expectEqual(0, tc.compute_meter);
+}
+
+test "alt_bn128 group op failure cases" {
+    const allocator = std.testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(0);
+    var cache, var tc = try sig.runtime.testing.createTransactionContext(
+        allocator,
+        prng.random(),
+        .{
+            .accounts = &.{.{
+                .pubkey = sig.core.Pubkey.initRandom(prng.random()),
+                .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+            }},
+            // one compress + two decompress + (3 * base_cost)
+            .compute_meter = 334,
+            .feature_set = &.{.{
+                .feature = .simplify_alt_bn128_syscall_error_codes,
+                .slot = 0,
+            }},
+        },
+    );
+    defer {
+        sig.runtime.testing.deinitTransactionContext(allocator, tc);
+        cache.deinit(allocator);
+    }
+
+    const input_addr = 0x100000000;
+    const result_point_addr = 0x200000000;
+
+    // Invalid input, doesn't create a valid projection.
+    const entry: [64]u8 = @splat(0xAA);
+    var buffer: [128]u8 = undefined;
+
+    var registers = sig.vm.interpreter.RegisterMap.initFill(0);
+    var memory_map = try MemoryMap.init(allocator, &.{
+        memory.Region.init(.constant, &entry, input_addr),
+        memory.Region.init(.mutable, &buffer, result_point_addr),
+    }, .v3, .{});
+    defer memory_map.deinit(allocator);
+
+    {
+        registers.set(.r1, 0); // add
+        registers.set(.r2, input_addr);
+        registers.set(.r3, entry.len);
+        registers.set(.r4, result_point_addr);
+
+        try altBn128GroupOp(&tc, &memory_map, &registers);
+    }
+
+    try std.testing.expectEqual(0, tc.compute_meter);
+}
+
+test "secp256k1_recover" {
+    const allocator = std.testing.allocator;
+
+    var prng: std.Random.DefaultPrng = .init(0);
+    const random = prng.random();
+
+    var cache, var tc = try sig.runtime.testing.createTransactionContext(allocator, random, .{
+        .compute_meter = 25_000,
+        .accounts = &.{
+            .{
+                .pubkey = .initRandom(random),
+                .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+            },
+        },
+    });
+    defer {
+        sig.runtime.testing.deinitTransactionContext(allocator, tc);
+        cache.deinit(allocator);
+    }
+
+    const message_hash_addr = 0x100000000;
+    const message_hash: [32]u8 = .{
+        0xde, 0xa5, 0x66, 0xb6, 0x94, 0x3b, 0xe0, 0xe9, 0x62, 0x53, 0xc2, 0x21, 0x5b, 0x1b, 0xac,
+        0x69, 0xe7, 0xa8, 0x1e, 0xdb, 0x41, 0xc5, 0x02, 0x8b, 0x4f, 0x5c, 0x45, 0xc5, 0x3b, 0x49,
+        0x54, 0xd0,
+    };
+
+    const signature_addr = 0x200000000;
+    const signature: [64]u8 = .{
+        0x97, 0xa4, 0xee, 0x31, 0xfe, 0x82, 0x65, 0x72, 0x9f, 0x4a, 0xa6, 0x7d, 0x24,
+        0xd4, 0xa7, 0x27, 0xf8, 0xc3, 0x15, 0xa4, 0xc8, 0xf9, 0x80, 0xeb, 0x4c, 0x4d,
+        0x4a, 0xfa, 0x6e, 0xc9, 0x42, 0x41, 0x5d, 0x10, 0xd9, 0xc2, 0x8a, 0x90, 0xe9,
+        0x92, 0x9c, 0x52, 0x4b, 0x2c, 0xfb, 0x65, 0xdf, 0xbc, 0xf6, 0x8c, 0xfd, 0x68,
+        0xdb, 0x17, 0xf9, 0x5d, 0x23, 0x5f, 0x96, 0xd8, 0xf0, 0x72, 0x01, 0x2d,
+    };
+
+    const invalid_signature_addr = 0x300000000;
+    const invalid_signature: [64]u8 = @splat(0);
+
+    const result_point_addr = 0x400000000;
+    var result_point: [64]u8 = undefined;
+
+    var memory_map: MemoryMap = try .init(allocator, &.{
+        .init(.constant, &message_hash, message_hash_addr),
+        .init(.constant, &signature, signature_addr),
+        .init(.constant, &invalid_signature, invalid_signature_addr),
+        .init(.mutable, &result_point, result_point_addr),
+    }, .v3, .{});
+    defer memory_map.deinit(allocator);
+
+    var registers: sig.vm.interpreter.RegisterMap = .initFill(0);
+    registers.set(.r0, 0); // exit code
+    registers.set(.r1, message_hash_addr);
+    registers.set(.r2, 1); // recovery id
+    registers.set(.r3, signature_addr);
+    registers.set(.r4, result_point_addr);
+
+    try secp256k1Recover(&tc, &memory_map, &registers);
+
+    try std.testing.expectEqual(0, registers.get(.r0)); // unchanged (success)
+    try std.testing.expectEqualSlices(
+        u8,
+        &.{
+            0x42, 0xcd, 0x27, 0xe4, 0x0f, 0xdf, 0x7c, 0x97, 0x0a, 0xa2, 0xca, 0x0b, 0x88, 0x5b, 0x96,
+            0x0f, 0x8b, 0x62, 0x8a, 0x41, 0xa1, 0x81, 0xe7, 0xe6, 0x8e, 0x03, 0xea, 0x0b, 0x84, 0x20,
+            0x58, 0x9b, 0x32, 0x06, 0xbd, 0x66, 0x2f, 0x75, 0x65, 0xd6, 0x9d, 0xbd, 0x1d, 0x34, 0x29,
+            0x6a, 0xd9, 0x35, 0x38, 0xed, 0x86, 0x9e, 0x99, 0x20, 0x43, 0xc3, 0xeb, 0xad, 0x65, 0x50,
+            0xa0, 0x11, 0x6e, 0x5d,
+        },
+        &result_point,
+    );
+    try std.testing.expectError(
+        error.ComputationalBudgetExceeded,
+        secp256k1Recover(&tc, &memory_map, &registers),
+    );
+
+    tc.compute_meter += tc.compute_budget.secp256k1_recover_cost;
+    registers.set(.r2, 4); // invalid recovery id
+    try secp256k1Recover(&tc, &memory_map, &registers);
+    try std.testing.expectEqual(2, registers.get(.r0)); // InvalidRecoveryId
+
+    tc.compute_meter += tc.compute_budget.secp256k1_recover_cost;
+    registers.set(.r0, 0);
+    registers.set(.r2, 1);
+    registers.set(.r3, invalid_signature_addr);
+    try secp256k1Recover(&tc, &memory_map, &registers);
+    try std.testing.expectEqual(3, registers.get(.r0)); // InvalidSignature
 
     try std.testing.expectEqual(0, tc.compute_meter);
 }

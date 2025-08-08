@@ -11,8 +11,8 @@ pub const ProgramState = state.ProgramState;
 
 const Pubkey = sig.core.Pubkey;
 
-pub const ID =
-    Pubkey.parseBase58String("AddressLookupTab1e1111111111111111111111111") catch unreachable;
+pub const ID: Pubkey = .parse("AddressLookupTab1e1111111111111111111111111");
+pub const SOURCE_ID: Pubkey = .parse("AhXWrD9BBUYcKjtpA3zuiiZG4ysbo6C6wjHo1QhERk6A");
 
 pub const execute = @import("execute.zig").execute;
 

@@ -35,9 +35,7 @@ PASSING_DIRS=(
     "syscall/fixtures/stack_height"
     "syscall/fixtures/try_find_program_address"
     "syscall/fixtures/vm"
-
-    # Unimplemented
-    # "syscall/fixtures/secp256k1"
+    "syscall/fixtures/secp256k1"
 
     "instr/fixtures/zk_sdk"
     "instr/fixtures/unknown"

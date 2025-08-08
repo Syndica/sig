@@ -104,6 +104,7 @@ pub const SvmGateway = struct {
             // set that max call depth and stack frame size. the actual compute
             // budgets are determined per transaction.
             &ComputeBudget.default(1_400_000),
+            params.slot,
             false,
             true, // TODO: should this be false?
         );

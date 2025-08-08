@@ -104,6 +104,7 @@ fn executeInstruction(
         allocator,
         tc.feature_set,
         &tc.compute_budget,
+        tc.slot,
         false,
         false,
     );
