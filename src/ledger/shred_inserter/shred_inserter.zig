@@ -240,10 +240,9 @@ pub const ShredInserter = struct {
                 .data => |data_shred| {
                     if (options.shred_tracker) |tracker| {
                         tracker.registerDataShred(&shred.data, timestamp) catch |err| {
+                            self.metrics.register_shred_error.observe(@errorCast(err));
                             switch (err) {
-                                error.SlotUnderflow, error.SlotOverflow => {
-                                    self.metrics.register_shred_error.observe(@errorCast(err));
-                                },
+                                error.SlotUnderflow, error.SlotOverflow => {},
                                 else => return err,
                             }
                         };
@@ -335,10 +334,9 @@ pub const ShredInserter = struct {
                 }
                 if (options.shred_tracker) |tracker| {
                     tracker.registerDataShred(&shred.data, timestamp) catch |err| {
+                        self.metrics.register_shred_error.observe(@errorCast(err));
                         switch (err) {
-                            error.SlotUnderflow, error.SlotOverflow => {
-                                self.metrics.register_shred_error.observe(@errorCast(err));
-                            },
+                            error.SlotUnderflow, error.SlotOverflow => {},
                             else => return err,
                         }
                     };
@@ -1186,7 +1184,9 @@ pub const BlockstoreInsertionMetrics = struct {
     num_code_shreds_invalid_erasure_config: *Counter, // usize
     num_code_shreds_inserted: *Counter, // usize
 
-    register_shred_error: *sig.prometheus.VariantCounter(sig.shred_network.shred_tracker.SlotOutOfBounds),
+    register_shred_error: *sig.prometheus.VariantCounter(
+        sig.shred_network.shred_tracker.BasicShredTracker.RegisterDataShredError,
+    ),
 
     pub const prefix = "shred_inserter";
 };
