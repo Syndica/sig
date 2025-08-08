@@ -13,7 +13,7 @@ pub fn build(b: *Build) void {
     const solfuzz_sig_step = b.step("solfuzz_sig", "The solfuzz sig library.");
     const test_step = b.step("test", "Run unit tests");
 
-    // current commit: b7ba4dae8ce07e6abdbe5902f4a14ac43e2b40cf
+    // current commit: 90ec31a506593fc9574d2c09f76e64d202b23124
     const proto_step = b.step(
         "protobuf",
         "Re-generate protobuf definitions based on the `protosol` directory." ++

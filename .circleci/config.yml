@@ -277,7 +277,9 @@ jobs:
           name: Setup solana-conformance
           command: |
             git clone https://github.com/firedancer-io/solana-conformance --depth 1
-            cd solana-conformance
+            cd solana-conformance/
+            git fetch origin 57c0dfc0bd68d9affd7c552e487063f89c79d0c5
+            git checkout 57c0dfc0bd68d9affd7c552e487063f89c79d0c5
             sudo add-apt-repository ppa:deadsnakes/ppa -y
             sudo apt install -y python3.11 python3.11-dev python3.11-venv rename
 

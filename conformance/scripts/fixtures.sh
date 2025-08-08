@@ -35,9 +35,7 @@ PASSING_DIRS=(
     "syscall/fixtures/stack_height"
     "syscall/fixtures/try_find_program_address"
     "syscall/fixtures/vm"
-
-    # Unimplemented
-    # "syscall/fixtures/secp256k1"
+    "syscall/fixtures/secp256k1"
 
     "instr/fixtures/zk_sdk"
     "instr/fixtures/unknown"
@@ -93,9 +91,11 @@ export ASAN_OPTIONS=detect_leaks=0
 echo "Generating fixtures"
 solana-test-suite create-fixtures \
 -s ../libsolfuzz_agave.so \
--i "../test-inputs"
+-i "../test-inputs" \
+-o "test_fixtures/"
 
 echo "Running fixtures"
 solana-test-suite exec-fixtures \
 -t ../conformance/zig-out/lib/libsolfuzz_sig.so \
+-o "test_results/" \
 -i test_fixtures/ | tee /dev/tty | grep -q "Failed: 0,"

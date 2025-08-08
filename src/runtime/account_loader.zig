@@ -150,6 +150,9 @@ pub const BatchAccountCache = struct {
                 if (validated_loaders.contains(program_owner_key))
                     continue; // already loaded + counted program account's owner
 
+                // the native loader doesn't have an account to load
+                if (program_owner_key.equals(&runtime.ids.NATIVE_LOADER_ID)) continue;
+
                 const owner_account = if (map.get(program_owner_key)) |owner| owner else blk: {
                     const owner_account = try getAccountSharedData(
                         allocator,
@@ -171,8 +174,7 @@ pub const BatchAccountCache = struct {
                     &tx_loaded_account_data_len,
                     owner_account.data.len,
                     max_data_len,
-                ) catch
-                    continue :next_tx; // tx will fail - accounts data too large
+                ) catch continue :next_tx; // tx will fail - accounts data too large
 
                 try validated_loaders.put(program_owner_key, {});
             }
@@ -326,19 +328,21 @@ pub const BatchAccountCache = struct {
             ) and !program_account.account.executable) return error.InvalidProgramForExecution;
 
             const owner_id = &program_account.account.owner;
-
             const owner_account = account: {
                 if (owner_id.equals(&runtime.ids.NATIVE_LOADER_ID)) continue;
                 if (validated_loaders.contains(owner_id.*)) continue; // only load + count owners once
 
-                break :account (try self.loadAccount(allocator, transaction, owner_id, false)) orelse
-                    return error.ProgramAccountNotFound;
+                break :account try self.loadAccount(
+                    allocator,
+                    transaction,
+                    owner_id,
+                    false,
+                ) orelse return error.ProgramAccountNotFound;
             };
 
             if (!owner_account.account.owner.equals(&runtime.ids.NATIVE_LOADER_ID)) {
                 return error.InvalidProgramForExecution;
             }
-
             try accumulateAndCheckLoadedAccountDataSize(
                 &loaded.loaded_accounts_data_size,
                 owner_account.loaded_size,
@@ -438,7 +442,7 @@ pub const BatchAccountCache = struct {
             break :account account;
         } else self.account_cache.getPtr(key.*);
 
-        const account = maybe_account orelse unreachable; // all keys should be already there
+        const account = maybe_account orelse unreachable;
         if (account.lamports == 0) {
             // a previous instr deallocated this account
             allocator.free(account.data);

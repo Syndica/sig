@@ -175,7 +175,11 @@ pub const Environment = struct {
             "sol_keccak256",
             syscalls.hash.keccak256,
         );
-        // _ = try syscalls.registerHashed(allocator, "sol_secp256k1_recover", secp256k1Recover,);
+        _ = try loader.registerHashed(
+            allocator,
+            "sol_secp256k1_recover",
+            syscalls.ecc.secp256k1Recover,
+        );
 
         // Blake3
         if (feature_set.active.contains(features.BLAKE3_SYSCALL_ENABLED)) {
@@ -353,11 +357,6 @@ pub const Environment = struct {
                 syscalls.remainingComputeUnits,
             );
         }
-
-        // Alt_bn_128_compression
-        // if (feature_set.active.contains(feature_set.ENABLE_ALT_BN_128_COMPRESSION_SYSCALL)) {
-        //     _ = try syscalls.registerHashed(allocator, "sol_alt_bn_128_compression", altBn128Compression,);
-        // }
 
         // Sysvar Getter
         if (feature_set.active.contains(features.GET_SYSVAR_SYSCALL_ENABLED)) {
