@@ -128,8 +128,10 @@ pub const RentCollector = struct {
         if (self.rent.isExempt(lamports, data_len)) return .Exempt;
 
         var slots_elapsed: u64 = 0;
-        for (account_rent_epoch..self.epoch + 1) |epoch| {
-            slots_elapsed +|= self.epoch_schedule.getSlotsInEpoch(epoch +| 1);
+        if (account_rent_epoch < self.epoch + 1) {
+            for (account_rent_epoch..self.epoch + 1) |epoch| {
+                slots_elapsed +|= self.epoch_schedule.getSlotsInEpoch(epoch +| 1);
+            }
         }
 
         // as firedancer says: "Consensus-critical use of doubles :("
