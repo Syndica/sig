@@ -11,7 +11,6 @@ const Ancestors = sig.core.Ancestors;
 const BlockhashQueue = sig.core.BlockhashQueue;
 const EpochStakes = sig.core.EpochStakes;
 const Hash = sig.core.Hash;
-const InstructionError = sig.core.instruction.InstructionError;
 const InstructionErrorEnum = sig.core.instruction.InstructionErrorEnum;
 const Pubkey = sig.core.Pubkey;
 const RentCollector = sig.core.rent_collector.RentCollector;
@@ -445,7 +444,11 @@ pub fn executeTransaction(
                     error.OutOfMemory => return error.OutOfMemory,
                     else => |instr_err| break .{
                         @intCast(index),
-                        InstructionErrorEnum.fromError(instr_err, tc.custom_error, null) catch |err| {
+                        InstructionErrorEnum.fromError(
+                            instr_err,
+                            tc.custom_error,
+                            null,
+                        ) catch |err| {
                             std.debug.panic("Error conversion failed: error={}", .{err});
                         },
                     },

@@ -8,6 +8,7 @@ const features = sig.core.features;
 const sysvar = sig.runtime.sysvar;
 const memory = sig.vm.memory;
 
+const TransactionError = sig.ledger.transaction_status.TransactionError;
 const InstructionError = sig.core.instruction.InstructionError;
 const InstructionInfo = sig.runtime.instruction_info.InstructionInfo;
 const TransactionContext = sig.runtime.transaction_context.TransactionContext;
@@ -35,7 +36,7 @@ pub const ConvertedErrorCodes = struct {
     };
 };
 
-pub fn convertTransactionError(err: sig.ledger.transaction_status.TransactionError) ConvertedErrorCodes {
+pub fn convertTransactionError(err: TransactionError) ConvertedErrorCodes {
     switch (err) {
         .InstructionError => |p| {
             const index, const instruction_error = p;
