@@ -180,7 +180,7 @@ pub const CopiedAccount = struct {
 
 pub const ExecutedTransaction = struct {
     err: ?InstructionErrorEnum,
-    err_index: ?u32,
+    err_index: u8,
     log_collector: ?LogCollector,
     instruction_trace: ?InstructionTrace,
     return_data: ?TransactionReturnData,
@@ -473,8 +473,8 @@ pub fn executeTransaction(
         .prev_lamports_per_signature = environment.last_lamports_per_signature,
     };
 
+    var instruction_error_index: u8 = 0;
     var maybe_instruction_error: ?InstructionError = null;
-    var instruction_index: u32 = 0;
 
     for (transaction.instruction_infos) |instruction_info| {
         executor.executeInstruction(
@@ -488,7 +488,7 @@ pub fn executeTransaction(
             }
             break;
         };
-        instruction_index += 1;
+        instruction_error_index += 1;
     }
 
     const instruction_error = if (maybe_instruction_error) |instruction_error|
@@ -499,7 +499,7 @@ pub fn executeTransaction(
 
     return .{
         .err = instruction_error,
-        .err_index = if (maybe_instruction_error) |_| instruction_index else 0,
+        .err_index = instruction_error_index,
         .log_collector = tc.takeLogCollector(),
         .instruction_trace = tc.instruction_trace,
         .return_data = tc.takeReturnData(),

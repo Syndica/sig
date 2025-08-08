@@ -114,6 +114,8 @@ const TransactionExecutionEnvironment = transaction_execution.TransactionExecuti
 const ProcessedTransaction = transaction_execution.ProcessedTransaction;
 const TransactionResult = transaction_execution.TransactionResult(ProcessedTransaction);
 
+const TransactionError = sig.ledger.transaction_status.TransactionError;
+
 const loadAndExecuteTransactions = transaction_execution.loadAndExecuteTransactions;
 const deinitMapAndValues = sig.utils.collections.deinitMapAndValues;
 
@@ -850,19 +852,32 @@ fn serializeOutput(
                 .fees_only => false,
             };
 
-            const converted: utils.Converted = switch (txn) {
-                .executed => |executed| if (executed.executed_transaction.err) |instr_err| .{
-                    // hardcode InstructionError, since nothing else could be returned from executeTransaction
-                    .err = 9,
-                    .instruction_error = @intFromEnum(instr_err) + 1,
-                    // TODO: special case for precompile failures
-                    .custom_error = switch (instr_err) {
-                        .Custom => |v| v,
-                        else => 0,
-                    },
-                    .instruction_index = executed.executed_transaction.err_index.?,
-                } else .default,
-                .fees_only => |fees_only| utils.convertTransactionError(fees_only.err),
+            const converted = blk: {
+                // https://github.com/firedancer-io/solfuzz-agave/blob/agave-v2.2.13/src/txn_fuzzer.rs#L208-L210
+                const txn_error: TransactionError = switch (txn) {
+                    .executed => |executed| if (executed.executed_transaction.err) |instr_err_enum|
+                        .{ .InstructionError = .{
+                            executed.executed_transaction.err_index,
+                            instr_err_enum,
+                        } }
+                    else
+                        break :blk std.mem.zeroes(utils.Converted),
+                    .fees_only => |fees_only| fees_only.err,
+                };
+
+                // Set custom err to 0 if the failing instruction is a precompile
+                var converted = utils.convertTransactionError(txn_error);
+                if (converted.instruction_index < sanitized.instruction_infos.len) {
+                    const ixn_info = &sanitized.instruction_infos[converted.instruction_index];
+                    for (sig.runtime.program.precompiles.PRECOMPILES) |precompile| {
+                        if (precompile.program_id.equals(&ixn_info.program_meta.pubkey)) {
+                            converted.custom_error = 0;
+                            break;
+                        }
+                    }
+                }
+
+                break :blk converted;
             };
 
             const rent = switch (txn) {
@@ -955,8 +970,8 @@ fn serializeOutput(
 
                 .status = converted.err,
                 .instruction_error = converted.instruction_error,
-                .instruction_error_index = converted.instruction_index,
                 .custom_error = converted.custom_error,
+                .instruction_error_index = converted.instruction_index,
 
                 .resulting_state = resulting_state,
                 .fee_details = .{
