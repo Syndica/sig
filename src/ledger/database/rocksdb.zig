@@ -260,7 +260,7 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
         };
 
         pub fn iterator(
-            self: *Self,
+            self: Self,
             comptime cf: ColumnFamily,
             comptime direction: IteratorDirection,
             start: ?cf.Key,

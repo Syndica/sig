@@ -10,6 +10,8 @@ pub const Ancestors = struct {
     // agave uses a "RollingBitField" which seems to be just an optimisation for a set
     ancestors: HashMap(Slot, void) = .{},
 
+    pub const EMPTY: Ancestors = .{ .ancestors = .empty };
+
     // For some reason, agave serializes Ancestors as HashMap(slot, usize). But deserializing
     // ignores the usize, and serializing just uses the value 0. So we need to serialize void
     // as if it's 0, and deserialize 0 as if it's void.

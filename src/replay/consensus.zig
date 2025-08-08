@@ -5,7 +5,7 @@ const Allocator = std.mem.Allocator;
 const AtomicBool = std.atomic.Value(bool);
 
 const RwMux = sig.sync.RwMux;
-const SortedSet = sig.utils.collections.SortedSet;
+const SortedSetUnmanaged = sig.utils.collections.SortedSetUnmanaged;
 
 const Epoch = sig.core.Epoch;
 const EpochStakesMap = sig.core.EpochStakesMap;
@@ -25,8 +25,7 @@ const SlotHistory = sig.runtime.sysvar.SlotHistory;
 const ReplayTower = sig.consensus.replay_tower.ReplayTower;
 const ProgressMap = sig.consensus.progress_map.ProgressMap;
 const ForkChoice = sig.consensus.fork_choice.ForkChoice;
-const LatestValidatorVotesForFrozenBanks =
-    sig.consensus.latest_validator_votes.LatestValidatorVotes;
+const LatestValidatorVotes = sig.consensus.latest_validator_votes.LatestValidatorVotes;
 
 const SlotTracker = sig.replay.trackers.SlotTracker;
 const EpochTracker = sig.replay.trackers.EpochTracker;
@@ -44,25 +43,17 @@ pub const ConsensusDependencies = struct {
     fork_choice: *ForkChoice,
     blockstore_reader: *BlockstoreReader,
     ledger_result_writer: *LedgerResultWriter,
-    ancestors: *const std.AutoHashMapUnmanaged(u64, SortedSet(u64)),
-    descendants: *const std.AutoArrayHashMapUnmanaged(u64, SortedSet(u64)),
+    ancestors: *const std.AutoArrayHashMapUnmanaged(u64, SortedSetUnmanaged(u64)),
+    descendants: *const std.AutoArrayHashMapUnmanaged(Slot, SortedSetUnmanaged(Slot)),
     vote_account: Pubkey,
     slot_history: *const SlotHistory,
-    epoch_stakes: EpochStakesMap,
-    latest_validator_votes_for_frozen_banks: *const LatestValidatorVotesForFrozenBanks,
+    latest_validator_votes_for_frozen_banks: *const LatestValidatorVotes,
 };
 
-pub fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
-    const deps = if (maybe_deps) |deps|
-        deps
-    else
-        return error.Todo;
-
+pub fn processConsensus(deps: ConsensusDependencies) !void {
     const heaviest_slot = deps.fork_choice.heaviestOverallSlot().slot;
     const heaviest_slot_on_same_voted_fork =
         (try deps.fork_choice.heaviestSlotOnSameVotedFork(deps.replay_tower)) orelse null;
-
-    const heaviest_epoch: Epoch = deps.epoch_tracker.schedule.getEpoch(heaviest_slot);
 
     const now = sig.time.Instant.now();
     var last_vote_refresh_time: LastVoteRefreshTime = .{
@@ -70,17 +61,21 @@ pub fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
         .last_print_time = now,
     };
 
+    const epoch_stake = blk: {
+        const epoch_consts = deps.epoch_tracker.getForSlot(heaviest_slot) orelse
+            return error.StakeNotFound;
+        break :blk epoch_consts.stakes;
+    };
     const vote_and_reset_forks = try deps.replay_tower.selectVoteAndResetForks(
         deps.allocator,
         heaviest_slot,
         if (heaviest_slot_on_same_voted_fork) |h| h.slot else null,
-        heaviest_epoch,
         deps.ancestors,
         deps.descendants,
         deps.progress_map,
         deps.latest_validator_votes_for_frozen_banks,
         deps.fork_choice,
-        deps.epoch_stakes,
+        epoch_stake,
         deps.slot_history,
     );
     const maybe_voted_slot = vote_and_reset_forks.vote_slot;
