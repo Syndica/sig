@@ -33,6 +33,7 @@ const SlotTracker = sig.replay.trackers.SlotTracker;
 const EpochTracker = sig.replay.trackers.EpochTracker;
 
 pub const isSlotDuplicateConfirmed = sig.consensus.tower.isSlotDuplicateConfirmed;
+const VoteThreshold = sig.consensus.progress_map.ForkStats.VoteThreshold;
 pub const collectVoteLockouts = sig.consensus.replay_tower.collectVoteLockouts;
 
 const MAX_VOTE_REFRESH_INTERVAL_MILLIS: usize = 5000;
@@ -69,6 +70,7 @@ pub fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
         &deps.epoch_tracker.schedule,
         deps.progress_map,
         deps.fork_choice,
+        deps.replay_tower,
         deps.latest_validator_votes_for_frozen_banks,
     );
     _ = newly_computed_slot_stats;
@@ -469,6 +471,7 @@ fn computeBankStats(
     epoch_schedule: *const EpochSchedule,
     progress: *ProgressMap,
     fork_choice: *ForkChoice,
+    replay_tower: *const ReplayTower,
     latest_validator_votes: *LatestValidatorVotesForFrozenBanks,
 ) ![]Slot {
     var new_stats = std.ArrayListUnmanaged(Slot).empty;
@@ -513,8 +516,40 @@ fn computeBankStats(
             fork_stats.computed = true;
             try new_stats.append(allocator, slot);
         }
+        try cacheTowerStats(
+            allocator,
+            progress,
+            replay_tower,
+            slot,
+            ancestors,
+        );
     }
     return try new_stats.toOwnedSlice(allocator);
+}
+
+fn cacheTowerStats(
+    allocator: std.mem.Allocator,
+    progress: *ProgressMap,
+    replay_tower: *const ReplayTower,
+    slot: Slot,
+    ancestors: *const std.AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)),
+) !void {
+    var stats = progress.getForkStats(slot) orelse return error.MissingSlot;
+
+    const slice = try replay_tower.checkVoteStakeThresholds(
+        allocator,
+        slot,
+        &stats.voted_stakes,
+        stats.total_stake,
+    );
+    stats.vote_threshold = try VoteThreshold.initCapacity(allocator, slice.len);
+    try stats.vote_threshold.appendSlice(allocator, slice);
+
+    const slot_ancestors = ancestors.get(slot) orelse return error.MissingAncestor;
+
+    stats.is_locked_out = try replay_tower.tower.isLockedOut(slot, &slot_ancestors);
+    stats.has_voted = replay_tower.tower.hasVoted(slot);
+    stats.is_recent = replay_tower.tower.isRecent(slot);
 }
 
 const testing = std.testing;
@@ -1318,6 +1353,10 @@ test "computeBankStats - child bank heavier" {
     try epoch_stakes.put(testing.allocator, 0, versioned_stakes);
     try epoch_stakes.put(testing.allocator, 1, versioned_stakes);
 
+    var replay_tower = try createTestReplayTower(
+        1,
+        0.67,
+    );
     const epoch_schedule = EpochSchedule.DEFAULT;
     const newly_computed_slot_stats = try computeBankStats(
         testing.allocator,
@@ -1328,6 +1367,7 @@ test "computeBankStats - child bank heavier" {
         &epoch_schedule,
         &fixture.progress,
         &fixture.fork_choice,
+        &replay_tower,
         &fixture.latest_validator_votes_for_frozen_banks,
     );
     defer testing.allocator.free(newly_computed_slot_stats);
@@ -1405,6 +1445,11 @@ test "computeBankStats - same weight selects lower slot" {
     try epoch_stakes.put(testing.allocator, 0, versioned_stakes);
     try epoch_stakes.put(testing.allocator, 1, versioned_stakes);
 
+    var replay_tower = try createTestReplayTower(
+        1,
+        0.67,
+    );
+
     const epoch_schedule = EpochSchedule.DEFAULT;
     const newly_computed_slot_stats = try computeBankStats(
         testing.allocator,
@@ -1415,6 +1460,7 @@ test "computeBankStats - same weight selects lower slot" {
         &epoch_schedule,
         &fixture.progress,
         &fixture.fork_choice,
+        &replay_tower,
         &fixture.latest_validator_votes_for_frozen_banks,
     );
     defer testing.allocator.free(newly_computed_slot_stats);
