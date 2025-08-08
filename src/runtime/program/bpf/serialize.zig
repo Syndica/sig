@@ -889,6 +889,24 @@ test "serializeParameters" {
                 .depth = 0,
             };
 
+            { // MaxAccountsExceeded
+                const original_len = ic.ixn_info.account_metas.len;
+                defer ic.ixn_info.account_metas.len = original_len;
+
+                while (ic.ixn_info.account_metas.len < ic.ixn_info.account_metas.buffer.len) {
+                    ic.ixn_info.account_metas.appendAssumeCapacity(.{
+                        .pubkey = Pubkey.ZEROES,
+                        .index_in_transaction = 0,
+                        .index_in_caller = 0,
+                        .index_in_callee = 0,
+                        .is_signer = false,
+                        .is_writable = false,
+                    });
+                }
+
+                try std.testing.expectEqual(error.MaxAccountsExceeded, serializeParameters(allocator, &ic, false, false));
+            }
+
             const pre_accounts = blk: {
                 var accounts = try std.ArrayListUnmanaged(struct {
                     pubkey: Pubkey,
