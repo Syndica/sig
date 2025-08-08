@@ -135,7 +135,7 @@ const ReplayState = struct {
             }),
         );
 
-        // TODO: Replace these with actual init.
+        // TODO: Might need updating with the Initialize requisite replay state PR.
         var fork_choice = HeaviestSubtreeForkChoice{
             .allocator = deps.allocator,
             .logger = .noop,
