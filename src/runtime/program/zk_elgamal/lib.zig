@@ -33,10 +33,7 @@ pub fn ProofContextState(C: type) type {
     };
 }
 
-pub const ID =
-    sig.core.Pubkey.parseBase58String(
-        "ZkE1Gama1Proof11111111111111111111111111111",
-    ) catch unreachable;
+pub const ID: sig.core.Pubkey = .parse("ZkE1Gama1Proof11111111111111111111111111111");
 
 pub const CLOSE_CONTEXT_STATE_COMPUTE_UNITS: u64 = 3_300;
 pub const VERIFY_ZERO_CIPHERTEXT_COMPUTE_UNITS: u64 = 6_000;

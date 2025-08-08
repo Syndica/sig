@@ -3,31 +3,25 @@
 const std = @import("std");
 const sig = @import("../../sig.zig");
 
-const features = sig.core.features;
 const programs = sig.runtime.program;
 
-const Pubkey = sig.core.Pubkey;
+const Feature = sig.core.features.Feature;
 const FeatureSet = sig.core.FeatureSet;
 
 pub const TOTAL_COUNT_BUILTINS: usize = 12;
-pub const BUILTIN_COSTS = initBuiltinCosts();
-pub const MAYBE_BUILTIN_KEY = initMaybeBuiltinKey();
-
-pub fn getMigrationFeatureId(index: usize) Pubkey {
-    return MIGRATING_BUILTIN_COSTS[index][1].coreBpfMigrationFeature() orelse
-        @panic("not a migrating builtin");
-}
-
-fn initBuiltinCosts() std.StaticStringMap(BuiltinCost) {
+pub const BUILTIN_COSTS: std.StaticStringMap(BuiltinCost) = costs: {
     @setEvalBranchQuota(10_000);
     const entries = MIGRATING_BUILTIN_COSTS ++ NON_MIGRATING_BUILTIN_COSTS;
-    return std.StaticStringMap(BuiltinCost).initComptime(&entries);
-}
-
-fn initMaybeBuiltinKey() [256]bool {
+    break :costs .initComptime(&entries);
+};
+pub const MAYBE_BUILTIN_KEY = key: {
     var table = [_]bool{false} ** 256;
     for (BUILTIN_COSTS.keys()) |key| table[key[0]] = true;
-    return table;
+    break :key table;
+};
+
+pub fn getMigrationFeatureId(index: usize) Feature {
+    return MIGRATING_BUILTIN_COSTS[index][1].coreBpfMigrationFeature().?;
 }
 
 pub const MIGRATING_BUILTIN_COSTS = [_]struct { []const u8, BuiltinCost }{
@@ -36,7 +30,7 @@ pub const MIGRATING_BUILTIN_COSTS = [_]struct { []const u8, BuiltinCost }{
         .{
             .migrating = .{
                 .native_cost = programs.stake.COMPUTE_UNITS,
-                .core_bf_migration_feature = features.MIGRATE_STAKE_PROGRAM_TO_CORE_BPF,
+                .core_bf_migration_feature = .migrate_stake_program_to_core_bpf,
                 .position = 0,
             },
         },
@@ -46,7 +40,7 @@ pub const MIGRATING_BUILTIN_COSTS = [_]struct { []const u8, BuiltinCost }{
         .{
             .migrating = .{
                 .native_cost = programs.config.COMPUTE_UNITS,
-                .core_bf_migration_feature = features.MIGRATE_CONFIG_PROGRAM_TO_CORE_BPF,
+                .core_bf_migration_feature = .migrate_config_program_to_core_bpf,
                 .position = 1,
             },
         },
@@ -56,8 +50,7 @@ pub const MIGRATING_BUILTIN_COSTS = [_]struct { []const u8, BuiltinCost }{
         .{
             .migrating = .{
                 .native_cost = programs.address_lookup_table.COMPUTE_UNITS,
-                .core_bf_migration_feature = features
-                    .MIGRATE_ADDRESS_LOOKUP_TABLE_PROGRAM_TO_CORE_BPF,
+                .core_bf_migration_feature = .migrate_address_lookup_table_program_to_core_bpf,
                 .position = 2,
             },
         },
@@ -106,7 +99,7 @@ pub const NON_MIGRATING_BUILTIN_COSTS = [_]struct { []const u8, BuiltinCost }{
 const BuiltinCost = union(enum(u8)) {
     migrating: struct {
         native_cost: u64,
-        core_bf_migration_feature: Pubkey,
+        core_bf_migration_feature: Feature,
         position: usize,
     },
     not_migrating: u64,
@@ -118,7 +111,7 @@ const BuiltinCost = union(enum(u8)) {
         };
     }
 
-    pub fn coreBpfMigrationFeature(self: BuiltinCost) ?Pubkey {
+    pub fn coreBpfMigrationFeature(self: BuiltinCost) ?Feature {
         return switch (self) {
             .migrating => |m| m.core_bf_migration_feature,
             .not_migrating => null,

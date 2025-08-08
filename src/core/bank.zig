@@ -129,7 +129,7 @@ pub const SlotConstants = struct {
             .fee_rate_governor = fee_rate_governor,
             .epoch_reward_status = .inactive,
             .ancestors = ancestors,
-            .feature_set = .EMPTY,
+            .feature_set = .ALL_DISABLED,
         };
     }
 
@@ -137,7 +137,6 @@ pub const SlotConstants = struct {
         var self = self_const;
         self.epoch_reward_status.deinit(allocator);
         self.ancestors.deinit(allocator);
-        self.feature_set.deinit(allocator);
     }
 };
 

@@ -4,7 +4,6 @@ const std = @import("std");
 const sig = @import("../../sig.zig");
 
 const bn254 = sig.crypto.bn254;
-const features = sig.core.features;
 
 const MemoryMap = sig.vm.memory.MemoryMap;
 const RegisterMap = sig.vm.interpreter.RegisterMap;
@@ -12,6 +11,7 @@ const TransactionContext = sig.runtime.TransactionContext;
 const Error = sig.vm.syscalls.Error;
 const SyscallError = sig.vm.SyscallError;
 const memory = sig.vm.memory;
+const FeatureSet = sig.core.FeatureSet;
 
 const Edwards25519 = std.crypto.ecc.Edwards25519;
 const Ristretto255 = std.crypto.ecc.Ristretto255;
@@ -48,7 +48,7 @@ pub fn curvePointValidation(
     registers: *RegisterMap,
 ) Error!void {
     const curve_id = CurveId.wrap(registers.get(.r1)) orelse {
-        if (tc.feature_set.active.contains(features.ABORT_ON_INVALID_CURVE)) {
+        if (tc.feature_set.active(.abort_on_invalid_curve, tc.slot)) {
             return SyscallError.InvalidAttribute;
         } else {
             registers.set(.r0, 1);
@@ -85,7 +85,7 @@ pub fn curveGroupOp(
     registers: *RegisterMap,
 ) Error!void {
     const curve_id = CurveId.wrap(registers.get(.r1)) orelse {
-        if (tc.feature_set.active.contains(features.ABORT_ON_INVALID_CURVE)) {
+        if (tc.feature_set.active(.abort_on_invalid_curve, tc.slot)) {
             return SyscallError.InvalidAttribute;
         } else {
             registers.set(.r0, 1);
@@ -93,7 +93,7 @@ pub fn curveGroupOp(
         }
     };
     const group_op = GroupOp.wrap(registers.get(.r2)) orelse {
-        if (tc.feature_set.active.contains(features.ABORT_ON_INVALID_CURVE)) {
+        if (tc.feature_set.active(.abort_on_invalid_curve, tc.slot)) {
             return SyscallError.InvalidAttribute;
         } else {
             registers.set(.r0, 1);
@@ -316,7 +316,7 @@ pub fn curveMultiscalarMul(
     if (points_len > 512) return SyscallError.InvalidLength;
 
     const curve_id = CurveId.wrap(attribute_id) orelse {
-        if (tc.feature_set.active.contains(features.ABORT_ON_INVALID_CURVE)) {
+        if (tc.feature_set.active(.abort_on_invalid_curve, tc.slot)) {
             return SyscallError.InvalidAttribute;
         } else {
             registers.set(.r0, 1);
@@ -461,10 +461,9 @@ pub fn altBn128GroupOp(
         input,
         &result,
         tc.feature_set,
+        tc.slot,
     ) catch {
-        if (tc.feature_set.active.contains(
-            features.SIMPLIFY_ALT_BN128_SYSCALL_ERROR_CODES,
-        )) {
+        if (tc.feature_set.active(.simplify_alt_bn128_syscall_error_codes, tc.slot)) {
             registers.set(.r0, 1);
             return;
         } else @panic("SIMPLIFY_ALT_BN_128_SYSCALL_ERROR_CODES not active");
@@ -525,9 +524,7 @@ pub fn altBn128Compression(
     };
     // Must be exactly the correct length.
     if (input_size != needed_input_size) {
-        if (tc.feature_set.active.contains(
-            features.SIMPLIFY_ALT_BN128_SYSCALL_ERROR_CODES,
-        )) {
+        if (tc.feature_set.active(.simplify_alt_bn128_syscall_error_codes, tc.slot)) {
             registers.set(.r0, 1);
             return;
         } else @panic("SIMPLIFY_ALT_BN_128_SYSCALL_ERROR_CODES not active");
@@ -543,9 +540,7 @@ pub fn altBn128Compression(
         .g2_decompress => bn254.G2.decompress(result[0..128], input[0..64] ),
         // zig fmt: on
     }) catch {
-        if (tc.feature_set.active.contains(
-            features.SIMPLIFY_ALT_BN128_SYSCALL_ERROR_CODES,
-        )) {
+        if (tc.feature_set.active(.simplify_alt_bn128_syscall_error_codes, tc.slot)) {
             registers.set(.r0, 1);
             return;
         } else @panic("SIMPLIFY_ALT_BN_128_SYSCALL_ERROR_CODES not active");
@@ -558,7 +553,8 @@ fn altBn128Operation(
     group_op: AltBn128GroupOp,
     input: []const u8,
     out: *[64]u8,
-    feature_set: *const features.FeatureSet,
+    feature_set: *const FeatureSet,
+    slot: sig.core.Slot,
 ) ![]const u8 {
     switch (group_op) {
         .add => {
@@ -574,8 +570,9 @@ fn altBn128Operation(
             return out;
         },
         .mul => {
-            const expected_size: usize = if (feature_set.active.contains(
-                features.FIX_ALT_BN128_MULTIPLICATION_INPUT_LENGTH,
+            const expected_size: usize = if (feature_set.active(
+                .fix_alt_bn128_multiplication_input_length,
+                slot,
             )) 96 else 128;
             if (input.len > expected_size) return error.InvalidLength;
 
@@ -1602,6 +1599,150 @@ test "alt_bn128 g2 compress/decompress" {
         }
 
         try std.testing.expectEqualSlices(u8, entry, &buffer);
+    }
+
+    try std.testing.expectEqual(0, tc.compute_meter);
+}
+
+test "alt_bn128 compression failure cases" {
+    const allocator = std.testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(0);
+    var cache, var tc = try sig.runtime.testing.createTransactionContext(
+        allocator,
+        prng.random(),
+        .{
+            .accounts = &.{.{
+                .pubkey = sig.core.Pubkey.initRandom(prng.random()),
+                .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+            }},
+            // one compress + two decompress + (3 * base_cost)
+            .compute_meter = 86 + (13_610 * 2) + 300,
+            .feature_set = &.{.{
+                .feature = .simplify_alt_bn128_syscall_error_codes,
+                .slot = 0,
+            }},
+        },
+    );
+    defer {
+        sig.runtime.testing.deinitTransactionContext(allocator, tc);
+        cache.deinit(allocator);
+    }
+
+    const input_addr = 0x100000000;
+    const result_point_addr = 0x200000000;
+
+    const entry: [128]u8 = .{
+        40,  57,  233, 205, 180, 46,  35,  111, 215, 5,   23,  93,  12,  71,  118, 225, 7,   46,
+        247, 147, 47,  130, 106, 189, 184, 80,  146, 103, 141, 52,  242, 25,  0,   203, 124, 176,
+        110, 34,  151, 212, 66,  180, 238, 151, 236, 189, 133, 209, 17,  137, 205, 183, 168, 196,
+        92,  159, 75,  174, 81,  168, 18,  86,  176, 56,  16,  26,  210, 20,  18,  81,  122, 142,
+        104, 62,  251, 169, 98,  141, 21,  253, 50,  130, 182, 15,  33,  109, 228, 31,  79,  183,
+        88,  147, 174, 108, 4,   22,  14,  129, 168, 6,   80,  246, 254, 100, 218, 131, 94,  49,
+        247, 211, 3,   245, 22,  200, 177, 91,  60,  144, 147, 174, 90,  17,  19,  189, 62,  147,
+        152, 18,
+    };
+    var buffer: [128]u8 = undefined;
+
+    var registers = sig.vm.interpreter.RegisterMap.initFill(0);
+    var memory_map = try MemoryMap.init(allocator, &.{
+        memory.Region.init(.constant, &entry, input_addr),
+        memory.Region.init(.mutable, &buffer, result_point_addr),
+    }, .v3, .{});
+    defer memory_map.deinit(allocator);
+
+    // failure case: invalid data passed to decompress
+
+    {
+        registers.set(.r1, 2); // g2_compress
+        registers.set(.r2, input_addr);
+        registers.set(.r3, entry.len);
+        registers.set(.r4, result_point_addr);
+
+        try altBn128Compression(&tc, &memory_map, &registers);
+    }
+
+    // oh no, something bad happened to the data!
+    buffer[3] = 20;
+
+    {
+        registers.set(.r1, 3); // g2_decompress
+        registers.set(.r2, result_point_addr);
+        registers.set(.r3, 64);
+        registers.set(.r4, result_point_addr);
+
+        try altBn128Compression(&tc, &memory_map, &registers);
+
+        // make sure 1 was written as the output
+        try std.testing.expectEqual(1, registers.get(.r0));
+    }
+
+    // failure case: incorrect input length
+
+    {
+        registers.set(.r1, 3); // g2_decompress
+        registers.set(.r2, result_point_addr);
+        // wrong length! we choose a smaller length rather than a
+        // larger one to avid out of bounds access violation
+        registers.set(.r3, 32);
+        registers.set(.r4, result_point_addr);
+
+        try altBn128Compression(&tc, &memory_map, &registers);
+
+        // make sure 1 was written as the output
+        try std.testing.expectEqual(1, registers.get(.r0));
+    }
+
+    // make sure the compute was still taken
+    try std.testing.expectEqual(0, tc.compute_meter);
+}
+
+test "alt_bn128 group op failure cases" {
+    const allocator = std.testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(0);
+    var cache, var tc = try sig.runtime.testing.createTransactionContext(
+        allocator,
+        prng.random(),
+        .{
+            .accounts = &.{.{
+                .pubkey = sig.core.Pubkey.initRandom(prng.random()),
+                .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+            }},
+            // one compress + two decompress + (3 * base_cost)
+            .compute_meter = 334,
+            .feature_set = &.{.{
+                .feature = .simplify_alt_bn128_syscall_error_codes,
+                .slot = 0,
+            }},
+        },
+    );
+    defer {
+        sig.runtime.testing.deinitTransactionContext(allocator, tc);
+        cache.deinit(allocator);
+    }
+
+    const input_addr = 0x100000000;
+    const result_point_addr = 0x200000000;
+
+    // Invalid input, doesn't create a valid projection.
+    const entry: [64]u8 = @splat(0xAA);
+    var buffer: [128]u8 = undefined;
+
+    var registers = sig.vm.interpreter.RegisterMap.initFill(0);
+    var memory_map = try MemoryMap.init(allocator, &.{
+        memory.Region.init(.constant, &entry, input_addr),
+        memory.Region.init(.mutable, &buffer, result_point_addr),
+    }, .v3, .{});
+    defer memory_map.deinit(allocator);
+
+    {
+        registers.set(.r1, 0); // add
+        registers.set(.r2, input_addr);
+        registers.set(.r3, entry.len);
+        registers.set(.r4, result_point_addr);
+
+        try altBn128GroupOp(&tc, &memory_map, &registers);
     }
 
     try std.testing.expectEqual(0, tc.compute_meter);

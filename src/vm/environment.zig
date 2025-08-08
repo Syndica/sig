@@ -1,7 +1,6 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 
-const features = sig.core.features;
 const syscalls = sig.vm.syscalls;
 
 const FeatureSet = sig.core.FeatureSet;
@@ -24,6 +23,7 @@ pub const Environment = struct {
         allocator: std.mem.Allocator,
         feature_set: *const FeatureSet,
         compute_budget: *const ComputeBudget,
+        slot: sig.core.Slot,
         debugging_features: bool,
         reject_deployment_of_broken_elfs: bool,
     ) !Environment {
@@ -31,11 +31,13 @@ pub const Environment = struct {
             .loader = try initV1Loader(
                 allocator,
                 feature_set,
+                slot,
                 reject_deployment_of_broken_elfs,
             ),
             .config = initV1Config(
                 feature_set,
                 compute_budget,
+                slot,
                 debugging_features,
                 reject_deployment_of_broken_elfs,
             ),
@@ -45,29 +47,33 @@ pub const Environment = struct {
     pub fn initV1Config(
         feature_set: *const FeatureSet,
         compute_budget: *const ComputeBudget,
+        slot: sig.core.Slot,
         debugging_features: bool,
         reject_deployment_of_broken_elfs: bool,
     ) Config {
-        const min_sbpf_version: SbpfVersion = if (!feature_set.active.contains(
-            features.DISABLE_SBPF_V0_EXECUTION,
-        ) or feature_set.active.contains(
-            features.REENABLE_SBPF_V0_EXECUTION,
-        )) .v0 else .v3;
+        const min_sbpf_version: SbpfVersion = if (!feature_set.active(
+            .disable_sbpf_v0_execution,
+            slot,
+        ) or feature_set.active(.reenable_sbpf_v0_execution, slot)) .v0 else .v3;
 
-        const max_sbpf_version: SbpfVersion = if (feature_set.active.contains(
-            features.ENABLE_SBPF_V3_DEPLOYMENT_AND_EXECUTION,
-        )) .v3 else if (feature_set.active.contains(
-            features.ENABLE_SBPF_V2_DEPLOYMENT_AND_EXECUTION,
-        )) .v2 else if (feature_set.active.contains(
-            features.ENABLE_SBPF_V1_DEPLOYMENT_AND_EXECUTION,
+        const max_sbpf_version: SbpfVersion = if (feature_set.active(
+            .enable_sbpf_v3_deployment_and_execution,
+            slot,
+        )) .v3 else if (feature_set.active(
+            .enable_sbpf_v2_deployment_and_execution,
+            slot,
+        )) .v2 else if (feature_set.active(
+            .enable_sbpf_v1_deployment_and_execution,
+            slot,
         )) .v1 else .v0;
 
         return .{
             .max_call_depth = compute_budget.max_call_depth,
             .stack_frame_size = compute_budget.stack_frame_size,
             .enable_address_translation = true,
-            .enable_stack_frame_gaps = !feature_set.active.contains(
-                features.BPF_ACCOUNT_DATA_DIRECT_MAPPING,
+            .enable_stack_frame_gaps = !feature_set.active(
+                .bpf_account_data_direct_mapping,
+                slot,
             ),
             .instruction_meter_checkpoint_distance = 10000,
             .enable_instruction_meter = true,
@@ -77,8 +83,9 @@ pub const Environment = struct {
             .noop_instruction_rate = 256,
             .sanitize_user_provided_values = true,
             .optimize_rodata = false,
-            .aligned_memory_mapping = !feature_set.active.contains(
-                features.BPF_ACCOUNT_DATA_DIRECT_MAPPING,
+            .aligned_memory_mapping = !feature_set.active(
+                .bpf_account_data_direct_mapping,
+                slot,
             ),
             .minimum_version = min_sbpf_version,
             .maximum_version = max_sbpf_version,
@@ -88,6 +95,7 @@ pub const Environment = struct {
     pub fn initV1Loader(
         allocator: std.mem.Allocator,
         feature_set: *const FeatureSet,
+        slot: sig.core.Slot,
         reject_deployment_of_broken_elfs: bool,
     ) !Registry(Syscall) {
         // Register syscalls
@@ -110,7 +118,7 @@ pub const Environment = struct {
 
         // Alloc Free
         const disable_alloc_free = reject_deployment_of_broken_elfs and
-            feature_set.active.contains(features.DISABLE_DEPLOY_OF_ALLOC_FREE_SYSCALL);
+            feature_set.active(.disable_deploy_of_alloc_free_syscall, slot);
 
         if (!disable_alloc_free) {
             _ = try loader.registerHashed(
@@ -182,7 +190,7 @@ pub const Environment = struct {
         );
 
         // Blake3
-        if (feature_set.active.contains(features.BLAKE3_SYSCALL_ENABLED)) {
+        if (feature_set.active(.blake3_syscall_enabled, slot)) {
             _ = try loader.registerHashed(
                 allocator,
                 "sol_blake3",
@@ -191,7 +199,7 @@ pub const Environment = struct {
         }
 
         // Elliptic Curve
-        if (feature_set.active.contains(features.CURVE25519_SYSCALL_ENABLED)) {
+        if (feature_set.active(.curve25519_syscall_enabled, slot)) {
             _ = try loader.registerHashed(
                 allocator,
                 "sol_curve_validate_point",
@@ -220,7 +228,7 @@ pub const Environment = struct {
             "sol_get_epoch_schedule_sysvar",
             syscalls.sysvar.getEpochSchedule,
         );
-        if (!feature_set.active.contains(features.DISABLE_FEES_SYSVAR)) {
+        if (!feature_set.active(.disable_fees_sysvar, slot)) {
             _ = try loader.registerHashed(
                 allocator,
                 "sol_get_fees_sysvar",
@@ -232,7 +240,7 @@ pub const Environment = struct {
             "sol_get_rent_sysvar",
             syscalls.sysvar.getRent,
         );
-        if (feature_set.active.contains(features.LAST_RESTART_SLOT_SYSVAR)) {
+        if (feature_set.active(.last_restart_slot_sysvar, slot)) {
             _ = try loader.registerHashed(
                 allocator,
                 "sol_get_last_restart_slot",
@@ -271,7 +279,6 @@ pub const Environment = struct {
             syscalls.memops.memcmp,
         );
 
-        // Processed Sibling
         _ = try loader.registerHashed(
             allocator,
             "sol_get_processed_sibling_instruction",
@@ -310,7 +317,7 @@ pub const Environment = struct {
         );
 
         // Memory Allocator
-        if (!feature_set.active.contains(features.DISABLE_DEPLOY_OF_ALLOC_FREE_SYSCALL)) {
+        if (!feature_set.active(.disable_deploy_of_alloc_free_syscall, slot)) {
             _ = try loader.registerHashed(
                 allocator,
                 "sol_alloc_free_",
@@ -318,16 +325,15 @@ pub const Environment = struct {
             );
         }
 
-        // Alt_bn128
-        if (feature_set.active.contains(features.ENABLE_ALT_BN128_SYSCALL)) {
+        // Alt-bn128
+        if (feature_set.active(.enable_alt_bn128_syscall, slot)) {
             _ = try loader.registerHashed(
                 allocator,
                 "sol_alt_bn128_group_op",
                 syscalls.ecc.altBn128GroupOp,
             );
         }
-
-        if (feature_set.active.contains(features.ENABLE_ALT_BN128_COMPRESSION_SYSCALL)) {
+        if (feature_set.active(.enable_alt_bn128_compression_syscall, slot)) {
             _ = try loader.registerHashed(
                 allocator,
                 "sol_alt_bn128_compression",
@@ -336,12 +342,11 @@ pub const Environment = struct {
         }
 
         // Big_mod_exp
-        // if (feature_set.active.contains(feature_set.ENABLE_BIG_MOD_EXP_SYSCALL)) {
+        // if (feature_set.active(feature_set.ENABLE_BIG_MOD_EXP_SYSCALL, slot)) {
         //     _ = try syscalls.registerHashed(allocator, "sol_big_mod_exp", bigModExp,);
         // }
 
-        // Poseidon
-        if (feature_set.active.contains(features.ENABLE_POSEIDON_SYSCALL)) {
+        if (feature_set.active(.enable_poseidon_syscall, slot)) {
             _ = try loader.registerHashed(
                 allocator,
                 "sol_poseidon",
@@ -349,8 +354,7 @@ pub const Environment = struct {
             );
         }
 
-        // Remaining Compute Units
-        if (feature_set.active.contains(features.REMAINING_COMPUTE_UNITS_SYSCALL_ENABLED)) {
+        if (feature_set.active(.remaining_compute_units_syscall_enabled, slot)) {
             _ = try loader.registerHashed(
                 allocator,
                 "sol_remaining_compute_units",
@@ -359,7 +363,7 @@ pub const Environment = struct {
         }
 
         // Sysvar Getter
-        if (feature_set.active.contains(features.GET_SYSVAR_SYSCALL_ENABLED)) {
+        if (feature_set.active(.get_sysvar_syscall_enabled, slot)) {
             _ = try loader.registerHashed(
                 allocator,
                 "sol_get_sysvar",
@@ -367,8 +371,7 @@ pub const Environment = struct {
             );
         }
 
-        // Get Epoch Stake
-        if (feature_set.active.contains(features.ENABLE_GET_EPOCH_STAKE_SYSCALL)) {
+        if (feature_set.active(.enable_get_epoch_stake_syscall, slot)) {
             _ = try loader.registerHashed(
                 allocator,
                 "sol_get_epoch_stake",

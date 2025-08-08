@@ -152,7 +152,7 @@ pub fn getOwnerFilters(
 
     try owner_pubkeys.ensureTotalCapacity(allocator, owner_accounts.len);
     for (owner_accounts) |owner_str| {
-        const owner_pubkey = try sig.core.Pubkey.parseBase58String(owner_str);
+        const owner_pubkey = try sig.core.Pubkey.parseRuntime(owner_str);
         owner_pubkeys.putAssumeCapacity(owner_pubkey, {});
     }
 
@@ -170,7 +170,7 @@ pub fn getAccountFilters(
     try account_pubkeys.ensureTotalCapacity(allocator, accounts.len);
 
     for (accounts) |account_str| {
-        const account_pubkey = try sig.core.Pubkey.parseBase58String(account_str);
+        const account_pubkey = try sig.core.Pubkey.parseRuntime(account_str);
         account_pubkeys.putAssumeCapacity(account_pubkey, {});
     }
 

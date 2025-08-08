@@ -166,8 +166,7 @@ test "stable_log" {
         cache.deinit(allocator);
     }
 
-    const program_id =
-        Pubkey.parseBase58String("SigDefau1tPubkey111111111111111111111111111") catch unreachable;
+    const program_id: Pubkey = .parse("SigDefau1tPubkey111111111111111111111111111");
 
     try programInvoke(&tc, program_id, 0);
     try programLog(&tc, "{s}", .{"log"});
