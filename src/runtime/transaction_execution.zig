@@ -179,8 +179,7 @@ pub const CopiedAccount = struct {
 };
 
 pub const ExecutedTransaction = struct {
-    err: ?InstructionErrorEnum,
-    err_index: ?u32,
+    instr_err: ?struct { u8, InstructionErrorEnum },
     log_collector: ?LogCollector,
     instruction_trace: ?InstructionTrace,
     return_data: ?TransactionReturnData,
@@ -435,33 +434,27 @@ pub fn executeTransaction(
         .prev_lamports_per_signature = environment.last_lamports_per_signature,
     };
 
-    var maybe_instruction_error: ?InstructionError = null;
-    var instruction_index: u32 = 0;
-
-    for (transaction.instruction_infos) |instruction_info| {
-        executor.executeInstruction(
-            allocator,
-            &tc,
-            instruction_info,
-        ) catch |err| {
-            switch (err) {
-                error.OutOfMemory => return error.OutOfMemory,
-                else => |e| maybe_instruction_error = e,
-            }
-            break;
-        };
-        instruction_index += 1;
-    }
-
-    const instruction_error = if (maybe_instruction_error) |instruction_error|
-        InstructionErrorEnum.fromError(instruction_error, tc.custom_error, null) catch |err|
-            std.debug.panic("Failed to convert error: instruction_error{}", .{err})
-    else
-        null;
+    const maybe_instruction_error: ?struct { u8, InstructionErrorEnum } =
+        for (transaction.instruction_infos, 0..) |instruction_info, index| {
+            executor.executeInstruction(
+                allocator,
+                &tc,
+                instruction_info,
+            ) catch |exec_err| {
+                switch (exec_err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    else => |instr_err| break .{
+                        @intCast(index),
+                        InstructionErrorEnum.fromError(instr_err, tc.custom_error, null) catch |err| {
+                            std.debug.panic("Error conversion failed: error={}", .{err});
+                        },
+                    },
+                }
+            };
+        } else null;
 
     return .{
-        .err = instruction_error,
-        .err_index = if (maybe_instruction_error) |_| instruction_index else 0,
+        .instr_err = maybe_instruction_error,
         .log_collector = tc.takeLogCollector(),
         .instruction_trace = tc.instruction_trace,
         .return_data = tc.takeReturnData(),
@@ -789,7 +782,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
     try std.testing.expectEqual(0, rent_collected);
     try std.testing.expectEqual(85_000, sender_account.lamports);
     try std.testing.expectEqual(110_000, receiver_account.lamports);
-    try std.testing.expectEqual(null, executed_transaction.err);
+    try std.testing.expectEqual(null, executed_transaction.instr_err);
     try std.testing.expectEqual(null, executed_transaction.log_collector);
     try std.testing.expectEqual(1, executed_transaction.instruction_trace.?.len);
     try std.testing.expectEqual(null, executed_transaction.return_data);

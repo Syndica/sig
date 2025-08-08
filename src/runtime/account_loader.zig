@@ -401,14 +401,12 @@ pub const BatchAccountCache = struct {
             var account = AccountSharedData.EMPTY;
             account.rent_epoch = RENT_EXEMPT_RENT_EPOCH;
 
-            const result = self.account_cache.getOrPutAssumeCapacity(key.*);
-            std.debug.assert(result.found_existing);
-            allocator.free(result.value_ptr.data);
-
-            result.value_ptr.* = account;
+            const account_ptr = self.account_cache.getPtr(key.*).?;
+            allocator.free(account_ptr.data);
+            account_ptr.* = account;
 
             return LoadedTransactionAccount{
-                .account = result.value_ptr,
+                .account = account_ptr,
                 .loaded_size = 0,
                 .rent_collected = 0,
             };

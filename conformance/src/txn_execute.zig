@@ -846,21 +846,21 @@ fn serializeOutput(
     switch (result) {
         .ok => |txn| {
             const is_ok = switch (txn) {
-                .executed => |executed| executed.executed_transaction.err == null,
+                .executed => |executed| executed.executed_transaction.instr_err == null,
                 .fees_only => false,
             };
 
-            const converted: utils.Converted = switch (txn) {
-                .executed => |executed| if (executed.executed_transaction.err) |instr_err| .{
+            const errors: utils.ConvertedErrorCodes = switch (txn) {
+                .executed => |executed| if (executed.executed_transaction.instr_err) |instr_err| .{
                     // hardcode InstructionError, since nothing else could be returned from executeTransaction
                     .err = 9,
-                    .instruction_error = @intFromEnum(instr_err) + 1,
+                    .instruction_error = @intFromEnum(instr_err[1]) + 1,
                     // TODO: special case for precompile failures
-                    .custom_error = switch (instr_err) {
+                    .custom_error = switch (instr_err[1]) {
                         .Custom => |v| v,
                         else => 0,
                     },
-                    .instruction_index = executed.executed_transaction.err_index.?,
+                    .instruction_index = instr_err[0],
                 } else .default,
                 .fees_only => |fees_only| utils.convertTransactionError(fees_only.err),
             };
@@ -950,10 +950,10 @@ fn serializeOutput(
                 .is_ok = is_ok,
                 .rent = rent,
 
-                .status = converted.err,
-                .instruction_error = converted.instruction_error,
-                .instruction_error_index = converted.instruction_index,
-                .custom_error = converted.custom_error,
+                .status = errors.err,
+                .instruction_error = errors.instruction_error,
+                .instruction_error_index = errors.instruction_index,
+                .custom_error = errors.custom_error,
 
                 .resulting_state = resulting_state,
                 .fee_details = .{
