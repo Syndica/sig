@@ -244,8 +244,7 @@ fn replaySlot(state: *ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
     };
 
     const new_rate_activation_epoch =
-        if (slot_info.constants.feature_set.active
-            .get(sig.core.features.REDUCE_STAKE_WARMUP_COOLDOWN)) |active_slot|
+        if (slot_info.constants.feature_set.get(.reduce_stake_warmup_cooldown)) |active_slot|
             state.epochs.schedule.getEpoch(active_slot)
         else
             null;

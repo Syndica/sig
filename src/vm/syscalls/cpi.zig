@@ -5,7 +5,6 @@ const sig = @import("../../sig.zig");
 const ids = sig.runtime.ids;
 const bpf_loader_program = sig.runtime.program.bpf_loader;
 const system_program = sig.runtime.program.system;
-const features = sig.core.features;
 const pubkey_utils = sig.runtime.pubkey_utils;
 const serialize = sig.runtime.program.bpf.serialize;
 const memory = sig.vm.memory;
@@ -224,8 +223,9 @@ const CallerAccount = struct {
     ) !CallerAccount {
         _ = _vm_addr; // unused, but have same signature as fromAccountInfoC().
 
-        const direct_mapping = ic.tc.feature_set.active.contains(
-            features.BPF_ACCOUNT_DATA_DIRECT_MAPPING,
+        const direct_mapping = ic.tc.feature_set.active(
+            .bpf_account_data_direct_mapping,
+            ic.tc.slot,
         );
 
         if (direct_mapping) {
@@ -379,8 +379,9 @@ const CallerAccount = struct {
         account_info: *align(1) const AccountInfoC,
         account_metadata: *const SerializedAccountMetadata,
     ) !CallerAccount {
-        const direct_mapping = ic.tc.feature_set.active.contains(
-            features.BPF_ACCOUNT_DATA_DIRECT_MAPPING,
+        const direct_mapping = ic.tc.feature_set.active(
+            .bpf_account_data_direct_mapping,
+            ic.tc.slot,
         );
 
         if (direct_mapping) {
@@ -587,8 +588,9 @@ fn translateAccounts(
 ) !TranslatedAccounts {
     // translate_account_infos():
 
-    const direct_mapping = ic.tc.feature_set.active.contains(
-        features.BPF_ACCOUNT_DATA_DIRECT_MAPPING,
+    const direct_mapping = ic.tc.feature_set.active(
+        .bpf_account_data_direct_mapping,
+        ic.tc.slot,
     );
 
     // In the same vein as the other checkAccountInfoPtr() checks, we don't lock
@@ -609,9 +611,10 @@ fn translateAccounts(
     );
 
     // check_account_infos():
-    if (ic.tc.feature_set.active.contains(features.LOOSEN_CPI_SIZE_RESTRICTION)) {
-        const max_cpi_account_infos: u64 = if (ic.tc.feature_set.active.contains(
-            features.INCREASE_TX_ACCOUNT_LOCK_LIMIT,
+    if (ic.tc.feature_set.active(.loosen_cpi_size_restriction, ic.tc.slot)) {
+        const max_cpi_account_infos: u64 = if (ic.tc.feature_set.active(
+            .increase_tx_account_lock_limit,
+            ic.tc.slot,
         )) 128 else 64;
 
         if (account_infos.len > max_cpi_account_infos) {
@@ -784,8 +787,9 @@ fn translateInstruction(
         else => unreachable,
     };
 
-    const loosen_cpi_size_restriction = ic.tc.feature_set.active.contains(
-        features.LOOSEN_CPI_SIZE_RESTRICTION,
+    const loosen_cpi_size_restriction = ic.tc.feature_set.active(
+        .loosen_cpi_size_restriction,
+        ic.tc.slot,
     );
 
     // check_instruction_size():
@@ -1258,8 +1262,9 @@ fn cpiCommon(
                 .close => true,
                 .upgrade => true,
                 .set_authority => true,
-                .set_authority_checked => ic.tc.feature_set.active.contains(
-                    features.ENABLE_BPF_LOADER_SET_AUTHORITY_CHECKED_IX,
+                .set_authority_checked => ic.tc.feature_set.active(
+                    .enable_bpf_loader_set_authority_checked_ix,
+                    ic.tc.slot,
                 ),
                 else => false,
             };
@@ -1290,8 +1295,9 @@ fn cpiCommon(
 
     // CPI Exit.
     // Synchronize the callee's account changes so the caller can see them.
-    const direct_mapping = ic.tc.feature_set.active.contains(
-        features.BPF_ACCOUNT_DATA_DIRECT_MAPPING,
+    const direct_mapping = ic.tc.feature_set.active(
+        .bpf_account_data_direct_mapping,
+        ic.tc.slot,
     );
 
     if (direct_mapping) {

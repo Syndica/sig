@@ -65,26 +65,6 @@ pub const VoteAccount = struct {
     pub usingnamespace protobuf.MessageMixins(@This());
 };
 
-pub const StakeAccount = struct {
-    stake_account_pubkey: ManagedString = .Empty,
-    voter_pubkey: ManagedString = .Empty,
-    stake: u64 = 0,
-    activation_epoch: u64 = 0,
-    deactivation_epoch: u64 = 0,
-    warmup_cooldown_rate: f64 = 0,
-
-    pub const _desc_table = .{
-        .stake_account_pubkey = fd(1, .Bytes),
-        .voter_pubkey = fd(2, .Bytes),
-        .stake = fd(3, .{ .Varint = .Simple }),
-        .activation_epoch = fd(4, .{ .Varint = .Simple }),
-        .deactivation_epoch = fd(5, .{ .Varint = .Simple }),
-        .warmup_cooldown_rate = fd(6, .{ .FixedInt = .I64 }),
-    };
-
-    pub usingnamespace protobuf.MessageMixins(@This());
-};
-
 pub const Inflation = struct {
     initial: f64 = 0,
     terminal: f64 = 0,
@@ -110,10 +90,6 @@ pub const EpochContext = struct {
     slots_per_year: f64 = 0,
     inflation: ?Inflation = null,
     genesis_creation_time: u64 = 0,
-    new_stake_accounts: ArrayList(ManagedString),
-    stake_accounts: ArrayList(StakeAccount),
-    new_vote_accounts: ArrayList(ManagedString),
-    vote_accounts_t: ArrayList(VoteAccount),
     vote_accounts_t_1: ArrayList(VoteAccount),
     vote_accounts_t_2: ArrayList(VoteAccount),
 
@@ -124,10 +100,6 @@ pub const EpochContext = struct {
         .slots_per_year = fd(4, .{ .FixedInt = .I64 }),
         .inflation = fd(5, .{ .SubMessage = {} }),
         .genesis_creation_time = fd(6, .{ .Varint = .Simple }),
-        .new_stake_accounts = fd(7, .{ .List = .Bytes }),
-        .stake_accounts = fd(8, .{ .List = .{ .SubMessage = {} } }),
-        .new_vote_accounts = fd(9, .{ .List = .Bytes }),
-        .vote_accounts_t = fd(10, .{ .List = .{ .SubMessage = {} } }),
         .vote_accounts_t_1 = fd(11, .{ .List = .{ .SubMessage = {} } }),
         .vote_accounts_t_2 = fd(12, .{ .List = .{ .SubMessage = {} } }),
     };
@@ -140,7 +112,6 @@ pub const SlotContext = struct {
     block_height: u64 = 0,
     poh: ManagedString = .Empty,
     parent_bank_hash: ManagedString = .Empty,
-    parent_lt_hash: ManagedString = .Empty,
     prev_slot: u64 = 0,
     prev_lps: u64 = 0,
     prev_epoch_capitalization: u64 = 0,
@@ -150,7 +121,6 @@ pub const SlotContext = struct {
         .block_height = fd(2, .{ .FixedInt = .I64 }),
         .poh = fd(3, .Bytes),
         .parent_bank_hash = fd(4, .Bytes),
-        .parent_lt_hash = fd(5, .Bytes),
         .prev_slot = fd(6, .{ .FixedInt = .I64 }),
         .prev_lps = fd(7, .{ .Varint = .Simple }),
         .prev_epoch_capitalization = fd(8, .{ .Varint = .Simple }),
@@ -182,13 +152,11 @@ pub const ELFBinary = struct {
 pub const ELFLoaderCtx = struct {
     elf: ?ELFBinary = null,
     features: ?FeatureSet = null,
-    elf_sz: u64 = 0,
     deploy_checks: bool = false,
 
     pub const _desc_table = .{
         .elf = fd(1, .{ .SubMessage = {} }),
         .features = fd(2, .{ .SubMessage = {} }),
-        .elf_sz = fd(3, .{ .Varint = .Simple }),
         .deploy_checks = fd(4, .{ .Varint = .Simple }),
     };
 
@@ -336,8 +304,6 @@ pub const VmContext = struct {
     r9: u64 = 0,
     r10: u64 = 0,
     r11: u64 = 0,
-    check_align: bool = false,
-    check_size: bool = false,
     entry_pc: u64 = 0,
     call_whitelist: ManagedString = .Empty,
     tracing_enabled: bool = false,
@@ -361,8 +327,6 @@ pub const VmContext = struct {
         .r9 = fd(15, .{ .Varint = .Simple }),
         .r10 = fd(16, .{ .Varint = .Simple }),
         .r11 = fd(17, .{ .Varint = .Simple }),
-        .check_align = fd(18, .{ .Varint = .Simple }),
-        .check_size = fd(19, .{ .Varint = .Simple }),
         .entry_pc = fd(20, .{ .Varint = .Simple }),
         .call_whitelist = fd(21, .Bytes),
         .tracing_enabled = fd(22, .{ .Varint = .Simple }),

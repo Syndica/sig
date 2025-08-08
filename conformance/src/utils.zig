@@ -4,7 +4,6 @@ const sig = @import("sig");
 
 const ManagedString = @import("protobuf").ManagedString;
 
-const features = sig.core.features;
 const sysvar = sig.runtime.sysvar;
 const memory = sig.vm.memory;
 
@@ -12,10 +11,10 @@ const InstructionError = sig.core.instruction.InstructionError;
 const InstructionInfo = sig.runtime.instruction_info.InstructionInfo;
 const TransactionContext = sig.runtime.transaction_context.TransactionContext;
 const TransactionContextAccount = sig.runtime.transaction_context.TransactionContextAccount;
-const FeatureSet = sig.core.FeatureSet;
 const SysvarCache = sig.runtime.SysvarCache;
 const EpochStakes = sig.core.EpochStakes;
 const ProgramMap = sig.runtime.program_loader.ProgramMap;
+const FeatureSet = sig.core.FeatureSet;
 
 const intFromInstructionError = sig.core.instruction.intFromInstructionError;
 
@@ -67,7 +66,7 @@ pub fn createTransactionContext(
         ptr
     else
         try allocator.create(FeatureSet);
-    feature_set.* = try createFeatureSet(allocator, instr_ctx);
+    feature_set.* = try createFeatureSet(instr_ctx);
 
     const epoch_stakes = if (environment.epoch_stakes) |ptr|
         ptr
@@ -121,6 +120,7 @@ pub fn createTransactionContext(
         .rent = sysvar_cache.get(sysvar.Rent) catch sysvar.Rent.DEFAULT,
         .prev_blockhash = sig.core.Hash.ZEROES,
         .prev_lamports_per_signature = 0,
+        .slot = if (instr_ctx.slot_context) |slot_ctx| slot_ctx.slot else 0,
     };
     errdefer comptime unreachable;
 
@@ -137,7 +137,6 @@ pub fn deinitTransactionContext(
     allocator: std.mem.Allocator,
     tc: TransactionContext,
 ) void {
-    tc.feature_set.deinit(allocator);
     allocator.destroy(tc.feature_set);
 
     tc.epoch_stakes.deinit(allocator);
@@ -162,31 +161,19 @@ pub fn deinitTransactionContext(
     tc.deinit();
 }
 
-pub fn createFeatureSet(
-    allocator: std.mem.Allocator,
-    pb_ctx: pb.InstrContext,
-) !features.FeatureSet {
+pub fn createFeatureSet(pb_ctx: pb.InstrContext) !FeatureSet {
     errdefer |err| {
         std.debug.print("createFeatureSet: error={}\n", .{err});
     }
 
-    const pb_epoch_context = pb_ctx.epoch_context orelse return features.FeatureSet.EMPTY;
-    const pb_feature_set = pb_epoch_context.features orelse return features.FeatureSet.EMPTY;
+    const pb_epoch_context = pb_ctx.epoch_context orelse return FeatureSet.ALL_DISABLED;
+    const pb_feature_set = pb_epoch_context.features orelse return FeatureSet.ALL_DISABLED;
 
-    var indexed_features = std.AutoArrayHashMap(u64, Pubkey).init(allocator);
-    defer indexed_features.deinit();
-
-    for (features.FEATURES) |feature| {
-        try indexed_features.put(@bitCast(feature.data[0..8].*), feature);
-    }
-
-    var feature_set = features.FeatureSet.EMPTY;
+    var feature_set: FeatureSet = .ALL_DISABLED;
     for (pb_feature_set.features.items) |id| {
-        if (indexed_features.get(id)) |pubkey| {
-            try feature_set.active.put(allocator, pubkey, 0);
-        }
+        // only way for `setSlotId` to return an error is if the `id` didn't match.
+        feature_set.setSlotId(id, 0) catch continue;
     }
-
     return feature_set;
 }
 
@@ -634,8 +621,6 @@ pub fn printPbVmContext(ctx: pb.VmContext) !void {
     try std.fmt.format(writer, ",\n\tr9: {}", .{ctx.r9});
     try std.fmt.format(writer, ",\n\tr10: {}", .{ctx.r10});
     try std.fmt.format(writer, ",\n\tr11: {}", .{ctx.r11});
-    try std.fmt.format(writer, ",\n\tcheck_align: {}", .{ctx.check_align});
-    try std.fmt.format(writer, ",\n\tcheck_size: {}", .{ctx.check_size});
     try std.fmt.format(writer, ",\n\tentry_pc: {}", .{ctx.entry_pc});
     try std.fmt.format(writer, ",\n\tcall_whitelist: {any}", .{ctx.call_whitelist.getSlice()});
     try std.fmt.format(writer, ",\n\ttracing_enabled: {}", .{ctx.tracing_enabled});

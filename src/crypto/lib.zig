@@ -17,3 +17,20 @@ pub const ed25519 = struct {
     pub const CachedPoint = namespace.CachedPoint;
     pub const pippenger = @import("pippenger.zig");
 };
+
+/// Extern definition of P256-Keccak256 signature.
+pub const EcdsaSignature = extern struct {
+    r: [32]u8,
+    s: [32]u8,
+
+    const Keccak256 = std.crypto.hash.sha3.Keccak256;
+    const Secp256k1 = std.crypto.ecc.Secp256k1;
+    const Ecdsa = std.crypto.sign.ecdsa.Ecdsa(Secp256k1, Keccak256);
+
+    pub fn to(self: EcdsaSignature) Ecdsa.Signature {
+        return .{
+            .r = self.r,
+            .s = self.s,
+        };
+    }
+};

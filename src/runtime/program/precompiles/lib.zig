@@ -9,8 +9,6 @@ const Pubkey = sig.core.Pubkey;
 const Ed25519 = std.crypto.sign.Ed25519;
 const TransactionInstruction = sig.core.transaction.Instruction;
 
-const features = sig.core.features;
-
 /// https://github.com/anza-xyz/agave/blob/df063a8c6483ad1d2bbbba50ab0b7fd7290eb7f4/cost-model/src/block_cost_limits.rs#L15
 /// Cluster averaged compute unit to micro-sec conversion rate
 pub const COMPUTE_UNIT_TO_US_RATIO: u64 = 30;
@@ -35,7 +33,7 @@ pub const PRECOMPILES = [_]Precompile{
     .{
         .program_id = secp256r1.ID,
         .function = secp256r1.verify,
-        .required_feature = features.ENABLE_SECP256R1_PRECOMPILE,
+        .required_feature = .enable_secp256r1_precompile,
     },
 };
 
@@ -43,7 +41,7 @@ pub const PRECOMPILES = [_]Precompile{
 // https://github.com/anza-xyz/agave/blob/6ea38fce866595908486a01c7d6b7182988f3b2d/sdk/program/src/message/sanitized.rs#L378
 pub fn verifyPrecompilesComputeCost(
     transaction: sig.core.Transaction,
-    feature_set: sig.core.FeatureSet,
+    feature_set: *const sig.core.FeatureSet,
 ) u64 {
     // TODO: support verify_strict feature https://github.com/anza-xyz/agave/pull/1876/
     _ = feature_set;
@@ -75,6 +73,7 @@ pub fn verifyPrecompiles(
     allocator: std.mem.Allocator,
     transaction: sig.core.Transaction,
     feature_set: *const sig.core.FeatureSet,
+    slot: sig.core.Slot,
 ) error{OutOfMemory}!?TransactionError {
     // could remove this alloc by passing in the transaction in directly, but maybe less clean
     var instruction_datas: ?[]const []const u8 = null;
@@ -86,7 +85,7 @@ pub fn verifyPrecompiles(
             if (!precompile.program_id.equals(&program_id)) continue;
 
             const precompile_feature_enabled = precompile.required_feature == null or
-                feature_set.active.contains(precompile.required_feature.?);
+                feature_set.active(precompile.required_feature.?, slot);
             if (!precompile_feature_enabled) continue;
 
             const datas = instruction_datas orelse blk: {
@@ -116,7 +115,7 @@ pub const PrecompileFn = fn (
 pub const Precompile = struct {
     program_id: Pubkey,
     function: *const PrecompileFn,
-    required_feature: ?Pubkey,
+    required_feature: ?sig.core.features.Feature,
 };
 
 // custom errors
@@ -133,8 +132,9 @@ test "verify ed25519" {
     {
         const actual = try verifyPrecompiles(
             std.testing.allocator,
-            sig.core.Transaction.EMPTY,
-            &sig.core.FeatureSet.EMPTY,
+            .EMPTY,
+            &.ALL_DISABLED,
+            0,
         );
         try std.testing.expectEqual(null, actual);
     }
@@ -162,7 +162,8 @@ test "verify ed25519" {
         const actual = try verifyPrecompiles(
             std.testing.allocator,
             bad_ed25519_tx,
-            &sig.core.FeatureSet.EMPTY,
+            &.ALL_DISABLED,
+            0,
         );
         try std.testing.expectEqual(
             TransactionError{ .InstructionError = .{ 0, .{ .Custom = 0 } } },
@@ -201,7 +202,8 @@ test "verify ed25519" {
         const actual = try verifyPrecompiles(
             std.testing.allocator,
             ed25519_tx,
-            &sig.core.FeatureSet.EMPTY,
+            &.ALL_DISABLED,
+            0,
         );
         try std.testing.expectEqual(null, actual);
     }
@@ -235,7 +237,7 @@ test "verify cost" {
     // cross-checked with agave (FeatureSet::default())
     try std.testing.expectEqual(3000, expected_cost);
 
-    const compute_units = verifyPrecompilesComputeCost(ed25519_tx, sig.core.FeatureSet.EMPTY);
+    const compute_units = verifyPrecompilesComputeCost(ed25519_tx, &.ALL_DISABLED);
     try std.testing.expectEqual(expected_cost, compute_units);
 }
 
@@ -263,7 +265,8 @@ test "verify secp256k1" {
     const actual = try verifyPrecompiles(
         std.testing.allocator,
         bad_secp256k1_tx,
-        &sig.core.FeatureSet.EMPTY,
+        &.ALL_DISABLED,
+        0,
     );
     try std.testing.expectEqual(
         TransactionError{ .InstructionError = .{ 0, .{ .Custom = 0 } } },
