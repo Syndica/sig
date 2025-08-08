@@ -286,6 +286,9 @@ pub fn loadAndExecuteTransaction(
     config: *const TransactionExecutionConfig,
     program_map: *const ProgramMap,
 ) error{OutOfMemory}!TransactionResult(ProcessedTransaction) {
+    if (hasDuplicates(transaction.accounts.items(.pubkey))) {
+        return .{ .err = .AccountLoadedTwice };
+    }
     const check_age_result = try sig.runtime.check_transactions.checkAge(
         allocator,
         transaction,
@@ -380,6 +383,41 @@ pub fn loadAndExecuteTransaction(
             .executed_transaction = executed_transaction,
         },
     } };
+}
+
+/// Check for duplicate account keys.
+///
+/// NOTE: in agave, this check is done while creating/loading the account batch:
+/// * [prepare_sanitized_batch](https://github.com/firedancer-io/agave/blob/10fe1eb29aac9c236fd72d08ae60a3ef61ee8353/runtime/src/bank.rs#L3173)
+/// * [try_lock_accounts](https://github.com/firedancer-io/agave/blob/10fe1eb29aac9c236fd72d08ae60a3ef61ee8353/runtime/src/bank.rs#L3164)
+/// * [lock_accounts](https://github.com/firedancer-io/agave/blob/10fe1eb29aac9c236fd72d08ae60a3ef61ee8353/accounts-db/src/accounts.rs#L569)
+/// * [validate_account_locks](https://github.com/firedancer-io/agave/blob/10fe1eb29aac9c236fd72d08ae60a3ef61ee8353/accounts-db/src/account_locks.rs#L122-L123)
+/// and then it is propagated to and through `load_and_execute_transactions`.
+///
+/// Our account batch creation/load process isn't designed to accommodate this, so what we do
+/// instead is do the check when we're actually trying to load and execute the transaction.
+fn hasDuplicates(account_keys: []const Pubkey) bool {
+    for (account_keys, 0..) |current_key, idx| {
+        for (account_keys[idx + 1 ..]) |next_key| {
+            if (current_key.equals(&next_key)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+test hasDuplicates {
+    const pk1: Pubkey = .{ .data = @splat(1) };
+    const pk2: Pubkey = .{ .data = @splat(2) };
+    const pk3: Pubkey = .{ .data = @splat(3) };
+
+    try std.testing.expectEqual(false, hasDuplicates(&.{}));
+    try std.testing.expectEqual(false, hasDuplicates(&.{pk1}));
+    try std.testing.expectEqual(false, hasDuplicates(&.{ pk1, pk2 }));
+    try std.testing.expectEqual(false, hasDuplicates(&.{ pk1, pk2, pk3 }));
+    try std.testing.expectEqual(true, hasDuplicates(&.{ pk1, pk2, pk3, pk3 }));
+    try std.testing.expectEqual(true, hasDuplicates(&.{ pk2, pk1, pk2, pk3 }));
 }
 
 /// [agave] https://github.com/firedancer-io/agave/blob/403d23b809fc513e2c4b433125c127cf172281a2/svm/src/transaction_processor.rs#L909
