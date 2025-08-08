@@ -21,14 +21,20 @@ pub const Stake = u64;
 
 pub const VotedSlot = Slot;
 
-pub const ThresholdDecision = union(enum) {
-    passed_threshold,
-    failed_threshold: struct {
-        // vote depth
-        u64,
-        // Observed stake
-        u64,
-    },
+const ComputedBankState = struct {
+    /// Maps each validator (by their Pubkey) to the amount of stake they have voted
+    /// with on this fork. Helps determine who has already committed to this
+    /// fork and how much total stake that represents.
+    voted_stakes: VotedStakes,
+    /// Represents the total active stake in the network.
+    total_stake: Stake,
+    /// The sum of stake from all validators who have voted on the
+    /// fork leading up to the current bank (slot).
+    fork_stake: Stake,
+    // Tree of intervals of lockouts of the form [slot, slot + slot.lockout],
+    // keyed by end of the range
+    lockout_intervals: LockoutIntervals,
+    my_latest_landed_vote: ?Slot,
 };
 
 pub const TowerError = error{

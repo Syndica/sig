@@ -28,7 +28,7 @@ const UnixTimestamp = sig.core.UnixTimestamp;
 const HeaviestSubtreeForkChoice = sig.consensus.HeaviestSubtreeForkChoice;
 const LatestValidatorVotesForFrozenBanks =
     sig.consensus.latest_validator_votes.LatestValidatorVotes;
-const ThresholdDecision = sig.consensus.tower.ThresholdDecision;
+const ThresholdDecision = sig.consensus.progress_map.consensus.ThresholdDecision;
 const ProgressMap = sig.consensus.ProgressMap;
 const Tower = sig.consensus.tower.Tower;
 const TowerError = sig.consensus.tower.TowerError;
@@ -1546,7 +1546,7 @@ fn checkVoteStakeThreshold(
     const fork_stake = voted_stakes.get(threshold_vote.slot) orelse {
         // We haven't seen any votes on this fork yet, so no stake
         return .{
-            .failed_threshold = .{ threshold_depth, 0 },
+            .failed_threshold = .{ .vote_depth = threshold_depth, .observed_stake = 0 },
         };
     };
 
@@ -1572,11 +1572,11 @@ fn checkVoteStakeThreshold(
         tower_before_applying_vote,
         threshold_vote,
     ) or lockout > threshold_size) {
-        return .{ .passed_threshold = {} };
+        return .passed_threshold;
     }
 
     return .{
-        .failed_threshold = .{ threshold_depth, 0 },
+        .failed_threshold = .{ .vote_depth = threshold_depth, .observed_stake = 0 },
     };
 }
 
