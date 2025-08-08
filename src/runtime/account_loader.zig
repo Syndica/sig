@@ -249,6 +249,7 @@ pub const BatchAccountCache = struct {
         transaction: *const RuntimeTransaction,
         rent_collector: *const RentCollector,
         feature_set: *const sig.core.FeatureSet,
+        slot: sig.core.Slot,
         compute_budget_limits: *const ComputeBudgetLimits,
     ) error{OutOfMemory}!TransactionResult(LoadedTransactionAccounts) {
         const result = loadTransactionAccountsInner(
@@ -257,6 +258,7 @@ pub const BatchAccountCache = struct {
             transaction,
             rent_collector,
             feature_set,
+            slot,
             compute_budget_limits,
         ) catch |err| return switch (err) {
             error.OutOfMemory => error.OutOfMemory,
@@ -276,6 +278,7 @@ pub const BatchAccountCache = struct {
         transaction: *const RuntimeTransaction,
         rent_collector: *const RentCollector,
         feature_set: *const sig.core.FeatureSet,
+        slot: sig.core.Slot,
         compute_budget_limits: *const ComputeBudgetLimits,
     ) LoadedTransactionAccountsError!LoadedTransactionAccounts {
         if (compute_budget_limits.loaded_accounts_bytes == 0)
@@ -290,6 +293,7 @@ pub const BatchAccountCache = struct {
                 transaction,
                 rent_collector,
                 feature_set,
+                slot,
                 &account_key,
                 is_writable,
             );
@@ -325,9 +329,8 @@ pub const BatchAccountCache = struct {
                 false,
             )) orelse return error.ProgramAccountNotFound;
 
-            if (!feature_set.active.contains(
-                sig.core.features.REMOVE_ACCOUNTS_EXECUTABLE_FLAG_CHECKS,
-            ) and !program_account.account.executable) return error.InvalidProgramForExecution;
+            if (!feature_set.active(.remove_accounts_executable_flag_checks, slot) and
+                !program_account.account.executable) return error.InvalidProgramForExecution;
 
             const owner_id = &program_account.account.owner;
             const owner_account = account: {
@@ -381,6 +384,7 @@ pub const BatchAccountCache = struct {
         transaction: *const RuntimeTransaction,
         rent_collector: *const RentCollector,
         feature_set: *const sig.core.FeatureSet,
+        slot: sig.core.Slot,
         key: *const Pubkey,
         is_writable: bool,
     ) error{OutOfMemory}!LoadedTransactionAccount {
@@ -416,6 +420,7 @@ pub const BatchAccountCache = struct {
             account.account,
             key,
             feature_set,
+            slot,
             rent_collector,
         );
 
@@ -491,9 +496,10 @@ pub fn collectRentFromAccount(
     account: *AccountSharedData,
     account_key: *const Pubkey,
     feature_set: *const sig.core.FeatureSet,
+    slot: sig.core.Slot,
     rent_collector: *const RentCollector,
 ) CollectedInfo {
-    if (!feature_set.active.contains(sig.core.features.DISABLE_RENT_FEES_COLLECTION)) {
+    if (!feature_set.active(.disable_rent_fees_collection, slot)) {
         @branchHint(.unlikely); // this feature should always be enabled?
         return rent_collector.collectFromExistingAccount(account_key, account);
     }
@@ -590,13 +596,15 @@ const TestingEnv = struct {
     rent_collector: RentCollector,
     feature_set: sig.core.FeatureSet,
     compute_budget_limits: ComputeBudgetLimits,
+    slot: sig.core.Slot,
 };
 
 fn newTestingEnv() TestingEnv {
     if (!@import("builtin").is_test) @compileError("newTestingEnv for testing only");
     return .{
         .rent_collector = sig.core.rent_collector.defaultCollector(0),
-        .feature_set = sig.core.FeatureSet.EMPTY,
+        .feature_set = .ALL_DISABLED,
+        .slot = 0,
         .compute_budget_limits = ComputeBudgetLimits{
             .heap_size = 0,
             .compute_unit_limit = 0,
@@ -654,6 +662,7 @@ test "loadTransactionAccounts empty transaction" {
         &empty_tx,
         &env.rent_collector,
         &env.feature_set,
+        env.slot,
         &env.compute_budget_limits,
     );
 
@@ -694,6 +703,7 @@ test "loadTransactionAccounts sysvar instruction" {
         &empty_tx,
         &env.rent_collector,
         &env.feature_set,
+        env.slot,
         &env.compute_budget_limits,
     );
 
@@ -829,6 +839,7 @@ test "load accounts rent paid" {
         &tx,
         &env.rent_collector,
         &env.feature_set,
+        env.slot,
         &env.compute_budget_limits,
     );
 
@@ -976,6 +987,7 @@ test "load tx too large" {
         &tx,
         &env.rent_collector,
         &env.feature_set,
+        env.slot,
         &env.compute_budget_limits,
     );
 
@@ -1074,6 +1086,7 @@ test "dont double count program owner account data size" {
         &tx,
         &env.rent_collector,
         &env.feature_set,
+        env.slot,
         &env.compute_budget_limits,
     );
 
@@ -1107,6 +1120,7 @@ test "load, create new account" {
         &tx,
         &env.rent_collector,
         &env.feature_set,
+        env.slot,
         &env.compute_budget_limits,
     );
 
@@ -1165,6 +1179,7 @@ test "invalid program owner owner" {
         &tx,
         &env.rent_collector,
         &env.feature_set,
+        env.slot,
         &env.compute_budget_limits,
     );
 
@@ -1213,6 +1228,7 @@ test "missing program owner account" {
         &tx,
         &env.rent_collector,
         &env.feature_set,
+        env.slot,
         &env.compute_budget_limits,
     );
 
@@ -1260,6 +1276,7 @@ test "deallocate account" {
         &tx,
         &env.rent_collector,
         &env.feature_set,
+        env.slot,
         &env.compute_budget_limits,
     );
 
@@ -1339,6 +1356,7 @@ test "load v3 program" {
         &tx,
         &env.rent_collector,
         &env.feature_set,
+        env.slot,
         &env.compute_budget_limits,
     );
 

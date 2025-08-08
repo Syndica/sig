@@ -111,12 +111,12 @@ fn resolveTransaction(
     for (message.account_keys, 0..) |pubkey, i| accounts.appendAssumeCapacity(.{
         .pubkey = pubkey,
         .is_signer = message.isSigner(i),
-        .is_writable = message.isWritable(i),
+        .is_writable = message.isWritable(i, lookups),
     });
-    for (lookups.writable) |pubkey| accounts.appendAssumeCapacity(.{
+    for (lookups.writable, 0..) |pubkey, i| accounts.appendAssumeCapacity(.{
         .pubkey = pubkey,
         .is_signer = false,
-        .is_writable = true,
+        .is_writable = message.isWritable(message.account_keys.len + i, lookups),
     });
     for (lookups.readonly) |pubkey| accounts.appendAssumeCapacity(.{
         .pubkey = pubkey,
@@ -141,29 +141,16 @@ fn resolveTransaction(
             seen.set(index);
 
             // expand the account metadata
-            (account_metas.addOne() catch break).* = if (index < lookups_start) .{
-                .pubkey = message.account_keys[index],
+            const account = if (index < accounts.len) accounts.get(index) else {
+                return error.InvalidAccountIndex;
+            };
+            (account_metas.addOne() catch break).* = .{
+                .pubkey = account.pubkey,
+                .is_signer = account.is_signer,
+                .is_writable = account.is_writable,
                 .index_in_transaction = index,
                 .index_in_caller = index,
                 .index_in_callee = @intCast(index_in_callee),
-                .is_signer = message.isSigner(index),
-                .is_writable = message.isWritable(index),
-            } else if (index < readable_lookups_start) .{
-                .pubkey = lookups.writable[index - lookups_start],
-                .index_in_transaction = index,
-                .index_in_caller = index,
-                .index_in_callee = @intCast(index_in_callee),
-                .is_signer = false,
-                .is_writable = true,
-            } else if (index < lookups_end) .{
-                .pubkey = lookups.readonly[index - readable_lookups_start],
-                .index_in_transaction = index,
-                .index_in_caller = index,
-                .index_in_callee = @intCast(index_in_callee),
-                .is_signer = false,
-                .is_writable = false,
-            } else {
-                return error.InvalidAddressLookupTableIndex;
             };
         }
 
@@ -186,11 +173,16 @@ fn resolveTransaction(
     };
 }
 
+pub const LookupTableAccounts = struct {
+    writable: []const Pubkey,
+    readonly: []const Pubkey,
+};
+
 fn resolveLookupTableAccounts(
     allocator: Allocator,
     account_reader: SlotAccountReader,
     address_lookups: []const TransactionAddressLookup,
-) !struct { writable: []const Pubkey, readonly: []const Pubkey } {
+) !LookupTableAccounts {
     // count number of accounts
     var total_writable: usize = 0;
     var total_readonly: usize = 0;

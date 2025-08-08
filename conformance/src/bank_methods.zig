@@ -16,7 +16,7 @@ const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 
 const AccountSharedData = sig.runtime.AccountSharedData;
-const FeatureSet = sig.core.features.FeatureSet;
+const FeatureSet = sig.core.FeatureSet;
 
 const failing_allocator = sig.utils.allocators.failing.allocator(.{});
 
@@ -38,7 +38,9 @@ pub fn applyFeatureActivations(
         allow_new_activations,
     );
 
-    for (new_feature_activations.keys()) |feature_id| {
+    var iterator = new_feature_activations.iterator(slot);
+    while (iterator.next()) |feature| {
+        const feature_id: Pubkey = features.map.get(feature);
         const db_account = try tryGetAccount(accounts_db, feature_id) orelse continue;
         defer db_account.deinit(allocator);
 
@@ -57,20 +59,12 @@ pub fn applyFeatureActivations(
     //     Arc::new(reserved_keys)
     // };
 
-    if (new_feature_activations.contains(features.PICO_INFLATION))
+    if (new_feature_activations.active(.pico_inflation, slot))
         return error.PicoInflationActivationNotImplemented;
 
-    const is_disjoint = blk: {
-        const full_inflation_features = try feature_set.fullInflationFeaturesEnabled(allocator);
-        const predicate = new_feature_activations.count() <= full_inflation_features.count();
-        const smaller, const larger = if (predicate)
-            .{ new_feature_activations, full_inflation_features }
-        else
-            .{ full_inflation_features, new_feature_activations };
-        for (smaller.keys()) |key| if (larger.contains(key)) break :blk false;
-        break :blk true;
-    };
-    if (!is_disjoint) return error.FullInflationActivationNotImplemented;
+    if (feature_set.fullInflationFeatures(slot).enabled(new_feature_activations, slot)) {
+        return error.FullInflationActivationNotImplemented;
+    }
 
     try applyBuiltinProgramFeatureTransitions(
         allocator,
@@ -81,35 +75,35 @@ pub fn applyFeatureActivations(
         allow_new_activations,
     );
 
-    if (new_feature_activations.contains(features.UPDATE_HASHES_PER_TICK))
+    if (new_feature_activations.active(.update_hashes_per_tick, slot))
         return error.UpdateHashesPerTickActivationNotImplemented;
 
-    if (new_feature_activations.contains(features.UPDATE_HASHES_PER_TICK2))
+    if (new_feature_activations.active(.update_hashes_per_tick2, slot))
         return error.UpdateHashesPerTick2ActivationNotImplemented;
 
-    if (new_feature_activations.contains(features.UPDATE_HASHES_PER_TICK3))
+    if (new_feature_activations.active(.update_hashes_per_tick3, slot))
         return error.UpdateHashesPerTick3ActivationNotImplemented;
 
-    if (new_feature_activations.contains(features.UPDATE_HASHES_PER_TICK4))
+    if (new_feature_activations.active(.update_hashes_per_tick4, slot))
         return error.UpdateHashesPerTick4ActivationNotImplemented;
 
-    if (new_feature_activations.contains(features.UPDATE_HASHES_PER_TICK5))
+    if (new_feature_activations.active(.update_hashes_per_tick5, slot))
         return error.UpdateHashesPerTick5ActivationNotImplemented;
 
-    if (new_feature_activations.contains(features.UPDATE_HASHES_PER_TICK6))
+    if (new_feature_activations.active(.update_hashes_per_tick6, slot))
         return error.UpdateHashesPerTick6ActivationNotImplemented;
 
-    if (new_feature_activations.contains(features.ACCOUNTS_LT_HASH))
+    if (new_feature_activations.active(.accounts_lt_hash, slot))
         return error.AccountsLtHashActivationNotImplemented;
 
-    if (new_feature_activations.contains(features.RAISE_BLOCK_LIMITS_TO_50M) and
-        !feature_set.active.contains(features.RAISE_BLOCK_LIMITS_TO_60M))
+    if (new_feature_activations.active(.raise_block_limits_to_50m, slot) and
+        !feature_set.active(.raise_block_limits_to_60m, slot))
         return error.RaiseBlockLimitsTo50MActivationNotImplemented;
 
-    if (new_feature_activations.contains(features.RAISE_BLOCK_LIMITS_TO_60M))
+    if (new_feature_activations.active(.raise_block_limits_to_60m, slot))
         return error.RaiseBlockLimitsTo60MActivationNotImplemented;
 
-    if (new_feature_activations.contains(features.REMOVE_ACCOUNTS_DELTA_HASH))
+    if (new_feature_activations.active(.remove_accounts_delta_hash, slot))
         return error.RemoveAccountsDeltaHashActivationNotImplemented;
 }
 
@@ -118,13 +112,13 @@ fn applyBuiltinProgramFeatureTransitions(
     slot: Slot,
     feature_set: *const FeatureSet,
     accounts_db: *AccountsDb,
-    new_feature_activations: *const std.AutoArrayHashMapUnmanaged(Pubkey, void),
+    new_feature_activations: *const FeatureSet,
     allow_new_activations: bool,
 ) !void {
     for (builtins.BUILTINS) |builtin_program| {
         var is_core_bpf = false;
         if (builtin_program.core_bpf_migration_config) |core_bpf_config| {
-            if (new_feature_activations.contains(core_bpf_config.enable_feature_id)) {
+            if (new_feature_activations.active(core_bpf_config.enable_feature_id, slot)) {
                 try migrateBuiltinProgramToCoreBpf();
                 is_core_bpf = true;
             } else {
@@ -139,9 +133,9 @@ fn applyBuiltinProgramFeatureTransitions(
 
         if (builtin_program.enable_feature_id) |enable_feature_id| {
             const should_enable_on_transition = !is_core_bpf and if (allow_new_activations)
-                new_feature_activations.contains(enable_feature_id)
+                new_feature_activations.active(enable_feature_id, slot)
             else
-                feature_set.active.contains(enable_feature_id);
+                feature_set.active(enable_feature_id, slot);
 
             if (should_enable_on_transition) {
                 const data = try allocator.dupe(u8, builtin_program.data);
@@ -164,14 +158,14 @@ fn applyBuiltinProgramFeatureTransitions(
 
     for (builtins.STATELESS_BUILTINS) |builtin_program| {
         const core_bpf_config = builtin_program.core_bpf_migration_config orelse continue;
-        if (new_feature_activations.contains(core_bpf_config.enable_feature_id)) {
+        if (new_feature_activations.active(core_bpf_config.enable_feature_id, 0)) {
             try migrateBuiltinProgramToCoreBpf();
         }
     }
 
     for (program.precompiles.PRECOMPILES) |precompile| {
         const feature_id = precompile.required_feature orelse continue;
-        if (!feature_set.active.contains(feature_id)) continue;
+        if (!feature_set.active(feature_id, 0)) continue;
 
         const maybe_account = accounts_db.getAccount(
             &precompile.program_id,
@@ -211,32 +205,27 @@ fn computeActiveFeatureSet(
     feature_set: *FeatureSet,
     accounts_db: *AccountsDb,
     allow_new_activations: bool,
-) !std.AutoArrayHashMapUnmanaged(Pubkey, void) {
+) !FeatureSet {
     // TODO: requires reimplementation of feature_set.inactive or some other solution
     // var inactive = std.AutoArrayHashMapUnmanaged(Pubkey, void){};
-    var pending = std.AutoArrayHashMapUnmanaged(Pubkey, void){};
-    errdefer pending.deinit(allocator);
+    var pending: FeatureSet = .ALL_DISABLED;
 
-    const keys = try allocator.dupe(Pubkey, feature_set.active.keys());
-    defer allocator.free(keys);
-
-    for (feature_set.active.keys()) |feature_id| {
+    var iterator = feature_set.iterator(slot);
+    while (iterator.next()) |feature| {
+        const feature_id: Pubkey = features.map.get(feature);
         var maybe_activation_slot: ?u64 = null;
 
         if (try tryGetAccount(accounts_db, feature_id)) |account| {
-            if (try featureActivationSlotFromAccount(
-                allocator,
-                account,
-            )) |activation_slot| {
+            if (try featureActivationSlotFromAccount(allocator, account)) |activation_slot| {
                 maybe_activation_slot = activation_slot;
             } else if (allow_new_activations) {
-                try pending.put(allocator, feature_id, {});
+                pending.setSlot(feature, 0);
                 maybe_activation_slot = slot;
             }
         }
 
         if (maybe_activation_slot) |activation_slot| {
-            try feature_set.active.put(allocator, feature_id, activation_slot);
+            feature_set.setSlot(feature, activation_slot);
         } else {
             // try inactive.put(allocator, feature_id, {});
         }
