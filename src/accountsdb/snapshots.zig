@@ -921,7 +921,7 @@ pub const FullSnapshotFileInfo = struct {
                 filename_truncated.len;
 
             const str = filename[start..end];
-            const hash = Hash.parseBase58String(str) catch |err| switch (err) {
+            const hash = Hash.parseRuntime(str) catch |err| switch (err) {
                 error.InvalidHash => return error.InvalidHash,
             };
 
@@ -1083,7 +1083,7 @@ pub const IncrementalSnapshotFileInfo = struct {
                 filename_truncated.len;
 
             const str = filename[start..end];
-            const hash = Hash.parseBase58String(str) catch |err| switch (err) {
+            const hash = Hash.parseRuntime(str) catch |err| switch (err) {
                 error.InvalidHash => return error.InvalidHash,
             };
 

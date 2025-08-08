@@ -21,8 +21,7 @@ const TransactionContext = sig.runtime.TransactionContext;
 const V3State = sig.runtime.program.bpf_loader.v3.State;
 
 // [agave] https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/programs/bpf_loader/src/lib.rs#L399-L401
-const migration_authority =
-    Pubkey.parseBase58String("3Scf35jMNk2xXBD6areNjgMtXgp5ZspDhms8vdcbzC42") catch unreachable;
+const migration_authority: Pubkey = .parse("3Scf35jMNk2xXBD6areNjgMtXgp5ZspDhms8vdcbzC42");
 
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L300
 pub fn execute(

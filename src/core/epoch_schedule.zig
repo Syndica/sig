@@ -36,9 +36,7 @@ pub const EpochSchedule = extern struct {
     /// Basically: `MINIMUM_SLOTS_PER_EPOCH * (2.pow(first_normal_epoch) - 1)`.
     first_normal_slot: core.Slot,
 
-    pub const ID = core.Pubkey.parseBase58String(
-        "SysvarEpochSchedu1e111111111111111111111111",
-    ) catch unreachable;
+    pub const ID: core.Pubkey = .parse("SysvarEpochSchedu1e111111111111111111111111");
     pub const STORAGE_SIZE: u64 = 33;
     pub const DEFAULT: EpochSchedule = .custom(.{
         .slots_per_epoch = DEFAULT_SLOTS_PER_EPOCH,

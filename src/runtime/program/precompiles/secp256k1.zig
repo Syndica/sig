@@ -11,8 +11,7 @@ const Keccak256 = std.crypto.hash.sha3.Keccak256;
 const Secp256k1 = std.crypto.ecc.Secp256k1;
 const Ecdsa = std.crypto.sign.ecdsa.Ecdsa(Secp256k1, Keccak256);
 
-pub const ID =
-    Pubkey.parseBase58String("KeccakSecp256k11111111111111111111111111111") catch unreachable;
+pub const ID: Pubkey = .parse("KeccakSecp256k11111111111111111111111111111");
 
 pub const SECP256K1_DATA_START = SECP256K1_SIGNATURE_OFFSETS_SERIALIZED_SIZE +
     SECP256K1_SIGNATURE_OFFSETS_START;

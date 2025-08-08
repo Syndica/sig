@@ -137,7 +137,7 @@ fn executeTxnContext(
     defer deinitMapAndValues(allocator, accounts_map);
 
     // TODO: use??
-    // const fee_collector = Pubkey.parseBase58String("1111111111111111111111111111111111") catch unreachable;
+    // const fee_collector = Pubkey.parseRuntime("1111111111111111111111111111111111") catch unreachable;
 
     // Load genesis config
     var genesis_config = GenesisConfig.default(allocator);
@@ -1396,7 +1396,7 @@ pub fn createPbManagedString(
     comptime T: type,
     string: []const u8,
 ) !ManagedString {
-    const parsed = T.parseBase58String(string) catch unreachable;
+    const parsed = T.parseRuntime(string) catch unreachable;
     return try ManagedString.copy(&parsed.data, allocator);
 }
 
@@ -1407,7 +1407,7 @@ pub fn createPbManagedStrings(
 ) !std.ArrayList(ManagedString) {
     var result = try std.ArrayList(ManagedString).initCapacity(allocator, strings.len);
     for (strings) |string| {
-        const parsed = T.parseBase58String(string) catch unreachable;
+        const parsed = T.parseRuntime(string) catch unreachable;
         result.appendAssumeCapacity(try ManagedString.copy(&parsed.data, allocator));
     }
     return result;

@@ -2072,10 +2072,8 @@ fn getTrustedValidators(allocator: std.mem.Allocator, cfg: config.Cmd) !?std.Arr
             allocator,
             cfg.gossip.trusted_validators.len,
         );
-        for (cfg.gossip.trusted_validators) |trusted_validator_str| {
-            trusted_validators.?.appendAssumeCapacity(
-                try Pubkey.parseBase58String(trusted_validator_str),
-            );
+        for (cfg.gossip.trusted_validators) |trusted_validator| {
+            trusted_validators.?.appendAssumeCapacity(try Pubkey.parseRuntime(trusted_validator));
         }
     }
     return trusted_validators;
