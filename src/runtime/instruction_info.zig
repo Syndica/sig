@@ -20,7 +20,11 @@ pub const InstructionInfo = struct {
     /// [fd] https://github.com/firedancer-io/firedancer/blob/dfadb7d33683aa8711dfe837282ad0983d3173a0/src/flamenco/runtime/info/fd_instr_info.h#L12
     pub const MAX_ACCOUNT_METAS: usize = 256;
 
-    pub const AccountMetas = std.BoundedArray(AccountMeta, MAX_ACCOUNT_METAS);
+    /// Errors resulting from instructions with account metas > MAX_ACCOUNT_METAS are handled during
+    /// transaction execution. We construct the account metas before transaction execution, so using an
+    /// array of size MAX_ACCOUNTS_METAS + 1 allows us to check the account metas length during transaction
+    /// execution and return the appropriate error.
+    pub const AccountMetas = std.BoundedArray(AccountMeta, MAX_ACCOUNT_METAS + 1);
 
     pub const ProgramMeta = struct {
         pubkey: Pubkey,

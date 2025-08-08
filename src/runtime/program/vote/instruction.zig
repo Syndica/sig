@@ -8,6 +8,8 @@ const Slot = sig.core.Slot;
 const Hash = sig.core.Hash;
 const InstructionAccount = sig.core.instruction.InstructionAccount;
 
+const MAX_SEED_LEN = sig.runtime.pubkey_utils.MAX_SEED_LEN;
+
 pub const InitializeAccount = struct {
     node_pubkey: Pubkey,
     /// The vote authority keypair signs vote transactions. Can be the same as the identity account.
@@ -54,7 +56,7 @@ pub const VoteAuthorizeWithSeedArgs = struct {
     new_authority: Pubkey,
 
     pub const @"!bincode-config:current_authority_derived_key_seed" =
-        sig.bincode.utf8StringCodec([]const u8);
+        sig.bincode.utf8StringCodec([]const u8, MAX_SEED_LEN);
 
     pub const AccountIndex = enum(u8) {
         /// `[WRITE]` Vote account to be updated
@@ -79,7 +81,7 @@ pub const VoteAuthorizeCheckedWithSeedArgs = struct {
     current_authority_derived_key_seed: []const u8,
 
     pub const @"!bincode-config:current_authority_derived_key_seed" =
-        sig.bincode.utf8StringCodec([]const u8);
+        sig.bincode.utf8StringCodec([]const u8, MAX_SEED_LEN);
 
     pub const AccountIndex = enum(u8) {
         /// `[Write]` Vote account to be updated

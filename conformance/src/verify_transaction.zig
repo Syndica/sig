@@ -58,14 +58,19 @@ pub fn verifyTransaction(
         &.{transaction},
     ) catch |err| {
         const err_code = switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            else => @panic("TODO: unsure how to handle errors here atm"),
-            // TODO: doesn't exist in the error set yet, missing some logic?
-            // error.UnsupportedVersion => transactionErrorToInt(.UnsupportedVersion),
-            // error.AddressLookupTableNotFound => transactionErrorToInt(.AddressLookupTableNotFound),
-            // error.InvalidAddressLookupTableOwner => transactionErrorToInt(.InvalidAddressLookupTableOwner),
-            // error.InvalidAddressLookupTableData => transactionErrorToInt(.InvalidAddressLookupTableData),
-            // error.InvalidAddressLookupTableIndex => transactionErrorToInt(.InvalidAddressLookupTableIndex),
+            error.AddressLookupTableNotFound => transactionErrorToInt(
+                .AddressLookupTableNotFound,
+            ),
+            error.InvalidAddressLookupTableOwner => transactionErrorToInt(
+                .InvalidAddressLookupTableOwner,
+            ),
+            error.InvalidAddressLookupTableData => transactionErrorToInt(
+                .InvalidAddressLookupTableData,
+            ),
+            error.InvalidAddressLookupTableIndex => transactionErrorToInt(
+                .InvalidAddressLookupTableIndex,
+            ),
+            else => std.debug.panic("Unexpected error: {s}\n", .{@errorName(err)}),
         };
         return .{ .err = .{
             .sanitization_error = true,

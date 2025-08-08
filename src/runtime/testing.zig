@@ -326,17 +326,11 @@ pub const InstructionInfoAccountMetaParams = struct {
 pub fn createInstructionInfoAccountMetas(
     tc: *const TransactionContext,
     account_meta_params: []const InstructionInfoAccountMetaParams,
-) !std.BoundedArray(
-    InstructionInfo.AccountMeta,
-    InstructionInfo.MAX_ACCOUNT_METAS,
-) {
+) !InstructionInfo.AccountMetas {
     if (!builtin.is_test)
         @compileError("createInstructionContextAccountMetas should only be called in test mode");
 
-    var account_metas = std.BoundedArray(
-        InstructionInfo.AccountMeta,
-        InstructionInfo.MAX_ACCOUNT_METAS,
-    ){};
+    var account_metas = InstructionInfo.AccountMetas{};
     for (account_meta_params, 0..) |acc, idx| {
         if (acc.index_in_transaction >= tc.accounts.len)
             return error.AccountIndexOutOfBounds;
