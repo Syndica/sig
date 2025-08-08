@@ -904,7 +904,10 @@ test "serializeParameters" {
                     });
                 }
 
-                try std.testing.expectEqual(error.MaxAccountsExceeded, serializeParameters(allocator, &ic, false, false));
+                try std.testing.expectEqual(
+                    error.MaxAccountsExceeded,
+                    serializeParameters(allocator, &ic, false, false),
+                );
             }
 
             const pre_accounts = blk: {
