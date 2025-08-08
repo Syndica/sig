@@ -136,7 +136,7 @@ const ComputeBudgetInstruction = union(enum) {
     }
 };
 
-// TODO: put this somewhere logical, maybe create a more general abstraction?
+// TODO: see https://github.com/Syndica/sig/issues/849
 fn BorshStaticTaggedUnionHelper(comptime Tagged: type) type {
     const Tag, const has_payloads = switch (@typeInfo(Tagged)) {
         .@"union" => |union_info| .{ union_info.tag_type.?, true },
