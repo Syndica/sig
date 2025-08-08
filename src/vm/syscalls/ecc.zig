@@ -4,7 +4,6 @@ const std = @import("std");
 const sig = @import("../../sig.zig");
 
 const bn254 = sig.crypto.bn254;
-const features = sig.core.features;
 
 const MemoryMap = sig.vm.memory.MemoryMap;
 const RegisterMap = sig.vm.interpreter.RegisterMap;
@@ -12,6 +11,7 @@ const TransactionContext = sig.runtime.TransactionContext;
 const Error = sig.vm.syscalls.Error;
 const SyscallError = sig.vm.SyscallError;
 const memory = sig.vm.memory;
+const FeatureSet = sig.core.FeatureSet;
 
 const Edwards25519 = std.crypto.ecc.Edwards25519;
 const Ristretto255 = std.crypto.ecc.Ristretto255;
@@ -48,7 +48,7 @@ pub fn curvePointValidation(
     registers: *RegisterMap,
 ) Error!void {
     const curve_id = CurveId.wrap(registers.get(.r1)) orelse {
-        if (tc.feature_set.active.contains(features.ABORT_ON_INVALID_CURVE)) {
+        if (tc.feature_set.active(.abort_on_invalid_curve, tc.slot)) {
             return SyscallError.InvalidAttribute;
         } else {
             registers.set(.r0, 1);
@@ -85,7 +85,7 @@ pub fn curveGroupOp(
     registers: *RegisterMap,
 ) Error!void {
     const curve_id = CurveId.wrap(registers.get(.r1)) orelse {
-        if (tc.feature_set.active.contains(features.ABORT_ON_INVALID_CURVE)) {
+        if (tc.feature_set.active(.abort_on_invalid_curve, tc.slot)) {
             return SyscallError.InvalidAttribute;
         } else {
             registers.set(.r0, 1);
@@ -93,7 +93,7 @@ pub fn curveGroupOp(
         }
     };
     const group_op = GroupOp.wrap(registers.get(.r2)) orelse {
-        if (tc.feature_set.active.contains(features.ABORT_ON_INVALID_CURVE)) {
+        if (tc.feature_set.active(.abort_on_invalid_curve, tc.slot)) {
             return SyscallError.InvalidAttribute;
         } else {
             registers.set(.r0, 1);
@@ -316,7 +316,7 @@ pub fn curveMultiscalarMul(
     if (points_len > 512) return SyscallError.InvalidLength;
 
     const curve_id = CurveId.wrap(attribute_id) orelse {
-        if (tc.feature_set.active.contains(features.ABORT_ON_INVALID_CURVE)) {
+        if (tc.feature_set.active(.abort_on_invalid_curve, tc.slot)) {
             return SyscallError.InvalidAttribute;
         } else {
             registers.set(.r0, 1);
@@ -461,10 +461,9 @@ pub fn altBn128GroupOp(
         input,
         &result,
         tc.feature_set,
+        tc.slot,
     ) catch {
-        if (tc.feature_set.active.contains(
-            features.SIMPLIFY_ALT_BN128_SYSCALL_ERROR_CODES,
-        )) {
+        if (tc.feature_set.active(.simplify_alt_bn128_syscall_error_codes, tc.slot)) {
             registers.set(.r0, 1);
             return;
         } else @panic("SIMPLIFY_ALT_BN_128_SYSCALL_ERROR_CODES not active");
@@ -525,9 +524,7 @@ pub fn altBn128Compression(
     };
     // Must be exactly the correct length.
     if (input_size != needed_input_size) {
-        if (tc.feature_set.active.contains(
-            features.SIMPLIFY_ALT_BN128_SYSCALL_ERROR_CODES,
-        )) {
+        if (tc.feature_set.active(.simplify_alt_bn128_syscall_error_codes, tc.slot)) {
             registers.set(.r0, 1);
             return;
         } else @panic("SIMPLIFY_ALT_BN_128_SYSCALL_ERROR_CODES not active");
@@ -543,9 +540,7 @@ pub fn altBn128Compression(
         .g2_decompress => bn254.G2.decompress(result[0..128], input[0..64] ),
         // zig fmt: on
     }) catch {
-        if (tc.feature_set.active.contains(
-            features.SIMPLIFY_ALT_BN128_SYSCALL_ERROR_CODES,
-        )) {
+        if (tc.feature_set.active(.simplify_alt_bn128_syscall_error_codes, tc.slot)) {
             registers.set(.r0, 1);
             return;
         } else @panic("SIMPLIFY_ALT_BN_128_SYSCALL_ERROR_CODES not active");
@@ -558,7 +553,8 @@ fn altBn128Operation(
     group_op: AltBn128GroupOp,
     input: []const u8,
     out: *[64]u8,
-    feature_set: *const features.FeatureSet,
+    feature_set: *const FeatureSet,
+    slot: sig.core.Slot,
 ) ![]const u8 {
     switch (group_op) {
         .add => {
@@ -574,8 +570,9 @@ fn altBn128Operation(
             return out;
         },
         .mul => {
-            const expected_size: usize = if (feature_set.active.contains(
-                features.FIX_ALT_BN128_MULTIPLICATION_INPUT_LENGTH,
+            const expected_size: usize = if (feature_set.active(
+                .fix_alt_bn128_multiplication_input_length,
+                slot,
             )) 96 else 128;
             if (input.len > expected_size) return error.InvalidLength;
 

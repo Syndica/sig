@@ -104,7 +104,7 @@ const BatchAccountCache = sig.runtime.account_loader.BatchAccountCache;
 const ComputeBudget = sig.runtime.ComputeBudget;
 const EpochRewards = sig.runtime.sysvar.EpochRewards;
 const EpochSchedule = sig.runtime.sysvar.EpochSchedule;
-const FeatureSet = sig.core.features.FeatureSet;
+const FeatureSet = sig.core.FeatureSet;
 const RecentBlockhashes = sig.runtime.sysvar.RecentBlockhashes;
 const Rent = sig.runtime.sysvar.Rent;
 const SysvarCache = sig.runtime.SysvarCache;
@@ -127,8 +127,7 @@ fn executeTxnContext(
     }
 
     // Load info from the protobuf transaction context
-    var feature_set = try loadFeatureSet(allocator, &pb_txn_ctx);
-    defer feature_set.deinit(allocator);
+    var feature_set = try loadFeatureSet(&pb_txn_ctx);
 
     const blockhashes = try loadBlockhashes(allocator, &pb_txn_ctx);
     defer allocator.free(blockhashes);
@@ -352,6 +351,7 @@ fn executeTxnContext(
                 allocator,
                 &feature_set,
                 &compute_budget,
+                slot,
                 false,
                 false,
             );
@@ -397,6 +397,7 @@ fn executeTxnContext(
         try update_sysvar.updateLastRestartSlot(
             allocator,
             &feature_set,
+            slot,
             &hard_forks,
             update_sysvar_deps,
         );
@@ -631,6 +632,7 @@ fn executeTxnContext(
                 try update_sysvar.updateLastRestartSlot(
                     allocator,
                     &feature_set,
+                    slot,
                     &hard_forks,
                     update_sysvar_deps,
                 );
@@ -767,6 +769,7 @@ fn executeTxnContext(
         allocator,
         transaction,
         &feature_set,
+        slot,
         accounts_db.accountReader().forSlot(&ancestors),
     )) {
         .ok => |txn| txn,
@@ -1036,38 +1039,28 @@ fn loadSlot(pb_txn_ctx: *const pb.TxnContext) u64 {
     return if (pb_txn_ctx.slot_ctx) |ctx| ctx.slot else 10;
 }
 
-fn loadFeatureSet(allocator: std.mem.Allocator, pb_txn_ctx: *const pb.TxnContext) !FeatureSet {
-    var feature_set = blk: {
+fn loadFeatureSet(pb_txn_ctx: *const pb.TxnContext) !FeatureSet {
+    var feature_set: FeatureSet = set: {
         const maybe_pb_features = if (pb_txn_ctx.epoch_ctx) |epoch_ctx|
             if (epoch_ctx.features) |pb_features| pb_features else null
         else
             null;
 
-        const pb_features = maybe_pb_features orelse break :blk FeatureSet.EMPTY;
+        const pb_features = maybe_pb_features orelse break :set .ALL_DISABLED;
 
-        var indexed_features = std.AutoArrayHashMap(u64, Pubkey).init(allocator);
-        defer indexed_features.deinit();
-
-        for (features.FEATURES) |feature| {
-            try indexed_features.put(@bitCast(feature.data[0..8].*), feature);
-        }
-
-        var feature_set = features.FeatureSet.EMPTY;
-
+        var feature_set: FeatureSet = .ALL_DISABLED;
         for (pb_features.features.items) |id| {
-            if (indexed_features.get(id)) |pubkey| {
-                try feature_set.active.put(allocator, pubkey, 0);
-            }
+            // only way for `setId` to fail is if the `id` doesn't exist.
+            feature_set.setSlotId(id, 0) catch std.debug.panic("unknown id: 0x{x}", .{id});
         }
-
-        break :blk feature_set;
+        break :set feature_set;
     };
 
     if (TOGGLE_DIRECT_MAPPING) {
-        if (feature_set.active.contains(features.BPF_ACCOUNT_DATA_DIRECT_MAPPING)) {
-            _ = feature_set.active.swapRemove(features.BPF_ACCOUNT_DATA_DIRECT_MAPPING);
+        if (feature_set.active(.bpf_account_data_direct_mapping, 0)) {
+            feature_set.disable(.bpf_account_data_direct_mapping);
         } else {
-            try feature_set.active.put(allocator, features.BPF_ACCOUNT_DATA_DIRECT_MAPPING, 0);
+            feature_set.setSlot(.bpf_account_data_direct_mapping, 0);
         }
     }
 

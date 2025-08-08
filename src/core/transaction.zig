@@ -14,12 +14,9 @@ const LookupTableAccounts = sig.replay.resolve_lookup.LookupTableAccounts;
 const shortVecConfig = sig.bincode.shortvec.sliceConfig;
 
 pub const Transaction = struct {
-    /// Signatures
     signatures: []const Signature,
-
     /// The version, either legacy or v0.
     version: Version,
-
     /// The signable data of a transaction
     msg: Message,
 

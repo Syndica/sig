@@ -367,7 +367,6 @@ fn verifyErasureBatch(
 
 const test_shreds = @import("../test_shreds.zig");
 
-const CodeHeader = ledger.shred.CodeHeader;
 const deinitShreds = ledger.tests.deinitShreds;
 
 const mainnet_shreds = test_shreds.mainnet_recovery_shreds;

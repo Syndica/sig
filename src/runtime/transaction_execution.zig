@@ -317,6 +317,7 @@ pub fn loadAndExecuteTransaction(
     const compute_budget_result = compute_budget_program.execute(
         transaction.instruction_infos,
         environment.feature_set,
+        environment.slot,
     );
     const compute_budget_limits = switch (compute_budget_result) {
         .ok => |limits| limits,
@@ -332,6 +333,7 @@ pub fn loadAndExecuteTransaction(
         maybe_nonce_info,
         environment.rent_collector,
         environment.feature_set,
+        environment.slot,
         environment.lamports_per_signature,
     );
     const fees, const rollbacks = switch (check_fee_payer_result) {
@@ -345,6 +347,7 @@ pub fn loadAndExecuteTransaction(
         transaction,
         environment.rent_collector,
         environment.feature_set,
+        environment.slot,
         &compute_budget_limits,
     );
     const loaded_accounts = switch (loaded_accounts_result) {
@@ -430,6 +433,7 @@ pub fn executeTransaction(
         .rent = environment.rent_collector.rent,
         .prev_blockhash = environment.last_blockhash,
         .prev_lamports_per_signature = environment.last_lamports_per_signature,
+        .slot = environment.slot,
     };
 
     var maybe_instruction_error: ?InstructionError = null;
@@ -472,7 +476,7 @@ test "loadAndExecuteTransactions: no transactions" {
     var batch_account_cache: account_loader.BatchAccountCache = .{};
 
     const ancestors: Ancestors = .{};
-    const feature_set: FeatureSet = FeatureSet.EMPTY;
+    const feature_set: FeatureSet = .ALL_DISABLED;
     const status_cache = StatusCache.default();
     const sysvar_cache: SysvarCache = .{};
     const rent_collector: RentCollector = sig.core.rent_collector.defaultCollector(10);
@@ -566,7 +570,7 @@ test "loadAndExecuteTransactions: invalid compute budget instruction" {
         &account_cache,
         &.{
             .ancestors = &Ancestors{},
-            .feature_set = &FeatureSet.EMPTY,
+            .feature_set = &FeatureSet.ALL_DISABLED,
             .status_cache = &StatusCache.default(),
             .sysvar_cache = &SysvarCache{},
             .rent_collector = &sig.core.rent_collector.defaultCollector(10),
@@ -707,16 +711,15 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
         },
     );
 
-    var ancestors = Ancestors{};
+    var ancestors: Ancestors = .{};
     defer ancestors.deinit(allocator);
 
-    const feature_set = try FeatureSet.allEnabled(allocator);
-    defer feature_set.deinit(allocator);
+    const feature_set: FeatureSet = .ALL_ENABLED_AT_GENESIS;
 
     var status_cache = StatusCache.default();
     defer status_cache.deinit(allocator);
 
-    const sysvar_cache = SysvarCache{};
+    const sysvar_cache: SysvarCache = .{};
     defer sysvar_cache.deinit(allocator);
 
     const rent_collector = sig.core.rent_collector.defaultCollector(10);

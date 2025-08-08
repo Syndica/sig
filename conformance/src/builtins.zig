@@ -3,17 +3,8 @@ const sig = @import("sig");
 const program = sig.runtime.program;
 const features = sig.core.features;
 
+const Feature = features.Feature;
 const Pubkey = sig.core.Pubkey;
-
-// Live source buffer accounts for builtin migrations
-const STAKE_PROGRAM_SOURCE_BUFFER_ADDRESS =
-    Pubkey.parseRuntime("8t3vv6v99tQA6Gp7fVdsBH66hQMaswH5qsJVqJqo8xvG") catch unreachable;
-const CONFIG_PROGRAM_SOURCE_BUFFER_ADDRESS =
-    Pubkey.parseRuntime("BuafH9fBv62u6XjzrzS4ZjAE8963ejqF5rt1f8Uga4Q3") catch unreachable;
-const ADDRESS_LOOKUP_TABLE_SOURCE_BUFFER_ADDRESS =
-    Pubkey.parseRuntime("AhXWrD9BBUYcKjtpA3zuiiZG4ysbo6C6wjHo1QhERk6A") catch unreachable;
-const FEATURE_PROGRAM_SOURCE_BUFFER_ADDRESSS =
-    Pubkey.parseRuntime("3D3ydPWvmEszrSjrickCtnyRSJm1rzbbSsZog8Ub6vLh") catch unreachable;
 
 /// Configuration for migrating a built-in program to Core BPF.
 pub const CoreBpfMigrationConfig = struct {
@@ -36,7 +27,7 @@ pub const CoreBpfMigrationConfig = struct {
     /// Note: This feature gate should never be the same as any builtin's
     /// `enable_feature_id`. It should always be a feature gate that will be
     /// activated after the builtin is already enabled.
-    enable_feature_id: Pubkey,
+    enable_feature_id: Feature,
 };
 
 /// Transitions of built-in programs at epoch boundaries when features are activated.
@@ -50,7 +41,7 @@ pub const BuiltinProgram = struct {
 
     /// Feature ID that enables the builtin program.
     /// If None, the built-in program is always enabled.
-    enable_feature_id: ?Pubkey,
+    enable_feature_id: ?Feature,
 
     /// Configurations for migrating the builtin to Core BPF.
     core_bpf_migration_config: ?CoreBpfMigrationConfig,
@@ -86,9 +77,9 @@ pub const BUILTINS = [_]BuiltinProgram{
         .enable_feature_id = null,
         .core_bpf_migration_config = .{
             .program_id = program.stake.ID,
-            .source_buffer_address = STAKE_PROGRAM_SOURCE_BUFFER_ADDRESS,
+            .source_buffer_address = program.stake.SOURCE_ID,
             .upgrade_authority_address = null,
-            .enable_feature_id = features.MIGRATE_STAKE_PROGRAM_TO_CORE_BPF,
+            .enable_feature_id = .migrate_stake_program_to_core_bpf,
         },
     },
     .{
@@ -97,9 +88,9 @@ pub const BUILTINS = [_]BuiltinProgram{
         .enable_feature_id = null,
         .core_bpf_migration_config = .{
             .program_id = program.config.ID,
-            .source_buffer_address = CONFIG_PROGRAM_SOURCE_BUFFER_ADDRESS,
+            .source_buffer_address = program.config.SOURCE_ID,
             .upgrade_authority_address = null,
-            .enable_feature_id = features.MIGRATE_CONFIG_PROGRAM_TO_CORE_BPF,
+            .enable_feature_id = .migrate_config_program_to_core_bpf,
         },
     },
     .{
@@ -108,9 +99,9 @@ pub const BUILTINS = [_]BuiltinProgram{
         .enable_feature_id = null,
         .core_bpf_migration_config = .{
             .program_id = program.address_lookup_table.ID,
-            .source_buffer_address = ADDRESS_LOOKUP_TABLE_SOURCE_BUFFER_ADDRESS,
+            .source_buffer_address = program.address_lookup_table.SOURCE_ID,
             .upgrade_authority_address = null,
-            .enable_feature_id = features.MIGRATE_ADDRESS_LOOKUP_TABLE_PROGRAM_TO_CORE_BPF,
+            .enable_feature_id = .migrate_address_lookup_table_program_to_core_bpf,
         },
     },
     .{
@@ -134,7 +125,7 @@ pub const BUILTINS = [_]BuiltinProgram{
     .{
         .program_id = program.bpf_loader.v4.ID,
         .data = "loader_v4",
-        .enable_feature_id = features.ENABLE_LOADER_V4,
+        .enable_feature_id = .enable_loader_v4,
         .core_bpf_migration_config = null,
     },
     .{
@@ -146,13 +137,13 @@ pub const BUILTINS = [_]BuiltinProgram{
     .{
         .program_id = sig.runtime.ids.ZK_TOKEN_PROOF_PROGRAM_ID,
         .data = "zk_token_proof_program",
-        .enable_feature_id = features.ZK_TOKEN_SDK_ENABLED,
+        .enable_feature_id = .zk_token_sdk_enabled,
         .core_bpf_migration_config = null,
     },
     .{
-        .program_id = sig.runtime.ids.ZK_ELGAMAL_PROOF_PROGRAM_ID,
+        .program_id = sig.runtime.program.zk_elgamal.ID,
         .data = "zk_elgamal_proof_program",
-        .enable_feature_id = features.ZK_ELGAMAL_PROOF_PROGRAM_ENABLED,
+        .enable_feature_id = .zk_elgamal_proof_program_enabled,
         .core_bpf_migration_config = null,
     },
 };
@@ -162,9 +153,9 @@ pub const STATELESS_BUILTINS = [_]StatelessBuiltinPrototype{
         .program_id = sig.runtime.ids.FEATURE_PROGRAM_ID,
         .core_bpf_migration_config = .{
             .program_id = sig.runtime.ids.FEATURE_PROGRAM_ID,
-            .source_buffer_address = FEATURE_PROGRAM_SOURCE_BUFFER_ADDRESSS,
+            .source_buffer_address = sig.runtime.ids.FEATURE_PROGRAM_SOURCE_ID,
             .upgrade_authority_address = null,
-            .enable_feature_id = features.MIGRATE_FEATURE_GATE_PROGRAM_TO_CORE_BPF,
+            .enable_feature_id = .migrate_feature_gate_program_to_core_bpf,
         },
     },
 };
