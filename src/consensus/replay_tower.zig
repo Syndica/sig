@@ -807,7 +807,7 @@ pub const ReplayTower = struct {
     /// This is used to experiment with vote lockout behavior and assess whether a vote is
     /// justified based on recent vote history, lockout depth, and voting stake.
     pub fn checkVoteStakeThresholds(
-        self: *ReplayTower,
+        self: *const ReplayTower,
         allocator: std.mem.Allocator,
         slot: Slot,
         voted_stakes: *const VotedStakes,
