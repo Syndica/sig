@@ -621,7 +621,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
     const transfer_instruction_data = try sig.bincode.writeAlloc(
         allocator,
         sig.runtime.program.system.Instruction{
-            .transfer = .{ .lamports = 10_000 },
+            .transfer = .{ .lamports = 50_000 },
         },
         .{},
     );
@@ -761,37 +761,77 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
         .log_messages_byte_limit = null,
     };
 
-    const result = try loadAndExecuteTransaction(
-        allocator,
-        &transaction,
-        &account_cache,
-        &environment,
-        &config,
-        &ProgramMap{},
-    );
+    { // Okay
+        const result = try loadAndExecuteTransaction(
+            allocator,
+            &transaction,
+            &account_cache,
+            &environment,
+            &config,
+            &ProgramMap{},
+        );
 
-    var processed_transaction = result.ok;
-    defer processed_transaction.deinit(allocator);
+        var processed_transaction = result.ok;
+        defer processed_transaction.deinit(allocator);
 
-    const executed_transaction = processed_transaction.executed.executed_transaction;
+        const executed_transaction = processed_transaction.executed.executed_transaction;
 
-    const transaction_fee = processed_transaction.executed.fees.transaction_fee;
-    const prioritization_fee = processed_transaction.executed.fees.prioritization_fee;
-    const rent_collected = processed_transaction.executed.loaded_accounts.rent_collected;
+        const transaction_fee = processed_transaction.executed.fees.transaction_fee;
+        const prioritization_fee = processed_transaction.executed.fees.prioritization_fee;
+        const rent_collected = processed_transaction.executed.loaded_accounts.rent_collected;
 
-    const sender_account = account_cache.account_cache.get(sender_key).?;
-    const receiver_account = account_cache.account_cache.get(receiver_key).?;
+        const sender_account = account_cache.account_cache.get(sender_key).?;
+        const receiver_account = account_cache.account_cache.get(receiver_key).?;
 
-    // TODO: verify these numbers against agave
-    try std.testing.expectEqual(5_000, transaction_fee);
-    try std.testing.expectEqual(0, prioritization_fee);
-    try std.testing.expectEqual(0, rent_collected);
-    try std.testing.expectEqual(85_000, sender_account.lamports);
-    try std.testing.expectEqual(110_000, receiver_account.lamports);
-    try std.testing.expectEqual(null, executed_transaction.instr_err);
-    try std.testing.expectEqual(null, executed_transaction.log_collector);
-    try std.testing.expectEqual(1, executed_transaction.instruction_trace.?.len);
-    try std.testing.expectEqual(null, executed_transaction.return_data);
-    try std.testing.expectEqual(2_850, executed_transaction.compute_meter);
-    try std.testing.expectEqual(0, executed_transaction.accounts_data_len_delta);
+        try std.testing.expectEqual(5_000, transaction_fee);
+        try std.testing.expectEqual(0, prioritization_fee);
+        try std.testing.expectEqual(0, rent_collected);
+        try std.testing.expectEqual(45_000, sender_account.lamports);
+        try std.testing.expectEqual(150_000, receiver_account.lamports);
+        try std.testing.expectEqual(null, executed_transaction.instr_err);
+        try std.testing.expectEqual(null, executed_transaction.log_collector);
+        try std.testing.expectEqual(1, executed_transaction.instruction_trace.?.len);
+        try std.testing.expectEqual(null, executed_transaction.return_data);
+        try std.testing.expectEqual(2_850, executed_transaction.compute_meter);
+        try std.testing.expectEqual(0, executed_transaction.accounts_data_len_delta);
+    }
+
+    { // Insufficient funds
+        const result = try loadAndExecuteTransaction(
+            allocator,
+            &transaction,
+            &account_cache,
+            &environment,
+            &config,
+            &ProgramMap{},
+        );
+
+        var processed_transaction = result.ok;
+        defer processed_transaction.deinit(allocator);
+
+        const executed_transaction = processed_transaction.executed.executed_transaction;
+
+        const transaction_fee = processed_transaction.executed.fees.transaction_fee;
+        const prioritization_fee = processed_transaction.executed.fees.prioritization_fee;
+        const rent_collected = processed_transaction.executed.loaded_accounts.rent_collected;
+
+        const sender_account = account_cache.account_cache.get(sender_key).?;
+        const receiver_account = account_cache.account_cache.get(receiver_key).?;
+
+        try std.testing.expectEqual(5_000, transaction_fee);
+        try std.testing.expectEqual(0, prioritization_fee);
+        try std.testing.expectEqual(0, rent_collected);
+        try std.testing.expectEqual(40_000, sender_account.lamports);
+        try std.testing.expectEqual(150_000, receiver_account.lamports);
+        try std.testing.expectEqual(0, executed_transaction.instr_err.?[0]);
+        try std.testing.expectEqual(
+            InstructionErrorEnum{ .Custom = 1 },
+            executed_transaction.instr_err.?[1],
+        );
+        try std.testing.expectEqual(null, executed_transaction.log_collector);
+        try std.testing.expectEqual(1, executed_transaction.instruction_trace.?.len);
+        try std.testing.expectEqual(null, executed_transaction.return_data);
+        try std.testing.expectEqual(2_850, executed_transaction.compute_meter);
+        try std.testing.expectEqual(0, executed_transaction.accounts_data_len_delta);
+    }
 }
