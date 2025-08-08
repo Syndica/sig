@@ -139,18 +139,15 @@ const ComputeBudgetInstruction = union(enum) {
 };
 
 // TODO: see https://github.com/Syndica/sig/issues/849
-fn BorshStaticTaggedUnionHelper(comptime Tagged: type) type {
-    const Tag, const has_payloads = switch (@typeInfo(Tagged)) {
-        .@"union" => |union_info| .{ union_info.tag_type.?, true },
-        .@"enum" => .{ Tagged, false },
-        else => @compileError("Unsupported type " ++ @typeName(Tagged)),
-    };
+fn BorshStaticTaggedUnionHelper(comptime U: type) type {
+    const u_info = @typeInfo(U).@"union";
+    const Tag = u_info.tag_type.?;
     if (@sizeOf(Tag) > @sizeOf(u8)) @compileError("Tag type is too big");
 
     const pl_size_min, const pl_size_max = blk: {
-        var min: usize = @sizeOf(Tagged);
+        var min: usize = if (u_info.fields.len == 0) 0 else @sizeOf(U);
         var max: usize = 0;
-        if (has_payloads) for (@typeInfo(Tagged).@"union".fields) |u_field| {
+        for (@typeInfo(U).@"union".fields) |u_field| {
             min = @min(min, @sizeOf(u_field.type));
             max = @max(max, @sizeOf(u_field.type));
             switch (u_field.type) {
@@ -161,7 +158,7 @@ fn BorshStaticTaggedUnionHelper(comptime Tagged: type) type {
                 bool => {},
                 else => |T| @compileError("Unsupported: " ++ @typeName(T)),
             }
-        };
+        }
         break :blk .{ min, max };
     };
 
@@ -181,14 +178,14 @@ fn BorshStaticTaggedUnionHelper(comptime Tagged: type) type {
         );
 
         pub fn encode(
-            tagged: Tagged,
+            tagged: U,
             buffer: *[ENCODED_SIZE_MAX]u8,
         ) EncodedSizeInt {
             var fbs = std.io.fixedBufferStream(buffer);
             const w = fbs.writer();
 
             w.writeByte(@intFromEnum(tagged)) catch unreachable;
-            if (has_payloads) switch (tagged) {
+            switch (tagged) {
                 inline else => |payload| switch (@TypeOf(payload)) {
                     void => {},
                     bool => w.writeByte(@intFromBool(payload)) catch unreachable,
@@ -206,7 +203,7 @@ fn BorshStaticTaggedUnionHelper(comptime Tagged: type) type {
 
                     else => unreachable,
                 },
-            };
+            }
 
             return @intCast(fbs.pos);
         }
@@ -220,9 +217,8 @@ fn BorshStaticTaggedUnionHelper(comptime Tagged: type) type {
 
         /// Presumes `tag == tagDecode(byte)` where byte is the first byte of the encoded buffer.
         pub fn payloadEncodedSize(tag: Tag) EncodedPayloadSizeInt {
-            if (!has_payloads) return 0;
             return switch (tag) {
-                inline else => |itag| @sizeOf(@FieldType(Tagged, @tagName(itag))),
+                inline else => |itag| @sizeOf(@FieldType(U, @tagName(itag))),
             };
         }
 
@@ -239,10 +235,9 @@ fn BorshStaticTaggedUnionHelper(comptime Tagged: type) type {
             payload_bytes: []const u8,
         ) ?ComputeBudgetInstruction {
             std.debug.assert(payload_bytes.len == payloadEncodedSize(tag));
-            if (!has_payloads) return tag;
             switch (tag) {
                 inline else => |itag| {
-                    const Payload = @FieldType(Tagged, @tagName(itag));
+                    const Payload = @FieldType(U, @tagName(itag));
                     comptime std.debug.assert(@sizeOf(Payload) == payloadEncodedSize(itag));
                     const payload: Payload = switch (Payload) {
                         void => {},
