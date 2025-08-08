@@ -195,10 +195,7 @@ pub fn RecycleBuffer(comptime T: type, default_init: T, config: struct {
             }
 
             // if allocation failed, then expand the capacity and try again
-            try self.expandCapacityUnsafe(@max(
-                config.min_split_size,
-                n,
-            ));
+            try self.expandCapacityUnsafe(@max(config.min_split_size, n));
             return self.allocUnsafe(n);
         }
 
