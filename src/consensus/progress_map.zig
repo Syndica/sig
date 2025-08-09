@@ -227,6 +227,7 @@ pub const ForkProgress = struct {
     is_dead: bool,
     fork_stats: ForkStats,
     propagated_stats: PropagatedStats,
+    // TODO Remove replay_stats? Does not look like it is used to make any application decision, just logging.
     replay_stats: stubs.Arc(stubs.RwLock(blockstore_processor.ReplaySlotStats)),
     replay_progress: stubs.Arc(stubs.RwLock(blockstore_processor.ConfirmationProgress)),
     retransmit_info: RetransmitInfo,

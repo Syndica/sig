@@ -1217,6 +1217,40 @@ pub const BlockstoreReader = struct {
     }
 
     // pub fn is_last_fec_set_full missing ???
+    // Temporary method to return the block id without all the checks implememented in Agave.
+    pub fn lastFecSetUnchecked(
+        self: *Self,
+        slot: Slot,
+    ) !?Hash {
+        const slot_meta: SlotMeta = (try self.db.get(
+            self.allocator,
+            schema.slot_meta,
+            slot,
+        )) orelse return null;
+
+        const maybe_last_shred_index = slot_meta.last_index;
+        const last_shred_index = maybe_last_shred_index orelse return null;
+        const MINIMUM_INDEX: u64 = 31;
+        const start_index = std.math.sub(u64, last_shred_index, MINIMUM_INDEX) catch return null;
+
+        if (start_index > std.math.maxInt(u32)) {
+            return error.ValueTooLarge;
+        }
+        const start_index_u32: u32 = @intCast(start_index);
+
+        if (last_shred_index > std.math.maxInt(u32)) {
+            return error.ValueTooLarge;
+        }
+        const last_shred_index_u32: u32 = @intCast(last_shred_index);
+
+        const entries = try self.getEntriesInDataBlock(
+            slot,
+            start_index_u32,
+            last_shred_index_u32,
+            &slot_meta,
+        );
+        return if (entries.len > 0) entries[entries.len - 1].hash else null;
+    }
 
     /// Returns a mapping from each elements of `slots` to a list of the
     /// element's children slots.
@@ -1331,6 +1365,11 @@ pub const BlockstoreReader = struct {
         var iterator = try self.db.iterator(schema.duplicate_slots, .forward, 0);
         defer iterator.deinit();
         return try iterator.next();
+    }
+
+    /// Analogous to [get_duplicate_slot](https://github.com/anza-xyz/agave/blob/6e84f7eab872cc553995e7d35ff1f2ec0dd37751/ledger/src/blockstore.rs#L4057)
+    pub fn getDuplicateSlot(self: *Self, slot: u64) !?DuplicateSlotProof {
+        return try self.db.get(self.allocator, schema.duplicate_slots, slot);
     }
 
     /// Returns the shred already stored in blockstore if it has a different
@@ -1670,6 +1709,63 @@ test "getFirstDuplicateProof" {
         try std.testing.expectEqualSlices(u8, proof.shred1, proof2.shred1);
         try std.testing.expectEqualSlices(u8, proof.shred2, proof2.shred2);
     }
+}
+
+test "getDuplicateSlot" {
+    const allocator = std.testing.allocator;
+    const logger = .noop;
+    var registry = sig.prometheus.Registry(.{}).init(allocator);
+    defer registry.deinit();
+
+    var db = try TestDB.init(@src());
+    defer db.deinit();
+
+    var lowest_cleanup_slot = RwMux(Slot).init(0);
+    var max_root = std.atomic.Value(Slot).init(0);
+    var reader = try BlockstoreReader.init(
+        allocator,
+        logger,
+        db,
+        &registry,
+        &lowest_cleanup_slot,
+        &max_root,
+    );
+
+    const slot: u64 = 42;
+
+    // Test case 1: No duplicate slot proof exists
+    const result_none = try reader.getDuplicateSlot(slot);
+    try std.testing.expectEqual(@as(?DuplicateSlotProof, null), result_none);
+
+    // Test case 2: Insert a duplicate slot proof and retrieve it
+    {
+        const test_shred1 = "test_shred_1_data";
+        const test_shred2 = "test_shred_2_data";
+        const duplicate_proof = DuplicateSlotProof{
+            .shred1 = test_shred1,
+            .shred2 = test_shred2,
+        };
+
+        var write_batch = try db.initWriteBatch();
+        defer write_batch.deinit();
+        try write_batch.put(schema.duplicate_slots, slot, duplicate_proof);
+        try db.commit(&write_batch);
+
+        // Retrieve and verify the duplicate slot proof
+        const result_some = try reader.getDuplicateSlot(slot);
+        try std.testing.expect(result_some != null);
+
+        const retrieved_proof = result_some.?;
+        defer bincode.free(allocator, retrieved_proof);
+
+        try std.testing.expectEqualSlices(u8, test_shred1, retrieved_proof.shred1);
+        try std.testing.expectEqualSlices(u8, test_shred2, retrieved_proof.shred2);
+    }
+
+    // Test case 3: Different slot returns null
+    const different_slot: u64 = 123;
+    const result_different = try reader.getDuplicateSlot(different_slot);
+    try std.testing.expectEqual(@as(?DuplicateSlotProof, null), result_different);
 }
 
 test "isDead" {
@@ -2330,4 +2426,84 @@ test "getDataShred" {
 
     const shred_payload_2 = shreds.items[0].payload();
     try std.testing.expectEqualSlices(u8, shred_payload, shred_payload_2);
+}
+
+test "lastFecSetUnchecked" {
+    const allocator = std.testing.allocator;
+    const logger = .noop;
+    var registry = sig.prometheus.Registry(.{}).init(allocator);
+    defer registry.deinit();
+
+    var db = try TestDB.init(@src());
+    defer db.deinit();
+
+    var lowest_cleanup_slot = RwMux(Slot).init(0);
+    var max_root = std.atomic.Value(Slot).init(0);
+    var reader = try BlockstoreReader.init(
+        allocator,
+        logger,
+        db,
+        &registry,
+        &lowest_cleanup_slot,
+        &max_root,
+    );
+
+    const test_slot: Slot = 42;
+
+    // Test case 1: No slot meta exists
+    {
+        const result = try reader.lastFecSetUnchecked(test_slot);
+        try std.testing.expectEqual(@as(?Hash, null), result);
+    }
+
+    // Test case 2: Slot meta exists but no last_index
+    {
+        var slot_meta = SlotMeta.init(allocator, test_slot, null);
+        defer slot_meta.deinit();
+        slot_meta.last_index = null;
+
+        var write_batch = try db.initWriteBatch();
+        defer write_batch.deinit();
+        try write_batch.put(schema.slot_meta, test_slot, slot_meta);
+        try db.commit(&write_batch);
+
+        const result = try reader.lastFecSetUnchecked(test_slot);
+        try std.testing.expectEqual(@as(?Hash, null), result);
+    }
+
+    // Test case 3: Slot meta exists with last_index, but start_index would underflow
+    {
+        var slot_meta = SlotMeta.init(allocator, test_slot, null);
+        defer slot_meta.deinit();
+        slot_meta.last_index = 10; // Less than 31, so start_index would underflow
+
+        var write_batch = try db.initWriteBatch();
+        defer write_batch.deinit();
+        try write_batch.put(schema.slot_meta, test_slot, slot_meta);
+        try db.commit(&write_batch);
+
+        const result = try reader.lastFecSetUnchecked(test_slot);
+        try std.testing.expectEqual(@as(?Hash, null), result);
+    }
+
+    // Test case 4: Valid scenario - test when getEntriesInDataBlock would fail due to missing shreds
+    {
+        const test_slot3: Slot = 44;
+        const last_index: u64 = 50;
+
+        var slot_meta = SlotMeta.init(allocator, test_slot3, null);
+        defer slot_meta.deinit();
+        slot_meta.last_index = last_index;
+
+        // Store slot meta first
+        var write_batch = try db.initWriteBatch();
+        defer write_batch.deinit();
+        try write_batch.put(schema.slot_meta, test_slot3, slot_meta);
+        try db.commit(&write_batch);
+
+        // This should fail because there are no actual data shreds, but we expect it to handle the error gracefully
+        // The method should return an error when it can't find the necessary shreds
+        const result = reader.lastFecSetUnchecked(test_slot3);
+        try std.testing.expectError(error.CorruptedBlockstore, result);
+    }
 }
