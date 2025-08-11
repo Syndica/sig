@@ -161,6 +161,10 @@ pub const LtHash = struct {
         return @ptrCast(&self.data);
     }
 
+    pub fn constBytes(self: *const LtHash) []const u8 {
+        return @ptrCast(&self.data);
+    }
+
     /// Mixes `other` into `self`
     ///
     /// This can be thought of as 'insert'

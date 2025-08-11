@@ -409,6 +409,8 @@ fn getDurableNonce(transaction: *const RuntimeTransaction) ?Pubkey {
     if (transaction.instruction_infos.len <= 0) return null;
     const instruction = transaction.instruction_infos[NONCED_TX_MARKER_IX_INDEX];
 
+    if (instruction.account_metas.len == 0) return null;
+
     const serialized_size = 4;
     if (instruction.instruction_data.len < serialized_size) return null;
 

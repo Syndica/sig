@@ -120,8 +120,6 @@ pub const BatchAccountCache = struct {
                     }
                 };
 
-                if (!created_new_account) std.debug.assert(account.lamports > 0); // this account should be gone?
-
                 accumulateAndCheckLoadedAccountDataSize(
                     tx_data_loaded,
                     account.data.len,
@@ -141,7 +139,10 @@ pub const BatchAccountCache = struct {
 
             for (tx.instruction_infos) |instr| {
                 const program_key = instr.program_meta.pubkey;
-                if (program_key.equals(&runtime.ids.NATIVE_LOADER_ID)) continue;
+
+                if (program_key.equals(&runtime.ids.NATIVE_LOADER_ID) or
+                    program_key.equals(&runtime.ids.SYSVAR_INSTRUCTIONS_ID)) continue;
+
                 const program_account = map.get(program_key) orelse
                     unreachable; // safe: we loaded all accounts in the previous loop
 
@@ -183,9 +184,10 @@ pub const BatchAccountCache = struct {
         // load v3 loader's ProgramData accounts.
         for (transactions) |tx| {
             for (tx.instruction_infos) |instr| {
-                const program_key = tx.accounts.items(
-                    .pubkey,
-                )[instr.program_meta.index_in_transaction];
+                const program_key = instr.program_meta.pubkey;
+
+                if (program_key.equals(&runtime.ids.NATIVE_LOADER_ID) or
+                    program_key.equals(&runtime.ids.SYSVAR_INSTRUCTIONS_ID)) continue;
 
                 const program_account = map.get(program_key) orelse
                     unreachable; // safe: we loaded all accounts in the previous loop
@@ -412,13 +414,12 @@ pub const BatchAccountCache = struct {
             var account = AccountSharedData.EMPTY;
             account.rent_epoch = RENT_EXEMPT_RENT_EPOCH;
 
-            const result = self.account_cache.getOrPutAssumeCapacity(key.*);
-            std.debug.assert(result.found_existing);
-
-            result.value_ptr.* = account;
+            const account_ptr = self.account_cache.getPtr(key.*).?;
+            allocator.free(account_ptr.data);
+            account_ptr.* = account;
 
             return LoadedTransactionAccount{
-                .account = result.value_ptr,
+                .account = account_ptr,
                 .loaded_size = 0,
                 .rent_collected = 0,
             };
@@ -457,11 +458,7 @@ pub const BatchAccountCache = struct {
         } else self.account_cache.getPtr(key.*);
 
         const account = maybe_account orelse unreachable;
-        if (account.lamports == 0) {
-            // a previous instr deallocated this account
-            allocator.free(account.data);
-            return null;
-        }
+        if (account.lamports == 0) return null;
 
         // agave "inspects" the account here, which caches the initial state of writeable accounts
         // TODO: we should probably do this at init time
@@ -488,6 +485,9 @@ fn getAccountSharedData(
         => return error.GetAccountFailedUnexpectedly,
     } orelse return null;
     defer account.deinit(reader.allocator());
+
+    // NOTE: Tmp fix since accounts DB should not return accounts with 0 lamports.
+    if (account.lamports == 0) return null;
 
     const shared_account: AccountSharedData = .{
         .data = try account.data.readAllAllocate(allocator),

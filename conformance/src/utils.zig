@@ -7,6 +7,7 @@ const ManagedString = @import("protobuf").ManagedString;
 const sysvar = sig.runtime.sysvar;
 const memory = sig.vm.memory;
 
+const TransactionError = sig.ledger.transaction_status.TransactionError;
 const InstructionError = sig.core.instruction.InstructionError;
 const InstructionInfo = sig.runtime.instruction_info.InstructionInfo;
 const TransactionContext = sig.runtime.transaction_context.TransactionContext;
@@ -20,14 +21,21 @@ const intFromInstructionError = sig.core.instruction.intFromInstructionError;
 
 const Pubkey = sig.core.Pubkey;
 
-const Converted = struct {
+pub const ConvertedErrorCodes = struct {
     err: u32,
     instruction_error: u32,
     custom_error: u32,
     instruction_index: u32,
+
+    pub const default: ConvertedErrorCodes = .{
+        .err = 0,
+        .instruction_error = 0,
+        .custom_error = 0,
+        .instruction_index = 0,
+    };
 };
 
-pub fn convertTransactionError(err: sig.ledger.transaction_status.TransactionError) Converted {
+pub fn convertTransactionError(err: TransactionError) ConvertedErrorCodes {
     switch (err) {
         .InstructionError => |p| {
             const index, const instruction_error = p;
@@ -243,10 +251,7 @@ pub fn createInstructionInfo(
         return error.CouldNotFindProgram;
     };
 
-    var account_metas = std.BoundedArray(
-        InstructionInfo.AccountMeta,
-        InstructionInfo.MAX_ACCOUNT_METAS,
-    ){};
+    var account_metas = InstructionInfo.AccountMetas{};
 
     for (pb_instruction_accounts, 0..) |acc, idx| {
         if (acc.index >= tc.accounts.len)
