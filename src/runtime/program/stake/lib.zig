@@ -14,7 +14,6 @@ const Epoch = sig.core.Epoch;
 const Slot = sig.core.Slot;
 const FeatureSet = sig.core.FeatureSet;
 
-const Pubkey = sig.core.Pubkey;
 const InstructionError = sig.core.instruction.InstructionError;
 const VoteStateVersions = runtime.program.vote.state.VoteStateVersions;
 const VoteState = runtime.program.vote.state.VoteState;
@@ -323,7 +322,7 @@ pub fn execute(
             try setLockup(allocator, &me, &lockup, ic.ixn_info.getSigners().slice(), &clock);
         },
         .get_minimum_delegation => {
-            const min_delegation = getMinimumDelegation(ic.tc.feature_set);
+            const min_delegation = getMinimumDelegation(ic, ic.tc.feature_set);
             const bytes = std.mem.asBytes(&std.mem.nativeToLittle(u64, min_delegation));
 
             std.debug.assert(bytes.len == 8);
@@ -350,16 +349,18 @@ pub fn execute(
             return error.InvalidInstructionData;
         },
         .move_stake => |lamports| {
-            if (!ic.tc.feature_set.active.contains(
-                features.MOVE_STAKE_AND_MOVE_LAMPORTS_IXS,
+            if (!ic.tc.feature_set.active(
+                .move_stake_and_move_lamports_ixs,
+                ic.tc.slot,
             )) return error.InvalidInstructionData;
 
             try ic.ixn_info.checkNumberOfAccounts(3);
             try moveStake(allocator, ic, 0, lamports, 1, 2);
         },
         .move_lamports => |lamports| {
-            if (!ic.tc.feature_set.active.contains(
-                features.MOVE_STAKE_AND_MOVE_LAMPORTS_IXS,
+            if (!ic.tc.feature_set.active(
+                .move_stake_and_move_lamports_ixs,
+                ic.tc.slot,
             )) return error.InvalidInstructionData;
 
             try ic.ixn_info.checkNumberOfAccounts(3);
@@ -551,9 +552,13 @@ fn authorizeWithSeed(
     );
 }
 
-fn getMinimumDelegation(feature_set: *const FeatureSet) u64 {
-    return if (feature_set.active.contains(
-        features.STAKE_RAISE_MINIMUM_DELEGATION_TO_1_SOL,
+fn getMinimumDelegation(
+    ic: *InstructionContext,
+    feature_set: *const FeatureSet,
+) u64 {
+    return if (feature_set.active(
+        .stake_raise_minimum_delegation_to_1_sol,
+        ic.tc.slot,
     ))
         1_000_000_000
     else
@@ -569,7 +574,7 @@ fn validateDelegatedAmount(
     feature_set: *const FeatureSet,
 ) InstructionError!ValidatedDelegatedInfo {
     const stake_amount = account.account.lamports -| meta.rent_exempt_reserve;
-    if (stake_amount < getMinimumDelegation(feature_set)) {
+    if (stake_amount < getMinimumDelegation(ic, feature_set)) {
         ic.tc.custom_error = @intFromEnum(StakeError.insufficient_delegation);
         return error.Custom;
     }
@@ -598,7 +603,14 @@ fn newWarmupCooldownRateEpoch(
 ) ?Epoch {
     const epoch_schedule = ic.tc.sysvar_cache.get(sysvar.EpochSchedule) catch
         @panic("failed to get epoch schedule"); // agave calls .unwrap here (!!).
-    return ic.tc.feature_set.newWarmupCooldownRateEpoch(&epoch_schedule);
+
+    // Originally on FeatureSet, inlined here.
+    const activated_slot = ic.tc.feature_set.array.get(.reduce_stake_warmup_cooldown);
+    if (ic.tc.slot >= activated_slot) {
+        return epoch_schedule.getEpoch(activated_slot);
+    }
+
+    return null;
 }
 
 fn redelegateStake(
@@ -825,7 +837,7 @@ fn split(
         .stake => |*args| {
             try args.meta.authorized.check(signers, .staker);
 
-            const minimum_delegation = getMinimumDelegation(feature_set);
+            const minimum_delegation = getMinimumDelegation(ic, feature_set);
             const is_active = blk: {
                 const clock = try ic.tc.sysvar_cache.get(sysvar.Clock);
                 const status = try getStakeStatus(ic, &args.stake, &clock);
@@ -1554,7 +1566,7 @@ fn moveStake(
     var source_stake = source_merge_kind.fully_active.@"1";
     const source_meta = source_merge_kind.fully_active.@"0";
 
-    const min_delegation = getMinimumDelegation(ic.tc.feature_set);
+    const min_delegation = getMinimumDelegation(ic, ic.tc.feature_set);
     const source_effective_stake = source_stake.delegation.stake;
 
     const source_final_stake = sub(source_effective_stake, lamports) orelse
