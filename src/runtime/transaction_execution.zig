@@ -510,20 +510,18 @@ pub fn executeTransaction(
                 allocator,
                 &tc,
                 instruction_info,
-            ) catch |exec_err| {
-                switch (exec_err) {
-                    error.OutOfMemory => return error.OutOfMemory,
-                    else => |instr_err| break .{
-                        @intCast(index),
-                        InstructionErrorEnum.fromError(
-                            instr_err,
-                            tc.custom_error,
-                            null,
-                        ) catch |err| {
-                            std.debug.panic("Error conversion failed: error={}", .{err});
-                        },
+            ) catch |exec_err| switch (exec_err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => |instr_err| break .{
+                    @intCast(index),
+                    InstructionErrorEnum.fromError(
+                        instr_err,
+                        tc.custom_error,
+                        null,
+                    ) catch |err| {
+                        std.debug.panic("Error conversion failed: error={}", .{err});
                     },
-                }
+                },
             };
         } else null;
 

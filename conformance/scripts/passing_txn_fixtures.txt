@@ -3086,4 +3086,3 @@
 ./test-vectors/txn/fixtures/programs/ffe6aa534ff1d1b32696b7e1314e26d0b84210e8_265678.fix
 ./test-vectors/txn/fixtures/programs/fff5e14663bd3ae176bd58bba58fefcd8a137e02_3004834.fix
 ./test-vectors/txn/fixtures/programs/fff87aff2cbaee9cdb9489c98db0adcc0309b97f_2202462.fix
-
