@@ -676,7 +676,7 @@ test "latest_validator_votes_for_frozen_banks_add_replay_and_gossip_vote" {
             vote_pubkey,
             vote_slot,
             frozen_hash,
-            is_replay_vote,
+            .gossip,
         );
         try std.testing.expectEqualDeep(
             .{ true, vote_slot },
@@ -689,7 +689,7 @@ test "latest_validator_votes_for_frozen_banks_add_replay_and_gossip_vote" {
         const latest_vote = latestVote(
             &latest_validator_votes,
             vote_pubkey,
-            is_replay_vote,
+            .gossip,
         );
         try std.testing.expectEqual(latest_vote.?.slot, vote_slot);
         try std.testing.expectEqual(latest_vote.?.hashes.len, 1);
@@ -701,14 +701,14 @@ test "latest_validator_votes_for_frozen_banks_add_replay_and_gossip_vote" {
         const latest_vote = latestVote(
             &latest_validator_votes,
             vote_pubkey,
-            !is_replay_vote,
+            .replay,
         );
         try std.testing.expectEqual(null, latest_vote);
 
-        var votes_dirty_set_output =
+        const votes_dirty_set_output =
             try latest_validator_votes.takeVotesDirtySet(allocator, 0);
-        defer votes_dirty_set_output.deinit(allocator);
-        try std.testing.expectEqual(0, votes_dirty_set_output.items.len);
+        defer allocator.free(votes_dirty_set_output);
+        try std.testing.expectEqual(0, votes_dirty_set_output.len);
     }
 
     // Next simulate vote from replay
@@ -719,7 +719,7 @@ test "latest_validator_votes_for_frozen_banks_add_replay_and_gossip_vote" {
             vote_pubkey,
             vote_slot,
             frozen_hash,
-            is_replay_vote,
+            .replay,
         );
         try std.testing.expectEqualDeep(
             .{ true, vote_slot },
@@ -732,7 +732,7 @@ test "latest_validator_votes_for_frozen_banks_add_replay_and_gossip_vote" {
         const latest_vote = latestVote(
             &latest_validator_votes,
             vote_pubkey,
-            is_replay_vote,
+            .gossip,
         );
         try std.testing.expectEqual(latest_vote.?.slot, vote_slot);
         try std.testing.expectEqual(latest_vote.?.hashes.len, 1);
@@ -742,17 +742,17 @@ test "latest_validator_votes_for_frozen_banks_add_replay_and_gossip_vote" {
         const latest_vote = latestVote(
             &latest_validator_votes,
             vote_pubkey,
-            !is_replay_vote,
+            .replay,
         );
         try std.testing.expectEqual(latest_vote.?.slot, vote_slot);
         try std.testing.expectEqual(latest_vote.?.hashes.len, 1);
         try std.testing.expectEqual(latest_vote.?.hashes[0], frozen_hash);
     }
     {
-        var result = try latest_validator_votes.takeVotesDirtySet(allocator, 0);
-        defer result.deinit(allocator);
-        try std.testing.expectEqual(result.items[0][0], vote_pubkey);
-        try std.testing.expectEqual(result.items[0][1].slot, vote_slot);
-        try std.testing.expectEqual(result.items[0][1].hash, frozen_hash);
+        const result = try latest_validator_votes.takeVotesDirtySet(allocator, 0);
+        defer allocator.free(result);
+        try std.testing.expectEqual(result[0][0], vote_pubkey);
+        try std.testing.expectEqual(result[0][1].slot, vote_slot);
+        try std.testing.expectEqual(result[0][1].hash, frozen_hash);
     }
 }

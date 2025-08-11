@@ -36,6 +36,7 @@ const Tower = sig.consensus.tower.Tower;
 const TowerError = sig.consensus.tower.TowerError;
 const VoteTransaction = sig.consensus.vote_transaction.VoteTransaction;
 const VotedStakes = sig.consensus.progress_map.consensus.VotedStakes;
+const LockoutIntervals = sig.consensus.progress_map.LockoutIntervals;
 
 const stateFromAccount = sig.consensus.tower.stateFromAccount;
 
@@ -54,13 +55,6 @@ pub const DUPLICATE_THRESHOLD: f64 = 1.0 - SWITCH_FORK_THRESHOLD - DUPLICATE_LIV
 pub const VOTE_THRESHOLD_SIZE: f64 = 2.0 / 3.0;
 pub const ExpirationSlot = Slot;
 const VotedSlotAndPubkey = struct { slot: Slot, pubkey: Pubkey };
-
-/// TODO Should be improved.
-const HashThatShouldBeMadeBTreeMap = std.AutoArrayHashMapUnmanaged(
-    ExpirationSlot,
-    std.ArrayList(VotedSlotAndPubkey),
-);
-pub const LockoutIntervals = HashThatShouldBeMadeBTreeMap;
 
 const ComputedBankState = struct {
     /// Maps each validator (by their Pubkey) to the amount of stake they have voted
@@ -1631,7 +1625,7 @@ pub fn collectVoteLockouts(
 
     // Tree of intervals of lockouts of the form [slot, slot + slot.lockout],
     // keyed by end of the range
-    var lockout_intervals = LockoutIntervals.empty;
+    var lockout_intervals = LockoutIntervals.EMPTY;
     errdefer lockout_intervals.deinit(allocator);
 
     var my_latest_landed_vote: ?Slot = null;
@@ -1653,7 +1647,7 @@ pub fn collectVoteLockouts(
             const interval = try lockout_intervals.map
                 .getOrPut(allocator, lockout_vote.lastLockedOutSlot());
             if (!interval.found_existing) {
-                interval.value_ptr.* = .init(allocator);
+                interval.value_ptr.* = .empty;
             }
             try interval.value_ptr.append(allocator, .{ lockout_vote.slot, vote_address });
         }
@@ -4117,33 +4111,26 @@ pub const TestFixture = struct {
         allocator: std.mem.Allocator,
         root: SlotAndHash,
     ) !TestFixture {
-        const element: SlotTracker.Element = .{
-            .constants = .{
-                .ancestors = Ancestors{ .ancestors = .empty },
-                .feature_set = FeatureSet.EMPTY,
-                .parent_lt_hash = null,
-                .parent_slot = root.slot,
-                .parent_hash = root.hash,
-                .block_height = 0,
-                .collector_id = Pubkey.ZEROES,
-                .max_tick_height = 100,
-                .fee_rate_governor = .DEFAULT,
-                .epoch_reward_status = .inactive,
-            },
-            .state = .{
-                .blockhash_queue = .init(.DEFAULT),
-                .hash = .init(root.hash),
-                .capitalization = .init(100),
-                .transaction_count = .init(100),
-                .signature_count = .init(100),
-                .tick_height = .init(100),
-                .collected_rent = .init(100),
-                .accounts_lt_hash = .init(.{ .data = @splat(100) }),
-            },
+        const slot_tracker = st: {
+            var constants = try sig.core.SlotConstants.genesis(allocator, .DEFAULT);
+            errdefer constants.deinit(allocator);
+
+            var state = sig.core.SlotState.GENESIS;
+            errdefer state.deinit(allocator);
+
+            constants.parent_slot = root.slot -| 1;
+            state.hash = .init(root.hash);
+
+            break :st try SlotTracker.init(
+                allocator,
+                root.slot,
+                .{ .constants = constants, .state = state },
+            );
         };
+        errdefer slot_tracker.deinit(allocator);
 
         return .{
-            .slot_tracker = try SlotTracker.init(allocator, root.slot, element),
+            .slot_tracker = slot_tracker,
             .fork_choice = try HeaviestSubtreeForkChoice.init(allocator, .noop, root),
             .node_pubkeys = .empty,
             .vote_pubkeys = .empty,
@@ -4249,31 +4236,26 @@ pub const TestFixture = struct {
                 const p = tree[1] orelse break :blk Hash.ZEROES;
                 break :blk p.hash;
             };
-            const element: SlotTracker.Element = .{
-                .constants = .{
-                    .ancestors = Ancestors{ .ancestors = .empty },
-                    .feature_set = FeatureSet.EMPTY,
-                    .parent_lt_hash = null,
-                    .parent_slot = parent_slot,
-                    .parent_hash = parent_hash,
-                    .block_height = tree[0].slot + 1,
-                    .collector_id = Pubkey.ZEROES,
-                    .max_tick_height = 100,
-                    .fee_rate_governor = .DEFAULT,
-                    .epoch_reward_status = .inactive,
-                },
-                .state = .{
-                    .blockhash_queue = .init(.DEFAULT),
-                    .hash = .init(tree[0].hash),
-                    .capitalization = .init(100),
-                    .transaction_count = .init(100),
-                    .signature_count = .init(100),
-                    .tick_height = .init(100),
-                    .collected_rent = .init(100),
-                    .accounts_lt_hash = .init(.{ .data = @splat(100) }),
-                },
-            };
-            try self.slot_tracker.put(allocator, tree[0].slot, element);
+
+            {
+                var constants = try sig.core.SlotConstants.genesis(allocator, .DEFAULT);
+                errdefer constants.deinit(allocator);
+
+                var state = sig.core.SlotState.GENESIS;
+                errdefer state.deinit(allocator);
+
+                constants.parent_slot = parent_slot;
+                constants.parent_hash = parent_hash;
+                constants.block_height = tree[0].slot + 1;
+                state.hash = .init(tree[0].hash);
+
+                try self.slot_tracker.put(
+                    allocator,
+                    tree[0].slot,
+                    .{ .constants = constants, .state = state },
+                );
+            }
+
             // Populate forkchoice
             try self.fork_choice.addNewLeafSlot(tree[0], tree[1]);
             // Populate progress map

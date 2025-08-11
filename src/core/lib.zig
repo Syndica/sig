@@ -18,7 +18,6 @@ pub const rent_collector = @import("rent_collector.zig");
 pub const shred = @import("shred.zig");
 pub const signature = @import("signature.zig");
 pub const stake = @import("stake.zig");
-pub const stake_accounts = @import("stake_accounts.zig");
 pub const status_cache = @import("status_cache.zig");
 pub const time = @import("time.zig");
 pub const transaction = @import("transaction.zig");

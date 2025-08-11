@@ -9,6 +9,7 @@ const SortedSet = sig.utils.collections.SortedSet;
 
 const Epoch = sig.core.Epoch;
 const EpochStakesMap = sig.core.EpochStakesMap;
+const EpochSchedule = sig.core.EpochSchedule;
 const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
@@ -27,8 +28,6 @@ const ProgressMap = sig.consensus.progress_map.ProgressMap;
 const ForkChoice = sig.consensus.fork_choice.ForkChoice;
 const LatestValidatorVotesForFrozenBanks =
     sig.consensus.latest_validator_votes.LatestValidatorVotes;
-const VersionedEpochStakes = sig.core.VersionedEpochStakes;
-const EpochSchedule = sig.core.EpochSchedule;
 
 const SlotTracker = sig.replay.trackers.SlotTracker;
 const EpochTracker = sig.replay.trackers.EpochTracker;
@@ -43,16 +42,15 @@ pub const ConsensusDependencies = struct {
     replay_tower: *ReplayTower,
     progress_map: *ProgressMap,
     slot_tracker: *SlotTracker,
-    epoch_tracker: *EpochTracker,
+    epoch_tracker: *const EpochTracker,
     fork_choice: *ForkChoice,
     blockstore_reader: *BlockstoreReader,
     ledger_result_writer: *LedgerResultWriter,
-    ancestors: *const std.AutoHashMapUnmanaged(u64, SortedSet(u64)),
+    ancestors: *const std.AutoArrayHashMapUnmanaged(u64, SortedSet(u64)),
     descendants: *const std.AutoArrayHashMapUnmanaged(u64, SortedSet(u64)),
     vote_account: Pubkey,
     slot_history: *const SlotHistory,
-    epoch_stakes: EpochStakesMap,
-    latest_validator_votes_for_frozen_banks: *const LatestValidatorVotesForFrozenBanks,
+    latest_validator_votes_for_frozen_banks: *LatestValidatorVotesForFrozenBanks,
 };
 
 pub fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
@@ -61,6 +59,31 @@ pub fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
     else
         return error.Todo;
 
+    var epoch_stakes_map: EpochStakesMap = .empty;
+    errdefer epoch_stakes_map.deinit(deps.allocator);
+
+    try epoch_stakes_map.ensureTotalCapacity(deps.allocator, deps.epoch_tracker.epochs.count());
+    defer epoch_stakes_map.deinit(deps.allocator);
+
+    for (deps.epoch_tracker.epochs.keys(), deps.epoch_tracker.epochs.values()) |key, constants| {
+        epoch_stakes_map.putAssumeCapacity(key, constants.stakes);
+    }
+
+    const newly_computed_slot_stats = try computeBankStats(
+        deps.allocator,
+        deps.vote_account,
+        deps.ancestors,
+        deps.slot_tracker,
+        &deps.epoch_tracker.schedule,
+        &epoch_stakes_map,
+        deps.progress_map,
+        deps.fork_choice,
+        deps.latest_validator_votes_for_frozen_banks,
+    );
+    _ = newly_computed_slot_stats;
+    // TODO: for each newly_computed_slot_stats:
+    //           tower_duplicate_confirmed_forks
+    //           mark_slots_duplicate_confirmed
     const heaviest_slot = deps.fork_choice.heaviestOverallSlot().slot;
     const heaviest_slot_on_same_voted_fork =
         (try deps.fork_choice.heaviestSlotOnSameVotedFork(deps.replay_tower)) orelse null;
@@ -83,7 +106,7 @@ pub fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
         deps.progress_map,
         deps.latest_validator_votes_for_frozen_banks,
         deps.fork_choice,
-        deps.epoch_stakes,
+        &epoch_stakes_map,
         deps.slot_history,
     );
     const maybe_voted_slot = vote_and_reset_forks.vote_slot;
@@ -449,10 +472,10 @@ fn resetFork(
 fn computeBankStats(
     allocator: std.mem.Allocator,
     my_vote_pubkey: Pubkey,
-    ancestors: std.AutoHashMapUnmanaged(u64, SortedSet(u64)),
+    ancestors: *const std.AutoArrayHashMapUnmanaged(u64, SortedSet(u64)),
     slot_tracker: *SlotTracker,
-    epoch_stakes: *const std.AutoHashMapUnmanaged(Epoch, VersionedEpochStakes),
     epoch_schedule: *const EpochSchedule,
+    epoch_stakes_map: *const EpochStakesMap,
     progress: *ProgressMap,
     fork_choice: *ForkChoice,
     latest_validator_votes: *LatestValidatorVotesForFrozenBanks,
@@ -465,7 +488,7 @@ fn computeBankStats(
     // If not, then we can avoid sorting here which may be verbose given frozen_slots is a map.
     for (frozen_slots.keys()) |slot| {
         const epoch = epoch_schedule.getEpoch(slot);
-        const epoch_stake = epoch_stakes.get(epoch) orelse return error.MissingEpochStake;
+        const epoch_stakes = epoch_stakes_map.get(epoch) orelse return error.MissingEpochStakes;
         const fork_stat = progress.getForkStats(slot) orelse return error.MissingSlot;
         if (!fork_stat.computed) {
             // TODO Self::adopt_on_chain_tower_if_behind
@@ -475,14 +498,15 @@ fn computeBankStats(
                 .noop,
                 &my_vote_pubkey,
                 slot,
-                &epoch_stake.current.stakes.vote_accounts.vote_accounts,
-                &ancestors,
+                &epoch_stakes.stakes.vote_accounts.vote_accounts,
+                ancestors,
                 progress,
                 latest_validator_votes,
             );
+
             try fork_choice.computeBankStats(
                 allocator,
-                epoch_stakes,
+                epoch_stakes_map,
                 epoch_schedule,
                 latest_validator_votes,
             );
@@ -510,6 +534,7 @@ const TestDB = sig.ledger.tests.TestDB;
 const TestFixture = sig.consensus.replay_tower.TestFixture;
 const MAX_TEST_TREE_LEN = sig.consensus.replay_tower.MAX_TEST_TREE_LEN;
 const Lockout = sig.runtime.program.vote.state.Lockout;
+
 const createTestReplayTower = sig.consensus.replay_tower.createTestReplayTower;
 
 test "maybeRefreshLastVote - no heaviest slot on same fork" {
@@ -1252,11 +1277,10 @@ test "computeBankStats - child bank heavier" {
     var prng = std.Random.DefaultPrng.init(91);
     const random = prng.random();
 
-    // Set up slots and hashes for the fork tree: 0 -> 1 -> 2 -> 3
+    // Set up slots and hashes for the fork tree: 0 -> 1 -> 2
     const root = SlotAndHash{ .slot = 0, .hash = Hash.initRandom(random) };
     const hash1 = SlotAndHash{ .slot = 1, .hash = Hash.initRandom(random) };
     const hash2 = SlotAndHash{ .slot = 2, .hash = Hash.initRandom(random) };
-    const hash3 = SlotAndHash{ .slot = 3, .hash = Hash.initRandom(random) };
 
     var fixture = try TestFixture.init(testing.allocator, root);
     defer fixture.deinit(testing.allocator);
@@ -1265,10 +1289,9 @@ test "computeBankStats - child bank heavier" {
 
     // Create the tree of banks in a BankForks object
     var trees1 = try std.BoundedArray(TreeNode, MAX_TEST_TREE_LEN).init(0);
-    trees1.appendSliceAssumeCapacity(&[3]TreeNode{
+    trees1.appendSliceAssumeCapacity(&[2]TreeNode{
         .{ hash1, root },
         .{ hash2, hash1 },
-        .{ hash3, hash2 },
     });
     try fixture.fill_fork(
         testing.allocator,
@@ -1290,10 +1313,6 @@ test "computeBankStats - child bank heavier" {
     defer frozen_slots.deinit(testing.allocator);
     errdefer frozen_slots.deinit(testing.allocator);
 
-    // Convert ancestors for computeBankStats
-    var ancestors = try convertAncestorsMap(testing.allocator, &fixture.ancestors);
-    defer ancestors.deinit(testing.allocator);
-
     // TODO move this into fixture?
     const versioned_stakes = try testEpochStakes(
         testing.allocator,
@@ -1303,19 +1322,31 @@ test "computeBankStats - child bank heavier" {
     );
     defer versioned_stakes.deinit(testing.allocator);
 
-    var epoch_stakes = std.AutoHashMapUnmanaged(Epoch, VersionedEpochStakes).empty;
+    const keys = versioned_stakes.stakes.vote_accounts.vote_accounts.keys();
+    for (keys) |key| {
+        var vote_account = versioned_stakes.stakes.vote_accounts.vote_accounts.getPtr(key).?;
+        const LandedVote = sig.runtime.program.vote.state.LandedVote;
+        try vote_account.account.state.votes.append(LandedVote{
+            .latency = 0,
+            .lockout = Lockout{
+                .slot = 1,
+                .confirmation_count = 4,
+            },
+        });
+    }
+
+    var epoch_stakes = EpochStakesMap.empty;
     defer epoch_stakes.deinit(testing.allocator);
     try epoch_stakes.put(testing.allocator, 0, versioned_stakes);
-    try epoch_stakes.put(testing.allocator, 1, versioned_stakes);
 
     const epoch_schedule = EpochSchedule.DEFAULT;
     const newly_computed_slot_stats = try computeBankStats(
         testing.allocator,
         my_node_pubkey,
-        ancestors,
+        &fixture.ancestors,
         &fixture.slot_tracker,
-        &epoch_stakes,
         &epoch_schedule,
+        &epoch_stakes,
         &fixture.progress,
         &fixture.fork_choice,
         &fixture.latest_validator_votes_for_frozen_banks,
@@ -1351,7 +1382,7 @@ test "computeBankStats - child bank heavier" {
             .{ .slot = slot, .hash = slot_info.state.hash.readCopy().? },
         ) orelse
             return error.MissingSlot;
-        try testing.expectEqual(3, best.slot);
+        try testing.expectEqual(2, best.slot);
     }
 }
 
@@ -1382,9 +1413,6 @@ test "computeBankStats - same weight selects lower slot" {
         .active,
     );
 
-    var ancestors = try convertAncestorsMap(testing.allocator, &fixture.ancestors);
-    defer ancestors.deinit(testing.allocator);
-
     const versioned_stakes = try testEpochStakes(
         testing.allocator,
         fixture.vote_pubkeys.items,
@@ -1393,7 +1421,7 @@ test "computeBankStats - same weight selects lower slot" {
     );
     defer versioned_stakes.deinit(testing.allocator);
 
-    var epoch_stakes = std.AutoHashMapUnmanaged(Epoch, VersionedEpochStakes).empty;
+    var epoch_stakes = EpochStakesMap.empty;
     defer epoch_stakes.deinit(testing.allocator);
     try epoch_stakes.put(testing.allocator, 0, versioned_stakes);
     try epoch_stakes.put(testing.allocator, 1, versioned_stakes);
@@ -1402,10 +1430,10 @@ test "computeBankStats - same weight selects lower slot" {
     const newly_computed_slot_stats = try computeBankStats(
         testing.allocator,
         my_vote_pubkey,
-        ancestors,
+        &fixture.ancestors,
         &fixture.slot_tracker,
-        &epoch_stakes,
         &epoch_schedule,
+        &epoch_stakes,
         &fixture.progress,
         &fixture.fork_choice,
         &fixture.latest_validator_votes_for_frozen_banks,
@@ -1428,21 +1456,4 @@ test "computeBankStats - same weight selects lower slot" {
     const heaviest = fixture.fork_choice.heaviestOverallSlot();
     // Should pick the lower of the two equally weighted banks
     try testing.expectEqual(@as(u64, 1), heaviest.slot);
-}
-
-const builtin = @import("builtin");
-fn convertAncestorsMap(
-    allocator: std.mem.Allocator,
-    src: *const std.AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)),
-) !std.AutoHashMapUnmanaged(u64, SortedSet(u64)) {
-    if (!builtin.is_test) {
-        @compileError("convertAncestorsMap should only be called in test mode");
-    }
-    var dst = std.AutoHashMapUnmanaged(u64, SortedSet(u64)).empty;
-    try dst.ensureTotalCapacity(allocator, @intCast(src.count()));
-    var it = src.iterator();
-    while (it.next()) |entry| {
-        try dst.put(allocator, entry.key_ptr.*, entry.value_ptr.*);
-    }
-    return dst;
 }
