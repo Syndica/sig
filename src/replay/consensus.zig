@@ -45,11 +45,10 @@ pub const ConsensusDependencies = struct {
     fork_choice: *ForkChoice,
     ledger_reader: *LedgerReader,
     ledger_result_writer: *LedgerResultWriter,
-    ancestors: *const std.AutoArrayHashMapUnmanaged(u64, SortedSet(u64)),
-    descendants: *const std.AutoArrayHashMapUnmanaged(u64, SortedSet(u64)),
+    ancestors: *const std.AutoArrayHashMapUnmanaged(u64, SortedSetUnmanaged(u64)),
+    descendants: *const std.AutoArrayHashMapUnmanaged(u64, SortedSetUnmanaged(u64)),
     vote_account: Pubkey,
     slot_history: *const SlotHistory,
-    epoch_stakes: EpochStakesMap,
     latest_validator_votes_for_frozen_banks: *LatestValidatorVotes,
 };
 
@@ -94,11 +93,6 @@ pub fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
         .last_print_time = now,
     };
 
-    const epoch_stake = blk: {
-        const epoch_consts = deps.epoch_tracker.getForSlot(heaviest_slot) orelse
-            return error.StakeNotFound;
-        break :blk epoch_consts.stakes;
-    };
     const vote_and_reset_forks = try deps.replay_tower.selectVoteAndResetForks(
         deps.allocator,
         heaviest_slot,
@@ -474,7 +468,7 @@ fn resetFork(
 fn computeBankStats(
     allocator: std.mem.Allocator,
     my_vote_pubkey: Pubkey,
-    ancestors: *const std.AutoArrayHashMapUnmanaged(u64, SortedSet(u64)),
+    ancestors: *const std.AutoArrayHashMapUnmanaged(u64, SortedSetUnmanaged(u64)),
     slot_tracker: *SlotTracker,
     epoch_schedule: *const EpochSchedule,
     epoch_stakes_map: *const EpochStakesMap,

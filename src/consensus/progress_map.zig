@@ -1285,7 +1285,7 @@ test "ForkProgress.init" {
     bank_data.hash = .ZEROES;
 
     const slot = bank_data.slot;
-    const slot_consts: sig.core.SlotConstants = try .fromBankFields(allocator, &bank_data, .EMPTY);
+    const slot_consts: sig.core.SlotConstants = try .fromBankFields(allocator, &bank_data, .ALL_DISABLED);
     defer slot_consts.deinit(allocator);
 
     var slot_state: sig.core.SlotState = try .fromBankFields(allocator, &bank_data);

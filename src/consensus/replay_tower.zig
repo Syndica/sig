@@ -8,6 +8,7 @@ const Hash = sig.core.Hash;
 const Lockout = sig.runtime.program.vote.state.Lockout;
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
+const Epoch = sig.core.Epoch;
 const EpochStakesMap = sig.core.EpochStakesMap;
 const SlotAndHash = sig.core.hash.SlotAndHash;
 const SlotHistory = sig.runtime.sysvar.SlotHistory;
@@ -1356,6 +1357,7 @@ pub const ReplayTower = struct {
         var failure_reasons: std.ArrayListUnmanaged(HeaviestForkFailures) = .empty;
         errdefer failure_reasons.deinit(allocator);
 
+        const epoch_stake = epoch_stakes.get(heaviest_epoch) orelse return error.ForkStatsNotFound;
         // Check switch threshold conditions
         const initial_decision = try self.checkSwitchThreshold(
             allocator,
@@ -1603,7 +1605,7 @@ pub fn collectVoteLockouts(
     vote_account_pubkey: *const Pubkey,
     bank_slot: Slot,
     vote_accounts: *const StakeAndVoteAccountsMap,
-    ancestors: *const AutoHashMapUnmanaged(Slot, SortedSetUnmanaged(Slot)),
+    ancestors: *const AutoArrayHashMapUnmanaged(Slot, SortedSetUnmanaged(Slot)),
     progress_map: *const ProgressMap,
     latest_validator_votes: *LatestValidatorVotes,
 ) !ComputedBankState {
@@ -1763,7 +1765,7 @@ pub fn populateAncestorVotedStakes(
     allocator: std.mem.Allocator,
     voted_stakes: *VotedStakes,
     vote_slots: []const Slot,
-    ancestors: *const AutoHashMapUnmanaged(Slot, SortedSetUnmanaged(Slot)),
+    ancestors: *const AutoArrayHashMapUnmanaged(Slot, SortedSetUnmanaged(Slot)),
 ) !void {
     // If there's no ancestors, that means this slot must be from before the current root,
     // in which case the lockouts won't be calculated in bank_weight anyways, so ignore
@@ -1784,7 +1786,7 @@ fn updateAncestorVotedStakes(
     voted_stakes: *VotedStakes,
     voted_slot: Slot,
     voted_stake: u64,
-    ancestors: *const AutoHashMapUnmanaged(Slot, SortedSetUnmanaged(Slot)),
+    ancestors: *const AutoArrayHashMapUnmanaged(Slot, SortedSetUnmanaged(Slot)),
 ) !void {
     // If there's no ancestors, that means this slot must be from
     // before the current root, so ignore this slot
@@ -1859,7 +1861,7 @@ test "check_vote_threshold_forks" {
     var prng = std.Random.DefaultPrng.init(19);
     const random = prng.random();
     // Create the ancestor relationships
-    var ancestors = std.AutoHashMapUnmanaged(u64, SortedSetUnmanaged(Slot)).empty;
+    var ancestors = std.AutoArrayHashMapUnmanaged(u64, SortedSetUnmanaged(Slot)).empty;
     defer {
         var it = ancestors.iterator();
         while (it.next()) |entry| {
@@ -2037,7 +2039,7 @@ test "collect vote lockouts root" {
     );
     defer replay_tower.deinit(allocator);
 
-    var ancestors = std.AutoHashMapUnmanaged(u64, SortedSetUnmanaged(Slot)).empty;
+    var ancestors = std.AutoArrayHashMapUnmanaged(u64, SortedSetUnmanaged(Slot)).empty;
     defer {
         var it = ancestors.iterator();
         while (it.next()) |entry| {
@@ -2077,7 +2079,7 @@ test "collect vote lockouts root" {
     defer progress_map.deinit(allocator);
 
     var fork_progress: sig.consensus.progress_map.ForkProgress = try .zeroes(allocator);
-    defer fork_progress.deinit(allocator);
+    errdefer fork_progress.deinit(allocator);
 
     for (accounts.values()) |value| {
         try progress_map.map.put(
@@ -2156,7 +2158,7 @@ test "collect vote lockouts sums" {
     }
 
     // ancestors: slot 1 has ancestor 0, slot 0 has no ancestors
-    var ancestors = std.AutoHashMapUnmanaged(u64, SortedSetUnmanaged(Slot)).empty;
+    var ancestors = std.AutoArrayHashMapUnmanaged(u64, SortedSetUnmanaged(Slot)).empty;
     defer {
         var it = ancestors.iterator();
         while (it.next()) |entry| {
@@ -3640,6 +3642,7 @@ test "selectVoteAndResetForks stake not found" {
             std.testing.allocator,
             100,
             null,
+            100,
             &.{},
             &.{},
             &ProgressMap.INIT,
@@ -3734,12 +3737,6 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
     );
     defer replay_tower.deinit(allocator);
 
-    var ancestors: AutoArrayHashMapUnmanaged(u64, SortedSet(u64)) = .{};
-    defer ancestors.deinit(allocator);
-    for (fixture.ancestors.keys(), fixture.ancestors.values()) |key, value| {
-        try ancestors.put(allocator, key, value);
-    }
-    const descendants = fixture.descendants;
     const bits = try DynamicArrayBitSet(u64).initEmpty(allocator, 10);
     defer bits.deinit(allocator);
 
@@ -3748,6 +3745,7 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
         allocator,
         forks1.heaviest,
         forks1.heaviest_on_same_fork,
+        0, // heaviest_epoch
         &fixture.ancestors,
         &fixture.descendants,
         &fixture.progress,
@@ -3768,6 +3766,7 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
         allocator,
         forks2.heaviest,
         forks2.heaviest_on_same_fork,
+        0, // heaviest_epoch
         &fixture.ancestors,
         &fixture.descendants,
         &fixture.progress,
@@ -3792,6 +3791,7 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
         allocator,
         forks3.heaviest,
         forks3.heaviest_on_same_fork,
+        0, // heaviest_epoch
         &fixture.ancestors,
         &fixture.descendants,
         &fixture.progress,
@@ -3847,13 +3847,6 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
 
     try fixture.fill_fork(allocator, .{ .root = hash5, .data = trees }, .active);
 
-    var ancestors2: AutoArrayHashMapUnmanaged(u64, SortedSet(u64)) = .{};
-    defer ancestors2.deinit(allocator);
-    for (fixture.ancestors.keys(), fixture.ancestors.values()) |key, value| {
-        try ancestors2.put(allocator, key, value);
-    }
-    const descendants2 = fixture.descendants;
-
     // 4 is still the heaviest slot, but not votable because of lockout.
     // 9 is the deepest slot from our last voted fork (5), so it is what we should
     // reset to.
@@ -3863,6 +3856,7 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
         allocator,
         forks4.heaviest,
         forks4.heaviest_on_same_fork,
+        0, // heaviest_epoch
         &fixture.ancestors,
         &fixture.descendants,
         &fixture.progress,
@@ -3905,6 +3899,7 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
         allocator,
         forks5.heaviest,
         forks5.heaviest_on_same_fork,
+        0, // heaviest_epoch
         &fixture.ancestors,
         &fixture.descendants,
         &fixture.progress,
@@ -4084,7 +4079,7 @@ pub const TestFixture = struct {
     epoch_stakes: EpochStakesMap,
     node_pubkeys: std.ArrayListUnmanaged(Pubkey),
     vote_pubkeys: std.ArrayListUnmanaged(Pubkey),
-    latest_validator_votes_for_frozen_banks: LatestValidatorVotesForFrozenBanks,
+    latest_validator_votes_for_frozen_banks: LatestValidatorVotes,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -4244,7 +4239,7 @@ pub const TestFixture = struct {
                 const new_slot = self.slot_tracker.get(parent_slot) orelse continue;
                 new_slot.state.hash = .init(parent_hash);
                 const fork_state = self.progress.getForkStats(parent_slot) orelse continue;
-                fork_state.bank_hash = parent_hash;
+                fork_state.slot_hash = parent_hash;
             }
         }
 
