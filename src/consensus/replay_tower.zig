@@ -1,7 +1,6 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 
-const AutoHashMapUnmanaged = std.AutoHashMapUnmanaged;
 const AutoArrayHashMapUnmanaged = std.AutoArrayHashMapUnmanaged;
 
 const AccountsDB = sig.accounts_db.AccountsDB;
@@ -37,6 +36,7 @@ const Tower = sig.consensus.tower.Tower;
 const TowerError = sig.consensus.tower.TowerError;
 const VoteTransaction = sig.consensus.vote_transaction.VoteTransaction;
 const VotedStakes = sig.consensus.progress_map.consensus.VotedStakes;
+const LockoutIntervals = sig.consensus.progress_map.LockoutIntervals;
 
 const stateFromAccount = sig.consensus.tower.stateFromAccount;
 
@@ -56,13 +56,6 @@ pub const VOTE_THRESHOLD_SIZE: f64 = 2.0 / 3.0;
 pub const ExpirationSlot = Slot;
 const VotedSlotAndPubkey = struct { slot: Slot, pubkey: Pubkey };
 
-/// TODO Should be improved.
-const HashThatShouldBeMadeBTreeMap = std.AutoArrayHashMapUnmanaged(
-    ExpirationSlot,
-    std.ArrayList(VotedSlotAndPubkey),
-);
-pub const LockoutIntervals = HashThatShouldBeMadeBTreeMap;
-
 const ComputedBankState = struct {
     /// Maps each validator (by their Pubkey) to the amount of stake they have voted
     /// with on this fork. Helps determine who has already committed to this
@@ -80,9 +73,6 @@ const ComputedBankState = struct {
 
     pub fn deinit(self: *ComputedBankState, allocator: std.mem.Allocator) void {
         self.voted_stakes.deinit(allocator);
-        for (self.lockout_intervals.values()) |value| {
-            value.deinit();
-        }
         self.lockout_intervals.deinit(allocator);
     }
 };
@@ -371,7 +361,7 @@ pub const ReplayTower = struct {
         candidate_slot: Slot,
         last_voted_slot: Slot,
         switch_slot: Slot,
-        ancestors: *const AutoHashMapUnmanaged(Slot, SortedSet(Slot)),
+        ancestors: *const AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)),
         last_vote_ancestors: *const SortedSet(Slot),
     ) ?bool {
 
@@ -452,7 +442,7 @@ pub const ReplayTower = struct {
         self: *const ReplayTower,
         allocator: std.mem.Allocator,
         switch_slot: Slot,
-        ancestors: *const AutoHashMapUnmanaged(Slot, SortedSet(Slot)),
+        ancestors: *const AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)),
         descendants: *const AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)),
         progress: *const ProgressMap,
         total_stake: u64,
@@ -776,7 +766,7 @@ pub const ReplayTower = struct {
         self: *ReplayTower,
         allocator: std.mem.Allocator,
         switch_slot: Slot,
-        ancestors: *const AutoHashMapUnmanaged(Slot, SortedSet(Slot)),
+        ancestors: *const AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)),
         descendants: *const AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)),
         progress: *const ProgressMap,
         total_stake: u64,
@@ -1360,12 +1350,12 @@ pub const ReplayTower = struct {
         heaviest_slot: Slot,
         heaviest_slot_on_same_voted_fork: ?Slot,
         heaviest_epoch: Epoch,
-        ancestors: *const AutoHashMapUnmanaged(u64, SortedSet(u64)),
+        ancestors: *const AutoArrayHashMapUnmanaged(u64, SortedSet(u64)),
         descendants: *const AutoArrayHashMapUnmanaged(u64, SortedSet(u64)),
         progress: *const ProgressMap,
         latest_validator_votes_for_frozen_banks: *const LatestValidatorVotesForFrozenBanks,
         fork_choice: *const HeaviestSubtreeForkChoice,
-        epoch_stakes: EpochStakesMap,
+        epoch_stakes: *const EpochStakesMap,
         slot_history: *const SlotHistory,
     ) !SelectVoteAndResetForkResult {
         // Initialize result with failure list
@@ -1499,7 +1489,7 @@ pub fn selectCandidatesFailedSwitchDuplicateRollback(
 /// * `slot_b` is not in `ancestors`
 /// * There is no common ancestor of slot_a and slot_b in `ancestors`
 fn greatestCommonAncestor(
-    ancestors: *const AutoHashMapUnmanaged(
+    ancestors: *const AutoArrayHashMapUnmanaged(
         Slot,
         SortedSet(Slot),
     ),
@@ -1532,7 +1522,7 @@ fn greatestCommonAncestor(
 fn isDescendantSlot(
     maybe_descendant: Slot,
     slot: Slot,
-    ancestors: *const AutoHashMapUnmanaged(Slot, SortedSet(Slot)),
+    ancestors: *const AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)),
 ) ?bool {
     return if (ancestors.get(maybe_descendant)) |candidate_slot_ancestors|
         candidate_slot_ancestors.contains(slot)
@@ -1622,7 +1612,7 @@ pub fn collectVoteLockouts(
     vote_account_pubkey: *const Pubkey,
     bank_slot: Slot,
     vote_accounts: *const StakeAndVoteAccountsMap,
-    ancestors: *const AutoHashMapUnmanaged(Slot, SortedSet(Slot)),
+    ancestors: *const AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)),
     progress_map: *const ProgressMap,
     latest_validator_votes_for_frozen_banks: *LatestValidatorVotesForFrozenBanks,
 ) !ComputedBankState {
@@ -1635,7 +1625,7 @@ pub fn collectVoteLockouts(
 
     // Tree of intervals of lockouts of the form [slot, slot + slot.lockout],
     // keyed by end of the range
-    var lockout_intervals = LockoutIntervals.empty;
+    var lockout_intervals = LockoutIntervals.EMPTY;
     errdefer lockout_intervals.deinit(allocator);
 
     var my_latest_landed_vote: ?Slot = null;
@@ -1654,12 +1644,12 @@ pub fn collectVoteLockouts(
         var vote_state = try TowerVoteState.fromAccount(&vote.account);
 
         for (vote_state.votes.constSlice()) |lockout_vote| {
-            const interval = try lockout_intervals
+            const interval = try lockout_intervals.map
                 .getOrPut(allocator, lockout_vote.lastLockedOutSlot());
             if (!interval.found_existing) {
-                interval.value_ptr.* = .init(allocator);
+                interval.value_ptr.* = .empty;
             }
-            try interval.value_ptr.append(.{ .slot = lockout_vote.slot, .pubkey = vote_address });
+            try interval.value_ptr.append(allocator, .{ lockout_vote.slot, vote_address });
         }
 
         // Vote account for this validator
@@ -1782,7 +1772,7 @@ pub fn populateAncestorVotedStakes(
     allocator: std.mem.Allocator,
     voted_stakes: *VotedStakes,
     vote_slots: []const Slot,
-    ancestors: *const AutoHashMapUnmanaged(Slot, SortedSet(Slot)),
+    ancestors: *const AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)),
 ) !void {
     // If there's no ancestors, that means this slot must be from before the current root,
     // in which case the lockouts won't be calculated in bank_weight anyways, so ignore
@@ -1803,7 +1793,7 @@ fn updateAncestorVotedStakes(
     voted_stakes: *VotedStakes,
     voted_slot: Slot,
     voted_stake: u64,
-    ancestors: *const AutoHashMapUnmanaged(Slot, SortedSet(Slot)),
+    ancestors: *const AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)),
 ) !void {
     // If there's no ancestors, that means this slot must be from
     // before the current root, so ignore this slot
@@ -1878,7 +1868,7 @@ test "check_vote_threshold_forks" {
     var prng = std.Random.DefaultPrng.init(19);
     const random = prng.random();
     // Create the ancestor relationships
-    var ancestors = std.AutoHashMapUnmanaged(u64, SortedSet(Slot)).empty;
+    var ancestors = std.AutoArrayHashMapUnmanaged(u64, SortedSet(Slot)).empty;
     defer {
         var it = ancestors.iterator();
         while (it.next()) |entry| {
@@ -2052,7 +2042,7 @@ test "collect vote lockouts root" {
     );
     defer replay_tower.deinit(allocator);
 
-    var ancestors = std.AutoHashMapUnmanaged(u64, SortedSet(Slot)).empty;
+    var ancestors = std.AutoArrayHashMapUnmanaged(u64, SortedSet(Slot)).empty;
     defer {
         var it = ancestors.iterator();
         while (it.next()) |entry| {
@@ -2171,7 +2161,7 @@ test "collect vote lockouts sums" {
     }
 
     // ancestors: slot 1 has ancestor 0, slot 0 has no ancestors
-    var ancestors = std.AutoHashMapUnmanaged(u64, SortedSet(Slot)).empty;
+    var ancestors = std.AutoArrayHashMapUnmanaged(u64, SortedSet(Slot)).empty;
     defer {
         var it = ancestors.iterator();
         while (it.next()) |entry| {
@@ -3540,7 +3530,7 @@ test "greatestCommonAncestor" {
 
     // Test case: Basic common ancestor
     {
-        var ancestors = AutoHashMapUnmanaged(Slot, SortedSet(Slot)){};
+        var ancestors = std.AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)){};
         defer {
             var it = ancestors.iterator();
             while (it.next()) |entry| {
@@ -3561,7 +3551,7 @@ test "greatestCommonAncestor" {
 
     // Test case: No common ancestor
     {
-        var ancestors = AutoHashMapUnmanaged(Slot, SortedSet(Slot)){};
+        var ancestors = std.AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)){};
         defer {
             var it = ancestors.iterator();
             while (it.next()) |entry| {
@@ -3581,7 +3571,7 @@ test "greatestCommonAncestor" {
 
     // Test case: One empty ancestor set
     {
-        var ancestors = AutoHashMapUnmanaged(Slot, SortedSet(Slot)){};
+        var ancestors = std.AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)){};
         defer {
             var it = ancestors.iterator();
             while (it.next()) |entry| {
@@ -3601,7 +3591,7 @@ test "greatestCommonAncestor" {
 
     // Test case: Missing slots
     {
-        var ancestors = AutoHashMapUnmanaged(Slot, SortedSet(Slot)){};
+        var ancestors = std.AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)){};
         defer {
             var it = ancestors.iterator();
             while (it.next()) |entry| {
@@ -3620,7 +3610,7 @@ test "greatestCommonAncestor" {
 
     // Test case: Multiple common ancestors (should pick greatest)
     {
-        var ancestors = AutoHashMapUnmanaged(Slot, SortedSet(Slot)){};
+        var ancestors = std.AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)){};
         defer {
             var it = ancestors.iterator();
             while (it.next()) |entry| {
@@ -3670,7 +3660,7 @@ test "selectVoteAndResetForks stake not found" {
             &ProgressMap.INIT,
             &latest,
             &fork_choice,
-            .{},
+            &.empty,
             &slot_history,
         ),
     );
@@ -3727,7 +3717,7 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
         .{ hash4, hash3 },
     });
 
-    try fixture.fill_fork(allocator, .{ .root = root, .data = trees1 });
+    try fixture.fill_fork(allocator, .{ .root = root, .data = trees1 }, .active);
     try fixture.fill_epoch_stake_random(allocator, random);
 
     var tmp_dir_root = std.testing.tmpDir(.{});
@@ -3759,7 +3749,7 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
     );
     defer replay_tower.deinit(allocator);
 
-    var ancestors: AutoHashMapUnmanaged(u64, SortedSet(u64)) = .{};
+    var ancestors: AutoArrayHashMapUnmanaged(u64, SortedSet(u64)) = .{};
     defer ancestors.deinit(allocator);
     for (fixture.ancestors.keys(), fixture.ancestors.values()) |key, value| {
         try ancestors.put(allocator, key, value);
@@ -3779,7 +3769,7 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
         &fixture.progress,
         &LatestValidatorVotesForFrozenBanks.empty,
         &fixture.fork_choice,
-        fixture.epoch_stake_map,
+        &fixture.epoch_stakes,
         &SlotHistory{ .bits = bits, .next_slot = 0 },
     );
     try std.testing.expectEqual(4, result.reset_slot.?);
@@ -3800,7 +3790,7 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
         &fixture.progress,
         &LatestValidatorVotesForFrozenBanks.empty,
         &fixture.fork_choice,
-        fixture.epoch_stake_map,
+        &fixture.epoch_stakes,
         &SlotHistory{ .bits = bits, .next_slot = 0 },
     );
 
@@ -3825,7 +3815,7 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
         &fixture.progress,
         &LatestValidatorVotesForFrozenBanks.empty,
         &fixture.fork_choice,
-        fixture.epoch_stake_map,
+        &fixture.epoch_stakes,
         &SlotHistory{ .bits = bits, .next_slot = 0 },
     );
 
@@ -3873,9 +3863,9 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
         .{ hash10, hash6 },
     });
 
-    try fixture.fill_fork(allocator, .{ .root = hash5, .data = trees });
+    try fixture.fill_fork(allocator, .{ .root = hash5, .data = trees }, .active);
 
-    var ancestors2: AutoHashMapUnmanaged(u64, SortedSet(u64)) = .{};
+    var ancestors2: AutoArrayHashMapUnmanaged(u64, SortedSet(u64)) = .{};
     defer ancestors2.deinit(allocator);
     for (fixture.ancestors.keys(), fixture.ancestors.values()) |key, value| {
         try ancestors2.put(allocator, key, value);
@@ -3897,7 +3887,7 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
         &fixture.progress,
         &LatestValidatorVotesForFrozenBanks.empty,
         &fixture.fork_choice,
-        fixture.epoch_stake_map,
+        &fixture.epoch_stakes,
         &SlotHistory{ .bits = bits, .next_slot = 0 },
     );
 
@@ -3940,7 +3930,7 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
         &fixture.progress,
         &LatestValidatorVotesForFrozenBanks.empty,
         &fixture.fork_choice,
-        fixture.epoch_stake_map,
+        &fixture.epoch_stakes,
         &SlotHistory{ .bits = bits, .next_slot = 0 },
     );
 
@@ -4104,31 +4094,65 @@ fn fillProgressMapForkStats(
 }
 
 pub const MAX_TEST_TREE_LEN = 100;
+const SlotTracker = sig.replay.trackers.SlotTracker;
 const Tree = struct { root: SlotAndHash, data: std.BoundedArray(TreeNode, MAX_TEST_TREE_LEN) };
 pub const TestFixture = struct {
+    slot_tracker: SlotTracker,
     fork_choice: HeaviestSubtreeForkChoice,
     ancestors: AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)) = .{},
     descendants: AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)) = .{},
     progress: ProgressMap = ProgressMap.INIT,
-    epoch_stake_map: EpochStakesMap,
+    epoch_stakes: EpochStakesMap,
+    node_pubkeys: std.ArrayListUnmanaged(Pubkey),
+    vote_pubkeys: std.ArrayListUnmanaged(Pubkey),
+    latest_validator_votes_for_frozen_banks: LatestValidatorVotesForFrozenBanks,
 
-    pub fn init(allocator: std.mem.Allocator, root: SlotAndHash) !TestFixture {
+    pub fn init(
+        allocator: std.mem.Allocator,
+        root: SlotAndHash,
+    ) !TestFixture {
+        const slot_tracker = st: {
+            var constants = try sig.core.SlotConstants.genesis(allocator, .DEFAULT);
+            errdefer constants.deinit(allocator);
+
+            var state = sig.core.SlotState.GENESIS;
+            errdefer state.deinit(allocator);
+
+            constants.parent_slot = root.slot -| 1;
+            state.hash = .init(root.hash);
+
+            break :st try SlotTracker.init(
+                allocator,
+                root.slot,
+                .{ .constants = constants, .state = state },
+            );
+        };
+        errdefer slot_tracker.deinit(allocator);
+
         return .{
+            .slot_tracker = slot_tracker,
             .fork_choice = try HeaviestSubtreeForkChoice.init(allocator, .noop, root),
-            .epoch_stake_map = .{},
+            .node_pubkeys = .empty,
+            .vote_pubkeys = .empty,
+            .epoch_stakes = .{},
+            .latest_validator_votes_for_frozen_banks = .empty,
         };
     }
 
     pub fn deinit(self: *TestFixture, allocator: std.mem.Allocator) void {
         self.fork_choice.deinit();
         self.progress.deinit(allocator);
+        self.slot_tracker.deinit(allocator);
+        self.node_pubkeys.deinit(allocator);
+        self.vote_pubkeys.deinit(allocator);
+        self.latest_validator_votes_for_frozen_banks.deinit(allocator);
 
         {
-            var it = self.epoch_stake_map.iterator();
+            var it = self.epoch_stakes.iterator();
             while (it.next()) |entry| {
                 entry.value_ptr.deinit(allocator);
             }
-            self.epoch_stake_map.deinit(allocator);
+            self.epoch_stakes.deinit(allocator);
         }
 
         {
@@ -4168,24 +4192,90 @@ pub const TestFixture = struct {
         };
     }
 
+    pub fn fill_keys(
+        self: *TestFixture,
+        allocator: std.mem.Allocator,
+        random: std.Random,
+        num_keypairs: usize,
+    ) !void {
+        self.node_pubkeys.clearRetainingCapacity();
+        self.vote_pubkeys.clearRetainingCapacity();
+
+        try self.node_pubkeys.ensureTotalCapacityPrecise(allocator, num_keypairs);
+        try self.vote_pubkeys.ensureTotalCapacityPrecise(allocator, num_keypairs);
+        for (0..num_keypairs) |_| {
+            self.node_pubkeys.appendAssumeCapacity(.initRandom(random));
+            self.vote_pubkeys.appendAssumeCapacity(.initRandom(random));
+        }
+    }
+
     pub fn fill_fork(
         self: *TestFixture,
         allocator: std.mem.Allocator,
         input_tree: Tree,
+        frozen_state: enum { frozen, active },
     ) !void {
+        // Add root to progress map.
+        {
+            try self.progress.map.ensureUnusedCapacity(allocator, 1);
+            const prev_root = self.progress.map.fetchPutAssumeCapacity(input_tree.root.slot, fp: {
+                var root_fp = try ForkProgress.zeroes(allocator);
+                root_fp.fork_stats.computed = true;
+                root_fp.fork_stats.my_latest_landed_vote = null;
+                break :fp root_fp;
+            });
+            if (prev_root) |kv| kv.value.deinit(allocator);
+        }
         // TODO check that root fork exist already and it is being extended
         for (input_tree.data.constSlice()) |tree| {
+            const parent_slot = blk: {
+                const p = tree[1] orelse break :blk 0;
+                break :blk p.slot;
+            };
+            const parent_hash = blk: {
+                const p = tree[1] orelse break :blk Hash.ZEROES;
+                break :blk p.hash;
+            };
+
+            {
+                var constants = try sig.core.SlotConstants.genesis(allocator, .DEFAULT);
+                errdefer constants.deinit(allocator);
+
+                var state = sig.core.SlotState.GENESIS;
+                errdefer state.deinit(allocator);
+
+                constants.parent_slot = parent_slot;
+                constants.parent_hash = parent_hash;
+                constants.block_height = tree[0].slot + 1;
+                state.hash = .init(tree[0].hash);
+
+                try self.slot_tracker.put(
+                    allocator,
+                    tree[0].slot,
+                    .{ .constants = constants, .state = state },
+                );
+            }
+
             // Populate forkchoice
             try self.fork_choice.addNewLeafSlot(tree[0], tree[1]);
             // Populate progress map
-            var fp = try ForkProgress.zeroes(allocator);
-            fp.fork_stats.computed = true;
-            fp.fork_stats.my_latest_landed_vote = null;
-            try self.progress.map.putNoClobber(
-                allocator,
-                tree[0].slot,
-                fp,
-            );
+            {
+                try self.progress.map.ensureUnusedCapacity(allocator, 1);
+                const prev_root = self.progress.map.fetchPutAssumeCapacity(tree[0].slot, fp: {
+                    var root_fp = try ForkProgress.zeroes(allocator);
+                    root_fp.fork_stats.computed = false;
+                    root_fp.fork_stats.my_latest_landed_vote = null;
+                    break :fp root_fp;
+                });
+                if (prev_root) |kv| kv.value.deinit(allocator);
+            }
+            if (frozen_state == .frozen) {
+                // new_bank.freeze();
+                const new_slot = self.slot_tracker.get(parent_slot) orelse continue;
+                new_slot.state.hash = .init(parent_hash);
+                const fork_state = self.progress.getForkStats(parent_slot) orelse continue;
+                fork_state.bank_hash = parent_hash;
+            }
         }
 
         try self.descendants.ensureTotalCapacity(allocator, input_tree.data.len);
@@ -4229,8 +4319,8 @@ pub const TestFixture = struct {
         );
 
         // Always resest for now.
-        self.epoch_stake_map = .{};
-        try self.epoch_stake_map.put(allocator, 0, epoch_stakes);
+        self.epoch_stakes = .{};
+        try self.epoch_stakes.put(allocator, 0, epoch_stakes);
     }
 };
 
