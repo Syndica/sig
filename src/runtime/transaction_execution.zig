@@ -123,12 +123,10 @@ pub const TransactionRollbacks = union(enum(u8)) {
     }
 
     pub fn accounts(self: *const TransactionRollbacks) []const CopiedAccount {
-        switch (self.*) {
-            .fee_payer_only, .same_nonce_and_fee_payer => |*item| {
-                return @as([*]const CopiedAccount, @ptrCast(item))[0..1];
-            },
-            .separate_nonce_and_fee_payer => |*items| return items,
-        }
+        return switch (self.*) {
+            .fee_payer_only, .same_nonce_and_fee_payer => |*item| item[0..1],
+            .separate_nonce_and_fee_payer => |*items| items,
+        };
     }
 
     pub fn deinit(self: TransactionRollbacks, allocator: std.mem.Allocator) void {
