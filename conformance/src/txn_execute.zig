@@ -798,7 +798,7 @@ fn executeTxnContext(
     const environment = TransactionExecutionEnvironment{
         .ancestors = &ancestors,
         .feature_set = &feature_set,
-        .status_cache = &status_cache,
+        .status_cache = &StatusCache.empty,
         .sysvar_cache = &sysvar_cache,
         .rent_collector = &rent_collector,
         .blockhash_queue = &blockhash_queue,
