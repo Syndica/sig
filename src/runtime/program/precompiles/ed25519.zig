@@ -202,6 +202,34 @@ fn testCase(
     return try verify(&instruction_data, &.{&(.{0} ** 100)});
 }
 
+test "execute" {
+    const testing = sig.runtime.program.testing;
+
+    const allocator = std.testing.allocator;
+
+    try testing.expectProgramExecuteError(
+        error.Custom,
+        allocator,
+        ID,
+        &.{ 0, 0, 0 },
+        &.{},
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = ID,
+                    .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+                    .executable = true,
+                },
+            },
+            .feature_set = &.{
+                .{ .feature = .move_precompile_verification_to_svm, .slot = 0 },
+            },
+            .instruction_datas = &.{},
+        },
+        .{},
+    );
+}
+
 // https://github.com/anza-xyz/agave/blob/a8aef04122068ec36a7af0721e36ee58efa0bef2/sdk/src/ed25519_instruction.rs#L279
 test "ed25519 invalid offsets" {
     const allocator = std.testing.allocator;
