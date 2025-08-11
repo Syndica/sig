@@ -160,9 +160,17 @@ fn processNextInstruction(
     // TODO:
     // - precompile feature gate move to svm otherwise noop
     // - precompile entrypoints
+    const move_verify_precompiles_to_svm = ic.tc.feature_set.active(
+        .move_precompile_verification_to_svm,
+        ic.tc.slot,
+    );
 
     const maybe_precompile_fn =
         program.PRECOMPILE_ENTRYPOINTS.get(native_program_id.base58String().slice());
+
+    // If the program is a precompile and move precompiles to svm is not enabled the precompile
+    // has already been executed outside the SVM, so we skip it
+    if (!move_verify_precompiles_to_svm and maybe_precompile_fn != null) return;
 
     const maybe_native_program_fn = maybe_precompile_fn orelse blk: {
         const native_program_fn = program.PROGRAM_ENTRYPOINTS.get(

@@ -480,6 +480,29 @@ pub fn executeTransaction(
         };
     }
 
+    const contains_precompile = for (transaction.instruction_infos) |ixn_info| {
+        if (ixn_info.program_meta.pubkey.equals(&sig.runtime.program.precompiles.ed25519.ID) or
+            ixn_info.program_meta.pubkey.equals(&sig.runtime.program.precompiles.secp256k1.ID) or
+            ixn_info.program_meta.pubkey.equals(&sig.runtime.program.precompiles.secp256r1.ID))
+            break true;
+    } else false;
+
+    const move_verify_precompiles_to_svm = environment.feature_set.active(
+        .move_precompile_verification_to_svm,
+        environment.slot,
+    );
+
+    // TODO: RuntimeTransaction already contains this information which we should use in the future
+    // instead of allocating a new array here.
+    const instruction_datas = if (contains_precompile and move_verify_precompiles_to_svm) blk: {
+        const instruction_datas = try allocator.alloc([]const u8, transaction.instruction_infos.len);
+        for (transaction.instruction_infos, 0..) |instruction_info, index| {
+            instruction_datas[index] = instruction_info.instruction_data;
+        }
+        break :blk instruction_datas;
+    } else null;
+    defer if (instruction_datas) |ids| allocator.free(ids);
+
     var tc: TransactionContext = .{
         .allocator = allocator,
         .feature_set = environment.feature_set,
@@ -502,6 +525,7 @@ pub fn executeTransaction(
         .prev_blockhash = environment.last_blockhash,
         .prev_lamports_per_signature = environment.last_lamports_per_signature,
         .slot = environment.slot,
+        .instruction_datas = instruction_datas,
     };
 
     const maybe_instruction_error: ?struct { u8, InstructionErrorEnum } =
