@@ -7,7 +7,6 @@ const AtomicBool = std.atomic.Value(bool);
 const RwMux = sig.sync.RwMux;
 const SortedSetUnmanaged = sig.utils.collections.SortedSetUnmanaged;
 
-const Epoch = sig.core.Epoch;
 const EpochStakesMap = sig.core.EpochStakesMap;
 const EpochSchedule = sig.core.EpochSchedule;
 const Hash = sig.core.Hash;
