@@ -663,8 +663,8 @@ test "loadAndExecuteTransactions: no transactions" {
     var batch_account_cache: account_loader.BatchAccountCache = .{};
 
     const ancestors: Ancestors = .{};
-    const feature_set: FeatureSet = FeatureSet.ALL_DISABLED;
-    var status_cache = StatusCache.DEFAULT;
+    const feature_set: FeatureSet = .ALL_DISABLED;
+    const status_cache = StatusCache.empty;
     const sysvar_cache: SysvarCache = .{};
     const rent_collector: RentCollector = sig.core.rent_collector.defaultCollector(10);
     const blockhash_queue: BlockhashQueue = try BlockhashQueue.initRandom(
@@ -760,7 +760,7 @@ test "loadAndExecuteTransactions: invalid compute budget instruction" {
         &.{
             .ancestors = &Ancestors{},
             .feature_set = &FeatureSet.ALL_DISABLED,
-            .status_cache = &status_cache,
+            .status_cache = &StatusCache.empty,
             .sysvar_cache = &SysvarCache{},
             .rent_collector = &sig.core.rent_collector.defaultCollector(10),
             .vm_environment = &vm.Environment{},

@@ -7,6 +7,7 @@ const AtomicBool = std.atomic.Value(bool);
 const RwMux = sig.sync.RwMux;
 const SortedSetUnmanaged = sig.utils.collections.SortedSetUnmanaged;
 
+const Epoch = sig.core.Epoch;
 const EpochStakesMap = sig.core.EpochStakesMap;
 const EpochSchedule = sig.core.EpochSchedule;
 const Hash = sig.core.Hash;
@@ -86,6 +87,8 @@ pub fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
     const heaviest_slot_on_same_voted_fork =
         (try deps.fork_choice.heaviestSlotOnSameVotedFork(deps.replay_tower)) orelse null;
 
+    const heaviest_epoch: Epoch = deps.epoch_tracker.schedule.getEpoch(heaviest_slot);
+
     const now = sig.time.Instant.now();
     var last_vote_refresh_time: LastVoteRefreshTime = .{
         .last_refresh_time = now,
@@ -96,6 +99,7 @@ pub fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
         deps.allocator,
         heaviest_slot,
         if (heaviest_slot_on_same_voted_fork) |h| h.slot else null,
+        heaviest_epoch,
         deps.ancestors,
         deps.descendants,
         deps.progress_map,
