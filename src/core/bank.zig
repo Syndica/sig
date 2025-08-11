@@ -320,14 +320,17 @@ pub const EpochConstants = struct {
         };
     }
 
-    pub fn fromBankFields(bank_fields: *const BankFields) Allocator.Error!EpochConstants {
+    pub fn fromBankFields(
+        allocator: Allocator,
+        bank_fields: *const BankFields,
+    ) Allocator.Error!EpochConstants {
         return .{
             .hashes_per_tick = bank_fields.hashes_per_tick,
             .ticks_per_slot = bank_fields.ticks_per_slot,
             .ns_per_slot = bank_fields.ns_per_slot,
             .genesis_creation_time = bank_fields.genesis_creation_time,
             .slots_per_year = bank_fields.slots_per_year,
-            .stakes = bank_fields.epoch_stakes,
+            .stakes = try bank_fields.epoch_stakes.get(bank_fields.epoch).?.clone(allocator), // TODO: is this the right thing to do?
             .rent_collector = bank_fields.rent_collector,
         };
     }
