@@ -878,73 +878,76 @@ fn serializeOutput(
                 .executed => |executed| executed.fees,
             };
 
+            const acct_states = switch (txn) {
+                .executed => |executed| acct_states: {
+                    var acct_states: std.ArrayList(pb.AcctState) = .init(allocator);
+                    errdefer acct_states.deinit();
+
+                    for (executed.loaded_accounts.accounts.constSlice(), 0..) |acc, i| {
+                        if (!sanitized.accounts.get(i).is_writable) continue;
+                        // Only keep accounts that were passed in as account_keys or as ALUT accounts
+                        for (sanitized.accounts.items(.pubkey)) |key| {
+                            if (key.equals(&acc.pubkey)) break;
+                        } else continue;
+
+                        try acct_states.append(.{
+                            .address = try .copy(&acc.pubkey.data, allocator),
+                            .lamports = acc.account.lamports,
+                            .data = try .copy(acc.account.data, allocator),
+                            .executable = acc.account.executable,
+                            .rent_epoch = acc.account.rent_epoch,
+                            .owner = try .copy(&acc.account.owner.data, allocator),
+                            .seed_addr = null,
+                        });
+                    }
+
+                    break :acct_states acct_states;
+                },
+                .fees_only => |fees_only| acct_states: {
+                    var acct_states: std.ArrayList(pb.AcctState) = .init(allocator);
+                    errdefer acct_states.deinit();
+                    errdefer for (acct_states.items) |acct_state| acct_state.deinit();
+                    try acct_states.ensureTotalCapacityPrecise(fees_only.rollbacks.count());
+
+                    const fee_payer_address = sanitized.fee_payer;
+                    switch (fees_only.rollbacks) {
+                        .fee_payer_only => |fee_payer_account| {
+                            acct_states.appendAssumeCapacity(try sharedAccountToState(
+                                allocator,
+                                fee_payer_address,
+                                fee_payer_account.account,
+                            ));
+                        },
+                        .same_nonce_and_fee_payer => |nonce| {
+                            acct_states.appendAssumeCapacity(try sharedAccountToState(
+                                allocator,
+                                nonce.pubkey,
+                                nonce.account,
+                            ));
+                        },
+                        .separate_nonce_and_fee_payer => |pair| {
+                            const nonce, const fee_payer_account = pair;
+                            acct_states.appendAssumeCapacity(try sharedAccountToState(
+                                allocator,
+                                fee_payer_address,
+                                fee_payer_account.account,
+                            ));
+                            acct_states.appendAssumeCapacity(try sharedAccountToState(
+                                allocator,
+                                nonce.pubkey,
+                                nonce.account,
+                            ));
+                        },
+                    }
+                    break :acct_states acct_states;
+                },
+            };
+            errdefer acct_states.deinit();
+
             const resulting_state: pb.ResultingState = .{
                 .rent_debits = .init(allocator),
                 .transaction_rent = rent,
-                .acct_states = switch (txn) {
-                    .executed => |executed| acct_states: {
-                        var acct_states: std.ArrayList(pb.AcctState) = .init(allocator);
-                        errdefer acct_states.deinit();
-
-                        for (executed.loaded_accounts.accounts.constSlice(), 0..) |acc, i| {
-                            if (!sanitized.accounts.get(i).is_writable) continue;
-                            // Only keep accounts that were passed in as account_keys or as ALUT accounts
-                            for (sanitized.accounts.items(.pubkey)) |key| {
-                                if (key.equals(&acc.pubkey)) break;
-                            } else continue;
-
-                            try acct_states.append(.{
-                                .address = try .copy(&acc.pubkey.data, allocator),
-                                .lamports = acc.account.lamports,
-                                .data = try .copy(acc.account.data, allocator),
-                                .executable = acc.account.executable,
-                                .rent_epoch = acc.account.rent_epoch,
-                                .owner = try .copy(&acc.account.owner.data, allocator),
-                                .seed_addr = null,
-                            });
-                        }
-
-                        break :acct_states acct_states;
-                    },
-                    .fees_only => |fees_only| acct_states: {
-                        var acct_states: std.ArrayList(pb.AcctState) = .init(allocator);
-                        errdefer acct_states.deinit();
-                        errdefer for (acct_states.items) |acct_state| acct_state.deinit();
-                        try acct_states.ensureTotalCapacityPrecise(fees_only.rollbacks.count());
-
-                        const fee_payer_address = sanitized.fee_payer;
-                        switch (fees_only.rollbacks) {
-                            .fee_payer_only => |fee_payer_account| {
-                                acct_states.appendAssumeCapacity(try sharedAccountToState(
-                                    allocator,
-                                    fee_payer_address,
-                                    fee_payer_account.account,
-                                ));
-                            },
-                            .same_nonce_and_fee_payer => |nonce| {
-                                acct_states.appendAssumeCapacity(try sharedAccountToState(
-                                    allocator,
-                                    nonce.pubkey,
-                                    nonce.account,
-                                ));
-                            },
-                            .separate_nonce_and_fee_payer => |pair| {
-                                const nonce, const fee_payer_account = pair;
-                                acct_states.appendAssumeCapacity(try sharedAccountToState(
-                                    allocator,
-                                    fee_payer_address,
-                                    fee_payer_account.account,
-                                ));
-                                acct_states.appendAssumeCapacity(try sharedAccountToState(
-                                    allocator,
-                                    nonce.pubkey,
-                                    nonce.account,
-                                ));
-                            },
-                        }
-                        break :acct_states acct_states;
-                    },
-                },
+                .acct_states = acct_states,
             };
 
             return .{

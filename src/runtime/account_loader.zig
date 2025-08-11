@@ -304,11 +304,20 @@ pub const BatchAccountCache = struct {
                 compute_budget_limits.loaded_accounts_bytes,
             );
 
+            // TODO: add a comment here explaining why we can assume capacity here,
+            // because I can't figure out what previous check would allow us to make
+            // this assumption.
+
             loaded.rent_collected += loaded_account.rent_collected;
-            loaded.rent_debits.appendAssumeCapacity(.{
-                .rent_balance = loaded_account.account.lamports,
-                .rent_collected = loaded_account.rent_collected,
-            });
+
+            // ignore when rent_collected = 0
+            if (loaded_account.rent_collected != 0) {
+                loaded.rent_debits.appendAssumeCapacity(.{
+                    .rent_balance = loaded_account.account.lamports,
+                    .rent_collected = loaded_account.rent_collected,
+                });
+            }
+
             loaded.accounts.appendAssumeCapacity(.{
                 .account = loaded_account.account,
                 .pubkey = account_key,
@@ -713,13 +722,7 @@ test "loadTransactionAccounts sysvar instruction" {
     try std.testing.expect(cached_account.account.data.len > 0);
     try std.testing.expectEqual(0, tx_accounts.rent_collected);
     try std.testing.expectEqual(0, tx_accounts.loaded_accounts_data_size);
-    try std.testing.expectEqual(1, tx_accounts.rent_debits.len);
-    const rent_debit: RentDebit = tx_accounts.rent_debits.slice()[0];
-
-    // maybe interesting? Most program accounts have 1 lamports. But this one is even less "real"
-    // than the others
-    try std.testing.expectEqual(0, rent_debit.rent_balance);
-    try std.testing.expectEqual(0, rent_debit.rent_collected);
+    try std.testing.expectEqual(0, tx_accounts.rent_debits.len);
 }
 
 test "accumulated size" {

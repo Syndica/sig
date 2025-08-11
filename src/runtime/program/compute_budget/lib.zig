@@ -88,7 +88,9 @@ pub const ComputeBudgetLimits = struct {
     }
 };
 
-const ComputeBudgetInstruction = union(enum(u32)) {
+/// Analogous to [ComputeBudgetInstruction](https://github.com/anza-xyz/solana-sdk/blob/1c1d667f161666f12f5a43ebef8eda9470a8c6ee/compute-budget-interface/src/lib.rs#L18-L24).
+/// NOTE: this type uses [BORSH](https://borsh.io/) encoding.
+const ComputeBudgetInstruction = union(enum) {
     /// Deprecated variant, reserved value.
     unused,
 
@@ -107,7 +109,150 @@ const ComputeBudgetInstruction = union(enum(u32)) {
 
     /// Set a specific transaction-wide account data size limit, in bytes, is allowed to load.
     set_loaded_accounts_data_size_limit: u32,
+
+    pub const Tag = @typeInfo(ComputeBudgetInstruction).@"union".tag_type.?;
+
+    const borsh = BorshStaticTaggedUnionHelper(ComputeBudgetInstruction);
+
+    pub const BorshDecodeError = error{
+        /// The raw data did not match the expected representation.
+        DecodeFailed,
+        /// `src` was too short.
+        TruncatedSrc,
+    };
+
+    /// Decodes the encoded ComputeBudgetInstruction, and the number of bytes it occupied in `src`.
+    pub fn borshDecodeSlice(
+        src: []const u8,
+    ) BorshDecodeError!struct { ComputeBudgetInstruction, borsh.EncodedSizeInt } {
+        if (src.len == 0) return error.TruncatedSrc;
+        const tag = borsh.tagDecode(src[0]) orelse return error.DecodeFailed;
+        const pl_size: borsh.EncodedSizeInt = borsh.payloadEncodedSize(tag);
+        const pl_bytes = src[1..];
+        if (pl_bytes.len < pl_size) return error.TruncatedSrc;
+        const cbi = borsh.decodeFromTagAndPayload(tag, pl_bytes[0..pl_size]) orelse
+            return error.DecodeFailed;
+        return .{ cbi, @sizeOf(u8) + pl_size };
+    }
 };
+
+// TODO: see https://github.com/Syndica/sig/issues/849
+fn BorshStaticTaggedUnionHelper(comptime U: type) type {
+    const u_info = @typeInfo(U).@"union";
+    const Tag = u_info.tag_type.?;
+    if (@sizeOf(Tag) > @sizeOf(u8)) @compileError("Tag type is too big");
+
+    const pl_size_max = blk: {
+        var max: usize = 0;
+        for (@typeInfo(U).@"union".fields) |u_field| {
+            max = @max(max, @sizeOf(u_field.type));
+            switch (u_field.type) {
+                u8, u16, u32, u64, u128 => {},
+                i8, i16, i32, i64, i128 => {},
+                f32, f64 => {},
+                void => {},
+                bool => {},
+                else => |T| @compileError("Unsupported: " ++ @typeName(T)),
+            }
+        }
+        break :blk max;
+    };
+
+    return struct {
+        pub const ENCODED_SIZE_MAX = @sizeOf(u8) + pl_size_max;
+        pub const EncodedSizeInt = std.math.IntFittingRange(0, ENCODED_SIZE_MAX);
+
+        pub fn encode(
+            tagged: U,
+            buffer: *[ENCODED_SIZE_MAX]u8,
+        ) EncodedSizeInt {
+            var fbs = std.io.fixedBufferStream(buffer);
+            const w = fbs.writer();
+
+            w.writeByte(@intFromEnum(tagged)) catch unreachable;
+            switch (tagged) {
+                inline else => |payload| switch (@TypeOf(payload)) {
+                    void => {},
+                    bool => w.writeByte(@intFromBool(payload)) catch unreachable,
+
+                    f32, f64 => |T| {
+                        const Int = std.meta.Int(.unsigned, @bitSizeOf(T));
+                        w.writeInt(Int, @bitCast(payload), .little) catch unreachable;
+                    },
+
+                    // zig fmt: off
+                    u8, u16, u32, u64, u128,
+                    i8, i16, i32, i64, i128,
+                    => |T| w.writeInt(T, payload, .little) catch unreachable,
+                    // zig fmt: on
+
+                    else => unreachable,
+                },
+            }
+
+            return @intCast(fbs.pos);
+        }
+
+        /// Presumes byte is the first byte of the encoded buffer.
+        pub fn tagDecode(tag_byte: u8) ?Tag {
+            return std.meta.intToEnum(Tag, tag_byte) catch |err| switch (err) {
+                error.InvalidEnumTag => null,
+            };
+        }
+
+        /// Presumes `tag == tagDecode(byte)` where byte is the first byte of the encoded buffer.
+        pub fn payloadEncodedSize(tag: Tag) EncodedSizeInt {
+            return switch (tag) {
+                inline else => |itag| @sizeOf(@FieldType(U, @tagName(itag))),
+            };
+        }
+
+        pub fn fullEncodedSize(tag: Tag) EncodedSizeInt {
+            return 1 + payloadEncodedSize(tag);
+        }
+
+        /// Presumes `tag == tagDecode(byte)` where byte is the first byte of the encoded buffer,
+        /// and `payload_bytes` is a slice of bytes subsequent to that first byte.
+        /// Returns null if the payload fails to decode.
+        /// Asserts `payload_bytes.len == payloadEncodedSize(tag)`.
+        pub fn decodeFromTagAndPayload(
+            tag: Tag,
+            payload_bytes: []const u8,
+        ) ?ComputeBudgetInstruction {
+            std.debug.assert(payload_bytes.len == payloadEncodedSize(tag));
+            switch (tag) {
+                inline else => |itag| {
+                    const Payload = @FieldType(U, @tagName(itag));
+                    comptime std.debug.assert(@sizeOf(Payload) == payloadEncodedSize(itag));
+                    const payload: Payload = switch (Payload) {
+                        void => {},
+                        bool => switch (payload_bytes[0]) {
+                            0 => false,
+                            1 => true,
+                            else => return null,
+                        },
+                        f32, f64 => |T| blk: {
+                            const Int = std.meta.Int(.unsigned, @bitSizeOf(T));
+                            const int = std.mem.readInt(Int, payload_bytes[0..@sizeOf(T)], .little);
+                            break :blk @bitCast(int);
+                        },
+
+                        // zig fmt: off
+                        u8, u16, u32, u64, u128,
+                        i8, i16, i32, i64, i128,
+                        => |T| std.mem.readInt(T, payload_bytes[0..@sizeOf(T)], .little),
+                        // zig fmt: on
+
+                        else => |T| @compileError(
+                            "Unhandled `" ++ @tagName(itag) ++ ": " ++ @typeName(T) ++ "`",
+                        ),
+                    };
+                    return @unionInit(ComputeBudgetInstruction, @tagName(itag), payload);
+                },
+            }
+        }
+    };
+}
 
 pub fn execute(
     instructions: []const InstructionInfo,
@@ -137,9 +282,8 @@ pub fn execute(
                 .err = .{ .DuplicateInstruction = @intCast(index) },
             };
 
-            const instruction = instr.deserializeInstruction(
-                std.testing.failing_allocator,
-                ComputeBudgetInstruction,
+            const instruction, _ = ComputeBudgetInstruction.borshDecodeSlice(
+                instr.instructionDataToDeserialize(),
             ) catch return invalid_instruction_data_error;
 
             switch (instruction) {
@@ -382,13 +526,19 @@ fn computeBudgetInstructionInfo(
     instruction: ComputeBudgetInstruction,
 ) !InstructionInfo {
     if (!builtin.is_test) @compileError("computeBudgetInstructionInfo is for testing only");
-    const instruction_data = try sig.bincode.writeAlloc(
-        allocator,
-        instruction,
-        .{},
-    );
 
-    return InstructionInfo{
+    const instruction_data: []const u8 = blk: {
+        const cbi_borsh = ComputeBudgetInstruction.borsh;
+
+        var buffer: [cbi_borsh.ENCODED_SIZE_MAX]u8 = @splat(undefined);
+        const encoded_len = cbi_borsh.encode(instruction, &buffer);
+        const encoded_bytes = buffer[0..encoded_len];
+
+        break :blk try allocator.dupe(u8, encoded_bytes);
+    };
+    errdefer allocator.free(instruction_data);
+
+    return .{
         .program_meta = .{ .pubkey = ID, .index_in_transaction = 0 },
         .account_metas = .{},
         .instruction_data = instruction_data,
@@ -400,8 +550,8 @@ fn emptyInstructionInfo(
     random: std.Random,
 ) InstructionInfo {
     if (!builtin.is_test) @compileError("emptyInstructionInfo is for testing only");
-    return InstructionInfo{
-        .program_meta = .{ .pubkey = Pubkey.initRandom(random), .index_in_transaction = 0 },
+    return .{
+        .program_meta = .{ .pubkey = .initRandom(random), .index_in_transaction = 0 },
         .account_metas = .{},
         .instruction_data = &.{},
         .initial_account_lamports = 0,
