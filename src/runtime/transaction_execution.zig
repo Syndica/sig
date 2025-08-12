@@ -15,6 +15,7 @@ const InstructionErrorEnum = sig.core.instruction.InstructionErrorEnum;
 const Pubkey = sig.core.Pubkey;
 const RentCollector = sig.core.rent_collector.RentCollector;
 const StatusCache = sig.core.StatusCache;
+const Slot = sig.core.Slot;
 
 const AccountSharedData = sig.runtime.AccountSharedData;
 const BatchAccountCache = sig.runtime.account_loader.BatchAccountCache;
@@ -480,27 +481,12 @@ pub fn executeTransaction(
         };
     }
 
-    const contains_precompile = for (transaction.instruction_infos) |ixn_info| {
-        if (ixn_info.program_meta.pubkey.equals(&sig.runtime.program.precompiles.ed25519.ID) or
-            ixn_info.program_meta.pubkey.equals(&sig.runtime.program.precompiles.secp256k1.ID) or
-            ixn_info.program_meta.pubkey.equals(&sig.runtime.program.precompiles.secp256r1.ID))
-            break true;
-    } else false;
-
-    const move_verify_precompiles_to_svm = environment.feature_set.active(
-        .move_precompile_verification_to_svm,
+    const instruction_datas = try getInstructionDatasSliceForPrecompiles(
+        allocator,
+        transaction.instruction_infos,
+        environment.feature_set,
         environment.slot,
     );
-
-    // TODO: RuntimeTransaction already contains this information which we should use in the future
-    // instead of allocating a new array here.
-    const instruction_datas = if (contains_precompile and move_verify_precompiles_to_svm) blk: {
-        const instruction_datas = try allocator.alloc([]const u8, transaction.instruction_infos.len);
-        for (transaction.instruction_infos, 0..) |instruction_info, index| {
-            instruction_datas[index] = instruction_info.instruction_data;
-        }
-        break :blk instruction_datas;
-    } else null;
     defer if (instruction_datas) |ids| allocator.free(ids);
 
     var tc: TransactionContext = .{
@@ -560,6 +546,113 @@ pub fn executeTransaction(
         .compute_meter = tc.compute_meter,
         .accounts_data_len_delta = tc.accounts_resize_delta,
     };
+}
+
+// TODO: RuntimeTransaction already contains this information which we should use in the future
+// instead of allocating a new array here.
+fn getInstructionDatasSliceForPrecompiles(
+    allocator: std.mem.Allocator,
+    instruction_infos: []const InstructionInfo,
+    feature_set: *const FeatureSet,
+    slot: Slot,
+) !?[]const []const u8 {
+    const contains_precompile = for (instruction_infos) |ixn_info| {
+        if (ixn_info.program_meta.pubkey.equals(&sig.runtime.program.precompiles.ed25519.ID) or
+            ixn_info.program_meta.pubkey.equals(&sig.runtime.program.precompiles.secp256k1.ID) or
+            ixn_info.program_meta.pubkey.equals(&sig.runtime.program.precompiles.secp256r1.ID))
+            break true;
+    } else false;
+
+    const move_verify_precompiles_to_svm = feature_set.active(
+        .move_precompile_verification_to_svm,
+        slot,
+    );
+
+    const instruction_datas = if (contains_precompile and move_verify_precompiles_to_svm) blk: {
+        const instruction_datas = try allocator.alloc([]const u8, instruction_infos.len);
+        for (instruction_infos, 0..) |instruction_info, index| {
+            instruction_datas[index] = instruction_info.instruction_data;
+        }
+        break :blk instruction_datas;
+    } else null;
+
+    return instruction_datas;
+}
+
+test getInstructionDatasSliceForPrecompiles {
+    const allocator = std.testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(0);
+    const random = prng.random();
+
+    var feature_set = sig.core.FeatureSet.ALL_DISABLED;
+    feature_set.setSlot(.move_precompile_verification_to_svm, 0);
+
+    {
+        const instruction_infos = [_]InstructionInfo{.{
+            .program_meta = .{
+                .pubkey = Pubkey.initRandom(random),
+                .index_in_transaction = 0,
+            },
+            .account_metas = .{},
+            .instruction_data = "instruction_data_1",
+            .initial_account_lamports = 0,
+        }};
+
+        const maybe_instruction_datas = try getInstructionDatasSliceForPrecompiles(
+            allocator,
+            &instruction_infos,
+            &feature_set,
+            0,
+        );
+        defer if (maybe_instruction_datas) |data| allocator.free(data);
+
+        try std.testing.expectEqual(null, maybe_instruction_datas);
+    }
+
+    {
+        const instruction_infos = [_]InstructionInfo{
+            .{
+                .program_meta = .{
+                    .pubkey = Pubkey.initRandom(random),
+                    .index_in_transaction = 0,
+                },
+                .account_metas = .{},
+                .instruction_data = "one",
+                .initial_account_lamports = 0,
+            },
+            .{
+                .program_meta = .{
+                    .pubkey = Pubkey.initRandom(random),
+                    .index_in_transaction = 0,
+                },
+                .account_metas = .{},
+                .instruction_data = "two",
+                .initial_account_lamports = 0,
+            },
+            .{
+                .program_meta = .{
+                    .pubkey = sig.runtime.program.precompiles.ed25519.ID,
+                    .index_in_transaction = 0,
+                },
+                .account_metas = .{},
+                .instruction_data = "three",
+                .initial_account_lamports = 0,
+            },
+        };
+
+        const maybe_instruction_datas = try getInstructionDatasSliceForPrecompiles(
+            allocator,
+            &instruction_infos,
+            &feature_set,
+            0,
+        );
+        defer if (maybe_instruction_datas) |datas| allocator.free(datas);
+
+        try std.testing.expectEqualSlices(u8, "one", maybe_instruction_datas.?[0]);
+        try std.testing.expectEqualSlices(u8, "two", maybe_instruction_datas.?[1]);
+        try std.testing.expectEqualSlices(u8, "three", maybe_instruction_datas.?[2]);
+    }
 }
 
 test "loadAndExecuteTransactions: no transactions" {
