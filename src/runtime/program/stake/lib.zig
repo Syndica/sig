@@ -8,7 +8,6 @@ const program = @import("lib.zig");
 const runtime = sig.runtime;
 const sysvar = runtime.sysvar;
 
-const features = sig.core.features;
 const Pubkey = sig.core.Pubkey;
 const Epoch = sig.core.Epoch;
 const Slot = sig.core.Slot;
@@ -2423,6 +2422,229 @@ test "stake.deactivate" {
     );
 }
 
+test "stake.set_lockup" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+
+    const sysvar_cache = sig.runtime.testing.ExecuteContextsParams.SysvarCacheParams{
+        .clock = runtime.sysvar.Clock.DEFAULT,
+        .rent = runtime.sysvar.Rent.DEFAULT,
+    };
+
+    const withdraw_auth = Pubkey.initRandom(prng.random());
+    const stake_account = Pubkey.initRandom(prng.random());
+
+    const new_lockup: Lockup = .{
+        .custodian = Pubkey.initRandom(prng.random()),
+        .epoch = sysvar_cache.clock.?.epoch + 42,
+        .unix_timestamp = sysvar_cache.clock.?.epoch_start_timestamp + 1000,
+    };
+
+    var stake_buf: [StakeStateV2.SIZE]u8 = @splat(0);
+    _ = try sig.bincode.writeToSlice(&stake_buf, StakeStateV2{
+        .initialized = .{
+            .authorized = .{
+                .staker = Pubkey.ZEROES,
+                .withdrawer = withdraw_auth,
+            },
+            .lockup = .DEFAULT,
+            .rent_exempt_reserve = sysvar_cache.rent.?.minimumBalance(StakeStateV2.SIZE),
+        },
+    }, .{});
+
+    var stake_buf_after: [StakeStateV2.SIZE]u8 = @splat(0);
+    _ = try sig.bincode.writeToSlice(&stake_buf_after, StakeStateV2{
+        .initialized = .{
+            .authorized = .{
+                .staker = Pubkey.ZEROES,
+                .withdrawer = withdraw_auth,
+            },
+            .lockup = new_lockup,
+            .rent_exempt_reserve = sysvar_cache.rent.?.minimumBalance(StakeStateV2.SIZE),
+        },
+    }, .{});
+
+    try runtime.program.testing.expectProgramExecuteResult(
+        allocator,
+        ID,
+        Instruction{ .set_lockup = .{
+            .custodian = new_lockup.custodian,
+            .epoch = new_lockup.epoch,
+            .unix_timestamp = new_lockup.unix_timestamp,
+        } },
+        &.{
+            .{ .index_in_transaction = 0, .is_writable = true },
+            .{ .index_in_transaction = 1, .is_signer = true }, // lockup/withdraw auth
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = stake_account,
+                    .owner = ID,
+                    .data = &stake_buf,
+                    .lamports = 1_000_000_000,
+                },
+                .{ .pubkey = withdraw_auth },
+                .{ .pubkey = ID, .owner = runtime.ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = 10_000,
+            .sysvar_cache = sysvar_cache,
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = stake_account,
+                    .owner = ID,
+                    .data = &stake_buf_after,
+                    .lamports = 1_000_000_000,
+                },
+                .{ .pubkey = withdraw_auth },
+                .{ .pubkey = ID, .owner = runtime.ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = 10_000 - COMPUTE_UNITS,
+            .sysvar_cache = sysvar_cache,
+        },
+        .{},
+    );
+}
+
+test "stake.merge" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+
+    var sysvar_cache = sig.runtime.testing.ExecuteContextsParams.SysvarCacheParams{
+        .clock = runtime.sysvar.Clock.DEFAULT,
+        .slot_hashes = try runtime.sysvar.SlotHashes.initWithEntries(
+            allocator,
+            &.{.{ .slot = std.math.maxInt(Slot), .hash = sig.core.Hash.ZEROES }},
+        ),
+        .stake_history = try sysvar.StakeHistory.init(allocator),
+        .rent = runtime.sysvar.Rent.DEFAULT,
+        .epoch_rewards = .DEFAULT,
+        .epoch_schedule = .initRandom(prng.random()),
+    };
+
+    // Hacky duplicate to avoid slot_hashes & stake_history double free from storing same ref.
+    var expected_sysvar_cache = sysvar_cache;
+    expected_sysvar_cache.stake_history = try sysvar.StakeHistory.init(allocator);
+    expected_sysvar_cache.slot_hashes = try runtime.sysvar.SlotHashes.initWithEntries(
+        allocator,
+        &.{.{ .slot = std.math.maxInt(Slot), .hash = sig.core.Hash.ZEROES }},
+    );
+
+    const stake_auth = Pubkey.initRandom(prng.random());
+    const stake_account = Pubkey.initRandom(prng.random());
+    const source_account = Pubkey.initRandom(prng.random());
+
+    const source_lamports = 10_000;
+    const stake_lamports = 1_000_000_000;
+
+    const stake_state = StakeStateV2{
+        .stake = .{
+            .flags = .EMPTY,
+            .meta = .{
+                .authorized = .{
+                    .staker = stake_auth,
+                    .withdrawer = stake_auth,
+                },
+                .lockup = .DEFAULT,
+                .rent_exempt_reserve = sysvar_cache.rent.?.minimumBalance(StakeStateV2.SIZE),
+            },
+            .stake = .{
+                .credits_observed = 0,
+                .delegation = .{
+                    .activation_epoch = 0,
+                    .deactivation_epoch = std.math.maxInt(Epoch),
+                    .stake = 10_000,
+                    .voter_pubkey = stake_auth,
+                },
+            },
+        },
+    };
+
+    var stake_buf: [StakeStateV2.SIZE]u8 = @splat(0);
+    _ = try sig.bincode.writeToSlice(&stake_buf, stake_state, .{});
+
+    var new_stake_state = stake_state;
+    new_stake_state.stake.stake.delegation.stake = 20_000;
+
+    var stake_buf_after: [StakeStateV2.SIZE]u8 = stake_buf;
+    _ = try sig.bincode.writeToSlice(&stake_buf_after, new_stake_state, .{});
+
+    var source_buf: [StakeStateV2.SIZE]u8 = @splat(0);
+    _ = try sig.bincode.writeToSlice(&source_buf, StakeStateV2{
+        .initialized = .{
+            .authorized = .{
+                .staker = stake_auth,
+                .withdrawer = stake_auth,
+            },
+            .lockup = .DEFAULT,
+            .rent_exempt_reserve = sysvar_cache.rent.?.minimumBalance(StakeStateV2.SIZE),
+        },
+    }, .{});
+
+    var source_buf_after: [StakeStateV2.SIZE]u8 = source_buf; // must be copy
+    _ = try sig.bincode.writeToSlice(&source_buf_after, StakeStateV2{ .uninitialized = {} }, .{});
+
+    try runtime.program.testing.expectProgramExecuteResult(
+        allocator,
+        ID,
+        Instruction{ .merge = {} },
+        &.{
+            .{ .index_in_transaction = 0, .is_writable = true },
+            .{ .index_in_transaction = 1, .is_writable = true },
+            .{ .index_in_transaction = 2 },
+            .{ .index_in_transaction = 3 },
+            .{ .index_in_transaction = 4, .is_signer = true },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = stake_account,
+                    .owner = ID,
+                    .data = &stake_buf,
+                    .lamports = stake_lamports,
+                },
+                .{
+                    .pubkey = source_account,
+                    .owner = ID,
+                    .data = &source_buf,
+                    .lamports = source_lamports,
+                },
+                .{ .pubkey = sysvar.Clock.ID },
+                .{ .pubkey = sysvar.StakeHistory.ID },
+                .{ .pubkey = stake_auth },
+                .{ .pubkey = ID, .owner = runtime.ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = 10_000,
+            .sysvar_cache = sysvar_cache,
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = stake_account,
+                    .owner = ID,
+                    .data = &stake_buf_after,
+                    .lamports = stake_lamports + source_lamports,
+                },
+                .{
+                    .pubkey = source_account,
+                    .owner = ID,
+                    .data = &source_buf_after,
+                    .lamports = 0,
+                },
+                .{ .pubkey = sysvar.Clock.ID },
+                .{ .pubkey = sysvar.StakeHistory.ID },
+                .{ .pubkey = stake_auth },
+                .{ .pubkey = ID, .owner = runtime.ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = 10_000 - COMPUTE_UNITS,
+            .sysvar_cache = expected_sysvar_cache,
+        },
+        .{},
+    );
+}
+
 test "stake.initialize_checked" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
@@ -2487,6 +2709,94 @@ test "stake.initialize_checked" {
                 .{ .pubkey = sysvar.Rent.ID },
                 .{ .pubkey = stake_auth },
                 .{ .pubkey = withdraw_auth },
+                .{ .pubkey = ID, .owner = runtime.ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = 10_000 - COMPUTE_UNITS,
+            .sysvar_cache = sysvar_cache,
+        },
+        .{},
+    );
+}
+
+test "stake.set_lockup_checked" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+
+    const sysvar_cache = sig.runtime.testing.ExecuteContextsParams.SysvarCacheParams{
+        .clock = runtime.sysvar.Clock.DEFAULT,
+        .rent = runtime.sysvar.Rent.DEFAULT,
+    };
+
+    const withdraw_auth = Pubkey.initRandom(prng.random());
+    const stake_account = Pubkey.initRandom(prng.random());
+
+    const new_lockup: Lockup = .{
+        .custodian = Pubkey.initRandom(prng.random()),
+        .epoch = sysvar_cache.clock.?.epoch + 42,
+        .unix_timestamp = sysvar_cache.clock.?.epoch_start_timestamp + 1000,
+    };
+
+    var stake_buf: [StakeStateV2.SIZE]u8 = @splat(0);
+    _ = try sig.bincode.writeToSlice(&stake_buf, StakeStateV2{
+        .initialized = .{
+            .authorized = .{
+                .staker = Pubkey.ZEROES,
+                .withdrawer = withdraw_auth,
+            },
+            .lockup = .DEFAULT,
+            .rent_exempt_reserve = sysvar_cache.rent.?.minimumBalance(StakeStateV2.SIZE),
+        },
+    }, .{});
+
+    var stake_buf_after: [StakeStateV2.SIZE]u8 = stake_buf;
+    _ = try sig.bincode.writeToSlice(&stake_buf_after, StakeStateV2{
+        .initialized = .{
+            .authorized = .{
+                .staker = Pubkey.ZEROES,
+                .withdrawer = withdraw_auth,
+            },
+            .lockup = new_lockup,
+            .rent_exempt_reserve = sysvar_cache.rent.?.minimumBalance(StakeStateV2.SIZE),
+        },
+    }, .{});
+
+    try runtime.program.testing.expectProgramExecuteResult(
+        allocator,
+        ID,
+        Instruction{ .set_lockup_checked = .{
+            .epoch = new_lockup.epoch,
+            .unix_timestamp = new_lockup.unix_timestamp,
+        } },
+        &.{
+            .{ .index_in_transaction = 0, .is_writable = true },
+            .{ .index_in_transaction = 1, .is_signer = true },
+            .{ .index_in_transaction = 2, .is_signer = true },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = stake_account,
+                    .owner = ID,
+                    .data = &stake_buf,
+                    .lamports = 1_000_000_000,
+                },
+                .{ .pubkey = withdraw_auth },
+                .{ .pubkey = new_lockup.custodian },
+                .{ .pubkey = ID, .owner = runtime.ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = 10_000,
+            .sysvar_cache = sysvar_cache,
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = stake_account,
+                    .owner = ID,
+                    .data = &stake_buf_after,
+                    .lamports = 1_000_000_000,
+                },
+                .{ .pubkey = withdraw_auth },
+                .{ .pubkey = new_lockup.custodian },
                 .{ .pubkey = ID, .owner = runtime.ids.NATIVE_LOADER_ID },
             },
             .compute_meter = 10_000 - COMPUTE_UNITS,
