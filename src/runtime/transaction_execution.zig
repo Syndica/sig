@@ -225,17 +225,21 @@ pub const ProcessedTransaction = union(enum(u8)) {
     }
 
     pub const Accounts = union(enum) {
-        success: []const CachedAccount,
-        rollback: []const CopiedAccount,
+        /// *all* of the accounts that were loaded for this transaction, in the
+        /// same order that they were present in the transaction.
+        all_loaded: []const CachedAccount,
+        /// *only* the accounts that definitely need to be written back to
+        /// accountsdb, in no particular order.
+        written: []const CopiedAccount,
     };
 
     pub fn accounts(self: *const ProcessedTransaction) Accounts {
         return switch (self.*) {
-            .fees_only => |f| .{ .rollback = f.rollbacks.accounts() },
+            .fees_only => |f| .{ .written = f.rollbacks.accounts() },
             .executed => |e| if (e.executed_transaction.err != null) .{
-                .rollback = e.rollbacks.accounts(),
+                .written = e.rollbacks.accounts(),
             } else .{
-                .success = e.loaded_accounts.accounts.slice(),
+                .all_loaded = e.loaded_accounts.accounts.slice(),
             },
         };
     }

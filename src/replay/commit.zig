@@ -45,18 +45,14 @@ pub const Committer = struct {
 
             // collect accounts to store
             switch (tx_result.accounts()) {
-                inline else => |accounts| for (accounts) |account| {
-                    const gop = try accounts_to_store.getOrPut(allocator, account.pubkey);
-                    if (gop.found_existing) {
-                        self.logger.err()
-                            .logf("multiple writes in a batch for address: {}\n", .{account.pubkey});
-                        return error.MultipleWritesInBatch;
-                        // this error most likely indicates a bug in the SVM or
-                        // the account locking code, since the account locks
-                        // should have already been checked before reaching this
-                        // point.
-                    }
-                    gop.value_ptr.* = account.getAccount().*;
+                .all_loaded => |accounts| {
+                    for (accounts, transaction.accounts.items(.is_writable)) |account, is_writable|
+                        if (is_writable)
+                            try putAccount(allocator, self.logger, &accounts_to_store, account);
+                },
+                .written => |accounts| {
+                    for (accounts) |account|
+                        try putAccount(allocator, self.logger, &accounts_to_store, account);
                 },
             }
 
@@ -89,3 +85,21 @@ pub const Committer = struct {
         }
     }
 };
+
+fn putAccount(
+    allocator: Allocator,
+    logger: Logger,
+    accounts_to_store: *std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData),
+    /// CachedAccount or CopiedAccount
+    account: anytype,
+) error{ OutOfMemory, MultipleWritesInBatch }!void {
+    const gop = try accounts_to_store.getOrPut(allocator, account.pubkey);
+    if (gop.found_existing) {
+        logger.err().logf("multiple writes in a batch for address: {}\n", .{account.pubkey});
+        // this error probably indicates a bug in the SVM or the account locking
+        // code, since the account locks should have already been checked before
+        // reaching this point.
+        return error.MultipleWritesInBatch;
+    }
+    gop.value_ptr.* = account.getAccount().*;
+}
