@@ -4263,7 +4263,7 @@ pub const TestFixture = struct {
                 try self.progress.map.ensureUnusedCapacity(allocator, 1);
                 const prev_root = self.progress.map.fetchPutAssumeCapacity(tree[0].slot, fp: {
                     var root_fp = try ForkProgress.zeroes(allocator);
-                    // root_fp.fork_stats.computed = true;
+                    root_fp.fork_stats.computed = false;
                     root_fp.fork_stats.my_latest_landed_vote = null;
                     break :fp root_fp;
                 });
