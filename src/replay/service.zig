@@ -87,10 +87,9 @@ const ReplayState = struct {
     blockstore_db: BlockstoreDB,
     execution: ReplayExecutionState,
 
-    zone: tracy.Zone,
-
     fn init(deps: ReplayDependencies) !ReplayState {
-        const zone = tracy.Zone.init(@src(), .{ .name = "ReplayState (init/deinit)" });
+        const zone = tracy.Zone.init(@src(), .{ .name = "ReplayState init" });
+        defer zone.deinit();
 
         const thread_pool = try deps.allocator.create(ThreadPool);
         errdefer deps.allocator.destroy(thread_pool);
@@ -152,12 +151,10 @@ const ReplayState = struct {
                 epoch_tracker,
                 progress_map,
             ),
-            .zone = zone,
         };
     }
 
     fn deinit(self: *ReplayState) void {
-        self.zone.deinit();
         self.thread_pool.shutdown();
         self.thread_pool.deinit();
         self.allocator.destroy(self.thread_pool);

@@ -108,8 +108,6 @@ pub const TransactionScheduler = struct {
     failure: ?replay.confirm_slot.ConfirmSlotError,
     svm_params: SvmGateway.Params,
 
-    zone: tracy.Zone,
-
     const BatchMessage = struct {
         batch_index: usize,
         result: BatchResult,
@@ -135,8 +133,6 @@ pub const TransactionScheduler = struct {
         var channel = try Channel(BatchMessage).init(allocator);
         errdefer channel.deinit();
 
-        const zone = tracy.Zone.init(@src(), .{ .name = "TransactionScheduler init/deinit" });
-
         return .{
             .allocator = allocator,
             .logger = logger,
@@ -150,13 +146,10 @@ pub const TransactionScheduler = struct {
             .exit = exit,
             .failure = null,
             .svm_params = svm_params,
-            .zone = zone,
         };
     }
 
     pub fn deinit(self: TransactionScheduler) void {
-        self.zone.deinit();
-
         var batches = self.batches;
         for (batches.items) |batch| batch.deinit(self.allocator);
         batches.deinit(self.allocator);
