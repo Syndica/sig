@@ -53,8 +53,8 @@ pub const Entry = entry.Entry;
 pub const EpochConstants = bank.EpochConstants;
 pub const EpochContext = epoch_context.EpochContext;
 pub const EpochSchedule = epoch_schedule.EpochSchedule;
-pub const FeatureSet = features.FeatureSet;
 pub const FeeRateGovernor = genesis_config.FeeRateGovernor;
+pub const FeatureSet = features.Set;
 pub const GenesisConfig = genesis_config.GenesisConfig;
 pub const HardFork = HardForks.HardFork;
 pub const Inflation = genesis_config.Inflation;
@@ -78,5 +78,3 @@ pub const Slot = time.Slot;
 pub const UnixTimestamp = time.UnixTimestamp;
 
 pub const Cluster = enum { mainnet, testnet, devnet, localnet };
-
-pub const FEATURES = features.FEATURES;

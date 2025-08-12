@@ -46,9 +46,12 @@ pub const StatusCache = struct {
     };
 
     pub fn deinit(self: *StatusCache, allocator: std.mem.Allocator) void {
-        var roots = self.roots.tryWrite() orelse unreachable;
-        var cache = self.cache.tryWrite() orelse unreachable;
-        var slot_deltas = self.slot_deltas.tryWrite() orelse unreachable;
+        var roots = self.roots.tryWrite() orelse
+            @panic("attempted to deinit StatusCache.roots while still in use");
+        var cache = self.cache.tryWrite() orelse
+            @panic("attempted to deinit StatusCache.cache while still in use");
+        var slot_deltas = self.slot_deltas.tryWrite() orelse
+            @panic("attempted to deinit StatusCache.slot_deltas while still in use");
         defer roots.unlock();
         defer cache.unlock();
         defer slot_deltas.unlock();

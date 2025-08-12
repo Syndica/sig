@@ -11,7 +11,6 @@ const Ancestors = sig.core.Ancestors;
 const BlockhashQueue = sig.core.BlockhashQueue;
 const EpochStakes = sig.core.EpochStakes;
 const Hash = sig.core.Hash;
-const InstructionError = sig.core.instruction.InstructionError;
 const InstructionErrorEnum = sig.core.instruction.InstructionErrorEnum;
 const Pubkey = sig.core.Pubkey;
 const RentCollector = sig.core.rent_collector.RentCollector;
@@ -123,12 +122,10 @@ pub const TransactionRollbacks = union(enum(u8)) {
     }
 
     pub fn accounts(self: *const TransactionRollbacks) []const CopiedAccount {
-        switch (self.*) {
-            .fee_payer_only, .same_nonce_and_fee_payer => |*item| {
-                return @as([*]const CopiedAccount, @ptrCast(item))[0..1];
-            },
-            .separate_nonce_and_fee_payer => |*items| return items,
-        }
+        return switch (self.*) {
+            .fee_payer_only, .same_nonce_and_fee_payer => |*item| item[0..1],
+            .separate_nonce_and_fee_payer => |*items| items,
+        };
     }
 
     pub fn deinit(self: TransactionRollbacks, allocator: std.mem.Allocator) void {
@@ -190,7 +187,7 @@ pub const CopiedAccount = struct {
 };
 
 pub const ExecutedTransaction = struct {
-    err: ?InstructionErrorEnum,
+    instr_err: ?struct { u8, InstructionErrorEnum },
     log_collector: ?LogCollector,
     instruction_trace: ?InstructionTrace,
     return_data: ?TransactionReturnData,
@@ -222,22 +219,28 @@ pub const ProcessedTransaction = union(enum(u8)) {
                 executed.executed_transaction.deinit(allocator);
                 executed.rollbacks.deinit(allocator);
             },
-            else => {},
+            .fees_only => |*fees_only| {
+                fees_only.rollbacks.deinit(allocator);
+            },
         }
     }
 
     pub const Accounts = union(enum) {
-        success: []const CachedAccount,
-        rollback: []const CopiedAccount,
+        /// *all* of the accounts that were loaded for this transaction, in the
+        /// same order that they were present in the transaction.
+        all_loaded: []const CachedAccount,
+        /// *only* the accounts that definitely need to be written back to
+        /// accountsdb, in no particular order.
+        written: []const CopiedAccount,
     };
 
     pub fn accounts(self: *const ProcessedTransaction) Accounts {
         return switch (self.*) {
-            .fees_only => |f| .{ .rollback = f.rollbacks.accounts() },
-            .executed => |e| if (e.executed_transaction.err != null) .{
-                .rollback = e.rollbacks.accounts(),
+            .fees_only => |f| .{ .written = f.rollbacks.accounts() },
+            .executed => |e| if (e.executed_transaction.instr_err != null) .{
+                .written = e.rollbacks.accounts(),
             } else .{
-                .success = e.loaded_accounts.accounts.slice(),
+                .all_loaded = e.loaded_accounts.accounts.slice(),
             },
         };
     }
@@ -312,6 +315,9 @@ pub fn loadAndExecuteTransaction(
     config: *const TransactionExecutionConfig,
     program_map: *const ProgramMap,
 ) error{OutOfMemory}!TransactionResult(ProcessedTransaction) {
+    if (hasDuplicates(transaction.accounts.items(.pubkey))) {
+        return .{ .err = .AccountLoadedTwice };
+    }
     const check_age_result = try sig.runtime.check_transactions.checkAge(
         allocator,
         transaction,
@@ -344,6 +350,7 @@ pub fn loadAndExecuteTransaction(
     const compute_budget_result = compute_budget_program.execute(
         transaction.instructions,
         environment.feature_set,
+        environment.slot,
     );
     const compute_budget_limits = switch (compute_budget_result) {
         .ok => |limits| limits,
@@ -359,6 +366,7 @@ pub fn loadAndExecuteTransaction(
         maybe_nonce_info,
         environment.rent_collector,
         environment.feature_set,
+        environment.slot,
         environment.lamports_per_signature,
     );
     const fees, const rollbacks = switch (check_fee_payer_result) {
@@ -372,6 +380,7 @@ pub fn loadAndExecuteTransaction(
         transaction,
         environment.rent_collector,
         environment.feature_set,
+        environment.slot,
         &compute_budget_limits,
     );
     const loaded_accounts = switch (loaded_accounts_result) {
@@ -403,6 +412,41 @@ pub fn loadAndExecuteTransaction(
             .executed_transaction = executed_transaction,
         },
     } };
+}
+
+/// Check for duplicate account keys.
+///
+/// NOTE: in agave, this check is done while creating/loading the account batch:
+/// * [prepare_sanitized_batch](https://github.com/firedancer-io/agave/blob/10fe1eb29aac9c236fd72d08ae60a3ef61ee8353/runtime/src/bank.rs#L3173)
+/// * [try_lock_accounts](https://github.com/firedancer-io/agave/blob/10fe1eb29aac9c236fd72d08ae60a3ef61ee8353/runtime/src/bank.rs#L3164)
+/// * [lock_accounts](https://github.com/firedancer-io/agave/blob/10fe1eb29aac9c236fd72d08ae60a3ef61ee8353/accounts-db/src/accounts.rs#L569)
+/// * [validate_account_locks](https://github.com/firedancer-io/agave/blob/10fe1eb29aac9c236fd72d08ae60a3ef61ee8353/accounts-db/src/account_locks.rs#L122-L123)
+/// and then it is propagated to and through `load_and_execute_transactions`.
+///
+/// Our account batch creation/load process isn't designed to accommodate this, so what we do
+/// instead is do the check when we're actually trying to load and execute the transaction.
+fn hasDuplicates(account_keys: []const Pubkey) bool {
+    for (account_keys, 0..) |current_key, idx| {
+        for (account_keys[idx + 1 ..]) |next_key| {
+            if (current_key.equals(&next_key)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+test hasDuplicates {
+    const pk1: Pubkey = .{ .data = @splat(1) };
+    const pk2: Pubkey = .{ .data = @splat(2) };
+    const pk3: Pubkey = .{ .data = @splat(3) };
+
+    try std.testing.expectEqual(false, hasDuplicates(&.{}));
+    try std.testing.expectEqual(false, hasDuplicates(&.{pk1}));
+    try std.testing.expectEqual(false, hasDuplicates(&.{ pk1, pk2 }));
+    try std.testing.expectEqual(false, hasDuplicates(&.{ pk1, pk2, pk3 }));
+    try std.testing.expectEqual(true, hasDuplicates(&.{ pk1, pk2, pk3, pk3 }));
+    try std.testing.expectEqual(true, hasDuplicates(&.{ pk2, pk1, pk2, pk3 }));
 }
 
 /// [agave] https://github.com/firedancer-io/agave/blob/403d23b809fc513e2c4b433125c127cf172281a2/svm/src/transaction_processor.rs#L909
@@ -457,31 +501,34 @@ pub fn executeTransaction(
         .rent = environment.rent_collector.rent,
         .prev_blockhash = environment.last_blockhash,
         .prev_lamports_per_signature = environment.last_lamports_per_signature,
+        .slot = environment.slot,
     };
 
-    var maybe_instruction_error: ?InstructionError = null;
-    for (transaction.instructions) |instruction_info| {
-        executor.executeInstruction(
-            allocator,
-            &tc,
-            instruction_info,
-        ) catch |err| {
-            switch (err) {
-                error.OutOfMemory => return error.OutOfMemory,
-                else => |e| maybe_instruction_error = e,
-            }
-            break;
-        };
-    }
-
-    const instruction_error = if (maybe_instruction_error) |instruction_error|
-        InstructionErrorEnum.fromError(instruction_error, tc.custom_error, null) catch |err|
-            std.debug.panic("Failed to convert error: instruction_error{}", .{err})
-    else
-        null;
+    const maybe_instruction_error: ?struct { u8, InstructionErrorEnum } =
+        for (transaction.instructions, 0..) |instruction_info, index| {
+            executor.executeInstruction(
+                allocator,
+                &tc,
+                instruction_info,
+            ) catch |exec_err| {
+                switch (exec_err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    else => |instr_err| break .{
+                        @intCast(index),
+                        InstructionErrorEnum.fromError(
+                            instr_err,
+                            tc.custom_error,
+                            null,
+                        ) catch |err| {
+                            std.debug.panic("Error conversion failed: error={}", .{err});
+                        },
+                    },
+                }
+            };
+        } else null;
 
     return .{
-        .err = instruction_error,
+        .instr_err = maybe_instruction_error,
         .log_collector = tc.takeLogCollector(),
         .instruction_trace = tc.instruction_trace,
         .return_data = tc.takeReturnData(),
@@ -499,7 +546,7 @@ test "loadAndExecuteTransactions: no transactions" {
     var batch_account_cache: account_loader.BatchAccountCache = .{};
 
     const ancestors: Ancestors = .{};
-    const feature_set: FeatureSet = FeatureSet.EMPTY;
+    const feature_set: FeatureSet = FeatureSet.ALL_DISABLED;
     var status_cache = StatusCache.DEFAULT;
     const sysvar_cache: SysvarCache = .{};
     const rent_collector: RentCollector = sig.core.rent_collector.defaultCollector(10);
@@ -595,7 +642,7 @@ test "loadAndExecuteTransactions: invalid compute budget instruction" {
         &account_cache,
         &.{
             .ancestors = &Ancestors{},
-            .feature_set = &FeatureSet.EMPTY,
+            .feature_set = &FeatureSet.ALL_DISABLED,
             .status_cache = &status_cache,
             .sysvar_cache = &SysvarCache{},
             .rent_collector = &sig.core.rent_collector.defaultCollector(10),
@@ -643,7 +690,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
     const transfer_instruction_data = try sig.bincode.writeAlloc(
         allocator,
         sig.runtime.program.system.Instruction{
-            .transfer = .{ .lamports = 10_000 },
+            .transfer = .{ .lamports = 50_000 },
         },
         .{},
     );
@@ -736,16 +783,15 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
         },
     );
 
-    var ancestors = Ancestors{};
+    var ancestors: Ancestors = .{};
     defer ancestors.deinit(allocator);
 
-    const feature_set = try FeatureSet.allEnabled(allocator);
-    defer feature_set.deinit(allocator);
+    const feature_set: FeatureSet = .ALL_ENABLED_AT_GENESIS;
 
     var status_cache = StatusCache.DEFAULT;
     defer status_cache.deinit(allocator);
 
-    const sysvar_cache = SysvarCache{};
+    const sysvar_cache: SysvarCache = .{};
     defer sysvar_cache.deinit(allocator);
 
     const rent_collector = sig.core.rent_collector.defaultCollector(10);
@@ -784,37 +830,77 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
         .log_messages_byte_limit = null,
     };
 
-    const result = try loadAndExecuteTransaction(
-        allocator,
-        &transaction,
-        &account_cache,
-        &environment,
-        &config,
-        &ProgramMap{},
-    );
+    { // Okay
+        const result = try loadAndExecuteTransaction(
+            allocator,
+            &transaction,
+            &account_cache,
+            &environment,
+            &config,
+            &ProgramMap{},
+        );
 
-    var processed_transaction = result.ok;
-    defer processed_transaction.deinit(allocator);
+        var processed_transaction = result.ok;
+        defer processed_transaction.deinit(allocator);
 
-    const executed_transaction = processed_transaction.executed.executed_transaction;
+        const executed_transaction = processed_transaction.executed.executed_transaction;
 
-    const transaction_fee = processed_transaction.executed.fees.transaction_fee;
-    const prioritization_fee = processed_transaction.executed.fees.prioritization_fee;
-    const rent_collected = processed_transaction.executed.loaded_accounts.rent_collected;
+        const transaction_fee = processed_transaction.executed.fees.transaction_fee;
+        const prioritization_fee = processed_transaction.executed.fees.prioritization_fee;
+        const rent_collected = processed_transaction.executed.loaded_accounts.rent_collected;
 
-    const sender_account = account_cache.account_cache.get(sender_key).?;
-    const receiver_account = account_cache.account_cache.get(receiver_key).?;
+        const sender_account = account_cache.account_cache.get(sender_key).?;
+        const receiver_account = account_cache.account_cache.get(receiver_key).?;
 
-    // TODO: verify these numbers against agave
-    try std.testing.expectEqual(5_000, transaction_fee);
-    try std.testing.expectEqual(0, prioritization_fee);
-    try std.testing.expectEqual(0, rent_collected);
-    try std.testing.expectEqual(85_000, sender_account.lamports);
-    try std.testing.expectEqual(110_000, receiver_account.lamports);
-    try std.testing.expectEqual(null, executed_transaction.err);
-    try std.testing.expectEqual(null, executed_transaction.log_collector);
-    try std.testing.expectEqual(1, executed_transaction.instruction_trace.?.len);
-    try std.testing.expectEqual(null, executed_transaction.return_data);
-    try std.testing.expectEqual(2_850, executed_transaction.compute_meter);
-    try std.testing.expectEqual(0, executed_transaction.accounts_data_len_delta);
+        try std.testing.expectEqual(5_000, transaction_fee);
+        try std.testing.expectEqual(0, prioritization_fee);
+        try std.testing.expectEqual(0, rent_collected);
+        try std.testing.expectEqual(45_000, sender_account.lamports);
+        try std.testing.expectEqual(150_000, receiver_account.lamports);
+        try std.testing.expectEqual(null, executed_transaction.instr_err);
+        try std.testing.expectEqual(null, executed_transaction.log_collector);
+        try std.testing.expectEqual(1, executed_transaction.instruction_trace.?.len);
+        try std.testing.expectEqual(null, executed_transaction.return_data);
+        try std.testing.expectEqual(2_850, executed_transaction.compute_meter);
+        try std.testing.expectEqual(0, executed_transaction.accounts_data_len_delta);
+    }
+
+    { // Insufficient funds
+        const result = try loadAndExecuteTransaction(
+            allocator,
+            &transaction,
+            &account_cache,
+            &environment,
+            &config,
+            &ProgramMap{},
+        );
+
+        var processed_transaction = result.ok;
+        defer processed_transaction.deinit(allocator);
+
+        const executed_transaction = processed_transaction.executed.executed_transaction;
+
+        const transaction_fee = processed_transaction.executed.fees.transaction_fee;
+        const prioritization_fee = processed_transaction.executed.fees.prioritization_fee;
+        const rent_collected = processed_transaction.executed.loaded_accounts.rent_collected;
+
+        const sender_account = account_cache.account_cache.get(sender_key).?;
+        const receiver_account = account_cache.account_cache.get(receiver_key).?;
+
+        try std.testing.expectEqual(5_000, transaction_fee);
+        try std.testing.expectEqual(0, prioritization_fee);
+        try std.testing.expectEqual(0, rent_collected);
+        try std.testing.expectEqual(40_000, sender_account.lamports);
+        try std.testing.expectEqual(150_000, receiver_account.lamports);
+        try std.testing.expectEqual(0, executed_transaction.instr_err.?[0]);
+        try std.testing.expectEqual(
+            InstructionErrorEnum{ .Custom = 1 },
+            executed_transaction.instr_err.?[1],
+        );
+        try std.testing.expectEqual(null, executed_transaction.log_collector);
+        try std.testing.expectEqual(1, executed_transaction.instruction_trace.?.len);
+        try std.testing.expectEqual(null, executed_transaction.return_data);
+        try std.testing.expectEqual(2_850, executed_transaction.compute_meter);
+        try std.testing.expectEqual(0, executed_transaction.accounts_data_len_delta);
+    }
 }

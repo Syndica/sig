@@ -93,6 +93,8 @@ pub const ComputeBudget = struct {
     alt_bn128_g2_compress: u64,
     /// Number of compute units consumed to call alt_bn128_g2_decompress.
     alt_bn128_g2_decompress: u64,
+    /// Number of compute units consumed to call secp256k1_recover
+    secp256k1_recover_cost: u64,
 
     pub const DEFAULT: ComputeBudget = ComputeBudget.default(1_400_000);
 
@@ -138,6 +140,7 @@ pub const ComputeBudget = struct {
             .alt_bn128_g1_decompress = 398,
             .alt_bn128_g2_compress = 86,
             .alt_bn128_g2_decompress = 13610,
+            .secp256k1_recover_cost = 25_000,
         };
     }
 

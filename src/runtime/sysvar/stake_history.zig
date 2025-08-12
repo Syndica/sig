@@ -47,8 +47,7 @@ pub const StakeHistory = struct {
         deactivating: u64,
     };
 
-    pub const ID =
-        Pubkey.parseBase58String("SysvarStakeHistory1111111111111111111111111") catch unreachable;
+    pub const ID: Pubkey = .parse("SysvarStakeHistory1111111111111111111111111");
 
     pub const MAX_ENTRIES: u64 = 512;
 

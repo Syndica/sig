@@ -128,7 +128,7 @@ pub const SlotConstants = struct {
             .fee_rate_governor = fee_rate_governor,
             .epoch_reward_status = .inactive,
             .ancestors = ancestors,
-            .feature_set = .EMPTY,
+            .feature_set = .ALL_DISABLED,
         };
     }
 
@@ -136,7 +136,6 @@ pub const SlotConstants = struct {
         var self = self_const;
         self.epoch_reward_status.deinit(allocator);
         self.ancestors.deinit(allocator);
-        self.feature_set.deinit(allocator);
     }
 };
 
@@ -186,7 +185,8 @@ pub const SlotState = struct {
     pub fn deinit(self: *SlotState, allocator: Allocator) void {
         self.stakes_cache.deinit(allocator);
 
-        var blockhash_queue = self.blockhash_queue.tryWrite() orelse unreachable;
+        var blockhash_queue = self.blockhash_queue.tryWrite() orelse
+            @panic("attempted to deinit SlotState.blockhash_queue while still in use");
         defer blockhash_queue.unlock();
         blockhash_queue.get().deinit(allocator);
     }

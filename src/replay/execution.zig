@@ -37,6 +37,8 @@ const check_slot_agrees_with_cluster = replay.edge_cases.check_slot_agrees_with_
 
 const SvmGateway = replay.svm_gateway.SvmGateway;
 
+const SvmGateway = replay.svm_gateway.SvmGateway;
+
 const confirmSlot = replay.confirm_slot.confirmSlot;
 /// State used for replaying and validating data from blockstore/accountsdb/svm
 pub const ReplayExecutionState = struct {
@@ -236,8 +238,6 @@ fn replaySlot(state: *ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
         state.logger.info().logf("got {} entries for slot {}", .{ entries.len, slot });
 
         if (entries.len == 0) {
-            for (entries) |entry| entry.deinit(state.allocator);
-            state.allocator.free(entries);
             return .empty;
         }
 
@@ -249,8 +249,7 @@ fn replaySlot(state: *ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
     };
 
     const new_rate_activation_epoch =
-        if (slot_info.constants.feature_set.active
-            .get(sig.core.features.REDUCE_STAKE_WARMUP_COOLDOWN)) |active_slot|
+        if (slot_info.constants.feature_set.get(.reduce_stake_warmup_cooldown)) |active_slot|
             state.epochs.schedule.getEpoch(active_slot)
         else
             null;
@@ -424,47 +423,47 @@ pub fn processReplayResults(
 
             if (!replay_state.duplicate_slots_tracker.contains(slot) and
                 try replay_state.blockstore_reader.getDuplicateSlot(slot) != null)
-            {
-                const duplicate_state: DuplicateState = .fromState(
-                    .from(replay_state.logger),
-                    slot,
-                    replay_state.duplicate_confirmed_slots,
-                    replay_state.fork_choice,
-                    .fromHash(hash),
-                );
+                {
+                    const duplicate_state: DuplicateState = .fromState(
+                        .from(replay_state.logger),
+                        slot,
+                        replay_state.duplicate_confirmed_slots,
+                        replay_state.fork_choice,
+                        .fromHash(hash),
+                    );
 
-                try check_slot_agrees_with_cluster.duplicate(
-                    replay_state.allocator,
-                    .from(replay_state.logger),
-                    slot,
-                    parent_slot,
-                    replay_state.duplicate_slots_tracker,
-                    replay_state.fork_choice,
-                    duplicate_state,
-                );
-            }
+                    try check_slot_agrees_with_cluster.duplicate(
+                        replay_state.allocator,
+                        .from(replay_state.logger),
+                        slot,
+                        parent_slot,
+                        replay_state.duplicate_slots_tracker,
+                        replay_state.fork_choice,
+                        duplicate_state,
+                    );
+                }
 
             // TODO bank_notification_sender
 
             // Move unfrozen_gossip_verified_vote_hashes entries to latest_validator_votes_for_frozen_banks
             if (replay_state.unfrozen_gossip_verified_vote_hashes.votes_per_slot
-                .get(slot)) |slot_hashes_const|
-            {
-                var slot_hashes = slot_hashes_const;
-                if (slot_hashes.fetchSwapRemove(hash)) |kv| {
-                    var new_frozen_voters = kv.value;
-                    defer new_frozen_voters.deinit(replay_state.allocator);
-                    for (new_frozen_voters.items) |pubkey| {
-                        _ = try replay_state.latest_validator_votes_for_frozen_banks.checkAddVote(
-                            replay_state.allocator,
-                            pubkey,
-                            slot,
-                            hash,
-                            .replay,
-                        );
+            .get(slot)) |slot_hashes_const|
+                {
+                    var slot_hashes = slot_hashes_const;
+                    if (slot_hashes.fetchSwapRemove(hash)) |kv| {
+                        var new_frozen_voters = kv.value;
+                        defer new_frozen_voters.deinit(replay_state.allocator);
+                        for (new_frozen_voters.items) |pubkey| {
+                            _ = try replay_state.latest_validator_votes_for_frozen_banks.checkAddVote(
+                                replay_state.allocator,
+                                pubkey,
+                                slot,
+                                hash,
+                                .replay,
+                            );
+                        }
                     }
-                }
-                // If `slot_hashes` becomes empty, it'll be removed by `setRoot()` later
+                    // If `slot_hashes` becomes empty, it'll be removed by `setRoot()` later
             }
 
             // TODO block_metadata_notifier

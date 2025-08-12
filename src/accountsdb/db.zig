@@ -1801,6 +1801,12 @@ pub const AccountsDB = struct {
     }
 
     /// gets the latest version of an account at the provided address.
+    ///
+    /// This function is not fork aware. It only gets the account from the
+    /// highest numeric slot when the account was updated. Typically, this is
+    /// the wrong function to use, and you should use the fork-aware function
+    /// getAccountWithAncestors, unless you really know what you're doing.
+    ///
     /// mut ref is required for locks.
     pub fn getAccountLatest(
         self: *AccountsDB,

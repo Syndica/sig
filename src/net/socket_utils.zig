@@ -287,7 +287,7 @@ const XevThread = struct {
         _: *xev.UDP.State,
         _: xev.UDP,
         _: xev.WriteBuffer,
-        result: xev.UDP.WriteError!usize,
+        result: xev.WriteError!usize,
     ) xev.CallbackAction {
         if (getNodeOnCallback(maybe_node.?)) |node| {
             handleSend(node, loop, result) catch |e| closeNode(node, e);
@@ -298,7 +298,7 @@ const XevThread = struct {
     fn handleSend(
         node: *List.Node,
         loop: *xev.Loop,
-        result: xev.UDP.WriteError!usize,
+        result: xev.WriteError!usize,
     ) !void {
         const st = node.data.st.?;
         const logger = st.logger.withScope(LOG_SCOPE);
@@ -320,7 +320,7 @@ const XevThread = struct {
         peer_addr: std.net.Address,
         _: xev.UDP,
         _: xev.ReadBuffer,
-        result: xev.UDP.ReadError!usize,
+        result: xev.ReadError!usize,
     ) xev.CallbackAction {
         if (getNodeOnCallback(maybe_node.?)) |node| {
             handleRecv(node, loop, peer_addr, result) catch |e| closeNode(node, e);
@@ -332,7 +332,7 @@ const XevThread = struct {
         node: *List.Node,
         loop: *xev.Loop,
         peer_addr: std.net.Address,
-        result: xev.UDP.ReadError!usize,
+        result: xev.ReadError!usize,
     ) !void {
         const st = node.data.st.?;
         const logger = st.logger.withScope(LOG_SCOPE);
@@ -620,7 +620,6 @@ pub const BenchmarkPacketProcessing = struct {
         defer outgoing_handle.join();
 
         // run incoming until received n_packets
-
         var packets_to_recv = n_packets;
         var timer = try sig.time.Timer.start();
         while (packets_to_recv > 0) {

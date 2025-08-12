@@ -31,8 +31,7 @@ pub const Rent = extern struct {
     /// distributed to validators.
     burn_percent: u8,
 
-    pub const ID =
-        Pubkey.parseBase58String("SysvarRent111111111111111111111111111111111") catch unreachable;
+    pub const ID: Pubkey = .parse("SysvarRent111111111111111111111111111111111");
 
     pub const DEFAULT: Rent = .{
         .lamports_per_byte_year = DEFAULT_LAMPORTS_PER_BYTE_YEAR,

@@ -47,9 +47,9 @@ pub const RentCollector = struct {
     pub fn initRandom(random: std.Random) RentCollector {
         return .{
             .epoch = random.int(Epoch),
-            .epoch_schedule = EpochSchedule.initRandom(random),
+            .epoch_schedule = .initRandom(random),
             .slots_per_year = random.float(f64),
-            .rent = Rent.initRandom(random),
+            .rent = .initRandom(random),
         };
     }
 
@@ -126,6 +126,8 @@ pub const RentCollector = struct {
         account_rent_epoch: Epoch,
     ) RentDue {
         if (self.rent.isExempt(lamports, data_len)) return .Exempt;
+
+        if (account_rent_epoch > self.epoch) return .{ .Paying = 0 };
 
         var slots_elapsed: u64 = 0;
         for (account_rent_epoch..self.epoch + 1) |epoch| {

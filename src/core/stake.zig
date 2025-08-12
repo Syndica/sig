@@ -182,9 +182,12 @@ pub fn Stakes(comptime stakes_type: StakesType) type {
             errdefer vote_accs.deinit(allocator);
 
             var stake_delegations = std.AutoArrayHashMapUnmanaged(Pubkey, output_type.T()).empty;
+            try stake_delegations.ensureTotalCapacity(allocator, self.stake_delegations.count());
             errdefer {
                 // Only the .account type contains allocated data in the stake_delegations.
-                if (is_account_type) for (stake_delegations.values()) |*v| v.deinit(allocator);
+                if (output_type == .account) {
+                    for (stake_delegations.values()) |*v| v.deinit(allocator);
+                }
                 stake_delegations.deinit(allocator);
             }
             for (self.stake_delegations.keys(), self.stake_delegations.values()) |key, value| {
@@ -200,7 +203,7 @@ pub fn Stakes(comptime stakes_type: StakesType) type {
                     else
                         @compileLog("unsupported conversion.", stakes_type, output_type);
 
-                try stake_delegations.put(allocator, key, new_value);
+                stake_delegations.putAssumeCapacity(key, new_value);
             }
 
             const stake_history = try self.stake_history.clone(allocator);

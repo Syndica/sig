@@ -10,8 +10,6 @@ const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 const SlotLeaders = sig.core.leader_schedule.SlotLeaders;
 const SlotState = sig.core.bank.SlotState;
-const SlotAndHash = sig.core.hash.SlotAndHash;
-const Hash = sig.core.Hash;
 
 const AccountStore = sig.accounts_db.AccountStore;
 const AccountReader = sig.accounts_db.AccountReader;
@@ -22,7 +20,6 @@ const BlockstoreReader = sig.ledger.BlockstoreReader;
 const LedgerResultWriter = sig.ledger.result_writer.LedgerResultWriter;
 
 const ProgressMap = sig.consensus.ProgressMap;
-const HeaviestSubtreeForkChoice = sig.consensus.HeaviestSubtreeForkChoice;
 
 const ReplayExecutionState = replay.execution.ReplayExecutionState;
 const SlotTracker = replay.trackers.SlotTracker;
@@ -32,13 +29,6 @@ const updateSysvarsForNewSlot = replay.update_sysvar.updateSysvarsForNewSlot;
 
 const LatestValidatorVotesForFrozenSlots =
     sig.consensus.latest_validator_votes.LatestValidatorVotes;
-
-const DuplicateSlots = replay.edge_cases.DuplicateSlots;
-const DuplicateConfirmedSlots = replay.edge_cases.DuplicateConfirmedSlots;
-const DuplicateSlotsToRepair = replay.edge_cases.DuplicateSlotsToRepair;
-const EpochSlotsFrozenSlots = replay.edge_cases.EpochSlotsFrozenSlots;
-const PurgeRepairSlotCounters = replay.edge_cases.PurgeRepairSlotCounters;
-const UnfrozenGossipVerifiedVoteHashes = replay.edge_cases.UnfrozenGossipVerifiedVoteHashes;
 
 /// Number of threads to use in replay's thread pool
 const NUM_THREADS = 4;
@@ -135,29 +125,6 @@ const ReplayState = struct {
             }),
         );
 
-        // TODO: Might need updating with the Initialize requisite replay state PR.
-        var fork_choice = HeaviestSubtreeForkChoice{
-            .allocator = deps.allocator,
-            .logger = .noop,
-            .fork_infos = std.AutoHashMap(
-                SlotAndHash,
-                sig.consensus.fork_choice.ForkInfo,
-            ).init(deps.allocator),
-            .latest_votes = std.AutoHashMap(Pubkey, SlotAndHash).init(deps.allocator),
-            .tree_root = .{ .slot = 0, .hash = Hash.ZEROES },
-            .last_root_time = sig.time.Instant.now(),
-        };
-        var duplicate_slot_tracker = DuplicateSlots.empty;
-        var duplicate_confirmed_slots = DuplicateConfirmedSlots.empty;
-        var epoch_slots_frozen_slots = EpochSlotsFrozenSlots.empty;
-        var duplicate_slots_to_repair = DuplicateSlotsToRepair.empty;
-        var purge_replair_slot_counter = PurgeRepairSlotCounters.empty;
-
-        var unfrozen_gossip_verified_vote_hashes = UnfrozenGossipVerifiedVoteHashes{
-            .votes_per_slot = .empty,
-        };
-        var latest_validator_votes_for_frozen_banks = LatestValidatorVotesForFrozenSlots.empty;
-
         return .{
             .allocator = deps.allocator,
             .logger = .from(deps.logger),
@@ -176,18 +143,9 @@ const ReplayState = struct {
                 thread_pool,
                 deps.account_store,
                 deps.blockstore_reader,
-                deps.ledger_result_writer,
                 slot_tracker,
                 epoch_tracker,
                 progress_map,
-                &fork_choice,
-                &duplicate_slot_tracker,
-                &unfrozen_gossip_verified_vote_hashes,
-                &latest_validator_votes_for_frozen_banks,
-                &duplicate_confirmed_slots,
-                &epoch_slots_frozen_slots,
-                &duplicate_slots_to_repair,
-                &purge_replair_slot_counter,
             ),
         };
     }
@@ -374,9 +332,11 @@ pub fn getActiveFeatures(
     account_reader: SlotAccountReader,
     slot: Slot,
 ) !sig.core.FeatureSet {
-    var features = std.AutoArrayHashMapUnmanaged(Pubkey, Slot).empty;
-    for (sig.core.FEATURES) |pubkey| {
-        const feature_account = try account_reader.get(pubkey) orelse continue;
+    var features: sig.core.FeatureSet = .ALL_DISABLED;
+    for (0..sig.core.features.NUM_FEATURES) |i| {
+        const possible_feature: sig.core.features.Feature = @enumFromInt(i);
+        const possible_feature_pubkey = sig.core.features.map.get(possible_feature);
+        const feature_account = try account_reader.get(possible_feature_pubkey) orelse continue;
         if (!feature_account.owner.equals(&sig.runtime.ids.FEATURE_PROGRAM_ID)) {
             return error.FeatureNotOwnedByFeatureProgram;
         }
@@ -386,11 +346,11 @@ pub fn getActiveFeatures(
         const feature = try sig.bincode.read(allocator, struct { activated_at: ?u64 }, reader, .{});
         if (feature.activated_at) |activation_slot| {
             if (activation_slot <= slot) {
-                try features.put(allocator, pubkey, activation_slot);
+                features.setSlot(possible_feature, activation_slot);
             }
         }
     }
-    return .{ .active = features };
+    return features;
 }
 
 test "getActiveFeatures rejects wrong ownership" {
@@ -401,7 +361,11 @@ test "getActiveFeatures rejects wrong ownership" {
     var acct: sig.core.Account = undefined;
     acct.owner = Pubkey.ZEROES;
 
-    try accounts.put(allocator, sig.core.features.SYSTEM_TRANSFER_ZERO_CHECK, acct);
+    try accounts.put(
+        allocator,
+        sig.core.features.map.get(.system_transfer_zero_check),
+        acct,
+    );
 
     try std.testing.expectError(
         error.FeatureNotOwnedByFeatureProgram,

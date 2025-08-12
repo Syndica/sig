@@ -69,6 +69,7 @@ const Allocator = std.mem.Allocator;
 const Atomic = std.atomic.Value;
 
 const features = sig.core.features;
+const freeze = sig.replay.freeze;
 const program = sig.runtime.program;
 const sysvars = sig.runtime.sysvar;
 const vm = sig.vm;
@@ -104,7 +105,7 @@ const BatchAccountCache = sig.runtime.account_loader.BatchAccountCache;
 const ComputeBudget = sig.runtime.ComputeBudget;
 const EpochRewards = sig.runtime.sysvar.EpochRewards;
 const EpochSchedule = sig.runtime.sysvar.EpochSchedule;
-const FeatureSet = sig.core.features.FeatureSet;
+const FeatureSet = sig.core.FeatureSet;
 const RecentBlockhashes = sig.runtime.sysvar.RecentBlockhashes;
 const Rent = sig.runtime.sysvar.Rent;
 const SysvarCache = sig.runtime.SysvarCache;
@@ -127,8 +128,7 @@ fn executeTxnContext(
     }
 
     // Load info from the protobuf transaction context
-    var feature_set = try loadFeatureSet(allocator, &pb_txn_ctx);
-    defer feature_set.deinit(allocator);
+    var feature_set = try loadFeatureSet(&pb_txn_ctx);
 
     const blockhashes = try loadBlockhashes(allocator, &pb_txn_ctx);
     defer allocator.free(blockhashes);
@@ -137,7 +137,7 @@ fn executeTxnContext(
     defer deinitMapAndValues(allocator, accounts_map);
 
     // TODO: use??
-    // const fee_collector = Pubkey.parseBase58String("1111111111111111111111111111111111") catch unreachable;
+    // const fee_collector = Pubkey.parseRuntime("1111111111111111111111111111111111") catch unreachable;
 
     // Load genesis config
     var genesis_config = GenesisConfig.default(allocator);
@@ -352,6 +352,7 @@ fn executeTxnContext(
                 allocator,
                 &feature_set,
                 &compute_budget,
+                slot,
                 false,
                 false,
             );
@@ -397,6 +398,7 @@ fn executeTxnContext(
         try update_sysvar.updateLastRestartSlot(
             allocator,
             &feature_set,
+            slot,
             &hard_forks,
             update_sysvar_deps,
         );
@@ -425,20 +427,12 @@ fn executeTxnContext(
     // let mut bank = bank_forks.read().unwrap().root_bank();
     //     Just gets the root bank
 
-    const parent_lt_hash: ?sig.core.LtHash = .IDENTITY;
-    const lt_hash, const slot_hash = try sig.replay.freeze.hashSlot(allocator, .{
-        .account_reader = accounts_db.accountReader(),
-        .slot = slot,
-        // At this point, Agave has not modified the signature count.
-        // It's changed when the transaction is processesed and when it's committed.
-        .signature_count = 0,
-        .parent_lt_hash = &parent_lt_hash,
-        .parent_slot_hash = &parent_hash,
-        .blockhash = blockhash_queue.last_hash.?,
-        .ancestors = &ancestors,
-        .feature_set = &feature_set,
-    });
-    _ = lt_hash;
+    const slot_hash = try hashSlot(
+        allocator,
+        blockhash_queue.last_hash.?,
+        &feature_set,
+        accounts_db.accountReader(),
+    );
 
     parent_slot = slot;
     parent_hash = slot_hash;
@@ -631,6 +625,7 @@ fn executeTxnContext(
                 try update_sysvar.updateLastRestartSlot(
                     allocator,
                     &feature_set,
+                    slot,
                     &hard_forks,
                     update_sysvar_deps,
                 );
@@ -698,20 +693,20 @@ fn executeTxnContext(
 
     // Get lamports per signature from first entry in recent blockhashes
     const lamports_per_signature = blk: {
-        var sysvar_cache: SysvarCache = .{};
-        defer sysvar_cache.deinit(allocator);
-        try update_sysvar.fillMissingSysvarCacheEntries(
-            allocator,
-            accounts_db.accountReader().forSlot(&ancestors),
-            &sysvar_cache,
-        );
+        const account = try accounts_db.getAccountWithAncestors(
+            &RecentBlockhashes.ID,
+            &ancestors,
+        ) orelse break :blk null;
+        defer account.deinit(allocator);
 
-        const recent_blockhashes = sysvar_cache.get(RecentBlockhashes) catch break :blk null;
-        // const first_entry = recent_blockhashes.getFirst() orelse break :blk null;
-        const first_entry = if (recent_blockhashes.entries.len == 0)
-            break :blk null
-        else
-            recent_blockhashes.entries.buffer[0];
+        var data = account.data.iterator();
+        const reader = data.reader();
+
+        const len = try sig.bincode.readInt(u64, reader, .{});
+
+        if (len == 0) break :blk null;
+
+        const first_entry = try sig.bincode.read(allocator, RecentBlockhashes.Entry, reader, .{});
 
         break :blk if (first_entry.lamports_per_signature != 0)
             first_entry.lamports_per_signature
@@ -767,6 +762,7 @@ fn executeTxnContext(
         allocator,
         transaction,
         &feature_set,
+        slot,
         accounts_db.accountReader().forSlot(&ancestors),
     )) {
         .ok => |txn| txn,
@@ -855,29 +851,23 @@ fn serializeOutput(
     switch (result) {
         .ok => |txn| {
             const is_ok = switch (txn) {
-                .executed => |executed| executed.executed_transaction.err == null,
+                .executed => |executed| executed.executed_transaction.instr_err == null,
                 .fees_only => false,
             };
 
-            // TODO: just hardcoding InstructionError for now, can something else happen?
-            // our current design assumes that the transaction execution can only return
-            // InstructionError, which seems wrong. Not to mention that we don't have a way
-            // to access *which* instruction in the transaction is the one that errored.
-            const status: u32, const instr_err: u32 = switch (txn) {
-                .executed => |executed| .{
-                    if (executed.executed_transaction.err != null) 9 else 0,
-                    if (executed.executed_transaction.err) |instr_err|
-                        @intFromEnum(instr_err) + 1
-                    else
-                        0,
-                },
-                .fees_only => |fees_only| fees_only: {
-                    const err_codes = utils.convertTransactionError(fees_only.err);
-                    break :fees_only .{
-                        err_codes.err,
-                        err_codes.instruction_error,
-                    };
-                },
+            const errors: utils.ConvertedErrorCodes = switch (txn) {
+                .executed => |executed| if (executed.executed_transaction.instr_err) |instr_err| .{
+                    // hardcode InstructionError, since nothing else could be returned from executeTransaction
+                    .err = 9,
+                    .instruction_error = @intFromEnum(instr_err[1]) + 1,
+                    // TODO: special case for precompile failures
+                    .custom_error = switch (instr_err[1]) {
+                        .Custom => |v| v,
+                        else => 0,
+                    },
+                    .instruction_index = instr_err[0],
+                } else .default,
+                .fees_only => |fees_only| utils.convertTransactionError(fees_only.err),
             };
 
             const rent = switch (txn) {
@@ -890,73 +880,76 @@ fn serializeOutput(
                 .executed => |executed| executed.fees,
             };
 
+            const acct_states = switch (txn) {
+                .executed => |executed| acct_states: {
+                    var acct_states: std.ArrayList(pb.AcctState) = .init(allocator);
+                    errdefer acct_states.deinit();
+
+                    for (executed.loaded_accounts.accounts.constSlice(), 0..) |acc, i| {
+                        if (!sanitized.accounts.get(i).is_writable) continue;
+                        // Only keep accounts that were passed in as account_keys or as ALUT accounts
+                        for (sanitized.accounts.items(.pubkey)) |key| {
+                            if (key.equals(&acc.pubkey)) break;
+                        } else continue;
+
+                        try acct_states.append(.{
+                            .address = try .copy(&acc.pubkey.data, allocator),
+                            .lamports = acc.account.lamports,
+                            .data = try .copy(acc.account.data, allocator),
+                            .executable = acc.account.executable,
+                            .rent_epoch = acc.account.rent_epoch,
+                            .owner = try .copy(&acc.account.owner.data, allocator),
+                            .seed_addr = null,
+                        });
+                    }
+
+                    break :acct_states acct_states;
+                },
+                .fees_only => |fees_only| acct_states: {
+                    var acct_states: std.ArrayList(pb.AcctState) = .init(allocator);
+                    errdefer acct_states.deinit();
+                    errdefer for (acct_states.items) |acct_state| acct_state.deinit();
+                    try acct_states.ensureTotalCapacityPrecise(fees_only.rollbacks.count());
+
+                    const fee_payer_address = sanitized.fee_payer;
+                    switch (fees_only.rollbacks) {
+                        .fee_payer_only => |fee_payer_account| {
+                            acct_states.appendAssumeCapacity(try sharedAccountToState(
+                                allocator,
+                                fee_payer_address,
+                                fee_payer_account.account,
+                            ));
+                        },
+                        .same_nonce_and_fee_payer => |nonce| {
+                            acct_states.appendAssumeCapacity(try sharedAccountToState(
+                                allocator,
+                                nonce.pubkey,
+                                nonce.account,
+                            ));
+                        },
+                        .separate_nonce_and_fee_payer => |pair| {
+                            const nonce, const fee_payer_account = pair;
+                            acct_states.appendAssumeCapacity(try sharedAccountToState(
+                                allocator,
+                                fee_payer_address,
+                                fee_payer_account.account,
+                            ));
+                            acct_states.appendAssumeCapacity(try sharedAccountToState(
+                                allocator,
+                                nonce.pubkey,
+                                nonce.account,
+                            ));
+                        },
+                    }
+                    break :acct_states acct_states;
+                },
+            };
+            errdefer acct_states.deinit();
+
             const resulting_state: pb.ResultingState = .{
                 .rent_debits = .init(allocator),
                 .transaction_rent = rent,
-                .acct_states = switch (txn) {
-                    .executed => |executed| acct_states: {
-                        var acct_states: std.ArrayList(pb.AcctState) = .init(allocator);
-                        errdefer acct_states.deinit();
-
-                        for (executed.loaded_accounts.accounts.constSlice(), 0..) |acc, i| {
-                            if (!sanitized.accounts.get(i).is_writable) continue;
-                            // Only keep accounts that were passed in as account_keys or as ALUT accounts
-                            for (sanitized.accounts.items(.pubkey)) |key| {
-                                if (key.equals(&acc.pubkey)) break;
-                            } else continue;
-
-                            try acct_states.append(.{
-                                .address = try .copy(&acc.pubkey.data, allocator),
-                                .lamports = acc.account.lamports,
-                                .data = try .copy(acc.account.data, allocator),
-                                .executable = acc.account.executable,
-                                .rent_epoch = acc.account.rent_epoch,
-                                .owner = try .copy(&acc.account.owner.data, allocator),
-                                .seed_addr = null,
-                            });
-                        }
-
-                        break :acct_states acct_states;
-                    },
-                    .fees_only => |fees_only| acct_states: {
-                        var acct_states: std.ArrayList(pb.AcctState) = .init(allocator);
-                        errdefer acct_states.deinit();
-                        errdefer for (acct_states.items) |acct_state| acct_state.deinit();
-                        try acct_states.ensureTotalCapacityPrecise(fees_only.rollbacks.count());
-
-                        const fee_payer_address = sanitized.fee_payer;
-                        switch (fees_only.rollbacks) {
-                            .fee_payer_only => |fee_payer_account| {
-                                acct_states.appendAssumeCapacity(try sharedAccountToState(
-                                    allocator,
-                                    fee_payer_address,
-                                    fee_payer_account.account,
-                                ));
-                            },
-                            .same_nonce_and_fee_payer => |nonce| {
-                                acct_states.appendAssumeCapacity(try sharedAccountToState(
-                                    allocator,
-                                    nonce.pubkey,
-                                    nonce.account,
-                                ));
-                            },
-                            .separate_nonce_and_fee_payer => |pair| {
-                                const nonce, const fee_payer_account = pair;
-                                acct_states.appendAssumeCapacity(try sharedAccountToState(
-                                    allocator,
-                                    fee_payer_address,
-                                    fee_payer_account.account,
-                                ));
-                                acct_states.appendAssumeCapacity(try sharedAccountToState(
-                                    allocator,
-                                    nonce.pubkey,
-                                    nonce.account,
-                                ));
-                            },
-                        }
-                        break :acct_states acct_states;
-                    },
-                },
+                .acct_states = acct_states,
             };
 
             return .{
@@ -965,8 +958,10 @@ fn serializeOutput(
                 .is_ok = is_ok,
                 .rent = rent,
 
-                .status = status,
-                .instruction_error = instr_err,
+                .status = errors.err,
+                .instruction_error = errors.instruction_error,
+                .instruction_error_index = errors.instruction_index,
+                .custom_error = errors.custom_error,
 
                 .resulting_state = resulting_state,
                 .fee_details = .{
@@ -1038,38 +1033,28 @@ fn loadSlot(pb_txn_ctx: *const pb.TxnContext) u64 {
     return if (pb_txn_ctx.slot_ctx) |ctx| ctx.slot else 10;
 }
 
-fn loadFeatureSet(allocator: std.mem.Allocator, pb_txn_ctx: *const pb.TxnContext) !FeatureSet {
-    var feature_set = blk: {
+fn loadFeatureSet(pb_txn_ctx: *const pb.TxnContext) !FeatureSet {
+    var feature_set: FeatureSet = set: {
         const maybe_pb_features = if (pb_txn_ctx.epoch_ctx) |epoch_ctx|
             if (epoch_ctx.features) |pb_features| pb_features else null
         else
             null;
 
-        const pb_features = maybe_pb_features orelse break :blk FeatureSet.EMPTY;
+        const pb_features = maybe_pb_features orelse break :set .ALL_DISABLED;
 
-        var indexed_features = std.AutoArrayHashMap(u64, Pubkey).init(allocator);
-        defer indexed_features.deinit();
-
-        for (features.FEATURES) |feature| {
-            try indexed_features.put(@bitCast(feature.data[0..8].*), feature);
-        }
-
-        var feature_set = features.FeatureSet.EMPTY;
-
+        var feature_set: FeatureSet = .ALL_DISABLED;
         for (pb_features.features.items) |id| {
-            if (indexed_features.get(id)) |pubkey| {
-                try feature_set.active.put(allocator, pubkey, 0);
-            }
+            // only way for `setId` to fail is if the `id` doesn't exist.
+            feature_set.setSlotId(id, 0) catch std.debug.panic("unknown id: 0x{x}", .{id});
         }
-
-        break :blk feature_set;
+        break :set feature_set;
     };
 
     if (TOGGLE_DIRECT_MAPPING) {
-        if (feature_set.active.contains(features.BPF_ACCOUNT_DATA_DIRECT_MAPPING)) {
-            _ = feature_set.active.swapRemove(features.BPF_ACCOUNT_DATA_DIRECT_MAPPING);
+        if (feature_set.active(.bpf_account_data_direct_mapping, 0)) {
+            feature_set.disable(.bpf_account_data_direct_mapping);
         } else {
-            try feature_set.active.put(allocator, features.BPF_ACCOUNT_DATA_DIRECT_MAPPING, 0);
+            feature_set.setSlot(.bpf_account_data_direct_mapping, 0);
         }
     }
 
@@ -1306,6 +1291,39 @@ fn accountFromAccountSharedData(
     };
 }
 
+/// A copy of sig hashSlot which is customized to match the behaviour of bank.rehash in solfuzz-agave.
+/// Specifically if accounts lt hash is enabled, the returned hash is the initial hash combined with
+/// the identity hash, as there is not parent lt hash in the txn fuzzing context.
+pub fn hashSlot(
+    allocator: Allocator,
+    blockhash: Hash,
+    feature_set: *const FeatureSet,
+    account_reader: sig.accounts_db.AccountReader,
+) !Hash {
+    var signature_count_bytes: [8]u8 = undefined;
+    std.mem.writeInt(u64, &signature_count_bytes, 0, .little);
+
+    const initial_hash =
+        if (feature_set.active(.remove_accounts_delta_hash, 0))
+            Hash.generateSha256(.{
+                Hash.ZEROES,
+                &signature_count_bytes,
+                blockhash,
+            })
+        else
+            Hash.generateSha256(.{
+                Hash.ZEROES,
+                try freeze.deltaMerkleHash(account_reader, allocator, 0),
+                &signature_count_bytes,
+                blockhash,
+            });
+
+    return if (feature_set.active(.accounts_lt_hash, 0))
+        Hash.generateSha256(.{ initial_hash, sig.core.hash.LtHash.IDENTITY.constBytes() })
+    else
+        initial_hash;
+}
+
 const State = struct {
     slot: Slot,
     epoch: Epoch,
@@ -1398,7 +1416,7 @@ pub fn createPbManagedString(
     comptime T: type,
     string: []const u8,
 ) !ManagedString {
-    const parsed = T.parseBase58String(string) catch unreachable;
+    const parsed = T.parseRuntime(string) catch unreachable;
     return try ManagedString.copy(&parsed.data, allocator);
 }
 
@@ -1409,7 +1427,7 @@ pub fn createPbManagedStrings(
 ) !std.ArrayList(ManagedString) {
     var result = try std.ArrayList(ManagedString).initCapacity(allocator, strings.len);
     for (strings) |string| {
-        const parsed = T.parseBase58String(string) catch unreachable;
+        const parsed = T.parseRuntime(string) catch unreachable;
         result.appendAssumeCapacity(try ManagedString.copy(&parsed.data, allocator));
     }
     return result;

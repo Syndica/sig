@@ -21,8 +21,7 @@ pub const RecentBlockhashes = struct {
         lamports_per_signature: u64,
     };
 
-    pub const ID =
-        Pubkey.parseBase58String("SysvarRecentB1ockHashes11111111111111111111") catch unreachable;
+    pub const ID: Pubkey = .parse("SysvarRecentB1ockHashes11111111111111111111");
 
     pub const MAX_ENTRIES: u64 = 150;
 
@@ -60,29 +59,29 @@ pub const RecentBlockhashes = struct {
             }
         };
 
-        const num_entries = @min(queue.hash_infos.count(), MAX_ENTRIES);
-        const entries = try allocator.alloc(IndexAndEntry, num_entries);
-        defer allocator.free(entries);
+        var entries = try std.ArrayListUnmanaged(IndexAndEntry).initCapacity(
+            allocator,
+            queue.hash_infos.count(),
+        );
+        defer entries.deinit(allocator);
 
-        var i: usize = 0;
         for (queue.hash_infos.keys(), queue.hash_infos.values()) |hash, info| {
-            if (queue.last_hash_index - info.index >= MAX_ENTRIES) continue;
-            entries[i] = .{
+            entries.appendAssumeCapacity(.{
                 .index = info.index,
                 .entry = .{
                     .blockhash = hash,
                     .lamports_per_signature = info.lamports_per_signature,
                 },
-            };
-            i += 1;
+            });
         }
 
-        std.sort.heap(IndexAndEntry, entries, {}, IndexAndEntry.compareFn);
+        std.sort.heap(IndexAndEntry, entries.items, {}, IndexAndEntry.compareFn);
 
         var self = try RecentBlockhashes.init(allocator);
         errdefer self.deinit(allocator);
 
-        for (entries) |entry| self.entries.appendAssumeCapacity(entry.entry);
+        const num_entries = @min(entries.items.len, MAX_ENTRIES);
+        for (entries.items[0..num_entries]) |entry| self.entries.appendAssumeCapacity(entry.entry);
 
         return self;
     }

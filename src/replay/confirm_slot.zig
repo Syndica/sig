@@ -233,7 +233,7 @@ pub const ConfirmSlotFuture = struct {
     }
 };
 
-pub const PohTask = struct {
+const PohTask = struct {
     allocator: Allocator,
     logger: ScopedLogger,
     initial_hash: Hash,
@@ -740,7 +740,7 @@ pub const TestState = struct {
             .max_age = max_age,
             .lamports_per_signature = 1,
             .blockhash_queue = .init(blockhash_queue),
-            .feature_set = .EMPTY,
+            .feature_set = .ALL_DISABLED,
             .rent_collector = .DEFAULT,
             .epoch_stakes = epoch_stakes,
             .slot_state = slot_state,
@@ -756,7 +756,6 @@ pub const TestState = struct {
         var bhq = self.blockhash_queue.tryWrite() orelse unreachable;
         bhq.get().deinit(allocator);
         bhq.unlock();
-        self.feature_set.deinit(allocator);
         self.epoch_stakes.deinit(allocator);
         self.slot_state.deinit(allocator);
         self.stakes_cache.deinit(allocator);
@@ -792,10 +791,13 @@ pub const TestState = struct {
         };
     }
 
-    /// This makes it so the svm will not return an error for these
-    /// transactions. It doesn't mean the transactions themselves will succeed,
-    /// but they will at least execute as if they are legally allowed in the
-    /// block.
+    /// This makes it so the transactions could legally be included in a block.
+    /// The transactions may fail, but at least the block containing this
+    /// transaction would be valid, since the fees are paid and the recent
+    /// blockhash is valid.
+    ///
+    /// With the the existing SVM code, this means the TransactionResult
+    /// returned by loadAndExecuteTransaction will be `ok` instead of `err`
     pub fn makeTransactionsPassable(
         self: *TestState,
         allocator: Allocator,

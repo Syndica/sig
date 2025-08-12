@@ -7,7 +7,6 @@ const Atomic = std.atomic.Value;
 
 const bincode = sig.bincode;
 const sysvars = sig.runtime.sysvar;
-const features = sig.core.features;
 
 const AccountStore = sig.accounts_db.AccountStore;
 const SlotAccountReader = sig.accounts_db.SlotAccountReader;
@@ -97,6 +96,7 @@ pub fn updateSysvarsForNewSlot(
     try updateLastRestartSlot(
         allocator,
         &constants.feature_set,
+        slot,
         hard_forks,
         sysvar_deps,
     );
@@ -198,10 +198,11 @@ pub fn updateClock(allocator: Allocator, deps: UpdateClockDeps) !void {
 pub fn updateLastRestartSlot(
     allocator: Allocator,
     feature_set: *const FeatureSet,
+    slot: sig.core.Slot,
     hard_forks: *const HardForks,
     deps: UpdateSysvarAccountDeps,
 ) !void {
-    if (!feature_set.active.contains(features.LAST_RESTART_SLOT_SYSVAR)) return;
+    if (!feature_set.active(.last_restart_slot_sysvar, slot)) return;
 
     const new_last_restart_slot = blk: {
         var iter = std.mem.reverseIterator(hard_forks.entries.items);
@@ -523,7 +524,7 @@ fn getTimestampEstimate(
         ns_per_slot,
         epoch_start_timestamp,
         max_allowable_drift,
-        feature_set.active.contains(features.WARP_TIMESTAMP_AGAIN),
+        feature_set.active(.warp_timestamp_again, slot),
     );
 }
 
@@ -883,8 +884,7 @@ test "update all sysvars" {
             (try getSysvarAndAccount(Clock, allocator, account_reader)).?;
         defer allocator.free(old_account.data);
 
-        const feature_set = FeatureSet.EMPTY;
-        defer feature_set.deinit(allocator);
+        const feature_set = FeatureSet.ALL_DISABLED;
         const epoch_schedule = EpochSchedule.DEFAULT;
         const epoch_stakes = try EpochStakes.init(allocator);
         defer epoch_stakes.deinit(allocator);
@@ -919,9 +919,8 @@ test "update all sysvars" {
     }
 
     { // updateLastRestartSlot
-        var feature_set = FeatureSet.EMPTY;
-        defer feature_set.deinit(allocator);
-        try feature_set.active.put(allocator, features.LAST_RESTART_SLOT_SYSVAR, 0);
+        var feature_set = FeatureSet.ALL_DISABLED;
+        feature_set.setSlot(.last_restart_slot_sysvar, 0);
 
         const new_restart_slot = slot - 5;
 
@@ -929,11 +928,20 @@ test "update all sysvars" {
         defer hard_forks.deinit(allocator);
         try hard_forks.register(allocator, new_restart_slot);
 
-        _, const old_account =
-            (try getSysvarAndAccount(LastRestartSlot, allocator, account_reader)).?;
+        _, const old_account = (try getSysvarAndAccount(
+            LastRestartSlot,
+            allocator,
+            account_reader,
+        )).?;
         defer allocator.free(old_account.data);
 
-        try updateLastRestartSlot(allocator, &feature_set, &hard_forks, update_sysvar_deps);
+        try updateLastRestartSlot(
+            allocator,
+            &feature_set,
+            slot,
+            &hard_forks,
+            update_sysvar_deps,
+        );
 
         const new_sysvar, const new_account =
             (try getSysvarAndAccount(LastRestartSlot, allocator, account_reader)).?;

@@ -92,6 +92,7 @@ pub fn checkFeePayer(
     nonce_account: ?CopiedAccount,
     rent_collector: *const RentCollector,
     feature_set: *const FeatureSet,
+    slot: sig.core.Slot,
     lamports_per_signature: u64,
 ) error{OutOfMemory}!TransactionResult(struct {
     FeeDetails,
@@ -100,10 +101,7 @@ pub fn checkFeePayer(
     var nonce_account_is_owned = true;
     defer if (nonce_account_is_owned) if (nonce_account) |na| allocator.free(na.account.data);
 
-    const enable_secp256r1 = feature_set.active.contains(
-        sig.core.features.ENABLE_SECP256R1_PRECOMPILE,
-    );
-
+    const enable_secp256r1 = feature_set.active(.enable_secp256r1_precompile, slot);
     const fee_payer_key = transaction.accounts.items(.pubkey)[0];
 
     var loaded_fee_payer = try batch_account_cache.loadAccount(
@@ -119,6 +117,7 @@ pub fn checkFeePayer(
         loaded_fee_payer.account,
         &fee_payer_key,
         feature_set,
+        slot,
         rent_collector,
     ).rent_amount;
 
@@ -409,6 +408,8 @@ fn verifyNonceAccount(account: AccountSharedData, recent_blockhash: *const Hash)
 fn getDurableNonce(transaction: *const RuntimeTransaction) ?Pubkey {
     if (transaction.instructions.len <= 0) return null;
     const instruction = transaction.instructions[NONCED_TX_MARKER_IX_INDEX];
+
+    if (instruction.account_metas.len == 0) return null;
 
     const serialized_size = 4;
     if (instruction.instruction_data.len < serialized_size) return null;
@@ -704,7 +705,8 @@ test "checkFeePayer: happy path fee payer only" {
         &ComputeBudgetLimits.DEFAULT,
         null,
         &sig.core.rent_collector.defaultCollector(10),
-        &sig.core.FeatureSet.EMPTY,
+        &sig.core.FeatureSet.ALL_DISABLED,
+        0,
         5000,
     );
 
@@ -764,7 +766,8 @@ test "checkFeePayer: happy path with same nonce and fee payer" {
         &ComputeBudgetLimits.DEFAULT,
         .{ .pubkey = transaction.fee_payer, .account = nonce_account },
         &sig.core.rent_collector.defaultCollector(10),
-        &sig.core.FeatureSet.EMPTY,
+        &sig.core.FeatureSet.ALL_DISABLED,
+        0,
         5000,
     );
 
@@ -826,7 +829,8 @@ test "checkFeePayer: happy path with separate nonce and fee payer" {
         &ComputeBudgetLimits.DEFAULT,
         .{ .pubkey = Pubkey.initRandom(prng.random()), .account = nonce_account },
         &sig.core.rent_collector.defaultCollector(10),
-        &sig.core.FeatureSet.EMPTY,
+        &sig.core.FeatureSet.ALL_DISABLED,
+        0,
         5000,
     );
 

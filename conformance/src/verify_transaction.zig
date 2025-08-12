@@ -3,8 +3,6 @@ const sig = @import("sig");
 const std = @import("std");
 const utils = @import("utils.zig");
 
-const features = sig.core.features;
-
 const Transaction = sig.core.Transaction;
 
 const RuntimeTransaction = sig.runtime.transaction_execution.RuntimeTransaction;
@@ -14,13 +12,14 @@ const VerifyTransactionResult = union(enum(u8)) {
     err: pb.TxnResult,
 };
 
-const FeatureSet = sig.core.features.FeatureSet;
+const FeatureSet = sig.core.FeatureSet;
 const SlotAccountReader = sig.accounts_db.SlotAccountReader;
 
 pub fn verifyTransaction(
     allocator: std.mem.Allocator,
     transaction: Transaction,
     feature_set: *const FeatureSet,
+    slot: sig.core.Slot,
     account_reader: SlotAccountReader,
 ) !VerifyTransactionResult {
     const serialized_msg = transaction.msg.serializeBounded(
@@ -34,11 +33,12 @@ pub fn verifyTransaction(
     };
     const msg_hash = sig.core.transaction.Message.hash(serialized_msg.slice());
 
-    if (!feature_set.active.contains(features.MOVE_PRECOMPILE_VERIFICATION_TO_SVM)) {
+    if (!feature_set.active(.move_precompile_verification_to_svm, slot)) {
         const maybe_verify_error = try sig.runtime.program.precompiles.verifyPrecompiles(
             allocator,
             transaction,
             feature_set,
+            slot,
         );
         if (maybe_verify_error) |verify_error| {
             const converted = utils.convertTransactionError(verify_error);
@@ -58,14 +58,19 @@ pub fn verifyTransaction(
         &.{transaction},
     ) catch |err| {
         const err_code = switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            else => @panic("TODO: unsure how to handle errors here atm"),
-            // TODO: doesn't exist in the error set yet, missing some logic?
-            // error.UnsupportedVersion => transactionErrorToInt(.UnsupportedVersion),
-            // error.AddressLookupTableNotFound => transactionErrorToInt(.AddressLookupTableNotFound),
-            // error.InvalidAddressLookupTableOwner => transactionErrorToInt(.InvalidAddressLookupTableOwner),
-            // error.InvalidAddressLookupTableData => transactionErrorToInt(.InvalidAddressLookupTableData),
-            // error.InvalidAddressLookupTableIndex => transactionErrorToInt(.InvalidAddressLookupTableIndex),
+            error.AddressLookupTableNotFound => transactionErrorToInt(
+                .AddressLookupTableNotFound,
+            ),
+            error.InvalidAddressLookupTableOwner => transactionErrorToInt(
+                .InvalidAddressLookupTableOwner,
+            ),
+            error.InvalidAddressLookupTableData => transactionErrorToInt(
+                .InvalidAddressLookupTableData,
+            ),
+            error.InvalidAddressLookupTableIndex => transactionErrorToInt(
+                .InvalidAddressLookupTableIndex,
+            ),
+            else => std.debug.panic("Unexpected error: {s}\n", .{@errorName(err)}),
         };
         return .{ .err = .{
             .sanitization_error = true,

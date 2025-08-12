@@ -1364,7 +1364,7 @@ const TestData = struct {
                     .fee_rate_governor = .initRandom(random),
                     .epoch_reward_status = .inactive,
                     .ancestors = .{ .ancestors = .empty },
-                    .feature_set = .{ .active = .empty },
+                    .feature_set = .ALL_DISABLED,
                 },
                 .state = .{
                     .blockhash_queue = .init(.DEFAULT),
@@ -1392,14 +1392,10 @@ const TestData = struct {
         const slot_infos = [_]SlotInfo{
             .initRandom(random, null, root_slot, .{
                 .now = .now(),
-                .last_entry = try .parseBase58String(
-                    "5NjW2CAV6MBQYxpL4oK2CESrpdj6tkcvxP3iigAgrHyR",
-                ),
+                .last_entry = .parse("5NjW2CAV6MBQYxpL4oK2CESrpdj6tkcvxP3iigAgrHyR"),
                 .prev_leader_slot = null,
                 .validator_stake_info = .{
-                    .validator_vote_pubkey = try .parseBase58String(
-                        "11111111111111111111111111111111",
-                    ),
+                    .validator_vote_pubkey = .parse("11111111111111111111111111111111"),
                     .stake = 0,
                     .total_epoch_stake = 10_000,
                 },
@@ -1408,7 +1404,7 @@ const TestData = struct {
             }),
             .initRandom(random, root_slot, 1, .{
                 .now = .now(),
-                .last_entry = try .parseBase58String("11111111111111111111111111111111"),
+                .last_entry = .parse("11111111111111111111111111111111"),
                 .prev_leader_slot = null,
                 .validator_stake_info = null,
                 .num_blocks_on_fork = 0,
@@ -1416,7 +1412,7 @@ const TestData = struct {
             }),
             .initRandom(random, 1, 2, .{
                 .now = .now(),
-                .last_entry = try .parseBase58String("11111111111111111111111111111111"),
+                .last_entry = .parse("11111111111111111111111111111111"),
                 .prev_leader_slot = null,
                 .validator_stake_info = null,
                 .num_blocks_on_fork = 0,
@@ -1424,7 +1420,7 @@ const TestData = struct {
             }),
             .initRandom(random, 2, 3, .{
                 .now = .now(),
-                .last_entry = try .parseBase58String("11111111111111111111111111111111"),
+                .last_entry = .parse("11111111111111111111111111111111"),
                 .prev_leader_slot = null,
                 .validator_stake_info = null,
                 .num_blocks_on_fork = 0,

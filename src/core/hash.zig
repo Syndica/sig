@@ -93,7 +93,13 @@ pub const Hash = extern struct {
         return &self.data;
     }
 
-    pub fn parseBase58String(str: []const u8) error{InvalidHash}!Hash {
+    pub inline fn parse(comptime str: []const u8) Hash {
+        comptime {
+            return parseRuntime(str) catch @compileError("failed to parse hash");
+        }
+    }
+
+    pub fn parseRuntime(str: []const u8) error{InvalidHash}!Hash {
         if (str.len > BASE58_MAX_SIZE) return error.InvalidHash;
         var encoded: std.BoundedArray(u8, BASE58_MAX_SIZE) = .{};
         encoded.appendSliceAssumeCapacity(str);
@@ -152,6 +158,10 @@ pub const LtHash = struct {
     }
 
     pub fn bytes(self: *LtHash) []u8 {
+        return @ptrCast(&self.data);
+    }
+
+    pub fn constBytes(self: *const LtHash) []const u8 {
         return @ptrCast(&self.data);
     }
 
