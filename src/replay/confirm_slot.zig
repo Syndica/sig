@@ -791,10 +791,13 @@ pub const TestState = struct {
         };
     }
 
-    /// This makes it so the svm will not return an error for these
-    /// transactions. It doesn't mean the transactions themselves will succeed,
-    /// but they will at least execute as if they are legally allowed in the
-    /// block.
+    /// This makes it so the transactions could legally be included in a block.
+    /// The transactions may fail, but at least the block containing this
+    /// transaction would be valid, since the fees are paid and the recent
+    /// blockhash is valid.
+    ///
+    /// With the the existing SVM code, this means the TransactionResult
+    /// returned by loadAndExecuteTransaction will be `ok` instead of `err`
     pub fn makeTransactionsPassable(
         self: *TestState,
         allocator: Allocator,
