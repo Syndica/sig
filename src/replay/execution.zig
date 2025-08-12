@@ -37,8 +37,6 @@ const check_slot_agrees_with_cluster = replay.edge_cases.check_slot_agrees_with_
 
 const SvmGateway = replay.svm_gateway.SvmGateway;
 
-const SvmGateway = replay.svm_gateway.SvmGateway;
-
 const confirmSlot = replay.confirm_slot.confirmSlot;
 /// State used for replaying and validating data from blockstore/accountsdb/svm
 pub const ReplayExecutionState = struct {
@@ -423,47 +421,47 @@ pub fn processReplayResults(
 
             if (!replay_state.duplicate_slots_tracker.contains(slot) and
                 try replay_state.blockstore_reader.getDuplicateSlot(slot) != null)
-                {
-                    const duplicate_state: DuplicateState = .fromState(
-                        .from(replay_state.logger),
-                        slot,
-                        replay_state.duplicate_confirmed_slots,
-                        replay_state.fork_choice,
-                        .fromHash(hash),
-                    );
+            {
+                const duplicate_state: DuplicateState = .fromState(
+                    .from(replay_state.logger),
+                    slot,
+                    replay_state.duplicate_confirmed_slots,
+                    replay_state.fork_choice,
+                    .fromHash(hash),
+                );
 
-                    try check_slot_agrees_with_cluster.duplicate(
-                        replay_state.allocator,
-                        .from(replay_state.logger),
-                        slot,
-                        parent_slot,
-                        replay_state.duplicate_slots_tracker,
-                        replay_state.fork_choice,
-                        duplicate_state,
-                    );
-                }
+                try check_slot_agrees_with_cluster.duplicate(
+                    replay_state.allocator,
+                    .from(replay_state.logger),
+                    slot,
+                    parent_slot,
+                    replay_state.duplicate_slots_tracker,
+                    replay_state.fork_choice,
+                    duplicate_state,
+                );
+            }
 
             // TODO bank_notification_sender
 
             // Move unfrozen_gossip_verified_vote_hashes entries to latest_validator_votes_for_frozen_banks
             if (replay_state.unfrozen_gossip_verified_vote_hashes.votes_per_slot
-            .get(slot)) |slot_hashes_const|
-                {
-                    var slot_hashes = slot_hashes_const;
-                    if (slot_hashes.fetchSwapRemove(hash)) |kv| {
-                        var new_frozen_voters = kv.value;
-                        defer new_frozen_voters.deinit(replay_state.allocator);
-                        for (new_frozen_voters.items) |pubkey| {
-                            _ = try replay_state.latest_validator_votes_for_frozen_banks.checkAddVote(
-                                replay_state.allocator,
-                                pubkey,
-                                slot,
-                                hash,
-                                .replay,
-                            );
-                        }
+                .get(slot)) |slot_hashes_const|
+            {
+                var slot_hashes = slot_hashes_const;
+                if (slot_hashes.fetchSwapRemove(hash)) |kv| {
+                    var new_frozen_voters = kv.value;
+                    defer new_frozen_voters.deinit(replay_state.allocator);
+                    for (new_frozen_voters.items) |pubkey| {
+                        _ = try replay_state.latest_validator_votes_for_frozen_banks.checkAddVote(
+                            replay_state.allocator,
+                            pubkey,
+                            slot,
+                            hash,
+                            .replay,
+                        );
                     }
-                    // If `slot_hashes` becomes empty, it'll be removed by `setRoot()` later
+                }
+                // If `slot_hashes` becomes empty, it'll be removed by `setRoot()` later
             }
 
             // TODO block_metadata_notifier
@@ -1029,7 +1027,7 @@ test "processReplayResults: confirm status with done poll and slot complete - su
         .fee_rate_governor = sig.core.FeeRateGovernor.DEFAULT,
         .epoch_reward_status = .inactive,
         .ancestors = .{ .ancestors = .empty },
-        .feature_set = .{ .active = .empty },
+        .feature_set = .ALL_DISABLED,
     };
 
     // Create slot state then modify tick height
