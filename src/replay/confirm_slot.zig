@@ -70,7 +70,14 @@ pub fn confirmSlot(
     }
 
     try startPohVerify(allocator, logger, &future.poh_verifier, last_entry, entries, &future.exit);
-    try scheduleTransactionBatches(allocator, &future.scheduler, account_store, entries, ancestors, reserved_keys);
+    try scheduleTransactionBatches(
+        allocator,
+        &future.scheduler,
+        account_store,
+        entries,
+        ancestors,
+        reserved_keys,
+    );
 
     _ = try future.poll(); // starts batch execution. poll result is cached inside future
 

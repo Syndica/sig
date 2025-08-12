@@ -1,6 +1,5 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
-const builtin = @import("builtin");
 
 const Blake3 = std.crypto.hash.Blake3;
 
