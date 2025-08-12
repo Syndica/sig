@@ -8,6 +8,7 @@ const Allocator = std.mem.Allocator;
 
 const Hash = core.Hash;
 const Ancestors = core.Ancestors;
+const FeatureSet = sig.core.FeatureSet;
 const InstructionAccount = core.instruction.InstructionAccount;
 const Pubkey = core.Pubkey;
 const Transaction = core.Transaction;
@@ -68,6 +69,7 @@ pub fn resolveBatch(
     allocator: Allocator,
     account_reader: SlotAccountReader,
     batch: []const Transaction,
+    reserved_keys: *const std.AutoArrayHashMapUnmanaged(Pubkey, void),
 ) !ResolvedBatch {
     var accounts = try std.ArrayListUnmanaged(LockableAccount)
         .initCapacity(allocator, Transaction.numAccounts(batch));
@@ -77,7 +79,7 @@ pub fn resolveBatch(
     errdefer allocator.free(resolved_txns);
 
     for (batch, resolved_txns) |transaction, *resolved| {
-        resolved.* = try resolveTransaction(allocator, account_reader, transaction);
+        resolved.* = try resolveTransaction(allocator, account_reader, transaction, reserved_keys);
         for (
             resolved.accounts.items(.pubkey),
             resolved.accounts.items(.is_writable),
@@ -99,6 +101,7 @@ fn resolveTransaction(
     allocator: Allocator,
     account_reader: SlotAccountReader,
     transaction: Transaction,
+    reserved_keys: *const std.AutoArrayHashMapUnmanaged(Pubkey, void),
 ) !ResolvedTransaction {
     const message = transaction.msg;
 
@@ -124,12 +127,12 @@ fn resolveTransaction(
     for (message.account_keys, 0..) |pubkey, i| accounts.appendAssumeCapacity(.{
         .pubkey = pubkey,
         .is_signer = message.isSigner(i),
-        .is_writable = message.isWritable(i, lookups),
+        .is_writable = message.isWritable(i, lookups, reserved_keys),
     });
     for (lookups.writable, 0..) |pubkey, i| accounts.appendAssumeCapacity(.{
         .pubkey = pubkey,
         .is_signer = false,
-        .is_writable = message.isWritable(message.account_keys.len + i, lookups),
+        .is_writable = message.isWritable(message.account_keys.len + i, lookups, reserved_keys),
     });
     for (lookups.readonly) |pubkey| accounts.appendAssumeCapacity(.{
         .pubkey = pubkey,
@@ -406,10 +409,18 @@ test resolveBatch {
     defer ancestors.deinit(std.testing.allocator);
     try ancestors.ancestors.put(std.testing.allocator, 0, {});
 
+    var reserved_keys = try sig.core.reserved_accounts.reservedAccountsForSlot(
+        std.testing.allocator,
+        &sig.core.FeatureSet.ALL_DISABLED,
+        0,
+    );
+    defer reserved_keys.deinit(std.testing.allocator);
+
     const resolved = try resolveBatch(
         std.testing.allocator,
         map.accountReader().forSlot(&ancestors),
         &.{tx},
+        &reserved_keys,
     );
     defer resolved.deinit(std.testing.allocator);
 

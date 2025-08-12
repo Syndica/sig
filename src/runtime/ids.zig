@@ -8,8 +8,6 @@ const Pubkey = sig.core.Pubkey;
 
 pub const NATIVE_LOADER_ID: Pubkey = .parse("NativeLoader1111111111111111111111111111111");
 
-pub const SYSVAR_INSTRUCTIONS_ID: Pubkey = .parse("Sysvar1nstructions1111111111111111111111111");
-
 // Deprecated - UNUSED
 pub const SYSVAR_REWARDS_ID: Pubkey = .parse("SysvarRewards111111111111111111111111111111");
 

@@ -51,6 +51,7 @@ pub fn confirmSlot(
     committer: Committer,
     verify_ticks_params: VerifyTicksParams,
     ancestors: *const Ancestors,
+    reserved_keys: *const std.AutoArrayHashMapUnmanaged(sig.core.Pubkey, void),
 ) !*ConfirmSlotFuture {
     logger.info().log("confirming slot");
     const future = fut: {
@@ -69,7 +70,7 @@ pub fn confirmSlot(
     }
 
     try startPohVerify(allocator, logger, &future.poh_verifier, last_entry, entries, &future.exit);
-    try scheduleTransactionBatches(allocator, &future.scheduler, account_store, entries, ancestors);
+    try scheduleTransactionBatches(allocator, &future.scheduler, account_store, entries, ancestors, reserved_keys);
 
     _ = try future.poll(); // starts batch execution. poll result is cached inside future
 
@@ -109,6 +110,7 @@ fn scheduleTransactionBatches(
     account_store: AccountStore,
     entries: []const Entry,
     ancestors: *const Ancestors,
+    reserved_keys: *const std.AutoArrayHashMapUnmanaged(sig.core.Pubkey, void),
 ) !void {
     var total_transactions: usize = 0;
     for (entries) |entry| {
@@ -118,6 +120,7 @@ fn scheduleTransactionBatches(
             allocator,
             account_store.reader().forSlot(ancestors),
             entry.transactions,
+            reserved_keys,
         );
         errdefer batch.deinit(allocator);
 
@@ -379,6 +382,13 @@ test "happy path: trivial case" {
     }
     var tick_hash_count: u64 = 0;
 
+    var reserved_keys = try sig.core.reserved_accounts.reservedAccountsForSlot(
+        std.testing.allocator,
+        &sig.core.FeatureSet.ALL_DISABLED,
+        0,
+    );
+    defer reserved_keys.deinit(std.testing.allocator);
+
     const future = try confirmSlot(
         std.testing.allocator,
         .FOR_TESTS,
@@ -397,6 +407,7 @@ test "happy path: trivial case" {
             .tick_hash_count = &tick_hash_count,
         },
         &.{ .ancestors = .empty },
+        &reserved_keys,
     );
     defer future.destroy(std.testing.allocator);
 
@@ -422,6 +433,13 @@ test "happy path: partial slot" {
     const entries: []const sig.core.Entry = entry_array.slice();
     for (entries) |e| try state.makeTransactionsPassable(allocator, e.transactions);
 
+    var reserved_keys = try sig.core.reserved_accounts.reservedAccountsForSlot(
+        std.testing.allocator,
+        &sig.core.FeatureSet.ALL_DISABLED,
+        0,
+    );
+    defer reserved_keys.deinit(std.testing.allocator);
+
     const future = try confirmSlot(
         std.testing.allocator,
         .FOR_TESTS,
@@ -440,6 +458,7 @@ test "happy path: partial slot" {
             .tick_hash_count = &tick_hash_count,
         },
         &.{ .ancestors = .empty },
+        &reserved_keys,
     );
     defer future.destroy(std.testing.allocator);
 
@@ -466,6 +485,13 @@ test "happy path: full slot" {
     const entries: []const sig.core.Entry = entry_array.slice();
     for (entries) |e| try state.makeTransactionsPassable(allocator, e.transactions);
 
+    var reserved_keys = try sig.core.reserved_accounts.reservedAccountsForSlot(
+        std.testing.allocator,
+        &sig.core.FeatureSet.ALL_DISABLED,
+        0,
+    );
+    defer reserved_keys.deinit(std.testing.allocator);
+
     const future = try confirmSlot(
         std.testing.allocator,
         .FOR_TESTS,
@@ -484,6 +510,7 @@ test "happy path: full slot" {
             .tick_hash_count = &tick_hash_count,
         },
         &.{ .ancestors = .empty },
+        &reserved_keys,
     );
 
     defer future.destroy(std.testing.allocator);
@@ -511,6 +538,13 @@ test "fail: full slot not marked full -> .InvalidLastTick" {
     const entries: []const sig.core.Entry = entry_array.slice();
     for (entries) |e| try state.makeTransactionsPassable(allocator, e.transactions);
 
+    var reserved_keys = try sig.core.reserved_accounts.reservedAccountsForSlot(
+        std.testing.allocator,
+        &sig.core.FeatureSet.ALL_DISABLED,
+        0,
+    );
+    defer reserved_keys.deinit(std.testing.allocator);
+
     const future = try confirmSlot(
         std.testing.allocator,
         .noop,
@@ -529,6 +563,7 @@ test "fail: full slot not marked full -> .InvalidLastTick" {
             .tick_hash_count = &tick_hash_count,
         },
         &.{ .ancestors = .empty },
+        &reserved_keys,
     );
     defer future.destroy(std.testing.allocator);
 
@@ -557,6 +592,13 @@ test "fail: no trailing tick at max height -> .TrailingEntry" {
     const entries: []const sig.core.Entry = entry_array.slice();
     for (entries) |e| try state.makeTransactionsPassable(allocator, e.transactions);
 
+    var reserved_keys = try sig.core.reserved_accounts.reservedAccountsForSlot(
+        std.testing.allocator,
+        &sig.core.FeatureSet.ALL_DISABLED,
+        0,
+    );
+    defer reserved_keys.deinit(std.testing.allocator);
+
     const future = try confirmSlot(
         std.testing.allocator,
         .noop,
@@ -575,6 +617,7 @@ test "fail: no trailing tick at max height -> .TrailingEntry" {
             .tick_hash_count = &tick_hash_count,
         },
         &.{ .ancestors = .empty },
+        &reserved_keys,
     );
     defer future.destroy(std.testing.allocator);
 
@@ -603,6 +646,13 @@ test "fail: invalid poh chain" {
     const entries: []sig.core.Entry = entry_array.slice();
     for (entries) |e| try state.makeTransactionsPassable(allocator, e.transactions);
 
+    var reserved_keys = try sig.core.reserved_accounts.reservedAccountsForSlot(
+        std.testing.allocator,
+        &sig.core.FeatureSet.ALL_DISABLED,
+        0,
+    );
+    defer reserved_keys.deinit(std.testing.allocator);
+
     // break the hash chain
     entries[0].hash.data[0] +%= 1;
 
@@ -624,6 +674,7 @@ test "fail: invalid poh chain" {
             .tick_hash_count = &tick_hash_count,
         },
         &.{ .ancestors = .empty },
+        &reserved_keys,
     );
     defer future.destroy(std.testing.allocator);
 
@@ -652,6 +703,13 @@ test "fail: sigverify" {
     const entries: []sig.core.Entry = entry_array.slice();
     for (entries) |e| try state.makeTransactionsPassable(allocator, e.transactions);
 
+    var reserved_keys = try sig.core.reserved_accounts.reservedAccountsForSlot(
+        std.testing.allocator,
+        &sig.core.FeatureSet.ALL_DISABLED,
+        0,
+    );
+    defer reserved_keys.deinit(std.testing.allocator);
+
     const future = try confirmSlot(
         std.testing.allocator,
         .noop,
@@ -670,6 +728,7 @@ test "fail: sigverify" {
             .tick_hash_count = &tick_hash_count,
         },
         &.{ .ancestors = .empty },
+        &reserved_keys,
     );
     defer future.destroy(std.testing.allocator);
 

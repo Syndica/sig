@@ -125,7 +125,7 @@ pub const BatchAccountCache = struct {
 
         { // load txes account_keys
             for (accounts.items(.pubkey)) |account_key| {
-                if (account_key.equals(&sig.runtime.ids.SYSVAR_INSTRUCTIONS_ID)) {
+                if (account_key.equals(&sig.runtime.sysvar.instruction.ID)) {
                     // this code is special, and requires constructing per-transaction accounts,
                     // which we will not perform in advance.
                     @branchHint(.unlikely);
@@ -164,7 +164,7 @@ pub const BatchAccountCache = struct {
                 const program_key = instr.program_meta.pubkey;
 
                 if (program_key.equals(&runtime.ids.NATIVE_LOADER_ID) or
-                    program_key.equals(&runtime.ids.SYSVAR_INSTRUCTIONS_ID)) continue;
+                    program_key.equals(&runtime.sysvar.instruction.ID)) continue;
 
                 const program_account = map.get(program_key) orelse
                     unreachable; // safe: we loaded all accounts in the previous loop
@@ -209,7 +209,7 @@ pub const BatchAccountCache = struct {
                 const program_key = instr.program_meta.pubkey;
 
                 if (program_key.equals(&runtime.ids.NATIVE_LOADER_ID) or
-                    program_key.equals(&runtime.ids.SYSVAR_INSTRUCTIONS_ID)) continue;
+                    program_key.equals(&runtime.sysvar.instruction.ID)) continue;
 
                 const program_account = map.get(program_key) orelse
                     unreachable; // safe: we loaded all accounts in the previous loop
@@ -420,7 +420,7 @@ pub const BatchAccountCache = struct {
         key: *const Pubkey,
         is_writable: bool,
     ) error{OutOfMemory}!LoadedTransactionAccount {
-        if (key.equals(&runtime.ids.SYSVAR_INSTRUCTIONS_ID)) {
+        if (key.equals(&runtime.sysvar.instruction.ID)) {
             @branchHint(.unlikely);
             const account = try self.sysvar_instruction_account_datas.addOne(allocator);
             account.* = try constructInstructionsAccount(allocator, transaction);
@@ -472,7 +472,7 @@ pub const BatchAccountCache = struct {
         is_writable: bool,
     ) error{OutOfMemory}!?LoadedTransactionAccount {
         const maybe_account: ?*AccountSharedData = if (key.equals(
-            &runtime.ids.SYSVAR_INSTRUCTIONS_ID,
+            &runtime.sysvar.instruction.ID,
         )) account: {
             @branchHint(.unlikely);
             const account = try self.sysvar_instruction_account_datas.addOne(allocator);
@@ -617,7 +617,7 @@ fn constructInstructionsAccount(
 
     return .{
         .data = try data.toOwnedSlice(),
-        .owner = runtime.ids.SYSVAR_INSTRUCTIONS_ID,
+        .owner = runtime.sysvar.instruction.ID,
         .lamports = 0, // a bit weird, but seems correct
         .executable = false,
         .rent_epoch = 0,
@@ -716,7 +716,7 @@ test "loadTransactionAccounts sysvar instruction" {
     var accounts = std.MultiArrayList(AccountMeta).empty;
     defer accounts.deinit(allocator);
     try accounts.append(allocator, sig.core.instruction.InstructionAccount{
-        .pubkey = runtime.ids.SYSVAR_INSTRUCTIONS_ID,
+        .pubkey = runtime.sysvar.instruction.ID,
         .is_signer = false,
         .is_writable = false,
     });
