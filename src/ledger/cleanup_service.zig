@@ -9,7 +9,7 @@ const Pubkey = sig.core.Pubkey;
 const Signature = sig.core.Signature;
 const Slot = sig.core.Slot;
 
-const BlockstoreDB = ledger.BlockstoreDB;
+const LedgerDB = ledger.LedgerDB;
 const LedgerReader = ledger.reader.LedgerReader;
 const LedgerResultWriter = ledger.result_writer.LedgerResultWriter;
 
@@ -36,7 +36,7 @@ const LOG_SCOPE: []const u8 = "ledger.cleanup_service";
 pub fn run(
     logger_: sig.trace.Logger,
     ledger_reader: *LedgerReader,
-    db: *BlockstoreDB,
+    db: *LedgerDB,
     lowest_cleanup_slot: *sig.sync.RwMux(Slot),
     max_ledger_shreds: u64,
     exit: *AtomicBool,
@@ -82,7 +82,7 @@ pub fn run(
 pub fn cleanBlockstore(
     logger_: sig.trace.Logger,
     ledger_reader: *LedgerReader,
-    db: *BlockstoreDB,
+    db: *LedgerDB,
     lowest_cleanup_slot: *sig.sync.RwMux(Slot),
     max_ledger_shreds: u64,
     last_purge_slot: u64,
@@ -210,7 +210,7 @@ fn findSlotsToClean(
 /// NOTE: this purges the range within [from_slot, to_slot] inclusive
 ///
 /// analog to [`run_purge_with_stats`](https://github.com/anza-xyz/agave/blob/26692e666454d340a6691e2483194934e6a8ddfc/ledger/src/blockstore/blockstore_purge.rs#L202)
-pub fn purgeSlots(db: *BlockstoreDB, from_slot: Slot, to_slot: Slot) !bool {
+pub fn purgeSlots(db: *LedgerDB, from_slot: Slot, to_slot: Slot) !bool {
     var write_batch = try db.initWriteBatch();
     defer write_batch.deinit();
 
@@ -235,7 +235,7 @@ pub fn purgeSlots(db: *BlockstoreDB, from_slot: Slot, to_slot: Slot) !bool {
 /// inline for (COLUMN_FAMILIES) |cf| {
 ///     try write_batch.deleteRange(cf, from_slot, to_slot);
 /// }
-fn writePurgeRange(write_batch: *BlockstoreDB.WriteBatch, from_slot: Slot, to_slot: Slot) !void {
+fn writePurgeRange(write_batch: *LedgerDB.WriteBatch, from_slot: Slot, to_slot: Slot) !void {
     var delete_count: u32 = 0; // sanity check
 
     // NOTE: we need to conver the slot into keys for the column families
@@ -264,7 +264,7 @@ fn writePurgeRange(write_batch: *BlockstoreDB.WriteBatch, from_slot: Slot, to_sl
     );
     // NOTE: for `address_signatures`, agave doesnt key based on slot for some reason
     // (permalink comment seems incorrect)
-    // https://github.com/anza-xyz/agave/blob/da029625d180dd1d396d26b74a5c281b7786e8c9/ledger/src/blockstore_db.rs#L962
+    // https://github.com/anza-xyz/agave/blob/da029625d180dd1d396d26b74a5c281b7786e8c9/ledger/src/ledger_db.rs#L962
     try purgeRangeWithCount(
         write_batch,
         schema.address_signatures,
@@ -302,7 +302,7 @@ fn writePurgeRange(write_batch: *BlockstoreDB.WriteBatch, from_slot: Slot, to_sl
 }
 
 fn purgeRangeWithCount(
-    write_batch: *BlockstoreDB.WriteBatch,
+    write_batch: *LedgerDB.WriteBatch,
     comptime cf: sig.ledger.database.ColumnFamily,
     from_key: cf.Key,
     to_key: cf.Key,
@@ -317,7 +317,7 @@ fn purgeRangeWithCount(
 /// inline for (COLUMN_FAMILIES) |cf| {
 ///     try db.deleteFileRange(cf, from_slot, to_slot);
 /// }
-fn purgeFilesInRange(db: *BlockstoreDB, from_slot: Slot, to_slot: Slot) !void {
+fn purgeFilesInRange(db: *LedgerDB, from_slot: Slot, to_slot: Slot) !void {
     var delete_count: u32 = 0; // sanity check
 
     // NOTE: we need to conver the slot into keys for the column families
@@ -346,7 +346,7 @@ fn purgeFilesInRange(db: *BlockstoreDB, from_slot: Slot, to_slot: Slot) !void {
     );
     // NOTE: for `address_signatures`, agave doesnt key based on slot for some reason
     // (permalink comment seems incorrect?)
-    // https://github.com/anza-xyz/agave/blob/da029625d180dd1d396d26b74a5c281b7786e8c9/ledger/src/blockstore_db.rs#L962
+    // https://github.com/anza-xyz/agave/blob/da029625d180dd1d396d26b74a5c281b7786e8c9/ledger/src/ledger_db.rs#L962
     try purgeFileRangeWithCount(
         db,
         schema.address_signatures,
@@ -390,7 +390,7 @@ fn purgeFilesInRange(db: *BlockstoreDB, from_slot: Slot, to_slot: Slot) !void {
 }
 
 fn purgeFileRangeWithCount(
-    db: *BlockstoreDB,
+    db: *LedgerDB,
     comptime cf: sig.ledger.database.ColumnFamily,
     from_key: cf.Key,
     to_key: cf.Key,
@@ -400,7 +400,7 @@ fn purgeFileRangeWithCount(
     count.* += 1;
 }
 
-const Blockstore = ledger.BlockstoreDB;
+const Blockstore = ledger.LedgerDB;
 const TestDB = ledger.tests.TestDB;
 
 test cleanBlockstore {
@@ -504,7 +504,7 @@ test "findSlotsToClean" {
     }
     // When implementation is rocksdb, we need to flush memtable to disk to be able to assert.
     // We do that by deiniting the current db, which triggers the flushing.
-    if (sig.build_options.blockstore_db == .rocksdb) {
+    if (sig.build_options.ledger_db == .rocksdb) {
         db.deinit();
         db = try TestDB.reuseBlockstore(@src());
         reader.db = db;

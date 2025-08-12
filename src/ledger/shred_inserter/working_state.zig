@@ -14,7 +14,7 @@ const Slot = sig.core.Slot;
 const SortedMap = sig.utils.collections.SortedMap;
 const Timer = sig.time.Timer;
 
-const BlockstoreDB = ledger.blockstore.BlockstoreDB;
+const LedgerDB = ledger.blockstore.LedgerDB;
 const BlockstoreInsertionMetrics = shred_inserter.shred_inserter.BlockstoreInsertionMetrics;
 const BytesRef = ledger.database.BytesRef;
 const CodeShred = ledger.shred.CodeShred;
@@ -22,7 +22,7 @@ const ColumnFamily = ledger.database.ColumnFamily;
 const ErasureSetId = ledger.shred.ErasureSetId;
 const Shred = ledger.shred.Shred;
 const ShredId = ledger.shred.ShredId;
-const WriteBatch = BlockstoreDB.WriteBatch;
+const WriteBatch = LedgerDB.WriteBatch;
 
 const ErasureMeta = meta.ErasureMeta;
 const Index = meta.Index;
@@ -77,7 +77,7 @@ const newlinesToSpaces = sig.utils.fmt.newlinesToSpaces;
 pub const PendingInsertShredsState = struct {
     allocator: Allocator,
     logger: sig.trace.ScopedLogger(@typeName(Self)),
-    db: *BlockstoreDB,
+    db: *LedgerDB,
     write_batch: WriteBatch,
     just_inserted_shreds: AutoHashMap(ShredId, Shred),
     erasure_metas: SortedMap(ErasureSetId, WorkingEntry(ErasureMeta)),
@@ -94,7 +94,7 @@ pub const PendingInsertShredsState = struct {
     pub fn init(
         allocator: Allocator,
         logger: sig.trace.Logger,
-        db: *BlockstoreDB,
+        db: *LedgerDB,
         metrics: BlockstoreInsertionMetrics,
     ) !Self {
         return .{
@@ -288,7 +288,7 @@ pub const PendingInsertShredsState = struct {
 
 pub const MerkleRootMetaWorkingStore = struct {
     allocator: Allocator,
-    db: *BlockstoreDB,
+    db: *LedgerDB,
     working_entries: *AutoHashMap(ErasureSetId, WorkingEntry(MerkleRootMeta)),
 
     const Self = @This();
@@ -321,7 +321,7 @@ pub const MerkleRootMetaWorkingStore = struct {
 
 pub const ErasureMetaWorkingStore = struct {
     allocator: Allocator,
-    db: *BlockstoreDB,
+    db: *LedgerDB,
     working_entries: *SortedMap(ErasureSetId, WorkingEntry(ErasureMeta)),
 
     const Self = @This();
@@ -410,7 +410,7 @@ pub const ErasureMetaWorkingStore = struct {
 };
 
 pub const DuplicateShredsWorkingStore = struct {
-    db: *BlockstoreDB,
+    db: *LedgerDB,
     duplicate_shreds: *std.ArrayList(PossibleDuplicateShred),
 
     const Self = DuplicateShredsWorkingStore;
@@ -506,7 +506,7 @@ const ShredConflict = struct {
 
 pub const ShredWorkingStore = struct {
     logger: sig.trace.ScopedLogger(@typeName(Self)),
-    db: *BlockstoreDB,
+    db: *LedgerDB,
     just_inserted_shreds: *const AutoHashMap(ShredId, Shred),
 
     const Self = @This();

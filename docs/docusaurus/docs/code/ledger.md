@@ -72,7 +72,7 @@ The following diagram illustrates the dependencies between the ShredNetwork and 
 ```mermaid
 graph TD
     A[ShredNetwork] --> B[ShredInserter]
-    B --> C[BlockstoreDB]
+    B --> C[LedgerDB]
     D[cleanup_service] --> C
     D --> E[LedgerReader]
 ```
@@ -83,10 +83,10 @@ graph TD
   - The **ShredInserter** to insert shreds received from the network via Gossip.
 
 - The **ShredInserter** relies on:
-  - The **BlockstoreDB**, which serves as the destination for writing data, backed by the RocksDB implementation of the ledger.
+  - The **LedgerDB**, which serves as the destination for writing data, backed by the RocksDB implementation of the ledger.
 
 - The **cleanup service** employs:
-  - The **BlockstoreDB** for performing cleanup operations, also backed by RocksDB.
+  - The **LedgerDB** for performing cleanup operations, also backed by RocksDB.
   - The **LedgerReader** for reading data during cleanup.
 
 The ShredNetwork can be run standalone without running the full node.
@@ -141,4 +141,4 @@ The tests in these two files are also a good resource for gaining a better under
 
 The different components of the ledger—Backing Database, ShredInserter, Shredder, Reader, Writer, etc.—work together to manage how data is stored and retrieved.
 
-The **BlockstoreDB** acts as the ledger’s storage, while the Reader and Writer simplify interactions with the database, making it easy to store and retrieve data without worrying about the low-level details of the storage backend.
+The **LedgerDB** acts as the ledger’s storage, while the Reader and Writer simplify interactions with the database, making it easy to store and retrieve data without worrying about the low-level details of the storage backend.

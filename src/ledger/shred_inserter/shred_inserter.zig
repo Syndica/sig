@@ -27,7 +27,7 @@ const SortedSet = sig.utils.collections.SortedSet;
 const SortedMap = sig.utils.collections.SortedMap;
 const Timer = sig.time.Timer;
 
-const BlockstoreDB = ledger.blockstore.BlockstoreDB;
+const LedgerDB = ledger.blockstore.LedgerDB;
 const BytesRef = ledger.database.BytesRef;
 const IndexMetaWorkingSetEntry = lib.working_state.IndexMetaWorkingSetEntry;
 const MerkleRootValidator = lib.merkle_root_checks.MerkleRootValidator;
@@ -35,7 +35,7 @@ const PendingInsertShredsState = lib.working_state.PendingInsertShredsState;
 const PossibleDuplicateShred = lib.working_state.PossibleDuplicateShred;
 const WorkingEntry = lib.working_state.WorkingEntry;
 const ShredWorkingStore = lib.working_state.ShredWorkingStore;
-const WriteBatch = BlockstoreDB.WriteBatch;
+const WriteBatch = LedgerDB.WriteBatch;
 
 const ErasureMeta = meta.ErasureMeta;
 const Index = meta.Index;
@@ -52,7 +52,7 @@ const DEFAULT_TICKS_PER_SECOND = sig.core.time.DEFAULT_TICKS_PER_SECOND;
 pub const ShredInserter = struct {
     allocator: Allocator,
     logger: sig.trace.ScopedLogger(@typeName(Self)),
-    db: BlockstoreDB,
+    db: LedgerDB,
     lock: Mutex,
     max_root: Atomic(u64), // TODO shared
     metrics: BlockstoreInsertionMetrics,
@@ -63,7 +63,7 @@ pub const ShredInserter = struct {
         allocator: Allocator,
         logger: sig.trace.Logger,
         registry: *sig.prometheus.Registry(.{}),
-        db: BlockstoreDB,
+        db: LedgerDB,
     ) GetMetricError!Self {
         return .{
             .allocator = allocator,
@@ -1205,7 +1205,7 @@ fn assertOk(result: anytype) void {
 
 const ShredInserterTestState = struct {
     state: *TestState,
-    db: BlockstoreDB,
+    db: LedgerDB,
     inserter: ShredInserter,
 
     pub fn init(

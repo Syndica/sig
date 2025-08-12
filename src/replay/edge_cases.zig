@@ -1510,7 +1510,7 @@ fn testLedgerRw(
     logger: replay.service.Logger,
     state: *TestLedgerRwState,
 ) !struct {
-    sig.ledger.BlockstoreDB,
+    sig.ledger.LedgerDB,
     sig.ledger.LedgerReader,
     sig.ledger.LedgerResultWriter,
 } {

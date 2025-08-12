@@ -584,7 +584,7 @@ const Cmd = struct {
                 .alias = .none,
                 .default_value = 5_000_000,
                 .config = {},
-                .help = "Max number of shreds to store in the blockstore",
+                .help = "Max number of shreds to store in the ledger",
             },
         };
 
@@ -1068,17 +1068,17 @@ fn validator(
         try leader_schedule_cache.put(bank_fields.epoch, schedule);
     }
 
-    // blockstore
-    var blockstore_db = try sig.ledger.BlockstoreDB.open(
+    // ledger
+    var ledger_db = try sig.ledger.LedgerDB.open(
         allocator,
         app_base.logger.unscoped(),
-        sig.VALIDATOR_DIR ++ "blockstore",
+        sig.VALIDATOR_DIR ++ "ledger",
     );
     const shred_inserter = try sig.ledger.ShredInserter.init(
         allocator,
         app_base.logger.unscoped(),
         app_base.metrics_registry,
-        blockstore_db,
+        ledger_db,
     );
 
     // cleanup service
@@ -1095,7 +1095,7 @@ fn validator(
     ledger_reader.* = try LedgerReader.init(
         allocator,
         app_base.logger.unscoped(),
-        blockstore_db,
+        ledger_db,
         app_base.metrics_registry,
         lowest_cleanup_slot,
         max_root,
@@ -1106,7 +1106,7 @@ fn validator(
     ledger_result_writer.* = try LedgerResultWriter.init(
         allocator,
         app_base.logger.unscoped(),
-        blockstore_db,
+        ledger_db,
         app_base.metrics_registry,
         lowest_cleanup_slot,
         max_root,
@@ -1115,7 +1115,7 @@ fn validator(
     var cleanup_service_handle = try std.Thread.spawn(.{}, sig.ledger.cleanup_service.run, .{
         app_base.logger.unscoped(),
         ledger_reader,
-        &blockstore_db,
+        &ledger_db,
         lowest_cleanup_slot,
         cfg.max_shreds,
         app_base.exit,
@@ -1295,17 +1295,17 @@ fn shredNetwork(
         .{ &rpc_epoch_ctx_service, app_base.exit },
     );
 
-    // blockstore
-    var blockstore_db = try sig.ledger.BlockstoreDB.open(
+    // ledger
+    var ledger_db = try sig.ledger.LedgerDB.open(
         allocator,
         app_base.logger.unscoped(),
-        sig.VALIDATOR_DIR ++ "blockstore",
+        sig.VALIDATOR_DIR ++ "ledger",
     );
     const shred_inserter = try sig.ledger.ShredInserter.init(
         allocator,
         app_base.logger.unscoped(),
         app_base.metrics_registry,
-        blockstore_db,
+        ledger_db,
     );
 
     // cleanup service
@@ -1322,7 +1322,7 @@ fn shredNetwork(
     ledger_reader.* = try LedgerReader.init(
         allocator,
         app_base.logger.unscoped(),
-        blockstore_db,
+        ledger_db,
         app_base.metrics_registry,
         lowest_cleanup_slot,
         max_root,
@@ -1331,7 +1331,7 @@ fn shredNetwork(
     var cleanup_service_handle = try std.Thread.spawn(.{}, sig.ledger.cleanup_service.run, .{
         app_base.logger.unscoped(),
         ledger_reader,
-        &blockstore_db,
+        &ledger_db,
         lowest_cleanup_slot,
         cfg.max_shreds,
         app_base.exit,

@@ -13,7 +13,7 @@ pub const transaction_status = @import("transaction_status.zig");
 pub const tests = @import("tests.zig");
 pub const fuzz_ledger = @import("fuzz.zig");
 
-pub const BlockstoreDB = blockstore.BlockstoreDB;
+pub const LedgerDB = blockstore.LedgerDB;
 pub const ShredInserter = shred_inserter.ShredInserter;
 pub const LedgerReader = reader.LedgerReader;
 pub const LedgerResultWriter = result_writer.LedgerResultWriter;

@@ -32,7 +32,7 @@ const shred_layout = sig.ledger.shred.layout;
 
 // ledger
 const BytesRef = ledger.database.BytesRef;
-const BlockstoreDB = ledger.blockstore.BlockstoreDB;
+const LedgerDB = ledger.blockstore.LedgerDB;
 const ColumnFamily = ledger.database.ColumnFamily;
 const DuplicateSlotProof = ledger.meta.DuplicateSlotProof;
 const PerfSample = ledger.meta.PerfSample;
@@ -49,7 +49,7 @@ const DEFAULT_TICKS_PER_SECOND = sig.core.time.DEFAULT_TICKS_PER_SECOND;
 pub const LedgerReader = struct {
     allocator: Allocator,
     logger: ScopedLogger(@typeName(Self)),
-    db: BlockstoreDB,
+    db: LedgerDB,
     // TODO: change naming to 'highest_slot_cleaned'
     lowest_cleanup_slot: *RwMux(Slot),
     max_root: *std.atomic.Value(u64),
@@ -62,7 +62,7 @@ pub const LedgerReader = struct {
     pub fn init(
         allocator: Allocator,
         logger: Logger,
-        db: BlockstoreDB,
+        db: LedgerDB,
         registry: *Registry(.{}),
         lowest_cleanup_slot: *RwMux(Slot),
         max_root: *std.atomic.Value(u64),
@@ -92,7 +92,7 @@ pub const LedgerReader = struct {
     pub fn slotMetaIterator(
         self: *Self,
         slot: Slot,
-    ) !BlockstoreDB.Iterator(schema.slot_meta, .forward) {
+    ) !LedgerDB.Iterator(schema.slot_meta, .forward) {
         return try self.db.iterator(schema.slot_meta, .forward, slot);
     }
 
@@ -100,7 +100,7 @@ pub const LedgerReader = struct {
     pub fn rootedSlotIterator(
         self: *Self,
         slot: Slot,
-    ) !BlockstoreDB.Iterator(schema.rooted_slots, .forward) {
+    ) !LedgerDB.Iterator(schema.rooted_slots, .forward) {
         return self.db.iterator(schema.rooted_slots, .forward, slot);
     }
 
@@ -1224,7 +1224,7 @@ pub const LedgerReader = struct {
     /// Analogous to [get_slots_since](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L3821)
     pub fn getSlotsSince(
         allocator: Allocator,
-        db: *BlockstoreDB,
+        db: *LedgerDB,
         slots: []const Slot,
     ) !std.AutoArrayHashMapUnmanaged(Slot, std.ArrayListUnmanaged(Slot)) {
         // TODO perf: support multi_get in db
@@ -1505,12 +1505,12 @@ const BlockstoreRpcApiMetrics = struct {
 
 pub const AncestorIterator = struct {
     allocator: Allocator,
-    db: *BlockstoreDB,
+    db: *LedgerDB,
     next_slot: ?Slot,
 
     pub fn initExclusive(
         allocator: Allocator,
-        db: *BlockstoreDB,
+        db: *LedgerDB,
         start_slot: Slot,
     ) !AncestorIterator {
         var self = AncestorIterator.initInclusive(allocator, db, start_slot);
@@ -1520,7 +1520,7 @@ pub const AncestorIterator = struct {
 
     pub fn initInclusive(
         allocator: Allocator,
-        db: *BlockstoreDB,
+        db: *LedgerDB,
         start_slot: Slot,
     ) AncestorIterator {
         return .{
@@ -1548,7 +1548,7 @@ pub const AncestorIterator = struct {
 };
 
 const bincode = sig.bincode;
-const Blockstore = ledger.BlockstoreDB;
+const Blockstore = ledger.LedgerDB;
 const CodeShred = ledger.shred.CodeShred;
 const TestDB = ledger.tests.TestDB;
 
@@ -1639,7 +1639,7 @@ test "getFirstDuplicateProof" {
 
     const path = std.fmt.comptimePrint("{s}/{s}", .{ sig.TEST_STATE_DIR ++ "blockstore/insert_shred", "getFirstDuplicateProof" });
     try sig.ledger.tests.freshDir(path);
-    var db = try BlockstoreDB.open(allocator, logger, path);
+    var db = try LedgerDB.open(allocator, logger, path);
     defer db.deinit();
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);

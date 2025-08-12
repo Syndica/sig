@@ -19,7 +19,7 @@ const Timer = sig.time.Timer;
 
 // ledger
 const AncestorIterator = ledger.reader.AncestorIterator;
-const BlockstoreDB = ledger.blockstore.BlockstoreDB;
+const LedgerDB = ledger.blockstore.LedgerDB;
 const FrozenHashVersioned = ledger.meta.FrozenHashVersioned;
 const FrozenHashStatus = ledger.meta.FrozenHashStatus;
 const SlotMeta = ledger.meta.SlotMeta;
@@ -32,7 +32,7 @@ const schema = ledger.schema.schema;
 pub const LedgerResultWriter = struct {
     allocator: Allocator,
     logger: ScopedLogger(@typeName(LedgerResultWriter)),
-    db: BlockstoreDB,
+    db: LedgerDB,
     // TODO: change naming to 'highest_slot_cleaned'
     lowest_cleanup_slot: *RwMux(Slot),
     max_root: *std.atomic.Value(Slot),
@@ -41,7 +41,7 @@ pub const LedgerResultWriter = struct {
     pub fn init(
         allocator: Allocator,
         logger: Logger,
-        db: BlockstoreDB,
+        db: LedgerDB,
         registry: *sig.prometheus.Registry(.{}),
         lowest_cleanup_slot: *RwMux(Slot),
         max_root: *std.atomic.Value(Slot),
@@ -135,7 +135,7 @@ pub const LedgerResultWriter = struct {
 
     pub const SetDuplicateConfirmedSlotsAndHashesIncremental = struct {
         result_writer: *LedgerResultWriter,
-        write_batch: BlockstoreDB.WriteBatch,
+        write_batch: LedgerDB.WriteBatch,
         is_committed_or_cancelled: bool,
 
         /// Asserts that either `self.cancel()` or `self.commit()` has been called.
@@ -200,7 +200,7 @@ pub const LedgerResultWriter = struct {
 
     pub const SetRootsIncremental = struct {
         result_writer: *LedgerResultWriter,
-        write_batch: BlockstoreDB.WriteBatch,
+        write_batch: LedgerDB.WriteBatch,
         max_new_rooted_slot: Slot,
         is_committed_or_cancelled: bool,
 
