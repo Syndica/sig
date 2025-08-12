@@ -8,6 +8,7 @@ const Blake3 = std.crypto.hash.Blake3;
 const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 const Signature = sig.core.Signature;
+const ReservedAccounts = sig.core.ReservedAccounts;
 
 const LookupTableAccounts = sig.replay.resolve_lookup.LookupTableAccounts;
 
@@ -397,7 +398,7 @@ pub const Message = struct {
         self: Message,
         index: usize,
         lookups: LookupTableAccounts,
-        reserved_keys: *const std.AutoArrayHashMapUnmanaged(Pubkey, void),
+        reserved_accounts: *const ReservedAccounts,
     ) bool {
         const pubkey = blk: {
             if (index < self.account_keys.len) {
@@ -432,7 +433,7 @@ pub const Message = struct {
             if (ixn.program_index == index) break true;
         } else false;
 
-        const is_reserved = reserved_keys.contains(pubkey);
+        const is_reserved = reserved_accounts.contains(pubkey);
 
         const demote_program_id = is_key_called_as_program and !is_upgradeable_loader_present;
         return !(is_reserved or demote_program_id);
