@@ -16,7 +16,7 @@ const Pubkey = sig.core.Pubkey;
 pub const RecentBlockhashes = struct {
     entries: *std.BoundedArray(Entry, MAX_ENTRIES),
 
-    pub const Entry = struct {
+    pub const Entry = extern struct {
         blockhash: Hash,
         lamports_per_signature: u64,
     };
@@ -41,6 +41,11 @@ pub const RecentBlockhashes = struct {
         return self.entries.len == 0;
     }
 
+    // pub fn getFirst(self: *const RecentBlockhashes) ?Entry {
+    //     if (self.entries.len == 0) return null;
+    //     return self.entries.buffer[0];
+    // }
+
     pub fn fromBlockhashQueue(
         allocator: Allocator,
         queue: *const BlockhashQueue,
@@ -54,29 +59,29 @@ pub const RecentBlockhashes = struct {
             }
         };
 
-        const num_entries = @min(queue.hash_infos.count(), MAX_ENTRIES);
-        const entries = try allocator.alloc(IndexAndEntry, num_entries);
-        defer allocator.free(entries);
+        var entries = try std.ArrayListUnmanaged(IndexAndEntry).initCapacity(
+            allocator,
+            queue.hash_infos.count(),
+        );
+        defer entries.deinit(allocator);
 
-        var i: usize = 0;
         for (queue.hash_infos.keys(), queue.hash_infos.values()) |hash, info| {
-            if (queue.last_hash_index - info.index >= MAX_ENTRIES) continue;
-            entries[i] = .{
+            entries.appendAssumeCapacity(.{
                 .index = info.index,
                 .entry = .{
                     .blockhash = hash,
                     .lamports_per_signature = info.lamports_per_signature,
                 },
-            };
-            i += 1;
+            });
         }
 
-        std.sort.heap(IndexAndEntry, entries, {}, IndexAndEntry.compareFn);
+        std.sort.heap(IndexAndEntry, entries.items, {}, IndexAndEntry.compareFn);
 
         var self = try RecentBlockhashes.init(allocator);
         errdefer self.deinit(allocator);
 
-        for (entries) |entry| self.entries.appendAssumeCapacity(entry.entry);
+        const num_entries = @min(entries.items.len, MAX_ENTRIES);
+        for (entries.items[0..num_entries]) |entry| self.entries.appendAssumeCapacity(entry.entry);
 
         return self;
     }
@@ -158,8 +163,12 @@ test "serialize and deserialize" {
         const serialized = try bincode.writeAlloc(allocator, blockhashes, .{});
         defer allocator.free(serialized);
 
-        const deserialized =
-            try bincode.readFromSlice(allocator, RecentBlockhashes, serialized, .{});
+        const deserialized = try bincode.readFromSlice(
+            allocator,
+            RecentBlockhashes,
+            serialized,
+            .{},
+        );
         defer deserialized.deinit(allocator);
 
         try std.testing.expectEqual(RecentBlockhashes.MAX_ENTRIES, deserialized.entries.capacity());
