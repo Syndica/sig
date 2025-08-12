@@ -38,6 +38,24 @@ const ComputedBankState = struct {
     my_latest_landed_vote: ?Slot,
 };
 
+pub const ThresholdDecision = union(enum) {
+    passed_threshold,
+    failed_threshold: FailedThreshold,
+
+    /// NOTE: this is a tuple in the original rust code
+    pub const FailedThreshold = struct {
+        vote_depth: u64,
+        observed_stake: u64,
+    };
+
+    /// #[default]
+    pub const DEFAULT: ThresholdDecision = .passed_threshold;
+
+    pub fn eql(self: ThresholdDecision, other: ThresholdDecision) bool {
+        return std.meta.eql(self, other);
+    }
+};
+
 pub const TowerError = error{
     IoError,
     SerializeError,
