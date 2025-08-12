@@ -8,7 +8,6 @@ const Allocator = std.mem.Allocator;
 
 const Hash = core.Hash;
 const Ancestors = core.Ancestors;
-const FeatureSet = sig.core.FeatureSet;
 const InstructionAccount = core.instruction.InstructionAccount;
 const Pubkey = core.Pubkey;
 const ReservedAccounts = core.ReservedAccounts;

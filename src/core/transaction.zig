@@ -5,7 +5,6 @@ const leb = std.leb;
 
 const Blake3 = std.crypto.hash.Blake3;
 
-const FeatureSet = sig.core.FeatureSet;
 const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 const Signature = sig.core.Signature;
