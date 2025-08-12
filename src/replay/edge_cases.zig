@@ -1511,13 +1511,13 @@ fn testLedgerRw(
     state: *TestLedgerRwState,
 ) !struct {
     sig.ledger.BlockstoreDB,
-    sig.ledger.BlockstoreReader,
+    sig.ledger.LedgerReader,
     sig.ledger.LedgerResultWriter,
 } {
     var ledger_db = try sig.ledger.tests.TestDB.init(src_loc);
     errdefer ledger_db.deinit();
 
-    const reader: sig.ledger.BlockstoreReader = try .init(
+    const reader: sig.ledger.LedgerReader = try .init(
         std.testing.allocator,
         logger.unscoped(),
         ledger_db,

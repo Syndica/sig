@@ -74,7 +74,7 @@ graph TD
     A[ShredNetwork] --> B[ShredInserter]
     B --> C[BlockstoreDB]
     D[cleanup_service] --> C
-    D --> E[BlockstoreReader]
+    D --> E[LedgerReader]
 ```
 
 ![ShredNetwork Component](/img/shred_network_component.png)
@@ -87,7 +87,7 @@ graph TD
 
 - The **cleanup service** employs:
   - The **BlockstoreDB** for performing cleanup operations, also backed by RocksDB.
-  - The **BlockstoreReader** for reading data during cleanup.
+  - The **LedgerReader** for reading data during cleanup.
 
 The ShredNetwork can be run standalone without running the full node.
 

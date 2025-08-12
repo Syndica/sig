@@ -16,7 +16,7 @@ const AccountReader = sig.accounts_db.AccountReader;
 const SlotAccountReader = sig.accounts_db.account_store.SlotAccountReader;
 
 const BlockstoreDB = sig.ledger.BlockstoreDB;
-const BlockstoreReader = sig.ledger.BlockstoreReader;
+const LedgerReader = sig.ledger.LedgerReader;
 const LedgerResultWriter = sig.ledger.result_writer.LedgerResultWriter;
 
 const ProgressMap = sig.consensus.ProgressMap;
@@ -48,7 +48,7 @@ pub const ReplayDependencies = struct {
     /// Used in the EpochManager
     epoch_schedule: sig.core.EpochSchedule,
     /// Used to get the entries to validate them and execute the transactions
-    blockstore_reader: *BlockstoreReader,
+    ledger_reader: *LedgerReader,
     /// Used to update the ledger with consensus results
     ledger_result_writer: *LedgerResultWriter,
     account_store: AccountStore,
@@ -134,7 +134,7 @@ const ReplayState = struct {
             .epochs = epoch_tracker,
             .hard_forks = deps.hard_forks,
             .account_store = deps.account_store,
-            .blockstore_db = deps.blockstore_reader.db,
+            .blockstore_db = deps.ledger_reader.db,
             .progress_map = progress_map,
             .execution = try ReplayExecutionState.init(
                 deps.allocator,
@@ -142,7 +142,7 @@ const ReplayState = struct {
                 deps.my_identity,
                 thread_pool,
                 deps.account_store,
-                deps.blockstore_reader,
+                deps.ledger_reader,
                 slot_tracker,
                 epoch_tracker,
                 progress_map,
@@ -227,7 +227,7 @@ fn trackNewSlots(
         frozen_slots_since_root.appendAssumeCapacity(slot);
     };
 
-    var next_slots = try BlockstoreReader
+    var next_slots = try LedgerReader
         .getSlotsSince(allocator, blockstore_db, frozen_slots_since_root.items);
     defer {
         for (next_slots.values()) |*list| list.deinit(allocator);

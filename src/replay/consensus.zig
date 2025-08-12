@@ -18,7 +18,7 @@ const SlotState = sig.core.SlotState;
 const SlotConstants = sig.core.SlotConstants;
 const Transaction = sig.core.transaction.Transaction;
 
-const BlockstoreReader = sig.ledger.BlockstoreReader;
+const LedgerReader = sig.ledger.LedgerReader;
 const LedgerResultWriter = sig.ledger.result_writer.LedgerResultWriter;
 
 const SlotHistory = sig.runtime.sysvar.SlotHistory;
@@ -43,7 +43,7 @@ pub const ConsensusDependencies = struct {
     slot_tracker: *SlotTracker,
     epoch_tracker: *const EpochTracker,
     fork_choice: *ForkChoice,
-    blockstore_reader: *BlockstoreReader,
+    ledger_reader: *LedgerReader,
     ledger_result_writer: *LedgerResultWriter,
     ancestors: *const std.AutoArrayHashMapUnmanaged(u64, SortedSet(u64)),
     descendants: *const std.AutoArrayHashMapUnmanaged(u64, SortedSet(u64)),
@@ -455,7 +455,7 @@ fn checkAndHandleNewRoot(
 /// TODO: Currently a placeholder function. Would be implemened when voting and producing blocks is supported.
 fn resetFork(
     progress: *const ProgressMap,
-    blockstore: *const BlockstoreReader,
+    blockstore: *const LedgerReader,
     reset_slot: Slot,
     last_reset_hash: Hash,
     last_blockhash: Hash,

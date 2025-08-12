@@ -313,8 +313,8 @@ pub const TestState = struct {
         );
     }
 
-    pub fn reader(self: *Self) !ledger.BlockstoreReader {
-        return try ledger.BlockstoreReader.init(
+    pub fn reader(self: *Self) !ledger.LedgerReader {
+        return try ledger.LedgerReader.init(
             self.allocator,
             self.logger,
             self.db,

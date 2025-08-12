@@ -15,5 +15,5 @@ pub const fuzz_ledger = @import("fuzz.zig");
 
 pub const BlockstoreDB = blockstore.BlockstoreDB;
 pub const ShredInserter = shred_inserter.ShredInserter;
-pub const BlockstoreReader = reader.BlockstoreReader;
+pub const LedgerReader = reader.LedgerReader;
 pub const LedgerResultWriter = result_writer.LedgerResultWriter;

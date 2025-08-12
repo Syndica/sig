@@ -46,7 +46,7 @@ const shredder = ledger.shredder;
 
 const DEFAULT_TICKS_PER_SECOND = sig.core.time.DEFAULT_TICKS_PER_SECOND;
 
-pub const BlockstoreReader = struct {
+pub const LedgerReader = struct {
     allocator: Allocator,
     logger: ScopedLogger(@typeName(Self)),
     db: BlockstoreDB,
@@ -55,7 +55,7 @@ pub const BlockstoreReader = struct {
     max_root: *std.atomic.Value(u64),
     // highest_primary_index_slot: RwMux(?Slot), // TODO shared
     rpc_api_metrics: BlockstoreRpcApiMetrics,
-    metrics: BlockstoreReaderMetrics,
+    metrics: LedgerReaderMetrics,
 
     const Self = @This();
 
@@ -72,7 +72,7 @@ pub const BlockstoreReader = struct {
             .logger = logger.withScope(@typeName(Self)),
             .db = db,
             .rpc_api_metrics = try registry.initStruct(BlockstoreRpcApiMetrics),
-            .metrics = try registry.initStruct(BlockstoreReaderMetrics),
+            .metrics = try registry.initStruct(LedgerReaderMetrics),
             .lowest_cleanup_slot = lowest_cleanup_slot,
             .max_root = max_root,
         };
@@ -730,7 +730,7 @@ pub const BlockstoreReader = struct {
                 // NOTE perf: redundant calls to validate every time this is called
                 if (transaction.validate()) |_| {} else |err| {
                     self.logger.warn().logf(
-                        "BlockstoreReader.findTransactionInSlot validate failed: {any}, slot: {}, {any}",
+                        "LedgerReader.findTransactionInSlot validate failed: {any}, slot: {}, {any}",
                         .{ err, slot, transaction },
                     );
                 }
@@ -1477,14 +1477,14 @@ const ConfirmedTransactionStatusWithSignature = struct {
     block_time: ?UnixTimestamp,
 };
 
-const BlockstoreReaderMetrics = struct {
+const LedgerReaderMetrics = struct {
     get_before_slot_us: *Histogram,
     get_initial_slot_us: *Histogram,
     address_signatures_iter_us: *Histogram,
     get_status_info_us: *Histogram,
     get_until_slot_us: *Histogram,
 
-    pub const prefix = "blockstore_reader";
+    pub const prefix = "ledger_reader";
     pub const histogram_buckets = sig.prometheus.histogram.exponentialBuckets(5, -1, 10);
 };
 
@@ -1570,7 +1570,7 @@ test "getLatestOptimisticSlots" {
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
     var max_root = std.atomic.Value(Slot).init(0);
-    var reader = try BlockstoreReader.init(
+    var reader = try LedgerReader.init(
         allocator,
         logger,
         db,
@@ -1644,7 +1644,7 @@ test "getFirstDuplicateProof" {
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
     var max_root = std.atomic.Value(Slot).init(0);
-    var reader = try BlockstoreReader.init(
+    var reader = try LedgerReader.init(
         allocator,
         logger,
         db,
@@ -1683,7 +1683,7 @@ test "isDead" {
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
     var max_root = std.atomic.Value(Slot).init(0);
-    var reader = try BlockstoreReader.init(
+    var reader = try LedgerReader.init(
         allocator,
         logger,
         db,
@@ -1720,7 +1720,7 @@ test "getBlockHeight" {
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
     var max_root = std.atomic.Value(Slot).init(0);
-    var reader = try BlockstoreReader.init(
+    var reader = try LedgerReader.init(
         allocator,
         logger,
         db,
@@ -1750,7 +1750,7 @@ test "getRootedBlockTime" {
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
     var max_root = std.atomic.Value(Slot).init(0);
-    var reader = try BlockstoreReader.init(
+    var reader = try LedgerReader.init(
         allocator,
         logger,
         db,
@@ -1790,7 +1790,7 @@ test "slotMetaIterator" {
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
     var max_root = std.atomic.Value(Slot).init(0);
-    var reader = try BlockstoreReader.init(
+    var reader = try LedgerReader.init(
         allocator,
         logger,
         db,
@@ -1853,7 +1853,7 @@ test "rootedSlotIterator" {
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
     var max_root = std.atomic.Value(Slot).init(0);
-    var reader = try BlockstoreReader.init(
+    var reader = try LedgerReader.init(
         allocator,
         logger,
         db,
@@ -1890,7 +1890,7 @@ test "slotRangeConnected" {
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
     var max_root = std.atomic.Value(Slot).init(0);
-    var reader = try BlockstoreReader.init(
+    var reader = try LedgerReader.init(
         allocator,
         logger,
         db,
@@ -1952,7 +1952,7 @@ test "highestSlot" {
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
     var max_root = std.atomic.Value(Slot).init(0);
-    var reader = try BlockstoreReader.init(
+    var reader = try LedgerReader.init(
         allocator,
         logger,
         db,
@@ -2012,7 +2012,7 @@ test "lowestSlot" {
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
     var max_root = std.atomic.Value(Slot).init(0);
-    var reader = try BlockstoreReader.init(
+    var reader = try LedgerReader.init(
         allocator,
         logger,
         db,
@@ -2059,7 +2059,7 @@ test "isShredDuplicate" {
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
     var max_root = std.atomic.Value(Slot).init(0);
-    var reader = try BlockstoreReader.init(
+    var reader = try LedgerReader.init(
         allocator,
         logger,
         db,
@@ -2112,7 +2112,7 @@ test "findMissingDataIndexes" {
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
     var max_root = std.atomic.Value(Slot).init(0);
-    var reader = try BlockstoreReader.init(
+    var reader = try LedgerReader.init(
         allocator,
         logger,
         db,
@@ -2181,7 +2181,7 @@ test "getCodeShred" {
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
     var max_root = std.atomic.Value(Slot).init(0);
-    var reader = try BlockstoreReader.init(
+    var reader = try LedgerReader.init(
         allocator,
         logger,
         db,
@@ -2265,7 +2265,7 @@ test "getDataShred" {
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
     var max_root = std.atomic.Value(Slot).init(0);
-    var reader = try BlockstoreReader.init(
+    var reader = try LedgerReader.init(
         allocator,
         logger,
         db,

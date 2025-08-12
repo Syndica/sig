@@ -6,7 +6,7 @@ const config = @import("config.zig");
 const tracy = @import("tracy");
 
 const AccountsDB = sig.accounts_db.AccountsDB;
-const BlockstoreReader = sig.ledger.BlockstoreReader;
+const LedgerReader = sig.ledger.LedgerReader;
 const LedgerResultWriter = sig.ledger.result_writer.LedgerResultWriter;
 const ChannelPrintLogger = sig.trace.ChannelPrintLogger;
 const ClusterType = sig.core.ClusterType;
@@ -1090,9 +1090,9 @@ fn validator(
     max_root.* = std.atomic.Value(sig.core.Slot).init(0);
     defer allocator.destroy(max_root);
 
-    const blockstore_reader = try allocator.create(BlockstoreReader);
-    defer allocator.destroy(blockstore_reader);
-    blockstore_reader.* = try BlockstoreReader.init(
+    const ledger_reader = try allocator.create(LedgerReader);
+    defer allocator.destroy(ledger_reader);
+    ledger_reader.* = try LedgerReader.init(
         allocator,
         app_base.logger.unscoped(),
         blockstore_db,
@@ -1114,7 +1114,7 @@ fn validator(
 
     var cleanup_service_handle = try std.Thread.spawn(.{}, sig.ledger.cleanup_service.run, .{
         app_base.logger.unscoped(),
-        blockstore_reader,
+        ledger_reader,
         &blockstore_db,
         lowest_cleanup_slot,
         cfg.max_shreds,
@@ -1221,7 +1221,7 @@ fn validator(
                 .logger = app_base.logger.unscoped(),
                 .my_identity = .{ .data = app_base.my_keypair.public_key.bytes },
                 .exit = app_base.exit,
-                .blockstore_reader = blockstore_reader,
+                .ledger_reader = ledger_reader,
                 .ledger_result_writer = ledger_result_writer,
                 .account_store = loaded_snapshot.accounts_db.accountStore(),
                 .epoch_schedule = bank_fields.epoch_schedule,
@@ -1317,9 +1317,9 @@ fn shredNetwork(
     max_root.* = std.atomic.Value(sig.core.Slot).init(0);
     defer allocator.destroy(max_root);
 
-    const blockstore_reader = try allocator.create(BlockstoreReader);
-    defer allocator.destroy(blockstore_reader);
-    blockstore_reader.* = try BlockstoreReader.init(
+    const ledger_reader = try allocator.create(LedgerReader);
+    defer allocator.destroy(ledger_reader);
+    ledger_reader.* = try LedgerReader.init(
         allocator,
         app_base.logger.unscoped(),
         blockstore_db,
@@ -1330,7 +1330,7 @@ fn shredNetwork(
 
     var cleanup_service_handle = try std.Thread.spawn(.{}, sig.ledger.cleanup_service.run, .{
         app_base.logger.unscoped(),
-        blockstore_reader,
+        ledger_reader,
         &blockstore_db,
         lowest_cleanup_slot,
         cfg.max_shreds,
