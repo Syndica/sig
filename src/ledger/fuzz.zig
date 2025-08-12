@@ -63,13 +63,18 @@ fn createLedgerDB() !LedgerDB {
 }
 
 pub fn run(initial_seed: u64, args: *std.process.ArgIterator) !void {
-    var seed = initial_seed;
     const maybe_max_actions_string = args.next();
 
     const maybe_max_actions = if (maybe_max_actions_string) |max_actions_str|
         try std.fmt.parseInt(usize, max_actions_str, 10)
     else
         null;
+
+    try runInner(initial_seed, maybe_max_actions, true);
+}
+
+fn runInner(initial_seed: u64, maybe_max_actions: ?usize, log: bool) !void {
+    var seed = initial_seed;
 
     const ledger_path =
         try std.fmt.allocPrint(allocator, "{s}/ledger", .{sig.FUZZ_DATA_DIR});
@@ -96,7 +101,7 @@ pub fn run(initial_seed: u64, args: *std.process.ArgIterator) !void {
         for (0..1_000) |_| {
             if (maybe_max_actions) |max| {
                 if (count >= max) {
-                    std.debug.print("reached max actions: {}\n", .{max});
+                    if (log) std.debug.print("reached max actions: {}\n", .{max});
                     break :outer;
                 }
             }
@@ -116,7 +121,7 @@ pub fn run(initial_seed: u64, args: *std.process.ArgIterator) !void {
             count += 1;
         }
         seed += 1;
-        std.debug.print("using seed: {}\n", .{seed});
+        if (log) std.debug.print("using seed: {}\n", .{seed});
     }
 
     inline for (@typeInfo(Actions).@"enum".fields) |field| {
@@ -340,4 +345,10 @@ fn batchAPI(data_map: *std.AutoHashMap(u32, Data), db: *LedgerDB, random: std.Ra
             try std.testing.expectEqual(null, actual);
         }
     }
+}
+
+test run {
+    var args = std.process.ArgIterator.init();
+    while (args.next()) |_| {}
+    try runInner(0, 100, false);
 }
