@@ -231,8 +231,6 @@ fn replaySlot(state: *ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
         state.logger.info().logf("got {} entries for slot {}", .{ entries.len, slot });
 
         if (entries.len == 0) {
-            for (entries) |entry| entry.deinit(state.allocator);
-            state.allocator.free(entries);
             return .empty;
         }
 
