@@ -167,7 +167,7 @@ fn applyBuiltinProgramFeatureTransitions(
         const feature_id = precompile.required_feature orelse continue;
         if (!feature_set.active(feature_id, 0)) continue;
 
-        const maybe_account = accounts_db.getAccount(
+        const maybe_account = accounts_db.getAccountLatest(
             &precompile.program_id,
         ) catch |err| switch (err) {
             error.PubkeyNotInIndex => null,
