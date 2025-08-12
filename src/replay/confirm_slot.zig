@@ -233,7 +233,7 @@ pub const ConfirmSlotFuture = struct {
     }
 };
 
-const PohTask = struct {
+pub const PohTask = struct {
     allocator: Allocator,
     logger: ScopedLogger,
     initial_hash: Hash,

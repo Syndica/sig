@@ -508,6 +508,10 @@ const TestReplayStateResources = struct {
     purge_repair_slot_counter: PurgeRepairSlotCounters,
     slot_tracker: SlotTracker,
     replay_state: ReplayExecutionState,
+    db: sig.ledger.BlockstoreDB,
+    registry: sig.prometheus.Registry(.{}),
+    lowest_cleanup_slot: sig.sync.RwMux(Slot),
+    max_root: std.atomic.Value(Slot),
 
     pub fn init(allocator: Allocator) !*TestReplayStateResources {
         const self = try allocator.create(TestReplayStateResources);
@@ -515,33 +519,33 @@ const TestReplayStateResources = struct {
 
         const account_store = AccountStore.noop;
 
-        var registry = sig.prometheus.Registry(.{}).init(allocator);
-        defer registry.deinit();
+        self.registry = sig.prometheus.Registry(.{}).init(allocator);
+        errdefer self.registry.deinit();
 
-        var db = try sig.ledger.tests.TestDB.init(@src());
-        defer db.deinit();
+        self.db = try sig.ledger.tests.TestDB.init(@src());
+        errdefer self.db.deinit();
 
-        var lowest_cleanup_slot = sig.sync.RwMux(Slot).init(0);
-        var max_root = std.atomic.Value(Slot).init(0);
+        self.lowest_cleanup_slot = sig.sync.RwMux(Slot).init(0);
+        self.max_root = std.atomic.Value(Slot).init(0);
 
         self.thread_pool = ThreadPool.init(.{});
 
         self.blockstore_reader = try BlockstoreReader.init(
             allocator,
             .noop,
-            db,
-            &registry,
-            &lowest_cleanup_slot,
-            &max_root,
+            self.db,
+            &self.registry,
+            &self.lowest_cleanup_slot,
+            &self.max_root,
         );
 
         self.ledger_result_writer = try sig.ledger.LedgerResultWriter.init(
             allocator,
             .noop,
-            db,
-            &registry,
-            &lowest_cleanup_slot,
-            &max_root,
+            self.db,
+            &self.registry,
+            &self.lowest_cleanup_slot,
+            &self.max_root,
         );
 
         self.epochs = EpochTracker{
@@ -612,6 +616,8 @@ const TestReplayStateResources = struct {
         self.epoch_slots_frozen_slots.deinit(allocator);
         self.duplicate_slots_to_repair.deinit(allocator);
         self.purge_repair_slot_counter.deinit(allocator);
+        self.db.deinit();
+        self.registry.deinit();
 
         allocator.destroy(self);
     }
@@ -707,6 +713,101 @@ test "processReplayResults: marks slot as dead correctly" {
 
     // Verify slot is now marked as dead
     const progress_after = progress.map.get(slot);
+    try testing.expect(progress_after != null);
+    try testing.expect(progress_after.?.is_dead);
+}
+
+test "processReplayResults: confirm status with err poll result marks slot dead" {
+    const allocator = testing.allocator;
+
+    var test_resources = createTestReplayState(allocator) catch |err| {
+        std.debug.print("Failed to create test replay state: {}\n", .{err});
+        return err;
+    };
+    defer test_resources.deinit(allocator);
+
+    const slot: Slot = 100;
+
+    // Add slot to progress map first
+    try test_resources.progress.map.putNoClobber(
+        allocator,
+        slot,
+        try sig.consensus.progress_map.ForkProgress.init(allocator, .{
+            .now = sig.time.Instant.now(),
+            .last_entry = sig.core.Hash.ZEROES,
+            .prev_leader_slot = null,
+            .validator_stake_info = null,
+            .num_blocks_on_fork = 0,
+            .num_dropped_blocks_on_fork = 0,
+        }),
+    );
+
+    // Verify slot is initially not dead
+    const progress_before = test_resources.progress.map.get(slot);
+    try testing.expect(progress_before != null);
+    try testing.expect(!progress_before.?.is_dead);
+
+    // Create a mock ConfirmSlotFuture that will return an error when polled.
+    const MockConfirmSlotFutureErr = struct {
+        scheduler: replay.scheduler.TransactionScheduler,
+        poh_verifier: sig.utils.thread.HomogeneousThreadPool(replay.confirm_slot.PohTask),
+        exit: std.atomic.Value(bool),
+        entries: []const sig.core.Entry,
+        status: replay.confirm_slot.ConfirmSlotStatus,
+        status_when_done: replay.confirm_slot.ConfirmSlotStatus,
+
+        pub fn poll(self: *@This()) !replay.confirm_slot.ConfirmSlotStatus {
+            _ = self;
+            // Always return an error to test the error path
+            return replay.confirm_slot.ConfirmSlotStatus{
+                .err = .{ .failed_to_load_entries = "test error" },
+            };
+        }
+
+        pub fn destroy(self: *@This(), alloc: Allocator) void {
+            alloc.destroy(self);
+        }
+    };
+
+    // Create the mock future
+    const mock_future = try allocator.create(MockConfirmSlotFutureErr);
+    const empty_entries = try allocator.alloc(sig.core.Entry, 0);
+
+    mock_future.* = MockConfirmSlotFutureErr{
+        .scheduler = undefined, // Not used in test.
+        .poh_verifier = undefined, // // Not used in test.
+        .exit = std.atomic.Value(bool).init(false),
+        .entries = empty_entries,
+        .status = .{ .err = .{ .failed_to_load_entries = "test error" } },
+        .status_when_done = .{ .err = .{ .failed_to_load_entries = "test error" } },
+    };
+
+    defer {
+        allocator.free(empty_entries);
+        allocator.destroy(mock_future);
+    }
+
+    // Create slot statuses with confirm status containing our mock future
+    var slot_statuses = std.ArrayListUnmanaged(struct { Slot, ReplaySlotStatus }).empty;
+    defer slot_statuses.deinit(allocator);
+
+    // Cast our mock to ConfirmSlotFuture - this should work since they have the same layout
+    const confirm_future: *ConfirmSlotFuture = @ptrCast(@alignCast(mock_future));
+    try slot_statuses.append(
+        allocator,
+        .{ slot, .{ .confirm = confirm_future } },
+    );
+
+    const result = try processReplayResults(
+        &test_resources.replay_state,
+        &slot_statuses,
+    );
+
+    // Should return false since no slot was successfully processed
+    try testing.expect(!result);
+
+    // Verify slot is now marked as dead
+    const progress_after = test_resources.progress.map.get(slot);
     try testing.expect(progress_after != null);
     try testing.expect(progress_after.?.is_dead);
 }
