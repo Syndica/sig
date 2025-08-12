@@ -303,7 +303,6 @@ fn newSlotFromParent(
     try ancestors.ancestors.put(allocator, slot, {});
 
     var feature_set = try getActiveFeatures(allocator, account_reader.forSlot(&ancestors), slot);
-    errdefer feature_set.deinit(allocator);
 
     const parent_hash = parent_state.hash.readCopy().?;
 
@@ -321,6 +320,14 @@ fn newSlotFromParent(
         .epoch_reward_status = epoch_reward_status,
         .ancestors = ancestors,
         .feature_set = feature_set,
+        // This is inefficient, reserved accounts could live in epoch constants along with
+        // the feature set since feature activations are only applied at epoch boundaries.
+        // Then we only need to clone the map and update the reserved accounts once per epoch.
+        .reserved_accounts = try sig.core.reserved_accounts.initForSlot(
+            allocator,
+            &feature_set,
+            slot,
+        ),
     };
 
     return .{ constants, state };

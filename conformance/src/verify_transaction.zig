@@ -52,18 +52,14 @@ pub fn verifyTransaction(
         }
     }
 
-    var reserved_keys = try sig.core.reserved_accounts.reservedAccountsForSlot(
-        allocator,
-        feature_set,
-        slot,
-    );
-    defer reserved_keys.deinit(allocator);
+    var reserved_accounts = try sig.core.reserved_accounts.initForSlot(allocator, feature_set, slot);
+    defer reserved_accounts.deinit(allocator);
 
     const resolved_batch = sig.replay.resolve_lookup.resolveBatch(
         allocator,
         account_reader,
         &.{transaction},
-        &reserved_keys,
+        &reserved_accounts,
     ) catch |err| {
         const err_code = switch (err) {
             error.AddressLookupTableNotFound => transactionErrorToInt(

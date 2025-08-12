@@ -355,18 +355,11 @@ test "TransactionScheduler: duplicate batch passes through to svm" {
     );
     defer scheduler.deinit();
 
-    var reserved_keys = try sig.core.reserved_accounts.reservedAccountsForSlot(
-        std.testing.allocator,
-        &sig.core.FeatureSet.ALL_DISABLED,
-        0,
-    );
-    defer reserved_keys.deinit(std.testing.allocator);
-
     {
-        const batch1 = try resolveBatch(allocator, .noop, transactions[0..3], &reserved_keys);
+        const batch1 = try resolveBatch(allocator, .noop, transactions[0..3], &.empty);
         errdefer batch1.deinit(allocator);
 
-        const batch1_dupe = try resolveBatch(allocator, .noop, transactions[0..3], &reserved_keys);
+        const batch1_dupe = try resolveBatch(allocator, .noop, transactions[0..3], &.empty);
         errdefer batch1_dupe.deinit(allocator);
 
         scheduler.addBatchAssumeCapacity(batch1);
@@ -416,15 +409,8 @@ test "TransactionScheduler: failed account locks" {
     );
     defer scheduler.deinit();
 
-    var reserved_keys = try sig.core.reserved_accounts.reservedAccountsForSlot(
-        std.testing.allocator,
-        &sig.core.FeatureSet.ALL_DISABLED,
-        0,
-    );
-    defer reserved_keys.deinit(std.testing.allocator);
-
     {
-        const batch1 = try resolveBatch(allocator, .noop, &unresolved_batch, &reserved_keys);
+        const batch1 = try resolveBatch(allocator, .noop, &unresolved_batch, &.empty);
         errdefer batch1.deinit(allocator);
 
         scheduler.addBatchAssumeCapacity(batch1);
@@ -481,18 +467,11 @@ test "TransactionScheduler: signature verification failure" {
     replaced_sigs[0].data[0] +%= 1;
     transactions[5].signatures = replaced_sigs;
 
-    var reserved_keys = try sig.core.reserved_accounts.reservedAccountsForSlot(
-        std.testing.allocator,
-        &sig.core.FeatureSet.ALL_DISABLED,
-        0,
-    );
-    defer reserved_keys.deinit(std.testing.allocator);
-
     {
-        const batch1 = try resolveBatch(allocator, .noop, transactions[0..3], &reserved_keys);
+        const batch1 = try resolveBatch(allocator, .noop, transactions[0..3], &.empty);
         errdefer batch1.deinit(allocator);
 
-        const batch2 = try resolveBatch(allocator, .noop, transactions[3..6], &reserved_keys);
+        const batch2 = try resolveBatch(allocator, .noop, transactions[3..6], &.empty);
         errdefer batch2.deinit(allocator);
 
         scheduler.addBatchAssumeCapacity(batch1);

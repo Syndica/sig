@@ -67,6 +67,7 @@ pub const LtHash = hash.LtHash;
 pub const Nonce = shred.Nonce;
 pub const Pubkey = pubkey.Pubkey;
 pub const RentCollector = rent_collector.RentCollector;
+pub const ReservedAccounts = reserved_accounts.ReservedAccounts;
 pub const ShredVersion = shred.ShredVersion;
 pub const Signature = signature.Signature;
 pub const SlotConstants = bank.SlotConstants;

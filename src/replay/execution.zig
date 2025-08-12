@@ -284,13 +284,6 @@ fn replaySlot(state: *ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
     }
     _ = slot_info.state.tick_height.fetchAdd(num_ticks, .monotonic);
 
-    var reserved_keys = try sig.core.reserved_accounts.reservedAccountsForSlot(
-        state.allocator,
-        &sig.core.FeatureSet.ALL_DISABLED,
-        slot,
-    );
-    defer reserved_keys.deinit(state.allocator);
-
     return .{ .confirm = try confirmSlot(
         state.allocator,
         .from(state.logger),
@@ -302,6 +295,6 @@ fn replaySlot(state: *ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
         committer,
         verify_ticks_params,
         &slot_info.constants.ancestors,
-        &reserved_keys,
+        &slot_info.constants.reserved_accounts,
     ) };
 }
