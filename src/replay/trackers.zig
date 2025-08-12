@@ -131,15 +131,16 @@ pub const SlotTracker = struct {
         self: *const SlotTracker,
         allocator: Allocator,
     ) Allocator.Error!std.AutoArrayHashMapUnmanaged(Slot, Reference) {
-        var frozen_slots = std.AutoArrayHashMapUnmanaged(Slot, Reference).empty;
+        var frozen_slots: std.AutoArrayHashMapUnmanaged(Slot, Reference) = .empty;
         try frozen_slots.ensureTotalCapacity(allocator, self.slots.count());
+
         for (self.slots.keys(), self.slots.values()) |slot, value| {
-            if (value.state.isFrozen()) {
-                frozen_slots.putAssumeCapacity(slot, .{
-                    .constants = &value.constants,
-                    .state = &value.state,
-                });
-            }
+            if (!value.state.isFrozen()) continue;
+
+            frozen_slots.putAssumeCapacity(
+                slot,
+                .{ .constants = &value.constants, .state = &value.state },
+            );
         }
         return frozen_slots;
     }

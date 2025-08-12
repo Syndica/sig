@@ -1,5 +1,6 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
+const tracy = @import("tracy");
 
 const Allocator = std.mem.Allocator;
 const Condition = std.Thread.Condition;
@@ -132,6 +133,9 @@ pub fn HomogeneousThreadPool(comptime TaskType: type) type {
         const Self = @This();
 
         fn run(pool_task: *ThreadPool.Task) void {
+            const zone = tracy.Zone.init(@src(), .{ .name = "HomogeneousThreadPool.run" });
+            defer zone.deinit();
+
             var self: *Self = @fieldParentPtr("pool_task", pool_task);
 
             self.result = self.typed_task.run();
@@ -231,6 +235,9 @@ pub fn HomogeneousThreadPool(comptime TaskType: type) type {
             allocator: Allocator,
             typed_task: TaskType,
         ) Allocator.Error!bool {
+            const zone = tracy.Zone.init(@src(), .{ .name = "HomogeneousThreadPool trySchedule" });
+            defer zone.deinit();
+
             if (self.max_concurrent_tasks) |max| {
                 const running = self.num_running_tasks.load(.monotonic);
                 assert(running <= max);

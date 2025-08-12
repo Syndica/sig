@@ -1,5 +1,6 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
+const tracy = @import("tracy");
 const runtime = sig.runtime;
 
 const Allocator = std.mem.Allocator;
@@ -275,6 +276,9 @@ pub const BatchAccountCache = struct {
         slot: sig.core.Slot,
         compute_budget_limits: *const ComputeBudgetLimits,
     ) error{OutOfMemory}!TransactionResult(LoadedTransactionAccounts) {
+        var zone = tracy.Zone.init(@src(), .{ .name = "loadTransactionAccounts" });
+        defer zone.deinit();
+
         const result = loadTransactionAccountsInner(
             self,
             allocator,

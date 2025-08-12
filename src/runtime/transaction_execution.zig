@@ -1,5 +1,6 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
+const tracy = @import("tracy");
 
 const account_loader = sig.runtime.account_loader;
 const program_loader = sig.runtime.program_loader;
@@ -315,6 +316,10 @@ pub fn loadAndExecuteTransaction(
     config: *const TransactionExecutionConfig,
     program_map: *const ProgramMap,
 ) error{OutOfMemory}!TransactionResult(ProcessedTransaction) {
+    var zone = tracy.Zone.init(@src(), .{ .name = "executeTransaction" });
+    defer zone.deinit();
+    errdefer zone.color(0xFF0000);
+
     if (hasDuplicates(transaction.accounts.items(.pubkey))) {
         return .{ .err = .AccountLoadedTwice };
     }
@@ -459,6 +464,9 @@ pub fn executeTransaction(
     config: *const TransactionExecutionConfig,
     program_map: *const ProgramMap,
 ) error{OutOfMemory}!ExecutedTransaction {
+    var zone = tracy.Zone.init(@src(), .{ .name = "executeTransaction" });
+    defer zone.deinit();
+
     const compute_budget = compute_budget_limits.intoComputeBudget();
 
     const log_collector = if (config.log)

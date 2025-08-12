@@ -51,8 +51,12 @@ pub const Rent = extern struct {
         const bytes: u64 = @intCast(data_len);
         const lamports_per_year: f64 = @floatFromInt(
             (ACCOUNT_STORAGE_OVERHEAD + bytes) * self.lamports_per_byte_year,
+        const lamports_per_year: f64 = @floatFromInt(
+            (ACCOUNT_STORAGE_OVERHEAD + bytes) * self.lamports_per_byte_year,
         );
         return @intFromFloat(self.exemption_threshold * lamports_per_year);
+    pub fn isExempt(self: Rent, lamports: u64, data_len: usize) bool {
+        return lamports >= self.minimumBalance(data_len);
     }
 
     pub fn isExempt(self: Rent, lamports: u64, data_len: usize) bool {

@@ -1,6 +1,7 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 const replay = @import("lib.zig");
+const tracy = @import("tracy");
 
 const Allocator = std.mem.Allocator;
 
@@ -86,7 +87,11 @@ const ReplayState = struct {
     blockstore_db: BlockstoreDB,
     execution: ReplayExecutionState,
 
+    zone: tracy.Zone,
+
     fn init(deps: ReplayDependencies) !ReplayState {
+        const zone = tracy.Zone.init(@src(), .{ .name = "ReplayState (init/deinit)" });
+
         const thread_pool = try deps.allocator.create(ThreadPool);
         errdefer deps.allocator.destroy(thread_pool);
         thread_pool.* = ThreadPool.init(.{ .max_threads = NUM_THREADS });
@@ -147,10 +152,12 @@ const ReplayState = struct {
                 epoch_tracker,
                 progress_map,
             ),
+            .zone = zone,
         };
     }
 
     fn deinit(self: *ReplayState) void {
+        self.zone.deinit();
         self.thread_pool.shutdown();
         self.thread_pool.deinit();
         self.allocator.destroy(self.thread_pool);
@@ -164,6 +171,9 @@ const ReplayState = struct {
 
 /// Run the replay service indefinitely.
 pub fn run(deps: ReplayDependencies) !void {
+    const zone = tracy.Zone.init(@src(), .{ .name = "run (replay service)" });
+    defer zone.deinit();
+
     var state = try ReplayState.init(deps);
     defer state.deinit();
 
@@ -174,6 +184,9 @@ pub fn run(deps: ReplayDependencies) !void {
 /// - replay all active slots that have not been replayed yet
 /// - running concensus on the latest updates
 fn advanceReplay(state: *ReplayState) !void {
+    const zone = tracy.Zone.init(@src(), .{ .name = "advanceReplay" });
+    defer zone.deinit();
+
     state.logger.info().log("advancing replay");
     try trackNewSlots(
         state.allocator,
@@ -216,6 +229,9 @@ fn trackNewSlots(
     /// needed for update_fork_propagated_threshold_from_votes
     _: *ProgressMap,
 ) !void {
+    var zone = tracy.Zone.init(@src(), .{ .name = "trackNewSlots" });
+    defer zone.deinit();
+
     const root = slot_tracker.root;
     var frozen_slots = try slot_tracker.frozenSlots(allocator);
     defer frozen_slots.deinit(allocator);
@@ -236,6 +252,7 @@ fn trackNewSlots(
 
     for (next_slots.keys(), next_slots.values()) |parent_slot, children| {
         const parent_info = frozen_slots.get(parent_slot) orelse return error.MissingParent;
+
         for (children.items) |slot| {
             if (slot_tracker.contains(slot)) continue;
 
@@ -291,6 +308,9 @@ fn newSlotFromParent(
     leader: Pubkey,
     slot: Slot,
 ) !struct { sig.core.SlotConstants, SlotState } {
+    var zone = tracy.Zone.init(@src(), .{ .name = "newSlotFromParent" });
+    defer zone.deinit();
+
     var state = try SlotState.fromFrozenParent(allocator, parent_state);
     errdefer state.deinit(allocator);
 

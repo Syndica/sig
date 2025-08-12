@@ -69,7 +69,7 @@ pub fn parallelUntarToFileSystem(
     n_threads: usize,
     n_files_estimate: ?usize,
 ) !void {
-    const zone = tracy.initZone(@src(), .{ .name = "tar parallelUntarToFileSystem" });
+    const zone = tracy.Zone.init(@src(), .{ .name = "tar parallelUntarToFileSystem" });
     defer zone.deinit();
 
     const logger = logger_.withScope(LOG_SCOPE);

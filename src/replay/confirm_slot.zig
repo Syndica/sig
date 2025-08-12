@@ -53,6 +53,7 @@ pub fn confirmSlot(
     ancestors: *const Ancestors,
 ) !*ConfirmSlotFuture {
     logger.info().log("confirming slot");
+
     const future = fut: {
         errdefer {
             for (entries) |entry| entry.deinit(allocator);

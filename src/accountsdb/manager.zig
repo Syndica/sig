@@ -40,7 +40,7 @@ pub fn runLoop(
     db: *AccountsDB,
     config: ManagerLoopConfig,
 ) !void {
-    const zone = tracy.initZone(@src(), .{ .name = "accountsdb runManagerLoop" });
+    const zone = tracy.Zone.init(@src(), .{ .name = "accountsdb runManagerLoop" });
     defer zone.deinit();
 
     const exit = config.exit;
@@ -237,7 +237,7 @@ pub fn runLoop(
 /// as the data field ([]u8) for each account.
 /// Returns the unclean file id.
 fn flushSlot(db: *AccountsDB, slot: Slot) !FileId {
-    const zone = tracy.initZone(@src(), .{ .name = "accountsdb flushSlot" });
+    const zone = tracy.Zone.init(@src(), .{ .name = "accountsdb flushSlot" });
     defer zone.deinit();
 
     var timer = try sig.time.Timer.start();
@@ -368,7 +368,7 @@ fn cleanAccountFiles(
     num_zero_lamports: usize,
     num_old_states: usize,
 } {
-    const zone = tracy.initZone(@src(), .{ .name = "accountsdb cleanAccountFiles" });
+    const zone = tracy.Zone.init(@src(), .{ .name = "accountsdb cleanAccountFiles" });
     defer zone.deinit();
 
     var timer = try sig.time.Timer.start();
@@ -536,7 +536,7 @@ fn deleteAccountFiles(
     db: *AccountsDB,
     delete_account_files: []const FileId,
 ) !void {
-    const zone = tracy.initZone(@src(), .{ .name = "accountsdb deleteAccountFiles" });
+    const zone = tracy.Zone.init(@src(), .{ .name = "accountsdb deleteAccountFiles" });
     defer zone.deinit();
 
     const number_of_files = delete_account_files.len;
@@ -631,7 +631,7 @@ fn shrinkAccountFiles(
     shrink_account_files: []const FileId,
     delete_account_files: *std.AutoArrayHashMap(FileId, void),
 ) !struct { num_accounts_deleted: usize } {
-    const zone = tracy.initZone(@src(), .{ .name = "accountsdb shrinkAccountFiles" });
+    const zone = tracy.Zone.init(@src(), .{ .name = "accountsdb shrinkAccountFiles" });
     defer zone.deinit();
 
     var timer = try sig.time.Timer.start();
