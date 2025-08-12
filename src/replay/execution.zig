@@ -360,38 +360,19 @@ pub fn processReplayResults(
             const is_leader_block =
                 slot_info.constants.collector_id.equals(&replay_state.my_identity);
 
-            const block_id: ?Hash = if (!is_leader_block)
-                // If the block does not have at least DATA_SHREDS_PER_FEC_BLOCK correctly retransmitted
-                // shreds in the last FEC set, mark it dead. No reason to perform this check on our leader block.
-                // TODO add blockstore.check_last_fec_set_and_get_block_id ie with the checks.
-
-                // TODO Question should the block_id (hash) be retrieved
-                // via slot_status[1].entries[last_index].hash?
-
-                replay_state.blockstore_reader.lastFecSetUnchecked(slot) catch {
-                    try markDeadSlot(
-                        slot,
-                        replay_state.progress_map,
-                        replay_state.ledger_result_writer,
-                    );
-                    continue;
-                }
-            else
-                null;
-
-            slot_info.state.hash = .init(block_id);
-
-            // Freeze the bank before sending to any auxiliary threads
-            // that may expect to be operating on a frozen bank
-            try replay.freeze.freezeSlot(replay_state.allocator, .init(
-                .from(replay_state.logger),
-                replay_state.account_store,
-                &(replay_state.epochs.getForSlot(slot) orelse return error.MissingEpoch),
-                slot_info.state,
-                slot_info.constants,
-                slot,
-                entries[entries.len - 1].hash,
-            ));
+            if (!is_leader_block) {
+                // Freeze the bank before sending to any auxiliary threads
+                // that may expect to be operating on a frozen bank
+                try replay.freeze.freezeSlot(replay_state.allocator, .init(
+                    .from(replay_state.logger),
+                    replay_state.account_store,
+                    &(replay_state.epochs.getForSlot(slot) orelse return error.MissingEpoch),
+                    slot_info.state,
+                    slot_info.constants,
+                    slot,
+                    entries[entries.len - 1].hash,
+                ));
+            }
 
             processed_a_slot = true;
 
