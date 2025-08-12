@@ -27,6 +27,8 @@ const TransactionResult = sig.runtime.transaction_execution.TransactionResult;
 const loadPrograms = sig.runtime.program_loader.loadPrograms;
 const initDurableNonceFromHash = sig.runtime.nonce.initDurableNonceFromHash;
 
+const ResolvedTransaction = replay.resolve_lookup.ResolvedTransaction;
+
 pub fn executeTransaction(
     allocator: Allocator,
     svm_gateway: *SvmGateway,
@@ -84,7 +86,7 @@ pub const SvmGateway = struct {
 
     pub fn init(
         allocator: Allocator,
-        batch: []const replay.resolve_lookup.ResolvedTransaction,
+        batch: []const ResolvedTransaction,
         params: Params,
     ) !SvmGateway {
         var accounts = try BatchAccountCache.initSufficientCapacity(allocator, batch);
