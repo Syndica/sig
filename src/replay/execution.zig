@@ -605,6 +605,7 @@ const TestReplayStateResources = struct {
         self.thread_pool.deinit();
 
         self.slot_tracker.deinit(allocator);
+        self.epochs.deinit(allocator);
         self.progress.deinit(allocator);
         self.fork_choice.deinit();
         allocator.destroy(self.fork_choice);
@@ -913,4 +914,168 @@ test "processReplayResults: confirm status with done poll but missing slot in tr
     );
 
     try testing.expectError(error.MissingSlotInTracker, result);
+}
+
+test "processReplayResults: confirm status with done poll and slot complete - success path" {
+    const allocator = testing.allocator;
+
+    var test_resources = createTestReplayState(allocator) catch |err| {
+        std.debug.print("Failed to create test replay state: {}\n", .{err});
+        return err;
+    };
+    defer test_resources.deinit(allocator);
+
+    const slot: Slot = 100;
+    const parent_slot: Slot = 99;
+
+    // Add parent slot to progress map first (required for slot processing)
+    try test_resources.progress.map.putNoClobber(
+        allocator,
+        parent_slot,
+        try sig.consensus.progress_map.ForkProgress.init(allocator, .{
+            .now = sig.time.Instant.now(),
+            .last_entry = sig.core.Hash.ZEROES,
+            .prev_leader_slot = null,
+            .validator_stake_info = null,
+            .num_blocks_on_fork = 0,
+            .num_dropped_blocks_on_fork = 0,
+        }),
+    );
+
+    // Add slot to progress map
+    try test_resources.progress.map.putNoClobber(
+        allocator,
+        slot,
+        try sig.consensus.progress_map.ForkProgress.init(allocator, .{
+            .now = sig.time.Instant.now(),
+            .last_entry = sig.core.Hash.ZEROES,
+            .prev_leader_slot = null,
+            .validator_stake_info = null,
+            .num_blocks_on_fork = 0,
+            .num_dropped_blocks_on_fork = 0,
+        }),
+    );
+
+    // Create mock entries for the slot
+    const mock_entries = try allocator.alloc(sig.core.Entry, 1);
+    defer allocator.free(mock_entries);
+
+    var rng = std.Random.DefaultPrng.init(0);
+    const random = rng.random();
+
+    mock_entries[0] = sig.core.Entry{
+        .num_hashes = 0,
+        .hash = sig.core.Hash.initRandom(random),
+        .transactions = &.{},
+    };
+
+    // Create a mock ConfirmSlotFuture that will return done with entries
+    const MockConfirmSlotFutureSuccess = struct {
+        scheduler: replay.scheduler.TransactionScheduler,
+        poh_verifier: sig.utils.thread.HomogeneousThreadPool(replay.confirm_slot.PohTask),
+        exit: std.atomic.Value(bool),
+        entries: []const sig.core.Entry,
+        status: replay.confirm_slot.ConfirmSlotStatus,
+        status_when_done: replay.confirm_slot.ConfirmSlotStatus,
+
+        pub fn poll(self: *@This()) !replay.confirm_slot.ConfirmSlotStatus {
+            _ = self;
+            return replay.confirm_slot.ConfirmSlotStatus.done;
+        }
+
+        pub fn destroy(self: *@This(), alloc: Allocator) void {
+            alloc.destroy(self);
+        }
+    };
+
+    // Create the mock future with the mock entries
+    const mock_future = try allocator.create(MockConfirmSlotFutureSuccess);
+    mock_future.* = MockConfirmSlotFutureSuccess{
+        .scheduler = undefined, // Not used in test
+        .poh_verifier = undefined, // Not used in test
+        .exit = std.atomic.Value(bool).init(false),
+        .entries = mock_entries,
+        .status = .done,
+        .status_when_done = .done,
+    };
+
+    defer allocator.destroy(mock_future);
+
+    // Add parent slot 99 to fork choice so slot 100 can be processed
+    const slot_99_hash = Hash.initRandom(random);
+    const slot_99_slot_and_hash = sig.core.hash.SlotAndHash{
+        .slot = 99,
+        .hash = slot_99_hash,
+    };
+    const root_slot_and_hash = sig.core.hash.SlotAndHash{
+        .slot = 0,
+        .hash = Hash.ZEROES,
+    };
+    try test_resources.replay_state.fork_choice.addNewLeafSlot(
+        slot_99_slot_and_hash,
+        root_slot_and_hash,
+    );
+
+    // Create slot constants and state.
+    const mock_slot_constants = sig.core.SlotConstants{
+        .parent_slot = parent_slot,
+        // Use the same hash as the parent slot in fork choice
+        .parent_hash = slot_99_hash,
+        .parent_lt_hash = .IDENTITY,
+        .block_height = 0,
+        // Different from replay_state.my_identity
+        .collector_id = sig.core.Pubkey.initRandom(random),
+        // This should match tickHeight() for slot to be complete
+        .max_tick_height = 64,
+        .fee_rate_governor = sig.core.FeeRateGovernor.DEFAULT,
+        .epoch_reward_status = .inactive,
+        .ancestors = .{ .ancestors = .empty },
+        .feature_set = .{ .active = .empty },
+    };
+
+    // Create slot state then modify tick height
+    var mock_slot_state = try sig.core.SlotState.genesis(allocator);
+
+    // Set tick height equal to max_tick_height to make slot complete
+    _ = mock_slot_state.tick_height.swap(64, .monotonic);
+
+    // Set a valid hash for the slot
+    mock_slot_state.hash.set(sig.core.Hash.initRandom(random));
+
+    // Add the slot to the slot tracker
+    try test_resources.slot_tracker.put(allocator, slot, .{
+        .constants = mock_slot_constants,
+        .state = mock_slot_state,
+    });
+
+    // Add epoch info for slot 100 (epoch 2 in default schedule).
+    try test_resources.epochs.epochs.put(allocator, 2, .{
+        .hashes_per_tick = 1,
+        .ticks_per_slot = 1,
+        .ns_per_slot = 1,
+        .genesis_creation_time = 1,
+        .slots_per_year = 1,
+        .stakes = try .initEmptyWithGenesisStakeHistoryEntry(allocator),
+        .rent_collector = .DEFAULT,
+    });
+
+    // Create slot statuses with confirm status containing the mock future
+    var slot_statuses = std.ArrayListUnmanaged(struct { Slot, ReplaySlotStatus }).empty;
+    defer slot_statuses.deinit(allocator);
+
+    // Cast the mock to ConfirmSlotFuture
+    const confirm_future: *ConfirmSlotFuture = @ptrCast(@alignCast(mock_future));
+    try slot_statuses.append(
+        allocator,
+        .{ slot, .{ .confirm = confirm_future } },
+    );
+
+    // This should successfully process the slot and return true
+    const result = try processReplayResults(
+        &test_resources.replay_state,
+        &slot_statuses,
+    );
+
+    // Should return true since the slot was successfully processed
+    try testing.expect(result);
 }
