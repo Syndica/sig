@@ -26,6 +26,7 @@ const RwMux = sig.sync.RwMux;
 
 const BlockhashQueue = core.BlockhashQueue;
 const EpochSchedule = core.epoch_schedule.EpochSchedule;
+const FeatureSet = core.FeatureSet;
 const Hash = core.hash.Hash;
 const HardForks = core.HardForks;
 const LtHash = core.hash.LtHash;
@@ -85,7 +86,19 @@ pub const SlotConstants = struct {
     /// Whether and how epoch rewards should be distributed in this slot.
     epoch_reward_status: EpochRewardStatus,
 
-    pub fn fromBankFields(bank_fields: *const BankFields) SlotConstants {
+    /// Set of slots leading to this one.
+    /// Includes the current slot.
+    /// Does not go back to genesis, may prune slots beyond 8192 generations ago.
+    ancestors: Ancestors,
+
+    /// A map of activated features to the slot when they were activated.
+    feature_set: FeatureSet,
+
+    pub fn fromBankFields(
+        allocator: Allocator,
+        bank_fields: *const BankFields,
+        feature_set: FeatureSet,
+    ) Allocator.Error!SlotConstants {
         return .{
             .parent_slot = bank_fields.parent_slot,
             .parent_hash = bank_fields.parent_hash,

@@ -275,7 +275,7 @@ pub const AccountIndex = struct {
 
     /// adds the reference to the index if there is not a duplicate (ie, the same slot).
     /// returns if the reference was inserted.
-    pub fn indexRefIfNotDuplicateSlotAssumeCapacity(
+    pub fn indexRefIfNotDuplicateSlot(
         self: *Self,
         account_ref: *AccountRef,
         index: u64,
@@ -299,9 +299,9 @@ pub const AccountIndex = struct {
 
         // traverse until you find the end
         var curr_ref = map_entry.value_ptr.ref_ptr;
+
         while (true) {
             if (curr_ref.slot == account_ref.slot) {
-                // found a duplicate => dont do the insertion
                 return false;
             }
             const next_ptr = curr_ref.next_ptr orelse {

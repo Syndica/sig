@@ -33,8 +33,12 @@ pub fn StakesCacheGeneric(comptime stakes_type: StakesType) type {
 
         const Self = @This();
 
-        pub fn default() Self {
-            return .{ .stakes = RwMux(StakesT).init(StakesT.DEFAULT) };
+        pub fn T() type {
+            return StakesT;
+        }
+
+        pub fn init(allocator: Allocator) Allocator.Error!Self {
+            return .{ .stakes = RwMux(StakesT).init(try StakesT.init(allocator)) };
         }
 
         pub fn deinit(self: *Self, allocator: Allocator) void {
@@ -92,7 +96,7 @@ pub fn StakesCacheGeneric(comptime stakes_type: StakesType) type {
                     new_rate_activation_epoch,
                 );
             } else if (stake_program.ID.equals(&account.owner)) {
-                const stake_account = StakeAccount.fromAccountSharedData(
+                const stake_account = StakeAccount.init(
                     allocator,
                     try account.clone(allocator),
                 ) catch {
@@ -120,8 +124,6 @@ pub const StakesType = enum {
     stake,
     account,
 };
-
-// pub const Stakes = StakesGeneric(.stake);
 
 pub fn Stakes(comptime stakes_type: StakesType) type {
     const T = switch (stakes_type) {
@@ -199,7 +201,7 @@ pub fn Stakes(comptime stakes_type: StakesType) type {
                 if (!delegation.voter_pubkey.equals(&pubkey)) continue;
                 stake += delegation.getStake(
                     self.epoch,
-                    &self.stake_history,
+                    self.stake_history,
                     new_rate_activation_epoch,
                 );
             }
@@ -251,7 +253,7 @@ pub fn Stakes(comptime stakes_type: StakesType) type {
             const voter_pubkey = delegation.voter_pubkey;
             const stake = delegation.getStake(
                 self.epoch,
-                &self.stake_history,
+                self.stake_history,
                 new_rate_activation_epoch,
             );
 
@@ -273,7 +275,7 @@ pub fn Stakes(comptime stakes_type: StakesType) type {
                 const old_voter_pubkey = old_delegation.voter_pubkey;
                 const old_stake = old_delegation.getStake(
                     self.epoch,
-                    &self.stake_history,
+                    self.stake_history,
                     new_rate_activation_epoch,
                 );
 
@@ -298,7 +300,7 @@ pub fn Stakes(comptime stakes_type: StakesType) type {
             const removed_delegation = account.getDelegation();
             const removed_stake = removed_delegation.getStake(
                 self.epoch,
-                &self.stake_history,
+                self.stake_history,
                 new_rate_activation_epoch,
             );
 
@@ -375,31 +377,14 @@ pub const CaclulateStakeContext = struct {
 
 pub const StakeAccount = struct {
     account: AccountSharedData,
-    state: StakeStateV2,
-
-    pub fn deinit(self: *const StakeAccount, allocator: Allocator) void {
-        self.account.deinit(allocator);
-    }
-
-    pub fn clone(self: *const StakeAccount, allocator: Allocator) Allocator.Error!StakeAccount {
-        return .{
-            .account = try self.account.clone(allocator),
-            .state = self.state,
-        };
-    }
-
-    pub fn getDelegation(self: StakeAccount) Delegation {
-        return self.state.getDelegation() orelse
-            @panic("StakeAccount does not have a delegation");
-    }
-
-    pub fn getStake(self: StakeAccount) Stake {
-        return self.state.getStake() orelse
-            @panic("StakeAccount does not have a stake");
-    }
+    // When initializing the `StakeAccount` we require that the `StakeStateV2` contained in the
+    // account data is the `stake` variant which contains `meta: Meta, stake: Stake, flags: StakeFlags`.
+    // For now, only the `Stake` field of the `stake variant is used, if in future we require the `Meta` or `Flags`
+    // we can simply add them in the initialisation method.
+    stake: Stake,
 
     /// Takes ownership of `account`.
-    pub fn fromAccountSharedData(allocator: Allocator, account: AccountSharedData) !StakeAccount {
+    pub fn init(allocator: Allocator, account: AccountSharedData) !StakeAccount {
         errdefer account.deinit(allocator);
 
         if (!stake_program.ID.equals(&account.owner)) return error.InvalidOwner;
@@ -411,12 +396,31 @@ pub const StakeAccount = struct {
             .{},
         );
 
-        if (state.getDelegation() == null) return error.NoDelegation;
+        const stake = state.getStake() orelse return error.InvalidData;
 
         return .{
             .account = account,
-            .state = state,
+            .stake = stake,
         };
+    }
+
+    pub fn deinit(self: *const StakeAccount, allocator: Allocator) void {
+        self.account.deinit(allocator);
+    }
+
+    pub fn clone(self: *const StakeAccount, allocator: Allocator) Allocator.Error!StakeAccount {
+        return .{
+            .account = try self.account.clone(allocator),
+            .stake = self.stake,
+        };
+    }
+
+    pub fn getDelegation(self: StakeAccount) Delegation {
+        return self.stake.delegation;
+    }
+
+    pub fn getStake(self: StakeAccount) Stake {
+        return self.stake;
     }
 };
 
@@ -509,7 +513,7 @@ pub const Delegation = struct {
     pub fn getStake(
         self: *const Delegation,
         epoch: Epoch,
-        stake_history: *const StakeHistory,
+        stake_history: StakeHistory,
         new_rate_activation_epoch: ?Epoch,
     ) u64 {
         return self.getStakeState(
@@ -522,7 +526,7 @@ pub const Delegation = struct {
     pub fn getStakeState(
         self: *const Delegation,
         epoch: Epoch,
-        history: *const StakeHistory,
+        history: StakeHistory,
         new_rate_activation_epoch: ?Epoch,
     ) StakeState {
         const effective_stake, const activating_stake = self.getEffectiveAndActivatingStake(
@@ -592,7 +596,7 @@ pub const Delegation = struct {
     pub fn getEffectiveAndActivatingStake(
         self: *const Delegation,
         epoch: Epoch,
-        history: *const StakeHistory,
+        history: StakeHistory,
         new_rate_activation_epoch: ?Epoch,
     ) struct { u64, u64 } {
         if (self.activation_epoch == std.math.maxInt(u64)) {
@@ -816,7 +820,10 @@ test "stakes basic" {
         for (0..4) |i| {
             const StakesT = Stakes(stakes_type);
 
-            var stakes_cache = StakesCacheGeneric(stakes_type).default();
+            const stake_history_empty = try StakeHistory.init(allocator);
+            defer stake_history_empty.deinit(allocator);
+
+            var stakes_cache = try StakesCacheGeneric(stakes_type).init(allocator);
             defer stakes_cache.deinit(allocator);
             {
                 const stakes: *StakesT, var guard = stakes_cache.stakes.writeWithLock();
@@ -835,7 +842,7 @@ test "stakes basic" {
                 defer stakes_guard.unlock();
                 try std.testing.expect(stakes.vote_accounts.getAccount(accs.vote_pubkey) != null);
                 try std.testing.expectEqual(
-                    stake.delegation.getStake(i, &StakeHistory.EMPTY, null),
+                    stake.delegation.getStake(i, stake_history_empty, null),
                     stakes.vote_accounts.getDelegatedStake(accs.vote_pubkey),
                 );
             }
@@ -847,7 +854,7 @@ test "stakes basic" {
                 defer stakes_guard.unlock();
                 try std.testing.expect(stakes.vote_accounts.getAccount(accs.vote_pubkey) != null);
                 try std.testing.expectEqual(
-                    stake.delegation.getStake(i, &StakeHistory.EMPTY, null),
+                    stake.delegation.getStake(i, stake_history_empty, null),
                     stakes.vote_accounts.getDelegatedStake(accs.vote_pubkey),
                 );
             }
@@ -881,7 +888,7 @@ test "stakes basic" {
                 defer stakes_guard.unlock();
                 try std.testing.expect(stakes.vote_accounts.getAccount(accs.vote_pubkey) != null);
                 try std.testing.expectEqual(
-                    stake.delegation.getStake(i, &StakeHistory.EMPTY, null),
+                    stake.delegation.getStake(i, stake_history_empty, null),
                     stakes.vote_accounts.getDelegatedStake(accs.vote_pubkey),
                 );
             }

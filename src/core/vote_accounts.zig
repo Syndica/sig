@@ -46,12 +46,13 @@ pub const StakeAndVoteAccount = struct {
     }
 };
 
-/// Deserialization in Agave allows invalid vote accounts to exist for snapshot compatibility. It is
-/// noted that this should change to a hard error in the future. We take the hard error on desererialisation
-/// approach and can write a custom deserializer if we come across a need to deserialize invalid vote accounts.
-/// [agave] https://github.com/firedancer-io/agave/blob/10fe1eb29aac9c236fd72d08ae60a3ef61ee8353/vote/src/vote_account.rs#L431-L438
+/// Deserialization in Agave allows invalid vote accounts to exist for snapshot
+/// compatibility. It is noted that this should change to a hard error in the
+/// future. We take the hard error on deserialisation approach and can write a
+/// custom deserializer if we come across a need to deserialize invalid vote
+/// accounts.
 ///
-/// [agave] https://github.com/firedancer-io/agave/blob/10fe1eb29aac9c236fd72d08ae60a3ef61ee8353/vote/src/vote_account.rs#L45-L46
+/// Analogous to [VoteAccounts](https://github.com/anza-xyz/agave/blob/10fe1eb29aac9c236fd72d08ae60a3ef61ee8353/vote/src/vote_account.rs#L45-L46)
 pub const VoteAccounts = struct {
     /// Maps pubkeys to vote account and delegated stake.
     vote_accounts: StakeAndVoteAccountsMap = .{},
@@ -60,13 +61,8 @@ pub const VoteAccounts = struct {
     /// to just compute the staked nodes on deserialisation but am open to changing this approach.
     staked_nodes: StakedNodesMap = .{},
 
-    pub const @"!bincode-config" = bincode.FieldConfig(
-        VoteAccounts,
-    ){ .deserializer = deserialize };
-
-    pub const @"!bincode-config:staked_nodes" = bincode.FieldConfig(
-        StakedNodesMap,
-    ){ .skip = true };
+    pub const @"!bincode-config" = bincode.FieldConfig(VoteAccounts){ .deserializer = deserialize };
+    pub const @"!bincode-config:staked_nodes" = bincode.FieldConfig(StakedNodesMap){ .skip = true };
 
     pub fn clone(
         self: *const VoteAccounts,
@@ -103,7 +99,7 @@ pub const VoteAccounts = struct {
     }
 
     /// Inserts a new vote account into the `vote_accounts` map, or updates an existing one.
-    /// If the vote account is new, it will calculate the stake and add it to the `staked_nodes` map.
+    /// If the vote account is new, it will calculate the stake and add it to the `staked_nodes` map
     /// If the vote account already exists, and the node pubkey has changed, it will move the stake
     /// from the old node to the new node in the `staked_nodes` map.
     /// Takes ownership of `account` and returns the previous value if it existed.
@@ -158,8 +154,9 @@ pub const VoteAccounts = struct {
         try self.addNodeStake(allocator, entry.account.state.node_pubkey, delta);
     }
 
-    /// Subtracts `delta` from the stake of the vote account identified by `pubkey`, and updates the
-    /// `staked_nodes` map. Panics if `delta` is greater than the current stake.
+    /// Subtracts `delta` from the stake of the vote account identified by
+    /// `pubkey`, and updates the `staked_nodes` map. Panics if `delta` is
+    /// greater than the current stake.
     pub fn subStake(self: *VoteAccounts, pubkey: Pubkey, delta: u64) !void {
         const entry = self.vote_accounts.getPtr(pubkey) orelse return;
         if (entry.stake < delta) return error.SubStakeOverflow;
@@ -167,7 +164,8 @@ pub const VoteAccounts = struct {
         try self.subNodeStake(entry.account.state.node_pubkey, delta);
     }
 
-    /// Adds `stake` to an entry in `staked_nodes`. If the entry does not exist, one will be created.
+    /// Adds `stake` to an entry in `staked_nodes`. If the entry does not exist,
+    /// one will be created.
     fn addNodeStake(
         self: *VoteAccounts,
         allocator: Allocator,
@@ -184,7 +182,8 @@ pub const VoteAccounts = struct {
             entry.value_ptr.* = stake;
     }
 
-    /// Subtracts `stake` from an entry in `staked_nodes`. If the entry does not exist, it will panic.
+    /// Subtracts `stake` from an entry in `staked_nodes`. If the entry does not
+    /// exist, it will panic.
     fn subNodeStake(self: *VoteAccounts, pubkey: Pubkey, stake: u64) !void {
         if (stake == 0) return;
 
@@ -218,6 +217,7 @@ pub const VoteAccounts = struct {
         return staked_nodes;
     }
 
+    /// Analogous to [deserialize_accounts_hash_map](https://github.com/anza-xyz/agave/blob/10fe1eb29aac9c236fd72d08ae60a3ef61ee8353/vote/src/vote_account.rs#L431-L438)
     fn deserialize(allocator: Allocator, reader: anytype, _: bincode.Params) !VoteAccounts {
         var vote_accounts = try bincode.read(
             allocator,
@@ -275,13 +275,8 @@ pub const VoteAccount = struct {
     account: AccountSharedData,
     state: VoteState,
 
-    pub const @"!bincode-config" = bincode.FieldConfig(
-        VoteAccount,
-    ){ .deserializer = deserialize };
-
-    pub const @"!bincode-config:state" = bincode.FieldConfig(
-        VoteState,
-    ){ .skip = true };
+    pub const @"!bincode-config" = bincode.FieldConfig(VoteAccount){ .deserializer = deserialize };
+    pub const @"!bincode-config:state" = bincode.FieldConfig(VoteState){ .skip = true };
 
     pub fn deinit(self: *const VoteAccount, allocator: Allocator) void {
         self.account.deinit(allocator);
@@ -329,7 +324,8 @@ pub const VoteAccount = struct {
         };
     }
 
-    /// Deserialize the `AccountSharedData`, and attempt to deserialize `VoteState` from the account data.
+    /// Deserialize the `AccountSharedData`, and attempt to deserialize
+    /// `VoteState` from the account data.
     fn deserialize(allocator: Allocator, reader: anytype, _: bincode.Params) !VoteAccount {
         return fromAccountSharedData(
             allocator,
@@ -361,7 +357,9 @@ pub const VoteAccount = struct {
         ) catch |err| {
             switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
-                else => unreachable, // We just created a 'valid' vote account, so the only possible error is `OutOfMemory`.
+                // We just created a 'valid' vote account, so the only possible
+                // error is `OutOfMemory`.
+                else => unreachable,
             }
         };
     }
@@ -412,7 +410,9 @@ pub fn createVoteAccount(
         vote_account.data,
         VoteStateVersions{ .current = vote_state },
         .{},
-    ) catch unreachable; // We just created a 'valid' vote state and allocated MAX_VOTE_STATE_SIZE bytes
+    ) catch unreachable;
+    // unreachable: We just created a 'valid' vote state and allocated
+    // MAX_VOTE_STATE_SIZE bytes
 
     return vote_account;
 }
@@ -441,7 +441,9 @@ pub fn createRandomVoteAccount(
     ) catch |err| {
         switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
-            else => unreachable, // We just created a 'valid' vote account, so the only possible error is `OutOfMemory`.
+            // We just created a 'valid' vote account, so the only possible
+            // error is `OutOfMemory`.
+            else => unreachable,
         }
     };
 }
@@ -638,7 +640,10 @@ test "vote accounts serialize and deserialize" {
             vote_accounts.vote_accounts.count(),
             deserialized.vote_accounts.count(),
         );
-        for (vote_accounts.vote_accounts.keys(), vote_accounts.vote_accounts.values()) |key, value| {
+        for (
+            vote_accounts.vote_accounts.keys(),
+            vote_accounts.vote_accounts.values(),
+        ) |key, value| {
             const actual_value = deserialized.vote_accounts.get(key) orelse
                 return error.VoteAccountNotFound;
             try std.testing.expectEqual(value.stake, actual_value.stake);

@@ -44,10 +44,6 @@ pub const EpochSchedule = extern struct {
         .warmup = true,
     });
 
-    pub const SIZE_OF: u64 = @sizeOf(EpochSchedule);
-
-    pub const STORAGE_SIZE: u64 = @sizeOf(EpochSchedule);
-
     pub fn getEpoch(self: *const EpochSchedule, slot: Slot) Epoch {
         return self.getEpochAndSlotIndex(slot)[0];
     }
@@ -133,10 +129,17 @@ pub const EpochSchedule = extern struct {
     }
 
     pub fn custom(
-        slots_per_epoch: u64,
-        leader_schedule_slot_offset: u64,
-        warmup: bool,
-    ) !EpochSchedule {
+        params: struct {
+            /// Only permits up to 2^63-1 as a value if `warmup = true`.
+            slots_per_epoch: u64,
+            leader_schedule_slot_offset: u64,
+            warmup: bool,
+        },
+    ) EpochSchedule {
+        const slots_per_epoch = params.slots_per_epoch;
+        const leader_schedule_slot_offset = params.leader_schedule_slot_offset;
+        const warmup = params.warmup;
+
         std.debug.assert(slots_per_epoch >= MINIMUM_SLOTS_PER_EPOCH);
         var first_normal_epoch: Epoch = 0;
         var first_normal_slot: Slot = 0;
@@ -169,11 +172,11 @@ pub const EpochSchedule = extern struct {
 
 test "epoch_schedule" {
     for (MINIMUM_SLOTS_PER_EPOCH..MINIMUM_SLOTS_PER_EPOCH * 16) |slots_per_epoch| {
-        const epoch_schedule = try EpochSchedule.custom(
-            slots_per_epoch,
-            slots_per_epoch / 2,
-            true,
-        );
+        const epoch_schedule = EpochSchedule.custom(.{
+            .slots_per_epoch = slots_per_epoch,
+            .leader_schedule_slot_offset = slots_per_epoch / 2,
+            .warmup = true,
+        });
 
         try std.testing.expectEqual(epoch_schedule.getFirstSlotInEpoch(0), 0);
         try std.testing.expectEqual(
@@ -218,7 +221,11 @@ test "epoch_schedule" {
 }
 
 test "getLeaderScheduleEpoch: leader schedule slot offset equals slots per epoch" {
-    const epoch_schedule = try EpochSchedule.custom(32, 32, true);
+    const epoch_schedule = EpochSchedule.custom(.{
+        .slots_per_epoch = 32,
+        .leader_schedule_slot_offset = 32,
+        .warmup = true,
+    });
     for (0..epoch_schedule.slots_per_epoch * 10) |slot| {
         const epoch = epoch_schedule.getEpoch(slot);
         const leader_schedule_epoch = epoch_schedule.getLeaderScheduleEpoch(slot);

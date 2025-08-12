@@ -8,14 +8,13 @@ const Pubkey = sig.core.Pubkey;
 pub const Fees = extern struct {
     lamports_per_signature: u64,
 
-    pub const ID =
-        Pubkey.parseBase58String("SysvarFees111111111111111111111111111111111") catch unreachable;
+    pub const ID: Pubkey = .parse("SysvarFees111111111111111111111111111111111");
 
     pub const DEFAULT = Fees{
         .lamports_per_signature = 0,
     };
 
-    pub const STORAGE_SIZE: u64 = @sizeOf(Fees);
+    pub const STORAGE_SIZE: u64 = 8;
 
     pub fn initRandom(random: std.Random) Fees {
         if (!builtin.is_test) @compileError("only for testing");

@@ -12,8 +12,8 @@ const TransactionMessage = sig.core.transaction.Message;
 const VoteTransaction = sig.consensus.vote_transaction.VoteTransaction;
 const VoteTracker = sig.consensus.VoteTracker;
 
-const deinitMapAndValues = sig.utils.collections.deinitMapAndValues;
-const cloneMapAndValues = sig.utils.collections.cloneMapAndValues;
+const SlotTracker = sig.replay.trackers.SlotTracker;
+const EpochTracker = sig.replay.trackers.EpochTracker;
 
 pub const BankForksStub = struct {
     slot_tracker: SlotTracker,
@@ -79,67 +79,8 @@ pub const BankForksStub = struct {
 
     pub const BankStub = struct {
         slot: Slot,
-        /// If this is Hash.ZEROES, it means the bank isn't frozen.
-        hash: Hash,
-        ancestors: sig.core.Ancestors,
-        epoch_schedule: sig.core.EpochSchedule,
-        epoch_stakes: sig.core.EpochStakesMap,
-
-        pub fn deinit(self: BankStub, allocator: std.mem.Allocator) void {
-            var copy = self;
-            copy.ancestors.deinit(allocator);
-            deinitMapAndValues(allocator, self.epoch_stakes);
-        }
-
-        pub fn init(
-            allocator: std.mem.Allocator,
-            params: struct {
-                slot: Slot,
-                hash: Hash,
-                ancestors: sig.core.Ancestors,
-                epoch_schedule: sig.core.EpochSchedule,
-                epoch_stakes: sig.core.EpochStakesMap,
-            },
-        ) std.mem.Allocator.Error!BankStub {
-            var ancestors = try params.ancestors.clone(allocator);
-            errdefer ancestors.deinit(allocator);
-
-            var epoch_stakes = try cloneMapAndValues(allocator, params.epoch_stakes);
-            errdefer deinitMapAndValues(allocator, epoch_stakes);
-
-            const slot_epoch = params.epoch_schedule.getEpoch(params.slot);
-            const gop = try epoch_stakes.getOrPut(allocator, slot_epoch);
-            if (!gop.found_existing) {
-                gop.value_ptr.* = try .initEmptyWithGenesisStakeHistoryEntry(allocator);
-            }
-
-            return .{
-                .slot = params.slot,
-                .hash = params.hash,
-                .ancestors = ancestors,
-                .epoch_schedule = params.epoch_schedule,
-                .epoch_stakes = epoch_stakes,
-            };
-        }
-
-        pub fn clone(
-            self: BankStub,
-            allocator: std.mem.Allocator,
-        ) std.mem.Allocator.Error!BankStub {
-            var ancestors = try self.ancestors.clone(allocator);
-            errdefer ancestors.deinit(allocator);
-
-            const epoch_stakes = try cloneMapAndValues(allocator, self.epoch_stakes);
-            errdefer deinitMapAndValues(allocator, epoch_stakes);
-
-            return .{
-                .slot = self.slot,
-                .hash = self.hash,
-                .ancestors = ancestors,
-                .epoch_schedule = self.epoch_schedule,
-                .epoch_stakes = epoch_stakes,
-            };
-        }
+        st_elem: SlotTracker.Reference,
+        et_elem: ?sig.core.EpochConstants,
     };
 };
 
@@ -1093,8 +1034,8 @@ fn trackNewVotesAndNotifyConfirmations(
 
 const ThresholdReachedResults = std.bit_set.IntegerBitSet(THRESHOLDS_TO_CHECK.len);
 const THRESHOLDS_TO_CHECK: [2]f64 = .{
-    sig.consensus.tower.DUPLICATE_THRESHOLD,
-    sig.consensus.tower.VOTE_THRESHOLD_SIZE,
+    sig.replay.service.DUPLICATE_THRESHOLD,
+    sig.consensus.replay_tower.VOTE_THRESHOLD_SIZE,
 };
 
 /// Returns if the slot was optimistically confirmed, and whether

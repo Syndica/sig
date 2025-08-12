@@ -3369,51 +3369,6 @@ test "HeaviestSubtreeForkChoice.addVotesDuplicateGreaterHashIgnored" {
             fork_choice.stakeForSlot(&ancestor).?,
         );
     }
-    return true;
-}
-
-pub fn testEpochStakes(
-    allocator: std.mem.Allocator,
-    pubkeys: []const Pubkey,
-    stake: u64,
-    random: std.Random,
-) !EpochStakes {
-    if (!builtin.is_test) {
-        @compileError("testEpochStakes should only be called in test mode");
-    }
-
-    var vote_accounts = sig.core.vote_accounts.VoteAccounts{};
-    errdefer vote_accounts.deinit(allocator);
-
-    for (pubkeys) |pubkey| {
-        try vote_accounts.vote_accounts.put(
-            allocator,
-            pubkey,
-            .{
-                .stake = stake,
-                .account = try sig.core.vote_accounts.createRandomVoteAccount(
-                    allocator,
-                    random,
-                    Pubkey.initRandom(random),
-                ),
-            },
-        );
-    }
-
-    const stakes = sig.core.epoch_stakes.EpochStakesGeneric(.delegation){
-        .stakes = sig.core.Stakes(.delegation){
-            .vote_accounts = vote_accounts,
-            .stake_delegations = .empty,
-            .unused = 0,
-            .epoch = 0,
-            .stake_history = try .init(allocator),
-        },
-        .epoch_authorized_voters = .empty,
-        .node_id_to_vote_accounts = .empty,
-        .total_stake = pubkeys.len * stake,
-    };
-
-    return stakes;
 }
 
 // Analogous to [test_add_votes_duplicate_smaller_hash_prioritized](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L2704)
@@ -4711,7 +4666,7 @@ test "HeaviestSubtreeForkChoice.gossipVoteDoesntAffectForkChoice" {
         vote_pubkey,
         vote_slot,
         vote_hash,
-        false, // is_replay_vote = false for gossip vote
+        .replay, // is_replay_vote = false for gossip vote
     );
 
     // Call computeBankStats - gossip votes shouldn't affect fork choice
@@ -5058,7 +5013,7 @@ pub fn testEpochStakes(
             .stake_delegations = .empty,
             .unused = 0,
             .epoch = 0,
-            .stake_history = sig.runtime.sysvar.StakeHistory.EMPTY,
+            .stake_history = try .init(allocator),
         },
         .epoch_authorized_voters = .empty,
         .node_id_to_vote_accounts = .empty,

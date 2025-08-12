@@ -14,7 +14,7 @@ const Slot = sig.core.Slot;
 pub const SlotHashes = struct {
     entries: *std.BoundedArray(Entry, MAX_ENTRIES),
 
-    pub const Entry = struct {
+    pub const Entry = extern struct {
         slot: Slot,
         hash: Hash,
 
@@ -27,9 +27,7 @@ pub const SlotHashes = struct {
         }
     };
 
-        pub fn sortCmp(_: void, a: Entry, b: Entry) bool {
-            return b.slot < a.slot; // Sort by descending slot
-        }
+    pub const ID: Pubkey = .parse("SysvarS1otHashes111111111111111111111111111");
 
     pub const MAX_ENTRIES: usize = 512;
 

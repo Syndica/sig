@@ -828,10 +828,12 @@ pub const AccountsDB = struct {
             const n_accounts_this_slot = blk: {
                 var n_accounts: usize = 0;
 
-                var iter = accounts_file.iterator(self.allocator, &self.buffer_pool);
+                var iter = accounts_file.iterator(&self.buffer_pool);
                 while (try iter.nextNoData()) |account| {
                     n_accounts += 1;
-                    _ = account;
+                    shard_counts[
+                        self.account_index.pubkey_ref_map.shard_calculator.index(account.pubkey())
+                    ] += 1;
                 }
                 break :blk n_accounts;
             };
@@ -847,7 +849,7 @@ pub const AccountsDB = struct {
             // index the account file
             var slot_references = AccountIndex.SlotRefMapValue{
                 .global_index = ref_global_index,
-                .refs = std.ArrayListUnmanaged(AccountRef).initBuffer(references_buf),
+                .refs = .initBuffer(references_buf),
             };
 
             indexAndValidateAccountFile(
@@ -855,7 +857,7 @@ pub const AccountsDB = struct {
                 &self.buffer_pool,
                 &accounts_file,
                 self.account_index.pubkey_ref_map.shard_calculator,
-                shard_counts,
+                null, // shard counts calculated earlier
                 &slot_references.refs,
                 // ! we collect the accounts and pubkeys into geyser storage here
                 geyser_slot_storage,
@@ -874,6 +876,8 @@ pub const AccountsDB = struct {
                     );
                 }
             };
+
+            std.debug.assert(accounts_file.number_of_accounts <= n_accounts_this_slot);
 
             const file_id = file_info.id;
             file_map.putAssumeCapacityNoClobber(file_id, accounts_file);
@@ -959,7 +963,7 @@ pub const AccountsDB = struct {
                 global_indices.items,
             ) |i_ref_buf, reference_buf, global_index| {
                 for (0.., reference_buf) |i, *ref| {
-                    _ = self.account_index.indexRefIfNotDuplicateSlotAssumeCapacity(
+                    _ = try self.account_index.indexRefIfNotDuplicateSlot(
                         ref,
                         global_index + i,
                     );
@@ -1812,6 +1816,21 @@ pub const AccountsDB = struct {
         return account;
     }
 
+    pub fn getSlotAndAccount(
+        self: *AccountsDB,
+        pubkey: *const Pubkey,
+    ) GetAccountError!struct { Slot, Account } {
+        const head_ref, var lock = self.account_index.pubkey_ref_map.getRead(pubkey) orelse
+            return error.PubkeyNotInIndex;
+        defer lock.unlock();
+
+        // NOTE: this will always be a safe unwrap since both bounds are null
+        const max_ref = slotListMaxWithinBounds(head_ref.ref_ptr, null, null).?;
+        const account = try self.getAccountFromRef(max_ref);
+
+        return .{ max_ref.slot, account };
+    }
+
     /// gets an account given an associated pubkey. mut ref is required for locks.
     /// Will only find rooted accounts, or unrooted accounts from a slot in ancestors.
     pub fn getAccountWithAncestors(
@@ -2020,9 +2039,7 @@ pub const AccountsDB = struct {
         account: sig.runtime.AccountSharedData,
     ) !void {
         const duplicated = Account{
-            .data = .{
-                .owned_allocation = try self.allocator.dupe(u8, account.data),
-            },
+            .data = .{ .owned_allocation = try self.allocator.dupe(u8, account.data) },
             .executable = account.executable,
             .lamports = account.lamports,
             .owner = account.owner,
@@ -2034,14 +2051,13 @@ pub const AccountsDB = struct {
         }
 
         if (self.geyser_writer) |geyser_writer| {
-            const data_versioned = sig.geyser.core.VersionedAccountPayload{
+            try geyser_writer.writePayloadToPipe(.{
                 .AccountPayloadV1 = .{
                     .accounts = &.{duplicated},
                     .pubkeys = &.{pubkey},
                     .slot = slot,
                 },
-            };
-            try geyser_writer.writePayloadToPipe(data_versioned);
+            });
         }
 
         {
@@ -2064,11 +2080,10 @@ pub const AccountsDB = struct {
             const ref = slotListMaxWithinBounds(head_ref.ref_ptr, min_slot, slot) orelse
                 break :search_and_overwrite;
 
-            if (ref.location != .UnrootedMap) {
-                return error.CannotWriteRootedSlot;
-            }
-
-            const index = ref.location.UnrootedMap.index;
+            const index = switch (ref.location) {
+                .UnrootedMap => |location| location.index,
+                else => return error.CannotWriteRootedSlot,
+            };
 
             const unrooted_accounts, var unrooted_lock = self.unrooted_accounts.readWithLock();
             defer unrooted_lock.unlock();
@@ -2092,7 +2107,7 @@ pub const AccountsDB = struct {
 
             const entry = try unrooted_accounts.getOrPut(slot);
 
-            if (!entry.found_existing) entry.value_ptr.* = .{};
+            if (!entry.found_existing) entry.value_ptr.* = .empty;
             try entry.value_ptr.append(
                 self.allocator,
                 .{ .account = duplicated, .pubkey = pubkey },
@@ -2120,12 +2135,16 @@ pub const AccountsDB = struct {
         defer lock.unlock();
 
         const slot_entry = try slot_ref_map.getOrPut(slot);
-        if (!slot_entry.found_existing) slot_entry.value_ptr.* = .{
-            .refs = .{},
-            .global_index = undefined,
-        };
 
+        if (!slot_entry.found_existing) {
+            // no entry means realloc always needed, value set in realloc_needed block
+            slot_entry.value_ptr.* = .{
+                .refs = .empty,
+                .global_index = std.math.maxInt(u64), // u64-max == invalid value / replaced soon
+            };
+        }
         const realloc_needed = slot_entry.value_ptr.refs.unusedCapacitySlice().len < pubkeys.len;
+        if (!slot_entry.found_existing) std.debug.assert(realloc_needed);
 
         const old_refs = slot_entry.value_ptr.refs.items;
         const new_len = old_refs.len + pubkeys.len;
@@ -2190,7 +2209,7 @@ pub const AccountsDB = struct {
             for (0.., reference_buf[0..new_len]) |i, *ref| {
                 if (i < old_refs.len) continue;
 
-                const was_inserted = self.account_index.indexRefIfNotDuplicateSlotAssumeCapacity(
+                const was_inserted = try self.account_index.indexRefIfNotDuplicateSlot(
                     ref,
                     global_ref_index + i,
                 );
@@ -2229,6 +2248,9 @@ pub const AccountsDB = struct {
         } else {
             // no realloc necessary
 
+            // guard against invalid slot entry
+            std.debug.assert(slot_entry.value_ptr.global_index != std.math.maxInt(u64));
+
             slot_entry.value_ptr.refs.items.len = new_len;
 
             for (0.., slot_entry.value_ptr.refs.items) |i, *ref| {
@@ -2245,7 +2267,7 @@ pub const AccountsDB = struct {
             for (0.., slot_entry.value_ptr.refs.items) |i, *ref| {
                 if (i < old_refs.len) continue;
 
-                const was_inserted = self.account_index.indexRefIfNotDuplicateSlotAssumeCapacity(
+                const was_inserted = try self.account_index.indexRefIfNotDuplicateSlot(
                     ref,
                     slot_entry.value_ptr.global_index + i,
                 );
@@ -2308,7 +2330,7 @@ pub const AccountsDB = struct {
             defer unrooted_accounts_lg.unlock();
 
             const entry = try unrooted_accounts.getOrPut(slot);
-            if (!entry.found_existing) entry.value_ptr.* = .{};
+            if (!entry.found_existing) entry.value_ptr.* = .empty;
             try entry.value_ptr.ensureUnusedCapacity(self.allocator, pubkeys.len);
             for (pubkeys, accounts_duped) |pubkey, account| {
                 entry.value_ptr.appendAssumeCapacity(.{ .account = account, .pubkey = pubkey });
@@ -3377,28 +3399,6 @@ pub fn unpackSnapshotFilePair(
     }
 }
 
-pub fn loadTestAccountsDbEmpty(
-    allocator: std.mem.Allocator,
-    use_disk: bool,
-    logger: Logger,
-    /// The directory into which the snapshots are unpacked, and
-    /// the `snapshots_dir` for the returned `AccountsDB`.
-    snapshot_dir: std.fs.Dir,
-) !AccountsDB {
-    var accounts_db = try AccountsDB.init(.{
-        .allocator = allocator,
-        .logger = logger,
-        .snapshot_dir = snapshot_dir,
-        .geyser_writer = null,
-        .gossip_view = null,
-        .index_allocation = if (use_disk) .disk else .ram,
-        .number_of_index_shards = 4,
-    });
-    errdefer accounts_db.deinit();
-
-    return accounts_db;
-}
-
 pub fn loadTestAccountsDB(
     allocator: std.mem.Allocator,
     use_disk: bool,
@@ -3621,7 +3621,7 @@ test "write and read an account (write single + read with ancestors)" {
         var data_2 = [_]u8{ 0, 1, 0, 1 };
 
         const test_account_2 = Account{
-            .data = AccountDataHandle.initAllocated(&data_2),
+            .data = .initAllocated(&data_2),
             .executable = true,
             .lamports = 1000,
             .owner = Pubkey.ZEROES,
@@ -4547,37 +4547,14 @@ test "read/write benchmark disk" {
     });
 }
 
-fn loadTestAccountsDbEmpty(
-    allocator: std.mem.Allocator,
-    use_disk: bool,
-    logger: Logger,
-    /// The directory into which the snapshots are unpacked, and
-    /// the `snapshots_dir` for the returned `AccountsDB`.
-    snapshot_dir: std.fs.Dir,
-) !AccountsDB {
-    var accounts_db = try AccountsDB.init(.{
-        .allocator = allocator,
-        .logger = logger,
-        .snapshot_dir = snapshot_dir,
-        .geyser_writer = null,
-        .gossip_view = null,
-        .index_allocation = if (use_disk) .disk else .ram,
-        .number_of_index_shards = 4,
-    });
-    errdefer accounts_db.deinit();
-
-    return accounts_db;
-}
-
 test "insert multiple accounts on same slot" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(0);
     const random = prng.random();
 
     // Initialize empty accounts db
-    var tmp_dir = std.testing.tmpDir(.{});
+    var accounts_db, var tmp_dir = try AccountsDB.initForTest(allocator);
     defer tmp_dir.cleanup();
-    var accounts_db = try loadTestAccountsDbEmpty(allocator, false, .noop, tmp_dir.dir);
     defer accounts_db.deinit();
 
     // Set initial slot
@@ -4656,9 +4633,8 @@ test "insert multiple accounts on multiple slots" {
     var prng = std.Random.DefaultPrng.init(0);
     const random = prng.random();
 
-    var tmp_dir = std.testing.tmpDir(.{});
+    var accounts_db, var tmp_dir = try AccountsDB.initForTest(allocator);
     defer tmp_dir.cleanup();
-    var accounts_db = try loadTestAccountsDbEmpty(allocator, false, .noop, tmp_dir.dir);
     defer accounts_db.deinit();
 
     const slots = [_]Slot{ 5, 9, 10, 11, 12 };
@@ -4671,7 +4647,7 @@ test "insert multiple accounts on multiple slots" {
         try ancestors.ancestors.put(allocator, slot, {});
 
         const pubkey = Pubkey.initRandom(random);
-        errdefer std.debug.print(
+        errdefer std.log.err(
             "Failed to insert and load account: i={}, slot={}, ancestors={any} pubkey={}\n",
             .{ i, slot, ancestors.ancestors.keys(), pubkey },
         );
@@ -4696,9 +4672,8 @@ test "insert account on multiple slots" {
     var prng = std.Random.DefaultPrng.init(0);
     const random = prng.random();
 
-    var tmp_dir = std.testing.tmpDir(.{});
+    var accounts_db, var tmp_dir = try AccountsDB.initForTest(allocator);
     defer tmp_dir.cleanup();
-    var accounts_db = try loadTestAccountsDbEmpty(allocator, false, .noop, tmp_dir.dir);
     defer accounts_db.deinit();
 
     const slots = [_]Slot{ 5, 9, 10, 11, 12 };
@@ -4714,7 +4689,7 @@ test "insert account on multiple slots" {
             defer ancestors.deinit(allocator);
             try ancestors.ancestors.put(allocator, slot, {});
 
-            errdefer std.debug.print(
+            errdefer std.log.err(
                 \\Failed to insert and load account: i={}
                 \\    j:         {}/{}
                 \\    slot:      {}
@@ -4746,9 +4721,8 @@ test "missing ancestor returns null" {
     var prng = std.Random.DefaultPrng.init(5083);
     const random = prng.random();
 
-    var tmp_dir = std.testing.tmpDir(.{});
+    var accounts_db, var tmp_dir = try AccountsDB.initForTest(allocator);
     defer tmp_dir.cleanup();
-    var accounts_db = try loadTestAccountsDbEmpty(allocator, false, .noop, tmp_dir.dir);
     defer accounts_db.deinit();
 
     const slot: Slot = 15;
@@ -4769,9 +4743,8 @@ test "overwrite account in same slot" {
     var prng = std.Random.DefaultPrng.init(5083);
     const random = prng.random();
 
-    var tmp_dir = std.testing.tmpDir(.{});
+    var accounts_db, var tmp_dir = try AccountsDB.initForTest(allocator);
     defer tmp_dir.cleanup();
-    var accounts_db = try loadTestAccountsDbEmpty(allocator, false, .noop, tmp_dir.dir);
     defer accounts_db.deinit();
 
     const slot: Slot = 15;
@@ -4802,10 +4775,8 @@ test "insert many duplicate individual accounts, get latest with ancestors" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
     const random = prng.random();
-
-    var tmp_dir = std.testing.tmpDir(.{});
+    var accounts_db, var tmp_dir = try AccountsDB.initForTest(allocator);
     defer tmp_dir.cleanup();
-    var accounts_db = try loadTestAccountsDbEmpty(allocator, false, .noop, tmp_dir.dir);
     defer accounts_db.deinit();
 
     const pubkey_count = 50;
@@ -4823,7 +4794,7 @@ test "insert many duplicate individual accounts, get latest with ancestors" {
     var expected_latest: [pubkey_count]?struct {
         slot: Slot,
         account: sig.runtime.AccountSharedData,
-    } = .{null} ** pubkey_count;
+    } = @splat(null);
 
     for (0..pubkey_count) |i| {
         const pubkey = pubkeys[i];

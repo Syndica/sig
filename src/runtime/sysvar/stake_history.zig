@@ -13,7 +13,7 @@ const Pubkey = sig.core.Pubkey;
 pub const StakeHistory = struct {
     entries: *std.BoundedArray(Entry, MAX_ENTRIES),
 
-    pub const Entry = struct {
+    pub const Entry = extern struct {
         epoch: Epoch,
         stake: StakeState,
 
@@ -38,7 +38,7 @@ pub const StakeHistory = struct {
         }
     };
 
-    pub const StakeState = struct {
+    pub const StakeState = extern struct {
         /// Effective stake at this epoch
         effective: u64,
         /// Sum of portion of stakes not fully warmed up
@@ -47,8 +47,7 @@ pub const StakeHistory = struct {
         deactivating: u64,
     };
 
-    pub const ID =
-        Pubkey.parseBase58String("SysvarStakeHistory1111111111111111111111111") catch unreachable;
+    pub const ID: Pubkey = .parse("SysvarStakeHistory1111111111111111111111111");
 
     pub const MAX_ENTRIES: u64 = 512;
 
@@ -68,10 +67,6 @@ pub const StakeHistory = struct {
         const cloned = try StakeHistory.init(allocator);
         cloned.entries.* = self.entries.*;
         return cloned;
-    }
-
-    pub fn clone(self: StakeHistory, allocator: Allocator) Allocator.Error!StakeHistory {
-        return .{ .entries = try self.entries.clone(allocator) };
     }
 
     pub fn isEmpty(self: StakeHistory) bool {
@@ -99,14 +94,18 @@ pub const StakeHistory = struct {
     }
 
     pub fn initRandom(allocator: Allocator, random: std.Random) Allocator.Error!StakeHistory {
-        if (!builtin.is_test) @compileError("only available in test mode");
+        // TODO: Uncomment once not required by bank init random
+        // if (!builtin.is_test) @compileError("only for testing");
         var self = try StakeHistory.init(allocator);
-        for (0..random.intRangeAtMost(Epoch, 1, 1_000)) |epoch|
-            self.entries.appendAssumeCapacity(.{ .epoch = epoch, .stake = .{
-                .effective = random.int(u64),
-                .activating = random.int(u64),
-                .deactivating = random.int(u64),
-            } });
+        for (0..random.uintLessThan(Epoch, MAX_ENTRIES)) |_|
+            self.entries.appendAssumeCapacity(.{
+                .epoch = random.int(u64),
+                .stake = .{
+                    .effective = random.int(u64),
+                    .activating = random.int(u64),
+                    .deactivating = random.int(u64),
+                },
+            });
         std.sort.heap(Entry, self.entries.slice(), {}, Entry.sortCmp);
         return self;
     }
