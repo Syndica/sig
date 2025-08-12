@@ -2205,7 +2205,9 @@ pub const AccountsDB = struct {
                     }
 
                     const head = shard_map.getPtr(new_ref.pubkey) orelse continue;
-                    if (head.ref_ptr.slot == new_ref.slot and head.ref_ptr.pubkey.equals(&new_ref.pubkey)) {
+                    if (head.ref_ptr.slot == new_ref.slot and
+                        head.ref_ptr.pubkey.equals(&new_ref.pubkey))
+                    {
                         head.ref_index = global_ref_index + i;
                         head.ref_ptr = new_ref;
                     }
