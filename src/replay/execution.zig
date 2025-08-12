@@ -846,3 +846,71 @@ test "processReplayResults: return value correctness" {
     );
     try testing.expect(!non_confirm_result);
 }
+
+test "processReplayResults: confirm status with done poll but missing slot in tracker" {
+    const allocator = testing.allocator;
+
+    var test_resources = createTestReplayState(allocator) catch |err| {
+        std.debug.print("Failed to create test replay state: {}\n", .{err});
+        return err;
+    };
+    defer test_resources.deinit(allocator);
+
+    const slot: Slot = 100;
+
+    // Create a mock ConfirmSlotFuture that will return done when polled
+    const MockConfirmSlotFutureDone = struct {
+        scheduler: replay.scheduler.TransactionScheduler,
+        poh_verifier: sig.utils.thread.HomogeneousThreadPool(replay.confirm_slot.PohTask),
+        exit: std.atomic.Value(bool),
+        entries: []const sig.core.Entry,
+        status: replay.confirm_slot.ConfirmSlotStatus,
+        status_when_done: replay.confirm_slot.ConfirmSlotStatus,
+
+        pub fn poll(self: *@This()) !replay.confirm_slot.ConfirmSlotStatus {
+            _ = self;
+            return replay.confirm_slot.ConfirmSlotStatus.done;
+        }
+
+        pub fn destroy(self: *@This(), alloc: Allocator) void {
+            alloc.destroy(self);
+        }
+    };
+
+    // Create the mock future
+    const mock_future = try allocator.create(MockConfirmSlotFutureDone);
+    const empty_entries = try allocator.alloc(sig.core.Entry, 0);
+
+    mock_future.* = MockConfirmSlotFutureDone{
+        .scheduler = undefined, // Not used in test
+        .poh_verifier = undefined, // Not used in test
+        .exit = std.atomic.Value(bool).init(false),
+        .entries = empty_entries,
+        .status = .done,
+        .status_when_done = .done,
+    };
+
+    defer {
+        allocator.free(empty_entries);
+        allocator.destroy(mock_future);
+    }
+
+    // Create slot statuses with confirm status containing our mock future
+    var slot_statuses = std.ArrayListUnmanaged(struct { Slot, ReplaySlotStatus }).empty;
+    defer slot_statuses.deinit(allocator);
+
+    // Cast our mock to ConfirmSlotFuture
+    const confirm_future: *ConfirmSlotFuture = @ptrCast(@alignCast(mock_future));
+    try slot_statuses.append(
+        allocator,
+        .{ slot, .{ .confirm = confirm_future } },
+    );
+
+    // The function should return an error since the slot is not in the tracker
+    const result = processReplayResults(
+        &test_resources.replay_state,
+        &slot_statuses,
+    );
+
+    try testing.expectError(error.MissingSlotInTracker, result);
+}
