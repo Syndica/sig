@@ -6,6 +6,7 @@ const Epoch = sig.core.Epoch;
 const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 const PubkeyArraySet = std.AutoArrayHashMapUnmanaged(Pubkey, void);
+const ThresholdDecision = sig.consensus.tower.ThresholdDecision;
 
 const deinitMapAndValues = sig.utils.collections.deinitMapAndValues;
 
@@ -473,7 +474,7 @@ pub const ForkStats = struct {
     bank_hash: Hash,
     my_latest_landed_vote: ?Slot,
 
-    pub const VoteThreshold = std.ArrayListUnmanaged(sig.consensus.tower.ThresholdDecision);
+    pub const VoteThreshold = std.ArrayListUnmanaged(ThresholdDecision);
 
     pub const EMPTY_ZEROES: ForkStats = .{
         .fork_stake = 0,
@@ -1745,8 +1746,6 @@ fn forkStatsInitRandom(
         },
     },
 ) std.mem.Allocator.Error!ForkStats {
-    const ThresholdDecision = sig.consensus.tower.ThresholdDecision;
-
     const vote_threshold = try allocator.alloc(ThresholdDecision, params.vote_threshold_len);
     errdefer allocator.free(vote_threshold);
 
