@@ -47,6 +47,10 @@ pub const LoadedTransactionAccounts = struct {
 pub const CachedAccount = struct {
     pubkey: Pubkey,
     account: *AccountSharedData,
+
+    pub fn getAccount(self: *const CachedAccount) *const AccountSharedData {
+        return self.account;
+    }
 };
 
 /// Implements much of Agave's AccountLoader functionality. Owns the accounts it loads.
@@ -68,37 +72,59 @@ pub const BatchAccountCache = struct {
         AccountSharedData,
     );
 
-    /// Eagerly loads accounts from accounts db. Assumes the best, and will not report errors.
-    /// Error reporting is deferred until accounts are loaded from BatchAccountCache.
-    /// No rent collection is performed.
+    /// Initializes a new instance with all the accounts needed for all the
+    /// provided transactions.
     pub fn initFromAccountsDb(
         allocator: Allocator,
         account_reader: SlotAccountReader,
         transactions: []const RuntimeTransaction,
     ) !BatchAccountCache {
-        // we assume the largest is allowed
-        const max_data_len = sig.runtime.program.compute_budget.MAX_LOADED_ACCOUNTS_DATA_SIZE_BYTES;
+        var self = try initSufficientCapacity(allocator, transactions);
+        for (transactions) |tx| {
+            try self.load(allocator, account_reader, &tx.accounts, tx.instructions);
+        }
+        return self;
+    }
 
+    /// Allocates a sufficiently large account cache to hold every account that
+    /// may be needed by these transactions.
+    pub fn initSufficientCapacity(allocator: Allocator, transactions: anytype) !BatchAccountCache {
         const max_map_entries = total_account_keys: {
             var n: usize = 0;
             for (transactions) |tx| n += tx.accounts.len;
             // for getting program owner accounts and ProgramData accounts
-            for (transactions) |tx| n += tx.instruction_infos.len * 2;
+            for (transactions) |tx| n += tx.instructions.len * 2;
             break :total_account_keys n;
         };
 
         // optimisation: we could also keep per-tx indexes to remove reliance on hashmap get
         var map: AccountMap = .{};
-        errdefer map.deinit(allocator);
         try map.ensureUnusedCapacity(allocator, max_map_entries);
 
-        const transactions_data_loaded = try allocator.alloc(u32, transactions.len);
-        defer allocator.free(transactions_data_loaded);
-        @memset(transactions_data_loaded, 0);
+        return .{ .account_cache = map };
+    }
 
-        // load txes account_keys
-        next_tx: for (transactions, transactions_data_loaded) |*tx, *tx_data_loaded| {
-            for (tx.accounts.items(.pubkey)) |account_key| {
+    /// Loads all the accounts needed to process a single transaction.
+    ///
+    /// Assumes the best, and will not report errors. Error reporting is
+    /// deferred until accounts are loaded from BatchAccountCache. No rent
+    /// collection is performed.
+    pub fn load(
+        self: *BatchAccountCache,
+        allocator: Allocator,
+        account_reader: SlotAccountReader,
+        accounts: *const std.MultiArrayList(sig.core.instruction.InstructionAccount),
+        instructions: []const sig.runtime.InstructionInfo,
+    ) !void {
+        const map = &self.account_cache;
+
+        // we assume the largest is allowed
+        const max_data_len = sig.runtime.program.compute_budget.MAX_LOADED_ACCOUNTS_DATA_SIZE_BYTES;
+
+        var tx_data_loaded: u32 = 0;
+
+        { // load txes account_keys
+            for (accounts.items(.pubkey)) |account_key| {
                 if (account_key.equals(&sig.runtime.ids.SYSVAR_INSTRUCTIONS_ID)) {
                     // this code is special, and requires constructing per-transaction accounts,
                     // which we will not perform in advance.
@@ -121,23 +147,20 @@ pub const BatchAccountCache = struct {
                 };
 
                 accumulateAndCheckLoadedAccountDataSize(
-                    tx_data_loaded,
+                    &tx_data_loaded,
                     account.data.len,
                     max_data_len,
-                ) catch continue :next_tx; // tx will fail - loaded too much
+                ) catch break; // tx will fail - loaded too much
             }
         }
 
-        var validated_loaders = std.AutoArrayHashMap(Pubkey, void).init(allocator);
-        defer validated_loaders.deinit();
+        { // load tx instruction's program account + its owner
+            var validated_loaders = std.AutoArrayHashMap(Pubkey, void).init(allocator);
+            defer validated_loaders.deinit();
 
-        // load tx instruction's program account + its owner
-        next_tx: for (transactions) |tx| {
-            try validated_loaders.ensureTotalCapacity(tx.instruction_infos.len);
-            defer validated_loaders.clearRetainingCapacity();
             var tx_loaded_account_data_len: u32 = 0;
 
-            for (tx.instruction_infos) |instr| {
+            for (instructions) |instr| {
                 const program_key = instr.program_meta.pubkey;
 
                 if (program_key.equals(&runtime.ids.NATIVE_LOADER_ID) or
@@ -163,7 +186,7 @@ pub const BatchAccountCache = struct {
                         // default account ~= account missing
                         // every account which a load is attempted on should have an entry
                         map.putAssumeCapacityNoClobber(program_owner_key, AccountSharedData.NEW);
-                        continue :next_tx; // tx will fail - can't get account
+                        break; // tx will fail - can't get account
                     };
 
                     map.putAssumeCapacityNoClobber(program_owner_key, owner_account);
@@ -175,15 +198,14 @@ pub const BatchAccountCache = struct {
                     &tx_loaded_account_data_len,
                     owner_account.data.len,
                     max_data_len,
-                ) catch continue :next_tx; // tx will fail - accounts data too large
+                ) catch break; // tx will fail - accounts data too large
 
                 try validated_loaders.put(program_owner_key, {});
             }
         }
 
-        // load v3 loader's ProgramData accounts.
-        for (transactions) |tx| {
-            for (tx.instruction_infos) |instr| {
+        { // load v3 loader's ProgramData accounts.
+            for (instructions) |instr| {
                 const program_key = instr.program_meta.pubkey;
 
                 if (program_key.equals(&runtime.ids.NATIVE_LOADER_ID) or
@@ -219,16 +241,17 @@ pub const BatchAccountCache = struct {
                 }
             }
         }
-
-        return .{ .account_cache = map };
     }
 
-    pub fn deinit(self: *BatchAccountCache, allocator: Allocator) void {
-        for (self.account_cache.values()) |account|
+    pub fn deinit(self_const: BatchAccountCache, allocator: Allocator) void {
+        var self = self_const;
+        for (self.account_cache.values()) |account| {
             allocator.free(account.data);
+        }
         self.account_cache.deinit(allocator);
-        for (self.sysvar_instruction_account_datas.items) |account|
+        for (self.sysvar_instruction_account_datas.items) |account| {
             allocator.free(account.data);
+        }
         self.sysvar_instruction_account_datas.deinit(allocator);
     }
 
@@ -327,7 +350,7 @@ pub const BatchAccountCache = struct {
         var validated_loaders = std.AutoArrayHashMap(Pubkey, void).init(allocator);
         defer validated_loaders.deinit();
 
-        for (transaction.instruction_infos) |instr| {
+        for (transaction.instructions) |instr| {
             const program_id = &instr.program_meta.pubkey;
             if (program_id.equals(&runtime.ids.NATIVE_LOADER_ID)) continue;
             const program_account = (try loadAccount(
@@ -553,7 +576,7 @@ fn constructInstructionsAccount(
 
     var decompiled_instructions = try std.ArrayList(Instruction).initCapacity(
         allocator,
-        transaction.instruction_infos.len,
+        transaction.instructions.len,
     );
     defer {
         for (decompiled_instructions.items) |decompiled| allocator.free(decompiled.accounts);
@@ -562,7 +585,7 @@ fn constructInstructionsAccount(
 
     const tx_accounts = transaction.accounts.slice();
 
-    for (transaction.instruction_infos) |instruction| {
+    for (transaction.instructions) |instruction| {
         const accounts_meta = try allocator.alloc(
             InstructionAccount,
             instruction.account_metas.len,
@@ -641,7 +664,7 @@ fn emptyTxWithKeys(allocator: Allocator, keys: []const Pubkey) !RuntimeTransacti
         .fee_payer = Pubkey.ZEROES,
         .msg_hash = Hash.ZEROES,
         .recent_blockhash = Hash.ZEROES,
-        .instruction_infos = &.{},
+        .instructions = &.{},
         .accounts = accounts,
     };
 }
@@ -660,7 +683,7 @@ test "loadTransactionAccounts empty transaction" {
 
     const empty_tx = RuntimeTransaction{
         .fee_payer = Pubkey.ZEROES,
-        .instruction_infos = &.{},
+        .instructions = &.{},
         .msg_hash = Hash.ZEROES,
         .recent_blockhash = Hash.ZEROES,
         .signature_count = 0,
@@ -700,7 +723,7 @@ test "loadTransactionAccounts sysvar instruction" {
 
     const empty_tx = RuntimeTransaction{
         .fee_payer = Pubkey.ZEROES,
-        .instruction_infos = &.{},
+        .instructions = &.{},
         .msg_hash = Hash.ZEROES,
         .recent_blockhash = Hash.ZEROES,
         .signature_count = 0,
@@ -803,7 +826,7 @@ test "load accounts rent paid" {
     var tx = try emptyTxWithKeys(allocator, &.{ fee_payer_address, instruction_address });
     defer tx.accounts.deinit(allocator);
 
-    tx.instruction_infos = &.{
+    tx.instructions = &.{
         .{
             .program_meta = .{ .pubkey = instruction_address, .index_in_transaction = 1 },
             .account_metas = try sig.runtime.InstructionInfo.AccountMetas.fromSlice(
@@ -881,7 +904,7 @@ test "constructInstructionsAccount" {
 
     const empty_tx = RuntimeTransaction{
         .fee_payer = Pubkey.ZEROES,
-        .instruction_infos = &.{
+        .instructions = &.{
             .{
                 .program_meta = .{ .pubkey = instruction_address, .index_in_transaction = 1 },
                 .account_metas = .{},
@@ -1061,7 +1084,7 @@ test "dont double count program owner account data size" {
             },
         );
 
-        tx.instruction_infos = &.{
+        tx.instructions = &.{
             .{
                 .program_meta = .{ .pubkey = pk2, .index_in_transaction = 1 },
                 .account_metas = metas,
@@ -1161,7 +1184,7 @@ test "invalid program owner owner" {
 
     var tx = try emptyTxWithKeys(allocator, &.{instruction_address});
     defer tx.accounts.deinit(allocator);
-    tx.instruction_infos = &.{
+    tx.instructions = &.{
         .{
             .program_meta = .{ .pubkey = instruction_address, .index_in_transaction = 0 },
             .account_metas = .{},
@@ -1210,7 +1233,7 @@ test "missing program owner account" {
 
     var tx = try emptyTxWithKeys(allocator, &.{instruction_address});
     defer tx.accounts.deinit(allocator);
-    tx.instruction_infos = &.{
+    tx.instructions = &.{
         .{
             .program_meta = .{ .pubkey = instruction_address, .index_in_transaction = 0 },
             .account_metas = .{},
@@ -1338,7 +1361,7 @@ test "load v3 program" {
     var tx = try emptyTxWithKeys(allocator, &.{pk_v3_program});
     defer tx.accounts.deinit(allocator);
 
-    tx.instruction_infos = &.{
+    tx.instructions = &.{
         .{
             .program_meta = .{ .pubkey = pk_v3_program, .index_in_transaction = 0 },
             .account_metas = .{},

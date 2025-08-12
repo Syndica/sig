@@ -1051,6 +1051,7 @@ pub const ShredVariantConfig = blk: {
 
 pub const ShredFlags = BitFlags(enum(u8) {
     shred_tick_reference_mask = 0b0011_1111,
+    /// this means it is the last shred in an erasure set
     data_complete_shred = 0b0100_0000,
     last_shred_in_slot = 0b1100_0000,
 

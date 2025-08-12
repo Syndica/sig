@@ -1092,7 +1092,7 @@ pub const BlockstoreReader = struct {
         var ranges = CompletedRanges.init(allocator);
         var begin: u32 = start_index;
         for (completed_data_indexes.range(start_index, consumed)) |index| {
-            try ranges.append(.{ begin, index });
+            try ranges.append(.{ begin, index + 1 });
             begin = index + 1;
         }
         return ranges;
@@ -1143,7 +1143,7 @@ pub const BlockstoreReader = struct {
             for (data_shreds.items) |ds| ds.deinit();
             data_shreds.deinit();
         }
-        for (all_ranges_start_index..all_ranges_end_index + 1) |index| {
+        for (all_ranges_start_index..all_ranges_end_index) |index| {
             // TODO perf: multi_get_bytes
             if (try self.db.getBytes(schema.data_shred, .{ slot, @intCast(index) })) |shred_bytes| {
                 defer shred_bytes.deinit();
@@ -1189,7 +1189,7 @@ pub const BlockstoreReader = struct {
             const range_start_index: usize = @intCast(start_index - all_ranges_start_index);
             const range_end_index: usize = @intCast(end_index - all_ranges_start_index);
             const range_shreds: []DataShred =
-                data_shreds.items[range_start_index .. range_end_index + 1];
+                data_shreds.items[range_start_index..range_end_index];
 
             const last_shred = range_shreds[range_shreds.len - 1];
             std.debug.assert(last_shred.dataComplete() or last_shred.isLastInSlot());

@@ -112,7 +112,15 @@ pub fn EpochStakesGeneric(comptime stakes_type: StakesType) type {
         }
 
         pub fn clone(self: *const Self, allocator: Allocator) !Self {
-            const stakes = try self.stakes.clone(allocator);
+            return self.convert(allocator, stakes_type);
+        }
+
+        pub fn convert(
+            self: *const Self,
+            allocator: Allocator,
+            comptime output_type: StakesType,
+        ) !EpochStakesGeneric(output_type) {
+            const stakes = try self.stakes.convert(allocator, output_type);
             errdefer stakes.deinit(allocator);
 
             const node_id_to_vote_accounts =

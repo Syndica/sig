@@ -624,7 +624,9 @@ test "RepairService sends repair request to gossip peer" {
         &my_shred_version,
     );
 
-    var tracker = try BasicShredTracker.init(13579, .noop, &registry);
+    var tracker = try BasicShredTracker.init(std.testing.allocator, 13579, .noop, &registry);
+    defer tracker.deinit();
+
     var service = try RepairService.init(
         allocator,
         logger,
