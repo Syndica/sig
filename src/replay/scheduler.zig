@@ -301,13 +301,6 @@ test "TransactionScheduler: happy path" {
     );
     defer scheduler.deinit();
 
-    var reserved_keys = try sig.core.reserved_accounts.reservedAccountsForSlot(
-        std.testing.allocator,
-        &sig.core.FeatureSet.ALL_DISABLED,
-        0,
-    );
-    defer reserved_keys.deinit(std.testing.allocator);
-
     {
         const batch1 = try resolveBatch(allocator, .noop, transactions[0..3], &.empty);
         errdefer batch1.deinit(allocator);
@@ -416,13 +409,6 @@ test "TransactionScheduler: failed account locks" {
     );
     defer scheduler.deinit();
 
-    var reserved_keys = try sig.core.reserved_accounts.reservedAccountsForSlot(
-        std.testing.allocator,
-        &sig.core.FeatureSet.ALL_DISABLED,
-        0,
-    );
-    defer reserved_keys.deinit(std.testing.allocator);
-
     {
         const batch1 = try resolveBatch(allocator, .noop, &unresolved_batch, &.empty);
         errdefer batch1.deinit(allocator);
@@ -480,13 +466,6 @@ test "TransactionScheduler: signature verification failure" {
         .dupe(sig.core.Signature, transactions[5].signatures);
     replaced_sigs[0].data[0] +%= 1;
     transactions[5].signatures = replaced_sigs;
-
-    var reserved_keys = try sig.core.reserved_accounts.reservedAccountsForSlot(
-        std.testing.allocator,
-        &sig.core.FeatureSet.ALL_DISABLED,
-        0,
-    );
-    defer reserved_keys.deinit(std.testing.allocator);
 
     {
         const batch1 = try resolveBatch(allocator, .noop, transactions[0..3], &.empty);

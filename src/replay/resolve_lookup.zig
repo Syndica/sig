@@ -414,13 +414,6 @@ test resolveBatch {
     defer ancestors.deinit(std.testing.allocator);
     try ancestors.ancestors.put(std.testing.allocator, 0, {});
 
-    var reserved_keys = try sig.core.reserved_accounts.reservedAccountsForSlot(
-        std.testing.allocator,
-        &sig.core.FeatureSet.ALL_DISABLED,
-        0,
-    );
-    defer reserved_keys.deinit(std.testing.allocator);
-
     const resolved = try resolveBatch(
         std.testing.allocator,
         map.accountReader().forSlot(&ancestors),
