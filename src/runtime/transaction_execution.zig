@@ -595,7 +595,7 @@ test getInstructionDatasSliceForPrecompiles {
                 .index_in_transaction = 0,
             },
             .account_metas = .{},
-            .instruction_data = "instruction_data_1",
+            .instruction_data = "data",
             .initial_account_lamports = 0,
         }};
 

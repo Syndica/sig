@@ -128,7 +128,7 @@ pub const PrecompileProgramError = error{
     InvalidInstructionDataSize,
 };
 
-pub fn precompileProgramErrorCode(err: PrecompileProgramError) u32 {
+pub fn intFromPrecompileProgramError(err: PrecompileProgramError) u32 {
     return switch (err) {
         error.InvalidPublicKey => 0,
         error.InvalidRecoveryId => 1,

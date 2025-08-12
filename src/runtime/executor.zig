@@ -157,9 +157,6 @@ fn processNextInstruction(
     // Lookup native program function
     // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/svm/src/message_processor.rs#L72-L75
     // [fd] https://github.com/firedancer-io/firedancer/blob/dfadb7d33683aa8711dfe837282ad0983d3173a0/src/flamenco/runtime/fd_executor.c#L1150-L1159
-    // TODO:
-    // - precompile feature gate move to svm otherwise noop
-    // - precompile entrypoints
     const move_verify_precompiles_to_svm = ic.tc.feature_set.active(
         .move_precompile_verification_to_svm,
         ic.tc.slot,
@@ -168,8 +165,6 @@ fn processNextInstruction(
     const maybe_precompile_fn =
         program.PRECOMPILE_ENTRYPOINTS.get(native_program_id.base58String().slice());
 
-    // If the program is a precompile and move precompiles to svm is not enabled the precompile
-    // has already been executed outside the SVM, so we skip it
     if (!move_verify_precompiles_to_svm and maybe_precompile_fn != null) return;
 
     const maybe_native_program_fn = maybe_precompile_fn orelse blk: {
