@@ -79,6 +79,7 @@ pub fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
         &epoch_stakes_map,
         deps.progress_map,
         deps.fork_choice,
+        deps.replay_tower,
         deps.latest_validator_votes_for_frozen_banks,
     );
     _ = newly_computed_slot_stats;
