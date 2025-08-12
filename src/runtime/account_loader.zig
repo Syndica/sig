@@ -146,8 +146,6 @@ pub const BatchAccountCache = struct {
                     }
                 };
 
-                if (!created_new_account) std.debug.assert(account.lamports > 0); // this account should be gone?
-
                 accumulateAndCheckLoadedAccountDataSize(
                     &tx_data_loaded,
                     account.data.len,
@@ -164,7 +162,10 @@ pub const BatchAccountCache = struct {
 
             for (instructions) |instr| {
                 const program_key = instr.program_meta.pubkey;
-                if (program_key.equals(&runtime.ids.NATIVE_LOADER_ID)) continue;
+
+                if (program_key.equals(&runtime.ids.NATIVE_LOADER_ID) or
+                    program_key.equals(&runtime.ids.SYSVAR_INSTRUCTIONS_ID)) continue;
+
                 const program_account = map.get(program_key) orelse
                     unreachable; // safe: we loaded all accounts in the previous loop
 
@@ -205,9 +206,10 @@ pub const BatchAccountCache = struct {
 
         { // load v3 loader's ProgramData accounts.
             for (instructions) |instr| {
-                const program_key = accounts.items(
-                    .pubkey,
-                )[instr.program_meta.index_in_transaction];
+                const program_key = instr.program_meta.pubkey;
+
+                if (program_key.equals(&runtime.ids.NATIVE_LOADER_ID) or
+                    program_key.equals(&runtime.ids.SYSVAR_INSTRUCTIONS_ID)) continue;
 
                 const program_account = map.get(program_key) orelse
                     unreachable; // safe: we loaded all accounts in the previous loop
@@ -325,11 +327,20 @@ pub const BatchAccountCache = struct {
                 compute_budget_limits.loaded_accounts_bytes,
             );
 
+            // TODO: add a comment here explaining why we can assume capacity here,
+            // because I can't figure out what previous check would allow us to make
+            // this assumption.
+
             loaded.rent_collected += loaded_account.rent_collected;
-            loaded.rent_debits.appendAssumeCapacity(.{
-                .rent_balance = loaded_account.account.lamports,
-                .rent_collected = loaded_account.rent_collected,
-            });
+
+            // ignore when rent_collected = 0
+            if (loaded_account.rent_collected != 0) {
+                loaded.rent_debits.appendAssumeCapacity(.{
+                    .rent_balance = loaded_account.account.lamports,
+                    .rent_collected = loaded_account.rent_collected,
+                });
+            }
+
             loaded.accounts.appendAssumeCapacity(.{
                 .account = loaded_account.account,
                 .pubkey = account_key,
@@ -426,13 +437,12 @@ pub const BatchAccountCache = struct {
             var account = AccountSharedData.EMPTY;
             account.rent_epoch = RENT_EXEMPT_RENT_EPOCH;
 
-            const result = self.account_cache.getOrPutAssumeCapacity(key.*);
-            std.debug.assert(result.found_existing);
-
-            result.value_ptr.* = account;
+            const account_ptr = self.account_cache.getPtr(key.*).?;
+            allocator.free(account_ptr.data);
+            account_ptr.* = account;
 
             return LoadedTransactionAccount{
-                .account = result.value_ptr,
+                .account = account_ptr,
                 .loaded_size = 0,
                 .rent_collected = 0,
             };
@@ -471,11 +481,7 @@ pub const BatchAccountCache = struct {
         } else self.account_cache.getPtr(key.*);
 
         const account = maybe_account orelse unreachable;
-        if (account.lamports == 0) {
-            // a previous instr deallocated this account
-            allocator.free(account.data);
-            return null;
-        }
+        if (account.lamports == 0) return null;
 
         // agave "inspects" the account here, which caches the initial state of writeable accounts
         // TODO: we should probably do this at init time
@@ -502,6 +508,9 @@ fn getAccountSharedData(
         => return error.GetAccountFailedUnexpectedly,
     } orelse return null;
     defer account.deinit(reader.allocator());
+
+    // NOTE: Tmp fix since accounts DB should not return accounts with 0 lamports.
+    if (account.lamports == 0) return null;
 
     const shared_account: AccountSharedData = .{
         .data = try account.data.readAllAllocate(allocator),
@@ -736,13 +745,7 @@ test "loadTransactionAccounts sysvar instruction" {
     try std.testing.expect(cached_account.account.data.len > 0);
     try std.testing.expectEqual(0, tx_accounts.rent_collected);
     try std.testing.expectEqual(0, tx_accounts.loaded_accounts_data_size);
-    try std.testing.expectEqual(1, tx_accounts.rent_debits.len);
-    const rent_debit: RentDebit = tx_accounts.rent_debits.slice()[0];
-
-    // maybe interesting? Most program accounts have 1 lamports. But this one is even less "real"
-    // than the others
-    try std.testing.expectEqual(0, rent_debit.rent_balance);
-    try std.testing.expectEqual(0, rent_debit.rent_collected);
+    try std.testing.expectEqual(0, tx_accounts.rent_debits.len);
 }
 
 test "accumulated size" {

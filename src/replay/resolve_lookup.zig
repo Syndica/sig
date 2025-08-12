@@ -17,7 +17,6 @@ const SlotAccountReader = sig.accounts_db.SlotAccountReader;
 
 const AddressLookupTable = sig.runtime.program.address_lookup_table.AddressLookupTable;
 const InstructionInfo = sig.runtime.InstructionInfo;
-const AccountMeta = sig.runtime.InstructionInfo.AccountMeta;
 const ProgramMeta = sig.runtime.InstructionInfo.ProgramMeta;
 const RuntimeTransaction = sig.runtime.transaction_execution.RuntimeTransaction;
 
@@ -142,8 +141,7 @@ fn resolveTransaction(
     const instructions = try allocator.alloc(InstructionInfo, message.instructions.len);
     errdefer allocator.free(instructions);
     for (message.instructions, instructions) |input_ix, *output_ix| {
-        var account_metas =
-            std.BoundedArray(AccountMeta, InstructionInfo.MAX_ACCOUNT_METAS){};
+        var account_metas = InstructionInfo.AccountMetas{};
         var seen = std.bit_set.ArrayBitSet(usize, 256).initEmpty();
         for (input_ix.account_indexes, 0..) |index, i| {
             // find first usage of this account in this instruction
@@ -159,7 +157,7 @@ fn resolveTransaction(
             const account = if (index < accounts.len) accounts.get(index) else {
                 return error.InvalidAccountIndex;
             };
-            (try account_metas.addOne()).* = .{
+            (account_metas.addOne() catch break).* = .{
                 .pubkey = account.pubkey,
                 .is_signer = account.is_signer,
                 .is_writable = account.is_writable,
@@ -170,7 +168,7 @@ fn resolveTransaction(
         }
 
         if (input_ix.program_index >= message.account_keys.len) {
-            return error.InvalidAccountIndex;
+            return error.InvalidAddressLookupTableIndex;
         }
         output_ix.* = .{
             .program_meta = ProgramMeta{
@@ -216,13 +214,12 @@ fn resolveLookupTableAccounts(
 
     // handle lookup table accounts
     for (address_lookups) |lookup| {
-        const table = try getLookupTable(account_reader, lookup.table_address) orelse
-            return error.LookupTableAccountNotFound;
+        const table = try getLookupTable(account_reader, lookup.table_address);
 
         // resolve writable addresses
         for (lookup.writable_indexes) |index| {
             if (table.addresses.len < index + 1) {
-                return error.LookupTableAccountTooSmall;
+                return error.InvalidAddressLookupTableIndex;
             }
             writable_accounts.appendAssumeCapacity(table.addresses[index]);
         }
@@ -230,7 +227,7 @@ fn resolveLookupTableAccounts(
         // resolve readonly addresses
         for (lookup.readonly_indexes) |index| {
             if (table.addresses.len < index + 1) {
-                return error.LookupTableAccountTooSmall;
+                return error.InvalidAddressLookupTableIndex;
             }
             readonly_accounts.appendAssumeCapacity(table.addresses[index]);
         }
@@ -245,20 +242,31 @@ fn resolveLookupTableAccounts(
 fn getLookupTable(
     account_reader: SlotAccountReader,
     table_address: Pubkey,
-) !?AddressLookupTable {
+) !AddressLookupTable {
     // TODO: Ensure the account comes from a valid slot by checking
     // it against the current slot's ancestors. This won't be usable
     // until consensus is implemented in replay, so it's not
     // implemented yet.
-    const account = try account_reader.get(table_address) orelse return null;
+    const account = try account_reader.get(table_address) orelse
+        return error.AddressLookupTableNotFound;
     defer account.deinit(account_reader.allocator());
-    if (account.data.len() > AddressLookupTable.MAX_SERIALIZED_SIZE) {
-        return error.LookupTableAccountOverflow;
+
+    if (!account.owner.equals(&sig.runtime.program.address_lookup_table.ID)) {
+        return error.InvalidAddressLookupTableOwner;
     }
+
+    if (account.data.len() > AddressLookupTable.MAX_SERIALIZED_SIZE) {
+        return error.InvalidAddressLookupTableData;
+    }
+
     var buf: [AddressLookupTable.MAX_SERIALIZED_SIZE]u8 = undefined;
     const account_bytes = buf[0..account.data.len()];
     account.data.readAll(account_bytes);
-    return try AddressLookupTable.deserialize(account_bytes);
+
+    return AddressLookupTable.deserialize(account_bytes) catch {
+        return error.InvalidAddressLookupTableData;
+    };
+
     // NOTE: deactivated lookup tables are allowed to be used,
     // according to agave's implementation. see here, where agave
     // discards the value:
@@ -482,4 +490,90 @@ fn put(
         .executable = false,
         .rent_epoch = 0,
     });
+}
+
+test getLookupTable {
+    const allocator = std.testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(0);
+    const random = prng.random();
+
+    var map = sig.accounts_db.ThreadSafeAccountMap.init(allocator);
+    defer map.deinit();
+
+    var ancestors = sig.core.Ancestors{};
+    defer ancestors.deinit(allocator);
+    try ancestors.addSlot(allocator, 0);
+
+    const account_reader = map.accountReader().forSlot(&ancestors);
+
+    { // Invalid owner
+        const pubkey = Pubkey.initRandom(random);
+
+        try map.put(0, pubkey, .{
+            .lamports = 1,
+            .data = &.{},
+            .owner = Pubkey.initRandom(random),
+            .executable = false,
+            .rent_epoch = 0,
+        });
+
+        try std.testing.expectError(
+            error.InvalidAddressLookupTableOwner,
+            getLookupTable(account_reader, pubkey),
+        );
+    }
+
+    { // Size too large
+        const pubkey = Pubkey.initRandom(random);
+        const data = try allocator.alloc(u8, AddressLookupTable.MAX_SERIALIZED_SIZE + 1);
+        defer allocator.free(data);
+
+        try map.put(0, pubkey, .{
+            .lamports = 1,
+            .data = data,
+            .owner = sig.runtime.program.address_lookup_table.ID,
+            .executable = false,
+            .rent_epoch = 0,
+        });
+
+        try std.testing.expectError(
+            error.InvalidAddressLookupTableData,
+            getLookupTable(account_reader, pubkey),
+        );
+    }
+
+    { // Data invalid
+        const pubkey = Pubkey.initRandom(random);
+        const data = try allocator.alloc(u8, AddressLookupTable.MAX_SERIALIZED_SIZE);
+        defer allocator.free(data);
+
+        try map.put(0, pubkey, .{
+            .lamports = 1,
+            .data = data,
+            .owner = sig.runtime.program.address_lookup_table.ID,
+            .executable = false,
+            .rent_epoch = 0,
+        });
+
+        try std.testing.expectError(
+            error.InvalidAddressLookupTableData,
+            getLookupTable(account_reader, pubkey),
+        );
+    }
+
+    {
+        const pubkey = Pubkey.initRandom(random);
+        const lookup_table = AddressLookupTable{
+            .meta = .{},
+            .addresses = &.{Pubkey.initRandom(random)},
+        };
+
+        try put(&map, pubkey, lookup_table);
+
+        const loaded_lookup_table = try getLookupTable(account_reader, pubkey);
+
+        try std.testing.expectEqual(lookup_table.meta, loaded_lookup_table.meta);
+        try std.testing.expect(lookup_table.addresses[0].equals(&loaded_lookup_table.addresses[0]));
+    }
 }

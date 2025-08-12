@@ -623,15 +623,11 @@ pub const BenchmarkPacketProcessing = struct {
         var packets_to_recv = n_packets;
         var timer = try sig.time.Timer.start();
         while (packets_to_recv > 0) {
-            std.debug.print("packets: {}\n", .{packets_to_recv});
             incoming_channel.waitToReceive(exit_condition) catch break;
             while (incoming_channel.tryReceive()) |_| {
-                std.debug.print("inside packets: {}\n", .{packets_to_recv});
                 packets_to_recv -|= 1;
             }
         }
-
-        std.debug.print("got to the end\n", .{});
 
         exit_condition.setExit(); // kill benchSender and join it on defer.
         return timer.read();
