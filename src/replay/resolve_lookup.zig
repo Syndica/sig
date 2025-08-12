@@ -8,6 +8,7 @@ const Allocator = std.mem.Allocator;
 
 const Hash = core.Hash;
 const Ancestors = core.Ancestors;
+const FeatureSet = sig.core.FeatureSet;
 const InstructionAccount = core.instruction.InstructionAccount;
 const Pubkey = core.Pubkey;
 const ReservedAccounts = core.ReservedAccounts;
@@ -413,6 +414,13 @@ test resolveBatch {
     var ancestors = Ancestors{ .ancestors = .empty };
     defer ancestors.deinit(std.testing.allocator);
     try ancestors.ancestors.put(std.testing.allocator, 0, {});
+
+    var reserved_keys = try sig.core.reserved_accounts.reservedAccountsForSlot(
+        std.testing.allocator,
+        &sig.core.FeatureSet.ALL_DISABLED,
+        0,
+    );
+    defer reserved_keys.deinit(std.testing.allocator);
 
     const resolved = try resolveBatch(
         std.testing.allocator,

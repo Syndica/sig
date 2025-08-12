@@ -5,10 +5,12 @@ const leb = std.leb;
 
 const Blake3 = std.crypto.hash.Blake3;
 
+const FeatureSet = sig.core.FeatureSet;
 const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 const Signature = sig.core.Signature;
 const ReservedAccounts = sig.core.ReservedAccounts;
+const Slot = sig.core.Slot;
 
 const LookupTableAccounts = sig.replay.resolve_lookup.LookupTableAccounts;
 
@@ -434,7 +436,6 @@ pub const Message = struct {
         } else false;
 
         const is_reserved = reserved_accounts.contains(pubkey);
-
         const demote_program_id = is_key_called_as_program and !is_upgradeable_loader_present;
         return !(is_reserved or demote_program_id);
     }
