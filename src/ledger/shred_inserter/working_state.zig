@@ -14,8 +14,8 @@ const Slot = sig.core.Slot;
 const SortedMap = sig.utils.collections.SortedMap;
 const Timer = sig.time.Timer;
 
-const LedgerDB = ledger.blockstore.LedgerDB;
-const BlockstoreInsertionMetrics = shred_inserter.shred_inserter.BlockstoreInsertionMetrics;
+const LedgerDB = ledger.db.LedgerDB;
+const LedgerInsertionMetrics = shred_inserter.shred_inserter.LedgerInsertionMetrics;
 const BytesRef = ledger.database.BytesRef;
 const CodeShred = ledger.shred.CodeShred;
 const ColumnFamily = ledger.database.ColumnFamily;
@@ -85,7 +85,7 @@ pub const PendingInsertShredsState = struct {
     slot_meta_working_set: AutoHashMap(u64, SlotMetaWorkingSetEntry),
     index_working_set: AutoHashMap(u64, IndexMetaWorkingSetEntry),
     duplicate_shreds: ArrayList(PossibleDuplicateShred),
-    metrics: BlockstoreInsertionMetrics,
+    metrics: LedgerInsertionMetrics,
 
     // TODO unmanaged
 
@@ -95,7 +95,7 @@ pub const PendingInsertShredsState = struct {
         allocator: Allocator,
         logger: sig.trace.Logger,
         db: *LedgerDB,
-        metrics: BlockstoreInsertionMetrics,
+        metrics: LedgerInsertionMetrics,
     ) !Self {
         return .{
             .allocator = allocator,
@@ -199,7 +199,7 @@ pub const PendingInsertShredsState = struct {
         var commit_working_sets_timer = try Timer.start();
 
         // TODO: inputs and outputs of this function may need to be fleshed out
-        // as the blockstore is used more throughout the codebase.
+        // as the ledger is used more throughout the codebase.
         _, const newly_completed_slots = try self.commitSlotMetaWorkingSet(self.allocator, &.{});
         newly_completed_slots.deinit();
 
@@ -223,7 +223,7 @@ pub const PendingInsertShredsState = struct {
 
     /// For each slot in the slot_meta_working_set which has any change, include
     /// corresponding updates to schema.slot_meta via the specified `write_batch`.
-    /// The `write_batch` will later be atomically committed to the blockstore.
+    /// The `write_batch` will later be atomically committed to the ledger.
     ///
     /// Arguments:
     /// - `slot_meta_working_set`: a map that maintains slot-id to its `SlotMeta`
@@ -383,7 +383,7 @@ pub const ErasureMetaWorkingStore = struct {
             }
         }
 
-        // Consecutive set was not found in memory, scan blockstore for a potential candidate
+        // Consecutive set was not found in memory, scan ledger for a potential candidate
         const key_serializer = ledger.database.key_serializer;
         const value_serializer = ledger.database.value_serializer;
         var iter = try self.db.iterator(schema.erasure_meta, .reverse, erasure_set);
@@ -426,9 +426,9 @@ pub const DuplicateShredsWorkingStore = struct {
 
 pub fn WorkingEntry(comptime T: type) type {
     return union(enum) {
-        // Value has been modified with respect to the blockstore column
+        // Value has been modified with respect to the ledger column
         dirty: T,
-        // Value matches what is currently in the blockstore column
+        // Value matches what is currently in the ledger column
         clean: T,
 
         pub fn asRef(self: *const @This()) *const T {
@@ -459,11 +459,11 @@ pub const IndexMetaWorkingSetEntry = struct {
 /// [`SlotMeta`].
 pub const SlotMetaWorkingSetEntry = struct {
     /// The dirty version of the `SlotMeta` which might not be persisted
-    /// to the blockstore yet.
+    /// to the ledger yet.
     new_slot_meta: SlotMeta,
     /// The latest version of the `SlotMeta` that was persisted in the
-    /// blockstore.  If None, it means the current slot is new to the
-    /// blockstore.
+    /// ledger.  If None, it means the current slot is new to the
+    /// ledger.
     old_slot_meta: ?SlotMeta = null,
     /// True only if at least one shred for this SlotMeta was inserted since
     /// this struct was created.
@@ -476,7 +476,7 @@ pub const SlotMetaWorkingSetEntry = struct {
 };
 
 pub const PossibleDuplicateShred = union(enum) {
-    /// Blockstore has another shred in its spot
+    /// Ledger has another shred in its spot
     Exists: Shred,
     /// The index of this shred conflicts with `slot_meta.last_index`
     LastIndexConflict: ShredConflict,

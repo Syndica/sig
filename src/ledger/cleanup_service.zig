@@ -18,7 +18,7 @@ const schema = ledger.schema.schema;
 // The default time to sleep between checks for new roots
 const DEFAULT_MS_PER_SLOT: u64 = 400;
 
-// Perform blockstore cleanup at this interval to limit the overhead of cleanup
+// Perform ledger cleanup at this interval to limit the overhead of cleanup
 // Cleanup will be considered after the latest root has advanced by this value
 const DEFAULT_CLEANUP_SLOT_INTERVAL: u64 = 512;
 
@@ -44,9 +44,9 @@ pub fn run(
     const logger = logger_.withScope(LOG_SCOPE);
     var last_purge_slot: Slot = 0;
 
-    logger.info().log("Starting blockstore cleanup service");
+    logger.info().log("Starting ledger cleanup service");
     while (!exit.load(.acquire)) {
-        last_purge_slot = try cleanBlockstore(
+        last_purge_slot = try cleanLedger(
             logger.unscoped(),
             ledger_reader,
             db,
@@ -73,13 +73,13 @@ pub fn run(
 ///   ledger cleanup.  As an output parameter, it will be updated if this
 ///   function actually performs the ledger cleanup.
 /// - `purge_interval`: the minimum slot interval between two ledger
-///   cleanup.  When the max root fetched from the Blockstore minus
+///   cleanup.  When the max root fetched from the Ledger minus
 ///   `last_purge_slot` is fewer than `purge_interval`, the function will
 ///   simply return `Ok` without actually running the ledger cleanup.
 ///   In this case, `purge_interval` will remain unchanged.
 ///
 /// Analogous to the [`cleanup_ledger`](https://github.com/anza-xyz/agave/blob/6476d5fac0c30d1f49d13eae118b89be78fb15d2/ledger/src/blockstore_cleanup_service.rs#L198) in agave:
-pub fn cleanBlockstore(
+pub fn cleanLedger(
     logger_: sig.trace.Logger,
     ledger_reader: *LedgerReader,
     db: *LedgerDB,
@@ -115,8 +115,8 @@ pub fn cleanBlockstore(
             logger.info().log("No slots purged");
         }
         // // TODO: Is this needed, it updates the OldestSlot data structure in
-        // // agave which is owned and used by the blockstore database backend.
-        // // We do not have an analogous data structure in the blockstore database
+        // // agave which is owned and used by the ledger database backend.
+        // // We do not have an analogous data structure in the ledger database
         // ledger_reader.setMaxExpiredSlot(...);
     }
 
@@ -162,12 +162,12 @@ fn findSlotsToClean(
     const num_shreds = try ledger_reader.db.count(schema.data_shred);
 
     // Using the difference between the lowest and highest slot seen will
-    // result in overestimating the number of slots in the blockstore since
+    // result in overestimating the number of slots in the ledger since
     // there are likely to be some missing slots, such as when a leader is
     // delinquent for their leader slots.
     //
     // With the below calculations, we will then end up underestimating the
-    // mean number of shreds per slot present in the blockstore which will
+    // mean number of shreds per slot present in the ledger which will
     // result in cleaning more slots than necessary to get us
     // below max_ledger_shreds.
     //
@@ -400,10 +400,10 @@ fn purgeFileRangeWithCount(
     count.* += 1;
 }
 
-const Blockstore = ledger.LedgerDB;
+const Ledger = ledger.LedgerDB;
 const TestDB = ledger.tests.TestDB;
 
-test cleanBlockstore {
+test cleanLedger {
     // test setup
     const allocator = std.testing.allocator;
     const logger = sig.trace.DirectPrintLogger.init(allocator, .warn).logger();
@@ -426,7 +426,7 @@ test cleanBlockstore {
     try db.flush(ledger.schema.schema.data_shred);
 
     // run test subject
-    const slot = try cleanBlockstore(logger, &reader, &db, &lowest_cleanup_slot, 100, 0, 0);
+    const slot = try cleanLedger(logger, &reader, &db, &lowest_cleanup_slot, 100, 0, 0);
     try std.testing.expectEqual(899, slot);
 
     // verify correct data was purged
@@ -506,7 +506,7 @@ test "findSlotsToClean" {
     // We do that by deiniting the current db, which triggers the flushing.
     if (sig.build_options.ledger_db == .rocksdb) {
         db.deinit();
-        db = try TestDB.reuseBlockstore(@src());
+        db = try TestDB.reuseLedger(@src());
         reader.db = db;
     }
     const r2 = try findSlotsToClean(&reader, 0, 100);

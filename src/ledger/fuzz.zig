@@ -89,7 +89,7 @@ pub fn run(initial_seed: u64, args: *std.process.ArgIterator) !void {
     outer: while (true) {
         var prng = std.Random.DefaultPrng.init(seed);
         const random = prng.random();
-        // This is a simpler blockstore which is used to make sure
+        // This is a simpler ledger which is used to make sure
         // the method calls being fuzzed return expected data.
         var data_map = std.AutoHashMap(u32, Data).init(allocator);
         defer data_map.deinit();

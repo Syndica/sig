@@ -10,7 +10,7 @@ const AutoHashMap = std.AutoHashMap;
 
 const Slot = sig.core.Slot;
 
-const LedgerDB = ledger.blockstore.LedgerDB;
+const LedgerDB = ledger.db.LedgerDB;
 const SlotMeta = ledger.meta.SlotMeta;
 const SlotMetaWorkingSetEntry = shred_inserter.working_state.SlotMetaWorkingSetEntry;
 const WriteBatch = LedgerDB.WriteBatch;
@@ -174,7 +174,7 @@ fn findSlotMetaElseCreate(
 /// `setParentConnected` to each.
 ///
 /// Arguments:
-/// `db`: the blockstore db that stores shreds and their metadata.
+/// `db`: the ledger db that stores shreds and their metadata.
 /// `slot_meta`: the SlotMeta of the above `slot`.
 /// `working_set`: a slot-id to SlotMetaWorkingSetEntry map which is used
 ///   to traverse the graph.

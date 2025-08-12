@@ -359,7 +359,7 @@ pub const MerkleRootMeta = struct {
             // An error here after the shred has already sigverified
             // can only indicate that the leader is sending
             // legacy or malformed shreds. We should still store
-            // `None` for those cases in blockstore, as a later
+            // `None` for those cases in ledger, as a later
             // shred that contains a proper merkle root would constitute
             // a valid duplicate shred proof.
             .merkle_root = shred.merkleRoot() catch null,

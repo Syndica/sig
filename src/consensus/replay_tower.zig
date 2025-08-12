@@ -547,7 +547,7 @@ pub const ReplayTower = struct {
         if (last_vote_ancestors.contains(switch_slot)) {
             if (self.isStrayLastVote()) {
                 // This peculiar corner handling is needed mainly for a tower which is newer than
-                // blockstore. (Yeah, we tolerate it for ease of maintaining validator by operators)
+                // ledger. (Yeah, we tolerate it for ease of maintaining validator by operators)
                 // This condition could be introduced by manual ledger mishandling,
                 // validator SEGV, OS/HW crash, or plain No Free Space FS error.
 
@@ -862,7 +862,7 @@ pub const ReplayTower = struct {
             self.stray_restored_slot == self.lastVotedSlot());
     }
 
-    /// Adjusts the tower's lockouts after a replay of the blockstore up to `replayed_root`.
+    /// Adjusts the tower's lockouts after a replay of the ledger up to `replayed_root`.
     /// This helps synchronize the in-memory tower state with the on-disk ledger history,
     /// particularly after a validator restart or divergence.
     ///
@@ -944,10 +944,10 @@ pub const ReplayTower = struct {
                 };
 
                 defer warped_slot_history.deinit(allocator);
-                // Blockstore doesn't have the tower_root slot because of
+                // Ledger doesn't have the tower_root slot because of
                 // (replayed_root < tower_root) in this else clause, meaning the tower is from
-                // the future from the view of blockstore.
-                // Pretend the blockstore has the future tower_root to anchor exactly with that
+                // the future from the view of ledger.
+                // Pretend the ledger has the future tower_root to anchor exactly with that
                 // slot by adding tower_root to a slot history. The added slot will be newer
                 // than all slots in the slot history (remember tower_root > replayed_root),
                 // satisfying the slot history invariant.
@@ -972,7 +972,7 @@ pub const ReplayTower = struct {
     /// Ensures that the ReplayTower's lockouts are consistent with the provided
     /// `slot_history`.
     ///
-    /// On success, the tower's lockouts are reinitialized to match blockstore state.
+    /// On success, the tower's lockouts are reinitialized to match ledger state.
     fn adjustLockoutsWithSlotHistory(
         self: *ReplayTower,
         allocator: std.mem.Allocator,
@@ -1015,7 +1015,7 @@ pub const ReplayTower = struct {
                 self
                     .logger
                     .err()
-                    .log("The tower is fatally inconsistent with blockstore." ++
+                    .log("The tower is fatally inconsistent with ledger." ++
                     "Possible causes: diverged ancestors");
                 return TowerError.FatallyInconsistentDivergedAncestors;
             }
@@ -1024,7 +1024,7 @@ pub const ReplayTower = struct {
                 still_in_future = false;
             } else if (!still_in_future and check == .future) {
                 // really odd cases: bad ordered votes?
-                self.logger.err().log("The tower is fatally inconsistent with blockstore");
+                self.logger.err().log("The tower is fatally inconsistent with ledger");
                 return TowerError.FatallyInconsistentTimeWarp;
             }
 
@@ -1035,7 +1035,7 @@ pub const ReplayTower = struct {
                 self
                     .logger
                     .err()
-                    .log("The tower is fatally inconsistent with blockstore." ++
+                    .log("The tower is fatally inconsistent with ledger." ++
                     "Possible causes: not too old once after got too old");
                 return TowerError.FatallyInconsistentReplayOutOfOrder;
             }
@@ -1066,7 +1066,7 @@ pub const ReplayTower = struct {
             self
                 .logger
                 .err()
-                .log("The tower is fatally inconsistent with blockstore." ++
+                .log("The tower is fatally inconsistent with ledger." ++
                 "Possible causes: no common slot for rooted tower");
             return TowerError.FatallyInconsistent;
         }

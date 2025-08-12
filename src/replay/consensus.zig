@@ -455,14 +455,14 @@ fn checkAndHandleNewRoot(
 /// TODO: Currently a placeholder function. Would be implemened when voting and producing blocks is supported.
 fn resetFork(
     progress: *const ProgressMap,
-    blockstore: *const LedgerReader,
+    ledger: *const LedgerReader,
     reset_slot: Slot,
     last_reset_hash: Hash,
     last_blockhash: Hash,
     last_reset_bank_descendants: std.ArrayList(Slot),
 ) !void {
     _ = progress;
-    _ = blockstore;
+    _ = ledger;
     _ = reset_slot;
     _ = last_reset_hash;
     _ = last_blockhash;

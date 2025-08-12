@@ -890,11 +890,11 @@ pub const blockstore_processor = struct {
         /// In microseconds.
         transaction_verify_elapsed: u64,
 
-        /// Wall clock time spent loading data sets (and entries) from the blockstore.  This does not
-        /// include the case when the blockstore load failed.  In microseconds.
+        /// Wall clock time spent loading data sets (and entries) from the ledger.  This does not
+        /// include the case when the ledger load failed.  In microseconds.
         fetch_elapsed: u64,
 
-        /// Same as `fetch_elapsed` above, but for the case when the blockstore load fails.  In
+        /// Same as `fetch_elapsed` above, but for the case when the ledger load fails.  In
         /// microseconds.
         fetch_fail_elapsed: u64,
 

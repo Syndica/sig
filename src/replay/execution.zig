@@ -25,7 +25,7 @@ const SvmGateway = replay.svm_gateway.SvmGateway;
 
 const confirmSlot = replay.confirm_slot.confirmSlot;
 
-/// State used for replaying and validating data from blockstore/accountsdb/svm
+/// State used for replaying and validating data from ledger/accountsdb/svm
 pub const ReplayExecutionState = struct {
     allocator: Allocator,
     logger: sig.trace.ScopedLogger("replay-execution"),
@@ -164,7 +164,7 @@ const ReplaySlotStatus = union(enum) {
 };
 
 /// Replay the transactions from any entries in the slot that we've received but
-/// haven't yet replayed. Integrates with accountsdb and blockstore.
+/// haven't yet replayed. Integrates with accountsdb and ledger.
 ///
 /// - Calls confirmSlot to verify/execute a slot's transactions.
 /// - Initializes the ForkProgress in the progress map for the slot if necessary.

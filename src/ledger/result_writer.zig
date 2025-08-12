@@ -19,7 +19,7 @@ const Timer = sig.time.Timer;
 
 // ledger
 const AncestorIterator = ledger.reader.AncestorIterator;
-const LedgerDB = ledger.blockstore.LedgerDB;
+const LedgerDB = ledger.db.LedgerDB;
 const FrozenHashVersioned = ledger.meta.FrozenHashVersioned;
 const FrozenHashStatus = ledger.meta.FrozenHashStatus;
 const SlotMeta = ledger.meta.SlotMeta;
@@ -93,7 +93,7 @@ pub const LedgerResultWriter = struct {
         if (try self.db.get(self.allocator, schema.bank_hash, slot)) |prev_value| {
             if (frozen_hash.eql(prev_value.frozenHash()) and prev_value.isDuplicateConfirmed()) {
                 // Don't overwrite is_duplicate_confirmed == true with is_duplicate_confirmed == false,
-                // which may happen on startup when procesing from blockstore processor because the
+                // which may happen on startup when procesing from ledger processor because the
                 // blocks may not reflect earlier observed gossip votes from before the restart.
                 return;
             }
@@ -281,9 +281,9 @@ pub const LedgerResultWriter = struct {
     ///
     /// Arguments:
     ///  - `start_root`: The root to start scan from, or the highest root in
-    ///    the blockstore if this value is `None`. This slot must be a root.
+    ///    the ledger if this value is `None`. This slot must be a root.
     ///  - `end_slot``: The slot to stop the scan at; the scan will continue to
-    ///    the earliest slot in the Blockstore if this value is `None`.
+    ///    the earliest slot in the Ledger if this value is `None`.
     ///  - `exit`: Exit early if this flag is set to `true`.
     /// agave: scan_and_fix_roots
     pub fn scanAndFixRoots(
@@ -293,10 +293,10 @@ pub const LedgerResultWriter = struct {
         exit: std.atomic.Value(bool),
     ) !usize {
         // Hold the lowest_cleanup_slot read lock to prevent any cleaning of
-        // the blockstore from another thread. Doing so will prevent a
+        // the ledger from another thread. Doing so will prevent a
         // possible inconsistency across column families where a slot is:
         //  - Identified as needing root repair by this thread
-        //  - Cleaned from the blockstore by another thread (LedgerCleanupSerivce)
+        //  - Cleaned from the ledger by another thread (LedgerCleanupSerivce)
         //  - Marked as root via Self::set_root() by this this thread
         var lowest_cleanup_slot = self.lowest_cleanup_slot.read();
         defer lowest_cleanup_slot.unlock();
@@ -393,8 +393,8 @@ pub const LedgerResultWriter = struct {
         while (i < child_slots.items.len) : (i += 1) {
             const slot = child_slots.items[i];
             var slot_meta: SlotMeta = try self.db.get(self.allocator, schema.slot_meta, slot) orelse {
-                self.logger.err().logf("Slot {} is a child but has no SlotMeta in blockstore", .{slot});
-                return error.CorruptedBlockstore;
+                self.logger.err().logf("Slot {} is a child but has no SlotMeta in ledger", .{slot});
+                return error.CorruptedLedger;
             };
             defer slot_meta.deinit();
 

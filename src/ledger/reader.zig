@@ -32,7 +32,7 @@ const shred_layout = sig.ledger.shred.layout;
 
 // ledger
 const BytesRef = ledger.database.BytesRef;
-const LedgerDB = ledger.blockstore.LedgerDB;
+const LedgerDB = ledger.db.LedgerDB;
 const ColumnFamily = ledger.database.ColumnFamily;
 const DuplicateSlotProof = ledger.meta.DuplicateSlotProof;
 const PerfSample = ledger.meta.PerfSample;
@@ -54,7 +54,7 @@ pub const LedgerReader = struct {
     lowest_cleanup_slot: *RwMux(Slot),
     max_root: *std.atomic.Value(u64),
     // highest_primary_index_slot: RwMux(?Slot), // TODO shared
-    rpc_api_metrics: BlockstoreRpcApiMetrics,
+    rpc_api_metrics: LedgerRpcApiMetrics,
     metrics: LedgerReaderMetrics,
 
     const Self = @This();
@@ -71,7 +71,7 @@ pub const LedgerReader = struct {
             .allocator = allocator,
             .logger = logger.withScope(@typeName(Self)),
             .db = db,
-            .rpc_api_metrics = try registry.initStruct(BlockstoreRpcApiMetrics),
+            .rpc_api_metrics = try registry.initStruct(LedgerRpcApiMetrics),
             .metrics = try registry.initStruct(LedgerReaderMetrics),
             .lowest_cleanup_slot = lowest_cleanup_slot,
             .max_root = max_root,
@@ -360,11 +360,11 @@ pub const LedgerReader = struct {
         var guard = self.lowest_cleanup_slot.read();
         // Make caller hold this lock properly; otherwise LedgerCleanupService can purge/compact
         // needed slots here at any given moment.
-        // Blockstore callers, like rpc, can process concurrent read queries
+        // Ledger callers, like rpc, can process concurrent read queries
         return .{ guard, guard.get().* +| 1 };
     }
 
-    /// The first complete block that is available in the Blockstore ledger
+    /// The first complete block that is available in the Ledger ledger
     ///
     /// Analogous to [get_first_available_block](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L2556)
     pub fn getFirstAvailableBlock(self: *Self) !Slot {
@@ -1168,7 +1168,7 @@ pub const LedgerReader = struct {
                                 all_ranges_end_index,
                             },
                         );
-                        return error.CorruptedBlockstore;
+                        return error.CorruptedLedger;
                     }
                 }
                 self.logger.err().logf("Missing shred for slot {}, index {}", .{ slot, index });
@@ -1333,7 +1333,7 @@ pub const LedgerReader = struct {
         return try iterator.next();
     }
 
-    /// Returns the shred already stored in blockstore if it has a different
+    /// Returns the shred already stored in ledger if it has a different
     /// payload than the given `shred` but the same (slot, index, shred-type).
     /// This implies the leader generated two different shreds with the same
     /// slot, index and shred-type.
@@ -1369,7 +1369,7 @@ pub const LedgerReader = struct {
         }
     }
 
-    /// find the first available slot in blockstore that has some data in it
+    /// find the first available slot in ledger that has some data in it
     /// Analogous to [lowest_slot](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L4073)
     pub fn lowestSlot(self: *Self) !Slot {
         var iterator = try self.db.iterator(schema.slot_meta, .forward, null);
@@ -1380,11 +1380,11 @@ pub const LedgerReader = struct {
                 return slot;
             }
         }
-        // This means blockstore is empty, should never get here aside from right at boot.
+        // This means ledger is empty, should never get here aside from right at boot.
         return self.max_root.load(.monotonic);
     }
 
-    /// Returns the highest available slot in the blockstore
+    /// Returns the highest available slot in the ledger
     ///
     /// Analogous to [highest_slot](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L4100)
     pub fn highestSlot(self: *Self) !?Slot {
@@ -1488,7 +1488,7 @@ const LedgerReaderMetrics = struct {
     pub const histogram_buckets = sig.prometheus.histogram.exponentialBuckets(5, -1, 10);
 };
 
-const BlockstoreRpcApiMetrics = struct {
+const LedgerRpcApiMetrics = struct {
     num_get_block_height: *Counter,
     num_get_complete_transaction: *Counter,
     num_get_confirmed_signatures_for_address: *Counter,
@@ -1500,7 +1500,7 @@ const BlockstoreRpcApiMetrics = struct {
     num_get_rooted_block_with_entries: *Counter,
     num_get_transaction_status: *Counter,
 
-    pub const prefix = "blockstore_rpc_api";
+    pub const prefix = "ledger_rpc_api";
 };
 
 pub const AncestorIterator = struct {
@@ -1548,7 +1548,7 @@ pub const AncestorIterator = struct {
 };
 
 const bincode = sig.bincode;
-const Blockstore = ledger.LedgerDB;
+const Ledger = ledger.LedgerDB;
 const CodeShred = ledger.shred.CodeShred;
 const TestDB = ledger.tests.TestDB;
 
