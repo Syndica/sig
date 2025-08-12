@@ -108,7 +108,7 @@ pub const SvmGateway = struct {
             &ComputeBudget.default(1_400_000),
             params.slot,
             false,
-            true, // TODO: should this be false?
+            false,
         );
 
         var programs =
