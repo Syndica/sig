@@ -185,7 +185,8 @@ pub const SlotState = struct {
     pub fn deinit(self: *SlotState, allocator: Allocator) void {
         self.stakes_cache.deinit(allocator);
 
-        var blockhash_queue = self.blockhash_queue.tryWrite() orelse unreachable;
+        var blockhash_queue = self.blockhash_queue.tryWrite() orelse
+            @panic("attempted to deinit SlotState.blockhash_queue while still in use");
         defer blockhash_queue.unlock();
         blockhash_queue.get().deinit(allocator);
     }
