@@ -2610,7 +2610,11 @@ test "stake.merge" {
         );
 
         var source_buf_after: [StakeStateV2.SIZE]u8 = source_buf; // must be copy
-        _ = try sig.bincode.writeToSlice(&source_buf_after, StakeStateV2{ .uninitialized = {} }, .{});
+        _ = try sig.bincode.writeToSlice(
+            &source_buf_after,
+            StakeStateV2{ .uninitialized = {} },
+            .{},
+        );
 
         try runtime.program.testing.expectProgramExecuteResult(
             allocator,
