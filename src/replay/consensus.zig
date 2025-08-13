@@ -21,7 +21,7 @@ const Transaction = sig.core.transaction.Transaction;
 const LedgerReader = sig.ledger.LedgerReader;
 const LedgerResultWriter = sig.ledger.result_writer.LedgerResultWriter;
 
-const SlotHistory = sig.runtime.sysvar.SlotHistory;
+const SlotHistoryAccessor = sig.replay.service.SlotHistoryAccessor;
 
 const ReplayTower = sig.consensus.replay_tower.ReplayTower;
 const ProgressMap = sig.consensus.progress_map.ProgressMap;
@@ -48,7 +48,7 @@ pub const ConsensusDependencies = struct {
     ancestors: *const std.AutoArrayHashMapUnmanaged(u64, SortedSetUnmanaged(u64)),
     descendants: *const std.AutoArrayHashMapUnmanaged(u64, SortedSetUnmanaged(u64)),
     vote_account: Pubkey,
-    slot_history: *const SlotHistory,
+    slot_history_accessor: *const SlotHistoryAccessor,
     latest_validator_votes_for_frozen_banks: *LatestValidatorVotes,
 };
 
@@ -106,7 +106,7 @@ pub fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
         deps.latest_validator_votes_for_frozen_banks,
         deps.fork_choice,
         &epoch_stakes_map,
-        deps.slot_history,
+        deps.slot_history_accessor,
     );
     const maybe_voted_slot = vote_and_reset_forks.vote_slot;
     const maybe_reset_slot = vote_and_reset_forks.reset_slot;

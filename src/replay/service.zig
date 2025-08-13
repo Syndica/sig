@@ -9,6 +9,7 @@ const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 const SlotLeaders = sig.core.leader_schedule.SlotLeaders;
 const SlotState = sig.core.bank.SlotState;
+const Ancestors = sig.core.Ancestors;
 
 const BlockstoreDB = sig.ledger.BlockstoreDB;
 const BlockstoreReader = sig.ledger.BlockstoreReader;
@@ -24,6 +25,8 @@ const LatestValidatorVotes = sig.consensus.latest_validator_votes.LatestValidato
 const ReplayExecutionState = replay.execution.ReplayExecutionState;
 const SlotTracker = replay.trackers.SlotTracker;
 const EpochTracker = replay.trackers.EpochTracker;
+
+const SlotHistory = sig.runtime.sysvar.SlotHistory;
 
 /// Number of threads to use in replay's thread pool
 const NUM_THREADS = 4;
@@ -66,6 +69,44 @@ pub const LedgerRef = struct {
     db: BlockstoreDB,
     reader: *sig.ledger.BlockstoreReader,
     writer: *sig.ledger.LedgerResultWriter,
+};
+
+pub const SlotHistoryAccessor = struct {
+    account_reader: sig.accounts_db.AccountReader,
+
+    pub fn init(account_reader: sig.accounts_db.AccountReader) SlotHistoryAccessor {
+        return .{
+            .account_reader = account_reader,
+        };
+    }
+
+    pub fn getSlotHistory(
+        self: SlotHistoryAccessor,
+        allocator: std.mem.Allocator,
+        ancestors: *const Ancestors,
+    ) !SlotHistory {
+        const slot_history: SlotHistory = sh: {
+            const maybe_account = try self.account_reader.forSlot(ancestors).get(SlotHistory.ID);
+            const account: sig.core.Account = maybe_account orelse
+                return error.MissingSlotHistoryAccount;
+
+            var data_iter = account.data.iterator();
+            const slot_history = try sig.bincode.read(
+                allocator,
+                SlotHistory,
+                data_iter.reader(),
+                .{},
+            );
+            errdefer slot_history.deinit(allocator);
+
+            if (data_iter.bytesRemaining() != 0) {
+                return error.TrailingBytesInSlotHistory;
+            }
+
+            break :sh slot_history;
+        };
+        return slot_history;
+    }
 };
 
 pub const Senders = struct {
@@ -441,25 +482,27 @@ fn advanceReplay(state: *ReplayState) !void {
         }
     }
 
-    const SlotHistory = sig.runtime.sysvar.SlotHistory;
-    const slot_history: SlotHistory = sh: {
-        const account_reader = state.account_store.reader();
+    // const slot_history: SlotHistory = sh: {
+    //     const account_reader = state.account_store.reader();
 
-        const maybe_account = try account_reader.getLatest(SlotHistory.ID); // TODO: do we need to scope this with `forSlot` or anything?
-        const account = maybe_account orelse return error.MissingSlotHistoryAccount;
-        defer account.deinit(account_reader.allocator());
+    //     const maybe_account = try account_reader.getLatest(SlotHistory.ID); // TODO: do we need to scope this with `forSlot` or anything?
+    //     const account = maybe_account orelse return error.MissingSlotHistoryAccount;
+    //     defer account.deinit(account_reader.allocator());
 
-        var data_iter = account.data.iterator();
-        const slot_history = try sig.bincode.read(arena, SlotHistory, data_iter.reader(), .{});
-        errdefer slot_history.deinit(arena);
+    //     var data_iter = account.data.iterator();
+    //     const slot_history = try sig.bincode.read(arena, SlotHistory, data_iter.reader(), .{});
+    //     errdefer slot_history.deinit(arena);
 
-        if (data_iter.bytesRemaining() != 0) {
-            return error.TrailingBytesInSlotHistory;
-        }
+    //     if (data_iter.bytesRemaining() != 0) {
+    //         return error.TrailingBytesInSlotHistory;
+    //     }
 
-        break :sh slot_history;
-    };
-    defer slot_history.deinit(arena);
+    //     break :sh slot_history;
+    // };
+    // defer slot_history.deinit(arena);
+
+    const slot_history_accessor = SlotHistoryAccessor
+        .init(state.account_store.reader());
 
     replay.consensus.processConsensus(.{
         .allocator = allocator,
@@ -473,7 +516,7 @@ fn advanceReplay(state: *ReplayState) !void {
         .ancestors = &ancestors,
         .descendants = &descendants,
         .vote_account = state.my_identity, // TODO: use explicitly distinct vote authority
-        .slot_history = &slot_history,
+        .slot_history_accessor = &slot_history_accessor,
         .latest_validator_votes_for_frozen_banks = &state.latest_validator_votes,
     }) catch |e| {
         // ignore errors in consensus since they are expected until the inputs are provided
