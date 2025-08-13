@@ -333,27 +333,53 @@ pub fn createSysvarCache(
     }
     if (sysvar_cache.slot_hashes == null) {
         if (try cloneSysvarData(allocator, ctx, sysvar.SlotHashes.ID)) |slot_hashes_data| {
-            sysvar_cache.slot_hashes_obj = sig.bincode.readFromSlice(
+            const len = sig.bincode.readFromSlice(
                 allocator,
-                sysvar.SlotHashes,
+                u64,
                 slot_hashes_data,
                 .{},
-            ) catch null;
-            if (sysvar_cache.slot_hashes_obj != null) {
+            ) catch 0;
+
+            const maybe_entries = if (len < 1024 * 1024) sig.bincode.readFromSlice(
+                allocator,
+                []sysvar.SlotHashes.Entry,
+                slot_hashes_data,
+                .{},
+            ) catch null else null;
+
+            if (maybe_entries) |entries| {
+                const start = entries.len -| sysvar.SlotHashes.MAX_ENTRIES;
                 sysvar_cache.slot_hashes = slot_hashes_data;
+                sysvar_cache.slot_hashes_obj = try sysvar.SlotHashes.init(allocator);
+                sysvar_cache.slot_hashes_obj.?.entries.appendSliceAssumeCapacity(
+                    entries[start..entries.len],
+                );
             }
         }
     }
     if (sysvar_cache.stake_history == null) {
         if (try cloneSysvarData(allocator, ctx, sysvar.StakeHistory.ID)) |stake_history_data| {
-            sysvar_cache.stake_history_obj = sig.bincode.readFromSlice(
+            const len = sig.bincode.readFromSlice(
                 allocator,
-                sysvar.StakeHistory,
+                u64,
                 stake_history_data,
                 .{},
-            ) catch null;
-            if (sysvar_cache.stake_history_obj != null) {
+            ) catch 0;
+
+            const maybe_entries = if (len < 1024 * 1024) sig.bincode.readFromSlice(
+                allocator,
+                []sysvar.StakeHistory.Entry,
+                stake_history_data,
+                .{},
+            ) catch null else null;
+
+            if (maybe_entries) |entries| {
+                const start = entries.len -| sysvar.StakeHistory.MAX_ENTRIES;
                 sysvar_cache.stake_history = stake_history_data;
+                sysvar_cache.stake_history_obj = try sysvar.StakeHistory.init(allocator);
+                sysvar_cache.stake_history_obj.?.entries.appendSliceAssumeCapacity(
+                    entries[start..entries.len],
+                );
             }
         }
     }
@@ -373,12 +399,19 @@ pub fn createSysvarCache(
             ctx,
             sysvar.RecentBlockhashes.ID,
         )) |recent_blockhashes_data| {
-            const maybe_entries = sig.bincode.readFromSlice(
+            const len = sig.bincode.readFromSlice(
+                allocator,
+                u64,
+                recent_blockhashes_data,
+                .{},
+            ) catch 0;
+
+            const maybe_entries = if (len < 1024 * 1024) sig.bincode.readFromSlice(
                 allocator,
                 []sysvar.RecentBlockhashes.Entry,
                 recent_blockhashes_data,
                 .{},
-            ) catch null;
+            ) catch null else null;
 
             if (maybe_entries) |entries| {
                 const start = entries.len -| sysvar.RecentBlockhashes.MAX_ENTRIES;
