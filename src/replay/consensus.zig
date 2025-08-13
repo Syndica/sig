@@ -608,6 +608,32 @@ test "cacheTowerStats - missing ancestor" {
     try testing.expectError(error.MissingAncestor, result);
 }
 
+test "cacheTowerStats - missing slot" {
+    var prng = std.Random.DefaultPrng.init(92);
+    const random = prng.random();
+
+    const root = SlotAndHash{ .slot = 0, .hash = Hash.initRandom(random) };
+
+    var fixture = try TestFixture.init(testing.allocator, root);
+    defer fixture.deinit(testing.allocator);
+
+    var replay_tower = try createTestReplayTower(1, 0.67);
+    defer replay_tower.deinit(std.testing.allocator);
+
+    // Do not populate progress for root.slot; ensure getForkStats returns null.
+    const empty_ancestors: std.AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)) = .empty;
+
+    const result = cacheTowerStats(
+        testing.allocator,
+        &fixture.progress,
+        &replay_tower,
+        root.slot,
+        &empty_ancestors,
+    );
+
+    try testing.expectError(error.MissingSlot, result);
+}
+
 test "maybeRefreshLastVote - no heaviest slot on same fork" {
     var prng = std.Random.DefaultPrng.init(91);
     const random = prng.random();
