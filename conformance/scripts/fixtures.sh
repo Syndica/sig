@@ -3,15 +3,9 @@
 PASSING_DIRS=(
     "elf_loader/fixtures"
 
-    # Passed: 19, Failed: 20, Skipped: 0
-    # "vm_interp/fixtures/latest"
-
     "vm_interp/fixtures/v0"
     "vm_interp/fixtures/v1"
     "vm_interp/fixtures/v2"
-
-    # Passed: 36252, Failed: 9, Skipped: 0 
-    # "vm_interp/fixtures/v3"
 
     "syscall/fixtures/abort"
     "syscall/fixtures/alt_bn128"
@@ -40,7 +34,6 @@ PASSING_DIRS=(
     "instr/fixtures/zk_sdk"
     "instr/fixtures/unknown"
     "instr/fixtures/compute-budget"
-
     "instr/fixtures/bpf-address-lookup-table"
     "instr/fixtures/bpf-config"
     "instr/fixtures/bpf-loader"
@@ -50,20 +43,23 @@ PASSING_DIRS=(
     "instr/fixtures/bpf-loader-v3"
     "instr/fixtures/bpf-loader-v3-programs"
     "instr/fixtures/bpf-loader-upgradeable-v1-programs"
-
-    # Passed: 6934, Failed: 0, Skipped: 0
     "instr/fixtures/stake"
-
-    "instr/fixtures/vote"
     "instr/fixtures/system"
+    "instr/fixtures/vote"
 
-    # Passed: 1629, Failed: 2286, Skipped: 0
+    "txn/fixtures/precompile/secp256k1"
+
+    # Passed: 19, Failed: 20, Skipped: 0
+    # "vm_interp/fixtures/latest"
+
+    # Passed: 36252, Failed: 9, Skipped: 0 
+    # "vm_interp/fixtures/v3"
+
+    # Passed: 3525, Failed: 390, Skipped: 0
     # "txn/fixtures/programs"
 
     # Passed: 993, Failed: 92, Skipped: 0
     # "txn/fixtures/precompile/ed25519"
-
-    "txn/fixtures/precompile/secp256k1"
 
     # Passed: 0, Failed: 357, Skipped: 0 (unimplemented)
     # "txn/fixtures/precompile/secp256k1"
