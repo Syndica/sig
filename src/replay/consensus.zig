@@ -587,7 +587,7 @@ test "cacheTowerStats - missing ancestor" {
     // Ensure the slot exists in the progress map so cacheTowerStats
     // progresses far enough to check ancestors.
     const trees = try std.BoundedArray(TreeNode, MAX_TEST_TREE_LEN).init(0);
-    try fixture.fill_fork(
+    try fixture.fillFork(
         testing.allocator,
         .{ .root = root, .data = trees },
         .active,
@@ -706,7 +706,7 @@ test "maybeRefreshLastVote - latest landed vote newer than last vote" {
         .{ hash3, hash2 },
     });
 
-    try fixture.fill_fork(
+    try fixture.fillFork(
         testing.allocator,
         .{ .root = root, .data = trees1 },
         .active,
@@ -784,7 +784,7 @@ test "maybeRefreshLastVote - non voting validator" {
         .{ hash3, hash2 },
     });
 
-    try fixture.fill_fork(
+    try fixture.fillFork(
         testing.allocator,
         .{ .root = root, .data = trees1 },
         .active,
@@ -864,7 +864,7 @@ test "maybeRefreshLastVote - hotspare validator" {
         .{ hash3, hash2 },
     });
 
-    try fixture.fill_fork(
+    try fixture.fillFork(
         testing.allocator,
         .{ .root = root, .data = trees1 },
         .active,
@@ -944,7 +944,7 @@ test "maybeRefreshLastVote - refresh interval not elapsed" {
         .{ hash3, hash2 },
     });
 
-    try fixture.fill_fork(
+    try fixture.fillFork(
         testing.allocator,
         .{ .root = root, .data = trees1 },
         .active,
@@ -1027,7 +1027,7 @@ test "maybeRefreshLastVote - successfully refreshed and mark last_vote_tx_blockh
         .{ hash3, hash2 },
     });
 
-    try fixture.fill_fork(
+    try fixture.fillFork(
         testing.allocator,
         .{ .root = root, .data = trees1 },
         .active,
@@ -1303,7 +1303,7 @@ test "checkAndHandleNewRoot - success" {
         .{ hash3, hash2 },
     });
 
-    try fixture.fill_fork(
+    try fixture.fillFork(
         testing.allocator,
         .{ .root = root, .data = trees1 },
         .active,
@@ -1364,7 +1364,7 @@ test "computeBankStats - child bank heavier" {
         .{ hash1, root },
         .{ hash2, hash1 },
     });
-    try fixture.fill_fork(
+    try fixture.fillFork(
         testing.allocator,
         .{ .root = root, .data = trees1 },
         .active,
@@ -1483,7 +1483,7 @@ test "computeBankStats - same weight selects lower slot" {
         .{ hash1, root },
         .{ hash2, root },
     });
-    try fixture.fill_fork(
+    try fixture.fillFork(
         testing.allocator,
         .{ .root = root, .data = trees1 },
         .active,
