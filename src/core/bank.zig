@@ -98,7 +98,8 @@ pub const SlotConstants = struct {
     /// to `EpochConstants`.
     feature_set: FeatureSet,
 
-    /// A map of reserved accounts
+    /// A map of reserved accounts that are not allowed to acquire write locks
+    /// in the current slot.
     reserved_accounts: ReservedAccounts,
 
     pub fn fromBankFields(
@@ -120,7 +121,7 @@ pub const SlotConstants = struct {
             .reserved_accounts = try reserved_accounts.initForSlot(
                 allocator,
                 &feature_set,
-                bank_fields.parent_slot + 1,
+                bank_fields.slot,
             ),
         };
     }
