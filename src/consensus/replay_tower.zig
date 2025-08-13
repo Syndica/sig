@@ -3717,7 +3717,7 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
         .{ hash4, hash3 },
     });
 
-    try fixture.fill_fork(allocator, .{ .root = root, .data = trees1 }, .active);
+    try fixture.fillFork(allocator, .{ .root = root, .data = trees1 }, .active);
     try fixture.fill_epoch_stake_random(allocator, random);
 
     var tmp_dir_root = std.testing.tmpDir(.{});
@@ -3863,7 +3863,7 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
         .{ hash10, hash6 },
     });
 
-    try fixture.fill_fork(allocator, .{ .root = hash5, .data = trees }, .active);
+    try fixture.fillFork(allocator, .{ .root = hash5, .data = trees }, .active);
 
     var ancestors2: AutoArrayHashMapUnmanaged(u64, SortedSet(u64)) = .{};
     defer ancestors2.deinit(allocator);
@@ -4209,7 +4209,7 @@ pub const TestFixture = struct {
         }
     }
 
-    pub fn fill_fork(
+    pub fn fillFork(
         self: *TestFixture,
         allocator: std.mem.Allocator,
         input_tree: Tree,
