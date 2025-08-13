@@ -303,63 +303,160 @@ fn replaySlot(state: *ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
     ) };
 }
 
+/// Polls a confirm status to obtain entries for a slot. If the confirm
+/// future yields an error, marks the slot as dead. Returns null if the slot
+/// should be skipped (non-confirm status, pending after retries, or error).
+fn awaitConfirmedEntriesForSlot(
+    replay_state: *ReplayExecutionState,
+    slot: Slot,
+    status: ReplaySlotStatus,
+) !?[]const sig.core.Entry {
+    return switch (status) {
+        .confirm => |confirm_slot_future| blk: {
+            var attempts: u8 = 0;
+            while (attempts < 3) : (attempts += 1) {
+                const poll_result = try confirm_slot_future.poll();
+                switch (poll_result) {
+                    .err => {
+                        try markDeadSlot(
+                            slot,
+                            replay_state.progress_map,
+                            replay_state.ledger_result_writer,
+                        );
+                        break :blk null;
+                    },
+                    .done => break :blk confirm_slot_future.entries,
+                    .pending => {
+                        if (attempts < 2) {
+                            std.time.sleep(std.time.ns_per_ms);
+                        }
+                    },
+                }
+            }
+            // Return null if all attempts failed
+            break :blk null;
+        },
+        else => null,
+    };
+}
+
+/// Applies fork-choice and vote updates after a slot has been frozen.
+fn finalizeSlotPostFreeze(
+    replay_state: *ReplayExecutionState,
+    slot: Slot,
+) !void {
+    var slot_info = replay_state.slot_tracker.get(slot) orelse
+        return error.MissingSlotInTracker;
+
+    const parent_slot = slot_info.constants.parent_slot;
+    const parent_hash = slot_info.constants.parent_hash;
+
+    var progress = replay_state.progress_map.map.getPtr(slot) orelse
+        return error.MissingBankProgress;
+
+    const hash = slot_info.state.hash.readCopy() orelse
+        return error.MissingHash;
+    std.debug.assert(!hash.eql(Hash.ZEROES));
+
+    // Needs to be updated before `check_slot_agrees_with_cluster()` so that any
+    // updates in `check_slot_agrees_with_cluster()` on fork choice take effect
+    try replay_state.fork_choice.addNewLeafSlot(
+        .{ .slot = slot, .hash = hash },
+        .{ .slot = parent_slot, .hash = parent_hash },
+    );
+
+    progress.fork_stats.bank_hash = hash;
+
+    const slot_frozen_state: SlotFrozenState = .fromState(
+        .from(replay_state.logger),
+        slot,
+        hash,
+        replay_state.duplicate_slots_tracker,
+        replay_state.duplicate_confirmed_slots,
+        replay_state.fork_choice,
+        replay_state.epoch_slots_frozen_slots,
+    );
+    try check_slot_agrees_with_cluster.slotFrozen(
+        replay_state.allocator,
+        .from(replay_state.logger),
+        slot,
+        replay_state.slot_tracker.root,
+        replay_state.ledger_result_writer,
+        replay_state.fork_choice,
+        replay_state.duplicate_slots_to_repair,
+        replay_state.purge_repair_slot_counter,
+        slot_frozen_state,
+    );
+
+    if (!replay_state.duplicate_slots_tracker.contains(slot) and
+        try replay_state.blockstore_reader.getDuplicateSlot(slot) != null)
+    {
+        const duplicate_state: DuplicateState = .fromState(
+            .from(replay_state.logger),
+            slot,
+            replay_state.duplicate_confirmed_slots,
+            replay_state.fork_choice,
+            .fromHash(hash),
+        );
+
+        try check_slot_agrees_with_cluster.duplicate(
+            replay_state.allocator,
+            .from(replay_state.logger),
+            slot,
+            parent_slot,
+            replay_state.duplicate_slots_tracker,
+            replay_state.fork_choice,
+            duplicate_state,
+        );
+    }
+
+    // Move unfrozen_gossip_verified_vote_hashes entries to latest_validator_votes_for_frozen_banks
+    if (replay_state
+        .unfrozen_gossip_verified_vote_hashes.votes_per_slot
+        .get(slot)) |slot_hashes_const|
+    {
+        var slot_hashes = slot_hashes_const;
+        if (slot_hashes.fetchSwapRemove(hash)) |kv| {
+            var new_frozen_voters = kv.value;
+            defer new_frozen_voters.deinit(replay_state.allocator);
+            for (new_frozen_voters.items) |pubkey| {
+                _ = try replay_state.latest_validator_votes_for_frozen_banks.checkAddVote(
+                    replay_state.allocator,
+                    pubkey,
+                    slot,
+                    hash,
+                    .replay,
+                );
+            }
+        }
+        // If `slot_hashes` becomes empty, it'll be removed by `setRoot()` later
+    }
+}
+
 pub fn processReplayResults(
     replay_state: *ReplayExecutionState,
     slot_statuses: *const std.ArrayListUnmanaged(struct { Slot, ReplaySlotStatus }),
 ) !bool {
     var processed_a_slot = false;
-    // Agave does a transaction count here but it looks redundant as the count is not used.
     for (slot_statuses.items) |slot_status| {
         const slot, const status = slot_status;
 
-        const maybe_entries = switch (status) {
-            .confirm => |confirm_slot_future| blk: {
-                var attempts: u8 = 0;
-                while (attempts < 3) : (attempts += 1) {
-                    const poll_result = try confirm_slot_future.poll();
-                    switch (poll_result) {
-                        .err => {
-                            try markDeadSlot(
-                                slot,
-                                replay_state.progress_map,
-                                replay_state.ledger_result_writer,
-                            );
-                            break :blk null;
-                        },
-                        .done => break :blk confirm_slot_future.entries,
-                        .pending => {
-                            if (attempts < 2) {
-                                std.time.sleep(std.time.ns_per_ms);
-                            }
-                        },
-                    }
-                }
-                // Return null if all attempts failed
-                break :blk null;
-            },
-            else => continue,
-        };
-
+        const maybe_entries = try awaitConfirmedEntriesForSlot(
+            replay_state,
+            slot,
+            status,
+        );
         // If entries is null, it means the slot failed or was skipped, so continue to next slot
         const entries = if (maybe_entries) |entries| entries else continue;
 
         var slot_info = replay_state.slot_tracker.get(slot) orelse
             return error.MissingSlotInTracker;
 
+        // Freeze the bank if its entries where completly processed.
         if (slot_info.state.tickHeight() == slot_info.constants.max_tick_height) {
-            // We skip tracking batch_execute as it does in Agave
-            const parent_slot = slot_info.constants.parent_slot;
-            const parent_hash = slot_info.constants.parent_hash;
-            var progress = replay_state.progress_map.map.getPtr(slot) orelse
-                return error.MissingBankProgress;
-
-            // Check if we are the leader for this block
             const is_leader_block =
                 slot_info.constants.collector_id.equals(&replay_state.my_identity);
-
             if (!is_leader_block) {
-                // Freeze the bank before sending to any auxiliary threads
-                // that may expect to be operating on a frozen bank
                 try replay.freeze.freezeSlot(replay_state.allocator, .init(
                     .from(replay_state.logger),
                     replay_state.account_store,
@@ -370,105 +467,16 @@ pub fn processReplayResults(
                     entries[entries.len - 1].hash,
                 ));
             }
-
             processed_a_slot = true;
-
             // TODO Send things out via a couple of senders
             // - cluster_slots_update_sender;
             // - transaction_status_sender;
             // - cost_update_sender;
-
-            const hash = slot_info.state.hash.readCopy() orelse
-                return error.MissingHash;
-            std.debug.assert(!hash.eql(Hash.ZEROES));
-
-            // Needs to be updated before `check_slot_agrees_with_cluster()` so that
-            // any updates in `check_slot_agrees_with_cluster()` on fork choice take
-            // effect
-            try replay_state.fork_choice.addNewLeafSlot(
-                .{
-                    .slot = slot,
-                    .hash = hash,
-                },
-                .{
-                    .slot = parent_slot,
-                    .hash = parent_hash,
-                },
-            );
-
-            progress.fork_stats.bank_hash = hash;
-
-            const slot_frozen_state: SlotFrozenState = .fromState(
-                .from(replay_state.logger),
-                slot,
-                hash,
-                replay_state.duplicate_slots_tracker,
-                replay_state.duplicate_confirmed_slots,
-                replay_state.fork_choice,
-                replay_state.epoch_slots_frozen_slots,
-            );
-            try check_slot_agrees_with_cluster.slotFrozen(
-                replay_state.allocator,
-                .from(replay_state.logger),
-                slot,
-                replay_state.slot_tracker.root,
-                replay_state.ledger_result_writer,
-                replay_state.fork_choice,
-                replay_state.duplicate_slots_to_repair,
-                replay_state.purge_repair_slot_counter,
-                slot_frozen_state,
-            );
-
-            if (!replay_state.duplicate_slots_tracker.contains(slot) and
-                try replay_state.blockstore_reader.getDuplicateSlot(slot) != null)
-            {
-                const duplicate_state: DuplicateState = .fromState(
-                    .from(replay_state.logger),
-                    slot,
-                    replay_state.duplicate_confirmed_slots,
-                    replay_state.fork_choice,
-                    .fromHash(hash),
-                );
-
-                try check_slot_agrees_with_cluster.duplicate(
-                    replay_state.allocator,
-                    .from(replay_state.logger),
-                    slot,
-                    parent_slot,
-                    replay_state.duplicate_slots_tracker,
-                    replay_state.fork_choice,
-                    duplicate_state,
-                );
-            }
-
-            // TODO bank_notification_sender
-
-            // Move unfrozen_gossip_verified_vote_hashes entries to latest_validator_votes_for_frozen_banks
-            if (replay_state.unfrozen_gossip_verified_vote_hashes.votes_per_slot
-                .get(slot)) |slot_hashes_const|
-            {
-                var slot_hashes = slot_hashes_const;
-                if (slot_hashes.fetchSwapRemove(hash)) |kv| {
-                    var new_frozen_voters = kv.value;
-                    defer new_frozen_voters.deinit(replay_state.allocator);
-                    for (new_frozen_voters.items) |pubkey| {
-                        _ = try replay_state.latest_validator_votes_for_frozen_banks.checkAddVote(
-                            replay_state.allocator,
-                            pubkey,
-                            slot,
-                            hash,
-                            .replay,
-                        );
-                    }
-                }
-                // If `slot_hashes` becomes empty, it'll be removed by `setRoot()` later
-            }
-
+            try finalizeSlotPostFreeze(replay_state, slot);
             // TODO block_metadata_notifier
             // TODO block_metadata_notifier
         }
     }
-
     return processed_a_slot;
 }
 
