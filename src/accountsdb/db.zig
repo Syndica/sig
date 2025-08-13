@@ -2147,6 +2147,18 @@ pub const AccountsDB = struct {
 
         const slot_entry = try slot_ref_map.getOrPut(slot);
 
+        // default-initializing new entries to reduce risk of undefined reads
+        if (!slot_entry.found_existing) slot_entry.value_ptr.* = .{
+            .global_index = std.math.maxInt(u64),
+            .refs = .empty,
+        };
+
+        // if we tried to create a new entry and failed, remove it before unlocking
+        errdefer {
+            if (!slot_entry.found_existing)
+                slot_ref_map.removeByPtr(slot_entry.key_ptr);
+        }
+
         // no entry => realloc always needed
         const realloc_needed = !slot_entry.found_existing or
             slot_entry.value_ptr.refs.unusedCapacitySlice().len < pubkeys.len;
