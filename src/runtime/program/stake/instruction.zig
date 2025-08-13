@@ -272,7 +272,7 @@ pub const AuthorizeCheckedWithSeedArgs = struct {
     authority_seed: []const u8, // is there a fixed upper bound here?
     authority_owner: Pubkey,
 
-    pub const @"!bincode-config:authority_seed" = bincode.utf8StringCodec([]const u8);
+    pub const @"!bincode-config:authority_seed" = sig.runtime.program.SEED_FIELD_CONFIG;
 };
 
 pub const AuthorizeWithSeedArgs = struct {
@@ -281,7 +281,7 @@ pub const AuthorizeWithSeedArgs = struct {
     authority_seed: []const u8, // is there a fixed upper bound here?
     authority_owner: Pubkey,
 
-    pub const @"!bincode-config:authority_seed" = bincode.utf8StringCodec([]const u8);
+    pub const @"!bincode-config:authority_seed" = sig.runtime.program.SEED_FIELD_CONFIG;
 };
 
 pub const LockupCheckedArgs = struct {
