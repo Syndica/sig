@@ -483,7 +483,7 @@ pub fn executeTransaction(
 
     const instruction_datas = try getInstructionDatasSliceForPrecompiles(
         allocator,
-        transaction.instruction_infos,
+        transaction.instructions,
         environment.feature_set,
         environment.slot,
     );
@@ -552,11 +552,11 @@ pub fn executeTransaction(
 // instead of allocating a new array here.
 fn getInstructionDatasSliceForPrecompiles(
     allocator: std.mem.Allocator,
-    instruction_infos: []const InstructionInfo,
+    instructions: []const InstructionInfo,
     feature_set: *const FeatureSet,
     slot: Slot,
 ) !?[]const []const u8 {
-    const contains_precompile = for (instruction_infos) |ixn_info| {
+    const contains_precompile = for (instructions) |ixn_info| {
         if (ixn_info.program_meta.pubkey.equals(&sig.runtime.program.precompiles.ed25519.ID) or
             ixn_info.program_meta.pubkey.equals(&sig.runtime.program.precompiles.secp256k1.ID) or
             ixn_info.program_meta.pubkey.equals(&sig.runtime.program.precompiles.secp256r1.ID))
@@ -569,8 +569,8 @@ fn getInstructionDatasSliceForPrecompiles(
     );
 
     const instruction_datas = if (contains_precompile and move_verify_precompiles_to_svm) blk: {
-        const instruction_datas = try allocator.alloc([]const u8, instruction_infos.len);
-        for (instruction_infos, 0..) |instruction_info, index| {
+        const instruction_datas = try allocator.alloc([]const u8, instructions.len);
+        for (instructions, 0..) |instruction_info, index| {
             instruction_datas[index] = instruction_info.instruction_data;
         }
         break :blk instruction_datas;
@@ -589,7 +589,7 @@ test getInstructionDatasSliceForPrecompiles {
     feature_set.setSlot(.move_precompile_verification_to_svm, 0);
 
     {
-        const instruction_infos = [_]InstructionInfo{.{
+        const instructions = [_]InstructionInfo{.{
             .program_meta = .{
                 .pubkey = Pubkey.initRandom(random),
                 .index_in_transaction = 0,
@@ -601,7 +601,7 @@ test getInstructionDatasSliceForPrecompiles {
 
         const maybe_instruction_datas = try getInstructionDatasSliceForPrecompiles(
             allocator,
-            &instruction_infos,
+            &instructions,
             &feature_set,
             0,
         );
@@ -611,7 +611,7 @@ test getInstructionDatasSliceForPrecompiles {
     }
 
     {
-        const instruction_infos = [_]InstructionInfo{
+        const instructions = [_]InstructionInfo{
             .{
                 .program_meta = .{
                     .pubkey = Pubkey.initRandom(random),
@@ -643,7 +643,7 @@ test getInstructionDatasSliceForPrecompiles {
 
         const maybe_instruction_datas = try getInstructionDatasSliceForPrecompiles(
             allocator,
-            &instruction_infos,
+            &instructions,
             &feature_set,
             0,
         );
