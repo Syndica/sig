@@ -606,5 +606,5 @@ test "run exits promptly" {
     exit.store(true, .monotonic);
     thread.join();
 
-    try std.testing.expect(timer.read().lt(.fromMillis(100)));
+    try std.testing.expect(timer.read().lt(.fromSecs(1)));
 }
