@@ -7,6 +7,7 @@ const AtomicBool = std.atomic.Value(bool);
 const RwMux = sig.sync.RwMux;
 const SortedSetUnmanaged = sig.utils.collections.SortedSetUnmanaged;
 
+const Ancestors = sig.core.Ancestors;
 const Epoch = sig.core.Epoch;
 const EpochStakesMap = sig.core.EpochStakesMap;
 const EpochSchedule = sig.core.EpochSchedule;
@@ -44,7 +45,7 @@ pub const ConsensusDependencies = struct {
     fork_choice: *ForkChoice,
     ledger_reader: *LedgerReader,
     ledger_result_writer: *LedgerResultWriter,
-    ancestors: *const std.AutoArrayHashMapUnmanaged(u64, SortedSetUnmanaged(u64)),
+    ancestors: *const std.AutoArrayHashMapUnmanaged(u64, Ancestors),
     descendants: *const std.AutoArrayHashMapUnmanaged(u64, SortedSetUnmanaged(u64)),
     vote_account: Pubkey,
     slot_history_accessor: *const SlotHistoryAccessor,
@@ -470,7 +471,7 @@ fn resetFork(
 fn computeBankStats(
     allocator: std.mem.Allocator,
     my_vote_pubkey: Pubkey,
-    ancestors: *const std.AutoArrayHashMapUnmanaged(u64, SortedSetUnmanaged(u64)),
+    ancestors: *const std.AutoArrayHashMapUnmanaged(u64, Ancestors),
     slot_tracker: *SlotTracker,
     epoch_schedule: *const EpochSchedule,
     epoch_stakes_map: *const EpochStakesMap,

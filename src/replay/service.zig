@@ -9,6 +9,7 @@ const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 const SlotLeaders = sig.core.leader_schedule.SlotLeaders;
 const SlotState = sig.core.bank.SlotState;
+const Ancestors = sig.core.Ancestors;
 
 const BlockstoreDB = sig.ledger.BlockstoreDB;
 const BlockstoreReader = sig.ledger.BlockstoreReader;
@@ -426,17 +427,17 @@ fn advanceReplay(state: *ReplayState) !void {
     const SlotSet = sig.utils.collections.SortedSetUnmanaged(Slot);
 
     // arena-allocated
-    var ancestors: std.AutoArrayHashMapUnmanaged(Slot, SlotSet) = .empty;
+    var ancestors: std.AutoArrayHashMapUnmanaged(Slot, Ancestors) = .empty;
     var descendants: std.AutoArrayHashMapUnmanaged(Slot, SlotSet) = .empty;
     for (
         state.slot_tracker.slots.keys(),
         state.slot_tracker.slots.values(),
     ) |slot, info| {
         const slot_ancestors = &info.constants.ancestors.ancestors;
-        const ancestor_gop = try ancestors.getOrPutValue(arena, slot, .empty);
-        try ancestor_gop.value_ptr.map.inner.ensureUnusedCapacity(arena, slot_ancestors.count());
+        const ancestor_gop = try ancestors.getOrPutValue(arena, slot, .EMPTY);
+        try ancestor_gop.value_ptr.ancestors.ensureUnusedCapacity(arena, slot_ancestors.count());
         for (slot_ancestors.keys()) |ancestor_slot| {
-            try ancestor_gop.value_ptr.put(arena, ancestor_slot);
+            try ancestor_gop.value_ptr.addSlot(arena, ancestor_slot);
             const descendants_gop = try descendants.getOrPutValue(arena, ancestor_slot, .empty);
             try descendants_gop.value_ptr.put(arena, slot);
         }
