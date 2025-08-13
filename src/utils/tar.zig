@@ -79,7 +79,7 @@ pub fn parallelUntarToFileSystem(
     var pool =
         try HomogeneousThreadPool(UnTarTask).init(allocator, @intCast(n_threads), n_threads);
     defer {
-        if (!pool.joinForDeinit(.{ .ns = std.time.ns_per_s })) {
+        if (!pool.joinForDeinit(.fromSecs(1))) {
             logger.warn().log("failed to join for deinit");
         }
         pool.deinit(allocator);
