@@ -1412,9 +1412,9 @@ pub const ReplayTower = struct {
 
         const maybe_slot_history: ?SlotHistory =
             if (heaviest_slot_on_same_voted_fork) |heaviest| blk: {
-                var slot_ancestors = ancestors.get(heaviest) orelse
+                const slot_ancestors = ancestors.getPtr(heaviest) orelse
                     return error.MissingAncestors;
-                break :blk try slot_history_accessor.getSlotHistory(allocator, &slot_ancestors);
+                break :blk try slot_history_accessor.getSlotHistory(allocator, slot_ancestors);
             } else null;
         defer {
             if (maybe_slot_history) |slot_history| slot_history.deinit(allocator);
