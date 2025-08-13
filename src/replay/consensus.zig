@@ -572,6 +572,42 @@ const Lockout = sig.runtime.program.vote.state.Lockout;
 
 const createTestReplayTower = sig.consensus.replay_tower.createTestReplayTower;
 
+test "cacheTowerStats - missing ancestor" {
+    var prng = std.Random.DefaultPrng.init(91);
+    const random = prng.random();
+
+    const root = SlotAndHash{ .slot = 0, .hash = Hash.initRandom(random) };
+
+    var fixture = try TestFixture.init(testing.allocator, root);
+    defer fixture.deinit(testing.allocator);
+
+    var replay_tower = try createTestReplayTower(1, 0.67);
+    defer replay_tower.deinit(std.testing.allocator);
+
+    // Ensure the slot exists in the progress map so cacheTowerStats
+    // progresses far enough to check ancestors.
+    const trees = try std.BoundedArray(TreeNode, MAX_TEST_TREE_LEN).init(0);
+    try fixture.fill_fork(
+        testing.allocator,
+        .{ .root = root, .data = trees },
+        .active,
+    );
+
+    // Provide an empty ancestors map so the slot has no recorded ancestors entry
+    // and cacheTowerStats should return error.MissingAncestor.
+    var empty_ancestors: std.AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)) = .empty;
+
+    const result = cacheTowerStats(
+        testing.allocator,
+        &fixture.progress,
+        &replay_tower,
+        root.slot,
+        &empty_ancestors,
+    );
+
+    try testing.expectError(error.MissingAncestor, result);
+}
+
 test "maybeRefreshLastVote - no heaviest slot on same fork" {
     var prng = std.Random.DefaultPrng.init(91);
     const random = prng.random();
