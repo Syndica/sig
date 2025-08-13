@@ -2463,6 +2463,11 @@ test "stake.set_lockup" {
     const withdraw_auth = Pubkey.initRandom(prng.random());
     const stake_account = Pubkey.initRandom(prng.random());
 
+    const old_lockup: Lockup = .{
+        .custodian = Pubkey.initRandom(prng.random()),
+        .epoch = sysvar_cache.clock.?.epoch + 42,
+        .unix_timestamp = sysvar_cache.clock.?.epoch_start_timestamp + 1000,
+    };
     const new_lockup: Lockup = .{
         .custodian = Pubkey.initRandom(prng.random()),
         .epoch = sysvar_cache.clock.?.epoch + 42,
@@ -2476,7 +2481,7 @@ test "stake.set_lockup" {
                 .staker = Pubkey.ZEROES,
                 .withdrawer = withdraw_auth,
             },
-            .lockup = .DEFAULT,
+            .lockup = old_lockup,
             .rent_exempt_reserve = sysvar_cache.rent.?.minimumBalance(StakeStateV2.SIZE),
         },
     }, .{});
@@ -2504,6 +2509,7 @@ test "stake.set_lockup" {
         &.{
             .{ .index_in_transaction = 0, .is_writable = true },
             .{ .index_in_transaction = 1, .is_signer = true }, // lockup/withdraw auth
+            .{ .index_in_transaction = 2, .is_signer = true }, // old custodoian
         },
         .{
             .accounts = &.{
@@ -2514,6 +2520,7 @@ test "stake.set_lockup" {
                     .lamports = 1_000_000_000,
                 },
                 .{ .pubkey = withdraw_auth },
+                .{ .pubkey = old_lockup.custodian },
                 .{ .pubkey = ID, .owner = runtime.ids.NATIVE_LOADER_ID },
             },
             .compute_meter = 10_000,
@@ -2528,6 +2535,7 @@ test "stake.set_lockup" {
                     .lamports = 1_000_000_000,
                 },
                 .{ .pubkey = withdraw_auth },
+                .{ .pubkey = old_lockup.custodian },
                 .{ .pubkey = ID, .owner = runtime.ids.NATIVE_LOADER_ID },
             },
             .compute_meter = 10_000 - COMPUTE_UNITS,
