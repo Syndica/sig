@@ -12,7 +12,7 @@ const Pubkey = core.Pubkey;
 const Slot = core.Slot;
 
 const AccountStore = sig.accounts_db.AccountStore;
-const BlockstoreReader = sig.ledger.BlockstoreReader;
+const LedgerReader = sig.ledger.LedgerReader;
 
 const ForkProgress = sig.consensus.progress_map.ForkProgress;
 const ProgressMap = sig.consensus.ProgressMap;
@@ -25,7 +25,7 @@ const SvmGateway = replay.svm_gateway.SvmGateway;
 
 const confirmSlot = replay.confirm_slot.confirmSlot;
 
-/// State used for replaying and validating data from blockstore/accountsdb/svm
+/// State used for replaying and validating data from ledger/accountsdb/svm
 pub const ReplayExecutionState = struct {
     allocator: Allocator,
     logger: sig.trace.ScopedLogger("replay-execution"),
@@ -35,7 +35,7 @@ pub const ReplayExecutionState = struct {
     // borrows
     account_store: AccountStore,
     thread_pool: *ThreadPool,
-    blockstore_reader: *BlockstoreReader,
+    ledger_reader: *LedgerReader,
     slot_tracker: *SlotTracker,
     epochs: *EpochTracker,
     progress_map: *ProgressMap,
@@ -49,7 +49,7 @@ pub const ReplayExecutionState = struct {
         my_identity: Pubkey,
         thread_pool: *ThreadPool,
         account_store: AccountStore,
-        blockstore_reader: *BlockstoreReader,
+        ledger_reader: *LedgerReader,
         slot_tracker: *SlotTracker,
         epochs: *EpochTracker,
         progress_map: *ProgressMap,
@@ -61,7 +61,7 @@ pub const ReplayExecutionState = struct {
             .vote_account = null, // voting not currently supported
             .account_store = account_store,
             .thread_pool = thread_pool,
-            .blockstore_reader = blockstore_reader,
+            .ledger_reader = ledger_reader,
             .slot_tracker = slot_tracker,
             .epochs = epochs,
             .progress_map = progress_map,
@@ -164,7 +164,7 @@ const ReplaySlotStatus = union(enum) {
 };
 
 /// Replay the transactions from any entries in the slot that we've received but
-/// haven't yet replayed. Integrates with accountsdb and blockstore.
+/// haven't yet replayed. Integrates with accountsdb and ledger.
 ///
 /// - Calls confirmSlot to verify/execute a slot's transactions.
 /// - Initializes the ForkProgress in the progress map for the slot if necessary.
@@ -218,7 +218,7 @@ fn replaySlot(state: *ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
 
     const entries, const slot_is_full = blk: {
         const entries, const num_shreds, const slot_is_full =
-            try state.blockstore_reader.getSlotEntriesWithShredInfo(
+            try state.ledger_reader.getSlotEntriesWithShredInfo(
                 state.allocator,
                 slot,
                 confirmation_progress.num_shreds,

@@ -106,7 +106,7 @@ pub const VoteListener = struct {
         params: struct {
             bank_forks_rw: *sig.sync.RwMux(BankForksStub),
             gossip_table_rw: *sig.sync.RwMux(sig.gossip.GossipTable),
-            ledger_db: if (TODO_CONFIRMATION_VERIFIER) *sig.ledger.BlockstoreDB else void,
+            ledger_db: if (TODO_CONFIRMATION_VERIFIER) *sig.ledger.LedgerDB else void,
 
             /// Channels that will be used to `receive` data.
             receivers: struct {
@@ -368,7 +368,7 @@ fn processVotesLoop(
     bank_forks_rw: *sig.sync.RwMux(BankForksStub),
     senders: Senders,
     receivers: Receivers,
-    ledger_db: if (TODO_CONFIRMATION_VERIFIER) *sig.ledger.BlockstoreDB else void,
+    ledger_db: if (TODO_CONFIRMATION_VERIFIER) *sig.ledger.LedgerDB else void,
     exit: sig.sync.ExitCondition,
 ) !void {
     defer exit.afterExit();
@@ -415,7 +415,7 @@ fn processVotesOnce(
     bank_forks_rw: *sig.sync.RwMux(BankForksStub),
     senders: Senders,
     receivers: Receivers,
-    ledger_db: if (TODO_CONFIRMATION_VERIFIER) *sig.ledger.BlockstoreDB else void,
+    ledger_db: if (TODO_CONFIRMATION_VERIFIER) *sig.ledger.LedgerDB else void,
     confirmation_verifier: *if (TODO_CONFIRMATION_VERIFIER) OptimisticConfirmationVerifier else void,
     latest_vote_slot_per_validator: *std.AutoArrayHashMapUnmanaged(Pubkey, Slot),
     last_process_root: *sig.time.Instant,
@@ -480,7 +480,7 @@ fn processVotesOnce(
     // match confirmed_slots {
     //     Ok(confirmed_slots) => {
     //         confirmation_verifier
-    //             .add_new_optimistic_confirmed_slots(confirmed_slots.clone(), &blockstore);
+    //             .add_new_optimistic_confirmed_slots(confirmed_slots.clone(), &ledger);
     //     }
     //     Err(e) => match e {
     //         Error::RecvTimeout(RecvTimeoutError::Disconnected) => {

@@ -144,7 +144,7 @@ jobs:
             # it seems that the feature detection is a bit broken in CircleCI's virtual machines
             # so we will manually say that it's an Apple M2.
             zig build -Denable-tsan=true -Dno-run -Dcpu=apple_m2 --summary all
-            zig build test -Denable-tsan=true -Dblockstore=hashmap -Dfilter="ledger" -Dno-bin -Dcpu=apple_m2 --summary all
+            zig build test -Denable-tsan=true -Dledger=hashmap -Dfilter="ledger" -Dno-bin -Dcpu=apple_m2 --summary all
             zig-out/bin/test
       - save_cache:
           key: macos-aarch64-0.14.1-{{ checksum "build.zig.zon" }}
@@ -162,7 +162,7 @@ jobs:
           key: linux-x86_64-0.14.1-{{ checksum "build.zig.zon" }}-v1
       - run:
           name: Build and Test
-          command: workspace/zig/zig build test -Denable-tsan=true -Dblockstore=hashmap -Dcpu=x86_64_v3 -Dfilter="ledger" --summary all
+          command: workspace/zig/zig build test -Denable-tsan=true -Dledger=hashmap -Dcpu=x86_64_v3 -Dfilter="ledger" --summary all
 
   test_linux:
     executor: linux-executor
@@ -317,8 +317,7 @@ jobs:
       - run:
           name: Run Fixtures
           command: ./conformance/scripts/fixtures.sh
-            
-            
+
 workflows:
   check_linux:
     jobs:

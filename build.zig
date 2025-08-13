@@ -6,7 +6,7 @@ pub const Config = struct {
     optimize: std.builtin.OptimizeMode,
     filters: ?[]const []const u8,
     enable_tsan: bool,
-    blockstore_db: BlockstoreDB,
+    ledger_db: LedgerDB,
     run: bool,
     install: bool,
     ssh_host: ?[]const u8,
@@ -34,10 +34,10 @@ pub const Config = struct {
                 "enable-tsan",
                 "Enable TSan for the test suite",
             ) orelse false,
-            .blockstore_db = b.option(
-                BlockstoreDB,
-                "blockstore",
-                "Blockstore database backend",
+            .ledger_db = b.option(
+                LedgerDB,
+                "ledger",
+                "Ledger database backend",
             ) orelse .rocksdb,
             .run = !(b.option(
                 bool,
@@ -116,7 +116,7 @@ pub fn build(b: *Build) void {
     const config = Config.fromBuild(b);
 
     const build_options = b.addOptions();
-    build_options.addOption(BlockstoreDB, "blockstore_db", config.blockstore_db);
+    build_options.addOption(LedgerDB, "ledger_db", config.ledger_db);
     build_options.addOption(bool, "no_network_tests", config.no_network_tests);
 
     const sig_step = b.step("sig", "Run the sig executable");
@@ -222,7 +222,7 @@ pub fn build(b: *Build) void {
         .imports = imports,
     });
 
-    switch (config.blockstore_db) {
+    switch (config.ledger_db) {
         .rocksdb => sig_mod.addImport("rocksdb", rocksdb_mod),
         .hashmap => {},
     }
@@ -245,7 +245,7 @@ pub fn build(b: *Build) void {
     // make sure pyroscope's got enough info to profile
     sig_exe.build_id = .fast;
 
-    switch (config.blockstore_db) {
+    switch (config.ledger_db) {
         .rocksdb => sig_exe.root_module.addImport("rocksdb", rocksdb_mod),
         .hashmap => {},
     }
@@ -263,7 +263,7 @@ pub fn build(b: *Build) void {
         .filters = config.filters orelse &.{},
         .use_llvm = config.use_llvm,
     });
-    switch (config.blockstore_db) {
+    switch (config.ledger_db) {
         .rocksdb => unit_tests_exe.root_module.addImport("rocksdb", rocksdb_mod),
         .hashmap => {},
     }
@@ -281,7 +281,7 @@ pub fn build(b: *Build) void {
             .link_libc = true,
         }),
     });
-    switch (config.blockstore_db) {
+    switch (config.ledger_db) {
         .rocksdb => fuzz_exe.root_module.addImport("rocksdb", rocksdb_mod),
         .hashmap => {},
     }
@@ -302,7 +302,7 @@ pub fn build(b: *Build) void {
     // make sure pyroscope's got enough info to profile
     benchmark_exe.build_id = .fast;
 
-    switch (config.blockstore_db) {
+    switch (config.ledger_db) {
         .rocksdb => benchmark_exe.root_module.addImport("rocksdb", rocksdb_mod),
         .hashmap => {},
     }
@@ -405,7 +405,7 @@ fn generateTable(b: *Build) Build.LazyPath {
     return b.addRunArtifact(gen).captureStdOut();
 }
 
-const BlockstoreDB = enum {
+const LedgerDB = enum {
     rocksdb,
     hashmap,
 };

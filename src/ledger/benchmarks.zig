@@ -97,10 +97,10 @@ pub const BenchmarkLedger = struct {
         return timer.read();
     }
 
-    /// Benchmarks for BlockstoreReader.
+    /// Benchmarks for LedgerReader.
     ///
     /// Analogous to [bench_read_sequential]https://github.com/anza-xyz/agave/blob/cfd393654f84c36a3c49f15dbe25e16a0269008d/ledger/benches/blockstore.rs#L78
-    pub fn @"BlockstoreReader.getDataShred - Sequential"() !sig.time.Duration {
+    pub fn @"LedgerReader.getDataShred - Sequential"() !sig.time.Duration {
         const allocator = std.heap.c_allocator;
         var state = try TestState.init(allocator, @src(), .noop);
         defer state.deinit();
@@ -132,7 +132,7 @@ pub const BenchmarkLedger = struct {
     }
 
     /// Analogous to [bench_read_random]https://github.com/anza-xyz/agave/blob/92eca1192b055d896558a78759d4e79ab4721ff1/ledger/benches/blockstore.rs#L103
-    pub fn @"BlockstoreReader.getDataShred - Random"() !sig.time.Duration {
+    pub fn @"LedgerReader.getDataShred - Random"() !sig.time.Duration {
         const allocator = std.heap.c_allocator;
         var state = try TestState.init(allocator, @src(), .noop);
         defer state.deinit();
@@ -166,7 +166,7 @@ pub const BenchmarkLedger = struct {
         return timer.read();
     }
 
-    pub fn @"BlockstoreReader.getCompleteBlock"() !sig.time.Duration {
+    pub fn @"LedgerReader.getCompleteBlock"() !sig.time.Duration {
         const state = try TestState.init(std.heap.c_allocator, @src(), .noop);
         defer state.deinit();
         var reader = try state.reader();
@@ -178,7 +178,7 @@ pub const BenchmarkLedger = struct {
         return timer.read();
     }
 
-    pub fn @"BlockstoreReader.getDataShredsForSlot"() !sig.time.Duration {
+    pub fn @"LedgerReader.getDataShredsForSlot"() !sig.time.Duration {
         const state = try TestState.init(std.heap.c_allocator, @src(), .noop);
         defer state.deinit();
         var reader = try state.reader();
@@ -192,7 +192,7 @@ pub const BenchmarkLedger = struct {
         return duration;
     }
 
-    pub fn @"BlockstoreReader.getSlotEntriesWithShredInfo"() !sig.time.Duration {
+    pub fn @"LedgerReader.getSlotEntriesWithShredInfo"() !sig.time.Duration {
         const state = try TestState.init(std.heap.c_allocator, @src(), .noop);
         defer state.deinit();
         var reader = try state.reader();
@@ -207,7 +207,7 @@ pub const BenchmarkLedger = struct {
         return duration;
     }
 
-    pub fn @"BlockstoreReader.getCodeShred"() !sig.time.Duration {
+    pub fn @"LedgerReader.getCodeShred"() !sig.time.Duration {
         const allocator = std.heap.c_allocator;
         var state = try TestState.init(allocator, @src(), .noop);
         defer state.deinit();
@@ -240,7 +240,7 @@ pub const BenchmarkLedger = struct {
         return timer.read();
     }
 
-    pub fn @"BlockstoreReader.getCodeShredsForSlot"() !sig.time.Duration {
+    pub fn @"LedgerReader.getCodeShredsForSlot"() !sig.time.Duration {
         const allocator = std.heap.c_allocator;
         var state = try TestState.init(allocator, @src(), .noop);
         defer state.deinit();
@@ -333,7 +333,7 @@ pub const BenchmarkLedgerSlow = struct {
     pub const min_iterations = 5;
     pub const max_iterations = 5;
 
-    pub fn @"BlockstoreReader.slotRangeConnected"() !sig.time.Duration {
+    pub fn @"LedgerReader.slotRangeConnected"() !sig.time.Duration {
         const allocator = std.heap.c_allocator;
         var state = try TestState.init(allocator, @src(), .noop);
         defer state.deinit();

@@ -10,10 +10,10 @@ const AutoHashMap = std.AutoHashMap;
 
 const Slot = sig.core.Slot;
 
-const BlockstoreDB = ledger.blockstore.BlockstoreDB;
+const LedgerDB = ledger.db.LedgerDB;
 const SlotMeta = ledger.meta.SlotMeta;
 const SlotMetaWorkingSetEntry = shred_inserter.working_state.SlotMetaWorkingSetEntry;
-const WriteBatch = BlockstoreDB.WriteBatch;
+const WriteBatch = LedgerDB.WriteBatch;
 
 const deinitMapRecursive = shred_inserter.working_state.deinitMapRecursive;
 const isNewlyCompletedSlot = shred_inserter.working_state.isNewlyCompletedSlot;
@@ -21,7 +21,7 @@ const isNewlyCompletedSlot = shred_inserter.working_state.isNewlyCompletedSlot;
 /// agave: handle_chaining
 pub fn handleChaining(
     allocator: Allocator,
-    db: *BlockstoreDB,
+    db: *LedgerDB,
     write_batch: *WriteBatch,
     working_set: *AutoHashMap(u64, SlotMetaWorkingSetEntry),
 ) !void {
@@ -75,7 +75,7 @@ pub fn handleChaining(
 /// agave: handle_chaining_for_slot
 fn handleChainingForSlot(
     allocator: Allocator,
-    db: *BlockstoreDB,
+    db: *LedgerDB,
     write_batch: *WriteBatch,
     working_set: *AutoHashMap(u64, SlotMetaWorkingSetEntry),
     new_chained_slots: *AutoHashMap(u64, SlotMeta),
@@ -151,7 +151,7 @@ fn handleChainingForSlot(
 /// agave: find_slot_meta_else_create
 fn findSlotMetaElseCreate(
     allocator: Allocator,
-    db: *BlockstoreDB,
+    db: *LedgerDB,
     working_set: *const AutoHashMap(u64, SlotMetaWorkingSetEntry),
     chained_slots: *AutoHashMap(u64, SlotMeta),
     slot: Slot,
@@ -174,7 +174,7 @@ fn findSlotMetaElseCreate(
 /// `setParentConnected` to each.
 ///
 /// Arguments:
-/// `db`: the blockstore db that stores shreds and their metadata.
+/// `db`: the ledger db that stores shreds and their metadata.
 /// `slot_meta`: the SlotMeta of the above `slot`.
 /// `working_set`: a slot-id to SlotMetaWorkingSetEntry map which is used
 ///   to traverse the graph.
@@ -187,7 +187,7 @@ fn findSlotMetaElseCreate(
 /// agave: traverse_children_mut
 fn traverseChildrenMut(
     allocator: Allocator,
-    db: *BlockstoreDB,
+    db: *LedgerDB,
     slots: []const u64,
     working_set: *AutoHashMap(u64, SlotMetaWorkingSetEntry),
     passed_visited_slots: *AutoHashMap(u64, SlotMeta),

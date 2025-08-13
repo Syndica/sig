@@ -15,8 +15,8 @@ const AccountStore = sig.accounts_db.AccountStore;
 const AccountReader = sig.accounts_db.AccountReader;
 const SlotAccountReader = sig.accounts_db.account_store.SlotAccountReader;
 
-const BlockstoreDB = sig.ledger.BlockstoreDB;
-const BlockstoreReader = sig.ledger.BlockstoreReader;
+const LedgerDB = sig.ledger.LedgerDB;
+const LedgerReader = sig.ledger.LedgerReader;
 const LedgerResultWriter = sig.ledger.result_writer.LedgerResultWriter;
 
 const ProgressMap = sig.consensus.ProgressMap;
@@ -48,7 +48,7 @@ pub const ReplayDependencies = struct {
     /// Used in the EpochManager
     epoch_schedule: sig.core.EpochSchedule,
     /// Used to get the entries to validate them and execute the transactions
-    blockstore_reader: *BlockstoreReader,
+    ledger_reader: *LedgerReader,
     /// Used to update the ledger with consensus results
     ledger_result_writer: *LedgerResultWriter,
     account_store: AccountStore,
@@ -83,7 +83,7 @@ const ReplayState = struct {
     hard_forks: sig.core.HardForks,
     account_store: AccountStore,
     progress_map: *ProgressMap,
-    blockstore_db: BlockstoreDB,
+    ledger_db: LedgerDB,
     execution: ReplayExecutionState,
 
     fn init(deps: ReplayDependencies) !ReplayState {
@@ -134,7 +134,7 @@ const ReplayState = struct {
             .epochs = epoch_tracker,
             .hard_forks = deps.hard_forks,
             .account_store = deps.account_store,
-            .blockstore_db = deps.blockstore_reader.db,
+            .ledger_db = deps.ledger_reader.db,
             .progress_map = progress_map,
             .execution = try ReplayExecutionState.init(
                 deps.allocator,
@@ -142,7 +142,7 @@ const ReplayState = struct {
                 deps.my_identity,
                 thread_pool,
                 deps.account_store,
-                deps.blockstore_reader,
+                deps.ledger_reader,
                 slot_tracker,
                 epoch_tracker,
                 progress_map,
@@ -178,7 +178,7 @@ fn advanceReplay(state: *ReplayState) !void {
     try trackNewSlots(
         state.allocator,
         state.account_store,
-        &state.blockstore_db,
+        &state.ledger_db,
         state.slot_tracker,
         state.epochs,
         state.slot_leaders,
@@ -208,7 +208,7 @@ fn advanceReplay(state: *ReplayState) !void {
 fn trackNewSlots(
     allocator: Allocator,
     account_store: AccountStore,
-    blockstore_db: *BlockstoreDB,
+    ledger_db: *LedgerDB,
     slot_tracker: *SlotTracker,
     epoch_tracker: *EpochTracker,
     slot_leaders: SlotLeaders,
@@ -227,8 +227,8 @@ fn trackNewSlots(
         frozen_slots_since_root.appendAssumeCapacity(slot);
     };
 
-    var next_slots = try BlockstoreReader
-        .getSlotsSince(allocator, blockstore_db, frozen_slots_since_root.items);
+    var next_slots = try LedgerReader
+        .getSlotsSince(allocator, ledger_db, frozen_slots_since_root.items);
     defer {
         for (next_slots.values()) |*list| list.deinit(allocator);
         next_slots.deinit(allocator);
@@ -377,8 +377,8 @@ test trackNewSlots {
     const allocator = std.testing.allocator;
     var rng = std.Random.DefaultPrng.init(0);
 
-    var blockstore_db = try sig.ledger.tests.TestDB.init(@src());
-    defer blockstore_db.deinit();
+    var ledger_db = try sig.ledger.tests.TestDB.init(@src());
+    defer ledger_db.deinit();
     //     0
     //     1
     //    / \
@@ -399,7 +399,7 @@ test trackNewSlots {
         var meta = sig.ledger.meta.SlotMeta.init(allocator, slot, parent);
         defer meta.deinit();
         try meta.child_slots.appendSlice(children);
-        try blockstore_db.put(sig.ledger.schema.schema.slot_meta, slot, meta);
+        try ledger_db.put(sig.ledger.schema.schema.slot_meta, slot, meta);
     }
 
     var slot_tracker: SlotTracker = try .init(allocator, 0, .{
@@ -452,7 +452,7 @@ test trackNewSlots {
     try trackNewSlots(
         allocator,
         .noop,
-        &blockstore_db,
+        &ledger_db,
         &slot_tracker,
         &epoch_tracker,
         slot_leaders,
@@ -470,7 +470,7 @@ test trackNewSlots {
     try trackNewSlots(
         allocator,
         .noop,
-        &blockstore_db,
+        &ledger_db,
         &slot_tracker,
         &epoch_tracker,
         slot_leaders,
@@ -489,7 +489,7 @@ test trackNewSlots {
     try trackNewSlots(
         allocator,
         .noop,
-        &blockstore_db,
+        &ledger_db,
         &slot_tracker,
         &epoch_tracker,
         slot_leaders,
@@ -509,7 +509,7 @@ test trackNewSlots {
     try trackNewSlots(
         allocator,
         .noop,
-        &blockstore_db,
+        &ledger_db,
         &slot_tracker,
         &epoch_tracker,
         slot_leaders,
