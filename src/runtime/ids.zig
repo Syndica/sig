@@ -11,7 +11,7 @@ pub const NATIVE_LOADER_ID: Pubkey = .parse("NativeLoader11111111111111111111111
 // Deprecated - UNUSED
 pub const SYSVAR_REWARDS_ID: Pubkey = .parse("SysvarRewards111111111111111111111111111111");
 
-pub const CONFIG_PROGRAM_STAKE_CONFIG_ID: Pubkey =
+pub const STAKE_CONFIG_PROGRAM_ID: Pubkey =
     .parse("StakeConfig11111111111111111111111111111111");
 
 // Proposed - SIMD0072
