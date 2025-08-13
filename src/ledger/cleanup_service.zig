@@ -30,24 +30,22 @@ const DEFAULT_CLEANUP_SLOT_INTERVAL: u64 = 512;
 // a long wait incase a check occurs just before the interval has elapsed
 const LOOP_LIMITER = Duration.fromMillis(DEFAULT_CLEANUP_SLOT_INTERVAL * DEFAULT_MS_PER_SLOT / 10);
 
-// The identifier for the scoped logger used in this file.
-const LOG_SCOPE: []const u8 = "ledger.cleanup_service";
+pub const Logger = sig.trace.ScopedLogger("ledger.cleanup_service");
 
 pub fn run(
-    logger_: sig.trace.Logger,
+    logger: Logger,
     ledger_reader: *LedgerReader,
     db: *LedgerDB,
     lowest_cleanup_slot: *sig.sync.RwMux(Slot),
     max_ledger_shreds: u64,
     exit: *AtomicBool,
 ) !void {
-    const logger = logger_.withScope(LOG_SCOPE);
-    var last_purge_slot: Slot = 0;
-
     logger.info().log("Starting ledger cleanup service");
+
+    var last_purge_slot: Slot = 0;
     while (!exit.load(.acquire)) {
         last_purge_slot = try cleanLedger(
-            logger.unscoped(),
+            logger,
             ledger_reader,
             db,
             lowest_cleanup_slot,
@@ -55,7 +53,7 @@ pub fn run(
             last_purge_slot,
             DEFAULT_CLEANUP_SLOT_INTERVAL,
         );
-        std.time.sleep(LOOP_LIMITER.asNanos());
+        _ = sig.utils.thread.sleep(LOOP_LIMITER, .{ .signal = exit });
     }
 }
 
@@ -80,7 +78,7 @@ pub fn run(
 ///
 /// Analogous to the [`cleanup_ledger`](https://github.com/anza-xyz/agave/blob/6476d5fac0c30d1f49d13eae118b89be78fb15d2/ledger/src/blockstore_cleanup_service.rs#L198) in agave:
 pub fn cleanLedger(
-    logger_: sig.trace.Logger,
+    logger: Logger,
     ledger_reader: *LedgerReader,
     db: *LedgerDB,
     lowest_cleanup_slot: *sig.sync.RwMux(Slot),
@@ -88,8 +86,6 @@ pub fn cleanLedger(
     last_purge_slot: u64,
     purge_interval: u64,
 ) !Slot {
-    const logger = logger_.withScope(LOG_SCOPE);
-
     // // TODO: add back when max_root is implemented with consensus
     // const root = ledger_reader.max_root.load(.acquire);
 
@@ -426,7 +422,7 @@ test cleanLedger {
     try db.flush(ledger.schema.schema.data_shred);
 
     // run test subject
-    const slot = try cleanLedger(logger, &reader, &db, &lowest_cleanup_slot, 100, 0, 0);
+    const slot = try cleanLedger(.from(logger), &reader, &db, &lowest_cleanup_slot, 100, 0, 0);
     try std.testing.expectEqual(899, slot);
 
     // verify correct data was purged
@@ -585,4 +581,30 @@ test "purgeSlots" {
         const r = try db.get(allocator, schema.merkle_root_meta, .{ .slot = i, .erasure_set_index = i });
         try std.testing.expect(r != null);
     }
+}
+
+test "run exits promptly" {
+    const allocator = std.testing.allocator;
+    const logger = sig.trace.DirectPrintLogger.init(allocator, .warn).logger();
+    const registry = sig.prometheus.globalRegistry();
+    var db = try TestDB.init(@src());
+    defer db.deinit();
+    var lowest_cleanup_slot = sig.sync.RwMux(Slot).init(0);
+    var max_root = std.atomic.Value(Slot).init(0);
+    var reader = try LedgerReader
+        .init(allocator, logger, db, registry, &lowest_cleanup_slot, &max_root);
+
+    var exit = std.atomic.Value(bool).init(false);
+    var timer = try sig.time.Timer.start();
+
+    const thread = try std.Thread.spawn(
+        .{},
+        run,
+        .{ .noop, &reader, &db, &lowest_cleanup_slot, 0, &exit },
+    );
+    std.Thread.sleep(10 * std.time.ns_per_ms);
+    exit.store(true, .monotonic);
+    thread.join();
+
+    try std.testing.expect(timer.read().lt(.fromMillis(100)));
 }

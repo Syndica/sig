@@ -1113,7 +1113,7 @@ fn validator(
     );
 
     var cleanup_service_handle = try std.Thread.spawn(.{}, sig.ledger.cleanup_service.run, .{
-        app_base.logger.unscoped(),
+        sig.ledger.cleanup_service.Logger.from(app_base.logger),
         ledger_reader,
         &ledger_db,
         lowest_cleanup_slot,
@@ -1329,7 +1329,7 @@ fn shredNetwork(
     );
 
     var cleanup_service_handle = try std.Thread.spawn(.{}, sig.ledger.cleanup_service.run, .{
-        app_base.logger.unscoped(),
+        sig.ledger.cleanup_service.Logger.from(app_base.logger),
         ledger_reader,
         &ledger_db,
         lowest_cleanup_slot,

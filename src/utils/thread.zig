@@ -27,6 +27,34 @@ fn chunkSizeAndThreadCount(data_len: usize, max_n_threads: usize) struct { usize
     return .{ chunk_size, n_threads };
 }
 
+/// Returns after the duration completes or exit signal is set, indicating which
+/// was the cause of the return.
+pub fn sleep(
+    duration: sig.time.Duration,
+    exit: struct {
+        signal: ?*const std.atomic.Value(bool) = null,
+        poll_interval: sig.time.Duration = .fromMillis(10),
+    },
+) enum { time, signal } {
+    if (exit.signal == null) {
+        std.Thread.sleep(duration.asNanos());
+        return .time;
+    }
+
+    const signal = exit.signal.?;
+    const num_intervals = duration.asNanos() / exit.poll_interval.asNanos();
+    const remainder_nanos = duration.asNanos() % exit.poll_interval.asNanos();
+    for (0..num_intervals) |_| {
+        std.Thread.sleep(exit.poll_interval.asNanos());
+        if (signal.load(.monotonic)) {
+            return .signal;
+        }
+    }
+    std.Thread.sleep(remainder_nanos);
+
+    return .time;
+}
+
 pub fn SpawnThreadTasksParams(comptime TaskFn: type) type {
     return struct {
         data_len: usize,
