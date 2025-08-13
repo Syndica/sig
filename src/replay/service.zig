@@ -9,7 +9,6 @@ const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 const SlotLeaders = sig.core.leader_schedule.SlotLeaders;
 const SlotState = sig.core.bank.SlotState;
-const Ancestors = sig.core.Ancestors;
 
 const BlockstoreDB = sig.ledger.BlockstoreDB;
 const BlockstoreReader = sig.ledger.BlockstoreReader;
@@ -21,12 +20,11 @@ const AncestorDuplicateSlotToRepair = replay.edge_cases.AncestorDuplicateSlotToR
 const ThresholdConfirmedSlot = sig.consensus.vote_listener.ThresholdConfirmedSlot;
 const GossipVerifiedVoteHash = sig.consensus.vote_listener.GossipVerifiedVoteHash;
 const LatestValidatorVotes = sig.consensus.latest_validator_votes.LatestValidatorVotes;
+const SlotHistoryAccessor = sig.consensus.replay_tower.SlotHistoryAccessor;
 
 const ReplayExecutionState = replay.execution.ReplayExecutionState;
 const SlotTracker = replay.trackers.SlotTracker;
 const EpochTracker = replay.trackers.EpochTracker;
-
-const SlotHistory = sig.runtime.sysvar.SlotHistory;
 
 /// Number of threads to use in replay's thread pool
 const NUM_THREADS = 4;
@@ -69,42 +67,6 @@ pub const LedgerRef = struct {
     db: BlockstoreDB,
     reader: *sig.ledger.BlockstoreReader,
     writer: *sig.ledger.LedgerResultWriter,
-};
-
-pub const SlotHistoryAccessor = struct {
-    account_reader: sig.accounts_db.AccountReader,
-
-    pub fn init(account_reader: sig.accounts_db.AccountReader) SlotHistoryAccessor {
-        return .{
-            .account_reader = account_reader,
-        };
-    }
-
-    pub fn getSlotHistory(
-        self: SlotHistoryAccessor,
-        allocator: std.mem.Allocator,
-        ancestors: *const Ancestors,
-    ) !SlotHistory {
-        const maybe_account =
-            try self.account_reader.forSlot(ancestors).get(SlotHistory.ID);
-        const account: sig.core.Account = maybe_account orelse
-            return error.MissingSlotHistoryAccount;
-
-        var data_iter = account.data.iterator();
-        const slot_history = try sig.bincode.read(
-            allocator,
-            SlotHistory,
-            data_iter.reader(),
-            .{},
-        );
-        errdefer slot_history.deinit(allocator);
-
-        if (data_iter.bytesRemaining() != 0) {
-            return error.TrailingBytesInSlotHistory;
-        }
-
-        return slot_history;
-    }
 };
 
 pub const Senders = struct {

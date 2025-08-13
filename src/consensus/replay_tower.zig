@@ -4,8 +4,9 @@ const sig = @import("../sig.zig");
 const AutoArrayHashMapUnmanaged = std.AutoArrayHashMapUnmanaged;
 
 const BlockTimestamp = sig.runtime.program.vote.state.BlockTimestamp;
-const Hash = sig.core.Hash;
 const Lockout = sig.runtime.program.vote.state.Lockout;
+const Ancestors = sig.core.Ancestors;
+const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 const Epoch = sig.core.Epoch;
@@ -117,6 +118,42 @@ pub const SelectVoteAndResetForkResult = struct {
     },
     reset_slot: ?Slot,
     heaviest_fork_failures: std.ArrayListUnmanaged(HeaviestForkFailures),
+};
+
+pub const SlotHistoryAccessor = struct {
+    account_reader: sig.accounts_db.AccountReader,
+
+    pub fn init(account_reader: sig.accounts_db.AccountReader) SlotHistoryAccessor {
+        return .{
+            .account_reader = account_reader,
+        };
+    }
+
+    pub fn getSlotHistory(
+        self: SlotHistoryAccessor,
+        allocator: std.mem.Allocator,
+        ancestors: *const Ancestors,
+    ) !SlotHistory {
+        const maybe_account =
+            try self.account_reader.forSlot(ancestors).get(SlotHistory.ID);
+        const account: sig.core.Account = maybe_account orelse
+            return error.MissingSlotHistoryAccount;
+
+        var data_iter = account.data.iterator();
+        const slot_history = try sig.bincode.read(
+            allocator,
+            SlotHistory,
+            data_iter.reader(),
+            .{},
+        );
+        errdefer slot_history.deinit(allocator);
+
+        if (data_iter.bytesRemaining() != 0) {
+            return error.TrailingBytesInSlotHistory;
+        }
+
+        return slot_history;
+    }
 };
 
 // TODO Come up with a better name?
@@ -1351,7 +1388,7 @@ pub const ReplayTower = struct {
         latest_validator_votes: *const LatestValidatorVotes,
         fork_choice: *const HeaviestSubtreeForkChoice,
         epoch_stakes: *const EpochStakesMap,
-        slot_history_accessor: *const sig.replay.service.SlotHistoryAccessor,
+        slot_history_accessor: *const SlotHistoryAccessor,
     ) !SelectVoteAndResetForkResult {
         // Initialize result with failure list
         var failure_reasons: std.ArrayListUnmanaged(HeaviestForkFailures) = .empty;

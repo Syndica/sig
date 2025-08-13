@@ -21,8 +21,7 @@ const Transaction = sig.core.transaction.Transaction;
 const LedgerReader = sig.ledger.LedgerReader;
 const LedgerResultWriter = sig.ledger.result_writer.LedgerResultWriter;
 
-const SlotHistoryAccessor = sig.replay.service.SlotHistoryAccessor;
-
+const SlotHistoryAccessor = sig.consensus.replay_tower.SlotHistoryAccessor;
 const ReplayTower = sig.consensus.replay_tower.ReplayTower;
 const ProgressMap = sig.consensus.progress_map.ProgressMap;
 const ForkChoice = sig.consensus.fork_choice.ForkChoice;
