@@ -40,17 +40,16 @@ pub const map: std.EnumArray(Feature, Pubkey) = map: {
 ///
 /// [agave] https://github.com/anza-xyz/agave/blob/8db563d3bba4d03edf0eb2737fba87f394c32b64/sdk/feature-set/src/lib.rs#L1188
 pub const Set = struct {
-    array: std.EnumArray(Feature, Slot),
+    array: std.EnumArray(Feature, ?Slot),
 
-    const TERMINATOR = std.math.maxInt(Slot);
-    pub const ALL_DISABLED: Set = .{ .array = .initFill(TERMINATOR) };
+    pub const ALL_DISABLED: Set = .{ .array = .initFill(null) };
     pub const ALL_ENABLED_AT_GENESIS: Set = .{ .array = .initFill(0) };
 
-    /// Check whether `feature` is enabled at or before the provided slot. The `slot` cannot be
-    /// `TERMINATOR`, since that's used to indicate a disabled slot.
+    /// Check whether `feature` is enabled at or before the provided slot.
     pub fn active(self: Set, feature: Feature, slot: Slot) bool {
-        std.debug.assert(slot != TERMINATOR);
-        return slot >= self.array.get(feature);
+        if (self.array.get(feature)) |activated|
+            return slot >= activated;
+        return false;
     }
 
     /// Gets the activation slot for a feature, if one has been set.
@@ -101,7 +100,7 @@ pub const Set = struct {
     }
 
     pub fn disable(self: *Set, feature: Feature) void {
-        self.array.set(feature, TERMINATOR);
+        self.array.set(feature, null);
     }
 
     const FullInflationFeatures = struct {
