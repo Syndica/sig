@@ -634,6 +634,41 @@ test "cacheTowerStats - missing slot" {
     try testing.expectError(error.MissingSlot, result);
 }
 
+test "cacheTowerStats - success sets flags and empty thresholds" {
+    var prng = std.Random.DefaultPrng.init(93);
+    const random = prng.random();
+
+    const root = SlotAndHash{ .slot = 0, .hash = Hash.initRandom(random) };
+
+    var fixture = try TestFixture.init(testing.allocator, root);
+    defer fixture.deinit(testing.allocator);
+
+    // Ensure slot exists in progress and ancestors are populated for the root
+    const trees = try std.BoundedArray(TreeNode, MAX_TEST_TREE_LEN).init(0);
+    try fixture.fillFork(
+        testing.allocator,
+        .{ .root = root, .data = trees },
+        .active,
+    );
+
+    var replay_tower = try createTestReplayTower(10, 0.67);
+    defer replay_tower.deinit(std.testing.allocator);
+
+    try cacheTowerStats(
+        testing.allocator,
+        &fixture.progress,
+        &replay_tower,
+        root.slot,
+        &fixture.ancestors,
+    );
+
+    const stats = fixture.progress.getForkStats(root.slot).?;
+    try testing.expectEqual(@as(usize, 0), stats.vote_threshold.items.len);
+    try testing.expectEqual(false, stats.is_locked_out);
+    try testing.expectEqual(false, stats.has_voted);
+    try testing.expectEqual(true, stats.is_recent);
+}
+
 test "maybeRefreshLastVote - no heaviest slot on same fork" {
     var prng = std.Random.DefaultPrng.init(91);
     const random = prng.random();
