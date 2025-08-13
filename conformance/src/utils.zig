@@ -373,12 +373,20 @@ pub fn createSysvarCache(
             ctx,
             sysvar.RecentBlockhashes.ID,
         )) |recent_blockhashes_data| {
-            sysvar_cache.recent_blockhashes_obj = sig.bincode.readFromSlice(
+            const maybe_entries = sig.bincode.readFromSlice(
                 allocator,
-                sysvar.RecentBlockhashes,
+                []sysvar.RecentBlockhashes.Entry,
                 recent_blockhashes_data,
                 .{},
             ) catch null;
+
+            if (maybe_entries) |entries| {
+                const start = entries.len -| sysvar.RecentBlockhashes.MAX_ENTRIES;
+                sysvar_cache.recent_blockhashes_obj = try sysvar.RecentBlockhashes.init(allocator);
+                sysvar_cache.recent_blockhashes_obj.?.entries.appendSliceAssumeCapacity(
+                    entries[start..entries.len],
+                );
+            }
         }
     }
     return sysvar_cache;
