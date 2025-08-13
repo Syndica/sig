@@ -50,8 +50,8 @@
             .hash = "secp256k1-0.5.0-2oLmGRAHAACjbp4BBLAoCU6Sotb_gqChbYOIIvBejN0V",
         },
         .tracy = .{
-            .url = "git+https://github.com/Sobeston/zig-tracy#097d8496ab7ddaa5f554841a0e70ad67d2bd7e78",
-            .hash = "zig_tracy-0.12.2-4TLLRwhjAACLxeZ1j2agzhWoAZQTus3-REDfLxe9eI9I",
+            .url = "git+https://github.com/Sobeston/zig-tracy#6dc171d492307e133dab3ea25a51f49914cd43ec",
+            .hash = "zig_tracy-0.12.2-4TLLRwhjAACZ5oQoOU26JhHKbLLZoUmd-73M2UfDniTZ",
         },
     },
 }

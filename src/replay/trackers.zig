@@ -1,5 +1,6 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
+const tracy = @import("tracy");
 
 const Allocator = std.mem.Allocator;
 
@@ -51,6 +52,8 @@ pub const SlotTracker = struct {
             .slots = .empty,
         };
         try self.put(allocator, root_slot, slot_init);
+        tracy.plot(u32, "slots tracked", @intCast(self.slots.count()));
+
         return self;
     }
 
@@ -70,6 +73,8 @@ pub const SlotTracker = struct {
         slot: Slot,
         slot_init: Element,
     ) Allocator.Error!void {
+        defer tracy.plot(u32, "slots tracked", @intCast(self.slots.count()));
+
         try self.slots.ensureUnusedCapacity(allocator, 1);
         const elem = try allocator.create(Element);
         elem.* = slot_init;
@@ -92,6 +97,8 @@ pub const SlotTracker = struct {
         slot: Slot,
         slot_init: Element,
     ) Allocator.Error!GetOrPutResult {
+        defer tracy.plot(u32, "slots tracked", @intCast(self.slots.count()));
+
         if (self.get(slot)) |existing| return .{
             .found_existing = true,
             .reference = existing,
@@ -171,6 +178,8 @@ pub const SlotTracker = struct {
     //  TODO Revisit: Currently this removes all slots less than the rooted slot.
     // In Agave, only the slots not in the root path are removed.
     pub fn pruneNonRooted(self: *SlotTracker, allocator: Allocator) void {
+        defer tracy.plot(u32, "slots tracked", @intCast(self.slots.count()));
+
         var slice = self.slots.entries.slice();
         var index: usize = 0;
         while (index < slice.len) {
