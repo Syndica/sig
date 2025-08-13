@@ -3049,6 +3049,157 @@ test "stake.get_minimum_delegation" {
     );
 }
 
+test "stake.move_stake" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+
+    const stake_entry = sysvar.StakeHistory.Entry{
+        .epoch = 42,
+        .stake = .{
+            .activating = 100,
+            .deactivating = 100,
+            .effective = 100,
+        },
+    };
+
+    var sysvar_cache = sig.runtime.testing.ExecuteContextsParams.SysvarCacheParams{
+        .clock = runtime.sysvar.Clock{
+            .epoch = stake_entry.epoch,
+            .epoch_start_timestamp = 0,
+            .leader_schedule_epoch = 0,
+            .unix_timestamp = 0,
+            .slot = 0,
+        },
+        .slot_hashes = try runtime.sysvar.SlotHashes.initWithEntries(
+            allocator,
+            &.{.{ .slot = std.math.maxInt(Slot), .hash = sig.core.Hash.ZEROES }},
+        ),
+        .stake_history = try sysvar.StakeHistory.initWithEntries(allocator, &.{
+            stake_entry,
+        }),
+        .rent = runtime.sysvar.Rent.DEFAULT,
+        .epoch_rewards = .DEFAULT,
+        .epoch_schedule = .initRandom(prng.random()),
+    };
+
+    // Hacky duplicate to avoid slot_hashes & stake_history double free from storing same ref.
+    var expected_sysvar_cache = sysvar_cache;
+    expected_sysvar_cache.stake_history = try sysvar.StakeHistory.initWithEntries(allocator, &.{
+        stake_entry,
+    });
+    expected_sysvar_cache.slot_hashes = try runtime.sysvar.SlotHashes.initWithEntries(
+        allocator,
+        &.{.{ .slot = std.math.maxInt(Slot), .hash = sig.core.Hash.ZEROES }},
+    );
+
+    const stake_rent = sysvar_cache.rent.?.minimumBalance(StakeStateV2.SIZE);
+    const src_lamports = stake_rent * 100;
+    const dst_lamports = stake_rent * 50;
+    const to_move = stake_rent * 5;
+
+    const dst_account = Pubkey.initRandom(prng.random());
+    const src_account = Pubkey.initRandom(prng.random());
+    const stake_auth = Pubkey.initRandom(prng.random());
+
+    const stake_meta = StakeStateV2.Meta{
+        .authorized = .{
+            .staker = stake_auth,
+            .withdrawer = Pubkey.ZEROES,
+        },
+        .lockup = .DEFAULT,
+        .rent_exempt_reserve = stake_rent,
+    };
+
+    const stake = @TypeOf(@as(StakeStateV2, undefined).stake){
+        .meta = stake_meta,
+        .stake = .{
+            .credits_observed = 0,
+            .delegation = .{
+                .activation_epoch = stake_entry.epoch - 1,
+                .deactivation_epoch = std.math.maxInt(u64),
+                .stake = to_move,
+                .voter_pubkey = stake_auth,
+            },
+        },
+        .flags = .EMPTY,
+    };
+
+    var src_buf: [StakeStateV2.SIZE]u8 = @splat(0);
+    _ = try sig.bincode.writeToSlice(&src_buf, StakeStateV2{
+        .stake = stake,
+    }, .{});
+
+    var src_buf_after: [StakeStateV2.SIZE]u8 = src_buf;
+    _ = try sig.bincode.writeToSlice(&src_buf_after, StakeStateV2{
+        .initialized = stake_meta,
+    }, .{});
+
+    var dst_buf: [StakeStateV2.SIZE]u8 = @splat(0);
+    _ = try sig.bincode.writeToSlice(&dst_buf, StakeStateV2{
+        .initialized = stake_meta,
+    }, .{});
+
+    var dst_buf_after: [StakeStateV2.SIZE]u8 = @splat(0);
+    _ = try sig.bincode.writeToSlice(&dst_buf_after, StakeStateV2{
+        .stake = stake,
+    }, .{});
+
+    try runtime.program.testing.expectProgramExecuteResult(
+        allocator,
+        ID,
+        Instruction{ .move_stake = to_move },
+        &.{
+            .{ .index_in_transaction = 0, .is_writable = true },
+            .{ .index_in_transaction = 1, .is_writable = true },
+            .{ .index_in_transaction = 2, .is_signer = true },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = src_account,
+                    .owner = ID,
+                    .data = &src_buf,
+                    .lamports = src_lamports,
+                },
+                .{
+                    .pubkey = dst_account,
+                    .owner = ID,
+                    .data = &dst_buf,
+                    .lamports = dst_lamports,
+                },
+                .{ .pubkey = stake_auth },
+                .{ .pubkey = ID, .owner = runtime.ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = 10_000,
+            .sysvar_cache = sysvar_cache,
+            .feature_set = &.{
+                .{ .feature = .move_stake_and_move_lamports_ixs },
+            },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = src_account,
+                    .owner = ID,
+                    .data = &src_buf_after,
+                    .lamports = src_lamports - to_move,
+                },
+                .{
+                    .pubkey = dst_account,
+                    .owner = ID,
+                    .data = &dst_buf_after,
+                    .lamports = dst_lamports + to_move,
+                },
+                .{ .pubkey = stake_auth },
+                .{ .pubkey = ID, .owner = runtime.ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = 10_000 - COMPUTE_UNITS,
+            .sysvar_cache = expected_sysvar_cache,
+        },
+        .{},
+    );
+}
+
 test "stake.move_lamports" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
