@@ -45,11 +45,10 @@ pub fn sleep(
     const num_intervals = duration.asNanos() / exit.poll_interval.asNanos();
     const remainder_nanos = duration.asNanos() % exit.poll_interval.asNanos();
     for (0..num_intervals) |_| {
+        if (signal.load(.monotonic)) return .signal;
         std.Thread.sleep(exit.poll_interval.asNanos());
-        if (signal.load(.monotonic)) {
-            return .signal;
-        }
     }
+    if (signal.load(.monotonic)) return .signal;
     std.Thread.sleep(remainder_nanos);
 
     return .time;
@@ -406,4 +405,18 @@ test "typed thread pool" {
     try std.testing.expect(2 == results[0]);
     try std.testing.expect(3 == results[1]);
     try std.testing.expect(5 == results[2]);
+}
+
+test sleep {
+    var timer = try sig.time.Timer.start();
+    try std.testing.expectEqual(.time, sleep(.fromMillis(12), .{}));
+    try std.testing.expect(timer.lap().gt(.fromMillis(11)));
+
+    var exit = std.atomic.Value(bool).init(false);
+    try std.testing.expectEqual(.time, sleep(.fromMillis(12), .{ .signal = &exit }));
+    try std.testing.expect(timer.lap().gt(.fromMillis(11)));
+
+    exit.store(true, .monotonic);
+    try std.testing.expectEqual(.signal, sleep(.fromMillis(12), .{ .signal = &exit }));
+    try std.testing.expect(timer.lap().lt(.fromMillis(11)));
 }
