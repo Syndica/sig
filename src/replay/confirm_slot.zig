@@ -1,6 +1,7 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 const replay = @import("lib.zig");
+const tracy = @import("tracy");
 
 const core = sig.core;
 
@@ -52,6 +53,11 @@ pub fn confirmSlot(
     verify_ticks_params: VerifyTicksParams,
     ancestors: *const Ancestors,
 ) !*ConfirmSlotFuture {
+    var zone = tracy.Zone.init(@src(), .{ .name = "confirmSlot" });
+    zone.value(svm_params.slot);
+    defer zone.deinit();
+    errdefer zone.color(0xFF0000);
+
     logger.info().log("confirming slot");
 
     const future = fut: {
