@@ -66,6 +66,10 @@ pub const TransactionContext = struct {
     /// Used by syscall.allocFree to implement sbrk bump allocation
     bpf_alloc_pos: u64 = 0,
 
+    /// Instruction datas used when executing precompiles in the SVM
+    /// Only set if a precompile is present and the move precompiles to svm feature is enabled
+    instruction_datas: ?[]const []const u8 = null,
+
     instruction_stack: InstructionStack = .{},
     instruction_trace: InstructionTrace = .{},
     top_level_instruction_index: u16 = 0,

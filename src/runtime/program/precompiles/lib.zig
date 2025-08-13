@@ -128,6 +128,16 @@ pub const PrecompileProgramError = error{
     InvalidInstructionDataSize,
 };
 
+pub fn intFromPrecompileProgramError(err: PrecompileProgramError) u32 {
+    return switch (err) {
+        error.InvalidPublicKey => 0,
+        error.InvalidRecoveryId => 1,
+        error.InvalidSignature => 2,
+        error.InvalidDataOffsets => 3,
+        error.InvalidInstructionDataSize => 4,
+    };
+}
+
 test "verify ed25519" {
     {
         const actual = try verifyPrecompiles(

@@ -407,6 +407,10 @@ pub const Message = struct {
         sig.runtime.program.zk_elgamal.ID,
         sig.runtime.ids.ZK_TOKEN_PROOF_PROGRAM_ID,
 
+        sig.runtime.program.precompiles.ed25519.ID,
+        sig.runtime.program.precompiles.secp256k1.ID,
+        sig.runtime.program.precompiles.secp256r1.ID,
+
         // sysvars
         sig.runtime.sysvar.Clock.ID,
         sig.runtime.sysvar.EpochSchedule.ID,
