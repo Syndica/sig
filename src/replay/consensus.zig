@@ -26,8 +26,7 @@ const SlotHistory = sig.runtime.sysvar.SlotHistory;
 const ReplayTower = sig.consensus.replay_tower.ReplayTower;
 const ProgressMap = sig.consensus.progress_map.ProgressMap;
 const ForkChoice = sig.consensus.fork_choice.ForkChoice;
-const LatestValidatorVotesForFrozenBanks =
-    sig.consensus.latest_validator_votes.LatestValidatorVotes;
+const LatestValidatorVotes = sig.consensus.latest_validator_votes.LatestValidatorVotes;
 
 const SlotTracker = sig.replay.trackers.SlotTracker;
 const EpochTracker = sig.replay.trackers.EpochTracker;
@@ -51,7 +50,8 @@ pub const ConsensusDependencies = struct {
     descendants: *const std.AutoArrayHashMapUnmanaged(u64, SortedSet(u64)),
     vote_account: Pubkey,
     slot_history: *const SlotHistory,
-    latest_validator_votes_for_frozen_banks: *LatestValidatorVotesForFrozenBanks,
+    epoch_stakes: EpochStakesMap,
+    latest_validator_votes_for_frozen_banks: *LatestValidatorVotes,
 };
 
 pub fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
@@ -481,7 +481,7 @@ fn computeBankStats(
     progress: *ProgressMap,
     fork_choice: *ForkChoice,
     replay_tower: *const ReplayTower,
-    latest_validator_votes: *LatestValidatorVotesForFrozenBanks,
+    latest_validator_votes: *LatestValidatorVotes,
 ) ![]Slot {
     var new_stats = std.ArrayListUnmanaged(Slot).empty;
     errdefer new_stats.deinit(allocator);
@@ -1203,9 +1203,11 @@ test "checkAndHandleNewRoot - missing slot" {
 
     const constants = try SlotConstants.genesis(testing.allocator, .initRandom(random));
     defer constants.deinit(testing.allocator);
+    var state = try SlotState.genesis(testing.allocator);
+    defer state.deinit(testing.allocator);
     try slot_tracker.put(testing.allocator, root.slot, .{
         .constants = constants,
-        .state = .GENESIS,
+        .state = state,
     });
 
     const logger = .noop;
@@ -1253,20 +1255,18 @@ test "checkAndHandleNewRoot - missing hash" {
     defer fixture.deinit(testing.allocator);
 
     var slot_tracker: SlotTracker = SlotTracker{ .root = root.slot, .slots = .{} };
-    defer {
-        var it = slot_tracker.slots.iterator();
-        while (it.next()) |entry| {
-            testing.allocator.destroy(entry.value_ptr.*);
-        }
-        slot_tracker.slots.deinit(testing.allocator);
-    }
+    defer slot_tracker.deinit(testing.allocator);
 
-    const constants = try SlotConstants.genesis(testing.allocator, .initRandom(random));
-    defer constants.deinit(testing.allocator);
-    try slot_tracker.put(testing.allocator, root.slot, .{
-        .constants = constants,
-        .state = .GENESIS,
-    });
+    {
+        const constants = try SlotConstants.genesis(testing.allocator, .initRandom(random));
+        errdefer constants.deinit(testing.allocator);
+        var state = try SlotState.genesis(testing.allocator);
+        errdefer state.deinit(testing.allocator);
+        try slot_tracker.put(testing.allocator, root.slot, .{
+            .constants = constants,
+            .state = state,
+        });
+    }
 
     const logger = .noop;
     var registry = sig.prometheus.Registry(.{}).init(testing.allocator);
@@ -1370,32 +1370,30 @@ test "checkAndHandleNewRoot - success" {
     defer fixture.deinit(testing.allocator);
 
     var slot_tracker: SlotTracker = SlotTracker{ .root = root.slot, .slots = .{} };
-    defer {
-        var it = slot_tracker.slots.iterator();
-        while (it.next()) |entry| {
-            testing.allocator.destroy(entry.value_ptr.*);
-        }
-        slot_tracker.slots.deinit(testing.allocator);
-    }
+    defer slot_tracker.deinit(testing.allocator);
 
-    var constants2 = try SlotConstants.genesis(testing.allocator, .initRandom(random));
-    defer constants2.deinit(testing.allocator);
-    var constants3 = try SlotConstants.genesis(testing.allocator, .initRandom(random));
-    defer constants3.deinit(testing.allocator);
-    var state2 = SlotState.GENESIS;
-    var state3 = SlotState.GENESIS;
-    constants2.parent_slot = hash1.slot;
-    constants3.parent_slot = hash2.slot;
-    state2.hash = .init(hash2.hash);
-    state3.hash = .init(hash3.hash);
-    try slot_tracker.put(testing.allocator, hash2.slot, .{
-        .constants = constants2,
-        .state = state2,
-    });
-    try slot_tracker.put(testing.allocator, hash3.slot, .{
-        .constants = constants3,
-        .state = state3,
-    });
+    {
+        var constants2 = try SlotConstants.genesis(testing.allocator, .initRandom(random));
+        errdefer constants2.deinit(testing.allocator);
+        var constants3 = try SlotConstants.genesis(testing.allocator, .initRandom(random));
+        errdefer constants3.deinit(testing.allocator);
+        var state2 = try SlotState.genesis(testing.allocator);
+        errdefer state2.deinit(testing.allocator);
+        var state3 = try SlotState.genesis(testing.allocator);
+        errdefer state3.deinit(testing.allocator);
+        constants2.parent_slot = hash1.slot;
+        constants3.parent_slot = hash2.slot;
+        state2.hash = .init(hash2.hash);
+        state3.hash = .init(hash3.hash);
+        try slot_tracker.put(testing.allocator, hash2.slot, .{
+            .constants = constants2,
+            .state = state2,
+        });
+        try slot_tracker.put(testing.allocator, hash3.slot, .{
+            .constants = constants3,
+            .state = state3,
+        });
+    }
 
     // Add some entries to progress map that should be removed
     var trees1 = try std.BoundedArray(TreeNode, MAX_TEST_TREE_LEN).init(0);

@@ -21,6 +21,8 @@ const ConfirmSlotFuture = replay.confirm_slot.ConfirmSlotFuture;
 const EpochTracker = replay.trackers.EpochTracker;
 const SlotTracker = replay.trackers.SlotTracker;
 
+const SvmGateway = replay.svm_gateway.SvmGateway;
+
 const confirmSlot = replay.confirm_slot.confirmSlot;
 
 /// State used for replaying and validating data from blockstore/accountsdb/svm
@@ -63,7 +65,7 @@ pub const ReplayExecutionState = struct {
             .slot_tracker = slot_tracker,
             .epochs = epochs,
             .progress_map = progress_map,
-            .status_cache = .default(),
+            .status_cache = .DEFAULT,
         };
     }
 };
@@ -131,6 +133,9 @@ pub fn replayActiveSlots(state: *ReplayExecutionState) !bool {
 }
 
 const ReplaySlotStatus = union(enum) {
+    /// We have no entries available to verify for this slot. No work was done.
+    empty,
+
     /// The slot was previously marked as dead (not this time), which means we
     /// don't need to do anything. see here that agave also does nothing:
     /// - [replay_active_bank](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/core/src/replay_stage.rs#L3005-L3007)
@@ -211,21 +216,73 @@ fn replaySlot(state: *ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
     // out more usages of this struct.
     const confirmation_progress = &fork_progress.replay_progress.arc_ed.rwlock_ed;
 
-    const entries, const num_shreds, const slot_is_full =
-        try state.blockstore_reader.getSlotEntriesWithShredInfo(
-            state.allocator,
-            slot,
-            confirmation_progress.num_shreds,
-            false,
-        );
-    errdefer {
-        for (entries) |entry| entry.deinit(state.allocator);
-        state.allocator.free(entries);
-    }
+    const entries, const slot_is_full = blk: {
+        const entries, const num_shreds, const slot_is_full =
+            try state.blockstore_reader.getSlotEntriesWithShredInfo(
+                state.allocator,
+                slot,
+                confirmation_progress.num_shreds,
+                false,
+            );
+        errdefer {
+            for (entries) |entry| entry.deinit(state.allocator);
+            state.allocator.free(entries);
+        }
+        state.logger.info().logf("got {} entries for slot {}", .{ entries.len, slot });
 
-    confirmation_progress.num_shreds += num_shreds;
-    confirmation_progress.num_entries += entries.len;
-    for (entries) |e| confirmation_progress.num_txs += e.transactions.len;
+        if (entries.len == 0) {
+            return .empty;
+        }
+
+        confirmation_progress.num_shreds += num_shreds;
+        confirmation_progress.num_entries += entries.len;
+        for (entries) |e| confirmation_progress.num_txs += e.transactions.len;
+
+        break :blk .{ entries, slot_is_full };
+    };
+
+    const new_rate_activation_epoch =
+        if (slot_info.constants.feature_set.get(.reduce_stake_warmup_cooldown)) |active_slot|
+            state.epochs.schedule.getEpoch(active_slot)
+        else
+            null;
+
+    const svm_params = SvmGateway.Params{
+        .slot = slot,
+        .max_age = sig.core.BlockhashQueue.MAX_RECENT_BLOCKHASHES / 2,
+        .lamports_per_signature = slot_info.constants.fee_rate_governor.lamports_per_signature,
+        .blockhash_queue = &slot_info.state.blockhash_queue,
+        .account_reader = state.account_store.reader().forSlot(&slot_info.constants.ancestors),
+        .ancestors = &slot_info.constants.ancestors,
+        .feature_set = slot_info.constants.feature_set,
+        .rent_collector = &epoch_info.rent_collector,
+        .epoch_stakes = &epoch_info.stakes,
+        .status_cache = &state.status_cache,
+    };
+
+    const committer = replay.commit.Committer{
+        .logger = .from(state.logger),
+        .account_store = state.account_store,
+        .slot_state = slot_info.state,
+        .status_cache = &state.status_cache,
+        .stakes_cache = &slot_info.state.stakes_cache,
+        .new_rate_activation_epoch = new_rate_activation_epoch,
+    };
+
+    const verify_ticks_params = replay.confirm_slot.VerifyTicksParams{
+        .tick_height = slot_info.state.tickHeight(),
+        .max_tick_height = slot_info.constants.max_tick_height,
+        .hashes_per_tick = epoch_info.hashes_per_tick,
+        .slot = slot,
+        .slot_is_full = slot_is_full,
+        .tick_hash_count = &confirmation_progress.tick_hash_count,
+    };
+
+    var num_ticks: u64 = 0;
+    for (entries) |entry| {
+        if (entry.isTick()) num_ticks += 1;
+    }
+    _ = slot_info.state.tick_height.fetchAdd(num_ticks, .monotonic);
 
     return .{ .confirm = try confirmSlot(
         state.allocator,
@@ -234,14 +291,9 @@ fn replaySlot(state: *ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
         state.thread_pool,
         entries,
         confirmation_progress.last_entry,
-        .{
-            .tick_height = slot_info.state.tickHeight(),
-            .max_tick_height = slot_info.constants.max_tick_height,
-            .hashes_per_tick = epoch_info.hashes_per_tick,
-            .slot = slot,
-            .slot_is_full = slot_is_full,
-            .tick_hash_count = &confirmation_progress.tick_hash_count,
-        },
+        svm_params,
+        committer,
+        verify_ticks_params,
         &slot_info.constants.ancestors,
     ) };
 }

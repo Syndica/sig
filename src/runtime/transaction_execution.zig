@@ -57,14 +57,14 @@ pub const RuntimeTransaction = struct {
     fee_payer: Pubkey,
     msg_hash: Hash,
     recent_blockhash: Hash,
-    instruction_infos: []const InstructionInfo,
+    instructions: []const InstructionInfo,
     accounts: std.MultiArrayList(AccountMeta) = .{},
 };
 
 pub const TransactionExecutionEnvironment = struct {
     ancestors: *const Ancestors,
     feature_set: *const FeatureSet,
-    status_cache: *const StatusCache,
+    status_cache: *StatusCache,
     sysvar_cache: *const SysvarCache,
     rent_collector: *const RentCollector,
     blockhash_queue: *const BlockhashQueue,
@@ -91,7 +91,7 @@ pub const TransactionExecutionConfig = struct {
 pub const TransactionRollbacks = union(enum(u8)) {
     fee_payer_only: CopiedAccount,
     same_nonce_and_fee_payer: CopiedAccount,
-    separate_nonce_and_fee_payer: struct { CopiedAccount, CopiedAccount },
+    separate_nonce_and_fee_payer: [2]CopiedAccount,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -121,14 +121,19 @@ pub const TransactionRollbacks = union(enum(u8)) {
         }
     }
 
+    pub fn accounts(self: *const TransactionRollbacks) []const CopiedAccount {
+        return switch (self.*) {
+            .fee_payer_only, .same_nonce_and_fee_payer => |*item| item[0..1],
+            .separate_nonce_and_fee_payer => |*items| items,
+        };
+    }
+
     pub fn deinit(self: TransactionRollbacks, allocator: std.mem.Allocator) void {
         switch (self) {
             .fee_payer_only => |fee_payer_account| allocator.free(fee_payer_account.account.data),
             .same_nonce_and_fee_payer => |account| allocator.free(account.account.data),
-            .separate_nonce_and_fee_payer => |accounts| {
-                const nonce, const fee_payer = accounts;
-                allocator.free(nonce.account.data);
-                allocator.free(fee_payer.account.data);
+            .separate_nonce_and_fee_payer => |both_accounts| for (both_accounts) |account| {
+                allocator.free(account.account.data);
             },
         }
     }
@@ -175,6 +180,10 @@ pub const CopiedAccount = struct {
             },
         };
     }
+
+    pub fn getAccount(self: *const CopiedAccount) *const AccountSharedData {
+        return &self.account;
+    }
 };
 
 pub const ExecutedTransaction = struct {
@@ -214,6 +223,26 @@ pub const ProcessedTransaction = union(enum(u8)) {
                 fees_only.rollbacks.deinit(allocator);
             },
         }
+    }
+
+    pub const Accounts = union(enum) {
+        /// *all* of the accounts that were loaded for this transaction, in the
+        /// same order that they were present in the transaction.
+        all_loaded: []const CachedAccount,
+        /// *only* the accounts that definitely need to be written back to
+        /// accountsdb, in no particular order.
+        written: []const CopiedAccount,
+    };
+
+    pub fn accounts(self: *const ProcessedTransaction) Accounts {
+        return switch (self.*) {
+            .fees_only => |f| .{ .written = f.rollbacks.accounts() },
+            .executed => |e| if (e.executed_transaction.instr_err != null) .{
+                .written = e.rollbacks.accounts(),
+            } else .{
+                .all_loaded = e.loaded_accounts.accounts.slice(),
+            },
+        };
     }
 
     /// Analogous to [executed_units](https://github.com/anza-xyz/agave/blob/10fe1eb29aac9c236fd72d08ae60a3ef61ee8353/svm/src/transaction_processing_result.rs#L91).
@@ -319,7 +348,7 @@ pub fn loadAndExecuteTransaction(
 
     // TODO: Should the compute budget program require the feature set?
     const compute_budget_result = compute_budget_program.execute(
-        transaction.instruction_infos,
+        transaction.instructions,
         environment.feature_set,
         environment.slot,
     );
@@ -476,7 +505,7 @@ pub fn executeTransaction(
     };
 
     const maybe_instruction_error: ?struct { u8, InstructionErrorEnum } =
-        for (transaction.instruction_infos, 0..) |instruction_info, index| {
+        for (transaction.instructions, 0..) |instruction_info, index| {
             executor.executeInstruction(
                 allocator,
                 &tc,
@@ -517,8 +546,8 @@ test "loadAndExecuteTransactions: no transactions" {
     var batch_account_cache: account_loader.BatchAccountCache = .{};
 
     const ancestors: Ancestors = .{};
-    const feature_set: FeatureSet = .ALL_DISABLED;
-    const status_cache = StatusCache.default();
+    const feature_set: FeatureSet = FeatureSet.ALL_DISABLED;
+    var status_cache = StatusCache.DEFAULT;
     const sysvar_cache: SysvarCache = .{};
     const rent_collector: RentCollector = sig.core.rent_collector.defaultCollector(10);
     const blockhash_queue: BlockhashQueue = try BlockhashQueue.initRandom(
@@ -582,7 +611,7 @@ test "loadAndExecuteTransactions: invalid compute budget instruction" {
         .fee_payer = Pubkey.ZEROES,
         .msg_hash = Hash.ZEROES,
         .recent_blockhash = recent_blockhash,
-        .instruction_infos = &.{.{
+        .instructions = &.{.{
             .program_meta = .{
                 .pubkey = sig.runtime.program.compute_budget.ID,
                 .index_in_transaction = 0,
@@ -605,6 +634,8 @@ test "loadAndExecuteTransactions: invalid compute budget instruction" {
     const epoch_stakes = try EpochStakes.initEmptyWithGenesisStakeHistoryEntry(allocator);
     defer epoch_stakes.deinit(allocator);
 
+    var status_cache = StatusCache.DEFAULT;
+
     const results = try loadAndExecuteTransactions(
         allocator,
         &.{transaction},
@@ -612,7 +643,7 @@ test "loadAndExecuteTransactions: invalid compute budget instruction" {
         &.{
             .ancestors = &Ancestors{},
             .feature_set = &FeatureSet.ALL_DISABLED,
-            .status_cache = &StatusCache.default(),
+            .status_cache = &status_cache,
             .sysvar_cache = &SysvarCache{},
             .rent_collector = &sig.core.rent_collector.defaultCollector(10),
             .vm_environment = &vm.Environment{},
@@ -688,7 +719,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
         .fee_payer = sender_key,
         .msg_hash = Hash.initRandom(prng.random()),
         .recent_blockhash = recent_blockhash,
-        .instruction_infos = &.{.{
+        .instructions = &.{.{
             .program_meta = .{
                 .pubkey = sig.runtime.program.system.ID,
                 .index_in_transaction = 2,
@@ -757,7 +788,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
 
     const feature_set: FeatureSet = .ALL_ENABLED_AT_GENESIS;
 
-    var status_cache = StatusCache.default();
+    var status_cache = StatusCache.DEFAULT;
     defer status_cache.deinit(allocator);
 
     const sysvar_cache: SysvarCache = .{};

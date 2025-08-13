@@ -1756,7 +1756,7 @@ pub fn lastVotedSlotInBank(
     accounts_db: *AccountsDB,
     vote_account_pubkey: *const Pubkey,
 ) !?Slot {
-    const vote_account = accounts_db.getAccount(vote_account_pubkey) catch return null;
+    const vote_account = try accounts_db.getAccountLatest(vote_account_pubkey) orelse return null;
     const vote_state = stateFromAccount(
         allocator,
         &vote_account,
@@ -4115,7 +4115,7 @@ pub const TestFixture = struct {
             var constants = try sig.core.SlotConstants.genesis(allocator, .DEFAULT);
             errdefer constants.deinit(allocator);
 
-            var state = sig.core.SlotState.GENESIS;
+            var state = try sig.core.SlotState.genesis(allocator);
             errdefer state.deinit(allocator);
 
             constants.parent_slot = root.slot -| 1;
@@ -4241,7 +4241,7 @@ pub const TestFixture = struct {
                 var constants = try sig.core.SlotConstants.genesis(allocator, .DEFAULT);
                 errdefer constants.deinit(allocator);
 
-                var state = sig.core.SlotState.GENESIS;
+                var state = try sig.core.SlotState.genesis(allocator);
                 errdefer state.deinit(allocator);
 
                 constants.parent_slot = parent_slot;

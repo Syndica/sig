@@ -41,7 +41,6 @@ const FeeRateGovernor = core.genesis_config.FeeRateGovernor;
 const Inflation = core.genesis_config.Inflation;
 
 const Ancestors = sig.core.Ancestors;
-const EpochStakes = core.EpochStakes;
 const EpochStakesMap = core.EpochStakesMap;
 const Stakes = core.Stakes;
 
@@ -175,29 +174,37 @@ pub const SlotState = struct {
     /// The value is only meaningful after freezing.
     accounts_lt_hash: sig.sync.Mux(?LtHash),
 
+    stakes_cache: sig.core.StakesCache,
+
     /// 50% burned, 50% paid to leader
     collected_transaction_fees: Atomic(u64),
 
     /// 100% paid to leader
     collected_priority_fees: Atomic(u64),
 
-    pub const GENESIS = SlotState{
-        .blockhash_queue = .init(.DEFAULT),
-        .hash = .init(null),
-        .capitalization = .init(0),
-        .transaction_count = .init(0),
-        .signature_count = .init(0),
-        .tick_height = .init(0),
-        .collected_rent = .init(0),
-        .accounts_lt_hash = .init(.IDENTITY),
-        .collected_transaction_fees = .init(0),
-        .collected_priority_fees = .init(0),
-    };
-
     pub fn deinit(self: *SlotState, allocator: Allocator) void {
-        var blockhash_queue = self.blockhash_queue.write();
+        self.stakes_cache.deinit(allocator);
+
+        var blockhash_queue = self.blockhash_queue.tryWrite() orelse
+            @panic("attempted to deinit SlotState.blockhash_queue while still in use");
         defer blockhash_queue.unlock();
         blockhash_queue.get().deinit(allocator);
+    }
+
+    pub fn genesis(allocator: Allocator) Allocator.Error!SlotState {
+        return .{
+            .blockhash_queue = .init(.DEFAULT),
+            .hash = .init(null),
+            .capitalization = .init(0),
+            .transaction_count = .init(0),
+            .signature_count = .init(0),
+            .tick_height = .init(0),
+            .collected_rent = .init(0),
+            .accounts_lt_hash = .init(.IDENTITY),
+            .stakes_cache = try .init(allocator),
+            .collected_transaction_fees = .init(0),
+            .collected_priority_fees = .init(0),
+        };
     }
 
     pub fn fromBankFields(
@@ -206,6 +213,9 @@ pub const SlotState = struct {
     ) Allocator.Error!SlotState {
         const blockhash_queue = try bank_fields.blockhash_queue.clone(allocator);
         errdefer blockhash_queue.deinit(allocator);
+
+        const stakes = try bank_fields.stakes.clone(allocator);
+        errdefer stakes.deinit(allocator);
 
         return .{
             .blockhash_queue = .init(blockhash_queue),
@@ -216,6 +226,7 @@ pub const SlotState = struct {
             .tick_height = .init(bank_fields.tick_height),
             .collected_rent = .init(bank_fields.collected_rent),
             .accounts_lt_hash = .init(LtHash{ .data = @splat(0xBAD1) }),
+            .stakes_cache = .{ .stakes = .init(stakes) },
             .collected_transaction_fees = .init(0),
             .collected_priority_fees = .init(0),
         };
@@ -230,6 +241,13 @@ pub const SlotState = struct {
         };
         errdefer blockhash_queue.deinit(allocator);
 
+        const stakes = foo: {
+            var cache = parent.stakes_cache.stakes.read();
+            defer cache.unlock();
+            break :foo try cache.get().clone(allocator);
+        };
+        errdefer stakes.deinit(allocator);
+
         return .{
             .blockhash_queue = .init(blockhash_queue),
             .hash = .init(null),
@@ -239,6 +257,7 @@ pub const SlotState = struct {
             .tick_height = .init(parent.tick_height.load(.monotonic)),
             .collected_rent = .init(0),
             .accounts_lt_hash = .init(parent.accounts_lt_hash.readCopy()),
+            .stakes_cache = .{ .stakes = .init(stakes) },
             .collected_transaction_fees = .init(0),
             .collected_priority_fees = .init(0),
         };
@@ -278,7 +297,7 @@ pub const EpochConstants = struct {
     slots_per_year: f64,
 
     /// The pre-determined stakes assigned to this epoch.
-    stakes: EpochStakes,
+    stakes: sig.core.EpochStakes,
 
     rent_collector: RentCollector,
 
@@ -301,14 +320,17 @@ pub const EpochConstants = struct {
         };
     }
 
-    pub fn fromBankFields(bank_fields: *const BankFields) Allocator.Error!EpochConstants {
+    pub fn fromBankFields(
+        bank_fields: *const BankFields,
+        epoch_stakes: sig.core.EpochStakes,
+    ) Allocator.Error!EpochConstants {
         return .{
             .hashes_per_tick = bank_fields.hashes_per_tick,
             .ticks_per_slot = bank_fields.ticks_per_slot,
             .ns_per_slot = bank_fields.ns_per_slot,
             .genesis_creation_time = bank_fields.genesis_creation_time,
             .slots_per_year = bank_fields.slots_per_year,
-            .stakes = bank_fields.epoch_stakes,
+            .stakes = epoch_stakes,
             .rent_collector = bank_fields.rent_collector,
         };
     }
@@ -461,42 +483,6 @@ pub const BankFields = struct {
         return years * SECONDS_PER_YEAR *
             (1_000_000_000.0 / @as(f64, @floatFromInt(tick_duration_ns))) /
             @as(f64, @floatFromInt(ticks_per_slot));
-    }
-
-    pub fn getStakedNodes(
-        self: *const BankFields,
-        epoch: Epoch,
-    ) !*const std.AutoArrayHashMapUnmanaged(Pubkey, u64) {
-        const epoch_stakes = self.epoch_stakes.getPtr(epoch) orelse return error.NoEpochStakes;
-        return &epoch_stakes.stakes.vote_accounts.staked_nodes;
-    }
-
-    /// Returns the leader schedule for this bank's epoch
-    pub fn leaderSchedule(
-        self: *const BankFields,
-        allocator: std.mem.Allocator,
-    ) !core.leader_schedule.LeaderSchedule {
-        return self.leaderScheduleForEpoch(allocator, self.epoch);
-    }
-
-    /// Returns the leader schedule for an arbitrary epoch.
-    /// Only works if the bank is aware of the staked nodes for that epoch.
-    pub fn leaderScheduleForEpoch(
-        self: *const BankFields,
-        allocator: std.mem.Allocator,
-        epoch: Epoch,
-    ) !core.leader_schedule.LeaderSchedule {
-        const slots_in_epoch = self.epoch_schedule.getSlotsInEpoch(self.epoch);
-        const staked_nodes = try self.getStakedNodes(epoch);
-        return .{
-            .allocator = allocator,
-            .slot_leaders = try core.leader_schedule.LeaderSchedule.fromStakedNodes(
-                allocator,
-                epoch,
-                slots_in_epoch,
-                staked_nodes,
-            ),
-        };
     }
 
     pub fn initRandom(

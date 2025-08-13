@@ -106,6 +106,8 @@ pub const AccountsDB = struct {
     snapshot_metadata_only: bool = false,
     /// maximum number of snapshot download attempts before failing
     max_number_of_snapshot_download_attempts: u64 = 1_000,
+    /// skip the validation of the snapshot
+    skip_snapshot_validation: bool = false,
 };
 
 pub const Gossip = struct {

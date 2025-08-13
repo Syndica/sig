@@ -174,7 +174,10 @@ pub const SlotTracker = struct {
         var index: usize = 0;
         while (index < slice.len) {
             if (slice.items(.key)[index] < self.root) {
-                allocator.destroy(slice.items(.value)[index]);
+                const element = slice.items(.value)[index];
+                element.state.deinit(allocator);
+                element.constants.deinit(allocator);
+                allocator.destroy(element);
                 self.slots.swapRemoveAt(index);
                 slice = self.slots.entries.slice();
             } else {
@@ -224,18 +227,20 @@ test "SlotTracker.prune removes all slots less than root" {
     const root_slot: Slot = 4;
     var tracker: SlotTracker = try .init(allocator, root_slot, .{
         .constants = testDummySlotConstants(root_slot),
-        .state = .GENESIS,
+        .state = try .genesis(allocator),
     });
     defer tracker.deinit(allocator);
 
     // Add slots 1, 2, 3, 4, 5
     for (1..6) |slot| {
+        var state = try SlotState.genesis(allocator);
         const gop = try tracker.getOrPut(allocator, slot, .{
             .constants = testDummySlotConstants(slot),
-            .state = .GENESIS,
+            .state = state,
         });
         if (gop.found_existing) {
             std.debug.assert(slot == root_slot);
+            state.deinit(allocator);
         }
     }
 
