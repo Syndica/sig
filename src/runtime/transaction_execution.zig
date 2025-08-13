@@ -751,8 +751,6 @@ test "loadAndExecuteTransactions: invalid compute budget instruction" {
     const epoch_stakes = try EpochStakes.initEmptyWithGenesisStakeHistoryEntry(allocator);
     defer epoch_stakes.deinit(allocator);
 
-    var status_cache = StatusCache.DEFAULT;
-
     const results = try loadAndExecuteTransactions(
         allocator,
         &.{transaction},

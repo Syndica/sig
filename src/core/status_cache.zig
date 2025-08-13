@@ -38,11 +38,11 @@ pub const StatusCache = struct {
 
     const MAX_CACHE_ENTRIES = sig.accounts_db.snapshots.MAX_RECENT_BLOCKHASHES;
 
-    pub const empty: StatusCache = .{
-        .cache = .empty,
-        .roots = .empty,
-        .slot_deltas = .empty,
-        .min_root = null,
+    pub const DEFAULT = StatusCache{
+        .cache = .init(.empty),
+        .roots = .init(.empty),
+        .slot_deltas = .init(.empty),
+        .min_root = .init(std.math.maxInt(Slot)),
     };
 
     pub fn deinit(self: *StatusCache, allocator: std.mem.Allocator) void {

@@ -2,6 +2,7 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 const replay = @import("lib.zig");
 
+const Allocator = std.mem.Allocator;
 const collections = sig.utils.collections;
 
 const Hash = sig.core.Hash;

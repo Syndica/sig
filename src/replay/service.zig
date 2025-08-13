@@ -10,7 +10,7 @@ const Slot = sig.core.Slot;
 const SlotLeaders = sig.core.leader_schedule.SlotLeaders;
 const SlotState = sig.core.bank.SlotState;
 const Ancestors = sig.core.Ancestors;
-
+const AccountReader = sig.accounts_db.AccountReader;
 const BlockstoreDB = sig.ledger.BlockstoreDB;
 const BlockstoreReader = sig.ledger.BlockstoreReader;
 
@@ -26,6 +26,8 @@ const SlotHistoryAccessor = sig.consensus.replay_tower.SlotHistoryAccessor;
 const ReplayExecutionState = replay.execution.ReplayExecutionState;
 const SlotTracker = replay.trackers.SlotTracker;
 const EpochTracker = replay.trackers.EpochTracker;
+
+const updateSysvarsForNewSlot = replay.update_sysvar.updateSysvarsForNewSlot;
 
 /// Number of threads to use in replay's thread pool
 const NUM_THREADS = 4;
