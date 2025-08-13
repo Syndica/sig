@@ -552,6 +552,7 @@ fn cacheTowerStats(
         &stats.voted_stakes,
         stats.total_stake,
     );
+    defer allocator.free(slice);
     stats.vote_threshold = try VoteThreshold.initCapacity(allocator, slice.len);
     try stats.vote_threshold.appendSlice(allocator, slice);
 
@@ -664,6 +665,46 @@ test "cacheTowerStats - success sets flags and empty thresholds" {
 
     const stats = fixture.progress.getForkStats(root.slot).?;
     try testing.expectEqual(@as(usize, 0), stats.vote_threshold.items.len);
+    try testing.expectEqual(false, stats.is_locked_out);
+    try testing.expectEqual(false, stats.has_voted);
+    try testing.expectEqual(true, stats.is_recent);
+}
+
+test "cacheTowerStats - records failed threshold at depth 0" {
+    var prng = std.Random.DefaultPrng.init(94);
+    const random = prng.random();
+
+    const root = SlotAndHash{ .slot = 0, .hash = Hash.initRandom(random) };
+
+    var fixture = try TestFixture.init(testing.allocator, root);
+    defer fixture.deinit(testing.allocator);
+
+    // Ensure slot exists in progress and ancestors populated
+    const trees = try std.BoundedArray(TreeNode, MAX_TEST_TREE_LEN).init(0);
+    try fixture.fillFork(
+        testing.allocator,
+        .{ .root = root, .data = trees },
+        .active,
+    );
+
+    // Configure threshold_depth = 0 so the new vote is checked at depth 0,
+    // and leave voted_stakes empty so the threshold check fails.
+    var replay_tower = try createTestReplayTower(0, 0.67);
+    defer replay_tower.deinit(std.testing.allocator);
+
+    try cacheTowerStats(
+        testing.allocator,
+        &fixture.progress,
+        &replay_tower,
+        root.slot,
+        &fixture.ancestors,
+    );
+
+    const stats = fixture.progress.getForkStats(root.slot).?;
+    try testing.expectEqual(@as(usize, 1), stats.vote_threshold.items.len);
+    const t = stats.vote_threshold.items[0];
+    try testing.expect(t == .failed_threshold);
+    try testing.expectEqual(@as(u64, 0), t.failed_threshold.vote_depth);
     try testing.expectEqual(false, stats.is_locked_out);
     try testing.expectEqual(false, stats.has_voted);
     try testing.expectEqual(true, stats.is_recent);
