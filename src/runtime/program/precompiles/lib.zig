@@ -5,9 +5,13 @@ pub const ed25519 = @import("ed25519.zig");
 pub const secp256k1 = @import("secp256k1.zig");
 pub const secp256r1 = @import("secp256r1.zig");
 
+const Slot = sig.core.Slot;
+const FeatureSet = sig.core.FeatureSet;
+const Feature = sig.core.features.Feature;
 const Pubkey = sig.core.Pubkey;
 const Ed25519 = std.crypto.sign.Ed25519;
 const TransactionInstruction = sig.core.transaction.Instruction;
+const TransactionError = sig.ledger.transaction_status.TransactionError;
 
 /// https://github.com/anza-xyz/agave/blob/df063a8c6483ad1d2bbbba50ab0b7fd7290eb7f4/cost-model/src/block_cost_limits.rs#L15
 /// Cluster averaged compute unit to micro-sec conversion rate
@@ -67,8 +71,6 @@ pub fn verifyPrecompilesComputeCost(
         n_ed25519_instruction_signatures *| ED25519_VERIFY_COST;
 }
 
-const TransactionError = sig.ledger.transaction_status.TransactionError;
-
 pub fn verifyPrecompiles(
     allocator: std.mem.Allocator,
     transaction: sig.core.Transaction,
@@ -95,11 +97,11 @@ pub fn verifyPrecompiles(
                 break :blk buf;
             };
 
-            precompile.function(instruction.data, datas) catch {
-                return .{
-                    // TODO: Map verify error to int for custom error
-                    .InstructionError = .{ @intCast(index), .{ .Custom = 0 } },
-                };
+            precompile.function(instruction.data, datas, feature_set, slot) catch |err| {
+                return .{ .InstructionError = .{
+                    @intCast(index),
+                    .{ .Custom = intFromPrecompileProgramError(err) },
+                } };
             };
         }
     }
@@ -110,16 +112,16 @@ pub fn verifyPrecompiles(
 pub const PrecompileFn = fn (
     current_instruction_data: []const u8,
     all_instruction_datas: []const []const u8,
+    feature_set: *const FeatureSet,
+    slot: Slot,
 ) PrecompileProgramError!void;
 
 pub const Precompile = struct {
     program_id: Pubkey,
     function: *const PrecompileFn,
-    required_feature: ?sig.core.features.Feature,
+    required_feature: ?Feature,
 };
 
-// custom errors
-// https://github.com/anza-xyz/agave/blob/a8aef04122068ec36a7af0721e36ee58efa0bef2/sdk/precompile-error/src/lib.rs#L6
 pub const PrecompileProgramError = error{
     InvalidPublicKey,
     InvalidRecoveryId,
@@ -176,7 +178,7 @@ test "verify ed25519" {
             0,
         );
         try std.testing.expectEqual(
-            TransactionError{ .InstructionError = .{ 0, .{ .Custom = 0 } } },
+            TransactionError{ .InstructionError = .{ 0, .{ .Custom = 4 } } },
             actual,
         );
     }
@@ -279,7 +281,7 @@ test "verify secp256k1" {
         0,
     );
     try std.testing.expectEqual(
-        TransactionError{ .InstructionError = .{ 0, .{ .Custom = 0 } } },
+        TransactionError{ .InstructionError = .{ 0, .{ .Custom = 4 } } },
         actual,
     );
 }

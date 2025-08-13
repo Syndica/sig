@@ -3,6 +3,7 @@ const builtin = @import("builtin");
 const sig = @import("../../../sig.zig");
 
 const Pubkey = sig.core.Pubkey;
+const FeatureSet = sig.core.FeatureSet;
 const InstructionError = sig.core.instruction.InstructionError;
 const InstructionContext = sig.runtime.InstructionContext;
 const PrecompileProgramError = sig.runtime.program.precompiles.PrecompileProgramError;
@@ -56,6 +57,8 @@ pub fn execute(_: std.mem.Allocator, ic: *InstructionContext) InstructionError!v
 pub fn verify(
     current_instruction_data: []const u8,
     all_instruction_datas: []const []const u8,
+    feature_set: *const FeatureSet,
+    slot: Slot,
 ) PrecompileProgramError!void {
     const data = current_instruction_data;
     if (data.len < ED25519_DATA_START) {
@@ -97,8 +100,22 @@ pub fn verify(
             sig_offsets.message_instruction_idx,
             sig_offsets.message_data_offset,
         );
-        signature.verify(msg, pubkey.*) catch return error.InvalidSignature;
+
+        if (feature_set.active(.ed25519_precompile_verify_strict, slot))
+            verifyStrict(signature, pubkey, msg) catch return error.InvalidSignature
+        else
+            signature.verify(msg, pubkey.*) catch return error.InvalidSignature;
     }
+}
+
+fn verifyStrict(
+    signature: *const Ed25519.Signature,
+    pubkey: *const Ed25519.PublicKey,
+    msg: []const u8,
+) !void {
+    try (try Ed25519.Curve.fromBytes(signature.s)).rejectLowOrder();
+    try (try Ed25519.Curve.fromBytes(pubkey.bytes)).rejectLowOrder();
+    try signature.verify(msg, pubkey.*);
 }
 
 // https://github.com/anza-xyz/agave/blob/a8aef04122068ec36a7af0721e36ee58efa0bef2/sdk/src/ed25519_instruction.rs#L163
@@ -196,7 +213,8 @@ fn testCase(
     @memcpy(instruction_data[0..2], std.mem.asBytes(&num_signatures));
     @memcpy(instruction_data[2..], std.mem.asBytes(&offsets));
 
-    return try verify(&instruction_data, &.{&(.{0} ** 100)});
+    try verify(&instruction_data, &.{&(.{0} ** 100)}, &.ALL_DISABLED, 0);
+    try verify(&instruction_data, &.{&(.{0} ** 100)}, &.ALL_ENABLED_AT_GENESIS, 0);
 }
 
 test "execute" {
@@ -244,7 +262,7 @@ test "ed25519 invalid offsets" {
     try instruction_data.resize(instruction_data.items.len - 1);
 
     try std.testing.expectEqual(
-        verify(instruction_data.items, &.{}),
+        verify(instruction_data.items, &.{}, &.ALL_DISABLED, 0),
         error.InvalidInstructionDataSize,
     );
 
