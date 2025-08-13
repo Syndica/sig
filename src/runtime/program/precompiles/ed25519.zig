@@ -101,10 +101,14 @@ pub fn verify(
             sig_offsets.message_data_offset,
         );
 
-        if (feature_set.active(.ed25519_precompile_verify_strict, slot))
-            verifyStrict(signature, pubkey, msg) catch return error.InvalidSignature
-        else
-            signature.verify(msg, pubkey.*) catch return error.InvalidSignature;
+        std.debug.print("Verifying Signature:\n\tpubkey={any}\n\tsignature={any}\n\tmsg={any}\n", .{ pubkey.toBytes(), signature.toBytes(), msg });
+        signature.verify(msg, pubkey.*) catch std.debug.print("verify failed\n", .{});
+        verifyStrict(signature, pubkey, msg) catch std.debug.print("verify strict failed\n", .{});
+        std.debug.print("\n", .{});
+
+        if (feature_set.active(.ed25519_precompile_verify_strict, slot)) {
+            verifyStrict(signature, pubkey, msg) catch return error.InvalidSignature;
+        } else signature.verify(msg, pubkey.*) catch return error.InvalidSignature;
     }
 }
 
@@ -113,8 +117,8 @@ fn verifyStrict(
     pubkey: *const Ed25519.PublicKey,
     msg: []const u8,
 ) !void {
-    try (try Ed25519.Curve.fromBytes(signature.s)).rejectLowOrder();
-    try (try Ed25519.Curve.fromBytes(pubkey.bytes)).rejectLowOrder();
+    // TODO: signature.s.is_small_order
+    // TODO: pubkey.is_small_order
     try signature.verify(msg, pubkey.*);
 }
 

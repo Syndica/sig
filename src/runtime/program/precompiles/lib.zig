@@ -97,10 +97,10 @@ pub fn verifyPrecompiles(
                 break :blk buf;
             };
 
-            precompile.function(instruction.data, datas, feature_set, slot) catch |err| {
+            precompile.function(instruction.data, datas, feature_set, slot) catch {
                 return .{ .InstructionError = .{
                     @intCast(index),
-                    .{ .Custom = intFromPrecompileProgramError(err) },
+                    .{ .Custom = 0 },
                 } };
             };
         }
