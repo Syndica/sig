@@ -85,26 +85,24 @@ pub const SlotHistoryAccessor = struct {
         allocator: std.mem.Allocator,
         ancestors: *const Ancestors,
     ) !SlotHistory {
-        const slot_history: SlotHistory = sh: {
-            const maybe_account = try self.account_reader.forSlot(ancestors).get(SlotHistory.ID);
-            const account: sig.core.Account = maybe_account orelse
-                return error.MissingSlotHistoryAccount;
+        const maybe_account =
+            try self.account_reader.forSlot(ancestors).get(SlotHistory.ID);
+        const account: sig.core.Account = maybe_account orelse
+            return error.MissingSlotHistoryAccount;
 
-            var data_iter = account.data.iterator();
-            const slot_history = try sig.bincode.read(
-                allocator,
-                SlotHistory,
-                data_iter.reader(),
-                .{},
-            );
-            errdefer slot_history.deinit(allocator);
+        var data_iter = account.data.iterator();
+        const slot_history = try sig.bincode.read(
+            allocator,
+            SlotHistory,
+            data_iter.reader(),
+            .{},
+        );
+        errdefer slot_history.deinit(allocator);
 
-            if (data_iter.bytesRemaining() != 0) {
-                return error.TrailingBytesInSlotHistory;
-            }
+        if (data_iter.bytesRemaining() != 0) {
+            return error.TrailingBytesInSlotHistory;
+        }
 
-            break :sh slot_history;
-        };
         return slot_history;
     }
 };
@@ -481,25 +479,6 @@ fn advanceReplay(state: *ReplayState) !void {
             try descendants_gop.value_ptr.put(arena, slot);
         }
     }
-
-    // const slot_history: SlotHistory = sh: {
-    //     const account_reader = state.account_store.reader();
-
-    //     const maybe_account = try account_reader.getLatest(SlotHistory.ID); // TODO: do we need to scope this with `forSlot` or anything?
-    //     const account = maybe_account orelse return error.MissingSlotHistoryAccount;
-    //     defer account.deinit(account_reader.allocator());
-
-    //     var data_iter = account.data.iterator();
-    //     const slot_history = try sig.bincode.read(arena, SlotHistory, data_iter.reader(), .{});
-    //     errdefer slot_history.deinit(arena);
-
-    //     if (data_iter.bytesRemaining() != 0) {
-    //         return error.TrailingBytesInSlotHistory;
-    //     }
-
-    //     break :sh slot_history;
-    // };
-    // defer slot_history.deinit(arena);
 
     const slot_history_accessor = SlotHistoryAccessor
         .init(state.account_store.reader());
