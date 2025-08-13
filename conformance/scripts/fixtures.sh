@@ -49,8 +49,8 @@ PASSING_DIRS=(
     "instr/fixtures/bpf-loader-v2-programs"
     "instr/fixtures/bpf-loader-v3"
 
-    # Passed: 0, Failed: 6934, Skipped: 0 (unimplemented)
-    # "instr/fixtures/stake"
+    # Passed: 6934, Failed: 0, Skipped: 0
+    "instr/fixtures/stake"
 
     # Passed: 7750, Failed: 5, Skipped: 0
     # "instr/fixtures/vote"
