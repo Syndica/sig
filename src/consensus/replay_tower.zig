@@ -814,7 +814,7 @@ pub const ReplayTower = struct {
         slot: Slot,
         voted_stakes: *const VotedStakes,
         total_stake: Stake,
-    ) ![]const ThresholdDecision {
+    ) ![]ThresholdDecision {
         const threshold_size = 3;
         var threshold_decisions: [threshold_size]ThresholdDecision = undefined;
 

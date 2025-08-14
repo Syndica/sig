@@ -552,9 +552,7 @@ fn cacheTowerStats(
         &stats.voted_stakes,
         stats.total_stake,
     );
-    defer allocator.free(slice);
-    stats.vote_threshold = try VoteThreshold.initCapacity(allocator, slice.len);
-    try stats.vote_threshold.appendSlice(allocator, slice);
+    stats.vote_threshold = VoteThreshold.fromOwnedSlice(slice);
 
     const slot_ancestors = ancestors.get(slot) orelse return error.MissingAncestor;
 
