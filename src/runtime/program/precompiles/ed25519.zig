@@ -47,8 +47,7 @@ pub fn execute(_: std.mem.Allocator, ic: *InstructionContext) InstructionError!v
     const instruction_data = ic.ixn_info.instruction_data;
     const instruction_datas = ic.tc.instruction_datas.?;
 
-    verify(instruction_data, instruction_datas) catch |err| {
-        ic.tc.custom_error = precompile_programs.intFromPrecompileProgramError(err);
+    verify(instruction_data, instruction_datas) catch {
         return error.Custom;
     };
 }
