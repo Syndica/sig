@@ -4,6 +4,8 @@ const replay = @import("lib.zig");
 
 const core = sig.core;
 
+const Allocator = std.mem.Allocator;
+
 const ThreadPool = sig.sync.ThreadPool;
 
 const Pubkey = core.Pubkey;
@@ -25,7 +27,7 @@ const confirmSlot = replay.confirm_slot.confirmSlot;
 
 /// State used for replaying and validating data from ledger/accountsdb/svm
 pub const ReplayExecutionState = struct {
-    allocator: std.mem.Allocator,
+    allocator: Allocator,
     logger: sig.trace.ScopedLogger("replay-execution"),
     my_identity: Pubkey,
     vote_account: ?Pubkey,
@@ -37,14 +39,42 @@ pub const ReplayExecutionState = struct {
     slot_tracker: *SlotTracker,
     epochs: *EpochTracker,
     progress_map: *ProgressMap,
-    status_cache: *sig.core.StatusCache,
+
+    // owned
+    status_cache: sig.core.StatusCache,
+
+    pub fn init(
+        allocator: Allocator,
+        logger: sig.trace.Logger,
+        my_identity: Pubkey,
+        thread_pool: *ThreadPool,
+        account_store: AccountStore,
+        ledger_reader: *LedgerReader,
+        slot_tracker: *SlotTracker,
+        epochs: *EpochTracker,
+        progress_map: *ProgressMap,
+    ) Allocator.Error!ReplayExecutionState {
+        return .{
+            .allocator = allocator,
+            .logger = .from(logger),
+            .my_identity = my_identity,
+            .vote_account = null, // voting not currently supported
+            .account_store = account_store,
+            .thread_pool = thread_pool,
+            .ledger_reader = ledger_reader,
+            .slot_tracker = slot_tracker,
+            .epochs = epochs,
+            .progress_map = progress_map,
+            .status_cache = .DEFAULT,
+        };
+    }
 };
 
 /// 1. Replays transactions from all the slots that need to be replayed.
 /// 2. Store the replay results into the relevant data structures.
 ///
 /// Analogous to [replay_active_banks](https://github.com/anza-xyz/agave/blob/3f68568060fd06f2d561ad79e8d8eb5c5136815a/core/src/replay_stage.rs#L3356)
-pub fn replayActiveSlots(state: ReplayExecutionState) !bool {
+pub fn replayActiveSlots(state: *ReplayExecutionState) !bool {
     const active_slots = try state.slot_tracker.activeSlots(state.allocator);
     defer state.allocator.free(active_slots);
     state.logger.info().logf("{} active slots to replay", .{active_slots.len});
@@ -145,7 +175,7 @@ const ReplaySlotStatus = union(enum) {
 /// - [replay_active_bank](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/core/src/replay_stage.rs#L2979)
 /// - [replay_blockstore_into_bank](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/core/src/replay_stage.rs#L2232)
 /// - [confirm_slot](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/ledger/src/blockstore_processor.rs#L1494)
-fn replaySlot(state: ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
+fn replaySlot(state: *ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
     const progress_get_or_put = try state.progress_map.map.getOrPut(state.allocator, slot);
     if (progress_get_or_put.found_existing and progress_get_or_put.value_ptr.is_dead) {
         return .dead;

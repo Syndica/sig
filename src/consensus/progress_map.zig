@@ -1297,7 +1297,12 @@ test "ForkProgress.init" {
         .state = &slot_state,
     };
 
-    const epoch_consts: sig.core.EpochConstants = try .fromBankFields(allocator, &bank_data);
+    const epoch_consts: sig.core.EpochConstants = try .fromBankFields(
+        &bank_data,
+        try (bank_data.epoch_stakes.get(bank_data.epoch) orelse
+            @panic("epoch stakes for bank_data.epoch not found"))
+            .convert(allocator, .delegation),
+    );
     defer epoch_consts.deinit(allocator);
 
     const vsi: ValidatorStakeInfo = .{

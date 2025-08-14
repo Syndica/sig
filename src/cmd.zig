@@ -1068,8 +1068,8 @@ fn validator(
         try leader_schedule_cache.put(bank_fields.epoch, schedule);
     }
 
-    // blockstore
-    var ledger_db = try sig.ledger.BlockstoreDB.open(
+    // ledger
+    var ledger_db = try sig.ledger.LedgerDB.open(
         allocator,
         app_base.logger.unscoped(),
         sig.VALIDATOR_DIR ++ "ledger",
@@ -1090,9 +1090,9 @@ fn validator(
     max_root.* = std.atomic.Value(sig.core.Slot).init(0);
     defer allocator.destroy(max_root);
 
-    const ledger_reader = try allocator.create(BlockstoreReader);
+    const ledger_reader = try allocator.create(LedgerReader);
     defer allocator.destroy(ledger_reader);
-    ledger_reader.* = try BlockstoreReader.init(
+    ledger_reader.* = try LedgerReader.init(
         allocator,
         app_base.logger.unscoped(),
         ledger_db,
@@ -1101,9 +1101,9 @@ fn validator(
         max_root,
     );
 
-    const ledger_writer = try allocator.create(LedgerResultWriter);
-    defer allocator.destroy(ledger_writer);
-    ledger_writer.* = try .init(
+    const ledger_result_writer = try allocator.create(LedgerResultWriter);
+    defer allocator.destroy(ledger_result_writer);
+    ledger_result_writer.* = try LedgerResultWriter.init(
         allocator,
         app_base.logger.unscoped(),
         ledger_db,
@@ -1113,7 +1113,7 @@ fn validator(
     );
 
     var cleanup_service_handle = try std.Thread.spawn(.{}, sig.ledger.cleanup_service.run, .{
-        app_base.logger.unscoped(),
+        sig.ledger.cleanup_service.Logger.from(app_base.logger),
         ledger_reader,
         &ledger_db,
         lowest_cleanup_slot,
@@ -1232,7 +1232,7 @@ fn validator(
                 .ledger = .{
                     .db = ledger_db,
                     .reader = ledger_reader,
-                    .writer = ledger_writer,
+                    .writer = ledger_result_writer,
                 },
                 .epoch_schedule = bank_fields.epoch_schedule,
                 .slot_leaders = epoch_context_manager.slotLeaders(),

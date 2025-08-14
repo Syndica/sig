@@ -3,16 +3,20 @@ const sig = @import("../sig.zig");
 const replay = @import("lib.zig");
 
 const Allocator = std.mem.Allocator;
+
 const ThreadPool = sig.sync.ThreadPool;
 
+const Ancestors = sig.core.Ancestors;
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 const SlotLeaders = sig.core.leader_schedule.SlotLeaders;
 const SlotState = sig.core.bank.SlotState;
-const Ancestors = sig.core.Ancestors;
+
+const AccountStore = sig.accounts_db.AccountStore;
 const AccountReader = sig.accounts_db.AccountReader;
-const BlockstoreDB = sig.ledger.BlockstoreDB;
-const BlockstoreReader = sig.ledger.BlockstoreReader;
+
+const LedgerDB = sig.ledger.LedgerDB;
+const LedgerReader = sig.ledger.LedgerReader;
 
 const ProgressMap = sig.consensus.ProgressMap;
 const HeaviestSubtreeForkChoice = sig.consensus.HeaviestSubtreeForkChoice;
@@ -64,11 +68,14 @@ pub const ReplayDependencies = struct {
         constants: sig.core.SlotConstants,
         state: sig.core.SlotState,
     },
+    current_epoch: sig.core.Epoch,
+    current_epoch_constants: sig.core.EpochConstants,
+    hard_forks: sig.core.HardForks,
 };
 
 pub const LedgerRef = struct {
-    db: BlockstoreDB,
-    reader: *sig.ledger.BlockstoreReader,
+    db: LedgerDB,
+    reader: *sig.ledger.LedgerReader,
     writer: *sig.ledger.LedgerResultWriter,
 };
 
@@ -148,16 +155,18 @@ pub const Receivers = struct {
 
 const ReplayState = struct {
     allocator: Allocator,
-    logger: Logger,
-    slot_leaders: SlotLeaders,
-    ledger: LedgerRef,
-    account_store: sig.accounts_db.AccountStore,
-
     my_identity: Pubkey,
+    logger: Logger,
+    thread_pool: *ThreadPool,
+    slot_leaders: SlotLeaders,
+    slot_tracker: *SlotTracker,
+    epochs: *EpochTracker,
+    hard_forks: sig.core.HardForks,
+    account_store: AccountStore,
+    progress_map: *ProgressMap,
+    ledger: LedgerRef,
+    execution: ReplayExecutionState,
 
-    slot_tracker: SlotTracker,
-    epochs: EpochTracker,
-    progress: ProgressMap,
     fork_choice: HeaviestSubtreeForkChoice,
     replay_tower: sig.consensus.ReplayTower,
     latest_validator_votes: LatestValidatorVotes,
@@ -166,47 +175,58 @@ const ReplayState = struct {
 
     arena_state: std.heap.ArenaAllocator.State,
 
-    thread_pool: ThreadPool,
     senders: Senders,
     receivers: Receivers,
 
-    fn deinit(self: *ReplayState) void {
-        self.thread_pool.shutdown();
-        self.thread_pool.deinit();
-
-        self.slot_tracker.deinit(self.allocator);
-
-        self.epochs.deinit(self.allocator);
-
-        self.progress.deinit(self.allocator);
-
-        self.fork_choice.deinit();
-        self.latest_validator_votes.deinit(self.allocator);
-        self.slot_data.deinit(self.allocator);
-    }
-
     fn init(deps: ReplayDependencies) !ReplayState {
-        const allocator = deps.allocator;
+        const thread_pool = try deps.allocator.create(ThreadPool);
+        errdefer deps.allocator.destroy(thread_pool);
+        thread_pool.* = ThreadPool.init(.{ .max_threads = NUM_THREADS });
 
-        var slot_tracker: SlotTracker = try .init(allocator, deps.root.slot, .{
+        var root_slot_state = deps.root.state;
+        const last_blockhash = root_slot_state.blockhash_queue.readField("last_hash") orelse
+            return error.InvalidBlockhashQueue;
+
+        const slot_tracker = try deps.allocator.create(SlotTracker);
+        errdefer deps.allocator.destroy(slot_tracker);
+        slot_tracker.* = try .init(deps.allocator, deps.root.slot, .{
             .constants = deps.root.constants,
-            .state = deps.root.state,
+            .state = root_slot_state,
         });
-        errdefer slot_tracker.deinit(allocator);
+        errdefer slot_tracker.deinit(deps.allocator);
 
-        var epoch_tracker: EpochTracker = .{ .schedule = deps.epoch_schedule };
-        errdefer epoch_tracker.deinit(allocator);
+        const epoch_tracker = try deps.allocator.create(EpochTracker);
+        errdefer deps.allocator.destroy(epoch_tracker);
+        epoch_tracker.* = .{ .schedule = deps.epoch_schedule };
+        errdefer epoch_tracker.deinit(deps.allocator);
+        try epoch_tracker.epochs
+            .put(deps.allocator, deps.current_epoch, deps.current_epoch_constants);
 
-        const progress, const fork_choice = try initProgressAndForkChoiceWithLockedSlotForks(
-            allocator,
+        const progress_map = try deps.allocator.create(ProgressMap);
+        progress_map.* = ProgressMap.INIT;
+        try progress_map.map.put(
+            deps.allocator,
+            slot_tracker.root,
+            try .init(deps.allocator, .{
+                .now = .now(),
+                .last_entry = last_blockhash,
+                .prev_leader_slot = null, // non-block-producing
+                .validator_stake_info = null, // non-voting
+                .num_blocks_on_fork = 0,
+                .num_dropped_blocks_on_fork = 0,
+            }),
+        );
+
+        _, const fork_choice = try initProgressAndForkChoiceWithLockedSlotForks(
+            deps.allocator,
             deps.logger,
-            &slot_tracker,
-            &epoch_tracker,
+            slot_tracker,
+            epoch_tracker,
             deps.my_identity,
             deps.vote_identity,
             deps.ledger.reader.*,
         );
-        errdefer progress.deinit(allocator);
+
         errdefer fork_choice.deinit();
 
         // TODO(ink): in agave replay_tower isn't created directly in replay,
@@ -220,34 +240,42 @@ const ReplayState = struct {
         //     - from tvu to [replay_config](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/tvu.rs#L311)
         //     - replay_config to [ReplayStage](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/replay_stage.rs#L563)
         const replay_tower: sig.consensus.ReplayTower = try .init(
-            allocator,
+            deps.allocator,
             .from(deps.logger),
             deps.my_identity,
             deps.vote_identity,
             deps.root.slot,
             deps.account_store.reader(),
         );
-        errdefer replay_tower.deinit(allocator);
+        errdefer replay_tower.deinit(deps.allocator);
 
         return .{
-            .allocator = allocator,
+            .allocator = deps.allocator,
             .logger = .from(deps.logger),
-            .slot_leaders = deps.slot_leaders,
-            .ledger = deps.ledger,
-            .account_store = deps.account_store,
-
+            .thread_pool = thread_pool,
             .my_identity = deps.my_identity,
-
-            .thread_pool = .init(.{ .max_threads = NUM_THREADS }),
-
+            .slot_leaders = deps.slot_leaders,
             .slot_tracker = slot_tracker,
             .epochs = epoch_tracker,
-
-            .progress = progress,
+            .hard_forks = deps.hard_forks,
+            .account_store = deps.account_store,
+            .ledger = deps.ledger,
+            .progress_map = progress_map,
+            .execution = try ReplayExecutionState.init(
+                deps.allocator,
+                .from(deps.logger),
+                deps.my_identity,
+                thread_pool,
+                deps.account_store,
+                deps.ledger.reader,
+                slot_tracker,
+                epoch_tracker,
+                progress_map,
+            ),
             .fork_choice = fork_choice,
             .replay_tower = replay_tower,
             .latest_validator_votes = .empty,
-            .status_cache = .empty,
+            .status_cache = .DEFAULT,
             .slot_data = .empty,
 
             .arena_state = .{},
@@ -257,21 +285,19 @@ const ReplayState = struct {
         };
     }
 
-    fn executionState(self: *ReplayState) ReplayExecutionState {
-        return .{
-            .allocator = self.allocator,
-            .logger = .from(self.logger),
-            .my_identity = self.my_identity,
-            .vote_account = null, // voting not currently supported
-
-            .account_store = self.account_store,
-            .thread_pool = &self.thread_pool,
-            .blockstore_reader = self.ledger.reader,
-            .slot_tracker = &self.slot_tracker,
-            .epochs = &self.epochs,
-            .progress_map = &self.progress,
-            .status_cache = &self.status_cache,
-        };
+    fn deinit(self: *ReplayState) void {
+        self.thread_pool.shutdown();
+        self.thread_pool.deinit();
+        self.allocator.destroy(self.thread_pool);
+        self.slot_tracker.deinit(self.allocator);
+        self.allocator.destroy(self.slot_tracker);
+        self.epochs.deinit(self.allocator);
+        self.allocator.destroy(self.epochs);
+        self.hard_forks.deinit(self.allocator);
+        self.progress_map.deinit(self.allocator);
+        self.fork_choice.deinit();
+        self.latest_validator_votes.deinit(self.allocator);
+        self.slot_data.deinit(self.allocator);
     }
 };
 
@@ -283,7 +309,7 @@ fn initProgressAndForkChoiceWithLockedSlotForks(
     epoch_tracker: *const EpochTracker,
     my_pubkey: Pubkey,
     vote_account: Pubkey,
-    blockstore: BlockstoreReader,
+    ledger_reader: LedgerReader,
 ) !struct { ProgressMap, HeaviestSubtreeForkChoice } {
     const root_slot, const root_hash = blk: {
         const root = slot_tracker.getRoot();
@@ -351,7 +377,7 @@ fn initProgressAndForkChoiceWithLockedSlotForks(
     };
     errdefer heaviest_subtree_fork_choice.deinit();
 
-    var duplicate_slots = try blockstore.db.iterator(
+    var duplicate_slots = try ledger_reader.db.iterator(
         sig.ledger.schema.schema.duplicate_slots,
         .forward,
         // It is important that the root bank is not marked as duplicate on initialization.
@@ -402,13 +428,15 @@ fn advanceReplay(state: *ReplayState) !void {
         allocator,
         state.account_store,
         &state.ledger.db,
-        &state.slot_tracker,
-        &state.epochs,
+        state.slot_tracker,
+        state.epochs,
         state.slot_leaders,
-        &state.progress,
+        &state.hard_forks,
+        state.progress_map,
     );
 
-    _ = try replay.execution.replayActiveSlots(state.executionState());
+    const processed_a_slot = try replay.execution.replayActiveSlots(&state.execution);
+    if (!processed_a_slot) std.time.sleep(100 * std.time.ns_per_ms);
 
     _ = try replay.edge_cases.processEdgeCases(allocator, logger, .{
         .my_pubkey = state.my_identity,
@@ -417,8 +445,8 @@ fn advanceReplay(state: *ReplayState) !void {
         .fork_choice = &state.fork_choice,
         .ledger = state.ledger.writer,
 
-        .slot_tracker = &state.slot_tracker,
-        .progress = &state.progress,
+        .slot_tracker = state.slot_tracker,
+        .progress = state.progress_map,
         .latest_validator_votes = &state.latest_validator_votes,
         .slot_data = &state.slot_data,
 
@@ -451,11 +479,11 @@ fn advanceReplay(state: *ReplayState) !void {
     replay.consensus.processConsensus(.{
         .allocator = allocator,
         .replay_tower = &state.replay_tower,
-        .progress_map = &state.progress,
-        .slot_tracker = &state.slot_tracker,
-        .epoch_tracker = &state.epochs,
+        .progress_map = state.progress_map,
+        .slot_tracker = state.slot_tracker,
+        .epoch_tracker = state.epochs,
         .fork_choice = &state.fork_choice,
-        .blockstore_reader = state.ledger.reader,
+        .ledger_reader = state.ledger.reader,
         .ledger_result_writer = state.ledger.writer,
         .ancestors = &ancestors,
         .descendants = &descendants,
@@ -479,8 +507,8 @@ fn advanceReplay(state: *ReplayState) !void {
 /// [generate_new_bank_forks](https://github.com/anza-xyz/agave/blob/146ebd8be3857d530c0946003fcd58be220c3290/core/src/replay_stage.rs#L4149)
 fn trackNewSlots(
     allocator: Allocator,
-    account_store: sig.accounts_db.AccountStore,
-    blockstore_db: *sig.ledger.BlockstoreDB,
+    account_store: AccountStore,
+    ledger_db: *LedgerDB,
     slot_tracker: *SlotTracker,
     epoch_tracker: *EpochTracker,
     slot_leaders: SlotLeaders,
@@ -492,8 +520,8 @@ fn trackNewSlots(
     var frozen_slots = try slot_tracker.frozenSlots(allocator);
     defer frozen_slots.deinit(allocator);
 
-    var frozen_slots_since_root: std.ArrayListUnmanaged(Slot) =
-        try .initCapacity(allocator, frozen_slots.count());
+    var frozen_slots_since_root = try std.ArrayListUnmanaged(sig.core.Slot)
+        .initCapacity(allocator, frozen_slots.count());
     defer frozen_slots_since_root.deinit(allocator);
     for (frozen_slots.keys()) |slot| if (slot >= root) {
         frozen_slots_since_root.appendAssumeCapacity(slot);
