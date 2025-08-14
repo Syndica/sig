@@ -68,12 +68,23 @@ pub fn read(
 }
 
 pub fn readWithConfig(
-    allocator: std.mem.Allocator,
+    read_allocator: std.mem.Allocator,
     comptime U: type,
     reader: anytype,
     params: bincode.Params,
     comptime config: FieldConfig(U),
 ) !U {
+    var limit_allocator = sig.utils.allocators.LimitAllocator{
+        .bytes_remaining = 100 * 1024 * 1024, // 100MB: chosen arbitrarily as a reasonable limit.
+        .backing_allocator = read_allocator,
+    };
+
+    // Only override with LimitAllocator if not already one (otherwise, stick to limit).
+    const allocator = if (read_allocator.vtable == limit_allocator.allocator().vtable)
+        read_allocator
+    else
+        limit_allocator.allocator();
+
     const T = switch (U) {
         usize => u64,
         isize => i64,

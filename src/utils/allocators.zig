@@ -1556,3 +1556,103 @@ fn randomLog2(random: std.Random, T: type, max_pow2: u64) T {
         @as(f64, @floatFromInt(max_pow2)) * random.float(f64),
     ));
 }
+
+/// An allocator that transparently limits the amount of bytes allocated with the backing_allocator.
+pub const LimitAllocator = struct {
+    bytes_remaining: usize,
+    backing_allocator: Allocator,
+
+    /// Needs a stable vtable address to check if an allocator is from LimitAllocator.
+    pub const vtable: Allocator.VTable = .{
+        .alloc = alloc,
+        .resize = resize,
+        .remap = remap,
+        .free = free,
+    };
+
+    pub fn allocator(self: *LimitAllocator) Allocator {
+        return .{
+            .ptr = self,
+            .vtable = &vtable,
+        };
+    }
+
+    fn alloc(
+        ctx: *anyopaque,
+        len: usize,
+        alignment: Alignment,
+        return_address: usize,
+    ) ?[*]u8 {
+        const self: *LimitAllocator = @ptrCast(@alignCast(ctx));
+        if (len > self.bytes_remaining) {
+            return null;
+        }
+        const new_ptr = self.backing_allocator.rawAlloc(len, alignment, return_address) orelse
+            return null;
+        self.bytes_remaining -= len;
+        return new_ptr;
+    }
+
+    fn resize(
+        ctx: *anyopaque,
+        memory: []u8,
+        alignment: Alignment,
+        new_len: usize,
+        ra: usize,
+    ) bool {
+        const self: *LimitAllocator = @ptrCast(@alignCast(ctx));
+        // free case
+        if (new_len <= memory.len) {
+            if (!self.backing_allocator.rawResize(memory, alignment, new_len, ra))
+                return false;
+            self.bytes_remaining += memory.len - new_len;
+            return true;
+        }
+        // alloc case
+        const remaining = self.bytes_remaining + memory.len;
+        if (new_len > remaining) {
+            return false;
+        }
+        if (!self.backing_allocator.rawResize(memory, alignment, new_len, ra))
+            return false;
+        self.bytes_remaining = remaining - new_len;
+        return true;
+    }
+
+    fn remap(
+        ctx: *anyopaque,
+        memory: []u8,
+        alignment: Alignment,
+        new_len: usize,
+        ra: usize,
+    ) ?[*]u8 {
+        const self: *LimitAllocator = @ptrCast(@alignCast(ctx));
+        // free case
+        if (new_len <= memory.len) {
+            const new_ptr = self.backing_allocator.rawRemap(memory, alignment, new_len, ra) orelse
+                return null;
+            self.bytes_remaining += memory.len - new_len;
+            return new_ptr;
+        }
+        // alloc case
+        const remaining = self.bytes_remaining + memory.len;
+        if (new_len > remaining) {
+            return null;
+        }
+        const new_ptr = self.backing_allocator.rawRemap(memory, alignment, new_len, ra) orelse
+            return null;
+        self.bytes_remaining = remaining - new_len;
+        return new_ptr;
+    }
+
+    fn free(
+        ctx: *anyopaque,
+        old_mem: []u8,
+        alignment: Alignment,
+        ra: usize,
+    ) void {
+        const self: *LimitAllocator = @ptrCast(@alignCast(ctx));
+        self.backing_allocator.rawFree(old_mem, alignment, ra);
+        self.bytes_remaining += old_mem.len;
+    }
+};
