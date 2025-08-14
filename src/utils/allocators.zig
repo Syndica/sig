@@ -1556,3 +1556,173 @@ fn randomLog2(random: std.Random, T: type, max_pow2: u64) T {
         @as(f64, @floatFromInt(max_pow2)) * random.float(f64),
     ));
 }
+
+/// An allocator that transparently limits the amount of bytes allocated with the backing_allocator.
+pub const LimitAllocator = struct {
+    bytes_remaining: usize,
+    backing_allocator: Allocator,
+
+    /// Needs a stable vtable address to check if an allocator is from LimitAllocator.
+    const vtable: *const Allocator.VTable = &.{
+        .alloc = alloc,
+        .resize = resize,
+        .remap = remap,
+        .free = free,
+    };
+
+    pub fn init(backing_alloc: std.mem.Allocator, byte_limit: usize) LimitAllocator {
+        // NOTE: LimitAllocators must not be nested.
+        std.debug.assert(tryFrom(backing_alloc) == null);
+        return .{
+            .bytes_remaining = byte_limit,
+            .backing_allocator = backing_alloc,
+        };
+    }
+
+    pub fn allocator(self: *LimitAllocator) Allocator {
+        return .{
+            .ptr = self,
+            .vtable = vtable,
+        };
+    }
+
+    pub fn tryFrom(allocator_: std.mem.Allocator) ?*LimitAllocator {
+        if (allocator_.vtable != LimitAllocator.vtable) return null;
+        const self: *LimitAllocator = @ptrCast(@alignCast(allocator_.ptr));
+        return self;
+    }
+
+    fn alloc(
+        ctx: *anyopaque,
+        len: usize,
+        alignment: Alignment,
+        return_address: usize,
+    ) ?[*]u8 {
+        const self: *LimitAllocator = @ptrCast(@alignCast(ctx));
+        if (len > self.bytes_remaining) {
+            return null;
+        }
+        const new_ptr = self.backing_allocator.rawAlloc(len, alignment, return_address) orelse
+            return null;
+        self.bytes_remaining -= len;
+        return new_ptr;
+    }
+
+    fn resize(
+        ctx: *anyopaque,
+        memory: []u8,
+        alignment: Alignment,
+        new_len: usize,
+        ra: usize,
+    ) bool {
+        const self: *LimitAllocator = @ptrCast(@alignCast(ctx));
+        // free case
+        if (new_len <= memory.len) {
+            if (!self.backing_allocator.rawResize(memory, alignment, new_len, ra))
+                return false;
+            self.bytes_remaining += memory.len - new_len;
+            return true;
+        }
+        // alloc case
+        const remaining = self.bytes_remaining + memory.len;
+        if (new_len > remaining) {
+            return false;
+        }
+        if (!self.backing_allocator.rawResize(memory, alignment, new_len, ra))
+            return false;
+        self.bytes_remaining = remaining - new_len;
+        return true;
+    }
+
+    fn remap(
+        ctx: *anyopaque,
+        memory: []u8,
+        alignment: Alignment,
+        new_len: usize,
+        ra: usize,
+    ) ?[*]u8 {
+        const self: *LimitAllocator = @ptrCast(@alignCast(ctx));
+        // free case
+        if (new_len <= memory.len) {
+            const new_ptr = self.backing_allocator.rawRemap(memory, alignment, new_len, ra) orelse
+                return null;
+            self.bytes_remaining += memory.len - new_len;
+            return new_ptr;
+        }
+        // alloc case
+        const remaining = self.bytes_remaining + memory.len;
+        if (new_len > remaining) {
+            return null;
+        }
+        const new_ptr = self.backing_allocator.rawRemap(memory, alignment, new_len, ra) orelse
+            return null;
+        self.bytes_remaining = remaining - new_len;
+        return new_ptr;
+    }
+
+    fn free(
+        ctx: *anyopaque,
+        old_mem: []u8,
+        alignment: Alignment,
+        ra: usize,
+    ) void {
+        const self: *LimitAllocator = @ptrCast(@alignCast(ctx));
+        self.backing_allocator.rawFree(old_mem, alignment, ra);
+        self.bytes_remaining += old_mem.len;
+    }
+};
+
+test "LimitAllocator" {
+    var buffer: [1024]u8 = undefined;
+    var fba = std.heap.FixedBufferAllocator.init(&buffer);
+
+    const limit = 512;
+    var limit_alloc = LimitAllocator.init(fba.allocator(), limit);
+
+    // alloc normal
+    const slice = try limit_alloc.allocator().alloc(u8, 12);
+    try std.testing.expectEqual(limit_alloc.bytes_remaining, limit - 12);
+    try std.testing.expectEqual(fba.end_index, 12);
+
+    // alloc (over)
+    try std.testing.expectError(error.OutOfMemory, limit_alloc.allocator().alloc(u8, limit + 1));
+    try std.testing.expectEqual(limit_alloc.bytes_remaining, limit - 12);
+    try std.testing.expectEqual(fba.end_index, 12);
+
+    // remap shrink
+    var new_slice = limit_alloc.allocator().remap(slice, 8).?;
+    try std.testing.expectEqual(limit_alloc.bytes_remaining, limit - 8);
+    try std.testing.expectEqual(fba.end_index, 8);
+
+    // remap grow
+    new_slice = limit_alloc.allocator().remap(new_slice, 100).?;
+    try std.testing.expectEqual(limit_alloc.bytes_remaining, limit - 100);
+    try std.testing.expectEqual(fba.end_index, 100);
+
+    // remap grow (over)
+    try std.testing.expectEqual(null, limit_alloc.allocator().remap(new_slice, limit + 1));
+    try std.testing.expectEqual(limit_alloc.bytes_remaining, limit - 100);
+    try std.testing.expectEqual(fba.end_index, 100);
+
+    // resize shrink
+    try std.testing.expect(limit_alloc.allocator().resize(new_slice, 12));
+    new_slice.len = 12;
+    try std.testing.expectEqual(limit_alloc.bytes_remaining, limit - 12);
+    try std.testing.expectEqual(fba.end_index, 12);
+
+    // resize grow
+    try std.testing.expect(limit_alloc.allocator().resize(new_slice, 100));
+    new_slice.len = 100;
+    try std.testing.expectEqual(limit_alloc.bytes_remaining, limit - 100);
+    try std.testing.expectEqual(fba.end_index, 100);
+
+    // resize grow (over)
+    try std.testing.expectEqual(false, limit_alloc.allocator().resize(new_slice, limit + 1));
+    try std.testing.expectEqual(limit_alloc.bytes_remaining, limit - 100);
+    try std.testing.expectEqual(fba.end_index, 100);
+
+    // free
+    limit_alloc.allocator().free(new_slice);
+    try std.testing.expectEqual(limit_alloc.bytes_remaining, limit);
+    try std.testing.expectEqual(fba.end_index, 0);
+}

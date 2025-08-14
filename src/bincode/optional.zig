@@ -14,15 +14,16 @@ pub fn defaultToNullOnEof(
 ) bincode.FieldConfig(?T) {
     const S = struct {
         fn deserializer(
-            allocator: std.mem.Allocator,
+            limit_allocator: *bincode.LimitAllocator,
             reader: anytype,
             params: bincode.Params,
         ) anyerror!?T {
             const EncodedType = if (options.encode_optional) ?T else T;
-            return bincode.read(allocator, EncodedType, reader, params) catch |err| switch (err) {
-                error.EndOfStream => null,
-                else => |e| e,
-            };
+            return bincode.readWithLimit(limit_allocator, EncodedType, reader, params) catch |err|
+                switch (err) {
+                    error.EndOfStream => null,
+                    else => |e| e,
+                };
         }
 
         fn serializer(

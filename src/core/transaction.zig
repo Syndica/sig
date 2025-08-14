@@ -160,16 +160,18 @@ pub const Transaction = struct {
         try data.msg.serialize(writer, data.version);
     }
 
-    pub fn deserialize(allocator: std.mem.Allocator, reader: anytype, _: sig.bincode.Params) !Transaction {
+    pub fn deserialize(limit_allocator: *sig.bincode.LimitAllocator, reader: anytype, _: sig.bincode.Params) !Transaction {
+        const allocator = limit_allocator.allocator();
         const signatures = try allocator.alloc(Signature, try leb.readULEB128(u16, reader));
         errdefer allocator.free(signatures);
+
         for (signatures) |*sgn| sgn.* = .{ .data = try reader.readBytesNoEof(Signature.SIZE) };
         var peekable = sig.utils.io.peekableReader(reader);
         const version = try Version.deserialize(&peekable);
         return .{
             .signatures = signatures,
             .version = version,
-            .msg = try Message.deserialize(allocator, peekable.reader(), version),
+            .msg = try Message.deserialize(limit_allocator, peekable.reader(), version),
         };
     }
 
@@ -475,7 +477,8 @@ pub const Message = struct {
         }
     }
 
-    pub fn deserialize(allocator: std.mem.Allocator, reader: anytype, version: Version) !Message {
+    pub fn deserialize(limit_allocator: *sig.bincode.LimitAllocator, reader: anytype, version: Version) !Message {
+        const allocator = limit_allocator.allocator();
         const signature_count = try reader.readByte();
         const readonly_signed_count = try reader.readByte();
         const readonly_unsigned_count = try reader.readByte();
@@ -488,12 +491,14 @@ pub const Message = struct {
 
         const instructions = try allocator.alloc(Instruction, try leb.readULEB128(u16, reader));
         errdefer sig.bincode.free(allocator, instructions);
-        for (instructions) |*instr| instr.* = try sig.bincode.read(allocator, Instruction, reader, .{});
+        for (instructions) |*instr|
+            instr.* = try sig.bincode.readWithLimit(limit_allocator, Instruction, reader, .{});
 
         const address_lookups_len = if (version == .legacy) 0 else try leb.readULEB128(u16, reader);
         const address_lookups = try allocator.alloc(AddressLookup, address_lookups_len);
         errdefer sig.bincode.free(allocator, address_lookups);
-        for (address_lookups) |*alt| alt.* = try sig.bincode.read(allocator, AddressLookup, reader, .{});
+        for (address_lookups) |*alt|
+            alt.* = try sig.bincode.readWithLimit(limit_allocator, AddressLookup, reader, .{});
 
         return .{
             .signature_count = signature_count,

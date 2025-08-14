@@ -1132,11 +1132,11 @@ pub const AccountDataHandle = union(enum) {
     }
 
     fn bincodeDeserialize(
-        alloc: std.mem.Allocator,
+        limit_allocator: *bincode.LimitAllocator,
         reader: anytype,
         params: bincode.Params,
     ) anyerror!AccountDataHandle {
-        const data = try bincode.read(alloc, []u8, reader, params);
+        const data = try bincode.readWithLimit(limit_allocator, []u8, reader, params);
         return AccountDataHandle.initAllocatedOwned(data);
     }
 
