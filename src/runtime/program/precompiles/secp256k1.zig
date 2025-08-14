@@ -3,8 +3,6 @@ const builtin = @import("builtin");
 const libsecp256k1 = @import("secp256k1");
 const sig = @import("../../../sig.zig");
 
-const precompile_programs = sig.runtime.program.precompiles;
-
 const Pubkey = sig.core.Pubkey;
 const InstructionError = sig.core.instruction.InstructionError;
 const InstructionContext = sig.runtime.InstructionContext;
