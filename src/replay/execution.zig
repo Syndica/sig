@@ -306,7 +306,7 @@ fn replaySlot(state: *ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
 
 /// Polls a confirm status to obtain entries for a slot. If the confirm
 /// future yields an error, marks the slot as dead. Returns null if the slot
-/// should be skipped (non-confirm status, pending after retries, or error).
+/// should be skipped (non-confirm status, pending, or error).
 fn awaitConfirmedEntriesForSlot(
     replay_state: *ReplayExecutionState,
     slot: Slot,
@@ -314,8 +314,7 @@ fn awaitConfirmedEntriesForSlot(
 ) !?[]const sig.core.Entry {
     return switch (status) {
         .confirm => |confirm_slot_future| blk: {
-            var attempts: u8 = 0;
-            while (attempts < 3) : (attempts += 1) {
+            while (true) {
                 const poll_result = try confirm_slot_future.poll();
                 switch (poll_result) {
                     .err => {
@@ -328,14 +327,11 @@ fn awaitConfirmedEntriesForSlot(
                     },
                     .done => break :blk confirm_slot_future.entries,
                     .pending => {
-                        if (attempts < 2) {
-                            std.time.sleep(std.time.ns_per_ms);
-                        }
+                        // TODO: consider futex-based wait like ResetEvent
+                        std.time.sleep(std.time.ns_per_ms);
                     },
                 }
             }
-            // Return null if all attempts failed
-            break :blk null;
         },
         else => null,
     };
