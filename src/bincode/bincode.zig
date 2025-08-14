@@ -30,6 +30,7 @@ pub const Params = struct {
     endian: std.builtin.Endian = .little,
     int_encoding: enum { variable, fixed } = .fixed,
     include_fixed_array_length: bool = false,
+    allocation_limit: usize = 100 * 1024 * 1024, // chosen arbitrarily
 };
 
 pub fn sizeOf(data: anytype, params: bincode.Params) usize {
@@ -75,16 +76,28 @@ pub fn readWithConfig(
     comptime config: FieldConfig(U),
 ) !U {
     var limit_allocator = sig.utils.allocators.LimitAllocator{
-        .bytes_remaining = 100 * 1024 * 1024, // 100MB: chosen arbitrarily as a reasonable limit.
+        .bytes_remaining = params.allocation_limit,
         .backing_allocator = read_allocator,
     };
+    return readWithConfigUnlimited(limit_allocator.allocator(), U, reader, params, config);
+}
 
-    // Only override with LimitAllocator if not already one (otherwise, stick to limit).
-    const allocator = if (read_allocator.vtable == limit_allocator.allocator().vtable)
-        read_allocator
-    else
-        limit_allocator.allocator();
+pub fn readUnlimited(
+    allocator: std.mem.Allocator,
+    comptime U: type,
+    reader: anytype,
+    params: bincode.Params,
+) !U {
+    return readWithConfigUnlimited(allocator, U, reader, params, getConfig(U) orelse .{});
+}
 
+pub fn readWithConfigUnlimited(
+    allocator: std.mem.Allocator,
+    comptime U: type,
+    reader: anytype,
+    params: bincode.Params,
+    comptime config: FieldConfig(U),
+) !U {
     const T = switch (U) {
         usize => u64,
         isize => i64,
@@ -116,13 +129,14 @@ pub fn readWithConfig(
         },
         .@"union" => |info| {
             const tag_type = info.tag_type orelse @compileError("Only tagged unions may be read.");
-            const raw_tag = try bincode.read(allocator, tag_type, reader, params);
+            const raw_tag = try bincode.readUnlimited(allocator, tag_type, reader, params);
 
             inline for (info.fields) |field| {
                 if (raw_tag == @field(tag_type, field.name)) {
                     // https://github.com/ziglang/zig/issues/7866
                     if (field.type == void) return @unionInit(T, field.name, {});
-                    const payload = try bincode.read(allocator, field.type, reader, params);
+                    const payload =
+                        try bincode.readUnlimited(allocator, field.type, reader, params);
                     return @unionInit(T, field.name, payload);
                 }
             }
@@ -149,11 +163,13 @@ pub fn readWithConfig(
                     //         std.debug.print("failed to deserialize field {s}\n", .{field.name});
                     //     }
                     // }
-                    @field(data, field.name) = try bincode.read(allocator, field.type, reader, params);
+                    @field(data, field.name) =
+                        try bincode.readUnlimited(allocator, field.type, reader, params);
                     continue;
                 };
 
-                @field(data, field.name) = try readFieldWithConfig(allocator, reader, params, field, field_config);
+                @field(data, field.name) =
+                    try readFieldWithConfig(allocator, reader, params, field, field_config);
             }
 
             // TODO: improve implementation of post deserialise method
@@ -170,33 +186,33 @@ pub fn readWithConfig(
         .optional => |info| {
             return switch (try reader.readByte()) {
                 0 => null,
-                1 => try bincode.read(allocator, info.child, reader, params),
+                1 => try bincode.readUnlimited(allocator, info.child, reader, params),
                 else => error.BadOptionalBoolean,
             };
         },
         .array => |info| {
             var data: T = undefined;
             if (params.include_fixed_array_length) {
-                const fixed_array_len = try bincode.read(allocator, u64, reader, params);
+                const fixed_array_len = try bincode.readUnlimited(allocator, u64, reader, params);
                 if (fixed_array_len != info.len) {
                     return error.UnexpectedFixedArrayLen;
                 }
             }
             for (&data) |*element| {
-                element.* = try bincode.read(allocator, info.child, reader, params);
+                element.* = try bincode.readUnlimited(allocator, info.child, reader, params);
             }
             return data;
         },
         .vector => |info| {
             var data: T = undefined;
             if (params.include_fixed_array_length) {
-                const fixed_array_len = try bincode.read(allocator, u64, reader, params);
+                const fixed_array_len = try bincode.readUnlimited(allocator, u64, reader, params);
                 if (fixed_array_len != info.len) {
                     return error.UnexpectedFixedArrayVectorLen;
                 }
             }
             for (&data) |*element| {
-                element.* = try bincode.read(allocator, info.child, reader, params);
+                element.* = try bincode.readUnlimited(allocator, info.child, reader, params);
             }
             return data;
         },
@@ -205,21 +221,22 @@ pub fn readWithConfig(
                 .one => {
                     const data = try allocator.create(info.child);
                     errdefer allocator.destroy(data);
-                    data.* = try bincode.read(allocator, info.child, reader, params);
+                    data.* = try bincode.readUnlimited(allocator, info.child, reader, params);
                     return data;
                 },
                 .slice => {
-                    const entries = try allocator.alloc(info.child, try bincode.read(allocator, usize, reader, params));
+                    const num_entries = try bincode.readUnlimited(allocator, usize, reader, params);
+                    const entries = try allocator.alloc(info.child, num_entries);
                     errdefer allocator.free(entries);
                     for (entries) |*entry| {
-                        entry.* = try bincode.read(allocator, info.child, reader, params);
+                        entry.* = try bincode.readUnlimited(allocator, info.child, reader, params);
                     }
                     return entries;
                 },
                 else => {},
             }
         },
-        .comptime_float => return bincode.read(allocator, f64, reader, params),
+        .comptime_float => return bincode.readUnlimited(allocator, f64, reader, params),
         .float => |info| {
             if (info.bits != 32 and info.bits != 64) {
                 @compileError("Only f{32, 64} floating-point integers may be serialized, but attempted to serialize " ++ @typeName(T) ++ ".");
@@ -227,7 +244,7 @@ pub fn readWithConfig(
             const bytes = try reader.readBytesNoEof((info.bits + 7) / 8);
             return @as(T, @bitCast(bytes));
         },
-        .comptime_int => return bincode.read(allocator, u64, reader, params),
+        .comptime_int => return bincode.readUnlimited(allocator, u64, reader, params),
         .int => return try bincode.readInt(T, reader, params),
         else => {},
     }
@@ -393,7 +410,7 @@ pub fn readFieldWithConfig(
         return try deser_fcn(allocator, reader, params);
     }
 
-    return try bincode.read(allocator, field.type, reader, params);
+    return try bincode.readUnlimited(allocator, field.type, reader, params);
 }
 
 pub fn write(writer: anytype, data: anytype, params: bincode.Params) !void {
