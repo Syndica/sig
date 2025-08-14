@@ -40,7 +40,7 @@ pub fn applyFeatureActivations(
 
     var iterator = new_feature_activations.iterator(slot);
     while (iterator.next()) |feature| {
-        const feature_id: Pubkey = features.map.get(feature);
+        const feature_id: Pubkey = features.map.get(feature).key;
         const db_account = try tryGetAccount(accounts_db, feature_id) orelse continue;
         defer db_account.deinit(allocator);
 
@@ -212,7 +212,7 @@ fn computeActiveFeatureSet(
 
     var iterator = feature_set.iterator(slot);
     while (iterator.next()) |feature| {
-        const feature_id: Pubkey = features.map.get(feature);
+        const feature_id: Pubkey = features.map.get(feature).key;
         var maybe_activation_slot: ?u64 = null;
 
         if (try tryGetAccount(accounts_db, feature_id)) |account| {
