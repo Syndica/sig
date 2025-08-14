@@ -7,6 +7,8 @@ const Slot = sig.core.Slot;
 const ZonInfo = struct {
     name: [:0]const u8,
     pubkey: [:0]const u8,
+    activated_on_all_clusters: bool = false,
+    reverted: bool = false,
 };
 pub const features: []const ZonInfo = @import("features.zon");
 pub const NUM_FEATURES = features.len;
@@ -27,11 +29,26 @@ pub const Feature = @Type(.{ .@"enum" = .{
     .is_exhaustive = true,
 } });
 
-pub const map: std.EnumArray(Feature, Pubkey) = map: {
+const Info = struct {
+    key: Pubkey,
+    activated_on_all_clusters: bool,
+    reverted: bool,
+
+    /// Returns the `id` of a feature, aka. the first 8 bytes of the public key.
+    pub fn id(self: Info) u64 {
+        return @bitCast(self.key.data[0..8].*);
+    }
+};
+
+pub const map: std.EnumArray(Feature, Info) = map: {
     @setEvalBranchQuota(NUM_FEATURES * 1000);
-    var s: std.enums.EnumFieldStruct(Feature, Pubkey, null) = undefined;
+    var s: std.enums.EnumFieldStruct(Feature, Info, null) = undefined;
     for (@typeInfo(Feature).@"enum".fields, features) |field, feature| {
-        @field(s, field.name) = .parse(feature.pubkey);
+        @field(s, field.name) = .{
+            .key = .parse(feature.pubkey),
+            .activated_on_all_clusters = feature.activated_on_all_clusters,
+            .reverted = feature.reverted,
+        };
     }
     break :map .init(s);
 };
@@ -84,7 +101,7 @@ pub const Set = struct {
     pub fn setSlotId(self: *Set, id: u64, slot: Slot) !void {
         for (&self.array.values, 0..) |*destination, i| {
             const feature: Feature = @enumFromInt(i);
-            const pubkey = map.get(feature);
+            const pubkey = map.get(feature).key;
             const feature_id: u64 = @bitCast(pubkey.data[0..8].*);
             if (feature_id == id) {
                 destination.* = slot;

@@ -434,7 +434,6 @@ pub const Message = struct {
         } else false;
 
         const is_reserved = reserved_accounts.contains(pubkey);
-
         const demote_program_id = is_key_called_as_program and !is_upgradeable_loader_present;
         return !(is_reserved or demote_program_id);
     }

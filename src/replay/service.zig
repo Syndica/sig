@@ -345,7 +345,7 @@ pub fn getActiveFeatures(
     var features: sig.core.FeatureSet = .ALL_DISABLED;
     for (0..sig.core.features.NUM_FEATURES) |i| {
         const possible_feature: sig.core.features.Feature = @enumFromInt(i);
-        const possible_feature_pubkey = sig.core.features.map.get(possible_feature);
+        const possible_feature_pubkey = sig.core.features.map.get(possible_feature).key;
         const feature_account = try account_reader.get(possible_feature_pubkey) orelse continue;
         if (!feature_account.owner.equals(&sig.runtime.ids.FEATURE_PROGRAM_ID)) {
             return error.FeatureNotOwnedByFeatureProgram;
@@ -373,7 +373,7 @@ test "getActiveFeatures rejects wrong ownership" {
 
     try accounts.put(
         allocator,
-        sig.core.features.map.get(.system_transfer_zero_check),
+        sig.core.features.map.get(.system_transfer_zero_check).key,
         acct,
     );
 
