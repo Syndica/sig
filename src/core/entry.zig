@@ -15,15 +15,15 @@ pub const Entry = struct {
     /// An unordered list of transactions that were observed before the Entry ID was
     /// generated. They may have been observed before a previous Entry ID but were
     /// pushed back into this list to ensure deterministic interpretation of the ledger.
-    transactions: std.ArrayListUnmanaged(Transaction),
+    transactions: []const Transaction,
 
     pub fn isTick(self: Entry) bool {
-        return self.transactions.items.len == 0;
+        return self.transactions.len == 0;
     }
 
     pub fn deinit(self: Entry, allocator: std.mem.Allocator) void {
-        for (self.transactions.items) |tx| tx.deinit(allocator);
-        allocator.free(self.transactions.allocatedSlice());
+        for (self.transactions) |tx| tx.deinit(allocator);
+        allocator.free(self.transactions);
     }
 };
 
@@ -78,21 +78,28 @@ pub fn verifyTickHashCount(
 pub fn verifyPoh(
     entries: []const Entry,
     allocator: Allocator,
-    preallocated_nodes: ?*std.ArrayListUnmanaged(Hash),
     initial_hash: Hash,
-) Allocator.Error!bool {
+    /// Items you may include to optimize this function.
+    optional: struct {
+        /// Recycle a list from a prior execution to avoid unnecessary allocations.
+        preallocated_nodes: ?*std.ArrayListUnmanaged(Hash) = null,
+        /// return error.Exit when set to true by another thread.
+        exit: ?*const std.atomic.Value(bool) = null,
+    },
+) (Allocator.Error || error{Exit})!bool {
     var current_hash = initial_hash;
 
     for (entries) |entry| {
+        if (optional.exit) |exit| if (exit.load(.monotonic)) return error.Exit;
         if (entry.num_hashes == 0) continue;
 
         for (1..entry.num_hashes) |_| {
             current_hash = Hash.generateSha256(&current_hash.data);
         }
 
-        if (entry.transactions.items.len > 0) {
+        if (entry.transactions.len > 0) {
             const mixin =
-                try hashTransactions(allocator, preallocated_nodes, entry.transactions.items);
+                try hashTransactions(allocator, optional.preallocated_nodes, entry.transactions);
             current_hash = current_hash.extendAndHash(&mixin.data);
         } else {
             current_hash = Hash.generateSha256(&current_hash.data);
@@ -116,7 +123,7 @@ pub fn verifyPoh(
 /// Based on these agave functions for conformance:
 /// - [hash_transactions](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/entry/src/entry.rs#L215)
 /// - [MerkleTree::new](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/merkle-tree/src/merkle_tree.rs#L98)
-fn hashTransactions(
+pub fn hashTransactions(
     allocator: std.mem.Allocator,
     preallocated_nodes: ?*std.ArrayListUnmanaged(Hash),
     transactions: []const Transaction,
@@ -176,18 +183,12 @@ test "Entry serialization and deserialization" {
 }
 
 pub const test_entry = struct {
-    var txns = [_]Transaction{
-        sig.core.transaction.transaction_v0_example.as_struct,
-        sig.core.transaction.transaction_v0_example.as_struct,
-    };
-
     pub const as_struct = Entry{
         .num_hashes = 149218308,
-        .hash = sig.core.Hash
-            .parseBase58String("G8T3smgLc4XavAtxScD3u4FTAqPtwbFCEJKwJbfoECcd") catch unreachable,
-        .transactions = .{
-            .items = txns[0..2],
-            .capacity = 2,
+        .hash = .parse("G8T3smgLc4XavAtxScD3u4FTAqPtwbFCEJKwJbfoECcd"),
+        .transactions = &.{
+            sig.core.transaction.transaction_v0_example.as_struct,
+            sig.core.transaction.transaction_v0_example.as_struct,
         },
     };
 
@@ -285,14 +286,14 @@ test hashTransactions {
     defer for (transactions) |tx| tx.deinit(std.testing.allocator);
 
     try std.testing.expectEqual(
-        try Hash.parseBase58String("2Gd4Mp8gCqSNCbmZXZVhrEo5A9qLM9BrmiWwzvvsLH4A"),
+        Hash.parse("2Gd4Mp8gCqSNCbmZXZVhrEo5A9qLM9BrmiWwzvvsLH4A"),
         hashTransactions(std.testing.allocator, null, &transactions),
     );
 
     std.mem.swap(Transaction, &transactions[0], &transactions[1]);
 
     try std.testing.expectEqual(
-        try Hash.parseBase58String("4yK3bxwdLmPQjDiLRH1XYZeYjXhuTmf8HUTYXMwwTcrJ"),
+        Hash.parse("4yK3bxwdLmPQjDiLRH1XYZeYjXhuTmf8HUTYXMwwTcrJ"),
         hashTransactions(std.testing.allocator, null, &transactions),
     );
 }

@@ -257,7 +257,7 @@ fn validateShred(
     _ = layout.merkleRoot(shred) orelse return error.signed_data_missing;
 }
 
-/// TODO: this may need to move to blockstore
+/// TODO: this may need to move to ledger
 fn verifyShredSlots(slot: Slot, parent: Slot, root: Slot) bool {
     if (slot == 0 and parent == 0 and root == 0) {
         return true; // valid write to slot zero.

@@ -5,7 +5,6 @@ const sig = @import("../../sig.zig");
 const ids = sig.runtime.ids;
 const bpf_loader_program = sig.runtime.program.bpf_loader;
 const system_program = sig.runtime.program.system;
-const features = sig.runtime.features;
 const pubkey_utils = sig.runtime.pubkey_utils;
 const serialize = sig.runtime.program.bpf.serialize;
 const memory = sig.vm.memory;
@@ -224,8 +223,9 @@ const CallerAccount = struct {
     ) !CallerAccount {
         _ = _vm_addr; // unused, but have same signature as fromAccountInfoC().
 
-        const direct_mapping = ic.tc.feature_set.active.contains(
-            features.BPF_ACCOUNT_DATA_DIRECT_MAPPING,
+        const direct_mapping = ic.tc.feature_set.active(
+            .bpf_account_data_direct_mapping,
+            ic.tc.slot,
         );
 
         if (direct_mapping) {
@@ -379,8 +379,9 @@ const CallerAccount = struct {
         account_info: *align(1) const AccountInfoC,
         account_metadata: *const SerializedAccountMetadata,
     ) !CallerAccount {
-        const direct_mapping = ic.tc.feature_set.active.contains(
-            features.BPF_ACCOUNT_DATA_DIRECT_MAPPING,
+        const direct_mapping = ic.tc.feature_set.active(
+            .bpf_account_data_direct_mapping,
+            ic.tc.slot,
         );
 
         if (direct_mapping) {
@@ -582,12 +583,14 @@ fn translateAccounts(
     comptime AccountInfoType: type,
     account_infos_addr: u64,
     account_infos_len: u64,
+    program_index_in_transaction: u16,
     account_metas: []const InstructionInfo.AccountMeta,
 ) !TranslatedAccounts {
     // translate_account_infos():
 
-    const direct_mapping = ic.tc.feature_set.active.contains(
-        features.BPF_ACCOUNT_DATA_DIRECT_MAPPING,
+    const direct_mapping = ic.tc.feature_set.active(
+        .bpf_account_data_direct_mapping,
+        ic.tc.slot,
     );
 
     // In the same vein as the other checkAccountInfoPtr() checks, we don't lock
@@ -608,9 +611,10 @@ fn translateAccounts(
     );
 
     // check_account_infos():
-    if (ic.tc.feature_set.active.contains(features.LOOSEN_CPI_SIZE_RESTRICTION)) {
-        const max_cpi_account_infos: u64 = if (ic.tc.feature_set.active.contains(
-            features.INCREASE_TX_ACCOUNT_LOCK_LIMIT,
+    if (ic.tc.feature_set.active(.loosen_cpi_size_restriction, ic.tc.slot)) {
+        const max_cpi_account_infos: u64 = if (ic.tc.feature_set.active(
+            .increase_tx_account_lock_limit,
+            ic.tc.slot,
         )) 128 else 64;
 
         if (account_infos.len > max_cpi_account_infos) {
@@ -645,7 +649,7 @@ fn translateAccounts(
 
     var accounts: TranslatedAccounts = .{};
     try accounts.append(.{
-        .index_in_caller = ic.ixn_info.program_meta.index_in_transaction,
+        .index_in_caller = program_index_in_transaction,
         .caller_account = null,
     });
 
@@ -656,9 +660,8 @@ fn translateAccounts(
         defer callee_account.release();
 
         const account_key = blk: {
-            const account_meta = ic.ixn_info.getAccountMetaAtIndex(
-                meta.index_in_transaction,
-            ) orelse return InstructionError.NotEnoughAccountKeys;
+            const account_meta = ic.tc.getAccountAtIndex(meta.index_in_transaction) orelse
+                return InstructionError.NotEnoughAccountKeys;
             break :blk account_meta.pubkey;
         };
 
@@ -684,7 +687,7 @@ fn translateAccounts(
             return InstructionError.MissingAccount;
         };
 
-        const serialized_account_metas = ic.tc.serialized_accounts.slice();
+        const serialized_account_metas = ic.tc.serialized_accounts.constSlice();
         const serialized_metadata = if (meta.index_in_caller < serialized_account_metas.len) blk: {
             break :blk &serialized_account_metas[meta.index_in_caller];
         } else {
@@ -784,8 +787,9 @@ fn translateInstruction(
         else => unreachable,
     };
 
-    const loosen_cpi_size_restriction = ic.tc.feature_set.active.contains(
-        features.LOOSEN_CPI_SIZE_RESTRICTION,
+    const loosen_cpi_size_restriction = ic.tc.feature_set.active(
+        .loosen_cpi_size_restriction,
+        ic.tc.slot,
     );
 
     // check_instruction_size():
@@ -1258,8 +1262,9 @@ fn cpiCommon(
                 .close => true,
                 .upgrade => true,
                 .set_authority => true,
-                .set_authority_checked => ic.tc.feature_set.active.contains(
-                    features.ENABLE_BPF_LOADER_SET_AUTHORITY_CHECKED_IX,
+                .set_authority_checked => ic.tc.feature_set.active(
+                    .enable_bpf_loader_set_authority_checked_ix,
+                    ic.tc.slot,
                 ),
                 else => false,
             };
@@ -1280,7 +1285,8 @@ fn cpiCommon(
         AccountInfoType,
         account_infos_addr,
         account_infos_len,
-        info.account_metas.slice(),
+        info.program_meta.index_in_transaction,
+        info.account_metas.constSlice(),
     );
 
     // Process the callee instruction.
@@ -1289,8 +1295,9 @@ fn cpiCommon(
 
     // CPI Exit.
     // Synchronize the callee's account changes so the caller can see them.
-    const direct_mapping = ic.tc.feature_set.active.contains(
-        features.BPF_ACCOUNT_DATA_DIRECT_MAPPING,
+    const direct_mapping = ic.tc.feature_set.active(
+        .bpf_account_data_direct_mapping,
+        ic.tc.slot,
     );
 
     if (direct_mapping) {
@@ -1363,7 +1370,7 @@ fn invokeSigned(
     const signers_seeds_addr = registers.get(.r4);
     const signers_seeds_len = registers.get(.r5);
 
-    const caller_ic = &tc.instruction_stack.buffer[tc.instruction_stack.len - 1];
+    const caller_ic = try tc.getCurrentInstructionContext();
 
     return cpiCommon(
         tc.allocator,
@@ -1743,6 +1750,7 @@ test "translateAccounts" {
         AccountInfoRust,
         vm_addr, // account_infos_addr
         1, // account_infos_len
+        ctx.ic.ixn_info.program_meta.index_in_transaction, // program_meta_index
         &.{
             .{
                 .pubkey = account.key,

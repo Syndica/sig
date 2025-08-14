@@ -19,7 +19,7 @@ const Timer = sig.time.Timer;
 
 // ledger
 const AncestorIterator = ledger.reader.AncestorIterator;
-const BlockstoreDB = ledger.blockstore.BlockstoreDB;
+const LedgerDB = ledger.db.LedgerDB;
 const FrozenHashVersioned = ledger.meta.FrozenHashVersioned;
 const FrozenHashStatus = ledger.meta.FrozenHashStatus;
 const SlotMeta = ledger.meta.SlotMeta;
@@ -31,26 +31,24 @@ const schema = ledger.schema.schema;
 /// or reaching consensus on a block.
 pub const LedgerResultWriter = struct {
     allocator: Allocator,
-    logger: ScopedLogger(@typeName(Self)),
-    db: BlockstoreDB,
+    logger: ScopedLogger(@typeName(LedgerResultWriter)),
+    db: LedgerDB,
     // TODO: change naming to 'highest_slot_cleaned'
     lowest_cleanup_slot: *RwMux(Slot),
     max_root: *std.atomic.Value(Slot),
     scan_and_fix_roots_metrics: ScanAndFixRootsMetrics,
 
-    const Self = @This();
-
     pub fn init(
         allocator: Allocator,
         logger: Logger,
-        db: BlockstoreDB,
+        db: LedgerDB,
         registry: *sig.prometheus.Registry(.{}),
         lowest_cleanup_slot: *RwMux(Slot),
         max_root: *std.atomic.Value(Slot),
     ) !LedgerResultWriter {
         return .{
             .allocator = allocator,
-            .logger = logger.withScope(@typeName(Self)),
+            .logger = logger.withScope(@typeName(LedgerResultWriter)),
             .db = db,
             .lowest_cleanup_slot = lowest_cleanup_slot,
             .max_root = max_root,
@@ -60,7 +58,7 @@ pub const LedgerResultWriter = struct {
 
     /// agave: write_transaction_status
     pub fn writeTransactionStatus(
-        self: *Self,
+        self: *LedgerResultWriter,
         slot: Slot,
         signature: Signature,
         writeable_keys: ArrayList(Pubkey),
@@ -87,7 +85,7 @@ pub const LedgerResultWriter = struct {
 
     /// agave: insert_bank_hash
     pub fn insertBankHash(
-        self: *Self,
+        self: *LedgerResultWriter,
         slot: Slot,
         frozen_hash: Hash,
         is_duplicate_confirmed: bool,
@@ -95,7 +93,7 @@ pub const LedgerResultWriter = struct {
         if (try self.db.get(self.allocator, schema.bank_hash, slot)) |prev_value| {
             if (frozen_hash.eql(prev_value.frozenHash()) and prev_value.isDuplicateConfirmed()) {
                 // Don't overwrite is_duplicate_confirmed == true with is_duplicate_confirmed == false,
-                // which may happen on startup when procesing from blockstore processor because the
+                // which may happen on startup when procesing from ledger processor because the
                 // blocks may not reflect earlier observed gossip votes from before the restart.
                 return;
             }
@@ -109,59 +107,167 @@ pub const LedgerResultWriter = struct {
 
     /// agave: set_duplicate_confirmed_slots_and_hashes
     pub fn setDuplicateConfirmedSlotsAndHashes(
-        self: *Self,
-        duplicate_confirmed_slot_hashes: []struct { Slot, Hash },
+        self: *LedgerResultWriter,
+        duplicate_confirmed_slot_hashes: []const struct { Slot, Hash },
     ) !void {
-        var write_batch = try self.db.initWriteBatch();
+        var setter = try self.setDuplicateConfirmedSlotsAndHashesIncremental();
+        defer setter.deinit();
+        errdefer setter.cancel();
+
         for (duplicate_confirmed_slot_hashes) |slot_hash| {
-            const slot, const frozen_hash = slot_hash;
-            const data = FrozenHashVersioned{ .current = FrozenHashStatus{
+            const slot, const hash = slot_hash;
+            try setter.addSlotAndHash(slot, hash);
+        }
+
+        try setter.commit();
+    }
+
+    /// Returns a struct which can be used to enact the same operation as `setDuplicateConfirmedSlotsAndHashes`, incrementally.
+    pub fn setDuplicateConfirmedSlotsAndHashesIncremental(
+        self: *LedgerResultWriter,
+    ) !SetDuplicateConfirmedSlotsAndHashesIncremental {
+        return .{
+            .result_writer = self,
+            .write_batch = try self.db.initWriteBatch(),
+            .is_committed_or_cancelled = false,
+        };
+    }
+
+    pub const SetDuplicateConfirmedSlotsAndHashesIncremental = struct {
+        result_writer: *LedgerResultWriter,
+        write_batch: LedgerDB.WriteBatch,
+        is_committed_or_cancelled: bool,
+
+        /// Asserts that either `self.cancel()` or `self.commit()` has been called.
+        pub fn deinit(self: *SetDuplicateConfirmedSlotsAndHashesIncremental) void {
+            std.debug.assert(self.is_committed_or_cancelled);
+            self.write_batch.deinit();
+        }
+
+        /// Should be called if `self` cannot be completed, e.g. in the error path:
+        /// ```zig
+        /// var setter = try ledger.setDuplicateConfirmedSlotsAndHashesIncremental();
+        /// defer setter.deinit();
+        /// errdefer setter.cancel();
+        /// ```
+        ///
+        /// Asserts `self.commit()` was not called before this.
+        pub fn cancel(self: *SetDuplicateConfirmedSlotsAndHashesIncremental) void {
+            std.debug.assert(!self.is_committed_or_cancelled);
+            self.is_committed_or_cancelled = true;
+        }
+
+        /// Asserts `self.cancel()` was not called before this.
+        pub fn commit(self: *SetDuplicateConfirmedSlotsAndHashesIncremental) !void {
+            std.debug.assert(!self.is_committed_or_cancelled);
+            try self.result_writer.db.commit(&self.write_batch);
+            self.is_committed_or_cancelled = true;
+        }
+
+        /// Asserts that neither of `self.cancel()` and `self.commit()` was called before this.
+        pub fn addSlotAndHash(
+            self: *SetDuplicateConfirmedSlotsAndHashesIncremental,
+            slot: Slot,
+            frozen_hash: Hash,
+        ) !void {
+            std.debug.assert(!self.is_committed_or_cancelled);
+            const data: FrozenHashVersioned = .{ .current = .{
                 .frozen_hash = frozen_hash,
                 .is_duplicate_confirmed = true,
             } };
-            try write_batch.put(schema.bank_hash, slot, data);
+            try self.write_batch.put(schema.bank_hash, slot, data);
         }
-        try self.db.commit(&write_batch);
-    }
+    };
 
     /// agave: set_roots
-    pub fn setRoots(self: *Self, rooted_slots: []const Slot) !void {
-        var write_batch = try self.db.initWriteBatch();
-        defer write_batch.deinit();
-        var max_new_rooted_slot: Slot = 0;
-        for (rooted_slots) |slot| {
-            max_new_rooted_slot = @max(max_new_rooted_slot, slot);
-            try write_batch.put(schema.rooted_slots, slot, true);
+    pub fn setRoots(self: *LedgerResultWriter, rooted_slots: []const Slot) !void {
+        var setter = try self.setRootsIncremental();
+        defer setter.deinit();
+        errdefer setter.cancel();
+        for (rooted_slots) |rooted_slot| try setter.addRoot(rooted_slot);
+        try setter.commit();
+    }
+
+    /// Returns a struct which can be used to enact the same operation as `setRoots`, incrementally.
+    pub fn setRootsIncremental(self: *LedgerResultWriter) !SetRootsIncremental {
+        return .{
+            .result_writer = self,
+            .write_batch = try self.db.initWriteBatch(),
+            .max_new_rooted_slot = 0,
+            .is_committed_or_cancelled = false,
+        };
+    }
+
+    pub const SetRootsIncremental = struct {
+        result_writer: *LedgerResultWriter,
+        write_batch: LedgerDB.WriteBatch,
+        max_new_rooted_slot: Slot,
+        is_committed_or_cancelled: bool,
+
+        /// Asserts that either `self.cancel()` or `self.commit()` has been called.
+        pub fn deinit(self: *SetRootsIncremental) void {
+            std.debug.assert(self.is_committed_or_cancelled);
+            self.write_batch.deinit();
         }
 
-        try self.db.commit(&write_batch);
-        _ = self.max_root.fetchMax(max_new_rooted_slot, .monotonic);
-    }
+        /// Should be called if `self` cannot be completed, e.g. in the error path:
+        /// ```zig
+        /// var setter = try ledger.setRootsIncremental();
+        /// defer setter.deinit();
+        /// errdefer setter.cancel();
+        /// ```
+        ///
+        /// Asserts `self.commit()` was not called before this.
+        pub fn cancel(self: *SetRootsIncremental) void {
+            std.debug.assert(!self.is_committed_or_cancelled);
+            self.is_committed_or_cancelled = true;
+        }
+
+        /// Asserts `self.cancel()` was not called before this.
+        pub fn commit(self: *SetRootsIncremental) !void {
+            std.debug.assert(!self.is_committed_or_cancelled);
+            try self.result_writer.db.commit(&self.write_batch);
+            _ = self.result_writer.max_root.fetchMax(self.max_new_rooted_slot, .monotonic);
+            self.is_committed_or_cancelled = true;
+        }
+
+        /// Asserts that neither of `self.cancel()` and `self.commit()` was called before this.
+        pub fn addRoot(self: *SetRootsIncremental, rooted_slot: Slot) !void {
+            std.debug.assert(!self.is_committed_or_cancelled);
+            self.max_new_rooted_slot = @max(self.max_new_rooted_slot, rooted_slot);
+            try self.write_batch.put(schema.rooted_slots, rooted_slot, true);
+        }
+    };
 
     /// agave: mark_slots_as_if_rooted_normally_at_startup
     pub fn markSlotsAsIfRootedNormallyAtStartup(
-        self: *Self,
-        slot_maybe_hashes: []struct { Slot, ?Hash },
+        self: *LedgerResultWriter,
+        slot_maybe_hashes: []const struct { Slot, ?Hash },
         with_hash: bool,
     ) !void {
-        var slots = try ArrayList(Slot).initCapacity(self.allocator, slot_maybe_hashes.len);
-        defer slots.deinit();
-        for (slot_maybe_hashes) |slot_hash| {
-            slots.appendAssumeCapacity(slot_hash[0]);
+        {
+            var root_setter = try self.setRootsIncremental();
+            defer root_setter.deinit();
+            errdefer root_setter.cancel();
+            for (slot_maybe_hashes) |slot_maybe_hash| {
+                const slot, _ = slot_maybe_hash;
+                try root_setter.addRoot(slot);
+            }
+            try root_setter.commit();
         }
-        try self.setRoots(slots.items);
+
         if (with_hash) {
-            var slot_hashes = try ArrayList(struct { Slot, Hash })
-                .initCapacity(self.allocator, slot_maybe_hashes.len);
-            defer slot_hashes.deinit();
+            var slot_hash_setter = try self.setDuplicateConfirmedSlotsAndHashesIncremental();
+            defer slot_hash_setter.deinit();
+            errdefer slot_hash_setter.cancel();
             for (slot_maybe_hashes) |slot_hash| {
                 const slot, const maybe_hash = slot_hash;
-                slot_hashes.appendAssumeCapacity(.{
+                try slot_hash_setter.addSlotAndHash(
                     slot,
                     maybe_hash orelse return error.MissingHash,
-                });
+                );
             }
-            try self.setDuplicateConfirmedSlotsAndHashes(slot_hashes.items);
+            try slot_hash_setter.commit();
         }
     }
 
@@ -175,22 +281,22 @@ pub const LedgerResultWriter = struct {
     ///
     /// Arguments:
     ///  - `start_root`: The root to start scan from, or the highest root in
-    ///    the blockstore if this value is `None`. This slot must be a root.
+    ///    the ledger if this value is `None`. This slot must be a root.
     ///  - `end_slot``: The slot to stop the scan at; the scan will continue to
-    ///    the earliest slot in the Blockstore if this value is `None`.
+    ///    the earliest slot in the Ledger if this value is `None`.
     ///  - `exit`: Exit early if this flag is set to `true`.
     /// agave: scan_and_fix_roots
     pub fn scanAndFixRoots(
-        self: *Self,
+        self: *LedgerResultWriter,
         maybe_start_root: ?Slot,
         maybe_end_slot: ?Slot,
         exit: std.atomic.Value(bool),
     ) !usize {
         // Hold the lowest_cleanup_slot read lock to prevent any cleaning of
-        // the blockstore from another thread. Doing so will prevent a
+        // the ledger from another thread. Doing so will prevent a
         // possible inconsistency across column families where a slot is:
         //  - Identified as needing root repair by this thread
-        //  - Cleaned from the blockstore by another thread (LedgerCleanupSerivce)
+        //  - Cleaned from the ledger by another thread (LedgerCleanupSerivce)
         //  - Marked as root via Self::set_root() by this this thread
         var lowest_cleanup_slot = self.lowest_cleanup_slot.read();
         defer lowest_cleanup_slot.unlock();
@@ -258,7 +364,7 @@ pub const LedgerResultWriter = struct {
     /// root as connected such that the node that joined midway through can
     /// have their slots considered connected.
     /// agave: set_and_chain_connected_on_root_and_next_slots
-    pub fn setAndChainConnectedOnRootAndNextSlots(self: *Self, root: Slot) !void {
+    pub fn setAndChainConnectedOnRootAndNextSlots(self: *LedgerResultWriter, root: Slot) !void {
         var root_slot_meta: SlotMeta = try self.db.get(self.allocator, schema.slot_meta, root) orelse
             SlotMeta.init(self.allocator, root, null);
         defer root_slot_meta.deinit();
@@ -287,8 +393,8 @@ pub const LedgerResultWriter = struct {
         while (i < child_slots.items.len) : (i += 1) {
             const slot = child_slots.items[i];
             var slot_meta: SlotMeta = try self.db.get(self.allocator, schema.slot_meta, slot) orelse {
-                self.logger.err().logf("Slot {} is a child but has no SlotMeta in blockstore", .{slot});
-                return error.CorruptedBlockstore;
+                self.logger.err().logf("Slot {} is a child but has no SlotMeta in ledger", .{slot});
+                return error.CorruptedLedger;
             };
             defer slot_meta.deinit();
 
@@ -301,7 +407,7 @@ pub const LedgerResultWriter = struct {
         try self.db.commit(&write_batch);
     }
 
-    fn isRoot(self: *Self, slot: Slot) !bool {
+    fn isRoot(self: *LedgerResultWriter, slot: Slot) !bool {
         return try self.db.get(self.allocator, schema.rooted_slots, slot) orelse false;
     }
 };
@@ -343,6 +449,146 @@ test "setRoots" {
     for (roots) |slot| {
         const is_root = try writer.isRoot(slot);
         try std.testing.expect(is_root);
+    }
+}
+
+test "markSlotsAsIfRootedNormallyAtStartup with hash" {
+    const allocator = std.testing.allocator;
+    var prng_state: std.Random.DefaultPrng = .init(31431);
+    const prng = prng_state.random();
+
+    var registry: sig.prometheus.Registry(.{}) = .init(allocator);
+    defer registry.deinit();
+
+    var db = try TestDB.init(@src());
+    defer db.deinit();
+
+    var lowest_cleanup_slot: RwMux(Slot) = .init(0);
+    var max_root: std.atomic.Value(Slot) = .init(0);
+    var writer: LedgerResultWriter = .{
+        .allocator = allocator,
+        .db = db,
+        .logger = .noop,
+        .lowest_cleanup_slot = &lowest_cleanup_slot,
+        .max_root = &max_root,
+        .scan_and_fix_roots_metrics = try registry.initStruct(ScanAndFixRootsMetrics),
+    };
+
+    const slot_maybe_hashes = [_]struct { Slot, ?Hash }{
+        .{ prng.intRangeAtMost(Slot, 100, 200), .initRandom(prng) },
+        .{ prng.intRangeAtMost(Slot, 300, 400), .initRandom(prng) },
+        .{ prng.intRangeAtMost(Slot, 500, 600), .initRandom(prng) },
+        .{ prng.intRangeAtMost(Slot, 700, 800), .initRandom(prng) },
+    };
+    try writer.markSlotsAsIfRootedNormallyAtStartup(&slot_maybe_hashes, true);
+
+    for (slot_maybe_hashes) |slot_maybe_hash| {
+        const slot, const maybe_hash = slot_maybe_hash;
+        try std.testing.expectEqual(true, writer.isRoot(slot));
+        const expected_value: ledger.meta.FrozenHashVersioned = .{ .current = .{
+            .frozen_hash = maybe_hash.?,
+            .is_duplicate_confirmed = true,
+        } };
+        try std.testing.expectEqual(expected_value, db.get(allocator, schema.bank_hash, slot));
+    }
+
+    try std.testing.expectError(
+        error.MissingHash,
+        writer.markSlotsAsIfRootedNormallyAtStartup(
+            &.{.{ prng.uintAtMost(Slot, 1000), null }},
+            true,
+        ),
+    );
+}
+
+test "markSlotsAsIfRootedNormallyAtStartup without hash" {
+    const allocator = std.testing.allocator;
+    var prng_state: std.Random.DefaultPrng = .init(6416);
+    const prng = prng_state.random();
+
+    var registry: sig.prometheus.Registry(.{}) = .init(allocator);
+    defer registry.deinit();
+
+    var db = try TestDB.init(@src());
+    defer db.deinit();
+
+    var lowest_cleanup_slot: RwMux(Slot) = .init(0);
+    var max_root: std.atomic.Value(Slot) = .init(0);
+    var writer: LedgerResultWriter = .{
+        .allocator = allocator,
+        .db = db,
+        .logger = .noop,
+        .lowest_cleanup_slot = &lowest_cleanup_slot,
+        .max_root = &max_root,
+        .scan_and_fix_roots_metrics = try registry.initStruct(ScanAndFixRootsMetrics),
+    };
+
+    const slot_maybe_hashes = [_]struct { Slot, ?Hash }{
+        .{ prng.intRangeAtMost(Slot, 100, 200), null },
+        .{ prng.intRangeAtMost(Slot, 300, 400), null },
+        .{ prng.intRangeAtMost(Slot, 500, 600), null },
+        .{ prng.intRangeAtMost(Slot, 700, 800), null },
+    };
+    try writer.markSlotsAsIfRootedNormallyAtStartup(&slot_maybe_hashes, false);
+
+    for (slot_maybe_hashes) |slot_maybe_hash| {
+        const slot, const maybe_hash = slot_maybe_hash;
+        std.debug.assert(maybe_hash == null);
+
+        try std.testing.expectEqual(true, writer.isRoot(slot));
+        try std.testing.expectEqual(null, db.get(allocator, schema.bank_hash, slot));
+    }
+
+    try std.testing.expectEqual(
+        {},
+        writer.markSlotsAsIfRootedNormallyAtStartup(
+            &.{.{ prng.uintAtMost(Slot, 1000), null }},
+            false,
+        ),
+    );
+}
+
+test "setDuplicateConfirmedSlotsAndHashes" {
+    const allocator = std.testing.allocator;
+    var prng_state: std.Random.DefaultPrng = .init(27911);
+    const prng = prng_state.random();
+
+    var registry: sig.prometheus.Registry(.{}) = .init(allocator);
+    defer registry.deinit();
+
+    var db = try TestDB.init(@src());
+    defer db.deinit();
+
+    var lowest_cleanup_slot: RwMux(Slot) = .init(0);
+    var max_root: std.atomic.Value(Slot) = .init(0);
+    var writer: LedgerResultWriter = .{
+        .allocator = allocator,
+        .db = db,
+        .logger = .noop,
+        .lowest_cleanup_slot = &lowest_cleanup_slot,
+        .max_root = &max_root,
+        .scan_and_fix_roots_metrics = try registry.initStruct(ScanAndFixRootsMetrics),
+    };
+
+    const duplicate_confirmed_slot_hashes = [_]struct { Slot, Hash }{
+        .{ prng.intRangeAtMost(Slot, 100, 200), .initRandom(prng) },
+        .{ prng.intRangeAtMost(Slot, 300, 400), .initRandom(prng) },
+        .{ prng.intRangeAtMost(Slot, 500, 600), .initRandom(prng) },
+        .{ prng.intRangeAtMost(Slot, 700, 800), .initRandom(prng) },
+    };
+    try writer.setDuplicateConfirmedSlotsAndHashes(&duplicate_confirmed_slot_hashes);
+
+    for (duplicate_confirmed_slot_hashes) |pair| {
+        const slot, const expected_hash = pair;
+        errdefer std.log.err("error occured for {}:{}", .{ slot, expected_hash });
+
+        const actual_fhv_opt: ?ledger.meta.FrozenHashVersioned =
+            try db.get(allocator, ledger.schema.schema.bank_hash, slot);
+        const expected_fhv: ledger.meta.FrozenHashVersioned = .{ .current = .{
+            .frozen_hash = expected_hash,
+            .is_duplicate_confirmed = true,
+        } };
+        try std.testing.expectEqual(expected_fhv, actual_fhv_opt);
     }
 }
 

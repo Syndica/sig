@@ -23,6 +23,7 @@ pub fn ScopedLogger(comptime scope: ?[]const u8) type {
 
         /// Can be used in tests to minimize the amount of logging during tests.
         pub const TEST_DEFAULT_LEVEL: Level = .warn;
+        pub const FOR_TESTS: Self = .{ .direct_print = .{ .max_level = TEST_DEFAULT_LEVEL } };
 
         pub fn unscoped(self: Self) Logger {
             return self.withScope(null);
@@ -211,7 +212,7 @@ pub const ChannelPrintLogger = struct {
     ) void {
         if (@intFromEnum(self.max_level) < @intFromEnum(level)) return;
         const size = logfmt.countLog(scope, level, fields, fmt, args);
-        const msg_buf = self.allocBuf(size) catch |err| {
+        const msg_buf = self.log_allocator.alloc(u8, size) catch |err| {
             std.debug.print("allocBuff failed with err: {any}", .{err});
             return;
         };
@@ -229,20 +230,6 @@ pub const ChannelPrintLogger = struct {
             self.log_allocator.free(msg_buf);
             return;
         };
-    }
-
-    // Utility function for allocating memory from RecycleFBA for part of the log message.
-    fn allocBuf(self: *const Self, size: u64) ![]u8 {
-        for (0..100) |_| {
-            return self.log_allocator.alloc(u8, size) catch {
-                std.time.sleep(std.time.ns_per_ms);
-                if (self.exit.load(.monotonic)) {
-                    return error.MemoryBlockedWithExitSignaled;
-                }
-                continue;
-            };
-        }
-        return error.OutOfMemory;
     }
 };
 

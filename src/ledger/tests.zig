@@ -6,7 +6,7 @@ const ledger = @import("lib.zig");
 
 const Allocator = std.mem.Allocator;
 
-const BlockstoreDB = ledger.BlockstoreDB;
+const LedgerDB = ledger.LedgerDB;
 const Entry = sig.core.Entry;
 const Shred = ledger.shred.Shred;
 const Slot = sig.core.Slot;
@@ -272,7 +272,7 @@ pub fn loadEntriesFromFile(allocator: Allocator, path: []const u8) ![]const Entr
 }
 
 pub const TestState = struct {
-    db: BlockstoreDB,
+    db: LedgerDB,
     registry: sig.prometheus.Registry(.{}),
     lowest_cleanup_slot: sig.sync.RwMux(Slot),
     max_root: std.atomic.Value(Slot),
@@ -313,8 +313,8 @@ pub const TestState = struct {
         );
     }
 
-    pub fn reader(self: *Self) !ledger.BlockstoreReader {
-        return try ledger.BlockstoreReader.init(
+    pub fn reader(self: *Self) !ledger.LedgerReader {
+        return try ledger.LedgerReader.init(
             self.allocator,
             self.logger,
             self.db,
@@ -334,23 +334,23 @@ pub const TestState = struct {
 pub const TestDB = struct {
     const dir = sig.TEST_STATE_DIR ++ "/blockstore";
 
-    pub fn init(comptime test_src: std.builtin.SourceLocation) !BlockstoreDB {
+    pub fn init(comptime test_src: std.builtin.SourceLocation) !LedgerDB {
         return try initCustom(std.testing.allocator, test_src);
     }
 
-    pub fn reuseBlockstore(comptime test_src: std.builtin.SourceLocation) !BlockstoreDB {
+    pub fn reuseLedger(comptime test_src: std.builtin.SourceLocation) !LedgerDB {
         const path = comptimePrint("{s}/{s}/{s}", .{ dir, test_src.file, test_src.fn_name });
         try std.fs.cwd().makePath(path);
-        return try BlockstoreDB.open(std.testing.allocator, .noop, path);
+        return try LedgerDB.open(std.testing.allocator, .noop, path);
     }
 
     pub fn initCustom(
         allocator: Allocator,
         comptime test_src: std.builtin.SourceLocation,
-    ) !BlockstoreDB {
+    ) !LedgerDB {
         const path = comptimePrint("{s}/{s}/{s}", .{ dir, test_src.file, test_src.fn_name });
         try sig.ledger.tests.freshDir(path);
-        return try BlockstoreDB.open(allocator, .noop, path);
+        return try LedgerDB.open(allocator, .noop, path);
     }
 };
 
@@ -411,7 +411,7 @@ pub fn insertDataForBlockTest(state: *TestState) !InsertDataForBlockResult {
 
     var expected_transactions = std.ArrayList(VersionedTransactionWithStatusMeta).init(allocator);
     for (entries) |entry| {
-        for (entry.transactions.items) |transaction| {
+        for (entry.transactions) |transaction| {
             var pre_balances = std.ArrayList(u64).init(allocator);
             var post_balances = std.ArrayList(u64).init(allocator);
             const num_accounts = transaction.msg.account_keys.len;

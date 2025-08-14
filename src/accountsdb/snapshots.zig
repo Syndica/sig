@@ -18,7 +18,7 @@ const Rent = sig.core.genesis_config.Rent;
 const Slot = sig.core.time.Slot;
 const SlotAndHash = sig.core.hash.SlotAndHash;
 const SlotHistory = sig.runtime.sysvar.SlotHistory;
-const VersionedEpochStake = sig.core.stake.VersionedEpochStake;
+const VersionedEpochStakes = sig.core.VersionedEpochStakes;
 const UnixTimestamp = sig.core.UnixTimestamp;
 
 const FileId = sig.accounts_db.accounts_file.FileId;
@@ -128,7 +128,7 @@ pub const ExtraFields = struct {
     lamports_per_signature: u64,
     snapshot_persistence: ?BankIncrementalSnapshotPersistence,
     epoch_accounts_hash: ?Hash,
-    versioned_epoch_stakes: VersionedEpochStakesMap,
+    versioned_epoch_stakes: std.AutoArrayHashMapUnmanaged(Epoch, VersionedEpochStakes),
     accounts_lt_hash: ?AccountsLtHash,
 
     pub const @"!bincode-config": bincode.FieldConfig(ExtraFields) = .{
@@ -136,8 +136,6 @@ pub const ExtraFields = struct {
         .serializer = null, // just use default serialization method
         .free = bincodeFree,
     };
-
-    pub const VersionedEpochStakesMap = std.AutoArrayHashMapUnmanaged(u64, VersionedEpochStake);
 
     /// TODO: https://github.com/orgs/Syndica/projects/2/views/10?pane=issue&itemId=85238686
     pub const ACCOUNTS_LATTICE_HASH_LEN = 1024;
@@ -203,7 +201,7 @@ pub const ExtraFields = struct {
                     const entry_count = random.uintAtMost(usize, max_list_entries);
                     try field_ptr.ensureTotalCapacity(allocator, entry_count);
                     for (0..entry_count) |_| {
-                        const ves = try VersionedEpochStake.initRandom(
+                        const ves = try VersionedEpochStakes.initRandom(
                             allocator,
                             random,
                             max_list_entries,
@@ -583,6 +581,40 @@ pub const Manifest = struct {
     ) !Manifest {
         return try bincode.deserializeAlloc(allocator, Manifest, reader, .{});
     }
+
+    pub fn epochStakes(
+        self: *const Manifest,
+        epoch: Epoch,
+    ) !*const std.AutoArrayHashMapUnmanaged(Pubkey, u64) {
+        if (self.bank_fields.epoch_stakes.getPtr(epoch)) |_| {
+            // Agave simply ignores this field. I've added this log message just
+            // as a sanity check, but I don't expect to ever see it.
+            std.log.warn("ignoring deprecated epoch stakes", .{});
+        }
+        return if (self.bank_extra.versioned_epoch_stakes.getPtr(epoch)) |es|
+            &es.current.stakes.vote_accounts.staked_nodes
+        else
+            return error.NoEpochStakes;
+    }
+
+    /// Returns the leader schedule for an arbitrary epoch.
+    /// Only works if the bank is aware of the staked nodes for that epoch.
+    pub fn leaderSchedule(
+        self: *const Manifest,
+        allocator: std.mem.Allocator,
+        /// Default is the bank's epoch.
+        custom_epoch: ?Epoch,
+    ) !sig.core.leader_schedule.LeaderSchedule {
+        const epoch = custom_epoch orelse self.bank_fields.epoch;
+        const slots_in_epoch =
+            self.bank_fields.epoch_schedule.getSlotsInEpoch(self.bank_fields.epoch);
+        const staked_nodes = try self.epochStakes(epoch);
+        return .{
+            .allocator = allocator,
+            .slot_leaders = try sig.core.leader_schedule.LeaderSchedule
+                .fromStakedNodes(allocator, epoch, slots_in_epoch, staked_nodes),
+        };
+    }
 };
 
 /// Analogous to [TransactionError](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/sdk/src/transaction/error.rs#L14)
@@ -923,7 +955,7 @@ pub const FullSnapshotFileInfo = struct {
                 filename_truncated.len;
 
             const str = filename[start..end];
-            const hash = Hash.parseBase58String(str) catch |err| switch (err) {
+            const hash = Hash.parseRuntime(str) catch |err| switch (err) {
                 error.InvalidHash => return error.InvalidHash,
             };
 
@@ -1085,7 +1117,7 @@ pub const IncrementalSnapshotFileInfo = struct {
                 filename_truncated.len;
 
             const str = filename[start..end];
-            const hash = Hash.parseBase58String(str) catch |err| switch (err) {
+            const hash = Hash.parseRuntime(str) catch |err| switch (err) {
                 error.InvalidHash => return error.InvalidHash,
             };
 
@@ -1468,6 +1500,9 @@ pub fn parallelUnpackZstdTarBall(
     defer zone.deinit();
 
     const file_size = (try file.stat()).size;
+
+    // calling posix.mmap on a zero-sized file will cause illegal behaviour
+    if (file_size == 0) return error.ZeroSizedTarball;
 
     // TODO: improve `zstd.Reader` to be capable of sourcing a stream of bytes
     // rather than a fixed slice of bytes, so we don't have to load the entire

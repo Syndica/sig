@@ -1,3 +1,5 @@
+const builtin = @import("builtin");
+const std = @import("std");
 const sig = @import("../../sig.zig");
 
 const Pubkey = sig.core.Pubkey;
@@ -8,10 +10,16 @@ pub const LastRestartSlot = extern struct {
     /// The last restart `Slot`.
     last_restart_slot: Slot,
 
-    pub const ID =
-        Pubkey.parseBase58String("SysvarLastRestartS1ot1111111111111111111111") catch unreachable;
+    pub const ID: Pubkey = .parse("SysvarLastRestartS1ot1111111111111111111111");
 
     pub const DEFAULT = LastRestartSlot{
         .last_restart_slot = 0,
     };
+
+    pub const STORAGE_SIZE: u64 = 8;
+
+    pub fn initRandom(random: std.Random) LastRestartSlot {
+        if (!builtin.is_test) @compileError("only for testing");
+        return .{ .last_restart_slot = random.int(Slot) };
+    }
 };

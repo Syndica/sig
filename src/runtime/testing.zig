@@ -4,13 +4,14 @@ const sig = @import("../sig.zig");
 
 const bincode = sig.bincode;
 const sysvar = sig.runtime.sysvar;
+const vm = sig.vm;
 
 const Pubkey = sig.core.Pubkey;
 const Hash = sig.core.Hash;
 const Slot = sig.core.Slot;
-const EpochStakes = sig.core.stake.EpochStakes;
+const EpochStakes = sig.core.EpochStakes;
 
-const FeatureSet = sig.runtime.FeatureSet;
+const FeatureSet = sig.core.FeatureSet;
 const InstructionInfo = sig.runtime.InstructionInfo;
 const LogCollector = sig.runtime.LogCollector;
 const SysvarCache = sig.runtime.SysvarCache;
@@ -20,6 +21,7 @@ const TransactionReturnData = sig.runtime.transaction_context.TransactionReturnD
 const Rent = sig.runtime.sysvar.Rent;
 const ComputeBudget = sig.runtime.ComputeBudget;
 const AccountCache = sig.runtime.account_loader.BatchAccountCache;
+const ProgramMap = sig.runtime.program_loader.ProgramMap;
 
 pub const ExecuteContextsParams = struct {
     // If a user requires a mutable reference to the created feature set, they should
@@ -29,11 +31,19 @@ pub const ExecuteContextsParams = struct {
     feature_set: []const FeatureParams = &.{},
     epoch_stakes: []const EpochStakeParam = &.{},
 
+    // Programs to be inserted into the program map.
+    program_map: *const ProgramMap = &.{},
+
+    // Environment used to load and verify programs.
+    vm_environment: *const vm.Environment = &.{},
+    next_vm_environment: ?*const vm.Environment = null,
+
     // Slot Context
     sysvar_cache: SysvarCacheParams = .{},
 
     // Transaction Context
     accounts: []const AccountParams = &.{},
+    instruction_datas: []const []const u8 = &.{},
     return_data: ReturnDataParams = .{},
     accounts_resize_delta: i64 = 0,
     compute_meter: u64 = 0,
@@ -43,8 +53,10 @@ pub const ExecuteContextsParams = struct {
     prev_blockhash: Hash = Hash.ZEROES,
     prev_lamports_per_signature: u64 = 0,
 
+    slot: Slot = 0,
+
     pub const FeatureParams = struct {
-        pubkey: Pubkey,
+        feature: sig.core.features.Feature,
         slot: Slot = 0,
     };
 
@@ -93,8 +105,7 @@ pub fn createTransactionContext(
         ptr
     else
         try allocator.create(FeatureSet);
-    feature_set.* = try createFeatureSet(allocator, params.feature_set);
-    errdefer feature_set.deinit(allocator);
+    feature_set.* = try createFeatureSet(params.feature_set);
 
     // Create EpochStakes
     const epoch_stakes = try allocator.create(EpochStakes);
@@ -150,15 +161,19 @@ pub fn createTransactionContext(
     return_data.data.appendSliceAssumeCapacity(params.return_data.data);
 
     // Create Transaction Context
-    const tc = TransactionContext{
+    const tc: TransactionContext = .{
         .allocator = allocator,
         .feature_set = feature_set,
         .sysvar_cache = sysvar_cache,
         .epoch_stakes = epoch_stakes,
+        .vm_environment = params.vm_environment,
+        .next_vm_environment = params.next_vm_environment,
+        .program_map = params.program_map,
         .accounts = try accounts.toOwnedSlice(allocator),
         .serialized_accounts = .{},
         .instruction_stack = .{},
         .instruction_trace = .{},
+        .instruction_datas = params.instruction_datas,
         .return_data = return_data,
         .accounts_resize_delta = params.accounts_resize_delta,
         .compute_meter = params.compute_meter,
@@ -168,6 +183,7 @@ pub fn createTransactionContext(
         .log_collector = params.log_collector,
         .prev_blockhash = params.prev_blockhash,
         .prev_lamports_per_signature = params.prev_lamports_per_signature,
+        .slot = params.slot,
     };
 
     return .{ account_cache, tc };
@@ -180,7 +196,6 @@ pub fn deinitTransactionContext(
     if (!builtin.is_test)
         @compileError("deinitTransactionContext should only be called in test mode");
 
-    tc.feature_set.deinit(allocator);
     allocator.destroy(tc.feature_set);
 
     tc.sysvar_cache.deinit(allocator);
@@ -197,16 +212,7 @@ pub fn createEpochStakes(
     params: []const ExecuteContextsParams.EpochStakeParam,
 ) !EpochStakes {
     var self: EpochStakes = .{
-        .stakes = .{
-            .vote_accounts = .{
-                .accounts = .{},
-                .staked_nodes = null,
-            },
-            .delegations = .{},
-            .unused = 0,
-            .epoch = 0,
-            .history = .{},
-        },
+        .stakes = try .init(allocator),
         .total_stake = 0,
         .node_id_to_vote_accounts = .{},
         .epoch_authorized_voters = .{},
@@ -215,7 +221,7 @@ pub fn createEpochStakes(
 
     for (params) |param| {
         self.total_stake += param.stake;
-        try self.stakes.delegations.put(allocator, param.pubkey, .{
+        try self.stakes.stake_delegations.put(allocator, param.pubkey, .{
             .voter_pubkey = param.pubkey,
             .stake = param.stake,
             .activation_epoch = 0,
@@ -227,24 +233,12 @@ pub fn createEpochStakes(
     return self;
 }
 
-pub fn createFeatureSet(
-    allocator: std.mem.Allocator,
-    params: []const ExecuteContextsParams.FeatureParams,
-) !FeatureSet {
+pub fn createFeatureSet(params: []const ExecuteContextsParams.FeatureParams) !FeatureSet {
     if (!builtin.is_test)
         @compileError("createFeatureSet should only be called in test mode");
 
-    var feature_set = FeatureSet{ .active = .{} };
-    errdefer feature_set.deinit(allocator);
-
-    for (params) |args| {
-        try feature_set.active.put(
-            allocator,
-            args.pubkey,
-            args.slot,
-        );
-    }
-
+    var feature_set: FeatureSet = .ALL_DISABLED;
+    for (params) |args| feature_set.setSlot(args.feature, args.slot);
     return feature_set;
 }
 
@@ -275,30 +269,15 @@ pub fn createSysvarCache(
     }
     if (params.slot_hashes) |slot_hashes| {
         sysvar_cache.slot_hashes = try sysvar.serialize(allocator, slot_hashes);
-        sysvar_cache.slot_hashes_obj = .{
-            .entries = try allocator.dupe(
-                sysvar.SlotHashes.Entry,
-                slot_hashes.entries,
-            ),
-        };
+        sysvar_cache.slot_hashes_obj = slot_hashes;
     }
     if (params.stake_history) |stake_history| {
         sysvar_cache.stake_history = try sysvar.serialize(allocator, stake_history);
-        sysvar_cache.stake_history_obj = .{
-            .entries = try allocator.dupe(
-                sysvar.StakeHistory.Entry,
-                stake_history.entries,
-            ),
-        };
+        sysvar_cache.stake_history_obj = stake_history;
     }
-    sysvar_cache.fees = params.fees;
+    sysvar_cache.fees_obj = params.fees;
     if (params.recent_blockhashes) |recent_blockhashes| {
-        sysvar_cache.recent_blockhashes = .{
-            .entries = try allocator.dupe(
-                sysvar.RecentBlockhashes.Entry,
-                recent_blockhashes.entries,
-            ),
-        };
+        sysvar_cache.recent_blockhashes_obj = recent_blockhashes;
     }
 
     return sysvar_cache;
@@ -339,7 +318,7 @@ pub fn createInstructionInfo(
 }
 
 pub const InstructionInfoAccountMetaParams = struct {
-    index_in_transaction: u16 = 0,
+    index_in_transaction: u16,
     index_in_caller: ?u16 = null,
     index_in_callee: ?u16 = null,
     is_signer: bool = false,
@@ -349,17 +328,11 @@ pub const InstructionInfoAccountMetaParams = struct {
 pub fn createInstructionInfoAccountMetas(
     tc: *const TransactionContext,
     account_meta_params: []const InstructionInfoAccountMetaParams,
-) !std.BoundedArray(
-    InstructionInfo.AccountMeta,
-    InstructionInfo.MAX_ACCOUNT_METAS,
-) {
+) !InstructionInfo.AccountMetas {
     if (!builtin.is_test)
         @compileError("createInstructionContextAccountMetas should only be called in test mode");
 
-    var account_metas = std.BoundedArray(
-        InstructionInfo.AccountMeta,
-        InstructionInfo.MAX_ACCOUNT_METAS,
-    ){};
+    var account_metas = InstructionInfo.AccountMetas{};
     for (account_meta_params, 0..) |acc, idx| {
         if (acc.index_in_transaction >= tc.accounts.len)
             return error.AccountIndexOutOfBounds;
@@ -424,19 +397,11 @@ pub fn expectTransactionContextEqual(
     // if (expected.maybe_log_collector != actual.maybe_log_collector)
     //     return error.MaybeLogCollectorMismatch;
 
-    // TODO: implement eqls for SysvarCache
-    // if (expected.sysvar_cache != actual.sysvar_cache)
-    //     return error.SysvarCacheMismatch;
-
     if (expected.prev_lamports_per_signature != actual.prev_lamports_per_signature)
         return error.LamportsPerSignatureMismatch;
 
     if (!expected.prev_blockhash.eql(actual.prev_blockhash))
         return error.LastBlockhashMismatch;
-
-    // TODO: implement eqls for FeatureSet
-    // if (expected.feature_set != actual.feature_set)
-    //     return error.FeatureSetMismatch;
 
     try expectTransactionReturnDataEqual(expected.return_data, actual.return_data);
 }

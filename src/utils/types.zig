@@ -451,7 +451,7 @@ fn sliceEql(comptime T: type, a: []const T, b: []const T, comptime config: EqlCo
     if (!@inComptime() and
         std.meta.hasUniqueRepresentation(T) and
         backend_can_use_eql_bytes and
-        (config.follow_pointers == .no or !(containsPointer(T) orelse true)))
+        (config.follow_pointers == .no or !(containsPointer(.any, T) orelse true)))
     {
         // This is a performance optimization. We directly compare the bytes in the slice, instead
         // of iterating over each item and comparing them for equality.
@@ -475,24 +475,39 @@ const backend_can_use_eql_bytes = switch (@import("builtin").zig_backend) {
     else => true,
 };
 
-/// Returns whether a type has any pointers within it, at any level of nesting.
+/// Returns whether a type has a pointer within it, at any level of nesting.
 /// Returns null if the answer cannot be determined.
-pub fn containsPointer(comptime T: type) ?bool {
+pub fn containsPointer(
+    /// The type of pointer you'd like to detect
+    ptr_type: enum {
+        /// return true if any pointer is found
+        any,
+        /// return true only if a mut pointer is found
+        mut,
+        /// return true only if a const pointer is found
+        @"const",
+    },
+    comptime T: type,
+) ?bool {
     return switch (@typeInfo(T)) {
-        .pointer => true,
+        .pointer => |ptr_info| switch (ptr_type) {
+            .any => true,
+            .mut => !ptr_info.is_const,
+            .@"const" => ptr_info.is_const,
+        },
 
-        inline .array, .optional => |info| containsPointer(info.child),
+        inline .array, .optional => |info| containsPointer(ptr_type, info.child),
 
-        .error_union => |info| containsPointer(info.payload),
+        .error_union => |info| containsPointer(ptr_type, info.payload),
 
         inline .@"struct", .@"union" => |info| inline for (info.fields) |field| {
-            const field_has_pointer = containsPointer(field.type);
+            const field_has_pointer = containsPointer(ptr_type, field.type);
             if (field_has_pointer != false) break field_has_pointer;
         } else false,
 
         .@"opaque", .frame => null,
 
-        .@"anyframe" => |info| if (info.child) |c| containsPointer(c) else null,
+        .@"anyframe" => |info| if (info.child) |c| containsPointer(ptr_type, c) else null,
 
         .type, .void, .bool, .noreturn, .int, .float, .comptime_float, .comptime_int => false,
         .undefined, .null, .error_set, .@"enum", .@"fn", .vector, .enum_literal => false,

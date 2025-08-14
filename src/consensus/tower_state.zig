@@ -4,10 +4,26 @@ const sig = @import("../sig.zig");
 const Slot = sig.core.Slot;
 const Lockout = sig.runtime.program.vote.state.Lockout;
 const MAX_LOCKOUT_HISTORY = sig.runtime.program.vote.state.MAX_LOCKOUT_HISTORY;
+const VoteAccount = sig.core.vote_accounts.VoteAccount;
 
 pub const TowerVoteState = struct {
-    votes: std.BoundedArray(Lockout, MAX_LOCKOUT_HISTORY) = .{},
     root_slot: ?Slot = null,
+    votes: std.BoundedArray(Lockout, MAX_LOCKOUT_HISTORY) = .{},
+
+    pub fn fromAccount(account: *const VoteAccount) !TowerVoteState {
+        const vote_state = account.state;
+        var lockouts: std.BoundedArray(Lockout, MAX_LOCKOUT_HISTORY) = .{};
+        for (vote_state.votes.items) |landed| {
+            try lockouts.append(.{
+                .slot = landed.lockout.slot,
+                .confirmation_count = landed.lockout.confirmation_count,
+            });
+        }
+        return .{
+            .root_slot = vote_state.root_slot,
+            .votes = lockouts,
+        };
+    }
 
     pub fn lastLockout(self: *const TowerVoteState) ?Lockout {
         if (self.votes.len == 0) return null;

@@ -1,10 +1,10 @@
 const std = @import("std");
-const sig = @import("../../../sig.zig");
 const builtin = @import("builtin");
-
+const sig = @import("../../../sig.zig");
 const program = @import("lib.zig");
-const state = @import("state.zig");
-const instruction = @import("instruction.zig");
+
+const state = program.state;
+const instruction = program.instruction;
 
 const Instruction = program.Instruction;
 const InstructionContext = runtime.InstructionContext;
@@ -61,10 +61,10 @@ fn createLookupTable(
 ) (error{OutOfMemory} || InstructionError)!void {
     const AccountIndex = instruction.CreateLookupTable.AccountIndex;
 
-    const has_relax_authority_signer_check_for_lookup_table_creation =
-        ic.tc.feature_set.active.contains(
-            runtime.features.RELAX_AUTHORITY_SIGNER_CHECK_FOR_LOOKUP_TABLE_CREATION,
-        );
+    const has_relax_authority_signer_check_for_lookup_table_creation = ic.tc.feature_set.active(
+        .relax_authority_signer_check_for_lookup_table_creation,
+        ic.tc.slot,
+    );
 
     // [agave] https://github.com/anza-xyz/agave/blob/8116c10021f09c806159852f65d37ffe6d5a118e/programs/address-lookup-table/src/processor.rs#L59
     const lookup_table_lamports, const table_key: Pubkey, const lookup_table_owner: Pubkey = blk: {
@@ -225,6 +225,7 @@ fn freezeLookupTable(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
 ) !void {
+    _ = allocator; // autofix
     const AccountIndex = instruction.FreezeLookupTable.AccountIndex;
 
     // [agave] https://github.com/anza-xyz/agave/blob/8116c10021f09c806159852f65d37ffe6d5a118e/programs/address-lookup-table/src/processor.rs#L177-L182
@@ -260,10 +261,8 @@ fn freezeLookupTable(
     defer lookup_table_account.release();
 
     const lookup_table = try AddressLookupTable.deserialize(
-        allocator,
         lookup_table_account.account.data,
     );
-    defer sig.bincode.free(allocator, lookup_table.meta);
 
     if (lookup_table.meta.authority) |authority| {
         if (!authority.equals(&authority_key)) {
@@ -329,10 +328,8 @@ fn extendLookupTable(
         defer lookup_table_account.release();
 
         var lookup_table = try AddressLookupTable.deserialize(
-            allocator,
             lookup_table_account.account.data,
         );
-        defer sig.bincode.free(allocator, lookup_table.meta);
 
         if (lookup_table.meta.authority) |authority| {
             if (!authority.equals(&authority_key)) {
@@ -450,6 +447,7 @@ fn deactivateLookupTable(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
 ) !void {
+    _ = allocator; // autofix
     const AccountIndex = instruction.DeactivateLookupTable.AccountIndex;
 
     {
@@ -483,10 +481,8 @@ fn deactivateLookupTable(
     defer lookup_table_account.release();
 
     const lookup_table = try AddressLookupTable.deserialize(
-        allocator,
         lookup_table_account.account.data,
     );
-    defer sig.bincode.free(allocator, lookup_table.meta);
 
     if (lookup_table.meta.authority) |authority| {
         if (!authority.equals(&authority_key)) {
@@ -564,10 +560,8 @@ fn closeLookupTable(
         defer lookup_table_account.release();
 
         const lookup_table = try AddressLookupTable.deserialize(
-            allocator,
             lookup_table_account.account.data,
         );
-        defer sig.bincode.free(allocator, lookup_table.meta);
 
         if (lookup_table.meta.authority) |authority| {
             if (!authority.equals(&authority_key)) {
@@ -752,9 +746,10 @@ test "address-lookup-table create" {
 
     const sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
         .clock = runtime.sysvar.Clock.DEFAULT,
-        .slot_hashes = runtime.sysvar.SlotHashes{
-            .entries = &.{.{ std.math.maxInt(Slot), sig.core.Hash.ZEROES }},
-        },
+        .slot_hashes = try sysvar.SlotHashes.initWithEntries(
+            allocator,
+            &.{.{ .slot = std.math.maxInt(Slot), .hash = sig.core.Hash.ZEROES }},
+        ),
         .rent = runtime.sysvar.Rent.DEFAULT,
     };
 
@@ -858,9 +853,10 @@ test "address-lookup-table freeze" {
 
     const sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
         .clock = runtime.sysvar.Clock.DEFAULT,
-        .slot_hashes = runtime.sysvar.SlotHashes{
-            .entries = &.{.{ std.math.maxInt(Slot), sig.core.Hash.ZEROES }},
-        },
+        .slot_hashes = try sysvar.SlotHashes.initWithEntries(
+            allocator,
+            &.{.{ .slot = std.math.maxInt(Slot), .hash = sig.core.Hash.ZEROES }},
+        ),
         .rent = runtime.sysvar.Rent.DEFAULT,
     };
 
@@ -968,9 +964,10 @@ test "address-lookup-table close" {
 
     const sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
         .clock = runtime.sysvar.Clock.DEFAULT,
-        .slot_hashes = runtime.sysvar.SlotHashes{
-            .entries = &.{.{ std.math.maxInt(Slot), sig.core.Hash.ZEROES }},
-        },
+        .slot_hashes = try sysvar.SlotHashes.initWithEntries(
+            allocator,
+            &.{.{ .slot = std.math.maxInt(Slot), .hash = sig.core.Hash.ZEROES }},
+        ),
         .rent = runtime.sysvar.Rent.DEFAULT,
     };
 
@@ -1076,9 +1073,10 @@ test "address-lookup-table deactivate" {
 
     const sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
         .clock = runtime.sysvar.Clock.DEFAULT,
-        .slot_hashes = runtime.sysvar.SlotHashes{
-            .entries = &.{.{ std.math.maxInt(Slot), sig.core.Hash.ZEROES }},
-        },
+        .slot_hashes = try sysvar.SlotHashes.initWithEntries(
+            allocator,
+            &.{.{ .slot = std.math.maxInt(Slot), .hash = sig.core.Hash.ZEROES }},
+        ),
         .rent = runtime.sysvar.Rent.DEFAULT,
     };
 
@@ -1208,9 +1206,10 @@ test "address-lookup-table extend" {
 
         const sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
             .clock = runtime.sysvar.Clock.DEFAULT,
-            .slot_hashes = runtime.sysvar.SlotHashes{
-                .entries = &.{.{ std.math.maxInt(Slot), sig.core.Hash.ZEROES }},
-            },
+            .slot_hashes = try sysvar.SlotHashes.initWithEntries(
+                allocator,
+                &.{.{ .slot = std.math.maxInt(Slot), .hash = sig.core.Hash.ZEROES }},
+            ),
             .rent = runtime.sysvar.Rent.DEFAULT,
         };
 

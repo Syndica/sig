@@ -9,7 +9,6 @@ const RegisterMap = sig.vm.interpreter.RegisterMap;
 const Error = syscalls.Error;
 const MemoryMap = sig.vm.memory.MemoryMap;
 const TransactionContext = sig.runtime.transaction_context.TransactionContext;
-const features = sig.runtime.features;
 const SerializedAccountMetadata = sig.runtime.program.bpf.serialize.SerializedAccountMeta;
 
 const MemoryChunkIterator = struct {
@@ -335,7 +334,7 @@ pub fn memset(tc: *TransactionContext, memory_map: *MemoryMap, registers: *Regis
 
     const feature_set = tc.feature_set;
     const check_aligned = tc.getCheckAligned();
-    if (feature_set.active.contains(features.BPF_ACCOUNT_DATA_DIRECT_MAPPING)) {
+    if (feature_set.active(.bpf_account_data_direct_mapping, tc.slot)) {
         try memsetNonContigious(
             dst_addr,
             @truncate(scalar),
@@ -372,7 +371,7 @@ pub fn memcpy(tc: *TransactionContext, memory_map: *MemoryMap, registers: *Regis
 
     const feature_set = tc.feature_set;
     const check_aligned = tc.getCheckAligned();
-    if (feature_set.active.contains(features.BPF_ACCOUNT_DATA_DIRECT_MAPPING)) {
+    if (feature_set.active(.bpf_account_data_direct_mapping, tc.slot)) {
         try memmoveNonContigious(
             dst_addr,
             src_addr,
@@ -398,7 +397,7 @@ pub fn memmove(tc: *TransactionContext, memory_map: *MemoryMap, reg_map: *Regist
 
     const feature_set = tc.feature_set;
     const check_aligned = tc.getCheckAligned();
-    if (feature_set.active.contains(features.BPF_ACCOUNT_DATA_DIRECT_MAPPING)) {
+    if (feature_set.active(.bpf_account_data_direct_mapping, tc.slot)) {
         try memmoveNonContigious(
             dst_addr,
             src_addr,
@@ -426,7 +425,7 @@ pub fn memcmp(tc: *TransactionContext, memory_map: *MemoryMap, registers: *Regis
 
     const feature_set = tc.feature_set;
     const check_aligned = tc.getCheckAligned();
-    if (feature_set.active.contains(features.BPF_ACCOUNT_DATA_DIRECT_MAPPING)) {
+    if (feature_set.active(.bpf_account_data_direct_mapping, tc.slot)) {
         const cmp_result = try memory_map.translateType(
             i32,
             .mutable,

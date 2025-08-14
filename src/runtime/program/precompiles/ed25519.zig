@@ -1,15 +1,17 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const sig = @import("../../../sig.zig");
-const Pubkey = sig.core.Pubkey;
 
 const precompile_programs = sig.runtime.program.precompiles;
 
-const PrecompileProgramError = precompile_programs.PrecompileProgramError;
+const Pubkey = sig.core.Pubkey;
+const InstructionError = sig.core.instruction.InstructionError;
+const InstructionContext = sig.runtime.InstructionContext;
+const PrecompileProgramError = sig.runtime.program.precompiles.PrecompileProgramError;
+
 const Ed25519 = std.crypto.sign.Ed25519;
 
-pub const ID =
-    Pubkey.parseBase58String("Ed25519SigVerify111111111111111111111111111") catch unreachable;
+pub const ID: Pubkey = .parse("Ed25519SigVerify111111111111111111111111111");
 
 pub const ED25519_DATA_START = ED25519_SIGNATURE_OFFSETS_SERIALIZED_SIZE +
     ED25519_SIGNATURE_OFFSETS_START;
@@ -40,6 +42,16 @@ pub const Ed25519SignatureOffsets = extern struct {
     /// Index of instruction data to get message data.
     message_instruction_idx: u16 = 0,
 };
+
+pub fn execute(_: std.mem.Allocator, ic: *InstructionContext) InstructionError!void {
+    const instruction_data = ic.ixn_info.instruction_data;
+    const instruction_datas = ic.tc.instruction_datas.?;
+
+    verify(instruction_data, instruction_datas) catch |err| {
+        ic.tc.custom_error = precompile_programs.intFromPrecompileProgramError(err);
+        return error.Custom;
+    };
+}
 
 // TODO: support verify_strict feature https://github.com/anza-xyz/agave/pull/1876/
 // https://github.com/anza-xyz/agave/blob/a8aef04122068ec36a7af0721e36ee58efa0bef2/sdk/src/ed25519_instruction.rs#L88
@@ -188,6 +200,34 @@ fn testCase(
     @memcpy(instruction_data[2..], std.mem.asBytes(&offsets));
 
     return try verify(&instruction_data, &.{&(.{0} ** 100)});
+}
+
+test "execute" {
+    const testing = sig.runtime.program.testing;
+
+    const allocator = std.testing.allocator;
+
+    try testing.expectProgramExecuteError(
+        error.Custom,
+        allocator,
+        ID,
+        &.{ 0, 0, 0 },
+        &.{},
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = ID,
+                    .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+                    .executable = true,
+                },
+            },
+            .feature_set = &.{
+                .{ .feature = .move_precompile_verification_to_svm, .slot = 0 },
+            },
+            .instruction_datas = &.{},
+        },
+        .{},
+    );
 }
 
 // https://github.com/anza-xyz/agave/blob/a8aef04122068ec36a7af0721e36ee58efa0bef2/sdk/src/ed25519_instruction.rs#L279

@@ -141,7 +141,7 @@ pub fn deserializeCustom(
             inline for (info.fields, 0..) |field, i| {
                 errdefer inline for (info.fields[0..i]) |prev| {
                     if (prev.is_comptime) continue;
-                    free(allocator, @field(data, prev.name));
+                    if (allocate) free(allocator, @field(data, prev.name));
                 };
 
                 if (field.is_comptime) continue;
@@ -370,15 +370,19 @@ pub fn deserializeIntAsLength(comptime T: type, reader: anytype, params: Params)
 pub fn utf8StringCodec(
     /// Should be a slice or array of bytes (ie `[16]u8` `[]const u8`, `[]u8`, etc).
     comptime Str: type,
+    comptime max_len: u64,
 ) FieldConfig(Str) {
     const S = struct {
         fn deserialize(
             allocator: std.mem.Allocator,
             reader: anytype,
-            params: Params,
+            _: bincode.Params,
         ) !Str {
-            const str = try deserializeAlloc(allocator, Str, reader, params);
-            errdefer free(allocator, str);
+            const len = try bincode.deserializeInt(u64, reader, .{});
+            if (len > max_len) return error.DataTooLarge;
+            const str = try allocator.alloc(u8, len);
+            errdefer allocator.free(str);
+            try reader.readNoEof(str);
             if (!std.unicode.utf8ValidateSlice(str[0..])) return error.InvalidUtf8;
             return str;
         }
@@ -547,10 +551,7 @@ pub fn writeWithConfig(
                         };
                     }
                 },
-                .fixed => return switch (params.endian) {
-                    .little => writer.writeInt(T, data, .little),
-                    .big => writer.writeInt(T, data, .big),
-                },
+                .fixed => return writer.writeInt(T, data, params.endian),
             }
         },
         else => {},

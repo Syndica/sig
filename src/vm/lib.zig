@@ -8,15 +8,17 @@ pub const memory = @import("memory.zig");
 pub const tests = @import("tests.zig");
 pub const interpreter = @import("interpreter.zig");
 pub const syscalls = @import("syscalls/lib.zig");
+pub const environment = @import("environment.zig");
 
 pub const Executable = executable.Executable;
-pub const BuiltinProgram = executable.BuiltinProgram;
 pub const Registry = executable.Registry;
 pub const Assembler = executable.Assembler;
 pub const Config = executable.Config;
 pub const Vm = interpreter.Vm;
 pub const Elf = elf.Elf;
 pub const Section = executable.Section;
+pub const Syscall = syscalls.Syscall;
+pub const Environment = environment.Environment;
 
 const InstructionError = sig.core.instruction.InstructionError;
 
@@ -203,7 +205,7 @@ pub fn convertExecutionError(err: ExecutionError) struct { i64, ExecutionErrorKi
 
 pub fn executionErrorFromStatusCode(status_code: u64) ExecutionError {
     return switch (status_code) {
-        0x100000000 => InstructionError.Custom,
+        0x100000000 => InstructionError.GenericError,
         0x200000000 => InstructionError.InvalidArgument,
         0x300000000 => InstructionError.InvalidInstructionData,
         0x400000000 => InstructionError.InvalidAccountData,

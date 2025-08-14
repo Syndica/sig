@@ -2,17 +2,18 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 
 const program = sig.runtime.program;
+const vm = sig.vm;
 
 const Hash = sig.core.Hash;
 const Instruction = sig.core.instruction.Instruction;
 const InstructionError = sig.core.instruction.InstructionError;
 const Pubkey = sig.core.Pubkey;
-const EpochStakes = sig.core.stake.EpochStakes;
+const EpochStakes = sig.core.EpochStakes;
 
 const AccountSharedData = sig.runtime.AccountSharedData;
 const BorrowedAccount = sig.runtime.BorrowedAccount;
 const BorrowedAccountContext = sig.runtime.BorrowedAccountContext;
-const FeatureSet = sig.runtime.FeatureSet;
+const FeatureSet = sig.core.FeatureSet;
 const LogCollector = sig.runtime.LogCollector;
 const SysvarCache = sig.runtime.SysvarCache;
 const InstructionContext = sig.runtime.InstructionContext;
@@ -20,6 +21,7 @@ const InstructionInfo = sig.runtime.InstructionInfo;
 const ComputeBudget = sig.runtime.ComputeBudget;
 const Rent = sig.runtime.sysvar.Rent;
 const SerializedAccountMetadata = sig.runtime.program.bpf.serialize.SerializedAccountMeta;
+const ProgramMap = sig.runtime.program_loader.ProgramMap;
 
 // https://github.com/anza-xyz/agave/blob/0d34a1a160129c4293dac248e14231e9e773b4ce/program-runtime/src/compute_budget.rs#L139
 pub const MAX_INSTRUCTION_TRACE_LENGTH = 64;
@@ -32,12 +34,24 @@ pub const MAX_INSTRUCTION_STACK_DEPTH = 5;
 pub const TransactionContext = struct {
     allocator: std.mem.Allocator,
 
+    /// The slot number this transaction is being executed in. Used for feature gate activations.
+    slot: sig.core.Slot,
+
     // These data structures exist beyond the lifetime of the TransactionContext.
     // These exist per-epoch.
     feature_set: *const FeatureSet,
     epoch_stakes: *const EpochStakes,
     // This exists per-slot.
     sysvar_cache: *const SysvarCache,
+
+    // The enviroment used to load and validate BPF programs.
+    // Changes once per epoch, next is used when deploying bpf programs in the slot
+    // prior to the next epoch. For all other slots, next is null.
+    vm_environment: *const vm.Environment,
+    next_vm_environment: ?*const vm.Environment,
+
+    // Program map is used to laod and invoke valid BPF programs.
+    program_map: *const ProgramMap,
 
     /// Transaction accounts
     /// TransactionContextAccount contains a non-owning reference to an AccountSharedData
@@ -47,18 +61,22 @@ pub const TransactionContext = struct {
     serialized_accounts: std.BoundedArray(
         SerializedAccountMetadata,
         InstructionInfo.MAX_ACCOUNT_METAS,
-    ),
+    ) = .{},
 
     /// Used by syscall.allocFree to implement sbrk bump allocation
     bpf_alloc_pos: u64 = 0,
 
-    instruction_stack: InstructionStack,
-    instruction_trace: InstructionTrace,
+    /// Instruction datas used when executing precompiles in the SVM
+    /// Only set if a precompile is present and the move precompiles to svm feature is enabled
+    instruction_datas: ?[]const []const u8 = null,
+
+    instruction_stack: InstructionStack = .{},
+    instruction_trace: InstructionTrace = .{},
     top_level_instruction_index: u16 = 0,
-    return_data: TransactionReturnData,
+    return_data: TransactionReturnData = .{},
 
     /// Total change to account data size within transaction
-    accounts_resize_delta: i64,
+    accounts_resize_delta: i64 = 0,
 
     /// Instruction compute meter, for tracking compute units consumed against
     /// the designated compute budget during program execution.
@@ -67,9 +85,9 @@ pub const TransactionContext = struct {
 
     /// If an error other than an InstructionError occurs during execution its value will
     /// be set here and InstructionError.custom will be returned
-    custom_error: ?u32,
+    custom_error: ?u32 = null,
 
-    log_collector: ?LogCollector,
+    log_collector: ?LogCollector = null,
     rent: Rent,
 
     /// Previous blockhash and lamports per signature from the blockhash queue
@@ -205,8 +223,8 @@ pub const TransactionReturnData = struct {
 pub const TransactionContextAccount = struct {
     pubkey: Pubkey,
     account: *AccountSharedData,
-    read_refs: usize,
-    write_ref: bool,
+    read_refs: usize = 0,
+    write_ref: bool = false,
 
     pub const RLockGuard = struct {
         read_refs: *usize,

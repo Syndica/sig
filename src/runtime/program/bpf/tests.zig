@@ -1,16 +1,102 @@
 const std = @import("std");
 const sig = @import("../../../sig.zig");
 
+const program_loader = sig.runtime.program_loader;
+const vm = sig.vm;
+
 const program = sig.runtime.program;
-const features = sig.runtime.features;
 const Pubkey = sig.core.Pubkey;
 const ExecuteContextParams = sig.runtime.testing.ExecuteContextsParams;
 const AccountParams = ExecuteContextParams.AccountParams;
+const AccountSharedData = sig.runtime.AccountSharedData;
+const ProgramMap = sig.runtime.program_loader.ProgramMap;
+const ComputeBudget = sig.runtime.ComputeBudget;
+const FeatureParams = sig.runtime.testing.ExecuteContextsParams.FeatureParams;
 
 const expectProgramExecuteResult = program.testing.expectProgramExecuteResult;
 const expectProgramExecuteError = program.testing.expectProgramExecuteError;
 
 const MAX_FILE_BYTES: usize = 1024 * 1024; // 1MiB
+
+pub fn prepareBpfV3Test(
+    allocator: std.mem.Allocator,
+    random: std.Random,
+    elf_bytes: []const u8,
+    feature_params: []const FeatureParams,
+) !struct { AccountParams, vm.Environment, ProgramMap } {
+    const program_key = Pubkey.initRandom(random);
+    const program_data_key = Pubkey.initRandom(random);
+    const program_deployment_slot = random.int(u64) -| 1;
+    const program_update_authority = null;
+
+    const feature_set = try sig.runtime.testing.createFeatureSet(feature_params);
+    var accounts = std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData){};
+    defer {
+        for (accounts.values()) |account| allocator.free(account.data);
+        accounts.deinit(allocator);
+    }
+
+    const program_bytes, const program_data_bytes = try program_loader.createV3ProgramAccountData(
+        allocator,
+        program_data_key,
+        program_deployment_slot,
+        program_update_authority,
+        elf_bytes,
+    );
+
+    try accounts.put(
+        allocator,
+        program_key,
+        .{
+            .lamports = 1,
+            .owner = program.bpf_loader.v3.ID,
+            .data = program_bytes,
+            .executable = true,
+            .rent_epoch = std.math.maxInt(u64),
+        },
+    );
+
+    try accounts.put(
+        allocator,
+        program_data_key,
+        .{
+            .lamports = 1,
+            .owner = program_key,
+            .data = program_data_bytes,
+            .executable = false,
+            .rent_epoch = std.math.maxInt(u64),
+        },
+    );
+
+    const program_account_params = AccountParams{
+        .pubkey = program_key,
+        .lamports = 1,
+        .owner = program.bpf_loader.v3.ID,
+        .data = try allocator.dupe(u8, program_bytes),
+        .executable = true,
+        .rent_epoch = std.math.maxInt(u64),
+    };
+
+    const compute_budget = ComputeBudget.default(1_400_000);
+
+    const environment = try sig.vm.Environment.initV1(
+        allocator,
+        &feature_set,
+        &compute_budget,
+        0,
+        false,
+        false,
+    );
+
+    const program_map = try program_loader.loadPrograms(
+        allocator,
+        &accounts,
+        &environment,
+        program_deployment_slot + 1,
+    );
+
+    return .{ program_account_params, environment, program_map };
+}
 
 test "hello_world" {
     // pub fn process_instruction(
@@ -25,39 +111,44 @@ test "hello_world" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(0);
 
-    const program_id = Pubkey.initRandom(prng.random());
-    const program_bytes = try std.fs.cwd().readFileAlloc(
+    const elf_bytes = try std.fs.cwd().readFileAlloc(
         allocator,
         sig.ELF_DATA_DIR ++ "hello_world.so",
         MAX_FILE_BYTES,
     );
-    defer allocator.free(program_bytes);
+    defer allocator.free(elf_bytes);
 
-    const accounts: []const AccountParams = &.{
-        .{
-            .pubkey = program_id,
-            .lamports = 1_000_000_000,
-            .owner = program.bpf_loader.v3.ID,
-            .executable = true,
-            .rent_epoch = 0,
-            .data = program_bytes,
-        },
+    const feature_params = &[_]FeatureParams{
+        .{ .feature = .enable_sbpf_v3_deployment_and_execution },
     };
+
+    const program_account, const environment, var program_map = try prepareBpfV3Test(
+        allocator,
+        prng.random(),
+        elf_bytes,
+        feature_params,
+    );
+    defer {
+        allocator.free(program_account.data);
+        environment.deinit(allocator);
+        for (program_map.values()) |*v| v.deinit(allocator);
+        program_map.deinit(allocator);
+    }
 
     try expectProgramExecuteResult(
         allocator,
-        program_id,
+        program_account.pubkey.?,
         &[_]u8{},
         &.{},
         .{
-            .accounts = accounts,
+            .accounts = &.{program_account},
             .compute_meter = 137,
-            .feature_set = &.{
-                .{ .pubkey = sig.runtime.features.ENABLE_SBPF_V3_DEPLOYMENT_AND_EXECUTION },
-            },
+            .program_map = &program_map,
+            .vm_environment = &environment,
+            .feature_set = feature_params,
         },
         .{
-            .accounts = accounts,
+            .accounts = &.{program_account},
         },
         .{},
     );
@@ -83,23 +174,32 @@ test "print_account" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(0);
 
-    const program_id = Pubkey.initRandom(prng.random());
-    const program_bytes = try std.fs.cwd().readFileAlloc(
+    const elf_bytes = try std.fs.cwd().readFileAlloc(
         allocator,
         sig.ELF_DATA_DIR ++ "print_account.so",
         MAX_FILE_BYTES,
     );
-    defer allocator.free(program_bytes);
+    defer allocator.free(elf_bytes);
+
+    const feature_params = &[_]FeatureParams{
+        .{ .feature = .enable_sbpf_v3_deployment_and_execution },
+    };
+
+    const program_account, const environment, var program_map = try prepareBpfV3Test(
+        allocator,
+        prng.random(),
+        elf_bytes,
+        feature_params,
+    );
+    defer {
+        allocator.free(program_account.data);
+        environment.deinit(allocator);
+        for (program_map.values()) |*v| v.deinit(allocator);
+        program_map.deinit(allocator);
+    }
 
     const accounts: []const AccountParams = &.{
-        .{
-            .pubkey = program_id,
-            .lamports = 1_000_000_000,
-            .owner = program.bpf_loader.v3.ID,
-            .executable = true,
-            .rent_epoch = 0,
-            .data = program_bytes,
-        },
+        program_account,
         .{
             .pubkey = Pubkey.initRandom(prng.random()),
             .lamports = 1_234_456,
@@ -112,7 +212,7 @@ test "print_account" {
 
     try expectProgramExecuteResult(
         allocator,
-        program_id,
+        program_account.pubkey.?,
         &[_]u8{},
         &.{
             .{
@@ -123,10 +223,10 @@ test "print_account" {
         },
         ExecuteContextParams{
             .accounts = accounts,
-            .compute_meter = 29_105,
-            .feature_set = &.{
-                .{ .pubkey = sig.runtime.features.ENABLE_SBPF_V3_DEPLOYMENT_AND_EXECUTION },
-            },
+            .compute_meter = 28_650,
+            .program_map = &program_map,
+            .vm_environment = &environment,
+            .feature_set = feature_params,
         },
         .{
             .accounts = accounts,
@@ -141,22 +241,31 @@ test "fast_copy" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(0);
 
-    const program_id = Pubkey.initRandom(prng.random());
-    const program_bytes = try std.fs.cwd().readFileAlloc(
+    const elf_bytes = try std.fs.cwd().readFileAlloc(
         allocator,
         sig.ELF_DATA_DIR ++ "fast_copy.so",
         MAX_FILE_BYTES,
     );
-    defer allocator.free(program_bytes);
-    const program_account: AccountParams = .{
-        .pubkey = program_id,
-        .lamports = 1_000_000_000,
-        .owner = program.bpf_loader.v3.ID,
-        .executable = true,
-        .rent_epoch = 0,
-        .data = program_bytes,
+    defer allocator.free(elf_bytes);
+
+    const feature_params = &[_]FeatureParams{
+        .{ .feature = .enable_sbpf_v3_deployment_and_execution },
     };
 
+    const program_account, const environment, var program_map = try prepareBpfV3Test(
+        allocator,
+        prng.random(),
+        elf_bytes,
+        feature_params,
+    );
+    defer {
+        allocator.free(program_account.data);
+        environment.deinit(allocator);
+        for (program_map.values()) |*v| v.deinit(allocator);
+        program_map.deinit(allocator);
+    }
+
+    const program_id = program_account.pubkey.?;
     const account_id = Pubkey.initRandom(prng.random());
     const initial_instruction_account: AccountParams = .{
         .pubkey = account_id,
@@ -193,9 +302,9 @@ test "fast_copy" {
                 initial_instruction_account,
             },
             .compute_meter = 61,
-            .feature_set = &.{
-                .{ .pubkey = sig.runtime.features.ENABLE_SBPF_V3_DEPLOYMENT_AND_EXECUTION },
-            },
+            .program_map = &program_map,
+            .vm_environment = &environment,
+            .feature_set = feature_params,
         },
         .{
             .accounts = &.{
@@ -220,41 +329,46 @@ test "set_return_data" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(0);
 
-    const program_id = Pubkey.initRandom(prng.random());
-    const program_bytes = try std.fs.cwd().readFileAlloc(
+    const elf_bytes = try std.fs.cwd().readFileAlloc(
         allocator,
         sig.ELF_DATA_DIR ++ "set_return_data.so",
         MAX_FILE_BYTES,
     );
-    defer allocator.free(program_bytes);
+    defer allocator.free(elf_bytes);
 
-    const accounts: []const AccountParams = &.{
-        .{
-            .pubkey = program_id,
-            .lamports = 1_000_000_000,
-            .owner = program.bpf_loader.v3.ID,
-            .executable = true,
-            .rent_epoch = 0,
-            .data = program_bytes,
-        },
+    const feature_params = &[_]FeatureParams{
+        .{ .feature = .enable_sbpf_v3_deployment_and_execution },
     };
+
+    const program_account, const environment, var program_map = try prepareBpfV3Test(
+        allocator,
+        prng.random(),
+        elf_bytes,
+        feature_params,
+    );
+    defer {
+        allocator.free(program_account.data);
+        environment.deinit(allocator);
+        for (program_map.values()) |*v| v.deinit(allocator);
+        program_map.deinit(allocator);
+    }
 
     try expectProgramExecuteResult(
         allocator,
-        program_id,
+        program_account.pubkey.?,
         &[_]u8{},
         &.{},
         ExecuteContextParams{
-            .accounts = accounts,
+            .accounts = &.{program_account},
             .compute_meter = 141,
-            .feature_set = &.{
-                .{ .pubkey = sig.runtime.features.ENABLE_SBPF_V3_DEPLOYMENT_AND_EXECUTION },
-            },
+            .program_map = &program_map,
+            .vm_environment = &environment,
+            .feature_set = feature_params,
         },
         .{
-            .accounts = accounts,
+            .accounts = &.{program_account},
             .return_data = .{
-                .program_id = program_id,
+                .program_id = program_account.pubkey.?,
                 .data = "Hello, world!",
             },
         },
@@ -295,7 +409,7 @@ test "program_is_not_executable" {
             .accounts = accounts,
             .compute_meter = 137,
             .feature_set = &.{
-                .{ .pubkey = sig.runtime.features.ENABLE_SBPF_V3_DEPLOYMENT_AND_EXECUTION },
+                .{ .feature = .enable_sbpf_v3_deployment_and_execution },
             },
         },
         .{},
@@ -335,7 +449,7 @@ test "program_invalid_account_data" {
             .accounts = accounts,
             .compute_meter = 137,
             .feature_set = &.{
-                .{ .pubkey = sig.runtime.features.ENABLE_SBPF_V3_DEPLOYMENT_AND_EXECUTION },
+                .{ .feature = .enable_sbpf_v3_deployment_and_execution },
             },
         },
         .{
@@ -351,24 +465,29 @@ test "program_init_vm_not_enough_compute" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(0);
 
-    const program_id = Pubkey.initRandom(prng.random());
-    const program_bytes = try std.fs.cwd().readFileAlloc(
+    const elf_bytes = try std.fs.cwd().readFileAlloc(
         allocator,
         sig.ELF_DATA_DIR ++ "hello_world.so",
         MAX_FILE_BYTES,
     );
-    defer allocator.free(program_bytes);
+    defer allocator.free(elf_bytes);
 
-    const accounts: []const AccountParams = &.{
-        .{
-            .pubkey = program_id,
-            .lamports = 1_000_000_000,
-            .owner = program.bpf_loader.v3.ID,
-            .executable = true,
-            .rent_epoch = 0,
-            .data = program_bytes,
-        },
+    const feature_params = &[_]FeatureParams{
+        .{ .feature = .enable_sbpf_v3_deployment_and_execution },
     };
+
+    const program_account, const environment, var program_map = try prepareBpfV3Test(
+        allocator,
+        prng.random(),
+        elf_bytes,
+        feature_params,
+    );
+    defer {
+        allocator.free(program_account.data);
+        environment.deinit(allocator);
+        for (program_map.values()) |*v| v.deinit(allocator);
+        program_map.deinit(allocator);
+    }
 
     var compute_budget = sig.runtime.ComputeBudget.default(1_400_000);
     // Set heap size so that heap cost is 8
@@ -376,16 +495,16 @@ test "program_init_vm_not_enough_compute" {
 
     const result = expectProgramExecuteResult(
         allocator,
-        program_id,
+        program_account.pubkey.?,
         &[_]u8{},
         &.{},
-        sig.runtime.testing.ExecuteContextsParams{
-            .accounts = accounts,
+        .{
+            .accounts = &.{program_account},
             .compute_meter = 7,
+            .program_map = &program_map,
+            .vm_environment = &environment,
             .compute_budget = compute_budget,
-            .feature_set = &.{
-                .{ .pubkey = sig.runtime.features.ENABLE_SBPF_V3_DEPLOYMENT_AND_EXECUTION },
-            },
+            .feature_set = feature_params,
         },
         .{},
         .{},
@@ -398,23 +517,34 @@ test "basic direct mapping" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(0);
 
-    const program_id = Pubkey.initRandom(prng.random());
-    const program_bytes = try std.fs.cwd().readFileAlloc(
+    const elf_bytes = try std.fs.cwd().readFileAlloc(
         allocator,
         sig.ELF_DATA_DIR ++ "direct_mapping.so",
         MAX_FILE_BYTES,
     );
-    defer allocator.free(program_bytes);
+    defer allocator.free(elf_bytes);
 
+    const feature_params = &[_]FeatureParams{
+        .{ .feature = .enable_sbpf_v3_deployment_and_execution },
+        .{ .feature = .bpf_account_data_direct_mapping },
+    };
+
+    const program_account, const environment, var program_map = try prepareBpfV3Test(
+        allocator,
+        prng.random(),
+        elf_bytes,
+        feature_params,
+    );
+    defer {
+        allocator.free(program_account.data);
+        environment.deinit(allocator);
+        for (program_map.values()) |*v| v.deinit(allocator);
+        program_map.deinit(allocator);
+    }
+
+    const program_id = program_account.pubkey.?;
     const accounts: []const AccountParams = &.{
-        .{
-            .pubkey = program_id,
-            .lamports = 1_000_000_000,
-            .owner = program.bpf_loader.v3.ID,
-            .executable = true,
-            .rent_epoch = 0,
-            .data = program_bytes,
-        },
+        program_account,
         .{
             .pubkey = Pubkey.initRandom(prng.random()),
             .lamports = 1_234_456,
@@ -427,14 +557,7 @@ test "basic direct mapping" {
     };
 
     const after_accounts: []const AccountParams = &.{
-        .{
-            .pubkey = program_id,
-            .lamports = 1_000_000_000,
-            .owner = program.bpf_loader.v3.ID,
-            .executable = true,
-            .rent_epoch = 0,
-            .data = program_bytes,
-        },
+        program_account,
         .{
             .pubkey = accounts[1].pubkey,
             .lamports = 1_234_456,
@@ -460,10 +583,9 @@ test "basic direct mapping" {
         .{
             .accounts = accounts,
             .compute_meter = 109,
-            .feature_set = &.{
-                .{ .pubkey = sig.runtime.features.ENABLE_SBPF_V3_DEPLOYMENT_AND_EXECUTION },
-                .{ .pubkey = features.BPF_ACCOUNT_DATA_DIRECT_MAPPING },
-            },
+            .program_map = &program_map,
+            .vm_environment = &environment,
+            .feature_set = feature_params,
         },
         .{
             .accounts = after_accounts,

@@ -1,19 +1,19 @@
-pub const blockstore = @import("blockstore.zig");
 pub const cleanup_service = @import("cleanup_service.zig");
 pub const database = @import("database/lib.zig");
-pub const shred_inserter = @import("shred_inserter/lib.zig");
+pub const db = @import("db.zig");
+pub const fuzz_ledger = @import("fuzz.zig");
 pub const meta = @import("meta.zig");
 pub const reader = @import("reader.zig");
 pub const reed_solomon = @import("reed_solomon.zig");
 pub const result_writer = @import("result_writer.zig");
 pub const schema = @import("schema.zig");
 pub const shred = @import("shred.zig");
+pub const shred_inserter = @import("shred_inserter/lib.zig");
 pub const shredder = @import("shredder.zig");
-pub const transaction_status = @import("transaction_status.zig");
 pub const tests = @import("tests.zig");
-pub const fuzz_ledger = @import("fuzz.zig");
+pub const transaction_status = @import("transaction_status.zig");
 
-pub const BlockstoreDB = blockstore.BlockstoreDB;
-pub const ShredInserter = shred_inserter.ShredInserter;
-pub const BlockstoreReader = reader.BlockstoreReader;
+pub const LedgerDB = db.LedgerDB;
+pub const LedgerReader = reader.LedgerReader;
 pub const LedgerResultWriter = result_writer.LedgerResultWriter;
+pub const ShredInserter = shred_inserter.ShredInserter;

@@ -1,26 +1,24 @@
-const std = @import("std");
 const builtin = @import("builtin");
-const cpi = @import("cpi.zig");
+const std = @import("std");
 const sig = @import("../../sig.zig");
 
+pub const cpi = @import("cpi.zig");
 pub const memops = @import("memops.zig");
 pub const hash = @import("hash.zig");
 pub const ecc = @import("ecc.zig");
 pub const sysvar = @import("sysvar.zig");
 
-const features = sig.runtime.features;
 const stable_log = sig.runtime.stable_log;
 const pubkey_utils = sig.runtime.pubkey_utils;
 const serialize = sig.runtime.program.bpf.serialize;
 
 const memory = sig.vm.memory;
+
 const SyscallError = sig.vm.SyscallError;
 const Pubkey = sig.core.Pubkey;
 const MemoryMap = memory.MemoryMap;
 const InstructionError = sig.core.instruction.InstructionError;
 const RegisterMap = sig.vm.interpreter.RegisterMap;
-const BuiltinProgram = sig.vm.BuiltinProgram;
-const FeatureSet = sig.runtime.features.FeatureSet;
 const TransactionContext = sig.runtime.TransactionContext;
 const TransactionReturnData = sig.runtime.transaction_context.TransactionReturnData;
 const InstructionInfo = sig.runtime.InstructionInfo;
@@ -38,280 +36,6 @@ pub const Entry = struct {
     name: []const u8,
     builtin_fn: Syscall,
 };
-
-// [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/syscalls/mod.rs#L335
-pub fn register(
-    allocator: std.mem.Allocator,
-    feature_set: *const FeatureSet,
-    slot: u64,
-    is_deploy: bool,
-) !BuiltinProgram {
-    // Register syscalls
-    var syscalls = BuiltinProgram{};
-    errdefer syscalls.deinit(allocator);
-
-    // Abort
-    _ = try syscalls.functions.registerHashed(
-        allocator,
-        "abort",
-        abort,
-    );
-
-    // Panic
-    _ = try syscalls.functions.registerHashed(
-        allocator,
-        "sol_panic_",
-        panic,
-    );
-
-    // Alloc Free
-    if (!is_deploy) {
-        _ = try syscalls.functions.registerHashed(
-            allocator,
-            "sol_alloc_free",
-            allocFree,
-        );
-    }
-
-    // Logging
-    _ = try syscalls.functions.registerHashed(
-        allocator,
-        "sol_log_",
-        log,
-    );
-
-    _ = try syscalls.functions.registerHashed(
-        allocator,
-        "sol_log_64_",
-        log64,
-    );
-
-    _ = try syscalls.functions.registerHashed(
-        allocator,
-        "sol_log_pubkey",
-        logPubkey,
-    );
-
-    _ = try syscalls.functions.registerHashed(
-        allocator,
-        "sol_log_compute_units_",
-        logComputeUnits,
-    );
-
-    // Log Data
-    _ = try syscalls.functions.registerHashed(
-        allocator,
-        "sol_log_data",
-        logData,
-    );
-
-    // Program derived addresses
-    _ = try syscalls.functions.registerHashed(
-        allocator,
-        "sol_create_program_address",
-        createProgramAddress,
-    );
-    _ = try syscalls.functions.registerHashed(
-        allocator,
-        "sol_try_find_program_address",
-        findProgramAddress,
-    );
-
-    // Sha256, Keccak256, Secp256k1Recover
-    _ = try syscalls.functions.registerHashed(
-        allocator,
-        "sol_sha256",
-        hash.sha256,
-    );
-    _ = try syscalls.functions.registerHashed(
-        allocator,
-        "sol_keccak256",
-        hash.keccak256,
-    );
-    // _ = try syscalls.functions.registerHashed(allocator, "sol_secp256k1_recover", secp256k1Recover,);
-
-    // Blake3
-    if (feature_set.isActive(features.BLAKE3_SYSCALL_ENABLED, slot)) {
-        _ = try syscalls.functions.registerHashed(
-            allocator,
-            "sol_blake3",
-            hash.blake3,
-        );
-    }
-
-    // Elliptic Curve
-    if (feature_set.isActive(features.CURVE25519_SYSCALL_ENABLED, slot)) {
-        _ = try syscalls.functions.registerHashed(
-            allocator,
-            "sol_curve_validate_point",
-            ecc.curvePointValidation,
-        );
-        _ = try syscalls.functions.registerHashed(
-            allocator,
-            "sol_curve_group_op",
-            ecc.curveGroupOp,
-        );
-        _ = try syscalls.functions.registerHashed(
-            allocator,
-            "sol_curve_multiscalar_mul",
-            ecc.curveMultiscalarMul,
-        );
-    }
-
-    // Sysvars
-    _ = try syscalls.functions.registerHashed(
-        allocator,
-        "sol_get_clock_sysvar",
-        sysvar.getClock,
-    );
-    _ = try syscalls.functions.registerHashed(
-        allocator,
-        "sol_get_epoch_schedule_sysvar",
-        sysvar.getEpochSchedule,
-    );
-    if (!feature_set.isActive(features.DISABLE_FEES_SYSVAR, slot)) {
-        _ = try syscalls.functions.registerHashed(
-            allocator,
-            "sol_get_fees_sysvar",
-            sysvar.getFees,
-        );
-    }
-    _ = try syscalls.functions.registerHashed(
-        allocator,
-        "sol_get_rent_sysvar",
-        sysvar.getRent,
-    );
-    if (feature_set.isActive(features.LAST_RESTART_SLOT_SYSVAR, slot)) {
-        _ = try syscalls.functions.registerHashed(
-            allocator,
-            "sol_get_last_restart_slot",
-            sysvar.getLastRestartSlot,
-        );
-    }
-
-    _ = try syscalls.functions.registerHashed(
-        allocator,
-        "sol_get_epoch_rewards_sysvar",
-        sysvar.getEpochRewards,
-    );
-
-    // Memory
-    _ = try syscalls.functions.registerHashed(
-        allocator,
-        "sol_memcpy_",
-        memops.memcpy,
-    );
-
-    _ = try syscalls.functions.registerHashed(
-        allocator,
-        "sol_memmove_",
-        memops.memmove,
-    );
-
-    _ = try syscalls.functions.registerHashed(
-        allocator,
-        "sol_memset_",
-        memops.memset,
-    );
-
-    _ = try syscalls.functions.registerHashed(
-        allocator,
-        "sol_memcmp_",
-        memops.memcmp,
-    );
-
-    // Processed Sibling
-    _ = try syscalls.functions.registerHashed(
-        allocator,
-        "sol_get_processed_sibling_instruction",
-        getProcessedSiblingInstruction,
-    );
-
-    // Stack Height
-    _ = try syscalls.functions.registerHashed(
-        allocator,
-        "sol_get_stack_height",
-        getStackHeight,
-    );
-
-    // Return Data
-    _ = try syscalls.functions.registerHashed(
-        allocator,
-        "sol_set_return_data",
-        setReturnData,
-    );
-    _ = try syscalls.functions.registerHashed(
-        allocator,
-        "sol_get_return_data",
-        getReturnData,
-    );
-
-    // Cross Program Invocation
-    _ = try syscalls.functions.registerHashed(
-        allocator,
-        "sol_invoke_signed_c",
-        cpi.invokeSignedC,
-    );
-    _ = try syscalls.functions.registerHashed(
-        allocator,
-        "sol_invoke_signed_rust",
-        cpi.invokeSignedRust,
-    );
-
-    // Memory Allocator
-    if (!feature_set.isActive(features.DISABLE_DEPLOY_OF_ALLOC_FREE_SYSCALL, slot)) {
-        _ = try syscalls.functions.registerHashed(
-            allocator,
-            "sol_alloc_free_",
-            allocFree,
-        );
-    }
-
-    // Alt_bn128
-    // if (feature_set.isActive(feature_set.ENABLE_ALT_BN128_SYSCALL, slot)) {
-    //     _ = try syscalls.functions.registerHashed(allocator, "sol_alt_bn128_group_op", altBn128GroupOp,);
-    // }
-
-    // Big_mod_exp
-    // if (feature_set.isActive(feature_set.ENABLE_BIG_MOD_EXP_SYSCALL, slot)) {
-    //     _ = try syscalls.functions.registerHashed(allocator, "sol_big_mod_exp", bigModExp,);
-    // }
-
-    // Poseidon
-    if (feature_set.isActive(features.ENABLE_POSEIDON_SYSCALL, slot)) {
-        _ = try syscalls.functions.registerHashed(
-            allocator,
-            "sol_poseidon",
-            hash.poseidon,
-        );
-    }
-
-    // Remaining Compute Units
-    if (feature_set.isActive(features.REMAINING_COMPUTE_UNITS_SYSCALL_ENABLED, slot)) {
-        _ = try syscalls.functions.registerHashed(
-            allocator,
-            "sol_remaining_compute_units",
-            remainingComputeUnits,
-        );
-    }
-
-    // Alt_bn_128_compression
-    // if (feature_set.isActive(feature_set.ENABLE_ALT_BN_128_COMPRESSION_SYSCALL, slot)) {
-    //     _ = try syscalls.functions.registerHashed(allocator, "sol_alt_bn_128_compression", altBn128Compression,);
-    // }
-
-    // Sysvar Getter
-    if (feature_set.isActive(features.GET_SYSVAR_SYSCALL_ENABLED, slot)) {
-        _ = try syscalls.functions.registerHashed(allocator, "sol_get_sysvar", sysvar.getSysvar);
-    }
-
-    // Get Epoch Stake
-    if (feature_set.isActive(features.ENABLE_GET_EPOCH_STAKE_SYSCALL, slot)) {
-        _ = try syscalls.functions.registerHashed(allocator, "sol_get_epoch_stake", getEpochStake);
-    }
-
-    return syscalls;
-}
 
 // logging
 /// [agave] https://github.com/anza-xyz/agave/blob/6f95c6aec57c74e3bed37265b07f44fcc0ae8333/programs/bpf_loader/src/syscalls/logging.rs#L3-L33
@@ -490,7 +214,7 @@ pub fn getEpochStake(
         tc.getCheckAligned(),
     );
 
-    if (tc.epoch_stakes.stakes.delegations.getPtr(vote_address.*)) |delegation| {
+    if (tc.epoch_stakes.stakes.stake_delegations.getPtr(vote_address.*)) |delegation| {
         registers.set(.r0, delegation.stake);
     } else {
         registers.set(.r0, 0);
@@ -528,91 +252,95 @@ pub fn getProcessedSiblingInstruction(
         }
     } else null;
 
-    const info = maybe_info orelse {
-        registers.set(.r0, 0);
-        return;
-    };
-
-    const check_aligned = tc.getCheckAligned();
-    const header = try memory_map.translateType(
-        ProcessedSiblingInstruction,
-        .mutable,
-        meta_addr,
-        check_aligned,
-    );
-
-    if (header.data_len == info.instruction_data.len and
-        header.accounts_len == info.account_metas.len)
-    {
-        const program_id = try memory_map.translateType(
-            Pubkey,
+    if (maybe_info) |info| {
+        const check_aligned = tc.getCheckAligned();
+        const header = try memory_map.translateType(
+            ProcessedSiblingInstruction,
             .mutable,
-            program_id_addr,
+            meta_addr,
             check_aligned,
         );
-        const data = try memory_map.translateSlice(
-            u8,
-            .mutable,
-            data_addr,
-            header.data_len,
-            check_aligned,
-        );
-        const accounts = try memory_map.translateSlice(
-            AccountMeta,
-            .mutable,
-            accounts_addr,
-            header.accounts_len,
-            check_aligned,
-        );
-        if (memops.isOverlapping(
-            @intFromPtr(header),
-            @sizeOf(ProcessedSiblingInstruction),
-            @intFromPtr(program_id),
-            @sizeOf(Pubkey),
-        ) or memops.isOverlapping(
-            @intFromPtr(header),
-            @sizeOf(ProcessedSiblingInstruction),
-            @intFromPtr(accounts.ptr),
-            accounts.len *| @sizeOf(AccountMeta),
-        ) or memops.isOverlapping(
-            @intFromPtr(header),
-            @sizeOf(ProcessedSiblingInstruction),
-            @intFromPtr(data.ptr),
-            data.len,
-        ) or memops.isOverlapping(
-            @intFromPtr(program_id),
-            @sizeOf(Pubkey),
-            @intFromPtr(data.ptr),
-            data.len,
-        ) or memops.isOverlapping(
-            @intFromPtr(program_id),
-            @sizeOf(Pubkey),
-            @intFromPtr(accounts.ptr),
-            accounts.len *| @sizeOf(AccountMeta),
-        ) or memops.isOverlapping(
-            @intFromPtr(data.ptr),
-            data.len,
-            @intFromPtr(accounts.ptr),
-            accounts.len *| @sizeOf(AccountMeta),
-        )) {
-            return SyscallError.CopyOverlapping;
-        }
 
-        program_id.* = info.program_meta.pubkey;
-        @memcpy(data, info.instruction_data);
+        if (header.data_len == info.instruction_data.len and
+            header.accounts_len == info.account_metas.len)
+        {
+            const program_id = try memory_map.translateType(
+                Pubkey,
+                .mutable,
+                program_id_addr,
+                check_aligned,
+            );
+            const data = try memory_map.translateSlice(
+                u8,
+                .mutable,
+                data_addr,
+                header.data_len,
+                check_aligned,
+            );
+            const accounts = try memory_map.translateSlice(
+                AccountMeta,
+                .mutable,
+                accounts_addr,
+                header.accounts_len,
+                check_aligned,
+            );
+            if (memops.isOverlapping(
+                @intFromPtr(header),
+                @sizeOf(ProcessedSiblingInstruction),
+                @intFromPtr(program_id),
+                @sizeOf(Pubkey),
+            ) or memops.isOverlapping(
+                @intFromPtr(header),
+                @sizeOf(ProcessedSiblingInstruction),
+                @intFromPtr(accounts.ptr),
+                accounts.len *| @sizeOf(AccountMeta),
+            ) or memops.isOverlapping(
+                @intFromPtr(header),
+                @sizeOf(ProcessedSiblingInstruction),
+                @intFromPtr(data.ptr),
+                data.len,
+            ) or memops.isOverlapping(
+                @intFromPtr(program_id),
+                @sizeOf(Pubkey),
+                @intFromPtr(data.ptr),
+                data.len,
+            ) or memops.isOverlapping(
+                @intFromPtr(program_id),
+                @sizeOf(Pubkey),
+                @intFromPtr(accounts.ptr),
+                accounts.len *| @sizeOf(AccountMeta),
+            ) or memops.isOverlapping(
+                @intFromPtr(data.ptr),
+                data.len,
+                @intFromPtr(accounts.ptr),
+                accounts.len *| @sizeOf(AccountMeta),
+            )) {
+                return SyscallError.CopyOverlapping;
+            }
 
-        for (info.account_metas.slice(), 0..) |meta, i| {
-            accounts[i] = .{
-                .pubkey = meta.pubkey,
-                .is_signer = @intFromBool(meta.is_signer),
-                .is_writable = @intFromBool(meta.is_writable),
-            };
+            program_id.* = info.program_meta.pubkey;
+            @memcpy(data, info.instruction_data);
+
+            for (info.account_metas.slice(), 0..) |meta, i| {
+                const acc = tc.getAccountAtIndex(meta.index_in_transaction) orelse
+                    return InstructionError.NotEnoughAccountKeys;
+
+                accounts[i] = .{
+                    .pubkey = acc.pubkey,
+                    .is_signer = @intFromBool(meta.is_signer),
+                    .is_writable = @intFromBool(meta.is_writable),
+                };
+            }
         }
 
         header.data_len = info.instruction_data.len;
         header.accounts_len = info.account_metas.len;
         registers.set(.r0, 1);
+        return;
     }
+
+    registers.set(.r0, 0);
+    return;
 }
 
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/95764e268fe33a19819e6f9f411ff9e732cbdf0d/cpi/src/lib.rs#L329
@@ -1181,7 +909,8 @@ test createProgramAddress {
         false,
     );
     try std.testing.expect(
-        (try Pubkey.parseBase58String("BwqrghZA2htAcqq8dzP1WDAhTXYTYWj7CHxF5j7TDBAe")).equals(&pk),
+        Pubkey.parse("BwqrghZA2htAcqq8dzP1WDAhTXYTYWj7CHxF5j7TDBAe")
+            .equals(&pk),
     );
 
     pk, _ = try callProgramAddressSyscall(
@@ -1193,7 +922,8 @@ test createProgramAddress {
         false,
     );
     try std.testing.expect(
-        (try Pubkey.parseBase58String("13yWmRpaTR4r5nAktwLqMpRNr28tnVUZw26rTvPSSB19")).equals(&pk),
+        Pubkey.parse("13yWmRpaTR4r5nAktwLqMpRNr28tnVUZw26rTvPSSB19")
+            .equals(&pk),
     );
 
     pk, _ = try callProgramAddressSyscall(
@@ -1205,10 +935,11 @@ test createProgramAddress {
         false,
     );
     try std.testing.expect(
-        (try Pubkey.parseBase58String("2fnQrngrQT4SeLcdToJAD96phoEjNL2man2kfRLCASVk")).equals(&pk),
+        Pubkey.parse("2fnQrngrQT4SeLcdToJAD96phoEjNL2man2kfRLCASVk")
+            .equals(&pk),
     );
 
-    const seed_pk = try Pubkey.parseBase58String("SeedPubey1111111111111111111111111111111111");
+    const seed_pk: Pubkey = .parse("SeedPubey1111111111111111111111111111111111");
     pk, _ = try callProgramAddressSyscall(
         allocator,
         &tc,
@@ -1218,7 +949,8 @@ test createProgramAddress {
         false,
     );
     try std.testing.expect(
-        (try Pubkey.parseBase58String("976ymqVnfE32QFe6NfGDctSvVa36LWnvYxhU6G2232YL")).equals(&pk),
+        Pubkey.parse("976ymqVnfE32QFe6NfGDctSvVa36LWnvYxhU6G2232YL")
+            .equals(&pk),
     );
 
     const pk_a, _ = try callProgramAddressSyscall(

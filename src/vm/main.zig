@@ -3,6 +3,8 @@ const sig = @import("sig");
 const builtin = @import("builtin");
 const cli = @import("cli");
 
+const vm = sig.vm;
+
 const Elf = sig.vm.Elf;
 const memory = sig.vm.memory;
 const Executable = sig.vm.Executable;
@@ -11,12 +13,13 @@ const sbpf = sig.vm.sbpf;
 const Config = sig.vm.Config;
 const MemoryMap = memory.MemoryMap;
 const TransactionContext = sig.runtime.TransactionContext;
-const FeatureSet = sig.runtime.FeatureSet;
+const FeatureSet = sig.core.FeatureSet;
 const Hash = sig.core.Hash;
 const Rent = sig.runtime.sysvar.Rent;
 const ComputeBudget = sig.runtime.ComputeBudget;
-const EpochStakes = sig.core.stake.EpochStakes;
+const EpochStakes = sig.core.EpochStakes;
 const SysvarCache = sig.runtime.SysvarCache;
+const ProgramMap = sig.runtime.program_loader.ProgramMap;
 
 pub fn main() !void {
     var gpa_state: std.heap.DebugAllocator(.{}) = .init;
@@ -43,20 +46,17 @@ pub fn main() !void {
     const bytes = try input_file.readToEndAlloc(gpa, sbpf.MAX_FILE_SIZE);
     defer gpa.free(bytes);
 
-    const feature_set = FeatureSet.EMPTY;
-    defer feature_set.deinit(gpa);
-
-    const epoch_stakes = try EpochStakes.initEmpty(gpa);
+    const epoch_stakes = try EpochStakes.initEmptyWithGenesisStakeHistoryEntry(gpa);
     defer epoch_stakes.deinit(gpa);
-
-    const sysvar_cache = SysvarCache{};
-    defer sysvar_cache.deinit(gpa);
 
     var tc: TransactionContext = .{
         .allocator = gpa,
-        .feature_set = &feature_set,
+        .feature_set = &FeatureSet.ALL_DISABLED,
         .epoch_stakes = &epoch_stakes,
-        .sysvar_cache = &sysvar_cache,
+        .sysvar_cache = &SysvarCache{},
+        .vm_environment = &vm.Environment{},
+        .program_map = &ProgramMap{},
+        .next_vm_environment = null,
         .accounts = &.{},
         .serialized_accounts = .{},
         .instruction_stack = .{},
@@ -70,10 +70,11 @@ pub fn main() !void {
         .prev_blockhash = Hash.ZEROES,
         .prev_lamports_per_signature = 0,
         .compute_budget = ComputeBudget.default(1_400_000),
+        .slot = 0,
     };
     defer tc.deinit();
 
-    var loader = try sig.vm.syscalls.register(gpa, &feature_set, 0, true);
+    var loader = try sig.vm.Environment.initV1Loader(gpa, &FeatureSet.ALL_DISABLED, 0, true);
     defer loader.deinit(gpa);
 
     const config: Config = .{
@@ -111,7 +112,7 @@ pub fn main() !void {
         config,
     );
 
-    var vm = try Vm.init(
+    var ebpf_vm = try Vm.init(
         gpa,
         &executable,
         m,
@@ -119,8 +120,8 @@ pub fn main() !void {
         stack_memory.len,
         &tc,
     );
-    defer vm.deinit();
-    const result, const instruction_count = vm.run();
+    defer ebpf_vm.deinit();
+    const result, const instruction_count = ebpf_vm.run();
 
     std.debug.print("result: {}, count: {}\n", .{ result, instruction_count });
 }

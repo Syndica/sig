@@ -1,4 +1,5 @@
 const std = @import("std");
+const sig = @import("../sig.zig");
 
 const Allocator = std.mem.Allocator;
 const Condition = std.Thread.Condition;
@@ -24,6 +25,33 @@ fn chunkSizeAndThreadCount(data_len: usize, max_n_threads: usize) struct { usize
         chunk_size = data_len;
     }
     return .{ chunk_size, n_threads };
+}
+
+/// Returns after the duration completes or exit signal is set, indicating which
+/// was the cause of the return.
+pub fn sleep(
+    duration: sig.time.Duration,
+    exit: struct {
+        signal: ?*const std.atomic.Value(bool) = null,
+        poll_interval: sig.time.Duration = .fromMillis(10),
+    },
+) enum { time, signal } {
+    if (exit.signal == null) {
+        std.Thread.sleep(duration.asNanos());
+        return .time;
+    }
+
+    const signal = exit.signal.?;
+    const num_intervals = duration.asNanos() / exit.poll_interval.asNanos();
+    const remainder_nanos = duration.asNanos() % exit.poll_interval.asNanos();
+    for (0..num_intervals) |_| {
+        if (signal.load(.monotonic)) return .signal;
+        std.Thread.sleep(exit.poll_interval.asNanos());
+    }
+    if (signal.load(.monotonic)) return .signal;
+    std.Thread.sleep(remainder_nanos);
+
+    return .time;
 }
 
 pub fn SpawnThreadTasksParams(comptime TaskFn: type) type {
@@ -160,6 +188,7 @@ pub fn HomogeneousThreadPool(comptime TaskType: type) type {
         max_concurrent_tasks: ?usize,
 
         pub const Task = TaskType;
+        pub const TaskError = @typeInfo(TaskResult).error_union.error_set;
 
         const Self = @This();
 
@@ -195,12 +224,14 @@ pub fn HomogeneousThreadPool(comptime TaskType: type) type {
         /// join before calling this
         pub fn deinit(const_self: Self, schedule_allocator: Allocator) void {
             var self = const_self;
+            if (self.tasks.items.len != 0) {
+                @panic("Did not join before deiniting thread pool.");
+            }
             if (self.pool_allocator) |pool_allocator| {
                 self.pool.shutdown();
                 self.pool.deinit();
                 pool_allocator.destroy(self.pool);
             }
-            assert(0 == self.tasks.items.len);
             self.tasks.deinit(schedule_allocator);
             assert(self.task_pool.reset(.free_all));
         }
@@ -208,11 +239,7 @@ pub fn HomogeneousThreadPool(comptime TaskType: type) type {
         /// Blocks until the task is scheduled. It will be immediate unless
         /// you've already scheduled max_concurrent_tasks and none have
         /// finished.
-        pub fn schedule(
-            self: *Self,
-            allocator: Allocator,
-            typed_task: TaskType,
-        ) !void {
+        pub fn schedule(self: *Self, allocator: Allocator, typed_task: TaskType) !void {
             while (true) {
                 if (try self.trySchedule(allocator, typed_task)) return;
                 try std.Thread.yield();
@@ -238,6 +265,8 @@ pub fn HomogeneousThreadPool(comptime TaskType: type) type {
                     return false;
                 }
                 assert(max >= self.num_running_tasks.fetchAdd(1, .monotonic));
+            } else {
+                _ = self.num_running_tasks.fetchAdd(1, .monotonic);
             }
 
             const task = try self.task_pool.create();
@@ -248,6 +277,20 @@ pub fn HomogeneousThreadPool(comptime TaskType: type) type {
 
             self.pool.schedule(Batch.from(&task.pool_task));
             return true;
+        }
+
+        /// Checks if all tasks are complete.
+        /// Returns a result indicating the outcome:
+        /// - done: all succeeded.
+        /// - pending: some are still running.
+        /// - err: all completed, and at least one failed.
+        pub fn pollFallible(self: *Self) union(enum) { done, pending, err: TaskError } {
+            for (self.tasks.items) |task| {
+                if (!task.done.load(.acquire)) {
+                    return .pending;
+                }
+            }
+            return if (self.joinFallible()) |_| .done else |err| .{ .err = err };
         }
 
         /// Blocks until all tasks are complete.
@@ -277,7 +320,21 @@ pub fn HomogeneousThreadPool(comptime TaskType: type) type {
             }
 
             for (self.tasks.items) |task| task.join();
-            for (self.tasks.items) |task| try task.result;
+            for (self.tasks.items) |task| _ = try task.result;
+        }
+
+        /// - Attempt to join and clean up all tasks.
+        /// - Discard the results of the threads as we're doing this purely for cleanup.
+        /// - Returns whether we successfully joined.
+        pub fn joinForDeinit(self: *Self, timeout: sig.time.Duration) bool {
+            var timer = sig.time.Timer.start() catch unreachable;
+            while (self.pollFallible() == .pending) {
+                std.Thread.yield() catch std.atomic.spinLoopHint();
+                if (timer.read().gt(timeout)) {
+                    return false;
+                }
+            }
+            return true;
         }
     };
 }
@@ -348,4 +405,18 @@ test "typed thread pool" {
     try std.testing.expect(2 == results[0]);
     try std.testing.expect(3 == results[1]);
     try std.testing.expect(5 == results[2]);
+}
+
+test sleep {
+    var timer = try sig.time.Timer.start();
+    try std.testing.expectEqual(.time, sleep(.fromMillis(12), .{}));
+    try std.testing.expect(timer.lap().gt(.fromMillis(11)));
+
+    var exit = std.atomic.Value(bool).init(false);
+    try std.testing.expectEqual(.time, sleep(.fromMillis(12), .{ .signal = &exit }));
+    try std.testing.expect(timer.lap().gt(.fromMillis(11)));
+
+    exit.store(true, .monotonic);
+    try std.testing.expectEqual(.signal, sleep(.fromMillis(12), .{ .signal = &exit }));
+    try std.testing.expect(timer.lap().lt(.fromMillis(11)));
 }

@@ -7,6 +7,8 @@ const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 const PubkeyArraySet = std.AutoArrayHashMapUnmanaged(Pubkey, void);
 
+const deinitMapAndValues = sig.utils.collections.deinitMapAndValues;
+
 /// TODO: any uses of these types are to be evaluated in their context, and
 /// the actual required semantics are to be determined later.
 const stubs = struct {
@@ -38,8 +40,8 @@ const stubs = struct {
                 "Bank epoch vote accounts must contain entry for the bank's own epoch",
                 .{},
             );
-            const stake, _ = eva.get(vote_account) orelse return 0;
-            return stake;
+            const entry = eva.get(vote_account) orelse return 0;
+            return entry.stake;
         }
 
         /// Get the fixed set of vote accounts for the given node id for the
@@ -47,7 +49,7 @@ const stubs = struct {
         fn epochVoteAccountsForNodeId(
             self: Bank,
             node_id: Pubkey,
-        ) ?*const sig.core.stake.NodeVoteAccounts {
+        ) ?*const sig.core.epoch_stakes.NodeVoteAccounts {
             const epoch_stakes = self.data.epoch_stakes.getPtr(self.data.epoch) orelse
                 std.debug.panic("Epoch stakes for bank's own epoch must exist", .{});
             return epoch_stakes.node_id_to_vote_accounts.getPtr(node_id);
@@ -58,9 +60,9 @@ const stubs = struct {
         fn epochVoteAccounts(
             self: Bank,
             epoch: Epoch,
-        ) ?*const sig.core.stake.StakeAndVoteAccountsMap {
+        ) ?*const sig.core.vote_accounts.StakeAndVoteAccountsMap {
             const epoch_stakes = self.data.epoch_stakes.getPtr(epoch) orelse return null;
-            return &epoch_stakes.stakes.vote_accounts.accounts;
+            return &epoch_stakes.stakes.vote_accounts.vote_accounts;
         }
     };
 };
@@ -187,6 +189,11 @@ pub const ProgressMap = struct {
         return &fork_progress.fork_stats;
     }
 
+    pub fn isDead(self: ProgressMap, slot: Slot) ?bool {
+        const fork_progress = self.map.getPtr(slot) orelse return null;
+        return fork_progress.is_dead;
+    }
+
     pub fn getHash(self: *const ProgressMap, slot: Slot) ?Hash {
         const fork_progress = self.map.get(slot) orelse return null;
         return fork_progress.fork_stats.bank_hash;
@@ -262,6 +269,7 @@ pub const ForkProgress = struct {
         };
     }
 
+    // TODO: remove this in favor of initFromParent
     pub fn initFromBank(
         allocator: std.mem.Allocator,
         params: struct {
@@ -299,6 +307,56 @@ pub const ForkProgress = struct {
 
         if (params.bank.isFrozen()) {
             new_progress.fork_stats.bank_hash = params.bank.data.hash;
+        }
+
+        return new_progress;
+    }
+
+    /// Helper init function to init the progress from the parent progress and
+    /// other data about the current slot that agave stores in its bank.
+    /// Analogous to [new_from_bank](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/core/src/consensus/progress_map.rs#L143)
+    pub fn initFromParent(
+        allocator: std.mem.Allocator,
+        params: struct {
+            now: sig.time.Instant,
+            slot: Slot,
+            parent_slot: Slot,
+            parent: *const ForkProgress,
+            validator_vote_pubkey: ?Pubkey,
+            slot_hash: ?Hash,
+            last_entry: Hash,
+            i_am_leader: bool,
+            epoch_stakes: *const sig.core.EpochStakes,
+        },
+    ) !ForkProgress {
+        const parent = params.parent;
+
+        var new_progress = try ForkProgress.init(allocator, .{
+            .now = params.now,
+
+            .last_entry = params.last_entry,
+
+            .prev_leader_slot = if (parent.propagated_stats.is_leader_slot)
+                params.parent_slot
+            else
+                parent.propagated_stats.prev_leader_slot,
+
+            .validator_stake_info = if (!params.i_am_leader) null else .{
+                .validator_vote_pubkey = params.validator_vote_pubkey orelse
+                    return error.MissingLeaderVoteAccount,
+                .stake = params.epoch_stakes.stakes.vote_accounts
+                    .getDelegatedStake(params.validator_vote_pubkey.?),
+                .total_epoch_stake = params.epoch_stakes.total_stake,
+            },
+
+            .num_blocks_on_fork = parent.num_blocks_on_fork + 1,
+
+            .num_dropped_blocks_on_fork = parent.num_dropped_blocks_on_fork +
+                params.slot - params.parent_slot - 1,
+        });
+
+        if (params.slot_hash) |hash| {
+            new_progress.fork_stats.bank_hash = hash;
         }
 
         return new_progress;
@@ -614,15 +672,15 @@ pub const PropagatedStats = struct {
         allocator: std.mem.Allocator,
         node_pubkey: Pubkey,
         vote_account_pubkeys: []const Pubkey,
-        epoch_vote_accounts: sig.core.stake.StakeAndVoteAccountsMap,
+        epoch_vote_accounts: sig.core.vote_accounts.StakeAndVoteAccountsMap,
     ) std.mem.Allocator.Error!void {
         try self.propagated_node_ids.put(allocator, node_pubkey, {});
 
         try self.propagated_validators.ensureUnusedCapacity(allocator, vote_account_pubkeys.len);
         for (vote_account_pubkeys) |vote_account_pubkey| {
             const stake = blk: {
-                const stake, _ = epoch_vote_accounts.get(vote_account_pubkey) orelse break :blk 0;
-                break :blk stake;
+                const entry = epoch_vote_accounts.get(vote_account_pubkey) orelse break :blk 0;
+                break :blk entry.stake;
             };
             _ = self.addVotePubkeyAssumeCapacity(vote_account_pubkey, stake);
         }
@@ -832,11 +890,11 @@ pub const blockstore_processor = struct {
         /// In microseconds.
         transaction_verify_elapsed: u64,
 
-        /// Wall clock time spent loading data sets (and entries) from the blockstore.  This does not
-        /// include the case when the blockstore load failed.  In microseconds.
+        /// Wall clock time spent loading data sets (and entries) from the ledger.  This does not
+        /// include the case when the ledger load failed.  In microseconds.
         fetch_elapsed: u64,
 
-        /// Same as `fetch_elapsed` above, but for the case when the blockstore load fails.  In
+        /// Same as `fetch_elapsed` above, but for the case when the ledger load fails.  In
         /// microseconds.
         fetch_fail_elapsed: u64,
 
@@ -1275,6 +1333,11 @@ test "ForkProgress.init" {
         },
     };
 
+    var expected_child = try expected.clone(allocator);
+    defer expected_child.deinit(allocator);
+    expected_child.propagated_stats.prev_leader_slot = bank.data.slot;
+    expected_child.num_blocks_on_fork += 1;
+
     const actual_init = try ForkProgress.init(allocator, .{
         .now = now,
         .last_entry = bank.data.blockhash_queue.last_hash.?,
@@ -1296,27 +1359,43 @@ test "ForkProgress.init" {
     });
     defer actual_init_from_bank.deinit(allocator);
 
-    for (0.., [_]ForkProgress{
-        actual_init,
-        actual_init_from_bank,
-    }) |fp_i, actual| {
-        errdefer std.log.err("Failure on ForkProgress [{d}]", .{fp_i});
-        try sig.testing.expectEqualDeepWithOverrides(expected, actual, struct {
-            pub fn compare(a: anytype, b: @TypeOf(a)) !bool {
-                const T = @TypeOf(a);
-                if (sig.utils.types.arrayListInfo(T)) |info| {
-                    try std.testing.expectEqualSlices(info.Elem, a.items, b.items);
-                    return true;
-                }
-                if (sig.utils.types.hashMapInfo(T)) |info| {
-                    try std.testing.expectEqualSlices(info.Key, a.keys(), b.keys());
-                    try std.testing.expectEqualSlices(info.Value, a.values(), b.values());
-                    return true;
-                }
-                return false;
+    const actual_init_from_parent = try ForkProgress.initFromParent(allocator, .{
+        .now = now,
+        .slot = bank.data.slot + 1,
+        .parent_slot = bank.data.slot,
+        .parent = &actual_init,
+        .validator_vote_pubkey = vsi.validator_vote_pubkey,
+        .slot_hash = bank.data.hash,
+        .last_entry = bank.data.blockhash_queue.last_hash.?,
+        .i_am_leader = true,
+        .epoch_stakes = &.{
+            .stakes = bank.data.stakes,
+            .total_stake = bank.totalEpochStake(),
+            .node_id_to_vote_accounts = .empty,
+            .epoch_authorized_voters = .empty,
+        },
+    });
+    defer actual_init_from_parent.deinit(allocator);
+
+    const override = struct {
+        pub fn compare(a: anytype, b: @TypeOf(a)) !bool {
+            const T = @TypeOf(a);
+            if (sig.utils.types.arrayListInfo(T)) |info| {
+                try std.testing.expectEqualSlices(info.Elem, a.items, b.items);
+                return true;
             }
-        });
-    }
+            if (sig.utils.types.hashMapInfo(T)) |info| {
+                try std.testing.expectEqualSlices(info.Key, a.keys(), b.keys());
+                try std.testing.expectEqualSlices(info.Value, a.values(), b.values());
+                return true;
+            }
+            return false;
+        }
+    };
+
+    try sig.testing.expectEqualDeepWithOverrides(expected, actual_init, override);
+    try sig.testing.expectEqualDeepWithOverrides(expected, actual_init_from_bank, override);
+    try sig.testing.expectEqualDeepWithOverrides(expected_child, actual_init_from_parent, override);
 }
 
 test "timings.ExecuteDetailsTimings.eql" {
@@ -1379,6 +1458,7 @@ test "addVotePubkey" {
 
 test "addNodePubkeyInternal" {
     const allocator = std.testing.allocator;
+    const VoteAccount = sig.core.vote_accounts.VoteAccount;
 
     var prng = std.Random.DefaultPrng.init(608159);
     const random = prng.random();
@@ -1392,19 +1472,15 @@ test "addNodePubkeyInternal" {
         break :blk pubkeys;
     };
 
-    var epoch_vote_accounts: sig.core.stake.StakeAndVoteAccountsMap = .{};
-    defer sig.core.stake.stakeAndVoteAccountsMapDeinit(epoch_vote_accounts, allocator);
+    var epoch_vote_accounts: sig.core.vote_accounts.StakeAndVoteAccountsMap = .{};
+    defer deinitMapAndValues(allocator, epoch_vote_accounts);
+
     for (vote_account_pubkeys1[num_vote_accounts - staked_vote_accounts ..]) |pubkey| {
-        try epoch_vote_accounts.ensureUnusedCapacity(allocator, 1);
-        const VoteAccount = sig.core.stake.VoteAccount;
-        const vote_account = try VoteAccount.initRandom(
-            random,
+        try epoch_vote_accounts.put(allocator, pubkey, .init(1, try VoteAccount.initRandom(
             allocator,
-            8,
-            error{ RandomErrorA, RandomErrorB, RandomErrorC },
-        );
-        errdefer comptime unreachable;
-        epoch_vote_accounts.putAssumeCapacity(pubkey, .{ 1, vote_account });
+            random,
+            null,
+        )));
     }
     var stats = PropagatedStats.EMPTY_ZEROES;
     defer stats.deinit(allocator);
@@ -1453,21 +1529,15 @@ test "addNodePubkeyInternal" {
         break :blk pubkeys;
     };
 
-    sig.core.stake.stakeAndVoteAccountsMapClearRetainingCapacity(
-        &epoch_vote_accounts,
-        allocator,
-    );
+    for (epoch_vote_accounts.values()) |*v| v.deinit(allocator);
+    epoch_vote_accounts.clearRetainingCapacity();
+
     for (vote_account_pubkeys2[num_vote_accounts - staked_vote_accounts ..]) |pubkey| {
-        try epoch_vote_accounts.ensureUnusedCapacity(allocator, 1);
-        const VoteAccount = sig.core.stake.VoteAccount;
-        const vote_account = try VoteAccount.initRandom(
-            random,
+        try epoch_vote_accounts.put(allocator, pubkey, .init(1, try VoteAccount.initRandom(
             allocator,
-            8,
-            error{ RandomErrorA, RandomErrorB, RandomErrorC },
-        );
-        errdefer comptime unreachable;
-        epoch_vote_accounts.putAssumeCapacity(pubkey, .{ 1, vote_account });
+            random,
+            null,
+        )));
     }
 
     try stats.addNodePubkeyInternal(

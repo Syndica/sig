@@ -244,21 +244,20 @@ fn flushSlot(db: *AccountsDB, slot: Slot) !FileId {
 
     defer db.metrics.number_files_flushed.inc();
 
-    const pubkeys, const accounts: []const Account = blk: {
+    var pubkeys_and_accounts = blk: {
         // NOTE: flush should be the only function to delete/free cache slices of a flushed slot
         // -- purgeSlot removes slices but we should never purge rooted slots
         const unrooted_accounts, var unrooted_accounts_lg = db.unrooted_accounts.readWithLock();
         defer unrooted_accounts_lg.unlock();
 
-        const pubkeys, const accounts = unrooted_accounts.get(slot) orelse
+        const pubkeys_and_accounts = unrooted_accounts.get(slot) orelse
             return error.SlotNotFound;
-        break :blk .{ pubkeys, accounts };
+        break :blk pubkeys_and_accounts;
     };
-    std.debug.assert(accounts.len == pubkeys.len);
 
     // create account file which is big enough
     var size: usize = 0;
-    for (accounts) |*account| {
+    for (pubkeys_and_accounts.items(.account)) |*account| {
         const account_size_in_file = account.getSizeInFile();
         size += account_size_in_file;
         db.metrics.flush_account_file_size.observe(account_size_in_file);
@@ -267,17 +266,21 @@ fn flushSlot(db: *AccountsDB, slot: Slot) !FileId {
     const file, const file_id = try db.createAccountFile(size, slot);
     errdefer file.close();
 
-    const offsets = try db.allocator.alloc(u64, accounts.len);
+    const offsets = try db.allocator.alloc(u64, pubkeys_and_accounts.len);
     defer db.allocator.free(offsets);
 
     var file_size: usize = 0;
-    for (accounts) |account| file_size += account.getSizeInFile();
+    for (pubkeys_and_accounts.items(.account)) |account| file_size += account.getSizeInFile();
 
     var account_file_buf = std.ArrayList(u8).init(db.allocator);
     defer account_file_buf.deinit();
 
     var current_offset: u64 = 0;
-    for (offsets, accounts, pubkeys) |*offset, account, pubkey| {
+    for (
+        offsets,
+        pubkeys_and_accounts.items(.account),
+        pubkeys_and_accounts.items(.pubkey),
+    ) |*offset, account, pubkey| {
         try account_file_buf.resize(account.getSizeInFile());
 
         offset.* = current_offset;
@@ -293,7 +296,7 @@ fn flushSlot(db: *AccountsDB, slot: Slot) !FileId {
         .id = file_id,
         .length = current_offset,
     }, slot);
-    account_file.number_of_accounts = accounts.len;
+    account_file.number_of_accounts = pubkeys_and_accounts.len;
 
     // update the file map
     {
@@ -305,7 +308,7 @@ fn flushSlot(db: *AccountsDB, slot: Slot) !FileId {
     db.metrics.flush_accounts_written.add(account_file.number_of_accounts);
 
     // update the reference AFTER the data exists
-    for (pubkeys, offsets) |pubkey, offset| {
+    for (pubkeys_and_accounts.items(.pubkey), offsets) |pubkey, offset| {
         const head_ref, var head_reference_lg =
             db.account_index.pubkey_ref_map.getWrite(&pubkey) orelse return error.PubkeyNotFound;
         defer head_reference_lg.unlock();
@@ -339,11 +342,8 @@ fn flushSlot(db: *AccountsDB, slot: Slot) !FileId {
         std.debug.assert(did_remove);
 
         // free slices
-        for (accounts) |account| {
-            account.data.deinit(db.allocator);
-        }
-        db.allocator.free(accounts);
-        db.allocator.free(pubkeys);
+        for (pubkeys_and_accounts.items(.account)) |account| account.data.deinit(db.allocator);
+        pubkeys_and_accounts.deinit(db.allocator);
     }
 
     db.metrics.time_flush.observe(timer.read().asNanos());
@@ -403,7 +403,7 @@ fn cleanAccountFiles(
             break :blk file_map.get(file_id).?;
         };
 
-        var account_iter = account_file.iterator(db.allocator, &db.buffer_pool);
+        var account_iter = account_file.iterator(&db.buffer_pool);
         while (try account_iter.nextNoData()) |account| {
             defer account.deinit(db.allocator);
             const pubkey = account.pubkey().*;
@@ -673,7 +673,7 @@ fn shrinkAccountFiles(
 
         var accounts_alive_size: u64 = 0;
         var accounts_dead_size: u64 = 0;
-        var account_iter = shrink_account_file.iterator(db.allocator, &db.buffer_pool);
+        var account_iter = shrink_account_file.iterator(&db.buffer_pool);
         while (try account_iter.nextNoData()) |*account_in_file| {
             defer account_in_file.deinit(db.allocator);
 
@@ -734,7 +734,7 @@ fn shrinkAccountFiles(
         var offset: usize = 0;
         for (is_alive_flags.items) |is_alive| {
             // SAFE: we know is_alive_flags is the same length as the account_iter
-            const account = (try account_iter.next()).?;
+            const account = (try account_iter.next(db.allocator)).?;
             defer account.deinit(db.allocator);
             if (is_alive) {
                 try account_file_buf.resize(account.getSizeInFile());
@@ -762,7 +762,7 @@ fn shrinkAccountFiles(
         }
 
         // update the references
-        const new_reference_block, _ = try db.account_index
+        const new_reference_block, const new_global_index = try db.account_index
             .reference_manager.allocOrExpand(accounts_alive_count);
 
         account_iter.reset();
@@ -810,10 +810,18 @@ fn shrinkAccountFiles(
             };
             // NOTE: this is ok because nothing points to this old reference memory
             // deinit old block of reference memory
-            db.account_index.reference_manager.free(slot_reference_map_entry.value_ptr.ptr);
+            db.account_index.reference_manager.free(
+                slot_reference_map_entry.value_ptr.refs.items.ptr,
+            );
 
             // point to new block
-            slot_reference_map_entry.value_ptr.* = new_reference_block;
+            slot_reference_map_entry.value_ptr.* = .{
+                .refs = .{
+                    .items = new_reference_block,
+                    .capacity = new_reference_block.len,
+                },
+                .global_index = new_global_index,
+            };
         }
 
         // queue the old account_file for deletion
@@ -853,9 +861,7 @@ fn shrinkAccountFiles(
 fn purgeSlot(db: *AccountsDB, slot: Slot) void {
     var timer = sig.time.Timer.start() catch @panic("Timer unsupported");
 
-    const pubkeys: []const Pubkey, //
-    const accounts: []const Account //
-    = blk: {
+    var pubkeys_and_accounts = blk: {
         const unrooted_accounts, var unrooted_accounts_lg = db.unrooted_accounts.writeWithLock();
         defer unrooted_accounts_lg.unlock();
 
@@ -864,11 +870,12 @@ fn purgeSlot(db: *AccountsDB, slot: Slot) void {
             // rooted slots should never need to be purged so we should never get here
             @panic("purging an account file not supported");
         };
+
         break :blk removed_entry.value;
     };
 
     // remove the references
-    for (pubkeys) |*pubkey| {
+    for (pubkeys_and_accounts.items(.pubkey)) |*pubkey| {
         db.account_index.removeReference(pubkey, slot) catch |err| switch (err) {
             error.PubkeyNotFound => std.debug.panic(
                 "pubkey not found in index while purging: {any}",
@@ -889,15 +896,13 @@ fn purgeSlot(db: *AccountsDB, slot: Slot) void {
             "slot reference map not found for slot: {d}",
             .{slot},
         );
-        db.account_index.reference_manager.free(r.value.ptr);
+        db.account_index.reference_manager.free(r.value.refs.items.ptr);
     }
 
     // free the account memory
-    for (accounts) |account| {
-        account.deinit(db.allocator);
-    }
-    db.allocator.free(accounts);
-    db.allocator.free(pubkeys);
+    for (pubkeys_and_accounts.items(.account)) |account| account.deinit(db.allocator);
+
+    pubkeys_and_accounts.deinit(db.allocator);
 
     db.metrics.time_purge.observe(timer.read().asNanos());
 }
@@ -1119,7 +1124,7 @@ test "clean to shrink account file works with zero-lamports" {
     // slot 500 will be fully dead because its all zero lamports
     try std.testing.expectEqual(1, delete_account_files.count());
 
-    var account = try accounts_db.getAccount(&pubkey_remain);
+    var account = try accounts_db.getAccountLatest(&pubkey_remain) orelse unreachable;
     defer account.deinit(allocator);
 }
 
@@ -1420,7 +1425,7 @@ test "shrink account file works" {
         defer slot_reference_map_lg.unlock();
 
         const slot_mem = slot_reference_map.get(new_slot).?;
-        try std.testing.expect(slot_mem.len == accounts2.len);
+        try std.testing.expect(slot_mem.refs.items.len == accounts2.len);
     }
 
     // test: files were shrunk
@@ -1467,10 +1472,10 @@ test "shrink account file works" {
         defer slot_reference_map_lg.unlock();
 
         const slot_mem = slot_reference_map.get(slot).?;
-        try std.testing.expectEqual(1, slot_mem.len);
+        try std.testing.expectEqual(1, slot_mem.refs.items.len);
     }
 
     // last account ref should still be accessible
-    const account = try accounts_db.getAccount(&pubkey_remain);
+    const account = try accounts_db.getAccountLatest(&pubkey_remain) orelse unreachable;
     account.deinit(allocator);
 }
