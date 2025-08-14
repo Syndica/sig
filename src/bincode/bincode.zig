@@ -105,7 +105,20 @@ pub fn readWithConfigUnlimited(
     };
 
     if (config.deserializer) |deserialize_fcn| {
-        return deserialize_fcn(allocator, reader, params);
+        // TODO: certain custom deserializations may store the allocator which is invalid for
+        // temporary LimitAllocators. In those instances, bypass LimitAllocator and use the backing.
+        //
+        // In the future, consider passing *LimitAllocator to custom deserializers instead of the
+        // generic std.mem.Allocator so that the custom ones which needs to store the Allocator will
+        // directly store the backing one instead.
+        const internal_allocator = blk: {
+            const LimitAllocator = sig.utils.allocators.LimitAllocator;
+            if (allocator.vtable != &LimitAllocator.vtable) break :blk allocator;
+            const limit: *LimitAllocator = @ptrCast(@alignCast(allocator.ptr));
+            break :blk limit.backing_allocator;
+        };
+
+        return deserialize_fcn(internal_allocator, reader, params);
     }
 
     switch (@typeInfo(T)) {
