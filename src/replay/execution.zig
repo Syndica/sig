@@ -133,7 +133,7 @@ pub fn replayActiveSlots(state: *ReplayExecutionState) !bool {
         errdefer result.deinit(state.allocator);
         try slot_statuses.append(state.allocator, .{ slot, result });
     }
-    return try processReplayResults(state, &slot_statuses);
+    return try processReplayResults(state, slot_statuses.items);
 }
 
 const ReplaySlotStatus = union(enum) {
@@ -430,10 +430,10 @@ fn updateConsensusForFrozenSlot(
 
 pub fn processReplayResults(
     replay_state: *ReplayExecutionState,
-    slot_statuses: *const std.ArrayListUnmanaged(struct { Slot, ReplaySlotStatus }),
+    slot_statuses: []const struct { Slot, ReplaySlotStatus },
 ) !bool {
     var processed_a_slot = false;
-    for (slot_statuses.items) |slot_status| {
+    for (slot_statuses) |slot_status| {
         const slot, const status = slot_status;
 
         const maybe_entries = try awaitConfirmedEntriesForSlot(
@@ -638,11 +638,11 @@ test "processReplayResults: empty slot statuses" {
     };
     defer test_resources.deinit(allocator);
 
-    const empty_slot_statuses = std.ArrayListUnmanaged(struct { Slot, ReplaySlotStatus }){};
+    const empty_slot_statuses: []const struct { Slot, ReplaySlotStatus } = &.{};
 
     const result = processReplayResults(
         &test_resources.replay_state,
-        &empty_slot_statuses,
+        empty_slot_statuses,
     ) catch |err| {
         std.debug.print("processReplayResults failed: {}\n", .{err});
         return err;
@@ -661,15 +661,13 @@ test "processReplayResults: non-confirm statuses are skipped" {
     };
     defer test_resources.deinit(allocator);
 
-    var slot_statuses = std.ArrayListUnmanaged(struct { Slot, ReplaySlotStatus }){};
-    defer slot_statuses.deinit(allocator);
+    const slot_statuses: []const struct { Slot, ReplaySlotStatus } = &.{
+        .{ 100, .empty },
+        .{ 101, .dead },
+        .{ 102, .leader },
+    };
 
-    // Add various non-confirm statuses
-    try slot_statuses.append(allocator, .{ 100, .empty });
-    try slot_statuses.append(allocator, .{ 101, .dead });
-    try slot_statuses.append(allocator, .{ 102, .leader });
-
-    const result = processReplayResults(&test_resources.replay_state, &slot_statuses) catch |err| {
+    const result = processReplayResults(&test_resources.replay_state, slot_statuses) catch |err| {
         std.debug.print("processReplayResults failed: {}\n", .{err});
         return err;
     };
@@ -801,7 +799,7 @@ test "processReplayResults: confirm status with err poll result marks slot dead"
 
     const result = try processReplayResults(
         &test_resources.replay_state,
-        &slot_statuses,
+        slot_statuses.items,
     );
 
     // Should return false since no slot was successfully processed
@@ -831,7 +829,7 @@ test "processReplayResults: return value correctness" {
         std.ArrayListUnmanaged(struct { Slot, ReplaySlotStatus }).empty;
     const empty_result = try processReplayResults(
         &test_resources.replay_state,
-        &empty_slot_statuses,
+        empty_slot_statuses.items,
     );
     try testing.expect(!empty_result);
 
@@ -843,7 +841,7 @@ test "processReplayResults: return value correctness" {
 
     const non_confirm_result = try processReplayResults(
         &test_resources.replay_state,
-        &non_confirm_statuses,
+        non_confirm_statuses.items,
     );
     try testing.expect(!non_confirm_result);
 }
@@ -910,7 +908,7 @@ test "processReplayResults: confirm status with done poll but missing slot in tr
     // The function should return an error since the slot is not in the tracker
     const result = processReplayResults(
         &test_resources.replay_state,
-        &slot_statuses,
+        slot_statuses.items,
     );
 
     try testing.expectError(error.MissingSlotInTracker, result);
@@ -1073,7 +1071,7 @@ test "processReplayResults: confirm status with done poll and slot complete - su
     // This should successfully process the slot and return true
     const result = try processReplayResults(
         &test_resources.replay_state,
-        &slot_statuses,
+        slot_statuses.items,
     );
 
     // Should return true since the slot was successfully processed
