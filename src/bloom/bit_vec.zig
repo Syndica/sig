@@ -52,11 +52,13 @@ pub fn BitVecConfig(comptime T: type) bincode.FieldConfig(DynamicArrayBitSet(T))
         }
 
         pub fn deserialize(
-            allocator: std.mem.Allocator,
+            limit_allocator: *bincode.LimitAllocator,
             reader: anytype,
             params: bincode.Params,
         ) !DynamicArrayBitSet(T) {
-            var bitvec = try bincode.read(allocator, BitVec(T), reader, params);
+            const allocator = limit_allocator.getUnlimitedAllocator(); // DynamicBitSet stores this.
+
+            var bitvec = try bincode.readWithLimit(limit_allocator, BitVec(T), reader, params);
             defer bincode.free(allocator, bitvec);
 
             const dynamic_bitset = try bitvec.toBitSet(allocator);

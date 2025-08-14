@@ -14,13 +14,16 @@ pub fn sliceConfig(comptime Slice: type) bincode.FieldConfig(Slice) {
             }
         }
 
-        pub fn deserialize(allocator: std.mem.Allocator, reader: anytype, params: bincode.Params) !Slice {
+        pub fn deserialize(limit_allocator: *bincode.LimitAllocator, reader: anytype, params: bincode.Params) !Slice {
             const len = try std.leb.readUleb128(u16, reader);
+
+            const allocator = limit_allocator.allocator();
             const elems = try allocator.alloc(Child, len);
             errdefer allocator.free(elems);
+
             for (elems, 0..) |*elem, i| {
                 errdefer for (elems[0..i]) |prev| bincode.free(allocator, prev);
-                elem.* = try bincode.read(allocator, Child, reader, params);
+                elem.* = try bincode.readWithLimit(limit_allocator, Child, reader, params);
             }
             return elems;
         }
@@ -49,11 +52,15 @@ pub fn arrayListConfig(comptime Child: type) bincode.FieldConfig(std.ArrayList(C
             }
         }
 
-        pub fn deserialize(allocator: std.mem.Allocator, reader: anytype, params: bincode.Params) !std.ArrayList(Child) {
+        pub fn deserialize(limit_allocator: *bincode.LimitAllocator, reader: anytype, params: bincode.Params) !std.ArrayList(Child) {
             const len = try std.leb.readUleb128(u16, reader);
+
+            const allocator = limit_allocator.getUnlimitedAllocator(); // ArrayList stores this.
             var list = try std.ArrayList(Child).initCapacity(allocator, @as(usize, len));
+            errdefer list.deinit();
+
             for (0..len) |_| {
-                const item = try bincode.read(allocator, Child, reader, params);
+                const item = try bincode.readWithLimit(limit_allocator, Child, reader, params);
                 try list.append(item);
             }
             return list;

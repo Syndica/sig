@@ -510,13 +510,14 @@ pub fn SortedMapCustom(
         }
 
         fn bincodeDeserialize(
-            allocator: std.mem.Allocator,
+            limit_allocator: *sig.bincode.LimitAllocator,
             reader: anytype,
             params: sig.bincode.Params,
         ) !SortedMapSelf {
-            const unmanaged = try sig.bincode.read(allocator, Unmanaged, reader, params);
+            const unmanaged =
+                try sig.bincode.readWithLimit(limit_allocator, Unmanaged, reader, params);
             return .{
-                .allocator = allocator,
+                .allocator = limit_allocator.getUnlimitedAllocator(), // SortedMap stores this.
                 .unmanaged = unmanaged,
             };
         }

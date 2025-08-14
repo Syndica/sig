@@ -51,9 +51,9 @@ pub fn BitVecConfig() bincode.FieldConfig(DynamicBitSet) {
             try bincode.write(writer, bitvec, params);
         }
 
-        pub fn deserialize(allocator: ?std.mem.Allocator, reader: anytype, params: bincode.Params) !DynamicBitSet {
-            const ally = allocator.?;
-            var bitvec = try bincode.read(ally, BitVec, reader, params);
+        pub fn deserialize(limit_allocator: *bincode.LimitAllocator, reader: anytype, params: bincode.Params) !DynamicBitSet {
+            const ally = limit_allocator.getUnlimitedAllocator(); // DynamicBitSet stores this.
+            var bitvec = try bincode.readWithLimit(limit_allocator, BitVec, reader, params);
             defer bincode.free(ally, bitvec);
 
             const dynamic_bitset = try bitvec.toBitSet(ally);

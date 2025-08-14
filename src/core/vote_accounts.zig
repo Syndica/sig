@@ -216,9 +216,14 @@ pub const VoteAccounts = struct {
     }
 
     /// Analogous to [deserialize_accounts_hash_map](https://github.com/anza-xyz/agave/blob/10fe1eb29aac9c236fd72d08ae60a3ef61ee8353/vote/src/vote_account.rs#L431-L438)
-    fn deserialize(allocator: Allocator, reader: anytype, _: bincode.Params) !VoteAccounts {
-        var vote_accounts = try bincode.read(
-            allocator,
+    fn deserialize(
+        limit_allocator: *bincode.LimitAllocator,
+        reader: anytype,
+        _: bincode.Params,
+    ) !VoteAccounts {
+        const allocator = limit_allocator.getUnlimitedAllocator(); // VoteAccounts stores this.
+        var vote_accounts = try bincode.readWithLimit(
+            limit_allocator,
             StakeAndVoteAccountsMap,
             reader,
             .{},
@@ -303,7 +308,10 @@ pub const VoteAccount = struct {
     }
 
     /// Takes ownership of `account`.
-    pub fn fromAccountSharedData(allocator: Allocator, account: AccountSharedData) !VoteAccount {
+    pub fn fromAccountSharedData(
+        allocator: std.mem.Allocator,
+        account: AccountSharedData,
+    ) !VoteAccount {
         errdefer account.deinit(allocator);
 
         if (!vote_program.ID.equals(&account.owner)) return error.InvalidOwner;
@@ -324,10 +332,14 @@ pub const VoteAccount = struct {
 
     /// Deserialize the `AccountSharedData`, and attempt to deserialize
     /// `VoteState` from the account data.
-    fn deserialize(allocator: Allocator, reader: anytype, _: bincode.Params) !VoteAccount {
+    fn deserialize(
+        limit_allocator: *bincode.LimitAllocator,
+        reader: anytype,
+        _: bincode.Params,
+    ) !VoteAccount {
         return fromAccountSharedData(
-            allocator,
-            try bincode.read(allocator, AccountSharedData, reader, .{}),
+            limit_allocator.getUnlimitedAllocator(), // VoteState stores this.
+            try bincode.readWithLimit(limit_allocator, AccountSharedData, reader, .{}),
         );
     }
 

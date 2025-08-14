@@ -152,10 +152,11 @@ pub fn hashMapFieldConfig(
         }
 
         fn deserialize(
-            allocator: std.mem.Allocator,
+            limit_allocator: *bincode.LimitAllocator,
             reader: anytype,
             params: Params,
         ) anyerror!HashMapType {
+            const allocator = limit_allocator.getUnlimitedAllocator(); // readCtx stores this.
             return readCtx(allocator, HashMapType, reader, params, struct {
                 pub fn readKey(
                     _allocator: std.mem.Allocator,

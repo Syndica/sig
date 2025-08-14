@@ -15,7 +15,9 @@ const testing = std.testing;
 const arrayListInfo = sig.utils.types.arrayListInfo;
 const hashMapInfo = sig.utils.types.hashMapInfo;
 const boundedArrayInfo = sig.utils.types.boundedArrayInfo;
-const LimitAllocator = sig.utils.allocators.LimitAllocator;
+
+// re-export for ease-of-use on custom deserializers
+pub const LimitAllocator = sig.utils.allocators.LimitAllocator;
 
 const bincode = @This();
 
@@ -48,6 +50,11 @@ pub fn readFromSlice(allocator: std.mem.Allocator, comptime T: type, slice: []co
     return bincode.read(allocator, T, stream.reader(), params);
 }
 
+pub fn readFromSliceWithLimit(limit_allocator: *LimitAllocator, comptime T: type, slice: []const u8, params: bincode.Params) !T {
+    var stream = std.io.fixedBufferStream(slice);
+    return bincode.readWithLimit(limit_allocator, T, stream.reader(), params);
+}
+
 pub fn writeToSlice(slice: []u8, data: anytype, params: bincode.Params) ![]u8 {
     var stream = std.io.fixedBufferStream(slice);
     try bincode.write(stream.writer(), data, params);
@@ -69,8 +76,17 @@ pub fn read(
     return readWithConfig(allocator, U, reader, params, getConfig(U) orelse .{});
 }
 
+pub fn readWithLimit(
+    limit_allocator: *LimitAllocator,
+    comptime U: type,
+    reader: anytype,
+    params: bincode.Params,
+) !U {
+    return readWithConfigAndLimit(limit_allocator, U, reader, params, getConfig(U) orelse .{});
+}
+
 pub fn readWithConfig(
-    read_allocator: std.mem.Allocator,
+    base_allocator: std.mem.Allocator,
     comptime U: type,
     reader: anytype,
     params: bincode.Params,
@@ -78,22 +94,14 @@ pub fn readWithConfig(
 ) !U {
     var limit_allocator = LimitAllocator{
         .bytes_remaining = params.allocation_limit,
-        .backing_allocator = read_allocator,
+        .backing_allocator = base_allocator,
     };
-    return readWithConfigUnlimited(limit_allocator.allocator(), U, reader, params, config);
+
+    return readWithConfigAndLimit(&limit_allocator, U, reader, params, config);
 }
 
-pub fn readUnlimited(
-    allocator: std.mem.Allocator,
-    comptime U: type,
-    reader: anytype,
-    params: bincode.Params,
-) !U {
-    return readWithConfigUnlimited(allocator, U, reader, params, getConfig(U) orelse .{});
-}
-
-pub fn readWithConfigUnlimited(
-    allocator: std.mem.Allocator,
+pub fn readWithConfigAndLimit(
+    limit_allocator: *LimitAllocator,
     comptime U: type,
     reader: anytype,
     params: bincode.Params,
@@ -106,7 +114,7 @@ pub fn readWithConfigUnlimited(
     };
 
     if (config.deserializer) |deserialize_fcn| {
-        return deserialize_fcn(getDeserializerAllocator(allocator), reader, params);
+        return deserialize_fcn(limit_allocator, reader, params);
     }
 
     switch (@typeInfo(T)) {
@@ -130,14 +138,14 @@ pub fn readWithConfigUnlimited(
         },
         .@"union" => |info| {
             const tag_type = info.tag_type orelse @compileError("Only tagged unions may be read.");
-            const raw_tag = try bincode.readUnlimited(allocator, tag_type, reader, params);
+            const raw_tag = try bincode.readWithLimit(limit_allocator, tag_type, reader, params);
 
             inline for (info.fields) |field| {
                 if (raw_tag == @field(tag_type, field.name)) {
                     // https://github.com/ziglang/zig/issues/7866
                     if (field.type == void) return @unionInit(T, field.name, {});
                     const payload =
-                        try bincode.readUnlimited(allocator, field.type, reader, params);
+                        try bincode.readWithLimit(limit_allocator, field.type, reader, params);
                     return @unionInit(T, field.name, payload);
                 }
             }
@@ -150,7 +158,7 @@ pub fn readWithConfigUnlimited(
             inline for (info.fields, 0..) |field, i| {
                 errdefer inline for (info.fields[0..i]) |prev| {
                     if (prev.is_comptime) continue;
-                    bincode.free(allocator, @field(data, prev.name));
+                    bincode.free(limit_allocator.allocator(), @field(data, prev.name));
                 };
 
                 if (field.is_comptime) continue;
@@ -165,12 +173,12 @@ pub fn readWithConfigUnlimited(
                     //     }
                     // }
                     @field(data, field.name) =
-                        try bincode.readUnlimited(allocator, field.type, reader, params);
+                        try bincode.readWithLimit(limit_allocator, field.type, reader, params);
                     continue;
                 };
 
                 @field(data, field.name) =
-                    try readFieldWithConfig(allocator, reader, params, field, field_config);
+                    try readFieldWithConfig(limit_allocator, reader, params, field, field_config);
             }
 
             // TODO: improve implementation of post deserialise method
@@ -187,57 +195,58 @@ pub fn readWithConfigUnlimited(
         .optional => |info| {
             return switch (try reader.readByte()) {
                 0 => null,
-                1 => try bincode.readUnlimited(allocator, info.child, reader, params),
+                1 => try bincode.readWithLimit(limit_allocator, info.child, reader, params),
                 else => error.BadOptionalBoolean,
             };
         },
         .array => |info| {
             var data: T = undefined;
             if (params.include_fixed_array_length) {
-                const fixed_array_len = try bincode.readUnlimited(allocator, u64, reader, params);
+                const fixed_array_len = try bincode.readWithLimit(limit_allocator, u64, reader, params);
                 if (fixed_array_len != info.len) {
                     return error.UnexpectedFixedArrayLen;
                 }
             }
             for (&data) |*element| {
-                element.* = try bincode.readUnlimited(allocator, info.child, reader, params);
+                element.* = try bincode.readWithLimit(limit_allocator, info.child, reader, params);
             }
             return data;
         },
         .vector => |info| {
             var data: T = undefined;
             if (params.include_fixed_array_length) {
-                const fixed_array_len = try bincode.readUnlimited(allocator, u64, reader, params);
+                const fixed_array_len = try bincode.readWithLimit(limit_allocator, u64, reader, params);
                 if (fixed_array_len != info.len) {
                     return error.UnexpectedFixedArrayVectorLen;
                 }
             }
             for (&data) |*element| {
-                element.* = try bincode.readUnlimited(allocator, info.child, reader, params);
+                element.* = try bincode.readWithLimit(limit_allocator, info.child, reader, params);
             }
             return data;
         },
         .pointer => |info| {
+            const allocator = limit_allocator.allocator();
             switch (info.size) {
                 .one => {
                     const data = try allocator.create(info.child);
                     errdefer allocator.destroy(data);
-                    data.* = try bincode.readUnlimited(allocator, info.child, reader, params);
+                    data.* = try bincode.readWithLimit(limit_allocator, info.child, reader, params);
                     return data;
                 },
                 .slice => {
-                    const num_entries = try bincode.readUnlimited(allocator, usize, reader, params);
+                    const num_entries = try bincode.readWithLimit(limit_allocator, usize, reader, params);
                     const entries = try allocator.alloc(info.child, num_entries);
                     errdefer allocator.free(entries);
                     for (entries) |*entry| {
-                        entry.* = try bincode.readUnlimited(allocator, info.child, reader, params);
+                        entry.* = try bincode.readWithLimit(limit_allocator, info.child, reader, params);
                     }
                     return entries;
                 },
                 else => {},
             }
         },
-        .comptime_float => return bincode.readUnlimited(allocator, f64, reader, params),
+        .comptime_float => return bincode.readWithLimit(limit_allocator, f64, reader, params),
         .float => |info| {
             if (info.bits != 32 and info.bits != 64) {
                 @compileError("Only f{32, 64} floating-point integers may be serialized, but attempted to serialize " ++ @typeName(T) ++ ".");
@@ -245,7 +254,7 @@ pub fn readWithConfigUnlimited(
             const bytes = try reader.readBytesNoEof((info.bits + 7) / 8);
             return @as(T, @bitCast(bytes));
         },
-        .comptime_int => return bincode.readUnlimited(allocator, u64, reader, params),
+        .comptime_int => return bincode.readWithLimit(limit_allocator, u64, reader, params),
         .int => return try bincode.readInt(T, reader, params),
         else => {},
     }
@@ -380,14 +389,17 @@ pub fn utf8StringCodec(
 ) FieldConfig(Str) {
     const S = struct {
         fn deserialize(
-            allocator: std.mem.Allocator,
+            limit_allocator: *bincode.LimitAllocator,
             reader: anytype,
             _: bincode.Params,
         ) !Str {
             const len = try bincode.readInt(u64, reader, .{});
             if (len > max_len) return error.DataTooLarge;
+
+            const allocator = limit_allocator.allocator();
             const str = try allocator.alloc(u8, len);
             errdefer allocator.free(str);
+
             try reader.readNoEof(str);
             if (!std.unicode.utf8ValidateSlice(str[0..])) return error.InvalidUtf8;
             return str;
@@ -397,7 +409,7 @@ pub fn utf8StringCodec(
 }
 
 pub fn readFieldWithConfig(
-    allocator: std.mem.Allocator,
+    limit_allocator: *LimitAllocator,
     reader: anytype,
     params: bincode.Params,
     comptime field: std.builtin.Type.StructField,
@@ -408,25 +420,10 @@ pub fn readFieldWithConfig(
     }
 
     if (field_config.deserializer) |deser_fcn| {
-        return try deser_fcn(getDeserializerAllocator(allocator), reader, params);
+        return try deser_fcn(limit_allocator, reader, params);
     }
 
-    return try bincode.readUnlimited(allocator, field.type, reader, params);
-}
-
-// TODO: certain custom deserializations may store the allocator which is invalid for
-// temporary LimitAllocators. In those instances, bypass LimitAllocator and use the backing.
-//
-// In the future, consider passing *LimitAllocator to custom deserializers instead of the
-// generic std.mem.Allocator so that the custom ones which needs to store the Allocator will
-// directly store the backing one instead.
-fn getDeserializerAllocator(allocator: std.mem.Allocator) std.mem.Allocator {
-    var backing_allocator = allocator;
-    while (backing_allocator.vtable == LimitAllocator.vtable) {
-        const limit_allocator: *LimitAllocator = @ptrCast(@alignCast(backing_allocator.ptr));
-        backing_allocator = limit_allocator.backing_allocator;
-    }
-    return backing_allocator;
+    return try bincode.readWithLimit(limit_allocator, field.type, reader, params);
 }
 
 pub fn write(writer: anytype, data: anytype, params: bincode.Params) !void {
@@ -664,12 +661,12 @@ pub fn VarIntConfig(comptime T: type) bincode.FieldConfig(T) {
         }
 
         pub fn deserialize(
-            allocator: std.mem.Allocator,
+            limit_allocator: *bincode.LimitAllocator,
             reader: anytype,
             params: bincode.Params,
         ) !T {
             _ = params;
-            _ = allocator;
+            _ = limit_allocator;
             return std.leb.readUleb128(T, reader);
         }
     };
@@ -682,7 +679,7 @@ pub fn VarIntConfig(comptime T: type) bincode.FieldConfig(T) {
 
 pub fn FieldConfig(comptime T: type) type {
     return struct {
-        deserializer: ?fn (alloc: std.mem.Allocator, reader: anytype, params: Params) anyerror!T = null,
+        deserializer: ?fn (limit_allocator: *LimitAllocator, reader: anytype, params: Params) anyerror!T = null,
         serializer: ?fn (writer: anytype, data: anytype, params: Params) anyerror!void = null,
         free: ?fn (allocator: std.mem.Allocator, data: anytype) void = null,
         skip: bool = false,
@@ -770,11 +767,15 @@ pub fn writeToArray(allocator: std.mem.Allocator, data: anytype, params: Params)
 // ** Tests **//
 fn TestSliceConfig(comptime Child: type) FieldConfig([]Child) {
     const S = struct {
-        fn deserializeTestSlice(allocator: std.mem.Allocator, reader: anytype, params: Params) ![]Child {
-            const len = try bincode.read(allocator, u16, reader, params);
+        fn deserializeTestSlice(limit_allocator: *bincode.LimitAllocator, reader: anytype, params: Params) ![]Child {
+            const len = try bincode.readWithLimit(limit_allocator, u16, reader, params);
+
+            const allocator = limit_allocator.allocator();
             var elems = try allocator.alloc(Child, len);
+            errdefer allocator.free(elems);
+
             for (0..len) |i| {
-                elems[i] = try bincode.read(allocator, Child, reader, params);
+                elems[i] = try bincode.readWithLimit(limit_allocator, Child, reader, params);
             }
             return elems;
         }

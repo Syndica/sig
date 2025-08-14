@@ -1577,6 +1577,21 @@ pub const LimitAllocator = struct {
         };
     }
 
+    pub fn tryFrom(allocator_: std.mem.Allocator) ?*LimitAllocator {
+        if (allocator_.vtable != LimitAllocator.vtable) return null;
+        const self: *LimitAllocator = @ptrCast(@alignCast(allocator_.ptr));
+        return self;
+    }
+
+    /// Returns the backing allocator that is NOT A LimitAllocator (skips any nesting as well).
+    pub fn getUnlimitedAllocator(self: *const LimitAllocator) Allocator {
+        var backing_allocator = self.backing_allocator;
+        while (tryFrom(backing_allocator)) |limit_allocator| {
+            backing_allocator = limit_allocator.backing_allocator;
+        }
+        return backing_allocator;
+    }
+
     fn alloc(
         ctx: *anyopaque,
         len: usize,

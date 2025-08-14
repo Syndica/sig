@@ -195,10 +195,12 @@ pub fn serializeCompactVoteStateUpdate(
 }
 
 pub fn deserializeCompactVoteStateUpdate(
-    allocator: std.mem.Allocator,
+    limit_allocator: *sig.bincode.LimitAllocator,
     reader: anytype,
     _: sig.bincode.Params,
 ) anyerror!VoteStateUpdate {
+    const allocator = limit_allocator.allocator();
+
     var root = try reader.readInt(Slot, .little);
     root = if (root == std.math.maxInt(Slot)) 0 else root;
 
@@ -294,10 +296,11 @@ pub fn serializeTowerSync(writer: anytype, data: anytype, _: sig.bincode.Params)
 }
 
 pub fn deserializeTowerSync(
-    allocator: std.mem.Allocator,
+    limit_allocator: *sig.bincode.LimitAllocator,
     reader: anytype,
     _: sig.bincode.Params,
 ) anyerror!TowerSync {
+    const allocator = limit_allocator.allocator();
     const root = try reader.readInt(Slot, .little);
 
     var slot = if (root == std.math.maxInt(Slot)) 0 else root;
@@ -473,10 +476,11 @@ pub const AuthorizedVoters = struct {
     }
 
     fn deserialize(
-        allocator: std.mem.Allocator,
+        limit_allocator: *sig.bincode.LimitAllocator,
         reader: anytype,
         _: sig.bincode.Params,
     ) !AuthorizedVoters {
+        const allocator = limit_allocator.getUnlimitedAllocator(); // AuthorizedVoters stores this.
         var authorized_voters = AuthorizedVoters{
             .voters = SortedMap(Epoch, Pubkey).init(allocator),
         };
