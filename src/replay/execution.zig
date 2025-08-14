@@ -336,7 +336,7 @@ fn awaitConfirmedEntriesForSlot(
 }
 
 /// Applies fork-choice and vote updates after a slot has been frozen.
-fn finalizeSlotPostFreeze(
+fn updateConsensusForFrozenSlot(
     replay_state: *ReplayExecutionState,
     slot: Slot,
 ) !void {
@@ -467,7 +467,7 @@ pub fn processReplayResults(
             // - cluster_slots_update_sender;
             // - transaction_status_sender;
             // - cost_update_sender;
-            try finalizeSlotPostFreeze(replay_state, slot);
+            try updateConsensusForFrozenSlot(replay_state, slot);
             // TODO block_metadata_notifier
             // TODO block_metadata_notifier
         }
