@@ -1656,3 +1656,61 @@ pub const LimitAllocator = struct {
         self.bytes_remaining += old_mem.len;
     }
 };
+
+test "LimitAllocator" {
+    var buffer: [1024]u8 = undefined;
+    var fba = std.heap.FixedBufferAllocator.init(&buffer);
+
+    const limit = 512;
+    var limit_alloc = LimitAllocator{
+        .bytes_remaining = limit,
+        .backing_allocator = fba.allocator(),
+    };
+
+    // alloc normal
+    const slice = try limit_alloc.allocator().alloc(u8, 12);
+    try std.testing.expectEqual(limit_alloc.bytes_remaining, limit - 12);
+    try std.testing.expectEqual(fba.end_index, 12);
+
+    // alloc (over)
+    try std.testing.expectError(error.OutOfMemory, limit_alloc.allocator().alloc(u8, limit + 1));
+    try std.testing.expectEqual(limit_alloc.bytes_remaining, limit - 12);
+    try std.testing.expectEqual(fba.end_index, 12);
+
+    // remap shrink
+    var new_slice = limit_alloc.allocator().remap(slice, 8).?;
+    try std.testing.expectEqual(limit_alloc.bytes_remaining, limit - 8);
+    try std.testing.expectEqual(fba.end_index, 8);
+
+    // remap grow
+    new_slice = limit_alloc.allocator().remap(new_slice, 100).?;
+    try std.testing.expectEqual(limit_alloc.bytes_remaining, limit - 100);
+    try std.testing.expectEqual(fba.end_index, 100);
+
+    // remap grow (over)
+    try std.testing.expectEqual(null, limit_alloc.allocator().remap(new_slice, limit + 1));
+    try std.testing.expectEqual(limit_alloc.bytes_remaining, limit - 100);
+    try std.testing.expectEqual(fba.end_index, 100);
+
+    // resize shrink
+    try std.testing.expect(limit_alloc.allocator().resize(new_slice, 12));
+    new_slice.len = 12;
+    try std.testing.expectEqual(limit_alloc.bytes_remaining, limit - 12);
+    try std.testing.expectEqual(fba.end_index, 12);
+
+    // resize grow
+    try std.testing.expect(limit_alloc.allocator().resize(new_slice, 100));
+    new_slice.len = 100;
+    try std.testing.expectEqual(limit_alloc.bytes_remaining, limit - 100);
+    try std.testing.expectEqual(fba.end_index, 100);
+
+    // resize grow (over)
+    try std.testing.expectEqual(false, limit_alloc.allocator().resize(new_slice, limit + 1));
+    try std.testing.expectEqual(limit_alloc.bytes_remaining, limit - 100);
+    try std.testing.expectEqual(fba.end_index, 100);
+
+    // free
+    limit_alloc.allocator().free(new_slice);
+    try std.testing.expectEqual(limit_alloc.bytes_remaining, limit);
+    try std.testing.expectEqual(fba.end_index, 0);
+}
