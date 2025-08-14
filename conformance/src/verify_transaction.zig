@@ -36,7 +36,7 @@ pub fn verifyTransaction(
     if (!feature_set.active(.move_precompile_verification_to_svm, slot)) {
         const maybe_verify_error = try sig.runtime.program.precompiles.verifyPrecompiles(
             allocator,
-            transaction,
+            &transaction,
             feature_set,
             slot,
         );

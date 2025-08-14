@@ -9,7 +9,6 @@ const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 const Signature = sig.core.Signature;
 const ReservedAccounts = sig.core.ReservedAccounts;
-const Slot = sig.core.Slot;
 
 const LookupTableAccounts = sig.replay.resolve_lookup.LookupTableAccounts;
 

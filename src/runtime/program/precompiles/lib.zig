@@ -73,7 +73,7 @@ pub fn verifyPrecompilesComputeCost(
 
 pub fn verifyPrecompiles(
     allocator: std.mem.Allocator,
-    transaction: sig.core.Transaction,
+    transaction: *const sig.core.Transaction,
     feature_set: *const sig.core.FeatureSet,
     slot: sig.core.Slot,
 ) error{OutOfMemory}!?TransactionError {
@@ -144,7 +144,7 @@ test "verify ed25519" {
     {
         const actual = try verifyPrecompiles(
             std.testing.allocator,
-            .EMPTY,
+            &.EMPTY,
             &.ALL_DISABLED,
             0,
         );
@@ -173,22 +173,25 @@ test "verify ed25519" {
         };
         const actual = try verifyPrecompiles(
             std.testing.allocator,
-            bad_ed25519_tx,
+            &bad_ed25519_tx,
             &.ALL_DISABLED,
             0,
         );
         try std.testing.expectEqual(
-            TransactionError{ .InstructionError = .{ 0, .{ .Custom = 4 } } },
+            TransactionError{ .InstructionError = .{ 0, .{ .Custom = 0 } } },
             actual,
         );
     }
 
     {
+        const message = "hello!";
         const keypair = Ed25519.KeyPair.generate();
+        const signature = try keypair.sign(message, null);
         const ed25519_instruction = try ed25519.newInstruction(
             std.testing.allocator,
-            keypair,
-            "hello!",
+            &signature,
+            &keypair.public_key,
+            message,
         );
         defer std.testing.allocator.free(ed25519_instruction.data);
 
@@ -213,7 +216,7 @@ test "verify ed25519" {
 
         const actual = try verifyPrecompiles(
             std.testing.allocator,
-            ed25519_tx,
+            &ed25519_tx,
             &.ALL_DISABLED,
             0,
         );
@@ -222,11 +225,14 @@ test "verify ed25519" {
 }
 
 test "verify cost" {
+    const message = "hello!";
     const keypair = Ed25519.KeyPair.generate();
+    const signature = try keypair.sign(message, null);
     const ed25519_instruction = try ed25519.newInstruction(
         std.testing.allocator,
-        keypair,
-        "hello!",
+        &signature,
+        &keypair.public_key,
+        message,
     );
     defer std.testing.allocator.free(ed25519_instruction.data);
 
@@ -276,12 +282,12 @@ test "verify secp256k1" {
 
     const actual = try verifyPrecompiles(
         std.testing.allocator,
-        bad_secp256k1_tx,
+        &bad_secp256k1_tx,
         &.ALL_DISABLED,
         0,
     );
     try std.testing.expectEqual(
-        TransactionError{ .InstructionError = .{ 0, .{ .Custom = 4 } } },
+        TransactionError{ .InstructionError = .{ 0, .{ .Custom = 0 } } },
         actual,
     );
 }
