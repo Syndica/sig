@@ -86,7 +86,7 @@ cd solana-conformance
 source test_suite_env/bin/activate
 
 export LD_PRELOAD=/lib/x86_64-linux-gnu/libasan.so.8
-export ASAN_OPTIONS=detect_leaks=0 allocator_may_return_null=1
+export ASAN_OPTIONS=detect_leaks=0
 
 echo "Generating fixtures"
 solana-test-suite create-fixtures \
