@@ -1030,7 +1030,7 @@ test "processReplayResults: confirm status with done poll and slot complete - su
         .epoch_reward_status = .inactive,
         .ancestors = .{ .ancestors = .empty },
         .feature_set = .ALL_DISABLED,
-        .reserved_accounts = .empty
+        .reserved_accounts = .empty,
     };
 
     // Create slot state then modify tick height
