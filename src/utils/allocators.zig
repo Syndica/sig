@@ -1563,7 +1563,7 @@ pub const LimitAllocator = struct {
     backing_allocator: Allocator,
 
     /// Needs a stable vtable address to check if an allocator is from LimitAllocator.
-    pub const vtable: Allocator.VTable = .{
+    pub const vtable: *const Allocator.VTable = &.{
         .alloc = alloc,
         .resize = resize,
         .remap = remap,
@@ -1573,7 +1573,7 @@ pub const LimitAllocator = struct {
     pub fn allocator(self: *LimitAllocator) Allocator {
         return .{
             .ptr = self,
-            .vtable = &vtable,
+            .vtable = vtable,
         };
     }
 

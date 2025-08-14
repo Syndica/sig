@@ -15,6 +15,7 @@ const testing = std.testing;
 const arrayListInfo = sig.utils.types.arrayListInfo;
 const hashMapInfo = sig.utils.types.hashMapInfo;
 const boundedArrayInfo = sig.utils.types.boundedArrayInfo;
+const LimitAllocator = sig.utils.allocators.LimitAllocator;
 
 const bincode = @This();
 
@@ -75,7 +76,7 @@ pub fn readWithConfig(
     params: bincode.Params,
     comptime config: FieldConfig(U),
 ) !U {
-    var limit_allocator = sig.utils.allocators.LimitAllocator{
+    var limit_allocator = LimitAllocator{
         .bytes_remaining = params.allocation_limit,
         .backing_allocator = read_allocator,
     };
@@ -105,20 +106,7 @@ pub fn readWithConfigUnlimited(
     };
 
     if (config.deserializer) |deserialize_fcn| {
-        // TODO: certain custom deserializations may store the allocator which is invalid for
-        // temporary LimitAllocators. In those instances, bypass LimitAllocator and use the backing.
-        //
-        // In the future, consider passing *LimitAllocator to custom deserializers instead of the
-        // generic std.mem.Allocator so that the custom ones which needs to store the Allocator will
-        // directly store the backing one instead.
-        const internal_allocator = blk: {
-            const LimitAllocator = sig.utils.allocators.LimitAllocator;
-            if (allocator.vtable != &LimitAllocator.vtable) break :blk allocator;
-            const limit: *LimitAllocator = @ptrCast(@alignCast(allocator.ptr));
-            break :blk limit.backing_allocator;
-        };
-
-        return deserialize_fcn(internal_allocator, reader, params);
+        return deserialize_fcn(getDeserializerAllocator(allocator), reader, params);
     }
 
     switch (@typeInfo(T)) {
@@ -420,10 +408,25 @@ pub fn readFieldWithConfig(
     }
 
     if (field_config.deserializer) |deser_fcn| {
-        return try deser_fcn(allocator, reader, params);
+        return try deser_fcn(getDeserializerAllocator(allocator), reader, params);
     }
 
     return try bincode.readUnlimited(allocator, field.type, reader, params);
+}
+
+// TODO: certain custom deserializations may store the allocator which is invalid for
+// temporary LimitAllocators. In those instances, bypass LimitAllocator and use the backing.
+//
+// In the future, consider passing *LimitAllocator to custom deserializers instead of the
+// generic std.mem.Allocator so that the custom ones which needs to store the Allocator will
+// directly store the backing one instead.
+fn getDeserializerAllocator(allocator: std.mem.Allocator) std.mem.Allocator {
+    var backing_allocator = allocator;
+    while (backing_allocator.vtable == LimitAllocator.vtable) {
+        const limit_allocator: *LimitAllocator = @ptrCast(@alignCast(backing_allocator.ptr));
+        backing_allocator = limit_allocator.backing_allocator;
+    }
+    return backing_allocator;
 }
 
 pub fn write(writer: anytype, data: anytype, params: bincode.Params) !void {

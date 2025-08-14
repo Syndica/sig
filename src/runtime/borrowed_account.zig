@@ -187,13 +187,12 @@ pub const BorrowedAccount = struct {
         allocator: std.mem.Allocator,
         comptime T: type,
     ) InstructionError!T {
-        var limit_allocator = sig.utils.allocators.LimitAllocator{
-            .bytes_remaining = MAX_PERMITTED_DATA_LENGTH,
-            .backing_allocator = allocator,
-        };
-
-        return bincode.readFromSlice(limit_allocator.allocator(), T, self.account.data, .{}) catch
-            return InstructionError.InvalidAccountData;
+        return bincode.readFromSlice(
+            allocator,
+            T,
+            self.account.data,
+            .{ .allocation_limit = MAX_PERMITTED_DATA_LENGTH },
+        ) catch return InstructionError.InvalidAccountData;
     }
 
     /// Serialize the state into the account data.\
