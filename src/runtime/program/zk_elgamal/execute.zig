@@ -154,9 +154,11 @@ fn processVerifyProof(
 
     // create context state if additional accounts are provided with the instruction
     if (ic.ixn_info.account_metas.len > accessed_accounts) {
-        const context_state_authority = try ic.borrowInstructionAccount(accessed_accounts + 1);
-        defer context_state_authority.release();
-        const context_authority_key = context_state_authority.pubkey;
+        const context_authority_key = blk: {
+            const context_state_authority = try ic.borrowInstructionAccount(accessed_accounts + 1);
+            defer context_state_authority.release();
+            break :blk context_state_authority.pubkey;
+        };
 
         const proof_context_account = try ic.borrowInstructionAccount(accessed_accounts);
         defer proof_context_account.release();
