@@ -133,9 +133,7 @@ pub fn replayActiveSlots(state: *ReplayExecutionState) !bool {
         errdefer result.deinit(state.allocator);
         try slot_statuses.append(state.allocator, .{ slot, result });
     }
-    var processed_a_slot = false;
-    processed_a_slot = try processReplayResults(state, &slot_statuses);
-    return processed_a_slot;
+    return try processReplayResults(state, &slot_statuses);
 }
 
 const ReplaySlotStatus = union(enum) {
