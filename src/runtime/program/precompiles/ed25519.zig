@@ -2,8 +2,6 @@ const std = @import("std");
 const builtin = @import("builtin");
 const sig = @import("../../../sig.zig");
 
-const precompile_programs = sig.runtime.program.precompiles;
-
 const Pubkey = sig.core.Pubkey;
 const InstructionError = sig.core.instruction.InstructionError;
 const InstructionContext = sig.runtime.InstructionContext;
