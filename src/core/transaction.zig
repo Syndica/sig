@@ -8,6 +8,7 @@ const Blake3 = std.crypto.hash.Blake3;
 const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 const Signature = sig.core.Signature;
+const ReservedAccounts = sig.core.ReservedAccounts;
 
 const LookupTableAccounts = sig.replay.resolve_lookup.LookupTableAccounts;
 
@@ -392,43 +393,13 @@ pub const Message = struct {
         return index < self.signature_count;
     }
 
-    const RESERVED_ACCOUNTS: []const Pubkey = &.{
-        // builtin programs
-        sig.runtime.program.bpf_loader.v2.ID,
-        sig.runtime.program.bpf_loader.v1.ID,
-        sig.runtime.program.bpf_loader.v3.ID,
-        sig.runtime.program.config.ID,
-
-        sig.runtime.ids.FEATURE_PROGRAM_ID,
-        sig.runtime.ids.CONFIG_PROGRAM_STAKE_CONFIG_ID,
-        sig.runtime.program.stake.ID,
-        sig.runtime.program.system.ID,
-        sig.runtime.program.vote.ID,
-        sig.runtime.program.zk_elgamal.ID,
-        sig.runtime.ids.ZK_TOKEN_PROOF_PROGRAM_ID,
-
-        sig.runtime.program.precompiles.ed25519.ID,
-        sig.runtime.program.precompiles.secp256k1.ID,
-        sig.runtime.program.precompiles.secp256r1.ID,
-
-        // sysvars
-        sig.runtime.sysvar.Clock.ID,
-        sig.runtime.sysvar.EpochSchedule.ID,
-        sig.runtime.sysvar.Fees.ID,
-        sig.runtime.ids.SYSVAR_INSTRUCTIONS_ID,
-        sig.runtime.sysvar.RecentBlockhashes.ID,
-        sig.runtime.sysvar.Rent.ID,
-        sig.runtime.ids.SYSVAR_REWARDS_ID,
-        sig.runtime.sysvar.SlotHashes.ID,
-        sig.runtime.sysvar.SlotHistory.ID,
-        sig.runtime.sysvar.StakeHistory.ID,
-
-        // other
-        sig.runtime.ids.NATIVE_LOADER_ID,
-    };
-
     /// https://github.com/anza-xyz/solana-sdk/blob/5ff67c1a53c10e16689e377f98a92ba3afd6bb7c/message/src/versions/v0/loaded.rs#L118-L150
-    pub fn isWritable(self: Message, index: usize, lookups: LookupTableAccounts) bool {
+    pub fn isWritable(
+        self: Message,
+        index: usize,
+        lookups: LookupTableAccounts,
+        reserved_accounts: *const ReservedAccounts,
+    ) bool {
         const pubkey = blk: {
             if (index < self.account_keys.len) {
                 if (index >= self.signature_count) {
@@ -462,9 +433,7 @@ pub const Message = struct {
             if (ixn.program_index == index) break true;
         } else false;
 
-        const is_reserved = for (RESERVED_ACCOUNTS) |reserved_key| {
-            if (reserved_key.equals(&pubkey)) break true;
-        } else false;
+        const is_reserved = reserved_accounts.contains(pubkey);
 
         const demote_program_id = is_key_called_as_program and !is_upgradeable_loader_present;
         return !(is_reserved or demote_program_id);

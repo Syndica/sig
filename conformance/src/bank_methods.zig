@@ -54,9 +54,9 @@ pub fn applyFeatureActivations(
 
     // Update active set of reserved account keys which are not allowed to be write locked
     // self.reserved_account_keys = {
-    //     let mut reserved_keys = ReservedAccountKeys::clone(&self.reserved_account_keys);
-    //     reserved_keys.update_active_set(&self.feature_set);
-    //     Arc::new(reserved_keys)
+    //     let mut reserved_accounts = ReservedAccountKeys::clone(&self.reserved_account_keys);
+    //     reserved_accounts.update_active_set(&self.feature_set);
+    //     Arc::new(reserved_accounts)
     // };
 
     if (new_feature_activations.active(.pico_inflation, slot))
