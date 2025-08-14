@@ -1207,7 +1207,7 @@ pub const SnapshotHashes = struct {
             try bincode.write(writer, inc_list.getSlice(), params);
         }
 
-        fn bincodeDeserializeFn(allocator: std.mem.Allocator, reader: anytype, params: bincode.Params) !IncrementalSnapshotsList {
+        fn bincodeDeserializeFn(limit_allocator: *bincode.LimitAllocator, reader: anytype, params: bincode.Params) !IncrementalSnapshotsList {
             const faililng_allocator = sig.utils.allocators.failing.allocator(.{});
 
             const maybe_len = try bincode.readIntAsLength(usize, reader, params);
@@ -1216,8 +1216,10 @@ pub const SnapshotHashes = struct {
                 0 => return EMPTY,
                 1 => return initSingle(try bincode.read(faililng_allocator, SlotAndHash, reader, params)),
                 else => {
+                    const allocator = limit_allocator.allocator();
                     const list = try allocator.alloc(SlotAndHash, len);
                     errdefer allocator.free(list);
+
                     for (list) |*sah| sah.* = try bincode.read(faililng_allocator, SlotAndHash, reader, params);
                     return initList(list);
                 },

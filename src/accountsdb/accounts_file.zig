@@ -67,7 +67,7 @@ pub const FileId = enum(Int) {
     }
 
     fn deserialize(
-        _: std.mem.Allocator,
+        _: *bincode.LimitAllocator,
         reader: anytype,
         params: sig.bincode.Params,
     ) anyerror!FileId {

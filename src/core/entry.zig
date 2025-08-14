@@ -281,7 +281,11 @@ test hashTransactions {
     var transactions: [3]Transaction = undefined;
     for (serialized_transactions, 0..) |stx, i| {
         var stream = std.io.fixedBufferStream(&stx);
-        transactions[i] = try Transaction.deserialize(std.testing.allocator, stream.reader(), .{});
+        var limit_allocator = sig.bincode.LimitAllocator{
+            .backing_allocator = std.testing.allocator,
+            .bytes_remaining = std.math.maxInt(usize),
+        };
+        transactions[i] = try Transaction.deserialize(&limit_allocator, stream.reader(), .{});
     }
     defer for (transactions) |tx| tx.deinit(std.testing.allocator);
 
