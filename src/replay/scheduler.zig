@@ -302,10 +302,10 @@ test "TransactionScheduler: happy path" {
     defer scheduler.deinit();
 
     {
-        const batch1 = try resolveBatch(allocator, .noop, transactions[0..3]);
+        const batch1 = try resolveBatch(allocator, .noop, transactions[0..3], &.empty);
         errdefer batch1.deinit(allocator);
 
-        const batch2 = try resolveBatch(allocator, .noop, transactions[3..6]);
+        const batch2 = try resolveBatch(allocator, .noop, transactions[3..6], &.empty);
         errdefer batch2.deinit(allocator);
 
         scheduler.addBatchAssumeCapacity(batch1);
@@ -356,10 +356,10 @@ test "TransactionScheduler: duplicate batch passes through to svm" {
     defer scheduler.deinit();
 
     {
-        const batch1 = try resolveBatch(allocator, .noop, transactions[0..3]);
+        const batch1 = try resolveBatch(allocator, .noop, transactions[0..3], &.empty);
         errdefer batch1.deinit(allocator);
 
-        const batch1_dupe = try resolveBatch(allocator, .noop, transactions[0..3]);
+        const batch1_dupe = try resolveBatch(allocator, .noop, transactions[0..3], &.empty);
         errdefer batch1_dupe.deinit(allocator);
 
         scheduler.addBatchAssumeCapacity(batch1);
@@ -410,7 +410,7 @@ test "TransactionScheduler: failed account locks" {
     defer scheduler.deinit();
 
     {
-        const batch1 = try resolveBatch(allocator, .noop, &unresolved_batch);
+        const batch1 = try resolveBatch(allocator, .noop, &unresolved_batch, &.empty);
         errdefer batch1.deinit(allocator);
 
         scheduler.addBatchAssumeCapacity(batch1);
@@ -468,10 +468,10 @@ test "TransactionScheduler: signature verification failure" {
     transactions[5].signatures = replaced_sigs;
 
     {
-        const batch1 = try resolveBatch(allocator, .noop, transactions[0..3]);
+        const batch1 = try resolveBatch(allocator, .noop, transactions[0..3], &.empty);
         errdefer batch1.deinit(allocator);
 
-        const batch2 = try resolveBatch(allocator, .noop, transactions[3..6]);
+        const batch2 = try resolveBatch(allocator, .noop, transactions[3..6], &.empty);
         errdefer batch2.deinit(allocator);
 
         scheduler.addBatchAssumeCapacity(batch1);

@@ -28,6 +28,8 @@ pub const BorrowedAccountContext = struct {
     program_id: Pubkey,
     is_signer: bool = false,
     is_writable: bool = false,
+    /// TODO: remove this after upgrading to agave 2.3+ (for conformance).
+    remove_accounts_executable_flag_checks: bool,
 };
 
 /// `BorrowedAccount` represents an account which has been 'borrowed' from the `TransactionContext`
@@ -59,9 +61,15 @@ pub const BorrowedAccount = struct {
         return self.account.owner.equals(&self.context.program_id);
     }
 
+    /// TODO: remove this after upgrading to agave 2.3+ (for conformance).
+    /// [agave] https://github.com/anza-xyz/agave/blob/23e01995a3d547295dd8dfa83fafe93f07de78d9/transaction-context/src/lib.rs#L1053-L1061 (v2.2 for conformance)
+    pub fn isExecutableInternal(self: *const BorrowedAccount) bool {
+        return self.account.executable and !self.context.remove_accounts_executable_flag_checks;
+    }
+
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L1077
     pub fn checkDataIsMutable(self: BorrowedAccount) ?InstructionError {
-        if (self.account.executable)
+        if (self.isExecutableInternal())
             return InstructionError.ExecutableDataModified;
 
         if (!self.context.is_writable)
@@ -108,8 +116,9 @@ pub const BorrowedAccount = struct {
         if (!self.context.is_writable)
             return InstructionError.ReadonlyLamportChange;
 
-        if (self.account.executable)
+        if (self.isExecutableInternal()) {
             return InstructionError.ExecutableLamportChange;
+        }
 
         self.account.lamports = lamports;
     }
@@ -219,7 +228,7 @@ pub const BorrowedAccount = struct {
     ) InstructionError!void {
         if (!self.account.owner.equals(&self.context.program_id) or
             !self.context.is_writable or
-            self.account.executable or
+            self.isExecutableInternal() or
             !self.account.isZeroed())
         {
             return InstructionError.ModifiedProgramId;

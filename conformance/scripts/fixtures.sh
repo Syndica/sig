@@ -66,6 +66,11 @@ PASSING_DIRS=(
 
     # Passed: 1629, Failed: 2286, Skipped: 0
     # "txn/fixtures/programs"
+
+    # Passed: 993, Failed: 92, Skipped: 0
+    # "txn/fixtures/precompiles/ed25519"
+
+    "txn/fixtures/precompile/secp256k1"
 )
 
 mapfile -t PASSING_TXN_FIXTURES < ./conformance/scripts/passing_txn_fixtures.txt
