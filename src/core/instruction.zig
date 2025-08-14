@@ -504,7 +504,7 @@ pub const InstructionErrorEnum = union(enum(u32)) {
             error.AccountBorrowFailed => .AccountBorrowFailed,
             error.AccountBorrowOutstanding => .AccountBorrowOutstanding,
             error.DuplicateAccountOutOfSync => .DuplicateAccountOutOfSync,
-            error.Custom => .{ .Custom = custom orelse return error.MissingCustomError },
+            error.Custom => .{ .Custom = custom orelse 0 },
             error.InvalidError => .InvalidError,
             error.ExecutableDataModified => .ExecutableDataModified,
             error.ExecutableLamportChange => .ExecutableLamportChange,
