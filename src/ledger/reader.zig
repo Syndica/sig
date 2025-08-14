@@ -1686,7 +1686,7 @@ test "getDuplicateSlot" {
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
     var max_root = std.atomic.Value(Slot).init(0);
-    var reader = try BlockstoreReader.init(
+    var reader = try LedgerReader.init(
         allocator,
         logger,
         db,

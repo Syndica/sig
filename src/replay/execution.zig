@@ -390,7 +390,7 @@ fn finalizeSlotPostFreeze(
     );
 
     if (!replay_state.duplicate_slots_tracker.contains(slot) and
-        try replay_state.blockstore_reader.getDuplicateSlot(slot) != null)
+        try replay_state.ledger_reader.getDuplicateSlot(slot) != null)
     {
         const duplicate_state: DuplicateState = .fromState(
             .from(replay_state.logger),
@@ -500,7 +500,7 @@ const testing = std.testing;
 // Test helper structure that owns all the resources
 const TestReplayStateResources = struct {
     thread_pool: ThreadPool,
-    blockstore_reader: BlockstoreReader,
+    ledger_reader: LedgerReader,
     ledger_result_writer: sig.ledger.LedgerResultWriter,
     epochs: EpochTracker,
     progress: ProgressMap,
@@ -514,7 +514,7 @@ const TestReplayStateResources = struct {
     purge_repair_slot_counter: PurgeRepairSlotCounters,
     slot_tracker: SlotTracker,
     replay_state: ReplayExecutionState,
-    db: sig.ledger.BlockstoreDB,
+    db: sig.ledger.LedgerDB,
     registry: sig.prometheus.Registry(.{}),
     lowest_cleanup_slot: sig.sync.RwMux(Slot),
     max_root: std.atomic.Value(Slot),
@@ -536,7 +536,7 @@ const TestReplayStateResources = struct {
 
         self.thread_pool = ThreadPool.init(.{});
 
-        self.blockstore_reader = try BlockstoreReader.init(
+        self.ledger_reader = try LedgerReader.init(
             allocator,
             .noop,
             self.db,
@@ -588,7 +588,7 @@ const TestReplayStateResources = struct {
             Pubkey.initRandom(std.crypto.random),
             &self.thread_pool,
             account_store,
-            &self.blockstore_reader,
+            &self.ledger_reader,
             &self.ledger_result_writer,
             &self.slot_tracker,
             &self.epochs,
