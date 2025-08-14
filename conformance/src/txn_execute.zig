@@ -1155,7 +1155,10 @@ fn loadTransactionMesssage(
     for (account_keys, message.account_keys.items) |*account_key, pb_account_key|
         account_key.* = .{ .data = pb_account_key.getSlice()[0..Pubkey.SIZE].* };
 
-    const recent_blockhash = Hash{ .data = message.recent_blockhash.getSlice()[0..Hash.SIZE].* };
+    const recent_blockhash = if (message.recent_blockhash.isEmpty())
+        Hash.ZEROES
+    else
+        Hash{ .data = message.recent_blockhash.getSlice()[0..Hash.SIZE].* };
 
     const instructions = try allocator.alloc(
         TransactionInstruction,
