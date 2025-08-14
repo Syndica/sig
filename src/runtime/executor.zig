@@ -110,7 +110,7 @@ pub fn pushInstruction(
         .depth = @intCast(tc.instruction_stack.len),
     });
 
-    if (tc.getAccountIndex(sig.runtime.ids.SYSVAR_INSTRUCTIONS_ID)) |index_in_transaction| {
+    if (tc.getAccountIndex(sig.runtime.sysvar.instruction.ID)) |index_in_transaction| {
         const account = tc.getAccountAtIndex(index_in_transaction) orelse
             return InstructionError.NotEnoughAccountKeys;
         const data = account.account.data;
@@ -615,9 +615,10 @@ test "popInstruction" {
     {
         // Failure: AccountBorrowOutstanding
         const borrowed_account = try tc.borrowAccountAtIndex(0, .{
-            .program_id = Pubkey.ZEROES,
+            .program_id = .ZEROES,
             .is_signer = false,
             .is_writable = false,
+            .remove_accounts_executable_flag_checks = false,
         });
         defer borrowed_account.release();
         try std.testing.expectError(
@@ -872,9 +873,10 @@ test "sumAccountLamports" {
     {
         // Failure: AccountBorrowOutstanding
         const borrowed_account = try tc.borrowAccountAtIndex(0, .{
-            .program_id = Pubkey.ZEROES,
+            .program_id = .ZEROES,
             .is_signer = false,
             .is_writable = false,
+            .remove_accounts_executable_flag_checks = false,
         });
         defer borrowed_account.release();
 
