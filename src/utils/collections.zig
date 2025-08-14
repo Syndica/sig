@@ -517,7 +517,7 @@ pub fn SortedMapCustom(
             const unmanaged =
                 try sig.bincode.readWithLimit(limit_allocator, Unmanaged, reader, params);
             return .{
-                .allocator = limit_allocator.getUnlimitedAllocator(), // SortedMap stores this.
+                .allocator = limit_allocator.backing_allocator, // patch persistent.
                 .unmanaged = unmanaged,
             };
         }

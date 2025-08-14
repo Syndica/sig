@@ -480,9 +480,8 @@ pub const AuthorizedVoters = struct {
         reader: anytype,
         _: sig.bincode.Params,
     ) !AuthorizedVoters {
-        const allocator = limit_allocator.getUnlimitedAllocator(); // AuthorizedVoters stores this.
         var authorized_voters = AuthorizedVoters{
-            .voters = SortedMap(Epoch, Pubkey).init(allocator),
+            .voters = SortedMap(Epoch, Pubkey).init(limit_allocator.allocator()),
         };
         errdefer authorized_voters.deinit();
 
@@ -494,6 +493,7 @@ pub const AuthorizedVoters = struct {
             try authorized_voters.voters.put(epoch, pubkey);
         }
 
+        authorized_voters.voters.allocator = limit_allocator.backing_allocator; // patch persistent.
         return authorized_voters;
     }
 

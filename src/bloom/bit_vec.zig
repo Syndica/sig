@@ -56,12 +56,10 @@ pub fn BitVecConfig(comptime T: type) bincode.FieldConfig(DynamicArrayBitSet(T))
             reader: anytype,
             params: bincode.Params,
         ) !DynamicArrayBitSet(T) {
-            const allocator = limit_allocator.getUnlimitedAllocator(); // DynamicBitSet stores this.
-
             var bitvec = try bincode.readWithLimit(limit_allocator, BitVec(T), reader, params);
-            defer bincode.free(allocator, bitvec);
+            defer bincode.free(limit_allocator.allocator(), bitvec);
 
-            const dynamic_bitset = try bitvec.toBitSet(allocator);
+            const dynamic_bitset = try bitvec.toBitSet(limit_allocator.backing_allocator);
             return dynamic_bitset;
         }
 

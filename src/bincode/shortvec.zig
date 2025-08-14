@@ -55,14 +55,16 @@ pub fn arrayListConfig(comptime Child: type) bincode.FieldConfig(std.ArrayList(C
         pub fn deserialize(limit_allocator: *bincode.LimitAllocator, reader: anytype, params: bincode.Params) !std.ArrayList(Child) {
             const len = try std.leb.readUleb128(u16, reader);
 
-            const allocator = limit_allocator.getUnlimitedAllocator(); // ArrayList stores this.
-            var list = try std.ArrayList(Child).initCapacity(allocator, @as(usize, len));
+            var list =
+                try std.ArrayList(Child).initCapacity(limit_allocator.allocator(), @as(usize, len));
             errdefer list.deinit();
 
             for (0..len) |_| {
                 const item = try bincode.readWithLimit(limit_allocator, Child, reader, params);
                 try list.append(item);
             }
+
+            list.allocator = limit_allocator.backing_allocator; // patch with backing before return.
             return list;
         }
 

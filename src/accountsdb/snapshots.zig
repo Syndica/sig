@@ -434,18 +434,18 @@ pub const AccountsDbFields = struct {
         reader: anytype,
         params: bincode.Params,
     ) !AccountsDbFields {
+        const allocator = limit_allocator.allocator();
         const assert_allocator = sig.utils.allocators.failing.allocator(.{
             .alloc = .assert,
             .resize = .assert,
             .free = .assert,
         });
 
-        const allocator = limit_allocator.getUnlimitedAllocator(); // readCtx stores this.
-        var file_map = try bincode.hashmap.readCtx(allocator, FileMap, reader, params, struct {
+        var filemap = try bincode.hashmap.readCtx(limit_allocator, FileMap, reader, params, struct {
             pub const readKey = {};
             pub const freeKey = {};
             pub fn readValue(
-                _: std.mem.Allocator,
+                _: *bincode.LimitAllocator,
                 _reader: anytype,
                 _params: bincode.Params,
             ) !AccountFileInfo {
@@ -456,7 +456,7 @@ pub const AccountsDbFields = struct {
             }
             pub const freeValue = {};
         });
-        errdefer file_map.deinit(allocator);
+        errdefer filemap.deinit(allocator);
 
         const stored_meta_write_version = try bincode.readInt(u64, reader, params);
         const slot = try bincode.readInt(Slot, reader, params);
@@ -479,7 +479,7 @@ pub const AccountsDbFields = struct {
         errdefer allocator.free(rooted_slot_hashes);
 
         return .{
-            .file_map = file_map,
+            .file_map = filemap,
             .stored_meta_write_version = stored_meta_write_version,
             .slot = slot,
             .bank_hash_info = bank_hash_info,

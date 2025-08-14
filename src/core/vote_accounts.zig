@@ -221,7 +221,7 @@ pub const VoteAccounts = struct {
         reader: anytype,
         _: bincode.Params,
     ) !VoteAccounts {
-        const allocator = limit_allocator.getUnlimitedAllocator(); // VoteAccounts stores this.
+        const allocator = limit_allocator.backing_allocator; // VoteAccounts stores this.
         var vote_accounts = try bincode.readWithLimit(
             limit_allocator,
             StakeAndVoteAccountsMap,
@@ -338,7 +338,7 @@ pub const VoteAccount = struct {
         _: bincode.Params,
     ) !VoteAccount {
         return fromAccountSharedData(
-            limit_allocator.getUnlimitedAllocator(), // VoteState stores this.
+            limit_allocator.backing_allocator, // VoteState stores this.
             try bincode.readWithLimit(limit_allocator, AccountSharedData, reader, .{}),
         );
     }

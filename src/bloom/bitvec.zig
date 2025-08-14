@@ -52,11 +52,10 @@ pub fn BitVecConfig() bincode.FieldConfig(DynamicBitSet) {
         }
 
         pub fn deserialize(limit_allocator: *bincode.LimitAllocator, reader: anytype, params: bincode.Params) !DynamicBitSet {
-            const ally = limit_allocator.getUnlimitedAllocator(); // DynamicBitSet stores this.
             var bitvec = try bincode.readWithLimit(limit_allocator, BitVec, reader, params);
-            defer bincode.free(ally, bitvec);
+            defer bincode.free(limit_allocator.allocator(), bitvec);
 
-            const dynamic_bitset = try bitvec.toBitSet(ally);
+            const dynamic_bitset = try bitvec.toBitSet(limit_allocator.backing_allocator);
             return dynamic_bitset;
         }
 

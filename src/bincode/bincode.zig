@@ -92,11 +92,7 @@ pub fn readWithConfig(
     params: bincode.Params,
     comptime config: FieldConfig(U),
 ) !U {
-    var limit_allocator = LimitAllocator{
-        .bytes_remaining = params.allocation_limit,
-        .backing_allocator = base_allocator,
-    };
-
+    var limit_allocator = LimitAllocator.init(base_allocator, params.allocation_limit);
     return readWithConfigAndLimit(&limit_allocator, U, reader, params, config);
 }
 

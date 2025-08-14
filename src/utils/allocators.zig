@@ -1563,12 +1563,21 @@ pub const LimitAllocator = struct {
     backing_allocator: Allocator,
 
     /// Needs a stable vtable address to check if an allocator is from LimitAllocator.
-    pub const vtable: *const Allocator.VTable = &.{
+    const vtable: *const Allocator.VTable = &.{
         .alloc = alloc,
         .resize = resize,
         .remap = remap,
         .free = free,
     };
+
+    pub fn init(backing_alloc: std.mem.Allocator, byte_limit: usize) LimitAllocator {
+        // NOTE: LimitAllocators must not be nested.
+        std.debug.assert(tryFrom(backing_alloc) == null);
+        return .{
+            .bytes_remaining = byte_limit,
+            .backing_allocator = backing_alloc,
+        };
+    }
 
     pub fn allocator(self: *LimitAllocator) Allocator {
         return .{
@@ -1581,15 +1590,6 @@ pub const LimitAllocator = struct {
         if (allocator_.vtable != LimitAllocator.vtable) return null;
         const self: *LimitAllocator = @ptrCast(@alignCast(allocator_.ptr));
         return self;
-    }
-
-    /// Returns the backing allocator that is NOT A LimitAllocator (skips any nesting as well).
-    pub fn getUnlimitedAllocator(self: *const LimitAllocator) Allocator {
-        var backing_allocator = self.backing_allocator;
-        while (tryFrom(backing_allocator)) |limit_allocator| {
-            backing_allocator = limit_allocator.backing_allocator;
-        }
-        return backing_allocator;
     }
 
     fn alloc(
@@ -1677,10 +1677,7 @@ test "LimitAllocator" {
     var fba = std.heap.FixedBufferAllocator.init(&buffer);
 
     const limit = 512;
-    var limit_alloc = LimitAllocator{
-        .bytes_remaining = limit,
-        .backing_allocator = fba.allocator(),
-    };
+    var limit_alloc = LimitAllocator.init(fba.allocator(), limit);
 
     // alloc normal
     const slice = try limit_alloc.allocator().alloc(u8, 12);

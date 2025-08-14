@@ -10,14 +10,14 @@ const Params = bincode.Params;
 const writeFieldWithConfig = bincode.writeFieldWithConfig;
 
 pub fn readCtx(
-    allocator: std.mem.Allocator,
+    limit_allocator: *bincode.LimitAllocator,
     comptime H: type,
     reader: anytype,
     params: bincode.Params,
     /// Expects void, or value/namespace with methods (implied `ctx: @TypeOf(ctx)` first parameter):
-    /// * `fn readKey(allocator: std.mem.Allocator, reader: anytype, params: bincode.Params) !Key`, or `pub const readKey = {}`.
+    /// * `fn readKey(allocator: *bincode.LimitAllocator, reader: anytype, params: bincode.Params) !Key`, or `pub const readKey = {}`.
     /// * `fn freeKey(allocator: std.mem.Allocator, key: Key) void`, or `pub const freeKey = {}`.
-    /// * `fn readValue(allocator: std.mem.Allocator, reader: anytype, params: bincode.Params) !Value`, or `pub const readValue = {}`.
+    /// * `fn readValue(allocator: *bincode.LimitAllocator, reader: anytype, params: bincode.Params) !Value`, or `pub const readValue = {}`.
     /// * `fn freeValue(allocator: std.mem.Allocator, value: Value) void`, or `pub const freeValue = {}`.
     ///
     /// Void is an indication to utilize default behavior.
@@ -39,14 +39,14 @@ pub fn readCtx(
     };
     const ctx_impl = if (@TypeOf(ctx_maybe_namespace) != type) ctx_maybe_namespace else struct {
         pub fn readKey(
-            _allocator: std.mem.Allocator,
+            _limit_allocator: *bincode.LimitAllocator,
             _reader: anytype,
             _params: bincode.Params,
         ) !hm_info.Key {
             if (@TypeOf(ctx_maybe_namespace.readKey) != void) {
-                return try ctx_maybe_namespace.readKey(_allocator, _reader, _params);
+                return try ctx_maybe_namespace.readKey(_limit_allocator, _reader, _params);
             } else {
-                return bincode.read(_allocator, hm_info.Key, _reader, _params);
+                return bincode.readWithLimit(_limit_allocator, hm_info.Key, _reader, _params);
             }
         }
 
@@ -59,14 +59,14 @@ pub fn readCtx(
         }
 
         pub fn readValue(
-            _allocator: std.mem.Allocator,
+            _limit_allocator: *bincode.LimitAllocator,
             _reader: anytype,
             _params: bincode.Params,
         ) !hm_info.Value {
             if (@TypeOf(ctx_maybe_namespace.readValue) != void) {
-                return try ctx_maybe_namespace.readValue(_allocator, _reader, _params);
+                return try ctx_maybe_namespace.readValue(_limit_allocator, _reader, _params);
             } else {
-                return bincode.read(_allocator, hm_info.Value, _reader, _params);
+                return bincode.readWithLimit(_limit_allocator, hm_info.Value, _reader, _params);
             }
         }
 
@@ -79,6 +79,7 @@ pub fn readCtx(
         }
     };
 
+    const allocator = limit_allocator.allocator(); // check allocation sizes.
     const file_map_len = try bincode.readIntAsLength(
         hm_info.Size(),
         reader,
@@ -98,17 +99,17 @@ pub fn readCtx(
     }
 
     for (0..file_map_len) |_| {
-        const key = try ctx_impl.readKey(allocator, reader, params);
+        const key = try ctx_impl.readKey(limit_allocator, reader, params);
         errdefer ctx_impl.freeKey(allocator, key);
 
         if (hash_map.contains(key)) return error.DuplicateFileMapEntry;
 
-        const value = try ctx_impl.readValue(allocator, reader, params);
+        const value = try ctx_impl.readValue(limit_allocator, reader, params);
         hash_map.putAssumeCapacityNoClobber(key, value);
     }
 
     return switch (hm_info.management) {
-        .managed => hash_map.promote(allocator),
+        .managed => hash_map.promote(limit_allocator.backing_allocator),
         .unmanaged => hash_map,
     };
 }
@@ -156,15 +157,14 @@ pub fn hashMapFieldConfig(
             reader: anytype,
             params: Params,
         ) anyerror!HashMapType {
-            const allocator = limit_allocator.getUnlimitedAllocator(); // readCtx stores this.
-            return readCtx(allocator, HashMapType, reader, params, struct {
+            return readCtx(limit_allocator, HashMapType, reader, params, struct {
                 pub fn readKey(
-                    _allocator: std.mem.Allocator,
+                    _limit_allocator: *bincode.LimitAllocator,
                     _reader: anytype,
                     _params: Params,
                 ) !hm_info.Key {
-                    return bincode.readWithConfig(
-                        _allocator,
+                    return bincode.readWithConfigAndLimit(
+                        _limit_allocator,
                         hm_info.Key,
                         _reader,
                         _params,
@@ -175,12 +175,12 @@ pub fn hashMapFieldConfig(
                     bincode.freeWithConfig(_allocator, key, config.key);
                 }
                 pub fn readValue(
-                    _allocator: std.mem.Allocator,
+                    _limit_allocator: *bincode.LimitAllocator,
                     _reader: anytype,
                     _params: bincode.Params,
                 ) !hm_info.Value {
-                    return bincode.readWithConfig(
-                        _allocator,
+                    return bincode.readWithConfigAndLimit(
+                        _limit_allocator,
                         hm_info.Value,
                         _reader,
                         _params,
