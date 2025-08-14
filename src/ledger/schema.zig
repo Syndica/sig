@@ -97,7 +97,7 @@ pub const schema = struct {
         .Key = struct { Signature, Slot },
         .Value = []const u8,
     };
-    /// Populated during blockstore cleanup, but not used for anything consequential. This is
+    /// Populated during ledger cleanup, but not used for anything consequential. This is
     /// retained for compatibility, but can likely be removed.
     pub const transaction_status_index: ColumnFamily = .{
         .name = "transaction_status_index",

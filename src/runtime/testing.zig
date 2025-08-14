@@ -43,6 +43,7 @@ pub const ExecuteContextsParams = struct {
 
     // Transaction Context
     accounts: []const AccountParams = &.{},
+    instruction_datas: []const []const u8 = &.{},
     return_data: ReturnDataParams = .{},
     accounts_resize_delta: i64 = 0,
     compute_meter: u64 = 0,
@@ -172,6 +173,7 @@ pub fn createTransactionContext(
         .serialized_accounts = .{},
         .instruction_stack = .{},
         .instruction_trace = .{},
+        .instruction_datas = params.instruction_datas,
         .return_data = return_data,
         .accounts_resize_delta = params.accounts_resize_delta,
         .compute_meter = params.compute_meter,

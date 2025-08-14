@@ -6,7 +6,10 @@ const sig = @import("../../../sig.zig");
 const precompile_programs = sig.runtime.program.precompiles;
 
 const Pubkey = sig.core.Pubkey;
-const PrecompileProgramError = precompile_programs.PrecompileProgramError;
+const InstructionError = sig.core.instruction.InstructionError;
+const InstructionContext = sig.runtime.InstructionContext;
+const PrecompileProgramError = sig.runtime.program.precompiles.PrecompileProgramError;
+
 const Keccak256 = std.crypto.hash.sha3.Keccak256;
 const Secp256k1 = std.crypto.ecc.Secp256k1;
 const Ecdsa = std.crypto.sign.ecdsa.Ecdsa(Secp256k1, Keccak256);
@@ -45,6 +48,16 @@ pub const Secp256k1SignatureOffsets = packed struct {
         return std.mem.asBytes(self)[0 .. @bitSizeOf(Secp256k1SignatureOffsets) / 8];
     }
 };
+
+pub fn execute(_: std.mem.Allocator, ic: *InstructionContext) InstructionError!void {
+    const instruction_data = ic.ixn_info.instruction_data;
+    const instruction_datas = ic.tc.instruction_datas.?;
+
+    verify(instruction_data, instruction_datas) catch |err| {
+        ic.tc.custom_error = precompile_programs.intFromPrecompileProgramError(err);
+        return error.Custom;
+    };
+}
 
 // https://github.com/firedancer-io/firedancer/blob/af74882ffb2c24783a82718dbc5111a94e1b5f6f/src/flamenco/runtime/program/fd_precompiles.c#L227
 // https://github.com/anza-xyz/agave/blob/a8aef04122068ec36a7af0721e36ee58efa0bef2/sdk/src/secp256k1_instruction.rs#L925
@@ -299,6 +312,34 @@ fn testCase(
     @memcpy(instruction_data[1..], offsets.asBytes());
 
     return try verify(&instruction_data, &.{&(.{0} ** 100)});
+}
+
+test "execute" {
+    const testing = sig.runtime.program.testing;
+
+    const allocator = std.testing.allocator;
+
+    try testing.expectProgramExecuteError(
+        error.Custom,
+        allocator,
+        ID,
+        &.{ 0, 0, 0 },
+        &.{},
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = ID,
+                    .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+                    .executable = true,
+                },
+            },
+            .feature_set = &.{
+                .{ .feature = .move_precompile_verification_to_svm, .slot = 0 },
+            },
+            .instruction_datas = &.{},
+        },
+        .{},
+    );
 }
 
 // https://github.com/anza-xyz/agave/blob/a8aef04122068ec36a7af0721e36ee58efa0bef2/sdk/src/secp256k1_instruction.rs#L1059

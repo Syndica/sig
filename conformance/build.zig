@@ -25,7 +25,7 @@ pub fn build(b: *Build) void {
         .target = target,
         .optimize = optimize,
         .@"enable-tsan" = false,
-        .blockstore = .hashmap,
+        .ledger = .hashmap,
         .force_pic = true,
     });
     const sig_mod = sig_dep.module("sig");
