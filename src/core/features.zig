@@ -71,8 +71,7 @@ pub const Set = struct {
 
     /// Gets the activation slot for a feature, if one has been set.
     pub fn get(self: Set, feature: Feature) ?Slot {
-        const slot = self.array.get(feature);
-        return if (slot == TERMINATOR) null else slot;
+        return self.array.get(feature);
     }
 
     /// Updates the set to update the feature whos pubkey was provided. Possible input values for
