@@ -32,10 +32,11 @@ const SlotTracker = sig.replay.trackers.SlotTracker;
 const EpochTracker = sig.replay.trackers.EpochTracker;
 
 pub const isSlotDuplicateConfirmed = sig.consensus.tower.isSlotDuplicateConfirmed;
-const VoteThreshold = sig.consensus.progress_map.ForkStats.VoteThreshold;
+
 pub const collectVoteLockouts = sig.consensus.replay_tower.collectVoteLockouts;
 
 const MAX_VOTE_REFRESH_INTERVAL_MILLIS: usize = 5000;
+const VoteThreshold = sig.consensus.progress_map.ForkStats.VoteThreshold;
 
 pub const ConsensusDependencies = struct {
     allocator: Allocator,
@@ -544,7 +545,7 @@ fn cacheTowerStats(
     slot: Slot,
     ancestors: *const std.AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)),
 ) !void {
-    var stats = progress.getForkStats(slot) orelse return error.MissingSlot;
+    const stats = progress.getForkStats(slot) orelse return error.MissingSlot;
 
     const slice = try replay_tower.checkVoteStakeThresholds(
         allocator,
@@ -552,7 +553,7 @@ fn cacheTowerStats(
         &stats.voted_stakes,
         stats.total_stake,
     );
-    stats.vote_threshold = VoteThreshold.fromOwnedSlice(slice);
+    stats.vote_threshold = .fromOwnedSlice(slice);
 
     const slot_ancestors = ancestors.get(slot) orelse return error.MissingAncestor;
 
