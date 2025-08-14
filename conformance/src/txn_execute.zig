@@ -952,6 +952,17 @@ fn serializeOutput(
                 .acct_states = acct_states,
             };
 
+            const return_data: ManagedString = switch (txn) {
+                .executed => |executed| blk: {
+                    if (executed.executed_transaction.return_data) |return_data| {
+                        break :blk try .copy(return_data.data.constSlice(), allocator);
+                    } else {
+                        break :blk .Empty;
+                    }
+                },
+                .fees_only => .Empty,
+            };
+
             return .{
                 .executed = true,
                 .sanitization_error = false,
@@ -963,6 +974,7 @@ fn serializeOutput(
                 .instruction_error_index = errors.instruction_index,
                 .custom_error = errors.custom_error,
 
+                .return_data = return_data,
                 .resulting_state = resulting_state,
                 .fee_details = .{
                     .transaction_fee = fees.transaction_fee,
