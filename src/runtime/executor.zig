@@ -615,9 +615,10 @@ test "popInstruction" {
     {
         // Failure: AccountBorrowOutstanding
         const borrowed_account = try tc.borrowAccountAtIndex(0, .{
-            .program_id = Pubkey.ZEROES,
+            .program_id = .ZEROES,
             .is_signer = false,
             .is_writable = false,
+            .remove_accounts_executable_flag_checks = false,
         });
         defer borrowed_account.release();
         try std.testing.expectError(
@@ -872,9 +873,10 @@ test "sumAccountLamports" {
     {
         // Failure: AccountBorrowOutstanding
         const borrowed_account = try tc.borrowAccountAtIndex(0, .{
-            .program_id = Pubkey.ZEROES,
+            .program_id = .ZEROES,
             .is_signer = false,
             .is_writable = false,
+            .remove_accounts_executable_flag_checks = false,
         });
         defer borrowed_account.release();
 
