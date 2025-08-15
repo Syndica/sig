@@ -40,6 +40,7 @@ PASSING_DIRS=(
     "instr/fixtures/zk_sdk"
     "instr/fixtures/unknown"
     "instr/fixtures/compute-budget"
+    "instr/fixtures/stake"
 
     "instr/fixtures/bpf-address-lookup-table"
     "instr/fixtures/bpf-config"
@@ -48,9 +49,6 @@ PASSING_DIRS=(
     "instr/fixtures/bpf-loader-v2"
     "instr/fixtures/bpf-loader-v2-programs"
     "instr/fixtures/bpf-loader-v3"
-
-    # Passed: 6934, Failed: 0, Skipped: 0
-    "instr/fixtures/stake"
 
     # Passed: 7750, Failed: 5, Skipped: 0
     # "instr/fixtures/vote"

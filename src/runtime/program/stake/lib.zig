@@ -551,15 +551,10 @@ fn authorizeWithSeed(
     );
 }
 
-fn getMinimumDelegation(
-    ic: *InstructionContext,
-    feature_set: *const FeatureSet,
-) u64 {
-    return if (feature_set.active(
-        .stake_raise_minimum_delegation_to_1_sol,
-        ic.tc.slot,
-    ))
-        1_000_000_000
+fn getMinimumDelegation(ic: *InstructionContext, feature_set: *const FeatureSet) u64 {
+    const LAMPORTS_PER_SOL: u64 = 1_000_000_000;
+    return if (feature_set.active(.stake_raise_minimum_delegation_to_1_sol, ic.tc.slot))
+        1 * LAMPORTS_PER_SOL
     else
         1;
 }
@@ -597,9 +592,7 @@ fn newStake(
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/dd15884337be94f39b7bf7c3c4ae3c92d4fad760/programs/stake/src/stake_state.rs#L60
-fn newWarmupCooldownRateEpoch(
-    ic: *InstructionContext,
-) ?Epoch {
+fn newWarmupCooldownRateEpoch(ic: *InstructionContext) ?Epoch {
     const epoch_schedule = ic.tc.sysvar_cache.get(sysvar.EpochSchedule) catch
         @panic("failed to get epoch schedule"); // agave calls .unwrap here (!!).
 
@@ -824,7 +817,7 @@ fn split(
         break :balance split_account.account.lamports;
     };
 
-    var stake_state = state: {
+    const stake_state = state: {
         const stake_account = try ic.borrowInstructionAccount(stake_account_index);
         defer stake_account.release();
 
@@ -833,7 +826,8 @@ fn split(
     };
 
     switch (stake_state) {
-        .stake => |*args| {
+        .stake => |stake_args| {
+            var args = stake_args;
             try args.meta.authorized.check(signers, .staker);
 
             const minimum_delegation = getMinimumDelegation(ic, feature_set);
@@ -959,27 +953,6 @@ fn split(
     }
 }
 
-// checked_add equivalent
-fn add(a: anytype, b: anytype) ?@TypeOf(a, b) {
-    const sum, const overflow = @addWithOverflow(a, b);
-    if (overflow == 1) return null;
-    return sum;
-}
-
-// checked_sub equivalent
-fn sub(a: anytype, b: anytype) ?@TypeOf(a, b) {
-    const subbed, const overflow = @subWithOverflow(a, b);
-    if (overflow == 1) return null;
-    return subbed;
-}
-
-// checked_mul equivalent
-fn mul(a: anytype, b: anytype) ?@TypeOf(a, b) {
-    const product, const overflow = @mulWithOverflow(a, b);
-    if (overflow == 1) return null;
-    return product;
-}
-
 fn stakeWeightedCreditsObserved(
     stake: *const StakeStateV2.Stake,
     absorbed_lamports: u64,
@@ -987,27 +960,22 @@ fn stakeWeightedCreditsObserved(
 ) ?u64 {
     if (stake.credits_observed == absorbed_credits_observed) return stake.credits_observed;
 
-    const total_stake: u128 = add(stake.delegation.stake, absorbed_lamports) orelse
-        return null;
+    const total_stake: u128 =
+        std.math.add(u64, stake.delegation.stake, absorbed_lamports) catch return null;
 
-    const stake_weighted_credits = mul(
-        @as(u128, stake.credits_observed),
-        stake.delegation.stake,
-    ) orelse return null;
+    const stake_weighted_credits =
+        std.math.mul(u128, stake.credits_observed, stake.delegation.stake) catch return null;
 
-    const absorbed_weighted_credits = mul(
-        @as(u128, absorbed_credits_observed),
-        absorbed_lamports,
-    ) orelse return null;
+    const absorbed_weighted_credits =
+        std.math.mul(u128, absorbed_credits_observed, absorbed_lamports) catch return null;
 
-    // porting this checked_{add,sub,mul,div} heavy code is annoying.
     var total_weighted_credits = stake_weighted_credits;
-    total_weighted_credits = add(total_weighted_credits, absorbed_weighted_credits) orelse
-        return null;
-    total_weighted_credits = add(total_weighted_credits, total_stake) orelse
-        return null;
-    total_weighted_credits = sub(total_weighted_credits, 1) orelse
-        return null;
+    total_weighted_credits =
+        std.math.add(u128, total_weighted_credits, absorbed_weighted_credits) catch return null;
+    total_weighted_credits =
+        std.math.add(u128, total_weighted_credits, total_stake) catch return null;
+    total_weighted_credits =
+        std.math.sub(u128, total_weighted_credits, 1) catch return null;
 
     if (total_stake == 0) return null;
 
@@ -1065,7 +1033,6 @@ const MergeKind = union(enum) {
                 };
 
                 const err = StakeError.merge_transient_stake;
-                // std.debug.panic("failed, {}\n", .{err});
                 try ic.tc.log("{}", .{err});
                 ic.tc.custom_error = @intFromEnum(err);
                 return error.Custom;
@@ -1160,8 +1127,11 @@ const MergeKind = union(enum) {
             const source_lamports = source.inactive.@"1";
             const source_stake_flags = source.inactive.@"2";
 
-            stake.delegation.stake = add(stake.delegation.stake, source_lamports) orelse
-                return error.InsufficientFunds;
+            stake.delegation.stake = std.math.add(
+                u64,
+                stake.delegation.stake,
+                source_lamports,
+            ) catch return error.InsufficientFunds;
 
             return .{ .stake = .{
                 .meta = self_meta,
@@ -1179,10 +1149,11 @@ const MergeKind = union(enum) {
             const source_stake = source.activation_epoch.@"1";
             const source_stake_flags = source.activation_epoch.@"2";
 
-            const source_lamports = add(
+            const source_lamports = std.math.add(
+                u64,
                 source_meta.rent_exempt_reserve,
                 source_stake.delegation.stake,
-            ) orelse return error.InsufficientFunds;
+            ) catch return error.InsufficientFunds;
 
             try mergeDelegationStakeAndCreditsObserved(
                 &stake,
@@ -1315,8 +1286,11 @@ fn withdraw(
                 else
                     args.stake.delegation.stake;
 
-                const staked_and_reserve = add(staked, args.meta.rent_exempt_reserve) orelse
-                    return error.InsufficientFunds;
+                const staked_and_reserve = std.math.add(
+                    u64,
+                    staked,
+                    args.meta.rent_exempt_reserve,
+                ) catch return error.InsufficientFunds;
 
                 break :blk .{ args.meta.lockup, staked_and_reserve, staked != 0 };
             },
@@ -1345,7 +1319,7 @@ fn withdraw(
             return error.Custom;
         }
 
-        const lamports_and_reserve: u64 = add(lamports, reserve) orelse
+        const lamports_and_reserve: u64 = std.math.add(u64, lamports, reserve) catch
             return error.InsufficientFunds;
 
         if (is_staked and lamports_and_reserve > stake_account.account.lamports)
@@ -1473,10 +1447,11 @@ fn acceptableReferenceEpochCredits(
     epoch_credits: []const runtime.program.vote.state.EpochCredit,
     current_epoch: Epoch,
 ) bool {
-    const epoch_index = sub(
+    const epoch_index = std.math.sub(
+        usize,
         epoch_credits.len,
         MINIMUM_DELINQUENT_EPOCHS_FOR_DEACTIVATION,
-    ) orelse return false;
+    ) catch return false;
 
     var epoch = current_epoch;
 
@@ -1528,8 +1503,11 @@ fn eligibleForAccountDelinquent(
 
     const last = epoch_credits[epoch_credits.len - 1];
 
-    const minimum_epoch = sub(current_epoch, MINIMUM_DELINQUENT_EPOCHS_FOR_DEACTIVATION) orelse
-        return false;
+    const minimum_epoch = std.math.sub(
+        u64,
+        current_epoch,
+        MINIMUM_DELINQUENT_EPOCHS_FOR_DEACTIVATION,
+    ) catch return false;
 
     return last.epoch <= minimum_epoch;
 }
@@ -1568,7 +1546,7 @@ fn moveStake(
     const min_delegation = getMinimumDelegation(ic, ic.tc.feature_set);
     const source_effective_stake = source_stake.delegation.stake;
 
-    const source_final_stake = sub(source_effective_stake, lamports) orelse
+    const source_final_stake = std.math.sub(u64, source_effective_stake, lamports) catch
         return error.InvalidArgument;
 
     if (source_final_stake != 0 and source_final_stake < min_delegation)
@@ -1587,8 +1565,11 @@ fn moveStake(
             }
 
             const destination_effective_stake = destination_stake.delegation.stake;
-            const destination_final_stake = add(destination_effective_stake, lamports) orelse
-                return error.ProgramArithmeticOverflow;
+            const destination_final_stake = std.math.add(
+                u64,
+                destination_effective_stake,
+                lamports,
+            ) catch return error.ProgramArithmeticOverflow;
 
             if (destination_final_stake < min_delegation) return error.InvalidArgument;
 
@@ -1665,7 +1646,7 @@ fn mergeDelegationStakeAndCreditsObserbed(
         absorbed_credits_observed,
     ) orelse return error.ProgramArithmeticOverflow;
 
-    stake.delegation.stake = add(stake.delegation.stake, absorbed_lamports) orelse
+    stake.delegation.stake = std.math.add(u64, stake.delegation.stake, absorbed_lamports) catch
         return error.InsufficientFunds;
 }
 

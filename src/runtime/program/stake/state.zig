@@ -99,11 +99,11 @@ pub const StakeStateV2 = union(enum) {
         }
     };
 
-    pub const StakeFlags = struct {
+    pub const StakeFlags = packed struct {
         bits: u8,
+
         pub const EMPTY: StakeFlags = .{ .bits = 0 };
 
-        // I couldn't call it "union"
         pub fn combine(self: StakeFlags, other: StakeFlags) StakeFlags {
             return .{ .bits = self.bits | other.bits };
         }
