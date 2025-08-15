@@ -1169,7 +1169,7 @@ pub const SnapshotFiles = struct {
     };
     /// finds existing snapshots (full and matching incremental) by looking for .tar.zstd files
     pub fn find(allocator: std.mem.Allocator, search_dir: std.fs.Dir) FindError!SnapshotFiles {
-        const zone = tracy.initZone(@src(), .{ .name = "accountsdb SnapshotFiles.find" });
+        const zone = tracy.Zone.init(@src(), .{ .name = "accountsdb SnapshotFiles.find" });
         defer zone.deinit();
 
         var incremental_snapshots: std.ArrayListUnmanaged(IncrementalSnapshotFileInfo) = .{};
@@ -1499,7 +1499,7 @@ pub fn parallelUnpackZstdTarBall(
     /// only used for progress estimation
     full_snapshot: bool,
 ) !void {
-    const zone = tracy.initZone(@src(), .{ .name = "accountsdb parallelUnpackZstdTarBall" });
+    const zone = tracy.Zone.init(@src(), .{ .name = "accountsdb parallelUnpackZstdTarBall" });
     defer zone.deinit();
 
     const file_size = (try file.stat()).size;
