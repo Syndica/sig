@@ -597,9 +597,10 @@ fn newWarmupCooldownRateEpoch(ic: *InstructionContext) ?Epoch {
         @panic("failed to get epoch schedule"); // agave calls .unwrap here (!!).
 
     // Originally on FeatureSet, inlined here.
-    const activated_slot = ic.tc.feature_set.array.get(.reduce_stake_warmup_cooldown);
-    if (ic.tc.slot >= activated_slot) {
-        return epoch_schedule.getEpoch(activated_slot);
+    if (ic.tc.feature_set.get(.reduce_stake_warmup_cooldown)) |activated_slot| {
+        if (ic.tc.slot >= activated_slot) {
+            return epoch_schedule.getEpoch(activated_slot);
+        }
     }
 
     return null;
