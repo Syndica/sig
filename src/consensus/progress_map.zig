@@ -6,6 +6,7 @@ const Epoch = sig.core.Epoch;
 const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 const PubkeyArraySet = std.AutoArrayHashMapUnmanaged(Pubkey, void);
+const ThresholdDecision = sig.consensus.tower.ThresholdDecision;
 
 const deinitMapAndValues = sig.utils.collections.deinitMapAndValues;
 
@@ -474,7 +475,7 @@ pub const ForkStats = struct {
     bank_hash: Hash,
     my_latest_landed_vote: ?Slot,
 
-    pub const VoteThreshold = std.ArrayListUnmanaged(consensus.ThresholdDecision);
+    pub const VoteThreshold = std.ArrayListUnmanaged(ThresholdDecision);
 
     pub const EMPTY_ZEROES: ForkStats = .{
         .fork_stake = 0,
@@ -733,24 +734,6 @@ pub const LockoutIntervals = struct {
 pub const consensus = struct {
     pub const Stake = u64;
     pub const VotedStakes = std.AutoArrayHashMapUnmanaged(Slot, Stake);
-
-    pub const ThresholdDecision = union(enum) {
-        passed_threshold,
-        failed_threshold: FailedThreshold,
-
-        /// NOTE: this is a tuple in the original rust code
-        pub const FailedThreshold = struct {
-            vote_depth: u64,
-            observed_stake: u64,
-        };
-
-        /// #[default]
-        pub const DEFAULT: ThresholdDecision = .passed_threshold;
-
-        pub fn eql(self: ThresholdDecision, other: ThresholdDecision) bool {
-            return std.meta.eql(self, other);
-        }
-    };
 
     pub const VoteStakeTracker = struct {
         voted: PubkeyArraySet,
@@ -1764,8 +1747,6 @@ fn forkStatsInitRandom(
         },
     },
 ) std.mem.Allocator.Error!ForkStats {
-    const ThresholdDecision = consensus.ThresholdDecision;
-
     const vote_threshold = try allocator.alloc(ThresholdDecision, params.vote_threshold_len);
     errdefer allocator.free(vote_threshold);
 
