@@ -188,7 +188,7 @@ pub const CopiedAccount = struct {
 };
 
 pub const ExecutedTransaction = struct {
-    instr_err: ?struct { u8, InstructionErrorEnum },
+    err: ?TransactionError,
     log_collector: ?LogCollector,
     instruction_trace: ?InstructionTrace,
     return_data: ?TransactionReturnData,
@@ -238,7 +238,7 @@ pub const ProcessedTransaction = union(enum(u8)) {
     pub fn accounts(self: *const ProcessedTransaction) Accounts {
         return switch (self.*) {
             .fees_only => |f| .{ .written = f.rollbacks.accounts() },
-            .executed => |e| if (e.executed_transaction.instr_err != null) .{
+            .executed => |e| if (e.executed_transaction.err != null) .{
                 .written = e.rollbacks.accounts(),
             } else .{
                 .all_loaded = e.loaded_accounts.accounts.slice(),
@@ -514,7 +514,7 @@ pub fn executeTransaction(
         .instruction_datas = instruction_datas,
     };
 
-    const maybe_instruction_error: ?struct { u8, InstructionErrorEnum } =
+    const maybe_instruction_error: ?TransactionError =
         for (transaction.instructions, 0..) |instruction_info, index| {
             executor.executeInstruction(
                 allocator,
@@ -523,22 +523,22 @@ pub fn executeTransaction(
             ) catch |exec_err| {
                 switch (exec_err) {
                     error.OutOfMemory => return error.OutOfMemory,
-                    else => |instr_err| break .{
+                    else => |ixn_err| break .{ .InstructionError = .{
                         @intCast(index),
                         InstructionErrorEnum.fromError(
-                            instr_err,
+                            ixn_err,
                             tc.custom_error,
                             null,
                         ) catch |err| {
                             std.debug.panic("Error conversion failed: error={}", .{err});
                         },
-                    },
+                    } },
                 }
             };
         } else null;
 
     return .{
-        .instr_err = maybe_instruction_error,
+        .err = maybe_instruction_error,
         .log_collector = tc.takeLogCollector(),
         .instruction_trace = tc.instruction_trace,
         .return_data = tc.takeReturnData(),
@@ -974,7 +974,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
         try std.testing.expectEqual(0, rent_collected);
         try std.testing.expectEqual(45_000, sender_account.lamports);
         try std.testing.expectEqual(150_000, receiver_account.lamports);
-        try std.testing.expectEqual(null, executed_transaction.instr_err);
+        try std.testing.expectEqual(null, executed_transaction.err);
         try std.testing.expectEqual(null, executed_transaction.log_collector);
         try std.testing.expectEqual(1, executed_transaction.instruction_trace.?.len);
         try std.testing.expectEqual(null, executed_transaction.return_data);
@@ -1009,10 +1009,10 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
         try std.testing.expectEqual(0, rent_collected);
         try std.testing.expectEqual(40_000, sender_account.lamports);
         try std.testing.expectEqual(150_000, receiver_account.lamports);
-        try std.testing.expectEqual(0, executed_transaction.instr_err.?[0]);
+        try std.testing.expectEqual(0, executed_transaction.err.?.InstructionError[0]);
         try std.testing.expectEqual(
             InstructionErrorEnum{ .Custom = 1 },
-            executed_transaction.instr_err.?[1],
+            executed_transaction.err.?.InstructionError[1],
         );
         try std.testing.expectEqual(null, executed_transaction.log_collector);
         try std.testing.expectEqual(1, executed_transaction.instruction_trace.?.len);
