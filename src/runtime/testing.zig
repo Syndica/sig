@@ -110,9 +110,11 @@ pub fn createTransactionContext(
     // Create ProgramMap
     const program_map = if (params.program_map) |ptr|
         ptr
-    else
-        try allocator.create(ProgramMap);
-    program_map.* = ProgramMap{};
+    else blk: {
+        const program_map = try allocator.create(ProgramMap);
+        program_map.* = ProgramMap{};
+        break :blk program_map;
+    };
 
     // Create EpochStakes
     const epoch_stakes = try allocator.create(EpochStakes);

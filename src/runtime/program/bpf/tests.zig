@@ -23,7 +23,7 @@ pub fn prepareBpfV3Test(
     random: std.Random,
     elf_bytes: []const u8,
     feature_params: []const FeatureParams,
-) !struct { AccountParams, vm.Environment, ProgramMap } {
+) !struct { AccountParams, vm.Environment, *ProgramMap } {
     const program_key = Pubkey.initRandom(random);
     const program_data_key = Pubkey.initRandom(random);
     const program_deployment_slot = random.int(u64) -| 1;
@@ -88,7 +88,10 @@ pub fn prepareBpfV3Test(
         false,
     );
 
-    const program_map = try program_loader.loadPrograms(
+    const program_map = try allocator.create(ProgramMap);
+    errdefer allocator.destroy(program_map);
+
+    program_map.* = try program_loader.loadPrograms(
         allocator,
         &accounts,
         &environment,
@@ -122,7 +125,7 @@ test "hello_world" {
         .{ .feature = .enable_sbpf_v3_deployment_and_execution },
     };
 
-    const program_account, const environment, var program_map = try prepareBpfV3Test(
+    const program_account, const environment, const program_map = try prepareBpfV3Test(
         allocator,
         prng.random(),
         elf_bytes,
@@ -131,7 +134,6 @@ test "hello_world" {
     defer {
         allocator.free(program_account.data);
         environment.deinit(allocator);
-        // program map is deinitialize by expectProgramExecuteResult
     }
 
     try expectProgramExecuteResult(
@@ -142,7 +144,7 @@ test "hello_world" {
         .{
             .accounts = &.{program_account},
             .compute_meter = 137,
-            .program_map = &program_map,
+            .program_map = program_map,
             .vm_environment = &environment,
             .feature_set = feature_params,
         },
@@ -184,7 +186,7 @@ test "print_account" {
         .{ .feature = .enable_sbpf_v3_deployment_and_execution },
     };
 
-    const program_account, const environment, var program_map = try prepareBpfV3Test(
+    const program_account, const environment, const program_map = try prepareBpfV3Test(
         allocator,
         prng.random(),
         elf_bytes,
@@ -221,7 +223,7 @@ test "print_account" {
         ExecuteContextParams{
             .accounts = accounts,
             .compute_meter = 28_650,
-            .program_map = &program_map,
+            .program_map = program_map,
             .vm_environment = &environment,
             .feature_set = feature_params,
         },
@@ -249,7 +251,7 @@ test "fast_copy" {
         .{ .feature = .enable_sbpf_v3_deployment_and_execution },
     };
 
-    const program_account, const environment, var program_map = try prepareBpfV3Test(
+    const program_account, const environment, const program_map = try prepareBpfV3Test(
         allocator,
         prng.random(),
         elf_bytes,
@@ -297,7 +299,7 @@ test "fast_copy" {
                 initial_instruction_account,
             },
             .compute_meter = 61,
-            .program_map = &program_map,
+            .program_map = program_map,
             .vm_environment = &environment,
             .feature_set = feature_params,
         },
@@ -335,7 +337,7 @@ test "set_return_data" {
         .{ .feature = .enable_sbpf_v3_deployment_and_execution },
     };
 
-    const program_account, const environment, var program_map = try prepareBpfV3Test(
+    const program_account, const environment, const program_map = try prepareBpfV3Test(
         allocator,
         prng.random(),
         elf_bytes,
@@ -354,7 +356,7 @@ test "set_return_data" {
         ExecuteContextParams{
             .accounts = &.{program_account},
             .compute_meter = 141,
-            .program_map = &program_map,
+            .program_map = program_map,
             .vm_environment = &environment,
             .feature_set = feature_params,
         },
@@ -469,7 +471,7 @@ test "program_init_vm_not_enough_compute" {
         .{ .feature = .enable_sbpf_v3_deployment_and_execution },
     };
 
-    const program_account, const environment, var program_map = try prepareBpfV3Test(
+    const program_account, const environment, const program_map = try prepareBpfV3Test(
         allocator,
         prng.random(),
         elf_bytes,
@@ -492,7 +494,7 @@ test "program_init_vm_not_enough_compute" {
         .{
             .accounts = &.{program_account},
             .compute_meter = 7,
-            .program_map = &program_map,
+            .program_map = program_map,
             .vm_environment = &environment,
             .compute_budget = compute_budget,
             .feature_set = feature_params,
@@ -520,7 +522,7 @@ test "basic direct mapping" {
         .{ .feature = .bpf_account_data_direct_mapping },
     };
 
-    const program_account, const environment, var program_map = try prepareBpfV3Test(
+    const program_account, const environment, const program_map = try prepareBpfV3Test(
         allocator,
         prng.random(),
         elf_bytes,
@@ -572,7 +574,7 @@ test "basic direct mapping" {
         .{
             .accounts = accounts,
             .compute_meter = 109,
-            .program_map = &program_map,
+            .program_map = program_map,
             .vm_environment = &environment,
             .feature_set = feature_params,
         },
