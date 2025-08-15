@@ -1216,8 +1216,6 @@ pub const LedgerReader = struct {
         return entries.toOwnedSlice(allocator);
     }
 
-    // pub fn is_last_fec_set_full missing ???
-
     /// Returns a mapping from each elements of `slots` to a list of the
     /// element's children slots.
     ///
@@ -1331,6 +1329,11 @@ pub const LedgerReader = struct {
         var iterator = try self.db.iterator(schema.duplicate_slots, .forward, 0);
         defer iterator.deinit();
         return try iterator.next();
+    }
+
+    /// Analogous to [get_duplicate_slot](https://github.com/anza-xyz/agave/blob/6e84f7eab872cc553995e7d35ff1f2ec0dd37751/ledger/src/blockstore.rs#L4057)
+    pub fn getDuplicateSlot(self: *Self, slot: u64) !?DuplicateSlotProof {
+        return try self.db.get(self.allocator, schema.duplicate_slots, slot);
     }
 
     /// Returns the shred already stored in ledger if it has a different
@@ -1670,6 +1673,63 @@ test "getFirstDuplicateProof" {
         try std.testing.expectEqualSlices(u8, proof.shred1, proof2.shred1);
         try std.testing.expectEqualSlices(u8, proof.shred2, proof2.shred2);
     }
+}
+
+test "getDuplicateSlot" {
+    const allocator = std.testing.allocator;
+    const logger = .noop;
+    var registry = sig.prometheus.Registry(.{}).init(allocator);
+    defer registry.deinit();
+
+    var db = try TestDB.init(@src());
+    defer db.deinit();
+
+    var lowest_cleanup_slot = RwMux(Slot).init(0);
+    var max_root = std.atomic.Value(Slot).init(0);
+    var reader = try LedgerReader.init(
+        allocator,
+        logger,
+        db,
+        &registry,
+        &lowest_cleanup_slot,
+        &max_root,
+    );
+
+    const slot: u64 = 42;
+
+    // Test case 1: No duplicate slot proof exists
+    const result_none = try reader.getDuplicateSlot(slot);
+    try std.testing.expectEqual(@as(?DuplicateSlotProof, null), result_none);
+
+    // Test case 2: Insert a duplicate slot proof and retrieve it
+    {
+        const test_shred1 = "test_shred_1_data";
+        const test_shred2 = "test_shred_2_data";
+        const duplicate_proof = DuplicateSlotProof{
+            .shred1 = test_shred1,
+            .shred2 = test_shred2,
+        };
+
+        var write_batch = try db.initWriteBatch();
+        defer write_batch.deinit();
+        try write_batch.put(schema.duplicate_slots, slot, duplicate_proof);
+        try db.commit(&write_batch);
+
+        // Retrieve and verify the duplicate slot proof
+        const result_some = try reader.getDuplicateSlot(slot);
+        try std.testing.expect(result_some != null);
+
+        const retrieved_proof = result_some.?;
+        defer bincode.free(allocator, retrieved_proof);
+
+        try std.testing.expectEqualSlices(u8, test_shred1, retrieved_proof.shred1);
+        try std.testing.expectEqualSlices(u8, test_shred2, retrieved_proof.shred2);
+    }
+
+    // Test case 3: Different slot returns null
+    const different_slot: u64 = 123;
+    const result_different = try reader.getDuplicateSlot(different_slot);
+    try std.testing.expectEqual(@as(?DuplicateSlotProof, null), result_different);
 }
 
 test "isDead" {
