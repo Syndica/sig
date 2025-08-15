@@ -2540,6 +2540,9 @@ test "stake.merge" {
     const stake_lamports = 1_000_000_000;
     const stake_rent = sysvar.Rent.DEFAULT.minimumBalance(StakeStateV2.SIZE);
 
+    const stake_credits = 5;
+    const source_credits = 10;
+
     const stake_state = StakeStateV2{
         .stake = .{
             .flags = .EMPTY,
@@ -2552,7 +2555,7 @@ test "stake.merge" {
                 .rent_exempt_reserve = stake_rent,
             },
             .stake = .{
-                .credits_observed = 0,
+                .credits_observed = stake_credits,
                 .delegation = .{
                     .activation_epoch = 0,
                     .deactivation_epoch = std.math.maxInt(Epoch),
@@ -2589,14 +2592,19 @@ test "stake.merge" {
 
         var new_stake_state = stake_state;
         new_stake_state.stake.stake.delegation.stake = 20_000 + (if (use_stake) stake_rent else 0);
+        new_stake_state.stake.stake.credits_observed =
+            if (use_stake) source_credits else stake_credits;
 
         var stake_buf_after: [StakeStateV2.SIZE]u8 = stake_buf;
         _ = try sig.bincode.writeToSlice(&stake_buf_after, new_stake_state, .{});
 
+        var source_state = stake_state;
+        source_state.stake.stake.credits_observed = source_credits;
+
         var source_buf: [StakeStateV2.SIZE]u8 = @splat(0);
         _ = try sig.bincode.writeToSlice(
             &source_buf,
-            if (use_stake) stake_state else StakeStateV2{ .initialized = stake_state.stake.meta },
+            if (use_stake) source_state else StakeStateV2{ .initialized = stake_state.stake.meta },
             .{},
         );
 
