@@ -36,7 +36,6 @@ pub const isSlotDuplicateConfirmed = sig.consensus.tower.isSlotDuplicateConfirme
 pub const collectVoteLockouts = sig.consensus.replay_tower.collectVoteLockouts;
 
 const MAX_VOTE_REFRESH_INTERVAL_MILLIS: usize = 5000;
-const VoteThreshold = sig.consensus.progress_map.ForkStats.VoteThreshold;
 
 pub const ConsensusDependencies = struct {
     allocator: Allocator,
