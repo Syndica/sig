@@ -4862,3 +4862,34 @@ test "insert many duplicate individual accounts, get latest with ancestors" {
         }
     }
 }
+
+test "expandSlotRefsAndInsert alloc failure" {
+    const test_fn = struct {
+        fn f(allocator: std.mem.Allocator) !void {
+            var accounts_db, var tmp_dir = try AccountsDB.initForTest(allocator);
+            defer tmp_dir.cleanup();
+            defer accounts_db.deinit();
+
+            try accounts_db.expandSlotRefsAndInsert(1, &.{Pubkey.ZEROES});
+            try accounts_db.expandSlotRefsAndInsert(2, &.{Pubkey.ZEROES});
+        }
+    }.f;
+
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, test_fn, .{});
+}
+
+test "expandSlotRefsAndInsert double insert failure" {
+    const allocator = std.testing.allocator;
+
+    var accounts_db, var tmp_dir = try AccountsDB.initForTest(allocator);
+    defer tmp_dir.cleanup();
+    defer accounts_db.deinit();
+
+    try accounts_db.expandSlotRefsAndInsert(1, &.{Pubkey.ZEROES});
+
+    accounts_db.logger = .{ .noop = {} };
+    try std.testing.expectError(
+        error.InsertIndexFailed,
+        accounts_db.expandSlotRefsAndInsert(1, &.{Pubkey.ZEROES}),
+    );
+}
