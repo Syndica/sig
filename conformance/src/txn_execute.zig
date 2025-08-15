@@ -1175,31 +1175,34 @@ fn loadTransactionMesssage(
         };
     }
 
-    const address_lookups = try allocator.alloc(
-        TransactionAddressLookup,
-        message.address_table_lookups.items.len,
-    );
-    for (address_lookups, message.address_table_lookups.items) |*lookup, pb_lookup| {
-        const writable_indexes = try allocator.alloc(u8, pb_lookup.writable_indexes.items.len);
-        for (
-            writable_indexes,
-            pb_lookup.writable_indexes.items,
-        ) |*writable_index, pb_writable_index|
-            writable_index.* = @truncate(pb_writable_index);
+    const address_lookups: []const TransactionAddressLookup = if (!message.is_legacy) blk: {
+        const address_lookups = try allocator.alloc(
+            TransactionAddressLookup,
+            message.address_table_lookups.items.len,
+        );
+        for (address_lookups, message.address_table_lookups.items) |*lookup, pb_lookup| {
+            const writable_indexes = try allocator.alloc(u8, pb_lookup.writable_indexes.items.len);
+            for (
+                writable_indexes,
+                pb_lookup.writable_indexes.items,
+            ) |*writable_index, pb_writable_index|
+                writable_index.* = @truncate(pb_writable_index);
 
-        const readonly_indexes = try allocator.alloc(u8, pb_lookup.readonly_indexes.items.len);
-        for (
-            readonly_indexes,
-            pb_lookup.readonly_indexes.items,
-        ) |*readonly_index, pb_readonly_index|
-            readonly_index.* = @truncate(pb_readonly_index);
+            const readonly_indexes = try allocator.alloc(u8, pb_lookup.readonly_indexes.items.len);
+            for (
+                readonly_indexes,
+                pb_lookup.readonly_indexes.items,
+            ) |*readonly_index, pb_readonly_index|
+                readonly_index.* = @truncate(pb_readonly_index);
 
-        lookup.* = TransactionAddressLookup{
-            .table_address = Pubkey{ .data = pb_lookup.account_key.getSlice()[0..Pubkey.SIZE].* },
-            .writable_indexes = writable_indexes,
-            .readonly_indexes = readonly_indexes,
-        };
-    }
+            lookup.* = TransactionAddressLookup{
+                .table_address = .{ .data = pb_lookup.account_key.getSlice()[0..Pubkey.SIZE].* },
+                .writable_indexes = writable_indexes,
+                .readonly_indexes = readonly_indexes,
+            };
+        }
+        break :blk address_lookups;
+    } else &.{};
 
     const header = message.header orelse pb.MessageHeader{
         .num_required_signatures = 1,
