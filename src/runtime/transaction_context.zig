@@ -51,7 +51,7 @@ pub const TransactionContext = struct {
     next_vm_environment: ?*const vm.Environment,
 
     // Program map is used to laod and invoke valid BPF programs.
-    program_map: *const ProgramMap,
+    program_map: *ProgramMap,
 
     /// Transaction accounts
     /// TransactionContextAccount contains a non-owning reference to an AccountSharedData

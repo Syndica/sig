@@ -1555,6 +1555,11 @@ pub fn deployProgram(
 
     try tc.log("Deploying program {}", .{program_id});
 
+    // Remove from the program map since it should not be accessible on this slot anymore.
+    const gop = try tc.program_map.getOrPut(allocator, program_id);
+    if (gop.found_existing) gop.value_ptr.deinit(allocator);
+    gop.value_ptr.* = .failed;
+
     _ = owner_id;
     _ = slot;
 }
