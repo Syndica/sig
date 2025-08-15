@@ -38,7 +38,7 @@ pub fn processBatch(
     transactions: []const ResolvedTransaction,
     exit: *Atomic(bool),
 ) !BatchResult {
-    var zone = tracy.Zone.init(@src(), .{ .name = "processBatch" });
+    const zone = tracy.Zone.init(@src(), .{ .name = "processBatch" });
     zone.value(transactions.len);
     defer zone.deinit();
     errdefer zone.color(0xFF0000);

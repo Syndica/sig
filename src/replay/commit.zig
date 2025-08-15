@@ -32,7 +32,7 @@ pub const Committer = struct {
         transactions: []const ResolvedTransaction,
         tx_results: []const struct { Hash, ProcessedTransaction },
     ) !void {
-        var zone = tracy.Zone.init(@src(), .{ .name = "commitTransactions" });
+        const zone = tracy.Zone.init(@src(), .{ .name = "commitTransactions" });
         zone.value(transactions.len);
         defer zone.deinit();
         errdefer zone.color(0xFF0000);

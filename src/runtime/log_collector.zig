@@ -1,5 +1,6 @@
 const builtin = @import("builtin");
 const std = @import("std");
+const tracy = @import("tracy");
 
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/program-runtime/src/log_collector.rs#L4
 const DEFAULT_MAX_BYTES_LIMIT: usize = 10 * 1000;
@@ -45,6 +46,9 @@ pub const LogCollector = struct {
         comptime fmt: []const u8,
         args: anytype,
     ) error{OutOfMemory}!void {
+        const zone = tracy.Zone.init(@src(), .{ .name = "LogCollector.log" });
+        defer zone.deinit();
+
         if (self.bytes_limit_reached) return;
 
         const message = try std.fmt.allocPrint(allocator, fmt, args);

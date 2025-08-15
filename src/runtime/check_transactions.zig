@@ -99,7 +99,7 @@ pub fn checkFeePayer(
     FeeDetails,
     TransactionRollbacks,
 }) {
-    var zone = tracy.Zone.init(@src(), .{ .name = "checkFeePayer" });
+    const zone = tracy.Zone.init(@src(), .{ .name = "checkFeePayer" });
     defer zone.deinit();
 
     var nonce_account_is_owned = true;

@@ -1,6 +1,7 @@
 pub const std = @import("std");
 pub const sig = @import("../sig.zig");
 pub const ledger = @import("lib.zig");
+const tracy = @import("tracy");
 
 // std
 const Allocator = std.mem.Allocator;
@@ -1129,6 +1130,9 @@ pub const LedgerReader = struct {
         completed_ranges: CompletedRanges,
         maybe_slot_meta: ?*const SlotMeta,
     ) ![]Entry {
+        const zone = tracy.Zone.init(@src(), .{ .name = "getSlotEntriesInBlock" });
+        defer zone.deinit();
+
         if (completed_ranges.items.len == 0) {
             return &.{};
         }

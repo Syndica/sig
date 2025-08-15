@@ -1847,6 +1847,9 @@ pub const AccountsDB = struct {
         pubkey: *const Pubkey,
         ancestors: *const sig.core.Ancestors,
     ) GetFileFromRefError!?Account {
+        const zone = tracy.Zone.init(@src(), .{ .name = "getAccountWithAncestors" });
+        defer zone.deinit();
+
         const head_ref, var lock = self.account_index.pubkey_ref_map.getRead(pubkey) orelse
             return null;
         defer lock.unlock();
