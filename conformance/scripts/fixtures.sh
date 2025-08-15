@@ -40,6 +40,7 @@ PASSING_DIRS=(
     "instr/fixtures/zk_sdk"
     "instr/fixtures/unknown"
     "instr/fixtures/compute-budget"
+    "instr/fixtures/stake"
 
     "instr/fixtures/bpf-address-lookup-table"
     "instr/fixtures/bpf-config"

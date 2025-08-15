@@ -40,11 +40,11 @@ pub const StakeHistory = struct {
 
     pub const StakeState = extern struct {
         /// Effective stake at this epoch
-        effective: u64,
+        effective: u64 = 0,
         /// Sum of portion of stakes not fully warmed up
-        activating: u64,
+        activating: u64 = 0,
         /// Requested to be cooled down, not fully deactivated yet
-        deactivating: u64,
+        deactivating: u64 = 0,
     };
 
     pub const ID: Pubkey = .parse("SysvarStakeHistory1111111111111111111111111");
