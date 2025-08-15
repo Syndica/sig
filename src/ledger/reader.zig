@@ -1200,6 +1200,13 @@ pub const LedgerReader = struct {
                 return e;
             };
             defer bytes.deinit();
+
+            // the length of the Entry slice
+            const len: u64 = @bitCast(bytes.items[0..8].*);
+
+            // len <= 255 seems normal, print anything larger in case we get something huge
+            if (len > 0xFF) tracy.print("bytes[0..8] 0x{X}\n", .{len});
+
             const these_entries = bincode.readFromSlice(
                 allocator,
                 []Entry,
