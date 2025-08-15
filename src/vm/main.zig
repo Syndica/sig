@@ -49,13 +49,16 @@ pub fn main() !void {
     const epoch_stakes = try EpochStakes.initEmptyWithGenesisStakeHistoryEntry(gpa);
     defer epoch_stakes.deinit(gpa);
 
+    var program_map = ProgramMap{};
+    defer program_map.deinit(gpa);
+
     var tc: TransactionContext = .{
         .allocator = gpa,
         .feature_set = &FeatureSet.ALL_DISABLED,
         .epoch_stakes = &epoch_stakes,
         .sysvar_cache = &SysvarCache{},
         .vm_environment = &vm.Environment{},
-        .program_map = &ProgramMap{},
+        .program_map = &program_map,
         .next_vm_environment = null,
         .accounts = &.{},
         .serialized_accounts = .{},
