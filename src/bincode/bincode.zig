@@ -5,6 +5,7 @@ pub const int = @import("int.zig");
 pub const list = @import("list.zig");
 pub const optional = @import("optional.zig");
 pub const shortvec = @import("shortvec.zig");
+const tracy = @import("tracy");
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -103,6 +104,8 @@ pub fn readWithConfigAndLimit(
     params: bincode.Params,
     comptime config: FieldConfig(U),
 ) !U {
+    errdefer tracy.print("readWithConfigAndLimit(T) failed: {s}\n", .{@typeName(U)});
+
     const T = switch (U) {
         usize => u64,
         isize => i64,

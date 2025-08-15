@@ -35,7 +35,7 @@ pub fn executeTransaction(
     svm_gateway: *SvmGateway,
     transaction: *const RuntimeTransaction,
 ) !TransactionResult(ProcessedTransaction) {
-    var zone = tracy.Zone.init(@src(), .{ .name = "executeTransaction" });
+    const zone = tracy.Zone.init(@src(), .{ .name = "svm_gateway.executeTransaction" });
     defer zone.deinit();
 
     const environment = try svm_gateway.environment();

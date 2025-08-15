@@ -183,6 +183,7 @@ pub fn build(b: *Build) void {
         .optimize = config.optimize,
         .tracy_enable = config.enable_tracy,
         .tracy_no_system_tracing = false,
+        .tracy_callstack = 6,
     }).module("tracy");
     tracy_mod.sanitize_c = false; // Workaround UB in Tracy.
 
@@ -234,9 +235,13 @@ pub fn build(b: *Build) void {
             .target = config.target,
             .optimize = config.optimize,
             .imports = imports,
-            .error_tracing = config.error_tracing,
+            // .error_tracing = config.error_tracing,
             .sanitize_thread = config.enable_tsan,
             .link_libc = true,
+            .stack_protector = true,
+            .stack_check = true,
+            .omit_frame_pointer = false,
+            .error_tracing = true,
         }),
         .use_llvm = config.use_llvm,
     });
