@@ -13,6 +13,7 @@ const ThreadPool = sig.sync.ThreadPool;
 const Ancestors = core.Ancestors;
 const Entry = core.Entry;
 const Hash = core.Hash;
+const ReservedAccounts = core.ReservedAccounts;
 const Slot = core.Slot;
 const TransactionError = sig.ledger.transaction_status.TransactionError;
 
@@ -51,6 +52,7 @@ pub fn confirmSlot(
     committer: Committer,
     verify_ticks_params: VerifyTicksParams,
     ancestors: *const Ancestors,
+    reserved_accounts: *const ReservedAccounts,
 ) !*ConfirmSlotFuture {
     logger.info().log("confirming slot");
     const future = fut: {
@@ -69,7 +71,14 @@ pub fn confirmSlot(
     }
 
     try startPohVerify(allocator, logger, &future.poh_verifier, last_entry, entries, &future.exit);
-    try scheduleTransactionBatches(allocator, &future.scheduler, account_store, entries, ancestors);
+    try scheduleTransactionBatches(
+        allocator,
+        &future.scheduler,
+        account_store,
+        entries,
+        ancestors,
+        reserved_accounts,
+    );
 
     _ = try future.poll(); // starts batch execution. poll result is cached inside future
 
@@ -109,6 +118,7 @@ fn scheduleTransactionBatches(
     account_store: AccountStore,
     entries: []const Entry,
     ancestors: *const Ancestors,
+    reserved_accounts: *const ReservedAccounts,
 ) !void {
     var total_transactions: usize = 0;
     for (entries) |entry| {
@@ -118,6 +128,7 @@ fn scheduleTransactionBatches(
             allocator,
             account_store.reader().forSlot(ancestors),
             entry.transactions,
+            reserved_accounts,
         );
         errdefer batch.deinit(allocator);
 
@@ -397,6 +408,7 @@ test "happy path: trivial case" {
             .tick_hash_count = &tick_hash_count,
         },
         &.{ .ancestors = .empty },
+        &.empty,
     );
     defer future.destroy(std.testing.allocator);
 
@@ -440,6 +452,7 @@ test "happy path: partial slot" {
             .tick_hash_count = &tick_hash_count,
         },
         &.{ .ancestors = .empty },
+        &.empty,
     );
     defer future.destroy(std.testing.allocator);
 
@@ -484,6 +497,7 @@ test "happy path: full slot" {
             .tick_hash_count = &tick_hash_count,
         },
         &.{ .ancestors = .empty },
+        &.empty,
     );
 
     defer future.destroy(std.testing.allocator);
@@ -529,6 +543,7 @@ test "fail: full slot not marked full -> .InvalidLastTick" {
             .tick_hash_count = &tick_hash_count,
         },
         &.{ .ancestors = .empty },
+        &.empty,
     );
     defer future.destroy(std.testing.allocator);
 
@@ -575,6 +590,7 @@ test "fail: no trailing tick at max height -> .TrailingEntry" {
             .tick_hash_count = &tick_hash_count,
         },
         &.{ .ancestors = .empty },
+        &.empty,
     );
     defer future.destroy(std.testing.allocator);
 
@@ -624,6 +640,7 @@ test "fail: invalid poh chain" {
             .tick_hash_count = &tick_hash_count,
         },
         &.{ .ancestors = .empty },
+        &.empty,
     );
     defer future.destroy(std.testing.allocator);
 
@@ -670,6 +687,7 @@ test "fail: sigverify" {
             .tick_hash_count = &tick_hash_count,
         },
         &.{ .ancestors = .empty },
+        &.empty,
     );
     defer future.destroy(std.testing.allocator);
 

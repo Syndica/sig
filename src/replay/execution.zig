@@ -268,5 +268,6 @@ fn replaySlot(state: ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
         committer,
         verify_ticks_params,
         &slot_info.constants.ancestors,
+        &slot_info.constants.reserved_accounts,
     ) };
 }

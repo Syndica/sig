@@ -1482,6 +1482,7 @@ test "simple usage" {
                 .epoch_reward_status = .inactive,
                 .ancestors = .{ .ancestors = .empty },
                 .feature_set = .ALL_DISABLED,
+                .reserved_accounts = .empty,
             },
             .state = try .genesis(allocator),
             .epoch_constants = .{
@@ -1584,6 +1585,7 @@ test "check trackers" {
                 .epoch_reward_status = .inactive,
                 .ancestors = .{ .ancestors = .empty },
                 .feature_set = .ALL_DISABLED,
+                .reserved_accounts = .empty,
             },
             .state = try .genesis(allocator),
             .epoch_constants = .{

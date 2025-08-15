@@ -40,7 +40,7 @@ pub fn applyFeatureActivations(
 
     var iterator = new_feature_activations.iterator(slot);
     while (iterator.next()) |feature| {
-        const feature_id: Pubkey = features.map.get(feature);
+        const feature_id: Pubkey = features.map.get(feature).key;
         const db_account = try tryGetAccount(accounts_db, feature_id) orelse continue;
         defer db_account.deinit(allocator);
 
@@ -54,9 +54,9 @@ pub fn applyFeatureActivations(
 
     // Update active set of reserved account keys which are not allowed to be write locked
     // self.reserved_account_keys = {
-    //     let mut reserved_keys = ReservedAccountKeys::clone(&self.reserved_account_keys);
-    //     reserved_keys.update_active_set(&self.feature_set);
-    //     Arc::new(reserved_keys)
+    //     let mut reserved_accounts = ReservedAccountKeys::clone(&self.reserved_account_keys);
+    //     reserved_accounts.update_active_set(&self.feature_set);
+    //     Arc::new(reserved_accounts)
     // };
 
     if (new_feature_activations.active(.pico_inflation, slot))
@@ -212,7 +212,7 @@ fn computeActiveFeatureSet(
 
     var iterator = feature_set.iterator(slot);
     while (iterator.next()) |feature| {
-        const feature_id: Pubkey = features.map.get(feature);
+        const feature_id: Pubkey = features.map.get(feature).key;
         var maybe_activation_slot: ?u64 = null;
 
         if (try tryGetAccount(accounts_db, feature_id)) |account| {

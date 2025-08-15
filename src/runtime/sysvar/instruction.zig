@@ -3,6 +3,8 @@ const sig = @import("../../sig.zig");
 const Pubkey = sig.core.Pubkey;
 const Instruction = sig.core.Instruction;
 
+pub const ID: Pubkey = .parse("Sysvar1nstructions1111111111111111111111111");
+
 // [agave] https://github.com/anza-xyz/solana-sdk/blob/0fbfb7d1467c1ab0c35e1a3b905b8ba0ac0bf538/instructions-sysvar/src/lib.rs#L77
 pub const InstructionsSysvarAccountMeta = packed struct(u8) {
     is_signer: bool,

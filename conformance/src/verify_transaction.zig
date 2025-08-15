@@ -52,10 +52,14 @@ pub fn verifyTransaction(
         }
     }
 
+    var reserved_accounts = try sig.core.reserved_accounts.initForSlot(allocator, feature_set, slot);
+    defer reserved_accounts.deinit(allocator);
+
     const resolved_batch = sig.replay.resolve_lookup.resolveBatch(
         allocator,
         account_reader,
         &.{transaction},
+        &reserved_accounts,
     ) catch |err| {
         const err_code = switch (err) {
             error.AddressLookupTableNotFound => transactionErrorToInt(

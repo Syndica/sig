@@ -582,9 +582,18 @@ fn newSlotFromParent(
     try ancestors.ancestors.put(allocator, slot, {});
 
     var feature_set = try getActiveFeatures(allocator, account_reader.forSlot(&ancestors), slot);
-    errdefer feature_set.deinit(allocator);
 
     const parent_hash = parent_state.hash.readCopy().?;
+
+    // This is inefficient, reserved accounts could live in epoch constants along with
+    // the feature set since feature activations are only applied at epoch boundaries.
+    // Then we only need to clone the map and update the reserved accounts once per epoch.
+    const reserved_accounts = try sig.core.reserved_accounts.initForSlot(
+        allocator,
+        &feature_set,
+        slot,
+    );
+    errdefer reserved_accounts.deinit(allocator);
 
     const constants = sig.core.SlotConstants{
         .parent_slot = parent_slot,
@@ -600,6 +609,7 @@ fn newSlotFromParent(
         .epoch_reward_status = epoch_reward_status,
         .ancestors = ancestors,
         .feature_set = feature_set,
+        .reserved_accounts = reserved_accounts,
     };
 
     return .{ constants, state };
@@ -614,7 +624,7 @@ pub fn getActiveFeatures(
     var features: sig.core.FeatureSet = .ALL_DISABLED;
     for (0..sig.core.features.NUM_FEATURES) |i| {
         const possible_feature: sig.core.features.Feature = @enumFromInt(i);
-        const possible_feature_pubkey = sig.core.features.map.get(possible_feature);
+        const possible_feature_pubkey = sig.core.features.map.get(possible_feature).key;
         const feature_account = try account_reader.get(possible_feature_pubkey) orelse continue;
         if (!feature_account.owner.equals(&sig.runtime.ids.FEATURE_PROGRAM_ID)) {
             return error.FeatureNotOwnedByFeatureProgram;
@@ -642,7 +652,7 @@ test "getActiveFeatures rejects wrong ownership" {
 
     try accounts.put(
         allocator,
-        sig.core.features.map.get(.system_transfer_zero_check),
+        sig.core.features.map.get(.system_transfer_zero_check).key,
         acct,
     );
 

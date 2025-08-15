@@ -953,6 +953,17 @@ fn serializeOutput(
                 .acct_states = acct_states,
             };
 
+            const return_data: ManagedString = switch (txn) {
+                .executed => |executed| blk: {
+                    if (executed.executed_transaction.return_data) |return_data| {
+                        break :blk try .copy(return_data.data.constSlice(), allocator);
+                    } else {
+                        break :blk .Empty;
+                    }
+                },
+                .fees_only => .Empty,
+            };
+
             return .{
                 .executed = true,
                 .sanitization_error = false,
@@ -964,6 +975,7 @@ fn serializeOutput(
                 .instruction_error_index = errors.instruction_index,
                 .custom_error = errors.custom_error,
 
+                .return_data = return_data,
                 .resulting_state = resulting_state,
                 .fee_details = .{
                     .transaction_fee = fees.transaction_fee,
@@ -1144,7 +1156,10 @@ fn loadTransactionMesssage(
     for (account_keys, message.account_keys.items) |*account_key, pb_account_key|
         account_key.* = .{ .data = pb_account_key.getSlice()[0..Pubkey.SIZE].* };
 
-    const recent_blockhash = Hash{ .data = message.recent_blockhash.getSlice()[0..Hash.SIZE].* };
+    const recent_blockhash = if (message.recent_blockhash.isEmpty())
+        Hash.ZEROES
+    else
+        Hash{ .data = message.recent_blockhash.getSlice()[0..Hash.SIZE].* };
 
     const instructions = try allocator.alloc(
         TransactionInstruction,

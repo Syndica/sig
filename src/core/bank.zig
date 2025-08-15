@@ -18,6 +18,7 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 
 const core = sig.core;
+const reserved_accounts = sig.core.reserved_accounts;
 
 const Allocator = std.mem.Allocator;
 const Atomic = std.atomic.Value;
@@ -32,6 +33,7 @@ const HardForks = core.HardForks;
 const LtHash = core.hash.LtHash;
 const Pubkey = core.pubkey.Pubkey;
 const RentCollector = sig.core.rent_collector.RentCollector;
+const ReservedAccounts = sig.core.ReservedAccounts;
 
 const Epoch = core.time.Epoch;
 const Slot = core.time.Slot;
@@ -91,7 +93,14 @@ pub const SlotConstants = struct {
     ancestors: Ancestors,
 
     /// A map of activated features to the slot when they were activated.
+    /// NOTE: Feature activations are only applied at epoch boundaries, so should be constant
+    /// during an epoch, not just a slot. We should evaluate moving this and `reserved_accounts`
+    /// to `EpochConstants`.
     feature_set: FeatureSet,
+
+    /// A map of reserved accounts that are not allowed to acquire write locks
+    /// in the current slot.
+    reserved_accounts: ReservedAccounts,
 
     pub fn fromBankFields(
         allocator: Allocator,
@@ -109,6 +118,11 @@ pub const SlotConstants = struct {
             .epoch_reward_status = .inactive,
             .ancestors = try bank_fields.ancestors.clone(allocator),
             .feature_set = feature_set,
+            .reserved_accounts = try reserved_accounts.initForSlot(
+                allocator,
+                &feature_set,
+                bank_fields.slot,
+            ),
         };
     }
 
@@ -129,6 +143,7 @@ pub const SlotConstants = struct {
             .epoch_reward_status = .inactive,
             .ancestors = ancestors,
             .feature_set = .ALL_DISABLED,
+            .reserved_accounts = try reserved_accounts.init(allocator),
         };
     }
 
@@ -136,6 +151,7 @@ pub const SlotConstants = struct {
         var self = self_const;
         self.epoch_reward_status.deinit(allocator);
         self.ancestors.deinit(allocator);
+        self.reserved_accounts.deinit(allocator);
     }
 };
 
