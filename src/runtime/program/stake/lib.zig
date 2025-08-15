@@ -1391,6 +1391,7 @@ fn deactivateDelinquent(
         VoteStateVersions,
     );
     const delinquent_vote_state = try delinquent_vote_state_raw.convertToCurrent(allocator);
+    defer delinquent_vote_state.deinit();
 
     const reference_vote_account = try ic.borrowInstructionAccount(reference_vote_account_index);
     defer reference_vote_account.release();
@@ -1401,6 +1402,7 @@ fn deactivateDelinquent(
         VoteStateVersions,
     );
     const reference_vote_state = try reference_vote_state_raw.convertToCurrent(allocator);
+    defer reference_vote_state.deinit();
 
     if (!acceptableReferenceEpochCredits(reference_vote_state.epoch_credits.items, current_epoch)) {
         ic.tc.custom_error = @intFromEnum(StakeError.insufficient_reference_votes);
@@ -3171,6 +3173,156 @@ test "stake.get_minimum_delegation" {
                 .program_id = ID,
                 .data = std.mem.asBytes(&min_delegation),
             },
+        },
+        .{},
+    );
+}
+
+test "stake.deactivate_delinquent" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+
+    const sysvar_cache = sig.runtime.testing.ExecuteContextsParams.SysvarCacheParams{
+        .clock = .{
+            .epoch = 100,
+            .epoch_start_timestamp = 100,
+            .leader_schedule_epoch = 0,
+            .slot = 0,
+            .unix_timestamp = 100,
+        },
+        .rent = runtime.sysvar.Rent.DEFAULT,
+    };
+
+    var reference_vote_state = VoteState.default(allocator);
+    defer reference_vote_state.deinit();
+
+    var delinquent_vote_state = VoteState.default(allocator);
+    defer delinquent_vote_state.deinit();
+
+    for (0..MINIMUM_DELINQUENT_EPOCHS_FOR_DEACTIVATION) |i| {
+        const epoch_offset = MINIMUM_DELINQUENT_EPOCHS_FOR_DEACTIVATION - (i + 1);
+        try reference_vote_state.epoch_credits.append(.{
+            .credits = 100,
+            .epoch = sysvar_cache.clock.?.epoch - epoch_offset,
+            .prev_credits = 10,
+        });
+        try delinquent_vote_state.epoch_credits.append(.{
+            .credits = 100,
+            .epoch = sysvar_cache.clock.?.epoch - epoch_offset,
+            .prev_credits = 10,
+        });
+    }
+
+    try delinquent_vote_state.epoch_credits.append(.{
+        .credits = 100,
+        .epoch = sysvar_cache.clock.?.epoch - MINIMUM_DELINQUENT_EPOCHS_FOR_DEACTIVATION,
+        .prev_credits = 10,
+    });
+
+    var reference_vote_buf: [@sizeOf(VoteStateVersions)]u8 = @splat(0);
+    _ = try sig.bincode.writeToSlice(&reference_vote_buf, VoteStateVersions{
+        .current = reference_vote_state,
+    }, .{});
+
+    var delinquent_vote_buf: [@sizeOf(VoteStateVersions)]u8 = @splat(0);
+    _ = try sig.bincode.writeToSlice(&delinquent_vote_buf, VoteStateVersions{
+        .current = delinquent_vote_state,
+    }, .{});
+
+    const delinquent_account = Pubkey.initRandom(prng.random());
+    const reference_account = Pubkey.initRandom(prng.random());
+    const stake_account = Pubkey.initRandom(prng.random());
+
+    const stake = @TypeOf(@as(StakeStateV2, undefined).stake){
+        .meta = .{
+            .authorized = .{
+                .staker = Pubkey.ZEROES,
+                .withdrawer = Pubkey.ZEROES,
+            },
+            .lockup = .DEFAULT,
+            .rent_exempt_reserve = sysvar_cache.rent.?.minimumBalance(StakeStateV2.SIZE),
+        },
+        .stake = .{
+            .credits_observed = 0,
+            .delegation = .{
+                .activation_epoch = sysvar_cache.clock.?.epoch,
+                .stake = 1000,
+                .voter_pubkey = delinquent_account,
+            },
+        },
+        .flags = .EMPTY,
+    };
+
+    var stake_buf: [StakeStateV2.SIZE]u8 = @splat(0);
+    _ = try sig.bincode.writeToSlice(&stake_buf, StakeStateV2{
+        .stake = stake,
+    }, .{});
+
+    var deactivated_stake = stake;
+    try std.testing.expectEqual(
+        null,
+        deactivated_stake.stake.deactivate(sysvar_cache.clock.?.epoch),
+    );
+
+    var stake_buf_after: [StakeStateV2.SIZE]u8 = stake_buf;
+    _ = try sig.bincode.writeToSlice(&stake_buf_after, StakeStateV2{
+        .stake = deactivated_stake,
+    }, .{});
+
+    try runtime.program.testing.expectProgramExecuteResult(
+        allocator,
+        ID,
+        Instruction{ .deactivate_delinquent = {} },
+        &.{
+            .{ .index_in_transaction = 0, .is_writable = true },
+            .{ .index_in_transaction = 1 },
+            .{ .index_in_transaction = 2 },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = stake_account,
+                    .owner = ID,
+                    .data = &stake_buf,
+                    .lamports = 1_000_000_000,
+                },
+                .{
+                    .pubkey = delinquent_account,
+                    .owner = runtime.program.vote.ID,
+                    .data = &delinquent_vote_buf,
+                },
+                .{
+                    .pubkey = reference_account,
+                    .owner = runtime.program.vote.ID,
+                    .data = &reference_vote_buf,
+                },
+                .{ .pubkey = ID, .owner = runtime.ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = 10_000,
+            .sysvar_cache = sysvar_cache,
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = stake_account,
+                    .owner = ID,
+                    .data = &stake_buf_after,
+                    .lamports = 1_000_000_000,
+                },
+                .{
+                    .pubkey = delinquent_account,
+                    .owner = runtime.program.vote.ID,
+                    .data = &delinquent_vote_buf,
+                },
+                .{
+                    .pubkey = reference_account,
+                    .owner = runtime.program.vote.ID,
+                    .data = &reference_vote_buf,
+                },
+                .{ .pubkey = ID, .owner = runtime.ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = 10_000 - COMPUTE_UNITS,
+            .sysvar_cache = sysvar_cache,
         },
         .{},
     );
