@@ -1975,25 +1975,6 @@ test "stake.delegate_stake" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
-    var sysvar_cache = sig.runtime.testing.ExecuteContextsParams.SysvarCacheParams{
-        .clock = runtime.sysvar.Clock.DEFAULT,
-        .slot_hashes = try runtime.sysvar.SlotHashes.initWithEntries(
-            allocator,
-            &.{.{ .slot = std.math.maxInt(Slot), .hash = sig.core.Hash.ZEROES }},
-        ),
-        .rent = runtime.sysvar.Rent.DEFAULT,
-        .stake_history = try sysvar.StakeHistory.init(allocator),
-        .epoch_rewards = .DEFAULT,
-    };
-
-    // Hacky duplicate to avoid slot_hashes & stake_history double free from storing same ref.
-    var expected_sysvar_cache = sysvar_cache;
-    expected_sysvar_cache.stake_history = try sysvar.StakeHistory.init(allocator);
-    expected_sysvar_cache.slot_hashes = try runtime.sysvar.SlotHashes.initWithEntries(
-        allocator,
-        &.{.{ .slot = std.math.maxInt(Slot), .hash = sig.core.Hash.ZEROES }},
-    );
-
     const staker_auth = Pubkey.initRandom(prng.random());
     const stake_account = Pubkey.initRandom(prng.random());
     const vote_account = Pubkey.initRandom(prng.random());
@@ -2006,25 +1987,31 @@ test "stake.delegate_stake" {
         .current = vote_state,
     }, .{});
 
-    const stake_lamports = 1_000_000_000;
-    const stake_rent = sysvar_cache.rent.?.minimumBalance(StakeStateV2.SIZE);
+    for ([_]bool{ false, true }) |use_stake| {
+        var sysvar_cache = sig.runtime.testing.ExecuteContextsParams.SysvarCacheParams{
+            .clock = runtime.sysvar.Clock.DEFAULT,
+            .slot_hashes = try runtime.sysvar.SlotHashes.initWithEntries(
+                allocator,
+                &.{.{ .slot = std.math.maxInt(Slot), .hash = sig.core.Hash.ZEROES }},
+            ),
+            .rent = runtime.sysvar.Rent.DEFAULT,
+            .stake_history = try sysvar.StakeHistory.init(allocator),
+            .epoch_rewards = .DEFAULT,
+            .epoch_schedule = .DEFAULT,
+        };
 
-    var buf: [StakeStateV2.SIZE]u8 = @splat(0);
-    _ = try sig.bincode.writeToSlice(&buf, StakeStateV2{
-        .initialized = .{
-            .authorized = .{
-                .staker = staker_auth,
-                .withdrawer = Pubkey.ZEROES,
-            },
-            .lockup = .DEFAULT,
-            .rent_exempt_reserve = stake_rent,
-        },
-    }, .{});
+        // Hacky duplicate to avoid slot_hashes & stake_history double free from storing same ref.
+        var expected_sysvar_cache = sysvar_cache;
+        expected_sysvar_cache.stake_history = try sysvar.StakeHistory.init(allocator);
+        expected_sysvar_cache.slot_hashes = try runtime.sysvar.SlotHashes.initWithEntries(
+            allocator,
+            &.{.{ .slot = std.math.maxInt(Slot), .hash = sig.core.Hash.ZEROES }},
+        );
 
-    var buf_after: [StakeStateV2.SIZE]u8 = @splat(0);
-    _ = try sig.bincode.writeToSlice(&buf_after, StakeStateV2{
-        .stake = .{
-            .flags = .EMPTY,
+        const stake_lamports = 1_000_000_000;
+        const stake_rent = sysvar_cache.rent.?.minimumBalance(StakeStateV2.SIZE);
+
+        const stake: @TypeOf(@as(StakeStateV2, undefined).stake) = .{
             .meta = .{
                 .authorized = .{
                     .staker = staker_auth,
@@ -2033,72 +2020,107 @@ test "stake.delegate_stake" {
                 .lockup = .DEFAULT,
                 .rent_exempt_reserve = stake_rent,
             },
-            .stake = .{ .credits_observed = vote_state.getCredits(), .delegation = .{
-                .voter_pubkey = vote_account,
-                .stake = stake_lamports -| stake_rent,
-                .activation_epoch = sysvar_cache.clock.?.epoch,
-            } },
-        },
-    }, .{});
+            .stake = .{
+                .credits_observed = 0,
+                .delegation = .{
+                    .activation_epoch = 0,
+                    .deactivation_epoch = std.math.maxInt(u64),
+                    .stake = 0,
+                    .voter_pubkey = Pubkey.ZEROES,
+                },
+            },
+            .flags = .EMPTY,
+        };
 
-    try runtime.program.testing.expectProgramExecuteResult(
-        allocator,
-        ID,
-        Instruction{ .delegate_stake = {} },
-        &.{
-            .{ .index_in_transaction = 0, .is_writable = true },
-            .{ .index_in_transaction = 1 },
-            .{ .index_in_transaction = 2 },
-            .{ .index_in_transaction = 3 },
-            .{ .index_in_transaction = 0 }, // unused account
-            .{ .index_in_transaction = 4, .is_signer = true }, // stake auth
-        },
-        .{
-            .accounts = &.{
-                .{
-                    .pubkey = stake_account,
-                    .owner = ID,
-                    .data = &buf,
-                    .lamports = stake_lamports,
+        var buf: [StakeStateV2.SIZE]u8 = @splat(0);
+        _ = try sig.bincode.writeToSlice(
+            &buf,
+            if (use_stake)
+                StakeStateV2{ .stake = stake }
+            else
+                StakeStateV2{ .initialized = stake.meta },
+            .{},
+        );
+
+        var buf_after: [StakeStateV2.SIZE]u8 = @splat(0);
+        _ = try sig.bincode.writeToSlice(&buf_after, StakeStateV2{
+            .stake = .{
+                .flags = .EMPTY,
+                .meta = .{
+                    .authorized = .{
+                        .staker = staker_auth,
+                        .withdrawer = Pubkey.ZEROES,
+                    },
+                    .lockup = .DEFAULT,
+                    .rent_exempt_reserve = stake_rent,
                 },
-                .{
-                    .pubkey = vote_account,
-                    .owner = sig.runtime.program.vote.ID,
-                    .data = &vote_buf,
-                    .lamports = 1_000_000_000,
-                },
-                .{ .pubkey = sysvar.Clock.ID },
-                .{ .pubkey = sysvar.StakeHistory.ID },
-                .{ .pubkey = staker_auth },
-                .{ .pubkey = ID, .owner = runtime.ids.NATIVE_LOADER_ID },
+                .stake = .{ .credits_observed = vote_state.getCredits(), .delegation = .{
+                    .voter_pubkey = vote_account,
+                    .stake = stake_lamports -| stake_rent,
+                    .activation_epoch = sysvar_cache.clock.?.epoch,
+                } },
             },
-            .compute_meter = 10_000,
-            .sysvar_cache = sysvar_cache,
-        },
-        .{
-            .accounts = &.{
-                .{
-                    .pubkey = stake_account,
-                    .owner = ID,
-                    .data = &buf_after,
-                    .lamports = stake_lamports,
-                },
-                .{
-                    .pubkey = vote_account,
-                    .owner = sig.runtime.program.vote.ID,
-                    .data = &vote_buf,
-                    .lamports = 1_000_000_000,
-                },
-                .{ .pubkey = sysvar.Clock.ID },
-                .{ .pubkey = sysvar.StakeHistory.ID },
-                .{ .pubkey = staker_auth },
-                .{ .pubkey = ID, .owner = runtime.ids.NATIVE_LOADER_ID },
+        }, .{});
+
+        try runtime.program.testing.expectProgramExecuteResult(
+            allocator,
+            ID,
+            Instruction{ .delegate_stake = {} },
+            &.{
+                .{ .index_in_transaction = 0, .is_writable = true },
+                .{ .index_in_transaction = 1 },
+                .{ .index_in_transaction = 2 },
+                .{ .index_in_transaction = 3 },
+                .{ .index_in_transaction = 0 }, // unused account
+                .{ .index_in_transaction = 4, .is_signer = true }, // stake auth
             },
-            .compute_meter = 10_000 - COMPUTE_UNITS,
-            .sysvar_cache = expected_sysvar_cache,
-        },
-        .{},
-    );
+            .{
+                .accounts = &.{
+                    .{
+                        .pubkey = stake_account,
+                        .owner = ID,
+                        .data = &buf,
+                        .lamports = stake_lamports,
+                    },
+                    .{
+                        .pubkey = vote_account,
+                        .owner = sig.runtime.program.vote.ID,
+                        .data = &vote_buf,
+                        .lamports = 1_000_000_000,
+                    },
+                    .{ .pubkey = sysvar.Clock.ID },
+                    .{ .pubkey = sysvar.StakeHistory.ID },
+                    .{ .pubkey = staker_auth },
+                    .{ .pubkey = ID, .owner = runtime.ids.NATIVE_LOADER_ID },
+                },
+                .compute_meter = 10_000,
+                .sysvar_cache = sysvar_cache,
+            },
+            .{
+                .accounts = &.{
+                    .{
+                        .pubkey = stake_account,
+                        .owner = ID,
+                        .data = &buf_after,
+                        .lamports = stake_lamports,
+                    },
+                    .{
+                        .pubkey = vote_account,
+                        .owner = sig.runtime.program.vote.ID,
+                        .data = &vote_buf,
+                        .lamports = 1_000_000_000,
+                    },
+                    .{ .pubkey = sysvar.Clock.ID },
+                    .{ .pubkey = sysvar.StakeHistory.ID },
+                    .{ .pubkey = staker_auth },
+                    .{ .pubkey = ID, .owner = runtime.ids.NATIVE_LOADER_ID },
+                },
+                .compute_meter = 10_000 - COMPUTE_UNITS,
+                .sysvar_cache = expected_sysvar_cache,
+            },
+            .{},
+        );
+    }
 }
 
 test "stake.split" {
