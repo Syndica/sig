@@ -282,8 +282,9 @@ fn numRequesterThreads(num_requests: usize) usize {
 /// Sets the maximum number of repair threads to either 16 or half the cpu
 /// count, whatever is less.
 fn maxRequesterThreads() u32 {
-    const cpu_count = std.Thread.getCpuCount() catch 1;
-    return @min(16, cpu_count / 2);
+    return 4;
+    // const cpu_count = std.Thread.getCpuCount() catch 1;
+    // return @min(16, cpu_count / 2);
 }
 
 /// Sleeps an appropriate duration after sending some repair requests.
