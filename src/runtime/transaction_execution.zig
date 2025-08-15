@@ -16,6 +16,7 @@ const Pubkey = sig.core.Pubkey;
 const RentCollector = sig.core.rent_collector.RentCollector;
 const StatusCache = sig.core.StatusCache;
 const Slot = sig.core.Slot;
+const RentState = sig.core.RentCollector.RentState;
 
 const AccountSharedData = sig.runtime.AccountSharedData;
 const BatchAccountCache = sig.runtime.account_loader.BatchAccountCache;
@@ -514,7 +515,15 @@ pub fn executeTransaction(
         .instruction_datas = instruction_datas,
     };
 
-    const maybe_instruction_error: ?TransactionError =
+    const pre_account_rent_states = try transactionAccountsRentState(
+        allocator,
+        &tc,
+        transaction,
+        environment.rent_collector,
+    );
+    defer allocator.free(pre_account_rent_states);
+
+    var maybe_instruction_error: ?TransactionError =
         for (transaction.instructions, 0..) |instruction_info, index| {
             executor.executeInstruction(
                 allocator,
@@ -537,6 +546,22 @@ pub fn executeTransaction(
             };
         } else null;
 
+    if (maybe_instruction_error == null) {
+        const post_account_rent_states = try transactionAccountsRentState(
+            allocator,
+            &tc,
+            transaction,
+            environment.rent_collector,
+        );
+        defer allocator.free(post_account_rent_states);
+
+        maybe_instruction_error = verifyAccountRentStateChanges(
+            &tc,
+            pre_account_rent_states,
+            post_account_rent_states,
+        );
+    }
+
     return .{
         .err = maybe_instruction_error,
         .log_collector = tc.takeLogCollector(),
@@ -546,6 +571,60 @@ pub fn executeTransaction(
         .compute_meter = tc.compute_meter,
         .accounts_data_len_delta = tc.accounts_resize_delta,
     };
+}
+
+fn verifyAccountRentStateChanges(
+    tc: *TransactionContext,
+    pre_account_rent_states: []const ?RentState,
+    post_account_rent_states: []const ?RentState,
+) ?TransactionError {
+    for (pre_account_rent_states, post_account_rent_states, 0..) |pre, post, i| {
+        if (pre != null and post != null) {
+            const account = tc.getAccountAtIndex(@intCast(i)) orelse
+                @panic("account must exist in transaction context");
+
+            if (RentCollector.checkRentStateWithAccount(
+                pre.?,
+                post.?,
+                &account.pubkey,
+                @intCast(i),
+            )) |err| return err;
+        }
+    }
+    return null;
+}
+
+fn transactionAccountsRentState(
+    allocator: std.mem.Allocator,
+    tc: *TransactionContext,
+    txn: *const RuntimeTransaction,
+    rent_collector: *const RentCollector,
+) ![]const ?RentState {
+    const rent_states = try allocator.alloc(?RentState, txn.accounts.len);
+    for (0..txn.accounts.len) |i| {
+        const rent_state = if (txn.accounts.items(.is_writable)[i]) blk: {
+            const account = tc.borrowAccountAtIndex(@intCast(i), .{
+                .program_id = Pubkey.ZEROES,
+                .remove_accounts_executable_flag_checks = false,
+            }) catch @panic("Account must exist in transaction context");
+            defer account.release();
+
+            if (sig.runtime.ids.NATIVE_LOADER_ID.equals(&account.account.owner)) {
+                // TODO: Native programs should not be writable. Returning null here is correct
+                // with respect to this function. However, we need to fix the is writable bug
+                // and reenable this panic.
+                // @panic("Native programs should not be writable");
+                break :blk null;
+            } else {
+                break :blk rent_collector.getAccountRentState(
+                    account.account.lamports,
+                    account.account.data.len,
+                );
+            }
+        } else null;
+        rent_states[i] = rent_state;
+    }
+    return rent_states;
 }
 
 // TODO: RuntimeTransaction already contains this information which we should use in the future
@@ -807,7 +886,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
     const transfer_instruction_data = try sig.bincode.writeAlloc(
         allocator,
         sig.runtime.program.system.Instruction{
-            .transfer = .{ .lamports = 50_000 },
+            .transfer = .{ .lamports = 5_000_000 },
         },
         .{},
     );
@@ -870,7 +949,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
         allocator,
         sender_key,
         .{
-            .lamports = 100_000,
+            .lamports = 10_000_000,
             .data = &.{},
             .owner = sig.runtime.program.system.ID,
             .executable = false,
@@ -881,7 +960,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
         allocator,
         receiver_key,
         .{
-            .lamports = 100_000,
+            .lamports = 10_000_000,
             .data = &.{},
             .owner = sig.runtime.program.system.ID,
             .executable = false,
@@ -972,8 +1051,8 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
         try std.testing.expectEqual(5_000, transaction_fee);
         try std.testing.expectEqual(0, prioritization_fee);
         try std.testing.expectEqual(0, rent_collected);
-        try std.testing.expectEqual(45_000, sender_account.lamports);
-        try std.testing.expectEqual(150_000, receiver_account.lamports);
+        try std.testing.expectEqual(4_995_000, sender_account.lamports);
+        try std.testing.expectEqual(15_000_000, receiver_account.lamports);
         try std.testing.expectEqual(null, executed_transaction.err);
         try std.testing.expectEqual(null, executed_transaction.log_collector);
         try std.testing.expectEqual(1, executed_transaction.instruction_trace.?.len);
@@ -1007,8 +1086,8 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
         try std.testing.expectEqual(5_000, transaction_fee);
         try std.testing.expectEqual(0, prioritization_fee);
         try std.testing.expectEqual(0, rent_collected);
-        try std.testing.expectEqual(40_000, sender_account.lamports);
-        try std.testing.expectEqual(150_000, receiver_account.lamports);
+        try std.testing.expectEqual(4_990_000, sender_account.lamports);
+        try std.testing.expectEqual(15_000_000, receiver_account.lamports);
         try std.testing.expectEqual(0, executed_transaction.err.?.InstructionError[0]);
         try std.testing.expectEqual(
             InstructionErrorEnum{ .Custom = 1 },
