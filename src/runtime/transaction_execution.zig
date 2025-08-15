@@ -314,7 +314,7 @@ pub fn loadAndExecuteTransaction(
     batch_account_cache: *BatchAccountCache,
     environment: *const TransactionExecutionEnvironment,
     config: *const TransactionExecutionConfig,
-    program_map: *const ProgramMap,
+    program_map: *ProgramMap,
 ) error{OutOfMemory}!TransactionResult(ProcessedTransaction) {
     if (hasDuplicates(transaction.accounts.items(.pubkey))) {
         return .{ .err = .AccountLoadedTwice };
@@ -458,7 +458,7 @@ pub fn executeTransaction(
     compute_budget_limits: *const ComputeBudgetLimits,
     environment: *const TransactionExecutionEnvironment,
     config: *const TransactionExecutionConfig,
-    program_map: *const ProgramMap,
+    program_map: *ProgramMap,
 ) error{OutOfMemory}!ExecutedTransaction {
     const compute_budget = compute_budget_limits.intoComputeBudget();
 
@@ -948,13 +948,15 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
     };
 
     { // Okay
+        var program_map = ProgramMap{};
+        defer program_map.deinit(allocator);
         const result = try loadAndExecuteTransaction(
             allocator,
             &transaction,
             &account_cache,
             &environment,
             &config,
-            &ProgramMap{},
+            &program_map,
         );
 
         var processed_transaction = result.ok;
@@ -983,13 +985,15 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
     }
 
     { // Insufficient funds
+        var program_map = ProgramMap{};
+        defer program_map.deinit(allocator);
         const result = try loadAndExecuteTransaction(
             allocator,
             &transaction,
             &account_cache,
             &environment,
             &config,
-            &ProgramMap{},
+            &program_map,
         );
 
         var processed_transaction = result.ok;
