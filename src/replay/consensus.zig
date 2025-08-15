@@ -68,7 +68,7 @@ pub fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
         epoch_stakes_map.putAssumeCapacity(key, constants.stakes);
     }
 
-    const newly_computed_slot_stats = try computeBankStats(
+    _ = try computeBankStats(
         deps.allocator,
         deps.vote_account,
         deps.ancestors,
@@ -79,7 +79,7 @@ pub fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
         deps.fork_choice,
         deps.latest_validator_votes_for_frozen_banks,
     );
-    _ = newly_computed_slot_stats;
+
     // TODO: for each newly_computed_slot_stats:
     //           tower_duplicate_confirmed_forks
     //           mark_slots_duplicate_confirmed
