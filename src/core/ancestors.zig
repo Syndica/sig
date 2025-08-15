@@ -29,8 +29,8 @@ pub const Ancestors = struct {
         return self.ancestors.contains(slot);
     }
 
-    fn voidDeserialize(alloc: std.mem.Allocator, reader: anytype, params: bincode.Params) !void {
-        _ = try bincode.read(alloc, usize, reader, params);
+    fn voidDeserialize(l: *bincode.LimitAllocator, reader: anytype, params: bincode.Params) !void {
+        _ = try bincode.readWithLimit(l, usize, reader, params);
     }
 
     fn voidSerialize(writer: anytype, data: anytype, params: bincode.Params) !void {

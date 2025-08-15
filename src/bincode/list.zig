@@ -1,4 +1,3 @@
-const std = @import("std");
 const sig = @import("../sig.zig");
 const bincode = sig.bincode;
 
@@ -9,7 +8,7 @@ pub fn valueEncodedAsSlice(
 ) bincode.FieldConfig(T) {
     const S = struct {
         fn deserializeImpl(
-            allocator: std.mem.Allocator,
+            limit_allocator: *bincode.LimitAllocator,
             reader: anytype,
             params: bincode.Params,
         ) anyerror!T {
@@ -17,9 +16,9 @@ pub fn valueEncodedAsSlice(
                 return Error.SingleElementSliceInvalidLength;
             if (len != 1) return Error.SingleElementSliceInvalidLength;
             if (config.deserializer) |deserialize| {
-                return try deserialize(allocator, reader, params);
+                return try deserialize(limit_allocator, reader, params);
             }
-            return try bincode.read(allocator, T, reader, params);
+            return try bincode.readWithLimit(limit_allocator, T, reader, params);
         }
 
         fn serializeImpl(

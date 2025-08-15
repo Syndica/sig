@@ -12,7 +12,7 @@ pub fn standardConfig(comptime List: type) bincode.FieldConfig(List) {
         }
 
         fn deserialize(
-            allocator: std.mem.Allocator,
+            limit_allocator: *bincode.LimitAllocator,
             reader: anytype,
             params: bincode.Params,
         ) !List {
@@ -29,10 +29,11 @@ pub fn standardConfig(comptime List: type) bincode.FieldConfig(List) {
                 return data;
             } else {
                 var data: List = .{};
-                errdefer for (data.constSlice()) |elem| bincode.free(allocator, elem);
+                errdefer for (data.constSlice()) |e| bincode.free(limit_allocator.allocator(), e);
 
                 for (0..len) |_| {
-                    const elem = try bincode.read(allocator, list_info.Elem, reader, params);
+                    const elem =
+                        try bincode.readWithLimit(limit_allocator, list_info.Elem, reader, params);
                     data.appendAssumeCapacity(elem);
                 }
 

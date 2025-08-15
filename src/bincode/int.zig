@@ -5,7 +5,7 @@ const bincode = sig.bincode;
 pub fn defaultOnEof(comptime T: type, comptime eof_value: T) bincode.FieldConfig(T) {
     const S = struct {
         fn deserializer(
-            _: std.mem.Allocator,
+            _: *bincode.LimitAllocator,
             reader: anytype,
             params: bincode.Params,
         ) anyerror!T {
@@ -37,9 +37,14 @@ pub fn U8SliceConfig() bincode.FieldConfig([]u8) {
             try writer.writeAll(data);
         }
 
-        pub fn deserialize(allocator: std.mem.Allocator, reader: anytype, _: bincode.Params) ![]u8 {
-            const len = try bincode.read(allocator, u64, reader, .{});
+        pub fn deserialize(
+            limit_allocator: *bincode.LimitAllocator,
+            reader: anytype,
+            _: bincode.Params,
+        ) ![]u8 {
+            const len = try bincode.readWithLimit(limit_allocator, u64, reader, .{});
 
+            const allocator = limit_allocator.allocator();
             const data = try allocator.alloc(u8, len);
             errdefer allocator.free(data);
 
@@ -66,7 +71,7 @@ pub fn U8Config() bincode.FieldConfig(u8) {
             try writer.writeByte(data);
         }
 
-        pub fn deserialize(_: std.mem.Allocator, reader: anytype, _: bincode.Params) !u8 {
+        pub fn deserialize(_: *bincode.LimitAllocator, reader: anytype, _: bincode.Params) !u8 {
             return try reader.readByte();
         }
 
@@ -83,11 +88,11 @@ pub fn U8Config() bincode.FieldConfig(u8) {
 pub fn U8ConstSliceConfig() bincode.FieldConfig([]const u8) {
     const S = struct {
         pub fn deserialize(
-            allocator: std.mem.Allocator,
+            limit_allocator: *bincode.LimitAllocator,
             reader: anytype,
             params: bincode.Params,
         ) ![]const u8 {
-            return U8SliceConfig().deserializer.?(allocator, reader, params);
+            return U8SliceConfig().deserializer.?(limit_allocator, reader, params);
         }
     };
 
@@ -108,9 +113,9 @@ pub fn U8ArrayConfig(comptime size: u64) bincode.FieldConfig([size]u8) {
             try writer.writeAll(&data);
         }
 
-        pub fn deserialize(allocator: std.mem.Allocator, reader: anytype, params: bincode.Params) ![size]u8 {
+        pub fn deserialize(limit_allocator: *bincode.LimitAllocator, reader: anytype, params: bincode.Params) ![size]u8 {
             if (params.include_fixed_array_length) {
-                _ = try bincode.read(allocator, u64, reader, .{});
+                _ = try bincode.readWithLimit(limit_allocator, u64, reader, .{});
             }
             const data = try reader.readBytesNoEof(size);
             return data;
@@ -131,9 +136,9 @@ pub fn U8ArrayConfig(comptime size: u64) bincode.FieldConfig([size]u8) {
 
 pub fn U8ArraySentinelConfig(comptime size: u64) bincode.FieldConfig([size:0]u8) {
     const S = struct {
-        pub fn deserialize(allocator: std.mem.Allocator, reader: anytype, params: bincode.Params) ![size:0]u8 {
+        pub fn deserialize(limit_allocator: *bincode.LimitAllocator, reader: anytype, params: bincode.Params) ![size:0]u8 {
             if (params.include_fixed_array_length) {
-                _ = try bincode.read(allocator, u64, reader, .{});
+                _ = try bincode.readWithLimit(limit_allocator, u64, reader, .{});
             }
             var buf: [size:0]u8 = undefined;
             @memcpy(&buf, &try reader.readBytesNoEof(size));

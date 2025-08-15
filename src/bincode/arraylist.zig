@@ -19,16 +19,27 @@ pub fn standardConfig(comptime List: type) bincode.FieldConfig(List) {
         }
 
         fn deserialize(
-            allocator: std.mem.Allocator,
+            limit_allocator: *bincode.LimitAllocator,
             reader: anytype,
             params: Params,
         ) anyerror!List {
             const len = (try readIntAsLength(usize, reader, params)) orelse return error.ArrayListTooBig;
 
+            const allocator = limit_allocator.allocator(); // List allocation is limit checked.
             var data: List = try List.initCapacity(allocator, len);
             errdefer free(allocator, data);
 
-            for (0..len) |_| data.appendAssumeCapacity(try bincode.read(allocator, list_info.Elem, reader, params));
+            for (0..len) |_| {
+                const elem =
+                    try bincode.readWithLimit(limit_allocator, list_info.Elem, reader, params);
+                data.appendAssumeCapacity(elem);
+            }
+
+            // Before returning List, the persistent allocator.
+            if (list_info.management == .managed) {
+                data.allocator = limit_allocator.backing_allocator;
+            }
+
             return data;
         }
 
@@ -53,23 +64,24 @@ pub fn standardConfig(comptime List: type) bincode.FieldConfig(List) {
 pub fn defaultOnEofConfig(comptime List: type) bincode.FieldConfig(List) {
     const al_info = arrayListInfo(List) orelse @compileError("Expected std.ArrayList[Unmanaged]Aligned(T), got " ++ @typeName(List));
     const S = struct {
-        fn deserialize(allocator: std.mem.Allocator, reader: anytype, params: bincode.Params) anyerror!List {
+        fn deserialize(limit_allocator: *bincode.LimitAllocator, reader: anytype, params: bincode.Params) anyerror!List {
             const len = if (bincode.readIntAsLength(usize, reader, params)) |maybe_len|
                 (maybe_len orelse return error.ArrayListTooBig)
             else |err| switch (err) {
                 error.EndOfStream,
                 => return switch (al_info.management) {
-                    .managed => List.init(allocator),
+                    .managed => List.init(limit_allocator.backing_allocator),
                     .unmanaged => .{},
                 },
                 else => |e| return e,
             };
 
+            const allocator = limit_allocator.allocator(); // make sure allocs are limit tested.
             const slice = try allocator.alignedAlloc(al_info.Elem, al_info.alignment, len);
             errdefer allocator.free(slice);
 
             return switch (al_info.management) {
-                .managed => List.fromOwnedSlice(allocator, slice),
+                .managed => List.fromOwnedSlice(limit_allocator.backing_allocator, slice),
                 .unmanaged => List.fromOwnedSlice(slice),
             };
         }
