@@ -296,11 +296,12 @@ fn validateFeePayer(
         payer.account.data.len,
     );
 
-    sig.core.rent_collector.RentCollector.checkRentStateWithAccount(
+    if (RentCollector.checkRentStateWithAccount(
         pre_rent_state,
         post_rent_state,
         &payer.pubkey,
-    ) catch return .{ .InsufficientFundsForRent = .{ .account_index = 0 } };
+        0, // Fee payer is always at index 0
+    )) |err| return err;
 
     return null;
 }
