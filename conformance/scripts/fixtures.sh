@@ -51,8 +51,8 @@ PASSING_DIRS=(
     "instr/fixtures/bpf-loader-v3-programs"
     "instr/fixtures/bpf-loader-upgradeable-v1-programs"
 
-    # Passed: 0, Failed: 6934, Skipped: 0 (unimplemented)
-    # "instr/fixtures/stake"
+    # Passed: 6934, Failed: 0, Skipped: 0
+    "instr/fixtures/stake"
 
     "instr/fixtures/vote"
     "instr/fixtures/system"
@@ -87,7 +87,7 @@ cd solana-conformance
 source test_suite_env/bin/activate
 
 export LD_PRELOAD=/lib/x86_64-linux-gnu/libasan.so.8
-export ASAN_OPTIONS=detect_leaks=0
+export ASAN_OPTIONS=detect_leaks=0 allocator_may_return_null=1
 
 echo "Generating fixtures"
 solana-test-suite create-fixtures \
