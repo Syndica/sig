@@ -131,8 +131,7 @@ test "hello_world" {
     defer {
         allocator.free(program_account.data);
         environment.deinit(allocator);
-        for (program_map.values()) |*v| v.deinit(allocator);
-        program_map.deinit(allocator);
+        // program map is deinitialize by expectProgramExecuteResult
     }
 
     try expectProgramExecuteResult(
@@ -194,8 +193,6 @@ test "print_account" {
     defer {
         allocator.free(program_account.data);
         environment.deinit(allocator);
-        for (program_map.values()) |*v| v.deinit(allocator);
-        program_map.deinit(allocator);
     }
 
     const accounts: []const AccountParams = &.{
@@ -261,8 +258,6 @@ test "fast_copy" {
     defer {
         allocator.free(program_account.data);
         environment.deinit(allocator);
-        for (program_map.values()) |*v| v.deinit(allocator);
-        program_map.deinit(allocator);
     }
 
     const program_id = program_account.pubkey.?;
@@ -349,8 +344,6 @@ test "set_return_data" {
     defer {
         allocator.free(program_account.data);
         environment.deinit(allocator);
-        for (program_map.values()) |*v| v.deinit(allocator);
-        program_map.deinit(allocator);
     }
 
     try expectProgramExecuteResult(
@@ -485,8 +478,6 @@ test "program_init_vm_not_enough_compute" {
     defer {
         allocator.free(program_account.data);
         environment.deinit(allocator);
-        for (program_map.values()) |*v| v.deinit(allocator);
-        program_map.deinit(allocator);
     }
 
     var compute_budget = sig.runtime.ComputeBudget.default(1_400_000);
@@ -538,8 +529,6 @@ test "basic direct mapping" {
     defer {
         allocator.free(program_account.data);
         environment.deinit(allocator);
-        for (program_map.values()) |*v| v.deinit(allocator);
-        program_map.deinit(allocator);
     }
 
     const program_id = program_account.pubkey.?;

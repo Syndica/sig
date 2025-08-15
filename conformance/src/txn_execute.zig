@@ -4,7 +4,7 @@ const std = @import("std");
 const utils = @import("utils.zig");
 const protobuf = @import("protobuf");
 
-const EMIT_LOGS = false;
+const EMIT_LOGS = true;
 const TOGGLE_DIRECT_MAPPING = false;
 const STACK_SIZE = 32 * 1024 * 1024;
 

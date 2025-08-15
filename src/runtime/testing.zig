@@ -32,7 +32,7 @@ pub const ExecuteContextsParams = struct {
     epoch_stakes: []const EpochStakeParam = &.{},
 
     // Programs to be inserted into the program map.
-    program_map: *const ProgramMap = &.{},
+    program_map: ?*ProgramMap = null,
 
     // Environment used to load and verify programs.
     vm_environment: *const vm.Environment = &.{},
@@ -107,6 +107,13 @@ pub fn createTransactionContext(
         try allocator.create(FeatureSet);
     feature_set.* = try createFeatureSet(params.feature_set);
 
+    // Create ProgramMap
+    const program_map = if (params.program_map) |ptr|
+        ptr
+    else
+        try allocator.create(ProgramMap);
+    program_map.* = ProgramMap{};
+
     // Create EpochStakes
     const epoch_stakes = try allocator.create(EpochStakes);
     epoch_stakes.* = try createEpochStakes(allocator, params.epoch_stakes);
@@ -168,7 +175,7 @@ pub fn createTransactionContext(
         .epoch_stakes = epoch_stakes,
         .vm_environment = params.vm_environment,
         .next_vm_environment = params.next_vm_environment,
-        .program_map = params.program_map,
+        .program_map = program_map,
         .accounts = try accounts.toOwnedSlice(allocator),
         .serialized_accounts = .{},
         .instruction_stack = .{},
@@ -197,6 +204,10 @@ pub fn deinitTransactionContext(
         @compileError("deinitTransactionContext should only be called in test mode");
 
     allocator.destroy(tc.feature_set);
+
+    for (tc.program_map.values()) |*v| v.deinit(allocator);
+    tc.program_map.deinit(allocator);
+    allocator.destroy(tc.program_map);
 
     tc.sysvar_cache.deinit(allocator);
     allocator.destroy(tc.sysvar_cache);
