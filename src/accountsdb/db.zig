@@ -178,8 +178,8 @@ pub const AccountsDB = struct {
         gossip_view: ?GossipView,
         index_allocation: Index,
         number_of_index_shards: usize,
-        /// Amount of BufferPool frames, used for cached reads. Default = 1GiB.
-        buffer_pool_frames: u32 = 2 * 1024 * 1024,
+        /// Amount of BufferPool frames, used for cached reads. Default = 1GiB (testing = 32MiB).
+        buffer_pool_frames: u32 = if (builtin.is_test) 64 * 1024 else 2 * 1024 * 1024,
     };
 
     pub fn init(params: InitParams) !AccountsDB {
