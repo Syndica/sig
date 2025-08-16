@@ -40,12 +40,16 @@ const ComputedBankState = struct {
 
 pub const ThresholdDecision = union(enum) {
     passed_threshold,
-    failed_threshold: struct {
-        // vote depth
-        u64,
-        // Observed stake
-        u64,
-    },
+    failed_threshold: FailedThreshold,
+
+    pub const FailedThreshold = struct {
+        vote_depth: u64,
+        observed_stake: u64,
+    };
+
+    pub fn eql(self: ThresholdDecision, other: ThresholdDecision) bool {
+        return std.meta.eql(self, other);
+    }
 };
 
 pub const TowerError = error{

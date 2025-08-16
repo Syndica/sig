@@ -183,7 +183,7 @@ pub const AccountsDB = struct {
     };
 
     pub fn init(params: InitParams) !AccountsDB {
-        const zone = tracy.initZone(@src(), .{ .name = "accountsdb init" });
+        const zone = tracy.Zone.init(@src(), .{ .name = "accountsdb init" });
         defer zone.deinit();
 
         // init index
@@ -269,7 +269,7 @@ pub const AccountsDB = struct {
     }
 
     pub fn deinit(self: *AccountsDB) void {
-        const zone = tracy.initZone(@src(), .{ .name = "accountsdb deinit" });
+        const zone = tracy.Zone.init(@src(), .{ .name = "accountsdb deinit" });
         defer zone.deinit();
 
         self.account_index.deinit();
@@ -352,7 +352,7 @@ pub const AccountsDB = struct {
         should_fastload: bool,
         save_index: bool,
     ) !SnapshotManifest {
-        const zone = tracy.initZone(@src(), .{ .name = "accountsdb loadWithDefaults" });
+        const zone = tracy.Zone.init(@src(), .{ .name = "accountsdb loadWithDefaults" });
         defer zone.deinit();
 
         const collapsed_manifest = try full_inc_manifest.collapse(self.allocator);
@@ -472,7 +472,7 @@ pub const AccountsDB = struct {
     pub fn saveStateForFastload(
         self: *AccountsDB,
     ) !void {
-        const zone = tracy.initZone(@src(), .{ .name = "accountsdb fastsaveStateForFastloadload" });
+        const zone = tracy.Zone.init(@src(), .{ .name = "accountsdb fastsaveStateForFastloadload" });
         defer zone.deinit();
 
         self.logger.info().log("running saveStateForFastload...");
@@ -486,7 +486,7 @@ pub const AccountsDB = struct {
         dir: std.fs.Dir,
         snapshot_manifest: AccountsDbFields,
     ) !void {
-        const zone = tracy.initZone(@src(), .{ .name = "accountsdb fastload" });
+        const zone = tracy.Zone.init(@src(), .{ .name = "accountsdb fastload" });
         defer zone.deinit();
 
         self.logger.info().log("running fastload...");
@@ -557,7 +557,7 @@ pub const AccountsDB = struct {
         per_thread_allocator: std.mem.Allocator,
         accounts_per_file_estimate: u64,
     ) !void {
-        const zone = tracy.initZone(@src(), .{ .name = "accountsdb loadFromSnapshot" });
+        const zone = tracy.Zone.init(@src(), .{ .name = "accountsdb loadFromSnapshot" });
         defer zone.deinit();
 
         self.logger.info().log("running loadFromSnapshot...");
@@ -633,7 +633,7 @@ pub const AccountsDB = struct {
         loading_threads: []AccountsDB,
         parent: *AccountsDB,
     ) !void {
-        const zone = tracy.initZone(@src(), .{ .name = "accountsdb initLoadingThreads" });
+        const zone = tracy.Zone.init(@src(), .{ .name = "accountsdb initLoadingThreads" });
         defer zone.deinit();
 
         @memset(loading_threads, undefined);
@@ -674,7 +674,7 @@ pub const AccountsDB = struct {
         per_thread_allocator: std.mem.Allocator,
         loading_threads: []AccountsDB,
     ) void {
-        const zone = tracy.initZone(@src(), .{ .name = "accountsdb deinitLoadingThreads" });
+        const zone = tracy.Zone.init(@src(), .{ .name = "accountsdb deinitLoadingThreads" });
         defer zone.deinit();
 
         for (loading_threads) |*loading_thread| {
@@ -696,7 +696,7 @@ pub const AccountsDB = struct {
         accounts_per_file_estimate: u64,
         task: sig.utils.thread.TaskParams,
     ) !void {
-        const zone = tracy.initZone(@src(), .{
+        const zone = tracy.Zone.init(@src(), .{
             .name = "accountsdb loadAndVerifyAccountsFilesMultiThread",
         });
         defer zone.deinit();
@@ -724,7 +724,7 @@ pub const AccountsDB = struct {
         // when we multithread this function we only want to print on the first thread
         print_progress: bool,
     ) !void {
-        const zone = tracy.initZone(@src(), .{ .name = "accountsdb loadAndVerifyAccountsFiles" });
+        const zone = tracy.Zone.init(@src(), .{ .name = "accountsdb loadAndVerifyAccountsFiles" });
         defer zone.deinit();
 
         // NOTE: we can hold this lock for the entire function
@@ -938,7 +938,7 @@ pub const AccountsDB = struct {
         }
 
         {
-            const pubkey_ref_map_zone = tracy.initZone(@src(), .{
+            const pubkey_ref_map_zone = tracy.Zone.init(@src(), .{
                 .name = "accountsdb loadAndVerifyAccountsFiles pubkey_ref_map.ensureTotalCapacity",
             });
             defer pubkey_ref_map_zone.deinit();
@@ -951,7 +951,7 @@ pub const AccountsDB = struct {
         // it will always be a search for a free spot, and not search for a match
 
         {
-            const index_build_zone = tracy.initZone(@src(), .{
+            const index_build_zone = tracy.Zone.init(@src(), .{
                 .name = "accountsdb loadAndVerifyAccountsFiles building index",
             });
             defer index_build_zone.deinit();
@@ -994,7 +994,7 @@ pub const AccountsDB = struct {
         thread_dbs: []AccountsDB,
         n_threads: usize,
     ) !void {
-        const zone = tracy.initZone(@src(), .{ .name = "accountsdb mergeMultipleDBs" });
+        const zone = tracy.Zone.init(@src(), .{ .name = "accountsdb mergeMultipleDBs" });
         defer zone.deinit();
 
         self.logger.info().logf("[{d} threads]: running mergeMultipleDBs...", .{n_threads});
@@ -1077,7 +1077,7 @@ pub const AccountsDB = struct {
         thread_dbs: []const AccountsDB,
         task: sig.utils.thread.TaskParams,
     ) !void {
-        const zone = tracy.initZone(@src(), .{
+        const zone = tracy.Zone.init(@src(), .{
             .name = "accountsdb mergeThreadIndexesMultiThread",
         });
         defer zone.deinit();
@@ -1173,7 +1173,7 @@ pub const AccountsDB = struct {
         self: *AccountsDB,
         config: AccountHashesConfig,
     ) !struct { Hash, u64 } {
-        const zone = tracy.initZone(@src(), .{
+        const zone = tracy.Zone.init(@src(), .{
             .name = "accountsdb computeAccountHashesAndLamports",
         });
         defer zone.deinit();
@@ -1314,7 +1314,7 @@ pub const AccountsDB = struct {
         self: *AccountsDB,
         params: ValidateLoadFromSnapshotParams,
     ) !void {
-        const zone = tracy.initZone(@src(), .{ .name = "accountsdb validateLoadFromSnapshot" });
+        const zone = tracy.Zone.init(@src(), .{ .name = "accountsdb validateLoadFromSnapshot" });
         defer zone.deinit();
 
         const maybe_latest_snapshot_info: *?SnapshotGenerationInfo, //
@@ -1434,7 +1434,7 @@ pub const AccountsDB = struct {
         total_lamports: []u64,
         task: sig.utils.thread.TaskParams,
     ) !void {
-        const zone = tracy.initZone(@src(), .{
+        const zone = tracy.Zone.init(@src(), .{
             .name = "accountsdb getHashesFromIndexMultiThread",
         });
         defer zone.deinit();
@@ -1461,7 +1461,7 @@ pub const AccountsDB = struct {
         // when we multithread this function we only want to print on the first thread
         print_progress: bool,
     ) !void {
-        const zone = tracy.initZone(@src(), .{ .name = "accountsdb getHashesFromIndex" });
+        const zone = tracy.Zone.init(@src(), .{ .name = "accountsdb getHashesFromIndex" });
         defer zone.deinit();
 
         var total_n_pubkeys: usize = 0;
@@ -2147,17 +2147,27 @@ pub const AccountsDB = struct {
 
         const slot_entry = try slot_ref_map.getOrPut(slot);
 
-        if (!slot_entry.found_existing) {
-            // no entry means realloc always needed, value set in realloc_needed block
-            slot_entry.value_ptr.* = .{
-                .refs = .empty,
-                .global_index = std.math.maxInt(u64), // u64-max == invalid value / replaced soon
-            };
-        }
-        const realloc_needed = slot_entry.value_ptr.refs.unusedCapacitySlice().len < pubkeys.len;
-        if (!slot_entry.found_existing) std.debug.assert(realloc_needed);
+        // default-initializing new entries to reduce risk of undefined reads
+        if (!slot_entry.found_existing) slot_entry.value_ptr.* = .{
+            .global_index = std.math.maxInt(u64),
+            .refs = .empty,
+        };
 
-        const old_refs = slot_entry.value_ptr.refs.items;
+        // if we tried to create a new entry and failed, remove it before unlocking
+        errdefer {
+            if (!slot_entry.found_existing)
+                slot_ref_map.removeByPtr(slot_entry.key_ptr);
+        }
+
+        // no entry => realloc always needed
+        const realloc_needed = !slot_entry.found_existing or
+            slot_entry.value_ptr.refs.unusedCapacitySlice().len < pubkeys.len;
+
+        const old_refs = if (!slot_entry.found_existing)
+            &.{}
+        else
+            slot_entry.value_ptr.refs.items;
+
         const new_len = old_refs.len + pubkeys.len;
 
         if (realloc_needed) {
@@ -2166,24 +2176,22 @@ pub const AccountsDB = struct {
             // round up the size a little, so we don't realloc every time
             const new_capacity = std.math.ceilPowerOfTwo(usize, new_len) catch new_len;
 
-            const reference_buf, const global_ref_index = try self.account_index
+            const new_ref_buf, const global_ref_index = try self.account_index
                 .reference_manager.allocOrExpand(new_capacity);
 
-            slot_entry.value_ptr.global_index = global_ref_index;
-
-            @memset(reference_buf, .DEFAULT);
-            for (0.., reference_buf[0..new_len]) |i, *ref| {
+            @memset(new_ref_buf, .DEFAULT);
+            for (0.., new_ref_buf[0..new_len]) |i, *new_ref| {
                 if (i < old_refs.len) {
-                    ref.* = old_refs[i];
+                    new_ref.* = old_refs[i];
 
                     // go back to prev & rewrite its next to make it valid again (we're moving these accountrefs)
-                    if (ref.prev_ptr) |prev| {
-                        prev.next_ptr = ref;
+                    if (new_ref.prev_ptr) |prev| {
+                        prev.next_ptr = new_ref;
                         prev.next_index = global_ref_index + i;
                     }
                 } else {
                     // new ref
-                    ref.* = AccountRef{
+                    new_ref.* = AccountRef{
                         .pubkey = pubkeys[i - old_refs.len],
                         .slot = slot,
                         .location = .{ .UnrootedMap = .{ .index = i } },
@@ -2193,41 +2201,43 @@ pub const AccountsDB = struct {
 
             // fix up any copied references' heads
             {
-                for (0.., reference_buf[0..old_refs.len]) |i, *ref| {
+                for (0.., new_ref_buf[0..old_refs.len]) |i, *new_ref| {
                     const shard_map: *ShardedPubkeyRefMap.PubkeyRefMap, var shard_map_lg =
-                        self.account_index.pubkey_ref_map.getShard(&ref.pubkey).writeWithLock();
+                        self.account_index.pubkey_ref_map.getShard(&new_ref.pubkey).writeWithLock();
                     defer shard_map_lg.unlock();
 
                     // if we just moved an accountref which is the head, fix up the head
-                    if (shard_map.getPtr(ref.pubkey)) |head| {
-                        if (head.ref_ptr.slot == ref.slot and
-                            head.ref_ptr.pubkey.equals(&ref.pubkey))
+                    if (shard_map.getPtr(new_ref.pubkey)) |head| {
+                        if (head.ref_ptr.slot == new_ref.slot and
+                            head.ref_ptr.pubkey.equals(&new_ref.pubkey))
                         {
                             head.ref_index = global_ref_index + i;
-                            head.ref_ptr = ref;
+                            head.ref_ptr = new_ref;
                         }
                     }
 
-                    const head = shard_map.getPtr(ref.pubkey) orelse continue;
-                    if (head.ref_ptr.slot == ref.slot and head.ref_ptr.pubkey.equals(&ref.pubkey)) {
+                    const head = shard_map.getPtr(new_ref.pubkey) orelse continue;
+                    if (head.ref_ptr.slot == new_ref.slot and
+                        head.ref_ptr.pubkey.equals(&new_ref.pubkey))
+                    {
                         head.ref_index = global_ref_index + i;
-                        head.ref_ptr = ref;
+                        head.ref_ptr = new_ref;
                     }
                 }
             }
 
             // insert + check if inserted
-            for (0.., reference_buf[0..new_len]) |i, *ref| {
+            for (0.., new_ref_buf[0..new_len]) |i, *new_ref| {
                 if (i < old_refs.len) continue;
 
                 const was_inserted = try self.account_index.indexRefIfNotDuplicateSlot(
-                    ref,
+                    new_ref,
                     global_ref_index + i,
                 );
                 if (!was_inserted) {
                     self.logger.warn().logf(
                         "account was not referenced because its slot was a duplicate: {any}",
-                        .{.{ .slot = ref.slot, .pubkey = ref.pubkey }},
+                        .{.{ .slot = new_ref.slot, .pubkey = new_ref.pubkey }},
                     );
                     // TODO: Make this error actually impossible to reach.
                     // Hitting this error means the account was added to
@@ -2245,17 +2255,18 @@ pub const AccountsDB = struct {
                 std.debug.assert(self.account_index.exists(&pubkeys[i - old_refs.len], slot));
             }
 
-            // free old ref
-            if (slot_entry.found_existing) {
-                self.account_index.reference_manager.free(slot_entry.value_ptr.refs.items.ptr);
-            }
+            // replace + free old ref
+            const old_ref_ptr = slot_entry.value_ptr.refs.items.ptr;
             slot_entry.value_ptr.* = .{
                 .global_index = global_ref_index,
                 .refs = .{
                     .capacity = new_capacity,
-                    .items = reference_buf[0..new_len],
+                    .items = new_ref_buf[0..new_len],
                 },
             };
+            if (slot_entry.found_existing) {
+                self.account_index.reference_manager.free(old_ref_ptr);
+            }
         } else {
             // no realloc necessary
 
@@ -2369,7 +2380,7 @@ pub const AccountsDB = struct {
         self: *AccountsDB,
         slot: Slot,
     ) !struct { *BankHashStats, RwMux(BankHashStatsMap).WLockGuard } {
-        const zone = tracy.initZone(@src(), .{ .name = "accountsdb getOrInitBankHashStats" });
+        const zone = tracy.Zone.init(@src(), .{ .name = "accountsdb getOrInitBankHashStats" });
         defer zone.deinit();
 
         const bank_hash_stats, var bank_hash_stats_lg = self.bank_hash_stats.writeWithLock();
@@ -3079,7 +3090,7 @@ pub fn indexAndValidateAccountFile(
     account_refs: *ArrayListUnmanaged(AccountRef),
     geyser_storage: ?*GeyserTmpStorage,
 ) ValidateAccountFileError!void {
-    const zone = tracy.initZone(@src(), .{
+    const zone = tracy.Zone.init(@src(), .{
         .name = "accountsdb AccountIndex.indexAndValidateAccountFile",
     });
     defer zone.deinit();
@@ -4850,4 +4861,35 @@ test "insert many duplicate individual accounts, get latest with ancestors" {
             return error.AccountNotFound;
         }
     }
+}
+
+test "expandSlotRefsAndInsert alloc failure" {
+    const test_fn = struct {
+        fn f(allocator: std.mem.Allocator) !void {
+            var accounts_db, var tmp_dir = try AccountsDB.initForTest(allocator);
+            defer tmp_dir.cleanup();
+            defer accounts_db.deinit();
+
+            try accounts_db.expandSlotRefsAndInsert(1, &.{Pubkey.ZEROES});
+            try accounts_db.expandSlotRefsAndInsert(2, &.{Pubkey.ZEROES});
+        }
+    }.f;
+
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, test_fn, .{});
+}
+
+test "expandSlotRefsAndInsert double insert failure" {
+    const allocator = std.testing.allocator;
+
+    var accounts_db, var tmp_dir = try AccountsDB.initForTest(allocator);
+    defer tmp_dir.cleanup();
+    defer accounts_db.deinit();
+
+    try accounts_db.expandSlotRefsAndInsert(1, &.{Pubkey.ZEROES});
+
+    accounts_db.logger = .{ .noop = {} };
+    try std.testing.expectError(
+        error.InsertIndexFailed,
+        accounts_db.expandSlotRefsAndInsert(1, &.{Pubkey.ZEROES}),
+    );
 }

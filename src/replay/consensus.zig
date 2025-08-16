@@ -32,6 +32,7 @@ const SlotTracker = sig.replay.trackers.SlotTracker;
 const EpochTracker = sig.replay.trackers.EpochTracker;
 
 pub const isSlotDuplicateConfirmed = sig.consensus.tower.isSlotDuplicateConfirmed;
+
 pub const collectVoteLockouts = sig.consensus.replay_tower.collectVoteLockouts;
 
 const MAX_VOTE_REFRESH_INTERVAL_MILLIS: usize = 5000;
@@ -77,6 +78,7 @@ pub fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
         &epoch_stakes_map,
         deps.progress_map,
         deps.fork_choice,
+        deps.replay_tower,
         deps.latest_validator_votes_for_frozen_banks,
     );
 
@@ -477,6 +479,7 @@ fn computeBankStats(
     epoch_stakes_map: *const EpochStakesMap,
     progress: *ProgressMap,
     fork_choice: *ForkChoice,
+    replay_tower: *const ReplayTower,
     latest_validator_votes: *LatestValidatorVotes,
 ) ![]Slot {
     var new_stats = std.ArrayListUnmanaged(Slot).empty;
@@ -522,8 +525,39 @@ fn computeBankStats(
             fork_stats.computed = true;
             try new_stats.append(allocator, slot);
         }
+        try cacheTowerStats(
+            allocator,
+            progress,
+            replay_tower,
+            slot,
+            ancestors,
+        );
     }
     return try new_stats.toOwnedSlice(allocator);
+}
+
+fn cacheTowerStats(
+    allocator: std.mem.Allocator,
+    progress: *ProgressMap,
+    replay_tower: *const ReplayTower,
+    slot: Slot,
+    ancestors: *const std.AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)),
+) !void {
+    const stats = progress.getForkStats(slot) orelse return error.MissingSlot;
+
+    const slice = try replay_tower.checkVoteStakeThresholds(
+        allocator,
+        slot,
+        &stats.voted_stakes,
+        stats.total_stake,
+    );
+    stats.vote_threshold = .fromOwnedSlice(slice);
+
+    const slot_ancestors = ancestors.get(slot) orelse return error.MissingAncestor;
+
+    stats.is_locked_out = try replay_tower.tower.isLockedOut(slot, &slot_ancestors);
+    stats.has_voted = replay_tower.tower.hasVoted(slot);
+    stats.is_recent = replay_tower.tower.isRecent(slot);
 }
 
 const testing = std.testing;
@@ -535,6 +569,143 @@ const MAX_TEST_TREE_LEN = sig.consensus.replay_tower.MAX_TEST_TREE_LEN;
 const Lockout = sig.runtime.program.vote.state.Lockout;
 
 const createTestReplayTower = sig.consensus.replay_tower.createTestReplayTower;
+
+test "cacheTowerStats - missing ancestor" {
+    var prng = std.Random.DefaultPrng.init(91);
+    const random = prng.random();
+
+    const root = SlotAndHash{ .slot = 0, .hash = Hash.initRandom(random) };
+
+    var fixture = try TestFixture.init(testing.allocator, root);
+    defer fixture.deinit(testing.allocator);
+
+    var replay_tower = try createTestReplayTower(1, 0.67);
+    defer replay_tower.deinit(std.testing.allocator);
+
+    // Ensure the slot exists in the progress map so cacheTowerStats
+    // progresses far enough to check ancestors.
+    const trees = try std.BoundedArray(TreeNode, MAX_TEST_TREE_LEN).init(0);
+    try fixture.fillFork(
+        testing.allocator,
+        .{ .root = root, .data = trees },
+        .active,
+    );
+
+    // Provide an empty ancestors map so the slot has no recorded ancestors entry
+    // and cacheTowerStats should return error.MissingAncestor.
+    var empty_ancestors: std.AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)) = .empty;
+
+    const result = cacheTowerStats(
+        testing.allocator,
+        &fixture.progress,
+        &replay_tower,
+        root.slot,
+        &empty_ancestors,
+    );
+
+    try testing.expectError(error.MissingAncestor, result);
+}
+
+test "cacheTowerStats - missing slot" {
+    var prng = std.Random.DefaultPrng.init(92);
+    const random = prng.random();
+
+    const root = SlotAndHash{ .slot = 0, .hash = Hash.initRandom(random) };
+
+    var fixture = try TestFixture.init(testing.allocator, root);
+    defer fixture.deinit(testing.allocator);
+
+    var replay_tower = try createTestReplayTower(1, 0.67);
+    defer replay_tower.deinit(std.testing.allocator);
+
+    // Do not populate progress for root.slot; ensure getForkStats returns null.
+    const empty_ancestors: std.AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)) = .empty;
+
+    const result = cacheTowerStats(
+        testing.allocator,
+        &fixture.progress,
+        &replay_tower,
+        root.slot,
+        &empty_ancestors,
+    );
+
+    try testing.expectError(error.MissingSlot, result);
+}
+
+test "cacheTowerStats - success sets flags and empty thresholds" {
+    var prng = std.Random.DefaultPrng.init(93);
+    const random = prng.random();
+
+    const root = SlotAndHash{ .slot = 0, .hash = Hash.initRandom(random) };
+
+    var fixture = try TestFixture.init(testing.allocator, root);
+    defer fixture.deinit(testing.allocator);
+
+    // Ensure slot exists in progress and ancestors are populated for the root
+    const trees = try std.BoundedArray(TreeNode, MAX_TEST_TREE_LEN).init(0);
+    try fixture.fillFork(
+        testing.allocator,
+        .{ .root = root, .data = trees },
+        .active,
+    );
+
+    var replay_tower = try createTestReplayTower(10, 0.67);
+    defer replay_tower.deinit(std.testing.allocator);
+
+    try cacheTowerStats(
+        testing.allocator,
+        &fixture.progress,
+        &replay_tower,
+        root.slot,
+        &fixture.ancestors,
+    );
+
+    const stats = fixture.progress.getForkStats(root.slot).?;
+    try testing.expectEqual(0, stats.vote_threshold.items.len);
+    try testing.expectEqual(false, stats.is_locked_out);
+    try testing.expectEqual(false, stats.has_voted);
+    try testing.expectEqual(true, stats.is_recent);
+}
+
+test "cacheTowerStats - records failed threshold at depth 0" {
+    var prng = std.Random.DefaultPrng.init(94);
+    const random = prng.random();
+
+    const root = SlotAndHash{ .slot = 0, .hash = Hash.initRandom(random) };
+
+    var fixture = try TestFixture.init(testing.allocator, root);
+    defer fixture.deinit(testing.allocator);
+
+    // Ensure slot exists in progress and ancestors populated
+    const trees = try std.BoundedArray(TreeNode, MAX_TEST_TREE_LEN).init(0);
+    try fixture.fillFork(
+        testing.allocator,
+        .{ .root = root, .data = trees },
+        .active,
+    );
+
+    // Configure threshold_depth = 0 so the new vote is checked at depth 0,
+    // and leave voted_stakes empty so the threshold check fails.
+    var replay_tower = try createTestReplayTower(0, 0.67);
+    defer replay_tower.deinit(std.testing.allocator);
+
+    try cacheTowerStats(
+        testing.allocator,
+        &fixture.progress,
+        &replay_tower,
+        root.slot,
+        &fixture.ancestors,
+    );
+
+    const stats = fixture.progress.getForkStats(root.slot).?;
+    try testing.expectEqual(1, stats.vote_threshold.items.len);
+    const t = stats.vote_threshold.items[0];
+    try testing.expect(t == .failed_threshold);
+    try testing.expectEqual(0, t.failed_threshold.vote_depth);
+    try testing.expectEqual(false, stats.is_locked_out);
+    try testing.expectEqual(false, stats.has_voted);
+    try testing.expectEqual(true, stats.is_recent);
+}
 
 test "maybeRefreshLastVote - no heaviest slot on same fork" {
     var prng = std.Random.DefaultPrng.init(91);
@@ -634,7 +805,7 @@ test "maybeRefreshLastVote - latest landed vote newer than last vote" {
         .{ hash3, hash2 },
     });
 
-    try fixture.fill_fork(
+    try fixture.fillFork(
         testing.allocator,
         .{ .root = root, .data = trees1 },
         .active,
@@ -712,7 +883,7 @@ test "maybeRefreshLastVote - non voting validator" {
         .{ hash3, hash2 },
     });
 
-    try fixture.fill_fork(
+    try fixture.fillFork(
         testing.allocator,
         .{ .root = root, .data = trees1 },
         .active,
@@ -792,7 +963,7 @@ test "maybeRefreshLastVote - hotspare validator" {
         .{ hash3, hash2 },
     });
 
-    try fixture.fill_fork(
+    try fixture.fillFork(
         testing.allocator,
         .{ .root = root, .data = trees1 },
         .active,
@@ -872,7 +1043,7 @@ test "maybeRefreshLastVote - refresh interval not elapsed" {
         .{ hash3, hash2 },
     });
 
-    try fixture.fill_fork(
+    try fixture.fillFork(
         testing.allocator,
         .{ .root = root, .data = trees1 },
         .active,
@@ -955,7 +1126,7 @@ test "maybeRefreshLastVote - successfully refreshed and mark last_vote_tx_blockh
         .{ hash3, hash2 },
     });
 
-    try fixture.fill_fork(
+    try fixture.fillFork(
         testing.allocator,
         .{ .root = root, .data = trees1 },
         .active,
@@ -1229,7 +1400,7 @@ test "checkAndHandleNewRoot - success" {
         .{ hash3, hash2 },
     });
 
-    try fixture.fill_fork(
+    try fixture.fillFork(
         testing.allocator,
         .{ .root = root, .data = trees1 },
         .active,
@@ -1290,7 +1461,7 @@ test "computeBankStats - child bank heavier" {
         .{ hash1, root },
         .{ hash2, hash1 },
     });
-    try fixture.fill_fork(
+    try fixture.fillFork(
         testing.allocator,
         .{ .root = root, .data = trees1 },
         .active,
@@ -1336,6 +1507,10 @@ test "computeBankStats - child bank heavier" {
     defer epoch_stakes.deinit(testing.allocator);
     try epoch_stakes.put(testing.allocator, 0, versioned_stakes);
 
+    var replay_tower = try createTestReplayTower(
+        1,
+        0.67,
+    );
     const epoch_schedule = EpochSchedule.DEFAULT;
     const newly_computed_slot_stats = try computeBankStats(
         testing.allocator,
@@ -1346,6 +1521,7 @@ test "computeBankStats - child bank heavier" {
         &epoch_stakes,
         &fixture.progress,
         &fixture.fork_choice,
+        &replay_tower,
         &fixture.latest_validator_votes_for_frozen_banks,
     );
     defer testing.allocator.free(newly_computed_slot_stats);
@@ -1404,7 +1580,7 @@ test "computeBankStats - same weight selects lower slot" {
         .{ hash1, root },
         .{ hash2, root },
     });
-    try fixture.fill_fork(
+    try fixture.fillFork(
         testing.allocator,
         .{ .root = root, .data = trees1 },
         .active,
@@ -1423,6 +1599,11 @@ test "computeBankStats - same weight selects lower slot" {
     try epoch_stakes.put(testing.allocator, 0, versioned_stakes);
     try epoch_stakes.put(testing.allocator, 1, versioned_stakes);
 
+    var replay_tower = try createTestReplayTower(
+        1,
+        0.67,
+    );
+
     const epoch_schedule = EpochSchedule.DEFAULT;
     const newly_computed_slot_stats = try computeBankStats(
         testing.allocator,
@@ -1433,6 +1614,7 @@ test "computeBankStats - same weight selects lower slot" {
         &epoch_stakes,
         &fixture.progress,
         &fixture.fork_choice,
+        &replay_tower,
         &fixture.latest_validator_votes_for_frozen_banks,
     );
     defer testing.allocator.free(newly_computed_slot_stats);

@@ -843,12 +843,12 @@ pub const ReplayTower = struct {
     /// This is used to experiment with vote lockout behavior and assess whether a vote is
     /// justified based on recent vote history, lockout depth, and voting stake.
     pub fn checkVoteStakeThresholds(
-        self: *ReplayTower,
+        self: *const ReplayTower,
         allocator: std.mem.Allocator,
         slot: Slot,
         voted_stakes: *const VotedStakes,
         total_stake: Stake,
-    ) ![]const ThresholdDecision {
+    ) ![]ThresholdDecision {
         const threshold_size = 3;
         var threshold_decisions: [threshold_size]ThresholdDecision = undefined;
 
@@ -1590,7 +1590,7 @@ fn checkVoteStakeThreshold(
     const fork_stake = voted_stakes.get(threshold_vote.slot) orelse {
         // We haven't seen any votes on this fork yet, so no stake
         return .{
-            .failed_threshold = .{ threshold_depth, 0 },
+            .failed_threshold = .{ .vote_depth = threshold_depth, .observed_stake = 0 },
         };
     };
 
@@ -1616,11 +1616,11 @@ fn checkVoteStakeThreshold(
         tower_before_applying_vote,
         threshold_vote,
     ) or lockout > threshold_size) {
-        return .{ .passed_threshold = {} };
+        return .passed_threshold;
     }
 
     return .{
-        .failed_threshold = .{ threshold_depth, 0 },
+        .failed_threshold = .{ .vote_depth = threshold_depth, .observed_stake = 0 },
     };
 }
 
@@ -3753,7 +3753,7 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
         .{ hash4, hash3 },
     });
 
-    try fixture.fill_fork(allocator, .{ .root = root, .data = trees1 }, .active);
+    try fixture.fillFork(allocator, .{ .root = root, .data = trees1 }, .active);
     try fixture.fill_epoch_stake_random(allocator, random);
 
     var tmp_dir_root = std.testing.tmpDir(.{});
@@ -3924,7 +3924,7 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
         .{ hash10, hash6 },
     });
 
-    try fixture.fill_fork(allocator, .{ .root = hash5, .data = trees }, .active);
+    try fixture.fillFork(allocator, .{ .root = hash5, .data = trees }, .active);
 
     // 4 is still the heaviest slot, but not votable because of lockout.
     // 9 is the deepest slot from our last voted fork (5), so it is what we should
@@ -4253,7 +4253,7 @@ pub const TestFixture = struct {
         }
     }
 
-    pub fn fill_fork(
+    pub fn fillFork(
         self: *TestFixture,
         allocator: std.mem.Allocator,
         input_tree: Tree,

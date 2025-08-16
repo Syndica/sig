@@ -69,7 +69,7 @@ pub fn parallelUntarToFileSystem(
     n_threads: usize,
     n_files_estimate: ?usize,
 ) !void {
-    const zone = tracy.initZone(@src(), .{ .name = "tar parallelUntarToFileSystem" });
+    const zone = tracy.Zone.init(@src(), .{ .name = "tar parallelUntarToFileSystem" });
     defer zone.deinit();
 
     const logger = logger_.withScope(LOG_SCOPE);
@@ -78,8 +78,10 @@ pub fn parallelUntarToFileSystem(
 
     var pool =
         try HomogeneousThreadPool(UnTarTask).init(allocator, @intCast(n_threads), n_threads);
-    defer pool.deinit(allocator);
-
+    defer {
+        if (!pool.joinForDeinit(.fromSecs(1))) logger.warn().log("failed to join for deinit");
+        pool.deinit(allocator);
+    }
     var timer = try sig.time.Timer.start();
     var progress_timer = try sig.time.Timer.start();
     var file_count: usize = 0;

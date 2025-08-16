@@ -7,6 +7,7 @@ const Slot = sig.core.Slot;
 const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 const PubkeyArraySet = std.AutoArrayHashMapUnmanaged(Pubkey, void);
+const ThresholdDecision = sig.consensus.tower.ThresholdDecision;
 
 /// TODO: any uses of these types are to be evaluated in their context, and
 /// the actual required semantics are to be determined later.
@@ -215,6 +216,7 @@ pub const ForkProgress = struct {
     is_dead: bool,
     fork_stats: ForkStats,
     propagated_stats: PropagatedStats,
+    // TODO Remove replay_stats? Does not look like it is used to make any application decision, just logging.
     replay_stats: stubs.Arc(stubs.RwLock(blockstore_processor.ReplaySlotStats)),
     replay_progress: stubs.Arc(stubs.RwLock(blockstore_processor.ConfirmationProgress)),
     retransmit_info: RetransmitInfo,
@@ -475,7 +477,7 @@ pub const ForkStats = struct {
     slot_hash: Hash,
     my_latest_landed_vote: ?Slot,
 
-    pub const VoteThreshold = std.ArrayListUnmanaged(consensus.ThresholdDecision);
+    pub const VoteThreshold = std.ArrayListUnmanaged(ThresholdDecision);
 
     pub const EMPTY_ZEROES: ForkStats = .{
         .fork_stake = 0,
@@ -732,24 +734,6 @@ pub const LockoutIntervals = struct {
 pub const consensus = struct {
     pub const Stake = u64;
     pub const VotedStakes = std.AutoArrayHashMapUnmanaged(Slot, Stake);
-
-    pub const ThresholdDecision = union(enum) {
-        passed_threshold,
-        failed_threshold: FailedThreshold,
-
-        /// NOTE: this is a tuple in the original rust code
-        pub const FailedThreshold = struct {
-            vote_depth: u64,
-            observed_stake: u64,
-        };
-
-        /// #[default]
-        pub const DEFAULT: ThresholdDecision = .passed_threshold;
-
-        pub fn eql(self: ThresholdDecision, other: ThresholdDecision) bool {
-            return std.meta.eql(self, other);
-        }
-    };
 
     pub const VoteStakeTracker = struct {
         voted: PubkeyArraySet,
@@ -1849,8 +1833,6 @@ fn forkStatsInitRandom(
         },
     },
 ) std.mem.Allocator.Error!ForkStats {
-    const ThresholdDecision = consensus.ThresholdDecision;
-
     const vote_threshold = try allocator.alloc(ThresholdDecision, params.vote_threshold_len);
     errdefer allocator.free(vote_threshold);
 

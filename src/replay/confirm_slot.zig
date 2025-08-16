@@ -1,6 +1,7 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 const replay = @import("lib.zig");
+const tracy = @import("tracy");
 
 const core = sig.core;
 
@@ -54,7 +55,13 @@ pub fn confirmSlot(
     ancestors: *const Ancestors,
     reserved_accounts: *const ReservedAccounts,
 ) !*ConfirmSlotFuture {
+    var zone = tracy.Zone.init(@src(), .{ .name = "confirmSlot" });
+    zone.value(svm_params.slot);
+    defer zone.deinit();
+    errdefer zone.color(0xFF0000);
+
     logger.info().log("confirming slot");
+
     const future = fut: {
         errdefer {
             for (entries) |entry| entry.deinit(allocator);
@@ -244,7 +251,7 @@ pub const ConfirmSlotFuture = struct {
     }
 };
 
-const PohTask = struct {
+pub const PohTask = struct {
     allocator: Allocator,
     logger: ScopedLogger,
     initial_hash: Hash,
