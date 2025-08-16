@@ -6,6 +6,7 @@ const Epoch = sig.core.Epoch;
 const Rent = sig.runtime.sysvar.Rent;
 const AccountSharedData = sig.runtime.AccountSharedData;
 const EpochSchedule = sig.core.EpochSchedule;
+const TransactionError = sig.ledger.transaction_status.TransactionError;
 
 pub const RENT_EXEMPT_RENT_EPOCH: Epoch = std.math.maxInt(Epoch);
 
@@ -184,9 +185,11 @@ pub const RentCollector = struct {
         pre: RentState,
         post: RentState,
         address: *const Pubkey,
-    ) error{InsufficientFundsForRent}!void {
-        if (sig.runtime.ids.INCINERATOR.equals(address)) return;
-        if (!transitionAllowed(pre, post)) return error.InsufficientFundsForRent;
+        index: u8,
+    ) ?TransactionError {
+        if (sig.runtime.ids.INCINERATOR.equals(address)) return null;
+        if (transitionAllowed(pre, post)) return null;
+        return .{ .InsufficientFundsForRent = .{ .account_index = index } };
     }
 };
 

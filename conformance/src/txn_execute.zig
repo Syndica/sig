@@ -851,21 +851,28 @@ fn serializeOutput(
     switch (result) {
         .ok => |txn| {
             const is_ok = switch (txn) {
-                .executed => |executed| executed.executed_transaction.instr_err == null,
+                .executed => |executed| executed.executed_transaction.err == null,
                 .fees_only => false,
             };
 
             const errors: utils.ConvertedErrorCodes = switch (txn) {
-                .executed => |executed| if (executed.executed_transaction.instr_err) |instr_err| .{
-                    // hardcode InstructionError, since nothing else could be returned from executeTransaction
-                    .err = 9,
-                    .instruction_error = @intFromEnum(instr_err[1]) + 1,
-                    // TODO: special case for precompile failures
-                    .custom_error = switch (instr_err[1]) {
-                        .Custom => |v| v,
-                        else => 0,
-                    },
-                    .instruction_index = instr_err[0],
+                .executed => |executed| if (executed.executed_transaction.err) |err| blk: {
+                    const txn_err_code = @intFromEnum(err) + 1;
+                    const ixn_err_index, const ixn_err_code, const custom_err_code = switch (err) {
+                        .InstructionError => |ixn_err| .{
+                            ixn_err[0], @intFromEnum(ixn_err[1]) + 1, switch (ixn_err[1]) {
+                                .Custom => |v| v,
+                                else => 0,
+                            },
+                        },
+                        else => .{ 0, 0, 0 },
+                    };
+                    break :blk .{
+                        .err = txn_err_code,
+                        .instruction_error = ixn_err_code,
+                        .custom_error = custom_err_code,
+                        .instruction_index = ixn_err_index,
+                    };
                 } else .default,
                 .fees_only => |fees_only| utils.convertTransactionError(fees_only.err),
             };
