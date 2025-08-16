@@ -1,14 +1,13 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 
+const replay = sig.replay;
+
 const Slot = sig.core.Slot;
-const Epoch = sig.core.Epoch;
 const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 const PubkeyArraySet = std.AutoArrayHashMapUnmanaged(Pubkey, void);
 const ThresholdDecision = sig.consensus.tower.ThresholdDecision;
-
-const deinitMapAndValues = sig.utils.collections.deinitMapAndValues;
 
 /// TODO: any uses of these types are to be evaluated in their context, and
 /// the actual required semantics are to be determined later.
@@ -19,53 +18,6 @@ const stubs = struct {
     fn RwLock(comptime T: type) type {
         return struct { rwlock_ed: T };
     }
-
-    const VoteAccountUnused = struct {};
-
-    const Bank = struct {
-        data: sig.core.BankFields,
-
-        fn isFrozen(self: Bank) bool {
-            return !self.data.hash.eql(Hash.ZEROES);
-        }
-
-        fn totalEpochStake(self: Bank) u64 {
-            const epoch_stakes = self.data.epoch_stakes.get(self.data.epoch) orelse
-                std.debug.panic("Epoch stakes for bank's own epoch must exist", .{});
-            return epoch_stakes.total_stake;
-        }
-
-        /// Get the fixed stake of the given vote account for the current epoch
-        fn epochVoteAccountStake(self: Bank, vote_account: Pubkey) u64 {
-            const eva = self.epochVoteAccounts(self.data.epoch) orelse std.debug.panic(
-                "Bank epoch vote accounts must contain entry for the bank's own epoch",
-                .{},
-            );
-            const entry = eva.get(vote_account) orelse return 0;
-            return entry.stake;
-        }
-
-        /// Get the fixed set of vote accounts for the given node id for the
-        /// current epoch
-        fn epochVoteAccountsForNodeId(
-            self: Bank,
-            node_id: Pubkey,
-        ) ?*const sig.core.epoch_stakes.NodeVoteAccounts {
-            const epoch_stakes = self.data.epoch_stakes.getPtr(self.data.epoch) orelse
-                std.debug.panic("Epoch stakes for bank's own epoch must exist", .{});
-            return epoch_stakes.node_id_to_vote_accounts.getPtr(node_id);
-        }
-
-        /// vote accounts for the specific epoch along with the stake
-        /// attributed to each account
-        fn epochVoteAccounts(
-            self: Bank,
-            epoch: Epoch,
-        ) ?*const sig.core.vote_accounts.StakeAndVoteAccountsMap {
-            const epoch_stakes = self.data.epoch_stakes.getPtr(epoch) orelse return null;
-            return &epoch_stakes.stakes.vote_accounts.vote_accounts;
-        }
-    };
 };
 
 /// TODO: merge into real replay stage when it exists?
@@ -162,7 +114,7 @@ fn Saturating(comptime T: type) type {
 pub const ProgressMap = struct {
     map: std.AutoArrayHashMapUnmanaged(Slot, ForkProgress),
 
-    pub const INIT: ProgressMap = .{ .map = .{} };
+    pub const INIT: ProgressMap = .{ .map = .empty };
 
     pub fn deinit(self: ProgressMap, allocator: std.mem.Allocator) void {
         var map = self.map;
@@ -174,7 +126,7 @@ pub const ProgressMap = struct {
         self: ProgressMap,
         allocator: std.mem.Allocator,
     ) std.mem.Allocator.Error!ProgressMap {
-        var result: ProgressMap = INIT;
+        var result: ProgressMap = .INIT;
         errdefer result.deinit(allocator);
 
         try result.map.ensureTotalCapacity(allocator, self.map.count());
@@ -185,42 +137,78 @@ pub const ProgressMap = struct {
         return result;
     }
 
-    pub fn getForkStats(self: ProgressMap, slot: Slot) ?*ForkStats {
-        const fork_progress = self.map.getPtr(slot) orelse return null;
+    pub fn getForkProgress(self: *const ProgressMap, slot: Slot) ?*ForkProgress {
+        return self.map.getPtr(slot);
+    }
+
+    pub fn getPropagatedStats(self: *const ProgressMap, slot: Slot) ?*PropagatedStats {
+        const fork_progress = self.getForkProgress(slot) orelse return null;
+        return &fork_progress.propagated_stats;
+    }
+
+    pub fn getForkStats(self: *const ProgressMap, slot: Slot) ?*ForkStats {
+        const fork_progress = self.getForkProgress(slot) orelse return null;
         return &fork_progress.fork_stats;
     }
 
-    pub fn isDead(self: ProgressMap, slot: Slot) ?bool {
-        const fork_progress = self.map.getPtr(slot) orelse return null;
+    pub fn isDead(self: *const ProgressMap, slot: Slot) ?bool {
+        const fork_progress = self.getForkProgress(slot) orelse return null;
         return fork_progress.is_dead;
     }
 
     pub fn getHash(self: *const ProgressMap, slot: Slot) ?Hash {
-        const fork_progress = self.map.get(slot) orelse return null;
-        return fork_progress.fork_stats.bank_hash;
+        const fork_progress = self.getForkProgress(slot) orelse return null;
+        return fork_progress.fork_stats.slot_hash;
     }
 
-    pub fn getLeaderPropagationSlotMustExist(
+    /// Returns whether the leader slot for `slot` is propagated,
+    /// or `null` if `slot` isn't in the progress map.
+    pub fn leaderSlotIsPropagated(
         self: *const ProgressMap,
         slot: Slot,
-    ) !struct { bool, ?Slot } {
-        const fork_progress = self.map.get(slot) orelse {
-            // Slot not found in progress map - leader is considered confirmed
+    ) ?bool {
+        const is_propagated, _ = self.getLeaderPropagationSlot(slot) orelse return null;
+        return is_propagated;
+    }
+
+    /// Returns `.{ is_propagated, leader_slot }`,
+    /// or `null` if `slot` isn't in the progress map.
+    /// `is_propagated` refers to `leader_slot`.
+    pub fn getLeaderPropagationSlot(
+        self: *const ProgressMap,
+        slot: Slot,
+    ) ?struct { bool, ?Slot } {
+        const slot_stats = self.getPropagatedStats(slot) orelse return null;
+        if (slot_stats.is_leader_slot) {
+            return .{ slot_stats.is_propagated, slot };
+        }
+
+        const leader_slot = slot_stats.prev_leader_slot orelse {
+            // prev_leader_slot doesn't exist because already rooted
+            // or this validator hasn't been scheduled as a leader
+            // yet. In both cases the latest leader is vacuously
+            // confirmed
             return .{ true, null };
         };
 
-        const leader_slot = if (fork_progress.propagated_stats.is_leader_slot)
-            slot
-        else
-            fork_progress.propagated_stats.prev_leader_slot;
+        const leader_slot_stats = self.getPropagatedStats(leader_slot) orelse {
+            // If the leader's stats aren't in the progress map,
+            // this means that prev_leader slot is rooted,
+            // so is_propagated = true.
+            return .{ true, leader_slot };
+        };
 
-        // If we got here, we have a leader slot
-        const is_propagated = if (self.map.get(slot)) |stats|
-            stats.propagated_stats.is_propagated
-        else
-            true;
+        return .{ leader_slot_stats.is_propagated, leader_slot };
+    }
 
-        return .{ is_propagated, leader_slot };
+    /// Analogous to [get_bank_prev_leader_slot]
+    pub fn getSlotPrevLeaderSlot(self: *const ProgressMap, parent_slot: Slot) ?Slot {
+        const stats = self.getPropagatedStats(parent_slot) orelse return null;
+        if (stats.is_leader_slot) {
+            return parent_slot;
+        } else {
+            return stats.prev_leader_slot;
+        }
     }
 };
 
@@ -272,10 +260,11 @@ pub const ForkProgress = struct {
     }
 
     // TODO: remove this in favor of initFromParent
-    pub fn initFromBank(
+    pub fn initFromInfo(
         allocator: std.mem.Allocator,
         params: struct {
-            bank: *const stubs.Bank,
+            slot_info: replay.trackers.SlotTracker.Reference,
+            epoch_stakes: *const sig.core.EpochStakes,
             /// Should usually be `.now()`.
             now: sig.time.Instant,
             validator_identity: *const Pubkey,
@@ -286,20 +275,24 @@ pub const ForkProgress = struct {
         },
     ) std.mem.Allocator.Error!ForkProgress {
         const validator_stake_info: ?ValidatorStakeInfo = if (Pubkey.equals(
-            &params.bank.data.collector_id,
+            &params.slot_info.constants.collector_id,
             params.validator_identity,
         )) .{
             .validator_vote_pubkey = params.validator_vote_pubkey.*,
-            .stake = params.bank.epochVoteAccountStake(params.validator_vote_pubkey.*),
-            .total_epoch_stake = params.bank.totalEpochStake(),
+            .stake = blk: {
+                const vote_accounts = &params.epoch_stakes.stakes.vote_accounts;
+                break :blk vote_accounts.getDelegatedStake(params.validator_vote_pubkey.*);
+            },
+            .total_epoch_stake = params.epoch_stakes.total_stake,
         } else null;
 
-        var new_progress = try ForkProgress.init(allocator, .{
+        var new_progress: ForkProgress = try .init(allocator, .{
             .now = params.now,
-            .last_entry = params.bank.data.blockhash_queue.last_hash orelse std.debug.panic(
-                "no hash has been set",
-                .{},
-            ),
+            .last_entry = blk: {
+                const bhq, var bhq_lg = params.slot_info.state.blockhash_queue.readWithLock();
+                defer bhq_lg.unlock();
+                break :blk bhq.last_hash orelse std.debug.panic("no hash has been set", .{});
+            },
             .prev_leader_slot = params.prev_leader_slot,
             .validator_stake_info = validator_stake_info,
             .num_blocks_on_fork = params.num_blocks_on_fork,
@@ -307,8 +300,8 @@ pub const ForkProgress = struct {
         });
         errdefer new_progress.deinit(allocator);
 
-        if (params.bank.isFrozen()) {
-            new_progress.fork_stats.bank_hash = params.bank.data.hash;
+        if (params.slot_info.state.hash.readCopy()) |frozen_hash| {
+            new_progress.fork_stats.slot_hash = frozen_hash;
         }
 
         return new_progress;
@@ -333,32 +326,42 @@ pub const ForkProgress = struct {
     ) !ForkProgress {
         const parent = params.parent;
 
-        var new_progress = try ForkProgress.init(allocator, .{
-            .now = params.now,
+        const prev_leader_slot = if (parent.propagated_stats.is_leader_slot)
+            params.parent_slot
+        else
+            parent.propagated_stats.prev_leader_slot;
 
-            .last_entry = params.last_entry,
+        const validator_stake_info: ?ValidatorStakeInfo = vsi: {
+            if (!params.i_am_leader) break :vsi null;
 
-            .prev_leader_slot = if (parent.propagated_stats.is_leader_slot)
-                params.parent_slot
-            else
-                parent.propagated_stats.prev_leader_slot,
+            const validator_vote_pubkey =
+                params.validator_vote_pubkey orelse
+                return error.MissingLeaderVoteAccount;
+            const vote_accounts = &params.epoch_stakes.stakes.vote_accounts;
+            const stake = vote_accounts.getDelegatedStake(validator_vote_pubkey);
 
-            .validator_stake_info = if (!params.i_am_leader) null else .{
-                .validator_vote_pubkey = params.validator_vote_pubkey orelse
-                    return error.MissingLeaderVoteAccount,
-                .stake = params.epoch_stakes.stakes.vote_accounts
-                    .getDelegatedStake(params.validator_vote_pubkey.?),
+            break :vsi .{
+                .validator_vote_pubkey = validator_vote_pubkey,
+                .stake = stake,
                 .total_epoch_stake = params.epoch_stakes.total_stake,
-            },
+            };
+        };
 
+        const num_dropped_blocks_on_fork =
+            parent.num_dropped_blocks_on_fork +
+            params.slot - params.parent_slot - 1;
+
+        var new_progress: ForkProgress = try .init(allocator, .{
+            .now = params.now,
+            .last_entry = params.last_entry,
+            .prev_leader_slot = prev_leader_slot,
+            .validator_stake_info = validator_stake_info,
             .num_blocks_on_fork = parent.num_blocks_on_fork + 1,
-
-            .num_dropped_blocks_on_fork = parent.num_dropped_blocks_on_fork +
-                params.slot - params.parent_slot - 1,
+            .num_dropped_blocks_on_fork = num_dropped_blocks_on_fork,
         });
 
         if (params.slot_hash) |hash| {
-            new_progress.fork_stats.bank_hash = hash;
+            new_progress.fork_stats.slot_hash = hash;
         }
 
         return new_progress;
@@ -377,11 +380,11 @@ pub const ForkProgress = struct {
     pub fn zeroes(
         allocator: std.mem.Allocator,
     ) std.mem.Allocator.Error!ForkProgress {
-        return ForkProgress.init(allocator, .{
-            .now = sig.time.Instant.now(),
-            .last_entry = Hash.ZEROES,
+        return .init(allocator, .{
+            .now = .now(),
+            .last_entry = .ZEROES,
             .prev_leader_slot = 0,
-            .validator_stake_info = ValidatorStakeInfo.DEFAULT,
+            .validator_stake_info = .DEFAULT,
             .num_blocks_on_fork = 0,
             .num_dropped_blocks_on_fork = 0,
         });
@@ -396,28 +399,27 @@ pub const ForkProgress = struct {
         var propagated_validators: PubkeyArraySet, //
         const is_propagated: bool, //
         const total_epoch_stake: u64 //
-        = if (params.validator_stake_info) |info| blk: {
-            const propagated_validators =
-                try PubkeyArraySet.init(allocator, &.{info.validator_vote_pubkey}, &.{});
-            errdefer comptime unreachable;
+        = blk: {
+            const info = params.validator_stake_info orelse
+                break :blk .{ false, 0, .{}, false, 0 };
             break :blk .{
                 true,
                 info.stake,
-                propagated_validators,
+                try .init(allocator, &.{info.validator_vote_pubkey}, &.{}),
                 info.isPropagated(),
                 info.total_epoch_stake,
             };
-        } else .{ false, 0, .{}, false, 0 };
+        };
         errdefer propagated_validators.deinit(allocator);
 
         return .{
             .is_dead = false,
-            .fork_stats = ForkStats.EMPTY_ZEROES,
+            .fork_stats = .EMPTY_ZEROES,
             .replay_stats = .{ .arc_ed = .{
-                .rwlock_ed = blockstore_processor.ReplaySlotStats.initEmptyZeroes(params.now),
+                .rwlock_ed = .initEmptyZeroes(params.now),
             } },
             .replay_progress = .{ .arc_ed = .{
-                .rwlock_ed = blockstore_processor.ConfirmationProgress.init(params.last_entry),
+                .rwlock_ed = .init(params.last_entry),
             } },
             .num_blocks_on_fork = params.num_blocks_on_fork,
             .num_dropped_blocks_on_fork = params.num_dropped_blocks_on_fork,
@@ -429,7 +431,7 @@ pub const ForkProgress = struct {
                 .prev_leader_slot = params.prev_leader_slot,
                 .total_epoch_stake = total_epoch_stake,
 
-                .propagated_node_ids = .{},
+                .propagated_node_ids = .empty,
                 .slot_vote_tracker = null,
                 .cluster_slot_pubkeys = null,
             },
@@ -448,7 +450,7 @@ pub const ValidatorStakeInfo = struct {
 
     pub const DEFAULT: ValidatorStakeInfo = .{
         .stake = 0,
-        .validator_vote_pubkey = Pubkey.ZEROES,
+        .validator_vote_pubkey = .ZEROES,
         .total_epoch_stake = 1,
     };
 
@@ -472,7 +474,7 @@ pub const ForkStats = struct {
     duplicate_confirmed_hash: Hash,
     computed: bool,
     lockout_intervals: LockoutIntervals,
-    bank_hash: Hash,
+    slot_hash: Hash,
     my_latest_landed_vote: ?Slot,
 
     pub const VoteThreshold = std.ArrayListUnmanaged(ThresholdDecision);
@@ -487,10 +489,10 @@ pub const ForkStats = struct {
         .vote_threshold = .{},
         .is_locked_out = false,
         .voted_stakes = .{},
-        .duplicate_confirmed_hash = Hash.ZEROES,
+        .duplicate_confirmed_hash = .ZEROES,
         .computed = false,
-        .lockout_intervals = LockoutIntervals.EMPTY,
-        .bank_hash = Hash.ZEROES,
+        .lockout_intervals = .EMPTY,
+        .slot_hash = .ZEROES,
         .my_latest_landed_vote = 0,
     };
 
@@ -531,7 +533,7 @@ pub const ForkStats = struct {
             .duplicate_confirmed_hash = self.duplicate_confirmed_hash,
             .computed = self.computed,
             .lockout_intervals = lockout_intervals,
-            .bank_hash = self.bank_hash,
+            .slot_hash = self.slot_hash,
             .my_latest_landed_vote = self.my_latest_landed_vote,
         };
     }
@@ -553,8 +555,8 @@ pub const PropagatedStats = struct {
     total_epoch_stake: u64,
 
     pub const EMPTY_ZEROES: PropagatedStats = .{
-        .propagated_validators = .{},
-        .propagated_node_ids = .{},
+        .propagated_validators = .empty,
+        .propagated_node_ids = .empty,
         .propagated_validators_stake = 0,
         .is_propagated = false,
         .is_leader_slot = false,
@@ -653,14 +655,12 @@ pub const PropagatedStats = struct {
         self: *PropagatedStats,
         allocator: std.mem.Allocator,
         node_pubkey: Pubkey,
-        bank: stubs.Bank,
+        epoch_consts: sig.core.EpochConstants,
     ) std.mem.Allocator.Error!void {
         if (self.propagated_node_ids.contains(node_pubkey)) return;
-        const nva = bank.epochVoteAccountsForNodeId(node_pubkey) orelse return;
-        const epoch_vote_accounts = bank.epochVoteAccounts(bank.data.epoch) orelse std.debug.panic(
-            "Epoch stakes for bank's own epoch must exist",
-            .{},
-        );
+        const node_id_to_vote_accounts = &epoch_consts.stakes.node_id_to_vote_accounts;
+        const nva = node_id_to_vote_accounts.getPtr(node_pubkey) orelse return;
+        const epoch_vote_accounts = &epoch_consts.stakes.stakes.vote_accounts.vote_accounts;
         try self.addNodePubkeyInternal(
             allocator,
             node_pubkey,
@@ -809,7 +809,7 @@ pub const cluster_info_vote_listener = struct {
     pub const OptimisticVotesTracker = struct {
         map: std.AutoArrayHashMapUnmanaged(Hash, consensus.VoteStakeTracker),
 
-        pub const EMPTY: OptimisticVotesTracker = .{ .map = .{} };
+        pub const EMPTY: OptimisticVotesTracker = .{ .map = .empty };
 
         pub fn deinit(self: OptimisticVotesTracker, allocator: std.mem.Allocator) void {
             for (self.map.values()) |vst| vst.deinit(allocator);
@@ -897,7 +897,7 @@ pub const blockstore_processor = struct {
                 .transaction_verify_elapsed = 0,
                 .fetch_elapsed = 0,
                 .fetch_fail_elapsed = 0,
-                .batch_execute = BatchExecutionTiming.EMPTY_ZEROES,
+                .batch_execute = .EMPTY_ZEROES,
             };
         }
 
@@ -937,9 +937,9 @@ pub const blockstore_processor = struct {
         slowest_thread: ThreadExecuteTimings,
 
         pub const EMPTY_ZEROES: BatchExecutionTiming = .{
-            .totals = timings.ExecuteTimings.EMPTY_ZEROES,
+            .totals = .EMPTY_ZEROES,
             .wall_clock_us = @enumFromInt(0),
-            .slowest_thread = ThreadExecuteTimings.EMPTY_ZEROES,
+            .slowest_thread = .EMPTY_ZEROES,
         };
 
         pub fn deinit(self: BatchExecutionTiming, allocator: std.mem.Allocator) void {
@@ -967,7 +967,7 @@ pub const blockstore_processor = struct {
         pub const EMPTY_ZEROES: ThreadExecuteTimings = .{
             .total_thread_us = @enumFromInt(0),
             .total_transactions_executed = @enumFromInt(0),
-            .execute_timings = timings.ExecuteTimings.EMPTY_ZEROES,
+            .execute_timings = .EMPTY_ZEROES,
         };
 
         pub fn deinit(self: ThreadExecuteTimings, allocator: std.mem.Allocator) void {
@@ -1084,9 +1084,9 @@ pub const timings = struct {
         execute_accessories: ExecuteAccessoryTimings,
 
         pub const EMPTY_ZEROES: ExecuteTimings = .{
-            .metrics = Metrics.initFill(@enumFromInt(0)),
-            .details = ExecuteDetailsTimings.EMPTY_ZEROES,
-            .execute_accessories = ExecuteAccessoryTimings.ZEROES,
+            .metrics = .initFill(@enumFromInt(0)),
+            .details = .EMPTY_ZEROES,
+            .execute_accessories = .ZEROES,
         };
 
         pub fn deinit(self: ExecuteTimings, allocator: std.mem.Allocator) void {
@@ -1134,7 +1134,7 @@ pub const timings = struct {
             .create_executor_load_elf_us = @enumFromInt(0),
             .create_executor_verify_code_us = @enumFromInt(0),
             .create_executor_jit_compile_us = @enumFromInt(0),
-            .per_program_timings = PerProgramTimings.EMPTY,
+            .per_program_timings = .EMPTY,
         };
 
         pub fn deinit(self: ExecuteDetailsTimings, allocator: std.mem.Allocator) void {
@@ -1173,7 +1173,7 @@ pub const timings = struct {
     pub const PerProgramTimings = struct {
         map: std.AutoArrayHashMapUnmanaged(Pubkey, ProgramTiming),
 
-        pub const EMPTY: PerProgramTimings = .{ .map = .{} };
+        pub const EMPTY: PerProgramTimings = .{ .map = .empty };
 
         pub fn deinit(self: PerProgramTimings, allocator: std.mem.Allocator) void {
             for (self.map.values()) |pt| pt.deinit(allocator);
@@ -1185,7 +1185,7 @@ pub const timings = struct {
             self: PerProgramTimings,
             allocator: std.mem.Allocator,
         ) std.mem.Allocator.Error!PerProgramTimings {
-            var cloned = PerProgramTimings.EMPTY;
+            var cloned: PerProgramTimings = .EMPTY;
             errdefer cloned.deinit(allocator);
 
             try cloned.map.ensureTotalCapacity(allocator, self.map.count());
@@ -1233,7 +1233,7 @@ pub const timings = struct {
             .feature_set_clone_us = @enumFromInt(0),
             .get_executors_us = @enumFromInt(0),
             .process_message_us = @enumFromInt(0),
-            .process_instructions = ExecuteProcessInstructionTimings.ZEROES,
+            .process_instructions = .ZEROES,
         };
     };
 };
@@ -1241,10 +1241,10 @@ pub const timings = struct {
 test "ProgressMap memory ownership" {
     const allocator = std.testing.allocator;
 
-    var prng = std.Random.DefaultPrng.init(43125);
+    var prng: std.Random.DefaultPrng = .init(43125);
     const random = prng.random();
 
-    var progress_map = ProgressMap.INIT;
+    var progress_map: ProgressMap = .INIT;
     defer progress_map.deinit(allocator);
 
     {
@@ -1260,20 +1260,42 @@ test "ProgressMap memory ownership" {
 test "ForkProgress.init" {
     const allocator = std.testing.allocator;
 
-    var prng = std.Random.DefaultPrng.init(3744);
+    var prng: std.Random.DefaultPrng = .init(3744);
     const random = prng.random();
 
-    const now = sig.time.Instant.now();
-    var bank: stubs.Bank = .{
-        .data = try sig.core.BankFields.initRandom(allocator, random, 128),
+    const now: sig.time.Instant = .now();
+    var bank_data: sig.core.BankFields = try .initRandom(allocator, random, 128);
+    defer bank_data.deinit(allocator);
+    bank_data.hash = .ZEROES;
+
+    const slot = bank_data.slot;
+    const slot_consts: sig.core.SlotConstants =
+        try .fromBankFields(allocator, &bank_data, .ALL_DISABLED);
+    defer slot_consts.deinit(allocator);
+
+    var slot_state: sig.core.SlotState = try .fromBankFields(allocator, &bank_data);
+    defer slot_state.deinit(allocator);
+
+    const slot_info: replay.trackers.SlotTracker.Reference = .{
+        .constants = &slot_consts,
+        .state = &slot_state,
     };
-    defer bank.data.deinit(allocator);
-    bank.data.hash = Hash.ZEROES;
+
+    const epoch_consts: sig.core.EpochConstants = try .fromBankFields(
+        &bank_data,
+        try (bank_data.epoch_stakes.get(bank_data.epoch) orelse
+            @panic("epoch stakes for bank_data.epoch not found"))
+            .convert(allocator, .delegation),
+    );
+    defer epoch_consts.deinit(allocator);
 
     const vsi: ValidatorStakeInfo = .{
-        .validator_vote_pubkey = bank.data.collector_id,
-        .stake = bank.epochVoteAccountStake(bank.data.collector_id),
-        .total_epoch_stake = bank.totalEpochStake(),
+        .validator_vote_pubkey = slot_consts.collector_id,
+        .stake = stake: {
+            const vote_accounts = &epoch_consts.stakes.stakes.vote_accounts;
+            break :stake vote_accounts.getDelegatedStake(slot_consts.collector_id);
+        },
+        .total_epoch_stake = epoch_consts.stakes.total_stake,
     };
 
     var expected_propagated_validators: PubkeyArraySet = .{};
@@ -1281,21 +1303,25 @@ test "ForkProgress.init" {
     try expected_propagated_validators.put(allocator, vsi.validator_vote_pubkey, {});
 
     const expected_fork_stats = stats: {
-        var fork_stats = ForkStats.EMPTY_ZEROES;
-        fork_stats.bank_hash = bank.data.hash;
+        var fork_stats: ForkStats = .EMPTY_ZEROES;
+        fork_stats.slot_hash = slot_state.hash.readCopy().?;
         break :stats fork_stats;
+    };
+
+    const bhq_last_hash = bhq_lh: {
+        const bhq, var bhq_lg = slot_state.blockhash_queue.readWithLock();
+        defer bhq_lg.unlock();
+        break :bhq_lh bhq.last_hash;
     };
 
     const expected: ForkProgress = .{
         .is_dead = false,
         .fork_stats = expected_fork_stats,
         .replay_stats = .{ .arc_ed = .{
-            .rwlock_ed = blockstore_processor
-                .ReplaySlotStats.initEmptyZeroes(now),
+            .rwlock_ed = .initEmptyZeroes(now),
         } },
         .replay_progress = .{ .arc_ed = .{
-            .rwlock_ed = blockstore_processor
-                .ConfirmationProgress.init(bank.data.blockhash_queue.last_hash.?),
+            .rwlock_ed = .init(bhq_last_hash.?),
         } },
         .num_blocks_on_fork = 15,
         .num_dropped_blocks_on_fork = 16,
@@ -1319,12 +1345,12 @@ test "ForkProgress.init" {
 
     var expected_child = try expected.clone(allocator);
     defer expected_child.deinit(allocator);
-    expected_child.propagated_stats.prev_leader_slot = bank.data.slot;
+    expected_child.propagated_stats.prev_leader_slot = slot;
     expected_child.num_blocks_on_fork += 1;
 
-    const actual_init = try ForkProgress.init(allocator, .{
+    const actual_init: ForkProgress = try .init(allocator, .{
         .now = now,
-        .last_entry = bank.data.blockhash_queue.last_hash.?,
+        .last_entry = bhq_last_hash.?,
         .prev_leader_slot = null,
         .validator_stake_info = vsi,
         .num_blocks_on_fork = 15,
@@ -1332,10 +1358,11 @@ test "ForkProgress.init" {
     });
     defer actual_init.deinit(allocator);
 
-    const actual_init_from_bank = try ForkProgress.initFromBank(allocator, .{
-        .bank = &bank,
+    const actual_init_from_bank: ForkProgress = try .initFromInfo(allocator, .{
+        .slot_info = slot_info,
+        .epoch_stakes = &epoch_consts.stakes,
         .now = now,
-        .validator_identity = &bank.data.collector_id,
+        .validator_identity = &slot_consts.collector_id,
         .validator_vote_pubkey = &vsi.validator_vote_pubkey,
         .prev_leader_slot = null,
         .num_blocks_on_fork = 15,
@@ -1343,18 +1370,18 @@ test "ForkProgress.init" {
     });
     defer actual_init_from_bank.deinit(allocator);
 
-    const actual_init_from_parent = try ForkProgress.initFromParent(allocator, .{
+    const actual_init_from_parent: ForkProgress = try .initFromParent(allocator, .{
         .now = now,
-        .slot = bank.data.slot + 1,
-        .parent_slot = bank.data.slot,
+        .slot = slot + 1,
+        .parent_slot = slot,
         .parent = &actual_init,
         .validator_vote_pubkey = vsi.validator_vote_pubkey,
-        .slot_hash = bank.data.hash,
-        .last_entry = bank.data.blockhash_queue.last_hash.?,
+        .slot_hash = slot_state.hash.readCopy(),
+        .last_entry = bhq_last_hash.?,
         .i_am_leader = true,
         .epoch_stakes = &.{
-            .stakes = bank.data.stakes,
-            .total_stake = bank.totalEpochStake(),
+            .stakes = epoch_consts.stakes.stakes,
+            .total_stake = epoch_consts.stakes.total_stake,
             .node_id_to_vote_accounts = .empty,
             .epoch_authorized_voters = .empty,
         },
@@ -1385,7 +1412,7 @@ test "ForkProgress.init" {
 test "timings.ExecuteDetailsTimings.eql" {
     const allocator = std.testing.allocator;
 
-    var prng = std.Random.DefaultPrng.init(608159);
+    var prng: std.Random.DefaultPrng = .init(608159);
     const random = prng.random();
 
     const edt = try executeDetailsTimingsInitRandom(allocator, random, .{
@@ -1414,13 +1441,13 @@ test "timings.ExecuteDetailsTimings.eql" {
 test "addVotePubkey" {
     const allocator = std.testing.allocator;
 
-    var prng = std.Random.DefaultPrng.init(608159);
+    var prng: std.Random.DefaultPrng = .init(608159);
     const random = prng.random();
 
-    var stats = PropagatedStats.EMPTY_ZEROES;
+    var stats: PropagatedStats = .EMPTY_ZEROES;
     defer stats.deinit(allocator);
 
-    const vote_pubkey1 = Pubkey.initRandom(random);
+    const vote_pubkey1: Pubkey = .initRandom(random);
 
     // Add a vote pubkey, the number of references in all_pubkeys
     // should be 2
@@ -1434,7 +1461,7 @@ test "addVotePubkey" {
     try std.testing.expectEqual(1, stats.propagated_validators_stake);
 
     // Adding another pubkey should succeed
-    const vote_pubkey2 = Pubkey.initRandom(random);
+    const vote_pubkey2: Pubkey = .initRandom(random);
     try std.testing.expectEqual(true, try stats.addVotePubkey(allocator, vote_pubkey2, 2));
     try std.testing.expectEqual(true, stats.propagated_validators.contains(vote_pubkey2));
     try std.testing.expectEqual(3, stats.propagated_validators_stake);
@@ -1442,9 +1469,8 @@ test "addVotePubkey" {
 
 test "addNodePubkeyInternal" {
     const allocator = std.testing.allocator;
-    const VoteAccount = sig.core.vote_accounts.VoteAccount;
 
-    var prng = std.Random.DefaultPrng.init(608159);
+    var prng: std.Random.DefaultPrng = .init(608159);
     const random = prng.random();
 
     const num_vote_accounts = 10;
@@ -1452,24 +1478,23 @@ test "addNodePubkeyInternal" {
 
     const vote_account_pubkeys1: [num_vote_accounts]Pubkey = blk: {
         var pubkeys: [num_vote_accounts]Pubkey = undefined;
-        for (&pubkeys) |*vap| vap.* = Pubkey.initRandom(random);
+        for (&pubkeys) |*vap| vap.* = .initRandom(random);
         break :blk pubkeys;
     };
 
-    var epoch_vote_accounts: sig.core.vote_accounts.StakeAndVoteAccountsMap = .{};
-    defer deinitMapAndValues(allocator, epoch_vote_accounts);
-
+    var epoch_vote_accounts: sig.core.vote_accounts.StakeAndVoteAccountsMap = .empty;
+    defer sig.utils.collections.deinitMapAndValues(allocator, epoch_vote_accounts);
     for (vote_account_pubkeys1[num_vote_accounts - staked_vote_accounts ..]) |pubkey| {
-        try epoch_vote_accounts.put(allocator, pubkey, .init(1, try VoteAccount.initRandom(
-            allocator,
-            random,
-            null,
-        )));
+        try epoch_vote_accounts.ensureUnusedCapacity(allocator, 1);
+        epoch_vote_accounts.putAssumeCapacity(
+            pubkey,
+            .init(1, try .initRandom(allocator, random, null)),
+        );
     }
-    var stats = PropagatedStats.EMPTY_ZEROES;
+    var stats: PropagatedStats = .EMPTY_ZEROES;
     defer stats.deinit(allocator);
 
-    const node_pubkey1 = Pubkey.initRandom(random);
+    const node_pubkey1: Pubkey = .initRandom(random);
 
     // Add a vote pubkey, the number of references in all_pubkeys
     // should be 2
@@ -1494,7 +1519,7 @@ test "addNodePubkeyInternal" {
 
     // Adding another pubkey with same vote accounts should succeed, but stake
     // shouldn't increase
-    const node_pubkey2 = Pubkey.initRandom(random);
+    const node_pubkey2: Pubkey = .initRandom(random);
     try stats.addNodePubkeyInternal(
         allocator,
         node_pubkey2,
@@ -1506,10 +1531,10 @@ test "addNodePubkeyInternal" {
 
     // Adding another pubkey with different vote accounts should succeed
     // and increase stake
-    const node_pubkey3 = Pubkey.initRandom(random);
+    const node_pubkey3: Pubkey = .initRandom(random);
     const vote_account_pubkeys2: [num_vote_accounts]Pubkey = blk: {
         var pubkeys: [num_vote_accounts]Pubkey = undefined;
-        for (&pubkeys) |*vap| vap.* = Pubkey.initRandom(random);
+        for (&pubkeys) |*vap| vap.* = .initRandom(random);
         break :blk pubkeys;
     };
 
@@ -1517,11 +1542,11 @@ test "addNodePubkeyInternal" {
     epoch_vote_accounts.clearRetainingCapacity();
 
     for (vote_account_pubkeys2[num_vote_accounts - staked_vote_accounts ..]) |pubkey| {
-        try epoch_vote_accounts.put(allocator, pubkey, .init(1, try VoteAccount.initRandom(
-            allocator,
-            random,
-            null,
-        )));
+        try epoch_vote_accounts.ensureUnusedCapacity(allocator, 1);
+        epoch_vote_accounts.putAssumeCapacity(
+            pubkey,
+            .init(1, try .initRandom(allocator, random, null)),
+        );
     }
 
     try stats.addNodePubkeyInternal(
@@ -1538,8 +1563,8 @@ test testForkProgressIsPropagatedOnInit {
     // If the given validator_stake_info == null, then this is not
     // a leader slot and is_propagated == false
     try testForkProgressIsPropagatedOnInit(false, .{
-        .now = sig.time.Instant.now(),
-        .last_entry = Hash.ZEROES,
+        .now = .now(),
+        .last_entry = .ZEROES,
         .prev_leader_slot = 9,
         .validator_stake_info = null,
         .num_blocks_on_fork = 0,
@@ -1548,11 +1573,11 @@ test testForkProgressIsPropagatedOnInit {
 
     // If the stake is zero, then threshold is always achieved
     try testForkProgressIsPropagatedOnInit(true, .{
-        .now = sig.time.Instant.now(),
-        .last_entry = Hash.ZEROES,
+        .now = .now(),
+        .last_entry = .ZEROES,
         .prev_leader_slot = 9,
         .validator_stake_info = blk: {
-            var validator_stake_info = ValidatorStakeInfo.DEFAULT;
+            var validator_stake_info: ValidatorStakeInfo = .DEFAULT;
             validator_stake_info.total_epoch_stake = 0;
             break :blk validator_stake_info;
         },
@@ -1563,11 +1588,11 @@ test testForkProgressIsPropagatedOnInit {
     // If the stake is non zero, then threshold is not achieved unless
     // validator has enough stake by itself to pass threshold
     try testForkProgressIsPropagatedOnInit(false, .{
-        .now = sig.time.Instant.now(),
-        .last_entry = Hash.ZEROES,
+        .now = .now(),
+        .last_entry = .ZEROES,
         .prev_leader_slot = 9,
         .validator_stake_info = blk: {
-            var validator_stake_info = ValidatorStakeInfo.DEFAULT;
+            var validator_stake_info: ValidatorStakeInfo = .DEFAULT;
             validator_stake_info.total_epoch_stake = 2;
             break :blk validator_stake_info;
         },
@@ -1578,10 +1603,10 @@ test testForkProgressIsPropagatedOnInit {
     // Give the validator enough stake by itself to pass threshold
     try testForkProgressIsPropagatedOnInit(true, .{
         .now = sig.time.Instant.now(),
-        .last_entry = Hash.ZEROES,
+        .last_entry = .ZEROES,
         .prev_leader_slot = 9,
         .validator_stake_info = blk: {
-            var validator_stake_info = ValidatorStakeInfo.DEFAULT;
+            var validator_stake_info: ValidatorStakeInfo = .DEFAULT;
             validator_stake_info.stake = 1;
             validator_stake_info.total_epoch_stake = 2;
             break :blk validator_stake_info;
@@ -1594,24 +1619,86 @@ test testForkProgressIsPropagatedOnInit {
     // with is_propagated == false, otherwise propagation tests will fail to run
     // the proper checks (most will auto-pass without checking anything)
     try testForkProgressIsPropagatedOnInit(false, .{
-        .now = sig.time.Instant.now(),
-        .last_entry = Hash.ZEROES,
+        .now = .now(),
+        .last_entry = .ZEROES,
         .prev_leader_slot = 9,
-        .validator_stake_info = ValidatorStakeInfo.DEFAULT,
+        .validator_stake_info = .DEFAULT,
         .num_blocks_on_fork = 0,
         .num_dropped_blocks_on_fork = 0,
     });
 }
 
 fn testForkProgressIsPropagatedOnInit(expected: bool, params: ForkProgress.InitParams) !void {
-    const progress = try ForkProgress.init(std.testing.allocator, params);
+    const progress: ForkProgress = try .init(std.testing.allocator, params);
     defer progress.deinit(std.testing.allocator);
     try std.testing.expectEqual(expected, progress.propagated_stats.is_propagated);
 }
 
 test "is_propagated" {
-    // TODO: implement the "test_is_propagated" from agave after implementing missing methods
-    return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+
+    var progress_map: ProgressMap = .INIT;
+    defer progress_map.deinit(allocator);
+
+    try std.testing.expectEqual(null, progress_map.leaderSlotIsPropagated(8));
+    try std.testing.expectEqual(null, progress_map.leaderSlotIsPropagated(9));
+    try std.testing.expectEqual(null, progress_map.leaderSlotIsPropagated(10));
+
+    // Insert new ForkProgress for slot 10 (not a leader slot) and its
+    // previous leader slot 9 (leader slot)
+    // try progress_map.map.put(allocator, 10, ForkProgress.init(allocator, Hash.default(), 9, null, 0, 0));
+    try progress_map.map.ensureUnusedCapacity(allocator, 1);
+    progress_map.map.putAssumeCapacity(10, try .init(allocator, .{
+        .now = .now(),
+        .last_entry = .ZEROES,
+        .prev_leader_slot = 9,
+        .validator_stake_info = null,
+        .num_blocks_on_fork = 0,
+        .num_dropped_blocks_on_fork = 0,
+    }));
+
+    try progress_map.map.ensureUnusedCapacity(allocator, 1);
+    progress_map.map.putAssumeCapacity(9, try .init(allocator, .{
+        .now = .now(),
+        .last_entry = .ZEROES,
+        .prev_leader_slot = null,
+        .validator_stake_info = .DEFAULT,
+        .num_blocks_on_fork = 0,
+        .num_dropped_blocks_on_fork = 0,
+    }));
+
+    // null of these slot have parents which are confirmed
+    try std.testing.expectEqual(false, progress_map.leaderSlotIsPropagated(9));
+    try std.testing.expectEqual(false, progress_map.leaderSlotIsPropagated(10));
+
+    // Insert new ForkProgress for slot 8 with no previous leader.
+    // The previous leader before 8, slot 7, does not exist in
+    // progress map, so is_propagated(8) should return true as
+    // this implies the parent is rooted
+    try progress_map.map.ensureUnusedCapacity(allocator, 1);
+    progress_map.map.putAssumeCapacity(8, try .init(allocator, .{
+        .now = .now(),
+        .last_entry = .ZEROES,
+        .prev_leader_slot = 7,
+        .validator_stake_info = null,
+        .num_blocks_on_fork = 0,
+        .num_dropped_blocks_on_fork = 0,
+    }));
+    try std.testing.expectEqual(true, progress_map.leaderSlotIsPropagated(8));
+
+    // If we set the is_propagated = true, is_propagated should return true
+    progress_map.getPropagatedStats(9).?.is_propagated = true;
+    try std.testing.expectEqual(true, progress_map.leaderSlotIsPropagated(9));
+    try std.testing.expect(progress_map.getForkProgress(9).?.propagated_stats.is_propagated);
+
+    // Because slot 9 is now confirmed, then slot 10 is also confirmed b/c 9
+    // is the last leader slot before 10
+    try std.testing.expectEqual(true, progress_map.leaderSlotIsPropagated(10));
+
+    // If we make slot 10 a leader slot though, even though its previous
+    // leader slot 9 has been confirmed, slot 10 itself is not confirmed
+    progress_map.getPropagatedStats(10).?.is_leader_slot = true;
+    try std.testing.expectEqual(false, progress_map.leaderSlotIsPropagated(10));
 }
 
 /// NOTE: Used in tests for generating dummy data.
@@ -1674,7 +1761,7 @@ fn forkProgressInitRandom(
     errdefer propagated_stats.deinit(allocator);
 
     const replay_stats = try replaySlotStatsInitRandom(allocator, random, .{
-        .started = sig.time.Instant.UNIX_EPOCH,
+        .started = .UNIX_EPOCH,
         .totals = .{
             .per_program_timings_len = 4,
             .program_timings_len = .{
@@ -1693,7 +1780,7 @@ fn forkProgressInitRandom(
     errdefer replay_stats.deinit(allocator);
 
     const replay_progress: blockstore_processor.ConfirmationProgress = .{
-        .last_entry = Hash.initRandom(random),
+        .last_entry = .initRandom(random),
         .tick_hash_count = random.int(u64),
         .num_shreds = random.int(u64),
         .num_entries = random.int(usize),
@@ -1707,7 +1794,7 @@ fn forkProgressInitRandom(
         .replay_stats = .{ .arc_ed = .{ .rwlock_ed = replay_stats } },
         .replay_progress = .{ .arc_ed = .{ .rwlock_ed = replay_progress } },
         .retransmit_info = .{
-            .retry_time = sig.time.Instant.UNIX_EPOCH,
+            .retry_time = .UNIX_EPOCH,
             .retry_iteration = random.int(u32),
         },
         .num_blocks_on_fork = random.int(u64),
@@ -1725,8 +1812,7 @@ fn pubkeyArraySetInitRandom(
     errdefer pubkey_set.deinit(allocator);
     try pubkey_set.ensureTotalCapacity(allocator, len);
     for (0..len) |_| while (true) {
-        const new_key = Pubkey.initRandom(random);
-        const gop = pubkey_set.getOrPutAssumeCapacity(new_key);
+        const gop = pubkey_set.getOrPutAssumeCapacity(.initRandom(random));
         if (gop.found_existing) continue;
         break;
     };
@@ -1783,13 +1869,13 @@ fn forkStatsInitRandom(
         .has_voted = random.boolean(),
         .is_recent = random.boolean(),
         .is_empty = random.boolean(),
-        .vote_threshold = ForkStats.VoteThreshold.fromOwnedSlice(vote_threshold),
+        .vote_threshold = .fromOwnedSlice(vote_threshold),
         .is_locked_out = random.boolean(),
         .voted_stakes = voted_stakes,
-        .duplicate_confirmed_hash = Hash.initRandom(random),
+        .duplicate_confirmed_hash = .initRandom(random),
         .computed = random.boolean(),
         .lockout_intervals = lockout_intervals,
-        .bank_hash = Hash.ZEROES,
+        .slot_hash = .ZEROES,
         .my_latest_landed_vote = 123,
     };
 }
@@ -1804,7 +1890,7 @@ fn lockoutIntervalsInitRandom(
         max_entry_len: u32,
     },
 ) std.mem.Allocator.Error!LockoutIntervals {
-    var result = LockoutIntervals.EMPTY;
+    var result: LockoutIntervals = .EMPTY;
     errdefer result.deinit(allocator);
 
     try result.map.ensureTotalCapacity(allocator, params.entry_count);
@@ -1815,12 +1901,12 @@ fn lockoutIntervalsInitRandom(
 
         for (entry_list_buf) |*elem| elem.* = .{
             random.int(LockoutIntervals.VotedSlot),
-            Pubkey.initRandom(random),
+            .initRandom(random),
         };
 
         result.map.putAssumeCapacity(
             random.int(LockoutIntervals.ExpirationSlot),
-            LockoutIntervals.EntryList.fromOwnedSlice(entry_list_buf),
+            .fromOwnedSlice(entry_list_buf),
         );
     }
 
@@ -1843,14 +1929,14 @@ pub fn slotVoteTrackerInitRandom(
 ) std.mem.Allocator.Error!cluster_info_vote_listener.SlotVoteTracker {
     const SlotVoteTracker = cluster_info_vote_listener.SlotVoteTracker;
 
-    var voted: SlotVoteTracker.Voted = .{};
+    var voted: SlotVoteTracker.Voted = .empty;
     errdefer voted.deinit(allocator);
     try voted.ensureTotalCapacity(allocator, params.voted_len);
     for (0..params.voted_len) |_| {
-        voted.putAssumeCapacity(Pubkey.initRandom(random), random.boolean());
+        voted.putAssumeCapacity(.initRandom(random), random.boolean());
     }
 
-    var ovt = cluster_info_vote_listener.OptimisticVotesTracker.EMPTY;
+    var ovt: cluster_info_vote_listener.OptimisticVotesTracker = .EMPTY;
     errdefer ovt.deinit(allocator);
     try ovt.map.ensureTotalCapacity(allocator, params.optimistic_tracker_len);
     for (0..params.optimistic_tracker_len) |_| {
@@ -1859,7 +1945,7 @@ pub fn slotVoteTrackerInitRandom(
             params.optimistic_tracker_entry_len.min,
             params.optimistic_tracker_entry_len.max,
         );
-        ovt.map.putAssumeCapacity(Hash.initRandom(random), .{
+        ovt.map.putAssumeCapacity(.initRandom(random), .{
             .voted = try pubkeyArraySetInitRandom(allocator, random, voted_len),
             .stake = random.int(u64),
         });
@@ -1868,8 +1954,8 @@ pub fn slotVoteTrackerInitRandom(
     var voted_slot_updates: ?std.ArrayListUnmanaged(Pubkey) = blk: {
         const vsu_len = params.voted_slot_updates_len orelse break :blk null;
         const vsu_buf = try allocator.alloc(Pubkey, vsu_len);
-        for (vsu_buf) |*key| key.* = Pubkey.initRandom(random);
-        break :blk std.ArrayListUnmanaged(Pubkey).fromOwnedSlice(vsu_buf);
+        for (vsu_buf) |*key| key.* = .initRandom(random);
+        break :blk .fromOwnedSlice(vsu_buf);
     };
     errdefer if (voted_slot_updates) |*vsu| vsu.deinit(allocator);
 
@@ -1887,13 +1973,12 @@ fn slotPubkeysInitRandom(
     random: std.Random,
     len: u32,
 ) std.mem.Allocator.Error!cluser_slots_service.SlotPubkeys {
-    var slot_pubkeys: cluser_slots_service.SlotPubkeys = .{};
+    var slot_pubkeys: cluser_slots_service.SlotPubkeys = .empty;
     errdefer slot_pubkeys.deinit(allocator);
 
     try slot_pubkeys.ensureTotalCapacity(allocator, len);
     for (0..len) |_| while (true) {
-        const new_key = Pubkey.initRandom(random);
-        const gop = slot_pubkeys.getOrPutAssumeCapacity(new_key);
+        const gop = slot_pubkeys.getOrPutAssumeCapacity(.initRandom(random));
         if (gop.found_existing) continue;
         gop.value_ptr.* = random.int(u64);
         break;
@@ -2012,7 +2097,7 @@ fn executeDetailsTimingsInitRandom(
         .create_executor_load_elf_us = @enumFromInt(random.int(u64)),
         .create_executor_verify_code_us = @enumFromInt(random.int(u64)),
         .create_executor_jit_compile_us = @enumFromInt(random.int(u64)),
-        .per_program_timings = timings.PerProgramTimings.EMPTY,
+        .per_program_timings = .EMPTY,
     };
     errdefer result.deinit(allocator);
 
@@ -2020,7 +2105,7 @@ fn executeDetailsTimingsInitRandom(
     try ppt.map.ensureTotalCapacity(allocator, params.per_program_timings_len);
     for (0..params.per_program_timings_len) |_| {
         const value_ptr = while (true) {
-            const gop = ppt.map.getOrPutAssumeCapacity(Pubkey.initRandom(random));
+            const gop = ppt.map.getOrPutAssumeCapacity(.initRandom(random));
             if (gop.found_existing) continue;
             break gop.value_ptr;
         };
@@ -2051,7 +2136,7 @@ fn programTimingInitRandom(
         .accumulated_us = @enumFromInt(random.int(u64)),
         .accumulated_units = @enumFromInt(random.int(u64)),
         .count = @enumFromInt(random.int(u32)),
-        .errored_txs_compute_consumed = std.ArrayListUnmanaged(u64).fromOwnedSlice(etcc_buf),
+        .errored_txs_compute_consumed = .fromOwnedSlice(etcc_buf),
         .total_errored_units = @enumFromInt(random.int(u64)),
     };
 }

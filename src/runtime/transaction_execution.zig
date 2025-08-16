@@ -671,8 +671,8 @@ test "loadAndExecuteTransactions: no transactions" {
     var batch_account_cache: account_loader.BatchAccountCache = .{};
 
     const ancestors: Ancestors = .{};
-    const feature_set: FeatureSet = FeatureSet.ALL_DISABLED;
-    var status_cache = StatusCache.DEFAULT;
+    const feature_set: FeatureSet = .ALL_DISABLED;
+    var status_cache: StatusCache = .DEFAULT;
     const sysvar_cache: SysvarCache = .{};
     const rent_collector: RentCollector = sig.core.rent_collector.defaultCollector(10);
     const blockhash_queue: BlockhashQueue = try BlockhashQueue.initRandom(
@@ -759,7 +759,7 @@ test "loadAndExecuteTransactions: invalid compute budget instruction" {
     const epoch_stakes = try EpochStakes.initEmptyWithGenesisStakeHistoryEntry(allocator);
     defer epoch_stakes.deinit(allocator);
 
-    var status_cache = StatusCache.DEFAULT;
+    var status_cache: StatusCache = .DEFAULT;
 
     const results = try loadAndExecuteTransactions(
         allocator,
@@ -913,7 +913,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
 
     const feature_set: FeatureSet = .ALL_ENABLED_AT_GENESIS;
 
-    var status_cache = StatusCache.DEFAULT;
+    var status_cache: StatusCache = .DEFAULT;
     defer status_cache.deinit(allocator);
 
     const sysvar_cache: SysvarCache = .{};

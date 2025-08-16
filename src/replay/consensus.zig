@@ -5,8 +5,9 @@ const Allocator = std.mem.Allocator;
 const AtomicBool = std.atomic.Value(bool);
 
 const RwMux = sig.sync.RwMux;
-const SortedSet = sig.utils.collections.SortedSet;
+const SortedSetUnmanaged = sig.utils.collections.SortedSetUnmanaged;
 
+const Ancestors = sig.core.Ancestors;
 const Epoch = sig.core.Epoch;
 const EpochStakesMap = sig.core.EpochStakesMap;
 const EpochSchedule = sig.core.EpochSchedule;
@@ -21,8 +22,7 @@ const Transaction = sig.core.transaction.Transaction;
 const LedgerReader = sig.ledger.LedgerReader;
 const LedgerResultWriter = sig.ledger.result_writer.LedgerResultWriter;
 
-const SlotHistory = sig.runtime.sysvar.SlotHistory;
-
+const SlotHistoryAccessor = sig.consensus.replay_tower.SlotHistoryAccessor;
 const ReplayTower = sig.consensus.replay_tower.ReplayTower;
 const ProgressMap = sig.consensus.progress_map.ProgressMap;
 const ForkChoice = sig.consensus.fork_choice.ForkChoice;
@@ -46,11 +46,10 @@ pub const ConsensusDependencies = struct {
     fork_choice: *ForkChoice,
     ledger_reader: *LedgerReader,
     ledger_result_writer: *LedgerResultWriter,
-    ancestors: *const std.AutoArrayHashMapUnmanaged(u64, SortedSet(u64)),
-    descendants: *const std.AutoArrayHashMapUnmanaged(u64, SortedSet(u64)),
+    ancestors: *const std.AutoArrayHashMapUnmanaged(u64, Ancestors),
+    descendants: *const std.AutoArrayHashMapUnmanaged(u64, SortedSetUnmanaged(u64)),
     vote_account: Pubkey,
-    slot_history: *const SlotHistory,
-    epoch_stakes: EpochStakesMap,
+    slot_history_accessor: *const SlotHistoryAccessor,
     latest_validator_votes_for_frozen_banks: *LatestValidatorVotes,
 };
 
@@ -70,7 +69,7 @@ pub fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
         epoch_stakes_map.putAssumeCapacity(key, constants.stakes);
     }
 
-    const newly_computed_slot_stats = try computeBankStats(
+    _ = try computeBankStats(
         deps.allocator,
         deps.vote_account,
         deps.ancestors,
@@ -82,7 +81,7 @@ pub fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
         deps.replay_tower,
         deps.latest_validator_votes_for_frozen_banks,
     );
-    _ = newly_computed_slot_stats;
+
     // TODO: for each newly_computed_slot_stats:
     //           tower_duplicate_confirmed_forks
     //           mark_slots_duplicate_confirmed
@@ -109,7 +108,7 @@ pub fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
         deps.latest_validator_votes_for_frozen_banks,
         deps.fork_choice,
         &epoch_stakes_map,
-        deps.slot_history,
+        deps.slot_history_accessor,
     );
     const maybe_voted_slot = vote_and_reset_forks.vote_slot;
     const maybe_reset_slot = vote_and_reset_forks.reset_slot;
@@ -474,7 +473,7 @@ fn resetFork(
 fn computeBankStats(
     allocator: std.mem.Allocator,
     my_vote_pubkey: Pubkey,
-    ancestors: *const std.AutoArrayHashMapUnmanaged(u64, SortedSet(u64)),
+    ancestors: *const std.AutoArrayHashMapUnmanaged(u64, Ancestors),
     slot_tracker: *SlotTracker,
     epoch_schedule: *const EpochSchedule,
     epoch_stakes_map: *const EpochStakesMap,
@@ -542,7 +541,7 @@ fn cacheTowerStats(
     progress: *ProgressMap,
     replay_tower: *const ReplayTower,
     slot: Slot,
-    ancestors: *const std.AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)),
+    ancestors: *const std.AutoArrayHashMapUnmanaged(Slot, Ancestors),
 ) !void {
     const stats = progress.getForkStats(slot) orelse return error.MissingSlot;
 
@@ -594,7 +593,7 @@ test "cacheTowerStats - missing ancestor" {
 
     // Provide an empty ancestors map so the slot has no recorded ancestors entry
     // and cacheTowerStats should return error.MissingAncestor.
-    var empty_ancestors: std.AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)) = .empty;
+    var empty_ancestors: std.AutoArrayHashMapUnmanaged(Slot, Ancestors) = .empty;
 
     const result = cacheTowerStats(
         testing.allocator,
@@ -620,7 +619,7 @@ test "cacheTowerStats - missing slot" {
     defer replay_tower.deinit(std.testing.allocator);
 
     // Do not populate progress for root.slot; ensure getForkStats returns null.
-    const empty_ancestors: std.AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)) = .empty;
+    const empty_ancestors: std.AutoArrayHashMapUnmanaged(Slot, Ancestors) = .empty;
 
     const result = cacheTowerStats(
         testing.allocator,
