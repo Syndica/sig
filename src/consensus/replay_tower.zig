@@ -2313,9 +2313,9 @@ test "is locked out empty" {
     var replay_tower = try createTestReplayTower(0, 0.67);
     defer replay_tower.deinit(std.testing.allocator);
 
-    var ancestors: SortedSetUnmanaged(Slot) = .empty;
+    var ancestors: Ancestors = .EMPTY;
     defer ancestors.deinit(std.testing.allocator);
-    try ancestors.put(std.testing.allocator, 0);
+    try ancestors.addSlot(std.testing.allocator, 0);
 
     const result = try replay_tower.tower.isLockedOut(
         1,
@@ -2328,9 +2328,9 @@ test "is locked out root slot child pass" {
     var replay_tower = try createTestReplayTower(0, 0.67);
     defer replay_tower.deinit(std.testing.allocator);
 
-    var ancestors: SortedSetUnmanaged(Slot) = .empty;
+    var ancestors: Ancestors = .EMPTY;
     defer ancestors.deinit(std.testing.allocator);
-    try ancestors.put(std.testing.allocator, 0);
+    try ancestors.addSlot(std.testing.allocator, 0);
 
     replay_tower.tower.vote_state.root_slot = 0;
 
@@ -2345,9 +2345,9 @@ test "is locked out root slot sibling fail" {
     var replay_tower = try createTestReplayTower(0, 0.67);
     defer replay_tower.deinit(std.testing.allocator);
 
-    var ancestors: SortedSetUnmanaged(Slot) = .empty;
+    var ancestors: Ancestors = .EMPTY;
     defer ancestors.deinit(std.testing.allocator);
-    try ancestors.put(std.testing.allocator, 0);
+    try ancestors.addSlot(std.testing.allocator, 0);
 
     replay_tower.tower.vote_state.root_slot = 0;
 
@@ -2406,9 +2406,9 @@ test "is locked out double vote" {
     var replay_tower = try createTestReplayTower(0, 0.67);
     defer replay_tower.deinit(std.testing.allocator);
 
-    var ancestors: SortedSetUnmanaged(Slot) = .empty;
+    var ancestors: Ancestors = .EMPTY;
     defer ancestors.deinit(std.testing.allocator);
-    try ancestors.put(std.testing.allocator, 0);
+    try ancestors.addSlot(std.testing.allocator, 0);
 
     for (0..2) |i| {
         _ = try replay_tower.recordBankVote(
@@ -2430,9 +2430,9 @@ test "is locked out child" {
     var replay_tower = try createTestReplayTower(0, 0.67);
     defer replay_tower.deinit(std.testing.allocator);
 
-    var ancestors: SortedSetUnmanaged(Slot) = .empty;
+    var ancestors: Ancestors = .EMPTY;
     defer ancestors.deinit(std.testing.allocator);
-    try ancestors.put(std.testing.allocator, 0);
+    try ancestors.addSlot(std.testing.allocator, 0);
 
     _ = try replay_tower.recordBankVote(
         std.testing.allocator,
@@ -2452,9 +2452,9 @@ test "is locked out sibling" {
     var replay_tower = try createTestReplayTower(0, 0.67);
     defer replay_tower.deinit(std.testing.allocator);
 
-    var ancestors: SortedSetUnmanaged(Slot) = .empty;
+    var ancestors: Ancestors = .EMPTY;
     defer ancestors.deinit(std.testing.allocator);
-    try ancestors.put(std.testing.allocator, 0);
+    try ancestors.addSlot(std.testing.allocator, 0);
 
     for (0..2) |i| {
         _ = try replay_tower.recordBankVote(
@@ -2476,9 +2476,9 @@ test "is locked out last vote expired" {
     var replay_tower = try createTestReplayTower(0, 0.67);
     defer replay_tower.deinit(std.testing.allocator);
 
-    var ancestors: SortedSetUnmanaged(Slot) = .empty;
+    var ancestors: Ancestors = .EMPTY;
     defer ancestors.deinit(std.testing.allocator);
-    try ancestors.put(std.testing.allocator, 0);
+    try ancestors.addSlot(std.testing.allocator, 0);
 
     for (0..2) |i| {
         _ = try replay_tower.recordBankVote(

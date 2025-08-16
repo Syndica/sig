@@ -146,6 +146,7 @@ pub const SlotData = struct {
     purge_repair_slot_counter: PurgeRepairSlotCounters,
     unfrozen_gossip_verified_vote_hashes: UnfrozenGossipVerifiedVoteHashes,
     duplicate_slots: DuplicateSlots,
+    latest_validator_votes: LatestValidatorVotes,
 
     /// Analogous to [DuplicateSlotsTracker](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/repair/cluster_slot_state_verifier.rs#L18)
     pub const DuplicateSlots = collections.SortedSetUnmanaged(Slot);
@@ -169,6 +170,7 @@ pub const SlotData = struct {
         .purge_repair_slot_counter = .empty,
         .unfrozen_gossip_verified_vote_hashes = .empty,
         .duplicate_slots = .empty,
+        .latest_validator_votes = .empty,
     };
 
     pub fn deinit(self: SlotData, allocator: std.mem.Allocator) void {

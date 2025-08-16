@@ -541,7 +541,7 @@ fn cacheTowerStats(
     progress: *ProgressMap,
     replay_tower: *const ReplayTower,
     slot: Slot,
-    ancestors: *const std.AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)),
+    ancestors: *const std.AutoArrayHashMapUnmanaged(Slot, Ancestors),
 ) !void {
     const stats = progress.getForkStats(slot) orelse return error.MissingSlot;
 
@@ -593,7 +593,7 @@ test "cacheTowerStats - missing ancestor" {
 
     // Provide an empty ancestors map so the slot has no recorded ancestors entry
     // and cacheTowerStats should return error.MissingAncestor.
-    var empty_ancestors: std.AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)) = .empty;
+    var empty_ancestors: std.AutoArrayHashMapUnmanaged(Slot, Ancestors) = .empty;
 
     const result = cacheTowerStats(
         testing.allocator,
@@ -619,7 +619,7 @@ test "cacheTowerStats - missing slot" {
     defer replay_tower.deinit(std.testing.allocator);
 
     // Do not populate progress for root.slot; ensure getForkStats returns null.
-    const empty_ancestors: std.AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)) = .empty;
+    const empty_ancestors: std.AutoArrayHashMapUnmanaged(Slot, Ancestors) = .empty;
 
     const result = cacheTowerStats(
         testing.allocator,

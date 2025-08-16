@@ -6,9 +6,9 @@ const AccountsDB = sig.accounts_db.AccountsDB;
 const LockoutIntervals = sig.consensus.replay_tower.LockoutIntervals;
 const Lockout = sig.runtime.program.vote.state.Lockout;
 const VotedStakes = sig.consensus.progress_map.consensus.VotedStakes;
+const Ancestors = sig.core.Ancestors;
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
-const SortedSet = sig.utils.collections.SortedSetUnmanaged;
 const TowerStorage = sig.consensus.tower_storage.TowerStorage;
 const TowerVoteState = sig.consensus.tower_state.TowerVoteState;
 const VoteState = sig.runtime.program.vote.state.VoteState;
@@ -238,7 +238,7 @@ pub const Tower = struct {
     pub fn isLockedOut(
         self: *const Tower,
         slot: Slot,
-        ancestors: *const SortedSet(Slot),
+        ancestors: *const Ancestors,
     ) !bool {
         if (!self.isRecent(slot)) {
             return true;
@@ -255,7 +255,7 @@ pub const Tower = struct {
         for (vote_state.votes.constSlice()) |vote| {
             if (slot != vote.slot and
                 // This means the validator is trying to vote on a fork incompatible with previous votes.
-                !ancestors.contains(vote.slot))
+                !ancestors.containsSlot(vote.slot))
             {
                 return true;
             }
@@ -265,7 +265,7 @@ pub const Tower = struct {
             if (slot != root_slot
                 // This case should never happen because bank forks purges all
                 // non-descendants of the root every time root is set
-            and !ancestors.contains(root_slot)) {
+            and !ancestors.containsSlot(root_slot)) {
                 return error.InvalidRootSlot;
             }
         }

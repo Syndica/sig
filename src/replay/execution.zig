@@ -16,6 +16,7 @@ const Hash = sig.core.Hash;
 const AccountStore = sig.accounts_db.AccountStore;
 const LedgerReader = sig.ledger.LedgerReader;
 
+const ForkProgress = sig.consensus.progress_map.ForkProgress;
 const ProgressMap = sig.consensus.ProgressMap;
 const HeaviestSubtreeForkChoice = sig.consensus.HeaviestSubtreeForkChoice;
 const LatestValidatorVotes = sig.consensus.latest_validator_votes.LatestValidatorVotes;
@@ -24,13 +25,13 @@ const ConfirmSlotFuture = replay.confirm_slot.ConfirmSlotFuture;
 
 const EpochTracker = replay.trackers.EpochTracker;
 const SlotTracker = replay.trackers.SlotTracker;
-const DuplicateSlots = replay.edge_cases.DuplicateSlots;
+const DuplicateSlots = replay.edge_cases.SlotData.DuplicateSlots;
 const DuplicateState = replay.edge_cases.DuplicateState;
 const SlotFrozenState = replay.edge_cases.SlotFrozenState;
-const DuplicateSlotsToRepair = replay.edge_cases.DuplicateSlotsToRepair;
-const DuplicateConfirmedSlots = replay.edge_cases.DuplicateConfirmedSlots;
-const PurgeRepairSlotCounters = replay.edge_cases.PurgeRepairSlotCounters;
-const EpochSlotsFrozenSlots = replay.edge_cases.EpochSlotsFrozenSlots;
+const DuplicateSlotsToRepair = replay.edge_cases.SlotData.DuplicateSlotsToRepair;
+const DuplicateConfirmedSlots = replay.edge_cases.SlotData.DuplicateConfirmedSlots;
+const PurgeRepairSlotCounters = replay.edge_cases.SlotData.PurgeRepairSlotCounters;
+const EpochSlotsFrozenSlots = replay.edge_cases.SlotData.EpochSlotsFrozenSlots;
 const UnfrozenGossipVerifiedVoteHashes = replay.edge_cases.UnfrozenGossipVerifiedVoteHashes;
 
 const check_slot_agrees_with_cluster = replay.edge_cases.check_slot_agrees_with_cluster;
@@ -58,12 +59,11 @@ pub const ReplayExecutionState = struct {
     fork_choice: *HeaviestSubtreeForkChoice,
     duplicate_slots_tracker: *DuplicateSlots,
     unfrozen_gossip_verified_vote_hashes: *UnfrozenGossipVerifiedVoteHashes,
-    latest_validator_votes_for_frozen_banks: *LatestValidatorVotes,
+    latest_validator_votes: *LatestValidatorVotes,
     duplicate_confirmed_slots: *DuplicateConfirmedSlots,
     epoch_slots_frozen_slots: *const EpochSlotsFrozenSlots,
     duplicate_slots_to_repair: *DuplicateSlotsToRepair,
     purge_repair_slot_counter: *PurgeRepairSlotCounters,
-
 };
 
 /// 1. Replays transactions from all the slots that need to be replayed.
@@ -272,7 +272,7 @@ fn replaySlot(state: ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
 /// future yields an error, marks the slot as dead. Returns null if the slot
 /// should be skipped (non-confirm status, pending, or error).
 fn awaitConfirmedEntriesForSlot(
-    replay_state: *ReplayExecutionState,
+    replay_state: ReplayExecutionState,
     slot: Slot,
     status: ReplaySlotStatus,
 ) !?[]const sig.core.Entry {
@@ -303,7 +303,7 @@ fn awaitConfirmedEntriesForSlot(
 
 /// Applies fork-choice and vote updates after a slot has been frozen.
 fn updateConsensusForFrozenSlot(
-    replay_state: *ReplayExecutionState,
+    replay_state: ReplayExecutionState,
     slot: Slot,
 ) !void {
     var slot_info = replay_state.slot_tracker.get(slot) orelse
@@ -326,7 +326,7 @@ fn updateConsensusForFrozenSlot(
         .{ .slot = parent_slot, .hash = parent_hash },
     );
 
-    progress.fork_stats.bank_hash = hash;
+    progress.fork_stats.slot_hash = hash;
 
     const slot_frozen_state: SlotFrozenState = .fromState(
         .from(replay_state.logger),
@@ -371,7 +371,7 @@ fn updateConsensusForFrozenSlot(
         );
     }
 
-    // Move unfrozen_gossip_verified_vote_hashes entries to latest_validator_votes_for_frozen_banks
+    // Move unfrozen_gossip_verified_vote_hashes entries to latest_validator_votes
     if (replay_state
         .unfrozen_gossip_verified_vote_hashes.votes_per_slot
         .get(slot)) |slot_hashes_const|
@@ -381,7 +381,7 @@ fn updateConsensusForFrozenSlot(
             var new_frozen_voters = kv.value;
             defer new_frozen_voters.deinit(replay_state.allocator);
             for (new_frozen_voters.items) |pubkey| {
-                _ = try replay_state.latest_validator_votes_for_frozen_banks.checkAddVote(
+                _ = try replay_state.latest_validator_votes.checkAddVote(
                     replay_state.allocator,
                     pubkey,
                     slot,
@@ -395,7 +395,7 @@ fn updateConsensusForFrozenSlot(
 }
 
 pub fn processReplayResults(
-    replay_state: *ReplayExecutionState,
+    replay_state: ReplayExecutionState,
     slot_statuses: []const struct { Slot, ReplaySlotStatus },
 ) !bool {
     var processed_a_slot = false;
@@ -467,7 +467,7 @@ const TestReplayStateResources = struct {
     fork_choice: *HeaviestSubtreeForkChoice,
     duplicate_slots_tracker: DuplicateSlots,
     unfrozen_gossip_verified_vote_hashes: UnfrozenGossipVerifiedVoteHashes,
-    latest_validator_votes_for_frozen_banks: LatestValidatorVotes,
+    latest_validator_votes: LatestValidatorVotes,
     duplicate_confirmed_slots: DuplicateConfirmedSlots,
     epoch_slots_frozen_slots: EpochSlotsFrozenSlots,
     duplicate_slots_to_repair: DuplicateSlotsToRepair,
@@ -484,6 +484,8 @@ const TestReplayStateResources = struct {
         errdefer allocator.destroy(self);
 
         const account_store = AccountStore.noop;
+        var status_cache = sig.core.StatusCache.DEFAULT;
+        defer status_cache.deinit(allocator);
 
         self.registry = sig.prometheus.Registry(.{}).init(allocator);
         errdefer self.registry.deinit();
@@ -531,7 +533,7 @@ const TestReplayStateResources = struct {
         self.unfrozen_gossip_verified_vote_hashes = UnfrozenGossipVerifiedVoteHashes{
             .votes_per_slot = .empty,
         };
-        self.latest_validator_votes_for_frozen_banks = LatestValidatorVotes.empty;
+        self.latest_validator_votes = LatestValidatorVotes.empty;
         self.duplicate_confirmed_slots = DuplicateConfirmedSlots.empty;
         self.epoch_slots_frozen_slots = EpochSlotsFrozenSlots.empty;
         self.duplicate_slots_to_repair = DuplicateSlotsToRepair.empty;
@@ -542,26 +544,28 @@ const TestReplayStateResources = struct {
             .root = 0,
         };
 
-        self.replay_state = try ReplayExecutionState.init(
-            allocator,
-            .noop,
-            Pubkey.initRandom(std.crypto.random),
-            &self.thread_pool,
-            account_store,
-            &self.ledger_reader,
-            &self.ledger_result_writer,
-            &self.slot_tracker,
-            &self.epochs,
-            &self.progress,
-            self.fork_choice,
-            &self.duplicate_slots_tracker,
-            &self.unfrozen_gossip_verified_vote_hashes,
-            &self.latest_validator_votes_for_frozen_banks,
-            &self.duplicate_confirmed_slots,
-            &self.epoch_slots_frozen_slots,
-            &self.duplicate_slots_to_repair,
-            &self.purge_repair_slot_counter,
-        );
+        self.replay_state = ReplayExecutionState{
+            .allocator = allocator,
+            .logger = .noop,
+            .my_identity = Pubkey.initRandom(std.crypto.random),
+            .vote_account = Pubkey.initRandom(std.crypto.random),
+            .account_store = account_store,
+            .thread_pool = &self.thread_pool,
+            .ledger_reader = &self.ledger_reader,
+            .ledger_result_writer = &self.ledger_result_writer,
+            .slot_tracker = &self.slot_tracker,
+            .epochs = &self.epochs,
+            .progress_map = &self.progress,
+            .status_cache = &status_cache,
+            .fork_choice = self.fork_choice,
+            .duplicate_slots_tracker = &self.duplicate_slots_tracker,
+            .unfrozen_gossip_verified_vote_hashes = &self.unfrozen_gossip_verified_vote_hashes,
+            .latest_validator_votes = &self.latest_validator_votes,
+            .duplicate_confirmed_slots = &self.duplicate_confirmed_slots,
+            .epoch_slots_frozen_slots = &self.epoch_slots_frozen_slots,
+            .duplicate_slots_to_repair = &self.duplicate_slots_to_repair,
+            .purge_repair_slot_counter = &self.purge_repair_slot_counter,
+        };
 
         return self;
     }
@@ -578,7 +582,7 @@ const TestReplayStateResources = struct {
 
         self.duplicate_slots_tracker.deinit(allocator);
         self.unfrozen_gossip_verified_vote_hashes.votes_per_slot.deinit(allocator);
-        self.latest_validator_votes_for_frozen_banks.deinit(allocator);
+        self.latest_validator_votes.deinit(allocator);
         self.duplicate_confirmed_slots.deinit(allocator);
         self.epoch_slots_frozen_slots.deinit(allocator);
         self.duplicate_slots_to_repair.deinit(allocator);
@@ -607,7 +611,7 @@ test "processReplayResults: empty slot statuses" {
     const empty_slot_statuses: []const struct { Slot, ReplaySlotStatus } = &.{};
 
     const result = processReplayResults(
-        &test_resources.replay_state,
+        test_resources.replay_state,
         empty_slot_statuses,
     ) catch |err| {
         std.debug.print("processReplayResults failed: {}\n", .{err});
@@ -633,7 +637,7 @@ test "processReplayResults: non-confirm statuses are skipped" {
         .{ 102, .leader },
     };
 
-    const result = processReplayResults(&test_resources.replay_state, slot_statuses) catch |err| {
+    const result = processReplayResults(test_resources.replay_state, slot_statuses) catch |err| {
         std.debug.print("processReplayResults failed: {}\n", .{err});
         return err;
     };
@@ -764,7 +768,7 @@ test "processReplayResults: confirm status with err poll result marks slot dead"
     );
 
     const result = try processReplayResults(
-        &test_resources.replay_state,
+        test_resources.replay_state,
         slot_statuses.items,
     );
 
@@ -794,7 +798,7 @@ test "processReplayResults: return value correctness" {
     const empty_slot_statuses =
         std.ArrayListUnmanaged(struct { Slot, ReplaySlotStatus }).empty;
     const empty_result = try processReplayResults(
-        &test_resources.replay_state,
+        test_resources.replay_state,
         empty_slot_statuses.items,
     );
     try testing.expect(!empty_result);
@@ -806,7 +810,7 @@ test "processReplayResults: return value correctness" {
     try non_confirm_statuses.append(allocator, .{ 100, .empty });
 
     const non_confirm_result = try processReplayResults(
-        &test_resources.replay_state,
+        test_resources.replay_state,
         non_confirm_statuses.items,
     );
     try testing.expect(!non_confirm_result);
@@ -873,7 +877,7 @@ test "processReplayResults: confirm status with done poll but missing slot in tr
 
     // The function should return an error since the slot is not in the tracker
     const result = processReplayResults(
-        &test_resources.replay_state,
+        test_resources.replay_state,
         slot_statuses.items,
     );
 
@@ -1037,7 +1041,7 @@ test "processReplayResults: confirm status with done poll and slot complete - su
 
     // This should successfully process the slot and return true
     const result = try processReplayResults(
-        &test_resources.replay_state,
+        test_resources.replay_state,
         slot_statuses.items,
     );
 

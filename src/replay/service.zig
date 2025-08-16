@@ -12,8 +12,6 @@ const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 const SlotLeaders = sig.core.leader_schedule.SlotLeaders;
 const SlotState = sig.core.bank.SlotState;
-const SlotAndHash = sig.core.hash.SlotAndHash;
-const Hash = sig.core.Hash;
 
 const AccountStore = sig.accounts_db.AccountStore;
 const AccountReader = sig.accounts_db.AccountReader;
@@ -38,14 +36,6 @@ const updateSysvarsForNewSlot = replay.update_sysvar.updateSysvarsForNewSlot;
 
 const LatestValidatorVotesForFrozenSlots =
     sig.consensus.latest_validator_votes.LatestValidatorVotes;
-
-const DuplicateSlots = replay.edge_cases.DuplicateSlots;
-const DuplicateConfirmedSlots = replay.edge_cases.DuplicateConfirmedSlots;
-const DuplicateSlotsToRepair = replay.edge_cases.DuplicateSlotsToRepair;
-const EpochSlotsFrozenSlots = replay.edge_cases.EpochSlotsFrozenSlots;
-const PurgeRepairSlotCounters = replay.edge_cases.PurgeRepairSlotCounters;
-const UnfrozenGossipVerifiedVoteHashes = replay.edge_cases.UnfrozenGossipVerifiedVoteHashes;
-
 
 /// Number of threads to use in replay's thread pool
 const NUM_THREADS = 4;
@@ -210,16 +200,11 @@ const ReplayState = struct {
         const zone = tracy.Zone.init(@src(), .{ .name = "ReplayState init" });
         defer zone.deinit();
 
-        var root_slot_state = deps.root_slot_state;
-        const last_blockhash = root_slot_state.blockhash_queue.readField("last_hash") orelse
-            return error.InvalidBlockhashQueue;
-
         var slot_tracker: SlotTracker = try .init(deps.allocator, deps.root.slot, .{
             .constants = deps.root.constants,
             .state = deps.root.state,
         });
         errdefer slot_tracker.deinit(deps.allocator);
-
 
         var epoch_tracker: EpochTracker = .{ .schedule = deps.epoch_schedule };
         errdefer epoch_tracker.deinit(deps.allocator);
@@ -259,29 +244,6 @@ const ReplayState = struct {
         );
         errdefer replay_tower.deinit(deps.allocator);
 
-        // TODO: Might need updating with the Initialize requisite replay state PR.
-        var fork_choice = HeaviestSubtreeForkChoice{
-            .allocator = deps.allocator,
-            .logger = .noop,
-            .fork_infos = std.AutoHashMap(
-                SlotAndHash,
-                sig.consensus.fork_choice.ForkInfo,
-            ).init(deps.allocator),
-            .latest_votes = std.AutoHashMap(Pubkey, SlotAndHash).init(deps.allocator),
-            .tree_root = .{ .slot = 0, .hash = Hash.ZEROES },
-            .last_root_time = sig.time.Instant.now(),
-        };
-        var duplicate_slot_tracker = DuplicateSlots.empty;
-        var duplicate_confirmed_slots = DuplicateConfirmedSlots.empty;
-        var epoch_slots_frozen_slots = EpochSlotsFrozenSlots.empty;
-        var duplicate_slots_to_repair = DuplicateSlotsToRepair.empty;
-        var purge_replair_slot_counter = PurgeRepairSlotCounters.empty;
-
-        var unfrozen_gossip_verified_vote_hashes = UnfrozenGossipVerifiedVoteHashes{
-            .votes_per_slot = .empty,
-        };
-        var latest_validator_votes_for_frozen_banks = LatestValidatorVotesForFrozenSlots.empty;
-
         return .{
             .allocator = deps.allocator,
             .logger = .from(deps.logger),
@@ -307,7 +269,7 @@ const ReplayState = struct {
         };
     }
 
-    fn executionState(self: *ReplayState) ReplayExecutionState {
+    pub fn executionState(self: *ReplayState) ReplayExecutionState {
         return .{
             .allocator = self.allocator,
             .logger = .from(self.logger),
@@ -317,10 +279,20 @@ const ReplayState = struct {
             .account_store = self.account_store,
             .thread_pool = &self.thread_pool,
             .ledger_reader = self.ledger.reader,
+            .ledger_result_writer = self.ledger.writer,
             .slot_tracker = &self.slot_tracker,
             .epochs = &self.epochs,
             .progress_map = &self.progress_map,
             .status_cache = &self.status_cache,
+            .fork_choice = &self.fork_choice,
+            .duplicate_slots_tracker = &self.slot_data.duplicate_slots,
+            .unfrozen_gossip_verified_vote_hashes = &self
+                .slot_data.unfrozen_gossip_verified_vote_hashes,
+            .latest_validator_votes = &self.slot_data.latest_validator_votes,
+            .duplicate_confirmed_slots = &self.slot_data.duplicate_confirmed_slots,
+            .epoch_slots_frozen_slots = &self.slot_data.epoch_slots_frozen_slots,
+            .duplicate_slots_to_repair = &self.slot_data.duplicate_slots_to_repair,
+            .purge_repair_slot_counter = &self.slot_data.purge_repair_slot_counter,
         };
     }
 };
