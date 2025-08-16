@@ -196,14 +196,14 @@ pub const ReplayTower = struct {
         node_pubkey: Pubkey,
         vote_account_pubkey: Pubkey,
         fork_root: Slot,
-        account_reader: sig.accounts_db.AccountReader,
+        slot_account_reader: sig.accounts_db.SlotAccountReader,
     ) !ReplayTower {
         var tower = Tower.init(logger.unscoped());
         try tower.initializeLockoutsFromBank(
             allocator,
             &vote_account_pubkey,
             fork_root,
-            account_reader,
+            slot_account_reader,
         );
 
         return .{
@@ -3775,13 +3775,15 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
     });
     defer accountsdb.deinit();
 
+    var empty_ancestors: Ancestors = .EMPTY;
+
     var replay_tower = try ReplayTower.init(
         allocator,
         .noop,
         Pubkey.ZEROES,
         Pubkey.ZEROES,
         root.slot,
-        accountsdb.accountReader(),
+        accountsdb.accountReader().forSlot(&empty_ancestors),
     );
     defer replay_tower.deinit(allocator);
 

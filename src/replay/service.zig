@@ -224,7 +224,7 @@ const ReplayState = struct {
         errdefer progress_map.deinit(deps.allocator);
         errdefer fork_choice.deinit();
 
-        // TODO(ink): in agave replay_tower isn't created directly in replay,
+        // NOTE(ink): in agave replay_tower isn't created directly in replay,
         // however its lifetime does end up being tied to it. This seems to be
         // because it is used once to query it for `last_vote`, for "wen_restart",
         // before being moved (fully by value, not by reference) down into replay.
@@ -240,7 +240,7 @@ const ReplayState = struct {
             deps.my_identity,
             deps.vote_identity,
             deps.root.slot,
-            deps.account_store.reader(),
+            deps.account_store.reader().forSlot(&deps.root.constants.ancestors),
         );
         errdefer replay_tower.deinit(deps.allocator);
 
