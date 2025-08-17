@@ -455,17 +455,6 @@ fn processVotesOnce(
             );
         defer allocator.free(unrooted_optimistic_slots);
 
-        // SlotVoteTracker's for all `slots` in `unrooted_optimistic_slots`
-        // should still be available because we haven't purged in
-        // `progress_with_new_root_bank()` yet, which is called below
-        OptimisticConfirmationVerifier.logUnrootedOptimisticSlots(
-            allocator,
-            logger,
-            bank_forks,
-            vote_tracker,
-            unrooted_optimistic_slots,
-        );
-
         vote_tracker.progressWithNewRootBank(allocator, root_slot);
         last_process_root.* = sig.time.Instant.now();
     }
