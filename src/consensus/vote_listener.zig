@@ -419,7 +419,7 @@ fn processVotesLoop(
 /// TODO: maybe add an abstraction like this to `sig.ledger` that can be shared across the codebase.
 /// Similar thing exists in `sig.replay.edge_cases` (in a separate PR at the time of writing).
 const LedgerRef = struct {
-    reader: *sig.ledger.BlockstoreReader,
+    reader: *sig.ledger.LedgerReader,
     writer: *sig.ledger.LedgerResultWriter,
 };
 
@@ -805,7 +805,7 @@ pub const OptimisticConfirmationVerifier = struct {
     fn verifyForUnrootedOptimisticSlots(
         self: *OptimisticConfirmationVerifier,
         allocator: std.mem.Allocator,
-        ledger_reader: *sig.ledger.BlockstoreReader,
+        ledger_reader: *sig.ledger.LedgerReader,
         root: struct {
             slot: Slot,
             hash: ?Hash,
@@ -1529,9 +1529,10 @@ test verifyVoteTransaction {
                 .fee_rate_governor = .DEFAULT,
                 .epoch_reward_status = .inactive,
                 .ancestors = .{},
-                .feature_set = .EMPTY,
+                .feature_set = .ALL_DISABLED,
+                .reserved_accounts = .empty,
             },
-            .state = .GENESIS,
+            .state = try .genesis(allocator),
             .epoch_constants = .{
                 .hashes_per_tick = 1,
                 .ticks_per_slot = 1,
@@ -1601,7 +1602,7 @@ test "simple usage" {
     var lowest_cleanup_slot: sig.sync.RwMux(Slot) = .init(0);
     var max_root: std.atomic.Value(u64) = .init(0);
 
-    var ledger_reader: sig.ledger.BlockstoreReader = try .init(
+    var ledger_reader: sig.ledger.LedgerReader = try .init(
         allocator,
         .noop,
         ledger_db,
@@ -1734,7 +1735,7 @@ test "check trackers" {
     var lowest_cleanup_slot: sig.sync.RwMux(Slot) = .init(0);
     var max_root: std.atomic.Value(u64) = .init(0);
 
-    var ledger_reader: sig.ledger.BlockstoreReader = try .init(
+    var ledger_reader: sig.ledger.LedgerReader = try .init(
         allocator,
         .noop,
         ledger_db,
