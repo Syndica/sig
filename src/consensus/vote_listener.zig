@@ -487,7 +487,6 @@ fn processVotesOnce(
 
     try confirmation_verifier.addNewOptimisticConfirmedSlots(
         allocator,
-        logger,
         confirmed_slots,
         ledger_ref.writer,
     );
@@ -773,21 +772,25 @@ const AtomicInterval = struct {
 };
 
 pub const OptimisticConfirmationVerifier = struct {
+    snapshot_start_slot: Slot,
+    unchecked_slots: sig.utils.collections.SortedSetUnmanaged(sig.core.hash.SlotAndHash),
+    last_optimistic_slot_ts: sig.time.Instant,
     pub fn deinit(
         self: *OptimisticConfirmationVerifier,
         allocator: std.mem.Allocator,
     ) void {
-        _ = self;
-        _ = allocator;
+        self.unchecked_slots.deinit(allocator);
     }
 
     pub fn init(
         last_optimistic_slot_ts: sig.time.Instant,
         snapshot_start_slot: Slot,
     ) OptimisticConfirmationVerifier {
-        _ = last_optimistic_slot_ts;
-        _ = snapshot_start_slot;
-        return .{};
+        return .{
+            .snapshot_start_slot = snapshot_start_slot,
+            .unchecked_slots = .empty,
+            .last_optimistic_slot_ts = last_optimistic_slot_ts,
+        };
     }
 
     /// Returns any optimistic slots that were not rooted
@@ -801,41 +804,66 @@ pub const OptimisticConfirmationVerifier = struct {
             ancestors: *const sig.core.Ancestors,
         },
     ) ![]const sig.core.hash.SlotAndHash {
-        _ = self;
-        _ = allocator;
-        _ = ledger_reader;
-        _ = root;
-        return &.{};
+        var before_or_equal_root: std.ArrayListUnmanaged(sig.core.hash.SlotAndHash) = .empty;
+        defer before_or_equal_root.deinit(allocator);
+
+        var after_root: sig.utils.collections.SortedSetUnmanaged(sig.core.hash.SlotAndHash) = .empty;
+
+        const items = self.unchecked_slots.items();
+        try before_or_equal_root.ensureTotalCapacityPrecise(allocator, items.len);
+        for (items) |sah| {
+            if (sah.slot > root.slot) {
+                try after_root.put(allocator, sah);
+            } else {
+                before_or_equal_root.appendAssumeCapacity(sah);
+            }
+        }
+
+        const old_set = self.unchecked_slots;
+        self.unchecked_slots = after_root;
+        old_set.deinit(allocator);
+
+        var optimistic_root_not_rooted: std.ArrayListUnmanaged(sig.core.hash.SlotAndHash) = .empty;
+        errdefer optimistic_root_not_rooted.deinit(allocator);
+
+        for (before_or_equal_root.items) |slot_and_hash| {
+            const is_root_slot = slot_and_hash.slot == root.slot;
+            const root_hash_mismatch =
+                is_root_slot and root.hash != null and !slot_and_hash.hash.eql(root.hash.?);
+            const not_in_ancestors = !root.ancestors.containsSlot(slot_and_hash.slot);
+            const not_rooted = !(try ledger_reader.isRoot(slot_and_hash.slot));
+            if (root_hash_mismatch or (!is_root_slot and not_in_ancestors and not_rooted)) {
+                try optimistic_root_not_rooted.append(allocator, slot_and_hash);
+            }
+        }
+
+        return try optimistic_root_not_rooted.toOwnedSlice(allocator);
     }
 
     pub fn addNewOptimisticConfirmedSlots(
         self: *OptimisticConfirmationVerifier,
         allocator: std.mem.Allocator,
-        logger: sig.trace.Logger,
         new_optimistic_slots: []const sig.core.hash.SlotAndHash,
         ledger_writer: *sig.ledger.LedgerResultWriter,
-    ) std.mem.Allocator.Error!void {
-        _ = self;
-        _ = allocator;
-        _ = logger;
-        _ = new_optimistic_slots;
-        _ = ledger_writer;
-    }
+    ) !void {
+        if (new_optimistic_slots.len == 0) return;
 
-    fn logUnrootedOptimisticSlots(
-        /// Used to potentially free acquired slot vote trackers from `vote_tracker`.
-        allocator: std.mem.Allocator,
-        logger: sig.trace.Logger,
-        bank_forks: *const BankForksStub,
-        /// Only read from, mutable reference required for APIs locking internal mutexes.
-        vote_tracker: *VoteTracker,
-        unrooted_optimistic_slots: []const sig.core.hash.SlotAndHash,
-    ) void {
-        _ = allocator;
-        _ = logger;
-        _ = bank_forks;
-        _ = vote_tracker;
-        _ = unrooted_optimistic_slots;
+        // We don't have any information about ancestors before the snapshot root,
+        // so ignore those slots
+        for (new_optimistic_slots) |slot_and_hash| {
+            if (slot_and_hash.slot > self.snapshot_start_slot) {
+                const ts_ms_u64: u64 = sig.time.getWallclockMs();
+                const ts_ms: sig.core.UnixTimestamp = @intCast(ts_ms_u64);
+                try ledger_writer.insertOptimisticSlot(
+                    slot_and_hash.slot,
+                    slot_and_hash.hash,
+                    ts_ms,
+                );
+                try self.unchecked_slots.put(allocator, slot_and_hash);
+            }
+        }
+
+        self.last_optimistic_slot_ts = sig.time.Instant.now();
     }
 };
 
