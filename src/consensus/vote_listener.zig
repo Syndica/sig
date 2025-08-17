@@ -72,7 +72,10 @@ pub const BankForksStub = struct {
         self: *const BankForksStub,
         slot: Slot,
     ) ?*const sig.core.Ancestors {
-        return self.ancestors_map.getPtr(slot);
+        if (self.slot_tracker.get(slot)) |ref| {
+            return &ref.constants.ancestors;
+        }
+        return null;
     }
 
     fn getEpochTotalStake(self: *const BankForksStub, epoch: u64) ?u64 {
