@@ -415,6 +415,7 @@ pub const LedgerResultWriter = struct {
         try self.db.commit(&write_batch);
     }
 
+    /// Analogous to [insert_optimistic_slot](https://github.com/anza-xyz/agave/blob/f149dec1d2c98c74305c6d34b494379994731377/ledger/src/blockstore.rs#L3937)
     pub fn insertOptimisticSlot(
         self: LedgerResultWriter,
         slot: Slot,
