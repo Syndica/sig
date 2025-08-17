@@ -1,5 +1,6 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
+const tracy = @import("tracy");
 const runtime = sig.runtime;
 
 const Allocator = std.mem.Allocator;
@@ -47,6 +48,10 @@ pub const LoadedTransactionAccounts = struct {
 pub const CachedAccount = struct {
     pubkey: Pubkey,
     account: *AccountSharedData,
+
+    pub fn getAccount(self: *const CachedAccount) *const AccountSharedData {
+        return self.account;
+    }
 };
 
 /// Implements much of Agave's AccountLoader functionality. Owns the accounts it loads.
@@ -68,38 +73,60 @@ pub const BatchAccountCache = struct {
         AccountSharedData,
     );
 
-    /// Eagerly loads accounts from accounts db. Assumes the best, and will not report errors.
-    /// Error reporting is deferred until accounts are loaded from BatchAccountCache.
-    /// No rent collection is performed.
+    /// Initializes a new instance with all the accounts needed for all the
+    /// provided transactions.
     pub fn initFromAccountsDb(
         allocator: Allocator,
         account_reader: SlotAccountReader,
         transactions: []const RuntimeTransaction,
     ) !BatchAccountCache {
-        // we assume the largest is allowed
-        const max_data_len = sig.runtime.program.compute_budget.MAX_LOADED_ACCOUNTS_DATA_SIZE_BYTES;
+        var self = try initSufficientCapacity(allocator, transactions);
+        for (transactions) |tx| {
+            try self.load(allocator, account_reader, &tx.accounts, tx.instructions);
+        }
+        return self;
+    }
 
+    /// Allocates a sufficiently large account cache to hold every account that
+    /// may be needed by these transactions.
+    pub fn initSufficientCapacity(allocator: Allocator, transactions: anytype) !BatchAccountCache {
         const max_map_entries = total_account_keys: {
             var n: usize = 0;
             for (transactions) |tx| n += tx.accounts.len;
             // for getting program owner accounts and ProgramData accounts
-            for (transactions) |tx| n += tx.instruction_infos.len * 2;
+            for (transactions) |tx| n += tx.instructions.len * 2;
             break :total_account_keys n;
         };
 
         // optimisation: we could also keep per-tx indexes to remove reliance on hashmap get
         var map: AccountMap = .{};
-        errdefer map.deinit(allocator);
         try map.ensureUnusedCapacity(allocator, max_map_entries);
 
-        const transactions_data_loaded = try allocator.alloc(u32, transactions.len);
-        defer allocator.free(transactions_data_loaded);
-        @memset(transactions_data_loaded, 0);
+        return .{ .account_cache = map };
+    }
 
-        // load txes account_keys
-        next_tx: for (transactions, transactions_data_loaded) |*tx, *tx_data_loaded| {
-            for (tx.accounts.items(.pubkey)) |account_key| {
-                if (account_key.equals(&sig.runtime.ids.SYSVAR_INSTRUCTIONS_ID)) {
+    /// Loads all the accounts needed to process a single transaction.
+    ///
+    /// Assumes the best, and will not report errors. Error reporting is
+    /// deferred until accounts are loaded from BatchAccountCache. No rent
+    /// collection is performed.
+    pub fn load(
+        self: *BatchAccountCache,
+        allocator: Allocator,
+        account_reader: SlotAccountReader,
+        accounts: *const std.MultiArrayList(sig.core.instruction.InstructionAccount),
+        instructions: []const sig.runtime.InstructionInfo,
+    ) !void {
+        const map = &self.account_cache;
+
+        // we assume the largest is allowed
+        const max_data_len = sig.runtime.program.compute_budget.MAX_LOADED_ACCOUNTS_DATA_SIZE_BYTES;
+
+        var tx_data_loaded: u32 = 0;
+
+        { // load txes account_keys
+            for (accounts.items(.pubkey)) |account_key| {
+                if (account_key.equals(&sig.runtime.sysvar.instruction.ID)) {
                     // this code is special, and requires constructing per-transaction accounts,
                     // which we will not perform in advance.
                     @branchHint(.unlikely);
@@ -120,28 +147,26 @@ pub const BatchAccountCache = struct {
                     }
                 };
 
-                if (!created_new_account) std.debug.assert(account.lamports > 0); // this account should be gone?
-
                 accumulateAndCheckLoadedAccountDataSize(
-                    tx_data_loaded,
+                    &tx_data_loaded,
                     account.data.len,
                     max_data_len,
-                ) catch continue :next_tx; // tx will fail - loaded too much
+                ) catch break; // tx will fail - loaded too much
             }
         }
 
-        var validated_loaders = std.AutoArrayHashMap(Pubkey, void).init(allocator);
-        defer validated_loaders.deinit();
+        { // load tx instruction's program account + its owner
+            var validated_loaders = std.AutoArrayHashMap(Pubkey, void).init(allocator);
+            defer validated_loaders.deinit();
 
-        // load tx instruction's program account + its owner
-        next_tx: for (transactions) |tx| {
-            try validated_loaders.ensureTotalCapacity(tx.instruction_infos.len);
-            defer validated_loaders.clearRetainingCapacity();
             var tx_loaded_account_data_len: u32 = 0;
 
-            for (tx.instruction_infos) |instr| {
+            for (instructions) |instr| {
                 const program_key = instr.program_meta.pubkey;
-                if (program_key.equals(&runtime.ids.NATIVE_LOADER_ID)) continue;
+
+                if (program_key.equals(&runtime.ids.NATIVE_LOADER_ID) or
+                    program_key.equals(&runtime.sysvar.instruction.ID)) continue;
+
                 const program_account = map.get(program_key) orelse
                     unreachable; // safe: we loaded all accounts in the previous loop
 
@@ -149,6 +174,9 @@ pub const BatchAccountCache = struct {
 
                 if (validated_loaders.contains(program_owner_key))
                     continue; // already loaded + counted program account's owner
+
+                // the native loader doesn't have an account to load
+                if (program_owner_key.equals(&runtime.ids.NATIVE_LOADER_ID)) continue;
 
                 const owner_account = if (map.get(program_owner_key)) |owner| owner else blk: {
                     const owner_account = try getAccountSharedData(
@@ -159,7 +187,7 @@ pub const BatchAccountCache = struct {
                         // default account ~= account missing
                         // every account which a load is attempted on should have an entry
                         map.putAssumeCapacityNoClobber(program_owner_key, AccountSharedData.NEW);
-                        continue :next_tx; // tx will fail - can't get account
+                        break; // tx will fail - can't get account
                     };
 
                     map.putAssumeCapacityNoClobber(program_owner_key, owner_account);
@@ -171,19 +199,18 @@ pub const BatchAccountCache = struct {
                     &tx_loaded_account_data_len,
                     owner_account.data.len,
                     max_data_len,
-                ) catch
-                    continue :next_tx; // tx will fail - accounts data too large
+                ) catch break; // tx will fail - accounts data too large
 
                 try validated_loaders.put(program_owner_key, {});
             }
         }
 
-        // load v3 loader's ProgramData accounts.
-        for (transactions) |tx| {
-            for (tx.instruction_infos) |instr| {
-                const program_key = tx.accounts.items(
-                    .pubkey,
-                )[instr.program_meta.index_in_transaction];
+        { // load v3 loader's ProgramData accounts.
+            for (instructions) |instr| {
+                const program_key = instr.program_meta.pubkey;
+
+                if (program_key.equals(&runtime.ids.NATIVE_LOADER_ID) or
+                    program_key.equals(&runtime.sysvar.instruction.ID)) continue;
 
                 const program_account = map.get(program_key) orelse
                     unreachable; // safe: we loaded all accounts in the previous loop
@@ -215,16 +242,17 @@ pub const BatchAccountCache = struct {
                 }
             }
         }
-
-        return .{ .account_cache = map };
     }
 
-    pub fn deinit(self: *BatchAccountCache, allocator: Allocator) void {
-        for (self.account_cache.values()) |account|
+    pub fn deinit(self_const: BatchAccountCache, allocator: Allocator) void {
+        var self = self_const;
+        for (self.account_cache.values()) |account| {
             allocator.free(account.data);
+        }
         self.account_cache.deinit(allocator);
-        for (self.sysvar_instruction_account_datas.items) |account|
+        for (self.sysvar_instruction_account_datas.items) |account| {
             allocator.free(account.data);
+        }
         self.sysvar_instruction_account_datas.deinit(allocator);
     }
 
@@ -245,14 +273,19 @@ pub const BatchAccountCache = struct {
         transaction: *const RuntimeTransaction,
         rent_collector: *const RentCollector,
         feature_set: *const sig.core.FeatureSet,
+        slot: sig.core.Slot,
         compute_budget_limits: *const ComputeBudgetLimits,
     ) error{OutOfMemory}!TransactionResult(LoadedTransactionAccounts) {
+        var zone = tracy.Zone.init(@src(), .{ .name = "loadTransactionAccounts" });
+        defer zone.deinit();
+
         const result = loadTransactionAccountsInner(
             self,
             allocator,
             transaction,
             rent_collector,
             feature_set,
+            slot,
             compute_budget_limits,
         ) catch |err| return switch (err) {
             error.OutOfMemory => error.OutOfMemory,
@@ -272,6 +305,7 @@ pub const BatchAccountCache = struct {
         transaction: *const RuntimeTransaction,
         rent_collector: *const RentCollector,
         feature_set: *const sig.core.FeatureSet,
+        slot: sig.core.Slot,
         compute_budget_limits: *const ComputeBudgetLimits,
     ) LoadedTransactionAccountsError!LoadedTransactionAccounts {
         if (compute_budget_limits.loaded_accounts_bytes == 0)
@@ -286,6 +320,7 @@ pub const BatchAccountCache = struct {
                 transaction,
                 rent_collector,
                 feature_set,
+                slot,
                 &account_key,
                 is_writable,
             );
@@ -296,11 +331,20 @@ pub const BatchAccountCache = struct {
                 compute_budget_limits.loaded_accounts_bytes,
             );
 
+            // TODO: add a comment here explaining why we can assume capacity here,
+            // because I can't figure out what previous check would allow us to make
+            // this assumption.
+
             loaded.rent_collected += loaded_account.rent_collected;
-            loaded.rent_debits.appendAssumeCapacity(.{
-                .rent_balance = loaded_account.account.lamports,
-                .rent_collected = loaded_account.rent_collected,
-            });
+
+            // ignore when rent_collected = 0
+            if (loaded_account.rent_collected != 0) {
+                loaded.rent_debits.appendAssumeCapacity(.{
+                    .rent_balance = loaded_account.account.lamports,
+                    .rent_collected = loaded_account.rent_collected,
+                });
+            }
+
             loaded.accounts.appendAssumeCapacity(.{
                 .account = loaded_account.account,
                 .pubkey = account_key,
@@ -310,7 +354,7 @@ pub const BatchAccountCache = struct {
         var validated_loaders = std.AutoArrayHashMap(Pubkey, void).init(allocator);
         defer validated_loaders.deinit();
 
-        for (transaction.instruction_infos) |instr| {
+        for (transaction.instructions) |instr| {
             const program_id = &instr.program_meta.pubkey;
             if (program_id.equals(&runtime.ids.NATIVE_LOADER_ID)) continue;
             const program_account = (try loadAccount(
@@ -321,24 +365,25 @@ pub const BatchAccountCache = struct {
                 false,
             )) orelse return error.ProgramAccountNotFound;
 
-            if (!feature_set.active.contains(
-                sig.core.features.REMOVE_ACCOUNTS_EXECUTABLE_FLAG_CHECKS,
-            ) and !program_account.account.executable) return error.InvalidProgramForExecution;
+            if (!feature_set.active(.remove_accounts_executable_flag_checks, slot) and
+                !program_account.account.executable) return error.InvalidProgramForExecution;
 
             const owner_id = &program_account.account.owner;
-
             const owner_account = account: {
                 if (owner_id.equals(&runtime.ids.NATIVE_LOADER_ID)) continue;
                 if (validated_loaders.contains(owner_id.*)) continue; // only load + count owners once
 
-                break :account (try self.loadAccount(allocator, transaction, owner_id, false)) orelse
-                    return error.InvalidProgramForExecution;
+                break :account try self.loadAccount(
+                    allocator,
+                    transaction,
+                    owner_id,
+                    false,
+                ) orelse return error.ProgramAccountNotFound;
             };
 
             if (!owner_account.account.owner.equals(&runtime.ids.NATIVE_LOADER_ID)) {
                 return error.InvalidProgramForExecution;
             }
-
             try accumulateAndCheckLoadedAccountDataSize(
                 &loaded.loaded_accounts_data_size,
                 owner_account.loaded_size,
@@ -375,10 +420,11 @@ pub const BatchAccountCache = struct {
         transaction: *const RuntimeTransaction,
         rent_collector: *const RentCollector,
         feature_set: *const sig.core.FeatureSet,
+        slot: sig.core.Slot,
         key: *const Pubkey,
         is_writable: bool,
     ) error{OutOfMemory}!LoadedTransactionAccount {
-        if (key.equals(&runtime.ids.SYSVAR_INSTRUCTIONS_ID)) {
+        if (key.equals(&runtime.sysvar.instruction.ID)) {
             @branchHint(.unlikely);
             const account = try self.sysvar_instruction_account_datas.addOne(allocator);
             account.* = try constructInstructionsAccount(allocator, transaction);
@@ -395,13 +441,12 @@ pub const BatchAccountCache = struct {
             var account = AccountSharedData.EMPTY;
             account.rent_epoch = RENT_EXEMPT_RENT_EPOCH;
 
-            const result = self.account_cache.getOrPutAssumeCapacity(key.*);
-            std.debug.assert(result.found_existing);
-
-            result.value_ptr.* = account;
+            const account_ptr = self.account_cache.getPtr(key.*).?;
+            allocator.free(account_ptr.data);
+            account_ptr.* = account;
 
             return LoadedTransactionAccount{
-                .account = result.value_ptr,
+                .account = account_ptr,
                 .loaded_size = 0,
                 .rent_collected = 0,
             };
@@ -411,6 +456,7 @@ pub const BatchAccountCache = struct {
             account.account,
             key,
             feature_set,
+            slot,
             rent_collector,
         );
 
@@ -430,7 +476,7 @@ pub const BatchAccountCache = struct {
         is_writable: bool,
     ) error{OutOfMemory}!?LoadedTransactionAccount {
         const maybe_account: ?*AccountSharedData = if (key.equals(
-            &runtime.ids.SYSVAR_INSTRUCTIONS_ID,
+            &runtime.sysvar.instruction.ID,
         )) account: {
             @branchHint(.unlikely);
             const account = try self.sysvar_instruction_account_datas.addOne(allocator);
@@ -438,12 +484,8 @@ pub const BatchAccountCache = struct {
             break :account account;
         } else self.account_cache.getPtr(key.*);
 
-        const account = maybe_account orelse unreachable; // all keys should be already there
-        if (account.lamports == 0) {
-            // a previous instr deallocated this account
-            allocator.free(account.data);
-            return null;
-        }
+        const account = maybe_account orelse unreachable;
+        if (account.lamports == 0) return null;
 
         // agave "inspects" the account here, which caches the initial state of writeable accounts
         // TODO: we should probably do this at init time
@@ -471,6 +513,9 @@ fn getAccountSharedData(
     } orelse return null;
     defer account.deinit(reader.allocator());
 
+    // NOTE: Tmp fix since accounts DB should not return accounts with 0 lamports.
+    if (account.lamports == 0) return null;
+
     const shared_account: AccountSharedData = .{
         .data = try account.data.readAllAllocate(allocator),
         .executable = account.executable,
@@ -487,9 +532,10 @@ pub fn collectRentFromAccount(
     account: *AccountSharedData,
     account_key: *const Pubkey,
     feature_set: *const sig.core.FeatureSet,
+    slot: sig.core.Slot,
     rent_collector: *const RentCollector,
 ) CollectedInfo {
-    if (!feature_set.active.contains(sig.core.features.DISABLE_RENT_FEES_COLLECTION)) {
+    if (!feature_set.active(.disable_rent_fees_collection, slot)) {
         @branchHint(.unlikely); // this feature should always be enabled?
         return rent_collector.collectFromExistingAccount(account_key, account);
     }
@@ -499,7 +545,7 @@ pub fn collectRentFromAccount(
             account.lamports,
             account.data.len,
             account.rent_epoch,
-        ) != .Exempt)
+        ) == .Exempt)
     {
         account.rent_epoch = RENT_EXEMPT_RENT_EPOCH;
     }
@@ -534,7 +580,7 @@ fn constructInstructionsAccount(
 
     var decompiled_instructions = try std.ArrayList(Instruction).initCapacity(
         allocator,
-        transaction.instruction_infos.len,
+        transaction.instructions.len,
     );
     defer {
         for (decompiled_instructions.items) |decompiled| allocator.free(decompiled.accounts);
@@ -543,7 +589,7 @@ fn constructInstructionsAccount(
 
     const tx_accounts = transaction.accounts.slice();
 
-    for (transaction.instruction_infos) |instruction| {
+    for (transaction.instructions) |instruction| {
         const accounts_meta = try allocator.alloc(
             InstructionAccount,
             instruction.account_metas.len,
@@ -575,7 +621,7 @@ fn constructInstructionsAccount(
 
     return .{
         .data = try data.toOwnedSlice(),
-        .owner = runtime.ids.SYSVAR_INSTRUCTIONS_ID,
+        .owner = runtime.sysvar.instruction.ID,
         .lamports = 0, // a bit weird, but seems correct
         .executable = false,
         .rent_epoch = 0,
@@ -586,13 +632,15 @@ const TestingEnv = struct {
     rent_collector: RentCollector,
     feature_set: sig.core.FeatureSet,
     compute_budget_limits: ComputeBudgetLimits,
+    slot: sig.core.Slot,
 };
 
 fn newTestingEnv() TestingEnv {
     if (!@import("builtin").is_test) @compileError("newTestingEnv for testing only");
     return .{
         .rent_collector = sig.core.rent_collector.defaultCollector(0),
-        .feature_set = sig.core.FeatureSet.EMPTY,
+        .feature_set = .ALL_DISABLED,
+        .slot = 0,
         .compute_budget_limits = ComputeBudgetLimits{
             .heap_size = 0,
             .compute_unit_limit = 0,
@@ -620,7 +668,7 @@ fn emptyTxWithKeys(allocator: Allocator, keys: []const Pubkey) !RuntimeTransacti
         .fee_payer = Pubkey.ZEROES,
         .msg_hash = Hash.ZEROES,
         .recent_blockhash = Hash.ZEROES,
-        .instruction_infos = &.{},
+        .instructions = &.{},
         .accounts = accounts,
     };
 }
@@ -639,7 +687,7 @@ test "loadTransactionAccounts empty transaction" {
 
     const empty_tx = RuntimeTransaction{
         .fee_payer = Pubkey.ZEROES,
-        .instruction_infos = &.{},
+        .instructions = &.{},
         .msg_hash = Hash.ZEROES,
         .recent_blockhash = Hash.ZEROES,
         .signature_count = 0,
@@ -650,6 +698,7 @@ test "loadTransactionAccounts empty transaction" {
         &empty_tx,
         &env.rent_collector,
         &env.feature_set,
+        env.slot,
         &env.compute_budget_limits,
     );
 
@@ -671,14 +720,14 @@ test "loadTransactionAccounts sysvar instruction" {
     var accounts = std.MultiArrayList(AccountMeta).empty;
     defer accounts.deinit(allocator);
     try accounts.append(allocator, sig.core.instruction.InstructionAccount{
-        .pubkey = runtime.ids.SYSVAR_INSTRUCTIONS_ID,
+        .pubkey = runtime.sysvar.instruction.ID,
         .is_signer = false,
         .is_writable = false,
     });
 
     const empty_tx = RuntimeTransaction{
         .fee_payer = Pubkey.ZEROES,
-        .instruction_infos = &.{},
+        .instructions = &.{},
         .msg_hash = Hash.ZEROES,
         .recent_blockhash = Hash.ZEROES,
         .signature_count = 0,
@@ -690,6 +739,7 @@ test "loadTransactionAccounts sysvar instruction" {
         &empty_tx,
         &env.rent_collector,
         &env.feature_set,
+        env.slot,
         &env.compute_budget_limits,
     );
 
@@ -699,13 +749,7 @@ test "loadTransactionAccounts sysvar instruction" {
     try std.testing.expect(cached_account.account.data.len > 0);
     try std.testing.expectEqual(0, tx_accounts.rent_collected);
     try std.testing.expectEqual(0, tx_accounts.loaded_accounts_data_size);
-    try std.testing.expectEqual(1, tx_accounts.rent_debits.len);
-    const rent_debit: RentDebit = tx_accounts.rent_debits.slice()[0];
-
-    // maybe interesting? Most program accounts have 1 lamports. But this one is even less "real"
-    // than the others
-    try std.testing.expectEqual(0, rent_debit.rent_balance);
-    try std.testing.expectEqual(0, rent_debit.rent_collected);
+    try std.testing.expectEqual(0, tx_accounts.rent_debits.len);
 }
 
 test "accumulated size" {
@@ -786,7 +830,7 @@ test "load accounts rent paid" {
     var tx = try emptyTxWithKeys(allocator, &.{ fee_payer_address, instruction_address });
     defer tx.accounts.deinit(allocator);
 
-    tx.instruction_infos = &.{
+    tx.instructions = &.{
         .{
             .program_meta = .{ .pubkey = instruction_address, .index_in_transaction = 1 },
             .account_metas = try sig.runtime.InstructionInfo.AccountMetas.fromSlice(
@@ -825,6 +869,7 @@ test "load accounts rent paid" {
         &tx,
         &env.rent_collector,
         &env.feature_set,
+        env.slot,
         &env.compute_budget_limits,
     );
 
@@ -863,7 +908,7 @@ test "constructInstructionsAccount" {
 
     const empty_tx = RuntimeTransaction{
         .fee_payer = Pubkey.ZEROES,
-        .instruction_infos = &.{
+        .instructions = &.{
             .{
                 .program_meta = .{ .pubkey = instruction_address, .index_in_transaction = 1 },
                 .account_metas = .{},
@@ -972,6 +1017,7 @@ test "load tx too large" {
         &tx,
         &env.rent_collector,
         &env.feature_set,
+        env.slot,
         &env.compute_budget_limits,
     );
 
@@ -1042,7 +1088,7 @@ test "dont double count program owner account data size" {
             },
         );
 
-        tx.instruction_infos = &.{
+        tx.instructions = &.{
             .{
                 .program_meta = .{ .pubkey = pk2, .index_in_transaction = 1 },
                 .account_metas = metas,
@@ -1070,6 +1116,7 @@ test "dont double count program owner account data size" {
         &tx,
         &env.rent_collector,
         &env.feature_set,
+        env.slot,
         &env.compute_budget_limits,
     );
 
@@ -1103,6 +1150,7 @@ test "load, create new account" {
         &tx,
         &env.rent_collector,
         &env.feature_set,
+        env.slot,
         &env.compute_budget_limits,
     );
 
@@ -1140,7 +1188,7 @@ test "invalid program owner owner" {
 
     var tx = try emptyTxWithKeys(allocator, &.{instruction_address});
     defer tx.accounts.deinit(allocator);
-    tx.instruction_infos = &.{
+    tx.instructions = &.{
         .{
             .program_meta = .{ .pubkey = instruction_address, .index_in_transaction = 0 },
             .account_metas = .{},
@@ -1161,6 +1209,7 @@ test "invalid program owner owner" {
         &tx,
         &env.rent_collector,
         &env.feature_set,
+        env.slot,
         &env.compute_budget_limits,
     );
 
@@ -1188,7 +1237,7 @@ test "missing program owner account" {
 
     var tx = try emptyTxWithKeys(allocator, &.{instruction_address});
     defer tx.accounts.deinit(allocator);
-    tx.instruction_infos = &.{
+    tx.instructions = &.{
         .{
             .program_meta = .{ .pubkey = instruction_address, .index_in_transaction = 0 },
             .account_metas = .{},
@@ -1209,10 +1258,11 @@ test "missing program owner account" {
         &tx,
         &env.rent_collector,
         &env.feature_set,
+        env.slot,
         &env.compute_budget_limits,
     );
 
-    try std.testing.expectError(error.InvalidProgramForExecution, loaded_accounts_result);
+    try std.testing.expectError(error.ProgramAccountNotFound, loaded_accounts_result);
 }
 
 test "deallocate account" {
@@ -1256,6 +1306,7 @@ test "deallocate account" {
         &tx,
         &env.rent_collector,
         &env.feature_set,
+        env.slot,
         &env.compute_budget_limits,
     );
 
@@ -1314,7 +1365,7 @@ test "load v3 program" {
     var tx = try emptyTxWithKeys(allocator, &.{pk_v3_program});
     defer tx.accounts.deinit(allocator);
 
-    tx.instruction_infos = &.{
+    tx.instructions = &.{
         .{
             .program_meta = .{ .pubkey = pk_v3_program, .index_in_transaction = 0 },
             .account_metas = .{},
@@ -1335,6 +1386,7 @@ test "load v3 program" {
         &tx,
         &env.rent_collector,
         &env.feature_set,
+        env.slot,
         &env.compute_budget_limits,
     );
 

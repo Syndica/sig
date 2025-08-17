@@ -223,12 +223,12 @@ pub const ExtraFields = struct {
     }
 
     fn bincodeRead(
-        allocator: std.mem.Allocator,
+        limit_allocator: *bincode.LimitAllocator,
         reader: anytype,
         params: bincode.Params,
     ) !ExtraFields {
         var extra_fields: ExtraFields = INIT_EOF;
-        errdefer extra_fields.deinit(allocator);
+        errdefer extra_fields.deinit(limit_allocator.allocator());
 
         until_eof: {
             const FieldTag = std.meta.FieldEnum(ExtraFields);
@@ -250,7 +250,7 @@ pub const ExtraFields = struct {
                     => bincode.read(assert_allocator, field.type, reader, params),
 
                     .versioned_epoch_stakes,
-                    => bincode.read(allocator, field.type, reader, params),
+                    => bincode.readWithLimit(limit_allocator, field.type, reader, params),
                 } catch |err| switch (err) {
                     error.EndOfStream => break :until_eof,
                     else => |e| return e,
@@ -430,21 +430,22 @@ pub const AccountsDbFields = struct {
     }
 
     fn bincodeRead(
-        allocator: std.mem.Allocator,
+        limit_allocator: *bincode.LimitAllocator,
         reader: anytype,
         params: bincode.Params,
     ) !AccountsDbFields {
+        const allocator = limit_allocator.allocator();
         const assert_allocator = sig.utils.allocators.failing.allocator(.{
             .alloc = .assert,
             .resize = .assert,
             .free = .assert,
         });
 
-        var file_map = try bincode.hashmap.readCtx(allocator, FileMap, reader, params, struct {
+        var filemap = try bincode.hashmap.readCtx(limit_allocator, FileMap, reader, params, struct {
             pub const readKey = {};
             pub const freeKey = {};
             pub fn readValue(
-                _: std.mem.Allocator,
+                _: *bincode.LimitAllocator,
                 _reader: anytype,
                 _params: bincode.Params,
             ) !AccountFileInfo {
@@ -455,28 +456,30 @@ pub const AccountsDbFields = struct {
             }
             pub const freeValue = {};
         });
-        errdefer file_map.deinit(allocator);
+        errdefer filemap.deinit(allocator);
 
         const stored_meta_write_version = try bincode.readInt(u64, reader, params);
         const slot = try bincode.readInt(Slot, reader, params);
         const bank_hash_info = try bincode.read(assert_allocator, BankHashInfo, reader, params);
 
         const rooted_slots: []const Slot =
-            bincode.read(allocator, []const Slot, reader, params) catch |err| switch (err) {
-                error.EndOfStream => &.{},
-                else => |e| return e,
-            };
+            bincode.readWithLimit(limit_allocator, []const Slot, reader, params) catch |err|
+                switch (err) {
+                    error.EndOfStream => &.{},
+                    else => |e| return e,
+                };
         errdefer allocator.free(rooted_slots);
 
         const rooted_slot_hashes: []const SlotAndHash =
-            bincode.read(allocator, []const SlotAndHash, reader, params) catch |err| switch (err) {
-                error.EndOfStream => &.{},
-                else => |e| return e,
-            };
+            bincode.readWithLimit(limit_allocator, []const SlotAndHash, reader, params) catch |err|
+                switch (err) {
+                    error.EndOfStream => &.{},
+                    else => |e| return e,
+                };
         errdefer allocator.free(rooted_slot_hashes);
 
         return .{
-            .file_map = file_map,
+            .file_map = filemap,
             .stored_meta_write_version = stored_meta_write_version,
             .slot = slot,
             .bank_hash_info = bank_hash_info,
@@ -580,6 +583,40 @@ pub const Manifest = struct {
         reader: anytype,
     ) !Manifest {
         return try bincode.read(allocator, Manifest, reader, .{});
+    }
+
+    pub fn epochStakes(
+        self: *const Manifest,
+        epoch: Epoch,
+    ) !*const std.AutoArrayHashMapUnmanaged(Pubkey, u64) {
+        if (self.bank_fields.epoch_stakes.getPtr(epoch)) |_| {
+            // Agave simply ignores this field. I've added this log message just
+            // as a sanity check, but I don't expect to ever see it.
+            std.log.warn("ignoring deprecated epoch stakes", .{});
+        }
+        return if (self.bank_extra.versioned_epoch_stakes.getPtr(epoch)) |es|
+            &es.current.stakes.vote_accounts.staked_nodes
+        else
+            return error.NoEpochStakes;
+    }
+
+    /// Returns the leader schedule for an arbitrary epoch.
+    /// Only works if the bank is aware of the staked nodes for that epoch.
+    pub fn leaderSchedule(
+        self: *const Manifest,
+        allocator: std.mem.Allocator,
+        /// Default is the bank's epoch.
+        custom_epoch: ?Epoch,
+    ) !sig.core.leader_schedule.LeaderSchedule {
+        const epoch = custom_epoch orelse self.bank_fields.epoch;
+        const slots_in_epoch =
+            self.bank_fields.epoch_schedule.getSlotsInEpoch(self.bank_fields.epoch);
+        const staked_nodes = try self.epochStakes(epoch);
+        return .{
+            .allocator = allocator,
+            .slot_leaders = try sig.core.leader_schedule.LeaderSchedule
+                .fromStakedNodes(allocator, epoch, slots_in_epoch, staked_nodes),
+        };
     }
 };
 
@@ -921,7 +958,7 @@ pub const FullSnapshotFileInfo = struct {
                 filename_truncated.len;
 
             const str = filename[start..end];
-            const hash = Hash.parseBase58String(str) catch |err| switch (err) {
+            const hash = Hash.parseRuntime(str) catch |err| switch (err) {
                 error.InvalidHash => return error.InvalidHash,
             };
 
@@ -1083,7 +1120,7 @@ pub const IncrementalSnapshotFileInfo = struct {
                 filename_truncated.len;
 
             const str = filename[start..end];
-            const hash = Hash.parseBase58String(str) catch |err| switch (err) {
+            const hash = Hash.parseRuntime(str) catch |err| switch (err) {
                 error.InvalidHash => return error.InvalidHash,
             };
 
@@ -1132,7 +1169,7 @@ pub const SnapshotFiles = struct {
     };
     /// finds existing snapshots (full and matching incremental) by looking for .tar.zstd files
     pub fn find(allocator: std.mem.Allocator, search_dir: std.fs.Dir) FindError!SnapshotFiles {
-        const zone = tracy.initZone(@src(), .{ .name = "accountsdb SnapshotFiles.find" });
+        const zone = tracy.Zone.init(@src(), .{ .name = "accountsdb SnapshotFiles.find" });
         defer zone.deinit();
 
         var incremental_snapshots: std.ArrayListUnmanaged(IncrementalSnapshotFileInfo) = .{};
@@ -1462,10 +1499,13 @@ pub fn parallelUnpackZstdTarBall(
     /// only used for progress estimation
     full_snapshot: bool,
 ) !void {
-    const zone = tracy.initZone(@src(), .{ .name = "accountsdb parallelUnpackZstdTarBall" });
+    const zone = tracy.Zone.init(@src(), .{ .name = "accountsdb parallelUnpackZstdTarBall" });
     defer zone.deinit();
 
     const file_size = (try file.stat()).size;
+
+    // calling posix.mmap on a zero-sized file will cause illegal behaviour
+    if (file_size == 0) return error.ZeroSizedTarball;
 
     // TODO: improve `zstd.Reader` to be capable of sourcing a stream of bytes
     // rather than a fixed slice of bytes, so we don't have to load the entire

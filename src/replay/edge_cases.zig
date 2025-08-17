@@ -2,6 +2,8 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 const replay = @import("lib.zig");
 
+const Allocator = std.mem.Allocator;
+
 const Slot = sig.core.Slot;
 const ProgressMap = sig.consensus.ProgressMap;
 const HeaviestSubtreeForkChoice = sig.consensus.HeaviestSubtreeForkChoice;
@@ -29,7 +31,7 @@ pub fn processEdgeCases(
         bank_forks_rwmux: *sig.sync.RwMux(sig.replay.trackers.SlotTracker),
         progress: *const sig.consensus.ProgressMap,
         fork_choice: *sig.consensus.HeaviestSubtreeForkChoice,
-        blockstore: *sig.ledger.LedgerResultWriter,
+        ledger: *sig.ledger.LedgerResultWriter,
 
         ancestor_duplicate_slots_receiver: *sig.sync.Channel(AncestorDuplicateSlotToRepair),
         duplicate_confirmed_slots_receiver: *sig.sync.Channel(ThresholdConfirmedSlot),
@@ -70,7 +72,7 @@ pub fn processEdgeCases(
         allocator,
         logger,
         params.duplicate_confirmed_slots_receiver,
-        params.blockstore,
+        params.ledger,
         &params.slot_data.duplicate_confirmed_slots,
         params.bank_forks_rwmux,
         params.progress,
@@ -242,7 +244,7 @@ pub const SlotStatus = union(enum) {
     }
 };
 
-const SlotFrozenState = struct {
+pub const SlotFrozenState = struct {
     frozen_hash: sig.core.Hash,
     cluster_confirmed_hash: ?ClusterConfirmedHash,
     is_slot_duplicate: bool,
@@ -436,7 +438,7 @@ fn processDuplicateConfirmedSlots(
     allocator: std.mem.Allocator,
     logger: replay.service.Logger,
     duplicate_confirmed_slots_receiver: *sig.sync.Channel(ThresholdConfirmedSlot),
-    blockstore: *sig.ledger.LedgerResultWriter,
+    ledger: *sig.ledger.LedgerResultWriter,
     duplicate_confirmed_slots: *DuplicateConfirmedSlots,
     slot_tracker_rwmux: *sig.sync.RwMux(SlotTracker),
     progress: *const ProgressMap,
@@ -485,7 +487,7 @@ fn processDuplicateConfirmedSlots(
             logger,
             new_duplicate_confirmed.slot,
             root,
-            blockstore,
+            ledger,
             fork_choice,
             duplicate_slots_to_repair,
             ancestor_hashes_replay_update_sender,
@@ -732,14 +734,14 @@ fn getDuplicateConfirmedHash(
 
 /// Analogous to [check_slot_agrees_with_cluster](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/repair/cluster_slot_state_verifier.rs#L848)
 /// NOTE: Where in agave the different modes of operation are represented as tagged union variants, here they're simply different functions inside this namespace.
-const check_slot_agrees_with_cluster = struct {
+pub const check_slot_agrees_with_cluster = struct {
     /// aka `BankFrozen` in agave.
-    fn slotFrozen(
+    pub fn slotFrozen(
         allocator: std.mem.Allocator,
         logger: replay.service.Logger,
         slot: sig.core.Slot,
         root: sig.core.Slot,
-        blockstore: *sig.ledger.LedgerResultWriter,
+        ledger: *sig.ledger.LedgerResultWriter,
         fork_choice: *HeaviestSubtreeForkChoice,
         duplicate_slots_to_repair: *DuplicateSlotsToRepair,
         purge_repair_slot_counter: *PurgeRepairSlotCounters,
@@ -783,7 +785,7 @@ const check_slot_agrees_with_cluster = struct {
                             slot,
                             fork_choice,
                             duplicate_slots_to_repair,
-                            blockstore,
+                            ledger,
                             purge_repair_slot_counter,
                             &confirmed_non_dupe_frozen_hash,
                             frozen_hash,
@@ -843,7 +845,7 @@ const check_slot_agrees_with_cluster = struct {
             try fork_choice.markForkInvalidCandidate(&.{ .slot = slot, .hash = frozen_hash });
         }
 
-        try confirmed_non_dupe_frozen_hash.finalize(slot, blockstore);
+        try confirmed_non_dupe_frozen_hash.finalize(slot, ledger);
     }
 
     fn duplicateConfirmed(
@@ -851,7 +853,7 @@ const check_slot_agrees_with_cluster = struct {
         logger: replay.service.Logger,
         slot: sig.core.Slot,
         root: sig.core.Slot,
-        blockstore: *sig.ledger.LedgerResultWriter,
+        ledger: *sig.ledger.LedgerResultWriter,
         fork_choice: *HeaviestSubtreeForkChoice,
         duplicate_slots_to_repair: *DuplicateSlotsToRepair,
         ancestor_hashes_replay_update_sender: *sig.sync.Channel(AncestorHashesReplayUpdate),
@@ -917,7 +919,7 @@ const check_slot_agrees_with_cluster = struct {
                         slot,
                         fork_choice,
                         duplicate_slots_to_repair,
-                        blockstore,
+                        ledger,
                         purge_repair_slot_counter,
                         &confirmed_non_dupe_frozen_hash,
                         frozen_hash,
@@ -942,7 +944,7 @@ const check_slot_agrees_with_cluster = struct {
             },
         }
 
-        try confirmed_non_dupe_frozen_hash.finalize(slot, blockstore);
+        try confirmed_non_dupe_frozen_hash.finalize(slot, ledger);
     }
 
     fn dead(
@@ -1006,7 +1008,7 @@ const check_slot_agrees_with_cluster = struct {
         }
     }
 
-    fn duplicate(
+    pub fn duplicate(
         allocator: std.mem.Allocator,
         logger: replay.service.Logger,
         slot: sig.core.Slot,
@@ -1259,7 +1261,7 @@ const state_change = struct {
         slot: u64,
         fork_choice: *HeaviestSubtreeForkChoice,
         duplicate_slots_to_repair: *DuplicateSlotsToRepair,
-        blockstore: *sig.ledger.LedgerResultWriter,
+        ledger: *sig.ledger.LedgerResultWriter,
         purge_repair_slot_counter: *PurgeRepairSlotCounters,
         confirmed_non_dupe_frozen_hash: *ConfirmedNonDupeFrozenHash,
         slot_frozen_hash: sig.core.Hash,
@@ -1267,7 +1269,7 @@ const state_change = struct {
         confirmed_non_dupe_frozen_hash.update(null);
         // When we detect that our frozen slot matches the cluster version (note this
         // will catch both slot frozen first -> confirmation, or confirmation first ->
-        // slot frozen), mark all the newly duplicate confirmed slots in blockstore
+        // slot frozen), mark all the newly duplicate confirmed slots in ledger
         const new_duplicate_and_confirmed_slot_hashes = try fork_choice.markForkValidCandidate(&.{
             .slot = slot,
             .hash = slot_frozen_hash,
@@ -1275,7 +1277,7 @@ const state_change = struct {
         defer new_duplicate_and_confirmed_slot_hashes.deinit();
 
         {
-            var setter = try blockstore.setDuplicateConfirmedSlotsAndHashesIncremental();
+            var setter = try ledger.setDuplicateConfirmedSlotsAndHashesIncremental();
             defer setter.deinit();
             for (new_duplicate_and_confirmed_slot_hashes.items) |confirmed| {
                 try setter.addSlotAndHash(confirmed.slot, confirmed.hash);
@@ -1347,9 +1349,10 @@ const TestData = struct {
         /// anything described by `self`.
         fn toDummyElem(
             self: SlotInfo,
+            allocator: Allocator,
             slot_infos: []const SlotInfo,
             random: std.Random,
-        ) SlotTracker.Element {
+        ) !SlotTracker.Element {
             return .{
                 .constants = .{
                     .parent_slot = self.parentSlot(),
@@ -1361,7 +1364,8 @@ const TestData = struct {
                     .fee_rate_governor = .initRandom(random),
                     .epoch_reward_status = .inactive,
                     .ancestors = .{ .ancestors = .empty },
-                    .feature_set = .{ .active = .empty },
+                    .feature_set = .ALL_DISABLED,
+                    .reserved_accounts = .empty,
                 },
                 .state = .{
                     .blockhash_queue = .init(.DEFAULT),
@@ -1372,6 +1376,9 @@ const TestData = struct {
                     .tick_height = .init(random.int(u64)),
                     .collected_rent = .init(random.int(u64)),
                     .accounts_lt_hash = .init(.{ .data = @splat(random.int(u16)) }),
+                    .stakes_cache = try .init(allocator),
+                    .collected_transaction_fees = .init(random.int(u64)),
+                    .collected_priority_fees = .init(random.int(u64)),
                 },
             };
         }
@@ -1386,14 +1393,10 @@ const TestData = struct {
         const slot_infos = [_]SlotInfo{
             .initRandom(random, null, root_slot, .{
                 .now = .now(),
-                .last_entry = try .parseBase58String(
-                    "5NjW2CAV6MBQYxpL4oK2CESrpdj6tkcvxP3iigAgrHyR",
-                ),
+                .last_entry = .parse("5NjW2CAV6MBQYxpL4oK2CESrpdj6tkcvxP3iigAgrHyR"),
                 .prev_leader_slot = null,
                 .validator_stake_info = .{
-                    .validator_vote_pubkey = try .parseBase58String(
-                        "11111111111111111111111111111111",
-                    ),
+                    .validator_vote_pubkey = .parse("11111111111111111111111111111111"),
                     .stake = 0,
                     .total_epoch_stake = 10_000,
                 },
@@ -1402,7 +1405,7 @@ const TestData = struct {
             }),
             .initRandom(random, root_slot, 1, .{
                 .now = .now(),
-                .last_entry = try .parseBase58String("11111111111111111111111111111111"),
+                .last_entry = .parse("11111111111111111111111111111111"),
                 .prev_leader_slot = null,
                 .validator_stake_info = null,
                 .num_blocks_on_fork = 0,
@@ -1410,7 +1413,7 @@ const TestData = struct {
             }),
             .initRandom(random, 1, 2, .{
                 .now = .now(),
-                .last_entry = try .parseBase58String("11111111111111111111111111111111"),
+                .last_entry = .parse("11111111111111111111111111111111"),
                 .prev_leader_slot = null,
                 .validator_stake_info = null,
                 .num_blocks_on_fork = 0,
@@ -1418,7 +1421,7 @@ const TestData = struct {
             }),
             .initRandom(random, 2, 3, .{
                 .now = .now(),
-                .last_entry = try .parseBase58String("11111111111111111111111111111111"),
+                .last_entry = .parse("11111111111111111111111111111111"),
                 .prev_leader_slot = null,
                 .validator_stake_info = null,
                 .num_blocks_on_fork = 0,
@@ -1429,7 +1432,7 @@ const TestData = struct {
         var slot_tracker: SlotTracker = try .init(
             allocator,
             root_slot,
-            slot_infos[root_slot].toDummyElem(slot_infos[0..], random),
+            try slot_infos[root_slot].toDummyElem(allocator, slot_infos[0..], random),
         );
         errdefer slot_tracker.deinit(allocator);
 
@@ -1457,13 +1460,12 @@ const TestData = struct {
                 } else null,
             );
 
-            const gop = try slot_tracker.getOrPut(
-                allocator,
-                slot_info.slot,
-                slot_info.toDummyElem(slot_infos[0..], random),
-            );
+            var elem = try slot_info.toDummyElem(allocator, slot_infos[0..], random);
+            const gop = try slot_tracker.getOrPut(allocator, slot_info.slot, elem);
             if (gop.found_existing) {
                 std.debug.assert(slot_info.slot == root_slot);
+                elem.state.deinit(allocator);
+                elem.constants.deinit(allocator);
             }
         }
 
@@ -1509,14 +1511,14 @@ fn testLedgerRw(
     logger: replay.service.Logger,
     state: *TestLedgerRwState,
 ) !struct {
-    sig.ledger.BlockstoreDB,
-    sig.ledger.BlockstoreReader,
+    sig.ledger.LedgerDB,
+    sig.ledger.LedgerReader,
     sig.ledger.LedgerResultWriter,
 } {
     var ledger_db = try sig.ledger.tests.TestDB.init(src_loc);
     errdefer ledger_db.deinit();
 
-    const reader: sig.ledger.BlockstoreReader = try .init(
+    const reader: sig.ledger.LedgerReader = try .init(
         std.testing.allocator,
         logger.unscoped(),
         ledger_db,
@@ -1623,7 +1625,7 @@ test "apply state changes slot frozen" {
     const duplicate_slot_hash = slot_tracker.get(duplicate_slot).?.state.hash.readCopy().?;
 
     // Simulate ReplayStage freezing a Slot with the given hash.
-    // 'slot frozen' should mark it down in Blockstore.
+    // 'slot frozen' should mark it down in Ledger.
     try std.testing.expectEqual(null, ledger_reader.getBankHash(duplicate_slot));
 
     {
@@ -1643,7 +1645,7 @@ test "apply state changes slot frozen" {
     try std.testing.expectEqual(false, ledger_reader.isDuplicateConfirmed(duplicate_slot));
 
     // If we freeze another version of the slot, it should overwrite the first
-    // version in blockstore.
+    // version in ledger.
     const new_slot_hash: sig.core.Hash = .initRandom(random);
     const root_slot_hash: sig.core.hash.SlotAndHash = rsh: {
         const root_slot_info = slot_tracker.get(slot_tracker.root).?;
@@ -1715,7 +1717,7 @@ test "apply state changes duplicate confirmed matches frozen" {
     // 2) Clear any pending repairs from `duplicate_slots_to_repair` since we have the
     //    right version now
     // 3) Clear the slot from `purge_repair_slot_counter`
-    // 3) Set the status to duplicate confirmed in Blockstore
+    // 3) Set the status to duplicate confirmed in Ledger
     {
         // Handle cases where the slot is frozen, but not duplicate confirmed yet.
         var confirmed_non_dupe_frozen_hash: state_change.ConfirmedNonDupeFrozenHash = .init;
@@ -1796,7 +1798,7 @@ test "apply state changes slot frozen and duplicate confirmed matches frozen" {
     // 2) Clear any pending repairs from `duplicate_slots_to_repair` since we have the
     //    right version now
     // 3) Clear the slot from `purge_repair_slot_counter`
-    // 3) Set the status to duplicate confirmed in Blockstore
+    // 3) Set the status to duplicate confirmed in Ledger
     {
         // Handle cases where the slot is frozen, but not duplicate confirmed yet.
         var confirmed_non_dupe_frozen_hash: state_change.ConfirmedNonDupeFrozenHash = .init;

@@ -359,7 +359,7 @@ fn callRocks(logger: ScopedLogger(LOG_SCOPE), comptime func: anytype, args: anyt
 }
 
 test {
-    if (sig.build_options.blockstore_db == .rocksdb) {
+    if (sig.build_options.ledger_db == .rocksdb) {
         _ = &database.interface.testDatabase(RocksDB);
     }
 }

@@ -111,6 +111,12 @@ pub fn Mux(comptime T: type) type {
             return .{ t, lock_guard };
         }
 
+        pub fn set(self: *Self, item: T) void {
+            self.private.m.lock();
+            defer self.private.m.unlock();
+            self.private.v = item;
+        }
+
         /// `lock` returns a `LockGuard` after acquiring `Mutex` lock
         pub fn lock(self: *Self) LockGuard {
             self.private.m.lock();
@@ -267,6 +273,15 @@ pub fn RwMux(comptime T: type) type {
             };
         }
 
+        /// `write` returns a `WLockGuard` after acquiring a `write` lock
+        pub fn tryWrite(self: *Self) ?WLockGuard {
+            if (!self.private.r.tryLock()) return null;
+            return WLockGuard{
+                .private = &self.private,
+                .valid = true,
+            };
+        }
+
         pub fn set(self: *Self, item: T) void {
             self.private.r.lock();
             defer self.private.r.unlock();
@@ -277,6 +292,15 @@ pub fn RwMux(comptime T: type) type {
         pub fn read(self: *Self) RLockGuard {
             self.private.r.lockShared();
             return RLockGuard{
+                .private = &self.private,
+                .valid = true,
+            };
+        }
+
+        /// `tryRead` returns a `RLockGuard` after acquiring a `read` lock
+        pub fn tryRead(self: *Self) ?RLockGuard {
+            if (!self.private.r.tryLockShared()) return null;
+            return .{
                 .private = &self.private,
                 .valid = true,
             };

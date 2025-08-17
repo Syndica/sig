@@ -1,6 +1,7 @@
 const std = @import("std");
-
 const sig = @import("../sig.zig");
+const tracy = @import("tracy");
+
 const Backoff = @import("backoff.zig").Backoff;
 const Atomic = std.atomic.Value;
 const Allocator = std.mem.Allocator;
@@ -146,6 +147,9 @@ pub fn Channel(T: type) type {
         }
 
         pub fn send(channel: *Self, value: T) !void {
+            const zone = tracy.Zone.init(@src(), .{ .name = "Channel.send" });
+            defer zone.deinit();
+
             if (channel.closed.load(.monotonic)) {
                 return error.ChannelClosed;
             }

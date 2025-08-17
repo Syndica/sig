@@ -64,7 +64,9 @@ pub const Hash = extern struct {
     fn update(hasher: *Sha256, data: anytype) void {
         const T = @TypeOf(data);
 
-        if (@typeInfo(T) == .@"struct") {
+        if (T == Hash or T == *const Hash or T == *Hash) {
+            hasher.update(&data.data);
+        } else if (@typeInfo(T) == .@"struct") {
             inline for (data) |val| update(hasher, val);
         } else if (std.meta.Elem(T) == u8) switch (@typeInfo(T)) {
             .array => hasher.update(&data),
@@ -91,7 +93,13 @@ pub const Hash = extern struct {
         return &self.data;
     }
 
-    pub fn parseBase58String(str: []const u8) error{InvalidHash}!Hash {
+    pub inline fn parse(comptime str: []const u8) Hash {
+        comptime {
+            return parseRuntime(str) catch @compileError("failed to parse hash");
+        }
+    }
+
+    pub fn parseRuntime(str: []const u8) error{InvalidHash}!Hash {
         if (str.len > BASE58_MAX_SIZE) return error.InvalidHash;
         var encoded: std.BoundedArray(u8, BASE58_MAX_SIZE) = .{};
         encoded.appendSliceAssumeCapacity(str);
@@ -131,7 +139,7 @@ pub const Hash = extern struct {
 
 /// A 16-bit, 1024 element lattice-based incremental hash based on blake3
 pub const LtHash = struct {
-    data: @Vector(1024, u16),
+    data: [NUM_ELEMENTS]u16,
 
     pub const IDENTITY = LtHash{ .data = @splat(0) };
 
@@ -150,53 +158,71 @@ pub const LtHash = struct {
     }
 
     pub fn bytes(self: *LtHash) []u8 {
-        return @as([*]u8, @ptrCast(&self.data))[0..2048];
+        return @ptrCast(&self.data);
+    }
+
+    pub fn constBytes(self: *const LtHash) []const u8 {
+        return @ptrCast(&self.data);
     }
 
     /// Mixes `other` into `self`
     ///
     /// This can be thought of as 'insert'
-    pub fn mixIn(self: *LtHash, other: *const LtHash) void {
-        self.data +%= other.data;
+    pub fn mixIn(self: *LtHash, other: LtHash) void {
+        self.* = self.add(other);
     }
 
     /// Mixes `other` out of `self`
     ///
     /// This can be thought of as 'remove'
-    pub fn mixOut(self: *LtHash, other: *const LtHash) void {
-        self.data -%= other.data;
+    pub fn mixOut(self: *LtHash, other: LtHash) void {
+        self.* = self.sub(other);
+    }
+
+    const Vector = @Vector(vec_len, u16);
+    const vec_len = std.simd.suggestVectorLength(u16) orelse 4;
+
+    pub fn add(lhs: LtHash, rhs: LtHash) LtHash {
+        var data: [NUM_ELEMENTS]u16 = undefined;
+        inline for (0..NUM_ELEMENTS / vec_len) |N| {
+            const lhs_v: Vector = lhs.data[N * vec_len ..][0..vec_len].*;
+            const rhs_v: Vector = rhs.data[N * vec_len ..][0..vec_len].*;
+            data[N * vec_len ..][0..vec_len].* = lhs_v +% rhs_v;
+        }
+        return .{ .data = data };
+    }
+
+    pub fn sub(lhs: LtHash, rhs: LtHash) LtHash {
+        var data: [NUM_ELEMENTS]u16 = undefined;
+        inline for (0..NUM_ELEMENTS / vec_len) |N| {
+            const lhs_v: Vector = lhs.data[N * vec_len ..][0..vec_len].*;
+            const rhs_v: Vector = rhs.data[N * vec_len ..][0..vec_len].*;
+            data[N * vec_len ..][0..vec_len].* = lhs_v -% rhs_v;
+        }
+        return .{ .data = data };
+    }
+
+    pub fn format(
+        lt_hash: LtHash,
+        comptime _: []const u8,
+        _: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
+        const encoded_len = comptime std.base64.standard.Encoder.calcSize(NUM_ELEMENTS * 2);
+        var buffer: [encoded_len]u8 = undefined;
+        const encoded = std.base64.standard.Encoder.encode(&buffer, @ptrCast(&lt_hash.data));
+        try writer.writeAll(encoded);
     }
 };
 
 const expectEqual = std.testing.expectEqual;
 
-// Ensure that the byte layout of the vector is the same as an array of u16
-test "LtHash.bytes" {
-    var rng = std.Random.DefaultPrng.init(0);
-    var hash = LtHash.initRandom(rng.random());
-    const items: [LtHash.NUM_ELEMENTS]u16 = hash.data;
-    const expected_bytes = std.mem.sliceAsBytes(&items);
-    try std.testing.expectEqualSlices(u8, expected_bytes, hash.bytes());
-}
-
-fn add(lhs: LtHash, rhs: LtHash) LtHash {
-    var self = lhs;
-    self.mixIn(&rhs);
-    return self;
-}
-
-fn sub(lhs: LtHash, rhs: LtHash) LtHash {
-    var self = lhs;
-    self.mixOut(&rhs);
-    return self;
-}
-
 // Ensure that if you mix-in or mix-out with the identity, you get the original value
 test "identity" {
     var rng = std.Random.DefaultPrng.init(0);
     const a = LtHash.initRandom(rng.random());
-    try expectEqual(a, add(a, LtHash.IDENTITY));
-    try expectEqual(a, sub(a, LtHash.IDENTITY));
+    try expectEqual(a, a.add(LtHash.IDENTITY));
+    try expectEqual(a, a.sub(LtHash.IDENTITY));
 }
 
 // Ensure that if you mix-in then mix-out a hash, you get the original value
@@ -204,8 +230,8 @@ test "inverse" {
     var rng = std.Random.DefaultPrng.init(1);
     const a = LtHash.initRandom(rng.random());
     const b = LtHash.initRandom(rng.random());
-    try expectEqual(a, sub(add(a, b), b));
-    try expectEqual(a, add(sub(a, b), b));
+    try expectEqual(a, a.add(b).sub(b));
+    try expectEqual(a, a.sub(b).add(b));
 }
 
 // Ensure that mixing is commutative
@@ -213,7 +239,7 @@ test "commutative" {
     var rng = std.Random.DefaultPrng.init(2);
     const a = LtHash.initRandom(rng.random());
     const b = LtHash.initRandom(rng.random());
-    try expectEqual(add(a, b), add(b, a));
+    try expectEqual(a.add(b), b.add(a));
 }
 
 // Ensure that mixing is associative
@@ -222,7 +248,7 @@ test "associative" {
     const a = LtHash.initRandom(rng.random());
     const b = LtHash.initRandom(rng.random());
     const c = LtHash.initRandom(rng.random());
-    try expectEqual(add(add(a, b), c), add(a, add(b, c)));
+    try expectEqual(a.add(b).add(c), a.add(b.add(c)));
 }
 
 // Ensure that mixing out respects distribution
@@ -232,7 +258,7 @@ test "distribute" {
     const b = LtHash.initRandom(rng.random());
     const c = LtHash.initRandom(rng.random());
     const d = LtHash.initRandom(rng.random());
-    try expectEqual(sub(sub(sub(a, b), c), d), sub(a, add(b, add(c, d))));
+    try expectEqual(a.sub(b).sub(c).sub(d), a.sub(b.add(c.add(d))));
 }
 
 // Ensure the correct lattice hash and checksum values are produced
@@ -441,4 +467,12 @@ test "hello and world hash correctly" {
 
         try expectEqual(expected, actual);
     }
+
+    // sig fmt: off
+    try std.testing.expectFmt(
+        "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",
+        "{}",
+        .{expected_world_lt_hash},
+    );
+    // sig fmt: on
 }

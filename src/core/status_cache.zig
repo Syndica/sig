@@ -15,64 +15,77 @@ const T = ?sig.ledger.transaction_status.TransactionError;
 
 const Fork = struct { slot: Slot, maybe_err: T = null };
 
+/// This is internally locking and thread safe.
 /// [agave] https://github.com/anza-xyz/agave/blob/b6eacb135037ab1021683d28b67a3c60e9039010/runtime/src/status_cache.rs#L39
 pub const StatusCache = struct {
-    cache: HashMap(Hash, HighestFork),
+    cache: RwMux(HashMap(Hash, HighestFork)),
 
-    roots: HashMap(Slot, void),
-    min_root: ?Slot,
+    roots: RwMux(HashMap(Slot, void)),
+    min_root: std.atomic.Value(Slot),
 
     /// all keys seen during a fork/slot
-    slot_deltas: HashMap(Slot, StatusKv),
+    slot_deltas: RwMux(HashMap(Slot, StatusKv)),
 
     const CACHED_KEY_SIZE = 20;
     const Key = [CACHED_KEY_SIZE]u8;
     const ForkStatus = ArrayList(Fork);
 
     const StatusValues = ArrayList(struct { key: Key, maybe_err: T = null });
-    // TODO: might be able to get rid of this RwMux, agave has one here
-    const StatusKv = RwMux(HashMap(Hash, struct { key_index: usize, status: StatusValues }));
+    const StatusKv = HashMap(Hash, struct { key_index: usize, status: StatusValues });
     const KeyMap = HashMap(Key, ForkStatus);
 
     const HighestFork = struct { slot: Slot, index: usize, key_map: KeyMap };
 
     const MAX_CACHE_ENTRIES = sig.accounts_db.snapshots.MAX_RECENT_BLOCKHASHES;
 
-    pub fn default() StatusCache {
-        return .{ .cache = .{}, .roots = .{}, .slot_deltas = .{}, .min_root = null };
-    }
+    pub const DEFAULT = StatusCache{
+        .cache = .init(.empty),
+        .roots = .init(.empty),
+        .slot_deltas = .init(.empty),
+        .min_root = .init(std.math.maxInt(Slot)),
+    };
 
     pub fn deinit(self: *StatusCache, allocator: std.mem.Allocator) void {
-        self.roots.deinit(allocator);
+        var roots = self.roots.tryWrite() orelse
+            @panic("attempted to deinit StatusCache.roots while still in use");
+        var cache = self.cache.tryWrite() orelse
+            @panic("attempted to deinit StatusCache.cache while still in use");
+        var slot_deltas = self.slot_deltas.tryWrite() orelse
+            @panic("attempted to deinit StatusCache.slot_deltas while still in use");
+        defer roots.unlock();
+        defer cache.unlock();
+        defer slot_deltas.unlock();
 
-        for (self.cache.values()) |*highest_fork| {
+        roots.mut().deinit(allocator);
+
+        for (cache.mut().values()) |*highest_fork| {
             const highest_fork_map: *KeyMap = &highest_fork.key_map;
             for (highest_fork_map.values()) |*fork_status| {
                 fork_status.deinit(allocator);
             }
             highest_fork_map.deinit(allocator);
         }
-        self.cache.deinit(allocator);
+        cache.mut().deinit(allocator);
 
-        for (self.slot_deltas.values()) |*status_kv| {
-            const status_map, var status_map_lg = status_kv.writeWithLock();
-            defer status_map_lg.unlock();
-
-            for (status_map.values()) |*value| {
+        for (slot_deltas.mut().values()) |*status_kv| {
+            for (status_kv.values()) |*value| {
                 value.status.deinit(allocator);
             }
-            status_map.deinit(allocator);
+            status_kv.deinit(allocator);
         }
-        self.slot_deltas.deinit(allocator);
+        slot_deltas.mut().deinit(allocator);
     }
 
     pub fn getStatus(
-        self: *const StatusCache,
+        self: *StatusCache,
         key: []const u8,
         blockhash: *const Hash,
         ancestors: *const Ancestors,
     ) ?Fork {
-        const map = self.cache.get(blockhash.*) orelse return null;
+        var cache = self.cache.read();
+        defer cache.unlock();
+
+        const map = cache.get().get(blockhash.*) orelse return null;
 
         const max_key_index = key.len -| (CACHED_KEY_SIZE + 1);
         const index = @min(map.index, max_key_index);
@@ -80,8 +93,10 @@ pub const StatusCache = struct {
         const lookup_key: [CACHED_KEY_SIZE]u8 = key[index..][0..CACHED_KEY_SIZE].*;
 
         const stored_forks: ArrayList(Fork) = map.key_map.get(lookup_key) orelse return null;
+        var roots = self.roots.read();
+        defer roots.unlock();
         return for (stored_forks.items) |fork| {
-            if (ancestors.ancestors.contains(fork.slot) or self.roots.contains(fork.slot)) {
+            if (ancestors.ancestors.contains(fork.slot) or roots.get().contains(fork.slot)) {
                 break fork;
             }
         } else null;
@@ -97,8 +112,11 @@ pub const StatusCache = struct {
     ) error{OutOfMemory}!void {
         const max_key_index = key.len -| (CACHED_KEY_SIZE + 1);
 
+        var cache = self.cache.write();
+        defer cache.unlock();
+
         // Get the cache entry for this blockhash.
-        const entry = try self.cache.getOrPut(allocator, blockhash.*);
+        const entry = try cache.mut().getOrPut(allocator, blockhash.*);
         if (!entry.found_existing) {
             entry.key_ptr.* = blockhash.*;
             entry.value_ptr.* = .{
@@ -124,37 +142,50 @@ pub const StatusCache = struct {
     }
 
     pub fn addRoot(self: *StatusCache, allocator: std.mem.Allocator, fork: Slot) !void {
-        try self.roots.put(allocator, fork, {});
+        {
+            var roots = self.roots.write();
+            defer roots.unlock();
+            try roots.mut().put(allocator, fork, {});
+        }
 
-        self.min_root = if (self.min_root) |min_root|
-            @min(min_root, fork)
-        else
-            fork;
+        _ = self.min_root.fetchMin(fork, .monotonic);
 
         self.purgeRoots(allocator);
     }
 
     /// remove roots older than MAX_CACHE_ENTRIES
     pub fn purgeRoots(self: *StatusCache, allocator: std.mem.Allocator) void {
-        if (self.roots.count() <= MAX_CACHE_ENTRIES) return;
-        const min_root = self.min_root orelse return;
+        const min_root = self.min_root.load(.monotonic);
+        if (min_root == std.math.maxInt(Slot)) return;
 
-        _ = self.roots.orderedRemove(min_root);
+        {
+            var roots = self.roots.write();
+            defer roots.unlock();
 
-        const cache_entries = self.cache.entries.slice();
+            if (roots.get().count() <= MAX_CACHE_ENTRIES) return;
+            _ = roots.mut().orderedRemove(min_root);
+        }
 
-        var n_removed: usize = 0;
-        for (cache_entries.items(.key), cache_entries.items(.value), 0..) |key, highest_fork, i| {
-            if (i >= cache_entries.len - n_removed) continue; // don't try to remove things twice!
+        var cache = self.cache.write();
+        defer cache.unlock();
+
+        var cache_entries = cache.mut().entries.slice();
+
+        var i: usize = 0;
+        while (i < cache.mut().count()) {
+            const key = cache_entries.items(.key)[i];
+            const highest_fork = cache_entries.items(.value)[i];
 
             if (highest_fork.slot <= min_root) {
-                var purged_fork: HighestFork = (self.cache.fetchOrderedRemove(key) orelse
+                var purged_fork: HighestFork = (cache.mut().fetchOrderedRemove(key) orelse
                     unreachable).value; // we just found this key!
 
                 for (purged_fork.key_map.values()) |*fork_status| fork_status.deinit(allocator);
                 purged_fork.key_map.deinit(allocator);
 
-                n_removed += 1;
+                cache_entries = cache.mut().entries.slice();
+            } else {
+                i += 1;
             }
         }
     }
@@ -169,28 +200,27 @@ pub const StatusCache = struct {
         key_index: usize,
         key: *const [CACHED_KEY_SIZE]u8,
     ) error{OutOfMemory}!void {
-        const fork_entry = try self.slot_deltas.getOrPutValue(allocator, slot, StatusKv.init(.{}));
-        const fork: *StatusKv = fork_entry.value_ptr;
-        {
-            const fork_map, var fork_lg = fork.writeWithLock();
-            defer fork_lg.unlock();
+        var slot_deltas = self.slot_deltas.write();
+        defer slot_deltas.unlock();
 
-            const hash_entry = try fork_map.getOrPutValue(
-                allocator,
-                blockhash.*,
-                .{ .status = .{}, .key_index = key_index },
-            );
-            const hash_entry_map: *StatusValues = &hash_entry.value_ptr.status;
-            try hash_entry_map.append(allocator, .{ .key = key.* });
-        }
+        const fork_entry = try slot_deltas.mut().getOrPutValue(allocator, slot, .empty);
+        const fork_map: *StatusKv = fork_entry.value_ptr;
+
+        const hash_entry = try fork_map.getOrPutValue(
+            allocator,
+            blockhash.*,
+            .{ .status = .{}, .key_index = key_index },
+        );
+        const hash_entry_map: *StatusValues = &hash_entry.value_ptr.status;
+        try hash_entry_map.append(allocator, .{ .key = key.* });
     }
 };
 
 test "status cache (de)serialize Ancestors" {
     const allocator = std.testing.allocator;
 
-    var ancestors: Ancestors = .{
-        .ancestors = try Ancestors.Map.init(allocator, &.{ 1, 2, 3, 4 }, &.{}),
+    var ancestors = Ancestors{
+        .ancestors = try .init(allocator, &.{ 1, 2, 3, 4 }, &.{}),
     };
     defer ancestors.deinit(allocator);
 
@@ -215,7 +245,7 @@ test "status cache empty" {
     const signature = sig.core.Signature.ZEROES;
     const block_hash = Hash.ZEROES;
 
-    var status_cache = StatusCache.default();
+    var status_cache = StatusCache.DEFAULT;
 
     try std.testing.expectEqual(
         null,
@@ -240,7 +270,7 @@ test "status cache find with ancestor fork" {
     };
     defer ancestors.ancestors.deinit(allocator);
 
-    var status_cache = StatusCache.default();
+    var status_cache = StatusCache.DEFAULT;
     defer status_cache.deinit(allocator);
 
     try status_cache.insert(allocator, random, &blockhash, &signature.data, 0);
@@ -261,7 +291,7 @@ test "status cache find without ancestor fork" {
 
     var ancestors: Ancestors = .{};
 
-    var status_cache = StatusCache.default();
+    var status_cache = StatusCache.DEFAULT;
     defer status_cache.deinit(allocator);
 
     try status_cache.insert(allocator, random, &blockhash, &signature.data, 1);
@@ -282,7 +312,7 @@ test "status cache find with root ancestor fork" {
 
     var ancestors: Ancestors = .{};
 
-    var status_cache = StatusCache.default();
+    var status_cache = StatusCache.DEFAULT;
     defer status_cache.deinit(allocator);
 
     try status_cache.insert(allocator, random, &blockhash, &signature.data, 0);
@@ -307,7 +337,7 @@ test "status cache insert picks latest blockhash fork" {
     };
     defer ancestors.ancestors.deinit(allocator);
 
-    var status_cache = StatusCache.default();
+    var status_cache = StatusCache.DEFAULT;
     defer status_cache.deinit(allocator);
 
     try status_cache.insert(allocator, random, &blockhash, &signature.data, 0);
@@ -330,7 +360,7 @@ test "status cache root expires" {
 
     var ancestors: Ancestors = .{};
 
-    var status_cache = StatusCache.default();
+    var status_cache = StatusCache.DEFAULT;
     defer status_cache.deinit(allocator);
 
     try status_cache.insert(allocator, random, &blockhash, &signature.data, 0);

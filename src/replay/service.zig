@@ -1,27 +1,45 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 const replay = @import("lib.zig");
+const tracy = @import("tracy");
 
 const Allocator = std.mem.Allocator;
 
 const ThreadPool = sig.sync.ThreadPool;
 
-const AccountStore = sig.accounts_db.account_store.AccountStore;
-const SlotAccountReader = sig.accounts_db.account_store.SlotAccountReader;
-const BlockstoreDB = sig.ledger.BlockstoreDB;
-const BlockstoreReader = sig.ledger.BlockstoreReader;
-const ProgressMap = sig.consensus.ProgressMap;
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 const SlotLeaders = sig.core.leader_schedule.SlotLeaders;
 const SlotState = sig.core.bank.SlotState;
+const SlotAndHash = sig.core.hash.SlotAndHash;
+const Hash = sig.core.Hash;
+
+const AccountStore = sig.accounts_db.AccountStore;
+const AccountReader = sig.accounts_db.AccountReader;
+const SlotAccountReader = sig.accounts_db.account_store.SlotAccountReader;
+
+const LedgerDB = sig.ledger.LedgerDB;
+const LedgerReader = sig.ledger.LedgerReader;
 const LedgerResultWriter = sig.ledger.result_writer.LedgerResultWriter;
+
+const ProgressMap = sig.consensus.ProgressMap;
+const HeaviestSubtreeForkChoice = sig.consensus.HeaviestSubtreeForkChoice;
+
 const ReplayExecutionState = replay.execution.ReplayExecutionState;
 const SlotTracker = replay.trackers.SlotTracker;
 const EpochTracker = replay.trackers.EpochTracker;
 
+const updateSysvarsForNewSlot = replay.update_sysvar.updateSysvarsForNewSlot;
+
 const LatestValidatorVotesForFrozenSlots =
     sig.consensus.latest_validator_votes.LatestValidatorVotes;
+
+const DuplicateSlots = replay.edge_cases.DuplicateSlots;
+const DuplicateConfirmedSlots = replay.edge_cases.DuplicateConfirmedSlots;
+const DuplicateSlotsToRepair = replay.edge_cases.DuplicateSlotsToRepair;
+const EpochSlotsFrozenSlots = replay.edge_cases.EpochSlotsFrozenSlots;
+const PurgeRepairSlotCounters = replay.edge_cases.PurgeRepairSlotCounters;
+const UnfrozenGossipVerifiedVoteHashes = replay.edge_cases.UnfrozenGossipVerifiedVoteHashes;
 
 /// Number of threads to use in replay's thread pool
 const NUM_THREADS = 4;
@@ -41,7 +59,7 @@ pub const ReplayDependencies = struct {
     /// Used in the EpochManager
     epoch_schedule: sig.core.EpochSchedule,
     /// Used to get the entries to validate them and execute the transactions
-    blockstore_reader: *BlockstoreReader,
+    ledger_reader: *LedgerReader,
     /// Used to update the ledger with consensus results
     ledger_result_writer: *LedgerResultWriter,
     account_store: AccountStore,
@@ -50,6 +68,9 @@ pub const ReplayDependencies = struct {
     root_slot: Slot,
     root_slot_constants: sig.core.SlotConstants,
     root_slot_state: sig.core.SlotState,
+    current_epoch: sig.core.Epoch,
+    current_epoch_constants: sig.core.EpochConstants,
+    hard_forks: sig.core.HardForks,
 };
 
 pub const Logger = sig.trace.ScopedLogger("replay");
@@ -70,12 +91,16 @@ const ReplayState = struct {
     slot_leaders: SlotLeaders,
     slot_tracker: *SlotTracker,
     epochs: *EpochTracker,
+    hard_forks: sig.core.HardForks,
     account_store: AccountStore,
     progress_map: *ProgressMap,
-    blockstore_db: BlockstoreDB,
+    ledger_db: LedgerDB,
     execution: ReplayExecutionState,
 
     fn init(deps: ReplayDependencies) !ReplayState {
+        const zone = tracy.Zone.init(@src(), .{ .name = "ReplayState init" });
+        defer zone.deinit();
+
         const thread_pool = try deps.allocator.create(ThreadPool);
         errdefer deps.allocator.destroy(thread_pool);
         thread_pool.* = ThreadPool.init(.{ .max_threads = NUM_THREADS });
@@ -96,6 +121,8 @@ const ReplayState = struct {
         errdefer deps.allocator.destroy(epoch_tracker);
         epoch_tracker.* = .{ .schedule = deps.epoch_schedule };
         errdefer epoch_tracker.deinit(deps.allocator);
+        try epoch_tracker.epochs
+            .put(deps.allocator, deps.current_epoch, deps.current_epoch_constants);
 
         const progress_map = try deps.allocator.create(ProgressMap);
         progress_map.* = ProgressMap.INIT;
@@ -112,6 +139,29 @@ const ReplayState = struct {
             }),
         );
 
+        // TODO: Might need updating with the Initialize requisite replay state PR.
+        var fork_choice = HeaviestSubtreeForkChoice{
+            .allocator = deps.allocator,
+            .logger = .noop,
+            .fork_infos = std.AutoHashMap(
+                SlotAndHash,
+                sig.consensus.fork_choice.ForkInfo,
+            ).init(deps.allocator),
+            .latest_votes = std.AutoHashMap(Pubkey, SlotAndHash).init(deps.allocator),
+            .tree_root = .{ .slot = 0, .hash = Hash.ZEROES },
+            .last_root_time = sig.time.Instant.now(),
+        };
+        var duplicate_slot_tracker = DuplicateSlots.empty;
+        var duplicate_confirmed_slots = DuplicateConfirmedSlots.empty;
+        var epoch_slots_frozen_slots = EpochSlotsFrozenSlots.empty;
+        var duplicate_slots_to_repair = DuplicateSlotsToRepair.empty;
+        var purge_replair_slot_counter = PurgeRepairSlotCounters.empty;
+
+        var unfrozen_gossip_verified_vote_hashes = UnfrozenGossipVerifiedVoteHashes{
+            .votes_per_slot = .empty,
+        };
+        var latest_validator_votes_for_frozen_banks = LatestValidatorVotesForFrozenSlots.empty;
+
         return .{
             .allocator = deps.allocator,
             .logger = .from(deps.logger),
@@ -119,8 +169,9 @@ const ReplayState = struct {
             .slot_leaders = deps.slot_leaders,
             .slot_tracker = slot_tracker,
             .epochs = epoch_tracker,
+            .hard_forks = deps.hard_forks,
             .account_store = deps.account_store,
-            .blockstore_db = deps.blockstore_reader.db,
+            .ledger_db = deps.ledger_reader.db,
             .progress_map = progress_map,
             .execution = try ReplayExecutionState.init(
                 deps.allocator,
@@ -128,10 +179,19 @@ const ReplayState = struct {
                 deps.my_identity,
                 thread_pool,
                 deps.account_store,
-                deps.blockstore_reader,
+                deps.ledger_reader,
+                deps.ledger_result_writer,
                 slot_tracker,
                 epoch_tracker,
                 progress_map,
+                &fork_choice,
+                &duplicate_slot_tracker,
+                &unfrozen_gossip_verified_vote_hashes,
+                &latest_validator_votes_for_frozen_banks,
+                &duplicate_confirmed_slots,
+                &epoch_slots_frozen_slots,
+                &duplicate_slots_to_repair,
+                &purge_replair_slot_counter,
             ),
         };
     }
@@ -144,11 +204,15 @@ const ReplayState = struct {
         self.allocator.destroy(self.slot_tracker);
         self.epochs.deinit(self.allocator);
         self.allocator.destroy(self.epochs);
+        self.hard_forks.deinit(self.allocator);
     }
 };
 
 /// Run the replay service indefinitely.
 pub fn run(deps: ReplayDependencies) !void {
+    const zone = tracy.Zone.init(@src(), .{ .name = "run (replay service)" });
+    defer zone.deinit();
+
     var state = try ReplayState.init(deps);
     defer state.deinit();
 
@@ -159,21 +223,29 @@ pub fn run(deps: ReplayDependencies) !void {
 /// - replay all active slots that have not been replayed yet
 /// - running concensus on the latest updates
 fn advanceReplay(state: *ReplayState) !void {
+    const zone = tracy.Zone.init(@src(), .{ .name = "advanceReplay" });
+    defer zone.deinit();
+
+    state.logger.info().log("advancing replay");
     try trackNewSlots(
         state.allocator,
         state.account_store,
-        &state.blockstore_db,
+        &state.ledger_db,
         state.slot_tracker,
         state.epochs,
         state.slot_leaders,
-        state.execution.progress_map,
+        &state.hard_forks,
+        state.progress_map,
     );
 
-    _ = try replay.execution.replayActiveSlots(&state.execution);
+    const processed_a_slot = try replay.execution.replayActiveSlots(&state.execution);
+    if (!processed_a_slot) std.time.sleep(100 * std.time.ns_per_ms);
 
     _ = &replay.edge_cases.processEdgeCases;
 
-    try replay.consensus.processConsensus(null);
+    // ignore errors in consensus since they are expected until the inputs are provided
+    replay.consensus.processConsensus(null) catch |e|
+        state.logger.err().logf("consensus failed with an error: {}", .{e});
 
     // TODO: dump_then_repair_correct_slots
 
@@ -188,13 +260,17 @@ fn advanceReplay(state: *ReplayState) !void {
 fn trackNewSlots(
     allocator: Allocator,
     account_store: AccountStore,
-    blockstore_db: *sig.ledger.BlockstoreDB,
+    ledger_db: *LedgerDB,
     slot_tracker: *SlotTracker,
     epoch_tracker: *EpochTracker,
     slot_leaders: SlotLeaders,
+    hard_forks: *const sig.core.HardForks,
     /// needed for update_fork_propagated_threshold_from_votes
     _: *ProgressMap,
 ) !void {
+    var zone = tracy.Zone.init(@src(), .{ .name = "trackNewSlots" });
+    defer zone.deinit();
+
     const root = slot_tracker.root;
     var frozen_slots = try slot_tracker.frozenSlots(allocator);
     defer frozen_slots.deinit(allocator);
@@ -206,8 +282,8 @@ fn trackNewSlots(
         frozen_slots_since_root.appendAssumeCapacity(slot);
     };
 
-    var next_slots = try BlockstoreReader
-        .getSlotsSince(allocator, blockstore_db, frozen_slots_since_root.items);
+    var next_slots = try LedgerReader
+        .getSlotsSince(allocator, ledger_db, frozen_slots_since_root.items);
     defer {
         for (next_slots.values()) |*list| list.deinit(allocator);
         next_slots.deinit(allocator);
@@ -215,56 +291,108 @@ fn trackNewSlots(
 
     for (next_slots.keys(), next_slots.values()) |parent_slot, children| {
         const parent_info = frozen_slots.get(parent_slot) orelse return error.MissingParent;
+
         for (children.items) |slot| {
             if (slot_tracker.contains(slot)) continue;
 
             const epoch_info = epoch_tracker.getPtrForSlot(slot) orelse
                 return error.MissingEpoch;
 
-            var slot_state = try SlotState.fromFrozenParent(allocator, parent_info.state);
-            errdefer slot_state.deinit(allocator);
-
-            const epoch_reward_status = try parent_info.constants.epoch_reward_status
-                .clone(allocator);
-            errdefer epoch_reward_status.deinit(allocator);
-
-            const leader = slot_leaders.get(slot) orelse return error.UnknownLeader;
-
-            var ancestors = try parent_info.constants.ancestors.clone(allocator);
-            errdefer ancestors.deinit(allocator);
-            try ancestors.ancestors.put(allocator, slot, {});
-
-            var feature_set = try getActiveFeatures(
+            const constants, var state = try newSlotFromParent(
                 allocator,
-                account_store.reader().forSlot(&ancestors),
+                account_store.reader(),
+                epoch_info.ticks_per_slot,
+                parent_slot,
+                parent_info.constants,
+                parent_info.state,
+                slot_leaders.get(slot) orelse return error.UnknownLeader,
                 slot,
             );
-            errdefer feature_set.deinit(allocator);
+            errdefer constants.deinit(allocator);
+            errdefer state.deinit(allocator);
 
-            const parent_hash = parent_info.state.hash.readCopy().?;
+            try updateSysvarsForNewSlot(
+                allocator,
+                account_store,
+                epoch_info,
+                epoch_tracker.schedule,
+                &constants,
+                &state,
+                slot,
+                hard_forks,
+            );
 
-            try slot_tracker.put(allocator, slot, .{
-                .constants = .{
-                    .parent_slot = parent_slot,
-                    .parent_hash = parent_hash,
-                    .parent_lt_hash = parent_info.state.accounts_lt_hash.readCopy().?,
-                    .block_height = parent_info.constants.block_height + 1,
-                    .collector_id = leader,
-                    .max_tick_height = (slot + 1) * epoch_info.ticks_per_slot,
-                    .fee_rate_governor = .initDerived(
-                        &parent_info.constants.fee_rate_governor,
-                        parent_info.state.signature_count.load(.monotonic),
-                    ),
-                    .epoch_reward_status = epoch_reward_status,
-                    .ancestors = ancestors,
-                    .feature_set = feature_set,
-                },
-                .state = slot_state,
-            });
+            try slot_tracker.put(allocator, slot, .{ .constants = constants, .state = state });
 
             // TODO: update_fork_propagated_threshold_from_votes
         }
     }
+}
+
+/// Initializes the SlotConstants and SlotState from their parents and other
+/// dependencies.
+///
+/// This is analogous to the *portion* of agave's Bank::new_from_parent that is
+/// responsible for creating the actual bank struct.
+///
+/// For the relevant updates to accountsdb to set sysvars, see
+/// updateSysvarsForNewSlot
+fn newSlotFromParent(
+    allocator: Allocator,
+    account_reader: AccountReader,
+    ticks_in_slot: u64,
+    parent_slot: Slot,
+    parent_constants: *const sig.core.SlotConstants,
+    parent_state: *SlotState,
+    leader: Pubkey,
+    slot: Slot,
+) !struct { sig.core.SlotConstants, SlotState } {
+    var zone = tracy.Zone.init(@src(), .{ .name = "newSlotFromParent" });
+    defer zone.deinit();
+
+    var state = try SlotState.fromFrozenParent(allocator, parent_state);
+    errdefer state.deinit(allocator);
+
+    const epoch_reward_status = try parent_constants.epoch_reward_status
+        .clone(allocator);
+    errdefer epoch_reward_status.deinit(allocator);
+
+    var ancestors = try parent_constants.ancestors.clone(allocator);
+    errdefer ancestors.deinit(allocator);
+    try ancestors.ancestors.put(allocator, slot, {});
+
+    var feature_set = try getActiveFeatures(allocator, account_reader.forSlot(&ancestors), slot);
+
+    const parent_hash = parent_state.hash.readCopy().?;
+
+    // This is inefficient, reserved accounts could live in epoch constants along with
+    // the feature set since feature activations are only applied at epoch boundaries.
+    // Then we only need to clone the map and update the reserved accounts once per epoch.
+    const reserved_accounts = try sig.core.reserved_accounts.initForSlot(
+        allocator,
+        &feature_set,
+        slot,
+    );
+    errdefer reserved_accounts.deinit(allocator);
+
+    const constants = sig.core.SlotConstants{
+        .parent_slot = parent_slot,
+        .parent_hash = parent_hash,
+        .parent_lt_hash = parent_state.accounts_lt_hash.readCopy().?,
+        .block_height = parent_constants.block_height + 1,
+        .collector_id = leader,
+        .max_tick_height = (slot + 1) * ticks_in_slot,
+        .fee_rate_governor = .initDerived(
+            &parent_constants.fee_rate_governor,
+            parent_state.signature_count.load(.monotonic),
+        ),
+        .epoch_reward_status = epoch_reward_status,
+        .ancestors = ancestors,
+        .feature_set = feature_set,
+        .reserved_accounts = reserved_accounts,
+    };
+
+    return .{ constants, state };
 }
 
 // TODO: epoch boundary - handle feature activations
@@ -273,9 +401,11 @@ pub fn getActiveFeatures(
     account_reader: SlotAccountReader,
     slot: Slot,
 ) !sig.core.FeatureSet {
-    var features = std.AutoArrayHashMapUnmanaged(Pubkey, Slot).empty;
-    for (sig.core.FEATURES) |pubkey| {
-        const feature_account = try account_reader.get(pubkey) orelse continue;
+    var features: sig.core.FeatureSet = .ALL_DISABLED;
+    for (0..sig.core.features.NUM_FEATURES) |i| {
+        const possible_feature: sig.core.features.Feature = @enumFromInt(i);
+        const possible_feature_pubkey = sig.core.features.map.get(possible_feature).key;
+        const feature_account = try account_reader.get(possible_feature_pubkey) orelse continue;
         if (!feature_account.owner.equals(&sig.runtime.ids.FEATURE_PROGRAM_ID)) {
             return error.FeatureNotOwnedByFeatureProgram;
         }
@@ -285,11 +415,11 @@ pub fn getActiveFeatures(
         const feature = try sig.bincode.read(allocator, struct { activated_at: ?u64 }, reader, .{});
         if (feature.activated_at) |activation_slot| {
             if (activation_slot <= slot) {
-                try features.put(allocator, pubkey, activation_slot);
+                features.setSlot(possible_feature, activation_slot);
             }
         }
     }
-    return .{ .active = features };
+    return features;
 }
 
 test "getActiveFeatures rejects wrong ownership" {
@@ -300,7 +430,11 @@ test "getActiveFeatures rejects wrong ownership" {
     var acct: sig.core.Account = undefined;
     acct.owner = Pubkey.ZEROES;
 
-    try accounts.put(allocator, sig.core.features.SYSTEM_TRANSFER_ZERO_CHECK, acct);
+    try accounts.put(
+        allocator,
+        sig.core.features.map.get(.system_transfer_zero_check).key,
+        acct,
+    );
 
     try std.testing.expectError(
         error.FeatureNotOwnedByFeatureProgram,
@@ -312,8 +446,8 @@ test trackNewSlots {
     const allocator = std.testing.allocator;
     var rng = std.Random.DefaultPrng.init(0);
 
-    var blockstore_db = try sig.ledger.tests.TestDB.init(@src());
-    defer blockstore_db.deinit();
+    var ledger_db = try sig.ledger.tests.TestDB.init(@src());
+    defer ledger_db.deinit();
     //     0
     //     1
     //    / \
@@ -334,12 +468,12 @@ test trackNewSlots {
         var meta = sig.ledger.meta.SlotMeta.init(allocator, slot, parent);
         defer meta.deinit();
         try meta.child_slots.appendSlice(children);
-        try blockstore_db.put(sig.ledger.schema.schema.slot_meta, slot, meta);
+        try ledger_db.put(sig.ledger.schema.schema.slot_meta, slot, meta);
     }
 
     var slot_tracker: SlotTracker = try .init(allocator, 0, .{
-        .constants = .genesis(.DEFAULT),
-        .state = .GENESIS,
+        .state = try .genesis(allocator),
+        .constants = try .genesis(allocator, .DEFAULT),
     });
     defer slot_tracker.deinit(allocator);
     slot_tracker.get(0).?.state.hash.set(.ZEROES);
@@ -353,7 +487,7 @@ test trackNewSlots {
         .genesis_creation_time = 1,
         .slots_per_year = 1,
         .stakes = try .initEmptyWithGenesisStakeHistoryEntry(allocator),
-        .rent_collector = .initRandom(rng.random()),
+        .rent_collector = .DEFAULT,
     });
 
     const leader_schedule = sig.core.leader_schedule.LeaderSchedule{
@@ -381,14 +515,17 @@ test trackNewSlots {
     // slot tracker should start with only 0
     try expectSlotTracker(&slot_tracker, leader_schedule, &.{.{ 0, 0 }}, &.{ 1, 2, 3, 4, 5, 6 });
 
+    const hard_forks = sig.core.HardForks{};
+
     // only the root (0) is considered frozen, so only 0 and 1 should be added at first.
     try trackNewSlots(
         allocator,
         .noop,
-        &blockstore_db,
+        &ledger_db,
         &slot_tracker,
         &epoch_tracker,
         slot_leaders,
+        &hard_forks,
         undefined,
     );
     try expectSlotTracker(
@@ -402,10 +539,11 @@ test trackNewSlots {
     try trackNewSlots(
         allocator,
         .noop,
-        &blockstore_db,
+        &ledger_db,
         &slot_tracker,
         &epoch_tracker,
         slot_leaders,
+        &hard_forks,
         undefined,
     );
     try expectSlotTracker(
@@ -420,10 +558,11 @@ test trackNewSlots {
     try trackNewSlots(
         allocator,
         .noop,
-        &blockstore_db,
+        &ledger_db,
         &slot_tracker,
         &epoch_tracker,
         slot_leaders,
+        &hard_forks,
         undefined,
     );
     try expectSlotTracker(
@@ -439,10 +578,11 @@ test trackNewSlots {
     try trackNewSlots(
         allocator,
         .noop,
-        &blockstore_db,
+        &ledger_db,
         &slot_tracker,
         &epoch_tracker,
         slot_leaders,
+        &hard_forks,
         undefined,
     );
     try expectSlotTracker(

@@ -95,6 +95,15 @@ pub fn EpochStakesGeneric(comptime stakes_type: StakesType) type {
 
         const Self = @This();
 
+        pub fn init(allocator: Allocator) Allocator.Error!Self {
+            return .{
+                .stakes = try .init(allocator),
+                .total_stake = 0,
+                .node_id_to_vote_accounts = .{},
+                .epoch_authorized_voters = .{},
+            };
+        }
+
         pub fn deinit(self: Self, allocator: Allocator) void {
             self.stakes.deinit(allocator);
             deinitMapAndValues(allocator, self.node_id_to_vote_accounts);
@@ -103,7 +112,15 @@ pub fn EpochStakesGeneric(comptime stakes_type: StakesType) type {
         }
 
         pub fn clone(self: *const Self, allocator: Allocator) !Self {
-            const stakes = try self.stakes.clone(allocator);
+            return self.convert(allocator, stakes_type);
+        }
+
+        pub fn convert(
+            self: *const Self,
+            allocator: Allocator,
+            comptime output_type: StakesType,
+        ) !EpochStakesGeneric(output_type) {
+            const stakes = try self.stakes.convert(allocator, output_type);
             errdefer stakes.deinit(allocator);
 
             const node_id_to_vote_accounts =

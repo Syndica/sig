@@ -31,8 +31,7 @@ pub const Rent = extern struct {
     /// distributed to validators.
     burn_percent: u8,
 
-    pub const ID =
-        Pubkey.parseBase58String("SysvarRent111111111111111111111111111111111") catch unreachable;
+    pub const ID: Pubkey = .parse("SysvarRent111111111111111111111111111111111");
 
     pub const DEFAULT: Rent = .{
         .lamports_per_byte_year = DEFAULT_LAMPORTS_PER_BYTE_YEAR,
@@ -46,7 +45,7 @@ pub const Rent = extern struct {
         .burn_percent = 0,
     };
 
-    pub const STORAGE_SIZE: u64 = @sizeOf(Rent);
+    pub const STORAGE_SIZE: u64 = 17;
 
     pub fn minimumBalance(self: Rent, data_len: usize) u64 {
         const bytes: u64 = @intCast(data_len);

@@ -2,7 +2,6 @@ const std = @import("std");
 const sig = @import("../../../sig.zig");
 
 const vm = sig.vm;
-const features = sig.core.features;
 const serialize = sig.runtime.program.bpf.serialize;
 const stable_log = sig.runtime.stable_log;
 
@@ -18,16 +17,18 @@ pub fn execute(
     ic: *InstructionContext,
 ) ExecutionError!void {
     // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1584-L1587
-    const direct_mapping = ic.tc.feature_set.active.contains(
-        features.BPF_ACCOUNT_DATA_DIRECT_MAPPING,
+    const direct_mapping = ic.tc.feature_set.active(
+        .bpf_account_data_direct_mapping,
+        ic.tc.slot,
     );
 
     const executable = blk: {
         const program_account = try ic.borrowProgramAccount();
         defer program_account.release();
 
-        const remove_accounts_executable_flag_checks = ic.tc.feature_set.active.contains(
-            features.REMOVE_ACCOUNTS_EXECUTABLE_FLAG_CHECKS,
+        const remove_accounts_executable_flag_checks = ic.tc.feature_set.active(
+            .remove_accounts_executable_flag_checks,
+            ic.tc.slot,
         );
 
         if (!remove_accounts_executable_flag_checks and
@@ -59,8 +60,9 @@ pub fn execute(
         }
     };
 
-    const mask_out_rent_epoch_in_vm_serialization = ic.tc.feature_set.active.contains(
-        features.BPF_ACCOUNT_DATA_DIRECT_MAPPING,
+    const mask_out_rent_epoch_in_vm_serialization = ic.tc.feature_set.active(
+        .bpf_account_data_direct_mapping,
+        ic.tc.slot,
     );
 
     // [agave] https://github.com/anza-xyz/agave/blob/32ac530151de63329f9ceb97dd23abfcee28f1d4/programs/bpf_loader/src/lib.rs#L1588
@@ -132,14 +134,19 @@ pub fn execute(
         // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1642-L1645
         .ok => |status| if (status != 0) {
             const execution_error = sig.vm.executionErrorFromStatusCode(status);
-            if (execution_error == error.Custom) ic.tc.custom_error = @intCast(status);
+            switch (execution_error) {
+                error.Custom => ic.tc.custom_error = @intCast(status),
+                error.GenericError => ic.tc.custom_error = 0,
+                else => {},
+            }
             maybe_execute_error = execution_error;
         },
         .err => |err| {
             const err_kind = sig.vm.getExecutionErrorKind(err);
-            if (ic.tc.feature_set.active.contains(features.DEPLETE_CU_METER_ON_VM_FAILURE) and
-                err_kind != .Syscall)
-            {
+            if (ic.tc.feature_set.active(
+                .deplete_cu_meter_on_vm_failure,
+                ic.tc.slot,
+            ) and err_kind != .Syscall) {
                 ic.tc.compute_meter = 0;
             }
 

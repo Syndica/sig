@@ -6,9 +6,11 @@ const core = sig.core;
 
 const Allocator = std.mem.Allocator;
 
+const Hash = core.Hash;
 const Ancestors = core.Ancestors;
 const InstructionAccount = core.instruction.InstructionAccount;
 const Pubkey = core.Pubkey;
+const ReservedAccounts = core.ReservedAccounts;
 const Transaction = core.Transaction;
 const TransactionAddressLookup = core.transaction.AddressLookup;
 
@@ -16,8 +18,8 @@ const SlotAccountReader = sig.accounts_db.SlotAccountReader;
 
 const AddressLookupTable = sig.runtime.program.address_lookup_table.AddressLookupTable;
 const InstructionInfo = sig.runtime.InstructionInfo;
-const AccountMeta = sig.runtime.InstructionInfo.AccountMeta;
 const ProgramMeta = sig.runtime.InstructionInfo.ProgramMeta;
+const RuntimeTransaction = sig.runtime.transaction_execution.RuntimeTransaction;
 
 const LockableAccount = sig.replay.account_locks.LockableAccount;
 
@@ -50,12 +52,24 @@ pub const ResolvedTransaction = struct {
         acc.deinit(allocator);
         allocator.free(self.instructions);
     }
+
+    pub fn toRuntimeTransaction(self: ResolvedTransaction, message_hash: Hash) RuntimeTransaction {
+        return .{
+            .signature_count = self.transaction.signatures.len,
+            .fee_payer = self.transaction.msg.account_keys[0],
+            .msg_hash = message_hash,
+            .recent_blockhash = self.transaction.msg.recent_blockhash,
+            .instructions = self.instructions,
+            .accounts = self.accounts,
+        };
+    }
 };
 
 pub fn resolveBatch(
     allocator: Allocator,
     account_reader: SlotAccountReader,
     batch: []const Transaction,
+    reserved_accounts: *const ReservedAccounts,
 ) !ResolvedBatch {
     var accounts = try std.ArrayListUnmanaged(LockableAccount)
         .initCapacity(allocator, Transaction.numAccounts(batch));
@@ -65,7 +79,12 @@ pub fn resolveBatch(
     errdefer allocator.free(resolved_txns);
 
     for (batch, resolved_txns) |transaction, *resolved| {
-        resolved.* = try resolveTransaction(allocator, account_reader, transaction);
+        resolved.* = try resolveTransaction(
+            allocator,
+            account_reader,
+            transaction,
+            reserved_accounts,
+        );
         for (
             resolved.accounts.items(.pubkey),
             resolved.accounts.items(.is_writable),
@@ -87,6 +106,7 @@ fn resolveTransaction(
     allocator: Allocator,
     account_reader: SlotAccountReader,
     transaction: Transaction,
+    reserved_accounts: *const ReservedAccounts,
 ) !ResolvedTransaction {
     const message = transaction.msg;
 
@@ -112,12 +132,12 @@ fn resolveTransaction(
     for (message.account_keys, 0..) |pubkey, i| accounts.appendAssumeCapacity(.{
         .pubkey = pubkey,
         .is_signer = message.isSigner(i),
-        .is_writable = message.isWritable(i),
+        .is_writable = message.isWritable(i, lookups, reserved_accounts),
     });
-    for (lookups.writable) |pubkey| accounts.appendAssumeCapacity(.{
+    for (lookups.writable, 0..) |pubkey, i| accounts.appendAssumeCapacity(.{
         .pubkey = pubkey,
         .is_signer = false,
-        .is_writable = true,
+        .is_writable = message.isWritable(message.account_keys.len + i, lookups, reserved_accounts),
     });
     for (lookups.readonly) |pubkey| accounts.appendAssumeCapacity(.{
         .pubkey = pubkey,
@@ -129,8 +149,7 @@ fn resolveTransaction(
     const instructions = try allocator.alloc(InstructionInfo, message.instructions.len);
     errdefer allocator.free(instructions);
     for (message.instructions, instructions) |input_ix, *output_ix| {
-        var account_metas =
-            std.BoundedArray(AccountMeta, InstructionInfo.MAX_ACCOUNT_METAS){};
+        var account_metas = InstructionInfo.AccountMetas{};
         var seen = std.bit_set.ArrayBitSet(usize, 256).initEmpty();
         for (input_ix.account_indexes, 0..) |index, i| {
             // find first usage of this account in this instruction
@@ -143,34 +162,21 @@ fn resolveTransaction(
             seen.set(index);
 
             // expand the account metadata
-            (try account_metas.addOne()).* = if (index < lookups_start) .{
-                .pubkey = message.account_keys[index],
-                .index_in_transaction = index,
-                .index_in_caller = index,
-                .index_in_callee = @intCast(index_in_callee),
-                .is_signer = message.isSigner(index),
-                .is_writable = message.isWritable(index),
-            } else if (index < readable_lookups_start) .{
-                .pubkey = lookups.writable[index - lookups_start],
-                .index_in_transaction = index,
-                .index_in_caller = index,
-                .index_in_callee = @intCast(index_in_callee),
-                .is_signer = false,
-                .is_writable = true,
-            } else if (index < lookups_end) .{
-                .pubkey = lookups.readonly[index - readable_lookups_start],
-                .index_in_transaction = index,
-                .index_in_caller = index,
-                .index_in_callee = @intCast(index_in_callee),
-                .is_signer = false,
-                .is_writable = false,
-            } else {
+            const account = if (index < accounts.len) accounts.get(index) else {
                 return error.InvalidAccountIndex;
+            };
+            (account_metas.addOne() catch break).* = .{
+                .pubkey = account.pubkey,
+                .is_signer = account.is_signer,
+                .is_writable = account.is_writable,
+                .index_in_transaction = index,
+                .index_in_caller = index,
+                .index_in_callee = @intCast(index_in_callee),
             };
         }
 
         if (input_ix.program_index >= message.account_keys.len) {
-            return error.InvalidAccountIndex;
+            return error.InvalidAddressLookupTableIndex;
         }
         output_ix.* = .{
             .program_meta = ProgramMeta{
@@ -188,11 +194,16 @@ fn resolveTransaction(
     };
 }
 
+pub const LookupTableAccounts = struct {
+    writable: []const Pubkey,
+    readonly: []const Pubkey,
+};
+
 fn resolveLookupTableAccounts(
     allocator: Allocator,
     account_reader: SlotAccountReader,
     address_lookups: []const TransactionAddressLookup,
-) !struct { writable: []const Pubkey, readonly: []const Pubkey } {
+) !LookupTableAccounts {
     // count number of accounts
     var total_writable: usize = 0;
     var total_readonly: usize = 0;
@@ -211,13 +222,12 @@ fn resolveLookupTableAccounts(
 
     // handle lookup table accounts
     for (address_lookups) |lookup| {
-        const table = try getLookupTable(account_reader, lookup.table_address) orelse
-            return error.LookupTableAccountNotFound;
+        const table = try getLookupTable(account_reader, lookup.table_address);
 
         // resolve writable addresses
         for (lookup.writable_indexes) |index| {
             if (table.addresses.len < index + 1) {
-                return error.LookupTableAccountTooSmall;
+                return error.InvalidAddressLookupTableIndex;
             }
             writable_accounts.appendAssumeCapacity(table.addresses[index]);
         }
@@ -225,7 +235,7 @@ fn resolveLookupTableAccounts(
         // resolve readonly addresses
         for (lookup.readonly_indexes) |index| {
             if (table.addresses.len < index + 1) {
-                return error.LookupTableAccountTooSmall;
+                return error.InvalidAddressLookupTableIndex;
             }
             readonly_accounts.appendAssumeCapacity(table.addresses[index]);
         }
@@ -240,20 +250,31 @@ fn resolveLookupTableAccounts(
 fn getLookupTable(
     account_reader: SlotAccountReader,
     table_address: Pubkey,
-) !?AddressLookupTable {
+) !AddressLookupTable {
     // TODO: Ensure the account comes from a valid slot by checking
     // it against the current slot's ancestors. This won't be usable
     // until consensus is implemented in replay, so it's not
     // implemented yet.
-    const account = try account_reader.get(table_address) orelse return null;
+    const account = try account_reader.get(table_address) orelse
+        return error.AddressLookupTableNotFound;
     defer account.deinit(account_reader.allocator());
-    if (account.data.len() > AddressLookupTable.MAX_SERIALIZED_SIZE) {
-        return error.LookupTableAccountOverflow;
+
+    if (!account.owner.equals(&sig.runtime.program.address_lookup_table.ID)) {
+        return error.InvalidAddressLookupTableOwner;
     }
+
+    if (account.data.len() > AddressLookupTable.MAX_SERIALIZED_SIZE) {
+        return error.InvalidAddressLookupTableData;
+    }
+
     var buf: [AddressLookupTable.MAX_SERIALIZED_SIZE]u8 = undefined;
     const account_bytes = buf[0..account.data.len()];
     account.data.readAll(account_bytes);
-    return try AddressLookupTable.deserialize(account_bytes);
+
+    return AddressLookupTable.deserialize(account_bytes) catch {
+        return error.InvalidAddressLookupTableData;
+    };
+
     // NOTE: deactivated lookup tables are allowed to be used,
     // according to agave's implementation. see here, where agave
     // discards the value:
@@ -397,6 +418,7 @@ test resolveBatch {
         std.testing.allocator,
         map.accountReader().forSlot(&ancestors),
         &.{tx},
+        &.empty,
     );
     defer resolved.deinit(std.testing.allocator);
 
@@ -477,4 +499,90 @@ fn put(
         .executable = false,
         .rent_epoch = 0,
     });
+}
+
+test getLookupTable {
+    const allocator = std.testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(0);
+    const random = prng.random();
+
+    var map = sig.accounts_db.ThreadSafeAccountMap.init(allocator);
+    defer map.deinit();
+
+    var ancestors = sig.core.Ancestors{};
+    defer ancestors.deinit(allocator);
+    try ancestors.addSlot(allocator, 0);
+
+    const account_reader = map.accountReader().forSlot(&ancestors);
+
+    { // Invalid owner
+        const pubkey = Pubkey.initRandom(random);
+
+        try map.put(0, pubkey, .{
+            .lamports = 1,
+            .data = &.{},
+            .owner = Pubkey.initRandom(random),
+            .executable = false,
+            .rent_epoch = 0,
+        });
+
+        try std.testing.expectError(
+            error.InvalidAddressLookupTableOwner,
+            getLookupTable(account_reader, pubkey),
+        );
+    }
+
+    { // Size too large
+        const pubkey = Pubkey.initRandom(random);
+        const data = try allocator.alloc(u8, AddressLookupTable.MAX_SERIALIZED_SIZE + 1);
+        defer allocator.free(data);
+
+        try map.put(0, pubkey, .{
+            .lamports = 1,
+            .data = data,
+            .owner = sig.runtime.program.address_lookup_table.ID,
+            .executable = false,
+            .rent_epoch = 0,
+        });
+
+        try std.testing.expectError(
+            error.InvalidAddressLookupTableData,
+            getLookupTable(account_reader, pubkey),
+        );
+    }
+
+    { // Data invalid
+        const pubkey = Pubkey.initRandom(random);
+        const data = try allocator.alloc(u8, AddressLookupTable.MAX_SERIALIZED_SIZE);
+        defer allocator.free(data);
+
+        try map.put(0, pubkey, .{
+            .lamports = 1,
+            .data = data,
+            .owner = sig.runtime.program.address_lookup_table.ID,
+            .executable = false,
+            .rent_epoch = 0,
+        });
+
+        try std.testing.expectError(
+            error.InvalidAddressLookupTableData,
+            getLookupTable(account_reader, pubkey),
+        );
+    }
+
+    {
+        const pubkey = Pubkey.initRandom(random);
+        const lookup_table = AddressLookupTable{
+            .meta = .{},
+            .addresses = &.{Pubkey.initRandom(random)},
+        };
+
+        try put(&map, pubkey, lookup_table);
+
+        const loaded_lookup_table = try getLookupTable(account_reader, pubkey);
+
+        try std.testing.expectEqual(lookup_table.meta, loaded_lookup_table.meta);
+        try std.testing.expect(lookup_table.addresses[0].equals(&loaded_lookup_table.addresses[0]));
+    }
 }

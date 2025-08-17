@@ -1,5 +1,6 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
+const tracy = @import("tracy");
 
 const Allocator = std.mem.Allocator;
 
@@ -51,6 +52,8 @@ pub const SlotTracker = struct {
             .slots = .empty,
         };
         try self.put(allocator, root_slot, slot_init);
+        tracy.plot(u32, "slots tracked", @intCast(self.slots.count()));
+
         return self;
     }
 
@@ -70,6 +73,8 @@ pub const SlotTracker = struct {
         slot: Slot,
         slot_init: Element,
     ) Allocator.Error!void {
+        defer tracy.plot(u32, "slots tracked", @intCast(self.slots.count()));
+
         try self.slots.ensureUnusedCapacity(allocator, 1);
         const elem = try allocator.create(Element);
         elem.* = slot_init;
@@ -92,6 +97,8 @@ pub const SlotTracker = struct {
         slot: Slot,
         slot_init: Element,
     ) Allocator.Error!GetOrPutResult {
+        defer tracy.plot(u32, "slots tracked", @intCast(self.slots.count()));
+
         if (self.get(slot)) |existing| return .{
             .found_existing = true,
             .reference = existing,
@@ -131,15 +138,16 @@ pub const SlotTracker = struct {
         self: *const SlotTracker,
         allocator: Allocator,
     ) Allocator.Error!std.AutoArrayHashMapUnmanaged(Slot, Reference) {
-        var frozen_slots = std.AutoArrayHashMapUnmanaged(Slot, Reference).empty;
+        var frozen_slots: std.AutoArrayHashMapUnmanaged(Slot, Reference) = .empty;
         try frozen_slots.ensureTotalCapacity(allocator, self.slots.count());
+
         for (self.slots.keys(), self.slots.values()) |slot, value| {
-            if (value.state.isFrozen()) {
-                frozen_slots.putAssumeCapacity(slot, .{
-                    .constants = &value.constants,
-                    .state = &value.state,
-                });
-            }
+            if (!value.state.isFrozen()) continue;
+
+            frozen_slots.putAssumeCapacity(
+                slot,
+                .{ .constants = &value.constants, .state = &value.state },
+            );
         }
         return frozen_slots;
     }
@@ -170,11 +178,16 @@ pub const SlotTracker = struct {
     //  TODO Revisit: Currently this removes all slots less than the rooted slot.
     // In Agave, only the slots not in the root path are removed.
     pub fn pruneNonRooted(self: *SlotTracker, allocator: Allocator) void {
+        defer tracy.plot(u32, "slots tracked", @intCast(self.slots.count()));
+
         var slice = self.slots.entries.slice();
         var index: usize = 0;
         while (index < slice.len) {
             if (slice.items(.key)[index] < self.root) {
-                allocator.destroy(slice.items(.value)[index]);
+                const element = slice.items(.value)[index];
+                element.state.deinit(allocator);
+                element.constants.deinit(allocator);
+                allocator.destroy(element);
                 self.slots.swapRemoveAt(index);
                 slice = self.slots.entries.slice();
             } else {
@@ -215,7 +228,8 @@ fn testDummySlotConstants(slot: Slot) SlotConstants {
         .fee_rate_governor = .DEFAULT,
         .epoch_reward_status = .inactive,
         .ancestors = .{ .ancestors = .empty },
-        .feature_set = .{ .active = .empty },
+        .feature_set = .ALL_DISABLED,
+        .reserved_accounts = .empty,
     };
 }
 
@@ -224,18 +238,20 @@ test "SlotTracker.prune removes all slots less than root" {
     const root_slot: Slot = 4;
     var tracker: SlotTracker = try .init(allocator, root_slot, .{
         .constants = testDummySlotConstants(root_slot),
-        .state = .GENESIS,
+        .state = try .genesis(allocator),
     });
     defer tracker.deinit(allocator);
 
     // Add slots 1, 2, 3, 4, 5
     for (1..6) |slot| {
+        var state = try SlotState.genesis(allocator);
         const gop = try tracker.getOrPut(allocator, slot, .{
             .constants = testDummySlotConstants(slot),
-            .state = .GENESIS,
+            .state = state,
         });
         if (gop.found_existing) {
             std.debug.assert(slot == root_slot);
+            state.deinit(allocator);
         }
     }
 

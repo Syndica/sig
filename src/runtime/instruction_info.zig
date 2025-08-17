@@ -20,7 +20,11 @@ pub const InstructionInfo = struct {
     /// [fd] https://github.com/firedancer-io/firedancer/blob/dfadb7d33683aa8711dfe837282ad0983d3173a0/src/flamenco/runtime/info/fd_instr_info.h#L12
     pub const MAX_ACCOUNT_METAS: usize = 256;
 
-    pub const AccountMetas = std.BoundedArray(AccountMeta, MAX_ACCOUNT_METAS);
+    /// Errors resulting from instructions with account metas > MAX_ACCOUNT_METAS are handled during
+    /// transaction execution. We construct the account metas before transaction execution, so using an
+    /// array of size MAX_ACCOUNTS_METAS + 1 allows us to check the account metas length during transaction
+    /// execution and return the appropriate error.
+    pub const AccountMetas = std.BoundedArray(AccountMeta, MAX_ACCOUNT_METAS + 1);
 
     pub const ProgramMeta = struct {
         pubkey: Pubkey,
@@ -105,16 +109,20 @@ pub const InstructionInfo = struct {
         return signers;
     }
 
+    pub fn instructionDataToDeserialize(self: *const InstructionInfo) []const u8 {
+        return self.instruction_data[0..@min(
+            self.instruction_data.len,
+            Transaction.MAX_BYTES,
+        )];
+    }
+
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/program_utils.rs#L9
     pub fn deserializeInstruction(
         self: *const InstructionInfo,
         allocator: std.mem.Allocator,
         comptime T: type,
     ) InstructionError!T {
-        var fbs = std.io.fixedBufferStream(self.instruction_data[0..@min(
-            self.instruction_data.len,
-            Transaction.MAX_BYTES,
-        )]);
+        var fbs = std.io.fixedBufferStream(self.instructionDataToDeserialize());
         const data = bincode.read(allocator, T, fbs.reader(), .{}) catch {
             return InstructionError.InvalidInstructionData;
         };
@@ -128,11 +136,7 @@ pub const InstructionInfo = struct {
         comptime T: type,
         alloc_buf: []u8,
     ) InstructionError!T {
-        var fbs = std.io.fixedBufferStream(self.instruction_data[0..@min(
-            self.instruction_data.len,
-            Transaction.MAX_BYTES,
-        )]);
-
+        var fbs = std.io.fixedBufferStream(self.instructionDataToDeserialize());
         var fba = std.heap.FixedBufferAllocator.init(alloc_buf);
         return bincode.read(fba.allocator(), T, fbs.reader(), .{}) catch {
             return InstructionError.InvalidInstructionData;

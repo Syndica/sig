@@ -43,6 +43,7 @@ pub const ExecuteContextsParams = struct {
 
     // Transaction Context
     accounts: []const AccountParams = &.{},
+    instruction_datas: []const []const u8 = &.{},
     return_data: ReturnDataParams = .{},
     accounts_resize_delta: i64 = 0,
     compute_meter: u64 = 0,
@@ -52,8 +53,10 @@ pub const ExecuteContextsParams = struct {
     prev_blockhash: Hash = Hash.ZEROES,
     prev_lamports_per_signature: u64 = 0,
 
+    slot: Slot = 0,
+
     pub const FeatureParams = struct {
-        pubkey: Pubkey,
+        feature: sig.core.features.Feature,
         slot: Slot = 0,
     };
 
@@ -102,8 +105,7 @@ pub fn createTransactionContext(
         ptr
     else
         try allocator.create(FeatureSet);
-    feature_set.* = try createFeatureSet(allocator, params.feature_set);
-    errdefer feature_set.deinit(allocator);
+    feature_set.* = try createFeatureSet(params.feature_set);
 
     // Create EpochStakes
     const epoch_stakes = try allocator.create(EpochStakes);
@@ -159,7 +161,7 @@ pub fn createTransactionContext(
     return_data.data.appendSliceAssumeCapacity(params.return_data.data);
 
     // Create Transaction Context
-    const tc = TransactionContext{
+    const tc: TransactionContext = .{
         .allocator = allocator,
         .feature_set = feature_set,
         .sysvar_cache = sysvar_cache,
@@ -171,6 +173,7 @@ pub fn createTransactionContext(
         .serialized_accounts = .{},
         .instruction_stack = .{},
         .instruction_trace = .{},
+        .instruction_datas = params.instruction_datas,
         .return_data = return_data,
         .accounts_resize_delta = params.accounts_resize_delta,
         .compute_meter = params.compute_meter,
@@ -180,6 +183,7 @@ pub fn createTransactionContext(
         .log_collector = params.log_collector,
         .prev_blockhash = params.prev_blockhash,
         .prev_lamports_per_signature = params.prev_lamports_per_signature,
+        .slot = params.slot,
     };
 
     return .{ account_cache, tc };
@@ -192,7 +196,6 @@ pub fn deinitTransactionContext(
     if (!builtin.is_test)
         @compileError("deinitTransactionContext should only be called in test mode");
 
-    tc.feature_set.deinit(allocator);
     allocator.destroy(tc.feature_set);
 
     tc.sysvar_cache.deinit(allocator);
@@ -230,24 +233,12 @@ pub fn createEpochStakes(
     return self;
 }
 
-pub fn createFeatureSet(
-    allocator: std.mem.Allocator,
-    params: []const ExecuteContextsParams.FeatureParams,
-) !FeatureSet {
+pub fn createFeatureSet(params: []const ExecuteContextsParams.FeatureParams) !FeatureSet {
     if (!builtin.is_test)
         @compileError("createFeatureSet should only be called in test mode");
 
-    var feature_set = FeatureSet{ .active = .{} };
-    errdefer feature_set.deinit(allocator);
-
-    for (params) |args| {
-        try feature_set.active.put(
-            allocator,
-            args.pubkey,
-            args.slot,
-        );
-    }
-
+    var feature_set: FeatureSet = .ALL_DISABLED;
+    for (params) |args| feature_set.setSlot(args.feature, args.slot);
     return feature_set;
 }
 
@@ -337,17 +328,11 @@ pub const InstructionInfoAccountMetaParams = struct {
 pub fn createInstructionInfoAccountMetas(
     tc: *const TransactionContext,
     account_meta_params: []const InstructionInfoAccountMetaParams,
-) !std.BoundedArray(
-    InstructionInfo.AccountMeta,
-    InstructionInfo.MAX_ACCOUNT_METAS,
-) {
+) !InstructionInfo.AccountMetas {
     if (!builtin.is_test)
         @compileError("createInstructionContextAccountMetas should only be called in test mode");
 
-    var account_metas = std.BoundedArray(
-        InstructionInfo.AccountMeta,
-        InstructionInfo.MAX_ACCOUNT_METAS,
-    ){};
+    var account_metas = InstructionInfo.AccountMetas{};
     for (account_meta_params, 0..) |acc, idx| {
         if (acc.index_in_transaction >= tc.accounts.len)
             return error.AccountIndexOutOfBounds;

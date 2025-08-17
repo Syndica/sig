@@ -16,8 +16,10 @@
 
 const std = @import("std");
 const sig = @import("../sig.zig");
+const tracy = @import("tracy");
 
 const core = sig.core;
+const reserved_accounts = sig.core.reserved_accounts;
 
 const Allocator = std.mem.Allocator;
 const Atomic = std.atomic.Value;
@@ -32,6 +34,7 @@ const HardForks = core.HardForks;
 const LtHash = core.hash.LtHash;
 const Pubkey = core.pubkey.Pubkey;
 const RentCollector = sig.core.rent_collector.RentCollector;
+const ReservedAccounts = sig.core.ReservedAccounts;
 
 const Epoch = core.time.Epoch;
 const Slot = core.time.Slot;
@@ -41,7 +44,6 @@ const FeeRateGovernor = core.genesis_config.FeeRateGovernor;
 const Inflation = core.genesis_config.Inflation;
 
 const Ancestors = sig.core.Ancestors;
-const EpochStakes = core.EpochStakes;
 const EpochStakesMap = core.EpochStakesMap;
 const Stakes = core.Stakes;
 
@@ -92,7 +94,14 @@ pub const SlotConstants = struct {
     ancestors: Ancestors,
 
     /// A map of activated features to the slot when they were activated.
+    /// NOTE: Feature activations are only applied at epoch boundaries, so should be constant
+    /// during an epoch, not just a slot. We should evaluate moving this and `reserved_accounts`
+    /// to `EpochConstants`.
     feature_set: FeatureSet,
+
+    /// A map of reserved accounts that are not allowed to acquire write locks
+    /// in the current slot.
+    reserved_accounts: ReservedAccounts,
 
     pub fn fromBankFields(
         allocator: Allocator,
@@ -110,10 +119,20 @@ pub const SlotConstants = struct {
             .epoch_reward_status = .inactive,
             .ancestors = try bank_fields.ancestors.clone(allocator),
             .feature_set = feature_set,
+            .reserved_accounts = try reserved_accounts.initForSlot(
+                allocator,
+                &feature_set,
+                bank_fields.slot,
+            ),
         };
     }
 
-    pub fn genesis(fee_rate_governor: sig.core.genesis_config.FeeRateGovernor) SlotConstants {
+    pub fn genesis(
+        allocator: Allocator,
+        fee_rate_governor: sig.core.genesis_config.FeeRateGovernor,
+    ) Allocator.Error!SlotConstants {
+        var ancestors = Ancestors{};
+        try ancestors.ancestors.put(allocator, 0, {});
         return .{
             .parent_slot = 0,
             .parent_hash = sig.core.Hash.ZEROES,
@@ -123,8 +142,9 @@ pub const SlotConstants = struct {
             .max_tick_height = 0,
             .fee_rate_governor = fee_rate_governor,
             .epoch_reward_status = .inactive,
-            .ancestors = .{},
-            .feature_set = .EMPTY,
+            .ancestors = ancestors,
+            .feature_set = .ALL_DISABLED,
+            .reserved_accounts = try reserved_accounts.init(allocator),
         };
     }
 
@@ -132,7 +152,7 @@ pub const SlotConstants = struct {
         var self = self_const;
         self.epoch_reward_status.deinit(allocator);
         self.ancestors.deinit(allocator);
-        self.feature_set.deinit(allocator);
+        self.reserved_accounts.deinit(allocator);
     }
 };
 
@@ -171,21 +191,37 @@ pub const SlotState = struct {
     /// The value is only meaningful after freezing.
     accounts_lt_hash: sig.sync.Mux(?LtHash),
 
-    pub const GENESIS = SlotState{
-        .blockhash_queue = .init(.DEFAULT),
-        .hash = .init(null),
-        .capitalization = .init(0),
-        .transaction_count = .init(0),
-        .signature_count = .init(0),
-        .tick_height = .init(0),
-        .collected_rent = .init(0),
-        .accounts_lt_hash = .init(.IDENTITY),
-    };
+    stakes_cache: sig.core.StakesCache,
+
+    /// 50% burned, 50% paid to leader
+    collected_transaction_fees: Atomic(u64),
+
+    /// 100% paid to leader
+    collected_priority_fees: Atomic(u64),
 
     pub fn deinit(self: *SlotState, allocator: Allocator) void {
-        var blockhash_queue = self.blockhash_queue.write();
+        self.stakes_cache.deinit(allocator);
+
+        var blockhash_queue = self.blockhash_queue.tryWrite() orelse
+            @panic("attempted to deinit SlotState.blockhash_queue while still in use");
         defer blockhash_queue.unlock();
         blockhash_queue.get().deinit(allocator);
+    }
+
+    pub fn genesis(allocator: Allocator) Allocator.Error!SlotState {
+        return .{
+            .blockhash_queue = .init(.DEFAULT),
+            .hash = .init(null),
+            .capitalization = .init(0),
+            .transaction_count = .init(0),
+            .signature_count = .init(0),
+            .tick_height = .init(0),
+            .collected_rent = .init(0),
+            .accounts_lt_hash = .init(.IDENTITY),
+            .stakes_cache = try .init(allocator),
+            .collected_transaction_fees = .init(0),
+            .collected_priority_fees = .init(0),
+        };
     }
 
     pub fn fromBankFields(
@@ -194,6 +230,9 @@ pub const SlotState = struct {
     ) Allocator.Error!SlotState {
         const blockhash_queue = try bank_fields.blockhash_queue.clone(allocator);
         errdefer blockhash_queue.deinit(allocator);
+
+        const stakes = try bank_fields.stakes.clone(allocator);
+        errdefer stakes.deinit(allocator);
 
         return .{
             .blockhash_queue = .init(blockhash_queue),
@@ -204,10 +243,16 @@ pub const SlotState = struct {
             .tick_height = .init(bank_fields.tick_height),
             .collected_rent = .init(bank_fields.collected_rent),
             .accounts_lt_hash = .init(LtHash{ .data = @splat(0xBAD1) }),
+            .stakes_cache = .{ .stakes = .init(stakes) },
+            .collected_transaction_fees = .init(0),
+            .collected_priority_fees = .init(0),
         };
     }
 
     pub fn fromFrozenParent(allocator: Allocator, parent: *SlotState) !SlotState {
+        const zone = tracy.Zone.init(@src(), .{ .name = "fromFrozenParent" });
+        defer zone.deinit();
+
         if (!parent.isFrozen()) return error.SlotNotFrozen;
         const blockhash_queue = foo: {
             var bhq = parent.blockhash_queue.read();
@@ -215,6 +260,13 @@ pub const SlotState = struct {
             break :foo try bhq.get().clone(allocator);
         };
         errdefer blockhash_queue.deinit(allocator);
+
+        const stakes = foo: {
+            var cache = parent.stakes_cache.stakes.read();
+            defer cache.unlock();
+            break :foo try cache.get().clone(allocator);
+        };
+        errdefer stakes.deinit(allocator);
 
         return .{
             .blockhash_queue = .init(blockhash_queue),
@@ -225,6 +277,9 @@ pub const SlotState = struct {
             .tick_height = .init(parent.tick_height.load(.monotonic)),
             .collected_rent = .init(0),
             .accounts_lt_hash = .init(parent.accounts_lt_hash.readCopy()),
+            .stakes_cache = .{ .stakes = .init(stakes) },
+            .collected_transaction_fees = .init(0),
+            .collected_priority_fees = .init(0),
         };
     }
 
@@ -262,7 +317,7 @@ pub const EpochConstants = struct {
     slots_per_year: f64,
 
     /// The pre-determined stakes assigned to this epoch.
-    stakes: EpochStakes,
+    stakes: sig.core.EpochStakes,
 
     rent_collector: RentCollector,
 
@@ -280,18 +335,22 @@ pub const EpochConstants = struct {
             .ns_per_slot = genesis_config.nsPerSlot(),
             .genesis_creation_time = genesis_config.creation_time,
             .slots_per_year = genesis_config.slotsPerYear(),
-            .stakes = try .initEmpty(allocator),
+            .stakes = try .initEmptyWithGenesisStakeHistoryEntry(allocator),
+            .rent_collector = .DEFAULT,
         };
     }
 
-    pub fn fromBankFields(bank_fields: *const BankFields) Allocator.Error!EpochConstants {
+    pub fn fromBankFields(
+        bank_fields: *const BankFields,
+        epoch_stakes: sig.core.EpochStakes,
+    ) Allocator.Error!EpochConstants {
         return .{
             .hashes_per_tick = bank_fields.hashes_per_tick,
             .ticks_per_slot = bank_fields.ticks_per_slot,
             .ns_per_slot = bank_fields.ns_per_slot,
             .genesis_creation_time = bank_fields.genesis_creation_time,
             .slots_per_year = bank_fields.slots_per_year,
-            .stakes = bank_fields.epoch_stakes,
+            .stakes = epoch_stakes,
             .rent_collector = bank_fields.rent_collector,
         };
     }
@@ -446,42 +505,6 @@ pub const BankFields = struct {
             @as(f64, @floatFromInt(ticks_per_slot));
     }
 
-    pub fn getStakedNodes(
-        self: *const BankFields,
-        epoch: Epoch,
-    ) !*const std.AutoArrayHashMapUnmanaged(Pubkey, u64) {
-        const epoch_stakes = self.epoch_stakes.getPtr(epoch) orelse return error.NoEpochStakes;
-        return &epoch_stakes.stakes.vote_accounts.staked_nodes;
-    }
-
-    /// Returns the leader schedule for this bank's epoch
-    pub fn leaderSchedule(
-        self: *const BankFields,
-        allocator: std.mem.Allocator,
-    ) !core.leader_schedule.LeaderSchedule {
-        return self.leaderScheduleForEpoch(allocator, self.epoch);
-    }
-
-    /// Returns the leader schedule for an arbitrary epoch.
-    /// Only works if the bank is aware of the staked nodes for that epoch.
-    pub fn leaderScheduleForEpoch(
-        self: *const BankFields,
-        allocator: std.mem.Allocator,
-        epoch: Epoch,
-    ) !core.leader_schedule.LeaderSchedule {
-        const slots_in_epoch = self.epoch_schedule.getSlotsInEpoch(self.epoch);
-        const staked_nodes = try self.getStakedNodes(epoch);
-        return .{
-            .allocator = allocator,
-            .slot_leaders = try core.leader_schedule.LeaderSchedule.fromStakedNodes(
-                allocator,
-                epoch,
-                slots_in_epoch,
-                staked_nodes,
-            ),
-        };
-    }
-
     pub fn initRandom(
         allocator: std.mem.Allocator,
         /// Should be a PRNG, not a true RNG. See the documentation on `std.Random.uintLessThan`
@@ -555,25 +578,14 @@ pub fn ancestorsRandom(
     allocator: std.mem.Allocator,
     max_list_entries: usize,
 ) std.mem.Allocator.Error!Ancestors {
-    var ancestors = Ancestors.Map.Managed.init(allocator);
-    errdefer ancestors.deinit();
+    var ancestors = Ancestors{};
+    errdefer ancestors.deinit(allocator);
 
-    try sig.rand.fillHashmapWithRng(
-        &ancestors,
-        random,
-        random.uintAtMost(usize, max_list_entries),
-        struct {
-            pub fn randomKey(rand: std.Random) !Slot {
-                return rand.int(Slot);
-            }
-            pub fn randomValue(rand: std.Random) !void {
-                _ = rand;
-                return {};
-            }
-        },
-    );
+    for (0..random.uintAtMost(usize, max_list_entries)) |_| {
+        try ancestors.addSlot(allocator, random.int(Slot));
+    }
 
-    return .{ .ancestors = ancestors.unmanaged };
+    return ancestors;
 }
 
 /// Analogous to [UnusedAccounts](https://github.com/anza-xyz/agave/blob/2de7b565e8b1101824a5e3bac74f3a8cce88ea72/runtime/src/serde_snapshot.rs#L123)

@@ -6,6 +6,7 @@ const Epoch = sig.core.Epoch;
 const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 const PubkeyArraySet = std.AutoArrayHashMapUnmanaged(Pubkey, void);
+const ThresholdDecision = sig.consensus.tower.ThresholdDecision;
 
 const deinitMapAndValues = sig.utils.collections.deinitMapAndValues;
 
@@ -227,6 +228,7 @@ pub const ForkProgress = struct {
     is_dead: bool,
     fork_stats: ForkStats,
     propagated_stats: PropagatedStats,
+    // TODO Remove replay_stats? Does not look like it is used to make any application decision, just logging.
     replay_stats: stubs.Arc(stubs.RwLock(blockstore_processor.ReplaySlotStats)),
     replay_progress: stubs.Arc(stubs.RwLock(blockstore_processor.ConfirmationProgress)),
     retransmit_info: RetransmitInfo,
@@ -473,7 +475,7 @@ pub const ForkStats = struct {
     bank_hash: Hash,
     my_latest_landed_vote: ?Slot,
 
-    pub const VoteThreshold = std.ArrayListUnmanaged(consensus.ThresholdDecision);
+    pub const VoteThreshold = std.ArrayListUnmanaged(ThresholdDecision);
 
     pub const EMPTY_ZEROES: ForkStats = .{
         .fork_stake = 0,
@@ -733,24 +735,6 @@ pub const consensus = struct {
     pub const Stake = u64;
     pub const VotedStakes = std.AutoArrayHashMapUnmanaged(Slot, Stake);
 
-    pub const ThresholdDecision = union(enum) {
-        passed_threshold,
-        failed_threshold: FailedThreshold,
-
-        /// NOTE: this is a tuple in the original rust code
-        pub const FailedThreshold = struct {
-            vote_depth: u64,
-            observed_stake: u64,
-        };
-
-        /// #[default]
-        pub const DEFAULT: ThresholdDecision = .passed_threshold;
-
-        pub fn eql(self: ThresholdDecision, other: ThresholdDecision) bool {
-            return std.meta.eql(self, other);
-        }
-    };
-
     pub const VoteStakeTracker = struct {
         voted: PubkeyArraySet,
         stake: u64,
@@ -890,11 +874,11 @@ pub const blockstore_processor = struct {
         /// In microseconds.
         transaction_verify_elapsed: u64,
 
-        /// Wall clock time spent loading data sets (and entries) from the blockstore.  This does not
-        /// include the case when the blockstore load failed.  In microseconds.
+        /// Wall clock time spent loading data sets (and entries) from the ledger.  This does not
+        /// include the case when the ledger load failed.  In microseconds.
         fetch_elapsed: u64,
 
-        /// Same as `fetch_elapsed` above, but for the case when the blockstore load fails.  In
+        /// Same as `fetch_elapsed` above, but for the case when the ledger load fails.  In
         /// microseconds.
         fetch_fail_elapsed: u64,
 
@@ -1763,8 +1747,6 @@ fn forkStatsInitRandom(
         },
     },
 ) std.mem.Allocator.Error!ForkStats {
-    const ThresholdDecision = consensus.ThresholdDecision;
-
     const vote_threshold = try allocator.alloc(ThresholdDecision, params.vote_threshold_len);
     errdefer allocator.free(vote_threshold);
 

@@ -17,6 +17,14 @@ pub const zk_elgamal = @import("zk_elgamal/lib.zig");
 const InstructionError = sig.core.instruction.InstructionError;
 const InstructionContext = sig.runtime.InstructionContext;
 
+/// Program instruction seeds should be no longer than 32 bytes (pubkey_utils.MAX_SEED_LEN).
+/// Agave validates instruction seeds during program execution returning error.Custom if they are
+/// invalid. Enforcing the seed limit during deserialization results in returning
+/// error.InvalidInstructionData for instructions with invalid seeds. This is an issue for
+/// conformance testing as the testing harness expects the same error code.
+// const MAX_SEED_LEN = sig.runtime.pubkey_utils.MAX_SEED_LEN;
+pub const SEED_FIELD_CONFIG = sig.bincode.utf8StringCodec([]const u8, 1024 * 1024);
+
 pub const PROGRAM_ENTRYPOINTS = initProgramEntrypoints();
 pub const PRECOMPILE_ENTRYPOINTS = initPrecompileEntrypoints();
 
@@ -42,5 +50,9 @@ fn initProgramEntrypoints() std.StaticStringMap(EntrypointFn) {
 }
 
 fn initPrecompileEntrypoints() std.StaticStringMap(EntrypointFn) {
-    return std.StaticStringMap(EntrypointFn).initComptime(&.{});
+    @setEvalBranchQuota(10_000);
+    return std.StaticStringMap(EntrypointFn).initComptime(&.{
+        .{ precompiles.ed25519.ID.base58String().slice(), precompiles.ed25519.execute },
+        .{ precompiles.secp256k1.ID.base58String().slice(), precompiles.secp256k1.execute },
+    });
 }

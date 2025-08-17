@@ -34,6 +34,9 @@ pub const MAX_INSTRUCTION_STACK_DEPTH = 5;
 pub const TransactionContext = struct {
     allocator: std.mem.Allocator,
 
+    /// The slot number this transaction is being executed in. Used for feature gate activations.
+    slot: sig.core.Slot,
+
     // These data structures exist beyond the lifetime of the TransactionContext.
     // These exist per-epoch.
     feature_set: *const FeatureSet,
@@ -62,6 +65,10 @@ pub const TransactionContext = struct {
 
     /// Used by syscall.allocFree to implement sbrk bump allocation
     bpf_alloc_pos: u64 = 0,
+
+    /// Instruction datas used when executing precompiles in the SVM
+    /// Only set if a precompile is present and the move precompiles to svm feature is enabled
+    instruction_datas: ?[]const []const u8 = null,
 
     instruction_stack: InstructionStack = .{},
     instruction_trace: InstructionTrace = .{},

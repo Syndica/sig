@@ -67,7 +67,7 @@ pub const FileId = enum(Int) {
     }
 
     fn deserialize(
-        _: std.mem.Allocator,
+        _: *bincode.LimitAllocator,
         reader: anytype,
         params: sig.bincode.Params,
     ) anyerror!FileId {
@@ -489,10 +489,14 @@ pub const AccountFile = struct {
 
     pub fn readAccountNoData(
         self: *const Self,
-        metadata_allocator: std.mem.Allocator,
         buffer_pool: *BufferPool,
         start_offset: usize,
     ) !AccountInFile {
+        // enough to store any account header
+        var buffer_pool_frame_buf: [@sizeOf(u32) * 3]u8 = undefined;
+        var fba = std.heap.FixedBufferAllocator.init(&buffer_pool_frame_buf);
+        const metadata_allocator = fba.allocator();
+
         var offset = start_offset;
 
         offset += @sizeOf(AccountInFile.StorageInfo);
@@ -611,14 +615,13 @@ pub const AccountFile = struct {
 
     pub const Iterator = struct {
         accounts_file: *const AccountFile,
-        metadata_allocator: std.mem.Allocator,
         buffer_pool: *BufferPool,
         offset: usize = 0,
 
-        pub fn next(self: *Iterator) !?AccountInFile {
+        pub fn next(self: *Iterator, fba: std.mem.Allocator) !?AccountInFile {
             while (true) {
                 const account = self.accounts_file.readAccount(
-                    self.metadata_allocator,
+                    fba,
                     self.buffer_pool,
                     self.offset,
                 ) catch |err| switch (err) {
@@ -634,7 +637,6 @@ pub const AccountFile = struct {
         pub fn nextNoData(self: *Iterator) !?AccountInFile {
             while (true) {
                 const account = self.accounts_file.readAccountNoData(
-                    self.metadata_allocator,
                     self.buffer_pool,
                     self.offset,
                 ) catch |err| switch (err) {
@@ -652,14 +654,9 @@ pub const AccountFile = struct {
         }
     };
 
-    pub fn iterator(
-        self: *const Self,
-        metadata_allocator: std.mem.Allocator,
-        buffer_pool: *BufferPool,
-    ) Iterator {
+    pub fn iterator(self: *const Self, buffer_pool: *BufferPool) Iterator {
         return .{
             .accounts_file = self,
-            .metadata_allocator = metadata_allocator,
             .buffer_pool = buffer_pool,
         };
     }

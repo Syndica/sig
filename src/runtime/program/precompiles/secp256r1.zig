@@ -2,11 +2,12 @@ const sig = @import("../../../sig.zig");
 
 const precompile_programs = sig.runtime.program.precompiles;
 
+const Slot = sig.core.Slot;
 const Pubkey = sig.core.Pubkey;
+const FeatureSet = sig.core.FeatureSet;
 const PrecompileProgramError = precompile_programs.PrecompileProgramError;
 
-pub const ID =
-    Pubkey.parseBase58String("Secp256r1SigVerify1111111111111111111111111") catch unreachable;
+pub const ID: Pubkey = .parse("Secp256r1SigVerify1111111111111111111111111");
 
 // Part of SIMD-0075, which is accepted.
 // Firedancer puts this one behind an ifdef. Maybe we don't need it yet?
@@ -15,6 +16,8 @@ pub const ID =
 pub fn verify(
     current_instruction_data: []const u8,
     all_instruction_datas: []const []const u8,
+    _: *const FeatureSet,
+    _: Slot,
 ) PrecompileProgramError!void {
     _ = current_instruction_data;
     _ = all_instruction_datas;

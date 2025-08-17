@@ -40,7 +40,7 @@ pub fn runLoop(
     db: *AccountsDB,
     config: ManagerLoopConfig,
 ) !void {
-    const zone = tracy.initZone(@src(), .{ .name = "accountsdb runManagerLoop" });
+    const zone = tracy.Zone.init(@src(), .{ .name = "accountsdb runManagerLoop" });
     defer zone.deinit();
 
     const exit = config.exit;
@@ -237,7 +237,7 @@ pub fn runLoop(
 /// as the data field ([]u8) for each account.
 /// Returns the unclean file id.
 fn flushSlot(db: *AccountsDB, slot: Slot) !FileId {
-    const zone = tracy.initZone(@src(), .{ .name = "accountsdb flushSlot" });
+    const zone = tracy.Zone.init(@src(), .{ .name = "accountsdb flushSlot" });
     defer zone.deinit();
 
     var timer = try sig.time.Timer.start();
@@ -368,7 +368,7 @@ fn cleanAccountFiles(
     num_zero_lamports: usize,
     num_old_states: usize,
 } {
-    const zone = tracy.initZone(@src(), .{ .name = "accountsdb cleanAccountFiles" });
+    const zone = tracy.Zone.init(@src(), .{ .name = "accountsdb cleanAccountFiles" });
     defer zone.deinit();
 
     var timer = try sig.time.Timer.start();
@@ -403,7 +403,7 @@ fn cleanAccountFiles(
             break :blk file_map.get(file_id).?;
         };
 
-        var account_iter = account_file.iterator(db.allocator, &db.buffer_pool);
+        var account_iter = account_file.iterator(&db.buffer_pool);
         while (try account_iter.nextNoData()) |account| {
             defer account.deinit(db.allocator);
             const pubkey = account.pubkey().*;
@@ -536,7 +536,7 @@ fn deleteAccountFiles(
     db: *AccountsDB,
     delete_account_files: []const FileId,
 ) !void {
-    const zone = tracy.initZone(@src(), .{ .name = "accountsdb deleteAccountFiles" });
+    const zone = tracy.Zone.init(@src(), .{ .name = "accountsdb deleteAccountFiles" });
     defer zone.deinit();
 
     const number_of_files = delete_account_files.len;
@@ -631,7 +631,7 @@ fn shrinkAccountFiles(
     shrink_account_files: []const FileId,
     delete_account_files: *std.AutoArrayHashMap(FileId, void),
 ) !struct { num_accounts_deleted: usize } {
-    const zone = tracy.initZone(@src(), .{ .name = "accountsdb shrinkAccountFiles" });
+    const zone = tracy.Zone.init(@src(), .{ .name = "accountsdb shrinkAccountFiles" });
     defer zone.deinit();
 
     var timer = try sig.time.Timer.start();
@@ -673,7 +673,7 @@ fn shrinkAccountFiles(
 
         var accounts_alive_size: u64 = 0;
         var accounts_dead_size: u64 = 0;
-        var account_iter = shrink_account_file.iterator(db.allocator, &db.buffer_pool);
+        var account_iter = shrink_account_file.iterator(&db.buffer_pool);
         while (try account_iter.nextNoData()) |*account_in_file| {
             defer account_in_file.deinit(db.allocator);
 
@@ -734,7 +734,7 @@ fn shrinkAccountFiles(
         var offset: usize = 0;
         for (is_alive_flags.items) |is_alive| {
             // SAFE: we know is_alive_flags is the same length as the account_iter
-            const account = (try account_iter.next()).?;
+            const account = (try account_iter.next(db.allocator)).?;
             defer account.deinit(db.allocator);
             if (is_alive) {
                 try account_file_buf.resize(account.getSizeInFile());
@@ -1124,7 +1124,7 @@ test "clean to shrink account file works with zero-lamports" {
     // slot 500 will be fully dead because its all zero lamports
     try std.testing.expectEqual(1, delete_account_files.count());
 
-    var account = try accounts_db.getAccount(&pubkey_remain);
+    var account = try accounts_db.getAccountLatest(&pubkey_remain) orelse unreachable;
     defer account.deinit(allocator);
 }
 
@@ -1476,6 +1476,6 @@ test "shrink account file works" {
     }
 
     // last account ref should still be accessible
-    const account = try accounts_db.getAccount(&pubkey_remain);
+    const account = try accounts_db.getAccountLatest(&pubkey_remain) orelse unreachable;
     account.deinit(allocator);
 }

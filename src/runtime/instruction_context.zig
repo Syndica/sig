@@ -41,9 +41,14 @@ pub const InstructionContext = struct {
     pub fn borrowProgramAccount(
         self: *const InstructionContext,
     ) InstructionError!BorrowedAccount {
+        const remove_accounts_executable_flag_checks =
+            self.tc.feature_set.active(.remove_accounts_executable_flag_checks, self.tc.slot);
         return self.tc.borrowAccountAtIndex(
             self.ixn_info.program_meta.index_in_transaction,
-            .{ .program_id = self.ixn_info.program_meta.pubkey },
+            .{
+                .program_id = self.ixn_info.program_meta.pubkey,
+                .remove_accounts_executable_flag_checks = remove_accounts_executable_flag_checks,
+            },
         );
     }
 
@@ -55,10 +60,13 @@ pub const InstructionContext = struct {
         const account_meta = self.ixn_info.getAccountMetaAtIndex(index_in_instruction) orelse
             return InstructionError.NotEnoughAccountKeys;
 
+        const remove_accounts_executable_flag_checks =
+            self.tc.feature_set.active(.remove_accounts_executable_flag_checks, self.tc.slot);
         return try self.tc.borrowAccountAtIndex(account_meta.index_in_transaction, .{
             .program_id = self.ixn_info.program_meta.pubkey,
             .is_signer = account_meta.is_signer,
             .is_writable = account_meta.is_writable,
+            .remove_accounts_executable_flag_checks = remove_accounts_executable_flag_checks,
         });
     }
 

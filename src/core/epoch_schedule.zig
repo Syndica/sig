@@ -36,12 +36,8 @@ pub const EpochSchedule = extern struct {
     /// Basically: `MINIMUM_SLOTS_PER_EPOCH * (2.pow(first_normal_epoch) - 1)`.
     first_normal_slot: core.Slot,
 
-    pub const ID = core.Pubkey.parseBase58String(
-        "SysvarEpochSchedu1e111111111111111111111111",
-    ) catch unreachable;
-
-    pub const STORAGE_SIZE: u64 = @sizeOf(EpochSchedule);
-
+    pub const ID: core.Pubkey = .parse("SysvarEpochSchedu1e111111111111111111111111");
+    pub const STORAGE_SIZE: u64 = 33;
     pub const DEFAULT: EpochSchedule = .custom(.{
         .slots_per_epoch = DEFAULT_SLOTS_PER_EPOCH,
         .leader_schedule_slot_offset = DEFAULT_LEADER_SCHEDULE_SLOT_OFFSET,
@@ -80,7 +76,7 @@ pub const EpochSchedule = extern struct {
         }
     }
 
-    pub fn getSlotsInEpoch(self: *const EpochSchedule, epoch: Epoch) Slot {
+    pub fn getSlotsInEpoch(self: *const EpochSchedule, epoch: Epoch) u64 {
         comptime std.debug.assert(std.math.isPowerOfTwo(MINIMUM_SLOTS_PER_EPOCH));
         return if (epoch < self.first_normal_epoch)
             @as(Slot, 1) <<| epoch +| @ctz(MINIMUM_SLOTS_PER_EPOCH)

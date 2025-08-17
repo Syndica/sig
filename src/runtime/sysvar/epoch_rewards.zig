@@ -36,8 +36,7 @@ pub const EpochRewards = extern struct {
     /// active
     active: bool,
 
-    pub const ID =
-        Pubkey.parseBase58String("SysvarEpochRewards1111111111111111111111111") catch unreachable;
+    pub const ID: Pubkey = .parse("SysvarEpochRewards1111111111111111111111111");
 
     pub const DEFAULT = EpochRewards{
         .distribution_starting_block_height = 0,
@@ -49,7 +48,7 @@ pub const EpochRewards = extern struct {
         .active = false,
     };
 
-    pub const STORAGE_SIZE: u64 = @sizeOf(EpochRewards);
+    pub const STORAGE_SIZE: u64 = 81;
 
     pub fn initRandom(random: std.Random) EpochRewards {
         if (!builtin.is_test) @compileError("only for testing");

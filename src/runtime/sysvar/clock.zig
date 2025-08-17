@@ -28,8 +28,7 @@ pub const Clock = extern struct {
     /// [oracle]: https://docs.solanalabs.com/implemented-proposals/validator-timestamp-oracle
     unix_timestamp: i64,
 
-    pub const ID =
-        Pubkey.parseBase58String("SysvarC1ock11111111111111111111111111111111") catch unreachable;
+    pub const ID: Pubkey = .parse("SysvarC1ock11111111111111111111111111111111");
 
     pub const DEFAULT = Clock{
         .slot = 0,
@@ -39,7 +38,7 @@ pub const Clock = extern struct {
         .unix_timestamp = 0,
     };
 
-    pub const STORAGE_SIZE: u64 = @sizeOf(Clock);
+    pub const STORAGE_SIZE: u64 = 40;
 
     pub fn initRandom(random: std.Random) Clock {
         // TODO: Uncomment once not required by bank init random

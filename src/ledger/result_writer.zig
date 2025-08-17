@@ -19,7 +19,7 @@ const Timer = sig.time.Timer;
 
 // ledger
 const AncestorIterator = ledger.reader.AncestorIterator;
-const BlockstoreDB = ledger.blockstore.BlockstoreDB;
+const LedgerDB = ledger.db.LedgerDB;
 const FrozenHashVersioned = ledger.meta.FrozenHashVersioned;
 const FrozenHashStatus = ledger.meta.FrozenHashStatus;
 const SlotMeta = ledger.meta.SlotMeta;
@@ -32,7 +32,7 @@ const schema = ledger.schema.schema;
 pub const LedgerResultWriter = struct {
     allocator: Allocator,
     logger: ScopedLogger(@typeName(LedgerResultWriter)),
-    db: BlockstoreDB,
+    db: LedgerDB,
     // TODO: change naming to 'highest_slot_cleaned'
     lowest_cleanup_slot: *RwMux(Slot),
     max_root: *std.atomic.Value(Slot),
@@ -41,7 +41,7 @@ pub const LedgerResultWriter = struct {
     pub fn init(
         allocator: Allocator,
         logger: Logger,
-        db: BlockstoreDB,
+        db: LedgerDB,
         registry: *sig.prometheus.Registry(.{}),
         lowest_cleanup_slot: *RwMux(Slot),
         max_root: *std.atomic.Value(Slot),
@@ -93,7 +93,7 @@ pub const LedgerResultWriter = struct {
         if (try self.db.get(self.allocator, schema.bank_hash, slot)) |prev_value| {
             if (frozen_hash.eql(prev_value.frozenHash()) and prev_value.isDuplicateConfirmed()) {
                 // Don't overwrite is_duplicate_confirmed == true with is_duplicate_confirmed == false,
-                // which may happen on startup when procesing from blockstore processor because the
+                // which may happen on startup when procesing from ledger processor because the
                 // blocks may not reflect earlier observed gossip votes from before the restart.
                 return;
             }
@@ -103,6 +103,14 @@ pub const LedgerResultWriter = struct {
             .is_duplicate_confirmed = is_duplicate_confirmed,
         } };
         try self.db.put(schema.bank_hash, slot, data);
+    }
+
+    /// Analogous to [set_dead_slot](https://github.com/anza-xyz/agave/blob/2a2f6b976d4a7f5cb2b2552564a603e03eba8bae/ledger/src/blockstore.rs#L4028)
+    pub fn setDeadSlot(
+        self: *LedgerResultWriter,
+        slot: Slot,
+    ) !void {
+        try self.db.put(schema.dead_slots, slot, true);
     }
 
     /// agave: set_duplicate_confirmed_slots_and_hashes
@@ -135,7 +143,7 @@ pub const LedgerResultWriter = struct {
 
     pub const SetDuplicateConfirmedSlotsAndHashesIncremental = struct {
         result_writer: *LedgerResultWriter,
-        write_batch: BlockstoreDB.WriteBatch,
+        write_batch: LedgerDB.WriteBatch,
         is_committed_or_cancelled: bool,
 
         /// Asserts that either `self.cancel()` or `self.commit()` has been called.
@@ -200,7 +208,7 @@ pub const LedgerResultWriter = struct {
 
     pub const SetRootsIncremental = struct {
         result_writer: *LedgerResultWriter,
-        write_batch: BlockstoreDB.WriteBatch,
+        write_batch: LedgerDB.WriteBatch,
         max_new_rooted_slot: Slot,
         is_committed_or_cancelled: bool,
 
@@ -281,9 +289,9 @@ pub const LedgerResultWriter = struct {
     ///
     /// Arguments:
     ///  - `start_root`: The root to start scan from, or the highest root in
-    ///    the blockstore if this value is `None`. This slot must be a root.
+    ///    the ledger if this value is `None`. This slot must be a root.
     ///  - `end_slot``: The slot to stop the scan at; the scan will continue to
-    ///    the earliest slot in the Blockstore if this value is `None`.
+    ///    the earliest slot in the Ledger if this value is `None`.
     ///  - `exit`: Exit early if this flag is set to `true`.
     /// agave: scan_and_fix_roots
     pub fn scanAndFixRoots(
@@ -293,10 +301,10 @@ pub const LedgerResultWriter = struct {
         exit: std.atomic.Value(bool),
     ) !usize {
         // Hold the lowest_cleanup_slot read lock to prevent any cleaning of
-        // the blockstore from another thread. Doing so will prevent a
+        // the ledger from another thread. Doing so will prevent a
         // possible inconsistency across column families where a slot is:
         //  - Identified as needing root repair by this thread
-        //  - Cleaned from the blockstore by another thread (LedgerCleanupSerivce)
+        //  - Cleaned from the ledger by another thread (LedgerCleanupSerivce)
         //  - Marked as root via Self::set_root() by this this thread
         var lowest_cleanup_slot = self.lowest_cleanup_slot.read();
         defer lowest_cleanup_slot.unlock();
@@ -393,8 +401,8 @@ pub const LedgerResultWriter = struct {
         while (i < child_slots.items.len) : (i += 1) {
             const slot = child_slots.items[i];
             var slot_meta: SlotMeta = try self.db.get(self.allocator, schema.slot_meta, slot) orelse {
-                self.logger.err().logf("Slot {} is a child but has no SlotMeta in blockstore", .{slot});
-                return error.CorruptedBlockstore;
+                self.logger.err().logf("Slot {} is a child but has no SlotMeta in ledger", .{slot});
+                return error.CorruptedLedger;
             };
             defer slot_meta.deinit();
 
@@ -461,6 +469,60 @@ test "setRoots" {
     for (roots) |slot| {
         const is_root = try writer.isRoot(slot);
         try std.testing.expect(is_root);
+    }
+}
+
+test "setDeadSlot" {
+    const allocator = std.testing.allocator;
+    const logger = .noop;
+    var registry = sig.prometheus.Registry(.{}).init(allocator);
+    defer registry.deinit();
+
+    var db = try TestDB.init(@src());
+    defer db.deinit();
+
+    var lowest_cleanup_slot = RwMux(Slot).init(0);
+    var max_root = std.atomic.Value(Slot).init(0);
+    var writer = LedgerResultWriter{
+        .allocator = allocator,
+        .db = db,
+        .logger = logger,
+        .lowest_cleanup_slot = &lowest_cleanup_slot,
+        .max_root = &max_root,
+        .scan_and_fix_roots_metrics = try registry.initStruct(ScanAndFixRootsMetrics),
+    };
+
+    const dead_slots: [4]Slot = .{ 10, 25, 42, 100 };
+    const non_existent_slot: Slot = 999; // Slot that doesn't exist in ledger
+    const existing_non_dead_slot: Slot = 50; // Slot that exists but is not dead
+
+    // Add an existing slot to the database (but don't mark it as dead)
+    try writer.setRoots(&.{existing_non_dead_slot});
+
+    // Mark slots as dead
+    for (dead_slots) |slot| {
+        try writer.setDeadSlot(slot);
+    }
+
+    // Verify that the slots are marked as dead in the database
+    for (dead_slots) |slot| {
+        const is_dead = try db.get(allocator, schema.dead_slots, slot);
+        try std.testing.expectEqual(true, is_dead);
+    }
+
+    // Verify that a slot that doesn't exist returns null
+    {
+        const is_dead = try db.get(allocator, schema.dead_slots, non_existent_slot);
+        try std.testing.expectEqual(null, is_dead);
+    }
+
+    // Verify that an existing slot not marked as dead returns null
+    {
+        const is_dead = try db.get(allocator, schema.dead_slots, existing_non_dead_slot);
+        try std.testing.expectEqual(null, is_dead);
+        // Verify the slot actually exists in the ledger as a root
+        const is_root = try writer.isRoot(existing_non_dead_slot);
+        try std.testing.expectEqual(true, is_root);
     }
 }
 

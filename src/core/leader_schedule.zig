@@ -250,7 +250,7 @@ pub const LeaderSchedule = struct {
                 start_slot = slot;
             }
             const node_str = nextNonEmpty(&word_iter) orelse return error.MissingPubkey;
-            try slot_leaders.append(try Pubkey.parseBase58String(node_str));
+            try slot_leaders.append(try Pubkey.parseRuntime(node_str));
         }
 
         return .{
@@ -288,7 +288,7 @@ test "leaderSchedule calculation matches agave" {
     for (slot_leaders, 0..) |slot_leader, i| {
         try std.testing.expectEqual(
             slot_leader,
-            try Pubkey.parseBase58String(generated_leader_schedule[i]),
+            try Pubkey.parseRuntime(generated_leader_schedule[i]),
         );
     }
 }
@@ -310,17 +310,17 @@ test "parseLeaderSchedule writeLeaderSchedule happy path roundtrip" {
         \\
     ;
     const expected_nodes = [_]Pubkey{
-        try Pubkey.parseBase58String("Fd7btgySsrjuo25CJCj7oE7VPMyezDhnx7pZkj2v69Nk"),
-        try Pubkey.parseBase58String("Fd7btgySsrjuo25CJCj7oE7VPMyezDhnx7pZkj2v69Nk"),
-        try Pubkey.parseBase58String("Fd7btgySsrjuo25CJCj7oE7VPMyezDhnx7pZkj2v69Nk"),
-        try Pubkey.parseBase58String("Fd7btgySsrjuo25CJCj7oE7VPMyezDhnx7pZkj2v69Nk"),
-        try Pubkey.parseBase58String("GBuP6xK2zcUHbQuUWM4gbBjom46AomsG8JzSp1bzJyn8"),
-        try Pubkey.parseBase58String("GBuP6xK2zcUHbQuUWM4gbBjom46AomsG8JzSp1bzJyn8"),
-        try Pubkey.parseBase58String("GBuP6xK2zcUHbQuUWM4gbBjom46AomsG8JzSp1bzJyn8"),
-        try Pubkey.parseBase58String("GBuP6xK2zcUHbQuUWM4gbBjom46AomsG8JzSp1bzJyn8"),
-        try Pubkey.parseBase58String("DWvDTSh3qfn88UoQTEKRV2JnLt5jtJAVoiCo3ivtMwXP"),
-        try Pubkey.parseBase58String("DWvDTSh3qfn88UoQTEKRV2JnLt5jtJAVoiCo3ivtMwXP"),
-        try Pubkey.parseBase58String("DWvDTSh3qfn88UoQTEKRV2JnLt5jtJAVoiCo3ivtMwXP"),
+        .parse("Fd7btgySsrjuo25CJCj7oE7VPMyezDhnx7pZkj2v69Nk"),
+        .parse("Fd7btgySsrjuo25CJCj7oE7VPMyezDhnx7pZkj2v69Nk"),
+        .parse("Fd7btgySsrjuo25CJCj7oE7VPMyezDhnx7pZkj2v69Nk"),
+        .parse("Fd7btgySsrjuo25CJCj7oE7VPMyezDhnx7pZkj2v69Nk"),
+        .parse("GBuP6xK2zcUHbQuUWM4gbBjom46AomsG8JzSp1bzJyn8"),
+        .parse("GBuP6xK2zcUHbQuUWM4gbBjom46AomsG8JzSp1bzJyn8"),
+        .parse("GBuP6xK2zcUHbQuUWM4gbBjom46AomsG8JzSp1bzJyn8"),
+        .parse("GBuP6xK2zcUHbQuUWM4gbBjom46AomsG8JzSp1bzJyn8"),
+        .parse("DWvDTSh3qfn88UoQTEKRV2JnLt5jtJAVoiCo3ivtMwXP"),
+        .parse("DWvDTSh3qfn88UoQTEKRV2JnLt5jtJAVoiCo3ivtMwXP"),
+        .parse("DWvDTSh3qfn88UoQTEKRV2JnLt5jtJAVoiCo3ivtMwXP"),
     };
     // const expected_start = 270864000;
 
