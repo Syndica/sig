@@ -591,6 +591,7 @@ fn processGossipVerifiedVoteHashes(
 /// Analogous to [process_popular_pruned_forks](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/replay_stage.rs#L1828)
 fn processPopularPrunedForks(
     logger: replay.service.Logger,
+    // TODO: ideally this should be renamed to pruned_but_popular_forks_receiver
     popular_pruned_forks_receiver: *sig.sync.Channel(sig.core.Slot),
     slot_tracker_rwmux: *sig.sync.RwMux(SlotTracker),
     ancestor_hashes_replay_update_sender: *sig.sync.Channel(AncestorHashesReplayUpdate),
