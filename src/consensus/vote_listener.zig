@@ -394,7 +394,7 @@ fn processVotesLoop(
     });
     defer confirmation_verifier.deinit(allocator);
 
-    var latest_vote_slot_per_validator: std.AutoArrayHashMapUnmanaged(Pubkey, Slot) = .{};
+    var latest_vote_slot_per_validator: std.AutoArrayHashMapUnmanaged(Pubkey, Slot) = .empty;
     defer latest_vote_slot_per_validator.deinit(allocator);
 
     var last_process_root = sig.time.Instant.now();
@@ -514,11 +514,11 @@ fn listenAndConfirmVotes(
     vote_processing_time: ?*VoteProcessingTiming,
     latest_vote_slot_per_validator: *std.AutoArrayHashMapUnmanaged(Pubkey, Slot),
 ) ListenAndConfirmVotesError![]const ThresholdConfirmedSlot {
-    var gossip_vote_txs_buffer: std.ArrayListUnmanaged(Transaction) = .{};
+    var gossip_vote_txs_buffer: std.ArrayListUnmanaged(Transaction) = .empty;
     defer gossip_vote_txs_buffer.deinit(allocator);
     try gossip_vote_txs_buffer.ensureTotalCapacityPrecise(allocator, 4096);
 
-    var replay_votes_buffer: std.ArrayListUnmanaged(vote_parser.ParsedVote) = .{};
+    var replay_votes_buffer: std.ArrayListUnmanaged(vote_parser.ParsedVote) = .empty;
     defer replay_votes_buffer.deinit(allocator);
     try replay_votes_buffer.ensureTotalCapacityPrecise(allocator, 4096);
 
@@ -1126,6 +1126,46 @@ const vote_parser = struct {
         };
     }
 
+    /// Used for locally forwarding processed vote transactions to consensus
+    /// Analogous to [parse_sanitized_vote_transaction](https://github.com/anza-xyz/agave/blob/961953a6ffab132b9a32e22edcd4cfbdba52c6f8/vote/src/vote_parser.rs#L11)
+    pub fn parseSanitizedVoteTransaction(
+        allocator: std.mem.Allocator,
+        // TODO: Confirm if this is the correct type to use here
+        tx: sig.replay.resolve_lookup.ResolvedTransaction,
+    ) std.mem.Allocator.Error!?ParsedVote {
+        // Check first instruction for a vote
+        const instructions = tx.instructions;
+        if (instructions.len == 0) return null;
+        const first_instruction = instructions[0];
+
+        const program_id = first_instruction.program_meta.pubkey;
+        if (!vote_program.ID.equals(&program_id)) {
+            return null;
+        }
+
+        const account_metas = first_instruction.account_metas.constSlice();
+        if (account_metas.len == 0) return null;
+        const key = account_metas[0].pubkey;
+
+        const vote, const switch_proof_hash = try parseVoteInstructionData(
+            allocator,
+            first_instruction.instruction_data,
+        ) orelse return null;
+        errdefer vote.deinit(allocator);
+
+        const signature: sig.core.Signature = if (tx.transaction.signatures.len != 0)
+            tx.transaction.signatures[0]
+        else
+            sig.core.Signature.ZEROES;
+
+        return .{
+            .key = key,
+            .vote = vote,
+            .switch_proof_hash = switch_proof_hash,
+            .signature = signature,
+        };
+    }
+
     fn parseVoteInstructionData(
         allocator: std.mem.Allocator,
         vote_instruction_data: []const u8,
@@ -1256,6 +1296,163 @@ const vote_parser = struct {
         };
         defer vote_tx.deinit(allocator);
         try std.testing.expectEqual(null, parseVoteTransaction(allocator, vote_tx));
+    }
+
+    fn testParseSanitizedVoteTransaction(input_hash: ?Hash, random: std.Random) !void {
+        const allocator = std.testing.allocator;
+
+        const node_keypair = try randomKeyPair(random);
+        const auth_voter_keypair = try randomKeyPair(random);
+        const vote_keypair = try randomKeyPair(random);
+
+        const vote_key = Pubkey.fromPublicKey(&vote_keypair.public_key);
+
+        {
+            const bank_hash = Hash.ZEROES;
+            const vote_tx = try testNewVoteTransaction(
+                allocator,
+                &.{42},
+                bank_hash,
+                Hash.ZEROES,
+                node_keypair,
+                vote_key,
+                auth_voter_keypair,
+                input_hash,
+            );
+            defer vote_tx.deinit(allocator);
+
+            // Build a ResolvedTransaction with the first instruction expanded to InstructionInfo
+            const message = vote_tx.msg;
+            std.debug.assert(message.instructions.len != 0);
+            const first_ix = message.instructions[0];
+
+            var account_metas = sig.runtime.InstructionInfo.AccountMetas{};
+            var seen = std.bit_set.ArrayBitSet(usize, 256).initEmpty();
+            for (first_ix.account_indexes, 0..) |acct_index_u8, i| {
+                const acct_index: usize = acct_index_u8;
+                const index_in_callee: usize = if (seen.isSet(acct_index)) blk: {
+                    var prior_idx: usize = 0;
+                    while (prior_idx < i) : (prior_idx += 1) {
+                        if (first_ix.account_indexes[prior_idx] == acct_index_u8)
+                            break :blk prior_idx;
+                    }
+                    break :blk i;
+                } else i;
+                seen.set(acct_index);
+
+                const pubkey = message.account_keys[acct_index];
+                (account_metas.addOne() catch break).* = .{
+                    .pubkey = pubkey,
+                    .index_in_transaction = @intCast(acct_index),
+                    .index_in_caller = @intCast(acct_index),
+                    .index_in_callee = @intCast(index_in_callee),
+                    .is_signer = message.isSigner(acct_index),
+                    .is_writable = false,
+                };
+            }
+
+            var instructions = try allocator.alloc(sig.runtime.InstructionInfo, 1);
+            instructions[0] = .{
+                .program_meta = .{
+                    .pubkey = message.account_keys[first_ix.program_index],
+                    .index_in_transaction = first_ix.program_index,
+                },
+                .account_metas = account_metas,
+                .instruction_data = first_ix.data,
+            };
+
+            var resolved: sig.replay.resolve_lookup.ResolvedTransaction = .{
+                .transaction = vote_tx,
+                .accounts = .{},
+                .instructions = instructions,
+            };
+            defer resolved.deinit(allocator);
+
+            const maybe_parsed_tx = try parseSanitizedVoteTransaction(allocator, resolved);
+            defer if (maybe_parsed_tx) |parsed_tx| parsed_tx.deinit(allocator);
+
+            try std.testing.expectEqualDeep(ParsedVote{
+                .key = vote_key,
+                .vote = .{ .vote = .{
+                    .slots = &.{42},
+                    .hash = bank_hash,
+                    .timestamp = null,
+                } },
+                .switch_proof_hash = input_hash,
+                .signature = vote_tx.signatures[0],
+            }, maybe_parsed_tx);
+        }
+
+        // Test bad program id fails
+        var vote_ix = try vote_instruction.createVote(
+            allocator,
+            vote_key,
+            Pubkey.fromPublicKey(&auth_voter_keypair.public_key),
+            .{ .vote = .{
+                .slots = &.{ 1, 2 },
+                .hash = Hash.ZEROES,
+                .timestamp = null,
+            } },
+        );
+        defer vote_ix.deinit(allocator);
+
+        const vote_tx = blk: {
+            const vote_tx_msg: TransactionMessage = try .initCompile(
+                allocator,
+                &.{vote_ix},
+                Pubkey.fromPublicKey(&node_keypair.public_key),
+                Hash.ZEROES,
+                null,
+            );
+            errdefer vote_tx_msg.deinit(allocator);
+            break :blk try Transaction.initOwnedMessageWithSigningKeypairs(
+                allocator,
+                .legacy,
+                vote_tx_msg,
+                &.{},
+            );
+        };
+        defer vote_tx.deinit(allocator);
+
+        const message = vote_tx.msg;
+        std.debug.assert(message.instructions.len != 0);
+        const first_ix = message.instructions[0];
+
+        var account_metas = sig.runtime.InstructionInfo.AccountMetas{};
+        // minimal one account to satisfy check
+        if (first_ix.account_indexes.len != 0) {
+            const acct_index: usize = first_ix.account_indexes[0];
+            (try account_metas.addOne()).* = .{
+                .pubkey = message.account_keys[acct_index],
+                .index_in_transaction = @intCast(acct_index),
+                .index_in_caller = @intCast(acct_index),
+                .index_in_callee = 0,
+                .is_signer = message.isSigner(acct_index),
+                .is_writable = false,
+            };
+        }
+
+        var instructions = try allocator.alloc(sig.runtime.InstructionInfo, 1);
+        instructions[0] = .{
+            .program_meta = .{
+                .pubkey = Pubkey.ZEROES, // bad program id
+                .index_in_transaction = first_ix.program_index,
+            },
+            .account_metas = account_metas,
+            .instruction_data = first_ix.data,
+        };
+
+        var resolved_bad: sig.replay.resolve_lookup.ResolvedTransaction = .{
+            .transaction = vote_tx,
+            .accounts = .{},
+            .instructions = instructions,
+        };
+        defer resolved_bad.deinit(allocator);
+
+        try std.testing.expectEqual(
+            null,
+            try parseSanitizedVoteTransaction(allocator, resolved_bad),
+        );
     }
 
     /// Reimplemented locally from Vote program.
@@ -1434,6 +1631,13 @@ test "vote_parser.parseVoteTransaction" {
     const random = prng.random();
     try vote_parser.testParseVoteTransaction(null, random);
     try vote_parser.testParseVoteTransaction(Hash.generateSha256(&[_]u8{42}), random);
+}
+
+test "vote_parser.parseSanitizedVoteTransaction" {
+    var prng = std.Random.DefaultPrng.init(43);
+    const random = prng.random();
+    try vote_parser.testParseSanitizedVoteTransaction(null, random);
+    try vote_parser.testParseSanitizedVoteTransaction(Hash.generateSha256(&[_]u8{43}), random);
 }
 
 test verifyVoteTransaction {
