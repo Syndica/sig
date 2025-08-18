@@ -108,20 +108,18 @@ pub const OptimisticConfirmationVerifier = struct {
         allocator: std.mem.Allocator,
         new_optimistic_slots: []const sig.core.hash.SlotAndHash,
         ledger_writer: *sig.ledger.LedgerResultWriter,
-    ) !void {
+    ) std.mem.Allocator.Error!void {
         if (new_optimistic_slots.len == 0) return;
 
         // We don't have any information about ancestors before the snapshot root,
         // so ignore those slots
         for (new_optimistic_slots) |slot_and_hash| {
             if (slot_and_hash.slot > self.snapshot_start_slot) {
-                const ts_ms_u64: u64 = sig.time.getWallclockMs();
-                const ts_ms: sig.core.UnixTimestamp = @intCast(ts_ms_u64);
-                try ledger_writer.insertOptimisticSlot(
+                ledger_writer.insertOptimisticSlot(
                     slot_and_hash.slot,
                     slot_and_hash.hash,
-                    ts_ms,
-                );
+                    @intCast(sig.time.getWallclockMs()),
+                ) catch {};
                 try self.unchecked_slots.put(allocator, slot_and_hash);
             }
         }
