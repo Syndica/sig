@@ -181,7 +181,7 @@ pub const AccountsDB = struct {
     };
 
     pub fn init(params: InitParams) !AccountsDB {
-        const zone = tracy.initZone(@src(), .{ .name = "accountsdb init" });
+        const zone = tracy.Zone.init(@src(), .{ .name = "accountsdb init" });
         defer zone.deinit();
 
         // init index
@@ -267,7 +267,7 @@ pub const AccountsDB = struct {
     }
 
     pub fn deinit(self: *AccountsDB) void {
-        const zone = tracy.initZone(@src(), .{ .name = "accountsdb deinit" });
+        const zone = tracy.Zone.init(@src(), .{ .name = "accountsdb deinit" });
         defer zone.deinit();
 
         self.account_index.deinit();
@@ -350,7 +350,7 @@ pub const AccountsDB = struct {
         should_fastload: bool,
         save_index: bool,
     ) !SnapshotManifest {
-        const zone = tracy.initZone(@src(), .{ .name = "accountsdb loadWithDefaults" });
+        const zone = tracy.Zone.init(@src(), .{ .name = "accountsdb loadWithDefaults" });
         defer zone.deinit();
 
         const collapsed_manifest = try full_inc_manifest.collapse(self.allocator);
@@ -470,7 +470,7 @@ pub const AccountsDB = struct {
     pub fn saveStateForFastload(
         self: *AccountsDB,
     ) !void {
-        const zone = tracy.initZone(@src(), .{ .name = "accountsdb fastsaveStateForFastloadload" });
+        const zone = tracy.Zone.init(@src(), .{ .name = "accountsdb fastsaveStateForFastloadload" });
         defer zone.deinit();
 
         self.logger.info().log("running saveStateForFastload...");
@@ -484,7 +484,7 @@ pub const AccountsDB = struct {
         dir: std.fs.Dir,
         snapshot_manifest: AccountsDbFields,
     ) !void {
-        const zone = tracy.initZone(@src(), .{ .name = "accountsdb fastload" });
+        const zone = tracy.Zone.init(@src(), .{ .name = "accountsdb fastload" });
         defer zone.deinit();
 
         self.logger.info().log("running fastload...");
@@ -555,7 +555,7 @@ pub const AccountsDB = struct {
         per_thread_allocator: std.mem.Allocator,
         accounts_per_file_estimate: u64,
     ) !void {
-        const zone = tracy.initZone(@src(), .{ .name = "accountsdb loadFromSnapshot" });
+        const zone = tracy.Zone.init(@src(), .{ .name = "accountsdb loadFromSnapshot" });
         defer zone.deinit();
 
         self.logger.info().log("running loadFromSnapshot...");
@@ -631,7 +631,7 @@ pub const AccountsDB = struct {
         loading_threads: []AccountsDB,
         parent: *AccountsDB,
     ) !void {
-        const zone = tracy.initZone(@src(), .{ .name = "accountsdb initLoadingThreads" });
+        const zone = tracy.Zone.init(@src(), .{ .name = "accountsdb initLoadingThreads" });
         defer zone.deinit();
 
         @memset(loading_threads, undefined);
@@ -672,7 +672,7 @@ pub const AccountsDB = struct {
         per_thread_allocator: std.mem.Allocator,
         loading_threads: []AccountsDB,
     ) void {
-        const zone = tracy.initZone(@src(), .{ .name = "accountsdb deinitLoadingThreads" });
+        const zone = tracy.Zone.init(@src(), .{ .name = "accountsdb deinitLoadingThreads" });
         defer zone.deinit();
 
         for (loading_threads) |*loading_thread| {
@@ -694,7 +694,7 @@ pub const AccountsDB = struct {
         accounts_per_file_estimate: u64,
         task: sig.utils.thread.TaskParams,
     ) !void {
-        const zone = tracy.initZone(@src(), .{
+        const zone = tracy.Zone.init(@src(), .{
             .name = "accountsdb loadAndVerifyAccountsFilesMultiThread",
         });
         defer zone.deinit();
@@ -722,7 +722,7 @@ pub const AccountsDB = struct {
         // when we multithread this function we only want to print on the first thread
         print_progress: bool,
     ) !void {
-        const zone = tracy.initZone(@src(), .{ .name = "accountsdb loadAndVerifyAccountsFiles" });
+        const zone = tracy.Zone.init(@src(), .{ .name = "accountsdb loadAndVerifyAccountsFiles" });
         defer zone.deinit();
 
         // NOTE: we can hold this lock for the entire function
@@ -936,7 +936,7 @@ pub const AccountsDB = struct {
         }
 
         {
-            const pubkey_ref_map_zone = tracy.initZone(@src(), .{
+            const pubkey_ref_map_zone = tracy.Zone.init(@src(), .{
                 .name = "accountsdb loadAndVerifyAccountsFiles pubkey_ref_map.ensureTotalCapacity",
             });
             defer pubkey_ref_map_zone.deinit();
@@ -949,7 +949,7 @@ pub const AccountsDB = struct {
         // it will always be a search for a free spot, and not search for a match
 
         {
-            const index_build_zone = tracy.initZone(@src(), .{
+            const index_build_zone = tracy.Zone.init(@src(), .{
                 .name = "accountsdb loadAndVerifyAccountsFiles building index",
             });
             defer index_build_zone.deinit();
@@ -992,7 +992,7 @@ pub const AccountsDB = struct {
         thread_dbs: []AccountsDB,
         n_threads: usize,
     ) !void {
-        const zone = tracy.initZone(@src(), .{ .name = "accountsdb mergeMultipleDBs" });
+        const zone = tracy.Zone.init(@src(), .{ .name = "accountsdb mergeMultipleDBs" });
         defer zone.deinit();
 
         self.logger.info().logf("[{d} threads]: running mergeMultipleDBs...", .{n_threads});
@@ -1075,7 +1075,7 @@ pub const AccountsDB = struct {
         thread_dbs: []const AccountsDB,
         task: sig.utils.thread.TaskParams,
     ) !void {
-        const zone = tracy.initZone(@src(), .{
+        const zone = tracy.Zone.init(@src(), .{
             .name = "accountsdb mergeThreadIndexesMultiThread",
         });
         defer zone.deinit();
@@ -1171,7 +1171,7 @@ pub const AccountsDB = struct {
         self: *AccountsDB,
         config: AccountHashesConfig,
     ) !struct { Hash, u64 } {
-        const zone = tracy.initZone(@src(), .{
+        const zone = tracy.Zone.init(@src(), .{
             .name = "accountsdb computeAccountHashesAndLamports",
         });
         defer zone.deinit();
@@ -1312,7 +1312,7 @@ pub const AccountsDB = struct {
         self: *AccountsDB,
         params: ValidateLoadFromSnapshotParams,
     ) !void {
-        const zone = tracy.initZone(@src(), .{ .name = "accountsdb validateLoadFromSnapshot" });
+        const zone = tracy.Zone.init(@src(), .{ .name = "accountsdb validateLoadFromSnapshot" });
         defer zone.deinit();
 
         const maybe_latest_snapshot_info: *?SnapshotGenerationInfo, //
@@ -1432,7 +1432,7 @@ pub const AccountsDB = struct {
         total_lamports: []u64,
         task: sig.utils.thread.TaskParams,
     ) !void {
-        const zone = tracy.initZone(@src(), .{
+        const zone = tracy.Zone.init(@src(), .{
             .name = "accountsdb getHashesFromIndexMultiThread",
         });
         defer zone.deinit();
@@ -1459,7 +1459,7 @@ pub const AccountsDB = struct {
         // when we multithread this function we only want to print on the first thread
         print_progress: bool,
     ) !void {
-        const zone = tracy.initZone(@src(), .{ .name = "accountsdb getHashesFromIndex" });
+        const zone = tracy.Zone.init(@src(), .{ .name = "accountsdb getHashesFromIndex" });
         defer zone.deinit();
 
         var total_n_pubkeys: usize = 0;
@@ -2378,7 +2378,7 @@ pub const AccountsDB = struct {
         self: *AccountsDB,
         slot: Slot,
     ) !struct { *BankHashStats, RwMux(BankHashStatsMap).WLockGuard } {
-        const zone = tracy.initZone(@src(), .{ .name = "accountsdb getOrInitBankHashStats" });
+        const zone = tracy.Zone.init(@src(), .{ .name = "accountsdb getOrInitBankHashStats" });
         defer zone.deinit();
 
         const bank_hash_stats, var bank_hash_stats_lg = self.bank_hash_stats.writeWithLock();
@@ -3088,7 +3088,7 @@ pub fn indexAndValidateAccountFile(
     account_refs: *ArrayListUnmanaged(AccountRef),
     geyser_storage: ?*GeyserTmpStorage,
 ) ValidateAccountFileError!void {
-    const zone = tracy.initZone(@src(), .{
+    const zone = tracy.Zone.init(@src(), .{
         .name = "accountsdb AccountIndex.indexAndValidateAccountFile",
     });
     defer zone.deinit();

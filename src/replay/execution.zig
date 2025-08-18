@@ -1,6 +1,7 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 const replay = @import("lib.zig");
+const tracy = @import("tracy");
 
 const core = sig.core;
 
@@ -118,6 +119,9 @@ pub const ReplayExecutionState = struct {
 ///
 /// Analogous to [replay_active_banks](https://github.com/anza-xyz/agave/blob/3f68568060fd06f2d561ad79e8d8eb5c5136815a/core/src/replay_stage.rs#L3356)
 pub fn replayActiveSlots(state: *ReplayExecutionState) !bool {
+    var zone = tracy.Zone.init(@src(), .{ .name = "replayActiveSlots" });
+    defer zone.deinit();
+
     const active_slots = try state.slot_tracker.activeSlots(state.allocator);
     state.logger.info().logf("{} active slots to replay", .{active_slots.len});
     if (active_slots.len == 0) {
@@ -181,12 +185,18 @@ const ReplaySlotStatus = union(enum) {
 /// - [replay_blockstore_into_bank](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/core/src/replay_stage.rs#L2232)
 /// - [confirm_slot](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/ledger/src/blockstore_processor.rs#L1494)
 fn replaySlot(state: *ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
+    var zone = tracy.Zone.init(@src(), .{ .name = "replaySlot" });
+    zone.value(slot);
+    defer zone.deinit();
+    errdefer zone.color(0xFF0000);
+
     const progress_get_or_put = try state.progress_map.map.getOrPut(state.allocator, slot);
     if (progress_get_or_put.found_existing and progress_get_or_put.value_ptr.is_dead) {
         return .dead;
     }
 
     const epoch_info = state.epochs.getForSlot(slot) orelse return error.MissingEpoch;
+
     const slot_info = state.slot_tracker.get(slot) orelse return error.MissingSlot;
 
     const i_am_leader = slot_info.constants.collector_id.equals(&state.my_identity);

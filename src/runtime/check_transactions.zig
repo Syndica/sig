@@ -1,5 +1,6 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
+const tracy = @import("tracy");
 
 const Allocator = std.mem.Allocator;
 
@@ -98,6 +99,9 @@ pub fn checkFeePayer(
     FeeDetails,
     TransactionRollbacks,
 }) {
+    var zone = tracy.Zone.init(@src(), .{ .name = "checkFeePayer" });
+    defer zone.deinit();
+
     var nonce_account_is_owned = true;
     defer if (nonce_account_is_owned) if (nonce_account) |na| allocator.free(na.account.data);
 

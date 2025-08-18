@@ -1,6 +1,7 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 const replay = @import("lib.zig");
+const tracy = @import("tracy");
 
 const vm = sig.vm;
 
@@ -34,11 +35,16 @@ pub fn executeTransaction(
     svm_gateway: *SvmGateway,
     transaction: *const RuntimeTransaction,
 ) !TransactionResult(ProcessedTransaction) {
+    var zone = tracy.Zone.init(@src(), .{ .name = "executeTransaction" });
+    defer zone.deinit();
+
+    const environment = try svm_gateway.environment();
+
     return try sig.runtime.transaction_execution.loadAndExecuteTransaction(
         allocator,
         transaction,
         &svm_gateway.state.accounts,
-        &try svm_gateway.environment(),
+        &environment,
         &.{ .log = true, .log_messages_byte_limit = null },
         &svm_gateway.state.programs,
     );

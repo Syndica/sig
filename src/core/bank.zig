@@ -16,6 +16,7 @@
 
 const std = @import("std");
 const sig = @import("../sig.zig");
+const tracy = @import("tracy");
 
 const core = sig.core;
 const reserved_accounts = sig.core.reserved_accounts;
@@ -249,6 +250,9 @@ pub const SlotState = struct {
     }
 
     pub fn fromFrozenParent(allocator: Allocator, parent: *SlotState) !SlotState {
+        const zone = tracy.Zone.init(@src(), .{ .name = "fromFrozenParent" });
+        defer zone.deinit();
+
         if (!parent.isFrozen()) return error.SlotNotFrozen;
         const blockhash_queue = foo: {
             var bhq = parent.blockhash_queue.read();

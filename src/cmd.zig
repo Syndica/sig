@@ -59,13 +59,16 @@ pub fn main() !void {
     tracy.startupProfiler();
     defer tracy.shutdownProfiler();
 
-    const zone = tracy.initZone(@src(), .{ .name = "main" });
+    const zone = tracy.Zone.init(@src(), .{ .name = "main" });
     defer zone.deinit();
 
     var gpa_state: GpaOrCAllocator(.{}) = .{};
     // defer _ = gpa_state.deinit();
 
-    var tracing_allocator = tracy.TracingAllocator.initNamed("gpa", gpa_state.allocator());
+    var tracing_allocator = tracy.TracingAllocator{
+        .name = "gpa",
+        .parent = gpa_state.allocator(),
+    };
     const gpa = tracing_allocator.allocator();
 
     var gossip_gpa_state: GpaOrCAllocator(.{ .stack_trace_frames = 100 }) = .{};
@@ -970,7 +973,7 @@ fn gossip(
     gossip_value_allocator: std.mem.Allocator,
     cfg: config.Cmd,
 ) !void {
-    const zone = tracy.initZone(@src(), .{ .name = "gossip" });
+    const zone = tracy.Zone.init(@src(), .{ .name = "gossip" });
     defer zone.deinit();
 
     var app_base = try AppBase.init(allocator, cfg);
@@ -1002,7 +1005,7 @@ fn validator(
     gossip_value_allocator: std.mem.Allocator,
     cfg: config.Cmd,
 ) !void {
-    const zone = tracy.initZone(@src(), .{ .name = "validator" });
+    const zone = tracy.Zone.init(@src(), .{ .name = "validator" });
     defer zone.deinit();
 
     var app_base = try AppBase.init(allocator, cfg);
@@ -1794,7 +1797,7 @@ fn startGossip(
     /// Extra sockets to publish in gossip, other than the gossip socket
     extra_sockets: []const struct { tag: SocketTag, port: u16 },
 ) !*GossipService {
-    const zone = tracy.initZone(@src(), .{ .name = "cmd startGossip" });
+    const zone = tracy.Zone.init(@src(), .{ .name = "cmd startGossip" });
     defer zone.deinit();
 
     app_base.logger.info()
@@ -1890,7 +1893,7 @@ fn loadSnapshot(
     logger: Logger,
     options: LoadSnapshotOptions,
 ) !LoadedSnapshot {
-    const zone = tracy.initZone(@src(), .{ .name = "cmd loadSnapshot" });
+    const zone = tracy.Zone.init(@src(), .{ .name = "cmd loadSnapshot" });
     defer zone.deinit();
 
     var validator_dir = try std.fs.cwd().makeOpenPath(sig.VALIDATOR_DIR, .{});

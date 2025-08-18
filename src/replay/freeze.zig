@@ -1,6 +1,7 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 const replay = @import("lib.zig");
+const tracy = @import("tracy");
 
 const core = sig.core;
 const features = sig.core.features;
@@ -92,6 +93,10 @@ pub const FreezeParams = struct {
 ///
 /// Analogous to [Bank::freeze](https://github.com/anza-xyz/agave/blob/b948b97d2a08850f56146074c0be9727202ceeff/runtime/src/bank.rs#L2620)
 pub fn freezeSlot(allocator: Allocator, params: FreezeParams) !void {
+    var zone = tracy.Zone.init(@src(), .{ .name = "freezeSlot" });
+    zone.value(params.finalize_state.slot);
+    defer zone.deinit();
+
     // TODO: reconsider locking the hash for the entire function. (this is how agave does it)
     var slot_hash = params.slot_hash.write();
     defer slot_hash.unlock();
@@ -133,6 +138,10 @@ const FinalizeStateParams = struct {
 
 /// Updates some accounts and other shared state to finish up the slot execution.
 fn finalizeState(allocator: Allocator, params: FinalizeStateParams) !void {
+    var zone = tracy.Zone.init(@src(), .{ .name = "finalizeState" });
+    zone.value(params.slot);
+    defer zone.deinit();
+
     // Update recent blockhashes (NOTE: agave does this in registerTick)
     {
         var q = params.blockhash_queue.write();

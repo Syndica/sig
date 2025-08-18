@@ -1,6 +1,7 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 const replay = @import("lib.zig");
+const tracy = @import("tracy");
 
 const Allocator = std.mem.Allocator;
 const Atomic = std.atomic.Value;
@@ -37,6 +38,11 @@ pub fn processBatch(
     transactions: []const ResolvedTransaction,
     exit: *Atomic(bool),
 ) !BatchResult {
+    var zone = tracy.Zone.init(@src(), .{ .name = "processBatch" });
+    zone.value(transactions.len);
+    defer zone.deinit();
+    errdefer zone.color(0xFF0000);
+
     const results = try allocator.alloc(struct { Hash, ProcessedTransaction }, transactions.len);
     defer allocator.free(results);
 
@@ -204,6 +210,9 @@ pub const TransactionScheduler = struct {
     }
 
     fn tryScheduleSome(self: *TransactionScheduler) !?TransactionError {
+        const zone = tracy.Zone.init(@src(), .{ .name = "tryScheduleSome" });
+        defer zone.deinit();
+
         while (self.batches.items.len > self.batches_started) {
             const batch = self.batches.items[self.batches_started];
             self.locks.lockStrict(self.allocator, batch.accounts) catch |e| switch (e) {

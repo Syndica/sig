@@ -503,7 +503,7 @@ pub const GossipService = struct {
     /// and verifing they have valid values, and have valid signatures.
     /// Verified GossipMessagemessages are then sent to the verified_channel.
     fn verifyPackets(self: *Self, exit_condition: ExitCondition) !void {
-        const zone = tracy.initZone(@src(), .{ .name = "gossip verifyPackets" });
+        const zone = tracy.Zone.init(@src(), .{ .name = "gossip verifyPackets" });
         defer zone.deinit();
 
         defer {
@@ -522,7 +522,7 @@ pub const GossipService = struct {
         while (true) {
             self.packet_incoming_channel.waitToReceive(exit_condition) catch break;
 
-            const zone_inner = tracy.initZone(@src(), .{ .name = "gossip verifyPackets: receiving" });
+            const zone_inner = tracy.Zone.init(@src(), .{ .name = "gossip verifyPackets: receiving" });
             defer zone_inner.deinit();
 
             // verify in parallel using the threadpool
@@ -573,7 +573,7 @@ pub const GossipService = struct {
 
     /// main logic for recieving and processing gossip messages.
     pub fn processMessages(self: *Self, seed: u64, exit_condition: ExitCondition) !void {
-        const zone = tracy.initZone(@src(), .{ .name = "gossip processMessages" });
+        const zone = tracy.Zone.init(@src(), .{ .name = "gossip processMessages" });
         defer zone.deinit();
 
         defer {
@@ -748,7 +748,7 @@ pub const GossipService = struct {
             defer self.metrics.gossip_packets_processed_total.add(gossip_packets_processed_total);
 
             // handle batch messages
-            const batch_handle_zone = tracy.initZone(
+            const batch_handle_zone = tracy.Zone.init(
                 @src(),
                 .{ .name = "gossip processMessages - handle batch messages" },
             );
@@ -881,7 +881,7 @@ pub const GossipService = struct {
     /// this includes sending push messages, pull requests, and triming old
     /// gossip data (in the gossip_table, active_set, and failed_pull_hashes).
     fn buildMessages(self: *Self, seed: u64, exit_condition: ExitCondition) !void {
-        const zone = tracy.initZone(@src(), .{ .name = "gossip buildMessages" });
+        const zone = tracy.Zone.init(@src(), .{ .name = "gossip buildMessages" });
         defer zone.deinit();
 
         defer {
@@ -1050,7 +1050,7 @@ pub const GossipService = struct {
     /// logic for building new push messages which are sent to peers from the
     /// active set and serialized into packets.
     fn buildPushMessages(self: *Self, push_cursor: *u64) !ArrayList(Packet) {
-        const zone = tracy.initZone(@src(), .{ .name = "gossip buildPushMessages" });
+        const zone = tracy.Zone.init(@src(), .{ .name = "gossip buildPushMessages" });
         defer zone.deinit();
 
         // TODO: find a better static value for the length?
@@ -1201,7 +1201,7 @@ pub const GossipService = struct {
         bloom_size: usize,
         now: u64,
     ) !ArrayList(Packet) {
-        const zone = tracy.initZone(@src(), .{ .name = "gossip buildPullRequests" });
+        const zone = tracy.Zone.init(@src(), .{ .name = "gossip buildPullRequests" });
         defer zone.deinit();
 
         // get nodes from gossip table

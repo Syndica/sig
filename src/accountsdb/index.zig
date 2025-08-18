@@ -127,8 +127,8 @@ pub const AccountIndex = struct {
                 const tracing_disk_allocator = try allocator.create(tracy.TracingAllocator);
                 errdefer allocator.destroy(tracing_disk_allocator);
                 tracing_disk_allocator.* = .{
-                    .parent_allocator = disk_allocator.allocator(),
-                    .pool_name = "index",
+                    .parent = disk_allocator.allocator(),
+                    .name = "index",
                 };
 
                 break :blk .{
@@ -204,7 +204,7 @@ pub const AccountIndex = struct {
     }
 
     pub fn expandRefCapacity(self: *Self, n: u64) !void {
-        const zone = tracy.initZone(@src(), .{
+        const zone = tracy.Zone.init(@src(), .{
             .name = "accountsdb AccountIndex.expandRefCapacity",
         });
         defer zone.deinit();
@@ -384,7 +384,7 @@ pub const AccountIndex = struct {
     }
 
     pub fn loadFromDisk(self: *Self, dir: std.fs.Dir) !void {
-        const zone = tracy.initZone(@src(), .{ .name = "accountsdb loadFromDisk" });
+        const zone = tracy.Zone.init(@src(), .{ .name = "accountsdb loadFromDisk" });
         defer zone.deinit();
 
         // manager must be empty
@@ -650,7 +650,7 @@ pub const ShardedPubkeyRefMap = struct {
     const Self = @This();
 
     pub fn init(allocator: std.mem.Allocator, number_of_shards: u64) !Self {
-        const zone = tracy.initZone(@src(), .{ .name = "ShardedPubkeyRefMap.init" });
+        const zone = tracy.Zone.init(@src(), .{ .name = "ShardedPubkeyRefMap.init" });
         defer zone.deinit();
 
         // shard the pubkey map into shards to reduce lock contention
@@ -689,7 +689,7 @@ pub const ShardedPubkeyRefMap = struct {
     }
 
     pub fn ensureTotalAdditionalCapacity(self: *Self, shard_counts: []const u64) !void {
-        const zone = tracy.initZone(@src(), .{
+        const zone = tracy.Zone.init(@src(), .{
             .name = "ShardedPubkeyRefMap.ensureTotalAdditionalCapacity",
         });
         defer zone.deinit();

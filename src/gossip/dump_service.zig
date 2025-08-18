@@ -22,7 +22,7 @@ pub const GossipDumpService = struct {
     const Self = @This();
 
     pub fn run(self: Self) !void {
-        const zone = tracy.initZone(@src(), .{ .name = "gossip GossipDumpService.run" });
+        const zone = tracy.Zone.init(@src(), .{ .name = "gossip GossipDumpService.run" });
         defer zone.deinit();
 
         defer {
