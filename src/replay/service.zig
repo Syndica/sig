@@ -197,6 +197,9 @@ const ReplayState = struct {
     }
 
     fn deinit(self: *ReplayState) void {
+        const zone = tracy.Zone.init(@src(), .{ .name = "ReplayState deinit" });
+        defer zone.deinit();
+
         self.thread_pool.shutdown();
         self.thread_pool.deinit();
         self.allocator.destroy(self.thread_pool);
@@ -268,7 +271,7 @@ fn trackNewSlots(
     /// needed for update_fork_propagated_threshold_from_votes
     _: *ProgressMap,
 ) !void {
-    var zone = tracy.Zone.init(@src(), .{ .name = "trackNewSlots" });
+    const zone = tracy.Zone.init(@src(), .{ .name = "trackNewSlots" });
     defer zone.deinit();
 
     const root = slot_tracker.root;
@@ -347,7 +350,7 @@ fn newSlotFromParent(
     leader: Pubkey,
     slot: Slot,
 ) !struct { sig.core.SlotConstants, SlotState } {
-    var zone = tracy.Zone.init(@src(), .{ .name = "newSlotFromParent" });
+    const zone = tracy.Zone.init(@src(), .{ .name = "newSlotFromParent" });
     defer zone.deinit();
 
     var state = try SlotState.fromFrozenParent(allocator, parent_state);

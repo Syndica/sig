@@ -1,6 +1,7 @@
 const builtin = @import("builtin");
 const std = @import("std");
 const sig = @import("../sig.zig");
+const tracy = @import("tracy");
 
 const Allocator = std.mem.Allocator;
 
@@ -31,6 +32,9 @@ pub const BlockhashQueue = struct {
     };
 
     pub fn init(max_age: usize) BlockhashQueue {
+        const zone = tracy.Zone.init(@src(), .{ .name = "BlockhashQueue.deinit" });
+        defer zone.deinit();
+
         return .{
             .last_hash_index = 0,
             .last_hash = null,
@@ -40,6 +44,9 @@ pub const BlockhashQueue = struct {
     }
 
     pub fn deinit(self: BlockhashQueue, allocator: Allocator) void {
+        const zone = tracy.Zone.init(@src(), .{ .name = "BlockhashQueue.deinit" });
+        defer zone.deinit();
+
         var infos = self.hash_infos;
         infos.deinit(allocator);
     }
@@ -48,6 +55,9 @@ pub const BlockhashQueue = struct {
         self: BlockhashQueue,
         allocator: Allocator,
     ) Allocator.Error!BlockhashQueue {
+        const zone = tracy.Zone.init(@src(), .{ .name = "BlockhashQueue.clone" });
+        defer zone.deinit();
+
         var hash_infos = try self.hash_infos.clone(allocator);
         errdefer hash_infos.deinit(allocator);
         return .{

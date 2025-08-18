@@ -582,7 +582,13 @@ pub const Manifest = struct {
         /// `std.io.GenericReader(...)` | `std.io.AnyReader`
         reader: anytype,
     ) !Manifest {
-        return try bincode.read(allocator, Manifest, reader, .{});
+        return try bincode.read(
+            allocator,
+            Manifest,
+            reader,
+            // 1GiB wasn't enough for testnet, 10's hopefully too far.
+            .{ .allocation_limit = 10 * 1024 * 1024 * 1024 },
+        );
     }
 
     pub fn epochStakes(

@@ -55,7 +55,7 @@ pub fn confirmSlot(
     ancestors: *const Ancestors,
     reserved_accounts: *const ReservedAccounts,
 ) !*ConfirmSlotFuture {
-    var zone = tracy.Zone.init(@src(), .{ .name = "confirmSlot" });
+    const zone = tracy.Zone.init(@src(), .{ .name = "confirmSlot" });
     zone.value(svm_params.slot);
     defer zone.deinit();
     errdefer zone.color(0xFF0000);

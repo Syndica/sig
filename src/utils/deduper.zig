@@ -163,7 +163,9 @@ fn testDedupSeeded(
     for (0..num_packets) |_| {
         const size = uintLessThanRust(usize, rng, packet_data_size);
         var data = [_]u8{0} ** packet_data_size;
-        rng.bytes(data[0..size]);
+        // avoid random interface for performance (?)
+        // this is our slowest test
+        chacha.block_rng.fill(data[0..size]);
         if (deduper.dedup(&data[0..size])) dup_count += 1;
         try std.testing.expect(deduper.dedup(&data[0..size]));
     }

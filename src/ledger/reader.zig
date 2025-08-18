@@ -1,6 +1,7 @@
 pub const std = @import("std");
 pub const sig = @import("../sig.zig");
 pub const ledger = @import("lib.zig");
+const tracy = @import("tracy");
 
 // std
 const Allocator = std.mem.Allocator;
@@ -1129,6 +1130,9 @@ pub const LedgerReader = struct {
         completed_ranges: CompletedRanges,
         maybe_slot_meta: ?*const SlotMeta,
     ) ![]Entry {
+        const zone = tracy.Zone.init(@src(), .{ .name = "getSlotEntriesInBlock" });
+        defer zone.deinit();
+
         if (completed_ranges.items.len == 0) {
             return &.{};
         }
@@ -1200,6 +1204,13 @@ pub const LedgerReader = struct {
                 return e;
             };
             defer bytes.deinit();
+
+            // the length of the Entry slice
+            const len: u64 = @bitCast(bytes.items[0..8].*);
+
+            // len <= 255 seems normal, print anything larger in case we get something huge
+            if (len > 0xFF) tracy.print("bytes[0..8] 0x{X}\n", .{len});
+
             const these_entries = bincode.readFromSlice(
                 allocator,
                 []Entry,

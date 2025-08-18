@@ -117,7 +117,7 @@ pub const ReplayExecutionState = struct {
 ///
 /// Analogous to [replay_active_banks](https://github.com/anza-xyz/agave/blob/3f68568060fd06f2d561ad79e8d8eb5c5136815a/core/src/replay_stage.rs#L3356)
 pub fn replayActiveSlots(state: *ReplayExecutionState) !bool {
-    var zone = tracy.Zone.init(@src(), .{ .name = "replayActiveSlots" });
+    const zone = tracy.Zone.init(@src(), .{ .name = "replayActiveSlots" });
     defer zone.deinit();
 
     const active_slots = try state.slot_tracker.activeSlots(state.allocator);
@@ -183,7 +183,7 @@ const ReplaySlotStatus = union(enum) {
 /// - [replay_blockstore_into_bank](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/core/src/replay_stage.rs#L2232)
 /// - [confirm_slot](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/ledger/src/blockstore_processor.rs#L1494)
 fn replaySlot(state: *ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
-    var zone = tracy.Zone.init(@src(), .{ .name = "replaySlot" });
+    const zone = tracy.Zone.init(@src(), .{ .name = "replaySlot" });
     zone.value(slot);
     defer zone.deinit();
     errdefer zone.color(0xFF0000);
