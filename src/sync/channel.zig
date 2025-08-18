@@ -235,7 +235,7 @@ pub fn Channel(T: type) type {
         /// Must be called by only one receiver thread at a time.
         pub fn waitToReceive(channel: *Self, exit: ExitCondition) error{Exit}!void {
             while (channel.isEmpty()) {
-                channel.event.timedWait(1 * std.time.ns_per_s) catch {};
+                channel.event.timedWait(10 * std.time.ns_per_ms) catch {};
                 if (exit.shouldExit()) return error.Exit;
                 if (channel.event.isSet()) return channel.event.reset();
             }

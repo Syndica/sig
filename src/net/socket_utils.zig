@@ -12,7 +12,7 @@ const PACKET_DATA_SIZE = Packet.DATA_SIZE;
 const Channel = sig.sync.Channel;
 const ExitCondition = sig.sync.ExitCondition;
 
-pub const SOCKET_TIMEOUT_US: usize = 1 * std.time.us_per_s;
+pub const SOCKET_TIMEOUT_US: usize = 10 * std.time.us_per_ms;
 pub const PACKETS_PER_BATCH: usize = 64;
 
 const Logger = sig.trace.Logger("socket_utils");
