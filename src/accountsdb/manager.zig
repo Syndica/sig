@@ -20,10 +20,7 @@ const FileId = sig.accounts_db.accounts_file.FileId;
 const AccountRef = sig.accounts_db.index.AccountRef;
 const BufferPool = sig.accounts_db.buffer_pool.BufferPool;
 
-const Logger = sig.trace.log.Logger;
-
-const LOG_SCOPE = "accounts_db.manager";
-const ScopedLogger = sig.trace.log.ScopedLogger(LOG_SCOPE);
+const Logger = sig.trace.log.Logger("accounts_db.manager");
 
 const DB_MANAGER_LOOP_MIN = sig.time.Duration.fromSecs(5);
 const ACCOUNT_FILE_SHRINK_THRESHOLD = 70; // shrink account files with more than X% dead bytes
@@ -40,7 +37,7 @@ pub fn runLoop(
     db: *AccountsDB,
     config: ManagerLoopConfig,
 ) !void {
-    const zone = tracy.initZone(@src(), .{ .name = "accountsdb runManagerLoop" });
+    const zone = tracy.Zone.init(@src(), .{ .name = "accountsdb runManagerLoop" });
     defer zone.deinit();
 
     const exit = config.exit;
@@ -237,7 +234,7 @@ pub fn runLoop(
 /// as the data field ([]u8) for each account.
 /// Returns the unclean file id.
 fn flushSlot(db: *AccountsDB, slot: Slot) !FileId {
-    const zone = tracy.initZone(@src(), .{ .name = "accountsdb flushSlot" });
+    const zone = tracy.Zone.init(@src(), .{ .name = "accountsdb flushSlot" });
     defer zone.deinit();
 
     var timer = try sig.time.Timer.start();
@@ -368,7 +365,7 @@ fn cleanAccountFiles(
     num_zero_lamports: usize,
     num_old_states: usize,
 } {
-    const zone = tracy.initZone(@src(), .{ .name = "accountsdb cleanAccountFiles" });
+    const zone = tracy.Zone.init(@src(), .{ .name = "accountsdb cleanAccountFiles" });
     defer zone.deinit();
 
     var timer = try sig.time.Timer.start();
@@ -536,7 +533,7 @@ fn deleteAccountFiles(
     db: *AccountsDB,
     delete_account_files: []const FileId,
 ) !void {
-    const zone = tracy.initZone(@src(), .{ .name = "accountsdb deleteAccountFiles" });
+    const zone = tracy.Zone.init(@src(), .{ .name = "accountsdb deleteAccountFiles" });
     defer zone.deinit();
 
     const number_of_files = delete_account_files.len;
@@ -631,7 +628,7 @@ fn shrinkAccountFiles(
     shrink_account_files: []const FileId,
     delete_account_files: *std.AutoArrayHashMap(FileId, void),
 ) !struct { num_accounts_deleted: usize } {
-    const zone = tracy.initZone(@src(), .{ .name = "accountsdb shrinkAccountFiles" });
+    const zone = tracy.Zone.init(@src(), .{ .name = "accountsdb shrinkAccountFiles" });
     defer zone.deinit();
 
     var timer = try sig.time.Timer.start();
@@ -920,7 +917,7 @@ test "flushing slots works" {
 
     var accounts_db = try AccountsDB.init(.{
         .allocator = allocator,
-        .logger = logger,
+        .logger = .from(logger),
         .snapshot_dir = snapshot_dir,
         .geyser_writer = null,
         .gossip_view = null,
@@ -981,7 +978,7 @@ test "purge accounts in cache works" {
 
     var accounts_db = try AccountsDB.init(.{
         .allocator = allocator,
-        .logger = logger,
+        .logger = .from(logger),
         .snapshot_dir = snapshot_dir,
         .geyser_writer = null,
         .gossip_view = null,
@@ -1051,7 +1048,7 @@ test "clean to shrink account file works with zero-lamports" {
 
     var accounts_db = try AccountsDB.init(.{
         .allocator = allocator,
-        .logger = logger,
+        .logger = .from(logger),
         .snapshot_dir = snapshot_dir,
         .geyser_writer = null,
         .gossip_view = null,
@@ -1138,7 +1135,7 @@ test "clean to shrink account file works" {
 
     var accounts_db = try AccountsDB.init(.{
         .allocator = allocator,
-        .logger = logger,
+        .logger = .from(logger),
         .snapshot_dir = snapshot_dir,
         .geyser_writer = null,
         .gossip_view = null,
@@ -1217,7 +1214,7 @@ test "full clean account file works" {
 
     var accounts_db = try AccountsDB.init(.{
         .allocator = allocator,
-        .logger = logger,
+        .logger = .from(logger),
         .snapshot_dir = snapshot_dir,
         .geyser_writer = null,
         .gossip_view = null,
@@ -1332,7 +1329,7 @@ test "shrink account file works" {
 
     var accounts_db = try AccountsDB.init(.{
         .allocator = allocator,
-        .logger = logger,
+        .logger = .from(logger),
         .snapshot_dir = snapshot_dir,
         .geyser_writer = null,
         .gossip_view = null,

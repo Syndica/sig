@@ -1,6 +1,7 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 const replay = @import("lib.zig");
+const tracy = @import("tracy");
 
 const Allocator = std.mem.Allocator;
 
@@ -10,6 +11,8 @@ const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 const SlotLeaders = sig.core.leader_schedule.SlotLeaders;
 const SlotState = sig.core.bank.SlotState;
+const SlotAndHash = sig.core.hash.SlotAndHash;
+const Hash = sig.core.Hash;
 
 const AccountStore = sig.accounts_db.AccountStore;
 const AccountReader = sig.accounts_db.AccountReader;
@@ -20,6 +23,7 @@ const LedgerReader = sig.ledger.LedgerReader;
 const LedgerResultWriter = sig.ledger.result_writer.LedgerResultWriter;
 
 const ProgressMap = sig.consensus.ProgressMap;
+const HeaviestSubtreeForkChoice = sig.consensus.HeaviestSubtreeForkChoice;
 
 const ReplayExecutionState = replay.execution.ReplayExecutionState;
 const SlotTracker = replay.trackers.SlotTracker;
@@ -29,6 +33,15 @@ const updateSysvarsForNewSlot = replay.update_sysvar.updateSysvarsForNewSlot;
 
 const LatestValidatorVotesForFrozenSlots =
     sig.consensus.latest_validator_votes.LatestValidatorVotes;
+
+const DuplicateSlots = replay.edge_cases.DuplicateSlots;
+const DuplicateConfirmedSlots = replay.edge_cases.DuplicateConfirmedSlots;
+const DuplicateSlotsToRepair = replay.edge_cases.DuplicateSlotsToRepair;
+const EpochSlotsFrozenSlots = replay.edge_cases.EpochSlotsFrozenSlots;
+const PurgeRepairSlotCounters = replay.edge_cases.PurgeRepairSlotCounters;
+const UnfrozenGossipVerifiedVoteHashes = replay.edge_cases.UnfrozenGossipVerifiedVoteHashes;
+
+pub const Logger = sig.trace.Logger("replay");
 
 /// Number of threads to use in replay's thread pool
 const NUM_THREADS = 4;
@@ -41,7 +54,7 @@ pub const DUPLICATE_THRESHOLD: f64 = 1.0 - SWITCH_FORK_THRESHOLD - DUPLICATE_LIV
 pub const ReplayDependencies = struct {
     /// Used for all allocations within the replay stage
     allocator: Allocator,
-    logger: sig.trace.Logger,
+    logger: Logger,
     my_identity: sig.core.Pubkey,
     /// Tell replay when to exit
     exit: *std.atomic.Value(bool),
@@ -61,8 +74,6 @@ pub const ReplayDependencies = struct {
     current_epoch_constants: sig.core.EpochConstants,
     hard_forks: sig.core.HardForks,
 };
-
-pub const Logger = sig.trace.ScopedLogger("replay");
 
 pub const SlotData = struct {
     duplicate_confirmed_slots: replay.edge_cases.DuplicateConfirmedSlots,
@@ -87,6 +98,9 @@ const ReplayState = struct {
     execution: ReplayExecutionState,
 
     fn init(deps: ReplayDependencies) !ReplayState {
+        const zone = tracy.Zone.init(@src(), .{ .name = "ReplayState init" });
+        defer zone.deinit();
+
         const thread_pool = try deps.allocator.create(ThreadPool);
         errdefer deps.allocator.destroy(thread_pool);
         thread_pool.* = ThreadPool.init(.{ .max_threads = NUM_THREADS });
@@ -125,6 +139,29 @@ const ReplayState = struct {
             }),
         );
 
+        // TODO: Might need updating with the Initialize requisite replay state PR.
+        var fork_choice = HeaviestSubtreeForkChoice{
+            .allocator = deps.allocator,
+            .logger = .noop,
+            .fork_infos = std.AutoHashMap(
+                SlotAndHash,
+                sig.consensus.fork_choice.ForkInfo,
+            ).init(deps.allocator),
+            .latest_votes = std.AutoHashMap(Pubkey, SlotAndHash).init(deps.allocator),
+            .tree_root = .{ .slot = 0, .hash = Hash.ZEROES },
+            .last_root_time = sig.time.Instant.now(),
+        };
+        var duplicate_slot_tracker = DuplicateSlots.empty;
+        var duplicate_confirmed_slots = DuplicateConfirmedSlots.empty;
+        var epoch_slots_frozen_slots = EpochSlotsFrozenSlots.empty;
+        var duplicate_slots_to_repair = DuplicateSlotsToRepair.empty;
+        var purge_replair_slot_counter = PurgeRepairSlotCounters.empty;
+
+        var unfrozen_gossip_verified_vote_hashes = UnfrozenGossipVerifiedVoteHashes{
+            .votes_per_slot = .empty,
+        };
+        var latest_validator_votes_for_frozen_banks = LatestValidatorVotesForFrozenSlots.empty;
+
         return .{
             .allocator = deps.allocator,
             .logger = .from(deps.logger),
@@ -138,14 +175,23 @@ const ReplayState = struct {
             .progress_map = progress_map,
             .execution = try ReplayExecutionState.init(
                 deps.allocator,
-                deps.logger,
+                .from(deps.logger),
                 deps.my_identity,
                 thread_pool,
                 deps.account_store,
                 deps.ledger_reader,
+                deps.ledger_result_writer,
                 slot_tracker,
                 epoch_tracker,
                 progress_map,
+                &fork_choice,
+                &duplicate_slot_tracker,
+                &unfrozen_gossip_verified_vote_hashes,
+                &latest_validator_votes_for_frozen_banks,
+                &duplicate_confirmed_slots,
+                &epoch_slots_frozen_slots,
+                &duplicate_slots_to_repair,
+                &purge_replair_slot_counter,
             ),
         };
     }
@@ -164,6 +210,9 @@ const ReplayState = struct {
 
 /// Run the replay service indefinitely.
 pub fn run(deps: ReplayDependencies) !void {
+    const zone = tracy.Zone.init(@src(), .{ .name = "run (replay service)" });
+    defer zone.deinit();
+
     var state = try ReplayState.init(deps);
     defer state.deinit();
 
@@ -174,6 +223,9 @@ pub fn run(deps: ReplayDependencies) !void {
 /// - replay all active slots that have not been replayed yet
 /// - running concensus on the latest updates
 fn advanceReplay(state: *ReplayState) !void {
+    const zone = tracy.Zone.init(@src(), .{ .name = "advanceReplay" });
+    defer zone.deinit();
+
     state.logger.info().log("advancing replay");
     try trackNewSlots(
         state.allocator,
@@ -216,6 +268,9 @@ fn trackNewSlots(
     /// needed for update_fork_propagated_threshold_from_votes
     _: *ProgressMap,
 ) !void {
+    var zone = tracy.Zone.init(@src(), .{ .name = "trackNewSlots" });
+    defer zone.deinit();
+
     const root = slot_tracker.root;
     var frozen_slots = try slot_tracker.frozenSlots(allocator);
     defer frozen_slots.deinit(allocator);
@@ -236,6 +291,7 @@ fn trackNewSlots(
 
     for (next_slots.keys(), next_slots.values()) |parent_slot, children| {
         const parent_info = frozen_slots.get(parent_slot) orelse return error.MissingParent;
+
         for (children.items) |slot| {
             if (slot_tracker.contains(slot)) continue;
 
@@ -291,6 +347,9 @@ fn newSlotFromParent(
     leader: Pubkey,
     slot: Slot,
 ) !struct { sig.core.SlotConstants, SlotState } {
+    var zone = tracy.Zone.init(@src(), .{ .name = "newSlotFromParent" });
+    defer zone.deinit();
+
     var state = try SlotState.fromFrozenParent(allocator, parent_state);
     errdefer state.deinit(allocator);
 

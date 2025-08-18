@@ -2,7 +2,9 @@ const sig = @import("../../../sig.zig");
 
 const precompile_programs = sig.runtime.program.precompiles;
 
+const Slot = sig.core.Slot;
 const Pubkey = sig.core.Pubkey;
+const FeatureSet = sig.core.FeatureSet;
 const PrecompileProgramError = precompile_programs.PrecompileProgramError;
 
 pub const ID: Pubkey = .parse("Secp256r1SigVerify1111111111111111111111111");
@@ -14,6 +16,8 @@ pub const ID: Pubkey = .parse("Secp256r1SigVerify1111111111111111111111111");
 pub fn verify(
     current_instruction_data: []const u8,
     all_instruction_datas: []const []const u8,
+    _: *const FeatureSet,
+    _: Slot,
 ) PrecompileProgramError!void {
     _ = current_instruction_data;
     _ = all_instruction_datas;

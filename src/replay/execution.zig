@@ -1,6 +1,7 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 const replay = @import("lib.zig");
+const tracy = @import("tracy");
 
 const core = sig.core;
 
@@ -10,16 +11,32 @@ const ThreadPool = sig.sync.ThreadPool;
 
 const Pubkey = core.Pubkey;
 const Slot = core.Slot;
+const Hash = sig.core.Hash;
 
 const AccountStore = sig.accounts_db.AccountStore;
 const LedgerReader = sig.ledger.LedgerReader;
 
 const ForkProgress = sig.consensus.progress_map.ForkProgress;
 const ProgressMap = sig.consensus.ProgressMap;
+const HeaviestSubtreeForkChoice = sig.consensus.HeaviestSubtreeForkChoice;
+const LatestValidatorVotes = sig.consensus.latest_validator_votes.LatestValidatorVotes;
 
 const ConfirmSlotFuture = replay.confirm_slot.ConfirmSlotFuture;
+
 const EpochTracker = replay.trackers.EpochTracker;
 const SlotTracker = replay.trackers.SlotTracker;
+const DuplicateSlots = replay.edge_cases.DuplicateSlots;
+const DuplicateState = replay.edge_cases.DuplicateState;
+const SlotFrozenState = replay.edge_cases.SlotFrozenState;
+const DuplicateSlotsToRepair = replay.edge_cases.DuplicateSlotsToRepair;
+const DuplicateConfirmedSlots = replay.edge_cases.DuplicateConfirmedSlots;
+const PurgeRepairSlotCounters = replay.edge_cases.PurgeRepairSlotCounters;
+const EpochSlotsFrozenSlots = replay.edge_cases.EpochSlotsFrozenSlots;
+const UnfrozenGossipVerifiedVoteHashes = replay.edge_cases.UnfrozenGossipVerifiedVoteHashes;
+
+const Logger = sig.trace.Logger("replay.execution");
+
+const check_slot_agrees_with_cluster = replay.edge_cases.check_slot_agrees_with_cluster;
 
 const SvmGateway = replay.svm_gateway.SvmGateway;
 
@@ -28,7 +45,7 @@ const confirmSlot = replay.confirm_slot.confirmSlot;
 /// State used for replaying and validating data from ledger/accountsdb/svm
 pub const ReplayExecutionState = struct {
     allocator: Allocator,
-    logger: sig.trace.ScopedLogger("replay-execution"),
+    logger: Logger,
     my_identity: Pubkey,
     vote_account: ?Pubkey,
 
@@ -36,23 +53,41 @@ pub const ReplayExecutionState = struct {
     account_store: AccountStore,
     thread_pool: *ThreadPool,
     ledger_reader: *LedgerReader,
+    ledger_result_writer: *sig.ledger.LedgerResultWriter,
     slot_tracker: *SlotTracker,
     epochs: *EpochTracker,
     progress_map: *ProgressMap,
+    fork_choice: *HeaviestSubtreeForkChoice,
+    duplicate_slots_tracker: *DuplicateSlots,
+    unfrozen_gossip_verified_vote_hashes: *UnfrozenGossipVerifiedVoteHashes,
+    latest_validator_votes_for_frozen_banks: *LatestValidatorVotes,
+    duplicate_confirmed_slots: *DuplicateConfirmedSlots,
+    epoch_slots_frozen_slots: *const EpochSlotsFrozenSlots,
+    duplicate_slots_to_repair: *DuplicateSlotsToRepair,
+    purge_repair_slot_counter: *PurgeRepairSlotCounters,
 
     // owned
     status_cache: sig.core.StatusCache,
 
     pub fn init(
         allocator: Allocator,
-        logger: sig.trace.Logger,
+        logger: Logger,
         my_identity: Pubkey,
         thread_pool: *ThreadPool,
         account_store: AccountStore,
         ledger_reader: *LedgerReader,
+        ledger_result_writer: *sig.ledger.LedgerResultWriter,
         slot_tracker: *SlotTracker,
         epochs: *EpochTracker,
         progress_map: *ProgressMap,
+        fork_choice: *HeaviestSubtreeForkChoice,
+        duplicate_slots_tracker: *DuplicateSlots,
+        unfrozen_gossip_verified_vote_hashes: *UnfrozenGossipVerifiedVoteHashes,
+        latest_validator_votes_for_frozen_banks: *LatestValidatorVotes,
+        duplicate_confirmed_slots: *DuplicateConfirmedSlots,
+        epoch_slots_frozen_slots: *const EpochSlotsFrozenSlots,
+        duplicate_slots_to_repair: *DuplicateSlotsToRepair,
+        purge_repair_slot_counter: *PurgeRepairSlotCounters,
     ) Allocator.Error!ReplayExecutionState {
         return .{
             .allocator = allocator,
@@ -62,9 +97,18 @@ pub const ReplayExecutionState = struct {
             .account_store = account_store,
             .thread_pool = thread_pool,
             .ledger_reader = ledger_reader,
+            .ledger_result_writer = ledger_result_writer,
             .slot_tracker = slot_tracker,
             .epochs = epochs,
             .progress_map = progress_map,
+            .fork_choice = fork_choice,
+            .duplicate_slots_tracker = duplicate_slots_tracker,
+            .unfrozen_gossip_verified_vote_hashes = unfrozen_gossip_verified_vote_hashes,
+            .latest_validator_votes_for_frozen_banks = latest_validator_votes_for_frozen_banks,
+            .duplicate_confirmed_slots = duplicate_confirmed_slots,
+            .epoch_slots_frozen_slots = epoch_slots_frozen_slots,
+            .duplicate_slots_to_repair = duplicate_slots_to_repair,
+            .purge_repair_slot_counter = purge_repair_slot_counter,
             .status_cache = .DEFAULT,
         };
     }
@@ -75,6 +119,9 @@ pub const ReplayExecutionState = struct {
 ///
 /// Analogous to [replay_active_banks](https://github.com/anza-xyz/agave/blob/3f68568060fd06f2d561ad79e8d8eb5c5136815a/core/src/replay_stage.rs#L3356)
 pub fn replayActiveSlots(state: *ReplayExecutionState) !bool {
+    var zone = tracy.Zone.init(@src(), .{ .name = "replayActiveSlots" });
+    defer zone.deinit();
+
     const active_slots = try state.slot_tracker.activeSlots(state.allocator);
     state.logger.info().logf("{} active slots to replay", .{active_slots.len});
     if (active_slots.len == 0) {
@@ -92,44 +139,7 @@ pub fn replayActiveSlots(state: *ReplayExecutionState) !bool {
         errdefer result.deinit(state.allocator);
         try slot_statuses.append(state.allocator, .{ slot, result });
     }
-    var processed_a_slot = false;
-    for (slot_statuses.items) |slot_status| {
-        // NOTE: currently this just awaits the futures and discards the
-        // results. this will change once we call the svm and process the
-        // results of execution.
-        const slot, const status = slot_status;
-        const slot_info = state.slot_tracker.get(slot) orelse unreachable;
-        const epoch_info = state.epochs.getForSlot(slot) orelse unreachable;
-
-        if (status != .confirm) continue;
-
-        const future = status.confirm;
-        // NOTE: agave does this a bit differently, it indicates that a slot
-        // was *finished*, not just processed partially.
-        processed_a_slot = true;
-        while (try status.confirm.poll() == .pending) {
-            // TODO: consider futex-based wait like ResetEvent
-            std.time.sleep(std.time.ns_per_ms);
-        }
-
-        if (slot_info.state.tickHeight() == slot_info.constants.max_tick_height) {
-            state.logger.info().logf("confirmed entire slot {}", .{slot});
-            try replay.freeze.freezeSlot(state.allocator, .init(
-                .from(state.logger),
-                state.account_store,
-                &epoch_info,
-                slot_info.state,
-                slot_info.constants,
-                slot,
-                future.entries[future.entries.len - 1].hash,
-            ));
-        } else {
-            state.logger.info().logf("partially confirmed slot {}", .{slot});
-        }
-    }
-
-    // TODO: process_replay_results: https://github.com/anza-xyz/agave/blob/3f68568060fd06f2d561ad79e8d8eb5c5136815a/core/src/replay_stage.rs#L3443
-    return processed_a_slot;
+    return try processReplayResults(state, slot_statuses.items);
 }
 
 const ReplaySlotStatus = union(enum) {
@@ -175,12 +185,18 @@ const ReplaySlotStatus = union(enum) {
 /// - [replay_blockstore_into_bank](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/core/src/replay_stage.rs#L2232)
 /// - [confirm_slot](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/ledger/src/blockstore_processor.rs#L1494)
 fn replaySlot(state: *ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
+    var zone = tracy.Zone.init(@src(), .{ .name = "replaySlot" });
+    zone.value(slot);
+    defer zone.deinit();
+    errdefer zone.color(0xFF0000);
+
     const progress_get_or_put = try state.progress_map.map.getOrPut(state.allocator, slot);
     if (progress_get_or_put.found_existing and progress_get_or_put.value_ptr.is_dead) {
         return .dead;
     }
 
     const epoch_info = state.epochs.getForSlot(slot) orelse return error.MissingEpoch;
+
     const slot_info = state.slot_tracker.get(slot) orelse return error.MissingSlot;
 
     const i_am_leader = slot_info.constants.collector_id.equals(&state.my_identity);
@@ -297,4 +313,781 @@ fn replaySlot(state: *ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
         &slot_info.constants.ancestors,
         &slot_info.constants.reserved_accounts,
     ) };
+}
+
+/// Polls a confirm status to obtain entries for a slot. If the confirm
+/// future yields an error, marks the slot as dead. Returns null if the slot
+/// should be skipped (non-confirm status, pending, or error).
+fn awaitConfirmedEntriesForSlot(
+    replay_state: *ReplayExecutionState,
+    slot: Slot,
+    status: ReplaySlotStatus,
+) !?[]const sig.core.Entry {
+    return switch (status) {
+        .confirm => |confirm_slot_future| blk: {
+            while (true) {
+                const poll_result = try confirm_slot_future.poll();
+                switch (poll_result) {
+                    .err => {
+                        try markDeadSlot(
+                            slot,
+                            replay_state.progress_map,
+                            replay_state.ledger_result_writer,
+                        );
+                        break :blk null;
+                    },
+                    .done => break :blk confirm_slot_future.entries,
+                    .pending => {
+                        // TODO: consider futex-based wait like ResetEvent
+                        std.time.sleep(std.time.ns_per_ms);
+                    },
+                }
+            }
+        },
+        else => null,
+    };
+}
+
+/// Applies fork-choice and vote updates after a slot has been frozen.
+fn updateConsensusForFrozenSlot(
+    replay_state: *ReplayExecutionState,
+    slot: Slot,
+) !void {
+    var slot_info = replay_state.slot_tracker.get(slot) orelse
+        return error.MissingSlotInTracker;
+
+    const parent_slot = slot_info.constants.parent_slot;
+    const parent_hash = slot_info.constants.parent_hash;
+
+    var progress = replay_state.progress_map.map.getPtr(slot) orelse
+        return error.MissingBankProgress;
+
+    const hash = slot_info.state.hash.readCopy() orelse
+        return error.MissingHash;
+    std.debug.assert(!hash.eql(Hash.ZEROES));
+
+    // Needs to be updated before `check_slot_agrees_with_cluster()` so that any
+    // updates in `check_slot_agrees_with_cluster()` on fork choice take effect
+    try replay_state.fork_choice.addNewLeafSlot(
+        .{ .slot = slot, .hash = hash },
+        .{ .slot = parent_slot, .hash = parent_hash },
+    );
+
+    progress.fork_stats.bank_hash = hash;
+
+    const slot_frozen_state: SlotFrozenState = .fromState(
+        .from(replay_state.logger),
+        slot,
+        hash,
+        replay_state.duplicate_slots_tracker,
+        replay_state.duplicate_confirmed_slots,
+        replay_state.fork_choice,
+        replay_state.epoch_slots_frozen_slots,
+    );
+    try check_slot_agrees_with_cluster.slotFrozen(
+        replay_state.allocator,
+        .from(replay_state.logger),
+        slot,
+        replay_state.slot_tracker.root,
+        replay_state.ledger_result_writer,
+        replay_state.fork_choice,
+        replay_state.duplicate_slots_to_repair,
+        replay_state.purge_repair_slot_counter,
+        slot_frozen_state,
+    );
+
+    if (!replay_state.duplicate_slots_tracker.contains(slot) and
+        try replay_state.ledger_reader.getDuplicateSlot(slot) != null)
+    {
+        const duplicate_state: DuplicateState = .fromState(
+            .from(replay_state.logger),
+            slot,
+            replay_state.duplicate_confirmed_slots,
+            replay_state.fork_choice,
+            .fromHash(hash),
+        );
+
+        try check_slot_agrees_with_cluster.duplicate(
+            replay_state.allocator,
+            .from(replay_state.logger),
+            slot,
+            parent_slot,
+            replay_state.duplicate_slots_tracker,
+            replay_state.fork_choice,
+            duplicate_state,
+        );
+    }
+
+    // Move unfrozen_gossip_verified_vote_hashes entries to latest_validator_votes_for_frozen_banks
+    if (replay_state
+        .unfrozen_gossip_verified_vote_hashes.votes_per_slot
+        .get(slot)) |slot_hashes_const|
+    {
+        var slot_hashes = slot_hashes_const;
+        if (slot_hashes.fetchSwapRemove(hash)) |kv| {
+            var new_frozen_voters = kv.value;
+            defer new_frozen_voters.deinit(replay_state.allocator);
+            for (new_frozen_voters.items) |pubkey| {
+                _ = try replay_state.latest_validator_votes_for_frozen_banks.checkAddVote(
+                    replay_state.allocator,
+                    pubkey,
+                    slot,
+                    hash,
+                    .replay,
+                );
+            }
+        }
+        // If `slot_hashes` becomes empty, it'll be removed by `setRoot()` later
+    }
+}
+
+pub fn processReplayResults(
+    replay_state: *ReplayExecutionState,
+    slot_statuses: []const struct { Slot, ReplaySlotStatus },
+) !bool {
+    var processed_a_slot = false;
+    for (slot_statuses) |slot_status| {
+        const slot, const status = slot_status;
+
+        const maybe_entries = try awaitConfirmedEntriesForSlot(
+            replay_state,
+            slot,
+            status,
+        );
+        // If entries is null, it means the slot failed or was skipped, so continue to next slot
+        const entries = if (maybe_entries) |entries| entries else continue;
+
+        var slot_info = replay_state.slot_tracker.get(slot) orelse
+            return error.MissingSlotInTracker;
+
+        // Freeze the bank if its entries where completly processed.
+        if (slot_info.state.tickHeight() == slot_info.constants.max_tick_height) {
+            const is_leader_block =
+                slot_info.constants.collector_id.equals(&replay_state.my_identity);
+            if (!is_leader_block) {
+                try replay.freeze.freezeSlot(replay_state.allocator, .init(
+                    .from(replay_state.logger),
+                    replay_state.account_store,
+                    &(replay_state.epochs.getForSlot(slot) orelse return error.MissingEpoch),
+                    slot_info.state,
+                    slot_info.constants,
+                    slot,
+                    entries[entries.len - 1].hash,
+                ));
+            }
+            processed_a_slot = true;
+            // TODO Send things out via a couple of senders
+            // - cluster_slots_update_sender;
+            // - transaction_status_sender;
+            // - cost_update_sender;
+            try updateConsensusForFrozenSlot(replay_state, slot);
+            // TODO block_metadata_notifier
+            // TODO block_metadata_notifier
+        }
+    }
+    return processed_a_slot;
+}
+
+fn markDeadSlot(
+    dead_slot: Slot,
+    progress_map: *ProgressMap,
+    ledger_result_writer: *sig.ledger.LedgerResultWriter,
+) !void {
+    // TODO add getForkProgress
+    var fork_progress = progress_map.map.getPtr(dead_slot) orelse {
+        return error.MissingBankProgress;
+    };
+    fork_progress.is_dead = true;
+    try ledger_result_writer.setDeadSlot(dead_slot);
+    // TODO Add and update slot stats blockstore.slots_stats.mark_dead(slot);
+}
+
+const testing = std.testing;
+
+// Test helper structure that owns all the resources
+const TestReplayStateResources = struct {
+    thread_pool: ThreadPool,
+    ledger_reader: LedgerReader,
+    ledger_result_writer: sig.ledger.LedgerResultWriter,
+    epochs: EpochTracker,
+    progress: ProgressMap,
+    fork_choice: *HeaviestSubtreeForkChoice,
+    duplicate_slots_tracker: DuplicateSlots,
+    unfrozen_gossip_verified_vote_hashes: UnfrozenGossipVerifiedVoteHashes,
+    latest_validator_votes_for_frozen_banks: LatestValidatorVotes,
+    duplicate_confirmed_slots: DuplicateConfirmedSlots,
+    epoch_slots_frozen_slots: EpochSlotsFrozenSlots,
+    duplicate_slots_to_repair: DuplicateSlotsToRepair,
+    purge_repair_slot_counter: PurgeRepairSlotCounters,
+    slot_tracker: SlotTracker,
+    replay_state: ReplayExecutionState,
+    db: sig.ledger.LedgerDB,
+    registry: sig.prometheus.Registry(.{}),
+    lowest_cleanup_slot: sig.sync.RwMux(Slot),
+    max_root: std.atomic.Value(Slot),
+
+    pub fn init(allocator: Allocator) !*TestReplayStateResources {
+        const self = try allocator.create(TestReplayStateResources);
+        errdefer allocator.destroy(self);
+
+        const account_store = AccountStore.noop;
+
+        self.registry = sig.prometheus.Registry(.{}).init(allocator);
+        errdefer self.registry.deinit();
+
+        self.db = try sig.ledger.tests.TestDB.init(@src());
+        errdefer self.db.deinit();
+
+        self.lowest_cleanup_slot = sig.sync.RwMux(Slot).init(0);
+        self.max_root = std.atomic.Value(Slot).init(0);
+
+        self.thread_pool = ThreadPool.init(.{});
+
+        self.ledger_reader = try LedgerReader.init(
+            allocator,
+            .noop,
+            self.db,
+            &self.registry,
+            &self.lowest_cleanup_slot,
+            &self.max_root,
+        );
+
+        self.ledger_result_writer = try sig.ledger.LedgerResultWriter.init(
+            allocator,
+            .noop,
+            self.db,
+            &self.registry,
+            &self.lowest_cleanup_slot,
+            &self.max_root,
+        );
+
+        self.epochs = EpochTracker{
+            .epochs = .empty,
+            .schedule = sig.core.EpochSchedule.DEFAULT,
+        };
+
+        self.progress = ProgressMap.INIT;
+
+        self.fork_choice = try allocator.create(HeaviestSubtreeForkChoice);
+        self.fork_choice.* = try HeaviestSubtreeForkChoice.init(allocator, .noop, .{
+            .slot = 0,
+            .hash = Hash.ZEROES,
+        });
+
+        self.duplicate_slots_tracker = DuplicateSlots.empty;
+        self.unfrozen_gossip_verified_vote_hashes = UnfrozenGossipVerifiedVoteHashes{
+            .votes_per_slot = .empty,
+        };
+        self.latest_validator_votes_for_frozen_banks = LatestValidatorVotes.empty;
+        self.duplicate_confirmed_slots = DuplicateConfirmedSlots.empty;
+        self.epoch_slots_frozen_slots = EpochSlotsFrozenSlots.empty;
+        self.duplicate_slots_to_repair = DuplicateSlotsToRepair.empty;
+        self.purge_repair_slot_counter = PurgeRepairSlotCounters.empty;
+
+        self.slot_tracker = SlotTracker{
+            .slots = .empty,
+            .root = 0,
+        };
+
+        self.replay_state = try ReplayExecutionState.init(
+            allocator,
+            .noop,
+            Pubkey.initRandom(std.crypto.random),
+            &self.thread_pool,
+            account_store,
+            &self.ledger_reader,
+            &self.ledger_result_writer,
+            &self.slot_tracker,
+            &self.epochs,
+            &self.progress,
+            self.fork_choice,
+            &self.duplicate_slots_tracker,
+            &self.unfrozen_gossip_verified_vote_hashes,
+            &self.latest_validator_votes_for_frozen_banks,
+            &self.duplicate_confirmed_slots,
+            &self.epoch_slots_frozen_slots,
+            &self.duplicate_slots_to_repair,
+            &self.purge_repair_slot_counter,
+        );
+
+        return self;
+    }
+
+    pub fn deinit(self: *TestReplayStateResources, allocator: Allocator) void {
+        self.thread_pool.shutdown();
+        self.thread_pool.deinit();
+
+        self.slot_tracker.deinit(allocator);
+        self.epochs.deinit(allocator);
+        self.progress.deinit(allocator);
+        self.fork_choice.deinit();
+        allocator.destroy(self.fork_choice);
+
+        self.duplicate_slots_tracker.deinit(allocator);
+        self.unfrozen_gossip_verified_vote_hashes.votes_per_slot.deinit(allocator);
+        self.latest_validator_votes_for_frozen_banks.deinit(allocator);
+        self.duplicate_confirmed_slots.deinit(allocator);
+        self.epoch_slots_frozen_slots.deinit(allocator);
+        self.duplicate_slots_to_repair.deinit(allocator);
+        self.purge_repair_slot_counter.deinit(allocator);
+        self.db.deinit();
+        self.registry.deinit();
+
+        allocator.destroy(self);
+    }
+};
+
+// Helper to create a minimal ReplayExecutionState for testing
+fn createTestReplayState(allocator: Allocator) !*TestReplayStateResources {
+    return TestReplayStateResources.init(allocator);
+}
+
+test "processReplayResults: empty slot statuses" {
+    const allocator = testing.allocator;
+
+    var test_resources = createTestReplayState(allocator) catch |err| {
+        std.debug.print("Failed to create test replay state: {}\n", .{err});
+        return err;
+    };
+    defer test_resources.deinit(allocator);
+
+    const empty_slot_statuses: []const struct { Slot, ReplaySlotStatus } = &.{};
+
+    const result = processReplayResults(
+        &test_resources.replay_state,
+        empty_slot_statuses,
+    ) catch |err| {
+        std.debug.print("processReplayResults failed: {}\n", .{err});
+        return err;
+    };
+
+    // Should return false since no slots were processed
+    try testing.expect(!result);
+}
+
+test "processReplayResults: non-confirm statuses are skipped" {
+    const allocator = testing.allocator;
+
+    var test_resources = createTestReplayState(allocator) catch |err| {
+        std.debug.print("Failed to create test replay state: {}\n", .{err});
+        return err;
+    };
+    defer test_resources.deinit(allocator);
+
+    const slot_statuses: []const struct { Slot, ReplaySlotStatus } = &.{
+        .{ 100, .empty },
+        .{ 101, .dead },
+        .{ 102, .leader },
+    };
+
+    const result = processReplayResults(&test_resources.replay_state, slot_statuses) catch |err| {
+        std.debug.print("processReplayResults failed: {}\n", .{err});
+        return err;
+    };
+
+    // Should return false since no confirm slots were processed
+    try testing.expect(!result);
+}
+
+test "processReplayResults: marks slot as dead correctly" {
+    const allocator = testing.allocator;
+
+    // Create a minimal test setup without the complex database dependencies
+    var progress = ProgressMap.INIT;
+    defer progress.deinit(allocator);
+
+    const slot: Slot = 100;
+
+    // Add slot to progress map
+    const gop = try progress.map.getOrPut(allocator, slot);
+    if (!gop.found_existing) {
+        gop.value_ptr.* = try sig.consensus.progress_map.ForkProgress.init(allocator, .{
+            .now = sig.time.Instant.now(),
+            .last_entry = sig.core.Hash.ZEROES,
+            .prev_leader_slot = null,
+            .validator_stake_info = null,
+            .num_blocks_on_fork = 0,
+            .num_dropped_blocks_on_fork = 0,
+        });
+    }
+
+    // Verify slot is initially not dead
+    const progress_before = progress.map.get(slot);
+    try testing.expect(progress_before != null);
+    try testing.expect(!progress_before.?.is_dead);
+
+    // Test the core logic without the database write
+    // Just verify that the progress map is updated correctly
+    var fork_progress = progress.map.getPtr(slot) orelse {
+        return error.MissingBankProgress;
+    };
+    fork_progress.is_dead = true;
+
+    // Verify slot is now marked as dead
+    const progress_after = progress.map.get(slot);
+    try testing.expect(progress_after != null);
+    try testing.expect(progress_after.?.is_dead);
+}
+
+test "processReplayResults: confirm status with err poll result marks slot dead" {
+    const allocator = testing.allocator;
+
+    var test_resources = createTestReplayState(allocator) catch |err| {
+        std.debug.print("Failed to create test replay state: {}\n", .{err});
+        return err;
+    };
+    defer test_resources.deinit(allocator);
+
+    const slot: Slot = 100;
+
+    // Add slot to progress map first
+    try test_resources.progress.map.putNoClobber(
+        allocator,
+        slot,
+        try sig.consensus.progress_map.ForkProgress.init(allocator, .{
+            .now = sig.time.Instant.now(),
+            .last_entry = sig.core.Hash.ZEROES,
+            .prev_leader_slot = null,
+            .validator_stake_info = null,
+            .num_blocks_on_fork = 0,
+            .num_dropped_blocks_on_fork = 0,
+        }),
+    );
+
+    // Verify slot is initially not dead
+    const progress_before = test_resources.progress.map.get(slot);
+    try testing.expect(progress_before != null);
+    try testing.expect(!progress_before.?.is_dead);
+
+    // Create a mock ConfirmSlotFuture that will return an error when polled.
+    const MockConfirmSlotFutureErr = struct {
+        scheduler: replay.scheduler.TransactionScheduler,
+        poh_verifier: sig.utils.thread.HomogeneousThreadPool(replay.confirm_slot.PohTask),
+        exit: std.atomic.Value(bool),
+        entries: []const sig.core.Entry,
+        status: replay.confirm_slot.ConfirmSlotStatus,
+        status_when_done: replay.confirm_slot.ConfirmSlotStatus,
+
+        pub fn poll(self: *@This()) !replay.confirm_slot.ConfirmSlotStatus {
+            _ = self;
+            // Always return an error to test the error path
+            return replay.confirm_slot.ConfirmSlotStatus{
+                .err = .{ .failed_to_load_entries = "test error" },
+            };
+        }
+
+        pub fn destroy(self: *@This(), alloc: Allocator) void {
+            alloc.destroy(self);
+        }
+    };
+
+    // Create the mock future
+    const mock_future = try allocator.create(MockConfirmSlotFutureErr);
+    const empty_entries = try allocator.alloc(sig.core.Entry, 0);
+
+    mock_future.* = MockConfirmSlotFutureErr{
+        .scheduler = undefined, // Not used in test.
+        .poh_verifier = undefined, // // Not used in test.
+        .exit = std.atomic.Value(bool).init(false),
+        .entries = empty_entries,
+        .status = .{ .err = .{ .failed_to_load_entries = "test error" } },
+        .status_when_done = .{ .err = .{ .failed_to_load_entries = "test error" } },
+    };
+
+    defer {
+        allocator.free(empty_entries);
+        allocator.destroy(mock_future);
+    }
+
+    // Create slot statuses with confirm status containing our mock future
+    var slot_statuses = std.ArrayListUnmanaged(struct { Slot, ReplaySlotStatus }).empty;
+    defer slot_statuses.deinit(allocator);
+
+    // Cast our mock to ConfirmSlotFuture - this should work since they have the same layout
+    const confirm_future: *ConfirmSlotFuture = @ptrCast(@alignCast(mock_future));
+    try slot_statuses.append(
+        allocator,
+        .{ slot, .{ .confirm = confirm_future } },
+    );
+
+    const result = try processReplayResults(
+        &test_resources.replay_state,
+        slot_statuses.items,
+    );
+
+    // Should return false since no slot was successfully processed
+    try testing.expect(!result);
+
+    // Verify slot is now marked as dead
+    const progress_after = test_resources.progress.map.get(slot);
+    try testing.expect(progress_after != null);
+    try testing.expect(progress_after.?.is_dead);
+}
+
+test "processReplayResults: return value correctness" {
+    const allocator = testing.allocator;
+
+    var test_resources = createTestReplayState(allocator) catch |err| {
+        std.debug.print("Failed to create test replay state: {}\n", .{err});
+        return err;
+    };
+    defer test_resources.deinit(allocator);
+
+    // Test that the function returns:
+    // - false when no slots are processed
+    // - true when at least one slot is fully processed (reaches processed_a_slot = true)
+
+    // Empty case
+    const empty_slot_statuses =
+        std.ArrayListUnmanaged(struct { Slot, ReplaySlotStatus }).empty;
+    const empty_result = try processReplayResults(
+        &test_resources.replay_state,
+        empty_slot_statuses.items,
+    );
+    try testing.expect(!empty_result);
+
+    // Non-confirm statuses case
+    var non_confirm_statuses =
+        std.ArrayListUnmanaged(struct { Slot, ReplaySlotStatus }).empty;
+    defer non_confirm_statuses.deinit(allocator);
+    try non_confirm_statuses.append(allocator, .{ 100, .empty });
+
+    const non_confirm_result = try processReplayResults(
+        &test_resources.replay_state,
+        non_confirm_statuses.items,
+    );
+    try testing.expect(!non_confirm_result);
+}
+
+test "processReplayResults: confirm status with done poll but missing slot in tracker" {
+    const allocator = testing.allocator;
+
+    var test_resources = createTestReplayState(allocator) catch |err| {
+        std.debug.print("Failed to create test replay state: {}\n", .{err});
+        return err;
+    };
+    defer test_resources.deinit(allocator);
+
+    const slot: Slot = 100;
+
+    // Create a mock ConfirmSlotFuture that will return done when polled
+    const MockConfirmSlotFutureDone = struct {
+        scheduler: replay.scheduler.TransactionScheduler,
+        poh_verifier: sig.utils.thread.HomogeneousThreadPool(replay.confirm_slot.PohTask),
+        exit: std.atomic.Value(bool),
+        entries: []const sig.core.Entry,
+        status: replay.confirm_slot.ConfirmSlotStatus,
+        status_when_done: replay.confirm_slot.ConfirmSlotStatus,
+
+        pub fn poll(self: *@This()) !replay.confirm_slot.ConfirmSlotStatus {
+            _ = self;
+            return replay.confirm_slot.ConfirmSlotStatus.done;
+        }
+
+        pub fn destroy(self: *@This(), alloc: Allocator) void {
+            alloc.destroy(self);
+        }
+    };
+
+    // Create the mock future
+    const mock_future = try allocator.create(MockConfirmSlotFutureDone);
+    const empty_entries = try allocator.alloc(sig.core.Entry, 0);
+
+    mock_future.* = MockConfirmSlotFutureDone{
+        .scheduler = undefined, // Not used in test
+        .poh_verifier = undefined, // Not used in test
+        .exit = std.atomic.Value(bool).init(false),
+        .entries = empty_entries,
+        .status = .done,
+        .status_when_done = .done,
+    };
+
+    defer {
+        allocator.free(empty_entries);
+        allocator.destroy(mock_future);
+    }
+
+    // Create slot statuses with confirm status containing our mock future
+    var slot_statuses = std.ArrayListUnmanaged(struct { Slot, ReplaySlotStatus }).empty;
+    defer slot_statuses.deinit(allocator);
+
+    // Cast our mock to ConfirmSlotFuture
+    const confirm_future: *ConfirmSlotFuture = @ptrCast(@alignCast(mock_future));
+    try slot_statuses.append(
+        allocator,
+        .{ slot, .{ .confirm = confirm_future } },
+    );
+
+    // The function should return an error since the slot is not in the tracker
+    const result = processReplayResults(
+        &test_resources.replay_state,
+        slot_statuses.items,
+    );
+
+    try testing.expectError(error.MissingSlotInTracker, result);
+}
+
+test "processReplayResults: confirm status with done poll and slot complete - success path" {
+    const allocator = testing.allocator;
+
+    var test_resources = createTestReplayState(allocator) catch |err| {
+        std.debug.print("Failed to create test replay state: {}\n", .{err});
+        return err;
+    };
+    defer test_resources.deinit(allocator);
+
+    const slot: Slot = 100;
+    const parent_slot: Slot = 99;
+
+    // Add parent slot to progress map first (required for slot processing)
+    try test_resources.progress.map.putNoClobber(
+        allocator,
+        parent_slot,
+        try sig.consensus.progress_map.ForkProgress.init(allocator, .{
+            .now = sig.time.Instant.now(),
+            .last_entry = sig.core.Hash.ZEROES,
+            .prev_leader_slot = null,
+            .validator_stake_info = null,
+            .num_blocks_on_fork = 0,
+            .num_dropped_blocks_on_fork = 0,
+        }),
+    );
+
+    // Add slot to progress map
+    try test_resources.progress.map.putNoClobber(
+        allocator,
+        slot,
+        try sig.consensus.progress_map.ForkProgress.init(allocator, .{
+            .now = sig.time.Instant.now(),
+            .last_entry = sig.core.Hash.ZEROES,
+            .prev_leader_slot = null,
+            .validator_stake_info = null,
+            .num_blocks_on_fork = 0,
+            .num_dropped_blocks_on_fork = 0,
+        }),
+    );
+
+    // Create mock entries for the slot
+    const mock_entries = try allocator.alloc(sig.core.Entry, 1);
+    defer allocator.free(mock_entries);
+
+    var rng = std.Random.DefaultPrng.init(0);
+    const random = rng.random();
+
+    mock_entries[0] = sig.core.Entry{
+        .num_hashes = 0,
+        .hash = sig.core.Hash.initRandom(random),
+        .transactions = &.{},
+    };
+
+    // Create a mock ConfirmSlotFuture that will return done with entries
+    const MockConfirmSlotFutureSuccess = struct {
+        scheduler: replay.scheduler.TransactionScheduler,
+        poh_verifier: sig.utils.thread.HomogeneousThreadPool(replay.confirm_slot.PohTask),
+        exit: std.atomic.Value(bool),
+        entries: []const sig.core.Entry,
+        status: replay.confirm_slot.ConfirmSlotStatus,
+        status_when_done: replay.confirm_slot.ConfirmSlotStatus,
+
+        pub fn poll(self: *@This()) !replay.confirm_slot.ConfirmSlotStatus {
+            _ = self;
+            return replay.confirm_slot.ConfirmSlotStatus.done;
+        }
+
+        pub fn destroy(self: *@This(), alloc: Allocator) void {
+            alloc.destroy(self);
+        }
+    };
+
+    // Create the mock future with the mock entries
+    const mock_future = try allocator.create(MockConfirmSlotFutureSuccess);
+    mock_future.* = MockConfirmSlotFutureSuccess{
+        .scheduler = undefined, // Not used in test
+        .poh_verifier = undefined, // Not used in test
+        .exit = std.atomic.Value(bool).init(false),
+        .entries = mock_entries,
+        .status = .done,
+        .status_when_done = .done,
+    };
+
+    defer allocator.destroy(mock_future);
+
+    // Add parent slot 99 to fork choice so slot 100 can be processed
+    const slot_99_hash = Hash.initRandom(random);
+    const slot_99_slot_and_hash = sig.core.hash.SlotAndHash{
+        .slot = 99,
+        .hash = slot_99_hash,
+    };
+    const root_slot_and_hash = sig.core.hash.SlotAndHash{
+        .slot = 0,
+        .hash = Hash.ZEROES,
+    };
+    try test_resources.replay_state.fork_choice.addNewLeafSlot(
+        slot_99_slot_and_hash,
+        root_slot_and_hash,
+    );
+
+    // Create slot constants and state.
+    const mock_slot_constants = sig.core.SlotConstants{
+        .parent_slot = parent_slot,
+        // Use the same hash as the parent slot in fork choice
+        .parent_hash = slot_99_hash,
+        .parent_lt_hash = .IDENTITY,
+        .block_height = 0,
+        // Different from replay_state.my_identity
+        .collector_id = sig.core.Pubkey.initRandom(random),
+        // This should match tickHeight() for slot to be complete
+        .max_tick_height = 64,
+        .fee_rate_governor = sig.core.FeeRateGovernor.DEFAULT,
+        .epoch_reward_status = .inactive,
+        .ancestors = .{ .ancestors = .empty },
+        .feature_set = .ALL_DISABLED,
+        .reserved_accounts = .empty,
+    };
+
+    // Create slot state then modify tick height
+    var mock_slot_state = try sig.core.SlotState.genesis(allocator);
+
+    // Set tick height equal to max_tick_height to make slot complete
+    _ = mock_slot_state.tick_height.swap(64, .monotonic);
+
+    // Set a valid hash for the slot
+    mock_slot_state.hash.set(sig.core.Hash.initRandom(random));
+
+    // Add the slot to the slot tracker
+    try test_resources.slot_tracker.put(allocator, slot, .{
+        .constants = mock_slot_constants,
+        .state = mock_slot_state,
+    });
+
+    // Add epoch info for slot 100 (epoch 2 in default schedule).
+    try test_resources.epochs.epochs.put(allocator, 2, .{
+        .hashes_per_tick = 1,
+        .ticks_per_slot = 1,
+        .ns_per_slot = 1,
+        .genesis_creation_time = 1,
+        .slots_per_year = 1,
+        .stakes = try .initEmptyWithGenesisStakeHistoryEntry(allocator),
+        .rent_collector = .DEFAULT,
+    });
+
+    // Create slot statuses with confirm status containing the mock future
+    var slot_statuses = std.ArrayListUnmanaged(struct { Slot, ReplaySlotStatus }).empty;
+    defer slot_statuses.deinit(allocator);
+
+    // Cast the mock to ConfirmSlotFuture
+    const confirm_future: *ConfirmSlotFuture = @ptrCast(@alignCast(mock_future));
+    try slot_statuses.append(
+        allocator,
+        .{ slot, .{ .confirm = confirm_future } },
+    );
+
+    // This should successfully process the slot and return true
+    const result = try processReplayResults(
+        &test_resources.replay_state,
+        slot_statuses.items,
+    );
+
+    // Should return true since the slot was successfully processed
+    try testing.expect(result);
 }

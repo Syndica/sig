@@ -1,6 +1,7 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 const replay = @import("lib.zig");
+const tracy = @import("tracy");
 
 const core = sig.core;
 
@@ -28,7 +29,7 @@ const resolveBatch = replay.resolve_lookup.resolveBatch;
 
 const assert = std.debug.assert;
 
-const ScopedLogger = sig.trace.ScopedLogger("replay-confirm-slot");
+const Logger = sig.trace.Logger("replay-confirm-slot");
 
 /// Asynchronously validate and execute entries from a slot.
 ///
@@ -42,7 +43,7 @@ const ScopedLogger = sig.trace.ScopedLogger("replay-confirm-slot");
 /// - fd: runtime_process_txns_in_microblock_stream
 pub fn confirmSlot(
     allocator: Allocator,
-    logger: ScopedLogger,
+    logger: Logger,
     account_store: AccountStore,
     thread_pool: *ThreadPool,
     /// takes ownership
@@ -54,7 +55,13 @@ pub fn confirmSlot(
     ancestors: *const Ancestors,
     reserved_accounts: *const ReservedAccounts,
 ) !*ConfirmSlotFuture {
+    var zone = tracy.Zone.init(@src(), .{ .name = "confirmSlot" });
+    zone.value(svm_params.slot);
+    defer zone.deinit();
+    errdefer zone.color(0xFF0000);
+
     logger.info().log("confirming slot");
+
     const future = fut: {
         errdefer {
             for (entries) |entry| entry.deinit(allocator);
@@ -88,7 +95,7 @@ pub fn confirmSlot(
 /// schedule poh verification asynchronously
 fn startPohVerify(
     allocator: Allocator,
-    logger: ScopedLogger,
+    logger: Logger,
     pool: *HomogeneousThreadPool(PohTask),
     initial_hash: Hash,
     entries: []const Entry,
@@ -164,7 +171,7 @@ pub const ConfirmSlotFuture = struct {
 
     fn create(
         allocator: Allocator,
-        logger: ScopedLogger,
+        logger: Logger,
         thread_pool: *ThreadPool,
         committer: Committer,
         entries: []const Entry,
@@ -244,9 +251,9 @@ pub const ConfirmSlotFuture = struct {
     }
 };
 
-const PohTask = struct {
+pub const PohTask = struct {
     allocator: Allocator,
-    logger: ScopedLogger,
+    logger: Logger,
     initial_hash: Hash,
     entries: []const Entry,
     exit: *Atomic(bool),
@@ -291,7 +298,7 @@ pub const VerifyTicksParams = struct {
 /// Verify that a segment of entries has the correct number of ticks and hashes
 /// analogous to [verify_ticks](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/ledger/src/blockstore_processor.rs#L1097)
 fn verifyTicks(
-    logger: ScopedLogger,
+    logger: Logger,
     entries: []const Entry,
     params: VerifyTicksParams,
 ) ?BlockError {

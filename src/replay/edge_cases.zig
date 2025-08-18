@@ -244,7 +244,7 @@ pub const SlotStatus = union(enum) {
     }
 };
 
-const SlotFrozenState = struct {
+pub const SlotFrozenState = struct {
     frozen_hash: sig.core.Hash,
     cluster_confirmed_hash: ?ClusterConfirmedHash,
     is_slot_duplicate: bool,
@@ -734,9 +734,9 @@ fn getDuplicateConfirmedHash(
 
 /// Analogous to [check_slot_agrees_with_cluster](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/repair/cluster_slot_state_verifier.rs#L848)
 /// NOTE: Where in agave the different modes of operation are represented as tagged union variants, here they're simply different functions inside this namespace.
-const check_slot_agrees_with_cluster = struct {
+pub const check_slot_agrees_with_cluster = struct {
     /// aka `BankFrozen` in agave.
-    fn slotFrozen(
+    pub fn slotFrozen(
         allocator: std.mem.Allocator,
         logger: replay.service.Logger,
         slot: sig.core.Slot,
@@ -1008,7 +1008,7 @@ const check_slot_agrees_with_cluster = struct {
         }
     }
 
-    fn duplicate(
+    pub fn duplicate(
         allocator: std.mem.Allocator,
         logger: replay.service.Logger,
         slot: sig.core.Slot,
@@ -1436,7 +1436,7 @@ const TestData = struct {
         );
         errdefer slot_tracker.deinit(allocator);
 
-        var fork_choice: HeaviestSubtreeForkChoice = try .init(allocator, logger.unscoped(), .{
+        var fork_choice: HeaviestSubtreeForkChoice = try .init(allocator, .from(logger), .{
             .slot = root_slot,
             .hash = slot_infos[root_slot].hash,
         });
@@ -1520,7 +1520,7 @@ fn testLedgerRw(
 
     const reader: sig.ledger.LedgerReader = try .init(
         std.testing.allocator,
-        logger.unscoped(),
+        .from(logger),
         ledger_db,
         &state.registry,
         &state.lowest_cleanup_slot,
@@ -1528,7 +1528,7 @@ fn testLedgerRw(
     );
     const writer: sig.ledger.LedgerResultWriter = try .init(
         std.testing.allocator,
-        logger.unscoped(),
+        .from(logger),
         ledger_db,
         &state.registry,
         &state.lowest_cleanup_slot,

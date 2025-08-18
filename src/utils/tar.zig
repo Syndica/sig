@@ -9,7 +9,7 @@ const printTimeEstimate = sig.time.estimate.printTimeEstimate;
 const TAR_PROGRESS_UPDATES = @import("../accountsdb/db.zig").DB_LOG_RATE;
 
 // The identifier for the scoped logger used in this file.
-const LOG_SCOPE = "utils.tar";
+const Logger = sig.trace.Logger("utils.tar");
 
 fn stripComponents(path: []const u8, count: u32) ![]const u8 {
     var i: usize = 0;
@@ -59,27 +59,25 @@ pub const UnTarTask = struct {
     }
 };
 
-const Logger = @import("../trace/log.zig").Logger;
-
 pub fn parallelUntarToFileSystem(
     allocator: std.mem.Allocator,
-    logger_: Logger,
+    logger: Logger,
     dir: std.fs.Dir,
     reader: anytype,
     n_threads: usize,
     n_files_estimate: ?usize,
 ) !void {
-    const zone = tracy.initZone(@src(), .{ .name = "tar parallelUntarToFileSystem" });
+    const zone = tracy.Zone.init(@src(), .{ .name = "tar parallelUntarToFileSystem" });
     defer zone.deinit();
-
-    const logger = logger_.withScope(LOG_SCOPE);
 
     logger.info().logf("using {d} threads to unpack snapshot", .{n_threads});
 
     var pool =
         try HomogeneousThreadPool(UnTarTask).init(allocator, @intCast(n_threads), n_threads);
-    defer pool.deinit(allocator);
-
+    defer {
+        if (!pool.joinForDeinit(.fromSecs(1))) logger.warn().log("failed to join for deinit");
+        pool.deinit(allocator);
+    }
     var timer = try sig.time.Timer.start();
     var progress_timer = try sig.time.Timer.start();
     var file_count: usize = 0;

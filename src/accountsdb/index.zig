@@ -13,8 +13,7 @@ const SwissMap = sig.accounts_db.swiss_map.SwissMap;
 
 const createAndMmapFile = sig.utils.allocators.createAndMmapFile;
 
-const LOG_SCOPE = "accounts_db.index";
-const ScopedLogger = sig.trace.ScopedLogger(LOG_SCOPE);
+const Logger = sig.trace.Logger("accounts_db.index");
 
 /// reference to an account (either in a file or in the unrooted_map)
 pub const AccountRef = struct {
@@ -63,7 +62,7 @@ pub const AccountRef = struct {
 /// Analogous to [AccountsIndex](https://github.com/anza-xyz/agave/blob/a6b2283142192c5360ad0f53bec1eb4a9fb36154/accounts-db/src/accounts_index.rs#L644)
 pub const AccountIndex = struct {
     allocator: std.mem.Allocator,
-    logger: ScopedLogger,
+    logger: Logger,
 
     /// map from Pubkey -> AccountRefHead
     pubkey_ref_map: ShardedPubkeyRefMap,
@@ -98,13 +97,11 @@ pub const AccountIndex = struct {
 
     pub fn init(
         allocator: std.mem.Allocator,
-        logger_: sig.trace.Logger,
+        logger: Logger,
         allocator_config: AllocatorConfig,
         /// number of shards for the pubkey_ref_map
         number_of_shards: usize,
     ) !Self {
-        const logger = logger_.withScope(LOG_SCOPE);
-
         const reference_allocator: ReferenceAllocator = switch (allocator_config) {
             .ram => |ram| blk: {
                 logger.info().logf("using ram memory for account index", .{});
@@ -129,8 +126,8 @@ pub const AccountIndex = struct {
                 const tracing_disk_allocator = try allocator.create(tracy.TracingAllocator);
                 errdefer allocator.destroy(tracing_disk_allocator);
                 tracing_disk_allocator.* = .{
-                    .parent_allocator = disk_allocator.allocator(),
-                    .pool_name = "index",
+                    .parent = disk_allocator.allocator(),
+                    .name = "index",
                 };
 
                 break :blk .{
@@ -206,7 +203,7 @@ pub const AccountIndex = struct {
     }
 
     pub fn expandRefCapacity(self: *Self, n: u64) !void {
-        const zone = tracy.initZone(@src(), .{
+        const zone = tracy.Zone.init(@src(), .{
             .name = "accountsdb AccountIndex.expandRefCapacity",
         });
         defer zone.deinit();
@@ -386,7 +383,7 @@ pub const AccountIndex = struct {
     }
 
     pub fn loadFromDisk(self: *Self, dir: std.fs.Dir) !void {
-        const zone = tracy.initZone(@src(), .{ .name = "accountsdb loadFromDisk" });
+        const zone = tracy.Zone.init(@src(), .{ .name = "accountsdb loadFromDisk" });
         defer zone.deinit();
 
         // manager must be empty
@@ -652,7 +649,7 @@ pub const ShardedPubkeyRefMap = struct {
     const Self = @This();
 
     pub fn init(allocator: std.mem.Allocator, number_of_shards: u64) !Self {
-        const zone = tracy.initZone(@src(), .{ .name = "ShardedPubkeyRefMap.init" });
+        const zone = tracy.Zone.init(@src(), .{ .name = "ShardedPubkeyRefMap.init" });
         defer zone.deinit();
 
         // shard the pubkey map into shards to reduce lock contention
@@ -691,7 +688,7 @@ pub const ShardedPubkeyRefMap = struct {
     }
 
     pub fn ensureTotalAdditionalCapacity(self: *Self, shard_counts: []const u64) !void {
-        const zone = tracy.initZone(@src(), .{
+        const zone = tracy.Zone.init(@src(), .{
             .name = "ShardedPubkeyRefMap.ensureTotalAdditionalCapacity",
         });
         defer zone.deinit();

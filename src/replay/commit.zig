@@ -1,10 +1,11 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 const replay = @import("lib.zig");
+const tracy = @import("tracy");
 
 const Allocator = std.mem.Allocator;
 
-const Logger = sig.trace.ScopedLogger("replay.committer");
+const Logger = sig.trace.Logger("replay.committer");
 
 const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
@@ -31,6 +32,11 @@ pub const Committer = struct {
         transactions: []const ResolvedTransaction,
         tx_results: []const struct { Hash, ProcessedTransaction },
     ) !void {
+        var zone = tracy.Zone.init(@src(), .{ .name = "commitTransactions" });
+        zone.value(transactions.len);
+        defer zone.deinit();
+        errdefer zone.color(0xFF0000);
+
         var rng = std.Random.DefaultPrng.init(slot + transactions.len);
 
         var accounts_to_store = std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData).empty;

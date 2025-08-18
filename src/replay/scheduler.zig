@@ -1,6 +1,7 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 const replay = @import("lib.zig");
+const tracy = @import("tracy");
 
 const Allocator = std.mem.Allocator;
 const Atomic = std.atomic.Value;
@@ -24,7 +25,7 @@ const ProcessedTransaction = sig.runtime.transaction_execution.ProcessedTransact
 
 const executeTransaction = replay.svm_gateway.executeTransaction;
 
-const ScopedLogger = sig.trace.ScopedLogger("replay-batcher");
+const Logger = sig.trace.Logger("replay-batcher");
 
 const assert = std.debug.assert;
 
@@ -37,6 +38,11 @@ pub fn processBatch(
     transactions: []const ResolvedTransaction,
     exit: *Atomic(bool),
 ) !BatchResult {
+    var zone = tracy.Zone.init(@src(), .{ .name = "processBatch" });
+    zone.value(transactions.len);
+    defer zone.deinit();
+    errdefer zone.color(0xFF0000);
+
     const results = try allocator.alloc(struct { Hash, ProcessedTransaction }, transactions.len);
     defer allocator.free(results);
 
@@ -86,7 +92,7 @@ const BatchResult = union(enum) {
 /// This should only be used in a single thread at a time.
 pub const TransactionScheduler = struct {
     allocator: Allocator,
-    logger: ScopedLogger,
+    logger: Logger,
     committer: Committer,
     batches: std.ArrayListUnmanaged(ResolvedBatch),
     thread_pool: HomogeneousThreadPool(ProcessBatchTask),
@@ -109,7 +115,7 @@ pub const TransactionScheduler = struct {
 
     pub fn initCapacity(
         allocator: Allocator,
-        logger: ScopedLogger,
+        logger: Logger,
         committer: Committer,
         batch_capacity: usize,
         thread_pool: *ThreadPool,
@@ -204,6 +210,9 @@ pub const TransactionScheduler = struct {
     }
 
     fn tryScheduleSome(self: *TransactionScheduler) !?TransactionError {
+        const zone = tracy.Zone.init(@src(), .{ .name = "tryScheduleSome" });
+        defer zone.deinit();
+
         while (self.batches.items.len > self.batches_started) {
             const batch = self.batches.items[self.batches_started];
             self.locks.lockStrict(self.allocator, batch.accounts) catch |e| switch (e) {
@@ -236,7 +245,7 @@ pub const TransactionScheduler = struct {
 
 const ProcessBatchTask = struct {
     allocator: Allocator,
-    logger: ScopedLogger,
+    logger: Logger,
     svm_params: SvmGateway.Params,
     committer: Committer,
     batch_index: usize,

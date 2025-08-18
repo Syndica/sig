@@ -2,8 +2,6 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 const builtin = @import("builtin");
 
-const ScopedLogger = sig.trace.ScopedLogger;
-
 const AutoHashMap = std.AutoHashMap;
 const Instant = sig.time.Instant;
 const Hash = sig.core.Hash;
@@ -17,6 +15,8 @@ const EpochSchedule = sig.core.EpochSchedule;
 const ReplayTower = sig.consensus.replay_tower.ReplayTower;
 const LatestValidatorVotes =
     sig.consensus.latest_validator_votes.LatestValidatorVotes;
+
+const Logger = sig.trace.Logger("fork_choice");
 
 const PubkeyVote = struct {
     pubkey: Pubkey,
@@ -57,7 +57,7 @@ pub const ForkWeight = u64;
 
 /// Analogous to [ForkInfo](https://github.com/anza-xyz/agave/blob/e7301b2a29d14df19c3496579cf8e271b493b3c6/core/src/consensus/heaviest_subtree_fork_choice.rs#L92)
 pub const ForkInfo = struct {
-    logger: ScopedLogger(@typeName(ForkInfo)),
+    logger: Logger,
     /// Amount of stake that has voted for exactly this slot
     stake_for_slot: ForkWeight,
     /// Amount of stake that has voted for this slot and the subtree
@@ -165,7 +165,7 @@ pub const ForkInfo = struct {
 /// Analogous to [HeaviestSubtreeForkChoice](https://github.com/anza-xyz/agave/blob/e7301b2a29d14df19c3496579cf8e271b493b3c6/core/src/consensus/heaviest_subtree_fork_choice.rs#L187)
 pub const ForkChoice = struct {
     allocator: std.mem.Allocator,
-    logger: ScopedLogger(@typeName(ForkChoice)),
+    logger: Logger,
     fork_infos: AutoHashMap(SlotAndHash, ForkInfo),
     latest_votes: AutoHashMap(Pubkey, SlotAndHash),
     tree_root: SlotAndHash,
@@ -173,12 +173,12 @@ pub const ForkChoice = struct {
 
     pub fn init(
         allocator: std.mem.Allocator,
-        logger: sig.trace.Logger,
+        logger: Logger,
         tree_root: SlotAndHash,
     ) !ForkChoice {
         var self = ForkChoice{
             .allocator = allocator,
-            .logger = logger.withScope(@typeName(ForkChoice)),
+            .logger = logger,
             .fork_infos = AutoHashMap(SlotAndHash, ForkInfo).init(allocator),
             .latest_votes = AutoHashMap(Pubkey, SlotAndHash).init(allocator),
             .tree_root = tree_root,
@@ -264,7 +264,7 @@ pub const ForkChoice = struct {
         } else {
             // Insert new entry
             const new_fork_info = ForkInfo{
-                .logger = self.logger.withScope(@typeName(ForkInfo)),
+                .logger = self.logger,
                 .stake_for_slot = 0,
                 .stake_for_subtree = 0,
                 .height = 1,

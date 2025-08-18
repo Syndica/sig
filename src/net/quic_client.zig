@@ -8,8 +8,9 @@ const sig = @import("../sig.zig");
 const Packet = sig.net.Packet;
 const Channel = sig.sync.Channel;
 const AtomicBool = std.atomic.Value(bool);
-const Logger = sig.trace.log.Logger;
 const ExitCondition = sig.sync.ExitCondition;
+
+pub const Logger = sig.trace.Logger("quic_client");
 
 pub fn runClient(
     allocator: std.mem.Allocator,

@@ -185,7 +185,7 @@ pub fn csvDump(allocator: std.mem.Allocator, config: Cmd.Csv) !void {
     }, null);
     defer std_logger.deinit();
 
-    const logger = std_logger.logger();
+    const logger = std_logger.logger("csvDump");
 
     const metrics_thread = try std.Thread
         .spawn(.{}, servePrometheus, .{ allocator, globalRegistry(), 12355 });
@@ -348,7 +348,7 @@ pub fn benchmark(config: Cmd.Benchmark) !void {
         .max_buffer = 1 << 15,
     }, null);
     defer std_logger.deinit();
-    const logger = std_logger.logger();
+    const logger = std_logger.logger("geyser.benchmark");
 
     const pipe_path = config.pipe_path;
     logger.info().logf("using pipe path: {s}", .{pipe_path});
@@ -368,7 +368,7 @@ pub fn benchmark(config: Cmd.Benchmark) !void {
 
     try sig.geyser.core.streamReader(
         &reader,
-        logger,
+        .from(logger),
         &exit,
         sig.time.Duration.fromSecs(config.measure_rate_secs),
     );

@@ -5,7 +5,7 @@ const bincode = sig.bincode;
 
 const Pubkey = sig.core.Pubkey;
 
-const MAX_SEED_LEN = sig.runtime.pubkey_utils.MAX_SEED_LEN;
+const SEED_FIELD_CONFIG = sig.runtime.program.SEED_FIELD_CONFIG;
 
 /// [agave] https://github.com/solana-program/system/blob/6185b40460c3e7bf8badf46626c60f4e246eb422/interface/src/instruction.rs#L80
 pub const Instruction = union(enum) {
@@ -67,7 +67,7 @@ pub const Instruction = union(enum) {
         /// Owner program account address
         owner: Pubkey,
 
-        pub const @"!bincode-config:seed" = bincode.utf8StringCodec([]const u8, MAX_SEED_LEN);
+        pub const @"!bincode-config:seed" = SEED_FIELD_CONFIG;
 
         pub fn deinit(self: @This(), allocator: std.mem.Allocator) void {
             allocator.free(self.seed);
@@ -146,7 +146,7 @@ pub const Instruction = union(enum) {
         /// Owner program account
         owner: Pubkey,
 
-        pub const @"!bincode-config:seed" = bincode.utf8StringCodec([]const u8, MAX_SEED_LEN);
+        pub const @"!bincode-config:seed" = SEED_FIELD_CONFIG;
 
         pub fn deinit(self: @This(), allocator: std.mem.Allocator) void {
             allocator.free(self.seed);
@@ -168,7 +168,7 @@ pub const Instruction = union(enum) {
         /// Owner program account
         owner: Pubkey,
 
-        pub const @"!bincode-config:seed" = bincode.utf8StringCodec([]const u8, MAX_SEED_LEN);
+        pub const @"!bincode-config:seed" = SEED_FIELD_CONFIG;
 
         pub fn deinit(self: @This(), allocator: std.mem.Allocator) void {
             allocator.free(self.seed);
@@ -191,7 +191,7 @@ pub const Instruction = union(enum) {
         /// Owner to use to derive the funding account address
         from_owner: Pubkey,
 
-        pub const @"!bincode-config:from_seed" = bincode.utf8StringCodec([]const u8, MAX_SEED_LEN);
+        pub const @"!bincode-config:from_seed" = SEED_FIELD_CONFIG;
 
         pub fn deinit(self: @This(), allocator: std.mem.Allocator) void {
             allocator.free(self.from_seed);

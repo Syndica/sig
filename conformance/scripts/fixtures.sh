@@ -40,6 +40,7 @@ PASSING_DIRS=(
     "instr/fixtures/zk_sdk"
     "instr/fixtures/unknown"
     "instr/fixtures/compute-budget"
+    "instr/fixtures/stake"
 
     "instr/fixtures/bpf-address-lookup-table"
     "instr/fixtures/bpf-config"
@@ -48,29 +49,23 @@ PASSING_DIRS=(
     "instr/fixtures/bpf-loader-v2"
     "instr/fixtures/bpf-loader-v2-programs"
     "instr/fixtures/bpf-loader-v3"
+    "instr/fixtures/bpf-loader-v3-programs"
+    "instr/fixtures/bpf-loader-upgradeable-v1-programs"
 
     # Passed: 0, Failed: 6934, Skipped: 0 (unimplemented)
     # "instr/fixtures/stake"
 
-    # Passed: 7750, Failed: 5, Skipped: 0
-    # "instr/fixtures/vote"
-
-    # Passed: 5077, Failed: 248, Skipped: 0 (also takes a long time to run)
-    # "instr/fixtures/system"
-
-    # Passed: 461, Failed: 48, Skipped: 0
-    # "instr/fixtures/bpf-loader-v3-programs"
-
-    # Passed: 369, Failed: 2, Skipped: 0
-    # "instr/fixtures/bpf-loader-upgradeable-v1-programs"
+    "instr/fixtures/vote"
+    "instr/fixtures/system"
 
     # Passed: 1629, Failed: 2286, Skipped: 0
     # "txn/fixtures/programs"
 
-    # Passed: 993, Failed: 92, Skipped: 0
-    # "txn/fixtures/precompiles/ed25519"
-
+    "txn/fixtures/precompile/ed25519"
     "txn/fixtures/precompile/secp256k1"
+
+    # Passed: 0, Failed: 357, Skipped: 0 (unimplemented)
+    # "txn/fixtures/precompile/secp256k1"
 )
 
 mapfile -t PASSING_TXN_FIXTURES < ./conformance/scripts/passing_txn_fixtures.txt

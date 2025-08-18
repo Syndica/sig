@@ -23,8 +23,6 @@ const VoteStateUpdate = sig.runtime.program.vote.state.VoteStateUpdate;
 const StakeAndVoteAccountsMap = sig.core.vote_accounts.StakeAndVoteAccountsMap;
 const StakeAndVoteAccount = sig.core.vote_accounts.StakeAndVoteAccount;
 const VoteAccount = sig.core.vote_accounts.VoteAccount;
-const Logger = sig.trace.Logger;
-const ScopedLogger = sig.trace.ScopedLogger;
 const UnixTimestamp = sig.core.UnixTimestamp;
 
 const HeaviestSubtreeForkChoice = sig.consensus.HeaviestSubtreeForkChoice;
@@ -41,6 +39,8 @@ const LockoutIntervals = sig.consensus.progress_map.LockoutIntervals;
 const stateFromAccount = sig.consensus.tower.stateFromAccount;
 
 const Stake = u64;
+
+const Logger = sig.trace.Logger("replay_tower");
 
 const MAX_LOCKOUT_HISTORY = sig.consensus.tower.MAX_LOCKOUT_HISTORY;
 
@@ -126,7 +126,7 @@ pub const SelectVoteAndResetForkResult = struct {
 //  making use of tower, fork choice etc
 // Voter?
 pub const ReplayTower = struct {
-    logger: ScopedLogger(@typeName(Self)),
+    logger: Logger,
     tower: Tower,
     node_pubkey: Pubkey,
     // TODO move the threshold_ to ReplayTower or a constant
@@ -161,7 +161,7 @@ pub const ReplayTower = struct {
         fork_root: Slot,
         accounts_db: *AccountsDB,
     ) !ReplayTower {
-        var tower = Tower.init(logger.unscoped());
+        var tower = Tower.init(.from(logger));
         try tower.initializeLockoutsFromBank(
             allocator,
             &vote_account_pubkey,
@@ -170,7 +170,7 @@ pub const ReplayTower = struct {
         );
 
         return .{
-            .logger = logger.withScope(@typeName(Self)),
+            .logger = logger,
             .tower = tower,
             .node_pubkey = node_pubkey,
             .threshold_depth = 0,
@@ -809,12 +809,12 @@ pub const ReplayTower = struct {
     /// This is used to experiment with vote lockout behavior and assess whether a vote is
     /// justified based on recent vote history, lockout depth, and voting stake.
     pub fn checkVoteStakeThresholds(
-        self: *ReplayTower,
+        self: *const ReplayTower,
         allocator: std.mem.Allocator,
         slot: Slot,
         voted_stakes: *const VotedStakes,
         total_stake: Stake,
-    ) ![]const ThresholdDecision {
+    ) ![]ThresholdDecision {
         const threshold_size = 3;
         var threshold_decisions: [threshold_size]ThresholdDecision = undefined;
 
@@ -838,7 +838,7 @@ pub const ReplayTower = struct {
         var index: usize = 0;
         for (vote_thresholds_and_depths) |threshold| {
             const vote_threshold = checkVoteStakeThreshold(
-                self.logger.unscoped(),
+                .from(self.logger),
                 vote_state.nthRecentLockout(threshold.depth),
                 self.tower.vote_state.votes.constSlice(),
                 threshold.depth,
@@ -1531,7 +1531,7 @@ fn isDescendantSlot(
 }
 
 fn checkVoteStakeThreshold(
-    logger: sig.trace.Logger,
+    logger: Logger,
     maybe_threshold_vote: ?Lockout,
     tower_before_applying_vote: []const Lockout,
     threshold_depth: usize,
@@ -1548,7 +1548,7 @@ fn checkVoteStakeThreshold(
     const fork_stake = voted_stakes.get(threshold_vote.slot) orelse {
         // We haven't seen any votes on this fork yet, so no stake
         return .{
-            .failed_threshold = .{ threshold_depth, 0 },
+            .failed_threshold = .{ .vote_depth = threshold_depth, .observed_stake = 0 },
         };
     };
 
@@ -1574,11 +1574,11 @@ fn checkVoteStakeThreshold(
         tower_before_applying_vote,
         threshold_vote,
     ) or lockout > threshold_size) {
-        return .{ .passed_threshold = {} };
+        return .passed_threshold;
     }
 
     return .{
-        .failed_threshold = .{ threshold_depth, 0 },
+        .failed_threshold = .{ .vote_depth = threshold_depth, .observed_stake = 0 },
     };
 }
 
@@ -1608,7 +1608,7 @@ fn optimisticallyBypassVoteStakeThresholdCheck(
 /// Analogous to [collect_vote_lockouts]https://github.com/anza-xyz/agave/blob/91520c7095c4db968fe666b80a1b80dfef1bd909/core/src/consensus.rs#L389
 pub fn collectVoteLockouts(
     allocator: std.mem.Allocator,
-    logger: ScopedLogger("replay_tower"),
+    logger: Logger,
     vote_account_pubkey: *const Pubkey,
     bank_slot: Slot,
     vote_accounts: *const StakeAndVoteAccountsMap,
@@ -3717,7 +3717,7 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
         .{ hash4, hash3 },
     });
 
-    try fixture.fill_fork(allocator, .{ .root = root, .data = trees1 }, .active);
+    try fixture.fillFork(allocator, .{ .root = root, .data = trees1 }, .active);
     try fixture.fill_epoch_stake_random(allocator, random);
 
     var tmp_dir_root = std.testing.tmpDir(.{});
@@ -3863,7 +3863,7 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
         .{ hash10, hash6 },
     });
 
-    try fixture.fill_fork(allocator, .{ .root = hash5, .data = trees }, .active);
+    try fixture.fillFork(allocator, .{ .root = hash5, .data = trees }, .active);
 
     var ancestors2: AutoArrayHashMapUnmanaged(u64, SortedSet(u64)) = .{};
     defer ancestors2.deinit(allocator);
@@ -4209,7 +4209,7 @@ pub const TestFixture = struct {
         }
     }
 
-    pub fn fill_fork(
+    pub fn fillFork(
         self: *TestFixture,
         allocator: std.mem.Allocator,
         input_tree: Tree,

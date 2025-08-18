@@ -2,6 +2,7 @@ const std = @import("std");
 const zig_network = @import("zig-network");
 const sig = @import("../sig.zig");
 const shred_network = @import("lib.zig");
+const tracy = @import("tracy");
 
 const bincode = sig.bincode;
 
@@ -19,8 +20,6 @@ const Gauge = sig.prometheus.Gauge;
 const GossipTable = sig.gossip.GossipTable;
 const Histogram = sig.prometheus.Histogram;
 const HomogeneousThreadPool = sig.utils.thread.HomogeneousThreadPool;
-const Logger = sig.trace.Logger;
-const ScopedLogger = sig.trace.ScopedLogger;
 const LruCacheCustom = sig.utils.lru.LruCacheCustom;
 const Nonce = sig.core.Nonce;
 const Packet = sig.net.Packet;
@@ -38,6 +37,8 @@ const MultiSlotReport = shred_network.shred_tracker.MultiSlotReport;
 const RepairRequest = shred_network.repair_message.RepairRequest;
 const RepairMessage = shred_network.repair_message.RepairMessage;
 
+const Logger = sig.trace.Logger("repair_service");
+
 const serializeRepairRequest = shred_network.repair_message.serializeRepairRequest;
 
 const MAX_DATA_SHREDS_PER_SLOT = sig.ledger.shred.DataShred.constants.max_per_slot;
@@ -52,7 +53,7 @@ pub const RepairService = struct {
     requester: RepairRequester,
     peer_provider: RepairPeerProvider,
     shred_tracker: *BasicShredTracker,
-    logger: ScopedLogger(@typeName(Self)),
+    logger: Logger,
     exit: *Atomic(bool),
     /// memory to re-use across iterations. initialized to empty
     report: MultiSlotReport,
@@ -102,13 +103,16 @@ pub const RepairService = struct {
         peer_provider: RepairPeerProvider,
         shred_tracker: *BasicShredTracker,
     ) !Self {
+        const zone = tracy.Zone.init(@src(), .{ .name = "RepairService.init" });
+        defer zone.deinit();
+
         const n_threads = maxRequesterThreads();
         return RepairService{
             .allocator = allocator,
             .requester = requester,
             .peer_provider = peer_provider,
             .shred_tracker = shred_tracker,
-            .logger = logger.withScope(@typeName(Self)),
+            .logger = .from(logger),
             .exit = exit,
             .report = MultiSlotReport.init(allocator),
             .thread_pool = try RequestBatchThreadPool.init(allocator, n_threads, n_threads),
@@ -118,6 +122,9 @@ pub const RepairService = struct {
     }
 
     pub fn deinit(self: *Self) void {
+        const zone = tracy.Zone.init(@src(), .{ .name = "RepairService.deinit" });
+        defer zone.deinit();
+
         self.exit.store(true, .release);
         self.peer_provider.deinit();
         self.requester.deinit();
@@ -158,6 +165,9 @@ pub const RepairService = struct {
     /// Identifies which repairs are needed based on the current state,
     /// and sends those repairs, then returns the number of repairs.
     pub fn sendNecessaryRepairs(self: *Self) !usize {
+        const zone = tracy.Zone.init(@src(), .{ .name = "sendNecessaryRepairs" });
+        defer zone.deinit();
+
         const repair_requests = try self.getRepairs();
         defer repair_requests.deinit();
         self.metrics.request_count.add(repair_requests.items.len);
@@ -190,6 +200,9 @@ pub const RepairService = struct {
     const MAX_SHRED_REPAIRS = (MAX_DATA_SHREDS_PER_SLOT * MAX_REPAIR_LOOP_DURATION_TARGET.asMillis()) / 400;
 
     fn getRepairs(self: *Self) !ArrayList(RepairRequest) {
+        const zone = tracy.Zone.init(@src(), .{ .name = "getRepairs" });
+        defer zone.deinit();
+
         var oldest_slot_needing_repair: u64 = 0;
         var newest_slot_needing_repair: u64 = 0;
         var repairs = ArrayList(RepairRequest).init(self.allocator);
@@ -237,6 +250,9 @@ pub const RepairService = struct {
         self: *Self,
         requests: []const RepairRequest,
     ) !ArrayList(AddressedRepairRequest) {
+        const zone = tracy.Zone.init(@src(), .{ .name = "assignRequestsToPeers" });
+        defer zone.deinit();
+
         var addressed = ArrayList(AddressedRepairRequest).init(self.allocator);
         for (requests) |request| {
             if (try self.peer_provider.getRandomPeer(request.slot())) |peer| {
@@ -319,7 +335,7 @@ const MIN_REPAIR_DELAY = Duration.fromMillis(100);
 /// Signs and serializes repair requests. Sends them over the network.
 pub const RepairRequester = struct {
     allocator: Allocator,
-    logger: ScopedLogger(@typeName(Self)),
+    logger: Logger,
     random: Random,
     keypair: *const KeyPair,
     sender_thread: *SocketThread,
@@ -349,7 +365,7 @@ pub const RepairRequester = struct {
 
         const thread = try SocketThread.spawnSender(
             allocator,
-            logger,
+            .from(logger),
             udp_send_socket,
             channel,
             .{ .unordered = exit },
@@ -357,7 +373,7 @@ pub const RepairRequester = struct {
 
         return .{
             .allocator = allocator,
-            .logger = logger.withScope(@typeName(Self)),
+            .logger = .from(logger),
             .random = random,
             .keypair = keypair,
             .sender_thread = thread,
@@ -375,6 +391,9 @@ pub const RepairRequester = struct {
         self: *const Self,
         requests: []const AddressedRepairRequest,
     ) !void {
+        const zone = tracy.Zone.init(@src(), .{ .name = "sendRepairRequestBatch" });
+        defer zone.deinit();
+
         self.metrics.pending_requests.add(requests.len);
         defer self.metrics.pending_requests.set(0);
         const timestamp = std.time.milliTimestamp();
@@ -495,6 +514,9 @@ pub const RepairPeerProvider = struct {
     /// Selects a peer at random from gossip or cache that is expected
     /// to be able to handle a repair request for the specified slot.
     pub fn getRandomPeer(self: *Self, slot: Slot) Error!?RepairPeer {
+        const zone = tracy.Zone.init(@src(), .{ .name = "getRandomPeer" });
+        defer zone.deinit();
+
         const peers = try self.getPeers(slot);
         if (peers.len == 0) return null;
         const index = self.random.intRangeLessThan(usize, 0, peers.len);
@@ -503,6 +525,9 @@ pub const RepairPeerProvider = struct {
 
     /// Tries to get peers that could have the slot. Checks cache, falling back to gossip.
     fn getPeers(self: *Self, slot: Slot) Error![]RepairPeer {
+        const zone = tracy.Zone.init(@src(), .{ .name = "getPeers" });
+        defer zone.deinit();
+
         const now: u64 = @intCast(std.time.timestamp());
 
         if (self.cache.get(slot)) |peers| {
@@ -514,6 +539,8 @@ pub const RepairPeerProvider = struct {
         } else self.metrics.cache_miss_count.inc();
 
         const peers = try self.getRepairPeersFromGossip(self.allocator, slot);
+        errdefer self.allocator.free(peers);
+
         self.metrics.latest_count_from_gossip.set(peers.len);
         try self.cache.insert(slot, .{
             .insertion_time_secs = now,
@@ -530,6 +557,9 @@ pub const RepairPeerProvider = struct {
         allocator: Allocator,
         slot: Slot,
     ) Error![]RepairPeer {
+        const zone = tracy.Zone.init(@src(), .{ .name = "getRepairPeersFromGossip" });
+        defer zone.deinit();
+
         var gossip_table_lock = self.gossip_table_rw.read();
         defer gossip_table_lock.unlock();
         const gossip_table: *const GossipTable = gossip_table_lock.get();
@@ -572,7 +602,6 @@ test "RepairService sends repair request to gossip peer" {
     defer registry.deinit();
     var prng = std.Random.DefaultPrng.init(4328095);
     const random = prng.random();
-    const TestLogger = sig.trace.DirectPrintLogger;
 
     // my details
     const keypair = KeyPair.generate();
@@ -580,9 +609,7 @@ test "RepairService sends repair request to gossip peer" {
     const wallclock = 100;
     var gossip = try GossipTable.init(allocator, allocator);
     defer gossip.deinit();
-    var test_logger = TestLogger.init(allocator, Logger.TEST_DEFAULT_LEVEL);
-
-    const logger = test_logger.logger();
+    const logger = sig.trace.Logger("test").FOR_TESTS;
 
     // connectivity
     const repair_port = random.intRangeAtMost(u16, 1000, std.math.maxInt(u16));
@@ -629,11 +656,11 @@ test "RepairService sends repair request to gossip peer" {
 
     var service = try RepairService.init(
         allocator,
-        logger,
+        .from(logger),
         &exit,
         &registry,
         try RepairRequester
-            .init(allocator, logger, random, &registry, &keypair, repair_socket, &exit),
+            .init(allocator, .from(logger), random, &registry, &keypair, repair_socket, &exit),
         peers,
         &tracker,
     );
@@ -744,6 +771,9 @@ const TestPeerGenerator = struct {
     };
 
     fn addPeerToGossip(self: *const @This(), peer_type: PeerType) !struct { PeerType, RepairPeer } {
+        const zone = tracy.Zone.init(@src(), .{ .name = "addPeerToGossip" });
+        defer zone.deinit();
+
         const wallclock = 1;
         const keypair = KeyPair.generate();
         const serve_repair_addr = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8003);
