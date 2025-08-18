@@ -8,9 +8,8 @@ const GossipService = sig.gossip.GossipService;
 const GossipTable = sig.gossip.GossipTable;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const LegacyContactInfo = sig.gossip.data.LegacyContactInfo;
-const Logger = sig.trace.Logger;
 const Pubkey = sig.core.Pubkey;
-const ScopedLogger = sig.trace.ScopedLogger;
+
 const SignedGossipData = sig.gossip.data.SignedGossipData;
 const SlotAndHash = sig.core.hash.SlotAndHash;
 const ThreadSafeContactInfo = sig.gossip.data.ThreadSafeContactInfo;
@@ -28,7 +27,7 @@ const BYTE_PER_MIB = 1024 * BYTE_PER_KIB;
 const BYTE_PER_GIB = 1024 * BYTE_PER_MIB;
 
 /// The scope for the logger used in this file.
-pub const LOG_SCOPE = "accountsdb.download";
+const Logger = sig.trace.Logger("accountsdb.download");
 
 /// Analogous to [PeerSnapshotHash](https://github.com/anza-xyz/agave/blob/f868aa38097094e4fb78a885b6fb27ce0e43f5c7/validator/src/bootstrap.rs#L342)
 pub const PeerSnapshotHash = struct {
@@ -181,7 +180,7 @@ pub fn findPeersToDownloadFromAssumeCapacity(
 /// note: gossip_service must be running.
 pub fn downloadSnapshotsFromGossip(
     allocator: std.mem.Allocator,
-    logger_: Logger,
+    logger: Logger,
     /// if null, then we trust any peer for snapshot download
     maybe_trusted_validators: ?[]const Pubkey,
     gossip_service: *GossipService,
@@ -193,7 +192,6 @@ pub fn downloadSnapshotsFromGossip(
     const zone = tracy.initZone(@src(), .{ .name = "accountsdb downloadSnapshotsFromGossip" });
     defer zone.deinit();
 
-    const logger = logger_.withScope(LOG_SCOPE);
     logger
         .info()
         .logf("starting snapshot download with min download speed: {d} MB/s", .{min_mb_per_sec});
@@ -368,7 +366,7 @@ pub fn downloadSnapshotsFromGossip(
 /// the main errors include {HeaderRequestFailed, NoContentLength, TooSlow} or a curl-related error
 fn downloadFile(
     allocator: std.mem.Allocator,
-    logger: ScopedLogger(LOG_SCOPE),
+    logger: Logger,
     uri: std.Uri,
     output_dir: std.fs.Dir,
     filename: []const u8,
@@ -468,7 +466,7 @@ fn downloadFile(
 
 pub fn getOrDownloadAndUnpackSnapshot(
     allocator: std.mem.Allocator,
-    logger_: Logger,
+    logger: Logger,
     /// dir which stores the snapshot files to unpack into {validator_dir}/accounts_db
     snapshot_path: []const u8,
     options: struct {
@@ -487,8 +485,6 @@ pub fn getOrDownloadAndUnpackSnapshot(
 ) !struct { FullAndIncrementalManifest, SnapshotFiles } {
     const zone = tracy.initZone(@src(), .{ .name = "accountsdb getOrDownloadAndUnpackSnapshot" });
     defer zone.deinit();
-
-    const logger = logger_.withScope(LOG_SCOPE);
 
     const force_unpack_snapshot = options.force_unpack_snapshot;
     const force_new_snapshot_download = options.force_new_snapshot_download;
@@ -537,7 +533,7 @@ pub fn getOrDownloadAndUnpackSnapshot(
 
         const full, const maybe_inc = try downloadSnapshotsFromGossip(
             allocator,
-            logger.unscoped(),
+            .from(logger),
             options.trusted_validators,
             gossip_service,
             snapshot_dir,
@@ -611,7 +607,7 @@ pub fn getOrDownloadAndUnpackSnapshot(
             defer archive_file.close();
             try parallelUnpackZstdTarBall(
                 allocator,
-                logger.unscoped(),
+                .from(logger),
                 archive_file,
                 snapshot_dir,
                 n_threads_snapshot_unpack,
@@ -636,7 +632,7 @@ pub fn getOrDownloadAndUnpackSnapshot(
 
             try parallelUnpackZstdTarBall(
                 allocator,
-                logger.unscoped(),
+                .from(logger),
                 archive_file,
                 snapshot_dir,
                 n_threads_snapshot_unpack,
@@ -653,7 +649,7 @@ pub fn getOrDownloadAndUnpackSnapshot(
     const snapshot_files = try SnapshotFiles.find(allocator, snapshot_dir);
     const snapshot_fields = try FullAndIncrementalManifest.fromFiles(
         allocator,
-        logger.unscoped(),
+        .from(logger),
         snapshot_dir,
         snapshot_files,
     );

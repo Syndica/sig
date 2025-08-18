@@ -14,7 +14,7 @@ const SwissMap = sig.accounts_db.swiss_map.SwissMap;
 const createAndMmapFile = sig.utils.allocators.createAndMmapFile;
 
 const LOG_SCOPE = "accounts_db.index";
-const ScopedLogger = sig.trace.ScopedLogger(LOG_SCOPE);
+const Logger = sig.trace.Logger(LOG_SCOPE);
 
 /// reference to an account (either in a file or in the unrooted_map)
 pub const AccountRef = struct {
@@ -63,7 +63,7 @@ pub const AccountRef = struct {
 /// Analogous to [AccountsIndex](https://github.com/anza-xyz/agave/blob/a6b2283142192c5360ad0f53bec1eb4a9fb36154/accounts-db/src/accounts_index.rs#L644)
 pub const AccountIndex = struct {
     allocator: std.mem.Allocator,
-    logger: ScopedLogger,
+    logger: Logger,
 
     /// map from Pubkey -> AccountRefHead
     pubkey_ref_map: ShardedPubkeyRefMap,
@@ -98,13 +98,11 @@ pub const AccountIndex = struct {
 
     pub fn init(
         allocator: std.mem.Allocator,
-        logger_: sig.trace.Logger,
+        logger: Logger,
         allocator_config: AllocatorConfig,
         /// number of shards for the pubkey_ref_map
         number_of_shards: usize,
     ) !Self {
-        const logger = logger_.withScope(LOG_SCOPE);
-
         const reference_allocator: ReferenceAllocator = switch (allocator_config) {
             .ram => |ram| blk: {
                 logger.info().logf("using ram memory for account index", .{});

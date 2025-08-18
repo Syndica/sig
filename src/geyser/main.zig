@@ -368,7 +368,7 @@ pub fn benchmark(config: Cmd.Benchmark) !void {
 
     try sig.geyser.core.streamReader(
         &reader,
-        logger,
+        .from(logger),
         &exit,
         sig.time.Duration.fromSecs(config.measure_rate_secs),
     );

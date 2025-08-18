@@ -103,7 +103,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
 
     var accounts_db = try AccountsDB.init(.{
         .allocator = allocator,
-        .logger = logger,
+        .logger = .from(logger),
         .snapshot_dir = snapshot_dir,
         .geyser_writer = null,
         .gossip_view = null,
@@ -383,7 +383,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
 
             const combined_manifest = try sig.accounts_db.FullAndIncrementalManifest.fromFiles(
                 allocator,
-                logger,
+                .from(logger),
                 alternative_snapshot_dir,
                 snapshot_files,
             );

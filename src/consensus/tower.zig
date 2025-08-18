@@ -13,8 +13,6 @@ const TowerStorage = sig.consensus.tower_storage.TowerStorage;
 const TowerVoteState = sig.consensus.tower_state.TowerVoteState;
 const VoteState = sig.runtime.program.vote.state.VoteState;
 const VoteStateVersions = sig.runtime.program.vote.state.VoteStateVersions;
-const Logger = sig.trace.Logger;
-const ScopedLogger = sig.trace.ScopedLogger;
 
 pub const MAX_LOCKOUT_HISTORY = sig.runtime.program.vote.state.MAX_LOCKOUT_HISTORY;
 
@@ -69,8 +67,10 @@ pub const TowerError = error{
 };
 
 pub const Tower = struct {
-    logger: ScopedLogger(@typeName(Tower)),
+    logger: Logger,
     vote_state: TowerVoteState,
+
+    const Logger = sig.trace.Logger(@typeName(Tower));
 
     pub fn init(logger: Logger) Tower {
         var tower = Tower{

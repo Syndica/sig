@@ -23,7 +23,7 @@ const RuntimeTransaction = sig.runtime.transaction_execution.RuntimeTransaction;
 
 const LockableAccount = sig.replay.account_locks.LockableAccount;
 
-const ScopedLogger = sig.trace.ScopedLogger("replay-resolve");
+const Logger = sig.trace.Logger("replay-resolve");
 
 pub const ResolvedBatch = struct {
     transactions: []const ResolvedTransaction,

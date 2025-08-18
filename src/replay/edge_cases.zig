@@ -1436,7 +1436,7 @@ const TestData = struct {
         );
         errdefer slot_tracker.deinit(allocator);
 
-        var fork_choice: HeaviestSubtreeForkChoice = try .init(allocator, logger.unscoped(), .{
+        var fork_choice: HeaviestSubtreeForkChoice = try .init(allocator, .from(logger), .{
             .slot = root_slot,
             .hash = slot_infos[root_slot].hash,
         });
@@ -1520,7 +1520,7 @@ fn testLedgerRw(
 
     const reader: sig.ledger.LedgerReader = try .init(
         std.testing.allocator,
-        logger.unscoped(),
+        .from(logger),
         ledger_db,
         &state.registry,
         &state.lowest_cleanup_slot,
@@ -1528,7 +1528,7 @@ fn testLedgerRw(
     );
     const writer: sig.ledger.LedgerResultWriter = try .init(
         std.testing.allocator,
-        logger.unscoped(),
+        .from(logger),
         ledger_db,
         &state.registry,
         &state.lowest_cleanup_slot,

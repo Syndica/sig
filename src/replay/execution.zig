@@ -33,6 +33,8 @@ const PurgeRepairSlotCounters = replay.edge_cases.PurgeRepairSlotCounters;
 const EpochSlotsFrozenSlots = replay.edge_cases.EpochSlotsFrozenSlots;
 const UnfrozenGossipVerifiedVoteHashes = replay.edge_cases.UnfrozenGossipVerifiedVoteHashes;
 
+const Logger = sig.trace.Logger("replay.execution");
+
 const check_slot_agrees_with_cluster = replay.edge_cases.check_slot_agrees_with_cluster;
 
 const SvmGateway = replay.svm_gateway.SvmGateway;
@@ -42,7 +44,7 @@ const confirmSlot = replay.confirm_slot.confirmSlot;
 /// State used for replaying and validating data from ledger/accountsdb/svm
 pub const ReplayExecutionState = struct {
     allocator: Allocator,
-    logger: sig.trace.ScopedLogger("replay-execution"),
+    logger: Logger,
     my_identity: Pubkey,
     vote_account: ?Pubkey,
 
@@ -68,7 +70,7 @@ pub const ReplayExecutionState = struct {
 
     pub fn init(
         allocator: Allocator,
-        logger: sig.trace.Logger,
+        logger: Logger,
         my_identity: Pubkey,
         thread_pool: *ThreadPool,
         account_store: AccountStore,

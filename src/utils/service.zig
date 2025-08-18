@@ -7,8 +7,7 @@ const ArenaAllocator = std.heap.ArenaAllocator;
 const ArrayListUnmanaged = std.ArrayListUnmanaged;
 const Atomic = std.atomic.Value;
 
-const Logger = sig.trace.Logger;
-const ScopedLogger = sig.trace.ScopedLogger;
+const Logger = sig.trace.Logger("service_manager");
 
 /// High level manager for long-running threads and the state
 /// shared by those threads.
@@ -16,7 +15,7 @@ const ScopedLogger = sig.trace.ScopedLogger;
 /// You can add threads or state, then await all threads and
 /// clean up their state.
 pub const ServiceManager = struct {
-    logger: ScopedLogger(LOG_SCOPE),
+    logger: Logger,
     /// Threads to join.
     threads: ArrayListUnmanaged(std.Thread),
     exit: *Atomic(bool),
@@ -41,7 +40,7 @@ pub const ServiceManager = struct {
         default_spawn_config: std.Thread.SpawnConfig,
     ) Self {
         return .{
-            .logger = logger.withScope(LOG_SCOPE),
+            .logger = logger,
             .exit = exit,
             .threads = .{},
             .arena = ArenaAllocator.init(backing_allocator),
@@ -129,7 +128,7 @@ pub const ReturnHandler = struct {
 /// Spawn a thread with a looping/restart policy using runService.
 /// The function may be restarted periodically, according to the provided config.
 pub fn spawnService(
-    any_logger: anytype,
+    logger: Logger,
     exit: *Atomic(bool),
     name: []const u8,
     config: struct {
@@ -139,7 +138,6 @@ pub fn spawnService(
     function: anytype,
     args: anytype,
 ) std.Thread.SpawnError!std.Thread {
-    const logger = any_logger.withScope(ServiceManager.LOG_SCOPE);
     var thread = try std.Thread.spawn(
         config.spawn_config,
         runService,
@@ -162,7 +160,7 @@ pub fn spawnService(
 /// It's guaranteed to run at least once in order to not race initialization with
 /// the `exit` flag.
 pub fn runService(
-    logger: ScopedLogger(ServiceManager.LOG_SCOPE),
+    logger: Logger,
     exit: *Atomic(bool),
     maybe_name: ?[]const u8,
     config: RunConfig,

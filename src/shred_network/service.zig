@@ -12,7 +12,7 @@ const Socket = network.Socket;
 const Channel = sig.sync.Channel;
 const EpochContextManager = sig.adapter.EpochContextManager;
 const GossipTable = sig.gossip.GossipTable;
-const Logger = sig.trace.Logger;
+const Logger = sig.trace.Logger("shred_network.service");
 const Packet = sig.net.Packet;
 const Pubkey = sig.core.Pubkey;
 const RwMux = sig.sync.RwMux;
@@ -74,7 +74,7 @@ pub fn start(
 ) !ServiceManager {
     var service_manager = ServiceManager.init(
         deps.allocator,
-        deps.logger.unscoped(),
+        .from(deps.logger),
         deps.exit,
         "shred network",
         .{},
@@ -100,7 +100,7 @@ pub fn start(
         .allocator = deps.allocator,
         .keypair = deps.my_keypair,
         .exit = deps.exit,
-        .logger = deps.logger.withScope(@typeName(ShredReceiver)),
+        .logger = .from(deps.logger),
         .repair_socket = repair_socket,
         .turbine_socket = turbine_socket,
         .unverified_shred_sender = unverified_shred_channel,
@@ -129,7 +129,7 @@ pub fn start(
     shred_tracker.* = try BasicShredTracker.init(
         deps.allocator,
         conf.start_slot,
-        deps.logger.unscoped(),
+        .from(deps.logger),
         deps.registry,
     );
     try defers.deferCall(BasicShredTracker.deinit, .{shred_tracker});
@@ -141,7 +141,7 @@ pub fn start(
         .{
             deps.allocator,
             deps.exit,
-            deps.logger.unscoped(),
+            shred_network.shred_processor.Logger.from(deps.logger),
             deps.registry,
             shreds_to_insert_channel,
             shred_tracker,
@@ -165,7 +165,7 @@ pub fn start(
                 .overwrite_stake_for_testing = deps.overwrite_turbine_stake_for_testing,
                 .exit = deps.exit,
                 .rand = deps.random,
-                .logger = deps.logger.unscoped(),
+                .logger = .from(deps.logger),
             }},
         );
     }
@@ -181,7 +181,7 @@ pub fn start(
     );
     const repair_requester = try RepairRequester.init(
         deps.allocator,
-        deps.logger.unscoped(),
+        .from(deps.logger),
         deps.random,
         deps.registry,
         deps.my_keypair,
@@ -192,7 +192,7 @@ pub fn start(
     try defers.deferCall(RepairService.deinit, .{repair_svc});
     repair_svc.* = try RepairService.init(
         deps.allocator,
-        deps.logger.unscoped(),
+        .from(deps.logger),
         deps.exit,
         deps.registry,
         repair_requester,

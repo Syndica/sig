@@ -53,7 +53,7 @@ pub fn streamWriter(allocator: std.mem.Allocator, exit: *std.atomic.Value(bool))
     }
 }
 
-pub fn runBenchmark(logger: sig.trace.Logger) !void {
+pub fn runBenchmark(logger: sig.trace.Logger("geyser.benchmark")) !void {
     const allocator = std.heap.c_allocator;
 
     const exit = try allocator.create(std.atomic.Value(bool));
@@ -72,7 +72,7 @@ pub fn runBenchmark(logger: sig.trace.Logger) !void {
     const reader_handle = try std.Thread.spawn(
         .{},
         geyser.core.streamReader,
-        .{ &reader, logger, exit, MEASURE_RATE },
+        .{ &reader, geyser.core.Logger.from(logger), exit, MEASURE_RATE },
     );
     const writer_handle = try std.Thread.spawn(.{}, streamWriter, .{ allocator, exit });
 

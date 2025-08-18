@@ -4,7 +4,7 @@ const sig = @import("../sig.zig");
 const Allocator = std.mem.Allocator;
 
 const ErrorReturn = sig.utils.types.ErrorReturn;
-const Logger = sig.trace.log.Logger;
+const Logger = sig.trace.log.Logger("rpc.http");
 
 /// Sends HTTP POST requests with content type of application/json and awaits a
 /// response. Offers a retry mechanism to handle failures.

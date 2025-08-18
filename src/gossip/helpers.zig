@@ -18,7 +18,7 @@ const getClusterEntrypoints = sig.gossip.service.getClusterEntrypoints;
 /// relying on the cluster to provide the entrypoints
 pub fn initGossipFromCluster(
     allocator: std.mem.Allocator,
-    logger: Logger,
+    logger: sig.trace.Logger("gossip"),
     cluster: Cluster,
     my_port: u16,
 ) !*GossipService {
@@ -33,11 +33,11 @@ pub fn initGossipFromCluster(
     }
 
     // create contact info
-    const echo_data = try getShredAndIPFromEchoServer(logger.unscoped(), entrypoints.items);
+    const echo_data = try getShredAndIPFromEchoServer(.from(logger), entrypoints.items);
     const my_shred_version = echo_data.shred_version orelse 0;
     const my_ip = echo_data.ip orelse IpAddr.newIpv4(127, 0, 0, 1);
 
-    const my_keypair = try sig.identity.getOrInit(allocator, logger);
+    const my_keypair = try sig.identity.getOrInit(allocator, .from(logger));
 
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     var contact_info = ContactInfo.init(allocator, my_pubkey, getWallclockMs(), 0);
@@ -59,6 +59,6 @@ pub fn initGossipFromCluster(
         contact_info,
         my_keypair,
         entrypoints.items,
-        logger,
+        .from(logger),
     );
 }

@@ -11,6 +11,8 @@ const Instant = sig.time.Instant;
 const Registry = sig.prometheus.Registry;
 const Slot = sig.core.Slot;
 
+const Logger = sig.trace.Logger("shred_tracker");
+
 const MAX_SHREDS_PER_SLOT: usize = sig.ledger.shred.MAX_SHREDS_PER_SLOT;
 
 const MIN_SLOT_AGE_TO_REPORT_AS_MISSING: Duration = Duration.fromMillis(600);
@@ -27,7 +29,7 @@ pub const Range = struct {
 /// is not yet implemented. A complete implementation in the future should
 /// continue pursuing missing shreds unless a later slot is rooted.
 pub const BasicShredTracker = struct {
-    logger: sig.trace.ScopedLogger(@typeName(Self)),
+    logger: Logger,
     skip_checking_arena: std.heap.ArenaAllocator,
     mux: Mutex = .{},
     /// The slot that this struct was initialized with at index 0
@@ -56,7 +58,7 @@ pub const BasicShredTracker = struct {
     pub fn init(
         allocator: Allocator,
         slot: Slot,
-        logger: sig.trace.Logger,
+        logger: Logger,
         registry: *Registry(.{}),
     ) !Self {
         const metrics = try registry.initStruct(Metrics);
@@ -68,7 +70,7 @@ pub const BasicShredTracker = struct {
             .current_bottom_slot = slot,
             .max_slot_processed = slot,
             .max_slot_seen = slot,
-            .logger = logger.withScope(@typeName(Self)),
+            .logger = logger,
             .metrics = try registry.initStruct(Metrics),
         };
     }

@@ -13,7 +13,7 @@ const RecycleFBA = sig.utils.allocators.RecycleFBA;
 const Level = trace.level.Level;
 const NewEntry = trace.entry.NewEntry;
 
-pub fn ScopedLogger(comptime scope: ?[]const u8) type {
+pub fn Logger(comptime scope: ?[]const u8) type {
     return union(enum) {
         channel_print: *ChannelPrintLogger,
         direct_print: DirectPrintLogger,
@@ -25,11 +25,7 @@ pub fn ScopedLogger(comptime scope: ?[]const u8) type {
         pub const TEST_DEFAULT_LEVEL: Level = .warn;
         pub const FOR_TESTS: Self = .{ .direct_print = .{ .max_level = TEST_DEFAULT_LEVEL } };
 
-        pub fn unscoped(self: Self) Logger {
-            return self.withScope(null);
-        }
-
-        pub fn withScope(self: Self, comptime new_scope: ?[]const u8) ScopedLogger(new_scope) {
+        pub fn withScope(self: Self, comptime new_scope: ?[]const u8) Logger(new_scope) {
             return switch (self) {
                 .channel_print => |logger| .{ .channel_print = logger },
                 .direct_print => |logger| .{ .direct_print = logger },
@@ -37,7 +33,7 @@ pub fn ScopedLogger(comptime scope: ?[]const u8) type {
             };
         }
 
-        pub fn from(logger: anytype) ScopedLogger(scope) {
+        pub fn from(logger: anytype) Logger(scope) {
             return logger.withScope(scope);
         }
 
@@ -108,9 +104,7 @@ pub fn ScopedLogger(comptime scope: ?[]const u8) type {
     };
 }
 
-pub const Logger = ScopedLogger(null);
-
-/// An instance of `ScopedLogger` that logs via the channel.
+/// An instance of `Logger` that logs via the channel.
 pub const ChannelPrintLogger = struct {
     max_level: Level,
     exit: std.atomic.Value(bool),
@@ -175,11 +169,7 @@ pub const ChannelPrintLogger = struct {
         self.allocator.destroy(self);
     }
 
-    pub fn logger(self: *Self) Logger {
-        return .{ .channel_print = self };
-    }
-
-    pub fn scopedLogger(self: *Self, comptime new_scope: anytype) ScopedLogger(new_scope) {
+    pub fn logger(self: *Self) Logger(null) {
         return .{ .channel_print = self };
     }
 
@@ -245,11 +235,7 @@ pub const DirectPrintLogger = struct {
         return .{ .max_level = max_level };
     }
 
-    pub fn logger(self: Self) Logger {
-        return .{ .direct_print = self };
-    }
-
-    pub fn scopedLogger(self: Self, comptime new_scope: anytype) ScopedLogger(new_scope) {
+    pub fn logger(self: Self) Logger(null) {
         return .{ .direct_print = self };
     }
 
@@ -295,9 +281,9 @@ test "direct" {
 test "trace_ngswitch" {
     const StuffChild = struct {
         const StuffChild = @This();
-        logger: ScopedLogger(@typeName(StuffChild)),
+        logger: Logger(@typeName(StuffChild)),
 
-        pub fn init(logger: *const Logger) StuffChild {
+        pub fn init(logger: anytype) StuffChild {
             return .{ .logger = logger.withScope(@typeName(StuffChild)) };
         }
 
@@ -308,15 +294,15 @@ test "trace_ngswitch" {
 
     const Stuff = struct {
         const Stuff = @This();
-        logger: ScopedLogger(@typeName(Stuff)),
+        logger: Logger(@typeName(Stuff)),
 
-        pub fn init(logger: Logger) Stuff {
+        pub fn init(logger: anytype) Stuff {
             return .{ .logger = logger.withScope(@typeName(Stuff)) };
         }
 
         pub fn doStuff(self: *Stuff) void {
             self.logger.info().log("doing stuff parent");
-            const logger = self.logger.unscoped();
+            const logger = self.logger.withScope("unscoped");
             var child = StuffChild.init(&logger);
             child.doStuffDetails();
         }

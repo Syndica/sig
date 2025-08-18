@@ -14,7 +14,6 @@ const Socket = network.Socket;
 const Channel = sig.sync.Channel;
 const Counter = sig.prometheus.Counter;
 const Histogram = sig.prometheus.Histogram;
-const ScopedLogger = sig.trace.ScopedLogger;
 const Packet = sig.net.Packet;
 const Ping = sig.gossip.Ping;
 const Pong = sig.gossip.Pong;
@@ -24,12 +23,14 @@ const SocketThread = sig.net.SocketThread;
 const ExitCondition = sig.sync.ExitCondition;
 const VariantCounter = sig.prometheus.VariantCounter;
 
+const Logger = sig.trace.Logger("shred_receiver");
+
 /// Analogous to [ShredFetchStage](https://github.com/anza-xyz/agave/blob/aa2f078836434965e1a5a03af7f95c6640fe6e1e/core/src/shred_fetch_stage.rs#L34)
 pub const ShredReceiver = struct {
     allocator: Allocator,
     keypair: *const KeyPair,
     exit: *Atomic(bool),
-    logger: ScopedLogger(@typeName(Self)),
+    logger: Logger,
     repair_socket: Socket,
     turbine_socket: Socket,
     /// me --> shred verifier
@@ -54,7 +55,7 @@ pub const ShredReceiver = struct {
 
         const response_sender_thread = try SocketThread.spawnSender(
             self.allocator,
-            self.logger.unscoped(),
+            .from(self.logger),
             self.repair_socket,
             response_sender,
             exit,
@@ -96,7 +97,7 @@ pub const ShredReceiver = struct {
         // Receive from the socket into the channel.
         const receiver_thread = try SocketThread.spawnReceiver(
             self.allocator,
-            self.logger.unscoped(),
+            .from(self.logger),
             receiver_socket,
             receiver,
             exit,

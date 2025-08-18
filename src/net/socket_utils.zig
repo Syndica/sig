@@ -10,14 +10,12 @@ const UdpSocket = network.Socket;
 const Packet = sig.net.Packet;
 const PACKET_DATA_SIZE = Packet.DATA_SIZE;
 const Channel = sig.sync.Channel;
-const Logger = sig.trace.Logger;
 const ExitCondition = sig.sync.ExitCondition;
 
 pub const SOCKET_TIMEOUT_US: usize = 1 * std.time.us_per_s;
 pub const PACKETS_PER_BATCH: usize = 64;
 
-// The identifier for the scoped logger used in this file.
-const LOG_SCOPE: []const u8 = "socket_utils";
+const Logger = sig.trace.Logger("socket_utils");
 
 const XevThread = struct {
     pub const Handle = std.Thread.ResetEvent;
@@ -251,8 +249,7 @@ const XevThread = struct {
             while (st.channel.tryReceive()) |_| {}
         }
 
-        const logger = st.logger.withScope(LOG_SCOPE);
-        logger.debug().logf("{s} loop closed: {}", .{ @tagName(st.direction), err });
+        st.logger.debug().logf("{s} loop closed: {}", .{ @tagName(st.direction), err });
         st.exit.afterExit();
 
         // Unregister node and signal SocketThread to deinit/dealloc itself (node may live on).
@@ -301,12 +298,11 @@ const XevThread = struct {
         result: xev.WriteError!usize,
     ) !void {
         const st = node.data.st.?;
-        const logger = st.logger.withScope(LOG_SCOPE);
 
         if (result) |bytes_sent| {
             std.debug.assert(node.data.packet.size == bytes_sent);
         } else |err| { // On send error, skip packet and proces next in pollNode
-            logger.err().logf("send socket error: {}", .{err});
+            st.logger.err().logf("send socket error: {}", .{err});
         }
 
         try pollNode(node, loop);
@@ -335,10 +331,9 @@ const XevThread = struct {
         result: xev.ReadError!usize,
     ) !void {
         const st = node.data.st.?;
-        const logger = st.logger.withScope(LOG_SCOPE);
 
         node.data.packet.size = result catch |err| {
-            logger.err().logf("recv socket error: {}", .{err});
+            st.logger.err().logf("recv socket error: {}", .{err});
             return err;
         };
 
@@ -368,10 +363,9 @@ const PerThread = struct {
     }
 
     fn runReceiver(st: *SocketThread) !void {
-        const logger = st.logger.withScope(LOG_SCOPE);
         defer {
             st.exit.afterExit();
-            logger.info().log("readSocket loop closed");
+            st.logger.info().log("readSocket loop closed");
         }
 
         // NOTE: we set a timeout to periodically check if we should exit
@@ -382,7 +376,7 @@ const PerThread = struct {
             const recv_meta = st.socket.receiveFrom(&packet.buffer) catch |err| switch (err) {
                 error.WouldBlock => continue,
                 else => |e| {
-                    logger.err().logf("readSocket error: {s}", .{@errorName(e)});
+                    st.logger.err().logf("readSocket error: {s}", .{@errorName(e)});
                     return e;
                 },
             };
@@ -395,12 +389,11 @@ const PerThread = struct {
     }
 
     fn runSender(st: *SocketThread) !void {
-        const logger = st.logger.withScope(LOG_SCOPE);
         defer {
             // empty the channel
             while (st.channel.tryReceive()) |_| {}
             st.exit.afterExit();
-            logger.debug().log("sendSocket loop closed");
+            st.logger.debug().log("sendSocket loop closed");
         }
 
         while (true) {
@@ -422,7 +415,7 @@ const PerThread = struct {
                             continue;
                         },
                         else => {
-                            logger.err().logf("sendSocket error: {s}", .{@errorName(e)});
+                            st.logger.err().logf("sendSocket error: {s}", .{@errorName(e)});
                             continue :next_packet; // on error, skip this packet and send another.
                         },
                     };

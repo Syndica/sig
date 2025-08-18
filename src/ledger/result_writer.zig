@@ -9,8 +9,6 @@ const ArrayList = std.ArrayList;
 // sig common
 const Hash = sig.core.Hash;
 const Histogram = sig.prometheus.Histogram;
-const Logger = sig.trace.Logger;
-const ScopedLogger = sig.trace.ScopedLogger;
 const Pubkey = sig.core.Pubkey;
 const RwMux = sig.sync.RwMux;
 const Signature = sig.core.Signature;
@@ -31,12 +29,14 @@ const schema = ledger.schema.schema;
 /// or reaching consensus on a block.
 pub const LedgerResultWriter = struct {
     allocator: Allocator,
-    logger: ScopedLogger(@typeName(LedgerResultWriter)),
+    logger: Logger,
     db: LedgerDB,
     // TODO: change naming to 'highest_slot_cleaned'
     lowest_cleanup_slot: *RwMux(Slot),
     max_root: *std.atomic.Value(Slot),
     scan_and_fix_roots_metrics: ScanAndFixRootsMetrics,
+
+    const Logger = sig.trace.Logger(@typeName(LedgerResultWriter));
 
     pub fn init(
         allocator: Allocator,

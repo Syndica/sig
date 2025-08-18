@@ -23,7 +23,7 @@ const UnixTimestamp = sig.core.UnixTimestamp;
 
 const FileId = sig.accounts_db.accounts_file.FileId;
 
-const Logger = sig.trace.Logger;
+const Logger = sig.trace.Logger("snapshots");
 
 pub const MAXIMUM_ACCOUNT_FILE_SIZE: u64 = 16 * 1024 * 1024 * 1024; // 16 GiB
 pub const MAX_RECENT_BLOCKHASHES: usize = 300;
@@ -1534,7 +1534,7 @@ pub fn parallelUnpackZstdTarBall(
 
     try sig.utils.tar.parallelUntarToFileSystem(
         allocator,
-        logger,
+        .from(logger),
         output_dir,
         tar_stream.reader(),
         n_threads,

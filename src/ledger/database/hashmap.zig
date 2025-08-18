@@ -10,7 +10,6 @@ const BytesRef = database.interface.BytesRef;
 const ColumnFamily = database.interface.ColumnFamily;
 const DiskMemoryAllocator = sig.utils.allocators.DiskMemoryAllocator;
 const IteratorDirection = database.interface.IteratorDirection;
-const Logger = sig.trace.Logger;
 const RcSlice = sig.sync.RcSlice;
 const SortedMap = sig.utils.collections.SortedMap;
 
@@ -38,7 +37,7 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
 
         pub fn open(
             allocator: Allocator,
-            logger: Logger,
+            logger: database.interface.Logger,
             path: []const u8,
         ) anyerror!Self {
             logger.info().log("Initializing SharedHashMapDB");

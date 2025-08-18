@@ -8,7 +8,7 @@ const features = sig.core.features;
 const Allocator = std.mem.Allocator;
 const assert = std.debug.assert;
 
-const Logger = sig.trace.ScopedLogger(@typeName(@This()));
+const Logger = sig.trace.Logger(@typeName(@This()));
 
 const Ancestors = core.Ancestors;
 const EpochConstants = core.EpochConstants;
