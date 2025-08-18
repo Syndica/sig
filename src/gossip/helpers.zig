@@ -3,7 +3,6 @@ const sig = @import("../sig.zig");
 
 const Pubkey = sig.core.Pubkey;
 const ContactInfo = sig.gossip.ContactInfo;
-const Logger = sig.trace.Logger;
 const Cluster = sig.core.Cluster;
 const GossipService = sig.gossip.GossipService;
 const SocketAddr = sig.net.SocketAddr;
