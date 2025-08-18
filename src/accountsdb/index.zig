@@ -13,8 +13,7 @@ const SwissMap = sig.accounts_db.swiss_map.SwissMap;
 
 const createAndMmapFile = sig.utils.allocators.createAndMmapFile;
 
-const LOG_SCOPE = "accounts_db.index";
-const Logger = sig.trace.Logger(LOG_SCOPE);
+const Logger = sig.trace.Logger("accounts_db.index");
 
 /// reference to an account (either in a file or in the unrooted_map)
 pub const AccountRef = struct {
