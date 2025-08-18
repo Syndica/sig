@@ -13,7 +13,7 @@ const RecycleFBA = sig.utils.allocators.RecycleFBA;
 const Level = trace.level.Level;
 const NewEntry = trace.entry.NewEntry;
 
-pub fn Logger(comptime scope: ?[]const u8) type {
+pub fn Logger(comptime scope: []const u8) type {
     return union(enum) {
         channel_print: *ChannelPrintLogger,
         direct_print: DirectPrintLogger,
@@ -25,7 +25,7 @@ pub fn Logger(comptime scope: ?[]const u8) type {
         pub const TEST_DEFAULT_LEVEL: Level = .warn;
         pub const FOR_TESTS: Self = .{ .direct_print = .{ .max_level = TEST_DEFAULT_LEVEL } };
 
-        pub fn withScope(self: Self, comptime new_scope: ?[]const u8) Logger(new_scope) {
+        pub fn withScope(self: Self, comptime new_scope: []const u8) Logger(new_scope) {
             return switch (self) {
                 .channel_print => |logger| .{ .channel_print = logger },
                 .direct_print => |logger| .{ .direct_print = logger },
@@ -169,7 +169,7 @@ pub const ChannelPrintLogger = struct {
         self.allocator.destroy(self);
     }
 
-    pub fn logger(self: *Self) Logger(null) {
+    pub fn logger(self: *Self, comptime scope: []const u8) Logger(scope) {
         return .{ .channel_print = self };
     }
 
@@ -235,7 +235,7 @@ pub const DirectPrintLogger = struct {
         return .{ .max_level = max_level };
     }
 
-    pub fn logger(self: Self) Logger(null) {
+    pub fn logger(self: Self, comptime scope: []const u8) Logger(scope) {
         return .{ .direct_print = self };
     }
 
@@ -268,7 +268,7 @@ test "direct" {
     }, null);
     defer std_logger.deinit();
 
-    const logger = std_logger.logger();
+    const logger = std_logger.logger("test");
     logger.log(.warn, "warn");
     logger.log(.info, "info");
     logger.log(.debug, "debug");
@@ -317,7 +317,7 @@ test "trace_ngswitch" {
     }, null);
     defer std_logger.deinit();
 
-    const logger = std_logger.logger();
+    const logger = std_logger.logger("test");
 
     // Below logs out the following:
     // trace_ng.log.test.trace_ng: scope switch.Stuff] time=2024-09-11T06:49:02Z level=info doing stuff parent
@@ -340,7 +340,7 @@ test "reclaim" {
 
     defer std_logger.deinit();
 
-    const logger = std_logger.logger();
+    const logger = std_logger.logger("test");
 
     // Ensure memory can be continously requested from recycle_fba without getting stuck.
     for (0..25) |_| {
@@ -362,7 +362,7 @@ test "level" {
 
     defer std_logger.deinit();
 
-    const logger = std_logger.logger();
+    const logger = std_logger.logger("test");
 
     //None should log as they are higher than set max_log.
     logger
@@ -397,7 +397,7 @@ test "test_logger" {
 
     var test_logger = DirectPrintLogger.init(allocator, Level.warn);
 
-    const logger = test_logger.logger();
+    const logger = test_logger.logger("test");
 
     logger.log(.info, "Logging with log");
 }
@@ -412,7 +412,7 @@ test "channel logger" {
         .max_buffer = 512,
     }, stream.writer());
 
-    logger.logger().log(.info, "hello world");
+    logger.logger("test").log(.info, "hello world");
     std.time.sleep(10 * std.time.ns_per_ms);
     logger.deinit();
 

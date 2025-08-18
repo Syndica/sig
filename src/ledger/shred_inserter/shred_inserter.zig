@@ -1214,7 +1214,7 @@ const ShredInserterTestState = struct {
         comptime test_src: std.builtin.SourceLocation,
     ) !ShredInserterTestState {
         var test_logger = DirectPrintLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
-        const logger = test_logger.logger();
+        const logger = test_logger.logger("shred_inserter.test");
         return initWithLogger(allocator_, test_src, .from(logger));
     }
 

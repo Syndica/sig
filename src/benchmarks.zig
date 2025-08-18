@@ -80,7 +80,7 @@ pub fn main() !void {
         allocator,
         .info, // NOTE: change to debug to see all logs
     );
-    const logger = std_logger.logger();
+    const logger = std_logger.logger("benchmarks");
 
     if (builtin.mode == .Debug) logger.warn().log("running benchmark in Debug mode");
 

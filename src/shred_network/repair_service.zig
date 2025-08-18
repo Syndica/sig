@@ -609,7 +609,7 @@ test "RepairService sends repair request to gossip peer" {
     const wallclock = 100;
     var gossip = try GossipTable.init(allocator, allocator);
     defer gossip.deinit();
-    const logger = sig.trace.Logger(null).FOR_TESTS;
+    const logger = sig.trace.Logger("test").FOR_TESTS;
 
     // connectivity
     const repair_port = random.intRangeAtMost(u16, 1000, std.math.maxInt(u16));

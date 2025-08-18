@@ -4057,7 +4057,7 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
     } {
         const allocator = std.heap.c_allocator;
         var print_logger = sig.trace.DirectPrintLogger.init(allocator, .debug);
-        const logger = print_logger.logger();
+        const logger = print_logger.logger("accountsdb.benchmark");
 
         // unpack the snapshot
         var snapshot_dir = std.fs.cwd().openDir(

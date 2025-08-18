@@ -1615,7 +1615,7 @@ fn testTransactionSenderService(
 }
 
 fn mockRpcServer(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
-    const logger: sig.trace.Logger(null) = .{ .direct_print = .{ .max_level = .trace } };
+    const logger: sig.trace.Logger("mock rpc") = .{ .direct_print = .{ .max_level = .trace } };
 
     var snapshot_dir = try std.fs.cwd().makeOpenPath(cfg.accounts_db.snapshot_dir, .{
         .iterate = true,
@@ -1854,7 +1854,7 @@ fn spawnLogger(
         .write_stderr = cfg.tee_logs or cfg.log_file == null,
     }, writer);
 
-    return .{ file, .from(std_logger.logger()) };
+    return .{ file, .from(std_logger.logger("spawnLogger")) };
 }
 
 const LoadedSnapshot = struct {

@@ -5,11 +5,11 @@ const Level = trace.level.Level;
 const Logger = trace.log.Logger;
 const AtomicBool = std.atomic.Value(bool);
 
-pub fn NewEntry(comptime scope: ?[]const u8) type {
+pub fn NewEntry(comptime scope: []const u8) type {
     return Entry(struct {}, scope);
 }
 
-pub fn Entry(comptime Fields: type, comptime scope: ?[]const u8) type {
+pub fn Entry(comptime Fields: type, comptime scope: []const u8) type {
     return struct {
         logger: Logger(scope),
         level: Level,

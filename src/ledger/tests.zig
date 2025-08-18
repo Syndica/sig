@@ -57,7 +57,7 @@ test "insert shreds and transaction statuses then get blocks" {
         Logger.TEST_DEFAULT_LEVEL,
     );
 
-    const logger = test_logger.logger();
+    const logger = test_logger.logger("ledger.test");
 
     var state = try TestState.init(std.testing.allocator, @src(), .from(logger));
     const result = try insertDataForBlockTest(state);

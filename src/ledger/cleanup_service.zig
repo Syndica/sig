@@ -402,7 +402,7 @@ const TestDB = ledger.tests.TestDB;
 test cleanLedger {
     // test setup
     const allocator = std.testing.allocator;
-    const logger = sig.trace.DirectPrintLogger.init(allocator, .warn).logger();
+    const logger = sig.trace.DirectPrintLogger.init(allocator, .warn).logger("ledger.test");
     const registry = sig.prometheus.globalRegistry();
     var db = try TestDB.init(@src());
     defer db.deinit();
@@ -585,7 +585,7 @@ test "purgeSlots" {
 
 test "run exits promptly" {
     const allocator = std.testing.allocator;
-    const logger = sig.trace.DirectPrintLogger.init(allocator, .warn).logger();
+    const logger = sig.trace.DirectPrintLogger.init(allocator, .warn).logger("ledger.test");
     const registry = sig.prometheus.globalRegistry();
     var db = try TestDB.init(@src());
     defer db.deinit();

@@ -68,7 +68,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
         .max_buffer = 1 << 20,
     }, null);
     defer std_logger.deinit();
-    const logger = std_logger.logger();
+    const logger = std_logger.logger("accountsdb.fuzz");
 
     const use_disk = random.boolean();
 

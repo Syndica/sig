@@ -2383,7 +2383,7 @@ test "build messages startup and shutdown" {
         Logger.TEST_DEFAULT_LEVEL,
     );
 
-    const logger = test_logger.logger();
+    const logger = test_logger.logger("gossip.test");
 
     var gossip_service = try GossipService.create(
         allocator,
@@ -2443,7 +2443,7 @@ test "handling prune messages" {
 
     var test_logger = TestingLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
 
-    const logger = test_logger.logger();
+    const logger = test_logger.logger("gossip.test");
 
     var gossip_service = try GossipService.create(
         allocator,
@@ -2517,7 +2517,7 @@ test "handling pull responses" {
 
     var test_logger = TestingLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
 
-    const logger = test_logger.logger();
+    const logger = test_logger.logger("gossip.test");
 
     var gossip_service = try GossipService.create(
         allocator,
@@ -2678,7 +2678,7 @@ test "handle pull request" {
 
     var test_logger = TestingLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
 
-    const logger = test_logger.logger();
+    const logger = test_logger.logger("gossip.test");
     var gossip_service = try GossipService.create(
         allocator,
         allocator,
@@ -2788,7 +2788,7 @@ test "test build prune messages and handle push messages" {
 
     var test_logger = TestingLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
 
-    const logger = test_logger.logger();
+    const logger = test_logger.logger("gossip.test");
 
     var gossip_service = try GossipService.create(
         allocator,
@@ -2886,7 +2886,7 @@ fn testBuildPullRequests(
     const allocator = std.testing.allocator;
 
     const test_logger = TestingLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
-    const logger = test_logger.logger();
+    const logger = test_logger.logger("gossip.test");
 
     const gossip_service = blk: {
         const contact_info_clone = try contact_info.clone();
@@ -2950,7 +2950,7 @@ test "test build push messages" {
 
     var test_logger = TestingLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
 
-    const logger = test_logger.logger();
+    const logger = test_logger.logger("gossip.test");
 
     var gossip_service = try GossipService.create(
         allocator,
@@ -3024,7 +3024,7 @@ test "test large push messages" {
 
     var test_logger = TestingLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
 
-    const logger = test_logger.logger();
+    const logger = test_logger.logger("gossip.test");
 
     var gossip_service = try GossipService.create(
         allocator,
@@ -3197,7 +3197,7 @@ test "process contact info push packet" {
 
     var test_logger = TestingLogger.init(allocator, Logger.TEST_DEFAULT_LEVEL);
 
-    const logger = test_logger.logger();
+    const logger = test_logger.logger("gossip.test");
 
     var gossip_service = try GossipService.create(
         allocator,
@@ -3305,7 +3305,7 @@ test "init, exit, and deinit" {
 
     var test_logger = TestingLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
 
-    const logger = test_logger.logger();
+    const logger = test_logger.logger("gossip.test");
 
     const gossip_service = try GossipService.create(
         std.testing.allocator,
