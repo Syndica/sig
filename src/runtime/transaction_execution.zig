@@ -314,7 +314,7 @@ pub fn loadAndExecuteTransaction(
     allocator: std.mem.Allocator,
     transaction: *const RuntimeTransaction,
     batch_account_cache: *BatchAccountCache,
-    environment: *const TransactionExecutionEnvironment,
+    env: *const TransactionExecutionEnvironment,
     config: *const TransactionExecutionConfig,
     program_map: *const ProgramMap,
 ) error{OutOfMemory}!TransactionResult(ProcessedTransaction) {
@@ -322,17 +322,27 @@ pub fn loadAndExecuteTransaction(
     defer zone.deinit();
     errdefer zone.color(0xFF0000);
 
+    const max_tx_locks: usize = if (env.feature_set.active(
+        .increase_tx_account_lock_limit,
+        env.slot,
+    )) 128 else 64;
+
+    if (transaction.accounts.len > max_tx_locks) {
+        return .{ .err = .TooManyAccountLocks };
+    }
+
     if (hasDuplicates(transaction.accounts.items(.pubkey))) {
         return .{ .err = .AccountLoadedTwice };
     }
+
     const check_age_result = try sig.runtime.check_transactions.checkAge(
         allocator,
         transaction,
         batch_account_cache,
-        environment.blockhash_queue,
-        environment.max_age,
-        &environment.next_durable_nonce,
-        environment.next_lamports_per_signature,
+        env.blockhash_queue,
+        env.max_age,
+        &env.next_durable_nonce,
+        env.next_lamports_per_signature,
     );
     const maybe_nonce_info = switch (check_age_result) {
         .ok => |copied_account| copied_account,
@@ -344,8 +354,8 @@ pub fn loadAndExecuteTransaction(
     if (sig.runtime.check_transactions.checkStatusCache(
         &transaction.msg_hash,
         &transaction.recent_blockhash,
-        environment.ancestors,
-        environment.status_cache,
+        env.ancestors,
+        env.status_cache,
     )) |err| return .{ .err = err };
 
     // NOTE: in agave nonce validation occurs during check_transactions and validate_nonce_and_fee_payer.
@@ -356,8 +366,8 @@ pub fn loadAndExecuteTransaction(
     // TODO: Should the compute budget program require the feature set?
     const compute_budget_result = compute_budget_program.execute(
         transaction.instructions,
-        environment.feature_set,
-        environment.slot,
+        env.feature_set,
+        env.slot,
     );
     const compute_budget_limits = switch (compute_budget_result) {
         .ok => |limits| limits,
@@ -371,10 +381,10 @@ pub fn loadAndExecuteTransaction(
         batch_account_cache,
         &compute_budget_limits,
         maybe_nonce_info,
-        environment.rent_collector,
-        environment.feature_set,
-        environment.slot,
-        environment.lamports_per_signature,
+        env.rent_collector,
+        env.feature_set,
+        env.slot,
+        env.lamports_per_signature,
     );
     const fees, const rollbacks = switch (check_fee_payer_result) {
         .ok => |result| result,
@@ -385,9 +395,9 @@ pub fn loadAndExecuteTransaction(
     const loaded_accounts_result = try batch_account_cache.loadTransactionAccounts(
         allocator,
         transaction,
-        environment.rent_collector,
-        environment.feature_set,
-        environment.slot,
+        env.rent_collector,
+        env.feature_set,
+        env.slot,
         &compute_budget_limits,
     );
     const loaded_accounts = switch (loaded_accounts_result) {
@@ -406,7 +416,7 @@ pub fn loadAndExecuteTransaction(
         transaction,
         loaded_accounts.accounts.constSlice(),
         &compute_budget_limits,
-        environment,
+        env,
         config,
         program_map,
     );
