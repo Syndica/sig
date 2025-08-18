@@ -32,6 +32,8 @@ const SlotMeta = meta.SlotMeta;
 
 const newlinesToSpaces = sig.utils.fmt.newlinesToSpaces;
 
+const Logger = sig.trace.Logger("ledger.shred_inserter.working_state");
+
 /// Acts as a proxy to the database during a single call to
 /// ShredInserter.insertShreds. Contains pending items that need to be written to
 /// and read from the database.
@@ -76,7 +78,7 @@ const newlinesToSpaces = sig.utils.fmt.newlinesToSpaces;
 /// database and working sets.
 pub const PendingInsertShredsState = struct {
     allocator: Allocator,
-    logger: sig.trace.ScopedLogger(@typeName(Self)),
+    logger: sig.trace.Logger(@typeName(Self)),
     db: *LedgerDB,
     write_batch: WriteBatch,
     just_inserted_shreds: AutoHashMap(ShredId, Shred),
@@ -93,7 +95,7 @@ pub const PendingInsertShredsState = struct {
 
     pub fn init(
         allocator: Allocator,
-        logger: sig.trace.Logger,
+        logger: Logger,
         db: *LedgerDB,
         metrics: LedgerInsertionMetrics,
     ) !Self {
@@ -505,7 +507,7 @@ const ShredConflict = struct {
 };
 
 pub const ShredWorkingStore = struct {
-    logger: sig.trace.ScopedLogger(@typeName(Self)),
+    logger: sig.trace.Logger(@typeName(Self)),
     db: *LedgerDB,
     just_inserted_shreds: *const AutoHashMap(ShredId, Shred),
 

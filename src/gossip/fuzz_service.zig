@@ -34,6 +34,8 @@ const SLEEP_TIME = Duration.zero();
 // const SLEEP_TIME = Duration.fromMillis(10);
 // const SLEEP_TIME = Duration.fromSecs(10);
 
+const Logger = sig.trace.Logger("gossip.fuzz_service");
+
 pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
@@ -277,7 +279,7 @@ pub fn newGossipClient(
     port: u16,
     shred_version: u16,
     entrypoints: ?[]const SocketAddr,
-    logger: sig.trace.Logger,
+    logger: Logger,
 ) !*GossipService {
     const address = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, port);
     var keypair = KeyPair.generate();
@@ -293,7 +295,7 @@ pub fn newGossipClient(
         contact_info,
         keypair,
         entrypoints,
-        logger,
+        .from(logger),
     );
 }
 

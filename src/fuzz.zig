@@ -38,7 +38,7 @@ pub fn main() !void {
     }, null);
     defer std_logger.deinit();
 
-    const logger = std_logger.logger();
+    const logger = std_logger.logger("fuzz");
 
     var cli_args = try std.process.argsWithAllocator(allocator);
     defer cli_args.deinit();

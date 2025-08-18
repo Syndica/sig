@@ -49,9 +49,11 @@ const newlinesToSpaces = sig.utils.fmt.newlinesToSpaces;
 
 const DEFAULT_TICKS_PER_SECOND = sig.core.time.DEFAULT_TICKS_PER_SECOND;
 
+const Logger = sig.trace.Logger("shred_inserter");
+
 pub const ShredInserter = struct {
     allocator: Allocator,
-    logger: sig.trace.ScopedLogger(@typeName(Self)),
+    logger: Logger,
     db: LedgerDB,
     lock: Mutex,
     max_root: Atomic(u64), // TODO shared
@@ -61,13 +63,13 @@ pub const ShredInserter = struct {
 
     pub fn init(
         allocator: Allocator,
-        logger: sig.trace.Logger,
+        logger: Logger,
         registry: *sig.prometheus.Registry(.{}),
         db: LedgerDB,
     ) GetMetricError!Self {
         return .{
             .allocator = allocator,
-            .logger = logger.withScope(@typeName(Self)),
+            .logger = logger,
             .db = db,
             .lock = .{},
             .max_root = Atomic(u64).init(0), // TODO read this from the database
@@ -215,7 +217,7 @@ pub const ShredInserter = struct {
         var total_timer = try Timer.start();
         var state = try PendingInsertShredsState.init(
             self.allocator,
-            self.logger.unscoped(),
+            .from(self.logger),
             &self.db,
             self.metrics,
         );
@@ -1197,7 +1199,6 @@ pub const LedgerInsertionMetrics = struct {
 const test_shreds = @import("../test_shreds.zig");
 const TestState = ledger.tests.TestState;
 const DirectPrintLogger = sig.trace.DirectPrintLogger;
-const Logger = sig.trace.Logger;
 
 fn assertOk(result: anytype) void {
     std.debug.assert(if (result) |_| true else |_| false);
@@ -1213,16 +1214,16 @@ const ShredInserterTestState = struct {
         comptime test_src: std.builtin.SourceLocation,
     ) !ShredInserterTestState {
         var test_logger = DirectPrintLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
-        const logger = test_logger.logger();
-        return initWithLogger(allocator_, test_src, logger);
+        const logger = test_logger.logger("shred_inserter.test");
+        return initWithLogger(allocator_, test_src, .from(logger));
     }
 
     fn initWithLogger(
         allocator_: std.mem.Allocator,
         comptime test_src: std.builtin.SourceLocation,
-        logger: sig.trace.Logger,
+        logger: Logger,
     ) !ShredInserterTestState {
-        const state = try TestState.init(allocator_, test_src, logger);
+        const state = try TestState.init(allocator_, test_src, .from(logger));
         const inserter = try ShredInserter.init(
             state.allocator,
             logger,

@@ -9,7 +9,7 @@ const Allocator = std.mem.Allocator;
 
 const ErasureSetId = sig.ledger.shred.ErasureSetId;
 const Hash = sig.core.Hash;
-const ScopedLogger = sig.trace.ScopedLogger;
+const Logger = sig.trace.Logger;
 const Slot = sig.core.Slot;
 
 const CodeShred = ledger.shred.CodeShred;
@@ -27,7 +27,7 @@ const newlinesToSpaces = sig.utils.fmt.newlinesToSpaces;
 
 pub const MerkleRootValidator = struct {
     allocator: Allocator,
-    logger: ScopedLogger(@typeName(Self)),
+    logger: Logger(@typeName(Self)),
     shreds: ShredWorkingStore,
     duplicate_shreds: DuplicateShredsWorkingStore,
 

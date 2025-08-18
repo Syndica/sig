@@ -5,7 +5,7 @@ const tracy = @import("tracy");
 
 const Allocator = std.mem.Allocator;
 
-const Logger = sig.trace.ScopedLogger("replay.committer");
+const Logger = sig.trace.Logger("replay.committer");
 
 const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;

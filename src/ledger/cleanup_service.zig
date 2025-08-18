@@ -30,7 +30,7 @@ const DEFAULT_CLEANUP_SLOT_INTERVAL: u64 = 512;
 // a long wait incase a check occurs just before the interval has elapsed
 const LOOP_LIMITER = Duration.fromMillis(DEFAULT_CLEANUP_SLOT_INTERVAL * DEFAULT_MS_PER_SLOT / 10);
 
-pub const Logger = sig.trace.ScopedLogger("ledger.cleanup_service");
+pub const Logger = sig.trace.Logger("ledger.cleanup_service");
 
 pub fn run(
     logger: Logger,
@@ -402,14 +402,14 @@ const TestDB = ledger.tests.TestDB;
 test cleanLedger {
     // test setup
     const allocator = std.testing.allocator;
-    const logger = sig.trace.DirectPrintLogger.init(allocator, .warn).logger();
+    const logger = sig.trace.DirectPrintLogger.init(allocator, .warn).logger("ledger.test");
     const registry = sig.prometheus.globalRegistry();
     var db = try TestDB.init(@src());
     defer db.deinit();
     var lowest_cleanup_slot = sig.sync.RwMux(Slot).init(0);
     var max_root = std.atomic.Value(Slot).init(0);
     var reader = try LedgerReader
-        .init(allocator, logger, db, registry, &lowest_cleanup_slot, &max_root);
+        .init(allocator, .from(logger), db, registry, &lowest_cleanup_slot, &max_root);
 
     // insert data
     var batch = try db.initWriteBatch();
@@ -585,14 +585,14 @@ test "purgeSlots" {
 
 test "run exits promptly" {
     const allocator = std.testing.allocator;
-    const logger = sig.trace.DirectPrintLogger.init(allocator, .warn).logger();
+    const logger = sig.trace.DirectPrintLogger.init(allocator, .warn).logger("ledger.test");
     const registry = sig.prometheus.globalRegistry();
     var db = try TestDB.init(@src());
     defer db.deinit();
     var lowest_cleanup_slot = sig.sync.RwMux(Slot).init(0);
     var max_root = std.atomic.Value(Slot).init(0);
     var reader = try LedgerReader
-        .init(allocator, logger, db, registry, &lowest_cleanup_slot, &max_root);
+        .init(allocator, .from(logger), db, registry, &lowest_cleanup_slot, &max_root);
 
     var exit = std.atomic.Value(bool).init(false);
     var timer = try sig.time.Timer.start();

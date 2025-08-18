@@ -41,6 +41,8 @@ const EpochSlotsFrozenSlots = replay.edge_cases.EpochSlotsFrozenSlots;
 const PurgeRepairSlotCounters = replay.edge_cases.PurgeRepairSlotCounters;
 const UnfrozenGossipVerifiedVoteHashes = replay.edge_cases.UnfrozenGossipVerifiedVoteHashes;
 
+pub const Logger = sig.trace.Logger("replay");
+
 /// Number of threads to use in replay's thread pool
 const NUM_THREADS = 4;
 
@@ -52,7 +54,7 @@ pub const DUPLICATE_THRESHOLD: f64 = 1.0 - SWITCH_FORK_THRESHOLD - DUPLICATE_LIV
 pub const ReplayDependencies = struct {
     /// Used for all allocations within the replay stage
     allocator: Allocator,
-    logger: sig.trace.Logger,
+    logger: Logger,
     my_identity: sig.core.Pubkey,
     /// Tell replay when to exit
     exit: *std.atomic.Value(bool),
@@ -72,8 +74,6 @@ pub const ReplayDependencies = struct {
     current_epoch_constants: sig.core.EpochConstants,
     hard_forks: sig.core.HardForks,
 };
-
-pub const Logger = sig.trace.ScopedLogger("replay");
 
 pub const SlotData = struct {
     duplicate_confirmed_slots: replay.edge_cases.DuplicateConfirmedSlots,
@@ -175,7 +175,7 @@ const ReplayState = struct {
             .progress_map = progress_map,
             .execution = try ReplayExecutionState.init(
                 deps.allocator,
-                deps.logger,
+                .from(deps.logger),
                 deps.my_identity,
                 thread_pool,
                 deps.account_store,
