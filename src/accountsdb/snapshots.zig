@@ -1249,12 +1249,10 @@ pub const FullAndIncrementalManifest = struct {
 
     pub fn fromFiles(
         allocator: std.mem.Allocator,
-        unscoped_logger: Logger,
+        logger: Logger,
         snapshot_dir: std.fs.Dir,
         files: SnapshotFiles,
     ) !FullAndIncrementalManifest {
-        const logger = unscoped_logger.withScope("accounts_db.snapshot_manifest");
-
         const full_fields = blk: {
             const rel_path_bounded = sig.utils.fmt.boundedFmt(
                 "snapshots/{0}/{0}",
