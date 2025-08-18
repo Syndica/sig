@@ -11,6 +11,8 @@ const Transaction = sig.core.Transaction;
 const TransactionMessage = sig.core.transaction.Message;
 const VoteTransaction = sig.consensus.vote_transaction.VoteTransaction;
 const VoteTracker = sig.consensus.VoteTracker;
+const OptimisticConfirmationVerifier =
+    sig.consensus.optimistic_vote_verifier.OptimisticConfirmationVerifier;
 
 const SlotTracker = sig.replay.trackers.SlotTracker;
 const EpochTracker = sig.replay.trackers.EpochTracker;
@@ -773,8 +775,6 @@ const AtomicInterval = struct {
             !(skip_first and last == 0);
     }
 };
-
-const OptimisticConfirmationVerifier = sig.consensus.optimistic_vote_verifier.OptimisticConfirmationVerifier;
 
 /// TODO: move this to its proper place or something
 const BankNotification = union(enum) {
