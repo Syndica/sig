@@ -490,6 +490,7 @@ pub fn processReplayResults(
     return processed_a_slot;
 }
 
+/// Analogous to [mark_dead_slot](https://github.com/anza-xyz/agave/blob/15635be1503566820331cd2c845675641a42d405/core/src/replay_stage.rs#L2255)
 fn markDeadSlot(
     replay_state: *ReplayExecutionState,
     dead_slot: Slot,
