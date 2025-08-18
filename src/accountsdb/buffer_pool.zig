@@ -120,7 +120,7 @@ pub const BufferPool = struct {
         allocator: std.mem.Allocator,
         num_frames: u32,
     ) !BufferPool {
-        const zone = tracy.initZone(@src(), .{ .name = "accountsdb.BufferPool init" });
+        const zone = tracy.Zone.init(@src(), .{ .name = "accountsdb.BufferPool init" });
         defer zone.deinit();
 
         if (num_frames == 0 or num_frames == 1) return error.InvalidArgument;
@@ -142,6 +142,9 @@ pub const BufferPool = struct {
         self: *BufferPool,
         allocator: std.mem.Allocator,
     ) void {
+        const zone = tracy.Zone.init(@src(), .{ .name = "accountsdb.BufferPool deinit" });
+        defer zone.deinit();
+
         allocator.free(self.frames);
         self.frame_manager.deinit(allocator);
     }
@@ -358,6 +361,9 @@ pub const FrameManager = struct {
     const GetError = error{ InvalidArgument, OffsetsOutOfBounds, OutOfMemory };
 
     pub fn init(allocator: std.mem.Allocator, num_frames: u32) error{OutOfMemory}!FrameManager {
+        const zone = tracy.Zone.init(@src(), .{ .name = "accountsdb.FrameManager init" });
+        defer zone.deinit();
+
         std.debug.assert(num_frames > 0);
 
         var frame_map: Map = .{};
@@ -405,6 +411,9 @@ pub const FrameManager = struct {
     }
 
     pub fn deinit(self: *FrameManager, allocator: std.mem.Allocator) void {
+        const zone = tracy.Zone.init(@src(), .{ .name = "accountsdb.FrameManager deinit" });
+        defer zone.deinit();
+
         const eviction_lfu, var eviction_lfu_lg = self.eviction_lfu.writeWithLock();
         eviction_lfu.deinit(allocator);
         eviction_lfu_lg.unlock();

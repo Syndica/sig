@@ -1,5 +1,6 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
+const tracy = @import("tracy");
 
 const bincode = sig.bincode;
 
@@ -51,6 +52,9 @@ pub fn serializeRepairRequest(
     timestamp: u64,
     nonce: Nonce,
 ) ![]u8 {
+    const zone = tracy.Zone.init(@src(), .{ .name = "serializeRepairRequest" });
+    defer zone.deinit();
+
     const header: RepairRequestHeader = .{
         .signature = .{ .data = undefined },
         .sender = .{ .data = keypair.public_key.bytes },

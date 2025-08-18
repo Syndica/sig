@@ -190,7 +190,7 @@ pub fn downloadSnapshotsFromGossip(
     max_number_of_download_attempts: u64,
     timeout: ?sig.time.Duration,
 ) !struct { std.fs.File, ?std.fs.File } {
-    const zone = tracy.initZone(@src(), .{ .name = "accountsdb downloadSnapshotsFromGossip" });
+    const zone = tracy.Zone.init(@src(), .{ .name = "accountsdb downloadSnapshotsFromGossip" });
     defer zone.deinit();
 
     const logger = logger_.withScope(LOG_SCOPE);
@@ -485,7 +485,7 @@ pub fn getOrDownloadAndUnpackSnapshot(
         download_timeout: ?sig.time.Duration = null,
     },
 ) !struct { FullAndIncrementalManifest, SnapshotFiles } {
-    const zone = tracy.initZone(@src(), .{ .name = "accountsdb getOrDownloadAndUnpackSnapshot" });
+    const zone = tracy.Zone.init(@src(), .{ .name = "accountsdb getOrDownloadAndUnpackSnapshot" });
     defer zone.deinit();
 
     const logger = logger_.withScope(LOG_SCOPE);

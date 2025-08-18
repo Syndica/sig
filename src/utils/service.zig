@@ -146,12 +146,8 @@ pub fn spawnService(
         .{ logger, exit, name, config.run_config, function, args },
     );
 
-    const thread_name = if (name.len > std.Thread.max_name_len)
-        name[0..std.Thread.max_name_len]
-    else
-        name;
-    thread.setName(thread_name) catch |e|
-        logger.err().logf("failed to set name for thread '{s}' - {}", .{ thread_name, e });
+    thread.setName(name[0..@min(name.len, std.Thread.max_name_len)]) catch |e|
+        logger.err().logf("failed to set name for thread '{s}' - {}", .{ name, e });
 
     return thread;
 }
