@@ -971,10 +971,9 @@ pub const check_slot_agrees_with_cluster = struct {
                     // If the cluster duplicate_confirmed some version of this slot, then
                     // check if our version agrees with the cluster,
                     // AKA: `ResultingStateChange::SendAncestorHashesReplayUpdate` in agave.
-                    try ancestor_hashes_replay_update_sender.send(.{
-                        .kind = .dead_duplicate_confirmed,
-                        .slot = slot,
-                    });
+                    try ancestor_hashes_replay_update_sender.send(
+                        .{ .dead_duplicate_confirmed = slot },
+                    );
 
                     // If the cluster duplicate confirmed some version of this slot, then
                     // there's another version of our dead slot
@@ -984,7 +983,7 @@ pub const check_slot_agrees_with_cluster = struct {
                         .{ slot, duplicate_confirmed_hash },
                     );
                     // AKA: `ResultingStateChange::RepairDuplicateConfirmedVersion` in agave
-                    try duplicate_slots_to_repair.put(allocator, slot, duplicate_confirmed_hash);
+                    try duplicate_slots_to_repair.put(allocator, slot, cluster_confirmed_hash.hash);
                 },
                 // Lower priority than having seen an actual duplicate confirmed hash in the
                 // match arm above.
@@ -996,15 +995,12 @@ pub const check_slot_agrees_with_cluster = struct {
                         .{ slot, epoch_slots_frozen_hash },
                     );
                     // AKA: `ResultingStateChange::RepairDuplicateConfirmedVersion` in agave
-                    try duplicate_slots_to_repair.put(allocator, slot, epoch_slots_frozen_hash);
+                    try duplicate_slots_to_repair.put(allocator, slot, cluster_confirmed_hash.hash);
                 },
             }
         } else {
             // AKA: `ResultingStateChange::SendAncestorHashesReplayUpdate` in agave.
-            try ancestor_hashes_replay_update_sender.send(.{
-                .kind = .dead,
-                .slot = slot,
-            });
+            try ancestor_hashes_replay_update_sender.send(.{ .dead = slot });
         }
     }
 

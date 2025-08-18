@@ -16,6 +16,7 @@ const Hash = sig.core.Hash;
 const AccountStore = sig.accounts_db.AccountStore;
 const LedgerReader = sig.ledger.LedgerReader;
 
+const AncestorHashesReplayUpdate = replay.consensus.AncestorHashesReplayUpdate;
 const ForkProgress = sig.consensus.progress_map.ForkProgress;
 const ProgressMap = sig.consensus.ProgressMap;
 const HeaviestSubtreeForkChoice = sig.consensus.HeaviestSubtreeForkChoice;
@@ -63,6 +64,7 @@ pub const ReplayExecutionState = struct {
     epoch_slots_frozen_slots: *const EpochSlotsFrozenSlots,
     duplicate_slots_to_repair: *DuplicateSlotsToRepair,
     purge_repair_slot_counter: *PurgeRepairSlotCounters,
+    ancestor_hashes_replay_update_sender: *sig.sync.Channel(AncestorHashesReplayUpdate),
 
     // owned
     status_cache: sig.core.StatusCache,
@@ -86,6 +88,7 @@ pub const ReplayExecutionState = struct {
         epoch_slots_frozen_slots: *const EpochSlotsFrozenSlots,
         duplicate_slots_to_repair: *DuplicateSlotsToRepair,
         purge_repair_slot_counter: *PurgeRepairSlotCounters,
+        ancestor_hashes_replay_update_sender: *sig.sync.Channel(AncestorHashesReplayUpdate),
     ) Allocator.Error!ReplayExecutionState {
         return .{
             .allocator = allocator,
@@ -108,6 +111,7 @@ pub const ReplayExecutionState = struct {
             .duplicate_slots_to_repair = duplicate_slots_to_repair,
             .purge_repair_slot_counter = purge_repair_slot_counter,
             .status_cache = .DEFAULT,
+            .ancestor_hashes_replay_update_sender = ancestor_hashes_replay_update_sender,
         };
     }
 };
@@ -328,9 +332,9 @@ fn awaitConfirmedEntriesForSlot(
                 switch (poll_result) {
                     .err => {
                         try markDeadSlot(
+                            replay_state,
                             slot,
-                            replay_state.progress_map,
-                            replay_state.ledger_result_writer,
+                            replay_state.ancestor_hashes_replay_update_sender,
                         );
                         break :blk null;
                     },
@@ -487,17 +491,66 @@ pub fn processReplayResults(
 }
 
 fn markDeadSlot(
+    replay_state: *ReplayExecutionState,
     dead_slot: Slot,
-    progress_map: *ProgressMap,
-    ledger_result_writer: *sig.ledger.LedgerResultWriter,
+    ancestor_hashes_replay_update_sender: *sig.sync.Channel(AncestorHashesReplayUpdate),
 ) !void {
     // TODO add getForkProgress
-    var fork_progress = progress_map.map.getPtr(dead_slot) orelse {
+    var fork_progress = replay_state.progress_map.map.getPtr(dead_slot) orelse {
         return error.MissingBankProgress;
     };
     fork_progress.is_dead = true;
-    try ledger_result_writer.setDeadSlot(dead_slot);
-    // TODO Add and update slot stats blockstore.slots_stats.mark_dead(slot);
+    try replay_state.ledger_result_writer.setDeadSlot(dead_slot);
+    // TODOs
+    // - blockstore.slots_stats.mark_dead(slot);
+    // - slot_status_notifier
+    // - rpc_subscriptions
+
+    const dead_state: replay.edge_cases.DeadState = .fromState(
+        .from(replay_state.logger),
+        dead_slot,
+        replay_state.duplicate_slots_tracker,
+        replay_state.duplicate_confirmed_slots,
+        replay_state.fork_choice,
+        replay_state.epoch_slots_frozen_slots,
+    );
+    try check_slot_agrees_with_cluster.dead(
+        replay_state.allocator,
+        .from(replay_state.logger),
+        dead_slot,
+        replay_state.slot_tracker.root,
+        replay_state.duplicate_slots_to_repair,
+        ancestor_hashes_replay_update_sender,
+        dead_state,
+    );
+
+    // If blockstore previously marked this slot as duplicate, invoke duplicate state as well
+    if (!replay_state.duplicate_slots_tracker.contains(dead_slot) and
+        try replay_state.ledger_reader.getDuplicateSlot(dead_slot) != null)
+    {
+        const slot_info =
+            replay_state.slot_tracker.get(dead_slot) orelse return error.MissingSlotInTracker;
+        const slot_hash = slot_info.state.hash.readCopy();
+        const duplicate_state: DuplicateState = .fromState(
+            .from(replay_state.logger),
+            dead_slot,
+            replay_state.duplicate_confirmed_slots,
+            replay_state.fork_choice,
+            if (replay_state.progress_map.isDead(dead_slot) orelse false)
+                .dead
+            else
+                .fromHash(slot_hash),
+        );
+        try check_slot_agrees_with_cluster.duplicate(
+            replay_state.allocator,
+            .from(replay_state.logger),
+            dead_slot,
+            replay_state.slot_tracker.root,
+            replay_state.duplicate_slots_tracker,
+            replay_state.fork_choice,
+            duplicate_state,
+        );
+    }
 }
 
 const testing = std.testing;

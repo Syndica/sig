@@ -22,6 +22,7 @@ const LedgerDB = sig.ledger.LedgerDB;
 const LedgerReader = sig.ledger.LedgerReader;
 const LedgerResultWriter = sig.ledger.result_writer.LedgerResultWriter;
 
+const AncestorHashesReplayUpdate = replay.consensus.AncestorHashesReplayUpdate;
 const ProgressMap = sig.consensus.ProgressMap;
 const HeaviestSubtreeForkChoice = sig.consensus.HeaviestSubtreeForkChoice;
 
@@ -96,6 +97,7 @@ const ReplayState = struct {
     progress_map: *ProgressMap,
     ledger_db: LedgerDB,
     execution: ReplayExecutionState,
+    ancestor_hashes_replay_update_channel: sig.sync.Channel(AncestorHashesReplayUpdate),
 
     fn init(deps: ReplayDependencies) !ReplayState {
         const zone = tracy.Zone.init(@src(), .{ .name = "ReplayState init" });
@@ -162,7 +164,7 @@ const ReplayState = struct {
         };
         var latest_validator_votes_for_frozen_banks = LatestValidatorVotesForFrozenSlots.empty;
 
-        return .{
+        var state: ReplayState = .{
             .allocator = deps.allocator,
             .logger = .from(deps.logger),
             .thread_pool = thread_pool,
@@ -173,27 +175,34 @@ const ReplayState = struct {
             .account_store = deps.account_store,
             .ledger_db = deps.ledger_reader.db,
             .progress_map = progress_map,
-            .execution = try ReplayExecutionState.init(
-                deps.allocator,
-                deps.logger,
-                deps.my_identity,
-                thread_pool,
-                deps.account_store,
-                deps.ledger_reader,
-                deps.ledger_result_writer,
-                slot_tracker,
-                epoch_tracker,
-                progress_map,
-                &fork_choice,
-                &duplicate_slot_tracker,
-                &unfrozen_gossip_verified_vote_hashes,
-                &latest_validator_votes_for_frozen_banks,
-                &duplicate_confirmed_slots,
-                &epoch_slots_frozen_slots,
-                &duplicate_slots_to_repair,
-                &purge_replair_slot_counter,
-            ),
+            .execution = undefined,
+            .ancestor_hashes_replay_update_channel = try sig.sync.Channel(AncestorHashesReplayUpdate)
+                .init(deps.allocator),
         };
+
+        state.execution = try ReplayExecutionState.init(
+            deps.allocator,
+            deps.logger,
+            deps.my_identity,
+            thread_pool,
+            deps.account_store,
+            deps.ledger_reader,
+            deps.ledger_result_writer,
+            slot_tracker,
+            epoch_tracker,
+            progress_map,
+            &fork_choice,
+            &duplicate_slot_tracker,
+            &unfrozen_gossip_verified_vote_hashes,
+            &latest_validator_votes_for_frozen_banks,
+            &duplicate_confirmed_slots,
+            &epoch_slots_frozen_slots,
+            &duplicate_slots_to_repair,
+            &purge_replair_slot_counter,
+            &state.ancestor_hashes_replay_update_channel,
+        );
+
+        return state;
     }
 
     fn deinit(self: *ReplayState) void {
