@@ -417,5 +417,9 @@ test "channel logger" {
     logger.deinit();
 
     const actual = stream.getWritten();
-    try std.testing.expectEqualSlices(u8, "level=info message=\"hello world\"\n", actual[30..]);
+    try std.testing.expectEqualSlices(
+        u8,
+        "level=info scope=test message=\"hello world\"\n",
+        actual[30..],
+    );
 }
