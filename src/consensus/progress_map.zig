@@ -806,32 +806,7 @@ pub const cluster_info_vote_listener = struct {
         }
     };
 
-    pub const OptimisticVotesTracker = struct {
-        map: std.AutoArrayHashMapUnmanaged(Hash, consensus.VoteStakeTracker),
-
-        pub const EMPTY: OptimisticVotesTracker = .{ .map = .{} };
-
-        pub fn deinit(self: OptimisticVotesTracker, allocator: std.mem.Allocator) void {
-            for (self.map.values()) |vst| vst.deinit(allocator);
-            var map = self.map;
-            map.deinit(allocator);
-        }
-
-        pub fn clone(
-            self: OptimisticVotesTracker,
-            allocator: std.mem.Allocator,
-        ) std.mem.Allocator.Error!OptimisticVotesTracker {
-            var cloned_ovt = OptimisticVotesTracker.EMPTY;
-            errdefer cloned_ovt.deinit(allocator);
-
-            try cloned_ovt.map.ensureTotalCapacity(allocator, self.map.count());
-            for (self.map.keys(), self.map.values()) |k, v| {
-                cloned_ovt.map.putAssumeCapacity(k, try v.clone(allocator));
-            }
-
-            return cloned_ovt;
-        }
-    };
+    pub const OptimisticVotesTracker = sig.consensus.optimistic_vote_verifier.OptimisticVotesTracker;
 };
 
 pub const cluser_slots_service = struct {
