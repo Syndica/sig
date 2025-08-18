@@ -947,7 +947,7 @@ pub const check_slot_agrees_with_cluster = struct {
         try confirmed_non_dupe_frozen_hash.finalize(slot, ledger);
     }
 
-    fn dead(
+    pub fn dead(
         allocator: std.mem.Allocator,
         logger: replay.service.Logger,
         slot: sig.core.Slot,
