@@ -952,7 +952,7 @@ fn serializeOutput(
                     const is_loaded_account = for (sanitized.accounts.items(.pubkey)) |key| {
                         if (key.equals(&pubkey)) break true;
                     } else false;
-                    
+
                     // Also, only keep accounts that are writable.
                     if (sanitized.accounts.get(i).is_writable and is_loaded_account) {
                         acct_states.appendAssumeCapacity(acct_state);
