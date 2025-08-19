@@ -382,7 +382,7 @@ fn loadMessageNonceAccount(
     ].getSigners();
 
     // check nonce is authorised
-    for (signers.slice()) |signer| {
+    for (signers.constSlice()) |signer| {
         if (signer.equals(&nonce_data.authority)) break;
     } else return null;
 
@@ -402,8 +402,7 @@ fn verifyNonceAccount(account: AccountSharedData, recent_blockhash: *const Hash)
     const nonce = sig.bincode.readFromSlice(fba.allocator(), NonceVersions, account.data, .{}) catch
         return null;
 
-    const nonce_data = nonce.verify(recent_blockhash.*) orelse
-        return null;
+    const nonce_data = nonce.verify(recent_blockhash.*) orelse return null;
 
     return nonce_data;
 }
