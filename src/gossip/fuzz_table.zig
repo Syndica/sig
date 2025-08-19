@@ -38,7 +38,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
         allocator,
         .debug,
     );
-    const logger = std_logger.logger();
+    const logger = std_logger.logger("gossip_table.fuzz");
 
     var prng = std.Random.DefaultPrng.init(seed);
     const random = prng.random();

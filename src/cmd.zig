@@ -18,7 +18,6 @@ const GossipService = sig.gossip.GossipService;
 const IpAddr = sig.net.IpAddr;
 const LeaderSchedule = sig.core.leader_schedule.LeaderSchedule;
 const LeaderScheduleCache = sig.core.leader_schedule.LeaderScheduleCache;
-const Logger = sig.trace.Logger;
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 const SnapshotFiles = sig.accounts_db.SnapshotFiles;
@@ -33,9 +32,7 @@ const getWallclockMs = sig.time.getWallclockMs;
 const globalRegistry = sig.prometheus.globalRegistry;
 const servePrometheus = sig.prometheus.servePrometheus;
 
-/// The identifier for the scoped logger used in this file.
-const LOG_SCOPE = "cmd";
-const ScopedLogger = sig.trace.ScopedLogger(LOG_SCOPE);
+const Logger = sig.trace.Logger("cmd");
 
 // We set this so that std.log knows not to log .debug level messages
 // which libraries we import will use
@@ -964,7 +961,7 @@ fn identity(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
     defer if (maybe_file) |file| file.close();
     defer logger.deinit();
 
-    const keypair = try sig.identity.getOrInit(allocator, logger);
+    const keypair = try sig.identity.getOrInit(allocator, .from(logger));
     const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
 
     logger.info().logf("Identity: {s}\n", .{pubkey});
@@ -1051,7 +1048,7 @@ fn validator(
     };
 
     // snapshot
-    var loaded_snapshot = try loadSnapshot(allocator, cfg, app_base.logger.unscoped(), .{
+    var loaded_snapshot = try loadSnapshot(allocator, cfg, .from(app_base.logger), .{
         .gossip_service = gossip_service,
         .geyser_writer = geyser_writer,
         .validate_snapshot = !cfg.accounts_db.skip_snapshot_validation,
@@ -1074,12 +1071,12 @@ fn validator(
     // ledger
     var ledger_db = try sig.ledger.LedgerDB.open(
         allocator,
-        app_base.logger.unscoped(),
+        .from(app_base.logger),
         sig.VALIDATOR_DIR ++ "ledger",
     );
     const shred_inserter = try sig.ledger.ShredInserter.init(
         allocator,
-        app_base.logger.unscoped(),
+        .from(app_base.logger),
         app_base.metrics_registry,
         ledger_db,
     );
@@ -1097,7 +1094,7 @@ fn validator(
     defer allocator.destroy(ledger_reader);
     ledger_reader.* = try LedgerReader.init(
         allocator,
-        app_base.logger.unscoped(),
+        .from(app_base.logger),
         ledger_db,
         app_base.metrics_registry,
         lowest_cleanup_slot,
@@ -1108,7 +1105,7 @@ fn validator(
     defer allocator.destroy(ledger_result_writer);
     ledger_result_writer.* = try LedgerResultWriter.init(
         allocator,
-        app_base.logger.unscoped(),
+        .from(app_base.logger),
         ledger_db,
         app_base.metrics_registry,
         lowest_cleanup_slot,
@@ -1162,7 +1159,7 @@ fn validator(
 
     var rpc_epoch_ctx_service = sig.adapter.RpcEpochContextService.init(
         allocator,
-        app_base.logger.unscoped(),
+        .from(app_base.logger),
         &epoch_context_manager,
         rpc_client,
     );
@@ -1180,7 +1177,7 @@ fn validator(
         cfg.shred_network.toConfig(loaded_snapshot.collapsed_manifest.bank_fields.slot),
         .{
             .allocator = allocator,
-            .logger = app_base.logger.unscoped(),
+            .logger = .from(app_base.logger),
             .registry = app_base.metrics_registry,
             .random = prng.random(),
             .my_keypair = &app_base.my_keypair,
@@ -1306,7 +1303,7 @@ fn shredNetwork(
     var epoch_context_manager = try sig.adapter.EpochContextManager
         .init(allocator, genesis_config.epoch_schedule);
     var rpc_epoch_ctx_service = sig.adapter.RpcEpochContextService
-        .init(allocator, app_base.logger.unscoped(), &epoch_context_manager, rpc_client);
+        .init(allocator, .from(app_base.logger), &epoch_context_manager, rpc_client);
     const rpc_epoch_ctx_service_thread = try std.Thread.spawn(
         .{},
         sig.adapter.RpcEpochContextService.run,
@@ -1316,12 +1313,12 @@ fn shredNetwork(
     // ledger
     var ledger_db = try sig.ledger.LedgerDB.open(
         allocator,
-        app_base.logger.unscoped(),
+        .from(app_base.logger),
         sig.VALIDATOR_DIR ++ "ledger",
     );
     const shred_inserter = try sig.ledger.ShredInserter.init(
         allocator,
-        app_base.logger.unscoped(),
+        .from(app_base.logger),
         app_base.metrics_registry,
         ledger_db,
     );
@@ -1339,7 +1336,7 @@ fn shredNetwork(
     defer allocator.destroy(ledger_reader);
     ledger_reader.* = try LedgerReader.init(
         allocator,
-        app_base.logger.unscoped(),
+        .from(app_base.logger),
         ledger_db,
         app_base.metrics_registry,
         lowest_cleanup_slot,
@@ -1363,7 +1360,7 @@ fn shredNetwork(
     // shred networking
     var shred_network_manager = try sig.shred_network.start(shred_network_conf, .{
         .allocator = allocator,
-        .logger = app_base.logger.unscoped(),
+        .logger = .from(app_base.logger),
         .registry = app_base.metrics_registry,
         .random = prng.random(),
         .my_keypair = &app_base.my_keypair,
@@ -1399,7 +1396,7 @@ fn printManifest(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
 
     var snapshots = try FullAndIncrementalManifest.fromFiles(
         allocator,
-        app_base.logger.unscoped(),
+        .from(app_base.logger),
         snapshot_dir,
         snapshot_file_info,
     );
@@ -1422,7 +1419,7 @@ fn createSnapshot(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{});
     defer snapshot_dir.close();
 
-    var loaded_snapshot = try loadSnapshot(allocator, cfg, app_base.logger.unscoped(), .{
+    var loaded_snapshot = try loadSnapshot(allocator, cfg, .from(app_base.logger), .{
         .gossip_service = null,
         .geyser_writer = null,
         .validate_snapshot = false,
@@ -1485,7 +1482,7 @@ fn validateSnapshot(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
         allocator.destroy(geyser);
     };
 
-    var loaded_snapshot = try loadSnapshot(allocator, cfg, app_base.logger.unscoped(), .{
+    var loaded_snapshot = try loadSnapshot(allocator, cfg, .from(app_base.logger), .{
         .gossip_service = null,
         .geyser_writer = geyser_writer,
         .validate_snapshot = true,
@@ -1507,7 +1504,7 @@ fn printLeaderSchedule(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
     = try getLeaderScheduleFromCli(allocator, cfg) orelse b: {
         app_base.logger.info().log("Downloading a snapshot to calculate the leader schedule.");
 
-        var loaded_snapshot = loadSnapshot(allocator, cfg, app_base.logger.unscoped(), .{
+        var loaded_snapshot = loadSnapshot(allocator, cfg, .from(app_base.logger), .{
             .gossip_service = null,
             .geyser_writer = null,
             .validate_snapshot = true,
@@ -1594,7 +1591,7 @@ fn testTransactionSenderService(
     // this handles transactions and forwards them to leaders TPU ports
     var transaction_sender_service = try sig.transaction_sender.Service.init(
         allocator,
-        app_base.logger.unscoped(),
+        .from(app_base.logger),
         .{ .cluster = rpc_cluster, .socket = SocketAddr.init(app_base.my_ip, 0) },
         transaction_channel,
         &gossip_service.gossip_table_rw,
@@ -1609,7 +1606,7 @@ fn testTransactionSenderService(
 
     // rpc is used to get blockhashes and other balance information
     var rpc_client = try sig.rpc.Client.init(allocator, rpc_cluster, .{
-        .logger = app_base.logger.unscoped(),
+        .logger = .from(app_base.logger),
     });
     defer rpc_client.deinit();
 
@@ -1619,7 +1616,7 @@ fn testTransactionSenderService(
         transaction_channel,
         rpc_client,
         app_base.exit,
-        app_base.logger.unscoped(),
+        .from(app_base.logger),
     );
     // send and confirm mock transactions
     try mock_transfer_service.run(
@@ -1633,7 +1630,7 @@ fn testTransactionSenderService(
 }
 
 fn mockRpcServer(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
-    const logger: sig.trace.Logger = .{ .direct_print = .{ .max_level = .trace } };
+    const logger: sig.trace.Logger("mock rpc") = .{ .direct_print = .{ .max_level = .trace } };
 
     var snapshot_dir = try std.fs.cwd().makeOpenPath(cfg.accounts_db.snapshot_dir, .{
         .iterate = true,
@@ -1661,7 +1658,7 @@ fn mockRpcServer(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
     {
         const all_snap_fields = try FullAndIncrementalManifest.fromFiles(
             allocator,
-            logger.unscoped(),
+            .from(logger),
             snapshot_dir,
             snap_files,
         );
@@ -1681,7 +1678,7 @@ fn mockRpcServer(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
 
     var server_ctx = try sig.rpc.server.Context.init(.{
         .allocator = allocator,
-        .logger = logger,
+        .logger = .from(logger),
         .accountsdb = &accountsdb,
 
         .read_buffer_size = sig.rpc.server.MIN_READ_BUFFER_SIZE,
@@ -1705,7 +1702,7 @@ fn mockRpcServer(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
 /// and deinitialized only when the app exits.
 const AppBase = struct {
     allocator: std.mem.Allocator,
-    logger: ScopedLogger,
+    logger: Logger,
     log_file: ?std.fs.File,
     metrics_registry: *sig.prometheus.Registry(.{}),
     metrics_thread: std.Thread,
@@ -1720,9 +1717,8 @@ const AppBase = struct {
     closed: bool,
 
     fn init(allocator: std.mem.Allocator, cfg: config.Cmd) !AppBase {
-        const maybe_file, const plain_logger = try spawnLogger(allocator, cfg);
+        const maybe_file, const logger = try spawnLogger(allocator, cfg);
         errdefer if (maybe_file) |file| file.close();
-        const logger = plain_logger.withScope(LOG_SCOPE);
         errdefer logger.deinit();
 
         const exit = try allocator.create(std.atomic.Value(bool));
@@ -1731,16 +1727,16 @@ const AppBase = struct {
 
         const metrics_registry = globalRegistry();
         const metrics_thread = try sig.utils.service_manager.spawnService( //
-            plain_logger, exit, "metrics endpoint", .{}, //
+            .from(logger), exit, "metrics endpoint", .{}, //
             servePrometheus, .{ allocator, metrics_registry, cfg.metrics_port });
         errdefer metrics_thread.detach();
 
-        const my_keypair = try sig.identity.getOrInit(allocator, logger.unscoped());
+        const my_keypair = try sig.identity.getOrInit(allocator, .from(logger));
         const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
 
         const entrypoints = try cfg.gossip.getEntrypointAddrs(allocator);
 
-        const echo_data = try getShredAndIPFromEchoServer(logger.unscoped(), entrypoints);
+        const echo_data = try getShredAndIPFromEchoServer(.from(logger), entrypoints);
 
         const my_shred_version =
             cfg.shred_version orelse
@@ -1782,7 +1778,7 @@ const AppBase = struct {
         args: anytype,
     ) std.Thread.SpawnError!std.Thread {
         return try sig.utils.service_manager.spawnService(
-            self.logger,
+            .from(self.logger),
             self.exit,
             name,
             .{},
@@ -1842,7 +1838,7 @@ fn startGossip(
         contact_info,
         app_base.my_keypair, // TODO: consider security implication of passing keypair by value
         app_base.entrypoints,
-        app_base.logger.unscoped(),
+        .from(app_base.logger),
     );
 
     try service.start(.{
@@ -1873,7 +1869,7 @@ fn spawnLogger(
         .write_stderr = cfg.tee_logs or cfg.log_file == null,
     }, writer);
 
-    return .{ file, std_logger.logger() };
+    return .{ file, .from(std_logger.logger("spawnLogger")) };
 }
 
 const LoadedSnapshot = struct {
@@ -1909,13 +1905,11 @@ const LoadSnapshotOptions = struct {
 fn loadSnapshot(
     allocator: std.mem.Allocator,
     cfg: config.Cmd,
-    unscoped_logger: Logger,
+    logger: Logger,
     options: LoadSnapshotOptions,
 ) !LoadedSnapshot {
     const zone = tracy.Zone.init(@src(), .{ .name = "cmd loadSnapshot" });
     defer zone.deinit();
-
-    const logger = unscoped_logger.withScope(@typeName(@This()) ++ "." ++ @src().fn_name);
 
     var validator_dir = try std.fs.cwd().makeOpenPath(sig.VALIDATOR_DIR, .{});
     defer validator_dir.close();
@@ -1930,7 +1924,7 @@ fn loadSnapshot(
     const snapshot_files //
     = try sig.accounts_db.download.getOrDownloadAndUnpackSnapshot(
         allocator,
-        logger.unscoped(),
+        .from(logger),
         snapshot_dir_str,
         .{
             .gossip_service = options.gossip_service,
@@ -1969,7 +1963,7 @@ fn loadSnapshot(
 
     var accounts_db = try AccountsDB.init(.{
         .allocator = allocator,
-        .logger = logger.unscoped(),
+        .logger = .from(logger),
         // where we read the snapshot from
         .snapshot_dir = snapshot_dir,
         .geyser_writer = options.geyser_writer,
@@ -2097,7 +2091,7 @@ fn downloadSnapshot(
 
     const full_file, const maybe_inc_file = try downloadSnapshotsFromGossip(
         allocator,
-        app_base.logger.unscoped(),
+        .from(app_base.logger),
         if (trusted_validators) |trusted| trusted.items else null,
         gossip_service,
         snapshot_dir,

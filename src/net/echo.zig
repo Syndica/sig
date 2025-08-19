@@ -4,12 +4,13 @@ const builtin = @import("builtin");
 
 const ShredVersion = sig.core.shred.ShredVersion;
 const SocketAddr = sig.net.SocketAddr;
-const Logger = sig.trace.Logger;
 const IpAddr = sig.net.IpAddr;
 
 const MAX_PORT_COUNT_PER_MSG: usize = 4;
 const SERVER_LISTENER_LINGERING_TIMEOUT: u64 = std.time.ns_per_s * 1;
 const HEADER_LENGTH: usize = 4;
+
+const Logger = sig.trace.Logger("net.echo");
 
 /// determine our shred version and ip. in the solana-labs client, the shred version
 /// comes from the snapshot, and ip echo is only used to validate it.

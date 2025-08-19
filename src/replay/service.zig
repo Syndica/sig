@@ -37,6 +37,15 @@ const updateSysvarsForNewSlot = replay.update_sysvar.updateSysvarsForNewSlot;
 const LatestValidatorVotesForFrozenSlots =
     sig.consensus.latest_validator_votes.LatestValidatorVotes;
 
+const DuplicateSlots = replay.edge_cases.DuplicateSlots;
+const DuplicateConfirmedSlots = replay.edge_cases.DuplicateConfirmedSlots;
+const DuplicateSlotsToRepair = replay.edge_cases.DuplicateSlotsToRepair;
+const EpochSlotsFrozenSlots = replay.edge_cases.EpochSlotsFrozenSlots;
+const PurgeRepairSlotCounters = replay.edge_cases.PurgeRepairSlotCounters;
+const UnfrozenGossipVerifiedVoteHashes = replay.edge_cases.UnfrozenGossipVerifiedVoteHashes;
+
+pub const Logger = sig.trace.Logger("replay");
+
 /// Number of threads to use in replay's thread pool
 const NUM_THREADS = 4;
 
@@ -44,8 +53,6 @@ const SWITCH_FORK_THRESHOLD: f64 = 0.38;
 const MAX_ENTRIES: u64 = 1024 * 1024; // 1 million slots is about 5 days
 const DUPLICATE_LIVENESS_THRESHOLD: f64 = 0.1;
 pub const DUPLICATE_THRESHOLD: f64 = 1.0 - SWITCH_FORK_THRESHOLD - DUPLICATE_LIVENESS_THRESHOLD;
-
-pub const Logger = sig.trace.ScopedLogger("replay");
 
 pub const ReplayDependencies = struct {
     /// Used for all allocations within the replay stage

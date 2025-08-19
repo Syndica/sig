@@ -15,6 +15,8 @@ const VoteTracker = sig.consensus.VoteTracker;
 const SlotTracker = sig.replay.trackers.SlotTracker;
 const EpochTracker = sig.replay.trackers.EpochTracker;
 
+const Logger = sig.trace.Logger("vote_listener");
+
 pub const BankForksStub = struct {
     slot_tracker: SlotTracker,
     epoch_tracker: EpochTracker,
@@ -101,7 +103,7 @@ pub const VoteListener = struct {
     pub fn init(
         allocator: std.mem.Allocator,
         exit: sig.sync.ExitCondition,
-        logger: sig.trace.Logger,
+        logger: Logger,
         vote_tracker: *VoteTracker,
         params: struct {
             bank_forks_rw: *sig.sync.RwMux(BankForksStub),
@@ -363,7 +365,7 @@ const Receivers = struct {
 
 fn processVotesLoop(
     allocator: std.mem.Allocator,
-    logger: sig.trace.Logger,
+    logger: Logger,
     vote_tracker: *VoteTracker,
     bank_forks_rw: *sig.sync.RwMux(BankForksStub),
     senders: Senders,
@@ -410,7 +412,7 @@ fn processVotesLoop(
 
 fn processVotesOnce(
     allocator: std.mem.Allocator,
-    logger: sig.trace.Logger,
+    logger: Logger,
     vote_tracker: *VoteTracker,
     bank_forks_rw: *sig.sync.RwMux(BankForksStub),
     senders: Senders,
@@ -505,7 +507,7 @@ const ListenAndConfirmVotesError = error{
 
 fn listenAndConfirmVotes(
     allocator: std.mem.Allocator,
-    logger: sig.trace.Logger,
+    logger: Logger,
     vote_tracker: *VoteTracker,
     bank_forks_rw: *sig.sync.RwMux(BankForksStub),
     senders: Senders,
@@ -572,7 +574,7 @@ fn listenAndConfirmVotes(
 
 fn filterAndConfirmWithNewVotes(
     allocator: std.mem.Allocator,
-    logger: sig.trace.Logger,
+    logger: Logger,
     vote_tracker: *VoteTracker,
     bank_forks_rw: *sig.sync.RwMux(BankForksStub),
     senders: Senders,
@@ -853,7 +855,7 @@ const SlotsDiff = struct {
 
 fn trackNewVotesAndNotifyConfirmations(
     allocator: std.mem.Allocator,
-    logger: sig.trace.Logger,
+    logger: Logger,
     vote_tracker: *VoteTracker,
     bank_forks_rw: *sig.sync.RwMux(BankForksStub),
     senders: Senders,
