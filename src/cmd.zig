@@ -1193,6 +1193,12 @@ fn validator(
     );
     defer shred_network_manager.deinit();
 
+    const replay_senders: sig.replay.service.Senders = try .create(allocator);
+    defer replay_senders.destroy();
+
+    const replay_receivers: sig.replay.service.Receivers = try .create(allocator);
+    defer replay_receivers.destroy();
+
     const replay_thread = replay: {
         const epoch_stakes_map = &collapsed_manifest.bank_extra.versioned_epoch_stakes;
         const epoch_stakes = epoch_stakes_map.get(epoch) orelse
@@ -1219,16 +1225,25 @@ fn validator(
             .{sig.replay.service.ReplayDependencies{
                 .allocator = allocator,
                 .logger = .from(app_base.logger),
-                .my_identity = .{ .data = app_base.my_keypair.public_key.bytes },
+                .my_identity = .fromPublicKey(&app_base.my_keypair.public_key),
+                .vote_identity = .fromPublicKey(&app_base.my_keypair.public_key), // TODO: is this fine, or do we need a separate identity for the vote account?
                 .exit = app_base.exit,
-                .ledger_reader = ledger_reader,
-                .ledger_result_writer = ledger_result_writer,
                 .account_store = loaded_snapshot.accounts_db.accountStore(),
+                .ledger = .{
+                    .db = ledger_db,
+                    .reader = ledger_reader,
+                    .writer = ledger_result_writer,
+                },
                 .epoch_schedule = bank_fields.epoch_schedule,
                 .slot_leaders = epoch_context_manager.slotLeaders(),
-                .root_slot = bank_fields.slot,
-                .root_slot_constants = root_slot_constants,
-                .root_slot_state = root_slot_state,
+                .root = .{
+                    .slot = bank_fields.slot,
+                    .constants = root_slot_constants,
+                    .state = root_slot_state,
+                },
+
+                .senders = replay_senders,
+                .receivers = replay_receivers,
                 .current_epoch = epoch,
                 .current_epoch_constants = try .fromBankFields(
                     bank_fields,

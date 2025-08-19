@@ -447,7 +447,7 @@ test checkStatusCache {
     var ancestors = Ancestors{};
     defer ancestors.deinit(allocator);
 
-    var status_cache = sig.core.StatusCache.DEFAULT;
+    var status_cache: sig.core.StatusCache = .DEFAULT;
     defer status_cache.deinit(allocator);
 
     const msg_hash = Hash.generateSha256("msg hash");

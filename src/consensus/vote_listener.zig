@@ -1455,7 +1455,7 @@ test "vote_parser.parseVoteTransaction" {
 
 test verifyVoteTransaction {
     const allocator = std.testing.allocator;
-    var epoch_tracker: EpochTracker = .{ .schedule = .DEFAULT };
+    const epoch_tracker: EpochTracker = .{ .schedule = .DEFAULT };
     defer epoch_tracker.deinit(allocator);
 
     try std.testing.expectEqual(

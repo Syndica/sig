@@ -10,6 +10,10 @@ pub const SlotAndHash = struct {
     slot: Slot,
     hash: Hash,
 
+    pub fn tuple(self: SlotAndHash) struct { Slot, Hash } {
+        return .{ self.slot, self.hash };
+    }
+
     pub fn order(a: SlotAndHash, b: SlotAndHash) std.math.Order {
         if (a.slot == b.slot and a.hash.order(&b.hash) == .eq) {
             return .eq;
