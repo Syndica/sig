@@ -529,3 +529,93 @@ test "TransactionScheduler: signature verification failure" {
         try replay.confirm_slot.testAwait(&scheduler),
     );
 }
+
+test "TransactionScheduler: sends replay vote after success" {
+    const allocator = std.testing.allocator;
+    const resolveBatch = replay.resolve_lookup.resolveBatch;
+    const vote_program = sig.runtime.program.vote;
+    const vote_instruction = vote_program.vote_instruction;
+    const InstrVote = vote_instruction.Vote;
+
+    var rng = std.Random.DefaultPrng.init(7);
+
+    var state = try replay.confirm_slot.TestState.init(allocator);
+    defer state.deinit(allocator);
+
+    var thread_pool = ThreadPool.init(.{});
+    defer {
+        thread_pool.shutdown();
+        thread_pool.deinit();
+    }
+
+    // Build a simple vote transaction (first instruction is vote program)
+    const node_kp = try sig.identity.KeyPair.generateDeterministic(@splat(1));
+    const auth_kp = try sig.identity.KeyPair.generateDeterministic(@splat(2));
+    const vote_pubkey = sig.core.Pubkey.initRandom(rng.random());
+    const vote_state_inner = vote_program.state.Vote{
+        .slots = &.{42},
+        .hash = sig.core.Hash.ZEROES,
+        .timestamp = null,
+    };
+    const vote_state = InstrVote{ .vote = vote_state_inner };
+    var vote_ix = try vote_instruction.createVote(
+        allocator,
+        vote_pubkey,
+        sig.core.Pubkey.fromPublicKey(&auth_kp.public_key),
+        vote_state,
+    );
+    defer vote_ix.deinit(allocator);
+
+    const tx_msg: sig.core.transaction.Message = try .initCompile(
+        allocator,
+        &.{vote_ix},
+        sig.core.Pubkey.fromPublicKey(&node_kp.public_key),
+        sig.core.Hash.ZEROES,
+        null,
+    );
+
+    const vote_tx = try Transaction.initOwnedMessageWithSigningKeypairs(
+        allocator,
+        .legacy,
+        tx_msg,
+        &.{ node_kp, auth_kp },
+    );
+    defer vote_tx.deinit(allocator);
+
+    // Make transaction passable (valid recent blockhash and fees)
+    var txs = [_]Transaction{vote_tx};
+    try state.makeTransactionsPassable(allocator, &txs);
+
+    // Resolve batch
+    const batch = try resolveBatch(allocator, .noop, &txs, &.empty);
+
+    // Channel to receive parsed votes
+    const votes_ch = try sig.sync.Channel(ParsedVote).create(allocator);
+    defer {
+        while (votes_ch.tryReceive()) |pv| pv.deinit(allocator);
+        votes_ch.destroy();
+    }
+
+    var scheduler = try TransactionScheduler
+        .initCapacity(
+        allocator,
+        .FOR_TESTS,
+        state.committer(),
+        4,
+        &thread_pool,
+        state.svmParams(),
+        &state.exit,
+        votes_ch,
+    );
+    defer scheduler.deinit();
+
+    scheduler.addBatchAssumeCapacity(batch);
+
+    // Await completion
+    try std.testing.expectEqual(.done, try replay.confirm_slot.testAwait(&scheduler));
+
+    // Ensure a parsed vote was sent
+    const maybe_vote = votes_ch.tryReceive();
+    try std.testing.expect(maybe_vote != null);
+    if (maybe_vote) |pv| pv.deinit(allocator);
+}
