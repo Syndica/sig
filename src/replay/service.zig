@@ -37,13 +37,6 @@ const updateSysvarsForNewSlot = replay.update_sysvar.updateSysvarsForNewSlot;
 const LatestValidatorVotesForFrozenSlots =
     sig.consensus.latest_validator_votes.LatestValidatorVotes;
 
-const DuplicateSlots = replay.edge_cases.DuplicateSlots;
-const DuplicateConfirmedSlots = replay.edge_cases.DuplicateConfirmedSlots;
-const DuplicateSlotsToRepair = replay.edge_cases.DuplicateSlotsToRepair;
-const EpochSlotsFrozenSlots = replay.edge_cases.EpochSlotsFrozenSlots;
-const PurgeRepairSlotCounters = replay.edge_cases.PurgeRepairSlotCounters;
-const UnfrozenGossipVerifiedVoteHashes = replay.edge_cases.UnfrozenGossipVerifiedVoteHashes;
-
 pub const Logger = sig.trace.Logger("replay");
 
 /// Number of threads to use in replay's thread pool
@@ -356,7 +349,7 @@ fn initProgressAndForkChoiceWithLockedSlotForks(
     // Analogous to [`new_from_frozen_banks`](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/consensus/heaviest_subtree_fork_choice.rs#L235)
     var heaviest_subtree_fork_choice = fork_choice: {
         var heaviest_subtree_fork_choice: HeaviestSubtreeForkChoice =
-            try .init(allocator, logger.unscoped(), .{
+            try .init(allocator, .from(logger), .{
                 .slot = root_slot,
                 .hash = root_hash,
             });
