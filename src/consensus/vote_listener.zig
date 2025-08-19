@@ -1067,7 +1067,13 @@ fn trackOptimisticConfirmationVote(
     return .{ reached_thresholds, result == .is_new };
 }
 
-const vote_parser = struct {
+fn sumStake(sum: *u64, epoch_stakes: ?*const sig.core.EpochStakes, pubkey: Pubkey) void {
+    if (epoch_stakes) |stakes| {
+        sum.* += stakes.stakes.vote_accounts.getDelegatedStake(pubkey);
+    }
+}
+
+pub const vote_parser = struct {
     //! Based on https://github.com/anza-xyz/agave/blob/182823ee353ee64fde230dbad96d8e24b6cd065a/vote/src/vote_parser.rs
     //! TODO: this is probably/definitely the wrong place for this code to be,
     //! but it's the only place it's needed right now, we can figure out a proper

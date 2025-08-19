@@ -2,6 +2,7 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 const replay = @import("lib.zig");
 const tracy = @import("tracy");
+const vote_listener = @import("../consensus/vote_listener.zig");
 
 const Allocator = std.mem.Allocator;
 const Atomic = std.atomic.Value;
@@ -11,6 +12,7 @@ const HomogeneousThreadPool = sig.utils.thread.HomogeneousThreadPool;
 const ThreadPool = sig.sync.ThreadPool;
 
 const Hash = sig.core.Hash;
+const Transaction = sig.core.Transaction;
 
 const TransactionError = sig.ledger.transaction_status.TransactionError;
 
@@ -26,6 +28,8 @@ const ProcessedTransaction = sig.runtime.transaction_execution.ProcessedTransact
 const executeTransaction = replay.svm_gateway.executeTransaction;
 
 const ScopedLogger = sig.trace.ScopedLogger("replay-batcher");
+
+const ParsedVote = vote_listener.vote_parser.ParsedVote;
 
 const assert = std.debug.assert;
 
@@ -65,6 +69,14 @@ pub fn processBatch(
     try committer.commitTransactions(allocator, svm_gateway.params.slot, transactions, results);
 
     return .success;
+}
+
+fn isSimpleVoteTransaction(tx: Transaction) bool {
+    const msg = tx.msg;
+    if (msg.instructions.len == 0) return false;
+    const ix = msg.instructions[0];
+    if (ix.program_index >= msg.account_keys.len) return false;
+    return sig.runtime.program.vote.ID.equals(&msg.account_keys[ix.program_index]);
 }
 
 const BatchResult = union(enum) {
@@ -107,6 +119,7 @@ pub const TransactionScheduler = struct {
     /// if non-null, a failure was already recorded and will be returned for every poll
     failure: ?replay.confirm_slot.ConfirmSlotError,
     svm_params: SvmGateway.Params,
+    replay_votes_sender: ?*Channel(ParsedVote),
 
     const BatchMessage = struct {
         batch_index: usize,
@@ -121,6 +134,7 @@ pub const TransactionScheduler = struct {
         thread_pool: *ThreadPool,
         svm_params: SvmGateway.Params,
         exit: *Atomic(bool),
+        replay_votes_sender: ?*Channel(ParsedVote),
     ) !TransactionScheduler {
         var batches = try std.ArrayListUnmanaged(ResolvedBatch)
             .initCapacity(allocator, batch_capacity);
@@ -146,6 +160,7 @@ pub const TransactionScheduler = struct {
             .exit = exit,
             .failure = null,
             .svm_params = svm_params,
+            .replay_votes_sender = replay_votes_sender,
         };
     }
 
@@ -236,6 +251,7 @@ pub const TransactionScheduler = struct {
                 .transactions = batch.transactions,
                 .results = &self.results,
                 .exit = self.exit,
+                .replay_votes_sender = self.replay_votes_sender,
             }));
             self.batches_started += 1;
         }
@@ -252,6 +268,7 @@ const ProcessBatchTask = struct {
     transactions: []const ResolvedTransaction,
     results: *Channel(TransactionScheduler.BatchMessage),
     exit: *Atomic(bool),
+    replay_votes_sender: ?*Channel(ParsedVote),
 
     pub fn run(self: *ProcessBatchTask) !void {
         const result = try processBatch(
@@ -261,6 +278,26 @@ const ProcessBatchTask = struct {
             self.transactions,
             self.exit,
         );
+
+        // On success, find and send vote transactions immediately
+        if (result == .success) {
+            if (self.replay_votes_sender) |votes_ch| {
+                for (self.transactions) |resolved| {
+                    const tx = resolved.transaction;
+                    if (!isSimpleVoteTransaction(tx)) continue;
+                    if (vote_listener.vote_parser.parseVoteTransaction(
+                        self.allocator,
+                        tx,
+                    ) catch null) |parsed| {
+                        if (parsed.vote.lastVotedSlot() != null) {
+                            votes_ch.send(parsed) catch parsed.deinit(self.allocator);
+                        } else {
+                            parsed.deinit(self.allocator);
+                        }
+                    } else continue;
+                }
+            }
+        }
 
         if (result == .failure) {
             self.logger.err().logf("batch failed due to transaction error: {}", .{result.failure});
@@ -272,7 +309,6 @@ const ProcessBatchTask = struct {
 
 test "TransactionScheduler: happy path" {
     const allocator = std.testing.allocator;
-    const Transaction = sig.core.Transaction;
     const resolveBatch = replay.resolve_lookup.resolveBatch;
 
     var rng = std.Random.DefaultPrng.init(123);
@@ -307,6 +343,7 @@ test "TransactionScheduler: happy path" {
         &thread_pool,
         state.svmParams(),
         &state.exit,
+        null,
     );
     defer scheduler.deinit();
 
@@ -326,7 +363,6 @@ test "TransactionScheduler: happy path" {
 
 test "TransactionScheduler: duplicate batch passes through to svm" {
     const allocator = std.testing.allocator;
-    const Transaction = sig.core.Transaction;
     const resolveBatch = replay.resolve_lookup.resolveBatch;
 
     var rng = std.Random.DefaultPrng.init(123);
@@ -361,6 +397,7 @@ test "TransactionScheduler: duplicate batch passes through to svm" {
         &thread_pool,
         state.svmParams(),
         &state.exit,
+        null,
     );
     defer scheduler.deinit();
 
@@ -386,7 +423,6 @@ test "TransactionScheduler: duplicate batch passes through to svm" {
 
 test "TransactionScheduler: failed account locks" {
     const allocator = std.testing.allocator;
-    const Transaction = sig.core.Transaction;
     const resolveBatch = replay.resolve_lookup.resolveBatch;
 
     var rng = std.Random.DefaultPrng.init(0);
@@ -415,6 +451,7 @@ test "TransactionScheduler: failed account locks" {
         &thread_pool,
         state.svmParams(),
         &state.exit,
+        null,
     );
     defer scheduler.deinit();
 
@@ -433,7 +470,6 @@ test "TransactionScheduler: failed account locks" {
 
 test "TransactionScheduler: signature verification failure" {
     const allocator = std.testing.allocator;
-    const Transaction = sig.core.Transaction;
     const resolveBatch = replay.resolve_lookup.resolveBatch;
 
     var rng = std.Random.DefaultPrng.init(0);
@@ -468,6 +504,7 @@ test "TransactionScheduler: signature verification failure" {
         &thread_pool,
         state.svmParams(),
         &state.exit,
+        null,
     );
     defer scheduler.deinit();
 

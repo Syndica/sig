@@ -200,6 +200,7 @@ pub const ConfirmSlotFuture = struct {
             thread_pool,
             svm_params,
             &future.exit,
+            null,
         );
 
         return future;
