@@ -133,10 +133,13 @@ pub fn execute(
     switch (result) {
         // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1642-L1645
         .ok => |status| if (status != 0) {
-            const execution_error = sig.vm.executionErrorFromStatusCode(status);
+            var execution_error = sig.vm.executionErrorFromStatusCode(status);
             switch (execution_error) {
                 error.Custom => ic.tc.custom_error = @intCast(status),
-                error.GenericError => ic.tc.custom_error = 0,
+                error.GenericError => {
+                    ic.tc.custom_error = 0;
+                    execution_error = error.Custom;
+                },
                 else => {},
             }
             maybe_execute_error = execution_error;
