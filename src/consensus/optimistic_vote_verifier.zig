@@ -33,6 +33,7 @@ pub const OptimisticVotesTracker = struct {
     }
 };
 
+/// Analogous to [OptimisticConfirmationVerifier](https://github.com/anza-xyz/agave/blob/9d8bf065f7aad8257addfc5639ae5cea4e743204/core/src/optimistic_confirmation_verifier.rs#L11)
 pub const OptimisticConfirmationVerifier = struct {
     snapshot_start_slot: Slot,
     unchecked_slots: sig.utils.collections.SortedSetUnmanaged(sig.core.hash.SlotAndHash),
