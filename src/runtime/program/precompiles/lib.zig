@@ -86,8 +86,10 @@ pub fn verifyPrecompiles(
         for (PRECOMPILES) |precompile| {
             if (!precompile.program_id.equals(&program_id)) continue;
 
-            const precompile_feature_enabled = precompile.required_feature == null or
-                feature_set.active(precompile.required_feature.?, slot);
+            const precompile_feature_enabled = if (precompile.required_feature) |feature|
+                feature_set.active(feature, slot)
+            else
+                true;
             if (!precompile_feature_enabled) continue;
 
             const datas = instruction_datas orelse blk: {
