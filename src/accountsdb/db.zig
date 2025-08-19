@@ -48,7 +48,6 @@ const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 
 const NestedHashTree = sig.utils.merkle_tree.NestedHashTree;
-const Logger = sig.trace.log.Logger;
 const GeyserWriter = sig.geyser.GeyserWriter;
 
 const Counter = sig.prometheus.counter.Counter;
@@ -67,8 +66,7 @@ const spawnThreadTasks = sig.utils.thread.spawnThreadTasks;
 const printTimeEstimate = sig.time.estimate.printTimeEstimate;
 const globalRegistry = sig.prometheus.registry.globalRegistry;
 
-const LOG_SCOPE = "accounts_db";
-const ScopedLogger = sig.trace.log.ScopedLogger(LOG_SCOPE);
+const Logger = sig.trace.log.Logger("accounts_db");
 
 pub const DB_LOG_RATE = sig.time.Duration.fromSecs(5);
 
@@ -84,7 +82,7 @@ pub const AccountsDB = struct {
     // injected dependencies
     allocator: std.mem.Allocator,
     metrics: AccountsDBMetrics,
-    logger: ScopedLogger,
+    logger: Logger,
 
     /// Not closed by the `AccountsDB`, but must live at least as long as it.
     snapshot_dir: std.fs.Dir,
@@ -195,7 +193,7 @@ pub const AccountsDB = struct {
 
         var account_index = try AccountIndex.init(
             params.allocator,
-            params.logger,
+            .from(params.logger),
             index_config,
             params.number_of_index_shards,
         );
@@ -218,7 +216,7 @@ pub const AccountsDB = struct {
         return .{
             .allocator = params.allocator,
             .metrics = metrics,
-            .logger = params.logger.withScope(LOG_SCOPE),
+            .logger = params.logger,
             .snapshot_dir = params.snapshot_dir,
             .geyser_writer = params.geyser_writer,
             .gossip_view = params.gossip_view,
@@ -1072,7 +1070,7 @@ pub const AccountsDB = struct {
     /// combines multiple thread indexes into the given index.
     /// each bin is also sorted by pubkey.
     pub fn mergeThreadIndexesMultiThread(
-        logger: ScopedLogger,
+        logger: Logger,
         index: *AccountIndex,
         thread_dbs: []const AccountsDB,
         task: sig.utils.thread.TaskParams,
@@ -3434,8 +3432,8 @@ pub fn loadTestAccountsDB(
 
     const snapshot_files = try findAndUnpackTestSnapshots(n_threads, snapshot_dir);
 
-    const full_inc_manifest =
-        try FullAndIncrementalManifest.fromFiles(allocator, logger, snapshot_dir, snapshot_files);
+    const full_inc_manifest = try FullAndIncrementalManifest
+        .fromFiles(allocator, .from(logger), snapshot_dir, snapshot_files);
     errdefer full_inc_manifest.deinit(allocator);
 
     const manifest = try full_inc_manifest.collapse(allocator);
@@ -3473,8 +3471,8 @@ test "geyser stream on load" {
 
     const snapshot_files = try findAndUnpackTestSnapshots(2, snapshot_dir);
 
-    const full_inc_manifest =
-        try FullAndIncrementalManifest.fromFiles(allocator, logger, snapshot_dir, snapshot_files);
+    const full_inc_manifest = try FullAndIncrementalManifest
+        .fromFiles(allocator, .from(logger), snapshot_dir, snapshot_files);
     defer full_inc_manifest.deinit(allocator);
 
     var geyser_exit = std.atomic.Value(bool).init(false);
@@ -4059,7 +4057,7 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
     } {
         const allocator = std.heap.c_allocator;
         var print_logger = sig.trace.DirectPrintLogger.init(allocator, .debug);
-        const logger = print_logger.logger();
+        const logger = print_logger.logger("accountsdb.benchmark");
 
         // unpack the snapshot
         var snapshot_dir = std.fs.cwd().openDir(
@@ -4084,7 +4082,7 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
         const snapshot_files = try SnapshotFiles.find(allocator, snapshot_dir);
         const full_inc_manifest = try FullAndIncrementalManifest.fromFiles(
             allocator,
-            logger,
+            .from(logger),
             snapshot_dir,
             snapshot_files,
         );
@@ -4097,7 +4095,7 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
         = duration_blk: {
             var accounts_db = try AccountsDB.init(.{
                 .allocator = allocator,
-                .logger = logger,
+                .logger = .from(logger),
                 .snapshot_dir = snapshot_dir,
                 .geyser_writer = null,
                 .gossip_view = null,
@@ -4147,7 +4145,7 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
         const fastload_duration = blk: {
             var fastload_accounts_db = try AccountsDB.init(.{
                 .allocator = allocator,
-                .logger = logger,
+                .logger = .from(logger),
                 .snapshot_dir = snapshot_dir,
                 .geyser_writer = null,
                 .gossip_view = null,

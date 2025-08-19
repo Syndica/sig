@@ -2,16 +2,16 @@ const std = @import("std");
 const trace = @import("lib.zig");
 
 const Level = trace.level.Level;
-const ScopedLogger = trace.log.ScopedLogger;
+const Logger = trace.log.Logger;
 const AtomicBool = std.atomic.Value(bool);
 
-pub fn NewEntry(comptime scope: ?[]const u8) type {
+pub fn NewEntry(comptime scope: []const u8) type {
     return Entry(struct {}, scope);
 }
 
-pub fn Entry(comptime Fields: type, comptime scope: ?[]const u8) type {
+pub fn Entry(comptime Fields: type, comptime scope: []const u8) type {
     return struct {
-        logger: ScopedLogger(scope),
+        logger: Logger(scope),
         level: Level,
         fields: Fields,
         const Self = @This();

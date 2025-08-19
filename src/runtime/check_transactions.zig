@@ -300,11 +300,12 @@ fn validateFeePayer(
         payer.account.data.len,
     );
 
-    sig.core.rent_collector.RentCollector.checkRentStateWithAccount(
+    if (RentCollector.checkRentStateWithAccount(
         pre_rent_state,
         post_rent_state,
         &payer.pubkey,
-    ) catch return .{ .InsufficientFundsForRent = .{ .account_index = 0 } };
+        0, // Fee payer is always at index 0
+    )) |err| return err;
 
     return null;
 }
@@ -447,7 +448,7 @@ test checkStatusCache {
     var ancestors = Ancestors{};
     defer ancestors.deinit(allocator);
 
-    var status_cache = sig.core.StatusCache.DEFAULT;
+    var status_cache: sig.core.StatusCache = .DEFAULT;
     defer status_cache.deinit(allocator);
 
     const msg_hash = Hash.generateSha256("msg hash");
