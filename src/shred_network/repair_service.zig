@@ -20,8 +20,6 @@ const Gauge = sig.prometheus.Gauge;
 const GossipTable = sig.gossip.GossipTable;
 const Histogram = sig.prometheus.Histogram;
 const HomogeneousThreadPool = sig.utils.thread.HomogeneousThreadPool;
-const Logger = sig.trace.Logger;
-const ScopedLogger = sig.trace.ScopedLogger;
 const LruCacheCustom = sig.utils.lru.LruCacheCustom;
 const Nonce = sig.core.Nonce;
 const Packet = sig.net.Packet;
@@ -39,6 +37,8 @@ const MultiSlotReport = shred_network.shred_tracker.MultiSlotReport;
 const RepairRequest = shred_network.repair_message.RepairRequest;
 const RepairMessage = shred_network.repair_message.RepairMessage;
 
+const Logger = sig.trace.Logger("repair_service");
+
 const serializeRepairRequest = shred_network.repair_message.serializeRepairRequest;
 
 const MAX_DATA_SHREDS_PER_SLOT = sig.ledger.shred.DataShred.constants.max_per_slot;
@@ -53,7 +53,7 @@ pub const RepairService = struct {
     requester: RepairRequester,
     peer_provider: RepairPeerProvider,
     shred_tracker: *BasicShredTracker,
-    logger: ScopedLogger(@typeName(Self)),
+    logger: Logger,
     exit: *Atomic(bool),
     /// memory to re-use across iterations. initialized to empty
     report: MultiSlotReport,
@@ -112,7 +112,7 @@ pub const RepairService = struct {
             .requester = requester,
             .peer_provider = peer_provider,
             .shred_tracker = shred_tracker,
-            .logger = logger.withScope(@typeName(Self)),
+            .logger = .from(logger),
             .exit = exit,
             .report = MultiSlotReport.init(allocator),
             .thread_pool = try RequestBatchThreadPool.init(allocator, n_threads, n_threads),
@@ -335,7 +335,7 @@ const MIN_REPAIR_DELAY = Duration.fromMillis(100);
 /// Signs and serializes repair requests. Sends them over the network.
 pub const RepairRequester = struct {
     allocator: Allocator,
-    logger: ScopedLogger(@typeName(Self)),
+    logger: Logger,
     random: Random,
     keypair: *const KeyPair,
     sender_thread: *SocketThread,
@@ -365,7 +365,7 @@ pub const RepairRequester = struct {
 
         const thread = try SocketThread.spawnSender(
             allocator,
-            logger,
+            .from(logger),
             udp_send_socket,
             channel,
             .{ .unordered = exit },
@@ -373,7 +373,7 @@ pub const RepairRequester = struct {
 
         return .{
             .allocator = allocator,
-            .logger = logger.withScope(@typeName(Self)),
+            .logger = .from(logger),
             .random = random,
             .keypair = keypair,
             .sender_thread = thread,
@@ -602,7 +602,6 @@ test "RepairService sends repair request to gossip peer" {
     defer registry.deinit();
     var prng = std.Random.DefaultPrng.init(4328095);
     const random = prng.random();
-    const TestLogger = sig.trace.DirectPrintLogger;
 
     // my details
     const keypair = KeyPair.generate();
@@ -610,9 +609,7 @@ test "RepairService sends repair request to gossip peer" {
     const wallclock = 100;
     var gossip = try GossipTable.init(allocator, allocator);
     defer gossip.deinit();
-    var test_logger = TestLogger.init(allocator, Logger.TEST_DEFAULT_LEVEL);
-
-    const logger = test_logger.logger();
+    const logger = sig.trace.Logger("test").FOR_TESTS;
 
     // connectivity
     const repair_port = random.intRangeAtMost(u16, 1000, std.math.maxInt(u16));
@@ -659,11 +656,11 @@ test "RepairService sends repair request to gossip peer" {
 
     var service = try RepairService.init(
         allocator,
-        logger,
+        .from(logger),
         &exit,
         &registry,
         try RepairRequester
-            .init(allocator, logger, random, &registry, &keypair, repair_socket, &exit),
+            .init(allocator, .from(logger), random, &registry, &keypair, repair_socket, &exit),
         peers,
         &tracker,
     );

@@ -17,6 +17,8 @@ const OptimisticConfirmationVerifier =
 const SlotTracker = sig.replay.trackers.SlotTracker;
 const EpochTracker = sig.replay.trackers.EpochTracker;
 
+const Logger = sig.trace.Logger("vote_listener");
+
 pub const BankForksStub = struct {
     slot_tracker: SlotTracker,
     epoch_tracker: EpochTracker,
@@ -118,7 +120,7 @@ pub const VoteListener = struct {
     pub fn init(
         allocator: std.mem.Allocator,
         exit: sig.sync.ExitCondition,
-        logger: sig.trace.Logger,
+        logger: Logger,
         vote_tracker: *VoteTracker,
         params: struct {
             bank_forks_rw: *sig.sync.RwMux(BankForksStub),
@@ -377,7 +379,7 @@ const Receivers = struct {
 
 fn processVotesLoop(
     allocator: std.mem.Allocator,
-    logger: sig.trace.Logger,
+    logger: Logger,
     vote_tracker: *VoteTracker,
     bank_forks_rw: *sig.sync.RwMux(BankForksStub),
     senders: Senders,
@@ -430,7 +432,7 @@ const LedgerRef = struct {
 
 fn processVotesOnce(
     allocator: std.mem.Allocator,
-    logger: sig.trace.Logger,
+    logger: Logger,
     vote_tracker: *VoteTracker,
     bank_forks_rw: *sig.sync.RwMux(BankForksStub),
     senders: Senders,
@@ -506,7 +508,7 @@ const ListenAndConfirmVotesError = error{
 
 fn listenAndConfirmVotes(
     allocator: std.mem.Allocator,
-    logger: sig.trace.Logger,
+    logger: Logger,
     vote_tracker: *VoteTracker,
     bank_forks: *const BankForksStub,
     senders: Senders,
@@ -571,7 +573,7 @@ fn listenAndConfirmVotes(
 
 fn filterAndConfirmWithNewVotes(
     allocator: std.mem.Allocator,
-    logger: sig.trace.Logger,
+    logger: Logger,
     vote_tracker: *VoteTracker,
     bank_forks: *const BankForksStub,
     senders: Senders,
@@ -849,7 +851,7 @@ const SlotsDiff = struct {
 
 fn trackNewVotesAndNotifyConfirmations(
     allocator: std.mem.Allocator,
-    logger: sig.trace.Logger,
+    logger: Logger,
     vote_tracker: *VoteTracker,
     bank_forks: *const BankForksStub,
     senders: Senders,
@@ -1438,39 +1440,8 @@ test "vote_parser.parseVoteTransaction" {
 
 test verifyVoteTransaction {
     const allocator = std.testing.allocator;
-
-    const bank_forks: BankForksStub = bf: {
-        var stakes: sig.core.EpochStakes = try .initEmptyWithGenesisStakeHistoryEntry(allocator);
-        defer stakes.deinit(allocator);
-
-        break :bf try .init(allocator, .DEFAULT, .{
-            .slot = 0,
-            .constants = .{
-                .parent_slot = 0,
-                .parent_hash = .ZEROES,
-                .parent_lt_hash = null,
-                .block_height = 1,
-                .collector_id = .ZEROES,
-                .max_tick_height = 1,
-                .fee_rate_governor = .DEFAULT,
-                .epoch_reward_status = .inactive,
-                .ancestors = .{},
-                .feature_set = .ALL_DISABLED,
-                .reserved_accounts = .empty,
-            },
-            .state = try .genesis(allocator),
-            .epoch_constants = .{
-                .hashes_per_tick = 1,
-                .ticks_per_slot = 1,
-                .ns_per_slot = 1,
-                .genesis_creation_time = 1,
-                .slots_per_year = 1,
-                .stakes = stakes,
-                .rent_collector = .testDefault(0),
-            },
-        });
-    };
-    defer bank_forks.deinit(allocator);
+    const epoch_tracker: EpochTracker = .{ .schedule = .DEFAULT };
+    defer epoch_tracker.deinit(allocator);
 
     try std.testing.expectEqual(
         .unverified,

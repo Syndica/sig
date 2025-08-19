@@ -15,5 +15,6 @@ pub const ForkWeight = fork_choice.ForkWeight;
 pub const ForkInfo = fork_choice.ForkInfo;
 
 pub const ProgressMap = progress_map.ProgressMap;
+pub const ReplayTower = replay_tower.ReplayTower;
 
 pub const VoteTracker = vote_tracker.VoteTracker;

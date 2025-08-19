@@ -12,7 +12,6 @@ const BasicShredTracker = shred_network.shred_tracker.BasicShredTracker;
 const Channel = sig.sync.Channel;
 const Counter = sig.prometheus.Counter;
 const Histogram = sig.prometheus.Histogram;
-const Logger = sig.trace.Logger;
 const Packet = sig.net.Packet;
 const Registry = sig.prometheus.Registry;
 const Shred = sig.ledger.shred.Shred;
@@ -21,13 +20,13 @@ const SlotOutOfBounds = shred_network.shred_tracker.SlotOutOfBounds;
 const VariantCounter = sig.prometheus.VariantCounter;
 
 // The identifier for the scoped logger used in this file.
-const LOG_SCOPE = "shred_processor";
+pub const Logger = sig.trace.Logger("shred_processor");
 
 /// Analogous to [WindowService](https://github.com/anza-xyz/agave/blob/aa2f078836434965e1a5a03af7f95c6640fe6e1e/core/src/window_service.rs#L395)
 pub fn runShredProcessor(
     allocator: Allocator,
     exit: *Atomic(bool),
-    logger_: Logger,
+    logger: Logger,
     registry: *Registry(.{}),
     // shred verifier --> me
     verified_shred_receiver: *Channel(Packet),
@@ -35,7 +34,6 @@ pub fn runShredProcessor(
     shred_inserter_: ShredInserter,
     leader_schedule: sig.core.leader_schedule.SlotLeaders,
 ) !void {
-    const logger = logger_.withScope(LOG_SCOPE);
     var shred_inserter = shred_inserter_;
     var shreds: ArrayListUnmanaged(Shred) = .{};
     var is_repaired: ArrayListUnmanaged(bool) = .{};

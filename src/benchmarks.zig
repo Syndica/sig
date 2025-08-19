@@ -80,7 +80,7 @@ pub fn main() !void {
         allocator,
         .info, // NOTE: change to debug to see all logs
     );
-    const logger = std_logger.logger();
+    const logger = std_logger.logger("benchmarks");
 
     if (builtin.mode == .Debug) logger.warn().log("running benchmark in Debug mode");
 
@@ -155,7 +155,7 @@ pub fn main() !void {
     if (filter == .swissmap or run_all_benchmarks) {
         try benchmark(
             allocator,
-            logger,
+            .from(logger),
             @import("accountsdb/swiss_map.zig").BenchmarkSwissMap,
             max_time_per_bench,
             .nanos,
@@ -172,7 +172,7 @@ pub fn main() !void {
         if (filter == .accounts_db_readwrite or run_all) {
             try benchmark(
                 allocator,
-                logger,
+                .from(logger),
                 @import("accountsdb/db.zig").BenchmarkAccountsDB,
                 max_time_per_bench,
                 .millis,
@@ -224,7 +224,7 @@ pub fn main() !void {
                 // start gossip
                 const gossip_service = try sig.gossip.helpers.initGossipFromCluster(
                     allocator,
-                    logger.unscoped(),
+                    .from(logger),
                     .testnet, // TODO: support other clusters
                     8006,
                 );
@@ -240,7 +240,7 @@ pub fn main() !void {
                 _ //
                 = sig.accounts_db.download.getOrDownloadAndUnpackSnapshot(
                     allocator,
-                    logger,
+                    .from(logger),
                     BENCH_SNAPSHOT_DIR_PATH,
                     .{
                         .gossip_service = gossip_service,
@@ -263,7 +263,7 @@ pub fn main() !void {
 
             try benchmark(
                 allocator,
-                logger,
+                .from(logger),
                 @import("accountsdb/db.zig").BenchmarkAccountsDBSnapshotLoad,
                 max_time_per_bench,
                 .millis,
@@ -275,7 +275,7 @@ pub fn main() !void {
     if (filter == .socket_utils or run_all_benchmarks) {
         try benchmark(
             allocator,
-            logger,
+            .from(logger),
             @import("net/socket_utils.zig").BenchmarkPacketProcessing,
             max_time_per_bench,
             .millis,
@@ -286,7 +286,7 @@ pub fn main() !void {
     if (filter == .gossip or run_all_benchmarks) {
         try benchmark(
             allocator,
-            logger,
+            .from(logger),
             @import("gossip/service.zig").BenchmarkGossipServiceGeneral,
             max_time_per_bench,
             .nanos,
@@ -294,7 +294,7 @@ pub fn main() !void {
         );
         try benchmark(
             allocator,
-            logger,
+            .from(logger),
             @import("gossip/service.zig").BenchmarkGossipServicePullRequests,
             max_time_per_bench,
             .nanos,
@@ -305,7 +305,7 @@ pub fn main() !void {
     if (filter == .sync or run_all_benchmarks) {
         try benchmark(
             allocator,
-            logger,
+            .from(logger),
             @import("sync/channel.zig").BenchmarkChannel,
             max_time_per_bench,
             .nanos,
@@ -316,7 +316,7 @@ pub fn main() !void {
     if (filter == .ledger or run_all_benchmarks) {
         try benchmark(
             allocator,
-            logger,
+            .from(logger),
             @import("ledger/benchmarks.zig").BenchmarkLedger,
             max_time_per_bench,
             .nanos,
@@ -324,7 +324,7 @@ pub fn main() !void {
         );
         try benchmark(
             allocator,
-            logger,
+            .from(logger),
             @import("ledger/benchmarks.zig").BenchmarkLedgerSlow,
             max_time_per_bench,
             .millis,
@@ -335,7 +335,7 @@ pub fn main() !void {
     if (filter == .bincode or run_all_benchmarks) {
         try benchmark(
             allocator,
-            logger,
+            .from(logger),
             @import("bincode/benchmarks.zig").BenchmarkEntry,
             max_time_per_bench,
             .nanos,
@@ -346,13 +346,13 @@ pub fn main() !void {
     // NOTE: we dont support CSV output on this method so all results are printed as debug
     if (filter == .geyser or run_all_benchmarks) {
         logger.debug().log("Geyser Streaming Benchmark:");
-        try @import("geyser/lib.zig").benchmark.runBenchmark(logger);
+        try @import("geyser/lib.zig").benchmark.runBenchmark(.from(logger));
     }
 
     if (filter == .zksdk or run_all_benchmarks) {
         try benchmark(
             allocator,
-            logger,
+            .from(logger),
             @import("zksdk/benchmarks.zig").Benchmark,
             max_time_per_bench,
             .micros,
@@ -372,7 +372,7 @@ pub fn main() !void {
 
 pub fn benchmark(
     allocator: std.mem.Allocator,
-    logger: sig.trace.Logger,
+    logger: sig.trace.Logger("benchmarks"),
     comptime B: type,
     max_time_per_benchmark: Duration,
     time_unit: BenchTimeUnit,

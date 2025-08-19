@@ -4,7 +4,7 @@ const ledger = @import("../lib.zig");
 
 const Allocator = std.mem.Allocator;
 
-const Logger = sig.trace.Logger;
+pub const Logger = sig.trace.Logger("ledger.database");
 
 pub fn assertIsDatabase(comptime Impl: type) void {
     sig.utils.interface.assertSameInterface(Database(Impl), Impl, .subset);
@@ -147,7 +147,7 @@ pub fn Database(comptime Impl: type) type {
         };
 
         pub fn iterator(
-            self: *Self,
+            self: Self,
             comptime cf: ColumnFamily,
             comptime direction: IteratorDirection,
             start: ?cf.Key,

@@ -7,7 +7,7 @@ const Allocator = std.mem.Allocator;
 const SignedGossipData = sig.gossip.data.SignedGossipData;
 const GossipTable = sig.gossip.table.GossipTable;
 const Duration = sig.time.Duration;
-const ScopedLogger = sig.trace.log.ScopedLogger;
+const Logger = sig.trace.log.Logger;
 const RwMux = sig.sync.mux.RwMux;
 const ExitCondition = sig.sync.ExitCondition;
 
@@ -15,7 +15,7 @@ pub const DUMP_INTERVAL = Duration.fromSecs(10);
 
 pub const GossipDumpService = struct {
     allocator: Allocator,
-    logger: ScopedLogger(@typeName(Self)),
+    logger: Logger(@typeName(Self)),
     gossip_table_rw: *RwMux(GossipTable),
     exit_condition: ExitCondition,
 
