@@ -214,14 +214,14 @@ const UnverifiedVoteReceptor = struct {
     /// and sending the transactions which are verified to `verified_vote_transactions_sender`.
     fn consumeTransactionsAndSendVerified(
         allocator: std.mem.Allocator,
-        bank_forks: *const BankForksStub,
+        epoch_tracker: *const EpochTracker,
         /// Presumably populated by `UnverifiedVoteReceptor.recv`.
         unverified_votes_buffer: *std.ArrayListUnmanaged(Transaction),
         /// Sends to `processVotesLoop`'s `receivers.verified_vote_transactions` parameter.
         verified_vote_transactions_sender: *sig.sync.Channel(Transaction),
     ) (std.mem.Allocator.Error || error{ChannelClosed})!void {
         while (unverified_votes_buffer.pop()) |vote_tx| {
-            switch (try verifyVoteTransaction(allocator, vote_tx, bank_forks)) {
+            switch (try verifyVoteTransaction(allocator, vote_tx, epoch_tracker)) {
                 .verified => verified_vote_transactions_sender.send(vote_tx) catch |err| {
                     vote_tx.deinit(allocator);
                     return err;
@@ -260,7 +260,7 @@ const UnverifiedVoteReceptor = struct {
 
         try consumeTransactionsAndSendVerified(
             allocator,
-            bank_forks,
+            &bank_forks.epoch_tracker,
             unverified_votes_buffer,
             verified_vote_transactions_sender,
         );
@@ -333,7 +333,7 @@ fn verifyVoteTransaction(
     allocator: std.mem.Allocator,
     vote_tx: Transaction,
     /// Should be associated with the root bank.
-    bank_forks: *const BankForksStub,
+    epoch_tracker: *const EpochTracker,
 ) std.mem.Allocator.Error!enum { verified, unverified } {
     vote_tx.verify() catch return .unverified;
     const parsed_vote =
@@ -344,10 +344,11 @@ fn verifyVoteTransaction(
     const vote = parsed_vote.vote;
 
     const slot = vote.lastVotedSlot() orelse return .unverified;
-    const authorized_voter = bank_forks.getAuthorizedVoterPubkey(
-        slot,
-        vote_account_key,
-    ) orelse return .unverified;
+    const authorized_voter: Pubkey = blk: {
+        const epoch_consts = epoch_tracker.getForSlot(slot) orelse return .unverified;
+        const epoch_authorized_voters = &epoch_consts.stakes.epoch_authorized_voters;
+        break :blk epoch_authorized_voters.get(vote_account_key) orelse return .unverified;
+    };
 
     const any_key_is_both_signer_and_authorized_voter = for (
         vote_tx.msg.account_keys,
@@ -1448,7 +1449,7 @@ test verifyVoteTransaction {
         // TODO: consider making two separate APIs, one for the slot tracker, and one for the epoch tracker,
         // since it seems like there's little or no real data inter-dependency internally.
         // Argument against: whether the data is interdependent could change.
-        verifyVoteTransaction(allocator, .EMPTY, &bank_forks),
+        verifyVoteTransaction(allocator, .EMPTY, &epoch_tracker),
     );
 }
 

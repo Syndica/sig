@@ -552,19 +552,19 @@ fn processDuplicateConfirmedSlots(
 ) !void {
     const root = slot_tracker.root;
     while (duplicate_confirmed_slots_receiver.tryReceive()) |new_duplicate_confirmed_slot| {
-        const confirmed_slot, const duplicate_confirmed_hash = new_duplicate_confirmed_slot;
+        const confirmed_slot, const duplicate_confirmed_hash = new_duplicate_confirmed_slot.tuple();
         if (confirmed_slot <= root) {
             continue;
         } else if (try duplicate_confirmed_slots.fetchPut(
             allocator,
-            new_duplicate_confirmed.slot,
-            new_duplicate_confirmed.hash,
+            confirmed_slot,
+            duplicate_confirmed_hash,
         )) |kv| {
             const prev_hash = kv.value;
-            if (!prev_hash.eql(new_duplicate_confirmed.hash)) {
+            if (!prev_hash.eql(duplicate_confirmed_hash)) {
                 std.debug.panic(
                     "Additional duplicate confirmed notification for slot {} with a different hash",
-                    .{new_duplicate_confirmed.slot},
+                    .{confirmed_slot},
                 );
             }
             // Already processed this signal
@@ -572,7 +572,7 @@ fn processDuplicateConfirmedSlots(
         }
 
         const duplicate_confirmed_state: DuplicateConfirmedState = .{
-            .duplicate_confirmed_hash = new_duplicate_confirmed.hash,
+            .duplicate_confirmed_hash = duplicate_confirmed_hash,
             .slot_status = status: {
                 if (progress.isDead(confirmed_slot) orelse false) break :status .dead;
                 const slot_hash = slot_tracker.get(confirmed_slot).?.state.hash.readCopy();
@@ -582,7 +582,7 @@ fn processDuplicateConfirmedSlots(
         try check_slot_agrees_with_cluster.duplicateConfirmed(
             allocator,
             logger,
-            new_duplicate_confirmed.slot,
+            confirmed_slot,
             root,
             ledger,
             fork_choice,
