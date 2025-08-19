@@ -19,7 +19,6 @@ const AccountReader = sig.accounts_db.AccountReader;
 const LedgerDB = sig.ledger.LedgerDB;
 const LedgerReader = sig.ledger.LedgerReader;
 
-const AncestorHashesReplayUpdate = replay.consensus.AncestorHashesReplayUpdate;
 const ProgressMap = sig.consensus.ProgressMap;
 const HeaviestSubtreeForkChoice = sig.consensus.HeaviestSubtreeForkChoice;
 const AncestorHashesReplayUpdate = sig.replay.consensus.AncestorHashesReplayUpdate;
@@ -245,7 +244,7 @@ const ReplayState = struct {
         );
         errdefer replay_tower.deinit(deps.allocator);
 
-        var state: ReplayState = .{
+        return .{
             .allocator = deps.allocator,
             .logger = .from(deps.logger),
             .thread_pool = .init(.{ .max_threads = NUM_THREADS }),

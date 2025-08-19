@@ -67,6 +67,7 @@ pub const ReplayExecutionState = struct {
     epoch_slots_frozen_slots: *const EpochSlotsFrozenSlots,
     duplicate_slots_to_repair: *DuplicateSlotsToRepair,
     purge_repair_slot_counter: *PurgeRepairSlotCounters,
+    ancestor_hashes_replay_update_sender: *sig.sync.Channel(AncestorHashesReplayUpdate),
 };
 
 /// 1. Replays transactions from all the slots that need to be replayed.
@@ -446,7 +447,7 @@ pub fn processReplayResults(
 
 /// Analogous to [mark_dead_slot](https://github.com/anza-xyz/agave/blob/15635be1503566820331cd2c845675641a42d405/core/src/replay_stage.rs#L2255)
 fn markDeadSlot(
-    replay_state: *ReplayExecutionState,
+    replay_state: ReplayExecutionState,
     dead_slot: Slot,
     ancestor_hashes_replay_update_sender: *sig.sync.Channel(AncestorHashesReplayUpdate),
 ) !void {
@@ -608,27 +609,29 @@ const TestReplayStateResources = struct {
             .Channel(AncestorHashesReplayUpdate)
             .init(allocator);
 
-        self.replay_state = try ReplayExecutionState.init(
-            allocator,
-            .noop,
-            Pubkey.initRandom(std.crypto.random),
-            &self.thread_pool,
-            account_store,
-            &self.ledger_reader,
-            &self.ledger_result_writer,
-            &self.slot_tracker,
-            &self.epochs,
-            &self.progress,
-            self.fork_choice,
-            &self.duplicate_slots_tracker,
-            &self.unfrozen_gossip_verified_vote_hashes,
-            &self.latest_validator_votes_for_frozen_banks,
-            &self.duplicate_confirmed_slots,
-            &self.epoch_slots_frozen_slots,
-            &self.duplicate_slots_to_repair,
-            &self.purge_repair_slot_counter,
-            &self.ancestor_hashes_replay_update_channel,
-        );
+        self.replay_state = ReplayExecutionState{
+            .allocator = allocator,
+            .logger = .noop,
+            .my_identity = Pubkey.initRandom(std.crypto.random),
+            .vote_account = Pubkey.initRandom(std.crypto.random),
+            .account_store = account_store,
+            .thread_pool = &self.thread_pool,
+            .ledger_reader = &self.ledger_reader,
+            .ledger_result_writer = &self.ledger_result_writer,
+            .slot_tracker = &self.slot_tracker,
+            .epochs = &self.epochs,
+            .progress_map = &self.progress,
+            .status_cache = &status_cache,
+            .fork_choice = self.fork_choice,
+            .duplicate_slots_tracker = &self.duplicate_slots_tracker,
+            .unfrozen_gossip_verified_vote_hashes = &self.unfrozen_gossip_verified_vote_hashes,
+            .latest_validator_votes = &self.latest_validator_votes,
+            .duplicate_confirmed_slots = &self.duplicate_confirmed_slots,
+            .epoch_slots_frozen_slots = &self.epoch_slots_frozen_slots,
+            .duplicate_slots_to_repair = &self.duplicate_slots_to_repair,
+            .purge_repair_slot_counter = &self.purge_repair_slot_counter,
+            .ancestor_hashes_replay_update_sender = &self.ancestor_hashes_replay_update_channel,
+        };
 
         return self;
     }
@@ -1143,7 +1146,7 @@ test "markDeadSlot: marks progress dead and writes to ledger" {
     defer ancestor_hashes_replay_update_channel.deinit();
 
     try markDeadSlot(
-        &test_resources.replay_state,
+        test_resources.replay_state,
         slot,
         &ancestor_hashes_replay_update_channel,
     );
@@ -1217,7 +1220,7 @@ test "markDeadSlot: when duplicate proof exists, duplicate tracker records slot"
     defer ancestor_hashes_replay_update_channel.deinit();
 
     try markDeadSlot(
-        &test_resources.replay_state,
+        test_resources.replay_state,
         slot,
         &ancestor_hashes_replay_update_channel,
     );
