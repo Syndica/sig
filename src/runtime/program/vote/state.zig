@@ -179,7 +179,7 @@ pub fn serializeCompactVoteStateUpdate(
     }
 
     // Serialize in compact format
-    try writer.writeInt(Slot, data.root orelse 0, .little);
+    try writer.writeInt(Slot, data.root orelse std.math.maxInt(u64), .little);
     try std.leb.writeUleb128(writer, @as(u16, @intCast(lockouts.len)));
     for (lockouts.constSlice()) |lockout| {
         try std.leb.writeUleb128(writer, @as(u16, @intCast(lockout[0])));
@@ -201,10 +201,10 @@ pub fn deserializeCompactVoteStateUpdate(
 ) anyerror!VoteStateUpdate {
     const allocator = limit_allocator.allocator();
 
-    var root = try reader.readInt(Slot, .little);
-    root = if (root == std.math.maxInt(Slot)) 0 else root;
+    var root: ?Slot = try reader.readInt(Slot, .little);
+    root = if (root == std.math.maxInt(Slot)) null else root;
 
-    var slot = if (root == std.math.maxInt(Slot)) 0 else root;
+    var slot = root orelse 0;
     const lockouts_len = try std.leb.readUleb128(u16, reader);
     const lockouts = try allocator.alloc(Lockout, lockouts_len);
     errdefer allocator.free(lockouts);
@@ -279,7 +279,7 @@ pub fn serializeTowerSync(writer: anytype, data: anytype, _: sig.bincode.Params)
     }
 
     // Serialize in compact format
-    try writer.writeInt(Slot, data.root orelse 0, .little);
+    try writer.writeInt(Slot, data.root orelse std.math.maxInt(u64), .little);
     try std.leb.writeUleb128(writer, @as(u16, @intCast(lockouts.len)));
     for (lockouts.constSlice()) |lockout| {
         try std.leb.writeUleb128(writer, lockout[0]);
@@ -301,9 +301,10 @@ pub fn deserializeTowerSync(
     _: sig.bincode.Params,
 ) anyerror!TowerSync {
     const allocator = limit_allocator.allocator();
-    const root = try reader.readInt(Slot, .little);
+    var root: ?Slot = try reader.readInt(Slot, .little);
+    root = if (root == std.math.maxInt(Slot)) null else root;
 
-    var slot = if (root == std.math.maxInt(Slot)) 0 else root;
+    var slot = root orelse 0;
     const lockouts_len = try std.leb.readUleb128(u16, reader);
     const lockouts = try allocator.alloc(Lockout, lockouts_len);
     errdefer allocator.free(lockouts);
