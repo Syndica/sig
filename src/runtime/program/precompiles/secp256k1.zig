@@ -25,10 +25,10 @@ pub const SECP256K1_SIGNATURE_SERIALIZED_SIZE = 64;
 
 comptime {
     std.debug.assert(SECP256K1_SIGNATURE_OFFSETS_SERIALIZED_SIZE ==
-        @bitSizeOf(Secp256k1SignatureOffsets) / 8);
+        @bitSizeOf(SignatureOffsets) / 8);
 }
 
-pub const Secp256k1SignatureOffsets = packed struct {
+pub const SignatureOffsets = packed struct {
     /// Offset to 64-byte signature plus 1-byte recovery ID.
     signature_offset: u16 = 0,
     /// Within the transaction, the index of the instruction whose instruction data contains the signature.
@@ -44,8 +44,8 @@ pub const Secp256k1SignatureOffsets = packed struct {
     /// Within the transaction, the index of the instruction whose instruction data contains the message.
     message_instruction_idx: u8 = 0,
 
-    fn asBytes(self: *const Secp256k1SignatureOffsets) []const u8 {
-        return std.mem.asBytes(self)[0 .. @bitSizeOf(Secp256k1SignatureOffsets) / 8];
+    fn asBytes(self: *const SignatureOffsets) []const u8 {
+        return std.mem.asBytes(self)[0 .. @bitSizeOf(SignatureOffsets) / 8];
     }
 };
 
@@ -82,7 +82,7 @@ pub fn verify(
     for (0..n_signatures) |i| {
         const offset = SECP256K1_SIGNATURE_OFFSETS_START +|
             i *| SECP256K1_SIGNATURE_OFFSETS_SERIALIZED_SIZE;
-        const sig_offsets: *align(1) const Secp256k1SignatureOffsets = @alignCast(
+        const sig_offsets: *align(1) const SignatureOffsets = @alignCast(
             @ptrCast(data.ptr + offset),
         );
 
@@ -280,7 +280,7 @@ fn newSecp256k1Instruction(
     const num_signatures = 1;
     instruction_data[0] = num_signatures;
 
-    const offsets: Secp256k1SignatureOffsets = .{
+    const offsets: SignatureOffsets = .{
         .signature_offset = signature_offset,
         .signature_instruction_idx = 0,
         .eth_address_offset = eth_address_offset,
@@ -302,7 +302,7 @@ fn newSecp256k1Instruction(
 // https://github.com/anza-xyz/agave/blob/a8aef04122068ec36a7af0721e36ee58efa0bef2/sdk/src/secp256k1_instruction.rs#L1046
 fn testCase(
     num_signatures: u8,
-    offsets: Secp256k1SignatureOffsets,
+    offsets: SignatureOffsets,
 ) PrecompileProgramError!void {
     if (!builtin.is_test) @compileError("testCase is only for use in tests");
 
@@ -350,8 +350,8 @@ test "secp256k1 invalid offsets" {
         @memcpy(
             instruction_data[1..],
             std.mem.asBytes(
-                &Secp256k1SignatureOffsets{},
-            )[0 .. @bitSizeOf(Secp256k1SignatureOffsets) / 8],
+                &SignatureOffsets{},
+            )[0 .. @bitSizeOf(SignatureOffsets) / 8],
         );
 
         try std.testing.expectError(
@@ -453,8 +453,8 @@ test "secp256k1 count is zero but sig data exists" {
     @memcpy(
         instruction_data[1..],
         std.mem.asBytes(
-            &Secp256k1SignatureOffsets{},
-        )[0 .. @bitSizeOf(Secp256k1SignatureOffsets) / 8],
+            &SignatureOffsets{},
+        )[0 .. @bitSizeOf(SignatureOffsets) / 8],
     );
 
     try std.testing.expectError(
@@ -646,7 +646,7 @@ test "secp256 malleability" {
 
     var data = std.ArrayList(u8).init(allocator);
     defer data.deinit();
-    var both_offsets: [2]Secp256k1SignatureOffsets = undefined;
+    var both_offsets: [2]SignatureOffsets = undefined;
 
     const pairs: [2]struct { Ecdsa.Signature, u2 } = .{
         .{ signature, recovery_id },
@@ -668,7 +668,7 @@ test "secp256 malleability" {
 
         const data_start = 1 + SECP256K1_SIGNATURE_OFFSETS_SERIALIZED_SIZE * 2;
 
-        const offsets: Secp256k1SignatureOffsets = .{
+        const offsets: SignatureOffsets = .{
             .signature_offset = @intCast(signature_offset + data_start),
             .signature_instruction_idx = 0,
             .eth_address_offset = @intCast(eth_address_offset + data_start),

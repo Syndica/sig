@@ -10,32 +10,37 @@ const FeatureSet = sig.core.FeatureSet;
 const InstructionError = sig.core.instruction.InstructionError;
 const InstructionContext = sig.runtime.InstructionContext;
 const PrecompileProgramError = precompile_programs.PrecompileProgramError;
+const TransactionError = sig.ledger.transaction_status.TransactionError;
+const verifyPrecompiles = precompile_programs.verifyPrecompiles;
 
+const P256 = std.crypto.ecc.P256;
+const Scalar = P256.scalar.Scalar;
 const Ecdsa = std.crypto.sign.ecdsa.EcdsaP256Sha256;
 
 pub const ID: Pubkey = .parse("Secp256r1SigVerify1111111111111111111111111");
 
-const START = 2;
+const OFFSETS_START = 2;
 const SERIALIZED_SIZE = 14;
+const DATA_START = OFFSETS_START + SERIALIZED_SIZE;
 
-const N: u256 = 0xffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551;
-const HALF_ORDER: u256 = (N - 1) / 2;
+const ORDER: u256 = 0xffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551;
+const HALF_ORDER: u256 = (ORDER - 1) / 2;
 
 const SignatureOffsets = extern struct {
     /// Offset to compact secp256r1 signature of 64 bytes
-    signature_offset: u16,
+    signature_offset: u16 = 0,
     /// Instruction index where the signature can be found
-    signature_instruction_index: u16,
+    signature_instruction_index: u16 = 0,
     /// Offset to compressed public key of 33 bytes
-    public_key_offset: u16,
+    public_key_offset: u16 = 0,
     /// Instruction index where the public key can be found
-    public_key_instruction_index: u16,
+    public_key_instruction_index: u16 = 0,
     /// Offset to the start of message data
-    message_data_offset: u16,
+    message_data_offset: u16 = 0,
     /// Size of message data in bytes
-    message_data_size: u16,
+    message_data_size: u16 = 0,
     /// Instruction index where the message data can be found
-    message_instruction_index: u16,
+    message_instruction_index: u16 = 0,
 };
 
 pub fn execute(_: std.mem.Allocator, ic: *InstructionContext) InstructionError!void {
@@ -55,15 +60,16 @@ pub fn verify(
     _: *const FeatureSet,
     _: Slot,
 ) PrecompileProgramError!void {
-    if (data.len < START) return error.InvalidInstructionDataSize;
+    if (data.len < OFFSETS_START) return error.InvalidInstructionDataSize;
     const num_signatures = data[0];
+
     if (num_signatures == 0 or num_signatures > 8) return error.InvalidInstructionDataSize;
 
-    const expected_data_size = num_signatures * SERIALIZED_SIZE + START;
+    const expected_data_size = num_signatures * SERIALIZED_SIZE + OFFSETS_START;
     if (data.len < expected_data_size) return error.InvalidInstructionDataSize;
 
     for (0..num_signatures) |i| {
-        const start = i * SERIALIZED_SIZE + START;
+        const start = i * SERIALIZED_SIZE + OFFSETS_START;
         const offsets: *align(1) const SignatureOffsets = @ptrCast(data[start..].ptr);
 
         const signature_bytes = try getInstructionData(
@@ -73,8 +79,6 @@ pub fn verify(
             offsets.signature_offset,
             Ecdsa.Signature.encoded_length,
         );
-        const signature: Ecdsa.Signature =
-            .fromBytes(signature_bytes[0..Ecdsa.Signature.encoded_length].*);
 
         const pubkey_bytes = try getInstructionData(
             data,
@@ -83,7 +87,6 @@ pub fn verify(
             offsets.public_key_offset,
             Ecdsa.PublicKey.compressed_sec1_encoded_length,
         );
-        const pubkey = Ecdsa.PublicKey.fromSec1(pubkey_bytes) catch return error.InvalidSignature;
 
         const msg = try getInstructionData(
             data,
@@ -92,6 +95,11 @@ pub fn verify(
             offsets.message_data_offset,
             offsets.message_data_size,
         );
+
+        const pubkey = Ecdsa.PublicKey.fromSec1(pubkey_bytes) catch return error.InvalidSignature;
+
+        const signature: Ecdsa.Signature =
+            .fromBytes(signature_bytes[0..Ecdsa.Signature.encoded_length].*);
 
         // check for low s in order to avoid malleable signatures
         const s: u256 = @bitCast(signature.s);
@@ -120,6 +128,319 @@ fn getInstructionData(
     const end = start +| size;
     if (end > instruction.len) return error.InvalidDataOffsets;
     return instruction[start..end];
+}
+
+// https://github.com/anza-xyz/agave/blob/a8aef04122068ec36a7af0721e36ee58efa0bef2/sdk/src/ed25519_instruction.rs#L258
+fn testCase(
+    num_signatures: u16,
+    offsets: SignatureOffsets,
+) PrecompileProgramError!void {
+    if (!builtin.is_test) @compileError("testCase is only for use in tests");
+
+    var instruction_data: [DATA_START]u8 align(2) = undefined;
+    @memcpy(instruction_data[0..2], std.mem.asBytes(&num_signatures));
+    @memcpy(instruction_data[2..], std.mem.asBytes(&offsets));
+
+    try verify(&instruction_data, &.{&(.{0} ** 100)}, &.ALL_ENABLED_AT_GENESIS, 0);
+}
+
+pub fn newInstruction(
+    allocator: std.mem.Allocator,
+    signature: *const Ecdsa.Signature,
+    public_key: *const Ecdsa.PublicKey,
+    message: []const u8,
+) !sig.core.Instruction {
+    if (!builtin.is_test) @compileError("newInstruction is only for use in tests");
+    std.debug.assert(message.len <= std.math.maxInt(u16));
+
+    const num_signatures: u8 = 1;
+    const public_key_offset = DATA_START;
+    const signature_offset = public_key_offset + Ecdsa.PublicKey.compressed_sec1_encoded_length;
+    const message_data_offset = signature_offset + Ecdsa.Signature.encoded_length;
+
+    const offsets: SignatureOffsets = .{
+        .signature_offset = signature_offset,
+        .signature_instruction_index = std.math.maxInt(u16),
+        .public_key_offset = public_key_offset,
+        .public_key_instruction_index = std.math.maxInt(u16),
+        .message_data_offset = message_data_offset,
+        .message_data_size = @intCast(message.len),
+        .message_instruction_index = std.math.maxInt(u16),
+    };
+
+    // if signature.s is larger than HALF_ORDER, replace it with ORDER - signature.s
+    var s = try Scalar.fromBytes(signature.s, .big);
+    if (@byteSwap(@as(u256, @bitCast(signature.s))) > HALF_ORDER) s = s.neg();
+    const sanitized_signature: Ecdsa.Signature = .{
+        .r = signature.r,
+        .s = s.toBytes(.big),
+    };
+
+    var instruction_data = try std.ArrayList(u8).initCapacity(
+        allocator,
+        message_data_offset + message.len,
+    );
+    errdefer instruction_data.deinit();
+
+    // add 2nd byte for padding, so that offset structure is aligned
+    instruction_data.appendSliceAssumeCapacity(&.{ num_signatures, 0 });
+    instruction_data.appendSliceAssumeCapacity(std.mem.asBytes(&offsets));
+    std.debug.assert(instruction_data.items.len == public_key_offset);
+    instruction_data.appendSliceAssumeCapacity(&public_key.toCompressedSec1());
+    std.debug.assert(instruction_data.items.len == signature_offset);
+    instruction_data.appendSliceAssumeCapacity(&sanitized_signature.toBytes());
+    std.debug.assert(instruction_data.items.len == message_data_offset);
+    instruction_data.appendSliceAssumeCapacity(message);
+
+    return .{
+        .program_id = ID,
+        .accounts = &.{},
+        .data = try instruction_data.toOwnedSlice(),
+    };
+}
+
+test "invalid offsets" {
+    const allocator = std.testing.allocator;
+    var instruction_data = try std.ArrayList(u8).initCapacity(
+        allocator,
+        DATA_START,
+    );
+    defer instruction_data.deinit();
+
+    const offsets: SignatureOffsets = .{};
+
+    // Set up instruction data with invalid size
+    instruction_data.appendSliceAssumeCapacity(std.mem.asBytes(&1));
+    instruction_data.appendSliceAssumeCapacity(std.mem.asBytes(&offsets));
+    try instruction_data.resize(instruction_data.items.len - 1);
+
+    try std.testing.expectEqual(
+        error.InvalidInstructionDataSize,
+        verify(instruction_data.items, &.{}, &.ALL_ENABLED_AT_GENESIS, 0),
+    );
+
+    // invalid signature instruction index
+    const invalid_signature_offsets: SignatureOffsets = .{
+        .signature_instruction_index = 1,
+    };
+    try std.testing.expectEqual(
+        error.InvalidDataOffsets,
+        testCase(1, invalid_signature_offsets),
+    );
+
+    // invalid message instruction index
+    const invalid_message_offsets: SignatureOffsets = .{
+        .message_instruction_index = 1,
+    };
+    try std.testing.expectEqual(
+        error.InvalidDataOffsets,
+        testCase(1, invalid_message_offsets),
+    );
+
+    // invalid pubkey instruction index
+    const invalid_pubkey_offsets: SignatureOffsets = .{
+        .public_key_instruction_index = 1,
+    };
+    try std.testing.expectEqual(
+        error.InvalidDataOffsets,
+        testCase(1, invalid_pubkey_offsets),
+    );
+}
+
+test "invalid signature data size" {
+    // Test data.len() < SIGNATURE_OFFSETS_START
+    const small_data: [OFFSETS_START - 1]u8 = @splat(0);
+    try std.testing.expectEqual(
+        error.InvalidInstructionDataSize,
+        verify(&small_data, &.{&.{}}, &.ALL_ENABLED_AT_GENESIS, 0),
+    );
+
+    // Test num_signatures == 0
+    var zero_sigs_data: [DATA_START]u8 = @splat(0);
+    zero_sigs_data[0] = 0; // Set num_signatures to 0
+    try std.testing.expectEqual(
+        error.InvalidInstructionDataSize,
+        verify(&zero_sigs_data, &.{&.{}}, &.ALL_ENABLED_AT_GENESIS, 0),
+    );
+
+    // Test num_signatures > 8
+    var too_many_sigs: [DATA_START]u8 = @splat(0);
+    too_many_sigs[0] = 9; // Set num_signatures to 9
+    try std.testing.expectEqual(
+        error.InvalidInstructionDataSize,
+        verify(&too_many_sigs, &.{&.{}}, &.ALL_ENABLED_AT_GENESIS, 0),
+    );
+}
+
+test "message data offsets" {
+    {
+        const offsets: SignatureOffsets = .{
+            .message_data_offset = 99,
+            .message_data_size = 1,
+        };
+        try std.testing.expectError(
+            error.InvalidSignature,
+            testCase(1, offsets),
+        );
+    }
+
+    {
+        const offsets: SignatureOffsets = .{
+            .message_data_offset = 100,
+            .message_data_size = 1,
+        };
+        try std.testing.expectError(
+            error.InvalidDataOffsets,
+            testCase(1, offsets),
+        );
+    }
+
+    {
+        const offsets: SignatureOffsets = .{
+            .message_data_offset = 100,
+            .message_data_size = 1000,
+        };
+        try std.testing.expectError(
+            error.InvalidDataOffsets,
+            testCase(1, offsets),
+        );
+    }
+
+    {
+        const offsets: SignatureOffsets = .{
+            .message_data_offset = std.math.maxInt(u16),
+            .message_data_size = std.math.maxInt(u16),
+        };
+        try std.testing.expectError(
+            error.InvalidDataOffsets,
+            testCase(1, offsets),
+        );
+    }
+}
+
+test "pubkey offset" {
+    {
+        const offsets: SignatureOffsets = .{
+            .public_key_offset = std.math.maxInt(u16),
+        };
+        try std.testing.expectEqual(
+            error.InvalidDataOffsets,
+            testCase(1, offsets),
+        );
+    }
+
+    {
+        const offsets: SignatureOffsets = .{
+            .public_key_offset = 100 - Ecdsa.PublicKey.compressed_sec1_encoded_length + 1,
+        };
+        try std.testing.expectEqual(
+            error.InvalidDataOffsets,
+            testCase(1, offsets),
+        );
+    }
+}
+
+test "ed25519 signature offset" {
+    {
+        const offsets: SignatureOffsets = .{
+            .signature_offset = std.math.maxInt(u16),
+        };
+        try std.testing.expectEqual(
+            testCase(1, offsets),
+            error.InvalidDataOffsets,
+        );
+    }
+
+    {
+        const offsets: SignatureOffsets = .{
+            .signature_offset = 100 - Ecdsa.Signature.encoded_length + 1,
+        };
+        try std.testing.expectEqual(
+            testCase(1, offsets),
+            error.InvalidDataOffsets,
+        );
+    }
+}
+
+test "sanity check" {
+    const allocator = std.testing.allocator;
+
+    const message = "hello";
+    const keypair = Ecdsa.KeyPair.generate();
+    const signature = try keypair.sign(message, null);
+    const instruction = try newInstruction(
+        allocator,
+        &signature,
+        &keypair.public_key,
+        message,
+    );
+    defer std.testing.allocator.free(instruction.data);
+    const tx: sig.core.Transaction = .{
+        .msg = .{
+            .account_keys = &.{ID},
+            .instructions = &.{
+                .{ .program_index = 0, .account_indexes = &.{0}, .data = instruction.data },
+            },
+            .signature_count = 1,
+            .readonly_signed_count = 1,
+            .readonly_unsigned_count = 0,
+            .recent_blockhash = sig.core.Hash.ZEROES,
+        },
+        .version = .legacy,
+        .signatures = &.{},
+    };
+
+    _ = try verifyPrecompiles(std.testing.allocator, &tx, &FeatureSet.ALL_ENABLED_AT_GENESIS, 0);
+}
+
+test "high s" {
+    const allocator = std.testing.allocator;
+
+    const message = "hello";
+    const keypair = Ecdsa.KeyPair.generate();
+    const signature = try keypair.sign(message, null);
+    var instruction = try newInstruction(
+        allocator,
+        &signature,
+        &keypair.public_key,
+        message,
+    );
+    // replace the instruction data with our own, so we can mutate it
+    const data = try allocator.dupe(u8, instruction.data);
+    allocator.free(instruction.data);
+    instruction.data = data;
+    defer allocator.free(instruction.data);
+
+    const public_key_offset = DATA_START;
+    const signature_offset = public_key_offset + Ecdsa.PublicKey.compressed_sec1_encoded_length;
+    const s_offset = signature_offset + P256.Fe.encoded_length;
+
+    // manipulate the signature to create a negative signature.s
+    // since the curve is symmetric in an unsecure implementation this could pass the verification
+    var s = try Scalar.fromBytes(data[s_offset..][0..32].*, .big);
+    s = s.neg();
+    @memcpy(data[s_offset..][0..32], &s.toBytes(.big));
+
+    const bad_tx: sig.core.Transaction = .{
+        .msg = .{
+            .account_keys = &.{ID},
+            .instructions = &.{
+                .{ .program_index = 0, .account_indexes = &.{0}, .data = instruction.data },
+            },
+            .signature_count = 1,
+            .readonly_signed_count = 1,
+            .readonly_unsigned_count = 0,
+            .recent_blockhash = sig.core.Hash.ZEROES,
+        },
+        .version = .legacy,
+        .signatures = &.{},
+    };
+
+    const actual = try verifyPrecompiles(allocator, &bad_tx, &FeatureSet.ALL_ENABLED_AT_GENESIS, 0);
+    try std.testing.expectEqual(
+        TransactionError{ .InstructionError = .{ 0, .{ .Custom = 0 } } },
+        actual,
+    );
 }
 
 // sig fmt: off

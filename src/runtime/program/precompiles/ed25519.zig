@@ -27,24 +27,24 @@ pub const ED25519_SIGNATURE_SERIALIZED_SIZE = 64;
 comptime {
     std.debug.assert(ED25519_PUBKEY_SERIALIZED_SIZE == Ed25519.PublicKey.encoded_length);
     std.debug.assert(ED25519_SIGNATURE_SERIALIZED_SIZE == Ed25519.Signature.encoded_length);
-    std.debug.assert(ED25519_SIGNATURE_OFFSETS_SERIALIZED_SIZE == @sizeOf(Ed25519SignatureOffsets));
+    std.debug.assert(ED25519_SIGNATURE_OFFSETS_SERIALIZED_SIZE == @sizeOf(SignatureOffsets));
 }
 
-pub const Ed25519SignatureOffsets = extern struct {
+pub const SignatureOffsets = extern struct {
     /// Offset to ed25519 signature of 64 bytes.
     signature_offset: u16 = 0,
     /// Instruction index to find signature.
-    signature_instruction_idx: u16 = 0,
+    signature_instruction_index: u16 = 0,
     /// Offset to public key of 32 bytes.
-    pubkey_offset: u16 = 0,
+    public_key_offset: u16 = 0,
     /// Instruction index to find public key.
-    pubkey_instruction_idx: u16 = 0,
+    public_key_instruction_index: u16 = 0,
     /// Offset to start of message data.
     message_data_offset: u16 = 0,
     /// Size of message data.
     message_data_size: u16 = 0,
     /// Index of instruction data to get message data.
-    message_instruction_idx: u16 = 0,
+    message_instruction_index: u16 = 0,
 };
 
 pub fn execute(_: std.mem.Allocator, ic: *InstructionContext) InstructionError!void {
@@ -81,13 +81,13 @@ pub fn verify(
         const offset = ED25519_SIGNATURE_OFFSETS_START +
             i * ED25519_SIGNATURE_OFFSETS_SERIALIZED_SIZE;
 
-        const sig_offsets: *align(1) const Ed25519SignatureOffsets = @ptrCast(data.ptr + offset);
+        const sig_offsets: *align(1) const SignatureOffsets = @ptrCast(data.ptr + offset);
 
         const signature_bytes = try getInstructionData(
             32 * 2, // 1 scalar + 1 point
             data,
             all_instruction_datas,
-            sig_offsets.signature_instruction_idx,
+            sig_offsets.signature_instruction_index,
             sig_offsets.signature_offset,
         );
         const signature: Ed25519.Signature = .fromBytes(signature_bytes[0..64].*);
@@ -96,8 +96,8 @@ pub fn verify(
             32,
             data,
             all_instruction_datas,
-            sig_offsets.pubkey_instruction_idx,
-            sig_offsets.pubkey_offset,
+            sig_offsets.public_key_instruction_index,
+            sig_offsets.public_key_offset,
         );
         // identity is rejected in verifySignature()
         const pubkey: Ed25519.PublicKey = .{ .bytes = pubkey_bytes[0..32].* };
@@ -106,7 +106,7 @@ pub fn verify(
             sig_offsets.message_data_size,
             data,
             all_instruction_datas,
-            sig_offsets.message_instruction_idx,
+            sig_offsets.message_instruction_index,
             sig_offsets.message_data_offset,
         );
 
@@ -195,18 +195,18 @@ pub fn newInstruction(
     std.debug.assert(message.len <= std.math.maxInt(u16));
 
     const num_signatures: u8 = 1;
-    const pubkey_offset = ED25519_DATA_START;
-    const signature_offset = pubkey_offset + ED25519_PUBKEY_SERIALIZED_SIZE;
+    const public_key_offset = ED25519_DATA_START;
+    const signature_offset = public_key_offset + ED25519_PUBKEY_SERIALIZED_SIZE;
     const message_data_offset = signature_offset + ED25519_SIGNATURE_SERIALIZED_SIZE;
 
-    const offsets: Ed25519SignatureOffsets = .{
+    const offsets: SignatureOffsets = .{
         .signature_offset = signature_offset,
-        .signature_instruction_idx = std.math.maxInt(u16),
-        .pubkey_offset = pubkey_offset,
-        .pubkey_instruction_idx = std.math.maxInt(u16),
+        .signature_instruction_index = std.math.maxInt(u16),
+        .public_key_offset = public_key_offset,
+        .public_key_instruction_index = std.math.maxInt(u16),
         .message_data_offset = message_data_offset,
         .message_data_size = @intCast(message.len),
-        .message_instruction_idx = std.math.maxInt(u16),
+        .message_instruction_index = std.math.maxInt(u16),
     };
 
     var instruction_data = try std.ArrayList(u8).initCapacity(
@@ -218,7 +218,7 @@ pub fn newInstruction(
     // add 2nd byte for padding, so that offset structure is aligned
     instruction_data.appendSliceAssumeCapacity(&.{ num_signatures, 0 });
     instruction_data.appendSliceAssumeCapacity(std.mem.asBytes(&offsets));
-    std.debug.assert(instruction_data.items.len == pubkey_offset);
+    std.debug.assert(instruction_data.items.len == public_key_offset);
     instruction_data.appendSliceAssumeCapacity(&public_key.toBytes());
     std.debug.assert(instruction_data.items.len == signature_offset);
     instruction_data.appendSliceAssumeCapacity(&signature.toBytes());
@@ -235,7 +235,7 @@ pub fn newInstruction(
 // https://github.com/anza-xyz/agave/blob/a8aef04122068ec36a7af0721e36ee58efa0bef2/sdk/src/ed25519_instruction.rs#L258
 fn testCase(
     num_signatures: u16,
-    offsets: Ed25519SignatureOffsets,
+    offsets: SignatureOffsets,
 ) PrecompileProgramError!void {
     if (!builtin.is_test) @compileError("testCase is only for use in tests");
 
@@ -284,7 +284,7 @@ test "ed25519 invalid offsets" {
     );
     defer instruction_data.deinit();
 
-    const offsets: Ed25519SignatureOffsets = .{};
+    const offsets: SignatureOffsets = .{};
 
     // Set up instruction data with invalid size
     instruction_data.appendSliceAssumeCapacity(std.mem.asBytes(&1));
@@ -292,42 +292,42 @@ test "ed25519 invalid offsets" {
     try instruction_data.resize(instruction_data.items.len - 1);
 
     try std.testing.expectEqual(
-        verify(instruction_data.items, &.{}, &.ALL_DISABLED, 0),
         error.InvalidInstructionDataSize,
+        verify(instruction_data.items, &.{}, &.ALL_DISABLED, 0),
     );
 
     // invalid signature instruction index
-    const invalid_signature_offsets: Ed25519SignatureOffsets = .{
-        .signature_instruction_idx = 1,
+    const invalid_signature_offsets: SignatureOffsets = .{
+        .signature_instruction_index = 1,
     };
     try std.testing.expectEqual(
-        testCase(1, invalid_signature_offsets),
         error.InvalidDataOffsets,
+        testCase(1, invalid_signature_offsets),
     );
 
     // invalid message instruction index
-    const invalid_message_offsets: Ed25519SignatureOffsets = .{
-        .message_instruction_idx = 1,
+    const invalid_message_offsets: SignatureOffsets = .{
+        .message_instruction_index = 1,
     };
     try std.testing.expectEqual(
-        testCase(1, invalid_message_offsets),
         error.InvalidDataOffsets,
+        testCase(1, invalid_message_offsets),
     );
 
     // invalid public key instruction index
-    const invalid_pubkey_offsets: Ed25519SignatureOffsets = .{
-        .pubkey_instruction_idx = 1,
+    const invalid_pubkey_offsets: SignatureOffsets = .{
+        .public_key_instruction_index = 1,
     };
     try std.testing.expectEqual(
-        testCase(1, invalid_pubkey_offsets),
         error.InvalidDataOffsets,
+        testCase(1, invalid_pubkey_offsets),
     );
 }
 
 // https://github.com/anza-xyz/agave/blob/a8aef04122068ec36a7af0721e36ee58efa0bef2/sdk/src/ed25519_instruction.rs#L326
 test "ed25519 message data offsets" {
     {
-        const offsets: Ed25519SignatureOffsets = .{
+        const offsets: SignatureOffsets = .{
             .message_data_offset = 99,
             .message_data_size = 1,
         };
@@ -338,7 +338,7 @@ test "ed25519 message data offsets" {
     }
 
     {
-        const offsets: Ed25519SignatureOffsets = .{
+        const offsets: SignatureOffsets = .{
             .message_data_offset = 100,
             .message_data_size = 1,
         };
@@ -349,7 +349,7 @@ test "ed25519 message data offsets" {
     }
 
     {
-        const offsets: Ed25519SignatureOffsets = .{
+        const offsets: SignatureOffsets = .{
             .message_data_offset = 100,
             .message_data_size = 1000,
         };
@@ -360,7 +360,7 @@ test "ed25519 message data offsets" {
     }
 
     {
-        const offsets: Ed25519SignatureOffsets = .{
+        const offsets: SignatureOffsets = .{
             .message_data_offset = std.math.maxInt(u16),
             .message_data_size = std.math.maxInt(u16),
         };
@@ -374,8 +374,8 @@ test "ed25519 message data offsets" {
 // https://github.com/anza-xyz/agave/blob/a8aef04122068ec36a7af0721e36ee58efa0bef2/sdk/src/ed25519_instruction.rs#L369
 test "ed25519 pubkey offset" {
     {
-        const offsets: Ed25519SignatureOffsets = .{
-            .pubkey_offset = std.math.maxInt(u16),
+        const offsets: SignatureOffsets = .{
+            .public_key_offset = std.math.maxInt(u16),
         };
         try std.testing.expectEqual(
             error.InvalidDataOffsets,
@@ -384,8 +384,8 @@ test "ed25519 pubkey offset" {
     }
 
     {
-        const offsets: Ed25519SignatureOffsets = .{
-            .pubkey_offset = 100 - ED25519_PUBKEY_SERIALIZED_SIZE + 1,
+        const offsets: SignatureOffsets = .{
+            .public_key_offset = 100 - ED25519_PUBKEY_SERIALIZED_SIZE + 1,
         };
         try std.testing.expectEqual(
             error.InvalidDataOffsets,
@@ -397,7 +397,7 @@ test "ed25519 pubkey offset" {
 // https://github.com/anza-xyz/agave/blob/a8aef04122068ec36a7af0721e36ee58efa0bef2/sdk/src/ed25519_instruction.rs#L389-L390
 test "ed25519 signature offset" {
     {
-        const offsets: Ed25519SignatureOffsets = .{
+        const offsets: SignatureOffsets = .{
             .signature_offset = std.math.maxInt(u16),
         };
         try std.testing.expectEqual(
@@ -407,7 +407,7 @@ test "ed25519 signature offset" {
     }
 
     {
-        const offsets: Ed25519SignatureOffsets = .{
+        const offsets: SignatureOffsets = .{
             .signature_offset = 100 - ED25519_SIGNATURE_SERIALIZED_SIZE + 1,
         };
         try std.testing.expectEqual(
