@@ -142,6 +142,26 @@ pub fn intFromPrecompileProgramError(err: PrecompileProgramError) u32 {
     };
 }
 
+pub fn getInstructionData(
+    data: []const u8,
+    instruction_data: []const []const u8,
+    instruction_index: u16,
+    start: u16,
+    size: u64,
+) error{InvalidDataOffsets}![]const u8 {
+    const instruction: []const u8 = switch (instruction_index) {
+        std.math.maxInt(u16) => data,
+        else => b: {
+            if (instruction_index >= instruction_data.len) {
+                return error.InvalidDataOffsets;
+            }
+            break :b instruction_data[instruction_index];
+        },
+    };
+    if (start +| size > instruction.len) return error.InvalidDataOffsets;
+    return instruction[start..][0..size];
+}
+
 test "verify ed25519" {
     {
         const actual = try verifyPrecompiles(

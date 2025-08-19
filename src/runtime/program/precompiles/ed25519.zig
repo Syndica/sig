@@ -10,6 +10,7 @@ const InstructionContext = sig.runtime.InstructionContext;
 const PrecompileProgramError = sig.runtime.program.precompiles.PrecompileProgramError;
 const verifyPrecompiles = sig.runtime.program.precompiles.verifyPrecompiles;
 const TransactionError = sig.ledger.transaction_status.TransactionError;
+const getInstructionData = sig.runtime.program.precompiles.getInstructionData;
 
 const Ed25519 = std.crypto.sign.Ed25519;
 const Curve = std.crypto.ecc.Edwards25519;
@@ -84,30 +85,30 @@ pub fn verify(
         const sig_offsets: *align(1) const SignatureOffsets = @ptrCast(data.ptr + offset);
 
         const signature_bytes = try getInstructionData(
-            32 * 2, // 1 scalar + 1 point
             data,
             all_instruction_datas,
             sig_offsets.signature_instruction_index,
             sig_offsets.signature_offset,
+            32 * 2, // 1 scalar + 1 point
         );
         const signature: Ed25519.Signature = .fromBytes(signature_bytes[0..64].*);
 
         const pubkey_bytes = try getInstructionData(
-            32,
             data,
             all_instruction_datas,
             sig_offsets.public_key_instruction_index,
             sig_offsets.public_key_offset,
+            32,
         );
         // identity is rejected in verifySignature()
         const pubkey: Ed25519.PublicKey = .{ .bytes = pubkey_bytes[0..32].* };
 
         const msg = try getInstructionData(
-            sig_offsets.message_data_size,
             data,
             all_instruction_datas,
             sig_offsets.message_instruction_index,
             sig_offsets.message_data_offset,
+            sig_offsets.message_data_size,
         );
 
         verifySignature(
@@ -163,25 +164,6 @@ fn fastEqual(a: Curve, b: Curve) bool {
     const x1 = b.x.mul(a.z);
     const y1 = b.y.mul(a.z);
     return x1.equivalent(a.x) and y1.equivalent(a.y);
-}
-
-// https://github.com/anza-xyz/agave/blob/a8aef04122068ec36a7af0721e36ee58efa0bef2/sdk/src/ed25519_instruction.rs#L163
-pub fn getInstructionData(
-    len: usize,
-    current_instruction_data: []const u8,
-    all_instruction_datas: []const []const u8,
-    instruction_idx: u16,
-    offset: u16,
-) error{InvalidDataOffsets}![]const u8 {
-    const instruction: []const u8 = if (instruction_idx == std.math.maxInt(u16))
-        current_instruction_data
-    else blk: {
-        if (instruction_idx >= all_instruction_datas.len) return error.InvalidDataOffsets;
-        break :blk all_instruction_datas[instruction_idx];
-    };
-
-    if (offset +| len > instruction.len) return error.InvalidDataOffsets;
-    return instruction[offset..][0..len];
 }
 
 // https://github.com/anza-xyz/agave/blob/a8aef04122068ec36a7af0721e36ee58efa0bef2/sdk/src/ed25519_instruction.rs#L35

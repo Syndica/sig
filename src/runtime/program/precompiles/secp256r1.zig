@@ -12,6 +12,7 @@ const InstructionContext = sig.runtime.InstructionContext;
 const PrecompileProgramError = precompile_programs.PrecompileProgramError;
 const TransactionError = sig.ledger.transaction_status.TransactionError;
 const verifyPrecompiles = precompile_programs.verifyPrecompiles;
+const getInstructionData = precompile_programs.getInstructionData;
 
 const P256 = std.crypto.ecc.P256;
 const Scalar = P256.scalar.Scalar;
@@ -107,27 +108,6 @@ pub fn verify(
 
         signature.verify(msg, pubkey) catch return error.InvalidSignature;
     }
-}
-
-fn getInstructionData(
-    data: []const u8,
-    instruction_data: []const []const u8,
-    instruction_index: u16,
-    start: u16,
-    size: u64,
-) error{InvalidDataOffsets}![]const u8 {
-    const instruction: []const u8 = switch (instruction_index) {
-        std.math.maxInt(u16) => data,
-        else => b: {
-            if (instruction_index >= instruction_data.len) {
-                return error.InvalidDataOffsets;
-            }
-            break :b instruction_data[instruction_index];
-        },
-    };
-    const end = start +| size;
-    if (end > instruction.len) return error.InvalidDataOffsets;
-    return instruction[start..end];
 }
 
 // https://github.com/anza-xyz/agave/blob/a8aef04122068ec36a7af0721e36ee58efa0bef2/sdk/src/ed25519_instruction.rs#L258
