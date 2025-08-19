@@ -78,7 +78,7 @@ pub fn replayActiveSlots(state: ReplayExecutionState) !bool {
 
     const active_slots = try state.slot_tracker.activeSlots(state.allocator);
     defer state.allocator.free(active_slots);
-    state.logger.info().logf("{} active slots to replay", .{active_slots.len});
+    state.logger.debug().logf("{} active slots to replay", .{active_slots.len});
     if (active_slots.len == 0) {
         return false;
     }
@@ -89,7 +89,7 @@ pub fn replayActiveSlots(state: ReplayExecutionState) !bool {
         slot_statuses.deinit(state.allocator);
     }
     for (active_slots) |slot| {
-        state.logger.info().logf("replaying slot: {}", .{slot});
+        state.logger.debug().logf("replaying slot: {}", .{slot});
         const result = try replaySlot(state, slot);
         errdefer result.deinit(state.allocator);
         try slot_statuses.append(state.allocator, .{ slot, result });
@@ -147,6 +147,7 @@ fn replaySlot(state: ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
 
     const progress_get_or_put = try state.progress_map.map.getOrPut(state.allocator, slot);
     if (progress_get_or_put.found_existing and progress_get_or_put.value_ptr.is_dead) {
+        state.logger.info().logf("slot is dead: {}", .{slot});
         return .dead;
     }
 
@@ -199,7 +200,10 @@ fn replaySlot(state: ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
             for (entries) |entry| entry.deinit(state.allocator);
             state.allocator.free(entries);
         }
-        state.logger.info().logf("got {} entries for slot {}", .{ entries.len, slot });
+        if (entries.len == 0)
+            state.logger.debug().logf("got {} entries for slot {}", .{ entries.len, slot })
+        else
+            state.logger.info().logf("got {} entries for slot {}", .{ entries.len, slot });
 
         if (entries.len == 0) {
             return .empty;
@@ -397,33 +401,30 @@ fn updateConsensusForFrozenSlot(
 }
 
 pub fn processReplayResults(
-    replay_state: ReplayExecutionState,
+    state: ReplayExecutionState,
     slot_statuses: []const struct { Slot, ReplaySlotStatus },
 ) !bool {
     var processed_a_slot = false;
     for (slot_statuses) |slot_status| {
         const slot, const status = slot_status;
 
-        const maybe_entries = try awaitConfirmedEntriesForSlot(
-            replay_state,
-            slot,
-            status,
-        );
+        const maybe_entries = try awaitConfirmedEntriesForSlot(state, slot, status);
+
         // If entries is null, it means the slot failed or was skipped, so continue to next slot
         const entries = if (maybe_entries) |entries| entries else continue;
 
-        var slot_info = replay_state.slot_tracker.get(slot) orelse
-            return error.MissingSlotInTracker;
+        var slot_info = state.slot_tracker.get(slot) orelse return error.MissingSlotInTracker;
 
         // Freeze the bank if its entries where completly processed.
         if (slot_info.state.tickHeight() == slot_info.constants.max_tick_height) {
+            state.logger.info().logf("finished replaying slot: {}", .{slot});
             const is_leader_block =
-                slot_info.constants.collector_id.equals(&replay_state.my_identity);
+                slot_info.constants.collector_id.equals(&state.my_identity);
             if (!is_leader_block) {
-                try replay.freeze.freezeSlot(replay_state.allocator, .init(
-                    .from(replay_state.logger),
-                    replay_state.account_store,
-                    &(replay_state.epochs.getForSlot(slot) orelse return error.MissingEpoch),
+                try replay.freeze.freezeSlot(state.allocator, .init(
+                    .from(state.logger),
+                    state.account_store,
+                    &(state.epochs.getForSlot(slot) orelse return error.MissingEpoch),
                     slot_info.state,
                     slot_info.constants,
                     slot,
@@ -438,6 +439,8 @@ pub fn processReplayResults(
             try updateConsensusForFrozenSlot(replay_state, slot);
             // TODO block_metadata_notifier
             // TODO block_metadata_notifier
+        } else {
+            state.logger.info().logf("partially replayed slot: {}", .{slot});
         }
     }
     return processed_a_slot;
