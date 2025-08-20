@@ -240,7 +240,7 @@ jobs:
       - attach_workspace:
           at: workspace
       - run:
-          name: Run Allocatrs Fuzzer
+          name: Run Allocators Fuzzer
           command: workspace/zig-out-release/bin/fuzz allocators 19 10000
 
   ledger_fuzz:

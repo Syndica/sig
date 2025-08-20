@@ -56,5 +56,6 @@ fn initPrecompileEntrypoints() std.StaticStringMap(EntrypointFn) {
     return std.StaticStringMap(EntrypointFn).initComptime(&.{
         .{ precompiles.ed25519.ID.base58String().slice(), precompiles.ed25519.execute },
         .{ precompiles.secp256k1.ID.base58String().slice(), precompiles.secp256k1.execute },
+        .{ precompiles.secp256r1.ID.base58String().slice(), precompiles.secp256r1.execute },
     });
 }

@@ -1042,7 +1042,7 @@ pub const LedgerReader = struct {
 
         const slot_meta = maybe_slot_meta.?;
         _, const end_index = completed_ranges.items[completed_ranges.items.len - 1];
-        const num_shreds = @as(u64, @intCast(end_index)) - start_index + 1;
+        const num_shreds = end_index - start_index;
 
         const entries = try self.getSlotEntriesInBlock(
             allocator,

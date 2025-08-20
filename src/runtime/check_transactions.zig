@@ -300,11 +300,12 @@ fn validateFeePayer(
         payer.account.data.len,
     );
 
-    sig.core.rent_collector.RentCollector.checkRentStateWithAccount(
+    if (RentCollector.checkRentStateWithAccount(
         pre_rent_state,
         post_rent_state,
         &payer.pubkey,
-    ) catch return .{ .InsufficientFundsForRent = .{ .account_index = 0 } };
+        0, // Fee payer is always at index 0
+    )) |err| return err;
 
     return null;
 }
@@ -381,7 +382,7 @@ fn loadMessageNonceAccount(
     ].getSigners();
 
     // check nonce is authorised
-    for (signers.slice()) |signer| {
+    for (signers.constSlice()) |signer| {
         if (signer.equals(&nonce_data.authority)) break;
     } else return null;
 
@@ -401,8 +402,7 @@ fn verifyNonceAccount(account: AccountSharedData, recent_blockhash: *const Hash)
     const nonce = sig.bincode.readFromSlice(fba.allocator(), NonceVersions, account.data, .{}) catch
         return null;
 
-    const nonce_data = nonce.verify(recent_blockhash.*) orelse
-        return null;
+    const nonce_data = nonce.verify(recent_blockhash.*) orelse return null;
 
     return nonce_data;
 }

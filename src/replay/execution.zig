@@ -188,6 +188,7 @@ fn replaySlot(state: ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
     // out more usages of this struct.
     const confirmation_progress = &fork_progress.replay_progress.arc_ed.rwlock_ed;
 
+    const previous_last_entry = confirmation_progress.last_entry;
     const entries, const slot_is_full = blk: {
         const entries, const num_shreds, const slot_is_full =
             try state.ledger_reader.getSlotEntriesWithShredInfo(
@@ -209,6 +210,7 @@ fn replaySlot(state: ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
             return .empty;
         }
 
+        confirmation_progress.last_entry = entries[entries.len - 1].hash;
         confirmation_progress.num_shreds += num_shreds;
         confirmation_progress.num_entries += entries.len;
         for (entries) |e| confirmation_progress.num_txs += e.transactions.len;
@@ -265,7 +267,7 @@ fn replaySlot(state: ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
         state.account_store,
         state.thread_pool,
         entries,
-        confirmation_progress.last_entry,
+        previous_last_entry,
         svm_params,
         committer,
         verify_ticks_params,
