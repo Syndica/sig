@@ -24,6 +24,8 @@ const Committer = replay.commit.Committer;
 const SvmGateway = replay.svm_gateway.SvmGateway;
 const TransactionScheduler = replay.scheduler.TransactionScheduler;
 
+const SlotHashes = sig.runtime.sysvar.SlotHashes;
+
 const verifyPoh = core.entry.verifyPoh;
 const resolveBatch = replay.resolve_lookup.resolveBatch;
 
@@ -78,11 +80,18 @@ pub fn confirmSlot(
     }
 
     try startPohVerify(allocator, logger, &future.poh_verifier, last_entry, entries, &future.exit);
+
+    // TODO: Sighhhhh, we need the sysvar cache...
+    const slot_hashes = try SlotHashes.init(allocator);
+    defer slot_hashes.deinit(allocator);
+
     try scheduleTransactionBatches(
         allocator,
         &future.scheduler,
         account_store,
         entries,
+        svm_params.slot,
+        slot_hashes,
         ancestors,
         reserved_accounts,
     );
@@ -124,6 +133,8 @@ fn scheduleTransactionBatches(
     scheduler: *TransactionScheduler,
     account_store: AccountStore,
     entries: []const Entry,
+    slot: Slot,
+    slot_hashes: SlotHashes,
     ancestors: *const Ancestors,
     reserved_accounts: *const ReservedAccounts,
 ) !void {
@@ -135,6 +146,8 @@ fn scheduleTransactionBatches(
             allocator,
             account_store.reader().forSlot(ancestors),
             entry.transactions,
+            slot,
+            slot_hashes,
             reserved_accounts,
         );
         errdefer batch.deinit(allocator);

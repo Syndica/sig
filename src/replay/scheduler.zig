@@ -310,11 +310,28 @@ test "TransactionScheduler: happy path" {
     );
     defer scheduler.deinit();
 
+    const slot_hashes = try sig.runtime.sysvar.SlotHashes.init(allocator);
+    defer slot_hashes.deinit(allocator);
+
     {
-        const batch1 = try resolveBatch(allocator, .noop, transactions[0..3], &.empty);
+        const batch1 = try resolveBatch(
+            allocator,
+            .noop,
+            transactions[0..3],
+            state.svmParams().slot,
+            slot_hashes,
+            &.empty,
+        );
         errdefer batch1.deinit(allocator);
 
-        const batch2 = try resolveBatch(allocator, .noop, transactions[3..6], &.empty);
+        const batch2 = try resolveBatch(
+            allocator,
+            .noop,
+            transactions[3..6],
+            state.svmParams().slot,
+            slot_hashes,
+            &.empty,
+        );
         errdefer batch2.deinit(allocator);
 
         scheduler.addBatchAssumeCapacity(batch1);
@@ -364,11 +381,28 @@ test "TransactionScheduler: duplicate batch passes through to svm" {
     );
     defer scheduler.deinit();
 
+    const slot_hashes = try sig.runtime.sysvar.SlotHashes.init(allocator);
+    defer slot_hashes.deinit(allocator);
+
     {
-        const batch1 = try resolveBatch(allocator, .noop, transactions[0..3], &.empty);
+        const batch1 = try resolveBatch(
+            allocator,
+            .noop,
+            transactions[0..3],
+            state.svmParams().slot,
+            slot_hashes,
+            &.empty,
+        );
         errdefer batch1.deinit(allocator);
 
-        const batch1_dupe = try resolveBatch(allocator, .noop, transactions[0..3], &.empty);
+        const batch1_dupe = try resolveBatch(
+            allocator,
+            .noop,
+            transactions[0..3],
+            state.svmParams().slot,
+            slot_hashes,
+            &.empty,
+        );
         errdefer batch1_dupe.deinit(allocator);
 
         scheduler.addBatchAssumeCapacity(batch1);
@@ -418,8 +452,18 @@ test "TransactionScheduler: failed account locks" {
     );
     defer scheduler.deinit();
 
+    const slot_hashes = try sig.runtime.sysvar.SlotHashes.init(allocator);
+    defer slot_hashes.deinit(allocator);
+
     {
-        const batch1 = try resolveBatch(allocator, .noop, &unresolved_batch, &.empty);
+        const batch1 = try resolveBatch(
+            allocator,
+            .noop,
+            &unresolved_batch,
+            state.svmParams().slot,
+            slot_hashes,
+            &.empty,
+        );
         errdefer batch1.deinit(allocator);
 
         scheduler.addBatchAssumeCapacity(batch1);
@@ -476,11 +520,28 @@ test "TransactionScheduler: signature verification failure" {
     replaced_sigs[0].data[0] +%= 1;
     transactions[5].signatures = replaced_sigs;
 
+    const slot_hashes = try sig.runtime.sysvar.SlotHashes.init(allocator);
+    defer slot_hashes.deinit(allocator);
+
     {
-        const batch1 = try resolveBatch(allocator, .noop, transactions[0..3], &.empty);
+        const batch1 = try resolveBatch(
+            allocator,
+            .noop,
+            transactions[0..3],
+            state.svmParams().slot,
+            slot_hashes,
+            &.empty,
+        );
         errdefer batch1.deinit(allocator);
 
-        const batch2 = try resolveBatch(allocator, .noop, transactions[3..6], &.empty);
+        const batch2 = try resolveBatch(
+            allocator,
+            .noop,
+            transactions[3..6],
+            state.svmParams().slot,
+            slot_hashes,
+            &.empty,
+        );
         errdefer batch2.deinit(allocator);
 
         scheduler.addBatchAssumeCapacity(batch1);
