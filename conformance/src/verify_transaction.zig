@@ -36,25 +36,6 @@ pub fn verifyTransaction(
     };
     const msg_hash = sig.core.transaction.Message.hash(serialized_msg.slice());
 
-    if (!feature_set.active(.move_precompile_verification_to_svm, slot)) {
-        const maybe_verify_error = try sig.runtime.program.precompiles.verifyPrecompiles(
-            allocator,
-            &transaction,
-            feature_set,
-            slot,
-        );
-        if (maybe_verify_error) |verify_error| {
-            const converted = utils.convertTransactionError(verify_error);
-            return .{ .err = .{
-                .sanitization_error = true,
-                .status = converted.err,
-                .instruction_error = converted.instruction_error,
-                .instruction_error_index = converted.instruction_index,
-                .custom_error = converted.custom_error,
-            } };
-        }
-    }
-
     var reserved_accounts = try sig.core.reserved_accounts.initForSlot(allocator, feature_set, slot);
     defer reserved_accounts.deinit(allocator);
 
@@ -87,6 +68,25 @@ pub fn verifyTransaction(
         } };
     };
     defer resolved_batch.deinit(allocator);
+
+    if (!feature_set.active(.move_precompile_verification_to_svm, slot)) {
+        const maybe_verify_error = try sig.runtime.program.precompiles.verifyPrecompiles(
+            allocator,
+            &transaction,
+            feature_set,
+            slot,
+        );
+        if (maybe_verify_error) |verify_error| {
+            const converted = utils.convertTransactionError(verify_error);
+            return .{ .err = .{
+                .sanitization_error = true,
+                .status = converted.err,
+                .instruction_error = converted.instruction_error,
+                .instruction_error_index = converted.instruction_index,
+                .custom_error = converted.custom_error,
+            } };
+        }
+    }
 
     const resolved_txn = resolved_batch.transactions[0];
 
