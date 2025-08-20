@@ -793,7 +793,8 @@ fn executeTxnContext(
     const current_epoch_stakes = try EpochStakes.init(allocator);
     defer current_epoch_stakes.deinit(allocator);
 
-    var status_cache = StatusCache.DEFAULT;
+    var status_cache: StatusCache = .DEFAULT;
+    defer status_cache.deinit(allocator);
 
     const environment = TransactionExecutionEnvironment{
         .ancestors = &ancestors,
@@ -851,21 +852,28 @@ fn serializeOutput(
     switch (result) {
         .ok => |txn| {
             const is_ok = switch (txn) {
-                .executed => |executed| executed.executed_transaction.instr_err == null,
+                .executed => |executed| executed.executed_transaction.err == null,
                 .fees_only => false,
             };
 
             const errors: utils.ConvertedErrorCodes = switch (txn) {
-                .executed => |executed| if (executed.executed_transaction.instr_err) |instr_err| .{
-                    // hardcode InstructionError, since nothing else could be returned from executeTransaction
-                    .err = 9,
-                    .instruction_error = @intFromEnum(instr_err[1]) + 1,
-                    // TODO: special case for precompile failures
-                    .custom_error = switch (instr_err[1]) {
-                        .Custom => |v| v,
-                        else => 0,
-                    },
-                    .instruction_index = instr_err[0],
+                .executed => |executed| if (executed.executed_transaction.err) |err| blk: {
+                    const txn_err_code = @intFromEnum(err) + 1;
+                    const ixn_err_index, const ixn_err_code, const custom_err_code = switch (err) {
+                        .InstructionError => |ixn_err| .{
+                            ixn_err[0], @intFromEnum(ixn_err[1]) + 1, switch (ixn_err[1]) {
+                                .Custom => |v| v,
+                                else => 0,
+                            },
+                        },
+                        else => .{ 0, 0, 0 },
+                    };
+                    break :blk .{
+                        .err = txn_err_code,
+                        .instruction_error = ixn_err_code,
+                        .custom_error = custom_err_code,
+                        .instruction_index = ixn_err_index,
+                    };
                 } else .default,
                 .fees_only => |fees_only| utils.convertTransactionError(fees_only.err),
             };
@@ -880,71 +888,89 @@ fn serializeOutput(
                 .executed => |executed| executed.fees,
             };
 
-            const acct_states = switch (txn) {
-                .executed => |executed| acct_states: {
-                    var acct_states: std.ArrayList(pb.AcctState) = .init(allocator);
-                    errdefer acct_states.deinit();
+            const acct_states = blk: {
+                const relevant_acct_states = switch (txn) {
+                    .executed => |executed| acct_states: {
+                        var acct_states: std.ArrayList(pb.AcctState) = .init(allocator);
+                        errdefer acct_states.deinit();
 
-                    for (executed.loaded_accounts.accounts.constSlice(), 0..) |acc, i| {
-                        if (!sanitized.accounts.get(i).is_writable) continue;
-                        // Only keep accounts that were passed in as account_keys or as ALUT accounts
-                        for (sanitized.accounts.items(.pubkey)) |key| {
-                            if (key.equals(&acc.pubkey)) break;
-                        } else continue;
+                        for (executed.loaded_accounts.accounts.constSlice()) |acc| {
+                            try acct_states.append(.{
+                                .address = try .copy(&acc.pubkey.data, allocator),
+                                .lamports = acc.account.lamports,
+                                .data = try .copy(acc.account.data, allocator),
+                                .executable = acc.account.executable,
+                                .rent_epoch = acc.account.rent_epoch,
+                                .owner = try .copy(&acc.account.owner.data, allocator),
+                                .seed_addr = null,
+                            });
+                        }
 
-                        try acct_states.append(.{
-                            .address = try .copy(&acc.pubkey.data, allocator),
-                            .lamports = acc.account.lamports,
-                            .data = try .copy(acc.account.data, allocator),
-                            .executable = acc.account.executable,
-                            .rent_epoch = acc.account.rent_epoch,
-                            .owner = try .copy(&acc.account.owner.data, allocator),
-                            .seed_addr = null,
-                        });
+                        break :acct_states acct_states;
+                    },
+                    .fees_only => |fees_only| acct_states: {
+                        var acct_states: std.ArrayList(pb.AcctState) = .init(allocator);
+                        errdefer acct_states.deinit();
+                        errdefer for (acct_states.items) |acct_state| acct_state.deinit();
+                        try acct_states.ensureTotalCapacityPrecise(fees_only.rollbacks.count());
+
+                        const fee_payer_address = sanitized.fee_payer;
+                        switch (fees_only.rollbacks) {
+                            .fee_payer_only => |fee_payer_account| {
+                                acct_states.appendAssumeCapacity(try sharedAccountToState(
+                                    allocator,
+                                    fee_payer_address,
+                                    fee_payer_account.account,
+                                ));
+                            },
+                            .same_nonce_and_fee_payer => |nonce| {
+                                acct_states.appendAssumeCapacity(try sharedAccountToState(
+                                    allocator,
+                                    nonce.pubkey,
+                                    nonce.account,
+                                ));
+                            },
+                            .separate_nonce_and_fee_payer => |pair| {
+                                const nonce, const fee_payer_account = pair;
+                                acct_states.appendAssumeCapacity(try sharedAccountToState(
+                                    allocator,
+                                    fee_payer_address,
+                                    fee_payer_account.account,
+                                ));
+                                acct_states.appendAssumeCapacity(try sharedAccountToState(
+                                    allocator,
+                                    nonce.pubkey,
+                                    nonce.account,
+                                ));
+                            },
+                        }
+                        break :acct_states acct_states;
+                    },
+                };
+                defer relevant_acct_states.deinit();
+
+                // Filter relevant accounts.
+                var acct_states: std.ArrayList(pb.AcctState) = .init(allocator);
+                errdefer acct_states.deinit();
+                try acct_states.ensureTotalCapacityPrecise(relevant_acct_states.items.len);
+
+                for (relevant_acct_states.items, 0..) |acct_state, i| {
+                    // Only keep accounts that were passed in as account_keys or as ALUT accounts
+                    const pubkey = try parsePubkey(acct_state.address.getSlice());
+                    const is_loaded_account = for (sanitized.accounts.items(.pubkey)) |key| {
+                        if (key.equals(&pubkey)) break true;
+                    } else false;
+
+                    // Also, only keep accounts that are writable.
+                    if (sanitized.accounts.get(i).is_writable and is_loaded_account) {
+                        acct_states.appendAssumeCapacity(acct_state);
+                    } else {
+                        acct_state.deinit();
                     }
+                }
 
-                    break :acct_states acct_states;
-                },
-                .fees_only => |fees_only| acct_states: {
-                    var acct_states: std.ArrayList(pb.AcctState) = .init(allocator);
-                    errdefer acct_states.deinit();
-                    errdefer for (acct_states.items) |acct_state| acct_state.deinit();
-                    try acct_states.ensureTotalCapacityPrecise(fees_only.rollbacks.count());
-
-                    const fee_payer_address = sanitized.fee_payer;
-                    switch (fees_only.rollbacks) {
-                        .fee_payer_only => |fee_payer_account| {
-                            acct_states.appendAssumeCapacity(try sharedAccountToState(
-                                allocator,
-                                fee_payer_address,
-                                fee_payer_account.account,
-                            ));
-                        },
-                        .same_nonce_and_fee_payer => |nonce| {
-                            acct_states.appendAssumeCapacity(try sharedAccountToState(
-                                allocator,
-                                nonce.pubkey,
-                                nonce.account,
-                            ));
-                        },
-                        .separate_nonce_and_fee_payer => |pair| {
-                            const nonce, const fee_payer_account = pair;
-                            acct_states.appendAssumeCapacity(try sharedAccountToState(
-                                allocator,
-                                fee_payer_address,
-                                fee_payer_account.account,
-                            ));
-                            acct_states.appendAssumeCapacity(try sharedAccountToState(
-                                allocator,
-                                nonce.pubkey,
-                                nonce.account,
-                            ));
-                        },
-                    }
-                    break :acct_states acct_states;
-                },
+                break :blk acct_states;
             };
-            errdefer acct_states.deinit();
 
             const resulting_state: pb.ResultingState = .{
                 .rent_debits = .init(allocator),
@@ -985,7 +1011,6 @@ fn serializeOutput(
                 .loaded_accounts_data_size = txn.loadedAccountsDataSize(),
             };
         },
-        // TODO: 008651fd6d7efed350fa33eeba912cb6e670eb7c_265678.fix
         .err => |err| {
             const converted = utils.convertTransactionError(err);
             return .{
@@ -1175,31 +1200,34 @@ fn loadTransactionMesssage(
         };
     }
 
-    const address_lookups = try allocator.alloc(
-        TransactionAddressLookup,
-        message.address_table_lookups.items.len,
-    );
-    for (address_lookups, message.address_table_lookups.items) |*lookup, pb_lookup| {
-        const writable_indexes = try allocator.alloc(u8, pb_lookup.writable_indexes.items.len);
-        for (
-            writable_indexes,
-            pb_lookup.writable_indexes.items,
-        ) |*writable_index, pb_writable_index|
-            writable_index.* = @truncate(pb_writable_index);
+    const address_lookups: []const TransactionAddressLookup = if (!message.is_legacy) blk: {
+        const address_lookups = try allocator.alloc(
+            TransactionAddressLookup,
+            message.address_table_lookups.items.len,
+        );
+        for (address_lookups, message.address_table_lookups.items) |*lookup, pb_lookup| {
+            const writable_indexes = try allocator.alloc(u8, pb_lookup.writable_indexes.items.len);
+            for (
+                writable_indexes,
+                pb_lookup.writable_indexes.items,
+            ) |*writable_index, pb_writable_index|
+                writable_index.* = @truncate(pb_writable_index);
 
-        const readonly_indexes = try allocator.alloc(u8, pb_lookup.readonly_indexes.items.len);
-        for (
-            readonly_indexes,
-            pb_lookup.readonly_indexes.items,
-        ) |*readonly_index, pb_readonly_index|
-            readonly_index.* = @truncate(pb_readonly_index);
+            const readonly_indexes = try allocator.alloc(u8, pb_lookup.readonly_indexes.items.len);
+            for (
+                readonly_indexes,
+                pb_lookup.readonly_indexes.items,
+            ) |*readonly_index, pb_readonly_index|
+                readonly_index.* = @truncate(pb_readonly_index);
 
-        lookup.* = TransactionAddressLookup{
-            .table_address = Pubkey{ .data = pb_lookup.account_key.getSlice()[0..Pubkey.SIZE].* },
-            .writable_indexes = writable_indexes,
-            .readonly_indexes = readonly_indexes,
-        };
-    }
+            lookup.* = TransactionAddressLookup{
+                .table_address = .{ .data = pb_lookup.account_key.getSlice()[0..Pubkey.SIZE].* },
+                .writable_indexes = writable_indexes,
+                .readonly_indexes = readonly_indexes,
+            };
+        }
+        break :blk address_lookups;
+    } else &.{};
 
     const header = message.header orelse pb.MessageHeader{
         .num_required_signatures = 1,

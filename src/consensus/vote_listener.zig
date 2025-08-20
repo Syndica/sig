@@ -17,6 +17,8 @@ const OptimisticConfirmationVerifier =
 const SlotTracker = sig.replay.trackers.SlotTracker;
 const EpochTracker = sig.replay.trackers.EpochTracker;
 
+const Logger = sig.trace.Logger("vote_listener");
+
 pub const BankForksStub = struct {
     slot_tracker: SlotTracker,
     epoch_tracker: EpochTracker,
@@ -118,7 +120,7 @@ pub const VoteListener = struct {
     pub fn init(
         allocator: std.mem.Allocator,
         exit: sig.sync.ExitCondition,
-        logger: sig.trace.Logger,
+        logger: Logger,
         vote_tracker: *VoteTracker,
         params: struct {
             bank_forks_rw: *sig.sync.RwMux(BankForksStub),
@@ -212,14 +214,14 @@ const UnverifiedVoteReceptor = struct {
     /// and sending the transactions which are verified to `verified_vote_transactions_sender`.
     fn consumeTransactionsAndSendVerified(
         allocator: std.mem.Allocator,
-        bank_forks: *const BankForksStub,
+        epoch_tracker: *const EpochTracker,
         /// Presumably populated by `UnverifiedVoteReceptor.recv`.
         unverified_votes_buffer: *std.ArrayListUnmanaged(Transaction),
         /// Sends to `processVotesLoop`'s `receivers.verified_vote_transactions` parameter.
         verified_vote_transactions_sender: *sig.sync.Channel(Transaction),
     ) (std.mem.Allocator.Error || error{ChannelClosed})!void {
         while (unverified_votes_buffer.pop()) |vote_tx| {
-            switch (try verifyVoteTransaction(allocator, vote_tx, bank_forks)) {
+            switch (try verifyVoteTransaction(allocator, vote_tx, epoch_tracker)) {
                 .verified => verified_vote_transactions_sender.send(vote_tx) catch |err| {
                     vote_tx.deinit(allocator);
                     return err;
@@ -258,7 +260,7 @@ const UnverifiedVoteReceptor = struct {
 
         try consumeTransactionsAndSendVerified(
             allocator,
-            bank_forks,
+            &bank_forks.epoch_tracker,
             unverified_votes_buffer,
             verified_vote_transactions_sender,
         );
@@ -331,7 +333,7 @@ fn verifyVoteTransaction(
     allocator: std.mem.Allocator,
     vote_tx: Transaction,
     /// Should be associated with the root bank.
-    bank_forks: *const BankForksStub,
+    epoch_tracker: *const EpochTracker,
 ) std.mem.Allocator.Error!enum { verified, unverified } {
     vote_tx.verify() catch return .unverified;
     const parsed_vote =
@@ -342,10 +344,11 @@ fn verifyVoteTransaction(
     const vote = parsed_vote.vote;
 
     const slot = vote.lastVotedSlot() orelse return .unverified;
-    const authorized_voter = bank_forks.getAuthorizedVoterPubkey(
-        slot,
-        vote_account_key,
-    ) orelse return .unverified;
+    const authorized_voter: Pubkey = blk: {
+        const epoch_consts = epoch_tracker.getForSlot(slot) orelse return .unverified;
+        const epoch_authorized_voters = &epoch_consts.stakes.epoch_authorized_voters;
+        break :blk epoch_authorized_voters.get(vote_account_key) orelse return .unverified;
+    };
 
     const any_key_is_both_signer_and_authorized_voter = for (
         vote_tx.msg.account_keys,
@@ -377,7 +380,7 @@ const Receivers = struct {
 
 fn processVotesLoop(
     allocator: std.mem.Allocator,
-    logger: sig.trace.Logger,
+    logger: Logger,
     vote_tracker: *VoteTracker,
     bank_forks_rw: *sig.sync.RwMux(BankForksStub),
     senders: Senders,
@@ -430,7 +433,7 @@ const LedgerRef = struct {
 
 fn processVotesOnce(
     allocator: std.mem.Allocator,
-    logger: sig.trace.Logger,
+    logger: Logger,
     vote_tracker: *VoteTracker,
     bank_forks_rw: *sig.sync.RwMux(BankForksStub),
     senders: Senders,
@@ -506,7 +509,7 @@ const ListenAndConfirmVotesError = error{
 
 fn listenAndConfirmVotes(
     allocator: std.mem.Allocator,
-    logger: sig.trace.Logger,
+    logger: Logger,
     vote_tracker: *VoteTracker,
     bank_forks: *const BankForksStub,
     senders: Senders,
@@ -571,7 +574,7 @@ fn listenAndConfirmVotes(
 
 fn filterAndConfirmWithNewVotes(
     allocator: std.mem.Allocator,
-    logger: sig.trace.Logger,
+    logger: Logger,
     vote_tracker: *VoteTracker,
     bank_forks: *const BankForksStub,
     senders: Senders,
@@ -849,7 +852,7 @@ const SlotsDiff = struct {
 
 fn trackNewVotesAndNotifyConfirmations(
     allocator: std.mem.Allocator,
-    logger: sig.trace.Logger,
+    logger: Logger,
     vote_tracker: *VoteTracker,
     bank_forks: *const BankForksStub,
     senders: Senders,
@@ -1642,46 +1645,15 @@ test "vote_parser.parseSanitizedVoteTransaction" {
 
 test verifyVoteTransaction {
     const allocator = std.testing.allocator;
-
-    const bank_forks: BankForksStub = bf: {
-        var stakes: sig.core.EpochStakes = try .initEmptyWithGenesisStakeHistoryEntry(allocator);
-        defer stakes.deinit(allocator);
-
-        break :bf try .init(allocator, .DEFAULT, .{
-            .slot = 0,
-            .constants = .{
-                .parent_slot = 0,
-                .parent_hash = .ZEROES,
-                .parent_lt_hash = null,
-                .block_height = 1,
-                .collector_id = .ZEROES,
-                .max_tick_height = 1,
-                .fee_rate_governor = .DEFAULT,
-                .epoch_reward_status = .inactive,
-                .ancestors = .{},
-                .feature_set = .ALL_DISABLED,
-                .reserved_accounts = .empty,
-            },
-            .state = try .genesis(allocator),
-            .epoch_constants = .{
-                .hashes_per_tick = 1,
-                .ticks_per_slot = 1,
-                .ns_per_slot = 1,
-                .genesis_creation_time = 1,
-                .slots_per_year = 1,
-                .stakes = stakes,
-                .rent_collector = .testDefault(0),
-            },
-        });
-    };
-    defer bank_forks.deinit(allocator);
+    const epoch_tracker: EpochTracker = .{ .schedule = .DEFAULT };
+    defer epoch_tracker.deinit(allocator);
 
     try std.testing.expectEqual(
         .unverified,
         // TODO: consider making two separate APIs, one for the slot tracker, and one for the epoch tracker,
         // since it seems like there's little or no real data inter-dependency internally.
         // Argument against: whether the data is interdependent could change.
-        verifyVoteTransaction(allocator, .EMPTY, &bank_forks),
+        verifyVoteTransaction(allocator, .EMPTY, &epoch_tracker),
     );
 }
 

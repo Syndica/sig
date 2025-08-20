@@ -12,8 +12,6 @@ const Counter = sig.prometheus.Counter;
 const Entry = sig.core.Entry;
 const Hash = sig.core.Hash;
 const Histogram = sig.prometheus.Histogram;
-const Logger = sig.trace.Logger;
-const ScopedLogger = sig.trace.ScopedLogger;
 const Pubkey = sig.core.Pubkey;
 const Registry = sig.prometheus.Registry;
 const RwMux = sig.sync.RwMux;
@@ -48,7 +46,7 @@ const DEFAULT_TICKS_PER_SECOND = sig.core.time.DEFAULT_TICKS_PER_SECOND;
 
 pub const LedgerReader = struct {
     allocator: Allocator,
-    logger: ScopedLogger(@typeName(Self)),
+    logger: Logger,
     db: LedgerDB,
     // TODO: change naming to 'highest_slot_cleaned'
     lowest_cleanup_slot: *RwMux(Slot),
@@ -58,6 +56,7 @@ pub const LedgerReader = struct {
     metrics: LedgerReaderMetrics,
 
     const Self = @This();
+    const Logger = sig.trace.Logger(@typeName(Self));
 
     pub fn init(
         allocator: Allocator,
@@ -1043,7 +1042,7 @@ pub const LedgerReader = struct {
 
         const slot_meta = maybe_slot_meta.?;
         _, const end_index = completed_ranges.items[completed_ranges.items.len - 1];
-        const num_shreds = @as(u64, @intCast(end_index)) - start_index + 1;
+        const num_shreds = end_index - start_index;
 
         const entries = try self.getSlotEntriesInBlock(
             allocator,

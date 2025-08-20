@@ -8,7 +8,7 @@ const requests = server.requests;
 const connection = server.connection;
 const AccountDataHandle = sig.accounts_db.buffer_pool.AccountDataHandle;
 
-const LOGGER_SCOPE = "rpc.server.basic";
+const Logger = sig.trace.Logger("rpc.server.basic");
 
 pub const AcceptAndServeConnectionError =
     error{AcceptError} ||
@@ -19,7 +19,7 @@ pub const AcceptAndServeConnectionError =
     error{AccountsDbError};
 
 pub fn acceptAndServeConnection(server_ctx: *server.Context) AcceptAndServeConnectionError!void {
-    const logger = server_ctx.logger.withScope(LOGGER_SCOPE);
+    const logger = Logger.from(server_ctx.logger);
 
     const conn = acceptHandled(
         server_ctx.tcp,
@@ -59,7 +59,7 @@ pub fn acceptAndServeConnection(server_ctx: *server.Context) AcceptAndServeConne
 
 fn respondSimpleErrorStatusBody(
     request: *std.http.Server.Request,
-    logger: sig.trace.ScopedLogger(LOGGER_SCOPE),
+    logger: Logger,
     status: std.http.Status,
     body: []const u8,
 ) !void {
@@ -84,7 +84,7 @@ fn respondSimpleErrorStatusBody(
 
 fn parseAndHandleHead(
     request: *std.http.Server.Request,
-    logger: sig.trace.ScopedLogger(LOGGER_SCOPE),
+    logger: Logger,
 ) !?requests.HeadInfo {
     const conn = request.server.connection;
     return requests.HeadInfo.parseFromStdHead(request.head) catch |err| switch (err) {
@@ -118,11 +118,11 @@ fn parseAndHandleHead(
 fn handleGetOrHead(
     server_ctx: *server.Context,
     request: *std.http.Server.Request,
-    logger: sig.trace.ScopedLogger(LOGGER_SCOPE),
+    logger: Logger,
 ) !void {
     const conn = request.server.connection;
     switch (requests.getRequestTargetResolve(
-        logger.unscoped(),
+        .from(logger),
         request.head.target,
         &server_ctx.accountsdb.latest_snapshot_gen_info,
     )) {
@@ -236,7 +236,7 @@ fn handleGetOrHead(
 fn handlePost(
     server_ctx: *server.Context,
     request: *std.http.Server.Request,
-    logger: sig.trace.ScopedLogger(LOGGER_SCOPE),
+    logger: Logger,
     head_info: requests.HeadInfo,
 ) !void {
     const conn = request.server.connection;
@@ -295,7 +295,7 @@ fn handlePost(
 fn handleRpcRequest(
     server_ctx: *server.Context,
     request: *std.http.Server.Request,
-    logger: sig.trace.ScopedLogger(LOGGER_SCOPE),
+    logger: Logger,
     content_body: []const u8,
 ) !void {
     var json_arena_state = std.heap.ArenaAllocator.init(server_ctx.allocator);

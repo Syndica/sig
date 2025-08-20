@@ -27,7 +27,7 @@ const ProcessedTransaction = sig.runtime.transaction_execution.ProcessedTransact
 
 const executeTransaction = replay.svm_gateway.executeTransaction;
 
-const ScopedLogger = sig.trace.ScopedLogger("replay-batcher");
+const Logger = sig.trace.Logger("replay-batcher");
 
 const ParsedVote = vote_listener.vote_parser.ParsedVote;
 
@@ -104,7 +104,7 @@ const BatchResult = union(enum) {
 /// This should only be used in a single thread at a time.
 pub const TransactionScheduler = struct {
     allocator: Allocator,
-    logger: ScopedLogger,
+    logger: Logger,
     committer: Committer,
     batches: std.ArrayListUnmanaged(ResolvedBatch),
     thread_pool: HomogeneousThreadPool(ProcessBatchTask),
@@ -128,7 +128,7 @@ pub const TransactionScheduler = struct {
 
     pub fn initCapacity(
         allocator: Allocator,
-        logger: ScopedLogger,
+        logger: Logger,
         committer: Committer,
         batch_capacity: usize,
         thread_pool: *ThreadPool,
@@ -261,7 +261,7 @@ pub const TransactionScheduler = struct {
 
 const ProcessBatchTask = struct {
     allocator: Allocator,
-    logger: ScopedLogger,
+    logger: Logger,
     svm_params: SvmGateway.Params,
     committer: Committer,
     batch_index: usize,

@@ -6,15 +6,13 @@ const AccountsDB = sig.accounts_db.AccountsDB;
 const LockoutIntervals = sig.consensus.replay_tower.LockoutIntervals;
 const Lockout = sig.runtime.program.vote.state.Lockout;
 const VotedStakes = sig.consensus.progress_map.consensus.VotedStakes;
+const Ancestors = sig.core.Ancestors;
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
-const SortedSet = sig.utils.collections.SortedSet;
 const TowerStorage = sig.consensus.tower_storage.TowerStorage;
 const TowerVoteState = sig.consensus.tower_state.TowerVoteState;
 const VoteState = sig.runtime.program.vote.state.VoteState;
 const VoteStateVersions = sig.runtime.program.vote.state.VoteStateVersions;
-const Logger = sig.trace.Logger;
-const ScopedLogger = sig.trace.ScopedLogger;
 
 pub const MAX_LOCKOUT_HISTORY = sig.runtime.program.vote.state.MAX_LOCKOUT_HISTORY;
 
@@ -69,8 +67,10 @@ pub const TowerError = error{
 };
 
 pub const Tower = struct {
-    logger: ScopedLogger(@typeName(Tower)),
+    logger: Logger,
     vote_state: TowerVoteState,
+
+    const Logger = sig.trace.Logger(@typeName(Tower));
 
     pub fn init(logger: Logger) Tower {
         var tower = Tower{
@@ -87,11 +87,22 @@ pub const Tower = struct {
         allocator: std.mem.Allocator,
         vote_account_pubkey: *const Pubkey,
         fork_root: Slot,
-        accounts_db: *AccountsDB,
+        slot_account_reader: sig.accounts_db.SlotAccountReader,
     ) !void {
-        const vote_account = try accounts_db.getAccountLatest(vote_account_pubkey) orelse {
-            self.initializeRoot(fork_root);
-            return;
+        const vote_account = blk: {
+            const maybe_vote_account = slot_account_reader.get(vote_account_pubkey.*) catch |err|
+                switch (err) {
+                    error.OutOfMemory,
+                    => |e| return e,
+                    error.InvalidOffset,
+                    error.FileIdNotFound,
+                    error.SlotNotFound,
+                    => null,
+                };
+            break :blk maybe_vote_account orelse {
+                self.initializeRoot(fork_root);
+                return;
+            };
         };
 
         const vote_state = try stateFromAccount(
@@ -226,7 +237,7 @@ pub const Tower = struct {
     pub fn isLockedOut(
         self: *const Tower,
         slot: Slot,
-        ancestors: *const SortedSet(Slot),
+        ancestors: *const Ancestors,
     ) !bool {
         if (!self.isRecent(slot)) {
             return true;
@@ -243,7 +254,7 @@ pub const Tower = struct {
         for (vote_state.votes.constSlice()) |vote| {
             if (slot != vote.slot and
                 // This means the validator is trying to vote on a fork incompatible with previous votes.
-                !ancestors.contains(vote.slot))
+                !ancestors.containsSlot(vote.slot))
             {
                 return true;
             }
@@ -253,7 +264,7 @@ pub const Tower = struct {
             if (slot != root_slot
                 // This case should never happen because bank forks purges all
                 // non-descendants of the root every time root is set
-            and !ancestors.contains(root_slot)) {
+            and !ancestors.containsSlot(root_slot)) {
                 return error.InvalidRootSlot;
             }
         }

@@ -139,30 +139,46 @@ pub const Fp = struct {
         return @reduce(.And, p == q);
     }
 
-    pub fn add(r: *Fp, a: Fp, b: Fp) void {
+    pub fn add(a: Fp, b: Fp) Fp {
+        var r: Fp = undefined;
         fiat.add(&r.limbs, a.limbs, b.limbs);
+        return r;
     }
 
-    pub fn sub(r: *Fp, a: Fp, b: Fp) void {
+    pub fn sub(a: Fp, b: Fp) Fp {
+        var r: Fp = undefined;
         fiat.sub(&r.limbs, a.limbs, b.limbs);
+        return r;
     }
 
-    pub fn mul(r: *Fp, a: Fp, b: Fp) void {
+    pub fn mul(a: Fp, b: Fp) Fp {
+        var r: Fp = undefined;
         fiat.mul(&r.limbs, a.limbs, b.limbs);
+        return r;
     }
 
-    pub fn sq(r: *Fp, a: Fp) void {
-        r.mul(a, a);
+    pub fn dbl(a: Fp) Fp {
+        return a.add(a);
     }
 
-    pub fn halve(r: *Fp, a: Fp) void {
-        const is_odd = r.limbs[0] & 0x1 != 0;
+    pub fn triple(a: Fp) Fp {
+        return a.dbl().add(a);
+    }
+
+    pub fn sq(a: Fp) Fp {
+        return a.mul(a);
+    }
+
+    pub fn halve(a: Fp) Fp {
+        const is_odd = a.limbs[0] & 0x1 != 0;
         const b: u256 = @bitCast(a.limbs);
-        r.limbs = @bitCast(b + if (is_odd) constants.p else 0);
-        r.limbs[0] = (r.limbs[0] >> 1) | (r.limbs[1] << 63);
-        r.limbs[1] = (r.limbs[1] >> 1) | (r.limbs[2] << 63);
-        r.limbs[2] = (r.limbs[2] >> 1) | (r.limbs[3] << 63);
-        r.limbs[3] >>= 1;
+        var limbs: [4]u64 = @bitCast(b + if (is_odd) constants.p else 0);
+        limbs = @bitCast(b + if (is_odd) constants.p else 0);
+        limbs[0] = (limbs[0] >> 1) | (limbs[1] << 63);
+        limbs[1] = (limbs[1] >> 1) | (limbs[2] << 63);
+        limbs[2] = (limbs[2] >> 1) | (limbs[3] << 63);
+        limbs[3] >>= 1;
+        return .{ .limbs = @bitCast(limbs) };
     }
 
     pub fn pow(a: Fp, comptime n: u256) Fp {
@@ -170,28 +186,24 @@ pub const Fp = struct {
         var r = one;
         var i: u8 = 255 - @clz(n);
         while (true) {
-            r.sq(r);
-            if (bn254.bit(limbs, i)) r.mul(r, a);
+            r = r.sq();
+            if (bn254.bit(limbs, i)) r = r.mul(a);
             if (i == 0) break;
             i -= 1;
         }
         return r;
     }
 
-    pub fn inverse(r: *Fp, a: Fp) void {
-        r.* = a.pow(constants.p_minus_2);
+    pub fn inverse(a: Fp) Fp {
+        return a.pow(constants.p_minus_2);
     }
 
     /// Alg. 2, https://eprint.iacr.org/2012/685
-    pub fn sqrt(r: *Fp, a: Fp) !void {
+    pub fn sqrt(a: Fp) !Fp {
         const c1: Fp = a.pow(constants.sqrt_exp);
-
-        var c0: Fp = undefined;
-        c0.sq(c1);
-        c0.mul(c0, a);
+        const c0 = c1.sq().mul(a);
         if (c0.eql(constants.p_minus_one_mont)) return error.NotSquare;
-
-        r.mul(c1, a);
+        return c1.mul(a);
     }
 
     pub fn toMont(r: *Fp) void {
@@ -202,8 +214,10 @@ pub const Fp = struct {
         fiat.fromMontgomery(&r.limbs, r.limbs);
     }
 
-    pub fn negate(r: *Fp, a: Fp) void {
+    pub fn negate(a: Fp) Fp {
+        var r: Fp = undefined;
         fiat.opp(&r.limbs, a.limbs);
+        return r;
     }
 
     pub fn negateNotMontgomery(r: *Fp, a: Fp) void {
@@ -249,8 +263,7 @@ pub const Fp = struct {
             .{ .zero, .one, .one },
         })) |entry| {
             const a, const b, const expected = entry;
-            var r: Fp = undefined;
-            r.add(a, b);
+            const r = a.add(b);
             try std.testing.expect(r.eql(expected));
         }
     }
@@ -262,8 +275,7 @@ pub const Fp = struct {
             .{ .zero, .one, .zero },
         })) |entry| {
             const a, const b, const expected = entry;
-            var r: Fp = undefined;
-            r.mul(a, b);
+            const r = a.mul(b);
             try std.testing.expect(r.eql(expected));
         }
     }
@@ -415,59 +427,80 @@ pub const Fp2 = struct {
         return a.c0.eql(b.c0) and a.c1.eql(b.c1);
     }
 
-    pub fn add(r: *Fp2, a: Fp2, b: Fp2) void {
-        r.c0.add(a.c0, b.c0);
-        r.c1.add(a.c1, b.c1);
+    pub fn add(a: Fp2, b: Fp2) Fp2 {
+        return .{
+            .c0 = a.c0.add(b.c0),
+            .c1 = a.c1.add(b.c1),
+        };
     }
 
-    pub fn sub(r: *Fp2, a: Fp2, b: Fp2) void {
-        r.c0.sub(a.c0, b.c0);
-        r.c1.sub(a.c1, b.c1);
+    /// Returns `2 * a`
+    pub fn dbl(a: Fp2) Fp2 {
+        return add(a, a);
     }
 
-    pub fn halve(r: *Fp2, a: Fp2) void {
-        r.c0.halve(a.c0);
-        r.c1.halve(a.c1);
+    /// Returns `3 * a`
+    pub fn triple(a: Fp2) Fp2 {
+        return add(a, add(a, a));
     }
 
-    pub fn mul(r: *Fp2, a: Fp2, b: Fp2) void {
+    pub fn sub(a: Fp2, b: Fp2) Fp2 {
+        return .{
+            .c0 = a.c0.sub(b.c0),
+            .c1 = a.c1.sub(b.c1),
+        };
+    }
+
+    /// Returns `a / 2`
+    pub fn halve(a: Fp2) Fp2 {
+        return .{
+            .c0 = a.c0.halve(),
+            .c1 = a.c1.halve(),
+        };
+    }
+
+    pub fn mul(a: Fp2, b: Fp2) Fp2 {
         const a0 = a.c0;
         const a1 = a.c1;
         const b0 = b.c0;
         const b1 = b.c1;
 
-        var sa: Fp = undefined;
-        var sb: Fp = undefined;
-        sa.add(a0, a1);
-        sb.add(b0, b1);
+        const sa = a0.add(a1);
+        const sb = b0.add(b1);
 
-        var a0b0: Fp = undefined;
-        var a1b1: Fp = undefined;
-        a0b0.mul(a0, b0);
-        a1b1.mul(a1, b1);
-        r.c1.mul(sa, sb);
+        const a0b0 = a0.mul(b0);
+        const a1b1 = a1.mul(b1);
 
-        r.c0.sub(a0b0, a1b1);
-        r.c1.sub(r.c1, a0b0);
-        r.c1.sub(r.c1, a1b1);
+        return .{
+            .c0 = a0b0.sub(a1b1),
+            .c1 = sa.mul(sb).sub(a0b0).sub(a1b1),
+        };
     }
 
-    pub fn sq(r: *Fp2, a: Fp2) void {
-        var p: Fp = undefined;
-        var m: Fp = undefined;
-        p.add(a.c0, a.c1);
-        m.sub(a.c0, a.c1);
-
-        // r1 = 2 c0*c1
-        r.c1.mul(a.c0, a.c1);
-        r.c1.add(r.c1, r.c1);
-        // r0 = (c0-c1)*(c0+c1)
-        r.c0.mul(p, m);
+    pub fn mulBroad(a: Fp2, b: Fp) Fp2 {
+        return .{
+            .c0 = a.c0.mul(b),
+            .c1 = a.c1.mul(b),
+        };
     }
 
-    pub fn negate(r: *Fp2, a: Fp2) void {
-        r.c0.negate(a.c0);
-        r.c1.negate(a.c1);
+    pub fn sq(a: Fp2) Fp2 {
+        const p = a.c0.add(a.c1);
+        const m = a.c0.sub(a.c1);
+
+        return .{
+            // r0 = (c0-c1)*(c0+c1)
+            .c0 = p.mul(m),
+            // r1 = 2 c0*c1
+            .c1 = a.c0.mul(a.c1).dbl(),
+        };
+    }
+
+    pub fn negate(a: Fp2) Fp2 {
+        return .{
+            .c0 = a.c0.negate(),
+            .c1 = a.c1.negate(),
+        };
     }
 
     pub fn negateNotMontgomery(r: *Fp2, a: Fp2) void {
@@ -480,8 +513,8 @@ pub const Fp2 = struct {
         var r = one;
         var i: u8 = 255 - @clz(n);
         while (true) {
-            r.sq(r);
-            if (bn254.bit(limbs, i)) r.mul(r, a);
+            r = r.sq();
+            if (bn254.bit(limbs, i)) r = r.mul(a);
             if (i == 0) break;
             i -= 1;
         }
@@ -493,74 +526,59 @@ pub const Fp2 = struct {
     /// Note: this function can return *either* r or -r, both are valid answers.
     ///
     /// Returns an error if `a` isn't a square.
-    pub fn sqrt(r: *Fp2, a: Fp2) !void {
+    pub fn sqrt(a: Fp2) !Fp2 {
         const a1 = a.pow(Fp.constants.sqrt_exp);
 
-        var alpha: Fp2 = undefined;
-        alpha.sq(a1);
-        alpha.mul(alpha, a);
-
-        var a0: Fp2 = undefined;
-        a0.conj(alpha);
-        a0.mul(a0, alpha);
-
+        const alpha = a1.sq().mul(a);
+        const a0 = alpha.conj().mul(alpha);
         if (a0.isMinusOne()) return error.NotSquare;
 
-        var x0: Fp2 = undefined;
-        x0.mul(a1, a);
+        const x0 = a1.mul(a);
         if (alpha.isMinusOne()) {
-            // As firedancer notes, I'm not sure of an input that would hit this code.
-            // If we find such an input, add it as a unit test!
-            var t: Fp = undefined;
-            t.negate(x0.c1);
-            r.c1 = x0.c0;
-            r.c0 = t;
+            // As firedancer notes, it shouldn't be possible to hit this... I think.
+            return x0.conj();
         } else {
-            a0.add(alpha, .one);
-            const x1 = a0.pow(Fp.constants.p_minus_1_half);
-            r.mul(x1, x0);
+            const x1 = alpha.add(.one).pow(Fp.constants.p_minus_1_half);
+            return x1.mul(x0);
         }
     }
 
-    fn inverse(r: *Fp2, a: Fp2) void {
-        var t0: Fp = undefined;
-        var t1: Fp = undefined;
+    /// https://eprint.iacr.org/2010/354.pdf, Alg. 8
+    fn inverse(a: Fp2) Fp2 {
+        // t0 ← a0^2
+        var t0 = a.c0.sq();
+        // t1 ← a1^2
+        var t1 = a.c1.sq();
+        // t0 ← t0 − β · t1;
+        t0 = t0.add(t1);
+        t1 = t0.inverse();
+        // c0 ← a0 · t1;
+        const c0 = a.c0.mul(t1);
+        // c1 ← −1 · a1 · t1;
+        const c1 = a.c1.mul(t1).negate();
 
-        t0.sq(a.c0);
-        t1.sq(a.c1);
-
-        t0.add(t0, t1);
-        t1.inverse(t0);
-
-        r.c0.mul(a.c0, t1);
-        r.c1.mul(a.c1, t1);
-        r.c1.negate(r.c1);
+        return .{
+            .c0 = c0,
+            .c1 = c1,
+        };
     }
 
     /// Computes the conjugate of the field extension
-    pub fn conj(r: *Fp2, a: Fp2) void {
-        r.c0 = a.c0;
-        r.c1.negate(a.c1);
+    pub fn conj(a: Fp2) Fp2 {
+        return .{
+            .c0 = a.c0,
+            .c1 = a.c1.negate(),
+        };
     }
 
     /// Computes r = a * (9 + i)
-    fn mulByXi(r: *Fp2, a: Fp2) void {
-        var r0: Fp = undefined;
-        var r1: Fp = undefined;
-
-        r0.add(a.c0, a.c0);
-        r0.add(r0, r0);
-        r0.add(r0, r0);
-        r0.add(r0, a.c0);
-        r0.sub(r0, a.c1);
-
-        r1.add(a.c1, a.c1);
-        r1.add(r1, r1);
-        r1.add(r1, r1);
-        r1.add(r1, a.c1);
-
-        r.c1.add(r1, a.c0);
-        r.c0 = r0;
+    fn mulByXi(a: Fp2) Fp2 {
+        const r0 = a.c0.dbl().dbl().dbl().add(a.c0).sub(a.c1);
+        const r1 = a.c1.dbl().dbl().dbl().add(a.c1).add(a.c0);
+        return .{
+            .c0 = r0,
+            .c1 = r1,
+        };
     }
 
     pub fn format(
@@ -602,20 +620,28 @@ const Fp6 = struct {
             f.c2.isZero();
     }
 
-    fn add(r: *Fp6, a: Fp6, b: Fp6) void {
-        r.c0.add(a.c0, b.c0);
-        r.c1.add(a.c1, b.c1);
-        r.c2.add(a.c2, b.c2);
+    fn add(a: Fp6, b: Fp6) Fp6 {
+        return .{
+            .c0 = a.c0.add(b.c0),
+            .c1 = a.c1.add(b.c1),
+            .c2 = a.c2.add(b.c2),
+        };
     }
 
-    fn sub(r: *Fp6, a: Fp6, b: Fp6) void {
-        r.c0.sub(a.c0, b.c0);
-        r.c1.sub(a.c1, b.c1);
-        r.c2.sub(a.c2, b.c2);
+    pub fn dbl(a: Fp6) Fp6 {
+        return a.add(a);
+    }
+
+    fn sub(a: Fp6, b: Fp6) Fp6 {
+        return .{
+            .c0 = a.c0.sub(b.c0),
+            .c1 = a.c1.sub(b.c1),
+            .c2 = a.c2.sub(b.c2),
+        };
     }
 
     /// https://eprint.iacr.org/2010/354, Alg. 13
-    fn mul(r: *Fp6, a: Fp6, b: Fp6) void {
+    fn mul(a: Fp6, b: Fp6) Fp6 {
         const a0 = a.c0;
         const a1 = a.c1;
         const a2 = a.c2;
@@ -623,137 +649,103 @@ const Fp6 = struct {
         const b1 = b.c1;
         const b2 = b.c2;
 
-        var a0b0: Fp2 = undefined;
-        var a1b1: Fp2 = undefined;
-        var a2b2: Fp2 = undefined;
-        a0b0.mul(a0, b0);
-        a1b1.mul(a1, b1);
-        a2b2.mul(a2, b2);
+        const t0 = a0.mul(b0);
+        const t1 = a1.mul(b1);
+        const t2 = a2.mul(b2);
 
-        var sa: Fp2 = undefined;
-        var sb: Fp2 = undefined;
-        sa.add(a1, a2);
-        sb.add(b1, b2);
+        // c0 ← [(a1 + a2) · (b1 + b2) − t1 − t2] · ξ + t0;
+        const c0 = a1.add(a2).mul(b1.add(b2)).sub(t1).sub(t2).mulByXi().add(t0);
+        // c1 ← (a0 + a1) · (b0 + b1) − t0 − t1 + ξ · t2;
+        const c1 = a0.add(a1).mul(b0.add(b1)).sub(t0).sub(t1).add(t2.mulByXi());
+        // c2 ← (a0 + a2) · (b0 + b2) − t0 − t2 + t1;
+        const c2 = a0.add(a2).mul(b0.add(b2)).sub(t0).sub(t2).add(t1);
 
-        var r0: Fp2 = undefined;
-        r0.mul(sa, sb);
-        r0.sub(r0, a1b1);
-        r0.sub(r0, a2b2);
-        r0.mulByXi(r0);
-        r0.add(r0, a0b0);
-
-        var r2: Fp2 = undefined;
-        sa.add(a0, a2);
-        sb.add(b0, b2);
-        r2.mul(sa, sb);
-        r2.sub(r2, a0b0);
-        r2.sub(r2, a2b2);
-        r2.add(r2, a1b1);
-
-        var r1: Fp2 = undefined;
-        sa.add(a0, a1);
-        sb.add(b0, b1);
-        r1.mul(sa, sb);
-        r1.sub(r1, a0b0);
-        r1.sub(r1, a1b1);
-        a2b2.mulByXi(a2b2);
-        r1.add(r1, a2b2);
-
-        r.c0 = r0;
-        r.c1 = r1;
-        r.c2 = r2;
+        return .{
+            .c0 = c0,
+            .c1 = c1,
+            .c2 = c2,
+        };
     }
 
     /// https://eprint.iacr.org/2010/354, Alg. 12
-    fn mulByGamma(r: *Fp6, a: Fp6) void {
-        var t: Fp2 = undefined;
-        t.mulByXi(a.c2);
-        r.c2 = a.c1;
-        r.c1 = a.c0;
-        r.c0 = t;
+    fn mulByGamma(a: Fp6) Fp6 {
+        return .{
+            .c0 = a.c2.mulByXi(),
+            .c1 = a.c0,
+            .c2 = a.c1,
+        };
     }
 
-    fn negate(r: *Fp6, a: Fp6) void {
-        r.c0.negate(a.c0);
-        r.c1.negate(a.c1);
-        r.c2.negate(a.c2);
+    fn negate(a: Fp6) Fp6 {
+        return .{
+            .c0 = a.c0.negate(),
+            .c1 = a.c1.negate(),
+            .c2 = a.c2.negate(),
+        };
     }
 
     /// https://eprint.iacr.org/2010/354, Alg. 16
-    fn sq(r: *Fp6, a: Fp6) void {
+    fn sq(a: Fp6) Fp6 {
         const a0 = a.c0;
         const a1 = a.c1;
         const a2 = a.c2;
 
-        var c0: Fp2 = undefined;
-        var c1: Fp2 = undefined;
-        var c2: Fp2 = undefined;
-        var c3: Fp2 = undefined;
-        var c4: Fp2 = undefined;
-        var c5: Fp2 = undefined;
+        // c4 ← 2(a0 · a1);
+        var c4 = a0.mul(a1).dbl();
+        // c5 ← a2^2
+        var c5 = a2.sq();
+        // c1 ← c5 · ξ + c4;
+        const c1 = c5.mulByXi().add(c4);
+        // c2 ← c4 − c5;
+        var c2 = c4.sub(c5);
+        // c3 ← a0^2
+        const c3 = a0.sq();
+        // c4 ← a0 − a1 + a2;
+        c4 = a0.sub(a1).add(a2);
+        // c5 ← 2(a1 · a2);
+        c5 = a1.mul(a2).dbl();
+        // c4 ← c4^2
+        c4 = c4.sq();
+        // c0 ← c5 · ξ + c3;
+        const c0 = c5.mulByXi().add(c3);
 
-        c4.mul(a0, a1);
-        c4.add(c4, c4);
-        c5.sq(a2);
-
-        c2.sub(c4, c5);
-        c5.mulByXi(c5);
-        c1.add(c4, c5);
-
-        c3.sq(a0);
-        c4.sub(a0, a1);
-        c4.add(c4, a2);
-
-        c5.mul(a1, a2);
-        c5.add(c5, c5);
-        c4.sq(c4);
-
-        c2.add(c2, c4);
-        c2.add(c2, c5);
-        c2.sub(c2, c3);
-        c5.mulByXi(c5);
-        c0.add(c3, c5);
-
-        r.c0 = c0;
-        r.c1 = c1;
-        r.c2 = c2;
+        return .{
+            .c0 = c0,
+            .c1 = c1,
+            // c2 ← c2 + c4 + c5 − c3;
+            .c2 = c2.add(c4).add(c5).sub(c3),
+        };
     }
 
     /// https://eprint.iacr.org/2010/354, Alg. 17
-    fn inverse(r: *Fp6, a: Fp6) void {
-        var t: [6]Fp2 = undefined;
+    fn inverse(a: Fp6) Fp6 {
+        const t0 = a.c0.sq();
+        const t1 = a.c1.sq();
+        const t2 = a.c2.sq();
+        const t3 = a.c0.mul(a.c1);
+        const t4 = a.c0.mul(a.c2);
+        const t5 = a.c1.mul(a.c2);
 
-        t[0].sq(a.c0);
-        t[1].sq(a.c1);
-        t[2].sq(a.c2);
-        t[3].mul(a.c0, a.c1);
-        t[4].mul(a.c0, a.c2);
-        t[5].mul(a.c1, a.c2);
+        // c0 ← t0 − ξ · t5;
+        const c0 = t0.sub(t5.mulByXi());
+        // c1 ← ξ · t2 − t3;
+        const c1 = t2.mulByXi().sub(t3);
+        // c2 ← t1 − t4; NOTE: paper says t1 · t4, but that's a misprint
+        const c2 = t1.sub(t4);
+        // t6 ← a0 · c0;
+        var t6 = a.c0.mul(c0);
+        // t6 ← t6 + ξ · a2 · c1;
+        t6 = t6.add(a.c2.mulByXi().mul(c1));
+        // t6 ← t6 + ξ · a1 · c2;
+        t6 = t6.add(a.c1.mulByXi().mul(c2));
+        // t6 ← t6^-1;
+        t6 = t6.inverse();
 
-        // t0 := c0 = t0 - xi * t5 */
-        t[5].mulByXi(t[5]);
-        t[0].sub(t[0], t[5]);
-        // t2 := c1 = xi * t2 - t3 */
-        t[2].mulByXi(t[2]);
-        t[2].sub(t[2], t[3]);
-        // t1 := c2 = t1 - t4 (NOTE: paper says t1*t4, but that's a misprint) */
-        t[1].sub(t[1], t[4]);
-        // t3 := t6 = a0 * c0 */
-        t[3].mul(a.c0, t[0]);
-        // t3 := t6 = t6 + (xi * a2 * c1 =: t4) */
-        t[4].mul(a.c2, t[2]);
-        t[4].mulByXi(t[4]);
-        t[3].add(t[3], t[4]);
-        // t3 := t6 = t6 + (xi * a2 * c1 =: t4) */
-        t[5].mul(a.c1, t[1]);
-        t[5].mulByXi(t[5]);
-        t[3].add(t[3], t[5]);
-        // t4 := t6^-1 */
-        t[4].inverse(t[3]);
-
-        r.c0.mul(t[0], t[4]);
-        r.c1.mul(t[2], t[4]);
-        r.c2.mul(t[1], t[4]);
+        return .{
+            .c0 = c0.mul(t6),
+            .c1 = c1.mul(t6),
+            .c2 = c2.mul(t6),
+        };
     }
 
     pub fn format(
@@ -781,197 +773,231 @@ pub const Fp12 = struct {
     }
 
     /// https://eprint.iacr.org/2010/354, Alg. 20
-    pub fn mul(r: *Fp12, a: Fp12, b: Fp12) void {
+    pub fn mul(a: Fp12, b: Fp12) Fp12 {
         const a0 = a.c0;
         const a1 = a.c1;
         const b0 = b.c0;
         const b1 = b.c1;
 
-        var sa: Fp6 = undefined;
-        var sb: Fp6 = undefined;
-        sa.add(a0, a1);
-        sb.add(b0, b1);
+        // t0 ← a0 · b0;
+        const t0 = a0.mul(b0);
+        // t1 ← a1 · b1;
+        const t1 = a1.mul(b1);
+        // c0 ← t0 + t1 · γ;
+        const c0 = t0.add(t1.mulByGamma());
+        // c1 ← (a0 + a1) · (b0 + b1) − t0 − t1;
+        const c1 = a0.add(a1).mul(b0.add(b1)).sub(t0).sub(t1);
 
-        var a0b0: Fp6 = undefined;
-        var a1b1: Fp6 = undefined;
-        a0b0.mul(a0, b0);
-        a1b1.mul(a1, b1);
-        r.c1.mul(sa, sb);
-
-        r.c1.sub(r.c1, a0b0);
-        r.c1.sub(r.c1, a1b1);
-
-        a1b1.mulByGamma(a1b1);
-        r.c0.add(a0b0, a1b1);
+        return .{
+            .c0 = c0,
+            .c1 = c1,
+        };
     }
 
     /// https://eprint.iacr.org/2010/354, Alg. 22
-    pub fn sq(r: *Fp12, a: Fp12) void {
-        var c0: Fp6 = undefined;
-        var c2: Fp6 = undefined;
-        var c3: Fp6 = undefined;
+    pub fn sq(a: Fp12) Fp12 {
+        const c3 = a.c0.sub(a.c1.mulByGamma());
+        const c2 = a.c0.mul(a.c1);
+        const c0 = a.c0.sub(a.c1).mul(c3).add(c2);
 
-        c0.sub(a.c0, a.c1);
-        c3.mulByGamma(a.c1);
-        c3.sub(a.c0, c3);
-        c2.mul(a.c0, a.c1);
-        c0.mul(c0, c3);
-        c0.add(c0, c2);
-        r.c1.add(c2, c2);
-        r.c0.mulByGamma(c2);
-        r.c0.add(r.c0, c0);
+        return .{
+            .c0 = c2.mulByGamma().add(c0),
+            .c1 = c2.dbl(),
+        };
+
+        // const c0 = a.c0.sub(a.c1)
+
+        // var c0: Fp6 = undefined;
+        // var c2: Fp6 = undefined;
+        // var c3: Fp6 = undefined;
+
+        // c0.sub(a.c0, a.c1);
+        // c3.mulByGamma(a.c1);
+        // c3.sub(a.c0, c3);
+        // c2.mul(a.c0, a.c1);
+        // c0.mul(c0, c3);
+        // c0.add(c0, c2);
+        // r.c1.add(c2, c2);
+        // r.c0.mulByGamma(c2);
+        // r.c0.add(r.c0, c0);
     }
 
-    pub fn conj(r: *Fp12, a: Fp12) void {
-        r.c0 = a.c0;
-        r.c1.negate(a.c1);
+    pub fn conj(a: Fp12) Fp12 {
+        return .{
+            .c0 = a.c0,
+            .c1 = a.c1.negate(),
+        };
     }
 
     /// https://eprint.iacr.org/2010/354, Alg. 23
-    pub fn inverse(r: *Fp12, a: Fp12) void {
-        var t0: Fp6 = undefined;
-        var t1: Fp6 = undefined;
-        t0.sq(a.c0);
-        t1.sq(a.c1);
-        t1.mulByGamma(t1);
-        t0.sub(t0, t1);
-        t1.inverse(t0);
-        r.c0.mul(a.c0, t1);
-        r.c1.mul(a.c1, t1);
-        r.c1.negate(r.c1);
+    pub fn inverse(a: Fp12) Fp12 {
+        // t0 ← a0^2
+        var t0 = a.c0.sq();
+        // t1 ← a1^2
+        var t1 = a.c1.sq();
+        // t0 ← t0 − γ · t1;
+        t0 = t0.sub(t1.mulByGamma());
+        // t1 ← t0^-1
+        t1 = t0.inverse();
+        // c0 ← a0 · t1;
+        const c0 = a.c0.mul(t1);
+        // c1 ← −1 · a1 · t1;
+        const c1 = a.c1.mul(t1).negate();
+
+        return .{
+            .c0 = c0,
+            .c1 = c1,
+        };
     }
 
     /// https://eprint.iacr.org/2010/354, Alg. 28
-    pub fn frob(r: *Fp12, a: Fp12) void {
-        var t: [5]Fp2 = undefined;
-
-        r.c0.c0.conj(a.c0.c0);
-        t[0].conj(a.c0.c1);
-        t[1].conj(a.c0.c2);
-        t[2].conj(a.c1.c0);
-        t[3].conj(a.c1.c1);
-        t[4].conj(a.c1.c2);
-
-        r.c0.c1.mul(t[0], Fp2.constants.frob_gamma1_mont[1]);
-        r.c0.c2.mul(t[1], Fp2.constants.frob_gamma1_mont[3]);
-        r.c1.c0.mul(t[2], Fp2.constants.frob_gamma1_mont[0]);
-        r.c1.c1.mul(t[3], Fp2.constants.frob_gamma1_mont[2]);
-        r.c1.c2.mul(t[4], Fp2.constants.frob_gamma1_mont[4]);
+    pub fn frob(a: Fp12) Fp12 {
+        return .{
+            .c0 = .{
+                .c0 = a.c0.c0.conj(),
+                .c1 = a.c0.c1.conj().mul(Fp2.constants.frob_gamma1_mont[1]),
+                .c2 = a.c0.c2.conj().mul(Fp2.constants.frob_gamma1_mont[3]),
+            },
+            .c1 = .{
+                .c0 = a.c1.c0.conj().mul(Fp2.constants.frob_gamma1_mont[0]),
+                .c1 = a.c1.c1.conj().mul(Fp2.constants.frob_gamma1_mont[2]),
+                .c2 = a.c1.c2.conj().mul(Fp2.constants.frob_gamma1_mont[4]),
+            },
+        };
     }
 
-    pub fn frob2(r: *Fp12, a: Fp12) void {
-        // g0
-        r.c0.c0 = a.c0.c0;
-
-        // g1 * gamma_2,2 */
-        r.c0.c1.c0.mul(a.c0.c1.c0, Fp.constants.frob_gamma2_mont[1]);
-        r.c0.c1.c1.mul(a.c0.c1.c1, Fp.constants.frob_gamma2_mont[1]);
-
-        // g2 * gamma_2,4 */
-        r.c0.c2.c0.mul(a.c0.c2.c0, Fp.constants.frob_gamma2_mont[3]);
-        r.c0.c2.c1.mul(a.c0.c2.c1, Fp.constants.frob_gamma2_mont[3]);
-
-        // h0 * gamma_2,1 */
-        r.c1.c0.c0.mul(a.c1.c0.c0, Fp.constants.frob_gamma2_mont[0]);
-        r.c1.c0.c1.mul(a.c1.c0.c1, Fp.constants.frob_gamma2_mont[0]);
-
-        // h1 * gamma_2,3 */
-        r.c1.c1.c0.mul(a.c1.c1.c0, Fp.constants.frob_gamma2_mont[2]);
-        r.c1.c1.c1.mul(a.c1.c1.c1, Fp.constants.frob_gamma2_mont[2]);
-
-        // h2 * gamma_2,5 */
-        r.c1.c2.c0.mul(a.c1.c2.c0, Fp.constants.frob_gamma2_mont[4]);
-        r.c1.c2.c1.mul(a.c1.c2.c1, Fp.constants.frob_gamma2_mont[4]);
+    /// https://eprint.iacr.org/2010/354, Alg. 29
+    pub fn frob2(a: Fp12) Fp12 {
+        return .{
+            .c0 = .{
+                .c0 = a.c0.c0,
+                .c1 = .{
+                    // g1 * gamma_2,2 */
+                    .c0 = a.c0.c1.c0.mul(Fp.constants.frob_gamma2_mont[1]),
+                    .c1 = a.c0.c1.c1.mul(Fp.constants.frob_gamma2_mont[1]),
+                },
+                .c2 = .{
+                    // g2 * gamma_2,4 */
+                    .c0 = a.c0.c2.c0.mul(Fp.constants.frob_gamma2_mont[3]),
+                    .c1 = a.c0.c2.c1.mul(Fp.constants.frob_gamma2_mont[3]),
+                },
+            },
+            .c1 = .{
+                .c0 = .{
+                    // h0 * gamma_2,1 */
+                    .c0 = a.c1.c0.c0.mul(Fp.constants.frob_gamma2_mont[0]),
+                    .c1 = a.c1.c0.c1.mul(Fp.constants.frob_gamma2_mont[0]),
+                },
+                .c1 = .{
+                    // h1 * gamma_2,3 */
+                    .c0 = a.c1.c1.c0.mul(Fp.constants.frob_gamma2_mont[2]),
+                    .c1 = a.c1.c1.c1.mul(Fp.constants.frob_gamma2_mont[2]),
+                },
+                .c2 = .{
+                    // h2 * gamma_2,5 */
+                    .c0 = a.c1.c2.c0.mul(Fp.constants.frob_gamma2_mont[4]),
+                    .c1 = a.c1.c2.c1.mul(Fp.constants.frob_gamma2_mont[4]),
+                },
+            },
+        };
     }
 
-    /// Cyclotomic sqr, https://eprint.iacr.org/2009/565, Sec. 3.2
-    pub fn sqFast(r: *Fp12, a: Fp12) void {
-        var t: [9]Fp2 = undefined;
+    /// Cyclotomic square root, https://eprint.iacr.org/2009/565, Sec. 3.2
+    pub fn sqFast(a: Fp12) Fp12 {
+        const t0 = a.c1.c1.sq();
+        const t1 = a.c0.c0.sq();
+        const t6 = a.c1.c1.add(a.c0.c0).sq().sub(t0).sub(t1);
 
-        t[0].sq(a.c1.c1);
-        t[1].sq(a.c0.c0);
-        t[6].add(a.c1.c1, a.c0.c0);
-        t[6].sq(t[6]);
-        t[6].sub(t[6], t[0]);
-        t[6].sub(t[6], t[1]);
+        const t2 = a.c0.c2.sq();
+        const t3 = a.c1.c0.sq();
+        const t7 = a.c0.c2.add(a.c1.c0).sq().sub(t2).sub(t3);
 
-        t[2].sq(a.c0.c2);
-        t[3].sq(a.c1.c0);
-        t[7].add(a.c0.c2, a.c1.c0);
-        t[7].sq(t[7]);
-        t[7].sub(t[7], t[2]);
-        t[7].sub(t[7], t[3]);
+        const t4 = a.c1.c2.sq();
+        const t5 = a.c0.c1.sq();
+        const t8 = a.c1.c2.add(a.c0.c1).sq().sub(t4).sub(t5).mulByXi();
 
-        t[4].sq(a.c1.c2);
-        t[5].sq(a.c0.c1);
-        t[8].add(a.c1.c2, a.c0.c1);
-        t[8].sq(t[8]);
-        t[8].sub(t[8], t[4]);
-        t[8].sub(t[8], t[5]);
-        t[8].mulByXi(t[8]);
+        const r0 = t0.mulByXi().add(t1);
+        const r2 = t2.mulByXi().add(t3);
+        const r4 = t4.mulByXi().add(t5);
 
-        t[0].mulByXi(t[0]);
-        t[0].add(t[0], t[1]);
-        t[2].mulByXi(t[2]);
-        t[2].add(t[2], t[3]);
-        t[4].mulByXi(t[4]);
-        t[4].add(t[4], t[5]);
-
-        r.c0.c0.sub(t[0], a.c0.c0);
-        r.c0.c0.add(r.c0.c0, r.c0.c0);
-        r.c0.c0.add(r.c0.c0, t[0]);
-        r.c0.c1.sub(t[2], a.c0.c1);
-        r.c0.c1.add(r.c0.c1, r.c0.c1);
-        r.c0.c1.add(r.c0.c1, t[2]);
-        r.c0.c2.sub(t[4], a.c0.c2);
-        r.c0.c2.add(r.c0.c2, r.c0.c2);
-        r.c0.c2.add(r.c0.c2, t[4]);
-
-        r.c1.c0.add(t[8], a.c1.c0);
-        r.c1.c0.add(r.c1.c0, r.c1.c0);
-        r.c1.c0.add(r.c1.c0, t[8]);
-        r.c1.c1.add(t[6], a.c1.c1);
-        r.c1.c1.add(r.c1.c1, r.c1.c1);
-        r.c1.c1.add(r.c1.c1, t[6]);
-        r.c1.c2.add(t[7], a.c1.c2);
-        r.c1.c2.add(r.c1.c2, r.c1.c2);
-        r.c1.c2.add(r.c1.c2, t[7]);
+        return .{
+            .c0 = .{
+                .c0 = r0.sub(a.c0.c0).dbl().add(r0),
+                .c1 = r2.sub(a.c0.c1).dbl().add(r2),
+                .c2 = r4.sub(a.c0.c2).dbl().add(r4),
+            },
+            .c1 = .{
+                .c0 = t8.add(a.c1.c0).dbl().add(t8),
+                .c1 = t6.add(a.c1.c1).dbl().add(t6),
+                .c2 = t7.add(a.c1.c2).dbl().add(t7),
+            },
+        };
     }
 
+    /// Raise `a` to `x^t mod q^12` where t is the generator of the curve.
+    ///
     /// https://github.com/Consensys/gnark-crypto/blob/v0.12.1/ecc/bn254/internal/fptower/e12_pairing.go#L16
-    pub fn powX(r: *Fp12, a: Fp12) void {
-        var t: [7]Fp12 = undefined;
-
-        t[3].sqFast(a);
-        t[5].sqFast(t[3]);
-        r.sqFast(t[5]);
-        t[0].sqFast(r.*);
-        t[2].mul(t[0], a);
-        t[0].mul(t[2], t[3]);
-        t[1].mul(t[0], a);
-        t[4].mul(t[2], r.*);
-        t[6].sqFast(t[2]);
-        t[1].mul(t[1], t[0]);
-        t[0].mul(t[1], t[3]);
-        for (0..6) |_| t[6].sqFast(t[6]);
-        t[5].mul(t[5], t[6]);
-        t[5].mul(t[5], t[4]);
-        for (0..7) |_| t[5].sqFast(t[5]);
-        t[4].mul(t[4], t[5]);
-        for (0..8) |_| t[4].sqFast(t[4]);
-        t[4].mul(t[4], t[0]);
-        t[3].mul(t[3], t[4]);
-        for (0..6) |_| t[3].sqFast(t[3]);
-        t[2].mul(t[2], t[3]);
-        for (0..8) |_| t[2].sqFast(t[2]);
-        t[2].mul(t[2], t[0]);
-        for (0..6) |_| t[2].sqFast(t[2]);
-        t[2].mul(t[2], t[0]);
-        for (0..10) |_| t[2].sqFast(t[2]);
-        t[1].mul(t[1], t[2]);
-        for (0..6) |_| t[1].sqFast(t[1]);
-        t[0].mul(t[0], t[1]);
-        r.mul(r.*, t[0]);
+    pub fn powX(a: Fp12) Fp12 {
+        // t3 = x^0x2
+        var t3 = a.sqFast();
+        // t5 = x^0x4
+        var t5 = t3.sqFast();
+        // result = x^0x8
+        const result = t5.sqFast();
+        // t0 = x^0x10
+        var t0 = result.sqFast();
+        // t2 = x^0x11
+        var t2 = a.mul(t0);
+        // t0 = x^0x13
+        t0 = t3.mul(t2);
+        // t1 = x^0x14
+        var t1 = a.mul(t0);
+        // t4 = x^0x19
+        var t4 = result.mul(t2);
+        // t6 = x^0x22
+        var t6 = t2.sqFast();
+        // t1 = x^0x27
+        t1 = t0.mul(t1);
+        // t0 = x^0x29
+        t0 = t3.mul(t1);
+        // t6 = x^0x880
+        for (0..6) |_| t6 = t6.sqFast();
+        // t5 = x^0x884
+        t5 = t5.mul(t6);
+        // t5 = x^0x89d
+        t5 = t5.mul(t4);
+        // t5 = x^0x44e80
+        for (0..7) |_| t5 = t5.sqFast();
+        // t4 = x^0x44e99
+        t4 = t4.mul(t5);
+        // t4 = x^0x44e9900
+        for (0..8) |_| t4 = t4.sqFast();
+        // t4 = x^0x44e9929
+        t4 = t4.mul(t0);
+        // t3 = x^0x44e992b
+        t3 = t3.mul(t4);
+        // t3 = x^0x113a64ac0
+        for (0..6) |_| t3 = t3.sqFast();
+        // t2 = x^0x113a64ad1
+        t2 = t2.mul(t3);
+        // t2 = x^0x113a64ad100
+        for (0..8) |_| t2 = t2.sqFast();
+        // t2 = x^0x113a64ad129
+        t2 = t2.mul(t0);
+        // t2 = x^0x44e992b44a40
+        for (0..6) |_| t2 = t2.sqFast();
+        // t2 = x^0x44e992b44a69
+        t2 = t2.mul(t0);
+        // t2 = x^0x113a64ad129a400
+        for (0..10) |_| t2 = t2.sqFast();
+        // t1 = x^0x113a64ad129a427
+        t1 = t1.mul(t2);
+        // t1 = x^0x44e992b44a6909c0
+        for (0..6) |_| t1 = t1.sqFast();
+        // t0 = x^0x44e992b44a6909e9
+        t0 = t0.mul(t1);
+        // result = x^0x44e992b44a6909f1
+        return result.mul(t0);
     }
 
     pub fn format(

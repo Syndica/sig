@@ -23,7 +23,7 @@ const UnixTimestamp = sig.core.UnixTimestamp;
 
 const FileId = sig.accounts_db.accounts_file.FileId;
 
-const Logger = sig.trace.Logger;
+const Logger = sig.trace.Logger("snapshots");
 
 pub const MAXIMUM_ACCOUNT_FILE_SIZE: u64 = 16 * 1024 * 1024 * 1024; // 16 GiB
 pub const MAX_RECENT_BLOCKHASHES: usize = 300;
@@ -582,7 +582,7 @@ pub const Manifest = struct {
         /// `std.io.GenericReader(...)` | `std.io.AnyReader`
         reader: anytype,
     ) !Manifest {
-        return try bincode.read(allocator, Manifest, reader, .{});
+        return try bincode.read(allocator, Manifest, reader, .{ .allocation_limit = 2 << 30 });
     }
 
     pub fn epochStakes(
@@ -1249,12 +1249,10 @@ pub const FullAndIncrementalManifest = struct {
 
     pub fn fromFiles(
         allocator: std.mem.Allocator,
-        unscoped_logger: Logger,
+        logger: Logger,
         snapshot_dir: std.fs.Dir,
         files: SnapshotFiles,
     ) !FullAndIncrementalManifest {
-        const logger = unscoped_logger.withScope("accounts_db.snapshot_manifest");
-
         const full_fields = blk: {
             const rel_path_bounded = sig.utils.fmt.boundedFmt(
                 "snapshots/{0}/{0}",
@@ -1534,7 +1532,7 @@ pub fn parallelUnpackZstdTarBall(
 
     try sig.utils.tar.parallelUntarToFileSystem(
         allocator,
-        logger,
+        .from(logger),
         output_dir,
         tar_stream.reader(),
         n_threads,

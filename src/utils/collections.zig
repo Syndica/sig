@@ -738,6 +738,11 @@ pub fn SortedMapUnmanagedCustom(
             return self.inner.keys();
         }
 
+        pub fn values(self: *SortedMapSelf) []V {
+            self.sort();
+            return self.inner.values();
+        }
+
         pub fn items(self: *SortedMapSelf) struct { []const K, []const V } {
             self.sort();
             return .{ self.inner.keys(), self.inner.values() };

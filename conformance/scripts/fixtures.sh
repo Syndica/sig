@@ -40,6 +40,7 @@ PASSING_DIRS=(
     "instr/fixtures/zk_sdk"
     "instr/fixtures/unknown"
     "instr/fixtures/compute-budget"
+    "instr/fixtures/stake"
 
     "instr/fixtures/bpf-address-lookup-table"
     "instr/fixtures/bpf-config"
@@ -60,13 +61,9 @@ PASSING_DIRS=(
     # Passed: 1629, Failed: 2286, Skipped: 0
     # "txn/fixtures/programs"
 
-    # Passed: 993, Failed: 92, Skipped: 0
-    # "txn/fixtures/precompile/ed25519"
-
+    "txn/fixtures/precompile/ed25519"
     "txn/fixtures/precompile/secp256k1"
-
-    # Passed: 0, Failed: 357, Skipped: 0 (unimplemented)
-    # "txn/fixtures/precompile/secp256k1"
+    "txn/fixtures/precompile/secp256r1"
 )
 
 mapfile -t PASSING_TXN_FIXTURES < ./conformance/scripts/passing_txn_fixtures.txt
