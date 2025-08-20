@@ -20,45 +20,10 @@ const EpochTracker = sig.replay.trackers.EpochTracker;
 const Logger = sig.trace.Logger("vote_listener");
 
 pub const BankForksStub = struct {
-    slot_tracker: SlotTracker,
-    epoch_tracker: EpochTracker,
-    ancestors_map: sig.utils.collections.SortedMapUnmanaged(Slot, sig.core.Ancestors),
-
-    pub fn deinit(self: BankForksStub, allocator: std.mem.Allocator) void {
-        self.slot_tracker.deinit(allocator);
-        self.epoch_tracker.deinit(allocator);
-        self.ancestors_map.deinit(allocator);
-    }
-
-    pub fn init(
-        allocator: std.mem.Allocator,
-        epoch_schedule: sig.core.EpochSchedule,
-        root: struct {
-            slot: Slot,
-            constants: sig.core.SlotConstants,
-            state: sig.core.SlotState,
-            epoch_constants: sig.core.EpochConstants,
-        },
-    ) std.mem.Allocator.Error!BankForksStub {
-        var self: BankForksStub = .{
-            .slot_tracker = try .init(allocator, root.slot, .{
-                .constants = root.constants,
-                .state = root.state,
-            }),
-            .epoch_tracker = .{ .schedule = epoch_schedule },
-            .ancestors_map = .empty,
-        };
-        errdefer self.deinit(allocator);
-
-        try self.epoch_tracker.epochs.ensureUnusedCapacity(allocator, 1);
-        self.epoch_tracker.epochs.putAssumeCapacity(
-            epoch_schedule.getEpoch(root.slot),
-            // TODO: Can this clone be avoided?
-            try root.epoch_constants.clone(allocator),
-        );
-
-        return self;
-    }
+    /// Non owning views into replay state. The lifetime of these pointers must
+    /// outlive the usage by the vote listener.
+    slot_tracker: *const SlotTracker,
+    epoch_tracker: *const EpochTracker,
 
     fn rootSlot(self: *const BankForksStub) Slot {
         return self.slot_tracker.root;
@@ -261,7 +226,7 @@ const UnverifiedVoteReceptor = struct {
 
         try consumeTransactionsAndSendVerified(
             allocator,
-            &bank_forks.epoch_tracker,
+            bank_forks.epoch_tracker,
             unverified_votes_buffer,
             verified_vote_transactions_sender,
         );
@@ -1661,41 +1626,42 @@ test verifyVoteTransaction {
 test "simple usage" {
     const allocator = std.testing.allocator;
 
-    var bank_forks_rw = sig.sync.RwMux(BankForksStub).init(blk: {
-        var stakes: sig.core.EpochStakes = try .initEmptyWithGenesisStakeHistoryEntry(allocator);
-        defer stakes.deinit(allocator);
-
-        break :blk try .init(allocator, .DEFAULT, .{
-            .slot = 0,
-            .constants = .{
-                .parent_slot = 0,
-                .parent_hash = .ZEROES,
-                .parent_lt_hash = .IDENTITY,
-                .block_height = 1,
-                .collector_id = .ZEROES,
-                .max_tick_height = 1,
-                .fee_rate_governor = .DEFAULT,
-                .epoch_reward_status = .inactive,
-                .ancestors = .{ .ancestors = .empty },
-                .feature_set = .ALL_DISABLED,
-                .reserved_accounts = .empty,
-            },
-            .state = try .genesis(allocator),
-            .epoch_constants = .{
-                .hashes_per_tick = 1,
-                .ticks_per_slot = 1,
-                .ns_per_slot = 1,
-                .genesis_creation_time = 1,
-                .slots_per_year = 1,
-                .stakes = stakes,
-                .rent_collector = undefined,
-            },
-        });
+    var slot_tracker: SlotTracker = try .init(allocator, 0, .{
+        .constants = .{
+            .parent_slot = 0,
+            .parent_hash = .ZEROES,
+            .parent_lt_hash = .IDENTITY,
+            .block_height = 1,
+            .collector_id = .ZEROES,
+            .max_tick_height = 1,
+            .fee_rate_governor = .DEFAULT,
+            .epoch_reward_status = .inactive,
+            .ancestors = .{ .ancestors = .empty },
+            .feature_set = .ALL_DISABLED,
+            .reserved_accounts = .empty,
+        },
+        .state = try .genesis(allocator),
     });
-    defer {
-        const bank_forks, _ = bank_forks_rw.writeWithLock();
-        bank_forks.deinit(allocator);
+    defer slot_tracker.deinit(allocator);
+
+    var epoch_tracker: EpochTracker = .{ .schedule = .DEFAULT };
+    defer epoch_tracker.deinit(allocator);
+    {
+        const stakes: sig.core.EpochStakes = try .initEmptyWithGenesisStakeHistoryEntry(allocator);
+        try epoch_tracker.epochs.ensureUnusedCapacity(allocator, 1);
+        epoch_tracker.epochs.putAssumeCapacity(0, .{
+            .hashes_per_tick = 1,
+            .ticks_per_slot = 1,
+            .ns_per_slot = 1,
+            .genesis_creation_time = 1,
+            .slots_per_year = 1,
+            .stakes = stakes,
+            .rent_collector = undefined,
+        });
     }
+
+    var bank_forks_rw = sig.sync.RwMux(BankForksStub)
+        .init(.{ .slot_tracker = &slot_tracker, .epoch_tracker = &epoch_tracker });
 
     var ledger_db = try sig.ledger.tests.TestDB.init(@src());
     defer ledger_db.deinit();
@@ -1789,46 +1755,47 @@ test "check trackers" {
 
     const root_slot: Slot = 0;
 
-    var bank_forks_rw = sig.sync.RwMux(BankForksStub).init(blk: {
+    var slot_tracker2: SlotTracker = try .init(allocator, root_slot, .{
+        .constants = .{
+            .parent_slot = 0,
+            .parent_hash = .ZEROES,
+            .parent_lt_hash = .IDENTITY,
+            .block_height = 1,
+            .collector_id = .ZEROES,
+            .max_tick_height = 1,
+            .fee_rate_governor = .DEFAULT,
+            .epoch_reward_status = .inactive,
+            .ancestors = .{ .ancestors = .empty },
+            .feature_set = .ALL_DISABLED,
+            .reserved_accounts = .empty,
+        },
+        .state = try .genesis(allocator),
+    });
+    defer slot_tracker2.deinit(allocator);
+
+    var epoch_tracker2: EpochTracker = .{ .schedule = .DEFAULT };
+    defer epoch_tracker2.deinit(allocator);
+    {
         var stakes: sig.core.EpochStakes = try .initEmptyWithGenesisStakeHistoryEntry(allocator);
-        defer stakes.deinit(allocator);
         for (tracker_templates) |template| {
             _, const vote_kp, _ = template;
             const vote_key: Pubkey = .fromPublicKey(&vote_kp.public_key);
             try stakes.epoch_authorized_voters.put(allocator, vote_key, vote_key);
         }
-
-        break :blk try .init(allocator, .DEFAULT, .{
-            .slot = root_slot,
-            .constants = .{
-                .parent_slot = 0,
-                .parent_hash = .ZEROES,
-                .parent_lt_hash = .IDENTITY,
-                .block_height = 1,
-                .collector_id = .ZEROES,
-                .max_tick_height = 1,
-                .fee_rate_governor = .DEFAULT,
-                .epoch_reward_status = .inactive,
-                .ancestors = .{ .ancestors = .empty },
-                .feature_set = .ALL_DISABLED,
-                .reserved_accounts = .empty,
-            },
-            .state = try .genesis(allocator),
-            .epoch_constants = .{
-                .hashes_per_tick = 1,
-                .ticks_per_slot = 1,
-                .ns_per_slot = 1,
-                .genesis_creation_time = 1,
-                .slots_per_year = 1,
-                .stakes = stakes,
-                .rent_collector = undefined,
-            },
+        try epoch_tracker2.epochs.ensureUnusedCapacity(allocator, 1);
+        epoch_tracker2.epochs.putAssumeCapacity(0, .{
+            .hashes_per_tick = 1,
+            .ticks_per_slot = 1,
+            .ns_per_slot = 1,
+            .genesis_creation_time = 1,
+            .slots_per_year = 1,
+            .stakes = stakes,
+            .rent_collector = undefined,
         });
-    });
-    defer {
-        const bank_forks, _ = bank_forks_rw.writeWithLock();
-        bank_forks.deinit(allocator);
     }
+
+    var bank_forks_rw = sig.sync.RwMux(BankForksStub)
+        .init(.{ .slot_tracker = &slot_tracker2, .epoch_tracker = &epoch_tracker2 });
 
     var ledger_db = try sig.ledger.tests.TestDB.init(@src());
     defer ledger_db.deinit();

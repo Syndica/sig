@@ -28,6 +28,7 @@ const GossipVerifiedVoteHash = sig.consensus.vote_listener.GossipVerifiedVoteHas
 const ParsedVote = sig.consensus.vote_listener.vote_parser.ParsedVote;
 const LatestValidatorVotes = sig.consensus.latest_validator_votes.LatestValidatorVotes;
 const SlotHistoryAccessor = sig.consensus.replay_tower.SlotHistoryAccessor;
+const VoteListener = sig.consensus.vote_listener.VoteListener;
 
 const ReplayExecutionState = replay.execution.ReplayExecutionState;
 const SlotTracker = replay.trackers.SlotTracker;
@@ -66,6 +67,10 @@ pub const ReplayDependencies = struct {
     slot_leaders: SlotLeaders,
     senders: Senders,
     receivers: Receivers,
+
+    /// Used by the vote listener to receive unverified
+    /// vote transactions from gossip.
+    gossip_table_rw: *sig.sync.RwMux(sig.gossip.GossipTable),
 
     /// The slot to start replaying from.
     root: struct {
@@ -413,6 +418,38 @@ pub fn run(deps: ReplayDependencies) !void {
 
     var state = try ReplayState.init(deps);
     defer state.deinit();
+
+    // Start vote listener inside replay so it can reference replay state directly.
+    var vote_tracker: sig.consensus.VoteTracker = .EMPTY;
+    defer vote_tracker.deinit(deps.allocator);
+
+    var vote_listener_bank_forks_rw = sig.sync.RwMux(sig.consensus.vote_listener.BankForksStub)
+        .init(.{ .slot_tracker = &state.slot_tracker, .epoch_tracker = &state.epochs });
+
+    const verified_vote_channel = try sig.sync.Channel(sig.consensus.vote_listener.VerifiedVote)
+        .create(deps.allocator);
+    defer verified_vote_channel.destroy();
+
+    const vote_listener: VoteListener = try VoteListener.init(
+        deps.allocator,
+        .{ .unordered = deps.exit },
+        .from(deps.logger),
+        &vote_tracker,
+        .{
+            .bank_forks_rw = &vote_listener_bank_forks_rw,
+            .gossip_table_rw = deps.gossip_table_rw,
+            .ledger_ref = .{ .reader = state.ledger.reader, .writer = state.ledger.writer },
+            .receivers = .{ .replay_votes = deps.senders.replay_votes },
+            .senders = .{
+                .verified_vote = verified_vote_channel,
+                .gossip_verified_vote_hash = state.receivers.gossip_verified_vote_hash,
+                .bank_notification = null,
+                .duplicate_confirmed_slot = state.receivers.duplicate_confirmed_slots,
+                .subscriptions = .{},
+            },
+        },
+    );
+    defer vote_listener.joinAndDeinit();
 
     while (!deps.exit.load(.monotonic)) {
         try advanceReplay(&state);

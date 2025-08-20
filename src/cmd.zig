@@ -1226,54 +1226,6 @@ fn validator(
         var root_slot_state = try sig.core.SlotState.fromBankFields(allocator, bank_fields);
         errdefer root_slot_state.deinit(allocator);
 
-        // vote listener setup
-        var vote_tracker: sig.consensus.VoteTracker = .EMPTY;
-        defer vote_tracker.deinit(allocator);
-
-        var vote_listener_bank_forks_rw = sig.sync.RwMux(sig.consensus.vote_listener.BankForksStub)
-            .init(try sig.consensus.vote_listener.BankForksStub.init(
-            allocator,
-            bank_fields.epoch_schedule,
-            .{
-                .slot = bank_fields.slot,
-                .constants = root_slot_constants,
-                .state = root_slot_state,
-                .epoch_constants = current_epoch_constants,
-            },
-        ));
-        defer {
-            const bank_forks, _ = vote_listener_bank_forks_rw.writeWithLock();
-            bank_forks.deinit(allocator);
-        }
-
-        const verified_vote_channel = try sig.sync.Channel(sig.consensus.vote_listener.VerifiedVote)
-            .create(allocator);
-        defer verified_vote_channel.destroy();
-
-        const vote_listener_senders: sig.consensus.vote_listener.Senders = .{
-            .verified_vote = verified_vote_channel,
-            .gossip_verified_vote_hash = replay_receivers.gossip_verified_vote_hash,
-            .bank_notification = null,
-            .duplicate_confirmed_slot = replay_receivers.duplicate_confirmed_slots,
-            .subscriptions = .{},
-        };
-
-        const vote_listener_exit: sig.sync.ExitCondition = .{ .unordered = app_base.exit };
-        const vote_listener = try sig.consensus.vote_listener.VoteListener.init(
-            allocator,
-            vote_listener_exit,
-            .from(app_base.logger),
-            &vote_tracker,
-            .{
-                .bank_forks_rw = &vote_listener_bank_forks_rw,
-                .gossip_table_rw = &gossip_service.gossip_table_rw,
-                .ledger_ref = .{ .reader = ledger_reader, .writer = ledger_result_writer },
-                .receivers = .{ .replay_votes = replay_senders.replay_votes },
-                .senders = vote_listener_senders,
-            },
-        );
-        defer vote_listener.joinAndDeinit();
-
         break :replay try app_base.spawnService(
             "replay",
             sig.replay.service.run,
@@ -1299,6 +1251,7 @@ fn validator(
 
                 .senders = replay_senders,
                 .receivers = replay_receivers,
+                .gossip_table_rw = &gossip_service.gossip_table_rw,
                 .current_epoch = epoch,
                 .current_epoch_constants = current_epoch_constants,
                 .hard_forks = try bank_fields.hard_forks.clone(allocator),
