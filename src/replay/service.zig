@@ -855,6 +855,32 @@ test trackNewSlots {
     );
 }
 
+test "Receivers.create wires replay_votes without taking ownership" {
+    const allocator = std.testing.allocator;
+
+    var dbg: std.heap.DebugAllocator(.{}) = .init;
+    defer {
+        const leak_check = dbg.deinit();
+        std.debug.assert(leak_check == .ok);
+    }
+    const tracked = dbg.allocator();
+
+    // Create a votes channel using the tracked allocator (borrowed by Receivers)
+    const votes_ch = try sig.sync.Channel(ParsedVote).create(tracked);
+    defer votes_ch.destroy();
+
+    // Create receivers with the borrowed channel
+    var receivers = try Receivers.create(allocator, .{ .replay_votes = votes_ch });
+    // Ensure the same pointer was wired through
+    try std.testing.expect(votes_ch == receivers.replay_votes);
+
+    // Destroy receivers; this should NOT destroy the borrowed channel.
+    receivers.destroy();
+
+    // Channel should still be usable; try a non-blocking receive (should be empty, but not crash)
+    _ = votes_ch.tryReceive();
+}
+
 fn expectSlotTracker(
     slot_tracker: *SlotTracker,
     leader_schedule: sig.core.leader_schedule.LeaderSchedule,
