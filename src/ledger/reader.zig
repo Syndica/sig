@@ -1147,13 +1147,6 @@ pub const LedgerReader = struct {
             if (try self.db.getBytes(schema.data_shred, .{ slot, @intCast(index) })) |shred_bytes| {
                 defer shred_bytes.deinit();
                 const shred = try Shred.fromPayload(allocator, shred_bytes.data);
-                shred.sanitize() catch |err| {
-                    self.logger.err().logf(
-                        "Ledger is corrupted. Extracted a shred " ++
-                            "that failed sanitization: {any} - {}",
-                        .{ shred.id(), err },
-                    );
-                };
                 data_shreds.appendAssumeCapacity(shred.data);
             } else {
                 if (maybe_slot_meta) |slot_meta| {
