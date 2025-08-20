@@ -9,9 +9,7 @@ PASSING_DIRS=(
     "vm_interp/fixtures/v0"
     "vm_interp/fixtures/v1"
     "vm_interp/fixtures/v2"
-
-    # Passed: 36252, Failed: 9, Skipped: 0 
-    # "vm_interp/fixtures/v3"
+    "vm_interp/fixtures/v3"
 
     "syscall/fixtures/abort"
     "syscall/fixtures/alt_bn128"
