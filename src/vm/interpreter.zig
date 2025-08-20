@@ -625,19 +625,23 @@ pub const Vm = struct {
                     next_pc = frame.return_pc;
                 }
             },
-            .call_imm => {
-                if (e: {
-                    if (version.enableStaticSyscalls()) break :e null;
-                    break :e self.loader.lookupKey(inst.imm);
-                }) |entry| {
-                    try self.dispatchSyscall(entry);
-                } else if (self.executable.function_registry.lookupKey(version.computeTargetPc(
-                    pc,
-                    inst,
-                ))) |entry| {
+            .call_imm => blk: {
+                if (!version.enableStaticSyscalls()) {
+                    if (self.loader.lookupKey(inst.imm)) |entry| {
+                        try self.dispatchSyscall(entry);
+                        break :blk;
+                    }
+                }
+
+                const target_pc = version.computeTargetPc(pc, inst);
+                const function_registry = &self.executable.function_registry;
+                if (function_registry.lookupKey(target_pc)) |entry| {
                     try self.pushCallFrame();
                     next_pc = entry.value;
-                } else return error.UnsupportedInstruction;
+                    break :blk;
+                }
+
+                return error.UnsupportedInstruction;
             },
             .call_reg => {
                 const src: sbpf.Instruction.Register = if (version.callRegUsesSrcReg())
