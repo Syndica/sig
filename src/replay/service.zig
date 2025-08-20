@@ -181,6 +181,8 @@ const ReplayState = struct {
     senders: Senders,
     receivers: Receivers,
 
+    execution_log_helper: replay.execution.LogHelper,
+
     fn deinit(self: *ReplayState) void {
         self.thread_pool.shutdown();
         self.thread_pool.deinit();
@@ -266,6 +268,8 @@ const ReplayState = struct {
 
             .senders = deps.senders,
             .receivers = deps.receivers,
+
+            .execution_log_helper = .init(.from(deps.logger)),
         };
     }
 
@@ -275,6 +279,8 @@ const ReplayState = struct {
             .logger = .from(self.logger),
             .my_identity = self.my_identity,
             .vote_account = null, // voting not currently supported
+
+            .log_helper = &self.execution_log_helper,
 
             .account_store = self.account_store,
             .thread_pool = &self.thread_pool,

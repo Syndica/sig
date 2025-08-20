@@ -49,6 +49,8 @@ pub const ReplayExecutionState = struct {
     my_identity: Pubkey,
     vote_account: ?Pubkey,
 
+    log_helper: *LogHelper,
+
     // borrows
     account_store: AccountStore,
     thread_pool: *ThreadPool,
@@ -77,8 +79,8 @@ pub fn replayActiveSlots(state: ReplayExecutionState) !bool {
     defer zone.deinit();
 
     const active_slots = try state.slot_tracker.activeSlots(state.allocator);
-    defer state.allocator.free(active_slots);
-    state.logger.debug().logf("{} active slots to replay", .{active_slots.len});
+    state.log_helper.logActiveSlots(active_slots, state.allocator);
+
     if (active_slots.len == 0) {
         return false;
     }
@@ -96,6 +98,45 @@ pub fn replayActiveSlots(state: ReplayExecutionState) !bool {
     }
     return try processReplayResults(state, slot_statuses.items);
 }
+
+pub const LogHelper = struct {
+    logger: Logger,
+    last_active_slots: ?[]const u64,
+    slots_are_the_same: bool,
+
+    pub fn init(logger: Logger) LogHelper {
+        return .{
+            .logger = logger,
+            .last_active_slots = null,
+            .slots_are_the_same = false,
+        };
+    }
+
+    /// takes ownership of active_slots,
+    pub fn logActiveSlots(
+        self: *LogHelper,
+        active_slots: []const u64,
+        deinit_allocator: Allocator,
+    ) void {
+        self.slots_are_the_same = if (self.last_active_slots) |last_slots|
+            std.mem.eql(u64, active_slots, last_slots)
+        else
+            false;
+
+        if (self.last_active_slots) |slots| deinit_allocator.free(slots);
+        self.last_active_slots = active_slots;
+
+        self.logger
+            .entry(if (self.slots_are_the_same) .debug else .info)
+            .logf("{} active slots to replay: {any}", .{ active_slots.len, active_slots });
+    }
+
+    pub fn logEntryCount(self: *LogHelper, entry_count: usize, slot: Slot) void {
+        self.logger
+            .entry(if (self.slots_are_the_same and entry_count == 0) .debug else .info)
+            .logf("got {} entries for slot {}", .{ entry_count, slot });
+    }
+};
 
 const ReplaySlotStatus = union(enum) {
     /// We have no entries available to verify for this slot. No work was done.
@@ -152,7 +193,6 @@ fn replaySlot(state: ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
     }
 
     const epoch_info = state.epochs.getForSlot(slot) orelse return error.MissingEpoch;
-
     const slot_info = state.slot_tracker.get(slot) orelse return error.MissingSlot;
 
     const i_am_leader = slot_info.constants.collector_id.equals(&state.my_identity);
@@ -201,10 +241,8 @@ fn replaySlot(state: ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
             for (entries) |entry| entry.deinit(state.allocator);
             state.allocator.free(entries);
         }
-        if (entries.len == 0)
-            state.logger.debug().logf("got {} entries for slot {}", .{ entries.len, slot })
-        else
-            state.logger.info().logf("got {} entries for slot {}", .{ entries.len, slot });
+
+        state.log_helper.logEntryCount(entries.len, slot);
 
         if (entries.len == 0) {
             return .empty;
@@ -485,6 +523,7 @@ const TestReplayStateResources = struct {
     registry: sig.prometheus.Registry(.{}),
     lowest_cleanup_slot: sig.sync.RwMux(Slot),
     max_root: std.atomic.Value(Slot),
+    log_helper: LogHelper,
 
     pub fn init(allocator: Allocator) !*TestReplayStateResources {
         const self = try allocator.create(TestReplayStateResources);
@@ -551,6 +590,8 @@ const TestReplayStateResources = struct {
             .root = 0,
         };
 
+        self.log_helper = .init(.noop);
+
         self.replay_state = ReplayExecutionState{
             .allocator = allocator,
             .logger = .noop,
@@ -572,6 +613,7 @@ const TestReplayStateResources = struct {
             .epoch_slots_frozen_slots = &self.epoch_slots_frozen_slots,
             .duplicate_slots_to_repair = &self.duplicate_slots_to_repair,
             .purge_repair_slot_counter = &self.purge_repair_slot_counter,
+            .log_helper = &self.log_helper,
         };
 
         return self;
