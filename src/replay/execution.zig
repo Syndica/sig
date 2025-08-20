@@ -483,8 +483,8 @@ fn markDeadSlot(
     // If blockstore previously marked this slot as duplicate, invoke duplicate state as well
     const maybe_duplicate_proof = try replay_state.ledger_reader.getDuplicateSlot(dead_slot);
     defer if (maybe_duplicate_proof) |proof| {
-        replay_state.allocator.free(proof.shred1);
-        replay_state.allocator.free(proof.shred2);
+        replay_state.ledger_reader.allocator.free(proof.shred1);
+        replay_state.ledger_reader.allocator.free(proof.shred2);
     };
     if (!replay_state.duplicate_slots_tracker.contains(dead_slot) and
         maybe_duplicate_proof != null)
