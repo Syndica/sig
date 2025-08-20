@@ -25,6 +25,7 @@ const AncestorHashesReplayUpdate = sig.replay.consensus.AncestorHashesReplayUpda
 const AncestorDuplicateSlotToRepair = replay.edge_cases.AncestorDuplicateSlotToRepair;
 const ThresholdConfirmedSlot = sig.consensus.vote_listener.ThresholdConfirmedSlot;
 const GossipVerifiedVoteHash = sig.consensus.vote_listener.GossipVerifiedVoteHash;
+const ParsedVote = sig.consensus.vote_listener.vote_parser.ParsedVote;
 const LatestValidatorVotes = sig.consensus.latest_validator_votes.LatestValidatorVotes;
 const SlotHistoryAccessor = sig.consensus.replay_tower.SlotHistoryAccessor;
 
@@ -86,14 +87,17 @@ pub const LedgerRef = struct {
 pub const Senders = struct {
     /// Received by repair [ancestor_hashes_service](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/repair/ancestor_hashes_service.rs#L589)
     ancestor_hashes_replay_update: *sig.sync.Channel(AncestorHashesReplayUpdate),
+    replay_votes: *sig.sync.Channel(ParsedVote),
 
     pub fn destroy(self: Senders) void {
         self.ancestor_hashes_replay_update.destroy();
+        self.replay_votes.destroy();
     }
 
     pub fn create(allocator: std.mem.Allocator) std.mem.Allocator.Error!Senders {
         return .{
             .ancestor_hashes_replay_update = try .create(allocator),
+            .replay_votes = try .create(allocator),
         };
     }
 };
@@ -120,6 +124,9 @@ pub const Receivers = struct {
     ///       - [relevant interface invokation](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/gossip/src/duplicate_shred_listener.rs#L31)
     duplicate_slots: *sig.sync.Channel(Slot),
 
+    // Borrowed. Managed by Senders.
+    replay_votes: *sig.sync.Channel(ParsedVote),
+
     pub fn destroy(self: Receivers) void {
         self.ancestor_duplicate_slots.destroy();
         self.duplicate_confirmed_slots.destroy();
@@ -128,7 +135,9 @@ pub const Receivers = struct {
         self.duplicate_slots.destroy();
     }
 
-    pub fn create(allocator: std.mem.Allocator) std.mem.Allocator.Error!Receivers {
+    pub fn create(allocator: std.mem.Allocator, params: struct {
+        replay_votes: *sig.sync.Channel(ParsedVote),
+    }) std.mem.Allocator.Error!Receivers {
         const ancestor_duplicate_slots: *sig.sync.Channel(AncestorDuplicateSlotToRepair) =
             try .create(allocator);
         errdefer ancestor_duplicate_slots.destroy();
@@ -153,6 +162,7 @@ pub const Receivers = struct {
             .gossip_verified_vote_hash = gossip_verified_vote_hash,
             .popular_pruned_forks = popular_pruned_forks,
             .duplicate_slots = duplicate_slots,
+            .replay_votes = params.replay_votes,
         };
     }
 };
