@@ -1009,8 +1009,11 @@ pub fn executeV3Close(
                     try commonCloseAccount(ic, authority_address);
 
                     clock = try ic.tc.sysvar_cache.get(sysvar.Clock);
-                    // TODO: This depends on program cache which isn't implemented yet.
-                    // [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/bpf_loader/src/lib.rs#L1114-L1123
+
+                    // Remove from the program map if it was deployed.
+                    const gop = try ic.tc.program_map.getOrPut(allocator, program_key);
+                    if (gop.found_existing) gop.value_ptr.deinit(allocator);
+                    gop.value_ptr.* = .failed;
                 },
                 else => {
                     try ic.tc.log("Invalid Program Account", .{});
