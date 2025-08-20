@@ -14,12 +14,15 @@ const VerifyTransactionResult = union(enum(u8)) {
 
 const FeatureSet = sig.core.FeatureSet;
 const SlotAccountReader = sig.accounts_db.SlotAccountReader;
+const Slot = sig.core.Slot;
+const SlotHashes = sig.runtime.sysvar.SlotHashes;
 
 pub fn verifyTransaction(
     allocator: std.mem.Allocator,
     transaction: Transaction,
     feature_set: *const FeatureSet,
-    slot: sig.core.Slot,
+    slot: Slot,
+    slot_hashes: SlotHashes,
     account_reader: SlotAccountReader,
 ) !VerifyTransactionResult {
     const serialized_msg = transaction.msg.serializeBounded(
@@ -59,6 +62,8 @@ pub fn verifyTransaction(
         allocator,
         account_reader,
         &.{transaction},
+        slot,
+        slot_hashes,
         &reserved_accounts,
     ) catch |err| {
         const err_code = switch (err) {
