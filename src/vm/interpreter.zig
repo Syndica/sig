@@ -626,31 +626,15 @@ pub const Vm = struct {
                 }
             },
             .call_imm => {
-                var resolved = false;
-                const external, const internal = if (version.enableStaticSyscalls())
-                    .{ inst.src == .r0, inst.src != .r0 }
-                else
-                    .{ true, true };
-
-                if (external) {
-                    if (self.loader.lookupKey(inst.imm)) |entry| {
-                        resolved = true;
-                        try self.dispatchSyscall(entry);
-                    }
-                }
-
-                if (internal and !resolved) {
-                    const target_pc = version.computeTargetPc(pc, inst);
-                    if (self.executable.function_registry.lookupKey(target_pc)) |entry| {
-                        resolved = true;
-                        try self.pushCallFrame();
-                        next_pc = entry.value;
-                    }
-                }
-
-                if (!resolved) {
-                    return error.UnsupportedInstruction;
-                }
+                if (e: {
+                    if (version.enableStaticSyscalls()) break :e null;
+                    break :e self.loader.lookupKey(inst.imm);
+                }) |entry| {
+                    try self.dispatchSyscall(entry);
+                } else if (self.executable.function_registry.lookupKey(version.computeTargetPc(pc, inst))) |entry| {
+                    try self.pushCallFrame();
+                    next_pc = entry.value;
+                } else return error.UnsupportedInstruction;
             },
             .call_reg => {
                 const src: sbpf.Instruction.Register = if (version.callRegUsesSrcReg())
