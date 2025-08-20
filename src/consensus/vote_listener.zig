@@ -24,13 +24,13 @@ pub const BankForksStub = struct {
     epoch_tracker: EpochTracker,
     ancestors_map: sig.utils.collections.SortedMapUnmanaged(Slot, sig.core.Ancestors),
 
-    fn deinit(self: BankForksStub, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: BankForksStub, allocator: std.mem.Allocator) void {
         self.slot_tracker.deinit(allocator);
         self.epoch_tracker.deinit(allocator);
         self.ancestors_map.deinit(allocator);
     }
 
-    fn init(
+    pub fn init(
         allocator: std.mem.Allocator,
         epoch_schedule: sig.core.EpochSchedule,
         root: struct {
@@ -53,6 +53,7 @@ pub const BankForksStub = struct {
         try self.epoch_tracker.epochs.ensureUnusedCapacity(allocator, 1);
         self.epoch_tracker.epochs.putAssumeCapacity(
             epoch_schedule.getEpoch(root.slot),
+            // TODO: Can this clone be avoided?
             try root.epoch_constants.clone(allocator),
         );
 
@@ -365,7 +366,7 @@ fn verifyVoteTransaction(
 
 pub const ThresholdConfirmedSlot = sig.core.hash.SlotAndHash;
 pub const GossipVerifiedVoteHash = struct { Pubkey, Slot, Hash };
-const VerifiedVote = struct { Pubkey, []const Slot };
+pub const VerifiedVote = struct { Pubkey, []const Slot };
 
 /// The expected duration of a slot (400 milliseconds).
 const DEFAULT_MS_PER_SLOT: u64 =
