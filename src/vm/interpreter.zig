@@ -631,7 +631,10 @@ pub const Vm = struct {
                     break :e self.loader.lookupKey(inst.imm);
                 }) |entry| {
                     try self.dispatchSyscall(entry);
-                } else if (self.executable.function_registry.lookupKey(version.computeTargetPc(pc, inst))) |entry| {
+                } else if (self.executable.function_registry.lookupKey(version.computeTargetPc(
+                    pc,
+                    inst,
+                ))) |entry| {
                     try self.pushCallFrame();
                     next_pc = entry.value;
                 } else return error.UnsupportedInstruction;
@@ -647,6 +650,11 @@ pub const Vm = struct {
 
                 next_pc = (target_pc -% self.vm_addr) / 8;
                 if (next_pc >= instructions.len) return error.CallOutsideTextSegment;
+                if (version.enableStaticSyscalls() and
+                    self.executable.function_registry.lookupKey(next_pc) == null)
+                {
+                    return error.UnsupportedInstruction;
+                }
             },
 
             // other instructions
