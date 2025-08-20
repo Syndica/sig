@@ -233,7 +233,7 @@ const Cmd = struct {
                 .kind = .named,
                 .name_override = null,
                 .alias = .l,
-                .default_value = .debug,
+                .default_value = if (builtin.mode == .Debug) .debug else .info,
                 .config = {},
                 .help = "The amount of detail to log",
             },
