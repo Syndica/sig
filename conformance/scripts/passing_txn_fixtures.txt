@@ -2769,6 +2769,7 @@
 ./test-vectors/txn/fixtures/programs/b7cf2485b3389767b1fca4cb91dd126d0d56cdce_265678.fix
 ./test-vectors/txn/fixtures/programs/b7d3fc01357179113939e00139a14aa5acc53155_2230820.fix
 ./test-vectors/txn/fixtures/programs/b7d6f98c38e149946bf6959d13766b691a983347_265678.fix
+./test-vectors/txn/fixtures/programs/b7d8956145950269da4dc2215fd6f149d1261e0b_1768662.fix
 ./test-vectors/txn/fixtures/programs/b7ec07f28f39579f7f9a56ef6302fea4511d0627_2187356.fix
 ./test-vectors/txn/fixtures/programs/b81023929ae580404b2a6d67f2c8cef49369914e_265678.fix
 ./test-vectors/txn/fixtures/programs/b8121b6611452a9199fad298f699fbd7dd8b0567_265678.fix
