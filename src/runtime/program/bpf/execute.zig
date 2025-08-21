@@ -129,34 +129,13 @@ pub fn execute(
     }
 
     // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1658-L1731
-    var maybe_execute_error: ?ExecutionError = null;
-    switch (result) {
-        // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1642-L1645
-        .ok => |status| if (status != 0) {
-            const execution_error = sig.vm.executionErrorFromStatusCode(status);
-            switch (execution_error) {
-                error.Custom => ic.tc.custom_error = @intCast(status),
-                error.GenericError => ic.tc.custom_error = 0,
-                else => {},
-            }
-            maybe_execute_error = execution_error;
-        },
-        .err => |err| {
-            const err_kind = sig.vm.getExecutionErrorKind(err);
-            if (ic.tc.feature_set.active(
-                .deplete_cu_meter_on_vm_failure,
-                ic.tc.slot,
-            ) and err_kind != .Syscall) {
-                ic.tc.compute_meter = 0;
-            }
-
-            if (direct_mapping and err == error.AccessViolation) {
-                std.debug.print("TODO: Handle AccessViolation: {s}\n", .{@errorName(err)});
-            }
-
-            maybe_execute_error = err;
-        },
-    }
+    var maybe_execute_error: ?ExecutionError = handleExecutionResult(
+        result,
+        &ic.tc.custom_error,
+        &ic.tc.compute_meter,
+        direct_mapping,
+        ic.tc.feature_set.active(.deplete_cu_meter_on_vm_failure, ic.tc.slot),
+    );
 
     // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1750-L1756
     if (maybe_execute_error == null)
@@ -247,4 +226,85 @@ pub fn initVm(
         heap,
         mm_regions,
     };
+}
+
+fn handleExecutionResult(
+    result: sig.vm.interpreter.Result,
+    custom_error: *?u32,
+    compute_meter: *u64,
+    direct_mapping: bool,
+    deplete_cu_meter: bool,
+) ?ExecutionError {
+    switch (result) {
+        .ok => |status| if (status != 0) {
+            switch (sig.vm.executionErrorFromStatusCode(status)) {
+                error.Custom => custom_error.* = @intCast(status),
+                error.GenericError => custom_error.* = 0,
+                else => |err| return err,
+            }
+            return error.Custom;
+        },
+        .err => |err| {
+            const err_kind = sig.vm.getExecutionErrorKind(err);
+            if (deplete_cu_meter and err_kind != .Syscall)
+                compute_meter.* = 0;
+            if (direct_mapping and err == error.AccessViolation)
+                std.debug.print("TODO: Handle AccessViolation: {s}\n", .{@errorName(err)});
+            return err;
+        },
+    }
+    return null;
+}
+
+test handleExecutionResult {
+    var custom_error: ?u32 = null;
+    var compute_meter: u64 = 1000;
+
+    // No Error
+    try std.testing.expectEqual(null, handleExecutionResult(
+        .{ .ok = 0 },
+        &custom_error,
+        &compute_meter,
+        false,
+        false,
+    ));
+    try std.testing.expectEqual(null, custom_error);
+    try std.testing.expectEqual(1000, compute_meter);
+
+    // Generic Error maps to Custom error with code 0
+    try std.testing.expectEqual(error.Custom, handleExecutionResult(
+        .{ .ok = 0x100000000 },
+        &custom_error,
+        &compute_meter,
+        false,
+        false,
+    ).?);
+    try std.testing.expectEqual(0, custom_error.?);
+    try std.testing.expectEqual(1000, compute_meter);
+
+    // Custom error with specific code
+    custom_error = null;
+    try std.testing.expectEqual(error.Custom, handleExecutionResult(
+        .{ .ok = 101 },
+        &custom_error,
+        &compute_meter,
+        false,
+        false,
+    ).?);
+    try std.testing.expectEqual(101, custom_error.?);
+    try std.testing.expectEqual(1000, compute_meter);
+
+    // Deplete compute meter on non-syscall error
+    custom_error = null;
+    try std.testing.expectEqual(error.InvalidArgument, handleExecutionResult(
+        .{ .err = error.InvalidArgument },
+        &custom_error,
+        &compute_meter,
+        false,
+        true,
+    ).?);
+    try std.testing.expectEqual(null, custom_error);
+    try std.testing.expectEqual(0, compute_meter);
+
+    // TODO: Handle AccessViolation
 }
