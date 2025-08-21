@@ -453,7 +453,7 @@ pub fn processReplayResults(
         // If entries is null, it means the slot failed or was skipped, so continue to next slot
         const entries = if (maybe_entries) |entries| entries else continue;
 
-        var slot_info = state.slot_tracker.get(slot) orelse return error.MissingSlotInTracker;
+        const slot_info = state.slot_tracker.get(slot) orelse return error.MissingSlotInTracker;
 
         // Freeze the bank if its entries where completly processed.
         if (slot_info.state.tickHeight() == slot_info.constants.max_tick_height) {
