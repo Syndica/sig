@@ -14,7 +14,6 @@ const ThreadPool = sig.sync.ThreadPool;
 const Ancestors = core.Ancestors;
 const Entry = core.Entry;
 const Hash = core.Hash;
-const ReservedAccounts = core.ReservedAccounts;
 const Slot = core.Slot;
 const TransactionError = sig.ledger.transaction_status.TransactionError;
 
