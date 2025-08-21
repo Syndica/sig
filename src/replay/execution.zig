@@ -452,7 +452,7 @@ fn markDeadSlot(
     ancestor_hashes_replay_update_sender: *sig.sync.Channel(AncestorHashesReplayUpdate),
 ) !void {
     // TODO add getForkProgress
-    var fork_progress = replay_state.progress_map.map.getPtr(dead_slot) orelse {
+    const fork_progress = replay_state.progress_map.map.getPtr(dead_slot) orelse {
         return error.MissingBankProgress;
     };
     fork_progress.is_dead = true;
