@@ -19,12 +19,15 @@ const EpochTracker = sig.replay.trackers.EpochTracker;
 
 const Logger = sig.trace.Logger("vote_listener");
 
-pub const BankForksStub = struct {
+/// Read-only data used by the vote listener.
+/// Provides per-slot queries (root, hash, ancestors) and epoch-scoped stake
+/// and authorized-voter lookups to verify votes and drive optimistic confirmation.
+pub const VoteListenerData = struct {
     slot_tracker: SlotTracker,
     epoch_tracker: EpochTracker,
     ancestors_map: sig.utils.collections.SortedMapUnmanaged(Slot, sig.core.Ancestors),
 
-    fn deinit(self: BankForksStub, allocator: std.mem.Allocator) void {
+    fn deinit(self: VoteListenerData, allocator: std.mem.Allocator) void {
         self.slot_tracker.deinit(allocator);
         self.epoch_tracker.deinit(allocator);
         self.ancestors_map.deinit(allocator);
@@ -39,8 +42,8 @@ pub const BankForksStub = struct {
             state: sig.core.SlotState,
             epoch_constants: sig.core.EpochConstants,
         },
-    ) std.mem.Allocator.Error!BankForksStub {
-        var self: BankForksStub = .{
+    ) std.mem.Allocator.Error!VoteListenerData {
+        var self: VoteListenerData = .{
             .slot_tracker = try .init(allocator, root.slot, .{
                 .constants = root.constants,
                 .state = root.state,
@@ -59,21 +62,21 @@ pub const BankForksStub = struct {
         return self;
     }
 
-    fn rootSlot(self: *const BankForksStub) Slot {
+    fn rootSlot(self: *const VoteListenerData) Slot {
         return self.slot_tracker.root;
     }
 
-    fn getSlotHash(self: *const BankForksStub, slot: Slot) ?Hash {
+    fn getSlotHash(self: *const VoteListenerData, slot: Slot) ?Hash {
         const slot_info = self.slot_tracker.get(slot) orelse return null;
         return slot_info.state.hash.readCopy();
     }
 
-    fn getSlotEpoch(self: *const BankForksStub, slot: Slot) sig.core.Epoch {
+    fn getSlotEpoch(self: *const VoteListenerData, slot: Slot) sig.core.Epoch {
         return self.epoch_tracker.schedule.getEpoch(slot);
     }
 
     fn getSlotAncestorsPtr(
-        self: *const BankForksStub,
+        self: *const VoteListenerData,
         slot: Slot,
     ) ?*const sig.core.Ancestors {
         if (self.slot_tracker.get(slot)) |ref| {
@@ -82,18 +85,18 @@ pub const BankForksStub = struct {
         return null;
     }
 
-    fn getEpochTotalStake(self: *const BankForksStub, epoch: u64) ?u64 {
+    fn getEpochTotalStake(self: *const VoteListenerData, epoch: u64) ?u64 {
         const epoch_info = self.epoch_tracker.epochs.get(epoch) orelse return null;
         return epoch_info.stakes.total_stake;
     }
 
-    fn getDelegatedStake(self: *const BankForksStub, slot: Slot, pubkey: Pubkey) ?u64 {
+    fn getDelegatedStake(self: *const VoteListenerData, slot: Slot, pubkey: Pubkey) ?u64 {
         const epoch_info = self.epoch_tracker.getForSlot(slot) orelse return null;
         return epoch_info.stakes.stakes.vote_accounts.getDelegatedStake(pubkey);
     }
 
     fn getAuthorizedVoterPubkey(
-        self: *const BankForksStub,
+        self: *const VoteListenerData,
         slot: Slot,
         vote_account_key: Pubkey,
     ) ?Pubkey {
@@ -123,7 +126,7 @@ pub const VoteListener = struct {
         logger: Logger,
         vote_tracker: *VoteTracker,
         params: struct {
-            bank_forks_rw: *sig.sync.RwMux(BankForksStub),
+            bank_forks_rw: *sig.sync.RwMux(VoteListenerData),
             gossip_table_rw: *sig.sync.RwMux(sig.gossip.GossipTable),
             ledger_ref: LedgerRef,
 
@@ -234,7 +237,7 @@ const UnverifiedVoteReceptor = struct {
     fn recvAndSendOnce(
         self: *UnverifiedVoteReceptor,
         allocator: std.mem.Allocator,
-        bank_forks_rw: *sig.sync.RwMux(BankForksStub),
+        bank_forks_rw: *sig.sync.RwMux(VoteListenerData),
         gossip_table_rw: *sig.sync.RwMux(sig.gossip.GossipTable),
         unverified_votes_buffer: *std.ArrayListUnmanaged(Transaction),
         /// Sends to `processVotesLoop`'s `receivers.verified_vote_transactions` parameter.
@@ -270,7 +273,7 @@ const UnverifiedVoteReceptor = struct {
 fn recvLoop(
     allocator: std.mem.Allocator,
     exit: sig.sync.ExitCondition,
-    bank_forks_rw: *sig.sync.RwMux(BankForksStub),
+    bank_forks_rw: *sig.sync.RwMux(VoteListenerData),
     gossip_table_rw: *sig.sync.RwMux(sig.gossip.GossipTable),
     /// Sends to `processVotesLoop`'s `receivers.verified_vote_transactions` parameter.
     verified_vote_transactions_sender: *sig.sync.Channel(Transaction),
@@ -382,7 +385,7 @@ fn processVotesLoop(
     allocator: std.mem.Allocator,
     logger: Logger,
     vote_tracker: *VoteTracker,
-    bank_forks_rw: *sig.sync.RwMux(BankForksStub),
+    bank_forks_rw: *sig.sync.RwMux(VoteListenerData),
     senders: Senders,
     receivers: Receivers,
     ledger_ref: LedgerRef,
@@ -435,7 +438,7 @@ fn processVotesOnce(
     allocator: std.mem.Allocator,
     logger: Logger,
     vote_tracker: *VoteTracker,
-    bank_forks_rw: *sig.sync.RwMux(BankForksStub),
+    bank_forks_rw: *sig.sync.RwMux(VoteListenerData),
     senders: Senders,
     receivers: Receivers,
     ledger_ref: LedgerRef,
@@ -511,7 +514,7 @@ fn listenAndConfirmVotes(
     allocator: std.mem.Allocator,
     logger: Logger,
     vote_tracker: *VoteTracker,
-    bank_forks: *const BankForksStub,
+    bank_forks: *const VoteListenerData,
     senders: Senders,
     receivers: Receivers,
     vote_processing_time: ?*VoteProcessingTiming,
@@ -576,7 +579,7 @@ fn filterAndConfirmWithNewVotes(
     allocator: std.mem.Allocator,
     logger: Logger,
     vote_tracker: *VoteTracker,
-    bank_forks: *const BankForksStub,
+    bank_forks: *const VoteListenerData,
     senders: Senders,
     vote_processing_time: ?*VoteProcessingTiming,
     latest_vote_slot_per_validator: *std.AutoArrayHashMapUnmanaged(Pubkey, Slot),
@@ -854,7 +857,7 @@ fn trackNewVotesAndNotifyConfirmations(
     allocator: std.mem.Allocator,
     logger: Logger,
     vote_tracker: *VoteTracker,
-    bank_forks: *const BankForksStub,
+    bank_forks: *const VoteListenerData,
     senders: Senders,
     vote: VoteTransaction,
     vote_pubkey: Pubkey,
@@ -1456,7 +1459,7 @@ test verifyVoteTransaction {
 test "simple usage" {
     const allocator = std.testing.allocator;
 
-    var bank_forks_rw = sig.sync.RwMux(BankForksStub).init(blk: {
+    var bank_forks_rw = sig.sync.RwMux(VoteListenerData).init(blk: {
         var stakes: sig.core.EpochStakes = try .initEmptyWithGenesisStakeHistoryEntry(allocator);
         defer stakes.deinit(allocator);
 
@@ -1584,7 +1587,7 @@ test "check trackers" {
 
     const root_slot: Slot = 0;
 
-    var bank_forks_rw = sig.sync.RwMux(BankForksStub).init(blk: {
+    var bank_forks_rw = sig.sync.RwMux(VoteListenerData).init(blk: {
         var stakes: sig.core.EpochStakes = try .initEmptyWithGenesisStakeHistoryEntry(allocator);
         defer stakes.deinit(allocator);
         for (tracker_templates) |template| {
