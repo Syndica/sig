@@ -41,11 +41,13 @@ pub fn verifyTransaction(
 
     const resolved_batch = sig.replay.resolve_lookup.resolveBatch(
         allocator,
-        account_reader,
         &.{transaction},
-        slot,
-        slot_hashes,
-        &reserved_accounts,
+        .{
+            .slot = slot,
+            .account_reader = account_reader,
+            .reserved_accounts = &reserved_accounts,
+            .slot_hashes = slot_hashes,
+        },
     ) catch |err| {
         const err_code = switch (err) {
             error.AddressLookupTableNotFound => transactionErrorToInt(

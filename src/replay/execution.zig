@@ -220,12 +220,32 @@ fn replaySlot(state: ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
         else
             null;
 
+    const slot_account_reader = state.account_store.reader()
+        .forSlot(&slot_info.constants.ancestors);
+
+    // TODO: Avoid the need to read this from accountsdb. We could broaden the
+    // scope of the sysvar cache, add this to slot constants, or implement
+    // additional mechanisms for lookup tables to detect slot age (e.g. block height).
+    const slot_hashes = try replay.update_sysvar.getSysvarFromAccount(
+        sig.runtime.sysvar.SlotHashes,
+        state.allocator,
+        slot_account_reader,
+    ) orelse return error.MissingSlotHashesSysvar;
+    errdefer slot_hashes.deinit(state.allocator);
+
+    const slot_resolver = replay.resolve_lookup.SlotResolver{
+        .slot = slot,
+        .account_reader = slot_account_reader,
+        .reserved_accounts = &slot_info.constants.reserved_accounts,
+        .slot_hashes = slot_hashes,
+    };
+
     const svm_params = SvmGateway.Params{
         .slot = slot,
         .max_age = sig.core.BlockhashQueue.MAX_RECENT_BLOCKHASHES / 2,
         .lamports_per_signature = slot_info.constants.fee_rate_governor.lamports_per_signature,
         .blockhash_queue = &slot_info.state.blockhash_queue,
-        .account_reader = state.account_store.reader().forSlot(&slot_info.constants.ancestors),
+        .account_reader = slot_account_reader,
         .ancestors = &slot_info.constants.ancestors,
         .feature_set = slot_info.constants.feature_set,
         .rent_collector = &epoch_info.rent_collector,
@@ -260,15 +280,13 @@ fn replaySlot(state: ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
     return .{ .confirm = try confirmSlot(
         state.allocator,
         .from(state.logger),
-        state.account_store,
         state.thread_pool,
         entries,
         previous_last_entry,
         svm_params,
         committer,
         verify_ticks_params,
-        &slot_info.constants.ancestors,
-        &slot_info.constants.reserved_accounts,
+        slot_resolver,
     ) };
 }
 
@@ -722,12 +740,7 @@ test "processReplayResults: confirm status with err poll result marks slot dead"
 
     // Create a mock ConfirmSlotFuture that will return an error when polled.
     const MockConfirmSlotFutureErr = struct {
-        scheduler: replay.scheduler.TransactionScheduler,
-        poh_verifier: sig.utils.thread.HomogeneousThreadPool(replay.confirm_slot.PohTask),
-        exit: std.atomic.Value(bool),
-        entries: []const sig.core.Entry,
-        status: replay.confirm_slot.ConfirmSlotStatus,
-        status_when_done: replay.confirm_slot.ConfirmSlotStatus,
+        inner: ConfirmSlotFuture,
 
         pub fn poll(self: *@This()) !replay.confirm_slot.ConfirmSlotStatus {
             _ = self;
@@ -747,12 +760,15 @@ test "processReplayResults: confirm status with err poll result marks slot dead"
     const empty_entries = try allocator.alloc(sig.core.Entry, 0);
 
     mock_future.* = MockConfirmSlotFutureErr{
-        .scheduler = undefined, // Not used in test.
-        .poh_verifier = undefined, // // Not used in test.
-        .exit = std.atomic.Value(bool).init(false),
-        .entries = empty_entries,
-        .status = .{ .err = .{ .failed_to_load_entries = "test error" } },
-        .status_when_done = .{ .err = .{ .failed_to_load_entries = "test error" } },
+        .inner = .{
+            .scheduler = undefined, // Not used in test.
+            .poh_verifier = undefined, // Not used in test.
+            .slot_resolver = undefined, // Not used in test
+            .exit = std.atomic.Value(bool).init(false),
+            .entries = empty_entries,
+            .status = .{ .err = .{ .failed_to_load_entries = "test error" } },
+            .status_when_done = .{ .err = .{ .failed_to_load_entries = "test error" } },
+        },
     };
 
     defer {
@@ -764,11 +780,9 @@ test "processReplayResults: confirm status with err poll result marks slot dead"
     var slot_statuses = std.ArrayListUnmanaged(struct { Slot, ReplaySlotStatus }).empty;
     defer slot_statuses.deinit(allocator);
 
-    // Cast our mock to ConfirmSlotFuture - this should work since they have the same layout
-    const confirm_future: *ConfirmSlotFuture = @ptrCast(@alignCast(mock_future));
     try slot_statuses.append(
         allocator,
-        .{ slot, .{ .confirm = confirm_future } },
+        .{ slot, .{ .confirm = &mock_future.inner } },
     );
 
     const result = try processReplayResults(
@@ -833,12 +847,7 @@ test "processReplayResults: confirm status with done poll but missing slot in tr
 
     // Create a mock ConfirmSlotFuture that will return done when polled
     const MockConfirmSlotFutureDone = struct {
-        scheduler: replay.scheduler.TransactionScheduler,
-        poh_verifier: sig.utils.thread.HomogeneousThreadPool(replay.confirm_slot.PohTask),
-        exit: std.atomic.Value(bool),
-        entries: []const sig.core.Entry,
-        status: replay.confirm_slot.ConfirmSlotStatus,
-        status_when_done: replay.confirm_slot.ConfirmSlotStatus,
+        inner: ConfirmSlotFuture,
 
         pub fn poll(self: *@This()) !replay.confirm_slot.ConfirmSlotStatus {
             _ = self;
@@ -855,12 +864,15 @@ test "processReplayResults: confirm status with done poll but missing slot in tr
     const empty_entries = try allocator.alloc(sig.core.Entry, 0);
 
     mock_future.* = MockConfirmSlotFutureDone{
-        .scheduler = undefined, // Not used in test
-        .poh_verifier = undefined, // Not used in test
-        .exit = std.atomic.Value(bool).init(false),
-        .entries = empty_entries,
-        .status = .done,
-        .status_when_done = .done,
+        .inner = .{
+            .scheduler = undefined, // Not used in test
+            .poh_verifier = undefined, // Not used in test
+            .slot_resolver = undefined, // Not used in test
+            .exit = std.atomic.Value(bool).init(false),
+            .entries = empty_entries,
+            .status = .done,
+            .status_when_done = .done,
+        },
     };
 
     defer {
@@ -873,10 +885,9 @@ test "processReplayResults: confirm status with done poll but missing slot in tr
     defer slot_statuses.deinit(allocator);
 
     // Cast our mock to ConfirmSlotFuture
-    const confirm_future: *ConfirmSlotFuture = @ptrCast(@alignCast(mock_future));
     try slot_statuses.append(
         allocator,
-        .{ slot, .{ .confirm = confirm_future } },
+        .{ slot, .{ .confirm = &mock_future.inner } },
     );
 
     // The function should return an error since the slot is not in the tracker
@@ -943,12 +954,7 @@ test "processReplayResults: confirm status with done poll and slot complete - su
 
     // Create a mock ConfirmSlotFuture that will return done with entries
     const MockConfirmSlotFutureSuccess = struct {
-        scheduler: replay.scheduler.TransactionScheduler,
-        poh_verifier: sig.utils.thread.HomogeneousThreadPool(replay.confirm_slot.PohTask),
-        exit: std.atomic.Value(bool),
-        entries: []const sig.core.Entry,
-        status: replay.confirm_slot.ConfirmSlotStatus,
-        status_when_done: replay.confirm_slot.ConfirmSlotStatus,
+        inner: ConfirmSlotFuture,
 
         pub fn poll(self: *@This()) !replay.confirm_slot.ConfirmSlotStatus {
             _ = self;
@@ -963,12 +969,15 @@ test "processReplayResults: confirm status with done poll and slot complete - su
     // Create the mock future with the mock entries
     const mock_future = try allocator.create(MockConfirmSlotFutureSuccess);
     mock_future.* = MockConfirmSlotFutureSuccess{
-        .scheduler = undefined, // Not used in test
-        .poh_verifier = undefined, // Not used in test
-        .exit = std.atomic.Value(bool).init(false),
-        .entries = mock_entries,
-        .status = .done,
-        .status_when_done = .done,
+        .inner = .{
+            .scheduler = undefined, // Not used in test
+            .poh_verifier = undefined, // Not used in test
+            .slot_resolver = undefined, // Not used in test
+            .exit = std.atomic.Value(bool).init(false),
+            .entries = mock_entries,
+            .status = .done,
+            .status_when_done = .done,
+        },
     };
 
     defer allocator.destroy(mock_future);
@@ -1036,11 +1045,9 @@ test "processReplayResults: confirm status with done poll and slot complete - su
     var slot_statuses = std.ArrayListUnmanaged(struct { Slot, ReplaySlotStatus }).empty;
     defer slot_statuses.deinit(allocator);
 
-    // Cast the mock to ConfirmSlotFuture
-    const confirm_future: *ConfirmSlotFuture = @ptrCast(@alignCast(mock_future));
     try slot_statuses.append(
         allocator,
-        .{ slot, .{ .confirm = confirm_future } },
+        .{ slot, .{ .confirm = &mock_future.inner } },
     );
 
     // This should successfully process the slot and return true

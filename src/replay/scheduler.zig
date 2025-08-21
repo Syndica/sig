@@ -316,21 +316,25 @@ test "TransactionScheduler: happy path" {
     {
         const batch1 = try resolveBatch(
             allocator,
-            .noop,
             transactions[0..3],
-            state.svmParams().slot,
-            slot_hashes,
-            &.empty,
+            .{
+                .slot = state.svmParams().slot,
+                .account_reader = .noop,
+                .reserved_accounts = &.empty,
+                .slot_hashes = slot_hashes,
+            },
         );
         errdefer batch1.deinit(allocator);
 
         const batch2 = try resolveBatch(
             allocator,
-            .noop,
             transactions[3..6],
-            state.svmParams().slot,
-            slot_hashes,
-            &.empty,
+            .{
+                .slot = state.svmParams().slot,
+                .account_reader = .noop,
+                .reserved_accounts = &.empty,
+                .slot_hashes = slot_hashes,
+            },
         );
         errdefer batch2.deinit(allocator);
 
@@ -387,21 +391,25 @@ test "TransactionScheduler: duplicate batch passes through to svm" {
     {
         const batch1 = try resolveBatch(
             allocator,
-            .noop,
             transactions[0..3],
-            state.svmParams().slot,
-            slot_hashes,
-            &.empty,
+            .{
+                .slot = state.svmParams().slot,
+                .account_reader = .noop,
+                .reserved_accounts = &.empty,
+                .slot_hashes = slot_hashes,
+            },
         );
         errdefer batch1.deinit(allocator);
 
         const batch1_dupe = try resolveBatch(
             allocator,
-            .noop,
             transactions[0..3],
-            state.svmParams().slot,
-            slot_hashes,
-            &.empty,
+            .{
+                .slot = state.svmParams().slot,
+                .account_reader = .noop,
+                .reserved_accounts = &.empty,
+                .slot_hashes = slot_hashes,
+            },
         );
         errdefer batch1_dupe.deinit(allocator);
 
@@ -458,11 +466,13 @@ test "TransactionScheduler: failed account locks" {
     {
         const batch1 = try resolveBatch(
             allocator,
-            .noop,
             &unresolved_batch,
-            state.svmParams().slot,
-            slot_hashes,
-            &.empty,
+            .{
+                .slot = state.svmParams().slot,
+                .account_reader = .noop,
+                .reserved_accounts = &.empty,
+                .slot_hashes = slot_hashes,
+            },
         );
         errdefer batch1.deinit(allocator);
 
@@ -526,21 +536,25 @@ test "TransactionScheduler: signature verification failure" {
     {
         const batch1 = try resolveBatch(
             allocator,
-            .noop,
             transactions[0..3],
-            state.svmParams().slot,
-            slot_hashes,
-            &.empty,
+            .{
+                .slot = state.svmParams().slot,
+                .account_reader = .noop,
+                .reserved_accounts = &.empty,
+                .slot_hashes = slot_hashes,
+            },
         );
         errdefer batch1.deinit(allocator);
 
         const batch2 = try resolveBatch(
             allocator,
-            .noop,
             transactions[3..6],
-            state.svmParams().slot,
-            slot_hashes,
-            &.empty,
+            .{
+                .slot = state.svmParams().slot,
+                .account_reader = .noop,
+                .reserved_accounts = &.empty,
+                .slot_hashes = slot_hashes,
+            },
         );
         errdefer batch2.deinit(allocator);
 
