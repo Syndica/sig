@@ -558,8 +558,6 @@ fn filterAndConfirmWithNewVotes(
     errdefer new_optimistic_confirmed_slots.deinit(allocator);
 
     // Process votes from gossip and ReplayStage
-
-    // let mut gossip_vote_txn_processing_time = Measure::start("gossip_vote_processing_time");
     inline for (.{
         .{ gossip_vote_txs, true },
         .{ replayed_votes, false },

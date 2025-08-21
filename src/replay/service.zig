@@ -430,7 +430,7 @@ pub fn run(deps: ReplayDependencies) !void {
         .create(deps.allocator);
     defer verified_vote_channel.destroy();
 
-    const vote_listener: VoteListener = try VoteListener.init(
+    const vote_listener: VoteListener = try .init(
         deps.allocator,
         .{ .unordered = deps.exit },
         .from(deps.logger),
