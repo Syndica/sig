@@ -101,7 +101,7 @@ pub fn replayActiveSlots(state: ReplayExecutionState) !bool {
 
 pub const LogHelper = struct {
     logger: Logger,
-    last_active_slots: ?[]const u64,
+    last_active_slots: ?[]const Slot,
     slots_are_the_same: bool,
 
     pub fn init(logger: Logger) LogHelper {
