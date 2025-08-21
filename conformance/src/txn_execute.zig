@@ -841,7 +841,28 @@ fn executeTxnContext(
         allocator.free(txn_results);
     }
 
+    if (emit_logs) {
+        printLogs(txn_results[0]);
+    }
+
     return try serializeOutput(allocator, txn_results[0], runtime_transaction);
+}
+
+fn printLogs(result: TransactionResult) void {
+    switch (result) {
+        .ok => |txn| {
+            switch (txn) {
+                .executed => |executed| {
+                    const msgs = executed.executed_transaction.log_collector.?.messages;
+                    for (msgs.items, 0..) |msg, i| {
+                        std.debug.print("log {}: {s}\n", .{ i, msg });
+                    }
+                },
+                .fees_only => {},
+            }
+        },
+        .err => {},
+    }
 }
 
 fn serializeOutput(

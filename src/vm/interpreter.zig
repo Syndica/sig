@@ -625,32 +625,23 @@ pub const Vm = struct {
                     next_pc = frame.return_pc;
                 }
             },
-            .call_imm => {
-                var resolved = false;
-                const external, const internal = if (version.enableStaticSyscalls())
-                    .{ inst.src == .r0, inst.src != .r0 }
-                else
-                    .{ true, true };
-
-                if (external) {
+            .call_imm => blk: {
+                if (!version.enableStaticSyscalls()) {
                     if (self.loader.lookupKey(inst.imm)) |entry| {
-                        resolved = true;
                         try self.dispatchSyscall(entry);
+                        break :blk;
                     }
                 }
 
-                if (internal and !resolved) {
-                    const target_pc = version.computeTargetPc(pc, inst);
-                    if (self.executable.function_registry.lookupKey(target_pc)) |entry| {
-                        resolved = true;
-                        try self.pushCallFrame();
-                        next_pc = entry.value;
-                    }
+                const target_pc = version.computeTargetPc(pc, inst);
+                const function_registry = &self.executable.function_registry;
+                if (function_registry.lookupKey(target_pc)) |entry| {
+                    try self.pushCallFrame();
+                    next_pc = entry.value;
+                    break :blk;
                 }
 
-                if (!resolved) {
-                    return error.UnsupportedInstruction;
-                }
+                return error.UnsupportedInstruction;
             },
             .call_reg => {
                 const src: sbpf.Instruction.Register = if (version.callRegUsesSrcReg())
@@ -663,6 +654,11 @@ pub const Vm = struct {
 
                 next_pc = (target_pc -% self.vm_addr) / 8;
                 if (next_pc >= instructions.len) return error.CallOutsideTextSegment;
+                if (version.enableStaticSyscalls() and
+                    self.executable.function_registry.lookupKey(next_pc) == null)
+                {
+                    return error.UnsupportedInstruction;
+                }
             },
 
             // other instructions
