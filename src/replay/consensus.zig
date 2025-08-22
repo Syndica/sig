@@ -41,8 +41,8 @@ pub const ConsensusDependencies = struct {
     allocator: Allocator,
     replay_tower: *ReplayTower,
     progress_map: *ProgressMap,
-    slot_tracker: *SlotTracker,
-    epoch_tracker: *const EpochTracker,
+    slot_tracker_rw: *sig.sync.RwMux(SlotTracker),
+    epoch_tracker_rw: *sig.sync.RwMux(EpochTracker),
     fork_choice: *ForkChoice,
     ledger_reader: *LedgerReader,
     ledger_result_writer: *LedgerResultWriter,
@@ -62,10 +62,13 @@ pub fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
     var epoch_stakes_map: EpochStakesMap = .empty;
     errdefer epoch_stakes_map.deinit(deps.allocator);
 
-    try epoch_stakes_map.ensureTotalCapacity(deps.allocator, deps.epoch_tracker.epochs.count());
+    const epoch_tracker, var lg = deps.epoch_tracker_rw.readWithLock();
+    defer lg.unlock();
+
+    try epoch_stakes_map.ensureTotalCapacity(deps.allocator, epoch_tracker.epochs.count());
     defer epoch_stakes_map.deinit(deps.allocator);
 
-    for (deps.epoch_tracker.epochs.keys(), deps.epoch_tracker.epochs.values()) |key, constants| {
+    for (epoch_tracker.epochs.keys(), epoch_tracker.epochs.values()) |key, constants| {
         epoch_stakes_map.putAssumeCapacity(key, constants.stakes);
     }
 
@@ -73,8 +76,8 @@ pub fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
         deps.allocator,
         deps.vote_account,
         deps.ancestors,
-        deps.slot_tracker,
-        &deps.epoch_tracker.schedule,
+        deps.slot_tracker_rw,
+        &epoch_tracker.schedule,
         &epoch_stakes_map,
         deps.progress_map,
         deps.fork_choice,
@@ -89,7 +92,7 @@ pub fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
     const heaviest_slot_on_same_voted_fork =
         (try deps.fork_choice.heaviestSlotOnSameVotedFork(deps.replay_tower)) orelse null;
 
-    const heaviest_epoch: Epoch = deps.epoch_tracker.schedule.getEpoch(heaviest_slot);
+    const heaviest_epoch: Epoch = epoch_tracker.schedule.getEpoch(heaviest_slot);
 
     const now = sig.time.Instant.now();
     var last_vote_refresh_time: LastVoteRefreshTime = .{
@@ -131,7 +134,8 @@ pub fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
 
     // Vote on the fork
     if (maybe_voted_slot) |voted| {
-        const slot_tracker = deps.slot_tracker;
+        const slot_tracker, var slot_tracker_lg = deps.slot_tracker_rw.readWithLock();
+        defer slot_tracker_lg.unlock();
         const found_slot_info = slot_tracker.get(voted.slot) orelse
             return error.MissingSlot;
 
@@ -143,7 +147,7 @@ pub fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
             deps.ledger_result_writer,
             voted.slot,
             voted_hash,
-            deps.slot_tracker,
+            deps.slot_tracker_rw,
             deps.replay_tower,
             deps.progress_map,
             deps.fork_choice,
@@ -322,7 +326,7 @@ fn handleVotableBank(
     ledger_result_writer: *LedgerResultWriter,
     vote_slot: Slot,
     vote_hash: Hash,
-    slot_tracker: *SlotTracker,
+    slot_tracker_rw: *sig.sync.RwMux(SlotTracker),
     replay_tower: *ReplayTower,
     progress: *ProgressMap,
     fork_choice: *ForkChoice,
@@ -337,7 +341,7 @@ fn handleVotableBank(
         try checkAndHandleNewRoot(
             allocator,
             ledger_result_writer,
-            slot_tracker,
+            slot_tracker_rw,
             progress,
             fork_choice,
             new_root,
@@ -393,11 +397,14 @@ fn pushVote(
 fn checkAndHandleNewRoot(
     allocator: std.mem.Allocator,
     ledger_result_writer: *LedgerResultWriter,
-    slot_tracker: *SlotTracker,
+    slot_tracker_rw: *sig.sync.RwMux(SlotTracker),
     progress: *ProgressMap,
     fork_choice: *ForkChoice,
     new_root: Slot,
 ) !void {
+    var slot_tracker, var lg = slot_tracker_rw.writeWithLock();
+    defer lg.unlock();
+
     // get the root bank before squash.
     if (slot_tracker.slots.count() == 0) return error.EmptySlotTracker;
     const root_tracker = slot_tracker.get(new_root) orelse return error.MissingSlot;
@@ -474,7 +481,7 @@ fn computeBankStats(
     allocator: std.mem.Allocator,
     my_vote_pubkey: Pubkey,
     ancestors: *const std.AutoArrayHashMapUnmanaged(u64, Ancestors),
-    slot_tracker: *SlotTracker,
+    slot_tracker_rw: *sig.sync.RwMux(SlotTracker),
     epoch_schedule: *const EpochSchedule,
     epoch_stakes_map: *const EpochStakesMap,
     progress: *ProgressMap,
@@ -484,6 +491,10 @@ fn computeBankStats(
 ) ![]Slot {
     var new_stats = std.ArrayListUnmanaged(Slot).empty;
     errdefer new_stats.deinit(allocator);
+
+    const slot_tracker, var lg = slot_tracker_rw.readWithLock();
+    defer lg.unlock();
+
     var frozen_slots = try slot_tracker.frozenSlots(allocator);
     defer frozen_slots.deinit(allocator);
     // TODO agave sorts this by the slot first. Is this needed for the implementation to be correct?
@@ -1189,23 +1200,27 @@ test "checkAndHandleNewRoot - missing slot" {
     var fixture = try TestFixture.init(testing.allocator, root);
     defer fixture.deinit(testing.allocator);
 
-    var slot_tracker: SlotTracker = SlotTracker{ .root = root.slot, .slots = .{} };
+    // Build a tracked slot set wrapped in RwMux
+    const slot_tracker_val: SlotTracker = SlotTracker{ .root = root.slot, .slots = .{} };
+    var slot_tracker = RwMux(SlotTracker).init(slot_tracker_val);
     defer {
-        var it = slot_tracker.slots.iterator();
-        while (it.next()) |entry| {
-            testing.allocator.destroy(entry.value_ptr.*);
-        }
-        slot_tracker.slots.deinit(testing.allocator);
+        const ptr, var lg = slot_tracker.writeWithLock();
+        defer lg.unlock();
+        ptr.deinit(testing.allocator);
     }
 
-    const constants = try SlotConstants.genesis(testing.allocator, .initRandom(random));
-    defer constants.deinit(testing.allocator);
-    var state = try SlotState.genesis(testing.allocator);
-    defer state.deinit(testing.allocator);
-    try slot_tracker.put(testing.allocator, root.slot, .{
-        .constants = constants,
-        .state = state,
-    });
+    {
+        const constants = try SlotConstants.genesis(testing.allocator, .initRandom(random));
+        errdefer constants.deinit(testing.allocator);
+        var state = try SlotState.genesis(testing.allocator);
+        errdefer state.deinit(testing.allocator);
+        const ptr, var lg = slot_tracker.writeWithLock();
+        defer lg.unlock();
+        try ptr.put(testing.allocator, root.slot, .{
+            .constants = constants,
+            .state = state,
+        });
+    }
 
     const logger = .noop;
     var registry = sig.prometheus.Registry(.{}).init(testing.allocator);
@@ -1251,15 +1266,21 @@ test "checkAndHandleNewRoot - missing hash" {
     var fixture = try TestFixture.init(testing.allocator, root);
     defer fixture.deinit(testing.allocator);
 
-    var slot_tracker: SlotTracker = SlotTracker{ .root = root.slot, .slots = .{} };
-    defer slot_tracker.deinit(testing.allocator);
-
+    const slot_tracker_val2: SlotTracker = SlotTracker{ .root = root.slot, .slots = .{} };
+    var slot_tracker2 = RwMux(SlotTracker).init(slot_tracker_val2);
+    defer {
+        const ptr, var lg = slot_tracker2.writeWithLock();
+        defer lg.unlock();
+        ptr.deinit(testing.allocator);
+    }
     {
         const constants = try SlotConstants.genesis(testing.allocator, .initRandom(random));
         errdefer constants.deinit(testing.allocator);
         var state = try SlotState.genesis(testing.allocator);
         errdefer state.deinit(testing.allocator);
-        try slot_tracker.put(testing.allocator, root.slot, .{
+        const ptr, var lg = slot_tracker2.writeWithLock();
+        defer lg.unlock();
+        try ptr.put(testing.allocator, root.slot, .{
             .constants = constants,
             .state = state,
         });
@@ -1288,7 +1309,7 @@ test "checkAndHandleNewRoot - missing hash" {
     const result = checkAndHandleNewRoot(
         testing.allocator,
         &ledger_result_writer,
-        &slot_tracker,
+        &slot_tracker2,
         &fixture.progress,
         &fixture.fork_choice,
         root.slot, // Non-existent hash
@@ -1309,7 +1330,13 @@ test "checkAndHandleNewRoot - empty slot tracker" {
     var fixture = try TestFixture.init(testing.allocator, root);
     defer fixture.deinit(testing.allocator);
 
-    var slot_tracker: SlotTracker = SlotTracker{ .root = root.slot, .slots = .{} };
+    const slot_tracker_val3: SlotTracker = SlotTracker{ .root = root.slot, .slots = .{} };
+    var slot_tracker3 = RwMux(SlotTracker).init(slot_tracker_val3);
+    defer {
+        const ptr, var lg = slot_tracker3.writeWithLock();
+        defer lg.unlock();
+        ptr.deinit(testing.allocator);
+    }
     const logger = .noop;
     var registry = sig.prometheus.Registry(.{}).init(testing.allocator);
     defer registry.deinit();
@@ -1333,7 +1360,7 @@ test "checkAndHandleNewRoot - empty slot tracker" {
     const result = checkAndHandleNewRoot(
         testing.allocator,
         &ledger_result_writer,
-        &slot_tracker,
+        &slot_tracker3,
         &fixture.progress,
         &fixture.fork_choice,
         root.slot,
@@ -1366,8 +1393,13 @@ test "checkAndHandleNewRoot - success" {
     var fixture = try TestFixture.init(testing.allocator, root);
     defer fixture.deinit(testing.allocator);
 
-    var slot_tracker: SlotTracker = SlotTracker{ .root = root.slot, .slots = .{} };
-    defer slot_tracker.deinit(testing.allocator);
+    const slot_tracker_val4: SlotTracker = SlotTracker{ .root = root.slot, .slots = .{} };
+    var slot_tracker4 = RwMux(SlotTracker).init(slot_tracker_val4);
+    defer {
+        const ptr, var lg = slot_tracker4.writeWithLock();
+        defer lg.unlock();
+        ptr.deinit(testing.allocator);
+    }
 
     {
         var constants2 = try SlotConstants.genesis(testing.allocator, .initRandom(random));
@@ -1382,11 +1414,13 @@ test "checkAndHandleNewRoot - success" {
         constants3.parent_slot = hash2.slot;
         state2.hash = .init(hash2.hash);
         state3.hash = .init(hash3.hash);
-        try slot_tracker.put(testing.allocator, hash2.slot, .{
+        const ptr, var lg = slot_tracker4.writeWithLock();
+        defer lg.unlock();
+        try ptr.put(testing.allocator, hash2.slot, .{
             .constants = constants2,
             .state = state2,
         });
-        try slot_tracker.put(testing.allocator, hash3.slot, .{
+        try ptr.put(testing.allocator, hash3.slot, .{
             .constants = constants3,
             .state = state3,
         });
@@ -1428,15 +1462,19 @@ test "checkAndHandleNewRoot - success" {
     try checkAndHandleNewRoot(
         testing.allocator,
         &ledger_result_writer,
-        &slot_tracker,
+        &slot_tracker4,
         &fixture.progress,
         &fixture.fork_choice,
         hash3.slot,
     );
 
     try testing.expectEqual(1, fixture.progress.map.count());
-    for (slot_tracker.slots.keys()) |remaining_slots| {
-        try testing.expect(remaining_slots >= hash3.slot);
+    {
+        const ptr, var lg = slot_tracker4.readWithLock();
+        defer lg.unlock();
+        for (ptr.slots.keys()) |remaining_slots| {
+            try testing.expect(remaining_slots >= hash3.slot);
+        }
     }
     try testing.expect(!fixture.progress.map.contains(hash1.slot));
 }
@@ -1512,11 +1550,12 @@ test "computeBankStats - child bank heavier" {
         0.67,
     );
     const epoch_schedule = EpochSchedule.DEFAULT;
+    var slot_tracker_rw1 = RwMux(SlotTracker).init(fixture.slot_tracker);
     const newly_computed_slot_stats = try computeBankStats(
         testing.allocator,
         my_node_pubkey,
         &fixture.ancestors,
-        &fixture.slot_tracker,
+        &slot_tracker_rw1,
         &epoch_schedule,
         &epoch_stakes,
         &fixture.progress,
@@ -1605,11 +1644,12 @@ test "computeBankStats - same weight selects lower slot" {
     );
 
     const epoch_schedule = EpochSchedule.DEFAULT;
+    var slot_tracker_rw2 = RwMux(SlotTracker).init(fixture.slot_tracker);
     const newly_computed_slot_stats = try computeBankStats(
         testing.allocator,
         my_vote_pubkey,
         &fixture.ancestors,
-        &fixture.slot_tracker,
+        &slot_tracker_rw2,
         &epoch_schedule,
         &epoch_stakes,
         &fixture.progress,

@@ -54,8 +54,8 @@ pub const ReplayExecutionState = struct {
     thread_pool: *ThreadPool,
     ledger_reader: *LedgerReader,
     ledger_result_writer: *sig.ledger.LedgerResultWriter,
-    slot_tracker: *SlotTracker,
-    epochs: *EpochTracker,
+    slot_tracker: *sig.sync.RwMux(SlotTracker),
+    epochs: *sig.sync.RwMux(EpochTracker),
     progress_map: *ProgressMap,
     status_cache: *sig.core.StatusCache,
     fork_choice: *HeaviestSubtreeForkChoice,
@@ -76,7 +76,11 @@ pub fn replayActiveSlots(state: ReplayExecutionState) !bool {
     var zone = tracy.Zone.init(@src(), .{ .name = "replayActiveSlots" });
     defer zone.deinit();
 
-    const active_slots = try state.slot_tracker.activeSlots(state.allocator);
+    const active_slots = blk: {
+        const tracker, var lg = state.slot_tracker.readWithLock();
+        defer lg.unlock();
+        break :blk try tracker.activeSlots(state.allocator);
+    };
     defer state.allocator.free(active_slots);
     state.logger.info().logf("{} active slots to replay", .{active_slots.len});
     if (active_slots.len == 0) {
@@ -150,9 +154,15 @@ fn replaySlot(state: ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
         return .dead;
     }
 
-    const epoch_info = state.epochs.getForSlot(slot) orelse return error.MissingEpoch;
+    const epoch_info = blk: {
+        const epochs_ptr, var lg = state.epochs.readWithLock();
+        defer lg.unlock();
+        break :blk (epochs_ptr.getForSlot(slot) orelse return error.MissingEpoch);
+    };
 
-    const slot_info = state.slot_tracker.get(slot) orelse return error.MissingSlot;
+    const tracker_ptr, var tracker_lg = state.slot_tracker.readWithLock();
+    defer tracker_lg.unlock();
+    const slot_info = tracker_ptr.get(slot) orelse return error.MissingSlot;
 
     const i_am_leader = slot_info.constants.collector_id.equals(&state.my_identity);
 
@@ -214,11 +224,12 @@ fn replaySlot(state: ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
         break :blk .{ entries, slot_is_full };
     };
 
-    const new_rate_activation_epoch =
-        if (slot_info.constants.feature_set.get(.reduce_stake_warmup_cooldown)) |active_slot|
-            state.epochs.schedule.getEpoch(active_slot)
-        else
-            null;
+    const new_rate_activation_epoch = blk: {
+        if (slot_info.constants.feature_set.get(.reduce_stake_warmup_cooldown)) |active_slot| {
+            const schedule = state.epochs.readField("schedule");
+            break :blk schedule.getEpoch(active_slot);
+        } else break :blk null;
+    };
 
     const svm_params = SvmGateway.Params{
         .slot = slot,
@@ -310,7 +321,9 @@ fn updateConsensusForFrozenSlot(
     replay_state: ReplayExecutionState,
     slot: Slot,
 ) !void {
-    var slot_info = replay_state.slot_tracker.get(slot) orelse
+    const slot_tracker, var lg = replay_state.slot_tracker.readWithLock();
+    defer lg.unlock();
+    var slot_info = slot_tracker.get(slot) orelse
         return error.MissingSlotInTracker;
 
     const parent_slot = slot_info.constants.parent_slot;
@@ -345,7 +358,7 @@ fn updateConsensusForFrozenSlot(
         replay_state.allocator,
         .from(replay_state.logger),
         slot,
-        replay_state.slot_tracker.root,
+        slot_tracker.root,
         replay_state.ledger_result_writer,
         replay_state.fork_choice,
         replay_state.duplicate_slots_to_repair,
@@ -414,7 +427,9 @@ pub fn processReplayResults(
         // If entries is null, it means the slot failed or was skipped, so continue to next slot
         const entries = if (maybe_entries) |entries| entries else continue;
 
-        var slot_info = replay_state.slot_tracker.get(slot) orelse
+        const slot_tracker_ptr, var lg = replay_state.slot_tracker.readWithLock();
+        defer lg.unlock();
+        var slot_info = slot_tracker_ptr.get(slot) orelse
             return error.MissingSlotInTracker;
 
         // Freeze the bank if its entries where completly processed.
@@ -425,7 +440,11 @@ pub fn processReplayResults(
                 try replay.freeze.freezeSlot(replay_state.allocator, .init(
                     .from(replay_state.logger),
                     replay_state.account_store,
-                    &(replay_state.epochs.getForSlot(slot) orelse return error.MissingEpoch),
+                    &(blk: {
+                        const epochs_ptr, var epochs_lg = replay_state.epochs.readWithLock();
+                        defer epochs_lg.unlock();
+                        break :blk (epochs_ptr.getForSlot(slot) orelse return error.MissingEpoch);
+                    }),
                     slot_info.state,
                     slot_info.constants,
                     slot,
@@ -466,7 +485,7 @@ const TestReplayStateResources = struct {
     thread_pool: ThreadPool,
     ledger_reader: LedgerReader,
     ledger_result_writer: sig.ledger.LedgerResultWriter,
-    epochs: EpochTracker,
+    epochs: sig.sync.RwMux(EpochTracker),
     progress: ProgressMap,
     fork_choice: *HeaviestSubtreeForkChoice,
     duplicate_slots_tracker: DuplicateSlots,
@@ -476,7 +495,7 @@ const TestReplayStateResources = struct {
     epoch_slots_frozen_slots: EpochSlotsFrozenSlots,
     duplicate_slots_to_repair: DuplicateSlotsToRepair,
     purge_repair_slot_counter: PurgeRepairSlotCounters,
-    slot_tracker: SlotTracker,
+    slot_tracker: sig.sync.RwMux(SlotTracker),
     replay_state: ReplayExecutionState,
     db: sig.ledger.LedgerDB,
     registry: sig.prometheus.Registry(.{}),
@@ -520,10 +539,11 @@ const TestReplayStateResources = struct {
             &self.max_root,
         );
 
-        self.epochs = EpochTracker{
+        const epoch_tracker_init: EpochTracker = .{
             .epochs = .empty,
             .schedule = sig.core.EpochSchedule.DEFAULT,
         };
+        self.epochs = sig.sync.RwMux(EpochTracker).init(epoch_tracker_init);
 
         self.progress = ProgressMap.INIT;
 
@@ -543,10 +563,11 @@ const TestReplayStateResources = struct {
         self.duplicate_slots_to_repair = DuplicateSlotsToRepair.empty;
         self.purge_repair_slot_counter = PurgeRepairSlotCounters.empty;
 
-        self.slot_tracker = SlotTracker{
+        const slot_tracker_init: SlotTracker = .{
             .slots = .empty,
             .root = 0,
         };
+        self.slot_tracker = sig.sync.RwMux(SlotTracker).init(slot_tracker_init);
 
         self.replay_state = ReplayExecutionState{
             .allocator = allocator,
@@ -578,8 +599,16 @@ const TestReplayStateResources = struct {
         self.thread_pool.shutdown();
         self.thread_pool.deinit();
 
-        self.slot_tracker.deinit(allocator);
-        self.epochs.deinit(allocator);
+        {
+            const ptr, var lg = self.slot_tracker.writeWithLock();
+            defer lg.unlock();
+            ptr.deinit(allocator);
+        }
+        {
+            const ptr, var lg = self.epochs.writeWithLock();
+            defer lg.unlock();
+            ptr.deinit(allocator);
+        }
         self.progress.deinit(allocator);
         self.fork_choice.deinit();
         allocator.destroy(self.fork_choice);
@@ -1016,21 +1045,29 @@ test "processReplayResults: confirm status with done poll and slot complete - su
     mock_slot_state.hash.set(sig.core.Hash.initRandom(random));
 
     // Add the slot to the slot tracker
-    try test_resources.slot_tracker.put(allocator, slot, .{
-        .constants = mock_slot_constants,
-        .state = mock_slot_state,
-    });
+    {
+        const ptr, var lg = test_resources.slot_tracker.writeWithLock();
+        defer lg.unlock();
+        try ptr.put(allocator, slot, .{
+            .constants = mock_slot_constants,
+            .state = mock_slot_state,
+        });
+    }
 
     // Add epoch info for slot 100 (epoch 2 in default schedule).
-    try test_resources.epochs.epochs.put(allocator, 2, .{
-        .hashes_per_tick = 1,
-        .ticks_per_slot = 1,
-        .ns_per_slot = 1,
-        .genesis_creation_time = 1,
-        .slots_per_year = 1,
-        .stakes = try .initEmptyWithGenesisStakeHistoryEntry(allocator),
-        .rent_collector = .DEFAULT,
-    });
+    {
+        const ep_ptr, var elg = test_resources.epochs.writeWithLock();
+        defer elg.unlock();
+        try ep_ptr.epochs.put(allocator, 2, .{
+            .hashes_per_tick = 1,
+            .ticks_per_slot = 1,
+            .ns_per_slot = 1,
+            .genesis_creation_time = 1,
+            .slots_per_year = 1,
+            .stakes = try .initEmptyWithGenesisStakeHistoryEntry(allocator),
+            .rent_collector = .DEFAULT,
+        });
+    }
 
     // Create slot statuses with confirm status containing the mock future
     var slot_statuses = std.ArrayListUnmanaged(struct { Slot, ReplaySlotStatus }).empty;

@@ -20,41 +20,56 @@ const EpochTracker = sig.replay.trackers.EpochTracker;
 const Logger = sig.trace.Logger("vote_listener");
 
 pub const BankForksStub = struct {
-    /// Non owning views into replay state. The lifetime of these pointers must
-    /// outlive the usage by the vote listener.
-    slot_tracker: *const SlotTracker,
-    epoch_tracker: *const EpochTracker,
+    /// Thread safe guards that wrap the actual resources.
+    /// Readers acquire read locks; writers acquire write locks when mutating.
+    /// Lifetime: these are borrowed from `replay.service.ReplayState` and are guaranteed
+    /// to outlive all VoteListener threads. They are deinitialized only after
+    /// `VoteListener.joinAndDeinit()` completes (see `replay.service.run`).
+    slot_tracker_rw: *sig.sync.RwMux(SlotTracker),
+    epoch_tracker_rw: *sig.sync.RwMux(EpochTracker),
 
     fn rootSlot(self: *const BankForksStub) Slot {
-        return self.slot_tracker.root;
+        const slot_tracker, var lg = self.slot_tracker_rw.readWithLock();
+        defer lg.unlock();
+        return slot_tracker.root;
     }
 
     fn getSlotHash(self: *const BankForksStub, slot: Slot) ?Hash {
-        const slot_info = self.slot_tracker.get(slot) orelse return null;
+        const slot_tracker, var lg = self.slot_tracker_rw.readWithLock();
+        defer lg.unlock();
+        const slot_info = slot_tracker.get(slot) orelse return null;
         return slot_info.state.hash.readCopy();
     }
 
     fn getSlotEpoch(self: *const BankForksStub, slot: Slot) sig.core.Epoch {
-        return self.epoch_tracker.schedule.getEpoch(slot);
+        const epoch_tracker, var lg = self.epoch_tracker_rw.readWithLock();
+        defer lg.unlock();
+        return epoch_tracker.schedule.getEpoch(slot);
     }
 
     fn getSlotAncestorsPtr(
         self: *const BankForksStub,
         slot: Slot,
     ) ?*const sig.core.Ancestors {
-        if (self.slot_tracker.get(slot)) |ref| {
+        const slot_tracker, var lg = self.slot_tracker_rw.readWithLock();
+        defer lg.unlock();
+        if (slot_tracker.get(slot)) |ref| {
             return &ref.constants.ancestors;
         }
         return null;
     }
 
     fn getEpochTotalStake(self: *const BankForksStub, epoch: u64) ?u64 {
-        const epoch_info = self.epoch_tracker.epochs.get(epoch) orelse return null;
+        const epoch_tracker, var lg = self.epoch_tracker_rw.readWithLock();
+        defer lg.unlock();
+        const epoch_info = epoch_tracker.epochs.get(epoch) orelse return null;
         return epoch_info.stakes.total_stake;
     }
 
     fn getDelegatedStake(self: *const BankForksStub, slot: Slot, pubkey: Pubkey) ?u64 {
-        const epoch_info = self.epoch_tracker.getForSlot(slot) orelse return null;
+        const epoch_tracker, var lg = self.epoch_tracker_rw.readWithLock();
+        defer lg.unlock();
+        const epoch_info = epoch_tracker.getForSlot(slot) orelse return null;
         return epoch_info.stakes.stakes.vote_accounts.getDelegatedStake(pubkey);
     }
 
@@ -63,7 +78,9 @@ pub const BankForksStub = struct {
         slot: Slot,
         vote_account_key: Pubkey,
     ) ?Pubkey {
-        const epoch_consts = self.epoch_tracker.getForSlot(slot) orelse return null;
+        const epoch_tracker, var lg = self.epoch_tracker_rw.readWithLock();
+        defer lg.unlock();
+        const epoch_consts = epoch_tracker.getForSlot(slot) orelse return null;
         const epoch_authorized_voters = &epoch_consts.stakes.epoch_authorized_voters;
         return epoch_authorized_voters.get(vote_account_key);
     }
@@ -89,7 +106,7 @@ pub const VoteListener = struct {
         logger: Logger,
         vote_tracker: *VoteTracker,
         params: struct {
-            bank_forks_rw: *sig.sync.RwMux(BankForksStub),
+            bank_forks: *const BankForksStub,
             gossip_table_rw: *sig.sync.RwMux(sig.gossip.GossipTable),
             ledger_ref: LedgerRef,
 
@@ -108,7 +125,7 @@ pub const VoteListener = struct {
         const recv_thread = try std.Thread.spawn(.{}, recvLoop, .{
             allocator,
             exit,
-            params.bank_forks_rw,
+            params.bank_forks,
             params.gossip_table_rw,
             verified_vote_transactions,
         });
@@ -120,7 +137,7 @@ pub const VoteListener = struct {
             logger,
 
             vote_tracker,
-            params.bank_forks_rw,
+            params.bank_forks,
 
             params.senders,
             Receivers{
@@ -200,7 +217,7 @@ const UnverifiedVoteReceptor = struct {
     fn recvAndSendOnce(
         self: *UnverifiedVoteReceptor,
         allocator: std.mem.Allocator,
-        bank_forks_rw: *sig.sync.RwMux(BankForksStub),
+        bank_forks: *const BankForksStub,
         gossip_table_rw: *sig.sync.RwMux(sig.gossip.GossipTable),
         unverified_votes_buffer: *std.ArrayListUnmanaged(Transaction),
         /// Sends to `processVotesLoop`'s `receivers.verified_vote_transactions` parameter.
@@ -221,12 +238,14 @@ const UnverifiedVoteReceptor = struct {
             return;
         }
 
-        const bank_forks, var bank_forks_lg = bank_forks_rw.readWithLock();
-        defer bank_forks_lg.unlock();
-
+        const epoch_tracker, var epoch_lg = bank_forks.epoch_tracker_rw.readWithLock();
+        defer epoch_lg.unlock();
+        // TODO: Question should the lock for epoch_tracker be held here?
+        // or *sig.sync.RwMux(EpochTracker) be passed into consumeTransactionsAndSendVerified and passed
+        // down and only aquired at the site where it is accessed?
         try consumeTransactionsAndSendVerified(
             allocator,
-            bank_forks.epoch_tracker,
+            epoch_tracker,
             unverified_votes_buffer,
             verified_vote_transactions_sender,
         );
@@ -236,7 +255,7 @@ const UnverifiedVoteReceptor = struct {
 fn recvLoop(
     allocator: std.mem.Allocator,
     exit: sig.sync.ExitCondition,
-    bank_forks_rw: *sig.sync.RwMux(BankForksStub),
+    bank_forks: *const BankForksStub,
     gossip_table_rw: *sig.sync.RwMux(sig.gossip.GossipTable),
     /// Sends to `processVotesLoop`'s `receivers.verified_vote_transactions` parameter.
     verified_vote_transactions_sender: *sig.sync.Channel(Transaction),
@@ -250,7 +269,7 @@ fn recvLoop(
     while (exit.shouldRun()) {
         try unverified_vote_receptor.recvAndSendOnce(
             allocator,
-            bank_forks_rw,
+            bank_forks,
             gossip_table_rw,
             &unverified_votes_buffer,
             verified_vote_transactions_sender,
@@ -348,7 +367,7 @@ fn processVotesLoop(
     allocator: std.mem.Allocator,
     logger: Logger,
     vote_tracker: *VoteTracker,
-    bank_forks_rw: *sig.sync.RwMux(BankForksStub),
+    bank_forks: *const BankForksStub,
     senders: Senders,
     receivers: Receivers,
     ledger_ref: LedgerRef,
@@ -356,11 +375,7 @@ fn processVotesLoop(
 ) !void {
     defer exit.afterExit();
 
-    var confirmation_verifier: OptimisticConfirmationVerifier = .init(.now(), blk: {
-        const bank_forks, var bank_forks_lg = bank_forks_rw.readWithLock();
-        defer bank_forks_lg.unlock();
-        break :blk bank_forks.rootSlot();
-    });
+    var confirmation_verifier: OptimisticConfirmationVerifier = .init(.now(), bank_forks.rootSlot());
     defer confirmation_verifier.deinit(allocator);
 
     var latest_vote_slot_per_validator: std.AutoArrayHashMapUnmanaged(Pubkey, Slot) = .empty;
@@ -373,7 +388,7 @@ fn processVotesLoop(
             allocator,
             logger,
             vote_tracker,
-            bank_forks_rw,
+            bank_forks,
             senders,
             receivers,
             ledger_ref,
@@ -401,7 +416,7 @@ fn processVotesOnce(
     allocator: std.mem.Allocator,
     logger: Logger,
     vote_tracker: *VoteTracker,
-    bank_forks_rw: *sig.sync.RwMux(BankForksStub),
+    bank_forks: *const BankForksStub,
     senders: Senders,
     receivers: Receivers,
     ledger_ref: LedgerRef,
@@ -410,23 +425,28 @@ fn processVotesOnce(
     last_process_root: *sig.time.Instant,
     vote_processing_time: *VoteProcessingTiming,
 ) !enum { ok, disconnected, timeout, logged } {
-    const bank_forks, var bank_forks_lg = bank_forks_rw.readWithLock();
-    defer bank_forks_lg.unlock();
-
-    const root_slot = bank_forks.rootSlot();
-    const root_hash = bank_forks.getSlotHash(root_slot);
+    const root_slot, const root_hash = blk: {
+        const slot_tracker_ptr, var slot_lg = bank_forks.slot_tracker_rw.readWithLock();
+        defer slot_lg.unlock();
+        const rs = slot_tracker_ptr.root;
+        const rh = bank_forks.getSlotHash(rs);
+        break :blk .{ rs, rh };
+    };
 
     if (last_process_root.elapsed().asMillis() > DEFAULT_MS_PER_SLOT) {
-        const unrooted_optimistic_slots =
-            try confirmation_verifier.verifyForUnrootedOptimisticSlots(
+        const unrooted_optimistic_slots = blk: {
+            const slot_tracker_ptr, var slot_lg = bank_forks.slot_tracker_rw.readWithLock();
+            defer slot_lg.unlock();
+            break :blk try confirmation_verifier.verifyForUnrootedOptimisticSlots(
                 allocator,
                 ledger_ref.reader,
                 .{
-                    .slot = root_slot,
+                    .slot = slot_tracker_ptr.root,
                     .hash = root_hash,
                     .ancestors = bank_forks.getSlotAncestorsPtr(root_slot).?, // must exist for the root slot
                 },
             );
+        };
         defer allocator.free(unrooted_optimistic_slots);
 
         vote_tracker.progressWithNewRootBank(allocator, root_slot);
@@ -874,7 +894,9 @@ fn trackNewVotesAndNotifyConfirmations(
 
         // if we don't have stake information, ignore it
         const epoch_stakes = blk: {
-            const et_elem = bank_forks.epoch_tracker.getForSlot(slot) orelse continue;
+            const epoch_tracker_ptr, var et_lg = bank_forks.epoch_tracker_rw.readWithLock();
+            defer et_lg.unlock();
+            const et_elem = epoch_tracker_ptr.getForSlot(slot) orelse continue;
             break :blk et_elem.stakes;
         };
 
@@ -1658,8 +1680,12 @@ test "simple usage" {
         });
     }
 
-    var bank_forks_rw = sig.sync.RwMux(BankForksStub)
-        .init(.{ .slot_tracker = &slot_tracker, .epoch_tracker = &epoch_tracker });
+    var slot_tracker_rw: sig.sync.RwMux(SlotTracker) = .init(slot_tracker);
+    var epoch_tracker_rw: sig.sync.RwMux(EpochTracker) = .init(epoch_tracker);
+    var bank_forks: BankForksStub = .{
+        .slot_tracker_rw = &slot_tracker_rw,
+        .epoch_tracker_rw = &epoch_tracker_rw,
+    };
 
     var ledger_db = try sig.ledger.tests.TestDB.init(@src());
     defer ledger_db.deinit();
@@ -1716,7 +1742,7 @@ test "simple usage" {
     const exit_cond: sig.sync.ExitCondition = .{ .unordered = &exit };
 
     const vote_listener: VoteListener = try .init(allocator, exit_cond, .noop, &vote_tracker, .{
-        .bank_forks_rw = &bank_forks_rw,
+        .bank_forks = &bank_forks,
         .gossip_table_rw = &gossip_table_rw,
         .ledger_ref = ledger_ref,
         .receivers = .{
@@ -1792,8 +1818,12 @@ test "check trackers" {
         });
     }
 
-    var bank_forks_rw = sig.sync.RwMux(BankForksStub)
-        .init(.{ .slot_tracker = &slot_tracker2, .epoch_tracker = &epoch_tracker2 });
+    var slot_tracker2_rw: sig.sync.RwMux(SlotTracker) = .init(slot_tracker2);
+    var epoch_tracker2_rw: sig.sync.RwMux(EpochTracker) = .init(epoch_tracker2);
+    var bank_forks2: BankForksStub = .{
+        .slot_tracker_rw = &slot_tracker2_rw,
+        .epoch_tracker_rw = &epoch_tracker2_rw,
+    };
 
     var ledger_db = try sig.ledger.tests.TestDB.init(@src());
     defer ledger_db.deinit();
@@ -1935,6 +1965,7 @@ test "check trackers" {
         _ = &VoteListener.init;
 
         var receptor: UnverifiedVoteReceptor = .{ .cursor = 0 };
+        const bank_forks_ptr: *const BankForksStub = &bank_forks2;
 
         const verified_vote_transactions_channel: *sig.sync.Channel(Transaction) =
             try .create(allocator);
@@ -1947,7 +1978,7 @@ test "check trackers" {
         defer unverified_votes_buffer.deinit(allocator);
         try receptor.recvAndSendOnce(
             allocator,
-            &bank_forks_rw,
+            bank_forks_ptr,
             &gossip_table_rw,
             &unverified_votes_buffer,
             verified_vote_transactions_channel,
@@ -1966,7 +1997,7 @@ test "check trackers" {
             allocator,
             .noop,
             &vote_tracker,
-            &bank_forks_rw,
+            bank_forks_ptr,
             .{
                 .verified_vote = verified_vote_channel,
                 .gossip_verified_vote_hash = gossip_verified_vote_hash_channel,
