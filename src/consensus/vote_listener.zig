@@ -375,7 +375,10 @@ fn processVotesLoop(
 ) !void {
     defer exit.afterExit();
 
-    var confirmation_verifier: OptimisticConfirmationVerifier = .init(.now(), slot_data_provider.rootSlot());
+    var confirmation_verifier: OptimisticConfirmationVerifier = .init(
+        .now(),
+        slot_data_provider.rootSlot(),
+    );
     defer confirmation_verifier.deinit(allocator);
 
     var latest_vote_slot_per_validator: std.AutoArrayHashMapUnmanaged(Pubkey, Slot) = .empty;
