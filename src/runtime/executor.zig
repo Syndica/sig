@@ -975,7 +975,7 @@ test "core bpf migration" {
                 },
             },
             .feature_set = &.{.{ .feature = migrated_builtin_feature }},
-            .compute_meter = 100_000,
+            .compute_meter = 0, // hit error.ExceededMaxInstructions
             .vm_environment = &environment,
         },
     );
@@ -1015,5 +1015,8 @@ test "core bpf migration" {
     );
     defer instruction_info.deinit(allocator);
 
-    try executeInstruction(allocator, &tc, instruction_info);
+    try std.testing.expectError(
+        error.ProgramFailedToComplete,
+        executeInstruction(allocator, &tc, instruction_info),
+    );
 }
