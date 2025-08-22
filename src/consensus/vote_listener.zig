@@ -11,22 +11,29 @@ const Transaction = sig.core.Transaction;
 const TransactionMessage = sig.core.transaction.Message;
 const VoteTransaction = sig.consensus.vote_transaction.VoteTransaction;
 const VoteTracker = sig.consensus.VoteTracker;
+const OptimisticConfirmationVerifier =
+    sig.consensus.optimistic_vote_verifier.OptimisticConfirmationVerifier;
 
 const SlotTracker = sig.replay.trackers.SlotTracker;
 const EpochTracker = sig.replay.trackers.EpochTracker;
 
 const Logger = sig.trace.Logger("vote_listener");
 
-pub const BankForksStub = struct {
+/// Read-only data used by the vote listener.
+/// Provides per-slot queries (root, hash, ancestors) and epoch-scoped stake
+/// and authorized-voter lookups to verify votes and drive optimistic confirmation.
+pub const SlotDataProvider = struct {
     slot_tracker: SlotTracker,
     epoch_tracker: EpochTracker,
+    ancestors_map: sig.utils.collections.SortedMapUnmanaged(Slot, sig.core.Ancestors),
 
-    pub fn deinit(self: BankForksStub, allocator: std.mem.Allocator) void {
+    fn deinit(self: SlotDataProvider, allocator: std.mem.Allocator) void {
         self.slot_tracker.deinit(allocator);
         self.epoch_tracker.deinit(allocator);
+        self.ancestors_map.deinit(allocator);
     }
 
-    pub fn init(
+    fn init(
         allocator: std.mem.Allocator,
         epoch_schedule: sig.core.EpochSchedule,
         root: struct {
@@ -35,13 +42,14 @@ pub const BankForksStub = struct {
             state: sig.core.SlotState,
             epoch_constants: sig.core.EpochConstants,
         },
-    ) std.mem.Allocator.Error!BankForksStub {
-        var self: BankForksStub = .{
+    ) std.mem.Allocator.Error!SlotDataProvider {
+        var self: SlotDataProvider = .{
             .slot_tracker = try .init(allocator, root.slot, .{
                 .constants = root.constants,
                 .state = root.state,
             }),
             .epoch_tracker = .{ .schedule = epoch_schedule },
+            .ancestors_map = .empty,
         };
         errdefer self.deinit(allocator);
 
@@ -54,36 +62,48 @@ pub const BankForksStub = struct {
         return self;
     }
 
-    pub fn getBank(self: *const BankForksStub, slot: Slot) ?BankStub {
-        const st_elem = self.slot_tracker.get(slot) orelse return null;
-        const et_elem = self.epoch_tracker.getForSlot(slot);
-        return .{
-            .slot = slot,
-            .st_elem = st_elem,
-            .et_elem = et_elem,
-        };
+    fn rootSlot(self: *const SlotDataProvider) Slot {
+        return self.slot_tracker.root;
     }
 
-    pub fn rootBank(self: *const BankForksStub) BankStub {
-        return self.getBank(self.slot_tracker.root).?; // root slot's bank must exist
+    fn getSlotHash(self: *const SlotDataProvider, slot: Slot) ?Hash {
+        const slot_info = self.slot_tracker.get(slot) orelse return null;
+        return slot_info.state.hash.readCopy();
     }
 
-    pub fn bankHash(self: *const BankForksStub, slot: Slot) ?Hash {
-        const bank = self.getBank(slot) orelse return null;
-        return bank.st_elem.state.hash.readCopy();
+    fn getSlotEpoch(self: *const SlotDataProvider, slot: Slot) sig.core.Epoch {
+        return self.epoch_tracker.schedule.getEpoch(slot);
     }
 
-    pub fn bankHashOrNullIfFrozen(self: *const BankForksStub, slot: Slot) ?Hash {
-        const hash = self.bankHash(slot) orelse return null;
-        if (hash.eql(Hash.ZEROES)) return null;
-        return hash;
-    }
-
-    pub const BankStub = struct {
+    fn getSlotAncestorsPtr(
+        self: *const SlotDataProvider,
         slot: Slot,
-        st_elem: SlotTracker.Reference,
-        et_elem: ?sig.core.EpochConstants,
-    };
+    ) ?*const sig.core.Ancestors {
+        if (self.slot_tracker.get(slot)) |ref| {
+            return &ref.constants.ancestors;
+        }
+        return null;
+    }
+
+    fn getEpochTotalStake(self: *const SlotDataProvider, epoch: u64) ?u64 {
+        const epoch_info = self.epoch_tracker.epochs.get(epoch) orelse return null;
+        return epoch_info.stakes.total_stake;
+    }
+
+    fn getDelegatedStake(self: *const SlotDataProvider, slot: Slot, pubkey: Pubkey) ?u64 {
+        const epoch_info = self.epoch_tracker.getForSlot(slot) orelse return null;
+        return epoch_info.stakes.stakes.vote_accounts.getDelegatedStake(pubkey);
+    }
+
+    fn getAuthorizedVoterPubkey(
+        self: *const SlotDataProvider,
+        slot: Slot,
+        vote_account_key: Pubkey,
+    ) ?Pubkey {
+        const epoch_consts = self.epoch_tracker.getForSlot(slot) orelse return null;
+        const epoch_authorized_voters = &epoch_consts.stakes.epoch_authorized_voters;
+        return epoch_authorized_voters.get(vote_account_key);
+    }
 };
 
 pub const Senders = struct {
@@ -106,9 +126,9 @@ pub const VoteListener = struct {
         logger: Logger,
         vote_tracker: *VoteTracker,
         params: struct {
-            bank_forks_rw: *sig.sync.RwMux(BankForksStub),
+            slot_data_provider_rw: *sig.sync.RwMux(SlotDataProvider),
             gossip_table_rw: *sig.sync.RwMux(sig.gossip.GossipTable),
-            ledger_db: if (TODO_CONFIRMATION_VERIFIER) *sig.ledger.LedgerDB else void,
+            ledger_ref: LedgerRef,
 
             /// Channels that will be used to `receive` data.
             receivers: struct {
@@ -125,7 +145,7 @@ pub const VoteListener = struct {
         const recv_thread = try std.Thread.spawn(.{}, recvLoop, .{
             allocator,
             exit,
-            params.bank_forks_rw,
+            params.slot_data_provider_rw,
             params.gossip_table_rw,
             verified_vote_transactions,
         });
@@ -137,7 +157,7 @@ pub const VoteListener = struct {
             logger,
 
             vote_tracker,
-            params.bank_forks_rw,
+            params.slot_data_provider_rw,
 
             params.senders,
             Receivers{
@@ -145,7 +165,7 @@ pub const VoteListener = struct {
                 .replay_votes = params.receivers.replay_votes,
             },
 
-            params.ledger_db,
+            params.ledger_ref,
             exit,
         });
         errdefer process_votes_thread.join();
@@ -217,7 +237,7 @@ const UnverifiedVoteReceptor = struct {
     fn recvAndSendOnce(
         self: *UnverifiedVoteReceptor,
         allocator: std.mem.Allocator,
-        bank_forks_rw: *sig.sync.RwMux(BankForksStub),
+        slot_data_provider_rw: *sig.sync.RwMux(SlotDataProvider),
         gossip_table_rw: *sig.sync.RwMux(sig.gossip.GossipTable),
         unverified_votes_buffer: *std.ArrayListUnmanaged(Transaction),
         /// Sends to `processVotesLoop`'s `receivers.verified_vote_transactions` parameter.
@@ -238,12 +258,12 @@ const UnverifiedVoteReceptor = struct {
             return;
         }
 
-        const bank_forks, var bank_forks_lg = bank_forks_rw.readWithLock();
-        defer bank_forks_lg.unlock();
+        const slot_data_provider, var slot_data_provider_lg = slot_data_provider_rw.readWithLock();
+        defer slot_data_provider_lg.unlock();
 
         try consumeTransactionsAndSendVerified(
             allocator,
-            &bank_forks.epoch_tracker,
+            &slot_data_provider.epoch_tracker,
             unverified_votes_buffer,
             verified_vote_transactions_sender,
         );
@@ -253,7 +273,7 @@ const UnverifiedVoteReceptor = struct {
 fn recvLoop(
     allocator: std.mem.Allocator,
     exit: sig.sync.ExitCondition,
-    bank_forks_rw: *sig.sync.RwMux(BankForksStub),
+    slot_data_provider_rw: *sig.sync.RwMux(SlotDataProvider),
     gossip_table_rw: *sig.sync.RwMux(sig.gossip.GossipTable),
     /// Sends to `processVotesLoop`'s `receivers.verified_vote_transactions` parameter.
     verified_vote_transactions_sender: *sig.sync.Channel(Transaction),
@@ -267,7 +287,7 @@ fn recvLoop(
     while (exit.shouldRun()) {
         try unverified_vote_receptor.recvAndSendOnce(
             allocator,
-            bank_forks_rw,
+            slot_data_provider_rw,
             gossip_table_rw,
             &unverified_votes_buffer,
             verified_vote_transactions_sender,
@@ -346,7 +366,7 @@ fn verifyVoteTransaction(
     return .verified;
 }
 
-pub const ThresholdConfirmedSlot = struct { Slot, Hash };
+pub const ThresholdConfirmedSlot = sig.core.hash.SlotAndHash;
 pub const GossipVerifiedVoteHash = struct { Pubkey, Slot, Hash };
 const VerifiedVote = struct { Pubkey, []const Slot };
 
@@ -355,8 +375,6 @@ const DEFAULT_MS_PER_SLOT: u64 =
     1_000 *
     sig.core.time.DEFAULT_TICKS_PER_SLOT /
     sig.core.time.DEFAULT_TICKS_PER_SECOND;
-
-const TODO_CONFIRMATION_VERIFIER = false;
 
 const Receivers = struct {
     verified_vote_transactions: *sig.sync.Channel(Transaction),
@@ -367,21 +385,20 @@ fn processVotesLoop(
     allocator: std.mem.Allocator,
     logger: Logger,
     vote_tracker: *VoteTracker,
-    bank_forks_rw: *sig.sync.RwMux(BankForksStub),
+    slot_data_provider_rw: *sig.sync.RwMux(SlotDataProvider),
     senders: Senders,
     receivers: Receivers,
-    ledger_db: if (TODO_CONFIRMATION_VERIFIER) *sig.ledger.LedgerDB else void,
+    ledger_ref: LedgerRef,
     exit: sig.sync.ExitCondition,
 ) !void {
     defer exit.afterExit();
 
-    var confirmation_verifier = if (TODO_CONFIRMATION_VERIFIER)
-        OptimisticConfirmationVerifier.new(blk: {
-            const bank_forks, var bank_forks_lg = bank_forks_rw.readWithLock();
-            defer bank_forks_lg.unlock();
-            // TODO: this is effectively what the agave code does, but could it just be `bank_forks.root_slot`?
-            break :blk bank_forks.rootBank().slot;
-        });
+    var confirmation_verifier: OptimisticConfirmationVerifier = .init(.now(), blk: {
+        const slot_data_provider, var slot_data_provider_lg = slot_data_provider_rw.readWithLock();
+        defer slot_data_provider_lg.unlock();
+        break :blk slot_data_provider.rootSlot();
+    });
+    defer confirmation_verifier.deinit(allocator);
 
     var latest_vote_slot_per_validator: std.AutoArrayHashMapUnmanaged(Pubkey, Slot) = .{};
     defer latest_vote_slot_per_validator.deinit(allocator);
@@ -393,10 +410,10 @@ fn processVotesLoop(
             allocator,
             logger,
             vote_tracker,
-            bank_forks_rw,
+            slot_data_provider_rw,
             senders,
             receivers,
-            ledger_db,
+            ledger_ref,
             &confirmation_verifier,
             &latest_vote_slot_per_validator,
             &last_process_root,
@@ -410,39 +427,46 @@ fn processVotesLoop(
     }
 }
 
+/// TODO: maybe add an abstraction like this to `sig.ledger` that can be shared across the codebase.
+/// Similar thing exists in `sig.replay.edge_cases` (in a separate PR at the time of writing).
+const LedgerRef = struct {
+    reader: *sig.ledger.LedgerReader,
+    writer: *sig.ledger.LedgerResultWriter,
+};
+
 fn processVotesOnce(
     allocator: std.mem.Allocator,
     logger: Logger,
     vote_tracker: *VoteTracker,
-    bank_forks_rw: *sig.sync.RwMux(BankForksStub),
+    slot_data_provider_rw: *sig.sync.RwMux(SlotDataProvider),
     senders: Senders,
     receivers: Receivers,
-    ledger_db: if (TODO_CONFIRMATION_VERIFIER) *sig.ledger.LedgerDB else void,
-    confirmation_verifier: *if (TODO_CONFIRMATION_VERIFIER) OptimisticConfirmationVerifier else void,
+    ledger_ref: LedgerRef,
+    confirmation_verifier: *OptimisticConfirmationVerifier,
     latest_vote_slot_per_validator: *std.AutoArrayHashMapUnmanaged(Pubkey, Slot),
     last_process_root: *sig.time.Instant,
     vote_processing_time: *VoteProcessingTiming,
 ) !enum { ok, disconnected, timeout, logged } {
-    const root_bank_slot, const root_bank = blk: {
-        const bank_forks, var bank_forks_lg = bank_forks_rw.readWithLock();
-        defer bank_forks_lg.unlock();
-        break :blk .{ bank_forks.slot_tracker.root, bank_forks.rootBank() };
-    };
+    const slot_data_provider, var slot_data_provider_lg = slot_data_provider_rw.readWithLock();
+    defer slot_data_provider_lg.unlock();
+
+    const root_slot = slot_data_provider.rootSlot();
+    const root_hash = slot_data_provider.getSlotHash(root_slot);
 
     if (last_process_root.elapsed().asMillis() > DEFAULT_MS_PER_SLOT) {
-        if (TODO_CONFIRMATION_VERIFIER) {
-            const unrooted_optimistic_slots = confirmation_verifier
-                .verify_for_unrooted_optimistic_slots(&root_bank, ledger_db);
-            // SlotVoteTracker's for all `slots` in `unrooted_optimistic_slots`
-            // should still be available because we haven't purged in
-            // `progress_with_new_root_bank()` yet, which is called below
-            OptimisticConfirmationVerifier.log_unrooted_optimistic_slots(
-                &root_bank,
-                &vote_tracker,
-                &unrooted_optimistic_slots,
+        const unrooted_optimistic_slots =
+            try confirmation_verifier.verifyForUnrootedOptimisticSlots(
+                allocator,
+                ledger_ref.reader,
+                .{
+                    .slot = root_slot,
+                    .hash = root_hash,
+                    .ancestors = slot_data_provider.getSlotAncestorsPtr(root_slot).?, // must exist for the root slot
+                },
             );
-        }
-        vote_tracker.progressWithNewRootBank(allocator, root_bank_slot);
+        defer allocator.free(unrooted_optimistic_slots);
+
+        vote_tracker.progressWithNewRootBank(allocator, root_slot);
         last_process_root.* = sig.time.Instant.now();
     }
 
@@ -450,10 +474,9 @@ fn processVotesOnce(
         allocator,
         logger,
         vote_tracker,
-        bank_forks_rw,
+        slot_data_provider,
         senders,
         receivers,
-        &root_bank,
         vote_processing_time,
         latest_vote_slot_per_validator,
     ) catch |err| switch (err) {
@@ -473,33 +496,15 @@ fn processVotesOnce(
     };
     defer allocator.free(confirmed_slots);
 
-    if (TODO_CONFIRMATION_VERIFIER) {
-        confirmation_verifier.add_new_optimistic_confirmed_slots(confirmed_slots, ledger_db);
-    }
-
-    // NOTE: keep this around for reference while I'm figuring it out
-
-    // match confirmed_slots {
-    //     Ok(confirmed_slots) => {
-    //         confirmation_verifier
-    //             .add_new_optimistic_confirmed_slots(confirmed_slots.clone(), &ledger);
-    //     }
-    //     Err(e) => match e {
-    //         Error::RecvTimeout(RecvTimeoutError::Disconnected) => {
-    //             return Ok(());
-    //         }
-    //         Error::ReadyTimeout => (),
-    //         _ => {
-    //             error!("thread {:?} error {:?}", thread::current().name(), e);
-    //         }
-    //     },
-    // }
+    try confirmation_verifier.addNewOptimisticConfirmedSlots(
+        allocator,
+        confirmed_slots,
+        ledger_ref.writer,
+    );
 
     return .ok;
 }
 
-/// TODO: remove this
-const TodoErrorSet = error{TODO};
 const ListenAndConfirmVotesError = error{
     RecvTimeoutDisconnected,
     ReadyTimeout,
@@ -509,10 +514,9 @@ fn listenAndConfirmVotes(
     allocator: std.mem.Allocator,
     logger: Logger,
     vote_tracker: *VoteTracker,
-    bank_forks_rw: *sig.sync.RwMux(BankForksStub),
+    slot_data_provider: *const SlotDataProvider,
     senders: Senders,
     receivers: Receivers,
-    root_bank: *const BankForksStub.BankStub,
     vote_processing_time: ?*VoteProcessingTiming,
     latest_vote_slot_per_validator: *std.AutoArrayHashMapUnmanaged(Pubkey, Slot),
 ) ListenAndConfirmVotesError![]const ThresholdConfirmedSlot {
@@ -559,9 +563,8 @@ fn listenAndConfirmVotes(
             allocator,
             logger,
             vote_tracker,
-            bank_forks_rw,
+            slot_data_provider,
             senders,
-            root_bank,
             vote_processing_time,
             latest_vote_slot_per_validator,
             gossip_vote_txs,
@@ -576,14 +579,15 @@ fn filterAndConfirmWithNewVotes(
     allocator: std.mem.Allocator,
     logger: Logger,
     vote_tracker: *VoteTracker,
-    bank_forks_rw: *sig.sync.RwMux(BankForksStub),
+    slot_data_provider: *const SlotDataProvider,
     senders: Senders,
-    root_bank: *const BankForksStub.BankStub,
     vote_processing_time: ?*VoteProcessingTiming,
     latest_vote_slot_per_validator: *std.AutoArrayHashMapUnmanaged(Pubkey, Slot),
     gossip_vote_txs: []const Transaction,
     replayed_votes: []const vote_parser.ParsedVote,
 ) std.mem.Allocator.Error![]const ThresholdConfirmedSlot {
+    const root_slot = slot_data_provider.rootSlot();
+
     var diff = SlotsDiff.EMPTY;
     defer diff.deinit(allocator);
 
@@ -614,12 +618,11 @@ fn filterAndConfirmWithNewVotes(
                 allocator,
                 logger,
                 vote_tracker,
-                bank_forks_rw,
+                slot_data_provider,
                 senders,
                 vote,
                 vote_pubkey,
                 signature,
-                root_bank,
                 &diff,
                 &new_optimistic_confirmed_slots,
                 is_gossip,
@@ -667,24 +670,23 @@ fn filterAndConfirmWithNewVotes(
         const w_slot_tracker, var w_slot_tracker_lg = slot_tracker.tracker.writeWithLock();
         defer w_slot_tracker_lg.unlock();
         if (w_slot_tracker.voted_slot_updates == null) {
-            w_slot_tracker.voted_slot_updates = .{};
+            w_slot_tracker.voted_slot_updates = .empty;
         }
         const voted = &w_slot_tracker.voted;
         const voted_slot_updates = &w_slot_tracker.voted_slot_updates.?;
 
         var gossip_only_stake: u64 = 0;
-        const epoch_stakes = if (root_bank.et_elem) |*et_elem| &et_elem.stakes else null;
-
         try voted.ensureUnusedCapacity(allocator, slot_diff.map.count());
         try voted_slot_updates.ensureUnusedCapacity(allocator, slot_diff.map.count());
         for (slot_diff.map.keys(), slot_diff.map.values()) |pubkey, seen_in_gossip_above| {
             if (seen_in_gossip_above) {
-                // By this point we know if the vote was seen in gossip above,
-                // it was not seen in gossip at any point in the past (if it was seen
-                // in gossip in the past, `is_new` would be false and it would have
-                // been filtered out above), so it's safe to increment the gossip-only
-                // stake
-                sumStake(&gossip_only_stake, epoch_stakes, pubkey);
+                // By this point we know if the vote was seen in gossip above, it was
+                // not seen in gossip at any point in the past (if it was seen in gossip
+                // in the past, `is_new` would be false and it would have been filtered
+                // out above), so it's safe to increment the gossip-only stake
+                if (slot_data_provider.getDelegatedStake(root_slot, pubkey)) |delegated_stake| {
+                    gossip_only_stake += delegated_stake;
+                }
             }
 
             // From the `slot_diff.retain` earlier, we know because there are
@@ -780,8 +782,6 @@ const AtomicInterval = struct {
     }
 };
 
-pub const OptimisticConfirmationVerifier = struct {};
-
 /// TODO: move this to its proper place or something
 const BankNotification = union(enum) {
     optimistically_confirmed: Slot,
@@ -857,18 +857,18 @@ fn trackNewVotesAndNotifyConfirmations(
     allocator: std.mem.Allocator,
     logger: Logger,
     vote_tracker: *VoteTracker,
-    bank_forks_rw: *sig.sync.RwMux(BankForksStub),
+    slot_data_provider: *const SlotDataProvider,
     senders: Senders,
     vote: VoteTransaction,
     vote_pubkey: Pubkey,
     vote_transaction_signature: sig.core.Signature,
-    root_bank: *const BankForksStub.BankStub,
     diff: *SlotsDiff,
     new_optimistic_confirmed_slots: *std.ArrayListUnmanaged(ThresholdConfirmedSlot),
     is_gossip_vote: bool,
     latest_vote_slot_per_validator: *std.AutoArrayHashMapUnmanaged(Pubkey, Slot),
 ) !void {
     if (vote.isEmpty()) return;
+    const root = slot_data_provider.rootSlot();
 
     const last_vote_slot = vote.lastVotedSlot().?;
     const last_vote_hash = vote.getHash();
@@ -882,7 +882,6 @@ fn trackNewVotesAndNotifyConfirmations(
     };
     defer latest_vote_slot_per_validator.unlockPointers();
 
-    const root = root_bank.slot;
     const vote_slots: []const Slot = blk: {
         const vote_slots = try allocator.alloc(Slot, vote.slotCount());
         errdefer allocator.free(vote_slots);
@@ -892,10 +891,7 @@ fn trackNewVotesAndNotifyConfirmations(
     defer allocator.free(vote_slots);
 
     const accumulate_intermediate_votes = blk: {
-        const bank_forks, var bank_forks_lg = bank_forks_rw.readWithLock();
-        defer bank_forks_lg.unlock();
-
-        if (bank_forks.bankHashOrNullIfFrozen(last_vote_slot)) |hash| {
+        if (slot_data_provider.getSlotHash(last_vote_slot)) |hash| {
             // Only accumulate intermediates if we have replayed the same version being voted on, as
             // otherwise we cannot verify the ancestry or the hashes.
             // NOTE: this can only be performed on full tower votes, until deprecate_legacy_vote_ixs feature
@@ -917,9 +913,7 @@ fn trackNewVotesAndNotifyConfirmations(
 
         // if we don't have stake information, ignore it
         const epoch_stakes = blk: {
-            const bank_forks, var bank_forks_lg = bank_forks_rw.readWithLock();
-            defer bank_forks_lg.unlock();
-            const et_elem = bank_forks.epoch_tracker.getForSlot(slot) orelse continue;
+            const et_elem = slot_data_provider.epoch_tracker.getForSlot(slot) orelse continue;
             break :blk et_elem.stakes;
         };
 
@@ -933,9 +927,7 @@ fn trackNewVotesAndNotifyConfirmations(
 
             const maybe_hash: ?Hash = get_hash: {
                 if (slot == last_vote_slot) break :get_hash last_vote_hash;
-                const bank_forks, var bank_forks_lg = bank_forks_rw.readWithLock();
-                defer bank_forks_lg.unlock();
-                break :get_hash bank_forks.bankHashOrNullIfFrozen(last_vote_slot);
+                break :get_hash slot_data_provider.getSlotHash(last_vote_slot);
             };
             const hash: Hash = maybe_hash orelse {
                 // In this case the supposed ancestor of this vote is missing. This can happen
@@ -966,7 +958,7 @@ fn trackNewVotesAndNotifyConfirmations(
 
             if (reached_threshold_results.isSet(0)) {
                 if (senders.duplicate_confirmed_slot) |sender| {
-                    sender.send(.{ slot, hash }) catch {
+                    sender.send(.{ .slot = slot, .hash = hash }) catch {
                         // WARN: the original agave code does literally just ignore this error, is that fine?
                         // TODO: evaluate this
                     };
@@ -974,7 +966,10 @@ fn trackNewVotesAndNotifyConfirmations(
             }
 
             if (reached_threshold_results.isSet(1)) {
-                try new_optimistic_confirmed_slots.append(allocator, .{ slot, hash });
+                try new_optimistic_confirmed_slots.append(allocator, .{
+                    .slot = slot,
+                    .hash = hash,
+                });
                 // Notify subscribers about new optimistic confirmation
                 if (senders.bank_notification) |sender| {
                     sender.send(.{ .optimistically_confirmed = slot }) catch |err| {
@@ -1076,12 +1071,6 @@ fn trackOptimisticConfirmationVote(
         .thresholds_to_check = &THRESHOLDS_TO_CHECK,
     });
     return .{ reached_thresholds, result == .is_new };
-}
-
-fn sumStake(sum: *u64, epoch_stakes: ?*const sig.core.EpochStakes, pubkey: Pubkey) void {
-    if (epoch_stakes) |stakes| {
-        sum.* += stakes.stakes.vote_accounts.getDelegatedStake(pubkey);
-    }
 }
 
 const vote_parser = struct {
@@ -1460,6 +1449,9 @@ test verifyVoteTransaction {
 
     try std.testing.expectEqual(
         .unverified,
+        // TODO: consider making two separate APIs, one for the slot tracker, and one for the epoch tracker,
+        // since it seems like there's little or no real data inter-dependency internally.
+        // Argument against: whether the data is interdependent could change.
         verifyVoteTransaction(allocator, .EMPTY, &epoch_tracker),
     );
 }
@@ -1467,7 +1459,7 @@ test verifyVoteTransaction {
 test "simple usage" {
     const allocator = std.testing.allocator;
 
-    var bank_forks_rw = sig.sync.RwMux(BankForksStub).init(blk: {
+    var slot_data_provider_rw = sig.sync.RwMux(SlotDataProvider).init(blk: {
         var stakes: sig.core.EpochStakes = try .initEmptyWithGenesisStakeHistoryEntry(allocator);
         defer stakes.deinit(allocator);
 
@@ -1499,9 +1491,39 @@ test "simple usage" {
         });
     });
     defer {
-        const bank_forks, _ = bank_forks_rw.writeWithLock();
+        const bank_forks, _ = slot_data_provider_rw.writeWithLock();
         bank_forks.deinit(allocator);
     }
+
+    var ledger_db = try sig.ledger.tests.TestDB.init(@src());
+    defer ledger_db.deinit();
+
+    var registry: sig.prometheus.Registry(.{}) = .init(allocator);
+    defer registry.deinit();
+    var lowest_cleanup_slot: sig.sync.RwMux(Slot) = .init(0);
+    var max_root: std.atomic.Value(u64) = .init(0);
+
+    var ledger_reader: sig.ledger.LedgerReader = try .init(
+        allocator,
+        .noop,
+        ledger_db,
+        &registry,
+        &lowest_cleanup_slot,
+        &max_root,
+    );
+    var ledger_writer: sig.ledger.LedgerResultWriter = try .init(
+        allocator,
+        .noop,
+        ledger_db,
+        &registry,
+        &lowest_cleanup_slot,
+        &max_root,
+    );
+
+    const ledger_ref: LedgerRef = .{
+        .reader = &ledger_reader,
+        .writer = &ledger_writer,
+    };
 
     var gossip_table_rw: sig.sync.RwMux(sig.gossip.GossipTable) = .init(
         try .init(allocator, allocator),
@@ -1528,9 +1550,9 @@ test "simple usage" {
     const exit_cond: sig.sync.ExitCondition = .{ .unordered = &exit };
 
     const vote_listener: VoteListener = try .init(allocator, exit_cond, .noop, &vote_tracker, .{
-        .bank_forks_rw = &bank_forks_rw,
+        .slot_data_provider_rw = &slot_data_provider_rw,
         .gossip_table_rw = &gossip_table_rw,
-        .ledger_db = {},
+        .ledger_ref = ledger_ref,
         .receivers = .{
             .replay_votes = replay_votes_channel,
         },
@@ -1565,7 +1587,7 @@ test "check trackers" {
 
     const root_slot: Slot = 0;
 
-    var bank_forks_rw = sig.sync.RwMux(BankForksStub).init(blk: {
+    var slot_data_provider_rw = sig.sync.RwMux(SlotDataProvider).init(blk: {
         var stakes: sig.core.EpochStakes = try .initEmptyWithGenesisStakeHistoryEntry(allocator);
         defer stakes.deinit(allocator);
         for (tracker_templates) |template| {
@@ -1602,9 +1624,39 @@ test "check trackers" {
         });
     });
     defer {
-        const bank_forks, _ = bank_forks_rw.writeWithLock();
+        const bank_forks, _ = slot_data_provider_rw.writeWithLock();
         bank_forks.deinit(allocator);
     }
+
+    var ledger_db = try sig.ledger.tests.TestDB.init(@src());
+    defer ledger_db.deinit();
+
+    var registry: sig.prometheus.Registry(.{}) = .init(allocator);
+    defer registry.deinit();
+    var lowest_cleanup_slot: sig.sync.RwMux(Slot) = .init(0);
+    var max_root: std.atomic.Value(u64) = .init(0);
+
+    var ledger_reader: sig.ledger.LedgerReader = try .init(
+        allocator,
+        .noop,
+        ledger_db,
+        &registry,
+        &lowest_cleanup_slot,
+        &max_root,
+    );
+    var ledger_writer: sig.ledger.LedgerResultWriter = try .init(
+        allocator,
+        .noop,
+        ledger_db,
+        &registry,
+        &lowest_cleanup_slot,
+        &max_root,
+    );
+
+    const ledger_ref: LedgerRef = .{
+        .reader = &ledger_reader,
+        .writer = &ledger_writer,
+    };
 
     var gossip_table_rw = sig.sync.RwMux(sig.gossip.GossipTable).init(
         try sig.gossip.GossipTable.init(allocator, allocator),
@@ -1728,7 +1780,7 @@ test "check trackers" {
         defer unverified_votes_buffer.deinit(allocator);
         try receptor.recvAndSendOnce(
             allocator,
-            &bank_forks_rw,
+            &slot_data_provider_rw,
             &gossip_table_rw,
             &unverified_votes_buffer,
             verified_vote_transactions_channel,
@@ -1740,12 +1792,14 @@ test "check trackers" {
         var last_process_root: sig.time.Instant = .now();
         var vote_processing_time: VoteProcessingTiming = .ZEROES;
 
-        var confirmation_verifier = {};
+        var confirmation_verifier: OptimisticConfirmationVerifier = .init(.now(), root_slot);
+        defer confirmation_verifier.deinit(allocator);
+
         try std.testing.expectEqual(.ok, try processVotesOnce(
             allocator,
             .noop,
             &vote_tracker,
-            &bank_forks_rw,
+            &slot_data_provider_rw,
             .{
                 .verified_vote = verified_vote_channel,
                 .gossip_verified_vote_hash = gossip_verified_vote_hash_channel,
@@ -1757,7 +1811,7 @@ test "check trackers" {
                 .replay_votes = replay_votes_channel,
                 .verified_vote_transactions = verified_vote_transactions_channel,
             },
-            {},
+            ledger_ref,
             &confirmation_verifier,
             &latest_vote_slot_per_validator,
             &last_process_root,
@@ -1799,6 +1853,8 @@ test "check trackers" {
         actual_trackers.items,
     );
 }
+
+// tests for OptimisticConfirmationVerifier moved to optimistic_vote_verifier.zig
 
 const TestSlotVoteTracker = struct {
     voted: []const struct { Pubkey, bool },
