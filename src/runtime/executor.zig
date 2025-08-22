@@ -142,65 +142,42 @@ fn processNextInstruction(
             break :blk .{ program_account.pubkey, program_account.pubkey };
 
         const owner_id = program_account.account.owner;
-        if (ic.tc.feature_set.active(.remove_accounts_executable_flag_checks, ic.tc.slot)) {
+        const is_migrated_bpf = for ([_]struct { Pubkey, sig.core.features.Feature }{
+            .{ program.address_lookup_table.ID, .migrate_address_lookup_table_program_to_core_bpf },
+            .{ program.config.ID, .migrate_config_program_to_core_bpf },
+            .{ program.stake.ID, .migrate_stake_program_to_core_bpf },
+        }) |entry| {
+            const migrate_key, const migrate_feature = entry;
+            if (owner_id.equals(&migrate_key) and
+                ic.tc.feature_set.active(migrate_feature, ic.tc.slot)) break true;
+        } else false;
+
+        if (is_migrated_bpf or
+            ic.tc.feature_set.active(.remove_accounts_executable_flag_checks, ic.tc.slot))
+        {
             if (bpf_loader_program.v1.ID.equals(&owner_id) or
                 bpf_loader_program.v2.ID.equals(&owner_id) or
                 bpf_loader_program.v3.ID.equals(&owner_id) or
                 bpf_loader_program.v4.ID.equals(&owner_id))
                 break :blk .{ owner_id, program_account.pubkey };
-            return InstructionError.UnsupportedProgramId;
         }
 
-        break :blk .{ owner_id, program_account.pubkey };
+        return InstructionError.UnsupportedProgramId;
     };
-
-    // Lookup native program function
-    // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/svm/src/message_processor.rs#L72-L75
-    // [fd] https://github.com/firedancer-io/firedancer/blob/dfadb7d33683aa8711dfe837282ad0983d3173a0/src/flamenco/runtime/fd_executor.c#L1150-L1159
-    const move_verify_precompiles_to_svm = ic.tc.feature_set.active(
-        .move_precompile_verification_to_svm,
-        ic.tc.slot,
-    );
 
     const maybe_precompile_fn =
         program.PRECOMPILE_ENTRYPOINTS.get(native_program_id.base58String().slice());
 
-    if (!move_verify_precompiles_to_svm and maybe_precompile_fn != null) return;
-
-    const function: union(enum) {
-        builtin: program.EntrypointFn,
-        bpf: sig.vm.Executable,
-    } = blk: {
-        if (maybe_precompile_fn) |precompile_fn|
-            break :blk .{ .builtin = precompile_fn };
-
-        // Handle migrated native programs
-        for ([_]struct { Pubkey, sig.core.features.Feature }{
-            .{ program.address_lookup_table.ID, .migrate_address_lookup_table_program_to_core_bpf },
-            // .{ program.config.ID, .migrate_config_program_to_core_bpf },
-            .{ program.stake.ID, .migrate_stake_program_to_core_bpf },
-        }) |migration| {
-            const migrate_key, const migrate_feature = migration;
-            if (native_program_id.equals(&migrate_key) and
-                ic.tc.feature_set.active(migrate_feature, ic.tc.slot))
-            {
-                const loaded_program = ic.tc.program_map.getPtr(native_program_id) orelse
-                    return error.UnsupportedProgramId;
-                switch (loaded_program.*) {
-                    .loaded => |entry| break :blk .{ .bpf = entry.executable },
-                    .failed => return error.UnsupportedProgramId,
-                }
-            }
-        }
-
-        const maybe_native_program_fn = program.PROGRAM_ENTRYPOINTS.get(
+    const maybe_native_program_fn = maybe_precompile_fn orelse blk: {
+        const native_program_fn = program.PROGRAM_ENTRYPOINTS.get(
             native_program_id.base58String().slice(),
         );
         ic.tc.return_data.data.len = 0;
-        break :blk .{
-            .builtin = maybe_native_program_fn orelse return error.UnsupportedProgramId,
-        };
+        break :blk native_program_fn;
     };
+
+    const native_program_fn = maybe_native_program_fn orelse
+        return InstructionError.UnsupportedProgramId;
 
     // Invoke the program and log the result
     // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L551-L571
@@ -211,22 +188,7 @@ fn processNextInstruction(
         ic.tc.instruction_stack.len,
     );
 
-    (switch (function) {
-        .builtin => |native_fn| native_fn(allocator, ic),
-        .bpf => |executable| program.bpf.executeProgram(allocator, ic, executable) catch |err| b: {
-            _, const kind, const msg = sig.vm.convertExecutionError(err);
-            if (kind != .Instruction) {
-                try sig.runtime.stable_log.programFailure(
-                    ic.tc,
-                    ic.ixn_info.program_meta.pubkey,
-                    msg,
-                );
-                break :b InstructionError.ProgramFailedToComplete;
-            } else {
-                break :b sig.vm.instructionErrorFromExecutionError(err);
-            }
-        },
-    }) catch |err| {
+    native_program_fn(allocator, ic) catch |err| {
         // This approach to failure logging is used to prevent requiring all native programs to return
         // an ExecutionError. Instead, native programs return an InstructionError, and more granular
         // failure logging for bpf programs is handled in the BPF executor.
@@ -1016,7 +978,7 @@ test "core bpf migration" {
     defer instruction_info.deinit(allocator);
 
     try std.testing.expectError(
-        error.ProgramFailedToComplete,
+        error.UnsupportedProgramId,
         executeInstruction(allocator, &tc, instruction_info),
     );
 }
