@@ -167,7 +167,7 @@ fn processNextInstruction(
 
     if (!move_verify_precompiles_to_svm and maybe_precompile_fn != null) return;
 
-    const function: union(enum){ 
+    const function: union(enum) {
         builtin: program.EntrypointFn,
         bpf: sig.vm.Executable,
     } = blk: {
@@ -181,18 +181,16 @@ fn processNextInstruction(
             .{ program.stake.ID, .migrate_stake_program_to_core_bpf },
         }) |migration| {
             const migrate_key, const migrate_feature = migration;
-            if (
-                native_program_id.equals(&migrate_key) and
-                ic.tc.feature_set.active(migrate_feature, ic.tc.slot)
-            ) {
-                const loaded_program = ic.tc.program_map.getPtr(native_program_id)
-                    orelse return error.UnsupportedProgramId;
+            if (native_program_id.equals(&migrate_key) and
+                ic.tc.feature_set.active(migrate_feature, ic.tc.slot))
+            {
+                const loaded_program = ic.tc.program_map.getPtr(native_program_id) orelse return error.UnsupportedProgramId;
                 switch (loaded_program.*) {
                     .loaded => |entry| break :blk .{ .bpf = entry.executable },
                     .failed => return error.UnsupportedProgramId,
                 }
             }
-        } 
+        }
 
         const maybe_native_program_fn = program.PROGRAM_ENTRYPOINTS.get(
             native_program_id.base58String().slice(),
@@ -217,7 +215,11 @@ fn processNextInstruction(
         .bpf => |executable| program.bpf.executeProgram(allocator, ic, executable) catch |err| b: {
             _, const kind, const msg = sig.vm.convertExecutionError(err);
             if (kind != .Instruction) {
-                try sig.runtime.stable_log.programFailure(ic.tc, ic.ixn_info.program_meta.pubkey, msg);
+                try sig.runtime.stable_log.programFailure(
+                    ic.tc,
+                    ic.ixn_info.program_meta.pubkey,
+                    msg,
+                );
                 break :b InstructionError.ProgramFailedToComplete;
             } else {
                 break :b sig.vm.instructionErrorFromExecutionError(err);
