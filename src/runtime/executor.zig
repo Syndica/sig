@@ -171,8 +171,8 @@ fn processNextInstruction(
         builtin: program.EntrypointFn,
         bpf: sig.vm.Executable,
     } = blk: {
-        if (maybe_precompile_fn) |native_program_fn|
-            break :blk .{ .builtin = native_program_fn };
+        if (maybe_precompile_fn) |precompile_fn|
+            break :blk .{ .builtin = precompile_fn };
 
         // Handle migrated native programs
         for ([_]struct { Pubkey, sig.core.features.Feature }{
@@ -931,4 +931,89 @@ test "sumAccountLamports" {
             sumAccountLamports(&tc, account_metas.constSlice()),
         );
     }
+}
+
+test "core bpf migration" {
+    const testing = sig.runtime.testing;
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+
+    const migrated_builtin_key = program.address_lookup_table.ID;
+    const migrated_builtin_feature: sig.core.features.Feature =
+        .migrate_address_lookup_table_program_to_core_bpf;
+
+    // Will patch the migrated builtin with this BPF program
+    const program_elf = try std.fs.cwd().readFileAlloc(
+        allocator,
+        sig.ELF_DATA_DIR ++ "hello_world.so",
+        std.math.maxInt(usize),
+    );
+    defer allocator.free(program_elf);
+
+    // Will invoke this account owned by the migrated builtin
+    const program_key = Pubkey.initRandom(prng.random());
+
+    var feature_set = sig.core.FeatureSet.ALL_ENABLED_AT_GENESIS;
+    feature_set.setSlot(migrated_builtin_feature, 0);
+
+    var environment: sig.vm.Environment = .{};
+    environment.loader = try sig.vm.Environment.initV1Loader(allocator, &feature_set, 0, false);
+    defer environment.deinit(allocator);
+
+    var cache, var tc = try testing.createTransactionContext(
+        allocator,
+        prng.random(),
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = program_key,
+                    .owner = migrated_builtin_key,
+                },
+                .{
+                    .pubkey = migrated_builtin_key,
+                    .owner = program.bpf_loader.v3.ID,
+                },
+            },
+            .feature_set = &.{.{ .feature = migrated_builtin_feature }},
+            .compute_meter = 100_000,
+            .vm_environment = &environment,
+        },
+    );
+    defer {
+        testing.deinitTransactionContext(allocator, tc);
+        cache.deinit(allocator);
+    }
+
+    {
+        const source = try allocator.dupe(u8, program_elf);
+        errdefer allocator.free(source);
+
+        var executable = try sig.vm.Executable.fromBytes(
+            allocator,
+            source,
+            &environment.loader,
+            environment.config,
+        );
+        errdefer executable.deinit(allocator);
+
+        try tc.program_map.put(allocator, migrated_builtin_key, .{
+            .loaded = .{
+                .executable = executable,
+                .source = source,
+            },
+        });
+    }
+
+    const instruction_info = try testing.createInstructionInfo(
+        &tc,
+        program_key,
+        "ignored",
+        &.{
+            .{ .index_in_transaction = 0 },
+            .{ .index_in_transaction = 1 },
+        },
+    );
+    defer instruction_info.deinit(allocator);
+
+    try executeInstruction(allocator, &tc, instruction_info);
 }
