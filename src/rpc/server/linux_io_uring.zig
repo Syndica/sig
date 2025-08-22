@@ -9,6 +9,7 @@ const connection = server.connection;
 const IoUring = std.os.linux.IoUring;
 
 const LOGGER_SCOPE = "rpc.server.linux_io_uring";
+const Logger = sig.trace.Logger(LOGGER_SCOPE);
 
 const HTTP_VERSION: std.http.Version = .@"HTTP/1.0";
 
@@ -90,10 +91,7 @@ const ConnErrLogger =
     sig.trace.NewEntry(LOGGER_SCOPE)
         .Field("conn", std.posix.GetSockNameError!std.net.Address);
 
-fn connErrLogger(
-    logger: sig.trace.ScopedLogger(LOGGER_SCOPE),
-    entry_data: *const EntryData,
-) ConnErrLogger {
+fn connErrLogger(logger: Logger, entry_data: *const EntryData) ConnErrLogger {
     return logger.err().field("conn", entry_data.getSocketName());
 }
 
@@ -463,7 +461,7 @@ fn handleRecvBody(
 
     switch (body.head_info.method) {
         inline .HEAD, .GET => |method| switch (requests.getRequestTargetResolve(
-            logger.unscoped(),
+            .from(logger),
             body.head_info.target.constSlice(),
             &server_ctx.accountsdb.latest_snapshot_gen_info,
         )) {

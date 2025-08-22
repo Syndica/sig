@@ -168,6 +168,9 @@ files_excluded_from_line_length_check = [
     "src/transaction_sender/mock_transfer_generator.zig",
     "src/transaction_sender/service.zig",
     "src/transaction_sender/transaction_pool.zig",
+
+    # Generated file, will not conform to style guide.
+    "src/crypto/bn254/bn254_64.zig",
 ]
 
 
@@ -187,9 +190,9 @@ def line_length(args, files_to_check):
             lines = f.readlines()
         for i, line in enumerate(lines):
             stripped = line.lstrip()
-            if "// zig fmt: off" in stripped:
+            if re.match(r"// [sz]ig fmt: off", stripped):
                 fmt_off = True
-            if "// zig fmt: on" in stripped:
+            if re.match(r"// [sz]ig fmt: on", stripped):
                 fmt_off = False
                 continue  # Don't check lines that have formatting turned off
 

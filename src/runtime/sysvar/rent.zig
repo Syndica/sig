@@ -1,3 +1,4 @@
+const builtin = @import("builtin");
 const sig = @import("../../sig.zig");
 const std = @import("std");
 
@@ -30,8 +31,7 @@ pub const Rent = extern struct {
     /// distributed to validators.
     burn_percent: u8,
 
-    pub const ID =
-        Pubkey.parseBase58String("SysvarRent111111111111111111111111111111111") catch unreachable;
+    pub const ID: Pubkey = .parse("SysvarRent111111111111111111111111111111111");
 
     pub const DEFAULT: Rent = .{
         .lamports_per_byte_year = DEFAULT_LAMPORTS_PER_BYTE_YEAR,
@@ -39,13 +39,13 @@ pub const Rent = extern struct {
         .burn_percent = DEFAULT_BURN_PERCENT,
     };
 
-    pub fn initRandom(random: std.Random) Rent {
-        return .{
-            .lamports_per_byte_year = random.int(u64),
-            .exemption_threshold = random.float(f64),
-            .burn_percent = random.uintAtMost(u8, 100),
-        };
-    }
+    pub const FREE: Rent = .{
+        .lamports_per_byte_year = 0,
+        .exemption_threshold = 0,
+        .burn_percent = 0,
+    };
+
+    pub const STORAGE_SIZE: u64 = 17;
 
     pub fn minimumBalance(self: Rent, data_len: usize) u64 {
         const bytes: u64 = @intCast(data_len);
@@ -64,5 +64,15 @@ pub const Rent = extern struct {
         const lamports_per_year: u64 = self.lamports_per_byte_year * actual_data_len;
 
         return @intFromFloat((@as(f64, @floatFromInt(lamports_per_year)) * years_elapsed));
+    }
+
+    pub fn initRandom(random: std.Random) Rent {
+        // Used by BankFeilds.initRandom inside accounts_db.manager.runLoop, should be made test only when possible.
+        // if (!builtin.is_test) @compileError("only for testing");
+        return .{
+            .lamports_per_byte_year = random.int(u64),
+            .exemption_threshold = random.float(f64),
+            .burn_percent = random.uintAtMost(u8, 100),
+        };
     }
 };

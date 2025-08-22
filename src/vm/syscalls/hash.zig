@@ -3,8 +3,6 @@ const std = @import("std");
 const phash = @import("poseidon");
 const sig = @import("../../sig.zig");
 
-const features = sig.runtime.features;
-
 const MemoryMap = sig.vm.memory.MemoryMap;
 const RegisterMap = sig.vm.interpreter.RegisterMap;
 const TransactionContext = sig.runtime.TransactionContext;
@@ -32,7 +30,7 @@ pub fn poseidon(
     const result_addr = registers.get(.r5);
 
     if (len > 12) {
-        try tc.log("Poseidon hashing {} sequences is not supported", .{len});
+        try tc.log("Poseidon hashing {d} sequences is not supported", .{len});
         return error.InvalidLength;
     }
 
@@ -93,9 +91,7 @@ pub fn poseidon(
         }
 
         hasher.append(&buffer) catch {
-            if (tc.feature_set.active.contains(
-                features.SIMPLIFY_ALT_BN128_SYSCALL_ERROR_CODES,
-            )) {
+            if (tc.feature_set.active(.simplify_alt_bn128_syscall_error_codes, tc.slot)) {
                 registers.set(.r0, 1);
                 return;
             } else @panic("SIMPLIFY_ALT_BN_128_SYSCALL_ERROR_CODES not active");

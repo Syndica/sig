@@ -68,7 +68,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
         .max_buffer = 1 << 20,
     }, null);
     defer std_logger.deinit();
-    const logger = std_logger.logger();
+    const logger = std_logger.logger("accountsdb.fuzz");
 
     const use_disk = random.boolean();
 
@@ -103,7 +103,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
 
     var accounts_db = try AccountsDB.init(.{
         .allocator = allocator,
-        .logger = logger,
+        .logger = .from(logger),
         .snapshot_dir = snapshot_dir,
         .geyser_writer = null,
         .gossip_view = null,
@@ -383,7 +383,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
 
             const combined_manifest = try sig.accounts_db.FullAndIncrementalManifest.fromFiles(
                 allocator,
-                logger,
+                .from(logger),
                 alternative_snapshot_dir,
                 snapshot_files,
             );
@@ -463,7 +463,9 @@ fn readRandomAccounts(
         }
 
         for (pubkeys) |pubkey| {
-            const account = db.getAccount(&pubkey) catch continue;
+            const account = db.getAccountLatest(&pubkey) catch |e|
+                std.debug.panic("getAccount failed with error: {}", .{e}) orelse
+                continue;
             defer account.deinit(db.allocator);
         }
     }

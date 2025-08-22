@@ -214,7 +214,7 @@ pub fn getEpochStake(
         tc.getCheckAligned(),
     );
 
-    if (tc.epoch_stakes.stakes.delegations.getPtr(vote_address.*)) |delegation| {
+    if (tc.epoch_stakes.stakes.stake_delegations.getPtr(vote_address.*)) |delegation| {
         registers.set(.r0, delegation.stake);
     } else {
         registers.set(.r0, 0);
@@ -252,91 +252,95 @@ pub fn getProcessedSiblingInstruction(
         }
     } else null;
 
-    const info = maybe_info orelse {
-        registers.set(.r0, 0);
-        return;
-    };
-
-    const check_aligned = tc.getCheckAligned();
-    const header = try memory_map.translateType(
-        ProcessedSiblingInstruction,
-        .mutable,
-        meta_addr,
-        check_aligned,
-    );
-
-    if (header.data_len == info.instruction_data.len and
-        header.accounts_len == info.account_metas.len)
-    {
-        const program_id = try memory_map.translateType(
-            Pubkey,
+    if (maybe_info) |info| {
+        const check_aligned = tc.getCheckAligned();
+        const header = try memory_map.translateType(
+            ProcessedSiblingInstruction,
             .mutable,
-            program_id_addr,
+            meta_addr,
             check_aligned,
         );
-        const data = try memory_map.translateSlice(
-            u8,
-            .mutable,
-            data_addr,
-            header.data_len,
-            check_aligned,
-        );
-        const accounts = try memory_map.translateSlice(
-            AccountMeta,
-            .mutable,
-            accounts_addr,
-            header.accounts_len,
-            check_aligned,
-        );
-        if (memops.isOverlapping(
-            @intFromPtr(header),
-            @sizeOf(ProcessedSiblingInstruction),
-            @intFromPtr(program_id),
-            @sizeOf(Pubkey),
-        ) or memops.isOverlapping(
-            @intFromPtr(header),
-            @sizeOf(ProcessedSiblingInstruction),
-            @intFromPtr(accounts.ptr),
-            accounts.len *| @sizeOf(AccountMeta),
-        ) or memops.isOverlapping(
-            @intFromPtr(header),
-            @sizeOf(ProcessedSiblingInstruction),
-            @intFromPtr(data.ptr),
-            data.len,
-        ) or memops.isOverlapping(
-            @intFromPtr(program_id),
-            @sizeOf(Pubkey),
-            @intFromPtr(data.ptr),
-            data.len,
-        ) or memops.isOverlapping(
-            @intFromPtr(program_id),
-            @sizeOf(Pubkey),
-            @intFromPtr(accounts.ptr),
-            accounts.len *| @sizeOf(AccountMeta),
-        ) or memops.isOverlapping(
-            @intFromPtr(data.ptr),
-            data.len,
-            @intFromPtr(accounts.ptr),
-            accounts.len *| @sizeOf(AccountMeta),
-        )) {
-            return SyscallError.CopyOverlapping;
-        }
 
-        program_id.* = info.program_meta.pubkey;
-        @memcpy(data, info.instruction_data);
+        if (header.data_len == info.instruction_data.len and
+            header.accounts_len == info.account_metas.len)
+        {
+            const program_id = try memory_map.translateType(
+                Pubkey,
+                .mutable,
+                program_id_addr,
+                check_aligned,
+            );
+            const data = try memory_map.translateSlice(
+                u8,
+                .mutable,
+                data_addr,
+                header.data_len,
+                check_aligned,
+            );
+            const accounts = try memory_map.translateSlice(
+                AccountMeta,
+                .mutable,
+                accounts_addr,
+                header.accounts_len,
+                check_aligned,
+            );
+            if (memops.isOverlapping(
+                @intFromPtr(header),
+                @sizeOf(ProcessedSiblingInstruction),
+                @intFromPtr(program_id),
+                @sizeOf(Pubkey),
+            ) or memops.isOverlapping(
+                @intFromPtr(header),
+                @sizeOf(ProcessedSiblingInstruction),
+                @intFromPtr(accounts.ptr),
+                accounts.len *| @sizeOf(AccountMeta),
+            ) or memops.isOverlapping(
+                @intFromPtr(header),
+                @sizeOf(ProcessedSiblingInstruction),
+                @intFromPtr(data.ptr),
+                data.len,
+            ) or memops.isOverlapping(
+                @intFromPtr(program_id),
+                @sizeOf(Pubkey),
+                @intFromPtr(data.ptr),
+                data.len,
+            ) or memops.isOverlapping(
+                @intFromPtr(program_id),
+                @sizeOf(Pubkey),
+                @intFromPtr(accounts.ptr),
+                accounts.len *| @sizeOf(AccountMeta),
+            ) or memops.isOverlapping(
+                @intFromPtr(data.ptr),
+                data.len,
+                @intFromPtr(accounts.ptr),
+                accounts.len *| @sizeOf(AccountMeta),
+            )) {
+                return SyscallError.CopyOverlapping;
+            }
 
-        for (info.account_metas.slice(), 0..) |meta, i| {
-            accounts[i] = .{
-                .pubkey = meta.pubkey,
-                .is_signer = @intFromBool(meta.is_signer),
-                .is_writable = @intFromBool(meta.is_writable),
-            };
+            program_id.* = info.program_meta.pubkey;
+            @memcpy(data, info.instruction_data);
+
+            for (info.account_metas.slice(), 0..) |meta, i| {
+                const acc = tc.getAccountAtIndex(meta.index_in_transaction) orelse
+                    return InstructionError.NotEnoughAccountKeys;
+
+                accounts[i] = .{
+                    .pubkey = acc.pubkey,
+                    .is_signer = @intFromBool(meta.is_signer),
+                    .is_writable = @intFromBool(meta.is_writable),
+                };
+            }
         }
 
         header.data_len = info.instruction_data.len;
         header.accounts_len = info.account_metas.len;
         registers.set(.r0, 1);
+        return;
     }
+
+    registers.set(.r0, 0);
+    return;
 }
 
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/95764e268fe33a19819e6f9f411ff9e732cbdf0d/cpi/src/lib.rs#L329
@@ -707,7 +711,7 @@ test findProgramAddress {
         },
     });
     defer {
-        testing.deinitTransactionContext(allocator, &tc);
+        testing.deinitTransactionContext(allocator, tc);
         cache.deinit(allocator);
     }
 
@@ -825,7 +829,7 @@ test createProgramAddress {
         },
     });
     defer {
-        testing.deinitTransactionContext(allocator, &tc);
+        testing.deinitTransactionContext(allocator, tc);
         cache.deinit(allocator);
     }
 
@@ -905,7 +909,8 @@ test createProgramAddress {
         false,
     );
     try std.testing.expect(
-        (try Pubkey.parseBase58String("BwqrghZA2htAcqq8dzP1WDAhTXYTYWj7CHxF5j7TDBAe")).equals(&pk),
+        Pubkey.parse("BwqrghZA2htAcqq8dzP1WDAhTXYTYWj7CHxF5j7TDBAe")
+            .equals(&pk),
     );
 
     pk, _ = try callProgramAddressSyscall(
@@ -917,7 +922,8 @@ test createProgramAddress {
         false,
     );
     try std.testing.expect(
-        (try Pubkey.parseBase58String("13yWmRpaTR4r5nAktwLqMpRNr28tnVUZw26rTvPSSB19")).equals(&pk),
+        Pubkey.parse("13yWmRpaTR4r5nAktwLqMpRNr28tnVUZw26rTvPSSB19")
+            .equals(&pk),
     );
 
     pk, _ = try callProgramAddressSyscall(
@@ -929,10 +935,11 @@ test createProgramAddress {
         false,
     );
     try std.testing.expect(
-        (try Pubkey.parseBase58String("2fnQrngrQT4SeLcdToJAD96phoEjNL2man2kfRLCASVk")).equals(&pk),
+        Pubkey.parse("2fnQrngrQT4SeLcdToJAD96phoEjNL2man2kfRLCASVk")
+            .equals(&pk),
     );
 
-    const seed_pk = try Pubkey.parseBase58String("SeedPubey1111111111111111111111111111111111");
+    const seed_pk: Pubkey = .parse("SeedPubey1111111111111111111111111111111111");
     pk, _ = try callProgramAddressSyscall(
         allocator,
         &tc,
@@ -942,7 +949,8 @@ test createProgramAddress {
         false,
     );
     try std.testing.expect(
-        (try Pubkey.parseBase58String("976ymqVnfE32QFe6NfGDctSvVa36LWnvYxhU6G2232YL")).equals(&pk),
+        Pubkey.parse("976ymqVnfE32QFe6NfGDctSvVa36LWnvYxhU6G2232YL")
+            .equals(&pk),
     );
 
     const pk_a, _ = try callProgramAddressSyscall(
@@ -987,7 +995,7 @@ test allocFree {
         .{},
     );
     defer {
-        sig.runtime.testing.deinitTransactionContext(allocator, &tc);
+        sig.runtime.testing.deinitTransactionContext(allocator, tc);
         cache.deinit(allocator);
     }
 
@@ -1039,7 +1047,7 @@ test getProcessedSiblingInstruction {
         .accounts = &account_params,
     });
     defer {
-        testing.deinitTransactionContext(allocator, &tc);
+        testing.deinitTransactionContext(allocator, tc);
         cache.deinit(allocator);
     }
 
@@ -1202,7 +1210,7 @@ test getEpochStake {
         },
     );
     defer {
-        sig.runtime.testing.deinitTransactionContext(allocator, &tc);
+        sig.runtime.testing.deinitTransactionContext(allocator, tc);
         cache.deinit(allocator);
     }
 
@@ -1319,7 +1327,7 @@ test "set and get return data" {
         },
     );
     defer {
-        sig.runtime.testing.deinitTransactionContext(allocator, &tc);
+        sig.runtime.testing.deinitTransactionContext(allocator, tc);
         cache.deinit(allocator);
     }
 

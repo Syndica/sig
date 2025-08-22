@@ -1,12 +1,12 @@
 version: 2.1
 
 orbs:
-  codecov: codecov/codecov@5.2.0
+  codecov: codecov/codecov@5.4.3
 
 executors:
   linux-executor:
     machine:
-      image: ubuntu-2004:current
+      image: ubuntu-2404:current
   python-executor:
     docker:
       - image: cimg/python:3.10
@@ -44,7 +44,10 @@ jobs:
           at: workspace
       - run:
           name: Lint
-          command: workspace/zig/zig fmt --check src/ build.zig
+          command: |
+            workspace/zig/zig fmt --check src/ build.zig
+            cd conformance/
+            ../workspace/zig/zig fmt --check src/ build.zig
 
   check_style:
     executor: python-executor
@@ -56,6 +59,9 @@ jobs:
       - run:
           name: Check style
           command: python scripts/style.py --check src
+      - run:
+          name: Check style in conformance
+          command: python scripts/style.py --check conformance/src
 
   check_docs:
     executor: python-executor
@@ -75,7 +81,7 @@ jobs:
       - attach_workspace:
           at: workspace
       - restore_cache:
-          key: linux-x86_64-0.14.1-{{ checksum "build.zig.zon" }}
+          key: linux-x86_64-0.14.1-{{ checksum "build.zig.zon" }}-v1
       - run:
           name: Build
           command: |
@@ -83,7 +89,7 @@ jobs:
             ./scripts/proxy_workaround.sh workspace/zig/zig
             workspace/zig/zig build -Denable-tsan=true -p workspace/zig-out -Dcpu=x86_64_v3 --summary all
       - save_cache:
-          key: linux-x86_64-0.14.1-{{ checksum "build.zig.zon" }}
+          key: linux-x86_64-0.14.1-{{ checksum "build.zig.zon" }}-v1
           paths:
             - .zig-cache
             - ~/.cache/zig
@@ -99,15 +105,20 @@ jobs:
       - attach_workspace:
           at: workspace
       - restore_cache:
-          key: linux-x86_64-0.14.1-{{ checksum "build.zig.zon" }}-release
+          key: linux-x86_64-0.14.1-{{ checksum "build.zig.zon" }}-v1-release
       - run:
           name: Build
           command: |
             apt update && apt install wget -y
             ./scripts/proxy_workaround.sh workspace/zig/zig
             workspace/zig/zig build sig fuzz -Dno-run -Denable-tsan=false -Doptimize=ReleaseSafe -Dcpu=x86_64_v3 -p workspace/zig-out-release --summary all
+      - run:
+          name: Build Conformance
+          command: |
+            cd conformance
+            ../workspace/zig/zig build -Doptimize=ReleaseSafe -Dcpu=x86_64_v3 -p ../workspace/conformance-release --summary all
       - save_cache:
-          key: linux-x86_64-0.14.1-{{ checksum "build.zig.zon" }}-release
+          key: linux-x86_64-0.14.1-{{ checksum "build.zig.zon" }}-v1-release
           paths:
             - .zig-cache
             - ~/.cache/zig
@@ -116,6 +127,7 @@ jobs:
           paths:
             - "zig-out-release/bin/sig"
             - "zig-out-release/bin/fuzz"
+            - "conformance-release/lib/libsolfuzz_sig.so"
 
   build_and_test_macos:
     executor: macos-executor
@@ -132,7 +144,7 @@ jobs:
             # it seems that the feature detection is a bit broken in CircleCI's virtual machines
             # so we will manually say that it's an Apple M2.
             zig build -Denable-tsan=true -Dno-run -Dcpu=apple_m2 --summary all
-            zig build test -Denable-tsan=true -Dblockstore=hashmap -Dfilter="ledger" -Dno-bin -Dcpu=apple_m2 --summary all
+            zig build test -Denable-tsan=true -Dledger=hashmap -Dfilter="ledger" -Dno-bin -Dcpu=apple_m2 --summary all
             zig-out/bin/test
       - save_cache:
           key: macos-aarch64-0.14.1-{{ checksum "build.zig.zon" }}
@@ -147,10 +159,10 @@ jobs:
       - attach_workspace:
           at: workspace
       - restore_cache:
-          key: linux-x86_64-0.14.1-{{ checksum "build.zig.zon" }}
+          key: linux-x86_64-0.14.1-{{ checksum "build.zig.zon" }}-v1
       - run:
           name: Build and Test
-          command: workspace/zig/zig build test -Denable-tsan=true -Dblockstore=hashmap -Dcpu=x86_64_v3 -Dfilter="ledger" --summary all
+          command: workspace/zig/zig build test -Denable-tsan=true -Dledger=hashmap -Dcpu=x86_64_v3 -Dfilter="ledger" --summary all
 
   test_linux:
     executor: linux-executor
@@ -161,7 +173,7 @@ jobs:
       # Restore the cache in order to have access to the files which the DWARF info
       # is referencing when dumping stack traces.
       - restore_cache:
-          key: linux-x86_64-0.14.1-{{ checksum "build.zig.zon" }}
+          key: linux-x86_64-0.14.1-{{ checksum "build.zig.zon" }}-v1
       - run:
           name: Test
           # Disable network-accessing tests for this job, which behave badly on circleci
@@ -174,10 +186,13 @@ jobs:
       - attach_workspace:
           at: workspace
       - restore_cache:
-          key: linux-x86_64-0.14.1-{{ checksum "build.zig.zon" }}
+          key: linux-x86_64-0.14.1-{{ checksum "build.zig.zon" }}-v1
       - run:
           name: Build
-          command: workspace/zig/zig build test -Dcpu=x86_64_v3 -Denable-tsan=false -Dno-run -Dno-network-tests --summary all
+          # Build with musl instead of glibc so it's statically linked, in order
+          # to run inside of the docker container which could contain a different
+          # GLIBC version.
+          command: workspace/zig/zig build test -Dtarget=x86_64-linux-gnu.2.36 -Dcpu=x86_64_v3 -Denable-tsan=false -Dno-run -Dno-network-tests --summary all
       - run:
           name: Test and Collect
           command: |
@@ -215,7 +230,7 @@ jobs:
       - attach_workspace:
           at: workspace
       - run:
-          name: Run Gossip Service Fuzzer
+          name: Run Gossip Table Fuzzer
           command: workspace/zig-out-release/bin/fuzz gossip_table 19 100000
 
   allocators_fuzz:
@@ -225,7 +240,7 @@ jobs:
       - attach_workspace:
           at: workspace
       - run:
-          name: Run Gossip Service Fuzzer
+          name: Run Allocators Fuzzer
           command: workspace/zig-out-release/bin/fuzz allocators 19 10000
 
   ledger_fuzz:
@@ -235,8 +250,73 @@ jobs:
       - attach_workspace:
           at: workspace
       - run:
-          name: Run Gossip Service Fuzzer
+          name: Run Ledger Fuzzer
           command: workspace/zig-out-release/bin/fuzz ledger 19 10000
+
+  solana_conformance:
+    executor: linux-executor
+    # We need a pretty high parallelism since the vm_interp harness has a *lot* of fixtures. Perhaps
+    # we can raise it even higher if the transaction harness takes too long?
+    parallelism: 6
+    steps:
+      - checkout
+      - attach_workspace:
+          at: workspace
+      - restore_cache:
+          key: linux-x86_64-0.14.1-{{ checksum "build.zig.zon" }}-v1-release
+      - run:
+          name: Install SigFuzz
+          command: |
+            cd conformance
+            mkdir zig-out/lib -p
+            mv ../workspace/conformance-release/lib/libsolfuzz_sig.so zig-out/lib
+      - run:
+          name: Download Artifacts
+          command: ./conformance/scripts/download_artifacts.sh
+      - run:
+          name: Setup solana-conformance
+          command: |
+            git clone https://github.com/firedancer-io/solana-conformance --depth 1
+            cd solana-conformance/
+            git fetch origin 57c0dfc0bd68d9affd7c552e487063f89c79d0c5
+            git checkout 57c0dfc0bd68d9affd7c552e487063f89c79d0c5
+            sudo add-apt-repository ppa:deadsnakes/ppa -y
+            sudo apt install -y python3.11 python3.11-dev python3.11-venv rename
+
+            python3.11 -m venv test_suite_env
+            source test_suite_env/bin/activate
+
+            pip install -e ".[dev]"
+      - restore_cache:
+          key: test-vectors-9caee88da199a61c31b7eb187f6ac8cd2210399c-v2
+      - run:
+          name: Checkout Test Vectors
+          # TODO: instead of using the specific test-vectors commit, we want to track master instead.
+          # we're missing a few updates to the sig-fuzz harness for them to work properly.
+          command: |
+            if [ ! -d "test-vectors" ]; then
+              git clone https://github.com/firedancer-io/test-vectors --depth 1
+              cd test-vectors
+              git fetch origin 9caee88da199a61c31b7eb187f6ac8cd2210399c
+              git checkout 9caee88da199a61c31b7eb187f6ac8cd2210399c
+
+              # We need each fixture file to have a unique name so that we can put them into the test-inputs directory
+              # in a "flat" manner. The problem is that there are just too many files and it exceeds ARG_MAX for a single
+              # "rename" invocation. So we need to go the round-about method of first finding the files then using "xargs"
+              # to chunk it MAX-ARGS. Testing shows that just using the maximum number from xargs is around twice as fast
+              # as specifying an arg limit manually.
+              find vm_interp/fixtures/v0 -type f -name '*.fix' -print0 | xargs -0 rename "s/\.fix\$/-v0.fix/"
+              find vm_interp/fixtures/v1 -type f -name '*.fix' -print0 | xargs -0 rename "s/\.fix\$/-v1.fix/"
+              find vm_interp/fixtures/v2 -type f -name '*.fix' -print0 | xargs -0 rename "s/\.fix\$/-v2.fix/"
+              find vm_interp/fixtures/v3 -type f -name '*.fix' -print0 | xargs -0 rename "s/\.fix\$/-v3.fix/"
+            fi
+      - save_cache:
+          key: test-vectors-9caee88da199a61c31b7eb187f6ac8cd2210399c-v2
+          paths:
+            - test-vectors/
+      - run:
+          name: Run Fixtures
+          command: ./conformance/scripts/fixtures.sh
 
 workflows:
   check_linux:
@@ -277,6 +357,9 @@ workflows:
           requires:
             - build_linux_release
       - ledger_fuzz:
+          requires:
+            - build_linux_release
+      - solana_conformance:
           requires:
             - build_linux_release
 

@@ -6,6 +6,7 @@ const Epoch = sig.core.Epoch;
 const Rent = sig.runtime.sysvar.Rent;
 const AccountSharedData = sig.runtime.AccountSharedData;
 const EpochSchedule = sig.core.EpochSchedule;
+const TransactionError = sig.ledger.transaction_status.TransactionError;
 
 pub const RENT_EXEMPT_RENT_EPOCH: Epoch = std.math.maxInt(Epoch);
 
@@ -36,12 +37,20 @@ pub const RentCollector = struct {
     slots_per_year: f64,
     rent: Rent,
 
+    pub const DEFAULT = RentCollector{
+        .epoch = 0,
+        .epoch_schedule = .DEFAULT,
+        .slots_per_year = sig.core.GenesisConfig.default(failing_allocator).slotsPerYear(),
+        .rent = .DEFAULT,
+    };
+    const failing_allocator = sig.utils.allocators.failing.allocator(.{});
+
     pub fn initRandom(random: std.Random) RentCollector {
         return .{
             .epoch = random.int(Epoch),
-            .epoch_schedule = EpochSchedule.initRandom(random),
+            .epoch_schedule = .initRandom(random),
             .slots_per_year = random.float(f64),
-            .rent = Rent.initRandom(random),
+            .rent = .initRandom(random),
         };
     }
 
@@ -108,7 +117,7 @@ pub const RentCollector = struct {
     }
 
     pub fn shouldCollectRent(address: *const Pubkey, executable: bool) bool {
-        return !(executable or address.equals(&sig.runtime.ids.Incinerator));
+        return !(executable or address.equals(&sig.runtime.ids.INCINERATOR));
     }
 
     pub fn getRentDue(
@@ -118,6 +127,8 @@ pub const RentCollector = struct {
         account_rent_epoch: Epoch,
     ) RentDue {
         if (self.rent.isExempt(lamports, data_len)) return .Exempt;
+
+        if (account_rent_epoch > self.epoch) return .{ .Paying = 0 };
 
         var slots_elapsed: u64 = 0;
         for (account_rent_epoch..self.epoch + 1) |epoch| {
@@ -174,9 +185,11 @@ pub const RentCollector = struct {
         pre: RentState,
         post: RentState,
         address: *const Pubkey,
-    ) error{InsufficientFundsForRent}!void {
-        if (sig.runtime.ids.Incinerator.equals(address)) return;
-        if (!transitionAllowed(pre, post)) return error.InsufficientFundsForRent;
+        index: u8,
+    ) ?TransactionError {
+        if (sig.runtime.ids.INCINERATOR.equals(address)) return null;
+        if (transitionAllowed(pre, post)) return null;
+        return .{ .InsufficientFundsForRent = .{ .account_index = index } };
     }
 };
 
@@ -227,7 +240,7 @@ test "calculate rent result" {
     account.executable = false;
     try std.testing.expectEqual(
         .Exempt,
-        collector.calculateRentResult(&sig.runtime.ids.Incinerator, account),
+        collector.calculateRentResult(&sig.runtime.ids.INCINERATOR, account),
     );
     {
         var account_clone = account;
@@ -236,7 +249,7 @@ test "calculate rent result" {
 
         try std.testing.expectEqual(
             CollectedInfo.NoneCollected,
-            collector.collectFromExistingAccount(&sig.runtime.ids.Incinerator, &account_clone),
+            collector.collectFromExistingAccount(&sig.runtime.ids.INCINERATOR, &account_clone),
         );
         try std.testing.expectEqualDeep(account_expected, account_clone);
     }

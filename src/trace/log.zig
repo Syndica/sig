@@ -13,7 +13,7 @@ const RecycleFBA = sig.utils.allocators.RecycleFBA;
 const Level = trace.level.Level;
 const NewEntry = trace.entry.NewEntry;
 
-pub fn ScopedLogger(comptime scope: ?[]const u8) type {
+pub fn Logger(comptime scope: []const u8) type {
     return union(enum) {
         channel_print: *ChannelPrintLogger,
         direct_print: DirectPrintLogger,
@@ -25,11 +25,7 @@ pub fn ScopedLogger(comptime scope: ?[]const u8) type {
         pub const TEST_DEFAULT_LEVEL: Level = .warn;
         pub const FOR_TESTS: Self = .{ .direct_print = .{ .max_level = TEST_DEFAULT_LEVEL } };
 
-        pub fn unscoped(self: Self) Logger {
-            return self.withScope(null);
-        }
-
-        pub fn withScope(self: Self, comptime new_scope: ?[]const u8) ScopedLogger(new_scope) {
+        pub fn withScope(self: Self, comptime new_scope: []const u8) Logger(new_scope) {
             return switch (self) {
                 .channel_print => |logger| .{ .channel_print = logger },
                 .direct_print => |logger| .{ .direct_print = logger },
@@ -37,7 +33,7 @@ pub fn ScopedLogger(comptime scope: ?[]const u8) type {
             };
         }
 
-        pub fn from(logger: anytype) ScopedLogger(scope) {
+        pub fn from(logger: anytype) Logger(scope) {
             return logger.withScope(scope);
         }
 
@@ -108,9 +104,7 @@ pub fn ScopedLogger(comptime scope: ?[]const u8) type {
     };
 }
 
-pub const Logger = ScopedLogger(null);
-
-/// An instance of `ScopedLogger` that logs via the channel.
+/// An instance of `Logger` that logs via the channel.
 pub const ChannelPrintLogger = struct {
     max_level: Level,
     exit: std.atomic.Value(bool),
@@ -175,11 +169,7 @@ pub const ChannelPrintLogger = struct {
         self.allocator.destroy(self);
     }
 
-    pub fn logger(self: *Self) Logger {
-        return .{ .channel_print = self };
-    }
-
-    pub fn scopedLogger(self: *Self, comptime new_scope: anytype) ScopedLogger(new_scope) {
+    pub fn logger(self: *Self, comptime scope: []const u8) Logger(scope) {
         return .{ .channel_print = self };
     }
 
@@ -212,7 +202,7 @@ pub const ChannelPrintLogger = struct {
     ) void {
         if (@intFromEnum(self.max_level) < @intFromEnum(level)) return;
         const size = logfmt.countLog(scope, level, fields, fmt, args);
-        const msg_buf = self.allocBuf(size) catch |err| {
+        const msg_buf = self.log_allocator.alloc(u8, size) catch |err| {
             std.debug.print("allocBuff failed with err: {any}", .{err});
             return;
         };
@@ -231,20 +221,6 @@ pub const ChannelPrintLogger = struct {
             return;
         };
     }
-
-    // Utility function for allocating memory from RecycleFBA for part of the log message.
-    fn allocBuf(self: *const Self, size: u64) ![]u8 {
-        for (0..100) |_| {
-            return self.log_allocator.alloc(u8, size) catch {
-                std.Thread.sleep(std.time.ns_per_ms);
-                if (self.exit.load(.monotonic)) {
-                    return error.MemoryBlockedWithExitSignaled;
-                }
-                continue;
-            };
-        }
-        return error.OutOfMemory;
-    }
 };
 
 /// Directly prints instead of running in a separate thread. This handles issues during tests
@@ -259,11 +235,7 @@ pub const DirectPrintLogger = struct {
         return .{ .max_level = max_level };
     }
 
-    pub fn logger(self: Self) Logger {
-        return .{ .direct_print = self };
-    }
-
-    pub fn scopedLogger(self: Self, comptime new_scope: anytype) ScopedLogger(new_scope) {
+    pub fn logger(self: Self, comptime scope: []const u8) Logger(scope) {
         return .{ .direct_print = self };
     }
 
@@ -296,7 +268,7 @@ test "direct" {
     }, null);
     defer std_logger.deinit();
 
-    const logger = std_logger.logger();
+    const logger = std_logger.logger("test");
     logger.log(.warn, "warn");
     logger.log(.info, "info");
     logger.log(.debug, "debug");
@@ -309,9 +281,9 @@ test "direct" {
 test "trace_ngswitch" {
     const StuffChild = struct {
         const StuffChild = @This();
-        logger: ScopedLogger(@typeName(StuffChild)),
+        logger: Logger(@typeName(StuffChild)),
 
-        pub fn init(logger: *const Logger) StuffChild {
+        pub fn init(logger: anytype) StuffChild {
             return .{ .logger = logger.withScope(@typeName(StuffChild)) };
         }
 
@@ -322,15 +294,15 @@ test "trace_ngswitch" {
 
     const Stuff = struct {
         const Stuff = @This();
-        logger: ScopedLogger(@typeName(Stuff)),
+        logger: Logger(@typeName(Stuff)),
 
-        pub fn init(logger: Logger) Stuff {
+        pub fn init(logger: anytype) Stuff {
             return .{ .logger = logger.withScope(@typeName(Stuff)) };
         }
 
         pub fn doStuff(self: *Stuff) void {
             self.logger.info().log("doing stuff parent");
-            const logger = self.logger.unscoped();
+            const logger = self.logger.withScope("unscoped");
             var child = StuffChild.init(&logger);
             child.doStuffDetails();
         }
@@ -345,7 +317,7 @@ test "trace_ngswitch" {
     }, null);
     defer std_logger.deinit();
 
-    const logger = std_logger.logger();
+    const logger = std_logger.logger("test");
 
     // Below logs out the following:
     // trace_ng.log.test.trace_ng: scope switch.Stuff] time=2024-09-11T06:49:02Z level=info doing stuff parent
@@ -368,7 +340,7 @@ test "reclaim" {
 
     defer std_logger.deinit();
 
-    const logger = std_logger.logger();
+    const logger = std_logger.logger("test");
 
     // Ensure memory can be continously requested from recycle_fba without getting stuck.
     for (0..25) |_| {
@@ -390,7 +362,7 @@ test "level" {
 
     defer std_logger.deinit();
 
-    const logger = std_logger.logger();
+    const logger = std_logger.logger("test");
 
     //None should log as they are higher than set max_log.
     logger
@@ -425,7 +397,7 @@ test "test_logger" {
 
     var test_logger = DirectPrintLogger.init(allocator, Level.warn);
 
-    const logger = test_logger.logger();
+    const logger = test_logger.logger("test");
 
     logger.log(.info, "Logging with log");
 }
@@ -440,10 +412,14 @@ test "channel logger" {
         .max_buffer = 512,
     }, stream.writer());
 
-    logger.logger().log(.info, "hello world");
+    logger.logger("test").log(.info, "hello world");
     std.Thread.sleep(10 * std.time.ns_per_ms);
     logger.deinit();
 
     const actual = stream.getWritten();
-    try std.testing.expectEqualSlices(u8, "level=info message=\"hello world\"\n", actual[30..]);
+    try std.testing.expectEqualSlices(
+        u8,
+        "level=info scope=test message=\"hello world\"\n",
+        actual[30..],
+    );
 }

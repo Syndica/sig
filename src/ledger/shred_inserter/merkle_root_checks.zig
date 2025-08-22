@@ -9,7 +9,7 @@ const Allocator = std.mem.Allocator;
 
 const ErasureSetId = sig.ledger.shred.ErasureSetId;
 const Hash = sig.core.Hash;
-const ScopedLogger = sig.trace.ScopedLogger;
+const Logger = sig.trace.Logger;
 const Slot = sig.core.Slot;
 
 const CodeShred = ledger.shred.CodeShred;
@@ -27,7 +27,7 @@ const newlinesToSpaces = sig.utils.fmt.newlinesToSpaces;
 
 pub const MerkleRootValidator = struct {
     allocator: Allocator,
-    logger: ScopedLogger(@typeName(Self)),
+    logger: Logger(@typeName(Self)),
     shreds: ShredWorkingStore,
     duplicate_shreds: DuplicateShredsWorkingStore,
 
@@ -91,8 +91,8 @@ pub const MerkleRootValidator = struct {
             } else {
                 self.logger.err().logf(&newlinesToSpaces(
                     \\Shred {any} indiciated by merkle root meta {any} is
-                    \\missing from blockstore. This should only happen in extreme cases where
-                    \\blockstore cleanup has caught up to the root. Skipping the merkle root
+                    \\missing from ledger. This should only happen in extreme cases where
+                    \\ledger cleanup has caught up to the root. Skipping the merkle root
                     \\consistency check
                 ), .{ shred_id, merkle_root_meta });
                 return true;
@@ -175,7 +175,7 @@ pub const MerkleRootValidator = struct {
 
         // If a shred from the previous fec set has already been inserted, check the chaining.
         // Since we cannot compute the previous fec set index, we check the in memory map, otherwise
-        // check the previous key from blockstore to see if it is consecutive with our current set.
+        // check the previous key from ledger to see if it is consecutive with our current set.
         _, const prev_erasure_meta = if (try erasure_metas.previousSet(erasure_set_id)) |pes|
             pes
         else
@@ -205,8 +205,8 @@ pub const MerkleRootValidator = struct {
             other_shred
         else {
             self.logger.warn().logf(
-                "Shred {any} is missing from blockstore. " ++
-                    "This can happen if blockstore cleanup has caught up to the root. " ++
+                "Shred {any} is missing from ledger. " ++
+                    "This can happen if ledger cleanup has caught up to the root. " ++
                     "Skipping the {} chained merkle root consistency check.",
                 .{ other_shred_id, direction },
             );

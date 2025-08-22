@@ -235,9 +235,7 @@ pub fn jsonParseValuesAsParamsArray(
 }
 
 test "Request simple" {
-    const test_pubkey = sig.core.Pubkey.parseBase58String(
-        "vinesvinesvinesvinesvinesvinesvinesvinesvin",
-    ) catch unreachable;
+    const test_pubkey: sig.core.Pubkey = .parse("vinesvinesvinesvinesvinesvinesvinesvinesvin");
     try testParseCall(
         .{},
         \\{
@@ -260,9 +258,7 @@ test "Request simple" {
 }
 
 test "Request encoding" {
-    const test_pubkey = sig.core.Pubkey.parseBase58String(
-        "vinesvinesvinesvinesvinesvinesvinesvinesvin",
-    ) catch unreachable;
+    const test_pubkey: sig.core.Pubkey = .parse("vinesvinesvinesvinesvinesvinesvinesvinesvin");
     try testParseCall(
         .{},
         \\{

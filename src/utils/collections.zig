@@ -510,13 +510,14 @@ pub fn SortedMapCustom(
         }
 
         fn bincodeDeserialize(
-            allocator: std.mem.Allocator,
+            limit_allocator: *sig.bincode.LimitAllocator,
             reader: anytype,
             params: sig.bincode.Params,
         ) !SortedMapSelf {
-            const unmanaged = try sig.bincode.read(allocator, Unmanaged, reader, params);
+            const unmanaged =
+                try sig.bincode.readWithLimit(limit_allocator, Unmanaged, reader, params);
             return .{
-                .allocator = allocator,
+                .allocator = limit_allocator.backing_allocator, // patch persistent.
                 .unmanaged = unmanaged,
             };
         }
@@ -560,6 +561,8 @@ pub fn SortedMapUnmanagedCustom(
         const SortedMapSelf = @This();
 
         const Inner = std.ArrayHashMapUnmanaged(K, V, config.Context, config.store_hash);
+
+        pub const Entry = Inner.Entry;
 
         pub const empty: SortedMapSelf = .{
             .inner = .empty,
@@ -719,6 +722,11 @@ pub fn SortedMapUnmanagedCustom(
         pub fn mutableKeys(self: *SortedMapSelf) []K {
             self.sort();
             return self.inner.keys();
+        }
+
+        pub fn values(self: *SortedMapSelf) []V {
+            self.sort();
+            return self.inner.values();
         }
 
         pub fn items(self: *SortedMapSelf) struct { []const K, []const V } {

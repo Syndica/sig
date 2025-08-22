@@ -77,15 +77,16 @@ pub const EpochContextManager = struct {
 
 pub const RpcEpochContextService = struct {
     allocator: std.mem.Allocator,
-    logger: sig.trace.ScopedLogger(@typeName(Self)),
+    logger: Logger,
     rpc_client: rpc.Client,
     state: *EpochContextManager,
 
     const Self = @This();
+    const Logger = sig.trace.Logger(@typeName(Self));
 
     pub fn init(
         allocator: Allocator,
-        logger: sig.trace.Logger,
+        logger: Logger,
         state: *EpochContextManager,
         rpc_client: rpc.Client,
     ) Self {

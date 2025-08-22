@@ -6,12 +6,12 @@ const ledger = @import("lib.zig");
 
 const Allocator = std.mem.Allocator;
 
-const BlockstoreDB = ledger.BlockstoreDB;
+const LedgerDB = ledger.LedgerDB;
 const Entry = sig.core.Entry;
 const Shred = ledger.shred.Shred;
 const Slot = sig.core.Slot;
 const DirectPrintLogger = sig.trace.DirectPrintLogger;
-const Logger = sig.trace.Logger;
+const Logger = sig.trace.Logger("ledger.tests");
 const SlotMeta = ledger.meta.SlotMeta;
 const VersionedTransactionWithStatusMeta = ledger.reader.VersionedTransactionWithStatusMeta;
 
@@ -52,11 +52,14 @@ test "put/get data consistency for merkle root" {
 
 // Analogous to [test_get_rooted_block](https://github.com/anza-xyz/agave/blob/a72f981370c3f566fc1becf024f3178da041547a/ledger/src/blockstore.rs#L8271)
 test "insert shreds and transaction statuses then get blocks" {
-    var test_logger = DirectPrintLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
+    var test_logger = DirectPrintLogger.init(
+        std.testing.allocator,
+        Logger.TEST_DEFAULT_LEVEL,
+    );
 
-    const logger = test_logger.logger();
+    const logger = test_logger.logger("ledger.test");
 
-    var state = try TestState.init(std.testing.allocator, @src(), logger);
+    var state = try TestState.init(std.testing.allocator, @src(), .from(logger));
     const result = try insertDataForBlockTest(state);
     defer result.deinit();
 
@@ -272,19 +275,19 @@ pub fn loadEntriesFromFile(allocator: Allocator, path: []const u8) ![]const Entr
 }
 
 pub const TestState = struct {
-    db: BlockstoreDB,
+    db: LedgerDB,
     registry: sig.prometheus.Registry(.{}),
     lowest_cleanup_slot: sig.sync.RwMux(Slot),
     max_root: std.atomic.Value(Slot),
     allocator: std.mem.Allocator,
-    logger: sig.trace.Logger,
+    logger: Logger,
 
     const Self = @This();
 
     pub fn init(
         allocator: std.mem.Allocator,
         comptime test_src: std.builtin.SourceLocation,
-        logger: sig.trace.Logger,
+        logger: Logger,
     ) !*Self {
         const self = try allocator.create(Self);
         self.* = .{
@@ -299,13 +302,18 @@ pub const TestState = struct {
     }
 
     pub fn shredInserter(self: *Self) !ledger.ShredInserter {
-        return ledger.ShredInserter.init(self.allocator, self.logger, &self.registry, self.db);
+        return ledger.ShredInserter.init(
+            self.allocator,
+            .from(self.logger),
+            &self.registry,
+            self.db,
+        );
     }
 
     pub fn writer(self: *Self) !ledger.LedgerResultWriter {
         return try ledger.LedgerResultWriter.init(
             self.allocator,
-            self.logger,
+            .from(self.logger),
             self.db,
             &self.registry,
             &self.lowest_cleanup_slot,
@@ -313,10 +321,10 @@ pub const TestState = struct {
         );
     }
 
-    pub fn reader(self: *Self) !ledger.BlockstoreReader {
-        return try ledger.BlockstoreReader.init(
+    pub fn reader(self: *Self) !ledger.LedgerReader {
+        return try ledger.LedgerReader.init(
             self.allocator,
-            self.logger,
+            .from(self.logger),
             self.db,
             &self.registry,
             &self.lowest_cleanup_slot,
@@ -334,23 +342,23 @@ pub const TestState = struct {
 pub const TestDB = struct {
     const dir = sig.TEST_STATE_DIR ++ "/blockstore";
 
-    pub fn init(comptime test_src: std.builtin.SourceLocation) !BlockstoreDB {
+    pub fn init(comptime test_src: std.builtin.SourceLocation) !LedgerDB {
         return try initCustom(std.testing.allocator, test_src);
     }
 
-    pub fn reuseBlockstore(comptime test_src: std.builtin.SourceLocation) !BlockstoreDB {
+    pub fn reuseLedger(comptime test_src: std.builtin.SourceLocation) !LedgerDB {
         const path = comptimePrint("{s}/{s}/{s}", .{ dir, test_src.file, test_src.fn_name });
         try std.fs.cwd().makePath(path);
-        return try BlockstoreDB.open(std.testing.allocator, .noop, path);
+        return try LedgerDB.open(std.testing.allocator, .noop, path);
     }
 
     pub fn initCustom(
         allocator: Allocator,
         comptime test_src: std.builtin.SourceLocation,
-    ) !BlockstoreDB {
+    ) !LedgerDB {
         const path = comptimePrint("{s}/{s}/{s}", .{ dir, test_src.file, test_src.fn_name });
         try sig.ledger.tests.freshDir(path);
-        return try BlockstoreDB.open(allocator, .noop, path);
+        return try LedgerDB.open(allocator, .noop, path);
     }
 };
 

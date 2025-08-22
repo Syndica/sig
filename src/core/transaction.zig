@@ -8,16 +8,16 @@ const Blake3 = std.crypto.hash.Blake3;
 const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 const Signature = sig.core.Signature;
+const ReservedAccounts = sig.core.ReservedAccounts;
+
+const LookupTableAccounts = sig.replay.resolve_lookup.LookupTableAccounts;
 
 const shortVecConfig = sig.bincode.shortvec.sliceConfig;
 
 pub const Transaction = struct {
-    /// Signatures
     signatures: []const Signature,
-
     /// The version, either legacy or v0.
     version: Version,
-
     /// The signable data of a transaction
     msg: Message,
 
@@ -160,16 +160,18 @@ pub const Transaction = struct {
         try data.msg.serialize(writer, data.version);
     }
 
-    pub fn deserialize(allocator: std.mem.Allocator, reader: anytype, _: sig.bincode.Params) !Transaction {
+    pub fn deserialize(limit_allocator: *sig.bincode.LimitAllocator, reader: anytype, _: sig.bincode.Params) !Transaction {
+        const allocator = limit_allocator.allocator();
         const signatures = try allocator.alloc(Signature, try leb.readULEB128(u16, reader));
         errdefer allocator.free(signatures);
+
         for (signatures) |*sgn| sgn.* = .{ .data = try reader.readBytesNoEof(Signature.SIZE) };
         var peekable = sig.utils.io.peekableReader(reader);
         const version = try Version.deserialize(&peekable);
         return .{
             .signatures = signatures,
             .version = version,
-            .msg = try Message.deserialize(allocator, peekable.reader(), version),
+            .msg = try Message.deserialize(limit_allocator, peekable.reader(), version),
         };
     }
 
@@ -281,6 +283,8 @@ pub const Message = struct {
     readonly_unsigned_count: u8,
 
     /// Addresses of accounts loaded by this transaction.
+    ///
+    /// [ writable signers | readonly signers | writable non-signers | readonly non-signers ]
     account_keys: []const Pubkey,
 
     /// The blockhash of a recent block.
@@ -391,14 +395,49 @@ pub const Message = struct {
         return index < self.signature_count;
     }
 
-    pub fn isWritable(self: Message, index: usize) bool {
-        const is_readonly_signed =
-            index < self.signature_count and
-            index >= self.signature_count - self.readonly_signed_count;
+    /// https://github.com/anza-xyz/solana-sdk/blob/5ff67c1a53c10e16689e377f98a92ba3afd6bb7c/message/src/versions/v0/loaded.rs#L118-L150
+    pub fn isWritable(
+        self: Message,
+        index: usize,
+        lookups: LookupTableAccounts,
+        reserved_accounts: *const ReservedAccounts,
+    ) bool {
+        const pubkey = blk: {
+            if (index < self.account_keys.len) {
+                if (index >= self.signature_count) {
+                    // check if signed readable
+                    if (index >= self.account_keys.len - self.readonly_unsigned_count) return false;
+                } else {
+                    // check if unsigned readable
+                    if (index >= self.signature_count - self.readonly_signed_count) return false;
+                }
+                break :blk self.account_keys[index];
+            } else if (index < self.account_keys.len + lookups.writable.len) {
+                // lookups.writable
+                break :blk lookups.writable[index - self.account_keys.len];
+            } else {
+                // lookups.readable
+                return false;
+            }
+        };
 
-        const is_readonly_unsigned = index >= self.account_keys.len - self.readonly_unsigned_count;
+        const is_upgradeable_loader_present = blk: for ([_][]const Pubkey{
+            self.account_keys,
+            lookups.writable,
+            lookups.readonly,
+        }) |accounts| {
+            for (accounts) |account_key|
+                if (account_key.equals(&sig.runtime.program.bpf_loader.v3.ID))
+                    break :blk true;
+        } else false;
 
-        return !(is_readonly_signed or is_readonly_unsigned);
+        const is_key_called_as_program = for (self.instructions) |ixn| {
+            if (ixn.program_index == index) break true;
+        } else false;
+
+        const is_reserved = reserved_accounts.contains(pubkey);
+        const demote_program_id = is_key_called_as_program and !is_upgradeable_loader_present;
+        return !(is_reserved or demote_program_id);
     }
 
     /// Returns the serialized message as a bounded array.
@@ -437,7 +476,8 @@ pub const Message = struct {
         }
     }
 
-    pub fn deserialize(allocator: std.mem.Allocator, reader: anytype, version: Version) !Message {
+    pub fn deserialize(limit_allocator: *sig.bincode.LimitAllocator, reader: anytype, version: Version) !Message {
+        const allocator = limit_allocator.allocator();
         const signature_count = try reader.readByte();
         const readonly_signed_count = try reader.readByte();
         const readonly_unsigned_count = try reader.readByte();
@@ -450,12 +490,14 @@ pub const Message = struct {
 
         const instructions = try allocator.alloc(Instruction, try leb.readULEB128(u16, reader));
         errdefer sig.bincode.free(allocator, instructions);
-        for (instructions) |*instr| instr.* = try sig.bincode.read(allocator, Instruction, reader, .{});
+        for (instructions) |*instr|
+            instr.* = try sig.bincode.readWithLimit(limit_allocator, Instruction, reader, .{});
 
         const address_lookups_len = if (version == .legacy) 0 else try leb.readULEB128(u16, reader);
         const address_lookups = try allocator.alloc(AddressLookup, address_lookups_len);
         errdefer sig.bincode.free(allocator, address_lookups);
-        for (address_lookups) |*alt| alt.* = try sig.bincode.read(allocator, AddressLookup, reader, .{});
+        for (address_lookups) |*alt|
+            alt.* = try sig.bincode.readWithLimit(limit_allocator, AddressLookup, reader, .{});
 
         return .{
             .signature_count = signature_count,
@@ -950,11 +992,8 @@ test "parse v0" {
 }
 
 pub const transaction_legacy_example = struct {
-    var signatures = [_]Signature{
-        Signature.parseBase58String(
-            "Z2hT7E85gqWWVKEsZXxJ184u7rXdRnB6EKz2PHAUajx6jHrUZhN5WkE7tPw6PrUA3XzeZRjoE7xJDtQzshZm1Pk",
-        ) catch unreachable,
-    };
+    var signatures: [1]Signature =
+        .{.parse("Z2hT7E85gqWWVKEsZXxJ184u7rXdRnB6EKz2PHAUajx6jHrUZhN5WkE7tPw6PrUA3XzeZRjoE7xJDtQzshZm1Pk")};
 
     const as_struct = Transaction{
         .signatures = &signatures,
@@ -964,11 +1003,11 @@ pub const transaction_legacy_example = struct {
             .readonly_signed_count = 0,
             .readonly_unsigned_count = 1,
             .account_keys = &.{
-                Pubkey.parseBase58String("4zvwRjXUKGfvwnParsHAS3HuSVzV5cA4McphgmoCtajS") catch unreachable,
-                Pubkey.parseBase58String("4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi") catch unreachable,
-                Pubkey.parseBase58String("11111111111111111111111111111111") catch unreachable,
+                .parse("4zvwRjXUKGfvwnParsHAS3HuSVzV5cA4McphgmoCtajS"),
+                .parse("4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi"),
+                .parse("11111111111111111111111111111111"),
             },
-            .recent_blockhash = Hash.parseBase58String("8RBsoeyoRwajj86MZfZE6gMDJQVYGYcdSfx1zxqxNHbr") catch unreachable,
+            .recent_blockhash = .parse("8RBsoeyoRwajj86MZfZE6gMDJQVYGYcdSfx1zxqxNHbr"),
             .instructions = &.{.{
                 .program_index = 2,
                 .account_indexes = &.{ 0, 1 },
@@ -997,12 +1036,8 @@ pub const transaction_legacy_example = struct {
 
 pub const transaction_v0_example = struct {
     var signatures = [_]Signature{
-        Signature.parseBase58String(
-            "2cxn1LdtB7GcpeLEnHe5eA7LymTXKkqGF6UvmBM2EtttZEeqBREDaAD7LCagDFHyuc3xXxyDkMPiy3CpK5m6Uskw",
-        ) catch unreachable,
-        Signature.parseBase58String(
-            "4gr9L7K3bALKjPRiRSk4JDB3jYmNaauf6rewNV3XFubX5EHxBn98gqBGhbwmZAB9DJ2pv8GWE1sLoYqhhLbTZcLj",
-        ) catch unreachable,
+        .parse("2cxn1LdtB7GcpeLEnHe5eA7LymTXKkqGF6UvmBM2EtttZEeqBREDaAD7LCagDFHyuc3xXxyDkMPiy3CpK5m6Uskw"),
+        .parse("4gr9L7K3bALKjPRiRSk4JDB3jYmNaauf6rewNV3XFubX5EHxBn98gqBGhbwmZAB9DJ2pv8GWE1sLoYqhhLbTZcLj"),
     };
 
     pub const as_struct: Transaction = .{
@@ -1013,10 +1048,10 @@ pub const transaction_v0_example = struct {
             .readonly_signed_count = 12,
             .readonly_unsigned_count = 102,
             .account_keys = &.{
-                Pubkey.parseBase58String("GubTBrbgk9JwkwX1FkXvsrF1UC2AP7iTgg8SGtgH14QE") catch unreachable,
-                Pubkey.parseBase58String("5yCD7QeAk5uAduhLZGxePv21RLsVEktPqJG5pbmZx4J4") catch unreachable,
+                .parse("GubTBrbgk9JwkwX1FkXvsrF1UC2AP7iTgg8SGtgH14QE"),
+                .parse("5yCD7QeAk5uAduhLZGxePv21RLsVEktPqJG5pbmZx4J4"),
             },
-            .recent_blockhash = Hash.parseBase58String("4xzjBNLkRqhBVmZ7JKcX2UEP8wzYKYWpXk7CPXzgrEZW") catch unreachable,
+            .recent_blockhash = .parse("4xzjBNLkRqhBVmZ7JKcX2UEP8wzYKYWpXk7CPXzgrEZW"),
             .instructions = &.{.{
                 .program_index = 100,
                 .account_indexes = &.{ 1, 3 },
@@ -1026,7 +1061,7 @@ pub const transaction_v0_example = struct {
                 },
             }},
             .address_lookups = &.{.{
-                .table_address = Pubkey.parseBase58String("ZETAxsqBRek56DhiGXrn75yj2NHU3aYUnxvHXpkf3aD") catch unreachable,
+                .table_address = .parse("ZETAxsqBRek56DhiGXrn75yj2NHU3aYUnxvHXpkf3aD"),
                 .writable_indexes = &.{ 1, 3, 5, 7, 90 },
                 .readonly_indexes = &.{},
             }},
@@ -1059,7 +1094,7 @@ test "verify and hash transaction" {
     try transaction_legacy_example.as_struct.verify();
     const hash = try transaction_legacy_example.as_struct.verifyAndHashMessage();
     try std.testing.expectEqual(
-        try Hash.parseBase58String("FjoeKaxTd3J7xgt9vHMpuQb7j192weaEP3yMa1ntfQNo"),
+        Hash.parse("FjoeKaxTd3J7xgt9vHMpuQb7j192weaEP3yMa1ntfQNo"),
         hash,
     );
 

@@ -1,3 +1,5 @@
+const builtin = @import("builtin");
+const std = @import("std");
 const sig = @import("../../sig.zig");
 
 const Pubkey = sig.core.Pubkey;
@@ -26,8 +28,7 @@ pub const Clock = extern struct {
     /// [oracle]: https://docs.solanalabs.com/implemented-proposals/validator-timestamp-oracle
     unix_timestamp: i64,
 
-    pub const ID =
-        Pubkey.parseBase58String("SysvarC1ock11111111111111111111111111111111") catch unreachable;
+    pub const ID: Pubkey = .parse("SysvarC1ock11111111111111111111111111111111");
 
     pub const DEFAULT = Clock{
         .slot = 0,
@@ -36,4 +37,18 @@ pub const Clock = extern struct {
         .leader_schedule_epoch = 0,
         .unix_timestamp = 0,
     };
+
+    pub const STORAGE_SIZE: u64 = 40;
+
+    pub fn initRandom(random: std.Random) Clock {
+        // TODO: Uncomment once not required by bank init random
+        // if (!builtin.is_test) @compileError("only for testing");
+        return Clock{
+            .slot = random.int(Slot),
+            .epoch_start_timestamp = random.int(i64),
+            .epoch = random.int(Epoch),
+            .leader_schedule_epoch = random.int(Epoch),
+            .unix_timestamp = random.int(i64),
+        };
+    }
 };

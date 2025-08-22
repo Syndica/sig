@@ -4,7 +4,7 @@ const ledger = @import("../lib.zig");
 
 const Allocator = std.mem.Allocator;
 
-const Logger = sig.trace.Logger;
+pub const Logger = sig.trace.Logger("ledger.database");
 
 pub fn assertIsDatabase(comptime Impl: type) void {
     sig.utils.interface.assertSameInterface(Database(Impl), Impl, .subset);
@@ -17,7 +17,7 @@ pub fn assertIsDatabase(comptime Impl: type) void {
     );
 }
 
-/// Interface defining the blockstore's dependency on a database
+/// Interface defining the ledger's dependency on a database
 pub fn Database(comptime Impl: type) type {
     return struct {
         impl: Impl,
@@ -147,7 +147,7 @@ pub fn Database(comptime Impl: type) type {
         };
 
         pub fn iterator(
-            self: *Self,
+            self: Self,
             comptime cf: ColumnFamily,
             comptime direction: IteratorDirection,
             start: ?cf.Key,
@@ -313,7 +313,7 @@ pub fn testDatabase(comptime Impl: fn ([]const ColumnFamily) type) type {
 
     @setEvalBranchQuota(10_000);
     const impl_id = sig.core.Hash.generateSha256(@typeName(Impl(&.{}))).base58String();
-    const test_dir = sig.TEST_STATE_DIR ++ "blockstore/database/" ++ impl_id.buffer ++ "/";
+    const test_dir = sig.TEST_STATE_DIR ++ "ledger/database/" ++ impl_id.buffer ++ "/";
 
     const Value1 = struct { hello: u16 };
     const Value2 = struct { world: u16 };

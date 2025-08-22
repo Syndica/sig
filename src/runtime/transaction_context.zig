@@ -8,12 +8,12 @@ const Hash = sig.core.Hash;
 const Instruction = sig.core.instruction.Instruction;
 const InstructionError = sig.core.instruction.InstructionError;
 const Pubkey = sig.core.Pubkey;
-const EpochStakes = sig.core.stake.EpochStakes;
+const EpochStakes = sig.core.EpochStakes;
 
 const AccountSharedData = sig.runtime.AccountSharedData;
 const BorrowedAccount = sig.runtime.BorrowedAccount;
 const BorrowedAccountContext = sig.runtime.BorrowedAccountContext;
-const FeatureSet = sig.runtime.FeatureSet;
+const FeatureSet = sig.core.FeatureSet;
 const LogCollector = sig.runtime.LogCollector;
 const SysvarCache = sig.runtime.SysvarCache;
 const InstructionContext = sig.runtime.InstructionContext;
@@ -34,6 +34,9 @@ pub const MAX_INSTRUCTION_STACK_DEPTH = 5;
 pub const TransactionContext = struct {
     allocator: std.mem.Allocator,
 
+    /// The slot number this transaction is being executed in. Used for feature gate activations.
+    slot: sig.core.Slot,
+
     // These data structures exist beyond the lifetime of the TransactionContext.
     // These exist per-epoch.
     feature_set: *const FeatureSet,
@@ -48,7 +51,7 @@ pub const TransactionContext = struct {
     next_vm_environment: ?*const vm.Environment,
 
     // Program map is used to laod and invoke valid BPF programs.
-    program_map: *const ProgramMap,
+    program_map: *ProgramMap,
 
     /// Transaction accounts
     /// TransactionContextAccount contains a non-owning reference to an AccountSharedData
@@ -62,6 +65,10 @@ pub const TransactionContext = struct {
 
     /// Used by syscall.allocFree to implement sbrk bump allocation
     bpf_alloc_pos: u64 = 0,
+
+    /// Instruction datas used when executing precompiles in the SVM
+    /// Only set if a precompile is present and the move precompiles to svm feature is enabled
+    instruction_datas: ?[]const []const u8 = null,
 
     instruction_stack: InstructionStack = .{},
     instruction_trace: InstructionTrace = .{},
@@ -97,7 +104,7 @@ pub const TransactionContext = struct {
         depth: u8,
     }, MAX_INSTRUCTION_TRACE_LENGTH);
 
-    pub fn deinit(self: *TransactionContext) void {
+    pub fn deinit(self: TransactionContext) void {
         self.allocator.free(self.accounts);
         if (self.log_collector) |*lc| lc.deinit(self.allocator);
     }

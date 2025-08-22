@@ -1,27 +1,35 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 const replay = @import("lib.zig");
+const tracy = @import("tracy");
 
 const core = sig.core;
 
 const Allocator = std.mem.Allocator;
+const Atomic = std.atomic.Value;
 
 const HomogeneousThreadPool = sig.utils.thread.HomogeneousThreadPool;
 const ThreadPool = sig.sync.ThreadPool;
 
+const Ancestors = core.Ancestors;
 const Entry = core.Entry;
 const Hash = core.Hash;
+const ReservedAccounts = core.ReservedAccounts;
 const Slot = core.Slot;
 const TransactionError = sig.ledger.transaction_status.TransactionError;
 
-const AccountsDB = sig.accounts_db.AccountsDB;
+const AccountStore = sig.accounts_db.AccountStore;
 
+const Committer = replay.commit.Committer;
+const SvmGateway = replay.svm_gateway.SvmGateway;
 const TransactionScheduler = replay.scheduler.TransactionScheduler;
+
+const verifyPoh = core.entry.verifyPoh;
 const resolveBatch = replay.resolve_lookup.resolveBatch;
 
 const assert = std.debug.assert;
 
-const ScopedLogger = sig.trace.ScopedLogger("replay-confirm-slot");
+const Logger = sig.trace.Logger("replay-confirm-slot");
 
 /// Asynchronously validate and execute entries from a slot.
 ///
@@ -35,14 +43,33 @@ const ScopedLogger = sig.trace.ScopedLogger("replay-confirm-slot");
 /// - fd: runtime_process_txns_in_microblock_stream
 pub fn confirmSlot(
     allocator: Allocator,
-    logger: ScopedLogger,
-    accounts_db: *AccountsDB,
+    logger: Logger,
+    account_store: AccountStore,
     thread_pool: *ThreadPool,
+    /// takes ownership
     entries: []const Entry,
     last_entry: Hash,
+    svm_params: SvmGateway.Params,
+    committer: Committer,
     verify_ticks_params: VerifyTicksParams,
+    ancestors: *const Ancestors,
+    reserved_accounts: *const ReservedAccounts,
 ) !*ConfirmSlotFuture {
-    const future = try ConfirmSlotFuture.create(allocator, thread_pool, entries);
+    var zone = tracy.Zone.init(@src(), .{ .name = "confirmSlot" });
+    zone.value(svm_params.slot);
+    defer zone.deinit();
+    errdefer zone.color(0xFF0000);
+
+    logger.info().log("confirming slot");
+
+    const future = fut: {
+        errdefer {
+            for (entries) |entry| entry.deinit(allocator);
+            allocator.free(entries);
+        }
+        break :fut try ConfirmSlotFuture
+            .create(allocator, logger, thread_pool, committer, entries, svm_params);
+    };
     errdefer future.destroy(allocator);
 
     if (verifyTicks(logger, entries, verify_ticks_params)) |block_error| {
@@ -50,8 +77,15 @@ pub fn confirmSlot(
         return future;
     }
 
-    try startPohVerify(allocator, &future.poh_verifier, last_entry, entries);
-    try scheduleTransactionBatches(allocator, &future.scheduler, accounts_db, entries);
+    try startPohVerify(allocator, logger, &future.poh_verifier, last_entry, entries, &future.exit);
+    try scheduleTransactionBatches(
+        allocator,
+        &future.scheduler,
+        account_store,
+        entries,
+        ancestors,
+        reserved_accounts,
+    );
 
     _ = try future.poll(); // starts batch execution. poll result is cached inside future
 
@@ -61,9 +95,11 @@ pub fn confirmSlot(
 /// schedule poh verification asynchronously
 fn startPohVerify(
     allocator: Allocator,
+    logger: Logger,
     pool: *HomogeneousThreadPool(PohTask),
     initial_hash: Hash,
     entries: []const Entry,
+    exit: *Atomic(bool),
 ) Allocator.Error!void {
     if (entries.len == 0) return;
     const num_tasks = if (pool.max_concurrent_tasks) |max| @min(max, entries.len) else entries.len;
@@ -73,8 +109,10 @@ fn startPohVerify(
         const end = if (i == num_tasks - 1) entries.len else (i + 1) * entries_per_task;
         assert(try pool.trySchedule(allocator, .{
             .allocator = allocator,
+            .logger = logger,
             .initial_hash = batch_initial_hash,
             .entries = entries[i * entries_per_task .. end],
+            .exit = exit,
         }));
         batch_initial_hash = entries[end - 1].hash;
     }
@@ -84,14 +122,21 @@ fn startPohVerify(
 fn scheduleTransactionBatches(
     allocator: Allocator,
     scheduler: *TransactionScheduler,
-    accounts_db: *AccountsDB,
+    account_store: AccountStore,
     entries: []const Entry,
+    ancestors: *const Ancestors,
+    reserved_accounts: *const ReservedAccounts,
 ) !void {
     var total_transactions: usize = 0;
     for (entries) |entry| {
         total_transactions += entry.transactions.len;
 
-        const batch = try resolveBatch(allocator, accounts_db, entry.transactions);
+        const batch = try resolveBatch(
+            allocator,
+            account_store.reader().forSlot(ancestors),
+            entry.transactions,
+            reserved_accounts,
+        );
         errdefer batch.deinit(allocator);
 
         scheduler.addBatchAssumeCapacity(batch);
@@ -113,6 +158,9 @@ pub const ConfirmSlotStatus = union(enum) {
 pub const ConfirmSlotFuture = struct {
     scheduler: TransactionScheduler,
     poh_verifier: HomogeneousThreadPool(PohTask),
+    /// Set to true as soon as something fails.
+    exit: Atomic(bool),
+
     entries: []const Entry,
 
     /// The current status to return on poll, unless something has changed.
@@ -123,30 +171,47 @@ pub const ConfirmSlotFuture = struct {
 
     fn create(
         allocator: Allocator,
+        logger: Logger,
         thread_pool: *ThreadPool,
+        committer: Committer,
         entries: []const Entry,
+        svm_params: SvmGateway.Params,
     ) !*ConfirmSlotFuture {
-        var scheduler = try TransactionScheduler.initCapacity(allocator, entries.len, thread_pool);
-        errdefer scheduler.deinit();
-
         const poh_verifier = try HomogeneousThreadPool(PohTask)
             .initBorrowed(allocator, thread_pool, thread_pool.max_threads);
         errdefer poh_verifier.deinit(allocator);
 
         const future = try allocator.create(ConfirmSlotFuture);
-        errdefer allocator.free(future);
+        errdefer allocator.destroy(future);
 
         future.* = ConfirmSlotFuture{
             .poh_verifier = poh_verifier,
-            .scheduler = scheduler,
+            .scheduler = undefined,
             .entries = entries,
             .status = .pending,
+            .exit = .init(false),
         };
+
+        future.scheduler = try TransactionScheduler.initCapacity(
+            allocator,
+            .from(logger),
+            committer,
+            entries.len,
+            thread_pool,
+            svm_params,
+            &future.exit,
+        );
 
         return future;
     }
 
     pub fn destroy(self: *ConfirmSlotFuture, allocator: Allocator) void {
+        self.exit.store(true, .monotonic);
+        const exited_scheduler = self.scheduler.thread_pool.joinForDeinit(.fromMillis(100));
+        const exited_poh = self.poh_verifier.joinForDeinit(.fromMillis(100));
+        if (!exited_scheduler or !exited_poh) {
+            @panic("Failed to deinit ConfirmSlotFuture due to hanging threads.");
+        }
         self.scheduler.deinit();
         self.poh_verifier.deinit(allocator);
         for (self.entries) |entry| entry.deinit(allocator);
@@ -161,8 +226,7 @@ pub const ConfirmSlotFuture = struct {
                 for (try self.pollEach()) |status| switch (status) {
                     .pending => pending = true,
                     .err => |err| if (self.status_when_done == .done) {
-                        // TODO: notify poh threads to exit
-                        self.scheduler.exit.store(true, .monotonic);
+                        self.exit.store(true, .monotonic);
                         self.status_when_done = .{ .err = err };
                     },
                     .done => {},
@@ -187,13 +251,29 @@ pub const ConfirmSlotFuture = struct {
     }
 };
 
-const PohTask = struct {
+pub const PohTask = struct {
     allocator: Allocator,
+    logger: Logger,
     initial_hash: Hash,
     entries: []const Entry,
+    exit: *Atomic(bool),
 
     pub fn run(self: *PohTask) !void {
-        if (!try core.entry.verifyPoh(self.entries, self.allocator, null, self.initial_hash)) {
+        const success = verifyPoh(
+            self.entries,
+            self.allocator,
+            self.initial_hash,
+            .{ .exit = self.exit },
+        ) catch |e| {
+            if (e != error.Exit) {
+                self.logger.err().logf("poh verification failed with error: {}", .{e});
+            }
+            self.exit.store(true, .monotonic);
+            return e;
+        };
+        if (!success) {
+            self.logger.err().log("poh verification failed");
+            self.exit.store(true, .monotonic);
             return error.PohVerifyFailed;
         }
     }
@@ -218,7 +298,7 @@ pub const VerifyTicksParams = struct {
 /// Verify that a segment of entries has the correct number of ticks and hashes
 /// analogous to [verify_ticks](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/ledger/src/blockstore_processor.rs#L1097)
 fn verifyTicks(
-    logger: ScopedLogger,
+    logger: Logger,
     entries: []const Entry,
     params: VerifyTicksParams,
 ) ?BlockError {
@@ -305,16 +385,27 @@ pub const BlockError = enum {
 };
 
 test "happy path: trivial case" {
+    const allocator = std.testing.allocator;
+
+    var state = try TestState.init(allocator);
+    defer state.deinit(allocator);
+
     var thread_pool = ThreadPool.init(.{});
+    defer {
+        thread_pool.shutdown();
+        thread_pool.deinit();
+    }
     var tick_hash_count: u64 = 0;
 
     const future = try confirmSlot(
         std.testing.allocator,
         .FOR_TESTS,
-        undefined,
+        state.account_map.accountStore(),
         &thread_pool,
         &.{},
         .ZEROES,
+        state.svmParams(),
+        state.committer(),
         .{
             .hashes_per_tick = 0,
             .slot = 0,
@@ -323,6 +414,8 @@ test "happy path: trivial case" {
             .slot_is_full = false,
             .tick_hash_count = &tick_hash_count,
         },
+        &.{ .ancestors = .empty },
+        &.empty,
     );
     defer future.destroy(std.testing.allocator);
 
@@ -334,20 +427,29 @@ test "happy path: trivial case" {
 test "happy path: partial slot" {
     const allocator = std.testing.allocator;
 
+    var state = try TestState.init(allocator);
+    defer state.deinit(allocator);
+
     var thread_pool = ThreadPool.init(.{});
+    defer {
+        thread_pool.shutdown();
+        thread_pool.deinit();
+    }
     var tick_hash_count: u64 = 0;
 
     const poh, const entry_array = try sig.core.poh.testPoh(true);
     const entries: []const sig.core.Entry = entry_array.slice();
-    errdefer for (entries) |entry| entry.deinit(allocator);
+    for (entries) |e| try state.makeTransactionsPassable(allocator, e.transactions);
 
     const future = try confirmSlot(
         std.testing.allocator,
         .FOR_TESTS,
-        undefined,
+        state.account_map.accountStore(),
         &thread_pool,
         try allocator.dupe(Entry, entries[0 .. entries.len - 1]),
         .ZEROES,
+        state.svmParams(),
+        state.committer(),
         .{
             .hashes_per_tick = poh.hashes_per_tick,
             .slot = 0,
@@ -356,31 +458,43 @@ test "happy path: partial slot" {
             .slot_is_full = false,
             .tick_hash_count = &tick_hash_count,
         },
+        &.{ .ancestors = .empty },
+        &.empty,
     );
     defer future.destroy(std.testing.allocator);
 
     const result = try testAwait(future);
     errdefer std.log.err("failed with: {any}\n", .{result});
+
     try std.testing.expectEqual(.done, result);
 }
 
 test "happy path: full slot" {
     const allocator = std.testing.allocator;
 
+    var state = try TestState.init(allocator);
+    defer state.deinit(allocator);
+
     var thread_pool = ThreadPool.init(.{});
+    defer {
+        thread_pool.shutdown();
+        thread_pool.deinit();
+    }
     var tick_hash_count: u64 = 0;
 
     const poh, const entry_array = try sig.core.poh.testPoh(true);
     const entries: []const sig.core.Entry = entry_array.slice();
-    errdefer for (entries) |entry| entry.deinit(allocator);
+    for (entries) |e| try state.makeTransactionsPassable(allocator, e.transactions);
 
     const future = try confirmSlot(
         std.testing.allocator,
         .FOR_TESTS,
-        undefined,
+        state.account_map.accountStore(),
         &thread_pool,
         try allocator.dupe(Entry, entries),
         .ZEROES,
+        state.svmParams(),
+        state.committer(),
         .{
             .hashes_per_tick = poh.hashes_per_tick,
             .slot = 0,
@@ -389,31 +503,44 @@ test "happy path: full slot" {
             .slot_is_full = true,
             .tick_hash_count = &tick_hash_count,
         },
+        &.{ .ancestors = .empty },
+        &.empty,
     );
+
     defer future.destroy(std.testing.allocator);
 
     const result = try testAwait(future);
     errdefer std.log.err("failed with: {any}\n", .{result});
+
     try std.testing.expectEqual(.done, result);
 }
 
 test "fail: full slot not marked full -> .InvalidLastTick" {
     const allocator = std.testing.allocator;
 
+    var state = try TestState.init(allocator);
+    defer state.deinit(allocator);
+
     var thread_pool = ThreadPool.init(.{});
+    defer {
+        thread_pool.shutdown();
+        thread_pool.deinit();
+    }
     var tick_hash_count: u64 = 0;
 
     const poh, const entry_array = try sig.core.poh.testPoh(true);
     const entries: []const sig.core.Entry = entry_array.slice();
-    errdefer for (entries) |entry| entry.deinit(allocator);
+    for (entries) |e| try state.makeTransactionsPassable(allocator, e.transactions);
 
     const future = try confirmSlot(
         std.testing.allocator,
         .noop,
-        undefined,
+        .noop,
         &thread_pool,
         try allocator.dupe(Entry, entries),
         .ZEROES,
+        state.svmParams(),
+        state.committer(),
         .{
             .hashes_per_tick = poh.hashes_per_tick,
             .slot = 0,
@@ -422,6 +549,8 @@ test "fail: full slot not marked full -> .InvalidLastTick" {
             .slot_is_full = false,
             .tick_hash_count = &tick_hash_count,
         },
+        &.{ .ancestors = .empty },
+        &.empty,
     );
     defer future.destroy(std.testing.allocator);
 
@@ -436,20 +565,29 @@ test "fail: full slot not marked full -> .InvalidLastTick" {
 test "fail: no trailing tick at max height -> .TrailingEntry" {
     const allocator = std.testing.allocator;
 
+    var state = try TestState.init(allocator);
+    defer state.deinit(allocator);
+
     var thread_pool = ThreadPool.init(.{});
+    defer {
+        thread_pool.shutdown();
+        thread_pool.deinit();
+    }
     var tick_hash_count: u64 = 0;
 
     const poh, const entry_array = try sig.core.poh.testPoh(true);
     const entries: []const sig.core.Entry = entry_array.slice();
-    errdefer for (entries) |entry| entry.deinit(allocator);
+    for (entries) |e| try state.makeTransactionsPassable(allocator, e.transactions);
 
     const future = try confirmSlot(
         std.testing.allocator,
         .noop,
-        undefined,
+        .noop,
         &thread_pool,
         try allocator.dupe(Entry, entries[0 .. entries.len - 1]),
         .ZEROES,
+        state.svmParams(),
+        state.committer(),
         .{
             .hashes_per_tick = poh.hashes_per_tick,
             .slot = 0,
@@ -458,6 +596,8 @@ test "fail: no trailing tick at max height -> .TrailingEntry" {
             .slot_is_full = false,
             .tick_hash_count = &tick_hash_count,
         },
+        &.{ .ancestors = .empty },
+        &.empty,
     );
     defer future.destroy(std.testing.allocator);
 
@@ -472,23 +612,32 @@ test "fail: no trailing tick at max height -> .TrailingEntry" {
 test "fail: invalid poh chain" {
     const allocator = std.testing.allocator;
 
+    var state = try TestState.init(allocator);
+    defer state.deinit(allocator);
+
     var thread_pool = ThreadPool.init(.{});
+    defer {
+        thread_pool.shutdown();
+        thread_pool.deinit();
+    }
     var tick_hash_count: u64 = 0;
 
     const poh, var entry_array = try sig.core.poh.testPoh(true);
     const entries: []sig.core.Entry = entry_array.slice();
-    errdefer for (entries) |entry| entry.deinit(allocator);
+    for (entries) |e| try state.makeTransactionsPassable(allocator, e.transactions);
 
     // break the hash chain
     entries[0].hash.data[0] +%= 1;
 
     const future = try confirmSlot(
         std.testing.allocator,
-        .FOR_TESTS,
-        undefined,
+        .noop,
+        state.account_map.accountStore(),
         &thread_pool,
         try allocator.dupe(Entry, entries),
         .ZEROES,
+        state.svmParams(),
+        state.committer(),
         .{
             .hashes_per_tick = poh.hashes_per_tick,
             .slot = 0,
@@ -497,6 +646,8 @@ test "fail: invalid poh chain" {
             .slot_is_full = true,
             .tick_hash_count = &tick_hash_count,
         },
+        &.{ .ancestors = .empty },
+        &.empty,
     );
     defer future.destroy(std.testing.allocator);
 
@@ -511,20 +662,29 @@ test "fail: invalid poh chain" {
 test "fail: sigverify" {
     const allocator = std.testing.allocator;
 
+    var state = try TestState.init(allocator);
+    defer state.deinit(allocator);
+
     var thread_pool = ThreadPool.init(.{});
+    defer {
+        thread_pool.shutdown();
+        thread_pool.deinit();
+    }
     var tick_hash_count: u64 = 0;
 
     const poh, var entry_array = try sig.core.poh.testPoh(false);
     const entries: []sig.core.Entry = entry_array.slice();
-    errdefer for (entries) |entry| entry.deinit(allocator);
+    for (entries) |e| try state.makeTransactionsPassable(allocator, e.transactions);
 
     const future = try confirmSlot(
         std.testing.allocator,
-        .FOR_TESTS,
-        undefined,
+        .noop,
+        state.account_map.accountStore(),
         &thread_pool,
         try allocator.dupe(Entry, entries),
         .ZEROES,
+        state.svmParams(),
+        state.committer(),
         .{
             .hashes_per_tick = poh.hashes_per_tick,
             .slot = 0,
@@ -533,11 +693,14 @@ test "fail: sigverify" {
             .slot_is_full = true,
             .tick_hash_count = &tick_hash_count,
         },
+        &.{ .ancestors = .empty },
+        &.empty,
     );
     defer future.destroy(std.testing.allocator);
 
     const result = try testAwait(future);
     errdefer std.log.err("failed with: {any}\n", .{result});
+
     try std.testing.expectEqual(
         ConfirmSlotStatus{ .err = .{ .invalid_transaction = .SignatureFailure } },
         result,
@@ -553,3 +716,125 @@ pub fn testAwait(future: anytype) !@TypeOf(future.poll()) {
     }
     return try future.poll();
 }
+
+pub const TestState = struct {
+    // shared for multiple things
+    account_map: sig.accounts_db.ThreadSafeAccountMap,
+    status_cache: sig.core.StatusCache,
+    ancestors: Ancestors,
+
+    // svm params
+    slot: u64,
+    max_age: u64,
+    lamports_per_signature: u64,
+    blockhash_queue: sig.sync.RwMux(sig.core.BlockhashQueue),
+    feature_set: sig.core.FeatureSet,
+    rent_collector: sig.core.RentCollector,
+    epoch_stakes: sig.core.EpochStakes,
+
+    // committer
+    slot_state: sig.core.SlotState,
+    stakes_cache: sig.core.StakesCache,
+
+    // scheduler
+    exit: Atomic(bool),
+
+    pub fn init(allocator: Allocator) !TestState {
+        const epoch_stakes = try sig.core.EpochStakes.init(allocator);
+        errdefer epoch_stakes.deinit(allocator);
+
+        var slot_state = try sig.core.SlotState.genesis(allocator);
+        errdefer slot_state.deinit(allocator);
+
+        var stakes_cache = try sig.core.StakesCache.init(allocator);
+        errdefer stakes_cache.deinit(allocator);
+
+        const max_age = sig.core.BlockhashQueue.MAX_RECENT_BLOCKHASHES / 2;
+        var blockhash_queue = sig.core.BlockhashQueue.init(max_age);
+        errdefer blockhash_queue.deinit(allocator);
+        try blockhash_queue.insertGenesisHash(allocator, .ZEROES, 1);
+
+        var ancestors = Ancestors{};
+        try ancestors.addSlot(allocator, 0);
+
+        return .{
+            .account_map = sig.accounts_db.ThreadSafeAccountMap.init(allocator),
+            .status_cache = .DEFAULT,
+            .ancestors = ancestors,
+            .slot = 0,
+            .max_age = max_age,
+            .lamports_per_signature = 1,
+            .blockhash_queue = .init(blockhash_queue),
+            .feature_set = .ALL_DISABLED,
+            .rent_collector = .DEFAULT,
+            .epoch_stakes = epoch_stakes,
+            .slot_state = slot_state,
+            .stakes_cache = stakes_cache,
+            .exit = .init(false),
+        };
+    }
+
+    pub fn deinit(self: *TestState, allocator: Allocator) void {
+        self.account_map.deinit();
+        self.status_cache.deinit(allocator);
+        self.ancestors.deinit(allocator);
+        var bhq = self.blockhash_queue.tryWrite() orelse unreachable;
+        bhq.get().deinit(allocator);
+        bhq.unlock();
+        self.epoch_stakes.deinit(allocator);
+        self.slot_state.deinit(allocator);
+        self.stakes_cache.deinit(allocator);
+    }
+
+    pub fn accountStore(self: *TestState) AccountStore {
+        return self.account_map.accountStore();
+    }
+
+    pub fn svmParams(self: *TestState) SvmGateway.Params {
+        return .{
+            .slot = self.slot,
+            .max_age = self.max_age,
+            .lamports_per_signature = self.lamports_per_signature,
+            .blockhash_queue = &self.blockhash_queue,
+            .account_reader = self.account_map.accountReader().forSlot(&self.ancestors),
+            .ancestors = &self.ancestors,
+            .feature_set = self.feature_set,
+            .rent_collector = &self.rent_collector,
+            .epoch_stakes = &self.epoch_stakes,
+            .status_cache = &self.status_cache,
+        };
+    }
+
+    pub fn committer(self: *TestState) Committer {
+        return .{
+            .logger = .FOR_TESTS,
+            .account_store = self.account_map.accountStore(),
+            .slot_state = &self.slot_state,
+            .status_cache = &self.status_cache,
+            .stakes_cache = &self.stakes_cache,
+            .new_rate_activation_epoch = null,
+        };
+    }
+
+    /// This makes it so the transactions could legally be included in a block.
+    /// The transactions may fail, but at least the block containing this
+    /// transaction would be valid, since the fees are paid and the recent
+    /// blockhash is valid.
+    ///
+    /// With the the existing SVM code, this means the TransactionResult
+    /// returned by loadAndExecuteTransaction will be `ok` instead of `err`
+    pub fn makeTransactionsPassable(
+        self: *TestState,
+        allocator: Allocator,
+        transactions: []const sig.core.Transaction,
+    ) Allocator.Error!void {
+        var bhq = self.blockhash_queue.write();
+        defer bhq.unlock();
+        for (transactions) |transaction| {
+            try bhq.mut().insertHash(allocator, transaction.msg.recent_blockhash, 1);
+            var account = sig.runtime.AccountSharedData.EMPTY;
+            account.lamports = 1_000;
+            try self.account_map.put(self.slot, transaction.msg.account_keys[0], account);
+        }
+    }
+};

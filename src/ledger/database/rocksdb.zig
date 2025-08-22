@@ -8,21 +8,18 @@ const Allocator = std.mem.Allocator;
 const BytesRef = database.interface.BytesRef;
 const ColumnFamily = database.interface.ColumnFamily;
 const IteratorDirection = database.interface.IteratorDirection;
-const Logger = sig.trace.Logger;
-const ScopedLogger = sig.trace.ScopedLogger;
 const ReturnType = sig.utils.types.ReturnType;
 
 const key_serializer = database.interface.key_serializer;
 const value_serializer = database.interface.value_serializer;
 
-// The identifier for the scoped logger used in this file.
-const LOG_SCOPE: []const u8 = "rocksdb";
+const Logger = sig.trace.Logger("rocksdb");
 
 pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
     return struct {
         allocator: Allocator,
         db: rocks.DB,
-        logger: ScopedLogger(LOG_SCOPE),
+        logger: Logger,
         cf_handles: []const rocks.ColumnFamilyHandle,
         path: [:0]const u8,
 
@@ -30,8 +27,11 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
 
         const OpenError = Error || std.posix.MakeDirError || std.fs.Dir.StatFileError;
 
-        pub fn open(allocator: Allocator, logger_: Logger, path: []const u8) OpenError!Self {
-            const logger = logger_.withScope(LOG_SCOPE);
+        pub fn open(
+            allocator: Allocator,
+            logger: database.interface.Logger,
+            path: []const u8,
+        ) OpenError!Self {
             logger.info().log("Initializing RocksDB");
             const owned_path = try std.fmt.allocPrintZ(allocator, "{s}/rocksdb", .{path});
             try std.fs.cwd().makePath(owned_path);
@@ -51,7 +51,7 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
             const db: rocks.DB, //
             const cfs: []const rocks.ColumnFamily //
             = try callRocks(
-                logger,
+                .from(logger),
                 rocks.DB.open,
                 .{
                     allocator,
@@ -74,7 +74,7 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
             return .{
                 .allocator = allocator,
                 .db = db,
-                .logger = logger,
+                .logger = .from(logger),
                 .cf_handles = cf_handles,
                 .path = owned_path,
             };
@@ -260,7 +260,7 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
         };
 
         pub fn iterator(
-            self: *Self,
+            self: Self,
             comptime cf: ColumnFamily,
             comptime direction: IteratorDirection,
             start: ?cf.Key,
@@ -285,7 +285,7 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
             return struct {
                 allocator: Allocator,
                 inner: rocks.Iterator,
-                logger: ScopedLogger(LOG_SCOPE),
+                logger: Logger,
 
                 /// Calling this will free all slices returned by the iterator
                 pub fn deinit(self: *@This()) void {
@@ -350,7 +350,7 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
     };
 }
 
-fn callRocks(logger: ScopedLogger(LOG_SCOPE), comptime func: anytype, args: anytype) ReturnType(@TypeOf(func)) {
+fn callRocks(logger: Logger, comptime func: anytype, args: anytype) ReturnType(@TypeOf(func)) {
     var err_str: ?rocks.Data = null;
     return @call(.auto, func, args ++ .{&err_str}) catch |e| {
         logger.err().logf("{} - {s}", .{ e, err_str.? });
@@ -358,8 +358,8 @@ fn callRocks(logger: ScopedLogger(LOG_SCOPE), comptime func: anytype, args: anyt
     };
 }
 
-comptime {
-    if (sig.build_options.blockstore_db == .rocksdb) {
+test {
+    if (sig.build_options.ledger_db == .rocksdb) {
         _ = &database.interface.testDatabase(RocksDB);
     }
 }

@@ -20,14 +20,14 @@ const Channel = sig.sync.Channel;
 const Duration = sig.time.Duration;
 const Instant = sig.time.Instant;
 const Timer = sig.time.Timer;
-const Logger = sig.trace.log.Logger;
-const ScopedLogger = sig.trace.log.ScopedLogger;
 const LeaderInfo = sig.transaction_sender.LeaderInfo;
 const TransactionInfo = sig.transaction_sender.TransactionInfo;
 const TransactionPool = sig.transaction_sender.TransactionPool;
 const EpochSchedule = sig.core.epoch_schedule.EpochSchedule;
 
 const globalRegistry = sig.prometheus.globalRegistry;
+
+const Logger = sig.trace.Logger("transaction_sender");
 
 /// Basic send transaction service that listens for transactions on a channel.
 /// Transactions are added to the pool and retried until they are confirmed, failed,
@@ -48,7 +48,7 @@ pub const Service = struct {
     /// Put transactions onto this channel to send them.
     input_channel: *Channel(TransactionInfo),
     exit: *AtomicBool,
-    logger: ScopedLogger(@typeName(Self)),
+    logger: Logger,
 
     const Self = @This();
 
@@ -74,14 +74,14 @@ pub const Service = struct {
             ),
             .leader_info_rw = RwMux(LeaderInfo).init(try LeaderInfo.init(
                 allocator,
-                logger,
+                .from(logger),
                 config,
                 gossip_table_rw,
                 epoch_schedule,
             )),
             .send_channel = send_channel,
             .input_channel = input_channel,
-            .logger = logger.withScope(@typeName(Self)),
+            .logger = .from(logger),
             .exit = exit,
         };
     }
@@ -93,7 +93,7 @@ pub const Service = struct {
             .{
                 self.allocator,
                 self.send_channel,
-                self.logger.unscoped(),
+                sig.net.quic_client.Logger.from(self.logger),
                 sig.sync.ExitCondition{ .unordered = self.exit },
             },
         );
@@ -166,7 +166,7 @@ pub const Service = struct {
         var rpc_client = try RpcClient.init(
             self.allocator,
             self.config.cluster,
-            .{ .max_retries = self.config.rpc_retries, .logger = self.logger.unscoped() },
+            .{ .max_retries = self.config.rpc_retries, .logger = .from(self.logger) },
         );
         defer rpc_client.deinit();
 
@@ -184,7 +184,7 @@ pub const Service = struct {
             self.transaction_pool.purge();
             self.metrics.pending_count.set(self.transaction_pool.count());
 
-            self.metrics.log(self.logger.unscoped());
+            self.metrics.log(.from(self.logger));
         }
     }
 

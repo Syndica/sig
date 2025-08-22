@@ -12,12 +12,13 @@ const Socket = network.Socket;
 const Channel = sig.sync.Channel;
 const EpochContextManager = sig.adapter.EpochContextManager;
 const GossipTable = sig.gossip.GossipTable;
-const Logger = sig.trace.Logger;
+const Logger = sig.trace.Logger("shred_network.service");
 const Packet = sig.net.Packet;
 const Pubkey = sig.core.Pubkey;
 const RwMux = sig.sync.RwMux;
 const Registry = sig.prometheus.Registry;
 const ServiceManager = sig.utils.service_manager.ServiceManager;
+const ShredInserter = sig.ledger.ShredInserter;
 const Slot = sig.core.Slot;
 const ThreadSafeContactInfo = sig.gossip.data.ThreadSafeContactInfo;
 
@@ -54,7 +55,7 @@ pub const ShredNetworkDependencies = struct {
     my_shred_version: *const Atomic(u16),
     my_contact_info: ThreadSafeContactInfo,
     epoch_context_mgr: *EpochContextManager,
-    shred_inserter: sig.ledger.ShredInserter,
+    shred_inserter: ShredInserter,
     n_retransmit_threads: ?usize,
     overwrite_turbine_stake_for_testing: bool,
 };
@@ -74,7 +75,7 @@ pub fn start(
 ) !ServiceManager {
     var service_manager = ServiceManager.init(
         deps.allocator,
-        deps.logger.unscoped(),
+        .from(deps.logger),
         deps.exit,
         "shred network",
         .{},
@@ -100,7 +101,7 @@ pub fn start(
         .allocator = deps.allocator,
         .keypair = deps.my_keypair,
         .exit = deps.exit,
-        .logger = deps.logger.withScope(@typeName(ShredReceiver)),
+        .logger = .from(deps.logger),
         .repair_socket = repair_socket,
         .turbine_socket = turbine_socket,
         .unverified_shred_sender = unverified_shred_channel,
@@ -127,10 +128,12 @@ pub fn start(
     // tracker (shared state, internal to Shred Network)
     const shred_tracker = try arena.create(BasicShredTracker);
     shred_tracker.* = try BasicShredTracker.init(
+        deps.allocator,
         conf.start_slot,
-        deps.logger.unscoped(),
+        .from(deps.logger),
         deps.registry,
     );
+    try defers.deferCall(BasicShredTracker.deinit, .{shred_tracker});
 
     // processor (thread)
     try service_manager.spawn(
@@ -139,7 +142,7 @@ pub fn start(
         .{
             deps.allocator,
             deps.exit,
-            deps.logger.unscoped(),
+            shred_network.shred_processor.Logger.from(deps.logger),
             deps.registry,
             shreds_to_insert_channel,
             shred_tracker,
@@ -163,7 +166,7 @@ pub fn start(
                 .overwrite_stake_for_testing = deps.overwrite_turbine_stake_for_testing,
                 .exit = deps.exit,
                 .rand = deps.random,
-                .logger = deps.logger.unscoped(),
+                .logger = .from(deps.logger),
             }},
         );
     }
@@ -179,7 +182,7 @@ pub fn start(
     );
     const repair_requester = try RepairRequester.init(
         deps.allocator,
-        deps.logger.unscoped(),
+        .from(deps.logger),
         deps.random,
         deps.registry,
         deps.my_keypair,
@@ -190,7 +193,7 @@ pub fn start(
     try defers.deferCall(RepairService.deinit, .{repair_svc});
     repair_svc.* = try RepairService.init(
         deps.allocator,
-        deps.logger.unscoped(),
+        .from(deps.logger),
         deps.exit,
         deps.registry,
         repair_requester,
@@ -222,4 +225,73 @@ fn bindUdpReusable(port: u16) !Socket {
     try socket.bindToPort(port);
     try socket.setReadTimeout(sig.net.SOCKET_TIMEOUT_US);
     return socket;
+}
+
+// This test verifies that the shred_network:
+// - does not leak
+// - shuts down promptly when requested
+test "start and stop gracefully" {
+    const allocator = std.testing.allocator;
+
+    const config = ShredNetworkConfig{
+        .start_slot = 0,
+        .repair_port = 50304,
+        .turbine_recv_port = 50305,
+        .retransmit = true,
+        .dump_shred_tracker = false,
+    };
+
+    var exit = Atomic(bool).init(false);
+
+    var rng = Random.DefaultPrng.init(0);
+
+    var registry = Registry(.{}).init(allocator);
+    defer registry.deinit();
+
+    const keypair = KeyPair.generate();
+    const shred_version = Atomic(u16).init(0);
+    const contact_info = try ThreadSafeContactInfo
+        .initRandom(rng.random(), Pubkey.initRandom(rng.random()), 0);
+
+    var gossip_table = try GossipTable.init(allocator, allocator);
+    defer gossip_table.deinit();
+    var gossip_table_rw = RwMux(GossipTable).init(gossip_table);
+
+    var epoch_ctx = try EpochContextManager.init(allocator, sig.core.EpochSchedule.DEFAULT);
+    defer epoch_ctx.deinit();
+
+    var ledger_db = try sig.ledger.tests.TestDB.init(@src());
+    defer ledger_db.deinit();
+
+    var shred_inserter = try ShredInserter.init(allocator, .FOR_TESTS, &registry, ledger_db);
+    defer shred_inserter.deinit();
+
+    const deps = ShredNetworkDependencies{
+        .allocator = allocator,
+        .logger = .FOR_TESTS,
+        .random = rng.random(),
+        .registry = &registry,
+        .my_keypair = &keypair,
+        .exit = &exit,
+        .gossip_table_rw = &gossip_table_rw,
+        .my_shred_version = &shred_version,
+        .my_contact_info = contact_info,
+        .epoch_context_mgr = &epoch_ctx,
+        .shred_inserter = shred_inserter,
+        .n_retransmit_threads = 1,
+        .overwrite_turbine_stake_for_testing = true,
+    };
+
+    var timer = try sig.time.Timer.start();
+
+    var shred_network_service = try start(config, deps);
+    defer shred_network_service.deinit();
+
+    exit.store(true, .monotonic);
+
+    shred_network_service.join();
+
+    // always completes in under 200 ms in my testing.
+    // set to 2 s to avoid flakiness on extremely slow CI machines.
+    try std.testing.expect(timer.read().lt(.fromSecs(2)));
 }

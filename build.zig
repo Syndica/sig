@@ -5,8 +5,8 @@ pub const Config = struct {
     target: Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
     filters: ?[]const []const u8,
-    enable_tsan: ?bool,
-    blockstore_db: BlockstoreDB,
+    enable_tsan: bool,
+    ledger_db: LedgerDB,
     run: bool,
     install: bool,
     ssh_host: ?[]const u8,
@@ -29,11 +29,15 @@ pub const Config = struct {
                 "List of filters, used for example to filter unit tests by name. " ++
                     "Specified as a series like `-Dfilter='filter1' -Dfilter='filter2'`.",
             ),
-            .enable_tsan = b.option(bool, "enable-tsan", "Enable TSan for the test suite"),
-            .blockstore_db = b.option(
-                BlockstoreDB,
-                "blockstore",
-                "Blockstore database backend",
+            .enable_tsan = b.option(
+                bool,
+                "enable-tsan",
+                "Enable TSan for the test suite",
+            ) orelse false,
+            .ledger_db = b.option(
+                LedgerDB,
+                "ledger",
+                "Ledger database backend",
             ) orelse .rocksdb,
             .run = !(b.option(
                 bool,
@@ -83,13 +87,13 @@ pub const Config = struct {
             ) orelse false,
             .use_llvm = b.option(
                 bool,
-                "use_llvm",
+                "use-llvm",
                 "If disabled, uses experimental self-hosted backend. Only works for x86_64-linux",
             ) orelse true,
             .force_pic = b.option(
                 bool,
                 "force_pic",
-                "Builds linked dependencies with PIC enabled",
+                "Builds linked dependencies with PIC enabled. If false, builds default PIC mode.",
             ) orelse false,
             .error_tracing = b.option(
                 bool,
@@ -112,10 +116,9 @@ pub fn build(b: *Build) void {
     const config = Config.fromBuild(b);
 
     const build_options = b.addOptions();
-    build_options.addOption(BlockstoreDB, "blockstore_db", config.blockstore_db);
+    build_options.addOption(LedgerDB, "ledger_db", config.ledger_db);
     build_options.addOption(bool, "no_network_tests", config.no_network_tests);
 
-    const install_step = b.getInstallStep();
     const sig_step = b.step("sig", "Run the sig executable");
     const test_step = b.step("test", "Run library tests");
     const fuzz_step = b.step("fuzz", "Gossip fuzz testing");
@@ -133,17 +136,35 @@ pub fn build(b: *Build) void {
     const base58_mod = b.dependency("base58", dep_opts).module("base58");
     const zig_network_mod = b.dependency("zig-network", dep_opts).module("network");
     const httpz_mod = b.dependency("httpz", dep_opts).module("httpz");
-    const zstd_mod = b.dependency("zstd", dep_opts).module("zstd");
     const poseidon_mod = b.dependency("poseidon", dep_opts).module("poseidon");
     const xev_mod = b.dependency("xev", dep_opts).module("xev");
     const pretty_table_mod = b.dependency("prettytable", dep_opts).module("prettytable");
 
-    const lsquic_dep = b.dependency("lsquic", dep_opts);
-    const lsquic_mod = b.dependency("lsquic", dep_opts).module("lsquic");
-    const ssl_dep = lsquic_dep.builder.dependency("boringssl", dep_opts);
-    const ssl_mod = ssl_dep.module("ssl");
+    const lsquic_dep = b.dependency("lsquic", .{
+        .target = config.target,
+        .optimize = config.optimize,
+        // TSan needs a PIE executable, so we need to build the deps with PIC.
+        .force_pic = config.force_pic or config.enable_tsan,
+    });
+    const lsquic_mod = lsquic_dep.module("lsquic");
 
-    const rocksdb_dep = b.dependency("rocksdb", dep_opts);
+    const zstd_mod = b.dependency("zstd", .{
+        .target = config.target,
+        .optimize = config.optimize,
+        .force_pic = config.force_pic or config.enable_tsan,
+    }).module("zstd");
+
+    const ssl_mod = lsquic_dep.builder.dependency("boringssl", .{
+        .target = config.target,
+        .optimize = config.optimize,
+        .force_pic = config.force_pic or config.enable_tsan,
+    }).module("ssl");
+
+    const rocksdb_dep = b.dependency("rocksdb", .{
+        .target = config.target,
+        .optimize = config.optimize,
+        .force_pic = config.force_pic or config.enable_tsan,
+    });
     const rocksdb_mod = rocksdb_dep.module("bindings");
     // TODO: UB might be fixed by future RocksDB version upgrade.
     // reproducable via: zig build test -Dfilter="ledger"
@@ -154,7 +175,7 @@ pub fn build(b: *Build) void {
     const secp256k1_mod = b.dependency("secp256k1", .{
         .target = config.target,
         .optimize = config.optimize,
-        .force_pic = config.force_pic,
+        .force_pic = config.force_pic or config.enable_tsan,
     }).module("secp256k1");
 
     const tracy_mod = b.dependency("tracy", .{
@@ -171,6 +192,11 @@ pub fn build(b: *Build) void {
         .optimize = config.optimize,
     });
 
+    // G/H table for Bulletproofs
+    const gh_table = b.createModule(.{
+        .root_source_file = generateTable(b),
+    });
+
     // zig fmt: off
     const imports: []const Build.Module.Import = &.{
         .{ .name = "base58",        .module = base58_mod },
@@ -185,6 +211,7 @@ pub fn build(b: *Build) void {
         .{ .name = "xev",           .module = xev_mod },
         .{ .name = "zig-network",   .module = zig_network_mod },
         .{ .name = "zstd",          .module = zstd_mod },
+        .{ .name = "table",         .module = gh_table },
     };
     // zig fmt: on
 
@@ -195,7 +222,7 @@ pub fn build(b: *Build) void {
         .imports = imports,
     });
 
-    switch (config.blockstore_db) {
+    switch (config.ledger_db) {
         .rocksdb => sig_mod.addImport("rocksdb", rocksdb_mod),
         .hashmap => {},
     }
@@ -208,17 +235,17 @@ pub fn build(b: *Build) void {
             .optimize = config.optimize,
             .imports = imports,
             .error_tracing = config.error_tracing,
+            .sanitize_thread = config.enable_tsan,
+            .link_libc = true,
         }),
-        .sanitize_thread = config.enable_tsan,
         .use_llvm = config.use_llvm,
     });
-    sig_exe.linkLibC();
     sig_exe.root_module.addImport("cli", cli_mod);
 
     // make sure pyroscope's got enough info to profile
     sig_exe.build_id = .fast;
 
-    switch (config.blockstore_db) {
+    switch (config.ledger_db) {
         .rocksdb => sig_exe.root_module.addImport("rocksdb", rocksdb_mod),
         .hashmap => {},
     }
@@ -231,13 +258,12 @@ pub fn build(b: *Build) void {
             .optimize = config.optimize,
             .imports = imports,
             .error_tracing = config.error_tracing,
+            .sanitize_thread = config.enable_tsan,
         }),
-        .sanitize_thread = config.enable_tsan,
         .filters = config.filters orelse &.{},
         .use_llvm = config.use_llvm,
     });
-    unit_tests_exe.linkLibC();
-    switch (config.blockstore_db) {
+    switch (config.ledger_db) {
         .rocksdb => unit_tests_exe.root_module.addImport("rocksdb", rocksdb_mod),
         .hashmap => {},
     }
@@ -251,12 +277,11 @@ pub fn build(b: *Build) void {
             .optimize = config.optimize,
             .imports = imports,
             .error_tracing = config.error_tracing,
+            .sanitize_thread = config.enable_tsan,
+            .link_libc = true,
         }),
-        .sanitize_thread = config.enable_tsan,
     });
-    fuzz_exe.linkLibC();
-    fuzz_exe.root_module.addOptions("build-options", build_options);
-    switch (config.blockstore_db) {
+    switch (config.ledger_db) {
         .rocksdb => fuzz_exe.root_module.addImport("rocksdb", rocksdb_mod),
         .hashmap => {},
     }
@@ -270,15 +295,14 @@ pub fn build(b: *Build) void {
             .optimize = config.optimize,
             .imports = imports,
             .error_tracing = config.error_tracing,
+            .sanitize_thread = config.enable_tsan,
+            .link_libc = true,
         }),
-        .sanitize_thread = config.enable_tsan,
     });
-    benchmark_exe.linkLibC();
-
     // make sure pyroscope's got enough info to profile
     benchmark_exe.build_id = .fast;
 
-    switch (config.blockstore_db) {
+    switch (config.ledger_db) {
         .rocksdb => benchmark_exe.root_module.addImport("rocksdb", rocksdb_mod),
         .hashmap => {},
     }
@@ -286,26 +310,28 @@ pub fn build(b: *Build) void {
 
     const geyser_reader_exe = b.addExecutable(.{
         .name = "geyser",
-        .root_source_file = b.path("src/geyser/main.zig"),
-        .target = config.target,
-        .optimize = config.optimize,
-        .sanitize_thread = config.enable_tsan,
-        .error_tracing = config.error_tracing,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/geyser/main.zig"),
+            .target = config.target,
+            .optimize = config.optimize,
+            .imports = imports,
+            .error_tracing = config.error_tracing,
+            .sanitize_thread = config.enable_tsan,
+        }),
     });
-    geyser_reader_step.dependOn(&geyser_reader_exe.step);
-    install_step.dependOn(&geyser_reader_exe.step);
-
     geyser_reader_exe.root_module.addImport("sig", sig_mod);
     geyser_reader_exe.root_module.addImport("cli", cli_mod);
     addInstallAndRun(b, geyser_reader_step, geyser_reader_exe, config);
 
     const vm_exe = b.addExecutable(.{
         .name = "vm",
-        .root_source_file = b.path("src/vm/main.zig"),
-        .target = config.target,
-        .optimize = config.optimize,
-        .sanitize_thread = config.enable_tsan,
-        .error_tracing = config.error_tracing,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/vm/main.zig"),
+            .target = config.target,
+            .optimize = config.optimize,
+            .sanitize_thread = config.enable_tsan,
+            .error_tracing = config.error_tracing,
+        }),
     });
     vm_exe.root_module.addImport("sig", sig_mod);
     vm_exe.root_module.addImport("cli", cli_mod);
@@ -366,7 +392,20 @@ fn addInstallAndRun(
     }
 }
 
-const BlockstoreDB = enum {
+fn generateTable(b: *Build) Build.LazyPath {
+    const gen = b.addExecutable(.{
+        .name = "generator_chain",
+        .root_module = b.createModule(.{
+            .target = b.graph.host,
+            // Overall it takes less time to compile in debug mode than the perf gain from a release mode at runtime
+            .optimize = .Debug,
+            .root_source_file = b.path("scripts/generator_chain.zig"),
+        }),
+    });
+    return b.addRunArtifact(gen).captureStdOut();
+}
+
+const LedgerDB = enum {
     rocksdb,
     hashmap,
 };

@@ -1,3 +1,4 @@
+pub const account_store = @import("account_store.zig");
 pub const accounts_file = @import("accounts_file.zig");
 pub const buffer_pool = @import("buffer_pool.zig");
 pub const db = @import("db.zig");
@@ -8,6 +9,11 @@ pub const index = @import("index.zig");
 pub const manager = @import("manager.zig");
 pub const snapshots = @import("snapshots.zig");
 pub const swiss_map = @import("swiss_map.zig");
+
+pub const AccountStore = account_store.AccountStore;
+pub const AccountReader = account_store.AccountReader;
+pub const SlotAccountReader = account_store.SlotAccountReader;
+pub const ThreadSafeAccountMap = account_store.ThreadSafeAccountMap;
 
 pub const AccountsDB = db.AccountsDB;
 pub const FullAndIncrementalManifest = snapshots.FullAndIncrementalManifest;

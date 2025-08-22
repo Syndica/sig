@@ -200,6 +200,10 @@ pub fn serializeParameters(
     copy_account_data: bool,
     mask_out_rent_epoch_in_vm_serialization: bool,
 ) (error{OutOfMemory} || InstructionError)!SerializeReturn {
+    if (ic.ixn_info.account_metas.len > InstructionInfo.MAX_ACCOUNT_METAS) {
+        return error.MaxAccountsExceeded;
+    }
+
     const is_loader_v1 = blk: {
         const program_account = try ic.borrowProgramAccount();
         defer program_account.release();
@@ -248,7 +252,7 @@ pub fn serializeParameters(
 /// [agave] https://github.com/anza-xyz/agave/blob/108fcb4ff0f3cb2e7739ca163e6ead04e377e567/program-runtime/src/serialization.rs#L282
 fn serializeParametersUnaligned(
     allocator: std.mem.Allocator,
-    accounts: []SerializedAccount,
+    accounts: []const SerializedAccount,
     instruction_data: []const u8,
     program_id: Pubkey,
     copy_account_data: bool,
@@ -360,7 +364,7 @@ fn serializeParametersUnaligned(
 /// [agave] https://github.com/anza-xyz/agave/blob/108fcb4ff0f3cb2e7739ca163e6ead04e377e567/program-runtime/src/serialization.rs#L415
 fn serializeParametersAligned(
     allocator: std.mem.Allocator,
-    accounts: []SerializedAccount,
+    accounts: []const SerializedAccount,
     instruction_data: []const u8,
     program_id: Pubkey,
     copy_account_data: bool,
@@ -580,6 +584,7 @@ fn deserializeParametersUnaligned(
                         if (can_data_be_mutated) |err| return err;
                     }
                 }
+                start += pre_len;
             }
         }
 
@@ -656,13 +661,13 @@ fn deserializeParametersAligned(
             if (copy_account_data) {
                 if (start + post_len > memory.len) return InstructionError.InvalidArgument;
                 const data = memory[start .. start + post_len];
-                const can_data_be_resized =
+                const data_update_err: ?InstructionError =
                     borrowed_account.checkCanSetDataLength(
                         ic.tc.accounts_resize_delta,
                         post_len,
-                    );
-                const can_data_be_mutated = borrowed_account.checkDataIsMutable();
-                if (can_data_be_resized == null and can_data_be_mutated == null) {
+                    ) orelse borrowed_account.checkDataIsMutable();
+
+                if (data_update_err == null) {
                     try borrowed_account.setDataFromSlice(
                         allocator,
                         &ic.tc.accounts_resize_delta,
@@ -670,21 +675,21 @@ fn deserializeParametersAligned(
                     );
                 } else {
                     if (!std.mem.eql(u8, borrowed_account.account.data, data)) {
-                        if (can_data_be_resized) |err| return err;
-                        if (can_data_be_mutated) |err| return err;
+                        if (data_update_err) |err| return err;
                     }
                 }
+                start += pre_len; // data
             } else {
                 start += BPF_ALIGN_OF_U128 -| alignment_offset;
                 if (start + post_len > memory.len) return InstructionError.InvalidArgument;
                 const data = memory[start .. start + post_len];
-                const can_data_be_resized =
+                const data_update_err: ?InstructionError =
                     borrowed_account.checkCanSetDataLength(
                         ic.tc.accounts_resize_delta,
                         post_len,
-                    );
-                const can_data_be_mutated = borrowed_account.checkDataIsMutable();
-                if (can_data_be_resized == null and can_data_be_mutated == null) {
+                    ) orelse borrowed_account.checkDataIsMutable();
+
+                if (data_update_err == null) {
                     try borrowed_account.setDataLength(
                         allocator,
                         &ic.tc.accounts_resize_delta,
@@ -706,8 +711,7 @@ fn deserializeParametersAligned(
                     }
                 } else {
                     if (borrowed_account.constAccountData().len != post_len) {
-                        if (can_data_be_resized) |err| return err;
-                        if (can_data_be_mutated) |err| return err;
+                        if (data_update_err) |err| return err;
                     }
                 }
             }
@@ -810,7 +814,7 @@ test "serializeParameters" {
                 },
             );
             defer {
-                deinitTransactionContext(allocator, &tc);
+                deinitTransactionContext(allocator, tc);
                 cache.deinit(allocator);
             }
 
@@ -884,6 +888,27 @@ test "serializeParameters" {
                 .ixn_info = instruction_info,
                 .depth = 0,
             };
+
+            { // MaxAccountsExceeded
+                const original_len = ic.ixn_info.account_metas.len;
+                defer ic.ixn_info.account_metas.len = original_len;
+
+                while (ic.ixn_info.account_metas.len < ic.ixn_info.account_metas.buffer.len) {
+                    ic.ixn_info.account_metas.appendAssumeCapacity(.{
+                        .pubkey = Pubkey.ZEROES,
+                        .index_in_transaction = 0,
+                        .index_in_caller = 0,
+                        .index_in_callee = 0,
+                        .is_signer = false,
+                        .is_writable = false,
+                    });
+                }
+
+                try std.testing.expectEqual(
+                    error.MaxAccountsExceeded,
+                    serializeParameters(allocator, &ic, false, false),
+                );
+            }
 
             const pre_accounts = blk: {
                 var accounts = try std.ArrayListUnmanaged(struct {

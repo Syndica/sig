@@ -16,7 +16,6 @@ const Counter = sig.prometheus.Counter;
 const Duration = sig.time.Duration;
 const Gauge = sig.prometheus.Gauge;
 const Histogram = sig.prometheus.Histogram;
-const Logger = sig.trace.log.Logger;
 const Packet = sig.net.Packet;
 const Pubkey = sig.core.Pubkey;
 const RwMux = sig.sync.RwMux;
@@ -28,6 +27,8 @@ const ThreadSafeContactInfo = sig.gossip.data.ThreadSafeContactInfo;
 const ShredDeduper = shred_network.shred_deduper.ShredDeduper;
 const TurbineTree = shred_network.turbine_tree.TurbineTree;
 const TurbineTreeCache = shred_network.turbine_tree.TurbineTreeCache;
+
+const Logger = sig.trace.Logger("shred_retransmitter");
 
 const globalRegistry = sig.prometheus.globalRegistry;
 
@@ -117,7 +118,7 @@ pub fn runShredRetransmitter(params: ShredRetransmitterParams) !void {
 
     const sender_thread = try socket_utils.SocketThread.spawnSender(
         params.allocator,
-        params.logger,
+        .from(params.logger),
         retransmit_socket,
         &retransmit_to_socket_channel,
         .{ .unordered = params.exit },

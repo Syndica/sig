@@ -1,6 +1,7 @@
 const std = @import("std");
-
 const sig = @import("../sig.zig");
+const tracy = @import("tracy");
+
 const Backoff = @import("backoff.zig").Backoff;
 const Atomic = std.atomic.Value;
 const Allocator = std.mem.Allocator;
@@ -146,6 +147,9 @@ pub fn Channel(T: type) type {
         }
 
         pub fn send(channel: *Self, value: T) !void {
+            const zone = tracy.Zone.init(@src(), .{ .name = "Channel.send" });
+            defer zone.deinit();
+
             if (channel.closed.load(.monotonic)) {
                 return error.ChannelClosed;
             }
@@ -231,7 +235,7 @@ pub fn Channel(T: type) type {
         /// Must be called by only one receiver thread at a time.
         pub fn waitToReceive(channel: *Self, exit: ExitCondition) error{Exit}!void {
             while (channel.isEmpty()) {
-                channel.event.timedWait(1 * std.time.ns_per_s) catch {};
+                channel.event.timedWait(10 * std.time.ns_per_ms) catch {};
                 if (exit.shouldExit()) return error.Exit;
                 if (channel.event.isSet()) return channel.event.reset();
             }

@@ -1,39 +1,162 @@
+const builtin = @import("builtin");
 const std = @import("std");
 const sig = @import("../../sig.zig");
+
+const Allocator = std.mem.Allocator;
+
+const bincode = sig.bincode;
 
 const Epoch = sig.core.Epoch;
 const Pubkey = sig.core.Pubkey;
 
 /// [agave] https://github.com/anza-xyz/agave/blob/8db563d3bba4d03edf0eb2737fba87f394c32b64/sdk/sysvar/src/stake_history.rs#L67
 pub const StakeHistory = struct {
-    entries: []const Entry,
+    entries: *std.BoundedArray(Entry, MAX_ENTRIES),
 
-    pub const ID =
-        Pubkey.parseBase58String("SysvarStakeHistory1111111111111111111111111") catch unreachable;
+    pub const Entry = extern struct {
+        epoch: Epoch,
+        stake: StakeState,
 
-    pub const DEFAULT = StakeHistory{
-        .entries = &.{},
+        pub fn sortCmp(_: void, a: Entry, b: Entry) bool {
+            return b.epoch < a.epoch; // Sort by descending epoch
+        }
+
+        pub fn searchCmp(epoch: u64, b: Entry) std.math.Order {
+            return std.math.order(b.epoch, epoch);
+        }
+
+        pub fn initRandom(random: std.Random) Entry {
+            if (!builtin.is_test) @compileError("only for testing");
+            return .{
+                .epoch = random.int(Epoch),
+                .stake = .{
+                    .effective = random.int(u64),
+                    .activating = random.int(u64),
+                    .deactivating = random.int(u64),
+                },
+            };
+        }
     };
 
-    /// [stake] https://github.com/solana-program/stake/blob/bcec951fda5f2a30b1f4a058706d2e9ed23a8429/interface/src/stake_history.rs#L8
-    pub const MAX_ENTRIES = 512;
-
-    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/ac11e3e568952977e63bce6bb20e37f26a61e151/sysvar/src/stake_history.rs#L66
-    pub const SIZE_OF = 16_392;
-
-    pub const Entry = struct {
-        Epoch,
-        struct {
-            /// Effective stake at this epoch
-            effective: u64,
-            /// Sum of portion of stakes not fully warmed up
-            activating: u64,
-            /// Requested to be cooled down, not fully deactivated yet
-            deactivating: u64,
-        },
+    pub const StakeState = extern struct {
+        /// Effective stake at this epoch
+        effective: u64 = 0,
+        /// Sum of portion of stakes not fully warmed up
+        activating: u64 = 0,
+        /// Requested to be cooled down, not fully deactivated yet
+        deactivating: u64 = 0,
     };
 
-    pub fn deinit(self: StakeHistory, allocator: std.mem.Allocator) void {
-        allocator.free(self.entries);
+    pub const ID: Pubkey = .parse("SysvarStakeHistory1111111111111111111111111");
+
+    pub const MAX_ENTRIES: u64 = 512;
+
+    pub const STORAGE_SIZE: u64 = 16_392;
+
+    pub fn init(allocator: Allocator) Allocator.Error!StakeHistory {
+        const entries = try allocator.create(std.BoundedArray(Entry, MAX_ENTRIES));
+        entries.* = std.BoundedArray(Entry, MAX_ENTRIES){};
+        return .{ .entries = entries };
+    }
+
+    pub fn deinit(self: StakeHistory, allocator: Allocator) void {
+        allocator.destroy(self.entries);
+    }
+
+    pub fn clone(self: StakeHistory, allocator: Allocator) Allocator.Error!StakeHistory {
+        const cloned = try StakeHistory.init(allocator);
+        cloned.entries.* = self.entries.*;
+        return cloned;
+    }
+
+    pub fn isEmpty(self: StakeHistory) bool {
+        return self.entries.len == 0;
+    }
+
+    pub fn getEntry(self: StakeHistory, epoch: Epoch) ?Entry {
+        return if (std.sort.binarySearch(
+            Entry,
+            self.entries.constSlice(),
+            epoch,
+            Entry.searchCmp,
+        )) |index| self.entries.buffer[index] else null;
+    }
+
+    pub fn initWithEntries(
+        allocator: Allocator,
+        entries: []const Entry,
+    ) Allocator.Error!StakeHistory {
+        std.debug.assert(entries.len <= MAX_ENTRIES);
+        var self = try StakeHistory.init(allocator);
+        self.entries.appendSliceAssumeCapacity(entries);
+        std.sort.heap(Entry, self.entries.slice(), {}, Entry.sortCmp);
+        return self;
+    }
+
+    pub fn initRandom(allocator: Allocator, random: std.Random) Allocator.Error!StakeHistory {
+        // TODO: Uncomment once not required by bank init random
+        // if (!builtin.is_test) @compileError("only for testing");
+        var self = try StakeHistory.init(allocator);
+        for (0..random.uintLessThan(Epoch, MAX_ENTRIES)) |_|
+            self.entries.appendAssumeCapacity(.{
+                .epoch = random.int(u64),
+                .stake = .{
+                    .effective = random.int(u64),
+                    .activating = random.int(u64),
+                    .deactivating = random.int(u64),
+                },
+            });
+        std.sort.heap(Entry, self.entries.slice(), {}, Entry.sortCmp);
+        return self;
     }
 };
+
+test "serialize and deserialize" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+    const random = prng.random();
+
+    {
+        var stake_history = try StakeHistory.initRandom(allocator, random);
+        defer stake_history.deinit(allocator);
+
+        const serialized = try bincode.writeAlloc(allocator, stake_history, .{});
+        defer allocator.free(serialized);
+
+        const deserialized = try bincode.readFromSlice(allocator, StakeHistory, serialized, .{});
+        defer deserialized.deinit(allocator);
+
+        try std.testing.expectEqual(StakeHistory.MAX_ENTRIES, deserialized.entries.capacity());
+        try std.testing.expectEqualSlices(
+            StakeHistory.Entry,
+            stake_history.entries.constSlice(),
+            deserialized.entries.constSlice(),
+        );
+    }
+
+    {
+        var stake_history = try StakeHistory.init(allocator);
+        defer stake_history.deinit(allocator);
+        stake_history.entries.appendAssumeCapacity(.{
+            .epoch = random.int(Epoch),
+            .stake = .{
+                .effective = random.int(u64),
+                .activating = random.int(u64),
+                .deactivating = random.int(u64),
+            },
+        });
+
+        const serialized = try bincode.writeAlloc(allocator, stake_history, .{});
+        defer allocator.free(serialized);
+
+        const deserialized = try bincode.readFromSlice(allocator, StakeHistory, serialized, .{});
+        defer deserialized.deinit(allocator);
+
+        try std.testing.expectEqual(StakeHistory.MAX_ENTRIES, deserialized.entries.capacity());
+        try std.testing.expectEqualSlices(
+            StakeHistory.Entry,
+            stake_history.entries.constSlice(),
+            deserialized.entries.constSlice(),
+        );
+    }
+}

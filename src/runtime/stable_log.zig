@@ -162,12 +162,11 @@ test "stable_log" {
         },
     );
     defer {
-        sig.runtime.testing.deinitTransactionContext(allocator, &tc);
+        sig.runtime.testing.deinitTransactionContext(allocator, tc);
         cache.deinit(allocator);
     }
 
-    const program_id =
-        Pubkey.parseBase58String("SigDefau1tPubkey111111111111111111111111111") catch unreachable;
+    const program_id: Pubkey = .parse("SigDefau1tPubkey111111111111111111111111111");
 
     try programInvoke(&tc, program_id, 0);
     try programLog(&tc, "{s}", .{"log"});

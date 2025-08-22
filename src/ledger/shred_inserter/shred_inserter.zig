@@ -27,7 +27,7 @@ const SortedSet = sig.utils.collections.SortedSet;
 const SortedMap = sig.utils.collections.SortedMap;
 const Timer = sig.time.Timer;
 
-const BlockstoreDB = ledger.blockstore.BlockstoreDB;
+const LedgerDB = ledger.db.LedgerDB;
 const BytesRef = ledger.database.BytesRef;
 const IndexMetaWorkingSetEntry = lib.working_state.IndexMetaWorkingSetEntry;
 const MerkleRootValidator = lib.merkle_root_checks.MerkleRootValidator;
@@ -35,7 +35,7 @@ const PendingInsertShredsState = lib.working_state.PendingInsertShredsState;
 const PossibleDuplicateShred = lib.working_state.PossibleDuplicateShred;
 const WorkingEntry = lib.working_state.WorkingEntry;
 const ShredWorkingStore = lib.working_state.ShredWorkingStore;
-const WriteBatch = BlockstoreDB.WriteBatch;
+const WriteBatch = LedgerDB.WriteBatch;
 
 const ErasureMeta = meta.ErasureMeta;
 const Index = meta.Index;
@@ -49,29 +49,31 @@ const newlinesToSpaces = sig.utils.fmt.newlinesToSpaces;
 
 const DEFAULT_TICKS_PER_SECOND = sig.core.time.DEFAULT_TICKS_PER_SECOND;
 
+const Logger = sig.trace.Logger("shred_inserter");
+
 pub const ShredInserter = struct {
     allocator: Allocator,
-    logger: sig.trace.ScopedLogger(@typeName(Self)),
-    db: BlockstoreDB,
+    logger: Logger,
+    db: LedgerDB,
     lock: Mutex,
     max_root: Atomic(u64), // TODO shared
-    metrics: BlockstoreInsertionMetrics,
+    metrics: LedgerInsertionMetrics,
 
     const Self = @This();
 
     pub fn init(
         allocator: Allocator,
-        logger: sig.trace.Logger,
+        logger: Logger,
         registry: *sig.prometheus.Registry(.{}),
-        db: BlockstoreDB,
+        db: LedgerDB,
     ) GetMetricError!Self {
         return .{
             .allocator = allocator,
-            .logger = logger.withScope(@typeName(Self)),
+            .logger = logger,
             .db = db,
             .lock = .{},
             .max_root = Atomic(u64).init(0), // TODO read this from the database
-            .metrics = try registry.initStruct(BlockstoreInsertionMetrics),
+            .metrics = try registry.initStruct(LedgerInsertionMetrics),
         };
     }
 
@@ -215,7 +217,7 @@ pub const ShredInserter = struct {
         var total_timer = try Timer.start();
         var state = try PendingInsertShredsState.init(
             self.allocator,
-            self.logger.unscoped(),
+            .from(self.logger),
             &self.db,
             self.metrics,
         );
@@ -240,10 +242,9 @@ pub const ShredInserter = struct {
                 .data => |data_shred| {
                     if (options.shred_tracker) |tracker| {
                         tracker.registerDataShred(&shred.data, timestamp) catch |err| {
+                            self.metrics.register_shred_error.observe(@errorCast(err));
                             switch (err) {
-                                error.SlotUnderflow, error.SlotOverflow => {
-                                    self.metrics.register_shred_error.observe(@errorCast(err));
-                                },
+                                error.SlotUnderflow, error.SlotOverflow => {},
                                 else => return err,
                             }
                         };
@@ -270,8 +271,8 @@ pub const ShredInserter = struct {
                             self.metrics.num_turbine_data_shreds_exists.inc();
                         },
                         error.InvalidShred => self.metrics.num_data_shreds_invalid.inc(),
-                        // error.BlockstoreError => {
-                        //     self.metrics.num_data_shreds_blockstore_error.inc();
+                        // error.LedgerError => {
+                        //     self.metrics.num_data_shreds_ledger_error.inc();
                         //     // TODO improve this (maybe should be an error set)
                         // },
                         else => return e, // TODO explicit
@@ -328,17 +329,16 @@ pub const ShredInserter = struct {
                 }
                 // Since the data shreds are fully recovered from the
                 // erasure batch, no need to store code shreds in
-                // blockstore.
+                // ledger.
                 if (shred == .code) {
                     try valid_recovered_shreds.append(shred.payload());
                     continue;
                 }
                 if (options.shred_tracker) |tracker| {
                     tracker.registerDataShred(&shred.data, timestamp) catch |err| {
+                        self.metrics.register_shred_error.observe(@errorCast(err));
                         switch (err) {
-                            error.SlotUnderflow, error.SlotOverflow => {
-                                self.metrics.register_shred_error.observe(@errorCast(err));
-                            },
+                            error.SlotUnderflow, error.SlotOverflow => {},
                             else => return err,
                         }
                     };
@@ -359,8 +359,8 @@ pub const ShredInserter = struct {
                 } else |e| switch (e) {
                     error.Exists => self.metrics.num_recovered_exists.inc(),
                     error.InvalidShred => self.metrics.num_recovered_failed_invalid.inc(),
-                    // error.BlockstoreError => {
-                    //     self.metrics.num_recovered_blockstore_error.inc();
+                    // error.LedgerError => {
+                    //     self.metrics.num_recovered_ledger_error.inc();
                     //     // TODO improve this (maybe should be an error set)
                     // },
                     else => return e, // TODO explicit
@@ -545,7 +545,7 @@ pub const ShredInserter = struct {
             // invalid merkle root
             if (state.merkle_root_metas.get(erasure_set_id)) |merkle_root_meta| {
                 // TODO: this does not look in the database, so it's only checking this batch. is that desired?
-                // A previous shred has been inserted in this batch or in blockstore
+                // A previous shred has been inserted in this batch or in ledger
                 // Compare our current shred against the previous shred for potential
                 // conflicts
                 if (!try merkle_root_validator.checkConsistency(
@@ -615,7 +615,7 @@ pub const ShredInserter = struct {
             } else {
                 self.logger.err().logf(&newlinesToSpaces(
                     \\Unable to find the conflicting code shred that set {any}.
-                    \\This should only happen in extreme cases where blockstore cleanup has
+                    \\This should only happen in extreme cases where ledger cleanup has
                     \\caught up to the root. Skipping the erasure meta duplicate shred check
                 ), .{erasure_meta});
             }
@@ -721,7 +721,7 @@ pub const ShredInserter = struct {
             }
 
             if (state.merkle_root_metas.get(erasure_set_id)) |merkle_root_meta| {
-                // A previous shred has been inserted in this batch or in blockstore
+                // A previous shred has been inserted in this batch or in ledger
                 // Compare our current shred against the previous shred for potential
                 // conflicts
                 if (!try merkle_root_validator
@@ -764,7 +764,7 @@ pub const ShredInserter = struct {
         try index_meta.code_index.put(shred_index);
     }
 
-    /// Check if the shred already exists in blockstore
+    /// Check if the shred already exists in ledger
     /// agave: is_data_shred_present
     fn isDataShredPresent(
         shred: DataShred,
@@ -809,8 +809,8 @@ pub const ShredInserter = struct {
                 const ending_shred = if (maybe_shred) |s| s else {
                     self.logger.err().logf(&newlinesToSpaces(
                         \\Last received data shred {any} indicated by slot meta \
-                        \\{any} is missing from blockstore. This should only happen in \
-                        \\extreme cases where blockstore cleanup has caught up to the root. \
+                        \\{any} is missing from ledger. This should only happen in \
+                        \\extreme cases where ledger cleanup has caught up to the root. \
                         \\Skipping data shred insertion
                     ), .{ shred_id, slot_meta });
                     return false; // TODO: this is redundant
@@ -1029,7 +1029,7 @@ pub const ShredInserter = struct {
     ) void {
         const start, const end = erasure_meta.dataShredsIndices();
         self.logger.trace().logf(
-            \\datapoint: blockstore-erasure
+            \\datapoint: ledger-erasure
             \\    slot: {[slot]}
             \\    start_index: {[start_index]}
             \\    end_index: {[end_index]}
@@ -1158,7 +1158,7 @@ pub const CompletedDataSetInfo = struct {
     end_index: u32,
 };
 
-pub const BlockstoreInsertionMetrics = struct {
+pub const LedgerInsertionMetrics = struct {
     insert_lock_elapsed_us: *Counter, // u64
     insert_shreds_elapsed_us: *Counter, // u64
     shred_recovery_elapsed_us: *Counter, // u64
@@ -1172,7 +1172,7 @@ pub const BlockstoreInsertionMetrics = struct {
     num_inserted: *Counter, // u64
     num_repair: *Counter, // u64
     num_recovered: *Counter, // usize
-    num_recovered_blockstore_error: *Counter, // usize
+    num_recovered_ledger_error: *Counter, // usize
     num_recovered_inserted: *Counter, // usize
     num_recovered_failed_sig: *Counter, // usize
     num_recovered_failed_invalid: *Counter, // usize
@@ -1180,13 +1180,15 @@ pub const BlockstoreInsertionMetrics = struct {
     num_repaired_data_shreds_exists: *Counter, // usize
     num_turbine_data_shreds_exists: *Counter, // usize
     num_data_shreds_invalid: *Counter, // usize
-    num_data_shreds_blockstore_error: *Counter, // usize
+    num_data_shreds_ledger_error: *Counter, // usize
     num_code_shreds_exists: *Counter, // usize
     num_code_shreds_invalid: *Counter, // usize
     num_code_shreds_invalid_erasure_config: *Counter, // usize
     num_code_shreds_inserted: *Counter, // usize
 
-    register_shred_error: *sig.prometheus.VariantCounter(sig.shred_network.shred_tracker.SlotOutOfBounds),
+    register_shred_error: *sig.prometheus.VariantCounter(
+        sig.shred_network.shred_tracker.BasicShredTracker.RegisterDataShredError,
+    ),
 
     pub const prefix = "shred_inserter";
 };
@@ -1197,7 +1199,6 @@ pub const BlockstoreInsertionMetrics = struct {
 const test_shreds = @import("../test_shreds.zig");
 const TestState = ledger.tests.TestState;
 const DirectPrintLogger = sig.trace.DirectPrintLogger;
-const Logger = sig.trace.Logger;
 
 fn assertOk(result: anytype) void {
     std.debug.assert(if (result) |_| true else |_| false);
@@ -1205,7 +1206,7 @@ fn assertOk(result: anytype) void {
 
 const ShredInserterTestState = struct {
     state: *TestState,
-    db: BlockstoreDB,
+    db: LedgerDB,
     inserter: ShredInserter,
 
     pub fn init(
@@ -1213,16 +1214,16 @@ const ShredInserterTestState = struct {
         comptime test_src: std.builtin.SourceLocation,
     ) !ShredInserterTestState {
         var test_logger = DirectPrintLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
-        const logger = test_logger.logger();
-        return initWithLogger(allocator_, test_src, logger);
+        const logger = test_logger.logger("shred_inserter.test");
+        return initWithLogger(allocator_, test_src, .from(logger));
     }
 
     fn initWithLogger(
         allocator_: std.mem.Allocator,
         comptime test_src: std.builtin.SourceLocation,
-        logger: sig.trace.Logger,
+        logger: Logger,
     ) !ShredInserterTestState {
-        const state = try TestState.init(allocator_, test_src, logger);
+        const state = try TestState.init(allocator_, test_src, .from(logger));
         const inserter = try ShredInserter.init(
             state.allocator,
             logger,
@@ -1414,7 +1415,7 @@ test "merkle root metas coding" {
     const allocator = state.allocator();
     var registry = sig.prometheus.Registry(.{}).init(allocator);
     defer registry.deinit();
-    const metrics = try registry.initStruct(BlockstoreInsertionMetrics);
+    const metrics = try registry.initStruct(LedgerInsertionMetrics);
 
     const slot = 1;
     const start_index = 0;
@@ -1574,8 +1575,8 @@ test "recovery" {
     const data_shreds = shreds[0..34];
     const code_shreds = shreds[34..68];
 
-    var leader_schedule = OneSlotLeaders{
-        .leader = try Pubkey.parseBase58String("2iWGQbhdWWAA15KTBJuqvAxCdKmEvY26BoFRBU4419Sn"),
+    var leader_schedule: OneSlotLeaders = .{
+        .leader = .parse("2iWGQbhdWWAA15KTBJuqvAxCdKmEvY26BoFRBU4419Sn"),
     };
 
     const is_repairs = try allocator.alloc(bool, code_shreds.len);

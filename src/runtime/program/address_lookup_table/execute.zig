@@ -61,10 +61,10 @@ fn createLookupTable(
 ) (error{OutOfMemory} || InstructionError)!void {
     const AccountIndex = instruction.CreateLookupTable.AccountIndex;
 
-    const has_relax_authority_signer_check_for_lookup_table_creation =
-        ic.tc.feature_set.active.contains(
-            runtime.features.RELAX_AUTHORITY_SIGNER_CHECK_FOR_LOOKUP_TABLE_CREATION,
-        );
+    const has_relax_authority_signer_check_for_lookup_table_creation = ic.tc.feature_set.active(
+        .relax_authority_signer_check_for_lookup_table_creation,
+        ic.tc.slot,
+    );
 
     // [agave] https://github.com/anza-xyz/agave/blob/8116c10021f09c806159852f65d37ffe6d5a118e/programs/address-lookup-table/src/processor.rs#L59
     const lookup_table_lamports, const table_key: Pubkey, const lookup_table_owner: Pubkey = blk: {
@@ -746,9 +746,10 @@ test "address-lookup-table create" {
 
     const sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
         .clock = runtime.sysvar.Clock.DEFAULT,
-        .slot_hashes = runtime.sysvar.SlotHashes{
-            .entries = &.{.{ std.math.maxInt(Slot), sig.core.Hash.ZEROES }},
-        },
+        .slot_hashes = try sysvar.SlotHashes.initWithEntries(
+            allocator,
+            &.{.{ .slot = std.math.maxInt(Slot), .hash = sig.core.Hash.ZEROES }},
+        ),
         .rent = runtime.sysvar.Rent.DEFAULT,
     };
 
@@ -852,9 +853,10 @@ test "address-lookup-table freeze" {
 
     const sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
         .clock = runtime.sysvar.Clock.DEFAULT,
-        .slot_hashes = runtime.sysvar.SlotHashes{
-            .entries = &.{.{ std.math.maxInt(Slot), sig.core.Hash.ZEROES }},
-        },
+        .slot_hashes = try sysvar.SlotHashes.initWithEntries(
+            allocator,
+            &.{.{ .slot = std.math.maxInt(Slot), .hash = sig.core.Hash.ZEROES }},
+        ),
         .rent = runtime.sysvar.Rent.DEFAULT,
     };
 
@@ -962,9 +964,10 @@ test "address-lookup-table close" {
 
     const sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
         .clock = runtime.sysvar.Clock.DEFAULT,
-        .slot_hashes = runtime.sysvar.SlotHashes{
-            .entries = &.{.{ std.math.maxInt(Slot), sig.core.Hash.ZEROES }},
-        },
+        .slot_hashes = try sysvar.SlotHashes.initWithEntries(
+            allocator,
+            &.{.{ .slot = std.math.maxInt(Slot), .hash = sig.core.Hash.ZEROES }},
+        ),
         .rent = runtime.sysvar.Rent.DEFAULT,
     };
 
@@ -1070,9 +1073,10 @@ test "address-lookup-table deactivate" {
 
     const sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
         .clock = runtime.sysvar.Clock.DEFAULT,
-        .slot_hashes = runtime.sysvar.SlotHashes{
-            .entries = &.{.{ std.math.maxInt(Slot), sig.core.Hash.ZEROES }},
-        },
+        .slot_hashes = try sysvar.SlotHashes.initWithEntries(
+            allocator,
+            &.{.{ .slot = std.math.maxInt(Slot), .hash = sig.core.Hash.ZEROES }},
+        ),
         .rent = runtime.sysvar.Rent.DEFAULT,
     };
 
@@ -1202,9 +1206,10 @@ test "address-lookup-table extend" {
 
         const sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
             .clock = runtime.sysvar.Clock.DEFAULT,
-            .slot_hashes = runtime.sysvar.SlotHashes{
-                .entries = &.{.{ std.math.maxInt(Slot), sig.core.Hash.ZEROES }},
-            },
+            .slot_hashes = try sysvar.SlotHashes.initWithEntries(
+                allocator,
+                &.{.{ .slot = std.math.maxInt(Slot), .hash = sig.core.Hash.ZEROES }},
+            ),
             .rent = runtime.sysvar.Rent.DEFAULT,
         };
 

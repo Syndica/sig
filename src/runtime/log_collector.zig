@@ -36,9 +36,10 @@ pub const LogCollector = struct {
         return LogCollector.init(allocator, DEFAULT_MAX_BYTES_LIMIT);
     }
 
-    pub fn deinit(self: *LogCollector, allocator: std.mem.Allocator) void {
-        self.message_pool.deinit(allocator);
-        self.message_indices.deinit(allocator);
+    pub fn deinit(self: LogCollector, allocator: std.mem.Allocator) void {
+        var copy = self;
+        copy.message_pool.deinit(allocator);
+        copy.message_indices.deinit(allocator);
     }
 
     pub fn eql(self: LogCollector, other: LogCollector) bool {

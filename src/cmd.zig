@@ -6,7 +6,7 @@ const config = @import("config.zig");
 const tracy = @import("tracy");
 
 const AccountsDB = sig.accounts_db.AccountsDB;
-const BlockstoreReader = sig.ledger.BlockstoreReader;
+const LedgerReader = sig.ledger.LedgerReader;
 const LedgerResultWriter = sig.ledger.result_writer.LedgerResultWriter;
 const ChannelPrintLogger = sig.trace.ChannelPrintLogger;
 const ClusterType = sig.core.ClusterType;
@@ -18,7 +18,6 @@ const GossipService = sig.gossip.GossipService;
 const IpAddr = sig.net.IpAddr;
 const LeaderSchedule = sig.core.leader_schedule.LeaderSchedule;
 const LeaderScheduleCache = sig.core.leader_schedule.LeaderScheduleCache;
-const Logger = sig.trace.Logger;
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 const SnapshotFiles = sig.accounts_db.SnapshotFiles;
@@ -33,9 +32,7 @@ const getWallclockMs = sig.time.getWallclockMs;
 const globalRegistry = sig.prometheus.globalRegistry;
 const servePrometheus = sig.prometheus.servePrometheus;
 
-/// The identifier for the scoped logger used in this file.
-const LOG_SCOPE = "cmd";
-const ScopedLogger = sig.trace.ScopedLogger(LOG_SCOPE);
+const Logger = sig.trace.Logger("cmd");
 
 // We set this so that std.log knows not to log .debug level messages
 // which libraries we import will use
@@ -62,13 +59,16 @@ pub fn main() !void {
     tracy.startupProfiler();
     defer tracy.shutdownProfiler();
 
-    const zone = tracy.initZone(@src(), .{ .name = "main" });
+    const zone = tracy.Zone.init(@src(), .{ .name = "main" });
     defer zone.deinit();
 
     var gpa_state: GpaOrCAllocator(.{}) = .{};
     // defer _ = gpa_state.deinit();
 
-    var tracing_allocator = tracy.TracingAllocator.initNamed("gpa", gpa_state.allocator());
+    var tracing_allocator = tracy.TracingAllocator{
+        .name = "gpa",
+        .parent = gpa_state.allocator(),
+    };
     const gpa = tracing_allocator.allocator();
 
     var gossip_gpa_state: GpaOrCAllocator(.{ .stack_trace_frames = 100 }) = .{};
@@ -402,6 +402,7 @@ const Cmd = struct {
         force_unpack_snapshot: bool,
         number_of_index_shards: u64,
         accounts_per_file_estimate: u64,
+        skip_snapshot_validation: bool,
 
         const cmd_info: cli.ArgumentInfoGroup(@This()) = .{
             .use_disk_index = .{
@@ -455,6 +456,14 @@ const Cmd = struct {
                 .help = "number of accounts to estimate inside of account files" ++
                     " (used for pre-allocation)",
             },
+            .skip_snapshot_validation = .{
+                .kind = .named,
+                .name_override = null,
+                .alias = .none,
+                .default_value = false,
+                .config = {},
+                .help = "skip the validation of the snapshot",
+            },
         };
 
         fn apply(args: @This(), cfg: *config.Cmd) void {
@@ -464,6 +473,7 @@ const Cmd = struct {
             cfg.accounts_db.force_unpack_snapshot = args.force_unpack_snapshot;
             cfg.accounts_db.number_of_index_shards = args.number_of_index_shards;
             cfg.accounts_db.accounts_per_file_estimate = args.accounts_per_file_estimate;
+            cfg.accounts_db.skip_snapshot_validation = args.skip_snapshot_validation;
         }
     };
     const AccountsDbArgumentsDownload = struct {
@@ -574,7 +584,7 @@ const Cmd = struct {
                 .alias = .none,
                 .default_value = 5_000_000,
                 .config = {},
-                .help = "Max number of shreds to store in the blockstore",
+                .help = "Max number of shreds to store in the ledger",
             },
         };
 
@@ -951,7 +961,7 @@ fn identity(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
     defer if (maybe_file) |file| file.close();
     defer logger.deinit();
 
-    const keypair = try sig.identity.getOrInit(allocator, logger);
+    const keypair = try sig.identity.getOrInit(allocator, .from(logger));
     const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
 
     logger.info().logf("Identity: {s}\n", .{pubkey});
@@ -963,7 +973,7 @@ fn gossip(
     gossip_value_allocator: std.mem.Allocator,
     cfg: config.Cmd,
 ) !void {
-    const zone = tracy.initZone(@src(), .{ .name = "gossip" });
+    const zone = tracy.Zone.init(@src(), .{ .name = "gossip" });
     defer zone.deinit();
 
     var app_base = try AppBase.init(allocator, cfg);
@@ -995,7 +1005,7 @@ fn validator(
     gossip_value_allocator: std.mem.Allocator,
     cfg: config.Cmd,
 ) !void {
-    const zone = tracy.initZone(@src(), .{ .name = "validator" });
+    const zone = tracy.Zone.init(@src(), .{ .name = "validator" });
     defer zone.deinit();
 
     var app_base = try AppBase.init(allocator, cfg);
@@ -1038,10 +1048,10 @@ fn validator(
     };
 
     // snapshot
-    var loaded_snapshot = try loadSnapshot(allocator, cfg, app_base.logger.unscoped(), .{
+    var loaded_snapshot = try loadSnapshot(allocator, cfg, .from(app_base.logger), .{
         .gossip_service = gossip_service,
         .geyser_writer = geyser_writer,
-        .validate_snapshot = true,
+        .validate_snapshot = !cfg.accounts_db.skip_snapshot_validation,
     });
     defer loaded_snapshot.deinit();
 
@@ -1053,22 +1063,22 @@ fn validator(
     if (try getLeaderScheduleFromCli(allocator, cfg)) |leader_schedule| {
         try leader_schedule_cache.put(bank_fields.epoch, leader_schedule[1]);
     } else {
-        const schedule = try bank_fields.leaderSchedule(allocator);
+        const schedule = try collapsed_manifest.leaderSchedule(allocator, null);
         errdefer schedule.deinit();
         try leader_schedule_cache.put(bank_fields.epoch, schedule);
     }
 
-    // blockstore
-    var blockstore_db = try sig.ledger.BlockstoreDB.open(
+    // ledger
+    var ledger_db = try sig.ledger.LedgerDB.open(
         allocator,
-        app_base.logger.unscoped(),
-        sig.VALIDATOR_DIR ++ "blockstore",
+        .from(app_base.logger),
+        sig.VALIDATOR_DIR ++ "ledger",
     );
     const shred_inserter = try sig.ledger.ShredInserter.init(
         allocator,
-        app_base.logger.unscoped(),
+        .from(app_base.logger),
         app_base.metrics_registry,
-        blockstore_db,
+        ledger_db,
     );
 
     // cleanup service
@@ -1080,12 +1090,12 @@ fn validator(
     max_root.* = std.atomic.Value(sig.core.Slot).init(0);
     defer allocator.destroy(max_root);
 
-    const blockstore_reader = try allocator.create(BlockstoreReader);
-    defer allocator.destroy(blockstore_reader);
-    blockstore_reader.* = try BlockstoreReader.init(
+    const ledger_reader = try allocator.create(LedgerReader);
+    defer allocator.destroy(ledger_reader);
+    ledger_reader.* = try LedgerReader.init(
         allocator,
-        app_base.logger.unscoped(),
-        blockstore_db,
+        .from(app_base.logger),
+        ledger_db,
         app_base.metrics_registry,
         lowest_cleanup_slot,
         max_root,
@@ -1095,22 +1105,21 @@ fn validator(
     defer allocator.destroy(ledger_result_writer);
     ledger_result_writer.* = try LedgerResultWriter.init(
         allocator,
-        app_base.logger.unscoped(),
-        blockstore_db,
+        .from(app_base.logger),
+        ledger_db,
         app_base.metrics_registry,
         lowest_cleanup_slot,
         max_root,
     );
 
     var cleanup_service_handle = try std.Thread.spawn(.{}, sig.ledger.cleanup_service.run, .{
-        app_base.logger.unscoped(),
-        blockstore_reader,
-        &blockstore_db,
+        sig.ledger.cleanup_service.Logger.from(app_base.logger),
+        ledger_reader,
+        &ledger_db,
         lowest_cleanup_slot,
         cfg.max_shreds,
         app_base.exit,
     });
-    defer cleanup_service_handle.join();
 
     // Random number generator
     var prng = std.Random.DefaultPrng.init(@bitCast(std.time.timestamp()));
@@ -1121,22 +1130,28 @@ fn validator(
 
     const epoch_schedule = bank_fields.epoch_schedule;
     const epoch = bank_fields.epoch;
-    const staked_nodes =
-        try bank_fields.getStakedNodes(allocator, epoch);
 
-    var epoch_context_manager = try sig.adapter.EpochContextManager.init(
-        allocator,
-        epoch_schedule,
-    );
-    try epoch_context_manager.put(epoch, .{
-        .staked_nodes = try staked_nodes.clone(allocator),
-        .leader_schedule = try LeaderSchedule.fromStakedNodes(
+    const staked_nodes = try collapsed_manifest.epochStakes(epoch);
+    var epoch_context_manager = try sig.adapter.EpochContextManager.init(allocator, epoch_schedule);
+    defer epoch_context_manager.deinit();
+    try epoch_context_manager.contexts.realign(epoch);
+    {
+        var staked_nodes_cloned = try staked_nodes.clone(allocator);
+        errdefer staked_nodes_cloned.deinit(allocator);
+
+        const leader_schedule = try LeaderSchedule.fromStakedNodes(
             allocator,
             epoch,
             epoch_schedule.slots_per_epoch,
             staked_nodes,
-        ),
-    });
+        );
+        errdefer allocator.free(leader_schedule);
+
+        try epoch_context_manager.put(epoch, .{
+            .staked_nodes = staked_nodes_cloned,
+            .leader_schedule = leader_schedule,
+        });
+    }
 
     const rpc_cluster_type = loaded_snapshot.genesis_config.cluster_type;
     var rpc_client = try sig.rpc.Client.init(allocator, rpc_cluster_type, .{});
@@ -1144,7 +1159,7 @@ fn validator(
 
     var rpc_epoch_ctx_service = sig.adapter.RpcEpochContextService.init(
         allocator,
-        app_base.logger.unscoped(),
+        .from(app_base.logger),
         &epoch_context_manager,
         rpc_client,
     );
@@ -1162,7 +1177,7 @@ fn validator(
         cfg.shred_network.toConfig(loaded_snapshot.collapsed_manifest.bank_fields.slot),
         .{
             .allocator = allocator,
-            .logger = app_base.logger.unscoped(),
+            .logger = .from(app_base.logger),
             .registry = app_base.metrics_registry,
             .random = prng.random(),
             .my_keypair = &app_base.my_keypair,
@@ -1178,29 +1193,72 @@ fn validator(
     );
     defer shred_network_manager.deinit();
 
-    const replay_thread = try app_base.spawnService(
-        "replay",
-        sig.replay.service.run,
-        .{sig.replay.service.ReplayDependencies{
-            .allocator = allocator,
-            .logger = app_base.logger.unscoped(),
-            .my_identity = .{ .data = app_base.my_keypair.public_key.bytes },
-            .exit = app_base.exit,
-            .blockstore_reader = blockstore_reader,
-            .ledger_result_writer = ledger_result_writer,
-            .accounts_db = &loaded_snapshot.accounts_db,
-            .epoch_schedule = bank_fields.epoch_schedule,
-            .slot_leaders = epoch_context_manager.slotLeaders(),
-            .root_slot = bank_fields.slot,
-            .root_slot_constants = .fromBankFields(bank_fields),
-            .root_slot_state = try .fromBankFields(allocator, bank_fields),
-        }},
-    );
+    const replay_senders: sig.replay.service.Senders = try .create(allocator);
+    defer replay_senders.destroy();
+
+    const replay_receivers: sig.replay.service.Receivers = try .create(allocator);
+    defer replay_receivers.destroy();
+
+    const replay_thread = replay: {
+        const epoch_stakes_map = &collapsed_manifest.bank_extra.versioned_epoch_stakes;
+        const epoch_stakes = epoch_stakes_map.get(epoch) orelse
+            return error.EpochStakesMissingFromSnapshot;
+
+        const feature_set = try sig.replay.service.getActiveFeatures(
+            allocator,
+            loaded_snapshot.accounts_db.accountReader().forSlot(&bank_fields.ancestors),
+            bank_fields.slot,
+        );
+        const root_slot_constants = try sig.core.SlotConstants.fromBankFields(
+            allocator,
+            bank_fields,
+            feature_set,
+        );
+        errdefer root_slot_constants.deinit(allocator);
+
+        var root_slot_state = try sig.core.SlotState.fromBankFields(allocator, bank_fields);
+        errdefer root_slot_state.deinit(allocator);
+
+        break :replay try app_base.spawnService(
+            "replay",
+            sig.replay.service.run,
+            .{sig.replay.service.ReplayDependencies{
+                .allocator = allocator,
+                .logger = .from(app_base.logger),
+                .my_identity = .fromPublicKey(&app_base.my_keypair.public_key),
+                .vote_identity = .fromPublicKey(&app_base.my_keypair.public_key), // TODO: is this fine, or do we need a separate identity for the vote account?
+                .exit = app_base.exit,
+                .account_store = loaded_snapshot.accounts_db.accountStore(),
+                .ledger = .{
+                    .db = ledger_db,
+                    .reader = ledger_reader,
+                    .writer = ledger_result_writer,
+                },
+                .epoch_schedule = bank_fields.epoch_schedule,
+                .slot_leaders = epoch_context_manager.slotLeaders(),
+                .root = .{
+                    .slot = bank_fields.slot,
+                    .constants = root_slot_constants,
+                    .state = root_slot_state,
+                },
+
+                .senders = replay_senders,
+                .receivers = replay_receivers,
+                .current_epoch = epoch,
+                .current_epoch_constants = try .fromBankFields(
+                    bank_fields,
+                    try epoch_stakes.current.convert(allocator, .delegation),
+                ),
+                .hard_forks = try bank_fields.hard_forks.clone(allocator),
+            }},
+        );
+    };
 
     replay_thread.join();
     rpc_epoch_ctx_service_thread.join();
     gossip_service.service_manager.join();
     shred_network_manager.join();
+    cleanup_service_handle.join();
 }
 
 fn shredNetwork(
@@ -1245,24 +1303,24 @@ fn shredNetwork(
     var epoch_context_manager = try sig.adapter.EpochContextManager
         .init(allocator, genesis_config.epoch_schedule);
     var rpc_epoch_ctx_service = sig.adapter.RpcEpochContextService
-        .init(allocator, app_base.logger.unscoped(), &epoch_context_manager, rpc_client);
+        .init(allocator, .from(app_base.logger), &epoch_context_manager, rpc_client);
     const rpc_epoch_ctx_service_thread = try std.Thread.spawn(
         .{},
         sig.adapter.RpcEpochContextService.run,
         .{ &rpc_epoch_ctx_service, app_base.exit },
     );
 
-    // blockstore
-    var blockstore_db = try sig.ledger.BlockstoreDB.open(
+    // ledger
+    var ledger_db = try sig.ledger.LedgerDB.open(
         allocator,
-        app_base.logger.unscoped(),
-        sig.VALIDATOR_DIR ++ "blockstore",
+        .from(app_base.logger),
+        sig.VALIDATOR_DIR ++ "ledger",
     );
     const shred_inserter = try sig.ledger.ShredInserter.init(
         allocator,
-        app_base.logger.unscoped(),
+        .from(app_base.logger),
         app_base.metrics_registry,
-        blockstore_db,
+        ledger_db,
     );
 
     // cleanup service
@@ -1274,26 +1332,25 @@ fn shredNetwork(
     max_root.* = std.atomic.Value(sig.core.Slot).init(0);
     defer allocator.destroy(max_root);
 
-    const blockstore_reader = try allocator.create(BlockstoreReader);
-    defer allocator.destroy(blockstore_reader);
-    blockstore_reader.* = try BlockstoreReader.init(
+    const ledger_reader = try allocator.create(LedgerReader);
+    defer allocator.destroy(ledger_reader);
+    ledger_reader.* = try LedgerReader.init(
         allocator,
-        app_base.logger.unscoped(),
-        blockstore_db,
+        .from(app_base.logger),
+        ledger_db,
         app_base.metrics_registry,
         lowest_cleanup_slot,
         max_root,
     );
 
     var cleanup_service_handle = try std.Thread.spawn(.{}, sig.ledger.cleanup_service.run, .{
-        app_base.logger.unscoped(),
-        blockstore_reader,
-        &blockstore_db,
+        sig.ledger.cleanup_service.Logger.from(app_base.logger),
+        ledger_reader,
+        &ledger_db,
         lowest_cleanup_slot,
         cfg.max_shreds,
         app_base.exit,
     });
-    defer cleanup_service_handle.join();
 
     var prng = std.Random.DefaultPrng.init(@bitCast(std.time.timestamp()));
 
@@ -1303,7 +1360,7 @@ fn shredNetwork(
     // shred networking
     var shred_network_manager = try sig.shred_network.start(shred_network_conf, .{
         .allocator = allocator,
-        .logger = app_base.logger.unscoped(),
+        .logger = .from(app_base.logger),
         .registry = app_base.metrics_registry,
         .random = prng.random(),
         .my_keypair = &app_base.my_keypair,
@@ -1321,6 +1378,7 @@ fn shredNetwork(
     rpc_epoch_ctx_service_thread.join();
     gossip_service.service_manager.join();
     shred_network_manager.join();
+    cleanup_service_handle.join();
 }
 
 fn printManifest(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
@@ -1338,7 +1396,7 @@ fn printManifest(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
 
     var snapshots = try FullAndIncrementalManifest.fromFiles(
         allocator,
-        app_base.logger.unscoped(),
+        .from(app_base.logger),
         snapshot_dir,
         snapshot_file_info,
     );
@@ -1361,7 +1419,7 @@ fn createSnapshot(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{});
     defer snapshot_dir.close();
 
-    var loaded_snapshot = try loadSnapshot(allocator, cfg, app_base.logger.unscoped(), .{
+    var loaded_snapshot = try loadSnapshot(allocator, cfg, .from(app_base.logger), .{
         .gossip_service = null,
         .geyser_writer = null,
         .validate_snapshot = false,
@@ -1424,7 +1482,7 @@ fn validateSnapshot(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
         allocator.destroy(geyser);
     };
 
-    var loaded_snapshot = try loadSnapshot(allocator, cfg, app_base.logger.unscoped(), .{
+    var loaded_snapshot = try loadSnapshot(allocator, cfg, .from(app_base.logger), .{
         .gossip_service = null,
         .geyser_writer = geyser_writer,
         .validate_snapshot = true,
@@ -1446,7 +1504,7 @@ fn printLeaderSchedule(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
     = try getLeaderScheduleFromCli(allocator, cfg) orelse b: {
         app_base.logger.info().log("Downloading a snapshot to calculate the leader schedule.");
 
-        var loaded_snapshot = loadSnapshot(allocator, cfg, app_base.logger.unscoped(), .{
+        var loaded_snapshot = loadSnapshot(allocator, cfg, .from(app_base.logger), .{
             .gossip_service = null,
             .geyser_writer = null,
             .validate_snapshot = true,
@@ -1466,7 +1524,7 @@ fn printLeaderSchedule(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
         _, const slot_index = bank_fields.epoch_schedule.getEpochAndSlotIndex(bank_fields.slot);
         break :b .{
             bank_fields.slot - slot_index,
-            try bank_fields.leaderSchedule(allocator),
+            try loaded_snapshot.collapsed_manifest.leaderSchedule(allocator, null),
         };
     };
 
@@ -1533,7 +1591,7 @@ fn testTransactionSenderService(
     // this handles transactions and forwards them to leaders TPU ports
     var transaction_sender_service = try sig.transaction_sender.Service.init(
         allocator,
-        app_base.logger.unscoped(),
+        .from(app_base.logger),
         .{ .cluster = rpc_cluster, .socket = SocketAddr.init(app_base.my_ip, 0) },
         transaction_channel,
         &gossip_service.gossip_table_rw,
@@ -1548,7 +1606,7 @@ fn testTransactionSenderService(
 
     // rpc is used to get blockhashes and other balance information
     var rpc_client = try sig.rpc.Client.init(allocator, rpc_cluster, .{
-        .logger = app_base.logger.unscoped(),
+        .logger = .from(app_base.logger),
     });
     defer rpc_client.deinit();
 
@@ -1558,7 +1616,7 @@ fn testTransactionSenderService(
         transaction_channel,
         rpc_client,
         app_base.exit,
-        app_base.logger.unscoped(),
+        .from(app_base.logger),
     );
     // send and confirm mock transactions
     try mock_transfer_service.run(
@@ -1572,7 +1630,7 @@ fn testTransactionSenderService(
 }
 
 fn mockRpcServer(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
-    const logger: sig.trace.Logger = .{ .direct_print = .{ .max_level = .trace } };
+    const logger: sig.trace.Logger("mock rpc") = .{ .direct_print = .{ .max_level = .trace } };
 
     var snapshot_dir = try std.fs.cwd().makeOpenPath(cfg.accounts_db.snapshot_dir, .{
         .iterate = true,
@@ -1600,7 +1658,7 @@ fn mockRpcServer(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
     {
         const all_snap_fields = try FullAndIncrementalManifest.fromFiles(
             allocator,
-            logger.unscoped(),
+            .from(logger),
             snapshot_dir,
             snap_files,
         );
@@ -1620,7 +1678,7 @@ fn mockRpcServer(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
 
     var server_ctx = try sig.rpc.server.Context.init(.{
         .allocator = allocator,
-        .logger = logger,
+        .logger = .from(logger),
         .accountsdb = &accountsdb,
 
         .read_buffer_size = sig.rpc.server.MIN_READ_BUFFER_SIZE,
@@ -1644,7 +1702,7 @@ fn mockRpcServer(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
 /// and deinitialized only when the app exits.
 const AppBase = struct {
     allocator: std.mem.Allocator,
-    logger: ScopedLogger,
+    logger: Logger,
     log_file: ?std.fs.File,
     metrics_registry: *sig.prometheus.Registry(.{}),
     metrics_thread: std.Thread,
@@ -1659,9 +1717,8 @@ const AppBase = struct {
     closed: bool,
 
     fn init(allocator: std.mem.Allocator, cfg: config.Cmd) !AppBase {
-        const maybe_file, const plain_logger = try spawnLogger(allocator, cfg);
+        const maybe_file, const logger = try spawnLogger(allocator, cfg);
         errdefer if (maybe_file) |file| file.close();
-        const logger = plain_logger.withScope(LOG_SCOPE);
         errdefer logger.deinit();
 
         const exit = try allocator.create(std.atomic.Value(bool));
@@ -1670,16 +1727,16 @@ const AppBase = struct {
 
         const metrics_registry = globalRegistry();
         const metrics_thread = try sig.utils.service_manager.spawnService( //
-            plain_logger, exit, "metrics endpoint", .{}, //
+            .from(logger), exit, "metrics endpoint", .{}, //
             servePrometheus, .{ allocator, metrics_registry, cfg.metrics_port });
         errdefer metrics_thread.detach();
 
-        const my_keypair = try sig.identity.getOrInit(allocator, logger.unscoped());
+        const my_keypair = try sig.identity.getOrInit(allocator, .from(logger));
         const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
 
         const entrypoints = try cfg.gossip.getEntrypointAddrs(allocator);
 
-        const echo_data = try getShredAndIPFromEchoServer(logger.unscoped(), entrypoints);
+        const echo_data = try getShredAndIPFromEchoServer(.from(logger), entrypoints);
 
         const my_shred_version =
             cfg.shred_version orelse
@@ -1721,7 +1778,7 @@ const AppBase = struct {
         args: anytype,
     ) std.Thread.SpawnError!std.Thread {
         return try sig.utils.service_manager.spawnService(
-            self.logger,
+            .from(self.logger),
             self.exit,
             name,
             .{},
@@ -1755,7 +1812,7 @@ fn startGossip(
     /// Extra sockets to publish in gossip, other than the gossip socket
     extra_sockets: []const struct { tag: SocketTag, port: u16 },
 ) !*GossipService {
-    const zone = tracy.initZone(@src(), .{ .name = "cmd startGossip" });
+    const zone = tracy.Zone.init(@src(), .{ .name = "cmd startGossip" });
     defer zone.deinit();
 
     app_base.logger.info()
@@ -1781,7 +1838,7 @@ fn startGossip(
         contact_info,
         app_base.my_keypair, // TODO: consider security implication of passing keypair by value
         app_base.entrypoints,
-        app_base.logger.unscoped(),
+        .from(app_base.logger),
     );
 
     try service.start(.{
@@ -1812,7 +1869,7 @@ fn spawnLogger(
         .write_stderr = cfg.tee_logs or cfg.log_file == null,
     }, writer);
 
-    return .{ file, std_logger.logger() };
+    return .{ file, .from(std_logger.logger("spawnLogger")) };
 }
 
 const LoadedSnapshot = struct {
@@ -1848,13 +1905,11 @@ const LoadSnapshotOptions = struct {
 fn loadSnapshot(
     allocator: std.mem.Allocator,
     cfg: config.Cmd,
-    unscoped_logger: Logger,
+    logger: Logger,
     options: LoadSnapshotOptions,
 ) !LoadedSnapshot {
-    const zone = tracy.initZone(@src(), .{ .name = "cmd loadSnapshot" });
+    const zone = tracy.Zone.init(@src(), .{ .name = "cmd loadSnapshot" });
     defer zone.deinit();
-
-    const logger = unscoped_logger.withScope(@typeName(@This()) ++ "." ++ @src().fn_name);
 
     var validator_dir = try std.fs.cwd().makeOpenPath(sig.VALIDATOR_DIR, .{});
     defer validator_dir.close();
@@ -1869,7 +1924,7 @@ fn loadSnapshot(
     const snapshot_files //
     = try sig.accounts_db.download.getOrDownloadAndUnpackSnapshot(
         allocator,
-        logger.unscoped(),
+        .from(logger),
         snapshot_dir_str,
         .{
             .gossip_service = options.gossip_service,
@@ -1908,7 +1963,7 @@ fn loadSnapshot(
 
     var accounts_db = try AccountsDB.init(.{
         .allocator = allocator,
-        .logger = logger.unscoped(),
+        .logger = .from(logger),
         // where we read the snapshot from
         .snapshot_dir = snapshot_dir,
         .geyser_writer = options.geyser_writer,
@@ -2036,7 +2091,7 @@ fn downloadSnapshot(
 
     const full_file, const maybe_inc_file = try downloadSnapshotsFromGossip(
         allocator,
-        app_base.logger.unscoped(),
+        .from(app_base.logger),
         if (trusted_validators) |trusted| trusted.items else null,
         gossip_service,
         snapshot_dir,
@@ -2055,10 +2110,8 @@ fn getTrustedValidators(allocator: std.mem.Allocator, cfg: config.Cmd) !?std.Arr
             allocator,
             cfg.gossip.trusted_validators.len,
         );
-        for (cfg.gossip.trusted_validators) |trusted_validator_str| {
-            trusted_validators.?.appendAssumeCapacity(
-                try Pubkey.parseBase58String(trusted_validator_str),
-            );
+        for (cfg.gossip.trusted_validators) |trusted_validator| {
+            trusted_validators.?.appendAssumeCapacity(try Pubkey.parseRuntime(trusted_validator));
         }
     }
     return trusted_validators;

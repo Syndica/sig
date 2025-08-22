@@ -78,12 +78,19 @@ pub fn verifyTickHashCount(
 pub fn verifyPoh(
     entries: []const Entry,
     allocator: Allocator,
-    preallocated_nodes: ?*std.ArrayListUnmanaged(Hash),
     initial_hash: Hash,
-) Allocator.Error!bool {
+    /// Items you may include to optimize this function.
+    optional: struct {
+        /// Recycle a list from a prior execution to avoid unnecessary allocations.
+        preallocated_nodes: ?*std.ArrayListUnmanaged(Hash) = null,
+        /// return error.Exit when set to true by another thread.
+        exit: ?*const std.atomic.Value(bool) = null,
+    },
+) (Allocator.Error || error{Exit})!bool {
     var current_hash = initial_hash;
 
     for (entries) |entry| {
+        if (optional.exit) |exit| if (exit.load(.monotonic)) return error.Exit;
         if (entry.num_hashes == 0) continue;
 
         for (1..entry.num_hashes) |_| {
@@ -92,7 +99,7 @@ pub fn verifyPoh(
 
         if (entry.transactions.len > 0) {
             const mixin =
-                try hashTransactions(allocator, preallocated_nodes, entry.transactions);
+                try hashTransactions(allocator, optional.preallocated_nodes, entry.transactions);
             current_hash = current_hash.extendAndHash(&mixin.data);
         } else {
             current_hash = Hash.generateSha256(&current_hash.data);
@@ -178,8 +185,7 @@ test "Entry serialization and deserialization" {
 pub const test_entry = struct {
     pub const as_struct = Entry{
         .num_hashes = 149218308,
-        .hash = sig.core.Hash
-            .parseBase58String("G8T3smgLc4XavAtxScD3u4FTAqPtwbFCEJKwJbfoECcd") catch unreachable,
+        .hash = .parse("G8T3smgLc4XavAtxScD3u4FTAqPtwbFCEJKwJbfoECcd"),
         .transactions = &.{
             sig.core.transaction.transaction_v0_example.as_struct,
             sig.core.transaction.transaction_v0_example.as_struct,
@@ -275,19 +281,23 @@ test hashTransactions {
     var transactions: [3]Transaction = undefined;
     for (serialized_transactions, 0..) |stx, i| {
         var stream = std.io.fixedBufferStream(&stx);
-        transactions[i] = try Transaction.deserialize(std.testing.allocator, stream.reader(), .{});
+        var limit_allocator = sig.bincode.LimitAllocator{
+            .backing_allocator = std.testing.allocator,
+            .bytes_remaining = std.math.maxInt(usize),
+        };
+        transactions[i] = try Transaction.deserialize(&limit_allocator, stream.reader(), .{});
     }
     defer for (transactions) |tx| tx.deinit(std.testing.allocator);
 
     try std.testing.expectEqual(
-        try Hash.parseBase58String("2Gd4Mp8gCqSNCbmZXZVhrEo5A9qLM9BrmiWwzvvsLH4A"),
+        Hash.parse("2Gd4Mp8gCqSNCbmZXZVhrEo5A9qLM9BrmiWwzvvsLH4A"),
         hashTransactions(std.testing.allocator, null, &transactions),
     );
 
     std.mem.swap(Transaction, &transactions[0], &transactions[1]);
 
     try std.testing.expectEqual(
-        try Hash.parseBase58String("4yK3bxwdLmPQjDiLRH1XYZeYjXhuTmf8HUTYXMwwTcrJ"),
+        Hash.parse("4yK3bxwdLmPQjDiLRH1XYZeYjXhuTmf8HUTYXMwwTcrJ"),
         hashTransactions(std.testing.allocator, null, &transactions),
     );
 }

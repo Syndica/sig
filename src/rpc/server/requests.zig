@@ -11,7 +11,7 @@ const IncrementalSnapshotFileInfo = sig.accounts_db.snapshots.IncrementalSnapsho
 /// A single request body cannot be larger than this.
 pub const MAX_REQUEST_BODY_SIZE: usize = 50 * 1024; // 50 KiB
 
-const LOGGER_SCOPE = "rpc.server.requests";
+const Logger = sig.trace.Logger("rpc.server.requests");
 
 pub const ContentType = enum(u8) {
     @"application/json",
@@ -90,12 +90,10 @@ pub const GetRequestTargetResolved = union(enum) {
 
 /// Resolve a `GET` request target.
 pub fn getRequestTargetResolve(
-    unscoped_logger: sig.trace.Logger,
+    logger: Logger,
     path: []const u8,
     latest_snapshot_gen_info_rw: *sig.sync.RwMux(?SnapshotGenerationInfo),
 ) GetRequestTargetResolved {
-    const logger = unscoped_logger.withScope(LOGGER_SCOPE);
-
     if (!std.mem.startsWith(u8, path, "/")) return .not_found;
     const target = path[1..];
 

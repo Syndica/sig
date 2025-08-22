@@ -18,7 +18,7 @@ const cf1 = ColumnFamily{
 
 var executed_actions = std.AutoHashMap(Actions, void).init(allocator);
 
-pub const BlockstoreDB = switch (sig.build_options.blockstore_db) {
+pub const LedgerDB = switch (sig.build_options.ledger_db) {
     .rocksdb => ledger.database.RocksDB(&.{cf1}),
     .hashmap => ledger.database.SharedHashMapDB(&.{cf1}),
 };
@@ -45,7 +45,7 @@ fn getKeys(map: *std.AutoHashMap(u32, Data)) !std.ArrayList(u32) {
     return keys;
 }
 
-fn createBlockstoreDB() !BlockstoreDB {
+fn createLedgerDB() !LedgerDB {
     const ledger_path =
         try std.fmt.allocPrint(allocator, "{s}/ledger", .{sig.FUZZ_DATA_DIR});
 
@@ -55,7 +55,7 @@ fn createBlockstoreDB() !BlockstoreDB {
     } else |_| {}
     try std.fs.cwd().makePath(ledger_path);
 
-    return try BlockstoreDB.open(
+    return try LedgerDB.open(
         allocator,
         .noop,
         ledger_path,
@@ -63,13 +63,18 @@ fn createBlockstoreDB() !BlockstoreDB {
 }
 
 pub fn run(initial_seed: u64, args: *std.process.ArgIterator) !void {
-    var seed = initial_seed;
     const maybe_max_actions_string = args.next();
 
     const maybe_max_actions = if (maybe_max_actions_string) |max_actions_str|
         try std.fmt.parseInt(usize, max_actions_str, 10)
     else
         null;
+
+    try runInner(initial_seed, maybe_max_actions, true);
+}
+
+fn runInner(initial_seed: u64, maybe_max_actions: ?usize, log: bool) !void {
+    var seed = initial_seed;
 
     const ledger_path =
         try std.fmt.allocPrint(allocator, "{s}/ledger", .{sig.FUZZ_DATA_DIR});
@@ -80,7 +85,7 @@ pub fn run(initial_seed: u64, args: *std.process.ArgIterator) !void {
     } else |_| {}
     try std.fs.cwd().makePath(ledger_path);
 
-    var db = try createBlockstoreDB();
+    var db = try createLedgerDB();
 
     defer db.deinit();
 
@@ -89,14 +94,14 @@ pub fn run(initial_seed: u64, args: *std.process.ArgIterator) !void {
     outer: while (true) {
         var prng = std.Random.DefaultPrng.init(seed);
         const random = prng.random();
-        // This is a simpler blockstore which is used to make sure
+        // This is a simpler ledger which is used to make sure
         // the method calls being fuzzed return expected data.
         var data_map = std.AutoHashMap(u32, Data).init(allocator);
         defer data_map.deinit();
         for (0..1_000) |_| {
             if (maybe_max_actions) |max| {
                 if (count >= max) {
-                    std.debug.print("reached max actions: {}\n", .{max});
+                    if (log) std.debug.print("reached max actions: {}\n", .{max});
                     break :outer;
                 }
             }
@@ -116,7 +121,7 @@ pub fn run(initial_seed: u64, args: *std.process.ArgIterator) !void {
             count += 1;
         }
         seed += 1;
-        std.debug.print("using seed: {}\n", .{seed});
+        if (log) std.debug.print("using seed: {}\n", .{seed});
     }
 
     inline for (@typeInfo(Actions).@"enum".fields) |field| {
@@ -128,7 +133,7 @@ pub fn run(initial_seed: u64, args: *std.process.ArgIterator) !void {
     }
 }
 
-fn dbPut(data_map: *std.AutoHashMap(u32, Data), db: *BlockstoreDB, random: std.Random) !void {
+fn dbPut(data_map: *std.AutoHashMap(u32, Data), db: *LedgerDB, random: std.Random) !void {
     try executed_actions.put(Actions.put, {});
     const key = random.int(u32);
     var buffer: [61]u8 = undefined;
@@ -145,7 +150,7 @@ fn dbPut(data_map: *std.AutoHashMap(u32, Data), db: *BlockstoreDB, random: std.R
     try data_map.put(key, data);
 }
 
-fn dbGet(data_map: *std.AutoHashMap(u32, Data), db: *BlockstoreDB, random: std.Random) !void {
+fn dbGet(data_map: *std.AutoHashMap(u32, Data), db: *LedgerDB, random: std.Random) !void {
     try executed_actions.put(Actions.get, {});
     const dataKeys = try getKeys(data_map);
     if (dataKeys.items.len > 0 and random.boolean()) {
@@ -165,7 +170,7 @@ fn dbGet(data_map: *std.AutoHashMap(u32, Data), db: *BlockstoreDB, random: std.R
     }
 }
 
-fn dbGetBytes(data_map: *std.AutoHashMap(u32, Data), db: *BlockstoreDB, random: std.Random) !void {
+fn dbGetBytes(data_map: *std.AutoHashMap(u32, Data), db: *LedgerDB, random: std.Random) !void {
     try executed_actions.put(Actions.get_bytes, {});
     const dataKeys = try getKeys(data_map);
     if (dataKeys.items.len > 0 and random.boolean()) {
@@ -192,12 +197,12 @@ fn dbGetBytes(data_map: *std.AutoHashMap(u32, Data), db: *BlockstoreDB, random: 
 
 fn dbCount(
     data_map: *std.AutoHashMap(u32, Data),
-    db: *BlockstoreDB,
+    db: *LedgerDB,
 ) !void {
     try executed_actions.put(Actions.count, {});
     // TODO Fix why changes are not reflected in count with rocksdb implementation,
     // but it does with hashmap.
-    if (sig.build_options.blockstore_db == .rocksdb) {
+    if (sig.build_options.ledger_db == .rocksdb) {
         return;
     }
 
@@ -207,7 +212,7 @@ fn dbCount(
     try std.testing.expectEqual(expected, actual);
 }
 
-fn dbContains(data_map: *std.AutoHashMap(u32, Data), db: *BlockstoreDB, random: std.Random) !void {
+fn dbContains(data_map: *std.AutoHashMap(u32, Data), db: *LedgerDB, random: std.Random) !void {
     try executed_actions.put(Actions.contains, {});
     const dataKeys = try getKeys(data_map);
     if (dataKeys.items.len > 0 and random.boolean()) {
@@ -226,7 +231,7 @@ fn dbContains(data_map: *std.AutoHashMap(u32, Data), db: *BlockstoreDB, random: 
     }
 }
 
-fn dbDelete(data_map: *std.AutoHashMap(u32, Data), db: *BlockstoreDB, random: std.Random) !void {
+fn dbDelete(data_map: *std.AutoHashMap(u32, Data), db: *LedgerDB, random: std.Random) !void {
     try executed_actions.put(Actions.delete, {});
     const dataKeys = try getKeys(data_map);
     if (dataKeys.items.len > 0 and random.boolean()) {
@@ -248,7 +253,7 @@ fn dbDelete(data_map: *std.AutoHashMap(u32, Data), db: *BlockstoreDB, random: st
 }
 
 // Batch API
-fn batchAPI(data_map: *std.AutoHashMap(u32, Data), db: *BlockstoreDB, random: std.Random) !void {
+fn batchAPI(data_map: *std.AutoHashMap(u32, Data), db: *LedgerDB, random: std.Random) !void {
     try executed_actions.put(Actions.batch, {});
     // Batch put
     {
@@ -340,4 +345,10 @@ fn batchAPI(data_map: *std.AutoHashMap(u32, Data), db: *BlockstoreDB, random: st
             try std.testing.expectEqual(null, actual);
         }
     }
+}
+
+test run {
+    var args = std.process.ArgIterator.init();
+    while (args.next()) |_| {}
+    try runInner(0, 100, false);
 }

@@ -1,8 +1,6 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 
-const Logger = sig.trace.Logger;
-const ScopedLogger = sig.trace.ScopedLogger;
 const AtomicBool = std.atomic.Value(bool);
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Channel = sig.sync.Channel;
@@ -59,8 +57,10 @@ pub const MockTransferService = struct {
     sender: *Channel(TransactionInfo),
     rpc_client: RpcClient,
     exit: *AtomicBool,
-    logger: ScopedLogger(@typeName(Self)),
+    logger: Logger,
     accounts: MockAccounts = MockAccounts.DEFAULT,
+
+    const Logger = sig.trace.Logger(@typeName(Self));
 
     const Self = @This();
 
@@ -176,7 +176,7 @@ pub const MockTransferService = struct {
                 defer blockhash_response.deinit();
                 const blockhash = try blockhash_response.result();
                 break :blk .{
-                    try Hash.parseBase58String(blockhash.value.blockhash),
+                    try Hash.parseRuntime(blockhash.value.blockhash),
                     blockhash.value.lastValidBlockHeight,
                 };
             };
@@ -231,7 +231,7 @@ pub const MockTransferService = struct {
                 defer blockhash_response.deinit();
                 const blockhash = try blockhash_response.result();
                 break :blk .{
-                    try Hash.parseBase58String(blockhash.value.blockhash),
+                    try Hash.parseRuntime(blockhash.value.blockhash),
                     blockhash.value.lastValidBlockHeight,
                 };
             };
@@ -276,7 +276,7 @@ pub const MockTransferService = struct {
             defer blockhash_response.deinit();
             const blockhash = try blockhash_response.result();
             break :blk .{
-                try Hash.parseBase58String(blockhash.value.blockhash),
+                try Hash.parseRuntime(blockhash.value.blockhash),
                 blockhash.value.lastValidBlockHeight,
             };
         };
@@ -387,8 +387,7 @@ pub const MockTransferService = struct {
         const addresses = try allocator.dupe(Pubkey, &.{
             from_pubkey,
             to_pubkey,
-            // TODO: replace with system_program_id once it's available
-            try Pubkey.parseBase58String("11111111111111111111111111111111"),
+            sig.runtime.program.system.ID,
         });
         errdefer allocator.free(addresses);
 

@@ -13,7 +13,9 @@ pub const requests = @import("requests.zig");
 pub const basic = @import("basic.zig");
 pub const LinuxIoUring = @import("linux_io_uring.zig").LinuxIoUring;
 
-comptime {
+const Logger = sig.trace.Logger("rpc.server");
+
+test {
     _ = connection;
     _ = requests;
 
@@ -23,8 +25,6 @@ comptime {
 
 /// The minimum buffer read size.
 pub const MIN_READ_BUFFER_SIZE = 4096;
-
-const LOGGER_SCOPE = "rpc.server";
 
 /// The work pool is a tagged union, representing one of various possible backends.
 /// It acts merely as a reference to a specific backend's state, or a tag for stateless
@@ -37,7 +37,7 @@ pub const WorkPool = union(enum) {
 /// The basic state required for the server to operate.
 pub const Context = struct {
     allocator: std.mem.Allocator,
-    logger: sig.trace.log.ScopedLogger(LOGGER_SCOPE),
+    logger: Logger,
     accountsdb: *sig.accounts_db.AccountsDB,
 
     /// Wait group for all currently running tasks, used to wait for
@@ -51,7 +51,7 @@ pub const Context = struct {
     pub fn init(params: struct {
         /// Must be a thread-safe allocator.
         allocator: std.mem.Allocator,
-        logger: sig.trace.Logger,
+        logger: Logger,
         accountsdb: *sig.accounts_db.AccountsDB,
 
         /// The size for the read buffer allocated to every request.
@@ -70,7 +70,7 @@ pub const Context = struct {
 
         return .{
             .allocator = params.allocator,
-            .logger = params.logger.withScope(LOGGER_SCOPE),
+            .logger = params.logger,
             .accountsdb = params.accountsdb,
 
             .wait_group = .{},
@@ -124,8 +124,8 @@ test "serveSpawn snapshots" {
     var prng = std.Random.DefaultPrng.init(0);
     const random = prng.random();
 
-    // const logger_unscoped: sig.trace.Logger = .{ .direct_print = .{ .max_level = .trace } };
-    const logger_unscoped: sig.trace.Logger = .noop;
+    // const logger_unscoped: Logger = .{ .direct_print = .{ .max_level = .trace } };
+    const logger_unscoped: Logger = .noop;
     const logger = logger_unscoped.withScope(@src().fn_name);
 
     var tmp_dir_root = std.testing.tmpDir(.{});
@@ -138,7 +138,7 @@ test "serveSpawn snapshots" {
 
     var accountsdb = try sig.accounts_db.AccountsDB.init(.{
         .allocator = allocator,
-        .logger = logger.unscoped(),
+        .logger = .from(logger),
         .snapshot_dir = unpacked_snap_dir,
         .geyser_writer = null,
         .gossip_view = null,
@@ -175,7 +175,7 @@ test "serveSpawn snapshots" {
         const FullAndIncrementalManifest = sig.accounts_db.snapshots.FullAndIncrementalManifest;
         const full_inc_manifest = try FullAndIncrementalManifest.fromFiles(
             allocator,
-            logger.unscoped(),
+            .from(logger),
             unpacked_snap_dir,
             snap_files,
         );
@@ -194,7 +194,7 @@ test "serveSpawn snapshots" {
     const sock_addr = std.net.Address.initIp4(.{ 0, 0, 0, 0 }, rpc_port);
     var server_ctx = try Context.init(.{
         .allocator = allocator,
-        .logger = logger.unscoped(),
+        .logger = .from(logger),
         .accountsdb = &accountsdb,
         .socket_addr = sock_addr,
         .read_buffer_size = 4096,
@@ -245,8 +245,8 @@ test "serveSpawn getAccountInfo" {
     var prng = std.Random.DefaultPrng.init(0);
     const random = prng.random();
 
-    // const logger_unscoped: sig.trace.Logger = .{ .direct_print = .{ .max_level = .trace } };
-    const logger_unscoped: sig.trace.Logger = .noop;
+    // const logger_unscoped: Logger = .{ .direct_print = .{ .max_level = .trace } };
+    const logger_unscoped: Logger = .noop;
     const logger = logger_unscoped.withScope(@src().fn_name);
 
     var tmp_dir_root = std.testing.tmpDir(.{});
@@ -259,7 +259,7 @@ test "serveSpawn getAccountInfo" {
 
     var accountsdb = try sig.accounts_db.AccountsDB.init(.{
         .allocator = allocator,
-        .logger = logger.unscoped(),
+        .logger = .from(logger),
         .snapshot_dir = unpacked_snap_dir,
         .geyser_writer = null,
         .gossip_view = null,
@@ -289,7 +289,7 @@ test "serveSpawn getAccountInfo" {
     const test_sock_addr = std.net.Address.initIp4(.{ 0, 0, 0, 0 }, test_rpc_port);
     var server_ctx = try Context.init(.{
         .allocator = allocator,
-        .logger = logger.unscoped(),
+        .logger = .from(logger),
         .accountsdb = &accountsdb,
         .socket_addr = test_sock_addr,
         .read_buffer_size = 4096,

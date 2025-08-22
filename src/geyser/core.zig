@@ -480,9 +480,11 @@ pub fn openPipe(pipe_path: []const u8) !std.fs.File {
     return file;
 }
 
+pub const Logger = sig.trace.Logger("geyser");
+
 pub fn streamReader(
     reader: *GeyserReader,
-    logger: sig.trace.Logger,
+    logger: Logger,
     exit: *std.atomic.Value(bool),
     measure_rate: ?sig.time.Duration,
 ) !void {

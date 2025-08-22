@@ -11,6 +11,8 @@ const Instant = sig.time.Instant;
 const Registry = sig.prometheus.Registry;
 const Slot = sig.core.Slot;
 
+const Logger = sig.trace.Logger("shred_tracker");
+
 const MAX_SHREDS_PER_SLOT: usize = sig.ledger.shred.MAX_SHREDS_PER_SLOT;
 
 const MIN_SLOT_AGE_TO_REPORT_AS_MISSING: Duration = Duration.fromMillis(600);
@@ -27,7 +29,8 @@ pub const Range = struct {
 /// is not yet implemented. A complete implementation in the future should
 /// continue pursuing missing shreds unless a later slot is rooted.
 pub const BasicShredTracker = struct {
-    logger: sig.trace.ScopedLogger(@typeName(Self)),
+    logger: Logger,
+    skip_checking_arena: std.heap.ArenaAllocator,
     mux: Mutex = .{},
     /// The slot that this struct was initialized with at index 0
     start_slot: ?Slot,
@@ -52,25 +55,38 @@ pub const BasicShredTracker = struct {
 
     const Self = @This();
 
-    pub fn init(slot: Slot, logger: sig.trace.Logger, registry: *Registry(.{})) !Self {
+    pub fn init(
+        allocator: Allocator,
+        slot: Slot,
+        logger: Logger,
+        registry: *Registry(.{}),
+    ) !Self {
         const metrics = try registry.initStruct(Metrics);
         metrics.finished_slots_through.set(slot);
         metrics.max_slot_processed.set(slot);
         return .{
             .start_slot = slot,
+            .skip_checking_arena = .init(allocator),
             .current_bottom_slot = slot,
             .max_slot_processed = slot,
             .max_slot_seen = slot,
-            .logger = logger.withScope(@typeName(Self)),
+            .logger = logger,
             .metrics = try registry.initStruct(Metrics),
         };
     }
+
+    pub fn deinit(self: *const BasicShredTracker) void {
+        self.skip_checking_arena.deinit();
+    }
+
+    pub const RegisterDataShredError = SlotOutOfBounds ||
+        error{ InvalidShredParent, InvalidParentSlotOffset };
 
     pub fn registerDataShred(
         self: *Self,
         shred: *const sig.ledger.shred.DataShred,
         timestamp: Instant,
-    ) !void {
+    ) RegisterDataShredError!void {
         const parent = try shred.parent();
         const is_last_in_slot = shred.custom.flags.isSet(.last_shred_in_slot);
         const slot = shred.common.slot;
@@ -78,14 +94,16 @@ pub const BasicShredTracker = struct {
         try self.registerShred(slot, index, parent, is_last_in_slot, timestamp);
     }
 
-    pub fn registerShred(
+    fn registerShred(
         self: *Self,
         slot: Slot,
         shred_index: u32,
         parent_slot: Slot,
         is_last_in_slot: bool,
         timestamp: Instant,
-    ) SlotOutOfBounds!void {
+    ) (SlotOutOfBounds || error{InvalidShredParent})!void {
+        if (parent_slot >= slot) return error.InvalidShredParent;
+
         self.mux.lock();
         defer self.mux.unlock();
 
@@ -114,12 +132,7 @@ pub const BasicShredTracker = struct {
             for (parent_slot + 1..slot) |slot_to_skip| {
                 const monitored_slot_to_skip = self.observeSlot(slot_to_skip) catch continue;
                 if (!monitored_slot_to_skip.is_complete) {
-                    monitored_slot_to_skip.is_complete = true;
-                    if (slot_to_skip > self.max_slot_processed) {
-                        self.max_slot_processed = slot_to_skip;
-                        self.metrics.max_slot_processed.set(slot_to_skip);
-                    }
-                    if (slot_to_skip == new_bottom) new_bottom += 1;
+                    monitored_slot_to_skip.is_skipped = true;
                 }
             }
         }
@@ -170,7 +183,7 @@ pub const BasicShredTracker = struct {
     pub fn identifyMissing(
         self: *Self,
         slot_reports: *MultiSlotReport,
-        timestamp: Instant,
+        now: Instant,
     ) (Allocator.Error || SlotOutOfBounds)!bool {
         if (self.start_slot == null) return false;
         self.mux.lock();
@@ -181,20 +194,75 @@ pub const BasicShredTracker = struct {
         const last_slot_to_check = @max(self.max_slot_processed, self.current_bottom_slot);
         for (self.current_bottom_slot..last_slot_to_check + 1) |slot| {
             const monitored_slot = try self.getMonitoredSlot(slot);
-            if (timestamp.elapsedSince(monitored_slot.first_received_timestamp)
+
+            if (now.elapsedSince(monitored_slot.first_received_timestamp)
                 .lt(MIN_SLOT_AGE_TO_REPORT_AS_MISSING))
                 continue;
-            var slot_report = try slot_reports.addOne();
-            slot_report.slot = slot;
-            try monitored_slot.identifyMissing(&slot_report.missing_shreds);
-            if (slot_report.missing_shreds.items.len > 0) {
-                found_an_incomplete_slot = true;
+
+            if (!try self.slotShouldBeSkipped(monitored_slot, slot, last_slot_to_check, now)) {
+                var slot_report = try slot_reports.addOne();
+                slot_report.slot = slot;
+                try monitored_slot.identifyMissing(&slot_report.missing_shreds);
+                if (slot_report.missing_shreds.items.len > 0) {
+                    std.debug.assert(!monitored_slot.is_complete);
+                    found_an_incomplete_slot = true;
+                } else {
+                    std.debug.assert(monitored_slot.is_complete);
+                    slot_reports.drop(1);
+                }
             }
+
             if (!found_an_incomplete_slot) {
-                self.setBottom(slot);
+                self.setBottom(slot + 1);
             }
         }
         return true;
+    }
+
+    /// assumes lock is held
+    ///
+    /// skip the slot if:
+    /// - marked as skipped by another slot
+    /// - there are at least 32 more slots we've received after this one
+    /// - 80% of those are complete or skipped
+    /// - it has been at least 10 seconds since we received any shreds for this
+    ///   slot
+    ///
+    /// the implication is that we'll stop repairing this slot because the
+    /// cluster has selected a fork that doesn't include the slot, and we won't
+    /// ever be able to repair it.
+    ///
+    /// This is only a temporary solution to make repair slightly more
+    /// fork-aware and handle the uncertainty of skipped slots more robustly.
+    /// - in the long term, we should only skip slots that our own consensus
+    ///   tells us to skip, and no others.
+    /// - in the short term, maybe this can be optimized somehow to avoid so
+    ///   much looping.
+    fn slotShouldBeSkipped(
+        self: *Self,
+        slot_in_question: *MonitoredSlot,
+        this_slot: Slot,
+        top_slot: Slot,
+        now: Instant,
+    ) Allocator.Error!bool {
+        const total_slots_tracked = top_slot -| this_slot;
+        if (!slot_in_question.is_skipped or total_slots_tracked < 32)
+            return false;
+
+        const allocator = self.skip_checking_arena.allocator();
+        defer _ = self.skip_checking_arena.reset(.retain_capacity);
+
+        var forks = ForkForest.empty;
+        defer forks.deinit(allocator);
+        for (this_slot + 1..top_slot + 1) |slot_to_check| {
+            const ms_to_check = self.getMonitoredSlot(slot_to_check) catch unreachable;
+            if (ms_to_check.parent_slot) |parent| {
+                try forks.append(allocator, slot_to_check, parent);
+            }
+        }
+
+        return forks.hasFork(this_slot, 32) and
+            now.elapsedSince(slot_in_question.last_unique_received_timestamp).asSecs() > 10;
     }
 
     /// assumes lock is held
@@ -223,6 +291,66 @@ pub const BasicShredTracker = struct {
         }
         const slot_index = (slot - self.start_slot.?) % num_slots;
         return &self.slots[slot_index];
+    }
+};
+
+/// Contains multiple trees, where each tree may contain many forks.
+const ForkForest = struct {
+    /// Every single node
+    nodes: List(*Node),
+    /// A subset of the nodes that have no known parent. Each of these is the
+    /// root of a separate tree in the forest.
+    roots: List(*Node),
+
+    pub const empty = ForkForest{ .roots = .empty, .nodes = .empty };
+
+    const Node = struct {
+        slot: Slot,
+        parent: Slot,
+        next: List(*Node),
+
+        fn hasFork(self: *const Node, disallowed_slot: Slot, minimum_length: usize) bool {
+            if (self.parent == disallowed_slot or self.slot == disallowed_slot) return false;
+            if (minimum_length == 0) return true;
+            for (self.next.items) |next| {
+                if (next.hasFork(disallowed_slot, minimum_length - 1)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    };
+
+    const List = std.ArrayListUnmanaged;
+
+    pub fn deinit(const_self: ForkForest, allocator: Allocator) void {
+        var self = const_self;
+        for (self.nodes.items) |item| allocator.destroy(item);
+        self.nodes.deinit(allocator);
+        self.roots.deinit(allocator);
+    }
+
+    pub fn append(self: *ForkForest, allocator: Allocator, slot: Slot, parent: Slot) !void {
+        const node = try allocator.create(Node);
+        node.* = .{ .slot = slot, .parent = parent, .next = .{} };
+        try self.nodes.append(allocator, node);
+        for (self.nodes.items) |maybe_parent| {
+            if (maybe_parent.slot == parent) {
+                try maybe_parent.next.append(allocator, node);
+                return;
+            }
+        }
+        try self.roots.append(allocator, node);
+    }
+
+    /// Returns whether at least one fork exists with the requested properties:
+    /// - there are at least minimum_length slots
+    /// - disallowed_slot is known to be excluded from the fork
+    pub fn hasFork(self: *const ForkForest, disallowed_slot: Slot, minimum_length: usize) bool {
+        for (self.roots.items) |tree| {
+            if (tree.hasFork(disallowed_slot, minimum_length)) return true;
+        }
+        return false;
     }
 };
 
@@ -280,7 +408,11 @@ const MonitoredSlot = struct {
     max_seen: ?u32 = null,
     last_shred: ?u32 = null,
     first_received_timestamp: Instant = Instant.UNIX_EPOCH,
+    last_unique_received_timestamp: Instant = Instant.UNIX_EPOCH,
     is_complete: bool = false,
+    /// this just means we've identified that another slot that claims to be
+    /// skipping this one. it doesn't mean this slot is definitely being skipped.
+    is_skipped: bool = false,
     parent_slot: ?Slot = null,
     unique_observed_count: u32 = 0,
 
@@ -289,27 +421,36 @@ const MonitoredSlot = struct {
     /// returns if the slot is *definitely* complete (there may be false negatives)
     pub fn record(self: *Self, shred_index: u32, is_last_in_slot: bool, timestamp: Instant) bool {
         if (self.is_complete) return false;
-        if (!bit_set.setAndWasSet(&self.shreds, shred_index)) self.unique_observed_count += 1;
-
-        if (is_last_in_slot) if (self.last_shred) |old_last| {
-            self.last_shred = @min(old_last, shred_index);
-        } else {
-            self.last_shred = shred_index;
-        };
-
-        if (self.max_seen == null) {
-            self.max_seen = shred_index;
-            self.first_received_timestamp = timestamp;
-        } else {
-            self.max_seen = @max(self.max_seen.?, shred_index);
+        if (!bit_set.setAndWasSet(&self.shreds, shred_index)) {
+            self.last_unique_received_timestamp = timestamp;
+            self.unique_observed_count += 1;
         }
 
-        if (self.last_shred) |last| if (self.max_seen) |max| {
-            if (self.unique_observed_count == last and last < max) {
+        if (is_last_in_slot) {
+            if (self.last_shred) |old_last| {
+                self.last_shred = @min(old_last, shred_index);
+            } else {
+                self.last_shred = shred_index;
+            }
+        }
+
+        if (self.max_seen) |max_seen| {
+            self.max_seen = @max(max_seen, shred_index);
+        } else {
+            self.max_seen = shred_index;
+            self.first_received_timestamp = timestamp;
+        }
+        const max_seen = self.max_seen.?; // was just set above if null
+
+        if (self.last_shred) |last| {
+            std.debug.assert(last <= max_seen);
+            std.debug.assert(last >= self.unique_observed_count -| 1);
+            if (self.unique_observed_count == last) {
+                std.debug.assert(last == max_seen);
                 self.is_complete = true;
                 return true;
             }
-        };
+        }
 
         return false;
     }
@@ -348,7 +489,8 @@ test "trivial happy path" {
 
     var registry = sig.prometheus.Registry(.{}).init(allocator);
     defer registry.deinit();
-    var tracker = try BasicShredTracker.init(13579, .noop, &registry);
+    var tracker = try BasicShredTracker.init(std.testing.allocator, 13579, .noop, &registry);
+    defer tracker.deinit();
 
     _ = try tracker.identifyMissing(&msr, Instant.UNIX_EPOCH.plus(Duration.fromSecs(1)));
 
@@ -368,7 +510,9 @@ test "1 registered shred is identified" {
 
     var registry = sig.prometheus.Registry(.{}).init(allocator);
     defer registry.deinit();
-    var tracker = try BasicShredTracker.init(13579, .noop, &registry);
+    var tracker = try BasicShredTracker.init(std.testing.allocator, 13579, .noop, &registry);
+    defer tracker.deinit();
+
     try tracker.registerShred(13579, 123, 13578, false, Instant.UNIX_EPOCH);
 
     _ = try tracker.identifyMissing(&msr, Instant.UNIX_EPOCH);
@@ -384,4 +528,82 @@ test "1 registered shred is identified" {
     try std.testing.expect(123 == report.missing_shreds.items[0].end);
     try std.testing.expect(0 == report.missing_shreds.items[1].start);
     try std.testing.expect(null == report.missing_shreds.items[1].end);
+}
+
+test "slots are only skipped after a competing fork has developed sufficiently" {
+    const allocator = std.testing.allocator;
+
+    var msr = MultiSlotReport.init(allocator);
+    defer msr.deinit();
+
+    var registry = sig.prometheus.Registry(.{}).init(allocator);
+    defer registry.deinit();
+    var tracker = try BasicShredTracker.init(std.testing.allocator, 1, .noop, &registry);
+    defer tracker.deinit();
+
+    const start = Instant.UNIX_EPOCH;
+
+    // complete slots 1 and 3, where 3 skips 2.
+    try tracker.registerShred(1, 0, 0, true, start);
+    try tracker.registerShred(3, 0, 1, true, start);
+    _ = try tracker.identifyMissing(&msr, start.plus(.fromSecs(11)));
+    try std.testing.expectEqual(2, msr.items()[0].slot);
+
+    // add shreds for many slots that are all separate forks. it should have no
+    // effect on 2 being identified as missing. 2 will be considered missing
+    // until ONE fork has at least 32 slots ahead of 2.
+    for (4..100) |slot| {
+        try tracker.registerShred(slot, 0, 3, false, start);
+        _ = try tracker.identifyMissing(&msr, start.plus(.fromSecs(11)));
+        try std.testing.expectEqual(2, msr.items()[0].slot);
+    }
+
+    // add 30 slots in a single fork, one less than we need to skip slot 2
+    for (100..130) |slot| {
+        try tracker.registerShred(slot, 0, slot - 1, false, start);
+        // trying after 11 seconds have passed: it should still report slot 2 as
+        // missing because not enough slots have passed
+        _ = try tracker.identifyMissing(&msr, start.plus(.fromSecs(11)));
+        try std.testing.expectEqual(2, msr.items()[0].slot);
+    }
+
+    // add shred for slot 130: now enough slots have passed, but we're going back
+    // in time to prove that 2 will still be reported as missing until enough
+    // time has passed.
+    try tracker.registerShred(130, 0, 129, false, start);
+    _ = try tracker.identifyMissing(&msr, start.plus(.fromSecs(9)));
+    try std.testing.expectEqual(2, msr.items()[0].slot);
+
+    // now 32 slots AND 10 seconds have passed, so we should be good to skip slot 2
+    _ = try tracker.identifyMissing(&msr, start.plus(.fromSecs(11)));
+    try std.testing.expectEqual(4, msr.items()[0].slot);
+}
+
+test "slots are not skipped when the current fork is developed" {
+    const allocator = std.testing.allocator;
+
+    var msr = MultiSlotReport.init(allocator);
+    defer msr.deinit();
+
+    var registry = sig.prometheus.Registry(.{}).init(allocator);
+    defer registry.deinit();
+    var tracker = try BasicShredTracker.init(std.testing.allocator, 1, .noop, &registry);
+    defer tracker.deinit();
+
+    const start = Instant.UNIX_EPOCH;
+
+    // complete slots 1 and 3, where 3 skips 2.
+    try tracker.registerShred(1, 0, 0, true, start);
+    try tracker.registerShred(3, 0, 2, true, start);
+    _ = try tracker.identifyMissing(&msr, start.plus(.fromSecs(11)));
+    try std.testing.expectEqual(2, msr.items()[0].slot);
+
+    // add shreds for 96 slots continue to branch off 2. 2 should always be
+    // considered missing even though more than 32 slots have passed, because we
+    // need slot 2 to process this fork.
+    for (4..100) |slot| {
+        try tracker.registerShred(slot, 0, 3, false, start);
+        _ = try tracker.identifyMissing(&msr, start.plus(.fromSecs(11)));
+        try std.testing.expectEqual(2, msr.items()[0].slot);
+    }
 }
