@@ -608,6 +608,7 @@ pub const BenchmarkChannel = struct {
         name: []const u8 = "",
         n_senders: ?usize,
         receives: bool,
+        is_unit_test: bool = false,
     };
 
     pub const args = [_]BenchmarkArgs{
@@ -678,7 +679,7 @@ pub const BenchmarkChannel = struct {
         }
 
         ctx.start.set();
-        std.time.sleep(1 * std.time.ns_per_s);
+        std.time.sleep(if (!argss.is_unit_test) std.time.ns_per_s else 10 * std.time.ns_per_ms);
 
         const popped = ctx.popped.load(.acquire); // NOTE: should happen-before len() read.
         const total = popped + ctx.channel.len();
@@ -690,5 +691,6 @@ test "BenchmarkChannel.benchmarkSimplePacketBetterChannel" {
     _ = try BenchmarkChannel.benchmarkSimplePacketBetterChannel(.{
         .n_senders = 4,
         .receives = true,
+        .is_unit_test = true,
     });
 }

@@ -1,3 +1,4 @@
+const sig = @import("../../sig.zig");
 const std = @import("std");
 const bn254 = @import("lib.zig");
 
@@ -273,7 +274,8 @@ test "pairing" {
         // zig fmt: on
     };
 
-    for (cases) |case| {
+    const cases_to_run = if (!sig.build_options.long_tests) cases[0..2] else cases;
+    for (cases_to_run) |case| {
         const N = 192 * 10;
         var buffer: [N]u8 = .{0} ** N;
         const input = try std.fmt.hexToBytes(&buffer, case.input);
