@@ -314,20 +314,19 @@ const SystemAccountKind = enum { System, Nonce };
 
 // [agave] https://github.com/anza-xyz/agave/blob/64b616042450fa6553427471f70895f1dfe0cd86/svm/src/account_loader.rs#L293
 fn getSystemAccountKind(account: *const AccountSharedData) ?SystemAccountKind {
-    return switch (account.data.len) {
-        else => null,
-        0 => .System,
-        NonceVersions.SERIALIZED_SIZE => {
-            const versions = NonceVersions.fromAccountData(account.data) orelse
-                return null;
+    if (!account.owner.equals(&sig.runtime.program.system.ID)) return null;
+    if (account.data.len == 0) return .System;
+    if (account.data.len == NonceVersions.SERIALIZED_SIZE) {
+        const versions = NonceVersions.fromAccountData(account.data) orelse
+            return null;
 
-            const state = versions.getState();
-            return switch (state) {
-                .uninitialized => null,
-                .initialized => .Nonce,
-            };
-        },
-    };
+        const state = versions.getState();
+        return switch (state) {
+            .uninitialized => null,
+            .initialized => .Nonce,
+        };
+    }
+    return null;
 }
 
 fn checkLoadAndAdvanceMessageNonceAccount(
