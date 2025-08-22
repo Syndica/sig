@@ -125,7 +125,7 @@ pub const VoteListener = struct {
         const recv_thread = try std.Thread.spawn(.{}, recvLoop, .{
             allocator,
             exit,
-            params.slot_data_provider_rw,
+            params.bank_forks,
             params.gossip_table_rw,
             verified_vote_transactions,
         });
@@ -137,7 +137,7 @@ pub const VoteListener = struct {
             logger,
 
             vote_tracker,
-            params.slot_data_provider_rw,
+            params.bank_forks,
 
             params.senders,
             Receivers{
@@ -425,28 +425,19 @@ fn processVotesOnce(
     last_process_root: *sig.time.Instant,
     vote_processing_time: *VoteProcessingTiming,
 ) !enum { ok, disconnected, timeout, logged } {
-    const root_slot, const root_hash = blk: {
-        const slot_tracker_ptr, var slot_lg = bank_forks.slot_tracker_rw.readWithLock();
-        defer slot_lg.unlock();
-        const rs = slot_tracker_ptr.root;
-        const rh = slot_data_provider.getSlotHash(rs);
-        break :blk .{ rs, rh };
-    };
+    const root_slot = slot_data_provider.rootSlot();
+    const root_hash = slot_data_provider.getSlotHash(root_slot);
 
     if (last_process_root.elapsed().asMillis() > DEFAULT_MS_PER_SLOT) {
-        const unrooted_optimistic_slots = blk: {
-            const slot_tracker_ptr, var slot_lg = bank_forks.slot_tracker_rw.readWithLock();
-            defer slot_lg.unlock();
-            break :blk try confirmation_verifier.verifyForUnrootedOptimisticSlots(
-                allocator,
-                ledger_ref.reader,
-                .{
-                    .slot = slot_tracker_ptr.root,
-                    .hash = root_hash,
-                    .ancestors = slot_data_provider.getSlotAncestorsPtr(root_slot).?, // must exist for the root slot
-                },
-            );
-        };
+        const unrooted_optimistic_slots = try confirmation_verifier.verifyForUnrootedOptimisticSlots(
+            allocator,
+            ledger_ref.reader,
+            .{
+                .slot = root_slot,
+                .hash = root_hash,
+                .ancestors = slot_data_provider.getSlotAncestorsPtr(root_slot).?, // must exist for the root slot
+            },
+        );
         defer allocator.free(unrooted_optimistic_slots);
 
         vote_tracker.progressWithNewRootBank(allocator, root_slot);
@@ -893,20 +884,17 @@ fn trackNewVotesAndNotifyConfirmations(
         if (slot <= root) continue;
 
         // if we don't have stake information, ignore it
-        const epoch_stakes = blk: {
-            const epoch_tracker_ptr, var et_lg = bank_forks.epoch_tracker_rw.readWithLock();
-            defer et_lg.unlock();
-            const et_elem = epoch_tracker_ptr.getForSlot(slot) orelse continue;
-            break :blk et_elem.stakes;
-        };
+        // Pull stakes via slot_data_provider helpers
 
         // We always track the last vote slot for optimistic confirmation. If we have replayed
         // the same version of last vote slot that is being voted on, then we also track the
         // other votes in the proposed tower.
         if (slot == last_vote_slot or accumulate_intermediate_votes) {
-            const vote_accounts = epoch_stakes.stakes.vote_accounts;
-            const stake = vote_accounts.getDelegatedStake(vote_pubkey);
-            const total_stake = epoch_stakes.total_stake;
+            const stake = slot_data_provider.getDelegatedStake(slot, vote_pubkey) orelse 0;
+            const total_stake = blk: {
+                const ep = slot_data_provider.getSlotEpoch(slot);
+                break :blk slot_data_provider.getEpochTotalStake(ep) orelse 0;
+            };
 
             const maybe_hash: ?Hash = get_hash: {
                 if (slot == last_vote_slot) break :get_hash last_vote_hash;
@@ -1742,7 +1730,7 @@ test "simple usage" {
     const exit_cond: sig.sync.ExitCondition = .{ .unordered = &exit };
 
     const vote_listener: VoteListener = try .init(allocator, exit_cond, .noop, &vote_tracker, .{
-        .slot_data_provider_rw = &slot_data_provider_rw,
+        .bank_forks = &bank_forks,
         .gossip_table_rw = &gossip_table_rw,
         .ledger_ref = ledger_ref,
         .receivers = .{
@@ -1997,7 +1985,7 @@ test "check trackers" {
             allocator,
             .noop,
             &vote_tracker,
-            &slot_data_provider_ptr,
+            slot_data_provider_ptr,
             .{
                 .verified_vote = verified_vote_channel,
                 .gossip_verified_vote_hash = gossip_verified_vote_hash_channel,

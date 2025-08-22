@@ -495,7 +495,7 @@ fn markDeadSlot(
         replay_state.allocator,
         .from(replay_state.logger),
         dead_slot,
-        replay_state.slot_tracker.root,
+        replay_state.slot_tracker.readField("root"),
         replay_state.duplicate_slots_to_repair,
         ancestor_hashes_replay_update_sender,
         dead_state,
@@ -510,8 +510,11 @@ fn markDeadSlot(
     if (!replay_state.duplicate_slots_tracker.contains(dead_slot) and
         maybe_duplicate_proof != null)
     {
-        const slot_info =
-            replay_state.slot_tracker.get(dead_slot) orelse return error.MissingSlotInTracker;
+        const slot_info = blk: {
+            const st, var lg = replay_state.slot_tracker.readWithLock();
+            defer lg.unlock();
+            break :blk st.get(dead_slot) orelse return error.MissingSlotInTracker;
+        };
         const slot_hash = slot_info.state.hash.readCopy();
         const duplicate_state: DuplicateState = .fromState(
             .from(replay_state.logger),
@@ -527,7 +530,7 @@ fn markDeadSlot(
             replay_state.allocator,
             .from(replay_state.logger),
             dead_slot,
-            replay_state.slot_tracker.root,
+            replay_state.slot_tracker.readField("root"),
             replay_state.duplicate_slots_tracker,
             replay_state.fork_choice,
             duplicate_state,
@@ -1239,10 +1242,14 @@ test "markDeadSlot: when duplicate proof exists, duplicate tracker records slot"
         .feature_set = .ALL_DISABLED,
         .reserved_accounts = .empty,
     };
-    try test_resources.slot_tracker.put(allocator, slot, .{
-        .constants = slot_consts,
-        .state = slot_state,
-    });
+    {
+        const ptr, var lg = test_resources.slot_tracker.writeWithLock();
+        defer lg.unlock();
+        try ptr.put(allocator, slot, .{
+            .constants = slot_consts,
+            .state = slot_state,
+        });
+    }
 
     // Insert a duplicate proof into the ledger to trigger the duplicate branch
     const dup_proof = sig.ledger.meta.DuplicateSlotProof{

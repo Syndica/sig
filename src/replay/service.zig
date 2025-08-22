@@ -440,7 +440,7 @@ pub fn run(deps: ReplayDependencies) !void {
 
     // TODO: Should `vote_listener_bank_forks` itself be wrapped in RwMux to ensure consistency
     // of the struct itself across multiple threads?
-    var vote_listener_bank_forks: sig.consensus.vote_listener.BankForksStub = .{
+    var vote_listener_bank_forks: sig.consensus.vote_listener.SlotDataProvider = .{
         .slot_tracker_rw = &state.slot_tracker_rw,
         .epoch_tracker_rw = &state.epoch_tracker_rw,
     };
