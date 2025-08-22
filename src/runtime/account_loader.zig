@@ -152,6 +152,33 @@ pub const BatchAccountCache = struct {
                     account.data.len,
                     max_data_len,
                 ) catch break; // tx will fail - loaded too much
+
+                // Special casing to load BPF V3 program accounts.
+                if (account.owner.equals(&runtime.program.bpf_loader.v3.ID)) {
+                    const program_state = sig.bincode.readFromSlice(
+                        allocator,
+                        runtime.program.bpf_loader.v3.State,
+                        account.data,
+                        .{},
+                    ) catch continue;
+                    defer sig.bincode.free(allocator, program_state);
+
+                    if (program_state != .program) continue;
+                    const program_data_address = program_state.program.programdata_address;
+
+                    const program_data_account = try getAccountSharedData(
+                        allocator,
+                        account_reader,
+                        program_data_address,
+                    ) orelse continue;
+
+                    const entry = map.getOrPutAssumeCapacity(program_data_address);
+                    if (!entry.found_existing) {
+                        entry.value_ptr.* = program_data_account;
+                    } else {
+                        account_reader.allocator().free(program_data_account.data);
+                    }
+                }
             }
         }
 
@@ -202,44 +229,6 @@ pub const BatchAccountCache = struct {
                 ) catch break; // tx will fail - accounts data too large
 
                 try validated_loaders.put(program_owner_key, {});
-            }
-        }
-
-        { // load v3 loader's ProgramData accounts.
-            for (instructions) |instr| {
-                const program_key = instr.program_meta.pubkey;
-
-                if (program_key.equals(&runtime.ids.NATIVE_LOADER_ID) or
-                    program_key.equals(&runtime.sysvar.instruction.ID)) continue;
-
-                const program_account = map.get(program_key) orelse
-                    unreachable; // safe: we loaded all accounts in the previous loop
-
-                if (!program_account.owner.equals(&runtime.program.bpf_loader.v3.ID)) continue;
-
-                const program_state = sig.bincode.readFromSlice(
-                    allocator,
-                    runtime.program.bpf_loader.v3.State,
-                    program_account.data,
-                    .{},
-                ) catch continue;
-                defer sig.bincode.free(allocator, program_state);
-
-                if (program_state != .program) continue;
-                const program_data_address = program_state.program.programdata_address;
-
-                const program_data_account = try getAccountSharedData(
-                    allocator,
-                    account_reader,
-                    program_data_address,
-                ) orelse continue;
-
-                const entry = map.getOrPutAssumeCapacity(program_data_address);
-                if (!entry.found_existing) {
-                    entry.value_ptr.* = program_data_account;
-                } else {
-                    account_reader.allocator().free(program_data_account.data);
-                }
             }
         }
     }
