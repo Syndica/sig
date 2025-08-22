@@ -184,7 +184,8 @@ fn processNextInstruction(
             if (native_program_id.equals(&migrate_key) and
                 ic.tc.feature_set.active(migrate_feature, ic.tc.slot))
             {
-                const loaded_program = ic.tc.program_map.getPtr(native_program_id) orelse return error.UnsupportedProgramId;
+                const loaded_program = ic.tc.program_map.getPtr(native_program_id) orelse
+                    return error.UnsupportedProgramId;
                 switch (loaded_program.*) {
                     .loaded => |entry| break :blk .{ .bpf = entry.executable },
                     .failed => return error.UnsupportedProgramId,
