@@ -154,30 +154,30 @@ pub const BatchAccountCache = struct {
                 ) catch break; // tx will fail - loaded too much
 
                 // Special casing to load BPF V3 program accounts.
-                if (!account.owner.equals(&runtime.program.bpf_loader.v3.ID)) continue;
+                if (account.owner.equals(&runtime.program.bpf_loader.v3.ID)) {
+                    const program_state = sig.bincode.readFromSlice(
+                        allocator,
+                        runtime.program.bpf_loader.v3.State,
+                        account.data,
+                        .{},
+                    ) catch continue;
+                    defer sig.bincode.free(allocator, program_state);
 
-                const program_state = sig.bincode.readFromSlice(
-                    allocator,
-                    runtime.program.bpf_loader.v3.State,
-                    account.data,
-                    .{},
-                ) catch continue;
-                defer sig.bincode.free(allocator, program_state);
+                    if (program_state != .program) continue;
+                    const program_data_address = program_state.program.programdata_address;
 
-                if (program_state != .program) continue;
-                const program_data_address = program_state.program.programdata_address;
+                    const program_data_account = try getAccountSharedData(
+                        allocator,
+                        account_reader,
+                        program_data_address,
+                    ) orelse continue;
 
-                const program_data_account = try getAccountSharedData(
-                    allocator,
-                    account_reader,
-                    program_data_address,
-                ) orelse continue;
-
-                const entry = map.getOrPutAssumeCapacity(program_data_address);
-                if (!entry.found_existing) {
-                    entry.value_ptr.* = program_data_account;
-                } else {
-                    account_reader.allocator().free(program_data_account.data);
+                    const entry = map.getOrPutAssumeCapacity(program_data_address);
+                    if (!entry.found_existing) {
+                        entry.value_ptr.* = program_data_account;
+                    } else {
+                        account_reader.allocator().free(program_data_account.data);
+                    }
                 }
             }
         }

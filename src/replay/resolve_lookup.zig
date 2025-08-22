@@ -11,6 +11,7 @@ const Ancestors = core.Ancestors;
 const InstructionAccount = core.instruction.InstructionAccount;
 const Pubkey = core.Pubkey;
 const ReservedAccounts = core.ReservedAccounts;
+const Slot = core.Slot;
 const Transaction = core.Transaction;
 const TransactionAddressLookup = core.transaction.AddressLookup;
 
@@ -20,6 +21,7 @@ const AddressLookupTable = sig.runtime.program.address_lookup_table.AddressLooku
 const InstructionInfo = sig.runtime.InstructionInfo;
 const ProgramMeta = sig.runtime.InstructionInfo.ProgramMeta;
 const RuntimeTransaction = sig.runtime.transaction_execution.RuntimeTransaction;
+const SlotHashes = sig.runtime.sysvar.SlotHashes;
 
 const LockableAccount = sig.replay.account_locks.LockableAccount;
 
@@ -65,11 +67,24 @@ pub const ResolvedTransaction = struct {
     }
 };
 
+/// Data sources needed to resolve arbitrary transactions from a particular slot
+pub const SlotResolver = struct {
+    slot: Slot,
+    account_reader: SlotAccountReader,
+    /// borrowed
+    reserved_accounts: *const ReservedAccounts,
+    /// owned
+    slot_hashes: SlotHashes,
+
+    pub fn deinit(self: SlotResolver, allocator: Allocator) void {
+        self.slot_hashes.deinit(allocator);
+    }
+};
+
 pub fn resolveBatch(
     allocator: Allocator,
-    account_reader: SlotAccountReader,
     batch: []const Transaction,
-    reserved_accounts: *const ReservedAccounts,
+    params: SlotResolver,
 ) !ResolvedBatch {
     var accounts = try std.ArrayListUnmanaged(LockableAccount)
         .initCapacity(allocator, Transaction.numAccounts(batch));
@@ -79,12 +94,7 @@ pub fn resolveBatch(
     errdefer allocator.free(resolved_txns);
 
     for (batch, resolved_txns) |transaction, *resolved| {
-        resolved.* = try resolveTransaction(
-            allocator,
-            account_reader,
-            transaction,
-            reserved_accounts,
-        );
+        resolved.* = try resolveTransaction(allocator, transaction, params);
         for (
             resolved.accounts.items(.pubkey),
             resolved.accounts.items(.is_writable),
@@ -104,16 +114,17 @@ pub fn resolveBatch(
 /// - Use `deinit` to free this struct
 fn resolveTransaction(
     allocator: Allocator,
-    account_reader: SlotAccountReader,
     transaction: Transaction,
-    reserved_accounts: *const ReservedAccounts,
+    params: SlotResolver,
 ) !ResolvedTransaction {
     const message = transaction.msg;
 
     const lookups = try resolveLookupTableAccounts(
         allocator,
-        account_reader,
+        params.account_reader,
         message.address_lookups,
+        params.slot,
+        params.slot_hashes,
     );
     defer {
         allocator.free(lookups.writable);
@@ -132,12 +143,16 @@ fn resolveTransaction(
     for (message.account_keys, 0..) |pubkey, i| accounts.appendAssumeCapacity(.{
         .pubkey = pubkey,
         .is_signer = message.isSigner(i),
-        .is_writable = message.isWritable(i, lookups, reserved_accounts),
+        .is_writable = message.isWritable(i, lookups, params.reserved_accounts),
     });
     for (lookups.writable, 0..) |pubkey, i| accounts.appendAssumeCapacity(.{
         .pubkey = pubkey,
         .is_signer = false,
-        .is_writable = message.isWritable(message.account_keys.len + i, lookups, reserved_accounts),
+        .is_writable = message.isWritable(
+            message.account_keys.len + i,
+            lookups,
+            params.reserved_accounts,
+        ),
     });
     for (lookups.readonly) |pubkey| accounts.appendAssumeCapacity(.{
         .pubkey = pubkey,
@@ -203,6 +218,8 @@ fn resolveLookupTableAccounts(
     allocator: Allocator,
     account_reader: SlotAccountReader,
     address_lookups: []const TransactionAddressLookup,
+    slot: Slot,
+    slot_hashes: SlotHashes,
 ) !LookupTableAccounts {
     // count number of accounts
     var total_writable: usize = 0;
@@ -224,9 +241,18 @@ fn resolveLookupTableAccounts(
     for (address_lookups) |lookup| {
         const table = try getLookupTable(account_reader, lookup.table_address);
 
+        if (table.meta.status(slot, slot_hashes) == .Deactivated) {
+            return error.AddressLookupTableNotFound;
+        }
+
+        const active_addresses_len = if (slot > table.meta.last_extended_slot)
+            table.addresses.len
+        else
+            table.meta.last_extended_slot_start_index;
+
         // resolve writable addresses
         for (lookup.writable_indexes) |index| {
-            if (table.addresses.len < index + 1) {
+            if (active_addresses_len < index + 1) {
                 return error.InvalidAddressLookupTableIndex;
             }
             writable_accounts.appendAssumeCapacity(table.addresses[index]);
@@ -234,7 +260,7 @@ fn resolveLookupTableAccounts(
 
         // resolve readonly addresses
         for (lookup.readonly_indexes) |index| {
-            if (table.addresses.len < index + 1) {
+            if (active_addresses_len < index + 1) {
                 return error.InvalidAddressLookupTableIndex;
             }
             readonly_accounts.appendAssumeCapacity(table.addresses[index]);
@@ -414,11 +440,18 @@ test resolveBatch {
     defer ancestors.deinit(std.testing.allocator);
     try ancestors.ancestors.put(std.testing.allocator, 0, {});
 
+    const slot_hashes = try SlotHashes.init(std.testing.allocator);
+    defer slot_hashes.deinit(std.testing.allocator);
+
     const resolved = try resolveBatch(
         std.testing.allocator,
-        map.accountReader().forSlot(&ancestors),
         &.{tx},
-        &.empty,
+        .{
+            .slot = 1, // Greater than lookup tables' last_extended_slot
+            .slot_hashes = slot_hashes,
+            .reserved_accounts = &.empty,
+            .account_reader = map.accountReader().forSlot(&ancestors),
+        },
     );
     defer resolved.deinit(std.testing.allocator);
 
