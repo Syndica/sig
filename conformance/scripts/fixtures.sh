@@ -3,15 +3,11 @@
 PASSING_DIRS=(
     "elf_loader/fixtures"
 
-    # Passed: 19, Failed: 20, Skipped: 0
-    # "vm_interp/fixtures/latest"
-
     "vm_interp/fixtures/v0"
     "vm_interp/fixtures/v1"
     "vm_interp/fixtures/v2"
-
-    # Passed: 36252, Failed: 9, Skipped: 0 
-    # "vm_interp/fixtures/v3"
+    "vm_interp/fixtures/v3"
+    "vm_interp/fixtures/latest"
 
     "syscall/fixtures/abort"
     "syscall/fixtures/alt_bn128"

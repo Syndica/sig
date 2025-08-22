@@ -320,6 +320,7 @@ const ReplayState = struct {
             .epoch_slots_frozen_slots = &self.slot_data.epoch_slots_frozen_slots,
             .duplicate_slots_to_repair = &self.slot_data.duplicate_slots_to_repair,
             .purge_repair_slot_counter = &self.slot_data.purge_repair_slot_counter,
+            .ancestor_hashes_replay_update_sender = self.senders.ancestor_hashes_replay_update,
         };
     }
 };

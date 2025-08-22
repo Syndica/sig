@@ -236,17 +236,16 @@ pub const Region = struct {
         vm_addr: u64,
         vm_gap_size: u64,
     ) Region {
-        var vm_addr_end: u64 = vm_addr +| slice.len;
-        var vm_gap_shift: u64 = @sizeOf(u64) * 8 - 1;
-        if (vm_gap_size > 0) {
-            vm_addr_end +|= slice.len;
-            vm_gap_shift -|= @clz(vm_gap_size);
+        const is_gapped = vm_gap_size > 0;
+        var vm_gap_shift: u64 = @bitSizeOf(u64) - 1;
+        if (is_gapped) {
+            vm_gap_shift -= @clz(vm_gap_size);
             std.debug.assert(vm_gap_size == @as(u64, 1) << @intCast(vm_gap_shift));
         }
         return .{
             .host_memory = @unionInit(HostMemory, @tagName(state), slice),
             .vm_addr_start = vm_addr,
-            .vm_addr_end = vm_addr_end,
+            .vm_addr_end = vm_addr +| (slice.len * @as(u64, if (is_gapped) 2 else 1)),
             .vm_gap_shift = @intCast(vm_gap_shift),
         };
     }
@@ -277,7 +276,7 @@ pub const Region = struct {
         if (vm_addr < self.vm_addr_start) return null;
 
         const host_slice = self.hostSlice(state) orelse return null;
-        const begin_offset = vm_addr -| self.vm_addr_start;
+        const begin_offset = vm_addr - self.vm_addr_start;
 
         const is_in_gap = @as(u1, @truncate(begin_offset >> self.vm_gap_shift)) != 0;
         const gap_mask: u64 = ~@as(u64, 0) << self.vm_gap_shift;

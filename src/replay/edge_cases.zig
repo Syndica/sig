@@ -111,7 +111,7 @@ pub fn processEdgeCases(
     // that are pruned, which would not be detected by normal means.
     // Signalled by `repair_service`.
     timer.reset();
-    try processPopularPrunedForks(
+    try processPrunedButPopularForks(
         logger,
         params.receivers.popular_pruned_forks,
         slot_tracker,
@@ -626,15 +626,14 @@ fn processGossipVerifiedVoteHashes(
 }
 
 /// Analogous to [process_popular_pruned_forks](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/replay_stage.rs#L1828)
-fn processPopularPrunedForks(
+fn processPrunedButPopularForks(
     logger: replay.service.Logger,
-    // TODO: ideally this should be renamed to pruned_but_popular_forks_receiver
-    popular_pruned_forks_receiver: *sig.sync.Channel(Slot),
+    pruned_but_popular_forks_receiver: *sig.sync.Channel(Slot),
     slot_tracker: *const SlotTracker,
     ancestor_hashes_replay_update_sender: *sig.sync.Channel(AncestorHashesReplayUpdate),
 ) !void {
     const root = slot_tracker.root;
-    while (popular_pruned_forks_receiver.tryReceive()) |new_popular_pruned_slot| {
+    while (pruned_but_popular_forks_receiver.tryReceive()) |new_popular_pruned_slot| {
         if (new_popular_pruned_slot <= root) {
             continue;
         }
@@ -975,7 +974,7 @@ pub const check_slot_agrees_with_cluster = struct {
         try confirmed_non_dupe_frozen_hash.finalize(slot, ledger);
     }
 
-    fn dead(
+    pub fn dead(
         allocator: std.mem.Allocator,
         logger: replay.service.Logger,
         slot: Slot,
@@ -999,10 +998,9 @@ pub const check_slot_agrees_with_cluster = struct {
                     // If the cluster duplicate_confirmed some version of this slot, then
                     // check if our version agrees with the cluster,
                     // AKA: `ResultingStateChange::SendAncestorHashesReplayUpdate` in agave.
-                    try ancestor_hashes_replay_update_sender.send(.{
-                        .kind = .dead_duplicate_confirmed,
-                        .slot = slot,
-                    });
+                    try ancestor_hashes_replay_update_sender.send(
+                        .{ .dead_duplicate_confirmed = slot },
+                    );
 
                     // If the cluster duplicate confirmed some version of this slot, then
                     // there's another version of our dead slot
@@ -1012,7 +1010,7 @@ pub const check_slot_agrees_with_cluster = struct {
                         .{ slot, duplicate_confirmed_hash },
                     );
                     // AKA: `ResultingStateChange::RepairDuplicateConfirmedVersion` in agave
-                    try duplicate_slots_to_repair.put(allocator, slot, duplicate_confirmed_hash);
+                    try duplicate_slots_to_repair.put(allocator, slot, cluster_confirmed_hash.hash);
                 },
                 // Lower priority than having seen an actual duplicate confirmed hash in the
                 // match arm above.
@@ -1024,15 +1022,12 @@ pub const check_slot_agrees_with_cluster = struct {
                         .{ slot, epoch_slots_frozen_hash },
                     );
                     // AKA: `ResultingStateChange::RepairDuplicateConfirmedVersion` in agave
-                    try duplicate_slots_to_repair.put(allocator, slot, epoch_slots_frozen_hash);
+                    try duplicate_slots_to_repair.put(allocator, slot, cluster_confirmed_hash.hash);
                 },
             }
         } else {
             // AKA: `ResultingStateChange::SendAncestorHashesReplayUpdate` in agave.
-            try ancestor_hashes_replay_update_sender.send(.{
-                .kind = .dead,
-                .slot = slot,
-            });
+            try ancestor_hashes_replay_update_sender.send(.{ .dead = slot });
         }
     }
 

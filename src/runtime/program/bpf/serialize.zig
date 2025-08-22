@@ -252,7 +252,7 @@ pub fn serializeParameters(
 /// [agave] https://github.com/anza-xyz/agave/blob/108fcb4ff0f3cb2e7739ca163e6ead04e377e567/program-runtime/src/serialization.rs#L282
 fn serializeParametersUnaligned(
     allocator: std.mem.Allocator,
-    accounts: []SerializedAccount,
+    accounts: []const SerializedAccount,
     instruction_data: []const u8,
     program_id: Pubkey,
     copy_account_data: bool,
@@ -364,7 +364,7 @@ fn serializeParametersUnaligned(
 /// [agave] https://github.com/anza-xyz/agave/blob/108fcb4ff0f3cb2e7739ca163e6ead04e377e567/program-runtime/src/serialization.rs#L415
 fn serializeParametersAligned(
     allocator: std.mem.Allocator,
-    accounts: []SerializedAccount,
+    accounts: []const SerializedAccount,
     instruction_data: []const u8,
     program_id: Pubkey,
     copy_account_data: bool,

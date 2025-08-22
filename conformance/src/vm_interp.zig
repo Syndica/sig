@@ -28,21 +28,15 @@ export fn sol_compat_vm_interp_v1(
     in_size: u64,
 ) i32 {
     errdefer |err| std.debug.panic("err: {s}", .{@errorName(err)});
+
     var arena = std.heap.ArenaAllocator.init(std.heap.c_allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
 
     const in_slice = in_ptr[0..in_size];
     const syscall_context = SyscallContext.decode(in_slice, allocator) catch return 0;
-    defer syscall_context.deinit();
-
-    const result = executeVmTest(syscall_context, allocator) catch {
-        return 0;
-    };
-    defer result.deinit();
-
+    const result = executeVmTest(syscall_context, allocator) catch return 0;
     const elf_effect_bytes = try result.encode(allocator);
-    defer allocator.free(elf_effect_bytes);
 
     const out_slice = out_ptr[0..out_size.*];
     if (elf_effect_bytes.len > out_slice.len) {
@@ -92,12 +86,7 @@ fn executeVmTest(
         3 => .v3,
         else => .v0,
     };
-    if (sbpf_version.gte(.v1)) {
-        feature_set.setSlot(.bpf_account_data_direct_mapping, 0);
-    }
-
-    const direct_mapping = sbpf_version.gte(.v1) or
-        feature_set.active(.bpf_account_data_direct_mapping, slot);
+    const direct_mapping = feature_set.active(.bpf_account_data_direct_mapping, slot);
 
     if (instr_context.program_id.getSlice().len != Pubkey.SIZE) return error.OutOfBounds;
     const instr_info = try utils.createInstructionInfo(
@@ -224,7 +213,7 @@ fn executeVmTest(
             .mutable,
             stack,
             memory.STACK_START,
-            if (config.enable_stack_frame_gaps)
+            if (!sbpf_version.enableDynamicStackFrames() and config.enable_stack_frame_gaps)
                 config.stack_frame_size
             else
                 0,
