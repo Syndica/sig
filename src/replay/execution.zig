@@ -758,6 +758,8 @@ const TestReplayStateResources = struct {
         self.db.deinit();
         self.registry.deinit();
         self.ancestor_hashes_replay_update_channel.deinit();
+        while (self.replay_state.replay_votes_ch.tryReceive()) |pv| pv.deinit(allocator);
+        self.replay_state.replay_votes_ch.destroy();
 
         allocator.destroy(self);
     }

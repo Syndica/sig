@@ -73,7 +73,16 @@ pub fn confirmSlot(
             allocator.free(entries);
         }
         break :fut try ConfirmSlotFuture
-            .create(allocator, logger, thread_pool, committer, entries, svm_params, slot_resolver, replay_votes_sender,);
+            .create(
+            allocator,
+            logger,
+            thread_pool,
+            committer,
+            entries,
+            svm_params,
+            slot_resolver,
+            replay_votes_sender,
+        );
     };
     errdefer future.destroy(allocator);
 
@@ -403,6 +412,10 @@ test "happy path: trivial case" {
     var tick_hash_count: u64 = 0;
 
     const replay_votes_ch: *sig.sync.Channel(ParsedVote) = try .create(allocator);
+    defer {
+        while (replay_votes_ch.tryReceive()) |pv| pv.deinit(allocator);
+        replay_votes_ch.destroy();
+    }
 
     const future = try confirmSlot(
         allocator,
@@ -448,6 +461,10 @@ test "happy path: partial slot" {
     for (entries) |e| try state.makeTransactionsPassable(allocator, e.transactions);
 
     const replay_votes_ch: *sig.sync.Channel(ParsedVote) = try .create(allocator);
+    defer {
+        while (replay_votes_ch.tryReceive()) |pv| pv.deinit(allocator);
+        replay_votes_ch.destroy();
+    }
     const future = try confirmSlot(
         allocator,
         .FOR_TESTS,
@@ -493,6 +510,10 @@ test "happy path: full slot" {
     for (entries) |e| try state.makeTransactionsPassable(allocator, e.transactions);
 
     const replay_votes_ch: *sig.sync.Channel(ParsedVote) = try .create(allocator);
+    defer {
+        while (replay_votes_ch.tryReceive()) |pv| pv.deinit(allocator);
+        replay_votes_ch.destroy();
+    }
     const future = try confirmSlot(
         allocator,
         .FOR_TESTS,
@@ -539,6 +560,10 @@ test "fail: full slot not marked full -> .InvalidLastTick" {
     for (entries) |e| try state.makeTransactionsPassable(allocator, e.transactions);
 
     const replay_votes_ch: *sig.sync.Channel(ParsedVote) = try .create(allocator);
+    defer {
+        while (replay_votes_ch.tryReceive()) |pv| pv.deinit(allocator);
+        replay_votes_ch.destroy();
+    }
     const future = try confirmSlot(
         allocator,
         .noop,
@@ -586,6 +611,10 @@ test "fail: no trailing tick at max height -> .TrailingEntry" {
     for (entries) |e| try state.makeTransactionsPassable(allocator, e.transactions);
 
     const replay_votes_ch: *sig.sync.Channel(ParsedVote) = try .create(allocator);
+    defer {
+        while (replay_votes_ch.tryReceive()) |pv| pv.deinit(allocator);
+        replay_votes_ch.destroy();
+    }
     const future = try confirmSlot(
         allocator,
         .noop,
@@ -636,6 +665,10 @@ test "fail: invalid poh chain" {
     entries[0].hash.data[0] +%= 1;
 
     const replay_votes_ch: *sig.sync.Channel(ParsedVote) = try .create(allocator);
+    defer {
+        while (replay_votes_ch.tryReceive()) |pv| pv.deinit(allocator);
+        replay_votes_ch.destroy();
+    }
     const future = try confirmSlot(
         allocator,
         .noop,
@@ -683,6 +716,10 @@ test "fail: sigverify" {
     for (entries) |e| try state.makeTransactionsPassable(allocator, e.transactions);
 
     const replay_votes_ch: *sig.sync.Channel(ParsedVote) = try .create(allocator);
+    defer {
+        while (replay_votes_ch.tryReceive()) |pv| pv.deinit(allocator);
+        replay_votes_ch.destroy();
+    }
     const future = try confirmSlot(
         allocator,
         .noop,
@@ -796,6 +833,8 @@ pub const TestState = struct {
         self.epoch_stakes.deinit(allocator);
         self.slot_state.deinit(allocator);
         self.stakes_cache.deinit(allocator);
+        while (self.replay_votes_ch.tryReceive()) |pv| pv.deinit(allocator);
+        self.replay_votes_ch.destroy();
     }
 
     pub fn accountStore(self: *TestState) AccountStore {

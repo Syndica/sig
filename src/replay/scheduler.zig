@@ -64,18 +64,19 @@ pub fn processBatch(
 
         switch (try executeTransaction(allocator, &svm_gateway, &runtime_transaction)) {
             .ok => |result| {
-                if (!isSimpleVoteTransaction(transaction.transaction)) continue;
-                if (vote_listener.vote_parser.parseSanitizedVoteTransaction(
-                    allocator,
-                    transaction,
-                ) catch null) |parsed| {
-                    if (parsed.vote.lastVotedSlot() != null) {
-                        replay_votes_sender.send(parsed) catch parsed.deinit(allocator);
-                    } else {
-                        parsed.deinit(allocator);
-                    }
-                } else continue;
                 results[i] = .{ hash, result };
+                if (isSimpleVoteTransaction(transaction.transaction)) {
+                    if (vote_listener.vote_parser.parseSanitizedVoteTransaction(
+                        allocator,
+                        transaction,
+                    ) catch null) |parsed| {
+                        if (parsed.vote.lastVotedSlot() != null) {
+                            replay_votes_sender.send(parsed) catch parsed.deinit(allocator);
+                        } else {
+                            parsed.deinit(allocator);
+                        }
+                    }
+                }
             },
             .err => |err| return .{ .failure = err },
         }
@@ -657,6 +658,8 @@ test "TransactionScheduler: sends replay vote after success" {
     try state.makeTransactionsPassable(allocator, &txs);
 
     // Resolve batch
+    const slot_hashes = try sig.runtime.sysvar.SlotHashes.init(allocator);
+    defer slot_hashes.deinit(allocator);
     const batch = try resolveBatch(
         allocator,
         &txs,
@@ -664,7 +667,7 @@ test "TransactionScheduler: sends replay vote after success" {
             .slot = state.svmParams().slot,
             .account_reader = .noop,
             .reserved_accounts = &.empty,
-            .slot_hashes = try sig.runtime.sysvar.SlotHashes.init(allocator),
+            .slot_hashes = slot_hashes,
         },
     );
 

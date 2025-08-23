@@ -29,48 +29,66 @@ pub const SlotDataProvider = struct {
     epoch_tracker_rw: *sig.sync.RwMux(EpochTracker),
 
     fn rootSlot(self: *const SlotDataProvider) Slot {
-        const slot_tracker, var lg = self.slot_tracker_rw.readWithLock();
-        defer lg.unlock();
-        return slot_tracker.root;
+        const root = blk: {
+            const slot_tracker, var lg = self.slot_tracker_rw.readWithLock();
+            defer lg.unlock();
+            break :blk slot_tracker.root;
+        };
+        return root;
     }
 
     fn getSlotHash(self: *const SlotDataProvider, slot: Slot) ?Hash {
-        const slot_tracker, var lg = self.slot_tracker_rw.readWithLock();
-        defer lg.unlock();
-        const slot_info = slot_tracker.get(slot) orelse return null;
-        return slot_info.state.hash.readCopy();
+        const hash = blk: {
+            const slot_tracker, var lg = self.slot_tracker_rw.readWithLock();
+            defer lg.unlock();
+            const slot_info = slot_tracker.get(slot) orelse break :blk null;
+            break :blk slot_info.state.hash.readCopy();
+        };
+        return hash;
     }
 
     fn getSlotEpoch(self: *const SlotDataProvider, slot: Slot) sig.core.Epoch {
-        const epoch_tracker, var lg = self.epoch_tracker_rw.readWithLock();
-        defer lg.unlock();
-        return epoch_tracker.schedule.getEpoch(slot);
+        const epoch = blk: {
+            const epoch_tracker, var lg = self.epoch_tracker_rw.readWithLock();
+            defer lg.unlock();
+            break :blk epoch_tracker.schedule.getEpoch(slot);
+        };
+        return epoch;
     }
 
     fn getSlotAncestorsPtr(
         self: *const SlotDataProvider,
         slot: Slot,
     ) ?*const sig.core.Ancestors {
-        const slot_tracker, var lg = self.slot_tracker_rw.readWithLock();
-        defer lg.unlock();
-        if (slot_tracker.get(slot)) |ref| {
-            return &ref.constants.ancestors;
-        }
-        return null;
+        const ancestors = blk: {
+            const slot_tracker, var lg = self.slot_tracker_rw.readWithLock();
+            defer lg.unlock();
+            if (slot_tracker.get(slot)) |ref| {
+                break :blk &ref.constants.ancestors;
+            }
+            break :blk null;
+        };
+        return ancestors;
     }
 
     fn getEpochTotalStake(self: *const SlotDataProvider, epoch: u64) ?u64 {
-        const epoch_tracker, var lg = self.epoch_tracker_rw.readWithLock();
-        defer lg.unlock();
-        const epoch_info = epoch_tracker.epochs.get(epoch) orelse return null;
-        return epoch_info.stakes.total_stake;
+        const stake = blk: {
+            const epoch_tracker, var lg = self.epoch_tracker_rw.readWithLock();
+            defer lg.unlock();
+            const epoch_info = epoch_tracker.epochs.get(epoch) orelse break :blk null;
+            break :blk epoch_info.stakes.total_stake;
+        };
+        return stake;
     }
 
     fn getDelegatedStake(self: *const SlotDataProvider, slot: Slot, pubkey: Pubkey) ?u64 {
-        const epoch_tracker, var lg = self.epoch_tracker_rw.readWithLock();
-        defer lg.unlock();
-        const epoch_info = epoch_tracker.getForSlot(slot) orelse return null;
-        return epoch_info.stakes.stakes.vote_accounts.getDelegatedStake(pubkey);
+        const stake = blk: {
+            const epoch_tracker, var lg = self.epoch_tracker_rw.readWithLock();
+            defer lg.unlock();
+            const epoch_info = epoch_tracker.getForSlot(slot) orelse break :blk null;
+            break :blk epoch_info.stakes.stakes.vote_accounts.getDelegatedStake(pubkey);
+        };
+        return stake;
     }
 
     fn getAuthorizedVoterPubkey(
@@ -78,11 +96,14 @@ pub const SlotDataProvider = struct {
         slot: Slot,
         vote_account_key: Pubkey,
     ) ?Pubkey {
-        const epoch_tracker, var lg = self.epoch_tracker_rw.readWithLock();
-        defer lg.unlock();
-        const epoch_consts = epoch_tracker.getForSlot(slot) orelse return null;
-        const epoch_authorized_voters = &epoch_consts.stakes.epoch_authorized_voters;
-        return epoch_authorized_voters.get(vote_account_key);
+        const pubkey = blk: {
+            const epoch_tracker, var lg = self.epoch_tracker_rw.readWithLock();
+            defer lg.unlock();
+            const epoch_consts = epoch_tracker.getForSlot(slot) orelse break :blk null;
+            const epoch_authorized_voters = &epoch_consts.stakes.epoch_authorized_voters;
+            break :blk epoch_authorized_voters.get(vote_account_key);
+        };
+        return pubkey;
     }
 };
 

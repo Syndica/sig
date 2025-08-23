@@ -62,14 +62,24 @@ pub fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
     var epoch_stakes_map: EpochStakesMap = .empty;
     errdefer epoch_stakes_map.deinit(deps.allocator);
 
-    const epoch_tracker, var lg = deps.epoch_tracker_rw.readWithLock();
-    defer lg.unlock();
+    // Get the count and schedule while holding the lock
+    const epochs_count, const schedule = blk: {
+        const epoch_tracker, var lg = deps.epoch_tracker_rw.readWithLock();
+        defer lg.unlock();
+        break :blk .{ epoch_tracker.epochs.count(), epoch_tracker.schedule };
+    };
 
-    try epoch_stakes_map.ensureTotalCapacity(deps.allocator, epoch_tracker.epochs.count());
+    try epoch_stakes_map.ensureTotalCapacity(deps.allocator, epochs_count);
     defer epoch_stakes_map.deinit(deps.allocator);
 
-    for (epoch_tracker.epochs.keys(), epoch_tracker.epochs.values()) |key, constants| {
-        epoch_stakes_map.putAssumeCapacity(key, constants.stakes);
+    // Copy the epochs data.
+    {
+        const epoch_tracker, var lg = deps.epoch_tracker_rw.readWithLock();
+        defer lg.unlock();
+
+        for (epoch_tracker.epochs.keys(), epoch_tracker.epochs.values()) |key, constants| {
+            epoch_stakes_map.putAssumeCapacity(key, constants.stakes);
+        }
     }
 
     _ = try computeBankStats(
@@ -77,7 +87,7 @@ pub fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
         deps.vote_account,
         deps.ancestors,
         deps.slot_tracker_rw,
-        &epoch_tracker.schedule,
+        &schedule,
         &epoch_stakes_map,
         deps.progress_map,
         deps.fork_choice,
@@ -92,7 +102,7 @@ pub fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
     const heaviest_slot_on_same_voted_fork =
         (try deps.fork_choice.heaviestSlotOnSameVotedFork(deps.replay_tower)) orelse null;
 
-    const heaviest_epoch: Epoch = epoch_tracker.schedule.getEpoch(heaviest_slot);
+    const heaviest_epoch: Epoch = schedule.getEpoch(heaviest_slot);
 
     const now = sig.time.Instant.now();
     var last_vote_refresh_time: LastVoteRefreshTime = .{
