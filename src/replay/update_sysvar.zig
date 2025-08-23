@@ -407,7 +407,7 @@ fn getSysvarAndDataFromAccount(
     return .{ .sysvar = sysvar, .data = data };
 }
 
-fn getSysvarFromAccount(
+pub fn getSysvarFromAccount(
     comptime Sysvar: type,
     allocator: Allocator,
     account_reader: SlotAccountReader,

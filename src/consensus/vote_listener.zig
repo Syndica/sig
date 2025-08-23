@@ -106,7 +106,7 @@ pub const VoteListener = struct {
         logger: Logger,
         vote_tracker: *VoteTracker,
         params: struct {
-            bank_forks: *const SlotDataProvider,
+            slot_data_provider: SlotDataProvider,
             gossip_table_rw: *sig.sync.RwMux(sig.gossip.GossipTable),
             ledger_ref: LedgerRef,
 
@@ -125,7 +125,7 @@ pub const VoteListener = struct {
         const recv_thread = try std.Thread.spawn(.{}, recvLoop, .{
             allocator,
             exit,
-            params.bank_forks,
+            params.slot_data_provider,
             params.gossip_table_rw,
             verified_vote_transactions,
         });
@@ -137,7 +137,7 @@ pub const VoteListener = struct {
             logger,
 
             vote_tracker,
-            params.bank_forks,
+            params.slot_data_provider,
 
             params.senders,
             Receivers{
@@ -217,7 +217,7 @@ const UnverifiedVoteReceptor = struct {
     fn recvAndSendOnce(
         self: *UnverifiedVoteReceptor,
         allocator: std.mem.Allocator,
-        bank_forks: *const SlotDataProvider,
+        slot_data_provider: *const SlotDataProvider,
         gossip_table_rw: *sig.sync.RwMux(sig.gossip.GossipTable),
         unverified_votes_buffer: *std.ArrayListUnmanaged(Transaction),
         /// Sends to `processVotesLoop`'s `receivers.verified_vote_transactions` parameter.
@@ -238,7 +238,7 @@ const UnverifiedVoteReceptor = struct {
             return;
         }
 
-        const epoch_tracker, var epoch_lg = bank_forks.epoch_tracker_rw.readWithLock();
+        const epoch_tracker, var epoch_lg = slot_data_provider.epoch_tracker_rw.readWithLock();
         defer epoch_lg.unlock();
         // TODO: Question should the lock for epoch_tracker be held here?
         // or *sig.sync.RwMux(EpochTracker) be passed into consumeTransactionsAndSendVerified and passed
@@ -1708,6 +1708,36 @@ test "simple usage" {
         .writer = &ledger_writer,
     };
 
+    var ledger_db = try sig.ledger.tests.TestDB.init(@src());
+    defer ledger_db.deinit();
+
+    var registry: sig.prometheus.Registry(.{}) = .init(allocator);
+    defer registry.deinit();
+    var lowest_cleanup_slot: sig.sync.RwMux(Slot) = .init(0);
+    var max_root: std.atomic.Value(u64) = .init(0);
+
+    var ledger_reader: sig.ledger.LedgerReader = try .init(
+        allocator,
+        .noop,
+        ledger_db,
+        &registry,
+        &lowest_cleanup_slot,
+        &max_root,
+    );
+    var ledger_writer: sig.ledger.LedgerResultWriter = try .init(
+        allocator,
+        .noop,
+        ledger_db,
+        &registry,
+        &lowest_cleanup_slot,
+        &max_root,
+    );
+
+    const ledger_ref: LedgerRef = .{
+        .reader = &ledger_reader,
+        .writer = &ledger_writer,
+    };
+
     var gossip_table_rw: sig.sync.RwMux(sig.gossip.GossipTable) = .init(
         try .init(allocator, allocator),
     );
@@ -1733,7 +1763,7 @@ test "simple usage" {
     const exit_cond: sig.sync.ExitCondition = .{ .unordered = &exit };
 
     const vote_listener: VoteListener = try .init(allocator, exit_cond, .noop, &vote_tracker, .{
-        .bank_forks = &bank_forks,
+        .slot_data_provider = &slot_data_provider,
         .gossip_table_rw = &gossip_table_rw,
         .ledger_ref = ledger_ref,
         .receivers = .{
@@ -1814,6 +1844,36 @@ test "check trackers" {
     var slot_data_provider2: SlotDataProvider = .{
         .slot_tracker_rw = &slot_tracker2_rw,
         .epoch_tracker_rw = &epoch_tracker2_rw,
+    };
+
+    var ledger_db = try sig.ledger.tests.TestDB.init(@src());
+    defer ledger_db.deinit();
+
+    var registry: sig.prometheus.Registry(.{}) = .init(allocator);
+    defer registry.deinit();
+    var lowest_cleanup_slot: sig.sync.RwMux(Slot) = .init(0);
+    var max_root: std.atomic.Value(u64) = .init(0);
+
+    var ledger_reader: sig.ledger.LedgerReader = try .init(
+        allocator,
+        .noop,
+        ledger_db,
+        &registry,
+        &lowest_cleanup_slot,
+        &max_root,
+    );
+    var ledger_writer: sig.ledger.LedgerResultWriter = try .init(
+        allocator,
+        .noop,
+        ledger_db,
+        &registry,
+        &lowest_cleanup_slot,
+        &max_root,
+    );
+
+    const ledger_ref: LedgerRef = .{
+        .reader = &ledger_reader,
+        .writer = &ledger_writer,
     };
 
     var ledger_db = try sig.ledger.tests.TestDB.init(@src());

@@ -342,11 +342,32 @@ test "TransactionScheduler: happy path" {
     );
     defer scheduler.deinit();
 
+    const slot_hashes = try sig.runtime.sysvar.SlotHashes.init(allocator);
+    defer slot_hashes.deinit(allocator);
+
     {
-        const batch1 = try resolveBatch(allocator, .noop, transactions[0..3], &.empty);
+        const batch1 = try resolveBatch(
+            allocator,
+            transactions[0..3],
+            .{
+                .slot = state.svmParams().slot,
+                .account_reader = .noop,
+                .reserved_accounts = &.empty,
+                .slot_hashes = slot_hashes,
+            },
+        );
         errdefer batch1.deinit(allocator);
 
-        const batch2 = try resolveBatch(allocator, .noop, transactions[3..6], &.empty);
+        const batch2 = try resolveBatch(
+            allocator,
+            transactions[3..6],
+            .{
+                .slot = state.svmParams().slot,
+                .account_reader = .noop,
+                .reserved_accounts = &.empty,
+                .slot_hashes = slot_hashes,
+            },
+        );
         errdefer batch2.deinit(allocator);
 
         scheduler.addBatchAssumeCapacity(batch1);
@@ -396,11 +417,32 @@ test "TransactionScheduler: duplicate batch passes through to svm" {
     );
     defer scheduler.deinit();
 
+    const slot_hashes = try sig.runtime.sysvar.SlotHashes.init(allocator);
+    defer slot_hashes.deinit(allocator);
+
     {
-        const batch1 = try resolveBatch(allocator, .noop, transactions[0..3], &.empty);
+        const batch1 = try resolveBatch(
+            allocator,
+            transactions[0..3],
+            .{
+                .slot = state.svmParams().slot,
+                .account_reader = .noop,
+                .reserved_accounts = &.empty,
+                .slot_hashes = slot_hashes,
+            },
+        );
         errdefer batch1.deinit(allocator);
 
-        const batch1_dupe = try resolveBatch(allocator, .noop, transactions[0..3], &.empty);
+        const batch1_dupe = try resolveBatch(
+            allocator,
+            transactions[0..3],
+            .{
+                .slot = state.svmParams().slot,
+                .account_reader = .noop,
+                .reserved_accounts = &.empty,
+                .slot_hashes = slot_hashes,
+            },
+        );
         errdefer batch1_dupe.deinit(allocator);
 
         scheduler.addBatchAssumeCapacity(batch1);
@@ -450,8 +492,20 @@ test "TransactionScheduler: failed account locks" {
     );
     defer scheduler.deinit();
 
+    const slot_hashes = try sig.runtime.sysvar.SlotHashes.init(allocator);
+    defer slot_hashes.deinit(allocator);
+
     {
-        const batch1 = try resolveBatch(allocator, .noop, &unresolved_batch, &.empty);
+        const batch1 = try resolveBatch(
+            allocator,
+            &unresolved_batch,
+            .{
+                .slot = state.svmParams().slot,
+                .account_reader = .noop,
+                .reserved_accounts = &.empty,
+                .slot_hashes = slot_hashes,
+            },
+        );
         errdefer batch1.deinit(allocator);
 
         scheduler.addBatchAssumeCapacity(batch1);
@@ -508,11 +562,32 @@ test "TransactionScheduler: signature verification failure" {
     replaced_sigs[0].data[0] +%= 1;
     transactions[5].signatures = replaced_sigs;
 
+    const slot_hashes = try sig.runtime.sysvar.SlotHashes.init(allocator);
+    defer slot_hashes.deinit(allocator);
+
     {
-        const batch1 = try resolveBatch(allocator, .noop, transactions[0..3], &.empty);
+        const batch1 = try resolveBatch(
+            allocator,
+            transactions[0..3],
+            .{
+                .slot = state.svmParams().slot,
+                .account_reader = .noop,
+                .reserved_accounts = &.empty,
+                .slot_hashes = slot_hashes,
+            },
+        );
         errdefer batch1.deinit(allocator);
 
-        const batch2 = try resolveBatch(allocator, .noop, transactions[3..6], &.empty);
+        const batch2 = try resolveBatch(
+            allocator,
+            transactions[3..6],
+            .{
+                .slot = state.svmParams().slot,
+                .account_reader = .noop,
+                .reserved_accounts = &.empty,
+                .slot_hashes = slot_hashes,
+            },
+        );
         errdefer batch2.deinit(allocator);
 
         scheduler.addBatchAssumeCapacity(batch1);

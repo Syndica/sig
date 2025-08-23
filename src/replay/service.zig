@@ -192,6 +192,8 @@ const ReplayState = struct {
     senders: Senders,
     receivers: Receivers,
 
+    execution_log_helper: replay.execution.LogHelper,
+
     replay_votes_ch: *sig.sync.Channel(ParsedVote),
 
     fn deinit(self: *ReplayState) void {
@@ -290,6 +292,8 @@ const ReplayState = struct {
             .senders = deps.senders,
             .receivers = deps.receivers,
 
+            .execution_log_helper = .init(.from(deps.logger)),
+
             .replay_votes_ch = replay_votes_ch,
         };
     }
@@ -300,6 +304,8 @@ const ReplayState = struct {
             .logger = .from(self.logger),
             .my_identity = self.my_identity,
             .vote_account = null, // voting not currently supported
+
+            .log_helper = &self.execution_log_helper,
 
             .account_store = self.account_store,
             .thread_pool = &self.thread_pool,
@@ -482,12 +488,11 @@ pub fn run(deps: ReplayDependencies) !void {
 /// - running concensus on the latest updates
 fn advanceReplay(state: *ReplayState) !void {
     const allocator = state.allocator;
-    const logger = state.logger;
 
     const zone = tracy.Zone.init(@src(), .{ .name = "advanceReplay" });
     defer zone.deinit();
 
-    state.logger.info().log("advancing replay");
+    state.logger.debug().log("advancing replay");
 
     var arena_state = state.arena_state.promote(allocator);
     defer {
@@ -498,6 +503,7 @@ fn advanceReplay(state: *ReplayState) !void {
 
     try trackNewSlots(
         allocator,
+        state.logger,
         state.account_store,
         &state.ledger.db,
         &state.slot_tracker_rw,
@@ -510,7 +516,7 @@ fn advanceReplay(state: *ReplayState) !void {
     const processed_a_slot = try replay.execution.replayActiveSlots(state.executionState());
     if (!processed_a_slot) std.time.sleep(100 * std.time.ns_per_ms);
 
-    _ = try replay.edge_cases.processEdgeCases(allocator, logger, .{
+    _ = try replay.edge_cases.processEdgeCases(allocator, state.logger, .{
         .my_pubkey = state.my_identity,
         .tpu_has_bank = false,
 
@@ -583,6 +589,7 @@ fn advanceReplay(state: *ReplayState) !void {
 /// [generate_new_bank_forks](https://github.com/anza-xyz/agave/blob/146ebd8be3857d530c0946003fcd58be220c3290/core/src/replay_stage.rs#L4149)
 fn trackNewSlots(
     allocator: Allocator,
+    logger: Logger,
     account_store: AccountStore,
     ledger_db: *LedgerDB,
     slot_tracker_rw: *sig.sync.RwMux(SlotTracker),
@@ -623,6 +630,7 @@ fn trackNewSlots(
 
         for (children.items) |slot| {
             if (slot_tracker.contains(slot)) continue;
+            logger.info().logf("tracking new slot: {}", .{slot});
 
             const epoch_info = epoch_tracker.getPtrForSlot(slot) orelse
                 return error.MissingEpoch;
@@ -871,6 +879,7 @@ test trackNewSlots {
     // only the root (0) is considered frozen, so only 0 and 1 should be added at first.
     try trackNewSlots(
         allocator,
+        .FOR_TESTS,
         .noop,
         &ledger_db,
         &slot_tracker,
@@ -893,6 +902,7 @@ test trackNewSlots {
     // doing nothing should result in the same tracker state
     try trackNewSlots(
         allocator,
+        .FOR_TESTS,
         .noop,
         &ledger_db,
         &slot_tracker,
@@ -920,6 +930,7 @@ test trackNewSlots {
     }
     try trackNewSlots(
         allocator,
+        .FOR_TESTS,
         .noop,
         &ledger_db,
         &slot_tracker,
@@ -948,6 +959,7 @@ test trackNewSlots {
     }
     try trackNewSlots(
         allocator,
+        .FOR_TESTS,
         .noop,
         &ledger_db,
         &slot_tracker,

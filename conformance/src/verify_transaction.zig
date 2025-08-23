@@ -14,12 +14,15 @@ const VerifyTransactionResult = union(enum(u8)) {
 
 const FeatureSet = sig.core.FeatureSet;
 const SlotAccountReader = sig.accounts_db.SlotAccountReader;
+const Slot = sig.core.Slot;
+const SlotHashes = sig.runtime.sysvar.SlotHashes;
 
 pub fn verifyTransaction(
     allocator: std.mem.Allocator,
     transaction: Transaction,
     feature_set: *const FeatureSet,
-    slot: sig.core.Slot,
+    slot: Slot,
+    slot_hashes: SlotHashes,
     account_reader: SlotAccountReader,
 ) !VerifyTransactionResult {
     const serialized_msg = transaction.msg.serializeBounded(
@@ -33,33 +36,18 @@ pub fn verifyTransaction(
     };
     const msg_hash = sig.core.transaction.Message.hash(serialized_msg.slice());
 
-    if (!feature_set.active(.move_precompile_verification_to_svm, slot)) {
-        const maybe_verify_error = try sig.runtime.program.precompiles.verifyPrecompiles(
-            allocator,
-            &transaction,
-            feature_set,
-            slot,
-        );
-        if (maybe_verify_error) |verify_error| {
-            const converted = utils.convertTransactionError(verify_error);
-            return .{ .err = .{
-                .sanitization_error = true,
-                .status = converted.err,
-                .instruction_error = converted.instruction_error,
-                .instruction_error_index = converted.instruction_index,
-                .custom_error = converted.custom_error,
-            } };
-        }
-    }
-
     var reserved_accounts = try sig.core.reserved_accounts.initForSlot(allocator, feature_set, slot);
     defer reserved_accounts.deinit(allocator);
 
     const resolved_batch = sig.replay.resolve_lookup.resolveBatch(
         allocator,
-        account_reader,
         &.{transaction},
-        &reserved_accounts,
+        .{
+            .slot = slot,
+            .account_reader = account_reader,
+            .reserved_accounts = &reserved_accounts,
+            .slot_hashes = slot_hashes,
+        },
     ) catch |err| {
         const err_code = switch (err) {
             error.AddressLookupTableNotFound => transactionErrorToInt(
@@ -82,6 +70,25 @@ pub fn verifyTransaction(
         } };
     };
     defer resolved_batch.deinit(allocator);
+
+    if (!feature_set.active(.move_precompile_verification_to_svm, slot)) {
+        const maybe_verify_error = try sig.runtime.program.precompiles.verifyPrecompiles(
+            allocator,
+            &transaction,
+            feature_set,
+            slot,
+        );
+        if (maybe_verify_error) |verify_error| {
+            const converted = utils.convertTransactionError(verify_error);
+            return .{ .err = .{
+                .sanitization_error = true,
+                .status = converted.err,
+                .instruction_error = converted.instruction_error,
+                .instruction_error_index = converted.instruction_index,
+                .custom_error = converted.custom_error,
+            } };
+        }
+    }
 
     const resolved_txn = resolved_batch.transactions[0];
 
