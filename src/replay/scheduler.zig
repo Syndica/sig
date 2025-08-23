@@ -41,6 +41,7 @@ pub fn processBatch(
     committer: Committer,
     transactions: []const ResolvedTransaction,
     exit: *Atomic(bool),
+    replay_votes_sender: *Channel(ParsedVote),
 ) !BatchResult {
     var zone = tracy.Zone.init(@src(), .{ .name = "processBatch" });
     zone.value(transactions.len);
@@ -62,7 +63,20 @@ pub fn processBatch(
         const runtime_transaction = transaction.toRuntimeTransaction(hash);
 
         switch (try executeTransaction(allocator, &svm_gateway, &runtime_transaction)) {
-            .ok => |result| results[i] = .{ hash, result },
+            .ok => |result| {
+                if (!isSimpleVoteTransaction(transaction.transaction)) continue;
+                if (vote_listener.vote_parser.parseSanitizedVoteTransaction(
+                    allocator,
+                    transaction,
+                ) catch null) |parsed| {
+                    if (parsed.vote.lastVotedSlot() != null) {
+                        replay_votes_sender.send(parsed) catch parsed.deinit(allocator);
+                    } else {
+                        parsed.deinit(allocator);
+                    }
+                } else continue;
+                results[i] = .{ hash, result };
+            },
             .err => |err| return .{ .failure = err },
         }
     }
@@ -119,7 +133,7 @@ pub const TransactionScheduler = struct {
     /// if non-null, a failure was already recorded and will be returned for every poll
     failure: ?replay.confirm_slot.ConfirmSlotError,
     svm_params: SvmGateway.Params,
-    replay_votes_sender: ?*Channel(ParsedVote),
+    replay_votes_sender: *Channel(ParsedVote),
 
     const BatchMessage = struct {
         batch_index: usize,
@@ -134,7 +148,7 @@ pub const TransactionScheduler = struct {
         thread_pool: *ThreadPool,
         svm_params: SvmGateway.Params,
         exit: *Atomic(bool),
-        replay_votes_sender: ?*Channel(ParsedVote),
+        replay_votes_sender: *Channel(ParsedVote),
     ) !TransactionScheduler {
         var batches = try std.ArrayListUnmanaged(ResolvedBatch)
             .initCapacity(allocator, batch_capacity);
@@ -268,7 +282,7 @@ const ProcessBatchTask = struct {
     transactions: []const ResolvedTransaction,
     results: *Channel(TransactionScheduler.BatchMessage),
     exit: *Atomic(bool),
-    replay_votes_sender: ?*Channel(ParsedVote),
+    replay_votes_sender: *Channel(ParsedVote),
 
     pub fn run(self: *ProcessBatchTask) !void {
         const result = try processBatch(
@@ -277,27 +291,8 @@ const ProcessBatchTask = struct {
             self.committer,
             self.transactions,
             self.exit,
+            self.replay_votes_sender,
         );
-
-        // On success, find and send vote transactions immediately
-        if (result == .success) {
-            if (self.replay_votes_sender) |votes_ch| {
-                for (self.transactions) |resolved| {
-                    const tx = resolved.transaction;
-                    if (!isSimpleVoteTransaction(tx)) continue;
-                    if (vote_listener.vote_parser.parseVoteTransaction(
-                        self.allocator,
-                        tx,
-                    ) catch null) |parsed| {
-                        if (parsed.vote.lastVotedSlot() != null) {
-                            votes_ch.send(parsed) catch parsed.deinit(self.allocator);
-                        } else {
-                            parsed.deinit(self.allocator);
-                        }
-                    } else continue;
-                }
-            }
-        }
 
         if (result == .failure) {
             self.logger.err().logf("batch failed due to transaction error: {}", .{result.failure});
@@ -343,7 +338,7 @@ test "TransactionScheduler: happy path" {
         &thread_pool,
         state.svmParams(),
         &state.exit,
-        null,
+        state.replay_votes_ch,
     );
     defer scheduler.deinit();
 
@@ -397,7 +392,7 @@ test "TransactionScheduler: duplicate batch passes through to svm" {
         &thread_pool,
         state.svmParams(),
         &state.exit,
-        null,
+        state.replay_votes_ch,
     );
     defer scheduler.deinit();
 
@@ -451,7 +446,7 @@ test "TransactionScheduler: failed account locks" {
         &thread_pool,
         state.svmParams(),
         &state.exit,
-        null,
+        state.replay_votes_ch,
     );
     defer scheduler.deinit();
 
@@ -504,7 +499,7 @@ test "TransactionScheduler: signature verification failure" {
         &thread_pool,
         state.svmParams(),
         &state.exit,
-        null,
+        state.replay_votes_ch,
     );
     defer scheduler.deinit();
 

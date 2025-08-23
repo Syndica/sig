@@ -2,6 +2,7 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 const replay = @import("lib.zig");
 const tracy = @import("tracy");
+const vote_listener = @import("../consensus/vote_listener.zig");
 
 const core = sig.core;
 
@@ -41,6 +42,8 @@ const check_slot_agrees_with_cluster = replay.edge_cases.check_slot_agrees_with_
 
 const SvmGateway = replay.svm_gateway.SvmGateway;
 
+const ParsedVote = vote_listener.vote_parser.ParsedVote;
+
 const confirmSlot = replay.confirm_slot.confirmSlot;
 
 /// State used for replaying and validating data from ledger/accountsdb/svm
@@ -68,6 +71,7 @@ pub const ReplayExecutionState = struct {
     duplicate_slots_to_repair: *DuplicateSlotsToRepair,
     purge_repair_slot_counter: *PurgeRepairSlotCounters,
     ancestor_hashes_replay_update_sender: *sig.sync.Channel(AncestorHashesReplayUpdate),
+    replay_votes_ch: *sig.sync.Channel(ParsedVote),
 };
 
 /// 1. Replays transactions from all the slots that need to be replayed.
@@ -282,6 +286,7 @@ fn replaySlot(state: ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
         verify_ticks_params,
         &slot_info.constants.ancestors,
         &slot_info.constants.reserved_accounts,
+        state.replay_votes_ch,
     ) };
 }
 
@@ -635,6 +640,8 @@ const TestReplayStateResources = struct {
             .Channel(AncestorHashesReplayUpdate)
             .init(allocator);
 
+        const replay_votes_ch: *sig.sync.Channel(ParsedVote) = try .create(allocator);
+
         self.replay_state = ReplayExecutionState{
             .allocator = allocator,
             .logger = .noop,
@@ -657,6 +664,7 @@ const TestReplayStateResources = struct {
             .duplicate_slots_to_repair = &self.duplicate_slots_to_repair,
             .purge_repair_slot_counter = &self.purge_repair_slot_counter,
             .ancestor_hashes_replay_update_sender = &self.ancestor_hashes_replay_update_channel,
+            .replay_votes_ch = replay_votes_ch,
         };
 
         return self;

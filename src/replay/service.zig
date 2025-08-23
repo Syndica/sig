@@ -92,17 +92,14 @@ pub const LedgerRef = struct {
 pub const Senders = struct {
     /// Received by repair [ancestor_hashes_service](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/repair/ancestor_hashes_service.rs#L589)
     ancestor_hashes_replay_update: *sig.sync.Channel(AncestorHashesReplayUpdate),
-    replay_votes: *sig.sync.Channel(ParsedVote),
 
     pub fn destroy(self: Senders) void {
         self.ancestor_hashes_replay_update.destroy();
-        self.replay_votes.destroy();
     }
 
     pub fn create(allocator: std.mem.Allocator) std.mem.Allocator.Error!Senders {
         return .{
             .ancestor_hashes_replay_update = try .create(allocator),
-            .replay_votes = try .create(allocator),
         };
     }
 };
@@ -129,9 +126,6 @@ pub const Receivers = struct {
     ///       - [relevant interface invokation](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/gossip/src/duplicate_shred_listener.rs#L31)
     duplicate_slots: *sig.sync.Channel(Slot),
 
-    // Borrowed. Managed by Senders.
-    replay_votes: *sig.sync.Channel(ParsedVote),
-
     pub fn destroy(self: Receivers) void {
         self.ancestor_duplicate_slots.destroy();
         self.duplicate_confirmed_slots.destroy();
@@ -140,9 +134,7 @@ pub const Receivers = struct {
         self.duplicate_slots.destroy();
     }
 
-    pub fn create(allocator: std.mem.Allocator, params: struct {
-        replay_votes: *sig.sync.Channel(ParsedVote),
-    }) std.mem.Allocator.Error!Receivers {
+    pub fn create(allocator: std.mem.Allocator) std.mem.Allocator.Error!Receivers {
         const ancestor_duplicate_slots: *sig.sync.Channel(AncestorDuplicateSlotToRepair) =
             try .create(allocator);
         errdefer ancestor_duplicate_slots.destroy();
@@ -167,7 +159,6 @@ pub const Receivers = struct {
             .gossip_verified_vote_hash = gossip_verified_vote_hash,
             .popular_pruned_forks = popular_pruned_forks,
             .duplicate_slots = duplicate_slots,
-            .replay_votes = params.replay_votes,
         };
     }
 };
@@ -201,6 +192,8 @@ const ReplayState = struct {
     senders: Senders,
     receivers: Receivers,
 
+    replay_votes_ch: *sig.sync.Channel(ParsedVote),
+
     fn deinit(self: *ReplayState) void {
         self.thread_pool.shutdown();
         self.thread_pool.deinit();
@@ -221,6 +214,7 @@ const ReplayState = struct {
         self.fork_choice.deinit();
         self.latest_validator_votes.deinit(self.allocator);
         self.slot_data.deinit(self.allocator);
+        self.replay_votes_ch.destroy();
     }
 
     fn init(deps: ReplayDependencies) !ReplayState {
@@ -232,6 +226,8 @@ const ReplayState = struct {
             .state = deps.root.state,
         });
         errdefer slot_tracker.deinit(deps.allocator);
+
+        const replay_votes_ch = try sig.sync.Channel(ParsedVote).create(deps.allocator);
 
         var epoch_tracker: EpochTracker = .{ .schedule = deps.epoch_schedule };
         errdefer epoch_tracker.deinit(deps.allocator);
@@ -293,6 +289,8 @@ const ReplayState = struct {
 
             .senders = deps.senders,
             .receivers = deps.receivers,
+
+            .replay_votes_ch = replay_votes_ch,
         };
     }
 
@@ -321,6 +319,7 @@ const ReplayState = struct {
             .duplicate_slots_to_repair = &self.slot_data.duplicate_slots_to_repair,
             .purge_repair_slot_counter = &self.slot_data.purge_repair_slot_counter,
             .ancestor_hashes_replay_update_sender = self.senders.ancestor_hashes_replay_update,
+            .replay_votes_ch = self.replay_votes_ch,
         };
     }
 };
@@ -458,7 +457,7 @@ pub fn run(deps: ReplayDependencies) !void {
             .bank_forks = &vote_listener_bank_forks,
             .gossip_table_rw = deps.gossip_table_rw,
             .ledger_ref = .{ .reader = state.ledger.reader, .writer = state.ledger.writer },
-            .receivers = .{ .replay_votes = deps.senders.replay_votes },
+            .receivers = .{ .replay_votes_ch = state.replay_votes_ch },
             .senders = .{
                 .verified_vote = verified_vote_channel,
                 .gossip_verified_vote_hash = state.receivers.gossip_verified_vote_hash,
@@ -967,32 +966,6 @@ test trackNewSlots {
             &.{ 3, 5 },
         );
     }
-}
-
-test "Receivers.create wires replay_votes without taking ownership" {
-    const allocator = std.testing.allocator;
-
-    var dbg: std.heap.DebugAllocator(.{}) = .init;
-    defer {
-        const leak_check = dbg.deinit();
-        std.debug.assert(leak_check == .ok);
-    }
-    const tracked = dbg.allocator();
-
-    // Create a votes channel using the tracked allocator (borrowed by Receivers)
-    const votes_ch = try sig.sync.Channel(ParsedVote).create(tracked);
-    defer votes_ch.destroy();
-
-    // Create receivers with the borrowed channel
-    var receivers = try Receivers.create(allocator, .{ .replay_votes = votes_ch });
-    // Ensure the same pointer was wired through
-    try std.testing.expect(votes_ch == receivers.replay_votes);
-
-    // Destroy receivers; this should NOT destroy the borrowed channel.
-    receivers.destroy();
-
-    // Channel should still be usable; try a non-blocking receive (should be empty, but not crash)
-    _ = votes_ch.tryReceive();
 }
 
 fn expectSlotTracker(

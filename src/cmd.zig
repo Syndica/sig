@@ -1198,7 +1198,6 @@ fn validator(
 
     const replay_receivers: sig.replay.service.Receivers = try .create(
         allocator,
-        .{ .replay_votes = replay_senders.replay_votes },
     );
     defer replay_receivers.destroy();
 

@@ -112,7 +112,7 @@ pub const VoteListener = struct {
 
             /// Channels that will be used to `receive` data.
             receivers: struct {
-                replay_votes: *sig.sync.Channel(vote_parser.ParsedVote),
+                replay_votes_ch: *sig.sync.Channel(vote_parser.ParsedVote),
             },
 
             /// Direct outputs
@@ -142,7 +142,7 @@ pub const VoteListener = struct {
             params.senders,
             Receivers{
                 .verified_vote_transactions = verified_vote_transactions,
-                .replay_votes = params.receivers.replay_votes,
+                .replay_votes = params.receivers.replay_votes_ch,
             },
 
             params.ledger_ref,
@@ -1737,7 +1737,7 @@ test "simple usage" {
         .gossip_table_rw = &gossip_table_rw,
         .ledger_ref = ledger_ref,
         .receivers = .{
-            .replay_votes = replay_votes_channel,
+            .replay_votes_ch = replay_votes_channel,
         },
         .senders = .{
             .verified_vote = verified_vote_channel,
