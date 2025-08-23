@@ -443,9 +443,9 @@ pub fn run(deps: ReplayDependencies) !void {
     var vote_tracker: sig.consensus.VoteTracker = .EMPTY;
     defer vote_tracker.deinit(deps.allocator);
 
-    // TODO: Should `vote_listener_bank_forks` itself be wrapped in RwMux to ensure consistency
+    // TODO: Should `slot_data_provider` itself be wrapped in RwMux to ensure consistency
     // of the struct itself across multiple threads?
-    var vote_listener_bank_forks: sig.consensus.vote_listener.SlotDataProvider = .{
+    const slot_data_provider: sig.consensus.vote_listener.SlotDataProvider = .{
         .slot_tracker_rw = &state.slot_tracker_rw,
         .epoch_tracker_rw = &state.epoch_tracker_rw,
     };
@@ -460,7 +460,7 @@ pub fn run(deps: ReplayDependencies) !void {
         .from(deps.logger),
         &vote_tracker,
         .{
-            .bank_forks = &vote_listener_bank_forks,
+            .slot_data_provider = slot_data_provider,
             .gossip_table_rw = deps.gossip_table_rw,
             .ledger_ref = .{ .reader = state.ledger.reader, .writer = state.ledger.writer },
             .receivers = .{ .replay_votes_ch = state.replay_votes_ch },

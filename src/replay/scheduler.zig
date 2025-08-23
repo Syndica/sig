@@ -657,7 +657,16 @@ test "TransactionScheduler: sends replay vote after success" {
     try state.makeTransactionsPassable(allocator, &txs);
 
     // Resolve batch
-    const batch = try resolveBatch(allocator, .noop, &txs, &.empty);
+    const batch = try resolveBatch(
+        allocator,
+        &txs,
+        .{
+            .slot = state.svmParams().slot,
+            .account_reader = .noop,
+            .reserved_accounts = &.empty,
+            .slot_hashes = try sig.runtime.sysvar.SlotHashes.init(allocator),
+        },
+    );
 
     // Channel to receive parsed votes
     const votes_ch = try sig.sync.Channel(ParsedVote).create(allocator);
