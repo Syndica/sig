@@ -96,7 +96,7 @@ pub fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
         var duplicate_confirmed_forks: std.ArrayListUnmanaged(SlotAndHash) = .empty;
         defer duplicate_confirmed_forks.deinit(deps.allocator);
 
-        // Analogoous to [ReplayStage::tower_duplicate_confirmed_forks](https://github.com/anza-xyz/agave/blob/47c0383f2301e5a739543c1af9992ae182b7e06c/core/src/replay_stage.rs#L3928)
+        // Analogous to [ReplayStage::tower_duplicate_confirmed_forks](https://github.com/anza-xyz/agave/blob/47c0383f2301e5a739543c1af9992ae182b7e06c/core/src/replay_stage.rs#L3928)
         try duplicate_confirmed_forks.ensureTotalCapacity(deps.allocator, deps.progress_map.map.count());
         for (deps.progress_map.map.keys()) |slot| {
             const slot_fork_stats = deps.progress_map.getForkStats(slot) orelse return error.MissingSlotInForkStats;
@@ -122,7 +122,7 @@ pub fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
             }
         }
 
-        // Analogoous to [ReplayStage::mark_slots_duplicate_confirmed](https://github.com/anza-xyz/agave/blob/47c0383f2301e5a739543c1af9992ae182b7e06c/core/src/replay_stage.rs#L3876)
+        // Analogous to [ReplayStage::mark_slots_duplicate_confirmed](https://github.com/anza-xyz/agave/blob/47c0383f2301e5a739543c1af9992ae182b7e06c/core/src/replay_stage.rs#L3876)
         const root_slot = deps.slot_tracker.root;
         for (duplicate_confirmed_forks.items) |duplicate_confirmed_fork| {
             const slot, const frozen_hash = duplicate_confirmed_fork.tuple();
@@ -549,6 +549,7 @@ fn resetFork(
 
 fn computeBankStats(
     allocator: std.mem.Allocator,
+    logger: Logger,
     my_vote_pubkey: Pubkey,
     ancestors: *const std.AutoArrayHashMapUnmanaged(u64, Ancestors),
     slot_tracker: *SlotTracker,
