@@ -146,7 +146,7 @@ pub const VoteListener = struct {
         const recv_thread = try std.Thread.spawn(.{}, recvLoop, .{
             allocator,
             exit,
-            &params.slot_data_provider,
+            params.slot_data_provider,
             params.gossip_table_rw,
             verified_vote_transactions,
         });
@@ -158,7 +158,7 @@ pub const VoteListener = struct {
             logger,
 
             vote_tracker,
-            &params.slot_data_provider,
+            params.slot_data_provider,
 
             params.senders,
             Receivers{
@@ -276,7 +276,7 @@ const UnverifiedVoteReceptor = struct {
 fn recvLoop(
     allocator: std.mem.Allocator,
     exit: sig.sync.ExitCondition,
-    slot_data_provider: *const SlotDataProvider,
+    slot_data_provider: SlotDataProvider,
     gossip_table_rw: *sig.sync.RwMux(sig.gossip.GossipTable),
     /// Sends to `processVotesLoop`'s `receivers.verified_vote_transactions` parameter.
     verified_vote_transactions_sender: *sig.sync.Channel(Transaction),
@@ -290,7 +290,7 @@ fn recvLoop(
     while (exit.shouldRun()) {
         try unverified_vote_receptor.recvAndSendOnce(
             allocator,
-            slot_data_provider,
+            &slot_data_provider,
             gossip_table_rw,
             &unverified_votes_buffer,
             verified_vote_transactions_sender,
@@ -388,7 +388,7 @@ fn processVotesLoop(
     allocator: std.mem.Allocator,
     logger: Logger,
     vote_tracker: *VoteTracker,
-    slot_data_provider: *const SlotDataProvider,
+    slot_data_provider: SlotDataProvider,
     senders: Senders,
     receivers: Receivers,
     ledger_ref: LedgerRef,
@@ -412,7 +412,7 @@ fn processVotesLoop(
             allocator,
             logger,
             vote_tracker,
-            slot_data_provider,
+            &slot_data_provider,
             senders,
             receivers,
             ledger_ref,
