@@ -79,8 +79,6 @@ pub const Set = struct {
     ///
     /// - `0` to indicate that this feature is enabled for all slots.
     /// - an actual slot number to indicate that this feature is enabled/active after this slot
-    /// - `maxInt(Slot)` to indicate that this feature is disabled in the set. `active` and
-    /// `activeSlot` will now always return false for this feature.
     ///
     /// If the provided pubkey doesn't match with any of the known feature gates, `InvalidPubkey`
     /// is returned.

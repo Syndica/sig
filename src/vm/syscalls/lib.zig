@@ -412,15 +412,15 @@ pub fn getReturnData(
             tc.getCheckAligned(),
         );
 
-        const source = return_data[0..length];
-        @memcpy(return_data_result, source);
-
         const program_id_result = try memory_map.translateType(
             Pubkey,
             .mutable,
             program_id_addr,
             tc.getCheckAligned(),
         );
+
+        const source = return_data[0..length];
+        @memcpy(return_data_result, source);
 
         if (memops.isOverlapping(
             @intFromPtr(return_data_result.ptr),

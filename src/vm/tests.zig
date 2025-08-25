@@ -2218,7 +2218,7 @@ test "fixed stack out of bounds" {
         \\entrypoint:
         \\  stb [r10-0x4000], 0
         \\  exit
-    , .{ error.StackAccessViolation, 1 });
+    , .{ error.AccessViolation, 1 });
 }
 
 test "decrease frame pointer on v0" {

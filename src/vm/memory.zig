@@ -401,13 +401,14 @@ fn accessViolation(
     version: sbpf.Version,
     config: exe.Config,
 ) AccessError {
-    const stack_frame_idx = std.math.divExact(
-        u64,
-        vm_addr -| STACK_START,
-        config.stack_frame_size,
+    const stack_frame_idx = std.math.divTrunc(
+        i64,
+        @as(i64, @bitCast(vm_addr)) -| @as(i64, STACK_START),
+        @intCast(config.stack_frame_size),
     ) catch 0;
 
-    return if (!version.enableDynamicStackFrames() and stack_frame_idx < config.max_call_depth)
+    return if (!version.enableDynamicStackFrames() and
+        stack_frame_idx >= -1 and stack_frame_idx <= config.max_call_depth)
         error.StackAccessViolation
     else
         error.AccessViolation;

@@ -129,15 +129,9 @@ fn executeInstruction(
     defer instr_info.deinit(allocator);
 
     var result: ?InstructionError = null;
-    executor.executeInstruction(
-        allocator,
-        &tc,
-        instr_info,
-    ) catch |err| {
-        switch (err) {
-            error.OutOfMemory => return err,
-            else => |e| result = e,
-        }
+    executor.executeInstruction(allocator, &tc, instr_info) catch |err| switch (err) {
+        error.OutOfMemory => return err,
+        else => |e| result = e,
     };
 
     if (emit_logs) {
@@ -147,9 +141,5 @@ fn executeInstruction(
         }
     }
 
-    return utils.createInstrEffects(
-        allocator,
-        &tc,
-        result,
-    );
+    return utils.createInstrEffects(allocator, &tc, result);
 }

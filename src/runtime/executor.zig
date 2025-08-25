@@ -52,15 +52,10 @@ pub fn executeNativeCpiInstruction(
 /// [fd] https://github.com/firedancer-io/firedancer/blob/dfadb7d33683aa8711dfe837282ad0983d3173a0/src/flamenco/runtime/fd_executor.c#L1034-L1035
 pub fn pushInstruction(
     tc: *TransactionContext,
-    instruction_info_: InstructionInfo,
+    initial_instruction_info: InstructionInfo,
 ) InstructionError!void {
-    var instruction_info = instruction_info_;
+    var instruction_info = initial_instruction_info;
     const program_id = instruction_info.program_meta.pubkey;
-
-    // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L250-L253
-    // [fd] https://github.com/firedancer-io/firedancer/blob/5e9c865414c12b89f1e0c3a2775cb90e3ca3da60/src/flamenco/runtime/fd_executor.c#L1001-L1011
-    if (program_id.equals(&ids.NATIVE_LOADER_ID))
-        return InstructionError.UnsupportedProgramId;
 
     // [agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/program-runtime/src/invoke_context.rs#L245-L283
     // [fd] https://github.com/firedancer-io/firedancer/blob/dfadb7d33683aa8711dfe837282ad0983d3173a0/src/flamenco/runtime/fd_executor.c#L1048-L1070
@@ -113,11 +108,16 @@ pub fn pushInstruction(
     if (tc.getAccountIndex(sig.runtime.sysvar.instruction.ID)) |index_in_transaction| {
         const account = tc.getAccountAtIndex(index_in_transaction) orelse
             return InstructionError.NotEnoughAccountKeys;
-        const data = account.account.data;
-        if (data.len >= 2) {
-            const last_index = data.len - 2;
-            @memcpy(data[last_index..][0..2], std.mem.asBytes(&tc.top_level_instruction_index));
+        // Normally this would never be hit since we setup the sysvar accounts and their owners,
+        // however if the validator falls into some sort of corrupt state, it is plausible this
+        // could trigger. Should only be seen through fuzzing.
+        if (!account.account.owner.equals(&sig.runtime.sysvar.OWNER_ID)) {
+            return InstructionError.InvalidAccountOwner;
         }
+        const data = account.account.data;
+        if (data.len < 2) return InstructionError.AccountDataTooSmall;
+        const last_index = data.len - 2;
+        std.mem.writeInt(u16, data[last_index..][0..2], tc.top_level_instruction_index, .little);
     }
 }
 
@@ -411,7 +411,7 @@ fn sumAccountLamports(
     return lamports;
 }
 
-test "pushInstruction" {
+test pushInstruction {
     const testing = sig.runtime.testing;
     const system_program = sig.runtime.program.system;
 
@@ -449,19 +449,6 @@ test "pushInstruction" {
     );
     defer instruction_info.deinit(allocator);
 
-    {
-        // Cannot push native loader
-        // Modify and defer reset the program id
-        const original_program_id = instruction_info.program_meta.pubkey;
-        defer instruction_info.program_meta.pubkey = original_program_id;
-        instruction_info.program_meta.pubkey = ids.NATIVE_LOADER_ID;
-
-        try std.testing.expectError(
-            InstructionError.UnsupportedProgramId,
-            pushInstruction(&tc, instruction_info),
-        );
-    }
-
     // Success
     try pushInstruction(&tc, instruction_info);
     try std.testing.expectEqual(
@@ -494,6 +481,103 @@ test "pushInstruction" {
     // an instruction context on the stack with the same program id that is not the last entry
     try std.testing.expectError(
         InstructionError.ReentrancyNotAllowed,
+        pushInstruction(&tc, instruction_info),
+    );
+}
+
+test "pushInstruction sysvar account data" {
+    const system_program = sig.runtime.program.system;
+    const testing = sig.runtime.testing;
+
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+
+    var sysvar_data: [20]u8 = @splat(0);
+    var cache, var tc = try testing.createTransactionContext(
+        allocator,
+        prng.random(),
+        .{
+            .accounts = &.{
+                .{ .lamports = 2_000 },
+                .{ .lamports = 0 },
+                .{
+                    .pubkey = sig.runtime.sysvar.instruction.ID,
+                    .owner = sig.runtime.sysvar.OWNER_ID,
+                    .data = &sysvar_data,
+                },
+                .{ .pubkey = system_program.ID },
+            },
+        },
+    );
+    defer {
+        testing.deinitTransactionContext(allocator, tc);
+        cache.deinit(allocator);
+    }
+
+    var instruction_info = try testing.createInstructionInfo(
+        &tc,
+        system_program.ID,
+        system_program.Instruction{
+            .transfer = .{
+                .lamports = 1_000,
+            },
+        },
+        &.{
+            .{ .index_in_transaction = 0 },
+            .{ .index_in_transaction = 1 },
+        },
+    );
+    defer instruction_info.deinit(allocator);
+
+    try pushInstruction(&tc, instruction_info);
+}
+
+test "pushInstruction sysvar account too small" {
+    const system_program = sig.runtime.program.system;
+    const testing = sig.runtime.testing;
+
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+
+    var sysvar_data: [1]u8 = @splat(0); // needs to be at least 2 bytes large
+    var cache, var tc = try testing.createTransactionContext(
+        allocator,
+        prng.random(),
+        .{
+            .accounts = &.{
+                .{ .lamports = 2_000 },
+                .{ .lamports = 0 },
+                .{
+                    .pubkey = sig.runtime.sysvar.instruction.ID,
+                    .owner = sig.runtime.sysvar.OWNER_ID,
+                    .data = &sysvar_data,
+                },
+                .{ .pubkey = system_program.ID },
+            },
+        },
+    );
+    defer {
+        testing.deinitTransactionContext(allocator, tc);
+        cache.deinit(allocator);
+    }
+
+    var instruction_info = try testing.createInstructionInfo(
+        &tc,
+        system_program.ID,
+        system_program.Instruction{
+            .transfer = .{
+                .lamports = 1_000,
+            },
+        },
+        &.{
+            .{ .index_in_transaction = 0 },
+            .{ .index_in_transaction = 1 },
+        },
+    );
+    defer instruction_info.deinit(allocator);
+
+    try std.testing.expectError(
+        error.AccountDataTooSmall,
         pushInstruction(&tc, instruction_info),
     );
 }
