@@ -92,19 +92,25 @@ pub fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
     defer deps.allocator.free(newly_computed_slot_stats);
 
     for (newly_computed_slot_stats) |slot_stat| {
-        const fork_stats = deps.progress_map.getForkStats(slot_stat) orelse return error.MissingSlotInForkStats;
+        const fork_stats = deps.progress_map.getForkStats(slot_stat) orelse
+            return error.MissingSlotInForkStats;
         var duplicate_confirmed_forks: std.ArrayListUnmanaged(SlotAndHash) = .empty;
         defer duplicate_confirmed_forks.deinit(deps.allocator);
 
         // Analogous to [ReplayStage::tower_duplicate_confirmed_forks](https://github.com/anza-xyz/agave/blob/47c0383f2301e5a739543c1af9992ae182b7e06c/core/src/replay_stage.rs#L3928)
-        try duplicate_confirmed_forks.ensureTotalCapacity(deps.allocator, deps.progress_map.map.count());
+        try duplicate_confirmed_forks.ensureTotalCapacity(
+            deps.allocator,
+            deps.progress_map.map.count(),
+        );
         for (deps.progress_map.map.keys()) |slot| {
-            const slot_fork_stats = deps.progress_map.getForkStats(slot) orelse return error.MissingSlotInForkStats;
+            const slot_fork_stats = deps.progress_map.getForkStats(slot) orelse
+                return error.MissingSlotInForkStats;
             if (slot_fork_stats.duplicate_confirmed_hash != null) {
                 continue;
             }
 
-            const slot_info = deps.slot_tracker.get(slot) orelse return error.MissingSlotInSlotTracker;
+            const slot_info = deps.slot_tracker.get(slot) orelse
+                return error.MissingSlotInSlotTracker;
             if (!slot_info.state.isFrozen()) {
                 continue;
             }
@@ -1791,7 +1797,8 @@ test "processConsensus - no duplicate confirmed without votes" {
 
     var slot_data: SlotData = .empty;
     defer slot_data.deinit(testing.allocator);
-    var ancestor_hashes_replay_update_sender = try sig.sync.Channel(AncestorHashesReplayUpdate).create(testing.allocator);
+    var ancestor_hashes_replay_update_sender =
+        try sig.sync.Channel(AncestorHashesReplayUpdate).create(testing.allocator);
     defer ancestor_hashes_replay_update_sender.destroy();
 
     var replay_tower = try createTestReplayTower(1, 0.67);
@@ -1951,7 +1958,8 @@ test "processConsensus - duplicate-confirmed is idempotent" {
 
     var slot_data: SlotData = .empty;
     defer slot_data.deinit(testing.allocator);
-    var ancestor_hashes_replay_update_sender = try sig.sync.Channel(AncestorHashesReplayUpdate).create(testing.allocator);
+    var ancestor_hashes_replay_update_sender =
+        try sig.sync.Channel(AncestorHashesReplayUpdate).create(testing.allocator);
     defer ancestor_hashes_replay_update_sender.destroy();
 
     var replay_tower = try createTestReplayTower(1, 0.67);
