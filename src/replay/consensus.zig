@@ -174,7 +174,7 @@ pub fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
         .last_print_time = now,
     };
 
-    const vote_and_reset_forks = try deps.replay_tower.selectVoteAndResetForks(
+    var vote_and_reset_forks = try deps.replay_tower.selectVoteAndResetForks(
         deps.allocator,
         heaviest_slot,
         if (heaviest_slot_on_same_voted_fork) |h| h.slot else null,
@@ -187,9 +187,9 @@ pub fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
         &epoch_stakes_map,
         deps.slot_history_accessor,
     );
+    defer vote_and_reset_forks.deinit(deps.allocator);
     const maybe_voted_slot = vote_and_reset_forks.vote_slot;
     const maybe_reset_slot = vote_and_reset_forks.reset_slot;
-    const heaviest_fork_failures = vote_and_reset_forks.heaviest_fork_failures;
 
     if (maybe_voted_slot == null) {
         _ = maybeRefreshLastVote(
@@ -201,7 +201,7 @@ pub fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
     }
 
     if (deps.replay_tower.tower.isRecent(heaviest_slot) and
-        heaviest_fork_failures.items.len != 0)
+        vote_and_reset_forks.heaviest_fork_failures.items.len != 0)
     {
         // TODO Implemented the Self::log_heaviest_fork_failures
     }
