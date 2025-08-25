@@ -181,23 +181,27 @@ fn testDedupSeeded(
 
 test "agave: dedup capacity" {
     try testDedupCapacity(63_999_979, 0.001, 2_023_857);
-    try testDedupCapacity(622_401_961, 0.001, 19_682_078);
-    try testDedupCapacity(622_401_979, 0.001, 19_682_078);
-    try testDedupCapacity(629_145_593, 0.001, 19_895_330);
-    try testDedupCapacity(632_455_543, 0.001, 20_000_000);
-    try testDedupCapacity(637_534_199, 0.001, 20_160_601);
-    try testDedupCapacity(622_401_961, 0.0001, 6_224_019);
-    try testDedupCapacity(622_401_979, 0.0001, 6_224_019);
-    try testDedupCapacity(629_145_593, 0.0001, 6_291_455);
-    try testDedupCapacity(632_455_543, 0.0001, 6_324_555);
-    try testDedupCapacity(637_534_199, 0.0001, 6_375_341);
+    if (sig.build_options.long_tests) {
+        try testDedupCapacity(622_401_961, 0.001, 19_682_078);
+        try testDedupCapacity(622_401_979, 0.001, 19_682_078);
+        try testDedupCapacity(629_145_593, 0.001, 19_895_330);
+        try testDedupCapacity(632_455_543, 0.001, 20_000_000);
+        try testDedupCapacity(637_534_199, 0.001, 20_160_601);
+        try testDedupCapacity(622_401_961, 0.0001, 6_224_019);
+        try testDedupCapacity(622_401_979, 0.0001, 6_224_019);
+        try testDedupCapacity(629_145_593, 0.0001, 6_291_455);
+        try testDedupCapacity(632_455_543, 0.0001, 6_324_555);
+        try testDedupCapacity(637_534_199, 0.0001, 6_375_341);
+    }
 }
 
 test "agave: dedup seeded" {
     try testDedupSeeded([_]u8{0xf9} ** 32, 3_199_997, 101_192, 51_414, 66, 101_121);
-    try testDedupSeeded([_]u8{0xdc} ** 32, 3_200_003, 101_192, 51_414, 60, 101_092);
-    try testDedupSeeded([_]u8{0xa5} ** 32, 6_399_971, 202_384, 102_828, 125, 202_178);
-    try testDedupSeeded([_]u8{0xdb} ** 32, 6_400_013, 202_386, 102_828, 135, 202_235);
-    try testDedupSeeded([_]u8{0xcd} ** 32, 12_799_987, 404_771, 205_655, 285, 404_410);
-    try testDedupSeeded([_]u8{0xc3} ** 32, 12_800_009, 404_771, 205_656, 293, 404_397);
+    if (sig.build_options.long_tests) {
+        try testDedupSeeded([_]u8{0xdc} ** 32, 3_200_003, 101_192, 51_414, 60, 101_092);
+        try testDedupSeeded([_]u8{0xa5} ** 32, 6_399_971, 202_384, 102_828, 125, 202_178);
+        try testDedupSeeded([_]u8{0xdb} ** 32, 6_400_013, 202_386, 102_828, 135, 202_235);
+        try testDedupSeeded([_]u8{0xcd} ** 32, 12_799_987, 404_771, 205_655, 285, 404_410);
+        try testDedupSeeded([_]u8{0xc3} ** 32, 12_800_009, 404_771, 205_656, 293, 404_397);
+    }
 }

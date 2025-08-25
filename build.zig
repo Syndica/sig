@@ -18,6 +18,7 @@ pub const Config = struct {
     use_llvm: bool,
     force_pic: bool,
     error_tracing: ?bool,
+    long_tests: bool,
 
     pub fn fromBuild(b: *Build) Config {
         var self: Config = .{
@@ -100,6 +101,11 @@ pub const Config = struct {
                 "error-tracing",
                 "Enable or disable error tracing. Default: Only for Debug builds.",
             ),
+            .long_tests = b.option(
+                bool,
+                "long-tests",
+                "Run extra tests that take a long time, for more exhaustive coverage.",
+            ) orelse false,
         };
 
         if (self.ssh_host) |host| {
@@ -118,6 +124,7 @@ pub fn build(b: *Build) void {
     const build_options = b.addOptions();
     build_options.addOption(LedgerDB, "ledger_db", config.ledger_db);
     build_options.addOption(bool, "no_network_tests", config.no_network_tests);
+    build_options.addOption(bool, "long_tests", config.long_tests);
 
     const sig_step = b.step("sig", "Run the sig executable");
     const test_step = b.step("test", "Run library tests");
