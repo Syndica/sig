@@ -20,6 +20,8 @@ const SYSVAR_NOT_FOUND = 2;
 const OFFSET_LENGTH_EXCEEDS_SYSVAR = 1;
 
 fn getter(comptime T: type) fn (*TransactionContext, *MemoryMap, *RegisterMap) Error!void {
+    std.debug.assert(@typeInfo(T).@"struct".layout == .@"extern");
+
     return struct {
         fn getSyscall(
             tc: *TransactionContext,
@@ -39,8 +41,10 @@ fn getter(comptime T: type) fn (*TransactionContext, *MemoryMap, *RegisterMap) E
             const v = try tc.sysvar_cache.get(T);
 
             // Avoid value.* = v as it sets padding bytes to undefined instead of 0.
-            value.* = std.mem.zeroes(T);
-            inline for (std.meta.fields(T)) |f| @field(value, f.name) = @field(v, f.name);
+            @memset(std.mem.asBytes(value), 0);
+            inline for (@typeInfo(T).@"struct".fields) |f| {
+                @field(value, f.name) = @field(v, f.name);
+            }
         }
     }.getSyscall;
 }
@@ -149,10 +153,14 @@ test getSysvar {
 
         fn fill(zeroed: bool, v: anytype) @TypeOf(v) {
             var new_v = @TypeOf(v).DEFAULT;
-            for (std.mem.asBytes(&new_v), 0..) |*b, i| {
-                b.* = if (zeroed) @as(u8, 0) else @intCast(i);
+            if (zeroed) {
+                @memset(std.mem.asBytes(&new_v), 0);
+            } else {
+                for (std.mem.asBytes(&new_v), 0..) |*b, i| {
+                    b.* = @intCast(i);
+                }
             }
-            inline for (std.meta.fields(@TypeOf(v))) |field| {
+            inline for (@typeInfo(@TypeOf(v)).@"struct".fields) |field| {
                 @field(new_v, field.name) = @field(v, field.name);
             }
             return new_v;

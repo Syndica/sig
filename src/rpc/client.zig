@@ -36,8 +36,7 @@ pub const Client = struct {
         allocator: Allocator,
         id: rpc.request.Id,
         comptime method: MethodAndParams.Tag,
-        // TODO: use this instead of `std.meta.FieldType` to avoid eval branch quota until `@FieldType`'s here.
-        params: @typeInfo(MethodAndParams).@"union".fields[@intFromEnum(method)].type,
+        params: @FieldType(MethodAndParams, @tagName(method)),
     ) Error!Response(@TypeOf(params).Response) {
         const request: rpc.request.Request = .{
             .id = id,
@@ -58,8 +57,7 @@ pub const Client = struct {
         self: *Client,
         id: rpc.request.Id,
         comptime method: MethodAndParams.Tag,
-        // TODO: use this instead of `std.meta.FieldType` to avoid eval branch quota until `@FieldType`'s here.
-        request: @typeInfo(MethodAndParams).@"union".fields[@intFromEnum(method)].type,
+        request: @FieldType(MethodAndParams, @tagName(method)),
     ) Error!Response(@TypeOf(request).Response) {
         return try self.fetchCustom(
             self.fetcher.http_client.allocator,
