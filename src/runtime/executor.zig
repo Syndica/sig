@@ -485,6 +485,103 @@ test pushInstruction {
     );
 }
 
+test "pushInstruction sysvar account data" {
+    const system_program = sig.runtime.program.system;
+    const testing = sig.runtime.testing;
+
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+
+    var sysvar_data: [20]u8 = @splat(0);
+    var cache, var tc = try testing.createTransactionContext(
+        allocator,
+        prng.random(),
+        .{
+            .accounts = &.{
+                .{ .lamports = 2_000 },
+                .{ .lamports = 0 },
+                .{
+                    .pubkey = sig.runtime.sysvar.instruction.ID,
+                    .owner = sig.runtime.sysvar.OWNER_ID,
+                    .data = &sysvar_data,
+                },
+                .{ .pubkey = system_program.ID },
+            },
+        },
+    );
+    defer {
+        testing.deinitTransactionContext(allocator, tc);
+        cache.deinit(allocator);
+    }
+
+    var instruction_info = try testing.createInstructionInfo(
+        &tc,
+        system_program.ID,
+        system_program.Instruction{
+            .transfer = .{
+                .lamports = 1_000,
+            },
+        },
+        &.{
+            .{ .index_in_transaction = 0 },
+            .{ .index_in_transaction = 1 },
+        },
+    );
+    defer instruction_info.deinit(allocator);
+
+    try pushInstruction(&tc, instruction_info);
+}
+
+test "pushInstruction sysvar account too small" {
+    const system_program = sig.runtime.program.system;
+    const testing = sig.runtime.testing;
+
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+
+    var sysvar_data: [1]u8 = @splat(0); // needs to be at least 2 bytes large
+    var cache, var tc = try testing.createTransactionContext(
+        allocator,
+        prng.random(),
+        .{
+            .accounts = &.{
+                .{ .lamports = 2_000 },
+                .{ .lamports = 0 },
+                .{
+                    .pubkey = sig.runtime.sysvar.instruction.ID,
+                    .owner = sig.runtime.sysvar.OWNER_ID,
+                    .data = &sysvar_data,
+                },
+                .{ .pubkey = system_program.ID },
+            },
+        },
+    );
+    defer {
+        testing.deinitTransactionContext(allocator, tc);
+        cache.deinit(allocator);
+    }
+
+    var instruction_info = try testing.createInstructionInfo(
+        &tc,
+        system_program.ID,
+        system_program.Instruction{
+            .transfer = .{
+                .lamports = 1_000,
+            },
+        },
+        &.{
+            .{ .index_in_transaction = 0 },
+            .{ .index_in_transaction = 1 },
+        },
+    );
+    defer instruction_info.deinit(allocator);
+
+    try std.testing.expectError(
+        error.AccountDataTooSmall,
+        pushInstruction(&tc, instruction_info),
+    );
+}
+
 test "processNextInstruction" {
     const testing = sig.runtime.testing;
     const system_program = sig.runtime.program.system;
