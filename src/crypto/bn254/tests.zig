@@ -1,4 +1,3 @@
-const sig = @import("../../sig.zig");
 const std = @import("std");
 const bn254 = @import("lib.zig");
 
