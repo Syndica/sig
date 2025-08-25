@@ -1716,3 +1716,305 @@ test "computeBankStats - same weight selects lower slot" {
     // Should pick the lower of the two equally weighted banks
     try testing.expectEqual(@as(u64, 1), heaviest.slot);
 }
+
+test "processConsensus - no duplicate confirmed without votes" {
+    var prng = std.Random.DefaultPrng.init(1234);
+    const random = prng.random();
+
+    const root = SlotAndHash{ .slot = 0, .hash = Hash.initRandom(random) };
+
+    var fixture = try TestFixture.init(testing.allocator, root);
+    defer fixture.deinit(testing.allocator);
+
+    // Populate keys for vote_account usage
+    try fixture.fill_keys(testing.allocator, random, 1);
+
+    // Build simple fork 0 -> 1
+    var trees = try std.BoundedArray(TreeNode, MAX_TEST_TREE_LEN).init(0);
+    const hash1 = SlotAndHash{ .slot = 1, .hash = Hash.initRandom(random) };
+    trees.appendSliceAssumeCapacity(&[_]TreeNode{.{ hash1, root }});
+    try fixture.fillFork(
+        testing.allocator,
+        .{ .root = root, .data = trees },
+        .active,
+    );
+
+    const SlotSet = sig.utils.collections.SortedSetUnmanaged(Slot);
+    var ancestors: std.AutoArrayHashMapUnmanaged(Slot, Ancestors) = .empty;
+    defer {
+        var it = ancestors.iterator();
+        while (it.next()) |entry| entry.value_ptr.deinit(testing.allocator);
+        ancestors.deinit(testing.allocator);
+    }
+    var descendants: std.AutoArrayHashMapUnmanaged(Slot, SlotSet) = .empty;
+    defer descendants.deinit(testing.allocator);
+    defer {
+        var it = descendants.iterator();
+        while (it.next()) |entry| entry.value_ptr.deinit(testing.allocator);
+    }
+    for (
+        fixture.slot_tracker.slots.keys(),
+        fixture.slot_tracker.slots.values(),
+    ) |slot, info| {
+        const slot_ancestors = &info.constants.ancestors.ancestors;
+        const agop = try ancestors.getOrPutValue(testing.allocator, slot, .EMPTY);
+        try agop.value_ptr.ancestors.ensureUnusedCapacity(testing.allocator, slot_ancestors.count());
+        for (slot_ancestors.keys()) |a_slot| {
+            try agop.value_ptr.addSlot(testing.allocator, a_slot);
+            const dgop = try descendants.getOrPutValue(testing.allocator, a_slot, .empty);
+            try dgop.value_ptr.put(testing.allocator, slot);
+        }
+    }
+
+    var db = try TestDB.init(@src());
+    defer db.deinit();
+    var registry = sig.prometheus.Registry(.{}).init(testing.allocator);
+    defer registry.deinit();
+    var lowest_cleanup_slot = RwMux(Slot).init(0);
+    var max_root = std.atomic.Value(Slot).init(0);
+    var ledger_reader = try LedgerReader.init(
+        testing.allocator,
+        .noop,
+        db,
+        &registry,
+        &lowest_cleanup_slot,
+        &max_root,
+    );
+    var ledger_writer = try LedgerResultWriter.init(
+        testing.allocator,
+        .noop,
+        db,
+        &registry,
+        &lowest_cleanup_slot,
+        &max_root,
+    );
+
+    var slot_data: SlotData = .empty;
+    defer slot_data.deinit(testing.allocator);
+    var ancestor_hashes_replay_update_sender = try sig.sync.Channel(AncestorHashesReplayUpdate).create(testing.allocator);
+    defer ancestor_hashes_replay_update_sender.destroy();
+
+    var replay_tower = try createTestReplayTower(1, 0.67);
+    defer replay_tower.deinit(testing.allocator);
+
+    const versioned_stakes = try testEpochStakes(
+        testing.allocator,
+        fixture.vote_pubkeys.items,
+        10000,
+        random,
+    );
+    var epoch_tracker: EpochTracker = .{ .epochs = .empty, .schedule = .DEFAULT };
+    try epoch_tracker.epochs.put(testing.allocator, 0, .{
+        .hashes_per_tick = null,
+        .ticks_per_slot = 1,
+        .ns_per_slot = 1,
+        .genesis_creation_time = 0,
+        .slots_per_year = 1,
+        .stakes = versioned_stakes,
+        .rent_collector = sig.core.RentCollector.DEFAULT,
+    });
+
+    var tsm1 = sig.accounts_db.ThreadSafeAccountMap.init(testing.allocator);
+    defer tsm1.deinit();
+    var slot_history1 = try sig.runtime.sysvar.SlotHistory.init(testing.allocator);
+    defer slot_history1.deinit(testing.allocator);
+    const ser1 = try sig.bincode.writeAlloc(testing.allocator, slot_history1, .{});
+    defer testing.allocator.free(ser1);
+    try tsm1.put(0, sig.runtime.sysvar.SlotHistory.ID, .{
+        .lamports = 1,
+        .data = ser1,
+        .owner = sig.core.Pubkey.ZEROES,
+        .executable = false,
+        .rent_epoch = 0,
+    });
+
+    const deps: ConsensusDependencies = .{
+        .allocator = testing.allocator,
+        .logger = .noop,
+        .replay_tower = &replay_tower,
+        .progress_map = &fixture.progress,
+        .slot_tracker = &fixture.slot_tracker,
+        .epoch_tracker = &epoch_tracker,
+        .fork_choice = &fixture.fork_choice,
+        .ledger_reader = &ledger_reader,
+        .ledger_result_writer = &ledger_writer,
+        .ancestors = &ancestors,
+        .descendants = &descendants,
+        .vote_account = fixture.vote_pubkeys.items[0],
+        .slot_history_accessor = &(blk: {
+            var accessor = SlotHistoryAccessor.init(tsm1.accountReader());
+            break :blk accessor;
+        }),
+        .latest_validator_votes_for_frozen_banks = &fixture.latest_validator_votes_for_frozen_banks,
+        .slot_data = &slot_data,
+        .ancestor_hashes_replay_update_sender = ancestor_hashes_replay_update_sender,
+    };
+
+    try processConsensus(deps);
+
+    try testing.expectEqual(0, slot_data.duplicate_confirmed_slots.count());
+    epoch_tracker.deinit(testing.allocator);
+}
+
+test "processConsensus - duplicate-confirmed is idempotent" {
+    var prng = std.Random.DefaultPrng.init(4321);
+    const random = prng.random();
+
+    const root = SlotAndHash{ .slot = 0, .hash = Hash.initRandom(random) };
+
+    var fixture = try TestFixture.init(testing.allocator, root);
+    defer fixture.deinit(testing.allocator);
+
+    try fixture.fill_keys(testing.allocator, random, 1);
+
+    // Build fork 0 -> 1 -> 2
+    var trees = try std.BoundedArray(TreeNode, MAX_TEST_TREE_LEN).init(0);
+    const hash1 = SlotAndHash{ .slot = 1, .hash = Hash.initRandom(random) };
+    const hash2 = SlotAndHash{ .slot = 2, .hash = Hash.initRandom(random) };
+    trees.appendSliceAssumeCapacity(&[_]TreeNode{
+        .{ hash1, root },
+        .{ hash2, hash1 },
+    });
+    try fixture.fillFork(
+        testing.allocator,
+        .{ .root = root, .data = trees },
+        .active,
+    );
+
+    // Create epoch stakes and append a LandedVote for every validator at slot 1,
+    // so ancestors aggregate stake for slot 0 crosses the duplicate threshold.
+    const versioned_stakes2 = try testEpochStakes(
+        testing.allocator,
+        fixture.vote_pubkeys.items,
+        10000,
+        random,
+    );
+    const keys = versioned_stakes2.stakes.vote_accounts.vote_accounts.keys();
+    for (keys) |key| {
+        var va = versioned_stakes2.stakes.vote_accounts.vote_accounts.getPtr(key).?;
+        const LandedVote = sig.runtime.program.vote.state.LandedVote;
+        try va.account.state.votes.append(LandedVote{
+            .latency = 0,
+            .lockout = Lockout{ .slot = 1, .confirmation_count = 4 },
+        });
+    }
+
+    const SlotSet = sig.utils.collections.SortedSetUnmanaged(Slot);
+    var ancestors: std.AutoArrayHashMapUnmanaged(Slot, Ancestors) = .empty;
+    defer {
+        var it = ancestors.iterator();
+        while (it.next()) |entry| entry.value_ptr.deinit(testing.allocator);
+        ancestors.deinit(testing.allocator);
+    }
+    var descendants: std.AutoArrayHashMapUnmanaged(Slot, SlotSet) = .empty;
+    defer descendants.deinit(testing.allocator);
+    defer {
+        var it2 = descendants.iterator();
+        while (it2.next()) |entry| entry.value_ptr.deinit(testing.allocator);
+    }
+    for (
+        fixture.slot_tracker.slots.keys(),
+        fixture.slot_tracker.slots.values(),
+    ) |slot, info| {
+        const slot_ancestors = &info.constants.ancestors.ancestors;
+        const agop = try ancestors.getOrPutValue(testing.allocator, slot, .EMPTY);
+        try agop.value_ptr.ancestors.ensureUnusedCapacity(testing.allocator, slot_ancestors.count());
+        for (slot_ancestors.keys()) |a_slot| {
+            try agop.value_ptr.addSlot(testing.allocator, a_slot);
+            const dgop = try descendants.getOrPutValue(testing.allocator, a_slot, .empty);
+            try dgop.value_ptr.put(testing.allocator, slot);
+        }
+    }
+
+    var db = try TestDB.init(@src());
+    defer db.deinit();
+    var registry = sig.prometheus.Registry(.{}).init(testing.allocator);
+    defer registry.deinit();
+    var lowest_cleanup_slot = RwMux(Slot).init(0);
+    var max_root = std.atomic.Value(Slot).init(0);
+    var ledger_reader = try LedgerReader.init(
+        testing.allocator,
+        .noop,
+        db,
+        &registry,
+        &lowest_cleanup_slot,
+        &max_root,
+    );
+    var ledger_writer = try LedgerResultWriter.init(
+        testing.allocator,
+        .noop,
+        db,
+        &registry,
+        &lowest_cleanup_slot,
+        &max_root,
+    );
+
+    var slot_data: SlotData = .empty;
+    defer slot_data.deinit(testing.allocator);
+    var ancestor_hashes_replay_update_sender = try sig.sync.Channel(AncestorHashesReplayUpdate).create(testing.allocator);
+    defer ancestor_hashes_replay_update_sender.destroy();
+
+    var replay_tower = try createTestReplayTower(1, 0.67);
+    defer replay_tower.deinit(testing.allocator);
+
+    var epoch_tracker2: EpochTracker = .{ .epochs = .empty, .schedule = .DEFAULT };
+    try epoch_tracker2.epochs.put(testing.allocator, 0, .{
+        .hashes_per_tick = null,
+        .ticks_per_slot = 1,
+        .ns_per_slot = 1,
+        .genesis_creation_time = 0,
+        .slots_per_year = 1,
+        .stakes = versioned_stakes2,
+        .rent_collector = sig.core.RentCollector.DEFAULT,
+    });
+
+    var tsm2 = sig.accounts_db.ThreadSafeAccountMap.init(testing.allocator);
+    defer tsm2.deinit();
+    var slot_history2 = try sig.runtime.sysvar.SlotHistory.init(testing.allocator);
+    defer slot_history2.deinit(testing.allocator);
+    const ser2 = try sig.bincode.writeAlloc(testing.allocator, slot_history2, .{});
+    defer testing.allocator.free(ser2);
+    try tsm2.put(0, sig.runtime.sysvar.SlotHistory.ID, .{
+        .lamports = 1,
+        .data = ser2,
+        .owner = sig.core.Pubkey.ZEROES,
+        .executable = false,
+        .rent_epoch = 0,
+    });
+
+    const deps: ConsensusDependencies = .{
+        .allocator = testing.allocator,
+        .logger = .noop,
+        .replay_tower = &replay_tower,
+        .progress_map = &fixture.progress,
+        .slot_tracker = &fixture.slot_tracker,
+        .epoch_tracker = &epoch_tracker2,
+        .fork_choice = &fixture.fork_choice,
+        .ledger_reader = &ledger_reader,
+        .ledger_result_writer = &ledger_writer,
+        .ancestors = &ancestors,
+        .descendants = &descendants,
+        .vote_account = fixture.vote_pubkeys.items[0],
+        .slot_history_accessor = &(blk: {
+            var accessor2 = SlotHistoryAccessor.init(tsm2.accountReader());
+            break :blk accessor2;
+        }),
+        .latest_validator_votes_for_frozen_banks = &fixture.latest_validator_votes_for_frozen_banks,
+        .slot_data = &slot_data,
+        .ancestor_hashes_replay_update_sender = ancestor_hashes_replay_update_sender,
+    };
+
+    try processConsensus(deps);
+
+    try testing.expectEqual(null, slot_data.duplicate_confirmed_slots.get(0));
+
+    const initial_count = slot_data.duplicate_confirmed_slots.count();
+
+    // Rerun to exercise dedup/early skip path
+    try processConsensus(deps);
+    try testing.expectEqual(initial_count, slot_data.duplicate_confirmed_slots.count());
+
+    // Progress map should not record duplicate_confirmed_hash for root
+    try testing.expectEqual(null, fixture.progress.getForkStats(0).?.duplicate_confirmed_hash);
+    epoch_tracker2.deinit(testing.allocator);
+}
