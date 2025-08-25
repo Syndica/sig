@@ -1196,14 +1196,20 @@ fn validator(
     const replay_senders: sig.replay.service.Senders = try .create(allocator);
     defer replay_senders.destroy();
 
-    const replay_receivers: sig.replay.service.Receivers = try .create(allocator);
+    const replay_receivers: sig.replay.service.Receivers = try .create(
+        allocator,
+    );
     defer replay_receivers.destroy();
 
     const replay_thread = replay: {
         const epoch_stakes_map = &collapsed_manifest.bank_extra.versioned_epoch_stakes;
         const epoch_stakes = epoch_stakes_map.get(epoch) orelse
             return error.EpochStakesMissingFromSnapshot;
-
+        const current_epoch_constants = try sig.core.EpochConstants.fromBankFields(
+            bank_fields,
+            try epoch_stakes.current.convert(allocator, .delegation),
+        );
+        errdefer current_epoch_constants.deinit(allocator);
         const feature_set = try sig.replay.service.getActiveFeatures(
             allocator,
             loaded_snapshot.accounts_db.accountReader().forSlot(&bank_fields.ancestors),
@@ -1244,11 +1250,9 @@ fn validator(
 
                 .senders = replay_senders,
                 .receivers = replay_receivers,
+                .gossip_table_rw = &gossip_service.gossip_table_rw,
                 .current_epoch = epoch,
-                .current_epoch_constants = try .fromBankFields(
-                    bank_fields,
-                    try epoch_stakes.current.convert(allocator, .delegation),
-                ),
+                .current_epoch_constants = current_epoch_constants,
                 .hard_forks = try bank_fields.hard_forks.clone(allocator),
             }},
         );
