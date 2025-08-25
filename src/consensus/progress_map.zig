@@ -489,11 +489,11 @@ pub const ForkStats = struct {
         .vote_threshold = .{},
         .is_locked_out = false,
         .voted_stakes = .{},
-        .duplicate_confirmed_hash = .ZEROES,
+        .duplicate_confirmed_hash = null,
         .computed = false,
         .lockout_intervals = .EMPTY,
         .slot_hash = .ZEROES,
-        .my_latest_landed_vote = 0,
+        .my_latest_landed_vote = null,
     };
 
     pub fn deinit(self: ForkStats, allocator: std.mem.Allocator) void {
