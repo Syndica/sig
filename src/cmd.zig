@@ -94,7 +94,23 @@ pub fn main() !void {
     current_config.log_file = cmd.log_file;
     current_config.tee_logs = cmd.tee_logs;
 
-    switch (cmd.subcmd orelse return error.MissingSubcommand) {
+    // If no subcommand was provided, print a friendly header and help information.
+    if (cmd.subcmd == null) {
+        const tty = std.io.tty.detectConfig(std.io.getStdOut());
+        const out = std.io.getStdOut().writer();
+        const ver = sig.version.CURRENT_CLIENT_VERSION;
+
+        try out.print(
+            "sig {d}.{d}.{d} (commit:{x}, feat:{x}, client:{d})\n\n",
+            .{ ver.major, ver.minor, ver.patch, ver.commit, ver.feature_set, ver.client },
+        );
+
+        // Render the top-level help.
+        _ = try parser.parse(gpa, "sig", tty, out, &.{"--help"});
+        return;
+    }
+
+    switch (cmd.subcmd orelse unreachable) {
         .identity => try identity(gpa, current_config),
         .gossip => |params| {
             current_config.shred_version = params.shred_version;
