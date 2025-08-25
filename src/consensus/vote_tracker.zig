@@ -69,7 +69,6 @@ pub const VoteTracker = struct {
     }
 
     pub fn getSlotVoteTracker(self: *VoteTracker, slot: Slot) ?*RcRwSlotVoteTracker {
-        // self.slot_vote_trackers.read().unwrap().get(&slot).cloned()
         self.map_rwlock.lockShared();
         defer self.map_rwlock.unlockShared();
         const rc_rw_svt = self.map.get(slot) orelse return null;

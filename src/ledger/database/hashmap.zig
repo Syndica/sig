@@ -96,7 +96,7 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
         }
 
         pub fn put(
-            self: *Self,
+            self: Self,
             comptime cf: ColumnFamily,
             key: cf.Key,
             value: cf.Value,

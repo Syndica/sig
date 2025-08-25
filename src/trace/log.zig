@@ -64,7 +64,7 @@ pub fn Logger(comptime scope: []const u8) type {
             return self.entry(.trace);
         }
 
-        fn entry(self: Self, level: Level) NewEntry(scope) {
+        pub fn entry(self: Self, level: Level) NewEntry(scope) {
             const logger = switch (self) {
                 .noop => .noop,
                 inline else => |impl| if (@intFromEnum(impl.max_level) >= @intFromEnum(level))

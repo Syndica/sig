@@ -763,6 +763,7 @@ fn executeTxnContext(
         transaction,
         &feature_set,
         slot,
+        try sysvar_cache.get(sig.runtime.sysvar.SlotHashes),
         accounts_db.accountReader().forSlot(&ancestors),
     )) {
         .ok => |txn| txn,

@@ -50,6 +50,8 @@ pub const ReplayExecutionState = struct {
     my_identity: Pubkey,
     vote_account: ?Pubkey,
 
+    log_helper: *LogHelper,
+
     // borrows
     account_store: AccountStore,
     thread_pool: *ThreadPool,
@@ -79,8 +81,8 @@ pub fn replayActiveSlots(state: ReplayExecutionState) !bool {
     defer zone.deinit();
 
     const active_slots = try state.slot_tracker.activeSlots(state.allocator);
-    defer state.allocator.free(active_slots);
-    state.logger.info().logf("{} active slots to replay", .{active_slots.len});
+    state.log_helper.logActiveSlots(active_slots, state.allocator);
+
     if (active_slots.len == 0) {
         return false;
     }
@@ -91,13 +93,52 @@ pub fn replayActiveSlots(state: ReplayExecutionState) !bool {
         slot_statuses.deinit(state.allocator);
     }
     for (active_slots) |slot| {
-        state.logger.info().logf("replaying slot: {}", .{slot});
+        state.logger.debug().logf("replaying slot: {}", .{slot});
         const result = try replaySlot(state, slot);
         errdefer result.deinit(state.allocator);
         try slot_statuses.append(state.allocator, .{ slot, result });
     }
     return try processReplayResults(state, slot_statuses.items);
 }
+
+pub const LogHelper = struct {
+    logger: Logger,
+    last_active_slots: ?[]const Slot,
+    slots_are_the_same: bool,
+
+    pub fn init(logger: Logger) LogHelper {
+        return .{
+            .logger = logger,
+            .last_active_slots = null,
+            .slots_are_the_same = false,
+        };
+    }
+
+    /// takes ownership of active_slots,
+    pub fn logActiveSlots(
+        self: *LogHelper,
+        active_slots: []const u64,
+        deinit_allocator: Allocator,
+    ) void {
+        self.slots_are_the_same = if (self.last_active_slots) |last_slots|
+            std.mem.eql(u64, active_slots, last_slots)
+        else
+            false;
+
+        if (self.last_active_slots) |slots| deinit_allocator.free(slots);
+        self.last_active_slots = active_slots;
+
+        self.logger
+            .entry(if (self.slots_are_the_same) .debug else .info)
+            .logf("{} active slots to replay: {any}", .{ active_slots.len, active_slots });
+    }
+
+    pub fn logEntryCount(self: *LogHelper, entry_count: usize, slot: Slot) void {
+        self.logger
+            .entry(if (self.slots_are_the_same and entry_count == 0) .debug else .info)
+            .logf("got {} entries for slot {}", .{ entry_count, slot });
+    }
+};
 
 const ReplaySlotStatus = union(enum) {
     /// We have no entries available to verify for this slot. No work was done.
@@ -149,11 +190,11 @@ fn replaySlot(state: ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
 
     const progress_get_or_put = try state.progress_map.map.getOrPut(state.allocator, slot);
     if (progress_get_or_put.found_existing and progress_get_or_put.value_ptr.is_dead) {
+        state.logger.info().logf("slot is dead: {}", .{slot});
         return .dead;
     }
 
     const epoch_info = state.epochs.getForSlot(slot) orelse return error.MissingEpoch;
-
     const slot_info = state.slot_tracker.get(slot) orelse return error.MissingSlot;
 
     const i_am_leader = slot_info.constants.collector_id.equals(&state.my_identity);
@@ -202,7 +243,8 @@ fn replaySlot(state: ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
             for (entries) |entry| entry.deinit(state.allocator);
             state.allocator.free(entries);
         }
-        state.logger.info().logf("got {} entries for slot {}", .{ entries.len, slot });
+
+        state.log_helper.logEntryCount(entries.len, slot);
 
         if (entries.len == 0) {
             return .empty;
@@ -222,12 +264,32 @@ fn replaySlot(state: ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
         else
             null;
 
+    const slot_account_reader = state.account_store.reader()
+        .forSlot(&slot_info.constants.ancestors);
+
+    // TODO: Avoid the need to read this from accountsdb. We could broaden the
+    // scope of the sysvar cache, add this to slot constants, or implement
+    // additional mechanisms for lookup tables to detect slot age (e.g. block height).
+    const slot_hashes = try replay.update_sysvar.getSysvarFromAccount(
+        sig.runtime.sysvar.SlotHashes,
+        state.allocator,
+        slot_account_reader,
+    ) orelse return error.MissingSlotHashesSysvar;
+    errdefer slot_hashes.deinit(state.allocator);
+
+    const slot_resolver = replay.resolve_lookup.SlotResolver{
+        .slot = slot,
+        .account_reader = slot_account_reader,
+        .reserved_accounts = &slot_info.constants.reserved_accounts,
+        .slot_hashes = slot_hashes,
+    };
+
     const svm_params = SvmGateway.Params{
         .slot = slot,
         .max_age = sig.core.BlockhashQueue.MAX_RECENT_BLOCKHASHES / 2,
         .lamports_per_signature = slot_info.constants.fee_rate_governor.lamports_per_signature,
         .blockhash_queue = &slot_info.state.blockhash_queue,
-        .account_reader = state.account_store.reader().forSlot(&slot_info.constants.ancestors),
+        .account_reader = slot_account_reader,
         .ancestors = &slot_info.constants.ancestors,
         .feature_set = slot_info.constants.feature_set,
         .rent_collector = &epoch_info.rent_collector,
@@ -262,15 +324,13 @@ fn replaySlot(state: ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
     return .{ .confirm = try confirmSlot(
         state.allocator,
         .from(state.logger),
-        state.account_store,
         state.thread_pool,
         entries,
         previous_last_entry,
         svm_params,
         committer,
         verify_ticks_params,
-        &slot_info.constants.ancestors,
-        &slot_info.constants.reserved_accounts,
+        slot_resolver,
     ) };
 }
 
@@ -401,33 +461,30 @@ fn updateConsensusForFrozenSlot(
 }
 
 pub fn processReplayResults(
-    replay_state: ReplayExecutionState,
+    state: ReplayExecutionState,
     slot_statuses: []const struct { Slot, ReplaySlotStatus },
 ) !bool {
     var processed_a_slot = false;
     for (slot_statuses) |slot_status| {
         const slot, const status = slot_status;
 
-        const maybe_entries = try awaitConfirmedEntriesForSlot(
-            replay_state,
-            slot,
-            status,
-        );
+        const maybe_entries = try awaitConfirmedEntriesForSlot(state, slot, status);
+
         // If entries is null, it means the slot failed or was skipped, so continue to next slot
         const entries = if (maybe_entries) |entries| entries else continue;
 
-        var slot_info = replay_state.slot_tracker.get(slot) orelse
-            return error.MissingSlotInTracker;
+        const slot_info = state.slot_tracker.get(slot) orelse return error.MissingSlotInTracker;
 
         // Freeze the bank if its entries where completly processed.
         if (slot_info.state.tickHeight() == slot_info.constants.max_tick_height) {
+            state.logger.info().logf("finished replaying slot: {}", .{slot});
             const is_leader_block =
-                slot_info.constants.collector_id.equals(&replay_state.my_identity);
+                slot_info.constants.collector_id.equals(&state.my_identity);
             if (!is_leader_block) {
-                try replay.freeze.freezeSlot(replay_state.allocator, .init(
-                    .from(replay_state.logger),
-                    replay_state.account_store,
-                    &(replay_state.epochs.getForSlot(slot) orelse return error.MissingEpoch),
+                try replay.freeze.freezeSlot(state.allocator, .init(
+                    .from(state.logger),
+                    state.account_store,
+                    &(state.epochs.getForSlot(slot) orelse return error.MissingEpoch),
                     slot_info.state,
                     slot_info.constants,
                     slot,
@@ -439,9 +496,11 @@ pub fn processReplayResults(
             // - cluster_slots_update_sender;
             // - transaction_status_sender;
             // - cost_update_sender;
-            try updateConsensusForFrozenSlot(replay_state, slot);
+            try updateConsensusForFrozenSlot(state, slot);
             // TODO block_metadata_notifier
             // TODO block_metadata_notifier
+        } else {
+            state.logger.info().logf("partially replayed slot: {}", .{slot});
         }
     }
     return processed_a_slot;
@@ -539,6 +598,7 @@ const TestReplayStateResources = struct {
     registry: sig.prometheus.Registry(.{}),
     lowest_cleanup_slot: sig.sync.RwMux(Slot),
     max_root: std.atomic.Value(Slot),
+    log_helper: LogHelper,
     ancestor_hashes_replay_update_channel: sig.sync.Channel(AncestorHashesReplayUpdate),
 
     pub fn init(allocator: Allocator) !*TestReplayStateResources {
@@ -606,6 +666,7 @@ const TestReplayStateResources = struct {
             .root = 0,
         };
 
+        self.log_helper = .init(.noop);
         self.ancestor_hashes_replay_update_channel = try sig
             .sync
             .Channel(AncestorHashesReplayUpdate)
@@ -632,6 +693,7 @@ const TestReplayStateResources = struct {
             .epoch_slots_frozen_slots = &self.epoch_slots_frozen_slots,
             .duplicate_slots_to_repair = &self.duplicate_slots_to_repair,
             .purge_repair_slot_counter = &self.purge_repair_slot_counter,
+            .log_helper = &self.log_helper,
             .ancestor_hashes_replay_update_sender = &self.ancestor_hashes_replay_update_channel,
         };
 
@@ -787,12 +849,7 @@ test "processReplayResults: confirm status with err poll result marks slot dead"
 
     // Create a mock ConfirmSlotFuture that will return an error when polled.
     const MockConfirmSlotFutureErr = struct {
-        scheduler: replay.scheduler.TransactionScheduler,
-        poh_verifier: sig.utils.thread.HomogeneousThreadPool(replay.confirm_slot.PohTask),
-        exit: std.atomic.Value(bool),
-        entries: []const sig.core.Entry,
-        status: replay.confirm_slot.ConfirmSlotStatus,
-        status_when_done: replay.confirm_slot.ConfirmSlotStatus,
+        inner: ConfirmSlotFuture,
 
         pub fn poll(self: *@This()) !replay.confirm_slot.ConfirmSlotStatus {
             _ = self;
@@ -812,12 +869,15 @@ test "processReplayResults: confirm status with err poll result marks slot dead"
     const empty_entries = try allocator.alloc(sig.core.Entry, 0);
 
     mock_future.* = MockConfirmSlotFutureErr{
-        .scheduler = undefined, // Not used in test.
-        .poh_verifier = undefined, // // Not used in test.
-        .exit = std.atomic.Value(bool).init(false),
-        .entries = empty_entries,
-        .status = .{ .err = .{ .failed_to_load_entries = "test error" } },
-        .status_when_done = .{ .err = .{ .failed_to_load_entries = "test error" } },
+        .inner = .{
+            .scheduler = undefined, // Not used in test.
+            .poh_verifier = undefined, // Not used in test.
+            .slot_resolver = undefined, // Not used in test
+            .exit = std.atomic.Value(bool).init(false),
+            .entries = empty_entries,
+            .status = .{ .err = .{ .failed_to_load_entries = "test error" } },
+            .status_when_done = .{ .err = .{ .failed_to_load_entries = "test error" } },
+        },
     };
 
     defer {
@@ -829,11 +889,9 @@ test "processReplayResults: confirm status with err poll result marks slot dead"
     var slot_statuses = std.ArrayListUnmanaged(struct { Slot, ReplaySlotStatus }).empty;
     defer slot_statuses.deinit(allocator);
 
-    // Cast our mock to ConfirmSlotFuture - this should work since they have the same layout
-    const confirm_future: *ConfirmSlotFuture = @ptrCast(@alignCast(mock_future));
     try slot_statuses.append(
         allocator,
-        .{ slot, .{ .confirm = confirm_future } },
+        .{ slot, .{ .confirm = &mock_future.inner } },
     );
 
     const result = try processReplayResults(
@@ -898,12 +956,7 @@ test "processReplayResults: confirm status with done poll but missing slot in tr
 
     // Create a mock ConfirmSlotFuture that will return done when polled
     const MockConfirmSlotFutureDone = struct {
-        scheduler: replay.scheduler.TransactionScheduler,
-        poh_verifier: sig.utils.thread.HomogeneousThreadPool(replay.confirm_slot.PohTask),
-        exit: std.atomic.Value(bool),
-        entries: []const sig.core.Entry,
-        status: replay.confirm_slot.ConfirmSlotStatus,
-        status_when_done: replay.confirm_slot.ConfirmSlotStatus,
+        inner: ConfirmSlotFuture,
 
         pub fn poll(self: *@This()) !replay.confirm_slot.ConfirmSlotStatus {
             _ = self;
@@ -920,12 +973,15 @@ test "processReplayResults: confirm status with done poll but missing slot in tr
     const empty_entries = try allocator.alloc(sig.core.Entry, 0);
 
     mock_future.* = MockConfirmSlotFutureDone{
-        .scheduler = undefined, // Not used in test
-        .poh_verifier = undefined, // Not used in test
-        .exit = std.atomic.Value(bool).init(false),
-        .entries = empty_entries,
-        .status = .done,
-        .status_when_done = .done,
+        .inner = .{
+            .scheduler = undefined, // Not used in test
+            .poh_verifier = undefined, // Not used in test
+            .slot_resolver = undefined, // Not used in test
+            .exit = std.atomic.Value(bool).init(false),
+            .entries = empty_entries,
+            .status = .done,
+            .status_when_done = .done,
+        },
     };
 
     defer {
@@ -938,10 +994,9 @@ test "processReplayResults: confirm status with done poll but missing slot in tr
     defer slot_statuses.deinit(allocator);
 
     // Cast our mock to ConfirmSlotFuture
-    const confirm_future: *ConfirmSlotFuture = @ptrCast(@alignCast(mock_future));
     try slot_statuses.append(
         allocator,
-        .{ slot, .{ .confirm = confirm_future } },
+        .{ slot, .{ .confirm = &mock_future.inner } },
     );
 
     // The function should return an error since the slot is not in the tracker
@@ -1008,12 +1063,7 @@ test "processReplayResults: confirm status with done poll and slot complete - su
 
     // Create a mock ConfirmSlotFuture that will return done with entries
     const MockConfirmSlotFutureSuccess = struct {
-        scheduler: replay.scheduler.TransactionScheduler,
-        poh_verifier: sig.utils.thread.HomogeneousThreadPool(replay.confirm_slot.PohTask),
-        exit: std.atomic.Value(bool),
-        entries: []const sig.core.Entry,
-        status: replay.confirm_slot.ConfirmSlotStatus,
-        status_when_done: replay.confirm_slot.ConfirmSlotStatus,
+        inner: ConfirmSlotFuture,
 
         pub fn poll(self: *@This()) !replay.confirm_slot.ConfirmSlotStatus {
             _ = self;
@@ -1028,12 +1078,15 @@ test "processReplayResults: confirm status with done poll and slot complete - su
     // Create the mock future with the mock entries
     const mock_future = try allocator.create(MockConfirmSlotFutureSuccess);
     mock_future.* = MockConfirmSlotFutureSuccess{
-        .scheduler = undefined, // Not used in test
-        .poh_verifier = undefined, // Not used in test
-        .exit = std.atomic.Value(bool).init(false),
-        .entries = mock_entries,
-        .status = .done,
-        .status_when_done = .done,
+        .inner = .{
+            .scheduler = undefined, // Not used in test
+            .poh_verifier = undefined, // Not used in test
+            .slot_resolver = undefined, // Not used in test
+            .exit = std.atomic.Value(bool).init(false),
+            .entries = mock_entries,
+            .status = .done,
+            .status_when_done = .done,
+        },
     };
 
     defer allocator.destroy(mock_future);
@@ -1101,11 +1154,9 @@ test "processReplayResults: confirm status with done poll and slot complete - su
     var slot_statuses = std.ArrayListUnmanaged(struct { Slot, ReplaySlotStatus }).empty;
     defer slot_statuses.deinit(allocator);
 
-    // Cast the mock to ConfirmSlotFuture
-    const confirm_future: *ConfirmSlotFuture = @ptrCast(@alignCast(mock_future));
     try slot_statuses.append(
         allocator,
-        .{ slot, .{ .confirm = confirm_future } },
+        .{ slot, .{ .confirm = &mock_future.inner } },
     );
 
     // This should successfully process the slot and return true
