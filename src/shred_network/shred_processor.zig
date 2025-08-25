@@ -5,7 +5,6 @@ const shred_network = @import("lib.zig");
 const layout = sig.ledger.shred.layout;
 
 const Allocator = std.mem.Allocator;
-const ArrayListUnmanaged = std.ArrayListUnmanaged;
 const Atomic = std.atomic.Value;
 
 const BasicShredTracker = shred_network.shred_tracker.BasicShredTracker;
@@ -35,35 +34,44 @@ pub fn runShredProcessor(
     leader_schedule: sig.core.leader_schedule.SlotLeaders,
 ) !void {
     var shred_inserter = shred_inserter_;
-    var shreds: ArrayListUnmanaged(Shred) = .{};
-    var is_repaired: ArrayListUnmanaged(bool) = .{};
     const metrics = try registry.initStruct(Metrics);
+
+    var shreds_buffer: std.MultiArrayList(struct {
+        shred: Shred,
+        is_required: bool,
+    }) = .empty;
+    defer shreds_buffer.deinit(allocator);
+    defer for (shreds_buffer.items(.shred)) |shred| shred.deinit();
+
+    const MAX_SHREDS_PER_ITER = 1024;
+    try shreds_buffer.ensureTotalCapacity(allocator, MAX_SHREDS_PER_ITER);
 
     while (true) {
         verified_shred_receiver.waitToReceive(.{ .unordered = exit }) catch break;
 
-        shreds.clearRetainingCapacity();
-        is_repaired.clearRetainingCapacity();
-        defer for (shreds.items) |shred| shred.deinit();
+        for (shreds_buffer.items(.shred)) |shred| shred.deinit();
+        shreds_buffer.clearRetainingCapacity();
+
         while (verified_shred_receiver.tryReceive()) |packet| {
             const shred_payload = layout.getShred(&packet) orelse return error.InvalidVerifiedShred;
-            const shred = try shreds.addOne(allocator);
-            errdefer _ = shreds.pop();
-            shred.* = Shred.fromPayload(allocator, shred_payload) catch |e| {
+            const shred = Shred.fromPayload(allocator, shred_payload) catch |e| {
                 logger.err().logf(
                     "failed to process verified shred {?}.{?}: {}",
                     .{ layout.getSlot(shred_payload), layout.getIndex(shred_payload), e },
                 );
                 continue;
             };
-
-            try is_repaired.append(allocator, packet.flags.isSet(.repair));
+            shreds_buffer.appendAssumeCapacity(.{
+                .shred = shred,
+                .is_required = packet.flags.isSet(.repair),
+            });
+            if (shreds_buffer.len == MAX_SHREDS_PER_ITER) break;
         }
-        metrics.insertion_batch_size.observe(shreds.items.len);
-        metrics.passed_to_inserter_count.add(shreds.items.len);
+        metrics.insertion_batch_size.observe(shreds_buffer.len);
+        metrics.passed_to_inserter_count.add(shreds_buffer.len);
         const result = try shred_inserter.insertShreds(
-            shreds.items,
-            is_repaired.items,
+            shreds_buffer.items(.shred),
+            shreds_buffer.items(.is_required),
             .{
                 .slot_leaders = leader_schedule,
                 .shred_tracker = tracker,
