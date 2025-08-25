@@ -274,7 +274,7 @@ fn executeVmTest(
 
     if (result == .err and result.err == error.ExceededMaxInstructions) {
         return .{
-            .@"error" = 16,
+            .@"error" = 9,
             .cu_avail = 0,
             .frame_count = vm.depth,
             .input_data_regions = std.ArrayList(pb.InputDataRegion).init(allocator),
@@ -282,7 +282,7 @@ fn executeVmTest(
     }
 
     const err: i64 = switch (result) {
-        .err => |err| convertError(err),
+        .err => |err| sig.vm.convertExecutionError(err)[0],
         .ok => 0,
     };
 
@@ -299,52 +299,6 @@ fn executeVmTest(
         .memory_map = vm.memory_map,
         .registers = out_registers,
     });
-}
-
-/// [agave] https://github.com/firedancer-io/solfuzz-agave/blob/agave-v2.1.14/src/utils/vm/err_map.rs#L7-L31
-fn convertError(err: anyerror) i32 {
-    return switch (err) {
-        // zig fmt: off
-        error.NoProgram                  => 6,
-        error.UnknownOpCode              => 25,
-        error.InvalidSourceRegister      => 26,
-        error.InvalidDestinationRegister => 27,
-        error.CannotWriteR10             => 27,
-        error.InfiniteLoop               => 28, 
-        error.JumpOutOfCode              => 29,
-        error.JumpToMiddleOfLDDW         => 30,
-        error.UnsupportedLEBEArgument    => 31,
-        error.LDDWCannotBeLast           => 32,
-        error.IncompleteLDDW             => 33,
-        error.InvalidRegister            => 35,
-        error.ShiftWithOverflow          => 37,
-        error.ProgramLengthNotMultiple   => 38,
-
-        error.ComputationalBudgetExceeded => 16,
-        error.TooManySlices               => 1,
-        error.InvalidLength               => 1,
-        error.InvalidAttribute            => 1,
-        error.StackAccessViolation        => 13,
-        error.AccessViolation             => 13,
-        error.InvalidParameters           => 1,
-        error.InvalidEndianness           => 1,
-
-        error.CallOutsideTextSegment      => 8,
-        error.ExecutionOverrun            => 8,
-        error.CallDepthExceeded           => 11,
-        error.UnsupportedInstruction      => 12,
-        error.InvalidInstruction          => 12,
-        // error.AccessViolation             => 13,
-        // error.StackAccessViolation        => 13,
-        error.ExceededMaxInstructions     => 16,
-        error.DivisionByZero              => 18,
-        error.DivideOverflow              => 19,
-
-        // zig fmt: on
-        else => {
-            std.debug.panic("unknown err: {s}", .{@errorName(err)});
-        },
-    };
 }
 
 fn stub(

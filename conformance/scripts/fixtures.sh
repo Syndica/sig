@@ -3,16 +3,11 @@
 PASSING_DIRS=(
     "elf_loader/fixtures"
 
-    # Passed: 35322, Failed: 939, Skipped: 0
-    # "vm_interp/fixtures/v0"
-
-    # Passed: 35880, Failed: 381, Skipped: 0
-    # "vm_interp/fixtures/v1"
-
-    # Passed: 35958, Failed: 303, Skipped: 0
-    # "vm_interp/fixtures/v2"
+    "vm_interp/fixtures/v0"
+    "vm_interp/fixtures/v1"
+    "vm_interp/fixtures/v2"
     
-    # Passed: 20, Failed: 8, Skipped: 0
+    # Passed: 25, Failed: 3, Skipped: 0
     # "vm_interp/fixtures/latest"
 
     "syscall/fixtures/abort"
@@ -25,29 +20,18 @@ PASSING_DIRS=(
     "syscall/fixtures/create_program_address"
     "syscall/fixtures/curve25519"
     "syscall/fixtures/get_epoch_schedule"
-
-    # Passed: 0, Failed: 1, Skipped: 0
-    # "syscall/fixtures/get_return_data"
-
+    "syscall/fixtures/get_return_data"
     "syscall/fixtures/keccak256"
     "syscall/fixtures/log"
     "syscall/fixtures/log_data"
     "syscall/fixtures/memcmp"
-
-    # Passed: 71, Failed: 3, Skipped: 0
-    # "syscall/fixtures/memcpy"
-
-    # Passed: 45, Failed: 9, Skipped: 0
-    # "syscall/fixtures/memmove"
-
+    "syscall/fixtures/memcpy"
+    "syscall/fixtures/memmove"
     "syscall/fixtures/memset"
     "syscall/fixtures/panic"
     "syscall/fixtures/poseidon"
     "syscall/fixtures/sha256"
-
-    # Passed: 234, Failed: 2, Skipped: 0
-    # "syscall/fixtures/sol_get_sysvar"
-
+    "syscall/fixtures/sol_get_sysvar"
     "syscall/fixtures/stack_height"
     "syscall/fixtures/try_find_program_address"
 

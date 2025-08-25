@@ -65,8 +65,8 @@ pub const EbpfError = error{
     StackAccessViolation,
     InvalidInstruction,
     UnsupportedInstruction,
-    ExhaustedTextSegment,
-    LibcInvocationFailed,
+    // ExhaustedTextSegment,
+    // LibcInvocationFailed,
     VerifierError,
     // SyscallError, // Sig never returns an Ebpf syscall error
 };
@@ -112,8 +112,8 @@ pub fn convertExecutionError(err: ExecutionError) struct { i64, ExecutionErrorKi
         EbpfError.StackAccessViolation =>                           .{ 14, .Ebpf, "Access violation in stack frame" },
         EbpfError.InvalidInstruction =>                             .{ 15, .Ebpf, "invalid BPF instruction" },
         EbpfError.UnsupportedInstruction =>                         .{ 16, .Ebpf, "unsupported BPF instruction" },
-        EbpfError.ExhaustedTextSegment =>                           .{ 17, .Ebpf, "Compilation exhausted text segment at BPF instruction" },
-        EbpfError.LibcInvocationFailed =>                           .{ 18, .Ebpf, "Libc calling returned error code" },
+        // EbpfError.ExhaustedTextSegment =>                           .{ 17, .Ebpf, "Compilation exhausted text segment at BPF instruction" },
+        // EbpfError.LibcInvocationFailed =>                           .{ 18, .Ebpf, "Libc calling returned error code" },
         EbpfError.VerifierError =>                                  .{ 19, .Ebpf, "Verifier error" },
         // EbpfError.SyscallError => @panic("Sig should not return an Ebpf syscall error"),
 
