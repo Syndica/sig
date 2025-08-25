@@ -29,7 +29,7 @@ pub const SEED_FIELD_CONFIG = sig.bincode.utf8StringCodec([]const u8, 1024 * 102
 pub const PROGRAM_ENTRYPOINTS = initProgramEntrypoints();
 pub const PRECOMPILE_ENTRYPOINTS = initPrecompileEntrypoints();
 
-const EntrypointFn = *const fn (
+pub const EntrypointFn = *const fn (
     std.mem.Allocator,
     *InstructionContext,
 ) (error{OutOfMemory} || InstructionError)!void;

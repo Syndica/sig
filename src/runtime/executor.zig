@@ -142,30 +142,31 @@ fn processNextInstruction(
             break :blk .{ program_account.pubkey, program_account.pubkey };
 
         const owner_id = program_account.account.owner;
-        if (ic.tc.feature_set.active(.remove_accounts_executable_flag_checks, ic.tc.slot)) {
+        const is_migrated_bpf = for ([_]struct { Pubkey, sig.core.features.Feature }{
+            .{ program.address_lookup_table.ID, .migrate_address_lookup_table_program_to_core_bpf },
+            .{ program.config.ID, .migrate_config_program_to_core_bpf },
+            .{ program.stake.ID, .migrate_stake_program_to_core_bpf },
+        }) |entry| {
+            const migrate_key, const migrate_feature = entry;
+            if (owner_id.equals(&migrate_key) and
+                ic.tc.feature_set.active(migrate_feature, ic.tc.slot)) break true;
+        } else false;
+
+        if (is_migrated_bpf or
+            ic.tc.feature_set.active(.remove_accounts_executable_flag_checks, ic.tc.slot))
+        {
             if (bpf_loader_program.v1.ID.equals(&owner_id) or
                 bpf_loader_program.v2.ID.equals(&owner_id) or
                 bpf_loader_program.v3.ID.equals(&owner_id) or
                 bpf_loader_program.v4.ID.equals(&owner_id))
                 break :blk .{ owner_id, program_account.pubkey };
-            return InstructionError.UnsupportedProgramId;
         }
 
-        break :blk .{ owner_id, program_account.pubkey };
+        return InstructionError.UnsupportedProgramId;
     };
-
-    // Lookup native program function
-    // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/svm/src/message_processor.rs#L72-L75
-    // [fd] https://github.com/firedancer-io/firedancer/blob/dfadb7d33683aa8711dfe837282ad0983d3173a0/src/flamenco/runtime/fd_executor.c#L1150-L1159
-    const move_verify_precompiles_to_svm = ic.tc.feature_set.active(
-        .move_precompile_verification_to_svm,
-        ic.tc.slot,
-    );
 
     const maybe_precompile_fn =
         program.PRECOMPILE_ENTRYPOINTS.get(native_program_id.base58String().slice());
-
-    if (!move_verify_precompiles_to_svm and maybe_precompile_fn != null) return;
 
     const maybe_native_program_fn = maybe_precompile_fn orelse blk: {
         const native_program_fn = program.PROGRAM_ENTRYPOINTS.get(
@@ -892,4 +893,92 @@ test "sumAccountLamports" {
             sumAccountLamports(&tc, account_metas.constSlice()),
         );
     }
+}
+
+test "core bpf migration" {
+    const testing = sig.runtime.testing;
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+
+    const migrated_builtin_key = program.address_lookup_table.ID;
+    const migrated_builtin_feature: sig.core.features.Feature =
+        .migrate_address_lookup_table_program_to_core_bpf;
+
+    // Will patch the migrated builtin with this BPF program
+    const program_elf = try std.fs.cwd().readFileAlloc(
+        allocator,
+        sig.ELF_DATA_DIR ++ "hello_world.so",
+        std.math.maxInt(usize),
+    );
+    defer allocator.free(program_elf);
+
+    // Will invoke this account owned by the migrated builtin
+    const program_key = Pubkey.initRandom(prng.random());
+
+    var feature_set = sig.core.FeatureSet.ALL_ENABLED_AT_GENESIS;
+    feature_set.setSlot(migrated_builtin_feature, 0);
+
+    var environment: sig.vm.Environment = .{};
+    environment.loader = try sig.vm.Environment.initV1Loader(allocator, &feature_set, 0, false);
+    defer environment.deinit(allocator);
+
+    var cache, var tc = try testing.createTransactionContext(
+        allocator,
+        prng.random(),
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = program_key,
+                    .owner = migrated_builtin_key,
+                },
+                .{
+                    .pubkey = migrated_builtin_key,
+                    .owner = program.bpf_loader.v3.ID,
+                },
+            },
+            .feature_set = &.{.{ .feature = migrated_builtin_feature }},
+            .compute_meter = 0, // hit error.ExceededMaxInstructions
+            .vm_environment = &environment,
+        },
+    );
+    defer {
+        testing.deinitTransactionContext(allocator, tc);
+        cache.deinit(allocator);
+    }
+
+    {
+        const source = try allocator.dupe(u8, program_elf);
+        errdefer allocator.free(source);
+
+        var executable = try sig.vm.Executable.fromBytes(
+            allocator,
+            source,
+            &environment.loader,
+            environment.config,
+        );
+        errdefer executable.deinit(allocator);
+
+        try tc.program_map.put(allocator, migrated_builtin_key, .{
+            .loaded = .{
+                .executable = executable,
+                .source = source,
+            },
+        });
+    }
+
+    const instruction_info = try testing.createInstructionInfo(
+        &tc,
+        program_key,
+        "ignored",
+        &.{
+            .{ .index_in_transaction = 0 },
+            .{ .index_in_transaction = 1 },
+        },
+    );
+    defer instruction_info.deinit(allocator);
+
+    try std.testing.expectError(
+        error.UnsupportedProgramId,
+        executeInstruction(allocator, &tc, instruction_info),
+    );
 }

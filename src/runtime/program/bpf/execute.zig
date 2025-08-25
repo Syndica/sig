@@ -16,12 +16,6 @@ pub fn execute(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
 ) ExecutionError!void {
-    // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1584-L1587
-    const direct_mapping = ic.tc.feature_set.active(
-        .bpf_account_data_direct_mapping,
-        ic.tc.slot,
-    );
-
     const executable = blk: {
         const program_account = try ic.borrowProgramAccount();
         defer program_account.release();
@@ -59,6 +53,20 @@ pub fn execute(
             },
         }
     };
+
+    return executeProgram(allocator, ic, executable);
+}
+
+pub fn executeProgram(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+    executable: sig.vm.Executable,
+) ExecutionError!void {
+    // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1584-L1587
+    const direct_mapping = ic.tc.feature_set.active(
+        .bpf_account_data_direct_mapping,
+        ic.tc.slot,
+    );
 
     const mask_out_rent_epoch_in_vm_serialization = ic.tc.feature_set.active(
         .bpf_account_data_direct_mapping,
