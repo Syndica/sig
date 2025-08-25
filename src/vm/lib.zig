@@ -109,7 +109,7 @@ pub fn convertExecutionError(err: ExecutionError) struct { i64, ExecutionErrorKi
         EbpfError.InvalidVirtualAddress =>                          .{ 11, .Ebpf, "invalid virtual address" },
         EbpfError.InvalidMemoryRegion =>                            .{ 12, .Ebpf, "Invalid memory region at index" },
         EbpfError.AccessViolation =>                                .{ 13, .Ebpf, "Access violation" },
-        EbpfError.StackAccessViolation =>                           .{ 13, .Ebpf, "Access violation" },
+        EbpfError.StackAccessViolation =>                           .{ 14, .Ebpf, "Access violation in stack frame" },
         EbpfError.InvalidInstruction =>                             .{ 15, .Ebpf, "invalid BPF instruction" },
         EbpfError.UnsupportedInstruction =>                         .{ 16, .Ebpf, "unsupported BPF instruction" },
         EbpfError.ExhaustedTextSegment =>                           .{ 17, .Ebpf, "Compilation exhausted text segment at BPF instruction" },
