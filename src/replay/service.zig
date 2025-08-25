@@ -489,6 +489,7 @@ fn advanceReplay(state: *ReplayState) !void {
 
     replay.consensus.processConsensus(.{
         .allocator = allocator,
+        .logger = .from(state.logger),
         .replay_tower = &state.replay_tower,
         .progress_map = &state.progress_map,
         .slot_tracker = &state.slot_tracker,
