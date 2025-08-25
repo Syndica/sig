@@ -32,7 +32,9 @@ const SlotTracker = sig.replay.trackers.SlotTracker;
 const EpochTracker = sig.replay.trackers.EpochTracker;
 const SlotData = sig.replay.edge_cases.SlotData;
 
-pub const isSlotDuplicateConfirmed = sig.consensus.tower.isSlotDuplicateConfirmed;
+const check_slot_agrees_with_cluster = sig.replay.edge_cases.check_slot_agrees_with_cluster;
+
+pub const isDuplicateSlotConfirmed = sig.consensus.replay_tower.isDuplicateSlotConfirmed;
 
 pub const collectVoteLockouts = sig.consensus.replay_tower.collectVoteLockouts;
 
@@ -63,16 +65,15 @@ pub fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
         return error.Todo;
 
     var epoch_stakes_map: EpochStakesMap = .empty;
-    errdefer epoch_stakes_map.deinit(deps.allocator);
+    defer epoch_stakes_map.deinit(deps.allocator);
 
     try epoch_stakes_map.ensureTotalCapacity(deps.allocator, deps.epoch_tracker.epochs.count());
-    defer epoch_stakes_map.deinit(deps.allocator);
 
     for (deps.epoch_tracker.epochs.keys(), deps.epoch_tracker.epochs.values()) |key, constants| {
         epoch_stakes_map.putAssumeCapacity(key, constants.stakes);
     }
 
-    _ = try computeBankStats(
+    const newly_computed_slot_stats = try computeBankStats(
         deps.allocator,
         deps.vote_account,
         deps.ancestors,
@@ -84,10 +85,79 @@ pub fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
         deps.replay_tower,
         deps.latest_validator_votes_for_frozen_banks,
     );
+    defer deps.allocator.free(newly_computed_slot_stats);
 
-    // TODO: for each newly_computed_slot_stats:
-    //           tower_duplicate_confirmed_forks
-    //           mark_slots_duplicate_confirmed
+    for (newly_computed_slot_stats) |slot_stat| {
+        const fork_stats = deps.progress_map.getForkStats(slot_stat) orelse return error.MissingSlotInForkStats;
+        var duplicate_confirmed_forks: std.ArrayListUnmanaged(SlotAndHash) = .empty;
+        defer duplicate_confirmed_forks.deinit(deps.allocator);
+
+        // Analogoous to [ReplayStage::tower_duplicate_confirmed_forks](https://github.com/anza-xyz/agave/blob/47c0383f2301e5a739543c1af9992ae182b7e06c/core/src/replay_stage.rs#L3928)
+        try duplicate_confirmed_forks.ensureTotalCapacity(deps.allocator, deps.progress_map.map.count());
+        for (deps.progress_map.map.keys()) |slot| {
+            const slot_fork_stats = deps.progress_map.getForkStats(slot) orelse return error.MissingSlotInForkStats;
+            if (slot_fork_stats.duplicate_confirmed_hash != null) {
+                continue;
+            }
+
+            const slot_info = deps.slot_tracker.get(slot) orelse return error.MissingSlotInSlotTracker;
+            if (!slot_info.state.isFrozen()) {
+                continue;
+            }
+            if (isDuplicateSlotConfirmed(
+                slot,
+                &fork_stats.voted_stakes,
+                fork_stats.total_stake,
+            )) {
+                duplicate_confirmed_forks.appendAssumeCapacity(
+                    .{
+                        .slot = slot,
+                        .hash = slot_info.state.hash.readCopy() orelse return error.MissingHash,
+                    },
+                );
+            }
+        }
+
+        // Analogoous to [ReplayStage::mark_slots_duplicate_confirmed](https://github.com/anza-xyz/agave/blob/47c0383f2301e5a739543c1af9992ae182b7e06c/core/src/replay_stage.rs#L3876)
+        const root_slot = deps.slot_tracker.root;
+        for (duplicate_confirmed_forks.items) |duplicate_confirmed_fork| {
+            const slot, const frozen_hash = duplicate_confirmed_fork.tuple();
+            std.debug.assert(!frozen_hash.eql(Hash.ZEROES));
+            if (slot <= root_slot) {
+                continue;
+            }
+            var f_stats = deps.progress_map.getForkStats(slot) orelse return error.MissingForkStats;
+            f_stats.duplicate_confirmed_hash = frozen_hash;
+
+            if (try deps.slot_data.duplicate_confirmed_slots.fetchPut(
+                deps.allocator,
+                slot,
+                frozen_hash,
+            )) |prev_entry| {
+                std.debug.assert(prev_entry.value.eql(frozen_hash));
+                // Already processed this signal
+                continue;
+            }
+
+            const duplicate_confirmed_state: sig.replay.edge_cases.DuplicateConfirmedState = .{
+                .duplicate_confirmed_hash = frozen_hash,
+                .slot_status = sig.replay.edge_cases.SlotStatus.fromHash(frozen_hash),
+            };
+            try check_slot_agrees_with_cluster.duplicateConfirmed(
+                deps.allocator,
+                .noop,
+                slot,
+                root_slot,
+                deps.ledger_result_writer,
+                deps.fork_choice,
+                &deps.slot_data.duplicate_slots_to_repair,
+                deps.ancestor_hashes_replay_update_sender,
+                &deps.slot_data.purge_repair_slot_counter,
+                duplicate_confirmed_state,
+            );
+        }
+    }
+
     const heaviest_slot = deps.fork_choice.heaviestOverallSlot().slot;
     const heaviest_slot_on_same_voted_fork =
         (try deps.fork_choice.heaviestSlotOnSameVotedFork(deps.replay_tower)) orelse null;
