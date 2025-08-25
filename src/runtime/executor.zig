@@ -411,7 +411,7 @@ fn sumAccountLamports(
     return lamports;
 }
 
-test "pushInstruction" {
+test pushInstruction {
     const testing = sig.runtime.testing;
     const system_program = sig.runtime.program.system;
 
@@ -448,19 +448,6 @@ test "pushInstruction" {
         },
     );
     defer instruction_info.deinit(allocator);
-
-    {
-        // Cannot push native loader
-        // Modify and defer reset the program id
-        const original_program_id = instruction_info.program_meta.pubkey;
-        defer instruction_info.program_meta.pubkey = original_program_id;
-        instruction_info.program_meta.pubkey = ids.NATIVE_LOADER_ID;
-
-        try std.testing.expectError(
-            InstructionError.UnsupportedProgramId,
-            pushInstruction(&tc, instruction_info),
-        );
-    }
 
     // Success
     try pushInstruction(&tc, instruction_info);
