@@ -4,6 +4,8 @@ const sig = @import("../sig.zig");
 const Allocator = std.mem.Allocator;
 const AtomicBool = std.atomic.Value(bool);
 
+pub const Logger = sig.trace.Logger("consensus");
+
 const RwMux = sig.sync.RwMux;
 const SortedSetUnmanaged = sig.utils.collections.SortedSetUnmanaged;
 
@@ -42,6 +44,7 @@ const MAX_VOTE_REFRESH_INTERVAL_MILLIS: usize = 5000;
 
 pub const ConsensusDependencies = struct {
     allocator: Allocator,
+    logger: Logger,
     replay_tower: *ReplayTower,
     progress_map: *ProgressMap,
     slot_tracker: *SlotTracker,
@@ -75,6 +78,7 @@ pub fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
 
     const newly_computed_slot_stats = try computeBankStats(
         deps.allocator,
+        deps.logger,
         deps.vote_account,
         deps.ancestors,
         deps.slot_tracker,
@@ -570,7 +574,7 @@ fn computeBankStats(
             // Gather voting information from all vote accounts to understand the current consensus state.
             const computed_bank_state = try collectVoteLockouts(
                 allocator,
-                .noop,
+                .from(logger),
                 &my_vote_pubkey,
                 slot,
                 &epoch_stakes.stakes.vote_accounts.vote_accounts,
@@ -1587,6 +1591,7 @@ test "computeBankStats - child bank heavier" {
     const epoch_schedule = EpochSchedule.DEFAULT;
     const newly_computed_slot_stats = try computeBankStats(
         testing.allocator,
+        .noop,
         my_node_pubkey,
         &fixture.ancestors,
         &fixture.slot_tracker,
@@ -1680,6 +1685,7 @@ test "computeBankStats - same weight selects lower slot" {
     const epoch_schedule = EpochSchedule.DEFAULT;
     const newly_computed_slot_stats = try computeBankStats(
         testing.allocator,
+        .noop,
         my_vote_pubkey,
         &fixture.ancestors,
         &fixture.slot_tracker,
