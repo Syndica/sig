@@ -30,6 +30,7 @@ const LatestValidatorVotes = sig.consensus.latest_validator_votes.LatestValidato
 
 const SlotTracker = sig.replay.trackers.SlotTracker;
 const EpochTracker = sig.replay.trackers.EpochTracker;
+const SlotData = sig.replay.edge_cases.SlotData;
 
 pub const isSlotDuplicateConfirmed = sig.consensus.tower.isSlotDuplicateConfirmed;
 
@@ -51,6 +52,8 @@ pub const ConsensusDependencies = struct {
     vote_account: Pubkey,
     slot_history_accessor: *const SlotHistoryAccessor,
     latest_validator_votes_for_frozen_banks: *LatestValidatorVotes,
+    slot_data: *SlotData,
+    ancestor_hashes_replay_update_sender: *sig.sync.Channel(AncestorHashesReplayUpdate),
 };
 
 pub fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {

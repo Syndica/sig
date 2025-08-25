@@ -501,6 +501,8 @@ fn advanceReplay(state: *ReplayState) !void {
         .vote_account = state.my_identity, // TODO: use explicitly distinct vote authority
         .slot_history_accessor = &slot_history_accessor,
         .latest_validator_votes_for_frozen_banks = &state.latest_validator_votes,
+        .slot_data = &state.slot_data,
+        .ancestor_hashes_replay_update_sender = state.senders.ancestor_hashes_replay_update,
     }) catch |e| {
         // ignore errors in consensus since they are expected until the inputs are provided
         state.logger.err().logf("consensus failed with an error: {}", .{e});
