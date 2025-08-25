@@ -177,9 +177,8 @@ fn resolveTransaction(
             seen.set(index);
 
             // expand the account metadata
-            const account = if (index < accounts.len) accounts.get(index) else {
-                return error.InvalidAccountIndex;
-            };
+            if (index >= accounts.len) return error.InvalidAccountIndex;
+            const account = accounts.get(index);
             (account_metas.addOne() catch break).* = .{
                 .pubkey = account.pubkey,
                 .is_signer = account.is_signer,

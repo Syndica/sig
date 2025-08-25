@@ -6,16 +6,14 @@ PASSING_DIRS=(
     "vm_interp/fixtures/v0"
     "vm_interp/fixtures/v1"
     "vm_interp/fixtures/v2"
-    
-    # Passed: 25, Failed: 3, Skipped: 0
-    # "vm_interp/fixtures/latest"
+    "vm_interp/fixtures/latest"
 
     "syscall/fixtures/abort"
     "syscall/fixtures/alt_bn128"
     "syscall/fixtures/blake3"
 
     # Passed: 325, Failed: 238, Skipped: 0
-    #"syscall/fixtures/cpi"
+    "syscall/fixtures/cpi"
 
     "syscall/fixtures/create_program_address"
     "syscall/fixtures/curve25519"
@@ -36,14 +34,12 @@ PASSING_DIRS=(
     "syscall/fixtures/try_find_program_address"
 
     # Passed: 1, Failed: 1, Skipped: 0
-    # "syscall/fixtures/vm"
+    "syscall/fixtures/vm"
     
     "syscall/fixtures/secp256k1"
 
     "instr/fixtures/zk_sdk"
-    
-    # Passed: 27, Failed: 1, Skipped: 0
-    # "instr/fixtures/unknown"
+    "instr/fixtures/unknown"
     
     "instr/fixtures/compute-budget"
     "instr/fixtures/stake"
@@ -58,26 +54,34 @@ PASSING_DIRS=(
     "instr/fixtures/bpf-loader-v2-programs"
 
     # Passed: 42, Failed: 304, Skipped: 0
-    # "instr/fixtures/bpf-loader-v3"
+    "instr/fixtures/bpf-loader-v3"
 
     "instr/fixtures/bpf-loader-v3-programs"
     "instr/fixtures/bpf-loader-upgradeable-v1-programs"
 
-
     # Passed: 4091, Failed: 63, Skipped: 0
-    # "txn/fixtures/programs"
+    "txn/fixtures/programs"
 
     "txn/fixtures/precompile/ed25519"
     "txn/fixtures/precompile/secp256k1"
     "txn/fixtures/precompile/secp256r1"
 )
 
-mapfile -t PASSING_TXN_FIXTURES < ./conformance/scripts/passing_txn_fixtures.txt
-FIXTURES=("${PASSING_TXN_FIXTURES[@]}")
+FAIL_FILE="./conformance/scripts/failing.txt"
+mapfile -t FAIL_SET < <(grep -v '^[[:space:]]*$' "$FAIL_FILE") # skips empty lines
+declare -A FAIL_MAP
+for f in "${FAIL_SET[@]}"; do
+  FAIL_MAP["$f"]=1
+done
+
+FIXTURES=()
 
 for dir in "${PASSING_DIRS[@]}"; do
   while IFS= read -r -d '' file; do
-    FIXTURES+=("$file")
+    relative_path="${file#./test-vectors/}"
+    if [[ -z "${FAIL_MAP[$relative_path]}" ]]; then
+      FIXTURES+=("$file")
+    fi
   done < <(find "./test-vectors/$dir" -type f -name '*.fix' -print0)
 done
 
