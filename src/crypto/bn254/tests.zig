@@ -274,8 +274,7 @@ test "pairing" {
         // zig fmt: on
     };
 
-    const cases_to_run = if (!sig.build_options.long_tests) cases[0..2] else cases;
-    for (cases_to_run) |case| {
+    for (cases) |case| {
         const N = 192 * 10;
         var buffer: [N]u8 = .{0} ** N;
         const input = try std.fmt.hexToBytes(&buffer, case.input);
