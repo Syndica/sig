@@ -94,18 +94,15 @@ pub fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
     for (newly_computed_slot_stats) |slot_stat| {
         const fork_stats = deps.progress_map.getForkStats(slot_stat) orelse
             return error.MissingSlotInForkStats;
+        // Analogous to [ReplayStage::tower_duplicate_confirmed_forks](https://github.com/anza-xyz/agave/blob/47c0383f2301e5a739543c1af9992ae182b7e06c/core/src/replay_stage.rs#L3928)
         var duplicate_confirmed_forks: std.ArrayListUnmanaged(SlotAndHash) = .empty;
         defer duplicate_confirmed_forks.deinit(deps.allocator);
-
-        // Analogous to [ReplayStage::tower_duplicate_confirmed_forks](https://github.com/anza-xyz/agave/blob/47c0383f2301e5a739543c1af9992ae182b7e06c/core/src/replay_stage.rs#L3928)
         try duplicate_confirmed_forks.ensureTotalCapacity(
             deps.allocator,
             deps.progress_map.map.count(),
         );
-        for (deps.progress_map.map.keys()) |slot| {
-            const slot_fork_stats = deps.progress_map.getForkStats(slot) orelse
-                return error.MissingSlotInForkStats;
-            if (slot_fork_stats.duplicate_confirmed_hash != null) {
+        for (deps.progress_map.map.keys(), deps.progress_map.map.values()) |slot, prog| {
+            if (prog.fork_stats.duplicate_confirmed_hash != null) {
                 continue;
             }
 
