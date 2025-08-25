@@ -397,7 +397,11 @@ pub fn createSyscallRegistry(
         "sol_keccak256",
         stub,
     );
-    // _ = try stub,
+    _ = try loader.registerHashed(
+        allocator,
+        "sol_secp256k1_recover",
+        stub,
+    );
 
     // Blake3
     if (feature_set.active(.blake3_syscall_enabled, slot)) {
