@@ -842,7 +842,7 @@ pub const AccountsDB = struct {
             const references_buf, const ref_global_index = reference_manager.alloc(
                 n_accounts_this_slot,
             ) catch |err| switch (err) {
-                error.AllocFailed => blk: {
+                error.AllocFailed, error.AllocTooBig => blk: {
                     self.logger.warn().log(
                         "ref manager AllocFailed: n_accounts_estimate too low? Expanding by 50%",
                     );
@@ -3432,7 +3432,7 @@ pub fn unpackSnapshotFilePair(
 }
 
 /// Loads from a snapshot, which takes time. For leaner accountsdb, use initForTest
-pub fn loadTestAccountsDBFromSnapshot(
+fn loadTestAccountsDBFromSnapshot(
     allocator: std.mem.Allocator,
     use_disk: bool,
     n_threads: u32,
@@ -3440,6 +3440,7 @@ pub fn loadTestAccountsDBFromSnapshot(
     /// The directory into which the snapshots are unpacked, and
     /// the `snapshots_dir` for the returned `AccountsDB`.
     snapshot_dir: std.fs.Dir,
+    accounts_per_file_estimate: u64,
 ) !struct { AccountsDB, FullAndIncrementalManifest } {
     comptime std.debug.assert(builtin.is_test); // should only be used in tests
 
@@ -3467,7 +3468,7 @@ pub fn loadTestAccountsDBFromSnapshot(
         manifest.accounts_db_fields,
         n_threads,
         allocator,
-        500,
+        accounts_per_file_estimate,
     );
 
     return .{ accounts_db, full_inc_manifest };
@@ -3722,7 +3723,7 @@ test "load and validate from test snapshot - single threaded" {
     const snapshot_dir = tmp_dir_root.dir;
 
     var accounts_db, const full_inc_manifest =
-        try loadTestAccountsDBFromSnapshot(allocator, false, 1, .noop, snapshot_dir);
+        try loadTestAccountsDBFromSnapshot(allocator, false, 1, .noop, snapshot_dir, 500);
     defer {
         accounts_db.deinit();
         full_inc_manifest.deinit(allocator);
@@ -3753,7 +3754,7 @@ test "load and validate from test snapshot - disk index" {
     const snapshot_dir = tmp_dir_root.dir;
 
     var accounts_db, const full_inc_manifest =
-        try loadTestAccountsDBFromSnapshot(allocator, true, 1, .noop, snapshot_dir);
+        try loadTestAccountsDBFromSnapshot(allocator, true, 1, .noop, snapshot_dir, 500);
     defer {
         accounts_db.deinit();
         full_inc_manifest.deinit(allocator);
@@ -3784,7 +3785,7 @@ test "load and validate from test snapshot - parallel" {
     const snapshot_dir = tmp_dir_root.dir;
 
     var accounts_db, const full_inc_manifest =
-        try loadTestAccountsDBFromSnapshot(allocator, false, 2, .noop, snapshot_dir);
+        try loadTestAccountsDBFromSnapshot(allocator, false, 2, .noop, snapshot_dir, 500);
     defer {
         accounts_db.deinit();
         full_inc_manifest.deinit(allocator);
@@ -3814,7 +3815,7 @@ test "load sysvars" {
     const snapshot_dir = tmp_dir_root.dir;
 
     var accounts_db, const full_inc_manifest =
-        try loadTestAccountsDBFromSnapshot(allocator, false, 1, .noop, snapshot_dir);
+        try loadTestAccountsDBFromSnapshot(allocator, false, 1, .noop, snapshot_dir, 500);
     defer {
         accounts_db.deinit();
         full_inc_manifest.deinit(allocator);
@@ -4887,4 +4888,42 @@ test "expandSlotRefsAndInsert double insert failure" {
         error.InsertIndexFailed,
         accounts_db.expandSlotRefsAndInsert(1, &.{Pubkey.ZEROES}),
     );
+}
+
+test "loadAndVerifyAccountsFiles ref manager expand" {
+    const allocator = std.testing.allocator;
+
+    var tmp_dir_root = std.testing.tmpDir(.{});
+    defer tmp_dir_root.cleanup();
+    const snapshot_dir = tmp_dir_root.dir;
+
+    const accounts_per_file_estimate = 3; // deliberate under-estimate
+
+    var accounts_db, const full_inc_manifest = try loadTestAccountsDBFromSnapshot(
+        allocator,
+        false,
+        1,
+        .noop,
+        snapshot_dir,
+        accounts_per_file_estimate,
+    );
+    defer {
+        accounts_db.deinit();
+        full_inc_manifest.deinit(allocator);
+    }
+
+    const n_slots = blk: {
+        const slot_reference_map, var slot_reference_map_lg =
+            accounts_db.account_index.slot_reference_map.readWithLock();
+        defer slot_reference_map_lg.unlock();
+
+        break :blk slot_reference_map.count();
+    };
+
+    const ref_capacity = accounts_db.account_index.reference_manager.capacity;
+
+    // For this test, accounts per file == accounts per slot.
+    // If we've made more account ref capacity per slot than we've estimated, we have expanded our
+    // reference manager.
+    try std.testing.expect(ref_capacity / n_slots > accounts_per_file_estimate);
 }
