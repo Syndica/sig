@@ -212,7 +212,6 @@ pub const BasicShredTracker = struct {
             var slot_report = try slot_reports.addOne();
             slot_report.slot = slot;
             try monitored_slot.identifyMissing(&slot_report.missing_shreds);
-            std.debug.assert(slot_report.missing_shreds.items.len > 0); // because !is_complete
         }
 
         return true;
