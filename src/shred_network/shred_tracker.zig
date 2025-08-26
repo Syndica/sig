@@ -131,9 +131,7 @@ pub const BasicShredTracker = struct {
         if (parent_slot + 1 != slot) {
             for (parent_slot + 1..slot) |slot_to_skip| {
                 const monitored_slot_to_skip = self.observeSlot(slot_to_skip) catch continue;
-                if (!monitored_slot_to_skip.is_complete) {
-                    monitored_slot_to_skip.is_skipped = true;
-                }
+                monitored_slot_to_skip.is_skipped = true;
             }
         }
 
@@ -195,27 +193,28 @@ pub const BasicShredTracker = struct {
         for (self.current_bottom_slot..last_slot_to_check + 1) |slot| {
             const monitored_slot = try self.getMonitoredSlot(slot);
 
-            if (now.elapsedSince(monitored_slot.first_received_timestamp)
-                .lt(MIN_SLOT_AGE_TO_REPORT_AS_MISSING))
+            var this_slot_needs_more_shreds = !monitored_slot.is_complete;
+            defer {
+                if (this_slot_needs_more_shreds) found_an_incomplete_slot = true;
+                if (!found_an_incomplete_slot) self.setBottom(slot + 1);
+            }
+
+            if (monitored_slot.is_complete or
+                now.elapsedSince(monitored_slot.first_received_timestamp)
+                    .lt(MIN_SLOT_AGE_TO_REPORT_AS_MISSING))
                 continue;
 
-            if (!try self.slotShouldBeSkipped(monitored_slot, slot, last_slot_to_check, now)) {
-                var slot_report = try slot_reports.addOne();
-                slot_report.slot = slot;
-                try monitored_slot.identifyMissing(&slot_report.missing_shreds);
-                if (slot_report.missing_shreds.items.len > 0) {
-                    std.debug.assert(!monitored_slot.is_complete);
-                    found_an_incomplete_slot = true;
-                } else {
-                    std.debug.assert(monitored_slot.is_complete);
-                    slot_reports.drop(1);
-                }
+            if (try self.slotShouldBeSkipped(monitored_slot, slot, last_slot_to_check, now)) {
+                this_slot_needs_more_shreds = false;
+                continue;
             }
 
-            if (!found_an_incomplete_slot) {
-                self.setBottom(slot + 1);
-            }
+            var slot_report = try slot_reports.addOne();
+            slot_report.slot = slot;
+            try monitored_slot.identifyMissing(&slot_report.missing_shreds);
+            std.debug.assert(slot_report.missing_shreds.items.len > 0); // because !is_complete
         }
+
         return true;
     }
 
