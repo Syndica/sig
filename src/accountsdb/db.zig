@@ -846,7 +846,9 @@ pub const AccountsDB = struct {
                     self.logger.warn().log(
                         "ref manager AllocFailed: n_accounts_estimate too low? Expanding by 50%",
                     );
-                    try reference_manager.expandCapacity(n_accounts_estimate / 2);
+                    try reference_manager.expandCapacity(
+                        @max(n_accounts_estimate / 2, n_accounts_this_slot),
+                    );
                     break :blk try reference_manager.alloc(n_accounts_this_slot);
                 },
                 else => return err,
