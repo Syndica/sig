@@ -271,6 +271,8 @@ test "batched range proof u128" {
 }
 
 test "batched range proof u256" {
+    if (!sig.build_options.long_tests) return error.SkipZigTest;
+
     const allocator = std.testing.allocator;
     const amount_1: u64 = 23;
     const amount_2: u64 = 24;

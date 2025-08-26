@@ -3015,7 +3015,7 @@ test "test build push messages" {
     try std.testing.expect(msgs2.items.len == 0);
 }
 
-test "test large push messages" {
+test "large push messages" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(91);
     var my_keypair = try KeyPair.generateDeterministic(@splat(1));
@@ -3048,7 +3048,8 @@ test "test large push messages" {
     {
         var lock_guard = gossip_service.gossip_table_rw.write();
         defer lock_guard.unlock();
-        for (0..2_000) |_| {
+        const count = if (sig.build_options.long_tests) 2_000 else 20;
+        for (0..count) |_| {
             var keypair = KeyPair.generate();
             const value = try SignedGossipData.randomWithIndex(prng.random(), &keypair, 0); // contact info
             _ = try lock_guard.mut().insert(value, getWallclockMs());
@@ -3069,7 +3070,8 @@ test "test large push messages" {
     const msgs = try gossip_service.buildPushMessages(&cursor);
     defer msgs.deinit();
 
-    try std.testing.expectEqual(3_780, msgs.items.len);
+    const expected = if (sig.build_options.long_tests) 3_780 else 42;
+    try std.testing.expectEqual(expected, msgs.items.len);
 }
 
 test "test packet verification" {

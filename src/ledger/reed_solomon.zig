@@ -606,6 +606,9 @@ test "ReedSolomon.reconstruct basic 0-11 sequence with any missing combination" 
 }
 
 test "ReedSolomon.reconstruct lorem ipsum with any missing combination" {
+    // somewhat redundant with other tests and this is the slowest one
+    if (!sig.build_options.long_tests) return error.SkipZigTest;
+
     const allocator = std.testing.allocator;
     var rs = try ReedSolomon.init(allocator, 7, 4);
     defer rs.deinit();

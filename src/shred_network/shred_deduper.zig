@@ -126,11 +126,13 @@ fn testDedupSeeded(
 
 test "agave: dedup seeded" {
     try testDedupSeeded([_]u8{0xf9} ** 32, 3_199_997, 51_414, 15_429, 101_207, 71_197, 4);
-    try testDedupSeeded([_]u8{0xdc} ** 32, 3_200_003, 51_414, 15_452, 101_259, 71_103, 4);
-    try testDedupSeeded([_]u8{0xa5} ** 32, 6_399_971, 102_828, 62_932, 202_433, 79_334, 4);
-    try testDedupSeeded([_]u8{0xdb} ** 32, 6_400_013, 102_828, 82_830, 202_356, 39_874, 2);
-    try testDedupSeeded([_]u8{0xcd} ** 32, 12_799_987, 404_771, 384_771, 784_600, 39_936, 2);
-    try testDedupSeeded([_]u8{0xc3} ** 32, 12_800_009, 404_771, 384_771, 784_563, 39_932, 2);
+    if (sig.build_options.long_tests) {
+        try testDedupSeeded([_]u8{0xdc} ** 32, 3_200_003, 51_414, 15_452, 101_259, 71_103, 4);
+        try testDedupSeeded([_]u8{0xa5} ** 32, 6_399_971, 102_828, 62_932, 202_433, 79_334, 4);
+        try testDedupSeeded([_]u8{0xdb} ** 32, 6_400_013, 102_828, 82_830, 202_356, 39_874, 2);
+        try testDedupSeeded([_]u8{0xcd} ** 32, 12_799_987, 404_771, 384_771, 784_600, 39_936, 2);
+        try testDedupSeeded([_]u8{0xc3} ** 32, 12_800_009, 404_771, 384_771, 784_563, 39_932, 2);
+    }
 }
 
 test "agave: test already received" {
