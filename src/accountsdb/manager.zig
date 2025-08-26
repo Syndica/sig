@@ -1040,22 +1040,10 @@ test "purge accounts in cache works" {
 
 test "clean to shrink account file works with zero-lamports" {
     const allocator = std.testing.allocator;
-    const logger: Logger = .noop;
 
-    var tmp_dir_root = std.testing.tmpDir(.{});
-    defer tmp_dir_root.cleanup();
-    const snapshot_dir = tmp_dir_root.dir;
-
-    var accounts_db = try AccountsDB.init(.{
-        .allocator = allocator,
-        .logger = .from(logger),
-        .snapshot_dir = snapshot_dir,
-        .geyser_writer = null,
-        .gossip_view = null,
-        .index_allocation = .ram,
-        .number_of_index_shards = 4,
-    });
+    var accounts_db, var dir = try AccountsDB.initForTest(allocator);
     defer accounts_db.deinit();
+    defer dir.cleanup();
 
     var prng = std.Random.DefaultPrng.init(19);
     const random = prng.random();
@@ -1125,24 +1113,12 @@ test "clean to shrink account file works with zero-lamports" {
     defer account.deinit(allocator);
 }
 
-test "clean to shrink account file works" {
+test "clean to shrink account file works - basic" {
     const allocator = std.testing.allocator;
-    const logger: Logger = .noop;
 
-    var tmp_dir_root = std.testing.tmpDir(.{});
-    defer tmp_dir_root.cleanup();
-    const snapshot_dir = tmp_dir_root.dir;
-
-    var accounts_db = try AccountsDB.init(.{
-        .allocator = allocator,
-        .logger = .from(logger),
-        .snapshot_dir = snapshot_dir,
-        .geyser_writer = null,
-        .gossip_view = null,
-        .index_allocation = .ram,
-        .number_of_index_shards = 4,
-    });
+    var accounts_db, var dir = try AccountsDB.initForTest(allocator);
     defer accounts_db.deinit();
+    defer dir.cleanup();
 
     var prng = std.Random.DefaultPrng.init(19);
     const random = prng.random();

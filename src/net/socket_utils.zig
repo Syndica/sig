@@ -629,6 +629,6 @@ pub const BenchmarkPacketProcessing = struct {
 
 test "benchmark packet processing" {
     _ = try BenchmarkPacketProcessing.benchmarkReadSocket(.{
-        .n_packets = 100_000,
+        .n_packets = if (sig.build_options.long_tests) 100_000 else 1,
     });
 }
