@@ -200,16 +200,13 @@ const ReplayState = struct {
         self.thread_pool.shutdown();
         self.thread_pool.deinit();
 
-        {
-            const ptr, var lg = self.slot_tracker_rw.writeWithLock();
-            defer lg.unlock();
-            ptr.deinit(self.allocator);
-        }
-        {
-            const ptr, var lg = self.epoch_tracker_rw.writeWithLock();
-            defer lg.unlock();
-            ptr.deinit(self.allocator);
-        }
+        var slots = self.slot_tracker_rw.tryRead() orelse
+            @panic("Slot tracker deinit while in use");
+        slots.get().deinit(self.allocator);
+
+        var epochs = self.epochs_tracker_rw.tryRead() orelse
+            @panic("Epoch tracker deinit while in use");
+        epochs.get().deinit(self.allocator);
 
         self.progress_map.deinit(self.allocator);
 
