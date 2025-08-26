@@ -839,8 +839,18 @@ pub const AccountsDB = struct {
 
             if (n_accounts_this_slot == 0) continue;
 
-            const references_buf, const ref_global_index =
-                try reference_manager.alloc(n_accounts_this_slot);
+            const references_buf, const ref_global_index = reference_manager.alloc(
+                n_accounts_this_slot,
+            ) catch |err| switch (err) {
+                error.AllocFailed => blk: {
+                    self.logger.warn().log(
+                        "ref manager AllocFailed: n_accounts_estimate too low? Expanding by 50%",
+                    );
+                    try reference_manager.expandCapacity(n_accounts_estimate / 2);
+                    break :blk try reference_manager.alloc(n_accounts_this_slot);
+                },
+                else => return err,
+            };
 
             try reference_bufs.append(references_buf);
             try global_indices.append(ref_global_index);
