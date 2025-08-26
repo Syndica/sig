@@ -194,7 +194,7 @@ const ReplayState = struct {
 
     execution_log_helper: replay.execution.LogHelper,
 
-    replay_votes_ch: *sig.sync.Channel(ParsedVote),
+    replay_votes_channel: *sig.sync.Channel(ParsedVote),
 
     fn deinit(self: *ReplayState) void {
         self.thread_pool.shutdown();
@@ -216,7 +216,7 @@ const ReplayState = struct {
         self.fork_choice.deinit();
         self.latest_validator_votes.deinit(self.allocator);
         self.slot_data.deinit(self.allocator);
-        self.replay_votes_ch.destroy();
+        self.replay_votes_channel.destroy();
     }
 
     fn init(deps: ReplayDependencies) !ReplayState {
@@ -229,7 +229,8 @@ const ReplayState = struct {
         });
         errdefer slot_tracker.deinit(deps.allocator);
 
-        const replay_votes_ch = try sig.sync.Channel(ParsedVote).create(deps.allocator);
+        const replay_votes_channel = try sig.sync.Channel(ParsedVote).create(deps.allocator);
+        errdefer replay_votes_channel.destroy();
 
         var epoch_tracker: EpochTracker = .{ .schedule = deps.epoch_schedule };
         errdefer epoch_tracker.deinit(deps.allocator);
@@ -294,7 +295,7 @@ const ReplayState = struct {
 
             .execution_log_helper = .init(.from(deps.logger)),
 
-            .replay_votes_ch = replay_votes_ch,
+            .replay_votes_channel = replay_votes_channel,
         };
     }
 
@@ -325,7 +326,7 @@ const ReplayState = struct {
             .duplicate_slots_to_repair = &self.slot_data.duplicate_slots_to_repair,
             .purge_repair_slot_counter = &self.slot_data.purge_repair_slot_counter,
             .ancestor_hashes_replay_update_sender = self.senders.ancestor_hashes_replay_update,
-            .replay_votes_ch = self.replay_votes_ch,
+            .replay_votes_channel = self.replay_votes_channel,
         };
     }
 };
@@ -443,8 +444,6 @@ pub fn run(deps: ReplayDependencies) !void {
     var vote_tracker: sig.consensus.VoteTracker = .EMPTY;
     defer vote_tracker.deinit(deps.allocator);
 
-    // TODO: Should `slot_data_provider` itself be wrapped in RwMux to ensure consistency
-    // of the struct itself across multiple threads?
     const slot_data_provider: sig.consensus.vote_listener.SlotDataProvider = .{
         .slot_tracker_rw = &state.slot_tracker_rw,
         .epoch_tracker_rw = &state.epoch_tracker_rw,
@@ -463,7 +462,7 @@ pub fn run(deps: ReplayDependencies) !void {
             .slot_data_provider = slot_data_provider,
             .gossip_table_rw = deps.gossip_table_rw,
             .ledger_ref = .{ .reader = state.ledger.reader, .writer = state.ledger.writer },
-            .receivers = .{ .replay_votes_ch = state.replay_votes_ch },
+            .receivers = .{ .replay_votes_channel = state.replay_votes_channel },
             .senders = .{
                 .verified_vote = verified_vote_channel,
                 .gossip_verified_vote_hash = state.receivers.gossip_verified_vote_hash,

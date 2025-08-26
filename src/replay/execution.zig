@@ -73,7 +73,7 @@ pub const ReplayExecutionState = struct {
     duplicate_slots_to_repair: *DuplicateSlotsToRepair,
     purge_repair_slot_counter: *PurgeRepairSlotCounters,
     ancestor_hashes_replay_update_sender: *sig.sync.Channel(AncestorHashesReplayUpdate),
-    replay_votes_ch: *sig.sync.Channel(ParsedVote),
+    replay_votes_channel: *sig.sync.Channel(ParsedVote),
 };
 
 /// 1. Replays transactions from all the slots that need to be replayed.
@@ -344,7 +344,7 @@ fn replaySlot(state: ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
         committer,
         verify_ticks_params,
         slot_resolver,
-        state.replay_votes_ch,
+        state.replay_votes_channel,
     ) };
 }
 
@@ -699,7 +699,7 @@ const TestReplayStateResources = struct {
             .Channel(AncestorHashesReplayUpdate)
             .init(allocator);
 
-        const replay_votes_ch: *sig.sync.Channel(ParsedVote) = try .create(allocator);
+        const replay_votes_channel: *sig.sync.Channel(ParsedVote) = try .create(allocator);
 
         self.replay_state = ReplayExecutionState{
             .allocator = allocator,
@@ -724,7 +724,7 @@ const TestReplayStateResources = struct {
             .purge_repair_slot_counter = &self.purge_repair_slot_counter,
             .log_helper = &self.log_helper,
             .ancestor_hashes_replay_update_sender = &self.ancestor_hashes_replay_update_channel,
-            .replay_votes_ch = replay_votes_ch,
+            .replay_votes_channel = replay_votes_channel,
         };
 
         return self;
@@ -758,8 +758,8 @@ const TestReplayStateResources = struct {
         self.db.deinit();
         self.registry.deinit();
         self.ancestor_hashes_replay_update_channel.deinit();
-        while (self.replay_state.replay_votes_ch.tryReceive()) |pv| pv.deinit(allocator);
-        self.replay_state.replay_votes_ch.destroy();
+        while (self.replay_state.replay_votes_channel.tryReceive()) |pv| pv.deinit(allocator);
+        self.replay_state.replay_votes_channel.destroy();
 
         allocator.destroy(self);
     }

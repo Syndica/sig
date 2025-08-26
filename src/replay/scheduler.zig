@@ -339,7 +339,7 @@ test "TransactionScheduler: happy path" {
         &thread_pool,
         state.svmParams(),
         &state.exit,
-        state.replay_votes_ch,
+        state.replay_votes_channel,
     );
     defer scheduler.deinit();
 
@@ -414,7 +414,7 @@ test "TransactionScheduler: duplicate batch passes through to svm" {
         &thread_pool,
         state.svmParams(),
         &state.exit,
-        state.replay_votes_ch,
+        state.replay_votes_channel,
     );
     defer scheduler.deinit();
 
@@ -489,7 +489,7 @@ test "TransactionScheduler: failed account locks" {
         &thread_pool,
         state.svmParams(),
         &state.exit,
-        state.replay_votes_ch,
+        state.replay_votes_channel,
     );
     defer scheduler.deinit();
 
@@ -554,7 +554,7 @@ test "TransactionScheduler: signature verification failure" {
         &thread_pool,
         state.svmParams(),
         &state.exit,
-        state.replay_votes_ch,
+        state.replay_votes_channel,
     );
     defer scheduler.deinit();
 
