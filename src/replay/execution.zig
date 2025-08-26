@@ -205,9 +205,9 @@ fn replaySlot(state: ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
         defer ep_lg.unlock();
         break :blk ep.getPtrForSlot(slot) orelse return error.MissingEpoch;
     };
-    const st2, var st2_lg = state.slot_tracker.readWithLock();
-    defer st2_lg.unlock();
-    const slot_info = st2.get(slot) orelse return error.MissingSlot;
+    const slot_tracker, var slot_tracker_lg = state.slot_tracker.readWithLock();
+    defer slot_tracker_lg.unlock();
+    const slot_info = slot_tracker.get(slot) orelse return error.MissingSlot;
 
     const i_am_leader = slot_info.constants.collector_id.equals(&state.my_identity);
 
