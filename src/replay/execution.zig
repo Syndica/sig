@@ -200,11 +200,14 @@ fn replaySlot(state: ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
         return .dead;
     }
 
-    const epoch_info_ptr: *const sig.core.EpochConstants = blk: {
+    var epoch_constants = blk: {
         const ep, var ep_lg = state.epochs.readWithLock();
         defer ep_lg.unlock();
-        break :blk ep.getPtrForSlot(slot) orelse return error.MissingEpoch;
+        const ptr = ep.getPtrForSlot(slot) orelse return error.MissingEpoch;
+        // The epoch constants, is a constant, so we can create a clone to for use in the replay path.
+        break :blk try ptr.clone(state.allocator);
     };
+    defer epoch_constants.deinit(state.allocator);
     const slot_tracker, var slot_tracker_lg = state.slot_tracker.readWithLock();
     defer slot_tracker_lg.unlock();
     const slot_info = slot_tracker.get(slot) orelse return error.MissingSlot;
@@ -224,7 +227,7 @@ fn replaySlot(state: ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
             .last_entry = slot_info.state.blockhash_queue.readField("last_hash") orelse
                 return error.MissingLastHash,
             .i_am_leader = i_am_leader,
-            .epoch_stakes = &epoch_info_ptr.stakes,
+            .epoch_stakes = &epoch_constants.stakes,
             .now = sig.time.Instant.now(),
             .validator_vote_pubkey = state.vote_account,
         });
@@ -305,8 +308,8 @@ fn replaySlot(state: ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
         .account_reader = slot_account_reader,
         .ancestors = &slot_info.constants.ancestors,
         .feature_set = slot_info.constants.feature_set,
-        .rent_collector = &epoch_info_ptr.rent_collector,
-        .epoch_stakes = &epoch_info_ptr.stakes,
+        .rent_collector = &epoch_constants.rent_collector,
+        .epoch_stakes = &epoch_constants.stakes,
         .status_cache = state.status_cache,
     };
 
@@ -322,7 +325,7 @@ fn replaySlot(state: ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
     const verify_ticks_params = replay.confirm_slot.VerifyTicksParams{
         .tick_height = slot_info.state.tickHeight(),
         .max_tick_height = slot_info.constants.max_tick_height,
-        .hashes_per_tick = epoch_info_ptr.hashes_per_tick,
+        .hashes_per_tick = epoch_constants.hashes_per_tick,
         .slot = slot,
         .slot_is_full = slot_is_full,
         .tick_hash_count = &confirmation_progress.tick_hash_count,
