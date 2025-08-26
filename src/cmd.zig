@@ -100,10 +100,7 @@ pub fn main() !void {
         const out = std.io.getStdOut().writer();
         const ver = sig.version.CURRENT_CLIENT_VERSION;
 
-        try out.print(
-            "sig {d}.{d}.{d} (commit:{x}, feat:{x}, client:{d})\n\n",
-            .{ ver.major, ver.minor, ver.patch, ver.commit, ver.feature_set, ver.client },
-        );
+        try out.print("sig {d}.{d}.{d}\n\n", .{ ver.major, ver.minor, ver.patch });
 
         // Render the top-level help.
         _ = try parser.parse(gpa, "sig", tty, out, &.{"--help"});
