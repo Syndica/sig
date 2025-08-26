@@ -204,7 +204,7 @@ const ReplayState = struct {
             @panic("Slot tracker deinit while in use");
         slots.get().deinit(self.allocator);
 
-        var epochs = self.epochs_tracker_rw.tryRead() orelse
+        var epochs = self.epoch_tracker_rw.tryRead() orelse
             @panic("Epoch tracker deinit while in use");
         epochs.get().deinit(self.allocator);
 
