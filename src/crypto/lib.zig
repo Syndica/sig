@@ -18,7 +18,7 @@ pub const ed25519 = struct {
     pub const pippenger = @import("pippenger.zig");
 };
 
-/// Extern definition of P256-Keccak256 signature.
+/// Extern definition of Ecdsa signature.
 pub const EcdsaSignature = extern struct {
     r: [32]u8,
     s: [32]u8,
