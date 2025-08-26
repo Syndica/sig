@@ -15,43 +15,8 @@ const VariantCounter = sig.prometheus.VariantCounter;
 
 const VerifiedMerkleRoots = sig.utils.lru.LruCache(.non_locking, sig.core.Hash, void);
 
-/// Analogous to [run_shred_sigverify](https://github.com/anza-xyz/agave/blob/8c5a33a81a0504fd25d0465bed35d153ff84819f/turbine/src/sigverify_shreds.rs#L82)
-pub fn runShredVerifier(
-    exit: *Atomic(bool),
-    registry: *Registry(.{}),
-    /// shred receiver --> me
-    unverified_shred_receiver: *Channel(Packet),
-    /// me --> shred processor
-    verified_shred_sender: *Channel(Packet),
-    /// me --> retransmit service
-    maybe_retransmit_shred_sender: ?*Channel(Packet),
-    leader_schedule: SlotLeaders,
-) !void {
-    const metrics = try registry.initStruct(Metrics);
-    var verified_merkle_roots = try VerifiedMerkleRoots.init(std.heap.c_allocator, 1024);
-    while (true) {
-        unverified_shred_receiver.waitToReceive(.{ .unordered = exit }) catch break;
-
-        var packet_count: usize = 0;
-        while (unverified_shred_receiver.tryReceive()) |packet| {
-            packet_count += 1;
-            metrics.received_count.inc();
-            if (verifyShred(&packet, leader_schedule, &verified_merkle_roots, metrics)) |_| {
-                metrics.verified_count.inc();
-                try verified_shred_sender.send(packet);
-                if (maybe_retransmit_shred_sender) |retransmit_shred_sender| {
-                    try retransmit_shred_sender.send(packet);
-                }
-            } else |err| {
-                metrics.fail.observe(err);
-            }
-        }
-        metrics.batch_size.observe(packet_count);
-    }
-}
-
 /// Analogous to [verify_shred_cpu](https://github.com/anza-xyz/agave/blob/83e7d84bcc4cf438905d07279bc07e012a49afd9/ledger/src/sigverify_shreds.rs#L35)
-fn verifyShred(
+pub fn verifyShred(
     packet: *const Packet,
     leader_schedule: SlotLeaders,
     verified_merkle_roots: *VerifiedMerkleRoots,
@@ -83,7 +48,7 @@ pub const ShredVerificationFailure = error{
     failed_caching,
 };
 
-const Metrics = struct {
+pub const Metrics = struct {
     received_count: *Counter,
     verified_count: *Counter,
     cache_miss_count: *Counter,

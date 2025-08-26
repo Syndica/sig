@@ -384,6 +384,7 @@ const PerThread = struct {
             if (bytes_read == 0) return error.SocketClosed;
             packet.addr = recv_meta.sender;
             packet.size = bytes_read;
+            packet.flags = st.flags;
             try st.channel.send(packet);
         }
     }
@@ -437,6 +438,7 @@ pub const SocketThread = struct {
     exit: ExitCondition,
     direction: Direction,
     handle: SocketBackend.Handle,
+    flags: Packet.Flags,
 
     const Direction = enum { sender, receiver };
 
@@ -447,7 +449,7 @@ pub const SocketThread = struct {
         outgoing_channel: *Channel(Packet),
         exit: ExitCondition,
     ) !*SocketThread {
-        return spawn(allocator, logger, socket, outgoing_channel, exit, .sender);
+        return spawn(allocator, logger, socket, outgoing_channel, exit, .sender, .empty);
     }
 
     pub fn spawnReceiver(
@@ -457,7 +459,19 @@ pub const SocketThread = struct {
         incoming_channel: *Channel(Packet),
         exit: ExitCondition,
     ) !*SocketThread {
-        return spawn(allocator, logger, socket, incoming_channel, exit, .receiver);
+        return spawn(allocator, logger, socket, incoming_channel, exit, .receiver, .empty);
+    }
+
+    /// Every packet will include the specified flags
+    pub fn spawnReceiverFlagged(
+        allocator: Allocator,
+        logger: Logger,
+        socket: UdpSocket,
+        incoming_channel: *Channel(Packet),
+        exit: ExitCondition,
+        flags: Packet.Flags,
+    ) !*SocketThread {
+        return spawn(allocator, logger, socket, incoming_channel, exit, .receiver, flags);
     }
 
     fn spawn(
@@ -467,6 +481,7 @@ pub const SocketThread = struct {
         channel: *Channel(Packet),
         exit: ExitCondition,
         direction: Direction,
+        flags: Packet.Flags,
     ) !*SocketThread {
         const self = try allocator.create(SocketThread);
         errdefer allocator.destroy(self);
@@ -479,6 +494,7 @@ pub const SocketThread = struct {
             .exit = exit,
             .direction = direction,
             .handle = undefined,
+            .flags = flags,
         };
 
         try SocketBackend.spawn(self);

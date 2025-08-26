@@ -104,26 +104,14 @@ pub fn start(
         .logger = .from(deps.logger),
         .repair_socket = repair_socket,
         .turbine_socket = turbine_socket,
-        .unverified_shred_sender = unverified_shred_channel,
         .shred_version = deps.my_shred_version,
-        .metrics = try deps.registry.initStruct(ShredReceiverMetrics),
+        .registry = deps.registry,
         .root_slot = conf.start_slot -| 1,
+        .verified_shred_sender = shreds_to_insert_channel,
+        .maybe_retransmit_shred_sender = if (conf.retransmit) retransmit_channel else null,
+        .leader_schedule = deps.epoch_context_mgr.slotLeaders(),
     };
     try service_manager.spawn("Shred Receiver", ShredReceiver.run, .{shred_receiver});
-
-    // verifier (thread)
-    try service_manager.spawn(
-        "Shred Verifier",
-        shred_network.shred_verifier.runShredVerifier,
-        .{
-            deps.exit,
-            deps.registry,
-            unverified_shred_channel,
-            shreds_to_insert_channel,
-            if (conf.retransmit) retransmit_channel else null,
-            deps.epoch_context_mgr.slotLeaders(),
-        },
-    );
 
     // tracker (shared state, internal to Shred Network)
     const shred_tracker = try arena.create(BasicShredTracker);
