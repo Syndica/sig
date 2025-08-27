@@ -443,6 +443,8 @@ test "agave: zero weights" {
 }
 
 test "agave: sanity check" {
+    if (!sig.build_options.long_tests) return error.SkipZigTest;
+
     const weights = [_]i32{ 1, 0, 1000, 0, 0, 10, 100, 0 };
 
     var seed = [_]u8{1} ** 32;
@@ -647,7 +649,9 @@ test "agave: paranoid" {
     var prng = std.Random.DefaultPrng.init(0);
     const random = prng.random();
 
-    for (0..1351) |size| {
+    const end = if (sig.build_options.long_tests) 1351 else 3;
+
+    for (0..end) |size| {
         // Create random weights
         var weights = try std.ArrayList(u64).initCapacity(std.testing.allocator, size);
         defer weights.deinit();

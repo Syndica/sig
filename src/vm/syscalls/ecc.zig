@@ -625,6 +625,13 @@ pub fn secp256k1Recover(
     const cost = tc.compute_budget.secp256k1_recover_cost;
     try tc.consumeCompute(cost);
 
+    const recovery_result = try memory_map.translateSlice(
+        u8,
+        .mutable,
+        result_addr,
+        64,
+        tc.getCheckAligned(),
+    );
     const hash = try memory_map.translateType(
         [32]u8,
         .constant,
@@ -635,13 +642,6 @@ pub fn secp256k1Recover(
         sig.crypto.EcdsaSignature,
         .constant,
         signature_addr,
-        tc.getCheckAligned(),
-    );
-    const recovery_result = try memory_map.translateSlice(
-        u8,
-        .mutable,
-        result_addr,
-        64,
         tc.getCheckAligned(),
     );
 

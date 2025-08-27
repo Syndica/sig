@@ -839,8 +839,20 @@ pub const AccountsDB = struct {
 
             if (n_accounts_this_slot == 0) continue;
 
-            const references_buf, const ref_global_index =
-                try reference_manager.alloc(n_accounts_this_slot);
+            const references_buf, const ref_global_index = reference_manager.alloc(
+                n_accounts_this_slot,
+            ) catch |err| switch (err) {
+                error.AllocFailed, error.AllocTooBig => blk: {
+                    self.logger.warn().log(
+                        "ref manager AllocFailed: n_accounts_estimate too low? Expanding by 50%",
+                    );
+                    try reference_manager.expandCapacity(
+                        @max(n_accounts_estimate / 2, n_accounts_this_slot),
+                    );
+                    break :blk try reference_manager.alloc(n_accounts_this_slot);
+                },
+                else => return err,
+            };
 
             try reference_bufs.append(references_buf);
             try global_indices.append(ref_global_index);
@@ -3419,7 +3431,8 @@ pub fn unpackSnapshotFilePair(
     }
 }
 
-pub fn loadTestAccountsDB(
+/// Loads from a snapshot, which takes time. For leaner accountsdb, use initForTest
+fn loadTestAccountsDBFromSnapshot(
     allocator: std.mem.Allocator,
     use_disk: bool,
     n_threads: u32,
@@ -3427,6 +3440,7 @@ pub fn loadTestAccountsDB(
     /// The directory into which the snapshots are unpacked, and
     /// the `snapshots_dir` for the returned `AccountsDB`.
     snapshot_dir: std.fs.Dir,
+    accounts_per_file_estimate: u64,
 ) !struct { AccountsDB, FullAndIncrementalManifest } {
     comptime std.debug.assert(builtin.is_test); // should only be used in tests
 
@@ -3454,7 +3468,7 @@ pub fn loadTestAccountsDB(
         manifest.accounts_db_fields,
         n_threads,
         allocator,
-        500,
+        accounts_per_file_estimate,
     );
 
     return .{ accounts_db, full_inc_manifest };
@@ -3520,7 +3534,8 @@ test "geyser stream on load" {
         .geyser_writer = geyser_writer,
         .gossip_view = null,
         .index_allocation = .ram,
-        .number_of_index_shards = 4,
+        .number_of_index_shards = 1,
+        .buffer_pool_frames = 2,
     });
     defer accounts_db.deinit();
 
@@ -3528,21 +3543,16 @@ test "geyser stream on load" {
         snapshot.accounts_db_fields,
         1,
         allocator,
-        500,
+        100,
     );
 }
 
-test "write and read an account" {
+test "write and read an account - basic" {
     const allocator = std.testing.allocator;
 
-    var tmp_dir_root = std.testing.tmpDir(.{});
-    defer tmp_dir_root.cleanup();
-    const snapshot_dir = tmp_dir_root.dir;
-
-    var accounts_db, const full_inc_manifest =
-        try loadTestAccountsDB(allocator, false, 1, .noop, snapshot_dir);
+    var accounts_db, var dir = try AccountsDB.initForTest(allocator);
     defer accounts_db.deinit();
-    defer full_inc_manifest.deinit(allocator);
+    defer dir.cleanup();
 
     var prng = std.Random.DefaultPrng.init(0);
     const pubkey = Pubkey.initRandom(prng.random());
@@ -3575,14 +3585,9 @@ test "write and read an account" {
 test "write and read an account (write single + read with ancestors)" {
     const allocator = std.testing.allocator;
 
-    var tmp_dir_root = std.testing.tmpDir(.{});
-    defer tmp_dir_root.cleanup();
-    const snapshot_dir = tmp_dir_root.dir;
-
-    var accounts_db, const full_inc_manifest =
-        try loadTestAccountsDB(allocator, false, 1, .noop, snapshot_dir);
+    var accounts_db, var dir = try AccountsDB.initForTest(allocator);
     defer accounts_db.deinit();
-    defer full_inc_manifest.deinit(allocator);
+    defer dir.cleanup();
 
     var prng = std.Random.DefaultPrng.init(0);
     const pubkey = Pubkey.initRandom(prng.random());
@@ -3710,7 +3715,7 @@ test "load and validate BankFields from test snapshot" {
     try full_manifest.bank_fields.validate(&genesis_config);
 }
 
-test "load and validate from test snapshot" {
+test "load and validate from test snapshot - single threaded" {
     const allocator = std.testing.allocator;
 
     var tmp_dir_root = std.testing.tmpDir(.{});
@@ -3718,7 +3723,7 @@ test "load and validate from test snapshot" {
     const snapshot_dir = tmp_dir_root.dir;
 
     var accounts_db, const full_inc_manifest =
-        try loadTestAccountsDB(allocator, false, 1, .noop, snapshot_dir);
+        try loadTestAccountsDBFromSnapshot(allocator, false, 1, .noop, snapshot_dir, 500);
     defer {
         accounts_db.deinit();
         full_inc_manifest.deinit(allocator);
@@ -3738,7 +3743,10 @@ test "load and validate from test snapshot" {
     });
 }
 
-test "load and validate from test snapshot using disk index" {
+test "load and validate from test snapshot - disk index" {
+    // slow, and doesn't add a lot on top of the single threaded test
+    if (!sig.build_options.long_tests) return error.SkipZigTest;
+
     const allocator = std.testing.allocator;
 
     var tmp_dir_root = std.testing.tmpDir(.{});
@@ -3746,7 +3754,7 @@ test "load and validate from test snapshot using disk index" {
     const snapshot_dir = tmp_dir_root.dir;
 
     var accounts_db, const full_inc_manifest =
-        try loadTestAccountsDB(allocator, false, 1, .noop, snapshot_dir);
+        try loadTestAccountsDBFromSnapshot(allocator, true, 1, .noop, snapshot_dir, 500);
     defer {
         accounts_db.deinit();
         full_inc_manifest.deinit(allocator);
@@ -3766,7 +3774,10 @@ test "load and validate from test snapshot using disk index" {
     });
 }
 
-test "load and validate from test snapshot parallel" {
+test "load and validate from test snapshot - parallel" {
+    // slow, and doesn't add a lot on top of the single threaded test
+    if (!sig.build_options.long_tests) return error.SkipZigTest;
+
     const allocator = std.testing.allocator;
 
     var tmp_dir_root = std.testing.tmpDir(.{});
@@ -3774,7 +3785,7 @@ test "load and validate from test snapshot parallel" {
     const snapshot_dir = tmp_dir_root.dir;
 
     var accounts_db, const full_inc_manifest =
-        try loadTestAccountsDB(allocator, false, 2, .noop, snapshot_dir);
+        try loadTestAccountsDBFromSnapshot(allocator, false, 2, .noop, snapshot_dir, 500);
     defer {
         accounts_db.deinit();
         full_inc_manifest.deinit(allocator);
@@ -3794,36 +3805,7 @@ test "load and validate from test snapshot parallel" {
     });
 }
 
-test "load clock sysvar" {
-    const allocator = std.testing.allocator;
-
-    var tmp_dir_root = std.testing.tmpDir(.{});
-    defer tmp_dir_root.cleanup();
-    const snapshot_dir = tmp_dir_root.dir;
-
-    var accounts_db, const full_inc_manifest =
-        try loadTestAccountsDB(allocator, false, 1, .noop, snapshot_dir);
-    defer {
-        accounts_db.deinit();
-        full_inc_manifest.deinit(allocator);
-    }
-
-    const full = full_inc_manifest.full;
-    const inc = full_inc_manifest.incremental;
-    const expected_clock: sysvar.Clock = .{
-        .slot = (inc orelse full).bank_fields.slot,
-        .epoch_start_timestamp = 1733349736,
-        .epoch = (inc orelse full).bank_fields.epoch,
-        .leader_schedule_epoch = 1,
-        .unix_timestamp = 1733350255,
-    };
-    try std.testing.expectEqual(
-        expected_clock,
-        try accounts_db.getTypeFromAccount(allocator, sysvar.Clock, &sysvar.Clock.ID),
-    );
-}
-
-test "load other sysvars" {
+test "load sysvars" {
     var gpa_state: std.heap.DebugAllocator(.{ .stack_trace_frames = 64 }) = .init;
     defer _ = gpa_state.deinit();
     const allocator = gpa_state.allocator();
@@ -3833,10 +3815,26 @@ test "load other sysvars" {
     const snapshot_dir = tmp_dir_root.dir;
 
     var accounts_db, const full_inc_manifest =
-        try loadTestAccountsDB(allocator, false, 1, .noop, snapshot_dir);
+        try loadTestAccountsDBFromSnapshot(allocator, false, 1, .noop, snapshot_dir, 500);
     defer {
         accounts_db.deinit();
         full_inc_manifest.deinit(allocator);
+    }
+
+    { // load clock sysvar
+        const full = full_inc_manifest.full;
+        const inc = full_inc_manifest.incremental;
+        const expected_clock: sysvar.Clock = .{
+            .slot = (inc orelse full).bank_fields.slot,
+            .epoch_start_timestamp = 1733349736,
+            .epoch = (inc orelse full).bank_fields.epoch,
+            .leader_schedule_epoch = 1,
+            .unix_timestamp = 1733350255,
+        };
+        try std.testing.expectEqual(
+            expected_clock,
+            try accounts_db.getTypeFromAccount(allocator, sysvar.Clock, &sysvar.Clock.ID),
+        );
     }
 
     const SlotAndHash = sig.core.hash.SlotAndHash;
@@ -4890,4 +4888,42 @@ test "expandSlotRefsAndInsert double insert failure" {
         error.InsertIndexFailed,
         accounts_db.expandSlotRefsAndInsert(1, &.{Pubkey.ZEROES}),
     );
+}
+
+test "loadAndVerifyAccountsFiles ref manager expand" {
+    const allocator = std.testing.allocator;
+
+    var tmp_dir_root = std.testing.tmpDir(.{});
+    defer tmp_dir_root.cleanup();
+    const snapshot_dir = tmp_dir_root.dir;
+
+    const accounts_per_file_estimate = 3; // deliberate under-estimate
+
+    var accounts_db, const full_inc_manifest = try loadTestAccountsDBFromSnapshot(
+        allocator,
+        false,
+        1,
+        .noop,
+        snapshot_dir,
+        accounts_per_file_estimate,
+    );
+    defer {
+        accounts_db.deinit();
+        full_inc_manifest.deinit(allocator);
+    }
+
+    const n_slots = blk: {
+        const slot_reference_map, var slot_reference_map_lg =
+            accounts_db.account_index.slot_reference_map.readWithLock();
+        defer slot_reference_map_lg.unlock();
+
+        break :blk slot_reference_map.count();
+    };
+
+    const ref_capacity = accounts_db.account_index.reference_manager.capacity;
+
+    // For this test, accounts per file == accounts per slot.
+    // If we've made more account ref capacity per slot than we've estimated, we have expanded our
+    // reference manager.
+    try std.testing.expect(ref_capacity / n_slots > accounts_per_file_estimate);
 }
