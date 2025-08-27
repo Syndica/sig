@@ -144,18 +144,21 @@ pub fn start(
     try defers.deferCall(sig.ledger.ShredInserter.deinit, .{shred_inserter});
 
     // processor (thread)
+    const processor = shred_network.shred_processor;
     try service_manager.spawn(
         "Shred Processor",
-        shred_network.shred_processor.runShredProcessor,
+        processor.runShredProcessor,
         .{
             deps.allocator,
-            deps.exit,
-            shred_network.shred_processor.Logger.from(deps.logger),
+            processor.Logger.from(deps.logger),
             deps.registry,
-            shreds_to_insert_channel,
-            shred_tracker,
-            shred_inserter,
-            deps.epoch_context_mgr.slotLeaders(),
+            deps.exit,
+            processor.Params{
+                .verified_shred_receiver = shreds_to_insert_channel,
+                .tracker = shred_tracker,
+                .inserter = shred_inserter,
+                .leader_schedule = deps.epoch_context_mgr.slotLeaders(),
+            },
         },
     );
 
