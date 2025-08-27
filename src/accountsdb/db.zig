@@ -2625,7 +2625,7 @@ pub const AccountsDB = struct {
         const zstd_write_ctx = zstd.writerCtx(archive_file.writer(), &zstd_compressor, zstd_buffer);
         try writeSnapshotTarWithFields(
             zstd_write_ctx.writer(),
-            sig.version.CURRENT_CLIENT_VERSION,
+            .CURRENT,
             StatusCache.EMPTY,
             &manifest,
             file_map,
@@ -2865,7 +2865,7 @@ pub const AccountsDB = struct {
         const zstd_write_ctx = zstd.writerCtx(archive_file.writer(), &zstd_compressor, zstd_buffer);
         try writeSnapshotTarWithFields(
             zstd_write_ctx.writer(),
-            sig.version.CURRENT_CLIENT_VERSION,
+            .CURRENT,
             StatusCache.EMPTY,
             &manifest,
             file_map,

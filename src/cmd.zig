@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const build_options = @import("build-options");
 const cli = @import("cli");
 const sig = @import("sig.zig");
 const config = @import("config.zig");
@@ -79,11 +80,13 @@ pub fn main() !void {
     defer std.process.argsFree(gpa, argv);
 
     const parser = cli.Parser(Cmd, Cmd.cmd_info);
+    const tty_config = std.io.tty.detectConfig(std.io.getStdOut());
+    const stdout = std.io.getStdOut().writer();
     const cmd = try parser.parse(
         gpa,
         "sig",
-        std.io.tty.detectConfig(std.io.getStdOut()),
-        std.io.getStdOut().writer(),
+        tty_config,
+        stdout,
         argv[1..],
     ) orelse return;
     defer parser.free(gpa, cmd);
@@ -96,12 +99,8 @@ pub fn main() !void {
 
     // If no subcommand was provided, print a friendly header and help information.
     const subcmd = cmd.subcmd orelse {
-        const tty = std.io.tty.detectConfig(std.io.getStdOut());
-        const out = std.io.getStdOut().writer();
-        const ver = sig.version.CURRENT_CLIENT_VERSION;
-        try out.print("sig {d}.{d}.{d}\n\n", .{ ver.major, ver.minor, ver.patch });
         // Render the top-level help.
-        _ = try parser.parse(gpa, "sig", tty, out, &.{"--help"});
+        _ = try parser.parse(gpa, "sig", tty_config, stdout, &.{"--help"});
         return;
     };
 
@@ -220,10 +219,12 @@ const Cmd = struct {
 
     const cmd_info: cli.CommandInfo(@This()) = .{
         .help = .{
-            .short =
-            \\Sig is a Solana client implementation written in Zig.
-            \\This is still a WIP, PRs welcome.
-            ,
+            .short = std.fmt.comptimePrint(
+                \\Version: {}
+                \\
+                \\Sig is a Solana validator client written in Zig. The project is still a
+                \\work in progress so contributions are welcome.
+            , .{build_options.version}),
             .long = null,
         },
         .sub = .{
