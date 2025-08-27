@@ -1861,11 +1861,16 @@ pub const AccountsDB = struct {
             return null;
         defer lock.unlock();
 
-        const max_ref = greatestInAncestors(
-            head_ref.ref_ptr,
-            ancestors,
-            self.largest_flushed_slot.load(.monotonic),
-        ) orelse return null;
+        const max_ref = blk: {
+            _, var ref_map_lg = self.account_index.slot_reference_map.readWithLock();
+            defer ref_map_lg.unlock();
+
+            break :blk greatestInAncestors(
+                head_ref.ref_ptr,
+                ancestors,
+                self.largest_flushed_slot.load(.monotonic),
+            ) orelse return null;
+        };
 
         return try self.getAccountFromRef(max_ref);
     }
