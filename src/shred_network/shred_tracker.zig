@@ -210,7 +210,7 @@ pub const BasicShredTracker = struct {
                 continue;
             }
 
-            var slot_report = try slot_reports.addOne();
+            const slot_report = try slot_reports.addOne();
             slot_report.slot = slot;
             try monitored_slot.identifyMissing(&slot_report.missing_shreds);
             if (monitored_slot.is_complete) {
