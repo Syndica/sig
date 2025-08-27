@@ -23,7 +23,7 @@ kcov \
     --include-pattern=src/utils/allocators.zig \
     --exclude-pattern=$HOME/.cache \
     kcov-output/ \
-    ./zig-out/bin/fuzz allocators 19 50_000
+    ./zig-out/bin/fuzz --seed 19 allocators 50_000
     
 # open report
 echo "=> Opening kcov-output/index.html" 
