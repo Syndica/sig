@@ -559,7 +559,7 @@ fn accumulateAndCheckLoadedAccountDataSize(
     }
 }
 
-// [agave] https://github.com/firedancer-io/agave/blob/agave-v2.3.7-patches/svm/src/account_loader.rs#L880
+// [agave] https://github.com/anza-xyz/agave/blob/996570bcbe7acc4dfd0a6931d024a11a3b4de7a3/svm/src/account_loader.rs#L784
 fn constructInstructionsAccount(
     allocator: Allocator,
     transaction: *const RuntimeTransaction,
