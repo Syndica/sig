@@ -2,6 +2,7 @@
 //!     ./zig-out/bin/fuzz <seed> <num_messages>
 const std = @import("std");
 const sig = @import("../sig.zig");
+const cli = @import("cli");
 
 const bincode = sig.bincode;
 
@@ -36,31 +37,38 @@ const SLEEP_TIME = Duration.zero();
 
 const Logger = sig.trace.Logger("gossip.fuzz_service");
 
-pub fn run(seed: u64, args: []const []const u8) !void {
-    var gpa: std.heap.DebugAllocator(.{}) = .init;
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+pub const RunCmd = struct {
+    max_messages: ?u64,
 
-    // logs
-    var std_logger = try sig.trace.ChannelPrintLogger.init(.{
-        .allocator = std.heap.c_allocator,
-        .max_level = sig.trace.Level.debug,
-        .max_buffer = 1 << 20,
-    }, null);
-    defer std_logger.deinit();
+    pub const cmd_info: cli.CommandInfo(@This()) = .{
+        .help = .{
+            .short = "Fuzz gossip.",
+            .long = null,
+        },
+        .sub = .{
+            .max_messages = .{
+                .kind = .named,
+                .name_override = null,
+                .alias = .m,
+                .default_value = null,
+                .config = {},
+                .help = "Maximum number of messages before exiting the fuzzer.",
+            },
+        },
+    };
+};
 
+pub fn run(
+    allocator: std.mem.Allocator,
+    seed: u64,
+    args: RunCmd,
+) !void {
     // setup randomness
-    var prng = std.Random.DefaultPrng.init(seed);
+    var prng_state: std.Random.DefaultPrng = .init(seed);
+    const prng = prng_state.random();
 
     // parse cli args to define where to send packets
-    const maybe_max_messages_string: ?[]const u8 = if (args.len == 0) null else args[0];
-    const maybe_max_messages = blk: {
-        if (maybe_max_messages_string) |max_messages_str| {
-            break :blk try std.fmt.parseInt(u64, max_messages_str, 10);
-        } else {
-            break :blk null;
-        }
-    };
+    const maybe_max_messages = args.max_messages;
 
     // we need two clients:
     //  1) fuzz_client: attacker
@@ -113,12 +121,7 @@ pub fn run(seed: u64, args: []const []const u8) !void {
     }
 
     // start fuzzing
-    try fuzz(
-        dirty_allocator,
-        maybe_max_messages,
-        prng.random(),
-        fuzz_client,
-    );
+    try fuzz(dirty_allocator, maybe_max_messages, prng, fuzz_client);
 }
 
 pub fn fuzz(
