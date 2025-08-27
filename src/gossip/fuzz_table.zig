@@ -1,6 +1,6 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
-const network = @import("zig-network");
+const cli = @import("cli");
 
 const AtomicBool = std.atomic.Value(bool);
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
@@ -18,30 +18,37 @@ const getVariant = sig.utils.types.getVariant;
 
 const TRIM_INTERVAL = Duration.fromSecs(2);
 
-pub fn run(seed: u64, args: []const []const u8) !void {
-    const maybe_max_actions_string: ?[]const u8 = if (args.len == 0) null else args[0];
-    const maybe_max_actions = blk: {
-        if (maybe_max_actions_string) |max_actions_str| {
-            break :blk try std.fmt.parseInt(usize, max_actions_str, 10);
-        } else {
-            break :blk null;
-        }
+pub const RunCmd = struct {
+    max_actions: ?u64,
+
+    pub const cmd_info: cli.CommandInfo(RunCmd) = .{
+        .help = .{
+            .short = "Fuzz the gossip table.",
+            .long = null,
+        },
+        .sub = .{
+            .max_actions = .{
+                .kind = .named,
+                .name_override = null,
+                .alias = .m,
+                .default_value = null,
+                .config = {},
+                .help = "Maximum number of actions to take before exiting the fuzzer.",
+            },
+        },
     };
+};
 
-    // setup
-    var gpa_state: std.heap.DebugAllocator(.{ .safety = true }) = .init;
-    defer _ = gpa_state.deinit();
-    const allocator = gpa_state.allocator();
+pub fn run(
+    allocator: std.mem.Allocator,
+    logger: sig.trace.Logger("gossip_table.fuzz"),
+    seed: u64,
+    run_cmd: RunCmd,
+) !void {
+    const maybe_max_actions = run_cmd.max_actions;
 
-    // NOTE: change to trace for full logs
-    var std_logger = sig.trace.DirectPrintLogger.init(
-        allocator,
-        .debug,
-    );
-    const logger = std_logger.logger("gossip_table.fuzz");
-
-    var prng = std.Random.DefaultPrng.init(seed);
-    const random = prng.random();
+    var prng_state: std.Random.DefaultPrng = .init(seed);
+    const random = prng_state.random();
 
     // init gossip table
     var gossip_table = try GossipTable.init(allocator, allocator);
