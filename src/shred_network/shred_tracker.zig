@@ -11,10 +11,11 @@ const Instant = sig.time.Instant;
 const Registry = sig.prometheus.Registry;
 const Slot = sig.core.Slot;
 
+const assert = std.debug.assert;
+
 const Logger = sig.trace.Logger("shred_tracker");
 
 const MAX_SHREDS_PER_SLOT: usize = sig.ledger.shred.MAX_SHREDS_PER_SLOT;
-
 const MIN_SLOT_AGE_TO_REPORT_AS_MISSING: Duration = Duration.fromMillis(600);
 
 pub const Range = struct {
@@ -212,6 +213,10 @@ pub const BasicShredTracker = struct {
             var slot_report = try slot_reports.addOne();
             slot_report.slot = slot;
             try monitored_slot.identifyMissing(&slot_report.missing_shreds);
+            if (monitored_slot.is_complete) {
+                assert(slot_report.missing_shreds.items.len == 0);
+                slot_reports.drop(1);
+            }
         }
 
         return true;
@@ -383,7 +388,7 @@ const ShredSet = std.bit_set.ArrayBitSet(usize, MAX_SHREDS_PER_SLOT / 10);
 
 const bit_set = struct {
     pub fn setAndWasSet(self: *ShredSet, index: usize) bool {
-        std.debug.assert(index < ShredSet.bit_length);
+        assert(index < ShredSet.bit_length);
         const mask_bit = maskBit(index);
         const mask_index = maskIndex(index);
         defer self.masks[mask_index] |= mask_bit;
@@ -441,10 +446,10 @@ const MonitoredSlot = struct {
         const max_seen = self.max_seen.?; // was just set above if null
 
         if (self.last_shred) |last| {
-            std.debug.assert(last <= max_seen);
-            std.debug.assert(last >= self.unique_observed_count -| 1);
+            assert(last <= max_seen);
+            assert(last >= self.unique_observed_count -| 1);
             if (self.unique_observed_count == last) {
-                std.debug.assert(last == max_seen);
+                assert(last == max_seen);
                 self.is_complete = true;
                 return true;
             }
