@@ -33,7 +33,7 @@ pub fn processEdgeCases(
         my_pubkey: sig.core.Pubkey,
         tpu_has_bank: bool,
 
-        slot_tracker_rw: *sig.sync.RwMux(SlotTracker),
+        slot_tracker: *const SlotTracker,
         progress: *const ProgressMap,
         fork_choice: *HeaviestSubtreeForkChoice,
         ledger: *sig.ledger.LedgerResultWriter,
@@ -51,10 +51,7 @@ pub fn processEdgeCases(
     // have the wrong version. Our version was dead or pruned.
     // Signalled by ancestor_hashes_service.
     timer.reset();
-    // TODO: should we be holding the lock here? or pass the RwMux to the individual functions
-    // and have the locks be aquired at the site where they are accessed?
-    const slot_tracker, var slot_tracker_lg = params.slot_tracker_rw.readWithLock();
-    defer slot_tracker_lg.unlock();
+    const slot_tracker = params.slot_tracker;
 
     try processAncestorHashesDuplicateSlots(
         allocator,

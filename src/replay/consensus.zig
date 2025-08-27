@@ -41,8 +41,8 @@ pub const ConsensusDependencies = struct {
     allocator: Allocator,
     replay_tower: *ReplayTower,
     progress_map: *ProgressMap,
-    slot_tracker_rw: *sig.sync.RwMux(SlotTracker),
-    epoch_tracker_rw: *sig.sync.RwMux(EpochTracker),
+    slot_tracker: *SlotTracker,
+    epoch_tracker: *const EpochTracker,
     fork_choice: *ForkChoice,
     ledger_reader: *LedgerReader,
     ledger_result_writer: *LedgerResultWriter,
@@ -62,32 +62,19 @@ pub fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
     var epoch_stakes_map: EpochStakesMap = .empty;
     errdefer epoch_stakes_map.deinit(deps.allocator);
 
-    // Get the count and schedule while holding the lock
-    const epochs_count, const schedule = blk: {
-        const epoch_tracker, var lg = deps.epoch_tracker_rw.readWithLock();
-        defer lg.unlock();
-        break :blk .{ epoch_tracker.epochs.count(), epoch_tracker.schedule };
-    };
-
-    try epoch_stakes_map.ensureTotalCapacity(deps.allocator, epochs_count);
+    try epoch_stakes_map.ensureTotalCapacity(deps.allocator, deps.epoch_tracker.epochs.count());
     defer epoch_stakes_map.deinit(deps.allocator);
 
-    // Copy the epochs data.
-    {
-        const epoch_tracker, var lg = deps.epoch_tracker_rw.readWithLock();
-        defer lg.unlock();
-
-        for (epoch_tracker.epochs.keys(), epoch_tracker.epochs.values()) |key, constants| {
-            epoch_stakes_map.putAssumeCapacity(key, constants.stakes);
-        }
+    for (deps.epoch_tracker.epochs.keys(), deps.epoch_tracker.epochs.values()) |key, constants| {
+        epoch_stakes_map.putAssumeCapacity(key, constants.stakes);
     }
 
     _ = try computeBankStats(
         deps.allocator,
         deps.vote_account,
         deps.ancestors,
-        deps.slot_tracker_rw,
-        &schedule,
+        deps.slot_tracker,
+        &deps.epoch_tracker.schedule,
         &epoch_stakes_map,
         deps.progress_map,
         deps.fork_choice,
@@ -102,7 +89,7 @@ pub fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
     const heaviest_slot_on_same_voted_fork =
         (try deps.fork_choice.heaviestSlotOnSameVotedFork(deps.replay_tower)) orelse null;
 
-    const heaviest_epoch: Epoch = schedule.getEpoch(heaviest_slot);
+    const heaviest_epoch: Epoch = deps.epoch_tracker.schedule.getEpoch(heaviest_slot);
 
     const now = sig.time.Instant.now();
     var last_vote_refresh_time: LastVoteRefreshTime = .{
@@ -144,8 +131,7 @@ pub fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
 
     // Vote on the fork
     if (maybe_voted_slot) |voted| {
-        const slot_tracker, var slot_tracker_lg = deps.slot_tracker_rw.readWithLock();
-        defer slot_tracker_lg.unlock();
+        const slot_tracker = deps.slot_tracker;
         const found_slot_info = slot_tracker.get(voted.slot) orelse
             return error.MissingSlot;
 
@@ -157,7 +143,7 @@ pub fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
             deps.ledger_result_writer,
             voted.slot,
             voted_hash,
-            deps.slot_tracker_rw,
+            deps.slot_tracker,
             deps.replay_tower,
             deps.progress_map,
             deps.fork_choice,
@@ -336,7 +322,7 @@ fn handleVotableBank(
     ledger_result_writer: *LedgerResultWriter,
     vote_slot: Slot,
     vote_hash: Hash,
-    slot_tracker_rw: *sig.sync.RwMux(SlotTracker),
+    slot_tracker: *SlotTracker,
     replay_tower: *ReplayTower,
     progress: *ProgressMap,
     fork_choice: *ForkChoice,
@@ -351,7 +337,7 @@ fn handleVotableBank(
         try checkAndHandleNewRoot(
             allocator,
             ledger_result_writer,
-            slot_tracker_rw,
+            slot_tracker,
             progress,
             fork_choice,
             new_root,
@@ -407,14 +393,11 @@ fn pushVote(
 fn checkAndHandleNewRoot(
     allocator: std.mem.Allocator,
     ledger_result_writer: *LedgerResultWriter,
-    slot_tracker_rw: *sig.sync.RwMux(SlotTracker),
+    slot_tracker: *SlotTracker,
     progress: *ProgressMap,
     fork_choice: *ForkChoice,
     new_root: Slot,
 ) !void {
-    var slot_tracker, var lg = slot_tracker_rw.writeWithLock();
-    defer lg.unlock();
-
     // get the root bank before squash.
     if (slot_tracker.slots.count() == 0) return error.EmptySlotTracker;
     const root_tracker = slot_tracker.get(new_root) orelse return error.MissingSlot;
@@ -491,7 +474,7 @@ fn computeBankStats(
     allocator: std.mem.Allocator,
     my_vote_pubkey: Pubkey,
     ancestors: *const std.AutoArrayHashMapUnmanaged(u64, Ancestors),
-    slot_tracker_rw: *sig.sync.RwMux(SlotTracker),
+    slot_tracker: *SlotTracker,
     epoch_schedule: *const EpochSchedule,
     epoch_stakes_map: *const EpochStakesMap,
     progress: *ProgressMap,
@@ -501,9 +484,6 @@ fn computeBankStats(
 ) ![]Slot {
     var new_stats = std.ArrayListUnmanaged(Slot).empty;
     errdefer new_stats.deinit(allocator);
-
-    const slot_tracker, var lg = slot_tracker_rw.readWithLock();
-    defer lg.unlock();
 
     var frozen_slots = try slot_tracker.frozenSlots(allocator);
     defer frozen_slots.deinit(allocator);
@@ -1252,10 +1232,12 @@ test "checkAndHandleNewRoot - missing slot" {
     );
 
     // Try to check a slot that doesn't exist in the tracker
+    const slot_tracker_ptr, var slot_tracker_lg = slot_tracker.writeWithLock();
+    defer slot_tracker_lg.unlock();
     const result = checkAndHandleNewRoot(
         testing.allocator,
         &ledger_result_writer,
-        &slot_tracker,
+        slot_tracker_ptr,
         &fixture.progress,
         &fixture.fork_choice,
         123, // Non-existent slot
@@ -1316,10 +1298,12 @@ test "checkAndHandleNewRoot - missing hash" {
     );
 
     // Try to check a slot that doesn't exist in the tracker
+    const slot_tracker2_ptr, var slot_tracker2_lg = slot_tracker2.writeWithLock();
+    defer slot_tracker2_lg.unlock();
     const result = checkAndHandleNewRoot(
         testing.allocator,
         &ledger_result_writer,
-        &slot_tracker2,
+        slot_tracker2_ptr,
         &fixture.progress,
         &fixture.fork_choice,
         root.slot, // Non-existent hash
@@ -1367,10 +1351,12 @@ test "checkAndHandleNewRoot - empty slot tracker" {
     );
 
     // Try to check a slot that doesn't exist in the tracker
+    const slot_tracker3_ptr, var slot_tracker3_lg = slot_tracker3.writeWithLock();
+    defer slot_tracker3_lg.unlock();
     const result = checkAndHandleNewRoot(
         testing.allocator,
         &ledger_result_writer,
-        &slot_tracker3,
+        slot_tracker3_ptr,
         &fixture.progress,
         &fixture.fork_choice,
         root.slot,
@@ -1469,16 +1455,21 @@ test "checkAndHandleNewRoot - success" {
 
     try testing.expectEqual(4, fixture.progress.map.count());
     try testing.expect(fixture.progress.map.contains(hash1.slot));
-    try checkAndHandleNewRoot(
-        testing.allocator,
-        &ledger_result_writer,
-        &slot_tracker4,
-        &fixture.progress,
-        &fixture.fork_choice,
-        hash3.slot,
-    );
+    {
+        const slot_tracker4_ptr, var slot_tracker4_lg = slot_tracker4.writeWithLock();
+        defer slot_tracker4_lg.unlock();
+        try checkAndHandleNewRoot(
+            testing.allocator,
+            &ledger_result_writer,
+            slot_tracker4_ptr,
+            &fixture.progress,
+            &fixture.fork_choice,
+            hash3.slot,
+        );
+    }
 
     try testing.expectEqual(1, fixture.progress.map.count());
+    // Now the write lock is released, we can acquire a read lock
     {
         const ptr, var lg = slot_tracker4.readWithLock();
         defer lg.unlock();
@@ -1561,11 +1552,13 @@ test "computeBankStats - child bank heavier" {
     );
     const epoch_schedule = EpochSchedule.DEFAULT;
     var slot_tracker_rw1 = RwMux(SlotTracker).init(fixture.slot_tracker);
+    const slot_tracker_rw1_ptr, var slot_tracker_rw1_lg = slot_tracker_rw1.writeWithLock();
+    defer slot_tracker_rw1_lg.unlock();
     const newly_computed_slot_stats = try computeBankStats(
         testing.allocator,
         my_node_pubkey,
         &fixture.ancestors,
-        &slot_tracker_rw1,
+        slot_tracker_rw1_ptr,
         &epoch_schedule,
         &epoch_stakes,
         &fixture.progress,
@@ -1655,11 +1648,13 @@ test "computeBankStats - same weight selects lower slot" {
 
     const epoch_schedule = EpochSchedule.DEFAULT;
     var slot_tracker_rw2 = RwMux(SlotTracker).init(fixture.slot_tracker);
+    const slot_tracker_rw2_ptr, var slot_tracker_rw2_lg = slot_tracker_rw2.writeWithLock();
+    defer slot_tracker_rw2_lg.unlock();
     const newly_computed_slot_stats = try computeBankStats(
         testing.allocator,
         my_vote_pubkey,
         &fixture.ancestors,
-        &slot_tracker_rw2,
+        slot_tracker_rw2_ptr,
         &epoch_schedule,
         &epoch_stakes,
         &fixture.progress,

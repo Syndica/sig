@@ -60,8 +60,8 @@ pub const ReplayExecutionState = struct {
     thread_pool: *ThreadPool,
     ledger_reader: *LedgerReader,
     ledger_result_writer: *sig.ledger.LedgerResultWriter,
-    slot_tracker: *sig.sync.RwMux(SlotTracker),
-    epochs: *sig.sync.RwMux(EpochTracker),
+    slot_tracker: *const SlotTracker,
+    epoch_tracker: *const EpochTracker,
     progress_map: *ProgressMap,
     status_cache: *sig.core.StatusCache,
     fork_choice: *HeaviestSubtreeForkChoice,
@@ -84,9 +84,7 @@ pub fn replayActiveSlots(state: ReplayExecutionState) !bool {
     var zone = tracy.Zone.init(@src(), .{ .name = "replayActiveSlots" });
     defer zone.deinit();
 
-    const st, var st_lg = state.slot_tracker.readWithLock();
-    defer st_lg.unlock();
-    const active_slots = try st.activeSlots(state.allocator);
+    const active_slots = try state.slot_tracker.activeSlots(state.allocator);
     state.log_helper.logActiveSlots(active_slots, state.allocator);
 
     if (active_slots.len == 0) {
@@ -200,17 +198,8 @@ fn replaySlot(state: ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
         return .dead;
     }
 
-    var epoch_constants = blk: {
-        const ep, var ep_lg = state.epochs.readWithLock();
-        defer ep_lg.unlock();
-        const ptr = ep.getPtrForSlot(slot) orelse return error.MissingEpoch;
-        // The epoch constants, is a constant, so we can create a clone to for use in the replay path.
-        break :blk try ptr.clone(state.allocator);
-    };
-    defer epoch_constants.deinit(state.allocator);
-    const slot_tracker, var slot_tracker_lg = state.slot_tracker.readWithLock();
-    defer slot_tracker_lg.unlock();
-    const slot_info = slot_tracker.get(slot) orelse return error.MissingSlot;
+    const epoch_constants = state.epoch_tracker.getPtrForSlot(slot) orelse return error.MissingEpoch;
+    const slot_info = state.slot_tracker.get(slot) orelse return error.MissingSlot;
 
     const i_am_leader = slot_info.constants.collector_id.equals(&state.my_identity);
 
@@ -275,7 +264,7 @@ fn replaySlot(state: ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
 
     const new_rate_activation_epoch = blk: {
         if (slot_info.constants.feature_set.get(.reduce_stake_warmup_cooldown)) |active_slot| {
-            const schedule = state.epochs.readField("schedule");
+            const schedule = state.epoch_tracker.schedule;
             break :blk schedule.getEpoch(active_slot);
         } else break :blk null;
     };
@@ -389,9 +378,7 @@ fn updateConsensusForFrozenSlot(
     replay_state: ReplayExecutionState,
     slot: Slot,
 ) !void {
-    const slot_tracker, var lg = replay_state.slot_tracker.readWithLock();
-    defer lg.unlock();
-    var slot_info = slot_tracker.get(slot) orelse
+    var slot_info = replay_state.slot_tracker.get(slot) orelse
         return error.MissingSlotInTracker;
 
     const parent_slot = slot_info.constants.parent_slot;
@@ -426,7 +413,7 @@ fn updateConsensusForFrozenSlot(
         replay_state.allocator,
         .from(replay_state.logger),
         slot,
-        slot_tracker.root,
+        replay_state.slot_tracker.root,
         replay_state.ledger_result_writer,
         replay_state.fork_choice,
         replay_state.duplicate_slots_to_repair,
@@ -492,9 +479,7 @@ pub fn processReplayResults(
         // If entries is null, it means the slot failed or was skipped, so continue to next slot
         const entries = if (maybe_entries) |entries| entries else continue;
 
-        const slot_tracker, var lg = state.slot_tracker.readWithLock();
-        defer lg.unlock();
-        const slot_info = slot_tracker.get(slot) orelse return error.MissingSlotInTracker;
+        const slot_info = state.slot_tracker.get(slot) orelse return error.MissingSlotInTracker;
 
         // Freeze the bank if its entries where completly processed.
         if (slot_info.state.tickHeight() == slot_info.constants.max_tick_height) {
@@ -506,9 +491,8 @@ pub fn processReplayResults(
                     .from(state.logger),
                     state.account_store,
                     &(blk: {
-                        const ep, var ep_lg = state.epochs.readWithLock();
-                        defer ep_lg.unlock();
-                        break :blk ep.getForSlot(slot) orelse return error.MissingEpoch;
+                        break :blk state.epoch_tracker.getForSlot(slot) orelse
+                            return error.MissingEpoch;
                     }),
                     slot_info.state,
                     slot_info.constants,
@@ -560,7 +544,7 @@ fn markDeadSlot(
         replay_state.allocator,
         .from(replay_state.logger),
         dead_slot,
-        replay_state.slot_tracker.readField("root"),
+        replay_state.slot_tracker.root,
         replay_state.duplicate_slots_to_repair,
         ancestor_hashes_replay_update_sender,
         dead_state,
@@ -576,9 +560,8 @@ fn markDeadSlot(
         maybe_duplicate_proof != null)
     {
         const slot_info = blk: {
-            const st, var lg = replay_state.slot_tracker.readWithLock();
-            defer lg.unlock();
-            break :blk st.get(dead_slot) orelse return error.MissingSlotInTracker;
+            break :blk replay_state.slot_tracker.get(dead_slot) orelse
+                return error.MissingSlotInTracker;
         };
         const slot_hash = slot_info.state.hash.readCopy();
         const duplicate_state: DuplicateState = .fromState(
@@ -595,7 +578,7 @@ fn markDeadSlot(
             replay_state.allocator,
             .from(replay_state.logger),
             dead_slot,
-            replay_state.slot_tracker.readField("root"),
+            replay_state.slot_tracker.root,
             replay_state.duplicate_slots_tracker,
             replay_state.fork_choice,
             duplicate_state,
@@ -704,6 +687,11 @@ const TestReplayStateResources = struct {
 
         const replay_votes_channel: *sig.sync.Channel(ParsedVote) = try .create(allocator);
 
+        const slot_tracker_ptr, var slot_tracker_lg = self.slot_tracker.readWithLock();
+        defer slot_tracker_lg.unlock();
+        const epochs_ptr, var epochs_lg = self.epochs.readWithLock();
+        defer epochs_lg.unlock();
+
         self.replay_state = ReplayExecutionState{
             .allocator = allocator,
             .logger = .noop,
@@ -713,8 +701,8 @@ const TestReplayStateResources = struct {
             .thread_pool = &self.thread_pool,
             .ledger_reader = &self.ledger_reader,
             .ledger_result_writer = &self.ledger_result_writer,
-            .slot_tracker = &self.slot_tracker,
-            .epochs = &self.epochs,
+            .slot_tracker = slot_tracker_ptr,
+            .epoch_tracker = epochs_ptr,
             .progress_map = &self.progress,
             .status_cache = &status_cache,
             .fork_choice = self.fork_choice,

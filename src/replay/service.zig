@@ -296,8 +296,23 @@ const ReplayState = struct {
         };
     }
 
-    pub fn executionState(self: *ReplayState) ReplayExecutionState {
-        return .{
+    const ExecutionStateReturn = struct {
+        execution_state: ReplayExecutionState,
+        slot_tracker_lg: sig.sync.RwMux(SlotTracker).RLockGuard,
+        epoch_tracker_lg: sig.sync.RwMux(EpochTracker).RLockGuard,
+        pub fn tuple(self: ExecutionStateReturn) struct {
+            ReplayExecutionState,
+            sig.sync.RwMux(SlotTracker).RLockGuard,
+            sig.sync.RwMux(EpochTracker).RLockGuard,
+        } {
+            return .{ self.execution_state, self.slot_tracker_lg, self.epoch_tracker_lg };
+        }
+    };
+
+    pub fn executionState(self: *ReplayState) ExecutionStateReturn {
+        const slot_tracker, const slot_tracker_lg = self.slot_tracker_rw.readWithLock();
+        const epoch_tracker, const epoch_tracker_lg = self.epoch_tracker_rw.readWithLock();
+        const execution_state: ReplayExecutionState = .{
             .allocator = self.allocator,
             .logger = .from(self.logger),
             .my_identity = self.my_identity,
@@ -309,8 +324,8 @@ const ReplayState = struct {
             .thread_pool = &self.thread_pool,
             .ledger_reader = self.ledger.reader,
             .ledger_result_writer = self.ledger.writer,
-            .slot_tracker = &self.slot_tracker_rw,
-            .epochs = &self.epoch_tracker_rw,
+            .slot_tracker = slot_tracker,
+            .epoch_tracker = epoch_tracker,
             .progress_map = &self.progress_map,
             .status_cache = &self.status_cache,
             .fork_choice = &self.fork_choice,
@@ -324,6 +339,12 @@ const ReplayState = struct {
             .purge_repair_slot_counter = &self.slot_data.purge_repair_slot_counter,
             .ancestor_hashes_replay_update_sender = self.senders.ancestor_hashes_replay_update,
             .replay_votes_channel = self.replay_votes_channel,
+        };
+
+        return .{
+            .execution_state = execution_state,
+            .slot_tracker_lg = slot_tracker_lg,
+            .epoch_tracker_lg = epoch_tracker_lg,
         };
     }
 };
@@ -509,7 +530,16 @@ fn advanceReplay(state: *ReplayState) !void {
         &state.progress_map,
     );
 
-    const processed_a_slot = try replay.execution.replayActiveSlots(state.executionState());
+    const execution_state, var epoch_tracker_lg, var slot_tracker_lg =
+        state.executionState().tuple();
+
+    defer epoch_tracker_lg.unlock();
+
+    const epoch_tracker = execution_state.epoch_tracker;
+    const slot_tracker = execution_state.slot_tracker;
+    // Note: slot_tracker_lg is explicitly unlocked before a write lock is acquired
+    // for consensus processing.
+    const processed_a_slot = try replay.execution.replayActiveSlots(execution_state);
     if (!processed_a_slot) std.time.sleep(100 * std.time.ns_per_ms);
 
     _ = try replay.edge_cases.processEdgeCases(allocator, state.logger, .{
@@ -519,7 +549,7 @@ fn advanceReplay(state: *ReplayState) !void {
         .fork_choice = &state.fork_choice,
         .ledger = state.ledger.writer,
 
-        .slot_tracker_rw = &state.slot_tracker_rw,
+        .slot_tracker = slot_tracker,
         .progress = &state.progress_map,
         .latest_validator_votes = &state.latest_validator_votes,
         .slot_data = &state.slot_data,
@@ -534,8 +564,6 @@ fn advanceReplay(state: *ReplayState) !void {
     var ancestors: std.AutoArrayHashMapUnmanaged(Slot, Ancestors) = .empty;
     var descendants: std.AutoArrayHashMapUnmanaged(Slot, SlotSet) = .empty;
     {
-        const slot_tracker, var lg = state.slot_tracker_rw.readWithLock();
-        defer lg.unlock();
         for (
             slot_tracker.slots.keys(),
             slot_tracker.slots.values(),
@@ -554,12 +582,18 @@ fn advanceReplay(state: *ReplayState) !void {
     const slot_history_accessor = SlotHistoryAccessor
         .init(state.account_store.reader());
 
+    // Explicitly Unlock the read lock on slot_tracker and acquire a write lock for consensus processing.
+    slot_tracker_lg.unlock();
+
+    const slot_tracker_mut, var slot_tracker_mut_lg = state.slot_tracker_rw.writeWithLock();
+    defer slot_tracker_mut_lg.unlock();
+
     replay.consensus.processConsensus(.{
         .allocator = allocator,
         .replay_tower = &state.replay_tower,
         .progress_map = &state.progress_map,
-        .slot_tracker_rw = &state.slot_tracker_rw,
-        .epoch_tracker_rw = &state.epoch_tracker_rw,
+        .slot_tracker = slot_tracker_mut,
+        .epoch_tracker = epoch_tracker,
         .fork_choice = &state.fork_choice,
         .ledger_reader = state.ledger.reader,
         .ledger_result_writer = state.ledger.writer,
