@@ -3,7 +3,6 @@ const sig = @import("../sig.zig");
 const cli = @import("cli");
 
 const Account = sig.runtime.AccountSharedData;
-const ChannelPrintLogger = sig.trace.ChannelPrintLogger;
 const Pubkey = sig.core.pubkey.Pubkey;
 const Slot = sig.core.time.Slot;
 
@@ -44,7 +43,7 @@ pub const TrackedAccount = struct {
 pub const RunCmd = struct {
     max_slots: ?Slot,
 
-    pub const parser = cli.Parser(RunCmd, .{
+    pub const cmd_info: cli.CommandInfo(RunCmd) = .{
         .help = .{
             .short = "Fuzz accountsdb.",
             .long = null,
@@ -59,10 +58,16 @@ pub const RunCmd = struct {
                 .help = "The number of slots number which, when surpassed, will exit the fuzzer.",
             },
         },
-    });
+    };
 };
 
-pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
+pub fn run(
+    allocator: std.mem.Allocator,
+    logger: sig.trace.Logger("accountsdb.fuzz"),
+    seed: u64,
+    fuzz_data_dir: std.fs.Dir,
+    run_cmd: RunCmd,
+) !void {
     var prng_state: std.Random.DefaultPrng = .init(seed);
     const random = prng_state.random();
 
@@ -71,40 +76,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     const N_ACCOUNTS_MAX: u64 = 100_000;
     const N_ACCOUNTS_PER_SLOT = 10;
 
-    var gpa_state: std.heap.DebugAllocator(.{
-        .safety = true,
-    }) = .init;
-    defer _ = gpa_state.deinit();
-    const allocator = gpa_state.allocator();
-
-    const std_logger: *ChannelPrintLogger = try .init(.{
-        .allocator = allocator,
-        .max_level = .debug,
-        .max_buffer = 1 << 20,
-    }, null);
-    defer std_logger.deinit();
-    const logger = std_logger.logger("accountsdb.fuzz");
-
-    const run_cmd: RunCmd = cmd: {
-        var argv_list: std.ArrayListUnmanaged([]const u8) = .empty;
-        defer argv_list.deinit(allocator);
-        while (args.next()) |arg| try argv_list.append(allocator, arg);
-
-        const stderr = std.io.getStdErr();
-        const stderr_tty = std.io.tty.detectConfig(stderr);
-        break :cmd try RunCmd.parser.parse(
-            allocator,
-            "fuzz accountsdb",
-            stderr_tty,
-            stderr.writer(),
-            argv_list.items,
-        ) orelse return;
-    };
-
     const maybe_max_slots = run_cmd.max_slots;
-
-    var fuzz_data_dir = try std.fs.cwd().makeOpenPath(sig.FUZZ_DATA_DIR, .{});
-    defer fuzz_data_dir.close();
 
     const main_dir_name = "main";
     var main_accountsdb_dir = try fuzz_data_dir.makeOpenPath(main_dir_name, .{});
