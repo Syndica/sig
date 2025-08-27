@@ -129,11 +129,6 @@ pub const Committer = struct {
                 else => {},
             }
         }
-
-        for (tx_results) |result| {
-            _, var tx_result = result;
-            tx_result.deinit(allocator);
-        }
     }
 };
 
