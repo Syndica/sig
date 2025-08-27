@@ -36,6 +36,7 @@ const ProgramMap = sig.runtime.program_loader.ProgramMap;
 
 const TransactionError = sig.ledger.transaction_status.TransactionError;
 const ComputeBudgetLimits = compute_budget_program.ComputeBudgetLimits;
+const ComputeBudgetInstructionDetails = compute_budget_program.ComputeBudgetInstructionDetails;
 const InstructionTrace = TransactionContext.InstructionTrace;
 
 // Transaction execution involves logic and validation which occurs in replay
@@ -62,6 +63,7 @@ pub const RuntimeTransaction = struct {
     recent_blockhash: Hash,
     instructions: []const InstructionInfo,
     accounts: std.MultiArrayList(AccountMeta) = .{},
+    compute_budget_instruction_details: ComputeBudgetInstructionDetails = .{},
 };
 
 pub const TransactionExecutionEnvironment = struct {
@@ -351,21 +353,8 @@ pub fn loadAndExecuteTransaction(
     var nonce_account_is_owned = true;
     defer if (nonce_account_is_owned) if (maybe_nonce_info) |n| allocator.free(n.account.data);
 
-    if (sig.runtime.check_transactions.checkStatusCache(
-        &transaction.msg_hash,
-        &transaction.recent_blockhash,
-        env.ancestors,
-        env.status_cache,
-    )) |err| return .{ .err = err };
-
-    // NOTE: in agave nonce validation occurs during check_transactions and validate_nonce_and_fee_payer.
-    // Since we do not perform check transactions at the batch level, the secondary checks may not be necessary.
-    // We will however need to return the corresponding errors which may occur in agave's validate_transaction_nonce.
-    // [agave] hhttps://github.com/firedancer-io/agave/blob/403d23b809fc513e2c4b433125c127cf172281a2/svm/src/transaction_processor.rs#L632-L688
-
-    // TODO: Should the compute budget program require the feature set?
-    const compute_budget_result = compute_budget_program.execute(
-        transaction.instructions,
+    const compute_budget_result = compute_budget_program.sanitize(
+        transaction.compute_budget_instruction_details,
         env.feature_set,
         env.slot,
     );
@@ -373,6 +362,13 @@ pub fn loadAndExecuteTransaction(
         .ok => |limits| limits,
         .err => |err| return .{ .err = err },
     };
+
+    if (sig.runtime.check_transactions.checkStatusCache(
+        &transaction.msg_hash,
+        &transaction.recent_blockhash,
+        env.ancestors,
+        env.status_cache,
+    )) |err| return .{ .err = err };
 
     nonce_account_is_owned = false;
     const check_fee_payer_result = try sig.runtime.check_transactions.checkFeePayer(
@@ -813,83 +809,34 @@ test "loadAndExecuteTransactions: no transactions" {
 }
 
 test "loadAndExecuteTransactions: invalid compute budget instruction" {
-    const allocator = std.testing.allocator;
-
+    const Signature = sig.core.Signature;
     var prng = std.Random.DefaultPrng.init(0);
 
-    const max_age = 5;
     const recent_blockhash = Hash.initRandom(prng.random());
 
-    const transaction = RuntimeTransaction{
-        .signature_count = 0,
-        .fee_payer = Pubkey.ZEROES,
-        .msg_hash = Hash.ZEROES,
-        .recent_blockhash = recent_blockhash,
-        .instructions = &.{.{
-            .program_meta = .{
-                .pubkey = sig.runtime.program.compute_budget.ID,
-                .index_in_transaction = 0,
-            },
-            .account_metas = .{},
-            .instruction_data = &.{},
-        }},
+    const transaction = sig.core.Transaction{
+        .signatures = &.{Signature.ZEROES},
+        .version = .legacy,
+        .msg = .{
+            .signature_count = 1,
+            .readonly_signed_count = 0,
+            .readonly_unsigned_count = 1,
+            .account_keys = &.{ Pubkey.ZEROES, sig.runtime.program.compute_budget.ID },
+            .recent_blockhash = recent_blockhash,
+            .instructions = &.{.{ // invalid compute budget instruction
+                .program_index = 1,
+                .account_indexes = &.{},
+                .data = &.{},
+            }},
+        },
     };
 
-    var blockhash_queue = try BlockhashQueue.initWithSingleEntry(
-        allocator,
-        recent_blockhash,
-        5000,
-    );
-    defer blockhash_queue.deinit(allocator);
-
-    var account_cache = BatchAccountCache{};
-    defer account_cache.deinit(allocator);
-
-    const epoch_stakes = try EpochStakes.initEmptyWithGenesisStakeHistoryEntry(allocator);
-    defer epoch_stakes.deinit(allocator);
-
-    var status_cache: StatusCache = .DEFAULT;
-
-    const results = try loadAndExecuteTransactions(
-        allocator,
-        &.{transaction},
-        &account_cache,
-        &.{
-            .ancestors = &Ancestors{},
-            .feature_set = &FeatureSet.ALL_DISABLED,
-            .status_cache = &status_cache,
-            .sysvar_cache = &SysvarCache{},
-            .rent_collector = &sig.core.rent_collector.defaultCollector(10),
-            .vm_environment = &vm.Environment{},
-            .next_vm_environment = null,
-            .blockhash_queue = &blockhash_queue,
-            .epoch_stakes = &epoch_stakes,
-            .slot = 0,
-            .max_age = max_age,
-            .last_blockhash = recent_blockhash,
-            .next_durable_nonce = Hash.ZEROES,
-            .next_lamports_per_signature = 0,
-            .last_lamports_per_signature = 0,
-            .lamports_per_signature = 0,
-        },
-        &.{
-            .log = false,
-            .log_messages_byte_limit = null,
-        },
-    );
-    defer {
-        for (results) |*result| {
-            switch (result.*) {
-                .ok => |*ok| ok.deinit(allocator),
-                .err => |err| err.deinit(allocator),
-            }
-        }
-        allocator.free(results);
-    }
+    const result =
+        sig.replay.verify_transaction.verifyTransactionWithoutSignatureVerification(transaction);
 
     try std.testing.expectEqual(
         TransactionError{ .InstructionError = .{ 0, .InvalidInstructionData } },
-        results[0].err,
+        result.err,
     );
 }
 
@@ -928,7 +875,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
         .is_writable = false,
     });
 
-    const transaction = RuntimeTransaction{
+    var transaction = RuntimeTransaction{
         .signature_count = 1,
         .fee_payer = sender_key,
         .msg_hash = Hash.initRandom(prng.random()),
@@ -960,6 +907,10 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
         }},
         .accounts = accounts,
     };
+
+    // Set a compute budget that is sufficient for the transaction to succeed
+    transaction.compute_budget_instruction_details.num_non_compute_budget_instructions = 1;
+    transaction.compute_budget_instruction_details.num_non_migratable_builtin_instructions = 1;
 
     var account_cache = BatchAccountCache{};
     defer account_cache.deinit(allocator);

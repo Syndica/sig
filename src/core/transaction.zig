@@ -254,13 +254,13 @@ pub const Transaction = struct {
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/42711325c40b314dafe3d5a41eb5b19af49cf1dc/transaction/src/versioned/mod.rs#L126
     pub fn validateSignatures(self: *const Transaction) !void {
         switch (std.math.order(self.msg.signature_count, self.signatures.len)) {
-            .lt => return error.InvalidValue,
-            .gt => return error.IndexOutOfBounds,
+            .lt => return error.TooManySignatures,
+            .gt => return error.NotEnoughSignatures,
             .eq => {},
         }
 
         if (self.signatures.len > self.msg.account_keys.len) {
-            return error.IndexOutOfBounds;
+            return error.MoreSignaturesThanAccounts;
         }
     }
 };
@@ -533,11 +533,12 @@ pub const Message = struct {
     /// Legacy - [agave] https://github.com/anza-xyz/solana-sdk/blob/42711325c40b314dafe3d5a41eb5b19af49cf1dc/message/src/legacy.rs#L97
     pub fn validate(self: *const Message) !void {
         // signing area and read-only non-signing area should not overlap
-        if (self.signature_count + self.readonly_unsigned_count > self.account_keys.len)
-            return error.IndexOutOfBounds;
+        if (self.signature_count +| self.readonly_unsigned_count > self.account_keys.len)
+            return error.NotEnoughAccounts;
 
         // there should be at least 1 RW fee-payer account.
-        if (self.readonly_signed_count >= self.signature_count) return error.InvalidValue;
+        if (self.readonly_signed_count >= self.signature_count)
+            return error.MissingWritableFeePayer;
 
         // program accounts must be in the static account keys
         const max_program_index = self.account_keys.len - 1;
@@ -546,18 +547,18 @@ pub const Message = struct {
         var max_account_index = self.account_keys.len - 1;
         for (self.address_lookups) |lookup| {
             const num_keys = lookup.writable_indexes.len + lookup.readonly_indexes.len;
-            if (num_keys == 0) return error.InvalidValue;
+            if (num_keys == 0) return error.AddressLookupTableEmpty;
             max_account_index += num_keys;
         }
-        if (max_account_index > 255) return error.IndexOutOfBounds;
+        if (max_account_index > 255) return error.TooManyAccounts;
 
         // check program and account indexes are in-bounds and no program is the fee-payer
         for (self.instructions) |instr| {
-            if (instr.program_index == 0 or
-                instr.program_index > max_program_index) return error.IndexOutOfBounds;
+            if (instr.program_index == 0) return error.ProgramCannotBeFeePayer;
+            if (instr.program_index > max_program_index) return error.ProgramIndexOutOfBounds;
 
             for (instr.account_indexes) |account_index| {
-                if (account_index > max_account_index) return error.IndexOutOfBounds;
+                if (account_index > max_account_index) return error.AccountIndexOutOfBounds;
             }
         }
     }
@@ -872,7 +873,7 @@ test "clone transaction" {
 
 test "sanitize succeeds minimal valid transaction" {
     const transaction = Transaction{
-        .signatures = &.{},
+        .signatures = &.{Signature.ZEROES},
         .version = .legacy,
         .msg = .{
             .signature_count = 1,
@@ -889,6 +890,40 @@ test "sanitize succeeds minimal valid transaction" {
 
 test "sanitize fails empty transaction" {
     try std.testing.expectError(error.MissingWritableFeePayer, Transaction.EMPTY.validate());
+}
+
+test "sanitize fails too many signers" {
+    const transaction = Transaction{
+        .signatures = &.{ Signature.ZEROES, Signature.ZEROES },
+        .version = .legacy,
+        .msg = .{
+            .signature_count = 1,
+            .readonly_signed_count = 0,
+            .readonly_unsigned_count = 0,
+            .account_keys = &.{Pubkey.ZEROES},
+            .recent_blockhash = Hash.ZEROES,
+            .instructions = &.{},
+            .address_lookups = &.{},
+        },
+    };
+    try std.testing.expectEqual(error.TooManySignatures, transaction.validate());
+}
+
+test "sanitize fails not enough signers" {
+    const transaction = Transaction{
+        .signatures = &.{ Signature.ZEROES, Signature.ZEROES },
+        .version = .legacy,
+        .msg = .{
+            .signature_count = 3,
+            .readonly_signed_count = 0,
+            .readonly_unsigned_count = 0,
+            .account_keys = &.{ Pubkey.ZEROES, Pubkey.ZEROES, Pubkey.ZEROES },
+            .recent_blockhash = Hash.ZEROES,
+            .instructions = &.{},
+            .address_lookups = &.{},
+        },
+    };
+    try std.testing.expectEqual(error.NotEnoughSignatures, transaction.validate());
 }
 
 test "sanitize fails missing signers" {
@@ -960,7 +995,7 @@ test "sanitize fails missing program id" {
             .address_lookups = &.{},
         },
     };
-    try std.testing.expectEqual(error.ProgramIdAccountMissing, transaction.validate());
+    try std.testing.expectEqual(error.ProgramIndexOutOfBounds, transaction.validate());
 }
 
 test "sanitize fails if program id has index 0" {
@@ -981,7 +1016,7 @@ test "sanitize fails if program id has index 0" {
             .address_lookups = &.{},
         },
     };
-    try std.testing.expectEqual(error.ProgramIdCannotBePayer, transaction.validate());
+    try std.testing.expectEqual(error.ProgramCannotBeFeePayer, transaction.validate());
 }
 
 test "satinize fails account index out of bounds" {
@@ -1003,6 +1038,27 @@ test "satinize fails account index out of bounds" {
         },
     };
     try std.testing.expectEqual(error.AccountIndexOutOfBounds, transaction.validate());
+}
+
+test "sanitize fails address lookup table empty" {
+    const transaction = Transaction{
+        .signatures = &.{Signature.ZEROES},
+        .version = .legacy,
+        .msg = .{
+            .signature_count = 1,
+            .readonly_signed_count = 0,
+            .readonly_unsigned_count = 0,
+            .account_keys = &.{Pubkey.ZEROES},
+            .recent_blockhash = Hash.ZEROES,
+            .instructions = &.{},
+            .address_lookups = &.{.{
+                .table_address = Pubkey.ZEROES,
+                .writable_indexes = &.{},
+                .readonly_indexes = &.{},
+            }},
+        },
+    };
+    try std.testing.expectEqual(error.AddressLookupTableEmpty, transaction.validate());
 }
 
 test "parse legacy" {
