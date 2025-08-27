@@ -2,6 +2,7 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 const replay = @import("lib.zig");
 const tracy = @import("tracy");
+const vote_listener = @import("../consensus/vote_listener.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -10,11 +11,22 @@ const Logger = sig.trace.Logger("replay.committer");
 const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
+const Transaction = sig.core.Transaction;
 
 const ResolvedTransaction = replay.resolve_lookup.ResolvedTransaction;
 
 const AccountSharedData = sig.runtime.AccountSharedData;
 const ProcessedTransaction = sig.runtime.transaction_execution.ProcessedTransaction;
+const ParsedVote = vote_listener.vote_parser.ParsedVote;
+const Channel = sig.sync.Channel;
+
+fn isSimpleVoteTransaction(tx: Transaction) bool {
+    const msg = tx.msg;
+    if (msg.instructions.len == 0) return false;
+    const ix = msg.instructions[0];
+    if (ix.program_index >= msg.account_keys.len) return false;
+    return sig.runtime.program.vote.ID.equals(&msg.account_keys[ix.program_index]);
+}
 
 /// All contained state is required to be thread-safe.
 pub const Committer = struct {
@@ -31,6 +43,7 @@ pub const Committer = struct {
         slot: Slot,
         transactions: []const ResolvedTransaction,
         tx_results: []const struct { Hash, ProcessedTransaction },
+        replay_votes_sender: *Channel(ParsedVote),
     ) !void {
         var zone = tracy.Zone.init(@src(), .{ .name = "commitTransactions" });
         zone.value(transactions.len);
@@ -88,6 +101,38 @@ pub const Committer = struct {
                 self.new_rate_activation_epoch,
             );
             try self.account_store.put(slot, pubkey, account);
+        }
+
+        for (transactions, tx_results) |transaction, result| {
+            _, const tx_result = result;
+
+            switch (tx_result) {
+                .executed => |exec| {
+                    // Skip non successful or non vote transactions.
+                    if (exec.executed_transaction.err != null or
+                        !isSimpleVoteTransaction(transaction.transaction))
+                    {
+                        continue;
+                    }
+
+                    if (vote_listener.vote_parser.parseSanitizedVoteTransaction(
+                        allocator,
+                        transaction,
+                    ) catch null) |parsed| {
+                        if (parsed.vote.lastVotedSlot() != null) {
+                            replay_votes_sender.send(parsed) catch parsed.deinit(allocator);
+                        } else {
+                            parsed.deinit(allocator);
+                        }
+                    }
+                },
+                else => {},
+            }
+        }
+
+        for (tx_results) |result| {
+            _, var tx_result = result;
+            tx_result.deinit(allocator);
         }
     }
 };
