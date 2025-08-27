@@ -95,19 +95,17 @@ pub fn main() !void {
     current_config.tee_logs = cmd.tee_logs;
 
     // If no subcommand was provided, print a friendly header and help information.
-    if (cmd.subcmd == null) {
+    const subcmd = cmd.subcmd orelse {
         const tty = std.io.tty.detectConfig(std.io.getStdOut());
         const out = std.io.getStdOut().writer();
         const ver = sig.version.CURRENT_CLIENT_VERSION;
-
         try out.print("sig {d}.{d}.{d}\n\n", .{ ver.major, ver.minor, ver.patch });
-
         // Render the top-level help.
         _ = try parser.parse(gpa, "sig", tty, out, &.{"--help"});
         return;
-    }
+    };
 
-    switch (cmd.subcmd orelse unreachable) {
+    switch (subcmd) {
         .identity => try identity(gpa, current_config),
         .gossip => |params| {
             current_config.shred_version = params.shred_version;
