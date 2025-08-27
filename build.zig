@@ -361,6 +361,7 @@ pub fn build(b: *Build) !void {
             .link_libc = true,
         }),
     });
+    fuzz_exe.root_module.addImport("cli", cli_mod);
     switch (config.ledger_db) {
         .rocksdb => fuzz_exe.root_module.addImport("rocksdb", rocksdb_mod),
         .hashmap => {},
