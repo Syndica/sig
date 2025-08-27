@@ -175,13 +175,6 @@ pub const Transaction = struct {
         };
     }
 
-    /// Run some sanity checks on the message to ensure the internal data has consistency.
-    ///
-    /// Does *not* verify signatures. Call `verify` to verify signatures.
-    pub fn validate(self: Transaction) !void {
-        try self.msg.validate();
-    }
-
     pub const VerifyError = error{
         /// The message is larger than the largest allowed transaction message size.
         NoSpaceLeft,
@@ -245,6 +238,30 @@ pub const Transaction = struct {
             }
         }
         return total_accounts;
+    }
+
+    /// Run some sanity checks on the signature counts and message to ensure the internal data has consistency.
+    ///
+    /// Does *not* verify signatures. Call `verify` to verify signatures.
+    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/42711325c40b314dafe3d5a41eb5b19af49cf1dc/transaction/src/versioned/mod.rs#L120
+    pub fn validate(self: Transaction) !void {
+        try self.msg.validate();
+        try self.validateSignatures();
+    }
+
+    /// Run some sanity checks on the signature counts to ensure the internal data has consistency.
+    ///
+    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/42711325c40b314dafe3d5a41eb5b19af49cf1dc/transaction/src/versioned/mod.rs#L126
+    pub fn validateSignatures(self: *const Transaction) !void {
+        switch (std.math.order(self.msg.signature_count, self.signatures.len)) {
+            .lt => return error.InvalidValue,
+            .gt => return error.IndexOutOfBounds,
+            .eq => {},
+        }
+
+        if (self.signatures.len > self.msg.account_keys.len) {
+            return error.IndexOutOfBounds;
+        }
     }
 };
 
@@ -510,26 +527,37 @@ pub const Message = struct {
         };
     }
 
-    pub fn validate(self: Message) !void {
-        // number of accounts should match spec in header. signed and unsigned should not overlap.
-        if (self.signature_count +| self.readonly_unsigned_count > self.account_keys.len)
-            return error.NotEnoughAccounts;
+    /// Run some sanity checks on the message to ensure the internal data has consistency.
+    ///
+    /// V0 - [agave] https://github.com/anza-xyz/solana-sdk/blob/42711325c40b314dafe3d5a41eb5b19af49cf1dc/message/src/versions/v0/mod.rs#L104
+    /// Legacy - [agave] https://github.com/anza-xyz/solana-sdk/blob/42711325c40b314dafe3d5a41eb5b19af49cf1dc/message/src/legacy.rs#L97
+    pub fn validate(self: *const Message) !void {
+        // signing area and read-only non-signing area should not overlap
+        if (self.signature_count + self.readonly_unsigned_count > self.account_keys.len)
+            return error.IndexOutOfBounds;
 
         // there should be at least 1 RW fee-payer account.
-        if (self.readonly_signed_count >= self.signature_count)
-            return error.MissingWritableFeePayer;
+        if (self.readonly_signed_count >= self.signature_count) return error.InvalidValue;
 
-        for (self.instructions) |ti| {
-            if (ti.program_index >= self.account_keys.len)
-                return error.ProgramIdAccountMissing;
+        // program accounts must be in the static account keys
+        const max_program_index = self.account_keys.len - 1;
 
-            // A program cannot be a payer.
-            if (ti.program_index == 0)
-                return error.ProgramIdCannotBePayer;
+        // max account index must be extended if address lookups are present
+        var max_account_index = self.account_keys.len - 1;
+        for (self.address_lookups) |lookup| {
+            const num_keys = lookup.writable_indexes.len + lookup.readonly_indexes.len;
+            if (num_keys == 0) return error.InvalidValue;
+            max_account_index += num_keys;
+        }
+        if (max_account_index > 255) return error.IndexOutOfBounds;
 
-            for (ti.account_indexes) |ai| {
-                if (ai >= self.account_keys.len)
-                    return error.AccountIndexOutOfBounds;
+        // check program and account indexes are in-bounds and no program is the fee-payer
+        for (self.instructions) |instr| {
+            if (instr.program_index == 0 or
+                instr.program_index > max_program_index) return error.IndexOutOfBounds;
+
+            for (instr.account_indexes) |account_index| {
+                if (account_index > max_account_index) return error.IndexOutOfBounds;
             }
         }
     }
