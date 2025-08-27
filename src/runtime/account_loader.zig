@@ -559,7 +559,7 @@ fn accumulateAndCheckLoadedAccountDataSize(
     }
 }
 
-// [agave] https://github.com/anza-xyz/agave/blob/cb32984a9b0d5c2c6f7775bed39b66d3a22e3c46/svm/src/account_loader.rs#L639
+// [agave] https://github.com/firedancer-io/agave/blob/agave-v2.3.7-patches/svm/src/account_loader.rs#L880
 fn constructInstructionsAccount(
     allocator: Allocator,
     transaction: *const RuntimeTransaction,
@@ -610,7 +610,7 @@ fn constructInstructionsAccount(
 
     return .{
         .data = try data.toOwnedSlice(),
-        .owner = runtime.sysvar.instruction.ID,
+        .owner = runtime.sysvar.OWNER_ID,
         .lamports = 0, // a bit weird, but seems correct
         .executable = false,
         .rent_epoch = 0,
