@@ -31,10 +31,9 @@ pub fn runShredProcessor(
     // shred verifier --> me
     verified_shred_receiver: *Channel(Packet),
     tracker: *BasicShredTracker,
-    shred_inserter_: ShredInserter,
+    shred_inserter: *ShredInserter,
     leader_schedule: sig.core.leader_schedule.SlotLeaders,
 ) !void {
-    var shred_inserter = shred_inserter_;
     var shreds: ArrayListUnmanaged(Shred) = .{};
     var is_repaired: ArrayListUnmanaged(bool) = .{};
     const metrics = try registry.initStruct(Metrics);
