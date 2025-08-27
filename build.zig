@@ -20,6 +20,7 @@ pub const Config = struct {
     use_llvm: bool,
     force_pic: bool,
     error_tracing: ?bool,
+    long_tests: bool,
     version: std.SemanticVersion,
 
     pub fn fromBuild(b: *Build) !Config {
@@ -103,6 +104,11 @@ pub const Config = struct {
                 "error-tracing",
                 "Enable or disable error tracing. Default: Only for Debug builds.",
             ),
+            .long_tests = b.option(
+                bool,
+                "long-tests",
+                "Run extra tests that take a long time, for more exhaustive coverage.",
+            ) orelse false,
             .version = s: {
                 const maybe_version_string = b.option(
                     []const u8,
@@ -189,6 +195,7 @@ pub fn build(b: *Build) !void {
     const build_options = b.addOptions();
     build_options.addOption(LedgerDB, "ledger_db", config.ledger_db);
     build_options.addOption(bool, "no_network_tests", config.no_network_tests);
+    build_options.addOption(bool, "long_tests", config.long_tests);
     build_options.addOption(std.SemanticVersion, "version", config.version);
 
     const sig_step = b.step("sig", "Run the sig executable");
