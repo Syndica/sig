@@ -12,7 +12,7 @@ PASSING_DIRS=(
     "syscall/fixtures/alt_bn128"
     "syscall/fixtures/blake3"
 
-    # Passed: 325, Failed: 238, Skipped: 0
+    # Passed: 560, Failed: 4, Skipped: 0
     "syscall/fixtures/cpi"
 
     "syscall/fixtures/create_program_address"

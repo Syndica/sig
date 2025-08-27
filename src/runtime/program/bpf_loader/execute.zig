@@ -819,7 +819,11 @@ pub fn executeV3SetAuthority(
         },
     }
 
-    try ic.tc.log("New authority {?}", .{new_authority});
+    if (new_authority) |some| {
+        try ic.tc.log("New authority Some({?})", .{some});
+    } else {
+        try ic.tc.log("New authority None", .{});
+    }
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/programs/bpf_loader/src/lib.rs#L1011-L1083
