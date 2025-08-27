@@ -2070,6 +2070,60 @@ test "executeV3SetAuthority" {
         },
         .{},
     );
+
+    @memcpy(final_program_account_data, initial_program_account_data);
+    _ = try bincode.writeToSlice(
+        final_program_account_data,
+        V3State{
+            .program_data = .{ .slot = 0, .upgrade_authority_address = null },
+        },
+        .{},
+    );
+
+    // test with no new authority
+    try testing.expectProgramExecuteResult(
+        allocator,
+        bpf_loader_program.v3.ID,
+        bpf_loader_program.v3.Instruction.set_authority,
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 1 },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = buffer_account_key,
+                    .data = initial_program_account_data,
+                    .owner = bpf_loader_program.v3.ID,
+                },
+                .{
+                    .pubkey = buffer_authority_key,
+                },
+                .{
+                    .pubkey = bpf_loader_program.v3.ID, // id of program u wanna run
+                    .owner = sig.runtime.ids.NATIVE_LOADER_ID, // bpf_loader_program.v3.ID,
+                },
+            },
+            .compute_meter = bpf_loader_program.v3.COMPUTE_UNITS,
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = buffer_account_key,
+                    .data = final_program_account_data,
+                    .owner = bpf_loader_program.v3.ID,
+                },
+                .{
+                    .pubkey = buffer_authority_key,
+                },
+                .{
+                    .pubkey = bpf_loader_program.v3.ID,
+                    .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+                },
+            },
+        },
+        .{},
+    );
 }
 
 test "executeV3SetAuthorityChecked" {
