@@ -62,8 +62,8 @@ fn createLedgerDB() !LedgerDB {
     );
 }
 
-pub fn run(initial_seed: u64, args: *std.process.ArgIterator) !void {
-    const maybe_max_actions_string = args.next();
+pub fn run(initial_seed: u64, args: []const []const u8) !void {
+    const maybe_max_actions_string: ?[]const u8 = if (args.len == 0) null else args[0];
 
     const maybe_max_actions = if (maybe_max_actions_string) |max_actions_str|
         try std.fmt.parseInt(usize, max_actions_str, 10)

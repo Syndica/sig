@@ -1311,17 +1311,19 @@ test "fuzzBatchAllocator - past failures" {
 }
 
 /// args "[allocator] [max_actions]"
-pub fn runFuzzer(seed: u64, args: *std.process.ArgIterator) !void {
+pub fn runFuzzer(seed: u64, args: []const []const u8) !void {
     var gpa: std.heap.DebugAllocator(.{}) = .init;
 
     // parse args
     const Fuzzable = enum { all, disk, batch };
     var to_fuzz: Fuzzable = .all;
     var max_actions: usize = std.math.maxInt(usize);
-    if (args.next()) |next_arg| {
+    if (args.len > 0) {
+        const next_arg = args[0];
         if (std.meta.stringToEnum(Fuzzable, next_arg)) |fuzzable| {
             to_fuzz = fuzzable;
-            if (args.next()) |max_actions_str| {
+            if (args.len > 1) {
+                const max_actions_str = args[1];
                 max_actions = try std.fmt.parseInt(usize, max_actions_str, 10);
             }
         } else {
