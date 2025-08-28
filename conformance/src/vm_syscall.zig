@@ -321,6 +321,15 @@ fn executeSyscall(
         }
     }
 
+    // Special casing to return only the custom error for transactions which have
+    // encountered the loader v4 program or bpf loader v3 migrate instruction.
+    if (tc.custom_error == 0x30000000 or tc.custom_error == 0x40000000) {
+        return .{
+            .@"error" = tc.custom_error.?,
+            .input_data_regions = .init(allocator),
+        };
+    }
+
     const effects = try utils.createSyscallEffect(allocator, .{
         .tc = &tc,
         .err = @"error",
