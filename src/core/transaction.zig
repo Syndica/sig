@@ -195,35 +195,20 @@ pub const Transaction = struct {
     pub fn verify(self: Transaction) VerifyError!void {
         const serialized_message = self.msg.serializeBounded(self.version) catch
             return error.SerializationFailed;
-
-        if (self.msg.account_keys.len < self.signatures.len) {
-            return error.NotEnoughAccounts;
-        }
-        for (self.signatures, self.msg.account_keys[0..self.signatures.len]) |signature, pubkey| {
-            if (!try signature.verify(pubkey, serialized_message.slice())) {
-                return error.SignatureVerificationFailed;
-            }
-        }
+        try self.verifySignatures(serialized_message.constSlice());
     }
 
-    /// Verify the transaction signatures and return the blake3 hash of the message.
+    /// Verify the transaction signatures against the provided serialized message.
     ///
     /// Does *not* ensure total internal consistency. Only does the minimum to
     /// verify signatures. Call `validate` to ensure full consistency.
-    pub fn verifyAndHashMessage(self: Transaction) VerifyError!Hash {
-        const serialized_message = self.msg.serializeBounded(self.version) catch
-            return error.SerializationFailed;
-
-        if (self.msg.account_keys.len < self.signatures.len) {
-            return error.NotEnoughAccounts;
-        }
+    pub fn verifySignatures(self: Transaction, serialized_message: []const u8) VerifyError!void {
+        if (self.msg.account_keys.len < self.signatures.len) return error.NotEnoughAccounts;
         for (self.signatures, self.msg.account_keys[0..self.signatures.len]) |signature, pubkey| {
-            if (!try signature.verify(pubkey, serialized_message.slice())) {
+            if (!try signature.verify(pubkey, serialized_message)) {
                 return error.SignatureVerificationFailed;
             }
         }
-
-        return Message.hash(serialized_message.slice());
     }
 
     /// Count the number of accounts in the slice of transactions,
@@ -245,14 +230,6 @@ pub const Transaction = struct {
     /// Does *not* verify signatures. Call `verify` to verify signatures.
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/42711325c40b314dafe3d5a41eb5b19af49cf1dc/transaction/src/versioned/mod.rs#L120
     pub fn validate(self: Transaction) !void {
-        try self.msg.validate();
-        try self.validateSignatureCounts();
-    }
-
-    /// Run some sanity checks on the signature counts to ensure the internal data has consistency.
-    ///
-    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/42711325c40b314dafe3d5a41eb5b19af49cf1dc/transaction/src/versioned/mod.rs#L126
-    pub fn validateSignatureCounts(self: *const Transaction) !void {
         switch (std.math.order(self.msg.signature_count, self.signatures.len)) {
             .lt => return error.TooManySignatures,
             .gt => return error.NotEnoughSignatures,
@@ -262,6 +239,8 @@ pub const Transaction = struct {
         if (self.signatures.len > self.msg.account_keys.len) {
             return error.MoreSignaturesThanAccounts;
         }
+
+        try self.msg.validate();
     }
 };
 
@@ -928,13 +907,13 @@ test "sanitize fails not enough signers" {
 
 test "sanitize fails missing signers" {
     const transaction = Transaction{
-        .signatures = &.{},
+        .signatures = &.{ Signature.ZEROES, Signature.ZEROES },
         .version = .legacy,
         .msg = .{
             .signature_count = 2,
             .readonly_signed_count = 0,
-            .readonly_unsigned_count = 0,
-            .account_keys = &.{Pubkey.ZEROES},
+            .readonly_unsigned_count = 1,
+            .account_keys = &.{ Pubkey.ZEROES, Pubkey.ZEROES },
             .recent_blockhash = Hash.ZEROES,
             .instructions = &.{},
             .address_lookups = &.{},
@@ -945,7 +924,7 @@ test "sanitize fails missing signers" {
 
 test "sanitize fails missing unsigned" {
     const transaction = Transaction{
-        .signatures = &.{},
+        .signatures = &.{Signature.ZEROES},
         .version = .legacy,
         .msg = .{
             .signature_count = 1,
@@ -962,7 +941,7 @@ test "sanitize fails missing unsigned" {
 
 test "sanitize fails no writable signed" {
     const transaction = Transaction{
-        .signatures = &.{},
+        .signatures = &.{Signature.ZEROES},
         .version = .legacy,
         .msg = .{
             .signature_count = 1,
@@ -979,7 +958,7 @@ test "sanitize fails no writable signed" {
 
 test "sanitize fails missing program id" {
     const transaction = Transaction{
-        .signatures = &.{},
+        .signatures = &.{Signature.ZEROES},
         .version = .legacy,
         .msg = .{
             .signature_count = 1,
@@ -1000,7 +979,7 @@ test "sanitize fails missing program id" {
 
 test "sanitize fails if program id has index 0" {
     const transaction = Transaction{
-        .signatures = &.{},
+        .signatures = &.{Signature.ZEROES},
         .version = .legacy,
         .msg = .{
             .signature_count = 1,
@@ -1021,7 +1000,7 @@ test "sanitize fails if program id has index 0" {
 
 test "satinize fails account index out of bounds" {
     const transaction = Transaction{
-        .signatures = &.{},
+        .signatures = &.{Signature.ZEROES},
         .version = .legacy,
         .msg = .{
             .signature_count = 1,
@@ -1175,8 +1154,9 @@ pub const transaction_v0_example = struct {
 };
 
 test "verify and hash transaction" {
-    try transaction_legacy_example.as_struct.verify();
-    const hash = try transaction_legacy_example.as_struct.verifyAndHashMessage();
+    const txn = transaction_legacy_example.as_struct;
+    try txn.verify();
+    const hash = Message.hash((try txn.msg.serializeBounded(txn.version)).constSlice());
     try std.testing.expectEqual(
         Hash.parse("FjoeKaxTd3J7xgt9vHMpuQb7j192weaEP3yMa1ntfQNo"),
         hash,
@@ -1185,9 +1165,5 @@ test "verify and hash transaction" {
     try std.testing.expectError(
         error.SignatureVerificationFailed,
         transaction_v0_example.as_struct.verify(),
-    );
-    try std.testing.expectError(
-        error.SignatureVerificationFailed,
-        transaction_v0_example.as_struct.verifyAndHashMessage(),
     );
 }

@@ -24,7 +24,7 @@ const SvmGateway = replay.svm_gateway.SvmGateway;
 const ProcessedTransaction = sig.runtime.transaction_execution.ProcessedTransaction;
 
 const executeTransaction = replay.svm_gateway.executeTransaction;
-const verifyTransaction = replay.verify_transaction.verifyTransaction;
+const preprocessTransaction = replay.preprocess_transaction.preprocessTransaction;
 
 const Logger = sig.trace.Logger("replay-batcher");
 
@@ -56,7 +56,7 @@ pub fn processBatch(
         }
 
         const hash, const compute_budget_details =
-            switch (verifyTransaction(transaction.transaction)) {
+            switch (preprocessTransaction(transaction.transaction, .run_sig_verify)) {
                 .ok => |res| res,
                 .err => |err| return .{ .failure = err },
             };

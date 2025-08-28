@@ -832,7 +832,7 @@ test "loadAndExecuteTransactions: invalid compute budget instruction" {
     };
 
     const result =
-        sig.replay.verify_transaction.verifyTransactionWithoutSignatureVerification(transaction);
+        sig.replay.preprocess_transaction.preprocessTransaction(transaction, .skip_sig_verify);
 
     try std.testing.expectEqual(
         TransactionError{ .InstructionError = .{ 0, .InvalidInstructionData } },

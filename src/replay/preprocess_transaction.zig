@@ -10,29 +10,40 @@ const Transaction = sig.core.transaction.Transaction;
 const TransactionResult = sig.runtime.transaction_execution.TransactionResult;
 const ComputeBudgetInstructionDetails = compute_budget.ComputeBudgetInstructionDetails;
 
-pub const VerifyTransactionResult = TransactionResult(struct {
+pub const PreprocessTransactionResult = TransactionResult(struct {
     Hash,
     ComputeBudgetInstructionDetails,
 });
 
-pub fn verifyTransaction(txn: Transaction) VerifyTransactionResult {
-    return verifyTransactionInner(txn, false);
-}
+pub const SigVerifyOption = enum {
+    run_sig_verify,
+    skip_sig_verify,
+};
 
-pub fn verifyTransactionWithoutSignatureVerification(txn: Transaction) VerifyTransactionResult {
-    return verifyTransactionInner(txn, true);
-}
-
-fn verifyTransactionInner(txn: Transaction, skip_sig_verify: bool) VerifyTransactionResult {
-    // If skipping signature verification, we still need to serialize and compute the hash
-    // to ensure the transaction is well-formed.
-    const msg_hash = if (skip_sig_verify)
-        Message.hash((txn.msg.serializeBounded(txn.version) catch
-            return .{ .err = .SanitizeFailure }).slice())
-    else
-        txn.verifyAndHashMessage() catch return .{ .err = .SanitizeFailure };
-
+/// Checks that a transaction is valid for execution.
+///     1. Ensure the transaction is valid i.e. signature counts make sense, there are enough accounts, etc.
+///     2. Ensure the transaction message is serialisable
+///     3. Ensure all signatures are verified against the serialized transaction message
+///     4. Ensure that the compute budget program is executed succesfully
+/// Returns the message hash and the compute budget instruction details on success.
+///
+/// [agave] https://github.com/firedancer-io/agave/blob/52daf1a021b716bf3ac4f20f9f301f20077f4d54/runtime/src/bank.rs#L4777
+pub fn preprocessTransaction(
+    txn: Transaction,
+    sig_verify: SigVerifyOption,
+) PreprocessTransactionResult {
     txn.validate() catch return .{ .err = .SanitizeFailure };
+
+    const msg_bytes = txn.msg.serializeBounded(txn.version) catch return .{
+        .err = .SanitizeFailure,
+    };
+
+    if (sig_verify == .run_sig_verify) {
+        txn.verifySignatures(msg_bytes.constSlice()) catch |err| return switch (err) {
+            error.SignatureVerificationFailed => .{ .err = .SignatureFailure },
+            else => .{ .err = .SanitizeFailure },
+        };
+    }
 
     const compute_budget_instruction_details = switch (compute_budget.execute(&txn.msg)) {
         .ok => |details| details,
@@ -40,12 +51,12 @@ fn verifyTransactionInner(txn: Transaction, skip_sig_verify: bool) VerifyTransac
     };
 
     return .{ .ok = .{
-        msg_hash,
+        Message.hash(msg_bytes.constSlice()),
         compute_budget_instruction_details,
     } };
 }
 
-test "verify transaction" {
+test preprocessTransaction {
     const allocator = std.testing.allocator;
 
     const Pubkey = sig.core.Pubkey;
@@ -58,8 +69,8 @@ test "verify transaction" {
     { // Verify succeeds
         const txn = try Transaction.initRandom(allocator, random);
         defer txn.deinit(allocator);
-        _ = verifyTransaction(txn).ok;
-        _ = verifyTransactionWithoutSignatureVerification(txn).ok;
+        _ = preprocessTransaction(txn, .run_sig_verify).ok;
+        _ = preprocessTransaction(txn, .skip_sig_verify).ok;
     }
 
     { // Transaction serialize fails
@@ -85,7 +96,7 @@ test "verify transaction" {
             },
         };
 
-        const err = verifyTransactionWithoutSignatureVerification(txn).err;
+        const err = preprocessTransaction(txn, .skip_sig_verify).err;
         try std.testing.expectEqual(TransactionError.SanitizeFailure, err);
     }
 
@@ -104,7 +115,7 @@ test "verify transaction" {
             },
         };
 
-        const err = verifyTransactionWithoutSignatureVerification(txn).err;
+        const err = preprocessTransaction(txn, .skip_sig_verify).err;
         try std.testing.expectEqual(TransactionError.SanitizeFailure, err);
     }
 
@@ -130,7 +141,7 @@ test "verify transaction" {
         };
         defer for (txn.msg.instructions) |instr| allocator.free(instr.data);
 
-        _, const details = verifyTransactionWithoutSignatureVerification(txn).ok;
+        _, const details = preprocessTransaction(txn, .skip_sig_verify).ok;
         const compute_limits = compute_budget.sanitize(details, &.ALL_DISABLED, 0).ok;
         try std.testing.expectEqual(1_000_000, compute_limits.compute_unit_limit);
     }
@@ -162,7 +173,7 @@ test "verify transaction" {
         };
         defer for (txn.msg.instructions) |instr| allocator.free(instr.data);
 
-        const err = verifyTransactionWithoutSignatureVerification(txn).err;
+        const err = preprocessTransaction(txn, .skip_sig_verify).err;
         try std.testing.expectEqual(TransactionError{ .DuplicateInstruction = 1 }, err);
     }
 }

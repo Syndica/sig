@@ -120,8 +120,7 @@ const loadAndExecuteTransactions = transaction_execution.loadAndExecuteTransacti
 const deinitMapAndValues = sig.utils.collections.deinitMapAndValues;
 
 const resolveTransaction = sig.replay.resolve_lookup.resolveTransaction;
-const verifyTransactionWithoutSignatureVerification =
-    sig.replay.verify_transaction.verifyTransactionWithoutSignatureVerification;
+const preprocessTransaction = sig.replay.preprocess_transaction.preprocessTransaction;
 
 fn executeTxnContext(
     allocator: std.mem.Allocator,
@@ -773,7 +772,7 @@ fn executeTxnContext(
 
     // Verify transaction
     const msg_hash, const compute_budget_instruction_details =
-        switch (verifyTransactionWithoutSignatureVerification(transaction)) {
+        switch (preprocessTransaction(transaction, .skip_sig_verify)) {
             .ok => |hash| hash,
             .err => |err| return serializeSanitizationError(err),
         };
