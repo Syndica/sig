@@ -692,8 +692,10 @@ test "getActiveFeatures rejects wrong ownership" {
     var accounts = std.AutoArrayHashMapUnmanaged(Pubkey, sig.core.Account).empty;
     defer accounts.deinit(allocator);
 
+    var slot_0_bytes: [9]u8 = .{ 1, 0, 0, 0, 0, 0, 0, 0, 0 };
     var acct: sig.core.Account = undefined;
     acct.owner = Pubkey.ZEROES;
+    acct.data = .{ .unowned_allocation = &slot_0_bytes };
 
     try accounts.put(
         allocator,
@@ -701,10 +703,18 @@ test "getActiveFeatures rejects wrong ownership" {
         acct,
     );
 
-    try std.testing.expectError(
-        error.FeatureNotOwnedByFeatureProgram,
-        getActiveFeatures(allocator, .{ .single_version_map = &accounts }, 0),
+    const features = try getActiveFeatures(allocator, .{ .single_version_map = &accounts }, 0);
+    try std.testing.expect(!features.active(.system_transfer_zero_check, 1));
+
+    acct.owner = sig.runtime.ids.FEATURE_PROGRAM_ID;
+    try accounts.put(
+        allocator,
+        sig.core.features.map.get(.system_transfer_zero_check).key,
+        acct,
     );
+
+    const features2 = try getActiveFeatures(allocator, .{ .single_version_map = &accounts }, 0);
+    try std.testing.expect(features2.active(.system_transfer_zero_check, 1));
 }
 
 test trackNewSlots {
