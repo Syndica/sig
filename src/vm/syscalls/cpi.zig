@@ -1240,30 +1240,39 @@ fn cpiCommon(
         break :blk account.account.owner.equals(&bpf_loader_program.v1.ID);
     };
 
-    const info = try sig.runtime.executor.prepareCpiInstructionInfo(
-        ic.tc,
-        instruction,
-        signers.slice(),
-    );
-
     // check_authorized_program(ic, instruction):
     // [agave] https://github.com/anza-xyz/agave/blob/bb5a6e773d5f41388a962c5c4f96f5f2ef2209d0/programs/bpf_loader/src/syscalls/cpi.rs#L1028C4-L1028C28
     if (ids.NATIVE_LOADER_ID.equals(&instruction.program_id) or
         bpf_loader_program.v1.ID.equals(&instruction.program_id) or
         bpf_loader_program.v2.ID.equals(&instruction.program_id) or
         (bpf_loader_program.v3.ID.equals(&instruction.program_id) and !(blk: {
-            // Check valid upgradable instruction
-            const v3_instruction = try info.deserializeInstruction(
+            // TODO: Do not deserialize the full instruction, instead just check the instruction
+            // data discriminant.
+            const info = InstructionInfo{
+                .program_meta = .{
+                    .index_in_transaction = 0,
+                    .pubkey = Pubkey.ZEROES,
+                },
+                .account_metas = .{},
+                .instruction_data = instruction.data,
+            };
+
+            const v3_instruction = info.deserializeInstruction(
                 allocator,
                 bpf_loader_program.v3.Instruction,
-            );
+            ) catch break :blk false;
             defer sig.bincode.free(allocator, v3_instruction);
+
             break :blk switch (v3_instruction) {
                 .close => true,
                 .upgrade => true,
                 .set_authority => true,
                 .set_authority_checked => ic.tc.feature_set.active(
                     .enable_bpf_loader_set_authority_checked_ix,
+                    ic.tc.slot,
+                ),
+                .extend_program_checked => ic.tc.feature_set.active(
+                    .enable_extend_program_checked,
                     ic.tc.slot,
                 ),
                 else => false,
@@ -1276,6 +1285,12 @@ fn cpiCommon(
         // https://github.com/anza-xyz/agave/blob/bb5a6e773d5f41388a962c5c4f96f5f2ef2209d0/programs/bpf_loader/src/syscalls/cpi.rs#L1048
         return SyscallError.ProgramNotSupported;
     }
+
+    const info = try sig.runtime.executor.prepareCpiInstructionInfo(
+        ic.tc,
+        instruction,
+        signers.slice(),
+    );
 
     var accounts = try translateAccounts(
         allocator,
