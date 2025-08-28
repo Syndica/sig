@@ -158,7 +158,7 @@ pub const ChannelPrintLogger = struct {
 
     pub fn deinit(self: *Self) void {
         if (self.handle) |handle| {
-            std.time.sleep(std.time.ns_per_ms * 5);
+            std.Thread.sleep(std.time.ns_per_ms * 5);
             self.exit.store(true, .seq_cst);
             handle.join();
         }
@@ -413,7 +413,7 @@ test "channel logger" {
     }, stream.writer());
 
     logger.logger("test").log(.info, "hello world");
-    std.time.sleep(10 * std.time.ns_per_ms);
+    std.Thread.sleep(10 * std.time.ns_per_ms);
     logger.deinit();
 
     const actual = stream.getWritten();
