@@ -1738,9 +1738,9 @@ test "simple usage" {
         gossip_table.deinit();
     }
 
-    const replay_votes_channelannel: *sig.sync.Channel(vote_parser.ParsedVote) =
+    const replay_votes_channel: *sig.sync.Channel(vote_parser.ParsedVote) =
         try .create(allocator);
-    defer replay_votes_channelannel.destroy();
+    defer replay_votes_channel.destroy();
 
     const verified_vote_channel: *sig.sync.Channel(VerifiedVote) = try .create(allocator);
     defer verified_vote_channel.destroy();
@@ -1760,7 +1760,7 @@ test "simple usage" {
         .gossip_table_rw = &gossip_table_rw,
         .ledger_ref = ledger_ref,
         .receivers = .{
-            .replay_votes_channel = replay_votes_channelannel,
+            .replay_votes_channel = replay_votes_channel,
         },
         .senders = .{
             .verified_vote = verified_vote_channel,
@@ -1880,8 +1880,8 @@ test "check trackers" {
     var vote_tracker: VoteTracker = .EMPTY;
     defer vote_tracker.deinit(allocator);
 
-    const replay_votes_channelannel = try sig.sync.Channel(vote_parser.ParsedVote).create(allocator);
-    defer replay_votes_channelannel.destroy();
+    const replay_votes_channel = try sig.sync.Channel(vote_parser.ParsedVote).create(allocator);
+    defer replay_votes_channel.destroy();
 
     const verified_vote_channel = try sig.sync.Channel(VerifiedVote).create(allocator);
     defer verified_vote_channel.destroy();
@@ -2020,7 +2020,7 @@ test "check trackers" {
                 .subscriptions = .{},
             },
             .{
-                .replay_votes = replay_votes_channelannel,
+                .replay_votes = replay_votes_channel,
                 .verified_vote_transactions = verified_vote_transactions_channel,
             },
             ledger_ref,
