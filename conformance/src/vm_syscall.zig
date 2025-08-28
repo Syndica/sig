@@ -109,22 +109,27 @@ fn executeSyscall(
     //     });
     // }
 
+    // Must be heap allocated for utils.deinitTransactionContext;
+    const vm_environment = try allocator.create(sig.vm.Environment);
+
     // Create execution contexts
     var tc: TransactionContext = undefined;
     try utils.createTransactionContext(
         allocator,
         pb_instr,
-        .{},
+        .{ .vm_environment = vm_environment },
         &tc,
     );
     defer utils.deinitTransactionContext(allocator, tc);
-    var syscall_registry = try sig.vm.Environment.initV1Loader(
+
+    // Will be deinit by utils.deinitTransactionContext
+    const syscall_registry = &vm_environment.loader;
+    syscall_registry.* = try sig.vm.Environment.initV1Loader(
         allocator,
         tc.feature_set,
         tc.slot,
         false,
     );
-    defer syscall_registry.deinit(allocator);
 
     const reject_broken_elfs = true;
     const debugging_features = false;
@@ -149,6 +154,7 @@ fn executeSyscall(
         .maximum_version = .v0,
         .minimum_version = .v0,
     };
+    vm_environment.config = config;
 
     // Set return data
     if (pb_vm.return_data) |return_data| {
@@ -158,8 +164,24 @@ fn executeSyscall(
         try tc.return_data.data.appendSlice(return_data.data.getSlice());
     }
 
-    // Program Cache Load Builtins??
+    // Program Cache Load Builtins
     // https://github.com/firedancer-io/solfuzz-agave/blob/0b8a7971055d822df3f602c287c368400a784c15/src/vm_syscalls.rs#L128-L130
+    {
+        var accounts: std.AutoArrayHashMapUnmanaged(Pubkey, sig.runtime.AccountSharedData) = .{};
+        defer accounts.deinit(allocator);
+
+        for (tc.accounts) |acc| {
+            try accounts.put(allocator, acc.pubkey, acc.account.*);
+        }
+
+        const clock = try tc.sysvar_cache.get(sig.runtime.sysvar.Clock);
+        tc.program_map.* = try sig.runtime.program_loader.loadPrograms(
+            allocator,
+            &accounts,
+            tc.vm_environment,
+            clock.slot,
+        );
+    }
 
     // Create instruction info and push it to the transaction context
     if (pb_instr.program_id.getSlice().len != Pubkey.SIZE) return error.OutOfBounds;
@@ -251,7 +273,7 @@ fn executeSyscall(
         allocator,
         &executable,
         memory_map,
-        &syscall_registry,
+        syscall_registry,
         stack.len,
         &tc,
     );
