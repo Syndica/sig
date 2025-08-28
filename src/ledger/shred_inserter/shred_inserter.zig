@@ -11,7 +11,6 @@ const ArrayList = std.ArrayList;
 const AutoHashMap = std.AutoHashMap;
 const Atomic = std.atomic.Value;
 const GetMetricError = sig.prometheus.registry.GetMetricError;
-const Mutex = std.Thread.Mutex;
 
 const Counter = sig.prometheus.Counter;
 const ErasureSetId = ledger.shred.ErasureSetId;
@@ -55,7 +54,6 @@ pub const ShredInserter = struct {
     allocator: Allocator,
     logger: Logger,
     db: LedgerDB,
-    lock: Mutex,
     max_root: Atomic(u64), // TODO shared
     metrics: LedgerInsertionMetrics,
 
@@ -71,7 +69,6 @@ pub const ShredInserter = struct {
             .allocator = allocator,
             .logger = logger,
             .db = db,
-            .lock = .{},
             .max_root = Atomic(u64).init(0), // TODO read this from the database
             .metrics = try registry.initStruct(LedgerInsertionMetrics),
         };
@@ -226,8 +223,6 @@ pub const ShredInserter = struct {
         const merkle_root_validator = MerkleRootValidator.init(&state);
 
         var get_lock_timer = try Timer.start();
-        self.lock.lock();
-        defer self.lock.unlock();
         self.metrics.insert_lock_elapsed_us.add(get_lock_timer.read().asMicros());
 
         ///////////////////////////
