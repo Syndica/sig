@@ -4,11 +4,11 @@ const sig = @import("../../../sig.zig");
 
 const builtin_costs = sig.runtime.program.builtin_costs;
 
+const Message = sig.core.transaction.Message;
 const Pubkey = sig.core.Pubkey;
 const InstructionError = sig.core.instruction.InstructionError;
 const FeatureSet = sig.core.FeatureSet;
 const InstructionContext = sig.runtime.InstructionContext;
-const InstructionInfo = sig.runtime.InstructionInfo;
 const TransactionError = sig.ledger.transaction_status.TransactionError;
 const TransactionResult = sig.runtime.transaction_execution.TransactionResult;
 
@@ -28,43 +28,25 @@ pub const COMPUTE_UNITS = 150;
 
 /// [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/compute-budget/src/lib.rs#L5
 pub fn entrypoint(
-    allocator: std.mem.Allocator,
+    _: std.mem.Allocator,
     ic: *InstructionContext,
 ) (error{OutOfMemory} || InstructionError)!void {
-    _ = allocator;
     try ic.tc.consumeCompute(COMPUTE_UNITS);
 }
 
-test "compute_budget Instruction" {
-    const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
-    var tx = try sig.runtime.testing.createTransactionContext(
-        allocator,
-        prng.random(),
-        .{
-            .accounts = &.{
-                .{
-                    .pubkey = ID,
-                    .owner = sig.runtime.ids.NATIVE_LOADER_ID,
-                },
-            },
-            .compute_meter = COMPUTE_UNITS,
-        },
-    );
-    const tc = &tx[1];
-    defer {
-        sig.runtime.testing.deinitTransactionContext(allocator, tc.*);
-        tx[0].deinit(allocator);
-    }
-
-    try sig.runtime.executor.executeInstruction(allocator, tc, .{
-        .account_metas = .{},
-        .instruction_data = &.{},
-        .program_meta = .{ .index_in_transaction = 0, .pubkey = ID },
-    });
-
-    try std.testing.expectEqual(tc.compute_meter, 0);
-}
+pub const ComputeBudgetInstructionDetails = struct {
+    // compute-budget instruction details:
+    // the first field in tuple is instruction index, second field is the unsanitized value set by user
+    requested_compute_unit_limit: ?struct { u8, u32 } = null,
+    requested_compute_unit_price: ?struct { u8, u64 } = null,
+    requested_heap_size: ?struct { u8, u32 } = null,
+    requested_loaded_accounts_data_size_limit: ?struct { u8, u32 } = null,
+    num_non_compute_budget_instructions: u16 = 0,
+    // Additional builtin program counters
+    num_non_migratable_builtin_instructions: u16 = 0,
+    num_non_builtin_instructions: u16 = 0,
+    migrating_builtin_feature_counters: [MIGRATING_BUILTIN_COSTS.len]u16 = @splat(0),
+};
 
 // [agave] https://github.com/anza-xyz/agave/blob/3e9af14f3a145070773c719ad104b6a02aefd718/compute-budget/src/compute_budget_limits.rs#L28
 pub const ComputeBudgetLimits = struct {
@@ -254,95 +236,98 @@ fn BorshStaticTaggedUnionHelper(comptime U: type) type {
     };
 }
 
-pub fn execute(
-    instructions: []const InstructionInfo,
-    feature_set: *const FeatureSet,
-    slot: sig.core.Slot,
-) TransactionResult(ComputeBudgetLimits) {
-    var requested_compute_unit_limit: ?struct { u8, u32 } = null;
-    var requested_compute_unit_price: ?struct { u8, u64 } = null;
-    var requested_heap_size: ?struct { u8, u32 } = null;
-    var requested_loaded_accounts_data_size_limit: ?struct { u8, u32 } = null;
-    var num_non_compute_budget_instructions: u16 = 0;
-    var num_non_migratable_builtin_instructions: u16 = 0;
-    var num_non_builtin_instructions: u16 = 0;
-    var migrating_builtin_counts = [_]u16{0} ** MIGRATING_BUILTIN_COSTS.len;
-
+/// Compute budget instructions are executed during transaction sanitization.
+/// Successful execution returns a `ComputeBudgetInstructionDetails` struct which is subsequently
+/// sanitized into a `ComputeBudgetLimits` struct during transaction execution.
+pub fn execute(msg: *const Message) TransactionResult(ComputeBudgetInstructionDetails) {
+    var details = ComputeBudgetInstructionDetails{};
     var is_compute_budget_cache = [_]?bool{null} ** MAX_TRANSACTION_ACCOUNTS;
 
-    for (instructions, 0..) |instr, index| {
-        const program_id = instr.program_meta.pubkey;
-        const program_index = instr.program_meta.index_in_transaction;
+    for (msg.instructions, 0..) |instr, index| {
+        const program_id = msg.account_keys[instr.program_index];
+        const program_index = instr.program_index;
 
-        if (isComputeBudgetProgram(&is_compute_budget_cache, program_index, program_id)) {
-            const invalid_instruction_data_error: TransactionResult(ComputeBudgetLimits) = .{
-                .err = .{ .InstructionError = .{ @intCast(index), .InvalidInstructionData } },
-            };
-            const duplicate_instruction_error: TransactionResult(ComputeBudgetLimits) = .{
-                .err = .{ .DuplicateInstruction = @intCast(index) },
-            };
+        if (!isComputeBudgetProgram(&is_compute_budget_cache, program_index, program_id)) {
+            details.num_non_compute_budget_instructions +|= 1;
+            continue;
+        }
 
-            const instruction, _ = ComputeBudgetInstruction.borshDecodeSlice(
-                instr.instructionDataToDeserialize(),
-            ) catch return invalid_instruction_data_error;
+        const invalid_instruction_data_error: TransactionResult(ComputeBudgetInstructionDetails) = .{
+            .err = .{ .InstructionError = .{ @intCast(index), .InvalidInstructionData } },
+        };
+        const duplicate_instruction_error: TransactionResult(ComputeBudgetInstructionDetails) = .{
+            .err = .{ .DuplicateInstruction = @intCast(index) },
+        };
 
-            switch (instruction) {
-                .unused => return invalid_instruction_data_error,
-                .request_heap_frame => |heap_size| {
-                    if (requested_heap_size) |_|
-                        return duplicate_instruction_error;
+        const instruction, _ = ComputeBudgetInstruction.borshDecodeSlice(instr.data) catch
+            return invalid_instruction_data_error;
 
-                    requested_heap_size = .{
-                        @intCast(index),
-                        heap_size,
-                    };
-                },
-                .set_compute_unit_limit => |compute_unit_limit| {
-                    if (requested_compute_unit_limit) |_|
-                        return duplicate_instruction_error;
+        switch (instruction) {
+            .unused => return invalid_instruction_data_error,
+            .request_heap_frame => |heap_size| {
+                if (details.requested_heap_size) |_|
+                    return duplicate_instruction_error;
 
-                    requested_compute_unit_limit = .{
-                        @intCast(index),
-                        compute_unit_limit,
-                    };
-                },
-                .set_compute_unit_price => |compute_unit_price| {
-                    if (requested_compute_unit_price) |_|
-                        return duplicate_instruction_error;
+                details.requested_heap_size = .{
+                    @intCast(index),
+                    heap_size,
+                };
+            },
+            .set_compute_unit_limit => |compute_unit_limit| {
+                if (details.requested_compute_unit_limit) |_|
+                    return duplicate_instruction_error;
 
-                    requested_compute_unit_price = .{
-                        @intCast(index),
-                        compute_unit_price,
-                    };
-                },
-                .set_loaded_accounts_data_size_limit => |loaded_accounts_data_size_limit| {
-                    if (requested_loaded_accounts_data_size_limit) |_|
-                        return duplicate_instruction_error;
+                details.requested_compute_unit_limit = .{
+                    @intCast(index),
+                    compute_unit_limit,
+                };
+            },
+            .set_compute_unit_price => |compute_unit_price| {
+                if (details.requested_compute_unit_price) |_|
+                    return duplicate_instruction_error;
 
-                    requested_loaded_accounts_data_size_limit = .{
-                        @intCast(index),
-                        loaded_accounts_data_size_limit,
-                    };
-                },
-            }
-        } else num_non_compute_budget_instructions +|= 1;
+                details.requested_compute_unit_price = .{
+                    @intCast(index),
+                    compute_unit_price,
+                };
+            },
+            .set_loaded_accounts_data_size_limit => |loaded_accounts_data_size_limit| {
+                if (details.requested_loaded_accounts_data_size_limit) |_|
+                    return duplicate_instruction_error;
+
+                details.requested_loaded_accounts_data_size_limit = .{
+                    @intCast(index),
+                    loaded_accounts_data_size_limit,
+                };
+            },
+        }
     }
 
-    if (requested_compute_unit_limit == null) {
+    if (details.requested_compute_unit_limit == null) {
         var kind_cache = [_]?ProgramKind{null} ** MAX_TRANSACTION_ACCOUNTS;
-        for (instructions, 0..) |instr, index| {
-            switch (getProgramKind(&kind_cache, index, instr.program_meta.pubkey)) {
-                .not_builtin => num_non_builtin_instructions +|= 1,
-                .builtin => num_non_migratable_builtin_instructions +|= 1,
-                .migrating_builtin => |pos| migrating_builtin_counts[pos] += 1,
+        for (msg.instructions, 0..) |instr, index| {
+            const program_id = msg.account_keys[instr.program_index];
+
+            switch (getProgramKind(&kind_cache, index, program_id)) {
+                .not_builtin => details.num_non_builtin_instructions +|= 1,
+                .builtin => details.num_non_migratable_builtin_instructions +|= 1,
+                .migrating_builtin => |pos| details.migrating_builtin_feature_counters[pos] += 1,
             }
         }
     }
 
+    return .{ .ok = details };
+}
+
+pub fn sanitize(
+    details: ComputeBudgetInstructionDetails,
+    feature_set: *const FeatureSet,
+    slot: sig.core.Slot,
+) TransactionResult(ComputeBudgetLimits) {
     // Requested heap size outsize of range is a transaction error
     // Requested heap size is not a multiple of 1024 is an instruction error
     const heap_bytes = blk: {
-        if (requested_heap_size) |heap_size| {
+        if (details.requested_heap_size) |heap_size| {
             const index, const size = heap_size;
             if (size >= MIN_HEAP_FRAME_BYTES and
                 size <= MAX_HEAP_FRAME_BYTES and
@@ -359,27 +344,20 @@ pub fn execute(
     };
 
     // Requested compute unit limit greater than max results in max compute unit limit
-    const compute_unit_limit = if (requested_compute_unit_limit) |limit|
+    const compute_unit_limit = if (details.requested_compute_unit_limit) |limit|
         limit[1]
     else
-        defaultComputeUnitLimit(
-            feature_set,
-            slot,
-            num_non_compute_budget_instructions,
-            num_non_builtin_instructions,
-            num_non_migratable_builtin_instructions,
-            &migrating_builtin_counts,
-        );
+        defaultComputeUnitLimit(feature_set, slot, &details);
 
     // Compute unit price is not bounded
-    const compute_unit_price = if (requested_compute_unit_price) |price|
+    const compute_unit_price = if (details.requested_compute_unit_price) |price|
         price[1]
     else
         0;
 
     // Requested loaded accounts data size limit greater than max results in max loaded accounts data size limit
     const loaded_accounts_bytes = blk: {
-        if (requested_loaded_accounts_data_size_limit) |max_size| {
+        if (details.requested_loaded_accounts_data_size_limit) |max_size| {
             if (max_size[1] == 0) return .{ .err = .InvalidLoadedAccountsDataSizeLimit };
             break :blk max_size[1];
         }
@@ -404,32 +382,29 @@ fn isComputeBudgetProgram(cache: []?bool, index: usize, program_id: Pubkey) bool
 fn defaultComputeUnitLimit(
     feature_set: *const FeatureSet,
     slot: sig.core.Slot,
-    num_non_compute_budget_instructions: u32,
-    num_non_builtin_instructions: u32,
-    num_non_migratable_builtin_instructions: u32,
-    migrating_builtin_counts: []u16,
+    details: *const ComputeBudgetInstructionDetails,
 ) u32 {
-    if (feature_set.active(.reserve_minimal_cus_for_builtin_instructions, slot)) {
-        var num_migrated: u32 = 0;
-        var num_not_migrated: u32 = 0;
-        for (migrating_builtin_counts, 0..) |count, index| {
-            if (count > 0 and feature_set.active(
-                builtin_costs.getMigrationFeatureId(index),
-                slot,
-            ))
-                num_migrated += count
-            else
-                num_not_migrated += count;
-        }
+    if (!feature_set.active(.reserve_minimal_cus_for_builtin_instructions, slot)) {
+        return details.num_non_compute_budget_instructions *| DEFAULT_INSTRUCTION_COMPUTE_UNIT_LIMIT;
+    }
 
-        const builtin_limit = (num_non_migratable_builtin_instructions +| num_not_migrated) *|
-            MAX_BUILTIN_ALLOCATION_COMPUTE_UNIT_LIMIT;
+    var num_migrated: u32 = 0;
+    var num_not_migrated: u32 = 0;
 
-        const not_builtin_limit = (num_non_builtin_instructions +| num_migrated) *|
-            DEFAULT_INSTRUCTION_COMPUTE_UNIT_LIMIT;
+    for (details.migrating_builtin_feature_counters, 0..) |count, index| {
+        if (count > 0 and feature_set.active(
+            builtin_costs.getMigrationFeatureId(index),
+            slot,
+        )) num_migrated += count else num_not_migrated += count;
+    }
 
-        return builtin_limit +| not_builtin_limit;
-    } else return num_non_compute_budget_instructions *| DEFAULT_INSTRUCTION_COMPUTE_UNIT_LIMIT;
+    const builtin_limit = (details.num_non_migratable_builtin_instructions +| num_not_migrated) *|
+        MAX_BUILTIN_ALLOCATION_COMPUTE_UNIT_LIMIT;
+
+    const not_builtin_limit = (details.num_non_builtin_instructions +| num_migrated) *|
+        DEFAULT_INSTRUCTION_COMPUTE_UNIT_LIMIT;
+
+    return builtin_limit +| not_builtin_limit;
 }
 
 const ProgramKind = union(enum(u8)) {
@@ -459,7 +434,8 @@ fn getProgramKind(
 fn testComputeBudgetLimits(
     allocator: std.mem.Allocator,
     feature_set: FeatureSet,
-    instructions: []const InstructionInfo,
+    account_keys: []const Pubkey,
+    instructions: []const sig.core.transaction.Instruction,
     expected: struct {
         err: ?TransactionError = null,
         heap_size: u32 = MIN_HEAP_FRAME_BYTES,
@@ -472,40 +448,43 @@ fn testComputeBudgetLimits(
     defer {
         // Only the compute budget instruction infos have allocated instruction data
         for (instructions) |instr| {
-            if (instr.program_meta.pubkey.equals(&ID))
-                allocator.free(instr.instruction_data);
+            if (account_keys[instr.program_index].equals(&ID))
+                allocator.free(instr.data);
         }
     }
 
-    const indexed_instructions = try allocator.alloc(
-        InstructionInfo,
-        instructions.len,
-    );
-    defer allocator.free(indexed_instructions);
+    const msg = sig.core.transaction.Message{
+        .signature_count = 0,
+        .readonly_signed_count = 0,
+        .readonly_unsigned_count = 0,
+        .recent_blockhash = sig.core.Hash.ZEROES,
+        .account_keys = account_keys,
+        .instructions = instructions,
+        .address_lookups = &.{},
+    };
 
-    for (instructions, 0..) |instr, index| {
-        indexed_instructions[index] = instr;
-        indexed_instructions[index].program_meta.index_in_transaction = @intCast(index);
-    }
+    const execute_result = execute(&msg);
 
-    const result = execute(indexed_instructions, &feature_set, 0);
+    const compute_budget_instruction_details = switch (execute_result) {
+        .ok => |res| res,
+        .err => |actual_err| {
+            try std.testing.expect(expected.err != null);
+            try std.testing.expectEqual(
+                expected.err.?,
+                actual_err,
+            );
+            return;
+        },
+    };
 
-    switch (result) {
+    const sanitize_result = sanitize(compute_budget_instruction_details, &feature_set, 0);
+
+    switch (sanitize_result) {
         .ok => |actual| {
             try std.testing.expect(expected.err == null);
-
-            try std.testing.expectEqual(
-                expected.heap_size,
-                actual.heap_size,
-            );
-            try std.testing.expectEqual(
-                expected.compute_unit_limit,
-                actual.compute_unit_limit,
-            );
-            try std.testing.expectEqual(
-                expected.compute_unit_price,
-                actual.compute_unit_price,
-            );
+            try std.testing.expectEqual(expected.heap_size, actual.heap_size);
+            try std.testing.expectEqual(expected.compute_unit_limit, actual.compute_unit_limit);
+            try std.testing.expectEqual(expected.compute_unit_price, actual.compute_unit_price);
             try std.testing.expectEqual(
                 expected.loaded_accounts_bytes,
                 actual.loaded_accounts_bytes,
@@ -513,19 +492,16 @@ fn testComputeBudgetLimits(
         },
         .err => |actual_err| {
             try std.testing.expect(expected.err != null);
-            try std.testing.expectEqual(
-                expected.err.?,
-                actual_err,
-            );
+            try std.testing.expectEqual(expected.err.?, actual_err);
         },
     }
 }
 
-fn computeBudgetInstructionInfo(
+fn testCreateComputeBudgetInstructionData(
     allocator: std.mem.Allocator,
     instruction: ComputeBudgetInstruction,
-) !InstructionInfo {
-    if (!builtin.is_test) @compileError("computeBudgetInstructionInfo is for testing only");
+) ![]const u8 {
+    if (!builtin.is_test) @compileError("computeBudgetInstructionData is for testing only");
 
     const instruction_data: []const u8 = blk: {
         const cbi_borsh = ComputeBudgetInstruction.borsh;
@@ -538,35 +514,74 @@ fn computeBudgetInstructionInfo(
     };
     errdefer allocator.free(instruction_data);
 
+    return instruction_data;
+}
+
+pub fn testCreateComputeBudgetInstruction(
+    allocator: std.mem.Allocator,
+    program_index: u8,
+    instruction: ComputeBudgetInstruction,
+) !sig.core.transaction.Instruction {
+    if (!builtin.is_test) @compileError("computeBudgetInstructionData is for testing only");
+
     return .{
-        .program_meta = .{ .pubkey = ID, .index_in_transaction = 0 },
-        .account_metas = .{},
-        .instruction_data = instruction_data,
-        .initial_account_lamports = 0,
+        .program_index = program_index,
+        .account_indexes = &.{},
+        .data = try testCreateComputeBudgetInstructionData(allocator, instruction),
     };
 }
 
-fn emptyInstructionInfo(
-    random: std.Random,
-) InstructionInfo {
-    if (!builtin.is_test) @compileError("emptyInstructionInfo is for testing only");
+fn testCreateEmptyInstruction(program_index: u8) sig.core.transaction.Instruction {
+    if (!builtin.is_test) @compileError("testCreateEmptyInstruction is for testing only");
     return .{
-        .program_meta = .{ .pubkey = .initRandom(random), .index_in_transaction = 0 },
+        .program_index = program_index,
+        .account_indexes = &.{},
+        .data = &.{},
+    };
+}
+
+test "compute_budget Instruction" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+    var tx = try sig.runtime.testing.createTransactionContext(
+        allocator,
+        prng.random(),
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = ID,
+                    .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+                },
+            },
+            .compute_meter = COMPUTE_UNITS,
+        },
+    );
+    const tc = &tx[1];
+    defer {
+        sig.runtime.testing.deinitTransactionContext(allocator, tc.*);
+        tx[0].deinit(allocator);
+    }
+
+    try sig.runtime.executor.executeInstruction(allocator, tc, .{
         .account_metas = .{},
         .instruction_data = &.{},
-        .initial_account_lamports = 0,
-    };
+        .program_meta = .{ .index_in_transaction = 0, .pubkey = ID },
+    });
+
+    try std.testing.expectEqual(tc.compute_meter, 0);
 }
 
 test execute {
     const allocator = std.testing.allocator;
 
     var prng = std.Random.DefaultPrng.init(0);
+    const random = prng.random();
 
     // Units
     try testComputeBudgetLimits(
         allocator,
         .ALL_DISABLED,
+        &.{},
         &.{},
         .{ .compute_unit_limit = 0 },
     );
@@ -574,12 +589,12 @@ test execute {
     try testComputeBudgetLimits(
         allocator,
         .ALL_DISABLED,
+        &.{ Pubkey.initRandom(random), ID },
         &.{
-            try computeBudgetInstructionInfo(
-                allocator,
-                .{ .set_compute_unit_limit = 1 },
-            ),
-            emptyInstructionInfo(prng.random()),
+            try testCreateComputeBudgetInstruction(allocator, 1, .{
+                .set_compute_unit_limit = 1,
+            }),
+            testCreateEmptyInstruction(0),
         },
         .{ .compute_unit_limit = 1 },
     );
@@ -587,12 +602,12 @@ test execute {
     try testComputeBudgetLimits(
         allocator,
         .ALL_DISABLED,
+        &.{ Pubkey.initRandom(random), ID },
         &.{
-            try computeBudgetInstructionInfo(
-                allocator,
-                .{ .set_compute_unit_limit = MAX_COMPUTE_UNIT_LIMIT + 1 },
-            ),
-            emptyInstructionInfo(prng.random()),
+            try testCreateComputeBudgetInstruction(allocator, 1, .{
+                .set_compute_unit_limit = MAX_COMPUTE_UNIT_LIMIT + 1,
+            }),
+            testCreateEmptyInstruction(0),
         },
         .{ .compute_unit_limit = MAX_COMPUTE_UNIT_LIMIT },
     );
@@ -600,12 +615,12 @@ test execute {
     try testComputeBudgetLimits(
         allocator,
         .ALL_DISABLED,
+        &.{ Pubkey.initRandom(random), ID },
         &.{
-            emptyInstructionInfo(prng.random()),
-            try computeBudgetInstructionInfo(
-                allocator,
-                .{ .set_compute_unit_limit = MAX_COMPUTE_UNIT_LIMIT },
-            ),
+            testCreateEmptyInstruction(0),
+            try testCreateComputeBudgetInstruction(allocator, 1, .{
+                .set_compute_unit_limit = MAX_COMPUTE_UNIT_LIMIT,
+            }),
         },
         .{ .compute_unit_limit = MAX_COMPUTE_UNIT_LIMIT },
     );
@@ -613,14 +628,14 @@ test execute {
     try testComputeBudgetLimits(
         allocator,
         .ALL_DISABLED,
+        &.{ Pubkey.initRandom(random), ID },
         &.{
-            emptyInstructionInfo(prng.random()),
-            emptyInstructionInfo(prng.random()),
-            emptyInstructionInfo(prng.random()),
-            try computeBudgetInstructionInfo(
-                allocator,
-                .{ .set_compute_unit_limit = 1 },
-            ),
+            testCreateEmptyInstruction(0),
+            testCreateEmptyInstruction(0),
+            testCreateEmptyInstruction(0),
+            try testCreateComputeBudgetInstruction(allocator, 1, .{
+                .set_compute_unit_limit = 1,
+            }),
         },
         .{ .compute_unit_limit = 1 },
     );
@@ -628,15 +643,14 @@ test execute {
     try testComputeBudgetLimits(
         allocator,
         .ALL_DISABLED,
+        &.{ Pubkey.initRandom(random), ID },
         &.{
-            try computeBudgetInstructionInfo(
-                allocator,
-                .{ .set_compute_unit_limit = 1 },
-            ),
-            try computeBudgetInstructionInfo(
-                allocator,
-                .{ .set_compute_unit_price = 42 },
-            ),
+            try testCreateComputeBudgetInstruction(allocator, 1, .{
+                .set_compute_unit_limit = 1,
+            }),
+            try testCreateComputeBudgetInstruction(allocator, 1, .{
+                .set_compute_unit_price = 42,
+            }),
         },
         .{ .compute_unit_limit = 1, .compute_unit_price = 42 },
     );
@@ -645,12 +659,12 @@ test execute {
     try testComputeBudgetLimits(
         allocator,
         .ALL_DISABLED,
+        &.{ Pubkey.initRandom(random), ID },
         &.{
-            try computeBudgetInstructionInfo(
-                allocator,
-                .{ .request_heap_frame = 40 * 1024 },
-            ),
-            emptyInstructionInfo(prng.random()),
+            try testCreateComputeBudgetInstruction(allocator, 1, .{
+                .request_heap_frame = 40 * 1024,
+            }),
+            testCreateEmptyInstruction(0),
         },
         .{
             .heap_size = 40 * 1024,
@@ -661,12 +675,12 @@ test execute {
     try testComputeBudgetLimits(
         allocator,
         .ALL_ENABLED_AT_GENESIS,
+        &.{ Pubkey.initRandom(random), ID },
         &.{
-            try computeBudgetInstructionInfo(
-                allocator,
-                .{ .request_heap_frame = 40 * 1024 },
-            ),
-            emptyInstructionInfo(prng.random()),
+            try testCreateComputeBudgetInstruction(allocator, 1, .{
+                .request_heap_frame = 40 * 1024,
+            }),
+            testCreateEmptyInstruction(0),
         },
         .{
             .heap_size = 40 * 1024,
@@ -678,12 +692,12 @@ test execute {
     try testComputeBudgetLimits(
         allocator,
         .ALL_DISABLED,
+        &.{ Pubkey.initRandom(random), ID },
         &.{
-            try computeBudgetInstructionInfo(
-                allocator,
-                .{ .request_heap_frame = 40 * 1024 + 1 },
-            ),
-            emptyInstructionInfo(prng.random()),
+            try testCreateComputeBudgetInstruction(allocator, 1, .{
+                .request_heap_frame = 40 * 1024 + 1,
+            }),
+            testCreateEmptyInstruction(0),
         },
         .{ .err = .{
             .InstructionError = .{ 0, .InvalidInstructionData },
@@ -693,12 +707,12 @@ test execute {
     try testComputeBudgetLimits(
         allocator,
         .ALL_DISABLED,
+        &.{ Pubkey.initRandom(random), ID },
         &.{
-            try computeBudgetInstructionInfo(
-                allocator,
-                .{ .request_heap_frame = 31 * 1024 },
-            ),
-            emptyInstructionInfo(prng.random()),
+            try testCreateComputeBudgetInstruction(allocator, 1, .{
+                .request_heap_frame = 31 * 1024,
+            }),
+            testCreateEmptyInstruction(0),
         },
         .{ .err = .{
             .InstructionError = .{ 0, .InvalidInstructionData },
@@ -708,12 +722,12 @@ test execute {
     try testComputeBudgetLimits(
         allocator,
         .ALL_DISABLED,
+        &.{ Pubkey.initRandom(random), ID },
         &.{
-            try computeBudgetInstructionInfo(
-                allocator,
-                .{ .request_heap_frame = MAX_HEAP_FRAME_BYTES + 1 },
-            ),
-            emptyInstructionInfo(prng.random()),
+            try testCreateComputeBudgetInstruction(allocator, 1, .{
+                .request_heap_frame = MAX_HEAP_FRAME_BYTES + 1,
+            }),
+            testCreateEmptyInstruction(0),
         },
         .{ .err = .{
             .InstructionError = .{ 0, .InvalidInstructionData },
@@ -723,12 +737,12 @@ test execute {
     try testComputeBudgetLimits(
         allocator,
         .ALL_DISABLED,
+        &.{ Pubkey.initRandom(random), ID },
         &.{
-            emptyInstructionInfo(prng.random()),
-            try computeBudgetInstructionInfo(
-                allocator,
-                .{ .request_heap_frame = MAX_HEAP_FRAME_BYTES },
-            ),
+            testCreateEmptyInstruction(0),
+            try testCreateComputeBudgetInstruction(allocator, 1, .{
+                .request_heap_frame = MAX_HEAP_FRAME_BYTES,
+            }),
         },
         .{
             .heap_size = MAX_HEAP_FRAME_BYTES,
@@ -741,12 +755,12 @@ test execute {
     try testComputeBudgetLimits(
         allocator,
         .ALL_ENABLED_AT_GENESIS,
+        &.{ Pubkey.initRandom(random), ID },
         &.{
-            emptyInstructionInfo(prng.random()),
-            try computeBudgetInstructionInfo(
-                allocator,
-                .{ .request_heap_frame = MAX_HEAP_FRAME_BYTES },
-            ),
+            testCreateEmptyInstruction(0),
+            try testCreateComputeBudgetInstruction(allocator, 1, .{
+                .request_heap_frame = MAX_HEAP_FRAME_BYTES,
+            }),
         },
         .{
             .heap_size = MAX_HEAP_FRAME_BYTES,
@@ -760,14 +774,14 @@ test execute {
     try testComputeBudgetLimits(
         allocator,
         .ALL_DISABLED,
+        &.{ Pubkey.initRandom(random), ID },
         &.{
-            emptyInstructionInfo(prng.random()),
-            emptyInstructionInfo(prng.random()),
-            emptyInstructionInfo(prng.random()),
-            try computeBudgetInstructionInfo(
-                allocator,
-                .{ .request_heap_frame = 1 },
-            ),
+            testCreateEmptyInstruction(0),
+            testCreateEmptyInstruction(0),
+            testCreateEmptyInstruction(0),
+            try testCreateComputeBudgetInstruction(allocator, 1, .{
+                .request_heap_frame = 1,
+            }),
         },
         .{ .err = .{
             .InstructionError = .{ 3, .InvalidInstructionData },
@@ -777,15 +791,16 @@ test execute {
     try testComputeBudgetLimits(
         allocator,
         .ALL_DISABLED,
+        &.{ Pubkey.initRandom(random), ID },
         &.{
-            emptyInstructionInfo(prng.random()),
-            emptyInstructionInfo(prng.random()),
-            emptyInstructionInfo(prng.random()),
-            emptyInstructionInfo(prng.random()),
-            emptyInstructionInfo(prng.random()),
-            emptyInstructionInfo(prng.random()),
-            emptyInstructionInfo(prng.random()),
-            emptyInstructionInfo(prng.random()),
+            testCreateEmptyInstruction(0),
+            testCreateEmptyInstruction(0),
+            testCreateEmptyInstruction(0),
+            testCreateEmptyInstruction(0),
+            testCreateEmptyInstruction(0),
+            testCreateEmptyInstruction(0),
+            testCreateEmptyInstruction(0),
+            testCreateEmptyInstruction(0),
         },
         .{ .compute_unit_limit = DEFAULT_INSTRUCTION_COMPUTE_UNIT_LIMIT * 7 },
     );
@@ -793,20 +808,18 @@ test execute {
     try testComputeBudgetLimits(
         allocator,
         .ALL_DISABLED,
+        &.{ Pubkey.initRandom(random), ID },
         &.{
-            emptyInstructionInfo(prng.random()),
-            try computeBudgetInstructionInfo(
-                allocator,
-                .{ .request_heap_frame = MAX_HEAP_FRAME_BYTES },
-            ),
-            try computeBudgetInstructionInfo(
-                allocator,
-                .{ .set_compute_unit_limit = MAX_COMPUTE_UNIT_LIMIT },
-            ),
-            try computeBudgetInstructionInfo(
-                allocator,
-                .{ .set_compute_unit_price = std.math.maxInt(u64) },
-            ),
+            testCreateEmptyInstruction(0),
+            try testCreateComputeBudgetInstruction(allocator, 1, .{
+                .request_heap_frame = MAX_HEAP_FRAME_BYTES,
+            }),
+            try testCreateComputeBudgetInstruction(allocator, 1, .{
+                .set_compute_unit_limit = MAX_COMPUTE_UNIT_LIMIT,
+            }),
+            try testCreateComputeBudgetInstruction(allocator, 1, .{
+                .set_compute_unit_price = std.math.maxInt(u64),
+            }),
         },
         .{
             .heap_size = MAX_HEAP_FRAME_BYTES,
@@ -818,20 +831,18 @@ test execute {
     try testComputeBudgetLimits(
         allocator,
         .ALL_DISABLED,
+        &.{ Pubkey.initRandom(random), ID },
         &.{
-            emptyInstructionInfo(prng.random()),
-            try computeBudgetInstructionInfo(
-                allocator,
-                .{ .set_compute_unit_limit = 1 },
-            ),
-            try computeBudgetInstructionInfo(
-                allocator,
-                .{ .request_heap_frame = MAX_HEAP_FRAME_BYTES },
-            ),
-            try computeBudgetInstructionInfo(
-                allocator,
-                .{ .set_compute_unit_price = std.math.maxInt(u64) },
-            ),
+            testCreateEmptyInstruction(0),
+            try testCreateComputeBudgetInstruction(allocator, 1, .{
+                .set_compute_unit_limit = 1,
+            }),
+            try testCreateComputeBudgetInstruction(allocator, 1, .{
+                .request_heap_frame = MAX_HEAP_FRAME_BYTES,
+            }),
+            try testCreateComputeBudgetInstruction(allocator, 1, .{
+                .set_compute_unit_price = std.math.maxInt(u64),
+            }),
         },
         .{
             .heap_size = MAX_HEAP_FRAME_BYTES,
@@ -843,16 +854,15 @@ test execute {
     try testComputeBudgetLimits(
         allocator,
         .ALL_DISABLED,
+        &.{ Pubkey.initRandom(random), ID },
         &.{
-            emptyInstructionInfo(prng.random()),
-            try computeBudgetInstructionInfo(
-                allocator,
-                .{ .set_compute_unit_limit = MAX_COMPUTE_UNIT_LIMIT },
-            ),
-            try computeBudgetInstructionInfo(
-                allocator,
-                .{ .set_compute_unit_limit = MAX_COMPUTE_UNIT_LIMIT - 1 },
-            ),
+            testCreateEmptyInstruction(0),
+            try testCreateComputeBudgetInstruction(allocator, 1, .{
+                .set_compute_unit_limit = MAX_COMPUTE_UNIT_LIMIT,
+            }),
+            try testCreateComputeBudgetInstruction(allocator, 1, .{
+                .set_compute_unit_limit = MAX_COMPUTE_UNIT_LIMIT - 1,
+            }),
         },
         .{ .err = .{
             .DuplicateInstruction = 2,
@@ -862,16 +872,15 @@ test execute {
     try testComputeBudgetLimits(
         allocator,
         .ALL_DISABLED,
+        &.{ Pubkey.initRandom(random), ID },
         &.{
-            emptyInstructionInfo(prng.random()),
-            try computeBudgetInstructionInfo(
-                allocator,
-                .{ .request_heap_frame = MIN_HEAP_FRAME_BYTES },
-            ),
-            try computeBudgetInstructionInfo(
-                allocator,
-                .{ .request_heap_frame = MAX_HEAP_FRAME_BYTES },
-            ),
+            testCreateEmptyInstruction(0),
+            try testCreateComputeBudgetInstruction(allocator, 1, .{
+                .request_heap_frame = MIN_HEAP_FRAME_BYTES,
+            }),
+            try testCreateComputeBudgetInstruction(allocator, 1, .{
+                .request_heap_frame = MAX_HEAP_FRAME_BYTES,
+            }),
         },
         .{ .err = .{
             .DuplicateInstruction = 2,
@@ -881,16 +890,15 @@ test execute {
     try testComputeBudgetLimits(
         allocator,
         .ALL_DISABLED,
+        &.{ Pubkey.initRandom(random), ID },
         &.{
-            emptyInstructionInfo(prng.random()),
-            try computeBudgetInstructionInfo(
-                allocator,
-                .{ .set_compute_unit_price = 0 },
-            ),
-            try computeBudgetInstructionInfo(
-                allocator,
-                .{ .set_compute_unit_price = std.math.maxInt(u64) },
-            ),
+            testCreateEmptyInstruction(0),
+            try testCreateComputeBudgetInstruction(allocator, 1, .{
+                .set_compute_unit_price = 0,
+            }),
+            try testCreateComputeBudgetInstruction(allocator, 1, .{
+                .set_compute_unit_price = std.math.maxInt(u64),
+            }),
         },
         .{ .err = .{
             .DuplicateInstruction = 2,
@@ -901,12 +909,12 @@ test execute {
     try testComputeBudgetLimits(
         allocator,
         .ALL_DISABLED,
+        &.{ Pubkey.initRandom(random), ID },
         &.{
-            try computeBudgetInstructionInfo(
-                allocator,
-                .{ .set_loaded_accounts_data_size_limit = 1 },
-            ),
-            emptyInstructionInfo(prng.random()),
+            try testCreateComputeBudgetInstruction(allocator, 1, .{
+                .set_loaded_accounts_data_size_limit = 1,
+            }),
+            testCreateEmptyInstruction(0),
         },
         .{
             .compute_unit_limit = DEFAULT_INSTRUCTION_COMPUTE_UNIT_LIMIT,
@@ -917,12 +925,12 @@ test execute {
     try testComputeBudgetLimits(
         allocator,
         .ALL_ENABLED_AT_GENESIS,
+        &.{ Pubkey.initRandom(random), ID },
         &.{
-            try computeBudgetInstructionInfo(
-                allocator,
-                .{ .set_loaded_accounts_data_size_limit = 1 },
-            ),
-            emptyInstructionInfo(prng.random()),
+            try testCreateComputeBudgetInstruction(allocator, 1, .{
+                .set_loaded_accounts_data_size_limit = 1,
+            }),
+            testCreateEmptyInstruction(0),
         },
         .{
             .compute_unit_limit = DEFAULT_INSTRUCTION_COMPUTE_UNIT_LIMIT +
@@ -931,26 +939,31 @@ test execute {
         },
     );
 
-    try testComputeBudgetLimits(allocator, .ALL_DISABLED, &.{
-        try computeBudgetInstructionInfo(
-            allocator,
-            .{ .set_loaded_accounts_data_size_limit = MAX_LOADED_ACCOUNTS_DATA_SIZE_BYTES + 1 },
-        ),
-        emptyInstructionInfo(prng.random()),
-    }, .{
-        .compute_unit_limit = DEFAULT_INSTRUCTION_COMPUTE_UNIT_LIMIT,
-        .loaded_accounts_bytes = MAX_LOADED_ACCOUNTS_DATA_SIZE_BYTES,
-    });
+    try testComputeBudgetLimits(
+        allocator,
+        .ALL_DISABLED,
+        &.{ Pubkey.initRandom(random), ID },
+        &.{
+            try testCreateComputeBudgetInstruction(allocator, 1, .{
+                .set_loaded_accounts_data_size_limit = MAX_LOADED_ACCOUNTS_DATA_SIZE_BYTES + 1,
+            }),
+            testCreateEmptyInstruction(0),
+        },
+        .{
+            .compute_unit_limit = DEFAULT_INSTRUCTION_COMPUTE_UNIT_LIMIT,
+            .loaded_accounts_bytes = MAX_LOADED_ACCOUNTS_DATA_SIZE_BYTES,
+        },
+    );
 
     try testComputeBudgetLimits(
         allocator,
         .ALL_ENABLED_AT_GENESIS,
+        &.{ Pubkey.initRandom(random), ID },
         &.{
-            try computeBudgetInstructionInfo(
-                allocator,
-                .{ .set_loaded_accounts_data_size_limit = MAX_LOADED_ACCOUNTS_DATA_SIZE_BYTES + 1 },
-            ),
-            emptyInstructionInfo(prng.random()),
+            try testCreateComputeBudgetInstruction(allocator, 1, .{
+                .set_loaded_accounts_data_size_limit = MAX_LOADED_ACCOUNTS_DATA_SIZE_BYTES + 1,
+            }),
+            testCreateEmptyInstruction(0),
         },
         .{
             .compute_unit_limit = DEFAULT_INSTRUCTION_COMPUTE_UNIT_LIMIT +
@@ -962,8 +975,9 @@ test execute {
     try testComputeBudgetLimits(
         allocator,
         .ALL_DISABLED,
+        &.{ Pubkey.initRandom(random), ID },
         &.{
-            emptyInstructionInfo(prng.random()),
+            testCreateEmptyInstruction(0),
         },
         .{
             .compute_unit_limit = DEFAULT_INSTRUCTION_COMPUTE_UNIT_LIMIT,
@@ -974,14 +988,17 @@ test execute {
     try testComputeBudgetLimits(
         allocator,
         .ALL_DISABLED,
+        &.{ Pubkey.initRandom(random), ID },
         &.{
-            emptyInstructionInfo(prng.random()),
-            try computeBudgetInstructionInfo(
+            testCreateEmptyInstruction(0),
+            try testCreateComputeBudgetInstruction(
                 allocator,
+                1,
                 .{ .set_loaded_accounts_data_size_limit = MAX_LOADED_ACCOUNTS_DATA_SIZE_BYTES },
             ),
-            try computeBudgetInstructionInfo(
+            try testCreateComputeBudgetInstruction(
                 allocator,
+                1,
                 .{ .set_loaded_accounts_data_size_limit = MAX_LOADED_ACCOUNTS_DATA_SIZE_BYTES },
             ),
         },
