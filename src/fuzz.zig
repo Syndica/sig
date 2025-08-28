@@ -158,6 +158,6 @@ pub fn main() !void {
         => |run_cmd| try allocators_fuzz.run(gpa, seed, run_cmd),
 
         .ledger,
-        => |run_cmd| try ledger_fuzz.run(seed, run_cmd),
+        => |run_cmd| try ledger_fuzz.run(gpa, .from(logger), seed, sub_data_dir, run_cmd),
     }
 }
