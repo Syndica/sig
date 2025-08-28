@@ -11,10 +11,11 @@ const Instant = sig.time.Instant;
 const Registry = sig.prometheus.Registry;
 const Slot = sig.core.Slot;
 
+const assert = std.debug.assert;
+
 const Logger = sig.trace.Logger("shred_tracker");
 
 const MAX_SHREDS_PER_SLOT: usize = sig.ledger.shred.MAX_SHREDS_PER_SLOT;
-
 const MIN_SLOT_AGE_TO_REPORT_AS_MISSING: Duration = Duration.fromMillis(600);
 
 pub const Range = struct {
@@ -131,9 +132,7 @@ pub const BasicShredTracker = struct {
         if (parent_slot + 1 != slot) {
             for (parent_slot + 1..slot) |slot_to_skip| {
                 const monitored_slot_to_skip = self.observeSlot(slot_to_skip) catch continue;
-                if (!monitored_slot_to_skip.is_complete) {
-                    monitored_slot_to_skip.is_skipped = true;
-                }
+                monitored_slot_to_skip.is_skipped = true;
             }
         }
 
@@ -195,27 +194,31 @@ pub const BasicShredTracker = struct {
         for (self.current_bottom_slot..last_slot_to_check + 1) |slot| {
             const monitored_slot = try self.getMonitoredSlot(slot);
 
-            if (now.elapsedSince(monitored_slot.first_received_timestamp)
-                .lt(MIN_SLOT_AGE_TO_REPORT_AS_MISSING))
+            var this_slot_needs_more_shreds = !monitored_slot.is_complete;
+            defer {
+                if (this_slot_needs_more_shreds) found_an_incomplete_slot = true;
+                if (!found_an_incomplete_slot) self.setBottom(slot + 1);
+            }
+
+            if (monitored_slot.is_complete or
+                now.elapsedSince(monitored_slot.first_received_timestamp)
+                    .lt(MIN_SLOT_AGE_TO_REPORT_AS_MISSING))
                 continue;
 
-            if (!try self.slotShouldBeSkipped(monitored_slot, slot, last_slot_to_check, now)) {
-                var slot_report = try slot_reports.addOne();
-                slot_report.slot = slot;
-                try monitored_slot.identifyMissing(&slot_report.missing_shreds);
-                if (slot_report.missing_shreds.items.len > 0) {
-                    std.debug.assert(!monitored_slot.is_complete);
-                    found_an_incomplete_slot = true;
-                } else {
-                    std.debug.assert(monitored_slot.is_complete);
-                    slot_reports.drop(1);
-                }
+            if (try self.slotShouldBeSkipped(monitored_slot, slot, last_slot_to_check, now)) {
+                this_slot_needs_more_shreds = false;
+                continue;
             }
 
-            if (!found_an_incomplete_slot) {
-                self.setBottom(slot + 1);
+            const slot_report = try slot_reports.addOne();
+            slot_report.slot = slot;
+            try monitored_slot.identifyMissing(&slot_report.missing_shreds);
+            if (monitored_slot.is_complete) {
+                assert(slot_report.missing_shreds.items.len == 0);
+                slot_reports.drop(1);
             }
         }
+
         return true;
     }
 
@@ -385,7 +388,7 @@ const ShredSet = std.bit_set.ArrayBitSet(usize, MAX_SHREDS_PER_SLOT / 10);
 
 const bit_set = struct {
     pub fn setAndWasSet(self: *ShredSet, index: usize) bool {
-        std.debug.assert(index < ShredSet.bit_length);
+        assert(index < ShredSet.bit_length);
         const mask_bit = maskBit(index);
         const mask_index = maskIndex(index);
         defer self.masks[mask_index] |= mask_bit;
@@ -443,10 +446,10 @@ const MonitoredSlot = struct {
         const max_seen = self.max_seen.?; // was just set above if null
 
         if (self.last_shred) |last| {
-            std.debug.assert(last <= max_seen);
-            std.debug.assert(last >= self.unique_observed_count -| 1);
+            assert(last <= max_seen);
+            assert(last >= self.unique_observed_count -| 1);
             if (self.unique_observed_count == last) {
-                std.debug.assert(last == max_seen);
+                assert(last == max_seen);
                 self.is_complete = true;
                 return true;
             }
