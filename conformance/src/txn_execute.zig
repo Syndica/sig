@@ -785,20 +785,12 @@ fn executeTxnContext(
             .account_reader = accounts_db.accountReader().forSlot(&ancestors),
             .reserved_accounts = &reserved_accounts,
             .slot_hashes = try sysvar_cache.get(sig.runtime.sysvar.SlotHashes),
-        }) catch |err| switch (err) {
+        }) catch |err| break :blk switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
-            error.AddressLookupTableNotFound => break :blk .{
-                .err = .AddressLookupTableNotFound,
-            },
-            error.InvalidAddressLookupTableOwner => break :blk .{
-                .err = .InvalidAddressLookupTableOwner,
-            },
-            error.InvalidAddressLookupTableData => break :blk .{
-                .err = .InvalidAddressLookupTableData,
-            },
-            error.InvalidAddressLookupTableIndex => break :blk .{
-                .err = .InvalidAddressLookupTableIndex,
-            },
+            error.AddressLookupTableNotFound => .{ .err = .AddressLookupTableNotFound },
+            error.InvalidAddressLookupTableOwner => .{ .err = .InvalidAddressLookupTableOwner },
+            error.InvalidAddressLookupTableData => .{ .err = .InvalidAddressLookupTableData },
+            error.InvalidAddressLookupTableIndex => .{ .err = .InvalidAddressLookupTableIndex },
             else => std.debug.panic("Unexpected error: {s}\n", .{@errorName(err)}),
         };
         break :blk .{ .ok = resolved };
@@ -1082,7 +1074,6 @@ fn serializeOutput(
             .transaction_fee = fees.transaction_fee,
             .prioritization_fee = fees.prioritization_fee,
         },
-        // TODO: obviously hard coded number. compute_meter counts how many units left instead of how many units consumed
         .executed_units = txn.executedUnits() orelse 0,
         .loaded_accounts_data_size = txn.loadedAccountsDataSize(),
     };

@@ -246,13 +246,13 @@ pub const Transaction = struct {
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/42711325c40b314dafe3d5a41eb5b19af49cf1dc/transaction/src/versioned/mod.rs#L120
     pub fn validate(self: Transaction) !void {
         try self.msg.validate();
-        try self.validateSignatures();
+        try self.validateSignatureCounts();
     }
 
     /// Run some sanity checks on the signature counts to ensure the internal data has consistency.
     ///
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/42711325c40b314dafe3d5a41eb5b19af49cf1dc/transaction/src/versioned/mod.rs#L126
-    pub fn validateSignatures(self: *const Transaction) !void {
+    pub fn validateSignatureCounts(self: *const Transaction) !void {
         switch (std.math.order(self.msg.signature_count, self.signatures.len)) {
             .lt => return error.TooManySignatures,
             .gt => return error.NotEnoughSignatures,
