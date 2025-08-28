@@ -26,11 +26,11 @@ pub fn verifyTransactionWithoutSignatureVerification(txn: Transaction) VerifyTra
 fn verifyTransactionInner(txn: Transaction, skip_sig_verify: bool) VerifyTransactionResult {
     // If skipping signature verification, we still need to serialize and compute the hash
     // to ensure the transaction is well-formed.
-    const msg_hash = if (skip_sig_verify) blk: {
-        const msg_bytes = txn.msg.serializeBounded(txn.version) catch
-            return .{ .err = .SanitizeFailure };
-        break :blk Message.hash(msg_bytes.slice());
-    } else txn.verifyAndHashMessage() catch return .{ .err = .SanitizeFailure };
+    const msg_hash = if (skip_sig_verify)
+        Message.hash((txn.msg.serializeBounded(txn.version) catch
+            return .{ .err = .SanitizeFailure }).slice())
+    else
+        txn.verifyAndHashMessage() catch return .{ .err = .SanitizeFailure };
 
     txn.validate() catch return .{ .err = .SanitizeFailure };
 

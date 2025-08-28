@@ -58,13 +58,10 @@ pub fn processBatch(
         const hash, const compute_budget_details =
             switch (verifyTransaction(transaction.transaction)) {
                 .ok => |res| res,
-                .err => |_| return .{ .failure = .SignatureFailure }, // This is not strictly true as there are other verification errors
+                .err => |err| return .{ .failure = err },
             };
 
-        const runtime_transaction = transaction.toRuntimeTransaction(
-            hash,
-            compute_budget_details,
-        );
+        const runtime_transaction = transaction.toRuntimeTransaction(hash, compute_budget_details);
 
         switch (try executeTransaction(allocator, &svm_gateway, &runtime_transaction)) {
             .ok => |result| results[i] = .{ hash, result },
