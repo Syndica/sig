@@ -656,6 +656,10 @@ fn newSlotFromParent(
     return .{ constants, state };
 }
 
+/// Determines which features are active for this slot by looking up the feature
+/// accounts in accountsdb.
+///
+/// Analogous to [compute_active_feature_set](https://github.com/anza-xyz/agave/blob/785455b5a3e2d8a95f878d6c80d5361dea9256db/runtime/src/bank.rs#L5338-L5339)
 // TODO: epoch boundary - handle feature activations
 pub fn getActiveFeatures(
     allocator: Allocator,
@@ -668,7 +672,7 @@ pub fn getActiveFeatures(
         const possible_feature_pubkey = sig.core.features.map.get(possible_feature).key;
         const feature_account = try account_reader.get(possible_feature_pubkey) orelse continue;
         if (!feature_account.owner.equals(&sig.runtime.ids.FEATURE_PROGRAM_ID)) {
-            return error.FeatureNotOwnedByFeatureProgram;
+            continue;
         }
 
         var data_iterator = feature_account.data.iterator();
