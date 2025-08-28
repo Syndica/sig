@@ -116,11 +116,11 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
 
     defer for ([_][]const u8{ main_dir_name, alt_dir_name }) |dir_name| {
         // NOTE: sometimes this can take a long time so we print when we start and finish
-        std.debug.print("deleting dir: {s}...\n", .{dir_name});
-        defer std.debug.print("deleted dir: {s}\n", .{dir_name});
+        logger.info().logf("deleting dir: {s}...", .{dir_name});
+        defer logger.info().logf("deleted dir: {s}", .{dir_name});
         fuzz_data_dir.deleteTreeMinStackSize(dir_name) catch |err| {
-            std.debug.print(
-                "failed to delete accountsdb dir ('{s}'): {}\n",
+            logger.err().logf(
+                "failed to delete accountsdb dir ('{s}'): {}",
                 .{ dir_name, err },
             );
         };
@@ -130,7 +130,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     var last_inc_snapshot_validated_slot: Slot = 0;
 
     const use_disk = random.boolean();
-    logger.info().logf("use disk: {}\n", .{use_disk});
+    logger.info().logf("use disk: {}", .{use_disk});
     var accounts_db: AccountsDB = try .init(.{
         .allocator = allocator,
         .logger = .from(logger),
@@ -191,7 +191,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
             &reader_exit,
             thread_i,
         }));
-        std.debug.print("started readRandomAccounts thread: {}\n", .{thread_i});
+        logger.debug().logf("started readRandomAccounts thread: {}", .{thread_i});
     }
 
     var largest_rooted_slot: Slot = 0;
@@ -200,7 +200,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     // get/put a bunch of accounts
     while (true) {
         if (maybe_max_slots) |max_slots| if (slot >= max_slots) {
-            std.debug.print("reached max slots: {}\n", .{max_slots});
+            logger.info().logf("reached max slots: {}", .{max_slots});
             break;
         };
         defer switch (random.int(u2)) {
@@ -423,7 +423,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
         }
     }
 
-    std.debug.print("fuzzing complete\n", .{});
+    logger.info().logf("fuzzing complete", .{});
 }
 
 fn readRandomAccounts(
