@@ -331,8 +331,5 @@ instr/fixtures/bpf-loader-v3/ff1926c5af58bf3617e014437a463829dc0a1c0a_743720.fix
 instr/fixtures/bpf-loader-v3/ff93184975311fc3bf38ab6d6dec011a44a1ef24_1817920.fix
 
 syscall/fixtures/cpi/5b2b64c42a7df83b59199904e8a0fda504c10333_1858828.fix
-syscall/fixtures/cpi/5e4a5d0bd9f6bb207754b0f407fb2e13dc8733d2_136304.fix
 syscall/fixtures/cpi/74436bf2974847823c3e27c1c98cdd4ee91c65c5_1887489.fix
-syscall/fixtures/cpi/9f6091b8d08548a810cdb962729353e5d69c17d7_686535.fix
-syscall/fixtures/cpi/callee_not_executable_log.fix
 syscall/fixtures/cpi/cpi_acc_meta_txn_instr_check_one_loop.fix
