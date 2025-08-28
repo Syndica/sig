@@ -1745,15 +1745,13 @@ test "processConsensus - no duplicate confirmed without votes" {
     const SlotSet = sig.utils.collections.SortedSetUnmanaged(Slot);
     var ancestors: std.AutoArrayHashMapUnmanaged(Slot, Ancestors) = .empty;
     defer {
-        var it = ancestors.iterator();
-        while (it.next()) |entry| entry.value_ptr.deinit(testing.allocator);
+        for (ancestors.values()) |*val| val.deinit(testing.allocator);
         ancestors.deinit(testing.allocator);
     }
     var descendants: std.AutoArrayHashMapUnmanaged(Slot, SlotSet) = .empty;
     defer descendants.deinit(testing.allocator);
     defer {
-        var it = descendants.iterator();
-        while (it.next()) |entry| entry.value_ptr.deinit(testing.allocator);
+        for (descendants.values()) |*val| val.deinit(testing.allocator);
     }
     for (
         fixture.slot_tracker.slots.keys(),
@@ -1832,6 +1830,8 @@ test "processConsensus - no duplicate confirmed without votes" {
         .rent_epoch = 0,
     });
 
+    const slot_history_accessor = SlotHistoryAccessor.init(tsm1.accountReader());
+
     const deps: ConsensusDependencies = .{
         .allocator = testing.allocator,
         .logger = .noop,
@@ -1845,10 +1845,7 @@ test "processConsensus - no duplicate confirmed without votes" {
         .ancestors = &ancestors,
         .descendants = &descendants,
         .vote_account = fixture.vote_pubkeys.items[0],
-        .slot_history_accessor = &(blk: {
-            var accessor = SlotHistoryAccessor.init(tsm1.accountReader());
-            break :blk accessor;
-        }),
+        .slot_history_accessor = &slot_history_accessor,
         .latest_validator_votes_for_frozen_banks = &fixture.latest_validator_votes_for_frozen_banks,
         .slot_data = &slot_data,
         .ancestor_hashes_replay_update_sender = ancestor_hashes_replay_update_sender,
@@ -1906,8 +1903,7 @@ test "processConsensus - duplicate-confirmed is idempotent" {
     const SlotSet = sig.utils.collections.SortedSetUnmanaged(Slot);
     var ancestors: std.AutoArrayHashMapUnmanaged(Slot, Ancestors) = .empty;
     defer {
-        var it = ancestors.iterator();
-        while (it.next()) |entry| entry.value_ptr.deinit(testing.allocator);
+        for (ancestors.values()) |*val| val.deinit(testing.allocator);
         ancestors.deinit(testing.allocator);
     }
     var descendants: std.AutoArrayHashMapUnmanaged(Slot, SlotSet) = .empty;
@@ -1987,6 +1983,8 @@ test "processConsensus - duplicate-confirmed is idempotent" {
         .rent_epoch = 0,
     });
 
+    const slot_history_accessor = SlotHistoryAccessor.init(tsm2.accountReader());
+
     const deps: ConsensusDependencies = .{
         .allocator = testing.allocator,
         .logger = .noop,
@@ -2000,10 +1998,7 @@ test "processConsensus - duplicate-confirmed is idempotent" {
         .ancestors = &ancestors,
         .descendants = &descendants,
         .vote_account = fixture.vote_pubkeys.items[0],
-        .slot_history_accessor = &(blk: {
-            var accessor2 = SlotHistoryAccessor.init(tsm2.accountReader());
-            break :blk accessor2;
-        }),
+        .slot_history_accessor = &slot_history_accessor,
         .latest_validator_votes_for_frozen_banks = &fixture.latest_validator_votes_for_frozen_banks,
         .slot_data = &slot_data,
         .ancestor_hashes_replay_update_sender = ancestor_hashes_replay_update_sender,
