@@ -79,20 +79,18 @@ pub const Committer = struct {
                 .executed => |exec| {
                     rent_collected += exec.loaded_accounts.rent_collected;
                     // Skip non successful or non vote transactions.
-                    if (exec.executed_transaction.err != null or
-                        !isSimpleVoteTransaction(transaction.transaction))
+                    if (exec.executed_transaction.err == null and
+                        isSimpleVoteTransaction(transaction.transaction))
                     {
-                        continue;
-                    }
-
-                    if (vote_listener.vote_parser.parseSanitizedVoteTransaction(
-                        allocator,
-                        transaction,
-                    ) catch null) |parsed| {
-                        if (parsed.vote.lastVotedSlot() != null) {
-                            replay_votes_sender.send(parsed) catch parsed.deinit(allocator);
-                        } else {
-                            parsed.deinit(allocator);
+                        if (vote_listener.vote_parser.parseSanitizedVoteTransaction(
+                            allocator,
+                            transaction,
+                        ) catch null) |parsed| {
+                            if (parsed.vote.lastVotedSlot() != null) {
+                                replay_votes_sender.send(parsed) catch parsed.deinit(allocator);
+                            } else {
+                                parsed.deinit(allocator);
+                            }
                         }
                     }
                 },
