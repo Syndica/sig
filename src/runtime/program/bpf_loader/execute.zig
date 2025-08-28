@@ -88,32 +88,149 @@ pub fn executeBpfLoaderV4ProgramInstruction(
         &buf,
     );
 
-    _ = allocator;
-    _ = instruction;
-    // return switch (instruction) {
-    //     .write => |args| executeV4Write(
-    //         allocator,
-    //         ic,
-    //         args.offset,
-    //         args.bytes,
-    //     ),
-    //     .copy => |args| executeV4Copy(
-    //         allocator,
-    //         ic,
-    //         args.destination_offset,
-    //         args.source_offset,
-    //         args.length,
-    //     ),
-    //     .set_program_length => |args| executeV4SetProgramLength(
-    //         allocator,
-    //         ic,
-    //         args.new_size,
-    //     ),
-    //     .deploy => executeV4Deploy(allocator, ic),
-    //     .retract => executeV4Retract(allocator, ic),
-    //     .transfer_authority => executeV4TransferAuthority(allocator, ic),
-    //     .finalize => executeV4Finalize(allocator, ic),
-    // };
+    return switch (instruction) {
+        .write => |args| executeV4Write(
+            allocator,
+            ic,
+            args.offset,
+            args.bytes,
+        ),
+        .copy => |args| executeV4Copy(
+            allocator,
+            ic,
+            args.destination_offset,
+            args.source_offset,
+            args.length,
+        ),
+        else => std.debug.panic("TODO: {any}", .{instruction}),
+        // .set_program_length => |args| executeV4SetProgramLength(
+        //     allocator,
+        //     ic,
+        //     args.new_size,
+        // ),
+        // .deploy => executeV4Deploy(allocator, ic),
+        // .retract => executeV4Retract(allocator, ic),
+        // .transfer_authority => executeV4TransferAuthority(allocator, ic),
+        // .finalize => executeV4Finalize(allocator, ic),
+    };
+}
+
+fn checkProgramAccount(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+    program_account: *const sig.runtime.BorrowedAccount,
+    authority_address: Pubkey,
+) (error{OutOfMemory} || InstructionError)!bpf_loader_program.v4.State {
+    if (!program_account.account.owner.equals(&bpf_loader_program.v4.ID)) {
+        try ic.tc.log("Program not owned by loader", .{});
+        return error.InvalidAccountOwner;
+    }
+
+    const state =
+        try program_account.deserializeFromAccountData(allocator, bpf_loader_program.v4.State);
+    errdefer bincode.free(allocator, state);
+
+    if (!program_account.context.is_writable) {
+        try ic.tc.log("Program is not writeable", .{});
+        return error.InvalidArgument;
+    }
+    if (!(try ic.ixn_info.isIndexSigner(1))) {
+        try ic.tc.log("Authority did not sign", .{});
+        return error.MissingRequiredSignature;
+    }
+    if (!state.authority_address_or_next_version.equals(&authority_address)) {
+        try ic.tc.log("Incorrect authority provided", .{});
+        return error.IncorrectAuthority;
+    }
+    if (state.status == .finalized) {
+        try ic.tc.log("Program is finalized", .{});
+        return error.Immutable;
+    }
+
+    return state;
+}
+
+fn executeV4Write(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+    offset: u32,
+    bytes: []const u8,
+) (error{OutOfMemory} || InstructionError)!void {
+    const AccountIndex = bpf_loader_program.v4.instruction.Write.AccountIndex;
+    const program_account = try ic.borrowInstructionAccount(@intFromEnum(AccountIndex.account));
+    defer program_account.release();
+
+    const authority_meta = ic.ixn_info.getAccountMetaAtIndex(@intFromEnum(AccountIndex.authority)) orelse return error.NotEnoughAccountKeys;
+
+    const state = try checkProgramAccount(allocator, ic, &program_account, authority_meta.pubkey);
+    defer bincode.free(allocator, state);
+
+    if (state.status != .retracted) {
+        try ic.tc.log("Program is not retracted", .{});
+        return error.InvalidArgument;
+    }
+
+    const dst_offset = @as(usize, offset) +| bpf_loader_program.v4.State.PROGRAM_DATA_METADATA_SIZE;
+    const data = try program_account.mutableAccountData();
+    if (dst_offset +| bytes.len > data.len) {
+        try ic.tc.log("Write out of bounds", .{});
+        return error.AccountDataTooSmall;
+    }
+
+    @memcpy(data[dst_offset..][0..bytes.len], bytes);
+}
+
+fn executeV4Copy(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+    dst_offset: u32,
+    src_offset: u32,
+    length: u32,
+) (error{OutOfMemory} || InstructionError)!void {
+    const AccountIndex = bpf_loader_program.v4.instruction.Copy.AccountIndex;
+    const dst_account = try ic.borrowInstructionAccount(@intFromEnum(AccountIndex.dst_account));
+    defer dst_account.release();
+
+    const authority_meta = ic.ixn_info.getAccountMetaAtIndex(@intFromEnum(AccountIndex.authority)) orelse return error.NotEnoughAccountKeys;
+
+    const src_account = try ic.borrowInstructionAccount(@intFromEnum(AccountIndex.src_account));
+    defer src_account.release();
+
+    const state = try checkProgramAccount(allocator, ic, &dst_account, authority_meta.pubkey);
+    defer bincode.free(allocator, state);
+
+    if (state.status != .retracted) {
+        try ic.tc.log("Program is not retracted", .{});
+        return error.InvalidArgument;
+    }
+
+    const source_owner = src_account.account.owner;
+    const source_offset = @as(usize, src_offset) +| (if (bpf_loader_program.v4.ID.equals(&source_owner))
+        bpf_loader_program.v4.State.PROGRAM_DATA_METADATA_SIZE
+    else if (bpf_loader_program.v3.ID.equals(&source_owner))
+        bpf_loader_program.v3.State.PROGRAM_DATA_METADATA_SIZE
+    else if (bpf_loader_program.v2.ID.equals(&source_owner) or
+        bpf_loader_program.v1.ID.equals(&source_owner))
+        0
+    else {
+        try ic.tc.log("Source is not a program", .{});
+        return error.InvalidArgument;
+    });
+
+    const source_data = src_account.constAccountData();
+    if (source_offset +| length > source_data.len) {
+        try ic.tc.log("Read out of bounds", .{});
+        return error.AccountDataTooSmall;
+    }
+
+    const offset = @as(usize, dst_offset) +| bpf_loader_program.v4.State.PROGRAM_DATA_METADATA_SIZE;
+    const data = try dst_account.mutableAccountData();
+    if (offset +| length > data.len) {
+        try ic.tc.log("Write out of bounds", .{});
+        return error.AccountDataTooSmall;
+    }
+
+    @memcpy(data[offset..][0..length], source_data[source_offset..][0..length]);
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/94d70cdf40ab55a3f1c2099037cdb36276ef9032/programs/bpf_loader/src/lib.rs#L486
