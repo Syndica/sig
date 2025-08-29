@@ -1196,9 +1196,7 @@ fn validator(
     const replay_senders: sig.replay.service.Senders = try .create(allocator);
     defer replay_senders.destroy();
 
-    const replay_receivers: sig.replay.service.Receivers = try .create(
-        allocator,
-    );
+    const replay_receivers: sig.replay.service.Receivers = try .create(allocator);
     defer replay_receivers.destroy();
 
     const replay_thread = replay: {
