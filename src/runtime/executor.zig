@@ -253,133 +253,116 @@ pub fn prepareCpiInstructionInfo(
 ) (error{OutOfMemory} || InstructionError)!InstructionInfo {
     const caller = try tc.getCurrentInstructionContext();
 
-    var deduped_account_metas = std.BoundedArray(
-        InstructionInfo.AccountMeta,
-        InstructionInfo.MAX_ACCOUNT_METAS,
-    ){};
-    var deduped_indexes = std.BoundedArray(
-        usize,
+    var callee_map: [InstructionInfo.MAX_ACCOUNT_METAS]u8 = @splat(0xff);
+    var instruction_accounts = std.BoundedArray(
+        struct {
+            pubkey: Pubkey,
+            index_in_transaction: u16,
+            is_signer: bool,
+            is_writable: bool,
+        },
         InstructionInfo.MAX_ACCOUNT_METAS,
     ){};
 
-    // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L337-L386
-    for (callee.accounts, 0..) |account, index| {
+    for (callee.accounts) |account| {
         const index_in_transaction = tc.getAccountIndex(account.pubkey) orelse {
             try tc.log("Instruction references an unknown account {}", .{account.pubkey});
             return InstructionError.MissingAccount;
         };
 
-        const maybe_duplicate_index: ?usize = blk: {
-            for (deduped_account_metas.slice(), 0..) |*deduped_meta, deduped_index| {
-                if (deduped_meta.index_in_transaction == index_in_transaction) {
-                    break :blk deduped_index;
-                }
-            }
-            break :blk null;
-        };
-
-        if (maybe_duplicate_index) |duplicate_index| {
-            deduped_indexes.appendAssumeCapacity(duplicate_index);
-            const deduped_meta = &deduped_account_metas.buffer[duplicate_index];
-            deduped_meta.is_signer = deduped_meta.is_signer or account.is_signer;
-            deduped_meta.is_writable = deduped_meta.is_writable or account.is_writable;
+        const index_in_callee_ptr = &callee_map[index_in_transaction];
+        if (index_in_callee_ptr.* < instruction_accounts.len) {
+            const prev = instruction_accounts.get(index_in_callee_ptr.*);
+            instruction_accounts.appendAssumeCapacity(.{
+                .pubkey = account.pubkey,
+                .index_in_transaction = prev.index_in_transaction,
+                .is_signer = prev.is_signer or account.is_signer,
+                .is_writable = prev.is_writable or account.is_writable,
+            });
         } else {
-            const index_in_caller = caller.ixn_info.getAccountMetaIndex(account.pubkey) orelse {
-                try tc.log("Instruction references an unknown account {}", .{account.pubkey});
-                return InstructionError.MissingAccount;
-            };
-
-            deduped_indexes.appendAssumeCapacity(deduped_account_metas.len);
-            deduped_account_metas.appendAssumeCapacity(.{
+            index_in_callee_ptr.* = @intCast(instruction_accounts.len);
+            instruction_accounts.appendAssumeCapacity(.{
                 .pubkey = account.pubkey,
                 .index_in_transaction = index_in_transaction,
-                .index_in_caller = index_in_caller,
-                .index_in_callee = @intCast(index),
                 .is_signer = account.is_signer,
                 .is_writable = account.is_writable,
             });
         }
     }
 
-    // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L386-L415
-    for (deduped_account_metas.slice()) |callee_account| {
-        // Borrow the account via the caller context
-        const caller_account =
-            try caller.borrowInstructionAccount(callee_account.index_in_caller);
-        defer caller_account.release();
+    for (instruction_accounts.slice(), 0..) |*account, i| {
+        const index_in_callee = callee_map[account.index_in_transaction];
+
+        if (i != index_in_callee) {
+            if (index_in_callee >= instruction_accounts.len) return error.NotEnoughAccountKeys;
+            const prev = instruction_accounts.get(index_in_callee);
+            account.is_signer = account.is_signer or prev.is_signer;
+            account.is_writable = account.is_writable or prev.is_writable;
+            // This account is repeated, so theres no need to check for perms
+            continue;
+        }
+
+        // const index_in_caller = try caller.idx_of_acc_in_instr(account.index_in_transaction);
+        const index_in_caller = caller.ixn_info.getAccountMetaIndex(account.pubkey) orelse
+            return error.MissingAccount;
+
+        const account_key = callee.accounts[i].pubkey;
+        const account_meta = caller.ixn_info.account_metas.get(index_in_caller);
 
         // Readonly in caller cannot become writable in callee
-        if (!caller_account.context.is_writable and callee_account.is_writable) {
-            try tc.log("{}'s writable privilege escalated", .{caller_account.pubkey});
-            return InstructionError.PrivilegeEscalation;
+        if (account.is_writable and !account_meta.is_writable) {
+            try tc.log("{}'s writable privilege escalated", .{account_key});
+            return error.PrivilegeEscalation;
         }
 
         // To be signed in the callee,
         // it must be either signed in the caller or by the program
-        var allow_callee_signer = caller_account.context.is_signer;
-        for (signers) |signer| {
-            if (allow_callee_signer) break;
-            if (signer.equals(&caller_account.pubkey)) allow_callee_signer = true;
-        }
-        if (!allow_callee_signer and callee_account.is_signer) {
-            try tc.log("{}'s signer privilege escalated", .{caller_account.pubkey});
-            return InstructionError.PrivilegeEscalation;
+        const in_signers = for (signers) |signer| {
+            if (signer.equals(&account_key)) break true;
+        } else false;
+        if (account.is_signer and !(account_meta.is_signer or in_signers)) {
+            try tc.log("{}'s signer privilege escalated", .{account_key});
+            return error.PrivilegeEscalation;
         }
     }
 
-    // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L415-L425
-    var instruction_accounts = InstructionInfo.AccountMetas{};
-    for (deduped_indexes.slice()) |index| {
-        const deduped_account = deduped_account_metas.buffer[index];
-        instruction_accounts.appendAssumeCapacity(.{
-            .pubkey = deduped_account.pubkey,
-            .index_in_transaction = deduped_account.index_in_transaction,
-            .index_in_caller = deduped_account.index_in_caller,
-            .index_in_callee = deduped_account.index_in_callee,
-            .is_signer = deduped_account.is_signer,
-            .is_writable = deduped_account.is_writable,
+    // Find and validate executables / program accounts
+    const program_account_index = for (caller.ixn_info.account_metas.slice(), 0..) |acc, i| {
+        const tc_acc = tc.getAccountAtIndex(acc.index_in_transaction) orelse continue;
+        if (tc_acc.pubkey.equals(&callee.program_id)) break i;
+    } else {
+        try tc.log("Unknown program {}", .{callee.program_id});
+        return error.MissingAccount;
+    };
+
+    const program_index_in_transaction = blk: {
+        const program_account_meta = caller.ixn_info.getAccountMetaAtIndex(
+            @intCast(program_account_index),
+        ) orelse return error.NotEnoughAccountKeys;
+        break :blk program_account_meta.index_in_transaction;
+    };
+
+    // Custom to account for no dedup map
+    var account_metas = InstructionInfo.AccountMetas{};
+    for (instruction_accounts.slice()) |account| {
+        account_metas.appendAssumeCapacity(.{
+            .index_in_callee = callee_map[account.index_in_transaction],
+            .index_in_caller = caller.ixn_info.getAccountMetaIndex(account.pubkey) orelse
+                return error.MissingAccount,
+                
+            .index_in_transaction = account.index_in_transaction,
+            .is_signer = account.is_signer,
+            .is_writable = account.is_writable,
+            .pubkey = account.pubkey,
         });
     }
-
-    // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L426-L457
-    const program_index_in_transaction = if (tc.feature_set.active(
-        .lift_cpi_caller_restriction,
-        tc.slot,
-    )) blk: {
-        break :blk tc.getAccountIndex(callee.program_id) orelse {
-            try tc.log("Unknown program {}", .{callee.program_id});
-            return InstructionError.MissingAccount;
-        };
-    } else blk: {
-        const index_in_caller = caller.ixn_info.getAccountMetaIndex(callee.program_id) orelse {
-            try tc.log("Unknown program {}", .{callee.program_id});
-            return InstructionError.MissingAccount;
-        };
-        const program_meta = caller.ixn_info.account_metas.buffer[index_in_caller];
-
-        const borrowed_account =
-            try caller.borrowInstructionAccount(index_in_caller);
-        defer borrowed_account.release();
-
-        if (!tc.feature_set.active(
-            .remove_accounts_executable_flag_checks,
-            tc.slot,
-        ) and
-            !borrowed_account.account.executable)
-        {
-            try tc.log("Account {} is not executable", .{callee.program_id});
-            return InstructionError.AccountNotExecutable;
-        }
-
-        break :blk program_meta.index_in_transaction;
-    };
 
     return .{
         .program_meta = .{
             .pubkey = callee.program_id,
             .index_in_transaction = program_index_in_transaction,
         },
-        .account_metas = instruction_accounts,
+        .account_metas = account_metas,
         .instruction_data = callee.data,
         .initial_account_lamports = 0,
     };

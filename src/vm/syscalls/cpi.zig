@@ -648,13 +648,20 @@ fn translateAccounts(
     // translate_and_update_accounts():
 
     var accounts: TranslatedAccounts = .{};
-    try accounts.append(.{
-        .index_in_caller = program_index_in_transaction,
-        .caller_account = null,
-    });
+    _ = program_index_in_transaction;
+    // try accounts.append(.{
+    //     .index_in_caller = program_index_in_transaction,
+    //     .caller_account = null,
+    // });
 
     for (account_metas, 0..) |meta, i| {
-        if (meta.index_in_callee != i) continue; // Skip duplicate account
+        // if (meta.index_in_callee != i) continue; // Skip duplicate account
+        // is_instruction_account_duplicate()
+
+        // Skip duplicate account.
+        //const first_idx_in_caller = idx_of_acc_in_instr(meta.index_in_transaction);
+        const first = meta.index_in_callee;
+        if (first != i) continue;
 
         var callee_account = try ic.borrowInstructionAccount(meta.index_in_caller);
         defer callee_account.release();
@@ -673,10 +680,10 @@ fn translateAccounts(
                 ic.tc.compute_budget.cpi_bytes_per_unit,
             ) catch std.math.maxInt(u64));
 
-            try accounts.append(.{
-                .index_in_caller = meta.index_in_caller,
-                .caller_account = null,
-            });
+            // try accounts.append(.{
+            //     .index_in_caller = meta.index_in_caller,
+            //     .caller_account = null,
+            // });
             continue;
         }
 
