@@ -48,6 +48,7 @@ pub const InstructionContext = struct {
             .{
                 .program_id = self.ixn_info.program_meta.pubkey,
                 .remove_accounts_executable_flag_checks = remove_accounts_executable_flag_checks,
+                .accounts_lamport_delta = &self.tc.accounts_lamport_delta,
             },
         );
     }
@@ -67,6 +68,7 @@ pub const InstructionContext = struct {
             .is_signer = account_meta.is_signer,
             .is_writable = account_meta.is_writable,
             .remove_accounts_executable_flag_checks = remove_accounts_executable_flag_checks,
+            .accounts_lamport_delta = &self.tc.accounts_lamport_delta,
         });
     }
 

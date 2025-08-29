@@ -60,6 +60,10 @@ pub fn execute(
         }
     };
 
+    const stricter_abi_and_runtime_constraints = ic.tc.feature_set.active(
+        .stricter_abi_and_runtime_constraints,
+        ic.tc.slot,
+    );
     const mask_out_rent_epoch_in_vm_serialization = ic.tc.feature_set.active(
         .bpf_account_data_direct_mapping,
         ic.tc.slot,
@@ -71,7 +75,8 @@ pub fn execute(
     const accounts_metadata = try serialize.serializeParameters(
         allocator,
         ic,
-        !direct_mapping,
+        direct_mapping,
+        stricter_abi_and_runtime_constraints,
         mask_out_rent_epoch_in_vm_serialization,
     );
     defer {
@@ -142,7 +147,8 @@ pub fn execute(
         serialize.deserializeParameters(
             allocator,
             ic,
-            !direct_mapping,
+            stricter_abi_and_runtime_constraints,
+            direct_mapping,
             parameter_bytes.items,
             accounts_metadata.constSlice(),
         ) catch |err| {

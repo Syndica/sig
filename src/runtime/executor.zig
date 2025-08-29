@@ -54,7 +54,7 @@ pub fn pushInstruction(
     tc: *TransactionContext,
     initial_instruction_info: InstructionInfo,
 ) InstructionError!void {
-    var instruction_info = initial_instruction_info;
+    const instruction_info = initial_instruction_info;
     const program_id = instruction_info.program_meta.pubkey;
 
     // [agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/program-runtime/src/invoke_context.rs#L245-L283
@@ -72,19 +72,11 @@ pub fn pushInstruction(
     // [agave] https://github.com/anza-xyz/solana-sdk/blob/e1554f4067329a0dcf5035120ec6a06275d3b9ec/transaction-context/src/lib.rs#L366-L403
     // [fd] https://github.com/firedancer-io/firedancer/blob/dfadb7d33683aa8711dfe837282ad0983d3173a0/src/flamenco/runtime/fd_executor.c#L975-L976
 
-    // Set initial account lamports before pushing the instruction context
-    instruction_info.initial_account_lamports = try sumAccountLamports(
-        tc,
-        instruction_info.account_metas.constSlice(),
-    );
-
-    if (tc.instruction_stack.len > 0) {
-        const parent = &tc.instruction_stack.buffer[tc.instruction_stack.len - 1];
-        const initial_lamports = parent.ixn_info.initial_account_lamports;
-        const current_lamports =
-            try sumAccountLamports(tc, parent.ixn_info.account_metas.constSlice());
-        if (initial_lamports != current_lamports) return InstructionError.UnbalancedInstruction;
+    if (tc.instruction_stack.len > 0 and tc.accounts_lamport_delta != 0) {
+        return InstructionError.UnbalancedInstruction;
     }
+
+    // TODO: get last instruction_trace & set nesting_level as stack height
 
     if (tc.instruction_trace.len >= tc.instruction_trace.capacity()) {
         return InstructionError.MaxInstructionTraceLengthExceeded;
@@ -142,16 +134,13 @@ fn processNextInstruction(
             break :blk .{ program_account.pubkey, program_account.pubkey };
 
         const owner_id = program_account.account.owner;
-        if (ic.tc.feature_set.active(.remove_accounts_executable_flag_checks, ic.tc.slot)) {
-            if (bpf_loader_program.v1.ID.equals(&owner_id) or
-                bpf_loader_program.v2.ID.equals(&owner_id) or
-                bpf_loader_program.v3.ID.equals(&owner_id) or
-                bpf_loader_program.v4.ID.equals(&owner_id))
-                break :blk .{ owner_id, program_account.pubkey };
-            return InstructionError.UnsupportedProgramId;
-        }
+        if (bpf_loader_program.v1.ID.equals(&owner_id) or
+            bpf_loader_program.v2.ID.equals(&owner_id) or
+            bpf_loader_program.v3.ID.equals(&owner_id) or
+            bpf_loader_program.v4.ID.equals(&owner_id))
+            break :blk .{ owner_id, program_account.pubkey };
 
-        break :blk .{ owner_id, program_account.pubkey };
+        return InstructionError.UnsupportedProgramId; 
     };
 
     // Lookup native program function
@@ -227,13 +216,7 @@ pub fn popInstruction(
         };
         program_account.release();
 
-        const initial_lamports = ic.ixn_info.initial_account_lamports;
-        const current_lamports = try sumAccountLamports(
-            tc,
-            ic.ixn_info.account_metas.constSlice(),
-        );
-
-        break :blk (initial_lamports != current_lamports);
+        break :blk tc.accounts_lamport_delta != 0;
     };
 
     _ = tc.instruction_stack.pop();
@@ -252,126 +235,86 @@ pub fn prepareCpiInstructionInfo(
     signers: []const Pubkey,
 ) (error{OutOfMemory} || InstructionError)!InstructionInfo {
     const caller = try tc.getCurrentInstructionContext();
+    std.debug.print("prepareCpi: prog={}\n", .{caller.ixn_info.program_meta.pubkey});
 
-    var deduped_account_metas = std.BoundedArray(
-        InstructionInfo.AccountMeta,
-        InstructionInfo.MAX_ACCOUNT_METAS,
-    ){};
-    var deduped_indexes = std.BoundedArray(
-        usize,
-        InstructionInfo.MAX_ACCOUNT_METAS,
-    ){};
+    var callee_map: [InstructionInfo.MAX_ACCOUNT_METAS]u8 = @splat(0xff);
+    var instruction_accounts = InstructionInfo.AccountMetas{};
 
-    // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L337-L386
-    for (callee.accounts, 0..) |account, index| {
+    for (callee.accounts) |account| {
         const index_in_transaction = tc.getAccountIndex(account.pubkey) orelse {
             try tc.log("Instruction references an unknown account {}", .{account.pubkey});
             return InstructionError.MissingAccount;
         };
 
-        const maybe_duplicate_index: ?usize = blk: {
-            for (deduped_account_metas.slice(), 0..) |*deduped_meta, deduped_index| {
-                if (deduped_meta.index_in_transaction == index_in_transaction) {
-                    break :blk deduped_index;
-                }
-            }
-            break :blk null;
-        };
-
-        if (maybe_duplicate_index) |duplicate_index| {
-            deduped_indexes.appendAssumeCapacity(duplicate_index);
-            const deduped_meta = &deduped_account_metas.buffer[duplicate_index];
-            deduped_meta.is_signer = deduped_meta.is_signer or account.is_signer;
-            deduped_meta.is_writable = deduped_meta.is_writable or account.is_writable;
+        const index_in_callee_ptr = &callee_map[index_in_transaction];
+        if (index_in_callee_ptr.* < instruction_accounts.len) {
+            const prev = instruction_accounts.get(index_in_callee_ptr.*);
+            instruction_accounts.appendAssumeCapacity(.{
+                .pubkey = account.pubkey,
+                .index_in_transaction = prev.index_in_transaction,
+                .is_signer = prev.is_signer or account.is_signer,
+                .is_writable = prev.is_writable or account.is_writable,
+            });
         } else {
-            const index_in_caller = caller.ixn_info.getAccountMetaIndex(account.pubkey) orelse {
-                try tc.log("Instruction references an unknown account {}", .{account.pubkey});
-                return InstructionError.MissingAccount;
-            };
-
-            deduped_indexes.appendAssumeCapacity(deduped_account_metas.len);
-            deduped_account_metas.appendAssumeCapacity(.{
+            index_in_callee_ptr.* = @intCast(instruction_accounts.len);
+            instruction_accounts.appendAssumeCapacity(.{
                 .pubkey = account.pubkey,
                 .index_in_transaction = index_in_transaction,
-                .index_in_caller = index_in_caller,
-                .index_in_callee = @intCast(index),
                 .is_signer = account.is_signer,
                 .is_writable = account.is_writable,
             });
         }
     }
 
-    // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L386-L415
-    for (deduped_account_metas.slice()) |callee_account| {
-        // Borrow the account via the caller context
-        const caller_account =
-            try caller.borrowInstructionAccount(callee_account.index_in_caller);
-        defer caller_account.release();
+    for (instruction_accounts.slice(), 0..) |*account, i| {
+        const index_in_callee = callee_map[account.index_in_transaction];
+
+        if (i != index_in_callee) {
+            if (index_in_callee >= instruction_accounts.len) return error.NotEnoughAccountKeys;
+            const prev = instruction_accounts.get(index_in_callee);
+            account.is_signer = account.is_signer or prev.is_signer;
+            account.is_writable = account.is_writable or prev.is_writable;
+            // This account is repeated, so theres no need to check for perms
+            continue;
+        }
+
+        const index_in_caller = 
+            try caller.ixn_info.getAccountInstructionIndex(account.index_in_transaction);
+
+        const account_key = callee.accounts[i].pubkey;
+        const account_meta = caller.ixn_info.account_metas.get(index_in_caller);
 
         // Readonly in caller cannot become writable in callee
-        if (!caller_account.context.is_writable and callee_account.is_writable) {
-            try tc.log("{}'s writable privilege escalated", .{caller_account.pubkey});
-            return InstructionError.PrivilegeEscalation;
+        if (account.is_writable and !account_meta.is_writable) {
+            try tc.log("{}'s writable privilege escalated", .{account_key});
+            return error.PrivilegeEscalation;
         }
 
         // To be signed in the callee,
         // it must be either signed in the caller or by the program
-        var allow_callee_signer = caller_account.context.is_signer;
-        for (signers) |signer| {
-            if (allow_callee_signer) break;
-            if (signer.equals(&caller_account.pubkey)) allow_callee_signer = true;
-        }
-        if (!allow_callee_signer and callee_account.is_signer) {
-            try tc.log("{}'s signer privilege escalated", .{caller_account.pubkey});
-            return InstructionError.PrivilegeEscalation;
+        const in_signers = for (signers) |signer| {
+            if (signer.equals(&account_key)) break true;
+        } else false;
+        if (account.is_signer and !(account_meta.is_signer or in_signers)) {
+            try tc.log("{}'s signer privilege escalated", .{account_key});
+            return error.PrivilegeEscalation;
         }
     }
 
-    // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L415-L425
-    var instruction_accounts = InstructionInfo.AccountMetas{};
-    for (deduped_indexes.slice()) |index| {
-        const deduped_account = deduped_account_metas.buffer[index];
-        instruction_accounts.appendAssumeCapacity(.{
-            .pubkey = deduped_account.pubkey,
-            .index_in_transaction = deduped_account.index_in_transaction,
-            .index_in_caller = deduped_account.index_in_caller,
-            .index_in_callee = deduped_account.index_in_callee,
-            .is_signer = deduped_account.is_signer,
-            .is_writable = deduped_account.is_writable,
-        });
-    }
+    // Find and validate executables / program accounts
+    const program_account_index = for (caller.ixn_info.account_metas.slice(), 0..) |acc, i| {
+        const tc_acc = tc.getAccountAtIndex(acc.index_in_transaction) orelse continue;
+        if (tc_acc.pubkey.equals(&callee.program_id)) break i;
+    } else {
+        try tc.log("Unknown program {}", .{callee.program_id});
+        return error.MissingAccount;
+    };
 
-    // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L426-L457
-    const program_index_in_transaction = if (tc.feature_set.active(
-        .lift_cpi_caller_restriction,
-        tc.slot,
-    )) blk: {
-        break :blk tc.getAccountIndex(callee.program_id) orelse {
-            try tc.log("Unknown program {}", .{callee.program_id});
-            return InstructionError.MissingAccount;
-        };
-    } else blk: {
-        const index_in_caller = caller.ixn_info.getAccountMetaIndex(callee.program_id) orelse {
-            try tc.log("Unknown program {}", .{callee.program_id});
-            return InstructionError.MissingAccount;
-        };
-        const program_meta = caller.ixn_info.account_metas.buffer[index_in_caller];
-
-        const borrowed_account =
-            try caller.borrowInstructionAccount(index_in_caller);
-        defer borrowed_account.release();
-
-        if (!tc.feature_set.active(
-            .remove_accounts_executable_flag_checks,
-            tc.slot,
-        ) and
-            !borrowed_account.account.executable)
-        {
-            try tc.log("Account {} is not executable", .{callee.program_id});
-            return InstructionError.AccountNotExecutable;
-        }
-
-        break :blk program_meta.index_in_transaction;
+    const program_index_in_transaction = blk: {
+        const program_account_meta = caller.ixn_info.getAccountMetaAtIndex(
+            @intCast(program_account_index),
+        ) orelse return error.NotEnoughAccountKeys;
+        break :blk program_account_meta.index_in_transaction;
     };
 
     return .{
@@ -380,6 +323,7 @@ pub fn prepareCpiInstructionInfo(
             .index_in_transaction = program_index_in_transaction,
         },
         .account_metas = instruction_accounts,
+        .dedup_map = callee_map,
         .instruction_data = callee.data,
         .initial_account_lamports = 0,
     };
