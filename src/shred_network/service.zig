@@ -18,7 +18,6 @@ const Pubkey = sig.core.Pubkey;
 const RwMux = sig.sync.RwMux;
 const Registry = sig.prometheus.Registry;
 const ServiceManager = sig.utils.service_manager.ServiceManager;
-const ShredInserter = sig.ledger.ShredInserter;
 const Slot = sig.core.Slot;
 const ThreadSafeContactInfo = sig.gossip.data.ThreadSafeContactInfo;
 
@@ -44,6 +43,7 @@ pub const ShredNetworkDependencies = struct {
     allocator: Allocator,
     logger: Logger,
     random: Random,
+    ledger_db: sig.ledger.LedgerDB,
     registry: *Registry(.{}),
     /// This validator's keypair
     my_keypair: *const KeyPair,
@@ -55,7 +55,6 @@ pub const ShredNetworkDependencies = struct {
     my_shred_version: *const Atomic(u16),
     my_contact_info: ThreadSafeContactInfo,
     epoch_context_mgr: *EpochContextManager,
-    shred_inserter: ShredInserter,
     n_retransmit_threads: ?usize,
     overwrite_turbine_stake_for_testing: bool,
 };
@@ -81,7 +80,7 @@ pub fn start(
         .{},
         .{},
     );
-    var arena = service_manager.arena.allocator();
+    const arena = service_manager.arena.allocator();
     const defers = &service_manager.defers; // use this instead of defer statements
 
     const repair_socket = try bindUdpReusable(conf.repair_port);
@@ -135,19 +134,31 @@ pub fn start(
     );
     try defers.deferCall(BasicShredTracker.deinit, .{shred_tracker});
 
+    const shred_inserter = try arena.create(sig.ledger.ShredInserter);
+    shred_inserter.* = try sig.ledger.ShredInserter.init(
+        deps.allocator,
+        .from(deps.logger),
+        deps.registry,
+        deps.ledger_db,
+    );
+    try defers.deferCall(sig.ledger.ShredInserter.deinit, .{shred_inserter});
+
     // processor (thread)
+    const processor = shred_network.shred_processor;
     try service_manager.spawn(
         "Shred Processor",
-        shred_network.shred_processor.runShredProcessor,
+        processor.runShredProcessor,
         .{
             deps.allocator,
-            deps.exit,
-            shred_network.shred_processor.Logger.from(deps.logger),
+            processor.Logger.from(deps.logger),
             deps.registry,
-            shreds_to_insert_channel,
-            shred_tracker,
-            deps.shred_inserter,
-            deps.epoch_context_mgr.slotLeaders(),
+            deps.exit,
+            processor.Params{
+                .verified_shred_receiver = shreds_to_insert_channel,
+                .tracker = shred_tracker,
+                .inserter = shred_inserter,
+                .leader_schedule = deps.epoch_context_mgr.slotLeaders(),
+            },
         },
     );
 
@@ -263,13 +274,11 @@ test "start and stop gracefully" {
     var ledger_db = try sig.ledger.tests.TestDB.init(@src());
     defer ledger_db.deinit();
 
-    var shred_inserter = try ShredInserter.init(allocator, .FOR_TESTS, &registry, ledger_db);
-    defer shred_inserter.deinit();
-
-    const deps = ShredNetworkDependencies{
+    const deps: ShredNetworkDependencies = .{
         .allocator = allocator,
         .logger = .FOR_TESTS,
         .random = rng.random(),
+        .ledger_db = ledger_db,
         .registry = &registry,
         .my_keypair = &keypair,
         .exit = &exit,
@@ -277,7 +286,6 @@ test "start and stop gracefully" {
         .my_shred_version = &shred_version,
         .my_contact_info = contact_info,
         .epoch_context_mgr = &epoch_ctx,
-        .shred_inserter = shred_inserter,
         .n_retransmit_threads = 1,
         .overwrite_turbine_stake_for_testing = true,
     };

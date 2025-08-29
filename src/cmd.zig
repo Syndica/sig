@@ -1086,12 +1086,6 @@ fn validator(
         .from(app_base.logger),
         sig.VALIDATOR_DIR ++ "ledger",
     );
-    const shred_inserter = try sig.ledger.ShredInserter.init(
-        allocator,
-        .from(app_base.logger),
-        app_base.metrics_registry,
-        ledger_db,
-    );
 
     // cleanup service
     const lowest_cleanup_slot = try allocator.create(sig.sync.RwMux(sig.core.Slot));
@@ -1192,12 +1186,12 @@ fn validator(
             .logger = .from(app_base.logger),
             .registry = app_base.metrics_registry,
             .random = prng.random(),
+            .ledger_db = ledger_db,
             .my_keypair = &app_base.my_keypair,
             .exit = app_base.exit,
             .gossip_table_rw = &gossip_service.gossip_table_rw,
             .my_shred_version = &gossip_service.my_shred_version,
             .epoch_context_mgr = &epoch_context_manager,
-            .shred_inserter = shred_inserter,
             .my_contact_info = my_contact_info,
             .n_retransmit_threads = turbine_config.num_retransmit_threads,
             .overwrite_turbine_stake_for_testing = turbine_config.overwrite_stake_for_testing,
@@ -1328,12 +1322,6 @@ fn shredNetwork(
         .from(app_base.logger),
         sig.VALIDATOR_DIR ++ "ledger",
     );
-    const shred_inserter = try sig.ledger.ShredInserter.init(
-        allocator,
-        .from(app_base.logger),
-        app_base.metrics_registry,
-        ledger_db,
-    );
 
     // cleanup service
     const lowest_cleanup_slot = try allocator.create(sig.sync.RwMux(sig.core.Slot));
@@ -1375,12 +1363,12 @@ fn shredNetwork(
         .logger = .from(app_base.logger),
         .registry = app_base.metrics_registry,
         .random = prng.random(),
+        .ledger_db = ledger_db,
         .my_keypair = &app_base.my_keypair,
         .exit = app_base.exit,
         .gossip_table_rw = &gossip_service.gossip_table_rw,
         .my_shred_version = &gossip_service.my_shred_version,
         .epoch_context_mgr = &epoch_context_manager,
-        .shred_inserter = shred_inserter,
         .my_contact_info = my_contact_info,
         .n_retransmit_threads = cfg.turbine.num_retransmit_threads,
         .overwrite_turbine_stake_for_testing = cfg.turbine.overwrite_stake_for_testing,

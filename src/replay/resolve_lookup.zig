@@ -3,6 +3,7 @@ const sig = @import("../sig.zig");
 const replay = @import("lib.zig");
 
 const core = sig.core;
+const compute_budget_program = sig.runtime.program.compute_budget;
 
 const Allocator = std.mem.Allocator;
 
@@ -18,6 +19,7 @@ const TransactionAddressLookup = core.transaction.AddressLookup;
 const SlotAccountReader = sig.accounts_db.SlotAccountReader;
 
 const AddressLookupTable = sig.runtime.program.address_lookup_table.AddressLookupTable;
+const ComputeBudgetInstructionDetails = compute_budget_program.ComputeBudgetInstructionDetails;
 const InstructionInfo = sig.runtime.InstructionInfo;
 const ProgramMeta = sig.runtime.InstructionInfo.ProgramMeta;
 const RuntimeTransaction = sig.runtime.transaction_execution.RuntimeTransaction;
@@ -55,7 +57,11 @@ pub const ResolvedTransaction = struct {
         allocator.free(self.instructions);
     }
 
-    pub fn toRuntimeTransaction(self: ResolvedTransaction, message_hash: Hash) RuntimeTransaction {
+    pub fn toRuntimeTransaction(
+        self: ResolvedTransaction,
+        message_hash: Hash,
+        compute_budget_instruction_details: ComputeBudgetInstructionDetails,
+    ) RuntimeTransaction {
         return .{
             .signature_count = self.transaction.signatures.len,
             .fee_payer = self.transaction.msg.account_keys[0],
@@ -63,6 +69,7 @@ pub const ResolvedTransaction = struct {
             .recent_blockhash = self.transaction.msg.recent_blockhash,
             .instructions = self.instructions,
             .accounts = self.accounts,
+            .compute_budget_instruction_details = compute_budget_instruction_details,
         };
     }
 };
@@ -112,7 +119,7 @@ pub fn resolveBatch(
 /// Returned data is partially borrowed and partially owned.
 /// - Ensure `transaction` exceeds the lifetime of this struct.
 /// - Use `deinit` to free this struct
-fn resolveTransaction(
+pub fn resolveTransaction(
     allocator: Allocator,
     transaction: Transaction,
     params: SlotResolver,

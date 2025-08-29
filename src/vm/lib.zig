@@ -183,7 +183,7 @@ pub fn convertExecutionError(err: ExecutionError) struct { i64, ExecutionErrorKi
         InstructionError.ProgramFailedToCompile =>                  .{ 42, .Instruction, "Program failed to compile" },
         InstructionError.Immutable =>                               .{ 43, .Instruction, "Account is immutable" },
         InstructionError.IncorrectAuthority =>                      .{ 44, .Instruction, "Incorrect authority provided" },
-        InstructionError.BorshIoError =>                            .{ 45, .Instruction, "Failed to serialize or deserialize account data" },
+        InstructionError.BorshIoError =>                            .{ 45, .Instruction, "Failed to serialize or deserialize account data: Unknown" },
         InstructionError.AccountNotRentExempt =>                    .{ 46, .Instruction, "An account does not have enough lamports to be rent-exempt" },
         InstructionError.InvalidAccountOwner =>                     .{ 47, .Instruction, "Invalid account owner" },
         InstructionError.ProgramArithmeticOverflow =>               .{ 48, .Instruction, "Program arithmetic overflowed" },

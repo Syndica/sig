@@ -819,7 +819,11 @@ pub fn executeV3SetAuthority(
         },
     }
 
-    try ic.tc.log("New authority {?}", .{new_authority});
+    if (new_authority) |some| {
+        try ic.tc.log("New authority Some({?})", .{some});
+    } else {
+        try ic.tc.log("New authority None", .{});
+    }
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/programs/bpf_loader/src/lib.rs#L1011-L1083
@@ -2057,6 +2061,60 @@ test "executeV3SetAuthority" {
                 },
                 .{
                     .pubkey = new_authority_key,
+                },
+                .{
+                    .pubkey = bpf_loader_program.v3.ID,
+                    .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+                },
+            },
+        },
+        .{},
+    );
+
+    @memcpy(final_program_account_data, initial_program_account_data);
+    _ = try bincode.writeToSlice(
+        final_program_account_data,
+        V3State{
+            .program_data = .{ .slot = 0, .upgrade_authority_address = null },
+        },
+        .{},
+    );
+
+    // test with no new authority
+    try testing.expectProgramExecuteResult(
+        allocator,
+        bpf_loader_program.v3.ID,
+        bpf_loader_program.v3.Instruction.set_authority,
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 1 },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = buffer_account_key,
+                    .data = initial_program_account_data,
+                    .owner = bpf_loader_program.v3.ID,
+                },
+                .{
+                    .pubkey = buffer_authority_key,
+                },
+                .{
+                    .pubkey = bpf_loader_program.v3.ID, // id of program u wanna run
+                    .owner = sig.runtime.ids.NATIVE_LOADER_ID, // bpf_loader_program.v3.ID,
+                },
+            },
+            .compute_meter = bpf_loader_program.v3.COMPUTE_UNITS,
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = buffer_account_key,
+                    .data = final_program_account_data,
+                    .owner = bpf_loader_program.v3.ID,
+                },
+                .{
+                    .pubkey = buffer_authority_key,
                 },
                 .{
                     .pubkey = bpf_loader_program.v3.ID,
