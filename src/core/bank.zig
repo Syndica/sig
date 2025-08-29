@@ -108,6 +108,9 @@ pub const SlotConstants = struct {
         bank_fields: *const BankFields,
         feature_set: FeatureSet,
     ) Allocator.Error!SlotConstants {
+        const zone = tracy.Zone.init(@src(), .{ .name = "SlotConstants.fromBankFields" });
+        defer zone.deinit();
+
         return .{
             .parent_slot = bank_fields.parent_slot,
             .parent_hash = bank_fields.parent_hash,

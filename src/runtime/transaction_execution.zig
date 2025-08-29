@@ -312,7 +312,7 @@ pub fn loadAndExecuteTransactions(
 }
 
 /// [agave] https://github.com/firedancer-io/agave/blob/403d23b809fc513e2c4b433125c127cf172281a2/svm/src/transaction_processor.rs#L323-L324
-pub fn loadAndExecuteTransaction(
+pub noinline fn loadAndExecuteTransaction(
     allocator: std.mem.Allocator,
     transaction: *const RuntimeTransaction,
     batch_account_cache: *BatchAccountCache,

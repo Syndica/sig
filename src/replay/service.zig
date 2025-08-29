@@ -40,7 +40,7 @@ const LatestValidatorVotesForFrozenSlots =
 pub const Logger = sig.trace.Logger("replay");
 
 /// Number of threads to use in replay's thread pool
-const NUM_THREADS = 4;
+const NUM_THREADS = 1;
 
 const SWITCH_FORK_THRESHOLD: f64 = 0.38;
 const MAX_ENTRIES: u64 = 1024 * 1024; // 1 million slots is about 5 days
@@ -405,6 +405,8 @@ fn initProgressAndForkChoiceWithLockedSlotForks(
 
 /// Run the replay service indefinitely.
 pub fn run(deps: ReplayDependencies) !void {
+    deps.logger.info().log("running replay service");
+
     const zone = tracy.Zone.init(@src(), .{ .name = "run (replay service)" });
     defer zone.deinit();
 
@@ -666,11 +668,15 @@ pub fn getActiveFeatures(
     account_reader: sig.accounts_db.SlotAccountReader,
     slot: Slot,
 ) !sig.core.FeatureSet {
+    const zone = tracy.Zone.init(@src(), .{ .name = "getActiveFeatures" });
+    defer zone.deinit();
+
     var features: sig.core.FeatureSet = .ALL_DISABLED;
     for (0..sig.core.features.NUM_FEATURES) |i| {
         const possible_feature: sig.core.features.Feature = @enumFromInt(i);
         const possible_feature_pubkey = sig.core.features.map.get(possible_feature).key;
         const feature_account = try account_reader.get(possible_feature_pubkey) orelse continue;
+
         if (!feature_account.owner.equals(&sig.runtime.ids.FEATURE_PROGRAM_ID)) {
             continue;
         }

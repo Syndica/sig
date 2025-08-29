@@ -184,7 +184,7 @@
     .{ .name = "merkle_conflict_duplicate_proofs", .pubkey = "mrkPjRg79B2oK2ZLgd7S3AfEJaX9B6gAF3H9aEykRUS", .activated_on_all_clusters = true },
     .{ .name = "disable_bpf_loader_instructions", .pubkey = "7WeS1vfPRgeeoXArLh7879YcB9mgE9ktjPDtajXeWfXn", .activated_on_all_clusters = true },
     .{ .name = "deprecate_executable_meta_update_in_bpf_loader", .pubkey = "k6uR1J9VtKJnTukBV2Eo15BEy434MBg8bT6hHQgmU8v", .reverted = true },
-    .{ .name = "enable_zk_proof_from_account", .pubkey = "zkiTNuzBKxrCLMKehzuQeKZyLtX2yvFcEKMML8nExU8" },
+    // .{ .name = "enable_zk_proof_from_account", .pubkey = "zkiTNuzBKxrCLMKehzuQeKZyLtX2yvFcEKMML8nExU8" },
     .{ .name = "cost_model_requested_write_lock_cost", .pubkey = "wLckV1a64ngtcKPRGU4S4grVTestXjmNjxBjaKZrAcn", .activated_on_all_clusters = true },
     .{ .name = "enable_gossip_duplicate_proof_ingestion", .pubkey = "FNKCMBzYUdjhHyPdsKG2LSmdzH8TCHXn3ytj8RNBS4nG", .activated_on_all_clusters = true },
     .{ .name = "enable_chained_merkle_shreds", .pubkey = "7uZBkJXJ1HkuP6R3MJfZs7mLwymBcDbKdqbF51ZWLier", .activated_on_all_clusters = true },

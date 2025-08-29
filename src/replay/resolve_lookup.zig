@@ -57,7 +57,7 @@ pub const ResolvedTransaction = struct {
         allocator.free(self.instructions);
     }
 
-    pub fn toRuntimeTransaction(
+    pub noinline fn toRuntimeTransaction(
         self: ResolvedTransaction,
         message_hash: Hash,
         compute_budget_instruction_details: ComputeBudgetInstructionDetails,

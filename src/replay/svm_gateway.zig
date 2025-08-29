@@ -30,7 +30,7 @@ const initDurableNonceFromHash = sig.runtime.nonce.initDurableNonceFromHash;
 
 const ResolvedTransaction = replay.resolve_lookup.ResolvedTransaction;
 
-pub fn executeTransaction(
+pub noinline fn executeTransaction(
     allocator: Allocator,
     svm_gateway: *SvmGateway,
     transaction: *const RuntimeTransaction,
@@ -90,7 +90,7 @@ pub const SvmGateway = struct {
         status_cache: *StatusCache,
     };
 
-    pub fn init(
+    pub noinline fn init(
         allocator: Allocator,
         batch: []const ResolvedTransaction,
         params: Params,
@@ -161,7 +161,7 @@ pub const SvmGateway = struct {
         programs.deinit(allocator);
     }
 
-    pub fn environment(self: *const SvmGateway) !TransactionExecutionEnvironment {
+    pub noinline fn environment(self: *const SvmGateway) !TransactionExecutionEnvironment {
         const last_blockhash = self.state.blockhash_queue.get().last_hash orelse
             return error.MissingLastBlockhash;
 

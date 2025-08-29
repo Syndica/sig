@@ -262,6 +262,7 @@ pub fn build(b: *Build) !void {
         .optimize = config.optimize,
         .tracy_enable = config.enable_tracy,
         .tracy_no_system_tracing = false,
+        .tracy_callstack = 6,
     }).module("tracy");
     tracy_mod.sanitize_c = false; // Workaround UB in Tracy.
 

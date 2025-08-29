@@ -66,15 +66,19 @@ pub fn main() !void {
     var gpa_state: GpaOrCAllocator(.{}) = .{};
     // defer _ = gpa_state.deinit();
 
-    var tracing_allocator = tracy.TracingAllocator{
+    var tracing_gpa = tracy.TracingAllocator{
         .name = "gpa",
         .parent = gpa_state.allocator(),
     };
-    const gpa = tracing_allocator.allocator();
+    const gpa = tracing_gpa.allocator();
 
     var gossip_gpa_state: GpaOrCAllocator(.{ .stack_trace_frames = 100 }) = .{};
+    var tracing_gossip_gpa = tracy.TracingAllocator{
+        .name = "gossip gpa",
+        .parent = gossip_gpa_state.allocator(),
+    };
     // defer _ = gossip_gpa_state.deinit();
-    const gossip_gpa = gossip_gpa_state.allocator();
+    const gossip_gpa = tracing_gossip_gpa.allocator();
 
     const argv = try std.process.argsAlloc(gpa);
     defer std.process.argsFree(gpa, argv);
@@ -118,6 +122,7 @@ pub fn main() !void {
             params.gossip_base.apply(&current_config);
             params.gossip_node.apply(&current_config);
             params.repair.apply(&current_config);
+            current_config.shred_network.dump_shred_tracker = true;
             current_config.accounts_db.snapshot_dir = params.snapshot_dir;
             current_config.genesis_file_path = params.genesis_file_path;
             params.accountsdb_base.apply(&current_config);
@@ -1203,18 +1208,32 @@ fn validator(
     defer replay_senders.destroy();
 
     const replay_receivers: sig.replay.service.Receivers = try .create(allocator);
-    defer replay_receivers.destroy();
+    defer {
+        app_base.logger.info().logf("destroying replay_receivers", .{});
+        replay_receivers.destroy();
+    }
+    errdefer |err| {
+        app_base.logger.info().logf("err: {}", .{err});
+    }
 
     const replay_thread = replay: {
+        const replay_thread_zone = tracy.Zone.init(@src(), .{ .name = "replay_thread spawn" });
+        defer replay_thread_zone.deinit();
+
         const epoch_stakes_map = &collapsed_manifest.bank_extra.versioned_epoch_stakes;
         const epoch_stakes = epoch_stakes_map.get(epoch) orelse
             return error.EpochStakesMissingFromSnapshot;
+
+        app_base.logger.info().logf("trying to start replay thread (getActiveFeatures)", .{});
 
         const feature_set = try sig.replay.service.getActiveFeatures(
             allocator,
             loaded_snapshot.accounts_db.accountReader().forSlot(&bank_fields.ancestors),
             bank_fields.slot,
         );
+
+        app_base.logger.info().logf("trying to start replay thread (root_slot_constants)", .{});
+
         const root_slot_constants = try sig.core.SlotConstants.fromBankFields(
             allocator,
             bank_fields,
@@ -1222,8 +1241,12 @@ fn validator(
         );
         errdefer root_slot_constants.deinit(allocator);
 
+        app_base.logger.info().logf("trying to start replay thread (root_slot_state)", .{});
+
         var root_slot_state = try sig.core.SlotState.fromBankFields(allocator, bank_fields);
         errdefer root_slot_state.deinit(allocator);
+
+        app_base.logger.info().logf("trying to start replay thread (spawnService)", .{});
 
         break :replay try app_base.spawnService(
             "replay",

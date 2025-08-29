@@ -89,7 +89,7 @@ pub const BatchAccountCache = struct {
 
     /// Allocates a sufficiently large account cache to hold every account that
     /// may be needed by these transactions.
-    pub fn initSufficientCapacity(allocator: Allocator, transactions: anytype) !BatchAccountCache {
+    pub noinline fn initSufficientCapacity(allocator: Allocator, transactions: anytype) !BatchAccountCache {
         const max_map_entries = total_account_keys: {
             var n: usize = 0;
             for (transactions) |tx| n += tx.accounts.len;

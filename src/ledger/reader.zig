@@ -1034,7 +1034,8 @@ pub const LedgerReader = struct {
         // This should be sufficient because full slots will never be marked dead from another thread,
         // this can only happen during entry processing during replay stage.
         if (try self.isDead(slot) and !allow_dead_slots) {
-            return error.DeadSlot;
+            self.logger.warn().logf("dead slot: {}", .{slot});
+            // return error.DeadSlot;
         }
         if (completed_ranges.items.len == 0) {
             return .{ &.{}, 0, false };

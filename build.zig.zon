@@ -53,5 +53,8 @@
             .url = "git+https://github.com/Syndica/tracy-zig#8fcc7521aa47e6dc8bf75de888f4ed4ed503c142",
             .hash = "zig_tracy-0.12.2-4TLLRxpkAABhUEzSm2wXjioLd_-qruRviTnehDTbhZYR",
         },
+        // .tracy = .{
+        //     .path = "../../../../random-clones/zig-tracy/",
+        // },
     },
 }

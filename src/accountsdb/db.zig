@@ -1717,7 +1717,7 @@ pub const AccountsDB = struct {
     /// Gets an account given an file_id and offset value.
     /// Locks the account file entries, and then unlocks
     /// them, after returning the clone of the account.
-    pub fn getAccountInFile(
+    fn getAccountInFile(
         self: *AccountsDB,
         account_allocator: std.mem.Allocator,
         file_id: FileId,
@@ -1738,7 +1738,7 @@ pub const AccountsDB = struct {
     /// Locks the account file entries, and returns the account.
     /// Must call `self.file_map_fd_rw.unlockShared()`
     /// when done with the account.
-    pub fn getAccountInFileAndLock(
+    fn getAccountInFileAndLock(
         self: *AccountsDB,
         metadata_allocator: std.mem.Allocator,
         buffer_pool: *BufferPool,
@@ -1758,7 +1758,7 @@ pub const AccountsDB = struct {
     /// Gets an account given a file_id and an offset value.
     /// Assumes `self.file_map_fd_rw` is at least
     /// locked for reading (shared).
-    pub fn getAccountInFileAssumeLock(
+    fn getAccountInFileAssumeLock(
         self: *AccountsDB,
         metadata_allocator: std.mem.Allocator,
         buffer_pool: *BufferPool,
@@ -1822,6 +1822,10 @@ pub const AccountsDB = struct {
         self: *AccountsDB,
         pubkey: *const Pubkey,
     ) GetAccountError!?Account {
+        // NOTE: take note of the ordering here between the two locks(!) reversal could cause a deadlock.
+        _, var ref_map_lg = self.account_index.slot_reference_map.readWithLock();
+        defer ref_map_lg.unlock();
+
         const head_ref, var lock = self.account_index.pubkey_ref_map.getRead(pubkey) orelse
             return null;
         defer lock.unlock();
@@ -1839,6 +1843,10 @@ pub const AccountsDB = struct {
         self: *AccountsDB,
         pubkey: *const Pubkey,
     ) GetAccountError!struct { Slot, Account } {
+        // NOTE: take note of the ordering here between the two locks(!) reversal could cause a deadlock.
+        _, var ref_map_lg = self.account_index.slot_reference_map.readWithLock();
+        defer ref_map_lg.unlock();
+
         const head_ref, var lock = self.account_index.pubkey_ref_map.getRead(pubkey) orelse
             return error.PubkeyNotInIndex;
         defer lock.unlock();
@@ -1878,6 +1886,10 @@ pub const AccountsDB = struct {
         self: *AccountsDB,
         pubkey: *const Pubkey,
     ) !struct { Account, AccountRef } {
+        // NOTE: take note of the ordering here between the two locks(!) reversal could cause a deadlock.
+        _, var ref_map_lg = self.account_index.slot_reference_map.readWithLock();
+        defer ref_map_lg.unlock();
+
         const head_ref, var head_ref_lg =
             self.account_index.pubkey_ref_map.getRead(pubkey) orelse return error.PubkeyNotInIndex;
         defer head_ref_lg.unlock();
@@ -1895,6 +1907,10 @@ pub const AccountsDB = struct {
         self: *AccountsDB,
         pubkey: *const Pubkey,
     ) GetAccountWithReadLockError!struct { AccountInCacheOrFile, AccountInCacheOrFileLock } {
+        // NOTE: take note of the ordering here between the two locks(!) reversal could cause a deadlock.
+        _, var ref_map_lg = self.account_index.slot_reference_map.readWithLock();
+        defer ref_map_lg.unlock();
+
         const head_ref, var head_ref_lg =
             self.account_index.pubkey_ref_map.getRead(pubkey) orelse return error.PubkeyNotInIndex;
         defer head_ref_lg.unlock();
@@ -1910,6 +1926,10 @@ pub const AccountsDB = struct {
         min_slot: ?Slot,
         max_slot: ?Slot,
     ) GetAccountWithReadLockError!?struct { AccountInCacheOrFile, Slot, AccountInCacheOrFileLock } {
+        // NOTE: take note of the ordering here between the two locks(!) reversal could cause a deadlock.
+        _, var ref_map_lg = self.account_index.slot_reference_map.readWithLock();
+        defer ref_map_lg.unlock();
+
         const head_ref, var lock = self.account_index.pubkey_ref_map.getRead(pubkey) orelse
             return error.PubkeyNotInIndex;
         defer lock.unlock();

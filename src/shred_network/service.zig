@@ -1,5 +1,6 @@
 const std = @import("std");
 const network = @import("zig-network");
+const tracy = @import("tracy");
 const sig = @import("../sig.zig");
 const shred_network = @import("lib.zig");
 
@@ -72,6 +73,13 @@ pub fn start(
     conf: ShredNetworkConfig,
     deps: ShredNetworkDependencies,
 ) !ServiceManager {
+    const zone = tracy.Zone.init(@src(), .{ .name = "shred network service start" });
+    defer zone.deinit();
+
+    errdefer |err| {
+        deps.logger.warn().logf("failed to start shred network, err: {}", .{err});
+    }
+
     var service_manager = ServiceManager.init(
         deps.allocator,
         .from(deps.logger),

@@ -102,7 +102,7 @@ pub fn updateSysvarsForNewSlot(
     );
 }
 
-pub fn fillMissingSysvarCacheEntries(
+pub noinline fn fillMissingSysvarCacheEntries(
     allocator: Allocator,
     account_reader: SlotAccountReader,
     sysvar_cache: *SysvarCache,
@@ -736,7 +736,7 @@ fn insertSysvarCacheAccounts(
     if (!builtin.is_test) @compileError("only for testing");
     var sysvar_accounts = std.MultiArrayList(struct {
         pubkey: Pubkey,
-        account: Account,
+        account: AccountSharedData,
     }){};
     defer {
         for (sysvar_accounts.slice().items(.account)) |acc| acc.deinit(allocator);
@@ -768,20 +768,21 @@ fn insertSysvarCacheAccounts(
             if (old_account) |*acc| acc else null,
         );
 
-        try sysvar_accounts.append(allocator, .{ .pubkey = Sysvar.ID, .account = .{
-            .lamports = account.lamports,
-            .data = .initAllocatedOwned(account.data),
-            .owner = account.owner,
-            .executable = account.executable,
-            .rent_epoch = account.rent_epoch,
-        } });
+        try sysvar_accounts.append(allocator, .{ .pubkey = Sysvar.ID, .account = account });
     }
 
-    try accounts_db.putAccountSlice(
+    for (
         sysvar_accounts.slice().items(.account),
         sysvar_accounts.slice().items(.pubkey),
-        slot,
-    );
+    ) |account, pubkey| {
+        try accounts_db.putAccount(slot, pubkey, account);
+    }
+
+    // try accounts_db.putAccountSlice(
+    //     sysvar_accounts.slice().items(.account),
+    //     sysvar_accounts.slice().items(.pubkey),
+    //     slot,
+    // );
 }
 
 fn expectSysvarAccountChange(rent: Rent, old: AccountSharedData, new: AccountSharedData) !void {
