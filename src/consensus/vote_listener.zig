@@ -1310,43 +1310,44 @@ pub const vote_parser = struct {
             var seen = std.bit_set.ArrayBitSet(usize, 256).initEmpty();
             for (first_ix.account_indexes, 0..) |acct_index_u8, i| {
                 const acct_index: usize = acct_index_u8;
-                const index_in_callee: usize = if (seen.isSet(acct_index)) blk: {
-                    var prior_idx: usize = 0;
-                    while (prior_idx < i) : (prior_idx += 1) {
-                        if (first_ix.account_indexes[prior_idx] == acct_index_u8)
-                            break :blk prior_idx;
-                    }
-                    break :blk i;
-                } else i;
+                const index_in_callee: usize = if (seen.isSet(acct_index))
+                    std.mem.indexOfScalar(
+                        u8,
+                        first_ix.account_indexes[0..i],
+                        acct_index_u8,
+                    ) orelse i
+                else
+                    i;
                 seen.set(acct_index);
 
                 const pubkey = message.account_keys[acct_index];
-                (account_metas.addOne() catch break).* = .{
+
+                account_metas.append(.{
                     .pubkey = pubkey,
                     .index_in_transaction = @intCast(acct_index),
                     .index_in_caller = @intCast(acct_index),
                     .index_in_callee = @intCast(index_in_callee),
                     .is_signer = message.isSigner(acct_index),
                     .is_writable = false,
-                };
+                })
+                // Unreachable because vote instructions contructed in the test have at most 4 accounts
+                // which is well below MAX_ACCOUNT_METAS (256)
+                catch unreachable;
             }
 
-            var instructions = try allocator.alloc(sig.runtime.InstructionInfo, 1);
-            instructions[0] = .{
-                .program_meta = .{
-                    .pubkey = message.account_keys[first_ix.program_index],
-                    .index_in_transaction = first_ix.program_index,
-                },
-                .account_metas = account_metas,
-                .instruction_data = first_ix.data,
-            };
-
-            var resolved: sig.replay.resolve_lookup.ResolvedTransaction = .{
+            const resolved: sig.replay.resolve_lookup.ResolvedTransaction = .{
                 .transaction = vote_tx,
                 .accounts = .{},
-                .instructions = instructions,
+                .instructions = &.{.{
+                    .program_meta = .{
+                        .pubkey = message.account_keys[first_ix.program_index],
+                        .index_in_transaction = first_ix.program_index,
+                    },
+                    .account_metas = account_metas,
+                    .instruction_data = first_ix.data,
+                }},
             };
-            defer resolved.deinit(allocator);
+            errdefer resolved.deinit(allocator);
 
             const maybe_parsed_tx = try parseSanitizedVoteTransaction(allocator, resolved);
             defer if (maybe_parsed_tx) |parsed_tx| parsed_tx.deinit(allocator);
@@ -1364,7 +1365,7 @@ pub const vote_parser = struct {
         }
 
         // Test bad program id fails
-        var vote_ix = try vote_instruction.createVote(
+        const vote_ix = try vote_instruction.createVote(
             allocator,
             vote_key,
             Pubkey.fromPublicKey(&auth_voter_keypair.public_key),
@@ -1402,30 +1403,27 @@ pub const vote_parser = struct {
         // minimal one account to satisfy check
         if (first_ix.account_indexes.len != 0) {
             const acct_index: usize = first_ix.account_indexes[0];
-            (try account_metas.addOne()).* = .{
+            try account_metas.append(.{
                 .pubkey = message.account_keys[acct_index],
                 .index_in_transaction = @intCast(acct_index),
                 .index_in_caller = @intCast(acct_index),
                 .index_in_callee = 0,
                 .is_signer = message.isSigner(acct_index),
                 .is_writable = false,
-            };
+            });
         }
 
-        var instructions = try allocator.alloc(sig.runtime.InstructionInfo, 1);
-        instructions[0] = .{
-            .program_meta = .{
-                .pubkey = Pubkey.ZEROES, // bad program id
-                .index_in_transaction = first_ix.program_index,
-            },
-            .account_metas = account_metas,
-            .instruction_data = first_ix.data,
-        };
-
-        var resolved_bad: sig.replay.resolve_lookup.ResolvedTransaction = .{
+        const resolved_bad: sig.replay.resolve_lookup.ResolvedTransaction = .{
             .transaction = vote_tx,
             .accounts = .{},
-            .instructions = instructions,
+            .instructions = try allocator.dupe(sig.runtime.InstructionInfo, &.{.{
+                .program_meta = .{
+                    .pubkey = Pubkey.ZEROES, // bad program id
+                    .index_in_transaction = first_ix.program_index,
+                },
+                .account_metas = account_metas,
+                .instruction_data = first_ix.data,
+            }}),
         };
         defer resolved_bad.deinit(allocator);
 
