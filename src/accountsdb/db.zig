@@ -1857,6 +1857,7 @@ pub const AccountsDB = struct {
         pubkey: *const Pubkey,
         ancestors: *const sig.core.Ancestors,
     ) GetFileFromRefError!?Account {
+        // NOTE: take note of the ordering here between the two locks(!) reversal could cause a deadlock.
         _, var ref_map_lg = self.account_index.slot_reference_map.readWithLock();
         defer ref_map_lg.unlock();
 
@@ -2155,6 +2156,7 @@ pub const AccountsDB = struct {
     fn expandSlotRefsAndInsert(self: *AccountsDB, slot: Slot, pubkeys: []const Pubkey) !void {
         std.debug.assert(pubkeys.len > 0);
 
+        // NOTE: take note of the ordering here between the two locks(!) reversal could cause a deadlock.
         const slot_ref_map, var lock = self.account_index.slot_reference_map.writeWithLock();
         defer lock.unlock();
 
