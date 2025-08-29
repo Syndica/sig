@@ -84,10 +84,10 @@ pub const Committer = struct {
                     if (exec.executed_transaction.err == null and
                         isSimpleVoteTransaction(transaction.transaction))
                     {
-                        if (vote_listener.vote_parser.parseSanitizedVoteTransaction(
+                        if (try vote_listener.vote_parser.parseSanitizedVoteTransaction(
                             allocator,
                             transaction,
-                        ) catch null) |parsed| {
+                        )) |parsed| {
                             if (parsed.vote.lastVotedSlot() != null) {
                                 replay_votes_sender.send(parsed) catch parsed.deinit(allocator);
                             } else {
