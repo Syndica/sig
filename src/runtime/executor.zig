@@ -143,18 +143,8 @@ fn processNextInstruction(
         return InstructionError.UnsupportedProgramId; 
     };
 
-    // Lookup native program function
-    // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/svm/src/message_processor.rs#L72-L75
-    // [fd] https://github.com/firedancer-io/firedancer/blob/dfadb7d33683aa8711dfe837282ad0983d3173a0/src/flamenco/runtime/fd_executor.c#L1150-L1159
-    const move_verify_precompiles_to_svm = ic.tc.feature_set.active(
-        .move_precompile_verification_to_svm,
-        ic.tc.slot,
-    );
-
     const maybe_precompile_fn =
         program.PRECOMPILE_ENTRYPOINTS.get(native_program_id.base58String().slice());
-
-    if (!move_verify_precompiles_to_svm and maybe_precompile_fn != null) return;
 
     const maybe_native_program_fn = maybe_precompile_fn orelse blk: {
         const native_program_fn = program.PROGRAM_ENTRYPOINTS.get(
@@ -235,7 +225,6 @@ pub fn prepareCpiInstructionInfo(
     signers: []const Pubkey,
 ) (error{OutOfMemory} || InstructionError)!InstructionInfo {
     const caller = try tc.getCurrentInstructionContext();
-    std.debug.print("prepareCpi: prog={}\n", .{caller.ixn_info.program_meta.pubkey});
 
     var callee_map: [InstructionInfo.MAX_ACCOUNT_METAS]u8 = @splat(0xff);
     var instruction_accounts = InstructionInfo.AccountMetas{};
