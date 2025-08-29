@@ -197,6 +197,9 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     var largest_rooted_slot: Slot = 0;
     var slot: Slot = 0;
 
+    var ancestors: sig.core.Ancestors = .EMPTY;
+    defer ancestors.deinit(allocator);
+
     // get/put a bunch of accounts
     while (true) {
         if (maybe_max_slots) |max_slots| if (slot >= max_slots) {
@@ -207,6 +210,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
             0 => slot += random.intRangeAtMost(Slot, 1, 2),
             1, 2, 3 => {},
         };
+        try ancestors.addSlot(allocator, slot);
 
         const action = random.enumValue(enum { put, get });
         switch (action) {
@@ -261,16 +265,34 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
 
                     break :blk .{ key, tracked_accounts.get(key).? };
                 };
-                const account, const ref =
-                    try accounts_db.getAccountAndReference(&tracked_account.pubkey);
+
+                var ancestors_sub = try ancestors.clone(allocator);
+                defer ancestors_sub.deinit(allocator);
+                for (ancestors_sub.ancestors.keys()) |other_slot| {
+                    if (other_slot <= tracked_account.slot) continue;
+                    _ = ancestors_sub.ancestors.swapRemove(other_slot);
+                }
+                ancestors_sub.ancestors.sort(struct {
+                    ancestors_sub: []Slot,
+                    pub fn lessThan(ctx: @This(), a: usize, b: usize) bool {
+                        return ctx.ancestors_sub[a] < ctx.ancestors_sub[b];
+                    }
+                }{ .ancestors_sub = ancestors_sub.ancestors.keys() });
+
+                const account =
+                    try accounts_db.getAccountWithAncestors(&pubkey, &ancestors_sub) orelse {
+                        logger.err().logf("accounts_db missing tracked account '{}': {}", .{ pubkey, tracked_account });
+                        return error.MissingAccount;
+                    };
                 defer account.deinit(allocator);
 
                 if (!account.data.eqlSlice(&tracked_account.data)) {
-                    std.debug.panic(
+                    logger.err().logf(
                         "found account {} with different data: " ++
-                            "tracked: {any} vs found: {any} ({})\n",
-                        .{ pubkey, tracked_account.data, account.data, ref },
+                            "tracked: {any} vs found: {any}\n",
+                        .{ pubkey, tracked_account.data, account.data },
                     );
+                    return error.TrackedAccountMismatch;
                 }
             },
         }
