@@ -30,7 +30,8 @@ pub const ManagerLoopConfig = Manager.Config;
 
 /// periodically runs flush/clean/shrink, and generates snapshots.
 pub fn runLoop(db: *AccountsDB, config: Manager.Config) !void {
-    var manager = try Manager.init(db, config);
+    var manager = try Manager.init(db.allocator, db, config);
+    defer manager.deinit(db.allocator);
     try manager.run(db.allocator);
 }
 
@@ -57,7 +58,7 @@ pub const Manager = struct {
         zstd_nb_workers: u31 = 0,
     };
 
-    pub fn init(db: *AccountsDB, config: Config) !Manager {
+    pub fn init(allocator: Allocator, db: *AccountsDB, config: Config) !Manager {
         const timer = try std.time.Timer.start();
 
         const zstd_compressor = try zstd.Compressor.init(.{
@@ -65,7 +66,7 @@ pub const Manager = struct {
         });
         errdefer zstd_compressor.deinit();
 
-        var zstd_sfba_state = std.heap.stackFallback(4096 * 4, db.allocator);
+        var zstd_sfba_state = std.heap.stackFallback(4096 * 4, allocator);
         const zstd_sfba = zstd_sfba_state.get();
 
         const zstd_buffer = try zstd_sfba.alloc(u8, zstd.Compressor.recommOutSize());
@@ -74,8 +75,8 @@ pub const Manager = struct {
         // TODO: get rid of this once `generateFullSnapshot` can actually
         // derive this data correctly by itdb.
         var prng = std.Random.DefaultPrng.init(1234);
-        const tmp_bank_fields = try BankFields.initRandom(db.allocator, prng.random(), 128);
-        errdefer tmp_bank_fields.deinit(db.allocator);
+        const tmp_bank_fields = try BankFields.initRandom(allocator, prng.random(), 128);
+        errdefer tmp_bank_fields.deinit(allocator);
 
         return .{
             .db = db,
@@ -91,6 +92,17 @@ pub const Manager = struct {
             .prng = prng,
             .tmp_bank_fields = tmp_bank_fields,
         };
+    }
+
+    pub fn deinit(const_self: Manager, allocator: Allocator) void {
+        var self = const_self;
+        self.tmp_bank_fields.deinit(allocator);
+        self.zstd_sfba_state.get().free(self.zstd_buffer);
+        self.zstd_compressor.deinit();
+        self.flush_slots.deinit(allocator);
+        self.unclean_account_files.deinit(allocator);
+        self.shrink_account_files.deinit(allocator);
+        self.delete_account_files.deinit(allocator);
     }
 
     /// Continuously runs the manager loop
