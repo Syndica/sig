@@ -195,6 +195,9 @@ pub fn main() !void {
             params.accountsdb_index.apply(&current_config);
             try mockRpcServer(gpa, current_config);
         },
+        .test_db => |_| {
+            try sig.accounts_db.db_debug.testDb();
+        },
     }
 }
 
@@ -215,6 +218,7 @@ const Cmd = struct {
         leader_schedule: LeaderScheduleSubCmd,
         test_transaction_sender: TestTransactionSender,
         mock_rpc_server: MockRpcServer,
+        test_db: TestDb,
     },
 
     const cmd_info: cli.CommandInfo(@This()) = .{
@@ -240,6 +244,7 @@ const Cmd = struct {
                 .leader_schedule = LeaderScheduleSubCmd.cmd_info,
                 .test_transaction_sender = TestTransactionSender.cmd_info,
                 .mock_rpc_server = MockRpcServer.cmd_info,
+                .test_db = TestDb.cmd_info,
             },
             .log_level = .{
                 .kind = .named,
@@ -963,6 +968,16 @@ const Cmd = struct {
                 .force_new_snapshot_download = force_new_snapshot_download_arg,
                 .accountsdb_index = AccountsDbArgumentsIndex.cmd_info,
             },
+        };
+    };
+
+    const TestDb = struct {
+        const cmd_info: cli.CommandInfo(@This()) = .{
+            .help = .{
+                .short = "Run a mock RPC server.",
+                .long = null,
+            },
+            .sub = .{},
         };
     };
 };

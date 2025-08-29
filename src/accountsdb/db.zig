@@ -1861,15 +1861,21 @@ pub const AccountsDB = struct {
         _, var ref_map_lg = self.account_index.slot_reference_map.readWithLock();
         defer ref_map_lg.unlock();
 
+        std.debug.print("got slot reference map lock\n", .{});
+
         const head_ref, var lock = self.account_index.pubkey_ref_map.getRead(pubkey) orelse
             return null;
         defer lock.unlock();
+
+        std.debug.print("got head reference lock\n", .{});
 
         const max_ref = greatestInAncestors(
             head_ref.ref_ptr,
             ancestors,
             self.largest_flushed_slot.load(.monotonic),
         ) orelse return null;
+
+        std.debug.print("got max ref\n", .{});
 
         return try self.getAccountFromRef(max_ref);
     }
