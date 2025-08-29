@@ -1201,11 +1201,15 @@ fn validator(
 
     const replay_thread = replay: {
         const epoch_stakes_map = &collapsed_manifest.bank_extra.versioned_epoch_stakes;
-        const epoch_stakes = epoch_stakes_map.get(epoch) orelse
+        const versioned_epoch_stakes = epoch_stakes_map.get(epoch) orelse
             return error.EpochStakesMissingFromSnapshot;
+
+        const epoch_stakes = try versioned_epoch_stakes.current.convert(allocator, .delegation);
+        errdefer epoch_stakes.deinit(allocator);
+
         const current_epoch_constants = try sig.core.EpochConstants.fromBankFields(
             bank_fields,
-            try epoch_stakes.current.convert(allocator, .delegation),
+            epoch_stakes,
         );
         errdefer current_epoch_constants.deinit(allocator);
         const feature_set = try sig.replay.service.getActiveFeatures(
