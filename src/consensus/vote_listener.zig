@@ -1329,10 +1329,7 @@ pub const vote_parser = struct {
                     .index_in_callee = @intCast(index_in_callee),
                     .is_signer = message.isSigner(acct_index),
                     .is_writable = false,
-                })
-                // Unreachable because vote instructions contructed in the test have at most 4 accounts
-                // which is well below MAX_ACCOUNT_METAS (256)
-                catch unreachable;
+                }) catch @panic("Vote instructions have 4 accounts, below MAX_ACCOUNT_METAS (256)");
             }
 
             const resolved: sig.replay.resolve_lookup.ResolvedTransaction = .{
@@ -1347,7 +1344,6 @@ pub const vote_parser = struct {
                     .instruction_data = first_ix.data,
                 }},
             };
-            errdefer resolved.deinit(allocator);
 
             const maybe_parsed_tx = try parseSanitizedVoteTransaction(allocator, resolved);
             defer if (maybe_parsed_tx) |parsed_tx| parsed_tx.deinit(allocator);
@@ -1416,16 +1412,15 @@ pub const vote_parser = struct {
         const resolved_bad: sig.replay.resolve_lookup.ResolvedTransaction = .{
             .transaction = vote_tx,
             .accounts = .{},
-            .instructions = try allocator.dupe(sig.runtime.InstructionInfo, &.{.{
+            .instructions = &.{.{
                 .program_meta = .{
                     .pubkey = Pubkey.ZEROES, // bad program id
                     .index_in_transaction = first_ix.program_index,
                 },
                 .account_metas = account_metas,
                 .instruction_data = first_ix.data,
-            }}),
+            }},
         };
-        defer resolved_bad.deinit(allocator);
 
         try std.testing.expectEqual(
             null,
