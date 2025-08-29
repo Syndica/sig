@@ -30,6 +30,7 @@ pub const BorrowedAccountContext = struct {
     is_writable: bool = false,
     /// TODO: remove this after upgrading to agave 2.3+ (for conformance).
     remove_accounts_executable_flag_checks: bool,
+    accounts_lamport_delta: *i128,
 };
 
 /// `BorrowedAccount` represents an account which has been 'borrowed' from the `TransactionContext`
@@ -119,6 +120,15 @@ pub const BorrowedAccount = struct {
         if (self.isExecutableInternal()) {
             return InstructionError.ExecutableLamportChange;
         }
+
+        // Dont touch account if lamports dont change.
+        if (lamports == self.account.lamports) return;
+
+        self.context.accounts_lamport_delta.* = std.math.add(
+            i128,
+            self.context.accounts_lamport_delta.*,
+            @as(i128, lamports) -| @as(i128, self.account.lamports),
+        ) catch return InstructionError.ProgramArithmeticOverflow;
 
         self.account.lamports = lamports;
     }

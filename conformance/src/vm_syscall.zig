@@ -219,6 +219,10 @@ fn executeSyscall(
         .from_asm = false,
     };
 
+    const stricter_abi_and_runtime_constraints = tc.feature_set.active(
+        .stricter_abi_and_runtime_constraints,
+        tc.slot,
+    );
     const mask_out_rent_epoch_in_vm_serialization = tc.feature_set.active(
         .mask_out_rent_epoch_in_vm_serialization,
         tc.slot,
@@ -226,7 +230,8 @@ fn executeSyscall(
     var parameter_bytes, var regions, const accounts_metadata = try serialize.serializeParameters(
         allocator,
         ic,
-        !direct_mapping,
+        direct_mapping,
+        stricter_abi_and_runtime_constraints,
         mask_out_rent_epoch_in_vm_serialization,
     );
     defer {
