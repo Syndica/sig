@@ -3,7 +3,6 @@ const sig = @import("../sig.zig");
 const replay = @import("lib.zig");
 const tracy = @import("tracy");
 
-
 const Allocator = std.mem.Allocator;
 
 const Logger = sig.trace.Logger("replay.committer");
