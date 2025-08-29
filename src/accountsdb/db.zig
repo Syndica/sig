@@ -1868,6 +1868,7 @@ pub const AccountsDB = struct {
         defer lock.unlock();
 
         std.debug.print("got head reference lock\n", .{});
+        std.debug.print("largest flushed slot: {d}\n", .{self.largest_flushed_slot.load(.monotonic)});
 
         const max_ref = greatestInAncestors(
             head_ref.ref_ptr,
@@ -2431,6 +2432,7 @@ pub const AccountsDB = struct {
                 const new_biggest = if (biggest) |big| ref.slot > big.slot else true;
                 if (new_biggest) biggest = ref;
             }
+            std.debug.print("loop 1\n", .{});
         }
 
         if (biggest == null) {
@@ -2440,6 +2442,7 @@ pub const AccountsDB = struct {
                     const new_biggest = if (biggest) |big| ref.slot > big.slot else true;
                     if (new_biggest) biggest = ref;
                 }
+                std.debug.print("loop 2\n", .{});
             }
         }
 
