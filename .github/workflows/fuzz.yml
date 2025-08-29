@@ -1,20 +1,41 @@
-name: Trigger SigFuzz CI
+name: FuzzCorp
 
 on:
-    workflow_dispatch:
-    push:
-        branches: [main]
+  repository_dispatch:
+    types: [shim]
+  push:
+    branches:
+    - master
 
 jobs:
-  kick_sigfuzz_ci:
+  build:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: conformance/
     steps:
-      - name: Dispatch SigFuzz CI
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.14.1
+
+      - name: Build solfuzz_sig
+        run: zig build -Dcpu=haswell -Doptimize=ReleaseSafe --summary all
+         
+      - name: Bundle
+        env: 
+          PAT: ${{ secrets.PAT }}
         run: |
-          curl -L \
-          -X POST \
-          https://api.github.com/repos/Syndica/sig-fuzz/dispatches \
-          -H 'Accept: application/vnd.github.everest-preview+json' \
-          -H "Authorization: Bearer ${{ secrets.PAT }}" \
-          -H "X-GitHub-Api-Version: 2022-11-28" \
-          --data '{"event_type": "sig"}'
+          ./scripts/download_fuzzcorp_artifacts.sh
+          ./scripts/bundle.sh
+
+      - name: Upload to FuzzCorp
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AKID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.SKID }}
+          AWS_DEFAULT_REGION: us-east-2
+        run: |
+          aws s3 cp ./bundle/fuzz.zip s3://fuzzcorp-bundle-dropbox-975049986498-86c13d2/org_AAAAAAAT/prj_AAAAAAATADU/$(date +%s).zip
