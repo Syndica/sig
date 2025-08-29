@@ -64,6 +64,7 @@ pub const RuntimeTransaction = struct {
     instructions: []const InstructionInfo,
     accounts: std.MultiArrayList(AccountMeta) = .{},
     compute_budget_instruction_details: ComputeBudgetInstructionDetails = .{},
+    num_lookup_tables: u64,
 };
 
 pub const TransactionExecutionEnvironment = struct {
