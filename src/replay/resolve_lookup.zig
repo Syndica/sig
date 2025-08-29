@@ -172,27 +172,20 @@ pub fn resolveTransaction(
     errdefer allocator.free(instructions);
     for (message.instructions, instructions) |input_ix, *output_ix| {
         var account_metas = InstructionInfo.AccountMetas{};
-        var seen = std.bit_set.ArrayBitSet(usize, 256).initEmpty();
-        for (input_ix.account_indexes, 0..) |index, i| {
+        var dedup_map: [InstructionInfo.MAX_ACCOUNT_METAS]u8 = @splat(0xff);
+        for (input_ix.account_indexes, 0..) |index_in_transaction, i| {
             // find first usage of this account in this instruction
-            const index_in_callee = if (seen.isSet(index))
-                for (input_ix.account_indexes[0..i], 0..) |prior_index, j| {
-                    if (prior_index == index) break j;
-                } else unreachable
-            else
-                i;
-            seen.set(index);
+            if (dedup_map[index_in_transaction] == 0xff)
+                dedup_map[index_in_transaction] = @intCast(i);
 
             // expand the account metadata
-            if (index >= accounts.len) return error.InvalidAccountIndex;
-            const account = accounts.get(index);
+            if (index_in_transaction >= accounts.len) return error.InvalidAccountIndex;
+            const account = accounts.get(index_in_transaction);
             (account_metas.addOne() catch break).* = .{
                 .pubkey = account.pubkey,
                 .is_signer = account.is_signer,
                 .is_writable = account.is_writable,
-                .index_in_transaction = index,
-                .index_in_caller = index,
-                .index_in_callee = @intCast(index_in_callee),
+                .index_in_transaction = index_in_transaction,
             };
         }
 
@@ -205,6 +198,7 @@ pub fn resolveTransaction(
                 .index_in_transaction = input_ix.program_index,
             },
             .account_metas = account_metas,
+            .dedup_map = dedup_map,
             .instruction_data = input_ix.data,
         };
     }
@@ -494,24 +488,24 @@ test resolveBatch {
             input_ix.account_indexes,
             output_ix.account_metas.slice(),
             expect.index_in_transaction,
-            expect.index_in_caller,
-            expect.index_in_callee,
+            // expect.index_in_caller,
+            // expect.index_in_callee,
             expect.is_signer,
             expect.is_writable,
         ) |
             input_index,
             output_meta,
             index_in_transaction,
-            index_in_caller,
-            index_in_callee,
+            // index_in_caller,
+            // index_in_callee,
             is_signer,
             is_writable,
         | {
             const address = resolved.accounts[input_index].address;
             try std.testing.expectEqual(address, output_meta.pubkey);
             try std.testing.expectEqual(index_in_transaction, output_meta.index_in_transaction);
-            try std.testing.expectEqual(index_in_caller, output_meta.index_in_caller);
-            try std.testing.expectEqual(index_in_callee, output_meta.index_in_callee);
+            // try std.testing.expectEqual(index_in_caller, output_meta.index_in_caller);
+            // try std.testing.expectEqual(index_in_callee, output_meta.index_in_callee);
             try std.testing.expectEqual(is_signer != 0, output_meta.is_signer);
             try std.testing.expectEqual(is_writable != 0, output_meta.is_writable);
         }

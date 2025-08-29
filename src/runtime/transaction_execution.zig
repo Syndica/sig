@@ -620,6 +620,7 @@ fn transactionAccountsRentState(
             const account = tc.borrowAccountAtIndex(@intCast(i), .{
                 .program_id = Pubkey.ZEROES,
                 .remove_accounts_executable_flag_checks = false,
+                .accounts_lamport_delta = &tc.accounts_lamport_delta,
             }) catch @panic("Account must exist in transaction context");
             defer account.release();
 
