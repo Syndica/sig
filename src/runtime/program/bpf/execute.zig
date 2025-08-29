@@ -16,12 +16,6 @@ pub fn execute(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
 ) ExecutionError!void {
-    // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1584-L1587
-    const direct_mapping = ic.tc.feature_set.active(
-        .bpf_account_data_direct_mapping,
-        ic.tc.slot,
-    );
-
     const executable = blk: {
         const program_account = try ic.borrowProgramAccount();
         defer program_account.release();
@@ -65,7 +59,7 @@ pub fn execute(
         ic.tc.slot,
     );
     const mask_out_rent_epoch_in_vm_serialization = ic.tc.feature_set.active(
-        .bpf_account_data_direct_mapping,
+        .mask_out_rent_epoch_in_vm_serialization,
         ic.tc.slot,
     );
 
@@ -75,7 +69,7 @@ pub fn execute(
     const accounts_metadata = try serialize.serializeParameters(
         allocator,
         ic,
-        direct_mapping,
+        ic.tc.account_data_direct_mapping,
         stricter_abi_and_runtime_constraints,
         mask_out_rent_epoch_in_vm_serialization,
     );
@@ -83,11 +77,6 @@ pub fn execute(
         parameter_bytes.deinit(allocator);
         regions.deinit(allocator);
     }
-
-    // [agave] https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/lib.rs#L278-L282
-    const old_accounts = ic.tc.serialized_accounts;
-    ic.tc.serialized_accounts = accounts_metadata;
-    defer ic.tc.serialized_accounts = old_accounts;
 
     // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1604-L1617
     // TODO: save account addresses for access violation errors resolution
@@ -111,6 +100,7 @@ pub fn execute(
             allocator.free(heap);
             allocator.free(mm_regions);
         }
+        sbpf_vm.registers.set(.r1, sig.vm.memory.INPUT_START);
         break :blk sbpf_vm.run();
     };
 
@@ -138,7 +128,7 @@ pub fn execute(
         result,
         &ic.tc.custom_error,
         &ic.tc.compute_meter,
-        direct_mapping,
+        stricter_abi_and_runtime_constraints,
         ic.tc.feature_set.active(.deplete_cu_meter_on_vm_failure, ic.tc.slot),
     );
 
@@ -148,7 +138,7 @@ pub fn execute(
             allocator,
             ic,
             stricter_abi_and_runtime_constraints,
-            direct_mapping,
+            ic.tc.account_data_direct_mapping,
             parameter_bytes.items,
             accounts_metadata.constSlice(),
         ) catch |err| {
@@ -238,7 +228,7 @@ fn handleExecutionResult(
     result: sig.vm.interpreter.Result,
     custom_error: *?u32,
     compute_meter: *u64,
-    direct_mapping: bool,
+    stricter_abi_and_runtime_constraints: bool,
     deplete_cu_meter: bool,
 ) ?ExecutionError {
     switch (result) {
@@ -254,7 +244,7 @@ fn handleExecutionResult(
             const err_kind = sig.vm.getExecutionErrorKind(err);
             if (deplete_cu_meter and err_kind != .Syscall)
                 compute_meter.* = 0;
-            if (direct_mapping and err == error.AccessViolation)
+            if (stricter_abi_and_runtime_constraints and err == error.AccessViolation)
                 std.debug.print("TODO: Handle AccessViolation: {s}\n", .{@errorName(err)});
             return err;
         },
