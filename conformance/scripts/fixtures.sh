@@ -12,7 +12,7 @@ PASSING_DIRS=(
     "syscall/fixtures/alt_bn128"
     "syscall/fixtures/blake3"
 
-    # Passed: 560, Failed: 4, Skipped: 0
+    # Passed: 559, Failed: 6, Skipped: 0
     "syscall/fixtures/cpi"
 
     "syscall/fixtures/create_program_address"
@@ -32,15 +32,11 @@ PASSING_DIRS=(
     "syscall/fixtures/sol_get_sysvar"
     "syscall/fixtures/stack_height"
     "syscall/fixtures/try_find_program_address"
-
-    # Passed: 1, Failed: 1, Skipped: 0
     "syscall/fixtures/vm"
-    
     "syscall/fixtures/secp256k1"
 
     "instr/fixtures/zk_sdk"
-    "instr/fixtures/unknown"
-    
+    "instr/fixtures/unknown"    
     "instr/fixtures/compute-budget"
     "instr/fixtures/stake"
     "instr/fixtures/vote"
@@ -54,12 +50,16 @@ PASSING_DIRS=(
     "instr/fixtures/bpf-loader-v2-programs"
 
     # Passed: 42, Failed: 304, Skipped: 0
+    # 304 failing due to bpf loader v3 migrate
     "instr/fixtures/bpf-loader-v3"
 
     "instr/fixtures/bpf-loader-v3-programs"
     "instr/fixtures/bpf-loader-upgradeable-v1-programs"
 
-    # Passed: 4091, Failed: 63, Skipped: 0
+    # Passed: 4128, Failed: 26, Skipped: 0
+    # 2  failing due to bpf loader v3 migrate 
+    # 20 failing due to bpf loader v4
+    # 4  failing due to simd 186
     "txn/fixtures/programs"
 
     "txn/fixtures/precompile/ed25519"
