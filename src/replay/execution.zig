@@ -2,7 +2,6 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 const replay = @import("lib.zig");
 const tracy = @import("tracy");
-const vote_listener = @import("../consensus/vote_listener.zig");
 
 const core = sig.core;
 
@@ -42,6 +41,7 @@ const check_slot_agrees_with_cluster = replay.edge_cases.check_slot_agrees_with_
 
 const SvmGateway = replay.svm_gateway.SvmGateway;
 
+const vote_listener = sig.consensus.vote_listener;
 const ParsedVote = vote_listener.vote_parser.ParsedVote;
 
 const confirmSlot = replay.confirm_slot.confirmSlot;

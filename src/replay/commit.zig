@@ -2,7 +2,7 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 const replay = @import("lib.zig");
 const tracy = @import("tracy");
-const vote_listener = @import("../consensus/vote_listener.zig");
+
 
 const Allocator = std.mem.Allocator;
 
@@ -17,7 +17,10 @@ const ResolvedTransaction = replay.resolve_lookup.ResolvedTransaction;
 
 const AccountSharedData = sig.runtime.AccountSharedData;
 const ProcessedTransaction = sig.runtime.transaction_execution.ProcessedTransaction;
+
+const vote_listener = sig.consensus.vote_listener;
 const ParsedVote = vote_listener.vote_parser.ParsedVote;
+
 const Channel = sig.sync.Channel;
 
 fn isSimpleVoteTransaction(tx: Transaction) bool {

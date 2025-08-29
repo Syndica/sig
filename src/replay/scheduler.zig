@@ -2,7 +2,6 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 const replay = @import("lib.zig");
 const tracy = @import("tracy");
-const vote_listener = @import("../consensus/vote_listener.zig");
 
 const Allocator = std.mem.Allocator;
 const Atomic = std.atomic.Value;
@@ -29,6 +28,7 @@ const executeTransaction = replay.svm_gateway.executeTransaction;
 
 const Logger = sig.trace.Logger("replay-batcher");
 
+const vote_listener = sig.consensus.vote_listener;
 const ParsedVote = vote_listener.vote_parser.ParsedVote;
 
 const assert = std.debug.assert;

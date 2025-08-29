@@ -2,7 +2,6 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 const replay = @import("lib.zig");
 const tracy = @import("tracy");
-const vote_listener = @import("../consensus/vote_listener.zig");
 
 const core = sig.core;
 
@@ -35,6 +34,7 @@ const assert = std.debug.assert;
 
 const Logger = sig.trace.Logger("replay-confirm-slot");
 
+const vote_listener = sig.consensus.vote_listener;
 const ParsedVote = vote_listener.vote_parser.ParsedVote;
 
 /// Asynchronously validate and execute entries from a slot.
