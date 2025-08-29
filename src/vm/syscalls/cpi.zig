@@ -1245,42 +1245,13 @@ fn cpiCommon(
     if (ids.NATIVE_LOADER_ID.equals(&instruction.program_id) or
         bpf_loader_program.v1.ID.equals(&instruction.program_id) or
         bpf_loader_program.v2.ID.equals(&instruction.program_id) or
-        (bpf_loader_program.v3.ID.equals(&instruction.program_id) and !(blk: {
-            // TODO: Do not deserialize the full instruction, instead just check the instruction
-            // data discriminant.
-            const info = InstructionInfo{
-                .program_meta = .{
-                    .index_in_transaction = 0,
-                    .pubkey = Pubkey.ZEROES,
-                },
-                .account_metas = .{},
-                .instruction_data = instruction.data,
-            };
-
-            const v3_instruction = info.deserializeInstruction(
-                allocator,
-                bpf_loader_program.v3.Instruction,
-            ) catch break :blk false;
-            defer sig.bincode.free(allocator, v3_instruction);
-
-            break :blk switch (v3_instruction) {
-                .close => true,
-                .upgrade => true,
-                .set_authority => true,
-                .set_authority_checked => ic.tc.feature_set.active(
-                    .enable_bpf_loader_set_authority_checked_ix,
-                    ic.tc.slot,
-                ),
-                .extend_program_checked => ic.tc.feature_set.active(
-                    .enable_extend_program_checked,
-                    ic.tc.slot,
-                ),
-                else => false,
-            };
-        })) or (blk: {
-        for (PRECOMPILES) |p| if (p.program_id.equals(&instruction.program_id)) break :blk true;
-        break :blk false;
-    })) {
+        (bpf_loader_program.v3.ID.equals(&instruction.program_id) and
+            isBpfLoaderV3InstructionAuthorized(instruction.data, ic.tc.feature_set, ic.tc.slot)) or
+        (blk: {
+            for (PRECOMPILES) |p| if (p.program_id.equals(&instruction.program_id)) break :blk true;
+            break :blk false;
+        }))
+    {
         // TODO add {instruction.program_id} as context to error.
         // https://github.com/anza-xyz/agave/blob/bb5a6e773d5f41388a962c5c4f96f5f2ef2209d0/programs/bpf_loader/src/syscalls/cpi.rs#L1048
         return SyscallError.ProgramNotSupported;
@@ -1371,6 +1342,37 @@ fn cpiCommon(
             direct_mapping,
         );
     }
+}
+
+/// Some bpf loader v3 instructions are not allowed to be invoked via cpi. This method
+/// determines if a bpf loader v3 instruction is part of the cpi restriced set of instructions.
+fn isBpfLoaderV3InstructionAuthorized(
+    instruction_data: []const u8,
+    feature_set: *const sig.core.FeatureSet,
+    slot: sig.core.Slot,
+) bool {
+    if (instruction_data.len == 0) return true;
+    return switch (instruction_data[0]) {
+        // upgrade instruction
+        3 => false,
+        // set authority instruction
+        4 => false,
+        // close instrucion
+        5 => false,
+        // set authority checked instruction
+        7 => !feature_set.active(
+            .enable_bpf_loader_set_authority_checked_ix,
+            slot,
+        ),
+        // migrate instruction
+        8 => false,
+        // extend program checked instruction
+        9 => !feature_set.active(
+            .enable_extend_program_checked,
+            slot,
+        ),
+        else => true,
+    };
 }
 
 fn invokeSigned(
@@ -2764,4 +2766,19 @@ fn testCpiCommon(comptime AccountInfoType: type) !void {
         AccountInfoC => try invokeSignedC(ctx.tc, &memory_map, &registers),
         else => @compileError("invalid AccountInfo type"),
     }
+}
+
+test isBpfLoaderV3InstructionAuthorized {
+    const all_enabled = sig.core.features.Set.ALL_ENABLED_AT_GENESIS;
+    const all_disabled = sig.core.features.Set.ALL_DISABLED;
+    try std.testing.expect(isBpfLoaderV3InstructionAuthorized(&.{}, &all_disabled, 0));
+    try std.testing.expect(!isBpfLoaderV3InstructionAuthorized(&.{3}, &all_disabled, 0));
+    try std.testing.expect(!isBpfLoaderV3InstructionAuthorized(&.{4}, &all_disabled, 0));
+    try std.testing.expect(!isBpfLoaderV3InstructionAuthorized(&.{5}, &all_disabled, 0));
+    try std.testing.expect(isBpfLoaderV3InstructionAuthorized(&.{7}, &all_disabled, 0));
+    try std.testing.expect(!isBpfLoaderV3InstructionAuthorized(&.{7}, &all_enabled, 0));
+    try std.testing.expect(!isBpfLoaderV3InstructionAuthorized(&.{3}, &all_disabled, 0));
+    try std.testing.expect(!isBpfLoaderV3InstructionAuthorized(&.{8}, &all_disabled, 0));
+    try std.testing.expect(isBpfLoaderV3InstructionAuthorized(&.{9}, &all_disabled, 0));
+    try std.testing.expect(!isBpfLoaderV3InstructionAuthorized(&.{9}, &all_enabled, 0));
 }
