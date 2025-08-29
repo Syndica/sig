@@ -907,6 +907,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
             .instruction_data = transfer_instruction_data,
         }},
         .accounts = accounts,
+        .num_lookup_tables = 0,
     };
 
     // Set a compute budget that is sufficient for the transaction to succeed
