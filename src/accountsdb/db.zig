@@ -2426,13 +2426,16 @@ pub const AccountsDB = struct {
     ) ?*AccountRef {
         var biggest: ?*AccountRef = null;
 
+        var max_refs: u64 = 5;
         var curr: ?*AccountRef = ref_ptr;
         while (curr) |ref| : (curr = ref.next_ptr) {
+            std.debug.print("ancestors: {any}, ref slot: {}\n", .{ ancestors.ancestors.keys(), ref.slot });
             if (ancestors.containsSlot(ref.slot)) {
                 const new_biggest = if (biggest) |big| ref.slot > big.slot else true;
                 if (new_biggest) biggest = ref;
             }
-            std.debug.print("loop 1\n", .{});
+            max_refs -= 1;
+            if (max_refs == 0) @panic("reached max refs");
         }
 
         if (biggest == null) {
@@ -2442,7 +2445,6 @@ pub const AccountsDB = struct {
                     const new_biggest = if (biggest) |big| ref.slot > big.slot else true;
                     if (new_biggest) biggest = ref;
                 }
-                std.debug.print("loop 2\n", .{});
             }
         }
 

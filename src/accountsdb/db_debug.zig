@@ -91,8 +91,8 @@ pub fn testDb() !void {
         const pubkey = Pubkey.initRandom(random);
         const account = try createRandomAccount(allocator, random);
         defer allocator.free(account.data);
-        for (0..random.uintAtMost(usize, 3)) |_| {
-            const slot = random.uintAtMost(Slot, 10);
+        for (1..random.intRangeAtMost(usize, 2, 5)) |i| {
+            const slot = i;
             try db.putAccount(slot, pubkey, account);
             try test_db.putAccount(allocator, slot, pubkey, try account.clone(allocator));
         }
@@ -111,6 +111,7 @@ pub fn testDb() !void {
 
             const expected_account = test_db.getAccount(pubkey, &ancestors).?;
             std.debug.print("Getting account {} at slot {}\n", .{ pubkey, slot });
+            // const actual_account = (try db.getAccountLatest(&pubkey)).?;
             const actual_account = (try db.getAccountWithAncestors(&pubkey, &ancestors)).?;
             std.debug.print("Got account {} at slot {}\n", .{ pubkey, slot });
             try expectedAccountSharedDataEqualsAccount(expected_account, actual_account, false);
