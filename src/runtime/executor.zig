@@ -237,13 +237,10 @@ pub fn prepareCpiInstructionInfo(
 
         const index_in_callee_ptr = &callee_map[index_in_transaction];
         if (index_in_callee_ptr.* < instruction_accounts.len) {
-            const prev = instruction_accounts.get(index_in_callee_ptr.*);
-            instruction_accounts.appendAssumeCapacity(.{
-                .pubkey = account.pubkey,
-                .index_in_transaction = prev.index_in_transaction,
-                .is_signer = prev.is_signer or account.is_signer,
-                .is_writable = prev.is_writable or account.is_writable,
-            });
+            const prev = &instruction_accounts.slice()[index_in_callee_ptr.*];
+            prev.is_signer = prev.is_signer or account.is_signer;
+            prev.is_writable = prev.is_writable or account.is_writable;
+            instruction_accounts.appendAssumeCapacity(prev.*);
         } else {
             index_in_callee_ptr.* = @intCast(instruction_accounts.len);
             instruction_accounts.appendAssumeCapacity(.{
