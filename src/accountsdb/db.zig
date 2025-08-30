@@ -2224,6 +2224,10 @@ pub const AccountsDB = struct {
                         prev.next_ptr = new_ref;
                         prev.next_index = global_ref_index + i;
                     }
+
+                    if (new_ref.next_ptr) |next| {
+                        next.prev_ptr = new_ref;
+                    }
                 } else {
                     // new ref
                     new_ref.* = AccountRef{
@@ -2242,15 +2246,6 @@ pub const AccountsDB = struct {
                     defer shard_map_lg.unlock();
 
                     // if we just moved an accountref which is the head, fix up the head
-                    if (shard_map.getPtr(new_ref.pubkey)) |head| {
-                        if (head.ref_ptr.slot == new_ref.slot and
-                            head.ref_ptr.pubkey.equals(&new_ref.pubkey))
-                        {
-                            head.ref_index = global_ref_index + i;
-                            head.ref_ptr = new_ref;
-                        }
-                    }
-
                     const head = shard_map.getPtr(new_ref.pubkey) orelse continue;
                     if (head.ref_ptr.slot == new_ref.slot and
                         head.ref_ptr.pubkey.equals(&new_ref.pubkey))
@@ -2291,7 +2286,7 @@ pub const AccountsDB = struct {
             }
 
             // replace + free old ref
-            const old_ref_ptr = slot_entry.value_ptr.refs.items.ptr;
+            const old_ref_buf = slot_entry.value_ptr.refs.items;
             slot_entry.value_ptr.* = .{
                 .global_index = global_ref_index,
                 .refs = .{
@@ -2300,7 +2295,8 @@ pub const AccountsDB = struct {
                 },
             };
             if (slot_entry.found_existing) {
-                self.account_index.reference_manager.free(old_ref_ptr);
+                self.account_index.reference_manager.free(old_ref_buf.ptr);
+                @memset(old_ref_buf, undefined);
             }
         } else {
             // no realloc necessary
