@@ -7,8 +7,6 @@ const config = @import("config.zig");
 const tracy = @import("tracy");
 
 const AccountsDB = sig.accounts_db.AccountsDB;
-const LedgerReader = sig.ledger.LedgerReader;
-const LedgerResultWriter = sig.ledger.result_writer.LedgerResultWriter;
 const ChannelPrintLogger = sig.trace.ChannelPrintLogger;
 const ClusterType = sig.core.ClusterType;
 const ContactInfo = sig.gossip.ContactInfo;
@@ -19,6 +17,8 @@ const GossipService = sig.gossip.GossipService;
 const IpAddr = sig.net.IpAddr;
 const LeaderSchedule = sig.core.leader_schedule.LeaderSchedule;
 const LeaderScheduleCache = sig.core.leader_schedule.LeaderScheduleCache;
+const LedgerReader = sig.ledger.LedgerReader;
+const LedgerResultWriter = sig.ledger.result_writer.LedgerResultWriter;
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 const SnapshotFiles = sig.accounts_db.SnapshotFiles;
