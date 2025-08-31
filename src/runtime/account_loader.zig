@@ -291,8 +291,6 @@ pub const BatchAccountCache = struct {
         var zone = tracy.Zone.init(@src(), .{ .name = "loadTransactionAccounts" });
         defer zone.deinit();
 
-        std.debug.print("feature enabled: {}\n", .{feature_set.active(.formalize_loaded_transaction_data_size, slot)});
-
         const result = if (feature_set.active(.formalize_loaded_transaction_data_size, slot))
             loadTransactionAccountsSimd186(
                 self,
