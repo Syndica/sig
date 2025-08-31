@@ -38,6 +38,7 @@ pub const Committer = struct {
     status_cache: *sig.core.StatusCache,
     stakes_cache: *sig.core.StakesCache,
     new_rate_activation_epoch: ?sig.core.Epoch,
+    replay_votes_sender: *Channel(ParsedVote),
 
     pub fn commitTransactions(
         self: Committer,
@@ -45,7 +46,6 @@ pub const Committer = struct {
         slot: Slot,
         transactions: []const ResolvedTransaction,
         tx_results: []const struct { Hash, ProcessedTransaction },
-        replay_votes_sender: *Channel(ParsedVote),
     ) !void {
         var zone = tracy.Zone.init(@src(), .{ .name = "commitTransactions" });
         zone.value(transactions.len);
@@ -89,7 +89,7 @@ pub const Committer = struct {
                             transaction,
                         )) |parsed| {
                             if (parsed.vote.lastVotedSlot() != null) {
-                                replay_votes_sender.send(parsed) catch parsed.deinit(allocator);
+                                self.replay_votes_sender.send(parsed) catch parsed.deinit(allocator);
                             } else {
                                 parsed.deinit(allocator);
                             }

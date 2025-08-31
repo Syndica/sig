@@ -309,6 +309,7 @@ fn replaySlot(state: ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
         .status_cache = state.status_cache,
         .stakes_cache = &slot_info.state.stakes_cache,
         .new_rate_activation_epoch = new_rate_activation_epoch,
+        .replay_votes_sender = state.replay_votes_channel,
     };
 
     const verify_ticks_params = replay.confirm_slot.VerifyTicksParams{
@@ -336,7 +337,6 @@ fn replaySlot(state: ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
         committer,
         verify_ticks_params,
         slot_resolver,
-        state.replay_votes_channel,
     ) };
 }
 

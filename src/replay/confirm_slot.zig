@@ -10,7 +10,6 @@ const Atomic = std.atomic.Value;
 
 const HomogeneousThreadPool = sig.utils.thread.HomogeneousThreadPool;
 const ThreadPool = sig.sync.ThreadPool;
-const Channel = sig.sync.Channel;
 
 const Ancestors = core.Ancestors;
 const Entry = core.Entry;
@@ -58,7 +57,6 @@ pub fn confirmSlot(
     committer: Committer,
     verify_ticks_params: VerifyTicksParams,
     slot_resolver: SlotResolver,
-    replay_votes_sender: *Channel(ParsedVote),
 ) !*ConfirmSlotFuture {
     var zone = tracy.Zone.init(@src(), .{ .name = "confirmSlot" });
     zone.value(svm_params.slot);
@@ -72,8 +70,7 @@ pub fn confirmSlot(
             for (entries) |entry| entry.deinit(allocator);
             allocator.free(entries);
         }
-        break :fut try ConfirmSlotFuture
-            .create(
+        break :fut try ConfirmSlotFuture.create(
             allocator,
             logger,
             thread_pool,
@@ -81,7 +78,6 @@ pub fn confirmSlot(
             entries,
             svm_params,
             slot_resolver,
-            replay_votes_sender,
         );
     };
     errdefer future.destroy(allocator);
@@ -179,7 +175,6 @@ pub const ConfirmSlotFuture = struct {
         entries: []const Entry,
         svm_params: SvmGateway.Params,
         slot_resolver: SlotResolver,
-        replay_votes_sender: *Channel(ParsedVote),
     ) !*ConfirmSlotFuture {
         const poh_verifier = try HomogeneousThreadPool(PohTask)
             .initBorrowed(allocator, thread_pool, thread_pool.max_threads);
@@ -205,7 +200,6 @@ pub const ConfirmSlotFuture = struct {
             thread_pool,
             svm_params,
             &future.exit,
-            replay_votes_sender,
         );
 
         return future;
@@ -434,7 +428,6 @@ test "happy path: trivial case" {
             .tick_hash_count = &tick_hash_count,
         },
         try state.resolver(allocator),
-        replay_votes_channel,
     );
     defer future.destroy(allocator);
 
@@ -482,7 +475,6 @@ test "happy path: partial slot" {
             .tick_hash_count = &tick_hash_count,
         },
         try state.resolver(allocator),
-        replay_votes_channel,
     );
     defer future.destroy(allocator);
 
@@ -531,7 +523,6 @@ test "happy path: full slot" {
             .tick_hash_count = &tick_hash_count,
         },
         try state.resolver(allocator),
-        replay_votes_channel,
     );
 
     defer future.destroy(allocator);
@@ -581,7 +572,6 @@ test "fail: full slot not marked full -> .InvalidLastTick" {
             .tick_hash_count = &tick_hash_count,
         },
         try state.resolver(allocator),
-        replay_votes_channel,
     );
     defer future.destroy(allocator);
 
@@ -632,7 +622,6 @@ test "fail: no trailing tick at max height -> .TrailingEntry" {
             .tick_hash_count = &tick_hash_count,
         },
         try state.resolver(allocator),
-        replay_votes_channel,
     );
     defer future.destroy(allocator);
 
@@ -686,7 +675,6 @@ test "fail: invalid poh chain" {
             .tick_hash_count = &tick_hash_count,
         },
         try state.resolver(allocator),
-        replay_votes_channel,
     );
     defer future.destroy(allocator);
 
@@ -737,7 +725,6 @@ test "fail: sigverify" {
             .tick_hash_count = &tick_hash_count,
         },
         try state.resolver(allocator),
-        replay_votes_channel,
     );
     defer future.destroy(allocator);
 
@@ -864,6 +851,7 @@ pub const TestState = struct {
             .status_cache = &self.status_cache,
             .stakes_cache = &self.stakes_cache,
             .new_rate_activation_epoch = null,
+            .replay_votes_sender = self.replay_votes_channel,
         };
     }
 

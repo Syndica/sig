@@ -42,7 +42,6 @@ pub fn processBatch(
     committer: Committer,
     transactions: []const ResolvedTransaction,
     exit: *Atomic(bool),
-    replay_votes_sender: *Channel(ParsedVote),
 ) !BatchResult {
     var zone = tracy.Zone.init(@src(), .{ .name = "processBatch" });
     zone.value(transactions.len);
@@ -89,7 +88,6 @@ pub fn processBatch(
         svm_gateway.params.slot,
         transactions,
         results,
-        replay_votes_sender,
     );
 
     return .success;
@@ -150,7 +148,6 @@ pub const TransactionScheduler = struct {
         thread_pool: *ThreadPool,
         svm_params: SvmGateway.Params,
         exit: *Atomic(bool),
-        replay_votes_sender: *Channel(ParsedVote),
     ) !TransactionScheduler {
         var batches = try std.ArrayListUnmanaged(ResolvedBatch)
             .initCapacity(allocator, batch_capacity);
@@ -176,7 +173,7 @@ pub const TransactionScheduler = struct {
             .exit = exit,
             .failure = null,
             .svm_params = svm_params,
-            .replay_votes_sender = replay_votes_sender,
+            .replay_votes_sender = committer.replay_votes_sender,
         };
     }
 
@@ -267,7 +264,6 @@ pub const TransactionScheduler = struct {
                 .transactions = batch.transactions,
                 .results = &self.results,
                 .exit = self.exit,
-                .replay_votes_sender = self.replay_votes_sender,
             }));
             self.batches_started += 1;
         }
@@ -284,7 +280,6 @@ const ProcessBatchTask = struct {
     transactions: []const ResolvedTransaction,
     results: *Channel(TransactionScheduler.BatchMessage),
     exit: *Atomic(bool),
-    replay_votes_sender: *Channel(ParsedVote),
 
     pub fn run(self: *ProcessBatchTask) !void {
         const result = try processBatch(
@@ -293,7 +288,6 @@ const ProcessBatchTask = struct {
             self.committer,
             self.transactions,
             self.exit,
-            self.replay_votes_sender,
         );
 
         if (result == .failure) {
@@ -340,7 +334,6 @@ test "TransactionScheduler: happy path" {
         &thread_pool,
         state.svmParams(),
         &state.exit,
-        state.replay_votes_channel,
     );
     defer scheduler.deinit();
 
@@ -415,7 +408,6 @@ test "TransactionScheduler: duplicate batch passes through to svm" {
         &thread_pool,
         state.svmParams(),
         &state.exit,
-        state.replay_votes_channel,
     );
     defer scheduler.deinit();
 
@@ -490,7 +482,6 @@ test "TransactionScheduler: failed account locks" {
         &thread_pool,
         state.svmParams(),
         &state.exit,
-        state.replay_votes_channel,
     );
     defer scheduler.deinit();
 
@@ -555,7 +546,6 @@ test "TransactionScheduler: signature verification failure" {
         &thread_pool,
         state.svmParams(),
         &state.exit,
-        state.replay_votes_channel,
     );
     defer scheduler.deinit();
 
@@ -687,7 +677,6 @@ test "TransactionScheduler: does not send replay vote for failed execution" {
         &thread_pool,
         state.svmParams(),
         &state.exit,
-        votes_ch,
     );
     defer scheduler.deinit();
 
@@ -876,13 +865,6 @@ test "TransactionScheduler: sends replay vote after successful execution" {
         },
     );
 
-    // Channel to receive parsed votes
-    const votes_ch = try sig.sync.Channel(ParsedVote).create(allocator);
-    defer {
-        while (votes_ch.tryReceive()) |pv| pv.deinit(allocator);
-        votes_ch.destroy();
-    }
-
     var scheduler = try TransactionScheduler.initCapacity(
         allocator,
         .FOR_TESTS,
@@ -891,7 +873,6 @@ test "TransactionScheduler: sends replay vote after successful execution" {
         &thread_pool,
         state.svmParams(),
         &state.exit,
-        votes_ch,
     );
     defer scheduler.deinit();
 
@@ -899,7 +880,7 @@ test "TransactionScheduler: sends replay vote after successful execution" {
 
     // Await completion and assert a replay vote was emitted
     try std.testing.expectEqual(.done, try replay.confirm_slot.testAwait(&scheduler));
-    const maybe_vote = votes_ch.tryReceive();
+    const maybe_vote = state.replay_votes_channel.tryReceive();
     try std.testing.expect(maybe_vote != null);
     if (maybe_vote) |pv| pv.deinit(allocator);
 }
