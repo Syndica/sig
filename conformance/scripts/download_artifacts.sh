@@ -1,9 +1,8 @@
 #!/bin/bash
 set -e
 
-# Specifically this commit of solfuzz-agave: e3bced475fda09b253748e73f9c095d323d0c49c
-# TODO: update the sig-fuzz fixtures to work with the latest agave
-artifact_id=3480947062
+# Specifically this commit of solfuzz-agave: 7e7b4935d66e17b478910b8a1e43b461cbb43f7d
+artifact_id=3876773025
 artifact_name="libsolfuzz-agave.so"
 
 artifacts_url="https://api.github.com/repos/firedancer-io/solfuzz-agave/actions/artifacts"

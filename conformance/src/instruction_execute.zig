@@ -129,15 +129,9 @@ fn executeInstruction(
     defer instr_info.deinit(allocator);
 
     var result: ?InstructionError = null;
-    executor.executeInstruction(
-        allocator,
-        &tc,
-        instr_info,
-    ) catch |err| {
-        switch (err) {
-            error.OutOfMemory => return err,
-            else => |e| result = e,
-        }
+    executor.executeInstruction(allocator, &tc, instr_info) catch |err| switch (err) {
+        error.OutOfMemory => return err,
+        else => |e| result = e,
     };
 
     if (emit_logs) {
@@ -147,9 +141,17 @@ fn executeInstruction(
         }
     }
 
-    return utils.createInstrEffects(
-        allocator,
-        &tc,
-        result,
-    );
+    // Special casing to return only the custom error for transactions which have
+    // encountered the loader v4 program or bpf loader v3 migrate instruction.
+    if (tc.custom_error == 0x30000000 or tc.custom_error == 0x40000000) {
+        return .{
+            .result = 0,
+            .custom_err = tc.custom_error.?,
+            .modified_accounts = .init(allocator),
+            .cu_avail = 0,
+            .return_data = .Empty,
+        };
+    }
+
+    return utils.createInstrEffects(allocator, &tc, result);
 }

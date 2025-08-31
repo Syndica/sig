@@ -1,13 +1,12 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const build_options = @import("build-options");
 const cli = @import("cli");
 const sig = @import("sig.zig");
 const config = @import("config.zig");
 const tracy = @import("tracy");
 
 const AccountsDB = sig.accounts_db.AccountsDB;
-const LedgerReader = sig.ledger.LedgerReader;
-const LedgerResultWriter = sig.ledger.result_writer.LedgerResultWriter;
 const ChannelPrintLogger = sig.trace.ChannelPrintLogger;
 const ClusterType = sig.core.ClusterType;
 const ContactInfo = sig.gossip.ContactInfo;
@@ -18,6 +17,8 @@ const GossipService = sig.gossip.GossipService;
 const IpAddr = sig.net.IpAddr;
 const LeaderSchedule = sig.core.leader_schedule.LeaderSchedule;
 const LeaderScheduleCache = sig.core.leader_schedule.LeaderScheduleCache;
+const LedgerReader = sig.ledger.LedgerReader;
+const LedgerResultWriter = sig.ledger.result_writer.LedgerResultWriter;
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 const SnapshotFiles = sig.accounts_db.SnapshotFiles;
@@ -79,11 +80,13 @@ pub fn main() !void {
     defer std.process.argsFree(gpa, argv);
 
     const parser = cli.Parser(Cmd, Cmd.cmd_info);
+    const tty_config = std.io.tty.detectConfig(std.io.getStdOut());
+    const stdout = std.io.getStdOut().writer();
     const cmd = try parser.parse(
         gpa,
         "sig",
-        std.io.tty.detectConfig(std.io.getStdOut()),
-        std.io.getStdOut().writer(),
+        tty_config,
+        stdout,
         argv[1..],
     ) orelse return;
     defer parser.free(gpa, cmd);
@@ -94,7 +97,14 @@ pub fn main() !void {
     current_config.log_file = cmd.log_file;
     current_config.tee_logs = cmd.tee_logs;
 
-    switch (cmd.subcmd orelse return error.MissingSubcommand) {
+    // If no subcommand was provided, print a friendly header and help information.
+    const subcmd = cmd.subcmd orelse {
+        // Render the top-level help.
+        _ = try parser.parse(gpa, "sig", tty_config, stdout, &.{"--help"});
+        return;
+    };
+
+    switch (subcmd) {
         .identity => try identity(gpa, current_config),
         .gossip => |params| {
             current_config.shred_version = params.shred_version;
@@ -209,10 +219,12 @@ const Cmd = struct {
 
     const cmd_info: cli.CommandInfo(@This()) = .{
         .help = .{
-            .short =
-            \\Sig is a Solana client implementation written in Zig.
-            \\This is still a WIP, PRs welcome.
-            ,
+            .short = std.fmt.comptimePrint(
+                \\Version: {}
+                \\
+                \\Sig is a Solana validator client written in Zig. The project is still a
+                \\work in progress so contributions are welcome.
+            , .{build_options.version}),
             .long = null,
         },
         .sub = .{
@@ -1074,12 +1086,6 @@ fn validator(
         .from(app_base.logger),
         sig.VALIDATOR_DIR ++ "ledger",
     );
-    const shred_inserter = try sig.ledger.ShredInserter.init(
-        allocator,
-        .from(app_base.logger),
-        app_base.metrics_registry,
-        ledger_db,
-    );
 
     // cleanup service
     const lowest_cleanup_slot = try allocator.create(sig.sync.RwMux(sig.core.Slot));
@@ -1180,12 +1186,12 @@ fn validator(
             .logger = .from(app_base.logger),
             .registry = app_base.metrics_registry,
             .random = prng.random(),
+            .ledger_db = ledger_db,
             .my_keypair = &app_base.my_keypair,
             .exit = app_base.exit,
             .gossip_table_rw = &gossip_service.gossip_table_rw,
             .my_shred_version = &gossip_service.my_shred_version,
             .epoch_context_mgr = &epoch_context_manager,
-            .shred_inserter = shred_inserter,
             .my_contact_info = my_contact_info,
             .n_retransmit_threads = turbine_config.num_retransmit_threads,
             .overwrite_turbine_stake_for_testing = turbine_config.overwrite_stake_for_testing,
@@ -1322,12 +1328,6 @@ fn shredNetwork(
         .from(app_base.logger),
         sig.VALIDATOR_DIR ++ "ledger",
     );
-    const shred_inserter = try sig.ledger.ShredInserter.init(
-        allocator,
-        .from(app_base.logger),
-        app_base.metrics_registry,
-        ledger_db,
-    );
 
     // cleanup service
     const lowest_cleanup_slot = try allocator.create(sig.sync.RwMux(sig.core.Slot));
@@ -1369,12 +1369,12 @@ fn shredNetwork(
         .logger = .from(app_base.logger),
         .registry = app_base.metrics_registry,
         .random = prng.random(),
+        .ledger_db = ledger_db,
         .my_keypair = &app_base.my_keypair,
         .exit = app_base.exit,
         .gossip_table_rw = &gossip_service.gossip_table_rw,
         .my_shred_version = &gossip_service.my_shred_version,
         .epoch_context_mgr = &epoch_context_manager,
-        .shred_inserter = shred_inserter,
         .my_contact_info = my_contact_info,
         .n_retransmit_threads = cfg.turbine.num_retransmit_threads,
         .overwrite_turbine_stake_for_testing = cfg.turbine.overwrite_stake_for_testing,

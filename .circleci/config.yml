@@ -144,7 +144,7 @@ jobs:
             # it seems that the feature detection is a bit broken in CircleCI's virtual machines
             # so we will manually say that it's an Apple M2.
             zig build -Denable-tsan=true -Dno-run -Dcpu=apple_m2 --summary all
-            zig build test -Denable-tsan=true -Dledger=hashmap -Dfilter="ledger" -Dno-bin -Dcpu=apple_m2 --summary all
+            zig build test -Dlong-tests -Denable-tsan=true -Dledger=hashmap -Dfilter="ledger" -Dno-bin -Dcpu=apple_m2 --summary all
             zig-out/bin/test
       - save_cache:
           key: macos-aarch64-0.14.1-{{ checksum "build.zig.zon" }}
@@ -162,7 +162,7 @@ jobs:
           key: linux-x86_64-0.14.1-{{ checksum "build.zig.zon" }}-v1
       - run:
           name: Build and Test
-          command: workspace/zig/zig build test -Denable-tsan=true -Dledger=hashmap -Dcpu=x86_64_v3 -Dfilter="ledger" --summary all
+          command: workspace/zig/zig build test -Dlong-tests -Denable-tsan=true -Dledger=hashmap -Dcpu=x86_64_v3 -Dfilter="ledger" --summary all
 
   test_linux:
     executor: linux-executor
@@ -177,7 +177,7 @@ jobs:
       - run:
           name: Test
           # Disable network-accessing tests for this job, which behave badly on circleci
-          command: workspace/zig/zig build test -Dcpu=x86_64_v3 -Denable-tsan=true -Dno-network-tests --summary all
+          command: workspace/zig/zig build test -Dlong-tests -Dcpu=x86_64_v3 -Denable-tsan=true -Dno-network-tests --summary all
 
   test_kcov_linux:
     executor: linux-executor
@@ -192,7 +192,7 @@ jobs:
           # Build with musl instead of glibc so it's statically linked, in order
           # to run inside of the docker container which could contain a different
           # GLIBC version.
-          command: workspace/zig/zig build test -Dtarget=x86_64-linux-gnu.2.36 -Dcpu=x86_64_v3 -Denable-tsan=false -Dno-run -Dno-network-tests --summary all
+          command: workspace/zig/zig build test -Dlong-tests -Dtarget=x86_64-linux-gnu.2.36 -Dcpu=x86_64_v3 -Denable-tsan=false -Dno-run -Dno-network-tests --summary all
       - run:
           name: Test and Collect
           command: |
@@ -278,8 +278,8 @@ jobs:
           command: |
             git clone https://github.com/firedancer-io/solana-conformance --depth 1
             cd solana-conformance/
-            git fetch origin 57c0dfc0bd68d9affd7c552e487063f89c79d0c5
-            git checkout 57c0dfc0bd68d9affd7c552e487063f89c79d0c5
+            git fetch origin b55791db1c74ff767da72e5cca8b152d33884bef
+            git checkout b55791db1c74ff767da72e5cca8b152d33884bef
             sudo add-apt-repository ppa:deadsnakes/ppa -y
             sudo apt install -y python3.11 python3.11-dev python3.11-venv rename
 
@@ -288,7 +288,7 @@ jobs:
 
             pip install -e ".[dev]"
       - restore_cache:
-          key: test-vectors-9caee88da199a61c31b7eb187f6ac8cd2210399c-v2
+          key: test-vectors-501980b8f6a0f2276da7703b19068f0abf821db5
       - run:
           name: Checkout Test Vectors
           # TODO: instead of using the specific test-vectors commit, we want to track master instead.
@@ -297,8 +297,8 @@ jobs:
             if [ ! -d "test-vectors" ]; then
               git clone https://github.com/firedancer-io/test-vectors --depth 1
               cd test-vectors
-              git fetch origin 9caee88da199a61c31b7eb187f6ac8cd2210399c
-              git checkout 9caee88da199a61c31b7eb187f6ac8cd2210399c
+              git fetch origin 501980b8f6a0f2276da7703b19068f0abf821db5
+              git checkout 501980b8f6a0f2276da7703b19068f0abf821db5
 
               # We need each fixture file to have a unique name so that we can put them into the test-inputs directory
               # in a "flat" manner. The problem is that there are just too many files and it exceeds ARG_MAX for a single
@@ -308,10 +308,9 @@ jobs:
               find vm_interp/fixtures/v0 -type f -name '*.fix' -print0 | xargs -0 rename "s/\.fix\$/-v0.fix/"
               find vm_interp/fixtures/v1 -type f -name '*.fix' -print0 | xargs -0 rename "s/\.fix\$/-v1.fix/"
               find vm_interp/fixtures/v2 -type f -name '*.fix' -print0 | xargs -0 rename "s/\.fix\$/-v2.fix/"
-              find vm_interp/fixtures/v3 -type f -name '*.fix' -print0 | xargs -0 rename "s/\.fix\$/-v3.fix/"
             fi
       - save_cache:
-          key: test-vectors-9caee88da199a61c31b7eb187f6ac8cd2210399c-v2
+          key: test-vectors-501980b8f6a0f2276da7703b19068f0abf821db5
           paths:
             - test-vectors/
       - run:

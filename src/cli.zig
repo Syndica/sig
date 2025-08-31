@@ -266,8 +266,15 @@ pub const ParseCmdError = error{
     UnrecognizedCommand,
 } || ParseArgumentKeyMaybeValStrError ||
     ParseSingleArgValueError ||
-    std.mem.Allocator.Error ||
-    std.os.windows.SetConsoleTextAttributeError; // for the TTY for the help message
+    WriteHelpError ||
+    std.mem.Allocator.Error;
+
+pub const WriteHelpError = error{
+    /// The help writer returned an error.
+    HelpWriteFail,
+    /// The tty config returned an error.
+    TtyFail,
+};
 
 pub fn Parser(
     /// Must be a struct type containing zero or more argument fields, and optionally
@@ -294,13 +301,13 @@ pub fn Parser(
             /// Should be a list of commands. If the source is `argv`, it should be `argv[1..]`.
             /// The strings in the list may referenced by the return value of this function.
             args: []const []const u8,
-        ) (ParseCmdError || @TypeOf(help_writer).Error)!?Cmd {
+        ) ParseCmdError!?Cmd {
             var args_iter: ArgsIter = .{ .args = args, .index = 0 };
             return helper.parseInner(
                 allocator,
                 &[_][]const u8{program_name},
                 tty_config,
-                help_writer,
+                .{ .context = help_writer.any() },
                 &args_iter,
             );
         }
@@ -467,7 +474,7 @@ test "TestCmd" {
                         .kind = .positional,
                         .name_override = "file",
                         .alias = .none,
-                        .default_value_ptr = null,
+                        .default_value = null,
                         .config = .string,
                         .help = "Input file",
                     },
@@ -506,7 +513,7 @@ test "TestCmd" {
                         .kind = .named,
                         .name_override = null,
                         .alias = .none,
-                        .default_value_ptr = null,
+                        .default_value = null,
                         .config = {},
                         .help = "A single argument",
                     },
@@ -815,9 +822,11 @@ fn CmdHelper(
 
         var default_init: Cmd = undefined;
 
-        const computeArgFieldInfo = struct {
+        const helper = struct {
             /// shared logic for each argument field, and each argument group field.
             fn computeArgFieldInfo(
+                comptime is_last: bool,
+
                 //
                 comptime field_name: []const u8,
                 comptime FieldType: type,
@@ -867,9 +876,16 @@ fn CmdHelper(
                             arg_enum_to_field_map_ptr.* ++ .{arg_struct_index};
                     },
                     .positional => {
-                        if (is_slice) @compileError(
+                        if (maybe_sub_cmd_s_field_index != null) @compileError(
+                            "Cannot have a positional argument" ++
+                                " (" ++ parent_prefix ++ field_name ++ ")" ++
+                                " and a sub-command" ++
+                                " (" ++ parent_prefix ++ field_name ++ ")",
+                        );
+
+                        if (is_slice and !is_last) @compileError(
                             "Argument " ++ parent_prefix ++ field_name ++
-                                " cannot be both a list and a positional.",
+                                " cannot be both a list and a positional if it is not last.",
                         );
 
                         if (arg_info.alias != .none) @compileError(
@@ -898,7 +914,7 @@ fn CmdHelper(
                         parent_prefix ++ field_name,
                 );
             }
-        }.computeArgFieldInfo;
+        };
 
         @setEvalBranchQuota(cmd_fields.len * 3 + 1);
         for (cmd_fields, 0..) |s_field, s_field_i| {
@@ -911,7 +927,8 @@ fn CmdHelper(
 
             const maybe_arg_info = @field(cmd_info.sub, s_field.name);
             if (isArgumentInfo(@TypeOf(maybe_arg_info))) {
-                computeArgFieldInfo(
+                helper.computeArgFieldInfo(
+                    s_field_i == cmd_fields.len - 1,
                     s_field.name,
                     s_field.type,
                     maybe_arg_info,
@@ -933,7 +950,10 @@ fn CmdHelper(
             const s_sub_info = @typeInfo(s_field.type).@"struct";
             @setEvalBranchQuota(cmd_fields.len * 3 + 1 + s_sub_info.fields.len * 2 + 1);
             for (s_sub_info.fields, 0..) |s_sub_field, s_sub_field_i| {
-                computeArgFieldInfo(
+                helper.computeArgFieldInfo(
+                    s_field_i == cmd_fields.len - 1 and
+                        s_sub_field_i == s_sub_info.fields.len - 1,
+
                     s_sub_field.name,
                     s_sub_field.type,
                     @field(maybe_arg_info, s_sub_field.name),
@@ -1099,9 +1119,9 @@ fn CmdHelper(
             command_chain: anytype,
             tty_config: std.io.tty.Config,
             /// `std.io.GenericWriter(...)` | `std.io.AnyWriter`
-            help_writer: anytype,
+            help_writer: AdaptedHelpWriter,
             args_iter: *ArgsIter,
-        ) (ParseCmdError || @TypeOf(help_writer).Error)!?Cmd {
+        ) ParseCmdError!?Cmd {
             var result: Cmd = default_init;
             errdefer freeArguments(allocator, result);
 
@@ -1309,18 +1329,40 @@ fn CmdHelper(
             }
         }
 
+        const AdaptedHelpWriter = std.io.GenericWriter(
+            std.io.AnyWriter,
+            error{HelpWriteFail},
+            struct {
+                fn adaptedWriteFn(
+                    unadapted: std.io.AnyWriter,
+                    bytes: []const u8,
+                ) error{HelpWriteFail}!usize {
+                    return unadapted.write(bytes) catch return error.HelpWriteFail;
+                }
+            }.adaptedWriteFn,
+        );
+        fn adaptedSetColor(
+            writer_adapted: AdaptedHelpWriter,
+            tty_config: std.io.tty.Config,
+            color: std.io.tty.Color,
+        ) WriteHelpError!void {
+            tty_config.setColor(writer_adapted, color) catch |err| switch (err) {
+                error.HelpWriteFail => |e| return e,
+                error.Unexpected => return error.TtyFail,
+            };
+        }
+
         fn writeHelp(
             /// `*const [n][]const u8`
             command_chain: anytype,
-            tty_config: std.io.tty.Config,
-            /// `std.io.GenericWriter(...)` | `std.io.AnyWriter`
-            writer: anytype,
-        ) (@TypeOf(writer).Error || std.os.windows.SetConsoleTextAttributeError)!void {
-            try tty_config.setColor(writer, .yellow);
+            tty: std.io.tty.Config,
+            writer: AdaptedHelpWriter,
+        ) WriteHelpError!void {
+            try adaptedSetColor(writer, tty, .yellow);
             try writer.writeAll("USAGE:\n");
             try writer.writeByteNTimes(' ', 2);
 
-            try tty_config.setColor(writer, .green);
+            try adaptedSetColor(writer, tty, .green);
             try writer.writeAll(command_chain[0]);
             try writer.writeByte(' ');
             for (command_chain[1..]) |subcmd_str| {
@@ -1357,7 +1399,7 @@ fn CmdHelper(
 
             try writer.writeAll("[OPTIONS]");
 
-            try tty_config.setColor(writer, .reset);
+            try adaptedSetColor(writer, tty, .reset);
             try writer.writeByteNTimes('\n', 2);
             try writer.writeAll(cmd_info.help.short);
 
@@ -1371,7 +1413,7 @@ fn CmdHelper(
             if (maybe_subcmd_list) |subcmd_list| {
                 try writer.writeByte('\n');
 
-                try tty_config.setColor(writer, .yellow);
+                try adaptedSetColor(writer, tty, .yellow);
                 try writer.writeAll("COMMANDS:");
 
                 const name_base_width = min: {
@@ -1386,13 +1428,13 @@ fn CmdHelper(
                 for (subcmd_list) |name_help_pair| {
                     const subcmd_name, const subcmd_short_help = name_help_pair;
 
-                    try tty_config.setColor(writer, .green);
+                    try adaptedSetColor(writer, tty, .green);
                     try writer.writeByte('\n');
                     try writer.writeByteNTimes(' ', 2);
 
                     try writer.writeAll(subcmd_name);
                     const padding = name_base_width - subcmd_name.len + 3;
-                    try tty_config.setColor(writer, .reset);
+                    try adaptedSetColor(writer, tty, .reset);
                     try writer.writeByteNTimes(' ', padding);
 
                     const indent = 2 + name_base_width + 3;
@@ -1404,15 +1446,15 @@ fn CmdHelper(
 
             try writer.writeByte('\n');
 
-            try tty_config.setColor(writer, .yellow);
+            try adaptedSetColor(writer, tty, .yellow);
             try writer.writeAll("OPTIONS:");
 
             const name_alias_base_width: u64, //
             const default_value_base_width: ?u64 //
-            = try writeArgumentsHelp(.no_color, std.io.null_writer, 0, null);
+            = try writeArgumentsHelp(.no_color, .{ .context = std.io.null_writer.any() }, 0, null);
 
             _ = try writeArgumentsHelp(
-                tty_config,
+                tty,
                 writer,
                 name_alias_base_width,
                 default_value_base_width,
@@ -1420,8 +1462,8 @@ fn CmdHelper(
         }
 
         fn writeArgumentsHelp(
-            tty_config: std.io.tty.Config,
-            writer: anytype,
+            tty: std.io.tty.Config,
+            writer: AdaptedHelpWriter,
             name_alias_base_width: u64,
             default_value_base_width: ?u64,
         ) !struct {
@@ -1454,7 +1496,7 @@ fn CmdHelper(
 
                 const multiline_help = std.mem.indexOfScalar(u8, arg_info.help, '\n') != null;
 
-                try tty_config.setColor(writer, .green);
+                try adaptedSetColor(writer, tty, .green);
                 if (multiline_help) try writer.writeByte('\n');
                 try writer.writeByte('\n');
                 try writer.writeByteNTimes(' ', 2);
@@ -1465,7 +1507,7 @@ fn CmdHelper(
                 max_name_alias_width = @max(max_name_alias_width, cw.bytes_written);
 
                 // write padding
-                try tty_config.setColor(writer, .reset);
+                try adaptedSetColor(writer, tty, .reset);
                 try writer.writeByteNTimes(
                     ' ',
                     @max(cw.bytes_written, name_alias_base_width) - cw.bytes_written + 2,
@@ -1509,7 +1551,7 @@ fn CmdHelper(
                 const multiline_help = std.mem.indexOfScalar(u8, arg_info.help, '\n') != null;
 
                 // write indent and separating newlines
-                try tty_config.setColor(writer, .green);
+                try adaptedSetColor(writer, tty, .green);
                 if (multiline_help) try writer.writeByte('\n');
                 try writer.writeByte('\n');
                 try writer.writeByteNTimes(' ', 2);
@@ -1524,7 +1566,7 @@ fn CmdHelper(
                 max_name_alias_width = @max(max_name_alias_width, cw.bytes_written);
 
                 // write padding
-                try tty_config.setColor(writer, .reset);
+                try adaptedSetColor(writer, tty, .reset);
                 try writer.writeByteNTimes(
                     ' ',
                     @max(cw.bytes_written, name_alias_base_width) - cw.bytes_written + 2,
@@ -1552,7 +1594,7 @@ fn CmdHelper(
                 if (multiline_help) try writer.writeByte('\n');
             }
 
-            try tty_config.setColor(writer, .green);
+            try adaptedSetColor(writer, tty, .green);
             try writer.writeByte('\n');
             try writer.writeByteNTimes(' ', 2);
 
@@ -1563,7 +1605,7 @@ fn CmdHelper(
                 @intFromBool(default_value_base_width != null);
             const padding2 = if (default_value_base_width) |base_width| base_width + 3 else 0;
 
-            try tty_config.setColor(writer, .reset);
+            try adaptedSetColor(writer, tty, .reset);
             try writer.writeByteNTimes(' ', padding1 + padding2);
 
             try writer.writeAll("Prints help information\n");

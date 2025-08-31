@@ -25,6 +25,7 @@ const SvmGateway = replay.svm_gateway.SvmGateway;
 const ProcessedTransaction = sig.runtime.transaction_execution.ProcessedTransaction;
 
 const executeTransaction = replay.svm_gateway.executeTransaction;
+const preprocessTransaction = replay.preprocess_transaction.preprocessTransaction;
 
 const Logger = sig.trace.Logger("replay-batcher");
 
@@ -66,9 +67,14 @@ pub fn processBatch(
         if (exit.load(.monotonic)) {
             return .exit;
         }
-        const hash = transaction.transaction.verifyAndHashMessage() catch
-            return .{ .failure = .SignatureFailure };
-        const runtime_transaction = transaction.toRuntimeTransaction(hash);
+
+        const hash, const compute_budget_details =
+            switch (preprocessTransaction(transaction.transaction, .run_sig_verify)) {
+                .ok => |res| res,
+                .err => |err| return .{ .failure = err },
+            };
+
+        const runtime_transaction = transaction.toRuntimeTransaction(hash, compute_budget_details);
 
         switch (try executeTransaction(allocator, &svm_gateway, &runtime_transaction)) {
             .ok => |result| {

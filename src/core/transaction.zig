@@ -175,13 +175,6 @@ pub const Transaction = struct {
         };
     }
 
-    /// Run some sanity checks on the message to ensure the internal data has consistency.
-    ///
-    /// Does *not* verify signatures. Call `verify` to verify signatures.
-    pub fn validate(self: Transaction) !void {
-        try self.msg.validate();
-    }
-
     pub const VerifyError = error{
         /// The message is larger than the largest allowed transaction message size.
         NoSpaceLeft,
@@ -202,35 +195,20 @@ pub const Transaction = struct {
     pub fn verify(self: Transaction) VerifyError!void {
         const serialized_message = self.msg.serializeBounded(self.version) catch
             return error.SerializationFailed;
-
-        if (self.msg.account_keys.len < self.signatures.len) {
-            return error.NotEnoughAccounts;
-        }
-        for (self.signatures, self.msg.account_keys[0..self.signatures.len]) |signature, pubkey| {
-            if (!try signature.verify(pubkey, serialized_message.slice())) {
-                return error.SignatureVerificationFailed;
-            }
-        }
+        try self.verifySignatures(serialized_message.constSlice());
     }
 
-    /// Verify the transaction signatures and return the blake3 hash of the message.
+    /// Verify the transaction signatures against the provided serialized message.
     ///
     /// Does *not* ensure total internal consistency. Only does the minimum to
     /// verify signatures. Call `validate` to ensure full consistency.
-    pub fn verifyAndHashMessage(self: Transaction) VerifyError!Hash {
-        const serialized_message = self.msg.serializeBounded(self.version) catch
-            return error.SerializationFailed;
-
-        if (self.msg.account_keys.len < self.signatures.len) {
-            return error.NotEnoughAccounts;
-        }
+    pub fn verifySignatures(self: Transaction, serialized_message: []const u8) VerifyError!void {
+        if (self.msg.account_keys.len < self.signatures.len) return error.NotEnoughAccounts;
         for (self.signatures, self.msg.account_keys[0..self.signatures.len]) |signature, pubkey| {
-            if (!try signature.verify(pubkey, serialized_message.slice())) {
+            if (!try signature.verify(pubkey, serialized_message)) {
                 return error.SignatureVerificationFailed;
             }
         }
-
-        return Message.hash(serialized_message.slice());
     }
 
     /// Count the number of accounts in the slice of transactions,
@@ -245,6 +223,24 @@ pub const Transaction = struct {
             }
         }
         return total_accounts;
+    }
+
+    /// Run some sanity checks on the signature counts and message to ensure the internal data has consistency.
+    ///
+    /// Does *not* verify signatures. Call `verify` to verify signatures.
+    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/42711325c40b314dafe3d5a41eb5b19af49cf1dc/transaction/src/versioned/mod.rs#L120
+    pub fn validate(self: Transaction) !void {
+        switch (std.math.order(self.msg.signature_count, self.signatures.len)) {
+            .lt => return error.TooManySignatures,
+            .gt => return error.NotEnoughSignatures,
+            .eq => {},
+        }
+
+        if (self.signatures.len > self.msg.account_keys.len) {
+            return error.MoreSignaturesThanAccounts;
+        }
+
+        try self.msg.validate();
     }
 };
 
@@ -510,8 +506,12 @@ pub const Message = struct {
         };
     }
 
-    pub fn validate(self: Message) !void {
-        // number of accounts should match spec in header. signed and unsigned should not overlap.
+    /// Run some sanity checks on the message to ensure the internal data has consistency.
+    ///
+    /// V0 - [agave] https://github.com/anza-xyz/solana-sdk/blob/42711325c40b314dafe3d5a41eb5b19af49cf1dc/message/src/versions/v0/mod.rs#L104
+    /// Legacy - [agave] https://github.com/anza-xyz/solana-sdk/blob/42711325c40b314dafe3d5a41eb5b19af49cf1dc/message/src/legacy.rs#L97
+    pub fn validate(self: *const Message) !void {
+        // signing area and read-only non-signing area should not overlap
         if (self.signature_count +| self.readonly_unsigned_count > self.account_keys.len)
             return error.NotEnoughAccounts;
 
@@ -519,17 +519,25 @@ pub const Message = struct {
         if (self.readonly_signed_count >= self.signature_count)
             return error.MissingWritableFeePayer;
 
-        for (self.instructions) |ti| {
-            if (ti.program_index >= self.account_keys.len)
-                return error.ProgramIdAccountMissing;
+        // program accounts must be in the static account keys
+        const max_program_index = self.account_keys.len - 1;
 
-            // A program cannot be a payer.
-            if (ti.program_index == 0)
-                return error.ProgramIdCannotBePayer;
+        // max account index must be extended if address lookups are present
+        var max_account_index = self.account_keys.len - 1;
+        for (self.address_lookups) |lookup| {
+            const num_keys = lookup.writable_indexes.len + lookup.readonly_indexes.len;
+            if (num_keys == 0) return error.AddressLookupTableEmpty;
+            max_account_index += num_keys;
+        }
+        if (max_account_index > 255) return error.TooManyAccounts;
 
-            for (ti.account_indexes) |ai| {
-                if (ai >= self.account_keys.len)
-                    return error.AccountIndexOutOfBounds;
+        // check program and account indexes are in-bounds and no program is the fee-payer
+        for (self.instructions) |instr| {
+            if (instr.program_index == 0) return error.ProgramCannotBeFeePayer;
+            if (instr.program_index > max_program_index) return error.ProgramIndexOutOfBounds;
+
+            for (instr.account_indexes) |account_index| {
+                if (account_index > max_account_index) return error.AccountIndexOutOfBounds;
             }
         }
     }
@@ -844,7 +852,7 @@ test "clone transaction" {
 
 test "sanitize succeeds minimal valid transaction" {
     const transaction = Transaction{
-        .signatures = &.{},
+        .signatures = &.{Signature.ZEROES},
         .version = .legacy,
         .msg = .{
             .signature_count = 1,
@@ -863,15 +871,49 @@ test "sanitize fails empty transaction" {
     try std.testing.expectError(error.MissingWritableFeePayer, Transaction.EMPTY.validate());
 }
 
+test "sanitize fails too many signers" {
+    const transaction = Transaction{
+        .signatures = &.{ Signature.ZEROES, Signature.ZEROES },
+        .version = .legacy,
+        .msg = .{
+            .signature_count = 1,
+            .readonly_signed_count = 0,
+            .readonly_unsigned_count = 0,
+            .account_keys = &.{Pubkey.ZEROES},
+            .recent_blockhash = Hash.ZEROES,
+            .instructions = &.{},
+            .address_lookups = &.{},
+        },
+    };
+    try std.testing.expectEqual(error.TooManySignatures, transaction.validate());
+}
+
+test "sanitize fails not enough signers" {
+    const transaction = Transaction{
+        .signatures = &.{ Signature.ZEROES, Signature.ZEROES },
+        .version = .legacy,
+        .msg = .{
+            .signature_count = 3,
+            .readonly_signed_count = 0,
+            .readonly_unsigned_count = 0,
+            .account_keys = &.{ Pubkey.ZEROES, Pubkey.ZEROES, Pubkey.ZEROES },
+            .recent_blockhash = Hash.ZEROES,
+            .instructions = &.{},
+            .address_lookups = &.{},
+        },
+    };
+    try std.testing.expectEqual(error.NotEnoughSignatures, transaction.validate());
+}
+
 test "sanitize fails missing signers" {
     const transaction = Transaction{
-        .signatures = &.{},
+        .signatures = &.{ Signature.ZEROES, Signature.ZEROES },
         .version = .legacy,
         .msg = .{
             .signature_count = 2,
             .readonly_signed_count = 0,
-            .readonly_unsigned_count = 0,
-            .account_keys = &.{Pubkey.ZEROES},
+            .readonly_unsigned_count = 1,
+            .account_keys = &.{ Pubkey.ZEROES, Pubkey.ZEROES },
             .recent_blockhash = Hash.ZEROES,
             .instructions = &.{},
             .address_lookups = &.{},
@@ -882,7 +924,7 @@ test "sanitize fails missing signers" {
 
 test "sanitize fails missing unsigned" {
     const transaction = Transaction{
-        .signatures = &.{},
+        .signatures = &.{Signature.ZEROES},
         .version = .legacy,
         .msg = .{
             .signature_count = 1,
@@ -899,7 +941,7 @@ test "sanitize fails missing unsigned" {
 
 test "sanitize fails no writable signed" {
     const transaction = Transaction{
-        .signatures = &.{},
+        .signatures = &.{Signature.ZEROES},
         .version = .legacy,
         .msg = .{
             .signature_count = 1,
@@ -916,7 +958,7 @@ test "sanitize fails no writable signed" {
 
 test "sanitize fails missing program id" {
     const transaction = Transaction{
-        .signatures = &.{},
+        .signatures = &.{Signature.ZEROES},
         .version = .legacy,
         .msg = .{
             .signature_count = 1,
@@ -932,12 +974,12 @@ test "sanitize fails missing program id" {
             .address_lookups = &.{},
         },
     };
-    try std.testing.expectEqual(error.ProgramIdAccountMissing, transaction.validate());
+    try std.testing.expectEqual(error.ProgramIndexOutOfBounds, transaction.validate());
 }
 
 test "sanitize fails if program id has index 0" {
     const transaction = Transaction{
-        .signatures = &.{},
+        .signatures = &.{Signature.ZEROES},
         .version = .legacy,
         .msg = .{
             .signature_count = 1,
@@ -953,12 +995,12 @@ test "sanitize fails if program id has index 0" {
             .address_lookups = &.{},
         },
     };
-    try std.testing.expectEqual(error.ProgramIdCannotBePayer, transaction.validate());
+    try std.testing.expectEqual(error.ProgramCannotBeFeePayer, transaction.validate());
 }
 
 test "satinize fails account index out of bounds" {
     const transaction = Transaction{
-        .signatures = &.{},
+        .signatures = &.{Signature.ZEROES},
         .version = .legacy,
         .msg = .{
             .signature_count = 1,
@@ -975,6 +1017,27 @@ test "satinize fails account index out of bounds" {
         },
     };
     try std.testing.expectEqual(error.AccountIndexOutOfBounds, transaction.validate());
+}
+
+test "sanitize fails address lookup table empty" {
+    const transaction = Transaction{
+        .signatures = &.{Signature.ZEROES},
+        .version = .legacy,
+        .msg = .{
+            .signature_count = 1,
+            .readonly_signed_count = 0,
+            .readonly_unsigned_count = 0,
+            .account_keys = &.{Pubkey.ZEROES},
+            .recent_blockhash = Hash.ZEROES,
+            .instructions = &.{},
+            .address_lookups = &.{.{
+                .table_address = Pubkey.ZEROES,
+                .writable_indexes = &.{},
+                .readonly_indexes = &.{},
+            }},
+        },
+    };
+    try std.testing.expectEqual(error.AddressLookupTableEmpty, transaction.validate());
 }
 
 test "parse legacy" {
@@ -1091,8 +1154,9 @@ pub const transaction_v0_example = struct {
 };
 
 test "verify and hash transaction" {
-    try transaction_legacy_example.as_struct.verify();
-    const hash = try transaction_legacy_example.as_struct.verifyAndHashMessage();
+    const txn = transaction_legacy_example.as_struct;
+    try txn.verify();
+    const hash = Message.hash((try txn.msg.serializeBounded(txn.version)).constSlice());
     try std.testing.expectEqual(
         Hash.parse("FjoeKaxTd3J7xgt9vHMpuQb7j192weaEP3yMa1ntfQNo"),
         hash,
@@ -1101,9 +1165,5 @@ test "verify and hash transaction" {
     try std.testing.expectError(
         error.SignatureVerificationFailed,
         transaction_v0_example.as_struct.verify(),
-    );
-    try std.testing.expectError(
-        error.SignatureVerificationFailed,
-        transaction_v0_example.as_struct.verifyAndHashMessage(),
     );
 }

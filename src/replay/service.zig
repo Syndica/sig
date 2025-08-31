@@ -762,6 +762,10 @@ fn newSlotFromParent(
     return .{ constants, state };
 }
 
+/// Determines which features are active for this slot by looking up the feature
+/// accounts in accountsdb.
+///
+/// Analogous to [compute_active_feature_set](https://github.com/anza-xyz/agave/blob/785455b5a3e2d8a95f878d6c80d5361dea9256db/runtime/src/bank.rs#L5338-L5339)
 // TODO: epoch boundary - handle feature activations
 pub fn getActiveFeatures(
     allocator: Allocator,
@@ -774,7 +778,7 @@ pub fn getActiveFeatures(
         const possible_feature_pubkey = sig.core.features.map.get(possible_feature).key;
         const feature_account = try account_reader.get(possible_feature_pubkey) orelse continue;
         if (!feature_account.owner.equals(&sig.runtime.ids.FEATURE_PROGRAM_ID)) {
-            return error.FeatureNotOwnedByFeatureProgram;
+            continue;
         }
 
         var data_iterator = feature_account.data.iterator();
@@ -793,9 +797,11 @@ test "getActiveFeatures rejects wrong ownership" {
     const allocator = std.testing.allocator;
     var accounts = std.AutoArrayHashMapUnmanaged(Pubkey, sig.core.Account).empty;
     defer accounts.deinit(allocator);
-
+    // bincode for a feature that activated at slot 0
+    var slot_0_bytes: [9]u8 = .{ 1, 0, 0, 0, 0, 0, 0, 0, 0 };
     var acct: sig.core.Account = undefined;
     acct.owner = Pubkey.ZEROES;
+    acct.data = .{ .unowned_allocation = &slot_0_bytes };
 
     try accounts.put(
         allocator,
@@ -803,10 +809,18 @@ test "getActiveFeatures rejects wrong ownership" {
         acct,
     );
 
-    try std.testing.expectError(
-        error.FeatureNotOwnedByFeatureProgram,
-        getActiveFeatures(allocator, .{ .single_version_map = &accounts }, 0),
+    const features = try getActiveFeatures(allocator, .{ .single_version_map = &accounts }, 0);
+    try std.testing.expect(!features.active(.system_transfer_zero_check, 1));
+
+    acct.owner = sig.runtime.ids.FEATURE_PROGRAM_ID;
+    try accounts.put(
+        allocator,
+        sig.core.features.map.get(.system_transfer_zero_check).key,
+        acct,
     );
+
+    const features2 = try getActiveFeatures(allocator, .{ .single_version_map = &accounts }, 0);
+    try std.testing.expect(features2.active(.system_transfer_zero_check, 1));
 }
 
 test trackNewSlots {
