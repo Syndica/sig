@@ -82,13 +82,24 @@ pub fn main() !void {
     const parser = cli.Parser(Cmd, Cmd.cmd_info);
     const tty_config = std.io.tty.detectConfig(std.io.getStdOut());
     const stdout = std.io.getStdOut().writer();
-    const cmd = try parser.parse(
+    const cmd = (parser.parse(
         gpa,
         "sig",
         tty_config,
         stdout,
         argv[1..],
-    ) orelse return;
+    )) catch |err| switch (err) {
+        error.UnrecognizedCommand => {
+            _ = try parser.parse(gpa, "sig", tty_config, stdout, &.{"--help"});
+            try tty_config.setColor(stdout, .red);
+            try stdout.writeAll("\nerror: ");
+            try tty_config.setColor(stdout, .reset);
+            try stdout.print(" unknown command: '{s}'\n", .{argv[1]});
+
+            return;
+        },
+        else => |e| return e,
+    } orelse return; // `--help` was passed in, so `parse` returned null.
     defer parser.free(gpa, cmd);
 
     var current_config: config.Cmd = .{};
