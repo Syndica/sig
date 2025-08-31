@@ -805,6 +805,7 @@ fn emptyTxWithKeys(allocator: Allocator, keys: []const Pubkey) !RuntimeTransacti
         .recent_blockhash = Hash.ZEROES,
         .instructions = &.{},
         .accounts = accounts,
+        .num_lookup_tables = 0,
     };
 }
 
@@ -826,9 +827,10 @@ test "loadTransactionAccounts empty transaction" {
         .msg_hash = Hash.ZEROES,
         .recent_blockhash = Hash.ZEROES,
         .signature_count = 0,
+        .num_lookup_tables = 0,
     };
 
-    const tx_accounts = try batch_account_cache.loadTransactionAccountsInner(
+    const tx_accounts = try batch_account_cache.loadTransactionAccountsOld(
         allocator,
         &empty_tx,
         &env.rent_collector,
@@ -867,9 +869,10 @@ test "loadTransactionAccounts sysvar instruction" {
         .recent_blockhash = Hash.ZEROES,
         .signature_count = 0,
         .accounts = accounts,
+        .num_lookup_tables = 0,
     };
 
-    const tx_accounts = try batch_account_cache.loadTransactionAccountsInner(
+    const tx_accounts = try batch_account_cache.loadTransactionAccountsOld(
         allocator,
         &empty_tx,
         &env.rent_collector,
@@ -998,7 +1001,7 @@ test "load accounts rent paid" {
     );
     defer account_cache.deinit(allocator);
 
-    const loaded_accounts = try account_cache.loadTransactionAccountsInner(
+    const loaded_accounts = try account_cache.loadTransactionAccountsOld(
         allocator,
         &tx,
         &env.rent_collector,
@@ -1054,6 +1057,7 @@ test "constructInstructionsAccount" {
         .recent_blockhash = Hash.ZEROES,
         .signature_count = 1,
         .accounts = accounts,
+        .num_lookup_tables = 0,
     };
 
     const checkFn = struct {
@@ -1097,12 +1101,13 @@ test "loadAccount allocations" {
             );
             defer batch_account_cache.deinit(allocator);
 
-            const account = (try batch_account_cache.loadAccount(
+            const account = try batch_account_cache.loadAccount(
                 allocator,
                 &tx,
                 &NATIVE_LOADER_ID,
                 false,
-            )) orelse @panic("account not found");
+                false,
+            ) orelse @panic("account not found");
 
             try std.testing.expectEqual(1, account.account.lamports);
             try std.testing.expectEqual(true, account.account.executable);
@@ -1146,7 +1151,7 @@ test "load tx too large" {
     );
     defer account_cache.deinit(allocator);
 
-    const loaded_accounts_result = account_cache.loadTransactionAccountsInner(
+    const loaded_accounts_result = account_cache.loadTransactionAccountsOld(
         allocator,
         &tx,
         &env.rent_collector,
@@ -1245,7 +1250,7 @@ test "dont double count program owner account data size" {
     );
     defer account_cache.deinit(allocator);
 
-    const loaded_accounts = try account_cache.loadTransactionAccountsInner(
+    const loaded_accounts = try account_cache.loadTransactionAccountsOld(
         allocator,
         &tx,
         &env.rent_collector,
@@ -1279,7 +1284,7 @@ test "load, create new account" {
     );
     defer account_cache.deinit(allocator);
 
-    const loaded_accounts = try account_cache.loadTransactionAccountsInner(
+    const loaded_accounts = try account_cache.loadTransactionAccountsOld(
         allocator,
         &tx,
         &env.rent_collector,
@@ -1338,7 +1343,7 @@ test "invalid program owner owner" {
     );
     defer account_cache.deinit(allocator);
 
-    const loaded_accounts_result = account_cache.loadTransactionAccountsInner(
+    const loaded_accounts_result = account_cache.loadTransactionAccountsOld(
         allocator,
         &tx,
         &env.rent_collector,
@@ -1387,7 +1392,7 @@ test "missing program owner account" {
     );
     defer account_cache.deinit(allocator);
 
-    const loaded_accounts_result = account_cache.loadTransactionAccountsInner(
+    const loaded_accounts_result = account_cache.loadTransactionAccountsOld(
         allocator,
         &tx,
         &env.rent_collector,
@@ -1435,7 +1440,7 @@ test "deallocate account" {
     account_cache.account_cache.getPtr(dying_account).?.lamports = 0;
 
     // load with the account being dead
-    const loaded_accounts = try account_cache.loadTransactionAccountsInner(
+    const loaded_accounts = try account_cache.loadTransactionAccountsOld(
         allocator,
         &tx,
         &env.rent_collector,
@@ -1515,7 +1520,7 @@ test "load v3 program" {
     );
     defer account_cache.deinit(allocator);
 
-    const loaded_accounts = try account_cache.loadTransactionAccountsInner(
+    const loaded_accounts = try account_cache.loadTransactionAccountsOld(
         allocator,
         &tx,
         &env.rent_collector,
