@@ -113,6 +113,7 @@ pub fn checkFeePayer(
         transaction,
         &fee_payer_key,
         true,
+        feature_set.active(.formalize_loaded_transaction_data_size, slot),
     ) orelse return .{ .err = .AccountNotFound };
 
     const fee_payer_loaded_rent_epoch = loaded_fee_payer.account.rent_epoch;
