@@ -1015,9 +1015,148 @@ test "load accounts rent paid" {
     //  |               |                 |       |     overhead
     //  v               v                 v       v      v
     // ((64) / (7.8892314983999997e7)) * (3480 * (1024 + 128))
-    const expected_rent = 3;
+    const expected_rent: u64 =
+        @intFromFloat(((64.0) / (7.8892314983999997e7)) * (3480 * (1024 + 128)));
     try std.testing.expectEqual(2, loaded_accounts.accounts.len);
     try std.testing.expectEqual(expected_rent, loaded_accounts.rent_collected);
+}
+
+test "load accounts with simd 186 and loaderv3 program" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+    var accountsdb = std.AutoArrayHashMapUnmanaged(Pubkey, sig.core.Account).empty;
+    defer accountsdb.deinit(allocator);
+    var env = newTestingEnv();
+    env.compute_budget_limits.loaded_accounts_bytes = 20_000;
+
+    const NATIVE_LOADER_ID = runtime.ids.NATIVE_LOADER_ID;
+
+    const fee_payer_address = Pubkey.initRandom(prng.random());
+    const instruction_address = Pubkey.initRandom(prng.random());
+    const program_address = Pubkey.initRandom(prng.random());
+    const programdata_address = Pubkey.initRandom(prng.random());
+
+    const instruction_data = "dummy instruction";
+
+    const fee_payer_balance = 300;
+    var fee_payer_account = AccountSharedData.EMPTY;
+    fee_payer_account.lamports = fee_payer_balance;
+
+    var data: [1024]u8 = undefined;
+    prng.fill(&data);
+
+    const program_state: runtime.program.bpf_loader.v3.State = .{
+        .program = .{ .programdata_address = programdata_address },
+    };
+    var program_data_buffer: [1024]u8 = undefined;
+    const program_data = try sig.bincode.writeToSlice(
+        &program_data_buffer,
+        program_state,
+        .{},
+    );
+
+    try accountsdb.put(allocator, fee_payer_address, .{
+        .data = .{ .unowned_allocation = &data },
+        .lamports = fee_payer_balance,
+        .executable = false,
+        .owner = Pubkey.ZEROES,
+        .rent_epoch = 0,
+    });
+    try accountsdb.put(allocator, program_address, .{
+        .data = .{ .unowned_allocation = program_data },
+        .lamports = 1,
+        .executable = true,
+        .owner = runtime.program.bpf_loader.v3.ID,
+        .rent_epoch = 0,
+    });
+    try accountsdb.put(allocator, programdata_address, .{
+        .data = .{ .unowned_allocation = &data },
+        .lamports = 1,
+        .executable = true,
+        .owner = Pubkey.ZEROES, // doesn't matter
+        .rent_epoch = 0,
+    });
+    try accountsdb.put(allocator, instruction_address, .{
+        .data = .{ .unowned_allocation = instruction_data },
+        .lamports = 1,
+        .executable = true,
+        .owner = NATIVE_LOADER_ID,
+        .rent_epoch = 0,
+    });
+    try accountsdb.put(allocator, NATIVE_LOADER_ID, .{
+        .data = .{ .empty = .{ .len = 0 } },
+        .lamports = 1,
+        .executable = true,
+        .owner = Pubkey.ZEROES,
+        .rent_epoch = 0,
+    });
+    try accountsdb.put(allocator, Pubkey.ZEROES, .{
+        .data = .{ .empty = .{ .len = 0 } },
+        .lamports = 0,
+        .executable = true,
+        .owner = Pubkey.ZEROES,
+        .rent_epoch = 0,
+    });
+
+    var tx = try emptyTxWithKeys(allocator, &.{
+        fee_payer_address,
+        instruction_address,
+        program_address,
+    });
+    defer tx.accounts.deinit(allocator);
+
+    tx.instructions = &.{
+        .{
+            .program_meta = .{ .pubkey = instruction_address, .index_in_transaction = 1 },
+            .account_metas = try sig.runtime.InstructionInfo.AccountMetas.fromSlice(
+                &.{
+                    .{
+                        .pubkey = fee_payer_address,
+                        .index_in_transaction = 0,
+                        .index_in_caller = 0,
+                        .index_in_callee = 0,
+                        .is_signer = true,
+                        .is_writable = true,
+                    },
+                    .{
+                        .pubkey = instruction_address,
+                        .index_in_transaction = 1,
+                        .index_in_caller = 1,
+                        .index_in_callee = 1,
+                        .is_signer = false,
+                        .is_writable = false,
+                    },
+                    .{
+                        .pubkey = program_address,
+                        .index_in_transaction = 2,
+                        .index_in_caller = 2,
+                        .index_in_callee = 2,
+                        .is_signer = false,
+                        .is_writable = false,
+                    },
+                },
+            ),
+            .instruction_data = "",
+        },
+    };
+
+    var account_cache = try BatchAccountCache.initFromAccountsDb(
+        allocator,
+        .{ .single_version_map = &accountsdb },
+        &.{tx},
+    );
+    defer account_cache.deinit(allocator);
+
+    const loaded_accounts = try account_cache.loadTransactionAccountsSimd186(
+        allocator,
+        &tx,
+        &env.rent_collector,
+        &env.feature_set,
+        env.slot,
+        &env.compute_budget_limits,
+    );
+
+    try std.testing.expectEqual(2165, loaded_accounts.loaded_accounts_data_size);
 }
 
 test "constructInstructionsAccount" {
