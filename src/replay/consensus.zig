@@ -31,9 +31,7 @@ const LatestValidatorVotes = sig.consensus.latest_validator_votes.LatestValidato
 const SlotTracker = sig.replay.trackers.SlotTracker;
 const EpochTracker = sig.replay.trackers.EpochTracker;
 
-pub const isSlotDuplicateConfirmed = sig.consensus.tower.isSlotDuplicateConfirmed;
-
-pub const collectVoteLockouts = sig.consensus.replay_tower.collectVoteLockouts;
+const collectVoteLockouts = sig.consensus.replay_tower.collectVoteLockouts;
 
 const MAX_VOTE_REFRESH_INTERVAL_MILLIS: usize = 5000;
 
