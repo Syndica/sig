@@ -6,7 +6,6 @@ const sig = @import("sig.zig");
 const config = @import("config.zig");
 const tracy = @import("tracy");
 
-const AccountsDB = sig.accounts_db.AccountsDB;
 const ChannelPrintLogger = sig.trace.ChannelPrintLogger;
 const ClusterType = sig.core.ClusterType;
 const ContactInfo = sig.gossip.ContactInfo;
@@ -24,7 +23,6 @@ const Slot = sig.core.Slot;
 const SnapshotFiles = sig.accounts_db.snapshot.SnapshotFiles;
 const SocketAddr = sig.net.SocketAddr;
 const SocketTag = sig.gossip.SocketTag;
-const StatusCache = sig.accounts_db.snapshot.StatusCache;
 
 const createGeyserWriter = sig.geyser.core.createGeyserWriter;
 const downloadSnapshotsFromGossip = sig.accounts_db.snapshot.downloadSnapshotsFromGossip;
@@ -1061,11 +1059,17 @@ fn validator(
     };
 
     // snapshot
-    var loaded_snapshot = try loadSnapshot(allocator, cfg, .from(app_base.logger), .{
-        .gossip_service = gossip_service,
-        .geyser_writer = geyser_writer,
-        .validate_snapshot = !cfg.accounts_db.skip_snapshot_validation,
-    });
+    var loaded_snapshot = try loadSnapshot(
+        allocator,
+        cfg.accounts_db,
+        try cfg.genesisFilePath() orelse return error.GenesisPathNotProvided,
+        .from(app_base.logger),
+        .{
+            .gossip_service = gossip_service,
+            .geyser_writer = geyser_writer,
+            .validate_snapshot = !cfg.accounts_db.skip_snapshot_validation,
+        },
+    );
     defer loaded_snapshot.deinit();
 
     const collapsed_manifest = &loaded_snapshot.collapsed_manifest;
@@ -1420,12 +1424,18 @@ fn createSnapshot(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{});
     defer snapshot_dir.close();
 
-    var loaded_snapshot = try loadSnapshot(allocator, cfg, .from(app_base.logger), .{
-        .gossip_service = null,
-        .geyser_writer = null,
-        .validate_snapshot = false,
-        .metadata_only = false,
-    });
+    var loaded_snapshot = try loadSnapshot(
+        allocator,
+        cfg.accounts_db,
+        try cfg.genesisFilePath() orelse return error.GenesisPathNotProvided,
+        .from(app_base.logger),
+        .{
+            .gossip_service = null,
+            .geyser_writer = null,
+            .validate_snapshot = false,
+            .metadata_only = false,
+        },
+    );
     defer loaded_snapshot.deinit();
 
     var accounts_db = loaded_snapshot.accounts_db;
@@ -1482,13 +1492,18 @@ fn validateSnapshot(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
         allocator.destroy(geyser.exit);
         allocator.destroy(geyser);
     };
-
-    var loaded_snapshot = try loadSnapshot(allocator, cfg, .from(app_base.logger), .{
-        .gossip_service = null,
-        .geyser_writer = geyser_writer,
-        .validate_snapshot = true,
-        .metadata_only = false,
-    });
+    var loaded_snapshot = try loadSnapshot(
+        allocator,
+        cfg.accounts_db,
+        try cfg.genesisFilePath() orelse return error.GenesisPathNotProvided,
+        .from(app_base.logger),
+        .{
+            .gossip_service = null,
+            .geyser_writer = geyser_writer,
+            .validate_snapshot = true,
+            .metadata_only = false,
+        },
+    );
     defer loaded_snapshot.deinit();
 }
 
@@ -1505,12 +1520,18 @@ fn printLeaderSchedule(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
     = try getLeaderScheduleFromCli(allocator, cfg) orelse b: {
         app_base.logger.info().log("Downloading a snapshot to calculate the leader schedule.");
 
-        var loaded_snapshot = loadSnapshot(allocator, cfg, .from(app_base.logger), .{
-            .gossip_service = null,
-            .geyser_writer = null,
-            .validate_snapshot = true,
-            .metadata_only = false,
-        }) catch |err| {
+        var loaded_snapshot = loadSnapshot(
+            allocator,
+            cfg.accounts_db,
+            try cfg.genesisFilePath() orelse return error.GenesisPathNotProvided,
+            .from(app_base.logger),
+            .{
+                .gossip_service = null,
+                .geyser_writer = null,
+                .validate_snapshot = true,
+                .metadata_only = false,
+            },
+        ) catch |err| {
             if (err == error.SnapshotsNotFoundAndNoGossipService) {
                 app_base.logger.err().log(
                     \\\ No snapshot found and no gossip service to download a snapshot from.

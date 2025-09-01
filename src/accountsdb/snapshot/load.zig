@@ -1,42 +1,19 @@
 const std = @import("std");
-const builtin = @import("builtin");
-const build_options = @import("build-options");
-const cli = @import("cli");
 const sig = @import("../../sig.zig");
-const config = @import("../../config.zig");
+const sig_config = @import("../../config.zig");
 const tracy = @import("tracy");
+const accountsdb = @import("../lib.zig");
 const snapshot = @import("lib.zig");
 
 const Allocator = std.mem.Allocator;
 
 const AccountsDB = sig.accounts_db.AccountsDB;
-const ChannelPrintLogger = sig.trace.ChannelPrintLogger;
-const ClusterType = sig.core.ClusterType;
-const ContactInfo = sig.gossip.ContactInfo;
-const FullAndIncrementalManifest = sig.accounts_db.snapshot.FullAndIncrementalManifest;
 const GenesisConfig = sig.core.GenesisConfig;
 const GeyserWriter = sig.geyser.GeyserWriter;
 const GossipService = sig.gossip.GossipService;
-const IpAddr = sig.net.IpAddr;
-const LeaderSchedule = sig.core.leader_schedule.LeaderSchedule;
-const LeaderScheduleCache = sig.core.leader_schedule.LeaderScheduleCache;
-const LedgerReader = sig.ledger.LedgerReader;
-const LedgerResultWriter = sig.ledger.result_writer.LedgerResultWriter;
-const Pubkey = sig.core.Pubkey;
-const Slot = sig.core.Slot;
-const SnapshotFiles = sig.accounts_db.snapshot.SnapshotFiles;
-const SocketAddr = sig.net.SocketAddr;
-const SocketTag = sig.gossip.SocketTag;
 const StatusCache = sig.accounts_db.snapshot.StatusCache;
 
-const createGeyserWriter = sig.geyser.core.createGeyserWriter;
-const downloadSnapshotsFromGossip = sig.accounts_db.snapshot.downloadSnapshotsFromGossip;
-const getShredAndIPFromEchoServer = sig.net.echo.getShredAndIPFromEchoServer;
-const getWallclockMs = sig.time.getWallclockMs;
-const globalRegistry = sig.prometheus.globalRegistry;
-const servePrometheus = sig.prometheus.servePrometheus;
-
-const Logger = sig.trace.Logger("cmd");
+const Logger = sig.trace.Logger("accountsdb.snapshot.load");
 
 const LoadedSnapshot = struct {
     allocator: Allocator,
@@ -70,21 +47,20 @@ const LoadSnapshotOptions = struct {
 
 pub fn loadSnapshot(
     allocator: Allocator,
-    cfg: config.Cmd,
+    config: sig_config.AccountsDB,
+    genesis_file_path: []const u8,
     logger: Logger,
     options: LoadSnapshotOptions,
 ) !LoadedSnapshot {
-    const zone = tracy.Zone.init(@src(), .{ .name = "cmd loadSnapshot" });
+    const zone = tracy.Zone.init(@src(), .{ .name = "loadSnapshot" });
     defer zone.deinit();
 
     var validator_dir = try std.fs.cwd().makeOpenPath(sig.VALIDATOR_DIR, .{});
     defer validator_dir.close();
 
-    const genesis_file_path = try cfg.genesisFilePath() orelse
-        return error.GenesisPathNotProvided;
+    // const genesis_file_path = try cfg.genesisFilePath() orelse return error.GenesisPathNotProvided;
 
-    const adb_config = cfg.accounts_db;
-    const snapshot_dir_str = adb_config.snapshot_dir;
+    const snapshot_dir_str = config.snapshot_dir;
 
     const combined_manifest, //
     const snapshot_files //
@@ -94,11 +70,11 @@ pub fn loadSnapshot(
         snapshot_dir_str,
         .{
             .gossip_service = options.gossip_service,
-            .force_unpack_snapshot = adb_config.force_unpack_snapshot,
-            .force_new_snapshot_download = adb_config.force_new_snapshot_download,
-            .num_threads_snapshot_unpack = adb_config.num_threads_snapshot_unpack,
-            .max_number_of_download_attempts = adb_config.max_number_of_snapshot_download_attempts,
-            .min_snapshot_download_speed_mbs = adb_config.min_snapshot_download_speed_mbs,
+            .force_unpack_snapshot = config.force_unpack_snapshot,
+            .force_new_snapshot_download = config.force_new_snapshot_download,
+            .num_threads_snapshot_unpack = config.num_threads_snapshot_unpack,
+            .max_number_of_download_attempts = config.max_number_of_snapshot_download_attempts,
+            .min_snapshot_download_speed_mbs = config.min_snapshot_download_speed_mbs,
         },
     );
 
@@ -118,7 +94,7 @@ pub fn loadSnapshot(
     // cli parsing
     const n_threads_snapshot_load: u32 = blk: {
         const cli_n_threads_snapshot_load: u32 =
-            cfg.accounts_db.num_threads_snapshot_load;
+            config.num_threads_snapshot_load;
         if (cli_n_threads_snapshot_load == 0) {
             // default value
             break :blk std.math.lossyCast(u32, try std.Thread.getCpuCount());
@@ -139,9 +115,9 @@ pub fn loadSnapshot(
         else
             null,
         // to use disk or ram for the index
-        .index_allocation = if (cfg.accounts_db.use_disk_index) .disk else .ram,
+        .index_allocation = if (config.use_disk_index) .disk else .ram,
         // number of shards for the index
-        .number_of_index_shards = cfg.accounts_db.number_of_index_shards,
+        .number_of_index_shards = config.number_of_index_shards,
     });
     errdefer accounts_db.deinit();
 
@@ -153,9 +129,9 @@ pub fn loadSnapshot(
             combined_manifest,
             n_threads_snapshot_load,
             options.validate_snapshot,
-            cfg.accounts_db.accounts_per_file_estimate,
-            cfg.accounts_db.fastload,
-            cfg.accounts_db.save_index,
+            config.accounts_per_file_estimate,
+            config.fastload,
+            config.save_index,
         );
     errdefer collapsed_manifest.deinit(allocator);
 
