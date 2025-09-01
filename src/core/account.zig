@@ -11,6 +11,13 @@ const Epoch = sig.core.Epoch;
 const AccountInFile = sig.accounts_db.accounts_file.AccountInFile;
 const AccountDataHandle = sig.accounts_db.buffer_pool.AccountDataHandle;
 
+pub const AccountFields = struct {
+    lamports: u64,
+    owner: Pubkey,
+    executable: bool,
+    rent_epoch: Epoch,
+};
+
 pub const Account = struct {
     lamports: u64,
     data: AccountDataHandle,

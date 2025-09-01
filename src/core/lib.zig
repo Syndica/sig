@@ -46,6 +46,7 @@ pub const StakesType = stake.StakesType;
 pub const Stakes = stake.Stakes;
 
 pub const Account = account.Account;
+pub const AccountFields = account.AccountFields;
 pub const Ancestors = ancestors.Ancestors;
 pub const BankFields = bank.BankFields;
 pub const BlockhashQueue = blockhash_queue.BlockhashQueue;
