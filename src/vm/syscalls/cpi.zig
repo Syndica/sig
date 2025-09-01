@@ -1352,22 +1352,24 @@ fn isBpfLoaderV3InstructionAuthorized(
     slot: sig.core.Slot,
 ) bool {
     if (instruction_data.len == 0) return true;
-    return switch (instruction_data[0]) {
+    const V3Tag = @typeInfo(bpf_loader_program.v3.Instruction).@"union".tag_type.?;
+    const v3_tag = std.meta.intToEnum(V3Tag, instruction_data[0]) catch return true;
+    return switch (v3_tag) {
         // upgrade instruction
-        3 => false,
+        .upgrade => false,
         // set authority instruction
-        4 => false,
+        .set_authority => false,
         // close instrucion
-        5 => false,
+        .close => false,
         // set authority checked instruction
-        7 => !feature_set.active(
+        .set_authority_checked => !feature_set.active(
             .enable_bpf_loader_set_authority_checked_ix,
             slot,
         ),
         // migrate instruction
-        8 => false,
+        .migrate => false,
         // extend program checked instruction
-        9 => !feature_set.active(
+        .extend_program_checked => !feature_set.active(
             .enable_extend_program_checked,
             slot,
         ),
