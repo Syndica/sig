@@ -249,7 +249,7 @@ pub const BorrowedAccount = struct {
     ) InstructionError!void {
         if (!rent.isExempt(self.account.lamports, self.account.data.len))
             return InstructionError.ExecutableAccountNotRentExempt;
-        
+
         if (!self.account.owner.equals(&self.context.program_id) or
             !self.context.is_writable)
         {

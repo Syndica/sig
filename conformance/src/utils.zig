@@ -242,7 +242,7 @@ pub fn createInstructionInfo(
         std.debug.print("createInstructionInfo: error={}\n", .{err});
     }
 
-    const program_index_in_transaction = 
+    const program_index_in_transaction =
         tc.getAccountIndex(program_id) orelse return error.CouldNotFindProgram;
 
     var dedup_map: [InstructionInfo.MAX_ACCOUNT_METAS]u8 = @splat(0xff);
@@ -253,7 +253,7 @@ pub fn createInstructionInfo(
 
     var instruction_accounts = InstructionInfo.AccountMetas{};
     for (pb_instruction_accounts) |account| {
-        const tc_acc = tc.getAccountAtIndex(@intCast(account.index)) orelse 
+        const tc_acc = tc.getAccountAtIndex(@intCast(account.index)) orelse
             return error.AccountNotInTransaction;
         try instruction_accounts.append(.{
             .pubkey = tc_acc.pubkey,
