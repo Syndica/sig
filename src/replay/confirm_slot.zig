@@ -129,7 +129,7 @@ pub fn confirmSlotSync(
 
     for (params.entries) |entry| {
         const batch = try resolveBatch(allocator, entry.transactions, params.slot_resolver);
-        batch.deinit(allocator);
+        defer batch.deinit(allocator);
 
         var exit = Atomic(bool).init(false);
         switch (try replay.scheduler.processBatch(
