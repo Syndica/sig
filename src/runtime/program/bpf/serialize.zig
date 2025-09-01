@@ -109,7 +109,7 @@ pub const Serializer = struct {
             }
             return addr;
         }
-        
+
         try self.pushRegion(true);
         const addr = self.vaddr;
         if (!self.direct_mapping) {
@@ -160,7 +160,7 @@ pub const Serializer = struct {
         account: *const BorrowedAccount,
     ) (error{OutOfMemory} || InstructionError)!void {
         // TODO: Cow https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/program-runtime/src/serialization.rs#L134
-        const address_space = account.constAccountData().len +| 
+        const address_space = account.constAccountData().len +|
             (MAX_PERMITTED_DATA_INCREASE * @intFromBool(self.aligned));
 
         if (address_space > 0) {
@@ -231,7 +231,7 @@ pub fn serializeParameters(
     defer accounts.deinit();
 
     for (ic.ixn_info.account_metas.constSlice(), 0..) |account_meta, index_in_instruction| {
-        const index_in_callee = 
+        const index_in_callee =
             try ic.ixn_info.getAccountInstructionIndex(account_meta.index_in_transaction);
 
         if (index_in_callee != index_in_instruction) {
@@ -416,9 +416,9 @@ fn serializeParametersAligned(
                         data_len,
                         BPF_ALIGN_OF_U128,
                     ) - data_len;
-                    size += borrowed_account.constAccountData().len 
-                        + MAX_PERMITTED_DATA_INCREASE
-                        + align_offset;
+                    size += borrowed_account.constAccountData().len +
+                        MAX_PERMITTED_DATA_INCREASE +
+                        align_offset;
                 } else {
                     size += BPF_ALIGN_OF_U128;
                 }
@@ -569,7 +569,7 @@ fn deserializeParametersUnaligned(
         const account_meta = ic.ixn_info.account_metas.buffer[index_in_instruction];
         const pre_len = account_lengths[index_in_instruction];
 
-        const index_in_callee = 
+        const index_in_callee =
             try ic.ixn_info.getAccountInstructionIndex(account_meta.index_in_transaction);
         const is_duplicate = index_in_callee != index_in_instruction;
 
@@ -629,7 +629,7 @@ fn deserializeParametersUnaligned(
                 );
             }
             if (!(stricter_abi_and_runtime_constraints and direct_mapping))
-                start += pre_len; // data 
+                start += pre_len; // data
             start += @sizeOf(Pubkey) // owner
                 + @sizeOf(u8) // executable
                 + @sizeOf(u64); // rent_epoch
@@ -653,7 +653,7 @@ fn deserializeParametersAligned(
         const account_meta = ic.ixn_info.account_metas.buffer[index_in_instruction];
         const pre_len = account_lengths[index_in_instruction];
 
-        const index_in_callee = 
+        const index_in_callee =
             try ic.ixn_info.getAccountInstructionIndex(account_meta.index_in_transaction);
         const is_duplicate = index_in_callee != index_in_instruction;
 

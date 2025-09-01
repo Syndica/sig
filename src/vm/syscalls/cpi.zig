@@ -549,8 +549,10 @@ fn translateAccounts(
     comptime AccountInfoType: type,
     account_infos_addr: u64,
     account_infos_len: u64,
-    account_metas: []const InstructionInfo.AccountMeta,
+    cpi_info: *const InstructionInfo,
 ) !TranslatedAccounts {
+    const account_metas = cpi_info.account_metas.slice();
+
     // translate_account_infos():
 
     const stricter_abi_and_runtime_constraints = ic.tc.feature_set.active(
@@ -603,11 +605,14 @@ fn translateAccounts(
 
     var accounts: TranslatedAccounts = .{};
     for (account_metas, 0..) |meta, index_in_instruction| {
-        const index_in_caller =
-            try ic.ixn_info.getAccountInstructionIndex(meta.index_in_transaction);
-        if (index_in_caller != index_in_instruction) {
+        const cpi_index_in_caller =
+            try cpi_info.getAccountInstructionIndex(meta.index_in_transaction);
+        if (cpi_index_in_caller != index_in_instruction) {
             continue; // Skip duplicate account.
         }
+
+        const index_in_caller =
+            try ic.ixn_info.getAccountInstructionIndex(meta.index_in_transaction);
 
         var callee_account = try ic.borrowInstructionAccount(index_in_caller);
         defer callee_account.release();
@@ -1028,7 +1033,7 @@ fn cpiCommon(
         AccountInfoType,
         account_infos_addr,
         account_infos_len,
-        info.account_metas.constSlice(),
+        &info,
     );
 
     // Process the callee instruction.
@@ -1045,6 +1050,7 @@ fn cpiCommon(
     for (accounts.slice()) |*translated| {
         var callee_account = try ic.borrowInstructionAccount(translated.index_in_caller);
         defer callee_account.release();
+
         if (translated.update_caller_account_info) {
             try updateCallerAccount(
                 ic,
@@ -1060,6 +1066,7 @@ fn cpiCommon(
         for (accounts.constSlice()) |translated| {
             var callee_account = try ic.borrowInstructionAccount(translated.index_in_caller);
             defer callee_account.release();
+
             if (translated.update_caller_account_region) {
                 // update_caller_account_region()
 
