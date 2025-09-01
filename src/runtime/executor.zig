@@ -140,7 +140,7 @@ fn processNextInstruction(
             bpf_loader_program.v4.ID.equals(&owner_id))
             break :blk .{ owner_id, program_account.pubkey };
 
-        return InstructionError.UnsupportedProgramId; 
+        return InstructionError.UnsupportedProgramId;
     };
 
     const maybe_precompile_fn =
@@ -264,7 +264,7 @@ pub fn prepareCpiInstructionInfo(
             continue;
         }
 
-        const index_in_caller = 
+        const index_in_caller =
             try caller.ixn_info.getAccountInstructionIndex(account.index_in_transaction);
 
         const account_key = callee.accounts[i].pubkey;
