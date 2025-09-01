@@ -945,6 +945,12 @@ fn serializeOutput(
         .fees_only => |fees_only| utils.convertTransactionError(fees_only.err),
     };
 
+    // Special casing to return only the custom error for transactions which have
+    // encountered the loader v4 program or bpf loader v3 migrate instruction.
+    if (errors.custom_error == 0x30000000 or errors.custom_error == 0x40000000) {
+        return .{ .custom_error = errors.custom_error };
+    }
+
     const rent = switch (txn) {
         .executed => |executed_txn| executed_txn.loaded_accounts.rent_collected,
         .fees_only => 0,

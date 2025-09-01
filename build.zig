@@ -1,6 +1,8 @@
 const std = @import("std");
 const Build = std.Build;
 
+const sig_version: std.SemanticVersion = .{ .major = 0, .minor = 2, .patch = 0 };
+
 pub const Config = struct {
     target: Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
@@ -19,8 +21,9 @@ pub const Config = struct {
     force_pic: bool,
     error_tracing: ?bool,
     long_tests: bool,
+    version: std.SemanticVersion,
 
-    pub fn fromBuild(b: *Build) Config {
+    pub fn fromBuild(b: *Build) !Config {
         var self: Config = .{
             .target = b.standardTargetOptions(.{}),
             .optimize = b.standardOptimizeOption(.{}),
@@ -106,6 +109,74 @@ pub const Config = struct {
                 "long-tests",
                 "Run extra tests that take a long time, for more exhaustive coverage.",
             ) orelse false,
+            .version = s: {
+                const maybe_version_string = b.option(
+                    []const u8,
+                    "version-string",
+                    "Override Sig's version string. The default is to find out through git.",
+                );
+                const version_slice = if (maybe_version_string) |version| version else v: {
+                    const version_string = b.fmt("{}", .{sig_version});
+
+                    var code: u8 = undefined;
+                    const git_describe_untrimmed = b.runAllowFail(&.{
+                        "git",
+                        "-C", b.build_root.path orelse ".", // affects the --git-dir argument
+                        "--git-dir", ".git", // affected by the -C argument
+                        "describe", "--match", "*.*.*", //
+                        "--tags", "--abbrev=8", //  get the first 8 characters, or 4 bytes for the client version
+                    }, &code, .Ignore) catch break :v version_string;
+                    const git_describe = std.mem.trim(u8, git_describe_untrimmed, " \n\r");
+
+                    switch (std.mem.count(u8, git_describe, &.{'-'})) {
+                        0 => {
+                            // This is a tagged release version (e.g. 0.2.0)
+                            if (!std.mem.eql(u8, git_describe, version_string)) {
+                                // Something must be very wrong.
+                                std.debug.print("Sig's version '{s}' does not match Git tag '{s}'\n", .{ version_string, git_describe });
+                                std.process.exit(1);
+                            }
+                            break :v version_string;
+                        },
+                        2 => {
+                            // Untagged development build (e.g. 0.2.0-dev.1832+g5ef9eaf0b).
+                            var it = std.mem.splitScalar(u8, git_describe, '-');
+                            const tagged_ancestor = it.first();
+                            const commit_height = it.next().?;
+                            const commit_id = it.next().?;
+
+                            // Check that the version of Sig we're compiling is after the latest tag. Something
+                            // must have gone wrong for this not to be the case.
+                            // We follow SemVerTag, so our tagged releases are versioned with vX.Y.Z, so we cut
+                            // off the first character when parsing the SemVer.
+                            const ancestor_ver = try std.SemanticVersion.parse(tagged_ancestor[1..]);
+                            if (sig_version.order(ancestor_ver) != .gt) {
+                                std.debug.print(
+                                    "'{}' must be greater than tagged ancestor '{}'\n",
+                                    .{ sig_version, ancestor_ver },
+                                );
+                                std.process.exit(1);
+                            }
+
+                            // Check that the commit hash is prefixed with a 'g' (a Git convention).
+                            // e.g v0.1.0-1832-g5ef9eaf0b
+                            if (commit_id.len < 1 or commit_id[0] != 'g') {
+                                std.debug.print("Unexpected `git describe` output: {s}\n", .{git_describe});
+                                break :v version_string;
+                            }
+
+                            // The version is reformatted in accordance with the https://semver.org specification.
+                            break :v b.fmt("{s}-dev.{s}+{s}", .{ version_string, commit_height, commit_id[1..] });
+                        },
+                        else => {
+                            std.debug.print("Unexpected `git describe` output: {s}\n", .{git_describe});
+                            break :v version_string;
+                        },
+                    }
+                };
+
+                break :s try std.SemanticVersion.parse(version_slice);
+            },
         };
 
         if (self.ssh_host) |host| {
@@ -116,15 +187,16 @@ pub const Config = struct {
     }
 };
 
-pub fn build(b: *Build) void {
+pub fn build(b: *Build) !void {
     defer makeZlsNotInstallAnythingDuringBuildOnSave(b);
 
-    const config = Config.fromBuild(b);
+    const config = try Config.fromBuild(b);
 
     const build_options = b.addOptions();
     build_options.addOption(LedgerDB, "ledger_db", config.ledger_db);
     build_options.addOption(bool, "no_network_tests", config.no_network_tests);
     build_options.addOption(bool, "long_tests", config.long_tests);
+    build_options.addOption(std.SemanticVersion, "version", config.version);
 
     const sig_step = b.step("sig", "Run the sig executable");
     const test_step = b.step("test", "Run library tests");
