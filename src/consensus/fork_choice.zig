@@ -170,6 +170,7 @@ pub const ForkChoice = struct {
     latest_votes: AutoHashMap(Pubkey, SlotAndHash),
     tree_root: SlotAndHash,
     last_root_time: Instant,
+    metrics: ForkChoiceMetrics,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -183,6 +184,7 @@ pub const ForkChoice = struct {
             .latest_votes = AutoHashMap(Pubkey, SlotAndHash).init(allocator),
             .tree_root = tree_root,
             .last_root_time = Instant.now(),
+            .metrics = try ForkChoiceMetrics.init(),
         };
 
         try self.addNewLeafSlot(tree_root, null);
@@ -200,6 +202,52 @@ pub const ForkChoice = struct {
 
         var latest_votes = self.latest_votes;
         latest_votes.deinit();
+    }
+
+    /// Updates fork choice metrics based on current state
+    fn updateMetrics(self: *ForkChoice) void {
+        const now = Instant.now();
+        const update_interval = @as(f64, @floatFromInt(now.elapsedSince(self.last_root_time).ns)) / 1_000_000_000.0; // Convert to seconds
+        self.metrics.fork_choice_update_interval.observe(update_interval);
+        self.metrics.fork_choice_updates.inc();
+        self.last_root_time = now;
+
+        // Calculate basic consensus metrics
+        var total_stake: u64 = 0;
+        var active_fork_count: u64 = 0;
+        var current_heaviest_slot: ?u64 = null;
+        var current_deepest_slot: ?u64 = null;
+
+        var it = self.fork_infos.iterator();
+        while (it.next()) |entry| {
+            const fork_info = entry.value_ptr;
+
+            total_stake += fork_info.stake_for_subtree;
+
+            // Count active forks (those that are candidates)
+            if (fork_info.isCandidate()) {
+                active_fork_count += 1;
+
+                // Track heaviest and deepest slots
+                if (current_heaviest_slot == null or fork_info.heaviest_subtree_slot.slot > current_heaviest_slot.?) {
+                    current_heaviest_slot = fork_info.heaviest_subtree_slot.slot;
+                }
+                if (current_deepest_slot == null or fork_info.deepest_slot.slot > current_deepest_slot.?) {
+                    current_deepest_slot = fork_info.deepest_slot.slot;
+                }
+            }
+        }
+
+        // Set gauge metrics
+        self.metrics.total_stake_in_tree.set(total_stake);
+        self.metrics.active_fork_count.set(active_fork_count);
+
+        if (current_heaviest_slot) |slot| {
+            self.metrics.current_heaviest_subtree_slot.set(slot);
+        }
+        if (current_deepest_slot) |slot| {
+            self.metrics.current_deepest_slot.set(slot);
+        }
     }
 
     /// [Agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L452
@@ -300,6 +348,9 @@ pub const ForkChoice = struct {
         try self.propagateNewLeaf(&slot_hash_key, &parent);
         // TODO: Revisit, this was set first in the Agave code.
         self.last_root_time = Instant.now();
+
+        // Update metrics after adding new leaf
+        self.updateMetrics();
     }
 
     pub fn containsBlock(self: *const ForkChoice, key: *const SlotAndHash) bool {
@@ -398,6 +449,10 @@ pub const ForkChoice = struct {
 
         // Finalize all updates
         self.processUpdateOperations(&update_ops);
+
+        // Update metrics after processing votes
+        self.updateMetrics();
+
         return self.heaviestOverallSlot();
     }
 
@@ -458,6 +513,9 @@ pub const ForkChoice = struct {
         root_fork_info.parent = null;
         self.tree_root = new_root.*;
         self.last_root_time = Instant.now();
+
+        // Update metrics after changing tree root
+        self.updateMetrics();
     }
 
     /// Adds a new root parent to the fork choice tree. This is used when we need to
@@ -1540,6 +1598,7 @@ pub const ForkChoice = struct {
             .latest_votes = split_tree_latest_votes,
             .tree_root = slot_hash_key,
             .last_root_time = Instant.now(),
+            .metrics = try ForkChoiceMetrics.init(),
         };
     }
 };
@@ -5026,3 +5085,38 @@ pub fn testEpochStakes(
 
     return stakes;
 }
+
+/// Metrics for tracking fork choice behavior and performance
+pub const ForkChoiceMetrics = struct {
+    /// Current heaviest subtree slot (the slot with most stake)
+    current_heaviest_subtree_slot: *sig.prometheus.Gauge(u64),
+    /// Current deepest slot (the slot with highest tree height)
+    current_deepest_slot: *sig.prometheus.Gauge(u64),
+    /// Number of active forks (count of fork candidates for consensus)
+    active_fork_count: *sig.prometheus.Gauge(u64),
+    /// Total stake in the fork choice tree
+    total_stake_in_tree: *sig.prometheus.Gauge(u64),
+
+    /// Number of fork choice updates - indicates consensus activity and health
+    fork_choice_updates: *sig.prometheus.Counter,
+    /// Time between fork choice updates (seconds) - performance and network health indicator
+    fork_choice_update_interval: *sig.prometheus.Histogram,
+
+    pub const prefix = "fork_choice";
+
+    pub fn init() sig.prometheus.GetMetricError!ForkChoiceMetrics {
+        return sig.prometheus.globalRegistry().initStruct(ForkChoiceMetrics);
+    }
+
+    pub fn histogramBucketsForField(comptime field_name: []const u8) []const f64 {
+        const HistogramKind = enum {
+            fork_choice_update_interval,
+        };
+
+        const time_interval_buckets = &.{ 0.001, 0.01, 0.1, 1, 10, 100, 1000 }; // seconds
+
+        return switch (@field(HistogramKind, field_name)) {
+            .fork_choice_update_interval => time_interval_buckets,
+        };
+    }
+};
