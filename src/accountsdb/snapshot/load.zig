@@ -15,7 +15,7 @@ const StatusCache = sig.accounts_db.snapshot.StatusCache;
 
 const Logger = sig.trace.Logger("accountsdb.snapshot.load");
 
-const LoadedSnapshot = struct {
+pub const LoadedSnapshot = struct {
     allocator: Allocator,
     accounts_db: AccountsDB,
     combined_manifest: snapshot.FullAndIncrementalManifest,

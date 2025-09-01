@@ -5,6 +5,7 @@ pub const load = @import("load.zig");
 
 pub const FullAndIncrementalManifest = data.FullAndIncrementalManifest;
 
+pub const LoadedSnapshot = load.LoadedSnapshot;
 pub const Manifest = data.Manifest;
 pub const SnapshotFiles = data.SnapshotFiles;
 pub const StatusCache = data.StatusCache;

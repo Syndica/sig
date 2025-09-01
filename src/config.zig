@@ -24,6 +24,7 @@ pub const Cmd = struct {
     tee_logs: bool = false,
     metrics_port: u16 = 12345,
     shred_version: ?u16 = null,
+    minimal_replay: bool = false,
 
     pub fn genesisFilePath(self: Cmd) error{UnknownCluster}!?[]const u8 {
         return if (self.genesis_file_path) |provided_path|

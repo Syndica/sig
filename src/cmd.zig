@@ -124,20 +124,6 @@ pub fn main() !void {
             params.geyser.apply(&current_config);
             try validator(gpa, gossip_gpa, current_config);
         },
-        .replay_simple => |params| {
-            current_config.shred_version = params.shred_version;
-            current_config.leader_schedule_path = params.leader_schedule;
-            params.gossip_base.apply(&current_config);
-            params.gossip_node.apply(&current_config);
-            params.repair.apply(&current_config);
-            current_config.accounts_db.snapshot_dir = params.snapshot_dir;
-            current_config.genesis_file_path = params.genesis_file_path;
-            params.accountsdb_base.apply(&current_config);
-            params.accountsdb_download.apply(&current_config);
-            params.accountsdb_index.apply(&current_config);
-            params.geyser.apply(&current_config);
-            try replaySimple(gpa, gossip_gpa, current_config);
-        },
         .replay_offline => |params| {
             current_config.shred_version = params.shred_version;
             current_config.leader_schedule_path = params.leader_schedule;
@@ -233,7 +219,6 @@ const Cmd = struct {
         identity,
         gossip: Gossip,
         validator: Validator,
-        replay_simple: Validator,
         replay_offline: Validator,
         shred_network: ShredNetwork,
         snapshot_download: SnapshotDownload,
@@ -260,7 +245,6 @@ const Cmd = struct {
                 .identity = identity_cmd_info,
                 .gossip = Gossip.cmd_info,
                 .validator = Validator.cmd_info,
-                .replay_simple = Validator.cmd_info,
                 .replay_offline = Validator.cmd_info,
                 .shred_network = ShredNetwork.cmd_info,
                 .snapshot_download = SnapshotDownload.cmd_info,
@@ -364,6 +348,15 @@ const Cmd = struct {
         .default_value = false,
         .config = {},
         .help = "force download of new snapshot (usually to get a more up-to-date snapshot)",
+    };
+
+    const minimal_replay_arg: cli.ArgumentInfo(bool) = .{
+        .kind = .named,
+        .name_override = "minimal-replay",
+        .alias = .none,
+        .default_value = false,
+        .config = {},
+        .help = "Run a minimal version of replay: single threaded without consensus",
     };
 
     const GossipArgumentsCommon = struct {
@@ -720,6 +713,7 @@ const Cmd = struct {
         force_new_snapshot_download: bool,
         accountsdb_index: AccountsDbArgumentsIndex,
         geyser: GeyserArgumentsBase,
+        minimal_replay: bool,
 
         const cmd_info: cli.CommandInfo(@This()) = .{
             .help = .{
@@ -739,6 +733,7 @@ const Cmd = struct {
                 .force_new_snapshot_download = force_new_snapshot_download_arg,
                 .accountsdb_index = AccountsDbArgumentsIndex.cmd_info,
                 .geyser = GeyserArgumentsBase.cmd_info,
+                .minimal_replay = minimal_replay_arg,
             },
         };
     };
@@ -1199,284 +1194,27 @@ fn validator(
     );
     defer shred_network_manager.deinit();
 
-    const replay_senders: sig.replay.service.Senders = try .create(allocator);
+    const replay_deps, const replay_senders, const replay_receivers = try replayDependencies(
+        allocator,
+        epoch,
+        &loaded_snapshot,
+        bank_fields,
+        &app_base,
+        ledger,
+        &epoch_context_manager,
+    );
     defer replay_senders.destroy();
-
-    const replay_receivers: sig.replay.service.Receivers = try .create(allocator);
     defer replay_receivers.destroy();
 
-    const replay_thread = replay: {
-        const epoch_stakes_map = &collapsed_manifest.bank_extra.versioned_epoch_stakes;
-        const epoch_stakes = epoch_stakes_map.get(epoch) orelse
-            return error.EpochStakesMissingFromSnapshot;
-
-        const feature_set = try sig.replay.service.getActiveFeatures(
-            allocator,
-            loaded_snapshot.accounts_db.accountReader().forSlot(&bank_fields.ancestors),
-            bank_fields.slot,
-        );
-        const root_slot_constants = try sig.core.SlotConstants.fromBankFields(
-            allocator,
-            bank_fields,
-            feature_set,
-        );
-        errdefer root_slot_constants.deinit(allocator);
-
-        var root_slot_state = try sig.core.SlotState.fromBankFields(allocator, bank_fields);
-        errdefer root_slot_state.deinit(allocator);
-
-        break :replay try app_base.spawnService(
-            "replay",
-            sig.replay.service.run,
-            .{sig.replay.service.ReplayDependencies{
-                .allocator = allocator,
-                .logger = .from(app_base.logger),
-                .my_identity = .fromPublicKey(&app_base.my_keypair.public_key),
-                .vote_identity = .fromPublicKey(&app_base.my_keypair.public_key), // TODO: is this fine, or do we need a separate identity for the vote account?
-                .exit = app_base.exit,
-                .account_store = loaded_snapshot.accounts_db.accountStore(),
-                .ledger = .{
-                    .db = ledger.db.*,
-                    .reader = ledger.reader,
-                    .writer = ledger.result_writer,
-                },
-                .epoch_schedule = bank_fields.epoch_schedule,
-                .slot_leaders = epoch_context_manager.slotLeaders(),
-                .root = .{
-                    .slot = bank_fields.slot,
-                    .constants = root_slot_constants,
-                    .state = root_slot_state,
-                },
-
-                .senders = replay_senders,
-                .receivers = replay_receivers,
-                .current_epoch = epoch,
-                .current_epoch_constants = try .fromBankFields(
-                    bank_fields,
-                    try epoch_stakes.current.convert(allocator, .delegation),
-                ),
-                .hard_forks = try bank_fields.hard_forks.clone(allocator),
-            }},
-        );
-    };
-
-    replay_thread.join();
-    rpc_epoch_ctx_service_thread.join();
-    gossip_service.service_manager.join();
-    shred_network_manager.join();
-    ledger.cleanup_service_handle.join();
-}
-
-/// entrypoint to run a minimal replay node
-fn replaySimple(
-    allocator: std.mem.Allocator,
-    gossip_value_allocator: std.mem.Allocator,
-    cfg: config.Cmd,
-) !void {
-    const zone = tracy.Zone.init(@src(), .{ .name = "cmd.replay" });
-    defer zone.deinit();
-
-    var app_base = try AppBase.init(allocator, cfg);
-    defer {
-        app_base.shutdown();
-        app_base.deinit();
-    }
-
-    app_base.logger.info().logf("starting validator with cfg: {}", .{cfg});
-
-    const repair_port: u16 = cfg.shred_network.repair_port;
-    const turbine_recv_port: u16 = cfg.shred_network.turbine_recv_port;
-    const snapshot_dir_str = cfg.accounts_db.snapshot_dir;
-
-    var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{});
-    defer snapshot_dir.close();
-
-    var gossip_service = try startGossip(allocator, gossip_value_allocator, cfg, &app_base, &.{
-        .{ .tag = .repair, .port = repair_port },
-        .{ .tag = .turbine_recv, .port = turbine_recv_port },
-    });
-    defer {
-        gossip_service.shutdown();
-        gossip_service.deinit();
-        allocator.destroy(gossip_service);
-    }
-
-    const geyser_writer: ?*GeyserWriter = if (!cfg.geyser.enable)
-        null
-    else
-        try createGeyserWriter(
-            allocator,
-            cfg.geyser.pipe_path,
-            cfg.geyser.writer_fba_bytes,
-        );
-    defer if (geyser_writer) |geyser| {
-        geyser.deinit();
-        allocator.destroy(geyser.exit);
-        allocator.destroy(geyser);
-    };
-
-    // snapshot
-    var loaded_snapshot = try loadSnapshot(
-        allocator,
-        cfg.accounts_db,
-        try cfg.genesisFilePath() orelse return error.GenesisPathNotProvided,
-        .from(app_base.logger),
-        .{
-            .gossip_service = gossip_service,
-            .geyser_writer = geyser_writer,
-            .validate_snapshot = !cfg.accounts_db.skip_snapshot_validation,
-        },
+    const replay_thread = if (cfg.minimal_replay) try app_base.spawnService(
+        "replay",
+        sig.replay.service.runMinimal,
+        .{replay_deps},
+    ) else try app_base.spawnService(
+        "replay",
+        sig.replay.service.run,
+        .{ replay_deps, replay_senders, replay_receivers },
     );
-    defer loaded_snapshot.deinit();
-
-    const collapsed_manifest = &loaded_snapshot.collapsed_manifest;
-    const bank_fields = &collapsed_manifest.bank_fields;
-
-    // leader schedule
-    var leader_schedule_cache = LeaderScheduleCache.init(allocator, bank_fields.epoch_schedule);
-    if (try getLeaderScheduleFromCli(allocator, cfg)) |leader_schedule| {
-        try leader_schedule_cache.put(bank_fields.epoch, leader_schedule[1]);
-    } else {
-        const schedule = try collapsed_manifest.leaderSchedule(allocator, null);
-        errdefer schedule.deinit();
-        try leader_schedule_cache.put(bank_fields.epoch, schedule);
-    }
-
-    // ledger
-    const ledger = try UnifiedLedger.init(
-        allocator,
-        .from(app_base.logger),
-        sig.VALIDATOR_DIR ++ "ledger",
-        app_base.metrics_registry,
-        app_base.exit,
-        cfg.max_shreds,
-    );
-    defer ledger.deinit(allocator);
-
-    // Random number generator
-    var prng = std.Random.DefaultPrng.init(@bitCast(std.time.timestamp()));
-
-    // shred networking
-    const my_contact_info =
-        sig.gossip.data.ThreadSafeContactInfo.fromContactInfo(gossip_service.my_contact_info);
-
-    const epoch_schedule = bank_fields.epoch_schedule;
-    const epoch = bank_fields.epoch;
-
-    const staked_nodes = try collapsed_manifest.epochStakes(epoch);
-    var epoch_context_manager = try sig.adapter.EpochContextManager.init(allocator, epoch_schedule);
-    defer epoch_context_manager.deinit();
-    try epoch_context_manager.contexts.realign(epoch);
-    {
-        var staked_nodes_cloned = try staked_nodes.clone(allocator);
-        errdefer staked_nodes_cloned.deinit(allocator);
-
-        const leader_schedule = try LeaderSchedule.fromStakedNodes(
-            allocator,
-            epoch,
-            epoch_schedule.slots_per_epoch,
-            staked_nodes,
-        );
-        errdefer allocator.free(leader_schedule);
-
-        try epoch_context_manager.put(epoch, .{
-            .staked_nodes = staked_nodes_cloned,
-            .leader_schedule = leader_schedule,
-        });
-    }
-
-    const rpc_cluster_type = loaded_snapshot.genesis_config.cluster_type;
-    var rpc_client = try sig.rpc.Client.init(allocator, rpc_cluster_type, .{});
-    defer rpc_client.deinit();
-
-    var rpc_epoch_ctx_service = sig.adapter.RpcEpochContextService.init(
-        allocator,
-        .from(app_base.logger),
-        &epoch_context_manager,
-        rpc_client,
-    );
-
-    const rpc_epoch_ctx_service_thread = try std.Thread.spawn(
-        .{},
-        sig.adapter.RpcEpochContextService.run,
-        .{ &rpc_epoch_ctx_service, app_base.exit },
-    );
-
-    const turbine_config = cfg.turbine;
-
-    // shred network
-    var shred_network_manager = try sig.shred_network.start(
-        cfg.shred_network.toConfig(loaded_snapshot.collapsed_manifest.bank_fields.slot),
-        .{
-            .allocator = allocator,
-            .logger = .from(app_base.logger),
-            .registry = app_base.metrics_registry,
-            .random = prng.random(),
-            .ledger_db = ledger.db.*,
-            .my_keypair = &app_base.my_keypair,
-            .exit = app_base.exit,
-            .gossip_table_rw = &gossip_service.gossip_table_rw,
-            .my_shred_version = &gossip_service.my_shred_version,
-            .epoch_context_mgr = &epoch_context_manager,
-            .my_contact_info = my_contact_info,
-            .n_retransmit_threads = turbine_config.num_retransmit_threads,
-            .overwrite_turbine_stake_for_testing = turbine_config.overwrite_stake_for_testing,
-        },
-    );
-    defer shred_network_manager.deinit();
-
-    const replay_thread = replay: {
-        const epoch_stakes_map = &collapsed_manifest.bank_extra.versioned_epoch_stakes;
-        const epoch_stakes = epoch_stakes_map.get(epoch) orelse
-            return error.EpochStakesMissingFromSnapshot;
-
-        const feature_set = try sig.replay.service.getActiveFeatures(
-            allocator,
-            loaded_snapshot.accounts_db.accountReader().forSlot(&bank_fields.ancestors),
-            bank_fields.slot,
-        );
-        const root_slot_constants = try sig.core.SlotConstants.fromBankFields(
-            allocator,
-            bank_fields,
-            feature_set,
-        );
-        errdefer root_slot_constants.deinit(allocator);
-
-        var root_slot_state = try sig.core.SlotState.fromBankFields(allocator, bank_fields);
-        errdefer root_slot_state.deinit(allocator);
-
-        break :replay try app_base.spawnService(
-            "replay",
-            sig.replay.simple.run,
-            .{sig.replay.simple.Dependencies{
-                .allocator = allocator,
-                .logger = .from(app_base.logger),
-                .my_identity = .fromPublicKey(&app_base.my_keypair.public_key),
-                .vote_identity = .fromPublicKey(&app_base.my_keypair.public_key), // TODO: is this fine, or do we need a separate identity for the vote account?
-                .exit = app_base.exit,
-                .account_store = loaded_snapshot.accounts_db.accountStore(),
-                .ledger = .{
-                    .db = ledger.db.*,
-                    .reader = ledger.reader,
-                    .writer = ledger.result_writer,
-                },
-                .epoch_schedule = bank_fields.epoch_schedule,
-                .slot_leaders = epoch_context_manager.slotLeaders(),
-                .root = .{
-                    .slot = bank_fields.slot,
-                    .constants = root_slot_constants,
-                    .state = root_slot_state,
-                },
-
-                .current_epoch = epoch,
-                .current_epoch_constants = try .fromBankFields(
-                    bank_fields,
-                    try epoch_stakes.current.convert(allocator, .delegation),
-                ),
-                .hard_forks = try bank_fields.hard_forks.clone(allocator),
-            }},
-        );
-    };
 
     replay_thread.join();
     rpc_epoch_ctx_service_thread.join();
@@ -1569,58 +1307,27 @@ fn replayOffline(
         });
     }
 
-    const replay_thread = replay: {
-        const epoch_stakes_map = &collapsed_manifest.bank_extra.versioned_epoch_stakes;
-        const epoch_stakes = epoch_stakes_map.get(epoch) orelse
-            return error.EpochStakesMissingFromSnapshot;
+    const replay_deps, const replay_senders, const replay_receivers = try replayDependencies(
+        allocator,
+        epoch,
+        &loaded_snapshot,
+        bank_fields,
+        &app_base,
+        ledger,
+        &epoch_context_manager,
+    );
+    defer replay_senders.destroy();
+    defer replay_receivers.destroy();
 
-        const feature_set = try sig.replay.service.getActiveFeatures(
-            allocator,
-            loaded_snapshot.accounts_db.accountReader().forSlot(&bank_fields.ancestors),
-            bank_fields.slot,
-        );
-        const root_slot_constants = try sig.core.SlotConstants.fromBankFields(
-            allocator,
-            bank_fields,
-            feature_set,
-        );
-        errdefer root_slot_constants.deinit(allocator);
-
-        var root_slot_state = try sig.core.SlotState.fromBankFields(allocator, bank_fields);
-        errdefer root_slot_state.deinit(allocator);
-
-        break :replay try app_base.spawnService(
-            "replay",
-            sig.replay.simple.run,
-            .{sig.replay.simple.Dependencies{
-                .allocator = allocator,
-                .logger = .from(app_base.logger),
-                .my_identity = .fromPublicKey(&app_base.my_keypair.public_key),
-                .vote_identity = .fromPublicKey(&app_base.my_keypair.public_key), // TODO: is this fine, or do we need a separate identity for the vote account?
-                .exit = app_base.exit,
-                .account_store = loaded_snapshot.accounts_db.accountStore(),
-                .ledger = .{
-                    .db = ledger.db.*,
-                    .reader = ledger.reader,
-                    .writer = ledger.result_writer,
-                },
-                .epoch_schedule = bank_fields.epoch_schedule,
-                .slot_leaders = epoch_context_manager.slotLeaders(),
-                .root = .{
-                    .slot = bank_fields.slot,
-                    .constants = root_slot_constants,
-                    .state = root_slot_state,
-                },
-
-                .current_epoch = epoch,
-                .current_epoch_constants = try .fromBankFields(
-                    bank_fields,
-                    try epoch_stakes.current.convert(allocator, .delegation),
-                ),
-                .hard_forks = try bank_fields.hard_forks.clone(allocator),
-            }},
-        );
-    };
+    const replay_thread = if (cfg.minimal_replay) try app_base.spawnService(
+        "replay minimal",
+        sig.replay.service.runMinimal,
+        .{replay_deps},
+    ) else try app_base.spawnService(
+        "replay",
+        sig.replay.service.run,
+        .{ replay_deps, replay_senders, replay_receivers },
+    );
 
     replay_thread.join();
     ledger.cleanup_service_handle.join();
@@ -2197,6 +1904,75 @@ fn startGossip(
     });
 
     return service;
+}
+
+fn replayDependencies(
+    allocator: std.mem.Allocator,
+    epoch: sig.core.Epoch,
+    loaded_snapshot: *sig.accounts_db.snapshot.LoadedSnapshot,
+    bank_fields: *const sig.core.BankFields,
+    app_base: *const AppBase,
+    ledger: UnifiedLedger,
+    epoch_context_manager: *sig.adapter.EpochContextManager,
+) !struct {
+    sig.replay.service.ReplayDependencies,
+    sig.replay.service.Senders,
+    sig.replay.service.Receivers,
+} {
+    const senders: sig.replay.service.Senders = try .create(allocator);
+    defer senders.destroy();
+
+    const receivers: sig.replay.service.Receivers = try .create(allocator);
+    defer receivers.destroy();
+
+    const epoch_stakes_map = &loaded_snapshot.collapsed_manifest.bank_extra.versioned_epoch_stakes;
+    const epoch_stakes = epoch_stakes_map.get(epoch) orelse
+        return error.EpochStakesMissingFromSnapshot;
+
+    const feature_set = try sig.replay.service.getActiveFeatures(
+        allocator,
+        loaded_snapshot.accounts_db.accountReader().forSlot(&bank_fields.ancestors),
+        bank_fields.slot,
+    );
+
+    const root_slot_constants = try sig.core.SlotConstants.fromBankFields(
+        allocator,
+        bank_fields,
+        feature_set,
+    );
+    errdefer root_slot_constants.deinit(allocator);
+
+    var root_slot_state = try sig.core.SlotState.fromBankFields(allocator, bank_fields);
+    errdefer root_slot_state.deinit(allocator);
+
+    const deps = sig.replay.service.ReplayDependencies{
+        .allocator = allocator,
+        .logger = .from(app_base.logger),
+        .my_identity = .fromPublicKey(&app_base.my_keypair.public_key),
+        .vote_identity = .fromPublicKey(&app_base.my_keypair.public_key),
+        .exit = app_base.exit,
+        .account_store = loaded_snapshot.accounts_db.accountStore(),
+        .ledger = .{
+            .db = ledger.db.*,
+            .reader = ledger.reader,
+            .writer = ledger.result_writer,
+        },
+        .epoch_schedule = bank_fields.epoch_schedule,
+        .slot_leaders = epoch_context_manager.slotLeaders(),
+        .root = .{
+            .slot = bank_fields.slot,
+            .constants = root_slot_constants,
+            .state = root_slot_state,
+        },
+        .current_epoch = epoch,
+        .current_epoch_constants = try .fromBankFields(
+            bank_fields,
+            try epoch_stakes.current.convert(allocator, .delegation),
+        ),
+        .hard_forks = try bank_fields.hard_forks.clone(allocator),
+    };
+
+    return .{ deps, senders, receivers };
 }
 
 fn spawnLogger(
