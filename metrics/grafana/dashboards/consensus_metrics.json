@@ -632,7 +632,7 @@
   ],
   "refresh": "5s",
   "schemaVersion": 39,
-      "tags": ["consensus", "fork-choice", "tower", "voting"],
+      "tags": [],
   "templating": {
     "list": []
   },
