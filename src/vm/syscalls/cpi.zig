@@ -1155,10 +1155,7 @@ fn invokeSigned(
         account_infos_len,
         signers_seeds_addr,
         signers_seeds_len,
-    ) catch |e| {
-        if (@errorReturnTrace()) |t| std.debug.dumpStackTrace(t.*);
-        return e;
-    };
+    );
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L608-L630
