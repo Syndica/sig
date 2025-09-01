@@ -64,6 +64,7 @@ pub const RuntimeTransaction = struct {
     instructions: []const InstructionInfo,
     accounts: std.MultiArrayList(AccountMeta) = .{},
     compute_budget_instruction_details: ComputeBudgetInstructionDetails = .{},
+    num_lookup_tables: u64,
 };
 
 pub const TransactionExecutionEnvironment = struct {
@@ -907,6 +908,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
             .instruction_data = transfer_instruction_data,
         }},
         .accounts = accounts,
+        .num_lookup_tables = 0,
     };
 
     // Set a compute budget that is sufficient for the transaction to succeed

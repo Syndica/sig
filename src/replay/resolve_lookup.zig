@@ -70,6 +70,7 @@ pub const ResolvedTransaction = struct {
             .instructions = self.instructions,
             .accounts = self.accounts,
             .compute_budget_instruction_details = compute_budget_instruction_details,
+            .num_lookup_tables = self.transaction.msg.address_lookups.len,
         };
     }
 };
