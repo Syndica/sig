@@ -118,6 +118,10 @@ pub const SelectVoteAndResetForkResult = struct {
     },
     reset_slot: ?Slot,
     heaviest_fork_failures: std.ArrayListUnmanaged(HeaviestForkFailures),
+
+    pub fn deinit(self: *SelectVoteAndResetForkResult, allocator: std.mem.Allocator) void {
+        self.heaviest_fork_failures.deinit(allocator);
+    }
 };
 
 pub const SlotHistoryAccessor = struct {
