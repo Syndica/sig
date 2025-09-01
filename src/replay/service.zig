@@ -28,10 +28,12 @@ const GossipVerifiedVoteHash = sig.consensus.vote_listener.GossipVerifiedVoteHas
 const LatestValidatorVotes = sig.consensus.latest_validator_votes.LatestValidatorVotes;
 const SlotHistoryAccessor = sig.consensus.replay_tower.SlotHistoryAccessor;
 
+const ProcessResultState = replay.process_result.ProcessResultState;
 const ReplayExecutionState = replay.execution.ReplayExecutionState;
 const SlotTracker = replay.trackers.SlotTracker;
 const EpochTracker = replay.trackers.EpochTracker;
 
+const processResult = replay.process_result.processResult;
 const updateSysvarsForNewSlot = replay.update_sysvar.updateSysvarsForNewSlot;
 
 const LatestValidatorVotesForFrozenSlots =
@@ -279,17 +281,28 @@ const ReplayState = struct {
             .logger = .from(self.logger),
             .my_identity = self.my_identity,
             .vote_account = null, // voting not currently supported
-
             .log_helper = &self.execution_log_helper,
-
             .account_store = self.account_store,
             .thread_pool = &self.thread_pool,
+            .ledger_reader = self.ledger.reader,
+            .slot_tracker = &self.slot_tracker,
+            .epochs = &self.epochs,
+            .progress_map = &self.progress_map,
+            .status_cache = &self.status_cache,
+        };
+    }
+
+    pub fn processResultState(self: *ReplayState) ProcessResultState {
+        return .{
+            .allocator = self.allocator,
+            .logger = .from(self.logger),
+            .my_identity = self.my_identity,
+            .account_store = self.account_store,
             .ledger_reader = self.ledger.reader,
             .ledger_result_writer = self.ledger.writer,
             .slot_tracker = &self.slot_tracker,
             .epochs = &self.epochs,
             .progress_map = &self.progress_map,
-            .status_cache = &self.status_cache,
             .fork_choice = &self.fork_choice,
             .duplicate_slots_tracker = &self.slot_data.duplicate_slots,
             .unfrozen_gossip_verified_vote_hashes = &self
@@ -305,7 +318,7 @@ const ReplayState = struct {
 };
 
 /// Analogous to [`initialize_progress_and_fork_choice_with_locked_bank_forks`](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/replay_stage.rs#L637)
-fn initProgressAndForkChoiceWithLockedSlotForks(
+pub fn initProgressAndForkChoiceWithLockedSlotForks(
     allocator: std.mem.Allocator,
     logger: Logger,
     slot_tracker: *const SlotTracker,
@@ -446,7 +459,18 @@ fn advanceReplay(state: *ReplayState) !void {
         &state.progress_map,
     );
 
-    const processed_a_slot = try replay.execution.replayActiveSlots(state.executionState());
+    const slot_statuses = try replay.execution.replayActiveSlots(state.executionState());
+
+    var processed_a_slot = false;
+    for (slot_statuses) |slot_status| {
+        const slot, const future = slot_status;
+        if (try processResult(
+            state.processResultState(),
+            slot,
+            future.entries,
+            try future.awaitBlocking(),
+        )) processed_a_slot = true;
+    }
     if (!processed_a_slot) std.time.sleep(100 * std.time.ns_per_ms);
 
     _ = try replay.edge_cases.processEdgeCases(allocator, state.logger, .{
@@ -516,7 +540,7 @@ fn advanceReplay(state: *ReplayState) !void {
 ///
 /// Analogous to
 /// [generate_new_bank_forks](https://github.com/anza-xyz/agave/blob/146ebd8be3857d530c0946003fcd58be220c3290/core/src/replay_stage.rs#L4149)
-fn trackNewSlots(
+pub fn trackNewSlots(
     allocator: Allocator,
     logger: Logger,
     account_store: AccountStore,

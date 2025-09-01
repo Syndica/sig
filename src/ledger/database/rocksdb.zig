@@ -32,7 +32,7 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
             logger: database.interface.Logger,
             path: []const u8,
         ) OpenError!Self {
-            logger.info().log("Initializing RocksDB");
+            logger.info().log("Opening RocksDB for ledger");
             const owned_path = try std.fmt.allocPrintZ(allocator, "{s}/rocksdb", .{path});
             try std.fs.cwd().makePath(owned_path);
 
