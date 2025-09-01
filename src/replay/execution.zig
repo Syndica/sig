@@ -11,16 +11,12 @@ const ThreadPool = sig.sync.ThreadPool;
 
 const Pubkey = core.Pubkey;
 const Slot = core.Slot;
-const Hash = sig.core.Hash;
 
 const AccountStore = sig.accounts_db.AccountStore;
 const LedgerReader = sig.ledger.LedgerReader;
 
-const AncestorHashesReplayUpdate = replay.consensus.AncestorHashesReplayUpdate;
 const ForkProgress = sig.consensus.progress_map.ForkProgress;
 const ProgressMap = sig.consensus.ProgressMap;
-const HeaviestSubtreeForkChoice = sig.consensus.HeaviestSubtreeForkChoice;
-const LatestValidatorVotes = sig.consensus.latest_validator_votes.LatestValidatorVotes;
 
 const ConfirmSlotError = replay.confirm_slot.ConfirmSlotError;
 const ConfirmSlotFuture = replay.confirm_slot.ConfirmSlotFuture;
@@ -29,18 +25,7 @@ const ConfirmSlotParams = replay.confirm_slot.ConfirmSlotParams;
 const EpochTracker = replay.trackers.EpochTracker;
 const SlotTracker = replay.trackers.SlotTracker;
 
-const DuplicateSlots = replay.edge_cases.SlotData.DuplicateSlots;
-const DuplicateState = replay.edge_cases.DuplicateState;
-const SlotFrozenState = replay.edge_cases.SlotFrozenState;
-const DuplicateSlotsToRepair = replay.edge_cases.SlotData.DuplicateSlotsToRepair;
-const DuplicateConfirmedSlots = replay.edge_cases.SlotData.DuplicateConfirmedSlots;
-const PurgeRepairSlotCounters = replay.edge_cases.SlotData.PurgeRepairSlotCounters;
-const EpochSlotsFrozenSlots = replay.edge_cases.SlotData.EpochSlotsFrozenSlots;
-const UnfrozenGossipVerifiedVoteHashes = replay.edge_cases.UnfrozenGossipVerifiedVoteHashes;
-
 const Logger = sig.trace.Logger("replay.execution");
-
-const check_slot_agrees_with_cluster = replay.edge_cases.check_slot_agrees_with_cluster;
 
 const SvmGateway = replay.svm_gateway.SvmGateway;
 

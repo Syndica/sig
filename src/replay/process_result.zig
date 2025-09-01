@@ -5,13 +5,10 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 const replay = @import("lib.zig");
-const tracy = @import("tracy");
 
 const core = sig.core;
 
 const Allocator = std.mem.Allocator;
-
-const ThreadPool = sig.sync.ThreadPool;
 
 const Pubkey = core.Pubkey;
 const Slot = core.Slot;
@@ -21,13 +18,9 @@ const AccountStore = sig.accounts_db.AccountStore;
 const LedgerReader = sig.ledger.LedgerReader;
 
 const AncestorHashesReplayUpdate = replay.consensus.AncestorHashesReplayUpdate;
-const ForkProgress = sig.consensus.progress_map.ForkProgress;
 const ProgressMap = sig.consensus.ProgressMap;
 const HeaviestSubtreeForkChoice = sig.consensus.HeaviestSubtreeForkChoice;
 const LatestValidatorVotes = sig.consensus.latest_validator_votes.LatestValidatorVotes;
-
-const ConfirmSlotFuture = replay.confirm_slot.ConfirmSlotFuture;
-const ConfirmSlotParams = replay.confirm_slot.ConfirmSlotParams;
 
 const EpochTracker = replay.trackers.EpochTracker;
 const SlotTracker = replay.trackers.SlotTracker;
@@ -44,11 +37,6 @@ const UnfrozenGossipVerifiedVoteHashes = replay.edge_cases.UnfrozenGossipVerifie
 const Logger = sig.trace.Logger("replay.process_result");
 
 const check_slot_agrees_with_cluster = replay.edge_cases.check_slot_agrees_with_cluster;
-
-const SvmGateway = replay.svm_gateway.SvmGateway;
-
-const confirmSlot = replay.confirm_slot.confirmSlot;
-const confirmSlotSync = replay.confirm_slot.confirmSlotSync;
 
 pub const ProcessResultState = struct {
     allocator: Allocator,

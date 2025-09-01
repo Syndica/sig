@@ -7,32 +7,19 @@ const Allocator = std.mem.Allocator;
 
 const ThreadPool = sig.sync.ThreadPool;
 
-const Ancestors = sig.core.Ancestors;
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 const SlotLeaders = sig.core.leader_schedule.SlotLeaders;
-const SlotState = sig.core.bank.SlotState;
 
 const AccountStore = sig.accounts_db.AccountStore;
-const AccountReader = sig.accounts_db.AccountReader;
 
 const LedgerDB = sig.ledger.LedgerDB;
-const LedgerReader = sig.ledger.LedgerReader;
 
 const ProgressMap = sig.consensus.ProgressMap;
-const HeaviestSubtreeForkChoice = sig.consensus.HeaviestSubtreeForkChoice;
-const AncestorHashesReplayUpdate = sig.replay.consensus.AncestorHashesReplayUpdate;
-const AncestorDuplicateSlotToRepair = replay.edge_cases.AncestorDuplicateSlotToRepair;
-const ThresholdConfirmedSlot = sig.consensus.vote_listener.ThresholdConfirmedSlot;
-const GossipVerifiedVoteHash = sig.consensus.vote_listener.GossipVerifiedVoteHash;
-const LatestValidatorVotes = sig.consensus.latest_validator_votes.LatestValidatorVotes;
-const SlotHistoryAccessor = sig.consensus.replay_tower.SlotHistoryAccessor;
 
 const ReplayExecutionState = replay.execution.ReplayExecutionState;
 const SlotTracker = replay.trackers.SlotTracker;
 const EpochTracker = replay.trackers.EpochTracker;
-
-const updateSysvarsForNewSlot = replay.update_sysvar.updateSysvarsForNewSlot;
 
 const LatestValidatorVotesForFrozenSlots =
     sig.consensus.latest_validator_votes.LatestValidatorVotes;
