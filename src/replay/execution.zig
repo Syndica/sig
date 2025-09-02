@@ -487,13 +487,13 @@ pub fn processReplayResults(
             const is_leader_block =
                 slot_info.constants.collector_id.equals(&state.my_identity);
             if (!is_leader_block) {
+                const epoch_for_slot = state.epoch_tracker.getForSlot(slot) orelse
+                    return error.MissingEpoch;
+
                 try replay.freeze.freezeSlot(state.allocator, .init(
                     .from(state.logger),
                     state.account_store,
-                    &(blk: {
-                        break :blk state.epoch_tracker.getForSlot(slot) orelse
-                            return error.MissingEpoch;
-                    }),
+                    &epoch_for_slot,
                     slot_info.state,
                     slot_info.constants,
                     slot,
