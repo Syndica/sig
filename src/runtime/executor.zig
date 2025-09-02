@@ -226,7 +226,7 @@ pub fn prepareCpiInstructionInfo(
 ) (error{OutOfMemory} || InstructionError)!InstructionInfo {
     const caller = try tc.getCurrentInstructionContext();
 
-    var callee_map: [InstructionInfo.MAX_ACCOUNT_METAS]u8 = @splat(0xff);
+    var dedup_map: [InstructionInfo.MAX_ACCOUNT_METAS]u8 = @splat(0xff);
     var instruction_accounts = InstructionInfo.AccountMetas{};
 
     for (callee.accounts) |account| {
@@ -235,7 +235,7 @@ pub fn prepareCpiInstructionInfo(
             return InstructionError.MissingAccount;
         };
 
-        const index_in_callee_ptr = &callee_map[index_in_transaction];
+        const index_in_callee_ptr = &dedup_map[index_in_transaction];
         if (index_in_callee_ptr.* < instruction_accounts.len) {
             const prev = &instruction_accounts.slice()[index_in_callee_ptr.*];
             prev.is_signer = prev.is_signer or account.is_signer;
@@ -253,7 +253,7 @@ pub fn prepareCpiInstructionInfo(
     }
 
     for (instruction_accounts.slice(), 0..) |*account, i| {
-        const index_in_callee = callee_map[account.index_in_transaction];
+        const index_in_callee = dedup_map[account.index_in_transaction];
 
         if (i != index_in_callee) {
             if (index_in_callee >= instruction_accounts.len) return error.NotEnoughAccountKeys;
@@ -309,36 +309,10 @@ pub fn prepareCpiInstructionInfo(
             .index_in_transaction = program_index_in_transaction,
         },
         .account_metas = instruction_accounts,
-        .dedup_map = callee_map,
+        .dedup_map = dedup_map,
         .instruction_data = callee.data,
         .initial_account_lamports = 0,
     };
-}
-
-/// [agave] https://github.com/anza-xyz/solana-sdk/blob/e1554f4067329a0dcf5035120ec6a06275d3b9ec/transaction-context/src/lib.rs#L452
-fn sumAccountLamports(
-    tc: *const TransactionContext,
-    account_metas: []const InstructionInfo.AccountMeta,
-) InstructionError!u128 {
-    var lamports: u128 = 0;
-    for (account_metas, 0..) |account_meta, index| {
-        if (account_meta.index_in_callee != index) continue;
-
-        const transaction_account = tc.getAccountAtIndex(
-            account_meta.index_in_transaction,
-        ) orelse return InstructionError.NotEnoughAccountKeys;
-
-        const account, const read_lock = transaction_account.readWithLock() orelse
-            return InstructionError.AccountBorrowOutstanding;
-        defer read_lock.release();
-
-        lamports = std.math.add(u128, lamports, account.lamports) catch {
-            // Effectively unreachable, would required greater
-            // than 1.8e19 accounts with max u64 lamports
-            return InstructionError.ProgramArithmeticOverflow;
-        };
-    }
-    return lamports;
 }
 
 test pushInstruction {
@@ -811,99 +785,5 @@ test "prepareCpiInstructionInfo" {
         defer feature_set.disable(.remove_accounts_executable_flag_checks);
 
         _ = try prepareCpiInstructionInfo(&tc, callee, &.{});
-    }
-}
-
-test "sumAccountLamports" {
-    const testing = sig.runtime.testing;
-
-    const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
-
-    var cache, var tc = try testing.createTransactionContext(
-        allocator,
-        prng.random(),
-        .{
-            .accounts = &.{
-                .{ .lamports = 0 },
-                .{ .lamports = 1 },
-                .{ .lamports = 2 },
-                .{ .lamports = 3 },
-            },
-        },
-    );
-    defer {
-        testing.deinitTransactionContext(allocator, tc);
-        cache.deinit(allocator);
-    }
-
-    {
-        // Success: 0 + 1 + 2 + 3 = 6
-        const account_metas = try testing.createInstructionInfoAccountMetas(&tc, &.{
-            .{ .index_in_transaction = 0 },
-            .{ .index_in_transaction = 1 },
-            .{ .index_in_transaction = 2 },
-            .{ .index_in_transaction = 3 },
-        });
-        try std.testing.expectEqual(
-            6,
-            try sumAccountLamports(&tc, account_metas.constSlice()),
-        );
-    }
-
-    {
-        // Success: 0 + 1 + 2 + 0 = 3
-        // First and last instruction account metas reference the same transaction account
-        const account_metas = try testing.createInstructionInfoAccountMetas(&tc, &.{
-            .{ .index_in_transaction = 0 },
-            .{ .index_in_transaction = 1 },
-            .{ .index_in_transaction = 2 },
-            .{ .index_in_transaction = 0 },
-        });
-
-        try std.testing.expectEqual(
-            3,
-            try sumAccountLamports(&tc, account_metas.constSlice()),
-        );
-    }
-
-    {
-        // Failure: NotEnoughAccountKeys
-        var account_metas = try testing.createInstructionInfoAccountMetas(&tc, &.{
-            .{ .index_in_transaction = 0 },
-            .{ .index_in_transaction = 1 },
-            .{ .index_in_transaction = 2 },
-            .{ .index_in_transaction = 3 },
-        });
-
-        account_metas.buffer[0].index_in_transaction = 4;
-
-        try std.testing.expectError(
-            InstructionError.NotEnoughAccountKeys,
-            sumAccountLamports(&tc, account_metas.constSlice()),
-        );
-    }
-
-    {
-        // Failure: AccountBorrowOutstanding
-        const borrowed_account = try tc.borrowAccountAtIndex(0, .{
-            .program_id = .ZEROES,
-            .is_signer = false,
-            .is_writable = false,
-            .remove_accounts_executable_flag_checks = false,
-        });
-        defer borrowed_account.release();
-
-        const account_metas = try testing.createInstructionInfoAccountMetas(&tc, &.{
-            .{ .index_in_transaction = 0 },
-            .{ .index_in_transaction = 1 },
-            .{ .index_in_transaction = 2 },
-            .{ .index_in_transaction = 3 },
-        });
-
-        try std.testing.expectError(
-            InstructionError.AccountBorrowOutstanding,
-            sumAccountLamports(&tc, account_metas.constSlice()),
-        );
     }
 }

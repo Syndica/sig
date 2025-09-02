@@ -471,7 +471,7 @@ fn updateCalleeAccount(
     callee_account: *BorrowedAccount,
     caller_account: *const CallerAccount,
     stricter_abi_and_runtime_constraints: bool,
-    direct_mapping: bool,
+    account_data_direct_mapping: bool,
 ) !bool {
     var must_update_caller = false;
 
@@ -493,7 +493,7 @@ fn updateCalleeAccount(
             // pointer to data may have changed, so caller must be updated
             must_update_caller = true;
         }
-        if (!direct_mapping and callee_account.checkDataIsMutable() == null) {
+        if (!account_data_direct_mapping and callee_account.checkDataIsMutable() == null) {
             try callee_account.setDataFromSlice(
                 allocator,
                 &ic.tc.accounts_resize_delta,
@@ -1514,40 +1514,42 @@ test "translateAccounts" {
 
     ctx.tc.serialized_accounts.appendAssumeCapacity(serialized_metadata);
 
-    // [agave] https://github.com/anza-xyz/agave/blob/04fd7a006d8b400096e14a69ac16e10dc3f6018a/programs/bpf_loader/src/syscalls/cpi.rs#L2554
-    const accounts = try translateAccounts(
-        allocator,
-        &ctx.ic,
-        &memory_map,
-        false, // is_loader_deprecated
-        AccountInfoRust,
-        vm_addr, // account_infos_addr
-        1, // account_infos_len
-        ctx.ic.ixn_info.program_meta.index_in_transaction, // program_meta_index
-        &.{
+    var dedup_map: [InstructionInfo.MAX_ACCOUNT_METAS]u8 = @splat(0xff);
+    dedup_map[account.index] = 0;
+    const cpi_info: InstructionInfo = .{
+        .program_meta = ctx.ic.ixn_info.program_meta,
+        .account_metas = try InstructionInfo.AccountMetas.fromSlice(&.{
             .{
                 .pubkey = account.key,
                 .index_in_transaction = account.index,
-                .index_in_caller = 0,
-                .index_in_callee = 0,
                 .is_signer = account.is_signer,
                 .is_writable = account.is_writable,
             },
             .{ // intentional duplicate to test skipping it
                 .pubkey = account.key,
                 .index_in_transaction = account.index,
-                .index_in_caller = 0,
-                .index_in_callee = 0,
                 .is_signer = account.is_signer,
                 .is_writable = account.is_writable,
             },
-        },
+        }),
+        .dedup_map = dedup_map,
+        .instruction_data = "",
+    };
+
+    const accounts = try translateAccounts(
+        allocator,
+        &ctx.ic,
+        &memory_map,
+        AccountInfoRust,
+        vm_addr, // account_infos_addr
+        1, // account_infos_len
+        &cpi_info, // cpi_info
     );
 
     try std.testing.expectEqual(accounts.len, 2);
-    try std.testing.expect(accounts.get(0).caller_account == null);
+    try std.testing.expect(accounts.get(0).update_caller_account_region);
 
-    const caller_account = accounts.get(1).caller_account.?;
+    const caller_account = accounts.get(1).caller_account;
     try std.testing.expect(std.mem.eql(u8, caller_account.serialized_data, account.data));
     try std.testing.expectEqual(caller_account.original_data_len, account.data.len);
 }
@@ -1886,11 +1888,10 @@ test "updateCalleeAccount: lamports owner" {
     _ = try updateCalleeAccount(
         allocator,
         &ctx.ic,
-        &ca.memory_map,
         &callee_account,
         &caller_account,
-        false, // is_loader_deprecated
-        false, // direct_mapping
+        false, // stricter_abi_and_runtime_constraints
+        false, // account_data_direct_mapping
     );
 
     try std.testing.expectEqual(callee_account.account.lamports, 42);
@@ -1926,11 +1927,10 @@ test "updateCalleeAccount: data" {
         _ = try updateCalleeAccount(
             allocator,
             &ctx.ic,
-            &ca.memory_map,
             &callee_account,
             &caller_account,
-            false, // is_loader_deprecated
-            false, // direct_mapping
+            false, // stricter_abi_and_runtime_constraints
+            false, // account_data_direct_mapping
         );
         try std.testing.expect(std.mem.eql(
             u8,
@@ -1950,11 +1950,10 @@ test "updateCalleeAccount: data" {
         _ = try updateCalleeAccount(
             allocator,
             &ctx.ic,
-            &ca.memory_map,
             &callee_account,
             &caller_account,
-            false, // is_loader_deprecated
-            false, // direct_mapping
+            false, // stricter_abi_and_runtime_constraints
+            false, // account_data_direct_mapping
         );
         try std.testing.expect(std.mem.eql(u8, callee_account.account.data, &.{}));
     }
@@ -1991,11 +1990,10 @@ test "updateCalleeAccount: data readonly" {
         updateCalleeAccount(
             allocator,
             &ctx.ic,
-            &ca.memory_map,
             &callee_account,
             &caller_account,
-            false, // is_loader_deprecated
-            false, // direct_mapping
+            false, // stricter_abi_and_runtime_constraints
+            false, // account_data_direct_mapping
         ),
     );
 
@@ -2008,11 +2006,10 @@ test "updateCalleeAccount: data readonly" {
         updateCalleeAccount(
             allocator,
             &ctx.ic,
-            &ca.memory_map,
             &callee_account,
             &caller_account,
-            false, // is_loader_deprecated
-            false, // direct_mapping
+            false, // stricter_abi_and_runtime_constraints
+            false, // account_data_direct_mapping
         ),
     );
 }
@@ -2058,11 +2055,10 @@ test "updateCalleeAccount: data direct mapping" {
         _ = try updateCalleeAccount(
             allocator,
             &ctx.ic,
-            &ca.memory_map,
             &callee_account,
             &caller_account,
-            false, // is_loader_deprecated
-            true, // direct_mapping
+            true, // stricter_abi_and_runtime_constraints
+            false, // account_data_direct_mapping
         );
         try std.testing.expect(std.mem.eql(u8, expected, callee_account.account.data));
     }
@@ -2075,11 +2071,10 @@ test "updateCalleeAccount: data direct mapping" {
     _ = try updateCalleeAccount(
         allocator,
         &ctx.ic,
-        &ca.memory_map,
         &callee_account,
         &caller_account,
-        false, // is_loader_deprecated
-        true, // direct_mapping
+        true, // stricter_abi_and_runtime_constraints
+        false, // account_data_direct_mappping        
     );
     try std.testing.expect(std.mem.eql(u8, callee_account.account.data, ""));
 }
@@ -2111,13 +2106,11 @@ test "updateCallerAccount: lamports owner" {
     try callee_account.setOwner(Pubkey.initRandom(prng.random()));
 
     try updateCallerAccount(
-        allocator,
         &ctx.ic,
         &ca.memory_map,
         &caller_account,
         &callee_account,
-        false, // is loader account
-        false, // direct mapping
+        false, // stricter_abi_and_runtime_constraints
     );
 
     try std.testing.expectEqual(caller_account.lamports.*, 42);
@@ -2164,13 +2157,11 @@ test "updateCallerAccount: data" {
         // Set to new slice.
         try callee_account.setDataFromSlice(allocator, &ctx.tc.accounts_resize_delta, new_value);
         try updateCallerAccount(
-            allocator,
             &ctx.ic,
             &ca.memory_map,
             &caller_account,
             &callee_account,
-            false, // is_loader_deprecated
-            false, // direct_mapping
+            false, // stricter_abi_and_runtime_constraints
         );
 
         const size = callee_account.account.data.len;
@@ -2195,13 +2186,11 @@ test "updateCallerAccount: data" {
         original_data_len + MAX_PERMITTED_DATA_INCREASE,
     );
     try updateCallerAccount(
-        allocator,
         &ctx.ic,
         &ca.memory_map,
         &caller_account,
         &callee_account,
-        false, // is_loader_deprecated
-        false, // direct_mapping
+        false, // stricter_abi_and_runtime_constraints
     );
 
     const realloced = ca.slice()[callee_account.account.data.len..];
@@ -2215,25 +2204,21 @@ test "updateCallerAccount: data" {
         original_data_len + MAX_PERMITTED_DATA_INCREASE + 1,
     );
     try std.testing.expectError(InstructionError.InvalidRealloc, updateCallerAccount(
-        allocator,
         &ctx.ic,
         &ca.memory_map,
         &caller_account,
         &callee_account,
-        false, // is_loader_deprecated
-        false, // direct_mapping
+        false, // stricter_abi_and_runtime_constraints
     ));
 
     // close the account
     try callee_account.setDataLength(allocator, &ctx.tc.accounts_resize_delta, 0);
     try updateCallerAccount(
-        allocator,
         &ctx.ic,
         &ca.memory_map,
         &caller_account,
         &callee_account,
-        false, // is_loader_deprecated
-        false, // direct_mapping
+        false, // stricter_abi_and_runtime_constraints
     );
     try std.testing.expectEqual(callee_account.account.data.len, 0);
 }
@@ -2278,13 +2263,11 @@ test "updateCallerAccount: data direct mapping" {
 
             try callee_account.setDataFromSlice(allocator, &ctx.tc.accounts_resize_delta, new);
             try updateCallerAccount(
-                allocator,
                 &ctx.ic,
                 &ca.memory_map,
                 &caller_account,
                 &callee_account,
-                false, // is_loader_deprecated
-                true, // direct_mapping
+                true, // stricter_abi_and_runtime_constraints
             );
 
             // Check the caller & callee account data pointers match
@@ -2342,13 +2325,11 @@ test "updateCallerAccount: data direct mapping" {
             original_data_len + MAX_PERMITTED_DATA_INCREASE,
         );
         try updateCallerAccount(
-            allocator,
             &ctx.ic,
             &ca.memory_map,
             &caller_account,
             &callee_account,
-            false, // is_loader_deprecated
-            true, // direct_mapping
+            true, // stricter_abi_and_runtime_constraints
         );
         try std.testing.expect(std.mem.allEqual(u8, caller_account.serialized_data, 0));
     }
@@ -2361,13 +2342,11 @@ test "updateCallerAccount: data direct mapping" {
             original_data_len + MAX_PERMITTED_DATA_INCREASE + 1,
         );
         try std.testing.expectError(InstructionError.InvalidRealloc, updateCallerAccount(
-            allocator,
             &ctx.ic,
             &ca.memory_map,
             &caller_account,
             &callee_account,
-            false, // is_loader_deprecated
-            false, // direct_mapping (false on overgrow?)
+            false, // stricter_abi_and_runtime_constraints (false on overgrow?)
         ));
         try std.testing.expect(std.mem.allEqual(u8, caller_account.serialized_data, 0));
     }
@@ -2377,13 +2356,11 @@ test "updateCallerAccount: data direct mapping" {
         try callee_account.setDataLength(allocator, &ctx.tc.accounts_resize_delta, 0);
         try callee_account.setOwner(system_program.ID);
         try updateCallerAccount(
-            allocator,
             &ctx.ic,
             &ca.memory_map,
             &caller_account,
             &callee_account,
-            false, // is_loader_deprecated
-            true, // direct_mapping
+            true, // stricter_abi_and_runtime_constraints
         );
         try std.testing.expectEqual(callee_account.constAccountData().len, 0);
     }
@@ -2419,13 +2396,11 @@ test "updateCallerAccount: data capacity direct mapping" {
         try std.testing.expectEqual(callee_account.constAccountData().len, 3);
 
         try updateCallerAccount(
-            allocator,
             &ctx.ic,
             &ca.memory_map,
             &caller_account,
             &callee_account,
-            false, // is_loader_deprecated
-            true, // direct_mapping
+            true, // stricter_abi_and_runtime_constraints
         );
 
         // TODO: ensure enough account data capacity (no data capacity atm).
