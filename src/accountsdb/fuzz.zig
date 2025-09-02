@@ -43,6 +43,11 @@ pub const TrackedAccount = struct {
 
 pub const RunCmd = struct {
     max_slots: ?Slot,
+    non_sequential_slots: bool,
+    index_allocation: ?IndexAllocation,
+    enable_manager: bool,
+
+    pub const IndexAllocation = enum { ram, disk };
 
     pub const parser = cli.Parser(RunCmd, .{
         .help = .{
@@ -58,9 +63,38 @@ pub const RunCmd = struct {
                 .config = {},
                 .help = "The number of slots number which, when surpassed, will exit the fuzzer.",
             },
+            .non_sequential_slots = .{
+                .kind = .named,
+                .name_override = null,
+                .alias = .none,
+                .default_value = false,
+                .config = {},
+                .help = "Enable non-sequential slots.",
+            },
+            .index_allocation = .{
+                .kind = .named,
+                .name_override = null,
+                .alias = .none,
+                .default_value = null,
+                .config = {},
+                .help =
+                \\Whether to use ram or disk for index allocation.
+                \\Defaults to a random value based on the seed.
+                ,
+            },
+            .enable_manager = .{
+                .kind = .named,
+                .name_override = null,
+                .alias = .none,
+                .default_value = false,
+                .config = {},
+                .help = "Enable the accountsdb manager during fuzzer.",
+            },
         },
     });
 };
+
+const Logger = sig.trace.Logger("accountsdb.fuzz");
 
 pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     var prng_state: std.Random.DefaultPrng = .init(seed);
@@ -83,7 +117,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
         .max_buffer = 1 << 20,
     }, null);
     defer std_logger.deinit();
-    const logger = std_logger.logger("accountsdb.fuzz");
+    const logger: Logger = std_logger.logger("accountsdb.fuzz");
 
     const run_cmd: RunCmd = cmd: {
         var argv_list: std.ArrayListUnmanaged([]const u8) = .empty;
@@ -102,6 +136,11 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     };
 
     const maybe_max_slots = run_cmd.max_slots;
+    const non_sequential_slots = run_cmd.non_sequential_slots;
+    const enable_manager = run_cmd.enable_manager;
+    const index_allocation =
+        run_cmd.index_allocation orelse
+        random.enumValue(RunCmd.IndexAllocation);
 
     var fuzz_data_dir = try std.fs.cwd().makeOpenPath(sig.FUZZ_DATA_DIR, .{});
     defer fuzz_data_dir.close();
@@ -126,18 +165,20 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
         };
     };
 
-    var last_full_snapshot_validated_slot: Slot = 0;
-    var last_inc_snapshot_validated_slot: Slot = 0;
+    logger.info().logf("enable manager: {}", .{enable_manager});
+    logger.info().logf("index allocation: {s}", .{@tagName(index_allocation)});
+    logger.info().logf("non-sequential slots: {}", .{non_sequential_slots});
 
-    const use_disk = random.boolean();
-    logger.info().logf("use disk: {}", .{use_disk});
     var accounts_db: AccountsDB = try .init(.{
         .allocator = allocator,
         .logger = .from(logger),
         .snapshot_dir = main_accountsdb_dir,
         .geyser_writer = null,
         .gossip_view = null,
-        .index_allocation = if (use_disk) .disk else .ram,
+        .index_allocation = switch (index_allocation) {
+            .ram => .ram,
+            .disk => .disk,
+        },
         .number_of_index_shards = sig.accounts_db.db.ACCOUNT_INDEX_SHARDS,
     });
     defer accounts_db.deinit();
@@ -146,18 +187,13 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     try accounts_db.account_index.expandRefCapacity(1_000_000);
 
     var manager_exit: std.atomic.Value(bool) = .init(false);
-    const manager_handle: std.Thread = try .spawn(.{}, sig.accounts_db.manager.runLoop, .{
-        &accounts_db, sig.accounts_db.manager.ManagerLoopConfig{
-            .exit = &manager_exit,
-            .slots_per_full_snapshot = 50_000,
-            .slots_per_incremental_snapshot = 5_000,
-            .zstd_nb_workers = @intCast(std.Thread.getCpuCount() catch 0),
-        },
+    var manager: sig.accounts_db.manager.Manager = try .init(allocator, &accounts_db, .{
+        .exit = &manager_exit,
+        .slots_per_full_snapshot = 50_000,
+        .slots_per_incremental_snapshot = 5_000,
+        .zstd_nb_workers = @intCast(std.Thread.getCpuCount() catch 0),
     });
-    defer {
-        manager_exit.store(true, .release);
-        manager_handle.join();
-    }
+    defer manager.deinit(allocator);
 
     var tracked_accounts_rw: sig.sync.RwMux(TrackedAccountsMap) = .init(.empty);
     defer {
@@ -185,32 +221,48 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
         // any validation (in the .get block of the main fuzzer
         // loop, we perform validation)
         threads.appendAssumeCapacity(try .spawn(.{}, readRandomAccounts, .{
+            logger,
             &accounts_db,
             &tracked_accounts_rw,
             seed + thread_i,
             &reader_exit,
             thread_i,
         }));
-        logger.debug().logf("started readRandomAccounts thread: {}", .{thread_i});
     }
 
+    var last_full_snapshot_validated_slot: Slot = 0;
+    var last_inc_snapshot_validated_slot: Slot = 0;
     var largest_rooted_slot: Slot = 0;
-    var slot: Slot = 0;
+    var top_slot: Slot = 0;
 
     var ancestors: sig.core.Ancestors = .EMPTY;
     defer ancestors.deinit(allocator);
 
     // get/put a bunch of accounts
     while (true) {
-        if (maybe_max_slots) |max_slots| if (slot >= max_slots) {
+        if (maybe_max_slots) |max_slots| if (top_slot >= max_slots) {
             logger.info().logf("reached max slots: {}", .{max_slots});
             break;
         };
-        defer switch (random.int(u2)) {
-            0 => slot += random.intRangeAtMost(Slot, 1, 2),
-            1, 2, 3 => {},
+        const will_inc_slot = switch (random.int(u2)) {
+            0 => true,
+            1, 2, 3 => false,
         };
-        try ancestors.addSlot(allocator, slot);
+        defer if (will_inc_slot) {
+            top_slot += random.intRangeAtMost(Slot, 1, 2);
+        };
+        try ancestors.addSlot(allocator, top_slot);
+
+        const current_slot = if (!non_sequential_slots) top_slot else slot: {
+            const ancestor_slots: []const Slot = ancestors.ancestors.keys();
+            std.debug.assert(ancestor_slots[ancestor_slots.len - 1] == top_slot);
+            const ancestor_index = random.intRangeLessThan(
+                usize,
+                ancestor_slots.len -| 10,
+                ancestor_slots.len,
+            );
+            break :slot ancestor_slots[ancestor_index];
+        };
 
         const action = random.enumValue(enum { put, get });
         switch (action) {
@@ -222,7 +274,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                 var pubkeys_this_slot: std.AutoHashMapUnmanaged(Pubkey, void) = .empty;
                 defer pubkeys_this_slot.deinit(allocator);
                 for (0..N_ACCOUNTS_PER_SLOT) |_| {
-                    var tracked_account = TrackedAccount.initRandom(random, slot);
+                    var tracked_account: TrackedAccount = .initRandom(random, current_slot);
 
                     const update_all_existing =
                         tracked_accounts.count() > N_ACCOUNTS_MAX;
@@ -243,7 +295,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
 
                     const account_shared_data = try tracked_account.toAccount(allocator);
                     defer account_shared_data.deinit(allocator);
-                    try accounts_db.putAccount(slot, pubkey, account_shared_data);
+                    try accounts_db.putAccount(current_slot, pubkey, account_shared_data);
 
                     // always overwrite the old slot
                     try tracked_accounts.put(allocator, pubkey, tracked_account);
@@ -281,7 +333,10 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
 
                 const account =
                     try accounts_db.getAccountWithAncestors(&pubkey, &ancestors_sub) orelse {
-                        logger.err().logf("accounts_db missing tracked account '{}': {}", .{ pubkey, tracked_account });
+                        logger.err().logf(
+                            "accounts_db missing tracked account '{}': {}",
+                            .{ pubkey, tracked_account },
+                        );
                         return error.MissingAccount;
                     };
                 defer account.deinit(allocator);
@@ -297,13 +352,15 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
             },
         }
 
-        const create_new_root = random.boolean();
-        if (create_new_root) {
-            largest_rooted_slot = @min(slot, largest_rooted_slot + 2);
+        const create_new_root =
+            enable_manager and
+            will_inc_slot and
+            random.int(u8) == 0;
+        if (create_new_root) snapshot_validation: {
+            largest_rooted_slot = @min(top_slot, largest_rooted_slot + 2);
             accounts_db.largest_rooted_slot.store(largest_rooted_slot, .monotonic);
-        }
+            try manager.manage(allocator);
 
-        snapshot_validation: {
             // holding the lock here means that the snapshot archive(s) wont be deleted
             // since deletion requires a write lock
             const maybe_latest_snapshot_info, //
@@ -449,20 +506,21 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
 }
 
 fn readRandomAccounts(
+    logger: Logger,
     db: *AccountsDB,
     tracked_accounts_rw: *sig.sync.RwMux(TrackedAccountsMap),
     seed: u64,
     exit: *std.atomic.Value(bool),
     thread_id: usize,
 ) void {
-    var prng = std.Random.DefaultPrng.init(seed);
+    logger.debug().logf("started readRandomAccounts thread: {}", .{thread_id});
+    defer logger.debug().logf("finishing readRandomAccounts thread: {}", .{thread_id});
+
+    var prng: std.Random.DefaultPrng = .init(seed);
     const random = prng.random();
 
     while (true) {
-        if (exit.load(.seq_cst)) {
-            std.debug.print("finishing readRandomAccounts thread: {}\n", .{thread_id});
-            return;
-        }
+        if (exit.load(.seq_cst)) return;
 
         var pubkeys: [50]Pubkey = undefined;
         {
