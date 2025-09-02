@@ -131,7 +131,7 @@ fn executeSyscall(
         false,
     );
 
-    const reject_broken_elfs = true;
+    const reject_broken_elfs = false;
     const debugging_features = false;
     const direct_mapping = tc.feature_set.active(
         .bpf_account_data_direct_mapping,
