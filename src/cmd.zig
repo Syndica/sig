@@ -122,6 +122,7 @@ pub fn main() !void {
             params.accountsdb_download.apply(&current_config);
             params.accountsdb_index.apply(&current_config);
             params.geyser.apply(&current_config);
+            current_config.minimal_replay = params.minimal_replay;
             try validator(gpa, gossip_gpa, current_config);
         },
         .replay_offline => |params| {
@@ -136,6 +137,7 @@ pub fn main() !void {
             params.accountsdb_download.apply(&current_config);
             params.accountsdb_index.apply(&current_config);
             params.geyser.apply(&current_config);
+            current_config.minimal_replay = params.minimal_replay;
             try replayOffline(gpa, current_config);
         },
         .shred_network => |params| {
@@ -1207,7 +1209,7 @@ fn validator(
     defer replay_receivers.destroy();
 
     const replay_thread = if (cfg.minimal_replay) try app_base.spawnService(
-        "replay",
+        "replay minimal",
         sig.replay.service.runMinimal,
         .{replay_deps},
     ) else try app_base.spawnService(
