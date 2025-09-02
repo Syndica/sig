@@ -44,7 +44,6 @@ pub const Manager = struct {
     shrink_account_files: std.AutoArrayHashMapUnmanaged(FileId, void),
     delete_account_files: std.AutoArrayHashMapUnmanaged(FileId, void),
     zstd_compressor: zstd.Compressor,
-    zstd_sfba_state: std.heap.StackFallbackAllocator(sfba_size),
     zstd_buffer: []u8,
     prng: std.Random.DefaultPrng,
     tmp_bank_fields: BankFields,
@@ -66,11 +65,8 @@ pub const Manager = struct {
         });
         errdefer zstd_compressor.deinit();
 
-        var zstd_sfba_state = std.heap.stackFallback(4096 * 4, allocator);
-        const zstd_sfba = zstd_sfba_state.get();
-
-        const zstd_buffer = try zstd_sfba.alloc(u8, zstd.Compressor.recommOutSize());
-        errdefer zstd_sfba.free(zstd_buffer);
+        const zstd_buffer = try allocator.alloc(u8, zstd.Compressor.recommOutSize());
+        errdefer allocator.free(zstd_buffer);
 
         // TODO: get rid of this once `generateFullSnapshot` can actually
         // derive this data correctly by itdb.
@@ -87,7 +83,6 @@ pub const Manager = struct {
             .shrink_account_files = .empty,
             .delete_account_files = .empty,
             .zstd_compressor = zstd_compressor,
-            .zstd_sfba_state = zstd_sfba_state,
             .zstd_buffer = zstd_buffer,
             .prng = prng,
             .tmp_bank_fields = tmp_bank_fields,
@@ -96,9 +91,9 @@ pub const Manager = struct {
 
     pub fn deinit(const_self: Manager, allocator: Allocator) void {
         var self = const_self;
-        self.tmp_bank_fields.deinit(allocator);
-        self.zstd_sfba_state.get().free(self.zstd_buffer);
+        allocator.free(self.zstd_buffer);
         self.zstd_compressor.deinit();
+        self.tmp_bank_fields.deinit(allocator);
         self.flush_slots.deinit(allocator);
         self.unclean_account_files.deinit(allocator);
         self.shrink_account_files.deinit(allocator);
@@ -113,19 +108,16 @@ pub const Manager = struct {
         self.timer = try std.time.Timer.start();
         while (!self.config.exit.load(.acquire)) {
             try self.manage(allocator);
-        }
-    }
-
-    pub fn manage(self: *Manager, allocator: Allocator) !void {
-        tracy.frameMarkNamed("manager loop");
-
-        defer {
             const elapsed = self.timer.lap();
             if (elapsed < DB_MANAGER_LOOP_MIN.asNanos()) {
                 const delay = DB_MANAGER_LOOP_MIN.asNanos() - elapsed;
                 std.time.sleep(delay);
             }
         }
+    }
+
+    pub fn manage(self: *Manager, allocator: Allocator) !void {
+        tracy.frameMarkNamed("manager loop");
 
         {
             const unrooted_accounts, var unrooted_accounts_lg =
