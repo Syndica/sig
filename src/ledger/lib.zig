@@ -29,6 +29,7 @@ pub const UnifiedLedger = struct {
     const std = @import("std");
     const sig = @import("../sig.zig");
 
+    /// join first to avoid UB
     pub fn deinit(self: UnifiedLedger, allocator: std.mem.Allocator) void {
         self.exit.store(true, .monotonic);
         self.db.deinit();
@@ -37,6 +38,10 @@ pub const UnifiedLedger = struct {
         allocator.destroy(self.reader);
         allocator.destroy(self.result_writer);
         allocator.destroy(self.db);
+    }
+
+    pub fn join(self: UnifiedLedger) void {
+        self.cleanup_service_handle.join();
     }
 
     pub fn init(
@@ -117,5 +122,10 @@ test "UnifiedLedger doesn't leak" {
     defer allocator.free(path);
 
     const ledger = try UnifiedLedger.init(allocator, .FOR_TESTS, path, &registry, &exit, 1_000);
-    ledger.deinit(allocator);
+    defer ledger.deinit(allocator);
+
+    exit.store(true, .monotonic);
+    var timer = try sig.time.Timer.start();
+    ledger.join();
+    try std.testing.expect(timer.read().lt(.fromSecs(1)));
 }

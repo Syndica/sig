@@ -1220,7 +1220,7 @@ fn validator(
     rpc_epoch_ctx_service_thread.join();
     gossip_service.service_manager.join();
     shred_network_manager.join();
-    ledger.cleanup_service_handle.join();
+    ledger.join();
 }
 
 /// entrypoint to run a minimal replay node
@@ -1330,7 +1330,7 @@ fn replayOffline(
     );
 
     replay_thread.join();
-    ledger.cleanup_service_handle.join();
+    ledger.join();
 }
 
 fn shredNetwork(
@@ -1418,7 +1418,7 @@ fn shredNetwork(
     rpc_epoch_ctx_service_thread.join();
     gossip_service.service_manager.join();
     shred_network_manager.join();
-    ledger.cleanup_service_handle.join();
+    ledger.join();
 }
 
 fn printManifest(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
