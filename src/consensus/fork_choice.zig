@@ -207,45 +207,45 @@ pub const ForkChoice = struct {
     /// Updates fork choice metrics based on current state
     fn updateMetrics(self: *ForkChoice) void {
         const now = Instant.now();
-        const update_interval = @as(f64, @floatFromInt(now.elapsedSince(self.last_root_time).ns)) / 1_000_000_000.0; // Convert to seconds
-        self.metrics.fork_choice_update_interval.observe(update_interval);
+        const update_interval = now.elapsedSince(self.last_root_time);
+        self.metrics.fork_choice_update_interval.observe(update_interval.asMicros());
         self.metrics.fork_choice_updates.inc();
-        self.last_root_time = now;
 
         // Calculate basic consensus metrics
         var total_stake: u64 = 0;
-        var active_fork_count: u64 = 0;
-        var current_heaviest_slot: ?u64 = null;
-        var current_deepest_slot: ?u64 = null;
+        var candidate_count: u64 = 0;
+        var maybe_current_heaviest_slot: ?u64 = null;
+        var maybe_current_deepest_slot: ?u64 = null;
 
-        var it = self.fork_infos.iterator();
-        while (it.next()) |entry| {
-            const fork_info = entry.value_ptr;
-
+        var it = self.fork_infos.valueIterator();
+        while (it.next()) |fork_info| {
             total_stake += fork_info.stake_for_subtree;
 
             // Count active forks (those that are candidates)
             if (fork_info.isCandidate()) {
-                active_fork_count += 1;
+                candidate_count += 1;
 
-                // Track heaviest and deepest slots
-                if (current_heaviest_slot == null or fork_info.heaviest_subtree_slot.slot > current_heaviest_slot.?) {
-                    current_heaviest_slot = fork_info.heaviest_subtree_slot.slot;
+                if (maybe_current_heaviest_slot) |current_heaviest_slot| {
+                    if (fork_info.heaviest_subtree_slot.slot > current_heaviest_slot) {
+                        maybe_current_heaviest_slot = fork_info.heaviest_subtree_slot.slot;
+                    }
                 }
-                if (current_deepest_slot == null or fork_info.deepest_slot.slot > current_deepest_slot.?) {
-                    current_deepest_slot = fork_info.deepest_slot.slot;
+
+                if (maybe_current_deepest_slot) |current_deepest_slot| {
+                    if (fork_info.deepest_slot.slot > current_deepest_slot) {
+                        maybe_current_deepest_slot = fork_info.deepest_slot.slot;
+                    }
                 }
             }
         }
 
-        // Set gauge metrics
         self.metrics.total_stake_in_tree.set(total_stake);
-        self.metrics.active_fork_count.set(active_fork_count);
+        self.metrics.active_fork_count.set(candidate_count);
 
-        if (current_heaviest_slot) |slot| {
+        if (maybe_current_heaviest_slot) |slot| {
             self.metrics.current_heaviest_subtree_slot.set(slot);
         }
-        if (current_deepest_slot) |slot| {
+        if (maybe_current_deepest_slot) |slot| {
             self.metrics.current_deepest_slot.set(slot);
         }
     }
@@ -5086,7 +5086,6 @@ pub fn testEpochStakes(
     return stakes;
 }
 
-/// Metrics for tracking fork choice behavior and performance
 pub const ForkChoiceMetrics = struct {
     /// Current heaviest subtree slot (the slot with most stake)
     current_heaviest_subtree_slot: *sig.prometheus.Gauge(u64),
