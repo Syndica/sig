@@ -1231,7 +1231,11 @@ fn validator(
             .enable_consensus = if (cfg.disable_consensus)
                 null
             else
-                .{ replay_senders, replay_receivers },
+                .{
+                    .senders = replay_senders,
+                    .receivers = replay_receivers,
+                    .gossip_table = &gossip_service.gossip_table_rw,
+                },
             .num_threads = cfg.replay_threads,
         } },
     );
@@ -1346,7 +1350,7 @@ fn replayOffline(
             .enable_consensus = if (cfg.disable_consensus)
                 null
             else
-                .{ replay_senders, replay_receivers },
+                .{ .senders = replay_senders, .receivers = replay_receivers, .gossip_table = null },
             .num_threads = cfg.replay_threads,
         } },
     );

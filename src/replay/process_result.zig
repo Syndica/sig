@@ -48,8 +48,8 @@ pub const ProcessResultState = struct {
     ledger_reader: *LedgerReader,
     ledger_result_writer: *sig.ledger.LedgerResultWriter,
     progress_map: *ProgressMap,
-    slot_tracker: *SlotTracker,
-    epochs: *EpochTracker,
+    slot_tracker: *const SlotTracker,
+    epoch_tracker: *const EpochTracker,
 
     // consensus data
     ancestor_hashes_replay_update_sender: *sig.sync.Channel(AncestorHashesReplayUpdate),
@@ -76,6 +76,7 @@ pub fn processResult(
     }
 
     const slot_info = state.slot_tracker.get(slot) orelse return error.MissingSlotInTracker;
+    const epoch_info = state.epoch_tracker.getForSlot(slot) orelse return error.MissingEpoch;
 
     // Freeze the bank if its entries where completly processed.
     if (slot_info.state.tickHeight() == slot_info.constants.max_tick_height) {
@@ -86,7 +87,7 @@ pub fn processResult(
             try replay.freeze.freezeSlot(state.allocator, .init(
                 .from(state.logger),
                 state.account_store,
-                &(state.epochs.getForSlot(slot) orelse return error.MissingEpoch),
+                &epoch_info,
                 slot_info.state,
                 slot_info.constants,
                 slot,
@@ -369,7 +370,7 @@ const TestReplayStateResources = struct {
             .ledger_reader = &self.ledger_reader,
             .ledger_result_writer = &self.ledger_result_writer,
             .slot_tracker = &self.slot_tracker,
-            .epochs = &self.epochs,
+            .epoch_tracker = &self.epochs,
             .progress_map = &self.progress,
             .fork_choice = self.fork_choice,
             .duplicate_slots_tracker = &self.duplicate_slots_tracker,

@@ -29,6 +29,9 @@ const Logger = sig.trace.Logger("replay.execution");
 
 const SvmGateway = replay.svm_gateway.SvmGateway;
 
+const vote_listener = sig.consensus.vote_listener;
+const ParsedVote = vote_listener.vote_parser.ParsedVote;
+
 const confirmSlot = replay.confirm_slot.confirmSlot;
 const confirmSlotSync = replay.confirm_slot.confirmSlotSync;
 
@@ -45,10 +48,11 @@ pub const ReplayExecutionState = struct {
     account_store: AccountStore,
     thread_pool: *ThreadPool,
     ledger_reader: *LedgerReader,
-    slot_tracker: *SlotTracker,
-    epochs: *EpochTracker,
+    slot_tracker: *const SlotTracker,
+    epoch_tracker: *const EpochTracker,
     progress_map: *ProgressMap,
     status_cache: *sig.core.StatusCache,
+    replay_votes_channel: *sig.sync.Channel(ParsedVote),
 };
 
 /// 1. Replays transactions from all the slots that need to be replayed.
@@ -250,7 +254,7 @@ fn prepareSlot(state: ReplayExecutionState, slot: Slot) !PreparedSlot {
         return .dead;
     }
 
-    const epoch_info = state.epochs.getPtrForSlot(slot) orelse return error.MissingEpoch;
+    const epoch_constants = state.epoch_tracker.getPtrForSlot(slot) orelse return error.MissingEpoch;
     const slot_info = state.slot_tracker.get(slot) orelse return error.MissingSlot;
 
     const i_am_leader = slot_info.constants.collector_id.equals(&state.my_identity);
@@ -268,7 +272,7 @@ fn prepareSlot(state: ReplayExecutionState, slot: Slot) !PreparedSlot {
             .last_entry = slot_info.state.blockhash_queue.readField("last_hash") orelse
                 return error.MissingLastHash,
             .i_am_leader = i_am_leader,
-            .epoch_stakes = &epoch_info.stakes,
+            .epoch_stakes = &epoch_constants.stakes,
             .now = sig.time.Instant.now(),
             .validator_vote_pubkey = state.vote_account,
         });
@@ -316,7 +320,7 @@ fn prepareSlot(state: ReplayExecutionState, slot: Slot) !PreparedSlot {
 
     const new_rate_activation_epoch =
         if (slot_info.constants.feature_set.get(.reduce_stake_warmup_cooldown)) |active_slot|
-            state.epochs.schedule.getEpoch(active_slot)
+            state.epoch_tracker.schedule.getEpoch(active_slot)
         else
             null;
 
@@ -348,8 +352,8 @@ fn prepareSlot(state: ReplayExecutionState, slot: Slot) !PreparedSlot {
         .account_reader = slot_account_reader,
         .ancestors = &slot_info.constants.ancestors,
         .feature_set = slot_info.constants.feature_set,
-        .rent_collector = &epoch_info.rent_collector,
-        .epoch_stakes = &epoch_info.stakes,
+        .rent_collector = &epoch_constants.rent_collector,
+        .epoch_stakes = &epoch_constants.stakes,
         .status_cache = state.status_cache,
     };
 
@@ -360,12 +364,13 @@ fn prepareSlot(state: ReplayExecutionState, slot: Slot) !PreparedSlot {
         .status_cache = state.status_cache,
         .stakes_cache = &slot_info.state.stakes_cache,
         .new_rate_activation_epoch = new_rate_activation_epoch,
+        .replay_votes_sender = state.replay_votes_channel,
     };
 
     const verify_ticks_params = replay.confirm_slot.VerifyTicksParams{
         .tick_height = slot_info.state.tickHeight(),
         .max_tick_height = slot_info.constants.max_tick_height,
-        .hashes_per_tick = epoch_info.hashes_per_tick,
+        .hashes_per_tick = epoch_constants.hashes_per_tick,
         .slot = slot,
         .slot_is_full = slot_is_full,
         .tick_hash_count = &confirmation_progress.tick_hash_count,
