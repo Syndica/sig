@@ -564,11 +564,11 @@ fn advanceReplay(state: *ReplayState, consensus: *ConsensusState) !void {
         }
     }
 
-    const slot_history_accessor = SlotHistoryAccessor
-        .init(state.account_store.reader());
+    const slot_history_accessor = SlotHistoryAccessor.init(state.account_store.reader());
 
     replay.consensus.processConsensus(.{
         .allocator = allocator,
+        .logger = .from(state.logger),
         .replay_tower = &consensus.replay_tower,
         .progress_map = &state.progress_map,
         .slot_tracker = &state.slot_tracker,
@@ -581,6 +581,8 @@ fn advanceReplay(state: *ReplayState, consensus: *ConsensusState) !void {
         .vote_account = state.my_identity, // TODO: use explicitly distinct vote authority
         .slot_history_accessor = &slot_history_accessor,
         .latest_validator_votes_for_frozen_banks = &consensus.latest_validator_votes,
+        .slot_data = &consensus.slot_data,
+        .ancestor_hashes_replay_update_sender = consensus.senders.ancestor_hashes_replay_update,
     }) catch |e| {
         // ignore errors in consensus since they are expected until the inputs are provided
         state.logger.err().logf("consensus failed with an error: {}", .{e});

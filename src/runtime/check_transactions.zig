@@ -113,6 +113,7 @@ pub fn checkFeePayer(
         transaction,
         &fee_payer_key,
         true,
+        feature_set.active(.formalize_loaded_transaction_data_size, slot),
     ) orelse return .{ .err = .AccountNotFound };
 
     const fee_payer_loaded_rent_epoch = loaded_fee_payer.account.rent_epoch;
@@ -490,6 +491,7 @@ test "checkAge: recent blockhash" {
         .msg_hash = Hash.ZEROES,
         .recent_blockhash = recent_blockhash,
         .instructions = &.{},
+        .num_lookup_tables = 0,
     };
 
     var blockhash_queue = try BlockhashQueue.initWithSingleEntry(
@@ -617,6 +619,7 @@ test "checkAge: nonce account" {
             .initial_account_lamports = 0,
         }},
         .accounts = accounts,
+        .num_lookup_tables = 0,
     };
 
     var blockhash_queue = BlockhashQueue{
@@ -682,6 +685,7 @@ test "checkFeePayer: happy path fee payer only" {
         .msg_hash = Hash.ZEROES,
         .recent_blockhash = recent_blockhash,
         .instructions = &.{},
+        .num_lookup_tables = 0,
     };
     defer transaction.accounts.deinit(allocator);
 
@@ -735,6 +739,7 @@ test "checkFeePayer: happy path with same nonce and fee payer" {
         .msg_hash = Hash.ZEROES,
         .recent_blockhash = recent_blockhash,
         .instructions = &.{},
+        .num_lookup_tables = 0,
     };
     defer transaction.accounts.deinit(allocator);
 
@@ -798,6 +803,7 @@ test "checkFeePayer: happy path with separate nonce and fee payer" {
         .msg_hash = Hash.ZEROES,
         .recent_blockhash = recent_blockhash,
         .instructions = &.{},
+        .num_lookup_tables = 0,
     };
     defer transaction.accounts.deinit(allocator);
 
