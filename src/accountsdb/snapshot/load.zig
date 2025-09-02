@@ -215,7 +215,12 @@ test loadSnapshot {
 
     var loaded_snapshot = try loadSnapshot(
         allocator,
-        .{ .snapshot_dir = path },
+        .{
+            .snapshot_dir = path,
+            .number_of_index_shards = 4,
+            .num_threads_snapshot_load = 1,
+            .accounts_per_file_estimate = 500,
+        },
         sig.TEST_DATA_DIR ++ "/genesis.bin",
         .FOR_TESTS,
         .{
