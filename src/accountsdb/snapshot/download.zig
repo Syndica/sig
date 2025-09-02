@@ -1,7 +1,7 @@
 //! logic for downloading a snapshot
 
 const std = @import("std");
-const sig = @import("../sig.zig");
+const sig = @import("../../sig.zig");
 const tracy = @import("tracy");
 
 const GossipService = sig.gossip.GossipService;
@@ -14,10 +14,10 @@ const SignedGossipData = sig.gossip.data.SignedGossipData;
 const SlotAndHash = sig.core.hash.SlotAndHash;
 const ThreadSafeContactInfo = sig.gossip.data.ThreadSafeContactInfo;
 
-const SnapshotFiles = sig.accounts_db.SnapshotFiles;
-const FullAndIncrementalManifest = sig.accounts_db.FullAndIncrementalManifest;
+const SnapshotFiles = sig.accounts_db.snapshot.SnapshotFiles;
+const FullAndIncrementalManifest = sig.accounts_db.snapshot.FullAndIncrementalManifest;
 
-const parallelUnpackZstdTarBall = sig.accounts_db.parallelUnpackZstdTarBall;
+const parallelUnpackZstdTarBall = sig.accounts_db.snapshot.parallelUnpackZstdTarBall;
 
 // NOTE: this also represents the interval at which progress updates are issued
 const DOWNLOAD_WARMUP_TIME = sig.time.Duration.fromSecs(20);
@@ -266,8 +266,9 @@ pub fn downloadSnapshotsFromGossip(
 
         const bStr = sig.utils.fmt.boundedString;
         const bFmt = sig.utils.fmt.boundedFmt;
-        const FullSnapshotFileInfo = sig.accounts_db.snapshots.FullSnapshotFileInfo;
-        const IncrementalSnapshotFileInfo = sig.accounts_db.snapshots.IncrementalSnapshotFileInfo;
+        const FullSnapshotFileInfo = sig.accounts_db.snapshot.data.FullSnapshotFileInfo;
+        const IncrementalSnapshotFileInfo =
+            sig.accounts_db.snapshot.data.IncrementalSnapshotFileInfo;
 
         const download_buffer = try allocator.alloc(u8, 1 * BYTE_PER_MIB);
         defer allocator.free(download_buffer);

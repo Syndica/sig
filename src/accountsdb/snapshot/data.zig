@@ -2,7 +2,7 @@
 
 const std = @import("std");
 const zstd = @import("zstd");
-const sig = @import("../sig.zig");
+const sig = @import("../../sig.zig");
 const base58 = @import("base58");
 const tracy = @import("tracy");
 
