@@ -194,7 +194,7 @@ fn replaySlot(state: ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
         return .dead;
     }
 
-    const epoch_info = state.epochs.getForSlot(slot) orelse return error.MissingEpoch;
+    const epoch_info = state.epochs.getPtrForSlot(slot) orelse return error.MissingEpoch;
     const slot_info = state.slot_tracker.get(slot) orelse return error.MissingSlot;
 
     const i_am_leader = slot_info.constants.collector_id.equals(&state.my_identity);
