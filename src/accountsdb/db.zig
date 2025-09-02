@@ -1650,8 +1650,9 @@ pub const AccountsDB = struct {
                     self.unrooted_accounts.readWithLock();
                 defer unrooted_accounts_lg.unlock();
 
-                const accounts = (unrooted_accounts.get(account_ref.slot) orelse
-                    return error.SlotNotFound).items(.account);
+                const slots_and_accounts = unrooted_accounts.get(account_ref.slot) orelse
+                    return error.SlotNotFound;
+                const accounts: []Account = slots_and_accounts.items(.account);
                 const account = accounts[ref_info.index];
 
                 return try account.cloneOwned(self.allocator);
