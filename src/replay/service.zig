@@ -666,10 +666,12 @@ fn doConsensus(
             ) |slot, info| {
                 const slot_ancestors = &info.constants.ancestors.ancestors;
                 const ancestor_gop = try ancestors.getOrPutValue(arena, slot, .EMPTY);
-                try ancestor_gop.value_ptr.ancestors.ensureUnusedCapacity(arena, slot_ancestors.count());
+                try ancestor_gop.value_ptr.ancestors
+                    .ensureUnusedCapacity(arena, slot_ancestors.count());
                 for (slot_ancestors.keys()) |ancestor_slot| {
                     try ancestor_gop.value_ptr.addSlot(arena, ancestor_slot);
-                    const descendants_gop = try descendants.getOrPutValue(arena, ancestor_slot, .empty);
+                    const descendants_gop =
+                        try descendants.getOrPutValue(arena, ancestor_slot, .empty);
                     try descendants_gop.value_ptr.put(arena, slot);
                 }
             }
