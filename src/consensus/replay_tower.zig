@@ -55,6 +55,11 @@ pub const VOTE_THRESHOLD_SIZE: f64 = 2.0 / 3.0;
 pub const ExpirationSlot = Slot;
 const VotedSlotAndPubkey = struct { slot: Slot, pubkey: Pubkey };
 
+pub const LastVoteSignal = enum {
+    normal,
+    stray,
+};
+
 const ComputedBankState = struct {
     /// Maps each validator (by their Pubkey) to the amount of stake they have voted
     /// with on this fork. Helps determine who has already committed to this
@@ -191,6 +196,7 @@ pub const ReplayTower = struct {
     /// bank_forks (=~ ledger) lacks the slot or not.
     stray_restored_slot: ?Slot,
     last_switch_threshold_check: ?struct { Slot, SwitchForkDecision },
+    metrics: ReplayTowerMetrics,
 
     const Self = @This();
 
@@ -221,6 +227,7 @@ pub const ReplayTower = struct {
             .last_timestamp = BlockTimestamp.ZEROES,
             .stray_restored_slot = null,
             .last_switch_threshold_check = null,
+            .metrics = try ReplayTowerMetrics.init(),
         };
     }
 
@@ -311,9 +318,15 @@ pub const ReplayTower = struct {
         // TODO expose feature set on Bank
         const is_enable_tower_active = true;
 
-        const new_root = try self.tower.recordBankVoteAndUpdateLockouts(
+        const new_root = self.tower.recordBankVoteAndUpdateLockouts(
             vote_slot,
-        );
+        ) catch |err| switch (err) {
+            error.VoteTooOld => {
+                self.metrics.trackStaleVoteRejected();
+                return err;
+            },
+            else => return err,
+        };
 
         try self.updateLastVoteFromVoteState(
             allocator,
@@ -895,9 +908,22 @@ pub const ReplayTower = struct {
         return allocator.dupe(ThresholdDecision, threshold_decisions[0..index]);
     }
 
+    fn lastVoteSignal(self: *const ReplayTower) LastVoteSignal {
+        return if (self.stray_restored_slot != null and
+            self.stray_restored_slot == self.lastVotedSlot())
+            .stray
+        else
+            .normal;
+    }
+
     pub fn isStrayLastVote(self: *const ReplayTower) bool {
-        return (self.stray_restored_slot != null and
-            self.stray_restored_slot == self.lastVotedSlot());
+        const signal = self.lastVoteSignal();
+
+        if (signal == .stray) {
+            self.metrics.trackStrayRestoredSlot();
+        }
+
+        return signal == .stray;
     }
 
     /// Adjusts the tower's lockouts after a replay of the ledger up to `replayed_root`.
@@ -1451,6 +1477,7 @@ pub const ReplayTower = struct {
             &failure_reasons,
             &candidate_slots.switch_fork_decision,
         )) {
+            self.metrics.trackForkSwitchingMetrics(candidate_slots.switch_fork_decision);
             return SelectVoteAndResetForkResult{
                 .vote_slot = .{
                     .slot = candidate_vote_slot,
@@ -4043,6 +4070,7 @@ pub fn createTestReplayTower(
         .last_timestamp = BlockTimestamp.ZEROES,
         .stray_restored_slot = null,
         .last_switch_threshold_check = null,
+        .metrics = try ReplayTowerMetrics.init(),
     };
 
     replay_tower.threshold_depth = threshold_depth;
@@ -4608,3 +4636,42 @@ fn genStakes(
     }
     return map;
 }
+
+pub const ReplayTowerMetrics = struct {
+    fork_switching_successes: *sig.prometheus.Counter,
+    fork_switching_failures: *sig.prometheus.Counter,
+
+    stale_votes_rejected: *sig.prometheus.Counter,
+    stray_restored_slots: *sig.prometheus.Counter,
+
+    pub const prefix = "replay_tower";
+
+    pub fn init() sig.prometheus.GetMetricError!ReplayTowerMetrics {
+        return sig.prometheus.globalRegistry().initStruct(ReplayTowerMetrics);
+    }
+
+    pub fn trackForkSwitchingMetrics(
+        self: *const ReplayTowerMetrics,
+        decision: SwitchForkDecision,
+    ) void {
+        switch (decision) {
+            .switch_proof => {
+                self.fork_switching_successes.inc();
+            },
+            .same_fork => {
+                // No metrics needed for same fork
+            },
+            .failed_switch_threshold, .failed_switch_duplicate_rollback => {
+                self.fork_switching_failures.inc();
+            },
+        }
+    }
+
+    pub fn trackStaleVoteRejected(self: *const ReplayTowerMetrics) void {
+        self.stale_votes_rejected.inc();
+    }
+
+    pub fn trackStrayRestoredSlot(self: *const ReplayTowerMetrics) void {
+        self.stray_restored_slots.inc();
+    }
+};
