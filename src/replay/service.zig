@@ -30,9 +30,12 @@ const SlotHistoryAccessor = sig.consensus.replay_tower.SlotHistoryAccessor;
 
 const ProcessResultState = replay.process_result.ProcessResultState;
 const ReplayExecutionState = replay.execution.ReplayExecutionState;
-const SlotTracker = replay.trackers.SlotTracker;
-const EpochTracker = replay.trackers.EpochTracker;
+const ReplayResult = replay.execution.ReplayResult;
 
+const EpochTracker = replay.trackers.EpochTracker;
+const SlotTracker = replay.trackers.SlotTracker;
+
+const awaitResults = replay.execution.awaitResults;
 const processResult = replay.process_result.processResult;
 const updateSysvarsForNewSlot = replay.update_sysvar.updateSysvarsForNewSlot;
 
@@ -41,15 +44,12 @@ const LatestValidatorVotesForFrozenSlots =
 
 pub const Logger = sig.trace.Logger("replay");
 
-/// Number of threads to use in replay's thread pool
-const NUM_THREADS = 4;
-
 const SWITCH_FORK_THRESHOLD: f64 = 0.38;
 const MAX_ENTRIES: u64 = 1024 * 1024; // 1 million slots is about 5 days
 const DUPLICATE_LIVENESS_THRESHOLD: f64 = 0.1;
 pub const DUPLICATE_THRESHOLD: f64 = 1.0 - SWITCH_FORK_THRESHOLD - DUPLICATE_LIVENESS_THRESHOLD;
 
-pub const ReplayDependencies = struct {
+pub const Dependencies = struct {
     /// Used for all allocations within the replay stage
     allocator: Allocator,
     logger: Logger,
@@ -179,7 +179,7 @@ const ReplayState = struct {
         self.progress_map.deinit(self.allocator);
     }
 
-    fn init(deps: ReplayDependencies) !ReplayState {
+    fn init(deps: Dependencies, num_threads: u32) !ReplayState {
         const zone = tracy.Zone.init(@src(), .{ .name = "ReplayState init" });
         defer zone.deinit();
 
@@ -208,7 +208,7 @@ const ReplayState = struct {
         return .{
             .allocator = deps.allocator,
             .logger = .from(deps.logger),
-            .thread_pool = .init(.{ .max_threads = NUM_THREADS }),
+            .thread_pool = .init(.{ .max_threads = num_threads }),
             .my_identity = deps.my_identity,
             .slot_leaders = deps.slot_leaders,
             .slot_tracker = slot_tracker,
@@ -259,7 +259,7 @@ const ConsensusState = struct {
         self.slot_data.deinit(allocator);
     }
 
-    fn init(deps: ReplayDependencies, senders: Senders, receivers: Receivers) !ConsensusState {
+    fn init(deps: Dependencies, senders: Senders, receivers: Receivers) !ConsensusState {
         const zone = tracy.Zone.init(@src(), .{ .name = "ConsensusState.init" });
         defer zone.deinit();
 
@@ -456,52 +456,40 @@ pub fn initForkChoice(
     return heaviest_subtree_fork_choice;
 }
 
+pub const RunConfig = struct {
+    enable_consensus: ?struct { Senders, Receivers },
+    num_threads: u32,
+};
+
 /// Run the replay service indefinitely.
-pub fn run(deps: ReplayDependencies, senders: Senders, receivers: Receivers) !void {
+pub fn run(deps: Dependencies, config: RunConfig) !void {
     const zone = tracy.Zone.init(@src(), .{ .name = "run (replay service)" });
     defer zone.deinit();
 
-    var state = try ReplayState.init(deps);
+    var state = try ReplayState.init(deps, config.num_threads);
     defer state.deinit();
 
-    var consensus = try ConsensusState.init(deps, senders, receivers);
-    defer consensus.deinit(deps.allocator);
+    var consensus: ?ConsensusState = if (config.enable_consensus) |consensus_api|
+        try ConsensusState.init(deps, consensus_api[0], consensus_api[1])
+    else
+        null;
+    defer if (consensus) |*c| c.deinit(deps.allocator);
 
     while (!deps.exit.load(.monotonic)) {
-        try advanceReplay(&state, &consensus);
-    }
-}
-
-/// Run a minimal version of replay indefinitely (single threaded, and without consensus).
-pub fn runMinimal(deps: ReplayDependencies) !void {
-    const zone = tracy.Zone.init(@src(), .{ .name = "runMinimal (replay service)" });
-    defer zone.deinit();
-
-    var state = try ReplayState.init(deps);
-    defer state.deinit();
-
-    while (!deps.exit.load(.monotonic)) {
-        try advanceMinimalReplay(&state);
+        try advanceReplay(&state, &consensus, config.num_threads > 1);
     }
 }
 
 /// Run a single iteration of the entire replay process. Includes:
 /// - replay all active slots that have not been replayed yet
-/// - running concensus on the latest updates
-fn advanceReplay(state: *ReplayState, consensus: *ConsensusState) !void {
+/// - running consensus on the latest updates (if present)
+fn advanceReplay(state: *ReplayState, maybe_consensus: *?ConsensusState, multithread: bool) !void {
     const allocator = state.allocator;
 
     const zone = tracy.Zone.init(@src(), .{ .name = "advanceReplay" });
     defer zone.deinit();
 
     state.logger.debug().log("advancing replay");
-
-    var arena_state = consensus.arena_state.promote(allocator);
-    defer {
-        _ = arena_state.reset(.retain_capacity);
-        consensus.arena_state = arena_state.state;
-    }
-    const arena = arena_state.allocator();
 
     try trackNewSlots(
         allocator,
@@ -515,19 +503,50 @@ fn advanceReplay(state: *ReplayState, consensus: *ConsensusState) !void {
         &state.progress_map,
     );
 
-    const slot_statuses = try replay.execution.replayActiveSlots(state.executionState());
+    const slot_results = if (multithread)
+        try awaitResults(allocator, try replay.execution.replayActiveSlots(state.executionState()))
+    else
+        try replay.execution.replayActiveSlotsSync(state.executionState());
+    defer allocator.free(slot_results);
+
+    const processed_a_slot = if (maybe_consensus.*) |*consensus|
+        try doConsensus(allocator, state, consensus, slot_results)
+    else
+        try bypassConsensus(state, slot_results);
+
+    if (!processed_a_slot) std.time.sleep(100 * std.time.ns_per_ms);
+}
+
+/// Run *all* consensus code, including:
+/// - process replay results
+/// - edge cases
+/// - process consensus
+///
+/// TODO: rethink consensus naming:
+/// - processConsensus vs doConsensus?
+/// - edge cases vs network sync vs duplicate slots?
+fn doConsensus(
+    allocator: Allocator,
+    state: *ReplayState,
+    consensus: *ConsensusState,
+    results: []const ReplayResult,
+) !bool {
+    var arena_state = consensus.arena_state.promote(allocator);
+    defer {
+        _ = arena_state.reset(.retain_capacity);
+        consensus.arena_state = arena_state.state;
+    }
+    const arena = arena_state.allocator();
 
     var processed_a_slot = false;
-    for (slot_statuses) |slot_status| {
-        const slot, const future = slot_status;
+    for (results) |result| {
         if (try processResult(
             processResultState(state, consensus),
-            slot,
-            future.entries,
-            try future.awaitBlocking(),
+            result.slot,
+            result.entries,
+            result.maybe_err,
         )) processed_a_slot = true;
     }
-    if (!processed_a_slot) std.time.sleep(100 * std.time.ns_per_ms);
 
     _ = try replay.edge_cases.processEdgeCases(allocator, state.logger, .{
         .my_pubkey = state.my_identity,
@@ -591,34 +610,15 @@ fn advanceReplay(state: *ReplayState, consensus: *ConsensusState) !void {
     // TODO: dump_then_repair_correct_slots
 
     // TODO: maybe_start_leader
+
+    return processed_a_slot;
 }
 
-/// Run a single iteration of the replay process. This replays all active slots
-/// that have not been replayed yet, without running consensus.
-fn advanceMinimalReplay(state: *ReplayState) !void {
-    const allocator = state.allocator;
-
-    const zone = tracy.Zone.init(@src(), .{ .name = "advanceMinimalReplay" });
-    defer zone.deinit();
-
-    state.logger.debug().log("advancing replay");
-
-    try sig.replay.service.trackNewSlots(
-        allocator,
-        state.logger,
-        state.account_store,
-        &state.ledger.db,
-        &state.slot_tracker,
-        &state.epochs,
-        state.slot_leaders,
-        &state.hard_forks,
-        &state.progress_map,
-    );
-
-    const slot_results = try replay.execution.replayActiveSlotsSync(state.executionState());
-
+/// bypass executing consensus, simply freezing slots and counting how many were
+/// completed.
+fn bypassConsensus(state: *ReplayState, results: []const ReplayResult) !bool {
     var processed_a_slot = false;
-    for (slot_results) |result| {
+    for (results) |result| {
         const slot = result.slot;
         const slot_info = state.slot_tracker.get(slot) orelse return error.MissingSlotInTracker;
         if (slot_info.state.tickHeight() == slot_info.constants.max_tick_height) {
@@ -637,8 +637,7 @@ fn advanceMinimalReplay(state: *ReplayState) !void {
             state.logger.info().logf("partially replayed slot: {}", .{slot});
         }
     }
-
-    if (!processed_a_slot) std.time.sleep(100 * std.time.ns_per_ms);
+    return processed_a_slot;
 }
 
 /// Identifies new slots in the ledger and starts tracking them in the slot

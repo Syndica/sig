@@ -6,6 +6,8 @@ const sig = @import("sig.zig");
 const config = @import("config.zig");
 const tracy = @import("tracy");
 
+const replay = sig.replay;
+
 const ChannelPrintLogger = sig.trace.ChannelPrintLogger;
 const ClusterType = sig.core.ClusterType;
 const ContactInfo = sig.gossip.ContactInfo;
@@ -122,7 +124,8 @@ pub fn main() !void {
             params.accountsdb_download.apply(&current_config);
             params.accountsdb_index.apply(&current_config);
             params.geyser.apply(&current_config);
-            current_config.minimal_replay = params.minimal_replay;
+            current_config.replay_threads = params.replay_threads;
+            current_config.disable_consensus = params.disable_consensus;
             try validator(gpa, gossip_gpa, current_config);
         },
         .replay_offline => |params| {
@@ -137,7 +140,8 @@ pub fn main() !void {
             params.accountsdb_download.apply(&current_config);
             params.accountsdb_index.apply(&current_config);
             params.geyser.apply(&current_config);
-            current_config.minimal_replay = params.minimal_replay;
+            current_config.replay_threads = params.replay_threads;
+            current_config.disable_consensus = params.disable_consensus;
             try replayOffline(gpa, current_config);
         },
         .shred_network => |params| {
@@ -352,13 +356,23 @@ const Cmd = struct {
         .help = "force download of new snapshot (usually to get a more up-to-date snapshot)",
     };
 
-    const minimal_replay_arg: cli.ArgumentInfo(bool) = .{
+    const replay_threads_arg: cli.ArgumentInfo(u16) = .{
         .kind = .named,
-        .name_override = "minimal-replay",
+        .name_override = "replay-threads",
+        .alias = .none,
+        .default_value = 4,
+        .config = {},
+        .help = "Number of threads to use in the replay thread pool. " ++
+            "Set to 1 for fully synchronous execution of replay.",
+    };
+
+    const disable_consensus_arg: cli.ArgumentInfo(bool) = .{
+        .kind = .named,
+        .name_override = "disable-consensus",
         .alias = .none,
         .default_value = false,
         .config = {},
-        .help = "Run a minimal version of replay: single threaded without consensus",
+        .help = "Disable running consensus in replay.",
     };
 
     const GossipArgumentsCommon = struct {
@@ -715,7 +729,8 @@ const Cmd = struct {
         force_new_snapshot_download: bool,
         accountsdb_index: AccountsDbArgumentsIndex,
         geyser: GeyserArgumentsBase,
-        minimal_replay: bool,
+        replay_threads: u16,
+        disable_consensus: bool,
 
         const cmd_info: cli.CommandInfo(@This()) = .{
             .help = .{
@@ -735,7 +750,8 @@ const Cmd = struct {
                 .force_new_snapshot_download = force_new_snapshot_download_arg,
                 .accountsdb_index = AccountsDbArgumentsIndex.cmd_info,
                 .geyser = GeyserArgumentsBase.cmd_info,
-                .minimal_replay = minimal_replay_arg,
+                .replay_threads = replay_threads_arg,
+                .disable_consensus = disable_consensus_arg,
             },
         };
     };
@@ -1208,14 +1224,16 @@ fn validator(
     defer replay_senders.destroy();
     defer replay_receivers.destroy();
 
-    const replay_thread = if (cfg.minimal_replay) try app_base.spawnService(
-        "replay minimal",
-        sig.replay.service.runMinimal,
-        .{replay_deps},
-    ) else try app_base.spawnService(
+    const replay_thread = try app_base.spawnService(
         "replay",
         sig.replay.service.run,
-        .{ replay_deps, replay_senders, replay_receivers },
+        .{ replay_deps, replay.RunConfig{
+            .enable_consensus = if (cfg.disable_consensus)
+                null
+            else
+                .{ replay_senders, replay_receivers },
+            .num_threads = cfg.replay_threads,
+        } },
     );
 
     replay_thread.join();
@@ -1321,14 +1339,16 @@ fn replayOffline(
     defer replay_senders.destroy();
     defer replay_receivers.destroy();
 
-    const replay_thread = if (cfg.minimal_replay) try app_base.spawnService(
-        "replay minimal",
-        sig.replay.service.runMinimal,
-        .{replay_deps},
-    ) else try app_base.spawnService(
+    const replay_thread = try app_base.spawnService(
         "replay",
         sig.replay.service.run,
-        .{ replay_deps, replay_senders, replay_receivers },
+        .{ replay_deps, replay.RunConfig{
+            .enable_consensus = if (cfg.disable_consensus)
+                null
+            else
+                .{ replay_senders, replay_receivers },
+            .num_threads = cfg.replay_threads,
+        } },
     );
 
     replay_thread.join();
@@ -1916,15 +1936,11 @@ fn replayDependencies(
     app_base: *const AppBase,
     ledger: UnifiedLedger,
     epoch_context_manager: *sig.adapter.EpochContextManager,
-) !struct {
-    sig.replay.service.ReplayDependencies,
-    sig.replay.service.Senders,
-    sig.replay.service.Receivers,
-} {
-    const senders: sig.replay.service.Senders = try .create(allocator);
+) !struct { replay.Dependencies, replay.Senders, replay.Receivers } {
+    const senders: sig.replay.Senders = try .create(allocator);
     defer senders.destroy();
 
-    const receivers: sig.replay.service.Receivers = try .create(allocator);
+    const receivers: sig.replay.Receivers = try .create(allocator);
     defer receivers.destroy();
 
     const epoch_stakes_map = &loaded_snapshot.collapsed_manifest.bank_extra.versioned_epoch_stakes;
@@ -1947,7 +1963,7 @@ fn replayDependencies(
     var root_slot_state = try sig.core.SlotState.fromBankFields(allocator, bank_fields);
     errdefer root_slot_state.deinit(allocator);
 
-    const deps = sig.replay.service.ReplayDependencies{
+    const deps = sig.replay.service.Dependencies{
         .allocator = allocator,
         .logger = .from(app_base.logger),
         .my_identity = .fromPublicKey(&app_base.my_keypair.public_key),

@@ -93,6 +93,25 @@ pub fn replayActiveSlots(state: ReplayExecutionState) ![]struct { Slot, *Confirm
     return slot_statuses.toOwnedSlice(state.allocator);
 }
 
+pub fn awaitResults(
+    allocator: Allocator,
+    /// takes ownership and frees with allocator
+    slot_futures: []struct { Slot, *ConfirmSlotFuture },
+) ![]const ReplayResult {
+    defer allocator.free(slot_futures);
+    const results = try allocator.alloc(ReplayResult, slot_futures.len);
+    errdefer allocator.free(results);
+    for (results, slot_futures) |*result, slot_future| {
+        const slot, const future = slot_future;
+        result.* = .{
+            .slot = slot,
+            .entries = future.entries,
+            .maybe_err = try future.awaitBlocking(),
+        };
+    }
+    return results;
+}
+
 pub const ReplayResult = struct {
     slot: Slot,
     entries: []const sig.core.Entry,
