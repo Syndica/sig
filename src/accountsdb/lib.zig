@@ -5,6 +5,8 @@ pub const db = @import("db.zig");
 pub const fuzz = @import("fuzz.zig");
 pub const index = @import("index.zig");
 pub const manager = @import("manager.zig");
+pub const rocks_full = @import("rocks_full/db.zig");
+pub const rocks_hybrid = @import("rocks_hybrid/lib.zig");
 pub const snapshot = @import("snapshot/lib.zig");
 pub const swiss_map = @import("swiss_map.zig");
 
