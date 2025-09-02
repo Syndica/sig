@@ -117,6 +117,7 @@ pub fn main() !void {
             params.gossip_base.apply(&current_config);
             params.gossip_node.apply(&current_config);
             params.repair.apply(&current_config);
+            current_config.shred_network.dump_shred_tracker = params.repair.dump_shred_tracker;
             current_config.accounts_db.snapshot_dir = params.snapshot_dir;
             current_config.genesis_file_path = params.genesis_file_path;
             params.accountsdb_base.apply(&current_config);
@@ -131,7 +132,7 @@ pub fn main() !void {
             params.gossip_base.apply(&current_config);
             params.gossip_node.apply(&current_config);
             params.repair.apply(&current_config);
-            current_config.shred_network.dump_shred_tracker = params.dump_shred_tracker;
+            current_config.shred_network.dump_shred_tracker = params.repair.dump_shred_tracker;
             current_config.turbine.overwrite_stake_for_testing =
                 params.overwrite_stake_for_testing;
             current_config.shred_network.no_retransmit = params.no_retransmit;
@@ -550,6 +551,7 @@ const Cmd = struct {
         test_repair_for_slot: ?Slot,
         max_shreds: u64,
         num_retransmit_threads: ?usize,
+        dump_shred_tracker: bool,
 
         const cmd_info: cli.ArgumentInfoGroup(@This()) = .{
             .turbine_port = .{
@@ -596,6 +598,15 @@ const Cmd = struct {
                 .default_value = 5_000_000,
                 .config = {},
                 .help = "Max number of shreds to store in the ledger",
+            },
+            .dump_shred_tracker = .{
+                .kind = .named,
+                .name_override = "dump-shred-tracker",
+                .alias = .none,
+                .default_value = false,
+                .config = {},
+                .help = "Create shred-tracker.txt" ++
+                    " to visually represent the currently tracked slots.",
             },
         };
 
@@ -718,7 +729,6 @@ const Cmd = struct {
         gossip_base: GossipArgumentsCommon,
         gossip_node: GossipArgumentsNode,
         repair: RepairArgumentsBase,
-        dump_shred_tracker: bool,
         /// TODO: Remove when no longer needed
         overwrite_stake_for_testing: bool,
         no_retransmit: bool,
@@ -746,15 +756,6 @@ const Cmd = struct {
                 .gossip_base = GossipArgumentsCommon.cmd_info,
                 .gossip_node = GossipArgumentsNode.cmd_info,
                 .repair = RepairArgumentsBase.cmd_info,
-                .dump_shred_tracker = .{
-                    .kind = .named,
-                    .name_override = "dump-shred-tracker",
-                    .alias = .none,
-                    .default_value = false,
-                    .config = {},
-                    .help = "Create shred-tracker.txt" ++
-                        " to visually represent the currently tracked slots.",
-                },
                 .overwrite_stake_for_testing = .{
                     .kind = .named,
                     .name_override = null,
