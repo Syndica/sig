@@ -9,6 +9,7 @@ pub const index = @import("index.zig");
 pub const manager = @import("manager.zig");
 pub const snapshots = @import("snapshots.zig");
 pub const swiss_map = @import("swiss_map.zig");
+pub const db_test = @import("db_test.zig");
 
 pub const AccountStore = account_store.AccountStore;
 pub const AccountReader = account_store.AccountReader;
