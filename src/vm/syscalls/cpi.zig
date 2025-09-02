@@ -607,6 +607,7 @@ fn translateAccounts(
     for (account_metas, 0..) |meta, index_in_instruction| {
         const cpi_index_in_caller =
             try cpi_info.getAccountInstructionIndex(meta.index_in_transaction);
+
         if (cpi_index_in_caller != index_in_instruction) {
             continue; // Skip duplicate account.
         }
@@ -1546,10 +1547,10 @@ test "translateAccounts" {
         &cpi_info, // cpi_info
     );
 
-    try std.testing.expectEqual(accounts.len, 2);
+    try std.testing.expectEqual(accounts.len, 1);
     try std.testing.expect(accounts.get(0).update_caller_account_region);
 
-    const caller_account = accounts.get(1).caller_account;
+    const caller_account = accounts.get(0).caller_account;
     try std.testing.expect(std.mem.eql(u8, caller_account.serialized_data, account.data));
     try std.testing.expectEqual(caller_account.original_data_len, account.data.len);
 }
@@ -1865,97 +1866,137 @@ test "updateCalleeAccount: lamports owner" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
-    var ctx = try TestContext.init(allocator, prng.random(), &.{});
-    defer ctx.deinit(allocator);
-    const account = ctx.getAccount();
+    for ([_]bool{ false, true }) |stricter_abi_and_runtime_constraints| {
+        var ctx = try TestContext.init(allocator, prng.random(), &.{});
+        defer ctx.deinit(allocator);
+        const account = ctx.getAccount();
 
-    var ca = try TestCallerAccount.init(
-        allocator,
-        1234,
-        account.owner,
-        account.data,
-        false, // direct mapping
-    );
-    defer ca.deinit(allocator);
-    var caller_account = ca.getCallerAccount();
+        var ca = try TestCallerAccount.init(
+            allocator,
+            1234,
+            account.owner,
+            account.data,
+            false, // direct mapping
+        );
+        defer ca.deinit(allocator);
+        var caller_account = ca.getCallerAccount();
 
-    var callee_account = try ctx.ic.borrowInstructionAccount(account.index);
-    defer callee_account.release();
+        var callee_account = try ctx.ic.borrowInstructionAccount(account.index);
+        defer callee_account.release();
 
-    caller_account.lamports.* = 42;
-    caller_account.owner.* = Pubkey.initRandom(prng.random());
+        caller_account.lamports.* = 42;
+        caller_account.owner.* = Pubkey.initRandom(prng.random());
 
-    _ = try updateCalleeAccount(
-        allocator,
-        &ctx.ic,
-        &callee_account,
-        &caller_account,
-        false, // stricter_abi_and_runtime_constraints
-        false, // account_data_direct_mapping
-    );
+        _ = try updateCalleeAccount(
+            allocator,
+            &ctx.ic,
+            &callee_account,
+            &caller_account,
+            stricter_abi_and_runtime_constraints,
+            false, // account_data_direct_mapping
+        );
 
-    try std.testing.expectEqual(callee_account.account.lamports, 42);
-    try std.testing.expect(callee_account.account.owner.equals(caller_account.owner));
+        try std.testing.expectEqual(callee_account.account.lamports, 42);
+        try std.testing.expect(callee_account.account.owner.equals(caller_account.owner));
+    }
 }
 
-test "updateCalleeAccount: data" {
+test "updateCalleeAccount: data writable" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
-    var ctx = try TestContext.init(allocator, prng.random(), "foobar");
-    defer ctx.deinit(allocator);
-    const account = ctx.getAccount();
+    for ([_]bool{ false, true }) |stricter_abi_and_runtime_constraints| {
+        var ctx = try TestContext.init(allocator, prng.random(), "foobar");
+        defer ctx.deinit(allocator);
+        const account = ctx.getAccount();
 
-    var ca = try TestCallerAccount.init(
-        allocator,
-        1234,
-        account.owner,
-        account.data,
-        false, // direct mapping
-    );
-    defer ca.deinit(allocator);
-    var caller_account = ca.getCallerAccount();
+        var ca = try TestCallerAccount.init(
+            allocator,
+            1234,
+            account.owner,
+            account.data,
+            false, // direct mapping
+        );
+        defer ca.deinit(allocator);
+        var caller_account = ca.getCallerAccount();
 
-    var callee_account = try ctx.ic.borrowInstructionAccount(account.index);
-    defer callee_account.release();
+        var callee_account = try ctx.ic.borrowInstructionAccount(account.index);
+        defer callee_account.release();
 
-    // Update the serialized data into account data
-    {
-        var data = "foo".*;
-        caller_account.serialized_data = &data;
-
+        // stricter_abi_and_runtime_constraints does not copy data in updateCalleeAccount()
+        caller_account.serialized_data[0] = 'b';
         _ = try updateCalleeAccount(
             allocator,
             &ctx.ic,
             &callee_account,
             &caller_account,
-            false, // stricter_abi_and_runtime_constraints
+            stricter_abi_and_runtime_constraints,
             false, // account_data_direct_mapping
         );
-        try std.testing.expect(std.mem.eql(
-            u8,
-            callee_account.account.data,
-            caller_account.serialized_data,
-        ));
-    }
+        try std.testing.expectEqualSlices(u8, callee_account.constAccountData(), "boobar");
 
-    // Close the account.
-    {
-        caller_account.serialized_data = &.{};
+        // growing resize
+        var resize_data = "foobarbaz".*;
+        (try caller_account.ref_to_len_in_vm.get(.mutable)).* = resize_data.len;
+        caller_account.serialized_data = &resize_data;
+        try std.testing.expectEqual(
+            stricter_abi_and_runtime_constraints,
+            try updateCalleeAccount(
+                allocator,
+                &ctx.ic,
+                &callee_account,
+                &caller_account,
+                stricter_abi_and_runtime_constraints,
+                true, // account_data_direct_mapping
+            ),
+        );
+
+        // truncating resize
+        var truncate_data = "baz".*;
+        (try caller_account.ref_to_len_in_vm.get(.mutable)).* = truncate_data.len;
+        caller_account.serialized_data = &truncate_data;
+        try std.testing.expectEqual(
+            stricter_abi_and_runtime_constraints,
+            try updateCalleeAccount(
+                allocator,
+                &ctx.ic,
+                &callee_account,
+                &caller_account,
+                stricter_abi_and_runtime_constraints,
+                true, // account_data_direct_mapping
+            ),
+        );
+
+        // close account
         (try caller_account.ref_to_len_in_vm.get(.mutable)).* = 0;
-
+        caller_account.serialized_data = &.{};
         var owner = system_program.ID;
         caller_account.owner = &owner;
-
         _ = try updateCalleeAccount(
             allocator,
             &ctx.ic,
             &callee_account,
             &caller_account,
-            false, // stricter_abi_and_runtime_constraints
-            false, // account_data_direct_mapping
+            stricter_abi_and_runtime_constraints,
+            true, // account_data_direct_mapping
         );
-        try std.testing.expect(std.mem.eql(u8, callee_account.account.data, &.{}));
+        try std.testing.expectEqualSlices(u8, callee_account.constAccountData(), "");
+
+        // growing beyond `address_space`
+        (try caller_account.ref_to_len_in_vm.get(.mutable)).* = MAX_PERMITTED_DATA_INCREASE + 7;
+        const result = updateCalleeAccount(
+            allocator,
+            &ctx.ic,
+            &callee_account,
+            &caller_account,
+            stricter_abi_and_runtime_constraints,
+            true, // account_data_direct_mapping
+        );
+        if (stricter_abi_and_runtime_constraints) {
+            try std.testing.expectError(InstructionError.InvalidRealloc, result);
+        } else {
+            _ = try result;
+        }
     }
 }
 
@@ -1963,120 +2004,76 @@ test "updateCalleeAccount: data readonly" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
-    var ctx = try TestContext.init(allocator, prng.random(), "foobar");
-    defer ctx.deinit(allocator);
-    const account = ctx.getAccount();
+    for ([_]bool{ false, true }) |stricter_abi_and_runtime_constraints| {
+        // Custom TestContext to set readonly account.
+        var ctx = try TestContext.init(allocator, prng.random(), "foobar");
+        defer ctx.deinit(allocator);
 
-    var ca = try TestCallerAccount.init(
-        allocator,
-        1234,
-        account.owner,
-        account.data,
-        false, // direct mapping
-    );
-    defer ca.deinit(allocator);
-    var caller_account = ca.getCallerAccount();
+        // Set random owner to mark readonly.
+        const random_owner = Pubkey.initRandom(prng.random());
+        ctx.tc.accounts[0].account.owner = random_owner;
 
-    var callee_account = try ctx.ic.borrowInstructionAccount(account.index);
-    defer callee_account.release();
+        const account = ctx.getAccount();
 
-    // Make account readonly (going through setOwner would hit error.ModifiedProgramId).
-    callee_account.account.owner = Pubkey.initRandom(prng.random());
-
-    // Check data must be the same when readonly
-    caller_account.serialized_data[0] = 'b';
-    try std.testing.expectError(
-        InstructionError.ExternalAccountDataModified,
-        updateCalleeAccount(
+        var ca = try TestCallerAccount.init(
             allocator,
-            &ctx.ic,
-            &callee_account,
-            &caller_account,
-            false, // stricter_abi_and_runtime_constraints
-            false, // account_data_direct_mapping
-        ),
-    );
-
-    // Check without direct mapping + different size.
-    var data = "foobarbaz".*;
-    caller_account.serialized_data = &data;
-    (try caller_account.ref_to_len_in_vm.get(.mutable)).* = data.len;
-    try std.testing.expectError(
-        InstructionError.AccountDataSizeChanged,
-        updateCalleeAccount(
-            allocator,
-            &ctx.ic,
-            &callee_account,
-            &caller_account,
-            false, // stricter_abi_and_runtime_constraints
-            false, // account_data_direct_mapping
-        ),
-    );
-}
-
-test "updateCalleeAccount: data direct mapping" {
-    const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
-
-    var ctx = try TestContext.init(allocator, prng.random(), "foobar");
-    defer ctx.deinit(allocator);
-    const account = ctx.getAccount();
-
-    var ca = try TestCallerAccount.init(
-        allocator,
-        1234,
-        account.owner,
-        account.data,
-        true, // direct mapping
-    );
-    defer ca.deinit(allocator);
-    var caller_account = ca.getCallerAccount();
-
-    var callee_account = try ctx.ic.borrowInstructionAccount(account.index);
-    defer callee_account.release();
-
-    const serialized_data = try ca.memory_map.translateSlice(
-        u8,
-        .mutable,
-        caller_account.vm_data_addr +| caller_account.original_data_len,
-        3,
-        ctx.ic.getCheckAligned(),
-    );
-    @memcpy(serialized_data, "baz");
-
-    for ([_]struct { usize, []const u8 }{
-        .{ 9, "foobarbaz" }, // > original_data_len, copies from realloc region
-        .{ 6, "foobar" }, // == original_data_len, truncates
-        .{ 3, "foo" }, // < original_data_len, truncates
-    }) |entry| {
-        const len, const expected = entry;
-
-        (try caller_account.ref_to_len_in_vm.get(.mutable)).* = len;
-        _ = try updateCalleeAccount(
-            allocator,
-            &ctx.ic,
-            &callee_account,
-            &caller_account,
-            true, // stricter_abi_and_runtime_constraints
-            false, // account_data_direct_mapping
+            1234,
+            account.owner,
+            account.data,
+            false, // direct mapping
         );
-        try std.testing.expect(std.mem.eql(u8, expected, callee_account.account.data));
-    }
+        defer ca.deinit(allocator);
+        var caller_account = ca.getCallerAccount();
 
-    // Close the account
-    caller_account.serialized_data = &.{};
-    (try caller_account.ref_to_len_in_vm.get(.mutable)).* = 0;
-    var owner = system_program.ID;
-    caller_account.owner = &owner;
-    _ = try updateCalleeAccount(
-        allocator,
-        &ctx.ic,
-        &callee_account,
-        &caller_account,
-        true, // stricter_abi_and_runtime_constraints
-        false, // account_data_direct_mappping        
-    );
-    try std.testing.expect(std.mem.eql(u8, callee_account.account.data, ""));
+        var callee_account = try ctx.ic.borrowInstructionAccount(account.index);
+        defer callee_account.release();
+
+        // stricter_abi_and_runtime_constraints does not copy data in updateCalleeAccount()
+        caller_account.serialized_data[0] = 'b';
+        try std.testing.expectError(
+            InstructionError.ExternalAccountDataModified,
+            updateCalleeAccount(
+                allocator,
+                &ctx.ic,
+                &callee_account,
+                &caller_account,
+                false, // stricter_abi_and_runtime_constraints
+                false, // account_data_direct_mapping
+            ),
+        );
+
+        // growing resize
+        var resize_data = "foobarbaz".*;
+        (try caller_account.ref_to_len_in_vm.get(.mutable)).* = resize_data.len;
+        caller_account.serialized_data = &resize_data;
+        try std.testing.expectError(
+            InstructionError.AccountDataSizeChanged,
+            updateCalleeAccount(
+                allocator,
+                &ctx.ic,
+                &callee_account,
+                &caller_account,
+                stricter_abi_and_runtime_constraints,
+                true, // account_data_direct_mapping
+            ),
+        );
+
+        // truncating resize
+        var truncate_data = "baz".*;
+        (try caller_account.ref_to_len_in_vm.get(.mutable)).* = truncate_data.len;
+        caller_account.serialized_data = &truncate_data;
+        try std.testing.expectError(
+            InstructionError.AccountDataSizeChanged,
+            updateCalleeAccount(
+                allocator,
+                &ctx.ic,
+                &callee_account,
+                &caller_account,
+                stricter_abi_and_runtime_constraints,
+                true, // account_data_direct_mapping
+            ),
+        );
+    }
 }
 
 // test CallerAccount updates
@@ -2085,36 +2082,38 @@ test "updateCallerAccount: lamports owner" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
-    var ctx = try TestContext.init(allocator, prng.random(), &.{});
-    defer ctx.deinit(allocator);
-    const account = ctx.getAccount();
+    for ([_]bool{ false, true }) |stricter_abi_and_runtime_constraints| {
+        var ctx = try TestContext.init(allocator, prng.random(), &.{});
+        defer ctx.deinit(allocator);
+        const account = ctx.getAccount();
 
-    var ca = try TestCallerAccount.init(
-        allocator,
-        1234, // lamports
-        account.owner,
-        account.data,
-        false, // direct mapping
-    );
-    defer ca.deinit(allocator);
-    var caller_account = ca.getCallerAccount();
+        var ca = try TestCallerAccount.init(
+            allocator,
+            1234, // lamports
+            account.owner,
+            account.data,
+            false, // direct mapping
+        );
+        defer ca.deinit(allocator);
+        var caller_account = ca.getCallerAccount();
 
-    var callee_account = try ctx.ic.borrowInstructionAccount(account.index);
-    defer callee_account.release();
+        var callee_account = try ctx.ic.borrowInstructionAccount(account.index);
+        defer callee_account.release();
 
-    try callee_account.setLamports(42);
-    try callee_account.setOwner(Pubkey.initRandom(prng.random()));
+        try callee_account.setLamports(42);
+        try callee_account.setOwner(Pubkey.initRandom(prng.random()));
 
-    try updateCallerAccount(
-        &ctx.ic,
-        &ca.memory_map,
-        &caller_account,
-        &callee_account,
-        false, // stricter_abi_and_runtime_constraints
-    );
+        try updateCallerAccount(
+            &ctx.ic,
+            &ca.memory_map,
+            &caller_account,
+            &callee_account,
+            stricter_abi_and_runtime_constraints,
+        );
 
-    try std.testing.expectEqual(caller_account.lamports.*, 42);
-    try std.testing.expect(caller_account.owner.equals(&callee_account.account.owner));
+        try std.testing.expectEqual(caller_account.lamports.*, 42);
+        try std.testing.expect(caller_account.owner.equals(&callee_account.account.owner));
+    }
 }
 
 test "updateCallerAccount: data" {
@@ -2221,204 +2220,6 @@ test "updateCallerAccount: data" {
         false, // stricter_abi_and_runtime_constraints
     );
     try std.testing.expectEqual(callee_account.account.data.len, 0);
-}
-
-test "updateCallerAccount: data direct mapping" {
-    const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
-
-    var ctx = try TestContext.init(allocator, prng.random(), "foobar");
-    defer ctx.deinit(allocator);
-    const account = ctx.getAccount();
-
-    var ca = try TestCallerAccount.init(
-        allocator,
-        account.lamports,
-        account.owner,
-        account.data,
-        true, // direct mapping
-    );
-    defer ca.deinit(allocator);
-    var caller_account = ca.getCallerAccount();
-
-    var callee_account = try ctx.ic.borrowInstructionAccount(account.index);
-    defer callee_account.release();
-
-    const len_ptr: *align(1) u64 = @ptrCast(ca.buffer[0..8]);
-    const original_data_len = account.data.len;
-
-    for ([_]bool{ false, true }) |change_ptr| {
-        for ([_]struct { []const u8, usize }{
-            .{ "foobazbad", 3 }, // > original_data_len, writes into realloc
-            .{ "foo", 0 }, // < original_data_len, zeroes account capacity + realloc capacity
-            .{ "foobaz", 0 }, // = original_data_len
-            .{ "", 0 }, // check lower bound
-        }) |entry| {
-            const new, const realloc_used = entry;
-            if (change_ptr) {
-                const copy = try allocator.dupe(u8, callee_account.account.data);
-                allocator.free(callee_account.account.data);
-                callee_account.account.data = copy;
-            }
-
-            try callee_account.setDataFromSlice(allocator, &ctx.tc.accounts_resize_delta, new);
-            try updateCallerAccount(
-                &ctx.ic,
-                &ca.memory_map,
-                &caller_account,
-                &callee_account,
-                true, // stricter_abi_and_runtime_constraints
-            );
-
-            // Check the caller & callee account data pointers match
-            try std.testing.expectEqual(
-                callee_account.account.data.ptr,
-                (try ca.memory_map.translateSlice(
-                    u8,
-                    .constant,
-                    caller_account.vm_data_addr,
-                    1,
-                    true,
-                )).ptr,
-            );
-
-            // Check account info lengths were updated
-            const size = callee_account.account.data.len;
-            try std.testing.expectEqual(size, len_ptr.*);
-            try std.testing.expectEqual(
-                size,
-                (try caller_account.ref_to_len_in_vm.get(.constant)).*,
-            );
-
-            const realloc_area = try ca.memory_map.translateSlice(
-                u8,
-                .constant,
-                caller_account.vm_data_addr +| caller_account.original_data_len,
-                MAX_PERMITTED_DATA_INCREASE,
-                ctx.ic.getCheckAligned(),
-            );
-
-            // TODO: Make sure spare capacity account data is zeroed (no data capacity atm).
-            // if (size < original_data_len) {
-            //     const original_slice = callee_account.constAccountData().ptr[0..original_data_len];
-            //     try std.testing.expect(std.mem.allEqual(
-            //         u8,
-            //         original_slice[original_data_len - size..],
-            //         0,
-            //     ));
-            // }
-
-            try std.testing.expect(std.mem.allEqual(u8, realloc_area[realloc_used..], 0));
-            try std.testing.expect(std.mem.eql(
-                u8,
-                realloc_area[0..realloc_used],
-                callee_account.constAccountData()[size - realloc_used ..],
-            ));
-        }
-    }
-
-    // Bump size to max & check zero padding.
-    {
-        try callee_account.setDataLength(
-            allocator,
-            &ctx.tc.accounts_resize_delta,
-            original_data_len + MAX_PERMITTED_DATA_INCREASE,
-        );
-        try updateCallerAccount(
-            &ctx.ic,
-            &ca.memory_map,
-            &caller_account,
-            &callee_account,
-            true, // stricter_abi_and_runtime_constraints
-        );
-        try std.testing.expect(std.mem.allEqual(u8, caller_account.serialized_data, 0));
-    }
-
-    // Bump size and over & check still zero padded.
-    {
-        try callee_account.setDataLength(
-            allocator,
-            &ctx.tc.accounts_resize_delta,
-            original_data_len + MAX_PERMITTED_DATA_INCREASE + 1,
-        );
-        try std.testing.expectError(InstructionError.InvalidRealloc, updateCallerAccount(
-            &ctx.ic,
-            &ca.memory_map,
-            &caller_account,
-            &callee_account,
-            false, // stricter_abi_and_runtime_constraints (false on overgrow?)
-        ));
-        try std.testing.expect(std.mem.allEqual(u8, caller_account.serialized_data, 0));
-    }
-
-    // Close account
-    {
-        try callee_account.setDataLength(allocator, &ctx.tc.accounts_resize_delta, 0);
-        try callee_account.setOwner(system_program.ID);
-        try updateCallerAccount(
-            &ctx.ic,
-            &ca.memory_map,
-            &caller_account,
-            &callee_account,
-            true, // stricter_abi_and_runtime_constraints
-        );
-        try std.testing.expectEqual(callee_account.constAccountData().len, 0);
-    }
-}
-
-test "updateCallerAccount: data capacity direct mapping" {
-    const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
-
-    var ctx = try TestContext.init(allocator, prng.random(), "foobar");
-    defer ctx.deinit(allocator);
-    const account = ctx.getAccount();
-
-    var ca = try TestCallerAccount.init(
-        allocator,
-        account.lamports,
-        account.owner,
-        account.data,
-        true, // direct mapping
-    );
-    defer ca.deinit(allocator);
-    var caller_account = ca.getCallerAccount();
-
-    var callee_account = try ctx.ic.borrowInstructionAccount(account.index);
-    defer callee_account.release();
-
-    // Update the buffer.
-    try callee_account.setDataFromSlice(allocator, &ctx.tc.accounts_resize_delta, "baz");
-
-    {
-        // TODO: ensure enough account data capacity (no data capacity atm).
-        // try std.testing.expect(callee_account.capacity >= 3);
-        try std.testing.expectEqual(callee_account.constAccountData().len, 3);
-
-        try updateCallerAccount(
-            &ctx.ic,
-            &ca.memory_map,
-            &caller_account,
-            &callee_account,
-            true, // stricter_abi_and_runtime_constraints
-        );
-
-        // TODO: ensure enough account data capacity (no data capacity atm).
-        // try std.testing.expect(callee_account.capacity >= caller_account.original_data_len);
-        try std.testing.expectEqual(callee_account.constAccountData().len, 3);
-    }
-
-    try std.testing.expect(std.mem.eql(
-        u8,
-        callee_account.constAccountData(),
-        try ca.memory_map.translateSlice(
-            u8,
-            .constant,
-            caller_account.vm_data_addr,
-            callee_account.constAccountData().len,
-            true,
-        ),
-    ));
 }
 
 test "cpiCommon (invokeSignedRust)" {
