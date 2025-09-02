@@ -193,3 +193,36 @@ pub fn loadSnapshot(
         .status_cache = status_cache,
     };
 }
+
+test loadSnapshot {
+    // This is a very slow test that's mostly redundant with the pre-existing
+    // snapshot loading tests db.zig. This just exists to get code coverage for
+    // the high-level helper code in here.
+    if (!sig.build_options.long_tests) return error.SkipZigTest;
+
+    const allocator = std.testing.allocator;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const path = try tmp.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(path);
+
+    const src_dir = try std.fs.cwd().openDir(sig.TEST_DATA_DIR, .{ .iterate = true });
+    const snapshot_files = try snapshot.data.SnapshotFiles.find(allocator, src_dir);
+    const snapshot_filename = snapshot_files.full.snapshotArchiveName();
+    try src_dir.copyFile(snapshot_filename.slice(), tmp.dir, snapshot_filename.slice(), .{});
+
+    var loaded_snapshot = try loadSnapshot(
+        allocator,
+        .{ .snapshot_dir = path },
+        sig.TEST_DATA_DIR ++ "/genesis.bin",
+        .FOR_TESTS,
+        .{
+            .gossip_service = null,
+            .geyser_writer = null,
+            .validate_snapshot = true,
+        },
+    );
+    loaded_snapshot.deinit();
+}
