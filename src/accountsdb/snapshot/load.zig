@@ -77,6 +77,7 @@ pub fn loadSnapshot(
             .min_snapshot_download_speed_mbs = config.min_snapshot_download_speed_mbs,
         },
     );
+    errdefer combined_manifest.deinit(allocator);
 
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{ .iterate = true });
     defer snapshot_dir.close();
@@ -212,7 +213,7 @@ test loadSnapshot {
     const snapshot_files = try snapshot.data.SnapshotFiles.find(allocator, src_dir);
     const snapshot_filename = snapshot_files.full.snapshotArchiveName();
 
-    std.testing.expectError(error.FileNotFound, loadSnapshot(
+    try std.testing.expectError(error.SnapshotsNotFoundAndNoGossipService, loadSnapshot(
         allocator,
         .{
             .snapshot_dir = path,
@@ -222,7 +223,7 @@ test loadSnapshot {
             .accounts_per_file_estimate = 500,
         },
         sig.TEST_DATA_DIR ++ "/genesis.bin",
-        .FOR_TESTS,
+        .noop,
         .{
             .gossip_service = null,
             .geyser_writer = null,
@@ -232,7 +233,7 @@ test loadSnapshot {
 
     try src_dir.copyFile(snapshot_filename.slice(), tmp.dir, snapshot_filename.slice(), .{});
 
-    std.testing.expectError(error.FileNotFound, loadSnapshot(
+    try std.testing.expectError(error.FileNotFound, loadSnapshot(
         allocator,
         .{
             .snapshot_dir = path,
@@ -242,7 +243,7 @@ test loadSnapshot {
             .accounts_per_file_estimate = 500,
         },
         sig.TEST_DATA_DIR ++ "/WRONG-genesis.bin",
-        .FOR_TESTS,
+        .noop,
         .{
             .gossip_service = null,
             .geyser_writer = null,
