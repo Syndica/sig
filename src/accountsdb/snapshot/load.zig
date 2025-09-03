@@ -212,6 +212,7 @@ test loadSnapshot {
     const src_dir = try std.fs.cwd().openDir(sig.TEST_DATA_DIR, .{ .iterate = true });
     const snapshot_files = try snapshot.data.SnapshotFiles.find(allocator, src_dir);
     const snapshot_filename = snapshot_files.full.snapshotArchiveName();
+    const incremental_filename = snapshot_files.incremental().?.snapshotArchiveName();
 
     try std.testing.expectError(error.SnapshotsNotFoundAndNoGossipService, loadSnapshot(
         allocator,
@@ -232,6 +233,7 @@ test loadSnapshot {
     ));
 
     try src_dir.copyFile(snapshot_filename.slice(), tmp.dir, snapshot_filename.slice(), .{});
+    try src_dir.copyFile(incremental_filename.slice(), tmp.dir, incremental_filename.slice(), .{});
 
     try std.testing.expectError(error.FileNotFound, loadSnapshot(
         allocator,
@@ -250,6 +252,26 @@ test loadSnapshot {
             .validate_snapshot = true,
         },
     ));
+
+    var metadata_only = try loadSnapshot(
+        allocator,
+        .{
+            .snapshot_dir = path,
+            .number_of_index_shards = 4,
+            .num_threads_snapshot_unpack = 1,
+            .num_threads_snapshot_load = 1,
+            .accounts_per_file_estimate = 500,
+        },
+        sig.TEST_DATA_DIR ++ "/genesis.bin",
+        .noop,
+        .{
+            .gossip_service = null,
+            .geyser_writer = null,
+            .validate_snapshot = true,
+            .metadata_only = true,
+        },
+    );
+    metadata_only.deinit();
 
     var loaded_snapshot = try loadSnapshot(
         allocator,
