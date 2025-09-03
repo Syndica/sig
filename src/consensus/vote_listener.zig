@@ -1305,7 +1305,7 @@ pub const vote_parser = struct {
             const message = vote_tx.msg;
             std.debug.assert(message.instructions.len != 0);
             const first_ix = message.instructions[0];
-            
+
             var dedup_map: [sig.runtime.InstructionInfo.MAX_ACCOUNT_METAS]u8 = @splat(0xff);
             var account_metas = sig.runtime.InstructionInfo.AccountMetas{};
             for (first_ix.account_indexes, 0..) |acct_index_u8, i| {

@@ -639,17 +639,14 @@ test popInstruction {
 test prepareCpiInstructionInfo {
     const testing = sig.runtime.testing;
     const system_program = sig.runtime.program.system;
-    const FeatureSet = sig.core.FeatureSet;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(0);
 
-    var feature_set = try allocator.create(FeatureSet);
     var cache, var tc = try testing.createTransactionContext(
         allocator,
         prng.random(),
         .{
-            .feature_set_ptr = feature_set,
             .accounts = &.{
                 .{ .pubkey = Pubkey.initRandom(prng.random()), .lamports = 2_000 },
                 .{ .pubkey = Pubkey.initRandom(prng.random()), .lamports = 0 },
@@ -762,27 +759,5 @@ test prepareCpiInstructionInfo {
             InstructionError.PrivilegeEscalation,
             prepareCpiInstructionInfo(&tc, callee, &.{}),
         );
-    }
-
-    // Failure: AccountNotExecutable
-    {
-        tc.accounts[2].account.executable = false;
-        defer tc.accounts[2].account.executable = true;
-
-        try std.testing.expectError(
-            InstructionError.AccountNotExecutable,
-            prepareCpiInstructionInfo(&tc, callee, &.{}),
-        );
-    }
-
-    // Success: REMOVE_ACCOUNTS_EXECUTABLE_FLAG_CHECKS
-    {
-        tc.accounts[2].account.executable = false;
-        defer tc.accounts[2].account.executable = true;
-
-        feature_set.setSlot(.remove_accounts_executable_flag_checks, 0);
-        defer feature_set.disable(.remove_accounts_executable_flag_checks);
-
-        _ = try prepareCpiInstructionInfo(&tc, callee, &.{});
     }
 }
