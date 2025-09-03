@@ -68,20 +68,14 @@ pub fn pushInstruction(
         }
     }
 
-    // Push the instruction onto the stack and trace, creating the instruction context
-    // [agave] https://github.com/anza-xyz/solana-sdk/blob/e1554f4067329a0dcf5035120ec6a06275d3b9ec/transaction-context/src/lib.rs#L366-L403
-    // [fd] https://github.com/firedancer-io/firedancer/blob/dfadb7d33683aa8711dfe837282ad0983d3173a0/src/flamenco/runtime/fd_executor.c#L975-L976
-
+    // Push to transaction context():
+    // [agave] https://github.com/anza-xyz/agave/blob/v3.0/transaction-context/src/lib.rs#L420
     if (tc.instruction_stack.len > 0 and tc.accounts_lamport_delta != 0) {
         return InstructionError.UnbalancedInstruction;
     }
-
-    // TODO: get last instruction_trace & set nesting_level as stack height
-
     if (tc.instruction_trace.len >= tc.instruction_trace.capacity()) {
         return InstructionError.MaxInstructionTraceLengthExceeded;
     }
-
     if (tc.instruction_stack.len >= tc.instruction_stack.capacity()) {
         return InstructionError.CallDepth;
     }
@@ -106,6 +100,8 @@ pub fn pushInstruction(
         if (!account.account.owner.equals(&sig.runtime.sysvar.OWNER_ID)) {
             return InstructionError.InvalidAccountOwner;
         }
+
+        // store_current_index_checked()
         const data = account.account.data;
         if (data.len < 2) return InstructionError.AccountDataTooSmall;
         const last_index = data.len - 2;
@@ -327,7 +323,7 @@ test pushInstruction {
         prng.random(),
         .{
             .accounts = &.{
-                .{ .lamports = 2_000 },
+                .{ .lamports = 2_000, .owner = system_program.ID },
                 .{ .lamports = 0 },
                 .{ .pubkey = system_program.ID },
             },
@@ -347,7 +343,7 @@ test pushInstruction {
             },
         },
         &.{
-            .{ .index_in_transaction = 0 },
+            .{ .index_in_transaction = 0, .is_writable = true },
             .{ .index_in_transaction = 1 },
         },
     );
@@ -363,14 +359,23 @@ test pushInstruction {
     {
         // Failure: UnbalancedInstruction
         // Modify and defer reset the first account's lamports
-        const original_lamports = tc.accounts[0].account.lamports;
-        defer tc.accounts[0].account.lamports = original_lamports;
-        tc.accounts[0].account.lamports = original_lamports + 1;
+       
+        {
+            var first = try (try tc.getCurrentInstructionContext()).borrowInstructionAccount(0);
+            defer first.release();
+            try first.addLamports(1);
+        }
 
         try std.testing.expectError(
             InstructionError.UnbalancedInstruction,
             pushInstruction(&tc, instruction_info),
         );
+
+        {
+            var first = try (try tc.getCurrentInstructionContext()).borrowInstructionAccount(0);
+            defer first.release();
+            try first.subtractLamports(1);
+        }
     }
 
     // Success

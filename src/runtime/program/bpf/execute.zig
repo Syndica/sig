@@ -78,6 +78,7 @@ pub fn execute(
         regions.deinit(allocator);
     }
 
+    // [agave] https://github.com/anza-xyz/agave/blob/v3.0/programs/bpf_loader/src/lib.rs#L275
     const old_accounts = ic.tc.serialized_accounts;
     ic.tc.serialized_accounts = accounts_metadata;
     defer ic.tc.serialized_accounts = old_accounts;
