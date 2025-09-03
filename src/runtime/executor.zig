@@ -607,6 +607,7 @@ test "popInstruction" {
             .is_signer = false,
             .is_writable = false,
             .remove_accounts_executable_flag_checks = false,
+            .accounts_lamport_delta = &tc.accounts_lamport_delta,
         });
         defer borrowed_account.release();
         try std.testing.expectError(
