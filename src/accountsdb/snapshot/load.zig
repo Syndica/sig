@@ -251,6 +251,26 @@ test loadSnapshot {
         },
     ));
 
+    const metadata_only = try loadSnapshot(
+        allocator,
+        .{
+            .snapshot_dir = path,
+            .number_of_index_shards = 4,
+            .num_threads_snapshot_unpack = 1,
+            .num_threads_snapshot_load = 1,
+            .accounts_per_file_estimate = 500,
+        },
+        sig.TEST_DATA_DIR ++ "/genesis.bin",
+        .noop,
+        .{
+            .gossip_service = null,
+            .geyser_writer = null,
+            .validate_snapshot = true,
+            .metadata_only = true,
+        },
+    );
+    metadata_only.deinit();
+
     var loaded_snapshot = try loadSnapshot(
         allocator,
         .{
