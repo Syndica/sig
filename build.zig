@@ -24,15 +24,16 @@ pub const Config = struct {
     version: std.SemanticVersion,
 
     pub fn fromBuild(b: *Build) !Config {
+        const filters = b.option(
+            []const []const u8,
+            "filter",
+            "List of filters, used for example to filter unit tests by name. " ++
+                "Specified as a series like `-Dfilter='filter1' -Dfilter='filter2'`.",
+        );
         var self: Config = .{
             .target = b.standardTargetOptions(.{}),
             .optimize = b.standardOptimizeOption(.{}),
-            .filters = b.option(
-                []const []const u8,
-                "filter",
-                "List of filters, used for example to filter unit tests by name. " ++
-                    "Specified as a series like `-Dfilter='filter1' -Dfilter='filter2'`.",
-            ),
+            .filters = filters,
             .enable_tsan = b.option(
                 bool,
                 "enable-tsan",
@@ -108,7 +109,7 @@ pub const Config = struct {
                 bool,
                 "long-tests",
                 "Run extra tests that take a long time, for more exhaustive coverage.",
-            ) orelse false,
+            ) orelse (filters != null),
             .version = s: {
                 const maybe_version_string = b.option(
                     []const u8,
