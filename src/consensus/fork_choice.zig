@@ -248,6 +248,8 @@ pub const ForkChoice = struct {
         if (maybe_current_deepest_slot) |slot| {
             self.metrics.current_deepest_slot.set(slot);
         }
+
+        self.metrics.current_tree_root_slot.set(self.tree_root.slot);
     }
 
     /// [Agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L452
@@ -557,6 +559,9 @@ pub const ForkChoice = struct {
             .is_duplicate_confirmed = root_info.is_duplicate_confirmed,
         });
         self.tree_root = root_parent;
+
+        // Update metrics after changing tree root
+        self.updateMetrics();
     }
 
     pub fn isDuplicateConfirmed(
@@ -1933,6 +1938,9 @@ test "HeaviestSubtreeForkChoice.setTreeRoot" {
         const exists = i != 0;
         try std.testing.expectEqual(exists, fork_choice.fork_infos.contains(slot_hash));
     }
+
+    // Check that root change metrics are tracked
+    try std.testing.expectEqual(1, fork_choice.metrics.current_tree_root_slot.get());
 }
 
 // [Agave] https://github.com/anza-xyz/agave/blob/4f9ad7a42b14ed681fb6412c104b3df5c310d50f/core/src/consensus/heaviest_subtree_fork_choice.rs#L1918
@@ -3284,6 +3292,8 @@ test "HeaviestSubtreeForkChoice.addRootParent" {
         null,
         fork_choice.getParent(&.{ .slot = 2, .hash = Hash.ZEROES }),
     );
+
+    try std.testing.expectEqual(2, fork_choice.metrics.current_tree_root_slot.get());
 }
 
 // Analogous to [test_add_votes](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L2493)
@@ -5087,6 +5097,9 @@ pub fn testEpochStakes(
 }
 
 pub const ForkChoiceMetrics = struct {
+    /// Current rooted slot.
+    current_tree_root_slot: *sig.prometheus.Gauge(u64),
+
     /// Current heaviest subtree slot (the slot with most stake)
     current_heaviest_subtree_slot: *sig.prometheus.Gauge(u64),
     /// Current deepest slot (the slot with highest tree height)
