@@ -93,16 +93,10 @@ pub fn loadSnapshot(
     }
 
     // cli parsing
-    const n_threads_snapshot_load: u32 = blk: {
-        const cli_n_threads_snapshot_load: u32 =
-            config.num_threads_snapshot_load;
-        if (cli_n_threads_snapshot_load == 0) {
-            // default value
-            break :blk std.math.lossyCast(u32, try std.Thread.getCpuCount());
-        } else {
-            break :blk cli_n_threads_snapshot_load;
-        }
-    };
+    const n_threads_snapshot_load = if (config.num_threads_snapshot_load == 0)
+        std.math.lossyCast(u32, std.Thread.getCpuCount() catch 1)
+    else
+        config.num_threads_snapshot_load;
 
     var accounts_db = try AccountsDB.init(.{
         .allocator = allocator,
@@ -111,10 +105,7 @@ pub fn loadSnapshot(
         .snapshot_dir = snapshot_dir,
         .geyser_writer = options.geyser_writer,
         // gossip information for propogating snapshot info
-        .gossip_view = if (options.gossip_service) |service|
-            try AccountsDB.GossipView.fromService(service)
-        else
-            null,
+        .gossip_view = if (options.gossip_service) |s| try .fromService(s) else null,
         // to use disk or ram for the index
         .index_allocation = if (config.use_disk_index) .disk else .ram,
         // number of shards for the index
@@ -168,12 +159,10 @@ pub fn loadSnapshot(
 
     // validate the status cache
     const status_cache = StatusCache.initFromDir(allocator, snapshot_dir) catch |err| {
-        if (err == error.FileNotFound) {
-            logger.err().logf(
-                "status_cache not found - expecting {s}/snapshots/status_cache to exist",
-                .{snapshot_dir_str},
-            );
-        }
+        if (err == error.FileNotFound) logger.err().logf(
+            "status_cache not found - expecting {s}/snapshots/status_cache to exist",
+            .{snapshot_dir_str},
+        );
         return err;
     };
     errdefer status_cache.deinit(allocator);
@@ -259,7 +248,7 @@ test loadSnapshot {
             .snapshot_dir = path,
             .number_of_index_shards = 4,
             .num_threads_snapshot_unpack = 1,
-            .num_threads_snapshot_load = 1,
+            .num_threads_snapshot_load = 0,
             .accounts_per_file_estimate = 500,
         },
         sig.TEST_DATA_DIR ++ "/genesis.bin",
