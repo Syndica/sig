@@ -850,57 +850,41 @@ test "serializeParameters" {
                 &.{
                     .{
                         .index_in_transaction = 1,
-                        .index_in_caller = 1,
-                        .index_in_callee = 0,
                         .is_signer = false,
                         .is_writable = false,
                     },
                     .{
                         .index_in_transaction = 1,
-                        .index_in_caller = 1,
-                        .index_in_callee = 0,
                         .is_signer = false,
                         .is_writable = false,
                     },
                     .{
                         .index_in_transaction = 2,
-                        .index_in_caller = 2,
-                        .index_in_callee = 1,
                         .is_signer = false,
                         .is_writable = false,
                     },
                     .{
                         .index_in_transaction = 3,
-                        .index_in_caller = 3,
-                        .index_in_callee = 2,
                         .is_signer = false,
                         .is_writable = false,
                     },
                     .{
                         .index_in_transaction = 4,
-                        .index_in_caller = 4,
-                        .index_in_callee = 3,
                         .is_signer = false,
                         .is_writable = true,
                     },
                     .{
                         .index_in_transaction = 4,
-                        .index_in_caller = 4,
-                        .index_in_callee = 3,
                         .is_signer = false,
                         .is_writable = true,
                     },
                     .{
                         .index_in_transaction = 5,
-                        .index_in_caller = 5,
-                        .index_in_callee = 4,
                         .is_signer = false,
                         .is_writable = true,
                     },
                     .{
                         .index_in_transaction = 6,
-                        .index_in_caller = 6,
-                        .index_in_callee = 5,
                         .is_signer = false,
                         .is_writable = true,
                     },
@@ -922,8 +906,6 @@ test "serializeParameters" {
                     ic.ixn_info.account_metas.appendAssumeCapacity(.{
                         .pubkey = Pubkey.ZEROES,
                         .index_in_transaction = 0,
-                        .index_in_caller = 0,
-                        .index_in_callee = 0,
                         .is_signer = false,
                         .is_writable = false,
                     });

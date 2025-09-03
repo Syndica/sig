@@ -314,8 +314,6 @@ test resolveBatch {
     // concisely represents all the expected account metas within an InstructionInfo
     const ExpectedAccountMetas = struct {
         index_in_transaction: []const u8,
-        index_in_caller: []const u8,
-        index_in_callee: []const u16,
         is_signer: []const u8,
         is_writable: []const u8,
     };
@@ -423,15 +421,11 @@ test resolveBatch {
     const expected_account_metas = [2]ExpectedAccountMetas{
         .{
             .index_in_transaction = tx.msg.instructions[0].account_indexes,
-            .index_in_caller = tx.msg.instructions[0].account_indexes,
-            .index_in_callee = &.{ 0, 1, 2, 3, 4, 5, 6, 7 },
             .is_signer = &.{ 1, 1, 1, 1, 0, 0, 0, 0 },
             .is_writable = &.{ 1, 1, 0, 0, 1, 1, 0, 0 },
         },
         .{
             .index_in_transaction = tx.msg.instructions[1].account_indexes,
-            .index_in_caller = tx.msg.instructions[1].account_indexes,
-            .index_in_callee = &.{ 0, 1, 0, 3, 4, 5, 6, 7 },
             .is_signer = &.{ 1, 0, 1, 0, 0, 0, 0, 0 },
             .is_writable = &.{ 0, 0, 0, 0, 1, 0, 0, 0 },
         },
@@ -489,24 +483,18 @@ test resolveBatch {
             input_ix.account_indexes,
             output_ix.account_metas.slice(),
             expect.index_in_transaction,
-            // expect.index_in_caller,
-            // expect.index_in_callee,
             expect.is_signer,
             expect.is_writable,
         ) |
             input_index,
             output_meta,
             index_in_transaction,
-            // index_in_caller,
-            // index_in_callee,
             is_signer,
             is_writable,
         | {
             const address = resolved.accounts[input_index].address;
             try std.testing.expectEqual(address, output_meta.pubkey);
             try std.testing.expectEqual(index_in_transaction, output_meta.index_in_transaction);
-            // try std.testing.expectEqual(index_in_caller, output_meta.index_in_caller);
-            // try std.testing.expectEqual(index_in_callee, output_meta.index_in_callee);
             try std.testing.expectEqual(is_signer != 0, output_meta.is_signer);
             try std.testing.expectEqual(is_writable != 0, output_meta.is_writable);
         }
