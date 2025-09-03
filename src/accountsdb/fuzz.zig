@@ -484,15 +484,16 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
             });
             defer alt_accounts_db.deinit();
 
-            (try alt_accounts_db.loadWithDefaults(
-                allocator,
-                combined_manifest,
-                1,
-                true,
-                N_ACCOUNTS_PER_SLOT,
-                false,
-                false,
-            )).deinit(allocator);
+            {
+                const loaded = try alt_accounts_db.loadWithDefaults(
+                    allocator,
+                    combined_manifest,
+                    1,
+                    true,
+                    N_ACCOUNTS_PER_SLOT,
+                );
+                defer loaded.deinit(allocator);
+            }
 
             const maybe_inc_slot = if (snapshot_info.inc) |inc| inc.slot else null;
             logger.info().logf(
