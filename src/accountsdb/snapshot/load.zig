@@ -251,7 +251,7 @@ test loadSnapshot {
         },
     ));
 
-    const metadata_only = try loadSnapshot(
+    var metadata_only = try loadSnapshot(
         allocator,
         .{
             .snapshot_dir = path,
