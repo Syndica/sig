@@ -516,6 +516,12 @@ pub const ForkChoice = struct {
         self.tree_root = new_root.*;
         self.last_root_time = Instant.now();
 
+        // Log the new root update
+        self.logger.info().logf("fork_choice: new root set to slot={} hash={}", .{
+            new_root.slot,
+            new_root.hash,
+        });
+
         // Update metrics after changing tree root
         self.updateMetrics();
     }
@@ -559,6 +565,12 @@ pub const ForkChoice = struct {
             .is_duplicate_confirmed = root_info.is_duplicate_confirmed,
         });
         self.tree_root = root_parent;
+
+        // Log the new root parent update
+        self.logger.info().logf("fork_choice: new root parent set to slot={} hash={}", .{
+            root_parent.slot,
+            root_parent.hash,
+        });
 
         // Update metrics after changing tree root
         self.updateMetrics();
