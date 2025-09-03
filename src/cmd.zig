@@ -118,6 +118,7 @@ pub fn main() !void {
             params.gossip_base.apply(&current_config);
             params.gossip_node.apply(&current_config);
             params.repair.apply(&current_config);
+            current_config.shred_network.dump_shred_tracker = params.repair.dump_shred_tracker;
             current_config.accounts_db.snapshot_dir = params.snapshot_dir;
             current_config.genesis_file_path = params.genesis_file_path;
             params.accountsdb_base.apply(&current_config);
@@ -132,7 +133,7 @@ pub fn main() !void {
             params.gossip_base.apply(&current_config);
             params.gossip_node.apply(&current_config);
             params.repair.apply(&current_config);
-            current_config.shred_network.dump_shred_tracker = params.dump_shred_tracker;
+            current_config.shred_network.dump_shred_tracker = params.repair.dump_shred_tracker;
             current_config.turbine.overwrite_stake_for_testing =
                 params.overwrite_stake_for_testing;
             current_config.shred_network.no_retransmit = params.no_retransmit;
@@ -551,6 +552,7 @@ const Cmd = struct {
         test_repair_for_slot: ?Slot,
         max_shreds: u64,
         num_retransmit_threads: ?usize,
+        dump_shred_tracker: bool,
 
         const cmd_info: cli.ArgumentInfoGroup(@This()) = .{
             .turbine_port = .{
@@ -597,6 +599,15 @@ const Cmd = struct {
                 .default_value = 5_000_000,
                 .config = {},
                 .help = "Max number of shreds to store in the ledger",
+            },
+            .dump_shred_tracker = .{
+                .kind = .named,
+                .name_override = "dump-shred-tracker",
+                .alias = .none,
+                .default_value = false,
+                .config = {},
+                .help = "Create shred-tracker.txt" ++
+                    " to visually represent the currently tracked slots.",
             },
         };
 
@@ -719,7 +730,6 @@ const Cmd = struct {
         gossip_base: GossipArgumentsCommon,
         gossip_node: GossipArgumentsNode,
         repair: RepairArgumentsBase,
-        dump_shred_tracker: bool,
         /// TODO: Remove when no longer needed
         overwrite_stake_for_testing: bool,
         no_retransmit: bool,
@@ -747,15 +757,6 @@ const Cmd = struct {
                 .gossip_base = GossipArgumentsCommon.cmd_info,
                 .gossip_node = GossipArgumentsNode.cmd_info,
                 .repair = RepairArgumentsBase.cmd_info,
-                .dump_shred_tracker = .{
-                    .kind = .named,
-                    .name_override = "dump-shred-tracker",
-                    .alias = .none,
-                    .default_value = false,
-                    .config = {},
-                    .help = "Create shred-tracker.txt" ++
-                        " to visually represent the currently tracked slots.",
-                },
                 .overwrite_stake_for_testing = .{
                     .kind = .named,
                     .name_override = null,
@@ -1207,9 +1208,17 @@ fn validator(
 
     const replay_thread = replay: {
         const epoch_stakes_map = &collapsed_manifest.bank_extra.versioned_epoch_stakes;
-        const epoch_stakes = epoch_stakes_map.get(epoch) orelse
+        const versioned_epoch_stakes = epoch_stakes_map.get(epoch) orelse
             return error.EpochStakesMissingFromSnapshot;
 
+        const epoch_stakes = try versioned_epoch_stakes.current.convert(allocator, .delegation);
+        errdefer epoch_stakes.deinit(allocator);
+
+        const current_epoch_constants = try sig.core.EpochConstants.fromBankFields(
+            bank_fields,
+            epoch_stakes,
+        );
+        errdefer current_epoch_constants.deinit(allocator);
         const feature_set = try sig.replay.service.getActiveFeatures(
             allocator,
             loaded_snapshot.accounts_db.accountReader().forSlot(&bank_fields.ancestors),
@@ -1250,11 +1259,9 @@ fn validator(
 
                 .senders = replay_senders,
                 .receivers = replay_receivers,
+                .gossip_table_rw = &gossip_service.gossip_table_rw,
                 .current_epoch = epoch,
-                .current_epoch_constants = try .fromBankFields(
-                    bank_fields,
-                    try epoch_stakes.current.convert(allocator, .delegation),
-                ),
+                .current_epoch_constants = current_epoch_constants,
                 .hard_forks = try bank_fields.hard_forks.clone(allocator),
             }},
         );
