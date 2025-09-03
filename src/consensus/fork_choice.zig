@@ -249,7 +249,7 @@ pub const ForkChoice = struct {
             self.metrics.current_deepest_slot.set(slot);
         }
 
-        self.metrics.current_tree_root_slot.set(self.tree_root.slot);
+        self.metrics.current_root_slot.set(self.tree_root.slot);
     }
 
     /// [Agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L452
