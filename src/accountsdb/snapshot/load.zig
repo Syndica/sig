@@ -212,6 +212,7 @@ test loadSnapshot {
     const src_dir = try std.fs.cwd().openDir(sig.TEST_DATA_DIR, .{ .iterate = true });
     const snapshot_files = try snapshot.data.SnapshotFiles.find(allocator, src_dir);
     const snapshot_filename = snapshot_files.full.snapshotArchiveName();
+    const incremental_filename = snapshot_files.incremental().?.snapshotArchiveName();
 
     try std.testing.expectError(error.SnapshotsNotFoundAndNoGossipService, loadSnapshot(
         allocator,
@@ -232,6 +233,7 @@ test loadSnapshot {
     ));
 
     try src_dir.copyFile(snapshot_filename.slice(), tmp.dir, snapshot_filename.slice(), .{});
+    try src_dir.copyFile(incremental_filename.slice(), tmp.dir, incremental_filename.slice(), .{});
 
     try std.testing.expectError(error.FileNotFound, loadSnapshot(
         allocator,
