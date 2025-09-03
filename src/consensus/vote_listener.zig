@@ -119,6 +119,7 @@ pub const VoteListener = struct {
     verified_vote_transactions: *sig.sync.Channel(Transaction),
     recv: std.Thread,
     process_votes: std.Thread,
+    metrics: *VoteListenerMetrics,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -139,6 +140,7 @@ pub const VoteListener = struct {
             senders: Senders,
         },
     ) !VoteListener {
+        var metrics = try VoteListenerMetrics.init();
         const verified_vote_transactions = try sig.sync.Channel(Transaction).create(allocator);
         errdefer verified_vote_transactions.destroy();
 
@@ -148,6 +150,7 @@ pub const VoteListener = struct {
             params.slot_data_provider_rw,
             params.gossip_table_rw,
             verified_vote_transactions,
+            &metrics,
         });
         errdefer recv_thread.join();
         recv_thread.setName("sigSolCiVoteLstnr") catch {};
@@ -167,6 +170,7 @@ pub const VoteListener = struct {
 
             params.ledger_ref,
             exit,
+            &metrics,
         });
         errdefer process_votes_thread.join();
         process_votes_thread.setName("solCiProcVotes") catch {};
@@ -176,6 +180,7 @@ pub const VoteListener = struct {
             .verified_vote_transactions = verified_vote_transactions,
             .recv = recv_thread,
             .process_votes = process_votes_thread,
+            .metrics = &metrics,
         };
     }
 
@@ -242,6 +247,7 @@ const UnverifiedVoteReceptor = struct {
         unverified_votes_buffer: *std.ArrayListUnmanaged(Transaction),
         /// Sends to `processVotesLoop`'s `receivers.verified_vote_transactions` parameter.
         verified_vote_transactions_sender: *sig.sync.Channel(Transaction),
+        metrics: *VoteListenerMetrics,
     ) !void {
         unverified_votes_buffer.clearRetainingCapacity();
         defer for (unverified_votes_buffer.items) |vote_tx| vote_tx.deinit(allocator);
@@ -257,6 +263,9 @@ const UnverifiedVoteReceptor = struct {
             std.time.sleep(GOSSIP_SLEEP_MILLIS);
             return;
         }
+
+        // Update metrics for gossip votes received
+        metrics.gossip_votes_received.add(unverified_votes_buffer.items.len);
 
         const slot_data_provider, var slot_data_provider_lg = slot_data_provider_rw.readWithLock();
         defer slot_data_provider_lg.unlock();
@@ -277,6 +286,7 @@ fn recvLoop(
     gossip_table_rw: *sig.sync.RwMux(sig.gossip.GossipTable),
     /// Sends to `processVotesLoop`'s `receivers.verified_vote_transactions` parameter.
     verified_vote_transactions_sender: *sig.sync.Channel(Transaction),
+    metrics: *VoteListenerMetrics,
 ) !void {
     defer exit.afterExit();
 
@@ -291,6 +301,7 @@ fn recvLoop(
             gossip_table_rw,
             &unverified_votes_buffer,
             verified_vote_transactions_sender,
+            metrics,
         );
     }
 }
@@ -403,6 +414,7 @@ fn processVotesLoop(
     receivers: Receivers,
     ledger_ref: LedgerRef,
     exit: sig.sync.ExitCondition,
+    metrics: *VoteListenerMetrics,
 ) !void {
     defer exit.afterExit();
 
@@ -431,6 +443,7 @@ fn processVotesLoop(
             &latest_vote_slot_per_validator,
             &last_process_root,
             &vote_processing_time,
+            metrics,
         )) {
             .ok => {},
             .disconnected => return,
@@ -459,6 +472,7 @@ fn processVotesOnce(
     latest_vote_slot_per_validator: *std.AutoArrayHashMapUnmanaged(Pubkey, Slot),
     last_process_root: *sig.time.Instant,
     vote_processing_time: *VoteProcessingTiming,
+    metrics: *VoteListenerMetrics,
 ) !enum { ok, disconnected, timeout, logged } {
     const slot_data_provider, var slot_data_provider_lg = slot_data_provider_rw.readWithLock();
     defer slot_data_provider_lg.unlock();
@@ -492,6 +506,7 @@ fn processVotesOnce(
         receivers,
         vote_processing_time,
         latest_vote_slot_per_validator,
+        metrics,
     ) catch |err| switch (err) {
         error.RecvTimeoutDisconnected => {
             return .disconnected;
@@ -532,6 +547,7 @@ fn listenAndConfirmVotes(
     receivers: Receivers,
     vote_processing_time: ?*VoteProcessingTiming,
     latest_vote_slot_per_validator: *std.AutoArrayHashMapUnmanaged(Pubkey, Slot),
+    metrics: *VoteListenerMetrics,
 ) ListenAndConfirmVotesError![]const ThresholdConfirmedSlot {
     var gossip_vote_txs_buffer: std.ArrayListUnmanaged(Transaction) = .{};
     defer gossip_vote_txs_buffer.deinit(allocator);
@@ -555,6 +571,7 @@ fn listenAndConfirmVotes(
             break :blk gossip_vote_txs_buffer.items;
         };
         defer for (gossip_vote_txs) |vote_tx| vote_tx.deinit(allocator);
+        if (gossip_vote_txs.len > 0) metrics.gossip_votes_received.add(gossip_vote_txs.len);
 
         const replay_votes: []const vote_parser.ParsedVote = blk: {
             replay_votes_buffer.clearRetainingCapacity();
@@ -564,6 +581,7 @@ fn listenAndConfirmVotes(
             }
             break :blk replay_votes_buffer.items;
         };
+        if (replay_votes.len > 0) metrics.replay_votes_received.add(replay_votes.len);
         // TODO: either pass separate allocator to deinit replay votes, or document
         // that replay and the vote listener must use the same allocator
         defer for (replay_votes) |replay_vote| replay_vote.deinit(allocator);
@@ -582,6 +600,7 @@ fn listenAndConfirmVotes(
             latest_vote_slot_per_validator,
             gossip_vote_txs,
             replay_votes,
+            metrics,
         );
     }
 
@@ -598,6 +617,7 @@ fn filterAndConfirmWithNewVotes(
     latest_vote_slot_per_validator: *std.AutoArrayHashMapUnmanaged(Pubkey, Slot),
     gossip_vote_txs: []const Transaction,
     replayed_votes: []const vote_parser.ParsedVote,
+    metrics: *VoteListenerMetrics,
 ) std.mem.Allocator.Error![]const ThresholdConfirmedSlot {
     const root_slot = slot_data_provider.rootSlot();
 
@@ -641,6 +661,7 @@ fn filterAndConfirmWithNewVotes(
                 is_gossip,
                 latest_vote_slot_per_validator,
             );
+            if (is_gossip) metrics.gossip_votes_processed.add(1) else metrics.replay_votes_processed.add(1);
         }
     }
 
@@ -1791,12 +1812,15 @@ test "check trackers" {
 
         var unverified_votes_buffer: std.ArrayListUnmanaged(Transaction) = .empty;
         defer unverified_votes_buffer.deinit(allocator);
+        var test_metrics = try VoteListenerMetrics.init();
+
         try receptor.recvAndSendOnce(
             allocator,
             &slot_data_provider_rw,
             &gossip_table_rw,
             &unverified_votes_buffer,
             verified_vote_transactions_channel,
+            &test_metrics,
         );
 
         var latest_vote_slot_per_validator: std.AutoArrayHashMapUnmanaged(Pubkey, Slot) = .empty;
@@ -1829,6 +1853,7 @@ test "check trackers" {
             &latest_vote_slot_per_validator,
             &last_process_root,
             &vote_processing_time,
+            &test_metrics,
         ));
     }
 
