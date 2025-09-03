@@ -381,6 +381,19 @@ const Receivers = struct {
     replay_votes: *sig.sync.Channel(vote_parser.ParsedVote),
 };
 
+pub const VoteListenerMetrics = struct {
+    gossip_votes_received: *sig.prometheus.Counter,
+    replay_votes_received: *sig.prometheus.Counter,
+    gossip_votes_processed: *sig.prometheus.Counter,
+    replay_votes_processed: *sig.prometheus.Counter,
+
+    pub const prefix = "vote_listener";
+
+    pub fn init() sig.prometheus.GetMetricError!VoteListenerMetrics {
+        return sig.prometheus.globalRegistry().initStruct(VoteListenerMetrics);
+    }
+};
+
 fn processVotesLoop(
     allocator: std.mem.Allocator,
     logger: Logger,
