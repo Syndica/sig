@@ -194,11 +194,12 @@ pub fn popInstruction(
 
     // [agave] https://github.com/anza-xyz/solana-sdk/blob/e1554f4067329a0dcf5035120ec6a06275d3b9ec/transaction-context/src/lib.rs#L411-L426
     const unbalanced_instruction = blk: {
-        const ic = &tc.instruction_stack.buffer[tc.instruction_stack.len - 1];
+        const ic = try tc.getCurrentInstructionContext();
 
         // Check program account has no outstanding borrows
-        const program_account = ic.borrowProgramAccount() catch {
-            return InstructionError.AccountBorrowOutstanding;
+        const program_account = ic.borrowProgramAccount() catch |err| switch (err) {
+            error.AccountBorrowFailed => return InstructionError.AccountBorrowOutstanding,
+            else => |e| return e,
         };
         program_account.release();
 
@@ -359,23 +360,17 @@ test pushInstruction {
     {
         // Failure: UnbalancedInstruction
         // Modify and defer reset the first account's lamports
-       
-        {
-            var first = try (try tc.getCurrentInstructionContext()).borrowInstructionAccount(0);
-            defer first.release();
-            try first.addLamports(1);
+        tc.accounts[0].account.lamports += 1;
+        tc.accounts_lamport_delta += 1;
+        defer {
+            tc.accounts[0].account.lamports -= 1;
+            tc.accounts_lamport_delta -= 1;
         }
 
         try std.testing.expectError(
             InstructionError.UnbalancedInstruction,
             pushInstruction(&tc, instruction_info),
         );
-
-        {
-            var first = try (try tc.getCurrentInstructionContext()).borrowInstructionAccount(0);
-            defer first.release();
-            try first.subtractLamports(1);
-        }
     }
 
     // Success
@@ -558,7 +553,7 @@ test "processNextInstruction" {
     try processNextInstruction(allocator, &tc);
 }
 
-test "popInstruction" {
+test popInstruction {
     const testing = sig.runtime.testing;
     const system_program = sig.runtime.program.system;
 
@@ -570,7 +565,7 @@ test "popInstruction" {
         prng.random(),
         .{
             .accounts = &.{
-                .{ .lamports = 2_000 },
+                .{ .lamports = 2_000, .owner = system_program.ID },
                 .{ .lamports = 0 },
                 .{ .pubkey = system_program.ID },
             },
@@ -590,7 +585,7 @@ test "popInstruction" {
             },
         },
         &.{
-            .{ .index_in_transaction = 0 },
+            .{ .index_in_transaction = 0, .is_writable = true },
             .{ .index_in_transaction = 1 },
         },
     );
@@ -607,13 +602,7 @@ test "popInstruction" {
 
     {
         // Failure: AccountBorrowOutstanding
-        const borrowed_account = try tc.borrowAccountAtIndex(0, .{
-            .program_id = .ZEROES,
-            .is_signer = false,
-            .is_writable = false,
-            .remove_accounts_executable_flag_checks = false,
-            .accounts_lamport_delta = &tc.accounts_lamport_delta,
-        });
+        const borrowed_account = try (try tc.getCurrentInstructionContext()).borrowProgramAccount();
         defer borrowed_account.release();
         try std.testing.expectError(
             InstructionError.AccountBorrowOutstanding,
@@ -623,9 +612,13 @@ test "popInstruction" {
 
     {
         // Failure: UnbalancedInstruction
-        const original_lamports = tc.accounts[0].account.lamports;
-        defer tc.accounts[0].account.lamports = original_lamports;
-        tc.accounts[0].account.lamports = original_lamports + 1;
+        tc.accounts[0].account.lamports += 1;
+        tc.accounts_lamport_delta += 1;
+        defer {
+            tc.accounts[0].account.lamports -= 1;
+            tc.accounts_lamport_delta -= 1;
+        }
+
         try std.testing.expectError(
             InstructionError.UnbalancedInstruction,
             popInstruction(&tc),
@@ -643,7 +636,7 @@ test "popInstruction" {
     );
 }
 
-test "prepareCpiInstructionInfo" {
+test prepareCpiInstructionInfo {
     const testing = sig.runtime.testing;
     const system_program = sig.runtime.program.system;
     const FeatureSet = sig.core.FeatureSet;
