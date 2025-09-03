@@ -571,7 +571,6 @@ fn listenAndConfirmVotes(
             break :blk gossip_vote_txs_buffer.items;
         };
         defer for (gossip_vote_txs) |vote_tx| vote_tx.deinit(allocator);
-        if (gossip_vote_txs.len > 0) metrics.gossip_votes_received.add(gossip_vote_txs.len);
 
         const replay_votes: []const vote_parser.ParsedVote = blk: {
             replay_votes_buffer.clearRetainingCapacity();
@@ -661,7 +660,10 @@ fn filterAndConfirmWithNewVotes(
                 is_gossip,
                 latest_vote_slot_per_validator,
             );
-            if (is_gossip) metrics.gossip_votes_processed.add(1) else metrics.replay_votes_processed.add(1);
+            if (is_gossip)
+                metrics.gossip_votes_processed.inc()
+            else
+                metrics.replay_votes_processed.inc();
         }
     }
 
