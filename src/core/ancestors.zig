@@ -23,8 +23,19 @@ pub const Ancestors = struct {
         },
     );
 
-    pub fn addSlot(self: *Ancestors, allocator: std.mem.Allocator, slot: Slot) !void {
+    pub fn addSlot(
+        self: *Ancestors,
+        allocator: std.mem.Allocator,
+        slot: Slot,
+    ) std.mem.Allocator.Error!void {
         try self.ancestors.put(allocator, slot, {});
+    }
+
+    pub fn addSlotAssumeCapacity(
+        self: *Ancestors,
+        slot: Slot,
+    ) void {
+        self.ancestors.putAssumeCapacity(slot, {});
     }
 
     pub fn containsSlot(self: *const Ancestors, slot: Slot) bool {
@@ -46,5 +57,19 @@ pub const Ancestors = struct {
 
     pub fn deinit(self: *Ancestors, allocator: std.mem.Allocator) void {
         self.ancestors.deinit(allocator);
+    }
+
+    pub fn subsetInto(
+        self: *const Ancestors,
+        max_slot: Slot,
+        allocator: std.mem.Allocator,
+        subset_result: *Ancestors,
+    ) std.mem.Allocator.Error!void {
+        subset_result.ancestors.clearRetainingCapacity();
+        try subset_result.ancestors.ensureTotalCapacity(allocator, self.ancestors.count());
+        for (self.ancestors.keys()) |slot| {
+            if (slot > max_slot) continue;
+            subset_result.addSlotAssumeCapacity(slot);
+        }
     }
 };
