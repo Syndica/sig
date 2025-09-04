@@ -12,8 +12,6 @@ const bytesAsValue = std.mem.bytesAsValue;
 /// very similar to RecycleFBA but with a few differences:
 /// - this uses an explicit T type and only returns slices of that type (instead of a generic u8)
 /// - additional memory blocks are supported (instead of using a fixed-buffer-allocator approach)
-/// - record serialization is supported for fast loading this memory back
-/// - the global index is also returned on allocation to help with additional book-keeping
 ///
 /// when `alloc` returns error.AllocFailed the allocation failed and the caller should try again
 /// (after some records/buffers have been free'd/recycle'd).
@@ -45,20 +43,12 @@ pub fn RecycleBuffer(comptime T: type, default_init: T, config: struct {
         mux: std.Thread.Mutex = .{},
         const Self = @This();
 
-        // NOTE: we use the global_index to support fast loading the state
         pub const Record = struct {
             is_free: bool,
             buf: []T,
-            global_index: u64,
             len: u64,
             // NOTE: this is tracked for correct usage of collapse()
             memory_index: u64,
-
-            /// NOTE: we dont want to re-write the buf memory (that exists in `memory` field) on save
-            pub const @"!bincode-config:buf": sig.bincode.FieldConfig([]T) = .{
-                .skip = true,
-                .default_value = &.{},
-            };
         };
 
         const AllocatorConfig = struct {
@@ -121,7 +111,6 @@ pub fn RecycleBuffer(comptime T: type, default_init: T, config: struct {
             self.records.appendAssumeCapacity(.{
                 .is_free = true,
                 .buf = buf,
-                .global_index = self.capacity,
                 .len = buf.len,
                 .memory_index = self.memory.items.len,
             });
@@ -138,7 +127,7 @@ pub fn RecycleBuffer(comptime T: type, default_init: T, config: struct {
             CollapseFailed,
         } || Allocator.Error;
 
-        pub fn alloc(self: *Self, n: u64) AllocError!struct { []T, u64 } {
+        pub fn alloc(self: *Self, n: u64) AllocError![]T {
             if (config.thread_safe) self.mux.lock();
             defer if (config.thread_safe) self.mux.unlock();
 
@@ -168,7 +157,7 @@ pub fn RecycleBuffer(comptime T: type, default_init: T, config: struct {
 
         /// same as alloc but if the alloc fails due to not having enough free records (error.AllocFailed),
         /// it expands the records to max(min_split_size, n) and retrys (which should always succeed)
-        pub fn allocOrExpand(self: *Self, n: u64) AllocError!struct { []T, u64 } {
+        pub fn allocOrExpand(self: *Self, n: u64) AllocError![]T {
             if (config.thread_safe) self.mux.lock();
             defer if (config.thread_safe) self.mux.unlock();
 
@@ -199,13 +188,11 @@ pub fn RecycleBuffer(comptime T: type, default_init: T, config: struct {
             return self.allocUnsafe(n);
         }
 
-        pub fn allocUnsafe(self: *Self, n: u64) AllocError!struct { []T, u64 } {
+        pub fn allocUnsafe(self: *Self, n: u64) AllocError![]T {
             if (n == 0) return error.AttemptedZeroAlloc;
             // this would never succeed
             if (n > self.max_continguous_capacity) return error.AllocTooBig;
 
-            // this is used to index directly into the buffer's underlying data
-            var global_index: u64 = 0;
             // check for a buf to recycle
             var is_possible_to_recycle = false;
             for (self.records.items) |*record| {
@@ -215,12 +202,11 @@ pub fn RecycleBuffer(comptime T: type, default_init: T, config: struct {
                         // local copy because next line will likely change the record pointer
                         const buf = record.buf[0..n];
                         _ = self.tryRecycleUnusedSpaceWithRecordUnsafe(record, n);
-                        return .{ buf, global_index };
+                        return buf;
                     } else {
                         is_possible_to_recycle = true;
                     }
                 }
-                global_index += record.buf.len;
             }
 
             if (is_possible_to_recycle) {
@@ -284,7 +270,6 @@ pub fn RecycleBuffer(comptime T: type, default_init: T, config: struct {
                 self.records.append(self.records_allocator, .{
                     .is_free = true,
                     .buf = split_buf,
-                    .global_index = record.global_index + used_len,
                     .len = split_buf.len,
                     .memory_index = record.memory_index,
                 }) catch unreachable;
@@ -1062,54 +1047,6 @@ pub const failing = struct {
     }
 };
 
-test "recycle buffer: save and load" {
-    const backing_allocator = std.testing.allocator;
-    const X = struct {
-        a: u8,
-        pub const DEFAULT: @This() = .{ .a = 0 };
-    };
-
-    var allocator = RecycleBuffer(X, X.DEFAULT, .{
-        .min_split_size = 10,
-    }).init(.{
-        .records_allocator = backing_allocator,
-        .memory_allocator = backing_allocator,
-    });
-    defer allocator.deinit();
-
-    // create 100 references
-    try allocator.expandCapacity(100);
-    // [0] assume flattened memory
-    const references = allocator.memory.items[0];
-
-    // this will create two records, one len 20 and one len 80
-    _ = try allocator.alloc(20);
-
-    // bincode write to slice
-    const records_size = sig.bincode.sizeOf(allocator.records.items, .{});
-    const records_memory = try backing_allocator.alloc(u8, records_size);
-    defer backing_allocator.free(records_memory);
-    _ = try sig.bincode.writeToSlice(records_memory, allocator.records.items, .{});
-
-    // read from slice to records
-    var records = try sig.bincode.readFromSlice(
-        backing_allocator,
-        @TypeOf(allocator.records),
-        records_memory,
-        .{},
-    );
-    defer records.deinit(backing_allocator);
-
-    for (records.items) |*record| {
-        record.buf = references[record.global_index..][0..record.len];
-    }
-
-    try std.testing.expectEqual(2, records.items.len);
-    for (records.items, allocator.records.items) |*record, *r| {
-        try std.testing.expectEqual(r.buf, record.buf);
-    }
-}
-
 test "recycle buffer: freeUnused" {
     const backing_allocator = std.testing.allocator;
     const X = struct {
@@ -1129,7 +1066,7 @@ test "recycle buffer: freeUnused" {
     try allocator.expandCapacity(100);
 
     // alloc a slice of 100 bytes
-    const bytes, _ = try allocator.alloc(100);
+    const bytes = try allocator.alloc(100);
     defer allocator.free(bytes.ptr);
 
     // free the unused space
@@ -1137,7 +1074,7 @@ test "recycle buffer: freeUnused" {
     try std.testing.expectEqual(true, did_recycle);
 
     // this should be ok now
-    const bytes2, _ = try allocator.alloc(50);
+    const bytes2 = try allocator.alloc(50);
     defer allocator.free(bytes2.ptr);
 
     const expected_ptr: [*]X = @alignCast(@ptrCast(&bytes[50]));

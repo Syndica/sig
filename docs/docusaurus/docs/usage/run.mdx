@@ -87,8 +87,6 @@ sig snapshot-validate \
     -n testnet \
     # stream the accounts out of the snapshot (see the geyser readme to know how to read from the stream)
     --enable-geyser \
-    # save the index generated for faster loads in the future (use --fastload in future runs)
-    --save-index \
     # preallocate some accounts to increase the speed of the snapshot validation
     --accounts-per-file-estimate 500
 ```

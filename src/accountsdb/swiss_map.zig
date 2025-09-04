@@ -623,7 +623,7 @@ test "swissmap load from memory" {
 
     try map.ensureTotalCapacity(100);
 
-    const ref = accounts_db.index.AccountRef.DEFAULT;
+    const ref = accounts_db.index.AccountRef.ZEROES;
     map.putAssumeCapacity(sig.core.Pubkey.ZEROES, ref);
 
     var map2 = MapT.initFromMemory(std.testing.allocator, map.unmanaged.memory);
@@ -643,7 +643,7 @@ test "swissmap resize" {
 
     try map.ensureTotalCapacity(100);
 
-    const ref = accounts_db.index.AccountRef.DEFAULT;
+    const ref = accounts_db.index.AccountRef.ZEROES;
     map.putAssumeCapacity(sig.core.Pubkey.ZEROES, ref);
 
     // this will resize the map with the key still in there
@@ -746,7 +746,7 @@ fn generateData(allocator: std.mem.Allocator, n_accounts: usize) !struct {
     const account_refs = try allocator.alloc(accounts_db.index.AccountRef, n_accounts);
     const pubkeys = try allocator.alloc(sig.core.Pubkey, n_accounts);
     for (account_refs, pubkeys) |*account_ref, *pubkey| {
-        account_ref.* = accounts_db.index.AccountRef.DEFAULT;
+        account_ref.* = .ZEROES;
         random.bytes(&account_ref.pubkey.data);
         pubkey.* = account_ref.pubkey;
     }
