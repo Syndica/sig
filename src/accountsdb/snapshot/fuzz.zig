@@ -1,5 +1,5 @@
 const std = @import("std");
-const sig = @import("../sig.zig");
+const sig = @import("../../sig.zig");
 
 const bincode = sig.bincode;
 
@@ -7,11 +7,11 @@ const BankFields = sig.core.BankFields;
 const Slot = sig.core.Slot;
 const Hash = sig.core.Hash;
 
-const AccountFileInfo = sig.accounts_db.snapshots.AccountFileInfo;
-const AccountsDbFields = sig.accounts_db.snapshots.AccountsDbFields;
-const ExtraFields = sig.accounts_db.snapshots.ExtraFields;
+const AccountFileInfo = sig.accounts_db.snapshot.data.AccountFileInfo;
+const AccountsDbFields = sig.accounts_db.snapshot.data.AccountsDbFields;
+const ExtraFields = sig.accounts_db.snapshot.data.ExtraFields;
 const FileId = sig.accounts_db.accounts_file.FileId;
-const SnapshotManifest = sig.accounts_db.Manifest;
+const SnapshotManifest = sig.accounts_db.snapshot.Manifest;
 
 const MAX_FUZZ_TIME_NS = std.time.ns_per_s * 100_000;
 
