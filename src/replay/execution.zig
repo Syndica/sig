@@ -250,9 +250,13 @@ const PreparedSlot = union(enum) {
 /// - Initializes the ForkProgress in the progress map for the slot if necessary.
 /// - Extracts the inputs for confirmSlot from the ledger and the slot and epoch trackers.
 ///
-/// Combines the logic of these agave functions, just without actually executing the slot.
+/// Combines the logic of these agave functions, just without actually executing
+/// the slot. So, where agave's `confirm_slot` calls `confirm_slot_entries`,
+/// at that point, we just return all the prepared data, which can be passed
+/// into confirmSlot or confirmSlotSync.
 /// - [replay_active_bank](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/core/src/replay_stage.rs#L2979)
 /// - [replay_blockstore_into_bank](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/core/src/replay_stage.rs#L2232)
+/// - [confirm_slot](https://github.com/anza-xyz/agave/blob/d79257e5f4afca4d092793f7a1e854cd5ccd6be9/ledger/src/blockstore_processor.rs#L1486)
 fn prepareSlot(state: ReplayExecutionState, slot: Slot) !PreparedSlot {
     var zone = tracy.Zone.init(@src(), .{ .name = "replaySlot" });
     zone.value(slot);
