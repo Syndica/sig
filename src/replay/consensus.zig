@@ -49,9 +49,8 @@ fn getVoteAccountsFromStakesCache(
     var vote_accounts = sig.core.vote_accounts.StakeAndVoteAccountsMap.empty;
     errdefer vote_accounts.deinit(allocator);
 
-    var stakes_guard = stakes_cache.stakes.read();
-    defer stakes_guard.unlock();
-    const stakes = stakes_guard.get();
+    const stakes, var stakes_lg = stakes_cache.stakes.readWithLock();
+    defer stakes_lg.unlock();
 
     try vote_accounts.ensureTotalCapacity(allocator, stakes.vote_accounts.vote_accounts.count());
     for (
