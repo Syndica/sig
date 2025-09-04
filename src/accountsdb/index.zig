@@ -19,8 +19,7 @@ pub const AccountRef = struct {
     slot: Slot,
     location: AccountLocation,
     next_ptr: ?*AccountRef,
-    // NOTE: used purely so that we can realloc slices of AccountRefs and fix up the next(ptr+index).
-    // this isn't serialised - it is inferred from next_index.
+    // NOTE: used purely so that we can realloc slices of AccountRefs and fix up the next ptr.
     prev_ptr: ?*AccountRef = null,
 
     pub const ZEROES: AccountRef = .{
