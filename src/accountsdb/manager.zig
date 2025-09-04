@@ -132,7 +132,7 @@ pub const Manager = struct {
             //   we're waiting on the account cache lock.
             // * we eventually acquire the lock, but have already read a now-stale
             //   largest rooted slot value.
-            const root_slot = self.db.largest_rooted_slot.load(.monotonic);
+            const root_slot = self.db.max_slots.readCopy().rooted orelse 0;
 
             // flush slots <= root slot
             // TODO: account for forks when consensus is implemented
@@ -175,10 +175,12 @@ pub const Manager = struct {
                 self.unclean_account_files.appendAssumeCapacity(unclean_file_id);
                 largest_flushed_slot = @max(largest_flushed_slot, flush_slot);
             }
-            _ = self.db.largest_flushed_slot.fetchMax(largest_flushed_slot, .seq_cst);
+            const max_slots, var max_slots_lg = self.db.max_slots.writeWithLock();
+            defer max_slots_lg.unlock();
+            max_slots.flushed = @max(max_slots.flushed orelse 0, largest_flushed_slot);
         }
 
-        const largest_flushed_slot = self.db.largest_flushed_slot.load(.seq_cst);
+        const largest_flushed_slot = self.db.max_slots.readCopy().flushed orelse 0;
 
         const latest_full_snapshot_slot_before_generation = blk: {
             const maybe_latest_snapshot_info, var latest_snapshot_info_lg =

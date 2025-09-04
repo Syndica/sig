@@ -358,7 +358,10 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
             random.int(u8) == 0;
         if (create_new_root) snapshot_validation: {
             largest_rooted_slot = @min(top_slot, largest_rooted_slot + 2);
-            accounts_db.largest_rooted_slot.store(largest_rooted_slot, .monotonic);
+            accounts_db.max_slots.set(.{
+                .rooted = largest_rooted_slot,
+                .flushed = null,
+            });
             try manager.manage(allocator);
 
             // holding the lock here means that the snapshot archive(s) wont be deleted
