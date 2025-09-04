@@ -42,6 +42,28 @@ pub const collectVoteLockouts = sig.consensus.replay_tower.collectVoteLockouts;
 
 const MAX_VOTE_REFRESH_INTERVAL_MILLIS: usize = 5000;
 
+fn getVoteAccountsFromStakesCache(
+    allocator: Allocator,
+    stakes_cache: *sig.core.StakesCache,
+) !sig.core.vote_accounts.StakeAndVoteAccountsMap {
+    var vote_accounts = sig.core.vote_accounts.StakeAndVoteAccountsMap.empty;
+    errdefer vote_accounts.deinit(allocator);
+
+    var stakes_guard = stakes_cache.stakes.read();
+    defer stakes_guard.unlock();
+    const stakes = stakes_guard.get();
+
+    try vote_accounts.ensureTotalCapacity(allocator, stakes.vote_accounts.vote_accounts.count());
+    for (
+        stakes.vote_accounts.vote_accounts.keys(),
+        stakes.vote_accounts.vote_accounts.values(),
+    ) |key, value| {
+        vote_accounts.putAssumeCapacity(key, try value.clone(allocator));
+    }
+
+    return vote_accounts;
+}
+
 pub const ConsensusDependencies = struct {
     allocator: Allocator,
     logger: Logger,
@@ -571,18 +593,24 @@ fn computeBankStats(
     // TODO agave sorts this by the slot first. Is this needed for the implementation to be correct?
     // If not, then we can avoid sorting here which may be verbose given frozen_slots is a map.
     for (frozen_slots.keys()) |slot| {
-        const epoch = epoch_schedule.getEpoch(slot);
-        const epoch_stakes = epoch_stakes_map.get(epoch) orelse return error.MissingEpochStakes;
         const fork_stat = progress.getForkStats(slot) orelse return error.MissingSlot;
         if (!fork_stat.computed) {
             // TODO Self::adopt_on_chain_tower_if_behind
             // Gather voting information from all vote accounts to understand the current consensus state.
+            const slot_info_for_stakes = slot_tracker.get(slot) orelse return error.MissingSlots;
+            var vote_accounts =
+                try getVoteAccountsFromStakesCache(
+                    allocator,
+                    &slot_info_for_stakes.state.stakes_cache,
+                );
+            defer vote_accounts.deinit(allocator);
+
             const computed_bank_state = try collectVoteLockouts(
                 allocator,
                 .from(logger),
                 &my_vote_pubkey,
                 slot,
-                &epoch_stakes.stakes.vote_accounts.vote_accounts,
+                &vote_accounts,
                 ancestors,
                 progress,
                 latest_validator_votes,
