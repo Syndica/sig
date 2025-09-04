@@ -48,7 +48,7 @@ pub const Serializer = struct {
     vaddr: u64,
     region_start: usize,
     aligned: bool,
-    direct_mapping: bool,
+    account_data_direct_mapping: bool,
     stricter_abi_and_runtime_constraints: bool,
 
     pub fn init(
@@ -56,7 +56,7 @@ pub const Serializer = struct {
         size: usize,
         region_start: usize,
         aligned: bool,
-        direct_mapping: bool,
+        account_data_direct_mapping: bool,
         stricter_abi_and_runtime_constraints: bool,
     ) error{OutOfMemory}!Serializer {
         return .{
@@ -66,7 +66,7 @@ pub const Serializer = struct {
             .vaddr = region_start,
             .region_start = 0,
             .aligned = aligned,
-            .direct_mapping = direct_mapping,
+            .account_data_direct_mapping = account_data_direct_mapping,
             .stricter_abi_and_runtime_constraints = stricter_abi_and_runtime_constraints,
         };
     }
@@ -94,7 +94,7 @@ pub const Serializer = struct {
     ) (error{OutOfMemory} || InstructionError)!u64 {
         if (!self.stricter_abi_and_runtime_constraints) {
             const addr = self.vaddr +| self.buffer.items.len;
-            _ = self.writeBytes(account.account.data); // intentionally ignored
+            _ = self.writeBytes(account.constAccountData()); // intentionally ignored
             if (self.aligned) {
                 const align_offset = std.mem.alignForward(
                     usize,
@@ -112,14 +112,39 @@ pub const Serializer = struct {
 
         try self.pushRegion(true);
         const addr = self.vaddr;
-        if (!self.direct_mapping) {
-            _ = self.writeBytes(account.account.data); // intentionally ignored
+        if (!self.account_data_direct_mapping) {
+            _ = self.writeBytes(account.constAccountData()); // intentionally ignored
             if (self.aligned) {
                 try self.buffer.appendNTimes(self.allocator, 0, MAX_PERMITTED_DATA_INCREASE);
             }
         }
 
-        try self.pushAccountDataRegion(account);
+        // TODO: Cow https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/program-runtime/src/serialization.rs#L134
+        const address_space = if (self.aligned)
+            account.constAccountData().len +| MAX_PERMITTED_DATA_INCREASE
+        else
+            account.constAccountData().len;
+
+        if (address_space > 0) {
+            const state = getAccountDataRegionMemoryState(account);
+            if (!self.account_data_direct_mapping) {
+                try self.pushRegion(state == .mutable);
+                const region = &self.regions.items[self.regions.items.len - 1];
+                const new_len = account.constAccountData().len;
+                region.vm_addr_end = region.vm_addr_start + new_len;
+                switch (state) {
+                    .mutable => region.host_memory.mutable.len = new_len,
+                    .constant => region.host_memory.constant.len = new_len,
+                }
+            } else {
+                try self.regions.append(self.allocator, switch (state) {
+                    .mutable => Region.init(.mutable, try account.mutableAccountData(), self.vaddr),
+                    .constant => Region.init(.constant, account.constAccountData(), self.vaddr),
+                });
+                self.vaddr += address_space;
+            }
+        }
+
         if (self.aligned) {
             const align_offset = std.mem.alignForward(
                 usize,
@@ -127,7 +152,7 @@ pub const Serializer = struct {
                 BPF_ALIGN_OF_U128,
             ) - account.constAccountData().len;
 
-            if (!self.direct_mapping) {
+            if (!self.account_data_direct_mapping) {
                 try self.buffer.appendNTimes(self.allocator, 0, align_offset);
             } else {
                 try self.buffer.appendNTimes(self.allocator, 0, BPF_ALIGN_OF_U128);
@@ -152,32 +177,6 @@ pub const Serializer = struct {
         try self.regions.append(self.allocator, region);
         self.region_start = self.buffer.items.len;
         self.vaddr += range_size;
-    }
-
-    /// [agave] https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/program-runtime/src/serialization.rs#L133-L134
-    pub fn pushAccountDataRegion(
-        self: *Serializer,
-        account: *const BorrowedAccount,
-    ) (error{OutOfMemory} || InstructionError)!void {
-        // TODO: Cow https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/program-runtime/src/serialization.rs#L134
-        const address_space = account.constAccountData().len +|
-            (MAX_PERMITTED_DATA_INCREASE * @intFromBool(self.aligned));
-
-        if (address_space > 0) {
-            const state = getAccountDataRegionMemoryState(account);
-            const region = switch (state) {
-                inline .constant, .mutable => |s| Region.init(
-                    s,
-                    if (s == .constant)
-                        account.constAccountData()
-                    else
-                        try account.mutableAccountData(),
-                    self.vaddr,
-                ),
-            };
-            self.vaddr += address_space;
-            try self.regions.append(self.allocator, region);
-        }
     }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/program-runtime/src/serialization.rs#L172
@@ -214,7 +213,7 @@ pub fn serializeParameters(
     stricter_abi_and_runtime_constraints: bool,
     mask_out_rent_epoch_in_vm_serialization: bool,
 ) (error{OutOfMemory} || InstructionError)!SerializeReturn {
-    if (ic.ixn_info.account_metas.len > InstructionInfo.MAX_ACCOUNT_METAS) {
+    if (ic.ixn_info.account_metas.len > InstructionInfo.MAX_ACCOUNT_METAS - 1) {
         return error.MaxAccountsExceeded;
     }
 
@@ -233,8 +232,9 @@ pub fn serializeParameters(
     for (ic.ixn_info.account_metas.constSlice(), 0..) |account_meta, index_in_instruction| {
         const index_in_callee =
             try ic.ixn_info.getAccountInstructionIndex(account_meta.index_in_transaction);
+        const is_duplicate = index_in_callee != index_in_instruction;
 
-        if (index_in_callee != index_in_instruction) {
+        if (is_duplicate) {
             accounts.appendAssumeCapacity(.{ .duplicate = @intCast(index_in_callee) });
         } else {
             const account = try ic.borrowInstructionAccount(@intCast(index_in_instruction));
@@ -274,7 +274,7 @@ fn serializeParametersUnaligned(
     accounts: []const SerializedAccount,
     instruction_data: []const u8,
     program_id: Pubkey,
-    direct_mapping: bool,
+    account_data_direct_mapping: bool,
     stricter_abi_and_runtime_constraints: bool,
     mask_out_rent_epoch_in_vm_serialization: bool,
 ) (error{OutOfMemory} || InstructionError)!SerializeReturn {
@@ -292,7 +292,7 @@ fn serializeParametersUnaligned(
                     + @sizeOf(Pubkey) // owner
                     + @sizeOf(u8) // executable
                     + @sizeOf(u64); // rent_epoch
-                if (!(stricter_abi_and_runtime_constraints and direct_mapping)) {
+                if (!(stricter_abi_and_runtime_constraints and account_data_direct_mapping)) {
                     size += borrowed_account.constAccountData().len;
                 }
             },
@@ -308,7 +308,7 @@ fn serializeParametersUnaligned(
         size,
         INPUT_START,
         false,
-        direct_mapping,
+        account_data_direct_mapping,
         stricter_abi_and_runtime_constraints,
     );
 
@@ -388,7 +388,7 @@ fn serializeParametersAligned(
     accounts: []const SerializedAccount,
     instruction_data: []const u8,
     program_id: Pubkey,
-    direct_mapping: bool,
+    account_data_direct_mapping: bool,
     stricter_abi_and_runtime_constraints: bool,
     mask_out_rent_epoch_in_vm_serialization: bool,
 ) (error{OutOfMemory} || InstructionError)!SerializeReturn {
@@ -406,17 +406,16 @@ fn serializeParametersAligned(
                     + @sizeOf(Pubkey) // owner
                     + @sizeOf(u64) // lamports
                     + @sizeOf(u64) // data len
-                    + MAX_PERMITTED_DATA_INCREASE //
                     + @sizeOf(u64); // rent_epoch
 
-                if (!(stricter_abi_and_runtime_constraints and direct_mapping)) {
+                if (!(stricter_abi_and_runtime_constraints and account_data_direct_mapping)) {
                     const data_len = borrowed_account.constAccountData().len;
                     const align_offset = std.mem.alignForward(
                         usize,
                         data_len,
                         BPF_ALIGN_OF_U128,
                     ) - data_len;
-                    size += borrowed_account.constAccountData().len +
+                    size += data_len +
                         MAX_PERMITTED_DATA_INCREASE +
                         align_offset;
                 } else {
@@ -435,7 +434,7 @@ fn serializeParametersAligned(
         size,
         INPUT_START,
         true,
-        direct_mapping,
+        account_data_direct_mapping,
         stricter_abi_and_runtime_constraints,
     );
     errdefer serializer.deinit();
@@ -450,7 +449,7 @@ fn serializeParametersAligned(
         switch (account) {
             .account => |index_and_borrowed_account| {
                 _, const borrowed_account = index_and_borrowed_account;
-                _ = serializer.write(u8, std.math.maxInt(u8));
+                _ = serializer.write(u8, std.math.maxInt(u8)); // NON_DUP_MARKER
                 _ = serializer.write(u8, @intFromBool(borrowed_account.context.is_signer));
                 _ = serializer.write(u8, @intFromBool(borrowed_account.context.is_writable));
                 _ = serializer.write(u8, @intFromBool(borrowed_account.account.executable));
@@ -754,7 +753,7 @@ fn deserializeParametersAligned(
 }
 
 // [agave] https://github.com/anza-xyz/agave/blob/108fcb4ff0f3cb2e7739ca163e6ead04e377e567/program-runtime/src/serialization.rs#L778
-test "serializeParameters" {
+test serializeParameters {
     const AccountSharedData = sig.runtime.AccountSharedData;
     const createTransactionContext = sig.runtime.testing.createTransactionContext;
     const deinitTransactionContext = sig.runtime.testing.deinitTransactionContext;
@@ -772,7 +771,7 @@ test "serializeParameters" {
         for ([_]bool{
             false,
             true,
-        }) |account_data_direct_mapping| {
+        }) |stricter_abi_and_runtime_constraints| {
             const program_id = Pubkey.initRandom(prng.random());
 
             var cache, var tc = try createTransactionContext(
@@ -835,6 +834,14 @@ test "serializeParameters" {
                             .executable = false,
                             .rent_epoch = 3100,
                         },
+                        .{
+                            .pubkey = program_id,
+                            .lamports = 0,
+                            .data = &.{},
+                            .owner = program.bpf_loader.v1.ID,
+                            .executable = true,
+                            .rent_epoch = 0,
+                        },
                     },
                 },
             );
@@ -892,11 +899,8 @@ test "serializeParameters" {
             );
             defer instruction_info.deinit(allocator);
 
-            var ic = InstructionContext{
-                .tc = &tc,
-                .ixn_info = instruction_info,
-                .depth = 0,
-            };
+            try sig.runtime.executor.pushInstruction(&tc, instruction_info);
+            const ic = try tc.getCurrentInstructionContext();
 
             { // MaxAccountsExceeded
                 const original_len = ic.ixn_info.account_metas.len;
@@ -913,7 +917,7 @@ test "serializeParameters" {
 
                 try std.testing.expectEqual(
                     error.MaxAccountsExceeded,
-                    serializeParameters(allocator, &ic, false, false, false),
+                    serializeParameters(allocator, ic, false, false, false),
                 );
             }
 
@@ -947,9 +951,9 @@ test "serializeParameters" {
 
             var memory, var regions, const account_metas = try serializeParameters(
                 allocator,
-                &ic,
-                account_data_direct_mapping,
-                false,
+                ic,
+                false, // account_data_direct_mapping,
+                stricter_abi_and_runtime_constraints,
                 false,
             );
             defer {
@@ -959,7 +963,7 @@ test "serializeParameters" {
 
             const serialized_regions = try concatRegions(allocator, regions.items);
             defer allocator.free(serialized_regions);
-            if (!account_data_direct_mapping) {
+            if (!stricter_abi_and_runtime_constraints) {
                 try std.testing.expectEqualSlices(u8, memory.items, serialized_regions);
             }
 
@@ -969,9 +973,9 @@ test "serializeParameters" {
 
             try deserializeParameters(
                 allocator,
-                &ic,
-                false,
-                account_data_direct_mapping,
+                ic,
+                stricter_abi_and_runtime_constraints,
+                false, // account_data_direct_mapping,
                 memory.items,
                 account_metas.constSlice(),
             );
