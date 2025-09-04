@@ -1965,7 +1965,12 @@ fn replayDependencies(
     );
     errdefer root_slot_constants.deinit(allocator);
 
-    var root_slot_state = try sig.core.SlotState.fromBankFields(allocator, bank_fields);
+    const lt_hash = if (loaded_snapshot.collapsed_manifest.bank_extra.accounts_lt_hash) |lt_hash|
+        sig.core.LtHash{ .data = lt_hash }
+    else
+        null;
+
+    var root_slot_state = try sig.core.SlotState.fromBankFields(allocator, bank_fields, lt_hash);
     errdefer root_slot_state.deinit(allocator);
 
     const deps = sig.replay.service.Dependencies{

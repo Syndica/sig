@@ -227,6 +227,7 @@ pub const SlotState = struct {
     pub fn fromBankFields(
         allocator: Allocator,
         bank_fields: *const BankFields,
+        lt_hash: ?LtHash,
     ) Allocator.Error!SlotState {
         const blockhash_queue = try bank_fields.blockhash_queue.clone(allocator);
         errdefer blockhash_queue.deinit(allocator);
@@ -242,7 +243,7 @@ pub const SlotState = struct {
             .signature_count = .init(bank_fields.signature_count),
             .tick_height = .init(bank_fields.tick_height),
             .collected_rent = .init(bank_fields.collected_rent),
-            .accounts_lt_hash = .init(LtHash{ .data = @splat(0xBAD1) }),
+            .accounts_lt_hash = .init(lt_hash),
             .stakes_cache = .{ .stakes = .init(stakes) },
             .collected_transaction_fees = .init(0),
             .collected_priority_fees = .init(0),
