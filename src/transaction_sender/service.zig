@@ -171,7 +171,7 @@ pub const Service = struct {
         defer rpc_client.deinit();
 
         while (!self.exit.load(.monotonic)) {
-            std.time.sleep(self.config.pool_process_rate.asNanos());
+            std.Thread.sleep(self.config.pool_process_rate.asNanos());
             if (self.transaction_pool.count() == 0) continue;
             var timer = try Timer.start();
 
