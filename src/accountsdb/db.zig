@@ -5126,8 +5126,14 @@ test "insertion out of order" {
     };
     const pk_of_ones: Pubkey = .{ .data = @splat(1) };
     setRootedLargestSlotForTest(&simple_state, &real_state, slot_to_try_write_while_rooted);
-    try std.testing.expectEqual(error.CannotWriteRootedSlot, simple_store.put(1, pk_of_ones, .EMPTY));
-    try std.testing.expectEqual(error.CannotWriteRootedSlot, real_store.put(1, pk_of_ones, .EMPTY));
+    try std.testing.expectEqual(
+        error.CannotWriteRootedSlot,
+        simple_store.put(1, pk_of_ones, .EMPTY),
+    );
+    try std.testing.expectEqual(
+        error.CannotWriteRootedSlot,
+        real_store.put(1, pk_of_ones, .EMPTY),
+    );
     setRootedLargestSlotForTest(&simple_state, &real_state, null);
     try std.testing.expectEqual({}, simple_store.put(1, pk_of_ones, .EMPTY));
     try std.testing.expectEqual({}, real_store.put(1, pk_of_ones, .EMPTY));
