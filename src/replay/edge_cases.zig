@@ -262,6 +262,10 @@ pub const UnfrozenGossipVerifiedVoteHashes = struct {
                 std.debug.assert(hash_to_votes.swapRemove(htv_gop.key_ptr.*));
             };
 
+            if (!htv_gop.found_existing) {
+                htv_gop.value_ptr.* = .empty;
+            }
+
             try htv_gop.value_ptr.append(allocator, vote_pubkey);
         }
     }
