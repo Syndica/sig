@@ -4077,6 +4077,42 @@ test "test VoteTooOld error triggers trackStaleVoteRejected" {
     try std.testing.expectEqual(initial_stale_votes + 1, final_stale_votes);
 }
 
+test "test trackForkSwitchingMetrics - switch_proof" {
+    var metrics = try ReplayTowerMetrics.init();
+
+    const initial_successes = metrics.fork_switching_successes.get();
+
+    metrics.trackForkSwitchingMetrics(.{ .switch_proof = Hash.ZEROES });
+
+    const final_successes = metrics.fork_switching_successes.get();
+    try std.testing.expectEqual(initial_successes + 1, final_successes);
+}
+
+test "test trackForkSwitchingMetrics - failed_switch_threshold" {
+    var metrics = try ReplayTowerMetrics.init();
+
+    const initial_failures = metrics.fork_switching_failures.get();
+
+    metrics.trackForkSwitchingMetrics(.{ .failed_switch_threshold = .{
+        .switch_proof_stake = 200,
+        .total_stake = 1000,
+    } });
+
+    const final_failures = metrics.fork_switching_failures.get();
+    try std.testing.expectEqual(initial_failures + 1, final_failures);
+}
+
+test "test trackForkSwitchingMetrics - failed_switch_duplicate_rollback" {
+    var metrics = try ReplayTowerMetrics.init();
+
+    const initial_failures = metrics.fork_switching_failures.get();
+
+    metrics.trackForkSwitchingMetrics(.{ .failed_switch_duplicate_rollback = 50 });
+
+    const final_failures = metrics.fork_switching_failures.get();
+    try std.testing.expectEqual(initial_failures + 1, final_failures);
+}
+
 const builtin = @import("builtin");
 const DynamicArrayBitSet = sig.bloom.bit_set.DynamicArrayBitSet;
 
