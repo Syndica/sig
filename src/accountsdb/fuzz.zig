@@ -186,12 +186,12 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     // prealloc some references to use throught the fuzz
     try accounts_db.account_index.expandRefCapacity(1_000_000);
 
-    var manager_exit: std.atomic.Value(bool) = .init(false);
     var manager: sig.accounts_db.manager.Manager = try .init(allocator, &accounts_db, .{
-        .exit = &manager_exit,
-        .slots_per_full_snapshot = 50_000,
-        .slots_per_incremental_snapshot = 5_000,
-        .zstd_nb_workers = @intCast(std.Thread.getCpuCount() catch 0),
+        .snapshot = .{
+            .slots_per_full_snapshot = 50_000,
+            .slots_per_incremental_snapshot = 5_000,
+            .zstd_nb_workers = @intCast(std.Thread.getCpuCount() catch 0),
+        },
     });
     defer manager.deinit(allocator);
 

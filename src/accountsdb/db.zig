@@ -4832,6 +4832,37 @@ fn putAccountIntoStores(
     }
 }
 
+fn expectAccountFromStores(
+    stores: []const sig.accounts_db.AccountStore,
+    ancestors: *const Ancestors,
+    address: Pubkey,
+    maybe_expected_account: ?Account,
+) !void {
+    const allocator = std.testing.allocator;
+
+    var data_buf: std.ArrayListUnmanaged(u8) = .empty;
+    defer data_buf.deinit(allocator);
+
+    if (maybe_expected_account) |expected_account| {
+        try data_buf.ensureTotalCapacityPrecise(allocator, expected_account.data.len());
+    }
+
+    for (stores) |store| {
+        const reader = store.reader();
+        const actual_account = try reader.forSlot(ancestors).get(address) orelse {
+            try std.testing.expectEqual(maybe_expected_account, null);
+            continue;
+        };
+        defer actual_account.deinit(reader.allocator());
+
+        const expected_account = maybe_expected_account orelse {
+            try std.testing.expectEqual(null, actual_account);
+            continue;
+        };
+        try actual_account.expectEquals(expected_account);
+    }
+}
+
 fn expectEqualDatabaseWithAncestors(
     ancestors: *const Ancestors,
     pubkeys: []const Pubkey,
@@ -5100,4 +5131,78 @@ test "insertion out of order" {
     setRootedLargestSlotForTest(&simple_state, &real_state, null);
     try std.testing.expectEqual({}, simple_store.put(1, pk_of_ones, .EMPTY));
     try std.testing.expectEqual({}, real_store.put(1, pk_of_ones, .EMPTY));
+}
+
+test "put and get zero lamports" {
+    const allocator = std.testing.allocator;
+
+    var prng_state: std.Random.Xoshiro256 = .init(346715);
+    const prng = prng_state.random();
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    var simple_state: sig.accounts_db.ThreadSafeAccountMap = .init(allocator);
+    defer simple_state.deinit();
+
+    var real_state: AccountsDB = try .init(.minimal(allocator, .noop, tmp_dir.dir));
+    defer real_state.deinit();
+
+    var manager: sig.accounts_db.manager.Manager = try .init(allocator, &real_state, .{
+        .snapshot = null,
+    });
+    defer manager.deinit(allocator);
+
+    const simple_store = simple_state.accountStore();
+    const real_store = real_state.accountStore();
+    const stores = [_]sig.accounts_db.AccountStore{ simple_store, real_store };
+
+    var ancestors: Ancestors = .EMPTY;
+    defer ancestors.deinit(allocator);
+
+    const pk1: Pubkey = .initRandom(prng);
+    try ancestors.addSlot(allocator, 1);
+    try putAccountIntoStores(&stores, 1, pk1, .{
+        .data = &.{},
+        .executable = false,
+        .lamports = 100,
+        .owner = .ZEROES,
+        .rent_epoch = 0,
+    });
+    try expectAccountFromStores(&stores, &ancestors, pk1, .{
+        .data = .initEmpty(0),
+        .executable = false,
+        .lamports = 100,
+        .owner = .ZEROES,
+        .rent_epoch = 0,
+    });
+
+    try putAccountIntoStores(&stores, 1, pk1, .{
+        .data = &.{},
+        .executable = false,
+        .lamports = 0,
+        .owner = .ZEROES,
+        .rent_epoch = 0,
+    });
+    // treated as being non-present
+    try expectAccountFromStores(&stores, &ancestors, pk1, null);
+
+    { // but it still exists in the unrooted account map
+        const unrooted, var unrooted_lg = real_state.unrooted_accounts.readWithLock();
+        defer unrooted_lg.unlock();
+
+        const pubkey_accounts_mal = unrooted.get(1) orelse return error.TestMissingExpectedSlot;
+        const pubkeys: []const Pubkey = pubkey_accounts_mal.items(.pubkey);
+        try std.testing.expectEqualSlices(Pubkey, &.{pk1}, pubkeys);
+    }
+
+    // but after we run the manager on it to clean it up...
+    setRootedLargestSlotForTest(&simple_state, &real_state, 1);
+    try manager.manage(allocator);
+
+    { // it's removed from accountsdb
+        const unrooted, var unrooted_lg = real_state.unrooted_accounts.readWithLock();
+        defer unrooted_lg.unlock();
+        try std.testing.expectEqual(null, unrooted.get(1));
+    }
 }
