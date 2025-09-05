@@ -100,7 +100,7 @@ pub const AccountReader = union(enum) {
 
     pub fn getLargestRootedSlot(self: AccountReader) ?Slot {
         return switch (self) {
-            .accounts_db => |db| db.max_slots.readCopy().rooted,
+            .accounts_db => |db| db.getLargestRootedSlot(),
             .thread_safe_map => |tsm| tsm.getLargestRootedSlot(),
             .noop => null,
         };
