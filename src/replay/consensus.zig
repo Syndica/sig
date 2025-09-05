@@ -34,11 +34,9 @@ const SlotTracker = sig.replay.trackers.SlotTracker;
 const EpochTracker = sig.replay.trackers.EpochTracker;
 const SlotData = sig.replay.edge_cases.SlotData;
 
+const collectVoteLockouts = sig.consensus.replay_tower.collectVoteLockouts;
+const isDuplicateSlotConfirmed = sig.consensus.replay_tower.isDuplicateSlotConfirmed;
 const check_slot_agrees_with_cluster = sig.replay.edge_cases.check_slot_agrees_with_cluster;
-
-pub const isDuplicateSlotConfirmed = sig.consensus.replay_tower.isDuplicateSlotConfirmed;
-
-pub const collectVoteLockouts = sig.consensus.replay_tower.collectVoteLockouts;
 
 const MAX_VOTE_REFRESH_INTERVAL_MILLIS: usize = 5000;
 

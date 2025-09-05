@@ -1248,7 +1248,7 @@ test "ForkProgress.init" {
         try .fromBankFields(allocator, &bank_data, .ALL_DISABLED);
     defer slot_consts.deinit(allocator);
 
-    var slot_state: sig.core.SlotState = try .fromBankFields(allocator, &bank_data);
+    var slot_state: sig.core.SlotState = try .fromBankFields(allocator, &bank_data, null);
     defer slot_state.deinit(allocator);
 
     const slot_info: replay.trackers.SlotTracker.Reference = .{

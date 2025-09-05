@@ -298,7 +298,7 @@ pub const BasicShredTracker = struct {
 };
 
 /// Contains multiple trees, where each tree may contain many forks.
-const ForkForest = struct {
+pub const ForkForest = struct {
     /// Every single node
     nodes: List(*Node),
     /// A subset of the nodes that have no known parent. Each of these is the

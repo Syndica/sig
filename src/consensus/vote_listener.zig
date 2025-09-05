@@ -107,7 +107,7 @@ pub const VoteListener = struct {
         vote_tracker: *VoteTracker,
         params: struct {
             slot_data_provider: SlotDataProvider,
-            gossip_table_rw: *sig.sync.RwMux(sig.gossip.GossipTable),
+            gossip_table_rw: ?*sig.sync.RwMux(sig.gossip.GossipTable),
             ledger_ref: LedgerRef,
 
             /// Channels that will be used to `receive` data.
@@ -218,7 +218,7 @@ const UnverifiedVoteReceptor = struct {
         self: *UnverifiedVoteReceptor,
         allocator: std.mem.Allocator,
         slot_data_provider: *const SlotDataProvider,
-        gossip_table_rw: *sig.sync.RwMux(sig.gossip.GossipTable),
+        gossip_table_rw: ?*sig.sync.RwMux(sig.gossip.GossipTable),
         unverified_votes_buffer: *std.ArrayListUnmanaged(Transaction),
         /// Sends to `processVotesLoop`'s `receivers.verified_vote_transactions` parameter.
         verified_vote_transactions_sender: *sig.sync.Channel(Transaction),
@@ -226,8 +226,8 @@ const UnverifiedVoteReceptor = struct {
         unverified_votes_buffer.clearRetainingCapacity();
         defer for (unverified_votes_buffer.items) |vote_tx| vote_tx.deinit(allocator);
 
-        {
-            const gossip_table, var gossip_table_lg = gossip_table_rw.readWithLock();
+        if (gossip_table_rw) |table| {
+            const gossip_table, var gossip_table_lg = table.readWithLock();
             defer gossip_table_lg.unlock();
             try self.recv(allocator, unverified_votes_buffer, gossip_table);
         }
@@ -256,7 +256,7 @@ fn recvLoop(
     allocator: std.mem.Allocator,
     exit: sig.sync.ExitCondition,
     slot_data_provider: SlotDataProvider,
-    gossip_table_rw: *sig.sync.RwMux(sig.gossip.GossipTable),
+    gossip_table_rw: ?*sig.sync.RwMux(sig.gossip.GossipTable),
     /// Sends to `processVotesLoop`'s `receivers.verified_vote_transactions` parameter.
     verified_vote_transactions_sender: *sig.sync.Channel(Transaction),
 ) !void {

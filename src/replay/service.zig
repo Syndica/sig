@@ -5,6 +5,8 @@ const tracy = @import("tracy");
 
 const Allocator = std.mem.Allocator;
 
+const Channel = sig.sync.Channel;
+const RwMux = sig.sync.RwMux;
 const ThreadPool = sig.sync.ThreadPool;
 
 const Ancestors = sig.core.Ancestors;
@@ -30,10 +32,15 @@ const LatestValidatorVotes = sig.consensus.latest_validator_votes.LatestValidato
 const SlotHistoryAccessor = sig.consensus.replay_tower.SlotHistoryAccessor;
 const VoteListener = sig.consensus.vote_listener.VoteListener;
 
+const ProcessResultState = replay.process_result.ProcessResultState;
 const ReplayExecutionState = replay.execution.ReplayExecutionState;
-const SlotTracker = replay.trackers.SlotTracker;
-const EpochTracker = replay.trackers.EpochTracker;
+const ReplayResult = replay.execution.ReplayResult;
 
+const EpochTracker = replay.trackers.EpochTracker;
+const SlotTracker = replay.trackers.SlotTracker;
+
+const awaitResults = replay.execution.awaitResults;
+const processResult = replay.process_result.processResult;
 const updateSysvarsForNewSlot = replay.update_sysvar.updateSysvarsForNewSlot;
 
 const LatestValidatorVotesForFrozenSlots =
@@ -41,15 +48,12 @@ const LatestValidatorVotesForFrozenSlots =
 
 pub const Logger = sig.trace.Logger("replay");
 
-/// Number of threads to use in replay's thread pool
-const NUM_THREADS = 4;
-
 const SWITCH_FORK_THRESHOLD: f64 = 0.38;
 const MAX_ENTRIES: u64 = 1024 * 1024; // 1 million slots is about 5 days
 const DUPLICATE_LIVENESS_THRESHOLD: f64 = 0.1;
 pub const DUPLICATE_THRESHOLD: f64 = 1.0 - SWITCH_FORK_THRESHOLD - DUPLICATE_LIVENESS_THRESHOLD;
 
-pub const ReplayDependencies = struct {
+pub const Dependencies = struct {
     /// Used for all allocations within the replay stage
     allocator: Allocator,
     logger: Logger,
@@ -65,13 +69,6 @@ pub const ReplayDependencies = struct {
     ledger: LedgerRef,
     /// Used to get the entries to validate them and execute the transactions
     slot_leaders: SlotLeaders,
-    senders: Senders,
-    receivers: Receivers,
-
-    /// Used by the vote listener to receive unverified
-    /// vote transactions from gossip.
-    gossip_table_rw: *sig.sync.RwMux(sig.gossip.GossipTable),
-
     /// The slot to start replaying from.
     root: struct {
         slot: Slot,
@@ -91,7 +88,7 @@ pub const LedgerRef = struct {
 
 pub const Senders = struct {
     /// Received by repair [ancestor_hashes_service](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/repair/ancestor_hashes_service.rs#L589)
-    ancestor_hashes_replay_update: *sig.sync.Channel(AncestorHashesReplayUpdate),
+    ancestor_hashes_replay_update: *Channel(AncestorHashesReplayUpdate),
 
     pub fn destroy(self: Senders) void {
         self.ancestor_hashes_replay_update.destroy();
@@ -106,17 +103,17 @@ pub const Senders = struct {
 
 pub const Receivers = struct {
     /// Sent by repair [ancestor_hashes_service](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/repair/ancestor_hashes_service.rs#L240)
-    ancestor_duplicate_slots: *sig.sync.Channel(AncestorDuplicateSlotToRepair),
+    ancestor_duplicate_slots: *Channel(AncestorDuplicateSlotToRepair),
     /// Sent by vote_listener:
     /// - `Senders`'s `duplicate_confirmed_slot` field.
     /// - agave's [vote listener](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/cluster_info_vote_listener.rs#L204)
-    duplicate_confirmed_slots: *sig.sync.Channel(ThresholdConfirmedSlot),
+    duplicate_confirmed_slots: *Channel(ThresholdConfirmedSlot),
     /// Sent by vote_listener:
     /// - `Sender`'s `gossip_verified_vote_hash` field.
     /// - agave's [vote listener](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/cluster_info_vote_listener.rs#L200)
-    gossip_verified_vote_hash: *sig.sync.Channel(GossipVerifiedVoteHash),
+    gossip_verified_vote_hash: *Channel(GossipVerifiedVoteHash),
     /// Sent by [repair service](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/repair/repair_service.rs#L423)
-    popular_pruned_forks: *sig.sync.Channel(Slot),
+    popular_pruned_forks: *Channel(Slot),
     /// Sent by two things:
     ///   - [WindowService](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/window_service.rs#L275)
     ///   - DuplicateShredListener/DuplicateShredHandler:
@@ -124,7 +121,7 @@ pub const Receivers = struct {
     ///       - [direct implementation usage](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/gossip/src/duplicate_shred_handler.rs#L150)
     ///       - [indirect interface usage](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/gossip/src/duplicate_shred_handler.rs#L61)
     ///       - [relevant interface invokation](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/gossip/src/duplicate_shred_listener.rs#L31)
-    duplicate_slots: *sig.sync.Channel(Slot),
+    duplicate_slots: *Channel(Slot),
 
     pub fn destroy(self: Receivers) void {
         self.ancestor_duplicate_slots.destroy();
@@ -135,22 +132,22 @@ pub const Receivers = struct {
     }
 
     pub fn create(allocator: std.mem.Allocator) std.mem.Allocator.Error!Receivers {
-        const ancestor_duplicate_slots: *sig.sync.Channel(AncestorDuplicateSlotToRepair) =
+        const ancestor_duplicate_slots: *Channel(AncestorDuplicateSlotToRepair) =
             try .create(allocator);
         errdefer ancestor_duplicate_slots.destroy();
 
-        const duplicate_confirmed_slots: *sig.sync.Channel(ThresholdConfirmedSlot) =
+        const duplicate_confirmed_slots: *Channel(ThresholdConfirmedSlot) =
             try .create(allocator);
         errdefer duplicate_confirmed_slots.destroy();
 
-        const gossip_verified_vote_hash: *sig.sync.Channel(GossipVerifiedVoteHash) =
+        const gossip_verified_vote_hash: *Channel(GossipVerifiedVoteHash) =
             try .create(allocator);
         errdefer gossip_verified_vote_hash.destroy();
 
-        const popular_pruned_forks: *sig.sync.Channel(Slot) = try .create(allocator);
+        const popular_pruned_forks: *Channel(Slot) = try .create(allocator);
         errdefer popular_pruned_forks.destroy();
 
-        const duplicate_slots: *sig.sync.Channel(Slot) = try .create(allocator);
+        const duplicate_slots: *Channel(Slot) = try .create(allocator);
         errdefer duplicate_slots.destroy();
 
         return .{
@@ -173,50 +170,35 @@ const ReplayState = struct {
     /// Borrowed across multiple threads (replay, vote_listener).
     /// These RwMuxes are deinitialized in `ReplayState.deinit()` only
     /// after all dependent threads have been joined based on defer order in `run`.
-    slot_tracker_rw: sig.sync.RwMux(SlotTracker),
-    /// Lifetime rules are the same as `slot_tracker_rw`.
-    epoch_tracker_rw: sig.sync.RwMux(EpochTracker),
+    slot_tracker: RwMux(SlotTracker),
+    /// Lifetime rules are the same as `slot_tracker`.
+    epoch_tracker: RwMux(EpochTracker),
     hard_forks: sig.core.HardForks,
     account_store: AccountStore,
     progress_map: ProgressMap,
     ledger: LedgerRef,
-
-    fork_choice: HeaviestSubtreeForkChoice,
-    replay_tower: sig.consensus.ReplayTower,
-    latest_validator_votes: LatestValidatorVotes,
     status_cache: sig.core.StatusCache,
-    slot_data: replay.edge_cases.SlotData,
-
-    arena_state: std.heap.ArenaAllocator.State,
-
-    senders: Senders,
-    receivers: Receivers,
-
     execution_log_helper: replay.execution.LogHelper,
 
-    replay_votes_channel: *sig.sync.Channel(ParsedVote),
+    replay_votes_channel: *Channel(ParsedVote),
 
     fn deinit(self: *ReplayState) void {
         self.thread_pool.shutdown();
         self.thread_pool.deinit();
 
-        var slots = self.slot_tracker_rw.tryRead() orelse
+        var slots = self.slot_tracker.tryRead() orelse
             @panic("Slot tracker deinit while in use");
         slots.get().deinit(self.allocator);
 
-        var epochs = self.epoch_tracker_rw.tryRead() orelse
+        var epoch_tracker = self.epoch_tracker.tryRead() orelse
             @panic("Epoch tracker deinit while in use");
-        epochs.get().deinit(self.allocator);
+        epoch_tracker.get().deinit(self.allocator);
 
         self.progress_map.deinit(self.allocator);
-
-        self.fork_choice.deinit();
-        self.latest_validator_votes.deinit(self.allocator);
-        self.slot_data.deinit(self.allocator);
         self.replay_votes_channel.destroy();
     }
 
-    fn init(deps: ReplayDependencies) !ReplayState {
+    fn init(deps: Dependencies, num_threads: u32) !ReplayState {
         const zone = tracy.Zone.init(@src(), .{ .name = "ReplayState init" });
         defer zone.deinit();
 
@@ -226,7 +208,7 @@ const ReplayState = struct {
         });
         errdefer slot_tracker.deinit(deps.allocator);
 
-        const replay_votes_channel = try sig.sync.Channel(ParsedVote).create(deps.allocator);
+        const replay_votes_channel = try Channel(ParsedVote).create(deps.allocator);
         errdefer replay_votes_channel.destroy();
 
         var epoch_tracker: EpochTracker = .{ .schedule = deps.epoch_schedule };
@@ -235,16 +217,107 @@ const ReplayState = struct {
         try epoch_tracker.epochs
             .put(deps.allocator, deps.current_epoch, deps.current_epoch_constants);
 
-        const progress_map, const fork_choice = try initProgressAndForkChoiceWithLockedSlotForks(
-            deps.allocator,
-            deps.logger,
-            &slot_tracker,
-            &epoch_tracker,
-            deps.my_identity,
-            deps.vote_identity,
-            deps.ledger.reader.*,
-        );
+        const progress_map =
+            try replay.service.initProgressMap(
+                deps.allocator,
+                &slot_tracker,
+                &epoch_tracker,
+                deps.my_identity,
+                deps.vote_identity,
+            );
         errdefer progress_map.deinit(deps.allocator);
+
+        return .{
+            .allocator = deps.allocator,
+            .logger = .from(deps.logger),
+            .thread_pool = .init(.{ .max_threads = num_threads }),
+            .my_identity = deps.my_identity,
+            .slot_leaders = deps.slot_leaders,
+            .slot_tracker = .init(slot_tracker),
+            .epoch_tracker = .init(epoch_tracker),
+            .hard_forks = deps.hard_forks,
+            .account_store = deps.account_store,
+            .ledger = deps.ledger,
+            .progress_map = progress_map,
+            .status_cache = .DEFAULT,
+            .execution_log_helper = .init(.from(deps.logger)),
+            .replay_votes_channel = replay_votes_channel,
+        };
+    }
+
+    pub fn executionState(self: *ReplayState) struct {
+        ReplayExecutionState,
+        RwMux(SlotTracker).RLockGuard,
+        RwMux(EpochTracker).RLockGuard,
+    } {
+        const slot_tracker, const slot_tracker_lg = self.slot_tracker.readWithLock();
+        const epoch_tracker, const epoch_tracker_lg = self.epoch_tracker.readWithLock();
+        const execution_state: ReplayExecutionState = .{
+            .allocator = self.allocator,
+            .logger = .from(self.logger),
+            .my_identity = self.my_identity,
+            .vote_account = null, // voting not currently supported
+            .log_helper = &self.execution_log_helper,
+            .account_store = self.account_store,
+            .thread_pool = &self.thread_pool,
+            .ledger_reader = self.ledger.reader,
+            .slot_tracker = slot_tracker,
+            .epoch_tracker = epoch_tracker,
+            .progress_map = &self.progress_map,
+            .status_cache = &self.status_cache,
+            .replay_votes_channel = self.replay_votes_channel,
+        };
+
+        return .{
+            execution_state,
+            slot_tracker_lg,
+            epoch_tracker_lg,
+        };
+    }
+};
+
+const ConsensusState = struct {
+    fork_choice: HeaviestSubtreeForkChoice,
+    replay_tower: sig.consensus.ReplayTower,
+    latest_validator_votes: LatestValidatorVotes,
+    status_cache: sig.core.StatusCache,
+    slot_data: replay.edge_cases.SlotData,
+    arena_state: std.heap.ArenaAllocator.State,
+    senders: Senders,
+    receivers: Receivers,
+    execution_log_helper: replay.execution.LogHelper,
+    vote_listener: VoteListener,
+
+    fn deinit(self: *ConsensusState, allocator: Allocator) void {
+        self.fork_choice.deinit();
+        self.latest_validator_votes.deinit(allocator);
+        self.slot_data.deinit(allocator);
+        self.vote_listener.joinAndDeinit();
+    }
+
+    const Dependencies = struct {
+        senders: Senders,
+        receivers: Receivers,
+        gossip_table: ?*RwMux(sig.gossip.GossipTable),
+    };
+
+    fn init(
+        replay_deps: replay.Dependencies,
+        consensus_deps: ConsensusState.Dependencies,
+        replay_state: *ReplayState,
+    ) !ConsensusState {
+        const zone = tracy.Zone.init(@src(), .{ .name = "ConsensusState.init" });
+        defer zone.deinit();
+
+        const slot_tracker, var slot_tracker_lock = replay_state.slot_tracker.readWithLock();
+        defer slot_tracker_lock.unlock();
+
+        const fork_choice = try initForkChoice(
+            replay_deps.allocator,
+            replay_deps.logger,
+            slot_tracker,
+            replay_deps.ledger.reader.*,
+        );
         errdefer fork_choice.deinit();
 
         // NOTE(ink): in agave replay_tower isn't created directly in replay,
@@ -258,122 +331,111 @@ const ReplayState = struct {
         //     - from tvu to [replay_config](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/tvu.rs#L311)
         //     - replay_config to [ReplayStage](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/replay_stage.rs#L563)
         const replay_tower: sig.consensus.ReplayTower = try .init(
-            deps.allocator,
-            .from(deps.logger),
-            deps.my_identity,
-            deps.vote_identity,
-            deps.root.slot,
-            deps.account_store.reader().forSlot(&deps.root.constants.ancestors),
+            replay_deps.allocator,
+            .from(replay_deps.logger),
+            replay_deps.my_identity,
+            replay_deps.vote_identity,
+            replay_deps.root.slot,
+            replay_deps.account_store.reader().forSlot(&replay_deps.root.constants.ancestors),
         );
-        errdefer replay_tower.deinit(deps.allocator);
+        errdefer replay_tower.deinit(replay_deps.allocator);
+
+        // Start vote listener inside replay so it can reference replay state directly.
+        var vote_tracker: sig.consensus.VoteTracker = .EMPTY;
+        defer vote_tracker.deinit(replay_deps.allocator);
+
+        const slot_data_provider: sig.consensus.vote_listener.SlotDataProvider = .{
+            .slot_tracker_rw = &replay_state.slot_tracker,
+            .epoch_tracker_rw = &replay_state.epoch_tracker,
+        };
+
+        const verified_vote_channel = try Channel(sig.consensus.vote_listener.VerifiedVote)
+            .create(replay_deps.allocator);
+        defer verified_vote_channel.destroy();
+
+        const vote_listener: VoteListener = try .init(
+            replay_deps.allocator,
+            .{ .unordered = replay_deps.exit },
+            .from(replay_deps.logger),
+            &vote_tracker,
+            .{
+                .slot_data_provider = slot_data_provider,
+                .gossip_table_rw = consensus_deps.gossip_table,
+                .ledger_ref = .{
+                    .reader = replay_deps.ledger.reader,
+                    .writer = replay_deps.ledger.writer,
+                },
+                .receivers = .{ .replay_votes_channel = replay_state.replay_votes_channel },
+                .senders = .{
+                    .verified_vote = verified_vote_channel,
+                    .gossip_verified_vote_hash = consensus_deps.receivers.gossip_verified_vote_hash,
+                    .bank_notification = null,
+                    .duplicate_confirmed_slot = consensus_deps.receivers.duplicate_confirmed_slots,
+                    .subscriptions = .{},
+                },
+            },
+        );
 
         return .{
-            .allocator = deps.allocator,
-            .logger = .from(deps.logger),
-            .thread_pool = .init(.{ .max_threads = NUM_THREADS }),
-            .my_identity = deps.my_identity,
-            .slot_leaders = deps.slot_leaders,
-            .slot_tracker_rw = .init(slot_tracker),
-            .epoch_tracker_rw = .init(epoch_tracker),
-            .hard_forks = deps.hard_forks,
-            .account_store = deps.account_store,
-            .ledger = deps.ledger,
-            .progress_map = progress_map,
             .fork_choice = fork_choice,
             .replay_tower = replay_tower,
             .latest_validator_votes = .empty,
             .status_cache = .DEFAULT,
             .slot_data = .empty,
-
             .arena_state = .{},
-
-            .senders = deps.senders,
-            .receivers = deps.receivers,
-
-            .execution_log_helper = .init(.from(deps.logger)),
-
-            .replay_votes_channel = replay_votes_channel,
-        };
-    }
-
-    const ExecutionStateReturn = struct {
-        execution_state: ReplayExecutionState,
-        slot_tracker_lg: sig.sync.RwMux(SlotTracker).RLockGuard,
-        epoch_tracker_lg: sig.sync.RwMux(EpochTracker).RLockGuard,
-        pub fn tuple(self: ExecutionStateReturn) struct {
-            ReplayExecutionState,
-            sig.sync.RwMux(SlotTracker).RLockGuard,
-            sig.sync.RwMux(EpochTracker).RLockGuard,
-        } {
-            return .{ self.execution_state, self.slot_tracker_lg, self.epoch_tracker_lg };
-        }
-    };
-
-    pub fn executionState(self: *ReplayState) ExecutionStateReturn {
-        const slot_tracker, const slot_tracker_lg = self.slot_tracker_rw.readWithLock();
-        const epoch_tracker, const epoch_tracker_lg = self.epoch_tracker_rw.readWithLock();
-        const execution_state: ReplayExecutionState = .{
-            .allocator = self.allocator,
-            .logger = .from(self.logger),
-            .my_identity = self.my_identity,
-            .vote_account = null, // voting not currently supported
-
-            .log_helper = &self.execution_log_helper,
-
-            .account_store = self.account_store,
-            .thread_pool = &self.thread_pool,
-            .ledger_reader = self.ledger.reader,
-            .ledger_result_writer = self.ledger.writer,
-            .slot_tracker = slot_tracker,
-            .epoch_tracker = epoch_tracker,
-            .progress_map = &self.progress_map,
-            .status_cache = &self.status_cache,
-            .fork_choice = &self.fork_choice,
-            .duplicate_slots_tracker = &self.slot_data.duplicate_slots,
-            .unfrozen_gossip_verified_vote_hashes = &self
-                .slot_data.unfrozen_gossip_verified_vote_hashes,
-            .latest_validator_votes = &self.slot_data.latest_validator_votes,
-            .duplicate_confirmed_slots = &self.slot_data.duplicate_confirmed_slots,
-            .epoch_slots_frozen_slots = &self.slot_data.epoch_slots_frozen_slots,
-            .duplicate_slots_to_repair = &self.slot_data.duplicate_slots_to_repair,
-            .purge_repair_slot_counter = &self.slot_data.purge_repair_slot_counter,
-            .ancestor_hashes_replay_update_sender = self.senders.ancestor_hashes_replay_update,
-            .replay_votes_channel = self.replay_votes_channel,
-        };
-
-        return .{
-            .execution_state = execution_state,
-            .slot_tracker_lg = slot_tracker_lg,
-            .epoch_tracker_lg = epoch_tracker_lg,
+            .senders = consensus_deps.senders,
+            .receivers = consensus_deps.receivers,
+            .execution_log_helper = .init(.from(replay_deps.logger)),
+            .vote_listener = vote_listener,
         };
     }
 };
 
+fn processResultState(state: *ReplayState, consensus: *ConsensusState) struct {
+    ProcessResultState,
+    RwMux(SlotTracker).RLockGuard,
+    RwMux(EpochTracker).RLockGuard,
+} {
+    const slot_tracker, const slot_tracker_lg = state.slot_tracker.readWithLock();
+    const epoch_tracker, const epoch_tracker_lg = state.epoch_tracker.readWithLock();
+    return .{
+        .{
+            .allocator = state.allocator,
+            .logger = .from(state.logger),
+            .my_identity = state.my_identity,
+            .account_store = state.account_store,
+            .ledger_reader = state.ledger.reader,
+            .ledger_result_writer = state.ledger.writer,
+            .slot_tracker = slot_tracker,
+            .epoch_tracker = epoch_tracker,
+            .progress_map = &state.progress_map,
+            .fork_choice = &consensus.fork_choice,
+            .duplicate_slots_tracker = &consensus.slot_data.duplicate_slots,
+            .unfrozen_gossip_verified_vote_hashes = &consensus
+                .slot_data.unfrozen_gossip_verified_vote_hashes,
+            .latest_validator_votes = &consensus.slot_data.latest_validator_votes,
+            .duplicate_confirmed_slots = &consensus.slot_data.duplicate_confirmed_slots,
+            .epoch_slots_frozen_slots = &consensus.slot_data.epoch_slots_frozen_slots,
+            .duplicate_slots_to_repair = &consensus.slot_data.duplicate_slots_to_repair,
+            .purge_repair_slot_counter = &consensus.slot_data.purge_repair_slot_counter,
+            .ancestor_hashes_replay_update_sender = consensus.senders.ancestor_hashes_replay_update,
+        },
+        slot_tracker_lg,
+        epoch_tracker_lg,
+    };
+}
+
 /// Analogous to [`initialize_progress_and_fork_choice_with_locked_bank_forks`](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/replay_stage.rs#L637)
-fn initProgressAndForkChoiceWithLockedSlotForks(
+pub fn initProgressMap(
     allocator: std.mem.Allocator,
-    logger: Logger,
     slot_tracker: *const SlotTracker,
     epoch_tracker: *const EpochTracker,
     my_pubkey: Pubkey,
     vote_account: Pubkey,
-    ledger_reader: LedgerReader,
-) !struct { ProgressMap, HeaviestSubtreeForkChoice } {
-    const root_slot, const root_hash = blk: {
-        const root = slot_tracker.getRoot();
-        const root_slot = slot_tracker.root;
-        const root_hash = root.state.hash.readCopy();
-        break :blk .{ root_slot, root_hash.? };
-    };
-
+) !ProgressMap {
     var frozen_slots = try slot_tracker.frozenSlots(allocator);
     defer frozen_slots.deinit(allocator);
-    const FrozenSlotsSortCtx = struct {
-        slots: []const Slot,
-        pub fn lessThan(ctx: @This(), a_index: usize, b_index: usize) bool {
-            return ctx.slots[a_index] < ctx.slots[b_index];
-        }
-    };
+
     frozen_slots.sort(FrozenSlotsSortCtx{ .slots = frozen_slots.keys() });
 
     var progress: ProgressMap = .INIT;
@@ -394,6 +456,35 @@ fn initProgressAndForkChoiceWithLockedSlotForks(
             .num_dropped_blocks_on_fork = 0,
         }));
     }
+
+    return progress;
+}
+
+const FrozenSlotsSortCtx = struct {
+    slots: []const Slot,
+    pub fn lessThan(ctx: @This(), a_index: usize, b_index: usize) bool {
+        return ctx.slots[a_index] < ctx.slots[b_index];
+    }
+};
+
+/// Analogous to [`initialize_progress_and_fork_choice_with_locked_bank_forks`](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/replay_stage.rs#L637)
+pub fn initForkChoice(
+    allocator: std.mem.Allocator,
+    logger: Logger,
+    slot_tracker: *const SlotTracker,
+    ledger_reader: LedgerReader,
+) !HeaviestSubtreeForkChoice {
+    const root_slot, const root_hash = blk: {
+        const root = slot_tracker.getRoot();
+        const root_slot = slot_tracker.root;
+        const root_hash = root.state.hash.readCopy();
+        break :blk .{ root_slot, root_hash.? };
+    };
+
+    var frozen_slots = try slot_tracker.frozenSlots(allocator);
+    defer frozen_slots.deinit(allocator);
+
+    frozen_slots.sort(FrozenSlotsSortCtx{ .slots = frozen_slots.keys() });
 
     // Given a root and a list of `frozen_slots` sorted smallest to greatest by slot,
     // initialize a new HeaviestSubtreeForkChoice
@@ -445,65 +536,37 @@ fn initProgressAndForkChoiceWithLockedSlotForks(
         });
     }
 
-    return .{ progress, heaviest_subtree_fork_choice };
+    return heaviest_subtree_fork_choice;
 }
 
+pub const RunConfig = struct {
+    enable_consensus: ?ConsensusState.Dependencies,
+    num_threads: u32,
+};
+
 /// Run the replay service indefinitely.
-pub fn run(deps: ReplayDependencies) !void {
+pub fn run(deps: Dependencies, config: RunConfig) !void {
     const zone = tracy.Zone.init(@src(), .{ .name = "run (replay service)" });
     defer zone.deinit();
 
-    var state = try ReplayState.init(deps);
-    // This defer is defined first, so it runs last. This ensures that any threads
-    // borrowing `state.slot_tracker_rw`/`state.epoch_tracker_rw` are joined before the RwMuxes are deinitialized.
+    var state = try ReplayState.init(deps, config.num_threads);
     defer state.deinit();
 
-    // Start vote listener inside replay so it can reference replay state directly.
-    var vote_tracker: sig.consensus.VoteTracker = .EMPTY;
-    defer vote_tracker.deinit(deps.allocator);
-
-    const slot_data_provider: sig.consensus.vote_listener.SlotDataProvider = .{
-        .slot_tracker_rw = &state.slot_tracker_rw,
-        .epoch_tracker_rw = &state.epoch_tracker_rw,
-    };
-
-    const verified_vote_channel = try sig.sync.Channel(sig.consensus.vote_listener.VerifiedVote)
-        .create(deps.allocator);
-    defer verified_vote_channel.destroy();
-
-    const vote_listener: VoteListener = try .init(
-        deps.allocator,
-        .{ .unordered = deps.exit },
-        .from(deps.logger),
-        &vote_tracker,
-        .{
-            .slot_data_provider = slot_data_provider,
-            .gossip_table_rw = deps.gossip_table_rw,
-            .ledger_ref = .{ .reader = state.ledger.reader, .writer = state.ledger.writer },
-            .receivers = .{ .replay_votes_channel = state.replay_votes_channel },
-            .senders = .{
-                .verified_vote = verified_vote_channel,
-                .gossip_verified_vote_hash = state.receivers.gossip_verified_vote_hash,
-                .bank_notification = null,
-                .duplicate_confirmed_slot = state.receivers.duplicate_confirmed_slots,
-                .subscriptions = .{},
-            },
-        },
-    );
-    // This defer is declared AFTER the `state.deinit()` defer above, so due to
-    // LIFO it will execute BEFORE `state.deinit()`. This guarantees no thread
-    // outlives the trackers.
-    defer vote_listener.joinAndDeinit();
+    var consensus: ?ConsensusState = if (config.enable_consensus) |consensus_deps|
+        try ConsensusState.init(deps, consensus_deps, &state)
+    else
+        null;
+    defer if (consensus) |*c| c.deinit(deps.allocator);
 
     while (!deps.exit.load(.monotonic)) {
-        try advanceReplay(&state);
+        try advanceReplay(&state, &consensus, config.num_threads > 1);
     }
 }
 
 /// Run a single iteration of the entire replay process. Includes:
 /// - replay all active slots that have not been replayed yet
-/// - running concensus on the latest updates
-fn advanceReplay(state: *ReplayState) !void {
+/// - running consensus on the latest updates (if present)
+fn advanceReplay(state: *ReplayState, maybe_consensus: *?ConsensusState, multithread: bool) !void {
     const allocator = state.allocator;
 
     const zone = tracy.Zone.init(@src(), .{ .name = "advanceReplay" });
@@ -511,100 +574,136 @@ fn advanceReplay(state: *ReplayState) !void {
 
     state.logger.debug().log("advancing replay");
 
-    var arena_state = state.arena_state.promote(allocator);
-    defer {
-        _ = arena_state.reset(.retain_capacity);
-        state.arena_state = arena_state.state;
-    }
-    const arena = arena_state.allocator();
-
     try trackNewSlots(
         allocator,
         state.logger,
         state.account_store,
         &state.ledger.db,
-        &state.slot_tracker_rw,
-        &state.epoch_tracker_rw,
+        &state.slot_tracker,
+        &state.epoch_tracker,
         state.slot_leaders,
         &state.hard_forks,
         &state.progress_map,
     );
 
-    const execution_state, var epoch_tracker_lg, var slot_tracker_lg =
-        state.executionState().tuple();
+    const slot_results = execution: {
+        const execution_state, var epochs_lock, var slots_lock = state.executionState();
+        defer epochs_lock.unlock();
+        defer slots_lock.unlock();
 
-    defer epoch_tracker_lg.unlock();
+        break :execution if (multithread)
+            try awaitResults(allocator, try replay.execution.replayActiveSlots(execution_state))
+        else
+            try replay.execution.replayActiveSlotsSync(execution_state);
+    };
+    defer allocator.free(slot_results);
 
-    const epoch_tracker = execution_state.epoch_tracker;
-    const slot_tracker = execution_state.slot_tracker;
-    // Note: slot_tracker_lg is explicitly unlocked before a write lock is acquired
-    // for consensus processing.
-    const processed_a_slot = try replay.execution.replayActiveSlots(execution_state);
+    const processed_a_slot = if (maybe_consensus.*) |*consensus|
+        try doConsensus(allocator, state, consensus, slot_results)
+    else
+        try bypassConsensus(state, slot_results);
+
     if (!processed_a_slot) std.time.sleep(100 * std.time.ns_per_ms);
+}
 
-    _ = try replay.edge_cases.processEdgeCases(allocator, state.logger, .{
-        .my_pubkey = state.my_identity,
-        .tpu_has_bank = false,
+/// Run *all* consensus code, including:
+/// - process replay results
+/// - edge cases
+/// - process consensus
+///
+/// TODO: rethink consensus naming:
+/// - processConsensus vs doConsensus?
+/// - edge cases vs network sync vs duplicate slots?
+fn doConsensus(
+    allocator: Allocator,
+    state: *ReplayState,
+    consensus: *ConsensusState,
+    results: []const ReplayResult,
+) !bool {
+    var arena_state = consensus.arena_state.promote(allocator);
+    defer {
+        _ = arena_state.reset(.retain_capacity);
+        consensus.arena_state = arena_state.state;
+    }
+    const arena = arena_state.allocator();
 
-        .fork_choice = &state.fork_choice,
-        .ledger = state.ledger.writer,
-
-        .slot_tracker = slot_tracker,
-        .progress = &state.progress_map,
-        .latest_validator_votes = &state.latest_validator_votes,
-        .slot_data = &state.slot_data,
-
-        .senders = state.senders,
-        .receivers = state.receivers,
-    });
-
-    const SlotSet = sig.utils.collections.SortedSetUnmanaged(Slot);
-
-    // arena-allocated
-    var ancestors: std.AutoArrayHashMapUnmanaged(Slot, Ancestors) = .empty;
-    var descendants: std.AutoArrayHashMapUnmanaged(Slot, SlotSet) = .empty;
-    {
-        for (
-            slot_tracker.slots.keys(),
-            slot_tracker.slots.values(),
-        ) |slot, info| {
-            const slot_ancestors = &info.constants.ancestors.ancestors;
-            const ancestor_gop = try ancestors.getOrPutValue(arena, slot, .EMPTY);
-            try ancestor_gop.value_ptr.ancestors.ensureUnusedCapacity(arena, slot_ancestors.count());
-            for (slot_ancestors.keys()) |ancestor_slot| {
-                try ancestor_gop.value_ptr.addSlot(arena, ancestor_slot);
-                const descendants_gop = try descendants.getOrPutValue(arena, ancestor_slot, .empty);
-                try descendants_gop.value_ptr.put(arena, slot);
-            }
+    var processed_a_slot = false;
+    for (results) |result| {
+        const process_state, var slot_lock, var epoch_lock = processResultState(state, consensus);
+        defer slot_lock.unlock();
+        defer epoch_lock.unlock();
+        if (try processResult(process_state, result.slot, result.entries, result.maybe_err)) {
+            processed_a_slot = true;
         }
     }
 
-    const slot_history_accessor = SlotHistoryAccessor
-        .init(state.account_store.reader());
+    const ancestors, const descendants = edge_cases_and_ancestors_descendants: {
+        const slot_tracker, var slot_tracker_lg = state.slot_tracker.readWithLock();
+        defer slot_tracker_lg.unlock();
 
-    // Explicitly Unlock the read lock on slot_tracker and acquire a write lock for consensus processing.
-    slot_tracker_lg.unlock();
+        _ = try replay.edge_cases.processEdgeCases(allocator, state.logger, .{
+            .my_pubkey = state.my_identity,
+            .tpu_has_bank = false,
+            .fork_choice = &consensus.fork_choice,
+            .ledger = state.ledger.writer,
+            .slot_tracker = slot_tracker,
+            .progress = &state.progress_map,
+            .latest_validator_votes = &consensus.latest_validator_votes,
+            .slot_data = &consensus.slot_data,
+            .senders = consensus.senders,
+            .receivers = consensus.receivers,
+        });
 
-    const slot_tracker_mut, var slot_tracker_mut_lg = state.slot_tracker_rw.writeWithLock();
+        const SlotSet = sig.utils.collections.SortedSetUnmanaged(Slot);
+
+        // arena-allocated
+        var ancestors: std.AutoArrayHashMapUnmanaged(Slot, Ancestors) = .empty;
+        var descendants: std.AutoArrayHashMapUnmanaged(Slot, SlotSet) = .empty;
+        {
+            for (
+                slot_tracker.slots.keys(),
+                slot_tracker.slots.values(),
+            ) |slot, info| {
+                const slot_ancestors = &info.constants.ancestors.ancestors;
+                const ancestor_gop = try ancestors.getOrPutValue(arena, slot, .EMPTY);
+                try ancestor_gop.value_ptr.ancestors
+                    .ensureUnusedCapacity(arena, slot_ancestors.count());
+                for (slot_ancestors.keys()) |ancestor_slot| {
+                    try ancestor_gop.value_ptr.addSlot(arena, ancestor_slot);
+                    const descendants_gop =
+                        try descendants.getOrPutValue(arena, ancestor_slot, .empty);
+                    try descendants_gop.value_ptr.put(arena, slot);
+                }
+            }
+        }
+        break :edge_cases_and_ancestors_descendants .{ ancestors, descendants };
+    };
+
+    const slot_history_accessor = SlotHistoryAccessor.init(state.account_store.reader());
+
+    const epoch_tracker, var epoch_tracker_lg = state.epoch_tracker.readWithLock();
+    defer epoch_tracker_lg.unlock();
+
+    const slot_tracker_mut, var slot_tracker_mut_lg = state.slot_tracker.writeWithLock();
     defer slot_tracker_mut_lg.unlock();
 
     replay.consensus.processConsensus(.{
         .allocator = allocator,
         .logger = .from(state.logger),
-        .replay_tower = &state.replay_tower,
+        .replay_tower = &consensus.replay_tower,
         .progress_map = &state.progress_map,
         .slot_tracker = slot_tracker_mut,
         .epoch_tracker = epoch_tracker,
-        .fork_choice = &state.fork_choice,
+        .fork_choice = &consensus.fork_choice,
         .ledger_reader = state.ledger.reader,
         .ledger_result_writer = state.ledger.writer,
         .ancestors = &ancestors,
         .descendants = &descendants,
         .vote_account = state.my_identity, // TODO: use explicitly distinct vote authority
         .slot_history_accessor = &slot_history_accessor,
-        .latest_validator_votes_for_frozen_banks = &state.latest_validator_votes,
-        .slot_data = &state.slot_data,
-        .ancestor_hashes_replay_update_sender = state.senders.ancestor_hashes_replay_update,
+        .latest_validator_votes_for_frozen_banks = &consensus.latest_validator_votes,
+        .slot_data = &consensus.slot_data,
+        .ancestor_hashes_replay_update_sender = consensus.senders.ancestor_hashes_replay_update,
     }) catch |e| {
         // ignore errors in consensus since they are expected until the inputs are provided
         state.logger.err().logf("consensus failed with an error: {}", .{e});
@@ -613,6 +712,41 @@ fn advanceReplay(state: *ReplayState) !void {
     // TODO: dump_then_repair_correct_slots
 
     // TODO: maybe_start_leader
+
+    return processed_a_slot;
+}
+
+/// bypass executing consensus, simply freezing slots and counting how many were
+/// completed.
+fn bypassConsensus(state: *ReplayState, results: []const ReplayResult) !bool {
+    const epoch_tracker, var epoch_tracker_lg = state.epoch_tracker.readWithLock();
+    defer epoch_tracker_lg.unlock();
+
+    const slot_tracker, var slot_tracker_lg = state.slot_tracker.readWithLock();
+    defer slot_tracker_lg.unlock();
+
+    var processed_a_slot = false;
+    for (results) |result| {
+        const slot = result.slot;
+        const slot_info = slot_tracker.get(slot) orelse return error.MissingSlotInTracker;
+        if (slot_info.state.tickHeight() == slot_info.constants.max_tick_height) {
+            state.logger.info().logf("finished replaying slot: {}", .{slot});
+            const epoch = epoch_tracker.getForSlot(slot) orelse return error.MissingEpoch;
+            try replay.freeze.freezeSlot(state.allocator, .init(
+                .from(state.logger),
+                state.account_store,
+                &epoch,
+                slot_info.state,
+                slot_info.constants,
+                slot,
+                result.entries[result.entries.len - 1].hash,
+            ));
+            processed_a_slot = true;
+        } else {
+            state.logger.info().logf("partially replayed slot: {}", .{slot});
+        }
+    }
+    return processed_a_slot;
 }
 
 /// Identifies new slots in the ledger and starts tracking them in the slot
@@ -620,13 +754,13 @@ fn advanceReplay(state: *ReplayState) !void {
 ///
 /// Analogous to
 /// [generate_new_bank_forks](https://github.com/anza-xyz/agave/blob/146ebd8be3857d530c0946003fcd58be220c3290/core/src/replay_stage.rs#L4149)
-fn trackNewSlots(
+pub fn trackNewSlots(
     allocator: Allocator,
     logger: Logger,
     account_store: AccountStore,
     ledger_db: *LedgerDB,
-    slot_tracker_rw: *sig.sync.RwMux(SlotTracker),
-    epoch_tracker_rw: *sig.sync.RwMux(EpochTracker),
+    slot_tracker_rw: *RwMux(SlotTracker),
+    epoch_tracker_rw: *RwMux(EpochTracker),
     slot_leaders: SlotLeaders,
     hard_forks: *const sig.core.HardForks,
     /// needed for update_fork_propagated_threshold_from_votes
@@ -859,7 +993,7 @@ test trackNewSlots {
         .state = try .genesis(allocator),
         .constants = try .genesis(allocator, .DEFAULT),
     });
-    var slot_tracker = sig.sync.RwMux(SlotTracker).init(slot_tracker_val);
+    var slot_tracker = RwMux(SlotTracker).init(slot_tracker_val);
     defer {
         const ptr, var lg = slot_tracker.writeWithLock();
         defer lg.unlock();
@@ -872,7 +1006,7 @@ test trackNewSlots {
     }
 
     const epoch_tracker_val: EpochTracker = .{ .schedule = .DEFAULT };
-    var epoch_tracker = sig.sync.RwMux(EpochTracker).init(epoch_tracker_val);
+    var epoch_tracker = RwMux(EpochTracker).init(epoch_tracker_val);
     defer {
         const ptr, var lg = epoch_tracker.writeWithLock();
         defer lg.unlock();
