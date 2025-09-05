@@ -116,12 +116,13 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     try accounts_db.account_index.expandRefCapacity(1_000_000);
 
     var manager_exit = std.atomic.Value(bool).init(false);
-    const manager_handle = try std.Thread.spawn(.{}, sig.accounts_db.manager.runLoop, .{
-        &accounts_db, sig.accounts_db.manager.ManagerLoopConfig{
-            .exit = &manager_exit,
-            .slots_per_full_snapshot = 50_000,
-            .slots_per_incremental_snapshot = 5_000,
-            .zstd_nb_workers = @intCast(std.Thread.getCpuCount() catch 0),
+    const manager_handle: std.Thread = try .spawn(.{}, sig.accounts_db.manager.runLoop, .{
+        &accounts_db, &manager_exit, sig.accounts_db.manager.ManagerLoopConfig{
+            .snapshot = .{
+                .slots_per_full_snapshot = 50_000,
+                .slots_per_incremental_snapshot = 5_000,
+                .zstd_nb_workers = @intCast(std.Thread.getCpuCount() catch 0),
+            },
         },
     });
     defer {
@@ -280,7 +281,10 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
         const create_new_root = random.boolean();
         if (create_new_root) {
             largest_rooted_slot = @min(slot, largest_rooted_slot + 2);
-            accounts_db.largest_rooted_slot.store(largest_rooted_slot, .monotonic);
+            accounts_db.max_slots.set(.{
+                .rooted = largest_rooted_slot,
+                .flushed = null,
+            });
         }
 
         snapshot_validation: {
