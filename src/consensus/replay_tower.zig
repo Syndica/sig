@@ -4048,6 +4048,35 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
 
 test "test tower sync from bank failed lockout" {}
 
+test "test VoteTooOld error triggers trackStaleVoteRejected" {
+    var tower = try createTestReplayTower(1, 0.67);
+    defer tower.deinit(std.testing.allocator);
+
+    // Record a vote for slot 5
+    _ = try tower.recordBankVote(
+        std.testing.allocator,
+        5,
+        Hash.ZEROES,
+    );
+
+    // Get initial counter value
+    const initial_stale_votes = tower.metrics.stale_votes_rejected.get();
+
+    // Try to record a vote for an older slot (should trigger VoteTooOld)
+    const result = tower.recordBankVote(
+        std.testing.allocator,
+        3, // Older than slot 5
+        Hash.ZEROES,
+    );
+
+    // Should return VoteTooOld error
+    try std.testing.expectError(error.VoteTooOld, result);
+
+    // Check that stale vote rejected counter was incremented
+    const final_stale_votes = tower.metrics.stale_votes_rejected.get();
+    try std.testing.expectEqual(initial_stale_votes + 1, final_stale_votes);
+}
+
 const builtin = @import("builtin");
 const DynamicArrayBitSet = sig.bloom.bit_set.DynamicArrayBitSet;
 
