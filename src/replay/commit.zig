@@ -10,11 +10,25 @@ const Logger = sig.trace.Logger("replay.committer");
 const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
+const Transaction = sig.core.Transaction;
 
 const ResolvedTransaction = replay.resolve_lookup.ResolvedTransaction;
 
 const AccountSharedData = sig.runtime.AccountSharedData;
 const ProcessedTransaction = sig.runtime.transaction_execution.ProcessedTransaction;
+
+const vote_listener = sig.consensus.vote_listener;
+const ParsedVote = vote_listener.vote_parser.ParsedVote;
+
+const Channel = sig.sync.Channel;
+
+fn isSimpleVoteTransaction(tx: Transaction) bool {
+    const msg = tx.msg;
+    if (msg.instructions.len == 0) return false;
+    const ix = msg.instructions[0];
+    if (ix.program_index >= msg.account_keys.len) return false;
+    return sig.runtime.program.vote.ID.equals(&msg.account_keys[ix.program_index]);
+}
 
 /// All contained state is required to be thread-safe.
 pub const Committer = struct {
@@ -24,6 +38,7 @@ pub const Committer = struct {
     status_cache: *sig.core.StatusCache,
     stakes_cache: *sig.core.StakesCache,
     new_rate_activation_epoch: ?sig.core.Epoch,
+    replay_votes_sender: *Channel(ParsedVote),
 
     pub fn commitTransactions(
         self: Committer,
@@ -63,7 +78,24 @@ pub const Committer = struct {
             }
 
             switch (tx_result) {
-                .executed => |exec| rent_collected += exec.loaded_accounts.rent_collected,
+                .executed => |exec| {
+                    rent_collected += exec.loaded_accounts.rent_collected;
+                    // Skip non successful or non vote transactions.
+                    if (exec.executed_transaction.err == null and
+                        isSimpleVoteTransaction(transaction.transaction))
+                    {
+                        if (try vote_listener.vote_parser.parseSanitizedVoteTransaction(
+                            allocator,
+                            transaction,
+                        )) |parsed| {
+                            if (parsed.vote.lastVotedSlot() != null) {
+                                self.replay_votes_sender.send(parsed) catch parsed.deinit(allocator);
+                            } else {
+                                parsed.deinit(allocator);
+                            }
+                        }
+                    }
+                },
                 else => {},
             }
 

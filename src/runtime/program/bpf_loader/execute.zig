@@ -79,17 +79,18 @@ pub fn execute(
 // TODO: v4 loader
 // [agave] https://github.com/anza-xyz/agave/blob/64e19be684046b5569ffd34a25a9d5653a391737/programs/loader-v4/src/lib.rs#L457
 pub fn executeBpfLoaderV4ProgramInstruction(
-    allocator: std.mem.Allocator,
+    _: std.mem.Allocator,
     ic: *InstructionContext,
 ) (error{OutOfMemory} || InstructionError)!void {
-    var buf: [sig.net.Packet.DATA_SIZE]u8 = undefined;
-    const instruction = try ic.ixn_info.limitedDeserializeInstruction(
-        bpf_loader_program.v4.Instruction,
-        &buf,
-    );
+    ic.tc.custom_error = 0x40000000;
+    return error.Custom;
 
-    _ = allocator;
-    _ = instruction;
+    // var buf: [sig.net.Packet.DATA_SIZE]u8 = undefined;
+    // const instruction = try ic.ixn_info.limitedDeserializeInstruction(
+    //     bpf_loader_program.v4.Instruction,
+    //     &buf,
+    // );
+    //
     // return switch (instruction) {
     //     .write => |args| executeV4Write(
     //         allocator,
@@ -819,7 +820,11 @@ pub fn executeV3SetAuthority(
         },
     }
 
-    try ic.tc.log("New authority {?}", .{new_authority});
+    if (new_authority) |some| {
+        try ic.tc.log("New authority Some({?})", .{some});
+    } else {
+        try ic.tc.log("New authority None", .{});
+    }
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/programs/bpf_loader/src/lib.rs#L1011-L1083
@@ -1281,217 +1286,220 @@ fn commonExtendProgram(
 
 /// [agave] https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/programs/bpf_loader/src/lib.rs#L1346-L1515
 pub fn executeV3Migrate(
-    allocator: std.mem.Allocator,
+    _: std.mem.Allocator,
     ic: *InstructionContext,
 ) (error{OutOfMemory} || InstructionError)!void {
-    if (!ic.tc.feature_set.active(.enable_loader_v4, ic.tc.slot)) {
-        return InstructionError.InvalidInstructionData;
-    }
+    ic.tc.custom_error = 0x30000000;
+    return error.Custom;
 
-    const AccountIndex = bpf_loader_program.v3.instruction.Migrate.AccountIndex;
-    try ic.ixn_info.checkNumberOfAccounts(3);
+    // if (!ic.tc.feature_set.active(.enable_loader_v4, ic.tc.slot)) {
+    //     return InstructionError.InvalidInstructionData;
+    // }
 
-    const programdata_key =
-        ic.getAccountKeyByIndexUnchecked(@intFromEnum(AccountIndex.program_data));
-    const program_key =
-        ic.getAccountKeyByIndexUnchecked(@intFromEnum(AccountIndex.program));
-    const provided_authority_key =
-        ic.getAccountKeyByIndexUnchecked(@intFromEnum(AccountIndex.authority));
+    // const AccountIndex = bpf_loader_program.v3.instruction.Migrate.AccountIndex;
+    // try ic.ixn_info.checkNumberOfAccounts(3);
 
-    // [agave] https://github.com/anza-xyz/agave/blob/5fa721b3b27c7ba33e5b0e1c55326241bb403bb1/program-runtime/src/sysvar_cache.rs#L130-L141
-    const clock = try ic.tc.sysvar_cache.get(sysvar.Clock);
+    // const programdata_key =
+    //     ic.getAccountKeyByIndexUnchecked(@intFromEnum(AccountIndex.program_data));
+    // const program_key =
+    //     ic.getAccountKeyByIndexUnchecked(@intFromEnum(AccountIndex.program));
+    // const provided_authority_key =
+    //     ic.getAccountKeyByIndexUnchecked(@intFromEnum(AccountIndex.authority));
 
-    // Verify ProgramData account.
-    const progdata_info = info: {
-        var programdata = try ic.borrowInstructionAccount(
-            @intFromEnum(AccountIndex.program_data),
-        );
-        defer programdata.release();
+    // // [agave] https://github.com/anza-xyz/agave/blob/5fa721b3b27c7ba33e5b0e1c55326241bb403bb1/program-runtime/src/sysvar_cache.rs#L130-L141
+    // const clock = try ic.tc.sysvar_cache.get(sysvar.Clock);
 
-        if (!programdata.context.is_writable) {
-            try ic.tc.log("ProgramData account not writeable", .{});
-            return InstructionError.InvalidArgument;
-        }
+    // // Verify ProgramData account.
+    // const progdata_info = info: {
+    //     var programdata = try ic.borrowInstructionAccount(
+    //         @intFromEnum(AccountIndex.program_data),
+    //     );
+    //     defer programdata.release();
 
-        const program_len, const upgrade_key = switch (try programdata.deserializeFromAccountData(
-            allocator,
-            V3State,
-        )) {
-            .program_data => |data| blk: {
-                if (clock.slot == data.slot) {
-                    try ic.tc.log("Program was deployed in this block already", .{});
-                    return InstructionError.InvalidArgument;
-                }
+    //     if (!programdata.context.is_writable) {
+    //         try ic.tc.log("ProgramData account not writeable", .{});
+    //         return InstructionError.InvalidArgument;
+    //     }
 
-                const program_len: u32 = @intCast(programdata.constAccountData().len -|
-                    V3State.PROGRAM_DATA_METADATA_SIZE);
+    //     const program_len, const upgrade_key = switch (try programdata.deserializeFromAccountData(
+    //         allocator,
+    //         V3State,
+    //     )) {
+    //         .program_data => |data| blk: {
+    //             if (clock.slot == data.slot) {
+    //                 try ic.tc.log("Program was deployed in this block already", .{});
+    //                 return InstructionError.InvalidArgument;
+    //             }
 
-                break :blk .{ program_len, data.upgrade_authority_address };
-            },
-            else => .{ 0, null },
-        };
+    //             const program_len: u32 = @intCast(programdata.constAccountData().len -|
+    //                 V3State.PROGRAM_DATA_METADATA_SIZE);
 
-        break :info .{
-            .len = program_len,
-            .upgrade_key = upgrade_key,
-            .funds = programdata.account.lamports,
-        };
-    };
+    //             break :blk .{ program_len, data.upgrade_authority_address };
+    //         },
+    //         else => .{ 0, null },
+    //     };
 
-    // Verify authority signature
-    if (!migration_authority.equals(&provided_authority_key) and
-        !provided_authority_key.equals(&(progdata_info.upgrade_key orelse program_key)))
-    {
-        try ic.tc.log("Incorrect migration authority provided", .{});
-        return InstructionError.IncorrectAuthority;
-    }
-    if (!(try ic.ixn_info.isIndexSigner(@intFromEnum(AccountIndex.authority)))) {
-        try ic.tc.log("Migration authority did not sign", .{});
-        return InstructionError.MissingRequiredSignature;
-    }
+    //     break :info .{
+    //         .len = program_len,
+    //         .upgrade_key = upgrade_key,
+    //         .funds = programdata.account.lamports,
+    //     };
+    // };
 
-    // Verify Program account
-    {
-        var program_account = try ic.borrowInstructionAccount(
-            @intFromEnum(AccountIndex.program),
-        );
-        defer program_account.release();
+    // // Verify authority signature
+    // if (!migration_authority.equals(&provided_authority_key) and
+    //     !provided_authority_key.equals(&(progdata_info.upgrade_key orelse program_key)))
+    // {
+    //     try ic.tc.log("Incorrect migration authority provided", .{});
+    //     return InstructionError.IncorrectAuthority;
+    // }
+    // if (!(try ic.ixn_info.isIndexSigner(@intFromEnum(AccountIndex.authority)))) {
+    //     try ic.tc.log("Migration authority did not sign", .{});
+    //     return InstructionError.MissingRequiredSignature;
+    // }
 
-        if (!program_account.context.is_writable) {
-            try ic.tc.log("Program account not writeable", .{});
-            return InstructionError.InvalidArgument;
-        }
-        if (!program_account.isOwnedByCurrentProgram()) {
-            try ic.tc.log("Program account not owned by loader", .{});
-            return InstructionError.IncorrectProgramId;
-        }
+    // // Verify Program account
+    // {
+    //     var program_account = try ic.borrowInstructionAccount(
+    //         @intFromEnum(AccountIndex.program),
+    //     );
+    //     defer program_account.release();
 
-        switch (try program_account.deserializeFromAccountData(
-            allocator,
-            V3State,
-        )) {
-            .program => |data| {
-                if (!programdata_key.equals(&data.programdata_address)) {
-                    try ic.tc.log("Program and ProgramData account mismatch", .{});
-                    return InstructionError.InvalidArgument;
-                }
-            },
-            else => {
-                try ic.tc.log("Invalid Program account", .{});
-                return InstructionError.InvalidAccountData;
-            },
-        }
+    //     if (!program_account.context.is_writable) {
+    //         try ic.tc.log("Program account not writeable", .{});
+    //         return InstructionError.InvalidArgument;
+    //     }
+    //     if (!program_account.isOwnedByCurrentProgram()) {
+    //         try ic.tc.log("Program account not owned by loader", .{});
+    //         return InstructionError.IncorrectProgramId;
+    //     }
 
-        var resize_delta: i64 = undefined;
-        try program_account.setDataLength(allocator, &resize_delta, 0); // set_data_from_slice(&[])
-        try program_account.addLamports(progdata_info.funds);
+    //     switch (try program_account.deserializeFromAccountData(
+    //         allocator,
+    //         V3State,
+    //     )) {
+    //         .program => |data| {
+    //             if (!programdata_key.equals(&data.programdata_address)) {
+    //                 try ic.tc.log("Program and ProgramData account mismatch", .{});
+    //                 return InstructionError.InvalidArgument;
+    //             }
+    //         },
+    //         else => {
+    //             try ic.tc.log("Invalid Program account", .{});
+    //             return InstructionError.InvalidAccountData;
+    //         },
+    //     }
 
-        if (progdata_info.len == 0) {
-            try program_account.setOwner(system_program.ID);
-        } else {
-            try program_account.setOwner(bpf_loader_program.v4.ID);
-        }
-    }
+    //     var resize_delta: i64 = undefined;
+    //     try program_account.setDataLength(allocator, &resize_delta, 0); // set_data_from_slice(&[])
+    //     try program_account.addLamports(progdata_info.funds);
 
-    {
-        var programdata = try ic.borrowInstructionAccount(
-            @intFromEnum(AccountIndex.program_data),
-        );
-        defer programdata.release();
-        try programdata.setLamports(0);
-    }
+    //     if (progdata_info.len == 0) {
+    //         try program_account.setOwner(system_program.ID);
+    //     } else {
+    //         try program_account.setOwner(bpf_loader_program.v4.ID);
+    //     }
+    // }
 
-    if (progdata_info.len > 0) {
-        try ic.nativeInvoke(
-            allocator,
-            bpf_loader_program.v4.ID,
-            bpf_loader_program.v4.Instruction{
-                .set_program_length = .{
-                    .new_size = progdata_info.len,
-                },
-            },
-            &.{
-                .{ .pubkey = program_key, .is_signer = false, .is_writable = true },
-                .{ .pubkey = provided_authority_key, .is_signer = true, .is_writable = false },
-                .{ .pubkey = program_key, .is_signer = false, .is_writable = true },
-            },
-            &.{},
-        );
+    // {
+    //     var programdata = try ic.borrowInstructionAccount(
+    //         @intFromEnum(AccountIndex.program_data),
+    //     );
+    //     defer programdata.release();
+    //     try programdata.setLamports(0);
+    // }
 
-        try ic.nativeInvoke(
-            allocator,
-            bpf_loader_program.v4.ID,
-            bpf_loader_program.v4.Instruction{
-                .copy = .{
-                    .destination_offset = 0,
-                    .source_offset = 0,
-                    .length = progdata_info.len,
-                },
-            },
-            &.{
-                .{ .pubkey = program_key, .is_signer = false, .is_writable = true },
-                .{ .pubkey = provided_authority_key, .is_signer = true, .is_writable = false },
-                .{ .pubkey = programdata_key, .is_signer = false, .is_writable = false },
-            },
-            &.{},
-        );
+    // if (progdata_info.len > 0) {
+    //     try ic.nativeInvoke(
+    //         allocator,
+    //         bpf_loader_program.v4.ID,
+    //         bpf_loader_program.v4.Instruction{
+    //             .set_program_length = .{
+    //                 .new_size = progdata_info.len,
+    //             },
+    //         },
+    //         &.{
+    //             .{ .pubkey = program_key, .is_signer = false, .is_writable = true },
+    //             .{ .pubkey = provided_authority_key, .is_signer = true, .is_writable = false },
+    //             .{ .pubkey = program_key, .is_signer = false, .is_writable = true },
+    //         },
+    //         &.{},
+    //     );
 
-        try ic.nativeInvoke(
-            allocator,
-            bpf_loader_program.v4.ID,
-            bpf_loader_program.v4.Instruction{
-                .deploy = .{},
-            },
-            &.{
-                .{ .pubkey = program_key, .is_signer = false, .is_writable = true },
-                .{ .pubkey = provided_authority_key, .is_signer = true, .is_writable = false },
-            },
-            &.{},
-        );
+    //     try ic.nativeInvoke(
+    //         allocator,
+    //         bpf_loader_program.v4.ID,
+    //         bpf_loader_program.v4.Instruction{
+    //             .copy = .{
+    //                 .destination_offset = 0,
+    //                 .source_offset = 0,
+    //                 .length = progdata_info.len,
+    //             },
+    //         },
+    //         &.{
+    //             .{ .pubkey = program_key, .is_signer = false, .is_writable = true },
+    //             .{ .pubkey = provided_authority_key, .is_signer = true, .is_writable = false },
+    //             .{ .pubkey = programdata_key, .is_signer = false, .is_writable = false },
+    //         },
+    //         &.{},
+    //     );
 
-        if (progdata_info.upgrade_key) |upgrade_key| {
-            try ic.nativeInvoke(
-                allocator,
-                bpf_loader_program.v4.ID,
-                bpf_loader_program.v4.Instruction{
-                    .transfer_authority = .{},
-                },
-                &.{
-                    .{ .pubkey = program_key, .is_signer = false, .is_writable = true },
-                    .{ .pubkey = provided_authority_key, .is_signer = true, .is_writable = false },
-                    .{ .pubkey = upgrade_key, .is_signer = true, .is_writable = false },
-                },
-                &.{},
-            );
-        } else {
-            try ic.nativeInvoke(
-                allocator,
-                bpf_loader_program.v4.ID,
-                bpf_loader_program.v4.Instruction{
-                    .finalize = .{},
-                },
-                &.{
-                    .{ .pubkey = program_key, .is_signer = false, .is_writable = true },
-                    .{ .pubkey = provided_authority_key, .is_signer = true, .is_writable = false },
-                    .{ .pubkey = program_key, .is_signer = false, .is_writable = false },
-                },
-                &.{},
-            );
-        }
-    }
+    //     try ic.nativeInvoke(
+    //         allocator,
+    //         bpf_loader_program.v4.ID,
+    //         bpf_loader_program.v4.Instruction{
+    //             .deploy = .{},
+    //         },
+    //         &.{
+    //             .{ .pubkey = program_key, .is_signer = false, .is_writable = true },
+    //             .{ .pubkey = provided_authority_key, .is_signer = true, .is_writable = false },
+    //         },
+    //         &.{},
+    //     );
 
-    {
-        var programdata = try ic.borrowInstructionAccount(
-            @intFromEnum(AccountIndex.program_data),
-        );
-        defer programdata.release();
+    //     if (progdata_info.upgrade_key) |upgrade_key| {
+    //         try ic.nativeInvoke(
+    //             allocator,
+    //             bpf_loader_program.v4.ID,
+    //             bpf_loader_program.v4.Instruction{
+    //                 .transfer_authority = .{},
+    //             },
+    //             &.{
+    //                 .{ .pubkey = program_key, .is_signer = false, .is_writable = true },
+    //                 .{ .pubkey = provided_authority_key, .is_signer = true, .is_writable = false },
+    //                 .{ .pubkey = upgrade_key, .is_signer = true, .is_writable = false },
+    //             },
+    //             &.{},
+    //         );
+    //     } else {
+    //         try ic.nativeInvoke(
+    //             allocator,
+    //             bpf_loader_program.v4.ID,
+    //             bpf_loader_program.v4.Instruction{
+    //                 .finalize = .{},
+    //             },
+    //             &.{
+    //                 .{ .pubkey = program_key, .is_signer = false, .is_writable = true },
+    //                 .{ .pubkey = provided_authority_key, .is_signer = true, .is_writable = false },
+    //                 .{ .pubkey = program_key, .is_signer = false, .is_writable = false },
+    //             },
+    //             &.{},
+    //         );
+    //     }
+    // }
 
-        var resize_delta: i64 = undefined;
-        try programdata.setDataLength(allocator, &resize_delta, 0); // set_data_from_slice(&[])
-        try programdata.setOwner(system_program.ID);
-    }
+    // {
+    //     var programdata = try ic.borrowInstructionAccount(
+    //         @intFromEnum(AccountIndex.program_data),
+    //     );
+    //     defer programdata.release();
 
-    try ic.tc.log("Migrated program {any}", .{program_key});
+    //     var resize_delta: i64 = undefined;
+    //     try programdata.setDataLength(allocator, &resize_delta, 0); // set_data_from_slice(&[])
+    //     try programdata.setOwner(system_program.ID);
+    // }
+
+    // try ic.tc.log("Migrated program {any}", .{program_key});
 }
 
 /// TODO: This function depends on syscalls and program cache implementations
@@ -2057,6 +2065,60 @@ test "executeV3SetAuthority" {
                 },
                 .{
                     .pubkey = new_authority_key,
+                },
+                .{
+                    .pubkey = bpf_loader_program.v3.ID,
+                    .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+                },
+            },
+        },
+        .{},
+    );
+
+    @memcpy(final_program_account_data, initial_program_account_data);
+    _ = try bincode.writeToSlice(
+        final_program_account_data,
+        V3State{
+            .program_data = .{ .slot = 0, .upgrade_authority_address = null },
+        },
+        .{},
+    );
+
+    // test with no new authority
+    try testing.expectProgramExecuteResult(
+        allocator,
+        bpf_loader_program.v3.ID,
+        bpf_loader_program.v3.Instruction.set_authority,
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 1 },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = buffer_account_key,
+                    .data = initial_program_account_data,
+                    .owner = bpf_loader_program.v3.ID,
+                },
+                .{
+                    .pubkey = buffer_authority_key,
+                },
+                .{
+                    .pubkey = bpf_loader_program.v3.ID, // id of program u wanna run
+                    .owner = sig.runtime.ids.NATIVE_LOADER_ID, // bpf_loader_program.v3.ID,
+                },
+            },
+            .compute_meter = bpf_loader_program.v3.COMPUTE_UNITS,
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = buffer_account_key,
+                    .data = final_program_account_data,
+                    .owner = bpf_loader_program.v3.ID,
+                },
+                .{
+                    .pubkey = buffer_authority_key,
                 },
                 .{
                     .pubkey = bpf_loader_program.v3.ID,
@@ -2969,142 +3031,143 @@ test "executeV3ExtendProgram" {
     }
 }
 
-test "executeV3Migrate" {
-    const testing = sig.runtime.program.testing;
+// TODO: Uncomment once loader v4 and migrate are implemented
+// test "executeV3Migrate" {
+// const testing = sig.runtime.program.testing;
 
-    const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+// const allocator = std.testing.allocator;
+// var prng = std.Random.DefaultPrng.init(5083);
 
-    const upgrade_authority_key = Pubkey.initRandom(prng.random());
-    const program_account_key = Pubkey.initRandom(prng.random());
-    const program_data_key, _ = pubkey_utils.findProgramAddress(
-        &.{&program_account_key.data},
-        bpf_loader_program.v3.ID,
-    ) orelse @panic("findProgramAddress failed");
+// const upgrade_authority_key = Pubkey.initRandom(prng.random());
+// const program_account_key = Pubkey.initRandom(prng.random());
+// const program_data_key, _ = pubkey_utils.findProgramAddress(
+//     &.{&program_account_key.data},
+//     bpf_loader_program.v3.ID,
+// ) orelse @panic("findProgramAddress failed");
 
-    var clock = sysvar.Clock.DEFAULT;
-    clock.slot += 1337;
+// var clock = sysvar.Clock.DEFAULT;
+// clock.slot += 1337;
 
-    const data_size = 42;
-    const program_data_buffer =
-        try allocator.alloc(u8, @sizeOf(V3State) + data_size);
-    defer allocator.free(program_data_buffer);
-    _ = try bincode.writeToSlice(
-        program_data_buffer,
-        V3State{
-            .program_data = .{
-                .slot = clock.slot - 1, // must be before the current clock's slot.
-                .upgrade_authority_address = upgrade_authority_key,
-            },
-        },
-        .{},
-    );
+// const data_size = 42;
+// const program_data_buffer =
+//     try allocator.alloc(u8, @sizeOf(V3State) + data_size);
+// defer allocator.free(program_data_buffer);
+// _ = try bincode.writeToSlice(
+//     program_data_buffer,
+//     V3State{
+//         .program_data = .{
+//             .slot = clock.slot - 1, // must be before the current clock's slot.
+//             .upgrade_authority_address = upgrade_authority_key,
+//         },
+//     },
+//     .{},
+// );
 
-    const program_account_buffer =
-        try allocator.alloc(u8, @sizeOf(V3State));
-    defer allocator.free(program_account_buffer);
-    const program_account = try bincode.writeToSlice(
-        program_account_buffer,
-        V3State{
-            .program = .{
-                .programdata_address = program_data_key,
-            },
-        },
-        .{},
-    );
+// const program_account_buffer =
+//     try allocator.alloc(u8, @sizeOf(V3State));
+// defer allocator.free(program_account_buffer);
+// const program_account = try bincode.writeToSlice(
+//     program_account_buffer,
+//     V3State{
+//         .program = .{
+//             .programdata_address = program_data_key,
+//         },
+//     },
+//     .{},
+// );
 
-    const program_data_balance = sysvar.Rent.DEFAULT.minimumBalance(program_data_buffer.len);
-    const program_account_balance = sysvar.Rent.DEFAULT.minimumBalance(program_account.len);
+// const program_data_balance = sysvar.Rent.DEFAULT.minimumBalance(program_data_buffer.len);
+// const program_account_balance = sysvar.Rent.DEFAULT.minimumBalance(program_account.len);
 
-    const compute_units: u64 = bpf_loader_program.v3.COMPUTE_UNITS +
-        (4 * bpf_loader_program.v4.COMPUTE_UNITS); // does 4 CPI calls.
+// const compute_units: u64 = bpf_loader_program.v3.COMPUTE_UNITS +
+//     (4 * bpf_loader_program.v4.COMPUTE_UNITS); // does 4 CPI calls.
 
-    try testing.expectProgramExecuteResult(
-        allocator,
-        bpf_loader_program.v3.ID,
-        bpf_loader_program.v3.Instruction{
-            .migrate = .{},
-        },
-        &.{
-            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
-            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 1 },
-            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 2 },
-            .{ .is_signer = false, .is_writable = false, .index_in_transaction = 3 },
-            .{ .is_signer = false, .is_writable = false, .index_in_transaction = 4 },
-        },
-        .{
-            .accounts = &.{
-                .{
-                    .pubkey = program_data_key,
-                    .data = program_data_buffer,
-                    .owner = bpf_loader_program.v3.ID,
-                    .lamports = program_data_balance,
-                },
-                .{
-                    .pubkey = program_account_key,
-                    .data = program_account,
-                    .owner = bpf_loader_program.v3.ID,
-                    .lamports = program_account_balance,
-                },
-                .{
-                    .pubkey = upgrade_authority_key,
-                    .owner = bpf_loader_program.v3.ID,
-                },
-                .{
-                    .pubkey = bpf_loader_program.v4.ID, // needed for CPI
-                    .owner = ids.NATIVE_LOADER_ID,
-                    .executable = true,
-                },
-                .{
-                    .pubkey = bpf_loader_program.v3.ID,
-                    .owner = ids.NATIVE_LOADER_ID,
-                },
-            },
-            .compute_meter = compute_units,
-            .feature_set = &.{
-                .{
-                    .feature = .enable_loader_v4,
-                    .slot = 0,
-                },
-            },
-            .sysvar_cache = .{
-                .rent = sysvar.Rent.DEFAULT,
-                .clock = clock,
-            },
-        },
-        .{
-            .accounts = &.{
-                .{
-                    .pubkey = program_data_key,
-                    .data = &.{}, // set_length to 0
-                    .owner = system_program.ID,
-                    .lamports = 0,
-                },
-                .{
-                    .pubkey = program_account_key,
-                    .data = &.{}, // set length to 0
-                    .owner = bpf_loader_program.v4.ID, // v4
-                    .lamports = program_account_balance + program_data_balance, // sum bal
-                },
-                .{
-                    .pubkey = upgrade_authority_key,
-                    .owner = bpf_loader_program.v3.ID,
-                },
-                .{
-                    .pubkey = bpf_loader_program.v4.ID, // needed for CPI
-                    .owner = ids.NATIVE_LOADER_ID,
-                    .executable = true,
-                },
-                .{
-                    .pubkey = bpf_loader_program.v3.ID,
-                    .owner = ids.NATIVE_LOADER_ID,
-                },
-            },
-            .accounts_resize_delta = 0,
-        },
-        .{},
-    );
-}
+// try testing.expectProgramExecuteResult(
+//     allocator,
+//     bpf_loader_program.v3.ID,
+//     bpf_loader_program.v3.Instruction{
+//         .migrate = .{},
+//     },
+//     &.{
+//         .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+//         .{ .is_signer = false, .is_writable = true, .index_in_transaction = 1 },
+//         .{ .is_signer = true, .is_writable = false, .index_in_transaction = 2 },
+//         .{ .is_signer = false, .is_writable = false, .index_in_transaction = 3 },
+//         .{ .is_signer = false, .is_writable = false, .index_in_transaction = 4 },
+//     },
+//     .{
+//         .accounts = &.{
+//             .{
+//                 .pubkey = program_data_key,
+//                 .data = program_data_buffer,
+//                 .owner = bpf_loader_program.v3.ID,
+//                 .lamports = program_data_balance,
+//             },
+//             .{
+//                 .pubkey = program_account_key,
+//                 .data = program_account,
+//                 .owner = bpf_loader_program.v3.ID,
+//                 .lamports = program_account_balance,
+//             },
+//             .{
+//                 .pubkey = upgrade_authority_key,
+//                 .owner = bpf_loader_program.v3.ID,
+//             },
+//             .{
+//                 .pubkey = bpf_loader_program.v4.ID, // needed for CPI
+//                 .owner = ids.NATIVE_LOADER_ID,
+//                 .executable = true,
+//             },
+//             .{
+//                 .pubkey = bpf_loader_program.v3.ID,
+//                 .owner = ids.NATIVE_LOADER_ID,
+//             },
+//         },
+//         .compute_meter = compute_units,
+//         .feature_set = &.{
+//             .{
+//                 .feature = .enable_loader_v4,
+//                 .slot = 0,
+//             },
+//         },
+//         .sysvar_cache = .{
+//             .rent = sysvar.Rent.DEFAULT,
+//             .clock = clock,
+//         },
+//     },
+//     .{
+//         .accounts = &.{
+//             .{
+//                 .pubkey = program_data_key,
+//                 .data = &.{}, // set_length to 0
+//                 .owner = system_program.ID,
+//                 .lamports = 0,
+//             },
+//             .{
+//                 .pubkey = program_account_key,
+//                 .data = &.{}, // set length to 0
+//                 .owner = bpf_loader_program.v4.ID, // v4
+//                 .lamports = program_account_balance + program_data_balance, // sum bal
+//             },
+//             .{
+//                 .pubkey = upgrade_authority_key,
+//                 .owner = bpf_loader_program.v3.ID,
+//             },
+//             .{
+//                 .pubkey = bpf_loader_program.v4.ID, // needed for CPI
+//                 .owner = ids.NATIVE_LOADER_ID,
+//                 .executable = true,
+//             },
+//             .{
+//                 .pubkey = bpf_loader_program.v3.ID,
+//                 .owner = ids.NATIVE_LOADER_ID,
+//             },
+//         },
+//         .accounts_resize_delta = 0,
+//     },
+//     .{},
+// );
+// }
 
 fn createValidProgramData(
     allocator: std.mem.Allocator,
@@ -3142,4 +3205,40 @@ fn createValidProgramData(
     );
 
     return program_data;
+}
+
+test "test loader v4 and bpf v3 migrate custom errors" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+
+    var tx = try sig.runtime.testing.createTransactionContext(
+        allocator,
+        prng.random(),
+        .{},
+    );
+    const tc = &tx[1];
+    defer {
+        sig.runtime.testing.deinitTransactionContext(allocator, tc.*);
+        tx[0].deinit(allocator);
+    }
+
+    var ic = InstructionContext{
+        .tc = tc,
+        .ixn_info = .{
+            .program_meta = .{
+                .index_in_transaction = 0,
+                .pubkey = Pubkey.ZEROES,
+            },
+            .account_metas = .{},
+            .instruction_data = &.{},
+            .initial_account_lamports = 0,
+        },
+        .depth = 0,
+    };
+
+    try std.testing.expectError(error.Custom, executeBpfLoaderV4ProgramInstruction(allocator, &ic));
+    try std.testing.expectEqual(0x40000000, tc.custom_error.?);
+
+    try std.testing.expectError(error.Custom, executeV3Migrate(allocator, &ic));
+    try std.testing.expectEqual(0x30000000, tc.custom_error.?);
 }
