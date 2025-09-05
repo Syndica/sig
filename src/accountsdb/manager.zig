@@ -29,84 +29,110 @@ const ACCOUNT_FILE_SHRINK_THRESHOLD = 70; // shrink account files with more than
 pub const ManagerLoopConfig = Manager.Config;
 
 /// periodically runs flush/clean/shrink, and generates snapshots.
-pub fn runLoop(db: *AccountsDB, config: Manager.Config) !void {
+pub fn runLoop(db: *AccountsDB, exit: *std.atomic.Value(bool), config: Manager.Config) !void {
     var manager = try Manager.init(db.allocator, db, config);
     defer manager.deinit(db.allocator);
-    try manager.run(db.allocator);
+    try manager.run(exit, db.allocator);
 }
 
 pub const Manager = struct {
     db: *AccountsDB,
-    config: Config,
     timer: std.time.Timer,
     flush_slots: std.ArrayListUnmanaged(Slot),
     unclean_account_files: std.ArrayListUnmanaged(FileId),
     shrink_account_files: std.AutoArrayHashMapUnmanaged(FileId, void),
     delete_account_files: std.AutoArrayHashMapUnmanaged(FileId, void),
-    zstd_compressor: zstd.Compressor,
-    zstd_buffer: []u8,
-    prng: std.Random.DefaultPrng,
-    tmp_bank_fields: BankFields,
+    snapshot_state: ?SnapshotState,
 
     const sfba_size = 4096 * 4;
 
     pub const Config = struct {
-        exit: *std.atomic.Value(bool),
-        slots_per_full_snapshot: u64,
-        slots_per_incremental_snapshot: u64,
-        zstd_nb_workers: u31 = 0,
+        snapshot: ?SnapshotState.Config,
+    };
+
+    pub const SnapshotState = struct {
+        config: SnapshotState.Config,
+        zstd_compressor: zstd.Compressor,
+        zstd_buffer: []u8,
+        prng: std.Random.DefaultPrng,
+        tmp_bank_fields: BankFields,
+
+        pub const Config = struct {
+            slots_per_full_snapshot: u64,
+            slots_per_incremental_snapshot: u64,
+            zstd_nb_workers: u31 = 0,
+        };
+
+        pub fn deinit(self: SnapshotState, allocator: std.mem.Allocator) void {
+            self.zstd_compressor.deinit();
+            allocator.free(self.zstd_buffer);
+            self.tmp_bank_fields.deinit(allocator);
+        }
     };
 
     pub fn init(allocator: Allocator, db: *AccountsDB, config: Config) !Manager {
         const timer = try std.time.Timer.start();
 
-        const zstd_compressor = try zstd.Compressor.init(.{
-            .nb_workers = config.zstd_nb_workers,
-        });
-        errdefer zstd_compressor.deinit();
+        const maybe_snapshot_state: ?SnapshotState = snapshot: {
+            const snap_config = config.snapshot orelse break :snapshot null;
 
-        const zstd_buffer = try allocator.alloc(u8, zstd.Compressor.recommOutSize());
-        errdefer allocator.free(zstd_buffer);
+            const zstd_compressor = try zstd.Compressor.init(.{
+                .nb_workers = snap_config.zstd_nb_workers,
+            });
+            errdefer zstd_compressor.deinit();
 
-        // TODO: get rid of this once `generateFullSnapshot` can actually
-        // derive this data correctly by itdb.
-        var prng = std.Random.DefaultPrng.init(1234);
-        const tmp_bank_fields = try BankFields.initRandom(allocator, prng.random(), 128);
-        errdefer tmp_bank_fields.deinit(allocator);
+            const zstd_buffer = try allocator.alloc(u8, zstd.Compressor.recommOutSize());
+            errdefer allocator.free(zstd_buffer);
+
+            // TODO: get rid of this once `generateFullSnapshot` can actually
+            // derive this data correctly by itdb.
+            var prng: std.Random.DefaultPrng = .init(1234);
+            const tmp_bank_fields: BankFields = try .initRandom(allocator, prng.random(), 128);
+            errdefer tmp_bank_fields.deinit(allocator);
+
+            break :snapshot .{
+                .config = snap_config,
+                .zstd_compressor = zstd_compressor,
+                .zstd_buffer = zstd_buffer,
+                .prng = prng,
+                .tmp_bank_fields = tmp_bank_fields,
+            };
+        };
+        errdefer if (maybe_snapshot_state) |snapshot| snapshot.deinit(allocator);
 
         return .{
             .db = db,
-            .config = config,
             .timer = timer,
             .flush_slots = .empty,
             .unclean_account_files = .empty,
             .shrink_account_files = .empty,
             .delete_account_files = .empty,
-            .zstd_compressor = zstd_compressor,
-            .zstd_buffer = zstd_buffer,
-            .prng = prng,
-            .tmp_bank_fields = tmp_bank_fields,
+            .snapshot_state = maybe_snapshot_state,
         };
     }
 
     pub fn deinit(const_self: Manager, allocator: Allocator) void {
         var self = const_self;
-        allocator.free(self.zstd_buffer);
-        self.zstd_compressor.deinit();
-        self.tmp_bank_fields.deinit(allocator);
         self.flush_slots.deinit(allocator);
         self.unclean_account_files.deinit(allocator);
         self.shrink_account_files.deinit(allocator);
         self.delete_account_files.deinit(allocator);
+        if (self.snapshot_state) |snapshot_state| {
+            snapshot_state.deinit(allocator);
+        }
     }
 
     /// Continuously runs the manager loop
-    pub fn run(self: *Manager, allocator: Allocator) !void {
+    pub fn run(
+        self: *Manager,
+        exit: *std.atomic.Value(bool),
+        allocator: Allocator,
+    ) !void {
         const zone = tracy.Zone.init(@src(), .{ .name = "accountsdb runManagerLoop" });
         defer zone.deinit();
 
         self.timer = try std.time.Timer.start();
-        while (!self.config.exit.load(.acquire)) {
+        while (!exit.load(.acquire)) {
             try self.manage(allocator);
             const elapsed = self.timer.lap();
             if (elapsed < DB_MANAGER_LOOP_MIN.asNanos()) {
@@ -180,72 +206,7 @@ pub const Manager = struct {
             max_slots.flushed = @max(max_slots.flushed orelse 0, largest_flushed_slot);
         }
 
-        const largest_flushed_slot = self.db.max_slots.readCopy().flushed orelse 0;
-
-        const latest_full_snapshot_slot_before_generation = blk: {
-            const maybe_latest_snapshot_info, var latest_snapshot_info_lg =
-                self.db.latest_snapshot_gen_info.readWithLock();
-            defer latest_snapshot_info_lg.unlock();
-            const latest_info = maybe_latest_snapshot_info.* orelse break :blk 0;
-            break :blk latest_info.full.slot;
-        };
-        if (largest_flushed_slot - latest_full_snapshot_slot_before_generation >=
-            self.config.slots_per_full_snapshot)
-        {
-            self.db.logger.info().logf(
-                "accountsdb[manager]: generating full snapshot for slot {d}",
-                .{largest_flushed_slot},
-            );
-            _ = try self.db.generateFullSnapshotWithCompressor(
-                self.zstd_compressor,
-                self.zstd_buffer,
-                .{
-                    .target_slot = largest_flushed_slot,
-                    .bank_fields = &self.tmp_bank_fields,
-                    .lamports_per_signature = self.prng.random().int(u64),
-                    .old_snapshot_action = .delete_old,
-                },
-            );
-        }
-
-        // we may have just generated a full snapshot,
-        // so we re-read the latest full snapshot slot
-        const latest_full_snapshot_slot, //
-        const latest_inc_snapshot_slot //
-        = blk: {
-            const maybe_latest_snapshot_info, var latest_snapshot_info_lg =
-                self.db.latest_snapshot_gen_info.readWithLock();
-            defer latest_snapshot_info_lg.unlock();
-            const latest_info = maybe_latest_snapshot_info.* orelse
-                break :blk .{largest_flushed_slot} ** 2;
-            const latest_info_inc = latest_info.inc orelse
-                break :blk .{ latest_info.full.slot, largest_flushed_slot };
-            break :blk .{
-                latest_info.full.slot,
-                latest_info_inc.slot,
-            };
-        };
-
-        const slots_per_incremental_snapshot = self.config.slots_per_incremental_snapshot;
-
-        if (largest_flushed_slot - latest_inc_snapshot_slot >= slots_per_incremental_snapshot and
-            largest_flushed_slot - latest_full_snapshot_slot >= slots_per_incremental_snapshot)
-        {
-            self.db.logger.info().logf(
-                "accountsdb[manager]: generating incremental snapshot from {d} to {d}",
-                .{ latest_full_snapshot_slot, largest_flushed_slot },
-            );
-            _ = try self.db.generateIncrementalSnapshotWithCompressor(
-                self.zstd_compressor,
-                self.zstd_buffer,
-                .{
-                    .target_slot = largest_flushed_slot,
-                    .bank_fields = &self.tmp_bank_fields,
-                    .lamports_per_signature = self.prng.random().int(u64),
-                    .old_snapshot_action = .delete_old,
-                },
-            );
-        }
+        const latest_full_snapshot_slot = try self.tryGenerateSnapshots();
 
         if (must_flush_slots) {
             // clean the flushed slots account files
@@ -274,6 +235,81 @@ pub const Manager = struct {
             defer self.delete_account_files.clearRetainingCapacity();
             try deleteAccountFiles(self.db, self.delete_account_files.keys());
         }
+    }
+
+    /// Returns the latest full snapshot slot by the end of the attempt.
+    pub fn tryGenerateSnapshots(self: *Manager) !Slot {
+        const largest_flushed_slot = self.db.max_slots.readCopy().flushed orelse 0;
+
+        const latest_full_snapshot_slot_before: Slot = blk: {
+            const maybe_latest_snapshot_info, var latest_snapshot_info_lg =
+                self.db.latest_snapshot_gen_info.readWithLock();
+            defer latest_snapshot_info_lg.unlock();
+            const latest_info = maybe_latest_snapshot_info.* orelse break :blk 0;
+            break :blk latest_info.full.slot;
+        };
+
+        const snapshot_state = if (self.snapshot_state) |*ptr| ptr else {
+            return latest_full_snapshot_slot_before;
+        };
+
+        const slots_per_full_snapshot = snapshot_state.config.slots_per_full_snapshot;
+        if (largest_flushed_slot - latest_full_snapshot_slot_before >= slots_per_full_snapshot) {
+            self.db.logger.info().logf(
+                "accountsdb[manager]: generating full snapshot for slot {d}",
+                .{largest_flushed_slot},
+            );
+            _ = try self.db.generateFullSnapshotWithCompressor(
+                snapshot_state.zstd_compressor,
+                snapshot_state.zstd_buffer,
+                .{
+                    .target_slot = largest_flushed_slot,
+                    .bank_fields = &snapshot_state.tmp_bank_fields,
+                    .lamports_per_signature = snapshot_state.prng.random().int(u64),
+                    .old_snapshot_action = .delete_old,
+                },
+            );
+        }
+
+        // we may have just generated a full snapshot,
+        // so we re-read the latest full snapshot slot
+        const latest_full_snapshot_slot, //
+        const latest_inc_snapshot_slot //
+        = blk: {
+            const maybe_latest_snapshot_info, var latest_snapshot_info_lg =
+                self.db.latest_snapshot_gen_info.readWithLock();
+            defer latest_snapshot_info_lg.unlock();
+            const latest_info = maybe_latest_snapshot_info.* orelse
+                break :blk .{largest_flushed_slot} ** 2;
+            const latest_info_inc = latest_info.inc orelse
+                break :blk .{ latest_info.full.slot, largest_flushed_slot };
+            break :blk .{
+                latest_info.full.slot,
+                latest_info_inc.slot,
+            };
+        };
+
+        const slots_per_incremental_snapshot = snapshot_state.config.slots_per_incremental_snapshot;
+        if (largest_flushed_slot - latest_inc_snapshot_slot >= slots_per_incremental_snapshot and
+            largest_flushed_slot - latest_full_snapshot_slot >= slots_per_incremental_snapshot)
+        {
+            self.db.logger.info().logf(
+                "accountsdb[manager]: generating incremental snapshot from {d} to {d}",
+                .{ latest_full_snapshot_slot, largest_flushed_slot },
+            );
+            _ = try self.db.generateIncrementalSnapshotWithCompressor(
+                snapshot_state.zstd_compressor,
+                snapshot_state.zstd_buffer,
+                .{
+                    .target_slot = largest_flushed_slot,
+                    .bank_fields = &snapshot_state.tmp_bank_fields,
+                    .lamports_per_signature = snapshot_state.prng.random().int(u64),
+                    .old_snapshot_action = .delete_old,
+                },
+            );
+        }
+
+        return latest_full_snapshot_slot;
     }
 };
 
