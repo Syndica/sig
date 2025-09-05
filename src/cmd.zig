@@ -1,13 +1,12 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const build_options = @import("build-options");
 const cli = @import("cli");
 const sig = @import("sig.zig");
 const config = @import("config.zig");
 const tracy = @import("tracy");
 
 const AccountsDB = sig.accounts_db.AccountsDB;
-const LedgerReader = sig.ledger.LedgerReader;
-const LedgerResultWriter = sig.ledger.result_writer.LedgerResultWriter;
 const ChannelPrintLogger = sig.trace.ChannelPrintLogger;
 const ClusterType = sig.core.ClusterType;
 const ContactInfo = sig.gossip.ContactInfo;
@@ -18,6 +17,8 @@ const GossipService = sig.gossip.GossipService;
 const IpAddr = sig.net.IpAddr;
 const LeaderSchedule = sig.core.leader_schedule.LeaderSchedule;
 const LeaderScheduleCache = sig.core.leader_schedule.LeaderScheduleCache;
+const LedgerReader = sig.ledger.LedgerReader;
+const LedgerResultWriter = sig.ledger.result_writer.LedgerResultWriter;
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 const SnapshotFiles = sig.accounts_db.SnapshotFiles;
@@ -79,11 +80,13 @@ pub fn main() !void {
     defer std.process.argsFree(gpa, argv);
 
     const parser = cli.Parser(Cmd, Cmd.cmd_info);
+    const tty_config = std.io.tty.detectConfig(std.io.getStdOut());
+    const stdout = std.io.getStdOut().writer();
     const cmd = try parser.parse(
         gpa,
         "sig",
-        std.io.tty.detectConfig(std.io.getStdOut()),
-        std.io.getStdOut().writer(),
+        tty_config,
+        stdout,
         argv[1..],
     ) orelse return;
     defer parser.free(gpa, cmd);
@@ -94,7 +97,14 @@ pub fn main() !void {
     current_config.log_file = cmd.log_file;
     current_config.tee_logs = cmd.tee_logs;
 
-    switch (cmd.subcmd orelse return error.MissingSubcommand) {
+    // If no subcommand was provided, print a friendly header and help information.
+    const subcmd = cmd.subcmd orelse {
+        // Render the top-level help.
+        _ = try parser.parse(gpa, "sig", tty_config, stdout, &.{"--help"});
+        return;
+    };
+
+    switch (subcmd) {
         .identity => try identity(gpa, current_config),
         .gossip => |params| {
             current_config.shred_version = params.shred_version;
@@ -108,6 +118,7 @@ pub fn main() !void {
             params.gossip_base.apply(&current_config);
             params.gossip_node.apply(&current_config);
             params.repair.apply(&current_config);
+            current_config.shred_network.dump_shred_tracker = params.repair.dump_shred_tracker;
             current_config.accounts_db.snapshot_dir = params.snapshot_dir;
             current_config.genesis_file_path = params.genesis_file_path;
             params.accountsdb_base.apply(&current_config);
@@ -122,7 +133,7 @@ pub fn main() !void {
             params.gossip_base.apply(&current_config);
             params.gossip_node.apply(&current_config);
             params.repair.apply(&current_config);
-            current_config.shred_network.dump_shred_tracker = params.dump_shred_tracker;
+            current_config.shred_network.dump_shred_tracker = params.repair.dump_shred_tracker;
             current_config.turbine.overwrite_stake_for_testing =
                 params.overwrite_stake_for_testing;
             current_config.shred_network.no_retransmit = params.no_retransmit;
@@ -209,10 +220,12 @@ const Cmd = struct {
 
     const cmd_info: cli.CommandInfo(@This()) = .{
         .help = .{
-            .short =
-            \\Sig is a Solana client implementation written in Zig.
-            \\This is still a WIP, PRs welcome.
-            ,
+            .short = std.fmt.comptimePrint(
+                \\Version: {}
+                \\
+                \\Sig is a Solana validator client written in Zig. The project is still a
+                \\work in progress so contributions are welcome.
+            , .{build_options.version}),
             .long = null,
         },
         .sub = .{
@@ -539,6 +552,7 @@ const Cmd = struct {
         test_repair_for_slot: ?Slot,
         max_shreds: u64,
         num_retransmit_threads: ?usize,
+        dump_shred_tracker: bool,
 
         const cmd_info: cli.ArgumentInfoGroup(@This()) = .{
             .turbine_port = .{
@@ -585,6 +599,15 @@ const Cmd = struct {
                 .default_value = 5_000_000,
                 .config = {},
                 .help = "Max number of shreds to store in the ledger",
+            },
+            .dump_shred_tracker = .{
+                .kind = .named,
+                .name_override = "dump-shred-tracker",
+                .alias = .none,
+                .default_value = false,
+                .config = {},
+                .help = "Create shred-tracker.txt" ++
+                    " to visually represent the currently tracked slots.",
             },
         };
 
@@ -707,7 +730,6 @@ const Cmd = struct {
         gossip_base: GossipArgumentsCommon,
         gossip_node: GossipArgumentsNode,
         repair: RepairArgumentsBase,
-        dump_shred_tracker: bool,
         /// TODO: Remove when no longer needed
         overwrite_stake_for_testing: bool,
         no_retransmit: bool,
@@ -735,15 +757,6 @@ const Cmd = struct {
                 .gossip_base = GossipArgumentsCommon.cmd_info,
                 .gossip_node = GossipArgumentsNode.cmd_info,
                 .repair = RepairArgumentsBase.cmd_info,
-                .dump_shred_tracker = .{
-                    .kind = .named,
-                    .name_override = "dump-shred-tracker",
-                    .alias = .none,
-                    .default_value = false,
-                    .config = {},
-                    .help = "Create shred-tracker.txt" ++
-                        " to visually represent the currently tracked slots.",
-                },
                 .overwrite_stake_for_testing = .{
                     .kind = .named,
                     .name_override = null,
@@ -1074,12 +1087,6 @@ fn validator(
         .from(app_base.logger),
         sig.VALIDATOR_DIR ++ "ledger",
     );
-    const shred_inserter = try sig.ledger.ShredInserter.init(
-        allocator,
-        .from(app_base.logger),
-        app_base.metrics_registry,
-        ledger_db,
-    );
 
     // cleanup service
     const lowest_cleanup_slot = try allocator.create(sig.sync.RwMux(sig.core.Slot));
@@ -1180,12 +1187,12 @@ fn validator(
             .logger = .from(app_base.logger),
             .registry = app_base.metrics_registry,
             .random = prng.random(),
+            .ledger_db = ledger_db,
             .my_keypair = &app_base.my_keypair,
             .exit = app_base.exit,
             .gossip_table_rw = &gossip_service.gossip_table_rw,
             .my_shred_version = &gossip_service.my_shred_version,
             .epoch_context_mgr = &epoch_context_manager,
-            .shred_inserter = shred_inserter,
             .my_contact_info = my_contact_info,
             .n_retransmit_threads = turbine_config.num_retransmit_threads,
             .overwrite_turbine_stake_for_testing = turbine_config.overwrite_stake_for_testing,
@@ -1201,9 +1208,17 @@ fn validator(
 
     const replay_thread = replay: {
         const epoch_stakes_map = &collapsed_manifest.bank_extra.versioned_epoch_stakes;
-        const epoch_stakes = epoch_stakes_map.get(epoch) orelse
+        const versioned_epoch_stakes = epoch_stakes_map.get(epoch) orelse
             return error.EpochStakesMissingFromSnapshot;
 
+        const epoch_stakes = try versioned_epoch_stakes.current.convert(allocator, .delegation);
+        errdefer epoch_stakes.deinit(allocator);
+
+        const current_epoch_constants = try sig.core.EpochConstants.fromBankFields(
+            bank_fields,
+            epoch_stakes,
+        );
+        errdefer current_epoch_constants.deinit(allocator);
         const feature_set = try sig.replay.service.getActiveFeatures(
             allocator,
             loaded_snapshot.accounts_db.accountReader().forSlot(&bank_fields.ancestors),
@@ -1244,11 +1259,9 @@ fn validator(
 
                 .senders = replay_senders,
                 .receivers = replay_receivers,
+                .gossip_table_rw = &gossip_service.gossip_table_rw,
                 .current_epoch = epoch,
-                .current_epoch_constants = try .fromBankFields(
-                    bank_fields,
-                    try epoch_stakes.current.convert(allocator, .delegation),
-                ),
+                .current_epoch_constants = current_epoch_constants,
                 .hard_forks = try bank_fields.hard_forks.clone(allocator),
             }},
         );
@@ -1316,12 +1329,6 @@ fn shredNetwork(
         .from(app_base.logger),
         sig.VALIDATOR_DIR ++ "ledger",
     );
-    const shred_inserter = try sig.ledger.ShredInserter.init(
-        allocator,
-        .from(app_base.logger),
-        app_base.metrics_registry,
-        ledger_db,
-    );
 
     // cleanup service
     const lowest_cleanup_slot = try allocator.create(sig.sync.RwMux(sig.core.Slot));
@@ -1363,12 +1370,12 @@ fn shredNetwork(
         .logger = .from(app_base.logger),
         .registry = app_base.metrics_registry,
         .random = prng.random(),
+        .ledger_db = ledger_db,
         .my_keypair = &app_base.my_keypair,
         .exit = app_base.exit,
         .gossip_table_rw = &gossip_service.gossip_table_rw,
         .my_shred_version = &gossip_service.my_shred_version,
         .epoch_context_mgr = &epoch_context_manager,
-        .shred_inserter = shred_inserter,
         .my_contact_info = my_contact_info,
         .n_retransmit_threads = cfg.turbine.num_retransmit_threads,
         .overwrite_turbine_stake_for_testing = cfg.turbine.overwrite_stake_for_testing,

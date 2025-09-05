@@ -1032,7 +1032,7 @@ pub const AccountDataHandle = union(enum) {
         var iter = self.iterator();
         var i: u32 = 0;
         while (iter.nextFrame()) |frame_slice| : (i += @intCast(frame_slice.len)) {
-            if (!std.mem.eql(u8, frame_slice, data[i..frame_slice.len])) return false;
+            if (!std.mem.eql(u8, frame_slice, data[i..][0..frame_slice.len])) return false;
         }
 
         return true;

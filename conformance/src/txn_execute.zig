@@ -62,7 +62,6 @@ export fn sol_compat_txn_execute_v1(
 }
 
 const builtins = @import("builtins.zig");
-const verify_transaction = @import("verify_transaction.zig");
 const bank_methods = @import("bank_methods.zig");
 
 const Allocator = std.mem.Allocator;
@@ -95,10 +94,13 @@ const Signature = sig.core.Signature;
 const StatusCache = sig.core.StatusCache;
 const StakesCache = sig.core.StakesCache;
 const Transaction = sig.core.Transaction;
+const TransactionError = sig.ledger.transaction_status.TransactionError;
 const TransactionVersion = sig.core.transaction.Version;
 const TransactionMessage = sig.core.transaction.Message;
 const TransactionInstruction = sig.core.transaction.Instruction;
 const TransactionAddressLookup = sig.core.transaction.AddressLookup;
+
+const ResolvedTransaction = sig.replay.resolve_lookup.ResolvedTransaction;
 
 const AccountSharedData = sig.runtime.AccountSharedData;
 const BatchAccountCache = sig.runtime.account_loader.BatchAccountCache;
@@ -112,10 +114,13 @@ const SysvarCache = sig.runtime.SysvarCache;
 const RuntimeTransaction = transaction_execution.RuntimeTransaction;
 const TransactionExecutionEnvironment = transaction_execution.TransactionExecutionEnvironment;
 const ProcessedTransaction = transaction_execution.ProcessedTransaction;
-const TransactionResult = transaction_execution.TransactionResult(ProcessedTransaction);
+const TransactionResult = transaction_execution.TransactionResult;
 
 const loadAndExecuteTransactions = transaction_execution.loadAndExecuteTransactions;
 const deinitMapAndValues = sig.utils.collections.deinitMapAndValues;
+
+const resolveTransaction = sig.replay.resolve_lookup.resolveTransaction;
+const preprocessTransaction = sig.replay.preprocess_transaction.preprocessTransaction;
 
 fn executeTxnContext(
     allocator: std.mem.Allocator,
@@ -753,28 +758,53 @@ fn executeTxnContext(
         &sysvar_cache,
     );
 
+    // Initialize reserved accounts for the slot
+    var reserved_accounts = try sig.core.reserved_accounts.initForSlot(
+        allocator,
+        &feature_set,
+        slot,
+    );
+    defer reserved_accounts.deinit(allocator);
+
     // Load transaction from protobuf context
     const transaction = try loadTransaction(allocator, &pb_txn_ctx);
     defer transaction.deinit(allocator);
 
     // Verify transaction
-    const runtime_transaction = switch (try verify_transaction.verifyTransaction(
-        allocator,
-        transaction,
-        &feature_set,
-        slot,
-        try sysvar_cache.get(sig.runtime.sysvar.SlotHashes),
-        accounts_db.accountReader().forSlot(&ancestors),
-    )) {
-        .ok => |txn| txn,
-        .err => |err| return err,
+    const msg_hash, const compute_budget_instruction_details =
+        switch (preprocessTransaction(transaction, .skip_sig_verify)) {
+            .ok => |hash| hash,
+            .err => |err| return serializeSanitizationError(err),
+        };
+
+    // Resolve transaction
+    const resolved_transaction_result: TransactionResult(ResolvedTransaction) = blk: {
+        const resolved = resolveTransaction(allocator, transaction, .{
+            .slot = slot,
+            .account_reader = accounts_db.accountReader().forSlot(&ancestors),
+            .reserved_accounts = &reserved_accounts,
+            .slot_hashes = try sysvar_cache.get(sig.runtime.sysvar.SlotHashes),
+        }) catch |err| break :blk switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.AddressLookupTableNotFound => .{ .err = .AddressLookupTableNotFound },
+            error.InvalidAddressLookupTableOwner => .{ .err = .InvalidAddressLookupTableOwner },
+            error.InvalidAddressLookupTableData => .{ .err = .InvalidAddressLookupTableData },
+            error.InvalidAddressLookupTableIndex => .{ .err = .InvalidAddressLookupTableIndex },
+            else => std.debug.panic("Unexpected error: {s}\n", .{@errorName(err)}),
+        };
+        break :blk .{ .ok = resolved };
     };
-    defer {
-        for (runtime_transaction.instructions) |info| info.deinit(allocator);
-        allocator.free(runtime_transaction.instructions);
-        var accs = runtime_transaction.accounts;
-        accs.deinit(allocator);
-    }
+    const resolved_transaction = switch (resolved_transaction_result) {
+        .ok => |txn| txn,
+        .err => |err| return serializeSanitizationError(err),
+    };
+    defer resolved_transaction.deinit(allocator);
+
+    // Convert to runtime transaction
+    const runtime_transaction = resolved_transaction.toRuntimeTransaction(
+        msg_hash,
+        compute_budget_instruction_details,
+    );
 
     // Create batch account cache from accounts db
     var accounts = try BatchAccountCache.initFromAccountsDb(
@@ -849,7 +879,7 @@ fn executeTxnContext(
     return try serializeOutput(allocator, txn_results[0], runtime_transaction);
 }
 
-fn printLogs(result: TransactionResult) void {
+fn printLogs(result: TransactionResult(ProcessedTransaction)) void {
     switch (result) {
         .ok => |txn| {
             switch (txn) {
@@ -866,191 +896,192 @@ fn printLogs(result: TransactionResult) void {
     }
 }
 
+fn serializeSanitizationError(err: TransactionError) pb.TxnResult {
+    const converted = utils.convertTransactionError(err);
+    return .{
+        .executed = false,
+        .sanitization_error = true,
+        .status = converted.err,
+        .instruction_error = converted.instruction_error,
+        .custom_error = converted.custom_error,
+        .instruction_error_index = converted.instruction_index,
+    };
+}
+
 fn serializeOutput(
     allocator: std.mem.Allocator,
-    result: TransactionResult,
+    result: TransactionResult(ProcessedTransaction),
     sanitized: RuntimeTransaction,
 ) !pb.TxnResult {
-    switch (result) {
-        .ok => |txn| {
-            const is_ok = switch (txn) {
-                .executed => |executed| executed.executed_transaction.err == null,
-                .fees_only => false,
-            };
+    const txn = switch (result) {
+        .ok => |txn| txn,
+        .err => |err| return serializeSanitizationError(err),
+    };
 
-            const errors: utils.ConvertedErrorCodes = switch (txn) {
-                .executed => |executed| if (executed.executed_transaction.err) |err| blk: {
-                    const txn_err_code = @intFromEnum(err) + 1;
-                    const ixn_err_index, const ixn_err_code, const custom_err_code = switch (err) {
-                        .InstructionError => |ixn_err| .{
-                            ixn_err[0], @intFromEnum(ixn_err[1]) + 1, switch (ixn_err[1]) {
-                                .Custom => |v| v,
-                                else => 0,
-                            },
-                        },
-                        else => .{ 0, 0, 0 },
-                    };
-                    break :blk .{
-                        .err = txn_err_code,
-                        .instruction_error = ixn_err_code,
-                        .custom_error = custom_err_code,
-                        .instruction_index = ixn_err_index,
-                    };
-                } else .default,
-                .fees_only => |fees_only| utils.convertTransactionError(fees_only.err),
-            };
+    const is_ok = switch (txn) {
+        .executed => |executed| executed.executed_transaction.err == null,
+        .fees_only => false,
+    };
 
-            const rent = switch (txn) {
-                .executed => |executed_txn| executed_txn.loaded_accounts.rent_collected,
-                .fees_only => 0,
-            };
-
-            const fees = switch (txn) {
-                .fees_only => |fees_only| fees_only.fees,
-                .executed => |executed| executed.fees,
-            };
-
-            const acct_states = blk: {
-                const relevant_acct_states = switch (txn) {
-                    .executed => |executed| acct_states: {
-                        var acct_states: std.ArrayList(pb.AcctState) = .init(allocator);
-                        errdefer acct_states.deinit();
-
-                        for (executed.loaded_accounts.accounts.constSlice()) |acc| {
-                            try acct_states.append(.{
-                                .address = try .copy(&acc.pubkey.data, allocator),
-                                .lamports = acc.account.lamports,
-                                .data = try .copy(acc.account.data, allocator),
-                                .executable = acc.account.executable,
-                                .rent_epoch = acc.account.rent_epoch,
-                                .owner = try .copy(&acc.account.owner.data, allocator),
-                                .seed_addr = null,
-                            });
-                        }
-
-                        break :acct_states acct_states;
+    const errors: utils.ConvertedErrorCodes = switch (txn) {
+        .executed => |executed| if (executed.executed_transaction.err) |err| blk: {
+            const txn_err_code = @intFromEnum(err) + 1;
+            const ixn_err_index, const ixn_err_code, const custom_err_code = switch (err) {
+                .InstructionError => |ixn_err| .{
+                    ixn_err[0], @intFromEnum(ixn_err[1]) + 1, switch (ixn_err[1]) {
+                        .Custom => |v| v,
+                        else => 0,
                     },
-                    .fees_only => |fees_only| acct_states: {
-                        var acct_states: std.ArrayList(pb.AcctState) = .init(allocator);
-                        errdefer acct_states.deinit();
-                        errdefer for (acct_states.items) |acct_state| acct_state.deinit();
-                        try acct_states.ensureTotalCapacityPrecise(fees_only.rollbacks.count());
+                },
+                else => .{ 0, 0, 0 },
+            };
+            break :blk .{
+                .err = txn_err_code,
+                .instruction_error = ixn_err_code,
+                .custom_error = custom_err_code,
+                .instruction_index = ixn_err_index,
+            };
+        } else .default,
+        .fees_only => |fees_only| utils.convertTransactionError(fees_only.err),
+    };
 
-                        const fee_payer_address = sanitized.fee_payer;
-                        switch (fees_only.rollbacks) {
-                            .fee_payer_only => |fee_payer_account| {
-                                acct_states.appendAssumeCapacity(try sharedAccountToState(
-                                    allocator,
-                                    fee_payer_address,
-                                    fee_payer_account.account,
-                                ));
-                            },
-                            .same_nonce_and_fee_payer => |nonce| {
-                                acct_states.appendAssumeCapacity(try sharedAccountToState(
-                                    allocator,
-                                    nonce.pubkey,
-                                    nonce.account,
-                                ));
-                            },
-                            .separate_nonce_and_fee_payer => |pair| {
-                                const nonce, const fee_payer_account = pair;
-                                acct_states.appendAssumeCapacity(try sharedAccountToState(
-                                    allocator,
-                                    fee_payer_address,
-                                    fee_payer_account.account,
-                                ));
-                                acct_states.appendAssumeCapacity(try sharedAccountToState(
-                                    allocator,
-                                    nonce.pubkey,
-                                    nonce.account,
-                                ));
-                            },
-                        }
-                        break :acct_states acct_states;
-                    },
-                };
-                defer relevant_acct_states.deinit();
+    // Special casing to return only the custom error for transactions which have
+    // encountered the loader v4 program or bpf loader v3 migrate instruction.
+    if (errors.custom_error == 0x30000000 or errors.custom_error == 0x40000000) {
+        return .{ .custom_error = errors.custom_error };
+    }
 
-                // Filter relevant accounts.
+    const rent = switch (txn) {
+        .executed => |executed_txn| executed_txn.loaded_accounts.rent_collected,
+        .fees_only => 0,
+    };
+
+    const fees = switch (txn) {
+        .fees_only => |fees_only| fees_only.fees,
+        .executed => |executed| executed.fees,
+    };
+
+    const acct_states = blk: {
+        const relevant_acct_states = switch (txn) {
+            .executed => |executed| acct_states: {
                 var acct_states: std.ArrayList(pb.AcctState) = .init(allocator);
                 errdefer acct_states.deinit();
-                try acct_states.ensureTotalCapacityPrecise(relevant_acct_states.items.len);
 
-                for (relevant_acct_states.items, 0..) |acct_state, i| {
-                    // Only keep accounts that were passed in as account_keys or as ALUT accounts
-                    const pubkey = try parsePubkey(acct_state.address.getSlice());
-                    const is_loaded_account = for (sanitized.accounts.items(.pubkey)) |key| {
-                        if (key.equals(&pubkey)) break true;
-                    } else false;
-
-                    // Also, only keep accounts that are writable.
-                    if (sanitized.accounts.get(i).is_writable and is_loaded_account) {
-                        acct_states.appendAssumeCapacity(acct_state);
-                    } else {
-                        acct_state.deinit();
-                    }
+                for (executed.loaded_accounts.accounts.constSlice()) |acc| {
+                    try acct_states.append(.{
+                        .address = try .copy(&acc.pubkey.data, allocator),
+                        .lamports = acc.account.lamports,
+                        .data = try .copy(acc.account.data, allocator),
+                        .executable = acc.account.executable,
+                        .rent_epoch = acc.account.rent_epoch,
+                        .owner = try .copy(&acc.account.owner.data, allocator),
+                        .seed_addr = null,
+                    });
                 }
 
-                break :blk acct_states;
-            };
+                break :acct_states acct_states;
+            },
+            .fees_only => |fees_only| acct_states: {
+                var acct_states: std.ArrayList(pb.AcctState) = .init(allocator);
+                errdefer acct_states.deinit();
+                errdefer for (acct_states.items) |acct_state| acct_state.deinit();
+                try acct_states.ensureTotalCapacityPrecise(fees_only.rollbacks.count());
 
-            const resulting_state: pb.ResultingState = .{
-                .rent_debits = .init(allocator),
-                .transaction_rent = rent,
-                .acct_states = acct_states,
-            };
+                const fee_payer_address = sanitized.fee_payer;
+                switch (fees_only.rollbacks) {
+                    .fee_payer_only => |fee_payer_account| {
+                        acct_states.appendAssumeCapacity(try sharedAccountToState(
+                            allocator,
+                            fee_payer_address,
+                            fee_payer_account.account,
+                        ));
+                    },
+                    .same_nonce_and_fee_payer => |nonce| {
+                        acct_states.appendAssumeCapacity(try sharedAccountToState(
+                            allocator,
+                            nonce.pubkey,
+                            nonce.account,
+                        ));
+                    },
+                    .separate_nonce_and_fee_payer => |pair| {
+                        const nonce, const fee_payer_account = pair;
+                        acct_states.appendAssumeCapacity(try sharedAccountToState(
+                            allocator,
+                            fee_payer_address,
+                            fee_payer_account.account,
+                        ));
+                        acct_states.appendAssumeCapacity(try sharedAccountToState(
+                            allocator,
+                            nonce.pubkey,
+                            nonce.account,
+                        ));
+                    },
+                }
+                break :acct_states acct_states;
+            },
+        };
+        defer relevant_acct_states.deinit();
 
-            const return_data: ManagedString = switch (txn) {
-                .executed => |executed| blk: {
-                    if (executed.executed_transaction.return_data) |return_data| {
-                        break :blk try .copy(return_data.data.constSlice(), allocator);
-                    } else {
-                        break :blk .Empty;
-                    }
-                },
-                .fees_only => .Empty,
-            };
+        // Filter relevant accounts.
+        var acct_states: std.ArrayList(pb.AcctState) = .init(allocator);
+        errdefer acct_states.deinit();
+        try acct_states.ensureTotalCapacityPrecise(relevant_acct_states.items.len);
 
-            return .{
-                .executed = true,
-                .sanitization_error = false,
-                .is_ok = is_ok,
-                .rent = rent,
+        for (relevant_acct_states.items, 0..) |acct_state, i| {
+            // Only keep accounts that were passed in as account_keys or as ALUT accounts
+            const pubkey = try parsePubkey(acct_state.address.getSlice());
+            const is_loaded_account = for (sanitized.accounts.items(.pubkey)) |key| {
+                if (key.equals(&pubkey)) break true;
+            } else false;
 
-                .status = errors.err,
-                .instruction_error = errors.instruction_error,
-                .instruction_error_index = errors.instruction_index,
-                .custom_error = errors.custom_error,
+            // Also, only keep accounts that are writable.
+            if (sanitized.accounts.get(i).is_writable and is_loaded_account) {
+                acct_states.appendAssumeCapacity(acct_state);
+            } else {
+                acct_state.deinit();
+            }
+        }
 
-                .return_data = return_data,
-                .resulting_state = resulting_state,
-                .fee_details = .{
-                    .transaction_fee = fees.transaction_fee,
-                    .prioritization_fee = fees.prioritization_fee,
-                },
-                // TODO: obviously hard coded number. compute_meter counts how many units left instead of how many units consumed
-                .executed_units = txn.executedUnits() orelse 0,
-                .loaded_accounts_data_size = txn.loadedAccountsDataSize(),
-            };
+        break :blk acct_states;
+    };
+
+    const resulting_state: pb.ResultingState = .{
+        .rent_debits = .init(allocator),
+        .transaction_rent = rent,
+        .acct_states = acct_states,
+    };
+
+    const return_data: ManagedString = switch (txn) {
+        .executed => |executed| blk: {
+            if (executed.executed_transaction.return_data) |return_data| {
+                break :blk try .copy(return_data.data.constSlice(), allocator);
+            } else {
+                break :blk .Empty;
+            }
         },
-        .err => |err| {
-            const converted = utils.convertTransactionError(err);
-            return .{
-                .executed = false,
-                .sanitization_error = true,
+        .fees_only => .Empty,
+    };
 
-                .status = converted.err,
-                .instruction_error = converted.instruction_error,
-                .custom_error = converted.custom_error,
-                .instruction_error_index = converted.instruction_index,
+    return .{
+        .executed = true,
+        .sanitization_error = false,
+        .is_ok = is_ok,
+        .rent = rent,
 
-                .fee_details = null,
-                .resulting_state = null,
-                .loaded_accounts_data_size = 0,
-                .rent = 0,
-            };
+        .status = errors.err,
+        .instruction_error = errors.instruction_error,
+        .instruction_error_index = errors.instruction_index,
+        .custom_error = errors.custom_error,
+
+        .return_data = return_data,
+        .resulting_state = resulting_state,
+        .fee_details = .{
+            .transaction_fee = fees.transaction_fee,
+            .prioritization_fee = fees.prioritization_fee,
         },
-    }
+        .executed_units = txn.executedUnits() orelse 0,
+        .loaded_accounts_data_size = txn.loadedAccountsDataSize(),
+    };
 }
 
 fn sharedAccountToState(
@@ -1263,7 +1294,7 @@ fn loadTransactionMesssage(
         else
             .v0,
         .{
-            .signature_count = @truncate(@max(1, header.num_required_signatures)),
+            .signature_count = @max(1, @as(u8, @truncate(header.num_required_signatures))),
             .readonly_signed_count = @truncate(header.num_readonly_signed_accounts),
             .readonly_unsigned_count = @truncate(header.num_readonly_unsigned_accounts),
             .account_keys = account_keys,
