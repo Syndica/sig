@@ -12,6 +12,7 @@ const Atomic = std.atomic.Value;
 const KeyPair = sig.identity.KeyPair;
 const Socket = network.Socket;
 
+const BasicShredTracker = shred_network.shred_tracker.BasicShredTracker;
 const Channel = sig.sync.Channel;
 const Counter = sig.prometheus.Counter;
 const Histogram = sig.prometheus.Histogram;
@@ -19,6 +20,8 @@ const Packet = sig.net.Packet;
 const Ping = sig.gossip.Ping;
 const Pong = sig.gossip.Pong;
 const RepairMessage = shred_network.repair_message.RepairMessage;
+const Shred = sig.ledger.shred.Shred;
+const ShredInserter = sig.ledger.ShredInserter;
 const Slot = sig.core.Slot;
 const SlotLeaders = sig.core.leader_schedule.SlotLeaders;
 const SocketThread = sig.net.SocketThread;
@@ -38,8 +41,6 @@ pub const ShredReceiver = struct {
     repair_socket: Socket,
     turbine_socket: Socket,
 
-    /// me --> shred processor
-    verified_shred_sender: *Channel(Packet),
     /// me --> retransmit service
     maybe_retransmit_shred_sender: ?*Channel(Packet),
 
@@ -47,6 +48,10 @@ pub const ShredReceiver = struct {
     registry: *sig.prometheus.Registry(.{}),
     root_slot: Slot,
     leader_schedule: SlotLeaders,
+
+    /// shared with repair
+    tracker: *BasicShredTracker,
+    inserter: ShredInserter,
 
     /// Run threads to listen/send over socket and handle all incoming packets.
     /// Returns when exit is set to true.
@@ -100,27 +105,49 @@ pub const ShredReceiver = struct {
         const metrics = try self.registry.initStruct(ShredReceiverMetrics);
         const verifier_metrics = try self.registry.initStruct(shred_verifier.Metrics);
 
+        var shred_batch = std.MultiArrayList(struct { shred: Shred, is_repair: bool }).empty;
+        defer shred_batch.deinit(self.allocator);
+
         // Handle all incoming shreds from the channel.
         while (!exit.shouldExit()) {
+            defer for (shred_batch.items(.shred)) |shred| shred.deinit();
+
             incoming_shreds.waitToReceive(exit) catch break;
-            var packet_count: usize = 0;
             while (incoming_shreds.tryReceive()) |packet| {
                 const is_repair = packet.flags.isSet(.repair);
                 metrics.incReceived(is_repair);
-                packet_count += 1;
-                try self.handlePacket(
+
+                if (try self.handlePacket(
                     packet,
                     response_sender,
                     &verified_merkle_roots,
                     verifier_metrics,
                     metrics,
-                );
+                )) |shred| shred_batch.appendAssumeCapacity(.{
+                    .shred = shred,
+                    .is_repair = packet.flags.isSet(.repair),
+                });
+                if (shred_batch.len == MAX_SHREDS_PER_ITER) break;
             }
-            metrics.batch_size.observe(packet_count);
+
+            const result = try self.inserter.insertShreds(
+                shred_batch.items(.shred),
+                shred_batch.items(.is_repair),
+                .{
+                    .slot_leaders = self.leader_schedule,
+                    .shred_tracker = self.tracker,
+                },
+            );
+            metrics.passed_to_inserter_count.add(shred_batch.len);
+            result.deinit();
+
+            metrics.batch_size.observe(shred_batch.len);
         }
     }
 
-    /// Handle a single packet and return.
+    const MAX_SHREDS_PER_ITER = 1024;
+
+    /// Handle a single packet and return a shred if it's a valid shred.
     fn handlePacket(
         self: ShredReceiver,
         packet: Packet,
@@ -128,17 +155,18 @@ pub const ShredReceiver = struct {
         verified_merkle_roots: *VerifiedMerkleRoots,
         verifier_metrics: shred_verifier.Metrics,
         metrics: ShredReceiverMetrics,
-    ) !void {
+    ) !?Shred {
         if (packet.size == REPAIR_RESPONSE_SERIALIZED_PING_BYTES) {
             if (try self.handlePing(&packet, metrics)) |pong_packet| {
                 try response_sender.send(pong_packet);
                 metrics.pong_sent_count.inc();
             }
+            return null;
         } else {
             const max_slot = std.math.maxInt(Slot); // TODO agave uses BankForks for this
             validateShred(&packet, self.root_slot, self.shred_version, max_slot) catch |err| {
                 metrics.discard.observe(err);
-                return;
+                return null;
             };
             metrics.satisfactory_shred_count.inc();
 
@@ -149,12 +177,21 @@ pub const ShredReceiver = struct {
                 verifier_metrics,
             )) |_| {
                 verifier_metrics.verified_count.inc();
-                try self.verified_shred_sender.send(packet);
                 if (self.maybe_retransmit_shred_sender) |retransmit_shred_sender| {
                     try retransmit_shred_sender.send(packet);
                 }
+                const shred_payload = layout.getShred(&packet) orelse
+                    return error.InvalidVerifiedShred;
+                return Shred.fromPayload(self.allocator, shred_payload) catch |e| {
+                    self.logger.err().logf(
+                        "failed to deserialize verified shred {?}.{?}: {}",
+                        .{ layout.getSlot(shred_payload), layout.getIndex(shred_payload), e },
+                    );
+                    return null;
+                };
             } else |err| {
                 verifier_metrics.fail.observe(err);
+                return null;
             }
         }
     }
@@ -298,6 +335,7 @@ pub const ShredReceiverMetrics = struct {
     turbine_received_count: *Counter,
     repair_received_count: *Counter,
     satisfactory_shred_count: *Counter,
+    passed_to_inserter_count: *Counter,
     valid_ping_count: *Counter,
     ping_deserialize_fail_count: *Counter,
     ping_verify_fail_count: *Counter,

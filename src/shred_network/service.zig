@@ -86,11 +86,26 @@ pub fn start(
     const repair_socket = try bindUdpReusable(conf.repair_port);
     const turbine_socket = try bindUdpReusable(conf.turbine_recv_port);
 
-    // channels (cant use arena as they need to alloc/free frequently & potentially from multiple sender threads)
-    const unverified_shred_channel = try Channel(Packet).create(deps.allocator);
-    try defers.deferCall(Channel(Packet).destroy, .{unverified_shred_channel});
-    const shreds_to_insert_channel = try Channel(Packet).create(deps.allocator);
-    try defers.deferCall(Channel(Packet).destroy, .{shreds_to_insert_channel});
+    // tracker (shared state, internal to Shred Network)
+    const shred_tracker = try arena.create(BasicShredTracker);
+    shred_tracker.* = try BasicShredTracker.init(
+        deps.allocator,
+        conf.start_slot,
+        .from(deps.logger),
+        deps.registry,
+    );
+    try defers.deferCall(BasicShredTracker.deinit, .{shred_tracker});
+
+    var shred_inserter = try sig.ledger.ShredInserter.init(
+        deps.allocator,
+        .from(deps.logger),
+        deps.registry,
+        deps.ledger_db,
+    );
+    errdefer shred_inserter.deinit();
+
+    // channels (cant use arena as they need to alloc/free frequently &
+    // potentially from multiple sender threads)
     const retransmit_channel = try Channel(Packet).create(deps.allocator);
     try defers.deferCall(Channel(Packet).destroy, .{retransmit_channel});
 
@@ -106,49 +121,12 @@ pub fn start(
         .shred_version = deps.my_shred_version,
         .registry = deps.registry,
         .root_slot = conf.start_slot -| 1,
-        .verified_shred_sender = shreds_to_insert_channel,
         .maybe_retransmit_shred_sender = if (conf.retransmit) retransmit_channel else null,
         .leader_schedule = deps.epoch_context_mgr.slotLeaders(),
+        .tracker = shred_tracker,
+        .inserter = shred_inserter,
     };
     try service_manager.spawn("Shred Receiver", ShredReceiver.run, .{shred_receiver});
-
-    // tracker (shared state, internal to Shred Network)
-    const shred_tracker = try arena.create(BasicShredTracker);
-    shred_tracker.* = try BasicShredTracker.init(
-        deps.allocator,
-        conf.start_slot,
-        .from(deps.logger),
-        deps.registry,
-    );
-    try defers.deferCall(BasicShredTracker.deinit, .{shred_tracker});
-
-    const shred_inserter = try arena.create(sig.ledger.ShredInserter);
-    shred_inserter.* = try sig.ledger.ShredInserter.init(
-        deps.allocator,
-        .from(deps.logger),
-        deps.registry,
-        deps.ledger_db,
-    );
-    try defers.deferCall(sig.ledger.ShredInserter.deinit, .{shred_inserter});
-
-    // processor (thread)
-    const processor = shred_network.shred_processor;
-    try service_manager.spawn(
-        "Shred Processor",
-        processor.runShredProcessor,
-        .{
-            deps.allocator,
-            processor.Logger.from(deps.logger),
-            deps.registry,
-            deps.exit,
-            processor.Params{
-                .verified_shred_receiver = shreds_to_insert_channel,
-                .tracker = shred_tracker,
-                .inserter = shred_inserter,
-                .leader_schedule = deps.epoch_context_mgr.slotLeaders(),
-            },
-        },
-    );
 
     // retransmitter (thread)
     if (conf.retransmit) {
