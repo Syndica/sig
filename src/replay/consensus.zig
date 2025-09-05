@@ -575,7 +575,7 @@ fn computeBankStats(
         if (!fork_stat.computed) {
             // TODO Self::adopt_on_chain_tower_if_behind
             // Gather voting information from all vote accounts to understand the current consensus state.
-            const slot_info_for_stakes = slot_tracker.get(slot) orelse return error.MissingSlots;
+            const slot_info_for_stakes = slot_tracker.get(slot) orelse return error.MissingSlot;
 
             const computed_bank_state = blk: {
                 const stakes, var stakes_lg =
