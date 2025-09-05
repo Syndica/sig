@@ -419,9 +419,6 @@ pub fn getReturnData(
             tc.getCheckAligned(),
         );
 
-        const source = return_data[0..length];
-        @memcpy(return_data_result, source);
-
         if (memops.isOverlapping(
             @intFromPtr(return_data_result.ptr),
             length,
@@ -431,6 +428,8 @@ pub fn getReturnData(
             return SyscallError.CopyOverlapping;
         }
 
+        const source = return_data[0..length];
+        @memcpy(return_data_result, source);
         program_id_result.* = program_id;
     }
 
