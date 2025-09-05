@@ -222,19 +222,19 @@ pub const ForkChoice = struct {
             total_stake += fork_info.stake_for_subtree;
 
             // Count active forks (those that are candidates)
-            if (fork_info.isCandidate()) {
-                candidate_count += 1;
+            if (!fork_info.isCandidate()) continue;
 
-                if (maybe_current_heaviest_slot) |current_heaviest_slot| {
-                    if (fork_info.heaviest_subtree_slot.slot > current_heaviest_slot) {
-                        maybe_current_heaviest_slot = fork_info.heaviest_subtree_slot.slot;
-                    }
+            candidate_count += 1;
+
+            if (maybe_current_heaviest_slot) |current_heaviest_slot| {
+                if (fork_info.heaviest_subtree_slot.slot > current_heaviest_slot) {
+                    maybe_current_heaviest_slot = fork_info.heaviest_subtree_slot.slot;
                 }
+            }
 
-                if (maybe_current_deepest_slot) |current_deepest_slot| {
-                    if (fork_info.deepest_slot.slot > current_deepest_slot) {
-                        maybe_current_deepest_slot = fork_info.deepest_slot.slot;
-                    }
+            if (maybe_current_deepest_slot) |current_deepest_slot| {
+                if (fork_info.deepest_slot.slot > current_deepest_slot) {
+                    maybe_current_deepest_slot = fork_info.deepest_slot.slot;
                 }
             }
         }
