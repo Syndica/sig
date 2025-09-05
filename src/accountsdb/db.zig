@@ -985,7 +985,7 @@ pub const AccountsDB = struct {
             {
                 const max_slots, var max_slots_lg = self.max_slots.writeWithLock();
                 defer max_slots_lg.unlock();
-                if (thread_db.max_slots.readCopy().rooted) |thread_db_rooted| {
+                if (thread_db.getLargestRootedSlot()) |thread_db_rooted| {
                     max_slots.rooted = @max(max_slots.rooted orelse 0, thread_db_rooted);
                 }
                 max_slots.flushed = max_slots.rooted;
@@ -1314,7 +1314,7 @@ pub const AccountsDB = struct {
         if (params.expected_incremental) |expected_incremental| {
             self.logger.info().logf("validating the incremental snapshot", .{});
 
-            const inc_slot = self.max_slots.readCopy().rooted orelse 0;
+            const inc_slot = self.getLargestRootedSlot() orelse 0;
 
             const accounts_delta_hash, //
             const incremental_lamports //
@@ -1794,7 +1794,7 @@ pub const AccountsDB = struct {
         const max_ref = greatestInAncestors(
             head_ref.ref_ptr,
             ancestors,
-            self.max_slots.readCopy().flushed orelse 0,
+            self.getLargestRootedSlot() orelse 0,
         ) orelse return null;
 
         return try self.getAccountFromRef(max_ref);
@@ -1986,7 +1986,7 @@ pub const AccountsDB = struct {
         pubkey: Pubkey,
         account: AccountSharedData,
     ) PutAccountError!void {
-        if (self.max_slots.readCopy().rooted) |largest_rooted_slot| {
+        if (self.getLargestRootedSlot()) |largest_rooted_slot| {
             if (slot <= largest_rooted_slot) {
                 return error.CannotWriteRootedSlot;
             }
@@ -2237,6 +2237,10 @@ pub const AccountsDB = struct {
         }
     }
 
+    pub fn getLargestRootedSlot(self: *AccountsDB) ?Slot {
+        return self.max_slots.readCopy().rooted;
+    }
+
     /// writes a batch of accounts to storage and updates the index
     /// NOTE: only currently used in benchmarks and tests
     pub fn putAccountSlice(
@@ -2461,7 +2465,7 @@ pub const AccountsDB = struct {
         defer latest_snapshot_info_lg.unlock();
 
         std.debug.assert(zstd_buffer.len != 0);
-        std.debug.assert(params.target_slot <= self.max_slots.readCopy().flushed orelse 0);
+        std.debug.assert(params.target_slot <= self.getLargestRootedSlot() orelse 0);
 
         const full_hash, const full_capitalization = compute: {
             check_first: {
@@ -4834,10 +4838,7 @@ fn expectEqualDatabaseWithAncestors(
     expected: sig.accounts_db.AccountReader,
     actual: sig.accounts_db.AccountReader,
 ) !void {
-    try std.testing.expectEqual(
-        expected.getLargestRootedSlot(),
-        actual.getLargestRootedSlot(),
-    );
+    try std.testing.expectEqual(expected.getLargestRootedSlot(), actual.getLargestRootedSlot());
 
     const expected_for_slot = expected.forSlot(ancestors);
     const actual_for_slot = actual.forSlot(ancestors);
@@ -4864,47 +4865,42 @@ fn expectEqualDatabaseWithAncestors(
         };
         try actual_account.expectEquals(expected_account);
     }
-}
 
-fn expectEqualDatabaseAtSlot(
-    slot: Slot,
-    expected: sig.accounts_db.AccountReader,
-    actual: sig.accounts_db.AccountReader,
-) !void {
     const allocator = std.testing.allocator;
-
-    try std.testing.expectEqual(
-        expected.getLargestRootedSlot(),
-        actual.getLargestRootedSlot(),
-    );
 
     var expected_map: std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData) = .empty;
     defer expected_map.deinit(allocator);
-    defer for (expected_map.values()) |acc| acc.deinit(allocator);
 
     var actual_map: std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData) = .empty;
     defer actual_map.deinit(allocator);
-    defer for (actual_map.values()) |acc| acc.deinit(allocator);
 
-    const expected_has_slot =
-        try accountSlotModifiedIterIntoMap(allocator, &expected_map, expected, slot);
-    const actual_has_slot =
-        try accountSlotModifiedIterIntoMap(allocator, &actual_map, actual, slot);
-    if (expected_has_slot and !actual_has_slot) {
-        std.log.err("Actual database is missing slot '{d}'", .{slot});
-        return error.TestMissingExpectedSlot;
+    for (ancestors.ancestors.keys()) |slot| {
+        defer expected_map.clearRetainingCapacity();
+        defer for (expected_map.values()) |acc| acc.deinit(allocator);
+
+        defer actual_map.clearRetainingCapacity();
+        defer for (actual_map.values()) |acc| acc.deinit(allocator);
+
+        const expected_has_slot =
+            try collectModifiedSlotsIntoMap(allocator, &expected_map, expected, slot);
+        const actual_has_slot =
+            try collectModifiedSlotsIntoMap(allocator, &actual_map, actual, slot);
+        if (expected_has_slot and !actual_has_slot) {
+            std.log.err("Actual database is missing slot '{d}'", .{slot});
+            return error.TestMissingExpectedSlot;
+        }
+
+        if (!expected_has_slot and actual_has_slot) {
+            std.log.err("Actual database contains unexpected slot '{d}'", .{slot});
+            return error.TestGotUnexpectedSlot;
+        }
+
+        try std.testing.expectEqualSlices(Pubkey, expected_map.keys(), actual_map.keys());
+        try std.testing.expectEqualDeep(expected_map.values(), actual_map.values());
     }
-
-    if (!expected_has_slot and actual_has_slot) {
-        std.log.err("Actual database contains unexpected slot '{d}'", .{slot});
-        return error.TestGotUnexpectedSlot;
-    }
-
-    try std.testing.expectEqualSlices(Pubkey, expected_map.keys(), actual_map.keys());
-    try std.testing.expectEqualDeep(expected_map.values(), actual_map.values());
 }
 
-fn accountSlotModifiedIterIntoMap(
+fn collectModifiedSlotsIntoMap(
     allocator: std.mem.Allocator,
     map: *std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData),
     account_reader: sig.accounts_db.AccountReader,
@@ -4924,18 +4920,36 @@ fn accountSlotModifiedIterIntoMap(
             .rent_epoch = account.rent_epoch,
         });
     }
-    const sort_ctx: struct {
+    const SortCtx = struct {
         keys: []const Pubkey,
 
         pub fn lessThan(ctx: @This(), a_index: usize, b_index: usize) bool {
             return ctx.keys[a_index].order(ctx.keys[b_index]) == .lt;
         }
-    } = .{ .keys = map.keys() };
+    };
+    const sort_ctx: SortCtx = .{ .keys = map.keys() };
     map.sort(sort_ctx);
     return true;
 }
 
-test "insertion basic & writing to a rooted slot" {
+fn setRootedLargestSlotForTest(
+    simple: *sig.accounts_db.ThreadSafeAccountMap,
+    real: *AccountsDB,
+    largest_rooted_slot: ?Slot,
+) void {
+    {
+        simple.rwlock.lock();
+        defer simple.rwlock.unlock();
+        simple.largest_rooted_slot = largest_rooted_slot;
+    }
+    {
+        const max_slots, var max_slots_lg = real.max_slots.writeWithLock();
+        defer max_slots_lg.unlock();
+        max_slots.rooted = largest_rooted_slot;
+    }
+}
+
+test "insertion basic" {
     const allocator = std.testing.allocator;
 
     var prng_state: std.Random.Xoshiro256 = .init(346715);
@@ -4954,7 +4968,12 @@ test "insertion basic & writing to a rooted slot" {
     const real_store = real_state.accountStore();
     const stores = [_]sig.accounts_db.AccountStore{ simple_store, real_store };
 
-    try expectEqualDatabaseAtSlot(0, simple_store.reader(), real_store.reader());
+    try expectEqualDatabaseWithAncestors(
+        &.EMPTY,
+        simple_state.pubkey_map.keys(),
+        simple_store.reader(),
+        real_store.reader(),
+    );
 
     var ancestor_set: Ancestors = .EMPTY;
     defer ancestor_set.deinit(allocator);
@@ -4969,12 +4988,6 @@ test "insertion basic & writing to a rooted slot" {
 
         try ancestor_set.addSlot(allocator, slot);
         try putAccountIntoStores(&stores, slot, pubkey, account);
-
-        try expectEqualDatabaseAtSlot(
-            slot,
-            simple_store.reader(),
-            real_store.reader(),
-        );
         try expectEqualDatabaseWithAncestors(
             &ancestor_set,
             simple_state.pubkey_map.keys(),
@@ -4988,11 +5001,6 @@ test "insertion basic & writing to a rooted slot" {
 
     for (0..100) |i| {
         const slot: Slot = i;
-        try expectEqualDatabaseAtSlot(
-            slot,
-            simple_store.reader(),
-            real_store.reader(),
-        );
         try ancestor_set.subsetInto(slot, allocator, &ancestors_subset);
         try expectEqualDatabaseWithAncestors(
             &ancestors_subset,
@@ -5005,22 +5013,91 @@ test "insertion basic & writing to a rooted slot" {
     try std.testing.expectEqual({}, simple_store.put(1, .ZEROES, .EMPTY));
     try std.testing.expectEqual({}, real_store.put(1, .ZEROES, .EMPTY));
 
-    {
-        simple_state.rwlock.lock();
-        defer simple_state.rwlock.unlock();
-        simple_state.largest_rooted_slot = 2;
-    }
-    {
-        var max_slots_lg = real_state.max_slots.write();
-        defer max_slots_lg.unlock();
-        max_slots_lg.mut().rooted = 2;
-    }
-
-    try std.testing.expectEqual(
-        simple_store.reader().getLargestRootedSlot(),
-        real_store.reader().getLargestRootedSlot(),
-    );
-
+    setRootedLargestSlotForTest(&simple_state, &real_state, 2);
     try std.testing.expectEqual(error.CannotWriteRootedSlot, simple_store.put(1, .ZEROES, .EMPTY));
     try std.testing.expectEqual(error.CannotWriteRootedSlot, real_store.put(1, .ZEROES, .EMPTY));
+    setRootedLargestSlotForTest(&simple_state, &real_state, null);
+    try std.testing.expectEqual({}, simple_store.put(1, .ZEROES, .EMPTY));
+    try std.testing.expectEqual({}, real_store.put(1, .ZEROES, .EMPTY));
+}
+
+test "insertion out of order" {
+    const allocator = std.testing.allocator;
+
+    var prng_state: std.Random.Xoshiro256 = .init(346715);
+    const prng = prng_state.random();
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    var simple_state: sig.accounts_db.ThreadSafeAccountMap = .init(allocator);
+    defer simple_state.deinit();
+
+    var real_state: AccountsDB = try .init(.minimal(allocator, .noop, tmp_dir.dir));
+    defer real_state.deinit();
+
+    const simple_store = simple_state.accountStore();
+    const real_store = real_state.accountStore();
+    const stores = [_]sig.accounts_db.AccountStore{ simple_store, real_store };
+
+    try expectEqualDatabaseWithAncestors(
+        &.EMPTY,
+        simple_state.pubkey_map.keys(),
+        simple_store.reader(),
+        real_store.reader(),
+    );
+
+    var ancestor_set: Ancestors = .EMPTY;
+    defer ancestor_set.deinit(allocator);
+
+    for (0..100) |i| {
+        const slot: Slot = while (true) {
+            const slot = prng.uintLessThan(Slot, 1000);
+            if (ancestor_set.containsSlot(slot)) continue;
+            break slot;
+        };
+        errdefer std.log.err("At slot {} (iteration {d})", .{ slot, i });
+
+        const pubkey: Pubkey = .initRandom(prng);
+        const account = try createRandomAccount(allocator, prng);
+        defer account.deinit(allocator);
+
+        try ancestor_set.addSlot(allocator, slot);
+        try putAccountIntoStores(&stores, slot, pubkey, account);
+
+        try expectEqualDatabaseWithAncestors(
+            &ancestor_set,
+            simple_state.pubkey_map.keys(),
+            simple_store.reader(),
+            real_store.reader(),
+        );
+    }
+
+    var ancestors_subset: Ancestors = .EMPTY;
+    defer ancestors_subset.deinit(allocator);
+
+    for (ancestor_set.ancestors.keys()) |slot| {
+        try ancestor_set.subsetInto(slot, allocator, &ancestors_subset);
+        try expectEqualDatabaseWithAncestors(
+            &ancestors_subset,
+            simple_state.pubkey_map.keys(),
+            simple_store.reader(),
+            real_store.reader(),
+        );
+    }
+
+    try std.testing.expectEqual({}, simple_store.put(1, .ZEROES, .EMPTY));
+    try std.testing.expectEqual({}, real_store.put(1, .ZEROES, .EMPTY));
+
+    const slot_to_try_write_while_rooted = slot: {
+        const slots = simple_state.slot_map.keys();
+        break :slot slots[prng.uintLessThan(usize, slots.len)];
+    };
+    const pk_of_ones: Pubkey = .{ .data = @splat(1) };
+    setRootedLargestSlotForTest(&simple_state, &real_state, slot_to_try_write_while_rooted);
+    try std.testing.expectEqual(error.CannotWriteRootedSlot, simple_store.put(1, pk_of_ones, .EMPTY));
+    try std.testing.expectEqual(error.CannotWriteRootedSlot, real_store.put(1, pk_of_ones, .EMPTY));
+    setRootedLargestSlotForTest(&simple_state, &real_state, null);
+    try std.testing.expectEqual({}, simple_store.put(1, pk_of_ones, .EMPTY));
+    try std.testing.expectEqual({}, real_store.put(1, pk_of_ones, .EMPTY));
 }

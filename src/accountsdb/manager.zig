@@ -132,7 +132,7 @@ pub const Manager = struct {
             //   we're waiting on the account cache lock.
             // * we eventually acquire the lock, but have already read a now-stale
             //   largest rooted slot value.
-            const root_slot = self.db.max_slots.readCopy().rooted orelse 0;
+            const root_slot = self.db.getLargestRootedSlot() orelse 0;
 
             // flush slots <= root slot
             // TODO: account for forks when consensus is implemented
