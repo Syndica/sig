@@ -287,7 +287,7 @@ pub const SlotTree = struct {
         for (self.leaves.items, 0..) |leaf_to_check, i| {
             if (last_leaf -| leaf_to_check.slot > min_age) {
                 for (self.leaves.items[i..]) |leaf_to_prune| {
-                    std.debug.assert(leaf_to_prune.pruneFork(allocator));
+                    std.debug.assert(leaf_to_prune.pruneUpstreamToFork(allocator));
                 }
                 self.leaves.shrinkRetainingCapacity(i);
                 break;
@@ -343,6 +343,7 @@ pub const SlotTree = struct {
             parent.destroy(allocator);
         }
         self.root = root_candidate;
+        self.root.parent = null;
 
         return if (self.root.slot != starting_root) self.root.slot else null;
     }
@@ -392,7 +393,7 @@ pub const SlotTree = struct {
         /// do not call this function unless there are other competing forks.
         ///
         /// returns whether this node was a leaf, and thus pruned and deinitted
-        fn pruneFork(self: *Node, allocator: Allocator) bool {
+        fn pruneUpstreamToFork(self: *Node, allocator: Allocator) bool {
             if (self.next.items.len != 0) return false;
 
             // must not be null since this function is only called when there
@@ -408,9 +409,8 @@ pub const SlotTree = struct {
 
             const removed = parent.next.swapRemove(index_in_parent); // remove self from parent
             std.debug.assert(self == removed);
-            std.debug.assert(self.next.items.len == 0);
             self.destroy(allocator); // deinit self
-            _ = parent.pruneFork(allocator); // prune parent from its parent, and so on
+            _ = parent.pruneUpstreamToFork(allocator); // prune parent from its parent, and so on
 
             return true;
         }
@@ -496,7 +496,6 @@ test "SlotTree: if no forks, root follows 32 behind latest" {
     try expectSlotTree(&tree, 0, &.{0});
 
     for (1..33) |slot| {
-        std.debug.print("{}\n", .{slot});
         try tree.record(allocator, slot, slot -| 1);
         try expectSlotTree(&tree, 0, &.{slot});
         try std.testing.expectEqual(null, tree.reRoot(allocator));
@@ -504,7 +503,6 @@ test "SlotTree: if no forks, root follows 32 behind latest" {
     }
 
     for (33..100) |slot| {
-        std.debug.print("{}\n", .{slot});
         try tree.record(allocator, slot, slot -| 1);
         try expectSlotTree(&tree, slot -| 33, &.{slot});
         try std.testing.expectEqual(slot -| 32, tree.reRoot(allocator));
