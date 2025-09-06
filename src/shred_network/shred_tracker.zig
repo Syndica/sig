@@ -23,6 +23,11 @@ pub const Range = struct {
     end: ?u32,
 };
 
+pub const Invalidated = ArrayList(struct {
+    monitored_slot: MonitoredSlot,
+    slot: usize,
+});
+
 /// This is a temporary placeholder that will be replaced by a solution that
 /// depends on the ledger and consensus. This struct optimistically discards
 /// slots that another slot claims to be skipped, even if consensus has not yet
@@ -81,18 +86,19 @@ pub const BasicShredTracker = struct {
     }
 
     pub const RegisterDataShredError = SlotOutOfBounds ||
-        error{ InvalidShredParent, InvalidParentSlotOffset };
+        error{ InvalidShredParent, InvalidParentSlotOffset, OutOfMemory };
 
     pub fn registerDataShred(
         self: *Self,
         shred: *const sig.ledger.shred.DataShred,
         timestamp: Instant,
+        invalidated: *Invalidated,
     ) RegisterDataShredError!void {
         const parent = try shred.parent();
         const is_last_in_slot = shred.custom.flags.isSet(.last_shred_in_slot);
         const slot = shred.common.slot;
         const index = shred.common.index;
-        try self.registerShred(slot, index, parent, is_last_in_slot, timestamp);
+        try self.registerShred(slot, index, parent, is_last_in_slot, timestamp, invalidated);
     }
 
     fn registerShred(
@@ -102,7 +108,8 @@ pub const BasicShredTracker = struct {
         parent_slot: Slot,
         is_last_in_slot: bool,
         timestamp: Instant,
-    ) (SlotOutOfBounds || error{InvalidShredParent})!void {
+        invalidated: *Invalidated,
+    ) (SlotOutOfBounds || error{InvalidShredParent, OutOfMemory})!void {
         if (parent_slot >= slot) return error.InvalidShredParent;
 
         self.mux.lock();
@@ -138,7 +145,7 @@ pub const BasicShredTracker = struct {
 
         if (slot_is_complete and slot == new_bottom) new_bottom += 1;
 
-        if (self.current_bottom_slot != new_bottom) self.setBottom(new_bottom);
+        if (self.current_bottom_slot != new_bottom) try self.setBottom(new_bottom, invalidated);
     }
 
     /// Writes the contents of the monitored slots as progress bars.
@@ -197,7 +204,7 @@ pub const BasicShredTracker = struct {
             var this_slot_needs_more_shreds = !monitored_slot.is_complete;
             defer {
                 if (this_slot_needs_more_shreds) found_an_incomplete_slot = true;
-                if (!found_an_incomplete_slot) self.setBottom(slot + 1);
+                if (!found_an_incomplete_slot) self.setBottom(slot + 1, null) catch unreachable;
             }
 
             if (monitored_slot.is_complete or
@@ -269,9 +276,13 @@ pub const BasicShredTracker = struct {
     }
 
     /// assumes lock is held
-    fn setBottom(self: *Self, slot: usize) void {
+    fn setBottom(self: *Self, slot: usize, invalidated: ?*Invalidated) !void {
         for (self.current_bottom_slot..slot) |slot_to_wipe| {
             const monitored_slot = self.getMonitoredSlot(slot_to_wipe) catch unreachable;
+            if (invalidated) |i| try i.append(.{
+                .monitored_slot = monitored_slot.*,
+                .slot = slot_to_wipe,
+            });
             monitored_slot.* = .{};
         }
         self.current_bottom_slot = @max(self.current_bottom_slot, slot);

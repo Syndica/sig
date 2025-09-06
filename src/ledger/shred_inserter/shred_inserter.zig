@@ -225,6 +225,9 @@ pub const ShredInserter = struct {
         var get_lock_timer = try Timer.start();
         self.metrics.insert_lock_elapsed_us.add(get_lock_timer.read().asMicros());
 
+        var invalidated = sig.shred_network.shred_tracker.Invalidated.init(self.allocator);
+        defer invalidated.deinit();
+
         ///////////////////////////
         // insert received shreds
         //
@@ -236,7 +239,7 @@ pub const ShredInserter = struct {
             switch (shred) {
                 .data => |data_shred| {
                     if (options.shred_tracker) |tracker| {
-                        tracker.registerDataShred(&shred.data, timestamp) catch |err| {
+                        tracker.registerDataShred(&shred.data, timestamp, &invalidated) catch |err| {
                             self.metrics.register_shred_error.observe(@errorCast(err));
                             switch (err) {
                                 error.SlotUnderflow, error.SlotOverflow => {},
@@ -330,7 +333,7 @@ pub const ShredInserter = struct {
                     continue;
                 }
                 if (options.shred_tracker) |tracker| {
-                    tracker.registerDataShred(&shred.data, timestamp) catch |err| {
+                    tracker.registerDataShred(&shred.data, timestamp, &invalidated) catch |err| {
                         self.metrics.register_shred_error.observe(@errorCast(err));
                         switch (err) {
                             error.SlotUnderflow, error.SlotOverflow => {},
@@ -442,6 +445,37 @@ pub const ShredInserter = struct {
         // commit and return
         //
         try state.commit();
+
+        if (invalidated.items.len > 0) std.debug.print("committed:\n", .{});
+        for (invalidated.items) |entry| {
+            std.debug.print(" slot:{} completed:{} skipped:{} 0..{?} max={?} (unique:{} / total:{})\n", .{
+                entry.slot,
+                entry.monitored_slot.is_complete,
+                entry.monitored_slot.is_skipped,
+                entry.monitored_slot.last_shred,
+                entry.monitored_slot.max_seen,
+                entry.monitored_slot.unique_observed_count,
+                entry.monitored_slot.shreds.count(),
+            });
+
+            var i: usize = 0;
+            var last_index: ?usize = null;
+            var it = entry.monitored_slot.shreds.iterator(.{});
+            while (it.next()) |index| {
+                if (index > i) {
+                    std.debug.print("  missing {}..{}\n", .{i, index - 1});
+                }
+                i = index + 1;
+                last_index = index;
+                if (try state.db.getBytes(schema.data_shred, .{ @intCast(entry.slot), @intCast(index) })) |bytes| {
+                    bytes.deinit();
+                } else {
+                    std.debug.print("  [!!] {} marked inserted in DB but is not\n", .{index});
+                }
+            }
+            if (last_index != (entry.monitored_slot.max_seen orelse @as(?usize, null)))
+                std.debug.print(" [!] max_seen={?} doesnt match last={}\n", .{entry.monitored_slot.max_seen, i});
+        }
 
         // TODO send signals
 
