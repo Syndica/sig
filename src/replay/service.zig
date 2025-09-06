@@ -38,6 +38,7 @@ const ReplayResult = replay.execution.ReplayResult;
 
 const EpochTracker = replay.trackers.EpochTracker;
 const SlotTracker = replay.trackers.SlotTracker;
+const SlotTree = replay.trackers.SlotTree;
 
 const awaitResults = replay.execution.awaitResults;
 const processResult = replay.process_result.processResult;
@@ -173,13 +174,13 @@ const ReplayState = struct {
     slot_tracker: RwMux(SlotTracker),
     /// Lifetime rules are the same as `slot_tracker`.
     epoch_tracker: RwMux(EpochTracker),
+    slot_tree: SlotTree,
     hard_forks: sig.core.HardForks,
     account_store: AccountStore,
     progress_map: ProgressMap,
     ledger: LedgerRef,
     status_cache: sig.core.StatusCache,
     execution_log_helper: replay.execution.LogHelper,
-
     replay_votes_channel: *Channel(ParsedVote),
 
     fn deinit(self: *ReplayState) void {
@@ -217,15 +218,17 @@ const ReplayState = struct {
         try epoch_tracker.epochs
             .put(deps.allocator, deps.current_epoch, deps.current_epoch_constants);
 
-        const progress_map =
-            try replay.service.initProgressMap(
-                deps.allocator,
-                &slot_tracker,
-                &epoch_tracker,
-                deps.my_identity,
-                deps.vote_identity,
-            );
+        const progress_map = try replay.service.initProgressMap(
+            deps.allocator,
+            &slot_tracker,
+            &epoch_tracker,
+            deps.my_identity,
+            deps.vote_identity,
+        );
         errdefer progress_map.deinit(deps.allocator);
+
+        const slot_tree = try SlotTree.init(deps.allocator, deps.root.slot);
+        errdefer slot_tree.deinit(deps.allocator);
 
         return .{
             .allocator = deps.allocator,
@@ -235,6 +238,7 @@ const ReplayState = struct {
             .slot_leaders = deps.slot_leaders,
             .slot_tracker = .init(slot_tracker),
             .epoch_tracker = .init(epoch_tracker),
+            .slot_tree = slot_tree,
             .hard_forks = deps.hard_forks,
             .account_store = deps.account_store,
             .ledger = deps.ledger,
@@ -581,6 +585,7 @@ fn advanceReplay(state: *ReplayState, maybe_consensus: *?ConsensusState, multith
         &state.ledger.db,
         &state.slot_tracker,
         &state.epoch_tracker,
+        &state.slot_tree,
         state.slot_leaders,
         &state.hard_forks,
         &state.progress_map,
@@ -722,30 +727,42 @@ fn bypassConsensus(state: *ReplayState, results: []const ReplayResult) !bool {
     const epoch_tracker, var epoch_tracker_lg = state.epoch_tracker.readWithLock();
     defer epoch_tracker_lg.unlock();
 
-    const slot_tracker, var slot_tracker_lg = state.slot_tracker.readWithLock();
-    defer slot_tracker_lg.unlock();
-
     var processed_a_slot = false;
-    for (results) |result| {
-        const slot = result.slot;
-        const slot_info = slot_tracker.get(slot) orelse return error.MissingSlotInTracker;
-        if (slot_info.state.tickHeight() == slot_info.constants.max_tick_height) {
-            state.logger.info().logf("finished replaying slot: {}", .{slot});
-            const epoch = epoch_tracker.getForSlot(slot) orelse return error.MissingEpoch;
-            try replay.freeze.freezeSlot(state.allocator, .init(
-                .from(state.logger),
-                state.account_store,
-                &epoch,
-                slot_info.state,
-                slot_info.constants,
-                slot,
-                result.entries[result.entries.len - 1].hash,
-            ));
-            processed_a_slot = true;
-        } else {
-            state.logger.info().logf("partially replayed slot: {}", .{slot});
+    {
+        const slot_tracker, var slot_tracker_lg = state.slot_tracker.readWithLock();
+        defer slot_tracker_lg.unlock();
+
+        for (results) |result| {
+            const slot = result.slot;
+            const slot_info = slot_tracker.get(slot) orelse return error.MissingSlotInTracker;
+            if (slot_info.state.tickHeight() == slot_info.constants.max_tick_height) {
+                state.logger.info().logf("finished replaying slot: {}", .{slot});
+                const epoch = epoch_tracker.getForSlot(slot) orelse return error.MissingEpoch;
+                try replay.freeze.freezeSlot(state.allocator, .init(
+                    .from(state.logger),
+                    state.account_store,
+                    &epoch,
+                    slot_info.state,
+                    slot_info.constants,
+                    slot,
+                    result.entries[result.entries.len - 1].hash,
+                ));
+                processed_a_slot = true;
+            } else {
+                state.logger.info().logf("partially replayed slot: {}", .{slot});
+            }
         }
     }
+
+    if (state.slot_tree.reRoot(state.allocator)) |new_root| {
+        const slot_tracker, var slot_tracker_lg = state.slot_tracker.writeWithLock();
+        defer slot_tracker_lg.unlock();
+
+        state.logger.info().logf("rooting slot with SlotTree.reRoot: {}", .{new_root});
+        slot_tracker.root = new_root;
+        slot_tracker.pruneNonRooted(state.allocator);
+    }
+
     return processed_a_slot;
 }
 
@@ -761,6 +778,7 @@ pub fn trackNewSlots(
     ledger_db: *LedgerDB,
     slot_tracker_rw: *RwMux(SlotTracker),
     epoch_tracker_rw: *RwMux(EpochTracker),
+    slot_tree: *SlotTree,
     slot_leaders: SlotLeaders,
     hard_forks: *const sig.core.HardForks,
     /// needed for update_fork_propagated_threshold_from_votes
@@ -827,6 +845,7 @@ pub fn trackNewSlots(
             );
 
             try slot_tracker.put(allocator, slot, .{ .constants = constants, .state = state });
+            try slot_tree.record(allocator, slot, constants.parent_slot);
 
             // TODO: update_fork_propagated_threshold_from_votes
         }
@@ -1057,6 +1076,9 @@ test trackNewSlots {
 
     const hard_forks = sig.core.HardForks{};
 
+    var slot_tree = try SlotTree.init(allocator, 0);
+    defer slot_tree.deinit(allocator);
+
     // only the root (0) is considered frozen, so only 0 and 1 should be added at first.
     try trackNewSlots(
         allocator,
@@ -1065,6 +1087,7 @@ test trackNewSlots {
         &ledger_db,
         &slot_tracker,
         &epoch_tracker,
+        &slot_tree,
         slot_leaders,
         &hard_forks,
         undefined,
@@ -1088,6 +1111,7 @@ test trackNewSlots {
         &ledger_db,
         &slot_tracker,
         &epoch_tracker,
+        &slot_tree,
         slot_leaders,
         &hard_forks,
         undefined,
@@ -1116,6 +1140,7 @@ test trackNewSlots {
         &ledger_db,
         &slot_tracker,
         &epoch_tracker,
+        &slot_tree,
         slot_leaders,
         &hard_forks,
         undefined,
@@ -1145,6 +1170,7 @@ test trackNewSlots {
         &ledger_db,
         &slot_tracker,
         &epoch_tracker,
+        &slot_tree,
         slot_leaders,
         &hard_forks,
         undefined,
