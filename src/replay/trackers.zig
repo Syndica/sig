@@ -197,6 +197,8 @@ pub const SlotTracker = struct {
     }
 };
 
+/// Tracks forks for the purpose of optimistically rooting slots in the absence
+/// of consensus.
 pub const SlotTree = struct {
     root: *Node,
     leaves: List(*Node),
@@ -266,7 +268,9 @@ pub const SlotTree = struct {
     /// 2. set the "root" slot to be the greatest common ancestor of all
     ///    remaining forks that is at least 32 blocks (not slots) older than the
     ///    leaf of the oldest fork that we are keeping after pruning.
-    pub fn reRoot(self: *SlotTree, allocator: Allocator) !Slot {
+    pub fn reRoot(self: *SlotTree, allocator: Allocator) ?Slot {
+        const starting_root = self.root.slot;
+
         std.mem.sort(
             *Node,
             self.leaves.items,
@@ -306,8 +310,15 @@ pub const SlotTree = struct {
                 }
             }
         }
-        // null is not possible because we have a single tree.
-        var root_candidate = maybe_common_ancestor.?;
+        var root_candidate = if (maybe_common_ancestor) |ca| ca else blk: {
+            // we couldn't find any nodes that branch out, which means there
+            // must be only one leaf.
+            std.debug.assert(self.leaves.items.len == 1);
+            // in that case, we can just use the leaf itself as the root
+            // candidate, because in the next step, we'll push it back by 32
+            // slots to find a proper root.
+            break :blk self.leaves.items[0];
+        };
 
         // look back min_age blocks behind each fork leaf to ensure its block height
         // is at least min_age greater than the common ancestor that will become the
@@ -316,8 +327,8 @@ pub const SlotTree = struct {
             var node = leaf;
             var found_old_root_candidate = false;
             for (0..min_age) |_| {
-                node = node.parent orelse break;
                 if (node.slot == root_candidate.slot) found_old_root_candidate = true;
+                node = node.parent orelse break;
             }
             if (node.slot < root_candidate.slot) {
                 std.debug.assert(found_old_root_candidate); // must be a common ancestor
@@ -333,7 +344,7 @@ pub const SlotTree = struct {
         }
         self.root = root_candidate;
 
-        return self.root.slot;
+        return if (self.root.slot != starting_root) self.root.slot else null;
     }
 
     const Node = struct {
@@ -475,7 +486,33 @@ test "SlotTracker.prune removes all slots less than root" {
     try std.testing.expect(!tracker.contains(3));
 }
 
-test SlotTree {
+test "SlotTree: if no forks, root follows 32 behind latest" {
+    const allocator = std.testing.allocator;
+    var tree = try SlotTree.init(allocator, 0);
+    defer tree.deinit(allocator);
+
+    try expectSlotTree(&tree, 0, &.{0});
+    try std.testing.expectEqual(null, tree.reRoot(allocator));
+    try expectSlotTree(&tree, 0, &.{0});
+
+    for (1..33) |slot| {
+        std.debug.print("{}\n", .{slot});
+        try tree.record(allocator, slot, slot -| 1);
+        try expectSlotTree(&tree, 0, &.{slot});
+        try std.testing.expectEqual(null, tree.reRoot(allocator));
+        try expectSlotTree(&tree, 0, &.{slot});
+    }
+
+    for (33..100) |slot| {
+        std.debug.print("{}\n", .{slot});
+        try tree.record(allocator, slot, slot -| 1);
+        try expectSlotTree(&tree, slot -| 33, &.{slot});
+        try std.testing.expectEqual(slot -| 32, tree.reRoot(allocator));
+        try expectSlotTree(&tree, slot -| 32, &.{slot});
+    }
+}
+
+test "SlotTree: 4 forks with large gap roots properly" {
     const allocator = std.testing.allocator;
     var tree = try SlotTree.init(allocator, 0);
     defer tree.deinit(allocator);
@@ -523,25 +560,23 @@ test SlotTree {
     try tree.record(allocator, 61, 48);
     for (62..71) |i| try tree.record(allocator, i, i - 1);
 
-    // assert correct root and leaves
-    try std.testing.expectEqual(0, tree.root.slot);
-    try std.testing.expectEqual(4, tree.leaves.items.len);
-    var leaves = std.AutoHashMapUnmanaged(Slot, void).empty;
-    defer leaves.deinit(allocator);
-    for (tree.leaves.items) |leaf| try leaves.put(allocator, leaf.slot, {});
+    try expectSlotTree(&tree, 0, &.{ 10, 20, 60, 70 });
 
-    for ([4]Slot{ 10, 20, 60, 70 }) |slot| {
-        try std.testing.expect(leaves.contains(slot));
-    }
+    try std.testing.expectEqual(26, tree.reRoot(allocator).?);
 
-    try std.testing.expectEqual(26, try tree.reRoot(allocator));
+    try expectSlotTree(&tree, 26, &.{ 60, 70 });
+}
 
-    // assert correct root and leaves
-    try std.testing.expectEqual(26, tree.root.slot);
-    try std.testing.expectEqual(2, tree.leaves.items.len);
-    leaves.clearRetainingCapacity();
-    for (tree.leaves.items) |leaf| try leaves.put(allocator, leaf.slot, {});
-    for ([2]Slot{ 60, 70 }) |slot| {
-        try std.testing.expect(leaves.contains(slot));
-    }
+fn expectSlotTree(tree: *const SlotTree, root: Slot, leaves: []const Slot) !void {
+    try std.testing.expectEqual(root, tree.root.slot);
+    try std.testing.expectEqual(leaves.len, tree.leaves.items.len);
+
+    var buf: [1024]u8 = undefined;
+    var fba = std.heap.FixedBufferAllocator.init(&buf);
+
+    var leaves_map = std.AutoHashMapUnmanaged(Slot, void).empty;
+    defer leaves_map.deinit(fba.allocator());
+    for (tree.leaves.items) |leaf| try leaves_map.put(fba.allocator(), leaf.slot, {});
+
+    for (leaves) |slot| try std.testing.expect(leaves_map.contains(slot));
 }
