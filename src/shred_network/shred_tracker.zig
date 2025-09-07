@@ -447,8 +447,8 @@ const MonitoredSlot = struct {
 
         if (self.last_shred) |last| {
             assert(last <= max_seen);
-            assert(last >= self.unique_observed_count -| 1);
-            if (self.unique_observed_count == last) {
+            assert(self.unique_observed_count <= last + 1);
+            if (self.unique_observed_count == last + 1) {
                 assert(last == max_seen);
                 self.is_complete = true;
                 return true;
