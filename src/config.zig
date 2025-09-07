@@ -61,7 +61,7 @@ pub const Geyser = struct {
 /// gets its own struct. `ShredNetworkConfig` represents the inputs to the start
 /// function.
 pub const ShredNetwork = struct {
-    start_slot: ?sig.core.Slot = null,
+    root_slot: ?sig.core.Slot = null,
     repair_port: u16 = 8003,
     turbine_recv_port: u16 = 8002,
     no_retransmit: bool = true,
@@ -70,7 +70,7 @@ pub const ShredNetwork = struct {
     /// Converts from the CLI args into the `shred_network.start` parameters
     pub fn toConfig(self: ShredNetwork, fallback_slot: sig.core.Slot) ShredNetworkConfig {
         return .{
-            .start_slot = self.start_slot orelse fallback_slot,
+            .root_slot = self.root_slot orelse fallback_slot,
             .repair_port = self.repair_port,
             .turbine_recv_port = self.turbine_recv_port,
             .retransmit = !self.no_retransmit,

@@ -653,7 +653,7 @@ const Cmd = struct {
         fn apply(args: @This(), cfg: *config.Cmd) void {
             cfg.shred_network.turbine_recv_port = args.turbine_port;
             cfg.shred_network.repair_port = args.repair_port;
-            cfg.shred_network.start_slot = args.test_repair_for_slot;
+            cfg.shred_network.root_slot = args.test_repair_for_slot;
             cfg.turbine.num_retransmit_threads = args.num_retransmit_threads;
             cfg.max_shreds = args.max_shreds;
         }
@@ -788,7 +788,7 @@ const Cmd = struct {
                 \\ NOTE: this means that this command *requires* a leader schedule to be provided
                 \\ (which would usually be derived from the accountsdb snapshot).
                 \\
-                \\ NOTE: this command also requires `start_slot` (`--test-repair-for-slot`) to be
+                \\ NOTE: this command also requires `root_slot` (`--test-repair-for-slot`) to be
                 \\ given as well (which is usually derived from the accountsdb snapshot).
                 \\ This can be done with `--test-repair-for-slot $(solana slot -u testnet)`
                 \\ for testnet or another `-u` for mainnet/devnet.
@@ -1379,12 +1379,15 @@ fn shredNetwork(
     defer rpc_client.deinit();
 
     const shred_network_conf = cfg.shred_network.toConfig(
-        cfg.shred_network.start_slot orelse blk: {
+        cfg.shred_network.root_slot orelse blk: {
             const response = try rpc_client.getSlot(.{});
             break :blk try response.result();
         },
     );
-    app_base.logger.info().logf("Starting from slot: {?}", .{shred_network_conf.start_slot});
+    app_base.logger.info().logf(
+        "Starting after assumed root slot: {?}",
+        .{shred_network_conf.root_slot},
+    );
 
     const repair_port: u16 = shred_network_conf.repair_port;
     const turbine_recv_port: u16 = shred_network_conf.turbine_recv_port;
@@ -1577,7 +1580,7 @@ fn printLeaderSchedule(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
         app_base.deinit();
     }
 
-    const start_slot, //
+    const root_slot, //
     const leader_schedule //
     = try getLeaderScheduleFromCli(allocator, cfg) orelse b: {
         app_base.logger.info().log("Downloading a snapshot to calculate the leader schedule.");
@@ -1613,7 +1616,7 @@ fn printLeaderSchedule(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
     };
 
     var stdout = std.io.bufferedWriter(std.io.getStdOut().writer());
-    try leader_schedule.write(stdout.writer(), start_slot);
+    try leader_schedule.write(stdout.writer(), root_slot);
     try stdout.flush();
 }
 
