@@ -137,6 +137,8 @@ pub fn confirmSlotSync(
     }
 
     for (params.entries) |entry| {
+        if (entry.isTick()) continue;
+
         const batch = try resolveBatch(allocator, entry.transactions, params.slot_resolver);
         defer batch.deinit(allocator);
 
@@ -191,6 +193,8 @@ fn scheduleTransactionBatches(
     slot_resolver: SlotResolver,
 ) !void {
     for (entries) |entry| {
+        if (entry.isTick()) continue;
+
         const batch = try resolveBatch(allocator, entry.transactions, slot_resolver);
         errdefer batch.deinit(allocator);
 
