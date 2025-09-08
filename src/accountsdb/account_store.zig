@@ -281,12 +281,12 @@ pub const ThreadSafeAccountMap = struct {
         const slot_account_pairs = pubkey_map.get(address) orelse return null;
         for (slot_account_pairs.items, 0..) |slot_account, index| {
             const slot, const account = slot_account;
-            if (ancestors.ancestors.contains(slot)) {
+            if (ancestors.containsSlot(slot)) {
                 return if (account.lamports == 0) null else try toAccount(self.allocator, account);
             }
 
             const last_rooted = self.largest_rooted_slot orelse continue;
-            if (slot < last_rooted) continue;
+            if (slot > last_rooted) continue;
             const latest_rooted_found = if (maybe_latest_rooted_found) |*ptr| ptr else {
                 maybe_latest_rooted_found = .{
                     .slot = slot,
