@@ -36,14 +36,15 @@ pub const Proof = struct {
         const P = kp.public;
         const D = ciphertext.handle.point;
 
-        const s = kp.secret.scalar;
-        const x = pedersen.scalarFromInt(u64, amount);
         const r = opening.scalar;
+        const s = kp.secret.scalar;
+        var x = pedersen.scalarFromInt(u64, amount);
 
         var y_s = Scalar.random();
         var y_x = Scalar.random();
         var y_r = Scalar.random();
         defer {
+            std.crypto.secureZero(u64, &x.limbs);
             std.crypto.secureZero(u64, &y_s.limbs);
             std.crypto.secureZero(u64, &y_x.limbs);
             std.crypto.secureZero(u64, &y_r.limbs);
