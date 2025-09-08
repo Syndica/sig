@@ -1794,7 +1794,7 @@ pub const AccountsDB = struct {
         const max_ref = greatestInAncestors(
             head_ref.ref_ptr,
             ancestors,
-            self.getLargestRootedSlot() orelse 0,
+            self.getLargestRootedSlot(),
         ) orelse return null;
 
         return try self.getAccountFromRef(max_ref);
@@ -2333,7 +2333,7 @@ pub const AccountsDB = struct {
     fn greatestInAncestors(
         ref_ptr: *AccountRef,
         ancestors: *const sig.core.Ancestors,
-        largest_flushed_slot: Slot,
+        maybe_largest_flushed_slot: ?Slot,
     ) ?*AccountRef {
         var biggest: ?*AccountRef = null;
 
@@ -2345,15 +2345,15 @@ pub const AccountsDB = struct {
             }
         }
 
-        if (biggest == null) {
+        if (biggest == null) if (maybe_largest_flushed_slot) |largest_flushed_slot| {
             curr = ref_ptr;
             while (curr) |ref| : (curr = ref.next_ptr) {
-                if (ref.slot < largest_flushed_slot) {
+                if (ref.slot <= largest_flushed_slot) {
                     const new_biggest = if (biggest) |big| ref.slot > big.slot else true;
                     if (new_biggest) biggest = ref;
                 }
             }
-        }
+        };
 
         return biggest;
     }
