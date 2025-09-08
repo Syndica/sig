@@ -264,6 +264,7 @@ const ReplayState = struct {
             deps.vote_identity,
             deps.root.slot,
             deps.account_store.reader().forSlot(&deps.root.constants.ancestors),
+            sig.prometheus.globalRegistry(),
         );
         errdefer replay_tower.deinit(deps.allocator);
 
@@ -401,10 +402,15 @@ fn initProgressAndForkChoiceWithLockedSlotForks(
     // Analogous to [`new_from_frozen_banks`](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/consensus/heaviest_subtree_fork_choice.rs#L235)
     var heaviest_subtree_fork_choice = fork_choice: {
         var heaviest_subtree_fork_choice: HeaviestSubtreeForkChoice =
-            try .init(allocator, .from(logger), .{
-                .slot = root_slot,
-                .hash = root_hash,
-            });
+            try .init(
+                allocator,
+                .from(logger),
+                .{
+                    .slot = root_slot,
+                    .hash = root_hash,
+                },
+                sig.prometheus.globalRegistry(),
+            );
 
         var prev_slot = root_slot;
         for (frozen_slots.keys(), frozen_slots.values()) |slot, info| {
@@ -476,6 +482,7 @@ pub fn run(deps: ReplayDependencies) !void {
         .{ .unordered = deps.exit },
         .from(deps.logger),
         &vote_tracker,
+        sig.prometheus.globalRegistry(),
         .{
             .slot_data_provider = slot_data_provider,
             .gossip_table_rw = deps.gossip_table_rw,

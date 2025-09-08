@@ -16,6 +16,8 @@ const ReplayTower = sig.consensus.replay_tower.ReplayTower;
 const LatestValidatorVotes =
     sig.consensus.latest_validator_votes.LatestValidatorVotes;
 
+const Registry = sig.prometheus.Registry;
+
 const Logger = sig.trace.Logger("fork_choice");
 
 const PubkeyVote = struct {
@@ -176,6 +178,7 @@ pub const ForkChoice = struct {
         allocator: std.mem.Allocator,
         logger: Logger,
         tree_root: SlotAndHash,
+        registry: *Registry(.{}),
     ) !ForkChoice {
         var self = ForkChoice{
             .allocator = allocator,
@@ -184,7 +187,7 @@ pub const ForkChoice = struct {
             .latest_votes = AutoHashMap(Pubkey, SlotAndHash).init(allocator),
             .tree_root = tree_root,
             .last_root_time = Instant.now(),
-            .metrics = try ForkChoiceMetrics.init(),
+            .metrics = try registry.initStruct(ForkChoiceMetrics),
         };
 
         try self.addNewLeafSlot(tree_root, null);
@@ -1537,6 +1540,7 @@ pub const ForkChoice = struct {
     pub fn splitOff(
         self: *ForkChoice,
         allocator: std.mem.Allocator,
+        registry: *sig.prometheus.Registry(.{}),
         slot_hash_key: SlotAndHash,
     ) !ForkChoice {
         if (!builtin.is_test) {
@@ -1615,7 +1619,7 @@ pub const ForkChoice = struct {
             .latest_votes = split_tree_latest_votes,
             .tree_root = slot_hash_key,
             .last_root_time = Instant.now(),
-            .metrics = try ForkChoiceMetrics.init(),
+            .metrics = try ForkChoiceMetrics.init(registry),
         };
     }
 };
@@ -4345,19 +4349,34 @@ test "HeaviestSubtreeForkChoice.splitOffOnBestPath" {
     try std.testing.expectEqual(6, fork_choice.heaviestOverallSlot().slot);
 
     // Split off at 6
-    var split_tree_6 = try fork_choice.splitOff(test_allocator, .{ .slot = 6, .hash = Hash.ZEROES });
+    var split_tree_6 =
+        try fork_choice.splitOff(
+            test_allocator,
+            sig.prometheus.globalRegistry(),
+            .{ .slot = 6, .hash = Hash.ZEROES },
+        );
     defer split_tree_6.deinit();
     try std.testing.expectEqual(5, fork_choice.heaviestOverallSlot().slot);
     try std.testing.expectEqual(6, split_tree_6.heaviestOverallSlot().slot);
 
     // Split off at 3
-    var split_tree_3 = try fork_choice.splitOff(test_allocator, .{ .slot = 3, .hash = Hash.ZEROES });
+    var split_tree_3 =
+        try fork_choice.splitOff(
+            test_allocator,
+            sig.prometheus.globalRegistry(),
+            .{ .slot = 3, .hash = Hash.ZEROES },
+        );
     defer split_tree_3.deinit();
     try std.testing.expectEqual(4, fork_choice.heaviestOverallSlot().slot);
     try std.testing.expectEqual(5, split_tree_3.heaviestOverallSlot().slot);
 
     // Split off at 1
-    var split_tree_1 = try fork_choice.splitOff(test_allocator, .{ .slot = 1, .hash = Hash.ZEROES });
+    var split_tree_1 =
+        try fork_choice.splitOff(
+            test_allocator,
+            sig.prometheus.globalRegistry(),
+            .{ .slot = 1, .hash = Hash.ZEROES },
+        );
     defer split_tree_1.deinit();
     try std.testing.expectEqual(0, fork_choice.heaviestOverallSlot().slot);
     try std.testing.expectEqual(4, split_tree_1.heaviestOverallSlot().slot);
@@ -4406,7 +4425,11 @@ test "HeaviestSubtreeForkChoice.splitOffSimple" {
         &EpochSchedule.DEFAULT,
     );
 
-    var tree = try fork_choice.splitOff(test_allocator, .{ .slot = 5, .hash = Hash.ZEROES });
+    var tree = try fork_choice.splitOff(
+        test_allocator,
+        sig.prometheus.globalRegistry(),
+        .{ .slot = 5, .hash = Hash.ZEROES },
+    );
     defer tree.deinit();
 
     try std.testing.expectEqual(
@@ -4511,7 +4534,11 @@ test "HeaviestSubtreeForkChoice.splitOffSubtreeWithDups" {
         fork_choice.deepestOverallSlot(),
     );
 
-    var tree = try fork_choice.splitOff(test_allocator, .{ .slot = 2, .hash = Hash.ZEROES });
+    var tree = try fork_choice.splitOff(
+        test_allocator,
+        sig.prometheus.globalRegistry(),
+        .{ .slot = 2, .hash = Hash.ZEROES },
+    );
     defer tree.deinit();
 
     try std.testing.expectEqual(
@@ -4576,7 +4603,11 @@ test "HeaviestSubtreeForkChoice.splitOffUnvoted" {
         &EpochSchedule.DEFAULT,
     );
 
-    var tree = try fork_choice.splitOff(test_allocator, .{ .slot = 2, .hash = Hash.ZEROES });
+    var tree = try fork_choice.splitOff(
+        test_allocator,
+        sig.prometheus.globalRegistry(),
+        .{ .slot = 2, .hash = Hash.ZEROES },
+    );
     defer tree.deinit();
 
     try std.testing.expectEqual(
@@ -4669,7 +4700,11 @@ test "HeaviestSubtreeForkChoice.splitOffWithDups" {
         fork_choice.deepestOverallSlot(),
     );
 
-    var tree = try fork_choice.splitOff(test_allocator, expected_best_slot_hash);
+    var tree = try fork_choice.splitOff(
+        test_allocator,
+        sig.prometheus.globalRegistry(),
+        expected_best_slot_hash,
+    );
     defer tree.deinit();
 
     try std.testing.expectEqual(
@@ -4779,6 +4814,7 @@ pub fn forkChoiceForTest(
         allocator,
         .noop,
         root,
+        sig.prometheus.globalRegistry(),
     );
     errdefer fork_choice.deinit();
 
@@ -5128,8 +5164,8 @@ pub const ForkChoiceMetrics = struct {
 
     pub const prefix = "fork_choice";
 
-    pub fn init() sig.prometheus.GetMetricError!ForkChoiceMetrics {
-        return sig.prometheus.globalRegistry().initStruct(ForkChoiceMetrics);
+    pub fn init(registry: *sig.prometheus.Registry(.{})) !ForkChoiceMetrics {
+        return try registry.initStruct(ForkChoiceMetrics);
     }
 
     pub fn histogramBucketsForField(comptime field_name: []const u8) []const f64 {

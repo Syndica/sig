@@ -106,6 +106,7 @@ pub const VoteListener = struct {
         exit: sig.sync.ExitCondition,
         logger: Logger,
         vote_tracker: *VoteTracker,
+        registry: *sig.prometheus.Registry(.{}),
         params: struct {
             slot_data_provider: SlotDataProvider,
             gossip_table_rw: *sig.sync.RwMux(sig.gossip.GossipTable),
@@ -120,7 +121,7 @@ pub const VoteListener = struct {
             senders: Senders,
         },
     ) !VoteListener {
-        var metrics = try VoteListenerMetrics.init();
+        var metrics = try VoteListenerMetrics.init(registry);
         const verified_vote_transactions = try sig.sync.Channel(Transaction).create(allocator);
         errdefer verified_vote_transactions.destroy();
 
@@ -380,8 +381,8 @@ pub const VoteListenerMetrics = struct {
 
     pub const prefix = "vote_listener";
 
-    pub fn init() sig.prometheus.GetMetricError!VoteListenerMetrics {
-        return sig.prometheus.globalRegistry().initStruct(VoteListenerMetrics);
+    pub fn init(registry: *sig.prometheus.Registry(.{})) !VoteListenerMetrics {
+        return try registry.initStruct(VoteListenerMetrics);
     }
 };
 
@@ -1761,7 +1762,7 @@ test "simple usage" {
     var exit: std.atomic.Value(bool) = .init(false);
     const exit_cond: sig.sync.ExitCondition = .{ .unordered = &exit };
 
-    const vote_listener: VoteListener = try .init(allocator, exit_cond, .noop, &vote_tracker, .{
+    const vote_listener: VoteListener = try .init(allocator, exit_cond, .noop, &vote_tracker, &registry, .{
         .slot_data_provider = slot_data_provider,
         .gossip_table_rw = &gossip_table_rw,
         .ledger_ref = ledger_ref,
@@ -1996,7 +1997,7 @@ test "check trackers" {
 
         var unverified_votes_buffer: std.ArrayListUnmanaged(Transaction) = .empty;
         defer unverified_votes_buffer.deinit(allocator);
-        var test_metrics = try VoteListenerMetrics.init();
+        var test_metrics = try VoteListenerMetrics.init(sig.prometheus.globalRegistry());
 
         try receptor.recvAndSendOnce(
             allocator,
