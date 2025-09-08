@@ -631,7 +631,8 @@ fn transactionAccountsRentState(
                 // @panic("Native programs should not be writable");
                 break :blk null;
             } else {
-                break :blk rent_collector.getAccountRentState(
+                break :blk RentCollector.getAccountRentState(
+                    rent_collector.rent,
                     account.account.lamports,
                     account.account.data.len,
                 );
