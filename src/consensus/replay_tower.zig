@@ -323,7 +323,7 @@ pub const ReplayTower = struct {
             vote_slot,
         ) catch |err| switch (err) {
             error.VoteTooOld => {
-                self.metrics.trackStaleVoteRejected();
+                self.metrics.stale_votes_rejected.inc();
                 return err;
             },
             else => return err,
@@ -921,7 +921,7 @@ pub const ReplayTower = struct {
         const signal = self.lastVoteSignal();
 
         if (signal == .stray) {
-            self.metrics.trackStrayRestoredSlot();
+            self.metrics.stray_restored_slots.inc();
         }
 
         return signal == .stray;
@@ -4737,13 +4737,5 @@ pub const ReplayTowerMetrics = struct {
                 self.fork_switching_failures.inc();
             },
         }
-    }
-
-    pub fn trackStaleVoteRejected(self: *const ReplayTowerMetrics) void {
-        self.stale_votes_rejected.inc();
-    }
-
-    pub fn trackStrayRestoredSlot(self: *const ReplayTowerMetrics) void {
-        self.stray_restored_slots.inc();
     }
 };
