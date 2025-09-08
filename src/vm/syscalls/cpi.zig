@@ -318,7 +318,7 @@ const CallerAccount = struct {
             if (stricter_abi_and_runtime_constraints) {
                 try checkAccountInfoPtr(
                     ic,
-                    data_ptr,
+                    data.ptr,
                     account_metadata.vm_data_addr,
                     "data",
                 );
@@ -1073,8 +1073,10 @@ fn cpiCommon(
 
                 const caller_account = &translated.caller_account;
                 const is_caller_loader_deprecated = !ic.getCheckAligned();
-                const address_space = caller_account.original_data_len +|
-                    (MAX_PERMITTED_DATA_INCREASE * @intFromBool(!is_caller_loader_deprecated));
+                const address_space = if (is_caller_loader_deprecated)
+                    caller_account.original_data_len
+                else
+                    caller_account.original_data_len +| MAX_PERMITTED_DATA_INCREASE;
 
                 if (address_space > 0) {
                     const region = memory_map.region(.constant, caller_account.vm_data_addr) catch
@@ -1275,6 +1277,7 @@ const TestAccount = struct {
         allocator: std.mem.Allocator,
         comptime AccountInfoType: type,
         vm_addr: u64,
+        custom_vm_data_addr: ?u64,
     ) !struct { []u8, SerializedAccountMetadata } {
         const size = @sizeOf(AccountInfoType) +
             @sizeOf(Pubkey) * 2 +
@@ -1293,6 +1296,8 @@ const TestAccount = struct {
         const data_cell_addr = owner_addr + @sizeOf(Pubkey);
         const data_addr = data_cell_addr + @sizeOf(RcBox(RefCell([]u8)));
         const data_len = self.data.len;
+
+        const actual_data_addr = custom_vm_data_addr orelse data_addr;
 
         switch (AccountInfoType) {
             AccountInfoRust => buffer[0..@sizeOf(AccountInfoRust)].* = @bitCast(AccountInfoRust{
@@ -1314,7 +1319,7 @@ const TestAccount = struct {
                 .is_signer = @intFromBool(self.is_signer),
                 .is_writable = @intFromBool(self.is_writable),
                 .lamports_addr = lamports_addr,
-                .data_addr = data_addr,
+                .data_addr = actual_data_addr,
                 .data_len = data_len,
                 .owner_addr = owner_addr,
                 .executable = @intFromBool(self.executable),
@@ -1331,14 +1336,14 @@ const TestAccount = struct {
         buffer[owner_addr - vm_addr ..][0..@sizeOf(Pubkey)].* = @bitCast(self.owner);
         buffer[data_cell_addr - vm_addr ..][0..@sizeOf(RcBox(RefCell([]u8)))].* = @bitCast(
             RcBox(RefCell([]u8)){
-                .value = RefCell([]u8).init(@as([*]u8, @ptrFromInt(data_addr))[0..data_len]),
+                .value = RefCell([]u8).init(@as([*]u8, @ptrFromInt(actual_data_addr))[0..data_len]),
             },
         );
         @memcpy(buffer[data_addr - vm_addr ..][0..data_len], self.data);
 
         return .{ buffer, SerializedAccountMetadata{
             .original_data_len = data_len,
-            .vm_data_addr = data_addr,
+            .vm_data_addr = actual_data_addr,
             .vm_key_addr = key_addr,
             .vm_lamports_addr = lamports_addr,
             .vm_owner_addr = owner_addr,
@@ -1357,7 +1362,7 @@ test "CallerAccount.fromAccountInfoRust" {
     const vm_addr = MM_INPUT_START;
 
     const buffer, const serialized_metadata =
-        try account.intoAccountInfo(allocator, AccountInfoRust, vm_addr);
+        try account.intoAccountInfo(allocator, AccountInfoRust, vm_addr, null);
     defer allocator.free(buffer);
 
     const memory_map = try MemoryMap.init(
@@ -1497,7 +1502,7 @@ test "translateAccounts" {
     const vm_addr = MM_INPUT_START;
 
     const buffer, const serialized_metadata =
-        try account.intoAccountInfo(allocator, AccountInfoRust, vm_addr);
+        try account.intoAccountInfo(allocator, AccountInfoRust, vm_addr, null);
     defer allocator.free(buffer);
 
     const memory_map = try MemoryMap.init(
@@ -2234,69 +2239,92 @@ fn testCpiCommon(comptime AccountInfoType: type) !void {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
-    var ctx = try TestContext.init(allocator, prng.random(), "");
-    defer ctx.deinit(allocator);
-    const account = ctx.getAccount();
+    for ([_]bool{ false, true }) |stricter_abi_and_runtime_constraints| {
+        var ctx = try TestContext.init(allocator, prng.random(), "hello world");
+        defer ctx.deinit(allocator);
+        const account = ctx.getAccount();
 
-    // the CPI program to execute.
-    const program_id = system_program.ID;
-    const data = try sig.bincode.writeAlloc(
-        allocator,
-        system_program.Instruction{ .assign = .{ .owner = Pubkey.initRandom(prng.random()) } },
-        .{},
-    );
-    defer allocator.free(data);
-    const accounts = [_]InstructionAccount{.{
-        .pubkey = account.key,
-        .is_signer = true,
-        .is_writable = true,
-    }};
+        if (stricter_abi_and_runtime_constraints) {
+            const feature_set: *sig.core.FeatureSet = @constCast(ctx.tc.feature_set);
+            feature_set.setSlot(.stricter_abi_and_runtime_constraints, ctx.tc.slot);
 
-    // setting up CPI structs in memory
-    const instruction_addr = memory.HEAP_START;
-    const heap_buffer = try intoStableInstruction(
-        allocator,
-        AccountInfoType,
-        instruction_addr,
-        data,
-        program_id,
-        &accounts,
-    );
-    defer allocator.free(heap_buffer);
+            // also enable account_data_direct_mapping for getSerializedData
+            ctx.tc.account_data_direct_mapping = true;
+        }
 
-    const account_info_addr = memory.INPUT_START;
-    const input_buffer, const serialized_metadata =
-        try account.intoAccountInfo(allocator, AccountInfoType, account_info_addr);
-    defer allocator.free(input_buffer);
+        // the CPI program to execute.
+        const program_id = system_program.ID;
+        const data = try sig.bincode.writeAlloc(
+            allocator,
+            system_program.Instruction{ .assign = .{ .owner = program_id } },
+            .{},
+        );
+        defer allocator.free(data);
+        const accounts = [_]InstructionAccount{.{
+            .pubkey = account.key,
+            .is_signer = true,
+            .is_writable = true,
+        }};
 
-    ctx.tc.serialized_accounts.appendAssumeCapacity(serialized_metadata);
+        // setting up CPI structs in memory
+        const instruction_addr = memory.HEAP_START;
+        const instruction_buffer = try intoStableInstruction(
+            allocator,
+            AccountInfoType,
+            instruction_addr,
+            data,
+            program_id,
+            &accounts,
+        );
+        defer allocator.free(instruction_buffer);
 
-    var memory_map = try MemoryMap.init(
-        allocator,
-        &.{
-            memory.Region.init(.constant, &.{}, memory.RODATA_START),
-            memory.Region.init(.mutable, &.{}, memory.STACK_START),
-            memory.Region.init(.constant, heap_buffer, instruction_addr),
-            memory.Region.init(.mutable, input_buffer, account_info_addr),
-        },
-        .v3,
-        .{ .aligned_memory_mapping = false },
-    );
-    defer memory_map.deinit(allocator);
+        // Update the account data to be:
+        // - its own region for stricter_abi_and_runtime_constraints.
+        // - start at INPUT_START for getSerializedData().
+        const account_data_addr = memory.INPUT_START;
+        const account_data_buffer = try allocator.dupe(u8, account.data);
+        defer allocator.free(account_data_buffer);
 
-    // invoke CPI
+        const account_info_addr =
+            std.mem.alignForward(u64, instruction_addr + instruction_buffer.len, BPF_ALIGN_OF_U128);
+        const account_info_buffer, const serialized_metadata = try account.intoAccountInfo(
+            allocator,
+            AccountInfoType,
+            account_info_addr,
+            account_data_addr,
+        );
+        defer allocator.free(account_info_buffer);
 
-    var registers = RegisterMap.initFill(0);
-    registers.set(.r1, instruction_addr);
-    registers.set(.r2, account_info_addr);
-    registers.set(.r3, 1); // account_infos_len
-    registers.set(.r4, 0); // null signers_addr
-    registers.set(.r5, 0); // zero signers_len
+        ctx.tc.serialized_accounts.appendAssumeCapacity(serialized_metadata);
 
-    switch (AccountInfoType) {
-        AccountInfoRust => try invokeSignedRust(ctx.tc, &memory_map, &registers),
-        AccountInfoC => try invokeSignedC(ctx.tc, &memory_map, &registers),
-        else => @compileError("invalid AccountInfo type"),
+        var memory_map = try MemoryMap.init(
+            allocator,
+            &.{
+                memory.Region.init(.constant, &.{}, memory.RODATA_START),
+                memory.Region.init(.mutable, &.{}, memory.STACK_START),
+                memory.Region.init(.constant, instruction_buffer, instruction_addr),
+                memory.Region.init(.mutable, account_info_buffer, account_info_addr),
+                memory.Region.init(.mutable, account_data_buffer, account_data_addr),
+            },
+            .v3,
+            .{ .aligned_memory_mapping = false },
+        );
+        defer memory_map.deinit(allocator);
+
+        // invoke CPI
+
+        var registers = RegisterMap.initFill(0);
+        registers.set(.r1, instruction_addr);
+        registers.set(.r2, account_info_addr);
+        registers.set(.r3, 1); // account_infos_len
+        registers.set(.r4, 0); // null signers_addr
+        registers.set(.r5, 0); // zero signers_len
+
+        switch (AccountInfoType) {
+            AccountInfoRust => try invokeSignedRust(ctx.tc, &memory_map, &registers),
+            AccountInfoC => try invokeSignedC(ctx.tc, &memory_map, &registers),
+            else => @compileError("invalid AccountInfo type"),
+        }
     }
 }
 
