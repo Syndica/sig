@@ -50,6 +50,9 @@ pub const Proof = struct {
     ) !void {
         transcript.appendDomSep("pubkey-proof");
 
+        // [agave] https://github.com/solana-program/zk-elgamal-proof/blob/8c84822593d393c2305eea917fdffd1ec2525aa7/zk-sdk/src/sigma_proofs/pubkey_validity.rs#L107-L109
+        try pubkey.point.rejectIdentity();
+
         try transcript.validateAndAppendPoint("Y", self.Y);
         const c = transcript.challengeScalar("c");
 
