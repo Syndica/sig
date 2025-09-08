@@ -25,6 +25,16 @@ pub const Account = struct {
     executable: bool,
     rent_epoch: Epoch,
 
+    pub fn init(fields: AccountFields, data: AccountDataHandle) Account {
+        return .{
+            .data = data,
+            .lamports = fields.lamports,
+            .owner = fields.owner,
+            .executable = fields.executable,
+            .rent_epoch = fields.rent_epoch,
+        };
+    }
+
     pub fn deinit(self: Account, allocator: std.mem.Allocator) void {
         self.data.deinit(allocator);
     }

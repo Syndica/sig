@@ -11,6 +11,7 @@ pub const Channel = channel.Channel;
 pub const Mux = mux.Mux;
 pub const RwMux = mux.RwMux;
 
+pub const ConstRcSlice = reference_counter.ConstRcSlice;
 pub const OnceCell = once_cell.OnceCell;
 pub const ReferenceCounter = reference_counter.ReferenceCounter;
 pub const Rc = reference_counter.Rc;

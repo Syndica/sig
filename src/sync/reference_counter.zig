@@ -134,11 +134,19 @@ pub fn Rc(T: type) type {
     };
 }
 
+pub fn RcSlice(T: type) type {
+    return RcSliceGeneric(false, T);
+}
+
+pub fn ConstRcSlice(T: type) type {
+    return RcSliceGeneric(false, T);
+}
+
 /// A reference counted slice that is only freed when the last
 /// reference is deinitialized.
 ///
 /// See RcBase for lifetime requirements
-pub fn RcSlice(T: type) type {
+fn RcSliceGeneric(constant: bool, T: type) type {
     return struct {
         ptr: RcBase(T),
         /// The number of T elements, *not* the number of bytes.
@@ -167,7 +175,7 @@ pub fn RcSlice(T: type) type {
             return self.ptr.release(self.len);
         }
 
-        pub fn payload(self: Self) []T {
+        pub fn payload(self: Self) if (constant) []const T else []T {
             return self.ptr.payload()[0..self.len];
         }
 

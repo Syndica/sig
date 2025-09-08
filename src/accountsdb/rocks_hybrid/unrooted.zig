@@ -5,13 +5,13 @@ const Allocator = std.mem.Allocator;
 const ArrayMap = std.AutoArrayHashMapUnmanaged;
 
 const Ancestors = sig.core.Ancestors;
-const AccountMetadata = sig.core.AccountMetadata;
+const AccountFields = sig.core.AccountFields;
 const Epoch = sig.core.Epoch;
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 
 const RwMux = sig.sync.RwMux;
-const RcSlice = sig.sync.RcSlice;
+const ConstRcSlice = sig.sync.ConstRcSlice;
 
 pub const AccountsDB = struct {};
 
@@ -25,87 +25,114 @@ const UnrootedDB = struct {
     allocator: Allocator,
     /// tells you which slot to look for an account
     index: NestedRwLockMap(Pubkey, RingBitSet),
-    accounts: NestedRwLockMap(Pubkey, ArrayMap(Pubkey, Account)),
+    accounts: NestedRwLockMap(Slot, ArrayMap(Pubkey, OutputAccount)),
+
+    pub fn init(allocator: Allocator) UnrootedDB {
+        return UnrootedDB{
+            .allocator = allocator,
+            .index = .empty,
+            .accounts = .empty,
+        };
+    }
+
+    // pub fn deinit(self: *UnrootedDB, allocator: Allocator) void {}
 
     pub fn get(
-        self: UnrootedDB,
+        self: *UnrootedDB,
         address: Pubkey,
         ancestors: Ancestors,
-    ) ?Account {
-        _ = ancestors; // autofix
-        const index, const lock = self.index.read(address);
-        _ = lock; // autofix
-        _ = index; // autofix
+    ) ?OutputAccount {
+        const slot_to_check = index: {
+            const index, var lock = self.index.read(address) orelse return null;
+            defer lock.unlock();
+            var iter = index.reverseIterator();
+            while (iter.next()) |slot| if (ancestors.containsSlot(slot)) break :index slot;
+            return null;
+        };
+
+        const map, var lock = self.accounts.read(slot_to_check) orelse
+            return null; // slot must have been pruned after releasing above lock
+        defer lock.unlock();
+        var account = map.get(address) orelse return null;
+        _ = account.data.acquire();
+        return account;
     }
 
     pub fn put(
         self: *UnrootedDB,
         slot: Slot,
         address: Pubkey,
-        account: Account,
+        account: InputAccount,
     ) error{ Deleted, OutOfMemory }!void {
         { // store the account
-            const accounts_rw, const lock = try self.accounts.write(slot);
+            const accounts, var lock = try self.accounts.write(self.allocator, slot, .empty);
             defer lock.unlock();
 
-            const accounts, var inner_lock = accounts_rw.writeWithLock();
-            defer inner_lock.unlock();
             const gop = try accounts.getOrPut(self.allocator, address);
-            if (gop.found_existing) {
-                self.allocator.free(gop.value_ptr.data);
-            }
+            const old = gop.value_ptr.*;
             gop.value_ptr.* = .{
-                .metadata = account.metadata,
-                .data = try self.allocator.dupe(account.data),
+                .fields = account.fields,
+                .data = try ConstRcSlice(u8).alloc(self.allocator, account.data.len),
             };
+            if (gop.found_existing) {
+                old.data.deinit(self.allocator);
+            }
         }
 
         { // update the index
-            const index, const lock = try self.index.write(address);
+            const index, var lock = try self.index.write(self.allocator, address, .empty);
             defer lock.unlock();
-            index.mark(slot);
+            index.mark(slot) catch |e| switch (e) {
+                // slot must have been flushed or pruned after inserting, no problem.
+                error.Underflow => {},
+            };
         }
     }
 };
 
-pub const Account = struct {
-    metadata: AccountMetadata,
+pub const InputAccount = struct {
+    fields: AccountFields,
     data: []const u8,
 };
 
-/// Requires that V can be initialized as `.empty`
+pub const OutputAccount = struct {
+    fields: AccountFields,
+    data: ConstRcSlice(u8),
+};
+
 pub fn NestedRwLockMap(K: type, V: type) type {
     return struct {
         data: RwMux(ArrayMap(K, RwMux(V))),
 
+        pub const empty = NestedRwLockMap(K, V){
+            .data = .init(.empty),
+        };
+
         pub fn read(
             self: *NestedRwLockMap(K, V),
             key: K,
-        ) error{ OutOfMemory, Deleted }!struct { *V, ReadGuard } {
-            const accounts, var lock = self.accounts.readWithLock();
-            if (accounts.getPtr(key)) |ptr| {
+        ) ?struct { *const V, ReadGuard } {
+            const data, var lock = self.data.readWithLock();
+            defer lock.unlock();
+            if (data.getPtr(key)) |ptr| {
                 const item, const inner_lock = ptr.readWithLock();
-                return .{
-                    item,
-                    .{ .outer_guard = lock, .inner_guard = inner_lock },
-                };
+                return .{ item, .{ .outer_guard = lock, .inner_guard = inner_lock } };
             }
-            lock.unlock();
+            return null;
         }
 
         pub fn write(
             self: *NestedRwLockMap(K, V),
+            allocator: Allocator,
             key: K,
+            default: V,
         ) error{ OutOfMemory, Deleted }!struct { *V, WriteGuard } {
             for (0..2) |i| {
                 { // first, optimistic try, and retry after writing in pessimistic case
-                    const accounts, var lock = self.accounts.readWithLock();
-                    if (accounts.getPtr(key)) |ptr| {
+                    const data, var lock = self.data.readWithLock();
+                    if (data.getPtr(key)) |ptr| {
                         const item, const write_lock = ptr.writeWithLock();
-                        return .{
-                            item,
-                            .{ .outer_guard = lock, .inner_guard = write_lock },
-                        };
+                        return .{ item, .{ .outer_guard = lock, .inner_guard = write_lock } };
                     }
                     lock.unlock();
                 }
@@ -117,18 +144,19 @@ pub fn NestedRwLockMap(K: type, V: type) type {
                 }
 
                 { // fallback, create entry for key
-                    const accounts, var lock = self.accounts.writeWithLock();
+                    const data, var lock = self.data.writeWithLock();
                     defer lock.unlock();
-                    try accounts.put(self.allocator, key, .empty);
+                    try data.put(allocator, key, .init(default));
                 }
             }
+            unreachable; // we'll hit error.Deleted before this.
         }
 
         pub const ReadGuard = struct {
             outer_guard: RwMux(ArrayMap(K, RwMux(V))).RLockGuard,
             inner_guard: RwMux(V).RLockGuard,
 
-            pub fn unlock(self: ReadGuard) void {
+            pub fn unlock(self: *ReadGuard) void {
                 self.inner_guard.unlock();
                 self.outer_guard.unlock();
             }
@@ -138,7 +166,7 @@ pub fn NestedRwLockMap(K: type, V: type) type {
             outer_guard: RwMux(ArrayMap(K, RwMux(V))).RLockGuard,
             inner_guard: RwMux(V).WLockGuard,
 
-            pub fn unlock(self: WriteGuard) void {
+            pub fn unlock(self: *WriteGuard) void {
                 self.inner_guard.unlock();
                 self.outer_guard.unlock();
             }
@@ -158,30 +186,33 @@ pub const RingBitSet = struct {
 
     const len = 128;
 
+    pub const empty = RingBitSet{
+        .slots = .initEmpty(),
+        .bottom = 0,
+        .last_set = 0,
+    };
+
     pub fn mark(self: *RingBitSet, index: usize) error{Underflow}!void {
         if (index < self.bottom) return error.Underflow;
         if (index - self.bottom > len) {
-            // update the start slot
-            self.start_slot = index - len + self.bottom;
-            // delete stale values (set all to false)
             const wipe_start = self.bottom;
-            const wipe_end = self.start_slot;
+            self.bottom += index - len;
+            const wipe_end = self.bottom;
             if (wipe_start % len > wipe_end % len) {
-                self.setRangeValue(.{ .start = wipe_start % len, .end = len }, false);
-                self.setRangeValue(.{ .start = 0, .end = wipe_end % len }, false);
+                self.slots.setRangeValue(.{ .start = wipe_start % len, .end = len }, false);
+                self.slots.setRangeValue(.{ .start = 0, .end = wipe_end % len }, false);
             } else {
-                self.setRangeValue(.{ .start = wipe_start % len, .end = wipe_end % len }, false);
+                self.slots.setRangeValue(.{ .start = wipe_start % len, .end = wipe_end % len }, false);
             }
         }
         self.last_set = index;
         self.slots.set(index % len);
     }
 
-    pub fn reverseIterator(self: *const RingBitSet) void {
+    pub fn reverseIterator(self: *const RingBitSet) ReverseIterator {
         return .{
             .marker = self,
-            .start = self.last_set,
-            .cursor = self.bottom,
+            .cursor = self.bottom + len - 1,
         };
     }
 
@@ -200,3 +231,9 @@ pub const RingBitSet = struct {
         }
     };
 };
+
+test UnrootedDB {
+    var db: UnrootedDB = undefined;
+    _ = db.get(undefined, undefined);
+    try db.put(undefined, undefined, undefined);
+}

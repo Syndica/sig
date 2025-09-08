@@ -782,7 +782,10 @@ pub const HierarchicalFIFO = struct {
 pub const AccountDataHandle = union(enum) {
     /// Data owned by BufferPool, returned by .read() - do not construct this yourself (!)
     buffer_pool_read: BufferPoolRead,
-
+    /// Reference counted data
+    rc_slice: sig.sync.ConstRcSlice(u8),
+    /// data from rocksdb that needs to be freed by rocksdb's allocator
+    rocksdb: @import("rocksdb").Data,
     /// Data allocated elsewhere, not owned or created by BufferPool. BufferPool will deallocate.
     owned_allocation: []const u8,
     /// Data allocated elsewhere, not owned or created by BufferPool.
@@ -862,9 +865,9 @@ pub const AccountDataHandle = union(enum) {
 
                 allocator.free(buffer_pool_read.frame_refs);
             },
-            .owned_allocation => |owned_allocation| {
-                allocator.free(owned_allocation);
-            },
+            .rc_slice => |rc_slice| rc_slice.deinit(allocator),
+            .rocksdb => |data| data.deinit(),
+            .owned_allocation => |owned_allocation| allocator.free(owned_allocation),
             .sub_read,
             .unowned_allocation,
             .empty,
@@ -901,6 +904,14 @@ pub const AccountDataHandle = union(enum) {
         switch (self.*) {
             .owned_allocation, .unowned_allocation => |data| {
                 @memcpy(buf, data[start..end]);
+                return end - start;
+            },
+            .rc_slice => |rc_slice| {
+                @memcpy(buf, rc_slice.payload()[start..end]);
+                return end - start;
+            },
+            .rocksdb => |data| {
+                @memcpy(buf, data.data[start..end]);
                 return end - start;
             },
             .sub_read => |*sb| return sb.parent.read(sb.start + start, buf),
@@ -944,6 +955,8 @@ pub const AccountDataHandle = union(enum) {
                     buffer_pool_read.last_frame_end_offset -
                     buffer_pool_read.first_frame_start_offset;
             },
+            .rc_slice => |rc_slice| @intCast(rc_slice.payload().len),
+            .rocksdb => |data| @intCast(data.data.len),
             .empty => |empty| empty.len,
             .owned_allocation, .unowned_allocation => |data| @intCast(data.len),
         };
@@ -1113,6 +1126,20 @@ pub const AccountDataHandle = union(enum) {
                         read_offset + self.bytesRemaining(),
                     );
                     break :buf external[read_offset..end_idx];
+                },
+                .rc_slice => |rc_slice| buf: {
+                    const end_idx = @min(
+                        read_offset + FRAME_SIZE,
+                        read_offset + self.bytesRemaining(),
+                    );
+                    break :buf rc_slice.payload()[read_offset..end_idx];
+                },
+                .rocksdb => |data| buf: {
+                    const end_idx = @min(
+                        read_offset + FRAME_SIZE,
+                        read_offset + self.bytesRemaining(),
+                    );
+                    break :buf data.data[read_offset..end_idx];
                 },
                 .empty => unreachable,
                 .sub_read => @panic("unimplemented"),
