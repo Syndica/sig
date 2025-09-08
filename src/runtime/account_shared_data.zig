@@ -86,4 +86,15 @@ pub const AccountSharedData = struct {
             self.data = new_memory;
         }
     }
+
+    /// Returns `self` as an account, without transferring ownership of the data.
+    pub fn asAccount(self: AccountSharedData) sig.core.Account {
+        return .{
+            .lamports = self.lamports,
+            .data = .{ .unowned_allocation = self.data },
+            .owner = self.owner,
+            .executable = self.executable,
+            .rent_epoch = self.rent_epoch,
+        };
+    }
 };
