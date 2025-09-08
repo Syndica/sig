@@ -79,9 +79,10 @@ pub const Proof = struct {
         const z_x = Scalar.random();
         const z_delta = Scalar.random();
         const z_claimed = Scalar.random();
-        const c_equality = Scalar.random();
+        var c_equality = Scalar.random();
+        defer std.crypto.secureZero(u64, &c_equality.limbs);
 
-        const Y_delta = weak_mul.mulMulti(3, .{
+        const Y_delta: Ristretto255 = .{ .p = weak_mul.mulMulti(3, .{
             pedersen.G.p,
             pedersen.H.p,
             C_delta.p,
@@ -89,9 +90,9 @@ pub const Proof = struct {
             z_x.toBytes(),
             z_delta.toBytes(),
             Edwards25519.scalar.neg(c_equality.toBytes()),
-        });
+        }) };
 
-        const Y_claimed = weak_mul.mulMulti(3, .{
+        const Y_claimed: Ristretto255 = .{ .p = weak_mul.mulMulti(3, .{
             pedersen.G.p,
             pedersen.H.p,
             C_claimed.p,
@@ -99,11 +100,11 @@ pub const Proof = struct {
             z_x.toBytes(),
             z_claimed.toBytes(),
             Edwards25519.scalar.neg(c_equality.toBytes()),
-        });
+        }) };
 
         const equality_proof: EqualityProof = .{
-            .Y_delta = .{ .p = Y_delta },
-            .Y_claimed = .{ .p = Y_claimed },
+            .Y_delta = Y_delta,
+            .Y_claimed = Y_claimed,
             .z_x = z_x,
             .z_delta = z_delta,
             .z_claimed = z_claimed,
@@ -111,13 +112,14 @@ pub const Proof = struct {
 
         const r_percentage = percentage_opening.scalar;
 
-        const y_max_proof = Scalar.random();
+        var y_max_proof = Scalar.random();
         // Scalar.random() cannot return zero, and H isn't an identity.
         const Y_max_proof = pedersen.H.mul(y_max_proof.toBytes()) catch unreachable;
+        defer std.crypto.secureZero(u64, &y_max_proof.limbs);
 
         transcript.appendPoint("Y_max_proof", Y_max_proof);
-        transcript.appendPoint("Y_delta", .{ .p = Y_delta });
-        transcript.appendPoint("Y_claimed", .{ .p = Y_claimed });
+        transcript.appendPoint("Y_delta", Y_delta);
+        transcript.appendPoint("Y_claimed", Y_claimed);
 
         const c = transcript.challengeScalar("c").toBytes();
         const c_max_proof = Edwards25519.scalar.sub(c, c_equality.toBytes());
@@ -152,7 +154,7 @@ pub const Proof = struct {
         const z_max_proof = Scalar.random();
         const c_max_proof = Scalar.random();
 
-        const Y_max_proof = weak_mul.mulMulti(3, .{
+        const Y_max_proof: Ristretto255 = .{ .p = weak_mul.mulMulti(3, .{
             pedersen.H.p,
             C_percentage.p,
             pedersen.G.p,
@@ -160,45 +162,52 @@ pub const Proof = struct {
             z_max_proof.toBytes(),
             Edwards25519.scalar.neg(c_max_proof.toBytes()),
             c_max_proof.mul(m).toBytes(),
-        });
+        }) };
 
         const max_proof: MaxProof = .{
-            .Y_max_proof = .{ .p = Y_max_proof },
+            .Y_max_proof = Y_max_proof,
             .z_max_proof = z_max_proof,
             .c_max_proof = c_max_proof,
         };
 
-        const x = pedersen.scalarFromInt(u64, delta_amount);
+        var x = pedersen.scalarFromInt(u64, delta_amount);
+        defer std.crypto.secureZero(u64, &x.limbs);
 
         const r_delta = delta_opening.scalar;
         const r_claimed = claimed_opening.scalar;
 
-        const y_x = Scalar.random();
-        const y_delta = Scalar.random();
-        const y_claimed = Scalar.random();
+        var y_x = Scalar.random();
+        var y_delta = Scalar.random();
+        var y_claimed = Scalar.random();
+        defer {
+            std.crypto.secureZero(u64, &y_x.limbs);
+            std.crypto.secureZero(u64, &y_delta.limbs);
+            std.crypto.secureZero(u64, &y_claimed.limbs);
+        }
 
-        const Y_delta = weak_mul.mulMulti(2, .{
+        const Y_delta: Ristretto255 = .{ .p = weak_mul.mulMulti(2, .{
             pedersen.G.p,
             pedersen.H.p,
         }, .{
             y_x.toBytes(),
             y_delta.toBytes(),
-        });
+        }) };
 
-        const Y_claimed = weak_mul.mulMulti(2, .{
+        const Y_claimed: Ristretto255 = .{ .p = weak_mul.mulMulti(2, .{
             pedersen.G.p,
             pedersen.H.p,
         }, .{
             y_x.toBytes(),
             y_claimed.toBytes(),
-        });
+        }) };
 
-        transcript.appendPoint("Y_max_proof", .{ .p = Y_max_proof });
-        transcript.appendPoint("Y_delta", .{ .p = Y_delta });
-        transcript.appendPoint("Y_claimed", .{ .p = Y_claimed });
+        transcript.appendPoint("Y_max_proof", Y_max_proof);
+        transcript.appendPoint("Y_delta", Y_delta);
+        transcript.appendPoint("Y_claimed", Y_claimed);
 
-        const c = transcript.challengeScalar("c").toBytes();
-        const c_equality = Scalar.fromBytes(Edwards25519.scalar.sub(c, c_max_proof.toBytes()));
+        const c = transcript.challengeScalar(&session, "c").toBytes();
+        var c_equality = Scalar.fromBytes(Edwards25519.scalar.sub(c, c_max_proof.toBytes()));
+        defer std.crypto.secureZero(u64, &c_equality.limbs);
 
         _ = transcript.challengeScalar("w");
 
@@ -207,8 +216,8 @@ pub const Proof = struct {
         const z_claimed = c_equality.mul(r_claimed).add(y_claimed);
 
         const equality_proof: EqualityProof = .{
-            .Y_delta = .{ .p = Y_delta },
-            .Y_claimed = .{ .p = Y_claimed },
+            .Y_delta = Y_delta,
+            .Y_claimed = Y_claimed,
             .z_x = z_x,
             .z_delta = z_delta,
             .z_claimed = z_claimed,
