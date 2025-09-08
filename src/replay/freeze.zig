@@ -19,6 +19,7 @@ const Pubkey = core.Pubkey;
 const Slot = core.Slot;
 const SlotState = core.SlotState;
 const SlotConstants = core.SlotConstants;
+const RentCollector = core.rent_collector.RentCollector;
 
 const AccountSharedData = sig.runtime.AccountSharedData;
 const Rent = sig.runtime.sysvar.Rent;
@@ -191,38 +192,45 @@ fn distributeTransactionFees(
     collected_transaction_fees: u64,
     collected_priority_fees: u64,
 ) !void {
-    var burn = collected_transaction_fees * 50 / 100;
-    const total_fees = collected_priority_fees + collected_transaction_fees;
-    const payout = total_fees -| burn;
-    tryPayoutFees(
-        allocator,
-        account_store,
-        account_reader,
-        rent,
-        slot,
-        collector_id,
-        payout,
-    ) catch |e| switch (e) {
-        error.InvalidAccountOwner,
-        error.LamportOverflow,
-        error.InvalidRentPayingAccount,
-        => burn = total_fees,
-        else => return e,
+    if (collected_transaction_fees == 0 and collected_priority_fees == 0) {
+        return;
+    }
+
+    var deposit, const burn = blk: {
+        if (collected_transaction_fees == 0) {
+            break :blk .{ 0, 0 };
+        }
+        const burned = collected_transaction_fees * 50 / 100;
+        break :blk .{ collected_transaction_fees - burned, burned };
     };
+    deposit +|= collected_priority_fees;
+
+    if (deposit > 0) blk: {
+        // TODO: record rewards returned by depositFees
+        _ = depositFees(
+            allocator,
+            account_store,
+            account_reader,
+            rent,
+            slot,
+            collector_id,
+            deposit,
+        ) catch break :blk;
+    }
+
     _ = capitalization.fetchSub(burn, .monotonic);
 }
 
-/// Attempt to pay the payout to the collector.
-fn tryPayoutFees(
+fn depositFees(
     allocator: Allocator,
     account_store: AccountStore,
     account_reader: SlotAccountReader,
     rent: Rent,
     slot: Slot,
     collector_id: Pubkey,
-    payout: u64,
-) !void {
-    var fee_collector_account =
+    fees: u64,
+) !u64 {
+    var account =
         if (try account_reader.get(collector_id)) |old_account|
             AccountSharedData{
                 .data = try old_account.data.readAllAllocate(allocator),
@@ -234,16 +242,23 @@ fn tryPayoutFees(
         else
             AccountSharedData.EMPTY;
 
-    if (!fee_collector_account.owner.equals(&sig.runtime.program.system.ID)) {
+    if (!account.owner.equals(&sig.runtime.program.system.ID)) {
         return error.InvalidAccountOwner;
     }
-    fee_collector_account.lamports = std.math.add(u64, fee_collector_account.lamports, payout) catch
+
+    const pre_state = RentCollector.getAccountRentState(rent, account.lamports, account.data.len);
+    account.lamports = std.math.add(u64, account.lamports, fees) catch {
         return error.LamportOverflow;
-    if (!rent.isExempt(fee_collector_account.lamports, fee_collector_account.data.len)) {
+    };
+
+    const post_state = RentCollector.getAccountRentState(rent, account.lamports, account.data.len);
+    if (!core.rent_collector.RentCollector.transitionAllowed(pre_state, post_state)) {
         return error.InvalidRentPayingAccount;
     }
 
-    try account_store.put(slot, collector_id, fee_collector_account);
+    try account_store.put(slot, collector_id, account);
+
+    return account.lamports;
 }
 
 pub const HashSlotParams = struct {

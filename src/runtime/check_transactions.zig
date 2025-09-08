@@ -288,7 +288,8 @@ fn validateFeePayer(
 
     if (payer.account.lamports < min_balance) return .InsufficientFundsForFee;
 
-    const pre_rent_state = rent_collector.getAccountRentState(
+    const pre_rent_state = RentCollector.getAccountRentState(
+        rent_collector.rent,
         payer.account.lamports,
         payer.account.data.len,
     );
@@ -296,7 +297,8 @@ fn validateFeePayer(
     payer.account.lamports = std.math.sub(u64, payer.account.lamports, fee) catch
         return .InsufficientFundsForFee;
 
-    const post_rent_state = rent_collector.getAccountRentState(
+    const post_rent_state = RentCollector.getAccountRentState(
+        rent_collector.rent,
         payer.account.lamports,
         payer.account.data.len,
     );
