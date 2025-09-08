@@ -1478,7 +1478,12 @@ pub const ReplayTower = struct {
             &failure_reasons,
             &candidate_slots.switch_fork_decision,
         )) {
-            self.metrics.trackForkSwitchingMetrics(candidate_slots.switch_fork_decision);
+            self.metrics.switch_fork_decision.observe(
+                @as(
+                    @typeInfo(SwitchForkDecision).@"union".tag_type.?,
+                    candidate_slots.switch_fork_decision,
+                ),
+            );
             return SelectVoteAndResetForkResult{
                 .vote_slot = .{
                     .slot = candidate_vote_slot,
@@ -4079,40 +4084,34 @@ test "test VoteTooOld error triggers trackStaleVoteRejected" {
     try std.testing.expectEqual(initial_stale_votes + 1, final_stale_votes);
 }
 
-test "test trackForkSwitchingMetrics - switch_proof" {
+test "test switch_fork_decision - switch_proof" {
     var metrics = try ReplayTowerMetrics.init(sig.prometheus.globalRegistry());
 
-    const initial_successes = metrics.fork_switching_successes.get();
-
-    metrics.trackForkSwitchingMetrics(.{ .switch_proof = Hash.ZEROES });
-
-    const final_successes = metrics.fork_switching_successes.get();
-    try std.testing.expectEqual(initial_successes + 1, final_successes);
+    const decision = SwitchForkDecision{ .switch_proof = Hash.ZEROES };
+    metrics.switch_fork_decision.observe(
+        @as(@typeInfo(SwitchForkDecision).@"union".tag_type.?, decision),
+    );
 }
 
-test "test trackForkSwitchingMetrics - failed_switch_threshold" {
+test "test switch_fork_decision - failed_switch_threshold" {
     var metrics = try ReplayTowerMetrics.init(sig.prometheus.globalRegistry());
 
-    const initial_failures = metrics.fork_switching_failures.get();
-
-    metrics.trackForkSwitchingMetrics(.{ .failed_switch_threshold = .{
+    const decision = SwitchForkDecision{ .failed_switch_threshold = .{
         .switch_proof_stake = 200,
         .total_stake = 1000,
-    } });
-
-    const final_failures = metrics.fork_switching_failures.get();
-    try std.testing.expectEqual(initial_failures + 1, final_failures);
+    } };
+    metrics.switch_fork_decision.observe(
+        @as(@typeInfo(SwitchForkDecision).@"union".tag_type.?, decision),
+    );
 }
 
-test "test trackForkSwitchingMetrics - failed_switch_duplicate_rollback" {
+test "test switch_fork_decision - failed_switch_duplicate_rollback" {
     var metrics = try ReplayTowerMetrics.init(sig.prometheus.globalRegistry());
 
-    const initial_failures = metrics.fork_switching_failures.get();
-
-    metrics.trackForkSwitchingMetrics(.{ .failed_switch_duplicate_rollback = 50 });
-
-    const final_failures = metrics.fork_switching_failures.get();
-    try std.testing.expectEqual(initial_failures + 1, final_failures);
+    const decision = SwitchForkDecision{ .failed_switch_duplicate_rollback = 50 };
+    metrics.switch_fork_decision.observe(
+        @as(@typeInfo(SwitchForkDecision).@"union".tag_type.?, decision),
+    );
 }
 
 const builtin = @import("builtin");
@@ -4710,8 +4709,9 @@ fn genStakes(
 }
 
 pub const ReplayTowerMetrics = struct {
-    fork_switching_successes: *sig.prometheus.Counter,
-    fork_switching_failures: *sig.prometheus.Counter,
+    switch_fork_decision: *sig.prometheus.VariantCounter(
+        @typeInfo(SwitchForkDecision).@"union".tag_type.?,
+    ),
 
     stale_votes_rejected: *sig.prometheus.Counter,
     stray_restored_slots: *sig.prometheus.Counter,
@@ -4720,22 +4720,5 @@ pub const ReplayTowerMetrics = struct {
 
     pub fn init(registry: *sig.prometheus.Registry(.{})) !ReplayTowerMetrics {
         return try registry.initStruct(ReplayTowerMetrics);
-    }
-
-    pub fn trackForkSwitchingMetrics(
-        self: *const ReplayTowerMetrics,
-        decision: SwitchForkDecision,
-    ) void {
-        switch (decision) {
-            .switch_proof => {
-                self.fork_switching_successes.inc();
-            },
-            .same_fork => {
-                // No metrics needed for same fork
-            },
-            .failed_switch_threshold, .failed_switch_duplicate_rollback => {
-                self.fork_switching_failures.inc();
-            },
-        }
     }
 };

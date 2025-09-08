@@ -1762,21 +1762,22 @@ test "simple usage" {
     var exit: std.atomic.Value(bool) = .init(false);
     const exit_cond: sig.sync.ExitCondition = .{ .unordered = &exit };
 
-    const vote_listener: VoteListener = try .init(allocator, exit_cond, .noop, &vote_tracker, &registry, .{
-        .slot_data_provider = slot_data_provider,
-        .gossip_table_rw = &gossip_table_rw,
-        .ledger_ref = ledger_ref,
-        .receivers = .{
-            .replay_votes_channel = replay_votes_channel,
-        },
-        .senders = .{
-            .verified_vote = verified_vote_channel,
-            .gossip_verified_vote_hash = gossip_verified_vote_hash_channel,
-            .bank_notification = null,
-            .duplicate_confirmed_slot = null,
-            .subscriptions = .{},
-        },
-    });
+    const vote_listener: VoteListener =
+        try .init(allocator, exit_cond, .noop, &vote_tracker, &registry, .{
+            .slot_data_provider = slot_data_provider,
+            .gossip_table_rw = &gossip_table_rw,
+            .ledger_ref = ledger_ref,
+            .receivers = .{
+                .replay_votes_channel = replay_votes_channel,
+            },
+            .senders = .{
+                .verified_vote = verified_vote_channel,
+                .gossip_verified_vote_hash = gossip_verified_vote_hash_channel,
+                .bank_notification = null,
+                .duplicate_confirmed_slot = null,
+                .subscriptions = .{},
+            },
+        });
     defer vote_listener.joinAndDeinit();
     std.time.sleep(sig.time.Duration.asNanos(.fromMillis(DEFAULT_MS_PER_SLOT * 2)));
     exit_cond.setExit();
