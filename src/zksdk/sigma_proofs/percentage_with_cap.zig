@@ -255,6 +255,7 @@ pub const Proof = struct {
         const c_equality = Edwards25519.scalar.sub(c, c_max_proof.toBytes());
 
         transcript.appendScalar("z_max", z_max);
+        transcript.appendScalar("c_max_proof", c_max_proof);
         transcript.appendScalar("z_x", z_x);
         transcript.appendScalar("z_delta_real", z_delta_real);
         transcript.appendScalar("z_claimed", z_claimed);
