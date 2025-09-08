@@ -28,7 +28,7 @@ pub const AccountsDB = struct {
     ) !RootedDB {
         return .{
             .unrooted = .init(allocator),
-            .rooted = try RootedDB.init(allocator, logger, path),
+            .rooted = try .init(allocator, logger, path),
         };
     }
 

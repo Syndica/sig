@@ -139,7 +139,7 @@ pub fn RcSlice(T: type) type {
 }
 
 pub fn ConstRcSlice(T: type) type {
-    return RcSliceGeneric(false, T);
+    return RcSliceGeneric(true, T);
 }
 
 /// A reference counted slice that is only freed when the last
