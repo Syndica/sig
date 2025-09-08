@@ -293,8 +293,7 @@ fn flushSlot(db: *AccountsDB, slot: Slot) !FileId {
         const unrooted_accounts, var unrooted_accounts_lg = db.unrooted_accounts.readWithLock();
         defer unrooted_accounts_lg.unlock();
 
-        const pubkeys_and_accounts = unrooted_accounts.get(slot) orelse
-            return error.SlotNotFound;
+        const pubkeys_and_accounts = unrooted_accounts.get(slot) orelse return error.SlotNotFound;
         break :blk pubkeys_and_accounts;
     };
 
