@@ -5287,3 +5287,67 @@ test "put and get zero lamports before & after cleanup" {
     try std.testing.expectEqual(false, real_state.account_index.exists(&pk3, slot200));
     try std.testing.expectEqual(true, real_state.account_index.exists(&pk4, slot200));
 }
+
+test "put and get zero lamports across forks" {
+    const allocator = std.testing.allocator;
+
+    var prng_state: std.Random.Xoshiro256 = .init(346715);
+    const prng = prng_state.random();
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    var simple_state: sig.accounts_db.ThreadSafeAccountMap = .init(allocator);
+    defer simple_state.deinit();
+
+    var real_state: AccountsDB = try .init(.minimal(allocator, .noop, tmp_dir.dir));
+    defer real_state.deinit();
+
+    var manager: sig.accounts_db.manager.Manager = try .init(allocator, &real_state, .{
+        .snapshot = null,
+    });
+    defer manager.deinit(allocator);
+
+    const simple_store = simple_state.accountStore();
+    const real_store = real_state.accountStore();
+    const stores = [_]sig.accounts_db.AccountStore{ simple_store, real_store };
+
+    const pk: Pubkey = .initRandom(prng);
+    const slot1: Slot = 100;
+    const slot2: Slot = 200;
+    const slot3: Slot = 300;
+    const slot4: Slot = 400;
+
+    const zero_lamports: AccountSharedData = .{
+        .data = &.{},
+        .executable = false,
+        .lamports = 0,
+        .owner = .ZEROES,
+        .rent_epoch = 0,
+    };
+    const one_lamport: AccountSharedData = .{
+        .data = &.{},
+        .executable = false,
+        .lamports = 1,
+        .owner = .ZEROES,
+        .rent_epoch = 0,
+    };
+
+    setRootedLargestSlotForTest(&simple_state, &real_state, slot1);
+    try putAccountIntoStores(&stores, slot2, pk, zero_lamports);
+    try putAccountIntoStores(&stores, slot3, pk, one_lamport);
+    try putAccountIntoStores(&stores, slot4, pk, zero_lamports);
+
+    const fork_a: Ancestors = try .initWithSlots(allocator, &.{slot2});
+    defer fork_a.deinit(allocator);
+
+    const fork_b: Ancestors = try .initWithSlots(allocator, &.{ slot2, slot3 });
+    defer fork_b.deinit(allocator);
+
+    const fork_c: Ancestors = try .initWithSlots(allocator, &.{ slot2, slot4 });
+    defer fork_c.deinit(allocator);
+
+    try expectAccountFromStores(&stores, &fork_a, pk, null);
+    try expectAccountFromStores(&stores, &fork_b, pk, one_lamport.asAccount());
+    try expectAccountFromStores(&stores, &fork_c, pk, null);
+}
