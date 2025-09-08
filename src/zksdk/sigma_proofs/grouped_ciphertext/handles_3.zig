@@ -72,7 +72,7 @@ pub const Proof = struct {
         const P_second = second_pubkey.point;
         const P_third = third_pubkey.point;
 
-        const x: Scalar = switch (@TypeOf(amount)) {
+        var x: Scalar = switch (@TypeOf(amount)) {
             u64 => pedersen.scalarFromInt(u64, amount),
             Scalar => amount,
             else => unreachable,
@@ -82,6 +82,7 @@ pub const Proof = struct {
         var y_r = Scalar.random();
         var y_x = Scalar.random();
         defer {
+            std.crypto.secureZero(u64, &x.limbs);
             std.crypto.secureZero(u64, &y_r.limbs);
             std.crypto.secureZero(u64, &y_x.limbs);
         }

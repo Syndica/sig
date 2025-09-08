@@ -26,6 +26,8 @@ pub const Proof = struct {
 
         const s = kp.secret.scalar;
         std.debug.assert(!s.isZero());
+        var s_inv = s.invert();
+        defer std.crypto.secureZero(u64, &s_inv.limbs);
 
         var y = Scalar.random();
         defer std.crypto.secureZero(u64, &y.limbs);
@@ -35,7 +37,7 @@ pub const Proof = struct {
         transcript.appendPoint("Y", Y);
 
         const c = transcript.challengeScalar("c");
-        const z = c.mul(s.invert()).add(y);
+        const z = c.mul(s_inv).add(y);
 
         return .{
             .Y = Y,
