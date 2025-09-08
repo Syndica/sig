@@ -10,8 +10,6 @@ pub const Ancestors = struct {
     // agave uses a "RollingBitField" which seems to be just an optimisation for a set
     ancestors: HashMap(Slot, void) = .{},
 
-    pub const EMPTY: Ancestors = .{ .ancestors = .empty };
-
     // For some reason, agave serializes Ancestors as HashMap(slot, usize). But deserializing
     // ignores the usize, and serializing just uses the value 0. So we need to serialize void
     // as if it's 0, and deserialize 0 as if it's void.
@@ -23,12 +21,31 @@ pub const Ancestors = struct {
         },
     );
 
+    pub const EMPTY: Ancestors = .{ .ancestors = .empty };
+
+    pub fn deinit(self: Ancestors, allocator: std.mem.Allocator) void {
+        var ancestors = self.ancestors;
+        ancestors.deinit(allocator);
+    }
+
+    pub fn initWithSlots(
+        allocator: std.mem.Allocator,
+        slots: []const Slot,
+    ) std.mem.Allocator.Error!Ancestors {
+        var new: Ancestors = .EMPTY;
+        errdefer new.deinit(allocator);
+        try new.ancestors.ensureTotalCapacity(allocator, slots.len);
+        for (slots) |slot| new.addSlotAssumeCapacity(slot);
+        return new;
+    }
+
     pub fn addSlot(
         self: *Ancestors,
         allocator: std.mem.Allocator,
         slot: Slot,
     ) std.mem.Allocator.Error!void {
-        try self.ancestors.put(allocator, slot, {});
+        try self.ancestors.ensureUnusedCapacity(allocator, 1);
+        self.addSlotAssumeCapacity(slot);
     }
 
     pub fn addSlotAssumeCapacity(
@@ -53,10 +70,6 @@ pub const Ancestors = struct {
 
     pub fn clone(self: *const Ancestors, allocator: std.mem.Allocator) !Ancestors {
         return .{ .ancestors = try self.ancestors.clone(allocator) };
-    }
-
-    pub fn deinit(self: *Ancestors, allocator: std.mem.Allocator) void {
-        self.ancestors.deinit(allocator);
     }
 
     pub fn subsetInto(
