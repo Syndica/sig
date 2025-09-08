@@ -145,7 +145,7 @@ pub const Manager = struct {
     pub fn manage(self: *Manager, allocator: Allocator) !void {
         tracy.frameMarkNamed("manager loop");
 
-        {
+        const largest_rooted_slot = blk: {
             const unrooted_accounts, var unrooted_accounts_lg =
                 self.db.unrooted_accounts.readWithLock();
             defer unrooted_accounts_lg.unlock();
@@ -158,20 +158,22 @@ pub const Manager = struct {
             //   we're waiting on the account cache lock.
             // * we eventually acquire the lock, but have already read a now-stale
             //   largest rooted slot value.
-            const root_slot = self.db.getLargestRootedSlot() orelse 0;
+            const rooted_slot = self.db.getLargestRootedSlot() orelse 0;
 
             // flush slots <= root slot
             // TODO: account for forks when consensus is implemented
             var unrooted_slot_iter = unrooted_accounts.keyIterator();
             while (unrooted_slot_iter.next()) |unrooted_slot| {
-                if (unrooted_slot.* <= root_slot) {
+                if (unrooted_slot.* <= rooted_slot) {
                     // NOTE: need to flush all references <= root_slot before we call clean
                     // or things break by trying to clean unrooted references
                     // NOTE: this might be too much in production, not sure
                     try self.flush_slots.append(allocator, unrooted_slot.*);
                 }
             }
-        }
+
+            break :blk rooted_slot;
+        };
 
         const must_flush_slots = self.flush_slots.items.len > 0;
         defer if (must_flush_slots) {
@@ -206,14 +208,14 @@ pub const Manager = struct {
             max_slots.flushed = @max(max_slots.flushed orelse 0, largest_flushed_slot);
         }
 
-        const latest_full_snapshot_slot = try self.tryGenerateSnapshots();
+        try self.tryGenerateSnapshots();
 
         if (must_flush_slots) {
             // clean the flushed slots account files
             const clean_result = try cleanAccountFiles(
                 allocator,
                 self.db,
-                latest_full_snapshot_slot,
+                largest_rooted_slot,
                 self.unclean_account_files.items,
                 &self.shrink_account_files,
                 &self.delete_account_files,
@@ -238,7 +240,7 @@ pub const Manager = struct {
     }
 
     /// Returns the latest full snapshot slot by the end of the attempt.
-    pub fn tryGenerateSnapshots(self: *Manager) !Slot {
+    pub fn tryGenerateSnapshots(self: *Manager) !void {
         const largest_flushed_slot = self.db.max_slots.readCopy().flushed orelse 0;
 
         const latest_full_snapshot_slot_before: Slot = blk: {
@@ -249,9 +251,7 @@ pub const Manager = struct {
             break :blk latest_info.full.slot;
         };
 
-        const snapshot_state = if (self.snapshot_state) |*ptr| ptr else {
-            return latest_full_snapshot_slot_before;
-        };
+        const snapshot_state = if (self.snapshot_state) |*ptr| ptr else return;
 
         const slots_per_full_snapshot = snapshot_state.config.slots_per_full_snapshot;
         if (largest_flushed_slot - latest_full_snapshot_slot_before >= slots_per_full_snapshot) {
@@ -308,8 +308,6 @@ pub const Manager = struct {
                 },
             );
         }
-
-        return latest_full_snapshot_slot;
     }
 };
 
