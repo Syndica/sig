@@ -463,7 +463,7 @@ test checkStatusCache {
         ),
     );
 
-    try ancestors.ancestors.put(allocator, 0, {});
+    try ancestors.addSlot(0);
     try status_cache.insert(allocator, prng.random(), &recent_blockhash, &msg_hash.data, 0);
 
     try std.testing.expectEqual(

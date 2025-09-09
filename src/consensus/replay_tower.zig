@@ -1554,7 +1554,8 @@ fn greatestCommonAncestor(
 
     if (superset.ancestors.count() == 0 or subset.ancestors.count() == 0) return null;
 
-    for (superset.ancestors.keys()) |slot| {
+    var iter = superset.ancestors.iterator();
+    while (iter.next()) |slot| {
         if (!subset.containsSlot(slot)) continue;
         max_slot = if (max_slot) |current_max| @max(current_max, slot) else slot;
     }
@@ -1776,7 +1777,8 @@ pub fn collectVoteLockouts(
     const fork_stake: u64 = blk: {
         var bank_ancestors = ancestors.get(bank_slot) orelse break :blk 0;
         var max_parent: ?Slot = null;
-        for (bank_ancestors.ancestors.keys()) |slot| {
+        var iter = bank_ancestors.ancestors.iterator();
+        while (iter.next()) |slot| {
             if (max_parent == null or slot > max_parent.?) {
                 max_parent = slot;
             }
@@ -1827,7 +1829,8 @@ pub fn populateAncestorVotedStakes(
         if (ancestors.getPtr(vote_slot)) |slot_ancestors| {
             _ = try voted_stakes.getOrPutValue(allocator, vote_slot, 0);
 
-            for (slot_ancestors.ancestors.keys()) |slot| {
+            var iter = slot_ancestors.ancestors.iterator();
+            while (iter.next()) |slot| {
                 _ = try voted_stakes.getOrPutValue(allocator, slot, 0);
             }
         }
@@ -1846,7 +1849,8 @@ fn updateAncestorVotedStakes(
     if (ancestors.getPtr(voted_slot)) |vote_slot_ancestors| {
         const entry_vote_stake = try voted_stakes.getOrPutValue(allocator, voted_slot, 0);
         entry_vote_stake.value_ptr.* += voted_stake;
-        for (vote_slot_ancestors.ancestors.keys()) |ancestor_slot| {
+        var iter = vote_slot_ancestors.ancestors.iterator();
+        while (iter.next()) |ancestor_slot| {
             const entry_voted_stake = try voted_stakes.getOrPutValue(allocator, ancestor_slot, 0);
             entry_voted_stake.value_ptr.* += voted_stake;
         }
@@ -1929,7 +1933,7 @@ test "check_vote_threshold_forks" {
         var slot_parents: Ancestors = .EMPTY;
         errdefer slot_parents.deinit(allocator);
         for (0..i) |j| {
-            try slot_parents.addSlot(allocator, j);
+            try slot_parents.addSlot(j);
         }
         ancestors.putAssumeCapacity(i, slot_parents);
     }
@@ -2109,7 +2113,7 @@ test "collect vote lockouts root" {
         var slots: Ancestors = .EMPTY;
         errdefer slots.deinit(allocator);
         for (0..i) |j| {
-            try slots.addSlot(allocator, j);
+            try slots.addSlot(j);
         }
         try ancestors.put(allocator, i, slots);
     }
@@ -2221,7 +2225,7 @@ test "collect vote lockouts sums" {
     }
     const set0: Ancestors = .EMPTY;
     var set1: Ancestors = .EMPTY;
-    try set1.addSlot(allocator, 0);
+    try set1.addSlot(0);
     try ancestors.put(allocator, 0, set0);
     try ancestors.put(allocator, 1, set1);
 
@@ -2319,7 +2323,7 @@ test "is locked out empty" {
 
     var ancestors: Ancestors = .EMPTY;
     defer ancestors.deinit(std.testing.allocator);
-    try ancestors.addSlot(std.testing.allocator, 0);
+    try ancestors.addSlot(0);
 
     const result = try replay_tower.tower.isLockedOut(
         1,
@@ -2334,7 +2338,7 @@ test "is locked out root slot child pass" {
 
     var ancestors: Ancestors = .EMPTY;
     defer ancestors.deinit(std.testing.allocator);
-    try ancestors.addSlot(std.testing.allocator, 0);
+    try ancestors.addSlot(0);
 
     replay_tower.tower.vote_state.root_slot = 0;
 
@@ -2351,7 +2355,7 @@ test "is locked out root slot sibling fail" {
 
     var ancestors: Ancestors = .EMPTY;
     defer ancestors.deinit(std.testing.allocator);
-    try ancestors.addSlot(std.testing.allocator, 0);
+    try ancestors.addSlot(0);
 
     replay_tower.tower.vote_state.root_slot = 0;
 
@@ -2412,7 +2416,7 @@ test "is locked out double vote" {
 
     var ancestors: Ancestors = .EMPTY;
     defer ancestors.deinit(std.testing.allocator);
-    try ancestors.addSlot(std.testing.allocator, 0);
+    try ancestors.addSlot(0);
 
     for (0..2) |i| {
         _ = try replay_tower.recordBankVote(
@@ -2436,7 +2440,7 @@ test "is locked out child" {
 
     var ancestors: Ancestors = .EMPTY;
     defer ancestors.deinit(std.testing.allocator);
-    try ancestors.addSlot(std.testing.allocator, 0);
+    try ancestors.addSlot(0);
 
     _ = try replay_tower.recordBankVote(
         std.testing.allocator,
@@ -2458,7 +2462,7 @@ test "is locked out sibling" {
 
     var ancestors: Ancestors = .EMPTY;
     defer ancestors.deinit(std.testing.allocator);
-    try ancestors.addSlot(std.testing.allocator, 0);
+    try ancestors.addSlot(0);
 
     for (0..2) |i| {
         _ = try replay_tower.recordBankVote(
@@ -2482,7 +2486,7 @@ test "is locked out last vote expired" {
 
     var ancestors: Ancestors = .EMPTY;
     defer ancestors.deinit(std.testing.allocator);
-    try ancestors.addSlot(std.testing.allocator, 0);
+    try ancestors.addSlot(0);
 
     for (0..2) |i| {
         _ = try replay_tower.recordBankVote(
@@ -4138,7 +4142,7 @@ fn createAncestor(allocator: std.mem.Allocator, slots: []const Slot) !Ancestors 
     }
     var set: Ancestors = .EMPTY;
     errdefer set.deinit(allocator);
-    for (slots) |slot| try set.addSlot(allocator, slot);
+    for (slots) |slot| try set.addSlot(slot);
     return set;
 }
 
@@ -4496,11 +4500,12 @@ fn getAncestors(allocator: std.mem.Allocator, tree: Tree) !std.AutoArrayHashMapU
 
                         var child_ancestors: Ancestors = .EMPTY;
                         errdefer child_ancestors.deinit(allocator);
-                        try child_ancestors.addSlot(allocator, current);
+                        try child_ancestors.addSlot(current);
 
                         if (ancestors.getPtr(current)) |parent_ancestors| {
-                            for (parent_ancestors.ancestors.keys()) |item| {
-                                try child_ancestors.addSlot(allocator, item);
+                            var iter = parent_ancestors.ancestors.iterator();
+                            while (iter.next()) |item| {
+                                try child_ancestors.addSlot(item);
                             }
                         }
 
@@ -4556,8 +4561,9 @@ pub fn extendForkTreeAncestors(
             continue;
         };
 
-        for (extension_children.ancestors.keys()) |extension_child| {
-            try original_children.addSlot(allocator, extension_child);
+        var iter = extension_children.ancestors.iterator();
+        while (iter.next()) |extension_child| {
+            try original_children.addSlot(extension_child);
         }
     }
 }

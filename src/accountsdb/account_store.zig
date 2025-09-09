@@ -261,7 +261,7 @@ pub const ThreadSafeAccountMap = struct {
         const list = map.get(address) orelse return null;
         for (list.items) |slot_account| {
             const slot, const account = slot_account;
-            if (ancestors.ancestors.contains(slot)) {
+            if (ancestors.containsSlot(slot)) {
                 return if (account.lamports == 0) null else try toAccount(self.allocator, account);
             }
         }
@@ -436,7 +436,7 @@ test "AccountStore does not return 0-lamport accounts from accountsdb" {
 
     var ancestors = Ancestors{};
     defer ancestors.deinit(std.testing.allocator);
-    try ancestors.ancestors.put(std.testing.allocator, 0, {});
+    try ancestors.addSlot(0);
     const slot_reader = db.accountReader().forSlot(&ancestors);
 
     try std.testing.expectEqual(null, try slot_reader.get(zero_lamport_address));
@@ -459,7 +459,7 @@ test ThreadSafeAccountMap {
     defer ancestors1.deinit(allocator);
     const slot1: Slot = 1;
     const addr1: Pubkey = .initRandom(random);
-    try ancestors1.ancestors.put(allocator, slot1, {});
+    try ancestors1.addSlot(slot1);
 
     var expected_data: [128]u8 = undefined;
     random.bytes(&expected_data);
