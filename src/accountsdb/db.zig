@@ -2010,7 +2010,10 @@ pub const AccountsDB = struct {
                     .pubkeys = &.{pubkey},
                     .slot = slot,
                 },
-            }) catch return error.GeyserWriteError;
+            }) catch |e| {
+                self.logger.err().logf("{s}", .{@errorName(e)});
+                return error.GeyserWriteError;
+            };
         }
 
         {
@@ -2088,7 +2091,10 @@ pub const AccountsDB = struct {
             error.AttemptedZeroAlloc,
             error.CollapseFailed,
             error.InsertIndexFailed,
-            => return error.OutOfMemory,
+            => |e| {
+                self.logger.err().logf("expandSlotRefsAndInsert: {s}", .{@errorName(e)});
+                return error.OutOfMemory;
+            },
         };
     }
 
