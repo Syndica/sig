@@ -21,6 +21,15 @@ pub const Proof = struct {
     D: Ristretto255,
     z: Scalar,
 
+    const contract: Transcript.Contract = &.{
+        .{ .label = "Y_P", .type = .validate_point },
+        .{ .label = "Y_D", .type = .point },
+        .{ .label = "c", .type = .challenge },
+
+        .{ .label = "z", .type = .scalar },
+        .{ .label = "w", .type = .challenge }, // w used for batch verification
+    };
+
     pub fn init(
         kp: *const ElGamalKeypair,
         ciphertext: *const ElGamalCiphertext,
@@ -40,14 +49,19 @@ pub const Proof = struct {
         const Y_P = P.mul(y.toBytes()) catch unreachable;
         const Y_D: Ristretto255 = .{ .p = weak_mul.mul(D.p, y.toBytes()) };
 
-        transcript.appendPoint("Y_P", Y_P);
-        transcript.appendPoint("Y_D", Y_D);
+        comptime var session = Transcript.getSession(contract);
+        defer session.finish();
 
-        const c = transcript.challengeScalar("c");
-        _ = transcript.challengeScalar("w");
+        transcript.appendNoValidate(&session, "Y_P", Y_P);
+        transcript.append(&session, .point, "Y_D", Y_D);
+
+        const c = transcript.challengeScalar(&session, "c");
 
         // compute the masked secret key
         const z = s.mul(c).add(y);
+
+        transcript.append(&session, .scalar, "z", z);
+        _ = transcript.challengeScalar(&session, "w");
 
         return .{
             .P = Y_P,
@@ -69,14 +83,16 @@ pub const Proof = struct {
         const D = ciphertext.handle.point;
         const Y_P = self.P;
 
-        // record Y in transcript and receieve challenge scalars
-        try transcript.validateAndAppendPoint("Y_P", self.P);
-        transcript.appendPoint("Y_D", self.D);
+        comptime var session = Transcript.getSession(contract);
+        defer session.finish();
 
-        const c = transcript.challengeScalar("c");
+        try transcript.append(&session, .validate_point, "Y_P", self.P);
+        transcript.append(&session, .point, "Y_D", self.D);
 
-        transcript.appendScalar("z", self.z);
-        const w = transcript.challengeScalar("w"); // w used for batch verification
+        const c = transcript.challengeScalar(&session, "c");
+
+        transcript.append(&session, .scalar, "z", self.z);
+        const w = transcript.challengeScalar(&session, "w");
 
         const w_negated = Edwards25519.scalar.neg(w.toBytes());
         const Y_D = self.D;
@@ -90,10 +106,8 @@ pub const Proof = struct {
         // ----------------------- MSM
         //     Y_P
 
-        // we need to use weak_mul since the protocol itself relies
-        // on producing identity points in order to indicate that the proof was valid.
         // zig fmt: off
-        const check =  weak_mul.mulMulti(5, .{
+        const check: Ristretto255 = .{ .p = weak_mul.mulMulti(5, .{
             pedersen.H.p,
             P.p,
             C.p,
@@ -105,10 +119,10 @@ pub const Proof = struct {
             Scalar.fromBytes(w_negated).mul(c).toBytes(), // -w * c
             w.mul(self.z).toBytes(),                      //  w * z
             w_negated,                                    // -w
-        });
+        })};
         // zig fmt: on
 
-        if (!Y_P.equivalent(.{ .p = check })) {
+        if (!Y_P.equivalent(check)) {
             return error.AlgebraicRelation;
         }
     }
@@ -166,10 +180,10 @@ pub const Data = struct {
         }
 
         fn newTranscript(self: Context) Transcript {
-            var transcript = Transcript.init(.@"zero-ciphertext-instruction");
-            transcript.appendPubkey("pubkey", self.pubkey);
-            transcript.appendCiphertext("ciphertext", self.ciphertext);
-            return transcript;
+            return .init(.@"zero-ciphertext-instruction", &.{
+                .{ .label = "pubkey", .message = .{ .pubkey = self.pubkey } },
+                .{ .label = "ciphertext", .message = .{ .ciphertext = self.ciphertext } },
+            });
         }
     };
 
@@ -273,7 +287,7 @@ test "edge case" {
         var verifier_transcript = Transcript.initTest("Test");
 
         const zeroed_commitment: pedersen.Commitment = .{
-            .point = try Ristretto255.fromBytes(.{0} ** 32),
+            .point = try Ristretto255.fromBytes(@splat(0)),
         };
         const opening = pedersen.Opening.random();
         const handle = pedersen.DecryptHandle.init(&kp.public, &opening);
@@ -299,7 +313,7 @@ test "edge case" {
         const commitment, _ = pedersen.initValue(u64, 0);
         const ciphertext: ElGamalCiphertext = .{
             .commitment = commitment,
-            .handle = .{ .point = try Ristretto255.fromBytes(.{0} ** 32) },
+            .handle = .{ .point = try Ristretto255.fromBytes(@splat(0)) },
         };
 
         const proof = Proof.init(&kp, &ciphertext, &prover_transcript);
@@ -314,7 +328,7 @@ test "edge case" {
         var prover_transcript = Transcript.initTest("Test");
         var verifier_transcript = Transcript.initTest("Test");
 
-        const public: ElGamalPubkey = .{ .point = try Ristretto255.fromBytes(.{0} ** 32) };
+        const public: ElGamalPubkey = .{ .point = try Ristretto255.fromBytes(@splat(0)) };
         const ciphertext = el_gamal.encrypt(u64, 0, &public);
 
         const proof = Proof.init(&kp, &ciphertext, &prover_transcript);
