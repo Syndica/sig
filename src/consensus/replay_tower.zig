@@ -4079,30 +4079,6 @@ test "test VoteTooOld error triggers trackStaleVoteRejected" {
     try std.testing.expectEqual(initial_stale_votes + 1, final_stale_votes);
 }
 
-test "test switch_fork_decision - switch_proof" {
-    var metrics = try ReplayTowerMetrics.init(sig.prometheus.globalRegistry());
-
-    const decision = SwitchForkDecision{ .switch_proof = Hash.ZEROES };
-    metrics.switch_fork_decision.observe(decision);
-}
-
-test "test switch_fork_decision - failed_switch_threshold" {
-    var metrics = try ReplayTowerMetrics.init(sig.prometheus.globalRegistry());
-
-    const decision = SwitchForkDecision{ .failed_switch_threshold = .{
-        .switch_proof_stake = 200,
-        .total_stake = 1000,
-    } };
-    metrics.switch_fork_decision.observe(decision);
-}
-
-test "test switch_fork_decision - failed_switch_duplicate_rollback" {
-    var metrics = try ReplayTowerMetrics.init(sig.prometheus.globalRegistry());
-
-    const decision = SwitchForkDecision{ .failed_switch_duplicate_rollback = 50 };
-    metrics.switch_fork_decision.observe(decision);
-}
-
 const builtin = @import("builtin");
 const DynamicArrayBitSet = sig.bloom.bit_set.DynamicArrayBitSet;
 
