@@ -111,8 +111,8 @@ pub fn RingBitSet(len: usize) type {
         }
 
         pub fn unset(self: *RingBitSet(len), index: usize) void {
-            if (index < self.bottom or index > self.bottom + len) return;
-            return self.inner.set(index);
+            if (index < self.bottom or index >= self.bottom + len) return;
+            return self.inner.unset(index);
         }
 
         pub fn count(self: *const RingBitSet(len)) usize {
