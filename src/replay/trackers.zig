@@ -337,10 +337,11 @@ pub const SlotTree = struct {
         }
 
         // we chose the new root. delete all prior slots and set the new root.
-        var node = root_candidate;
-        while (node.parent) |parent| : (node = parent) {
-            std.debug.assert(parent.next.items.len == 1); // older forks were pruned
-            parent.destroy(allocator);
+        var maybe_parent = root_candidate.parent;
+        while (maybe_parent) |node_to_destroy| {
+            std.debug.assert(node_to_destroy.next.items.len == 1); // older forks were pruned
+            maybe_parent = node_to_destroy.parent;
+            node_to_destroy.destroy(allocator);
         }
         self.root = root_candidate;
         self.root.parent = null;
@@ -502,7 +503,7 @@ test "SlotTree: if no forks, root follows 32 behind latest" {
         try expectSlotTree(&tree, 0, &.{slot});
     }
 
-    for (33..100) |slot| {
+    for (33..10_000) |slot| {
         try tree.record(allocator, slot, slot -| 1);
         try expectSlotTree(&tree, slot -| 33, &.{slot});
         try std.testing.expectEqual(slot -| 32, tree.reRoot(allocator));
