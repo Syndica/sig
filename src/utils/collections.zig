@@ -1115,18 +1115,15 @@ pub fn RingBitSet(len: usize) type {
 
         pub fn set(self: *RingBitSet(len), index: usize) error{Underflow}!void {
             if (index < self.bottom) return error.Underflow;
-            if (index - self.bottom > len) {
-                const wipe_start = self.bottom;
+            if (1 + index - self.bottom > len) {
+                const wipe_start = self.bottom % len;
                 self.bottom = 1 + index - len;
-                const wipe_end = self.bottom;
-                if (wipe_start % len > wipe_end % len) {
-                    self.inner.setRangeValue(.{ .start = wipe_start % len, .end = len }, false);
-                    self.inner.setRangeValue(.{ .start = 0, .end = wipe_end % len }, false);
+                const wipe_end = self.bottom % len;
+                if (wipe_start > wipe_end) {
+                    self.inner.setRangeValue(.{ .start = wipe_start, .end = len }, false);
+                    self.inner.setRangeValue(.{ .start = 0, .end = wipe_end }, false);
                 } else {
-                    self.inner.setRangeValue(
-                        .{ .start = wipe_start % len, .end = wipe_end % len },
-                        false,
-                    );
+                    self.inner.setRangeValue(.{ .start = wipe_start, .end = wipe_end }, false);
                 }
             }
             self.inner.set(index % len);
@@ -1534,4 +1531,20 @@ test "checkAllAllocationFailures in cloneMapAndValues" {
     };
 
     try std.testing.checkAllAllocationFailures(std.testing.allocator, Clonable.runTest, .{});
+}
+
+test RingBitSet {
+    var set = RingBitSet(10).empty;
+
+    for (0..100) |i| {
+        try set.set(i);
+        try expect(set.isSet(i));
+        try expectEqual(if (i > 9) 10 else i + 1, set.count());
+        const first_set = i -| 9;
+        for (0..i) |j| {
+            const is_set = set.isSet(j);
+            const expected = if (j >= first_set) is_set else !is_set;
+            try expect(expected);
+        }
+    }
 }
