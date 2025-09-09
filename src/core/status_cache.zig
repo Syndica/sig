@@ -216,35 +216,6 @@ pub const StatusCache = struct {
     }
 };
 
-test "status cache (de)serialize Ancestors" {
-    const allocator = std.testing.allocator;
-
-    var ancestors = Ancestors.EMPTY;
-    try ancestors.addSlot(1);
-    try ancestors.addSlot(2);
-    try ancestors.addSlot(3);
-    try ancestors.addSlot(4);
-
-    const serialized = try bincode.writeAlloc(allocator, ancestors, .{});
-
-    defer allocator.free(serialized);
-
-    const deserialized = try bincode.readFromSlice(
-        allocator,
-        HashMap(Slot, usize),
-        serialized,
-        .{},
-    );
-    defer bincode.free(allocator, deserialized);
-
-    try std.testing.expectEqual(ancestors.ancestors.count(), deserialized.count());
-    var iter = ancestors.iterator();
-    while (iter.next()) |slot| {
-        try std.testing.expect(deserialized.contains(slot));
-    }
-    try std.testing.expectEqualSlices(usize, &.{ 0, 0, 0, 0 }, deserialized.values());
-}
-
 test "status cache empty" {
     const signature = sig.core.Signature.ZEROES;
     const block_hash = Hash.ZEROES;

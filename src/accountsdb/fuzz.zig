@@ -253,8 +253,8 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
         try ancestors.addSlot(top_slot);
 
         const current_slot = if (!non_sequential_slots) top_slot else slot: {
-            var ancestor_slots = try allocator.alloc(Slot, ancestors.ancestors.count());
-            var iter = ancestors.ancestors.iterator();
+            var ancestor_slots = try allocator.alloc(Slot, ancestors.count());
+            var iter = ancestors.iterator();
             var i: usize = 0;
             while (iter.next()) |slot| : (i += 1) ancestor_slots[i] = slot;
             std.mem.sort(Slot, ancestor_slots, {}, std.sort.asc(Slot));

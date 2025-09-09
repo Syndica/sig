@@ -1223,9 +1223,10 @@ fn validator(
             epoch_stakes,
         );
         errdefer current_epoch_constants.deinit(allocator);
+        const ancestors = try sig.core.Ancestors.fromMap(&bank_fields.ancestors);
         const feature_set = try sig.replay.service.getActiveFeatures(
             allocator,
-            loaded_snapshot.accounts_db.accountReader().forSlot(&bank_fields.ancestors),
+            loaded_snapshot.accounts_db.accountReader().forSlot(&ancestors),
             bank_fields.slot,
         );
         const root_slot_constants = try sig.core.SlotConstants.fromBankFields(

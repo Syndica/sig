@@ -416,7 +416,7 @@ pub const ReplayTower = struct {
             return false;
         }
 
-        if (last_vote_ancestors.ancestors.count() == 0) {
+        if (last_vote_ancestors.count() == 0) {
             // If `last_vote_ancestors` is empty, this means we must have a last vote that is stray. If the `last_voted_slot`
             // is stray, it must be descended from some earlier root than the latest root (the anchor at startup).
             // The above check also guarentees that the candidate slot is not a descendant of this stray last vote.
@@ -1777,7 +1777,7 @@ pub fn collectVoteLockouts(
     const fork_stake: u64 = blk: {
         var bank_ancestors = ancestors.get(bank_slot) orelse break :blk 0;
         var max_parent: ?Slot = null;
-        var iter = bank_ancestors.ancestors.iterator();
+        var iter = bank_ancestors.iterator();
         while (iter.next()) |slot| {
             if (max_parent == null or slot > max_parent.?) {
                 max_parent = slot;
@@ -1829,7 +1829,7 @@ pub fn populateAncestorVotedStakes(
         if (ancestors.getPtr(vote_slot)) |slot_ancestors| {
             _ = try voted_stakes.getOrPutValue(allocator, vote_slot, 0);
 
-            var iter = slot_ancestors.ancestors.iterator();
+            var iter = slot_ancestors.iterator();
             while (iter.next()) |slot| {
                 _ = try voted_stakes.getOrPutValue(allocator, slot, 0);
             }
@@ -1849,7 +1849,7 @@ fn updateAncestorVotedStakes(
     if (ancestors.getPtr(voted_slot)) |vote_slot_ancestors| {
         const entry_vote_stake = try voted_stakes.getOrPutValue(allocator, voted_slot, 0);
         entry_vote_stake.value_ptr.* += voted_stake;
-        var iter = vote_slot_ancestors.ancestors.iterator();
+        var iter = vote_slot_ancestors.iterator();
         while (iter.next()) |ancestor_slot| {
             const entry_voted_stake = try voted_stakes.getOrPutValue(allocator, ancestor_slot, 0);
             entry_voted_stake.value_ptr.* += voted_stake;
@@ -4457,7 +4457,7 @@ fn getAncestors(allocator: std.mem.Allocator, tree: Tree) !std.AutoArrayHashMapU
                         try child_ancestors.addSlot(current);
 
                         if (ancestors.getPtr(current)) |parent_ancestors| {
-                            var iter = parent_ancestors.ancestors.iterator();
+                            var iter = parent_ancestors.iterator();
                             while (iter.next()) |item| {
                                 try child_ancestors.addSlot(item);
                             }

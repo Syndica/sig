@@ -107,7 +107,8 @@ pub const SlotConstants = struct {
         allocator: Allocator,
         bank_fields: *const BankFields,
         feature_set: FeatureSet,
-    ) Allocator.Error!SlotConstants {
+    ) !SlotConstants {
+        const ancestors = try sig.core.Ancestors.fromMap(&bank_fields.ancestors);
         return .{
             .parent_slot = bank_fields.parent_slot,
             .parent_hash = bank_fields.parent_hash,
@@ -117,7 +118,7 @@ pub const SlotConstants = struct {
             .max_tick_height = bank_fields.max_tick_height,
             .fee_rate_governor = bank_fields.fee_rate_governor,
             .epoch_reward_status = .inactive,
-            .ancestors = bank_fields.ancestors,
+            .ancestors = ancestors,
             .feature_set = feature_set,
             .reserved_accounts = try reserved_accounts.initForSlot(
                 allocator,
@@ -377,7 +378,7 @@ pub const EpochConstants = struct {
 /// Analogous to [DeserializableVersionedBank](https://github.com/anza-xyz/agave/blob/9c899a72414993dc005f11afb5df10752b10810b/runtime/src/serde_snapshot.rs#L134).
 pub const BankFields = struct {
     blockhash_queue: BlockhashQueue,
-    ancestors: Ancestors,
+    ancestors: std.AutoArrayHashMapUnmanaged(Slot, usize),
     hash: Hash,
     parent_hash: Hash,
     parent_slot: Slot,
@@ -412,19 +413,16 @@ pub const BankFields = struct {
     epoch_stakes: EpochStakesMap,
     is_delta: bool,
 
-    pub fn deinit(
-        bank_fields: *const BankFields,
-        allocator: std.mem.Allocator,
-    ) void {
-        bank_fields.blockhash_queue.deinit(allocator);
+    pub fn deinit(self: *const BankFields, allocator: std.mem.Allocator) void {
+        var ancestors = self.ancestors;
+        ancestors.deinit(allocator);
 
-        bank_fields.hard_forks.deinit(allocator);
+        self.blockhash_queue.deinit(allocator);
+        self.hard_forks.deinit(allocator);
+        self.stakes.deinit(allocator);
+        self.unused_accounts.deinit(allocator);
 
-        bank_fields.stakes.deinit(allocator);
-
-        bank_fields.unused_accounts.deinit(allocator);
-
-        deinitMapAndValues(allocator, bank_fields.epoch_stakes);
+        deinitMapAndValues(allocator, self.epoch_stakes);
     }
 
     pub fn clone(
@@ -433,6 +431,9 @@ pub const BankFields = struct {
     ) std.mem.Allocator.Error!BankFields {
         const blockhash_queue = try bank_fields.blockhash_queue.clone(allocator);
         errdefer blockhash_queue.deinit(allocator);
+
+        var ancestors = try bank_fields.ancestors.clone(allocator);
+        errdefer ancestors.deinit(allocator);
 
         const hard_forks = try bank_fields.hard_forks.clone(allocator);
         errdefer hard_forks.deinit(allocator);
@@ -448,6 +449,7 @@ pub const BankFields = struct {
 
         var cloned = bank_fields.*;
         cloned.blockhash_queue = blockhash_queue;
+        cloned.ancestors = ancestors;
         cloned.hard_forks = hard_forks;
         cloned.stakes = stakes;
         cloned.unused_accounts = unused_accounts;
@@ -507,7 +509,8 @@ pub const BankFields = struct {
         var blockhash_queue = try BlockhashQueue.initRandom(allocator, random, max_list_entries);
         errdefer blockhash_queue.deinit(allocator);
 
-        const ancestors = try ancestorsRandom(random, max_list_entries);
+        var ancestors = try ancestorsRandom(allocator, random, max_list_entries);
+        errdefer ancestors.deinit(allocator);
 
         const hard_forks = try HardForks.initRandom(random, allocator, max_list_entries);
         errdefer hard_forks.deinit(allocator);
@@ -565,16 +568,17 @@ pub const BankFields = struct {
 };
 
 pub fn ancestorsRandom(
+    allocator: Allocator,
     random: std.Random,
     max_list_entries: usize,
-) !Ancestors {
-    var ancestors = Ancestors.EMPTY;
+) !std.AutoArrayHashMapUnmanaged(Slot, usize) {
+    var ancestors = std.AutoArrayHashMapUnmanaged(Slot, usize){};
 
     const lower_bound = random.int(Slot);
     const upper_bound = lower_bound + Ancestors.MAX_SLOT_RANGE;
 
     for (0..@min(Ancestors.MAX_SLOT_RANGE, random.uintAtMost(usize, max_list_entries))) |_| {
-        try ancestors.addSlot(random.intRangeLessThan(Slot, lower_bound, upper_bound));
+        try ancestors.put(allocator, random.intRangeLessThan(Slot, lower_bound, upper_bound), 0);
     }
 
     return ancestors;
