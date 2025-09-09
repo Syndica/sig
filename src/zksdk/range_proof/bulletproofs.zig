@@ -693,12 +693,14 @@ pub fn Data(bit_size: comptime_int) type {
                 return @bitCast(self);
             }
 
+            // sig fmt: off
             fn newTranscript(self: Context) Transcript {
                 return .init(.@"batched-range-proof-instruction", &.{
                     .{ .label = "commitments", .message = .{ .bytes = std.mem.sliceAsBytes(&self.commitments) } },
                     .{ .label = "bit-lengths", .message = .{ .bytes = std.mem.sliceAsBytes(&self.bit_lengths) } },
                 });
             }
+            // sig fmt: on
         };
     };
 }

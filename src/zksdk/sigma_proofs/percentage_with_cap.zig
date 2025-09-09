@@ -453,14 +453,16 @@ pub const Data = struct {
                 self.claimed_commitment.toBytes() ++ @as([8]u8, @bitCast(self.max_value));
         }
 
+        // zig fmt: off
         fn newTranscript(self: Context) Transcript {
             return .init(.@"percentage-with-cap-instruction", &.{
                 .{ .label = "percentage-commitment", .message = .{ .commitment = self.percentage_commitment } },
-                .{ .label = "delta-commitment", .message = .{ .commitment = self.delta_commitment } },
-                .{ .label = "claimed-commitment", .message = .{ .commitment = self.claimed_commitment } },
-                .{ .label = "max-value", .message = .{ .u64 = self.max_value } },
+                .{ .label = "delta-commitment",      .message = .{ .commitment = self.delta_commitment } },
+                .{ .label = "claimed-commitment",    .message = .{ .commitment = self.claimed_commitment } },
+                .{ .label = "max-value",             .message = .{ .u64 = self.max_value } },
             });
         }
+        // zig fmt: on
     };
 
     pub fn init(
