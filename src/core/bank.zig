@@ -131,7 +131,7 @@ pub const SlotConstants = struct {
         allocator: Allocator,
         fee_rate_governor: sig.core.genesis_config.FeeRateGovernor,
     ) Allocator.Error!SlotConstants {
-        var ancestors = Ancestors{};
+        var ancestors = Ancestors.EMPTY;
         ancestors.addSlot(0) catch unreachable;
         return .{
             .parent_slot = 0,
@@ -568,7 +568,7 @@ pub fn ancestorsRandom(
     random: std.Random,
     max_list_entries: usize,
 ) !Ancestors {
-    var ancestors = Ancestors{};
+    var ancestors = Ancestors.EMPTY;
 
     const lower_bound = random.int(Slot);
     const upper_bound = lower_bound + Ancestors.MAX_SLOT_RANGE;

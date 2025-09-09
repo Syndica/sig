@@ -186,7 +186,7 @@ fn executeTxnContext(
     var parent_hash: Hash = Hash.ZEROES;
     var epoch_schedule: EpochSchedule = undefined;
 
-    var ancestors: Ancestors = .{};
+    var ancestors: Ancestors = .EMPTY;
 
     var compute_budget = ComputeBudget.DEFAULT;
     compute_budget.compute_unit_limit = compute_budget.compute_unit_limit;

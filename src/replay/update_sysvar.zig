@@ -614,7 +614,7 @@ test fillMissingSysvarCacheEntries {
 
     // Set slot and ancestors
     const slot = 10;
-    var ancestors = Ancestors{};
+    var ancestors = Ancestors.EMPTY;
     try ancestors.addSlot(slot);
 
     // Create a sysvar cache with all sysvars randomly initialized.
@@ -838,7 +838,7 @@ test "update all sysvars" {
     var capitalization = Atomic(u64).init(0);
     var slot: Slot = 10;
     const rent = Rent.DEFAULT;
-    var ancestors = Ancestors{};
+    var ancestors = Ancestors.EMPTY;
     try ancestors.addSlot(slot);
 
     // Create and insert sysvar defaults

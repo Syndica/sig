@@ -549,7 +549,7 @@ test getLookupTable {
     var map = sig.accounts_db.ThreadSafeAccountMap.init(allocator);
     defer map.deinit();
 
-    var ancestors = sig.core.Ancestors{};
+    var ancestors = sig.core.Ancestors.EMPTY;
     try ancestors.addSlot(0);
 
     const account_reader = map.accountReader().forSlot(&ancestors);

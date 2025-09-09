@@ -3623,7 +3623,7 @@ test "write and read an account (write single + read with ancestors)" {
     // assume we've progessed past the need for ancestors
     {
         accounts_db.largest_flushed_slot.store(10_000, .monotonic);
-        var account = (try accounts_db.getAccountWithAncestors(&pubkey, &.{})).?;
+        var account = (try accounts_db.getAccountWithAncestors(&pubkey, &.EMPTY)).?;
         accounts_db.largest_flushed_slot.store(0, .monotonic);
         defer account.deinit(allocator);
         try std.testing.expect(test_account.equals(&account));
@@ -3631,7 +3631,7 @@ test "write and read an account (write single + read with ancestors)" {
 
     // slot is in ancestors
     {
-        var ancestors = sig.core.Ancestors{};
+        var ancestors = sig.core.Ancestors.EMPTY;
         try ancestors.addSlot(5083);
 
         var account = (try accounts_db.getAccountWithAncestors(&pubkey, &ancestors)).?;
@@ -3640,7 +3640,7 @@ test "write and read an account (write single + read with ancestors)" {
     }
 
     // slot is not in ancestors
-    try std.testing.expectEqual(null, accounts_db.getAccountWithAncestors(&pubkey, &.{}));
+    try std.testing.expectEqual(null, accounts_db.getAccountWithAncestors(&pubkey, &.EMPTY));
 
     // write account to the same pubkey in the next slot (!)
     {
@@ -3666,7 +3666,7 @@ test "write and read an account (write single + read with ancestors)" {
 
         // prev slot, get prev account
         {
-            var ancestors = sig.core.Ancestors{};
+            var ancestors = sig.core.Ancestors.EMPTY;
             try ancestors.addSlot(5083);
 
             var account = (try accounts_db.getAccountWithAncestors(&pubkey, &ancestors)).?;
@@ -3676,7 +3676,7 @@ test "write and read an account (write single + read with ancestors)" {
 
         // new slot, get new account
         {
-            var ancestors = sig.core.Ancestors{};
+            var ancestors = sig.core.Ancestors.EMPTY;
             try ancestors.addSlot(5084);
 
             var account = (try accounts_db.getAccountWithAncestors(&pubkey, &ancestors)).?;
@@ -4580,7 +4580,7 @@ test "insert multiple accounts on same slot" {
     const slot: Slot = 10;
 
     // Create ancestors with initial slot
-    var ancestors = Ancestors{};
+    var ancestors = Ancestors.EMPTY;
     try ancestors.addSlot(slot);
 
     // Insert 50 random accounts on current slot and reload them immediately
@@ -4660,7 +4660,7 @@ test "insert multiple accounts on multiple slots" {
     for (0..50) |i| {
         const slot = slots[random.uintLessThan(u64, slots.len)];
 
-        var ancestors = Ancestors{};
+        var ancestors = Ancestors.EMPTY;
         try ancestors.addSlot(slot);
 
         const pubkey = Pubkey.initRandom(random);
@@ -4702,7 +4702,7 @@ test "insert account on multiple slots" {
         for (0..num_slots_to_insert) |j| {
             const slot = slots[random.uintLessThan(u64, slots.len)];
 
-            var ancestors = Ancestors{};
+            var ancestors = Ancestors.EMPTY;
             try ancestors.addSlot(slot);
 
             errdefer std.log.err(
@@ -4748,7 +4748,7 @@ test "missing ancestor returns null" {
     defer allocator.free(account.data);
     try accounts_db.putAccount(slot, pubkey, account);
 
-    var ancestors = Ancestors{};
+    var ancestors = Ancestors.EMPTY;
     try std.testing.expectEqual(null, try accounts_db.getAccountWithAncestors(&pubkey, &ancestors));
 }
 
@@ -4764,7 +4764,7 @@ test "overwrite account in same slot" {
     const slot: Slot = 15;
     const pubkey = Pubkey.initRandom(random);
 
-    var ancestors = Ancestors{};
+    var ancestors = Ancestors.EMPTY;
     try ancestors.addSlot(slot);
 
     const first = try createRandomAccount(allocator, random);
@@ -4833,7 +4833,7 @@ test "insert many duplicate individual accounts, get latest with ancestors" {
     for (pubkeys, expected_latest) |pubkey, maybe_expected| {
         const expected = maybe_expected orelse return error.ExpectedMissing;
 
-        var ancestors = Ancestors{};
+        var ancestors = Ancestors.EMPTY;
         try ancestors.addSlot(expected.slot);
 
         const maybe_actual = try accounts_db.getAccountWithAncestors(&pubkey, &ancestors);

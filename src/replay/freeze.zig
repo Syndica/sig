@@ -365,7 +365,7 @@ pub fn deltaLtHash(
 }
 
 test "deltaLtHash is identity for 0 accounts" {
-    try std.testing.expectEqual(LtHash.IDENTITY, try deltaLtHash(.noop, 0, &Ancestors{}));
+    try std.testing.expectEqual(LtHash.IDENTITY, try deltaLtHash(.noop, 0, &Ancestors.EMPTY));
 }
 
 test "deltaMerkleHash for 0 accounts" {
@@ -568,7 +568,7 @@ test "delta hashes with many accounts" {
     const expected_merkle_hash =
         Hash.parseRuntime("5tpzYxp8ghAETjXaXnZvxZov11iNEvSbDZXNAMoJX6ov") catch unreachable;
 
-    var parent_ancestors = Ancestors{};
+    var parent_ancestors = Ancestors.EMPTY;
     try parent_ancestors.addSlot(0);
     try parent_ancestors.addSlot(1);
 

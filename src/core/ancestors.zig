@@ -7,7 +7,7 @@ const bincode = sig.bincode;
 const Slot = sig.core.Slot;
 
 pub const Ancestors = struct {
-    ancestors: RingBitSet(MAX_SLOT_RANGE) = .empty,
+    ancestors: RingBitSet(MAX_SLOT_RANGE),
 
     pub const EMPTY: Ancestors = .{ .ancestors = .empty };
 

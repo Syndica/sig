@@ -256,7 +256,7 @@ test "status cache empty" {
         status_cache.getStatus(
             &signature.data,
             &block_hash,
-            &Ancestors{},
+            &Ancestors.EMPTY,
         ),
     );
 }
@@ -291,7 +291,7 @@ test "status cache find without ancestor fork" {
     const signature = sig.core.Signature.ZEROES;
     const blockhash = Hash.ZEROES;
 
-    var ancestors: Ancestors = .{};
+    var ancestors: Ancestors = .EMPTY;
 
     var status_cache: StatusCache = .DEFAULT;
     defer status_cache.deinit(allocator);
@@ -312,7 +312,7 @@ test "status cache find with root ancestor fork" {
     const signature = sig.core.Signature.ZEROES;
     const blockhash = Hash.ZEROES;
 
-    var ancestors: Ancestors = .{};
+    var ancestors: Ancestors = .EMPTY;
 
     var status_cache: StatusCache = .DEFAULT;
     defer status_cache.deinit(allocator);
@@ -358,7 +358,7 @@ test "status cache root expires" {
     const signature = sig.core.Signature.ZEROES;
     const blockhash = Hash.ZEROES;
 
-    var ancestors: Ancestors = .{};
+    var ancestors: Ancestors = .EMPTY;
 
     var status_cache: StatusCache = .DEFAULT;
     defer status_cache.deinit(allocator);

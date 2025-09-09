@@ -787,7 +787,7 @@ pub const TestState = struct {
         errdefer blockhash_queue.deinit(allocator);
         try blockhash_queue.insertGenesisHash(allocator, .ZEROES, 1);
 
-        var ancestors = Ancestors{};
+        var ancestors = Ancestors.EMPTY;
         try ancestors.addSlot(0);
 
         const replay_votes_channel: *sig.sync.Channel(ParsedVote) = try .create(allocator);
