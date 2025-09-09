@@ -102,7 +102,10 @@ pub fn RingBitSet(len: usize) type {
                     self.inner.setRangeValue(.{ .start = wipe_start % len, .end = len }, false);
                     self.inner.setRangeValue(.{ .start = 0, .end = wipe_end % len }, false);
                 } else {
-                    self.inner.setRangeValue(.{ .start = wipe_start % len, .end = wipe_end % len }, false);
+                    self.inner.setRangeValue(
+                        .{ .start = wipe_start % len, .end = wipe_end % len },
+                        false,
+                    );
                 }
             }
             self.inner.set(index % len);
