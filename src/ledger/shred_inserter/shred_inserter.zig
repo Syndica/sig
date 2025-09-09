@@ -905,6 +905,7 @@ pub const ShredInserter = struct {
             break :blk current_index;
         } else slot_meta.consecutive_received_from_0;
 
+        std.debug.print("insertDataShred {{slot:{} index:{}}}\n", .{slot, index});
         try write_batch.put(schema.data_shred, .{ slot, index }, shred.payload);
         try data_index.put(index);
 

@@ -129,3 +129,76 @@ test "UnifiedLedger doesn't leak" {
     ledger.join();
     try std.testing.expect(timer.read().lt(.fromSecs(1)));
 }
+
+test "UnifiedLedger.partial" {
+    const std = UnifiedLedger.std;
+    const sig = UnifiedLedger.sig;
+
+    const allocator = std.testing.allocator;
+    var registry = sig.prometheus.Registry(.{}).init(allocator);
+    defer registry.deinit();
+
+    const path = "./validator/ledger";
+    const logger: sig.trace.Logger("ledger") = .FOR_TESTS;
+    const metrics_registry = &registry;
+
+    const ledger_db = try allocator.create(LedgerDB);
+    defer allocator.destroy(ledger_db);
+    ledger_db.* = try LedgerDB.open(allocator, .from(logger), path);
+    defer ledger_db.deinit();
+
+    const lowest_cleanup_slot = try allocator.create(sig.sync.RwMux(sig.core.Slot));
+    lowest_cleanup_slot.* = sig.sync.RwMux(sig.core.Slot).init(0);
+    defer allocator.destroy(lowest_cleanup_slot);
+
+    const max_root = try allocator.create(std.atomic.Value(sig.core.Slot));
+    max_root.* = std.atomic.Value(sig.core.Slot).init(0);
+    defer allocator.destroy(max_root);
+
+    const ledger_reader = try allocator.create(LedgerReader);
+    defer allocator.destroy(ledger_reader);
+    ledger_reader.* = try LedgerReader.init(
+        allocator,
+        .from(logger),
+        ledger_db.*,
+        metrics_registry,
+        lowest_cleanup_slot,
+        max_root,
+    );
+
+    const ledger_result_writer = try allocator.create(LedgerResultWriter);
+    defer allocator.destroy(ledger_result_writer);
+    ledger_result_writer.* = try LedgerResultWriter.init(
+        allocator,
+        .from(logger),
+        ledger_db.*,
+        metrics_registry,
+        lowest_cleanup_slot,
+        max_root,
+    );
+
+    const slot = 355625214;
+
+    // const entries, const num_shreds, const is_full =
+    //     try ledger_reader.getSlotEntriesWithShredInfo(allocator, slot, 0, false);
+    // defer {
+    //     for (entries) |e| e.deinit(allocator);
+    //     allocator.free(entries);
+    // }
+
+    // std.debug.print("{} {} {}\n", .{entries.len, num_shreds, is_full});
+
+    const slot_meta = try ledger_reader.db.get(allocator, schema.schema.slot_meta, slot);
+    defer if (slot_meta) |m| m.deinit();
+    std.debug.print("{any}\n", .{slot_meta});
+
+    for (0..863 + 1) |i| {
+         if (try ledger_reader.db.getBytes(
+            schema.schema.data_shred, .{ slot, @intCast(i) })) |bytes| {
+                defer bytes.deinit();
+                // std.debug.print("found shred at {}: {}\n", .{i, bytes.data.len});
+         } else {
+            std.debug.print("  missing shred {}\n", .{i});
+         }
+    }
+}

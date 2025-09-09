@@ -249,6 +249,7 @@ fn writePurgeRange(write_batch: *LedgerDB.WriteBatch, from_slot: Slot, to_slot: 
     );
     try purgeRangeWithCount(write_batch, schema.orphan_slots, from_slot, to_slot, &delete_count);
     try purgeRangeWithCount(write_batch, schema.index, from_slot, to_slot, &delete_count);
+    std.debug.print("writePurgeRange data/code_shred {{from={}, 0}} {{to={}, 0}}\n", .{from_slot, to_slot});
     try purgeRangeWithCount(write_batch, schema.data_shred, .{ from_slot, 0 }, .{ to_slot, 0 }, &delete_count);
     try purgeRangeWithCount(write_batch, schema.code_shred, .{ from_slot, 0 }, .{ to_slot, 0 }, &delete_count);
     try purgeRangeWithCount(
@@ -331,6 +332,7 @@ fn purgeFilesInRange(db: *LedgerDB, from_slot: Slot, to_slot: Slot) !void {
     );
     try purgeFileRangeWithCount(db, schema.orphan_slots, from_slot, to_slot, &delete_count);
     try purgeFileRangeWithCount(db, schema.index, from_slot, to_slot, &delete_count);
+    std.debug.print("purgeFilesInRange data/code_shred {{from={}, 0}} {{to={}, 0}}\n", .{from_slot, to_slot});
     try purgeFileRangeWithCount(db, schema.data_shred, .{ from_slot, 0 }, .{ to_slot, 0 }, &delete_count);
     try purgeFileRangeWithCount(db, schema.code_shred, .{ from_slot, 0 }, .{ to_slot, 0 }, &delete_count);
     try purgeFileRangeWithCount(

@@ -156,6 +156,7 @@ pub const LedgerReader = struct {
 
     /// Analogous to [get_data_shred](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L2220)
     pub fn getDataShred(self: *Self, slot: Slot, index: u64) !?BytesRef {
+        std.debug.print("getDataShred {{slot:{} index:{}}}\n", .{slot, index});
         const shred = try self.db.getBytes(schema.data_shred, .{ slot, index }) orelse return null;
         if (shred.data.len != DataShred.constants.payload_size) {
             return error.InvalidDataShred;
@@ -170,6 +171,7 @@ pub const LedgerReader = struct {
 
     /// Analogous to [get_data_shreds_for_slot](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L2230)
     pub fn getDataShredsForSlot(self: *Self, slot: Slot, start_index: u64) !ArrayList(Shred) {
+        std.debug.print("getDataShredsForSlot {{slot:{} start_index:{}}}\n", .{slot, start_index});
         return self.getShredsForSlot(schema.data_shred, slot, start_index);
     }
 
@@ -241,6 +243,10 @@ pub const LedgerReader = struct {
         if (start_index >= end_index or max_missing == 0) {
             return ArrayList(u64).init(self.allocator);
         }
+
+        const x = .{ slot, start_index };
+        std.debug.print("findMissingDataIndexes {{slot:{} index:{}}} - begin\n", x);
+        defer std.debug.print(" findMissingDataIndexes {{slot:{} index:{}}} - end\n", x);
 
         var iter = try self.db.iterator(schema.data_shred, .forward, .{ slot, start_index });
         defer iter.deinit();
@@ -1142,8 +1148,10 @@ pub const LedgerReader = struct {
             for (data_shreds.items) |ds| ds.deinit();
             data_shreds.deinit();
         }
+        std.debug.print("slot_meta: {?}\n", .{maybe_slot_meta});
         for (all_ranges_start_index..all_ranges_end_index) |index| {
             // TODO perf: multi_get_bytes
+            std.debug.print("getSlotEntriesInBlock {{slot:{} index:{}}}\n", .{slot, index});
             if (try self.db.getBytes(schema.data_shred, .{ slot, @intCast(index) })) |shred_bytes| {
                 defer shred_bytes.deinit();
                 const shred = try Shred.fromPayload(allocator, shred_bytes.data);
@@ -1210,6 +1218,8 @@ pub const LedgerReader = struct {
             };
             defer allocator.free(these_entries);
             errdefer for (these_entries) |e| e.deinit(allocator);
+
+            std.debug.print("{}-{} entries:{}\n", .{start_index, end_index, these_entries.len});
             try entries.appendSlice(allocator, these_entries);
         }
         return entries.toOwnedSlice(allocator);

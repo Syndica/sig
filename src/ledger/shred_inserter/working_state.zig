@@ -519,6 +519,7 @@ pub const ShredWorkingStore = struct {
         if (self.just_inserted_shreds.get(id)) |shred| {
             return .{ .data = shred.payload(), .deinitializer = null };
         }
+        std.debug.print("ShredWorkingStore.get {} {{slot:{} index:{}}}\n", .{id.shred_type, id.slot, id.index});
         return switch (id.shred_type) {
             .data => self.getFromDb(schema.data_shred, id),
             .code => self.getFromDb(schema.code_shred, id),
@@ -544,6 +545,7 @@ pub const ShredWorkingStore = struct {
         return if (self.just_inserted_shreds.get(id)) |shred|
             try shred.clone() // TODO perf - avoid clone without causing memory issues
         else if (index.contains(shred_index)) blk: {
+            std.debug.print("ShredWorkingStore.getWithIndex {} {{slot:{} index:{}}}\n", .{id.shred_type, id.slot, id.index});
             const shred = try self.db.getBytes(cf, .{ slot, @intCast(id.index) }) orelse {
                 self.logger.err().logf(&newlinesToSpaces(
                     \\Unable to read the {s} with slot {}, index {} for shred
