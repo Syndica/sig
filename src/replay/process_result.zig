@@ -63,17 +63,17 @@ pub const ProcessResultState = struct {
     purge_repair_slot_counter: *PurgeRepairSlotCounters,
 };
 
-pub fn processResult(
-    state: ProcessResultState,
-    slot: Slot,
-    entries: []const sig.core.Entry,
-    err: ?replay.confirm_slot.ConfirmSlotError,
-) !bool {
+pub fn processResult(state: ProcessResultState, result: sig.replay.execution.ReplayResult) !bool {
+    const slot = result.slot;
     var processed_a_slot = false;
-    if (err) |_| {
-        try markDeadSlot(state, slot, state.ancestor_hashes_replay_update_sender);
-        return processed_a_slot;
-    }
+
+    const last_entry_hash = switch (result.output) {
+        .err => {
+            try markDeadSlot(state, slot, state.ancestor_hashes_replay_update_sender);
+            return processed_a_slot;
+        },
+        .last_entry_hash => |hash| hash,
+    };
 
     const slot_info = state.slot_tracker.get(slot) orelse return error.MissingSlotInTracker;
     const epoch_info = state.epoch_tracker.getForSlot(slot) orelse return error.MissingEpoch;
@@ -91,7 +91,7 @@ pub fn processResult(
                 slot_info.state,
                 slot_info.constants,
                 slot,
-                entries[entries.len - 1].hash,
+                last_entry_hash,
             ));
         }
         processed_a_slot = true;
@@ -482,16 +482,10 @@ test "processResult: confirm status with err poll result marks slot dead" {
     try testing.expect(progress_before != null);
     try testing.expect(!progress_before.?.is_dead);
 
-    const empty_entries = try allocator.alloc(sig.core.Entry, 0);
-
-    defer allocator.free(empty_entries);
-
-    const result = try processResult(
-        test_resources.replay_state,
-        slot,
-        empty_entries,
-        .{ .failed_to_load_entries = "test error" },
-    );
+    const result = try processResult(test_resources.replay_state, .{
+        .slot = slot,
+        .output = .{ .err = .{ .failed_to_load_entries = "test error" } },
+    });
 
     // Should return false since no slot was successfully processed
     try testing.expect(!result);
@@ -513,12 +507,11 @@ test "processResult: confirm status with done poll but missing slot in tracker" 
 
     const slot: Slot = 100;
 
-    const empty_entries = try allocator.alloc(sig.core.Entry, 0);
-
-    defer allocator.free(empty_entries);
-
     // The function should return an error since the slot is not in the tracker
-    const result = processResult(test_resources.replay_state, slot, empty_entries, null);
+    const result = processResult(test_resources.replay_state, .{
+        .slot = slot,
+        .output = .{ .last_entry_hash = .ZEROES },
+    });
 
     try testing.expectError(error.MissingSlotInTracker, result);
 }
@@ -563,18 +556,10 @@ test "processResult: confirm status with done poll and slot complete - success p
         }),
     );
 
-    // Create mock entries for the slot
-    const mock_entries = try allocator.alloc(sig.core.Entry, 1);
-    defer allocator.free(mock_entries);
-
     var rng = std.Random.DefaultPrng.init(0);
     const random = rng.random();
 
-    mock_entries[0] = sig.core.Entry{
-        .num_hashes = 0,
-        .hash = sig.core.Hash.initRandom(random),
-        .transactions = &.{},
-    };
+    const last_entry_hash = sig.core.Hash.initRandom(random);
 
     // Add parent slot 99 to fork choice so slot 100 can be processed
     const slot_99_hash = Hash.initRandom(random);
@@ -636,7 +621,10 @@ test "processResult: confirm status with done poll and slot complete - success p
     });
 
     // This should successfully process the slot and return true
-    const result = try processResult(test_resources.replay_state, slot, mock_entries, null);
+    const result = try processResult(test_resources.replay_state, .{
+        .slot = slot,
+        .output = .{ .last_entry_hash = last_entry_hash },
+    });
 
     // Should return true since the slot was successfully processed
     try testing.expect(result);

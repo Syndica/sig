@@ -109,8 +109,10 @@ pub fn awaitResults(
         const slot, const future = slot_future;
         result.* = .{
             .slot = slot,
-            .entries = future.entries,
-            .maybe_err = try future.awaitBlocking(),
+            .output = if (try future.awaitBlocking()) |err|
+                .{ .err = err }
+            else
+                .{ .last_entry_hash = future.entries[future.entries.len - 1].hash },
         };
     }
     return results;
@@ -118,13 +120,10 @@ pub fn awaitResults(
 
 pub const ReplayResult = struct {
     slot: Slot,
-    entries: []const sig.core.Entry,
-    maybe_err: ?ConfirmSlotError,
-
-    pub fn deinit(self: ReplayResult, allocator: Allocator) void {
-        for (self.entries) |entry| entry.deinit(allocator);
-        allocator.free(self.entries);
-    }
+    output: union(enum) {
+        last_entry_hash: sig.core.Hash,
+        err: ConfirmSlotError,
+    },
 };
 
 /// Fully synchronous version of replayActiveSlots that does not use
@@ -143,10 +142,7 @@ pub fn replayActiveSlotsSync(state: ReplayExecutionState) ![]const ReplayResult 
 
     var results = try std.ArrayListUnmanaged(ReplayResult)
         .initCapacity(allocator, active_slots.len);
-    errdefer {
-        for (results.items) |result| result.deinit(allocator);
-        results.deinit(allocator);
-    }
+    errdefer results.deinit(allocator);
 
     for (active_slots) |slot| {
         state.logger.debug().logf("replaying slot: {}", .{slot});
@@ -155,16 +151,15 @@ pub fn replayActiveSlotsSync(state: ReplayExecutionState) ![]const ReplayResult 
             .confirm => |params| params,
             .empty, .dead, .leader => continue,
         };
-        errdefer {
-            for (params.entries) |entry| entry.deinit(allocator);
-            allocator.free(params.entries);
-        }
+        const last_entry_hash = params.entries[params.entries.len - 1].hash;
 
         const maybe_err = try confirmSlotSync(allocator, .from(state.logger), params);
         results.appendAssumeCapacity(.{
             .slot = slot,
-            .entries = params.entries,
-            .maybe_err = maybe_err,
+            .output = if (maybe_err) |err|
+                .{ .err = err }
+            else
+                .{ .last_entry_hash = last_entry_hash },
         });
     }
 

@@ -637,7 +637,7 @@ fn doConsensus(
         const process_state, var slot_lock, var epoch_lock = processResultState(state, consensus);
         defer slot_lock.unlock();
         defer epoch_lock.unlock();
-        if (try processResult(process_state, result.slot, result.entries, result.maybe_err)) {
+        if (try processResult(process_state, result)) {
             processed_a_slot = true;
         }
     }
@@ -732,26 +732,32 @@ fn bypassConsensus(state: *ReplayState, results: []const ReplayResult) !bool {
         const slot_tracker, var slot_tracker_lg = state.slot_tracker.readWithLock();
         defer slot_tracker_lg.unlock();
 
-        for (results) |result| {
-            const slot = result.slot;
-            const slot_info = slot_tracker.get(slot) orelse return error.MissingSlotInTracker;
-            if (slot_info.state.tickHeight() == slot_info.constants.max_tick_height) {
-                state.logger.info().logf("finished replaying slot: {}", .{slot});
-                const epoch = epoch_tracker.getForSlot(slot) orelse return error.MissingEpoch;
-                try replay.freeze.freezeSlot(state.allocator, .init(
-                    .from(state.logger),
-                    state.account_store,
-                    &epoch,
-                    slot_info.state,
-                    slot_info.constants,
-                    slot,
-                    result.entries[result.entries.len - 1].hash,
-                ));
-                processed_a_slot = true;
-            } else {
-                state.logger.info().logf("partially replayed slot: {}", .{slot});
-            }
-        }
+        for (results) |result| switch (result.output) {
+            .err => |err| state.logger.err().logf(
+                "replayed slot {} with error: {}",
+                .{ result.slot, err },
+            ),
+            .last_entry_hash => |last_entry_hash| {
+                const slot = result.slot;
+                const slot_info = slot_tracker.get(slot) orelse return error.MissingSlotInTracker;
+                if (slot_info.state.tickHeight() == slot_info.constants.max_tick_height) {
+                    state.logger.info().logf("finished replaying slot: {}", .{slot});
+                    const epoch = epoch_tracker.getForSlot(slot) orelse return error.MissingEpoch;
+                    try replay.freeze.freezeSlot(state.allocator, .init(
+                        .from(state.logger),
+                        state.account_store,
+                        &epoch,
+                        slot_info.state,
+                        slot_info.constants,
+                        slot,
+                        last_entry_hash,
+                    ));
+                    processed_a_slot = true;
+                } else {
+                    state.logger.info().logf("partially replayed slot: {}", .{slot});
+                }
+            },
+        };
     }
 
     if (state.slot_tree.reRoot(state.allocator)) |new_root| {
