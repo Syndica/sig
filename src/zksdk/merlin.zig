@@ -3,6 +3,7 @@
 //! https://merlin.cool/use/protocol.html
 
 const std = @import("std");
+const builtin = @import("builtin");
 const sig = @import("../sig.zig");
 const Keccak1600 = std.crypto.core.keccak.KeccakF(1600);
 const Ed25519 = std.crypto.ecc.Edwards25519;
@@ -186,17 +187,47 @@ pub const Strobe128 = struct {
 pub const Transcript = struct {
     strobe: Strobe128,
 
-    pub fn init(comptime label: []const u8) Transcript {
-        var transcript: Transcript = .{
-            .strobe = Strobe128.init("Merlin v1.0"),
-        };
-        transcript.appendMessage("dom-sep", label);
+    const DomainSeperator = enum {
+        @"zero-ciphertext-instruction",
+        @"zero-ciphertext-proof",
+        @"pubkey-validity-instruction",
+        @"pubkey-proof",
+        @"percentage-with-cap-proof",
+        @"percentage-with-cap-instruction",
+        @"ciphertext-commitment-equality-proof",
+        @"ciphertext-commitment-equality-instruction",
+        @"ciphertext-ciphertext-equality-proof",
+        @"ciphertext-ciphertext-equality-instruction",
 
+        @"inner-product",
+        @"range-proof",
+        @"batched-range-proof-instruction",
+
+        @"validity-proof",
+        @"batched-validity-proof",
+
+        @"grouped-ciphertext-validity-2-handles-instruction",
+        @"batched-grouped-ciphertext-validity-2-handles-instruction",
+
+        @"grouped-ciphertext-validity-3-handles-instruction",
+        @"batched-grouped-ciphertext-validity-3-handles-instruction",
+    };
+
+    pub fn init(comptime seperator: DomainSeperator) Transcript {
+        var transcript: Transcript = .{ .strobe = Strobe128.init("Merlin v1.0") };
+        transcript.appendDomSep(seperator);
+        return transcript;
+    }
+
+    pub fn initTest(label: []const u8) Transcript {
+        comptime if (!builtin.is_test) @compileError("should only be used during tests");
+        var transcript: Transcript = .{ .strobe = Strobe128.init("Merlin v1.0") };
+        transcript.appendMessage("dom-sep", label);
         return transcript;
     }
 
     /// NOTE: be very careful with this function, there are only a specific few
-    /// usages of it. generally speaking, use the a helper function if it exists.
+    /// usages of it. always use helper functions if possible.
     pub fn appendMessage(
         self: *Transcript,
         comptime label: []const u8,
@@ -209,8 +240,8 @@ pub const Transcript = struct {
         self.strobe.ad(message, false);
     }
 
-    pub fn appendDomSep(self: *Transcript, comptime label: []const u8) void {
-        self.appendMessage("dom-sep", label);
+    pub fn appendDomSep(self: *Transcript, comptime seperator: DomainSeperator) void {
+        self.appendMessage("dom-sep", @tagName(seperator));
     }
 
     pub fn challengeBytes(
@@ -289,10 +320,37 @@ pub const Transcript = struct {
         std.mem.writeInt(u64, &buffer, x, .little);
         self.appendMessage(label, &buffer);
     }
+
+    pub fn appendHandleDomSep(
+        self: *Transcript,
+        comptime mode: enum { batched, unbatched },
+        comptime handles: enum { two, three },
+    ) void {
+        self.appendDomSep(switch (mode) {
+            .batched => .@"batched-validity-proof",
+            .unbatched => .@"validity-proof",
+        });
+        self.appendU64("handles", switch (handles) {
+            .two => 2,
+            .three => 3,
+        });
+    }
+
+    pub fn appendRangeProof(
+        self: *Transcript,
+        comptime mode: enum { range, inner },
+        n: comptime_int,
+    ) void {
+        self.appendDomSep(switch (mode) {
+            .range => .@"range-proof",
+            .inner => .@"inner-product",
+        });
+        self.appendU64("n", n);
+    }
 };
 
 test "equivalence" {
-    var transcript = Transcript.init("test protocol");
+    var transcript = Transcript.initTest("test protocol");
 
     transcript.appendMessage("some label", "some data");
 

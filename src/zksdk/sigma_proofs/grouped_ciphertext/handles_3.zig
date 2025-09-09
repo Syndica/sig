@@ -34,8 +34,7 @@ pub const Proof = struct {
         opening_hi: *const pedersen.Opening,
         transcript: *Transcript,
     ) Proof {
-        transcript.appendDomSep("batched-validity-proof");
-        transcript.appendU64("handles", 3);
+        transcript.appendHandleDomSep(.batched, .three);
 
         const t = transcript.challengeScalar("t");
 
@@ -65,8 +64,7 @@ pub const Proof = struct {
         opening: *const pedersen.Opening,
         transcript: *Transcript,
     ) Proof {
-        transcript.appendDomSep("validity-proof");
-        transcript.appendU64("handles", 3);
+        transcript.appendHandleDomSep(.unbatched, .three);
 
         const P_first = first_pubkey.point;
         const P_second = second_pubkey.point;
@@ -151,13 +149,11 @@ pub const Proof = struct {
         transcript: *Transcript,
     ) !void {
         const t = if (batched) t: {
-            transcript.appendDomSep("batched-validity-proof");
-            transcript.appendU64("handles", 3);
+            transcript.appendHandleDomSep(.batched, .three);
             break :t transcript.challengeScalar("t");
         } else void; // shouldn't be referenced
 
-        transcript.appendDomSep("validity-proof");
-        transcript.appendU64("handles", 3);
+        transcript.appendHandleDomSep(.unbatched, .three);
 
         try transcript.validateAndAppendPoint("Y_0", self.Y_0);
         try transcript.validateAndAppendPoint("Y_1", self.Y_1);
@@ -333,7 +329,7 @@ pub const Data = struct {
         }
 
         fn newTranscript(self: Context) Transcript {
-            var transcript = Transcript.init("grouped-ciphertext-validity-3-handles-instruction");
+            var transcript = Transcript.init(.@"grouped-ciphertext-validity-3-handles-instruction");
             transcript.appendPubkey("first-pubkey", self.first_pubkey);
             transcript.appendPubkey("second-pubkey", self.second_pubkey);
             transcript.appendPubkey("third-pubkey", self.third_pubkey);
@@ -470,7 +466,7 @@ pub const BatchedData = struct {
 
         fn newTranscript(self: Context) Transcript {
             var transcript = Transcript.init(
-                "batched-grouped-ciphertext-validity-3-handles-instruction",
+                .@"batched-grouped-ciphertext-validity-3-handles-instruction",
             );
             transcript.appendPubkey("first-pubkey", self.first_pubkey);
             transcript.appendPubkey("second-pubkey", self.second_pubkey);
@@ -618,8 +614,8 @@ test "correctness" {
     const second_handle = pedersen.DecryptHandle.init(&second_pubkey, &opening);
     const third_handle = pedersen.DecryptHandle.init(&third_pubkey, &opening);
 
-    var prover_transcript = Transcript.init("test");
-    var verifier_transcript = Transcript.init("test");
+    var prover_transcript = Transcript.initTest("Test");
+    var verifier_transcript = Transcript.initTest("Test");
 
     const proof = Proof.init(
         &first_pubkey,
@@ -661,8 +657,8 @@ test "first/second pubkey zeroed" {
     const second_handle = pedersen.DecryptHandle.init(&second_pubkey, &opening);
     const third_handle = pedersen.DecryptHandle.init(&third_pubkey, &opening);
 
-    var prover_transcript = Transcript.init("test");
-    var verifier_transcript = Transcript.init("test");
+    var prover_transcript = Transcript.initTest("Test");
+    var verifier_transcript = Transcript.initTest("Test");
 
     const proof = Proof.init(
         &first_pubkey,
@@ -710,8 +706,8 @@ test "zeroed ciphertext" {
     const second_handle = pedersen.DecryptHandle.init(&second_pubkey, &opening);
     const third_handle = pedersen.DecryptHandle.init(&third_pubkey, &opening);
 
-    var prover_transcript = Transcript.init("test");
-    var verifier_transcript = Transcript.init("test");
+    var prover_transcript = Transcript.initTest("Test");
+    var verifier_transcript = Transcript.initTest("Test");
 
     const proof = Proof.init(
         &first_pubkey,
@@ -756,8 +752,8 @@ test "zeroed decryption handle" {
     const second_handle = pedersen.DecryptHandle.init(&second_pubkey, &zeroed_opening);
     const third_handle = pedersen.DecryptHandle.init(&third_pubkey, &zeroed_opening);
 
-    var prover_transcript = Transcript.init("test");
-    var verifier_transcript = Transcript.init("test");
+    var prover_transcript = Transcript.initTest("Test");
+    var verifier_transcript = Transcript.initTest("Test");
 
     const proof = Proof.init(
         &first_pubkey,
@@ -810,7 +806,7 @@ test "proof string" {
     const proof = try Proof.fromBase64(proof_string);
     // zig fmt: on
 
-    var verifier_transcript = Transcript.init("Test");
+    var verifier_transcript = Transcript.initTest("Test");
 
     try proof.verify(
         false,
@@ -852,8 +848,8 @@ test "batched correctness" {
     const third_handle_lo = pedersen.DecryptHandle.init(&third_pubkey, &opening_lo);
     const third_handle_hi = pedersen.DecryptHandle.init(&third_pubkey, &opening_hi);
 
-    var prover_transcript = Transcript.init("test");
-    var verifier_transcript = Transcript.init("test");
+    var prover_transcript = Transcript.initTest("Test");
+    var verifier_transcript = Transcript.initTest("Test");
 
     const proof = Proof.initBatched(
         &first_pubkey,
@@ -924,7 +920,7 @@ test "batched proof string" {
     const proof = try Proof.fromBase64(proof_string);
     // zig fmt: on
 
-    var verifier_transcript = Transcript.init("Test");
+    var verifier_transcript = Transcript.initTest("Test");
 
     try proof.verify(
         true,

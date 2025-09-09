@@ -70,8 +70,7 @@ pub fn Proof(bit_size: comptime_int) type {
             var a: []Scalar = a_vec;
             var b: []Scalar = b_vec;
 
-            transcript.appendDomSep("inner-product");
-            transcript.appendU64("n", bit_size);
+            transcript.appendRangeProof(.inner, bit_size);
 
             var L_vec: std.BoundedArray(Ristretto255, logn) = .{};
             var R_vec: std.BoundedArray(Ristretto255, logn) = .{};
@@ -264,8 +263,7 @@ pub fn Proof(bit_size: comptime_int) type {
             [logn]Scalar, // u_inv_sq
             [bit_size]Scalar, // s
         } {
-            transcript.appendDomSep("inner-product");
-            transcript.appendU64("n", bit_size);
+            transcript.appendRangeProof(.inner, bit_size);
 
             // 1. Recompute x_k,...,x_1 based on the proof transcript
             var challenges: [logn]Scalar = undefined;
@@ -397,8 +395,8 @@ test "basic correctness" {
         scalars.buffer,
     ) };
 
-    var prover_transcript = Transcript.init("innerproducttest");
-    var verifier_transcript = Transcript.init("innerproducttest");
+    var prover_transcript = Transcript.initTest("Test");
+    var verifier_transcript = Transcript.initTest("Test");
 
     const proof = Proof(32).init(
         Q,

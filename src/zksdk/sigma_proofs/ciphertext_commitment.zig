@@ -31,7 +31,7 @@ pub const Proof = struct {
         amount: u64,
         transcript: *Transcript,
     ) Proof {
-        transcript.appendDomSep("ciphertext-commitment-equality-proof");
+        transcript.appendDomSep(.@"ciphertext-commitment-equality-proof");
 
         const P = kp.public;
         const D = ciphertext.handle.point;
@@ -90,7 +90,7 @@ pub const Proof = struct {
         commitment: *const pedersen.Commitment,
         transcript: *Transcript,
     ) !void {
-        transcript.appendDomSep("ciphertext-commitment-equality-proof");
+        transcript.appendDomSep(.@"ciphertext-commitment-equality-proof");
 
         const P = pubkey.point;
         const C_ciphertext = ciphertext.commitment.point;
@@ -217,7 +217,7 @@ pub const Data = struct {
         }
 
         fn newTranscript(self: Context) Transcript {
-            var transcript = Transcript.init("ciphertext-commitment-equality-instruction");
+            var transcript = Transcript.init(.@"ciphertext-commitment-equality-instruction");
             transcript.appendPubkey("pubkey", self.pubkey);
             transcript.appendCiphertext("ciphertext", self.ciphertext);
             transcript.appendCommitment("commitment", self.commitment);
@@ -295,8 +295,8 @@ test "success case" {
     const ciphertext = el_gamal.encrypt(u64, message, &kp.public);
     const commitment, const opening = pedersen.initValue(u64, message);
 
-    var prover_transcript = Transcript.init("Test");
-    var verifier_transcript = Transcript.init("Test");
+    var prover_transcript = Transcript.initTest("Test");
+    var verifier_transcript = Transcript.initTest("Test");
 
     const proof = Proof.init(
         &kp,
@@ -321,8 +321,8 @@ test "fail case" {
     const ciphertext = el_gamal.encrypt(u64, encrypted_message, &kp.public);
     const commitment, const opening = pedersen.initValue(u64, committed_message);
 
-    var prover_transcript = Transcript.init("test");
-    var verifier_transcript = Transcript.init("test");
+    var prover_transcript = Transcript.initTest("Test");
+    var verifier_transcript = Transcript.initTest("Test");
 
     const proof = Proof.init(
         &kp,
@@ -353,8 +353,8 @@ test "public key zeroed" {
     const ciphertext = el_gamal.encrypt(u64, message, &kp.public);
     const commitment, const opening = pedersen.initValue(u64, message);
 
-    var prover_transcript = Transcript.init("test");
-    var verifier_transcript = Transcript.init("test");
+    var prover_transcript = Transcript.initTest("Test");
+    var verifier_transcript = Transcript.initTest("Test");
 
     const proof = Proof.init(
         &kp,
@@ -385,8 +385,8 @@ test "all zoered" {
     const commitment = try pedersen.Commitment.fromBytes(.{0} ** 32);
     const opening = try pedersen.Opening.fromBytes(.{0} ** 32);
 
-    var prover_transcript = Transcript.init("test");
-    var verifier_transcript = Transcript.init("test");
+    var prover_transcript = Transcript.initTest("Test");
+    var verifier_transcript = Transcript.initTest("Test");
 
     const proof = Proof.init(
         &kp,
@@ -414,8 +414,8 @@ test "commitment zeroed" {
     const commitment = try pedersen.Commitment.fromBytes(.{0} ** 32);
     const opening = try pedersen.Opening.fromBytes(.{0} ** 32);
 
-    var prover_transcript = Transcript.init("test");
-    var verifier_transcript = Transcript.init("test");
+    var prover_transcript = Transcript.initTest("Test");
+    var verifier_transcript = Transcript.initTest("Test");
 
     const proof = Proof.init(
         &kp,
@@ -442,8 +442,8 @@ test "ciphertext zeroed" {
     const ciphertext = try ElGamalCiphertext.fromBytes(.{0} ** 64);
     const commitment, const opening = pedersen.initValue(u64, message);
 
-    var prover_transcript = Transcript.init("test");
-    var verifier_transcript = Transcript.init("test");
+    var prover_transcript = Transcript.initTest("Test");
+    var verifier_transcript = Transcript.initTest("Test");
 
     const proof = Proof.init(
         &kp,
@@ -476,7 +476,7 @@ test "proof strings" {
     const proof = try Proof.fromBase64(proof_string);
     // zig fmt: on
 
-    var verifier_transcript = Transcript.init("Test");
+    var verifier_transcript = Transcript.initTest("Test");
     try proof.verify(
         &pubkey,
         &ciphertext,

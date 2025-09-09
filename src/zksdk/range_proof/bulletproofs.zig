@@ -123,8 +123,7 @@ pub fn Proof(bit_size: comptime_int) type {
             }
             std.debug.assert(nm == bit_size);
 
-            transcript.appendDomSep("range-proof");
-            transcript.appendU64("n", bit_size);
+            transcript.appendRangeProof(.range, bit_size);
 
             // bit-decompose values and generate their Pedersen vector commitment
             const a_blinding: Scalar = .random();
@@ -269,8 +268,7 @@ pub fn Proof(bit_size: comptime_int) type {
         ) !void {
             std.debug.assert(commitments.len == bit_lengths.len);
 
-            transcript.appendDomSep("range-proof");
-            transcript.appendU64("n", bit_size);
+            transcript.appendRangeProof(.range, bit_size);
 
             try transcript.validateAndAppendPoint("A", self.A);
             try transcript.validateAndAppendPoint("S", self.S);
@@ -659,7 +657,7 @@ pub fn Data(bit_size: comptime_int) type {
             }
 
             fn newTranscript(self: Context) Transcript {
-                var transcript = Transcript.init("batched-range-proof-instruction");
+                var transcript = Transcript.init(.@"batched-range-proof-instruction");
                 transcript.appendMessage(
                     "commitments",
                     std.mem.sliceAsBytes(&self.commitments),
@@ -699,8 +697,8 @@ pub fn genPowers(comptime n: usize, x: Scalar) [n]Scalar {
 test "single rangeproof" {
     const commitment, const opening = pedersen.initValue(u64, 55);
 
-    var creation_transcript = Transcript.init("Test");
-    var verification_transcript = Transcript.init("Test");
+    var creation_transcript = Transcript.initTest("Test");
+    var verification_transcript = Transcript.initTest("Test");
 
     const proof = try Proof(32).init(
         &.{55},
@@ -721,8 +719,8 @@ test "aggregated rangeproof" {
     const comm2, const opening2 = pedersen.initValue(u64, 77);
     const comm3, const opening3 = pedersen.initValue(u64, 99);
 
-    var creation_transcript = Transcript.init("Test");
-    var verification_transcript = Transcript.init("Test");
+    var creation_transcript = Transcript.initTest("Test");
+    var verification_transcript = Transcript.initTest("Test");
 
     const proof = try Proof(128).init(
         &.{ 55, 77, 99 },
@@ -753,7 +751,7 @@ test "proof string" {
     const proof = try Proof(128).fromBase64(proof_string);
     // zig fmt: on
 
-    var verification_transcript = Transcript.init("Test");
+    var verification_transcript = Transcript.initTest("Test");
     try proof.verify(
         &.{ commitment_1, commitment_2, commitment_3 },
         &.{ 64, 32, 32 },

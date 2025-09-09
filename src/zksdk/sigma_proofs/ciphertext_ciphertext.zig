@@ -33,7 +33,7 @@ pub const Proof = struct {
         amount: u64,
         transcript: *Transcript,
     ) Proof {
-        transcript.appendDomSep("ciphertext-ciphertext-equality-proof");
+        transcript.appendDomSep(.@"ciphertext-ciphertext-equality-proof");
 
         const P_first = first_kp.public.point;
         const D_first = first_ciphertext.handle.point;
@@ -97,7 +97,7 @@ pub const Proof = struct {
         second_ciphertext: *const ElGamalCiphertext,
         transcript: *Transcript,
     ) !void {
-        transcript.appendDomSep("ciphertext-ciphertext-equality-proof");
+        transcript.appendDomSep(.@"ciphertext-ciphertext-equality-proof");
 
         const P_first = first_pubkey.point;
         const C_first = first_ciphertext.commitment.point;
@@ -256,7 +256,7 @@ pub const Data = struct {
         }
 
         fn newTranscript(self: Context) Transcript {
-            var transcript = Transcript.init("ciphertext-ciphertext-equality-instruction");
+            var transcript = Transcript.init(.@"ciphertext-ciphertext-equality-instruction");
             transcript.appendPubkey("first-pubkey", self.first_pubkey);
             transcript.appendPubkey("second-pubkey", self.second_pubkey);
             transcript.appendCiphertext("first-ciphertext", self.first_ciphertext);
@@ -403,8 +403,8 @@ test "correctness" {
         &second_opening,
     );
 
-    var prover_transcript = Transcript.init("test");
-    var verifier_transcript = Transcript.init("test");
+    var prover_transcript = Transcript.initTest("Test");
+    var verifier_transcript = Transcript.initTest("Test");
 
     const proof = Proof.init(
         &first_kp,
@@ -439,8 +439,8 @@ test "different messages" {
         &second_opening,
     );
 
-    var prover_transcript = Transcript.init("test");
-    var verifier_transcript = Transcript.init("test");
+    var prover_transcript = Transcript.initTest("Test");
+    var verifier_transcript = Transcript.initTest("Test");
 
     const proof = Proof.init(
         &first_kp,
@@ -480,7 +480,7 @@ test "proof string" {
     const proof = try Proof.fromBase64(proof_string);
     // zig fmt: on
 
-    var verifier_transcript = Transcript.init("Test");
+    var verifier_transcript = Transcript.initTest("Test");
 
     try proof.verify(
         &first_pubkey,
