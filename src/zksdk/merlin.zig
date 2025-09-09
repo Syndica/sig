@@ -5,6 +5,9 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const sig = @import("../sig.zig");
+
+const zksdk = sig.zksdk;
+
 const Keccak1600 = std.crypto.core.keccak.KeccakF(1600);
 const Ed25519 = std.crypto.ecc.Edwards25519;
 const Scalar = Ed25519.scalar.Scalar;
@@ -213,40 +216,115 @@ pub const Transcript = struct {
         @"batched-grouped-ciphertext-validity-3-handles-instruction",
     };
 
-    pub fn init(comptime seperator: DomainSeperator) Transcript {
+    const TranscriptInput = struct {
+        label: []const u8,
+        message: Message,
+    };
+
+    const Message = union(enum) {
+        bytes: []const u8,
+
+        point: Ristretto255,
+        pubkey: zksdk.el_gamal.Pubkey,
+        scalar: Scalar,
+        ciphertext: zksdk.el_gamal.Ciphertext,
+        commitment: zksdk.pedersen.Commitment,
+        u64: u64,
+
+        grouped_2: zksdk.el_gamal.GroupedElGamalCiphertext(2),
+        grouped_3: zksdk.el_gamal.GroupedElGamalCiphertext(3),
+    };
+
+    pub fn init(comptime seperator: DomainSeperator, inputs: []const TranscriptInput) Transcript {
         var transcript: Transcript = .{ .strobe = Strobe128.init("Merlin v1.0") };
         transcript.appendDomSep(seperator);
+        for (inputs) |input| transcript.appendMessage(input.label, input.message);
         return transcript;
     }
 
     pub fn initTest(label: []const u8) Transcript {
         comptime if (!builtin.is_test) @compileError("should only be used during tests");
         var transcript: Transcript = .{ .strobe = Strobe128.init("Merlin v1.0") };
-        transcript.appendMessage("dom-sep", label);
+        transcript.appendBytes("dom-sep", label);
         return transcript;
     }
 
-    /// NOTE: be very careful with this function, there are only a specific few
-    /// usages of it. always use helper functions if possible.
-    pub fn appendMessage(
-        self: *Transcript,
-        comptime label: []const u8,
-        message: []const u8,
-    ) void {
+    fn appendBytes(self: *Transcript, label: []const u8, bytes: []const u8) void {
         var data_len: [4]u8 = undefined;
-        std.mem.writeInt(u32, &data_len, @intCast(message.len), .little);
+        std.mem.writeInt(u32, &data_len, @intCast(bytes.len), .little);
         self.strobe.metaAd(label, false);
         self.strobe.metaAd(&data_len, true);
-        self.strobe.ad(message, false);
+        self.strobe.ad(bytes, false);
     }
 
-    pub fn appendDomSep(self: *Transcript, comptime seperator: DomainSeperator) void {
-        self.appendMessage("dom-sep", @tagName(seperator));
+    fn appendMessage(self: *Transcript, label: []const u8, message: Message) void {
+        var buffer: [64]u8 = @splat(0);
+        const bytes: []const u8 = switch (message) {
+            .bytes => |b| b,
+            .point => |*point| &point.toBytes(),
+            .pubkey => |*pubkey| &pubkey.toBytes(),
+            .scalar => |*scalar| &scalar.toBytes(),
+            .ciphertext => |*ct| b: {
+                @memcpy(buffer[0..32], &ct.commitment.point.toBytes());
+                @memcpy(buffer[32..64], &ct.handle.point.toBytes());
+                break :b &buffer;
+            },
+            .commitment => |*c| &c.toBytes(),
+            .u64 => |x| b: {
+                std.mem.writeInt(u64, buffer[0..8], x, .little);
+                break :b buffer[0..8];
+            },
+            inline .grouped_2, .grouped_3 => |*g| &g.toBytes(),
+        };
+        self.appendBytes(label, bytes);
     }
 
-    pub fn challengeBytes(
+    pub inline fn append(
         self: *Transcript,
+        comptime session: *Session,
+        comptime t: Input.Type,
         comptime label: []const u8,
+        data: t.Data(),
+    ) if (t == .validate_point) error{IdentityElement}!void else void {
+        // if validate_point fails to validate, we no longer want to check the contract
+        // because the function calling append will now return early.
+        errdefer session.cancel();
+
+        if (t == .bytes and !builtin.is_test)
+            @compileError("message type `bytes` only allowed in tests");
+
+        // assert correctness
+        const input = comptime session.nextInput(t, label);
+        if (t == .validate_point) try data.rejectIdentity();
+
+        // add the message
+        self.appendMessage(input.label, @unionInit(
+            Message,
+            @tagName(switch (t) {
+                .validate_point => .point,
+                else => t,
+            }),
+            data,
+        ));
+    }
+
+    /// Helper function to be used in proof creation. We often need to test what will
+    /// happen if points are zeroed, and to make sure that the verification fails.
+    /// Shouldn't be used outside of the `init` functions.
+    pub inline fn appendNoValidate(
+        self: *Transcript,
+        comptime session: *Session,
+        comptime label: []const u8,
+        point: Ristretto255,
+    ) void {
+        const input = comptime session.nextInput(.validate_point, label);
+        point.rejectIdentity() catch {}; // ignore the error
+        self.appendMessage(input.label, .{ .point = point });
+    }
+
+    fn challengeBytes(
+        self: *Transcript,
+        label: []const u8,
         destination: []u8,
     ) void {
         var data_len: [4]u8 = undefined;
@@ -257,68 +335,24 @@ pub const Transcript = struct {
         self.strobe.prf(destination, false);
     }
 
-    pub fn challengeScalar(
+    pub inline fn challengeScalar(
         self: *Transcript,
+        comptime session: *Session,
         comptime label: []const u8,
     ) Scalar {
-        var buffer: [64]u8 = .{0} ** 64;
-        self.challengeBytes(label, &buffer);
+        const input = comptime session.nextInput(.challenge, label);
+        var buffer: [64]u8 = @splat(0);
+        self.challengeBytes(input.label, &buffer);
         // Specifically need reduce64 instead of Scalar.fromBytes64, since
         // we need the Barret reduction to be done with 10 limbs, not 5.
         const compressed = Ed25519.scalar.reduce64(buffer);
         return Scalar.fromBytes(compressed);
     }
 
-    pub fn validateAndAppendPoint(
-        self: *Transcript,
-        comptime label: []const u8,
-        point: Ristretto255,
-    ) !void {
-        try point.rejectIdentity();
-        self.appendPoint(label, point);
-    }
+    // domain seperation helpers
 
-    // helper functions
-
-    pub fn appendPoint(self: *Transcript, comptime label: []const u8, point: Ristretto255) void {
-        self.appendMessage(label, &point.toBytes());
-    }
-
-    pub fn appendScalar(self: *Transcript, comptime label: []const u8, scalar: Scalar) void {
-        self.appendMessage(label, &scalar.toBytes());
-    }
-
-    pub fn appendPubkey(
-        self: *Transcript,
-        comptime label: []const u8,
-        pubkey: sig.zksdk.ElGamalPubkey,
-    ) void {
-        self.appendPoint(label, pubkey.point);
-    }
-
-    pub fn appendCiphertext(
-        self: *Transcript,
-        comptime label: []const u8,
-        ciphertext: sig.zksdk.ElGamalCiphertext,
-    ) void {
-        var buffer: [64]u8 = .{0} ** 64;
-        @memcpy(buffer[0..32], &ciphertext.commitment.point.toBytes());
-        @memcpy(buffer[32..64], &ciphertext.handle.point.toBytes());
-        self.appendMessage(label, &buffer);
-    }
-
-    pub fn appendCommitment(
-        self: *Transcript,
-        comptime label: []const u8,
-        commitment: sig.zksdk.pedersen.Commitment,
-    ) void {
-        self.appendMessage(label, &commitment.point.toBytes());
-    }
-
-    pub fn appendU64(self: *Transcript, comptime label: []const u8, x: u64) void {
-        var buffer: [8]u8 = .{0} ** 8;
-        std.mem.writeInt(u64, &buffer, x, .little);
-        self.appendMessage(label, &buffer);
+    pub fn appendDomSep(self: *Transcript, comptime seperator: DomainSeperator) void {
+        self.appendBytes("dom-sep", @tagName(seperator));
     }
 
     pub fn appendHandleDomSep(
@@ -330,10 +364,10 @@ pub const Transcript = struct {
             .batched => .@"batched-validity-proof",
             .unbatched => .@"validity-proof",
         });
-        self.appendU64("handles", switch (handles) {
+        self.appendMessage("handles", .{ .u64 = switch (handles) {
             .two => 2,
             .three => 3,
-        });
+        } });
     }
 
     pub fn appendRangeProof(
@@ -345,14 +379,90 @@ pub const Transcript = struct {
             .range => .@"range-proof",
             .inner => .@"inner-product",
         });
-        self.appendU64("n", n);
+        self.appendMessage("n", .{ .u64 = n });
+    }
+
+    // sessions
+
+    pub const Input = struct {
+        label: []const u8,
+        type: Type,
+
+        const Type = enum {
+            bytes,
+            scalar,
+            challenge,
+            point,
+            validate_point,
+            pubkey,
+
+            pub fn Data(comptime t: Type) type {
+                return switch (t) {
+                    .bytes => []const u8,
+                    .scalar => Scalar,
+                    .validate_point, .point => Ristretto255,
+                    .pubkey => zksdk.el_gamal.Pubkey,
+                    .challenge => unreachable, // call `challenge*`
+                };
+            }
+        };
+
+        fn check(self: Input, t: Type, label: []const u8) void {
+            std.debug.assert(self.type == t);
+            std.debug.assert(std.mem.eql(u8, self.label, label));
+        }
+    };
+
+    pub const Contract = []const Input;
+
+    pub const Session = struct {
+        i: u8,
+        contract: Contract,
+        err: bool, // if validate_point errors, we skip the finish() check
+
+        pub inline fn nextInput(comptime self: *Session, t: Input.Type, label: []const u8) Input {
+            comptime {
+                defer self.i += 1;
+                const input = self.contract[self.i];
+                input.check(t, label);
+                return input;
+            }
+        }
+
+        pub inline fn finish(comptime self: *Session) void {
+            // For performance, we have certain computations (specifically in `init` functions)
+            // which skip the last parts of transcript when they aren't needed (i.e ciphertext_ciphertext proof).
+            //
+            // By performing this check, we still ensure that they do those extra computations when in Debug mode,
+            // but are allowed to skip them in a release build.
+            if (builtin.mode == .Debug and !self.err and self.i != self.contract.len) {
+                @compileError("contract unfulfilled");
+            }
+        }
+
+        inline fn cancel(comptime self: *Session) void {
+            comptime self.err = true;
+        }
+    };
+
+    pub inline fn getSession(comptime contract: []const Input) Session {
+        comptime {
+            // contract should always end in a challenge
+            const last_contract = contract[contract.len - 1];
+            std.debug.assert(last_contract.type == .challenge);
+            return .{ .i = 0, .contract = contract, .err = false };
+        }
     }
 };
 
 test "equivalence" {
     var transcript = Transcript.initTest("test protocol");
 
-    transcript.appendMessage("some label", "some data");
+    comptime var session = Transcript.getSession(&.{
+        .{ .label = "some label", .type = .bytes },
+        .{ .label = "challenge", .type = .challenge },
+    });
+    transcript.append(&session, .bytes, "some label", "some data");
 
     var bytes: [32]u8 = undefined;
     transcript.challengeBytes("challenge", &bytes);

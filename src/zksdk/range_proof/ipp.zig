@@ -36,7 +36,7 @@ const bp = sig.zksdk.bulletproofs;
 /// - Bulletproofs paper (Bünz et al., 2018): https://eprint.iacr.org/2017/1066
 /// - Dalek Bulletproofs implementation and docs: https://doc.dalek.rs/bulletproofs/
 /// - Agave IPP implementation: https://github.com/anza-xyz/agave/blob/93699947720534741b2b4d9b6e1696d81e386dcc/zk-sdk/src/range_proof/inner_product.rs
-pub fn Proof(bit_size: comptime_int) type {
+pub fn Proof(comptime bit_size: u64) type {
     const logn: u64 = std.math.log2_int(u64, bit_size);
     const max_elements =
         bit_size * 2 + // g_times_a_times_s and h_times_b_div_s
@@ -52,6 +52,15 @@ pub fn Proof(bit_size: comptime_int) type {
 
         const Self = @This();
         pub const BYTE_LEN = (2 * logn * 32) + 64;
+
+        pub const contract: Transcript.Contract = c: {
+            const triple: [3]Transcript.Input = .{
+                .{ .label = "L", .type = .validate_point },
+                .{ .label = "R", .type = .validate_point },
+                .{ .label = "u", .type = .challenge },
+            };
+            break :c (&triple) ** logn;
+        };
 
         /// Modifies the mutable array pointers in undefined ways, so don't rely on the value
         /// of them after `init`.
@@ -72,13 +81,16 @@ pub fn Proof(bit_size: comptime_int) type {
 
             transcript.appendRangeProof(.inner, bit_size);
 
+            comptime var session = Transcript.getSession(contract);
+            defer session.finish();
+
             var L_vec: std.BoundedArray(Ristretto255, logn) = .{};
             var R_vec: std.BoundedArray(Ristretto255, logn) = .{};
 
-            var n: u64 = bit_size;
-            while (n != 1) {
-                const first_round = n == bit_size;
-                n = n / 2;
+            const rounds = @ctz(bit_size);
+            inline for (0..rounds) |i| {
+                const first_round = (i == 0);
+                const n = bit_size >> @intCast(i + 1);
 
                 const a_L = a[0..n];
                 const a_R = a[n..];
@@ -158,33 +170,33 @@ pub fn Proof(bit_size: comptime_int) type {
                 L_vec.appendAssumeCapacity(L);
                 R_vec.appendAssumeCapacity(R);
 
-                transcript.appendPoint("L", L);
-                transcript.appendPoint("R", R);
+                transcript.appendNoValidate(&session, "L", L);
+                transcript.appendNoValidate(&session, "R", R);
 
-                const u = transcript.challengeScalar("u");
+                const u = transcript.challengeScalar(&session, "u");
                 const u_inv = u.invert();
 
-                for (0..n) |i| {
-                    a_L[i] = a_L[i].mul(u).add(u_inv.mul(a_R[i]));
-                    b_L[i] = b_L[i].mul(u_inv).add(u.mul(b_R[i]));
+                for (0..n) |j| {
+                    a_L[j] = a_L[j].mul(u).add(u_inv.mul(a_R[j]));
+                    b_L[j] = b_L[j].mul(u_inv).add(u.mul(b_R[j]));
 
                     // For the first round, unroll the Hprime = H * y_inv scalar multiplications
                     // into multiscalar multiplications, for performance.
                     // zig fmt: off
-                    const first =  if (first_round) u_inv.mul(G_factors[i])     else u_inv;
-                    const second = if (first_round) u.mul(G_factors[n + i])     else u;
-                    const third =  if (first_round) u.mul(H_factors[i])         else u;
-                    const fourth = if (first_round) u_inv.mul(H_factors[n + i]) else u_inv;
+                    const first =  if (first_round) u_inv.mul(G_factors[j])     else u_inv;
+                    const second = if (first_round) u.mul(G_factors[n + j])     else u;
+                    const third =  if (first_round) u.mul(H_factors[j])         else u;
+                    const fourth = if (first_round) u_inv.mul(H_factors[n + j]) else u_inv;
                     // zig fmt: on
 
-                    G_L[i] = weak_mul.mulMulti(
+                    G_L[j] = weak_mul.mulMulti(
                         2,
-                        .{ G_L[i], G_R[i] },
+                        .{ G_L[j], G_R[j] },
                         .{ first.toBytes(), second.toBytes() },
                     );
-                    H_L[i] = weak_mul.mulMulti(
+                    H_L[j] = weak_mul.mulMulti(
                         2,
-                        .{ H_L[i], H_R[i] },
+                        .{ H_L[j], H_R[j] },
                         .{ third.toBytes(), fourth.toBytes() },
                     );
                 }
@@ -214,7 +226,9 @@ pub fn Proof(bit_size: comptime_int) type {
             Q: Ristretto255,
             transcript: *Transcript,
         ) !void {
-            const u_sq, const u_inv_sq, const s = try self.verificationScalars(transcript);
+            const u_sq, //
+            const u_inv_sq, //
+            const s = try self.verificationScalars(transcript);
 
             var scalars: std.BoundedArray([32]u8, max_elements) = .{};
             var points: std.BoundedArray(Ristretto255, max_elements) = .{};
@@ -265,12 +279,15 @@ pub fn Proof(bit_size: comptime_int) type {
         } {
             transcript.appendRangeProof(.inner, bit_size);
 
+            comptime var session = Transcript.getSession(contract);
+            defer session.finish();
+
             // 1. Recompute x_k,...,x_1 based on the proof transcript
             var challenges: [logn]Scalar = undefined;
-            for (&challenges, self.L_vec, self.R_vec) |*c, L, R| {
-                try transcript.validateAndAppendPoint("L", L);
-                try transcript.validateAndAppendPoint("R", R);
-                c.* = transcript.challengeScalar("u");
+            inline for (&challenges, self.L_vec, self.R_vec) |*c, L, R| {
+                try transcript.append(&session, .validate_point, "L", L);
+                try transcript.append(&session, .validate_point, "R", R);
+                c.* = transcript.challengeScalar(&session, "u");
             }
 
             // 2. Compute 1/(u_k...u_1) and 1/u_k, ..., 1/u_1

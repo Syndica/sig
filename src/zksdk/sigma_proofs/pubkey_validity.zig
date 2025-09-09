@@ -18,6 +18,11 @@ pub const Proof = struct {
     Y: Ristretto255,
     z: Scalar,
 
+    const contract: Transcript.Contract = &.{
+        .{ .label = "Y", .type = .validate_point },
+        .{ .label = "c", .type = .challenge },
+    };
+
     pub fn init(
         kp: *const ElGamalKeypair,
         transcript: *Transcript,
@@ -34,9 +39,12 @@ pub const Proof = struct {
 
         // Scalar.random() cannot return zero, and H isn't an identity
         const Y = pedersen.H.mul(y.toBytes()) catch unreachable;
-        transcript.appendPoint("Y", Y);
 
-        const c = transcript.challengeScalar("c");
+        comptime var session = Transcript.getSession(contract);
+        defer session.finish();
+
+        transcript.appendNoValidate(&session, "Y", Y);
+        const c = transcript.challengeScalar(&session, "c");
         const z = c.mul(s_inv).add(y);
 
         return .{
@@ -55,8 +63,11 @@ pub const Proof = struct {
         // [agave] https://github.com/solana-program/zk-elgamal-proof/blob/8c84822593d393c2305eea917fdffd1ec2525aa7/zk-sdk/src/sigma_proofs/pubkey_validity.rs#L107-L109
         try pubkey.point.rejectIdentity();
 
-        try transcript.validateAndAppendPoint("Y", self.Y);
-        const c = transcript.challengeScalar("c");
+        comptime var session = Transcript.getSession(contract);
+        defer session.finish();
+
+        try transcript.append(&session, .validate_point, "Y", self.Y);
+        const c = transcript.challengeScalar(&session, "c");
 
         //     points  scalars
         // 0   H        z
@@ -124,9 +135,9 @@ pub const Data = struct {
         }
 
         fn newTranscript(self: Context) Transcript {
-            var transcript = Transcript.init(.@"pubkey-validity-instruction");
-            transcript.appendPubkey("pubkey", self.pubkey);
-            return transcript;
+            return .init(.@"pubkey-validity-instruction", &.{
+                .{ .label = "pubkey", .message = .{ .pubkey = self.pubkey } },
+            });
         }
     };
 

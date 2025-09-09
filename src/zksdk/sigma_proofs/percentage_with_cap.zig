@@ -2,6 +2,7 @@
 //! [agave](https://github.com/anza-xyz/agave/blob/5a9906ebf4f24cd2a2b15aca638d609ceed87797/zk-sdk/src/sigma_proofs/percentage_with_cap.rs)
 
 const std = @import("std");
+const builtin = @import("builtin");
 const sig = @import("../../sig.zig");
 
 const Edwards25519 = std.crypto.ecc.Edwards25519;
@@ -15,6 +16,20 @@ const ProofType = sig.runtime.program.zk_elgamal.ProofType;
 pub const Proof = struct {
     max_proof: MaxProof,
     equality_proof: EqualityProof,
+
+    const contract: Transcript.Contract = &.{
+        .{ .label = "Y_max_proof", .type = .validate_point },
+        .{ .label = "Y_delta", .type = .validate_point },
+        .{ .label = "Y_claimed", .type = .validate_point },
+        .{ .label = "c", .type = .challenge },
+
+        .{ .label = "z_max", .type = .scalar },
+        .{ .label = "c_max_proof", .type = .scalar },
+        .{ .label = "z_x", .type = .scalar },
+        .{ .label = "z_delta_real", .type = .scalar },
+        .{ .label = "z_claimed", .type = .scalar },
+        .{ .label = "w", .type = .challenge },
+    };
 
     pub fn init(
         percentage_commitment: *const pedersen.Commitment,
@@ -54,12 +69,22 @@ pub const Proof = struct {
         const below_max = percentage_amount <= max_value;
         const active = if (below_max) proof_below_max else proof_above_max;
 
-        transcript.appendPoint("Y_max_proof", active.max_proof.Y_max_proof);
-        transcript.appendPoint("Y_delta", active.equality_proof.Y_delta);
-        transcript.appendPoint("Y_claimed", active.equality_proof.Y_claimed);
+        if (builtin.mode == .Debug) {
+            comptime var session = Transcript.getSession(contract);
+            defer session.finish();
 
-        _ = transcript.challengeScalar("c");
-        _ = transcript.challengeScalar("w");
+            transcript.appendNoValidate(&session, "Y_max_proof", active.max_proof.Y_max_proof);
+            transcript.appendNoValidate(&session, "Y_delta", active.equality_proof.Y_delta);
+            transcript.appendNoValidate(&session, "Y_claimed", active.equality_proof.Y_claimed);
+            _ = transcript.challengeScalar(&session, "c");
+
+            transcript.append(&session, .scalar, "z_max", active.max_proof.z_max_proof);
+            transcript.append(&session, .scalar, "c_max_proof", active.max_proof.c_max_proof);
+            transcript.append(&session, .scalar, "z_x", active.equality_proof.z_x);
+            transcript.append(&session, .scalar, "z_delta_real", active.equality_proof.z_delta);
+            transcript.append(&session, .scalar, "z_claimed", active.equality_proof.z_claimed);
+            _ = transcript.challengeScalar(&session, "w");
+        }
 
         return .{
             .max_proof = active.max_proof,
@@ -117,14 +142,15 @@ pub const Proof = struct {
         const Y_max_proof = pedersen.H.mul(y_max_proof.toBytes()) catch unreachable;
         defer std.crypto.secureZero(u64, &y_max_proof.limbs);
 
-        transcript.appendPoint("Y_max_proof", Y_max_proof);
-        transcript.appendPoint("Y_delta", Y_delta);
-        transcript.appendPoint("Y_claimed", Y_claimed);
+        comptime var session = Transcript.getSession(contract);
+        defer session.finish();
 
-        const c = transcript.challengeScalar("c").toBytes();
+        transcript.appendNoValidate(&session, "Y_max_proof", Y_max_proof);
+        transcript.appendNoValidate(&session, "Y_delta", Y_delta);
+        transcript.appendNoValidate(&session, "Y_claimed", Y_claimed);
+
+        const c = transcript.challengeScalar(&session, "c").toBytes();
         const c_max_proof = Edwards25519.scalar.sub(c, c_equality.toBytes());
-
-        _ = transcript.challengeScalar("w");
 
         const z_max_proof = Scalar.fromBytes(c_max_proof).mul(r_percentage).add(y_max_proof);
 
@@ -133,6 +159,15 @@ pub const Proof = struct {
             .z_max_proof = z_max_proof,
             .c_max_proof = Scalar.fromBytes(c_max_proof),
         };
+
+        if (builtin.mode == .Debug) {
+            transcript.append(&session, .scalar, "z_max", z_max_proof);
+            transcript.append(&session, .scalar, "c_max_proof", Scalar.fromBytes(c_max_proof));
+            transcript.append(&session, .scalar, "z_x", z_x);
+            transcript.append(&session, .scalar, "z_delta_real", z_delta);
+            transcript.append(&session, .scalar, "z_claimed", z_claimed);
+            _ = transcript.challengeScalar(&session, "w");
+        }
 
         return .{
             .max_proof = max_proof,
@@ -201,15 +236,16 @@ pub const Proof = struct {
             y_claimed.toBytes(),
         }) };
 
-        transcript.appendPoint("Y_max_proof", Y_max_proof);
-        transcript.appendPoint("Y_delta", Y_delta);
-        transcript.appendPoint("Y_claimed", Y_claimed);
+        comptime var session = Transcript.getSession(contract);
+        defer session.finish();
+
+        transcript.appendNoValidate(&session, "Y_max_proof", Y_max_proof);
+        transcript.appendNoValidate(&session, "Y_delta", Y_delta);
+        transcript.appendNoValidate(&session, "Y_claimed", Y_claimed);
 
         const c = transcript.challengeScalar(&session, "c").toBytes();
         var c_equality = Scalar.fromBytes(Edwards25519.scalar.sub(c, c_max_proof.toBytes()));
         defer std.crypto.secureZero(u64, &c_equality.limbs);
-
-        _ = transcript.challengeScalar("w");
 
         const z_x = c_equality.mul(x).add(y_x);
         const z_delta = c_equality.mul(r_delta).add(y_delta);
@@ -222,6 +258,15 @@ pub const Proof = struct {
             .z_delta = z_delta,
             .z_claimed = z_claimed,
         };
+
+        if (builtin.mode == .Debug) {
+            transcript.append(&session, .scalar, "z_max", z_max_proof);
+            transcript.append(&session, .scalar, "c_max_proof", c_max_proof);
+            transcript.append(&session, .scalar, "z_x", z_x);
+            transcript.append(&session, .scalar, "z_delta_real", z_delta);
+            transcript.append(&session, .scalar, "z_claimed", z_claimed);
+            _ = transcript.challengeScalar(&session, "w");
+        }
 
         return .{
             .max_proof = max_proof,
@@ -245,9 +290,12 @@ pub const Proof = struct {
         const C_delta = delta_commitment.point;
         const C_claimed = claimed_commitment.point;
 
-        try transcript.validateAndAppendPoint("Y_max_proof", self.max_proof.Y_max_proof);
-        try transcript.validateAndAppendPoint("Y_delta", self.equality_proof.Y_delta);
-        try transcript.validateAndAppendPoint("Y_claimed", self.equality_proof.Y_claimed);
+        comptime var session = Transcript.getSession(contract);
+        defer session.finish();
+
+        try transcript.append(&session, .validate_point, "Y_max_proof", self.max_proof.Y_max_proof);
+        try transcript.append(&session, .validate_point, "Y_delta", self.equality_proof.Y_delta);
+        try transcript.append(&session, .validate_point, "Y_claimed", self.equality_proof.Y_claimed);
 
         const Y_max = self.max_proof.Y_max_proof;
         const z_max = self.max_proof.z_max_proof;
@@ -259,17 +307,17 @@ pub const Proof = struct {
         const z_delta_real = self.equality_proof.z_delta;
         const z_claimed = self.equality_proof.z_claimed;
 
-        const c = transcript.challengeScalar("c").toBytes();
+        const c = transcript.challengeScalar(&session, "c").toBytes();
         const c_max_proof = self.max_proof.c_max_proof;
         const c_equality = Edwards25519.scalar.sub(c, c_max_proof.toBytes());
 
-        transcript.appendScalar("z_max", z_max);
-        transcript.appendScalar("c_max_proof", c_max_proof);
-        transcript.appendScalar("z_x", z_x);
-        transcript.appendScalar("z_delta_real", z_delta_real);
-        transcript.appendScalar("z_claimed", z_claimed);
+        transcript.append(&session, .scalar, "z_max", z_max);
+        transcript.append(&session, .scalar, "c_max_proof", c_max_proof);
+        transcript.append(&session, .scalar, "z_x", z_x);
+        transcript.append(&session, .scalar, "z_delta_real", z_delta_real);
+        transcript.append(&session, .scalar, "z_claimed", z_claimed);
 
-        const w = transcript.challengeScalar("w");
+        const w = transcript.challengeScalar(&session, "w");
         const ww = w.mul(w);
 
         //     We store points and scalars in the following arrays:
@@ -406,12 +454,12 @@ pub const Data = struct {
         }
 
         fn newTranscript(self: Context) Transcript {
-            var transcript = Transcript.init(.@"percentage-with-cap-instruction");
-            transcript.appendCommitment("percentage-commitment", self.percentage_commitment);
-            transcript.appendCommitment("delta-commitment", self.delta_commitment);
-            transcript.appendCommitment("claimed-commitment", self.claimed_commitment);
-            transcript.appendU64("max-value", self.max_value);
-            return transcript;
+            return .init(.@"percentage-with-cap-instruction", &.{
+                .{ .label = "percentage-commitment", .message = .{ .commitment = self.percentage_commitment } },
+                .{ .label = "delta-commitment", .message = .{ .commitment = self.delta_commitment } },
+                .{ .label = "claimed-commitment", .message = .{ .commitment = self.claimed_commitment } },
+                .{ .label = "max-value", .message = .{ .u64 = self.max_value } },
+            });
         }
     };
 

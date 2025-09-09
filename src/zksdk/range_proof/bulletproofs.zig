@@ -5,6 +5,7 @@
 //! [paper](https://eprint.iacr.org/2017/1066) (Section 4.3).
 
 const std = @import("std");
+const builtin = @import("builtin");
 const sig = @import("../../sig.zig");
 const table = @import("table");
 pub const InnerProductProof = @import("ipp.zig").Proof; // pub so tests can run
@@ -28,6 +29,30 @@ pub fn Proof(bit_size: comptime_int) type {
     std.debug.assert(bit_size <= 256);
     const logn: u64 = std.math.log2_int(u64, bit_size);
     const max = (2 * bit_size) + (2 * logn) + 5 + 8;
+
+    const contract: Transcript.Contract = &[_]Transcript.Input{
+        .{ .label = "A", .type = .validate_point },
+        .{ .label = "S", .type = .validate_point },
+        .{ .label = "y", .type = .challenge },
+        .{ .label = "z", .type = .challenge },
+
+        .{ .label = "T_1", .type = .validate_point },
+        .{ .label = "T_2", .type = .validate_point },
+        .{ .label = "x", .type = .challenge },
+
+        .{ .label = "t_x", .type = .scalar },
+        .{ .label = "t_x_blinding", .type = .scalar },
+        .{ .label = "e_blinding", .type = .scalar },
+        .{ .label = "w", .type = .challenge },
+
+        .{ .label = "c", .type = .challenge },
+
+        //  InnerProductProof(bit_size).contract runs here
+
+        .{ .label = "ipp_a", .type = .scalar },
+        .{ .label = "ipp_b", .type = .scalar },
+        .{ .label = "d", .type = .challenge },
+    };
 
     return struct {
         A: Ristretto255,
@@ -154,12 +179,15 @@ pub fn Proof(bit_size: comptime_int) type {
                 .{s_blinding.toBytes()} ++ s_L ++ s_R,
             ) catch unreachable };
 
-            transcript.appendPoint("A", A);
-            transcript.appendPoint("S", S);
+            comptime var session = Transcript.getSession(contract);
+            defer session.finish();
+
+            transcript.appendNoValidate(&session, "A", A);
+            transcript.appendNoValidate(&session, "S", S);
 
             // y and z are used to merge multiple inner product relations into one inner product
-            const y = transcript.challengeScalar("y");
-            const z = transcript.challengeScalar("z");
+            const y = transcript.challengeScalar(&session, "y");
+            const z = transcript.challengeScalar(&session, "z");
 
             var l_poly: VecPoly1 = .zero;
             var r_poly: VecPoly1 = .zero;
@@ -195,12 +223,12 @@ pub fn Proof(bit_size: comptime_int) type {
             const T_1, const t_1_blinding = pedersen.initScalar(t_poly.b);
             const T_2, const t_2_blinding = pedersen.initScalar(t_poly.c);
 
-            transcript.appendPoint("T_1", T_1.point);
-            transcript.appendPoint("T_2", T_2.point);
+            transcript.appendNoValidate(&session, "T_1", T_1.point);
+            transcript.appendNoValidate(&session, "T_2", T_2.point);
 
             // evaluate t(x) on challenge x and homomorphically compute the openings for
             // z^2 * V_1 + z^3 * V_2 + ... + z^{m+1} * V_m + delta(y, z)*G + x*T_1 + x^2*T_2
-            const x = transcript.challengeScalar("x");
+            const x = transcript.challengeScalar(&session, "x");
 
             var agg_opening = ZERO;
             var agg_scalar = z;
@@ -218,22 +246,22 @@ pub fn Proof(bit_size: comptime_int) type {
             const t_x = t_poly.evaluate(x);
             const t_x_blinding = t_binding_poly.evaluate(x);
 
-            transcript.appendScalar("t_x", t_x);
-            transcript.appendScalar("t_x_blinding", t_x_blinding);
+            transcript.append(&session, .scalar, "t_x", t_x);
+            transcript.append(&session, .scalar, "t_x_blinding", t_x_blinding);
 
             // homomorphically compuate the openings for A + x*S
             const e_blinding = s_blinding.mul(x).add(a_blinding);
-            transcript.appendScalar("e_blinding", e_blinding);
+            transcript.append(&session, .scalar, "e_blinding", e_blinding);
 
             // compute the inner product argument on the commitment:
             // P = <l(x), G> + <r(x), H'> + <l(x), r(x)>*Q
-            const w = transcript.challengeScalar("w");
+            const w = transcript.challengeScalar(&session, "w");
             const Q = weak_mul.mul(pedersen.G.p, w.toBytes());
 
             const G_factors: [bit_size]Scalar = @splat(ONE);
             const H_factors = genPowers(bit_size, y.invert());
 
-            _ = transcript.challengeScalar("c");
+            _ = transcript.challengeScalar(&session, "c");
 
             var l_vec = l_poly.eval(x);
             var r_vec = r_poly.eval(x);
@@ -245,6 +273,12 @@ pub fn Proof(bit_size: comptime_int) type {
                 &r_vec,
                 transcript,
             );
+
+            if (builtin.mode == .Debug) {
+                transcript.append(&session, .scalar, "ipp_a", ipp_proof.a);
+                transcript.append(&session, .scalar, "ipp_b", ipp_proof.b);
+                _ = transcript.challengeScalar(&session, "d");
+            }
 
             return .{
                 .A = A,
@@ -270,24 +304,27 @@ pub fn Proof(bit_size: comptime_int) type {
 
             transcript.appendRangeProof(.range, bit_size);
 
-            try transcript.validateAndAppendPoint("A", self.A);
-            try transcript.validateAndAppendPoint("S", self.S);
+            comptime var session = Transcript.getSession(contract);
+            defer session.finish();
 
-            const y = transcript.challengeScalar("y");
-            const z = transcript.challengeScalar("z");
+            try transcript.append(&session, .validate_point, "A", self.A);
+            try transcript.append(&session, .validate_point, "S", self.S);
 
-            try transcript.validateAndAppendPoint("T_1", self.T_1);
-            try transcript.validateAndAppendPoint("T_2", self.T_2);
+            const y = transcript.challengeScalar(&session, "y");
+            const z = transcript.challengeScalar(&session, "z");
 
-            const x = transcript.challengeScalar("x");
+            try transcript.append(&session, .validate_point, "T_1", self.T_1);
+            try transcript.append(&session, .validate_point, "T_2", self.T_2);
 
-            transcript.appendScalar("t_x", self.t_x);
-            transcript.appendScalar("t_x_blinding", self.t_x_blinding);
-            transcript.appendScalar("e_blinding", self.e_blinding);
+            const x = transcript.challengeScalar(&session, "x");
 
-            const w = transcript.challengeScalar("w");
+            transcript.append(&session, .scalar, "t_x", self.t_x);
+            transcript.append(&session, .scalar, "t_x_blinding", self.t_x_blinding);
+            transcript.append(&session, .scalar, "e_blinding", self.e_blinding);
+
+            const w = transcript.challengeScalar(&session, "w");
             // only left for legacy reasons, use `d` instead
-            _ = transcript.challengeScalar("c");
+            _ = transcript.challengeScalar(&session, "c");
 
             const x_sq, //
             const x_inv_sq, //
@@ -297,10 +334,10 @@ pub fn Proof(bit_size: comptime_int) type {
             const a = self.ipp.a;
             const b = self.ipp.b;
 
-            transcript.appendScalar("ipp_a", a);
-            transcript.appendScalar("ipp_b", b);
+            transcript.append(&session, .scalar, "ipp_a", a);
+            transcript.append(&session, .scalar, "ipp_b", b);
 
-            const d = transcript.challengeScalar("d");
+            const d = transcript.challengeScalar(&session, "d");
 
             // (numbers use u128 as the example)
             //        points                scalars
@@ -657,16 +694,10 @@ pub fn Data(bit_size: comptime_int) type {
             }
 
             fn newTranscript(self: Context) Transcript {
-                var transcript = Transcript.init(.@"batched-range-proof-instruction");
-                transcript.appendMessage(
-                    "commitments",
-                    std.mem.sliceAsBytes(&self.commitments),
-                );
-                transcript.appendMessage(
-                    "bit-lengths",
-                    std.mem.sliceAsBytes(&self.bit_lengths),
-                );
-                return transcript;
+                return .init(.@"batched-range-proof-instruction", &.{
+                    .{ .label = "commitments", .message = .{ .bytes = std.mem.sliceAsBytes(&self.commitments) } },
+                    .{ .label = "bit-lengths", .message = .{ .bytes = std.mem.sliceAsBytes(&self.bit_lengths) } },
+                });
             }
         };
     };

@@ -2,6 +2,7 @@
 //! [agave](https://github.com/anza-xyz/agave/blob/5a9906ebf4f24cd2a2b15aca638d609ceed87797/zk-sdk/src/sigma_proofs/grouped_ciphertext_validity/handles_3.rs)
 
 const std = @import("std");
+const builtin = @import("builtin");
 const sig = @import("../../../sig.zig");
 
 const Edwards25519 = std.crypto.ecc.Edwards25519;
@@ -24,6 +25,23 @@ pub const Proof = struct {
     z_r: Scalar,
     z_x: Scalar,
 
+    // the extra contract on top of the base `contract` used in `init`.
+    const batched_contract: Transcript.Contract = &.{
+        .{ .label = "t", .type = .challenge },
+    };
+
+    const contract: Transcript.Contract = &.{
+        .{ .label = "Y_0", .type = .validate_point },
+        .{ .label = "Y_1", .type = .validate_point },
+        .{ .label = "Y_2", .type = .validate_point },
+        .{ .label = "Y_3", .type = .point },
+        .{ .label = "c", .type = .challenge },
+
+        .{ .label = "z_r", .type = .scalar },
+        .{ .label = "z_x", .type = .scalar },
+        .{ .label = "w", .type = .challenge },
+    };
+
     pub fn initBatched(
         first_pubkey: *const ElGamalPubkey,
         second_pubkey: *const ElGamalPubkey,
@@ -36,7 +54,9 @@ pub const Proof = struct {
     ) Proof {
         transcript.appendHandleDomSep(.batched, .three);
 
-        const t = transcript.challengeScalar("t");
+        comptime var session = Transcript.getSession(batched_contract);
+        defer session.finish();
+        const t = transcript.challengeScalar(&session, "t");
 
         const scalar_lo = pedersen.scalarFromInt(u64, amount_lo);
         const scalar_hi = pedersen.scalarFromInt(u64, amount_hi);
@@ -66,6 +86,9 @@ pub const Proof = struct {
     ) Proof {
         transcript.appendHandleDomSep(.unbatched, .three);
 
+        comptime var session = Transcript.getSession(contract);
+        defer session.finish();
+
         const P_first = first_pubkey.point;
         const P_second = second_pubkey.point;
         const P_third = third_pubkey.point;
@@ -94,16 +117,21 @@ pub const Proof = struct {
         const Y_2: Ristretto255 = .{ .p = weak_mul.mul(P_second.p, y_r.toBytes()) };
         const Y_3: Ristretto255 = .{ .p = weak_mul.mul(P_third.p, y_r.toBytes()) };
 
-        transcript.appendPoint("Y_0", Y_0);
-        transcript.appendPoint("Y_1", Y_1);
-        transcript.appendPoint("Y_2", Y_2);
-        transcript.appendPoint("Y_3", Y_3);
+        transcript.appendNoValidate(&session, "Y_0", Y_0);
+        transcript.appendNoValidate(&session, "Y_1", Y_1);
+        transcript.appendNoValidate(&session, "Y_2", Y_2);
+        transcript.append(&session, .point, "Y_3", Y_3);
 
-        const c = transcript.challengeScalar("c");
-        _ = transcript.challengeScalar("w");
+        const c = transcript.challengeScalar(&session, "c");
 
         const z_r = c.mul(r).add(y_r);
         const z_x = c.mul(x).add(y_x);
+
+        if (builtin.mode == .Debug) {
+            transcript.append(&session, .scalar, "z_r", z_r);
+            transcript.append(&session, .scalar, "z_x", z_x);
+            _ = transcript.challengeScalar(&session, "w");
+        }
 
         return .{
             .Y_0 = Y_0,
@@ -148,24 +176,27 @@ pub const Proof = struct {
         params: Params(batched),
         transcript: *Transcript,
     ) !void {
+        comptime var session = Transcript.getSession(if (batched) batched_contract ++ contract else contract);
+        defer session.finish();
+
         const t = if (batched) t: {
             transcript.appendHandleDomSep(.batched, .three);
-            break :t transcript.challengeScalar("t");
+            break :t transcript.challengeScalar(&session, "t");
         } else void; // shouldn't be referenced
 
         transcript.appendHandleDomSep(.unbatched, .three);
 
-        try transcript.validateAndAppendPoint("Y_0", self.Y_0);
-        try transcript.validateAndAppendPoint("Y_1", self.Y_1);
-        try transcript.validateAndAppendPoint("Y_2", self.Y_2);
-        transcript.appendPoint("Y_3", self.Y_3);
+        try transcript.append(&session, .validate_point, "Y_0", self.Y_0);
+        try transcript.append(&session, .validate_point, "Y_1", self.Y_1);
+        try transcript.append(&session, .validate_point, "Y_2", self.Y_2);
+        transcript.append(&session, .point, "Y_3", self.Y_3);
 
-        const c = transcript.challengeScalar("c");
+        const c = transcript.challengeScalar(&session, "c");
         const c_negated = Scalar.fromBytes(Edwards25519.scalar.neg(c.toBytes()));
 
-        transcript.appendScalar("z_r", self.z_r);
-        transcript.appendScalar("z_x", self.z_x);
-        const w = transcript.challengeScalar("w");
+        transcript.append(&session, .scalar, "z_r", self.z_r);
+        transcript.append(&session, .scalar, "z_x", self.z_x);
+        const w = transcript.challengeScalar(&session, "w");
         const ww = w.mul(w);
         const www = ww.mul(w);
 
@@ -329,12 +360,12 @@ pub const Data = struct {
         }
 
         fn newTranscript(self: Context) Transcript {
-            var transcript = Transcript.init(.@"grouped-ciphertext-validity-3-handles-instruction");
-            transcript.appendPubkey("first-pubkey", self.first_pubkey);
-            transcript.appendPubkey("second-pubkey", self.second_pubkey);
-            transcript.appendPubkey("third-pubkey", self.third_pubkey);
-            transcript.appendMessage("grouped-ciphertext", &self.grouped_ciphertext.toBytes());
-            return transcript;
+            return .init(.@"grouped-ciphertext-validity-3-handles-instruction", &.{
+                .{ .label = "first-pubkey", .message = .{ .pubkey = self.first_pubkey } },
+                .{ .label = "second-pubkey", .message = .{ .pubkey = self.second_pubkey } },
+                .{ .label = "third-pubkey", .message = .{ .pubkey = self.third_pubkey } },
+                .{ .label = "grouped-ciphertext", .message = .{ .grouped_3 = self.grouped_ciphertext } },
+            });
         }
     };
 
@@ -465,15 +496,13 @@ pub const BatchedData = struct {
         }
 
         fn newTranscript(self: Context) Transcript {
-            var transcript = Transcript.init(
-                .@"batched-grouped-ciphertext-validity-3-handles-instruction",
-            );
-            transcript.appendPubkey("first-pubkey", self.first_pubkey);
-            transcript.appendPubkey("second-pubkey", self.second_pubkey);
-            transcript.appendPubkey("third-pubkey", self.third_pubkey);
-            transcript.appendMessage("grouped-ciphertext-lo", &self.grouped_ciphertext_lo.toBytes());
-            transcript.appendMessage("grouped-ciphertext-hi", &self.grouped_ciphertext_hi.toBytes());
-            return transcript;
+            return .init(.@"batched-grouped-ciphertext-validity-3-handles-instruction", &.{
+                .{ .label = "first-pubkey", .message = .{ .pubkey = self.first_pubkey } },
+                .{ .label = "second-pubkey", .message = .{ .pubkey = self.second_pubkey } },
+                .{ .label = "third-pubkey", .message = .{ .pubkey = self.third_pubkey } },
+                .{ .label = "grouped-ciphertext-lo", .message = .{ .grouped_3 = self.grouped_ciphertext_lo } },
+                .{ .label = "grouped-ciphertext-hi", .message = .{ .grouped_3 = self.grouped_ciphertext_hi } },
+            });
         }
     };
 

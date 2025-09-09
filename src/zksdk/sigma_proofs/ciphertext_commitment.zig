@@ -2,6 +2,7 @@
 //! [agave](https://github.com/anza-xyz/agave/blob/5a9906ebf4f24cd2a2b15aca638d609ceed87797/zk-sdk/src/sigma_proofs/ciphertext_commitment_equality.rs)
 
 const std = @import("std");
+const builtin = @import("builtin");
 const sig = @import("../../sig.zig");
 
 const Edwards25519 = std.crypto.ecc.Edwards25519;
@@ -23,6 +24,18 @@ pub const Proof = struct {
     z_s: Scalar,
     z_x: Scalar,
     z_r: Scalar,
+
+    const contract: Transcript.Contract = &.{
+        .{ .label = "Y_0", .type = .validate_point },
+        .{ .label = "Y_1", .type = .validate_point },
+        .{ .label = "Y_2", .type = .validate_point },
+        .{ .label = "c", .type = .challenge },
+
+        .{ .label = "z_s", .type = .scalar },
+        .{ .label = "z_x", .type = .scalar },
+        .{ .label = "z_r", .type = .scalar },
+        .{ .label = "w", .type = .challenge }, // w used for batch verification
+    };
 
     pub fn init(
         kp: *const ElGamalKeypair,
@@ -50,33 +63,42 @@ pub const Proof = struct {
             std.crypto.secureZero(u64, &y_r.limbs);
         }
 
-        const Y_0 = weak_mul.mul(P.point.p, y_s.toBytes());
-        const Y_1 = weak_mul.mulMulti(
+        const Y_0: Ristretto255 = .{ .p = weak_mul.mul(P.point.p, y_s.toBytes()) };
+        const Y_1: Ristretto255 = .{ .p = weak_mul.mulMulti(
             2,
             .{ pedersen.G.p, D.p },
             .{ y_x.toBytes(), y_s.toBytes() },
-        );
-        const Y_2 = weak_mul.mulMulti(
+        ) };
+        const Y_2: Ristretto255 = .{ .p = weak_mul.mulMulti(
             2,
             .{ pedersen.G.p, pedersen.H.p },
             .{ y_x.toBytes(), y_r.toBytes() },
-        );
+        ) };
 
-        transcript.appendPoint("Y_0", .{ .p = Y_0 });
-        transcript.appendPoint("Y_1", .{ .p = Y_1 });
-        transcript.appendPoint("Y_2", .{ .p = Y_2 });
+        comptime var session = Transcript.getSession(contract);
+        defer session.finish();
 
-        const c = transcript.challengeScalar("c");
-        _ = transcript.challengeScalar("w");
+        transcript.appendNoValidate(&session, "Y_0", Y_0);
+        transcript.appendNoValidate(&session, "Y_1", Y_1);
+        transcript.appendNoValidate(&session, "Y_2", Y_2);
+
+        const c = transcript.challengeScalar(&session, "c");
 
         const z_s = c.mul(s).add(y_s);
         const z_x = c.mul(x).add(y_x);
         const z_r = c.mul(r).add(y_r);
 
+        if (builtin.mode == .Debug) {
+            transcript.append(&session, .scalar, "z_s", z_s);
+            transcript.append(&session, .scalar, "z_x", z_x);
+            transcript.append(&session, .scalar, "z_r", z_r);
+            _ = transcript.challengeScalar(&session, "w");
+        }
+
         return .{
-            .Y_0 = .{ .p = Y_0 },
-            .Y_1 = .{ .p = Y_1 },
-            .Y_2 = .{ .p = Y_2 },
+            .Y_0 = Y_0,
+            .Y_1 = Y_1,
+            .Y_2 = Y_2,
             .z_s = z_s,
             .z_x = z_x,
             .z_r = z_r,
@@ -97,12 +119,19 @@ pub const Proof = struct {
         const D = ciphertext.handle.point;
         const C_commitment = commitment.point;
 
-        try transcript.validateAndAppendPoint("Y_0", self.Y_0);
-        try transcript.validateAndAppendPoint("Y_1", self.Y_1);
-        try transcript.validateAndAppendPoint("Y_2", self.Y_2);
+        comptime var session = Transcript.getSession(contract);
+        defer session.finish();
 
-        const c = transcript.challengeScalar("c").toBytes();
-        const w = transcript.challengeScalar("w");
+        try transcript.append(&session, .validate_point, "Y_0", self.Y_0);
+        try transcript.append(&session, .validate_point, "Y_1", self.Y_1);
+        try transcript.append(&session, .validate_point, "Y_2", self.Y_2);
+
+        const c = transcript.challengeScalar(&session, "c").toBytes();
+
+        transcript.append(&session, .scalar, "z_s", self.z_s);
+        transcript.append(&session, .scalar, "z_x", self.z_x);
+        transcript.append(&session, .scalar, "z_r", self.z_r);
+        const w = transcript.challengeScalar(&session, "w");
 
         const c_negated = Scalar.fromBytes(Edwards25519.scalar.neg(c));
         const z_s_w = self.z_s.mul(w);
@@ -217,11 +246,11 @@ pub const Data = struct {
         }
 
         fn newTranscript(self: Context) Transcript {
-            var transcript = Transcript.init(.@"ciphertext-commitment-equality-instruction");
-            transcript.appendPubkey("pubkey", self.pubkey);
-            transcript.appendCiphertext("ciphertext", self.ciphertext);
-            transcript.appendCommitment("commitment", self.commitment);
-            return transcript;
+            return .init(.@"ciphertext-commitment-equality-instruction", &.{
+                .{ .label = "pubkey", .message = .{ .pubkey = self.pubkey } },
+                .{ .label = "ciphertext", .message = .{ .ciphertext = self.ciphertext } },
+                .{ .label = "commitment", .message = .{ .commitment = self.commitment } },
+            });
         }
     };
 
