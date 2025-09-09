@@ -270,6 +270,7 @@ pub const BasicShredTracker = struct {
 
     /// assumes lock is held
     fn setBottom(self: *Self, slot: usize) void {
+        self.logger.info().logf("set bottom: slot={}", .{slot});
         for (self.current_bottom_slot..slot) |slot_to_wipe| {
             const monitored_slot = self.getMonitoredSlot(slot_to_wipe) catch unreachable;
             monitored_slot.* = .{};

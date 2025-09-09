@@ -160,7 +160,18 @@ pub fn replayActiveSlotsSync(state: ReplayExecutionState) ![]const ReplayResult 
             allocator.free(params.entries);
         }
 
+        std.debug.print(
+            "Confirming slot:\n\tslot={}\n\tdelta_lt_hash={s}\n",
+            .{ slot, try sig.replay.freeze.truncatedDeltaLtHash(allocator, state.account_store.reader(), slot, params.svm_params.ancestors) },
+        );
+
         const maybe_err = try confirmSlotSync(allocator, .from(state.logger), params);
+
+        std.debug.print(
+            "Confirmed slot:\n\tslot={}\n\tdelta_lt_hash={s}\n",
+            .{ slot, try sig.replay.freeze.truncatedDeltaLtHash(allocator, state.account_store.reader(), slot, params.svm_params.ancestors) },
+        );
+
         results.appendAssumeCapacity(.{
             .slot = slot,
             .entries = params.entries,

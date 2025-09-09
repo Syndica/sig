@@ -134,11 +134,19 @@ pub fn confirmSlotSync(
         return .{ .invalid_block = .InvalidEntryHash };
     }
 
+    var index: usize = 0;
     for (params.entries) |entry| {
+        if (entry.transactions.len == 0) continue;
+        index += 1;
+
         const batch = try resolveBatch(allocator, entry.transactions, params.slot_resolver);
         defer batch.deinit(allocator);
 
         var exit = Atomic(bool).init(false);
+        // std.debug.print(
+        //     "Processing batch: delta_lt_hash={s}\n",
+        //     .{try sig.replay.freeze.truncatedDeltaLtHash(allocator, params.committer.account_store.reader(), params.svm_params.slot, params.svm_params.ancestors)},
+        // );
         switch (try replay.scheduler.processBatch(
             allocator,
             params.svm_params,
@@ -149,6 +157,12 @@ pub fn confirmSlotSync(
             .success => {},
             .failure => |err| return .{ .invalid_transaction = err },
             .exit => unreachable,
+        }
+        if (params.svm_params.slot == 356426107) {
+            std.debug.print(
+                "Processed batch:  delta_lt_hash={s}\n",
+                .{try sig.replay.freeze.truncatedDeltaLtHash(allocator, params.committer.account_store.reader(), params.svm_params.slot, params.svm_params.ancestors)},
+            );
         }
     }
 
