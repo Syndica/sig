@@ -28,7 +28,7 @@ pub const Proof = struct {
         max_value: u64,
         transcript: *Transcript,
     ) Proof {
-        transcript.appendDomSep("percentage-with-cap-proof");
+        transcript.appendDomSep(.@"percentage-with-cap-proof");
 
         var transcript_percentage_above_max = transcript.*;
         var transcript_percentage_below_max = transcript.*;
@@ -237,7 +237,7 @@ pub const Proof = struct {
         max_value: u64,
         transcript: *Transcript,
     ) !void {
-        transcript.appendDomSep("percentage-with-cap-proof");
+        transcript.appendDomSep(.@"percentage-with-cap-proof");
 
         const m = pedersen.scalarFromInt(u64, max_value);
 
@@ -406,7 +406,7 @@ pub const Data = struct {
         }
 
         fn newTranscript(self: Context) Transcript {
-            var transcript = Transcript.init("percentage-with-cap-instruction");
+            var transcript = Transcript.init(.@"percentage-with-cap-instruction");
             transcript.appendCommitment("percentage-commitment", self.percentage_commitment);
             transcript.appendCommitment("delta-commitment", self.delta_commitment);
             transcript.appendCommitment("claimed-commitment", self.claimed_commitment);
@@ -603,8 +603,8 @@ test "above max proof" {
 
     const claimed_commitment, const claimed_opening = pedersen.initValue(u64, 0);
 
-    var prover_transcript = Transcript.init("test");
-    var verifier_transcript = Transcript.init("test");
+    var prover_transcript = Transcript.initTest("Test");
+    var verifier_transcript = Transcript.initTest("Test");
 
     var proof = Proof.init(
         &percentage_commitment,
@@ -667,8 +667,8 @@ test "below max proof" {
         try std.testing.expect(b.equivalent(d));
     }
 
-    var prover_transcript = Transcript.init("test");
-    var verifier_transcript = Transcript.init("test");
+    var prover_transcript = Transcript.initTest("Test");
+    var verifier_transcript = Transcript.initTest("Test");
 
     var proof = Proof.init(
         &percentage_commitment,
@@ -721,8 +721,8 @@ test "is zero" {
     };
     const claimed_commitment, const claimed_opening = pedersen.initValue(u64, delta);
 
-    var prover_transcript = Transcript.init("test");
-    var verifier_transcript = Transcript.init("test");
+    var prover_transcript = Transcript.initTest("Test");
+    var verifier_transcript = Transcript.initTest("Test");
 
     var proof = Proof.init(
         &percentage_commitment,
@@ -763,7 +763,7 @@ test "proof string" {
     const proof = try Proof.fromBase64(proof_string);
     // zig fmt: on
 
-    var verifier_transcript = Transcript.init("test");
+    var verifier_transcript = Transcript.initTest("test");
 
     try proof.verify(
         &percentage_commitment,

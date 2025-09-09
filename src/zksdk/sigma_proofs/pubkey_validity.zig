@@ -22,7 +22,7 @@ pub const Proof = struct {
         kp: *const ElGamalKeypair,
         transcript: *Transcript,
     ) Proof {
-        transcript.appendDomSep("pubkey-proof");
+        transcript.appendDomSep(.@"pubkey-proof");
 
         const s = kp.secret.scalar;
         std.debug.assert(!s.isZero());
@@ -50,7 +50,7 @@ pub const Proof = struct {
         pubkey: *const ElGamalPubkey,
         transcript: *Transcript,
     ) !void {
-        transcript.appendDomSep("pubkey-proof");
+        transcript.appendDomSep(.@"pubkey-proof");
 
         // [agave] https://github.com/solana-program/zk-elgamal-proof/blob/8c84822593d393c2305eea917fdffd1ec2525aa7/zk-sdk/src/sigma_proofs/pubkey_validity.rs#L107-L109
         try pubkey.point.rejectIdentity();
@@ -124,7 +124,7 @@ pub const Data = struct {
         }
 
         fn newTranscript(self: Context) Transcript {
-            var transcript = Transcript.init("pubkey-validity-instruction");
+            var transcript = Transcript.init(.@"pubkey-validity-instruction");
             transcript.appendPubkey("pubkey", self.pubkey);
             return transcript;
         }
@@ -167,8 +167,8 @@ pub const Data = struct {
 test "correctness" {
     const kp = ElGamalKeypair.random();
 
-    var prover_transcript = Transcript.init("test");
-    var verifier_transcript = Transcript.init("test");
+    var prover_transcript = Transcript.initTest("Test");
+    var verifier_transcript = Transcript.initTest("Test");
 
     const proof = Proof.init(&kp, &prover_transcript);
     try proof.verify(&kp.public, &verifier_transcript);
@@ -178,8 +178,8 @@ test "incorrect pubkey" {
     const kp = ElGamalKeypair.random();
     const incorrect_kp = ElGamalKeypair.random();
 
-    var prover_transcript = Transcript.init("test");
-    var verifier_transcript = Transcript.init("test");
+    var prover_transcript = Transcript.initTest("Test");
+    var verifier_transcript = Transcript.initTest("Test");
 
     const proof = Proof.init(&kp, &prover_transcript);
 
@@ -198,6 +198,6 @@ test "proof string" {
     const proof = try Proof.fromBase64(proof_string);
     // zig fmt: on
 
-    var verifier_transcript = Transcript.init("test");
+    var verifier_transcript = Transcript.initTest("test");
     try proof.verify(&pubkey, &verifier_transcript);
 }

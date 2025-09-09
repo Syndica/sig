@@ -26,7 +26,7 @@ pub const Proof = struct {
         ciphertext: *const ElGamalCiphertext,
         transcript: *Transcript,
     ) Proof {
-        transcript.appendDomSep("zero-ciphertext-proof");
+        transcript.appendDomSep(.@"zero-ciphertext-proof");
 
         const P = kp.public.point;
         const s = kp.secret.scalar;
@@ -62,7 +62,7 @@ pub const Proof = struct {
         ciphertext: *const ElGamalCiphertext,
         transcript: *Transcript,
     ) !void {
-        transcript.appendDomSep("zero-ciphertext-proof");
+        transcript.appendDomSep(.@"zero-ciphertext-proof");
 
         const P = pubkey.point;
         const C = ciphertext.commitment.point;
@@ -166,7 +166,7 @@ pub const Data = struct {
         }
 
         fn newTranscript(self: Context) Transcript {
-            var transcript = Transcript.init("zero-ciphertext-instruction");
+            var transcript = Transcript.init(.@"zero-ciphertext-instruction");
             transcript.appendPubkey("pubkey", self.pubkey);
             transcript.appendCiphertext("ciphertext", self.ciphertext);
             return transcript;
@@ -229,8 +229,8 @@ pub const Data = struct {
 test "sanity" {
     var kp = ElGamalKeypair.random();
 
-    var prover_transcript = Transcript.init("test");
-    var verifier_transcript = Transcript.init("test");
+    var prover_transcript = Transcript.initTest("Test");
+    var verifier_transcript = Transcript.initTest("Test");
 
     // general case: encryption of 0
     {
@@ -254,8 +254,8 @@ test "edge case" {
     var kp = ElGamalKeypair.random();
 
     {
-        var prover_transcript = Transcript.init("test");
-        var verifier_transcript = Transcript.init("test");
+        var prover_transcript = Transcript.initTest("Test");
+        var verifier_transcript = Transcript.initTest("Test");
 
         // All zero ciphertext should be a valid encoding for the scalar "0"
         var ciphertext = try ElGamalCiphertext.fromBytes(.{0} ** 64);
@@ -269,8 +269,8 @@ test "edge case" {
     {
         // zeroed commitment
 
-        var prover_transcript = Transcript.init("test");
-        var verifier_transcript = Transcript.init("test");
+        var prover_transcript = Transcript.initTest("Test");
+        var verifier_transcript = Transcript.initTest("Test");
 
         const zeroed_commitment: pedersen.Commitment = .{
             .point = try Ristretto255.fromBytes(.{0} ** 32),
@@ -293,8 +293,8 @@ test "edge case" {
     {
         // zeroed handle
 
-        var prover_transcript = Transcript.init("test");
-        var verifier_transcript = Transcript.init("test");
+        var prover_transcript = Transcript.initTest("Test");
+        var verifier_transcript = Transcript.initTest("Test");
 
         const commitment, _ = pedersen.initValue(u64, 0);
         const ciphertext: ElGamalCiphertext = .{
@@ -311,8 +311,8 @@ test "edge case" {
 
     // if the public key is zeroed, then the proof should always reject
     {
-        var prover_transcript = Transcript.init("test");
-        var verifier_transcript = Transcript.init("test");
+        var prover_transcript = Transcript.initTest("Test");
+        var verifier_transcript = Transcript.initTest("Test");
 
         const public: ElGamalPubkey = .{ .point = try Ristretto255.fromBytes(.{0} ** 32) };
         const ciphertext = el_gamal.encrypt(u64, 0, &public);
@@ -337,6 +337,6 @@ test "proof string" {
     const proof = try Proof.fromBase64(proof_string);
     // zig fmt: on
 
-    var verifier_transcript = Transcript.init("test");
+    var verifier_transcript = Transcript.initTest("test");
     try proof.verify(&pubkey, &ciphertext, &verifier_transcript);
 }
