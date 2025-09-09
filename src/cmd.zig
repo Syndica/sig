@@ -1318,7 +1318,15 @@ fn replayOffline(
         var staked_nodes_cloned = try staked_nodes.clone(allocator);
         errdefer staked_nodes_cloned.deinit(allocator);
 
-        const leader_schedule = try LeaderSchedule.fromStakedNodes(
+        const leader_schedule = if (true) // TODO: Feature gate
+            try LeaderSchedule.fromVoteAccounts(
+                allocator,
+                epoch,
+                epoch_schedule.slots_per_epoch,
+                try collapsed_manifest.epochVoteAccounts(epoch),
+            )
+        else
+            try LeaderSchedule.fromStakedNodes(
             allocator,
             epoch,
             epoch_schedule.slots_per_epoch,
