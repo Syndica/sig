@@ -16,13 +16,13 @@ pub const Ancestors = struct {
     /// The maximum allowed distance from the highest to lowest contained slot.
     pub const MAX_SLOT_RANGE = 8192;
 
-    // For some reason, agave serializes Ancestors as HashMap(slot, usize). But deserializing
-    // ignores the usize, and serializing just uses the value 0. So we need to serialize void
-    // as if it's 0, and deserialize 0 as if it's void.
-    // pub const @"!bincode-config:ancestors" = bincode.FieldConfig(RingBitSet(MAX_SLOT_RANGE)){
-    //     .serializer = voidSerialize,
-    //     .deserializer = voidDeserialize,
-    // };
+    /// For some reason, agave serializes Ancestors as HashMap(slot, usize). But deserializing
+    /// ignores the usize, and serializing just uses the value 0. So we need to serialize void
+    /// as if it's 0, and deserialize 0 as if it's void.
+    pub const @"!bincode-config:ancestors" = bincode.FieldConfig(RingBitSet(MAX_SLOT_RANGE)){
+        .serializer = serialize,
+        .deserializer = deserialize,
+    };
 
     pub fn addSlot(self: *Ancestors, slot: Slot) error{Underflow}!void {
         try self.ancestors.set(slot);
@@ -42,15 +42,28 @@ pub const Ancestors = struct {
         return self.ancestors.iterator();
     }
 
-    fn voidDeserialize(l: *bincode.LimitAllocator, reader: anytype, params: bincode.Params) !void {
-        _ = params; // autofix
-        const deserialized = try bincode.readWithLimit(l, HashMap(Slot, usize), reader, .{});
+    fn deserialize(
+        l: *bincode.LimitAllocator,
+        reader: anytype,
+        params: bincode.Params,
+    ) anyerror!RingBitSet(MAX_SLOT_RANGE) {
+        const deserialized = try bincode.readWithLimit(l, HashMap(Slot, usize), reader, params);
         defer bincode.free(l.allocator(), deserialized);
+        var set = RingBitSet(MAX_SLOT_RANGE){};
+        for (deserialized.keys()) |slot| {
+            try set.set(slot);
+        }
     }
 
-    // fn voidSerialize(writer: anytype, _: anytype, params: bincode.Params) !void {
-    //     try bincode.write(writer, @as(usize, 0), params);
-    // }
+    fn serialize(writer: anytype, data: anytype, params: bincode.Params) anyerror!void {
+        var map = HashMap(Slot, usize){};
+        defer map.deinit(std.heap.c_allocator); // TODO: change this
+        var iter = data.iterator();
+        while (iter.next()) |slot| {
+            try map.put(std.heap.c_allocator, slot, 0);
+        }
+        try bincode.write(writer, map, params);
+    }
 
     pub fn clone(self: *const Ancestors, _: std.mem.Allocator) !Ancestors {
         return self.*;
