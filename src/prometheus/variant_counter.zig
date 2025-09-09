@@ -6,11 +6,17 @@ const Atomic = std.atomic.Value;
 const Metric = prometheus.metric.Metric;
 const MetricType = prometheus.metric.MetricType;
 
-/// Separately count the occurrence of each variant within an enum or error set.
+/// Separately count the occurrence of each variant within an enum, error set, or tagged union.
 ///
 /// This is a composite metric, similar to a histogram, except the "buckets" are
 /// discrete, unordered, and identified by name, instead of representing numeric ranges.
-pub fn VariantCounter(comptime EnumOrError: type) type {
+pub fn VariantCounter(comptime T: type) type {
+    // If T is a tagged union, index by its tag enum.
+    const EnumOrError = switch (@typeInfo(T)) {
+        .@"union" => |u| u.tag_type.?,
+        else => T,
+    };
+
     const indexer = VariantIndexer.init(EnumOrError);
     const names = indexer.names();
 
@@ -21,10 +27,17 @@ pub fn VariantCounter(comptime EnumOrError: type) type {
         const Self = @This();
 
         pub const metric_type: MetricType = .variant_counter;
+        /// The observed type.
+        pub const ObservedType = T;
+        /// The internal tag/error type used for indexing.
         pub const Type = EnumOrError;
 
-        pub fn observe(self: *Self, err: EnumOrError) void {
-            _ = self.counts[indexer.index(err)].fetchAdd(1, .monotonic);
+        pub fn observe(self: *Self, value: T) void {
+            const tag_value: EnumOrError = switch (@typeInfo(T)) {
+                .@"union" => @as(EnumOrError, value),
+                else => value,
+            };
+            _ = self.counts[indexer.index(tag_value)].fetchAdd(1, .monotonic);
         }
 
         pub fn getResult(metric: *Metric, _: std.mem.Allocator) Metric.Error!Metric.Result {
@@ -63,7 +76,13 @@ const VariantIndexer = struct {
 
     const Self = @This();
 
-    pub fn init(comptime EnumOrError: type) Self {
+    pub fn init(comptime Item: type) Self {
+        // Accept either the enum/error type directly, or a union whose tag is the enum/error.
+        const EnumOrError = switch (@typeInfo(Item)) {
+            .@"union" => |u| u.tag_type.?,
+            else => Item,
+        };
+
         const variants = switch (@typeInfo(EnumOrError)) {
             .error_set => |es| es.?,
             .@"enum" => |e| e.fields,
@@ -136,3 +155,122 @@ const VariantIndexer = struct {
         };
     }
 };
+
+test "VariantCounter.observe: enum counts" {
+    const SwitchForkDecision = enum { Accept, Reject, Ignore };
+    const indexer = VariantIndexer.init(SwitchForkDecision);
+
+    var counter = VariantCounter(SwitchForkDecision){};
+    // Accept 4 times
+    // Reject 3 times
+    // Ignore 3 times
+    counter.observe(SwitchForkDecision.Accept);
+    counter.observe(SwitchForkDecision.Accept);
+    counter.observe(SwitchForkDecision.Accept);
+    counter.observe(SwitchForkDecision.Reject);
+    counter.observe(SwitchForkDecision.Reject);
+    counter.observe(SwitchForkDecision.Ignore);
+    counter.observe(SwitchForkDecision.Accept);
+    counter.observe(SwitchForkDecision.Ignore);
+    counter.observe(SwitchForkDecision.Reject);
+    counter.observe(SwitchForkDecision.Ignore);
+
+    const counts = counter.counts;
+
+    try std.testing.expect(counts[indexer.index(SwitchForkDecision.Accept)].load(.monotonic) == 4);
+    try std.testing.expect(counts[indexer.index(SwitchForkDecision.Reject)].load(.monotonic) == 3);
+    try std.testing.expect(counts[indexer.index(SwitchForkDecision.Ignore)].load(.monotonic) == 3);
+}
+
+test "VariantCounter.observe: tagged-union counts" {
+    const SwitchForkDecision = enum { Accept, Reject, Ignore };
+    const DecisionUnion = union(SwitchForkDecision) {
+        Accept: u32,
+        Reject: []const u8,
+        Ignore: void,
+    };
+    const indexer = VariantIndexer.init(SwitchForkDecision);
+
+    var counter = VariantCounter(DecisionUnion){};
+    // Accept 2 times
+    // Reject 3 times
+    // Ignore 1 time
+    counter.observe(DecisionUnion{ .Accept = 42 });
+    counter.observe(DecisionUnion{ .Reject = "foo" });
+    counter.observe(DecisionUnion{ .Reject = "bar" });
+    counter.observe(DecisionUnion{ .Ignore = {} });
+    counter.observe(DecisionUnion{ .Accept = 99 });
+    counter.observe(DecisionUnion{ .Reject = "baz" });
+
+    const counts = counter.counts;
+    try std.testing.expect(counts[indexer.index(SwitchForkDecision.Accept)].load(.monotonic) == 2);
+    try std.testing.expect(counts[indexer.index(SwitchForkDecision.Reject)].load(.monotonic) == 3);
+    try std.testing.expect(counts[indexer.index(SwitchForkDecision.Ignore)].load(.monotonic) == 1);
+}
+
+test "VariantCounter.observe: union(enum) counts" {
+    const Hash = [32]u8;
+    const Slot = u64;
+    const SwitchForkDecision = union(enum) {
+        switch_proof: Hash,
+        same_fork,
+        failed_switch_threshold: struct {
+            switch_proof_stake: u64,
+            total_stake: u64,
+        },
+        failed_switch_duplicate_rollback: Slot,
+        pub fn canVote(self: *const @This()) bool {
+            return switch (self.*) {
+                .failed_switch_threshold => false,
+                .failed_switch_duplicate_rollback => false,
+                .same_fork => true,
+                .switch_proof => true,
+            };
+        }
+    };
+
+    const indexer = VariantIndexer.init(SwitchForkDecision);
+    var counter = VariantCounter(SwitchForkDecision){};
+
+    // switch_proof 2 times
+    counter.observe(SwitchForkDecision{ .switch_proof = [_]u8{0} ** 32 });
+    counter.observe(SwitchForkDecision{ .switch_proof = [_]u8{1} ** 32 });
+
+    // same_fork 1 time
+    counter.observe(SwitchForkDecision{ .same_fork = {} });
+
+    // failed_switch_threshold 3 times
+    counter.observe(
+        SwitchForkDecision{
+            .failed_switch_threshold = .{ .switch_proof_stake = 10, .total_stake = 100 },
+        },
+    );
+    counter.observe(
+        SwitchForkDecision{
+            .failed_switch_threshold = .{ .switch_proof_stake = 20, .total_stake = 200 },
+        },
+    );
+    counter.observe(
+        SwitchForkDecision{
+            .failed_switch_threshold = .{ .switch_proof_stake = 30, .total_stake = 300 },
+        },
+    );
+
+    // failed_switch_duplicate_rollback 2 times
+    counter.observe(SwitchForkDecision{ .failed_switch_duplicate_rollback = 42 });
+    counter.observe(SwitchForkDecision{ .failed_switch_duplicate_rollback = 99 });
+
+    const counts = counter.counts;
+    try std.testing.expect(
+        counts[indexer.index(.switch_proof)].load(.monotonic) == 2,
+    );
+    try std.testing.expect(
+        counts[indexer.index(.same_fork)].load(.monotonic) == 1,
+    );
+    try std.testing.expect(
+        counts[indexer.index(.failed_switch_threshold)].load(.monotonic) == 3,
+    );
+    try std.testing.expect(
+        counts[indexer.index(.failed_switch_duplicate_rollback)].load(.monotonic) == 2,
+    );
+}

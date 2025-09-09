@@ -1478,12 +1478,7 @@ pub const ReplayTower = struct {
             &failure_reasons,
             &candidate_slots.switch_fork_decision,
         )) {
-            self.metrics.switch_fork_decision.observe(
-                @as(
-                    @typeInfo(SwitchForkDecision).@"union".tag_type.?,
-                    candidate_slots.switch_fork_decision,
-                ),
-            );
+            self.metrics.switch_fork_decision.observe(candidate_slots.switch_fork_decision);
             return SelectVoteAndResetForkResult{
                 .vote_slot = .{
                     .slot = candidate_vote_slot,
@@ -4088,9 +4083,7 @@ test "test switch_fork_decision - switch_proof" {
     var metrics = try ReplayTowerMetrics.init(sig.prometheus.globalRegistry());
 
     const decision = SwitchForkDecision{ .switch_proof = Hash.ZEROES };
-    metrics.switch_fork_decision.observe(
-        @as(@typeInfo(SwitchForkDecision).@"union".tag_type.?, decision),
-    );
+    metrics.switch_fork_decision.observe(decision);
 }
 
 test "test switch_fork_decision - failed_switch_threshold" {
@@ -4100,18 +4093,14 @@ test "test switch_fork_decision - failed_switch_threshold" {
         .switch_proof_stake = 200,
         .total_stake = 1000,
     } };
-    metrics.switch_fork_decision.observe(
-        @as(@typeInfo(SwitchForkDecision).@"union".tag_type.?, decision),
-    );
+    metrics.switch_fork_decision.observe(decision);
 }
 
 test "test switch_fork_decision - failed_switch_duplicate_rollback" {
     var metrics = try ReplayTowerMetrics.init(sig.prometheus.globalRegistry());
 
     const decision = SwitchForkDecision{ .failed_switch_duplicate_rollback = 50 };
-    metrics.switch_fork_decision.observe(
-        @as(@typeInfo(SwitchForkDecision).@"union".tag_type.?, decision),
-    );
+    metrics.switch_fork_decision.observe(decision);
 }
 
 const builtin = @import("builtin");
@@ -4709,9 +4698,7 @@ fn genStakes(
 }
 
 pub const ReplayTowerMetrics = struct {
-    switch_fork_decision: *sig.prometheus.VariantCounter(
-        @typeInfo(SwitchForkDecision).@"union".tag_type.?,
-    ),
+    switch_fork_decision: *sig.prometheus.VariantCounter(SwitchForkDecision),
 
     stale_votes_rejected: *sig.prometheus.Counter,
     stray_restored_slots: *sig.prometheus.Counter,

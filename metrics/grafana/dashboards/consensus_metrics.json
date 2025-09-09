@@ -820,7 +820,7 @@
           },
           "disableTextWrap": false,
           "exemplar": false,
-          "expr": "rate(replay_tower_switch_fork_decision{switch_fork_decision=\"switch_proof\"}[5m])",
+          "expr": "rate(replay_tower_switch_fork_decision_count{variant=\"switch_proof\"}[5m])",
           "fullMetaSearch": false,
           "hide": false,
           "includeNullMetadata": true,
@@ -837,7 +837,7 @@
             "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "rate(replay_tower_switch_fork_decision{switch_fork_decision=~\"failed_switch_.*\"}[5m])",
+          "expr": "rate(replay_tower_switch_fork_decision_count{variant=~\"failed_switch_.*\"}[5m])",
           "hide": false,
           "instant": false,
           "interval": "",
