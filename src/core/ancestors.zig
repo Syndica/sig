@@ -6,15 +6,13 @@ const HashMap = std.AutoArrayHashMapUnmanaged;
 const bincode = sig.bincode;
 const Slot = sig.core.Slot;
 
-//
-
 pub const Ancestors = struct {
     ancestors: RingBitSet(MAX_SLOT_RANGE) = .empty,
 
     pub const EMPTY: Ancestors = .{ .ancestors = .empty };
 
     /// The maximum allowed distance from the highest to lowest contained slot.
-    pub const MAX_SLOT_RANGE = 8192;
+    pub const MAX_SLOT_RANGE = 256;
 
     /// For some reason, agave serializes Ancestors as HashMap(slot, usize). But deserializing
     /// ignores the usize, and serializing just uses the value 0. So we need to serialize void
@@ -91,7 +89,7 @@ pub fn RingBitSet(len: usize) type {
 
         pub fn isSet(self: *const RingBitSet(len), index: usize) bool {
             if (index < self.bottom or index >= self.bottom + len) return false;
-            return self.inner.isSet(index);
+            return self.inner.isSet(index % len);
         }
 
         pub fn set(self: *RingBitSet(len), index: usize) error{Underflow}!void {
@@ -112,18 +110,34 @@ pub fn RingBitSet(len: usize) type {
 
         pub fn unset(self: *RingBitSet(len), index: usize) void {
             if (index < self.bottom or index >= self.bottom + len) return;
-            return self.inner.unset(index);
+            return self.inner.unset(index % len);
         }
 
         pub fn count(self: *const RingBitSet(len)) usize {
             return self.inner.count();
         }
 
-        pub const Iterator = InnerSet.Iterator(.{});
+        pub const Iterator = struct {
+            inner: InnerSet.Iterator(.{}),
+            bottom: usize,
+
+            pub fn next(self: *Iterator) ?usize {
+                if (self.inner.next()) |item| {
+                    return if (item < self.bottom % len)
+                        item + self.bottom - len
+                    else
+                        item + self.bottom;
+                }
+                return null;
+            }
+        };
 
         /// items are not sorted
-        pub fn iterator(self: *const RingBitSet(len)) InnerSet.Iterator(.{}) {
-            return self.inner.iterator(.{});
+        pub fn iterator(self: *const RingBitSet(len)) Iterator {
+            return .{
+                .inner = self.inner.iterator(.{}),
+                .bottom = self.bottom,
+            };
         }
     };
 }
