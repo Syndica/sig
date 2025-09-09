@@ -1092,6 +1092,80 @@ pub fn Window(T: type) type {
     };
 }
 
+/// A bit set that is allowed to progress forwards by setting bits out of bounds
+/// and deleting old values, but not allowed to regress backwards.
+pub fn RingBitSet(len: usize) type {
+    return struct {
+        /// underlying bit set
+        inner: InnerSet,
+        /// The lowest value represented
+        bottom: usize,
+
+        const InnerSet = std.bit_set.ArrayBitSet(usize, len);
+
+        pub const empty = RingBitSet(len){
+            .inner = .initEmpty(),
+            .bottom = 0,
+        };
+
+        pub fn isSet(self: *const RingBitSet(len), index: usize) bool {
+            if (index < self.bottom or index >= self.bottom + len) return false;
+            return self.inner.isSet(index % len);
+        }
+
+        pub fn set(self: *RingBitSet(len), index: usize) error{Underflow}!void {
+            if (index < self.bottom) return error.Underflow;
+            if (index - self.bottom > len) {
+                const wipe_start = self.bottom;
+                self.bottom = 1 + index - len;
+                const wipe_end = self.bottom;
+                if (wipe_start % len > wipe_end % len) {
+                    self.inner.setRangeValue(.{ .start = wipe_start % len, .end = len }, false);
+                    self.inner.setRangeValue(.{ .start = 0, .end = wipe_end % len }, false);
+                } else {
+                    self.inner.setRangeValue(
+                        .{ .start = wipe_start % len, .end = wipe_end % len },
+                        false,
+                    );
+                }
+            }
+            self.inner.set(index % len);
+        }
+
+        pub fn unset(self: *RingBitSet(len), index: usize) void {
+            if (index < self.bottom or index >= self.bottom + len) return;
+            return self.inner.unset(index % len);
+        }
+
+        pub fn count(self: *const RingBitSet(len)) usize {
+            return self.inner.count();
+        }
+
+        pub const Iterator = struct {
+            inner: InnerSet.Iterator(.{}),
+            bottom: usize,
+
+            pub fn next(self: *Iterator) ?usize {
+                if (self.inner.next()) |item| {
+                    return if (item < self.bottom % len)
+                        item + self.bottom - len
+                    else
+                        item + self.bottom;
+                }
+                return null;
+            }
+        };
+
+        /// items are not sorted
+        pub fn iterator(self: *const RingBitSet(len)) Iterator {
+            return .{
+                .inner = self.inner.iterator(.{}),
+                .bottom = self.bottom,
+            };
+        }
+    };
+}
+
 pub fn cloneMapAndValues(allocator: Allocator, map: anytype) Allocator.Error!@TypeOf(map) {
     var cloned: @TypeOf(map) = .{};
     errdefer deinitMapAndValues(allocator, cloned);
