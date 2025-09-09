@@ -132,7 +132,7 @@ pub const SlotConstants = struct {
         fee_rate_governor: sig.core.genesis_config.FeeRateGovernor,
     ) Allocator.Error!SlotConstants {
         var ancestors = Ancestors{};
-        try ancestors.ancestors.put(allocator, 0, {});
+        ancestors.addSlot(0) catch unreachable;
         return .{
             .parent_slot = 0,
             .parent_hash = sig.core.Hash.ZEROES,
@@ -512,7 +512,7 @@ pub const BankFields = struct {
         /// for commentary on the runtime of this function.
         random: std.Random,
         max_list_entries: usize,
-    ) std.mem.Allocator.Error!BankFields {
+    ) !BankFields {
         var blockhash_queue = try BlockhashQueue.initRandom(allocator, random, max_list_entries);
         errdefer blockhash_queue.deinit(allocator);
 
@@ -578,12 +578,15 @@ pub fn ancestorsRandom(
     random: std.Random,
     allocator: std.mem.Allocator,
     max_list_entries: usize,
-) std.mem.Allocator.Error!Ancestors {
+) !Ancestors {
     var ancestors = Ancestors{};
     errdefer ancestors.deinit(allocator);
 
-    for (0..random.uintAtMost(usize, max_list_entries)) |_| {
-        try ancestors.addSlot(allocator, random.int(Slot));
+    const lower_bound = random.int(Slot);
+    const upper_bound = lower_bound + Ancestors.MAX_SLOT_RANGE;
+
+    for (0..@min(Ancestors.MAX_SLOT_RANGE, random.uintAtMost(usize, max_list_entries))) |_| {
+        try ancestors.addSlot(random.intRangeLessThan(Slot, lower_bound, upper_bound));
     }
 
     return ancestors;

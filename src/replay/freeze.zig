@@ -280,7 +280,7 @@ pub fn hashSlot(allocator: Allocator, params: HashSlotParams) !struct { ?LtHash,
     if (params.feature_set.active(.accounts_lt_hash, params.slot)) {
         var parent_ancestors = try params.ancestors.clone(allocator);
         defer parent_ancestors.deinit(allocator);
-        assert(parent_ancestors.ancestors.swapRemove(params.slot));
+        parent_ancestors.removeSlot(params.slot);
 
         var lt_hash = params.parent_lt_hash.* orelse return error.UnknownParentLtHash;
         lt_hash.mixIn(try deltaLtHash(params.account_reader, params.slot, &parent_ancestors));
@@ -571,8 +571,8 @@ test "delta hashes with many accounts" {
 
     var parent_ancestors = Ancestors{};
     defer parent_ancestors.deinit(allocator);
-    try parent_ancestors.ancestors.put(allocator, 0, {});
-    try parent_ancestors.ancestors.put(allocator, 1, {});
+    try parent_ancestors.addSlot(0);
+    try parent_ancestors.addSlot(1);
 
     const actual_lt_hash = try deltaLtHash(accounts.accountReader(), hash_slot, &parent_ancestors);
     const actual_merkle_hash = try deltaMerkleHash(accounts.accountReader(), allocator, hash_slot);

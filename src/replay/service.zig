@@ -671,10 +671,9 @@ fn doConsensus(
             ) |slot, info| {
                 const slot_ancestors = &info.constants.ancestors.ancestors;
                 const ancestor_gop = try ancestors.getOrPutValue(arena, slot, .EMPTY);
-                try ancestor_gop.value_ptr.ancestors
-                    .ensureUnusedCapacity(arena, slot_ancestors.count());
-                for (slot_ancestors.keys()) |ancestor_slot| {
-                    try ancestor_gop.value_ptr.addSlot(arena, ancestor_slot);
+                var iter = slot_ancestors.iterator();
+                while (iter.next()) |ancestor_slot| {
+                    try ancestor_gop.value_ptr.addSlot(ancestor_slot);
                     const descendants_gop =
                         try descendants.getOrPutValue(arena, ancestor_slot, .empty);
                     try descendants_gop.value_ptr.put(arena, slot);
@@ -882,7 +881,7 @@ fn newSlotFromParent(
 
     var ancestors = try parent_constants.ancestors.clone(allocator);
     errdefer ancestors.deinit(allocator);
-    try ancestors.ancestors.put(allocator, slot, {});
+    try ancestors.addSlot(slot);
 
     var feature_set = try getActiveFeatures(allocator, account_reader.forSlot(&ancestors), slot);
 

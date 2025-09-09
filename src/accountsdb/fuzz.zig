@@ -251,7 +251,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
         defer if (will_inc_slot) {
             top_slot += random.intRangeAtMost(Slot, 1, 2);
         };
-        try ancestors.addSlot(allocator, top_slot);
+        try ancestors.addSlot(top_slot);
 
         const current_slot = if (!non_sequential_slots) top_slot else slot: {
             const ancestor_slots: []const Slot = ancestors.ancestors.keys();
@@ -320,7 +320,8 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
 
                 var ancestors_sub = try ancestors.clone(allocator);
                 defer ancestors_sub.deinit(allocator);
-                for (ancestors_sub.ancestors.keys()) |other_slot| {
+                var iter = ancestors_sub.ancestors.iterator();
+                while (iter.next()) |other_slot| {
                     if (other_slot <= tracked_account.slot) continue;
                     _ = ancestors_sub.ancestors.swapRemove(other_slot);
                 }

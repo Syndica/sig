@@ -616,7 +616,7 @@ test fillMissingSysvarCacheEntries {
     const slot = 10;
     var ancestors = Ancestors{};
     defer ancestors.deinit(allocator);
-    try ancestors.ancestors.put(allocator, slot, {});
+    try ancestors.addSlot(slot);
 
     // Create a sysvar cache with all sysvars randomly initialized.
     const expected = try initSysvarCacheWithRandomValues(allocator, prng.random());
@@ -841,7 +841,7 @@ test "update all sysvars" {
     const rent = Rent.DEFAULT;
     var ancestors = Ancestors{};
     defer ancestors.deinit(allocator);
-    try ancestors.ancestors.put(allocator, slot, {});
+    try ancestors.addSlot(slot);
 
     // Create and insert sysvar defaults
     const initial_sysvars = try initSysvarCacheWithDefaultValues(allocator);
@@ -876,7 +876,7 @@ test "update all sysvars" {
         .rent = &rent,
         .slot = slot,
     };
-    try ancestors.ancestors.put(allocator, slot, {});
+    try ancestors.addSlot(slot);
     const account_reader = accounts_db.accountReader().forSlot(&ancestors);
 
     { // updateClock

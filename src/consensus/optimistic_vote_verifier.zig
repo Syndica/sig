@@ -327,10 +327,10 @@ test "OptimisticConfirmationVerifier.verifyForUnrootedOptimisticSlots: unrooted 
     try std.testing.expectEqual(3, latest.items.len);
 
     // Root on same fork at slot 5: ancestors include 1 and 3
-    var anc5: sig.core.Ancestors = .{ .ancestors = .{} };
+    var anc5: sig.core.Ancestors = .EMPTY;
     defer anc5.deinit(allocator);
-    try anc5.addSlot(allocator, 1);
-    try anc5.addSlot(allocator, 3);
+    try anc5.addSlot(1);
+    try anc5.addSlot(3);
     {
         const unrooted = try verifier.verifyForUnrootedOptimisticSlots(
             allocator,
@@ -344,9 +344,9 @@ test "OptimisticConfirmationVerifier.verifyForUnrootedOptimisticSlots: unrooted 
 
     // Re-add optimistic slots and check root at 3 (same fork)
     try verifier.addNewOptimisticConfirmedSlots(allocator, optimistic, &ledger_writer);
-    var anc3: sig.core.Ancestors = .{ .ancestors = .{} };
+    var anc3: sig.core.Ancestors = .EMPTY;
     defer anc3.deinit(allocator);
-    try anc3.addSlot(allocator, 1);
+    try anc3.addSlot(1);
     {
         const unrooted = try verifier.verifyForUnrootedOptimisticSlots(
             allocator,
@@ -361,10 +361,10 @@ test "OptimisticConfirmationVerifier.verifyForUnrootedOptimisticSlots: unrooted 
 
     // Re-add optimistic slots and set a different fork root at slot 4
     try verifier.addNewOptimisticConfirmedSlots(allocator, optimistic, &ledger_writer);
-    var anc4: sig.core.Ancestors = .{ .ancestors = .{} };
+    var anc4: sig.core.Ancestors = .EMPTY;
     defer anc4.deinit(allocator);
     // ancestors for 4 include 1 (but not 3)
-    try anc4.addSlot(allocator, 1);
+    try anc4.addSlot(1);
     {
         const unrooted = try verifier.verifyForUnrootedOptimisticSlots(
             allocator,
@@ -385,7 +385,7 @@ test "OptimisticConfirmationVerifier.verifyForUnrootedOptimisticSlots: unrooted 
     var anc7: sig.core.Ancestors = .{ .ancestors = .empty };
     defer anc7.deinit(allocator);
     // First run should return 1 and 3 (not in ancestors and not rooted). Mark 5 as ancestor.
-    try anc7.addSlot(allocator, 5);
+    try anc7.addSlot(5);
     try verifier.addNewOptimisticConfirmedSlots(
         allocator,
         optimistic,
