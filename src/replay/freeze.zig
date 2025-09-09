@@ -453,7 +453,8 @@ test "freezeSlot: trivial e2e lattice hash test" {
     var simple_db: sig.accounts_db.ThreadSafeAccountMap = .init(allocator);
     defer simple_db.deinit();
 
-    var real_db: sig.accounts_db.AccountsDB = try .init(.minimal(allocator, .noop, tmp_dir.dir));
+    var real_db: sig.accounts_db.AccountsDB =
+        try .init(.minimal(allocator, .noop, tmp_dir.dir, null));
     defer real_db.deinit();
 
     for ([_]sig.accounts_db.AccountStore{
