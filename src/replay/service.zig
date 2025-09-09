@@ -570,18 +570,16 @@ fn advanceReplay(state: *ReplayState) !void {
         ) |slot, info| {
             const slot_ancestors = &info.constants.ancestors.ancestors;
             const ancestor_gop = try ancestors.getOrPutValue(arena, slot, .EMPTY);
-            try ancestor_gop.value_ptr.ancestors.ensureUnusedCapacity(arena, slot_ancestors.count());
-            var iter = slot.ancestors.iterator();
+            var iter = slot_ancestors.iterator();
             while (iter.next()) |ancestor_slot| {
-                try try ancestor_gop.value_ptr.addSlot(arena, ancestor_slot);
+                try ancestor_gop.value_ptr.addSlot(ancestor_slot);
                 const descendants_gop = try descendants.getOrPutValue(arena, ancestor_slot, .empty);
                 try descendants_gop.value_ptr.put(arena, slot);
             }
         }
     }
 
-    const slot_history_accessor = SlotHistoryAccessor
-        .init(state.account_store.reader());
+    const slot_history_accessor = SlotHistoryAccessor.init(state.account_store.reader());
 
     // Explicitly Unlock the read lock on slot_tracker and acquire a write lock for consensus processing.
     slot_tracker_lg.unlock();
