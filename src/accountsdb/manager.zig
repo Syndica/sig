@@ -42,9 +42,8 @@ pub const Manager = struct {
     unclean_account_files: std.ArrayListUnmanaged(FileId),
     shrink_account_files: std.AutoArrayHashMapUnmanaged(FileId, void),
     delete_account_files: std.AutoArrayHashMapUnmanaged(FileId, void),
+    dead_accounts_counters: AccountsDB.DeadAccountsCounter,
     snapshot_state: ?SnapshotState,
-
-    const sfba_size = 4096 * 4;
 
     pub const Config = struct {
         snapshot: ?SnapshotState.Config,
@@ -107,6 +106,7 @@ pub const Manager = struct {
             .unclean_account_files = .empty,
             .shrink_account_files = .empty,
             .delete_account_files = .empty,
+            .dead_accounts_counters = .empty,
             .snapshot_state = maybe_snapshot_state,
         };
     }
@@ -117,6 +117,7 @@ pub const Manager = struct {
         self.unclean_account_files.deinit(allocator);
         self.shrink_account_files.deinit(allocator);
         self.delete_account_files.deinit(allocator);
+        self.dead_accounts_counters.deinit(allocator);
         if (self.snapshot_state) |snapshot_state| {
             snapshot_state.deinit(allocator);
         }
@@ -219,6 +220,7 @@ pub const Manager = struct {
                 self.unclean_account_files.items,
                 &self.shrink_account_files,
                 &self.delete_account_files,
+                &self.dead_accounts_counters,
             );
             _ = clean_result;
             // self.db.logger.debug().logf("clean_result: {any}", .{clean_result});
@@ -229,13 +231,18 @@ pub const Manager = struct {
                 self.db,
                 self.shrink_account_files.keys(),
                 &self.delete_account_files,
+                &self.dead_accounts_counters,
             );
             _ = shrink_result;
             // self.db.logger.debug().logf("shrink_results: {any}", .{shrink_results});
 
             // delete any empty account files
             defer self.delete_account_files.clearRetainingCapacity();
-            try deleteAccountFiles(self.db, self.delete_account_files.keys());
+            try deleteAccountFiles(
+                self.db,
+                self.delete_account_files.keys(),
+                &self.dead_accounts_counters,
+            );
         }
     }
 
@@ -442,6 +449,7 @@ fn cleanAccountFiles(
     unclean_account_files: []const FileId,
     shrink_account_files: *std.AutoArrayHashMapUnmanaged(FileId, void),
     delete_account_files: *std.AutoArrayHashMapUnmanaged(FileId, void),
+    dead_accounts_counters: *AccountsDB.DeadAccountsCounter,
 ) !struct {
     num_zero_lamports: usize,
     num_old_states: usize,
@@ -533,15 +541,12 @@ fn cleanAccountFiles(
                     const ref_slot = ref.slot;
 
                     const accounts_total_count, const accounts_dead_count = blk: {
-                        const dead_accounts_counter, var dead_accounts_counter_lg =
-                            db.dead_accounts_counter.writeWithLock();
-                        defer dead_accounts_counter_lg.unlock();
-
                         // NOTE: if there is no counter for this slot, it may
                         // have been removed after reaching 0 dead accounts
                         // previously. it is added back as needed.
-                        const number_dead_accounts_ptr =
-                            (try dead_accounts_counter.getOrPutValue(ref_slot, 0)).value_ptr;
+                        const gop =
+                            try dead_accounts_counters.getOrPutValue(allocator, ref_slot, 0);
+                        const number_dead_accounts_ptr = gop.value_ptr;
                         number_dead_accounts_ptr.* += 1;
                         const accounts_dead_count = number_dead_accounts_ptr.*;
 
@@ -613,6 +618,7 @@ fn cleanAccountFiles(
 fn deleteAccountFiles(
     db: *AccountsDB,
     delete_account_files: []const FileId,
+    dead_accounts_counters: *AccountsDB.DeadAccountsCounter,
 ) !void {
     const zone = tracy.Zone.init(@src(), .{ .name = "accountsdb deleteAccountFiles" });
     defer zone.deinit();
@@ -666,21 +672,15 @@ fn deleteAccountFiles(
         };
     }
 
-    {
-        const dead_accounts_counter, var dead_accounts_counter_lg =
-            db.dead_accounts_counter.writeWithLock();
-        defer dead_accounts_counter_lg.unlock();
-
-        for (delete_queue.items) |account_file| {
-            const slot = account_file.slot;
-            // there are two cases for an account file being queued for deletion
-            // from cleaning:
-            // 1) it was queued for shrink, and this is the *old* accountFile:
-            //    dead_count == 0 and the slot DNE in the map (shrink removed it)
-            // 2) it contains 100% dead accounts (in which dead_count > 0 and we
-            //    can remove it from the map)
-            _ = dead_accounts_counter.swapRemove(slot);
-        }
+    for (delete_queue.items) |account_file| {
+        const slot = account_file.slot;
+        // there are two cases for an account file being queued for deletion
+        // from cleaning:
+        // 1) it was queued for shrink, and this is the *old* accountFile:
+        //    dead_count == 0 and the slot DNE in the map (shrink removed it)
+        // 2) it contains 100% dead accounts (in which dead_count > 0 and we
+        //    can remove it from the map)
+        _ = dead_accounts_counters.swapRemove(slot);
     }
 }
 
@@ -709,6 +709,7 @@ fn shrinkAccountFiles(
     db: *AccountsDB,
     shrink_account_files: []const FileId,
     delete_account_files: *std.AutoArrayHashMapUnmanaged(FileId, void),
+    dead_accounts_counters: *AccountsDB.DeadAccountsCounter,
 ) !struct { num_accounts_deleted: usize } {
     const zone = tracy.Zone.init(@src(), .{ .name = "accountsdb shrinkAccountFiles" });
     defer zone.deinit();
@@ -906,18 +907,13 @@ fn shrinkAccountFiles(
         // queue the old account_file for deletion
         delete_account_files.putAssumeCapacityNoClobber(shrink_file_id, {});
 
-        {
-            // remove the dead accounts counter entry, since there
-            // are no longer any dead accounts at this slot for now.
-            // there has to be a counter for it at this point, since
-            // cleanAccounts would only have added this file_id to
-            // the queue if it deleted any accounts refs.
-            const dead_accounts_counter, var dead_accounts_counter_lg =
-                db.dead_accounts_counter.writeWithLock();
-            defer dead_accounts_counter_lg.unlock();
-            const removed = dead_accounts_counter.fetchSwapRemove(slot).?;
-            std.debug.assert(removed.value == accounts_dead_count);
-        }
+        // remove the dead accounts counter entry, since there
+        // are no longer any dead accounts at this slot for now.
+        // there has to be a counter for it at this point, since
+        // cleanAccounts would only have added this file_id to
+        // the queue if it deleted any accounts refs.
+        const removed = dead_accounts_counters.fetchSwapRemove(slot).?;
+        std.debug.assert(removed.value == accounts_dead_count);
     }
 
     if (number_of_files > 0) {
@@ -1177,6 +1173,9 @@ test "clean to shrink account file works with zero-lamports" {
     var delete_account_files = std.AutoArrayHashMapUnmanaged(FileId, void).empty;
     defer delete_account_files.deinit(allocator);
 
+    var dead_accounts_counters: AccountsDB.DeadAccountsCounter = .empty;
+    defer dead_accounts_counters.deinit(allocator);
+
     const r = try cleanAccountFiles(
         allocator,
         &accounts_db,
@@ -1184,6 +1183,7 @@ test "clean to shrink account file works with zero-lamports" {
         unclean_account_files.items,
         &shrink_account_files,
         &delete_account_files,
+        &dead_accounts_counters,
     );
     try std.testing.expect(r.num_old_states == new_len);
     try std.testing.expect(r.num_zero_lamports == new_len);
@@ -1242,6 +1242,9 @@ test "clean to shrink account file works - basic" {
     var delete_account_files = std.AutoArrayHashMapUnmanaged(FileId, void).empty;
     defer delete_account_files.deinit(allocator);
 
+    var dead_accounts_counters: AccountsDB.DeadAccountsCounter = .empty;
+    defer dead_accounts_counters.deinit(allocator);
+
     try unclean_account_files.append(try flushSlot(&accounts_db, slot));
 
     // write new state
@@ -1256,6 +1259,7 @@ test "clean to shrink account file works - basic" {
         unclean_account_files.items,
         &shrink_account_files,
         &delete_account_files,
+        &dead_accounts_counters,
     );
     try std.testing.expect(r.num_old_states == new_len);
     try std.testing.expect(r.num_zero_lamports == 0);
@@ -1321,6 +1325,9 @@ test "full clean account file works" {
     var delete_account_files = std.AutoArrayHashMapUnmanaged(FileId, void).empty;
     defer delete_account_files.deinit(allocator);
 
+    var dead_accounts_counters: AccountsDB.DeadAccountsCounter = .empty;
+    defer dead_accounts_counters.deinit(allocator);
+
     try unclean_account_files.append(try flushSlot(&accounts_db, slot));
 
     // zero is rooted so no files should be cleaned
@@ -1331,6 +1338,7 @@ test "full clean account file works" {
         unclean_account_files.items,
         &shrink_account_files,
         &delete_account_files,
+        &dead_accounts_counters,
     );
     try std.testing.expect(r.num_old_states == 0);
     try std.testing.expect(r.num_zero_lamports == 0);
@@ -1343,6 +1351,7 @@ test "full clean account file works" {
         unclean_account_files.items,
         &shrink_account_files,
         &delete_account_files,
+        &dead_accounts_counters,
     );
     try std.testing.expect(r.num_old_states == 0);
     try std.testing.expect(r.num_zero_lamports == 0);
@@ -1359,6 +1368,7 @@ test "full clean account file works" {
         unclean_account_files.items,
         &shrink_account_files,
         &delete_account_files,
+        &dead_accounts_counters,
     );
     try std.testing.expect(r.num_old_states == n_accounts);
     try std.testing.expect(r.num_zero_lamports == 0);
@@ -1373,7 +1383,7 @@ test "full clean account file works" {
         try std.testing.expect(file_map.get(delete_file_id) != null);
     }
 
-    try deleteAccountFiles(&accounts_db, delete_account_files.keys());
+    try deleteAccountFiles(&accounts_db, delete_account_files.keys(), &dead_accounts_counters);
 
     {
         const file_map, var file_map_lg = accounts_db.file_map.readWithLock();
@@ -1437,10 +1447,15 @@ test "shrink account file works" {
 
     var unclean_account_files = ArrayList(FileId).init(allocator);
     defer unclean_account_files.deinit();
+
     var shrink_account_files = std.AutoArrayHashMapUnmanaged(FileId, void).empty;
     defer shrink_account_files.deinit(allocator);
+
     var delete_account_files = std.AutoArrayHashMapUnmanaged(FileId, void).empty;
     defer delete_account_files.deinit(allocator);
+
+    var dead_accounts_counters: AccountsDB.DeadAccountsCounter = .empty;
+    defer dead_accounts_counters.deinit(allocator);
 
     try unclean_account_files.append(try flushSlot(&accounts_db, slot));
 
@@ -1461,6 +1476,7 @@ test "shrink account file works" {
         unclean_account_files.items,
         &shrink_account_files,
         &delete_account_files,
+        &dead_accounts_counters,
     );
     try std.testing.expect(shrink_account_files.count() == 1);
     try std.testing.expectEqual(9, clean_result.num_old_states);
@@ -1495,6 +1511,7 @@ test "shrink account file works" {
         &accounts_db,
         shrink_account_files.keys(),
         &delete_account_files,
+        &dead_accounts_counters,
     );
     try std.testing.expectEqual(9, r.num_accounts_deleted);
 

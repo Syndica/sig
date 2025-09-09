@@ -484,7 +484,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                 .geyser_writer = null,
                 .gossip_view = null,
                 .index_allocation = index_type,
-                .number_of_index_shards = accounts_db.number_of_index_shards,
+                .number_of_index_shards = accounts_db.numberOfIndexShards(),
             });
             defer alt_accounts_db.deinit();
 

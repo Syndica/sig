@@ -90,9 +90,6 @@ pub const AccountsDB = struct {
     geyser_writer: ?*GeyserWriter,
     gossip_view: ?GossipView,
 
-    // some static data
-    number_of_index_shards: usize,
-
     // internal structures & data
 
     /// maps pubkeys to account locations
@@ -109,16 +106,6 @@ pub const AccountsDB = struct {
     file_map_fd_rw: std.Thread.RwLock,
 
     buffer_pool: BufferPool,
-
-    /// Tracks how many accounts (which we have stored) are dead for a specific slot.
-    /// Used during clean to queue an AccountFile for shrink if it contains
-    /// a large percentage of dead accounts, or deletion if the file contains only
-    /// dead accounts.
-    ///
-    /// When a given counter reaches 0, it is to be removed (ie, if a slot does not exist
-    /// in this map, then its safe to assume it has 0 dead accounts).
-    /// When a counter is first added, it must be initialized to 0.
-    dead_accounts_counter: RwMux(DeadAccountsCounter),
 
     /// Used for filenames when flushing accounts to disk.
     // TODO: do we need this? since flushed slots will be unique
@@ -138,9 +125,6 @@ pub const AccountsDB = struct {
         };
     }),
 
-    /// The snapshot info from which this instance was loaded from and validated against (null if that didn't happen).
-    /// Used to potentially skip the first `computeAccountHashesAndLamports`.
-    first_snapshot_load_info: RwMux(?SnapshotGenerationInfo),
     /// Represents the largest slot info used to generate a full snapshot, and optionally an incremental snapshot relative to it, which currently exists.
     /// It also protects access to the snapshot archive files it refers to - as in, the caller who has a lock on this has a lock on the snapshot archives.
     latest_snapshot_gen_info: RwMux(?SnapshotGenerationInfo),
@@ -153,9 +137,18 @@ pub const AccountsDB = struct {
 
     pub const PubkeysAndAccounts = std.MultiArrayList(PubkeyAndAccount);
     pub const SlotPubkeyAccounts = std.AutoHashMap(Slot, PubkeysAndAccounts);
-    pub const DeadAccountsCounter = std.AutoArrayHashMap(Slot, u64);
     pub const BankHashStatsMap = std.AutoArrayHashMapUnmanaged(Slot, BankHashStats);
     pub const FileMap = std.AutoArrayHashMapUnmanaged(FileId, AccountFile);
+
+    /// Tracks how many accounts (which we have stored) are dead for a specific slot.
+    /// Used during clean to queue an AccountFile for shrink if it contains
+    /// a large percentage of dead accounts, or deletion if the file contains only
+    /// dead accounts.
+    ///
+    /// When a given counter reaches 0, it is to be removed (ie, if a slot does not exist
+    /// in this map, then its safe to assume it has 0 dead accounts).
+    /// When a counter is first added, it must be initialized to 0.
+    pub const DeadAccountsCounter = std.AutoArrayHashMapUnmanaged(Slot, u64);
 
     pub const GossipView = struct {
         /// Used to initialize snapshot hashes to be sent to gossip.
@@ -248,19 +241,15 @@ pub const AccountsDB = struct {
             .geyser_writer = params.geyser_writer,
             .gossip_view = params.gossip_view,
 
-            .number_of_index_shards = params.number_of_index_shards,
-
             .account_index = account_index,
             .unrooted_accounts = .init(.init(params.allocator)),
             .file_map = .init(.{}),
             .file_map_fd_rw = .{},
             .buffer_pool = buffer_pool,
-            .dead_accounts_counter = .init(.init(params.allocator)),
 
             .largest_file_id = .fromInt(0),
             .max_slots = .init(.INIT),
 
-            .first_snapshot_load_info = .init(null),
             .latest_snapshot_gen_info = .init(null),
 
             .bank_hash_stats = .init(.{}),
@@ -316,12 +305,6 @@ pub const AccountsDB = struct {
             for (file_map.values()) |v| v.deinit();
             file_map.deinit(self.allocator);
         }
-        {
-            const dead_accounts_counter, var dead_accounts_counter_lg =
-                self.dead_accounts_counter.writeWithLock();
-            defer dead_accounts_counter_lg.unlock();
-            dead_accounts_counter.deinit();
-        }
 
         {
             const bank_hash_stats, var bank_hash_stats_lg =
@@ -329,6 +312,10 @@ pub const AccountsDB = struct {
             defer bank_hash_stats_lg.unlock();
             bank_hash_stats.deinit(self.allocator);
         }
+    }
+
+    pub fn numberOfIndexShards(self: *const AccountsDB) usize {
+        return self.account_index.pubkey_ref_map.shard_calculator.n_shards;
     }
 
     pub fn accountReader(self: *AccountsDB) sig.accounts_db.AccountReader {
@@ -575,7 +562,7 @@ pub const AccountsDB = struct {
                 .allocator = per_thread_allocator,
                 .snapshot_dir = parent.snapshot_dir,
                 .geyser_writer = parent.geyser_writer,
-                .number_of_index_shards = parent.number_of_index_shards,
+                .number_of_index_shards = parent.numberOfIndexShards(),
 
                 // dont spam the logs with init information (we set it after)
                 .logger = .noop,
@@ -1257,16 +1244,6 @@ pub const AccountsDB = struct {
         = self.latest_snapshot_gen_info.writeWithLock();
         defer latest_snapshot_info_lg.unlock();
 
-        const maybe_first_snapshot_info: *?SnapshotGenerationInfo, //
-        var first_snapshot_info_lg //
-        = self.first_snapshot_load_info.writeWithLock();
-        defer first_snapshot_info_lg.unlock();
-
-        if (maybe_first_snapshot_info.*) |first| {
-            std.debug.assert( // already validated against a different set of snapshot info
-                first.full.slot == params.full_slot);
-        }
-
         // validate the full snapshot
         self.logger.info().logf("validating the full snapshot", .{});
         const accounts_hash, const total_lamports = try self.computeAccountHashesAndLamports(.{
@@ -1301,7 +1278,7 @@ pub const AccountsDB = struct {
             std.debug.assert(latest_snapshot_info.full.hash.eql(accounts_hash));
             std.debug.assert(latest_snapshot_info.full.capitalization == total_lamports);
         }
-        maybe_first_snapshot_info.* = .{
+        var first_snapshot_info: SnapshotGenerationInfo = .{
             .full = .{
                 .slot = params.full_slot,
                 .hash = accounts_hash,
@@ -1309,7 +1286,6 @@ pub const AccountsDB = struct {
             },
             .inc = null,
         };
-        const p_maybe_first_inc = &maybe_first_snapshot_info.*.?.inc;
 
         // validate the incremental snapshot
         if (params.expected_incremental) |expected_incremental| {
@@ -1344,19 +1320,19 @@ pub const AccountsDB = struct {
 
             // ASSERTION: same idea as the previous assertion, but applied to
             // the incremental snapshot info.
-            if (p_maybe_first_inc.*) |first_inc| {
+            if (first_snapshot_info.inc) |first_inc| {
                 std.debug.assert(first_inc.slot == inc_slot);
                 std.debug.assert(first_inc.hash.eql(accounts_delta_hash));
                 std.debug.assert(first_inc.capitalization == incremental_lamports);
             }
-            p_maybe_first_inc.* = .{
+            first_snapshot_info.inc = .{
                 .slot = inc_slot,
                 .hash = accounts_delta_hash,
                 .capitalization = incremental_lamports,
             };
         }
 
-        maybe_latest_snapshot_info.* = maybe_first_snapshot_info.*;
+        maybe_latest_snapshot_info.* = first_snapshot_info;
     }
 
     /// multithread entrypoint for getHashesFromIndex
@@ -1891,6 +1867,9 @@ pub const AccountsDB = struct {
         self: *AccountsDB,
         account_file: *AccountFile,
         n_accounts: usize,
+        /// Allocator for `dead_accounts_counters`.
+        allocator: std.mem.Allocator,
+        dead_accounts_counters: *DeadAccountsCounter,
     ) !void {
         const shard_counts =
             try self.allocator.alloc(usize, self.account_index.pubkey_ref_map.numberOfShards());
@@ -1967,9 +1946,11 @@ pub const AccountsDB = struct {
         }
 
         if (accounts_dead_count != 0) {
-            const dead_accounts, var dead_accounts_lg = self.dead_accounts_counter.writeWithLock();
-            defer dead_accounts_lg.unlock();
-            try dead_accounts.putNoClobber(account_file.slot, accounts_dead_count);
+            try dead_accounts_counters.putNoClobber(
+                allocator,
+                account_file.slot,
+                accounts_dead_count,
+            );
         }
     }
 
@@ -2475,27 +2456,16 @@ pub const AccountsDB = struct {
         std.debug.assert(zstd_buffer.len != 0);
         std.debug.assert(params.target_slot <= self.getLargestRootedSlot() orelse 0);
 
-        const full_hash, const full_capitalization = compute: {
-            check_first: {
-                const maybe_first_snapshot_info, var first_snapshot_info_lg =
-                    self.first_snapshot_load_info.readWithLock();
-                defer first_snapshot_info_lg.unlock();
-
-                const first = maybe_first_snapshot_info.* orelse break :check_first;
-                if (first.full.slot != params.target_slot) break :check_first;
-
-                break :compute .{ first.full.hash, first.full.capitalization };
-            }
-
-            break :compute try self.computeAccountHashesAndLamports(.{
-                .FullAccountHash = .{
-                    .max_slot = params.target_slot,
-                },
-            });
-        };
+        const full_hash, //
+        const full_capitalization //
+        = try self.computeAccountHashesAndLamports(.{
+            .FullAccountHash = .{
+                .max_slot = params.target_slot,
+            },
+        });
 
         // TODO: this is a temporary value
-        const delta_hash = Hash.ZEROES;
+        const delta_hash: Hash = .ZEROES;
 
         const archive_file = blk: {
             const archive_info: FullSnapshotFileInfo = .{
@@ -2511,11 +2481,9 @@ pub const AccountsDB = struct {
         };
         defer archive_file.close();
 
-        const SerializableFileMap = AccountsDbFields.FileMap;
-
-        var serializable_file_map: SerializableFileMap = .{};
+        var serializable_file_map: AccountsDbFields.FileMap = .empty;
         defer serializable_file_map.deinit(self.allocator);
-        var bank_hash_stats = BankHashStats.zero_init;
+        var bank_hash_stats: BankHashStats = .zero_init;
 
         // collect account files into serializable_file_map and compute bank_hash_stats
         try serializable_file_map.ensureTotalCapacity(self.allocator, file_map.count());
@@ -2693,27 +2661,12 @@ pub const AccountsDB = struct {
 
         const incremental_hash, //
         const incremental_capitalization //
-        = compute: {
-            check_first: {
-                const maybe_first_snapshot_info, var first_snapshot_info_lg =
-                    self.first_snapshot_load_info.readWithLock();
-                defer first_snapshot_info_lg.unlock();
-
-                const first = maybe_first_snapshot_info.* orelse break :check_first;
-                const first_inc = first.inc orelse break :check_first;
-                if (first.full.slot != full_snapshot_info.slot) break :check_first;
-                if (first_inc.slot != params.target_slot) break :check_first;
-
-                break :compute .{ first_inc.hash, first_inc.capitalization };
-            }
-
-            break :compute try self.computeAccountHashesAndLamports(.{
-                .IncrementalAccountHash = .{
-                    .min_slot = full_snapshot_info.slot,
-                    .max_slot = params.target_slot,
-                },
-            });
-        };
+        = try self.computeAccountHashesAndLamports(.{
+            .IncrementalAccountHash = .{
+                .min_slot = full_snapshot_info.slot,
+                .max_slot = params.target_slot,
+            },
+        });
 
         // TODO: compute the correct value during account writes
         const delta_hash = Hash.ZEROES;
@@ -4269,6 +4222,9 @@ pub const BenchmarkAccountsDB = struct {
         });
         defer accounts_db.deinit();
 
+        var dead_accounts_counters: AccountsDB.DeadAccountsCounter = .empty;
+        defer dead_accounts_counters.deinit(allocator);
+
         try accounts_db.account_index.expandRefCapacity(
             std.math.ceilPowerOfTwo(usize, total_n_accounts) catch total_n_accounts,
         );
@@ -4390,7 +4346,12 @@ pub const BenchmarkAccountsDB = struct {
                         };
 
                         if (s < bench_args.n_accounts_multiple) {
-                            try accounts_db.putAccountFile(&account_file, n_accounts);
+                            try accounts_db.putAccountFile(
+                                &account_file,
+                                n_accounts,
+                                allocator,
+                                &dead_accounts_counters,
+                            );
                         } else {
                             // to be indexed later (and timed)
                             account_files.appendAssumeCapacity(account_file);
@@ -4400,7 +4361,12 @@ pub const BenchmarkAccountsDB = struct {
 
                     var timer = try sig.time.Timer.start();
                     for (account_files.items) |*account_file| {
-                        try accounts_db.putAccountFile(account_file, n_accounts);
+                        try accounts_db.putAccountFile(
+                            account_file,
+                            n_accounts,
+                            allocator,
+                            &dead_accounts_counters,
+                        );
                     }
                     break :timer_blk timer.read();
                 },
