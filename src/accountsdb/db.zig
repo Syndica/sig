@@ -195,6 +195,7 @@ pub const AccountsDB = struct {
             allocator: std.mem.Allocator,
             logger: Logger,
             snapshot_dir: std.fs.Dir,
+            buffer_pool_frames: ?u32,
         ) InitParams {
             return .{
                 .allocator = allocator,
@@ -204,7 +205,7 @@ pub const AccountsDB = struct {
                 .number_of_index_shards = 1,
                 .geyser_writer = null,
                 .gossip_view = null,
-                .buffer_pool_frames = 2,
+                .buffer_pool_frames = buffer_pool_frames orelse 128 * 1024,
             };
         }
     };
@@ -4995,7 +4996,7 @@ test "insertion basic" {
     var simple_state: sig.accounts_db.ThreadSafeAccountMap = .init(allocator);
     defer simple_state.deinit();
 
-    var real_state: AccountsDB = try .init(.minimal(allocator, .noop, tmp_dir.dir));
+    var real_state: AccountsDB = try .init(.minimal(allocator, .noop, tmp_dir.dir, null));
     defer real_state.deinit();
 
     const simple_store = simple_state.accountStore();
@@ -5068,7 +5069,7 @@ test "insertion out of order" {
     var simple_state: sig.accounts_db.ThreadSafeAccountMap = .init(allocator);
     defer simple_state.deinit();
 
-    var real_state: AccountsDB = try .init(.minimal(allocator, .noop, tmp_dir.dir));
+    var real_state: AccountsDB = try .init(.minimal(allocator, .noop, tmp_dir.dir, null));
     defer real_state.deinit();
 
     const simple_store = simple_state.accountStore();
@@ -5177,7 +5178,7 @@ test "put and get zero lamports before & after cleanup" {
     var simple_state: sig.accounts_db.ThreadSafeAccountMap = .init(allocator);
     defer simple_state.deinit();
 
-    var real_state: AccountsDB = try .init(.minimal(allocator, .noop, tmp_dir.dir));
+    var real_state: AccountsDB = try .init(.minimal(allocator, .noop, tmp_dir.dir, null));
     defer real_state.deinit();
 
     var manager: sig.accounts_db.manager.Manager = try .init(allocator, &real_state, .{
@@ -5303,7 +5304,7 @@ test "put and get zero lamports across forks" {
     var simple_state: sig.accounts_db.ThreadSafeAccountMap = .init(allocator);
     defer simple_state.deinit();
 
-    var real_state: AccountsDB = try .init(.minimal(allocator, .noop, tmp_dir.dir));
+    var real_state: AccountsDB = try .init(.minimal(allocator, .noop, tmp_dir.dir, null));
     defer real_state.deinit();
 
     var manager: sig.accounts_db.manager.Manager = try .init(allocator, &real_state, .{
@@ -5367,7 +5368,7 @@ test "put and get across competing forks" {
     var simple_state: sig.accounts_db.ThreadSafeAccountMap = .init(allocator);
     defer simple_state.deinit();
 
-    var real_state: AccountsDB = try .init(.minimal(allocator, .noop, tmp_dir.dir));
+    var real_state: AccountsDB = try .init(.minimal(allocator, .noop, tmp_dir.dir, null));
     defer real_state.deinit();
 
     var manager: sig.accounts_db.manager.Manager = try .init(allocator, &real_state, .{
