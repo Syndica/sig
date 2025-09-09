@@ -3,8 +3,6 @@ const sig = @import("../sig.zig");
 
 const HashMap = std.AutoArrayHashMapUnmanaged;
 
-const bincode = sig.bincode;
-
 const RingBitSet = sig.utils.collections.RingBitSet;
 const Slot = sig.core.Slot;
 

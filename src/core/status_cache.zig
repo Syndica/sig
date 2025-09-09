@@ -4,7 +4,6 @@ const sig = @import("../sig.zig");
 const HashMap = std.AutoArrayHashMapUnmanaged;
 const ArrayList = std.ArrayListUnmanaged;
 const RwMux = sig.sync.RwMux;
-const bincode = sig.bincode;
 
 const Hash = sig.core.Hash;
 const Slot = sig.core.Slot;
