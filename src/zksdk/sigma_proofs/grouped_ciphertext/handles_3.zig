@@ -176,7 +176,10 @@ pub const Proof = struct {
         params: Params(batched),
         transcript: *Transcript,
     ) !void {
-        comptime var session = Transcript.getSession(if (batched) batched_contract ++ contract else contract);
+        comptime var session = Transcript.getSession(if (batched)
+            batched_contract ++ contract
+        else
+            contract);
         defer session.finish();
 
         const t = if (batched) t: {
@@ -359,14 +362,16 @@ pub const Data = struct {
                 self.grouped_ciphertext.toBytes();
         }
 
+        // zig fmt: off
         fn newTranscript(self: Context) Transcript {
             return .init(.@"grouped-ciphertext-validity-3-handles-instruction", &.{
-                .{ .label = "first-pubkey", .message = .{ .pubkey = self.first_pubkey } },
-                .{ .label = "second-pubkey", .message = .{ .pubkey = self.second_pubkey } },
-                .{ .label = "third-pubkey", .message = .{ .pubkey = self.third_pubkey } },
+                .{ .label = "first-pubkey",       .message = .{ .pubkey = self.first_pubkey } },
+                .{ .label = "second-pubkey",      .message = .{ .pubkey = self.second_pubkey } },
+                .{ .label = "third-pubkey",       .message = .{ .pubkey = self.third_pubkey } },
                 .{ .label = "grouped-ciphertext", .message = .{ .grouped_3 = self.grouped_ciphertext } },
             });
         }
+        // zig fmt: on
     };
 
     pub fn init(
@@ -495,15 +500,17 @@ pub const BatchedData = struct {
                 self.grouped_ciphertext_hi.toBytes();
         }
 
+        // zig fmt: off
         fn newTranscript(self: Context) Transcript {
             return .init(.@"batched-grouped-ciphertext-validity-3-handles-instruction", &.{
-                .{ .label = "first-pubkey", .message = .{ .pubkey = self.first_pubkey } },
-                .{ .label = "second-pubkey", .message = .{ .pubkey = self.second_pubkey } },
-                .{ .label = "third-pubkey", .message = .{ .pubkey = self.third_pubkey } },
+                .{ .label = "first-pubkey",          .message = .{ .pubkey = self.first_pubkey } },
+                .{ .label = "second-pubkey",         .message = .{ .pubkey = self.second_pubkey } },
+                .{ .label = "third-pubkey",          .message = .{ .pubkey = self.third_pubkey } },
                 .{ .label = "grouped-ciphertext-lo", .message = .{ .grouped_3 = self.grouped_ciphertext_lo } },
                 .{ .label = "grouped-ciphertext-hi", .message = .{ .grouped_3 = self.grouped_ciphertext_hi } },
             });
         }
+        // zig fmt: on
     };
 
     pub fn init(
