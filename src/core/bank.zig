@@ -585,7 +585,7 @@ pub fn ancestorsRandom(
     const upper_bound = lower_bound + Ancestors.MAX_SLOT_RANGE;
 
     for (0..@min(Ancestors.MAX_SLOT_RANGE, random.uintAtMost(usize, max_list_entries))) |_| {
-        try ancestors.addSlot(random.intRangeAtMost(Slot, lower_bound, upper_bound));
+        try ancestors.addSlot(random.intRangeLessThan(Slot, lower_bound, upper_bound));
     }
 
     return ancestors;

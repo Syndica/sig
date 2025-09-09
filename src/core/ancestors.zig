@@ -98,7 +98,7 @@ pub fn RingBitSet(len: usize) type {
             if (index < self.bottom) return error.Underflow;
             if (index - self.bottom > len) {
                 const wipe_start = self.bottom;
-                self.bottom = index + len;
+                self.bottom = 1 + index - len;
                 const wipe_end = self.bottom;
                 if (wipe_start % len > wipe_end % len) {
                     self.inner.setRangeValue(.{ .start = wipe_start % len, .end = len }, false);
