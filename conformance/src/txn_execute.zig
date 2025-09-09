@@ -187,7 +187,6 @@ fn executeTxnContext(
     var epoch_schedule: EpochSchedule = undefined;
 
     var ancestors: Ancestors = .{};
-    defer ancestors.deinit(allocator);
 
     var compute_budget = ComputeBudget.DEFAULT;
     compute_budget.compute_unit_limit = compute_budget.compute_unit_limit;
