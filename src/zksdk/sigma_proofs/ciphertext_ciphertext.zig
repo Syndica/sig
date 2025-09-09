@@ -282,15 +282,17 @@ pub const Data = struct {
                 self.first_ciphertext.toBytes() ++ self.second_ciphertext.toBytes();
         }
 
+        // zig fmt: off
         fn newTranscript(self: Context) Transcript {
             return .init(.@"ciphertext-ciphertext-equality-instruction", &.{
-                .{ .label = "first-pubkey", .message = .{ .pubkey = self.first_pubkey } },
-                .{ .label = "second-pubkey", .message = .{ .pubkey = self.second_pubkey } },
+                .{ .label = "first-pubkey",      .message = .{ .pubkey = self.first_pubkey } },
+                .{ .label = "second-pubkey",     .message = .{ .pubkey = self.second_pubkey } },
 
-                .{ .label = "first-ciphertext", .message = .{ .ciphertext = self.first_ciphertext } },
+                .{ .label = "first-ciphertext",  .message = .{ .ciphertext = self.first_ciphertext } },
                 .{ .label = "second-ciphertext", .message = .{ .ciphertext = self.second_ciphertext } },
             });
         }
+        // zig fmt: on
     };
 
     pub fn init(
