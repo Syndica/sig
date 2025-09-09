@@ -49,10 +49,11 @@ pub const Ancestors = struct {
     ) anyerror!RingBitSet(MAX_SLOT_RANGE) {
         const deserialized = try bincode.readWithLimit(l, HashMap(Slot, usize), reader, params);
         defer bincode.free(l.allocator(), deserialized);
-        var set = RingBitSet(MAX_SLOT_RANGE){};
+        var set = RingBitSet(MAX_SLOT_RANGE).empty;
         for (deserialized.keys()) |slot| {
             try set.set(slot);
         }
+        return set;
     }
 
     fn serialize(writer: anytype, data: anytype, params: bincode.Params) anyerror!void {
