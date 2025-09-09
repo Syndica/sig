@@ -75,7 +75,7 @@ pub fn processResult(
         return processed_a_slot;
     }
 
-    const slot_info = state.slot_tracker.get(slot) orelse return error.MissingSlotInTracker;
+    const slot_info = state.slot_tracker.get2(slot) orelse return error.MissingSlotInTracker;
     const epoch_info = state.epoch_tracker.getForSlot(slot) orelse return error.MissingEpoch;
 
     // Freeze the bank if its entries where completly processed.

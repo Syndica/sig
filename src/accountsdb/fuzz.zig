@@ -254,14 +254,15 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
         try ancestors.addSlot(top_slot);
 
         const current_slot = if (!non_sequential_slots) top_slot else slot: {
-            const ancestor_slots: []const Slot = ancestors.ancestors.keys();
-            std.debug.assert(ancestor_slots[ancestor_slots.len - 1] == top_slot);
-            const ancestor_index = random.intRangeLessThan(
-                usize,
-                ancestor_slots.len -| 10,
-                ancestor_slots.len,
-            );
-            break :slot ancestor_slots[ancestor_index];
+            // const ancestor_slots: []const Slot = ancestors.ancestors.keys();
+            // std.debug.assert(ancestor_slots[ancestor_slots.len - 1] == top_slot);
+            // const ancestor_index = random.intRangeLessThan(
+            //     usize,
+            //     ancestor_slots.len -| 10,
+            //     ancestor_slots.len,
+            // );
+            // break :slot ancestor_slots[ancestor_index];
+            break :slot 1;
         };
 
         const action = random.enumValue(enum { put, get });
@@ -323,14 +324,14 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                 var iter = ancestors_sub.ancestors.iterator();
                 while (iter.next()) |other_slot| {
                     if (other_slot <= tracked_account.slot) continue;
-                    _ = ancestors_sub.ancestors.swapRemove(other_slot);
+                    // _ = ancestors_sub.ancestors.swapRemove(other_slot);
                 }
-                ancestors_sub.ancestors.sort(struct {
-                    ancestors_sub: []Slot,
-                    pub fn lessThan(ctx: @This(), a: usize, b: usize) bool {
-                        return ctx.ancestors_sub[a] < ctx.ancestors_sub[b];
-                    }
-                }{ .ancestors_sub = ancestors_sub.ancestors.keys() });
+                // ancestors_sub.ancestors.sort(struct {
+                //     ancestors_sub: []Slot,
+                //     pub fn lessThan(ctx: @This(), a: usize, b: usize) bool {
+                //         return ctx.ancestors_sub[a] < ctx.ancestors_sub[b];
+                //     }
+                // }{ .ancestors_sub = ancestors_sub.ancestors.keys() });
 
                 const account =
                     try accounts_db.getAccountWithAncestors(&pubkey, &ancestors_sub) orelse {

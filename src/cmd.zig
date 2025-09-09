@@ -1961,7 +1961,7 @@ fn replayDependencies(
 
     const feature_set = try sig.replay.service.getActiveFeatures(
         allocator,
-        loaded_snapshot.accounts_db.accountReader().forSlot(&bank_fields.ancestors),
+        loaded_snapshot.accounts_db.accountReader().forSlot(bank_fields.ancestors),
         bank_fields.slot,
     );
 

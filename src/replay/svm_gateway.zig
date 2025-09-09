@@ -83,7 +83,7 @@ pub const SvmGateway = struct {
 
         // Borrowed values to pass by reference into the SVM.
         blockhash_queue: *sig.sync.RwMux(BlockhashQueue),
-        ancestors: *const Ancestors,
+        ancestors: Ancestors,
         feature_set: FeatureSet,
         rent_collector: *const RentCollector,
         epoch_stakes: *const sig.core.EpochStakes,
@@ -170,7 +170,7 @@ pub const SvmGateway = struct {
             return error.MissingLastBlockhashInfo;
 
         return .{
-            .ancestors = self.params.ancestors,
+            .ancestors = &self.params.ancestors,
             .feature_set = &self.params.feature_set,
             .status_cache = self.params.status_cache,
             .sysvar_cache = &self.state.sysvar_cache,

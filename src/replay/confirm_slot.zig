@@ -823,8 +823,8 @@ pub const TestState = struct {
             .max_age = self.max_age,
             .lamports_per_signature = self.lamports_per_signature,
             .blockhash_queue = &self.blockhash_queue,
-            .account_reader = self.account_map.accountReader().forSlot(&self.ancestors),
-            .ancestors = &self.ancestors,
+            .account_reader = self.account_map.accountReader().forSlot(self.ancestors),
+            .ancestors = self.ancestors,
             .feature_set = self.feature_set,
             .rent_collector = &self.rent_collector,
             .epoch_stakes = &self.epoch_stakes,
@@ -847,8 +847,8 @@ pub const TestState = struct {
     pub fn resolver(self: *TestState, allocator: Allocator) !SlotResolver {
         return .{
             .slot = self.slot,
-            .account_reader = self.account_map.accountReader().forSlot(&self.ancestors),
-            .reserved_accounts = &.empty,
+            .account_reader = self.account_map.accountReader().forSlot(self.ancestors),
+            .reserved_accounts = .empty,
             .slot_hashes = try SlotHashes.init(allocator),
         };
     }

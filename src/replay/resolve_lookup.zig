@@ -79,13 +79,13 @@ pub const ResolvedTransaction = struct {
 pub const SlotResolver = struct {
     slot: Slot,
     account_reader: SlotAccountReader,
-    /// borrowed
-    reserved_accounts: *const ReservedAccounts,
-    /// owned
+    reserved_accounts: ReservedAccounts,
     slot_hashes: SlotHashes,
 
     pub fn deinit(self: SlotResolver, allocator: Allocator) void {
-        self.slot_hashes.deinit(allocator);
+        var copy = self;
+        copy.reserved_accounts.deinit(allocator);
+        copy.slot_hashes.deinit(allocator);
     }
 };
 
@@ -151,7 +151,7 @@ pub fn resolveTransaction(
     for (message.account_keys, 0..) |pubkey, i| accounts.appendAssumeCapacity(.{
         .pubkey = pubkey,
         .is_signer = message.isSigner(i),
-        .is_writable = message.isWritable(i, lookups, params.reserved_accounts),
+        .is_writable = message.isWritable(i, lookups, &params.reserved_accounts),
     });
     for (lookups.writable, 0..) |pubkey, i| accounts.appendAssumeCapacity(.{
         .pubkey = pubkey,
@@ -159,7 +159,7 @@ pub fn resolveTransaction(
         .is_writable = message.isWritable(
             message.account_keys.len + i,
             lookups,
-            params.reserved_accounts,
+            &params.reserved_accounts,
         ),
     });
     for (lookups.readonly) |pubkey| accounts.appendAssumeCapacity(.{
@@ -456,8 +456,8 @@ test resolveBatch {
         .{
             .slot = 1, // Greater than lookup tables' last_extended_slot
             .slot_hashes = slot_hashes,
-            .reserved_accounts = &.empty,
-            .account_reader = map.accountReader().forSlot(&ancestors),
+            .reserved_accounts = .empty,
+            .account_reader = map.accountReader().forSlot(ancestors),
         },
     );
     defer resolved.deinit(std.testing.allocator);
@@ -554,7 +554,7 @@ test getLookupTable {
     defer ancestors.deinit(allocator);
     try ancestors.addSlot(0);
 
-    const account_reader = map.accountReader().forSlot(&ancestors);
+    const account_reader = map.accountReader().forSlot(ancestors);
 
     { // Invalid owner
         const pubkey = Pubkey.initRandom(random);

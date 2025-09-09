@@ -66,8 +66,8 @@ pub fn updateSysvarsForNewSlot(
     const sysvar_deps = UpdateSysvarAccountDeps{
         .account_store = account_store,
         .capitalization = &state.capitalization,
-        .ancestors = &constants.ancestors,
-        .rent = &epoch_info.rent_collector.rent,
+        .ancestors = constants.ancestors,
+        .rent = epoch_info.rent_collector.rent,
         .slot = slot,
     };
 
@@ -306,8 +306,8 @@ pub fn updateRecentBlockhashes(
 pub const UpdateSysvarAccountDeps = struct {
     account_store: AccountStore,
     capitalization: *Atomic(u64),
-    ancestors: *const Ancestors,
-    rent: *const Rent,
+    ancestors: Ancestors,
+    rent: Rent,
     slot: Slot,
 };
 
@@ -329,7 +329,7 @@ pub fn updateSysvarAccount(
 
     const new_account = try createSysvarAccount(
         allocator,
-        deps.rent,
+        &deps.rent,
         Sysvar,
         sysvar,
         if (maybe_old_account) |acc| &acc else null,
@@ -638,7 +638,7 @@ test fillMissingSysvarCacheEntries {
     // Fill missing entries in the sysvar cache from accounts db.
     try fillMissingSysvarCacheEntries(
         allocator,
-        accounts_db.accountStore().reader().forSlot(&ancestors),
+        accounts_db.accountStore().reader().forSlot(ancestors),
         &actual,
     );
 
@@ -872,12 +872,12 @@ test "update all sysvars" {
     const update_sysvar_deps = UpdateSysvarAccountDeps{
         .account_store = accounts_db.accountStore(),
         .capitalization = &capitalization,
-        .ancestors = &ancestors,
-        .rent = &rent,
+        .ancestors = ancestors,
+        .rent = rent,
         .slot = slot,
     };
     try ancestors.addSlot(slot);
-    const account_reader = accounts_db.accountReader().forSlot(&ancestors);
+    const account_reader = accounts_db.accountReader().forSlot(ancestors);
 
     { // updateClock
         _, const old_account =

@@ -139,7 +139,7 @@ pub const SlotHistoryAccessor = struct {
         ancestors: *const Ancestors,
     ) !SlotHistory {
         const maybe_account =
-            try self.account_reader.forSlot(ancestors).get(SlotHistory.ID);
+            try self.account_reader.forSlot(ancestors.*).get(SlotHistory.ID);
         const account: sig.core.Account = maybe_account orelse
             return error.MissingSlotHistoryAccount;
 
@@ -3783,7 +3783,7 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
     });
     defer accountsdb.deinit();
 
-    var empty_ancestors: Ancestors = .EMPTY;
+    const empty_ancestors: Ancestors = .EMPTY;
 
     var replay_tower = try ReplayTower.init(
         allocator,
@@ -3791,7 +3791,7 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
         Pubkey.ZEROES,
         Pubkey.ZEROES,
         root.slot,
-        accountsdb.accountReader().forSlot(&empty_ancestors),
+        accountsdb.accountReader().forSlot(empty_ancestors),
     );
     defer replay_tower.deinit(allocator);
 

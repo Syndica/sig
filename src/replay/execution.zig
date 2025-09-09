@@ -259,7 +259,7 @@ fn prepareSlot(state: ReplayExecutionState, slot: Slot) !PreparedSlot {
     }
 
     const epoch_constants = state.epoch_tracker.getPtrForSlot(slot) orelse return error.MissingEpoch;
-    const slot_info = state.slot_tracker.get(slot) orelse return error.MissingSlot;
+    const slot_info = state.slot_tracker.get2(slot) orelse return error.MissingSlot;
 
     const i_am_leader = slot_info.constants.collector_id.equals(&state.my_identity);
 
@@ -329,7 +329,7 @@ fn prepareSlot(state: ReplayExecutionState, slot: Slot) !PreparedSlot {
             null;
 
     const slot_account_reader = state.account_store.reader()
-        .forSlot(&slot_info.constants.ancestors);
+        .forSlot(slot_info.constants.ancestors);
 
     // TODO: Avoid the need to read this from accountsdb. We could broaden the
     // scope of the sysvar cache, add this to slot constants, or implement
@@ -344,7 +344,7 @@ fn prepareSlot(state: ReplayExecutionState, slot: Slot) !PreparedSlot {
     const slot_resolver = replay.resolve_lookup.SlotResolver{
         .slot = slot,
         .account_reader = slot_account_reader,
-        .reserved_accounts = &slot_info.constants.reserved_accounts,
+        .reserved_accounts = slot_info.constants.reserved_accounts,
         .slot_hashes = slot_hashes,
     };
 
@@ -354,7 +354,7 @@ fn prepareSlot(state: ReplayExecutionState, slot: Slot) !PreparedSlot {
         .lamports_per_signature = slot_info.constants.fee_rate_governor.lamports_per_signature,
         .blockhash_queue = &slot_info.state.blockhash_queue,
         .account_reader = slot_account_reader,
-        .ancestors = &slot_info.constants.ancestors,
+        .ancestors = slot_info.constants.ancestors,
         .feature_set = slot_info.constants.feature_set,
         .rent_collector = &epoch_constants.rent_collector,
         .epoch_stakes = &epoch_constants.stakes,

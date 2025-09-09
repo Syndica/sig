@@ -58,7 +58,7 @@ pub const AccountReader = union(enum) {
         };
     }
 
-    pub fn forSlot(self: AccountReader, ancestors: *const Ancestors) SlotAccountReader {
+    pub fn forSlot(self: AccountReader, ancestors: Ancestors) SlotAccountReader {
         return switch (self) {
             .accounts_db => |db| .{ .accounts_db = .{ db, ancestors } },
             .thread_safe_map => |map| .{ .thread_safe_map = .{ map, ancestors } },
@@ -150,10 +150,10 @@ pub const SlotModifiedIterator = union(enum) {
 /// that's less than or equal to slot 6. If the account was modified in slot 6,
 /// then you'll get the version of the account from slot 6.
 pub const SlotAccountReader = union(enum) {
-    accounts_db: struct { *AccountsDB, *const Ancestors },
+    accounts_db: struct { *AccountsDB, Ancestors },
     /// Contains many versions of accounts and becomes fork-aware using
     /// ancestors, like accountsdb.
-    thread_safe_map: struct { *ThreadSafeAccountMap, *const Ancestors },
+    thread_safe_map: struct { *ThreadSafeAccountMap, Ancestors },
     /// Only stores the current slot's version of each account.
     /// Should only store borrowed accounts, or else it will panic on deinit.
     single_version_map: *const std.AutoArrayHashMapUnmanaged(Pubkey, Account),
@@ -177,7 +177,7 @@ pub const SlotAccountReader = union(enum) {
         return switch (self) {
             .accounts_db => |pair| {
                 const db, const ancestors = pair;
-                const account = try db.getAccountWithAncestors(&address, ancestors) orelse
+                const account = try db.getAccountWithAncestors(&address, &ancestors) orelse
                     return null;
                 if (account.lamports == 0) {
                     account.deinit(db.allocator);
@@ -253,7 +253,7 @@ pub const ThreadSafeAccountMap = struct {
     pub fn get(
         self: *ThreadSafeAccountMap,
         address: Pubkey,
-        ancestors: *const Ancestors,
+        ancestors: Ancestors,
     ) !?Account {
         const map, var lock = self.pubkey_map.readWithLock();
         defer lock.unlock();
@@ -437,7 +437,7 @@ test "AccountStore does not return 0-lamport accounts from accountsdb" {
     var ancestors = Ancestors{};
     defer ancestors.deinit(std.testing.allocator);
     try ancestors.addSlot(0);
-    const slot_reader = db.accountReader().forSlot(&ancestors);
+    const slot_reader = db.accountReader().forSlot(ancestors);
 
     try std.testing.expectEqual(null, try slot_reader.get(zero_lamport_address));
     try std.testing.expectEqual(1, (try slot_reader.get(one_lamport_address)).?.lamports);
@@ -483,7 +483,7 @@ fn expectAccount(
     expected: ?sig.core.Account,
 ) !void {
     if (!@import("builtin").is_test) @compileError("Not allowed outside of tests.");
-    const actual = if (maybe_ancestors) |*ancestors|
+    const actual = if (maybe_ancestors) |ancestors|
         try account_reader.forSlot(ancestors).get(address)
     else
         try account_reader.getLatest(address);

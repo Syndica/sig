@@ -754,7 +754,7 @@ fn executeTxnContext(
     defer sysvar_cache.deinit(allocator);
     try update_sysvar.fillMissingSysvarCacheEntries(
         allocator,
-        accounts_db.accountReader().forSlot(&ancestors),
+        accounts_db.accountReader().forSlot(ancestors),
         &sysvar_cache,
     );
 
@@ -781,7 +781,7 @@ fn executeTxnContext(
     const resolved_transaction_result: TransactionResult(ResolvedTransaction) = blk: {
         const resolved = resolveTransaction(allocator, transaction, .{
             .slot = slot,
-            .account_reader = accounts_db.accountReader().forSlot(&ancestors),
+            .account_reader = accounts_db.accountReader().forSlot(ancestors),
             .reserved_accounts = &reserved_accounts,
             .slot_hashes = try sysvar_cache.get(sig.runtime.sysvar.SlotHashes),
         }) catch |err| break :blk switch (err) {
@@ -809,7 +809,7 @@ fn executeTxnContext(
     // Create batch account cache from accounts db
     var accounts = try BatchAccountCache.initFromAccountsDb(
         allocator,
-        accounts_db.accountReader().forSlot(&ancestors),
+        accounts_db.accountReader().forSlot(ancestors),
         &.{runtime_transaction},
     );
     defer accounts.deinit(allocator);

@@ -35,10 +35,21 @@ pub const SlotTracker = struct {
                 .state = &self.state,
             };
         }
+        fn toRef2(self: *Element) Ref2 {
+            return .{
+                .constants = self.constants,
+                .state = &self.state,
+            };
+        }
     };
 
     pub const Reference = struct {
         constants: *const SlotConstants,
+        state: *SlotState,
+    };
+
+    pub const Ref2 = struct {
+        constants: SlotConstants,
         state: *SlotState,
     };
 
@@ -84,6 +95,11 @@ pub const SlotTracker = struct {
     pub fn get(self: *const SlotTracker, slot: Slot) ?Reference {
         const elem = self.slots.get(slot) orelse return null;
         return elem.toRef();
+    }
+
+    pub fn get2(self: *const SlotTracker, slot: Slot) ?Ref2 {
+        const elem = self.slots.get(slot) orelse return null;
+        return elem.toRef2();
     }
 
     pub const GetOrPutResult = struct {

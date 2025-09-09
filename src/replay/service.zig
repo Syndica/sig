@@ -340,7 +340,7 @@ const ConsensusState = struct {
             replay_deps.my_identity,
             replay_deps.vote_identity,
             replay_deps.root.slot,
-            replay_deps.account_store.reader().forSlot(&replay_deps.root.constants.ancestors),
+            replay_deps.account_store.reader().forSlot(replay_deps.root.constants.ancestors),
         );
         errdefer replay_tower.deinit(replay_deps.allocator);
 
@@ -733,7 +733,7 @@ fn bypassConsensus(state: *ReplayState, results: []const ReplayResult) !bool {
 
         for (results) |result| {
             const slot = result.slot;
-            const slot_info = slot_tracker.get(slot) orelse return error.MissingSlotInTracker;
+            const slot_info = slot_tracker.get2(slot) orelse return error.MissingSlotInTracker;
             if (slot_info.state.tickHeight() == slot_info.constants.max_tick_height) {
                 state.logger.info().logf("finished replaying slot: {}", .{slot});
                 const epoch = epoch_tracker.getForSlot(slot) orelse return error.MissingEpoch;
@@ -883,7 +883,7 @@ fn newSlotFromParent(
     errdefer ancestors.deinit(allocator);
     try ancestors.addSlot(slot);
 
-    var feature_set = try getActiveFeatures(allocator, account_reader.forSlot(&ancestors), slot);
+    var feature_set = try getActiveFeatures(allocator, account_reader.forSlot(ancestors), slot);
 
     const parent_hash = parent_state.hash.readCopy().?;
 

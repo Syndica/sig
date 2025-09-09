@@ -45,7 +45,7 @@ pub const FreezeParams = struct {
         account_store: AccountStore,
         epoch: *const EpochConstants,
         state: *SlotState,
-        constants: *const SlotConstants,
+        constants: SlotConstants,
         slot: Slot,
         blockhash: Hash,
     ) FreezeParams {
@@ -56,23 +56,23 @@ pub const FreezeParams = struct {
             .hash_slot = .{
                 .account_reader = account_store.reader(),
                 .slot = slot,
-                .parent_slot_hash = &constants.parent_hash,
-                .parent_lt_hash = &constants.parent_lt_hash,
-                .ancestors = &constants.ancestors,
+                .parent_slot_hash = constants.parent_hash,
+                .parent_lt_hash = constants.parent_lt_hash,
+                .ancestors = constants.ancestors,
                 .blockhash = blockhash,
-                .feature_set = &constants.feature_set,
+                .feature_set = constants.feature_set,
                 .signature_count = state.signature_count.load(.monotonic),
             },
             .finalize_state = .{
                 .update_sysvar = .{
                     .account_store = account_store,
                     .slot = slot,
-                    .ancestors = &constants.ancestors,
-                    .rent = &epoch.rent_collector.rent,
+                    .ancestors = constants.ancestors,
+                    .rent = epoch.rent_collector.rent,
                     .capitalization = &state.capitalization,
                 },
                 .account_store = account_store,
-                .account_reader = account_store.reader().forSlot(&constants.ancestors),
+                .account_reader = account_store.reader().forSlot(constants.ancestors),
                 .capitalization = &state.capitalization,
                 .blockhash_queue = &state.blockhash_queue,
                 .rent = epoch.rent_collector.rent,
@@ -250,11 +250,11 @@ pub const HashSlotParams = struct {
     account_reader: AccountReader,
     slot: Slot,
     signature_count: u64,
-    parent_slot_hash: *const Hash,
-    parent_lt_hash: *const ?LtHash,
-    ancestors: *const Ancestors,
+    parent_slot_hash: Hash,
+    parent_lt_hash: ?LtHash,
+    ancestors: Ancestors,
     blockhash: Hash,
-    feature_set: *const sig.core.FeatureSet,
+    feature_set: sig.core.FeatureSet,
 };
 
 /// Calculates the slot hash (known as the "bank hash" in agave)
@@ -282,7 +282,7 @@ pub fn hashSlot(allocator: Allocator, params: HashSlotParams) !struct { ?LtHash,
         defer parent_ancestors.deinit(allocator);
         parent_ancestors.removeSlot(params.slot);
 
-        var lt_hash = params.parent_lt_hash.* orelse return error.UnknownParentLtHash;
+        var lt_hash = params.parent_lt_hash orelse return error.UnknownParentLtHash;
         lt_hash.mixIn(try deltaLtHash(params.account_reader, params.slot, &parent_ancestors));
 
         return .{ lt_hash, Hash.generateSha256(.{ initial_hash, lt_hash.bytes() }) };
@@ -351,7 +351,7 @@ pub fn deltaLtHash(
     while (try iterator.next()) |pubkey_account| : (i += 1) {
         const pubkey, const account = pubkey_account;
         defer account.deinit(account_reader.allocator());
-        if (try account_reader.forSlot(parent_ancestors).get(pubkey)) |old_acct| {
+        if (try account_reader.forSlot(parent_ancestors.*).get(pubkey)) |old_acct| {
             defer old_acct.deinit(account_reader.allocator());
             if (!old_acct.equals(&account)) {
                 hash.mixOut(old_acct.ltHash(pubkey));
@@ -406,7 +406,7 @@ test "freezeSlot: trivial e2e merkle hash test" {
 
     try freezeSlot(
         allocator,
-        .init(.FOR_TESTS, account_store, &epoch, &state, &constants, 0, .ZEROES),
+        .init(.FOR_TESTS, account_store, &epoch, &state, constants, 0, .ZEROES),
     );
 
     try std.testing.expectEqual(
@@ -454,7 +454,7 @@ test "freezeSlot: trivial e2e lattice hash test" {
 
     try freezeSlot(
         allocator,
-        .init(.FOR_TESTS, account_store, &epoch, &state, &constants, 0, .ZEROES),
+        .init(.FOR_TESTS, account_store, &epoch, &state, constants, 0, .ZEROES),
     );
 
     try std.testing.expectEqual(
