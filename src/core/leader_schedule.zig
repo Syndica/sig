@@ -162,12 +162,35 @@ pub const LeaderSchedule = struct {
         };
     }
 
+    pub fn fromVoteAccounts(
+        allocator: std.mem.Allocator,
+        epoch: Epoch,
+        slots_in_epoch: Slot,
+        vote_accounts: *const sig.core.vote_accounts.StakeAndVoteAccountsMap,
+    ) ![]const Pubkey {
+        var stakes = std.AutoArrayHashMapUnmanaged(Pubkey, u64){};
+        defer stakes.deinit(allocator);
+
+        for (vote_accounts.keys(), vote_accounts.values()) |key, value| {
+            try stakes.put(allocator, key, value.stake);
+        }
+
+        const vote_keyed = try fromStakedNodes(allocator, epoch, slots_in_epoch, &stakes);
+
+        for (vote_keyed) |*pk| {
+            const npk = vote_accounts.get(pk.*) orelse unreachable;
+            pk.* = npk.account.state.node_pubkey;
+        }
+
+        return vote_keyed;
+    }
+
     pub fn fromStakedNodes(
         allocator: std.mem.Allocator,
         epoch: Epoch,
         slots_in_epoch: Slot,
         staked_nodes: *const std.AutoArrayHashMapUnmanaged(Pubkey, u64),
-    ) ![]const Pubkey {
+    ) ![]Pubkey {
         const Entry = std.AutoArrayHashMap(Pubkey, u64).Entry;
 
         const nodes = try allocator.alloc(Entry, staked_nodes.count());
