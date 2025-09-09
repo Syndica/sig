@@ -4822,13 +4822,15 @@ test "loadAndVerifyAccountsFiles ref manager expand" {
 }
 
 fn putAccountIntoStores(
+    expected_result: anyerror!void,
     stores: []const sig.accounts_db.AccountStore,
     slot: Slot,
     pubkey: Pubkey,
     account: AccountSharedData,
 ) !void {
     for (stores) |store| {
-        try store.put(slot, pubkey, account);
+        errdefer std.log.err("Error occurred with implementation '{s}'", .{@tagName(store)});
+        try std.testing.expectEqual(expected_result, store.put(slot, pubkey, account));
     }
 }
 
@@ -5019,7 +5021,7 @@ test "insertion basic" {
         defer account.deinit(allocator);
 
         try ancestor_set.addSlot(allocator, slot);
-        try putAccountIntoStores(&stores, slot, pubkey, account);
+        try putAccountIntoStores({}, &stores, slot, pubkey, account);
         try expectEqualDatabaseWithAncestors(
             &ancestor_set,
             simple_state.pubkey_map.keys(),
@@ -5046,11 +5048,12 @@ test "insertion basic" {
     try std.testing.expectEqual({}, real_store.put(1, .ZEROES, .EMPTY));
 
     setRootedLargestSlotForTest(&simple_state, &real_state, 2);
-    try std.testing.expectEqual(error.CannotWriteRootedSlot, simple_store.put(1, .ZEROES, .EMPTY));
-    try std.testing.expectEqual(error.CannotWriteRootedSlot, real_store.put(1, .ZEROES, .EMPTY));
+    try putAccountIntoStores(error.CannotWriteRootedSlot, &stores, 1, .ZEROES, .EMPTY);
+
+    // this backtracking wouldn't/shouldn't really ever happen, but just
+    // to demonstrate that the error is based on the rooted slot:
     setRootedLargestSlotForTest(&simple_state, &real_state, null);
-    try std.testing.expectEqual({}, simple_store.put(1, .ZEROES, .EMPTY));
-    try std.testing.expectEqual({}, real_store.put(1, .ZEROES, .EMPTY));
+    try putAccountIntoStores({}, &stores, 1, .ZEROES, .EMPTY);
 }
 
 test "insertion out of order" {
@@ -5095,7 +5098,7 @@ test "insertion out of order" {
         defer account.deinit(allocator);
 
         try ancestor_set.addSlot(allocator, slot);
-        try putAccountIntoStores(&stores, slot, pubkey, account);
+        try putAccountIntoStores({}, &stores, slot, pubkey, account);
 
         try expectEqualDatabaseWithAncestors(
             &ancestor_set,
@@ -5136,8 +5139,7 @@ test "insertion out of order" {
         real_store.put(1, pk_of_ones, .EMPTY),
     );
     setRootedLargestSlotForTest(&simple_state, &real_state, null);
-    try std.testing.expectEqual({}, simple_store.put(1, pk_of_ones, .EMPTY));
-    try std.testing.expectEqual({}, real_store.put(1, pk_of_ones, .EMPTY));
+    try putAccountIntoStores({}, &stores, 1, pk_of_ones, .EMPTY);
 }
 
 fn expectDbUnrootedPubkeysInSlot(
@@ -5224,20 +5226,20 @@ test "put and get zero lamports before & after cleanup" {
     };
 
     // lamports: zero before and after
-    try putAccountIntoStores(&stores, slot100, pk1, zero_lamports);
-    try putAccountIntoStores(&stores, slot200, pk1, zero_lamports);
+    try putAccountIntoStores({}, &stores, slot100, pk1, zero_lamports);
+    try putAccountIntoStores({}, &stores, slot200, pk1, zero_lamports);
 
     // lamports: zero before, non-zero after
-    try putAccountIntoStores(&stores, slot100, pk2, zero_lamports);
-    try putAccountIntoStores(&stores, slot200, pk2, one_lamport);
+    try putAccountIntoStores({}, &stores, slot100, pk2, zero_lamports);
+    try putAccountIntoStores({}, &stores, slot200, pk2, one_lamport);
 
     // lamports: non-zero before, zero after
-    try putAccountIntoStores(&stores, slot100, pk3, one_lamport);
-    try putAccountIntoStores(&stores, slot200, pk3, zero_lamports);
+    try putAccountIntoStores({}, &stores, slot100, pk3, one_lamport);
+    try putAccountIntoStores({}, &stores, slot200, pk3, zero_lamports);
 
     // lamports: non-zero before, non-zero after
-    try putAccountIntoStores(&stores, slot100, pk4, one_lamport);
-    try putAccountIntoStores(&stores, slot200, pk4, one_lamport);
+    try putAccountIntoStores({}, &stores, slot100, pk4, one_lamport);
+    try putAccountIntoStores({}, &stores, slot200, pk4, one_lamport);
 
     // where lamports == 0, treated as non-present, before and after
     try expectAccountFromStores(&stores, &ancestors_before, pk1, null);
@@ -5335,9 +5337,9 @@ test "put and get zero lamports across forks" {
     const slot4: Slot = 400;
 
     setRootedLargestSlotForTest(&simple_state, &real_state, slot1);
-    try putAccountIntoStores(&stores, slot2, pk, zero_lamports);
-    try putAccountIntoStores(&stores, slot3, pk, one_lamport);
-    try putAccountIntoStores(&stores, slot4, pk, zero_lamports);
+    try putAccountIntoStores({}, &stores, slot2, pk, zero_lamports);
+    try putAccountIntoStores({}, &stores, slot3, pk, one_lamport);
+    try putAccountIntoStores({}, &stores, slot4, pk, zero_lamports);
 
     const fork_a: Ancestors = try .initWithSlots(allocator, &.{slot2});
     defer fork_a.deinit(allocator);
@@ -5398,10 +5400,10 @@ test "put and get across competing forks" {
     const slot3: Slot = 300;
     const slot4: Slot = 400;
 
-    try putAccountIntoStores(&stores, slot1, pk, asd_a);
+    try putAccountIntoStores({}, &stores, slot1, pk, asd_a);
     setRootedLargestSlotForTest(&simple_state, &real_state, slot1);
-    try putAccountIntoStores(&stores, slot3, pk, asd_b);
-    try putAccountIntoStores(&stores, slot4, pk, asd_c);
+    try putAccountIntoStores({}, &stores, slot3, pk, asd_b);
+    try putAccountIntoStores({}, &stores, slot4, pk, asd_c);
 
     const fork_a: Ancestors = try .initWithSlots(allocator, &.{slot2});
     defer fork_a.deinit(allocator);
