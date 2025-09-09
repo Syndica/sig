@@ -813,7 +813,6 @@ pub const TestState = struct {
     pub fn deinit(self: *TestState, allocator: Allocator) void {
         self.account_map.deinit();
         self.status_cache.deinit(allocator);
-        self.ancestors.deinit(allocator);
         var bhq = self.blockhash_queue.tryWrite() orelse unreachable;
         bhq.get().deinit(allocator);
         bhq.unlock();

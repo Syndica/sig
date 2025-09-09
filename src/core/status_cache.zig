@@ -224,7 +224,6 @@ test "status cache (de)serialize Ancestors" {
     try ancestors.addSlot(2);
     try ancestors.addSlot(3);
     try ancestors.addSlot(4);
-    defer ancestors.deinit(allocator);
 
     const serialized = try bincode.writeAlloc(allocator, ancestors, .{});
 

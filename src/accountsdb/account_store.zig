@@ -435,7 +435,6 @@ test "AccountStore does not return 0-lamport accounts from accountsdb" {
     try std.testing.expectEqual(1, (try reader.getLatest(one_lamport_address)).?.lamports);
 
     var ancestors = Ancestors{};
-    defer ancestors.deinit(std.testing.allocator);
     try ancestors.addSlot(0);
     const slot_reader = db.accountReader().forSlot(&ancestors);
 
@@ -456,7 +455,6 @@ test ThreadSafeAccountMap {
     const account_reader = tsm.accountReader();
 
     var ancestors1: Ancestors = .{};
-    defer ancestors1.deinit(allocator);
     const slot1: Slot = 1;
     const addr1: Pubkey = .initRandom(random);
     try ancestors1.addSlot(slot1);

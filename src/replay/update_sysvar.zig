@@ -615,7 +615,6 @@ test fillMissingSysvarCacheEntries {
     // Set slot and ancestors
     const slot = 10;
     var ancestors = Ancestors{};
-    defer ancestors.deinit(allocator);
     try ancestors.addSlot(slot);
 
     // Create a sysvar cache with all sysvars randomly initialized.
@@ -840,7 +839,6 @@ test "update all sysvars" {
     var slot: Slot = 10;
     const rent = Rent.DEFAULT;
     var ancestors = Ancestors{};
-    defer ancestors.deinit(allocator);
     try ancestors.addSlot(slot);
 
     // Create and insert sysvar defaults

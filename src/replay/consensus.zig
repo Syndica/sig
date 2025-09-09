@@ -1789,10 +1789,8 @@ test "processConsensus - no duplicate confirmed without votes" {
 
     const SlotSet = sig.utils.collections.SortedSetUnmanaged(Slot);
     var ancestors: std.AutoArrayHashMapUnmanaged(Slot, Ancestors) = .empty;
-    defer {
-        for (ancestors.values()) |*val| val.deinit(testing.allocator);
-        ancestors.deinit(testing.allocator);
-    }
+    defer ancestors.deinit(testing.allocator);
+
     var descendants: std.AutoArrayHashMapUnmanaged(Slot, SlotSet) = .empty;
     defer descendants.deinit(testing.allocator);
     defer {
@@ -1947,10 +1945,8 @@ test "processConsensus - duplicate-confirmed is idempotent" {
 
     const SlotSet = sig.utils.collections.SortedSetUnmanaged(Slot);
     var ancestors: std.AutoArrayHashMapUnmanaged(Slot, Ancestors) = .empty;
-    defer {
-        for (ancestors.values()) |*val| val.deinit(testing.allocator);
-        ancestors.deinit(testing.allocator);
-    }
+    defer ancestors.deinit(testing.allocator);
+
     var descendants: std.AutoArrayHashMapUnmanaged(Slot, SlotSet) = .empty;
     defer descendants.deinit(testing.allocator);
     defer {

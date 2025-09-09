@@ -444,8 +444,7 @@ test checkStatusCache {
 
     var prng = std.Random.DefaultPrng.init(0);
 
-    var ancestors = Ancestors{};
-    defer ancestors.deinit(allocator);
+    var ancestors = Ancestors.EMPTY;
 
     var status_cache: sig.core.StatusCache = .DEFAULT;
     defer status_cache.deinit(allocator);

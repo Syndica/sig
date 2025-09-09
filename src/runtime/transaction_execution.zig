@@ -950,8 +950,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
         },
     );
 
-    var ancestors: Ancestors = .{};
-    defer ancestors.deinit(allocator);
+    var ancestors: Ancestors = .EMPTY;
 
     const feature_set: FeatureSet = .ALL_ENABLED_AT_GENESIS;
 

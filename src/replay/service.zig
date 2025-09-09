@@ -726,8 +726,7 @@ fn newSlotFromParent(
         .clone(allocator);
     errdefer epoch_reward_status.deinit(allocator);
 
-    var ancestors = try parent_constants.ancestors.clone(allocator);
-    errdefer ancestors.deinit(allocator);
+    var ancestors = parent_constants.ancestors;
     try ancestors.addSlot(slot);
 
     var feature_set = try getActiveFeatures(allocator, account_reader.forSlot(&ancestors), slot);

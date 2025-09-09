@@ -63,12 +63,6 @@ pub const Ancestors = struct {
         }
         try bincode.write(writer, map, params);
     }
-
-    pub fn clone(self: *const Ancestors, _: std.mem.Allocator) !Ancestors {
-        return self.*;
-    }
-
-    pub fn deinit(_: *Ancestors, _: std.mem.Allocator) void {}
 };
 
 /// A bit set that is allowed to progress forwards by setting bits out of bounds

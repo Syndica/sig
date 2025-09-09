@@ -278,8 +278,7 @@ pub fn hashSlot(allocator: Allocator, params: HashSlotParams) !struct { ?LtHash,
             });
 
     if (params.feature_set.active(.accounts_lt_hash, params.slot)) {
-        var parent_ancestors = try params.ancestors.clone(allocator);
-        defer parent_ancestors.deinit(allocator);
+        var parent_ancestors = params.ancestors.*;
         parent_ancestors.removeSlot(params.slot);
 
         var lt_hash = params.parent_lt_hash.* orelse return error.UnknownParentLtHash;
@@ -570,7 +569,6 @@ test "delta hashes with many accounts" {
         Hash.parseRuntime("5tpzYxp8ghAETjXaXnZvxZov11iNEvSbDZXNAMoJX6ov") catch unreachable;
 
     var parent_ancestors = Ancestors{};
-    defer parent_ancestors.deinit(allocator);
     try parent_ancestors.addSlot(0);
     try parent_ancestors.addSlot(1);
 

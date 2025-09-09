@@ -117,7 +117,7 @@ pub const SlotConstants = struct {
             .max_tick_height = bank_fields.max_tick_height,
             .fee_rate_governor = bank_fields.fee_rate_governor,
             .epoch_reward_status = .inactive,
-            .ancestors = try bank_fields.ancestors.clone(allocator),
+            .ancestors = bank_fields.ancestors,
             .feature_set = feature_set,
             .reserved_accounts = try reserved_accounts.initForSlot(
                 allocator,
@@ -151,7 +151,6 @@ pub const SlotConstants = struct {
     pub fn deinit(self_const: SlotConstants, allocator: Allocator) void {
         var self = self_const;
         self.epoch_reward_status.deinit(allocator);
-        self.ancestors.deinit(allocator);
         self.reserved_accounts.deinit(allocator);
     }
 };
@@ -419,9 +418,6 @@ pub const BankFields = struct {
     ) void {
         bank_fields.blockhash_queue.deinit(allocator);
 
-        var ancestors = bank_fields.ancestors;
-        ancestors.deinit(allocator);
-
         bank_fields.hard_forks.deinit(allocator);
 
         bank_fields.stakes.deinit(allocator);
@@ -438,9 +434,6 @@ pub const BankFields = struct {
         const blockhash_queue = try bank_fields.blockhash_queue.clone(allocator);
         errdefer blockhash_queue.deinit(allocator);
 
-        var ancestors = try bank_fields.ancestors.clone(allocator);
-        errdefer ancestors.deinit(allocator);
-
         const hard_forks = try bank_fields.hard_forks.clone(allocator);
         errdefer hard_forks.deinit(allocator);
 
@@ -455,7 +448,6 @@ pub const BankFields = struct {
 
         var cloned = bank_fields.*;
         cloned.blockhash_queue = blockhash_queue;
-        cloned.ancestors = ancestors;
         cloned.hard_forks = hard_forks;
         cloned.stakes = stakes;
         cloned.unused_accounts = unused_accounts;
@@ -515,8 +507,7 @@ pub const BankFields = struct {
         var blockhash_queue = try BlockhashQueue.initRandom(allocator, random, max_list_entries);
         errdefer blockhash_queue.deinit(allocator);
 
-        var ancestors = try ancestorsRandom(random, allocator, max_list_entries);
-        errdefer ancestors.deinit(allocator);
+        const ancestors = try ancestorsRandom(random, max_list_entries);
 
         const hard_forks = try HardForks.initRandom(random, allocator, max_list_entries);
         errdefer hard_forks.deinit(allocator);
@@ -575,11 +566,9 @@ pub const BankFields = struct {
 
 pub fn ancestorsRandom(
     random: std.Random,
-    allocator: std.mem.Allocator,
     max_list_entries: usize,
 ) !Ancestors {
     var ancestors = Ancestors{};
-    errdefer ancestors.deinit(allocator);
 
     const lower_bound = random.int(Slot);
     const upper_bound = lower_bound + Ancestors.MAX_SLOT_RANGE;

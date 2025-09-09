@@ -252,8 +252,7 @@ test "OptimisticConfirmationVerifier.verifyForUnrootedOptimisticSlots: same slot
     latest.deinit();
     try std.testing.expectEqual(2, latest.items.len);
 
-    var root_ancestors: sig.core.Ancestors = .{ .ancestors = .empty };
-    defer root_ancestors.deinit(allocator);
+    var root_ancestors: sig.core.Ancestors = .EMPTY;
 
     const unrooted = try verifier.verifyForUnrootedOptimisticSlots(
         allocator,
@@ -328,7 +327,6 @@ test "OptimisticConfirmationVerifier.verifyForUnrootedOptimisticSlots: unrooted 
 
     // Root on same fork at slot 5: ancestors include 1 and 3
     var anc5: sig.core.Ancestors = .EMPTY;
-    defer anc5.deinit(allocator);
     try anc5.addSlot(1);
     try anc5.addSlot(3);
     {
@@ -345,7 +343,6 @@ test "OptimisticConfirmationVerifier.verifyForUnrootedOptimisticSlots: unrooted 
     // Re-add optimistic slots and check root at 3 (same fork)
     try verifier.addNewOptimisticConfirmedSlots(allocator, optimistic, &ledger_writer);
     var anc3: sig.core.Ancestors = .EMPTY;
-    defer anc3.deinit(allocator);
     try anc3.addSlot(1);
     {
         const unrooted = try verifier.verifyForUnrootedOptimisticSlots(
@@ -362,7 +359,6 @@ test "OptimisticConfirmationVerifier.verifyForUnrootedOptimisticSlots: unrooted 
     // Re-add optimistic slots and set a different fork root at slot 4
     try verifier.addNewOptimisticConfirmedSlots(allocator, optimistic, &ledger_writer);
     var anc4: sig.core.Ancestors = .EMPTY;
-    defer anc4.deinit(allocator);
     // ancestors for 4 include 1 (but not 3)
     try anc4.addSlot(1);
     {
@@ -383,7 +379,6 @@ test "OptimisticConfirmationVerifier.verifyForUnrootedOptimisticSlots: unrooted 
 
     // Simulate missing ancestors by using root at 7 with no ancestors info
     var anc7: sig.core.Ancestors = .{ .ancestors = .empty };
-    defer anc7.deinit(allocator);
     // First run should return 1 and 3 (not in ancestors and not rooted). Mark 5 as ancestor.
     try anc7.addSlot(5);
     try verifier.addNewOptimisticConfirmedSlots(

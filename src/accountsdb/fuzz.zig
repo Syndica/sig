@@ -236,7 +236,6 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     var top_slot: Slot = 0;
 
     var ancestors: sig.core.Ancestors = .EMPTY;
-    defer ancestors.deinit(allocator);
 
     // get/put a bunch of accounts
     while (true) {
@@ -323,8 +322,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                     break :blk .{ key, tracked_accounts.get(key).? };
                 };
 
-                var ancestors_sub = try ancestors.clone(allocator);
-                defer ancestors_sub.deinit(allocator);
+                var ancestors_sub = ancestors;
                 var iter = ancestors_sub.iterator();
                 while (iter.next()) |other_slot| {
                     if (other_slot <= tracked_account.slot) continue;

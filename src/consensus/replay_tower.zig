@@ -1919,19 +1919,12 @@ test "check_vote_threshold_forks" {
     const random = prng.random();
     // Create the ancestor relationships
     var ancestors = std.AutoArrayHashMapUnmanaged(u64, Ancestors).empty;
-    defer {
-        var it = ancestors.iterator();
-        while (it.next()) |entry| {
-            entry.value_ptr.deinit(allocator);
-        }
-        ancestors.deinit(allocator);
-    }
+    defer ancestors.deinit(allocator);
 
     const vote_threshold_depth_plus_2 = VOTE_THRESHOLD_DEPTH + 2;
     try ancestors.ensureUnusedCapacity(allocator, vote_threshold_depth_plus_2);
     for (0..vote_threshold_depth_plus_2) |i| {
         var slot_parents: Ancestors = .EMPTY;
-        errdefer slot_parents.deinit(allocator);
         for (0..i) |j| {
             try slot_parents.addSlot(j);
         }
@@ -2097,13 +2090,7 @@ test "collect vote lockouts root" {
     defer replay_tower.deinit(allocator);
 
     var ancestors = std.AutoArrayHashMapUnmanaged(u64, Ancestors).empty;
-    defer {
-        var it = ancestors.iterator();
-        while (it.next()) |entry| {
-            entry.value_ptr.deinit(allocator);
-        }
-        ancestors.deinit(allocator);
-    }
+    defer ancestors.deinit(allocator);
 
     const max_lockout_history_plus_1 = MAX_LOCKOUT_HISTORY + 1;
     try ancestors.ensureUnusedCapacity(allocator, max_lockout_history_plus_1);
@@ -2111,7 +2098,6 @@ test "collect vote lockouts root" {
     for (0..max_lockout_history_plus_1) |i| {
         _ = try replay_tower.recordBankVote(allocator, i, .initRandom(random));
         var slots: Ancestors = .EMPTY;
-        errdefer slots.deinit(allocator);
         for (0..i) |j| {
             try slots.addSlot(j);
         }
@@ -2216,13 +2202,8 @@ test "collect vote lockouts sums" {
 
     // ancestors: slot 1 has ancestor 0, slot 0 has no ancestors
     var ancestors = std.AutoArrayHashMapUnmanaged(u64, Ancestors).empty;
-    defer {
-        var it = ancestors.iterator();
-        while (it.next()) |entry| {
-            entry.value_ptr.*.deinit(allocator);
-        }
-        ancestors.deinit(allocator);
-    }
+    defer ancestors.deinit(allocator);
+
     const set0: Ancestors = .EMPTY;
     var set1: Ancestors = .EMPTY;
     try set1.addSlot(0);
@@ -2322,7 +2303,6 @@ test "is locked out empty" {
     defer replay_tower.deinit(std.testing.allocator);
 
     var ancestors: Ancestors = .EMPTY;
-    defer ancestors.deinit(std.testing.allocator);
     try ancestors.addSlot(0);
 
     const result = try replay_tower.tower.isLockedOut(
@@ -2337,7 +2317,6 @@ test "is locked out root slot child pass" {
     defer replay_tower.deinit(std.testing.allocator);
 
     var ancestors: Ancestors = .EMPTY;
-    defer ancestors.deinit(std.testing.allocator);
     try ancestors.addSlot(0);
 
     replay_tower.tower.vote_state.root_slot = 0;
@@ -2354,7 +2333,6 @@ test "is locked out root slot sibling fail" {
     defer replay_tower.deinit(std.testing.allocator);
 
     var ancestors: Ancestors = .EMPTY;
-    defer ancestors.deinit(std.testing.allocator);
     try ancestors.addSlot(0);
 
     replay_tower.tower.vote_state.root_slot = 0;
@@ -2415,7 +2393,6 @@ test "is locked out double vote" {
     defer replay_tower.deinit(std.testing.allocator);
 
     var ancestors: Ancestors = .EMPTY;
-    defer ancestors.deinit(std.testing.allocator);
     try ancestors.addSlot(0);
 
     for (0..2) |i| {
@@ -2439,7 +2416,6 @@ test "is locked out child" {
     defer replay_tower.deinit(std.testing.allocator);
 
     var ancestors: Ancestors = .EMPTY;
-    defer ancestors.deinit(std.testing.allocator);
     try ancestors.addSlot(0);
 
     _ = try replay_tower.recordBankVote(
@@ -2461,7 +2437,6 @@ test "is locked out sibling" {
     defer replay_tower.deinit(std.testing.allocator);
 
     var ancestors: Ancestors = .EMPTY;
-    defer ancestors.deinit(std.testing.allocator);
     try ancestors.addSlot(0);
 
     for (0..2) |i| {
@@ -2485,7 +2460,6 @@ test "is locked out last vote expired" {
     defer replay_tower.deinit(std.testing.allocator);
 
     var ancestors: Ancestors = .EMPTY;
-    defer ancestors.deinit(std.testing.allocator);
     try ancestors.addSlot(0);
 
     for (0..2) |i| {
@@ -3584,14 +3558,11 @@ test "greatestCommonAncestor" {
     // Test case: Basic common ancestor
     {
         var ancestors: AutoArrayHashMapUnmanaged(Slot, Ancestors) = .empty;
-        defer {
-            for (ancestors.values()) |*set| set.deinit(allocator);
-            ancestors.deinit(allocator);
-        }
+        defer ancestors.deinit(allocator);
 
         try ancestors.ensureUnusedCapacity(allocator, 2);
-        ancestors.putAssumeCapacity(10, try createAncestor(allocator, &.{ 5, 3, 1 }));
-        ancestors.putAssumeCapacity(20, try createAncestor(allocator, &.{ 8, 5, 2 }));
+        ancestors.putAssumeCapacity(10, try createAncestor(&.{ 5, 3, 1 }));
+        ancestors.putAssumeCapacity(20, try createAncestor(&.{ 8, 5, 2 }));
 
         // Both slots have common ancestor 5
         try std.testing.expectEqual(
@@ -3603,14 +3574,11 @@ test "greatestCommonAncestor" {
     // Test case: No common ancestor
     {
         var ancestors: AutoArrayHashMapUnmanaged(Slot, Ancestors) = .empty;
-        defer {
-            for (ancestors.values()) |*set| set.deinit(allocator);
-            ancestors.deinit(allocator);
-        }
+        defer ancestors.deinit(allocator);
 
         try ancestors.ensureUnusedCapacity(allocator, 2);
-        ancestors.putAssumeCapacity(10, try createAncestor(allocator, &.{ 3, 1 }));
-        ancestors.putAssumeCapacity(20, try createAncestor(allocator, &.{ 8, 2 }));
+        ancestors.putAssumeCapacity(10, try createAncestor(&.{ 3, 1 }));
+        ancestors.putAssumeCapacity(20, try createAncestor(&.{ 8, 2 }));
 
         try std.testing.expectEqual(
             @as(?Slot, null),
@@ -3621,14 +3589,11 @@ test "greatestCommonAncestor" {
     // Test case: One empty ancestor set
     {
         var ancestors: AutoArrayHashMapUnmanaged(Slot, Ancestors) = .empty;
-        defer {
-            for (ancestors.values()) |*set| set.deinit(allocator);
-            ancestors.deinit(allocator);
-        }
+        defer ancestors.deinit(allocator);
 
         try ancestors.ensureUnusedCapacity(allocator, 2);
-        ancestors.putAssumeCapacity(10, try createAncestor(allocator, &.{ 5, 3 }));
-        ancestors.putAssumeCapacity(20, try createAncestor(allocator, &.{}));
+        ancestors.putAssumeCapacity(10, try createAncestor(&.{ 5, 3 }));
+        ancestors.putAssumeCapacity(20, try createAncestor(&.{}));
 
         try std.testing.expectEqual(
             @as(?Slot, null),
@@ -3639,13 +3604,10 @@ test "greatestCommonAncestor" {
     // Test case: Missing slots
     {
         var ancestors: AutoArrayHashMapUnmanaged(Slot, Ancestors) = .empty;
-        defer {
-            for (ancestors.values()) |*set| set.deinit(allocator);
-            ancestors.deinit(allocator);
-        }
+        defer ancestors.deinit(allocator);
 
         try ancestors.ensureUnusedCapacity(allocator, 1);
-        ancestors.putAssumeCapacity(10, try createAncestor(allocator, &.{ 5, 3 }));
+        ancestors.putAssumeCapacity(10, try createAncestor(&.{ 5, 3 }));
 
         try std.testing.expectEqual(
             @as(?Slot, null),
@@ -3656,13 +3618,10 @@ test "greatestCommonAncestor" {
     // Test case: Multiple common ancestors (should pick greatest)
     {
         var ancestors: AutoArrayHashMapUnmanaged(Slot, Ancestors) = .empty;
-        defer {
-            for (ancestors.values()) |*set| set.deinit(allocator);
-            ancestors.deinit(allocator);
-        }
+        defer ancestors.deinit(allocator);
 
-        try ancestors.put(allocator, 10, try createAncestor(allocator, &.{ 7, 5, 3 }));
-        try ancestors.put(allocator, 20, try createAncestor(allocator, &.{ 7, 5, 4 }));
+        try ancestors.put(allocator, 10, try createAncestor(&.{ 7, 5, 3 }));
+        try ancestors.put(allocator, 20, try createAncestor(&.{ 7, 5, 4 }));
 
         // Should pick 7 (greater than 5)
         try std.testing.expectEqual(
@@ -4136,12 +4095,11 @@ pub fn createTestSlotHistory(
     return SlotHistory{ .bits = bits, .next_slot = 1 };
 }
 
-fn createAncestor(allocator: std.mem.Allocator, slots: []const Slot) !Ancestors {
+fn createAncestor(slots: []const Slot) !Ancestors {
     if (!builtin.is_test) {
         @compileError("createAncestor should only be used in test");
     }
     var set: Ancestors = .EMPTY;
-    errdefer set.deinit(allocator);
     for (slots) |slot| try set.addSlot(slot);
     return set;
 }
@@ -4221,7 +4179,6 @@ pub const TestFixture = struct {
         for (self.descendants.values()) |set| set.deinit(allocator);
         self.descendants.deinit(allocator);
 
-        for (self.ancestors.values()) |*set| set.deinit(allocator);
         self.ancestors.deinit(allocator);
     }
 
@@ -4336,10 +4293,8 @@ pub const TestFixture = struct {
         try self.ancestors.ensureTotalCapacity(allocator, input_tree.data.len);
         // Populate ancenstors
         var extended_ancestors = try getAncestors(allocator, input_tree);
-        defer {
-            for (extended_ancestors.values()) |*set| set.deinit(allocator);
-            extended_ancestors.deinit(allocator);
-        }
+        defer extended_ancestors.deinit(allocator);
+
         try extendForkTreeAncestors(allocator, &self.ancestors, extended_ancestors);
 
         // Populate decendants
@@ -4499,7 +4454,6 @@ fn getAncestors(allocator: std.mem.Allocator, tree: Tree) !std.AutoArrayHashMapU
                         try visited.put(child.slot, {});
 
                         var child_ancestors: Ancestors = .EMPTY;
-                        errdefer child_ancestors.deinit(allocator);
                         try child_ancestors.addSlot(current);
 
                         if (ancestors.getPtr(current)) |parent_ancestors| {
@@ -4555,9 +4509,9 @@ pub fn extendForkTreeAncestors(
         return;
     }
 
-    for (extension.keys(), extension.values()) |slot, *extension_children| {
+    for (extension.keys(), extension.values()) |slot, extension_children| {
         const original_children = original.getPtr(slot) orelse {
-            try original.put(allocator, slot, try extension_children.clone(allocator));
+            try original.put(allocator, slot, extension_children);
             continue;
         };
 
