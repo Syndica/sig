@@ -581,8 +581,11 @@ pub fn ancestorsRandom(
     var ancestors = Ancestors{};
     errdefer ancestors.deinit(allocator);
 
-    for (0..random.uintAtMost(usize, max_list_entries)) |_| {
-        try ancestors.addSlot(random.int(Slot));
+    const lower_bound = random.int(Slot);
+    const upper_bound = lower_bound + Ancestors.MAX_SLOT_RANGE;
+
+    for (0..@min(Ancestors.MAX_SLOT_RANGE, random.uintAtMost(usize, max_list_entries))) |_| {
+        try ancestors.addSlot(random.intRangeAtMost(Slot, lower_bound, upper_bound));
     }
 
     return ancestors;
