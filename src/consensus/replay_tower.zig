@@ -3809,6 +3809,8 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
 
     var empty_ancestors: Ancestors = .EMPTY;
 
+    var registry = sig.prometheus.Registry(.{}).init(allocator);
+    defer registry.deinit();
     var replay_tower = try ReplayTower.init(
         allocator,
         .noop,
@@ -3816,7 +3818,7 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
         Pubkey.ZEROES,
         root.slot,
         accountsdb.accountReader().forSlot(&empty_ancestors),
-        sig.prometheus.globalRegistry(),
+        &registry,
     );
     defer replay_tower.deinit(allocator);
 
@@ -4004,7 +4006,9 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
         else => try std.testing.expect(false), // Fail if not LockedOut
     }
 
-    var split = try fixture.fork_choice.splitOff(allocator, sig.prometheus.globalRegistry(), hash6);
+    var test_registry = sig.prometheus.Registry(.{}).init(allocator);
+    defer test_registry.deinit();
+    var split = try fixture.fork_choice.splitOff(allocator, &test_registry, hash6);
     defer split.deinit();
 
     const forks5 = try fixture.select_fork_slots(&replay_tower);

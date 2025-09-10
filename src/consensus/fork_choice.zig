@@ -4349,10 +4349,12 @@ test "HeaviestSubtreeForkChoice.splitOffOnBestPath" {
     try std.testing.expectEqual(6, fork_choice.heaviestOverallSlot().slot);
 
     // Split off at 6
+    var registry1 = sig.prometheus.Registry(.{}).init(test_allocator);
+    defer registry1.deinit();
     var split_tree_6 =
         try fork_choice.splitOff(
             test_allocator,
-            sig.prometheus.globalRegistry(),
+            &registry1,
             .{ .slot = 6, .hash = Hash.ZEROES },
         );
     defer split_tree_6.deinit();
@@ -4360,10 +4362,12 @@ test "HeaviestSubtreeForkChoice.splitOffOnBestPath" {
     try std.testing.expectEqual(6, split_tree_6.heaviestOverallSlot().slot);
 
     // Split off at 3
+    var registry2 = sig.prometheus.Registry(.{}).init(test_allocator);
+    defer registry2.deinit();
     var split_tree_3 =
         try fork_choice.splitOff(
             test_allocator,
-            sig.prometheus.globalRegistry(),
+            &registry2,
             .{ .slot = 3, .hash = Hash.ZEROES },
         );
     defer split_tree_3.deinit();
@@ -4371,10 +4375,12 @@ test "HeaviestSubtreeForkChoice.splitOffOnBestPath" {
     try std.testing.expectEqual(5, split_tree_3.heaviestOverallSlot().slot);
 
     // Split off at 1
+    var registry3 = sig.prometheus.Registry(.{}).init(test_allocator);
+    defer registry3.deinit();
     var split_tree_1 =
         try fork_choice.splitOff(
             test_allocator,
-            sig.prometheus.globalRegistry(),
+            &registry3,
             .{ .slot = 1, .hash = Hash.ZEROES },
         );
     defer split_tree_1.deinit();
@@ -4425,9 +4431,11 @@ test "HeaviestSubtreeForkChoice.splitOffSimple" {
         &EpochSchedule.DEFAULT,
     );
 
+    var registry = sig.prometheus.Registry(.{}).init(test_allocator);
+    defer registry.deinit();
     var tree = try fork_choice.splitOff(
         test_allocator,
-        sig.prometheus.globalRegistry(),
+        &registry,
         .{ .slot = 5, .hash = Hash.ZEROES },
     );
     defer tree.deinit();
@@ -4534,9 +4542,11 @@ test "HeaviestSubtreeForkChoice.splitOffSubtreeWithDups" {
         fork_choice.deepestOverallSlot(),
     );
 
+    var registry = sig.prometheus.Registry(.{}).init(test_allocator);
+    defer registry.deinit();
     var tree = try fork_choice.splitOff(
         test_allocator,
-        sig.prometheus.globalRegistry(),
+        &registry,
         .{ .slot = 2, .hash = Hash.ZEROES },
     );
     defer tree.deinit();
@@ -4603,9 +4613,11 @@ test "HeaviestSubtreeForkChoice.splitOffUnvoted" {
         &EpochSchedule.DEFAULT,
     );
 
+    var registry = sig.prometheus.Registry(.{}).init(test_allocator);
+    defer registry.deinit();
     var tree = try fork_choice.splitOff(
         test_allocator,
-        sig.prometheus.globalRegistry(),
+        &registry,
         .{ .slot = 2, .hash = Hash.ZEROES },
     );
     defer tree.deinit();
@@ -4700,9 +4712,11 @@ test "HeaviestSubtreeForkChoice.splitOffWithDups" {
         fork_choice.deepestOverallSlot(),
     );
 
+    var registry = sig.prometheus.Registry(.{}).init(test_allocator);
+    defer registry.deinit();
     var tree = try fork_choice.splitOff(
         test_allocator,
-        sig.prometheus.globalRegistry(),
+        &registry,
         expected_best_slot_hash,
     );
     defer tree.deinit();

@@ -1998,7 +1998,9 @@ test "check trackers" {
 
         var unverified_votes_buffer: std.ArrayListUnmanaged(Transaction) = .empty;
         defer unverified_votes_buffer.deinit(allocator);
-        var test_metrics = try VoteListenerMetrics.init(sig.prometheus.globalRegistry());
+        var test_registry = sig.prometheus.Registry(.{}).init(allocator);
+        defer test_registry.deinit();
+        var test_metrics = try VoteListenerMetrics.init(&test_registry);
 
         try receptor.recvAndSendOnce(
             allocator,
