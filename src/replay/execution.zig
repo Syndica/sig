@@ -153,7 +153,28 @@ pub fn replayActiveSlotsSync(state: ReplayExecutionState) ![]const ReplayResult 
         };
         const last_entry_hash = params.entries[params.entries.len - 1].hash;
 
+        // std.debug.print(
+        //     "Confirming slot:\n\tslot={}\n\tdelta_lt_hash={s}\n",
+        //     .{ slot, try sig.replay.freeze.truncatedDeltaLtHash(allocator, state.account_store.reader(), slot, params.svm_params.ancestors) },
+        // );
+
+        // var num_ticks: u64 = 0;
+        // var num_txns: usize = 0;
+        // for (params.entries) |entry| {
+        //     if (entry.isTick()) num_ticks += 1 else num_txns += entry.transactions.len;
+        // }
+        // std.debug.print(
+        //     "\tslot {}: {} entries ({} txns, {} ticks)\n",
+        //     .{ slot, params.entries.len, num_txns, num_ticks },
+        // );
+
         const maybe_err = try confirmSlotSync(allocator, .from(state.logger), params);
+        // std.debug.print("\tslot={} tick_height={}\n", .{ slot, params.verify_ticks_params.tick_height });
+        // std.debug.print(
+        //     "Confirmed slot:\n\tslot={}\n\tdelta_lt_hash={s}\n",
+        //     .{ slot, try sig.replay.freeze.truncatedDeltaLtHash(allocator, state.account_store.reader(), slot, params.svm_params.ancestors) },
+        // );
+
         results.appendAssumeCapacity(.{
             .slot = slot,
             .output = if (maybe_err) |err|

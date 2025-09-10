@@ -136,13 +136,31 @@ pub fn confirmSlotSync(
         return .{ .invalid_block = .InvalidEntryHash };
     }
 
+    // var index: usize = 0;
     for (params.entries) |entry| {
         if (entry.isTick()) continue;
+        // index += 1;
 
         const batch = try resolveBatch(allocator, entry.transactions, params.slot_resolver);
         defer batch.deinit(allocator);
 
         var exit = Atomic(bool).init(false);
+        // std.debug.print(
+        //     "Processing batch: delta_lt_hash={s}\n",
+        //     .{try sig.replay.freeze.truncatedDeltaLtHash(allocator, params.committer.account_store.reader(), params.svm_params.slot, params.svm_params.ancestors)},
+        // );
+        // const delta_lt_hash = try sig.replay.freeze.truncatedDeltaLtHash(allocator, params.committer.account_store.reader(), params.svm_params.slot, params.svm_params.ancestors);
+        // if (std.mem.eql(u8, &delta_lt_hash, "uaEraa44Q5iyNS5E"))
+        //     std.debug.print("transaction.signatures:\n", .{});
+        // for (batch.transactions) |transaction| {
+        //     std.debug.print("\ntransaction.version={}\n", .{transaction.transaction.version});
+        //     for (transaction.transaction.signatures, transaction.transaction.msg.account_keys[0..transaction.transaction.signatures.len], 0..) |s, key, si| {
+        //         std.debug.print("\tkey-{}={any}\n\tsig-{}={any}\n", .{ si, key.data, si, s.data });
+        //     }
+        //     const serialized_msg = try transaction.transaction.msg.serializeBounded(transaction.transaction.version);
+        //     std.debug.print("\tmsg_bytes: {any}\n", .{serialized_msg.constSlice()});
+        // }
+
         switch (try replay.scheduler.processBatch(
             allocator,
             params.svm_params,
@@ -154,6 +172,12 @@ pub fn confirmSlotSync(
             .failure => |err| return .{ .invalid_transaction = err },
             .exit => unreachable,
         }
+        // if (params.svm_params.slot == 356426107) {
+        //     std.debug.print(
+        //         "Processed batch:  delta_lt_hash={s}\n",
+        //         .{try sig.replay.freeze.truncatedDeltaLtHash(allocator, params.committer.account_store.reader(), params.svm_params.slot, params.svm_params.ancestors)},
+        //     );
+        // }
     }
 
     return null;

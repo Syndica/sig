@@ -88,6 +88,26 @@ pub const FreezeParams = struct {
     }
 };
 
+pub fn truncatedDeltaLtHash(
+    allocator: Allocator,
+    account_reader: AccountReader,
+    slot: Slot,
+    ancestors: *const Ancestors,
+) ![16]u8 {
+    var parent_ancestors = try ancestors.clone(allocator);
+    defer parent_ancestors.deinit(allocator);
+    assert(parent_ancestors.ancestors.swapRemove(slot));
+    const delta_lt_hash = try std.fmt.allocPrint(
+        allocator,
+        "{}",
+        .{try deltaLtHash(account_reader, slot, &parent_ancestors)},
+    );
+    defer allocator.free(delta_lt_hash);
+    var truncated_delta_lt_hash = [_]u8{0} ** 16;
+    @memcpy(&truncated_delta_lt_hash, delta_lt_hash[0..16]);
+    return truncated_delta_lt_hash;
+}
+
 /// Handles the "freezing" of a slot which occurs after a block has finished
 /// execution. This finalizes some last bits of state and then calculates the
 /// hash for the slot.
@@ -98,6 +118,11 @@ pub fn freezeSlot(allocator: Allocator, params: FreezeParams) !void {
     zone.value(params.finalize_state.slot);
     defer zone.deinit();
 
+    // std.debug.print("Freezing slot: {}\n", .{params.hash_slot.slot});
+    // std.debug.print("\tparent_slot_hash: {}\n", .{params.hash_slot.parent_slot_hash});
+    // std.debug.print("\tsignature_count: {}\n", .{params.hash_slot.signature_count});
+    // std.debug.print("\tblockhash: {}\n", .{params.hash_slot.blockhash});
+
     // TODO: reconsider locking the hash for the entire function. (this is how agave does it)
     var slot_hash = params.slot_hash.write();
     defer slot_hash.unlock();
@@ -107,12 +132,18 @@ pub fn freezeSlot(allocator: Allocator, params: FreezeParams) !void {
     try finalizeState(allocator, params.finalize_state);
 
     const maybe_lt_hash, slot_hash.mut().* = try hashSlot(allocator, params.hash_slot);
-    if (maybe_lt_hash) |lt_hash| params.accounts_lt_hash.set(lt_hash);
+    if (maybe_lt_hash) |lt_hash| {
+        // std.debug.print("\taccounts_lt_hash 0: {}\n", .{params.hash_slot.parent_lt_hash.*.?});
+        // std.debug.print("\taccounts_lt_hash 1: {}\n", .{lt_hash});
+        params.accounts_lt_hash.set(lt_hash);
+    }
 
     params.logger.info().logf(
         "froze slot {} with hash {s}",
         .{ params.hash_slot.slot, slot_hash.get().*.?.base58String().slice() },
     );
+
+    std.debug.print("slot={} hash={}\n", .{ params.hash_slot.slot, slot_hash.get().*.? });
 
     // NOTE: agave updates hard_forks and hash_overrides here
 }
@@ -155,6 +186,13 @@ fn finalizeState(allocator: Allocator, params: FinalizeStateParams) !void {
         try updateRecentBlockhashes(allocator, q.get(), params.update_sysvar);
     }
 
+    // const account_reader = AccountReader{
+    //     .accounts_db = params.account_reader.accounts_db[0],
+    // };
+    // std.debug.print("\tdelta_lt_hash 0: {s}\n", .{try truncatedDeltaLtHash(allocator, account_reader, params.slot, params.account_reader.accounts_db[1])});
+    // Agave: Collect rent eagerly
+    // std.debug.print("\tdelta_lt_hash 1: {s}\n", .{try truncatedDeltaLtHash(allocator, account_reader, params.slot, params.account_reader.accounts_db[1])});
+
     try distributeTransactionFees(
         allocator,
         params.account_store,
@@ -166,6 +204,11 @@ fn finalizeState(allocator: Allocator, params: FinalizeStateParams) !void {
         params.collected_transaction_fees,
         params.collected_priority_fees,
     );
+    // std.debug.print("\tdelta_lt_hash 2: {s}\n", .{try truncatedDeltaLtHash(allocator, account_reader, params.slot, params.account_reader.accounts_db[1])});
+    // Agave: distribute rent fees
+    // std.debug.print("\tdelta_lt_hash 3: {s}\n", .{try truncatedDeltaLtHash(allocator, account_reader, params.slot, params.account_reader.accounts_db[1])});
+    try updateSlotHistory(allocator, params.update_sysvar);
+    // std.debug.print("\tdelta_lt_hash 4: {s}\n", .{try truncatedDeltaLtHash(allocator, account_reader, params.slot, params.account_reader.accounts_db[1])});
 
     // Run incinerator
     if (try params.account_reader.get(sig.runtime.ids.INCINERATOR)) |incinerator_account| {
@@ -177,7 +220,7 @@ fn finalizeState(allocator: Allocator, params: FinalizeStateParams) !void {
         );
     }
 
-    try updateSlotHistory(allocator, params.update_sysvar);
+    // std.debug.print("\tdelta_lt_hash 5: {s}\n", .{try truncatedDeltaLtHash(allocator, account_reader, params.slot, params.account_reader.accounts_db[1])});
 }
 
 /// Burn and payout the appropriate portions of collected fees.
@@ -192,6 +235,8 @@ fn distributeTransactionFees(
     collected_transaction_fees: u64,
     collected_priority_fees: u64,
 ) !void {
+    // std.debug.print("\tcollector_id: {}\n\ttransaction_fee: {}\n\tpriority_fee: {}\n", .{ collector_id, collected_transaction_fees, collected_priority_fees });
+
     if (collected_transaction_fees == 0 and collected_priority_fees == 0) {
         return;
     }

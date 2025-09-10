@@ -1331,11 +1331,11 @@ fn replayOffline(
             )
         else
             try LeaderSchedule.fromStakedNodes(
-            allocator,
-            epoch,
-            epoch_schedule.slots_per_epoch,
-            staked_nodes,
-        );
+                allocator,
+                epoch,
+                epoch_schedule.slots_per_epoch,
+                staked_nodes,
+            );
         errdefer allocator.free(leader_schedule);
 
         try epoch_context_manager.put(epoch, .{
