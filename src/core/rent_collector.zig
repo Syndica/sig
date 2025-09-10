@@ -157,9 +157,9 @@ pub const RentCollector = struct {
         rent_exempt,
     };
 
-    pub fn getAccountRentState(rent: Rent, lamports: u64, data_len: usize) RentState {
+    pub fn getAccountRentState(self: RentCollector, lamports: u64, data_len: usize) RentState {
         if (lamports == 0) return .uninitialized;
-        if (rent.isExempt(lamports, data_len)) return .rent_exempt;
+        if (self.rent.isExempt(lamports, data_len)) return .rent_exempt;
         return .{
             .rent_paying = .{
                 .data_len = data_len,

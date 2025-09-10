@@ -1322,7 +1322,10 @@ fn replayOffline(
         var staked_nodes_cloned = try staked_nodes.clone(allocator);
         errdefer staked_nodes_cloned.deinit(allocator);
 
-        const leader_schedule = if (true) // TODO: Feature gate
+        // TODO: Implement feature gating for vote keyed leader schedule.
+        // [agave] https://github.com/anza-xyz/agave/blob/e468acf4da519171510f2ec982f70a0fd9eb2c8b/ledger/src/leader_schedule_utils.rs#L12
+        // [agave] https://github.com/anza-xyz/agave/blob/e468acf4da519171510f2ec982f70a0fd9eb2c8b/runtime/src/bank.rs#L4833
+        const leader_schedule = if (true)
             try LeaderSchedule.fromVoteAccounts(
                 allocator,
                 epoch,
@@ -1331,11 +1334,11 @@ fn replayOffline(
             )
         else
             try LeaderSchedule.fromStakedNodes(
-            allocator,
-            epoch,
-            epoch_schedule.slots_per_epoch,
-            staked_nodes,
-        );
+                allocator,
+                epoch,
+                epoch_schedule.slots_per_epoch,
+                staked_nodes,
+            );
         errdefer allocator.free(leader_schedule);
 
         try epoch_context_manager.put(epoch, .{

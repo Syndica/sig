@@ -177,9 +177,9 @@ pub const LeaderSchedule = struct {
 
         const vote_keyed = try fromStakedNodes(allocator, epoch, slots_in_epoch, &stakes);
 
-        for (vote_keyed) |*pk| {
-            const npk = vote_accounts.get(pk.*) orelse unreachable;
-            pk.* = npk.account.state.node_pubkey;
+        for (vote_keyed) |*pubkey| {
+            const vote_account = vote_accounts.get(pubkey.*) orelse unreachable;
+            pubkey.* = vote_account.account.state.node_pubkey;
         }
 
         return vote_keyed;

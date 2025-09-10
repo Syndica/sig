@@ -19,7 +19,6 @@ const Pubkey = core.Pubkey;
 const Slot = core.Slot;
 const SlotState = core.SlotState;
 const SlotConstants = core.SlotConstants;
-const RentCollector = core.rent_collector.RentCollector;
 
 const AccountSharedData = sig.runtime.AccountSharedData;
 const Rent = sig.runtime.sysvar.Rent;
@@ -192,45 +191,47 @@ fn distributeTransactionFees(
     collected_transaction_fees: u64,
     collected_priority_fees: u64,
 ) !void {
-    if (collected_transaction_fees == 0 and collected_priority_fees == 0) {
-        return;
-    }
+    var burn = collected_transaction_fees * rent.burn_percent / 100;
+    const total_fees = collected_priority_fees + collected_transaction_fees;
+    const payout = total_fees -| burn;
 
-    var deposit, const burn = blk: {
-        if (collected_transaction_fees == 0) {
-            break :blk .{ 0, 0 };
-        }
-        const burned = collected_transaction_fees * 50 / 100;
-        break :blk .{ collected_transaction_fees - burned, burned };
-    };
-    deposit +|= collected_priority_fees;
-
-    if (deposit > 0) blk: {
-        // TODO: record rewards returned by depositFees
-        _ = depositFees(
+    if (payout > 0) blk: {
+        const post_balance = tryPayoutFees(
             allocator,
             account_store,
             account_reader,
             rent,
             slot,
             collector_id,
-            deposit,
-        ) catch break :blk;
+            payout,
+        ) catch |err| switch (err) {
+            error.InvalidAccountOwner,
+            error.LamportOverflow,
+            error.InvalidRentPayingAccount,
+            => {
+                burn = total_fees;
+                break :blk;
+            },
+            else => return err,
+        };
+        // TODO: record rewards returned by tryPayoutFees
+        _ = post_balance;
     }
 
     _ = capitalization.fetchSub(burn, .monotonic);
 }
 
-fn depositFees(
+/// Attempt to pay the payout to the collector.
+fn tryPayoutFees(
     allocator: Allocator,
     account_store: AccountStore,
     account_reader: SlotAccountReader,
     rent: Rent,
     slot: Slot,
     collector_id: Pubkey,
-    fees: u64,
+    payout: u64,
 ) !u64 {
-    var account =
+    var fee_collector_account =
         if (try account_reader.get(collector_id)) |old_account|
             AccountSharedData{
                 .data = try old_account.data.readAllAllocate(allocator),
@@ -242,23 +243,18 @@ fn depositFees(
         else
             AccountSharedData.EMPTY;
 
-    if (!account.owner.equals(&sig.runtime.program.system.ID)) {
+    if (!fee_collector_account.owner.equals(&sig.runtime.program.system.ID)) {
         return error.InvalidAccountOwner;
     }
-
-    const pre_state = RentCollector.getAccountRentState(rent, account.lamports, account.data.len);
-    account.lamports = std.math.add(u64, account.lamports, fees) catch {
+    fee_collector_account.lamports = std.math.add(u64, fee_collector_account.lamports, payout) catch
         return error.LamportOverflow;
-    };
-
-    const post_state = RentCollector.getAccountRentState(rent, account.lamports, account.data.len);
-    if (!core.rent_collector.RentCollector.transitionAllowed(pre_state, post_state)) {
+    if (!rent.isExempt(fee_collector_account.lamports, fee_collector_account.data.len)) {
         return error.InvalidRentPayingAccount;
     }
 
-    try account_store.put(slot, collector_id, account);
+    try account_store.put(slot, collector_id, fee_collector_account);
 
-    return account.lamports;
+    return fee_collector_account.lamports;
 }
 
 pub const HashSlotParams = struct {
