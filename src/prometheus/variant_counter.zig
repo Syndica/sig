@@ -33,11 +33,7 @@ pub fn VariantCounter(comptime T: type) type {
         pub const Type = EnumOrError;
 
         pub fn observe(self: *Self, value: T) void {
-            const tag_value: EnumOrError = switch (@typeInfo(T)) {
-                .@"union" => @as(EnumOrError, value),
-                else => value,
-            };
-            _ = self.counts[indexer.index(tag_value)].fetchAdd(1, .monotonic);
+            _ = self.counts[indexer.index(value)].fetchAdd(1, .monotonic);
         }
 
         pub fn getResult(metric: *Metric, _: std.mem.Allocator) Metric.Error!Metric.Result {
