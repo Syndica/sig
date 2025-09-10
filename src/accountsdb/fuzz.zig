@@ -186,15 +186,6 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     // prealloc some references to use throught the fuzz
     try accounts_db.account_index.expandRefCapacity(1_000_000);
 
-    var manager_exit: std.atomic.Value(bool) = .init(false);
-    var manager: sig.accounts_db.manager.Manager = try .init(allocator, &accounts_db, .{
-        .exit = &manager_exit,
-        .slots_per_full_snapshot = 50_000,
-        .slots_per_incremental_snapshot = 5_000,
-        .zstd_nb_workers = @intCast(std.Thread.getCpuCount() catch 0),
-    });
-    defer manager.deinit(allocator);
-
     var tracked_accounts_rw: sig.sync.RwMux(TrackedAccountsMap) = .init(.empty);
     defer {
         const tracked_accounts, var tracked_accounts_lg = tracked_accounts_rw.writeWithLock();
@@ -359,7 +350,13 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
         if (create_new_root) snapshot_validation: {
             largest_rooted_slot = @min(top_slot, largest_rooted_slot + 2);
             accounts_db.largest_rooted_slot.store(largest_rooted_slot, .monotonic);
-            try manager.manage(allocator);
+            try sig.accounts_db.manager.onSlotRooted(
+                allocator,
+                &accounts_db,
+                largest_rooted_slot,
+                .{},
+                5000,
+            );
 
             // holding the lock here means that the snapshot archive(s) wont be deleted
             // since deletion requires a write lock
