@@ -4083,6 +4083,43 @@ test "test VoteTooOld error triggers trackStaleVoteRejected" {
     try std.testing.expectEqual(initial_stale_votes + 1, final_stale_votes);
 }
 
+test "switch_fork_decision - switch_proof" {
+    var registry = sig.prometheus.Registry(.{}).init(std.testing.allocator);
+    defer registry.deinit();
+    var metrics = try ReplayTowerMetrics.init(&registry);
+
+    const decision = SwitchForkDecision{ .switch_proof = Hash.ZEROES };
+    metrics.switch_fork_decision.observe(decision);
+
+    try std.testing.expectEqual(Hash.ZEROES, decision.switch_proof);
+}
+
+test "switch_fork_decision - failed_switch_threshold" {
+    var registry = sig.prometheus.Registry(.{}).init(std.testing.allocator);
+    defer registry.deinit();
+    var metrics = try ReplayTowerMetrics.init(&registry);
+
+    const decision = SwitchForkDecision{ .failed_switch_threshold = .{
+        .switch_proof_stake = 200,
+        .total_stake = 1000,
+    } };
+    metrics.switch_fork_decision.observe(decision);
+
+    try std.testing.expectEqual(200, decision.failed_switch_threshold.switch_proof_stake);
+    try std.testing.expectEqual(1000, decision.failed_switch_threshold.total_stake);
+}
+
+test "switch_fork_decision - failed_switch_duplicate_rollback" {
+    var registry = sig.prometheus.Registry(.{}).init(std.testing.allocator);
+    defer registry.deinit();
+    var metrics = try ReplayTowerMetrics.init(&registry);
+
+    const decision = SwitchForkDecision{ .failed_switch_duplicate_rollback = 50 };
+    metrics.switch_fork_decision.observe(decision);
+
+    try std.testing.expectEqual(50, decision.failed_switch_duplicate_rollback);
+}
+
 const builtin = @import("builtin");
 const DynamicArrayBitSet = sig.bloom.bit_set.DynamicArrayBitSet;
 
