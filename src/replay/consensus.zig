@@ -565,22 +565,28 @@ fn computeBankStats(
     // TODO agave sorts this by the slot first. Is this needed for the implementation to be correct?
     // If not, then we can avoid sorting here which may be verbose given frozen_slots is a map.
     for (frozen_slots.keys()) |slot| {
-        const epoch = epoch_schedule.getEpoch(slot);
-        const epoch_stakes = epoch_stakes_map.get(epoch) orelse return error.MissingEpochStakes;
         const fork_stat = progress.getForkStats(slot) orelse return error.MissingSlot;
         if (!fork_stat.computed) {
             // TODO Self::adopt_on_chain_tower_if_behind
             // Gather voting information from all vote accounts to understand the current consensus state.
-            const computed_bank_state = try collectVoteLockouts(
-                allocator,
-                .from(logger),
-                &my_vote_pubkey,
-                slot,
-                &epoch_stakes.stakes.vote_accounts.vote_accounts,
-                ancestors,
-                progress,
-                latest_validator_votes,
-            );
+            const slot_info_for_stakes = slot_tracker.get(slot) orelse return error.MissingSlot;
+
+            const computed_bank_state = blk: {
+                const stakes, var stakes_lg =
+                    slot_info_for_stakes.state.stakes_cache.stakes.readWithLock();
+                defer stakes_lg.unlock();
+
+                break :blk try collectVoteLockouts(
+                    allocator,
+                    .from(logger),
+                    &my_vote_pubkey,
+                    slot,
+                    &stakes.vote_accounts.vote_accounts,
+                    ancestors,
+                    progress,
+                    latest_validator_votes,
+                );
+            };
 
             try fork_choice.computeBankStats(
                 allocator,
