@@ -184,6 +184,8 @@ const ReplayState = struct {
     replay_votes_channel: *Channel(ParsedVote),
 
     fn deinit(self: *ReplayState) void {
+        self.logger.warn().log("Deinitializing ReplayState");
+
         self.thread_pool.shutdown();
         self.thread_pool.deinit();
 
@@ -767,6 +769,18 @@ fn bypassConsensus(state: *ReplayState, results: []const ReplayResult) !bool {
         state.logger.info().logf("rooting slot with SlotTree.reRoot: {}", .{new_root});
         slot_tracker.root = new_root;
         slot_tracker.pruneNonRooted(state.allocator);
+        if (state.account_store == .accounts_db) {
+            // TODO: get this value from the right place
+            const lamports_per_signature = 5000;
+
+            try sig.accounts_db.manager.onSlotRooted(
+                state.allocator,
+                state.account_store.accounts_db,
+                new_root,
+                .{},
+                lamports_per_signature,
+            );
+        }
     }
 
     return processed_a_slot;

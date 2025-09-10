@@ -80,7 +80,7 @@ pub fn loadSnapshot(
     errdefer combined_manifest.deinit(allocator);
 
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{ .iterate = true });
-    defer snapshot_dir.close();
+    errdefer snapshot_dir.close();
 
     logger.info().logf("full snapshot: {s}", .{sig.utils.fmt.tryRealPath(
         snapshot_dir,

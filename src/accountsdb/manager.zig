@@ -47,11 +47,15 @@ pub fn onSlotRooted(
 ) !void {
     const zone = tracy.Zone.init(@src(), .{ .name = "onSlotRooted" });
     defer zone.deinit();
-    defer tracy.frameMarkNamed("rooted slots flushed");
+    errdefer zone.color(0xFF0000);
 
     db.logger.info().logf("flushing slot {} to disk", .{newly_rooted_slot});
+
     var failed: bool = false;
-    defer if (!failed) db.logger.info().logf("successfully flushed slot {} to disk", .{newly_rooted_slot});
+    defer if (!failed) {
+        db.logger.info().logf("successfully flushed slot {} to disk", .{newly_rooted_slot});
+        tracy.frameMarkNamed("rooted slots flushed");
+    };
     errdefer |err| {
         db.logger.err().logf("failed to flushed slot {} to disk, err: {}", .{ newly_rooted_slot, err });
         failed = true;
@@ -59,13 +63,15 @@ pub fn onSlotRooted(
 
     // make a new AccountFile for our newly rooted slot, and "flush" the data to it
     const file_id = new_id: {
-        break :new_id flushSlot(db, newly_rooted_slot) catch |err| {
-            // flush fail = loss of account data on slot -- should never happen
-            db.logger.err()
-                .logf("flushSlot {d} error: {s}", .{ newly_rooted_slot, @errorName(err) });
-            return err;
-        };
+        // flush fail = loss of account data on slot -- should never happen
+        errdefer |err| db.logger.err()
+            .logf("flushSlot {d} error: {s}", .{ newly_rooted_slot, @errorName(err) });
+
+        break :new_id try flushSlot(db, newly_rooted_slot);
     };
+
+    // TODO: audit this and related fields - not sure why this is an atomic to begin with
+    db.largest_flushed_slot.store(newly_rooted_slot, .monotonic);
 
     // when we last made a full snapshot, and when we last made an incremental snapshot (relative to
     // the last full snapshot).
@@ -77,9 +83,12 @@ pub fn onSlotRooted(
         break :blk .{ snapshot_gen_info.full.slot, incremental_info.slot };
     };
 
-    const make_full_snapshot = newly_rooted_slot >=
+    // TODO: this should be configurable - leaving disabled until snapshot generation is fixed
+    const snapshot_generation_enabled = false;
+
+    const make_full_snapshot = snapshot_generation_enabled and newly_rooted_slot >=
         latest_full_snapshot_slot + config.slots_per_full_snapshot;
-    const make_inc_snapshot = newly_rooted_slot >=
+    const make_inc_snapshot = snapshot_generation_enabled and newly_rooted_slot >=
         latest_inc_snapshot + latest_full_snapshot_slot + config.slots_per_incremental_snapshot;
 
     // TODO: might be a good idea to move snapshot creation to another thread
@@ -122,7 +131,7 @@ pub fn onSlotRooted(
                     prev.full.slot + config.slots_per_full_snapshot);
             }
 
-            gen_info.full = .{
+            gen_info.* = .{
                 .full = .{
                     .capitalization = result.capitalization,
                     .hash = result.hash,
@@ -155,17 +164,17 @@ pub fn onSlotRooted(
                 db.latest_snapshot_gen_info.writeWithLock();
             defer gen_info_lg.unlock();
 
-            // we can't make an incremental snapshot without having previously made a full snapshot?
-            const gen_info = maybe_gen_info orelse unreachable;
+            const gen_info = &((maybe_gen_info.*) orelse
+                @panic("can't make an incr snapshot without previously making a full snapshot"));
 
             if (gen_info.inc) |prev_inc| {
                 std.debug.assert(newly_rooted_slot >=
-                    prev_inc + config.slots_per_incremental_snapshot);
+                    prev_inc.slot + config.slots_per_incremental_snapshot);
             }
 
             gen_info.inc = .{
-                .capitalization = result.capitalization,
-                .hash = result.hash,
+                .capitalization = result.incremental_capitalization,
+                .hash = result.incremental_hash,
                 .slot = newly_rooted_slot,
             };
         }
@@ -174,9 +183,9 @@ pub fn onSlotRooted(
     // TODO: change APIs of {clean, shrink, delete}AccountFiles to take single accounts, and stop
     // doing this.
     // TODO: could use an arena allocator for this whole function
-    const to_shrink: std.AutoArrayHashMapUnmanaged(FileId, void) = .init(allocator, .{}, .{});
+    var to_shrink: std.AutoArrayHashMapUnmanaged(FileId, void) = try .init(allocator, &.{}, &.{});
     defer to_shrink.deinit(allocator);
-    const to_delete: std.AutoArrayHashMapUnmanaged(FileId, void) = .init(allocator, .{}, .{});
+    var to_delete: std.AutoArrayHashMapUnmanaged(FileId, void) = try .init(allocator, &.{}, &.{});
     defer to_delete.deinit(allocator);
 
     const clean_result = try cleanAccountFiles(
@@ -209,6 +218,7 @@ pub fn onSlotRooted(
 fn flushSlot(db: *AccountsDB, slot: Slot) !FileId {
     const zone = tracy.Zone.init(@src(), .{ .name = "accountsdb flushSlot" });
     defer zone.deinit();
+    errdefer zone.color(0xFF0000);
 
     var timer = try sig.time.Timer.start();
 
