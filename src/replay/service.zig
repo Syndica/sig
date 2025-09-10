@@ -218,9 +218,12 @@ const ReplayState = struct {
         try epoch_tracker.epochs
             .put(deps.allocator, deps.current_epoch, deps.current_epoch_constants);
 
+        const frozen_slots = slot_tracker.frozenSlots(deps.allocator);
+        defer deps.allocator.free(frozen_slots);
+
         const progress_map = try replay.service.initProgressMap(
             deps.allocator,
-            &slot_tracker,
+            frozen_slots,
             &epoch_tracker,
             deps.my_identity,
             deps.vote_identity,
@@ -316,10 +319,14 @@ const ConsensusState = struct {
         const slot_tracker, var slot_tracker_lock = replay_state.slot_tracker.readWithLock();
         defer slot_tracker_lock.unlock();
 
+        const frozen_slots = try slot_tracker.frozenSlots(replay_deps.allocator);
+
         const fork_choice = try initForkChoice(
             replay_deps.allocator,
             replay_deps.logger,
-            slot_tracker,
+            replay_deps.root.slot,
+            replay_deps.root.state.hash.readCopy(),
+            frozen_slots,
             replay_deps.ledger.reader.*,
         );
         errdefer fork_choice.deinit();
@@ -432,26 +439,21 @@ fn processResultState(state: *ReplayState, consensus: *ConsensusState) struct {
 /// Analogous to [`initialize_progress_and_fork_choice_with_locked_bank_forks`](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/replay_stage.rs#L637)
 pub fn initProgressMap(
     allocator: std.mem.Allocator,
-    slot_tracker: *const SlotTracker,
+    sorted_frozen_slots: []const SlotTracker.FrozenSlot,
     epoch_tracker: *const EpochTracker,
     my_pubkey: Pubkey,
     vote_account: Pubkey,
 ) !ProgressMap {
-    var frozen_slots = try slot_tracker.frozenSlots(allocator);
-    defer frozen_slots.deinit(allocator);
-
-    frozen_slots.sort(FrozenSlotsSortCtx{ .slots = frozen_slots.keys() });
-
     var progress: ProgressMap = .INIT;
     errdefer progress.deinit(allocator);
 
     // Initialize progress map with any root slots
-    for (frozen_slots.keys(), frozen_slots.values()) |slot, ref| {
-        const prev_leader_slot = progress.getSlotPrevLeaderSlot(ref.constants.parent_slot);
-        try progress.map.ensureUnusedCapacity(allocator, 1);
-        progress.map.putAssumeCapacity(slot, try .initFromInfo(allocator, .{
-            .slot_info = ref,
-            .epoch_stakes = &epoch_tracker.getPtrForSlot(slot).?.stakes,
+    try progress.map.ensureUnusedCapacity(allocator, sorted_frozen_slots.count());
+    for (sorted_frozen_slots) |frozen_slot| {
+        const prev_leader_slot = progress.getSlotPrevLeaderSlot(frozen_slot.parent);
+        progress.map.putAssumeCapacity(frozen_slot.slot, try .initFromInfo(allocator, .{
+            .slot_info = frozen_slot,
+            .epoch_stakes = &epoch_tracker.getPtrForSlot(frozen_slot.slot).?.stakes,
             .now = .now(),
             .validator_identity = &my_pubkey,
             .validator_vote_pubkey = &vote_account,
@@ -463,13 +465,6 @@ pub fn initProgressMap(
 
     return progress;
 }
-
-const FrozenSlotsSortCtx = struct {
-    slots: []const Slot,
-    pub fn lessThan(ctx: @This(), a_index: usize, b_index: usize) bool {
-        return ctx.slots[a_index] < ctx.slots[b_index];
-    }
-};
 
 /// Analogous to [`initialize_progress_and_fork_choice_with_locked_bank_forks`](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/replay_stage.rs#L637)
 pub fn initForkChoice(
@@ -488,8 +483,6 @@ pub fn initForkChoice(
     var frozen_slots = try slot_tracker.frozenSlots(allocator);
     defer frozen_slots.deinit(allocator);
 
-    frozen_slots.sort(FrozenSlotsSortCtx{ .slots = frozen_slots.keys() });
-
     // Given a root and a list of `frozen_slots` sorted smallest to greatest by slot,
     // initialize a new HeaviestSubtreeForkChoice
     //
@@ -502,17 +495,15 @@ pub fn initForkChoice(
             });
 
         var prev_slot = root_slot;
-        for (frozen_slots.keys(), frozen_slots.values()) |slot, info| {
-            const frozen_hash = info.state.hash.readCopy().?;
-            if (slot > root_slot) {
+        for (frozen_slots) |frozen_slot| {
+            if (frozen_slot.slot > root_slot) {
                 // Make sure the list is sorted
-                std.debug.assert(slot > prev_slot);
-                prev_slot = slot;
-                const parent_bank_hash = info.constants.parent_hash;
+                std.debug.assert(frozen_slot.slot > prev_slot);
                 try heaviest_subtree_fork_choice.addNewLeafSlot(
-                    .{ .slot = slot, .hash = frozen_hash },
-                    .{ .slot = info.constants.parent_slot, .hash = parent_bank_hash },
+                    .{ .slot = frozen_slot.slot, .hash = frozen_slot.hash },
+                    .{ .slot = frozen_slot.parent, .hash = frozen_slot.parent_hash },
                 );
+                prev_slot = frozen_slot.slot;
             }
         }
 
@@ -800,13 +791,13 @@ pub fn trackNewSlots(
 
     const root = slot_tracker.root;
     var frozen_slots = try slot_tracker.frozenSlots(allocator);
-    defer frozen_slots.deinit(allocator);
+    defer allocator.free(frozen_slots);
 
     var frozen_slots_since_root = try std.ArrayListUnmanaged(sig.core.Slot)
-        .initCapacity(allocator, frozen_slots.count());
+        .initCapacity(allocator, frozen_slots.len);
     defer frozen_slots_since_root.deinit(allocator);
-    for (frozen_slots.keys()) |slot| if (slot >= root) {
-        frozen_slots_since_root.appendAssumeCapacity(slot);
+    for (frozen_slots) |frozen_slot| if (frozen_slot.slot >= root) {
+        frozen_slots_since_root.appendAssumeCapacity(frozen_slot.slot);
     };
 
     var next_slots = try LedgerReader

@@ -134,22 +134,49 @@ pub const SlotTracker = struct {
         return try list.toOwnedSlice(allocator);
     }
 
+    pub const FrozenSlot = struct {
+        slot: Slot,
+        hash: sig.core.Hash,
+        parent: Slot,
+        parent_hash: sig.core.Hash,
+        last_blockhash: sig.core.Hash,
+        collector_id: sig.core.Pubkey,
+
+        pub fn lessThan(_: void, lhs: FrozenSlot, rhs: FrozenSlot) bool {
+            return lhs.slot < rhs.slot;
+        }
+    };
+
     pub fn frozenSlots(
         self: *const SlotTracker,
         allocator: Allocator,
-    ) Allocator.Error!std.AutoArrayHashMapUnmanaged(Slot, Reference) {
-        var frozen_slots: std.AutoArrayHashMapUnmanaged(Slot, Reference) = .empty;
-        try frozen_slots.ensureTotalCapacity(allocator, self.slots.count());
+    ) Allocator.Error![]FrozenSlot {
+        var frozen_slots = try std.ArrayListUnmanaged(FrozenSlot)
+            .initCapacity(allocator, self.slots.count());
 
         for (self.slots.keys(), self.slots.values()) |slot, value| {
             if (!value.state.isFrozen()) continue;
 
-            frozen_slots.putAssumeCapacity(
-                slot,
-                .{ .constants = &value.constants, .state = &value.state },
-            );
+            const last_blockhash = blk: {
+                const bhq, var bhq_lg = value.state.blockhash_queue.readWithLock();
+                defer bhq_lg.unlock();
+                break :blk bhq.last_hash orelse std.debug.panic("no hash has been set", .{});
+            };
+
+            const frozen_slot = FrozenSlot{
+                .slot = slot,
+                .hash = value.state.hash.readCopy(),
+                .parent = value.constants.parent_slot,
+                .parent_hash = value.constants.parent_hash,
+                .last_blockhash = last_blockhash,
+                .collector_id = value.constants.collector_id,
+            };
+
+            frozen_slots.appendAssumeCapacity(slot, frozen_slot);
         }
-        return frozen_slots;
+        const slice = try frozen_slots.toOwnedSlice(allocator);
+        std.mem.sort(FrozenSlot, slice, {}, FrozenSlot.lessThan);
+        return slice;
     }
 
     pub fn parents(

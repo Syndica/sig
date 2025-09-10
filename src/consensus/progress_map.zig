@@ -259,11 +259,10 @@ pub const ForkProgress = struct {
         };
     }
 
-    // TODO: remove this in favor of initFromParent
     pub fn initFromInfo(
         allocator: std.mem.Allocator,
         params: struct {
-            slot_info: replay.trackers.SlotTracker.Reference,
+            slot_info: replay.trackers.SlotTracker.FrozenSlot,
             epoch_stakes: *const sig.core.EpochStakes,
             /// Should usually be `.now()`.
             now: sig.time.Instant,
@@ -275,7 +274,7 @@ pub const ForkProgress = struct {
         },
     ) std.mem.Allocator.Error!ForkProgress {
         const validator_stake_info: ?ValidatorStakeInfo = if (Pubkey.equals(
-            &params.slot_info.constants.collector_id,
+            &params.slot_info.collector_id,
             params.validator_identity,
         )) .{
             .validator_vote_pubkey = params.validator_vote_pubkey.*,
@@ -288,11 +287,7 @@ pub const ForkProgress = struct {
 
         var new_progress: ForkProgress = try .init(allocator, .{
             .now = params.now,
-            .last_entry = blk: {
-                const bhq, var bhq_lg = params.slot_info.state.blockhash_queue.readWithLock();
-                defer bhq_lg.unlock();
-                break :blk bhq.last_hash orelse std.debug.panic("no hash has been set", .{});
-            },
+            .last_entry = params.slot_info.last_blockhash,
             .prev_leader_slot = params.prev_leader_slot,
             .validator_stake_info = validator_stake_info,
             .num_blocks_on_fork = params.num_blocks_on_fork,
@@ -300,7 +295,7 @@ pub const ForkProgress = struct {
         });
         errdefer new_progress.deinit(allocator);
 
-        if (params.slot_info.state.hash.readCopy()) |frozen_hash| {
+        if (params.slot_info.hash) |frozen_hash| {
             new_progress.fork_stats.slot_hash = frozen_hash;
         }
 
