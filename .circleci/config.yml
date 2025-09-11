@@ -290,7 +290,7 @@ jobs:
 
             pip install -e ".[dev]"
       - restore_cache:
-          key: test-vectors-90c7ef9dd81b635b375198f21ba8466f9f104d33
+          key: test-vectors-e0b55b1fd3d72532b87a53fa6c313c8a09e34164
       - run:
           name: Checkout Test Vectors
           # TODO: instead of using the specific test-vectors commit, we want to track master instead.
@@ -299,8 +299,8 @@ jobs:
             if [ ! -d "test-vectors" ]; then
               git clone https://github.com/firedancer-io/test-vectors --depth 1
               cd test-vectors
-              git fetch origin 90c7ef9dd81b635b375198f21ba8466f9f104d33
-              git checkout 90c7ef9dd81b635b375198f21ba8466f9f104d33
+              git fetch origin e0b55b1fd3d72532b87a53fa6c313c8a09e34164
+              git checkout e0b55b1fd3d72532b87a53fa6c313c8a09e34164
 
               # We need each fixture file to have a unique name so that we can put them into the test-inputs directory
               # in a "flat" manner. The problem is that there are just too many files and it exceeds ARG_MAX for a single
@@ -312,7 +312,7 @@ jobs:
               find vm_interp/fixtures/v2 -type f -name '*.fix' -print0 | xargs -0 rename "s/\.fix\$/-v2.fix/"
             fi
       - save_cache:
-          key: test-vectors-90c7ef9dd81b635b375198f21ba8466f9f104d33
+          key: test-vectors-e0b55b1fd3d72532b87a53fa6c313c8a09e34164
           paths:
             - test-vectors/
       - run:
