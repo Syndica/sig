@@ -1186,7 +1186,7 @@ fn loadAccountsMap(
             .data = try allocator.dupe(u8, pb_account.data.getSlice()),
             .owner = try parsePubkey(pb_account.owner.getSlice()),
             .executable = pb_account.executable,
-            .rent_epoch = pb_account.rent_epoch,
+            .rent_epoch = std.math.maxInt(u64),
         });
     }
 

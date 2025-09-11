@@ -217,7 +217,7 @@ pub fn createTransactionContextAccounts(
             .data = account_data,
             .owner = .{ .data = pb_account.owner.getSlice()[0..Pubkey.SIZE].* },
             .executable = pb_account.executable,
-            .rent_epoch = pb_account.rent_epoch,
+            .rent_epoch = std.math.maxInt(u64),
         };
 
         try accounts.append(

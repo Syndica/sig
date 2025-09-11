@@ -36,7 +36,7 @@ pub const AcctState = struct {
     lamports: u64 = 0,
     data: ManagedString = .Empty,
     executable: bool = false,
-    rent_epoch: u64 = 0,
+    rent_epoch: ?u64 = null,
     owner: ManagedString = .Empty,
     seed_addr: ?SeedAddress = null,
 
@@ -83,6 +83,24 @@ pub const Inflation = struct {
     pub usingnamespace protobuf.MessageMixins(@This());
 };
 
+pub const FeeRateGovernor = struct {
+    target_lamports_per_signature: u64 = 0,
+    target_signatures_per_slot: u64 = 0,
+    min_lamports_per_signature: u64 = 0,
+    max_lamports_per_signature: u64 = 0,
+    burn_percent: u32 = 0,
+
+    pub const _desc_table = .{
+        .target_lamports_per_signature = fd(1, .{ .Varint = .Simple }),
+        .target_signatures_per_slot = fd(2, .{ .Varint = .Simple }),
+        .min_lamports_per_signature = fd(3, .{ .Varint = .Simple }),
+        .max_lamports_per_signature = fd(4, .{ .Varint = .Simple }),
+        .burn_percent = fd(5, .{ .Varint = .Simple }),
+    };
+
+    pub usingnamespace protobuf.MessageMixins(@This());
+};
+
 pub const EpochContext = struct {
     features: ?FeatureSet = null,
     hashes_per_tick: u64 = 0,
@@ -115,6 +133,8 @@ pub const SlotContext = struct {
     prev_slot: u64 = 0,
     prev_lps: u64 = 0,
     prev_epoch_capitalization: u64 = 0,
+    fee_rate_governor: ?FeeRateGovernor = null,
+    parent_signature_count: u64 = 0,
 
     pub const _desc_table = .{
         .slot = fd(1, .{ .FixedInt = .I64 }),
@@ -124,6 +144,8 @@ pub const SlotContext = struct {
         .prev_slot = fd(6, .{ .FixedInt = .I64 }),
         .prev_lps = fd(7, .{ .Varint = .Simple }),
         .prev_epoch_capitalization = fd(8, .{ .Varint = .Simple }),
+        .fee_rate_governor = fd(9, .{ .SubMessage = {} }),
+        .parent_signature_count = fd(10, .{ .Varint = .Simple }),
     };
 
     pub usingnamespace protobuf.MessageMixins(@This());

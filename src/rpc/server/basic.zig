@@ -421,10 +421,10 @@ fn handleRpcRequest(
             const facts: Facts //
             = switch (account) {
                 .file => |aif| .{ aif.data, .{
-                    .executable = aif.executable().*,
-                    .lamports = aif.lamports().*,
-                    .owner = aif.owner().*,
-                    .rent_epoch = aif.rent_epoch().*,
+                    .executable = aif.account_info.executable,
+                    .lamports = aif.account_info.lamports,
+                    .owner = aif.account_info.owner,
+                    .rent_epoch = aif.account_info.rent_epoch,
                     .space = aif.data.len(),
                 } },
                 .unrooted_map => |um| .{ um.data, .{

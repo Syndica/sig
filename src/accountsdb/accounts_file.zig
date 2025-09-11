@@ -99,7 +99,7 @@ pub const AccountInFile = struct {
         data_len: u64,
         pubkey: Pubkey,
 
-        pub fn writeToBuf(self: *const StorageInfo, buf: []u8) usize {
+        pub fn serialize(self: *const StorageInfo, buf: []u8) usize {
             std.debug.assert(buf.len >= @sizeOf(StorageInfo));
 
             var offset: usize = 0;
@@ -109,10 +109,6 @@ pub const AccountInFile = struct {
             offset += 32;
             offset = std.mem.alignForward(usize, offset, @sizeOf(u64));
             return offset;
-        }
-
-        pub fn writeToBufLen() usize {
-            return @sizeOf(u64) + @sizeOf(u64) + @sizeOf(Pubkey);
         }
     };
 
@@ -125,7 +121,7 @@ pub const AccountInFile = struct {
         owner: Pubkey,
         executable: bool,
 
-        pub fn writeToBuf(self: *const AccountInfo, buf: []u8) usize {
+        pub fn serialize(self: *const AccountInfo, buf: []u8) usize {
             std.debug.assert(buf.len >= @sizeOf(AccountInfo));
 
             var offset: usize = 0;
@@ -163,13 +159,11 @@ pub const AccountInFile = struct {
         InvalidLamports,
     };
 
-    const Self = @This();
-
     pub fn deinit(self: AccountInFile, allocator: std.mem.Allocator) void {
         self.data.deinit(allocator);
     }
 
-    pub fn getSizeInFile(self: *const Self) u64 {
+    pub fn getSizeInFile(self: *const AccountInFile) u64 {
         return std.mem.alignForward(
             usize,
             AccountInFile.STATIC_SIZE + self.data.len(),
@@ -177,65 +171,46 @@ pub const AccountInFile = struct {
         );
     }
 
-    pub fn validate(self: *const Self) ValidateError!void {
+    pub fn validate(self: *const AccountInFile) ValidateError!void {
+        // TODO: this is not valid, make sure we don't need this
         // make sure upper bits are zero
-        const exec_byte = @as(*const u8, @ptrCast(self.executable())).*;
+        const exec_byte = @as(*const u8, @ptrCast(&self.account_info.executable)).*;
         const valid_exec = exec_byte & ~@as(u8, 1) == 0;
         if (!valid_exec) {
             return error.InvalidExecutableFlag;
         }
 
-        const valid_lamports = self.account_info.lamports != 0 or (
-            // ie, is default account
-            self.data.len() == 0 and
-                self.owner().isZeroed() and
-                self.executable().* == false and
-                self.rent_epoch().* == 0);
-        if (!valid_lamports) {
-            return error.InvalidLamports;
-        }
+        const info = self.account_info;
+        const is_default_account = self.data.len() == 0 and
+            info.owner.isZeroed() and
+            info.executable == false and
+            info.rent_epoch == 0;
+
+        const valid_lamports = info.lamports != 0 or is_default_account;
+        if (!valid_lamports) return error.InvalidLamports;
     }
 
     /// requires .data to be owned by the BufferPool
     pub fn dupeCachedAccount(
-        self: *const Self,
+        self: *const AccountInFile,
         allocator: std.mem.Allocator,
     ) std.mem.Allocator.Error!Account {
+        const info = self.account_info;
         return .{
             .data = try self.data.duplicateBufferPoolRead(allocator),
-            .executable = self.executable().*,
-            .lamports = self.lamports().*,
-            .owner = self.owner().*,
-            .rent_epoch = self.rent_epoch().*,
+            .executable = info.executable,
+            .lamports = info.lamports,
+            .owner = info.owner,
+            .rent_epoch = info.rent_epoch,
         };
     }
 
-    pub inline fn pubkey(self: *const Self) *const Pubkey {
-        return &self.store_info.pubkey;
-    }
-
-    pub inline fn lamports(self: *const Self) *const u64 {
-        return &self.account_info.lamports;
-    }
-
-    pub inline fn owner(self: *const Self) *const Pubkey {
-        return &self.account_info.owner;
-    }
-
-    pub inline fn executable(self: *const Self) *const bool {
-        return &self.account_info.executable;
-    }
-
-    pub inline fn rent_epoch(self: *const Self) *const Epoch {
-        return &self.account_info.rent_epoch;
-    }
-
-    pub fn writeToBuf(self: *const Self, buf: []u8) usize {
+    pub fn serialize(self: *const AccountInFile, buf: []u8) usize {
         std.debug.assert(buf.len >= STATIC_SIZE + self.data.len());
 
         var offset: usize = 0;
-        offset += self.store_info.writeToBuf(buf[offset..]);
-        offset += self.account_info.writeToBuf(buf[offset..]);
+        offset += self.store_info.serialize(buf[offset..]);
+        offset += self.account_info.serialize(buf[offset..]);
 
         @memcpy(buf[offset..(offset + 32)], &self.hash.data);
         offset += 32;
@@ -266,9 +241,7 @@ pub const AccountFile = struct {
     // number of accounts stored in the file
     number_of_accounts: usize = 0,
 
-    const Self = @This();
-
-    pub fn init(file: std.fs.File, accounts_file_info: AccountFileInfo, slot: Slot) !Self {
+    pub fn init(file: std.fs.File, accounts_file_info: AccountFileInfo, slot: Slot) !AccountFile {
         const file_stat = try file.stat();
         const file_size: u64 = @intCast(file_stat.size);
 
@@ -283,12 +256,12 @@ pub const AccountFile = struct {
         };
     }
 
-    pub fn deinit(self: Self) void {
+    pub fn deinit(self: AccountFile) void {
         self.file.close();
     }
 
     pub fn validate(
-        self: *const Self,
+        self: *const AccountFile,
         buffer_pool: *BufferPool,
     ) !usize {
         var offset: usize = 0;
@@ -329,7 +302,7 @@ pub const AccountFile = struct {
     /// get account without reading the data field (a lot faster)
     /// (used when computing account hashes for snapshot validation)
     pub fn getAccountHashAndLamports(
-        self: *const Self,
+        self: *const AccountFile,
         metadata_allocator: std.mem.Allocator,
         buffer_pool: *BufferPool,
         start_offset: usize,
@@ -372,7 +345,7 @@ pub const AccountFile = struct {
     }
 
     /// get the account pubkey without parsing data (a lot faster if the data field isnt used anyway)
-    pub fn getAccountPubkey(self: *const Self, start_offset: usize) error{EOF}!struct {
+    pub fn getAccountPubkey(self: *const AccountFile, start_offset: usize) error{EOF}!struct {
         pubkey: *Pubkey,
         account_len: usize,
     } {
@@ -414,7 +387,7 @@ pub const AccountFile = struct {
     };
 
     pub fn readAccount(
-        self: *const Self,
+        self: *const AccountFile,
         metadata_allocator: std.mem.Allocator,
         buffer_pool: *BufferPool,
         start_offset: usize,
@@ -488,7 +461,7 @@ pub const AccountFile = struct {
     }
 
     pub fn readAccountNoData(
-        self: *const Self,
+        self: *const AccountFile,
         buffer_pool: *BufferPool,
         start_offset: usize,
     ) !AccountInFile {
@@ -571,7 +544,7 @@ pub const AccountFile = struct {
     }
 
     pub fn getSlice(
-        self: *const Self,
+        self: *const AccountFile,
         metadata_allocator: std.mem.Allocator,
         buffer_pool: *BufferPool,
         start_index_ptr: *usize,
@@ -597,7 +570,7 @@ pub const AccountFile = struct {
     }
 
     pub fn getType(
-        self: *const Self,
+        self: *const AccountFile,
         metadata_allocator: std.mem.Allocator,
         buffer_pool: *BufferPool,
         start_index_ptr: *usize,
@@ -654,7 +627,7 @@ pub const AccountFile = struct {
         }
     };
 
-    pub fn iterator(self: *const Self, buffer_pool: *BufferPool) Iterator {
+    pub fn iterator(self: *const AccountFile, buffer_pool: *BufferPool) Iterator {
         return .{
             .accounts_file = self,
             .buffer_pool = buffer_pool,
@@ -687,6 +660,6 @@ test "core.accounts_file: verify accounts file" {
         0,
     );
 
-    try std.testing.expectEqual(account.lamports().*, hash_and_lamports.lamports);
+    try std.testing.expectEqual(account.account_info.lamports, hash_and_lamports.lamports);
     try std.testing.expectEqual(account.hash, hash_and_lamports.hash);
 }

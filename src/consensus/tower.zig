@@ -311,7 +311,7 @@ pub fn stateFromAccount(
 ) (error{BincodeError} || std.mem.Allocator.Error)!VoteState {
     const buf = try allocator.alloc(u8, vote_account.data.len());
     // TODO Not sure if this is the way to get the data from the vote account. Review.
-    _ = vote_account.writeToBuf(vote_account_pubkey, buf);
+    _ = vote_account.serialize(vote_account_pubkey, buf);
     const versioned_state = sig.bincode.readFromSlice(
         allocator,
         VoteStateVersions,

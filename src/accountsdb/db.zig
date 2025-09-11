@@ -830,9 +830,8 @@ pub const AccountsDB = struct {
                 var iter = accounts_file.iterator(&self.buffer_pool);
                 while (try iter.nextNoData()) |account| {
                     n_accounts += 1;
-                    shard_counts[
-                        self.account_index.pubkey_ref_map.shard_calculator.index(account.pubkey())
-                    ] += 1;
+                    const shred_calculator = self.account_index.pubkey_ref_map.shard_calculator;
+                    shard_counts[shred_calculator.index(&account.store_info.pubkey)] += 1;
                 }
                 break :blk n_accounts;
             };
@@ -1559,15 +1558,16 @@ pub const AccountsDB = struct {
 
                         account_hash = switch (account) {
                             .file => |in_file_account| blk: {
-                                var iter = in_file_account.data.iterator();
+                                const info = in_file_account.account_info;
+                                var iterator = in_file_account.data.iterator();
                                 var hash = Hash.ZEROES;
                                 sig.core.account.hashAccount(
-                                    in_file_account.lamports().*,
-                                    &iter,
-                                    &in_file_account.owner().data,
-                                    in_file_account.executable().*,
-                                    in_file_account.rent_epoch().*,
-                                    &in_file_account.pubkey().data,
+                                    info.lamports,
+                                    &iterator,
+                                    &info.owner,
+                                    info.executable,
+                                    info.rent_epoch,
+                                    &in_file_account.store_info.pubkey,
                                     &hash.data,
                                 );
                                 break :blk hash;
@@ -1635,7 +1635,7 @@ pub const AccountsDB = struct {
         account_ref: *const AccountRef,
     ) GetFileFromRefError!Account {
         switch (account_ref.location) {
-            .File => |ref_info| {
+            .file => |ref_info| {
                 const account = try self.getAccountInFile(
                     self.allocator,
                     ref_info.file_id,
@@ -1645,7 +1645,7 @@ pub const AccountsDB = struct {
 
                 return account;
             },
-            .UnrootedMap => |ref_info| {
+            .unrooted_map => |ref_info| {
                 const unrooted_accounts, var unrooted_accounts_lg =
                     self.unrooted_accounts.readWithLock();
                 defer unrooted_accounts_lg.unlock();
@@ -1686,7 +1686,7 @@ pub const AccountsDB = struct {
         account_ref: *const AccountRef,
     ) GetAccountFromRefError!struct { AccountInCacheOrFile, AccountInCacheOrFileLock } {
         switch (account_ref.location) {
-            .File => |ref_info| {
+            .file => |ref_info| {
                 const account = try self.getAccountInFileAndLock(
                     self.allocator,
                     &self.buffer_pool,
@@ -1698,7 +1698,7 @@ pub const AccountsDB = struct {
                     .{ .file = &self.file_map_fd_rw },
                 };
             },
-            .UnrootedMap => |ref_info| {
+            .unrooted_map => |ref_info| {
                 const unrooted_accounts, var unrooted_accounts_lg =
                     self.unrooted_accounts.readWithLock();
                 errdefer unrooted_accounts_lg.unlock();
@@ -1783,7 +1783,7 @@ pub const AccountsDB = struct {
         location: AccountRef.AccountLocation,
     ) GetAccountInFileError!struct { Hash, u64 } {
         switch (location) {
-            .File => |ref_info| {
+            .file => |ref_info| {
                 self.file_map_fd_rw.lockShared();
                 defer self.file_map_fd_rw.unlockShared();
 
@@ -1805,8 +1805,8 @@ pub const AccountsDB = struct {
                 };
             },
             // we dont use this method for cache
-            .UnrootedMap => @panic(
-                "getAccountHashAndLamportsFromRef is not implemented on UnrootedMap references",
+            .unrooted_map => @panic(
+                "getAccountHashAndLamportsFromRef is not implemented on unrooted_map references",
             ),
         }
     }
@@ -2017,12 +2017,13 @@ pub const AccountsDB = struct {
                     fba.reset();
                 }
 
+                const info = account_in_file.account_info;
                 const bhs, var bhs_lg = try self.getOrInitBankHashStats(account_file.slot);
                 defer bhs_lg.unlock();
                 bhs.update(.{
-                    .lamports = account_in_file.lamports().*,
+                    .lamports = info.lamports,
                     .data_len = account_in_file.data.len(),
-                    .executable = account_in_file.executable().*,
+                    .executable = info.executable,
                 });
             }
         }
@@ -2107,7 +2108,7 @@ pub const AccountsDB = struct {
                 break :search_and_overwrite;
 
             const index = switch (ref.location) {
-                .UnrootedMap => |location| location.index,
+                .unrooted_map => |location| location.index,
                 else => return error.CannotWriteRootedSlot,
             };
 
@@ -2214,7 +2215,7 @@ pub const AccountsDB = struct {
                     new_ref.* = AccountRef{
                         .pubkey = pubkeys[i - old_refs.len],
                         .slot = slot,
-                        .location = .{ .UnrootedMap = .{ .index = i } },
+                        .location = .{ .unrooted_map = .{ .index = i } },
                     };
                 }
             }
@@ -2293,7 +2294,7 @@ pub const AccountsDB = struct {
                 ref.* = AccountRef{
                     .pubkey = pubkeys[i - old_refs.len],
                     .slot = slot,
-                    .location = .{ .UnrootedMap = .{ .index = i } },
+                    .location = .{ .unrooted_map = .{ .index = i } },
                 };
             }
 
@@ -3064,10 +3065,7 @@ pub const GeyserTmpStorage = struct {
         self.pubkeys.deinit();
     }
 
-    pub fn reset(
-        self: *Self,
-        allocator: std.mem.Allocator,
-    ) void {
+    pub fn reset(self: *Self, allocator: std.mem.Allocator) void {
         for (self.accounts.items) |account| account.deinit(allocator);
         self.accounts.clearRetainingCapacity();
         self.pubkeys.clearRetainingCapacity();
@@ -3080,9 +3078,12 @@ pub const GeyserTmpStorage = struct {
     ) Error!void {
         const account = try account_in_file.dupeCachedAccount(allocator);
         errdefer account.deinit(allocator);
+
         self.accounts.append(account) catch return Error.OutOfGeyserArrayMemory;
         errdefer _ = self.accounts.pop();
-        self.pubkeys.append(account_in_file.pubkey().*) catch return Error.OutOfGeyserArrayMemory;
+
+        const store_info = account_in_file.store_info;
+        self.pubkeys.append(store_info.pubkey) catch return Error.OutOfGeyserArrayMemory;
     }
 };
 
@@ -3147,12 +3148,10 @@ pub fn indexAndValidateAccountFile(
         account_refs.appendAssumeCapacity(.{
             .pubkey = account.store_info.pubkey,
             .slot = accounts_file.slot,
-            .location = .{
-                .File = .{
-                    .file_id = accounts_file.id,
-                    .offset = offset,
-                },
-            },
+            .location = .{ .file = .{
+                .file_id = accounts_file.id,
+                .offset = offset,
+            } },
         });
 
         if (shard_counts) |s_c| {
@@ -4479,7 +4478,7 @@ pub const BenchmarkAccountsDB = struct {
                                     try Account.initRandom(allocator, random, i % 1_000);
                                 defer account.deinit(allocator);
                                 var pubkey = pubkeys[i % n_accounts];
-                                offset += account.writeToBuf(&pubkey, buf[offset..]);
+                                offset += account.serialize(&pubkey, buf[offset..]);
                             }
 
                             try file.writeAll(buf);
