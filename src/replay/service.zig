@@ -31,6 +31,7 @@ const ParsedVote = sig.consensus.vote_listener.vote_parser.ParsedVote;
 const LatestValidatorVotes = sig.consensus.latest_validator_votes.LatestValidatorVotes;
 const SlotHistoryAccessor = sig.consensus.replay_tower.SlotHistoryAccessor;
 const VoteListener = sig.consensus.vote_listener.VoteListener;
+const VoteTracker = sig.consensus.VoteTracker;
 
 const ProcessResultState = replay.process_result.ProcessResultState;
 const ReplayExecutionState = replay.execution.ReplayExecutionState;
@@ -291,12 +292,14 @@ const ConsensusState = struct {
     receivers: Receivers,
     execution_log_helper: replay.execution.LogHelper,
     vote_listener: VoteListener,
+    vote_tracker: *VoteTracker,
 
     fn deinit(self: *ConsensusState, allocator: Allocator) void {
         self.fork_choice.deinit();
         self.latest_validator_votes.deinit(allocator);
         self.slot_data.deinit(allocator);
         self.vote_listener.joinAndDeinit();
+        self.vote_tracker.deinit(allocator);
     }
 
     const Dependencies = struct {
@@ -345,9 +348,6 @@ const ConsensusState = struct {
         errdefer replay_tower.deinit(replay_deps.allocator);
 
         // Start vote listener inside replay so it can reference replay state directly.
-        var vote_tracker: sig.consensus.VoteTracker = .EMPTY;
-        defer vote_tracker.deinit(replay_deps.allocator);
-
         const slot_data_provider: sig.consensus.vote_listener.SlotDataProvider = .{
             .slot_tracker_rw = &replay_state.slot_tracker,
             .epoch_tracker_rw = &replay_state.epoch_tracker,
@@ -357,11 +357,16 @@ const ConsensusState = struct {
             .create(replay_deps.allocator);
         defer verified_vote_channel.destroy();
 
+        const vote_tracker = try replay_deps.allocator.create(sig.consensus.VoteTracker);
+        errdefer replay_deps.allocator.destroy(vote_tracker);
+
+        vote_tracker.* = .EMPTY;
+
         const vote_listener: VoteListener = try .init(
             replay_deps.allocator,
             .{ .unordered = replay_deps.exit },
             .from(replay_deps.logger),
-            &vote_tracker,
+            vote_tracker,
             .{
                 .slot_data_provider = slot_data_provider,
                 .gossip_table_rw = consensus_deps.gossip_table,
@@ -391,6 +396,7 @@ const ConsensusState = struct {
             .receivers = consensus_deps.receivers,
             .execution_log_helper = .init(.from(replay_deps.logger)),
             .vote_listener = vote_listener,
+            .vote_tracker = vote_tracker,
         };
     }
 };

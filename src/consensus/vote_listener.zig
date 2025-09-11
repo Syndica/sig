@@ -432,13 +432,25 @@ fn processVotesOnce(
     const root_hash = slot_data_provider.getSlotHash(root_slot);
 
     if (last_process_root.elapsed().asMillis() > DEFAULT_MS_PER_SLOT) {
+        const ancestors_ptr = slot_data_provider.getSlotAncestorsPtr(root_slot);
+        // TODO: Revisit shouldn't this "must exist for the root slot"
+        const ancestors = ancestors_ptr orelse {
+            logger.warn().logf(
+                "Root slot {} not found in slot tracker, skipping optimistic slot verification",
+                .{root_slot},
+            );
+            vote_tracker.progressWithNewRootBank(allocator, root_slot);
+            last_process_root.* = sig.time.Instant.now();
+            return .ok;
+        };
+
         const unrooted_optimistic_slots = try confirmation_verifier.verifyForUnrootedOptimisticSlots(
             allocator,
             ledger_ref.reader,
             .{
                 .slot = root_slot,
                 .hash = root_hash,
-                .ancestors = slot_data_provider.getSlotAncestorsPtr(root_slot).?, // must exist for the root slot
+                .ancestors = ancestors, // must exist for the root slot
             },
         );
         defer allocator.free(unrooted_optimistic_slots);
