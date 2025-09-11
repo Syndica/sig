@@ -33,7 +33,7 @@ pub fn processEdgeCases(
         my_pubkey: sig.core.Pubkey,
         tpu_has_bank: bool,
 
-        slot_tracker: *SlotTracker,
+        slot_tracker: *const SlotTracker,
         progress: *const ProgressMap,
         fork_choice: *HeaviestSubtreeForkChoice,
         ledger: *sig.ledger.LedgerResultWriter,
@@ -51,6 +51,8 @@ pub fn processEdgeCases(
     // have the wrong version. Our version was dead or pruned.
     // Signalled by ancestor_hashes_service.
     timer.reset();
+    const slot_tracker = params.slot_tracker;
+
     try processAncestorHashesDuplicateSlots(
         allocator,
         logger,
@@ -60,7 +62,7 @@ pub fn processEdgeCases(
         &params.slot_data.epoch_slots_frozen_slots,
         params.progress,
         params.fork_choice,
-        params.slot_tracker,
+        slot_tracker,
         &params.slot_data.duplicate_slots_to_repair,
     );
     const ancestor_hashes_duplicate_slots_time = timer.lap();
@@ -75,7 +77,7 @@ pub fn processEdgeCases(
         params.receivers.duplicate_confirmed_slots,
         params.ledger,
         &params.slot_data.duplicate_confirmed_slots,
-        params.slot_tracker,
+        slot_tracker,
         params.progress,
         params.fork_choice,
         &params.slot_data.duplicate_slots_to_repair,
@@ -109,7 +111,7 @@ pub fn processEdgeCases(
     try processPrunedButPopularForks(
         logger,
         params.receivers.popular_pruned_forks,
-        params.slot_tracker,
+        slot_tracker,
         params.senders.ancestor_hashes_replay_update,
     );
     const popular_pruned_forks_time = timer.lap();
@@ -123,7 +125,7 @@ pub fn processEdgeCases(
             params.receivers.duplicate_slots,
             &params.slot_data.duplicate_slots,
             &params.slot_data.duplicate_confirmed_slots,
-            params.slot_tracker,
+            slot_tracker,
             params.progress,
             params.fork_choice,
         );
@@ -259,6 +261,10 @@ pub const UnfrozenGossipVerifiedVoteHashes = struct {
             errdefer if (!htv_gop.found_existing) {
                 std.debug.assert(hash_to_votes.swapRemove(htv_gop.key_ptr.*));
             };
+
+            if (!htv_gop.found_existing) {
+                htv_gop.value_ptr.* = .empty;
+            }
 
             try htv_gop.value_ptr.append(allocator, vote_pubkey);
         }
@@ -479,7 +485,7 @@ fn processAncestorHashesDuplicateSlots(
     epoch_slots_frozen_slots: *SlotData.EpochSlotsFrozenSlots,
     progress: *const ProgressMap,
     fork_choice: *HeaviestSubtreeForkChoice,
-    slot_tracker: *SlotTracker,
+    slot_tracker: *const SlotTracker,
     duplicate_slots_to_repair: *SlotData.DuplicateSlotsToRepair,
 ) !void {
     const root = slot_tracker.root;
@@ -543,7 +549,7 @@ fn processDuplicateConfirmedSlots(
     duplicate_confirmed_slots_receiver: *sig.sync.Channel(ThresholdConfirmedSlot),
     ledger: *sig.ledger.LedgerResultWriter,
     duplicate_confirmed_slots: *SlotData.DuplicateConfirmedSlots,
-    slot_tracker: *SlotTracker,
+    slot_tracker: *const SlotTracker,
     progress: *const ProgressMap,
     fork_choice: *HeaviestSubtreeForkChoice,
     duplicate_slots_to_repair: *SlotData.DuplicateSlotsToRepair,
@@ -624,7 +630,7 @@ fn processGossipVerifiedVoteHashes(
 fn processPrunedButPopularForks(
     logger: replay.service.Logger,
     pruned_but_popular_forks_receiver: *sig.sync.Channel(Slot),
-    slot_tracker: *SlotTracker,
+    slot_tracker: *const SlotTracker,
     ancestor_hashes_replay_update_sender: *sig.sync.Channel(AncestorHashesReplayUpdate),
 ) !void {
     const root = slot_tracker.root;
@@ -664,7 +670,7 @@ fn processDuplicateSlots(
     duplicate_slots_receiver: *sig.sync.Channel(Slot),
     duplicate_slots_tracker: *SlotData.DuplicateSlots,
     duplicate_confirmed_slots: *const SlotData.DuplicateConfirmedSlots,
-    slot_tracker: *SlotTracker,
+    slot_tracker: *const SlotTracker,
     progress: *const ProgressMap,
     fork_choice: *HeaviestSubtreeForkChoice,
 ) !void {
@@ -870,7 +876,7 @@ pub const check_slot_agrees_with_cluster = struct {
         try confirmed_non_dupe_frozen_hash.finalize(slot, ledger);
     }
 
-    fn duplicateConfirmed(
+    pub fn duplicateConfirmed(
         allocator: std.mem.Allocator,
         logger: replay.service.Logger,
         slot: Slot,

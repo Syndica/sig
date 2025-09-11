@@ -21,7 +21,7 @@ mkdir kcov-output
 
 if [ -z "$1" ]; then
     echo "=> Building Sig" 
-    zig build test -Dno-run
+    zig build test -Dno-run -Dlong-tests
     test_bin="./zig-out/bin/test"
 else
     test_bin="$1"
