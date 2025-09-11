@@ -87,7 +87,7 @@ pub fn onSlotRooted(
     };
 
     // TODO: this should be configurable - leaving disabled until snapshot generation is fixed
-    const snapshot_generation_enabled = false;
+    const snapshot_generation_enabled = builtin.is_test;
 
     const make_full_snapshot = snapshot_generation_enabled and newly_rooted_slot >=
         latest_full_snapshot_slot + config.slots_per_full_snapshot;
@@ -105,7 +105,7 @@ pub fn onSlotRooted(
         // TODO: get rid of this once `generateFullSnapshot` can actually
         // derive this data correctly by itdb.
         var prng = std.Random.DefaultPrng.init(1234);
-        const tmp_bank_fields = try BankFields.initRandom(allocator, prng.random(), 128);
+        var tmp_bank_fields = try BankFields.initRandom(allocator, prng.random(), 128);
         defer tmp_bank_fields.deinit(allocator);
 
         if (make_full_snapshot) {
@@ -144,8 +144,13 @@ pub fn onSlotRooted(
             };
         }
 
-        if (make_inc_snapshot) {
-            // incrementals shouldn't be generated on the same slot as a full snapshot
+        const has_made_full_snapshot = blk: {
+            const maybe_gen_info, var gen_info_lg = db.latest_snapshot_gen_info.readWithLock();
+            defer gen_info_lg.unlock();
+            break :blk maybe_gen_info.* != null;
+        };
+
+        if (make_inc_snapshot and has_made_full_snapshot) {
             std.debug.assert(!make_full_snapshot);
 
             db.logger.info().logf(
@@ -168,7 +173,7 @@ pub fn onSlotRooted(
             defer gen_info_lg.unlock();
 
             const gen_info = &((maybe_gen_info.*) orelse
-                @panic("can't make an incr snapshot without previously making a full snapshot"));
+                @panic("illegal state - snapshot_gen_info (previously non-null) is now null"));
 
             if (gen_info.inc) |prev_inc| {
                 std.debug.assert(newly_rooted_slot >=
@@ -1445,4 +1450,181 @@ test "shrink account file works" {
     // last account ref should still be accessible
     const account = try accounts_db.getAccountLatest(&pubkey_remain) orelse unreachable;
     account.deinit(allocator);
+}
+
+test "onSlotRooted basic" {
+    const allocator = std.testing.allocator;
+    const logger: Logger = .noop;
+    var prng = std.Random.DefaultPrng.init(5083);
+    const random = prng.random();
+
+    var tmp_dir_root = std.testing.tmpDir(.{});
+    defer tmp_dir_root.cleanup();
+    const snapshot_dir = tmp_dir_root.dir;
+
+    var db = try AccountsDB.init(.{
+        .allocator = allocator,
+        .logger = .from(logger),
+        .snapshot_dir = snapshot_dir,
+        .geyser_writer = null,
+        .gossip_view = null,
+        .index_allocation = .ram,
+        .number_of_index_shards = 4,
+    });
+    defer db.deinit();
+
+    const pk = Pubkey.initRandom(random);
+
+    var account: sig.runtime.AccountSharedData = .EMPTY;
+    account.lamports = 1;
+
+    // interleave put + root
+    try db.putAccount(149, pk, account);
+    try onSlotRooted(allocator, &db, 149, .{}, 5000);
+    try db.putAccount(150, pk, account);
+    try onSlotRooted(allocator, &db, 150, .{}, 5000);
+
+    // put some + root some
+    try db.putAccount(151, pk, account);
+    try db.putAccount(152, pk, account);
+    try db.putAccount(153, pk, account);
+    try onSlotRooted(allocator, &db, 151, .{}, 5000);
+    try onSlotRooted(allocator, &db, 152, .{}, 5000);
+    try onSlotRooted(allocator, &db, 153, .{}, 5000);
+
+    // check failure cases
+    for (&[_]u64{
+        154, // no accounts are in 154 yet
+        153, 150, // we already flushed these!
+        1, 0, // nope
+    }) |slot| {
+        try std.testing.expectError(
+            error.SlotNotFound,
+            onSlotRooted(allocator, &db, slot, .{}, 5000),
+        );
+    }
+
+    var accounts_dir = try snapshot_dir.openDir("accounts", .{ .iterate = true });
+    defer accounts_dir.close();
+
+    // the last slot should be the only one that remains after onSlotRooted(last_slot)
+    var iter = accounts_dir.iterate();
+    try std.testing.expectEqualStrings("153.5", (try iter.next()).?.name);
+    try std.testing.expectEqual(null, try iter.next());
+}
+
+test "onSlotRooted zero_lamports" {
+    const allocator = std.testing.allocator;
+    const logger: Logger = .noop;
+    var prng = std.Random.DefaultPrng.init(5083);
+    const random = prng.random();
+
+    var tmp_dir_root = std.testing.tmpDir(.{});
+    defer tmp_dir_root.cleanup();
+    const snapshot_dir = tmp_dir_root.dir;
+
+    var db = try AccountsDB.init(.{
+        .allocator = allocator,
+        .logger = .from(logger),
+        .snapshot_dir = snapshot_dir,
+        .geyser_writer = null,
+        .gossip_view = null,
+        .index_allocation = .ram,
+        .number_of_index_shards = 4,
+    });
+    defer db.deinit();
+
+    const pk = Pubkey.initRandom(random);
+    const account: sig.runtime.AccountSharedData = .EMPTY;
+
+    // interleave put + root
+    try db.putAccount(149, pk, account);
+    try onSlotRooted(allocator, &db, 149, .{}, 5000);
+
+    var accounts_dir = try snapshot_dir.openDir("accounts", .{ .iterate = true });
+    defer accounts_dir.close();
+
+    var iter = accounts_dir.iterate();
+    // all files containing just zero lamport accounts should be deleted
+    try std.testing.expectEqual(null, try iter.next());
+}
+
+test "onSlotRooted shrink and delete" {
+    const allocator = std.testing.allocator;
+    const logger: Logger = .noop;
+    var prng = std.Random.DefaultPrng.init(5083);
+    const random = prng.random();
+
+    var tmp_dir_root = std.testing.tmpDir(.{});
+    defer tmp_dir_root.cleanup();
+    const snapshot_dir = tmp_dir_root.dir;
+
+    var db = try AccountsDB.init(.{
+        .allocator = allocator,
+        .logger = .from(logger),
+        .snapshot_dir = snapshot_dir,
+        .geyser_writer = null,
+        .gossip_view = null,
+        .index_allocation = .ram,
+        .number_of_index_shards = 4,
+    });
+    defer db.deinit();
+
+    const accounts = try allocator.alloc(sig.runtime.AccountSharedData, 10);
+    defer allocator.free(accounts);
+    for (accounts) |*account| {
+        account.* = sig.runtime.AccountSharedData.EMPTY;
+        account.lamports = 1;
+    }
+    const pubkeys = try allocator.alloc(Pubkey, 10);
+    defer allocator.free(pubkeys);
+    for (pubkeys) |*pubkey| pubkey.* = Pubkey.initRandom(random);
+
+    // put all accounts
+    {
+        for (accounts, pubkeys) |account, pubkey| {
+            try db.putAccount(149, pubkey, account);
+        }
+        try onSlotRooted(allocator, &db, 149, .{}, 5000);
+    }
+
+    const size_149_before = blk: {
+        var accounts_dir = try snapshot_dir.openDir("accounts", .{ .iterate = true });
+        defer accounts_dir.close();
+        const stat = try accounts_dir.statFile("149.1");
+        break :blk stat.size;
+    };
+
+    // overwrite 90% of accounts in next slot
+    {
+        for (accounts[0..9], pubkeys[0..9]) |account, pubkey| {
+            try db.putAccount(150, pubkey, account);
+        }
+        try onSlotRooted(allocator, &db, 150, .{}, 5000);
+    }
+
+    const size_149_after = blk: {
+        var accounts_dir = try snapshot_dir.openDir("accounts", .{ .iterate = true });
+        defer accounts_dir.close();
+        const stat = try accounts_dir.statFile("149.3"); // shrinking a file means a new file id
+        break :blk stat.size;
+    };
+
+    // slot 149 has been shrunk!
+    try std.testing.expect(size_149_after < size_149_before);
+
+    // overwrite 100% of accounts in both previous slots
+    {
+        for (accounts, pubkeys) |account, pubkey| {
+            try db.putAccount(151, pubkey, account);
+        }
+        try onSlotRooted(allocator, &db, 151, .{}, 5000);
+    }
+
+    // slot 150 and 149 are gone
+    var accounts_dir = try snapshot_dir.openDir("accounts", .{ .iterate = true });
+    defer accounts_dir.close();
+    var iter = accounts_dir.iterate();
+    try std.testing.expectEqualStrings("151.4", (try iter.next()).?.name);
+    try std.testing.expectEqual(null, try iter.next());
 }
