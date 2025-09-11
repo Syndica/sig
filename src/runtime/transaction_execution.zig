@@ -246,7 +246,7 @@ pub const ProcessedTransaction = union(enum(u8)) {
             .executed => |e| if (e.executed_transaction.err != null) .{
                 .written = e.rollbacks.accounts(),
             } else .{
-                .all_loaded = e.loaded_accounts.accounts.slice(),
+                .all_loaded = e.loaded_accounts.accounts.constSlice(),
             },
         };
     }

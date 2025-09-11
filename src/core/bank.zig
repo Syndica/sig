@@ -489,8 +489,11 @@ pub const BankFields = struct {
             return error.BankAndGenesisMismatch;
         }
 
-        const genesis_slots_per_year = yearsAsSlots(1, //
-            genesis_config.poh_config.target_tick_duration.nanos, self.ticks_per_slot);
+        const genesis_slots_per_year = yearsAsSlots(
+            1,
+            genesis_config.poh_config.target_tick_duration.nanos,
+            self.ticks_per_slot,
+        );
         if (genesis_slots_per_year != self.slots_per_year) {
             return error.BankAndGenesisMismatch;
         }

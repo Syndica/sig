@@ -929,23 +929,20 @@ pub const FullSnapshotFileInfo = struct {
     /// Returns the full snapshot info based on the parsed section, and the index to the
     /// remainder of the unparsed section of `filename`, which the caller can check for
     /// the expected extension.
-    pub fn parseFileBaseName(
-        filename: []const u8,
-    ) ParseFileBaseNameError!struct { FullSnapshotFileInfo, usize } {
+    pub fn parseFileBaseName(filename: []const u8) ParseFileBaseNameError!struct {
+        FullSnapshotFileInfo,
+        usize,
+    } {
         const prefix = "snapshot-";
-        if (!std.mem.startsWith(u8, filename, prefix)) {
-            return error.MissingPrefix;
-        }
+        if (!std.mem.startsWith(u8, filename, prefix)) return error.MissingPrefix;
 
         // parse slot until '-'
         const slot, const slot_end = slot: {
             const start = prefix.len;
-            if (start == filename.len) {
-                return error.MissingSlot;
-            }
+            if (start == filename.len) return error.MissingSlot;
 
             const str_max_len = std.fmt.count("{d}", .{std.math.maxInt(Slot)});
-            const end_max = @max(filename.len, start + str_max_len + 1);
+            const end_max = @min(filename.len, start + str_max_len + 1);
             const filename_trunc = filename[0..end_max];
             const end = std.mem.indexOfScalarPos(u8, filename_trunc, start + 1, '-') orelse
                 return error.MissingSlotDelimiter;
@@ -961,9 +958,7 @@ pub const FullSnapshotFileInfo = struct {
         // parse until there's no base58 characters left
         const hash, const hash_end = hash: {
             const start = slot_end + 1;
-            if (start == filename.len) {
-                return error.MissingHash;
-            }
+            if (start == filename.len) return error.MissingHash;
 
             const str_max_len = Hash.BASE58_MAX_SIZE;
             const end_max = @min(filename.len, start + str_max_len + 1);

@@ -140,11 +140,8 @@ pub const Gossip = struct {
     }
 
     pub fn getCluster(self: Gossip) error{UnknownCluster}!?sig.core.Cluster {
-        return if (self.cluster) |cluster_str|
-            std.meta.stringToEnum(sig.core.Cluster, cluster_str) orelse
-                error.UnknownCluster
-        else
-            null;
+        const cluster = self.cluster orelse return error.UnknownCluster;
+        return std.meta.stringToEnum(sig.core.Cluster, cluster);
     }
 
     pub fn getEntrypointAddrs(

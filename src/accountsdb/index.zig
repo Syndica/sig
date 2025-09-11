@@ -432,7 +432,7 @@ pub const AccountIndex = struct {
             self.reference_manager.memory_allocator,
             []AccountRef,
             reference_memory,
-            .{},
+            .{ .allocation_limit = 100 * 1024 * 1024 * 1024 },
         );
         try self.reference_manager.memory.append(
             self.reference_manager.memory_allocator,

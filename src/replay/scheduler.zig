@@ -55,7 +55,7 @@ pub fn processBatch(
         // Only deinit elements that were actually populated
         // TODO Better way to do this? Instead of tracking populated count. Maybe switch to array list?
         for (results[0..populated_count]) |*result| {
-            result.*[1].deinit(allocator);
+            result[1].deinit(allocator);
         }
         allocator.free(results);
     }

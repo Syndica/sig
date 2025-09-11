@@ -70,13 +70,19 @@ pub const Committer = struct {
             // collect accounts to store
             switch (tx_result.accounts()) {
                 .all_loaded => |accounts| {
-                    for (accounts, transaction.accounts.items(.is_writable)) |account, is_writable|
-                        if (is_writable)
-                            try putAccount(allocator, self.logger, &accounts_to_store, account);
+                    for (accounts, transaction.accounts.items(.is_writable)) |account, is_writable| {
+                        if (is_writable) try putAccount(
+                            allocator,
+                            self.logger,
+                            &accounts_to_store,
+                            account,
+                        );
+                    }
                 },
                 .written => |accounts| {
-                    for (accounts) |account|
+                    for (accounts) |account| {
                         try putAccount(allocator, self.logger, &accounts_to_store, account);
+                    }
                 },
             }
 
