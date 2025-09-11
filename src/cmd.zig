@@ -1217,7 +1217,7 @@ fn validator(
     );
     defer shred_network_manager.deinit();
 
-    const replay_deps, const replay_senders, const replay_receivers = try replayDependencies(
+    const replay_deps = try replayDependencies(
         allocator,
         epoch,
         &loaded_snapshot,
@@ -1226,23 +1226,20 @@ fn validator(
         ledger,
         &epoch_context_manager,
     );
-    defer replay_senders.destroy();
-    defer replay_receivers.destroy();
+
+    const consensus_deps = if (cfg.disable_consensus)
+        null
+    else
+        try consensusDependencies(allocator, &gossip_service.gossip_table_rw);
+
+    var replay_service = try replay.Service.init(replay_deps, consensus_deps, cfg.replay_threads);
+    defer replay_service.deinit(allocator);
 
     const replay_thread = try app_base.spawnService(
         "replay",
-        sig.replay.service.run,
-        .{ replay_deps, replay.RunConfig{
-            .enable_consensus = if (cfg.disable_consensus)
-                null
-            else
-                .{
-                    .senders = replay_senders,
-                    .receivers = replay_receivers,
-                    .gossip_table = &gossip_service.gossip_table_rw,
-                },
-            .num_threads = cfg.replay_threads,
-        } },
+        .loop,
+        replay.Service.advance,
+        .{&replay_service},
     );
 
     replay_thread.join();
@@ -1347,7 +1344,7 @@ fn replayOffline(
         });
     }
 
-    const replay_deps, const replay_senders, const replay_receivers = try replayDependencies(
+    const replay_deps = try replayDependencies(
         allocator,
         epoch,
         &loaded_snapshot,
@@ -1356,19 +1353,20 @@ fn replayOffline(
         ledger,
         &epoch_context_manager,
     );
-    defer replay_senders.destroy();
-    defer replay_receivers.destroy();
+
+    const consensus_deps = if (cfg.disable_consensus)
+        null
+    else
+        try consensusDependencies(allocator, null);
+
+    var replay_service = try replay.Service.init(replay_deps, consensus_deps, cfg.replay_threads);
+    defer replay_service.deinit(allocator);
 
     const replay_thread = try app_base.spawnService(
         "replay",
-        sig.replay.service.run,
-        .{ replay_deps, replay.RunConfig{
-            .enable_consensus = if (cfg.disable_consensus)
-                null
-            else
-                .{ .senders = replay_senders, .receivers = replay_receivers, .gossip_table = null },
-            .num_threads = cfg.replay_threads,
-        } },
+        .loop,
+        replay.Service.advance,
+        .{&replay_service},
     );
 
     replay_thread.join();
@@ -1876,17 +1874,12 @@ const AppBase = struct {
     pub fn spawnService(
         self: *const AppBase,
         name: []const u8,
+        run_config: sig.utils.service_manager.RunConfig,
         function: anytype,
         args: anytype,
     ) std.Thread.SpawnError!std.Thread {
-        return try sig.utils.service_manager.spawnService(
-            .from(self.logger),
-            self.exit,
-            name,
-            .{},
-            function,
-            args,
-        );
+        return try sig.utils.service_manager
+            .spawnService(.from(self.logger), self.exit, name, run_config, function, args);
     }
 
     /// Signals the shutdown, however it does not block.
@@ -1959,13 +1952,7 @@ fn replayDependencies(
     app_base: *const AppBase,
     ledger: UnifiedLedger,
     epoch_context_manager: *sig.adapter.EpochContextManager,
-) !struct { replay.Dependencies, replay.Senders, replay.Receivers } {
-    const senders: sig.replay.Senders = try .create(allocator);
-    defer senders.destroy();
-
-    const receivers: sig.replay.Receivers = try .create(allocator);
-    defer receivers.destroy();
-
+) !replay.Dependencies {
     const epoch_stakes_map = &loaded_snapshot.collapsed_manifest.bank_extra.versioned_epoch_stakes;
     const epoch_stakes = epoch_stakes_map.get(epoch) orelse
         return error.EpochStakesMissingFromSnapshot;
@@ -1991,7 +1978,7 @@ fn replayDependencies(
     var root_slot_state = try sig.core.SlotState.fromBankFields(allocator, bank_fields, lt_hash);
     errdefer root_slot_state.deinit(allocator);
 
-    const deps = sig.replay.service.Dependencies{
+    return sig.replay.service.Dependencies{
         .allocator = allocator,
         .logger = .from(app_base.logger),
         .my_identity = .fromPublicKey(&app_base.my_keypair.public_key),
@@ -2017,8 +2004,23 @@ fn replayDependencies(
         ),
         .hard_forks = try bank_fields.hard_forks.clone(allocator),
     };
+}
 
-    return .{ deps, senders, receivers };
+fn consensusDependencies(
+    allocator: std.mem.Allocator,
+    gossip_table: ?*sig.sync.RwMux(sig.gossip.GossipTable),
+) !replay.service.ConsensusState.Dependencies {
+    const senders: sig.replay.ConsensusState.Senders = try .create(allocator);
+    defer senders.destroy();
+
+    const receivers: sig.replay.ConsensusState.Receivers = try .create(allocator);
+    defer receivers.destroy();
+
+    return .{
+        .senders = senders,
+        .receivers = receivers,
+        .gossip_table = gossip_table,
+    };
 }
 
 fn spawnLogger(

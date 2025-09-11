@@ -23,7 +23,7 @@ pub const UnifiedLedger = struct {
     db: *LedgerDB,
     reader: *LedgerReader,
     result_writer: *LedgerResultWriter,
-    cleanup_service_handle: std.Thread,
+    cleanup_service_handle: ?std.Thread,
     exit: *std.atomic.Value(bool),
 
     const std = @import("std");
@@ -41,7 +41,7 @@ pub const UnifiedLedger = struct {
     }
 
     pub fn join(self: UnifiedLedger) void {
-        self.cleanup_service_handle.join();
+        if (self.cleanup_service_handle) |handle| handle.join();
     }
 
     pub fn init(
@@ -50,7 +50,8 @@ pub const UnifiedLedger = struct {
         path: []const u8,
         metrics_registry: *sig.prometheus.Registry(.{}),
         exit: *std.atomic.Value(bool),
-        max_shreds: u64,
+        /// If non-null, this function will spawn a cleanup thread.
+        max_shreds: ?u64,
     ) !UnifiedLedger {
         const ledger_db = try allocator.create(LedgerDB);
         errdefer allocator.destroy(ledger_db);
@@ -87,14 +88,17 @@ pub const UnifiedLedger = struct {
             max_root,
         );
 
-        const cleanup_service_handle = try std.Thread.spawn(.{}, cleanup_service.run, .{
-            cleanup_service.Logger.from(logger),
-            ledger_reader,
-            ledger_db,
-            lowest_cleanup_slot,
-            max_shreds,
-            exit,
-        });
+        const cleanup_service_handle = if (max_shreds) |shred_limit|
+            try std.Thread.spawn(.{}, cleanup_service.run, .{
+                cleanup_service.Logger.from(logger),
+                ledger_reader,
+                ledger_db,
+                lowest_cleanup_slot,
+                shred_limit,
+                exit,
+            })
+        else
+            null;
 
         return .{
             .db = ledger_db,
