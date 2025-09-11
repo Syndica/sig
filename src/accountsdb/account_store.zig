@@ -25,12 +25,14 @@ const AccountsDB = accounts_db.AccountsDB;
 pub const AccountStore = union(enum) {
     accounts_db: *AccountsDB,
     thread_safe_map: *ThreadSafeAccountMap,
+    rocks_hybrid: *accounts_db.rocks_hybrid.db.AccountsDB,
     noop,
 
     pub fn reader(self: AccountStore) AccountReader {
         return switch (self) {
             .accounts_db => |db| .{ .accounts_db = db },
             .thread_safe_map => |map| .{ .thread_safe_map = map },
+            .rocks_hybrid => |db| .{ .rocks_hybrid = db },
             .noop => .noop,
         };
     }
@@ -39,6 +41,10 @@ pub const AccountStore = union(enum) {
         return switch (self) {
             .accounts_db => |db| db.putAccount(slot, address, account),
             .thread_safe_map => |map| try map.put(slot, address, account),
+            .rocks_hybrid => |db| db.put(slot, address, .{
+                .fields = account.fields(),
+                .data = account.data,
+            }),
             .noop => {},
         };
     }
@@ -48,6 +54,7 @@ pub const AccountStore = union(enum) {
 pub const AccountReader = union(enum) {
     accounts_db: *AccountsDB,
     thread_safe_map: *ThreadSafeAccountMap,
+    rocks_hybrid: *accounts_db.rocks_hybrid.db.AccountsDB,
     noop,
 
     /// use this to deinit accounts returned by get methods
@@ -62,6 +69,7 @@ pub const AccountReader = union(enum) {
         return switch (self) {
             .accounts_db => |db| .{ .accounts_db = .{ db, ancestors } },
             .thread_safe_map => |map| .{ .thread_safe_map = .{ map, ancestors } },
+            .rocks_hybrid => |db| .{ .rocks_hybrid = .{ db, ancestors } },
             .noop => .noop,
         };
     }
@@ -79,6 +87,7 @@ pub const AccountReader = union(enum) {
                 return account;
             },
             .thread_safe_map => |map| try map.getLatest(address),
+            .rocks_hybrid => @panic("deprecated method unsupported"),
             .noop => null,
         };
     }
@@ -96,6 +105,7 @@ pub const AccountReader = union(enum) {
             .thread_safe_map => |map| .{
                 .thread_safe_map = map.slotModifiedIterator(slot) orelse return null,
             },
+            .rocks_hybrid => @panic("TODO"), // TODO
             .noop => .noop,
         };
     }
@@ -154,6 +164,7 @@ pub const SlotAccountReader = union(enum) {
     /// Contains many versions of accounts and becomes fork-aware using
     /// ancestors, like accountsdb.
     thread_safe_map: struct { *ThreadSafeAccountMap, *const Ancestors },
+    rocks_hybrid: struct { *accounts_db.rocks_hybrid.db.AccountsDB, *const Ancestors },
     /// Only stores the current slot's version of each account.
     /// Should only store borrowed accounts, or else it will panic on deinit.
     single_version_map: *const std.AutoArrayHashMapUnmanaged(Pubkey, Account),
@@ -186,6 +197,7 @@ pub const SlotAccountReader = union(enum) {
                 return account;
             },
             .thread_safe_map => |pair| try pair[0].get(address, pair[1]),
+            .rocks_hybrid => |pair| try pair[0].get(address, pair[1]),
             .single_version_map => |pair| pair.get(address),
             .noop => null,
         };

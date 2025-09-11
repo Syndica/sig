@@ -67,6 +67,15 @@ pub const AccountSharedData = struct {
             self.rent_epoch == other.rent_epoch;
     }
 
+    pub fn fields(self: *const AccountSharedData) sig.core.AccountFields {
+        return .{
+            .lamports = self.lamports,
+            .owner = self.owner,
+            .executable = self.executable,
+            .rent_epoch = self.rent_epoch,
+        };
+    }
+
     /// Copy the old data into the new memory
     /// If the new size is less than the old size, truncate the data
     pub fn resize(

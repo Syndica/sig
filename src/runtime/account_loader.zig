@@ -495,10 +495,7 @@ fn getAccountSharedData(
 ) error{ OutOfMemory, GetAccountFailedUnexpectedly }!?AccountSharedData {
     const account: sig.core.Account = reader.get(pubkey) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
-        error.FileIdNotFound,
-        error.InvalidOffset,
-        error.SlotNotFound,
-        => return error.GetAccountFailedUnexpectedly,
+        else => return error.GetAccountFailedUnexpectedly,
     } orelse return null;
     defer account.deinit(reader.allocator());
 

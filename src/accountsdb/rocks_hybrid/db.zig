@@ -18,6 +18,7 @@ const RootedDB = rocks_hybrid.rooted.RootedDB;
 const Logger = sig.trace.Logger("accountsdb.rocks.db");
 
 pub const AccountsDB = struct {
+    allocator: Allocator,
     unrooted: UnrootedDB,
     rooted: RootedDB,
 
@@ -27,9 +28,14 @@ pub const AccountsDB = struct {
         path: []const u8,
     ) !RootedDB {
         return .{
+            .allocator = allocator,
             .unrooted = .init(allocator),
             .rooted = try .init(allocator, logger, path),
         };
+    }
+
+    pub fn accountStore(self: *AccountsDB) sig.accounts_db.AccountStore {
+        return .{ .rocks_hybrid = self };
     }
 
     pub fn get(

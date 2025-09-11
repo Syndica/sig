@@ -92,12 +92,11 @@ pub const Tower = struct {
         const vote_account = blk: {
             const maybe_vote_account = slot_account_reader.get(vote_account_pubkey.*) catch |err|
                 switch (err) {
-                    error.OutOfMemory,
-                    => |e| return e,
                     error.InvalidOffset,
                     error.FileIdNotFound,
                     error.SlotNotFound,
                     => null,
+                    else => |e| return e,
                 };
             break :blk maybe_vote_account orelse {
                 self.initializeRoot(fork_root);

@@ -13,15 +13,13 @@ const Slot = sig.core.Slot;
 const RwMux = sig.sync.RwMux;
 const ConstRcSlice = sig.sync.ConstRcSlice;
 
-pub const AccountsDB = struct {};
-
 /// Locking rules:
 /// - never hold the lock to the index and the accounts simultaneously. if you
 ///   want to add an account, update the accounts first, then the index. if you
 ///   want to remove an account, update the index first, then the accounts.
 /// - always acquire the outer lock first, then the inner lock
 /// - always release inner lock before outer lock
-const UnrootedDB = struct {
+pub const UnrootedDB = struct {
     allocator: Allocator,
     /// tells you which slot to look for an account
     index: NestedRwLockMap(Pubkey, RingBitSet),
@@ -40,7 +38,7 @@ const UnrootedDB = struct {
     pub fn get(
         self: *UnrootedDB,
         address: Pubkey,
-        ancestors: Ancestors,
+        ancestors: *const Ancestors,
     ) ?OutputAccount {
         const slot_to_check = index: {
             const index, var lock = self.index.read(address) orelse return null;
@@ -54,6 +52,7 @@ const UnrootedDB = struct {
             return null; // slot must have been pruned after releasing above lock
         defer lock.unlock();
         var account = map.get(address) orelse return null;
+        if (account.fields.lamports == 0) return null;
         _ = account.data.acquire();
         return account;
     }

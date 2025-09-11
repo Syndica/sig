@@ -109,10 +109,13 @@ pub const RootedDB = struct {
     };
 
     pub fn get(self: *RootedDB, address: Pubkey) !?OutputAccount {
-        const metadata_bytes = try self.rocksGet(.metadata, &address.bytes) orelse return null;
-        const data = try self.rocksGet(.data, &address.bytes) orelse return null;
+        const metadata_bytes = try self.rocksGet(.metadata, &address.data) orelse return null;
+        errdefer metadata_bytes.deinit();
 
-        const metadata = try AccountMetadata.deserialize(metadata_bytes);
+        const data = try self.rocksGet(.data, &address.data) orelse return null;
+        errdefer data.deinit();
+
+        const metadata = try AccountMetadata.deserialize(metadata_bytes.data);
 
         return .{
             .fields = metadata.fields,
@@ -124,7 +127,7 @@ pub const RootedDB = struct {
     /// helper methods for interacting with rocksdb
     // -----------------------------------------------------
 
-    fn rocksGet(self: RootedDB, comptime cf: ColumnFamily, key: []const u8) !rocks.Data {
+    fn rocksGet(self: RootedDB, comptime cf: ColumnFamily, key: []const u8) !?rocks.Data {
         return try callRocks(
             self.logger,
             rocks.DB.get,
