@@ -20,6 +20,7 @@ const Committer = replay.commit.Committer;
 const ConfirmSlotError = replay.confirm_slot.ConfirmSlotError;
 const ConfirmSlotStatus = replay.confirm_slot.ConfirmSlotStatus;
 const ResolvedTransaction = replay.resolve_lookup.ResolvedTransaction;
+const ResolvedTransactionSerializable = replay.resolve_lookup.ResolvedTransactionSerializable;
 const ResolvedBatch = replay.resolve_lookup.ResolvedBatch;
 const SvmGateway = replay.svm_gateway.SvmGateway;
 
@@ -43,6 +44,7 @@ pub fn processBatch(
     committer: Committer,
     transactions: []const ResolvedTransaction,
     exit: *Atomic(bool),
+    print_txns: bool,
 ) !BatchResult {
     var zone = tracy.Zone.init(@src(), .{ .name = "processBatch" });
     zone.value(transactions.len);
@@ -63,9 +65,50 @@ pub fn processBatch(
     var svm_gateway = try SvmGateway.init(allocator, transactions, svm_params);
     defer svm_gateway.deinit(allocator);
 
+    // SAVE SVM STATE
+    if (print_txns) {
+        const serializable_txns = try allocator.alloc(ResolvedTransactionSerializable, transactions.len);
+        defer allocator.free(serializable_txns);
+        for (transactions, 0..) |txn, i| {
+            serializable_txns[i] = try txn.toSerializable();
+        }
+        const txn_batch_bytes = sig.bincode.writeAlloc(allocator, serializable_txns, .{}) catch "failed to serialize txn batch!!!";
+        defer allocator.free(txn_batch_bytes);
+        var txn_batch_file = try std.fs.cwd().createFile(
+            "validator/ds-txn-batch.bin",
+            .{ .truncate = true },
+        );
+        defer txn_batch_file.close();
+        try txn_batch_file.writeAll(txn_batch_bytes);
+
+        const svm_gateway_bytes = sig.bincode.writeAlloc(allocator, svm_gateway.toSerializable(allocator), .{}) catch "failed to serialize svm gateway params!!!";
+        defer allocator.free(svm_gateway_bytes);
+        var svm_gateway_file = try std.fs.cwd().createFile(
+            "validator/ds-svm-gateway.bin",
+            .{ .truncate = true },
+        );
+        defer svm_gateway_file.close();
+        try svm_gateway_file.writeAll(svm_gateway_bytes);
+
+        const batch_accounts_cache_bytes = sig.bincode.writeAlloc(allocator, svm_gateway.state.accounts.account_cache, .{}) catch "failed to serialize batch account cache!!!";
+        var batch_account_cache_file = try std.fs.cwd().createFile(
+            "validator/ds-batch-account-cache.bin",
+            .{ .truncate = true },
+        );
+        defer batch_account_cache_file.close();
+        defer allocator.free(batch_accounts_cache_bytes);
+        try batch_account_cache_file.writeAll(batch_accounts_cache_bytes);
+    }
+
     for (transactions, 0..) |transaction, i| {
         if (exit.load(.monotonic)) {
             return .exit;
+        }
+
+        if (print_txns) {
+            const txn_bytes = sig.bincode.writeAlloc(allocator, transaction.transaction, .{}) catch "failed to serialize txn!!!";
+            defer allocator.free(txn_bytes);
+            std.debug.print("txn-{}={any}\n", .{ i, txn_bytes });
         }
 
         const hash, const compute_budget_details =
@@ -89,6 +132,7 @@ pub fn processBatch(
         svm_gateway.params.slot,
         transactions,
         results,
+        print_txns,
     );
 
     return .success;
@@ -289,6 +333,7 @@ const ProcessBatchTask = struct {
             self.committer,
             self.transactions,
             self.exit,
+            false,
         );
 
         if (result == .failure) {

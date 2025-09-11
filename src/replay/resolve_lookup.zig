@@ -40,6 +40,14 @@ pub const ResolvedBatch = struct {
     }
 };
 
+pub const ResolvedTransactionSerializable = struct {
+    transaction: Transaction,
+    account_pubkeys: []const sig.core.Pubkey,
+    account_is_writable: []const bool,
+    account_is_signer: []const bool,
+    instructions: []const InstructionInfo,
+};
+
 /// This is a transaction plus the following additions:
 /// - The lookup table addresses have been resolved from accountsdb.
 /// - The instructions have been expanded out to a more useful form for the SVM.
@@ -49,6 +57,16 @@ pub const ResolvedTransaction = struct {
     transaction: Transaction,
     accounts: std.MultiArrayList(InstructionAccount),
     instructions: []const InstructionInfo,
+
+    pub fn toSerializable(self: ResolvedTransaction) !ResolvedTransactionSerializable {
+        return .{
+            .transaction = self.transaction,
+            .account_pubkeys = self.accounts.items(.pubkey),
+            .account_is_writable = self.accounts.items(.is_writable),
+            .account_is_signer = self.accounts.items(.is_signer),
+            .instructions = self.instructions,
+        };
+    }
 
     /// The transaction is not deinitialized since it is borrowed.
     pub fn deinit(self: ResolvedTransaction, allocator: Allocator) void {

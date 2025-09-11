@@ -46,6 +46,7 @@ pub const Committer = struct {
         slot: Slot,
         transactions: []const ResolvedTransaction,
         tx_results: []const struct { Hash, ProcessedTransaction },
+        print_txns: bool,
     ) !void {
         var zone = tracy.Zone.init(@src(), .{ .name = "commitTransactions" });
         zone.value(transactions.len);
@@ -63,7 +64,17 @@ pub const Committer = struct {
         var transaction_fees: u64 = 0;
         var priority_fees: u64 = 0;
 
-        for (transactions, tx_results) |transaction, result| {
+        for (transactions, tx_results, 0..) |transaction, result, i| {
+            if (print_txns) blk: {
+                const result_bytes = sig.bincode.writeAlloc(allocator, result[1], .{}) catch |err| {
+                    std.debug.print("failed to serialize result for transaction: {any}\n", .{err});
+                    break :blk;
+                };
+                defer allocator.free(result_bytes);
+
+                std.debug.print("processing-result-{}={any}\n", .{ i, result_bytes });
+            }
+
             const message_hash, const tx_result = result;
             signature_count += transaction.transaction.signatures.len;
 
@@ -123,6 +134,16 @@ pub const Committer = struct {
         _ = self.slot_state.collected_rent.fetchAdd(rent_collected, .monotonic);
 
         for (accounts_to_store.keys(), accounts_to_store.values()) |pubkey, account| {
+            if (print_txns) {
+                std.debug.print("storing-account: key={} lamports={} owner={} executable={} rent_epoch={} data={any}\n", .{
+                    pubkey,
+                    account.lamports,
+                    account.owner,
+                    account.executable,
+                    account.rent_epoch,
+                    account.data,
+                });
+            }
             try self.stakes_cache.checkAndStore(
                 allocator,
                 pubkey,

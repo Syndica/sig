@@ -143,16 +143,31 @@ pub fn confirmSlotSync(
         defer batch.deinit(allocator);
 
         var exit = Atomic(bool).init(false);
+
+        const print_txns = if (params.svm_params.slot == 356797363) blk: {
+            const truncated_delta_lt_hash = try sig.replay.freeze.truncatedDeltaLtHash(allocator, params.committer.account_store.reader(), params.svm_params.slot, params.svm_params.ancestors);
+            const expected_delta_lt_hash = "0p3zomxwGdm+S6xI";
+            break :blk std.mem.eql(u8, &truncated_delta_lt_hash, expected_delta_lt_hash);
+        } else false;
+
         switch (try replay.scheduler.processBatch(
             allocator,
             params.svm_params,
             params.committer,
             batch.transactions,
             &exit,
+            print_txns,
         )) {
             .success => {},
             .failure => |err| return .{ .invalid_transaction = err },
             .exit => unreachable,
+        }
+
+        if (params.svm_params.slot == 356797363) {
+            std.debug.print(
+                "Processed batch:  delta_lt_hash={s}\n",
+                .{try sig.replay.freeze.truncatedDeltaLtHash(allocator, params.committer.account_store.reader(), params.svm_params.slot, params.svm_params.ancestors)},
+            );
         }
     }
 

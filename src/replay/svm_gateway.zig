@@ -50,6 +50,21 @@ pub fn executeTransaction(
     );
 }
 
+pub const SvmGatewayParamsSerializable = struct {
+    // Simple inputs to copy into the svm
+    slot: u64,
+    max_age: u64,
+    lamports_per_signature: u64,
+
+    // Borrowed values to pass by reference into the SVM.
+    blockhash_queue: BlockhashQueue,
+    ancestors: *const Ancestors,
+    feature_set: FeatureSet,
+    rent_collector: *const RentCollector,
+    epoch_stakes: *const sig.core.EpochStakes,
+    status_cache: *StatusCache,
+};
+
 /// State that needs to be initialized once per batch for the SVM
 ///
 /// This is intended for read-only use across multiple threads simultaneously.
@@ -89,6 +104,20 @@ pub const SvmGateway = struct {
         epoch_stakes: *const sig.core.EpochStakes,
         status_cache: *StatusCache,
     };
+
+    pub fn toSerializable(self: *const SvmGateway, allocator: Allocator) SvmGatewayParamsSerializable {
+        return .{
+            .slot = self.params.slot,
+            .max_age = self.params.max_age,
+            .lamports_per_signature = self.params.lamports_per_signature,
+            .blockhash_queue = self.params.blockhash_queue.private.v.clone(allocator) catch unreachable,
+            .ancestors = self.params.ancestors,
+            .feature_set = self.params.feature_set,
+            .rent_collector = self.params.rent_collector,
+            .epoch_stakes = self.params.epoch_stakes,
+            .status_cache = self.params.status_cache,
+        };
+    }
 
     pub fn init(
         allocator: Allocator,

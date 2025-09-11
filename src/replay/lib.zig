@@ -13,6 +13,7 @@ pub const service = @import("service.zig");
 pub const svm_gateway = @import("svm_gateway.zig");
 pub const trackers = @import("trackers.zig");
 pub const update_sysvar = @import("update_sysvar.zig");
+pub const debug_transaction = @import("debug_transaction.zig");
 
 pub const RunConfig = service.RunConfig;
 pub const Dependencies = service.Dependencies;

@@ -1168,3 +1168,18 @@ test "verify and hash transaction" {
         transaction_v0_example.as_struct.verify(),
     );
 }
+
+test "v0 serialize deserialize" {
+    const allocator = std.testing.allocator;
+
+    const txn = transaction_v0_example.as_struct;
+
+    const serialized_bytes = try sig.bincode.writeAlloc(allocator, txn, .{});
+    defer allocator.free(serialized_bytes);
+
+    const deserialized_txn = try sig.bincode.readFromSlice(allocator, Transaction, serialized_bytes, .{});
+    defer deserialized_txn.deinit(allocator);
+
+    try std.testing.expectEqual(txn.signatures.len, deserialized_txn.signatures.len);
+    try std.testing.expectEqual(txn.version, deserialized_txn.version);
+}
