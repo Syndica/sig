@@ -242,11 +242,11 @@ pub const ProcessedTransaction = union(enum(u8)) {
 
     pub fn accounts(self: *const ProcessedTransaction) Accounts {
         return switch (self.*) {
-            .fees_only => |f| .{ .written = f.rollbacks.accounts() },
-            .executed => |e| if (e.executed_transaction.err != null) .{
+            .fees_only => |*f| .{ .written = f.rollbacks.accounts() },
+            .executed => |*e| if (e.executed_transaction.err != null) .{
                 .written = e.rollbacks.accounts(),
             } else .{
-                .all_loaded = e.loaded_accounts.accounts.slice(),
+                .all_loaded = e.loaded_accounts.accounts.constSlice(),
             },
         };
     }
