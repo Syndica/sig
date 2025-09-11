@@ -2174,3 +2174,112 @@ const TestSlotVoteTracker = struct {
         };
     }
 };
+
+test "processVotesOnce handles missing root ancestors (coverage)" {
+    const allocator = std.testing.allocator;
+
+    var slot_tracker: SlotTracker = try .init(allocator, 0, .{
+        .constants = .{
+            .parent_slot = 0,
+            .parent_hash = .ZEROES,
+            .parent_lt_hash = .IDENTITY,
+            .block_height = 0,
+            .collector_id = .ZEROES,
+            .max_tick_height = 0,
+            .fee_rate_governor = .DEFAULT,
+            .epoch_reward_status = .inactive,
+            .ancestors = .{ .ancestors = .empty },
+            .feature_set = .ALL_DISABLED,
+            .reserved_accounts = .empty,
+        },
+        .state = try .genesis(allocator),
+    });
+    defer slot_tracker.deinit(allocator);
+
+    slot_tracker.root = 1234;
+
+    var epoch_tracker: EpochTracker = .{ .schedule = .DEFAULT };
+    defer epoch_tracker.deinit(allocator);
+
+    var slot_tracker_rw: sig.sync.RwMux(SlotTracker) = .init(slot_tracker);
+    var epoch_tracker_rw: sig.sync.RwMux(EpochTracker) = .init(epoch_tracker);
+    var slot_data_provider: SlotDataProvider = .{
+        .slot_tracker_rw = &slot_tracker_rw,
+        .epoch_tracker_rw = &epoch_tracker_rw,
+    };
+
+    var ledger_db = try sig.ledger.tests.TestDB.init(@src());
+    defer ledger_db.deinit();
+
+    var registry: sig.prometheus.Registry(.{}) = .init(allocator);
+    defer registry.deinit();
+    var lowest_cleanup_slot: sig.sync.RwMux(Slot) = .init(0);
+    var max_root: std.atomic.Value(u64) = .init(0);
+
+    var ledger_reader: sig.ledger.LedgerReader = try .init(
+        allocator,
+        .noop,
+        ledger_db,
+        &registry,
+        &lowest_cleanup_slot,
+        &max_root,
+    );
+    var ledger_writer: sig.ledger.LedgerResultWriter = try .init(
+        allocator,
+        .noop,
+        ledger_db,
+        &registry,
+        &lowest_cleanup_slot,
+        &max_root,
+    );
+
+    const ledger_ref: LedgerRef = .{ .reader = &ledger_reader, .writer = &ledger_writer };
+
+    const replay_votes_channel = try sig.sync.Channel(vote_parser.ParsedVote).create(allocator);
+    defer replay_votes_channel.destroy();
+    const verified_vote_tx_channel = try sig.sync.Channel(Transaction).create(allocator);
+    defer verified_vote_tx_channel.destroy();
+    const verified_vote_channel = try sig.sync.Channel(VerifiedVote).create(allocator);
+    defer verified_vote_channel.destroy();
+    const gossip_verified_vote_hash_channel =
+        try sig.sync.Channel(GossipVerifiedVoteHash).create(allocator);
+    defer gossip_verified_vote_hash_channel.destroy();
+
+    var vote_tracker_state: VoteTracker = .EMPTY;
+    defer vote_tracker_state.deinit(allocator);
+
+    var latest_vote_slot_per_validator: std.AutoArrayHashMapUnmanaged(Pubkey, Slot) = .empty;
+    defer latest_vote_slot_per_validator.deinit(allocator);
+
+    var last_process_root = sig.time.Instant.now().sub(sig.time.Duration.fromSecs(10));
+    var vpt: VoteProcessingTiming = .ZEROES;
+    var confirmation_verifier: OptimisticConfirmationVerifier = .init(.now(), 0);
+    defer confirmation_verifier.deinit(allocator);
+
+    const result = try processVotesOnce(
+        allocator,
+        .noop,
+        &vote_tracker_state,
+        &slot_data_provider,
+        .{
+            .verified_vote = verified_vote_channel,
+            .gossip_verified_vote_hash = gossip_verified_vote_hash_channel,
+            .bank_notification = null,
+            .duplicate_confirmed_slot = null,
+            .subscriptions = .{},
+        },
+        .{
+            .verified_vote_transactions = verified_vote_tx_channel,
+            .replay_votes = replay_votes_channel,
+        },
+        ledger_ref,
+        &confirmation_verifier,
+        &latest_vote_slot_per_validator,
+        &last_process_root,
+        &vpt,
+    );
+
+    try std.testing.expectEqual(.ok, result);
+    // Should have reset last_process_root to "now" (or very recent).
+    try std.testing.expect(last_process_root.elapsed().asMillis() <= DEFAULT_MS_PER_SLOT);
+}
