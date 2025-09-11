@@ -621,6 +621,7 @@ fn transactionAccountsRentState(
             const account = tc.borrowAccountAtIndex(@intCast(i), .{
                 .program_id = Pubkey.ZEROES,
                 .remove_accounts_executable_flag_checks = false,
+                .accounts_lamport_delta = &tc.accounts_lamport_delta,
             }) catch @panic("Account must exist in transaction context");
             defer account.release();
 
@@ -689,6 +690,7 @@ test getInstructionDatasSliceForPrecompiles {
                 .index_in_transaction = 0,
             },
             .account_metas = .{},
+            .dedup_map = @splat(0xff),
             .instruction_data = "data",
             .initial_account_lamports = 0,
         }};
@@ -712,6 +714,7 @@ test getInstructionDatasSliceForPrecompiles {
                     .index_in_transaction = 0,
                 },
                 .account_metas = .{},
+                .dedup_map = @splat(0xff),
                 .instruction_data = "one",
                 .initial_account_lamports = 0,
             },
@@ -721,6 +724,7 @@ test getInstructionDatasSliceForPrecompiles {
                     .index_in_transaction = 0,
                 },
                 .account_metas = .{},
+                .dedup_map = @splat(0xff),
                 .instruction_data = "two",
                 .initial_account_lamports = 0,
             },
@@ -730,6 +734,7 @@ test getInstructionDatasSliceForPrecompiles {
                     .index_in_transaction = 0,
                 },
                 .account_metas = .{},
+                .dedup_map = @splat(0xff),
                 .instruction_data = "three",
                 .initial_account_lamports = 0,
             },
@@ -890,20 +895,22 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
                 .{
                     .pubkey = sender_key,
                     .index_in_transaction = 0,
-                    .index_in_callee = 0,
-                    .index_in_caller = 0,
                     .is_signer = true,
                     .is_writable = true,
                 },
                 .{
                     .pubkey = receiver_key,
                     .index_in_transaction = 1,
-                    .index_in_callee = 1,
-                    .index_in_caller = 1,
                     .is_signer = false,
                     .is_writable = true,
                 },
             }),
+            .dedup_map = blk: {
+                var dedup_map: [InstructionInfo.MAX_ACCOUNT_METAS]u8 = @splat(0xff);
+                dedup_map[0] = 0;
+                dedup_map[1] = 1;
+                break :blk dedup_map;
+            },
             .instruction_data = transfer_instruction_data,
         }},
         .accounts = accounts,
