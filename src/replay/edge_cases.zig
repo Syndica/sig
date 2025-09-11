@@ -41,8 +41,8 @@ pub fn processEdgeCases(
         latest_validator_votes: *LatestValidatorVotes,
         slot_data: *SlotData,
 
-        senders: replay.service.Senders,
-        receivers: replay.service.Receivers,
+        senders: replay.ConsensusState.Senders,
+        receivers: replay.ConsensusState.Receivers,
     },
 ) !ProcessEdgeCaseTimings {
     var timer = try sig.time.Timer.start();
@@ -261,6 +261,10 @@ pub const UnfrozenGossipVerifiedVoteHashes = struct {
             errdefer if (!htv_gop.found_existing) {
                 std.debug.assert(hash_to_votes.swapRemove(htv_gop.key_ptr.*));
             };
+
+            if (!htv_gop.found_existing) {
+                htv_gop.value_ptr.* = .empty;
+            }
 
             try htv_gop.value_ptr.append(allocator, vote_pubkey);
         }

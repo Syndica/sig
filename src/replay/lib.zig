@@ -14,9 +14,6 @@ pub const svm_gateway = @import("svm_gateway.zig");
 pub const trackers = @import("trackers.zig");
 pub const update_sysvar = @import("update_sysvar.zig");
 
-pub const RunConfig = service.RunConfig;
 pub const Dependencies = service.Dependencies;
-pub const Receivers = service.Receivers;
-pub const Senders = service.Senders;
-
-pub const run = service.run;
+pub const ConsensusState = service.ConsensusState;
+pub const Service = service.Service;

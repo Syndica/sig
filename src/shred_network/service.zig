@@ -78,7 +78,6 @@ pub fn start(
         deps.exit,
         "shred network",
         .{},
-        .{},
     );
     const arena = service_manager.arena.allocator();
     const defers = &service_manager.defers; // use this instead of defer statements

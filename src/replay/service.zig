@@ -55,6 +55,42 @@ const MAX_ENTRIES: u64 = 1024 * 1024; // 1 million slots is about 5 days
 const DUPLICATE_LIVENESS_THRESHOLD: f64 = 0.1;
 pub const DUPLICATE_THRESHOLD: f64 = 1.0 - SWITCH_FORK_THRESHOLD - DUPLICATE_LIVENESS_THRESHOLD;
 
+pub const Service = struct {
+    replay: ReplayState,
+    consensus: ?ConsensusState,
+    num_threads: u32,
+
+    pub fn init(
+        deps: Dependencies,
+        enable_consensus: ?ConsensusState.Dependencies,
+        num_threads: u32,
+    ) !Service {
+        var state = try ReplayState.init(deps, num_threads);
+        errdefer state.deinit();
+
+        var consensus: ?ConsensusState = if (enable_consensus) |consensus_deps|
+            try ConsensusState.init(deps, consensus_deps, &state)
+        else
+            null;
+        errdefer if (consensus) |*c| c.deinit(deps.allocator);
+
+        return .{
+            .replay = state,
+            .consensus = consensus,
+            .num_threads = num_threads,
+        };
+    }
+
+    pub fn deinit(self: *Service, allocator: Allocator) void {
+        self.replay.deinit();
+        if (self.consensus) |*c| c.deinit(allocator);
+    }
+
+    pub fn advance(self: *Service) !void {
+        try advanceReplay(&self.replay, &self.consensus, self.num_threads > 1);
+    }
+};
+
 pub const Dependencies = struct {
     /// Used for all allocations within the replay stage
     allocator: Allocator,
@@ -74,11 +110,14 @@ pub const Dependencies = struct {
     /// The slot to start replaying from.
     root: struct {
         slot: Slot,
+        /// ownership transferred to replay
         constants: sig.core.SlotConstants,
+        /// ownership transferred to replay
         state: sig.core.SlotState,
     },
     current_epoch: sig.core.Epoch,
     current_epoch_constants: sig.core.EpochConstants,
+    /// ownership transferred to replay
     hard_forks: sig.core.HardForks,
 };
 
@@ -86,80 +125,6 @@ pub const LedgerRef = struct {
     db: LedgerDB,
     reader: *sig.ledger.LedgerReader,
     writer: *sig.ledger.LedgerResultWriter,
-};
-
-pub const Senders = struct {
-    /// Received by repair [ancestor_hashes_service](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/repair/ancestor_hashes_service.rs#L589)
-    ancestor_hashes_replay_update: *Channel(AncestorHashesReplayUpdate),
-
-    pub fn destroy(self: Senders) void {
-        self.ancestor_hashes_replay_update.destroy();
-    }
-
-    pub fn create(allocator: std.mem.Allocator) std.mem.Allocator.Error!Senders {
-        return .{
-            .ancestor_hashes_replay_update = try .create(allocator),
-        };
-    }
-};
-
-pub const Receivers = struct {
-    /// Sent by repair [ancestor_hashes_service](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/repair/ancestor_hashes_service.rs#L240)
-    ancestor_duplicate_slots: *Channel(AncestorDuplicateSlotToRepair),
-    /// Sent by vote_listener:
-    /// - `Senders`'s `duplicate_confirmed_slot` field.
-    /// - agave's [vote listener](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/cluster_info_vote_listener.rs#L204)
-    duplicate_confirmed_slots: *Channel(ThresholdConfirmedSlot),
-    /// Sent by vote_listener:
-    /// - `Sender`'s `gossip_verified_vote_hash` field.
-    /// - agave's [vote listener](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/cluster_info_vote_listener.rs#L200)
-    gossip_verified_vote_hash: *Channel(GossipVerifiedVoteHash),
-    /// Sent by [repair service](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/repair/repair_service.rs#L423)
-    popular_pruned_forks: *Channel(Slot),
-    /// Sent by two things:
-    ///   - [WindowService](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/window_service.rs#L275)
-    ///   - DuplicateShredListener/DuplicateShredHandler:
-    ///       - [intialization](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/tvu.rs#L368)
-    ///       - [direct implementation usage](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/gossip/src/duplicate_shred_handler.rs#L150)
-    ///       - [indirect interface usage](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/gossip/src/duplicate_shred_handler.rs#L61)
-    ///       - [relevant interface invokation](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/gossip/src/duplicate_shred_listener.rs#L31)
-    duplicate_slots: *Channel(Slot),
-
-    pub fn destroy(self: Receivers) void {
-        self.ancestor_duplicate_slots.destroy();
-        self.duplicate_confirmed_slots.destroy();
-        self.gossip_verified_vote_hash.destroy();
-        self.popular_pruned_forks.destroy();
-        self.duplicate_slots.destroy();
-    }
-
-    pub fn create(allocator: std.mem.Allocator) std.mem.Allocator.Error!Receivers {
-        const ancestor_duplicate_slots: *Channel(AncestorDuplicateSlotToRepair) =
-            try .create(allocator);
-        errdefer ancestor_duplicate_slots.destroy();
-
-        const duplicate_confirmed_slots: *Channel(ThresholdConfirmedSlot) =
-            try .create(allocator);
-        errdefer duplicate_confirmed_slots.destroy();
-
-        const gossip_verified_vote_hash: *Channel(GossipVerifiedVoteHash) =
-            try .create(allocator);
-        errdefer gossip_verified_vote_hash.destroy();
-
-        const popular_pruned_forks: *Channel(Slot) = try .create(allocator);
-        errdefer popular_pruned_forks.destroy();
-
-        const duplicate_slots: *Channel(Slot) = try .create(allocator);
-        errdefer duplicate_slots.destroy();
-
-        return .{
-            .ancestor_duplicate_slots = ancestor_duplicate_slots,
-            .duplicate_confirmed_slots = duplicate_confirmed_slots,
-            .gossip_verified_vote_hash = gossip_verified_vote_hash,
-            .popular_pruned_forks = popular_pruned_forks,
-            .duplicate_slots = duplicate_slots,
-        };
-    }
 };
 
 const ReplayState = struct {
@@ -198,6 +163,7 @@ const ReplayState = struct {
 
         self.progress_map.deinit(self.allocator);
         self.replay_votes_channel.destroy();
+        self.slot_tree.deinit(self.allocator);
     }
 
     fn init(deps: Dependencies, num_threads: u32) !ReplayState {
@@ -219,7 +185,7 @@ const ReplayState = struct {
         try epoch_tracker.epochs
             .put(deps.allocator, deps.current_epoch, deps.current_epoch_constants);
 
-        const progress_map = try replay.service.initProgressMap(
+        const progress_map = try initProgressMap(
             deps.allocator,
             &slot_tracker,
             &epoch_tracker,
@@ -281,7 +247,7 @@ const ReplayState = struct {
     }
 };
 
-const ConsensusState = struct {
+pub const ConsensusState = struct {
     fork_choice: HeaviestSubtreeForkChoice,
     replay_tower: sig.consensus.ReplayTower,
     latest_validator_votes: LatestValidatorVotes,
@@ -302,10 +268,84 @@ const ConsensusState = struct {
         self.vote_tracker.deinit(allocator);
     }
 
-    const Dependencies = struct {
+    pub const Dependencies = struct {
         senders: Senders,
         receivers: Receivers,
         gossip_table: ?*RwMux(sig.gossip.GossipTable),
+    };
+
+    pub const Senders = struct {
+        /// Received by repair [ancestor_hashes_service](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/repair/ancestor_hashes_service.rs#L589)
+        ancestor_hashes_replay_update: *Channel(AncestorHashesReplayUpdate),
+
+        pub fn destroy(self: Senders) void {
+            self.ancestor_hashes_replay_update.destroy();
+        }
+
+        pub fn create(allocator: std.mem.Allocator) std.mem.Allocator.Error!Senders {
+            return .{
+                .ancestor_hashes_replay_update = try .create(allocator),
+            };
+        }
+    };
+
+    pub const Receivers = struct {
+        /// Sent by repair [ancestor_hashes_service](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/repair/ancestor_hashes_service.rs#L240)
+        ancestor_duplicate_slots: *Channel(AncestorDuplicateSlotToRepair),
+        /// Sent by vote_listener:
+        /// - `Senders`'s `duplicate_confirmed_slot` field.
+        /// - agave's [vote listener](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/cluster_info_vote_listener.rs#L204)
+        duplicate_confirmed_slots: *Channel(ThresholdConfirmedSlot),
+        /// Sent by vote_listener:
+        /// - `Sender`'s `gossip_verified_vote_hash` field.
+        /// - agave's [vote listener](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/cluster_info_vote_listener.rs#L200)
+        gossip_verified_vote_hash: *Channel(GossipVerifiedVoteHash),
+        /// Sent by [repair service](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/repair/repair_service.rs#L423)
+        popular_pruned_forks: *Channel(Slot),
+        /// Sent by two things:
+        ///   - [WindowService](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/window_service.rs#L275)
+        ///   - DuplicateShredListener/DuplicateShredHandler:
+        ///       - [intialization](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/tvu.rs#L368)
+        ///       - [direct implementation usage](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/gossip/src/duplicate_shred_handler.rs#L150)
+        ///       - [indirect interface usage](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/gossip/src/duplicate_shred_handler.rs#L61)
+        ///       - [relevant interface invokation](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/gossip/src/duplicate_shred_listener.rs#L31)
+        duplicate_slots: *Channel(Slot),
+
+        pub fn destroy(self: Receivers) void {
+            self.ancestor_duplicate_slots.destroy();
+            self.duplicate_confirmed_slots.destroy();
+            self.gossip_verified_vote_hash.destroy();
+            self.popular_pruned_forks.destroy();
+            self.duplicate_slots.destroy();
+        }
+
+        pub fn create(allocator: std.mem.Allocator) std.mem.Allocator.Error!Receivers {
+            const ancestor_duplicate_slots: *Channel(AncestorDuplicateSlotToRepair) =
+                try .create(allocator);
+            errdefer ancestor_duplicate_slots.destroy();
+
+            const duplicate_confirmed_slots: *Channel(ThresholdConfirmedSlot) =
+                try .create(allocator);
+            errdefer duplicate_confirmed_slots.destroy();
+
+            const gossip_verified_vote_hash: *Channel(GossipVerifiedVoteHash) =
+                try .create(allocator);
+            errdefer gossip_verified_vote_hash.destroy();
+
+            const popular_pruned_forks: *Channel(Slot) = try .create(allocator);
+            errdefer popular_pruned_forks.destroy();
+
+            const duplicate_slots: *Channel(Slot) = try .create(allocator);
+            errdefer duplicate_slots.destroy();
+
+            return .{
+                .ancestor_duplicate_slots = ancestor_duplicate_slots,
+                .duplicate_confirmed_slots = duplicate_confirmed_slots,
+                .gossip_verified_vote_hash = gossip_verified_vote_hash,
+                .popular_pruned_forks = popular_pruned_forks,
+                .duplicate_slots = duplicate_slots,
+            };
+        }
     };
 
     fn init(
@@ -549,30 +589,6 @@ pub fn initForkChoice(
     return heaviest_subtree_fork_choice;
 }
 
-pub const RunConfig = struct {
-    enable_consensus: ?ConsensusState.Dependencies,
-    num_threads: u32,
-};
-
-/// Run the replay service indefinitely.
-pub fn run(deps: Dependencies, config: RunConfig) !void {
-    const zone = tracy.Zone.init(@src(), .{ .name = "run (replay service)" });
-    defer zone.deinit();
-
-    var state = try ReplayState.init(deps, config.num_threads);
-    defer state.deinit();
-
-    var consensus: ?ConsensusState = if (config.enable_consensus) |consensus_deps|
-        try ConsensusState.init(deps, consensus_deps, &state)
-    else
-        null;
-    defer if (consensus) |*c| c.deinit(deps.allocator);
-
-    while (!deps.exit.load(.monotonic)) {
-        try advanceReplay(&state, &consensus, config.num_threads > 1);
-    }
-}
-
 /// Run a single iteration of the entire replay process. Includes:
 /// - replay all active slots that have not been replayed yet
 /// - running consensus on the latest updates (if present)
@@ -643,7 +659,7 @@ fn doConsensus(
         const process_state, var slot_lock, var epoch_lock = processResultState(state, consensus);
         defer slot_lock.unlock();
         defer epoch_lock.unlock();
-        if (try processResult(process_state, result.slot, result.entries, result.maybe_err)) {
+        if (try processResult(process_state, result)) {
             processed_a_slot = true;
         }
     }
@@ -738,26 +754,32 @@ fn bypassConsensus(state: *ReplayState, results: []const ReplayResult) !bool {
         const slot_tracker, var slot_tracker_lg = state.slot_tracker.readWithLock();
         defer slot_tracker_lg.unlock();
 
-        for (results) |result| {
-            const slot = result.slot;
-            const slot_info = slot_tracker.get(slot) orelse return error.MissingSlotInTracker;
-            if (slot_info.state.tickHeight() == slot_info.constants.max_tick_height) {
-                state.logger.info().logf("finished replaying slot: {}", .{slot});
-                const epoch = epoch_tracker.getForSlot(slot) orelse return error.MissingEpoch;
-                try replay.freeze.freezeSlot(state.allocator, .init(
-                    .from(state.logger),
-                    state.account_store,
-                    &epoch,
-                    slot_info.state,
-                    slot_info.constants,
-                    slot,
-                    result.entries[result.entries.len - 1].hash,
-                ));
-                processed_a_slot = true;
-            } else {
-                state.logger.info().logf("partially replayed slot: {}", .{slot});
-            }
-        }
+        for (results) |result| switch (result.output) {
+            .err => |err| state.logger.err().logf(
+                "replayed slot {} with error: {}",
+                .{ result.slot, err },
+            ),
+            .last_entry_hash => |last_entry_hash| {
+                const slot = result.slot;
+                const slot_info = slot_tracker.get(slot) orelse return error.MissingSlotInTracker;
+                if (slot_info.state.tickHeight() == slot_info.constants.max_tick_height) {
+                    state.logger.info().logf("finished replaying slot: {}", .{slot});
+                    const epoch = epoch_tracker.getForSlot(slot) orelse return error.MissingEpoch;
+                    try replay.freeze.freezeSlot(state.allocator, .init(
+                        .from(state.logger),
+                        state.account_store,
+                        &epoch,
+                        slot_info.state,
+                        slot_info.constants,
+                        slot,
+                        last_entry_hash,
+                    ));
+                    processed_a_slot = true;
+                } else {
+                    state.logger.info().logf("partially replayed slot: {}", .{slot});
+                }
+            },
+        };
     }
 
     if (state.slot_tree.reRoot(state.allocator)) |new_root| {
@@ -1212,3 +1234,136 @@ fn expectSlotTracker(
         try std.testing.expectEqual(null, slot_tracker.get(slot));
     }
 }
+
+test "Service clean init and deinit" {
+    const allocator = std.testing.allocator;
+
+    var dep_stubs = try DependencyStubs.init(allocator);
+    defer dep_stubs.deinit(allocator);
+
+    var service = try dep_stubs.initService(allocator);
+    defer service.deinit(allocator);
+
+    dep_stubs.exit.store(true, .monotonic);
+}
+
+/// Basic stubs for state that's supposed to be initialized outside replay,
+/// outlive replay, and is used by replay.
+const DependencyStubs = struct {
+    accountsdb: sig.accounts_db.ThreadSafeAccountMap,
+    exit: std.atomic.Value(bool),
+    registry: sig.prometheus.Registry(.{}),
+    dir: std.testing.TmpDir,
+    ledger_path: []const u8,
+    ledger: sig.ledger.UnifiedLedger,
+    senders: ConsensusState.Senders,
+    receivers: ConsensusState.Receivers,
+
+    fn deinit(self: *DependencyStubs, allocator: Allocator) void {
+        self.accountsdb.deinit();
+        self.registry.deinit();
+        self.dir.cleanup();
+        allocator.free(self.ledger_path);
+        self.ledger.deinit(allocator);
+        self.senders.destroy();
+        self.receivers.destroy();
+    }
+
+    fn init(allocator: Allocator) !DependencyStubs {
+        var accountsdb = sig.accounts_db.ThreadSafeAccountMap.init(allocator);
+        errdefer accountsdb.deinit();
+
+        var exit = std.atomic.Value(bool).init(false);
+
+        var registry = sig.prometheus.Registry(.{}).init(allocator);
+        errdefer registry.deinit();
+
+        var dir = std.testing.tmpDir(.{});
+        errdefer dir.cleanup();
+
+        const ledger_path = try dir.dir.realpathAlloc(allocator, ".");
+        errdefer allocator.free(ledger_path);
+
+        var ledger = try sig.ledger.UnifiedLedger
+            .init(allocator, .FOR_TESTS, ledger_path, &registry, &exit, null);
+        errdefer ledger.deinit(allocator);
+
+        var senders = try ConsensusState.Senders.create(allocator);
+        errdefer senders.destroy();
+
+        var receivers = try ConsensusState.Receivers.create(allocator);
+        errdefer receivers.destroy();
+
+        return .{
+            .accountsdb = accountsdb,
+            .exit = .init(false),
+            .registry = registry,
+            .dir = dir,
+            .ledger_path = ledger_path,
+            .ledger = ledger,
+            .senders = senders,
+            .receivers = receivers,
+        };
+    }
+
+    /// Initialize replay service with stubbed inputs
+    /// (some inputs from this struct, some just stubbed directly)
+    fn initService(self: *DependencyStubs, allocator: Allocator) !Service {
+        var rng = std.Random.DefaultPrng.init(0);
+        const random = rng.random();
+
+        var leader = Pubkey.initRandom(random);
+
+        const root_slot_constants = try sig.core.SlotConstants.genesis(allocator, .DEFAULT);
+        errdefer root_slot_constants.deinit(allocator);
+
+        var root_slot_state = try SlotState.genesis(allocator);
+        errdefer root_slot_state.deinit(allocator);
+
+        { // this is to essentially root the slot
+            root_slot_state.hash.set(.ZEROES);
+            var bhq = root_slot_state.blockhash_queue.write();
+            defer bhq.unlock();
+            try bhq.mut().insertGenesisHash(allocator, .ZEROES, 0);
+        }
+
+        const epoch = try sig.core.EpochConstants.genesis(allocator, .default(allocator));
+        errdefer epoch.deinit(allocator);
+
+        const deps = Dependencies{
+            .allocator = allocator,
+            .logger = .FOR_TESTS,
+            .my_identity = .initRandom(random),
+            .vote_identity = .initRandom(random),
+            .exit = &self.exit,
+            .epoch_schedule = .DEFAULT,
+            .account_store = self.accountsdb.accountStore(),
+            .ledger = .{
+                .db = self.ledger.db.*,
+                .reader = self.ledger.reader,
+                .writer = self.ledger.result_writer,
+            },
+            .slot_leaders = SlotLeaders.init(&leader, struct {
+                pub fn get(pubkey: *Pubkey, _: Slot) ?Pubkey {
+                    return pubkey.*;
+                }
+            }.get),
+            .root = .{
+                .slot = 0,
+                .constants = root_slot_constants,
+                .state = root_slot_state,
+            },
+            .current_epoch = 0,
+            .current_epoch_constants = epoch,
+            .hard_forks = .{},
+        };
+
+        const consensus_deps = ConsensusState.Dependencies{
+            .senders = self.senders,
+            .receivers = self.receivers,
+            .gossip_table = null,
+        };
+
+        return try Service.init(deps, consensus_deps, 1);
+    }
+};
