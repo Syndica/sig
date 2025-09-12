@@ -309,7 +309,22 @@ pub fn createInstructionInfo(
         if (account.pubkey.equals(&program_id)) break index;
     } else return error.CouldNotFindProgramAccount;
 
-    const account_metas = try createInstructionInfoAccountMetas(tc, accounts_params);
+    var dedup_map: [InstructionInfo.MAX_ACCOUNT_METAS]u8 = @splat(0xff);
+    var account_metas = InstructionInfo.AccountMetas{};
+    for (accounts_params, 0..) |acc, idx| {
+        if (acc.index_in_transaction >= tc.accounts.len)
+            return error.AccountIndexOutOfBounds;
+
+        if (dedup_map[acc.index_in_transaction] == 0xff)
+            dedup_map[acc.index_in_transaction] = @intCast(idx);
+
+        try account_metas.append(.{
+            .pubkey = tc.accounts[acc.index_in_transaction].pubkey,
+            .index_in_transaction = acc.index_in_transaction,
+            .is_signer = acc.is_signer,
+            .is_writable = acc.is_writable,
+        });
+    }
 
     const instruction_data = if (@TypeOf(instruction) == []const u8)
         try tc.allocator.dupe(u8, instruction)
@@ -326,53 +341,16 @@ pub fn createInstructionInfo(
             .index_in_transaction = @intCast(program_index_in_transaction),
         },
         .account_metas = account_metas,
+        .dedup_map = dedup_map,
         .instruction_data = instruction_data,
     };
 }
 
 pub const InstructionInfoAccountMetaParams = struct {
     index_in_transaction: u16,
-    index_in_caller: ?u16 = null,
-    index_in_callee: ?u16 = null,
     is_signer: bool = false,
     is_writable: bool = false,
 };
-
-pub fn createInstructionInfoAccountMetas(
-    tc: *const TransactionContext,
-    account_meta_params: []const InstructionInfoAccountMetaParams,
-) !InstructionInfo.AccountMetas {
-    if (!builtin.is_test)
-        @compileError("createInstructionContextAccountMetas should only be called in test mode");
-
-    var account_metas = InstructionInfo.AccountMetas{};
-    for (account_meta_params, 0..) |acc, idx| {
-        if (acc.index_in_transaction >= tc.accounts.len)
-            return error.AccountIndexOutOfBounds;
-
-        const index_in_callee = blk: {
-            for (0..idx) |i| {
-                if (acc.index_in_transaction ==
-                    account_meta_params[i].index_in_transaction)
-                {
-                    break :blk i;
-                }
-            }
-            break :blk idx;
-        };
-
-        try account_metas.append(.{
-            .pubkey = tc.accounts[acc.index_in_transaction].pubkey,
-            .index_in_transaction = acc.index_in_transaction,
-            .index_in_caller = acc.index_in_caller orelse acc.index_in_transaction,
-            .index_in_callee = acc.index_in_callee orelse @intCast(index_in_callee),
-            .is_signer = acc.is_signer,
-            .is_writable = acc.is_writable,
-        });
-    }
-
-    return account_metas;
-}
 
 pub fn expectTransactionContextEqual(
     expected: TransactionContext,
