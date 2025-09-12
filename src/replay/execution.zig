@@ -658,10 +658,15 @@ const TestReplayStateResources = struct {
         self.progress = ProgressMap.INIT;
 
         self.fork_choice = try allocator.create(HeaviestSubtreeForkChoice);
-        self.fork_choice.* = try HeaviestSubtreeForkChoice.init(allocator, .noop, .{
-            .slot = 0,
-            .hash = Hash.ZEROES,
-        });
+        self.fork_choice.* = try HeaviestSubtreeForkChoice.init(
+            allocator,
+            .noop,
+            .{
+                .slot = 0,
+                .hash = Hash.ZEROES,
+            },
+            &self.registry,
+        );
 
         self.duplicate_slots_tracker = DuplicateSlots.empty;
         self.unfrozen_gossip_verified_vote_hashes = UnfrozenGossipVerifiedVoteHashes{

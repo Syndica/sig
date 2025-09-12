@@ -55,6 +55,11 @@ pub const VOTE_THRESHOLD_SIZE: f64 = 2.0 / 3.0;
 pub const ExpirationSlot = Slot;
 const VotedSlotAndPubkey = struct { slot: Slot, pubkey: Pubkey };
 
+pub const LastVoteSignal = enum {
+    normal,
+    stray,
+};
+
 const ComputedBankState = struct {
     /// Maps each validator (by their Pubkey) to the amount of stake they have voted
     /// with on this fork. Helps determine who has already committed to this
@@ -191,6 +196,7 @@ pub const ReplayTower = struct {
     /// bank_forks (=~ ledger) lacks the slot or not.
     stray_restored_slot: ?Slot,
     last_switch_threshold_check: ?struct { Slot, SwitchForkDecision },
+    metrics: ReplayTowerMetrics,
 
     const Self = @This();
 
@@ -201,6 +207,7 @@ pub const ReplayTower = struct {
         vote_account_pubkey: Pubkey,
         fork_root: Slot,
         slot_account_reader: sig.accounts_db.SlotAccountReader,
+        registry: *sig.prometheus.Registry(.{}),
     ) !ReplayTower {
         var tower = Tower.init(.from(logger));
         try tower.initializeLockoutsFromBank(
@@ -221,6 +228,7 @@ pub const ReplayTower = struct {
             .last_timestamp = BlockTimestamp.ZEROES,
             .stray_restored_slot = null,
             .last_switch_threshold_check = null,
+            .metrics = try ReplayTowerMetrics.init(registry),
         };
     }
 
@@ -311,9 +319,15 @@ pub const ReplayTower = struct {
         // TODO expose feature set on Bank
         const is_enable_tower_active = true;
 
-        const new_root = try self.tower.recordBankVoteAndUpdateLockouts(
+        const new_root = self.tower.recordBankVoteAndUpdateLockouts(
             vote_slot,
-        );
+        ) catch |err| switch (err) {
+            error.VoteTooOld => {
+                self.metrics.stale_votes_rejected.inc();
+                return err;
+            },
+            else => return err,
+        };
 
         try self.updateLastVoteFromVoteState(
             allocator,
@@ -895,9 +909,22 @@ pub const ReplayTower = struct {
         return allocator.dupe(ThresholdDecision, threshold_decisions[0..index]);
     }
 
+    fn lastVoteSignal(self: *const ReplayTower) LastVoteSignal {
+        return if (self.stray_restored_slot != null and
+            self.stray_restored_slot == self.lastVotedSlot())
+            .stray
+        else
+            .normal;
+    }
+
     pub fn isStrayLastVote(self: *const ReplayTower) bool {
-        return (self.stray_restored_slot != null and
-            self.stray_restored_slot == self.lastVotedSlot());
+        const signal = self.lastVoteSignal();
+
+        if (signal == .stray) {
+            self.metrics.stray_restored_slots.inc();
+        }
+
+        return signal == .stray;
     }
 
     /// Adjusts the tower's lockouts after a replay of the ledger up to `replayed_root`.
@@ -1451,6 +1478,7 @@ pub const ReplayTower = struct {
             &failure_reasons,
             &candidate_slots.switch_fork_decision,
         )) {
+            self.metrics.switch_fork_decision.observe(candidate_slots.switch_fork_decision);
             return SelectVoteAndResetForkResult{
                 .vote_slot = .{
                     .slot = candidate_vote_slot,
@@ -3781,6 +3809,8 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
 
     var empty_ancestors: Ancestors = .EMPTY;
 
+    var registry = sig.prometheus.Registry(.{}).init(allocator);
+    defer registry.deinit();
     var replay_tower = try ReplayTower.init(
         allocator,
         .noop,
@@ -3788,6 +3818,7 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
         Pubkey.ZEROES,
         root.slot,
         accountsdb.accountReader().forSlot(&empty_ancestors),
+        &registry,
     );
     defer replay_tower.deinit(allocator);
 
@@ -3975,7 +4006,9 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
         else => try std.testing.expect(false), // Fail if not LockedOut
     }
 
-    var split = try fixture.fork_choice.splitOff(allocator, hash6);
+    var test_registry = sig.prometheus.Registry(.{}).init(allocator);
+    defer test_registry.deinit();
+    var split = try fixture.fork_choice.splitOff(allocator, &test_registry, hash6);
     defer split.deinit();
 
     const forks5 = try fixture.select_fork_slots(&replay_tower);
@@ -4021,6 +4054,72 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
 
 test "test tower sync from bank failed lockout" {}
 
+test "test VoteTooOld error triggers trackStaleVoteRejected" {
+    var tower = try createTestReplayTower(1, 0.67);
+    defer tower.deinit(std.testing.allocator);
+
+    // Record a vote for slot 5
+    _ = try tower.recordBankVote(
+        std.testing.allocator,
+        5,
+        Hash.ZEROES,
+    );
+
+    // Get initial counter value
+    const initial_stale_votes = tower.metrics.stale_votes_rejected.get();
+
+    // Try to record a vote for an older slot (should trigger VoteTooOld)
+    const result = tower.recordBankVote(
+        std.testing.allocator,
+        3, // Older than slot 5
+        Hash.ZEROES,
+    );
+
+    // Should return VoteTooOld error
+    try std.testing.expectError(error.VoteTooOld, result);
+
+    // Check that stale vote rejected counter was incremented
+    const final_stale_votes = tower.metrics.stale_votes_rejected.get();
+    try std.testing.expectEqual(initial_stale_votes + 1, final_stale_votes);
+}
+
+test "switch_fork_decision - switch_proof" {
+    var registry = sig.prometheus.Registry(.{}).init(std.testing.allocator);
+    defer registry.deinit();
+    var metrics = try ReplayTowerMetrics.init(&registry);
+
+    const decision = SwitchForkDecision{ .switch_proof = Hash.ZEROES };
+    metrics.switch_fork_decision.observe(decision);
+
+    try std.testing.expectEqual(Hash.ZEROES, decision.switch_proof);
+}
+
+test "switch_fork_decision - failed_switch_threshold" {
+    var registry = sig.prometheus.Registry(.{}).init(std.testing.allocator);
+    defer registry.deinit();
+    var metrics = try ReplayTowerMetrics.init(&registry);
+
+    const decision = SwitchForkDecision{ .failed_switch_threshold = .{
+        .switch_proof_stake = 200,
+        .total_stake = 1000,
+    } };
+    metrics.switch_fork_decision.observe(decision);
+
+    try std.testing.expectEqual(200, decision.failed_switch_threshold.switch_proof_stake);
+    try std.testing.expectEqual(1000, decision.failed_switch_threshold.total_stake);
+}
+
+test "switch_fork_decision - failed_switch_duplicate_rollback" {
+    var registry = sig.prometheus.Registry(.{}).init(std.testing.allocator);
+    defer registry.deinit();
+    var metrics = try ReplayTowerMetrics.init(&registry);
+
+    const decision = SwitchForkDecision{ .failed_switch_duplicate_rollback = 50 };
+    metrics.switch_fork_decision.observe(decision);
+
+    try std.testing.expectEqual(50, decision.failed_switch_duplicate_rollback);
+}
+
 const builtin = @import("builtin");
 const DynamicArrayBitSet = sig.bloom.bit_set.DynamicArrayBitSet;
 
@@ -4043,6 +4142,7 @@ pub fn createTestReplayTower(
         .last_timestamp = BlockTimestamp.ZEROES,
         .stray_restored_slot = null,
         .last_switch_threshold_check = null,
+        .metrics = try ReplayTowerMetrics.init(sig.prometheus.globalRegistry()),
     };
 
     replay_tower.threshold_depth = threshold_depth;
@@ -4190,7 +4290,12 @@ pub const TestFixture = struct {
 
         return .{
             .slot_tracker = slot_tracker,
-            .fork_choice = try HeaviestSubtreeForkChoice.init(allocator, .noop, root),
+            .fork_choice = try HeaviestSubtreeForkChoice.init(
+                allocator,
+                .noop,
+                root,
+                sig.prometheus.globalRegistry(),
+            ),
             .node_pubkeys = .empty,
             .vote_pubkeys = .empty,
             .epoch_stakes = .{},
@@ -4608,3 +4713,16 @@ fn genStakes(
     }
     return map;
 }
+
+pub const ReplayTowerMetrics = struct {
+    switch_fork_decision: *sig.prometheus.VariantCounter(SwitchForkDecision),
+
+    stale_votes_rejected: *sig.prometheus.Counter,
+    stray_restored_slots: *sig.prometheus.Counter,
+
+    pub const prefix = "replay_tower";
+
+    pub fn init(registry: *sig.prometheus.Registry(.{})) !ReplayTowerMetrics {
+        return try registry.initStruct(ReplayTowerMetrics);
+    }
+};

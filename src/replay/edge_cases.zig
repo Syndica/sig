@@ -1463,10 +1463,15 @@ const TestData = struct {
         );
         errdefer slot_tracker.deinit(allocator);
 
-        var fork_choice: HeaviestSubtreeForkChoice = try .init(allocator, .from(logger), .{
-            .slot = root_slot,
-            .hash = slot_infos[root_slot].hash,
-        });
+        var fork_choice: HeaviestSubtreeForkChoice = try .init(
+            allocator,
+            .from(logger),
+            .{
+                .slot = root_slot,
+                .hash = slot_infos[root_slot].hash,
+            },
+            sig.prometheus.globalRegistry(),
+        );
         errdefer fork_choice.deinit();
 
         var progress: ProgressMap = .INIT;
