@@ -138,7 +138,9 @@ fn processNextInstruction(
             return InstructionError.UnsupportedProgramId;
         defer program_account.release();
 
-        if (ids.NATIVE_LOADER_ID.equals(&program_account.account.owner))
+        const program_key = program_account.pubkey.base58String().constSlice();
+        if (ids.NATIVE_LOADER_ID.equals(&program_account.account.owner) or
+            program.PRECOMPILE_ENTRYPOINTS.get(program_key) != null)
             break :blk .{ program_account.pubkey, program_account.pubkey };
 
         const owner_id = program_account.account.owner;

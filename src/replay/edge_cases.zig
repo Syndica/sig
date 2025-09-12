@@ -41,8 +41,8 @@ pub fn processEdgeCases(
         latest_validator_votes: *LatestValidatorVotes,
         slot_data: *SlotData,
 
-        senders: replay.service.Senders,
-        receivers: replay.service.Receivers,
+        senders: replay.ConsensusState.Senders,
+        receivers: replay.ConsensusState.Receivers,
     },
 ) !ProcessEdgeCaseTimings {
     var timer = try sig.time.Timer.start();

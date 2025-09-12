@@ -30,7 +30,7 @@ const ShredReceiverMetrics = shred_network.shred_receiver.ShredReceiverMetrics;
 
 /// Settings which instruct the Shred Network how to behave.
 pub const ShredNetworkConfig = struct {
-    start_slot: Slot,
+    root_slot: Slot,
     repair_port: u16,
     /// tvu port in agave
     turbine_recv_port: u16,
@@ -78,7 +78,6 @@ pub fn start(
         deps.exit,
         "shred network",
         .{},
-        .{},
     );
     const arena = service_manager.arena.allocator();
     const defers = &service_manager.defers; // use this instead of defer statements
@@ -106,7 +105,7 @@ pub fn start(
         .unverified_shred_sender = unverified_shred_channel,
         .shred_version = deps.my_shred_version,
         .metrics = try deps.registry.initStruct(ShredReceiverMetrics),
-        .root_slot = conf.start_slot -| 1,
+        .root_slot = conf.root_slot,
     };
     try service_manager.spawn("Shred Receiver", ShredReceiver.run, .{shred_receiver});
 
@@ -128,7 +127,7 @@ pub fn start(
     const shred_tracker = try arena.create(BasicShredTracker);
     shred_tracker.* = try BasicShredTracker.init(
         deps.allocator,
-        conf.start_slot,
+        conf.root_slot + 1,
         .from(deps.logger),
         deps.registry,
     );
@@ -245,7 +244,7 @@ test "start and stop gracefully" {
     const allocator = std.testing.allocator;
 
     const config = ShredNetworkConfig{
-        .start_slot = 0,
+        .root_slot = 0,
         .repair_port = 50304,
         .turbine_recv_port = 50305,
         .retransmit = true,

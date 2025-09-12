@@ -36,7 +36,7 @@ pub const StatusCache = struct {
 
     const HighestFork = struct { slot: Slot, index: usize, key_map: KeyMap };
 
-    const MAX_CACHE_ENTRIES = sig.accounts_db.snapshots.MAX_RECENT_BLOCKHASHES;
+    const MAX_CACHE_ENTRIES = sig.accounts_db.snapshot.data.MAX_RECENT_BLOCKHASHES;
 
     pub const DEFAULT = StatusCache{
         .cache = .init(.empty),

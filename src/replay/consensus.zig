@@ -34,15 +34,13 @@ const SlotTracker = sig.replay.trackers.SlotTracker;
 const EpochTracker = sig.replay.trackers.EpochTracker;
 const SlotData = sig.replay.edge_cases.SlotData;
 
+const collectVoteLockouts = sig.consensus.replay_tower.collectVoteLockouts;
+const isDuplicateSlotConfirmed = sig.consensus.replay_tower.isDuplicateSlotConfirmed;
 const check_slot_agrees_with_cluster = sig.replay.edge_cases.check_slot_agrees_with_cluster;
-
-pub const isDuplicateSlotConfirmed = sig.consensus.replay_tower.isDuplicateSlotConfirmed;
-
-pub const collectVoteLockouts = sig.consensus.replay_tower.collectVoteLockouts;
 
 const MAX_VOTE_REFRESH_INTERVAL_MILLIS: usize = 5000;
 
-pub const ConsensusDependencies = struct {
+pub const ConsensusParams = struct {
     allocator: Allocator,
     logger: Logger,
     replay_tower: *ReplayTower,
@@ -61,52 +59,47 @@ pub const ConsensusDependencies = struct {
     ancestor_hashes_replay_update_sender: *sig.sync.Channel(AncestorHashesReplayUpdate),
 };
 
-pub fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
-    const deps = if (maybe_deps) |deps|
-        deps
-    else
-        return error.Todo;
-
+pub fn processConsensus(params: ConsensusParams) !void {
     var epoch_stakes_map: EpochStakesMap = .empty;
-    defer epoch_stakes_map.deinit(deps.allocator);
+    defer epoch_stakes_map.deinit(params.allocator);
 
-    try epoch_stakes_map.ensureTotalCapacity(deps.allocator, deps.epoch_tracker.epochs.count());
+    try epoch_stakes_map.ensureTotalCapacity(params.allocator, params.epoch_tracker.epochs.count());
 
-    for (deps.epoch_tracker.epochs.keys(), deps.epoch_tracker.epochs.values()) |key, constants| {
+    for (params.epoch_tracker.epochs.keys(), params.epoch_tracker.epochs.values()) |key, constants| {
         epoch_stakes_map.putAssumeCapacity(key, constants.stakes);
     }
 
     const newly_computed_slot_stats = try computeBankStats(
-        deps.allocator,
-        deps.logger,
-        deps.vote_account,
-        deps.ancestors,
-        deps.slot_tracker,
-        &deps.epoch_tracker.schedule,
+        params.allocator,
+        params.logger,
+        params.vote_account,
+        params.ancestors,
+        params.slot_tracker,
+        &params.epoch_tracker.schedule,
         &epoch_stakes_map,
-        deps.progress_map,
-        deps.fork_choice,
-        deps.replay_tower,
-        deps.latest_validator_votes_for_frozen_banks,
+        params.progress_map,
+        params.fork_choice,
+        params.replay_tower,
+        params.latest_validator_votes_for_frozen_banks,
     );
-    defer deps.allocator.free(newly_computed_slot_stats);
+    defer params.allocator.free(newly_computed_slot_stats);
 
     for (newly_computed_slot_stats) |slot_stat| {
-        const fork_stats = deps.progress_map.getForkStats(slot_stat) orelse
+        const fork_stats = params.progress_map.getForkStats(slot_stat) orelse
             return error.MissingSlotInForkStats;
         // Analogous to [ReplayStage::tower_duplicate_confirmed_forks](https://github.com/anza-xyz/agave/blob/47c0383f2301e5a739543c1af9992ae182b7e06c/core/src/replay_stage.rs#L3928)
         var duplicate_confirmed_forks: std.ArrayListUnmanaged(SlotAndHash) = .empty;
-        defer duplicate_confirmed_forks.deinit(deps.allocator);
+        defer duplicate_confirmed_forks.deinit(params.allocator);
         try duplicate_confirmed_forks.ensureTotalCapacity(
-            deps.allocator,
-            deps.progress_map.map.count(),
+            params.allocator,
+            params.progress_map.map.count(),
         );
-        for (deps.progress_map.map.keys(), deps.progress_map.map.values()) |slot, prog| {
+        for (params.progress_map.map.keys(), params.progress_map.map.values()) |slot, prog| {
             if (prog.fork_stats.duplicate_confirmed_hash != null) {
                 continue;
             }
 
-            const slot_info = deps.slot_tracker.get(slot) orelse
+            const slot_info = params.slot_tracker.get(slot) orelse
                 return error.MissingSlotInSlotTracker;
             if (!slot_info.state.isFrozen()) {
                 continue;
@@ -126,18 +119,19 @@ pub fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
         }
 
         // Analogous to [ReplayStage::mark_slots_duplicate_confirmed](https://github.com/anza-xyz/agave/blob/47c0383f2301e5a739543c1af9992ae182b7e06c/core/src/replay_stage.rs#L3876)
-        const root_slot = deps.slot_tracker.root;
+        const root_slot = params.slot_tracker.root;
         for (duplicate_confirmed_forks.items) |duplicate_confirmed_fork| {
             const slot, const frozen_hash = duplicate_confirmed_fork.tuple();
             std.debug.assert(!frozen_hash.eql(Hash.ZEROES));
             if (slot <= root_slot) {
                 continue;
             }
-            var f_stats = deps.progress_map.getForkStats(slot) orelse return error.MissingForkStats;
+            var f_stats = params.progress_map.getForkStats(slot) orelse
+                return error.MissingForkStats;
             f_stats.duplicate_confirmed_hash = frozen_hash;
 
-            if (try deps.slot_data.duplicate_confirmed_slots.fetchPut(
-                deps.allocator,
+            if (try params.slot_data.duplicate_confirmed_slots.fetchPut(
+                params.allocator,
                 slot,
                 frozen_hash,
             )) |prev_entry| {
@@ -151,25 +145,25 @@ pub fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
                 .slot_status = sig.replay.edge_cases.SlotStatus.fromHash(frozen_hash),
             };
             try check_slot_agrees_with_cluster.duplicateConfirmed(
-                deps.allocator,
+                params.allocator,
                 .noop,
                 slot,
                 root_slot,
-                deps.ledger_result_writer,
-                deps.fork_choice,
-                &deps.slot_data.duplicate_slots_to_repair,
-                deps.ancestor_hashes_replay_update_sender,
-                &deps.slot_data.purge_repair_slot_counter,
+                params.ledger_result_writer,
+                params.fork_choice,
+                &params.slot_data.duplicate_slots_to_repair,
+                params.ancestor_hashes_replay_update_sender,
+                &params.slot_data.purge_repair_slot_counter,
                 duplicate_confirmed_state,
             );
         }
     }
 
-    const heaviest_slot = deps.fork_choice.heaviestOverallSlot().slot;
+    const heaviest_slot = params.fork_choice.heaviestOverallSlot().slot;
     const heaviest_slot_on_same_voted_fork =
-        (try deps.fork_choice.heaviestSlotOnSameVotedFork(deps.replay_tower)) orelse null;
+        (try params.fork_choice.heaviestSlotOnSameVotedFork(params.replay_tower)) orelse null;
 
-    const heaviest_epoch: Epoch = deps.epoch_tracker.schedule.getEpoch(heaviest_slot);
+    const heaviest_epoch: Epoch = params.epoch_tracker.schedule.getEpoch(heaviest_slot);
 
     const now = sig.time.Instant.now();
     var last_vote_refresh_time: LastVoteRefreshTime = .{
@@ -177,33 +171,33 @@ pub fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
         .last_print_time = now,
     };
 
-    var vote_and_reset_forks = try deps.replay_tower.selectVoteAndResetForks(
-        deps.allocator,
+    var vote_and_reset_forks = try params.replay_tower.selectVoteAndResetForks(
+        params.allocator,
         heaviest_slot,
         if (heaviest_slot_on_same_voted_fork) |h| h.slot else null,
         heaviest_epoch,
-        deps.ancestors,
-        deps.descendants,
-        deps.progress_map,
-        deps.latest_validator_votes_for_frozen_banks,
-        deps.fork_choice,
+        params.ancestors,
+        params.descendants,
+        params.progress_map,
+        params.latest_validator_votes_for_frozen_banks,
+        params.fork_choice,
         &epoch_stakes_map,
-        deps.slot_history_accessor,
+        params.slot_history_accessor,
     );
-    defer vote_and_reset_forks.deinit(deps.allocator);
+    defer vote_and_reset_forks.deinit(params.allocator);
     const maybe_voted_slot = vote_and_reset_forks.vote_slot;
     const maybe_reset_slot = vote_and_reset_forks.reset_slot;
 
     if (maybe_voted_slot == null) {
         _ = maybeRefreshLastVote(
-            deps.replay_tower,
-            deps.progress_map,
+            params.replay_tower,
+            params.progress_map,
             if (heaviest_slot_on_same_voted_fork) |h| h.slot else null,
             &last_vote_refresh_time,
         );
     }
 
-    if (deps.replay_tower.tower.isRecent(heaviest_slot) and
+    if (params.replay_tower.tower.isRecent(heaviest_slot) and
         vote_and_reset_forks.heaviest_fork_failures.items.len != 0)
     {
         // TODO Implemented the Self::log_heaviest_fork_failures
@@ -211,7 +205,7 @@ pub fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
 
     // Vote on the fork
     if (maybe_voted_slot) |voted| {
-        const slot_tracker = deps.slot_tracker;
+        const slot_tracker = params.slot_tracker;
         const found_slot_info = slot_tracker.get(voted.slot) orelse
             return error.MissingSlot;
 
@@ -219,14 +213,14 @@ pub fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
             return error.MissingSlotInTracker;
 
         try handleVotableBank(
-            deps.allocator,
-            deps.ledger_result_writer,
+            params.allocator,
+            params.ledger_result_writer,
             voted.slot,
             voted_hash,
-            deps.slot_tracker,
-            deps.replay_tower,
-            deps.progress_map,
-            deps.fork_choice,
+            params.slot_tracker,
+            params.replay_tower,
+            params.progress_map,
+            params.fork_choice,
         );
     }
 
@@ -1883,7 +1877,7 @@ test "processConsensus - no duplicate confirmed without votes" {
 
     const slot_history_accessor = SlotHistoryAccessor.init(tsm1.accountReader());
 
-    const deps: ConsensusDependencies = .{
+    const deps: ConsensusParams = .{
         .allocator = testing.allocator,
         .logger = .noop,
         .replay_tower = &replay_tower,
@@ -2036,7 +2030,7 @@ test "processConsensus - duplicate-confirmed is idempotent" {
 
     const slot_history_accessor = SlotHistoryAccessor.init(tsm2.accountReader());
 
-    const deps: ConsensusDependencies = .{
+    const deps: ConsensusParams = .{
         .allocator = testing.allocator,
         .logger = .noop,
         .replay_tower = &replay_tower,

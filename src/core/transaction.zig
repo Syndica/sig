@@ -156,7 +156,6 @@ pub const Transaction = struct {
         std.debug.assert(data.signatures.len <= std.math.maxInt(u16));
         try leb.writeULEB128(writer, @as(u16, @intCast(data.signatures.len)));
         for (data.signatures) |sgn| try writer.writeAll(&sgn.data);
-        try data.version.serialize(writer);
         try data.msg.serialize(writer, data.version);
     }
 
@@ -448,6 +447,8 @@ pub const Message = struct {
     }
 
     pub fn serialize(self: Message, writer: anytype, version: Version) !void {
+        try version.serialize(writer);
+
         try writer.writeByte(self.signature_count);
         try writer.writeByte(self.readonly_signed_count);
         try writer.writeByte(self.readonly_unsigned_count);

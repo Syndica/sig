@@ -2,7 +2,7 @@
 
 const std = @import("std");
 const zstd = @import("zstd");
-const sig = @import("../sig.zig");
+const sig = @import("../../sig.zig");
 const base58 = @import("base58");
 const tracy = @import("tracy");
 
@@ -596,6 +596,21 @@ pub const Manifest = struct {
         }
         return if (self.bank_extra.versioned_epoch_stakes.getPtr(epoch)) |es|
             &es.current.stakes.vote_accounts.staked_nodes
+        else
+            return error.NoEpochStakes;
+    }
+
+    pub fn epochVoteAccounts(
+        self: *const Manifest,
+        epoch: Epoch,
+    ) !*const sig.core.vote_accounts.StakeAndVoteAccountsMap {
+        if (self.bank_fields.epoch_stakes.getPtr(epoch)) |_| {
+            // Agave simply ignores this field. I've added this log message just
+            // as a sanity check, but I don't expect to ever see it.
+            std.log.warn("ignoring deprecated epoch stakes", .{});
+        }
+        return if (self.bank_extra.versioned_epoch_stakes.getPtr(epoch)) |es|
+            &es.current.stakes.vote_accounts.vote_accounts
         else
             return error.NoEpochStakes;
     }

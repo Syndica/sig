@@ -191,24 +191,33 @@ fn distributeTransactionFees(
     collected_transaction_fees: u64,
     collected_priority_fees: u64,
 ) !void {
-    var burn = collected_transaction_fees * 50 / 100;
+    var burn = collected_transaction_fees * rent.burn_percent / 100;
     const total_fees = collected_priority_fees + collected_transaction_fees;
     const payout = total_fees -| burn;
-    tryPayoutFees(
-        allocator,
-        account_store,
-        account_reader,
-        rent,
-        slot,
-        collector_id,
-        payout,
-    ) catch |e| switch (e) {
-        error.InvalidAccountOwner,
-        error.LamportOverflow,
-        error.InvalidRentPayingAccount,
-        => burn = total_fees,
-        else => return e,
-    };
+
+    if (payout > 0) blk: {
+        const post_balance = tryPayoutFees(
+            allocator,
+            account_store,
+            account_reader,
+            rent,
+            slot,
+            collector_id,
+            payout,
+        ) catch |err| switch (err) {
+            error.InvalidAccountOwner,
+            error.LamportOverflow,
+            error.InvalidRentPayingAccount,
+            => {
+                burn = total_fees;
+                break :blk;
+            },
+            else => return err,
+        };
+        // TODO: record rewards returned by tryPayoutFees
+        _ = post_balance;
+    }
+
     _ = capitalization.fetchSub(burn, .monotonic);
 }
 
@@ -221,7 +230,7 @@ fn tryPayoutFees(
     slot: Slot,
     collector_id: Pubkey,
     payout: u64,
-) !void {
+) !u64 {
     var fee_collector_account =
         if (try account_reader.get(collector_id)) |old_account|
             AccountSharedData{
@@ -244,6 +253,8 @@ fn tryPayoutFees(
     }
 
     try account_store.put(slot, collector_id, fee_collector_account);
+
+    return fee_collector_account.lamports;
 }
 
 pub const HashSlotParams = struct {

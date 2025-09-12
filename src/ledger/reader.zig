@@ -1550,7 +1550,6 @@ pub const AncestorIterator = struct {
 };
 
 const bincode = sig.bincode;
-const Ledger = ledger.LedgerDB;
 const CodeShred = ledger.shred.CodeShred;
 const TestDB = ledger.tests.TestDB;
 
