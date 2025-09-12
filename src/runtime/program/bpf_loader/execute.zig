@@ -1799,15 +1799,9 @@ pub fn executeV3Migrate(
             },
         }
 
-        var resize_delta: i64 = undefined;
-        try program_account.setDataLength(allocator, &resize_delta, 0); // set_data_from_slice(&[])
+        try program_account.setDataLength(allocator, &ic.tc.accounts_resize_delta, 0);
         try program_account.addLamports(progdata_info.funds);
-
-        if (progdata_info.len == 0) {
-            try program_account.setOwner(system_program.ID);
-        } else {
-            try program_account.setOwner(bpf_loader_program.v4.ID);
-        }
+        try program_account.setOwner(bpf_loader_program.v4.ID);
     }
 
     {
@@ -1818,7 +1812,13 @@ pub fn executeV3Migrate(
         try programdata.setLamports(0);
     }
 
-    if (progdata_info.len > 0) {
+    if (progdata_info.len == 0) {
+        // Close the program map entry.
+        const gop = try ic.tc.program_map.getOrPut(allocator, program_key);
+        if (gop.found_existing) gop.value_ptr.deinit(allocator);
+        gop.value_ptr.* = .failed; 
+
+    } else {
         try ic.nativeInvoke(
             allocator,
             bpf_loader_program.v4.ID,
@@ -1866,21 +1866,7 @@ pub fn executeV3Migrate(
             &.{},
         );
 
-        if (progdata_info.upgrade_key) |upgrade_key| {
-            try ic.nativeInvoke(
-                allocator,
-                bpf_loader_program.v4.ID,
-                bpf_loader_program.v4.Instruction{
-                    .transfer_authority = .{},
-                },
-                &.{
-                    .{ .pubkey = program_key, .is_signer = false, .is_writable = true },
-                    .{ .pubkey = provided_authority_key, .is_signer = true, .is_writable = false },
-                    .{ .pubkey = upgrade_key, .is_signer = true, .is_writable = false },
-                },
-                &.{},
-            );
-        } else {
+        if (progdata_info.upgrade_key == null) {
             try ic.nativeInvoke(
                 allocator,
                 bpf_loader_program.v4.ID,
@@ -1894,6 +1880,21 @@ pub fn executeV3Migrate(
                 },
                 &.{},
             );
+        } else if (provided_authority_key.equals(&migration_authority)) {
+            const upgrade_key = progdata_info.upgrade_key.?;
+            try ic.nativeInvoke(
+                allocator,
+                bpf_loader_program.v4.ID,
+                bpf_loader_program.v4.Instruction{
+                    .transfer_authority = .{},
+                },
+                &.{
+                    .{ .pubkey = program_key, .is_signer = false, .is_writable = true },
+                    .{ .pubkey = provided_authority_key, .is_signer = true, .is_writable = false },
+                    .{ .pubkey = upgrade_key, .is_signer = true, .is_writable = false },
+                },
+                &.{},
+            );
         }
     }
 
@@ -1902,10 +1903,7 @@ pub fn executeV3Migrate(
             @intFromEnum(AccountIndex.program_data),
         );
         defer programdata.release();
-
-        var resize_delta: i64 = undefined;
-        try programdata.setDataLength(allocator, &resize_delta, 0); // set_data_from_slice(&[])
-        try programdata.setOwner(system_program.ID);
+        try programdata.setDataLength(allocator, &ic.tc.accounts_resize_delta, 0);
     }
 
     try ic.tc.log("Migrated program {any}", .{program_key});
@@ -1966,10 +1964,7 @@ pub fn deployProgram(
     defer executable.deinit(allocator);
 
     executable.verify(&environment.loader) catch |err| {
-        try tc.log(
-            "executable failed to verify: pubkey={s} error={s}",
-            .{ program_id, @errorName(err) },
-        );
+        try tc.log("{s}", .{@errorName(err)});
         return InstructionError.InvalidAccountData;
     };
 

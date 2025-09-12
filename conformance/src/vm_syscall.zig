@@ -137,23 +137,13 @@ fn executeSyscall(
         .bpf_account_data_direct_mapping,
         tc.slot,
     );
-    const config = VmConfig{
-        .max_call_depth = tc.compute_budget.max_call_depth,
-        .stack_frame_size = tc.compute_budget.stack_frame_size,
-        .enable_address_translation = true,
-        .instruction_meter_checkpoint_distance = 10_000,
-        .enable_instruction_meter = true,
-        .enable_instruction_tracing = debugging_features,
-        .enable_symbol_and_section_labels = debugging_features,
-        .reject_broken_elfs = reject_broken_elfs,
-        .noop_instruction_rate = 256,
-        .sanitize_user_provided_values = true,
-        .optimize_rodata = false,
-        .aligned_memory_mapping = !direct_mapping,
-        .enable_stack_frame_gaps = !direct_mapping,
-        .maximum_version = .v0,
-        .minimum_version = .v0,
-    };
+    const config = sig.vm.Environment.initV1Config(
+        tc.feature_set,
+        &tc.compute_budget,
+        tc.slot,
+        debugging_features,
+        reject_broken_elfs,
+    );
     vm_environment.config = config;
 
     // Set return data
