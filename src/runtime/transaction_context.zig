@@ -89,7 +89,7 @@ pub const TransactionContext = struct {
     compute_budget: ComputeBudget,
 
     /// If an error other than an InstructionError occurs during execution its value will
-    /// be set here and InstructionError.custom will be returned
+    /// be set here and InstructionError.Custom will be returned
     custom_error: ?u32 = null,
 
     log_collector: ?LogCollector = null,

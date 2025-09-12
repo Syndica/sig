@@ -66,9 +66,9 @@ pub fn execute(
     // borrow wrt Agave's implementation. It should not cause an issue but is worth noting.
     // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L458-L518
     bpf_program.execute(allocator, ic) catch |err| {
-        _, const kind, const msg = sig.vm.convertExecutionError(err);
+        const kind = sig.vm.getExecutionErrorKind(err);
         if (kind != .Instruction) {
-            try sig.runtime.stable_log.programFailure(ic.tc, ic.ixn_info.program_meta.pubkey, msg);
+            try sig.runtime.stable_log.programFailure(ic.tc, ic.ixn_info.program_meta.pubkey, err);
             return InstructionError.ProgramFailedToComplete;
         } else {
             return sig.vm.instructionErrorFromExecutionError(err);
@@ -1816,8 +1816,7 @@ pub fn executeV3Migrate(
         // Close the program map entry.
         const gop = try ic.tc.program_map.getOrPut(allocator, program_key);
         if (gop.found_existing) gop.value_ptr.deinit(allocator);
-        gop.value_ptr.* = .failed; 
-
+        gop.value_ptr.* = .failed;
     } else {
         try ic.nativeInvoke(
             allocator,

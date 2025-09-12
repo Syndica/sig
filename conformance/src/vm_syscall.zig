@@ -303,17 +303,18 @@ fn executeSyscall(
 
     var @"error": i64, var error_kind: pb.ErrKind = .{ 0, .UNSPECIFIED };
     if (execution_error) |err| {
-        const e, const ek, const msg = convertExecutionError(err);
-        @"error" = e;
+        @"error", const ek, _ = convertExecutionError(err);
         error_kind = switch (ek) {
             .Instruction => .INSTRUCTION,
             .Syscall => .SYSCALL,
             .Ebpf => .EBPF,
         };
         // Agave doesn't log Poseidon errors
-        if (e != -1) {
-            try sig.runtime.stable_log.programFailure(&tc, instr_info.program_meta.pubkey, msg);
-        }
+        if (@"error" != -1) try sig.runtime.stable_log.programFailure(
+            &tc,
+            instr_info.program_meta.pubkey,
+            err,
+        );
     }
 
     // Special casing to return only the custom error for transactions which have

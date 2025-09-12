@@ -141,10 +141,19 @@ pub fn programSuccess(tc: *TransactionContext, program_id: Pubkey) !void {
 pub fn programFailure(
     tc: *TransactionContext,
     program_id: Pubkey,
-    err: []const u8,
+    err: sig.vm.ExecutionError,
 ) !void {
     if (tc.log_collector) |*lc| {
-        try lc.log(tc.allocator, "Program {} failed: {s}", .{ program_id, err });
+        if (err == error.Custom) {
+            try lc.log(
+                tc.allocator,
+                "Program {} failed: custom program error: 0x{x}",
+                .{ program_id, tc.custom_error.? },
+            );
+        } else {
+            const msg = sig.vm.getExecutionErrorMessage(err);
+            try lc.log(tc.allocator, "Program {} failed: {s}", .{ program_id, msg });
+        }
     }
 }
 
@@ -173,7 +182,7 @@ test "stable_log" {
     try programData(&tc, &.{ "data0", "data1" });
     try programReturn(&tc, program_id, "return");
     try programSuccess(&tc, program_id);
-    try programFailure(&tc, program_id, "error");
+    try programFailure(&tc, program_id, error.FunctionAlreadyRegistered);
 
     const expected: []const []const u8 = &.{
         "Program SigDefau1tPubkey111111111111111111111111111 invoke [0]",
@@ -181,7 +190,7 @@ test "stable_log" {
         "Program data: ZGF0YTA= ZGF0YTE=",
         "Program return: SigDefau1tPubkey111111111111111111111111111 cmV0dXJu",
         "Program SigDefau1tPubkey111111111111111111111111111 success",
-        "Program SigDefau1tPubkey111111111111111111111111111 failed: error",
+        "Program SigDefau1tPubkey111111111111111111111111111 failed: function was already registered",
     };
     const actual = tc.log_collector.?.collect();
 
