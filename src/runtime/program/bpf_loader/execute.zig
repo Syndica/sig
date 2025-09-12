@@ -1730,22 +1730,23 @@ pub fn executeV3Migrate(
             return InstructionError.InvalidArgument;
         }
 
-        const program_len, const upgrade_key = switch (try programdata.deserializeFromAccountData(
-            allocator,
-            V3State,
-        )) {
-            .program_data => |data| blk: {
-                if (clock.slot == data.slot) {
-                    try ic.tc.log("Program was deployed in this block already", .{});
-                    return InstructionError.InvalidArgument;
-                }
+        const program_len, const upgrade_key = blk: {
+            const state = programdata.deserializeFromAccountData(allocator, V3State) catch
+                break :blk .{ 0, null };
+            switch (state) {
+                .program_data => |data| {
+                    if (clock.slot == data.slot) {
+                        try ic.tc.log("Program was deployed in this block already", .{});
+                        return InstructionError.InvalidArgument;
+                    }
 
-                const program_len: u32 = @intCast(programdata.constAccountData().len -|
-                    V3State.PROGRAM_DATA_METADATA_SIZE);
+                    const program_len: u32 = @intCast(programdata.constAccountData().len -|
+                        V3State.PROGRAM_DATA_METADATA_SIZE);
 
-                break :blk .{ program_len, data.upgrade_authority_address };
-            },
-            else => .{ 0, null },
+                    break :blk .{ program_len, data.upgrade_authority_address };
+                },
+                else => break :blk .{ 0, null },
+            }
         };
 
         break :info .{
