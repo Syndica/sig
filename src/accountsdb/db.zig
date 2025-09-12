@@ -1948,7 +1948,7 @@ pub const AccountsDB = struct {
         pubkey: Pubkey,
         account: sig.runtime.AccountSharedData,
     ) !void {
-        const duplicated = Account{
+        const duplicated: Account = .{
             .data = .{ .owned_allocation = try self.allocator.dupe(u8, account.data) },
             .executable = account.executable,
             .lamports = account.lamports,
@@ -1956,9 +1956,7 @@ pub const AccountsDB = struct {
             .rent_epoch = account.rent_epoch,
         };
         var inserted_duplicate: bool = false;
-        defer {
-            if (!inserted_duplicate) duplicated.deinit(self.allocator);
-        }
+        defer if (!inserted_duplicate) duplicated.deinit(self.allocator);
 
         if (self.geyser_writer) |geyser_writer| {
             try geyser_writer.writePayloadToPipe(.{
@@ -1980,11 +1978,17 @@ pub const AccountsDB = struct {
             });
         }
 
+        // NOTE: take note of the ordering here between the two locks(!) reversal could cause a deadlock.
+        const slot_ref_map, var slot_ref_map_lg =
+            self.account_index.slot_reference_map.writeWithLock();
+        defer slot_ref_map_lg.unlock();
+
         // look for existing account at this slot and overwrite in-place if present.
         search_and_overwrite: {
-            const head_ref, var lock = self.account_index.pubkey_ref_map.getRead(&pubkey) orelse
+            const head_ref, var head_ref_lg =
+                self.account_index.pubkey_ref_map.getWrite(&pubkey) orelse
                 break :search_and_overwrite;
-            defer lock.unlock();
+            defer head_ref_lg.unlock();
 
             const min_slot = if (slot == 0) null else slot - 1;
             const ref = slotListMaxWithinBounds(head_ref.ref_ptr, min_slot, slot) orelse
@@ -1995,8 +1999,9 @@ pub const AccountsDB = struct {
                 else => return error.CannotWriteRootedSlot,
             };
 
-            const unrooted_accounts, var unrooted_lock = self.unrooted_accounts.readWithLock();
-            defer unrooted_lock.unlock();
+            const unrooted_accounts, var unrooted_accounts_lg =
+                self.unrooted_accounts.writeWithLock();
+            defer unrooted_accounts_lg.unlock();
 
             const slot_list = unrooted_accounts.get(ref.slot) orelse return error.SlotNotFound;
             const slot_accounts: []Account = slot_list.items(.account);
@@ -2016,8 +2021,11 @@ pub const AccountsDB = struct {
             defer unrooted_accounts_lg.unlock();
 
             const entry = try unrooted_accounts.getOrPut(slot);
-
             if (!entry.found_existing) entry.value_ptr.* = .empty;
+            errdefer if (!entry.found_existing) {
+                entry.value_ptr.deinit(self.allocator);
+                unrooted_accounts.removeByPtr(entry.key_ptr);
+            };
             try entry.value_ptr.append(
                 self.allocator,
                 .{ .account = duplicated, .pubkey = pubkey },
@@ -2025,25 +2033,32 @@ pub const AccountsDB = struct {
             inserted_duplicate = true;
         }
 
-        // prealloc the ref map space
-        {
-            const shard_map_rw = self.account_index.pubkey_ref_map.getShard(&pubkey);
-            const shard_map, var shard_map_lg = shard_map_rw.writeWithLock();
-            defer shard_map_lg.unlock();
-
-            try shard_map.ensureTotalCapacity(1 + shard_map.count());
-        }
-
         // update index
-        try self.expandSlotRefsAndInsert(slot, &.{pubkey});
+        try self.expandSlotRefsAndInsertWithSlotMapLocked(
+            slot,
+            &.{pubkey},
+            slot_ref_map,
+        );
     }
 
-    fn expandSlotRefsAndInsert(self: *AccountsDB, slot: Slot, pubkeys: []const Pubkey) !void {
-        std.debug.assert(pubkeys.len > 0);
-
+    fn expandSlotRefsAndInsert(
+        self: *AccountsDB,
+        slot: Slot,
+        pubkeys: []const Pubkey,
+    ) !void {
         // NOTE: take note of the ordering here between the two locks(!) reversal could cause a deadlock.
         const slot_ref_map, var lock = self.account_index.slot_reference_map.writeWithLock();
         defer lock.unlock();
+        try self.expandSlotRefsAndInsertWithSlotMapLocked(slot, pubkeys, slot_ref_map);
+    }
+
+    fn expandSlotRefsAndInsertWithSlotMapLocked(
+        self: *AccountsDB,
+        slot: Slot,
+        pubkeys: []const Pubkey,
+        slot_ref_map: *AccountIndex.SlotRefMap,
+    ) !void {
+        std.debug.assert(pubkeys.len > 0);
         const reference_manager = self.account_index.reference_manager;
 
         const slot_gop = try slot_ref_map.getOrPut(slot);
