@@ -649,7 +649,7 @@ test "swissmap resize" {
     // this will resize the map with the key still in there
     try map.ensureTotalCapacity(200);
     const get_ref = map.get(sig.core.Pubkey.ZEROES) orelse return error.MissingAccount;
-    try std.testing.expect(std.meta.eql(get_ref, ref));
+    try std.testing.expectEqual(get_ref, ref);
 }
 
 test "swissmap read/write/delete" {
