@@ -10,8 +10,6 @@ pub const Ancestors = struct {
     // agave uses a "RollingBitField" which seems to be just an optimisation for a set
     ancestors: HashMap(Slot, void) = .{},
 
-    pub const EMPTY: Ancestors = .{ .ancestors = .empty };
-
     // For some reason, agave serializes Ancestors as HashMap(slot, usize). But deserializing
     // ignores the usize, and serializing just uses the value 0. So we need to serialize void
     // as if it's 0, and deserialize 0 as if it's void.
@@ -23,8 +21,38 @@ pub const Ancestors = struct {
         },
     );
 
-    pub fn addSlot(self: *Ancestors, allocator: std.mem.Allocator, slot: Slot) !void {
-        try self.ancestors.put(allocator, slot, {});
+    pub const EMPTY: Ancestors = .{ .ancestors = .empty };
+
+    pub fn deinit(self: Ancestors, allocator: std.mem.Allocator) void {
+        var ancestors = self.ancestors;
+        ancestors.deinit(allocator);
+    }
+
+    pub fn initWithSlots(
+        allocator: std.mem.Allocator,
+        slots: []const Slot,
+    ) std.mem.Allocator.Error!Ancestors {
+        var new: Ancestors = .EMPTY;
+        errdefer new.deinit(allocator);
+        try new.ancestors.ensureTotalCapacity(allocator, slots.len);
+        for (slots) |slot| new.addSlotAssumeCapacity(slot);
+        return new;
+    }
+
+    pub fn addSlot(
+        self: *Ancestors,
+        allocator: std.mem.Allocator,
+        slot: Slot,
+    ) std.mem.Allocator.Error!void {
+        try self.ancestors.ensureUnusedCapacity(allocator, 1);
+        self.addSlotAssumeCapacity(slot);
+    }
+
+    pub fn addSlotAssumeCapacity(
+        self: *Ancestors,
+        slot: Slot,
+    ) void {
+        self.ancestors.putAssumeCapacity(slot, {});
     }
 
     pub fn containsSlot(self: *const Ancestors, slot: Slot) bool {
@@ -44,7 +72,17 @@ pub const Ancestors = struct {
         return .{ .ancestors = try self.ancestors.clone(allocator) };
     }
 
-    pub fn deinit(self: *Ancestors, allocator: std.mem.Allocator) void {
-        self.ancestors.deinit(allocator);
+    pub fn subsetInto(
+        self: *const Ancestors,
+        max_slot: Slot,
+        allocator: std.mem.Allocator,
+        subset_result: *Ancestors,
+    ) std.mem.Allocator.Error!void {
+        subset_result.ancestors.clearRetainingCapacity();
+        try subset_result.ancestors.ensureTotalCapacity(allocator, self.ancestors.count());
+        for (self.ancestors.keys()) |slot| {
+            if (slot > max_slot) continue;
+            subset_result.addSlotAssumeCapacity(slot);
+        }
     }
 };

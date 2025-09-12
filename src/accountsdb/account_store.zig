@@ -97,6 +97,14 @@ pub const AccountReader = union(enum) {
             .noop => .noop,
         };
     }
+
+    pub fn getLargestRootedSlot(self: AccountReader) ?Slot {
+        return switch (self) {
+            .accounts_db => |db| db.getLargestRootedSlot(),
+            .thread_safe_map => |tsm| tsm.getLargestRootedSlot(),
+            .noop => null,
+        };
+    }
 };
 
 pub const SlotModifiedIterator = union(enum) {
@@ -122,6 +130,14 @@ pub const SlotModifiedIterator = union(enum) {
         return switch (self.*) {
             inline else => |*item| try item.next(),
             .noop => null,
+        };
+    }
+
+    pub fn allocator(self: SlotModifiedIterator) std.mem.Allocator {
+        return switch (self) {
+            .accounts_db => |state| state.db.allocator,
+            .thread_safe_map => |state| state.allocator,
+            .noop => sig.utils.allocators.failing.allocator(.{}),
         };
     }
 };
@@ -196,7 +212,7 @@ pub const ThreadSafeAccountMap = struct {
     allocator: Allocator,
     slot_map: SlotMap,
     pubkey_map: PubkeyMap,
-    last_rooted_slot: ?Slot,
+    largest_rooted_slot: ?Slot,
 
     const SlotMap = std.AutoArrayHashMapUnmanaged(
         Slot,
@@ -213,7 +229,7 @@ pub const ThreadSafeAccountMap = struct {
             .allocator = allocator,
             .slot_map = .empty,
             .pubkey_map = .empty,
-            .last_rooted_slot = null,
+            .largest_rooted_slot = null,
         };
     }
 
@@ -265,12 +281,12 @@ pub const ThreadSafeAccountMap = struct {
         const slot_account_pairs = pubkey_map.get(address) orelse return null;
         for (slot_account_pairs.items, 0..) |slot_account, index| {
             const slot, const account = slot_account;
-            if (ancestors.ancestors.contains(slot)) {
+            if (ancestors.containsSlot(slot)) {
                 return if (account.lamports == 0) null else try toAccount(self.allocator, account);
             }
 
-            const last_rooted = self.last_rooted_slot orelse continue;
-            if (slot < last_rooted) continue;
+            const last_rooted = self.largest_rooted_slot orelse continue;
+            if (slot > last_rooted) continue;
             const latest_rooted_found = if (maybe_latest_rooted_found) |*ptr| ptr else {
                 maybe_latest_rooted_found = .{
                     .slot = slot,
@@ -316,14 +332,23 @@ pub const ThreadSafeAccountMap = struct {
         };
     }
 
+    pub const PutError = error{
+        CannotWriteRootedSlot,
+    } || std.mem.Allocator.Error;
     pub fn put(
         self: *ThreadSafeAccountMap,
         slot: Slot,
         address: Pubkey,
         account: AccountSharedData,
-    ) !void {
+    ) PutError!void {
         self.rwlock.lock();
         defer self.rwlock.unlock();
+
+        if (self.largest_rooted_slot) |largest_rooted_slot| {
+            if (slot <= largest_rooted_slot) {
+                return error.CannotWriteRootedSlot;
+            }
+        }
 
         const data = try self.allocator.dupe(u8, account.data);
         errdefer self.allocator.free(account.data);
@@ -422,6 +447,12 @@ pub const ThreadSafeAccountMap = struct {
             return .{ pubkey, try toAccount(self.allocator, account) };
         }
     };
+
+    pub fn getLargestRootedSlot(self: *ThreadSafeAccountMap) ?Slot {
+        self.rwlock.lockShared();
+        defer self.rwlock.unlockShared();
+        return self.largest_rooted_slot;
+    }
 };
 
 test "AccountStore does not return 0-lamport accounts from accountsdb" {
