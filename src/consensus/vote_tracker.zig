@@ -177,27 +177,49 @@ pub const SlotVoteTracker = struct {
     /// Maps pubkeys that have voted for this slot
     /// to whether or not we've seen the vote on gossip.
     /// True if seen on gossip, false if only seen in replay.
-    voted: std.AutoArrayHashMapUnmanaged(Pubkey, bool),
-    optimistic_votes_tracker: std.AutoArrayHashMapUnmanaged(Hash, VoteStakeTracker),
+    voted: Voted,
+    optimistic_votes_tracker: OptimisticVotesTracker,
     voted_slot_updates: ?std.ArrayListUnmanaged(Pubkey),
     gossip_only_stake: u64,
 
+    pub const Voted = std.AutoArrayHashMapUnmanaged(Pubkey, bool);
+
     pub const EMPTY_ZEROES: SlotVoteTracker = .{
-        .voted = .{},
-        .optimistic_votes_tracker = .{},
+        .voted = .empty,
+        .optimistic_votes_tracker = .EMPTY,
         .voted_slot_updates = null,
         .gossip_only_stake = 0,
     };
 
     pub fn deinit(self: SlotVoteTracker, allocator: std.mem.Allocator) void {
         var copy = self;
-
         copy.voted.deinit(allocator);
-
-        for (copy.optimistic_votes_tracker.values()) |vst| vst.deinit(allocator);
         copy.optimistic_votes_tracker.deinit(allocator);
-
         copy.initAndOrGetUpdates().deinit(allocator);
+    }
+
+    pub fn clone(
+        self: SlotVoteTracker,
+        allocator: std.mem.Allocator,
+    ) std.mem.Allocator.Error!SlotVoteTracker {
+        var voted = try self.voted.clone(allocator);
+        errdefer voted.deinit(allocator);
+
+        var optimistic_votes_tracker = try self.optimistic_votes_tracker.clone(allocator);
+        errdefer optimistic_votes_tracker.deinit(allocator);
+
+        var voted_slot_updates: ?std.ArrayListUnmanaged(Pubkey) = blk: {
+            const vsu = self.voted_slot_updates orelse break :blk null;
+            break :blk try vsu.clone(allocator);
+        };
+        errdefer if (voted_slot_updates) |*vsu| vsu.deinit(allocator);
+
+        return .{
+            .voted = voted,
+            .optimistic_votes_tracker = optimistic_votes_tracker,
+            .voted_slot_updates = voted_slot_updates,
+            .gossip_only_stake = self.gossip_only_stake,
+        };
     }
 
     /// If there already are vote slot updates, returns the pointer to them.
@@ -220,9 +242,36 @@ pub const SlotVoteTracker = struct {
         allocator: std.mem.Allocator,
         hash: Hash,
     ) std.mem.Allocator.Error!*VoteStakeTracker {
-        const gop = try self.optimistic_votes_tracker.getOrPut(allocator, hash);
-        if (!gop.found_existing) gop.value_ptr.* = VoteStakeTracker.EMPTY_ZEROES;
+        const gop = try self.optimistic_votes_tracker.map.getOrPut(allocator, hash);
+        if (!gop.found_existing) gop.value_ptr.* = .EMPTY_ZEROES;
         return gop.value_ptr;
+    }
+};
+
+pub const OptimisticVotesTracker = struct {
+    map: std.AutoArrayHashMapUnmanaged(Hash, VoteStakeTracker),
+
+    pub const EMPTY: OptimisticVotesTracker = .{ .map = .empty };
+
+    pub fn deinit(self: OptimisticVotesTracker, allocator: std.mem.Allocator) void {
+        for (self.map.values()) |vst| vst.deinit(allocator);
+        var map = self.map;
+        map.deinit(allocator);
+    }
+
+    pub fn clone(
+        self: OptimisticVotesTracker,
+        allocator: std.mem.Allocator,
+    ) std.mem.Allocator.Error!OptimisticVotesTracker {
+        var cloned_ovt = OptimisticVotesTracker.EMPTY;
+        errdefer cloned_ovt.deinit(allocator);
+
+        try cloned_ovt.map.ensureTotalCapacity(allocator, self.map.count());
+        for (self.map.keys(), self.map.values()) |k, v| {
+            cloned_ovt.map.putAssumeCapacity(k, try v.clone(allocator));
+        }
+
+        return cloned_ovt;
     }
 };
 
@@ -238,6 +287,19 @@ pub const VoteStakeTracker = struct {
     pub fn deinit(self: VoteStakeTracker, allocator: std.mem.Allocator) void {
         var voted = self.voted;
         voted.deinit(allocator);
+    }
+
+    pub fn clone(
+        self: VoteStakeTracker,
+        allocator: std.mem.Allocator,
+    ) std.mem.Allocator.Error!VoteStakeTracker {
+        var voted = try self.voted.clone(allocator);
+        errdefer voted.deinit(allocator);
+
+        return .{
+            .voted = voted,
+            .stake = self.stake,
+        };
     }
 
     pub fn ensureTotalCapacity(
