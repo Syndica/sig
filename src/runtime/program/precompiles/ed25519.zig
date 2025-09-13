@@ -155,14 +155,7 @@ fn verifySignature(
     // We can use [8][S]B = [8]R + [8][k]A' or [S]B = R + [k]A' verification here.
     // We opt for cofactorless since it's faster.
     const computed_r = try Curve.basePoint.mulDoubleBasePublic(signature.s, a.neg(), hram);
-    if (!fastEqual(computed_r, r)) return error.InvalidSignature;
-}
-
-/// Equate two ed25519 points with the assumption that b.z is 1.
-fn fastEqual(a: Curve, b: Curve) bool {
-    const x1 = b.x.mul(a.z);
-    const y1 = b.y.mul(a.z);
-    return x1.equivalent(a.x) and y1.equivalent(a.y);
+    if (!sig.crypto.ed25519.affineEqual(computed_r, r)) return error.InvalidSignature;
 }
 
 // https://github.com/anza-xyz/agave/blob/a8aef04122068ec36a7af0721e36ee58efa0bef2/sdk/src/ed25519_instruction.rs#L35

@@ -29,6 +29,7 @@ const Benchmark = enum {
     accounts_db_snapshot, // expensive
     accounts_db,
     bincode,
+    crypto,
     geyser,
     gossip,
     ledger,
@@ -138,6 +139,7 @@ pub fn main() !void {
 
     const max_time_per_bench = Duration.fromSecs(5); // !!
     const run_all_benchmarks = filter == .all;
+    _ = run_all_benchmarks; // autofix
 
     var maybe_metrics: ?std.ArrayList(Metric) = null;
     if (collect_metrics) {
@@ -152,213 +154,234 @@ pub fn main() !void {
         }
     }
 
-    if (filter == .swissmap or run_all_benchmarks) {
-        try benchmark(
-            allocator,
-            .from(logger),
-            @import("accountsdb/swiss_map.zig").BenchmarkSwissMap,
-            max_time_per_bench,
-            .nanos,
-            &maybe_metrics,
-        );
-    }
+    try benchmark(
+        allocator,
+        .from(logger),
+        @import("crypto/benchmark.zig").Benchmark,
+        max_time_per_bench,
+        .micros,
+        &maybe_metrics,
+    );
 
-    if (std.mem.startsWith(u8, @tagName(filter), "accounts_db") or run_all_benchmarks) {
-        var run_all = false;
-        if (filter == .accounts_db or run_all_benchmarks) {
-            run_all = true;
-        }
+    // if (filter == .swissmap or run_all_benchmarks) {
+    //     try benchmark(
+    //         allocator,
+    //         .from(logger),
+    //         @import("accountsdb/swiss_map.zig").BenchmarkSwissMap,
+    //         max_time_per_bench,
+    //         .nanos,
+    //         &maybe_metrics,
+    //     );
+    // }
 
-        if (filter == .accounts_db_readwrite or run_all) {
-            try benchmark(
-                allocator,
-                .from(logger),
-                @import("accountsdb/db.zig").BenchmarkAccountsDB,
-                max_time_per_bench,
-                .millis,
-                &maybe_metrics,
-            );
-        }
+    // if (std.mem.startsWith(u8, @tagName(filter), "accounts_db") or run_all_benchmarks) {
+    //     var run_all = false;
+    //     if (filter == .accounts_db or run_all_benchmarks) {
+    //         run_all = true;
+    //     }
 
-        if ((filter == .accounts_db_snapshot or run_all) and !run_expensive_benchmarks) {
-            logger.warn().log("[accounts_db_snapshot]: skipping benchmark, use -e to run");
-        }
+    //     if (filter == .accounts_db_readwrite or run_all) {
+    //         try benchmark(
+    //             allocator,
+    //             .from(logger),
+    //             @import("accountsdb/db.zig").BenchmarkAccountsDB,
+    //             max_time_per_bench,
+    //             .millis,
+    //             &maybe_metrics,
+    //         );
+    //     }
 
-        if ((filter == .accounts_db_snapshot or run_all) and
-            run_expensive_benchmarks //
-        ) snapshot_benchmark: {
-            // NOTE: snapshot must exist in this directory for the benchmark to run
-            // NOTE: also need to increase file limits to run this benchmark (see debugging.md)
-            const BENCH_SNAPSHOT_DIR_PATH = @import("accountsdb/db.zig")
-                .BenchmarkAccountsDBSnapshotLoad
-                .SNAPSHOT_DIR_PATH;
+    //     if ((filter == .accounts_db_snapshot or run_all) and !run_expensive_benchmarks) {
+    //         logger.warn().log("[accounts_db_snapshot]: skipping benchmark, use -e to run");
+    //     }
 
-            var test_snapshot_exists = true;
-            if (std.fs.cwd().openDir(BENCH_SNAPSHOT_DIR_PATH, .{ .iterate = true })) |dir| {
-                std.posix.close(dir.fd);
-            } else |_| {
-                test_snapshot_exists = false;
-            }
+    //     if ((filter == .accounts_db_snapshot or run_all) and
+    //         run_expensive_benchmarks //
+    //     ) snapshot_benchmark: {
+    //         // NOTE: snapshot must exist in this directory for the benchmark to run
+    //         // NOTE: also need to increase file limits to run this benchmark (see debugging.md)
+    //         const BENCH_SNAPSHOT_DIR_PATH = @import("accountsdb/db.zig")
+    //             .BenchmarkAccountsDBSnapshotLoad
+    //             .SNAPSHOT_DIR_PATH;
 
-            const download_new_snapshot = force_fresh_state or !test_snapshot_exists;
-            if (download_new_snapshot) {
-                // delete existing snapshot dir
-                if (test_snapshot_exists) {
-                    logger.info().log("deleting snapshot dir...");
-                    std.fs.cwd().deleteTreeMinStackSize(BENCH_SNAPSHOT_DIR_PATH) catch |err| {
-                        logger.err().logf("failed to delete snapshot dir ('{s}'): {}", .{
-                            BENCH_SNAPSHOT_DIR_PATH,
-                            err,
-                        });
-                        return err;
-                    };
-                }
+    //         var test_snapshot_exists = true;
+    //         if (std.fs.cwd().openDir(BENCH_SNAPSHOT_DIR_PATH, .{ .iterate = true })) |dir| {
+    //             std.posix.close(dir.fd);
+    //         } else |_| {
+    //             test_snapshot_exists = false;
+    //         }
 
-                // create fresh snapshot dir
-                var snapshot_dir = try std.fs.cwd().makeOpenPath(
-                    BENCH_SNAPSHOT_DIR_PATH,
-                    .{ .iterate = true },
-                );
-                defer snapshot_dir.close();
+    //         const download_new_snapshot = force_fresh_state or !test_snapshot_exists;
+    //         if (download_new_snapshot) {
+    //             // delete existing snapshot dir
+    //             if (test_snapshot_exists) {
+    //                 logger.info().log("deleting snapshot dir...");
+    //                 std.fs.cwd().deleteTreeMinStackSize(BENCH_SNAPSHOT_DIR_PATH) catch |err| {
+    //                     logger.err().logf("failed to delete snapshot dir ('{s}'): {}", .{
+    //                         BENCH_SNAPSHOT_DIR_PATH,
+    //                         err,
+    //                     });
+    //                     return err;
+    //                 };
+    //             }
 
-                // start gossip
-                const gossip_service = try sig.gossip.helpers.initGossipFromCluster(
-                    allocator,
-                    .from(logger),
-                    .testnet, // TODO: support other clusters
-                    8006,
-                );
-                defer {
-                    gossip_service.shutdown();
-                    gossip_service.deinit();
-                    allocator.destroy(gossip_service);
-                }
-                try gossip_service.start(.{});
+    //             // create fresh snapshot dir
+    //             var snapshot_dir = try std.fs.cwd().makeOpenPath(
+    //                 BENCH_SNAPSHOT_DIR_PATH,
+    //                 .{ .iterate = true },
+    //             );
+    //             defer snapshot_dir.close();
 
-                // download and unpack snapshot
-                const snapshot_manifests, //
-                _ //
-                = sig.accounts_db.snapshot.download.getOrDownloadAndUnpackSnapshot(
-                    allocator,
-                    .from(logger),
-                    BENCH_SNAPSHOT_DIR_PATH,
-                    .{
-                        .gossip_service = gossip_service,
-                        .force_new_snapshot_download = true,
-                        .max_number_of_download_attempts = 50,
-                        .min_snapshot_download_speed_mbs = 10,
-                        .download_timeout = Duration.fromMinutes(5),
-                    },
-                ) catch |err| {
-                    switch (err) {
-                        error.UnableToDownloadSnapshot => {
-                            logger.err().log("unable to download snapshot, skipping benchmark...");
-                            break :snapshot_benchmark;
-                        },
-                        else => return err,
-                    }
-                };
-                defer snapshot_manifests.deinit(allocator);
-            }
+    //     // download and unpack snapshot
+    //     const snapshot_manifests, //
+    //     _ //
+    //     = sig.accounts_db.snapshot.download.getOrDownloadAndUnpackSnapshot(
+    //         allocator,
+    //         .from(logger),
+    //         BENCH_SNAPSHOT_DIR_PATH,
+    //         .{
+    //             .gossip_service = gossip_service,
+    //             .force_new_snapshot_download = true,
+    //             .max_number_of_download_attempts = 50,
+    //             .min_snapshot_download_speed_mbs = 10,
+    //             .download_timeout = Duration.fromMinutes(5),
+    //         },
+    //     ) catch |err| {
+    //         switch (err) {
+    //             error.UnableToDownloadSnapshot => {
+    //                 logger.err().log("unable to download snapshot, skipping benchmark...");
+    //                 break :snapshot_benchmark;
+    //             },
+    //             else => return err,
+    //         }
+    //     };
+    //     defer snapshot_manifests.deinit(allocator);
+    // }
 
-            try benchmark(
-                allocator,
-                .from(logger),
-                @import("accountsdb/db.zig").BenchmarkAccountsDBSnapshotLoad,
-                max_time_per_bench,
-                .millis,
-                &maybe_metrics,
-            );
-        }
-    }
+    //             // download and unpack snapshot
+    //             const snapshot_manifests, //
+    //             _ //
+    //             = sig.accounts_db.download.getOrDownloadAndUnpackSnapshot(
+    //                 allocator,
+    //                 .from(logger),
+    //                 BENCH_SNAPSHOT_DIR_PATH,
+    //                 .{
+    //                     .gossip_service = gossip_service,
+    //                     .force_new_snapshot_download = true,
+    //                     .max_number_of_download_attempts = 50,
+    //                     .min_snapshot_download_speed_mbs = 10,
+    //                     .download_timeout = Duration.fromMinutes(5),
+    //                 },
+    //             ) catch |err| {
+    //                 switch (err) {
+    //                     error.UnableToDownloadSnapshot => {
+    //                         logger.err().log("unable to download snapshot, skipping benchmark...");
+    //                         break :snapshot_benchmark;
+    //                     },
+    //                     else => return err,
+    //                 }
+    //             };
+    //             defer snapshot_manifests.deinit(allocator);
+    //         }
 
-    if (filter == .socket_utils or run_all_benchmarks) {
-        try benchmark(
-            allocator,
-            .from(logger),
-            @import("net/socket_utils.zig").BenchmarkPacketProcessing,
-            max_time_per_bench,
-            .millis,
-            &maybe_metrics,
-        );
-    }
+    //         try benchmark(
+    //             allocator,
+    //             .from(logger),
+    //             @import("accountsdb/db.zig").BenchmarkAccountsDBSnapshotLoad,
+    //             max_time_per_bench,
+    //             .millis,
+    //             &maybe_metrics,
+    //         );
+    //     }
+    // }
 
-    if (filter == .gossip or run_all_benchmarks) {
-        try benchmark(
-            allocator,
-            .from(logger),
-            @import("gossip/service.zig").BenchmarkGossipServiceGeneral,
-            max_time_per_bench,
-            .nanos,
-            &maybe_metrics,
-        );
-        try benchmark(
-            allocator,
-            .from(logger),
-            @import("gossip/service.zig").BenchmarkGossipServicePullRequests,
-            max_time_per_bench,
-            .nanos,
-            &maybe_metrics,
-        );
-    }
+    // if (filter == .socket_utils or run_all_benchmarks) {
+    //     try benchmark(
+    //         allocator,
+    //         .from(logger),
+    //         @import("net/socket_utils.zig").BenchmarkPacketProcessing,
+    //         max_time_per_bench,
+    //         .millis,
+    //         &maybe_metrics,
+    //     );
+    // }
 
-    if (filter == .sync or run_all_benchmarks) {
-        try benchmark(
-            allocator,
-            .from(logger),
-            @import("sync/channel.zig").BenchmarkChannel,
-            max_time_per_bench,
-            .nanos,
-            &maybe_metrics,
-        );
-    }
+    // if (filter == .gossip or run_all_benchmarks) {
+    //     try benchmark(
+    //         allocator,
+    //         .from(logger),
+    //         @import("gossip/service.zig").BenchmarkGossipServiceGeneral,
+    //         max_time_per_bench,
+    //         .nanos,
+    //         &maybe_metrics,
+    //     );
+    //     try benchmark(
+    //         allocator,
+    //         .from(logger),
+    //         @import("gossip/service.zig").BenchmarkGossipServicePullRequests,
+    //         max_time_per_bench,
+    //         .nanos,
+    //         &maybe_metrics,
+    //     );
+    // }
 
-    if (filter == .ledger or run_all_benchmarks) {
-        try benchmark(
-            allocator,
-            .from(logger),
-            @import("ledger/benchmarks.zig").BenchmarkLedger,
-            max_time_per_bench,
-            .nanos,
-            &maybe_metrics,
-        );
-        try benchmark(
-            allocator,
-            .from(logger),
-            @import("ledger/benchmarks.zig").BenchmarkLedgerSlow,
-            max_time_per_bench,
-            .millis,
-            &maybe_metrics,
-        );
-    }
+    // if (filter == .sync or run_all_benchmarks) {
+    //     try benchmark(
+    //         allocator,
+    //         .from(logger),
+    //         @import("sync/channel.zig").BenchmarkChannel,
+    //         max_time_per_bench,
+    //         .nanos,
+    //         &maybe_metrics,
+    //     );
+    // }
 
-    if (filter == .bincode or run_all_benchmarks) {
-        try benchmark(
-            allocator,
-            .from(logger),
-            @import("bincode/benchmarks.zig").BenchmarkEntry,
-            max_time_per_bench,
-            .nanos,
-            &maybe_metrics,
-        );
-    }
+    // if (filter == .ledger or run_all_benchmarks) {
+    //     try benchmark(
+    //         allocator,
+    //         .from(logger),
+    //         @import("ledger/benchmarks.zig").BenchmarkLedger,
+    //         max_time_per_bench,
+    //         .nanos,
+    //         &maybe_metrics,
+    //     );
+    //     try benchmark(
+    //         allocator,
+    //         .from(logger),
+    //         @import("ledger/benchmarks.zig").BenchmarkLedgerSlow,
+    //         max_time_per_bench,
+    //         .millis,
+    //         &maybe_metrics,
+    //     );
+    // }
 
-    // NOTE: we dont support CSV output on this method so all results are printed as debug
-    if (filter == .geyser or run_all_benchmarks) {
-        logger.debug().log("Geyser Streaming Benchmark:");
-        try @import("geyser/lib.zig").benchmark.runBenchmark(.from(logger));
-    }
+    // if (filter == .bincode or run_all_benchmarks) {
+    //     try benchmark(
+    //         allocator,
+    //         .from(logger),
+    //         @import("bincode/benchmarks.zig").BenchmarkEntry,
+    //         max_time_per_bench,
+    //         .nanos,
+    //         &maybe_metrics,
+    //     );
+    // }
 
-    if (filter == .zksdk or run_all_benchmarks) {
-        try benchmark(
-            allocator,
-            .from(logger),
-            @import("zksdk/benchmarks.zig").Benchmark,
-            max_time_per_bench,
-            .micros,
-            &maybe_metrics,
-        );
-    }
+    // // NOTE: we dont support CSV output on this method so all results are printed as debug
+    // if (filter == .geyser or run_all_benchmarks) {
+    //     logger.debug().log("Geyser Streaming Benchmark:");
+    //     try @import("geyser/lib.zig").benchmark.runBenchmark(.from(logger));
+    // }
+
+    // if (filter == .zksdk or run_all_benchmarks) {
+    //     try benchmark(
+    //         allocator,
+    //         .from(logger),
+    //         @import("zksdk/benchmarks.zig").Benchmark,
+    //         max_time_per_bench,
+    //         .micros,
+    //         &maybe_metrics,
+    //     );
+    // }
 
     // save metrics
     if (collect_metrics) {

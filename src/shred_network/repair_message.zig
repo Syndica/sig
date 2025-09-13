@@ -56,7 +56,7 @@ pub fn serializeRepairRequest(
     defer zone.deinit();
 
     const header: RepairRequestHeader = .{
-        .signature = .{ .data = undefined },
+        .signature = .ZEROES,
         .sender = .{ .data = keypair.public_key.bytes },
         .recipient = recipient,
         .timestamp = timestamp,
