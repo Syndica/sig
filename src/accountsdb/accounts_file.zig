@@ -4,7 +4,7 @@ const sig = @import("../sig.zig");
 
 const Account = sig.core.account.Account;
 const AccountDataHandle = sig.accounts_db.buffer_pool.AccountDataHandle;
-const AccountFileInfo = sig.accounts_db.snapshots.AccountFileInfo;
+const AccountFileInfo = sig.accounts_db.snapshot.data.AccountFileInfo;
 const BufferPool = sig.accounts_db.buffer_pool.BufferPool;
 const Epoch = sig.core.time.Epoch;
 const Hash = sig.core.hash.Hash;

@@ -5,8 +5,8 @@ const std = @import("std");
 const sig = @import("../../sig.zig");
 
 const SnapshotGenerationInfo = sig.accounts_db.AccountsDB.SnapshotGenerationInfo;
-const FullSnapshotFileInfo = sig.accounts_db.snapshots.FullSnapshotFileInfo;
-const IncrementalSnapshotFileInfo = sig.accounts_db.snapshots.IncrementalSnapshotFileInfo;
+const FullSnapshotFileInfo = sig.accounts_db.snapshot.data.FullSnapshotFileInfo;
+const IncrementalSnapshotFileInfo = sig.accounts_db.snapshot.data.IncrementalSnapshotFileInfo;
 
 /// A single request body cannot be larger than this.
 pub const MAX_REQUEST_BODY_SIZE: usize = 50 * 1024; // 50 KiB
