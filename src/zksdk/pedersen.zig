@@ -4,7 +4,7 @@ const sig = @import("../sig.zig");
 const Ristretto255 = std.crypto.ecc.Ristretto255;
 const Edwards25519 = std.crypto.ecc.Edwards25519;
 const Scalar = Edwards25519.scalar.Scalar;
-const weak_mul = sig.vm.syscalls.ecc.weak_mul;
+const ed25519 = sig.crypto.ed25519;
 const Pubkey = sig.zksdk.ElGamalPubkey;
 
 /// Pedersen basepoint.
@@ -72,8 +72,8 @@ pub const DecryptHandle = struct {
     point: Ristretto255,
 
     pub fn init(pubkey: *const Pubkey, opening: *const Opening) DecryptHandle {
-        const point = weak_mul.mul(pubkey.point.p, opening.scalar.toBytes());
-        return .{ .point = .{ .p = point } };
+        const point = ed25519.mul(true, pubkey.point, opening.scalar.toBytes());
+        return .{ .point = point };
     }
 
     pub fn fromBytes(bytes: [32]u8) !DecryptHandle {
@@ -100,12 +100,12 @@ pub const DecryptHandle = struct {
 pub fn init(s: Scalar, opening: *const Opening) Commitment {
     // G and H are not identities and opening.scalar cannot be zero,
     // so this function cannot return an error.
-    const point = Edwards25519.mulMulti(
+    const point = ed25519.mulMulti(
         2,
-        .{ G.p, H.p },
+        .{ G, H },
         .{ s.toBytes(), opening.scalar.toBytes() },
-    ) catch unreachable;
-    return .{ .point = .{ .p = point } };
+    );
+    return .{ .point = point };
 }
 
 pub fn initScalar(s: Scalar) struct { Commitment, Opening } {

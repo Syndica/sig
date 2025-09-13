@@ -2,17 +2,22 @@ const sig = @import("../../sig.zig");
 const std = @import("std");
 const builtin = @import("builtin");
 
-const pippenger = @import("pippenger.zig");
-const straus = @import("straus.zig");
+pub const pippenger = @import("pippenger.zig");
+pub const straus = @import("straus.zig");
+
+pub const mul = straus.mul;
+pub const mulManyWithSameScalar = straus.mulManyWithSameScalar;
+pub const mulMulti = straus.mulMulti;
 
 const generic = @import("generic.zig");
 const avx512 = @import("avx512.zig");
 const has_avx512 = builtin.cpu.arch == .x86_64 and
     std.Target.x86.featureSetHas(builtin.cpu.features, .avx512ifma) and
     std.Target.x86.featureSetHas(builtin.cpu.features, .avx512vl);
+pub const use_avx125 = has_avx512 and builtin.zig_backend == .stage2_llvm;
 
 // avx512 implementation relies on llvm specific tricks
-const namespace = if (has_avx512 and builtin.zig_backend == .stage2_llvm) avx512 else generic;
+const namespace = if (use_avx125) avx512 else generic;
 pub const ExtendedPoint = namespace.ExtendedPoint;
 pub const CachedPoint = namespace.CachedPoint;
 
@@ -82,14 +87,14 @@ pub fn verifyBatchOverSingleMessage(
         zhs.appendAssumeCapacity(Edwards25519.scalar.mul(z, hram_batch.constSlice()[i]));
     }
 
-    const zr = mulMulti(
+    const zr = mulMultiRuntime(
         max,
         false,
         false,
         expected_r_batch.constSlice(),
         z_batch.constSlice(),
     ).clearCofactor();
-    const zah = mulMulti(
+    const zah = mulMultiRuntime(
         max,
         false,
         false,
@@ -101,65 +106,6 @@ pub fn verifyBatchOverSingleMessage(
     if (zr.add(zah).sub(zsb).rejectIdentity()) |_| {
         return error.SignatureVerificationFailed;
     } else |_| {}
-}
-
-pub fn asRadix16(c: CompressedScalar) [64]i8 {
-    std.debug.assert(c[31] <= 127);
-
-    var output: [64]i8 = @splat(0);
-
-    // radix 256 -> radix 16
-    for (0..32) |i| {
-        output[i * 2] = @intCast(c[i] & 0b1111);
-        output[i * 2 + 1] = @intCast(c[i] >> 4);
-    }
-
-    // recenter
-    for (0..63) |i| {
-        const carry = (output[i] + 8) >> 4;
-        output[i] -= carry << 4;
-        output[i + 1] += carry;
-    }
-
-    return output;
-}
-
-pub fn asRadix2w(c: CompressedScalar, w: u6) [64]i8 {
-    var scalars: [4]u64 = @splat(0);
-    @memcpy(scalars[0..4], std.mem.bytesAsSlice(u64, &c));
-
-    const radix = @as(u64, 1) << w;
-    const window_mask = radix - 1;
-
-    var carry: u64 = 0;
-    const digits_count = (@as(u64, 256) + w - 1) / w;
-    var digits: [64]i8 = @splat(0);
-
-    for (0..digits_count) |i| {
-        const bit_offset = i * w;
-        const u64_idx = bit_offset / 64;
-        const bit_idx: u6 = @truncate(bit_offset);
-        const element = scalars[u64_idx] >> bit_idx;
-
-        const below = bit_idx < @as(u64, 64) - w or u64_idx == 3;
-        const bit_buf: u64 = switch (below) {
-            true => element,
-            else => element | (scalars[1 + u64_idx] << @intCast(@as(u64, 64) - bit_idx)),
-        };
-
-        const coef = carry + (bit_buf & window_mask);
-        carry = (coef + (radix / 2)) >> w;
-        const signed_coef: i64 = @bitCast(coef);
-        const cindex: i64 = @bitCast(carry << w);
-        digits[i] = @truncate(signed_coef - cindex);
-    }
-
-    switch (w) {
-        8 => digits[digits_count] += @intCast(@as(i64, @bitCast(carry))),
-        else => digits[digits_count - 1] += @intCast(@as(i64, @bitCast(carry << w))),
-    }
-
-    return digits;
 }
 
 /// Equate two ed25519 points with the assumption that b.z is 1.
@@ -180,7 +126,13 @@ pub fn PointType(encoded: bool, ristretto: bool) type {
     return if (ristretto) Ristretto255 else Edwards25519;
 }
 
-pub fn mulMulti(
+/// MSM in variable time with a runtime known (but comptime bounded) number
+/// of points. useful for things such as bulletproofs where we are generic over
+/// the bitsize and it can change between being more optimal to use straus or pippenger.
+///
+/// Generally speaking, `mulMulti` will be more useful as in most cases the number of points
+/// and scalars is known ahead of time.
+pub fn mulMultiRuntime(
     comptime max_elements: comptime_int,
     /// Set to true if the input is in wire-format. This lets us usually save
     /// an extra stack copy and loop when buffering the decoding process,
@@ -206,7 +158,7 @@ pub fn mulMulti(
     // code size impact.
 
     if (ed_points.len < 190) {
-        return straus.mulMulti(
+        return straus.mulMultiRuntime(
             max_elements,
             encoded,
             ristretto,
@@ -214,7 +166,7 @@ pub fn mulMulti(
             compressed_scalars,
         );
     } else {
-        return pippenger.mulMulti(
+        return pippenger.mulMultiRuntime(
             max_elements,
             encoded,
             ristretto,

@@ -1,5 +1,6 @@
 const std = @import("std");
 const sig = @import("../../sig.zig");
+
 const ed25519 = sig.crypto.ed25519;
 const Edwards25519 = std.crypto.ecc.Edwards25519;
 const Ristretto255 = std.crypto.ecc.Ristretto255;
@@ -8,6 +9,12 @@ const CompressedScalar = Edwards25519.scalar.CompressedScalar;
 const ExtendedPoint = ed25519.ExtendedPoint;
 const CachedPoint = ed25519.CachedPoint;
 
+/// Stores a lookup table of multiplications of a point over radix-16 scalars, which is the most
+/// common usecase for straus' method. table contains 1P, 2P, 3P, 4P, 5P, 6P, 7P, 8P, and
+/// our window for the scalar indexes into it. Since we want radix-16 (i.e one nibble per byte),
+/// we need 16 points, however we can optimize further by centering the radix at 0 (-8..8) and
+/// negating the cached point if the radix is below zero. Thus our initialization for the table
+/// is twice as keep while retaining the same effect.
 const LookupTable = struct {
     table: [8]CachedPoint,
 
@@ -35,7 +42,28 @@ const LookupTable = struct {
     }
 };
 
-pub fn mulMulti(
+fn asRadix16(c: CompressedScalar) [64]i8 {
+    std.debug.assert(c[31] <= 127);
+
+    var output: [64]i8 = @splat(0);
+
+    // radix 256 -> radix 16
+    for (0..32) |i| {
+        output[i * 2] = @intCast(c[i] & 0b1111);
+        output[i * 2 + 1] = @intCast(c[i] >> 4);
+    }
+
+    // recenter
+    for (0..63) |i| {
+        const carry = (output[i] + 8) >> 4;
+        output[i] -= carry << 4;
+        output[i + 1] += carry;
+    }
+
+    return output;
+}
+
+pub fn mulMultiRuntime(
     comptime max: comptime_int,
     comptime encoded: bool,
     comptime ristretto: bool,
@@ -48,7 +76,7 @@ pub fn mulMulti(
 
     var scalars_in_radix: std.BoundedArray([64]i8, max) = .{};
     for (scalars) |scalar| {
-        scalars_in_radix.appendAssumeCapacity(sig.crypto.ed25519.asRadix16(scalar));
+        scalars_in_radix.appendAssumeCapacity(asRadix16(scalar));
     }
 
     var lookup_tables: std.BoundedArray(LookupTable, max) = .{};
@@ -80,4 +108,87 @@ pub fn mulMulti(
         true => .{ .p = q.toPoint() },
         else => q.toPoint(),
     };
+}
+
+/// Same as `mulMulti` except it takes a comptime known amount of points/scalars. Seems
+/// to help with inlining part of the precomputation steps to the callsite.
+pub fn mulMulti(
+    comptime N: comptime_int,
+    points: [N]Ristretto255,
+    scalars: [N]CompressedScalar,
+) Ristretto255 {
+    var radix: [N][64]i8 = undefined;
+    for (&radix, scalars) |*r, s| {
+        r.* = asRadix16(s);
+    }
+
+    var lts: [N]LookupTable = undefined;
+    for (&lts, points) |*lt, p| {
+        lt.* = .init(p.p);
+    }
+
+    var q: ExtendedPoint = .identityElement;
+    for (0..64) |rev| {
+        const i = 64 - rev - 1;
+        q = q.mulByPow2(4);
+        for (&radix, &lts) |s, lt| {
+            q = q.addCached(lt.select(s[i]));
+        }
+    }
+
+    return .{ .p = q.toPoint() };
+}
+
+/// variable time, variable base scalar multiplication
+pub fn mul(
+    comptime ristretto: bool,
+    point: ed25519.PointType(false, ristretto),
+    scalar: CompressedScalar,
+) ed25519.PointType(false, ristretto) {
+    const lookup_table: LookupTable = .init(if (ristretto) point.p else point);
+    const radix = asRadix16(scalar);
+
+    const q = step(lookup_table, radix);
+
+    return switch (ristretto) {
+        true => .{ .p = q },
+        else => q,
+    };
+}
+
+/// Variable-base multiplication of `scalar` by a comptime known point.
+pub fn mulByKnown(comptime point: Ristretto255, scalar: CompressedScalar) Ristretto255 {
+    @setEvalBranchQuota(9_000);
+    const lookup_table: LookupTable = comptime .init(point.p);
+    const radix = asRadix16(scalar);
+    return .{ .p = step(lookup_table, radix) };
+}
+
+/// Small optimization, sometimes we need to multiply a few points with the same scalar.
+/// By batching them into this one function, we can save on converting the scalar into radix-16
+/// for each point and instead just reuse the single transformation.
+pub fn mulManyWithSameScalar(
+    comptime N: comptime_int,
+    points: [N]Ristretto255,
+    scalar: CompressedScalar,
+) [N]Ristretto255 {
+    const radix = asRadix16(scalar);
+    var output: [N]Ristretto255 = undefined;
+    for (points, &output) |point, *out| {
+        out.* = .{ .p = step(.init(point.p), radix) };
+    }
+    return output;
+}
+
+inline fn step(
+    lookup_table: LookupTable,
+    radix: [64]i8,
+) Edwards25519 {
+    var q: ExtendedPoint = .identityElement;
+    for (0..64) |rev| {
+        const i = 64 - rev - 1;
+        q = q.mulByPow2(4);
+        q = q.addCached(lookup_table.select(radix[i]));
+    }
+    return q.toPoint();
 }

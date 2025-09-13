@@ -10,7 +10,7 @@ const pedersen = sig.zksdk.pedersen;
 const Ristretto255 = std.crypto.ecc.Ristretto255;
 const Scalar = std.crypto.ecc.Edwards25519.scalar.Scalar;
 const Transcript = sig.zksdk.Transcript;
-const weak_mul = sig.vm.syscalls.ecc.weak_mul;
+const ed25519 = sig.crypto.ed25519;
 const ProofType = sig.runtime.program.zk_elgamal.ProofType;
 
 pub const Proof = struct {
@@ -107,25 +107,25 @@ pub const Proof = struct {
         var c_equality = Scalar.random();
         defer std.crypto.secureZero(u64, &c_equality.limbs);
 
-        const Y_delta: Ristretto255 = .{ .p = weak_mul.mulMulti(3, .{
-            pedersen.G.p,
-            pedersen.H.p,
-            C_delta.p,
+        const Y_delta = ed25519.mulMulti(3, .{
+            pedersen.G,
+            pedersen.H,
+            C_delta,
         }, .{
             z_x.toBytes(),
             z_delta.toBytes(),
             Edwards25519.scalar.neg(c_equality.toBytes()),
-        }) };
+        });
 
-        const Y_claimed: Ristretto255 = .{ .p = weak_mul.mulMulti(3, .{
-            pedersen.G.p,
-            pedersen.H.p,
-            C_claimed.p,
+        const Y_claimed = ed25519.mulMulti(3, .{
+            pedersen.G,
+            pedersen.H,
+            C_claimed,
         }, .{
             z_x.toBytes(),
             z_claimed.toBytes(),
             Edwards25519.scalar.neg(c_equality.toBytes()),
-        }) };
+        });
 
         const equality_proof: EqualityProof = .{
             .Y_delta = Y_delta,
@@ -189,15 +189,15 @@ pub const Proof = struct {
         const z_max_proof = Scalar.random();
         const c_max_proof = Scalar.random();
 
-        const Y_max_proof: Ristretto255 = .{ .p = weak_mul.mulMulti(3, .{
-            pedersen.H.p,
-            C_percentage.p,
-            pedersen.G.p,
+        const Y_max_proof = ed25519.mulMulti(3, .{
+            pedersen.H,
+            C_percentage,
+            pedersen.G,
         }, .{
             z_max_proof.toBytes(),
             Edwards25519.scalar.neg(c_max_proof.toBytes()),
             c_max_proof.mul(m).toBytes(),
-        }) };
+        });
 
         const max_proof: MaxProof = .{
             .Y_max_proof = Y_max_proof,
@@ -220,21 +220,21 @@ pub const Proof = struct {
             std.crypto.secureZero(u64, &y_claimed.limbs);
         }
 
-        const Y_delta: Ristretto255 = .{ .p = weak_mul.mulMulti(2, .{
-            pedersen.G.p,
-            pedersen.H.p,
+        const Y_delta = ed25519.mulMulti(2, .{
+            pedersen.G,
+            pedersen.H,
         }, .{
             y_x.toBytes(),
             y_delta.toBytes(),
-        }) };
+        });
 
-        const Y_claimed: Ristretto255 = .{ .p = weak_mul.mulMulti(2, .{
-            pedersen.G.p,
-            pedersen.H.p,
+        const Y_claimed = ed25519.mulMulti(2, .{
+            pedersen.G,
+            pedersen.H,
         }, .{
             y_x.toBytes(),
             y_claimed.toBytes(),
-        }) };
+        });
 
         comptime var session = Transcript.getSession(contract);
         defer session.finish();
@@ -347,14 +347,14 @@ pub const Proof = struct {
             break :h Edwards25519.scalar.sub(z_max.toBytes(), b.toBytes());
         };
 
-        const check = weak_mul.mulMulti(7, .{
-            pedersen.G.p,
-            pedersen.H.p,
-            C_max.p,
-            Y_delta_real.p,
-            C_delta.p,
-            Y_claimed.p,
-            C_claimed.p,
+        const check = ed25519.mulMulti(7, .{
+            pedersen.G,
+            pedersen.H,
+            C_max,
+            Y_delta_real,
+            C_delta,
+            Y_claimed,
+            C_claimed,
         }, .{
             g, // c_max * m - (w + ww) z_x
             h, // z_max - (w z_delta + ww z_claimed)
@@ -365,7 +365,7 @@ pub const Proof = struct {
             ww.mul(Scalar.fromBytes(c_equality)).toBytes(), // ww * c_eq
         });
 
-        if (!Y_max.equivalent(.{ .p = check })) {
+        if (!Y_max.equivalent(check)) {
             return error.AlgebraicRelation;
         }
     }

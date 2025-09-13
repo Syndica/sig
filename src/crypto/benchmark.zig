@@ -17,7 +17,7 @@ pub const Benchmark = struct {
 
         var start = try sig.time.Timer.start();
         for (inputs) |s| {
-            std.mem.doNotOptimizeAway(try s.verify(message, keypair.public_key));
+            std.mem.doNotOptimizeAway(s.verify(message, keypair.public_key));
         }
         return start.read();
     }
