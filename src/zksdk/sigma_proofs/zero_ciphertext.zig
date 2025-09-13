@@ -13,7 +13,7 @@ const ElGamalPubkey = sig.zksdk.ElGamalPubkey;
 const Ristretto255 = std.crypto.ecc.Ristretto255;
 const Scalar = std.crypto.ecc.Edwards25519.scalar.Scalar;
 const Transcript = sig.zksdk.Transcript;
-const weak_mul = sig.vm.syscalls.ecc.weak_mul;
+const ed25519 = sig.crypto.ed25519;
 const ProofType = sig.runtime.program.zk_elgamal.ProofType;
 
 pub const Proof = struct {
@@ -45,9 +45,11 @@ pub const Proof = struct {
         var y = Scalar.random();
         defer std.crypto.secureZero(u64, &y.limbs);
 
-        // random() guarantees that y isn't zero and P must not be zero.
-        const Y_P = P.mul(y.toBytes()) catch unreachable;
-        const Y_D: Ristretto255 = .{ .p = weak_mul.mul(D.p, y.toBytes()) };
+        const Y_P, const Y_D = ed25519.mulManyWithSameScalar(
+            2,
+            .{ P, D },
+            y.toBytes(),
+        );
 
         comptime var session = Transcript.getSession(contract);
         defer session.finish();
@@ -107,19 +109,19 @@ pub const Proof = struct {
         //     Y_P
 
         // zig fmt: off
-        const check: Ristretto255 = .{ .p = weak_mul.mulMulti(5, .{
-            pedersen.H.p,
-            P.p,
-            C.p,
-            D.p,
-            Y_D.p,
+        const check =  ed25519.mulMulti(5, .{
+            pedersen.H,
+            P,
+            C,
+            D,
+            Y_D,
         }, .{
             Edwards25519.scalar.neg(c.toBytes()),         // -c
             self.z.toBytes(),                             //  z
             Scalar.fromBytes(w_negated).mul(c).toBytes(), // -w * c
             w.mul(self.z).toBytes(),                      //  w * z
             w_negated,                                    // -w
-        })};
+        });
         // zig fmt: on
 
         if (!Y_P.equivalent(check)) {

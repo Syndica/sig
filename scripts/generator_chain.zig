@@ -27,7 +27,6 @@ pub fn main() !void {
         \\
         \\const std = @import("std");
         \\const Ristretto255 = std.crypto.ecc.Ristretto255;
-        \\const Edwards25519 = std.crypto.ecc.Edwards25519;
         \\
     );
 
@@ -37,7 +36,7 @@ pub fn main() !void {
 
 fn writeChain(comptime name: []const u8, writer: anytype) !void {
     try writer.print(
-        \\pub const {s}: [256]Edwards25519 = .{{
+        \\pub const {s}: [256]Ristretto255 = .{{
         \\
     , .{name});
 
@@ -45,7 +44,7 @@ fn writeChain(comptime name: []const u8, writer: anytype) !void {
     for (0..256) |_| {
         const next = generator.next();
 
-        try writer.writeAll("     .{ .x = ");
+        try writer.writeAll("     .{ .p = .{ .x = ");
         try printPoint(next.p.x, writer);
         try writer.writeAll(", .y = ");
         try printPoint(next.p.y, writer);
@@ -54,19 +53,10 @@ fn writeChain(comptime name: []const u8, writer: anytype) !void {
         try writer.writeAll(", .t = ");
         try printPoint(next.p.t, writer);
 
-        try writer.writeAll(" },\n");
+        try writer.writeAll(" }},\n");
     }
 
-    try writer.print(
-        \\}};
-        \\
-        \\pub const {[0]s}_ristretto = blk: {{
-        \\    var points: [256]Ristretto255 = undefined;
-        \\    for (&points, {[0]s}) |*p, e| p.* = .{{ .p = e }};
-        \\    break :blk points;
-        \\}};
-        \\
-    , .{name});
+    try writer.writeAll("};\n");
 }
 
 fn printPoint(p: Ristretto255.Curve.Fe, writer: anytype) !void {

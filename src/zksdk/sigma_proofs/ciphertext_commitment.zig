@@ -14,7 +14,7 @@ const ElGamalPubkey = sig.zksdk.ElGamalPubkey;
 const Ristretto255 = std.crypto.ecc.Ristretto255;
 const Scalar = std.crypto.ecc.Edwards25519.scalar.Scalar;
 const Transcript = sig.zksdk.Transcript;
-const weak_mul = sig.vm.syscalls.ecc.weak_mul;
+const ed25519 = sig.crypto.ed25519;
 const ProofType = sig.runtime.program.zk_elgamal.ProofType;
 
 pub const Proof = struct {
@@ -63,17 +63,17 @@ pub const Proof = struct {
             std.crypto.secureZero(u64, &y_r.limbs);
         }
 
-        const Y_0: Ristretto255 = .{ .p = weak_mul.mul(P.point.p, y_s.toBytes()) };
-        const Y_1: Ristretto255 = .{ .p = weak_mul.mulMulti(
+        const Y_0 = ed25519.mul(true, P.point, y_s.toBytes());
+        const Y_1 = ed25519.mulMulti(
             2,
-            .{ pedersen.G.p, D.p },
+            .{ pedersen.G, D },
             .{ y_x.toBytes(), y_s.toBytes() },
-        ) };
-        const Y_2: Ristretto255 = .{ .p = weak_mul.mulMulti(
+        );
+        const Y_2 = ed25519.mulMulti(
             2,
-            .{ pedersen.G.p, pedersen.H.p },
+            .{ pedersen.G, pedersen.H },
             .{ y_x.toBytes(), y_r.toBytes() },
-        ) };
+        );
 
         comptime var session = Transcript.getSession(contract);
         defer session.finish();
@@ -150,16 +150,15 @@ pub const Proof = struct {
         // ----------------------- MSM
         //     Y_2
 
-        // zig fmt: off
-        const check = weak_mul.mulMulti(8, .{
-            pedersen.G.p,
-            pedersen.H.p,
-            self.Y_0.p,
-            self.Y_1.p,
-            P.p,
-            C_ciphertext.p,
-            D.p,
-            C_commitment.p,
+        const check = ed25519.mulMulti(8, .{
+            pedersen.G,
+            pedersen.H,
+            self.Y_0,
+            self.Y_1,
+            P,
+            C_ciphertext,
+            D,
+            C_commitment,
         }, .{
             self.z_x.mul(w).add(self.z_x).toBytes(),
             c_negated_w.mul(w).add(self.z_r).toBytes(),
@@ -170,9 +169,8 @@ pub const Proof = struct {
             z_s_w.toBytes(),
             c_negated.toBytes(),
         });
-        // zig fmt: on
 
-        if (!self.Y_2.equivalent(.{ .p = check })) {
+        if (!self.Y_2.equivalent(check)) {
             return error.AlgebraicRelation;
         }
     }

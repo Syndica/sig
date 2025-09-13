@@ -6,7 +6,7 @@ const Edwards25519 = std.crypto.ecc.Edwards25519;
 const Sha3 = std.crypto.hash.sha3.Sha3_512;
 const Ristretto255 = std.crypto.ecc.Ristretto255;
 const Scalar = std.crypto.ecc.Edwards25519.scalar.Scalar;
-const weak_mul = sig.vm.syscalls.ecc.weak_mul;
+const ed25519 = sig.crypto.ed25519;
 const Transcript = sig.zksdk.Transcript;
 const bp = sig.zksdk.bulletproofs;
 
@@ -73,8 +73,8 @@ pub fn Proof(comptime bit_size: u64) type {
         ) Self {
             var G_buffer = table.G[0..bit_size].*;
             var H_buffer = table.H[0..bit_size].*;
-            var G: []Edwards25519 = &G_buffer;
-            var H: []Edwards25519 = &H_buffer;
+            var G: []Ristretto255 = &G_buffer;
+            var H: []Ristretto255 = &H_buffer;
             var a: []Scalar = a_vec;
             var b: []Scalar = b_vec;
 
@@ -106,7 +106,7 @@ pub fn Proof(comptime bit_size: u64) type {
                 // after the first round, the size has been divded by two, meaning we
                 // only need to have bit_size / 2 + 1 elements in the arrays.
                 var scalars: std.BoundedArray([32]u8, bit_size + 1) = .{};
-                var points: std.BoundedArray(Edwards25519, bit_size + 1) = .{};
+                var points: std.BoundedArray(Ristretto255, bit_size + 1) = .{};
 
                 if (first_round) {
                     for (a_L, G_factors[n .. n * 2]) |ai, gi| {
@@ -123,17 +123,15 @@ pub fn Proof(comptime bit_size: u64) type {
 
                 for (G_R) |gi| points.appendAssumeCapacity(gi);
                 for (H_L) |hi| points.appendAssumeCapacity(hi);
-                points.appendAssumeCapacity(Q.p);
+                points.appendAssumeCapacity(Q);
 
-                const L: Ristretto255 = .{
-                    .p = sig.crypto.ed25519.mulMulti(
-                        257, // 128 + 128 + 1
-                        false,
-                        false,
-                        points.constSlice(),
-                        scalars.constSlice(),
-                    ),
-                };
+                const L = sig.crypto.ed25519.pippenger.mulMultiRuntime(
+                    257, // 128 + 128 + 1
+                    false,
+                    true,
+                    points.constSlice(),
+                    scalars.constSlice(),
+                );
 
                 // reset the arrays
                 points.len = 0;
@@ -154,17 +152,15 @@ pub fn Proof(comptime bit_size: u64) type {
 
                 for (G_L) |gi| points.appendAssumeCapacity(gi);
                 for (H_R) |hi| points.appendAssumeCapacity(hi);
-                points.appendAssumeCapacity(Q.p);
+                points.appendAssumeCapacity(Q);
 
-                const R: Ristretto255 = .{
-                    .p = sig.crypto.ed25519.mulMulti(
-                        257, // 128 + 128 + 1
-                        false,
-                        false,
-                        points.constSlice(),
-                        scalars.constSlice(),
-                    ),
-                };
+                const R = sig.crypto.ed25519.pippenger.mulMultiRuntime(
+                    257, // 128 + 128 + 1
+                    false,
+                    true,
+                    points.constSlice(),
+                    scalars.constSlice(),
+                );
 
                 L_vec.appendAssumeCapacity(L);
                 R_vec.appendAssumeCapacity(R);
@@ -188,12 +184,12 @@ pub fn Proof(comptime bit_size: u64) type {
                     const fourth = if (first_round) u_inv.mul(H_factors[n + j]) else u_inv;
                     // zig fmt: on
 
-                    G_L[j] = weak_mul.mulMulti(
+                    G_L[j] = ed25519.mulMulti(
                         2,
                         .{ G_L[j], G_R[j] },
                         .{ first.toBytes(), second.toBytes() },
                     );
-                    H_L[j] = weak_mul.mulMulti(
+                    H_L[j] = ed25519.mulMulti(
                         2,
                         .{ H_L[j], H_R[j] },
                         .{ third.toBytes(), fourth.toBytes() },
@@ -253,12 +249,12 @@ pub fn Proof(comptime bit_size: u64) type {
             }
 
             points.appendAssumeCapacity(Q);
-            for (table.G[0..bit_size]) |g| points.appendAssumeCapacity(.{ .p = g });
-            for (table.H[0..bit_size]) |h| points.appendAssumeCapacity(.{ .p = h });
+            for (table.G[0..bit_size]) |g| points.appendAssumeCapacity(g);
+            for (table.H[0..bit_size]) |h| points.appendAssumeCapacity(h);
             for (self.L_vec) |l| points.appendAssumeCapacity(l);
             for (self.R_vec) |r| points.appendAssumeCapacity(r);
 
-            const check = sig.crypto.ed25519.mulMulti(
+            const check = sig.crypto.ed25519.mulMultiRuntime(
                 max_elements,
                 false,
                 true,
@@ -400,16 +396,18 @@ test "basic correctness" {
     for (b, H_factors) |bi, yi| try scalars.append(bi.mul(yi).toBytes());
     try scalars.append(c.toBytes());
 
-    var points: std.BoundedArray(Edwards25519, P_len) = .{};
+    var points: std.BoundedArray(Ristretto255, P_len) = .{};
     try points.appendSlice(table.G[0..n]);
     try points.appendSlice(table.H[0..n]);
-    try points.append(Q.p);
+    try points.append(Q);
 
-    const P: Ristretto255 = .{ .p = weak_mul.mulMulti(
+    const P = ed25519.mulMultiRuntime(
         P_len,
-        points.buffer,
-        scalars.buffer,
-    ) };
+        false,
+        true,
+        points.constSlice(),
+        scalars.constSlice(),
+    );
 
     var prover_transcript = Transcript.initTest("Test");
     var verifier_transcript = Transcript.initTest("Test");

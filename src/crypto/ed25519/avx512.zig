@@ -8,6 +8,7 @@ const Fe = Ed25519.Fe;
 const u32x8 = @Vector(8, u32);
 const i32x8 = @Vector(8, i32);
 const u64x4 = @Vector(4, u64);
+const u52x4 = @Vector(4, u52);
 
 // TODO: there's no inherent limitation from using inline assembly instead,
 // however this currently (Zig 0.14.1) crashes both LLVM and the self-hosted backend.
@@ -15,8 +16,28 @@ const u64x4 = @Vector(4, u64);
 // better codegen as opposed to inline assembly.
 extern fn @"llvm.x86.avx512.vpmadd52l.uq.256"(u64x4, u64x4, u64x4) u64x4;
 extern fn @"llvm.x86.avx512.vpmadd52h.uq.256"(u64x4, u64x4, u64x4) u64x4;
-const madd52lo = @"llvm.x86.avx512.vpmadd52l.uq.256";
-const madd52hi = @"llvm.x86.avx512.vpmadd52h.uq.256";
+
+inline fn madd52lo(x: u64x4, y: u64x4, z: u64x4) u64x4 {
+    if (@inComptime()) {
+        const V = @Vector(4, u128);
+        const tsrc2: u52x4 = @truncate(z);
+        const temp128 = @as(V, @as(u52x4, @truncate(y))) * @as(V, tsrc2);
+        return x + @as(u52x4, @truncate(temp128));
+    } else {
+        return @"llvm.x86.avx512.vpmadd52l.uq.256"(x, y, z);
+    }
+}
+
+inline fn madd52hi(x: u64x4, y: u64x4, z: u64x4) u64x4 {
+    if (@inComptime()) {
+        const V = @Vector(4, u128);
+        const tsrc2: u52x4 = @truncate(z);
+        const temp128 = @as(V, @as(u52x4, @truncate(y))) * @as(V, tsrc2);
+        return x + @as(u52x4, @truncate(temp128 >> @splat(52)));
+    } else {
+        return @"llvm.x86.avx512.vpmadd52h.uq.256"(x, y, z);
+    }
+}
 
 /// A vector of four field elements.
 pub const ExtendedPoint = struct {
@@ -602,8 +623,8 @@ test "vpmadd52luq" {
     const z: u64x4 = @splat(5);
 
     try std.testing.expectEqual(
-        madd52lo(z, x, y),
-        @as(u64x4, @splat(5 + 2 * 3)),
+        madd52lo(x, y, z),
+        @as(u64x4, @splat(2 + 3 * 5)),
     );
 }
 
