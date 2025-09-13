@@ -1,17 +1,17 @@
 const std = @import("std");
 const sig = @import("../../sig.zig");
-const crypto = std.crypto;
-const Ed25519 = crypto.ecc.Edwards25519;
-const Ristretto255 = crypto.ecc.Ristretto255;
-const CompressedScalar = Ed25519.scalar.CompressedScalar;
+const ed25519 = sig.crypto.ed25519;
+const Edwards25519 = std.crypto.ecc.Edwards25519;
+const Ristretto255 = std.crypto.ecc.Ristretto255;
+const CompressedScalar = Edwards25519.scalar.CompressedScalar;
 
-const ExtendedPoint = sig.crypto.ed25519.ExtendedPoint;
-const CachedPoint = sig.crypto.ed25519.CachedPoint;
+const ExtendedPoint = ed25519.ExtendedPoint;
+const CachedPoint = ed25519.CachedPoint;
 
 const LookupTable = struct {
     table: [8]CachedPoint,
 
-    fn init(point: Ed25519) LookupTable {
+    fn init(point: Edwards25519) LookupTable {
         const e: ExtendedPoint = .fromPoint(point);
         var points: [8]CachedPoint = @splat(.fromExtended(e));
         for (0..7) |i| points[i + 1] = .fromExtended(e.addCached(points[i]));
@@ -26,15 +26,10 @@ const LookupTable = struct {
 
         const abs = @abs(index);
 
-        // set t = 0 * P = identityElement
-        var t: CachedPoint = .identityElement;
-        for (1..9) |j| if (abs == j) {
-            t = self.table[j - 1];
-        };
-        // now t == |x| * P
-
+        // t == |x| * P
+        var t: CachedPoint = if (abs == 0) .identityElement else self.table[abs - 1];
+        // if index was negative, negate the point
         if (abs != index) t = t.neg();
-        // not t == x * P
 
         return t;
     }
@@ -42,9 +37,11 @@ const LookupTable = struct {
 
 pub fn mulMulti(
     comptime max: comptime_int,
-    points: []const Ed25519,
+    comptime encoded: bool,
+    comptime ristretto: bool,
+    points: []const ed25519.PointType(encoded, ristretto),
     scalars: []const CompressedScalar,
-) Ed25519 {
+) ed25519.ReturnType(encoded, ristretto) {
     std.debug.assert(points.len <= max);
     std.debug.assert(scalars.len <= max);
     std.debug.assert(points.len == scalars.len);
@@ -56,7 +53,18 @@ pub fn mulMulti(
 
     var lookup_tables: std.BoundedArray(LookupTable, max) = .{};
     for (points) |point| {
-        lookup_tables.appendAssumeCapacity(.init(point));
+        // Translate from whatever the input format is to a decompressed Ed25519 point.
+        const decompressed = switch (encoded) {
+            true => switch (ristretto) {
+                true => (try Ristretto255.fromBytes(point)).p,
+                else => try Edwards25519.fromBytes(point),
+            },
+            else => switch (ristretto) {
+                true => point.p,
+                else => point,
+            },
+        };
+        lookup_tables.appendAssumeCapacity(.init(decompressed));
     }
 
     var q: ExtendedPoint = .identityElement;
@@ -68,5 +76,8 @@ pub fn mulMulti(
         }
     }
 
-    return q.toPoint();
+    return switch (ristretto) {
+        true => .{ .p = q.toPoint() },
+        else => q.toPoint(),
+    };
 }

@@ -2,8 +2,8 @@ const sig = @import("../../sig.zig");
 const std = @import("std");
 const builtin = @import("builtin");
 
-pub const pippenger = @import("pippenger.zig");
-pub const straus = @import("straus.zig");
+const pippenger = @import("pippenger.zig");
+const straus = @import("straus.zig");
 
 const generic = @import("generic.zig");
 const avx512 = @import("avx512.zig");
@@ -17,6 +17,7 @@ pub const ExtendedPoint = namespace.ExtendedPoint;
 pub const CachedPoint = namespace.CachedPoint;
 
 const Edwards25519 = std.crypto.ecc.Edwards25519;
+const Ristretto255 = std.crypto.ecc.Ristretto255;
 const Sha512 = std.crypto.hash.sha2.Sha512;
 const CompressedScalar = [32]u8;
 
@@ -81,8 +82,20 @@ pub fn verifyBatchOverSingleMessage(
         zhs.appendAssumeCapacity(Edwards25519.scalar.mul(z, hram_batch.constSlice()[i]));
     }
 
-    const zr = straus.mulMulti(max, expected_r_batch.constSlice(), z_batch.constSlice()).clearCofactor();
-    const zah = straus.mulMulti(max, a_batch.constSlice(), zhs.constSlice()).clearCofactor();
+    const zr = mulMulti(
+        max,
+        false,
+        false,
+        expected_r_batch.constSlice(),
+        z_batch.constSlice(),
+    ).clearCofactor();
+    const zah = mulMulti(
+        max,
+        false,
+        false,
+        a_batch.constSlice(),
+        zhs.constSlice(),
+    ).clearCofactor();
 
     const zsb = try Edwards25519.basePoint.mulPublic(zs_sum);
     if (zr.add(zah).sub(zsb).rejectIdentity()) |_| {
@@ -155,6 +168,60 @@ pub fn affineEqual(a: Edwards25519, b: Edwards25519) bool {
     const x1 = b.x.mul(a.z);
     const y1 = b.y.mul(a.z);
     return x1.equivalent(a.x) and y1.equivalent(a.y);
+}
+
+pub fn ReturnType(encoded: bool, ristretto: bool) type {
+    const Base = if (ristretto) Ristretto255 else Edwards25519;
+    return if (encoded) (error{NonCanonical} || std.crypto.errors.EncodingError)!Base else Base;
+}
+
+pub fn PointType(encoded: bool, ristretto: bool) type {
+    if (encoded) return [32]u8;
+    return if (ristretto) Ristretto255 else Edwards25519;
+}
+
+pub fn mulMulti(
+    comptime max_elements: comptime_int,
+    /// Set to true if the input is in wire-format. This lets us usually save
+    /// an extra stack copy and loop when buffering the decoding process,
+    /// instead just doing it once here straight into the extended point form.
+    ///
+    /// Changes the return type of the function to an error union, in case
+    /// the encoded points decode into a non-canonical form.
+    comptime encoded: bool,
+    /// (Option only applies if we're decoding from a wire format).
+    ///
+    /// Set to true if the wire format we're decoding from is Ristretto instead
+    /// of Edwards25519. The actual MSM itself still happens on the underlying
+    /// Edwards25519 element, since there's no difference between the operation
+    /// on Ristretto and Edwards25519, but the decoding is different.
+    comptime ristretto: bool,
+    ed_points: []const PointType(encoded, ristretto),
+    compressed_scalars: []const CompressedScalar,
+) ReturnType(encoded, ristretto) {
+    // through impirical benchmarking, we see that pippenger's MSM becomes faster around
+    // the 190 element mark.
+    // TODO: maybe consider checking the `max_elements < 190` here instead
+    // in order to avoid generating both versions? probably would be slower, not sure about the
+    // code size impact.
+
+    if (ed_points.len < 190) {
+        return straus.mulMulti(
+            max_elements,
+            encoded,
+            ristretto,
+            ed_points,
+            compressed_scalars,
+        );
+    } else {
+        return pippenger.mulMulti(
+            max_elements,
+            encoded,
+            ristretto,
+            ed_points,
+            compressed_scalars,
+        );
+    }
 }
 
 test "batch verification" {

@@ -109,7 +109,7 @@ pub const SignedGossipData = struct {
             error.NonCanonical => unreachable,
         };
         return .{
-            .signature = .{ .data = signature.toBytes() },
+            .signature = .fromSignature(signature),
             .data = data,
         };
     }

@@ -142,7 +142,7 @@ pub const Transaction = struct {
 
         for (signatures, keypairs) |*signature, keypair| {
             const msg_signature = keypair.sign(msg_bytes, null) catch return error.SigningError;
-            signature.* = .{ .data = msg_signature.toBytes() };
+            signature.* = .fromSignature(msg_signature);
         }
 
         return .{
@@ -155,7 +155,7 @@ pub const Transaction = struct {
     pub fn serialize(writer: anytype, data: anytype, _: sig.bincode.Params) !void {
         std.debug.assert(data.signatures.len <= std.math.maxInt(u16));
         try leb.writeULEB128(writer, @as(u16, @intCast(data.signatures.len)));
-        for (data.signatures) |sgn| try writer.writeAll(&sgn.data);
+        for (data.signatures) |sgn| try writer.writeAll(&sgn.toBytes());
         try data.msg.serialize(writer, data.version);
     }
 
