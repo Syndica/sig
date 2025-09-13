@@ -1626,14 +1626,96 @@ test "onSlotRooted shrink and delete" {
     try std.testing.expectEqual(null, try iter.next());
 }
 
+fn testSnapshotEqualsDb(
+    allocator: std.mem.Allocator,
+    original: *AccountsDB,
+    // new_snapshot_dir: std.fs.Dir,
+    new_snapshot_path: []const u8,
+) !void {
+    if (!builtin.is_test) @compileError("testSnapshotEqualsDb is for testing only");
+
+    // var tmp_dir_root = std.testing.tmpDir(.{ .iterate = true });
+    // defer tmp_dir_root.cleanup();
+
+    // const loaded_snapshot = try sig.accounts_db.snapshot.loadSnapshot(
+    //     allocator,
+    //     .{
+    //         .snapshot_dir = new_snapshot_dir_path,
+    //     },
+    //     "data/genesis-files/testnet_genesis.bin",
+    //     .noop,
+    //     .{ .validate_snapshot = true },
+    // );
+    // defer loaded_snapshot.deinit();
+
+    // var new_db = try AccountsDB.init(.{
+    //     .allocator = allocator,
+    //     .logger = .noop,
+    //     .snapshot_dir = new_snapshot_dir,
+    //     .geyser_writer = null,
+    //     .gossip_view = null,
+    //     .index_allocation = .ram,
+    //     .number_of_index_shards = 4,
+    // });
+    // defer new_db.deinit();
+    // var snap_files = false;
+
+    // const all_snap_fields = try sig.accounts_db.FullAndIncrementalManifest.fromFiles(
+    //     allocator,
+    //     .noop,
+    //     new_snapshot_dir,
+    //     snap_files,
+    // );
+    // defer all_snap_fields.deinit(allocator);
+
+    var loaded_snapshot = try sig.accounts_db.snapshot.loadSnapshot(
+        allocator,
+        .{ .snapshot_dir = new_snapshot_path },
+        "data/genesis-files/testnet_genesis.bin",
+        .noop,
+        .{
+            .gossip_service = null,
+            .geyser_writer = null,
+            .validate_snapshot = true,
+        },
+    );
+    defer loaded_snapshot.deinit();
+
+    // const manifest, const snap_files = sig.accounts_db.snapshot.download.getOrDownloadAndUnpackSnapshot(
+    //     allocator,
+    //     .noop,
+    //     new_snapshot_path,
+    //     .{},
+    // );
+    // try new_db.loadWithDefaults(
+    //     allocator,
+    //     combined_manifest,
+    //     n_threads_snapshot_load,
+    //     options.validate_snapshot,
+    //     config.accounts_per_file_estimate,
+    //     config.fastload,
+    //     config.save_index,
+    // );
+    // errdefer collapsed_manifest.deinit(allocator);
+
+    const original_keys = try original
+        .getAllPubkeysSorted(allocator);
+    defer allocator.free(original_keys);
+    const loaded_keys = try loaded_snapshot.accounts_db
+        .getAllPubkeysSorted(allocator);
+    defer allocator.free(loaded_keys);
+
+    try std.testing.expectEqualSlices(Pubkey, original_keys, loaded_keys);
+}
+
 test "snapshot generation happens without error" {
     const allocator = std.testing.allocator;
     const logger: Logger = .noop;
     var prng = std.Random.DefaultPrng.init(5083);
     const random = prng.random();
 
-    var tmp_dir_root = std.testing.tmpDir(.{ .iterate = true });
-    defer tmp_dir_root.cleanup();
+    const tmp_dir_root = std.testing.tmpDir(.{ .iterate = true });
+    // defer tmp_dir_root.cleanup();
     const snapshot_dir = tmp_dir_root.dir;
 
     var db = try AccountsDB.init(.{
@@ -1701,4 +1783,15 @@ test "snapshot generation happens without error" {
 
     try std.testing.expect(found_inc);
     try std.testing.expect(found_full);
+
+    const snapshot_dir_str = try std.fmt.allocPrint(
+        allocator,
+        "{s}",
+        .{sig.utils.fmt.tryRealPath(tmp_dir_root.dir, "")},
+    );
+    defer allocator.free(snapshot_dir_str);
+
+    std.debug.print("{s}\n", .{snapshot_dir_str});
+
+    try testSnapshotEqualsDb(allocator, &db, snapshot_dir_str);
 }
