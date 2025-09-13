@@ -80,7 +80,7 @@ pub const Signature = extern struct {
         };
 
         if (decoded.len != SIZE) return error.InvalidSignature;
-        return .{ .data = decoded.constSlice()[0..SIZE].* };
+        return .fromBytes(decoded.constSlice()[0..SIZE].*);
     }
 
     pub const BASE58_MAX_SIZE = base58.encodedMaxSize(SIZE);

@@ -246,7 +246,7 @@ test "RepairRequestHeader serialization round trip" {
     prng.fill(&signature);
 
     const header: RepairRequestHeader = .{
-        .signature = .{ .data = signature },
+        .signature = .fromBytes(signature),
         .sender = Pubkey.initRandom(prng.random()),
         .recipient = Pubkey.initRandom(prng.random()),
         .timestamp = 5924,
@@ -413,7 +413,7 @@ const testHelpers = struct {
         random.bytes(&signature);
 
         return .{
-            .signature = .{ .data = signature },
+            .signature = .fromBytes(signature),
             .sender = Pubkey.initRandom(random),
             .recipient = Pubkey.initRandom(random),
             .timestamp = random.int(u64),
@@ -485,7 +485,7 @@ const testHelpers = struct {
         std.debug.print("nonce: {any}\n\n", .{header.nonce});
         std.debug.print("recipient: {any}\n\n", .{header.recipient.data});
         std.debug.print("sender: {any}\n\n", .{header.sender.data});
-        std.debug.print("signature: {any}\n\n", .{header.signature.data});
+        std.debug.print("signature: {any}\n\n", .{header.signature.toBytes()});
         std.debug.print("timestamp: {any}\n\n", .{header.timestamp});
     }
 };

@@ -885,7 +885,7 @@ pub const CommonHeader = struct {
     pub const @"!bincode-config:variant" = ShredVariantConfig;
 
     const ZEROED_FOR_TEST: CommonHeader = .{
-        .leader_signature = Signature{ .data = .{0} ** Signature.SIZE },
+        .leader_signature = .ZEROES,
         .variant = ShredVariant{ .shred_type = .data, .proof_size = 0, .chained = false, .resigned = false },
         .slot = 0,
         .index = 0,
@@ -1265,7 +1265,7 @@ test "getLeaderSignature" {
         193, 194, 143, 192, 142, 141, 134, 85,  93,  252, 43,  200, 224, 101, 12,  28,  97,  202, 230, 215,
         34,  217, 20,  7,
     };
-    try std.testing.expect(std.mem.eql(u8, &expected_signature, &signature.data));
+    try std.testing.expect(std.mem.eql(u8, &expected_signature, &signature.toBytes()));
 }
 
 test "layout.merkleRoot" {

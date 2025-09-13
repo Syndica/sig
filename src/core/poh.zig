@@ -128,7 +128,7 @@ pub fn testPoh(valid_signatures: bool) !struct { Poh, std.BoundedArray(sig.core.
         const sigs = try allocator.dupe(sig.core.Signature, a_transaction.signatures);
         allocator.free(a_transaction.signatures);
         a_transaction.signatures = sigs;
-        sigs[0].data[0] +%= 1;
+        sigs[0].r[0] +%= 1;
     }
 
     const transactions = [_]Transaction{
