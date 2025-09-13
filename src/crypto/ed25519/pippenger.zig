@@ -24,19 +24,7 @@ fn PointType(encoded: bool, ristretto: bool) type {
 
 pub fn mulMulti(
     comptime max_elements: comptime_int,
-    /// Set to true if the input is in wire-format. This lets us usually save
-    /// an extra stack copy and loop when buffering the decoding process,
-    /// instead just doing it once here straight into the extended point form.
-    ///
-    /// Changes the return type of the function to an error union, in case
-    /// the encoded points decode into a non-canonical form.
     comptime encoded: bool,
-    /// (Option only applies if we're decoding from a wire format).
-    ///
-    /// Set to true if the wire format we're decoding from is Ristretto instead
-    /// of Edwards25519. The actual MSM itself still happens on the underlying
-    /// Edwards25519 element, since there's no difference between the operation
-    /// on Ristretto and Edwards25519, but the decoding is different.
     comptime ristretto: bool,
     ed_points: []const PointType(encoded, ristretto),
     compressed_scalars: []const CompressedScalar,

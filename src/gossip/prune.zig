@@ -84,8 +84,8 @@ pub const PruneData = struct {
         var d: [PACKET_DATA_SIZE]u8 = undefined;
         const data = try bincode.writeToSlice(&d, signable_data, .{});
         // sign
-        var signature = try keypair.sign(data, null);
-        self.signature.data = signature.toBytes();
+        const signature = try keypair.sign(data, null);
+        self.signature = .fromSignature(signature);
     }
 
     pub fn signWithPrefix(self: *PruneData, keypair: *const KeyPair) !void {
@@ -100,8 +100,8 @@ pub const PruneData = struct {
         var d: [PACKET_DATA_SIZE]u8 = undefined;
         const data = try bincode.writeToSlice(&d, signable_data, .{});
         // sign
-        var signature = try keypair.sign(data, null);
-        self.signature.data = signature.toBytes();
+        const signature = try keypair.sign(data, null);
+        self.signature = .fromSignature(signature);
     }
 
     pub fn verify(self: *const PruneData) !void {
@@ -179,7 +179,10 @@ test "sign/verify PruneData with prefix" {
 
     // check if signing works
     try prune_data.signWithPrefix(&keypair);
-    try std.testing.expectEqual(expected_signature.data, prune_data.signature.data);
+    try std.testing.expectEqual(
+        expected_signature.toBytes(),
+        prune_data.signature.toBytes(),
+    );
 }
 
 test "PruneData sig verify" {
@@ -211,6 +214,6 @@ test "PruneData sig verify" {
     };
     try prune_v2.signWithoutPrefix(&keypair);
 
-    var sig_bytes = prune_v2.signature.data;
+    var sig_bytes = prune_v2.signature.toBytes();
     try std.testing.expectEqualSlices(u8, &rust_bytes, &sig_bytes);
 }
