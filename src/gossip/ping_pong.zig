@@ -66,7 +66,7 @@ pub const Pong = struct {
         return .{
             .from = Pubkey.fromPublicKey(&keypair.public_key),
             .hash = hash,
-            .signature = .{ .data = signature.toBytes() },
+            .signature = .fromSignature(signature),
         };
     }
 

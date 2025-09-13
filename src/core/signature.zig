@@ -9,20 +9,37 @@ const e = std.crypto.errors;
 
 const Pubkey = core.Pubkey;
 
-pub const Signature = struct {
-    data: [SIZE]u8,
+pub const Signature = extern struct {
+    r: [32]u8,
+    s: [32]u8,
 
     pub const SIZE: usize = 64;
 
-    pub const ZEROES: Signature = .{ .data = .{0} ** SIZE };
+    pub const ZEROES: Signature = .{ .r = @splat(0), .s = @splat(0) };
 
+    pub fn fromBytes(data: [SIZE]u8) Signature {
+        return .{
+            .r = data[0..32].*,
+            .s = data[32..64].*,
+        };
+    }
+
+    pub fn toBytes(self: Signature) [SIZE]u8 {
+        return self.r ++ self.s;
+    }
+
+    pub fn fromSignature(sig: Ed25519.Signature) Signature {
+        return .{ .r = sig.r, .s = sig.s };
+    }
+
+    // TODO: replace with our own simd verify
     pub const VerifyError = e.NonCanonicalError;
     pub fn verify(
         self: Signature,
         pubkey: Pubkey,
         msg: []const u8,
     ) VerifyError!bool {
-        const signature = Ed25519.Signature.fromBytes(self.data);
+        const signature: Ed25519.Signature = .{ .r = self.r, .s = self.s };
         const byte_pubkey = try Ed25519.PublicKey.fromBytes(pubkey.data);
         signature.verify(msg, byte_pubkey) catch return false;
         return true;
@@ -36,12 +53,14 @@ pub const Signature = struct {
         self: Signature,
         pubkey: Pubkey,
     ) VerifierError!Verifier {
-        const signature = Ed25519.Signature.fromBytes(self.data);
+        const signature: Ed25519.Signature = .{ .r = self.r, .s = self.s };
         return signature.verifier(try Ed25519.PublicKey.fromBytes(pubkey.data));
     }
 
     pub fn eql(self: *const Signature, other: *const Signature) bool {
-        return std.mem.eql(u8, self.data[0..], other.data[0..]);
+        const x: @Vector(SIZE, u8) = self.toBytes();
+        const y: @Vector(SIZE, u8) = other.toBytes();
+        return @reduce(.And, x == y);
     }
 
     pub inline fn parse(comptime str: []const u8) Signature {
@@ -68,7 +87,7 @@ pub const Signature = struct {
     pub const Base58String = std.BoundedArray(u8, BASE58_MAX_SIZE);
 
     pub fn base58String(self: Signature) Base58String {
-        return BASE58_ENDEC.encodeArray(SIZE, self.data);
+        return BASE58_ENDEC.encodeArray(SIZE, self.toBytes());
     }
 
     pub fn format(
