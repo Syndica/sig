@@ -444,8 +444,7 @@ test checkStatusCache {
 
     var prng = std.Random.DefaultPrng.init(0);
 
-    var ancestors = Ancestors{};
-    defer ancestors.deinit(allocator);
+    var ancestors = Ancestors.EMPTY;
 
     var status_cache: sig.core.StatusCache = .DEFAULT;
     defer status_cache.deinit(allocator);
@@ -463,7 +462,7 @@ test checkStatusCache {
         ),
     );
 
-    try ancestors.ancestors.put(allocator, 0, {});
+    try ancestors.addSlot(0);
     try status_cache.insert(allocator, prng.random(), &recent_blockhash, &msg_hash.data, 0);
 
     try std.testing.expectEqual(

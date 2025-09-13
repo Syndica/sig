@@ -787,8 +787,8 @@ pub const TestState = struct {
         errdefer blockhash_queue.deinit(allocator);
         try blockhash_queue.insertGenesisHash(allocator, .ZEROES, 1);
 
-        var ancestors = Ancestors{};
-        try ancestors.addSlot(allocator, 0);
+        var ancestors = Ancestors.EMPTY;
+        try ancestors.addSlot(0);
 
         const replay_votes_channel: *sig.sync.Channel(ParsedVote) = try .create(allocator);
 
@@ -813,7 +813,6 @@ pub const TestState = struct {
     pub fn deinit(self: *TestState, allocator: Allocator) void {
         self.account_map.deinit();
         self.status_cache.deinit(allocator);
-        self.ancestors.deinit(allocator);
         var bhq = self.blockhash_queue.tryWrite() orelse unreachable;
         bhq.get().deinit(allocator);
         bhq.unlock();

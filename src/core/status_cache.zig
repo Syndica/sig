@@ -4,7 +4,6 @@ const sig = @import("../sig.zig");
 const HashMap = std.AutoArrayHashMapUnmanaged;
 const ArrayList = std.ArrayListUnmanaged;
 const RwMux = sig.sync.RwMux;
-const bincode = sig.bincode;
 
 const Hash = sig.core.Hash;
 const Slot = sig.core.Slot;
@@ -96,7 +95,7 @@ pub const StatusCache = struct {
         var roots = self.roots.read();
         defer roots.unlock();
         return for (stored_forks.items) |fork| {
-            if (ancestors.ancestors.contains(fork.slot) or roots.get().contains(fork.slot)) {
+            if (ancestors.containsSlot(fork.slot) or roots.get().contains(fork.slot)) {
                 break fork;
             }
         } else null;
@@ -216,31 +215,6 @@ pub const StatusCache = struct {
     }
 };
 
-test "status cache (de)serialize Ancestors" {
-    const allocator = std.testing.allocator;
-
-    var ancestors = Ancestors{
-        .ancestors = try .init(allocator, &.{ 1, 2, 3, 4 }, &.{}),
-    };
-    defer ancestors.deinit(allocator);
-
-    const serialized = try bincode.writeAlloc(allocator, ancestors, .{});
-
-    defer allocator.free(serialized);
-
-    const deserialized = try bincode.readFromSlice(
-        allocator,
-        HashMap(Slot, usize),
-        serialized,
-        .{},
-    );
-    defer bincode.free(allocator, deserialized);
-
-    try std.testing.expectEqual(ancestors.ancestors.count(), deserialized.count());
-    try std.testing.expectEqualSlices(Slot, ancestors.ancestors.keys(), deserialized.keys());
-    try std.testing.expectEqualSlices(usize, &.{ 0, 0, 0, 0 }, deserialized.values());
-}
-
 test "status cache empty" {
     const signature = sig.core.Signature.ZEROES;
     const block_hash = Hash.ZEROES;
@@ -252,7 +226,7 @@ test "status cache empty" {
         status_cache.getStatus(
             &signature.data,
             &block_hash,
-            &Ancestors{},
+            &Ancestors.EMPTY,
         ),
     );
 }
@@ -265,10 +239,8 @@ test "status cache find with ancestor fork" {
     const signature = sig.core.Signature.ZEROES;
     const blockhash = Hash.ZEROES;
 
-    var ancestors: Ancestors = .{
-        .ancestors = try HashMap(Slot, void).init(allocator, &.{0}, &.{}),
-    };
-    defer ancestors.ancestors.deinit(allocator);
+    var ancestors: Ancestors = .EMPTY;
+    try ancestors.addSlot(0);
 
     var status_cache: StatusCache = .DEFAULT;
     defer status_cache.deinit(allocator);
@@ -289,7 +261,7 @@ test "status cache find without ancestor fork" {
     const signature = sig.core.Signature.ZEROES;
     const blockhash = Hash.ZEROES;
 
-    var ancestors: Ancestors = .{};
+    var ancestors: Ancestors = .EMPTY;
 
     var status_cache: StatusCache = .DEFAULT;
     defer status_cache.deinit(allocator);
@@ -310,7 +282,7 @@ test "status cache find with root ancestor fork" {
     const signature = sig.core.Signature.ZEROES;
     const blockhash = Hash.ZEROES;
 
-    var ancestors: Ancestors = .{};
+    var ancestors: Ancestors = .EMPTY;
 
     var status_cache: StatusCache = .DEFAULT;
     defer status_cache.deinit(allocator);
@@ -332,10 +304,8 @@ test "status cache insert picks latest blockhash fork" {
     const signature = sig.core.Signature.ZEROES;
     const blockhash = Hash.ZEROES;
 
-    var ancestors: Ancestors = .{
-        .ancestors = try HashMap(Slot, void).init(allocator, &.{0}, &.{}),
-    };
-    defer ancestors.ancestors.deinit(allocator);
+    var ancestors: Ancestors = .EMPTY;
+    try ancestors.addSlot(0);
 
     var status_cache: StatusCache = .DEFAULT;
     defer status_cache.deinit(allocator);
@@ -358,7 +328,7 @@ test "status cache root expires" {
     const signature = sig.core.Signature.ZEROES;
     const blockhash = Hash.ZEROES;
 
-    var ancestors: Ancestors = .{};
+    var ancestors: Ancestors = .EMPTY;
 
     var status_cache: StatusCache = .DEFAULT;
     defer status_cache.deinit(allocator);

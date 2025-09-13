@@ -756,7 +756,7 @@ test "loadAndExecuteTransactions: no transactions" {
     const transactions: []RuntimeTransaction = &.{};
     var batch_account_cache: account_loader.BatchAccountCache = .{};
 
-    const ancestors: Ancestors = .{};
+    const ancestors: Ancestors = .EMPTY;
     const feature_set: FeatureSet = .ALL_DISABLED;
     var status_cache: StatusCache = .DEFAULT;
     const sysvar_cache: SysvarCache = .{};
@@ -950,8 +950,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
         },
     );
 
-    var ancestors: Ancestors = .{};
-    defer ancestors.deinit(allocator);
+    var ancestors: Ancestors = .EMPTY;
 
     const feature_set: FeatureSet = .ALL_ENABLED_AT_GENESIS;
 

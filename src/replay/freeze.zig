@@ -278,9 +278,8 @@ pub fn hashSlot(allocator: Allocator, params: HashSlotParams) !struct { ?LtHash,
             });
 
     if (params.feature_set.active(.accounts_lt_hash, params.slot)) {
-        var parent_ancestors = try params.ancestors.clone(allocator);
-        defer parent_ancestors.deinit(allocator);
-        assert(parent_ancestors.ancestors.swapRemove(params.slot));
+        var parent_ancestors = params.ancestors.*;
+        parent_ancestors.removeSlot(params.slot);
 
         var lt_hash = params.parent_lt_hash.* orelse return error.UnknownParentLtHash;
         lt_hash.mixIn(try deltaLtHash(params.account_reader, params.slot, &parent_ancestors));
@@ -366,7 +365,7 @@ pub fn deltaLtHash(
 }
 
 test "deltaLtHash is identity for 0 accounts" {
-    try std.testing.expectEqual(LtHash.IDENTITY, try deltaLtHash(.noop, 0, &Ancestors{}));
+    try std.testing.expectEqual(LtHash.IDENTITY, try deltaLtHash(.noop, 0, &Ancestors.EMPTY));
 }
 
 test "deltaMerkleHash for 0 accounts" {
@@ -569,10 +568,9 @@ test "delta hashes with many accounts" {
     const expected_merkle_hash =
         Hash.parseRuntime("5tpzYxp8ghAETjXaXnZvxZov11iNEvSbDZXNAMoJX6ov") catch unreachable;
 
-    var parent_ancestors = Ancestors{};
-    defer parent_ancestors.deinit(allocator);
-    try parent_ancestors.ancestors.put(allocator, 0, {});
-    try parent_ancestors.ancestors.put(allocator, 1, {});
+    var parent_ancestors = Ancestors.EMPTY;
+    try parent_ancestors.addSlot(0);
+    try parent_ancestors.addSlot(1);
 
     const actual_lt_hash = try deltaLtHash(accounts.accountReader(), hash_slot, &parent_ancestors);
     const actual_merkle_hash = try deltaMerkleHash(accounts.accountReader(), allocator, hash_slot);
