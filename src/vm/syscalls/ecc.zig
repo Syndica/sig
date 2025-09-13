@@ -359,7 +359,7 @@ pub fn curveMultiscalarMul(
                 };
             }
 
-            const msm = sig.crypto.ed25519.pippenger.mulMulti(
+            const msm = sig.crypto.ed25519.mulMulti(
                 512,
                 true,
                 id == .ristretto,
