@@ -1,0 +1,40 @@
+{
+  "apiVersion": "v2",
+  "differential": {
+    "driver": "solfuzz",
+    "path": "target/fuzz_sol_vm_syscall",
+    "implementations": [
+      {
+        "impl": "sig",
+        "path": "lib/libsolfuzz_sig.so",
+        "feature": "asan",
+        "source": ""
+      },
+      {
+        "impl": "agave",
+        "path": "lib/libsolfuzz_agave.so",
+        "feature": "asan",
+        "source": ""
+      }
+    ]
+  },
+  "lineage": "sol_vm_syscall_get_sysvar_diff",
+  "corpusGroup": "sol_vm_syscall_get_sysvar_diff",
+  "architecture": {
+    "base": "x86_64",
+    "ext": [
+      "avx"
+    ]
+  },
+  "generatesCustomOutput": true,
+  "env": [
+    {
+      "key": "SOLFUZZ_TARGETS",
+      "value": "lib/libsolfuzz_agave.so,lib/libsolfuzz_sig.so"
+    },
+    {
+      "key": "SOLFUZZ_SYSCALL_NAME",
+      "value": "sol_get_sysvar"
+    }
+  ]
+}
