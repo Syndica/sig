@@ -661,6 +661,84 @@ pub fn secp256k1Recover(
     @memcpy(recovery_result, pubkey.toUncompressedSec1()[1..65]);
 }
 
+const BigModExpParams = extern struct {
+    base_addr: u64,
+    base_len: u64,
+    exponent_addr: u64,
+    exponent_len: u64,
+    modulus_addr: u64,
+    modulus_len: u64,
+};
+
+pub fn bigModExp(
+    tc: *TransactionContext,
+    memory_map: *MemoryMap,
+    registers: *RegisterMap,
+) Error!void {
+    const params_addr = registers.get(.r1);
+    const return_value_addr = registers.get(.r2);
+
+    const params = try memory_map.translateType(
+        BigModExpParams,
+        .constant,
+        params_addr,
+        tc.getCheckAligned(),
+    );
+
+    const input_length = @max(
+        params.base_len,
+        params.exponent_len,
+        params.modulus_len,
+    );
+    if (input_length > 512) return SyscallError.InvalidLength;
+
+    // The compute units are calculated by the quadratic equation `0.5 input_len^2 + 190`
+    const cb = tc.compute_budget;
+    const cost = cb.syscall_base_cost +|
+        (input_length *| input_length /
+            cb.big_modular_exponentiation_cost_divisor +|
+            cb.big_modular_exponentiation_base_cost);
+
+    try tc.consumeCompute(cost);
+
+    const base = try memory_map.translateSlice(
+        u8,
+        .constant,
+        params.base_addr,
+        params.base_len,
+        tc.getCheckAligned(),
+    );
+    const exponent = try memory_map.translateSlice(
+        u8,
+        .constant,
+        params.exponent_addr,
+        params.exponent_len,
+        tc.getCheckAligned(),
+    );
+    const modulus = try memory_map.translateSlice(
+        u8,
+        .constant,
+        params.modulus_addr,
+        params.modulus_len,
+        tc.getCheckAligned(),
+    );
+
+    // big mod exp
+
+    const return_value = try memory_map.translateSlice(
+        u8,
+        .mutable,
+        return_value_addr,
+        params.modulus_len,
+        tc.getCheckAligned(),
+    );
+    _ = return_value;
+
+    _ = base;
+    _ = exponent;
+    _ = modulus;
+}
+
 test "edwards curve point validation" {
     const valid_bytes = [_]u8{
         201, 179, 241, 122, 180, 185, 239, 50,  183, 52,  221, 0,  153,
@@ -1837,4 +1915,80 @@ test "secp256k1_recover" {
     try std.testing.expectEqual(3, registers.get(.r0)); // InvalidSignature
 
     try std.testing.expectEqual(0, tc.compute_meter);
+}
+
+test "big mod exp" {
+    const allocator = std.testing.allocator;
+
+    var prng: std.Random.DefaultPrng = .init(0);
+    const random = prng.random();
+
+    var cache, var tc = try sig.runtime.testing.createTransactionContext(allocator, random, .{
+        .compute_meter = 25_000,
+        .accounts = &.{
+            .{
+                .pubkey = .initRandom(random),
+                .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+            },
+        },
+    });
+    defer {
+        sig.runtime.testing.deinitTransactionContext(allocator, tc);
+        cache.deinit(allocator);
+    }
+
+    _ = &tc;
+
+    const base_addr = 0x100000000;
+    const base: [32]u8 = .{
+        0x98, 0x74, 0x23, 0x14, 0x72, 0x31, 0x74, 0x32, 0x84, 0x79, 0x23, 0x17, 0x43, 0x92,
+        0x87, 0x49, 0x18, 0x23, 0x74, 0x39, 0x28, 0x74, 0x92, 0x37, 0x49, 0x32, 0x87, 0x19,
+        0x37, 0x28, 0x97, 0x19,
+    };
+    const exponent_addr = 0x200000000;
+    const exponent: [32]u8 = .{
+        0x09, 0x48, 0x40, 0x39, 0x85, 0x40, 0x12, 0x32, 0x88, 0x94, 0x38, 0x57, 0x94, 0x75,
+        0x81, 0x23, 0x47, 0x23, 0x20, 0x99, 0x08, 0x00, 0x51, 0x35, 0x61, 0x65, 0x12, 0x61,
+        0x66, 0x26, 0x62, 0x22,
+    };
+    const modulus_addr = 0x300000000;
+    const modulus: [32]u8 = .{
+        0x25, 0x53, 0x23, 0x21, 0xa2, 0x14, 0x32, 0x14, 0x23, 0x12, 0x42, 0x12, 0x22, 0x22,
+        0x24, 0x22, 0x2b, 0x24, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22,
+        0x22, 0x22, 0x24, 0x44,
+    };
+
+    const result_addr = 0x400000000;
+    var result: [32]u8 = undefined;
+
+    const params: BigModExpParams = .{
+        .base_addr = base_addr,
+        .base_len = base.len,
+        .exponent_addr = exponent_addr,
+        .exponent_len = exponent.len,
+        .modulus_addr = modulus_addr,
+        .modulus_len = modulus.len,
+    };
+    const params_addr = 0x500000000;
+
+    var memory_map: MemoryMap = try .init(allocator, &.{
+        .init(.constant, &base, base_addr),
+        .init(.constant, &exponent, exponent_addr),
+        .init(.constant, &modulus, modulus_addr),
+        .init(.mutable, &result, result_addr),
+        .init(.constant, std.mem.asBytes(&params), params_addr),
+    }, .v3, .{});
+    defer memory_map.deinit(allocator);
+
+    var registers: sig.vm.interpreter.RegisterMap = .initFill(0);
+    registers.set(.r1, params_addr);
+    registers.set(.r2, result_addr);
+
+    try bigModExp(&tc, &memory_map, &registers);
+
+    try std.testing.expectEqualSlices(u8, &.{
+        0x22, 0x0e, 0xce, 0x1c, 0x42, 0x62, 0x4e, 0x98, 0xae, 0xe7, 0xeb, 0x86, 0x57, 0x8b,
+        0x2f, 0xe5, 0xc4, 0x85, 0x5d, 0xff, 0xac, 0xcb, 0x43, 0xcc, 0xbb, 0x70, 0x8a, 0x3a,
+        0xb3, 0x7f, 0x18, 0x4d,
+    }, &result);
 }

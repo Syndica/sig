@@ -95,6 +95,12 @@ pub const ComputeBudget = struct {
     alt_bn128_g2_decompress: u64,
     /// Number of compute units consumed to call secp256k1_recover
     secp256k1_recover_cost: u64,
+    /// Big integer modular exponentiation base cost
+    big_modular_exponentiation_base_cost: u64,
+    /// Big integer moduler exponentiation cost divisor
+    /// The modular exponentiation cost is computed as
+    /// `input_length`/`big_modular_exponentiation_cost_divisor` + `big_modular_exponentiation_base_cost`
+    big_modular_exponentiation_cost_divisor: u64,
 
     pub const DEFAULT: ComputeBudget = ComputeBudget.default(1_400_000);
 
@@ -141,6 +147,8 @@ pub const ComputeBudget = struct {
             .alt_bn128_g2_compress = 86,
             .alt_bn128_g2_decompress = 13610,
             .secp256k1_recover_cost = 25_000,
+            .big_modular_exponentiation_base_cost = 190,
+            .big_modular_exponentiation_cost_divisor = 2,
         };
     }
 

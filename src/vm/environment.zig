@@ -341,10 +341,13 @@ pub const Environment = struct {
             );
         }
 
-        // Big_mod_exp
-        // if (feature_set.active(feature_set.ENABLE_BIG_MOD_EXP_SYSCALL, slot)) {
-        //     _ = try syscalls.registerHashed(allocator, "sol_big_mod_exp", bigModExp,);
-        // }
+        if (feature_set.active(.enable_big_mod_exp_syscall, slot)) {
+            _ = try loader.registerHashed(
+                allocator,
+                "sol_big_mod_exp",
+                syscalls.ecc.bigModExp,
+            );
+        }
 
         if (feature_set.active(.enable_poseidon_syscall, slot)) {
             _ = try loader.registerHashed(
