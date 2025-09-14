@@ -18,7 +18,6 @@ Other files include:
 - `fuzz.zig`: accounts-db's fuzzer
 - `download.zig`: downloading snapshots
 - `buffer_pool.zig`: buffer pool for reading from account files
-- `swiss_map.zig`: high-performance swissmap hashmap implementation
 
 ## Usage
 
@@ -145,16 +144,14 @@ For a random seed, ommit the seed argument. For infinite fuzzing, omit the numbe
 
 ## Benchmarking
 
-We also have a few benchmarks for the database:
+We also have a couple benchmarks for the database:
 - read/write benchmarks: this benchmarks the read/write speed for accounts
 (can use the `accounts_db_readwrite` flag for the benchmarking binary)
 - load and validate from a snapshot: this benchmarks the speed of loading and validating a snapshot
 (can use the `accounts_db_snapshot` flag for the benchmarking binary with the `-e` flag)
-- swissmap benchmarks: benchmarks the swissmap hashmap implementation against stdlib hashmap
-(can use the `swissmap` flag for the benchmarking binary)
 
-The benchmarking code can be found in the structs `BenchmarkAccountsDB`, `BenchmarkAccountsDBSnapshotLoad`,
-and `BenchmarkSwissMap` respectively.
+The benchmarking code can be found in the structs `BenchmarkAccountsDB` and `BenchmarkAccountsDBSnapshotLoad` respectively.
+
 
 ## Architecture Notes
 

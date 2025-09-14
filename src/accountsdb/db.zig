@@ -357,11 +357,12 @@ pub const AccountsDB = struct {
         errdefer collapsed_manifest.deinit(self.allocator);
 
         if (should_fastload) {
-            var timer = try sig.time.Timer.start();
-            var fastload_dir = try self.snapshot_dir.makeOpenPath("fastload_state", .{});
-            defer fastload_dir.close();
-            try self.fastload(fastload_dir, collapsed_manifest.accounts_db_fields);
-            self.logger.info().logf("fastload: total time: {s}", .{timer.read()});
+            @panic("TODO(david): re-implement fastloading");
+            // var timer = try sig.time.Timer.start();
+            // var fastload_dir = try self.snapshot_dir.makeOpenPath("fastload_state", .{});
+            // defer fastload_dir.close();
+            // try self.fastload(fastload_dir, collapsed_manifest.accounts_db_fields);
+            // self.logger.info().logf("fastload: total time: {s}", .{timer.read()});
         } else {
             var load_timer = try sig.time.Timer.start();
             try self.loadFromSnapshot(
@@ -375,9 +376,10 @@ pub const AccountsDB = struct {
 
         // no need to re-save if we just loaded from a fastload
         if (save_index and !should_fastload) {
-            var timer = try sig.time.Timer.start();
-            _ = try self.saveStateForFastload();
-            self.logger.info().logf("saveStateForFastload: total time: {s}", .{timer.read()});
+            @panic("TODO(david): re-implement fastloading");
+            // var timer = try sig.time.Timer.start();
+            // _ = try self.saveStateForFastload();
+            // self.logger.info().logf("saveStateForFastload: total time: {s}", .{timer.read()});
         }
 
         if (validate) {
@@ -467,83 +469,83 @@ pub const AccountsDB = struct {
         return collapsed_manifest;
     }
 
-    pub fn saveStateForFastload(
-        self: *AccountsDB,
-    ) !void {
-        const zone = tracy.Zone.init(@src(), .{ .name = "accountsdb fastsaveStateForFastloadload" });
-        defer zone.deinit();
+    // pub fn saveStateForFastload(
+    //     self: *AccountsDB,
+    // ) !void {
+    //     const zone = tracy.Zone.init(@src(), .{ .name = "accountsdb fastsaveStateForFastloadload" });
+    //     defer zone.deinit();
 
-        self.logger.info().log("running saveStateForFastload...");
-        var fastload_dir = try self.snapshot_dir.makeOpenPath("fastload_state", .{});
-        defer fastload_dir.close();
-        try self.account_index.saveToDisk(fastload_dir);
-    }
+    //     self.logger.info().log("running saveStateForFastload...");
+    //     var fastload_dir = try self.snapshot_dir.makeOpenPath("fastload_state", .{});
+    //     defer fastload_dir.close();
+    //     try self.account_index.saveToDisk(fastload_dir);
+    // }
 
-    pub fn fastload(
-        self: *AccountsDB,
-        dir: std.fs.Dir,
-        snapshot_manifest: AccountsDbFields,
-    ) !void {
-        const zone = tracy.Zone.init(@src(), .{ .name = "accountsdb fastload" });
-        defer zone.deinit();
+    // pub fn fastload(
+    //     self: *AccountsDB,
+    //     dir: std.fs.Dir,
+    //     snapshot_manifest: AccountsDbFields,
+    // ) !void {
+    //     const zone = tracy.Zone.init(@src(), .{ .name = "accountsdb fastload" });
+    //     defer zone.deinit();
 
-        self.logger.info().log("running fastload...");
+    //     self.logger.info().log("running fastload...");
 
-        var accounts_dir = try self.snapshot_dir.openDir("accounts", .{});
-        defer accounts_dir.close();
+    //     var accounts_dir = try self.snapshot_dir.openDir("accounts", .{});
+    //     defer accounts_dir.close();
 
-        const n_account_files = snapshot_manifest.file_map.count();
-        self.logger.info().logf("found {d} account files", .{n_account_files});
-        std.debug.assert(n_account_files > 0);
+    //     const n_account_files = snapshot_manifest.file_map.count();
+    //     self.logger.info().logf("found {d} account files", .{n_account_files});
+    //     std.debug.assert(n_account_files > 0);
 
-        const file_map, var file_map_lg = self.file_map.writeWithLock();
-        defer file_map_lg.unlock();
-        try file_map.ensureTotalCapacity(self.allocator, n_account_files);
+    //     const file_map, var file_map_lg = self.file_map.writeWithLock();
+    //     defer file_map_lg.unlock();
+    //     try file_map.ensureTotalCapacity(self.allocator, n_account_files);
 
-        self.logger.info().log("loading account files");
-        const file_info_map = snapshot_manifest.file_map;
-        for (file_info_map.keys(), file_info_map.values()) |slot, file_info| {
-            // read accounts file
-            var accounts_file = blk: {
-                const file_name_bounded = sig.utils.fmt.boundedFmt(
-                    "{d}.{d}",
-                    .{ slot, file_info.id.toInt() },
-                );
-                const file_name = file_name_bounded.constSlice();
-                const accounts_file = accounts_dir.openFile(file_name, .{
-                    .mode = .read_write,
-                }) catch |err| {
-                    self.logger.err().logf(
-                        "Failed to open accounts/{s}: {s}",
-                        .{ file_name, @errorName(err) },
-                    );
-                    return err;
-                };
-                errdefer accounts_file.close();
+    //     self.logger.info().log("loading account files");
+    //     const file_info_map = snapshot_manifest.file_map;
+    //     for (file_info_map.keys(), file_info_map.values()) |slot, file_info| {
+    //         // read accounts file
+    //         var accounts_file = blk: {
+    //             const file_name_bounded = sig.utils.fmt.boundedFmt(
+    //                 "{d}.{d}",
+    //                 .{ slot, file_info.id.toInt() },
+    //             );
+    //             const file_name = file_name_bounded.constSlice();
+    //             const accounts_file = accounts_dir.openFile(file_name, .{
+    //                 .mode = .read_write,
+    //             }) catch |err| {
+    //                 self.logger.err().logf(
+    //                     "Failed to open accounts/{s}: {s}",
+    //                     .{ file_name, @errorName(err) },
+    //                 );
+    //                 return err;
+    //             };
+    //             errdefer accounts_file.close();
 
-                break :blk AccountFile.init(accounts_file, file_info, slot) catch |err| {
-                    self.logger.err().logf(
-                        "failed to *open* AccountsFile {s}: {s}\n",
-                        .{ file_name, @errorName(err) },
-                    );
-                    return err;
-                };
-            };
-            errdefer accounts_file.deinit();
+    //             break :blk AccountFile.init(accounts_file, file_info, slot) catch |err| {
+    //                 self.logger.err().logf(
+    //                     "failed to *open* AccountsFile {s}: {s}\n",
+    //                     .{ file_name, @errorName(err) },
+    //                 );
+    //                 return err;
+    //             };
+    //         };
+    //         errdefer accounts_file.deinit();
 
-            // NOTE: no need to validate since we are fast loading
+    //         // NOTE: no need to validate since we are fast loading
 
-            // track file
-            const file_id = file_info.id;
-            file_map.putAssumeCapacityNoClobber(file_id, accounts_file);
-            self.largest_file_id = FileId.max(self.largest_file_id, file_id);
-            _ = self.largest_rooted_slot.fetchMax(slot, .release);
-            self.largest_flushed_slot.store(self.largest_rooted_slot.load(.acquire), .release);
-        }
+    //         // track file
+    //         const file_id = file_info.id;
+    //         file_map.putAssumeCapacityNoClobber(file_id, accounts_file);
+    //         self.largest_file_id = FileId.max(self.largest_file_id, file_id);
+    //         _ = self.largest_rooted_slot.fetchMax(slot, .release);
+    //         self.largest_flushed_slot.store(self.largest_rooted_slot.load(.acquire), .release);
+    //     }
 
-        // NOTE: index loading was the most expensive part which we fastload here
-        try self.account_index.loadFromDisk(dir);
-    }
+    //     // NOTE: index loading was the most expensive part which we fastload here
+    //     try self.account_index.loadFromDisk(dir);
+    // }
 
     /// loads the account files and generates the account index from a snapshot
     pub fn loadFromSnapshot(
@@ -1013,6 +1015,7 @@ pub const AccountsDB = struct {
             .data_len = self.account_index.pubkey_ref_map.numberOfShards(),
             .max_threads = n_threads,
             .params = .{
+                self.allocator,
                 self.logger,
                 &self.account_index,
                 thread_dbs,
@@ -1082,6 +1085,7 @@ pub const AccountsDB = struct {
     /// combines multiple thread indexes into the given index.
     /// each bin is also sorted by pubkey.
     pub fn mergeThreadIndexesMultiThread(
+        allocator: std.mem.Allocator,
         logger: Logger,
         index: *AccountIndex,
         thread_dbs: []const AccountsDB,
@@ -1102,7 +1106,7 @@ pub const AccountsDB = struct {
 
         for (shard_start_index..shard_end_index, 1..) |shard_index, iteration_count| {
             // sum size across threads
-            var shard_n_accounts: usize = 0;
+            var shard_n_accounts: u32 = 0;
             for (thread_dbs) |*thread_db| {
                 const pubkey_ref_map = &thread_db.account_index.pubkey_ref_map;
                 shard_n_accounts += pubkey_ref_map.getShardCount(shard_index);
@@ -1113,7 +1117,10 @@ pub const AccountsDB = struct {
                 const shard_map, var shard_map_lg =
                     index.pubkey_ref_map.getShardFromIndex(shard_index).writeWithLock();
                 defer shard_map_lg.unlock();
-                try shard_map.ensureTotalCapacity(shard_n_accounts);
+                try shard_map.ensureTotalCapacity(
+                    allocator,
+                    shard_n_accounts,
+                );
             }
 
             for (thread_dbs) |*thread_db| {
@@ -1966,8 +1973,10 @@ pub const AccountsDB = struct {
         account_file: *AccountFile,
         n_accounts: usize,
     ) !void {
-        const shard_counts =
-            try self.allocator.alloc(usize, self.account_index.pubkey_ref_map.numberOfShards());
+        const shard_counts = try self.allocator.alloc(
+            usize,
+            self.account_index.pubkey_ref_map.numberOfShards(),
+        );
         defer self.allocator.free(shard_counts);
         @memset(shard_counts, 0);
 
@@ -2147,7 +2156,7 @@ pub const AccountsDB = struct {
             const shard_map, var shard_map_lg = shard_map_rw.writeWithLock();
             defer shard_map_lg.unlock();
 
-            try shard_map.ensureTotalCapacity(1 + shard_map.count());
+            try shard_map.ensureTotalCapacity(self.allocator, 1 + shard_map.count());
         }
 
         // update index
@@ -2372,8 +2381,10 @@ pub const AccountsDB = struct {
         }
 
         // prealloc the ref map space
-        const shard_counts =
-            try self.allocator.alloc(usize, self.account_index.pubkey_ref_map.numberOfShards());
+        const shard_counts = try self.allocator.alloc(
+            u64,
+            self.account_index.pubkey_ref_map.numberOfShards(),
+        );
         defer self.allocator.free(shard_counts);
         @memset(shard_counts, 0);
 
@@ -3098,7 +3109,7 @@ pub fn indexAndValidateAccountFile(
     buffer_pool: *BufferPool,
     accounts_file: *AccountFile,
     shard_calculator: PubkeyShardCalculator,
-    shard_counts: ?[]usize,
+    shard_counts: ?[]u64,
     account_refs: *ArrayListUnmanaged(AccountRef),
     geyser_storage: ?*GeyserTmpStorage,
 ) ValidateAccountFileError!void {
@@ -4052,8 +4063,6 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
     pub fn loadAndVerifySnapshot(units: BenchTimeUnit, bench_args: BenchArgs) !struct {
         load_time: u64,
         validate_time: u64,
-        fastload_save_time: u64,
-        fastload_time: u64,
     } {
         const allocator = std.heap.c_allocator;
         var print_logger = sig.trace.DirectPrintLogger.init(allocator, .debug);
@@ -4073,8 +4082,6 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
             return .{
                 .load_time = zero_duration.asNanos(),
                 .validate_time = zero_duration.asNanos(),
-                .fastload_save_time = zero_duration.asNanos(),
-                .fastload_time = zero_duration.asNanos(),
             };
         };
         defer snapshot_dir.close();
@@ -4090,7 +4097,6 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
         const collapsed_manifest = try full_inc_manifest.collapse(allocator);
 
         const loading_duration, //
-        const fastload_save_duration, //
         const validate_duration //
         = duration_blk: {
             var accounts_db = try AccountsDB.init(.{
@@ -4113,11 +4119,11 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
             );
             const loading_duration = load_timer.read();
 
-            const fastload_save_duration = blk: {
-                var timer = try sig.time.Timer.start();
-                try accounts_db.saveStateForFastload();
-                break :blk timer.read();
-            };
+            // const fastload_save_duration = blk: {
+            //     var timer = try sig.time.Timer.start();
+            //     try accounts_db.saveStateForFastload();
+            //     break :blk timer.read();
+            // };
 
             const full_manifest = full_inc_manifest.full;
             const maybe_inc_persistence = if (full_inc_manifest.incremental) |inc|
@@ -4139,34 +4145,32 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
             });
             const validate_duration = validate_timer.read();
 
-            break :duration_blk .{ loading_duration, fastload_save_duration, validate_duration };
+            break :duration_blk .{ loading_duration, validate_duration };
         };
 
-        const fastload_duration = blk: {
-            var fastload_accounts_db = try AccountsDB.init(.{
-                .allocator = allocator,
-                .logger = .from(logger),
-                .snapshot_dir = snapshot_dir,
-                .geyser_writer = null,
-                .gossip_view = null,
-                .index_allocation = if (bench_args.use_disk) .disk else .ram,
-                .number_of_index_shards = 32,
-            });
-            defer fastload_accounts_db.deinit();
+        // const fastload_duration = blk: {
+        //     var fastload_accounts_db = try AccountsDB.init(.{
+        //         .allocator = allocator,
+        //         .logger = .from(logger),
+        //         .snapshot_dir = snapshot_dir,
+        //         .geyser_writer = null,
+        //         .gossip_view = null,
+        //         .index_allocation = if (bench_args.use_disk) .disk else .ram,
+        //         .number_of_index_shards = 32,
+        //     });
+        //     defer fastload_accounts_db.deinit();
 
-            var fastload_dir = try snapshot_dir.makeOpenPath("fastload_state", .{});
-            defer fastload_dir.close();
+        //     var fastload_dir = try snapshot_dir.makeOpenPath("fastload_state", .{});
+        //     defer fastload_dir.close();
 
-            var fastload_timer = try sig.time.Timer.start();
-            try fastload_accounts_db.fastload(fastload_dir, collapsed_manifest.accounts_db_fields);
-            break :blk fastload_timer.read();
-        };
+        //     var fastload_timer = try sig.time.Timer.start();
+        //     try fastload_accounts_db.fastload(fastload_dir, collapsed_manifest.accounts_db_fields);
+        //     break :blk fastload_timer.read();
+        // };
 
         return .{
             .load_time = units.convertDuration(loading_duration),
             .validate_time = units.convertDuration(validate_duration),
-            .fastload_save_time = units.convertDuration(fastload_save_duration),
-            .fastload_time = units.convertDuration(fastload_duration),
         };
     }
 };
