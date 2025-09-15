@@ -611,11 +611,11 @@ test "checkAge: nonce account" {
                     .is_writable = false,
                 },
             }),
-            .dedup_map = blk: {
-                var dedup_map: [sig.runtime.InstructionInfo.MAX_ACCOUNT_METAS]u8 = @splat(0xff);
-                dedup_map[1] = 1;
-                dedup_map[2] = 2;
-                break :blk dedup_map;
+            .dedupe_map = blk: {
+                var dedupe_map: [sig.runtime.InstructionInfo.MAX_ACCOUNT_METAS]u8 = @splat(0xff);
+                dedupe_map[1] = 1;
+                dedupe_map[2] = 2;
+                break :blk dedupe_map;
             },
             .instruction_data = instruction_data,
             .initial_account_lamports = 0,

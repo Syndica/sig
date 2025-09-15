@@ -12,7 +12,7 @@ const Transaction = sig.core.Transaction;
 pub const InstructionInfo = struct {
     program_meta: ProgramMeta,
     account_metas: AccountMetas,
-    dedup_map: [MAX_ACCOUNT_METAS]u8,
+    dedupe_map: [MAX_ACCOUNT_METAS]u8,
     instruction_data: []const u8,
     // Initial account lamports are computed and set immediately before
     // pushing an instruction onto the stack.
@@ -48,8 +48,8 @@ pub const InstructionInfo = struct {
         self: *const InstructionInfo,
         index_in_transaction: u16,
     ) InstructionError!u16 {
-        if (index_in_transaction < self.dedup_map.len) {
-            const index = self.dedup_map[index_in_transaction];
+        if (index_in_transaction < self.dedupe_map.len) {
+            const index = self.dedupe_map[index_in_transaction];
             if (index < self.account_metas.len) {
                 return index;
             }

@@ -564,7 +564,7 @@ test "compute_budget Instruction" {
 
     try sig.runtime.executor.executeInstruction(allocator, tc, .{
         .account_metas = .{},
-        .dedup_map = @splat(0xff),
+        .dedupe_map = @splat(0xff),
         .instruction_data = &.{},
         .program_meta = .{ .index_in_transaction = 0, .pubkey = ID },
     });

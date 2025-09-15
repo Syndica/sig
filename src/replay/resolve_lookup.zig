@@ -173,11 +173,11 @@ pub fn resolveTransaction(
     errdefer allocator.free(instructions);
     for (message.instructions, instructions) |input_ix, *output_ix| {
         var account_metas = InstructionInfo.AccountMetas{};
-        var dedup_map: [InstructionInfo.MAX_ACCOUNT_METAS]u8 = @splat(0xff);
+        var dedupe_map: [InstructionInfo.MAX_ACCOUNT_METAS]u8 = @splat(0xff);
         for (input_ix.account_indexes, 0..) |index_in_transaction, i| {
             // find first usage of this account in this instruction
-            if (dedup_map[index_in_transaction] == 0xff)
-                dedup_map[index_in_transaction] = @intCast(i);
+            if (dedupe_map[index_in_transaction] == 0xff)
+                dedupe_map[index_in_transaction] = @intCast(i);
 
             // expand the account metadata
             if (index_in_transaction >= accounts.len) return error.InvalidAccountIndex;
@@ -199,7 +199,7 @@ pub fn resolveTransaction(
                 .index_in_transaction = input_ix.program_index,
             },
             .account_metas = account_metas,
-            .dedup_map = dedup_map,
+            .dedupe_map = dedupe_map,
             .instruction_data = input_ix.data,
         };
     }

@@ -223,8 +223,8 @@ pub fn prepareCpiInstructionInfo(
 ) (error{OutOfMemory} || InstructionError)!InstructionInfo {
     const caller = try tc.getCurrentInstructionContext();
 
-    var dedup_map: [InstructionInfo.MAX_ACCOUNT_METAS]u8 = @splat(0xff);
-    var instruction_accounts = InstructionInfo.AccountMetas{};
+    var dedupe_map: [InstructionInfo.MAX_ACCOUNT_METAS]u8 = @splat(0xff);
+    var deduped_account_metas = InstructionInfo.AccountMetas{};
 
     for (callee.accounts) |account| {
         const index_in_transaction = tc.getAccountIndex(account.pubkey) orelse {
@@ -232,15 +232,15 @@ pub fn prepareCpiInstructionInfo(
             return InstructionError.MissingAccount;
         };
 
-        const index_in_callee_ptr = &dedup_map[index_in_transaction];
-        if (index_in_callee_ptr.* < instruction_accounts.len) {
-            const prev = &instruction_accounts.slice()[index_in_callee_ptr.*];
+        const index_in_callee_ptr = &dedupe_map[index_in_transaction];
+        if (index_in_callee_ptr.* < deduped_account_metas.len) {
+            const prev = &deduped_account_metas.slice()[index_in_callee_ptr.*];
             prev.is_signer = prev.is_signer or account.is_signer;
             prev.is_writable = prev.is_writable or account.is_writable;
-            instruction_accounts.appendAssumeCapacity(prev.*);
+            deduped_account_metas.appendAssumeCapacity(prev.*);
         } else {
-            index_in_callee_ptr.* = @intCast(instruction_accounts.len);
-            instruction_accounts.appendAssumeCapacity(.{
+            index_in_callee_ptr.* = @intCast(deduped_account_metas.len);
+            deduped_account_metas.appendAssumeCapacity(.{
                 .pubkey = account.pubkey,
                 .index_in_transaction = index_in_transaction,
                 .is_signer = account.is_signer,
@@ -249,44 +249,44 @@ pub fn prepareCpiInstructionInfo(
         }
     }
 
-    for (instruction_accounts.slice(), 0..) |*account, i| {
-        const index_in_callee = dedup_map[account.index_in_transaction];
+    for (deduped_account_metas.slice(), 0..) |*account_meta, index_in_instruction| {
+        const index_in_callee = dedupe_map[account_meta.index_in_transaction];
 
-        if (i != index_in_callee) {
-            if (index_in_callee >= instruction_accounts.len) return error.NotEnoughAccountKeys;
-            const prev = instruction_accounts.get(index_in_callee);
-            account.is_signer = account.is_signer or prev.is_signer;
-            account.is_writable = account.is_writable or prev.is_writable;
+        if (index_in_callee != index_in_instruction) {
+            if (index_in_callee >= deduped_account_metas.len) return error.NotEnoughAccountKeys;
+            const prev = deduped_account_metas.get(index_in_callee);
+            account_meta.is_signer = account_meta.is_signer or prev.is_signer;
+            account_meta.is_writable = account_meta.is_writable or prev.is_writable;
             // This account is repeated, so theres no need to check for perms
             continue;
         }
 
         const index_in_caller =
-            try caller.ixn_info.getAccountInstructionIndex(account.index_in_transaction);
+            try caller.ixn_info.getAccountInstructionIndex(account_meta.index_in_transaction);
 
-        const account_key = callee.accounts[i].pubkey;
-        const account_meta = caller.ixn_info.account_metas.get(index_in_caller);
+        const callee_account_key = callee.accounts[index_in_instruction].pubkey;
+        const caller_account_meta = caller.ixn_info.account_metas.get(index_in_caller);
 
         // Readonly in caller cannot become writable in callee
-        if (account.is_writable and !account_meta.is_writable) {
-            try tc.log("{}'s writable privilege escalated", .{account_key});
+        if (account_meta.is_writable and !caller_account_meta.is_writable) {
+            try tc.log("{}'s writable privilege escalated", .{callee_account_key});
             return error.PrivilegeEscalation;
         }
 
         // To be signed in the callee,
         // it must be either signed in the caller or by the program
         const in_signers = for (signers) |signer| {
-            if (signer.equals(&account_key)) break true;
+            if (signer.equals(&callee_account_key)) break true;
         } else false;
-        if (account.is_signer and !(account_meta.is_signer or in_signers)) {
-            try tc.log("{}'s signer privilege escalated", .{account_key});
+        if (account_meta.is_signer and !(caller_account_meta.is_signer or in_signers)) {
+            try tc.log("{}'s signer privilege escalated", .{callee_account_key});
             return error.PrivilegeEscalation;
         }
     }
 
     // Find and validate executables / program accounts
-    const program_account_index = for (caller.ixn_info.account_metas.slice(), 0..) |acc, i| {
-        const tc_acc = tc.getAccountAtIndex(acc.index_in_transaction) orelse continue;
+    const program_account_index = for (caller.ixn_info.account_metas.slice(), 0..) |acc_meta, i| {
+        const tc_acc = tc.getAccountAtIndex(acc_meta.index_in_transaction) orelse continue;
         if (tc_acc.pubkey.equals(&callee.program_id)) break i;
     } else {
         try tc.log("Unknown program {}", .{callee.program_id});
@@ -305,8 +305,8 @@ pub fn prepareCpiInstructionInfo(
             .pubkey = callee.program_id,
             .index_in_transaction = program_index_in_transaction,
         },
-        .account_metas = instruction_accounts,
-        .dedup_map = dedup_map,
+        .account_metas = deduped_account_metas,
+        .dedupe_map = dedupe_map,
         .instruction_data = callee.data,
         .initial_account_lamports = 0,
     };

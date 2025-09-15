@@ -245,10 +245,10 @@ pub fn createInstructionInfo(
     const program_index_in_transaction =
         tc.getAccountIndex(program_id) orelse return error.CouldNotFindProgram;
 
-    var dedup_map: [InstructionInfo.MAX_ACCOUNT_METAS]u8 = @splat(0xff);
+    var dedupe_map: [InstructionInfo.MAX_ACCOUNT_METAS]u8 = @splat(0xff);
     for (pb_instruction_accounts, 0..) |acc, idx| {
-        if (dedup_map[acc.index] == 0xff)
-            dedup_map[acc.index] = @intCast(idx);
+        if (dedupe_map[acc.index] == 0xff)
+            dedupe_map[acc.index] = @intCast(idx);
     }
 
     var instruction_accounts = InstructionInfo.AccountMetas{};
@@ -269,7 +269,7 @@ pub fn createInstructionInfo(
             .index_in_transaction = @intCast(program_index_in_transaction),
         },
         .account_metas = instruction_accounts,
-        .dedup_map = dedup_map,
+        .dedupe_map = dedupe_map,
         .instruction_data = try allocator.dupe(u8, instruction),
         .initial_account_lamports = 0,
     };

@@ -309,14 +309,14 @@ pub fn createInstructionInfo(
         if (account.pubkey.equals(&program_id)) break index;
     } else return error.CouldNotFindProgramAccount;
 
-    var dedup_map: [InstructionInfo.MAX_ACCOUNT_METAS]u8 = @splat(0xff);
+    var dedupe_map: [InstructionInfo.MAX_ACCOUNT_METAS]u8 = @splat(0xff);
     var account_metas = InstructionInfo.AccountMetas{};
     for (accounts_params, 0..) |acc, idx| {
         if (acc.index_in_transaction >= tc.accounts.len)
             return error.AccountIndexOutOfBounds;
 
-        if (dedup_map[acc.index_in_transaction] == 0xff)
-            dedup_map[acc.index_in_transaction] = @intCast(idx);
+        if (dedupe_map[acc.index_in_transaction] == 0xff)
+            dedupe_map[acc.index_in_transaction] = @intCast(idx);
 
         try account_metas.append(.{
             .pubkey = tc.accounts[acc.index_in_transaction].pubkey,
@@ -341,7 +341,7 @@ pub fn createInstructionInfo(
             .index_in_transaction = @intCast(program_index_in_transaction),
         },
         .account_metas = account_metas,
-        .dedup_map = dedup_map,
+        .dedupe_map = dedupe_map,
         .instruction_data = instruction_data,
     };
 }

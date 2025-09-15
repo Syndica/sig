@@ -221,6 +221,18 @@ const CallerAccount = struct {
         direct_mapping: bool,
     ) ![]u8 {
         if (stricter_abi_and_runtime_constraints and direct_mapping) {
+            // when direct mapping is enabled, the permissions on the
+            // realloc region can change during CPI so we must delay
+            // translating until when we know whether we're going to mutate
+            // the realloc region or not. Consider this case:
+            //
+            // [caller can't write to an account] <- we are here
+            // [callee grows and assigns account to the caller]
+            // [caller can now write to the account]
+            //
+            // If we always translated the realloc area here, we'd get a
+            // memory access violation since we can't write to the account
+            // _yet_, but we will be able to once the caller returns.
             return &.{};
         } else if (stricter_abi_and_runtime_constraints) {
             // Workaround the memory permissions (as these are from the PoV of being inside the VM)
@@ -1520,8 +1532,8 @@ test "translateAccounts" {
 
     ctx.tc.serialized_accounts.appendAssumeCapacity(serialized_metadata);
 
-    var dedup_map: [InstructionInfo.MAX_ACCOUNT_METAS]u8 = @splat(0xff);
-    dedup_map[account.index] = 0;
+    var dedupe_map: [InstructionInfo.MAX_ACCOUNT_METAS]u8 = @splat(0xff);
+    dedupe_map[account.index] = 0;
     const cpi_info: InstructionInfo = .{
         .program_meta = ctx.ic.ixn_info.program_meta,
         .account_metas = try InstructionInfo.AccountMetas.fromSlice(&.{
@@ -1538,7 +1550,7 @@ test "translateAccounts" {
                 .is_writable = account.is_writable,
             },
         }),
-        .dedup_map = dedup_map,
+        .dedupe_map = dedupe_map,
         .instruction_data = "",
     };
 

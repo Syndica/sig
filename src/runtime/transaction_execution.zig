@@ -690,7 +690,7 @@ test getInstructionDatasSliceForPrecompiles {
                 .index_in_transaction = 0,
             },
             .account_metas = .{},
-            .dedup_map = @splat(0xff),
+            .dedupe_map = @splat(0xff),
             .instruction_data = "data",
             .initial_account_lamports = 0,
         }};
@@ -714,7 +714,7 @@ test getInstructionDatasSliceForPrecompiles {
                     .index_in_transaction = 0,
                 },
                 .account_metas = .{},
-                .dedup_map = @splat(0xff),
+                .dedupe_map = @splat(0xff),
                 .instruction_data = "one",
                 .initial_account_lamports = 0,
             },
@@ -724,7 +724,7 @@ test getInstructionDatasSliceForPrecompiles {
                     .index_in_transaction = 0,
                 },
                 .account_metas = .{},
-                .dedup_map = @splat(0xff),
+                .dedupe_map = @splat(0xff),
                 .instruction_data = "two",
                 .initial_account_lamports = 0,
             },
@@ -734,7 +734,7 @@ test getInstructionDatasSliceForPrecompiles {
                     .index_in_transaction = 0,
                 },
                 .account_metas = .{},
-                .dedup_map = @splat(0xff),
+                .dedupe_map = @splat(0xff),
                 .instruction_data = "three",
                 .initial_account_lamports = 0,
             },
@@ -905,11 +905,11 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
                     .is_writable = true,
                 },
             }),
-            .dedup_map = blk: {
-                var dedup_map: [InstructionInfo.MAX_ACCOUNT_METAS]u8 = @splat(0xff);
-                dedup_map[0] = 0;
-                dedup_map[1] = 1;
-                break :blk dedup_map;
+            .dedupe_map = blk: {
+                var dedupe_map: [InstructionInfo.MAX_ACCOUNT_METAS]u8 = @splat(0xff);
+                dedupe_map[0] = 0;
+                dedupe_map[1] = 1;
+                break :blk dedupe_map;
             },
             .instruction_data = transfer_instruction_data,
         }},

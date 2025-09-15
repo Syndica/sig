@@ -1306,12 +1306,12 @@ pub const vote_parser = struct {
             std.debug.assert(message.instructions.len != 0);
             const first_ix = message.instructions[0];
 
-            var dedup_map: [sig.runtime.InstructionInfo.MAX_ACCOUNT_METAS]u8 = @splat(0xff);
+            var dedupe_map: [sig.runtime.InstructionInfo.MAX_ACCOUNT_METAS]u8 = @splat(0xff);
             var account_metas = sig.runtime.InstructionInfo.AccountMetas{};
             for (first_ix.account_indexes, 0..) |acct_index_u8, i| {
                 const acct_index: usize = acct_index_u8;
-                if (dedup_map[i] == 0xff)
-                    dedup_map[i] = @intCast(i);
+                if (dedupe_map[i] == 0xff)
+                    dedupe_map[i] = @intCast(i);
 
                 const pubkey = message.account_keys[acct_index];
                 account_metas.append(.{
@@ -1331,7 +1331,7 @@ pub const vote_parser = struct {
                         .index_in_transaction = first_ix.program_index,
                     },
                     .account_metas = account_metas,
-                    .dedup_map = dedup_map,
+                    .dedupe_map = dedupe_map,
                     .instruction_data = first_ix.data,
                 }},
             };
@@ -1386,12 +1386,12 @@ pub const vote_parser = struct {
         std.debug.assert(message.instructions.len != 0);
         const first_ix = message.instructions[0];
 
-        var dedup_map: [sig.runtime.InstructionInfo.MAX_ACCOUNT_METAS]u8 = @splat(0xff);
+        var dedupe_map: [sig.runtime.InstructionInfo.MAX_ACCOUNT_METAS]u8 = @splat(0xff);
         var account_metas = sig.runtime.InstructionInfo.AccountMetas{};
         // minimal one account to satisfy check
         if (first_ix.account_indexes.len != 0) {
             const acct_index: usize = first_ix.account_indexes[0];
-            dedup_map[0] = 0;
+            dedupe_map[0] = 0;
             try account_metas.append(.{
                 .pubkey = message.account_keys[acct_index],
                 .index_in_transaction = @intCast(acct_index),
@@ -1409,7 +1409,7 @@ pub const vote_parser = struct {
                     .index_in_transaction = first_ix.program_index,
                 },
                 .account_metas = account_metas,
-                .dedup_map = dedup_map,
+                .dedupe_map = dedupe_map,
                 .instruction_data = first_ix.data,
             }},
         };
