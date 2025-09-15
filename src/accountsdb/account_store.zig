@@ -194,7 +194,9 @@ pub const SlotAccountReader = union(enum) {
 pub const ThreadSafeAccountMap = struct {
     rwlock: std.Thread.RwLock.DefaultRwLock,
     allocator: Allocator,
+    /// Ordering of slots (the entry keys) is not guaranteed.
     slot_map: SlotMap,
+    /// Ordering of the list of versions in each entry value is sorted highest to lowest.
     pubkey_map: PubkeyMap,
     last_rooted_slot: ?Slot,
 
@@ -256,39 +258,15 @@ pub const ThreadSafeAccountMap = struct {
         defer self.rwlock.unlockShared();
 
         const pubkey_map = &self.pubkey_map;
-
-        var maybe_latest_rooted_found: ?struct {
-            slot: Slot,
-            index: usize,
-        } = null;
-
         const slot_account_pairs = pubkey_map.get(address) orelse return null;
-        for (slot_account_pairs.items, 0..) |slot_account, index| {
+        for (slot_account_pairs.items) |slot_account| {
             const slot, const account = slot_account;
-            if (ancestors.ancestors.contains(slot)) {
+            if (ancestors.containsSlot(slot)) {
                 return if (account.lamports == 0) null else try toAccount(self.allocator, account);
             }
-
-            const last_rooted = self.last_rooted_slot orelse continue;
-            if (slot < last_rooted) continue;
-            const latest_rooted_found = if (maybe_latest_rooted_found) |*ptr| ptr else {
-                maybe_latest_rooted_found = .{
-                    .slot = slot,
-                    .index = index,
-                };
-                continue;
+            if (self.last_rooted_slot) |last_rooted_slot| if (slot <= last_rooted_slot) {
+                return if (account.lamports == 0) null else try toAccount(self.allocator, account);
             };
-            if (slot >= latest_rooted_found.slot) {
-                latest_rooted_found.* = .{
-                    .slot = slot,
-                    .index = index,
-                };
-            }
-        }
-
-        if (maybe_latest_rooted_found) |latest_rooted_found| {
-            _, const account = slot_account_pairs.items[latest_rooted_found.index];
-            return try toAccount(self.allocator, account);
         }
 
         return null;
