@@ -1345,7 +1345,7 @@ pub const ReplayTower = struct {
             } });
 
             // Ignore shallow checks for voting purposes
-            if (@as(usize, vote_depth) >= self.threshold_depth) {
+            if (vote_depth >= self.threshold_depth) {
                 threshold_passed = false;
             }
         }
