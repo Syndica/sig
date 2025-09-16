@@ -324,7 +324,13 @@ pub fn doubleBaseMul(a: CompressedScalar, A: Edwards25519, b: CompressedScalar) 
     }
 
     const table_A: NafLookupTable5 = .init(A);
-    @setEvalBranchQuota(15_300);
+
+    // avx512 backend only needs ~25k quota, but avx2 one needs ~100k
+    // TODO: make comptime precompilation stuff use the avx512 one because of this
+    @setEvalBranchQuota(100_000);
+
+    // Since we are pre-computing the basePoint lookup table, we might as well pre-compute it
+    // for a larger amount of points in order to make it fast.
     const table_B: NafLookupTable8 = comptime .init(.basePoint);
 
     var Q: ExtendedPoint = .identityElement;
