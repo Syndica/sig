@@ -1,5 +1,4 @@
 const std = @import("std");
-const builtin = @import("builtin");
 const sig = @import("../../sig.zig");
 
 const ed25519 = sig.crypto.ed25519;
@@ -8,45 +7,7 @@ const Ristretto255 = std.crypto.ecc.Ristretto255;
 const CompressedScalar = Edwards25519.scalar.CompressedScalar;
 
 const ExtendedPoint = ed25519.ExtendedPoint;
-const CachedPoint = ed25519.CachedPoint;
-
-const convention: std.builtin.CallingConvention = switch (builtin.mode) {
-    .ReleaseFast => .@"inline",
-    else => .auto,
-};
-
-/// Stores a lookup table of multiplications of a point over radix-16 scalars, which is the most
-/// common usecase for straus' method. table contains 1P, 2P, 3P, 4P, 5P, 6P, 7P, 8P, and
-/// our window for the scalar indexes into it. Since we want radix-16 (i.e one nibble per byte),
-/// we need 16 points, however we can optimize further by centering the radix at 0 (-8..8) and
-/// negating the cached point if the radix is below zero. Thus our initialization for the table
-/// is twice as keep while retaining the same effect.
-const LookupTable = struct {
-    table: [8]CachedPoint,
-
-    fn init(point: Edwards25519) callconv(convention) LookupTable {
-        const e: ExtendedPoint = .fromPoint(point);
-        var points: [8]CachedPoint = @splat(.fromExtended(e));
-        for (0..7) |i| points[i + 1] = .fromExtended(e.addCached(points[i]));
-        return .{ .table = points };
-    }
-
-    /// NOTE: variable time!
-    fn select(self: LookupTable, index: i8) callconv(convention) CachedPoint {
-        // ensure we're in radix
-        std.debug.assert(index >= -8);
-        std.debug.assert(index <= 8);
-
-        const abs = @abs(index);
-
-        // t == |x| * P
-        var t: CachedPoint = if (abs == 0) .identityElement else self.table[abs - 1];
-        // if index was negative, negate the point
-        if (abs != index) t = t.neg();
-
-        return t;
-    }
-};
+const LookupTable = ed25519.LookupTable;
 
 fn asRadix16(c: CompressedScalar) [64]i8 {
     std.debug.assert(c[31] <= 127);

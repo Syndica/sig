@@ -13,8 +13,6 @@ const TransactionError = sig.ledger.transaction_status.TransactionError;
 const getInstructionData = sig.runtime.program.precompiles.getInstructionData;
 
 const Ed25519 = std.crypto.sign.Ed25519;
-const Curve = std.crypto.ecc.Edwards25519;
-const Sha512 = std.crypto.hash.sha2.Sha512;
 
 pub const ID: Pubkey = .parse("Ed25519SigVerify111111111111111111111111111");
 
@@ -90,7 +88,7 @@ pub fn verify(
             sig_offsets.signature_offset,
             32 * 2, // 1 scalar + 1 point
         );
-        const signature: Ed25519.Signature = .fromBytes(signature_bytes[0..64].*);
+        const signature: sig.core.Signature = .fromBytes(signature_bytes[0..64].*);
 
         const pubkey_bytes = try getInstructionData(
             data,
@@ -99,8 +97,9 @@ pub fn verify(
             sig_offsets.public_key_offset,
             32,
         );
-        // identity is rejected in verifySignature()
-        const pubkey: Ed25519.PublicKey = .{ .bytes = pubkey_bytes[0..32].* };
+        // specifically not using `fromBytes`, since we want the encoding error to happen inside of
+        // the `verifySignature` call.
+        const pubkey: sig.core.Pubkey = .{ .data = pubkey_bytes[0..32].* };
 
         const msg = try getInstructionData(
             data,
@@ -110,52 +109,13 @@ pub fn verify(
             sig_offsets.message_data_size,
         );
 
-        verifySignature(
-            &signature,
-            &pubkey,
+        sig.crypto.ed25519.verifySignature(
+            signature,
+            pubkey,
             msg,
-            feature_set,
-            slot,
+            feature_set.active(.ed25519_precompile_verify_strict, slot),
         ) catch return error.InvalidSignature;
     }
-}
-
-fn verifySignature(
-    signature: *const Ed25519.Signature,
-    pubkey: *const Ed25519.PublicKey,
-    msg: []const u8,
-    feature_set: *const FeatureSet,
-    slot: Slot,
-) !void {
-    try Curve.scalar.rejectNonCanonical(signature.s);
-
-    const a = try Ed25519.Curve.fromBytes(pubkey.bytes);
-    try a.rejectIdentity();
-
-    // this guarantees that `st.expected_r` Z coordinate will be 1, which allows us to equate
-    // without that pesky inversion.
-    const r = try Ed25519.Curve.fromBytes(signature.r);
-    try r.rejectIdentity();
-
-    // https://github.com/dalek-cryptography/ed25519-dalek/blob/02001d8c3422fb0314b541fdb09d04760f7ab4ba/src/verifying.rs#L424-L427
-    if (feature_set.active(.ed25519_precompile_verify_strict, slot)) {
-        try a.rejectLowOrder();
-        try r.rejectLowOrder();
-    }
-
-    var h = Sha512.init(.{});
-    h.update(&signature.r);
-    h.update(&pubkey.bytes);
-    h.update(msg);
-
-    var hram64: [Sha512.digest_length]u8 = undefined;
-    h.final(&hram64);
-    const hram = Ed25519.Curve.scalar.reduce64(hram64);
-
-    // We can use [8][S]B = [8]R + [8][k]A' or [S]B = R + [k]A' verification here.
-    // We opt for cofactorless since it's faster.
-    const computed_r = try Curve.basePoint.mulDoubleBasePublic(signature.s, a.neg(), hram);
-    if (!sig.crypto.ed25519.affineEqual(computed_r, r)) return error.InvalidSignature;
 }
 
 // https://github.com/anza-xyz/agave/blob/a8aef04122068ec36a7af0721e36ee58efa0bef2/sdk/src/ed25519_instruction.rs#L35
