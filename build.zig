@@ -18,7 +18,6 @@ pub const Config = struct {
     has_side_effects: bool,
     enable_tracy: bool,
     use_llvm: bool,
-    force_pic: bool,
     error_tracing: ?bool,
     long_tests: bool,
     version: std.SemanticVersion,
@@ -95,11 +94,6 @@ pub const Config = struct {
                 "use-llvm",
                 "If disabled, uses experimental self-hosted backend. Only works for x86_64-linux",
             ) orelse true,
-            .force_pic = b.option(
-                bool,
-                "force_pic",
-                "Builds linked dependencies with PIC enabled. If false, builds default PIC mode.",
-            ) orelse false,
             .error_tracing = b.option(
                 bool,
                 "error-tracing",
@@ -223,39 +217,31 @@ pub fn build(b: *Build) !void {
     const lsquic_dep = b.dependency("lsquic", .{
         .target = config.target,
         .optimize = config.optimize,
-        // TSan needs a PIE executable, so we need to build the deps with PIC.
-        .force_pic = config.force_pic or config.enable_tsan,
     });
     const lsquic_mod = lsquic_dep.module("lsquic");
 
     const zstd_mod = b.dependency("zstd", .{
         .target = config.target,
         .optimize = config.optimize,
-        .force_pic = config.force_pic or config.enable_tsan,
     }).module("zstd");
 
     const ssl_mod = lsquic_dep.builder.dependency("boringssl", .{
         .target = config.target,
         .optimize = config.optimize,
-        .force_pic = config.force_pic or config.enable_tsan,
     }).module("ssl");
 
     const rocksdb_dep = b.dependency("rocksdb", .{
         .target = config.target,
         .optimize = config.optimize,
-        .force_pic = config.force_pic or config.enable_tsan,
     });
     const rocksdb_mod = rocksdb_dep.module("bindings");
     // TODO: UB might be fixed by future RocksDB version upgrade.
     // reproducable via: zig build test -Dfilter="ledger"
     rocksdb_dep.artifact("rocksdb").root_module.sanitize_c = false;
 
-    // the sig-fuzz target needs to be built as a shared library, which requires
-    // the linked dependencies of sig to have been built with PIC.
     const secp256k1_mod = b.dependency("secp256k1", .{
         .target = config.target,
         .optimize = config.optimize,
-        .force_pic = config.force_pic or config.enable_tsan,
     }).module("secp256k1");
 
     const tracy_mod = b.dependency("tracy", .{

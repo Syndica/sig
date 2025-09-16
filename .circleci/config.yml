@@ -290,8 +290,6 @@ jobs:
           key: test-vectors-e0b55b1fd3d72532b87a53fa6c313c8a09e34164
       - run:
           name: Checkout Test Vectors
-          # TODO: instead of using the specific test-vectors commit, we want to track master instead.
-          # we're missing a few updates to the sig-fuzz harness for them to work properly.
           command: |
             if [ ! -d "test-vectors" ]; then
               git clone https://github.com/firedancer-io/test-vectors --depth 1
