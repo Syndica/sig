@@ -327,7 +327,7 @@ fn flushSlot(db: *AccountsDB, slot: Slot) !FileId {
 
         offset.* = current_offset;
         // write the account to the file
-        const bytes_written = account.writeToBuf(&pubkey, account_file_buf.items);
+        const bytes_written = account.serialize(&pubkey, account_file_buf.items);
         current_offset += bytes_written;
 
         if (bytes_written != account.getSizeInFile()) unreachable;
@@ -359,10 +359,10 @@ fn flushSlot(db: *AccountsDB, slot: Slot) !FileId {
         var curr_ref: ?*AccountRef = head_ref.ref_ptr;
         const did_update = while (curr_ref) |ref| : (curr_ref = ref.next_ptr) {
             if (ref.slot == slot) {
-                ref.location = .{ .File = .{ .file_id = file_id, .offset = offset } };
+                ref.location = .{ .file = .{ .file_id = file_id, .offset = offset } };
                 // NOTE: we break here because we dont allow multiple account states per slot
                 // NOTE: if there are multiple states, then it will likely break during clean
-                // trying to access a .File location which is actually still .UnrootedMap (bc it
+                // trying to access a .file location which is actually still .unrooted_map (bc it
                 // was never updated)
                 break true;
             }
@@ -449,7 +449,7 @@ fn cleanAccountFiles(
         var account_iter = account_file.iterator(&db.buffer_pool);
         while (try account_iter.nextNoData()) |account| {
             defer account.deinit(db.allocator);
-            const pubkey = account.pubkey().*;
+            const pubkey = account.store_info.pubkey;
 
             // check if already cleaned
             if (try cleaned_pubkeys.fetchPut(pubkey, {}) != null) continue;
@@ -494,7 +494,7 @@ fn cleanAccountFiles(
 
                     // NOTE: we should never clean non-rooted references
                     // (ie, should always be in a file)
-                    const ref_file_id = ref.location.File.file_id;
+                    const ref_file_id = ref.location.file.file_id;
                     const ref_slot = ref.slot;
 
                     const accounts_total_count, const accounts_dead_count = blk: {
@@ -721,17 +721,17 @@ fn shrinkAccountFiles(
         while (try account_iter.nextNoData()) |*account_in_file| {
             defer account_in_file.deinit(db.allocator);
 
-            const pubkey = account_in_file.pubkey();
+            const pubkey = account_in_file.store_info.pubkey;
             // account is dead if it is not in the index; dead accounts
             // are removed from the index during cleaning
-            const is_alive = db.account_index.exists(pubkey, shrink_account_file.slot);
+            const is_alive = db.account_index.exists(&pubkey, shrink_account_file.slot);
             // NOTE: there may be duplicate state in account files which we must account for
-            const is_not_duplicate = !alive_pubkeys.contains(pubkey.*);
+            const is_not_duplicate = !alive_pubkeys.contains(pubkey);
             if (is_alive and is_not_duplicate) {
                 accounts_alive_size += account_in_file.getSizeInFile();
                 accounts_alive_count += 1;
                 is_alive_flags.appendAssumeCapacity(true);
-                alive_pubkeys.putAssumeCapacity(pubkey.*, {});
+                alive_pubkeys.putAssumeCapacity(pubkey, {});
             } else {
                 accounts_dead_size += account_in_file.getSizeInFile();
                 accounts_dead_count += 1;
@@ -783,7 +783,7 @@ fn shrinkAccountFiles(
             if (is_alive) {
                 try account_file_buf.resize(account.getSizeInFile());
                 offsets.appendAssumeCapacity(offset);
-                offset += account.writeToBuf(account_file_buf.items);
+                offset += account.serialize(account_file_buf.items);
                 try new_file.writeAll(account_file_buf.items);
             }
         }
@@ -816,13 +816,15 @@ fn shrinkAccountFiles(
             defer account.deinit(db.allocator);
             if (is_alive) {
                 // find the slot in the reference list
-                const pubkey = account.pubkey();
+                const pubkey = &account.store_info.pubkey;
 
-                const ref_parent, var ref_lg =
-                    db.account_index.getReferenceParent(pubkey, slot) catch |err| switch (err) {
-                        // SAFE: we know the pubkey exists in the index because its alive
-                        error.SlotNotFound, error.PubkeyNotFound => unreachable,
-                    };
+                const ref_parent, var ref_lg = db.account_index.getReferenceParent(
+                    pubkey,
+                    slot,
+                ) catch |err| switch (err) {
+                    // SAFE: we know the pubkey exists in the index because its alive
+                    error.SlotNotFound, error.PubkeyNotFound => unreachable,
+                };
                 defer ref_lg.unlock();
                 const ptr_to_ref_field = switch (ref_parent) {
                     .head => |head| &head.ref_ptr,
@@ -832,7 +834,7 @@ fn shrinkAccountFiles(
                 // copy + update the values
                 const new_ref_ptr = &new_reference_block[offset_index];
                 new_ref_ptr.* = ptr_to_ref_field.*.*;
-                new_ref_ptr.location.File = .{
+                new_ref_ptr.location.file = .{
                     .offset = offsets.items[offset_index],
                     .file_id = new_file_id,
                 };
