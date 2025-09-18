@@ -64,24 +64,26 @@ pub fn execute(
         .bpf_account_data_direct_mapping,
         ic.tc.slot,
     );
+    const provide_instruction_data_offset = ic.tc.feature_set.active(
+        .provide_instruction_data_offset_in_vm_r2,
+        ic.tc.slot,
+    );
 
     // [agave] https://github.com/anza-xyz/agave/blob/32ac530151de63329f9ceb97dd23abfcee28f1d4/programs/bpf_loader/src/lib.rs#L1588
-    var parameter_bytes, //
-    var regions, //
-    const accounts_metadata = try serialize.serializeParameters(
+    var serialized = try serialize.serializeParameters(
         allocator,
         ic,
         !direct_mapping,
         mask_out_rent_epoch_in_vm_serialization,
     );
     defer {
-        parameter_bytes.deinit(allocator);
-        regions.deinit(allocator);
+        serialized.memory.deinit(allocator);
+        serialized.regions.deinit(allocator);
     }
 
     // [agave] https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/lib.rs#L278-L282
     const old_accounts = ic.tc.serialized_accounts;
-    ic.tc.serialized_accounts = accounts_metadata;
+    ic.tc.serialized_accounts = serialized.account_metas;
     defer ic.tc.serialized_accounts = old_accounts;
 
     // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1604-L1617
@@ -94,8 +96,9 @@ pub fn execute(
             allocator,
             ic.tc,
             &executable,
-            regions.items,
+            serialized.regions.items,
             &ic.tc.vm_environment.loader,
+            if (provide_instruction_data_offset) serialized.instruction_data_offset else 0,
         ) catch |err| {
             try ic.tc.log("Failed to create SBPF VM: {s}", .{@errorName(err)});
             return InstructionError.ProgramEnvironmentSetupFailure;
@@ -143,8 +146,8 @@ pub fn execute(
             allocator,
             ic,
             !direct_mapping,
-            parameter_bytes.items,
-            accounts_metadata.constSlice(),
+            serialized.memory.items,
+            serialized.account_metas.constSlice(),
         ) catch |err| {
             maybe_execute_error = err;
         };
@@ -160,8 +163,9 @@ pub fn initVm(
     allocator: std.mem.Allocator,
     tc: *TransactionContext,
     executable: *const vm.Executable,
-    regions: []vm.memory.Region,
+    regions: []const vm.memory.Region,
     syscalls: *const Registry(Syscall),
+    instruction_data_offset: u64,
 ) !struct {
     vm.Vm,
     []u8,
@@ -217,6 +221,7 @@ pub fn initVm(
         memory_map,
         syscalls,
         stack.len,
+        instruction_data_offset,
         tc,
     );
 
