@@ -336,11 +336,7 @@ const CallerAccount = struct {
                 );
             }
 
-            try ic.tc.consumeCompute(std.math.divFloor(
-                u64,
-                data.len,
-                ic.tc.compute_budget.cpi_bytes_per_unit,
-            ) catch std.math.maxInt(u64));
+            try ic.tc.consumeCompute(data.len / ic.tc.compute_budget.cpi_bytes_per_unit);
 
             const vm_len_addr = data_ptr +| @sizeOf(u64);
             if (stricter_abi_and_runtime_constraints) {
@@ -430,11 +426,7 @@ const CallerAccount = struct {
             ic.getCheckAligned(),
         );
 
-        try ic.tc.consumeCompute(std.math.divFloor(
-            u64,
-            account_info.data_len,
-            ic.tc.compute_budget.cpi_bytes_per_unit,
-        ) catch std.math.maxInt(u64));
+        try ic.tc.consumeCompute(account_info.data_len / ic.tc.compute_budget.cpi_bytes_per_unit);
 
         const serialized_data: []u8 = try getSerializedData(
             memory_map,
@@ -638,11 +630,9 @@ fn translateAccounts(
 
         if (callee_account.account.executable) {
             // Use the known account
-            try ic.tc.consumeCompute(std.math.divFloor(
-                u64,
-                callee_account.constAccountData().len,
-                ic.tc.compute_budget.cpi_bytes_per_unit,
-            ) catch std.math.maxInt(u64));
+            try ic.tc.consumeCompute(
+                callee_account.constAccountData().len / ic.tc.compute_budget.cpi_bytes_per_unit,
+            );
             continue;
         }
 
@@ -766,11 +756,7 @@ fn translateInstruction(
         return SyscallError.MaxInstructionDataLenExceeded;
     }
 
-    try ic.tc.consumeCompute(std.math.divFloor(
-        u64,
-        data.len,
-        ic.tc.compute_budget.cpi_bytes_per_unit,
-    ) catch std.math.maxInt(u64));
+    try ic.tc.consumeCompute(data.len / ic.tc.compute_budget.cpi_bytes_per_unit);
 
     var accounts = try allocator.alloc(InstructionAccount, account_metas.len);
     errdefer allocator.free(accounts);
