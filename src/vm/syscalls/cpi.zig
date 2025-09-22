@@ -1077,22 +1077,20 @@ fn cpiCommon(
                     caller_account.original_data_len +| MAX_PERMITTED_DATA_INCREASE;
 
                 if (address_space > 0) {
-                    const region = memory_map.region(.constant, caller_account.vm_data_addr) catch
+                    const region = memory_map.findRegion(caller_account.vm_data_addr) catch
                         return InstructionError.MissingAccount;
                     std.debug.assert(region.vm_addr_start == caller_account.vm_data_addr);
 
-                    const shared = false; // TODO: callee_account.account.data is not ref-counted
-                    const writable = callee_account.checkDataIsMutable() == null;
-                    const data = if (ic.tc.account_data_direct_mapping)
-                        callee_account.constAccountData()
-                    else
-                        region.constSlice();
-
-                    // Modify memory_map's region AccessType & Memory
-                    region.host_memory = if (writable and !shared)
-                        .{ .mutable = @constCast(data) }
-                    else
-                        .{ .constant = data };
+                    switch (callee_account.checkDataIsMutable() == null) {
+                        inline true, false => |mutable| {
+                            const state: memory.MemoryState = if (mutable) .mutable else .constant;
+                            const data = if (ic.tc.account_data_direct_mapping)
+                                callee_account.account.data
+                            else
+                                region.hostSlice(state).?[0..callee_account.account.data.len];
+                            region.* = .init(state, data, region.vm_addr_start);
+                        },
+                    }
                 }
             }
         }
