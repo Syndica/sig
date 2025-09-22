@@ -101,26 +101,31 @@ pub const OutputAccount = struct {
 
 pub fn NestedRwLockMap(K: type, V: type) type {
     return struct {
-        data: RwMux(ArrayMap(K, RwMux(V))),
+        data: ArrayMap(K, struct {
+            data: V,
+            lock: RwLock,
+        }),
+        lock: RwLock,
 
+        const RwLock = std.Thread.RwLock;
         const Self = NestedRwLockMap(K, V);
 
         pub const empty = Self{
-            .data = .init(.empty),
+            .data = .empty,
+            .lock = .{},
         };
 
         pub fn deinit(self: *Self, allocator: Allocator) void {
-            var data = self.data.tryWrite() orelse @panic("tried to deinit while lock was held");
-            defer data.unlock();
-            data.mut().deinit(allocator);
+            if (!self.lock.tryLock()) @panic("tried to deinit while lock was held");
+            self.data.deinit(allocator);
         }
 
         pub fn read(self: *Self, key: K) ?struct { *const V, ReadUnlocker } {
-            const data, var lock = self.data.readWithLock();
-            defer lock.unlock();
-            if (data.getPtr(key)) |ptr| {
-                const item, const inner_lock = ptr.readWithLock();
-                return .{ item, .{ .outer_guard = lock, .inner_guard = inner_lock } };
+            self.lock.lockShared();
+            defer self.lock.unlock();
+            if (self.data.getPtr(key)) |ptr| {
+                ptr.lock.lockShared();
+                return .{ &ptr.data, .{ .outer = &self.lock, .inner = &ptr.lock } };
             }
             return null;
         }
@@ -133,12 +138,12 @@ pub fn NestedRwLockMap(K: type, V: type) type {
         ) error{ OutOfMemory, Deleted }!struct { *V, WriteUnlocker } {
             for (0..2) |i| {
                 { // first, optimistic try, and retry after writing in pessimistic case
-                    const data, var lock = self.data.readWithLock();
-                    if (data.getPtr(key)) |ptr| {
-                        const item, const write_lock = ptr.writeWithLock();
-                        return .{ item, .{ .outer_guard = lock, .inner_guard = write_lock } };
+                    self.lock.lockShared();
+                    if (self.data.getPtr(key)) |ptr| {
+                        ptr.lock.lock();
+                        return .{ &ptr.data, .{ .outer = &self.lock, .inner = &ptr.lock } };
                     }
-                    lock.unlock();
+                    self.lock.unlockShared();
                 }
 
                 if (i == 1) {
@@ -148,14 +153,15 @@ pub fn NestedRwLockMap(K: type, V: type) type {
                 }
 
                 { // fallback, create entry for key
-                    const data, var lock = self.data.writeWithLock();
-                    defer lock.unlock();
-                    try data.put(allocator, key, .init(default));
+                    self.lock.lock();
+                    defer self.lock.unlock();
+                    try self.data.put(allocator, key, .{ .data = default, .lock = .{} });
                 }
             }
             unreachable; // we'll hit error.Deleted before this.
         }
 
+        /// Call Iterator.unlock when done with iterator
         pub fn iterator(self: *Self) Iterator {
             const guard = self.data.read();
             return .{
@@ -166,37 +172,52 @@ pub fn NestedRwLockMap(K: type, V: type) type {
 
         pub const Iterator = struct {
             inner: ArrayMap(K, RwMux(V)).Iterator,
-            held_read_lock: RwMux(ArrayMap(K, RwMux(V))).RLockGuard,
+            held_read_lock: *RwLock,
 
             pub fn unlock(self: *Iterator) void {
                 self.held_read_lock.unlock();
             }
 
-            pub fn next(self: *Iterator) ?struct { key: *K, value: RwMux(V).RLockGuard } {
-                return if (self.inner.next()) |item| .{
-                    .key = item.key_ptr,
-                    .value = item.value_ptr.read(),
-                } else null;
+            /// Call unlock for each entry when done with that entry.
+            pub fn next(self: *Iterator) ?Entry {
+                if (self.inner.next()) |item| {
+                    item.value_ptr.lock.lockShared();
+                    return .{
+                        .key = item.key_ptr,
+                        .value = item.value_ptr.data,
+                        .lock = item.value_ptr.lock,
+                    };
+                } else return null;
             }
+
+            pub const Entry = struct {
+                key: *K,
+                value: *V,
+                held_inner_read_lock: *RwLock,
+
+                pub fn unlock(self: *Entry) void {
+                    self.held_inner_read_lock.unlockShared();
+                }
+            };
         };
 
         pub const ReadUnlocker = struct {
-            outer_guard: RwMux(ArrayMap(K, RwMux(V))).RLockGuard,
-            inner_guard: RwMux(V).RLockGuard,
+            outer: *RwLock,
+            inner: *RwLock,
 
             pub fn unlock(self: *ReadUnlocker) void {
-                self.inner_guard.unlock();
-                self.outer_guard.unlock();
+                self.inner.unlockShared();
+                self.outer.unlockShared();
             }
         };
 
         pub const WriteUnlocker = struct {
-            outer_guard: RwMux(ArrayMap(K, RwMux(V))).RLockGuard,
-            inner_guard: RwMux(V).WLockGuard,
+            outer: *RwLock,
+            inner: *RwLock,
 
             pub fn unlock(self: *WriteUnlocker) void {
-                self.inner_guard.unlock();
-                self.outer_guard.unlock();
+                self.inner.unlock();
+                self.outer.unlockShared();
             }
         };
     };
