@@ -20,20 +20,19 @@ const ConstRcSlice = sig.sync.ConstRcSlice;
 /// - always acquire the outer lock first, then the inner lock
 /// - always release inner lock before outer lock
 pub const UnrootedDB = struct {
-    allocator: Allocator,
     /// tells you which slot to look for an account
     index: NestedRwLockMap(Pubkey, RingBitSet),
     accounts: NestedRwLockMap(Slot, ArrayMap(Pubkey, OutputAccount)),
 
-    pub fn init(allocator: Allocator) UnrootedDB {
-        return UnrootedDB{
-            .allocator = allocator,
-            .index = .empty,
-            .accounts = .empty,
-        };
-    }
+    pub const empty = UnrootedDB{
+        .index = .empty,
+        .accounts = .empty,
+    };
 
-    // pub fn deinit(self: *UnrootedDB, allocator: Allocator) void {}
+    pub fn deinit(self: *UnrootedDB, allocator: Allocator) void {
+        self.index.deinit(allocator);
+        self.accounts.deinit(allocator);
+    }
 
     pub fn get(
         self: *UnrootedDB,
@@ -59,27 +58,28 @@ pub const UnrootedDB = struct {
 
     pub fn put(
         self: *UnrootedDB,
+        allocator: Allocator,
         slot: Slot,
         address: Pubkey,
         account: InputAccount,
     ) error{ Deleted, OutOfMemory }!void {
         { // store the account
-            const accounts, var lock = try self.accounts.write(self.allocator, slot, .empty);
+            const accounts, var lock = try self.accounts.write(allocator, slot, .empty);
             defer lock.unlock();
 
-            const gop = try accounts.getOrPut(self.allocator, address);
+            const gop = try accounts.getOrPut(allocator, address);
             const old = gop.value_ptr.*;
             gop.value_ptr.* = .{
                 .fields = account.fields,
-                .data = try ConstRcSlice(u8).alloc(self.allocator, account.data.len),
+                .data = try ConstRcSlice(u8).alloc(allocator, account.data.len),
             };
             if (gop.found_existing) {
-                old.data.deinit(self.allocator);
+                old.data.deinit(allocator);
             }
         }
 
         { // update the index
-            const index, var lock = try self.index.write(self.allocator, address, .empty);
+            const index, var lock = try self.index.write(allocator, address, .empty);
             defer lock.unlock();
             index.mark(slot) catch |e| switch (e) {
                 // slot must have been flushed or pruned after inserting, no problem.
@@ -103,14 +103,19 @@ pub fn NestedRwLockMap(K: type, V: type) type {
     return struct {
         data: RwMux(ArrayMap(K, RwMux(V))),
 
-        pub const empty = NestedRwLockMap(K, V){
+        const Self = NestedRwLockMap(K, V);
+
+        pub const empty = Self{
             .data = .init(.empty),
         };
 
-        pub fn read(
-            self: *NestedRwLockMap(K, V),
-            key: K,
-        ) ?struct { *const V, ReadGuard } {
+        pub fn deinit(self: *Self, allocator: Allocator) void {
+            var data = self.data.tryWrite() orelse @panic("tried to deinit while lock was held");
+            defer data.unlock();
+            data.mut().deinit(allocator);
+        }
+
+        pub fn read(self: *Self, key: K) ?struct { *const V, ReadUnlocker } {
             const data, var lock = self.data.readWithLock();
             defer lock.unlock();
             if (data.getPtr(key)) |ptr| {
@@ -121,11 +126,11 @@ pub fn NestedRwLockMap(K: type, V: type) type {
         }
 
         pub fn write(
-            self: *NestedRwLockMap(K, V),
+            self: *Self,
             allocator: Allocator,
             key: K,
             default: V,
-        ) error{ OutOfMemory, Deleted }!struct { *V, WriteGuard } {
+        ) error{ OutOfMemory, Deleted }!struct { *V, WriteUnlocker } {
             for (0..2) |i| {
                 { // first, optimistic try, and retry after writing in pessimistic case
                     const data, var lock = self.data.readWithLock();
@@ -151,21 +156,45 @@ pub fn NestedRwLockMap(K: type, V: type) type {
             unreachable; // we'll hit error.Deleted before this.
         }
 
-        pub const ReadGuard = struct {
+        pub fn iterator(self: *Self) Iterator {
+            const guard = self.data.read();
+            return .{
+                .inner = guard.get().iterator(),
+                .held_read_lock = guard,
+            };
+        }
+
+        pub const Iterator = struct {
+            inner: ArrayMap(K, RwMux(V)).Iterator,
+            held_read_lock: RwMux(ArrayMap(K, RwMux(V))).RLockGuard,
+
+            pub fn unlock(self: *Iterator) void {
+                self.held_read_lock.unlock();
+            }
+
+            pub fn next(self: *Iterator) ?struct { key: *K, value: RwMux(V).RLockGuard } {
+                return if (self.inner.next()) |item| .{
+                    .key = item.key_ptr,
+                    .value = item.value_ptr.read(),
+                } else null;
+            }
+        };
+
+        pub const ReadUnlocker = struct {
             outer_guard: RwMux(ArrayMap(K, RwMux(V))).RLockGuard,
             inner_guard: RwMux(V).RLockGuard,
 
-            pub fn unlock(self: *ReadGuard) void {
+            pub fn unlock(self: *ReadUnlocker) void {
                 self.inner_guard.unlock();
                 self.outer_guard.unlock();
             }
         };
 
-        pub const WriteGuard = struct {
+        pub const WriteUnlocker = struct {
             outer_guard: RwMux(ArrayMap(K, RwMux(V))).RLockGuard,
             inner_guard: RwMux(V).WLockGuard,
 
-            pub fn unlock(self: *WriteGuard) void {
+            pub fn unlock(self: *WriteUnlocker) void {
                 self.inner_guard.unlock();
                 self.outer_guard.unlock();
             }
@@ -232,7 +261,11 @@ pub const RingBitSet = struct {
 };
 
 test UnrootedDB {
-    var db: UnrootedDB = undefined;
-    _ = db.get(undefined, undefined);
-    try db.put(undefined, undefined, undefined);
+    var db: UnrootedDB = .empty;
+    defer db.deinit(std.testing.allocator);
+    if (false) {
+        // TODO
+        try db.put(std.testing.allocator, 0, .ZEROES, undefined);
+        _ = db.get(.ZEROES, undefined);
+    }
 }

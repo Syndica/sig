@@ -29,7 +29,7 @@ pub const AccountsDB = struct {
     ) !RootedDB {
         return .{
             .allocator = allocator,
-            .unrooted = .init(allocator),
+            .unrooted = .empty,
             .rooted = try .init(allocator, logger, path),
         };
     }
@@ -58,6 +58,6 @@ pub const AccountsDB = struct {
         address: Pubkey,
         account: rocks_hybrid.unrooted.InputAccount,
     ) error{ Deleted, OutOfMemory }!void {
-        try self.unrooted.put(slot, address, account);
+        try self.unrooted.put(self.allocator, slot, address, account);
     }
 };
