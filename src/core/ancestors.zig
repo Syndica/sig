@@ -12,7 +12,7 @@ pub const Ancestors = struct {
     pub const EMPTY: Ancestors = .{ .ancestors = .empty };
 
     /// The maximum allowed distance from the highest to lowest contained slot.
-    pub const MAX_SLOT_RANGE = 256;
+    pub const MAX_SLOT_RANGE = 8192;
 
     pub fn fromMap(map: *const HashMap(Slot, usize)) error{Underflow}!Ancestors {
         var set = RingBitSet(MAX_SLOT_RANGE).empty;
