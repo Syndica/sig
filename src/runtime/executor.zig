@@ -172,7 +172,7 @@ fn processNextInstruction(
             try stable_log.programFailure(
                 ic.tc,
                 program_id,
-                sig.vm.getExecutionErrorMessage(err),
+                err,
             );
         return err;
     };

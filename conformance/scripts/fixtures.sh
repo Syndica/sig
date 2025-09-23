@@ -11,10 +11,7 @@ PASSING_DIRS=(
     "syscall/fixtures/abort"
     "syscall/fixtures/alt_bn128"
     "syscall/fixtures/blake3"
-
-    # Passed: 559, Failed: 6, Skipped: 0
     "syscall/fixtures/cpi"
-
     "syscall/fixtures/create_program_address"
     "syscall/fixtures/curve25519"
     "syscall/fixtures/get_epoch_schedule"
@@ -41,25 +38,17 @@ PASSING_DIRS=(
     "instr/fixtures/stake"
     "instr/fixtures/vote"
     "instr/fixtures/system"
-
+    
     "instr/fixtures/bpf-address-lookup-table"
     "instr/fixtures/bpf-config"
     "instr/fixtures/bpf-loader"
     "instr/fixtures/bpf-loader-v1-programs"
     "instr/fixtures/bpf-loader-v2"
     "instr/fixtures/bpf-loader-v2-programs"
-
-    # Passed: 42, Failed: 304, Skipped: 0
-    # 304 failing due to bpf loader v3 migrate
     "instr/fixtures/bpf-loader-v3"
-
     "instr/fixtures/bpf-loader-v3-programs"
     "instr/fixtures/bpf-loader-upgradeable-v1-programs"
 
-    # Passed: 4128, Failed: 26, Skipped: 0
-    # 2  failing due to bpf loader v3 migrate 
-    # 20 failing due to bpf loader v4
-    # 4  failing due to simd 186
     "txn/fixtures/programs"
 
     "txn/fixtures/precompile/ed25519"
@@ -67,21 +56,11 @@ PASSING_DIRS=(
     "txn/fixtures/precompile/secp256r1"
 )
 
-FAIL_FILE="./conformance/scripts/failing.txt"
-mapfile -t FAIL_SET < <(grep -v '^[[:space:]]*$' "$FAIL_FILE") # skips empty lines
-declare -A FAIL_MAP
-for f in "${FAIL_SET[@]}"; do
-  FAIL_MAP["$f"]=1
-done
-
 FIXTURES=()
 
 for dir in "${PASSING_DIRS[@]}"; do
   while IFS= read -r -d '' file; do
-    relative_path="${file#./test-vectors/}"
-    if [[ -z "${FAIL_MAP[$relative_path]}" ]]; then
-      FIXTURES+=("$file")
-    fi
+    FIXTURES+=("$file")
   done < <(find "./test-vectors/$dir" -type f -name '*.fix' -print0)
 done
 
