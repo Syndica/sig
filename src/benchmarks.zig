@@ -33,7 +33,6 @@ const Benchmark = enum {
     gossip,
     ledger,
     socket_utils,
-    swissmap,
     sync,
     zksdk,
 };
@@ -150,17 +149,6 @@ pub fn main() !void {
             }
             metrics.deinit();
         }
-    }
-
-    if (filter == .swissmap or run_all_benchmarks) {
-        try benchmark(
-            allocator,
-            .from(logger),
-            @import("accountsdb/swiss_map.zig").BenchmarkSwissMap,
-            max_time_per_bench,
-            .nanos,
-            &maybe_metrics,
-        );
     }
 
     if (std.mem.startsWith(u8, @tagName(filter), "accounts_db") or run_all_benchmarks) {

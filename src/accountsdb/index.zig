@@ -9,7 +9,6 @@ const RwMux = sig.sync.RwMux;
 const Slot = sig.core.time.Slot;
 
 const FileId = sig.accounts_db.accounts_file.FileId;
-const SwissMap = sig.accounts_db.swiss_map.SwissMap;
 
 const createAndMmapFile = sig.utils.allocators.createAndMmapFile;
 
@@ -285,7 +284,7 @@ pub const AccountIndex = struct {
         if (shard_map.capacity() < shard_map.count() + 1) {
             // caller is generally expected to ensure capacity first
             self.logger.info().log("index: shard growing unexpectedly");
-            try shard_map.ensureTotalCapacity(shard_map.capacity() + 1);
+            try shard_map.ensureTotalCapacity(self.allocator, shard_map.capacity() + 1);
         }
 
         const map_entry = shard_map.getOrPutAssumeCapacity(account_ref.pubkey);
@@ -373,203 +372,201 @@ pub const AccountIndex = struct {
         switch (head_ref.getParentRefOf(slot)) {
             .null => return error.SlotNotFound,
             .head => head_ref.ref_ptr = head_ref.ref_ptr.next_ptr orelse {
-                _ = pubkey_ref_map.remove(pubkey.*) catch |err| return switch (err) {
-                    error.KeyNotFound => error.PubkeyNotFound,
-                };
+                if (!pubkey_ref_map.remove(pubkey.*)) return error.PubkeyNotFound;
                 return;
             },
             .parent => |parent| parent.next_ptr = if (parent.next_ptr) |ref| ref.next_ptr else null,
         }
     }
 
-    pub fn loadFromDisk(self: *Self, dir: std.fs.Dir) !void {
-        const zone = tracy.Zone.init(@src(), .{ .name = "accountsdb loadFromDisk" });
-        defer zone.deinit();
+    // pub fn loadFromDisk(self: *Self, dir: std.fs.Dir) !void {
+    //     const zone = tracy.Zone.init(@src(), .{ .name = "accountsdb loadFromDisk" });
+    //     defer zone.deinit();
 
-        // manager must be empty
-        std.debug.assert(self.reference_manager.capacity == 0);
+    //     // manager must be empty
+    //     std.debug.assert(self.reference_manager.capacity == 0);
 
-        self.logger.info().log("running account_index.loadFromDisk");
-        const reference_file = try dir.openFile("index.bin", .{});
-        const size = (try reference_file.stat()).size;
-        const index_memory = try std.posix.mmap(
-            null,
-            size,
-            std.posix.PROT.READ,
-            std.posix.MAP{ .TYPE = .PRIVATE },
-            reference_file.handle,
-            0,
-        );
-        defer std.posix.munmap(index_memory);
+    //     self.logger.info().log("running account_index.loadFromDisk");
+    //     const reference_file = try dir.openFile("index.bin", .{});
+    //     const size = (try reference_file.stat()).size;
+    //     const index_memory = try std.posix.mmap(
+    //         null,
+    //         size,
+    //         std.posix.PROT.READ,
+    //         std.posix.MAP{ .TYPE = .PRIVATE },
+    //         reference_file.handle,
+    //         0,
+    //     );
+    //     defer std.posix.munmap(index_memory);
 
-        var offset: u64 = 0;
-        const ref_map_size =
-            std.mem.readInt(u64, index_memory[offset..][0..@sizeOf(u64)], .little);
-        offset += @sizeOf(u64);
-        const reference_size =
-            std.mem.readInt(u64, index_memory[offset..][0..@sizeOf(u64)], .little);
-        offset += @sizeOf(u64);
-        const records_size =
-            std.mem.readInt(u64, index_memory[offset..][0..@sizeOf(u64)], .little);
-        offset += @sizeOf(u64);
+    //     var offset: u64 = 0;
+    //     const ref_map_size =
+    //         std.mem.readInt(u64, index_memory[offset..][0..@sizeOf(u64)], .little);
+    //     offset += @sizeOf(u64);
+    //     const reference_size =
+    //         std.mem.readInt(u64, index_memory[offset..][0..@sizeOf(u64)], .little);
+    //     offset += @sizeOf(u64);
+    //     const records_size =
+    //         std.mem.readInt(u64, index_memory[offset..][0..@sizeOf(u64)], .little);
+    //     offset += @sizeOf(u64);
 
-        // [shard0 length, shard0 data, shard1 length, shard1 data, ...]
-        const map_memory = index_memory[offset..][0..ref_map_size];
-        offset += ref_map_size;
-        // [AccountRef, AccountRef, ...]
-        const reference_memory = index_memory[offset..][0..reference_size];
-        offset += reference_size;
-        // [Bincode(Record), Bincode(Record), ...]
-        const records_memory = index_memory[offset..][0..records_size];
-        offset += records_size;
+    //     // [shard0 length, shard0 data, shard1 length, shard1 data, ...]
+    //     const map_memory = index_memory[offset..][0..ref_map_size];
+    //     offset += ref_map_size;
+    //     // [AccountRef, AccountRef, ...]
+    //     const reference_memory = index_memory[offset..][0..reference_size];
+    //     offset += reference_size;
+    //     // [Bincode(Record), Bincode(Record), ...]
+    //     const records_memory = index_memory[offset..][0..records_size];
+    //     offset += records_size;
 
-        // load the []AccountRef
-        self.logger.info().log("loading account references");
-        const references = try sig.bincode.readFromSlice(
-            // NOTE: this still ensure reference memory is either on disk or ram
-            // even though the state we are loading from is on disk.
-            // with bincode this will only be one alloc!
-            self.reference_manager.memory_allocator,
-            []AccountRef,
-            reference_memory,
-            .{},
-        );
-        try self.reference_manager.memory.append(
-            self.reference_manager.memory_allocator,
-            references,
-        );
-        self.reference_manager.capacity += references.len;
+    //     // load the []AccountRef
+    //     self.logger.info().log("loading account references");
+    //     const references = try sig.bincode.readFromSlice(
+    //         // NOTE: this still ensure reference memory is either on disk or ram
+    //         // even though the state we are loading from is on disk.
+    //         // with bincode this will only be one alloc!
+    //         self.reference_manager.memory_allocator,
+    //         []AccountRef,
+    //         reference_memory,
+    //         .{},
+    //     );
+    //     try self.reference_manager.memory.append(
+    //         self.reference_manager.memory_allocator,
+    //         references,
+    //     );
+    //     self.reference_manager.capacity += references.len;
 
-        // update the pointers of the references
-        self.logger.info().log("organizing manager memory");
-        for (references) |*ref| {
-            const next_index = ref.next_index orelse continue;
+    //     // update the pointers of the references
+    //     self.logger.info().log("organizing manager memory");
+    //     for (references) |*ref| {
+    //         const next_index = ref.next_index orelse continue;
 
-            ref.next_ptr = &references[next_index];
-            references[next_index].prev_ptr = ref;
-        }
+    //         ref.next_ptr = &references[next_index];
+    //         references[next_index].prev_ptr = ref;
+    //     }
 
-        // load the records
-        self.logger.info().log("loading manager records");
-        const records = try sig.bincode.readFromSlice(
-            self.reference_manager.records_allocator,
-            @TypeOf(self.reference_manager.records),
-            records_memory,
-            .{},
-        );
-        for (records.items) |*record| {
-            record.buf = references[record.global_index..][0..record.len];
-            // NOTE: since we flattened the references memory list, all
-            // records have the same memory_index
-            record.memory_index = 0;
-        }
-        self.reference_manager.records = records;
+    //     // load the records
+    //     self.logger.info().log("loading manager records");
+    //     const records = try sig.bincode.readFromSlice(
+    //         self.reference_manager.records_allocator,
+    //         @TypeOf(self.reference_manager.records),
+    //         records_memory,
+    //         .{},
+    //     );
+    //     for (records.items) |*record| {
+    //         record.buf = references[record.global_index..][0..record.len];
+    //         // NOTE: since we flattened the references memory list, all
+    //         // records have the same memory_index
+    //         record.memory_index = 0;
+    //     }
+    //     self.reference_manager.records = records;
 
-        // load the pubkey_ref_map
-        self.logger.info().log("loading pubkey -> ref map");
-        offset = 0;
-        for (self.pubkey_ref_map.shards) |*shard_rw| {
-            const shard, var lock = shard_rw.writeWithLock();
-            defer lock.unlock();
+    //     // load the pubkey_ref_map
+    //     self.logger.info().log("loading pubkey -> ref map");
+    //     offset = 0;
+    //     for (self.pubkey_ref_map.shards) |*shard_rw| {
+    //         const shard, var lock = shard_rw.writeWithLock();
+    //         defer lock.unlock();
 
-            const shard_len = std.mem.readInt(u64, map_memory[offset..][0..@sizeOf(u64)], .little);
-            offset += @sizeOf(u64);
-            if (shard_len == 0) continue;
+    //         const shard_len = std.mem.readInt(u64, map_memory[offset..][0..@sizeOf(u64)], .little);
+    //         offset += @sizeOf(u64);
+    //         if (shard_len == 0) continue;
 
-            const memory = try self.allocator.alloc(u8, shard_len);
-            @memcpy(memory, map_memory[offset..][0..shard_len]);
-            offset += shard_len;
+    //         const memory = try self.allocator.alloc(u8, shard_len);
+    //         @memcpy(memory, map_memory[offset..][0..shard_len]);
+    //         offset += shard_len;
 
-            // update the shard
-            shard.deinit(); // NOTE: this shouldnt do anything but we keep for correctness
-            shard.* = ShardedPubkeyRefMap.PubkeyRefMap.initFromMemory(
-                shard.allocator,
-                memory,
-            );
+    //         // update the shard
+    //         shard.deinit(self.allocator); // NOTE: this shouldnt do anything but we keep for correctness
+    //         shard.* = ShardedPubkeyRefMap.PubkeyRefMap.initFromMemory(
+    //             shard.allocator,
+    //             memory,
+    //         );
 
-            // update the pointers of the reference_heads
-            var shard_iter = shard.iterator();
-            while (shard_iter.next()) |entry| {
-                entry.value_ptr.ref_ptr = &references[entry.value_ptr.ref_index];
-            }
-        }
-    }
+    //         // update the pointers of the reference_heads
+    //         var shard_iter = shard.iterator();
+    //         while (shard_iter.next()) |entry| {
+    //             entry.value_ptr.ref_ptr = &references[entry.value_ptr.ref_index];
+    //         }
+    //     }
+    // }
 
-    pub fn saveToDisk(self: *Self, dir: std.fs.Dir) !void {
-        self.logger.info().log("saving state to disk...");
-        self.logger.info().log("saving pubkey -> reference map");
-        // write the pubkey_ref_map (populating this is very expensive)
-        var shard_data_total: u64 = 0;
-        for (self.pubkey_ref_map.shards) |*shard_rw| {
-            const shard, var lock = shard_rw.readWithLock();
-            defer lock.unlock();
-            shard_data_total += shard.unmanaged.memory.len;
-        }
-        const n_shards = self.pubkey_ref_map.numberOfShards();
+    // pub fn saveToDisk(self: *Self, dir: std.fs.Dir) !void {
+    //     self.logger.info().log("saving state to disk...");
+    //     self.logger.info().log("saving pubkey -> reference map");
+    //     // write the pubkey_ref_map (populating this is very expensive)
+    //     var shard_data_total: u64 = 0;
+    //     for (self.pubkey_ref_map.shards) |*shard_rw| {
+    //         const shard, var lock = shard_rw.readWithLock();
+    //         defer lock.unlock();
+    //         shard_data_total += shard.unmanaged.memory.len;
+    //     }
+    //     const n_shards = self.pubkey_ref_map.numberOfShards();
 
-        // [shard0 length, shard0 data, shard1 length, shard1 data, ...]
-        const ref_map_size = @sizeOf(u64) * n_shards + shard_data_total;
-        // [AccountRef, AccountRef, ...]
-        const reference_size = @sizeOf(u64) + self.reference_manager.capacity * @sizeOf(AccountRef);
-        // [Bincode(Record), Bincode(Record), ...]
-        const records_size = sig.bincode.sizeOf(self.reference_manager.records.items, .{});
-        const index_memory = try createAndMmapFile(
-            dir,
-            "index.bin",
-            ref_map_size + reference_size + records_size + 3 * @sizeOf(u64),
-        );
-        defer std.posix.munmap(index_memory);
+    //     // [shard0 length, shard0 data, shard1 length, shard1 data, ...]
+    //     const ref_map_size = @sizeOf(u64) * n_shards + shard_data_total;
+    //     // [AccountRef, AccountRef, ...]
+    //     const reference_size = @sizeOf(u64) + self.reference_manager.capacity * @sizeOf(AccountRef);
+    //     // [Bincode(Record), Bincode(Record), ...]
+    //     const records_size = sig.bincode.sizeOf(self.reference_manager.records.items, .{});
+    //     const index_memory = try createAndMmapFile(
+    //         dir,
+    //         "index.bin",
+    //         ref_map_size + reference_size + records_size + 3 * @sizeOf(u64),
+    //     );
+    //     defer std.posix.munmap(index_memory);
 
-        var offset: u64 = 0;
-        std.mem.writeInt(u64, index_memory[offset..][0..@sizeOf(u64)], ref_map_size, .little);
-        offset += @sizeOf(u64);
-        std.mem.writeInt(u64, index_memory[offset..][0..@sizeOf(u64)], reference_size, .little);
-        offset += @sizeOf(u64);
-        std.mem.writeInt(u64, index_memory[offset..][0..@sizeOf(u64)], records_size, .little);
-        offset += @sizeOf(u64);
+    //     var offset: u64 = 0;
+    //     std.mem.writeInt(u64, index_memory[offset..][0..@sizeOf(u64)], ref_map_size, .little);
+    //     offset += @sizeOf(u64);
+    //     std.mem.writeInt(u64, index_memory[offset..][0..@sizeOf(u64)], reference_size, .little);
+    //     offset += @sizeOf(u64);
+    //     std.mem.writeInt(u64, index_memory[offset..][0..@sizeOf(u64)], records_size, .little);
+    //     offset += @sizeOf(u64);
 
-        const map_memory = index_memory[offset..][0..ref_map_size];
-        offset += ref_map_size;
-        const reference_memory = index_memory[offset..][0..reference_size];
-        offset += reference_size;
-        const records_memory = index_memory[offset..][0..records_size];
-        offset += records_size;
+    //     const map_memory = index_memory[offset..][0..ref_map_size];
+    //     offset += ref_map_size;
+    //     const reference_memory = index_memory[offset..][0..reference_size];
+    //     offset += reference_size;
+    //     const records_memory = index_memory[offset..][0..records_size];
+    //     offset += records_size;
 
-        // write each shard's data
-        self.logger.info().log("saving pubkey_ref_map memory");
-        offset = 0;
-        for (self.pubkey_ref_map.shards) |*shard_rw| {
-            const shard, var lock = shard_rw.readWithLock();
-            defer lock.unlock();
+    //     // write each shard's data
+    //     self.logger.info().log("saving pubkey_ref_map memory");
+    //     offset = 0;
+    //     for (self.pubkey_ref_map.shards) |*shard_rw| {
+    //         const shard, var lock = shard_rw.readWithLock();
+    //         defer lock.unlock();
 
-            const shard_memory = shard.unmanaged.memory;
-            std.mem.writeInt(u64, map_memory[offset..][0..@sizeOf(u64)], shard_memory.len, .little);
-            offset += @sizeOf(u64);
+    //         const shard_memory = shard.unmanaged.memory;
+    //         std.mem.writeInt(u64, map_memory[offset..][0..@sizeOf(u64)], shard_memory.len, .little);
+    //         offset += @sizeOf(u64);
 
-            @memcpy(map_memory[offset..][0..shard_memory.len], shard_memory);
-            offset += shard_memory.len;
-        }
+    //         @memcpy(map_memory[offset..][0..shard_memory.len], shard_memory);
+    //         offset += shard_memory.len;
+    //     }
 
-        self.logger.info().log("saving account references");
-        offset = 0;
-        // collapse [][]AccountRef into a single slice
-        std.mem.writeInt(
-            u64,
-            reference_memory[offset..][0..@sizeOf(u64)],
-            self.reference_manager.capacity,
-            .little,
-        );
-        offset += @sizeOf(u64);
-        for (self.reference_manager.memory.items) |ref_block| {
-            for (ref_block) |ref| {
-                const n = try sig.bincode.writeToSlice(reference_memory[offset..], ref, .{});
-                offset += n.len;
-            }
-        }
+    //     self.logger.info().log("saving account references");
+    //     offset = 0;
+    //     // collapse [][]AccountRef into a single slice
+    //     std.mem.writeInt(
+    //         u64,
+    //         reference_memory[offset..][0..@sizeOf(u64)],
+    //         self.reference_manager.capacity,
+    //         .little,
+    //     );
+    //     offset += @sizeOf(u64);
+    //     for (self.reference_manager.memory.items) |ref_block| {
+    //         for (ref_block) |ref| {
+    //             const n = try sig.bincode.writeToSlice(reference_memory[offset..], ref, .{});
+    //             offset += n.len;
+    //         }
+    //     }
 
-        self.logger.info().log("saving reference_manager records");
-        _ = try sig.bincode.writeToSlice(records_memory, self.reference_manager.records.items, .{});
-    }
+    //     self.logger.info().log("saving reference_manager records");
+    //     _ = try sig.bincode.writeToSlice(records_memory, self.reference_manager.records.items, .{});
+    // }
 };
 
 pub const AccountReferenceHead = struct {
@@ -635,13 +632,12 @@ pub const ShardedPubkeyRefMap = struct {
 
     // map from pubkey -> account reference head (of linked list)
     pub const RwPubkeyRefMap = RwMux(PubkeyRefMap);
-    pub const PubkeyRefMap = SwissMap(Pubkey, AccountReferenceHead, hash, eql);
-    pub inline fn hash(key: Pubkey) u64 {
-        return std.mem.readInt(u64, key.data[0..8], .little);
-    }
-    pub inline fn eql(key1: Pubkey, key2: Pubkey) bool {
-        return key1.equals(&key2);
-    }
+    pub const PubkeyRefMap = std.HashMapUnmanaged(
+        Pubkey,
+        AccountReferenceHead,
+        Pubkey.HashContext,
+        std.hash_map.default_max_load_percentage,
+    );
 
     pub const ShardWriteLock = RwPubkeyRefMap.WLockGuard;
     pub const ShardReadLock = RwPubkeyRefMap.RLockGuard;
@@ -655,7 +651,7 @@ pub const ShardedPubkeyRefMap = struct {
         // shard the pubkey map into shards to reduce lock contention
         const shards = try allocator.alloc(RwPubkeyRefMap, number_of_shards);
         errdefer allocator.free(number_of_shards);
-        @memset(shards, RwPubkeyRefMap.init(PubkeyRefMap.init(allocator)));
+        @memset(shards, RwPubkeyRefMap.init(.empty));
 
         const shard_calculator = PubkeyShardCalculator.init(number_of_shards);
         return .{
@@ -669,7 +665,7 @@ pub const ShardedPubkeyRefMap = struct {
         for (self.shards) |*shard_rw| {
             const shard, var shard_lg = shard_rw.writeWithLock();
             defer shard_lg.unlock();
-            shard.deinit();
+            shard.deinit(self.allocator);
         }
         self.allocator.free(self.shards);
     }
@@ -682,7 +678,7 @@ pub const ShardedPubkeyRefMap = struct {
             if (count > 0) {
                 const shard_map, var lock = self.getShardFromIndex(index).writeWithLock();
                 defer lock.unlock();
-                try shard_map.ensureTotalCapacity(count);
+                try shard_map.ensureTotalCapacity(self.allocator, @intCast(count));
             }
         }
     }
@@ -701,7 +697,10 @@ pub const ShardedPubkeyRefMap = struct {
                 const shard_map, var lock = self.getShardFromIndex(index).writeWithLock();
                 defer lock.unlock();
                 // !
-                try shard_map.ensureTotalCapacity(count + shard_map.count());
+                try shard_map.ensureTotalCapacity(
+                    self.allocator,
+                    @intCast(count + shard_map.count()),
+                );
             }
         }
     }
@@ -710,7 +709,7 @@ pub const ShardedPubkeyRefMap = struct {
         for (self.shards) |*shard_rw| {
             const shard, var shard_lg = shard_rw.writeWithLock();
             defer shard_lg.unlock();
-            try shard.ensureTotalCapacity(size_per_shard);
+            try shard.ensureTotalCapacity(self.allocator, size_per_shard);
         }
     }
 
@@ -756,7 +755,7 @@ pub const ShardedPubkeyRefMap = struct {
         return self.getShardFromIndex(self.getShardIndex(pubkey));
     }
 
-    pub fn getShardCount(self: *const Self, index: u64) u64 {
+    pub fn getShardCount(self: *const Self, index: u64) u32 {
         const shard, var lock = self.getShardFromIndex(index).readWithLock();
         defer lock.unlock();
         return shard.count();
@@ -850,121 +849,121 @@ pub const ReferenceAllocator = union(Tag) {
     }
 };
 
-test "save and load account index state -- multi linked list" {
-    const allocator = std.testing.allocator;
-    var save_dir = std.testing.tmpDir(.{});
-    defer save_dir.cleanup();
+// test "save and load account index state -- multi linked list" {
+//     const allocator = std.testing.allocator;
+//     var save_dir = std.testing.tmpDir(.{});
+//     defer save_dir.cleanup();
 
-    var index = try AccountIndex.init(
-        allocator,
-        .noop,
-        .{ .ram = .{ .allocator = allocator } },
-        8,
-    );
-    defer index.deinit();
+//     var index = try AccountIndex.init(
+//         allocator,
+//         .noop,
+//         .{ .ram = .{ .allocator = allocator } },
+//         8,
+//     );
+//     defer index.deinit();
 
-    try index.expandRefCapacity(10);
-    try index.pubkey_ref_map.ensureTotalCapacityPerShard(10);
+//     try index.expandRefCapacity(10);
+//     try index.pubkey_ref_map.ensureTotalCapacityPerShard(10);
 
-    const ref_block, _ = try index.reference_manager.alloc(2);
+//     const ref_block, _ = try index.reference_manager.alloc(2);
 
-    var ref_a = AccountRef.DEFAULT;
-    ref_a.slot = 10;
-    ref_block[0] = ref_a;
-    //
-    // pubkey -> a
-    index.indexRefAssumeCapacity(&ref_block[0], 0);
+//     var ref_a = AccountRef.DEFAULT;
+//     ref_a.slot = 10;
+//     ref_block[0] = ref_a;
+//     //
+//     // pubkey -> a
+//     index.indexRefAssumeCapacity(&ref_block[0], 0);
 
-    var ref_b = AccountRef.DEFAULT;
-    ref_b.slot = 20;
-    ref_b.location = .{ .File = .{ .file_id = FileId.fromInt(1), .offset = 20 } };
-    ref_block[1] = ref_b;
+//     var ref_b = AccountRef.DEFAULT;
+//     ref_b.slot = 20;
+//     ref_b.location = .{ .File = .{ .file_id = FileId.fromInt(1), .offset = 20 } };
+//     ref_block[1] = ref_b;
 
-    // pubkey -> a -> b
-    index.indexRefAssumeCapacity(&ref_block[1], 1);
+//     // pubkey -> a -> b
+//     index.indexRefAssumeCapacity(&ref_block[1], 1);
 
-    {
-        const ref_head, var ref_head_lg = index.pubkey_ref_map.getRead(&ref_a.pubkey).?;
-        defer ref_head_lg.unlock();
-        _, const ref_max_slot = ref_head.highestRootedSlot(100);
-        try std.testing.expectEqual(20, ref_max_slot);
-    }
+//     {
+//         const ref_head, var ref_head_lg = index.pubkey_ref_map.getRead(&ref_a.pubkey).?;
+//         defer ref_head_lg.unlock();
+//         _, const ref_max_slot = ref_head.highestRootedSlot(100);
+//         try std.testing.expectEqual(20, ref_max_slot);
+//     }
 
-    // save the state
-    try index.saveToDisk(save_dir.dir);
+//     // save the state
+//     try index.saveToDisk(save_dir.dir);
 
-    var index2 = try AccountIndex.init(
-        allocator,
-        .noop,
-        .{ .ram = .{ .allocator = allocator } },
-        8,
-    );
-    defer index2.deinit();
+//     var index2 = try AccountIndex.init(
+//         allocator,
+//         .noop,
+//         .{ .ram = .{ .allocator = allocator } },
+//         8,
+//     );
+//     defer index2.deinit();
 
-    // load the state
-    // NOTE: this will work even if something is wrong
-    // because were using the same pointers because its the same run
-    try index2.loadFromDisk(save_dir.dir);
-    {
-        const ref_head, var ref_head_lg = index2.pubkey_ref_map.getRead(&ref_a.pubkey).?;
-        defer ref_head_lg.unlock();
-        _, const ref_max_slot = ref_head.highestRootedSlot(100);
-        try std.testing.expectEqual(20, ref_max_slot);
-    }
-}
+//     // load the state
+//     // NOTE: this will work even if something is wrong
+//     // because were using the same pointers because its the same run
+//     try index2.loadFromDisk(save_dir.dir);
+//     {
+//         const ref_head, var ref_head_lg = index2.pubkey_ref_map.getRead(&ref_a.pubkey).?;
+//         defer ref_head_lg.unlock();
+//         _, const ref_max_slot = ref_head.highestRootedSlot(100);
+//         try std.testing.expectEqual(20, ref_max_slot);
+//     }
+// }
 
-test "save and load account index state" {
-    const allocator = std.testing.allocator;
-    var save_dir = std.testing.tmpDir(.{});
-    defer save_dir.cleanup();
+// test "save and load account index state" {
+//     const allocator = std.testing.allocator;
+//     var save_dir = std.testing.tmpDir(.{});
+//     defer save_dir.cleanup();
 
-    var index = try AccountIndex.init(
-        allocator,
-        .noop,
-        .{ .ram = .{ .allocator = allocator } },
-        8,
-    );
-    defer index.deinit();
-    try index.expandRefCapacity(1);
-    try index.pubkey_ref_map.ensureTotalCapacityPerShard(100);
+//     var index = try AccountIndex.init(
+//         allocator,
+//         .noop,
+//         .{ .ram = .{ .allocator = allocator } },
+//         8,
+//     );
+//     defer index.deinit();
+//     try index.expandRefCapacity(1);
+//     try index.pubkey_ref_map.ensureTotalCapacityPerShard(100);
 
-    const ref_block, _ = try index.reference_manager.alloc(1);
-    var ref_a = AccountRef.DEFAULT;
-    ref_a.slot = 10;
-    ref_block[0] = ref_a;
+//     const ref_block, _ = try index.reference_manager.alloc(1);
+//     var ref_a = AccountRef.DEFAULT;
+//     ref_a.slot = 10;
+//     ref_block[0] = ref_a;
 
-    // pubkey -> a
-    index.indexRefAssumeCapacity(&ref_block[0], 0);
+//     // pubkey -> a
+//     index.indexRefAssumeCapacity(&ref_block[0], 0);
 
-    {
-        const ref_head, var ref_head_lg = index.pubkey_ref_map.getRead(&ref_a.pubkey).?;
-        defer ref_head_lg.unlock();
-        _, const ref_max_slot = ref_head.highestRootedSlot(100);
-        try std.testing.expectEqual(10, ref_max_slot);
-    }
+//     {
+//         const ref_head, var ref_head_lg = index.pubkey_ref_map.getRead(&ref_a.pubkey).?;
+//         defer ref_head_lg.unlock();
+//         _, const ref_max_slot = ref_head.highestRootedSlot(100);
+//         try std.testing.expectEqual(10, ref_max_slot);
+//     }
 
-    // save the state
-    try index.saveToDisk(save_dir.dir);
+//     // save the state
+//     try index.saveToDisk(save_dir.dir);
 
-    var index2 = try AccountIndex.init(
-        allocator,
-        .noop,
-        .{ .ram = .{ .allocator = allocator } },
-        8,
-    );
-    defer index2.deinit();
+//     var index2 = try AccountIndex.init(
+//         allocator,
+//         .noop,
+//         .{ .ram = .{ .allocator = allocator } },
+//         8,
+//     );
+//     defer index2.deinit();
 
-    // load the state
-    // NOTE: this will work even if something is wrong
-    // because were using the same pointers because its the same run
-    try index2.loadFromDisk(save_dir.dir);
-    {
-        const ref_head, var ref_head_lg = index2.pubkey_ref_map.getRead(&ref_a.pubkey).?;
-        defer ref_head_lg.unlock();
-        _, const ref_max_slot = ref_head.highestRootedSlot(10);
-        try std.testing.expectEqual(10, ref_max_slot);
-    }
-}
+//     // load the state
+//     // NOTE: this will work even if something is wrong
+//     // because were using the same pointers because its the same run
+//     try index2.loadFromDisk(save_dir.dir);
+//     {
+//         const ref_head, var ref_head_lg = index2.pubkey_ref_map.getRead(&ref_a.pubkey).?;
+//         defer ref_head_lg.unlock();
+//         _, const ref_max_slot = ref_head.highestRootedSlot(10);
+//         try std.testing.expectEqual(10, ref_max_slot);
+//     }
+// }
 
 test "account index update/remove reference" {
     const allocator = std.testing.allocator;

@@ -9,6 +9,17 @@ pub const Pubkey = extern struct {
 
     pub const ZEROES: Pubkey = .{ .data = .{0} ** SIZE };
 
+    pub const HashContext = struct {
+        pub fn hash(_: HashContext, pubkey: Pubkey) u64 {
+            const key = std.mem.readInt(u64, pubkey.data[0..8], .little);
+            return std.hash.int(key);
+        }
+
+        pub fn eql(_: HashContext, key1: Pubkey, key2: Pubkey) bool {
+            return key1.equals(&key2);
+        }
+    };
+
     pub fn fromPublicKey(public_key: *const std.crypto.sign.Ed25519.PublicKey) Pubkey {
         return .{ .data = public_key.bytes };
     }
