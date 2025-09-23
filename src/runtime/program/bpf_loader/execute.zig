@@ -18,6 +18,7 @@ const InstructionError = sig.core.instruction.InstructionError;
 const InstructionContext = sig.runtime.InstructionContext;
 const TransactionContext = sig.runtime.TransactionContext;
 const V3State = sig.runtime.program.bpf_loader.v3.State;
+const V4State = sig.runtime.program.bpf_loader.v4.State;
 
 // [agave] https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/programs/bpf_loader/src/lib.rs#L399-L401
 const migration_authority: Pubkey = .parse("3Scf35jMNk2xXBD6areNjgMtXgp5ZspDhms8vdcbzC42");
@@ -116,14 +117,13 @@ fn checkProgramAccount(
     ic: *InstructionContext,
     program_account: *const sig.runtime.BorrowedAccount,
     authority_address: Pubkey,
-) (error{OutOfMemory} || InstructionError)!bpf_loader_program.v4.State {
+) (error{OutOfMemory} || InstructionError)!V4State {
     if (!program_account.account.owner.equals(&bpf_loader_program.v4.ID)) {
         try ic.tc.log("Program not owned by loader", .{});
         return error.InvalidAccountOwner;
     }
 
-    const state =
-        try program_account.deserializeFromAccountData(allocator, bpf_loader_program.v4.State);
+    const state = try program_account.deserializeFromAccountData(allocator, V4State);
     errdefer bincode.free(allocator, state);
 
     if (!program_account.context.is_writable) {
@@ -168,7 +168,7 @@ pub fn executeV4Write(
         return error.InvalidArgument;
     }
 
-    const dst_offset = @as(usize, offset) +| bpf_loader_program.v4.State.PROGRAM_DATA_METADATA_SIZE;
+    const dst_offset = @as(usize, offset) +| V4State.PROGRAM_DATA_METADATA_SIZE;
     const data = try program_account.mutableAccountData();
     if (dst_offset +| bytes.len > data.len) {
         try ic.tc.log("Write out of bounds", .{});
@@ -207,7 +207,7 @@ pub fn executeV4Copy(
     const source_owner = src_account.account.owner;
     const source_offset = @as(usize, src_offset) +|
         (if (bpf_loader_program.v4.ID.equals(&source_owner))
-            bpf_loader_program.v4.State.PROGRAM_DATA_METADATA_SIZE
+            V4State.PROGRAM_DATA_METADATA_SIZE
         else if (bpf_loader_program.v3.ID.equals(&source_owner))
             bpf_loader_program.v3.State.PROGRAM_DATA_METADATA_SIZE
         else if (bpf_loader_program.v2.ID.equals(&source_owner) or
@@ -224,7 +224,7 @@ pub fn executeV4Copy(
         return error.AccountDataTooSmall;
     }
 
-    const offset = @as(usize, dst_offset) +| bpf_loader_program.v4.State.PROGRAM_DATA_METADATA_SIZE;
+    const offset = @as(usize, dst_offset) +| V4State.PROGRAM_DATA_METADATA_SIZE;
     const data = try dst_account.mutableAccountData();
     if (offset +| length > data.len) {
         try ic.tc.log("Write out of bounds", .{});
@@ -251,8 +251,7 @@ pub fn executeV4SetProgramLength(
         break :blk txn_account.pubkey;
     };
 
-    const is_initialization =
-        program_account.constAccountData().len < @sizeOf(bpf_loader_program.v4.State);
+    const is_initialization = program_account.constAccountData().len < @sizeOf(V4State);
     if (is_initialization) {
         if (!program_account.account.owner.equals(&bpf_loader_program.v4.ID)) {
             try ic.tc.log("Program not owned by loader", .{});
@@ -279,7 +278,7 @@ pub fn executeV4SetProgramLength(
     const required_lamports = if (new_size == 0) 0 else blk: {
         const rent = try ic.tc.sysvar_cache.get(sysvar.Rent);
         break :blk rent.minimumBalance(
-            @as(usize, new_size) +| @sizeOf(bpf_loader_program.v4.State),
+            @as(usize, new_size) +| @sizeOf(V4State),
         );
     };
 
@@ -314,11 +313,11 @@ pub fn executeV4SetProgramLength(
         try program_account.setDataLength(
             allocator,
             &ic.tc.accounts_resize_delta,
-            @as(usize, new_size) +| @sizeOf(bpf_loader_program.v4.State),
+            @as(usize, new_size) +| @sizeOf(V4State),
         );
         if (is_initialization) {
             try program_account.setExecutable(true, ic.tc.rent);
-            try program_account.serializeIntoAccountData(bpf_loader_program.v4.State{
+            try program_account.serializeIntoAccountData(V4State{
                 .slot = 0,
                 .status = .retracted,
                 .authority_address_or_next_version = authority_address,
@@ -363,9 +362,9 @@ pub fn executeV4Deploy(
     }
 
     const program_data =
-        if (program_account.constAccountData().len < @sizeOf(bpf_loader_program.v4.State)) {
+        if (program_account.constAccountData().len < @sizeOf(V4State)) {
             return InstructionError.AccountDataTooSmall;
-        } else program_account.constAccountData()[@sizeOf(bpf_loader_program.v4.State)..];
+        } else program_account.constAccountData()[@sizeOf(V4State)..];
 
     try deployProgram(
         allocator,
@@ -376,7 +375,7 @@ pub fn executeV4Deploy(
         current_slot,
     );
 
-    try program_account.serializeIntoAccountData(bpf_loader_program.v4.State{
+    try program_account.serializeIntoAccountData(V4State{
         .slot = current_slot,
         .status = .deployed,
         .authority_address_or_next_version = state.authority_address_or_next_version,
@@ -412,7 +411,7 @@ pub fn executeV4Retract(
         return InstructionError.InvalidArgument;
     }
 
-    try program_account.serializeIntoAccountData(bpf_loader_program.v4.State{
+    try program_account.serializeIntoAccountData(V4State{
         .slot = state.slot,
         .status = .retracted,
         .authority_address_or_next_version = state.authority_address_or_next_version,
@@ -461,7 +460,7 @@ pub fn executeV4TransferAuthority(
         return InstructionError.InvalidArgument;
     }
 
-    try program_account.serializeIntoAccountData(bpf_loader_program.v4.State{
+    try program_account.serializeIntoAccountData(V4State{
         .slot = state.slot,
         .status = state.status,
         .authority_address_or_next_version = new_authority_address,
@@ -505,9 +504,9 @@ pub fn executeV4Finalize(
             return InstructionError.InvalidAccountOwner;
         }
 
-        const next_state =
-            try next_version.deserializeFromAccountData(allocator, bpf_loader_program.v4.State);
+        const next_state = try next_version.deserializeFromAccountData(allocator, V4State);
         defer bincode.free(allocator, next_state);
+
         if (!next_state.authority_address_or_next_version.equals(&authority_address)) {
             try ic.tc.log("Next version has a different authority", .{});
             return InstructionError.IncorrectAuthority;
@@ -522,7 +521,7 @@ pub fn executeV4Finalize(
 
     var program_account = try ic.borrowInstructionAccount(@intFromEnum(AccountIndex.account));
     defer program_account.release();
-    try program_account.serializeIntoAccountData(bpf_loader_program.v4.State{
+    try program_account.serializeIntoAccountData(V4State{
         .slot = state_slot,
         .status = .finalized,
         .authority_address_or_next_version = next_address,
@@ -1867,6 +1866,7 @@ pub fn executeV3Migrate(
         );
 
         if (progdata_info.upgrade_key == null) {
+            std.debug.print("finalize\n", .{});
             try ic.nativeInvoke(
                 allocator,
                 bpf_loader_program.v4.ID,
@@ -1882,6 +1882,7 @@ pub fn executeV3Migrate(
             );
         } else if (provided_authority_key.equals(&migration_authority)) {
             const upgrade_key = progdata_info.upgrade_key.?;
+            std.debug.print("transfer_auth: {}\n", .{upgrade_key});
             try ic.nativeInvoke(
                 allocator,
                 bpf_loader_program.v4.ID,
@@ -1922,6 +1923,9 @@ pub fn deployProgram(
     data: []const u8,
     slot: u64,
 ) (error{OutOfMemory} || InstructionError)!void {
+    _ = slot;
+    _ = owner_id;
+
     // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L124-L131
     var environment = vm.Environment.initV1(
         allocator,
@@ -1974,9 +1978,6 @@ pub fn deployProgram(
     const gop = try tc.program_map.getOrPut(allocator, program_id);
     if (gop.found_existing) gop.value_ptr.deinit(allocator);
     gop.value_ptr.* = .failed;
-
-    _ = owner_id;
-    _ = slot;
 }
 
 test "executeV3InitializeBuffer" {
@@ -3451,9 +3452,15 @@ test "executeV3Migrate" {
     var clock = sysvar.Clock.DEFAULT;
     clock.slot += 1337;
 
-    const data_size = 42;
+    const program_elf = try std.fs.cwd().readFileAlloc(
+        allocator,
+        sig.ELF_DATA_DIR ++ "hello_world.so",
+        std.math.maxInt(usize),
+    );
+    defer allocator.free(program_elf);
+
     const program_data_buffer =
-        try allocator.alloc(u8, @sizeOf(V3State) + data_size);
+        try allocator.alloc(u8, V3State.PROGRAM_DATA_METADATA_SIZE + program_elf.len);
     defer allocator.free(program_data_buffer);
     _ = try bincode.writeToSlice(
         program_data_buffer,
@@ -3465,11 +3472,15 @@ test "executeV3Migrate" {
         },
         .{},
     );
+    @memcpy(
+        program_data_buffer[V3State.PROGRAM_DATA_METADATA_SIZE..][0..program_elf.len],
+        program_elf,
+    );
 
     const program_account_buffer =
         try allocator.alloc(u8, @sizeOf(V3State));
     defer allocator.free(program_account_buffer);
-    const program_account = try bincode.writeToSlice(
+    _ = try bincode.writeToSlice(
         program_account_buffer,
         V3State{
             .program = .{
@@ -3479,11 +3490,28 @@ test "executeV3Migrate" {
         .{},
     );
 
+    const final_program_buffer = try allocator.alloc(u8, @sizeOf(V4State) + program_elf.len);
+    defer allocator.free(final_program_buffer);
+    _ = try bincode.writeToSlice(
+        final_program_buffer,
+        V4State{
+            .slot = clock.slot,
+            .authority_address_or_next_version = upgrade_authority_key,
+            .status = .deployed,
+        },
+        .{},
+    );
+    @memcpy(
+        final_program_buffer[@sizeOf(V4State)..][0..program_elf.len],
+        program_elf,
+    );
+
     const program_data_balance = sysvar.Rent.DEFAULT.minimumBalance(program_data_buffer.len);
-    const program_account_balance = sysvar.Rent.DEFAULT.minimumBalance(program_account.len);
+    const program_account_balance = sysvar.Rent.DEFAULT.minimumBalance(program_account_buffer.len);
 
     const compute_units: u64 = bpf_loader_program.v3.COMPUTE_UNITS +
-        (4 * bpf_loader_program.v4.COMPUTE_UNITS); // does 4 CPI calls.
+        // does 3 CPI calls (no finalize or transfer_authority at the end)
+        (3 * bpf_loader_program.v4.COMPUTE_UNITS);
 
     try testing.expectProgramExecuteResult(
         allocator,
@@ -3508,7 +3536,7 @@ test "executeV3Migrate" {
                 },
                 .{
                     .pubkey = program_account_key,
-                    .data = program_account,
+                    .data = program_account_buffer,
                     .owner = bpf_loader_program.v3.ID,
                     .lamports = program_account_balance,
                 },
@@ -3543,14 +3571,15 @@ test "executeV3Migrate" {
                 .{
                     .pubkey = program_data_key,
                     .data = &.{}, // set_length to 0
-                    .owner = system_program.ID,
+                    .owner = bpf_loader_program.v3.ID,
                     .lamports = 0,
                 },
                 .{
                     .pubkey = program_account_key,
-                    .data = &.{}, // set length to 0
+                    .data = final_program_buffer,
                     .owner = bpf_loader_program.v4.ID, // v4
                     .lamports = program_account_balance + program_data_balance, // sum bal
+                    .executable = true,
                 },
                 .{
                     .pubkey = upgrade_authority_key,
@@ -3566,7 +3595,10 @@ test "executeV3Migrate" {
                     .owner = ids.NATIVE_LOADER_ID,
                 },
             },
-            .accounts_resize_delta = 0,
+            .accounts_resize_delta = @intCast(@as(i128, 0) -
+                program_account_buffer.len +
+                final_program_buffer.len -
+                program_data_buffer.len),
         },
         .{},
     );
