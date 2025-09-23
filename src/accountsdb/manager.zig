@@ -1542,3 +1542,55 @@ test "shrink account file works" {
     const account = try accounts_db.getAccountLatest(&pubkey_remain) orelse unreachable;
     account.deinit(allocator);
 }
+
+test "snapshot generation" {
+    const allocator = std.testing.allocator;
+    const logger: Logger = .noop;
+
+    var bp: BufferPool = try .init(allocator, 100);
+    defer bp.deinit(allocator);
+
+    var tmp_dir_root = std.testing.tmpDir(.{});
+    defer tmp_dir_root.cleanup();
+    const snapshot_dir = tmp_dir_root.dir;
+
+    var accounts_db: AccountsDB = try .init(
+        .minimal(allocator, .from(logger), snapshot_dir, null),
+    );
+    defer accounts_db.deinit();
+
+    var manager = try Manager.init(allocator, &accounts_db, .{
+        .snapshot = .{
+            .slots_per_full_snapshot = 2,
+            .slots_per_incremental_snapshot = 1,
+            .zstd_nb_workers = 1,
+        },
+    });
+    defer manager.deinit(allocator);
+
+    try manager.manage(allocator);
+
+    accounts_db.max_slots.set(.{
+        .rooted = 1,
+        .flushed = accounts_db.max_slots.readCopy().flushed,
+    });
+    try manager.manage(allocator);
+
+    accounts_db.max_slots.set(.{
+        .rooted = 2,
+        .flushed = accounts_db.max_slots.readCopy().flushed,
+    });
+    try manager.manage(allocator);
+
+    accounts_db.max_slots.set(.{
+        .rooted = 3,
+        .flushed = accounts_db.max_slots.readCopy().flushed,
+    });
+    try manager.manage(allocator);
+
+    accounts_db.max_slots.set(.{
+        .rooted = 4,
+        .flushed = accounts_db.max_slots.readCopy().flushed,
+    });
+    try manager.manage(allocator);
+}
