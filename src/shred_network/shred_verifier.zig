@@ -3,13 +3,9 @@ const sig = @import("../sig.zig");
 
 const shred_layout = sig.ledger.shred.layout;
 
-const Atomic = std.atomic.Value;
-
-const Channel = sig.sync.Channel;
 const Counter = sig.prometheus.Counter;
 const Histogram = sig.prometheus.Histogram;
 const Packet = sig.net.Packet;
-const Registry = sig.prometheus.Registry;
 const SlotLeaders = sig.core.leader_schedule.SlotLeaders;
 const VariantCounter = sig.prometheus.VariantCounter;
 

@@ -26,7 +26,6 @@ const RepairPeerProvider = shred_network.repair_service.RepairPeerProvider;
 const RepairRequester = shred_network.repair_service.RepairRequester;
 const RepairService = shred_network.repair_service.RepairService;
 const ShredReceiver = shred_network.shred_receiver.ShredReceiver;
-const ShredReceiverMetrics = shred_network.shred_receiver.ShredReceiverMetrics;
 
 /// Settings which instruct the Shred Network how to behave.
 pub const ShredNetworkConfig = struct {
