@@ -261,6 +261,7 @@ pub const ConsensusState = struct {
     vote_listener: VoteListener,
 
     fn deinit(self: *ConsensusState, allocator: Allocator) void {
+        self.replay_tower.deinit(allocator);
         self.fork_choice.deinit();
         self.latest_validator_votes.deinit(allocator);
         self.slot_data.deinit(allocator);
@@ -1246,6 +1247,10 @@ test "Service clean init and deinit" {
 
     var service = try dep_stubs.stubbedService(allocator);
     defer service.deinit(allocator);
+
+    // TODO: run consensus in the tests that actually execute blocks for better
+    // coverage. currently consensus panics if you run it with an actual block.
+    _ = try doConsensus(allocator, &service.replay, &service.consensus.?, &.{});
 
     dep_stubs.exit.store(true, .monotonic);
 }
