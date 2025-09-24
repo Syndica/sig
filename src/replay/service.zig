@@ -1338,7 +1338,7 @@ fn testExecuteBlock(allocator: Allocator, config: struct {
     shreds_path: []const u8,
     accounts_path: []const u8,
 }) !void {
-    var dep_stubs = try DependencyStubs.init(allocator);
+    var dep_stubs = try DependencyStubs.init(allocator, .FOR_TESTS);
     defer dep_stubs.deinit(allocator);
 
     // get snapshot manifest
@@ -1661,20 +1661,20 @@ const DependencyStubs = struct {
                 .slot_leaders = slot_leaders,
                 .root = .{
                     .slot = bank_fields.slot,
-                    .constants = root_slot_constants,
-                    .state = root_slot_state,
+                    .constants = .init(root_slot_constants),
+                    .state = .init(root_slot_state),
                 },
                 .current_epoch = epoch,
-                .current_epoch_constants = try .fromBankFields(
+                .current_epoch_constants = .init(try .fromBankFields(
                     bank_fields,
                     try epoch_stakes.current.convert(allocator, .delegation),
-                ),
-                .hard_forks = hard_forks,
+                )),
+                .hard_forks = .init(hard_forks),
             };
         };
         defer deps.deinit(allocator);
 
-        return try Service.init(deps, null, num_threads);
+        return try Service.init(&deps, null, num_threads);
     }
 };
 
