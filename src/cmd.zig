@@ -1124,16 +1124,6 @@ fn validator(
     const collapsed_manifest = &loaded_snapshot.collapsed_manifest;
     const bank_fields = &collapsed_manifest.bank_fields;
 
-    // leader schedule
-    var leader_schedule_cache = LeaderScheduleCache.init(allocator, bank_fields.epoch_schedule);
-    if (try getLeaderScheduleFromCli(allocator, cfg)) |leader_schedule| {
-        try leader_schedule_cache.put(bank_fields.epoch, leader_schedule[1]);
-    } else {
-        const schedule = try collapsed_manifest.leaderSchedule(allocator, null);
-        errdefer schedule.deinit();
-        try leader_schedule_cache.put(bank_fields.epoch, schedule);
-    }
-
     // ledger
     const ledger = try UnifiedLedger.init(
         allocator,
@@ -1163,12 +1153,27 @@ fn validator(
         var staked_nodes_cloned = try staked_nodes.clone(allocator);
         errdefer staked_nodes_cloned.deinit(allocator);
 
-        const leader_schedule = try LeaderSchedule.fromStakedNodes(
-            allocator,
-            epoch,
-            epoch_schedule.slots_per_epoch,
-            staked_nodes,
-        );
+        const leader_schedule = if (try getLeaderScheduleFromCli(allocator, cfg)) |leader_schedule|
+            leader_schedule[1].slot_leaders
+        else ls: {
+            // TODO: Implement feature gating for vote keyed leader schedule.
+            // [agave] https://github.com/anza-xyz/agave/blob/e468acf4da519171510f2ec982f70a0fd9eb2c8b/ledger/src/leader_schedule_utils.rs#L12
+            // [agave] https://github.com/anza-xyz/agave/blob/e468acf4da519171510f2ec982f70a0fd9eb2c8b/runtime/src/bank.rs#L4833
+            break :ls if (true)
+                try LeaderSchedule.fromVoteAccounts(
+                    allocator,
+                    epoch,
+                    epoch_schedule.slots_per_epoch,
+                    try collapsed_manifest.epochVoteAccounts(epoch),
+                )
+            else
+                try LeaderSchedule.fromStakedNodes(
+                    allocator,
+                    epoch,
+                    epoch_schedule.slots_per_epoch,
+                    staked_nodes,
+                );
+        };
         errdefer allocator.free(leader_schedule);
 
         try epoch_context_manager.put(epoch, .{
