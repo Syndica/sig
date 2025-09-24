@@ -294,6 +294,24 @@ pub const LeaderSchedule = struct {
     }
 };
 
+/// Minimal implementation of SlotLeaders for a single epoch. Useful for tests
+/// or any other context that will not exceed a single epoch.
+pub const SingleEpochSlotLeaders = struct {
+    start_slot: Slot,
+    slot_leaders: []const Pubkey,
+
+    pub fn get(self: *SingleEpochSlotLeaders, slot: Slot) ?Pubkey {
+        if (slot < self.start_slot or slot - self.start_slot >= self.slot_leaders.len) {
+            return null;
+        }
+        return self.slot_leaders[slot - self.start_slot];
+    }
+
+    pub fn slotLeaders(self: *SingleEpochSlotLeaders) SlotLeaders {
+        return SlotLeaders.init(self, get);
+    }
+};
+
 test "leaderSchedule calculation matches agave" {
     var rng = ChaChaRng(20).fromSeed(.{0} ** 32);
     const random = rng.random();
