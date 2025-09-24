@@ -406,7 +406,7 @@ pub fn executeV4Retract(
         try ic.tc.log("Program was deployed recently, cooldown still in effect", .{});
         return InstructionError.InvalidArgument;
     }
-    if (state.status != .retracted) {
+    if (state.status != .deployed) {
         try ic.tc.log("Program is not deployed", .{});
         return InstructionError.InvalidArgument;
     }
@@ -3434,72 +3434,24 @@ test "executeV3ExtendProgram" {
     }
 }
 
-test "executeV3Migrate" {
+test executeV3Migrate {
     const testing = sig.runtime.program.testing;
-
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
-    const upgrade_authority_key = Pubkey.initRandom(prng.random());
-    const program_account_key = Pubkey.initRandom(prng.random());
-    const program_data_key, _ = pubkey_utils.findProgramAddress(
-        &.{},
-        program_account_key,
-    ) orelse @panic("findProgramAddress failed");
-
-    var clock = sysvar.Clock.DEFAULT;
-    clock.slot += 1337;
-
-    const program_elf = try std.fs.cwd().readFileAlloc(
-        allocator,
-        sig.ELF_DATA_DIR ++ "hello_world.so",
-        std.math.maxInt(usize),
-    );
-    defer allocator.free(program_elf);
-
-    const program_data_buffer =
-        try allocator.alloc(u8, V3State.PROGRAM_DATA_METADATA_SIZE + program_elf.len);
-    defer allocator.free(program_data_buffer);
-
-    @memcpy(
-        program_data_buffer[V3State.PROGRAM_DATA_METADATA_SIZE..][0..program_elf.len],
-        program_elf,
-    );
-
-    const program_account_buffer =
-        try allocator.alloc(u8, @sizeOf(V3State));
-    defer allocator.free(program_account_buffer);
-    _ = try bincode.writeToSlice(
-        program_account_buffer,
-        V3State{
-            .program = .{
-                .programdata_address = program_data_key,
-            },
-        },
-        .{},
-    );
-
-    const final_program_buffer = try allocator.alloc(u8, @sizeOf(V4State) + program_elf.len);
-    defer allocator.free(final_program_buffer);
-    @memcpy(
-        final_program_buffer[@sizeOf(V4State)..][0..program_elf.len],
-        program_elf,
-    );
-
-    const program_data_balance = sysvar.Rent.DEFAULT.minimumBalance(program_data_buffer.len);
-    const program_account_balance = sysvar.Rent.DEFAULT.minimumBalance(program_account_buffer.len);
-
     for ([_]enum { use_auth, no_auth, migrate }{ .use_auth, .no_auth, .migrate }) |mode| {
-        const compute_units: u64 = bpf_loader_program.v3.COMPUTE_UNITS +
-            // does 3 v4 CPI calls (+ v4.finalize or v4.transfer_authority depending on mode)
-            @as(u64, switch (mode) {
-                .use_auth => 3,
-                .no_auth => 3 + 1,
-                .migrate => 3 + 1,
-            }) * bpf_loader_program.v4.COMPUTE_UNITS;
+        const upgrade_authority_key = Pubkey.initRandom(prng.random());
+        const program_account_key = Pubkey.initRandom(prng.random());
+        const program_data_key, _ = pubkey_utils.findProgramAddress(
+            &.{},
+            program_account_key,
+        ) orelse @panic("findProgramAddress failed");
 
-        _ = try bincode.writeToSlice(
-            program_data_buffer,
+        var clock = sysvar.Clock.DEFAULT;
+        clock.slot += 1337;
+
+        const program_data_buffer = try createValidProgramData(
+            allocator,
             V3State{
                 .program_data = .{
                     .slot = clock.slot - 1, // must be before the current clock's slot.
@@ -3510,30 +3462,57 @@ test "executeV3Migrate" {
                     },
                 },
             },
+            V3State.PROGRAM_DATA_METADATA_SIZE,
+            0,
+        );
+        defer allocator.free(program_data_buffer);
+
+        const program_account_buffer = try allocator.alloc(u8, @sizeOf(V3State));
+        defer allocator.free(program_account_buffer);
+        _ = try bincode.writeToSlice(
+            program_account_buffer,
+            V3State{
+                .program = .{
+                    .programdata_address = program_data_key,
+                },
+            },
             .{},
         );
 
-        _ = try bincode.writeToSlice(
-            final_program_buffer,
-            @as(V4State, switch (mode) {
-                .use_auth => .{
+        const final_program_buffer = try createValidProgramData(
+            allocator,
+            switch (mode) {
+                .use_auth => V4State{
                     .slot = clock.slot,
                     .authority_address_or_next_version = upgrade_authority_key,
                     .status = .deployed,
                 },
-                .no_auth => .{
+                .no_auth => V4State{
                     .slot = clock.slot,
                     .authority_address_or_next_version = program_account_key,
                     .status = .finalized,
                 },
-                .migrate => .{
+                .migrate => V4State{
                     .slot = clock.slot,
                     .authority_address_or_next_version = program_account_key,
                     .status = .deployed,
                 },
-            }),
-            .{},
+            },
+            V4State.PROGRAM_DATA_METADATA_SIZE,
+            0,
         );
+        defer allocator.free(final_program_buffer);
+
+        const program_data_balance = sysvar.Rent.DEFAULT.minimumBalance(program_data_buffer.len);
+        const program_account_balance = sysvar.Rent.DEFAULT.minimumBalance(program_account_buffer.len);
+
+        const compute_units: u64 = bpf_loader_program.v3.COMPUTE_UNITS +
+            // does 3 v4 CPI calls (+ v4.finalize or v4.transfer_authority depending on mode)
+            @as(u64, switch (mode) {
+                .use_auth => 3,
+                .no_auth => 3 + 1,
+                .migrate => 3 + 1,
+            }) * bpf_loader_program.v4.COMPUTE_UNITS;
 
         try testing.expectProgramExecuteResult(
             allocator,
@@ -3687,4 +3666,151 @@ fn createValidProgramData(
     );
 
     return program_data;
+}
+
+test executeV4Write {
+    const testing = sig.runtime.program.testing;
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+
+    const program_key = Pubkey.initRandom(prng.random());
+
+    const initial_program_buffer = try allocator.alloc(u8, @sizeOf(V4State) + 100);
+    defer allocator.free(initial_program_buffer);
+
+    @memset(initial_program_buffer, 0);
+    _ = try bincode.writeToSlice(
+        initial_program_buffer,
+        V4State{
+            .slot = 0,
+            .authority_address_or_next_version = program_key,
+            .status = .retracted,
+        },
+        .{},
+    );
+
+    const final_program_buffer = try allocator.dupe(u8, initial_program_buffer);
+    defer allocator.free(final_program_buffer);
+
+    const to_write: []const u8 = "hello world";
+    @memcpy(final_program_buffer[@sizeOf(V4State)..][0..to_write.len], to_write);
+
+    try testing.expectProgramExecuteResult(
+        allocator,
+        bpf_loader_program.v4.ID,
+        bpf_loader_program.v4.Instruction{
+            .write = .{ .offset = 0, .bytes = to_write },
+        },
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 }, // program
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 0 }, // auth itself
+            .{ .is_signer = false, .is_writable = false, .index_in_transaction = 1 }, // loader v4
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = program_key,
+                    .data = initial_program_buffer,
+                    .owner = bpf_loader_program.v4.ID,
+                },
+                .{
+                    .pubkey = bpf_loader_program.v4.ID,
+                    .owner = ids.NATIVE_LOADER_ID,
+                },
+            },
+            .compute_meter = bpf_loader_program.v4.COMPUTE_UNITS,
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = program_key,
+                    .data = final_program_buffer,
+                    .owner = bpf_loader_program.v4.ID,
+                },
+                .{
+                    .pubkey = bpf_loader_program.v4.ID,
+                    .owner = ids.NATIVE_LOADER_ID,
+                },
+            },
+        },
+        .{},
+    );
+}
+
+test executeV4Retract {
+    const testing = sig.runtime.program.testing;
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+
+    const program_key = Pubkey.initRandom(prng.random());
+
+    const initial_program_buffer = try allocator.alloc(u8, @sizeOf(V4State));
+    defer allocator.free(initial_program_buffer);
+    _ = try bincode.writeToSlice(
+        initial_program_buffer,
+        V4State{
+            .slot = 0,
+            .authority_address_or_next_version = program_key,
+            .status = .deployed,
+        },
+        .{},
+    );
+
+    const final_program_buffer = try allocator.dupe(u8, initial_program_buffer);
+    defer allocator.free(final_program_buffer);
+    _ = try bincode.writeToSlice(
+        final_program_buffer,
+        V4State{
+            .slot = 0,
+            .authority_address_or_next_version = program_key,
+            .status = .retracted,
+        },
+        .{},
+    );
+
+    var clock = sysvar.Clock.DEFAULT;
+    clock.slot = DEPLOYMENT_COOLDOWN_IN_SLOTS;
+
+    try testing.expectProgramExecuteResult(
+        allocator,
+        bpf_loader_program.v4.ID,
+        bpf_loader_program.v4.Instruction{ .retract = .{} },
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 }, // program
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 0 }, // auth itself
+            .{ .is_signer = false, .is_writable = false, .index_in_transaction = 1 }, // loader v4
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = program_key,
+                    .data = initial_program_buffer,
+                    .owner = bpf_loader_program.v4.ID,
+                },
+                .{
+                    .pubkey = bpf_loader_program.v4.ID,
+                    .owner = ids.NATIVE_LOADER_ID,
+                },
+            },
+            .compute_meter = bpf_loader_program.v4.COMPUTE_UNITS,
+            .sysvar_cache = .{
+                .rent = sysvar.Rent.DEFAULT,
+                .clock = clock,
+            },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = program_key,
+                    .data = final_program_buffer,
+                    .owner = bpf_loader_program.v4.ID,
+                },
+                .{
+                    .pubkey = bpf_loader_program.v4.ID,
+                    .owner = ids.NATIVE_LOADER_ID,
+                },
+            },
+        },
+        .{},
+    );
 }
