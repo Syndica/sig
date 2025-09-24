@@ -81,8 +81,8 @@ pub const Service = struct {
     }
 
     pub fn deinit(self: *Service, allocator: Allocator) void {
-        self.replay.deinit();
         if (self.consensus) |*c| c.deinit(allocator);
+        self.replay.deinit();
     }
 
     pub fn advance(self: *Service) !void {
