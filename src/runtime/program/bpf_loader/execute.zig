@@ -1866,7 +1866,6 @@ pub fn executeV3Migrate(
         );
 
         if (progdata_info.upgrade_key == null) {
-            std.debug.print("finalize\n", .{});
             try ic.nativeInvoke(
                 allocator,
                 bpf_loader_program.v4.ID,
@@ -1882,7 +1881,6 @@ pub fn executeV3Migrate(
             );
         } else if (provided_authority_key.equals(&migration_authority)) {
             const upgrade_key = progdata_info.upgrade_key.?;
-            std.debug.print("transfer_auth: {}\n", .{upgrade_key});
             try ic.nativeInvoke(
                 allocator,
                 bpf_loader_program.v4.ID,
@@ -3445,8 +3443,8 @@ test "executeV3Migrate" {
     const upgrade_authority_key = Pubkey.initRandom(prng.random());
     const program_account_key = Pubkey.initRandom(prng.random());
     const program_data_key, _ = pubkey_utils.findProgramAddress(
-        &.{&program_account_key.data},
-        bpf_loader_program.v3.ID,
+        &.{},
+        program_account_key,
     ) orelse @panic("findProgramAddress failed");
 
     var clock = sysvar.Clock.DEFAULT;
@@ -3462,16 +3460,7 @@ test "executeV3Migrate" {
     const program_data_buffer =
         try allocator.alloc(u8, V3State.PROGRAM_DATA_METADATA_SIZE + program_elf.len);
     defer allocator.free(program_data_buffer);
-    _ = try bincode.writeToSlice(
-        program_data_buffer,
-        V3State{
-            .program_data = .{
-                .slot = clock.slot - 1, // must be before the current clock's slot.
-                .upgrade_authority_address = upgrade_authority_key,
-            },
-        },
-        .{},
-    );
+
     @memcpy(
         program_data_buffer[V3State.PROGRAM_DATA_METADATA_SIZE..][0..program_elf.len],
         program_elf,
@@ -3492,15 +3481,6 @@ test "executeV3Migrate" {
 
     const final_program_buffer = try allocator.alloc(u8, @sizeOf(V4State) + program_elf.len);
     defer allocator.free(final_program_buffer);
-    _ = try bincode.writeToSlice(
-        final_program_buffer,
-        V4State{
-            .slot = clock.slot,
-            .authority_address_or_next_version = upgrade_authority_key,
-            .status = .deployed,
-        },
-        .{},
-    );
     @memcpy(
         final_program_buffer[@sizeOf(V4State)..][0..program_elf.len],
         program_elf,
@@ -3509,99 +3489,166 @@ test "executeV3Migrate" {
     const program_data_balance = sysvar.Rent.DEFAULT.minimumBalance(program_data_buffer.len);
     const program_account_balance = sysvar.Rent.DEFAULT.minimumBalance(program_account_buffer.len);
 
-    const compute_units: u64 = bpf_loader_program.v3.COMPUTE_UNITS +
-        // does 3 CPI calls (no finalize or transfer_authority at the end)
-        (3 * bpf_loader_program.v4.COMPUTE_UNITS);
+    for ([_]enum { use_auth, no_auth, migrate }{ .use_auth, .no_auth, .migrate }) |mode| {
+        const compute_units: u64 = bpf_loader_program.v3.COMPUTE_UNITS +
+            // does 3 v4 CPI calls (+ v4.finalize or v4.transfer_authority depending on mode)
+            @as(u64, switch (mode) {
+                .use_auth => 3,
+                .no_auth => 3 + 1,
+                .migrate => 3 + 1,
+            }) * bpf_loader_program.v4.COMPUTE_UNITS;
 
-    try testing.expectProgramExecuteResult(
-        allocator,
-        bpf_loader_program.v3.ID,
-        bpf_loader_program.v3.Instruction{
-            .migrate = .{},
-        },
-        &.{
-            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
-            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 1 },
-            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 2 },
-            .{ .is_signer = false, .is_writable = false, .index_in_transaction = 3 },
-            .{ .is_signer = false, .is_writable = false, .index_in_transaction = 4 },
-        },
-        .{
-            .accounts = &.{
-                .{
-                    .pubkey = program_data_key,
-                    .data = program_data_buffer,
-                    .owner = bpf_loader_program.v3.ID,
-                    .lamports = program_data_balance,
-                },
-                .{
-                    .pubkey = program_account_key,
-                    .data = program_account_buffer,
-                    .owner = bpf_loader_program.v3.ID,
-                    .lamports = program_account_balance,
-                },
-                .{
-                    .pubkey = upgrade_authority_key,
-                    .owner = bpf_loader_program.v3.ID,
-                },
-                .{
-                    .pubkey = bpf_loader_program.v4.ID, // needed for CPI
-                    .owner = ids.NATIVE_LOADER_ID,
-                    .executable = true,
-                },
-                .{
-                    .pubkey = bpf_loader_program.v3.ID,
-                    .owner = ids.NATIVE_LOADER_ID,
+        _ = try bincode.writeToSlice(
+            program_data_buffer,
+            V3State{
+                .program_data = .{
+                    .slot = clock.slot - 1, // must be before the current clock's slot.
+                    .upgrade_authority_address = switch (mode) {
+                        .use_auth => upgrade_authority_key,
+                        .no_auth => null,
+                        .migrate => program_account_key,
+                    },
                 },
             },
-            .compute_meter = compute_units,
-            .feature_set = &.{
+            .{},
+        );
+
+        _ = try bincode.writeToSlice(
+            final_program_buffer,
+            @as(V4State, switch (mode) {
+                .use_auth => .{
+                    .slot = clock.slot,
+                    .authority_address_or_next_version = upgrade_authority_key,
+                    .status = .deployed,
+                },
+                .no_auth => .{
+                    .slot = clock.slot,
+                    .authority_address_or_next_version = program_account_key,
+                    .status = .finalized,
+                },
+                .migrate => .{
+                    .slot = clock.slot,
+                    .authority_address_or_next_version = program_account_key,
+                    .status = .deployed,
+                },
+            }),
+            .{},
+        );
+
+        try testing.expectProgramExecuteResult(
+            allocator,
+            bpf_loader_program.v3.ID,
+            bpf_loader_program.v3.Instruction{
+                .migrate = .{},
+            },
+            &.{
+                // program_data_key
+                .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+                // program_account_key
                 .{
-                    .feature = .enable_loader_v4,
-                    .slot = 0,
+                    .is_signer = mode != .use_auth,
+                    .is_writable = true,
+                    .index_in_transaction = 1,
+                },
+                .{
+                    .is_signer = true,
+                    .is_writable = false,
+                    .index_in_transaction = switch (mode) {
+                        .use_auth => 2, // upgrade_authority_key
+                        .no_auth => 1, // program_account_key
+                        .migrate => 3, // migration_authority
+                    },
+                },
+                // bpf_loader_v4 for CPI
+                .{ .is_signer = false, .is_writable = false, .index_in_transaction = 4 },
+                // bpf_loader_v3 for v3.Instruction
+                .{ .is_signer = false, .is_writable = false, .index_in_transaction = 5 },
+            },
+            .{
+                .accounts = &.{
+                    .{
+                        .pubkey = program_data_key,
+                        .data = program_data_buffer,
+                        .owner = bpf_loader_program.v3.ID,
+                        .lamports = program_data_balance,
+                    },
+                    .{
+                        .pubkey = program_account_key,
+                        .data = program_account_buffer,
+                        .owner = bpf_loader_program.v3.ID,
+                        .lamports = program_account_balance,
+                    },
+                    .{
+                        .pubkey = upgrade_authority_key,
+                        .owner = bpf_loader_program.v3.ID,
+                    },
+                    .{
+                        .pubkey = migration_authority,
+                        .owner = bpf_loader_program.v3.ID,
+                    },
+                    .{
+                        .pubkey = bpf_loader_program.v4.ID, // needed for CPI
+                        .owner = ids.NATIVE_LOADER_ID,
+                        .executable = true,
+                    },
+                    .{
+                        .pubkey = bpf_loader_program.v3.ID,
+                        .owner = ids.NATIVE_LOADER_ID,
+                    },
+                },
+                .compute_meter = compute_units,
+                .feature_set = &.{
+                    .{
+                        .feature = .enable_loader_v4,
+                        .slot = 0,
+                    },
+                },
+                .sysvar_cache = .{
+                    .rent = sysvar.Rent.DEFAULT,
+                    .clock = clock,
                 },
             },
-            .sysvar_cache = .{
-                .rent = sysvar.Rent.DEFAULT,
-                .clock = clock,
+            .{
+                .accounts = &.{
+                    .{
+                        .pubkey = program_data_key,
+                        .data = &.{}, // set_length to 0
+                        .owner = bpf_loader_program.v3.ID,
+                        .lamports = 0,
+                    },
+                    .{
+                        .pubkey = program_account_key,
+                        .data = final_program_buffer,
+                        .owner = bpf_loader_program.v4.ID, // v4
+                        .lamports = program_account_balance + program_data_balance, // sum bal
+                        .executable = true,
+                    },
+                    .{
+                        .pubkey = upgrade_authority_key,
+                        .owner = bpf_loader_program.v3.ID,
+                    },
+                    .{
+                        .pubkey = migration_authority,
+                        .owner = bpf_loader_program.v3.ID,
+                    },
+                    .{
+                        .pubkey = bpf_loader_program.v4.ID, // needed for CPI
+                        .owner = ids.NATIVE_LOADER_ID,
+                        .executable = true,
+                    },
+                    .{
+                        .pubkey = bpf_loader_program.v3.ID,
+                        .owner = ids.NATIVE_LOADER_ID,
+                    },
+                },
+                .accounts_resize_delta = @intCast(@as(i128, 0) -
+                    program_account_buffer.len +
+                    final_program_buffer.len -
+                    program_data_buffer.len),
             },
-        },
-        .{
-            .accounts = &.{
-                .{
-                    .pubkey = program_data_key,
-                    .data = &.{}, // set_length to 0
-                    .owner = bpf_loader_program.v3.ID,
-                    .lamports = 0,
-                },
-                .{
-                    .pubkey = program_account_key,
-                    .data = final_program_buffer,
-                    .owner = bpf_loader_program.v4.ID, // v4
-                    .lamports = program_account_balance + program_data_balance, // sum bal
-                    .executable = true,
-                },
-                .{
-                    .pubkey = upgrade_authority_key,
-                    .owner = bpf_loader_program.v3.ID,
-                },
-                .{
-                    .pubkey = bpf_loader_program.v4.ID, // needed for CPI
-                    .owner = ids.NATIVE_LOADER_ID,
-                    .executable = true,
-                },
-                .{
-                    .pubkey = bpf_loader_program.v3.ID,
-                    .owner = ids.NATIVE_LOADER_ID,
-                },
-            },
-            .accounts_resize_delta = @intCast(@as(i128, 0) -
-                program_account_buffer.len +
-                final_program_buffer.len -
-                program_data_buffer.len),
-        },
-        .{},
-    );
+            .{},
+        );
+    }
 }
 
 fn createValidProgramData(
