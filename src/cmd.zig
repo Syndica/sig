@@ -1236,6 +1236,7 @@ fn validator(
         null
     else
         try consensusDependencies(allocator, &gossip_service.gossip_table_rw);
+    defer if (consensus_deps) |d| d.deinit();
 
     var replay_service = try replay.Service.init(replay_deps, consensus_deps, cfg.replay_threads);
     defer replay_service.deinit(allocator);
@@ -1363,6 +1364,7 @@ fn replayOffline(
         null
     else
         try consensusDependencies(allocator, null);
+    defer if (consensus_deps) |d| d.deinit();
 
     var replay_service = try replay.Service.init(replay_deps, consensus_deps, cfg.replay_threads);
     defer replay_service.deinit(allocator);
@@ -2017,10 +2019,10 @@ fn consensusDependencies(
     gossip_table: ?*sig.sync.RwMux(sig.gossip.GossipTable),
 ) !replay.service.ConsensusState.Dependencies {
     const senders: sig.replay.ConsensusState.Senders = try .create(allocator);
-    defer senders.destroy();
+    errdefer senders.destroy();
 
     const receivers: sig.replay.ConsensusState.Receivers = try .create(allocator);
-    defer receivers.destroy();
+    errdefer receivers.destroy();
 
     return .{
         .senders = senders,

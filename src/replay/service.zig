@@ -272,6 +272,11 @@ pub const ConsensusState = struct {
         senders: Senders,
         receivers: Receivers,
         gossip_table: ?*RwMux(sig.gossip.GossipTable),
+
+        pub fn deinit(self: ConsensusState.Dependencies) void {
+            self.senders.destroy();
+            self.receivers.destroy();
+        }
     };
 
     pub const Senders = struct {
