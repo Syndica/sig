@@ -1638,7 +1638,8 @@ const DependencyStubs = struct {
             else
                 null;
 
-            var root_slot_state = try sig.core.SlotState.fromBankFields(allocator, bank_fields, lt_hash);
+            var root_slot_state =
+                try sig.core.SlotState.fromBankFields(allocator, bank_fields, lt_hash);
             errdefer root_slot_state.deinit(allocator);
 
             const hard_forks = try bank_fields.hard_forks.clone(allocator);
