@@ -206,8 +206,10 @@ fn executeTxnContext(
     var stakes_cache = try StakesCache.init(allocator);
     defer stakes_cache.deinit(allocator);
 
-    var vm_environment: vm.Environment = .{};
-    defer vm_environment.deinit(allocator);
+    var vm_environment: vm.Environment = .{
+        .loader = .ALL_DISABLED,
+        .config = .{},
+    };
 
     var capitalization: Atomic(u64) = .init(0);
 
@@ -353,8 +355,7 @@ fn executeTxnContext(
                 });
             }
 
-            vm_environment = try vm.Environment.initV1(
-                allocator,
+            vm_environment = vm.Environment.initV1(
                 &feature_set,
                 &compute_budget,
                 slot,
