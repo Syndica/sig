@@ -432,10 +432,6 @@ pub const ConsensusState = struct {
         );
         errdefer replay_tower.deinit(allocator);
 
-        // Start vote listener inside replay so it can reference replay state directly.
-        var vote_tracker: sig.consensus.VoteTracker = .EMPTY;
-        defer vote_tracker.deinit(allocator);
-
         const slot_data_provider: sig.consensus.vote_listener.SlotDataProvider = .{
             .slot_tracker_rw = &replay_state.slot_tracker,
             .epoch_tracker_rw = &replay_state.epoch_tracker,
@@ -449,7 +445,6 @@ pub const ConsensusState = struct {
             allocator,
             .{ .unordered = replay_deps.exit },
             .from(logger),
-            &vote_tracker,
             .{
                 .slot_data_provider = slot_data_provider,
                 .gossip_table_rw = consensus_deps.gossip_table,

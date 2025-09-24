@@ -104,7 +104,6 @@ pub const VoteListener = struct {
         allocator: std.mem.Allocator,
         exit: sig.sync.ExitCondition,
         logger: Logger,
-        vote_tracker: *VoteTracker,
         params: struct {
             slot_data_provider: SlotDataProvider,
             gossip_table_rw: ?*sig.sync.RwMux(sig.gossip.GossipTable),
@@ -135,10 +134,7 @@ pub const VoteListener = struct {
         const process_votes_thread = try std.Thread.spawn(.{}, processVotesLoop, .{
             allocator,
             logger,
-
-            vote_tracker,
             params.slot_data_provider,
-
             params.senders,
             Receivers{
                 .verified_vote_transactions = verified_vote_transactions,
@@ -366,7 +362,6 @@ const Receivers = struct {
 fn processVotesLoop(
     allocator: std.mem.Allocator,
     logger: Logger,
-    vote_tracker: *VoteTracker,
     slot_data_provider: SlotDataProvider,
     senders: Senders,
     receivers: Receivers,
@@ -374,6 +369,9 @@ fn processVotesLoop(
     exit: sig.sync.ExitCondition,
 ) !void {
     defer exit.afterExit();
+
+    var vote_tracker: sig.consensus.VoteTracker = .EMPTY;
+    defer vote_tracker.deinit(allocator);
 
     var confirmation_verifier: OptimisticConfirmationVerifier = .init(
         .now(),
@@ -390,7 +388,7 @@ fn processVotesLoop(
         switch (try processVotesOnce(
             allocator,
             logger,
-            vote_tracker,
+            &vote_tracker,
             &slot_data_provider,
             senders,
             receivers,
@@ -1721,13 +1719,10 @@ test "simple usage" {
         try .create(allocator);
     defer gossip_verified_vote_hash_channel.destroy();
 
-    var vote_tracker: VoteTracker = .EMPTY;
-    defer vote_tracker.deinit(allocator);
-
     var exit: std.atomic.Value(bool) = .init(false);
     const exit_cond: sig.sync.ExitCondition = .{ .unordered = &exit };
 
-    const vote_listener: VoteListener = try .init(allocator, exit_cond, .noop, &vote_tracker, .{
+    const vote_listener: VoteListener = try .init(allocator, exit_cond, .noop, .{
         .slot_data_provider = slot_data_provider,
         .gossip_table_rw = &gossip_table_rw,
         .ledger_ref = ledger_ref,
