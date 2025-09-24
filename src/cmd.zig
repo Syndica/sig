@@ -1984,7 +1984,7 @@ fn replayDependencies(
     var root_slot_state = try sig.core.SlotState.fromBankFields(allocator, bank_fields, lt_hash);
     errdefer root_slot_state.deinit(allocator);
 
-    return sig.replay.service.Dependencies{
+    return .{
         .allocator = allocator,
         .logger = .from(app_base.logger),
         .my_identity = .fromPublicKey(&app_base.my_keypair.public_key),
