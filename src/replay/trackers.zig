@@ -45,13 +45,20 @@ pub const SlotTracker = struct {
     pub fn init(
         allocator: std.mem.Allocator,
         root_slot: Slot,
+        /// ownership is transferred to this function
         slot_init: Element,
     ) std.mem.Allocator.Error!SlotTracker {
+        var element = slot_init;
         var self: SlotTracker = .{
             .root = root_slot,
             .slots = .empty,
         };
-        try self.put(allocator, root_slot, slot_init);
+        errdefer {
+            self.deinit(allocator);
+            element.constants.deinit(allocator);
+            element.state.deinit(allocator);
+        }
+        try self.put(allocator, root_slot, element);
         tracy.plot(u32, "slots tracked", @intCast(self.slots.count()));
 
         return self;
@@ -214,6 +221,7 @@ pub const SlotTree = struct {
 
     pub fn init(allocator: Allocator, root: Slot) Allocator.Error!SlotTree {
         const root_node = try allocator.create(Node);
+        errdefer allocator.destroy(root_node);
         root_node.* = .{
             .slot = root,
             .parent = null,
