@@ -23,7 +23,7 @@ pub const LoadedSnapshot = struct {
     genesis_config: GenesisConfig,
     status_cache: ?snapshot.StatusCache,
 
-    pub fn deinit(self: *@This()) void {
+    pub fn deinit(self: *LoadedSnapshot) void {
         self.accounts_db.deinit();
         self.combined_manifest.deinit(self.allocator);
         self.collapsed_manifest.deinit(self.allocator);
@@ -47,10 +47,10 @@ const LoadSnapshotOptions = struct {
 
 pub fn loadSnapshot(
     allocator: Allocator,
-    config: sig_config.AccountsDB,
+    db_config: sig_config.AccountsDB,
     genesis_file_path: []const u8,
     logger: Logger,
-    options: LoadSnapshotOptions,
+    load_options: LoadSnapshotOptions,
 ) !LoadedSnapshot {
     const zone = tracy.Zone.init(@src(), .{ .name = "loadSnapshot" });
     defer zone.deinit();
@@ -58,9 +58,7 @@ pub fn loadSnapshot(
     var validator_dir = try std.fs.cwd().makeOpenPath(sig.VALIDATOR_DIR, .{});
     defer validator_dir.close();
 
-    // const genesis_file_path = try cfg.genesisFilePath() orelse return error.GenesisPathNotProvided;
-
-    const snapshot_dir_str = config.snapshot_dir;
+    const snapshot_dir_str = db_config.snapshot_dir;
 
     const combined_manifest, //
     const snapshot_files //
@@ -69,12 +67,12 @@ pub fn loadSnapshot(
         .from(logger),
         snapshot_dir_str,
         .{
-            .gossip_service = options.gossip_service,
-            .force_unpack_snapshot = config.force_unpack_snapshot,
-            .force_new_snapshot_download = config.force_new_snapshot_download,
-            .num_threads_snapshot_unpack = config.num_threads_snapshot_unpack,
-            .max_number_of_download_attempts = config.max_number_of_snapshot_download_attempts,
-            .min_snapshot_download_speed_mbs = config.min_snapshot_download_speed_mbs,
+            .gossip_service = load_options.gossip_service,
+            .force_unpack_snapshot = db_config.force_unpack_snapshot,
+            .force_new_snapshot_download = db_config.force_new_snapshot_download,
+            .num_threads_snapshot_unpack = db_config.num_threads_snapshot_unpack,
+            .max_number_of_download_attempts = db_config.max_number_of_snapshot_download_attempts,
+            .min_snapshot_download_speed_mbs = db_config.min_snapshot_download_speed_mbs,
         },
     );
     errdefer combined_manifest.deinit(allocator);
@@ -93,37 +91,37 @@ pub fn loadSnapshot(
     }
 
     // cli parsing
-    const n_threads_snapshot_load = if (config.num_threads_snapshot_load == 0)
+    const n_threads_snapshot_load = if (db_config.num_threads_snapshot_load == 0)
         std.math.lossyCast(u32, std.Thread.getCpuCount() catch 1)
     else
-        config.num_threads_snapshot_load;
+        db_config.num_threads_snapshot_load;
 
     var accounts_db = try AccountsDB.init(.{
         .allocator = allocator,
         .logger = .from(logger),
         // where we read the snapshot from
         .snapshot_dir = snapshot_dir,
-        .geyser_writer = options.geyser_writer,
+        .geyser_writer = load_options.geyser_writer,
         // gossip information for propogating snapshot info
-        .gossip_view = if (options.gossip_service) |s| try .fromService(s) else null,
+        .gossip_view = if (load_options.gossip_service) |s| try .fromService(s) else null,
         // to use disk or ram for the index
-        .index_allocation = if (config.use_disk_index) .disk else .ram,
+        .index_allocation = if (db_config.use_disk_index) .disk else .ram,
         // number of shards for the index
-        .number_of_index_shards = config.number_of_index_shards,
+        .number_of_index_shards = db_config.number_of_index_shards,
     });
     errdefer accounts_db.deinit();
 
-    const collapsed_manifest = if (options.metadata_only)
+    const collapsed_manifest = if (load_options.metadata_only)
         try combined_manifest.collapse(allocator)
     else
         try accounts_db.loadWithDefaults(
             allocator,
             combined_manifest,
             n_threads_snapshot_load,
-            options.validate_snapshot,
-            config.accounts_per_file_estimate,
-            config.fastload,
-            config.save_index,
+            load_options.validate_snapshot,
+            db_config.accounts_per_file_estimate,
+            db_config.fastload,
+            db_config.save_index,
         );
     errdefer collapsed_manifest.deinit(allocator);
 
@@ -145,7 +143,7 @@ pub fn loadSnapshot(
 
     try collapsed_manifest.bank_fields.validate(&genesis_config);
 
-    if (options.metadata_only) {
+    if (load_options.metadata_only) {
         logger.info().log("accounts-db setup done...");
         return .{
             .allocator = allocator,
