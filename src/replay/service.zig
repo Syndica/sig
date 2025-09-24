@@ -30,6 +30,7 @@ const GossipVerifiedVoteHash = sig.consensus.vote_listener.GossipVerifiedVoteHas
 const ParsedVote = sig.consensus.vote_listener.vote_parser.ParsedVote;
 const LatestValidatorVotes = sig.consensus.latest_validator_votes.LatestValidatorVotes;
 const SlotHistoryAccessor = sig.consensus.replay_tower.SlotHistoryAccessor;
+const VerifiedVote = sig.consensus.vote_listener.VerifiedVote;
 const VoteListener = sig.consensus.vote_listener.VoteListener;
 
 const ProcessResultState = replay.process_result.ProcessResultState;
@@ -297,14 +298,16 @@ pub const ConsensusState = struct {
     receivers: Receivers,
     execution_log_helper: replay.execution.LogHelper,
     vote_listener: VoteListener,
+    verified_vote_channel: *Channel(VerifiedVote),
 
     fn deinit(self: *ConsensusState, allocator: Allocator) void {
+        self.vote_listener.joinAndDeinit();
         self.replay_tower.deinit(allocator);
         self.fork_choice.deinit();
         self.latest_validator_votes.deinit(allocator);
         self.slot_data.deinit(allocator);
-        self.vote_listener.joinAndDeinit();
         self.arena_state.promote(allocator).deinit();
+        self.verified_vote_channel.destroy();
     }
 
     pub const Dependencies = struct {
@@ -437,9 +440,8 @@ pub const ConsensusState = struct {
             .epoch_tracker_rw = &replay_state.epoch_tracker,
         };
 
-        const verified_vote_channel = try Channel(sig.consensus.vote_listener.VerifiedVote)
-            .create(allocator);
-        defer verified_vote_channel.destroy();
+        const verified_vote_channel = try Channel(VerifiedVote).create(allocator);
+        errdefer verified_vote_channel.destroy();
 
         const vote_listener: VoteListener = try .init(
             allocator,
@@ -474,6 +476,7 @@ pub const ConsensusState = struct {
             .receivers = consensus_deps.receivers,
             .execution_log_helper = .init(.from(logger)),
             .vote_listener = vote_listener,
+            .verified_vote_channel = verified_vote_channel,
         };
     }
 };
