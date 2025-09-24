@@ -1220,8 +1220,8 @@ fn validator(
     const replay_deps = try replayDependencies(
         allocator,
         epoch,
-        &loaded_snapshot,
-        bank_fields,
+        loaded_snapshot.accounts_db.accountStore(),
+        &loaded_snapshot.collapsed_manifest,
         &app_base,
         ledger,
         &epoch_context_manager,
@@ -1347,8 +1347,8 @@ fn replayOffline(
     const replay_deps = try replayDependencies(
         allocator,
         epoch,
-        &loaded_snapshot,
-        bank_fields,
+        loaded_snapshot.accounts_db.accountStore(),
+        &loaded_snapshot.collapsed_manifest,
         &app_base,
         ledger,
         &epoch_context_manager,
@@ -1947,19 +1947,20 @@ fn startGossip(
 fn replayDependencies(
     allocator: std.mem.Allocator,
     epoch: sig.core.Epoch,
-    loaded_snapshot: *sig.accounts_db.snapshot.LoadedSnapshot,
-    bank_fields: *const sig.core.BankFields,
+    account_store: sig.accounts_db.AccountStore,
+    collapsed_manifest: *const sig.accounts_db.snapshot.Manifest,
     app_base: *const AppBase,
     ledger: UnifiedLedger,
     epoch_context_manager: *sig.adapter.EpochContextManager,
 ) !replay.Dependencies {
-    const epoch_stakes_map = &loaded_snapshot.collapsed_manifest.bank_extra.versioned_epoch_stakes;
+    const bank_fields = &collapsed_manifest.bank_fields;
+    const epoch_stakes_map = &collapsed_manifest.bank_extra.versioned_epoch_stakes;
     const epoch_stakes = epoch_stakes_map.get(epoch) orelse
         return error.EpochStakesMissingFromSnapshot;
 
     const feature_set = try sig.replay.service.getActiveFeatures(
         allocator,
-        loaded_snapshot.accounts_db.accountReader().forSlot(&bank_fields.ancestors),
+        account_store.reader().forSlot(&bank_fields.ancestors),
         bank_fields.slot,
     );
 
@@ -1970,7 +1971,7 @@ fn replayDependencies(
     );
     errdefer root_slot_constants.deinit(allocator);
 
-    const lt_hash = if (loaded_snapshot.collapsed_manifest.bank_extra.accounts_lt_hash) |lt_hash|
+    const lt_hash = if (collapsed_manifest.bank_extra.accounts_lt_hash) |lt_hash|
         sig.core.LtHash{ .data = lt_hash }
     else
         null;
@@ -1984,7 +1985,7 @@ fn replayDependencies(
         .my_identity = .fromPublicKey(&app_base.my_keypair.public_key),
         .vote_identity = .fromPublicKey(&app_base.my_keypair.public_key),
         .exit = app_base.exit,
-        .account_store = loaded_snapshot.accounts_db.accountStore(),
+        .account_store = account_store,
         .ledger = .{
             .db = ledger.db.*,
             .reader = ledger.reader,

@@ -163,6 +163,8 @@ const ReplayState = struct {
         self.progress_map.deinit(self.allocator);
         self.replay_votes_channel.destroy();
         self.slot_tree.deinit(self.allocator);
+        self.status_cache.deinit(self.allocator);
+        self.hard_forks.deinit(self.allocator);
     }
 
     fn init(deps: Dependencies, num_threads: u32) !ReplayState {
@@ -263,6 +265,7 @@ pub const ConsensusState = struct {
         self.latest_validator_votes.deinit(allocator);
         self.slot_data.deinit(allocator);
         self.vote_listener.joinAndDeinit();
+        self.arena_state.promote(allocator).deinit();
     }
 
     pub const Dependencies = struct {
@@ -955,14 +958,15 @@ pub fn getActiveFeatures(
         const possible_feature: sig.core.features.Feature = @enumFromInt(i);
         const possible_feature_pubkey = sig.core.features.map.get(possible_feature).key;
         const feature_account = try account_reader.get(possible_feature_pubkey) orelse continue;
+        defer feature_account.deinit(account_reader.allocator());
         if (!feature_account.owner.equals(&sig.runtime.ids.FEATURE_PROGRAM_ID)) {
             continue;
         }
 
         var data_iterator = feature_account.data.iterator();
         const reader = data_iterator.reader();
-        const feature = try sig.bincode.read(allocator, struct { activated_at: ?u64 }, reader, .{});
-        if (feature.activated_at) |activation_slot| {
+        const activated_at = try sig.bincode.read(allocator, ?u64, reader, .{});
+        if (activated_at) |activation_slot| {
             if (activation_slot <= slot) {
                 features.setSlot(possible_feature, activation_slot);
             }
@@ -1235,10 +1239,149 @@ test "Service clean init and deinit" {
     var dep_stubs = try DependencyStubs.init(allocator);
     defer dep_stubs.deinit(allocator);
 
-    var service = try dep_stubs.initService(allocator);
+    var service = try dep_stubs.stubbedService(allocator);
     defer service.deinit(allocator);
 
     dep_stubs.exit.store(true, .monotonic);
+}
+
+test "Execute testnet block" {
+    if (!sig.build_options.long_tests) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+
+    const manifest_path = sig.TEST_DATA_DIR ++ "blocks/testnet-356797362/manifest.bin.gz";
+    const shreds_path = sig.TEST_DATA_DIR ++ "blocks/testnet-356797362/shreds.json.gz";
+    const accounts_path = sig.TEST_DATA_DIR ++ "blocks/testnet-356797362/accounts.json.gz";
+
+    var dep_stubs = try DependencyStubs.init(allocator);
+    defer dep_stubs.deinit(allocator);
+
+    // get snapshot manifest
+    const fba_buf = try allocator.alloc(u8, 175_000_000);
+    defer allocator.free(fba_buf);
+    var fba = std.heap.FixedBufferAllocator.init(fba_buf);
+    // TODO: figure out why `Manifest.deinit` doesn't work for a Manifest that
+    // was deserialized with bincode.
+    var manifest = try parseBincodeFromGzipFile(
+        sig.accounts_db.snapshot.Manifest,
+        fba.allocator(),
+        manifest_path,
+    );
+    defer manifest.deinit(fba.allocator());
+
+    // insert shreds
+    const shred_bytes = try parseJsonFromGzipFile([]const []const u8, allocator, shreds_path);
+    defer shred_bytes.deinit();
+    var shreds = std.MultiArrayList(struct { shred: sig.ledger.shred.Shred, is_repair: bool }).empty;
+    defer {
+        for (shreds.items(.shred)) |shred| shred.deinit();
+        shreds.deinit(allocator);
+    }
+    try shreds.ensureTotalCapacity(allocator, shred_bytes.value.len);
+    for (shred_bytes.value) |payload| {
+        shreds.appendAssumeCapacity(.{
+            .shred = try sig.ledger.shred.Shred.fromPayload(allocator, payload),
+            .is_repair = false,
+        });
+    }
+    var shred_inserter = try sig.ledger.ShredInserter.init(
+        allocator,
+        .FOR_TESTS,
+        &dep_stubs.registry,
+        dep_stubs.ledger.db.*,
+    );
+    const result = try shred_inserter.insertShreds(
+        shreds.items(.shred),
+        shreds.items(.is_repair),
+        .{},
+    );
+    result.deinit();
+
+    // get data about this test from snapshot + shreds
+    const epoch = manifest.bank_fields.epoch;
+    const snapshot_slot = manifest.bank_fields.slot;
+    const execution_slot = shreds.items(.shred)[0].commonHeader().slot;
+
+    // insert accounts
+    const accounts = try parseJsonFromGzipFile([]const TestAccount, allocator, accounts_path);
+    defer accounts.deinit();
+    for (accounts.value) |test_account| {
+        _, const address, const account = try test_account.toAccount();
+        try dep_stubs.accountsdb.put(snapshot_slot, address, account);
+    }
+
+    // calculate leader schedule
+    const leader_schedule = try sig.core.leader_schedule.LeaderSchedule.fromVoteAccounts(
+        allocator,
+        epoch,
+        manifest.bank_fields.epoch_schedule.slots_per_epoch,
+        try manifest.epochVoteAccounts(epoch),
+    );
+    defer allocator.free(leader_schedule);
+    var slot_leaders = sig.core.leader_schedule.SingleEpochSlotLeaders{
+        .slot_leaders = leader_schedule,
+        .start_slot = manifest.bank_fields.epoch_schedule.getFirstSlotInEpoch(epoch),
+    };
+
+    // init replay
+    var service = try dep_stubs.mockedService(
+        allocator,
+        epoch,
+        &manifest,
+        slot_leaders.slotLeaders(),
+    );
+    defer {
+        while (service.replay.replay_votes_channel.tryReceive()) |item| item.deinit(allocator);
+        service.deinit(allocator);
+    }
+
+    // replay the block
+    try service.advance();
+
+    // get slot hash
+    const actual_slot_hash = tracker_lock: {
+        var slot_tracker = service.replay.slot_tracker.tryRead() orelse unreachable;
+        defer slot_tracker.unlock();
+        break :tracker_lock slot_tracker.get().get(execution_slot).?.state.hash.readCopy().?;
+    };
+
+    const expected_slot_hash = sig.core.Hash.parse("4UeCbit4YGY42p9KrDzoD1LL21Vn3htb5N5G9w6L1kUE");
+
+    try std.testing.expectEqual(expected_slot_hash, actual_slot_hash);
+}
+
+fn parseJsonFromGzipFile(
+    comptime T: type,
+    allocator: Allocator,
+    path: []const u8,
+) !std.json.Parsed(T) {
+    const file = try std.fs.cwd().openFile(path, .{});
+    defer file.close();
+
+    var decompressor = std.compress.gzip.decompressor(file.reader());
+
+    var decompressor_reader = std.json.reader(allocator, decompressor.reader());
+    defer decompressor_reader.deinit();
+
+    return try std.json.parseFromTokenSource(T, allocator, &decompressor_reader, .{});
+}
+
+fn parseBincodeFromGzipFile(
+    comptime T: type,
+    allocator: Allocator,
+    path: []const u8,
+) !T {
+    const file = try std.fs.cwd().openFile(path, .{});
+    defer file.close();
+
+    var decompressor = std.compress.gzip.decompressor(file.reader());
+
+    return try sig.bincode.read(
+        allocator,
+        T,
+        decompressor.reader(),
+        .{ .allocation_limit = 1 << 31 },
+    );
 }
 
 /// Basic stubs for state that's supposed to be initialized outside replay,
@@ -1300,9 +1443,12 @@ const DependencyStubs = struct {
         };
     }
 
-    /// Initialize replay service with stubbed inputs
+    /// Initialize replay service with stubbed inputs.
     /// (some inputs from this struct, some just stubbed directly)
-    fn initService(self: *DependencyStubs, allocator: Allocator) !Service {
+    ///
+    /// these inputs are "stubbed" with potentially garbage/meaningless data,
+    /// rather than being "mocked" with meaningful data.
+    fn stubbedService(self: *DependencyStubs, allocator: Allocator) !Service {
         var rng = std.Random.DefaultPrng.init(0);
         const random = rng.random();
 
@@ -1359,5 +1505,103 @@ const DependencyStubs = struct {
         };
 
         return try Service.init(deps, consensus_deps, 1);
+    }
+
+    // TODO: consider deduplicating with above and similar function in cmd.zig
+    /// "mocked" with meaningful data as opposed to "stubbed" with garbage data
+    fn mockedService(
+        self: *DependencyStubs,
+        allocator: std.mem.Allocator,
+        epoch: sig.core.Epoch,
+        collapsed_manifest: *const sig.accounts_db.snapshot.Manifest,
+        slot_leaders: sig.core.leader_schedule.SlotLeaders,
+    ) !Service {
+        const bank_fields = &collapsed_manifest.bank_fields;
+        const epoch_stakes_map = &collapsed_manifest.bank_extra.versioned_epoch_stakes;
+        const epoch_stakes = epoch_stakes_map.get(epoch) orelse
+            return error.EpochStakesMissingFromSnapshot;
+
+        const feature_set = try sig.replay.service.getActiveFeatures(
+            allocator,
+            self.accountsdb.accountReader().forSlot(&bank_fields.ancestors),
+            bank_fields.slot,
+        );
+
+        const root_slot_constants = try sig.core.SlotConstants.fromBankFields(
+            allocator,
+            bank_fields,
+            feature_set,
+        );
+        errdefer root_slot_constants.deinit(allocator);
+
+        const lt_hash = if (collapsed_manifest.bank_extra.accounts_lt_hash) |lt_hash|
+            sig.core.LtHash{ .data = lt_hash }
+        else
+            null;
+
+        var root_slot_state = try sig.core.SlotState.fromBankFields(allocator, bank_fields, lt_hash);
+        errdefer root_slot_state.deinit(allocator);
+
+        const hard_forks = try bank_fields.hard_forks.clone(allocator);
+        errdefer hard_forks.deinit(allocator);
+
+        const deps = sig.replay.service.Dependencies{
+            .allocator = allocator,
+            .logger = .FOR_TESTS,
+            .my_identity = .ZEROES,
+            .vote_identity = .ZEROES,
+            .exit = &self.exit,
+            .account_store = self.accountsdb.accountStore(),
+            .ledger = .{
+                .db = self.ledger.db.*,
+                .reader = self.ledger.reader,
+                .writer = self.ledger.result_writer,
+            },
+            .epoch_schedule = bank_fields.epoch_schedule,
+            .slot_leaders = slot_leaders,
+            .root = .{
+                .slot = bank_fields.slot,
+                .constants = root_slot_constants,
+                .state = root_slot_state,
+            },
+            .current_epoch = epoch,
+            .current_epoch_constants = try .fromBankFields(
+                bank_fields,
+                try epoch_stakes.current.convert(allocator, .delegation),
+            ),
+            .hard_forks = hard_forks,
+        };
+
+        return try Service.init(deps, null, 1);
+    }
+};
+
+const TestAccount = struct {
+    slot: Slot,
+    pubkey: []const u8,
+    lamports: u64,
+    owner: []const u8,
+    executable: bool,
+    rent_epoch: u64,
+    data: []u8,
+
+    pub fn deinit(self: @This(), allocator: std.mem.Allocator) void {
+        allocator.free(self.pubkey);
+        allocator.free(self.owner);
+        allocator.free(self.data);
+    }
+
+    pub fn toAccount(self: @This()) !struct { Slot, Pubkey, sig.runtime.AccountSharedData } {
+        return .{
+            self.slot,
+            try .parseRuntime(self.pubkey),
+            .{
+                .lamports = self.lamports,
+                .owner = try .parseRuntime(self.owner),
+                .executable = self.executable,
+                .rent_epoch = self.rent_epoch,
+                .data = self.data,
+            },
+        };
     }
 };

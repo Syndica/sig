@@ -134,6 +134,7 @@ pub fn replayActiveSlotsSync(state: ReplayExecutionState) ![]const ReplayResult 
     defer zone.deinit();
 
     const active_slots = try state.slot_tracker.activeSlots(allocator);
+    defer allocator.free(active_slots);
     state.log_helper.logActiveSlots(active_slots, allocator);
 
     if (active_slots.len == 0) {
