@@ -64,6 +64,7 @@ pub fn replayActiveSlots(state: ReplayExecutionState) ![]struct { Slot, *Confirm
     defer zone.deinit();
 
     const active_slots = try state.slot_tracker.activeSlots(state.allocator);
+    defer state.allocator.free(active_slots);
     state.log_helper.logActiveSlots(active_slots, state.allocator);
 
     if (active_slots.len == 0) {
@@ -97,12 +98,16 @@ pub fn replayActiveSlots(state: ReplayExecutionState) ![]struct { Slot, *Confirm
     return slot_statuses.toOwnedSlice(state.allocator);
 }
 
+/// Takes ownership over the futures and destroys them
 pub fn awaitResults(
     allocator: Allocator,
     /// takes ownership and frees with allocator
     slot_futures: []struct { Slot, *ConfirmSlotFuture },
 ) ![]const ReplayResult {
-    defer allocator.free(slot_futures);
+    defer {
+        for (slot_futures) |sf| sf[1].destroy(allocator);
+        allocator.free(slot_futures);
+    }
     const results = try allocator.alloc(ReplayResult, slot_futures.len);
     errdefer allocator.free(results);
     for (results, slot_futures) |*result, slot_future| {

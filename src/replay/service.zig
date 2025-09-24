@@ -1245,14 +1245,34 @@ test "Service clean init and deinit" {
     dep_stubs.exit.store(true, .monotonic);
 }
 
-test "Execute testnet block" {
+test "Execute testnet block single threaded" {
     if (!sig.build_options.long_tests) return error.SkipZigTest;
-    const allocator = std.testing.allocator;
 
-    const manifest_path = sig.TEST_DATA_DIR ++ "blocks/testnet-356797362/manifest.bin.gz";
-    const shreds_path = sig.TEST_DATA_DIR ++ "blocks/testnet-356797362/shreds.json.gz";
-    const accounts_path = sig.TEST_DATA_DIR ++ "blocks/testnet-356797362/accounts.json.gz";
+    try testExecuteBlock(std.testing.allocator, .{
+        .num_threads = 1,
+        .manifest_path = sig.TEST_DATA_DIR ++ "blocks/testnet-356797362/manifest.bin.gz",
+        .shreds_path = sig.TEST_DATA_DIR ++ "blocks/testnet-356797362/shreds.json.gz",
+        .accounts_path = sig.TEST_DATA_DIR ++ "blocks/testnet-356797362/accounts.json.gz",
+    });
+}
 
+test "Execute testnet block multi threaded" {
+    if (!sig.build_options.long_tests) return error.SkipZigTest;
+
+    try testExecuteBlock(std.testing.allocator, .{
+        .num_threads = 2,
+        .manifest_path = sig.TEST_DATA_DIR ++ "blocks/testnet-356797362/manifest.bin.gz",
+        .shreds_path = sig.TEST_DATA_DIR ++ "blocks/testnet-356797362/shreds.json.gz",
+        .accounts_path = sig.TEST_DATA_DIR ++ "blocks/testnet-356797362/accounts.json.gz",
+    });
+}
+
+fn testExecuteBlock(allocator: Allocator, config: struct {
+    num_threads: u32,
+    manifest_path: []const u8,
+    shreds_path: []const u8,
+    accounts_path: []const u8,
+}) !void {
     var dep_stubs = try DependencyStubs.init(allocator);
     defer dep_stubs.deinit(allocator);
 
@@ -1265,12 +1285,16 @@ test "Execute testnet block" {
     var manifest = try parseBincodeFromGzipFile(
         sig.accounts_db.snapshot.Manifest,
         fba.allocator(),
-        manifest_path,
+        config.manifest_path,
     );
     defer manifest.deinit(fba.allocator());
 
     // insert shreds
-    const shred_bytes = try parseJsonFromGzipFile([]const []const u8, allocator, shreds_path);
+    const shred_bytes = try parseJsonFromGzipFile(
+        []const []const u8,
+        allocator,
+        config.shreds_path,
+    );
     defer shred_bytes.deinit();
     var shreds = std.MultiArrayList(struct { shred: sig.ledger.shred.Shred, is_repair: bool }).empty;
     defer {
@@ -1303,7 +1327,11 @@ test "Execute testnet block" {
     const execution_slot = shreds.items(.shred)[0].commonHeader().slot;
 
     // insert accounts
-    const accounts = try parseJsonFromGzipFile([]const TestAccount, allocator, accounts_path);
+    const accounts = try parseJsonFromGzipFile(
+        []const TestAccount,
+        allocator,
+        config.accounts_path,
+    );
     defer accounts.deinit();
     for (accounts.value) |test_account| {
         _, const address, const account = try test_account.toAccount();
@@ -1329,6 +1357,7 @@ test "Execute testnet block" {
         epoch,
         &manifest,
         slot_leaders.slotLeaders(),
+        config.num_threads,
     );
     defer {
         while (service.replay.replay_votes_channel.tryReceive()) |item| item.deinit(allocator);
@@ -1515,6 +1544,7 @@ const DependencyStubs = struct {
         epoch: sig.core.Epoch,
         collapsed_manifest: *const sig.accounts_db.snapshot.Manifest,
         slot_leaders: sig.core.leader_schedule.SlotLeaders,
+        num_threads: u32,
     ) !Service {
         const bank_fields = &collapsed_manifest.bank_fields;
         const epoch_stakes_map = &collapsed_manifest.bank_extra.versioned_epoch_stakes;
@@ -1572,7 +1602,7 @@ const DependencyStubs = struct {
             .hard_forks = hard_forks,
         };
 
-        return try Service.init(deps, null, 1);
+        return try Service.init(deps, null, num_threads);
     }
 };
 
