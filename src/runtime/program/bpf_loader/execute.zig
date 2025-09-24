@@ -3503,8 +3503,10 @@ test executeV3Migrate {
         );
         defer allocator.free(final_program_buffer);
 
-        const program_data_balance = sysvar.Rent.DEFAULT.minimumBalance(program_data_buffer.len);
-        const program_account_balance = sysvar.Rent.DEFAULT.minimumBalance(program_account_buffer.len);
+        const program_data_balance =
+            sysvar.Rent.DEFAULT.minimumBalance(program_data_buffer.len);
+        const program_account_balance =
+            sysvar.Rent.DEFAULT.minimumBalance(program_account_buffer.len);
 
         const compute_units: u64 = bpf_loader_program.v3.COMPUTE_UNITS +
             // does 3 v4 CPI calls (+ v4.finalize or v4.transfer_authority depending on mode)
