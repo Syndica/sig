@@ -168,6 +168,9 @@ pub const LeaderSchedule = struct {
         slots_in_epoch: Slot,
         vote_accounts: *const sig.core.vote_accounts.StakeAndVoteAccountsMap,
     ) ![]const Pubkey {
+        // this implementation is naive and performs unnecessay allocations to construct and
+        // input compatable with fromStakedNodes and re-key results.
+        // It should be addressed as part of issue #945
         var stakes = std.AutoArrayHashMapUnmanaged(Pubkey, u64){};
         defer stakes.deinit(allocator);
 
