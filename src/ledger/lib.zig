@@ -29,7 +29,7 @@ pub const UnifiedLedger = struct {
     const std = @import("std");
     const sig = @import("../sig.zig");
 
-    /// join first to avoid UB
+    /// Call join before deinit to avoid UB.
     pub fn deinit(self: UnifiedLedger, allocator: std.mem.Allocator) void {
         self.exit.store(true, .monotonic);
         self.db.deinit();
