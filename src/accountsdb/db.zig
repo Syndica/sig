@@ -1875,6 +1875,30 @@ pub const AccountsDB = struct {
         return try self.getAccountFromRef(max_ref);
     }
 
+    /// gets an account given an associated pubkey. mut ref is required for locks.
+    /// Will only find rooted accounts, or unrooted accounts from a slot in ancestors.
+    pub fn getAccountSlotWithAncestors(
+        self: *AccountsDB,
+        pubkey: *const Pubkey,
+        ancestors: *const sig.core.Ancestors,
+    ) GetFileFromRefError!?struct { Slot, Account } {
+        // NOTE: take note of the ordering here between the two locks(!) reversal could cause a deadlock.
+        _, var ref_map_lg = self.account_index.slot_reference_map.readWithLock();
+        defer ref_map_lg.unlock();
+
+        const head_ref, var lock = self.account_index.pubkey_ref_map.getRead(pubkey) orelse
+            return null;
+        defer lock.unlock();
+
+        const max_ref = greatestInAncestors(
+            head_ref.ref_ptr,
+            ancestors,
+            self.largest_flushed_slot.load(.monotonic),
+        ) orelse return null;
+
+        return .{ max_ref.slot, try self.getAccountFromRef(max_ref) };
+    }
+
     pub fn getAccountAndReference(
         self: *AccountsDB,
         pubkey: *const Pubkey,

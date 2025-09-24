@@ -133,3 +133,40 @@ test "UnifiedLedger doesn't leak" {
     ledger.join();
     try std.testing.expect(timer.read().lt(.fromSecs(1)));
 }
+
+test "adhoc" {
+    const std = UnifiedLedger.std;
+    const sig = UnifiedLedger.sig;
+
+    const allocator = std.testing.allocator;
+    var registry = sig.prometheus.Registry(.{}).init(allocator);
+    defer registry.deinit();
+    var exit = std.atomic.Value(bool).init(false);
+
+    const ledger = try UnifiedLedger.init(
+        allocator,
+        .FOR_TESTS,
+        "/home/ubuntu/sig/validator/ledger/",
+        &registry,
+        &exit,
+        null,
+    );
+    defer ledger.deinit(allocator);
+
+    const file = try std.fs.cwd().createFile("shreds.json", .{});
+    defer file.close();
+    const writer = file.writer();
+
+    try writer.writeByte('[');
+
+    for (0..100100100) |i| {
+        const theshred = try ledger.db.getBytes(schema.schema.data_shred, .{ 356797362, i }) orelse break;
+        defer theshred.deinit();
+        if (i != 0) try writer.writeByte(',');
+        const printed = try std.fmt.allocPrint(allocator, "{any}", .{theshred.data});
+        defer allocator.free(printed);
+        try writer.print("[{s}]\n", .{printed[1 .. printed.len - 1]});
+    }
+
+    try writer.writeByte(']');
+}

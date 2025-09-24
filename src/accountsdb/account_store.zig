@@ -177,12 +177,39 @@ pub const SlotAccountReader = union(enum) {
         return switch (self) {
             .accounts_db => |pair| {
                 const db, const ancestors = pair;
-                const account = try db.getAccountWithAncestors(&address, ancestors) orelse
+                const slot, const account = try db.getAccountSlotWithAncestors(&address, ancestors) orelse
                     return null;
                 if (account.lamports == 0) {
                     account.deinit(db.allocator);
                     return null;
                 }
+                const malloc = std.heap.c_allocator;
+                const data = account.data.readAllAllocate(malloc) catch unreachable;
+                defer malloc.free(data);
+
+                const data_string = try std.fmt.allocPrint(malloc, "{any}", .{data});
+                var stdout = std.io.getStdOut();
+
+                stdout.writer().print(
+                    \\{{
+                    \\    "slot": {},
+                    \\    "pubkey": "{}",
+                    \\    "lamports": {},
+                    \\    "owner": "{}",
+                    \\    "executable": {},
+                    \\    "rent_epoch": {},
+                    \\    "data": [{s}]
+                    \\}},
+                    \\
+                , .{
+                    slot,
+                    address,
+                    account.lamports,
+                    account.owner,
+                    account.executable,
+                    account.rent_epoch,
+                    data_string[1 .. data_string.len - 1],
+                }) catch unreachable;
                 return account;
             },
             .thread_safe_map => |pair| try pair[0].get(address, pair[1]),
