@@ -1978,7 +1978,7 @@ pub fn deployProgram(
     gop.value_ptr.* = .failed;
 }
 
-test "executeV3InitializeBuffer" {
+test executeV3InitializeBuffer {
     const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
@@ -2048,7 +2048,7 @@ test "executeV3InitializeBuffer" {
     );
 }
 
-test "executeV3Write" {
+test executeV3Write {
     const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
@@ -2126,7 +2126,7 @@ test "executeV3Write" {
     );
 }
 
-test "executeDeployWithMaxDataLen" {
+test executeV3DeployWithMaxDataLen {
     const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
@@ -2322,7 +2322,7 @@ test "executeDeployWithMaxDataLen" {
     );
 }
 
-test "executeV3SetAuthority" {
+test executeV3SetAuthority {
     const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
@@ -2533,7 +2533,7 @@ test "executeV3SetAuthority" {
     );
 }
 
-test "executeV3SetAuthorityChecked" {
+test executeV3SetAuthorityChecked {
     const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
@@ -2702,7 +2702,7 @@ test "executeV3SetAuthorityChecked" {
     );
 }
 
-test "executeV3Close" {
+test executeV3Close {
     const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
@@ -2959,7 +2959,7 @@ test "executeV3Close" {
     }
 }
 
-test "executeV3Upgrade" {
+test executeV3Upgrade {
     const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
@@ -3148,7 +3148,7 @@ test "executeV3Upgrade" {
     );
 }
 
-test "executeV3ExtendProgram" {
+test executeV3ExtendProgram {
     const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
@@ -3964,4 +3964,160 @@ test executeV4SetProgramLength {
             .{},
         );
     }
+}
+
+test checkProgramAccount {
+    const testing = sig.runtime.testing;
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+
+    const program_key = Pubkey.initRandom(prng.random());
+    var program_data: [@sizeOf(V4State)]u8 = @splat(0);
+    _ = try bincode.writeToSlice(
+        &program_data,
+        V4State{
+            .slot = 0,
+            .status = .retracted,
+            .authority_address_or_next_version = program_key,
+        },
+        .{},
+    );
+
+    var cache, var tc = try testing.createTransactionContext(allocator, prng.random(), .{
+        .accounts = &.{
+            .{
+                .pubkey = program_key,
+                .data = &program_data,
+                .owner = bpf_loader_program.v4.ID,
+            },
+            .{
+                .pubkey = bpf_loader_program.v4.ID,
+                .owner = ids.NATIVE_LOADER_ID,
+            },
+        },
+    });
+    defer {
+        testing.deinitTransactionContext(allocator, tc);
+        cache.deinit(allocator);
+    }
+
+    var info = try testing.createInstructionInfo(
+        &tc,
+        bpf_loader_program.v4.ID,
+        bpf_loader_program.v4.Instruction{ .retract = .{} },
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 0 },
+        },
+    );
+    defer info.deinit(allocator);
+
+    try sig.runtime.executor.pushInstruction(&tc, info);
+    const ic = try tc.getCurrentInstructionContext();
+
+    var account = try ic.borrowInstructionAccount(0);
+    defer account.release();
+
+    // check program owner
+    {
+        account.account.owner = system_program.ID;
+        defer account.account.owner = bpf_loader_program.v4.ID;
+
+        try std.testing.expectError(
+            error.InvalidAccountOwner,
+            checkProgramAccount(allocator, ic, &account, program_key),
+        );
+    }
+
+    // check writable
+    {
+        account.context.is_writable = false;
+        ic.ixn_info.account_metas.slice()[0].is_writable = false;
+
+        defer {
+            account.context.is_writable = true;
+            ic.ixn_info.account_metas.slice()[0].is_writable = true;
+        }
+
+        try std.testing.expectError(
+            error.InvalidArgument,
+            checkProgramAccount(allocator, ic, &account, program_key),
+        );
+    }
+
+    // check signer
+    {
+        ic.ixn_info.account_metas.slice()[1].is_signer = false;
+        defer ic.ixn_info.account_metas.slice()[1].is_signer = true;
+
+        try std.testing.expectError(
+            error.MissingRequiredSignature,
+            checkProgramAccount(allocator, ic, &account, program_key),
+        );
+    }
+
+    // check auth
+    {
+        _ = try bincode.writeToSlice(
+            tc.accounts[0].account.data,
+            V4State{
+                .slot = 0,
+                .status = .retracted,
+                .authority_address_or_next_version = Pubkey.ZEROES,
+            },
+            .{},
+        );
+
+        try std.testing.expectError(
+            error.IncorrectAuthority,
+            checkProgramAccount(allocator, ic, &account, program_key),
+        );
+
+        _ = try bincode.writeToSlice(
+            tc.accounts[0].account.data,
+            V4State{
+                .slot = 0,
+                .status = .retracted,
+                .authority_address_or_next_version = program_key,
+            },
+            .{},
+        );
+    }
+
+    // check finalized
+    {
+        _ = try bincode.writeToSlice(
+            tc.accounts[0].account.data,
+            V4State{
+                .slot = 0,
+                .status = .finalized,
+                .authority_address_or_next_version = program_key,
+            },
+            .{},
+        );
+
+        try std.testing.expectError(
+            error.Immutable,
+            checkProgramAccount(allocator, ic, &account, program_key),
+        );
+
+        _ = try bincode.writeToSlice(
+            tc.accounts[0].account.data,
+            V4State{
+                .slot = 0,
+                .status = .retracted,
+                .authority_address_or_next_version = program_key,
+            },
+            .{},
+        );
+    }
+
+    try std.testing.expectEqual(
+        try checkProgramAccount(allocator, ic, &account, program_key),
+        V4State{
+            .slot = 0,
+            .status = .retracted,
+            .authority_address_or_next_version = program_key,
+        },
+    );
 }
