@@ -111,7 +111,7 @@ pub const Manager = struct {
             const elapsed = self.timer.lap();
             if (elapsed < DB_MANAGER_LOOP_MIN.asNanos()) {
                 const delay = DB_MANAGER_LOOP_MIN.asNanos() - elapsed;
-                std.time.sleep(delay);
+                std.Thread.sleep(delay);
             }
         }
     }
