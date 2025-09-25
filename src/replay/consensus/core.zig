@@ -71,6 +71,8 @@ pub const TowerConsensus = struct {
     latest_validator_votes: LatestValidatorVotes,
     status_cache: sig.core.StatusCache,
     slot_data: SlotData,
+    /// this is used for some temporary allocations that don't outlive
+    /// functions; ie, it isn't used for any persistent data
     arena_state: std.heap.ArenaAllocator.State,
 
     // Data sources
@@ -296,31 +298,27 @@ pub const TowerConsensus = struct {
         // initialize a new HeaviestSubtreeForkChoice
         //
         // Analogous to [`new_from_frozen_banks`](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/consensus/heaviest_subtree_fork_choice.rs#L235)
-        var heaviest_subtree_fork_choice = fork_choice: {
-            var heaviest_subtree_fork_choice: HeaviestSubtreeForkChoice =
-                try .init(allocator, .from(logger), .{
-                    .slot = root_slot,
-                    .hash = root_hash,
-                });
-
-            var prev_slot = root_slot;
-            for (frozen_slots.keys(), frozen_slots.values()) |slot, info| {
-                const frozen_hash = info.state.hash.readCopy().?;
-                if (slot > root_slot) {
-                    // Make sure the list is sorted
-                    std.debug.assert(slot > prev_slot);
-                    prev_slot = slot;
-                    const parent_bank_hash = info.constants.parent_hash;
-                    try heaviest_subtree_fork_choice.addNewLeafSlot(
-                        .{ .slot = slot, .hash = frozen_hash },
-                        .{ .slot = info.constants.parent_slot, .hash = parent_bank_hash },
-                    );
-                }
-            }
-
-            break :fork_choice heaviest_subtree_fork_choice;
-        };
+        var heaviest_subtree_fork_choice: HeaviestSubtreeForkChoice =
+            try .init(allocator, .from(logger), .{
+                .slot = root_slot,
+                .hash = root_hash,
+            });
         errdefer heaviest_subtree_fork_choice.deinit();
+
+        var prev_slot = root_slot;
+        for (frozen_slots.keys(), frozen_slots.values()) |slot, info| {
+            const frozen_hash = info.state.hash.readCopy().?;
+            if (slot > root_slot) {
+                // Make sure the list is sorted
+                std.debug.assert(slot > prev_slot);
+                prev_slot = slot;
+                const parent_bank_hash = info.constants.parent_hash;
+                try heaviest_subtree_fork_choice.addNewLeafSlot(
+                    .{ .slot = slot, .hash = frozen_hash },
+                    .{ .slot = info.constants.parent_slot, .hash = parent_bank_hash },
+                );
+            }
+        }
 
         var duplicate_slots = try ledger_reader.db.iterator(
             sig.ledger.schema.schema.duplicate_slots,
