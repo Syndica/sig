@@ -44,7 +44,6 @@ pub const ProcessResultParams = struct {
     my_identity: Pubkey,
 
     // global validator state
-    account_store: AccountStore,
     ledger_reader: *LedgerReader,
     ledger_result_writer: *sig.ledger.LedgerResultWriter,
 
@@ -277,8 +276,6 @@ const TestReplayStateResources = struct {
         const self = try allocator.create(TestReplayStateResources);
         errdefer allocator.destroy(self);
 
-        const account_store = AccountStore.noop;
-
         self.registry = sig.prometheus.Registry(.{}).init(allocator);
         errdefer self.registry.deinit();
 
@@ -338,7 +335,6 @@ const TestReplayStateResources = struct {
             .allocator = allocator,
             .logger = .FOR_TESTS,
             .my_identity = Pubkey.initRandom(std.crypto.random),
-            .account_store = account_store,
             .ledger_reader = &self.ledger_reader,
             .ledger_result_writer = &self.ledger_result_writer,
             .slot_tracker = &self.slot_tracker,

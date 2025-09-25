@@ -51,14 +51,13 @@ pub const Service = struct {
             const slot_tracker, var slot_tracker_lock = state.slot_tracker.readWithLock();
             defer slot_tracker_lock.unlock();
 
-            // Build the consolidated dependencies for TowerConsensus
             const consensus_state_deps: TowerConsensus.Dependencies = .{
                 .logger = .from(deps.logger),
                 .my_identity = deps.my_identity,
                 .vote_identity = deps.vote_identity,
                 .root_slot = deps.root.slot,
                 .root_hash = slot_tracker.get(slot_tracker.root).?.state.hash.readCopy().?,
-                .account_store = deps.account_store,
+                .account_reader = deps.account_store.reader(),
                 .ledger_reader = deps.ledger.reader,
                 .ledger_writer = deps.ledger.writer,
                 .exit = deps.exit,
@@ -1042,7 +1041,7 @@ fn parseBincodeFromGzipFile(
 
 /// Basic stubs for state that's supposed to be initialized outside replay,
 /// outlive replay, and is used by replay.
-const DependencyStubs = struct {
+pub const DependencyStubs = struct {
     accountsdb: sig.accounts_db.ThreadSafeAccountMap,
     exit: std.atomic.Value(bool),
     registry: sig.prometheus.Registry(.{}),
@@ -1052,7 +1051,7 @@ const DependencyStubs = struct {
     senders: TowerConsensus.Senders,
     receivers: TowerConsensus.Receivers,
 
-    fn deinit(self: *DependencyStubs, allocator: Allocator) void {
+    pub fn deinit(self: *DependencyStubs, allocator: Allocator) void {
         self.accountsdb.deinit();
         self.registry.deinit();
         self.dir.cleanup();
@@ -1062,7 +1061,7 @@ const DependencyStubs = struct {
         self.receivers.destroy();
     }
 
-    fn init(allocator: Allocator, logger: Logger) !DependencyStubs {
+    pub fn init(allocator: Allocator, logger: Logger) !DependencyStubs {
         var accountsdb = sig.accounts_db.ThreadSafeAccountMap.init(allocator);
         errdefer accountsdb.deinit();
 
@@ -1104,7 +1103,7 @@ const DependencyStubs = struct {
     ///
     /// these inputs are "stubbed" with potentially garbage/meaningless data,
     /// rather than being "mocked" with meaningful data.
-    fn stubbedService(
+    pub fn stubbedService(
         self: *DependencyStubs,
         allocator: Allocator,
         logger: Logger,
