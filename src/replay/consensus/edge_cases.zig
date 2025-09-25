@@ -1,6 +1,6 @@
 const std = @import("std");
-const sig = @import("../sig.zig");
-const replay = @import("lib.zig");
+const sig = @import("../../sig.zig");
+const replay = @import("../lib.zig");
 
 const Allocator = std.mem.Allocator;
 const collections = sig.utils.collections;
@@ -13,7 +13,7 @@ const SlotTracker = sig.replay.trackers.SlotTracker;
 
 const ProgressMap = sig.consensus.ProgressMap;
 const HeaviestSubtreeForkChoice = sig.consensus.HeaviestSubtreeForkChoice;
-const AncestorHashesReplayUpdate = replay.consensus.AncestorHashesReplayUpdate;
+const AncestorHashesReplayUpdate = replay.consensus.core.AncestorHashesReplayUpdate;
 const GossipVerifiedVoteHash = sig.consensus.vote_listener.GossipVerifiedVoteHash;
 const ThresholdConfirmedSlot = sig.consensus.vote_listener.ThresholdConfirmedSlot;
 const LatestValidatorVotes = sig.consensus.latest_validator_votes.LatestValidatorVotes;
