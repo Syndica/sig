@@ -1179,7 +1179,10 @@ pub const AccountsDB = struct {
             return self.slot_index.refs.items.len;
         }
 
-        pub fn next(self: *SlotModifiedIterator, allocator: std.mem.Allocator) !?struct { Pubkey, Account } {
+        pub fn next(
+            self: *SlotModifiedIterator,
+            allocator: std.mem.Allocator,
+        ) !?struct { Pubkey, Account } {
             assert(self.cursor != std.math.maxInt(usize));
             defer self.cursor += 1;
             if (self.cursor >= self.slot_index.refs.items.len) return null;
@@ -4354,8 +4357,10 @@ pub const BenchmarkAccountsDB = struct {
             var i: usize = 0;
             while (i < n_accounts) : (i += 1) {
                 const pubkey_idx = indexer.sample();
-                const account = try accounts_db.getAccountLatest(allocator, &pubkeys[pubkey_idx]) orelse
-                    unreachable;
+                const account = try accounts_db.getAccountLatest(
+                    allocator,
+                    &pubkeys[pubkey_idx],
+                ) orelse unreachable;
                 account.deinit(allocator);
             }
         }
