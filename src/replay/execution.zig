@@ -7,16 +7,9 @@ const core = sig.core;
 
 const Allocator = std.mem.Allocator;
 
-const ThreadPool = sig.sync.ThreadPool;
-
-const Pubkey = core.Pubkey;
 const Slot = core.Slot;
 
-const AccountStore = sig.accounts_db.AccountStore;
-const LedgerReader = sig.ledger.LedgerReader;
-
 const ForkProgress = sig.consensus.progress_map.ForkProgress;
-const ProgressMap = sig.consensus.ProgressMap;
 
 const ConfirmSlotError = replay.confirm_slot.ConfirmSlotError;
 const ConfirmSlotFuture = replay.confirm_slot.ConfirmSlotFuture;
@@ -30,7 +23,6 @@ const SvmGateway = replay.svm_gateway.SvmGateway;
 const Logger = sig.trace.Logger("replay.execution");
 
 const vote_listener = sig.consensus.vote_listener;
-const ParsedVote = vote_listener.vote_parser.ParsedVote;
 
 const confirmSlot = replay.confirm_slot.confirmSlot;
 const confirmSlotSync = replay.confirm_slot.confirmSlotSync;
