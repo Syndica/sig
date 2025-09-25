@@ -1089,27 +1089,56 @@ test "processResult and handleDuplicateConfirmedFork" {
     defer service.deinit(allocator);
 
     const consensus = &service.consensus.?;
+    {
+        const slot_tracker, var slock = service.replay.slot_tracker.writeWithLock();
+        defer slock.unlock();
 
-    const slot_tracker, var slock = service.replay.slot_tracker.writeWithLock();
-    defer slock.unlock();
+        slot_tracker.get(0).?.state.hash.set(.{ .data = @splat(1) });
+    }
 
-    slot_tracker.get(0).?.state.hash.set(.{ .data = @splat(1) });
+    {
+        const slot_tracker, var slock = service.replay.slot_tracker.readWithLock();
+        defer slock.unlock();
 
-    try consensus.processResult(
-        allocator,
-        &service.replay.progress_map,
-        slot_tracker,
-        .{
-            .slot = 0,
-            .output = .{ .last_entry_hash = .ZEROES },
-        },
-    );
+        try consensus.processResult(
+            allocator,
+            &service.replay.progress_map,
+            slot_tracker,
+            .{
+                .slot = 0,
+                .output = .{ .last_entry_hash = .ZEROES },
+            },
+        );
+    }
+
+    const stats = service.replay.progress_map.map.get(0).?;
+    try service.replay.progress_map.map.put(allocator, 1, stats);
+
+    const slot_hash = SlotAndHash{
+        .slot = 1,
+        .hash = .parse("4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi"),
+    };
+    const children = sig.utils.collections.SortedMap(SlotAndHash, void).init(allocator);
+    defer children.deinit();
+
+    try consensus.fork_choice.fork_infos.put(slot_hash, .{
+        .logger = .FOR_TESTS,
+        .stake_for_slot = 0,
+        .stake_for_subtree = 0,
+        .height = 0,
+        .heaviest_subtree_slot = slot_hash,
+        .deepest_slot = slot_hash,
+        .parent = null,
+        .children = children,
+        .latest_duplicate_ancestor = null,
+        .is_duplicate_confirmed = false,
+    });
 
     try consensus.handleDuplicateConfirmedFork(
         allocator,
         &service.replay.progress_map,
         0,
-        0,
+        1,
         .{ .data = @splat(1) },
     );
 }
