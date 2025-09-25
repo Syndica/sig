@@ -1081,7 +1081,7 @@ fn validator(
         try leader_schedule_cache.put(bank_fields.epoch, leader_schedule[1]);
     } else {
         const schedule = try collapsed_manifest.leaderSchedule(allocator, null);
-        errdefer schedule.deinit();
+        errdefer schedule.deinit(allocator);
         try leader_schedule_cache.put(bank_fields.epoch, schedule);
     }
 
@@ -1156,11 +1156,11 @@ fn validator(
             epoch_schedule.slots_per_epoch,
             staked_nodes,
         );
-        errdefer allocator.free(leader_schedule);
+        errdefer leader_schedule.deinit(allocator);
 
         try epoch_context_manager.put(epoch, .{
             .staked_nodes = staked_nodes_cloned,
-            .leader_schedule = leader_schedule,
+            .leader_schedule = leader_schedule.slot_leaders,
         });
     }
 

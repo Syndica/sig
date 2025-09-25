@@ -64,7 +64,7 @@ pub const ActiveSet = struct {
             return;
         }
         const size = @min(peers.len, NUM_ACTIVE_SET_ENTRIES);
-        sig.rand.shuffleFocusedRange(random, ThreadSafeContactInfo, peers, 0, size);
+        sig.random.shuffleFocusedRange(random, ThreadSafeContactInfo, peers, 0, size);
 
         const bloom_num_items = @max(peers.len, MIN_NUM_BLOOM_ITEMS);
         for (0..size) |i| {

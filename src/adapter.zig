@@ -146,8 +146,11 @@ pub const RpcEpochContextService = struct {
     fn getLeaderSchedule(self: *Self, slot: sig.core.Slot) ![]const sig.core.Pubkey {
         const response = try self.rpc_client.getLeaderSchedule(.{ .slot = slot });
         defer response.deinit();
-        const rpc_schedule = (try response.result()).value;
-        const schedule = try leader_schedule.LeaderSchedule.fromMap(self.allocator, rpc_schedule);
+        const rpc_schedule = try response.result();
+        const schedule = try leader_schedule.LeaderSchedule.fromMap(
+            self.allocator,
+            &rpc_schedule.value,
+        );
         return schedule.slot_leaders;
     }
 };
