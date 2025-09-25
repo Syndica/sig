@@ -35,6 +35,7 @@ const HeaviestSubtreeForkChoice = sig.consensus.HeaviestSubtreeForkChoice;
 const LatestValidatorVotes = sig.consensus.latest_validator_votes.LatestValidatorVotes;
 const ThresholdConfirmedSlot = sig.consensus.vote_listener.ThresholdConfirmedSlot;
 const GossipVerifiedVoteHash = sig.consensus.vote_listener.GossipVerifiedVoteHash;
+const VerifiedVote = sig.consensus.vote_listener.VerifiedVote;
 const VoteListener = sig.consensus.vote_listener.VoteListener;
 
 const AccountStore = sig.accounts_db.AccountStore;
@@ -70,18 +71,20 @@ pub const ConsensusState = struct {
     // Communication channels
     senders: Senders,
     receivers: Receivers,
+    verified_vote_channel: *Channel(VerifiedVote),
 
     // Supporting services
     execution_log_helper: replay.execution.LogHelper,
     vote_listener: VoteListener,
 
     pub fn deinit(self: *ConsensusState, allocator: Allocator) void {
+        self.vote_listener.joinAndDeinit();
         self.replay_tower.deinit(allocator);
         self.fork_choice.deinit();
         self.latest_validator_votes.deinit(allocator);
         self.slot_data.deinit(allocator);
-        self.vote_listener.joinAndDeinit();
         self.arena_state.promote(allocator).deinit();
+        self.verified_vote_channel.destroy();
     }
 
     /// Consolidated dependencies that encapsulate all parameters needed for initialization
@@ -216,24 +219,18 @@ pub const ConsensusState = struct {
         );
         errdefer replay_tower.deinit(deps.allocator);
 
-        // Start vote listener
-        var vote_tracker: sig.consensus.VoteTracker = .EMPTY;
-        defer vote_tracker.deinit(deps.allocator);
-
         const slot_data_provider: sig.consensus.vote_listener.SlotDataProvider = .{
             .slot_tracker_rw = deps.slot_tracker_rw,
             .epoch_tracker_rw = deps.epoch_tracker_rw,
         };
 
-        const verified_vote_channel = try Channel(sig.consensus.vote_listener.VerifiedVote)
-            .create(deps.allocator);
-        defer verified_vote_channel.destroy();
+        const verified_vote_channel = try Channel(VerifiedVote).create(deps.allocator);
+        errdefer verified_vote_channel.destroy();
 
         const vote_listener: VoteListener = try .init(
             deps.allocator,
             .{ .unordered = deps.exit },
             .from(deps.logger),
-            &vote_tracker,
             .{
                 .slot_data_provider = slot_data_provider,
                 .gossip_table_rw = deps.gossip_table,
@@ -263,6 +260,7 @@ pub const ConsensusState = struct {
             .receivers = deps.receivers,
             .execution_log_helper = .init(.from(deps.logger)),
             .vote_listener = vote_listener,
+            .verified_vote_channel = verified_vote_channel,
         };
     }
 
