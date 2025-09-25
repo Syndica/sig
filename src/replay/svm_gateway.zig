@@ -139,11 +139,12 @@ pub const SvmGateway = struct {
                 .next_vm_environment = null, // TODO epoch boundary
                 .accounts = accounts,
                 .programs = programs,
-                .blockhash_queue = params.blockhash_queue.tryRead() orelse
-                    // blockhash queue is only written when freezing a slot,
-                    // which comes *after* executing all transactions, not
-                    // concurrently (with this struct's existence).
-                    unreachable,
+
+                // blockhash queue is only written when freezing a slot,
+                // which comes *after* executing all transactions, not
+                // concurrently (with this struct's existence).
+                // TODO: why does tryRead sometimes fail here - this seems weird?
+                .blockhash_queue = params.blockhash_queue.read(),
             },
         };
     }
