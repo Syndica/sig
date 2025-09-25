@@ -3816,3 +3816,135 @@ test executeV4Retract {
         .{},
     );
 }
+
+test executeV4SetProgramLength {
+    const testing = sig.runtime.program.testing;
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+
+    for ([_]enum { open, grow, shrink, close }{ .open, .grow, .shrink, .close }) |mode| {
+        const program_key = Pubkey.initRandom(prng.random());
+        const recipient_key = Pubkey.initRandom(prng.random());
+        const rent = sysvar.Rent.DEFAULT;
+
+        const bump_size: usize = 100;
+        const required_lamports = rent.minimumBalance(@sizeOf(V4State) + bump_size);
+        const program_lamports = required_lamports + 10;
+
+        const buffer = try allocator.alloc(u8, @sizeOf(V4State) + bump_size);
+        defer allocator.free(buffer);
+        @memset(buffer, 0);
+
+        _ = try bincode.writeToSlice(
+            buffer,
+            V4State{
+                .slot = 0,
+                .authority_address_or_next_version = program_key,
+                .status = .retracted,
+            },
+            .{},
+        );
+
+        const args: struct {
+            new_size: u32,
+            init_buf: []const u8,
+            final_buf: []const u8,
+            moved_lamports: ?u64,
+            resize_delta: i64,
+        } = switch (mode) {
+            .open => .{
+                .new_size = bump_size,
+                .init_buf = &.{},
+                .final_buf = buffer,
+                .moved_lamports = program_lamports - required_lamports,
+                .resize_delta = @intCast(buffer.len),
+            },
+            .grow => .{
+                .new_size = bump_size,
+                .init_buf = buffer[0..@sizeOf(V4State)],
+                .final_buf = buffer,
+                .moved_lamports = program_lamports - required_lamports,
+                .resize_delta = bump_size,
+            },
+            .shrink => .{
+                .new_size = 1,
+                .init_buf = buffer,
+                .final_buf = buffer[0 .. @sizeOf(V4State) + 1],
+                .moved_lamports = null,
+                .resize_delta = -@as(i64, bump_size - 1),
+            },
+            .close => .{
+                .new_size = 0,
+                .init_buf = buffer,
+                .final_buf = &.{},
+                .moved_lamports = program_lamports,
+                .resize_delta = -@as(i64, @sizeOf(V4State) + bump_size),
+            },
+        };
+
+        var instr_accounts: std.BoundedArray(testing.InstructionContextAccountMetaParams, 4) = .{};
+        instr_accounts.appendSliceAssumeCapacity(&.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 }, // program
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 0 }, // auth
+        });
+        if (args.moved_lamports) |_| {
+            instr_accounts.appendAssumeCapacity(.{
+                .is_signer = false,
+                .is_writable = true,
+                .index_in_transaction = 1,
+            });
+        }
+
+        try testing.expectProgramExecuteResult(
+            allocator,
+            bpf_loader_program.v4.ID,
+            bpf_loader_program.v4.Instruction{
+                .set_program_length = .{ .new_size = args.new_size },
+            },
+            instr_accounts.constSlice(),
+            .{
+                .accounts = &.{
+                    .{
+                        .pubkey = program_key,
+                        .data = args.init_buf,
+                        .owner = bpf_loader_program.v4.ID,
+                        .lamports = program_lamports,
+                    },
+                    .{
+                        .pubkey = recipient_key,
+                        .owner = system_program.ID,
+                        .lamports = 0,
+                    },
+                    .{
+                        .pubkey = bpf_loader_program.v4.ID,
+                        .owner = ids.NATIVE_LOADER_ID,
+                    },
+                },
+                .compute_meter = bpf_loader_program.v4.COMPUTE_UNITS,
+                .sysvar_cache = .{ .rent = rent },
+            },
+            .{
+                .accounts = &.{
+                    .{
+                        .pubkey = program_key,
+                        .data = args.final_buf,
+                        .owner = bpf_loader_program.v4.ID,
+                        .lamports = program_lamports - (args.moved_lamports orelse 0),
+                        .executable = mode == .open,
+                    },
+                    .{
+                        .pubkey = recipient_key,
+                        .owner = system_program.ID,
+                        .lamports = args.moved_lamports orelse 0,
+                    },
+                    .{
+                        .pubkey = bpf_loader_program.v4.ID,
+                        .owner = ids.NATIVE_LOADER_ID,
+                    },
+                },
+                .accounts_resize_delta = args.resize_delta,
+            },
+            .{},
+        );
+    }
+}
