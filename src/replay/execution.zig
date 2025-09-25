@@ -40,11 +40,27 @@ const verifyPoh = core.entry.verifyPoh;
 
 const Logger = sig.trace.Logger("replay.execution");
 
+/// The result of replaying an individual slot.
+pub const ReplayResult = struct {
+    slot: Slot,
+    output: union(enum) {
+        last_entry_hash: sig.core.Hash,
+        err: ReplaySlotError,
+    },
+};
+
 /// 1. Replays transactions from all the slots that need to be replayed.
 /// 2. Store the replay results into the relevant data structures.
 ///
 /// Analogous to [replay_active_banks](https://github.com/anza-xyz/agave/blob/3f68568060fd06f2d561ad79e8d8eb5c5136815a/core/src/replay_stage.rs#L3356)
-pub fn replayActiveSlotsAsync(state: *ReplayState) ![]struct { Slot, *ReplaySlotFuture } {
+pub fn replayActiveSlots(state: *ReplayState, num_threads: u32) ![]const ReplayResult {
+    return if (num_threads > 1)
+        try awaitResults(state.allocator, try replayActiveSlotsAsync(state))
+    else
+        try replayActiveSlotsSync(state);
+}
+
+fn replayActiveSlotsAsync(state: *ReplayState) ![]struct { Slot, *ReplaySlotFuture } {
     var zone = tracy.Zone.init(@src(), .{ .name = "replayActiveSlotsAsync" });
     defer zone.deinit();
 
@@ -91,7 +107,7 @@ pub fn replayActiveSlotsAsync(state: *ReplayState) ![]struct { Slot, *ReplaySlot
 }
 
 /// Takes ownership over the futures and destroys them
-pub fn awaitResults(
+fn awaitResults(
     allocator: Allocator,
     /// takes ownership and frees with allocator
     slot_futures: []struct { Slot, *ReplaySlotFuture },
@@ -115,17 +131,9 @@ pub fn awaitResults(
     return results;
 }
 
-pub const ReplayResult = struct {
-    slot: Slot,
-    output: union(enum) {
-        last_entry_hash: sig.core.Hash,
-        err: ReplaySlotError,
-    },
-};
-
 /// Fully synchronous version of replayActiveSlotsAsync that does not use
 /// multithreading or async execution in any way.
-pub fn replayActiveSlotsSync(state: *ReplayState) ![]const ReplayResult {
+fn replayActiveSlotsSync(state: *ReplayState) ![]const ReplayResult {
     const allocator = state.allocator;
     var zone = tracy.Zone.init(@src(), .{ .name = "replayActiveSlotsSync" });
     defer zone.deinit();
@@ -170,6 +178,7 @@ pub fn replayActiveSlotsSync(state: *ReplayState) ![]const ReplayResult {
     return results.toOwnedSlice(allocator);
 }
 
+/// Inputs required to replay a single slot.
 pub const ReplaySlotParams = struct {
     /// confirm slot takes ownership of this
     entries: []const Entry,
@@ -181,7 +190,7 @@ pub const ReplaySlotParams = struct {
     slot_resolver: SlotResolver,
 };
 
-/// Asynchronously validate and execute entries from a slot.
+/// Asynchronously validate and execute entries from a single slot.
 ///
 /// Return: ReplaySlotFuture which you can poll periodically to await a result.
 ///
@@ -256,12 +265,21 @@ pub fn replaySlotAsync(
     return future;
 }
 
-/// Synchronous version of replaySlotAsync.
+/// Synchronous version of replaySlotAsync -- The main benefit of this function
+/// is to simplify debugging when the multithreading overhead causes issues. It
+/// can also be used when there is no concern for performance and you'd just
+/// like to reduce the number of moving pieces.
 ///
-/// The main benefit of this function is to simplify debugging when the
-/// multithreading overhead causes issues. It can also be used when there is no
-/// concern for performance and you'd just like to reduce the number of moving
-/// pieces.
+/// Validate and execute entries from a single slot.
+///
+/// Returns an error if the slot failed to replay.
+///
+/// Takes ownership of the entries. Pass the same allocator that was used for
+/// the entry allocation.
+///
+/// Analogous to:
+/// - agave: confirm_slot_entries
+/// - fd: runtime_process_txns_in_microblock_stream
 pub fn replaySlotSync(
     allocator: Allocator,
     logger: Logger,
@@ -311,6 +329,7 @@ pub fn replaySlotSync(
     return null;
 }
 
+/// The result of processing a transaction batch (entry).
 pub const BatchResult = union(enum) {
     /// The batch completed with acceptable results.
     success,
@@ -714,7 +733,7 @@ pub const LogHelper = struct {
     }
 };
 
-test "happy path: trivial case" {
+test "replaySlot - happy path: trivial case" {
     const allocator = std.testing.allocator;
 
     var state = try TestState.init(allocator);
@@ -733,7 +752,7 @@ test "happy path: trivial case" {
     try testReplaySlot(allocator, null, &.{}, params);
 }
 
-test "happy path: partial slot" {
+test "replaySlot - happy path: partial slot" {
     const allocator = std.testing.allocator;
 
     var state = try TestState.init(allocator);
@@ -756,7 +775,7 @@ test "happy path: partial slot" {
     try testReplaySlot(allocator, null, entries[0 .. entries.len - 1], params);
 }
 
-test "happy path: full slot" {
+test "replaySlot - happy path: full slot" {
     const allocator = std.testing.allocator;
 
     var state = try TestState.init(allocator);
@@ -779,7 +798,7 @@ test "happy path: full slot" {
     try testReplaySlot(allocator, null, entries, params);
 }
 
-test "fail: full slot not marked full -> .InvalidLastTick" {
+test "replaySlot - fail: full slot not marked full -> .InvalidLastTick" {
     const allocator = std.testing.allocator;
 
     var state = try TestState.init(allocator);
@@ -807,7 +826,7 @@ test "fail: full slot not marked full -> .InvalidLastTick" {
     );
 }
 
-test "fail: no trailing tick at max height -> .TrailingEntry" {
+test "replaySlot - fail: no trailing tick at max height -> .TrailingEntry" {
     const allocator = std.testing.allocator;
 
     var state = try TestState.init(allocator);
@@ -835,7 +854,7 @@ test "fail: no trailing tick at max height -> .TrailingEntry" {
     );
 }
 
-test "fail: invalid poh chain" {
+test "replaySlot - fail: invalid poh chain" {
     const allocator = std.testing.allocator;
 
     var state = try TestState.init(allocator);
@@ -865,7 +884,7 @@ test "fail: invalid poh chain" {
     );
 }
 
-test "fail: sigverify" {
+test "replaySlot - fail: sigverify" {
     const allocator = std.testing.allocator;
 
     var state = try TestState.init(allocator);

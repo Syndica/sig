@@ -30,7 +30,6 @@ const EpochTracker = replay.trackers.EpochTracker;
 const SlotTracker = replay.trackers.SlotTracker;
 const SlotTree = replay.trackers.SlotTree;
 
-const awaitResults = replay.execution.awaitResults;
 const updateSysvarsForNewSlot = replay.update_sysvar.updateSysvarsForNewSlot;
 
 pub const Logger = sig.trace.Logger("replay");
@@ -95,7 +94,7 @@ pub const Service = struct {
         const allocator = self.replay.allocator;
         self.replay.logger.debug().log("advancing replay");
 
-        // identify new slots in the ledger
+        // find slots in the ledger
         try trackNewSlots(
             allocator,
             self.replay.logger,
@@ -109,17 +108,11 @@ pub const Service = struct {
             &self.replay.progress_map,
         );
 
-        // execute active slots
-        const slot_results = execution: {
-            break :execution if (self.num_threads > 1)
-                try awaitResults(
-                    allocator,
-                    try replay.execution.replayActiveSlotsAsync(&self.replay),
-                )
-            else
-                try replay.execution.replayActiveSlotsSync(&self.replay);
-        };
+        // replay slots
+        const slot_results = try replay.execution.replayActiveSlots(&self.replay, self.num_threads);
         defer allocator.free(slot_results);
+
+        // freeze slots
         const processed_a_slot = try freezeCompletedSlots(&self.replay, slot_results);
 
         // run consensus
