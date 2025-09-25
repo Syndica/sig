@@ -64,7 +64,6 @@ pub fn replayActiveSlots(state: ReplayExecutionState) ![]struct { Slot, *Confirm
     defer zone.deinit();
 
     const active_slots = try state.slot_tracker.activeSlots(state.allocator);
-    defer state.allocator.free(active_slots);
     state.log_helper.logActiveSlots(active_slots, state.allocator);
 
     if (active_slots.len == 0) {
