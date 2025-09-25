@@ -806,9 +806,8 @@ fn shrinkAccountFiles(
         }
 
         // update the references
-        const new_reference_block, const new_global_index = try db.account_index
-            .reference_manager.allocOrExpand(accounts_alive_count);
-
+        const new_reference_block =
+            try db.account_index.reference_manager.allocOrExpand(accounts_alive_count);
         account_iter.reset();
         var offset_index: u64 = 0;
         for (is_alive_flags.items) |is_alive| {
@@ -864,7 +863,6 @@ fn shrinkAccountFiles(
                     .items = new_reference_block,
                     .capacity = new_reference_block.len,
                 },
-                .global_index = new_global_index,
             };
         }
 

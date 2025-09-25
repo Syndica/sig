@@ -120,8 +120,6 @@ pub fn loadSnapshot(
             n_threads_snapshot_load,
             load_options.validate_snapshot,
             db_config.accounts_per_file_estimate,
-            db_config.fastload,
-            db_config.save_index,
         );
     errdefer collapsed_manifest.deinit(allocator);
 
