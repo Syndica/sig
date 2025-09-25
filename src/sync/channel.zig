@@ -132,6 +132,7 @@ pub fn Channel(T: type) type {
 
         pub fn create(allocator: Allocator) !*Self {
             const channel = try allocator.create(Self);
+            errdefer allocator.destroy(channel);
             channel.* = try Self.init(allocator);
             return channel;
         }
@@ -380,6 +381,18 @@ pub fn Channel(T: type) type {
 }
 
 const expect = std.testing.expect;
+
+test "Channel clean init and deinit" {
+    const ns = struct {
+        pub fn run(allocator: Allocator) !void {
+            var channel = try Channel(u8).create(allocator);
+            defer channel.destroy();
+        }
+    };
+
+    try ns.run(std.testing.allocator);
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, ns.run, .{});
+}
 
 test "smoke" {
     var ch = try Channel(u32).init(std.testing.allocator);

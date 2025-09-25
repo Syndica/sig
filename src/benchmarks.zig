@@ -238,7 +238,7 @@ pub fn main() !void {
                 // download and unpack snapshot
                 const snapshot_manifests, //
                 _ //
-                = sig.accounts_db.download.getOrDownloadAndUnpackSnapshot(
+                = sig.accounts_db.snapshot.download.getOrDownloadAndUnpackSnapshot(
                     allocator,
                     .from(logger),
                     BENCH_SNAPSHOT_DIR_PATH,

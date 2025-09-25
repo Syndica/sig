@@ -18,13 +18,13 @@ const Slot = core.Slot;
 const TransactionError = sig.ledger.transaction_status.TransactionError;
 
 const AccountStore = sig.accounts_db.AccountStore;
+const ParsedVote = sig.consensus.vote_listener.vote_parser.ParsedVote;
+const SlotHashes = sig.runtime.sysvar.SlotHashes;
 
 const Committer = replay.commit.Committer;
 const SlotResolver = replay.resolve_lookup.SlotResolver;
 const SvmGateway = replay.svm_gateway.SvmGateway;
 const TransactionScheduler = replay.scheduler.TransactionScheduler;
-
-const SlotHashes = sig.runtime.sysvar.SlotHashes;
 
 const verifyPoh = core.entry.verifyPoh;
 const resolveBatch = replay.resolve_lookup.resolveBatch;
@@ -33,8 +33,16 @@ const assert = std.debug.assert;
 
 const Logger = sig.trace.Logger("replay-confirm-slot");
 
-const vote_listener = sig.consensus.vote_listener;
-const ParsedVote = vote_listener.vote_parser.ParsedVote;
+pub const ConfirmSlotParams = struct {
+    /// confirm slot takes ownership of this
+    entries: []const Entry,
+    last_entry: Hash,
+    svm_params: SvmGateway.Params,
+    committer: Committer,
+    verify_ticks_params: VerifyTicksParams,
+    /// confirm slot takes ownership of this
+    slot_resolver: SlotResolver,
+};
 
 /// Asynchronously validate and execute entries from a slot.
 ///
@@ -50,14 +58,15 @@ pub fn confirmSlot(
     allocator: Allocator,
     logger: Logger,
     thread_pool: *ThreadPool,
-    /// takes ownership
-    entries: []const Entry,
-    last_entry: Hash,
-    svm_params: SvmGateway.Params,
-    committer: Committer,
-    verify_ticks_params: VerifyTicksParams,
-    slot_resolver: SlotResolver,
+    params: ConfirmSlotParams,
 ) !*ConfirmSlotFuture {
+    const entries = params.entries;
+    const last_entry = params.last_entry;
+    const svm_params = params.svm_params;
+    const committer = params.committer;
+    const verify_ticks_params = params.verify_ticks_params;
+    const slot_resolver = params.slot_resolver;
+
     var zone = tracy.Zone.init(@src(), .{ .name = "confirmSlot" });
     zone.value(svm_params.slot);
     defer zone.deinit();
@@ -83,7 +92,7 @@ pub fn confirmSlot(
     errdefer future.destroy(allocator);
 
     if (verifyTicks(logger, entries, verify_ticks_params)) |block_error| {
-        future.status = .{ .err = .{ .invalid_block = block_error } };
+        future.status = .{ .done = .{ .invalid_block = block_error } };
         return future;
     }
 
@@ -93,6 +102,61 @@ pub fn confirmSlot(
     _ = try future.poll(); // starts batch execution. poll result is cached inside future
 
     return future;
+}
+
+/// Synchronous version of confirmSlot.
+///
+/// The main benefit of this function is to simplify debugging when the
+/// multithreading overhead causes issues. It can also be used when there is no
+/// concern for performance and you'd just like to reduce the number of moving
+/// pieces.
+pub fn confirmSlotSync(
+    allocator: Allocator,
+    logger: Logger,
+    params: ConfirmSlotParams,
+) !?ConfirmSlotError {
+    var zone = tracy.Zone.init(@src(), .{ .name = "confirmSlotSync" });
+    zone.value(params.svm_params.slot);
+    defer zone.deinit();
+    errdefer zone.color(0xFF0000);
+
+    defer {
+        params.slot_resolver.deinit(allocator);
+        for (params.entries) |entry| entry.deinit(allocator);
+        allocator.free(params.entries);
+    }
+
+    logger.info().log("confirming slot");
+
+    if (verifyTicks(logger, params.entries, params.verify_ticks_params)) |block_error| {
+        return .{ .invalid_block = block_error };
+    }
+
+    if (!try verifyPoh(params.entries, allocator, params.last_entry, .{})) {
+        return .{ .invalid_block = .InvalidEntryHash };
+    }
+
+    for (params.entries) |entry| {
+        if (entry.isTick()) continue;
+
+        const batch = try resolveBatch(allocator, entry.transactions, params.slot_resolver);
+        defer batch.deinit(allocator);
+
+        var exit = Atomic(bool).init(false);
+        switch (try replay.scheduler.processBatch(
+            allocator,
+            params.svm_params,
+            params.committer,
+            batch.transactions,
+            &exit,
+        )) {
+            .success => {},
+            .failure => |err| return .{ .invalid_transaction = err },
+            .exit => unreachable,
+        }
+    }
+
+    return null;
 }
 
 /// schedule poh verification asynchronously
@@ -128,9 +192,8 @@ fn scheduleTransactionBatches(
     entries: []const Entry,
     slot_resolver: SlotResolver,
 ) !void {
-    var total_transactions: usize = 0;
     for (entries) |entry| {
-        total_transactions += entry.transactions.len;
+        if (entry.isTick()) continue;
 
         const batch = try resolveBatch(allocator, entry.transactions, slot_resolver);
         errdefer batch.deinit(allocator);
@@ -139,11 +202,16 @@ fn scheduleTransactionBatches(
     }
 }
 
-pub const ConfirmSlotStatus = union(enum) {
-    done,
-    pending,
-    err: ConfirmSlotError,
-};
+pub const ConfirmSlotStatus = FutureStatus(?ConfirmSlotError);
+
+fn FutureStatus(T: type) type {
+    return union(enum) {
+        done: T,
+        pending,
+
+        pub const Result = T;
+    };
+}
 
 /// Tracks the state of a slot confirmation execution.
 ///
@@ -165,7 +233,7 @@ pub const ConfirmSlotFuture = struct {
     status: ConfirmSlotStatus,
     /// Temporarily stores errors that occur before completion that need to be
     /// returned when all tasks are complete.
-    status_when_done: ConfirmSlotStatus = .done,
+    status_when_done: ?ConfirmSlotError = null,
 
     fn create(
         allocator: Allocator,
@@ -227,19 +295,31 @@ pub const ConfirmSlotFuture = struct {
         allocator.destroy(self);
     }
 
+    pub fn awaitBlocking(self: *ConfirmSlotFuture) !?ConfirmSlotError {
+        while (true) {
+            const poll_result = try self.poll();
+            switch (poll_result) {
+                .done => |val| return val,
+                // TODO: consider futex-based wait like ResetEvent
+                .pending => std.time.sleep(100 * std.time.ns_per_ms),
+            }
+        }
+    }
+
     pub fn poll(self: *ConfirmSlotFuture) !ConfirmSlotStatus {
         switch (self.status) {
             .pending => {
                 var pending = false;
                 for (try self.pollEach()) |status| switch (status) {
                     .pending => pending = true,
-                    .err => |err| if (self.status_when_done == .done) {
-                        self.exit.store(true, .monotonic);
-                        self.status_when_done = .{ .err = err };
+                    .done => |maybe_err| if (maybe_err) |err| {
+                        if (self.status_when_done == null) {
+                            self.exit.store(true, .monotonic);
+                            self.status_when_done = err;
+                        }
                     },
-                    .done => {},
                 };
-                if (!pending) self.status = self.status_when_done;
+                if (!pending) self.status = .{ .done = self.status_when_done };
             },
             else => {},
         }
@@ -250,9 +330,9 @@ pub const ConfirmSlotFuture = struct {
     fn pollEach(self: *ConfirmSlotFuture) ![2]ConfirmSlotStatus {
         return .{
             switch (self.poh_verifier.pollFallible()) {
-                .done => .done,
+                .done => .{ .done = null },
+                .err => .{ .done = .{ .invalid_block = .InvalidEntryHash } },
                 .pending => .pending,
-                .err => .{ .err = .{ .invalid_block = .InvalidEntryHash } },
             },
             try self.scheduler.poll(),
         };
@@ -398,42 +478,17 @@ test "happy path: trivial case" {
     var state = try TestState.init(allocator);
     defer state.deinit(allocator);
 
-    var thread_pool = ThreadPool.init(.{});
-    defer {
-        thread_pool.shutdown();
-        thread_pool.deinit();
-    }
     var tick_hash_count: u64 = 0;
 
-    const replay_votes_channel: *sig.sync.Channel(ParsedVote) = try .create(allocator);
-    defer {
-        while (replay_votes_channel.tryReceive()) |pv| pv.deinit(allocator);
-        replay_votes_channel.destroy();
-    }
-
-    const future = try confirmSlot(
-        allocator,
-        .FOR_TESTS,
-        &thread_pool,
-        &.{},
-        .ZEROES,
-        state.svmParams(),
-        state.committer(),
-        .{
-            .hashes_per_tick = 0,
-            .slot = 0,
-            .max_tick_height = 1,
-            .tick_height = 0,
-            .slot_is_full = false,
-            .tick_hash_count = &tick_hash_count,
-        },
-        try state.resolver(allocator),
-    );
-    defer future.destroy(allocator);
-
-    const result = try testAwait(future);
-    errdefer std.log.err("failed with: {any}\n", .{result});
-    try std.testing.expectEqual(.done, result);
+    const params = VerifyTicksParams{
+        .hashes_per_tick = 0,
+        .slot = 0,
+        .max_tick_height = 1,
+        .tick_height = 0,
+        .slot_is_full = false,
+        .tick_hash_count = &tick_hash_count,
+    };
+    try testConfirmSlot(allocator, null, &.{}, params);
 }
 
 test "happy path: partial slot" {
@@ -442,46 +497,21 @@ test "happy path: partial slot" {
     var state = try TestState.init(allocator);
     defer state.deinit(allocator);
 
-    var thread_pool = ThreadPool.init(.{});
-    defer {
-        thread_pool.shutdown();
-        thread_pool.deinit();
-    }
     var tick_hash_count: u64 = 0;
 
     const poh, const entry_array = try sig.core.poh.testPoh(true);
+    defer for (entry_array.slice()) |e| e.deinit(allocator);
     const entries: []const sig.core.Entry = entry_array.slice();
-    for (entries) |e| try state.makeTransactionsPassable(allocator, e.transactions);
 
-    const replay_votes_channel: *sig.sync.Channel(ParsedVote) = try .create(allocator);
-    defer {
-        while (replay_votes_channel.tryReceive()) |pv| pv.deinit(allocator);
-        replay_votes_channel.destroy();
-    }
-    const future = try confirmSlot(
-        allocator,
-        .FOR_TESTS,
-        &thread_pool,
-        try allocator.dupe(Entry, entries[0 .. entries.len - 1]),
-        .ZEROES,
-        state.svmParams(),
-        state.committer(),
-        .{
-            .hashes_per_tick = poh.hashes_per_tick,
-            .slot = 0,
-            .max_tick_height = poh.tick_count,
-            .tick_height = 0,
-            .slot_is_full = false,
-            .tick_hash_count = &tick_hash_count,
-        },
-        try state.resolver(allocator),
-    );
-    defer future.destroy(allocator);
-
-    const result = try testAwait(future);
-    errdefer std.log.err("failed with: {any}\n", .{result});
-
-    try std.testing.expectEqual(.done, result);
+    const params = VerifyTicksParams{
+        .hashes_per_tick = poh.hashes_per_tick,
+        .slot = 0,
+        .max_tick_height = poh.tick_count,
+        .tick_height = 0,
+        .slot_is_full = false,
+        .tick_hash_count = &tick_hash_count,
+    };
+    try testConfirmSlot(allocator, null, entries[0 .. entries.len - 1], params);
 }
 
 test "happy path: full slot" {
@@ -490,47 +520,21 @@ test "happy path: full slot" {
     var state = try TestState.init(allocator);
     defer state.deinit(allocator);
 
-    var thread_pool = ThreadPool.init(.{});
-    defer {
-        thread_pool.shutdown();
-        thread_pool.deinit();
-    }
     var tick_hash_count: u64 = 0;
 
     const poh, const entry_array = try sig.core.poh.testPoh(true);
+    defer for (entry_array.slice()) |e| e.deinit(allocator);
     const entries: []const sig.core.Entry = entry_array.slice();
-    for (entries) |e| try state.makeTransactionsPassable(allocator, e.transactions);
 
-    const replay_votes_channel: *sig.sync.Channel(ParsedVote) = try .create(allocator);
-    defer {
-        while (replay_votes_channel.tryReceive()) |pv| pv.deinit(allocator);
-        replay_votes_channel.destroy();
-    }
-    const future = try confirmSlot(
-        allocator,
-        .FOR_TESTS,
-        &thread_pool,
-        try allocator.dupe(Entry, entries),
-        .ZEROES,
-        state.svmParams(),
-        state.committer(),
-        .{
-            .hashes_per_tick = poh.hashes_per_tick,
-            .slot = 0,
-            .max_tick_height = poh.tick_count,
-            .tick_height = 0,
-            .slot_is_full = true,
-            .tick_hash_count = &tick_hash_count,
-        },
-        try state.resolver(allocator),
-    );
-
-    defer future.destroy(allocator);
-
-    const result = try testAwait(future);
-    errdefer std.log.err("failed with: {any}\n", .{result});
-
-    try std.testing.expectEqual(.done, result);
+    const params = VerifyTicksParams{
+        .hashes_per_tick = poh.hashes_per_tick,
+        .slot = 0,
+        .max_tick_height = poh.tick_count,
+        .tick_height = 0,
+        .slot_is_full = true,
+        .tick_hash_count = &tick_hash_count,
+    };
+    try testConfirmSlot(allocator, null, entries, params);
 }
 
 test "fail: full slot not marked full -> .InvalidLastTick" {
@@ -539,47 +543,25 @@ test "fail: full slot not marked full -> .InvalidLastTick" {
     var state = try TestState.init(allocator);
     defer state.deinit(allocator);
 
-    var thread_pool = ThreadPool.init(.{});
-    defer {
-        thread_pool.shutdown();
-        thread_pool.deinit();
-    }
     var tick_hash_count: u64 = 0;
 
     const poh, const entry_array = try sig.core.poh.testPoh(true);
+    defer for (entry_array.slice()) |e| e.deinit(allocator);
     const entries: []const sig.core.Entry = entry_array.slice();
-    for (entries) |e| try state.makeTransactionsPassable(allocator, e.transactions);
 
-    const replay_votes_channel: *sig.sync.Channel(ParsedVote) = try .create(allocator);
-    defer {
-        while (replay_votes_channel.tryReceive()) |pv| pv.deinit(allocator);
-        replay_votes_channel.destroy();
-    }
-    const future = try confirmSlot(
+    const params = VerifyTicksParams{
+        .hashes_per_tick = poh.hashes_per_tick,
+        .slot = 0,
+        .max_tick_height = poh.tick_count,
+        .tick_height = 0,
+        .slot_is_full = false,
+        .tick_hash_count = &tick_hash_count,
+    };
+    try testConfirmSlot(
         allocator,
-        .noop,
-        &thread_pool,
-        try allocator.dupe(Entry, entries),
-        .ZEROES,
-        state.svmParams(),
-        state.committer(),
-        .{
-            .hashes_per_tick = poh.hashes_per_tick,
-            .slot = 0,
-            .max_tick_height = poh.tick_count,
-            .tick_height = 0,
-            .slot_is_full = false,
-            .tick_hash_count = &tick_hash_count,
-        },
-        try state.resolver(allocator),
-    );
-    defer future.destroy(allocator);
-
-    const result = try testAwait(future);
-    errdefer std.log.err("failed with: {any}\n", .{result});
-    try std.testing.expectEqual(
-        ConfirmSlotStatus{ .err = .{ .invalid_block = .InvalidLastTick } },
-        result,
+        ConfirmSlotError{ .invalid_block = .InvalidLastTick },
+        entries,
+        params,
     );
 }
 
@@ -589,47 +571,25 @@ test "fail: no trailing tick at max height -> .TrailingEntry" {
     var state = try TestState.init(allocator);
     defer state.deinit(allocator);
 
-    var thread_pool = ThreadPool.init(.{});
-    defer {
-        thread_pool.shutdown();
-        thread_pool.deinit();
-    }
     var tick_hash_count: u64 = 0;
 
     const poh, const entry_array = try sig.core.poh.testPoh(true);
+    defer for (entry_array.slice()) |e| e.deinit(allocator);
     const entries: []const sig.core.Entry = entry_array.slice();
-    for (entries) |e| try state.makeTransactionsPassable(allocator, e.transactions);
 
-    const replay_votes_channel: *sig.sync.Channel(ParsedVote) = try .create(allocator);
-    defer {
-        while (replay_votes_channel.tryReceive()) |pv| pv.deinit(allocator);
-        replay_votes_channel.destroy();
-    }
-    const future = try confirmSlot(
+    const params = VerifyTicksParams{
+        .hashes_per_tick = poh.hashes_per_tick,
+        .slot = 0,
+        .max_tick_height = poh.tick_count - 1,
+        .tick_height = 0,
+        .slot_is_full = false,
+        .tick_hash_count = &tick_hash_count,
+    };
+    try testConfirmSlot(
         allocator,
-        .noop,
-        &thread_pool,
-        try allocator.dupe(Entry, entries[0 .. entries.len - 1]),
-        .ZEROES,
-        state.svmParams(),
-        state.committer(),
-        .{
-            .hashes_per_tick = poh.hashes_per_tick,
-            .slot = 0,
-            .max_tick_height = poh.tick_count - 1,
-            .tick_height = 0,
-            .slot_is_full = false,
-            .tick_hash_count = &tick_hash_count,
-        },
-        try state.resolver(allocator),
-    );
-    defer future.destroy(allocator);
-
-    const result = try testAwait(future);
-    errdefer std.log.err("failed with: {any}\n", .{result});
-    try std.testing.expectEqual(
-        ConfirmSlotStatus{ .err = .{ .invalid_block = .TrailingEntry } },
-        result,
+        ConfirmSlotError{ .invalid_block = .TrailingEntry },
+        entries[0 .. entries.len - 1],
+        params,
     );
 }
 
@@ -639,50 +599,27 @@ test "fail: invalid poh chain" {
     var state = try TestState.init(allocator);
     defer state.deinit(allocator);
 
-    var thread_pool = ThreadPool.init(.{});
-    defer {
-        thread_pool.shutdown();
-        thread_pool.deinit();
-    }
     var tick_hash_count: u64 = 0;
 
     const poh, var entry_array = try sig.core.poh.testPoh(true);
+    defer for (entry_array.slice()) |e| e.deinit(allocator);
     const entries: []sig.core.Entry = entry_array.slice();
-    for (entries) |e| try state.makeTransactionsPassable(allocator, e.transactions);
 
     // break the hash chain
     entries[0].hash.data[0] +%= 1;
-
-    const replay_votes_channel: *sig.sync.Channel(ParsedVote) = try .create(allocator);
-    defer {
-        while (replay_votes_channel.tryReceive()) |pv| pv.deinit(allocator);
-        replay_votes_channel.destroy();
-    }
-    const future = try confirmSlot(
+    const params = VerifyTicksParams{
+        .hashes_per_tick = poh.hashes_per_tick,
+        .slot = 0,
+        .max_tick_height = poh.tick_count,
+        .tick_height = 0,
+        .slot_is_full = true,
+        .tick_hash_count = &tick_hash_count,
+    };
+    try testConfirmSlot(
         allocator,
-        .noop,
-        &thread_pool,
-        try allocator.dupe(Entry, entries),
-        .ZEROES,
-        state.svmParams(),
-        state.committer(),
-        .{
-            .hashes_per_tick = poh.hashes_per_tick,
-            .slot = 0,
-            .max_tick_height = poh.tick_count,
-            .tick_height = 0,
-            .slot_is_full = true,
-            .tick_hash_count = &tick_hash_count,
-        },
-        try state.resolver(allocator),
-    );
-    defer future.destroy(allocator);
-
-    const result = try testAwait(future);
-    errdefer std.log.err("failed with: {any}\n", .{result});
-    try std.testing.expectEqual(
-        ConfirmSlotStatus{ .err = .{ .invalid_block = .InvalidEntryHash } },
-        result,
+        ConfirmSlotError{ .invalid_block = .InvalidEntryHash },
+        entries,
+        params,
     );
 }
 
@@ -692,59 +629,111 @@ test "fail: sigverify" {
     var state = try TestState.init(allocator);
     defer state.deinit(allocator);
 
-    var thread_pool = ThreadPool.init(.{});
-    defer {
-        thread_pool.shutdown();
-        thread_pool.deinit();
-    }
     var tick_hash_count: u64 = 0;
 
     const poh, var entry_array = try sig.core.poh.testPoh(false);
+    defer for (entry_array.slice()) |e| e.deinit(allocator);
     const entries: []sig.core.Entry = entry_array.slice();
-    for (entries) |e| try state.makeTransactionsPassable(allocator, e.transactions);
 
-    const replay_votes_channel: *sig.sync.Channel(ParsedVote) = try .create(allocator);
-    defer {
-        while (replay_votes_channel.tryReceive()) |pv| pv.deinit(allocator);
-        replay_votes_channel.destroy();
-    }
-    const future = try confirmSlot(
+    const params = VerifyTicksParams{
+        .hashes_per_tick = poh.hashes_per_tick,
+        .slot = 0,
+        .max_tick_height = poh.tick_count,
+        .tick_height = 0,
+        .slot_is_full = true,
+        .tick_hash_count = &tick_hash_count,
+    };
+    try testConfirmSlot(
         allocator,
-        .noop,
-        &thread_pool,
-        try allocator.dupe(Entry, entries),
-        .ZEROES,
-        state.svmParams(),
-        state.committer(),
-        .{
-            .hashes_per_tick = poh.hashes_per_tick,
-            .slot = 0,
-            .max_tick_height = poh.tick_count,
-            .tick_height = 0,
-            .slot_is_full = true,
-            .tick_hash_count = &tick_hash_count,
-        },
-        try state.resolver(allocator),
-    );
-    defer future.destroy(allocator);
-
-    const result = try testAwait(future);
-    errdefer std.log.err("failed with: {any}\n", .{result});
-
-    try std.testing.expectEqual(
-        ConfirmSlotStatus{ .err = .{ .invalid_transaction = .SignatureFailure } },
-        result,
+        ConfirmSlotError{ .invalid_transaction = .SignatureFailure },
+        entries,
+        params,
     );
 }
 
-pub fn testAwait(future: anytype) !@TypeOf(future.poll()) {
+fn testConfirmSlot(
+    allocator: Allocator,
+    expected: ?ConfirmSlotError,
+    entries: []const Entry,
+    verify_ticks_params: VerifyTicksParams,
+) !void {
+    const logger: Logger = if (expected == null) .FOR_TESTS else .noop;
+
+    const sync_result = result: {
+        var state = try TestState.init(allocator);
+        defer state.deinit(allocator);
+
+        const entries_copy = try allocator.dupe(Entry, entries);
+        errdefer allocator.free(entries_copy);
+        for (entries_copy, 0..) |*entry, i| {
+            errdefer for (entries_copy, 0..i) |e, _| e.deinit(allocator);
+            entry.* = try entry.clone(allocator);
+        }
+
+        for (entries_copy) |e| try state.makeTransactionsPassable(allocator, e.transactions);
+
+        const params = ConfirmSlotParams{
+            .entries = entries_copy,
+            .last_entry = .ZEROES,
+            .svm_params = state.svmParams(),
+            .committer = state.committer(),
+            .verify_ticks_params = verify_ticks_params,
+            .slot_resolver = try state.resolver(allocator),
+        };
+
+        break :result try confirmSlotSync(allocator, logger, params);
+    };
+
+    verify_ticks_params.tick_hash_count.* = 0;
+
+    const async_result = result: {
+        var state = try TestState.init(allocator);
+        defer state.deinit(allocator);
+
+        const entries_copy = try allocator.dupe(Entry, entries);
+        errdefer allocator.free(entries_copy);
+        for (entries_copy, 0..) |*entry, i| {
+            errdefer for (entries_copy, 0..i) |e, _| e.deinit(allocator);
+            entry.* = try entry.clone(allocator);
+        }
+
+        for (entries_copy) |e| try state.makeTransactionsPassable(allocator, e.transactions);
+
+        const params = ConfirmSlotParams{
+            .entries = entries_copy,
+            .last_entry = .ZEROES,
+            .svm_params = state.svmParams(),
+            .committer = state.committer(),
+            .verify_ticks_params = verify_ticks_params,
+            .slot_resolver = try state.resolver(allocator),
+        };
+
+        var thread_pool = ThreadPool.init(.{});
+        defer {
+            thread_pool.shutdown();
+            thread_pool.deinit();
+        }
+
+        const future = try confirmSlot(allocator, logger, &thread_pool, params);
+        defer future.destroy(allocator);
+
+        break :result try testAwait(future);
+    };
+
+    errdefer std.log.err("failed with: {any} - {any}\n", .{ async_result, sync_result });
+
+    try std.testing.expectEqual(expected, async_result);
+    try std.testing.expectEqual(expected, sync_result);
+}
+
+pub fn testAwait(future: anytype) !@typeInfo(@TypeOf(future.poll())).error_union.payload.Result {
     var i: usize = 0;
     while (try future.poll() == .pending) {
         std.time.sleep(std.time.ns_per_ms);
         i += 1;
         if (i > 100) return error.TooSlow;
     }
-    return try future.poll();
+    return (try future.poll()).done;
 }
 
 pub const TestState = struct {

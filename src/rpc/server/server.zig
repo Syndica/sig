@@ -172,7 +172,7 @@ test "serveSpawn snapshots" {
             );
         }
 
-        const FullAndIncrementalManifest = sig.accounts_db.snapshots.FullAndIncrementalManifest;
+        const FullAndIncrementalManifest = sig.accounts_db.snapshot.data.FullAndIncrementalManifest;
         const full_inc_manifest = try FullAndIncrementalManifest.fromFiles(
             allocator,
             .from(logger),
@@ -379,8 +379,8 @@ fn testExpectSnapshotResponse(
     rpc_port: u16,
     comptime kind: enum { full, incremental },
     snap_info: switch (kind) {
-        .full => sig.accounts_db.snapshots.FullSnapshotFileInfo,
-        .incremental => sig.accounts_db.snapshots.IncrementalSnapshotFileInfo,
+        .full => sig.accounts_db.snapshot.data.FullSnapshotFileInfo,
+        .incremental => sig.accounts_db.snapshot.data.IncrementalSnapshotFileInfo,
     },
 ) !void {
     const snap_name_bounded = snap_info.snapshotArchiveName();

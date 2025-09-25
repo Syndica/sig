@@ -10,10 +10,9 @@ const Slot = sig.core.Slot;
 
 pub const ReservedAccounts = std.AutoArrayHashMapUnmanaged(Pubkey, void);
 
-pub fn init(
-    allocator: Allocator,
-) Allocator.Error!ReservedAccounts {
+pub fn init(allocator: Allocator) Allocator.Error!ReservedAccounts {
     var reserved_accounts = ReservedAccounts{};
+    errdefer reserved_accounts.deinit(allocator);
     try reserved_accounts.ensureTotalCapacity(allocator, ACCOUNTS.len);
 
     for (ACCOUNTS) |account| {

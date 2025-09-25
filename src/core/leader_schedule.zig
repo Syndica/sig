@@ -162,12 +162,38 @@ pub const LeaderSchedule = struct {
         };
     }
 
+    pub fn fromVoteAccounts(
+        allocator: std.mem.Allocator,
+        epoch: Epoch,
+        slots_in_epoch: Slot,
+        vote_accounts: *const sig.core.vote_accounts.StakeAndVoteAccountsMap,
+    ) ![]const Pubkey {
+        // this implementation is naive and performs unnecessay allocations to construct and
+        // input compatable with fromStakedNodes and re-key results.
+        // It should be addressed as part of issue #945
+        var stakes = std.AutoArrayHashMapUnmanaged(Pubkey, u64){};
+        defer stakes.deinit(allocator);
+
+        for (vote_accounts.keys(), vote_accounts.values()) |key, value| {
+            try stakes.put(allocator, key, value.stake);
+        }
+
+        const vote_keyed = try fromStakedNodes(allocator, epoch, slots_in_epoch, &stakes);
+
+        for (vote_keyed) |*pubkey| {
+            const vote_account = vote_accounts.get(pubkey.*) orelse unreachable;
+            pubkey.* = vote_account.account.state.node_pubkey;
+        }
+
+        return vote_keyed;
+    }
+
     pub fn fromStakedNodes(
         allocator: std.mem.Allocator,
         epoch: Epoch,
         slots_in_epoch: Slot,
         staked_nodes: *const std.AutoArrayHashMapUnmanaged(Pubkey, u64),
-    ) ![]const Pubkey {
+    ) ![]Pubkey {
         const Entry = std.AutoArrayHashMap(Pubkey, u64).Entry;
 
         const nodes = try allocator.alloc(Entry, staked_nodes.count());
@@ -268,6 +294,24 @@ pub const LeaderSchedule = struct {
         for (self.slot_leaders, 0..) |leader, i| {
             try writer.print("  {}       {s}\n", .{ i + start_slot, leader });
         }
+    }
+};
+
+/// Minimal implementation of SlotLeaders for a single epoch. Useful for tests
+/// or any other context that will not exceed a single epoch.
+pub const SingleEpochSlotLeaders = struct {
+    start_slot: Slot,
+    slot_leaders: []const Pubkey,
+
+    pub fn get(self: *SingleEpochSlotLeaders, slot: Slot) ?Pubkey {
+        if (slot < self.start_slot or slot - self.start_slot >= self.slot_leaders.len) {
+            return null;
+        }
+        return self.slot_leaders[slot - self.start_slot];
+    }
+
+    pub fn slotLeaders(self: *SingleEpochSlotLeaders) SlotLeaders {
+        return SlotLeaders.init(self, get);
     }
 };
 

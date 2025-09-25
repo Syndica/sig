@@ -7,7 +7,7 @@ const zstd = @import("zstd");
 const tracy = @import("tracy");
 
 const sysvar = sig.runtime.sysvar;
-const snapgen = sig.accounts_db.snapshots.generate;
+const snapgen = sig.accounts_db.snapshot.data.generate;
 
 const BenchTimeUnit = @import("../benchmarks.zig").BenchTimeUnit;
 
@@ -22,17 +22,17 @@ const BankFields = sig.core.BankFields;
 const AccountFile = sig.accounts_db.accounts_file.AccountFile;
 const AccountInFile = sig.accounts_db.accounts_file.AccountInFile;
 const FileId = sig.accounts_db.accounts_file.FileId;
-const StatusCache = sig.accounts_db.StatusCache;
+const StatusCache = sig.accounts_db.snapshot.StatusCache;
 
-const AccountsDbFields = sig.accounts_db.snapshots.AccountsDbFields;
-const BankHashStats = sig.accounts_db.snapshots.BankHashStats;
+const AccountsDbFields = sig.accounts_db.snapshot.data.AccountsDbFields;
+const BankHashStats = sig.accounts_db.snapshot.data.BankHashStats;
 const BankIncrementalSnapshotPersistence =
-    sig.accounts_db.snapshots.BankIncrementalSnapshotPersistence;
-const FullAndIncrementalManifest = sig.accounts_db.snapshots.FullAndIncrementalManifest;
-const FullSnapshotFileInfo = sig.accounts_db.snapshots.FullSnapshotFileInfo;
-const IncrementalSnapshotFileInfo = sig.accounts_db.snapshots.IncrementalSnapshotFileInfo;
-const SnapshotFiles = sig.accounts_db.snapshots.SnapshotFiles;
-const SnapshotManifest = sig.accounts_db.snapshots.Manifest;
+    sig.accounts_db.snapshot.data.BankIncrementalSnapshotPersistence;
+const FullAndIncrementalManifest = sig.accounts_db.snapshot.data.FullAndIncrementalManifest;
+const FullSnapshotFileInfo = sig.accounts_db.snapshot.data.FullSnapshotFileInfo;
+const IncrementalSnapshotFileInfo = sig.accounts_db.snapshot.data.IncrementalSnapshotFileInfo;
+const SnapshotFiles = sig.accounts_db.snapshot.data.SnapshotFiles;
+const SnapshotManifest = sig.accounts_db.snapshot.data.Manifest;
 
 const AccountDataHandle = sig.accounts_db.buffer_pool.AccountDataHandle;
 const AccountIndex = sig.accounts_db.index.AccountIndex;
@@ -61,7 +61,7 @@ const RwMux = sig.sync.RwMux;
 
 const assert = std.debug.assert;
 
-const parallelUnpackZstdTarBall = sig.accounts_db.snapshots.parallelUnpackZstdTarBall;
+const parallelUnpackZstdTarBall = sig.accounts_db.snapshot.data.parallelUnpackZstdTarBall;
 const spawnThreadTasks = sig.utils.thread.spawnThreadTasks;
 const printTimeEstimate = sig.time.estimate.printTimeEstimate;
 const globalRegistry = sig.prometheus.registry.globalRegistry;
@@ -2937,8 +2937,8 @@ pub const AccountsDB = struct {
         self: *AccountsDB,
         comptime kind: enum { full, incremental },
         snapshot_name_info: switch (kind) {
-            .full => sig.accounts_db.snapshots.FullSnapshotFileInfo,
-            .incremental => sig.accounts_db.snapshots.IncrementalSnapshotFileInfo,
+            .full => sig.accounts_db.snapshot.data.FullSnapshotFileInfo,
+            .incremental => sig.accounts_db.snapshot.data.IncrementalSnapshotFileInfo,
         },
     ) std.fs.Dir.DeleteFileError!void {
         const file_name_bounded = snapshot_name_info.snapshotArchiveName();
