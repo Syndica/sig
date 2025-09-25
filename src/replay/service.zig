@@ -1306,6 +1306,11 @@ test "doConsensus runs without error with no replay results" {
     // coverage. currently consensus panics or hangs if you run it with actual data
     _ = try doConsensus(allocator, &service.replay, &service.consensus.?, &.{});
 
+    _, var slot_lock, var epoch_lock =
+        processResultState(&service.replay, &service.consensus.?);
+    slot_lock.unlock();
+    epoch_lock.unlock();
+
     dep_stubs.exit.store(true, .monotonic);
 }
 
