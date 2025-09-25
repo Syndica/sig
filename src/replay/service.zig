@@ -331,6 +331,9 @@ pub fn initProgressMap(
     return progress;
 }
 
+/// This is pub because it's used both in this file and consensus/core.zig. In
+/// the future we'll probably stop using this in at least one of those places,
+/// and at that point it should be deleted or moved and made non-pub.
 pub const FrozenSlotsSortCtx = struct {
     slots: []const Slot,
     pub fn lessThan(ctx: @This(), a_index: usize, b_index: usize) bool {
