@@ -31,7 +31,8 @@ const DuplicateSlotsToRepair = replay.consensus.edge_cases.SlotData.DuplicateSlo
 const DuplicateConfirmedSlots = replay.consensus.edge_cases.SlotData.DuplicateConfirmedSlots;
 const PurgeRepairSlotCounters = replay.consensus.edge_cases.SlotData.PurgeRepairSlotCounters;
 const EpochSlotsFrozenSlots = replay.consensus.edge_cases.SlotData.EpochSlotsFrozenSlots;
-const UnfrozenGossipVerifiedVoteHashes = replay.consensus.edge_cases.UnfrozenGossipVerifiedVoteHashes;
+const UnfrozenGossipVerifiedVoteHashes =
+    replay.consensus.edge_cases.UnfrozenGossipVerifiedVoteHashes;
 
 const Logger = sig.trace.Logger("replay.process_result");
 
