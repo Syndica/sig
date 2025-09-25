@@ -25,7 +25,6 @@ const HeaviestSubtreeForkChoice = sig.consensus.HeaviestSubtreeForkChoice;
 const TowerConsensus = replay.consensus.TowerConsensus;
 const ParsedVote = sig.consensus.vote_listener.vote_parser.ParsedVote;
 
-const ReplayExecutionState = replay.execution.ReplayExecutionState;
 const ReplayResult = replay.execution.ReplayResult;
 
 const EpochTracker = replay.trackers.EpochTracker;
@@ -171,7 +170,7 @@ pub const LedgerRef = struct {
     writer: *sig.ledger.LedgerResultWriter,
 };
 
-const ReplayState = struct {
+pub const ReplayState = struct {
     allocator: Allocator,
     my_identity: Pubkey,
     logger: Logger,
@@ -262,36 +261,6 @@ const ReplayState = struct {
             .status_cache = .DEFAULT,
             .execution_log_helper = .init(.from(deps.logger)),
             .replay_votes_channel = replay_votes_channel,
-        };
-    }
-
-    pub fn executionState(self: *ReplayState) struct {
-        ReplayExecutionState,
-        RwMux(SlotTracker).RLockGuard,
-        RwMux(EpochTracker).RLockGuard,
-    } {
-        const slot_tracker, const slot_tracker_lg = self.slot_tracker.readWithLock();
-        const epoch_tracker, const epoch_tracker_lg = self.epoch_tracker.readWithLock();
-        const execution_state: ReplayExecutionState = .{
-            .allocator = self.allocator,
-            .logger = .from(self.logger),
-            .my_identity = self.my_identity,
-            .vote_account = null, // voting not currently supported
-            .log_helper = &self.execution_log_helper,
-            .account_store = self.account_store,
-            .thread_pool = &self.thread_pool,
-            .ledger_reader = self.ledger.reader,
-            .slot_tracker = slot_tracker,
-            .epoch_tracker = epoch_tracker,
-            .progress_map = &self.progress_map,
-            .status_cache = &self.status_cache,
-            .replay_votes_channel = self.replay_votes_channel,
-        };
-
-        return .{
-            execution_state,
-            slot_tracker_lg,
-            epoch_tracker_lg,
         };
     }
 };
@@ -435,14 +404,10 @@ fn advanceReplay(state: *ReplayState, maybe_consensus: *?TowerConsensus, multith
     );
 
     const slot_results = execution: {
-        const execution_state, var epochs_lock, var slots_lock = state.executionState();
-        defer epochs_lock.unlock();
-        defer slots_lock.unlock();
-
         break :execution if (multithread)
-            try awaitResults(allocator, try replay.execution.replayActiveSlots(execution_state))
+            try awaitResults(allocator, try replay.execution.replayActiveSlots(state))
         else
-            try replay.execution.replayActiveSlotsSync(execution_state);
+            try replay.execution.replayActiveSlotsSync(state);
     };
     defer allocator.free(slot_results);
 
