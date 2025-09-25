@@ -127,7 +127,6 @@ pub fn main() !void {
             current_config.genesis_file_path = params.genesis_file_path;
             params.accountsdb_base.apply(&current_config);
             params.accountsdb_download.apply(&current_config);
-            params.accountsdb_index.apply(&current_config);
             params.geyser.apply(&current_config);
             current_config.replay_threads = params.replay_threads;
             current_config.disable_consensus = params.disable_consensus;
@@ -143,7 +142,6 @@ pub fn main() !void {
             current_config.genesis_file_path = params.genesis_file_path;
             params.accountsdb_base.apply(&current_config);
             params.accountsdb_download.apply(&current_config);
-            params.accountsdb_index.apply(&current_config);
             params.geyser.apply(&current_config);
             current_config.replay_threads = params.replay_threads;
             current_config.disable_consensus = params.disable_consensus;
@@ -173,7 +171,6 @@ pub fn main() !void {
             current_config.accounts_db.snapshot_dir = params.snapshot_dir;
             current_config.genesis_file_path = params.genesis_file_path;
             params.accountsdb_base.apply(&current_config);
-            params.accountsdb_index.apply(&current_config);
             current_config.gossip.cluster = params.gossip_cluster;
             params.geyser.apply(&current_config);
             try validateSnapshot(gpa, current_config);
@@ -215,7 +212,6 @@ pub fn main() !void {
             current_config.genesis_file_path = params.genesis_file_path;
             params.accountsdb_base.apply(&current_config);
             params.accountsdb_download.apply(&current_config);
-            params.accountsdb_index.apply(&current_config);
             try mockRpcServer(gpa, current_config);
         },
     }
@@ -561,34 +557,6 @@ const Cmd = struct {
             cfg.gossip.trusted_validators = args.trusted_validators;
         }
     };
-    const AccountsDbArgumentsIndex = struct {
-        fastload: bool,
-        save_index: bool,
-
-        const cmd_info: cli.ArgumentInfoGroup(@This()) = .{
-            .fastload = .{
-                .kind = .named,
-                .name_override = null,
-                .alias = .none,
-                .default_value = false,
-                .config = {},
-                .help = "fastload the accounts db",
-            },
-            .save_index = .{
-                .kind = .named,
-                .name_override = null,
-                .alias = .none,
-                .default_value = false,
-                .config = {},
-                .help = "save the account index to disk",
-            },
-        };
-
-        fn apply(args: @This(), cfg: *config.Cmd) void {
-            cfg.accounts_db.fastload = args.fastload;
-            cfg.accounts_db.save_index = args.save_index;
-        }
-    };
     const RepairArgumentsBase = struct {
         turbine_port: u16,
         repair_port: u16,
@@ -742,7 +710,6 @@ const Cmd = struct {
         accountsdb_base: AccountsDbArgumentsBase,
         accountsdb_download: AccountsDbArgumentsDownload,
         force_new_snapshot_download: bool,
-        accountsdb_index: AccountsDbArgumentsIndex,
         geyser: GeyserArgumentsBase,
         replay_threads: u16,
         disable_consensus: bool,
@@ -763,7 +730,6 @@ const Cmd = struct {
                 .accountsdb_base = AccountsDbArgumentsBase.cmd_info,
                 .accountsdb_download = AccountsDbArgumentsDownload.cmd_info,
                 .force_new_snapshot_download = force_new_snapshot_download_arg,
-                .accountsdb_index = AccountsDbArgumentsIndex.cmd_info,
                 .geyser = GeyserArgumentsBase.cmd_info,
                 .replay_threads = replay_threads_arg,
                 .disable_consensus = disable_consensus_arg,
@@ -856,7 +822,6 @@ const Cmd = struct {
         snapshot_dir: []const u8,
         genesis_file_path: ?[]const u8,
         accountsdb_base: AccountsDbArgumentsBase,
-        accountsdb_index: AccountsDbArgumentsIndex,
         gossip_cluster: ?[]const u8,
         geyser: GeyserArgumentsBase,
 
@@ -869,7 +834,6 @@ const Cmd = struct {
                 .snapshot_dir = snapshot_dir_arg,
                 .genesis_file_path = genesis_file_path_arg,
                 .accountsdb_base = AccountsDbArgumentsBase.cmd_info,
-                .accountsdb_index = AccountsDbArgumentsIndex.cmd_info,
                 .gossip_cluster = gossip_cluster_arg,
                 .geyser = GeyserArgumentsBase.cmd_info,
             },
@@ -994,7 +958,6 @@ const Cmd = struct {
         accountsdb_base: AccountsDbArgumentsBase,
         accountsdb_download: AccountsDbArgumentsDownload,
         force_new_snapshot_download: bool,
-        accountsdb_index: AccountsDbArgumentsIndex,
 
         const cmd_info: cli.CommandInfo(@This()) = .{
             .help = .{
@@ -1009,7 +972,6 @@ const Cmd = struct {
                 .accountsdb_base = AccountsDbArgumentsBase.cmd_info,
                 .accountsdb_download = AccountsDbArgumentsDownload.cmd_info,
                 .force_new_snapshot_download = force_new_snapshot_download_arg,
-                .accountsdb_index = AccountsDbArgumentsIndex.cmd_info,
             },
         };
     };
@@ -1773,15 +1735,8 @@ fn mockRpcServer(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
         );
         defer all_snap_fields.deinit(allocator);
 
-        const manifest = try accountsdb.loadWithDefaults(
-            allocator,
-            all_snap_fields,
-            1,
-            true,
-            1500,
-            false,
-            false,
-        );
+        const manifest =
+            try accountsdb.loadWithDefaults(allocator, all_snap_fields, 1, true, 1500);
         defer manifest.deinit(allocator);
     }
 
