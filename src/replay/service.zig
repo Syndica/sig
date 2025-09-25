@@ -964,7 +964,7 @@ test "Service clean init and deinit" {
             var dep_stubs = try DependencyStubs.init(allocator, .noop);
             defer dep_stubs.deinit(allocator);
 
-            var service = try dep_stubs.stubbedService(allocator, .FOR_TESTS);
+            var service = try dep_stubs.stubbedService(allocator, .FOR_TESTS, false);
             defer service.deinit(allocator);
 
             dep_stubs.exit.store(true, .monotonic);
@@ -980,7 +980,7 @@ test "process runs without error with no replay results" {
     var dep_stubs = try DependencyStubs.init(allocator, .FOR_TESTS);
     defer dep_stubs.deinit(allocator);
 
-    var service = try dep_stubs.stubbedService(allocator, .FOR_TESTS);
+    var service = try dep_stubs.stubbedService(allocator, .FOR_TESTS, true);
     defer service.deinit(allocator);
 
     // TODO: run consensus in the tests that actually execute blocks for better
@@ -1233,7 +1233,12 @@ const DependencyStubs = struct {
     ///
     /// these inputs are "stubbed" with potentially garbage/meaningless data,
     /// rather than being "mocked" with meaningful data.
-    fn stubbedService(self: *DependencyStubs, allocator: Allocator, logger: Logger) !Service {
+    fn stubbedService(
+        self: *DependencyStubs,
+        allocator: Allocator,
+        logger: Logger,
+        run_vote_listener: bool,
+    ) !Service {
         var rng = std.Random.DefaultPrng.init(0);
         const random = rng.random();
 
@@ -1290,6 +1295,7 @@ const DependencyStubs = struct {
             .senders = self.senders,
             .receivers = self.receivers,
             .gossip_table = null,
+            .run_vote_listener = run_vote_listener,
         };
 
         return try Service.init(&deps, consensus_deps, 1);

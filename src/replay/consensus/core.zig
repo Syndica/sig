@@ -42,8 +42,11 @@ const VoteListener = sig.consensus.vote_listener.VoteListener;
 
 const SlotTracker = sig.replay.trackers.SlotTracker;
 const EpochTracker = sig.replay.trackers.EpochTracker;
-const SlotData = sig.replay.consensus.edge_cases.SlotData;
+
 const AncestorDuplicateSlotToRepair = replay.consensus.edge_cases.AncestorDuplicateSlotToRepair;
+const SlotData = sig.replay.consensus.edge_cases.SlotData;
+const DuplicateConfirmedState = sig.replay.consensus.edge_cases.DuplicateConfirmedState;
+const SlotStatus = sig.replay.consensus.edge_cases.SlotStatus;
 
 const ReplayResult = replay.execution.ReplayResult;
 const ProcessResultState = replay.consensus.process_result.ProcessResultState;
@@ -75,10 +78,10 @@ pub const TowerConsensus = struct {
 
     // Supporting services
     execution_log_helper: replay.execution.LogHelper,
-    vote_listener: VoteListener,
+    vote_listener: ?VoteListener,
 
     pub fn deinit(self: *TowerConsensus, allocator: Allocator) void {
-        self.vote_listener.joinAndDeinit();
+        if (self.vote_listener) |vl| vl.joinAndDeinit();
         self.replay_tower.deinit(allocator);
         self.fork_choice.deinit();
         self.latest_validator_votes.deinit(allocator);
@@ -108,11 +111,12 @@ pub const TowerConsensus = struct {
         epoch_tracker_rw: *RwMux(EpochTracker),
         external: External,
 
-        /// Channels that extend outside of replay
+        /// Data that comes from outside replay
         pub const External = struct {
             senders: Senders,
             receivers: Receivers,
             gossip_table: ?*RwMux(sig.gossip.GossipTable),
+            run_vote_listener: bool = true,
 
             pub fn deinit(self: External) void {
                 self.senders.destroy();
@@ -223,7 +227,7 @@ pub const TowerConsensus = struct {
         const verified_vote_channel = try Channel(VerifiedVote).create(allocator);
         errdefer verified_vote_channel.destroy();
 
-        const vote_listener: VoteListener = try .init(
+        const vote_listener: ?VoteListener = if (deps.external.run_vote_listener) try .init(
             allocator,
             .{ .unordered = deps.exit },
             .from(deps.logger),
@@ -243,7 +247,7 @@ pub const TowerConsensus = struct {
                     .subscriptions = .{},
                 },
             },
-        );
+        ) else null;
 
         return .{
             .fork_choice = fork_choice,
@@ -483,9 +487,9 @@ pub const TowerConsensus = struct {
                     continue;
                 }
 
-                const duplicate_confirmed_state: sig.replay.consensus.edge_cases.DuplicateConfirmedState = .{
+                const duplicate_confirmed_state: DuplicateConfirmedState = .{
                     .duplicate_confirmed_hash = frozen_hash,
-                    .slot_status = sig.replay.consensus.edge_cases.SlotStatus.fromHash(frozen_hash),
+                    .slot_status = SlotStatus.fromHash(frozen_hash),
                 };
                 try check_slot_agrees_with_cluster.duplicateConfirmed(
                     allocator,
