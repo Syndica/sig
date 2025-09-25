@@ -23,11 +23,11 @@ const ConfirmSlotFuture = replay.confirm_slot.ConfirmSlotFuture;
 const ConfirmSlotParams = replay.confirm_slot.ConfirmSlotParams;
 
 const EpochTracker = replay.trackers.EpochTracker;
+const ReplayState = replay.service.ReplayState;
 const SlotTracker = replay.trackers.SlotTracker;
+const SvmGateway = replay.svm_gateway.SvmGateway;
 
 const Logger = sig.trace.Logger("replay.execution");
-
-const SvmGateway = replay.svm_gateway.SvmGateway;
 
 const vote_listener = sig.consensus.vote_listener;
 const ParsedVote = vote_listener.vote_parser.ParsedVote;
@@ -35,37 +35,20 @@ const ParsedVote = vote_listener.vote_parser.ParsedVote;
 const confirmSlot = replay.confirm_slot.confirmSlot;
 const confirmSlotSync = replay.confirm_slot.confirmSlotSync;
 
-/// State used for replaying and validating data from ledger/accountsdb/svm
-pub const ReplayExecutionState = struct {
-    allocator: Allocator,
-    logger: Logger,
-    my_identity: Pubkey,
-    vote_account: ?Pubkey,
-
-    log_helper: *LogHelper,
-
-    // borrows
-    account_store: AccountStore,
-    thread_pool: *ThreadPool,
-    ledger_reader: *LedgerReader,
-    slot_tracker: *const SlotTracker,
-    epoch_tracker: *const EpochTracker,
-    progress_map: *ProgressMap,
-    status_cache: *sig.core.StatusCache,
-    replay_votes_channel: *sig.sync.Channel(ParsedVote),
-};
-
 /// 1. Replays transactions from all the slots that need to be replayed.
 /// 2. Store the replay results into the relevant data structures.
 ///
 /// Analogous to [replay_active_banks](https://github.com/anza-xyz/agave/blob/3f68568060fd06f2d561ad79e8d8eb5c5136815a/core/src/replay_stage.rs#L3356)
-pub fn replayActiveSlots(state: ReplayExecutionState) ![]struct { Slot, *ConfirmSlotFuture } {
+pub fn replayActiveSlots(state: *ReplayState) ![]struct { Slot, *ConfirmSlotFuture } {
     var zone = tracy.Zone.init(@src(), .{ .name = "replayActiveSlots" });
     defer zone.deinit();
 
-    const active_slots = try state.slot_tracker.activeSlots(state.allocator);
+    const slot_tracker, var slot_lock = state.slot_tracker.readWithLock();
+    defer slot_lock.unlock();
+
+    const active_slots = try slot_tracker.activeSlots(state.allocator);
     defer state.allocator.free(active_slots);
-    state.log_helper.logActiveSlots(active_slots, state.allocator);
+    state.execution_log_helper.logActiveSlots(active_slots, state.allocator);
 
     if (active_slots.len == 0) {
         return &.{};
@@ -76,10 +59,14 @@ pub fn replayActiveSlots(state: ReplayExecutionState) ![]struct { Slot, *Confirm
         for (slot_statuses.items) |status| status[1].destroy(state.allocator);
         slot_statuses.deinit(state.allocator);
     }
+
+    const epoch_tracker_inner, var epoch_lock = state.epoch_tracker.readWithLock();
+    defer epoch_lock.unlock();
+
     for (active_slots) |slot| {
         state.logger.debug().logf("replaying slot: {}", .{slot});
 
-        const params = switch (try prepareSlot(state, slot)) {
+        const params = switch (try prepareSlot(state, slot_tracker, epoch_tracker_inner, slot)) {
             .confirm => |params| params,
             .empty, .dead, .leader => continue,
         };
@@ -87,7 +74,7 @@ pub fn replayActiveSlots(state: ReplayExecutionState) ![]struct { Slot, *Confirm
         const future = try confirmSlot(
             state.allocator,
             .from(state.logger),
-            state.thread_pool,
+            &state.thread_pool,
             params,
         );
 
@@ -133,14 +120,17 @@ pub const ReplayResult = struct {
 
 /// Fully synchronous version of replayActiveSlots that does not use
 /// multithreading or async execution in any way.
-pub fn replayActiveSlotsSync(state: ReplayExecutionState) ![]const ReplayResult {
+pub fn replayActiveSlotsSync(state: *ReplayState) ![]const ReplayResult {
     const allocator = state.allocator;
     var zone = tracy.Zone.init(@src(), .{ .name = "replayActiveSlotsSync" });
     defer zone.deinit();
 
-    const active_slots = try state.slot_tracker.activeSlots(allocator);
+    const slot_tracker, var slot_lock = state.slot_tracker.readWithLock();
+    defer slot_lock.unlock();
+
+    const active_slots = try slot_tracker.activeSlots(allocator);
     defer allocator.free(active_slots);
-    state.log_helper.logActiveSlots(active_slots, allocator);
+    state.execution_log_helper.logActiveSlots(active_slots, allocator);
 
     if (active_slots.len == 0) {
         return &.{};
@@ -150,10 +140,13 @@ pub fn replayActiveSlotsSync(state: ReplayExecutionState) ![]const ReplayResult 
         .initCapacity(allocator, active_slots.len);
     errdefer results.deinit(allocator);
 
+    const epoch_tracker, var epoch_lock = state.epoch_tracker.readWithLock();
+    defer epoch_lock.unlock();
+
     for (active_slots) |slot| {
         state.logger.debug().logf("replaying slot: {}", .{slot});
 
-        const params = switch (try prepareSlot(state, slot)) {
+        const params = switch (try prepareSlot(state, slot_tracker, epoch_tracker, slot)) {
             .confirm => |params| params,
             .empty, .dead, .leader => continue,
         };
@@ -247,7 +240,12 @@ const PreparedSlot = union(enum) {
 /// - [replay_active_bank](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/core/src/replay_stage.rs#L2979)
 /// - [replay_blockstore_into_bank](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/core/src/replay_stage.rs#L2232)
 /// - [confirm_slot](https://github.com/anza-xyz/agave/blob/d79257e5f4afca4d092793f7a1e854cd5ccd6be9/ledger/src/blockstore_processor.rs#L1486)
-fn prepareSlot(state: ReplayExecutionState, slot: Slot) !PreparedSlot {
+fn prepareSlot(
+    state: *ReplayState,
+    slot_tracker: *const SlotTracker,
+    epoch_tracker: *const EpochTracker,
+    slot: Slot,
+) !PreparedSlot {
     var zone = tracy.Zone.init(@src(), .{ .name = "replaySlot" });
     zone.value(slot);
     defer zone.deinit();
@@ -259,8 +257,8 @@ fn prepareSlot(state: ReplayExecutionState, slot: Slot) !PreparedSlot {
         return .dead;
     }
 
-    const epoch_constants = state.epoch_tracker.getPtrForSlot(slot) orelse return error.MissingEpoch;
-    const slot_info = state.slot_tracker.get(slot) orelse return error.MissingSlot;
+    const epoch_constants = epoch_tracker.getPtrForSlot(slot) orelse return error.MissingEpoch;
+    const slot_info = slot_tracker.get(slot) orelse return error.MissingSlot;
 
     const i_am_leader = slot_info.constants.collector_id.equals(&state.my_identity);
 
@@ -279,7 +277,7 @@ fn prepareSlot(state: ReplayExecutionState, slot: Slot) !PreparedSlot {
             .i_am_leader = i_am_leader,
             .epoch_stakes = &epoch_constants.stakes,
             .now = sig.time.Instant.now(),
-            .validator_vote_pubkey = state.vote_account,
+            .validator_vote_pubkey = null, // voting not currently supported
         });
     }
     const fork_progress = progress_get_or_put.value_ptr;
@@ -298,7 +296,7 @@ fn prepareSlot(state: ReplayExecutionState, slot: Slot) !PreparedSlot {
     const previous_last_entry = confirmation_progress.last_entry;
     const entries, const slot_is_full = blk: {
         const entries, const num_shreds, const slot_is_full =
-            try state.ledger_reader.getSlotEntriesWithShredInfo(
+            try state.ledger.reader.getSlotEntriesWithShredInfo(
                 state.allocator,
                 slot,
                 confirmation_progress.num_shreds,
@@ -309,7 +307,7 @@ fn prepareSlot(state: ReplayExecutionState, slot: Slot) !PreparedSlot {
             state.allocator.free(entries);
         }
 
-        state.log_helper.logEntryCount(entries.len, slot);
+        state.execution_log_helper.logEntryCount(entries.len, slot);
 
         if (entries.len == 0) {
             return .empty;
@@ -325,7 +323,7 @@ fn prepareSlot(state: ReplayExecutionState, slot: Slot) !PreparedSlot {
 
     const new_rate_activation_epoch =
         if (slot_info.constants.feature_set.get(.reduce_stake_warmup_cooldown)) |active_slot|
-            state.epoch_tracker.schedule.getEpoch(active_slot)
+            epoch_tracker.schedule.getEpoch(active_slot)
         else
             null;
 
@@ -359,14 +357,14 @@ fn prepareSlot(state: ReplayExecutionState, slot: Slot) !PreparedSlot {
         .feature_set = slot_info.constants.feature_set,
         .rent_collector = &epoch_constants.rent_collector,
         .epoch_stakes = &epoch_constants.stakes,
-        .status_cache = state.status_cache,
+        .status_cache = &state.status_cache,
     };
 
     const committer = replay.commit.Committer{
         .logger = .from(state.logger),
         .account_store = state.account_store,
         .slot_state = slot_info.state,
-        .status_cache = state.status_cache,
+        .status_cache = &state.status_cache,
         .stakes_cache = &slot_info.state.stakes_cache,
         .new_rate_activation_epoch = new_rate_activation_epoch,
         .replay_votes_sender = state.replay_votes_channel,
