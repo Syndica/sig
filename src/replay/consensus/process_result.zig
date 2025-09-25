@@ -22,7 +22,6 @@ const ProgressMap = sig.consensus.ProgressMap;
 const HeaviestSubtreeForkChoice = sig.consensus.HeaviestSubtreeForkChoice;
 const LatestValidatorVotes = sig.consensus.latest_validator_votes.LatestValidatorVotes;
 
-const EpochTracker = replay.trackers.EpochTracker;
 const SlotTracker = replay.trackers.SlotTracker;
 
 const DuplicateSlots = replay.consensus.edge_cases.SlotData.DuplicateSlots;

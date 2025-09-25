@@ -94,8 +94,53 @@ pub const Service = struct {
         self.replay.deinit();
     }
 
+    /// Run a single iteration of the entire replay process. Includes:
+    /// - replay all active slots that have not been replayed yet
+    /// - running consensus on the latest updates (if present)
     pub fn advance(self: *Service) !void {
-        try advanceReplay(&self.replay, &self.consensus, self.num_threads > 1);
+        const zone = tracy.Zone.init(@src(), .{ .name = "advanceReplay" });
+        defer zone.deinit();
+
+        const allocator = self.replay.allocator;
+        self.replay.logger.debug().log("advancing replay");
+
+        // identify new slots in the ledger
+        try trackNewSlots(
+            allocator,
+            self.replay.logger,
+            self.replay.account_store,
+            &self.replay.ledger.db,
+            &self.replay.slot_tracker,
+            &self.replay.epoch_tracker,
+            &self.replay.slot_tree,
+            self.replay.slot_leaders,
+            &self.replay.hard_forks,
+            &self.replay.progress_map,
+        );
+
+        // execute active slots
+        const slot_results = execution: {
+            break :execution if (self.num_threads > 1)
+                try awaitResults(allocator, try replay.execution.replayActiveSlots(&self.replay))
+            else
+                try replay.execution.replayActiveSlotsSync(&self.replay);
+        };
+        defer allocator.free(slot_results);
+        const processed_a_slot = try freezeCompletedSlots(&self.replay, slot_results);
+
+        // run consensus
+        if (self.consensus) |*consensus|
+            try consensus.process(
+                allocator,
+                &self.replay.slot_tracker,
+                &self.replay.epoch_tracker,
+                &self.replay.progress_map,
+                slot_results,
+            )
+        else
+            try bypassConsensus(&self.replay);
+
+        if (!processed_a_slot) try std.Thread.yield();
     }
 };
 
@@ -377,56 +422,6 @@ pub fn initForkChoice(
     }
 
     return heaviest_subtree_fork_choice;
-}
-
-/// Run a single iteration of the entire replay process. Includes:
-/// - replay all active slots that have not been replayed yet
-/// - running consensus on the latest updates (if present)
-fn advanceReplay(state: *ReplayState, maybe_consensus: *?TowerConsensus, multithread: bool) !void {
-    const allocator = state.allocator;
-
-    const zone = tracy.Zone.init(@src(), .{ .name = "advanceReplay" });
-    defer zone.deinit();
-
-    state.logger.debug().log("advancing replay");
-
-    // identify new slots in the ledger
-    try trackNewSlots(
-        allocator,
-        state.logger,
-        state.account_store,
-        &state.ledger.db,
-        &state.slot_tracker,
-        &state.epoch_tracker,
-        &state.slot_tree,
-        state.slot_leaders,
-        &state.hard_forks,
-        &state.progress_map,
-    );
-
-    // execute active slots
-    const slot_results = execution: {
-        break :execution if (multithread)
-            try awaitResults(allocator, try replay.execution.replayActiveSlots(state))
-        else
-            try replay.execution.replayActiveSlotsSync(state);
-    };
-    defer allocator.free(slot_results);
-    const processed_a_slot = try freezeCompletedSlots(state, slot_results);
-
-    // run consensus
-    if (maybe_consensus.*) |*consensus|
-        try consensus.process(
-            allocator,
-            &state.slot_tracker,
-            &state.epoch_tracker,
-            &state.progress_map,
-            slot_results,
-        )
-    else
-        try bypassConsensus(state);
-
-    if (!processed_a_slot) try std.Thread.yield();
 }
 
 /// Identifies new slots in the ledger and starts tracking them in the slot
