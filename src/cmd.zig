@@ -2025,11 +2025,11 @@ fn replayDependencies(
 fn consensusDependencies(
     allocator: std.mem.Allocator,
     gossip_table: ?*sig.sync.RwMux(sig.gossip.GossipTable),
-) !replay.consensus.ConsensusState.ChannelDependencies {
-    const senders: sig.replay.consensus.ConsensusState.Senders = try .create(allocator);
+) !replay.TowerConsensus.Dependencies.External {
+    const senders: sig.replay.TowerConsensus.Senders = try .create(allocator);
     errdefer senders.destroy();
 
-    const receivers: sig.replay.consensus.ConsensusState.Receivers = try .create(allocator);
+    const receivers: sig.replay.TowerConsensus.Receivers = try .create(allocator);
     errdefer receivers.destroy();
 
     return .{

@@ -24,6 +24,8 @@ const SlotState = sig.core.SlotState;
 const SlotConstants = sig.core.SlotConstants;
 const Transaction = sig.core.transaction.Transaction;
 
+const AccountStore = sig.accounts_db.AccountStore;
+
 const LedgerReader = sig.ledger.LedgerReader;
 const LedgerResultWriter = sig.ledger.result_writer.LedgerResultWriter;
 
@@ -37,9 +39,6 @@ const ThresholdConfirmedSlot = sig.consensus.vote_listener.ThresholdConfirmedSlo
 const GossipVerifiedVoteHash = sig.consensus.vote_listener.GossipVerifiedVoteHash;
 const VerifiedVote = sig.consensus.vote_listener.VerifiedVote;
 const VoteListener = sig.consensus.vote_listener.VoteListener;
-
-const AccountStore = sig.accounts_db.AccountStore;
-const LedgerDB = sig.ledger.LedgerDB;
 
 const SlotTracker = sig.replay.trackers.SlotTracker;
 const EpochTracker = sig.replay.trackers.EpochTracker;
@@ -57,9 +56,9 @@ const check_slot_agrees_with_cluster = sig.replay.edge_cases.check_slot_agrees_w
 
 const MAX_VOTE_REFRESH_INTERVAL_MILLIS: usize = 5000;
 
-/// ConsensusState contains all the state and dependencies needed for consensus operations.
-/// It can be initialized with its own dependencies and doesn't need ReplayState.
-pub const ConsensusState = struct {
+/// TowerConsensus contains all the state needed for operating the Tower BFT
+/// consensus mechanism in sig.
+pub const TowerConsensus = struct {
     // Core consensus state
     fork_choice: HeaviestSubtreeForkChoice,
     replay_tower: ReplayTower,
@@ -77,7 +76,7 @@ pub const ConsensusState = struct {
     execution_log_helper: replay.execution.LogHelper,
     vote_listener: VoteListener,
 
-    pub fn deinit(self: *ConsensusState, allocator: Allocator) void {
+    pub fn deinit(self: *TowerConsensus, allocator: Allocator) void {
         self.vote_listener.joinAndDeinit();
         self.replay_tower.deinit(allocator);
         self.fork_choice.deinit();
@@ -87,50 +86,45 @@ pub const ConsensusState = struct {
         self.verified_vote_channel.destroy();
     }
 
-    /// Consolidated dependencies that encapsulate all parameters needed for initialization
+    /// All parameters needed for initialization
     pub const Dependencies = struct {
         // Basic parameters
-        allocator: Allocator,
         logger: Logger,
         my_identity: Pubkey,
         vote_identity: Pubkey,
         root_slot: Slot,
         root_hash: Hash,
 
-        // Services
+        // Data sources
         account_store: AccountStore,
         ledger_reader: *LedgerReader,
         ledger_writer: *sig.ledger.LedgerResultWriter,
-        exit: *AtomicBool,
 
-        // Channels and communication
+        // channels/signals/communication
+        exit: *AtomicBool,
         replay_votes_channel: *Channel(sig.consensus.vote_listener.vote_parser.ParsedVote),
         slot_tracker_rw: *RwMux(SlotTracker),
         epoch_tracker_rw: *RwMux(EpochTracker),
+        external: External,
 
-        // Communication channels
-        senders: Senders,
-        receivers: Receivers,
-        gossip_table: ?*RwMux(sig.gossip.GossipTable),
+        /// Channels that extend outside of replay
+        pub const External = struct {
+            senders: Senders,
+            receivers: Receivers,
+            gossip_table: ?*RwMux(sig.gossip.GossipTable),
+
+            pub fn deinit(self: External) void {
+                self.senders.destroy();
+                self.receivers.destroy();
+            }
+        };
 
         pub fn deinit(self: Dependencies) void {
-            self.senders.destroy();
-            self.receivers.destroy();
+            self.external.deinit();
         }
     };
 
-    /// Minimal dependencies just for communication channels (for compatibility)
-    pub const ChannelDependencies = struct {
-        senders: Senders,
-        receivers: Receivers,
-        gossip_table: ?*RwMux(sig.gossip.GossipTable),
-
-        pub fn deinit(self: ChannelDependencies) void {
-            self.senders.destroy();
-            self.receivers.destroy();
-        }
-    };
-
+    /// Channels where consensus sends messages to other services
     pub const Senders = struct {
         /// Received by repair ancestor_hashes_service
         ancestor_hashes_replay_update: *Channel(AncestorHashesReplayUpdate),
@@ -144,6 +138,7 @@ pub const ConsensusState = struct {
         }
     };
 
+    /// Channels where consensus receives messages from other services
     pub const Receivers = struct {
         /// Sent by repair ancestor_hashes_service
         ancestor_duplicate_slots: *Channel(AncestorDuplicateSlotToRepair),
@@ -193,12 +188,12 @@ pub const ConsensusState = struct {
         }
     };
 
-    pub fn init(deps: Dependencies) !ConsensusState {
-        const zone = tracy.Zone.init(@src(), .{ .name = "ConsensusState.init" });
+    pub fn init(allocator: Allocator, deps: Dependencies) !TowerConsensus {
+        const zone = tracy.Zone.init(@src(), .{ .name = "TowerConsensus.init" });
         defer zone.deinit();
 
         // Initialize fork choice from root
-        var fork_choice = try HeaviestSubtreeForkChoice.init(deps.allocator, .from(deps.logger), .{
+        var fork_choice = try HeaviestSubtreeForkChoice.init(allocator, .from(deps.logger), .{
             .slot = deps.root_slot,
             .hash = deps.root_hash,
         });
@@ -209,7 +204,7 @@ pub const ConsensusState = struct {
         defer slot_tracker_lock.unlock();
 
         const replay_tower: ReplayTower = try .init(
-            deps.allocator,
+            allocator,
             .from(deps.logger),
             deps.my_identity,
             deps.vote_identity,
@@ -217,23 +212,23 @@ pub const ConsensusState = struct {
             deps.account_store.reader()
                 .forSlot(&slot_tracker.get(slot_tracker.root).?.constants.ancestors),
         );
-        errdefer replay_tower.deinit(deps.allocator);
+        errdefer replay_tower.deinit(allocator);
 
         const slot_data_provider: sig.consensus.vote_listener.SlotDataProvider = .{
             .slot_tracker_rw = deps.slot_tracker_rw,
             .epoch_tracker_rw = deps.epoch_tracker_rw,
         };
 
-        const verified_vote_channel = try Channel(VerifiedVote).create(deps.allocator);
+        const verified_vote_channel = try Channel(VerifiedVote).create(allocator);
         errdefer verified_vote_channel.destroy();
 
         const vote_listener: VoteListener = try .init(
-            deps.allocator,
+            allocator,
             .{ .unordered = deps.exit },
             .from(deps.logger),
             .{
                 .slot_data_provider = slot_data_provider,
-                .gossip_table_rw = deps.gossip_table,
+                .gossip_table_rw = deps.external.gossip_table,
                 .ledger_ref = .{
                     .reader = deps.ledger_reader,
                     .writer = deps.ledger_writer,
@@ -241,9 +236,9 @@ pub const ConsensusState = struct {
                 .receivers = .{ .replay_votes_channel = deps.replay_votes_channel },
                 .senders = .{
                     .verified_vote = verified_vote_channel,
-                    .gossip_verified_vote_hash = deps.receivers.gossip_verified_vote_hash,
+                    .gossip_verified_vote_hash = deps.external.receivers.gossip_verified_vote_hash,
                     .bank_notification = null,
-                    .duplicate_confirmed_slot = deps.receivers.duplicate_confirmed_slots,
+                    .duplicate_confirmed_slot = deps.external.receivers.duplicate_confirmed_slots,
                     .subscriptions = .{},
                 },
             },
@@ -256,19 +251,20 @@ pub const ConsensusState = struct {
             .status_cache = .DEFAULT,
             .slot_data = .empty,
             .arena_state = .{},
-            .senders = deps.senders,
-            .receivers = deps.receivers,
+            .senders = deps.external.senders,
+            .receivers = deps.external.receivers,
             .execution_log_helper = .init(.from(deps.logger)),
             .vote_listener = vote_listener,
             .verified_vote_channel = verified_vote_channel,
         };
     }
 
-    /// Run consensus including all phases: process replay results, edge cases, and actual consensus.
-    /// This consolidates everything that was previously split between doConsensus, processConsensus,
-    /// and processResultState.
-    pub fn doConsensus(
-        self: *ConsensusState,
+    /// Run all phases of consensus:
+    /// - process replay results
+    /// - edge cases
+    /// - actual consensus protocol.
+    pub fn process(
+        self: *TowerConsensus,
         allocator: Allocator,
         logger: Logger,
         my_identity: Pubkey,
@@ -308,7 +304,8 @@ pub const ConsensusState = struct {
                 .progress_map = progress_map,
                 .fork_choice = &self.fork_choice,
                 .duplicate_slots_tracker = &self.slot_data.duplicate_slots,
-                .unfrozen_gossip_verified_vote_hashes = &self.slot_data.unfrozen_gossip_verified_vote_hashes,
+                .unfrozen_gossip_verified_vote_hashes = &self
+                    .slot_data.unfrozen_gossip_verified_vote_hashes,
                 .latest_validator_votes = &self.slot_data.latest_validator_votes,
                 .duplicate_confirmed_slots = &self.slot_data.duplicate_confirmed_slots,
                 .epoch_slots_frozen_slots = &self.slot_data.epoch_slots_frozen_slots,
@@ -365,7 +362,6 @@ pub const ConsensusState = struct {
             break :edge_cases_and_ancestors_descendants .{ ancestors, descendants };
         };
 
-        // Run the actual consensus logic (consolidated from processConsensus)
         const slot_history_accessor = SlotHistoryAccessor.init(account_store.reader());
 
         const epoch_tracker, var epoch_tracker_lg = epoch_tracker_rw.readWithLock();
@@ -374,8 +370,7 @@ pub const ConsensusState = struct {
         const slot_tracker_mut, var slot_tracker_mut_lg = slot_tracker_rw.writeWithLock();
         defer slot_tracker_mut_lg.unlock();
 
-        // Consolidated consensus processing (previously processConsensus)
-        try self.processConsensusLogic(
+        try self.executeProtocol(
             allocator,
             logger,
             &ancestors,
@@ -392,9 +387,9 @@ pub const ConsensusState = struct {
         return processed_a_slot;
     }
 
-    /// Internal consolidated consensus logic (previously processConsensus)
-    fn processConsensusLogic(
-        self: *ConsensusState,
+    /// runs the core consensus protocol: select fork, vote, and update internal state
+    fn executeProtocol(
+        self: *TowerConsensus,
         allocator: Allocator,
         logger: Logger,
         ancestors: *const std.AutoArrayHashMapUnmanaged(Slot, Ancestors),
