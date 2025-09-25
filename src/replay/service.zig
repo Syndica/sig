@@ -671,7 +671,7 @@ fn advanceReplay(state: *ReplayState, maybe_consensus: *?ConsensusState, multith
     else
         try bypassConsensus(state, slot_results);
 
-    if (!processed_a_slot) std.time.sleep(100 * std.time.ns_per_ms);
+    if (!processed_a_slot) std.time.sleep(0);
 }
 
 /// Run *all* consensus code, including:

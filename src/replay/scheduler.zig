@@ -198,11 +198,11 @@ pub const TransactionScheduler = struct {
         self.batches.appendAssumeCapacity(batch);
     }
 
-    pub fn poll(self: *TransactionScheduler) !ConfirmSlotStatus {
-        // collect results
+    fn collectResults(self: *TransactionScheduler) void {
         while (self.results.tryReceive()) |message| {
             assert(0 == self.locks.unlock(self.batches.items[message.batch_index].accounts));
             self.batches_finished += 1;
+            tracy.plot(u32, "batches_finished", @intCast(self.batches_started));
             switch (message.result) {
                 .success => {},
                 .failure => |err| {
@@ -212,11 +212,23 @@ pub const TransactionScheduler = struct {
                 .exit => {},
             }
         }
+    }
+
+    pub fn poll(self: *TransactionScheduler) !ConfirmSlotStatus {
+        self.collectResults();
 
         // process results
         switch (self.thread_pool.pollFallible()) {
             .done => {
-                assert(self.batches_started == self.batches_finished);
+                if (self.batches_started > self.batches_finished) {
+                    self.collectResults(); // collect results again
+                }
+
+                if (self.batches_started != self.batches_finished) std.debug.panic(
+                    "batches started: {}, batches finished: {}\n",
+                    .{ self.batches_started, self.batches_finished },
+                );
+
                 if (self.failure) |f| {
                     return .{ .done = f };
                 } else if (self.batches.items.len != self.batches_started) {
@@ -267,6 +279,7 @@ pub const TransactionScheduler = struct {
                 .exit = self.exit,
             }));
             self.batches_started += 1;
+            tracy.plot(u32, "batches_started", @intCast(self.batches_started));
         }
         return null;
     }

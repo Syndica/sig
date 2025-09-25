@@ -65,7 +65,7 @@ pub fn replayActiveSlots(state: ReplayExecutionState) ![]struct { Slot, *Confirm
 
     const active_slots = try state.slot_tracker.activeSlots(state.allocator);
     defer state.allocator.free(active_slots);
-    state.log_helper.logActiveSlots(active_slots, state.allocator);
+    state.log_helper.logActiveSlots(active_slots);
 
     if (active_slots.len == 0) {
         return &.{};
@@ -140,7 +140,7 @@ pub fn replayActiveSlotsSync(state: ReplayExecutionState) ![]const ReplayResult 
 
     const active_slots = try state.slot_tracker.activeSlots(allocator);
     defer allocator.free(active_slots);
-    state.log_helper.logActiveSlots(active_slots, allocator);
+    state.log_helper.logActiveSlots(active_slots);
 
     if (active_slots.len == 0) {
         return &.{};
@@ -185,19 +185,11 @@ pub const LogHelper = struct {
         };
     }
 
-    /// takes ownership of active_slots,
-    pub fn logActiveSlots(
-        self: *LogHelper,
-        active_slots: []const u64,
-        deinit_allocator: Allocator,
-    ) void {
+    pub fn logActiveSlots(self: *LogHelper, active_slots: []const u64) void {
         self.slots_are_the_same = if (self.last_active_slots) |last_slots|
             std.mem.eql(u64, active_slots, last_slots)
         else
             false;
-
-        if (self.last_active_slots) |slots| deinit_allocator.free(slots);
-        self.last_active_slots = active_slots;
 
         self.logger
             .entry(if (self.slots_are_the_same) .debug else .info)
