@@ -390,6 +390,7 @@ fn advanceReplay(state: *ReplayState, maybe_consensus: *?TowerConsensus, multith
 
     state.logger.debug().log("advancing replay");
 
+    // identify new slots in the ledger
     try trackNewSlots(
         allocator,
         state.logger,
@@ -403,6 +404,7 @@ fn advanceReplay(state: *ReplayState, maybe_consensus: *?TowerConsensus, multith
         &state.progress_map,
     );
 
+    // execute active slots
     const slot_results = execution: {
         break :execution if (multithread)
             try awaitResults(allocator, try replay.execution.replayActiveSlots(state))
@@ -410,8 +412,10 @@ fn advanceReplay(state: *ReplayState, maybe_consensus: *?TowerConsensus, multith
             try replay.execution.replayActiveSlotsSync(state);
     };
     defer allocator.free(slot_results);
+    const processed_a_slot = try freezeCompletedSlots(state, slot_results);
 
-    const processed_a_slot = if (maybe_consensus.*) |*consensus|
+    // run consensus
+    if (maybe_consensus.*) |*consensus|
         try consensus.process(
             allocator,
             &state.slot_tracker,
@@ -420,14 +424,13 @@ fn advanceReplay(state: *ReplayState, maybe_consensus: *?TowerConsensus, multith
             slot_results,
         )
     else
-        try bypassConsensus(state, slot_results);
+        try bypassConsensus(state);
 
-    if (!processed_a_slot) std.time.sleep(100 * std.time.ns_per_ms);
+    if (!processed_a_slot) try std.Thread.yield();
 }
 
-/// bypass executing consensus, simply freezing slots and counting how many were
-/// completed.
-fn bypassConsensus(state: *ReplayState, results: []const ReplayResult) !bool {
+/// freezes any slots that were completed according to these replay results
+fn freezeCompletedSlots(state: *ReplayState, results: []const ReplayResult) !bool {
     const epoch_tracker, var epoch_tracker_lg = state.epoch_tracker.readWithLock();
     defer epoch_tracker_lg.unlock();
 
@@ -464,6 +467,11 @@ fn bypassConsensus(state: *ReplayState, results: []const ReplayResult) !bool {
         };
     }
 
+    return processed_a_slot;
+}
+
+/// bypass the tower bft consensus protocol, simply rooting slots with SlotTree.reRoot
+fn bypassConsensus(state: *ReplayState) !void {
     if (state.slot_tree.reRoot(state.allocator)) |new_root| {
         const slot_tracker, var slot_tracker_lg = state.slot_tracker.writeWithLock();
         defer slot_tracker_lg.unlock();
@@ -472,8 +480,6 @@ fn bypassConsensus(state: *ReplayState, results: []const ReplayResult) !bool {
         slot_tracker.root = new_root;
         slot_tracker.pruneNonRooted(state.allocator);
     }
-
-    return processed_a_slot;
 }
 
 /// Identifies new slots in the ledger and starts tracking them in the slot
@@ -952,11 +958,6 @@ test "process runs without error with no replay results" {
         &service.replay.progress_map,
         &.{},
     );
-
-    _, var slot_lock, var epoch_lock =
-        processResultState(&service.replay, &service.consensus.?);
-    slot_lock.unlock();
-    epoch_lock.unlock();
 
     dep_stubs.exit.store(true, .monotonic);
 }

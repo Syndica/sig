@@ -46,7 +46,7 @@ const SlotData = sig.replay.consensus.edge_cases.SlotData;
 const AncestorDuplicateSlotToRepair = replay.consensus.edge_cases.AncestorDuplicateSlotToRepair;
 
 const ReplayResult = replay.execution.ReplayResult;
-const ProcessResultState = replay.consensus.process_result.ProcessResultState;
+const ProcessResultParams = replay.consensus.process_result.ProcessResultParams;
 
 const processResult = replay.consensus.process_result.processResult;
 
@@ -282,7 +282,7 @@ pub const TowerConsensus = struct {
         epoch_tracker_rw: *RwMux(EpochTracker),
         progress_map: *ProgressMap,
         results: []const ReplayResult,
-    ) !bool {
+    ) !void {
         var arena_state = self.arena_state.promote(allocator);
         defer {
             _ = arena_state.reset(.retain_capacity);
@@ -290,16 +290,11 @@ pub const TowerConsensus = struct {
         }
         const arena = arena_state.allocator();
 
-        var processed_a_slot = false;
-
-        // Process replay results using our internal processResultState logic
         for (results) |result| {
             const slot_tracker, var slot_lock = slot_tracker_rw.readWithLock();
             defer slot_lock.unlock();
-            const epoch_tracker, var epoch_lock = epoch_tracker_rw.readWithLock();
-            defer epoch_lock.unlock();
 
-            const process_state: ProcessResultState = .{
+            const process_state: ProcessResultParams = .{
                 .allocator = allocator,
                 .logger = .from(self.logger),
                 .my_identity = self.my_identity,
@@ -307,7 +302,6 @@ pub const TowerConsensus = struct {
                 .ledger_reader = self.ledger_reader,
                 .ledger_result_writer = self.ledger_writer,
                 .slot_tracker = slot_tracker,
-                .epoch_tracker = epoch_tracker,
                 .progress_map = progress_map,
                 .fork_choice = &self.fork_choice,
                 .duplicate_slots_tracker = &self.slot_data.duplicate_slots,
@@ -321,9 +315,7 @@ pub const TowerConsensus = struct {
                 .ancestor_hashes_replay_update_sender = self.senders.ancestor_hashes_replay_update,
             };
 
-            if (try processResult(process_state, result)) {
-                processed_a_slot = true;
-            }
+            try processResult(process_state, result);
         }
 
         // Process edge cases and prepare ancestors/descendants
@@ -387,8 +379,6 @@ pub const TowerConsensus = struct {
             &slot_history_accessor,
             self.my_identity, // vote_account
         );
-
-        return processed_a_slot;
     }
 
     /// runs the core consensus protocol: select fork, vote, and update internal state
