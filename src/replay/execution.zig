@@ -22,8 +22,6 @@ const SvmGateway = replay.svm_gateway.SvmGateway;
 
 const Logger = sig.trace.Logger("replay.execution");
 
-const vote_listener = sig.consensus.vote_listener;
-
 const confirmSlot = replay.confirm_slot.confirmSlot;
 const confirmSlotSync = replay.confirm_slot.confirmSlotSync;
 
