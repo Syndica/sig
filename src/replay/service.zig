@@ -953,6 +953,11 @@ test "process runs without error with no replay results" {
         &.{},
     );
 
+    _, var slot_lock, var epoch_lock =
+        processResultState(&service.replay, &service.consensus.?);
+    slot_lock.unlock();
+    epoch_lock.unlock();
+
     dep_stubs.exit.store(true, .monotonic);
 }
 
