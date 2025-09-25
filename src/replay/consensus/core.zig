@@ -60,6 +60,9 @@ const MAX_VOTE_REFRESH_INTERVAL_MILLIS: usize = 5000;
 /// TowerConsensus contains all the state needed for operating the Tower BFT
 /// consensus mechanism in sig.
 pub const TowerConsensus = struct {
+    logger: Logger,
+    my_identity: Pubkey,
+
     // Core consensus state
     fork_choice: HeaviestSubtreeForkChoice,
     replay_tower: ReplayTower,
@@ -68,14 +71,18 @@ pub const TowerConsensus = struct {
     slot_data: SlotData,
     arena_state: std.heap.ArenaAllocator.State,
 
+    // Data sources
+    account_store: AccountStore,
+    ledger_reader: *LedgerReader,
+    ledger_writer: *sig.ledger.LedgerResultWriter,
+
     // Communication channels
     senders: Senders,
     receivers: Receivers,
     verified_vote_channel: *Channel(VerifiedVote),
 
     // Supporting services
-    execution_log_helper: replay.execution.LogHelper,
-    vote_listener: VoteListener,
+    vote_listener: ?VoteListener,
 
     pub fn deinit(self: *TowerConsensus, allocator: Allocator) void {
         self.vote_listener.joinAndDeinit();
@@ -252,9 +259,13 @@ pub const TowerConsensus = struct {
             .status_cache = .DEFAULT,
             .slot_data = .empty,
             .arena_state = .{},
+            .logger = deps.logger,
+            .my_identity = deps.my_identity,
+            .account_store = deps.account_store,
+            .ledger_reader = deps.ledger_reader,
+            .ledger_writer = deps.ledger_writer,
             .senders = deps.external.senders,
             .receivers = deps.external.receivers,
-            .execution_log_helper = .init(.from(deps.logger)),
             .vote_listener = vote_listener,
             .verified_vote_channel = verified_vote_channel,
         };
@@ -267,11 +278,6 @@ pub const TowerConsensus = struct {
     pub fn process(
         self: *TowerConsensus,
         allocator: Allocator,
-        logger: Logger,
-        my_identity: Pubkey,
-        account_store: AccountStore,
-        ledger_reader: *LedgerReader,
-        ledger_writer: *sig.ledger.LedgerResultWriter,
         slot_tracker_rw: *RwMux(SlotTracker),
         epoch_tracker_rw: *RwMux(EpochTracker),
         progress_map: *ProgressMap,
@@ -295,11 +301,11 @@ pub const TowerConsensus = struct {
 
             const process_state: ProcessResultState = .{
                 .allocator = allocator,
-                .logger = .from(logger),
-                .my_identity = my_identity,
-                .account_store = account_store,
-                .ledger_reader = ledger_reader,
-                .ledger_result_writer = ledger_writer,
+                .logger = .from(self.logger),
+                .my_identity = self.my_identity,
+                .account_store = self.account_store,
+                .ledger_reader = self.ledger_reader,
+                .ledger_result_writer = self.ledger_writer,
                 .slot_tracker = slot_tracker,
                 .epoch_tracker = epoch_tracker,
                 .progress_map = progress_map,
@@ -325,11 +331,11 @@ pub const TowerConsensus = struct {
             const slot_tracker, var slot_tracker_lg = slot_tracker_rw.readWithLock();
             defer slot_tracker_lg.unlock();
 
-            _ = try replay.consensus.edge_cases.processEdgeCases(allocator, .from(logger), .{
-                .my_pubkey = my_identity,
+            _ = try replay.consensus.edge_cases.processEdgeCases(allocator, .from(self.logger), .{
+                .my_pubkey = self.my_identity,
                 .tpu_has_bank = false,
                 .fork_choice = &self.fork_choice,
-                .ledger = ledger_writer,
+                .ledger = self.ledger_writer,
                 .slot_tracker = slot_tracker,
                 .progress = progress_map,
                 .latest_validator_votes = &self.latest_validator_votes,
@@ -363,7 +369,7 @@ pub const TowerConsensus = struct {
             break :edge_cases_and_ancestors_descendants .{ ancestors, descendants };
         };
 
-        const slot_history_accessor = SlotHistoryAccessor.init(account_store.reader());
+        const slot_history_accessor = SlotHistoryAccessor.init(self.account_store.reader());
 
         const epoch_tracker, var epoch_tracker_lg = epoch_tracker_rw.readWithLock();
         defer epoch_tracker_lg.unlock();
@@ -373,16 +379,13 @@ pub const TowerConsensus = struct {
 
         try self.executeProtocol(
             allocator,
-            logger,
             &ancestors,
             &descendants,
             slot_tracker_mut,
             epoch_tracker,
             progress_map,
-            ledger_reader,
-            ledger_writer,
             &slot_history_accessor,
-            my_identity, // vote_account
+            self.my_identity, // vote_account
         );
 
         return processed_a_slot;
@@ -392,14 +395,11 @@ pub const TowerConsensus = struct {
     fn executeProtocol(
         self: *TowerConsensus,
         allocator: Allocator,
-        logger: Logger,
         ancestors: *const std.AutoArrayHashMapUnmanaged(Slot, Ancestors),
         descendants: *const std.AutoArrayHashMapUnmanaged(Slot, SortedSetUnmanaged(Slot)),
         slot_tracker: *SlotTracker,
         epoch_tracker: *const EpochTracker,
         progress_map: *ProgressMap,
-        _: *LedgerReader,
-        ledger_result_writer: *LedgerResultWriter,
         slot_history_accessor: *const SlotHistoryAccessor,
         vote_account: Pubkey,
     ) !void {
@@ -414,7 +414,7 @@ pub const TowerConsensus = struct {
 
         const newly_computed_slot_stats = try computeBankStats(
             allocator,
-            logger,
+            self.logger,
             vote_account,
             ancestors,
             slot_tracker,
@@ -492,7 +492,7 @@ pub const TowerConsensus = struct {
                     .noop,
                     slot,
                     root_slot,
-                    ledger_result_writer,
+                    self.ledger_writer,
                     &self.fork_choice,
                     &self.slot_data.duplicate_slots_to_repair,
                     self.senders.ancestor_hashes_replay_update,
@@ -556,7 +556,7 @@ pub const TowerConsensus = struct {
 
             try handleVotableBank(
                 allocator,
-                ledger_result_writer,
+                self.ledger_writer,
                 voted.slot,
                 voted_hash,
                 slot_tracker,
