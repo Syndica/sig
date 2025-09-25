@@ -15,5 +15,5 @@ pub const trackers = @import("trackers.zig");
 pub const update_sysvar = @import("update_sysvar.zig");
 
 pub const Dependencies = service.Dependencies;
-pub const ConsensusState = service.ConsensusState;
+pub const ConsensusState = consensus.ConsensusState;
 pub const Service = service.Service;
