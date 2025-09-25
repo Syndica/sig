@@ -1,5 +1,6 @@
-pub const std = @import("std");
-pub const sig = @import("../sig.zig");
+const std = @import("std");
+const builtin = @import("builtin");
+const sig = @import("../sig.zig");
 
 const Allocator = std.mem.Allocator;
 const Hash = sig.core.hash.Hash;
@@ -27,6 +28,7 @@ pub const Entry = struct {
     }
 
     pub fn clone(self: Entry, allocator: std.mem.Allocator) Allocator.Error!Entry {
+        if (!builtin.is_test) @compileError("only for tests");
         const transactions = try allocator.dupe(Transaction, self.transactions);
         errdefer allocator.free(transactions);
         for (transactions, 0..) |*txn, i| {
