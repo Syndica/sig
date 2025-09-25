@@ -1495,6 +1495,9 @@ pub const AccountsDB = struct {
         std.fs.File,
         FileId,
     } {
+        const zone = tracy.Zone.init(@src(), .{ .name = "createAccountFile" });
+        defer zone.deinit();
+
         self.largest_file_id = self.largest_file_id.increment();
         const file_id = self.largest_file_id;
 
@@ -2392,6 +2395,9 @@ pub const AccountsDB = struct {
         zstd_buffer: []u8,
         params: FullSnapshotGenParams,
     ) !GenerateFullSnapshotResult {
+        const zone = tracy.Zone.init(@src(), .{ .name = "generateFullSnapshotWithCompressor" });
+        defer zone.deinit();
+
         // NOTE: we hold the lock for the rest of the duration of the procedure to ensure
         // flush and clean do not create files while generating a snapshot.
         self.file_map_fd_rw.lockShared();
