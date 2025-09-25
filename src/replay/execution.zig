@@ -232,7 +232,7 @@ fn replaySlot(state: ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
     // process. I don't think it matters that we're doing it all eagerly, but
     // it's worth reconsidering once we introduce actual locking here and flesh
     // out more usages of this struct.
-    const confirmation_progress = &fork_progress.replay_progress.arc_ed.rwlock_ed;
+    const confirmation_progress = &fork_progress.replay_progress;
 
     const previous_last_entry = confirmation_progress.last_entry;
     const entries, const slot_is_full = blk: {
