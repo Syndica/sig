@@ -217,7 +217,7 @@ pub fn createTransactionContextAccounts(
             .data = account_data,
             .owner = .{ .data = pb_account.owner.getSlice()[0..Pubkey.SIZE].* },
             .executable = pb_account.executable,
-            .rent_epoch = pb_account.rent_epoch,
+            .rent_epoch = sig.core.rent_collector.RENT_EXEMPT_RENT_EPOCH,
         };
 
         try accounts.append(
@@ -470,7 +470,6 @@ fn modifiedAccounts(
                 allocator,
             ),
             .executable = acc.account.executable,
-            .rent_epoch = acc.account.rent_epoch,
             .owner = try ManagedString.copy(
                 &acc.account.owner.data,
                 allocator,
@@ -589,7 +588,6 @@ pub fn printPbInstrContext(ctx: pb.InstrContext) !void {
         try std.fmt.format(writer, ",\n\t\t\tlamports: {d}", .{acc.lamports});
         try std.fmt.format(writer, ",\n\t\t\tdata.len: {any}", .{acc.data.getSlice().len});
         try std.fmt.format(writer, ",\n\t\t\texecutable: {}", .{acc.executable});
-        try std.fmt.format(writer, ",\n\t\t\trent_epoch: {}", .{acc.rent_epoch});
         try std.fmt.format(writer, ",\n\t\t\towner: {any}", .{
             Pubkey{ .data = acc.owner.getSlice()[0..Pubkey.SIZE].* },
         });
@@ -625,7 +623,6 @@ pub fn printPbInstrEffects(effects: pb.InstrEffects) !void {
         try std.fmt.format(writer, ",\n\t\t\tlamports: {d}", .{acc.lamports});
         try std.fmt.format(writer, ",\n\t\t\tdata: {any}", .{acc.data.getSlice()});
         try std.fmt.format(writer, ",\n\t\t\texecutable: {}", .{acc.executable});
-        try std.fmt.format(writer, ",\n\t\t\trent_epoch: {}", .{acc.rent_epoch});
         try std.fmt.format(writer, ",\n\t\t\towner: {}", .{
             Pubkey{ .data = acc.owner.getSlice()[0..Pubkey.SIZE].* },
         });

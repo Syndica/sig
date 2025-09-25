@@ -25,20 +25,20 @@ pub const AccountRef = struct {
     pub const ZEROES: AccountRef = .{
         .pubkey = Pubkey.ZEROES,
         .slot = 0,
-        .location = .{ .UnrootedMap = .{ .index = 0 } },
+        .location = .{ .unrooted_map = .{ .index = 0 } },
         .next_ptr = null,
         .prev_ptr = null,
     };
 
     /// Analogous to [StorageLocation](https://github.com/anza-xyz/agave/blob/b47a4ec74d85dae0b6d5dd24a13a8923240e03af/accounts-db/src/account_info.rs#L23)
     pub const AccountLocation = union(enum(u8)) {
-        File: struct {
+        file: struct {
             file_id: FileId,
             offset: u64,
 
             pub const @"!bincode-config:file_id" = FileId.BincodeConfig;
         },
-        UnrootedMap: struct {
+        unrooted_map: struct {
             index: u64,
         },
     };
@@ -670,28 +670,28 @@ test "account index update/remove reference" {
     }
 
     // update the tail
-    try std.testing.expect(ref_b.location == .UnrootedMap);
+    try std.testing.expect(ref_b.location == .unrooted_map);
     var ref_b2 = ref_b;
-    ref_b2.location = .{ .File = .{
+    ref_b2.location = .{ .file = .{
         .file_id = FileId.fromInt(@intCast(1)),
         .offset = 10,
     } };
     try index.updateReference(&ref_b.pubkey, 1, &ref_b2);
     {
         const ref = index.getReferenceSlotCopy(&ref_a.pubkey, 1).?;
-        try std.testing.expect(ref.location == .File);
+        try std.testing.expect(ref.location == .file);
     }
 
     // update the head
     var ref_a2 = ref_a;
-    ref_a2.location = .{ .File = .{
+    ref_a2.location = .{ .file = .{
         .file_id = FileId.fromInt(1),
         .offset = 20,
     } };
     try index.updateReference(&ref_a.pubkey, 0, &ref_a2);
     {
         const ref = index.getReferenceSlotCopy(&ref_a.pubkey, 0).?;
-        try std.testing.expect(ref.location == .File);
+        try std.testing.expect(ref.location == .file);
     }
 
     // remove the head

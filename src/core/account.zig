@@ -100,10 +100,10 @@ pub const Account = struct {
         hashAccount(
             self.lamports,
             &iter,
-            &self.owner.data,
+            &self.owner,
             self.executable,
             if (include_rent_epoch) self.rent_epoch else null,
-            &pubkey.data,
+            &pubkey,
             the_hash.bytes(),
         );
 
@@ -111,7 +111,7 @@ pub const Account = struct {
     }
 
     /// writes account to buf in snapshot format
-    pub fn writeToBuf(self: *const Account, pubkey: *const Pubkey, buf: []u8) usize {
+    pub fn serialize(self: *const Account, pubkey: *const Pubkey, buf: []u8) usize {
         var offset: usize = 0;
 
         const storage_info = AccountInFile.StorageInfo{
@@ -119,7 +119,7 @@ pub const Account = struct {
             .data_len = self.data.len(),
             .pubkey = pubkey.*,
         };
-        offset += storage_info.writeToBuf(buf[offset..]);
+        offset += storage_info.serialize(buf[offset..]);
 
         const account_info = AccountInFile.AccountInfo{
             .lamports = self.lamports,
@@ -127,7 +127,7 @@ pub const Account = struct {
             .owner = self.owner,
             .executable = self.executable,
         };
-        offset += account_info.writeToBuf(buf[offset..]);
+        offset += account_info.serialize(buf[offset..]);
 
         const account_hash = self.hash(pubkey.*);
         @memcpy(buf[offset..(offset + 32)], &account_hash.data);
@@ -157,10 +157,10 @@ pub fn writeIntLittleMem(
 pub fn hashAccount(
     lamports: u64,
     data: *AccountDataHandle.Iterator,
-    owner_pubkey_data: []const u8,
+    owner_pubkey: *const Pubkey,
     executable: bool,
     maybe_rent_epoch: ?u64,
-    address_pubkey_data: []const u8,
+    address_pubkey: *const Pubkey,
     out_slice: []u8,
 ) void {
     var hasher = Blake3.init(.{});
@@ -184,8 +184,8 @@ pub fn hashAccount(
         hasher.update(&[_]u8{0});
     }
 
-    hasher.update(owner_pubkey_data);
-    hasher.update(address_pubkey_data);
+    hasher.update(&owner_pubkey.data);
+    hasher.update(&address_pubkey.data);
 
     hasher.final(out_slice);
 }
