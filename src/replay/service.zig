@@ -9,7 +9,6 @@ const Channel = sig.sync.Channel;
 const RwMux = sig.sync.RwMux;
 const ThreadPool = sig.sync.ThreadPool;
 
-const Ancestors = sig.core.Ancestors;
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 const SlotLeaders = sig.core.leader_schedule.SlotLeaders;
@@ -23,18 +22,9 @@ const LedgerReader = sig.ledger.LedgerReader;
 
 const ProgressMap = sig.consensus.ProgressMap;
 const HeaviestSubtreeForkChoice = sig.consensus.HeaviestSubtreeForkChoice;
-const AncestorHashesReplayUpdate = replay.consensus.AncestorHashesReplayUpdate;
-const ConsensusState = replay.consensus.ConsensusState;
-const AncestorDuplicateSlotToRepair = replay.edge_cases.AncestorDuplicateSlotToRepair;
-const ThresholdConfirmedSlot = sig.consensus.vote_listener.ThresholdConfirmedSlot;
-const GossipVerifiedVoteHash = sig.consensus.vote_listener.GossipVerifiedVoteHash;
+const TowerConsensus = replay.consensus.TowerConsensus;
 const ParsedVote = sig.consensus.vote_listener.vote_parser.ParsedVote;
-const LatestValidatorVotes = sig.consensus.latest_validator_votes.LatestValidatorVotes;
-const SlotHistoryAccessor = sig.consensus.replay_tower.SlotHistoryAccessor;
-const VerifiedVote = sig.consensus.vote_listener.VerifiedVote;
-const VoteListener = sig.consensus.vote_listener.VoteListener;
 
-const ProcessResultState = replay.process_result.ProcessResultState;
 const ReplayExecutionState = replay.execution.ReplayExecutionState;
 const ReplayResult = replay.execution.ReplayResult;
 
@@ -43,7 +33,6 @@ const SlotTracker = replay.trackers.SlotTracker;
 const SlotTree = replay.trackers.SlotTree;
 
 const awaitResults = replay.execution.awaitResults;
-const processResult = replay.process_result.processResult;
 const updateSysvarsForNewSlot = replay.update_sysvar.updateSysvarsForNewSlot;
 
 const LatestValidatorVotesForFrozenSlots =
@@ -58,24 +47,23 @@ pub const DUPLICATE_THRESHOLD: f64 = 1.0 - SWITCH_FORK_THRESHOLD - DUPLICATE_LIV
 
 pub const Service = struct {
     replay: ReplayState,
-    consensus: ?ConsensusState,
+    consensus: ?TowerConsensus,
     num_threads: u32,
 
     pub fn init(
         deps: *Dependencies,
-        enable_consensus: ?ConsensusState.ChannelDependencies,
+        enable_consensus: ?TowerConsensus.Dependencies.External,
         num_threads: u32,
     ) !Service {
         var state = try ReplayState.init(deps, num_threads);
         errdefer state.deinit();
 
-        var consensus: ?ConsensusState = if (enable_consensus) |consensus_deps| blk: {
+        var consensus: ?TowerConsensus = if (enable_consensus) |consensus_deps| blk: {
             const slot_tracker, var slot_tracker_lock = state.slot_tracker.readWithLock();
             defer slot_tracker_lock.unlock();
 
-            // Build the consolidated dependencies for ConsensusState
-            const consensus_state_deps: ConsensusState.Dependencies = .{
-                .allocator = deps.allocator,
+            // Build the consolidated dependencies for TowerConsensus
+            const consensus_state_deps: TowerConsensus.Dependencies = .{
                 .logger = .from(deps.logger),
                 .my_identity = deps.my_identity,
                 .vote_identity = deps.vote_identity,
@@ -88,12 +76,10 @@ pub const Service = struct {
                 .replay_votes_channel = state.replay_votes_channel,
                 .slot_tracker_rw = &state.slot_tracker,
                 .epoch_tracker_rw = &state.epoch_tracker,
-                .senders = consensus_deps.senders,
-                .receivers = consensus_deps.receivers,
-                .gossip_table = consensus_deps.gossip_table,
+                .external = consensus_deps,
             };
 
-            break :blk try ConsensusState.init(consensus_state_deps);
+            break :blk try TowerConsensus.init(deps.allocator, consensus_state_deps);
         } else null;
         errdefer if (consensus) |*c| c.deinit(deps.allocator);
 
@@ -427,7 +413,7 @@ pub fn initForkChoice(
 /// Run a single iteration of the entire replay process. Includes:
 /// - replay all active slots that have not been replayed yet
 /// - running consensus on the latest updates (if present)
-fn advanceReplay(state: *ReplayState, maybe_consensus: *?ConsensusState, multithread: bool) !void {
+fn advanceReplay(state: *ReplayState, maybe_consensus: *?TowerConsensus, multithread: bool) !void {
     const allocator = state.allocator;
 
     const zone = tracy.Zone.init(@src(), .{ .name = "advanceReplay" });
@@ -461,7 +447,7 @@ fn advanceReplay(state: *ReplayState, maybe_consensus: *?ConsensusState, multith
     defer allocator.free(slot_results);
 
     const processed_a_slot = if (maybe_consensus.*) |*consensus|
-        try consensus.doConsensus(
+        try consensus.process(
             allocator,
             .from(state.logger),
             state.my_identity,
@@ -988,7 +974,7 @@ test "Service clean init and deinit" {
     try std.testing.checkAllAllocationFailures(std.testing.allocator, ns.run, .{});
 }
 
-test "doConsensus runs without error with no replay results" {
+test "process runs without error with no replay results" {
     const allocator = std.testing.allocator;
 
     var dep_stubs = try DependencyStubs.init(allocator, .FOR_TESTS);
@@ -999,7 +985,7 @@ test "doConsensus runs without error with no replay results" {
 
     // TODO: run consensus in the tests that actually execute blocks for better
     // coverage. currently consensus panics or hangs if you run it with actual data
-    _ = try service.consensus.?.doConsensus(
+    _ = try service.consensus.?.process(
         allocator,
         .FOR_TESTS,
         service.replay.my_identity,
@@ -1197,8 +1183,8 @@ const DependencyStubs = struct {
     dir: std.testing.TmpDir,
     ledger_path: []const u8,
     ledger: sig.ledger.UnifiedLedger,
-    senders: ConsensusState.Senders,
-    receivers: ConsensusState.Receivers,
+    senders: TowerConsensus.Senders,
+    receivers: TowerConsensus.Receivers,
 
     fn deinit(self: *DependencyStubs, allocator: Allocator) void {
         self.accountsdb.deinit();
@@ -1229,10 +1215,10 @@ const DependencyStubs = struct {
             .init(allocator, .from(logger), ledger_path, &registry, &exit, null);
         errdefer ledger.deinit(allocator);
 
-        var senders = try ConsensusState.Senders.create(allocator);
+        var senders = try TowerConsensus.Senders.create(allocator);
         errdefer senders.destroy();
 
-        var receivers = try ConsensusState.Receivers.create(allocator);
+        var receivers = try TowerConsensus.Receivers.create(allocator);
         errdefer receivers.destroy();
 
         return .{
@@ -1310,7 +1296,7 @@ const DependencyStubs = struct {
         };
         defer deps.deinit(allocator);
 
-        const consensus_deps = ConsensusState.ChannelDependencies{
+        const consensus_deps = TowerConsensus.Dependencies.External{
             .senders = self.senders,
             .receivers = self.receivers,
             .gossip_table = null,
