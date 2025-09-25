@@ -204,16 +204,16 @@ pub const TowerConsensus = struct {
         const zone = tracy.Zone.init(@src(), .{ .name = "TowerConsensus.init" });
         defer zone.deinit();
 
-        // Initialize fork choice from root
-        var fork_choice = try HeaviestSubtreeForkChoice.init(allocator, .from(deps.logger), .{
-            .slot = deps.root_slot,
-            .hash = deps.root_hash,
-        });
-        errdefer fork_choice.deinit();
-
-        // Initialize replay tower
         const slot_tracker, var slot_tracker_lock = deps.slot_tracker_rw.readWithLock();
         defer slot_tracker_lock.unlock();
+
+        var fork_choice = try initForkChoice(
+            allocator,
+            deps.logger,
+            slot_tracker,
+            deps.ledger_reader,
+        );
+        errdefer fork_choice.deinit();
 
         const replay_tower: ReplayTower = try .init(
             allocator,
@@ -273,6 +273,78 @@ pub const TowerConsensus = struct {
             .vote_listener = vote_listener,
             .verified_vote_channel = verified_vote_channel,
         };
+    }
+
+    /// Analogous to [`initialize_progress_and_fork_choice_with_locked_bank_forks`](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/replay_stage.rs#L637)
+    pub fn initForkChoice(
+        allocator: std.mem.Allocator,
+        logger: Logger,
+        slot_tracker: *const SlotTracker,
+        ledger_reader: *LedgerReader,
+    ) !HeaviestSubtreeForkChoice {
+        const root_slot, const root_hash = blk: {
+            const root = slot_tracker.getRoot();
+            const root_slot = slot_tracker.root;
+            const root_hash = root.state.hash.readCopy();
+            break :blk .{ root_slot, root_hash.? };
+        };
+
+        var frozen_slots = try slot_tracker.frozenSlots(allocator);
+        defer frozen_slots.deinit(allocator);
+
+        frozen_slots.sort(replay.service.FrozenSlotsSortCtx{ .slots = frozen_slots.keys() });
+
+        // Given a root and a list of `frozen_slots` sorted smallest to greatest by slot,
+        // initialize a new HeaviestSubtreeForkChoice
+        //
+        // Analogous to [`new_from_frozen_banks`](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/consensus/heaviest_subtree_fork_choice.rs#L235)
+        var heaviest_subtree_fork_choice = fork_choice: {
+            var heaviest_subtree_fork_choice: HeaviestSubtreeForkChoice =
+                try .init(allocator, .from(logger), .{
+                    .slot = root_slot,
+                    .hash = root_hash,
+                });
+
+            var prev_slot = root_slot;
+            for (frozen_slots.keys(), frozen_slots.values()) |slot, info| {
+                const frozen_hash = info.state.hash.readCopy().?;
+                if (slot > root_slot) {
+                    // Make sure the list is sorted
+                    std.debug.assert(slot > prev_slot);
+                    prev_slot = slot;
+                    const parent_bank_hash = info.constants.parent_hash;
+                    try heaviest_subtree_fork_choice.addNewLeafSlot(
+                        .{ .slot = slot, .hash = frozen_hash },
+                        .{ .slot = info.constants.parent_slot, .hash = parent_bank_hash },
+                    );
+                }
+            }
+
+            break :fork_choice heaviest_subtree_fork_choice;
+        };
+        errdefer heaviest_subtree_fork_choice.deinit();
+
+        var duplicate_slots = try ledger_reader.db.iterator(
+            sig.ledger.schema.schema.duplicate_slots,
+            .forward,
+            // It is important that the root bank is not marked as duplicate on initialization.
+            // Although this bank could contain a duplicate proof, the fact that it was rooted
+            // either during a previous run or artificially means that we should ignore any
+            // duplicate proofs for the root slot, thus we start consuming duplicate proofs
+            // from the root slot + 1
+            root_slot +| 1,
+        );
+        defer duplicate_slots.deinit();
+
+        while (try duplicate_slots.nextKey()) |slot| {
+            const ref = slot_tracker.get(slot) orelse continue;
+            try heaviest_subtree_fork_choice.markForkInvalidCandidate(&.{
+                .slot = slot,
+                .hash = ref.state.hash.readCopy().?,
+            });
+        }
+
+        return heaviest_subtree_fork_choice;
     }
 
     /// Run all phases of consensus:
