@@ -1222,7 +1222,7 @@ fn validator(
     );
     defer shred_network_manager.deinit();
 
-    const replay_deps = try replayDependencies(
+    var replay_deps = try replayDependencies(
         allocator,
         epoch,
         loaded_snapshot.accounts_db.accountStore(),
@@ -1231,6 +1231,7 @@ fn validator(
         ledger,
         &epoch_context_manager,
     );
+    defer replay_deps.deinit(allocator);
 
     const consensus_deps = if (cfg.disable_consensus)
         null
@@ -1238,7 +1239,7 @@ fn validator(
         try consensusDependencies(allocator, &gossip_service.gossip_table_rw);
     defer if (consensus_deps) |d| d.deinit();
 
-    var replay_service = try replay.Service.init(replay_deps, consensus_deps, cfg.replay_threads);
+    var replay_service = try replay.Service.init(&replay_deps, consensus_deps, cfg.replay_threads);
     defer replay_service.deinit(allocator);
 
     const replay_thread = try app_base.spawnService(
@@ -1350,7 +1351,7 @@ fn replayOffline(
         });
     }
 
-    const replay_deps = try replayDependencies(
+    var replay_deps = try replayDependencies(
         allocator,
         epoch,
         loaded_snapshot.accounts_db.accountStore(),
@@ -1359,6 +1360,7 @@ fn replayOffline(
         ledger,
         &epoch_context_manager,
     );
+    defer replay_deps.deinit(allocator);
 
     const consensus_deps = if (cfg.disable_consensus)
         null
@@ -1366,7 +1368,7 @@ fn replayOffline(
         try consensusDependencies(allocator, null);
     defer if (consensus_deps) |d| d.deinit();
 
-    var replay_service = try replay.Service.init(replay_deps, consensus_deps, cfg.replay_threads);
+    var replay_service = try replay.Service.init(&replay_deps, consensus_deps, cfg.replay_threads);
     defer replay_service.deinit(allocator);
 
     const replay_thread = try app_base.spawnService(
@@ -1986,6 +1988,15 @@ fn replayDependencies(
     var root_slot_state = try sig.core.SlotState.fromBankFields(allocator, bank_fields, lt_hash);
     errdefer root_slot_state.deinit(allocator);
 
+    const hard_forks = try bank_fields.hard_forks.clone(allocator);
+    errdefer hard_forks.deinit(allocator);
+
+    const current_epoch_constants: sig.core.EpochConstants = try .fromBankFields(
+        bank_fields,
+        try epoch_stakes.current.convert(allocator, .delegation),
+    );
+    errdefer current_epoch_constants.deinit(allocator);
+
     return .{
         .allocator = allocator,
         .logger = .from(app_base.logger),
@@ -2002,15 +2013,12 @@ fn replayDependencies(
         .slot_leaders = epoch_context_manager.slotLeaders(),
         .root = .{
             .slot = bank_fields.slot,
-            .constants = root_slot_constants,
-            .state = root_slot_state,
+            .constants = .init(root_slot_constants),
+            .state = .init(root_slot_state),
         },
         .current_epoch = epoch,
-        .current_epoch_constants = try .fromBankFields(
-            bank_fields,
-            try epoch_stakes.current.convert(allocator, .delegation),
-        ),
-        .hard_forks = try bank_fields.hard_forks.clone(allocator),
+        .current_epoch_constants = .init(current_epoch_constants),
+        .hard_forks = .init(hard_forks),
     };
 }
 

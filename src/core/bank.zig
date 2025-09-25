@@ -133,6 +133,11 @@ pub const SlotConstants = struct {
     ) Allocator.Error!SlotConstants {
         var ancestors = Ancestors{};
         try ancestors.ancestors.put(allocator, 0, {});
+        errdefer ancestors.deinit(allocator);
+
+        const reserved_accounts_data = try reserved_accounts.init(allocator);
+        errdefer reserved_accounts_data.deinit(allocator);
+
         return .{
             .parent_slot = 0,
             .parent_hash = sig.core.Hash.ZEROES,
@@ -144,7 +149,7 @@ pub const SlotConstants = struct {
             .epoch_reward_status = .inactive,
             .ancestors = ancestors,
             .feature_set = .ALL_DISABLED,
-            .reserved_accounts = try reserved_accounts.init(allocator),
+            .reserved_accounts = reserved_accounts_data,
         };
     }
 
