@@ -14,7 +14,6 @@ const Pubkey = core.Pubkey;
 const Slot = core.Slot;
 const Hash = sig.core.Hash;
 
-const AccountStore = sig.accounts_db.AccountStore;
 const LedgerReader = sig.ledger.LedgerReader;
 
 const AncestorHashesReplayUpdate = replay.consensus.core.AncestorHashesReplayUpdate;
