@@ -140,6 +140,8 @@ jobs:
       - run:
           name: Build
           command: |
+            ulimit -Hn unlimited
+            ulimit -Sn unlimited
             export PATH="workspace/zig:$PATH"
             # it seems that the feature detection is a bit broken in CircleCI's virtual machines
             # so we will manually say that it's an Apple M2.
