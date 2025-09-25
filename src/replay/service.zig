@@ -112,7 +112,10 @@ pub const Service = struct {
         // execute active slots
         const slot_results = execution: {
             break :execution if (self.num_threads > 1)
-                try awaitResults(allocator, try replay.execution.replayActiveSlots(&self.replay))
+                try awaitResults(
+                    allocator,
+                    try replay.execution.replayActiveSlotsAsync(&self.replay),
+                )
             else
                 try replay.execution.replayActiveSlotsSync(&self.replay);
         };

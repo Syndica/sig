@@ -1,7 +1,12 @@
+//! Helper Structs and functions used in execution.zig when asynchronously
+//! executing slots
+
 const std = @import("std");
 const sig = @import("../sig.zig");
 const replay = @import("lib.zig");
 const tracy = @import("tracy");
+
+const core = sig.core;
 
 const Allocator = std.mem.Allocator;
 const Atomic = std.atomic.Value;
@@ -10,97 +15,219 @@ const Channel = sig.sync.Channel;
 const HomogeneousThreadPool = sig.utils.thread.HomogeneousThreadPool;
 const ThreadPool = sig.sync.ThreadPool;
 
-const Hash = sig.core.Hash;
+const Entry = core.Entry;
+const Hash = core.Hash;
 const Transaction = sig.core.Transaction;
 
+const ParsedVote = sig.consensus.vote_listener.vote_parser.ParsedVote;
+const SlotHashes = sig.runtime.sysvar.SlotHashes;
 const TransactionError = sig.ledger.transaction_status.TransactionError;
 
 const AccountLocks = replay.account_locks.AccountLocks;
+const BatchResult = replay.execution.BatchResult;
 const Committer = replay.commit.Committer;
-const ConfirmSlotError = replay.confirm_slot.ConfirmSlotError;
-const ConfirmSlotStatus = replay.confirm_slot.ConfirmSlotStatus;
-const ResolvedTransaction = replay.resolve_lookup.ResolvedTransaction;
+const ReplaySlotError = replay.execution.ReplaySlotError;
 const ResolvedBatch = replay.resolve_lookup.ResolvedBatch;
+const ResolvedTransaction = replay.resolve_lookup.ResolvedTransaction;
+const SlotResolver = replay.resolve_lookup.SlotResolver;
 const SvmGateway = replay.svm_gateway.SvmGateway;
 
-const ProcessedTransaction = sig.runtime.transaction_execution.ProcessedTransaction;
-
-const executeTransaction = replay.svm_gateway.executeTransaction;
-const preprocessTransaction = replay.preprocess_transaction.preprocessTransaction;
-
-const Logger = sig.trace.Logger("replay-batcher");
-
-const vote_listener = sig.consensus.vote_listener;
-const ParsedVote = vote_listener.vote_parser.ParsedVote;
+const verifyPoh = core.entry.verifyPoh;
+const resolveBatch = replay.resolve_lookup.resolveBatch;
 
 const assert = std.debug.assert;
 
-/// Processes a batch of transactions by verifying their signatures and
-/// executing them with the SVM.
-pub fn processBatch(
+const Logger = sig.trace.Logger("replay-async");
+
+/// schedule poh verification asynchronously
+pub fn startPohVerify(
     allocator: Allocator,
-    svm_params: SvmGateway.Params,
-    committer: Committer,
-    transactions: []const ResolvedTransaction,
+    logger: Logger,
+    pool: *HomogeneousThreadPool(PohTask),
+    initial_hash: Hash,
+    entries: []const Entry,
     exit: *Atomic(bool),
-) !BatchResult {
-    var zone = tracy.Zone.init(@src(), .{ .name = "processBatch" });
-    zone.value(transactions.len);
-    defer zone.deinit();
-    errdefer zone.color(0xFF0000);
-
-    const results = try allocator.alloc(struct { Hash, ProcessedTransaction }, transactions.len);
-    var populated_count: usize = 0;
-    defer {
-        // Only deinit elements that were actually populated
-        // TODO Better way to do this? Instead of tracking populated count. Maybe switch to array list?
-        for (results[0..populated_count]) |*result| {
-            result.*[1].deinit(allocator);
-        }
-        allocator.free(results);
+) Allocator.Error!void {
+    if (entries.len == 0) return;
+    const num_tasks = if (pool.max_concurrent_tasks) |max| @min(max, entries.len) else entries.len;
+    const entries_per_task = entries.len / num_tasks;
+    var batch_initial_hash = initial_hash;
+    for (0..num_tasks) |i| {
+        const end = if (i == num_tasks - 1) entries.len else (i + 1) * entries_per_task;
+        assert(try pool.trySchedule(allocator, .{
+            .allocator = allocator,
+            .logger = logger,
+            .initial_hash = batch_initial_hash,
+            .entries = entries[i * entries_per_task .. end],
+            .exit = exit,
+        }));
+        batch_initial_hash = entries[end - 1].hash;
     }
-
-    var svm_gateway = try SvmGateway.init(allocator, transactions, svm_params);
-    defer svm_gateway.deinit(allocator);
-
-    for (transactions, 0..) |transaction, i| {
-        if (exit.load(.monotonic)) {
-            return .exit;
-        }
-
-        const hash, const compute_budget_details =
-            switch (preprocessTransaction(transaction.transaction, .run_sig_verify)) {
-                .ok => |res| res,
-                .err => |err| return .{ .failure = err },
-            };
-
-        const runtime_transaction = transaction.toRuntimeTransaction(hash, compute_budget_details);
-
-        switch (try executeTransaction(allocator, &svm_gateway, &runtime_transaction)) {
-            .ok => |result| {
-                results[i] = .{ hash, result };
-                populated_count += 1;
-            },
-            .err => |err| return .{ .failure = err },
-        }
-    }
-    try committer.commitTransactions(
-        allocator,
-        svm_gateway.params.slot,
-        transactions,
-        results,
-    );
-
-    return .success;
 }
 
-const BatchResult = union(enum) {
-    /// The batch completed with acceptable results.
-    success,
-    /// This batch had an error that indicates an invalid block
-    failure: TransactionError,
-    /// Termination was exited due to a failure in another thread.
-    exit,
+pub const ReplaySlotStatus = FutureStatus(?ReplaySlotError);
+
+fn FutureStatus(T: type) type {
+    return union(enum) {
+        done: T,
+        pending,
+
+        pub const Result = T;
+    };
+}
+
+/// Tracks the state of a slot confirmation execution.
+///
+/// Do not share across threads.
+///
+/// agave: confirm_slot and confirm_slot_entries
+/// fd: runtime_process_txns_in_microblock_stream
+pub const ReplaySlotFuture = struct {
+    scheduler: TransactionScheduler,
+    poh_verifier: HomogeneousThreadPool(PohTask),
+    /// Set to true as soon as something fails.
+    exit: Atomic(bool),
+    /// just here to be deinitted on completion
+    slot_resolver: SlotResolver,
+
+    entries: []const Entry,
+
+    /// The current status to return on poll, unless something has changed.
+    status: ReplaySlotStatus,
+    /// Temporarily stores errors that occur before completion that need to be
+    /// returned when all tasks are complete.
+    status_when_done: ?ReplaySlotError = null,
+
+    pub fn create(
+        allocator: Allocator,
+        logger: Logger,
+        thread_pool: *ThreadPool,
+        committer: Committer,
+        entries: []const Entry,
+        svm_params: SvmGateway.Params,
+        slot_resolver: SlotResolver,
+    ) !*ReplaySlotFuture {
+        const poh_verifier = try HomogeneousThreadPool(PohTask)
+            .initBorrowed(allocator, thread_pool, thread_pool.max_threads);
+        errdefer poh_verifier.deinit(allocator);
+
+        const future = try allocator.create(ReplaySlotFuture);
+        errdefer allocator.destroy(future);
+
+        future.* = ReplaySlotFuture{
+            .poh_verifier = poh_verifier,
+            .scheduler = undefined,
+            .entries = entries,
+            .status = .pending,
+            .exit = .init(false),
+            .slot_resolver = slot_resolver,
+        };
+
+        future.scheduler = try TransactionScheduler.initCapacity(
+            allocator,
+            .from(logger),
+            committer,
+            entries.len,
+            thread_pool,
+            svm_params,
+            &future.exit,
+        );
+
+        return future;
+    }
+
+    pub fn destroy(self: *ReplaySlotFuture, allocator: Allocator) void {
+        // tell threads to exit (they shouldn't be running unless there was an unexpected error)
+        self.exit.store(true, .monotonic);
+
+        // join threads
+        const exited_scheduler = self.scheduler.thread_pool.joinForDeinit(.fromMillis(100));
+        const exited_poh = self.poh_verifier.joinForDeinit(.fromMillis(100));
+        if (!exited_scheduler or !exited_poh) {
+            @panic("Failed to deinit ReplaySlotFuture due to hanging threads.");
+        }
+
+        // deinit contained items
+        self.slot_resolver.deinit(allocator);
+        self.scheduler.deinit();
+        self.poh_verifier.deinit(allocator);
+        for (self.entries) |entry| entry.deinit(allocator);
+        allocator.free(self.entries);
+
+        // destroy self
+        allocator.destroy(self);
+    }
+
+    pub fn awaitBlocking(self: *ReplaySlotFuture) !?ReplaySlotError {
+        while (true) {
+            const poll_result = try self.poll();
+            switch (poll_result) {
+                .done => |val| return val,
+                // TODO: consider futex-based wait like ResetEvent
+                .pending => std.time.sleep(100 * std.time.ns_per_ms),
+            }
+        }
+    }
+
+    pub fn poll(self: *ReplaySlotFuture) !ReplaySlotStatus {
+        switch (self.status) {
+            .pending => {
+                var pending = false;
+                for (try self.pollEach()) |status| switch (status) {
+                    .pending => pending = true,
+                    .done => |maybe_err| if (maybe_err) |err| {
+                        if (self.status_when_done == null) {
+                            self.exit.store(true, .monotonic);
+                            self.status_when_done = err;
+                        }
+                    },
+                };
+                if (!pending) self.status = .{ .done = self.status_when_done };
+            },
+            else => {},
+        }
+
+        return self.status;
+    }
+
+    fn pollEach(self: *ReplaySlotFuture) ![2]ReplaySlotStatus {
+        return .{
+            switch (self.poh_verifier.pollFallible()) {
+                .done => .{ .done = null },
+                .err => .{ .done = .{ .invalid_block = .InvalidEntryHash } },
+                .pending => .pending,
+            },
+            try self.scheduler.poll(),
+        };
+    }
+};
+
+pub const PohTask = struct {
+    allocator: Allocator,
+    logger: Logger,
+    initial_hash: Hash,
+    entries: []const Entry,
+    exit: *Atomic(bool),
+
+    pub fn run(self: *PohTask) !void {
+        const success = verifyPoh(
+            self.entries,
+            self.allocator,
+            self.initial_hash,
+            .{ .exit = self.exit },
+        ) catch |e| {
+            if (e != error.Exit) {
+                self.logger.err().logf("poh verification failed with error: {}", .{e});
+            }
+            self.exit.store(true, .monotonic);
+            return e;
+        };
+        if (!success) {
+            self.logger.err().log("poh verification failed");
+            self.exit.store(true, .monotonic);
+            return error.PohVerifyFailed;
+        }
+    }
 };
 
 /// Batches transactions and executes them on a thread pool.
@@ -117,12 +244,12 @@ const BatchResult = union(enum) {
 /// propagate up when polling.
 ///
 /// This should only be used in a single thread at a time.
-pub const TransactionScheduler = struct {
+const TransactionScheduler = struct {
     allocator: Allocator,
     logger: Logger,
     committer: Committer,
     batches: std.ArrayListUnmanaged(ResolvedBatch),
-    thread_pool: HomogeneousThreadPool(ProcessBatchTask),
+    thread_pool: HomogeneousThreadPool(ReplayBatchTask),
     results: Channel(BatchMessage),
     locks: AccountLocks,
     /// The number of batches that have been scheduled with thread_pool.trySchedule.
@@ -132,7 +259,7 @@ pub const TransactionScheduler = struct {
     /// triggered as soon as a single transaction fails
     exit: *Atomic(bool),
     /// if non-null, a failure was already recorded and will be returned for every poll
-    failure: ?replay.confirm_slot.ConfirmSlotError,
+    failure: ?replay.execution.ReplaySlotError,
     svm_params: SvmGateway.Params,
     replay_votes_sender: *Channel(ParsedVote),
 
@@ -154,7 +281,7 @@ pub const TransactionScheduler = struct {
             .initCapacity(allocator, batch_capacity);
         errdefer batches.deinit(allocator);
 
-        const pool = try HomogeneousThreadPool(ProcessBatchTask)
+        const pool = try HomogeneousThreadPool(ReplayBatchTask)
             .initBorrowed(allocator, thread_pool, null);
         errdefer pool.deinit(allocator);
 
@@ -198,7 +325,7 @@ pub const TransactionScheduler = struct {
         self.batches.appendAssumeCapacity(batch);
     }
 
-    pub fn poll(self: *TransactionScheduler) !ConfirmSlotStatus {
+    pub fn poll(self: *TransactionScheduler) !ReplaySlotStatus {
         // collect results
         while (self.results.tryReceive()) |message| {
             assert(0 == self.locks.unlock(self.batches.items[message.batch_index].accounts));
@@ -272,7 +399,7 @@ pub const TransactionScheduler = struct {
     }
 };
 
-const ProcessBatchTask = struct {
+const ReplayBatchTask = struct {
     allocator: Allocator,
     logger: Logger,
     svm_params: SvmGateway.Params,
@@ -282,8 +409,8 @@ const ProcessBatchTask = struct {
     results: *Channel(TransactionScheduler.BatchMessage),
     exit: *Atomic(bool),
 
-    pub fn run(self: *ProcessBatchTask) !void {
-        const result = try processBatch(
+    pub fn run(self: *ReplayBatchTask) !void {
+        const result = try replay.execution.replayBatch(
             self.allocator,
             self.svm_params,
             self.committer,
@@ -301,11 +428,10 @@ const ProcessBatchTask = struct {
 
 test "TransactionScheduler: happy path" {
     const allocator = std.testing.allocator;
-    const resolveBatch = replay.resolve_lookup.resolveBatch;
 
     var rng = std.Random.DefaultPrng.init(123);
 
-    var state = try replay.confirm_slot.TestState.init(allocator);
+    var state = try replay.execution.TestState.init(allocator);
     defer state.deinit(allocator);
 
     var thread_pool = ThreadPool.init(.{});
@@ -370,16 +496,15 @@ test "TransactionScheduler: happy path" {
         scheduler.addBatchAssumeCapacity(batch2);
     }
 
-    try std.testing.expectEqual(null, try replay.confirm_slot.testAwait(&scheduler));
+    try std.testing.expectEqual(null, try replay.execution.testAwait(&scheduler));
 }
 
 test "TransactionScheduler: duplicate batch passes through to svm" {
     const allocator = std.testing.allocator;
-    const resolveBatch = replay.resolve_lookup.resolveBatch;
 
     var rng = std.Random.DefaultPrng.init(123);
 
-    var state = try replay.confirm_slot.TestState.init(allocator);
+    var state = try replay.execution.TestState.init(allocator);
     defer state.deinit(allocator);
 
     var thread_pool = ThreadPool.init(.{});
@@ -448,18 +573,17 @@ test "TransactionScheduler: duplicate batch passes through to svm" {
     }
 
     try std.testing.expectEqual(
-        ConfirmSlotError{ .invalid_transaction = .AlreadyProcessed },
-        try replay.confirm_slot.testAwait(&scheduler),
+        ReplaySlotError{ .invalid_transaction = .AlreadyProcessed },
+        try replay.execution.testAwait(&scheduler),
     );
 }
 
 test "TransactionScheduler: failed account locks" {
     const allocator = std.testing.allocator;
-    const resolveBatch = replay.resolve_lookup.resolveBatch;
 
     var rng = std.Random.DefaultPrng.init(0);
 
-    var state = try replay.confirm_slot.TestState.init(allocator);
+    var state = try replay.execution.TestState.init(allocator);
     defer state.deinit(allocator);
 
     var thread_pool = ThreadPool.init(.{});
@@ -506,18 +630,17 @@ test "TransactionScheduler: failed account locks" {
     }
 
     try std.testing.expectEqual(
-        ConfirmSlotError{ .invalid_transaction = .AccountInUse },
-        try replay.confirm_slot.testAwait(&scheduler),
+        ReplaySlotError{ .invalid_transaction = .AccountInUse },
+        try replay.execution.testAwait(&scheduler),
     );
 }
 
 test "TransactionScheduler: signature verification failure" {
     const allocator = std.testing.allocator;
-    const resolveBatch = replay.resolve_lookup.resolveBatch;
 
     var rng = std.Random.DefaultPrng.init(0);
 
-    var state = try replay.confirm_slot.TestState.init(allocator);
+    var state = try replay.execution.TestState.init(allocator);
     defer state.deinit(allocator);
 
     var thread_pool = ThreadPool.init(.{});
@@ -588,20 +711,19 @@ test "TransactionScheduler: signature verification failure" {
     }
 
     try std.testing.expectEqual(
-        ConfirmSlotError{ .invalid_transaction = .SignatureFailure },
-        try replay.confirm_slot.testAwait(&scheduler),
+        ReplaySlotError{ .invalid_transaction = .SignatureFailure },
+        try replay.execution.testAwait(&scheduler),
     );
 }
 
 test "TransactionScheduler: does not send replay vote for failed execution" {
     const allocator = std.testing.allocator;
-    const resolveBatch = replay.resolve_lookup.resolveBatch;
     const vote_program = sig.runtime.program.vote;
     const vote_instruction = vote_program.vote_instruction;
 
     var rng = std.Random.DefaultPrng.init(7);
 
-    var state = try replay.confirm_slot.TestState.init(allocator);
+    var state = try replay.execution.TestState.init(allocator);
     defer state.deinit(allocator);
 
     var thread_pool = ThreadPool.init(.{});
@@ -684,7 +806,7 @@ test "TransactionScheduler: does not send replay vote for failed execution" {
     scheduler.addBatchAssumeCapacity(batch);
 
     // Await completion
-    try std.testing.expectEqual(null, try replay.confirm_slot.testAwait(&scheduler));
+    try std.testing.expectEqual(null, try replay.execution.testAwait(&scheduler));
 
     const maybe_vote = votes_ch.tryReceive();
     try std.testing.expect(maybe_vote == null);
@@ -692,13 +814,12 @@ test "TransactionScheduler: does not send replay vote for failed execution" {
 
 test "TransactionScheduler: sends replay vote after successful execution" {
     const allocator = std.testing.allocator;
-    const resolveBatch = replay.resolve_lookup.resolveBatch;
     const vote_program = sig.runtime.program.vote;
     const vote_instruction = vote_program.vote_instruction;
 
     var rng = std.Random.DefaultPrng.init(9);
 
-    var state = try replay.confirm_slot.TestState.init(allocator);
+    var state = try replay.execution.TestState.init(allocator);
     defer state.deinit(allocator);
 
     var thread_pool = ThreadPool.init(.{});
@@ -880,7 +1001,7 @@ test "TransactionScheduler: sends replay vote after successful execution" {
     scheduler.addBatchAssumeCapacity(batch);
 
     // Await completion and assert a replay vote was emitted
-    try std.testing.expectEqual(null, try replay.confirm_slot.testAwait(&scheduler));
+    try std.testing.expectEqual(null, try replay.execution.testAwait(&scheduler));
     const maybe_vote = state.replay_votes_channel.tryReceive();
     try std.testing.expect(maybe_vote != null);
     if (maybe_vote) |pv| pv.deinit(allocator);

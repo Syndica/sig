@@ -1,12 +1,11 @@
 pub const account_locks = @import("account_locks.zig");
+pub const exec_async = @import("exec_async.zig");
 pub const commit = @import("commit.zig");
-pub const confirm_slot = @import("confirm_slot.zig");
 pub const consensus = @import("consensus/lib.zig");
 pub const execution = @import("execution.zig");
 pub const freeze = @import("freeze.zig");
 pub const preprocess_transaction = @import("preprocess_transaction.zig");
 pub const resolve_lookup = @import("resolve_lookup.zig");
-pub const scheduler = @import("scheduler.zig");
 pub const service = @import("service.zig");
 pub const svm_gateway = @import("svm_gateway.zig");
 pub const trackers = @import("trackers.zig");
