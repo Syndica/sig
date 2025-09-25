@@ -429,59 +429,6 @@ fn advanceReplay(state: *ReplayState, maybe_consensus: *?TowerConsensus, multith
     if (!processed_a_slot) try std.Thread.yield();
 }
 
-/// freezes any slots that were completed according to these replay results
-fn freezeCompletedSlots(state: *ReplayState, results: []const ReplayResult) !bool {
-    const epoch_tracker, var epoch_tracker_lg = state.epoch_tracker.readWithLock();
-    defer epoch_tracker_lg.unlock();
-
-    var processed_a_slot = false;
-    {
-        const slot_tracker, var slot_tracker_lg = state.slot_tracker.readWithLock();
-        defer slot_tracker_lg.unlock();
-
-        for (results) |result| switch (result.output) {
-            .err => |err| state.logger.err().logf(
-                "replayed slot {} with error: {}",
-                .{ result.slot, err },
-            ),
-            .last_entry_hash => |last_entry_hash| {
-                const slot = result.slot;
-                const slot_info = slot_tracker.get(slot) orelse return error.MissingSlotInTracker;
-                if (slot_info.state.tickHeight() == slot_info.constants.max_tick_height) {
-                    state.logger.info().logf("finished replaying slot: {}", .{slot});
-                    const epoch = epoch_tracker.getForSlot(slot) orelse return error.MissingEpoch;
-                    try replay.freeze.freezeSlot(state.allocator, .init(
-                        .from(state.logger),
-                        state.account_store,
-                        &epoch,
-                        slot_info.state,
-                        slot_info.constants,
-                        slot,
-                        last_entry_hash,
-                    ));
-                    processed_a_slot = true;
-                } else {
-                    state.logger.info().logf("partially replayed slot: {}", .{slot});
-                }
-            },
-        };
-    }
-
-    return processed_a_slot;
-}
-
-/// bypass the tower bft consensus protocol, simply rooting slots with SlotTree.reRoot
-fn bypassConsensus(state: *ReplayState) !void {
-    if (state.slot_tree.reRoot(state.allocator)) |new_root| {
-        const slot_tracker, var slot_tracker_lg = state.slot_tracker.writeWithLock();
-        defer slot_tracker_lg.unlock();
-
-        state.logger.info().logf("rooting slot with SlotTree.reRoot: {}", .{new_root});
-        slot_tracker.root = new_root;
-        slot_tracker.pruneNonRooted(state.allocator);
-    }
-}
-
 /// Identifies new slots in the ledger and starts tracking them in the slot
 /// tracker.
 ///
@@ -664,6 +611,59 @@ pub fn getActiveFeatures(
         }
     }
     return features;
+}
+
+/// freezes any slots that were completed according to these replay results
+fn freezeCompletedSlots(state: *ReplayState, results: []const ReplayResult) !bool {
+    const epoch_tracker, var epoch_tracker_lg = state.epoch_tracker.readWithLock();
+    defer epoch_tracker_lg.unlock();
+
+    var processed_a_slot = false;
+    {
+        const slot_tracker, var slot_tracker_lg = state.slot_tracker.readWithLock();
+        defer slot_tracker_lg.unlock();
+
+        for (results) |result| switch (result.output) {
+            .err => |err| state.logger.err().logf(
+                "replayed slot {} with error: {}",
+                .{ result.slot, err },
+            ),
+            .last_entry_hash => |last_entry_hash| {
+                const slot = result.slot;
+                const slot_info = slot_tracker.get(slot) orelse return error.MissingSlotInTracker;
+                if (slot_info.state.tickHeight() == slot_info.constants.max_tick_height) {
+                    state.logger.info().logf("finished replaying slot: {}", .{slot});
+                    const epoch = epoch_tracker.getForSlot(slot) orelse return error.MissingEpoch;
+                    try replay.freeze.freezeSlot(state.allocator, .init(
+                        .from(state.logger),
+                        state.account_store,
+                        &epoch,
+                        slot_info.state,
+                        slot_info.constants,
+                        slot,
+                        last_entry_hash,
+                    ));
+                    processed_a_slot = true;
+                } else {
+                    state.logger.info().logf("partially replayed slot: {}", .{slot});
+                }
+            },
+        };
+    }
+
+    return processed_a_slot;
+}
+
+/// bypass the tower bft consensus protocol, simply rooting slots with SlotTree.reRoot
+fn bypassConsensus(state: *ReplayState) !void {
+    if (state.slot_tree.reRoot(state.allocator)) |new_root| {
+        const slot_tracker, var slot_tracker_lg = state.slot_tracker.writeWithLock();
+        defer slot_tracker_lg.unlock();
+
+        state.logger.info().logf("rooting slot with SlotTree.reRoot: {}", .{new_root});
+        slot_tracker.root = new_root;
+        slot_tracker.pruneNonRooted(state.allocator);
+    }
 }
 
 test "getActiveFeatures rejects wrong ownership" {
