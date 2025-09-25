@@ -414,11 +414,6 @@ fn advanceReplay(state: *ReplayState, maybe_consensus: *?TowerConsensus, multith
     const processed_a_slot = if (maybe_consensus.*) |*consensus|
         try consensus.process(
             allocator,
-            .from(state.logger),
-            state.my_identity,
-            state.account_store,
-            state.ledger.reader,
-            state.ledger.writer,
             &state.slot_tracker,
             &state.epoch_tracker,
             &state.progress_map,
@@ -952,11 +947,6 @@ test "process runs without error with no replay results" {
     // coverage. currently consensus panics or hangs if you run it with actual data
     _ = try service.consensus.?.process(
         allocator,
-        .FOR_TESTS,
-        service.replay.my_identity,
-        service.replay.account_store,
-        service.replay.ledger.reader,
-        service.replay.ledger.writer,
         &service.replay.slot_tracker,
         &service.replay.epoch_tracker,
         &service.replay.progress_map,
