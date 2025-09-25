@@ -1,6 +1,6 @@
 const std = @import("std");
-const sig = @import("../sig.zig");
-const replay = @import("lib.zig");
+const sig = @import("../../sig.zig");
+const replay = @import("../lib.zig");
 const tracy = @import("tracy");
 
 const Allocator = std.mem.Allocator;
@@ -42,17 +42,18 @@ const VoteListener = sig.consensus.vote_listener.VoteListener;
 
 const SlotTracker = sig.replay.trackers.SlotTracker;
 const EpochTracker = sig.replay.trackers.EpochTracker;
-const SlotData = sig.replay.edge_cases.SlotData;
-const AncestorDuplicateSlotToRepair = replay.edge_cases.AncestorDuplicateSlotToRepair;
+const SlotData = sig.replay.consensus.edge_cases.SlotData;
+const AncestorDuplicateSlotToRepair = replay.consensus.edge_cases.AncestorDuplicateSlotToRepair;
 
 const ReplayResult = replay.execution.ReplayResult;
-const ProcessResultState = replay.process_result.ProcessResultState;
+const ProcessResultState = replay.consensus.process_result.ProcessResultState;
 
-const processResult = replay.process_result.processResult;
+const processResult = replay.consensus.process_result.processResult;
 
 const collectVoteLockouts = sig.consensus.replay_tower.collectVoteLockouts;
 const isDuplicateSlotConfirmed = sig.consensus.replay_tower.isDuplicateSlotConfirmed;
-const check_slot_agrees_with_cluster = sig.replay.edge_cases.check_slot_agrees_with_cluster;
+const check_slot_agrees_with_cluster =
+    sig.replay.consensus.edge_cases.check_slot_agrees_with_cluster;
 
 const MAX_VOTE_REFRESH_INTERVAL_MILLIS: usize = 5000;
 
@@ -324,7 +325,7 @@ pub const TowerConsensus = struct {
             const slot_tracker, var slot_tracker_lg = slot_tracker_rw.readWithLock();
             defer slot_tracker_lg.unlock();
 
-            _ = try replay.edge_cases.processEdgeCases(allocator, .from(logger), .{
+            _ = try replay.consensus.edge_cases.processEdgeCases(allocator, .from(logger), .{
                 .my_pubkey = my_identity,
                 .tpu_has_bank = false,
                 .fork_choice = &self.fork_choice,
@@ -482,9 +483,9 @@ pub const TowerConsensus = struct {
                     continue;
                 }
 
-                const duplicate_confirmed_state: sig.replay.edge_cases.DuplicateConfirmedState = .{
+                const duplicate_confirmed_state: sig.replay.consensus.edge_cases.DuplicateConfirmedState = .{
                     .duplicate_confirmed_hash = frozen_hash,
-                    .slot_status = sig.replay.edge_cases.SlotStatus.fromHash(frozen_hash),
+                    .slot_status = sig.replay.consensus.edge_cases.SlotStatus.fromHash(frozen_hash),
                 };
                 try check_slot_agrees_with_cluster.duplicateConfirmed(
                     allocator,
@@ -1152,7 +1153,7 @@ test "maybeRefreshLastVote - no heaviest slot on same fork" {
         .last_print_time = now,
     };
 
-    const result = sig.replay.consensus.maybeRefreshLastVote(
+    const result = sig.replay.consensus.core.maybeRefreshLastVote(
         &replay_tower,
         &fixture.progress,
         null,
@@ -1188,7 +1189,7 @@ test "maybeRefreshLastVote - no landed vote" {
 
     // not vote in progress map.
     try testing.expectEqual(0, fixture.progress.map.count());
-    const result = sig.replay.consensus.maybeRefreshLastVote(
+    const result = sig.replay.consensus.core.maybeRefreshLastVote(
         &replay_tower,
         &fixture.progress,
         10, // Not in progress map.
@@ -1266,7 +1267,7 @@ test "maybeRefreshLastVote - latest landed vote newer than last vote" {
         .last_print_time = now,
     };
 
-    const result = sig.replay.consensus.maybeRefreshLastVote(
+    const result = sig.replay.consensus.core.maybeRefreshLastVote(
         &replay_tower,
         &fixture.progress,
         hash3.slot,
@@ -1346,7 +1347,7 @@ test "maybeRefreshLastVote - non voting validator" {
         .last_print_time = now,
     };
 
-    const result = sig.replay.consensus.maybeRefreshLastVote(
+    const result = sig.replay.consensus.core.maybeRefreshLastVote(
         &replay_tower,
         &fixture.progress,
         hash3.slot,
@@ -1426,7 +1427,7 @@ test "maybeRefreshLastVote - hotspare validator" {
         .last_print_time = now,
     };
 
-    const result = sig.replay.consensus.maybeRefreshLastVote(
+    const result = sig.replay.consensus.core.maybeRefreshLastVote(
         &replay_tower,
         &fixture.progress,
         hash3.slot,
@@ -1509,7 +1510,7 @@ test "maybeRefreshLastVote - refresh interval not elapsed" {
         .last_print_time = now,
     };
 
-    const result = sig.replay.consensus.maybeRefreshLastVote(
+    const result = sig.replay.consensus.core.maybeRefreshLastVote(
         &replay_tower,
         &fixture.progress,
         hash3.slot,
@@ -1590,7 +1591,7 @@ test "maybeRefreshLastVote - successfully refreshed and mark last_vote_tx_blockh
         .last_print_time = sig.time.Instant.now(),
     };
 
-    const result = sig.replay.consensus.maybeRefreshLastVote(
+    const result = sig.replay.consensus.core.maybeRefreshLastVote(
         &replay_tower,
         &fixture.progress,
         hash3.slot,
