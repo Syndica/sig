@@ -444,8 +444,7 @@ test resolveBatch {
     };
 
     var ancestors = Ancestors{ .ancestors = .empty };
-    defer ancestors.deinit(std.testing.allocator);
-    try ancestors.ancestors.put(std.testing.allocator, 0, {});
+    try ancestors.addSlot(0);
 
     const slot_hashes = try SlotHashes.init(std.testing.allocator);
     defer slot_hashes.deinit(std.testing.allocator);
@@ -550,9 +549,8 @@ test getLookupTable {
     var map = sig.accounts_db.ThreadSafeAccountMap.init(allocator);
     defer map.deinit();
 
-    var ancestors = sig.core.Ancestors{};
-    defer ancestors.deinit(allocator);
-    try ancestors.addSlot(allocator, 0);
+    var ancestors = sig.core.Ancestors.EMPTY;
+    try ancestors.addSlot(0);
 
     const account_reader = map.accountReader().forSlot(&ancestors);
 

@@ -1795,10 +1795,8 @@ test "processConsensus - no duplicate confirmed without votes" {
 
     const SlotSet = sig.utils.collections.SortedSetUnmanaged(Slot);
     var ancestors: std.AutoArrayHashMapUnmanaged(Slot, Ancestors) = .empty;
-    defer {
-        for (ancestors.values()) |*val| val.deinit(testing.allocator);
-        ancestors.deinit(testing.allocator);
-    }
+    defer ancestors.deinit(testing.allocator);
+
     var descendants: std.AutoArrayHashMapUnmanaged(Slot, SlotSet) = .empty;
     defer descendants.deinit(testing.allocator);
     defer {
@@ -1810,9 +1808,9 @@ test "processConsensus - no duplicate confirmed without votes" {
     ) |slot, info| {
         const slot_ancestors = &info.constants.ancestors.ancestors;
         const agop = try ancestors.getOrPutValue(testing.allocator, slot, .EMPTY);
-        try agop.value_ptr.ancestors.ensureUnusedCapacity(testing.allocator, slot_ancestors.count());
-        for (slot_ancestors.keys()) |a_slot| {
-            try agop.value_ptr.addSlot(testing.allocator, a_slot);
+        var iter = slot_ancestors.iterator();
+        while (iter.next()) |a_slot| {
+            try agop.value_ptr.addSlot(a_slot);
             const dgop = try descendants.getOrPutValue(testing.allocator, a_slot, .empty);
             try dgop.value_ptr.put(testing.allocator, slot);
         }
@@ -1953,10 +1951,8 @@ test "processConsensus - duplicate-confirmed is idempotent" {
 
     const SlotSet = sig.utils.collections.SortedSetUnmanaged(Slot);
     var ancestors: std.AutoArrayHashMapUnmanaged(Slot, Ancestors) = .empty;
-    defer {
-        for (ancestors.values()) |*val| val.deinit(testing.allocator);
-        ancestors.deinit(testing.allocator);
-    }
+    defer ancestors.deinit(testing.allocator);
+
     var descendants: std.AutoArrayHashMapUnmanaged(Slot, SlotSet) = .empty;
     defer descendants.deinit(testing.allocator);
     defer {
@@ -1969,9 +1965,9 @@ test "processConsensus - duplicate-confirmed is idempotent" {
     ) |slot, info| {
         const slot_ancestors = &info.constants.ancestors.ancestors;
         const agop = try ancestors.getOrPutValue(testing.allocator, slot, .EMPTY);
-        try agop.value_ptr.ancestors.ensureUnusedCapacity(testing.allocator, slot_ancestors.count());
-        for (slot_ancestors.keys()) |a_slot| {
-            try agop.value_ptr.addSlot(testing.allocator, a_slot);
+        var iter = slot_ancestors.iterator();
+        while (iter.next()) |a_slot| {
+            try agop.value_ptr.addSlot(a_slot);
             const dgop = try descendants.getOrPutValue(testing.allocator, a_slot, .empty);
             try dgop.value_ptr.put(testing.allocator, slot);
         }

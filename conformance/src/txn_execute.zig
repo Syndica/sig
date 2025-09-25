@@ -186,8 +186,7 @@ fn executeTxnContext(
     var parent_hash: Hash = Hash.ZEROES;
     var epoch_schedule: EpochSchedule = undefined;
 
-    var ancestors: Ancestors = .{};
-    defer ancestors.deinit(allocator);
+    var ancestors: Ancestors = .EMPTY;
 
     var compute_budget = ComputeBudget.DEFAULT;
     compute_budget.compute_unit_limit = compute_budget.compute_unit_limit;
@@ -214,7 +213,7 @@ fn executeTxnContext(
     // Bank::new_with_paths(...)
     // https://github.com/firedancer-io/agave/blob/10fe1eb29aac9c236fd72d08ae60a3ef61ee8353/runtime/src/bank.rs#L1162
     {
-        try ancestors.addSlot(allocator, 0);
+        try ancestors.addSlot(0);
         // bank.compute_budget = runtime_config.compute_budget;
         // bank.transaction_account_lock_limit = null;
         // bank.transaction_debug_keys = null;
@@ -506,7 +505,7 @@ fn executeTxnContext(
             // var new = Bank{...}
 
             // Create ancestors with new slot and all parent slots
-            try ancestors.addSlot(allocator, slot);
+            try ancestors.addSlot(slot);
 
             // Update epoch
             if (parent_slots_epoch < epoch) {

@@ -3,48 +3,42 @@ const sig = @import("../sig.zig");
 
 const HashMap = std.AutoArrayHashMapUnmanaged;
 
-const bincode = sig.bincode;
+const RingBitSet = sig.utils.collections.RingBitSet;
 const Slot = sig.core.Slot;
 
 pub const Ancestors = struct {
-    // agave uses a "RollingBitField" which seems to be just an optimisation for a set
-    ancestors: HashMap(Slot, void) = .{},
+    ancestors: RingBitSet(MAX_SLOT_RANGE),
 
     pub const EMPTY: Ancestors = .{ .ancestors = .empty };
 
-    // For some reason, agave serializes Ancestors as HashMap(slot, usize). But deserializing
-    // ignores the usize, and serializing just uses the value 0. So we need to serialize void
-    // as if it's 0, and deserialize 0 as if it's void.
-    pub const @"!bincode-config:ancestors" = bincode.hashmap.hashMapFieldConfig(
-        HashMap(Slot, void),
-        .{
-            .key = .{},
-            .value = .{ .serializer = voidSerialize, .deserializer = voidDeserialize },
-        },
-    );
+    /// The maximum allowed distance from the highest to lowest contained slot.
+    pub const MAX_SLOT_RANGE = 8192;
 
-    pub fn addSlot(self: *Ancestors, allocator: std.mem.Allocator, slot: Slot) !void {
-        try self.ancestors.put(allocator, slot, {});
+    pub fn fromMap(map: *const HashMap(Slot, usize)) error{Underflow}!Ancestors {
+        var set = RingBitSet(MAX_SLOT_RANGE).empty;
+        for (map.keys()) |slot| try set.set(slot);
+        return .{ .ancestors = set };
+    }
+
+    pub fn addSlot(self: *Ancestors, slot: Slot) error{Underflow}!void {
+        try self.ancestors.set(slot);
+    }
+
+    pub fn removeSlot(self: *Ancestors, slot: Slot) void {
+        self.ancestors.unset(slot);
     }
 
     pub fn containsSlot(self: *const Ancestors, slot: Slot) bool {
-        return self.ancestors.contains(slot);
+        return self.ancestors.isSet(slot);
     }
 
-    fn voidDeserialize(l: *bincode.LimitAllocator, reader: anytype, params: bincode.Params) !void {
-        _ = try bincode.readWithLimit(l, usize, reader, params);
+    pub fn count(self: *const Ancestors) usize {
+        return self.ancestors.count();
     }
 
-    fn voidSerialize(writer: anytype, data: anytype, params: bincode.Params) !void {
-        _ = data;
-        try bincode.write(writer, @as(usize, 0), params);
-    }
+    pub const Iterator = RingBitSet(MAX_SLOT_RANGE).Iterator;
 
-    pub fn clone(self: *const Ancestors, allocator: std.mem.Allocator) !Ancestors {
-        return .{ .ancestors = try self.ancestors.clone(allocator) };
-    }
-
-    pub fn deinit(self: *Ancestors, allocator: std.mem.Allocator) void {
-        self.ancestors.deinit(allocator);
+    pub fn iterator(self: *const Ancestors) Iterator {
+        return self.ancestors.iterator();
     }
 };
