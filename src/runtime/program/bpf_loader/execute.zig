@@ -3439,7 +3439,12 @@ test executeV3Migrate {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
-    for ([_]enum { use_auth, no_auth, migrate }{ .use_auth, .no_auth, .migrate }) |mode| {
+    for ([_]enum { use_auth, no_auth, migrate, migrate_zero }{
+        .use_auth,
+        .no_auth,
+        .migrate,
+        .migrate_zero,
+    }) |mode| {
         const upgrade_authority_key = Pubkey.initRandom(prng.random());
         const program_account_key = Pubkey.initRandom(prng.random());
         const program_data_key, _ = pubkey_utils.findProgramAddress(
@@ -3459,6 +3464,7 @@ test executeV3Migrate {
                         .use_auth => upgrade_authority_key,
                         .no_auth => null,
                         .migrate => program_account_key,
+                        .migrate_zero => upgrade_authority_key,
                     },
                 },
             },
@@ -3466,6 +3472,11 @@ test executeV3Migrate {
             0,
         );
         defer allocator.free(program_data_buffer);
+
+        const program_data_buf = switch (mode) {
+            .migrate_zero => program_data_buffer[0..V3State.PROGRAM_DATA_METADATA_SIZE],
+            else => program_data_buffer,
+        };
 
         const program_account_buffer = try allocator.alloc(u8, @sizeOf(V3State));
         defer allocator.free(program_account_buffer);
@@ -3479,28 +3490,32 @@ test executeV3Migrate {
             .{},
         );
 
-        const final_program_buffer = try createValidProgramData(
-            allocator,
-            switch (mode) {
-                .use_auth => V4State{
-                    .slot = clock.slot,
-                    .authority_address_or_next_version = upgrade_authority_key,
-                    .status = .deployed,
+        const final_program_buffer = switch (mode) {
+            .migrate_zero => &.{},
+            else => try createValidProgramData(
+                allocator,
+                switch (mode) {
+                    .use_auth => V4State{
+                        .slot = clock.slot,
+                        .authority_address_or_next_version = upgrade_authority_key,
+                        .status = .deployed,
+                    },
+                    .no_auth => V4State{
+                        .slot = clock.slot,
+                        .authority_address_or_next_version = program_account_key,
+                        .status = .finalized,
+                    },
+                    .migrate => V4State{
+                        .slot = clock.slot,
+                        .authority_address_or_next_version = program_account_key,
+                        .status = .deployed,
+                    },
+                    else => unreachable,
                 },
-                .no_auth => V4State{
-                    .slot = clock.slot,
-                    .authority_address_or_next_version = program_account_key,
-                    .status = .finalized,
-                },
-                .migrate => V4State{
-                    .slot = clock.slot,
-                    .authority_address_or_next_version = program_account_key,
-                    .status = .deployed,
-                },
-            },
-            V4State.PROGRAM_DATA_METADATA_SIZE,
-            0,
-        );
+                V4State.PROGRAM_DATA_METADATA_SIZE,
+                0,
+            ),
+        };
         defer allocator.free(final_program_buffer);
 
         const program_data_balance =
@@ -3514,6 +3529,7 @@ test executeV3Migrate {
                 .use_auth => 3,
                 .no_auth => 3 + 1,
                 .migrate => 3 + 1,
+                .migrate_zero => 0,
             }) * bpf_loader_program.v4.COMPUTE_UNITS;
 
         try testing.expectProgramExecuteResult(
@@ -3538,6 +3554,7 @@ test executeV3Migrate {
                         .use_auth => 2, // upgrade_authority_key
                         .no_auth => 1, // program_account_key
                         .migrate => 3, // migration_authority
+                        .migrate_zero => 2, // upgrade_authority_key
                     },
                 },
                 // bpf_loader_v4 for CPI
@@ -3549,7 +3566,7 @@ test executeV3Migrate {
                 .accounts = &.{
                     .{
                         .pubkey = program_data_key,
-                        .data = program_data_buffer,
+                        .data = program_data_buf,
                         .owner = bpf_loader_program.v3.ID,
                         .lamports = program_data_balance,
                     },
@@ -3602,7 +3619,7 @@ test executeV3Migrate {
                         .data = final_program_buffer,
                         .owner = bpf_loader_program.v4.ID, // v4
                         .lamports = program_account_balance + program_data_balance, // sum bal
-                        .executable = true,
+                        .executable = mode != .migrate_zero,
                     },
                     .{
                         .pubkey = upgrade_authority_key,
@@ -3625,7 +3642,7 @@ test executeV3Migrate {
                 .accounts_resize_delta = @intCast(@as(i128, 0) -
                     program_account_buffer.len +
                     final_program_buffer.len -
-                    program_data_buffer.len),
+                    program_data_buf.len),
             },
             .{},
         );
