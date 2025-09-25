@@ -4,6 +4,7 @@ const sig = @import("sig.zig");
 test {
     @setEvalBranchQuota(10_000);
     refAllDeclsRecursive(sig, 2);
+    refAllDeclsRecursive(sig.accounts_db, 2);
     refAllDeclsRecursive(sig.ledger, 2);
     refAllDeclsRecursive(sig.runtime.program, 3);
     refAllDeclsRecursive(sig.runtime.sysvar, 3);

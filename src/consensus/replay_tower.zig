@@ -4226,7 +4226,7 @@ pub const TestFixture = struct {
         allocator: std.mem.Allocator,
         root: SlotAndHash,
     ) !TestFixture {
-        const slot_tracker = st: {
+        const constants, const state = st: {
             var constants = try sig.core.SlotConstants.genesis(allocator, .DEFAULT);
             errdefer constants.deinit(allocator);
 
@@ -4236,12 +4236,13 @@ pub const TestFixture = struct {
             constants.parent_slot = root.slot -| 1;
             state.hash = .init(root.hash);
 
-            break :st try SlotTracker.init(
-                allocator,
-                root.slot,
-                .{ .constants = constants, .state = state },
-            );
+            break :st .{ constants, state };
         };
+        const slot_tracker = try SlotTracker.init(
+            allocator,
+            root.slot,
+            .{ .constants = constants, .state = state },
+        );
         errdefer slot_tracker.deinit(allocator);
 
         return .{

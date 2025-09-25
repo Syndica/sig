@@ -133,6 +133,11 @@ pub const SlotConstants = struct {
     ) Allocator.Error!SlotConstants {
         var ancestors = Ancestors{};
         try ancestors.ancestors.put(allocator, 0, {});
+        errdefer ancestors.deinit(allocator);
+
+        const reserved_accounts_data = try reserved_accounts.init(allocator);
+        errdefer reserved_accounts_data.deinit(allocator);
+
         return .{
             .parent_slot = 0,
             .parent_hash = sig.core.Hash.ZEROES,
@@ -144,7 +149,7 @@ pub const SlotConstants = struct {
             .epoch_reward_status = .inactive,
             .ancestors = ancestors,
             .feature_set = .ALL_DISABLED,
-            .reserved_accounts = try reserved_accounts.init(allocator),
+            .reserved_accounts = reserved_accounts_data,
         };
     }
 
@@ -227,6 +232,7 @@ pub const SlotState = struct {
     pub fn fromBankFields(
         allocator: Allocator,
         bank_fields: *const BankFields,
+        lt_hash: ?LtHash,
     ) Allocator.Error!SlotState {
         const blockhash_queue = try bank_fields.blockhash_queue.clone(allocator);
         errdefer blockhash_queue.deinit(allocator);
@@ -242,7 +248,7 @@ pub const SlotState = struct {
             .signature_count = .init(bank_fields.signature_count),
             .tick_height = .init(bank_fields.tick_height),
             .collected_rent = .init(bank_fields.collected_rent),
-            .accounts_lt_hash = .init(LtHash{ .data = @splat(0xBAD1) }),
+            .accounts_lt_hash = .init(lt_hash),
             .stakes_cache = .{ .stakes = .init(stakes) },
             .collected_transaction_fees = .init(0),
             .collected_priority_fees = .init(0),

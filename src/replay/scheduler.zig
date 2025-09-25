@@ -17,6 +17,7 @@ const TransactionError = sig.ledger.transaction_status.TransactionError;
 
 const AccountLocks = replay.account_locks.AccountLocks;
 const Committer = replay.commit.Committer;
+const ConfirmSlotError = replay.confirm_slot.ConfirmSlotError;
 const ConfirmSlotStatus = replay.confirm_slot.ConfirmSlotStatus;
 const ResolvedTransaction = replay.resolve_lookup.ResolvedTransaction;
 const ResolvedBatch = replay.resolve_lookup.ResolvedBatch;
@@ -217,7 +218,7 @@ pub const TransactionScheduler = struct {
             .done => {
                 assert(self.batches_started == self.batches_finished);
                 if (self.failure) |f| {
-                    return .{ .err = f };
+                    return .{ .done = f };
                 } else if (self.batches.items.len != self.batches_started) {
                     if (try self.tryScheduleSome()) |err| {
                         self.exit.store(true, .monotonic);
@@ -226,7 +227,7 @@ pub const TransactionScheduler = struct {
                     return .pending;
                 } else {
                     assert(self.batches.items.len == self.batches_finished);
-                    return .done;
+                    return .{ .done = null };
                 }
             },
             .pending => return .pending,
@@ -369,7 +370,7 @@ test "TransactionScheduler: happy path" {
         scheduler.addBatchAssumeCapacity(batch2);
     }
 
-    try std.testing.expectEqual(.done, try replay.confirm_slot.testAwait(&scheduler));
+    try std.testing.expectEqual(null, try replay.confirm_slot.testAwait(&scheduler));
 }
 
 test "TransactionScheduler: duplicate batch passes through to svm" {
@@ -447,7 +448,7 @@ test "TransactionScheduler: duplicate batch passes through to svm" {
     }
 
     try std.testing.expectEqual(
-        ConfirmSlotStatus{ .err = .{ .invalid_transaction = .AlreadyProcessed } },
+        ConfirmSlotError{ .invalid_transaction = .AlreadyProcessed },
         try replay.confirm_slot.testAwait(&scheduler),
     );
 }
@@ -505,7 +506,7 @@ test "TransactionScheduler: failed account locks" {
     }
 
     try std.testing.expectEqual(
-        ConfirmSlotStatus{ .err = .{ .invalid_transaction = .AccountInUse } },
+        ConfirmSlotError{ .invalid_transaction = .AccountInUse },
         try replay.confirm_slot.testAwait(&scheduler),
     );
 }
@@ -587,7 +588,7 @@ test "TransactionScheduler: signature verification failure" {
     }
 
     try std.testing.expectEqual(
-        ConfirmSlotStatus{ .err = .{ .invalid_transaction = .SignatureFailure } },
+        ConfirmSlotError{ .invalid_transaction = .SignatureFailure },
         try replay.confirm_slot.testAwait(&scheduler),
     );
 }
@@ -683,7 +684,7 @@ test "TransactionScheduler: does not send replay vote for failed execution" {
     scheduler.addBatchAssumeCapacity(batch);
 
     // Await completion
-    try std.testing.expectEqual(.done, try replay.confirm_slot.testAwait(&scheduler));
+    try std.testing.expectEqual(null, try replay.confirm_slot.testAwait(&scheduler));
 
     const maybe_vote = votes_ch.tryReceive();
     try std.testing.expect(maybe_vote == null);
@@ -879,7 +880,7 @@ test "TransactionScheduler: sends replay vote after successful execution" {
     scheduler.addBatchAssumeCapacity(batch);
 
     // Await completion and assert a replay vote was emitted
-    try std.testing.expectEqual(.done, try replay.confirm_slot.testAwait(&scheduler));
+    try std.testing.expectEqual(null, try replay.confirm_slot.testAwait(&scheduler));
     const maybe_vote = state.replay_votes_channel.tryReceive();
     try std.testing.expect(maybe_vote != null);
     if (maybe_vote) |pv| pv.deinit(allocator);

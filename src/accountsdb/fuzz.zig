@@ -8,8 +8,8 @@ const Pubkey = sig.core.pubkey.Pubkey;
 const Slot = sig.core.time.Slot;
 
 const AccountsDB = sig.accounts_db.AccountsDB;
-const FullSnapshotFileInfo = sig.accounts_db.snapshots.FullSnapshotFileInfo;
-const IncrementalSnapshotFileInfo = sig.accounts_db.snapshots.IncrementalSnapshotFileInfo;
+const FullSnapshotFileInfo = sig.accounts_db.snapshot.data.FullSnapshotFileInfo;
+const IncrementalSnapshotFileInfo = sig.accounts_db.snapshot.data.IncrementalSnapshotFileInfo;
 
 const N_RANDOM_THREADS = 8;
 
@@ -394,7 +394,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                     try main_accountsdb_dir.openFile(full_archive_name, .{ .mode = .read_only });
                 defer full_archive_file.close();
 
-                try sig.accounts_db.snapshots.parallelUnpackZstdTarBall(
+                try sig.accounts_db.snapshot.data.parallelUnpackZstdTarBall(
                     allocator,
                     .noop,
                     full_archive_file,
@@ -437,7 +437,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                     try alt_accountsdb_dir.openFile(inc_archive_name, .{});
                 defer inc_archive_file.close();
 
-                try sig.accounts_db.snapshots.parallelUnpackZstdTarBall(
+                try sig.accounts_db.snapshot.data.parallelUnpackZstdTarBall(
                     allocator,
                     .noop,
                     inc_archive_file,
@@ -453,17 +453,18 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                 break :inc inc_snapshot_file_info;
             };
 
-            const snapshot_files = sig.accounts_db.SnapshotFiles.fromFileInfos(
+            const snapshot_files = sig.accounts_db.snapshot.SnapshotFiles.fromFileInfos(
                 full_snapshot_file_info,
                 maybe_incremental_file_info,
             );
 
-            const combined_manifest = try sig.accounts_db.FullAndIncrementalManifest.fromFiles(
-                allocator,
-                .from(logger),
-                alt_accountsdb_dir,
-                snapshot_files,
-            );
+            const combined_manifest =
+                try sig.accounts_db.snapshot.FullAndIncrementalManifest.fromFiles(
+                    allocator,
+                    .from(logger),
+                    alt_accountsdb_dir,
+                    snapshot_files,
+                );
             defer combined_manifest.deinit(allocator);
 
             const index_type: AccountsDB.InitParams.Index =
