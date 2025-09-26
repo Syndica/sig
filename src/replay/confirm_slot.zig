@@ -875,3 +875,125 @@ pub const TestState = struct {
         }
     }
 };
+
+fn temporaryTestForCodecov() void {
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+
+    // 80
+
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+
+    // 86
+    if (true) return;
+
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+    std.debug.print("hello world", .{});
+}
+
+test temporaryTestForCodecov {
+    temporaryTestForCodecov();
+}
