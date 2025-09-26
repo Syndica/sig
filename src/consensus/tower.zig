@@ -90,20 +90,22 @@ pub const Tower = struct {
         slot_account_reader: sig.accounts_db.SlotAccountReader,
     ) !void {
         const vote_account = blk: {
-            const maybe_vote_account = slot_account_reader.get(vote_account_pubkey.*) catch |err|
-                switch (err) {
-                    error.OutOfMemory,
-                    => |e| return e,
-                    error.InvalidOffset,
-                    error.FileIdNotFound,
-                    error.SlotNotFound,
-                    => null,
-                };
+            const maybe_vote_account = slot_account_reader.get(
+                allocator,
+                vote_account_pubkey.*,
+            ) catch |err| switch (err) {
+                error.OutOfMemory => |e| return e,
+                error.InvalidOffset,
+                error.FileIdNotFound,
+                error.SlotNotFound,
+                => null,
+            };
             break :blk maybe_vote_account orelse {
                 self.initializeRoot(fork_root);
                 return;
             };
         };
+        defer vote_account.deinit(allocator);
 
         const vote_state = try stateFromAccount(
             allocator,
@@ -294,8 +296,10 @@ pub fn lastVotedSlotInBank(
     accounts_db: *AccountsDB,
     vote_account_pubkey: *const Pubkey,
 ) !?Slot {
-    const vote_account = try accounts_db.getAccountLatest(vote_account_pubkey) orelse
+    const vote_account = try accounts_db.getAccountLatest(allocator, vote_account_pubkey) orelse
         return null;
+    defer vote_account.deinit(allocator);
+
     const vote_state = stateFromAccount(
         allocator,
         &vote_account,

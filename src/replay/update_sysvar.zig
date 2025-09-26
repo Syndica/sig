@@ -324,7 +324,7 @@ pub fn updateSysvarAccount(
     deps: UpdateSysvarAccountDeps,
 ) !void {
     const maybe_old_account =
-        try deps.account_store.reader().forSlot(deps.ancestors).get(Sysvar.ID);
+        try deps.account_store.reader().forSlot(deps.ancestors).get(allocator, Sysvar.ID);
     defer if (maybe_old_account) |old_account| old_account.deinit(allocator);
 
     const new_account = try createSysvarAccount(
@@ -393,7 +393,7 @@ fn getSysvarAndDataFromAccount(
     allocator: Allocator,
     account_reader: SlotAccountReader,
 ) !?struct { sysvar: Sysvar, data: []const u8 } {
-    const maybe_account = try account_reader.get(Sysvar.ID);
+    const maybe_account = try account_reader.get(allocator, Sysvar.ID);
 
     const account = maybe_account orelse return null;
     defer account.deinit(allocator);
@@ -412,7 +412,7 @@ pub fn getSysvarFromAccount(
     allocator: Allocator,
     account_reader: SlotAccountReader,
 ) !?Sysvar {
-    const maybe_account = try account_reader.get(Sysvar.ID);
+    const maybe_account = try account_reader.get(allocator, Sysvar.ID);
 
     const account = maybe_account orelse return null;
     defer account.deinit(allocator);
@@ -755,7 +755,7 @@ fn insertSysvarCacheAccounts(
         RecentBlockhashes,
     }) |Sysvar| {
         const old_account = if (inherit_from_old_account)
-            accounts_db.getAccountLatest(&Sysvar.ID) catch null
+            accounts_db.getAccountLatest(allocator, &Sysvar.ID) catch null
         else
             null;
         defer if (old_account) |acc| acc.deinit(allocator) else {};
@@ -799,7 +799,7 @@ fn getSysvarAndAccount(
     account_reader: SlotAccountReader,
 ) !?struct { Sysvar, AccountSharedData } {
     if (!builtin.is_test) @compileError("only for testing");
-    const maybe_account = account_reader.get(Sysvar.ID) catch return null;
+    const maybe_account = account_reader.get(allocator, Sysvar.ID) catch return null;
 
     const account = maybe_account orelse return null;
     defer account.deinit(allocator);
