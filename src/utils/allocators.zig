@@ -122,16 +122,15 @@ pub fn RecycleBuffer(comptime T: type, default_init: T, config: struct {
         const AllocError = error{
             AllocTooBig,
             AllocFailed,
-            AttemptedZeroAlloc,
             // NOTE: even though this doesnt get hit on `alloc`, zig isnt smart enough to know that
             CollapseFailed,
         } || Allocator.Error;
 
         pub fn alloc(self: *Self, n: u64) AllocError![]T {
+            if (n == 0) return &.{};
+
             if (config.thread_safe) self.mux.lock();
             defer if (config.thread_safe) self.mux.unlock();
-
-            if (n == 0) return error.AttemptedZeroAlloc;
 
             for (0..config.max_collapse_tries) |_| {
                 return self.allocUnsafe(n) catch |err| {
@@ -158,10 +157,10 @@ pub fn RecycleBuffer(comptime T: type, default_init: T, config: struct {
         /// same as alloc but if the alloc fails due to not having enough free records (error.AllocFailed),
         /// it expands the records to max(min_split_size, n) and retrys (which should always succeed)
         pub fn allocOrExpand(self: *Self, n: u64) AllocError![]T {
+            if (n == 0) return &.{};
+
             if (config.thread_safe) self.mux.lock();
             defer if (config.thread_safe) self.mux.unlock();
-
-            if (n == 0) return error.AttemptedZeroAlloc;
 
             for (0..config.max_collapse_tries) |_| {
                 return self.allocUnsafe(n) catch |err| {
@@ -189,7 +188,7 @@ pub fn RecycleBuffer(comptime T: type, default_init: T, config: struct {
         }
 
         pub fn allocUnsafe(self: *Self, n: u64) AllocError![]T {
-            if (n == 0) return error.AttemptedZeroAlloc;
+            if (n == 0) return &.{};
             // this would never succeed
             if (n > self.max_continguous_capacity) return error.AllocTooBig;
 
