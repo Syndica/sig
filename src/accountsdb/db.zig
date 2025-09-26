@@ -5003,7 +5003,7 @@ test "insertion basic" {
     var simple_state: sig.accounts_db.ThreadSafeAccountMap = .init(allocator);
     defer simple_state.deinit();
 
-    var real_state: AccountsDB = try .init(.minimal(allocator, .noop, tmp_dir.dir, null));
+    var real_state: AccountsDB = try .init(.minimal(allocator, .FOR_TESTS, tmp_dir.dir, null));
     defer real_state.deinit();
 
     const simple_store = simple_state.accountStore();
@@ -5076,7 +5076,7 @@ test "insertion out of order" {
     var simple_state: sig.accounts_db.ThreadSafeAccountMap = .init(allocator);
     defer simple_state.deinit();
 
-    var real_state: AccountsDB = try .init(.minimal(allocator, .noop, tmp_dir.dir, null));
+    var real_state: AccountsDB = try .init(.minimal(allocator, .FOR_TESTS, tmp_dir.dir, null));
     defer real_state.deinit();
 
     const simple_store = simple_state.accountStore();
@@ -5185,7 +5185,7 @@ test "put and get zero lamports before & after cleanup" {
     var simple_state: sig.accounts_db.ThreadSafeAccountMap = .init(allocator);
     defer simple_state.deinit();
 
-    var real_state: AccountsDB = try .init(.minimal(allocator, .noop, tmp_dir.dir, null));
+    var real_state: AccountsDB = try .init(.minimal(allocator, .FOR_TESTS, tmp_dir.dir, null));
     defer real_state.deinit();
 
     var manager: sig.accounts_db.manager.Manager = try .init(allocator, &real_state, .{
@@ -5311,7 +5311,7 @@ test "put and get zero lamports across forks" {
     var simple_state: sig.accounts_db.ThreadSafeAccountMap = .init(allocator);
     defer simple_state.deinit();
 
-    var real_state: AccountsDB = try .init(.minimal(allocator, .noop, tmp_dir.dir, null));
+    var real_state: AccountsDB = try .init(.minimal(allocator, .FOR_TESTS, tmp_dir.dir, null));
     defer real_state.deinit();
 
     var manager: sig.accounts_db.manager.Manager = try .init(allocator, &real_state, .{
@@ -5375,7 +5375,7 @@ test "put and get across competing forks" {
     var simple_state: sig.accounts_db.ThreadSafeAccountMap = .init(allocator);
     defer simple_state.deinit();
 
-    var real_state: AccountsDB = try .init(.minimal(allocator, .noop, tmp_dir.dir, null));
+    var real_state: AccountsDB = try .init(.minimal(allocator, .FOR_TESTS, tmp_dir.dir, null));
     defer real_state.deinit();
 
     var manager: sig.accounts_db.manager.Manager = try .init(allocator, &real_state, .{
