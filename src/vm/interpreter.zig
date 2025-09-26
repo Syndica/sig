@@ -656,8 +656,8 @@ pub const Vm = struct {
 
                 next_pc = (target_pc -% self.vm_addr) / 8;
                 if (next_pc >= instructions.len) return error.CallOutsideTextSegment;
-                if (version.enableStaticSyscalls() and
-                    self.executable.function_registry.lookupKey(next_pc) == null)
+                if (version.enableStricterVerification() and
+                    instructions[next_pc].isFunctionStartMarker())
                 {
                     return error.UnsupportedInstruction;
                 }

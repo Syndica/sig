@@ -127,8 +127,10 @@ pub const Executable = struct {
         const instructions = self.instructions;
         if (instructions.len == 0) return error.NoProgram;
 
-        const map = self.function_registry.map;
-        var iter = map.iterator();
+        if (version.enableStricterVerification() and !instructions[0].isFunctionStartMarker()) {
+            return error.InvalidFunction;
+        }
+
         var function_start: u64 = 0;
         var function_end: u64 = instructions.len;
 
@@ -137,11 +139,15 @@ pub const Executable = struct {
             const inst = instructions[pc];
             var store: bool = false;
 
-            if (version.enableStaticSyscalls() and map.contains(pc)) {
-                function_start = if (iter.next()) |entry| entry.key_ptr.* else 0;
-                const before_index = iter.index;
-                function_end = if (iter.next()) |entry| entry.key_ptr.* else instructions.len;
-                iter.index = before_index;
+            if (version.enableStricterVerification() and inst.isFunctionStartMarker()) {
+                function_start = pc;
+                function_end = pc +| 1;
+
+                while (function_end < instructions.len and
+                    !instructions[function_end].isFunctionStartMarker())
+                {
+                    function_end -|= 1;
+                }
                 switch (instructions[function_end -| 1].opcode) {
                     .ja, .@"return" => {},
                     else => return error.InvalidFunction,
@@ -341,7 +347,9 @@ pub const Executable = struct {
 
                 .call_imm => if (version.enableStaticSyscalls()) {
                     const target_pc = version.computeTargetPc(pc, inst);
-                    if (!self.function_registry.map.contains(target_pc)) {
+                    if (target_pc >= instructions.len or
+                        !instructions[target_pc].isFunctionStartMarker())
+                    {
                         return error.InvalidFunction;
                     }
                 },
@@ -953,7 +961,7 @@ pub const Config = struct {
 
     /// Allowed [SBPFVersion]s
     minimum_version: sbpf.Version = .v0,
-    maximum_version: sbpf.Version = .v3,
+    maximum_version: sbpf.Version = .v4,
 
     pub fn stackSize(config: Config) u64 {
         return config.stack_frame_size * config.max_call_depth;
