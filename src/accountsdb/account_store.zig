@@ -263,6 +263,7 @@ pub const ThreadSafeAccountMap = struct {
     pub fn getLatest(self: *ThreadSafeAccountMap, address: Pubkey) !?Account {
         self.rwlock.lockShared();
         defer self.rwlock.unlockShared();
+
         const list = self.pubkey_map.get(address) orelse return null;
         if (list.items.len == 0) return null;
         return asAccount(list.items[0][1]);
@@ -284,6 +285,9 @@ pub const ThreadSafeAccountMap = struct {
         address: Pubkey,
         put_account: AccountSharedData,
     ) !void {
+        self.rwlock.lock();
+        defer self.rwlock.unlock();
+
         const account = try put_account.clone(self.allocator);
 
         slot_map: {
