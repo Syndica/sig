@@ -142,7 +142,7 @@ pub const Transaction = struct {
 
         for (signatures, keypairs) |*signature, keypair| {
             const msg_signature = keypair.sign(msg_bytes, null) catch return error.SigningError;
-            signature.* = .{ .data = msg_signature.toBytes() };
+            signature.* = .fromSignature(msg_signature);
         }
 
         return .{
@@ -155,7 +155,7 @@ pub const Transaction = struct {
     pub fn serialize(writer: anytype, data: anytype, _: sig.bincode.Params) !void {
         std.debug.assert(data.signatures.len <= std.math.maxInt(u16));
         try leb.writeULEB128(writer, @as(u16, @intCast(data.signatures.len)));
-        for (data.signatures) |sgn| try writer.writeAll(&sgn.data);
+        for (data.signatures) |sgn| try writer.writeAll(&sgn.toBytes());
         try data.msg.serialize(writer, data.version);
     }
 
@@ -164,7 +164,7 @@ pub const Transaction = struct {
         const signatures = try allocator.alloc(Signature, try leb.readULEB128(u16, reader));
         errdefer allocator.free(signatures);
 
-        for (signatures) |*sgn| sgn.* = .{ .data = try reader.readBytesNoEof(Signature.SIZE) };
+        for (signatures) |*sgn| sgn.* = .fromBytes(try reader.readBytesNoEof(Signature.SIZE));
         var peekable = sig.utils.io.peekableReader(reader);
         const version = try Version.deserialize(&peekable);
         return .{
@@ -203,11 +203,13 @@ pub const Transaction = struct {
     /// verify signatures. Call `validate` to ensure full consistency.
     pub fn verifySignatures(self: Transaction, serialized_message: []const u8) VerifyError!void {
         if (self.msg.account_keys.len < self.signatures.len) return error.NotEnoughAccounts;
-        for (self.signatures, self.msg.account_keys[0..self.signatures.len]) |signature, pubkey| {
-            if (!try signature.verify(pubkey, serialized_message)) {
-                return error.SignatureVerificationFailed;
-            }
-        }
+
+        sig.crypto.ed25519.verifyBatchOverSingleMessage(
+            16,
+            self.signatures,
+            self.msg.account_keys[0..self.signatures.len],
+            serialized_message,
+        ) catch return error.SignatureVerificationFailed;
     }
 
     /// Count the number of accounts in the slice of transactions,

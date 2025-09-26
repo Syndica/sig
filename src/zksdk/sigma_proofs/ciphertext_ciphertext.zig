@@ -14,7 +14,7 @@ const ElGamalPubkey = sig.zksdk.ElGamalPubkey;
 const Ristretto255 = std.crypto.ecc.Ristretto255;
 const Scalar = std.crypto.ecc.Edwards25519.scalar.Scalar;
 const Transcript = sig.zksdk.Transcript;
-const weak_mul = sig.vm.syscalls.ecc.weak_mul;
+const ed25519 = sig.crypto.ed25519;
 const ProofType = sig.runtime.program.zk_elgamal.ProofType;
 
 pub const Proof = struct {
@@ -67,18 +67,21 @@ pub const Proof = struct {
             std.crypto.secureZero(u64, &y_r.limbs);
         }
 
-        const Y_0: Ristretto255 = .{ .p = weak_mul.mul(P_first.p, y_s.toBytes()) };
-        const Y_1: Ristretto255 = .{ .p = weak_mul.mulMulti(
+        const Y_0 = ed25519.mul(true, P_first, y_s.toBytes());
+        // TODO: another optimization to explore is pre-computing the `G` and `H` straus lookup
+        // tables here, we need some way of checking that they are in-fact the G and H point
+        // inside of the `mulMulti`. maybe have a wrapper ristretto struct?
+        const Y_1 = ed25519.mulMulti(
             2,
-            .{ pedersen.G.p, D_first.p },
+            .{ pedersen.G, D_first },
             .{ y_x.toBytes(), y_s.toBytes() },
-        ) };
-        const Y_2: Ristretto255 = .{ .p = weak_mul.mulMulti(
+        );
+        const Y_2 = ed25519.mulMulti(
             2,
-            .{ pedersen.G.p, pedersen.H.p },
+            .{ pedersen.G, pedersen.H },
             .{ y_x.toBytes(), y_r.toBytes() },
-        ) };
-        const Y_3: Ristretto255 = .{ .p = weak_mul.mul(P_second.p, y_r.toBytes()) };
+        );
+        const Y_3 = ed25519.mul(true, P_second, y_r.toBytes());
 
         comptime var session = Transcript.getSession(contract);
         defer session.finish();
@@ -177,18 +180,18 @@ pub const Proof = struct {
         //         Y_0
 
         // zig fmt: off
-        const check = weak_mul.mulMulti(11, .{
-            pedersen.G.p,
-            pedersen.H.p,
-            P_first.p,
-            D_first.p,
-            Y_1.p,
-            C_first.p,
-            Y_2.p,
-            C_second.p,
-            Y_3.p,
-            D_second.p,
-            P_second.p,
+        const check = ed25519.mulMulti(11, .{
+            pedersen.G,
+            pedersen.H,
+            P_first,
+            D_first,
+            Y_1,
+            C_first,
+            Y_2,
+            C_second,
+            Y_3,
+            D_second,
+            P_second,
         }, .{
             w.add(ww).mul(self.z_x).toBytes(),                      // z_x * (w + ww)
             Edwards25519.scalar.sub(self.z_r.mul(ww).toBytes(), c), // -c + (z_r * ww)
@@ -204,7 +207,7 @@ pub const Proof = struct {
         });
         // zig fmt: on
 
-        if (!Y_0.equivalent(.{ .p = check })) {
+        if (!Y_0.equivalent(check)) {
             return error.AlgebraicRelation;
         }
     }

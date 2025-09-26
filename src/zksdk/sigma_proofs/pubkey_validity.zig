@@ -11,7 +11,7 @@ const ElGamalPubkey = sig.zksdk.ElGamalPubkey;
 const Ristretto255 = std.crypto.ecc.Ristretto255;
 const Scalar = std.crypto.ecc.Edwards25519.scalar.Scalar;
 const Transcript = sig.zksdk.Transcript;
-const weak_mul = sig.vm.syscalls.ecc.weak_mul;
+const ed25519 = sig.crypto.ed25519;
 const ProofType = sig.runtime.program.zk_elgamal.ProofType;
 
 pub const Proof = struct {
@@ -38,7 +38,7 @@ pub const Proof = struct {
         defer std.crypto.secureZero(u64, &y.limbs);
 
         // Scalar.random() cannot return zero, and H isn't an identity
-        const Y = pedersen.H.mul(y.toBytes()) catch unreachable;
+        const Y = ed25519.straus.mulByKnown(pedersen.H, y.toBytes());
 
         comptime var session = Transcript.getSession(contract);
         defer session.finish();
@@ -75,15 +75,15 @@ pub const Proof = struct {
         // ----------------------- MSM
         //     Y
 
-        const check = weak_mul.mulMulti(2, .{
-            pedersen.H.p,
-            pubkey.point.p,
+        const check = ed25519.mulMulti(2, .{
+            pedersen.H,
+            pubkey.point,
         }, .{
             self.z.toBytes(),
             Edwards25519.scalar.neg(c.toBytes()),
         });
 
-        if (!self.Y.equivalent(.{ .p = check })) {
+        if (!self.Y.equivalent(check)) {
             return error.AlgebraicRelation;
         }
     }

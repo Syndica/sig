@@ -19,6 +19,7 @@ const sig = @import("../sig.zig");
 const Ristretto255 = std.crypto.ecc.Ristretto255;
 const Edwards25519 = std.crypto.ecc.Edwards25519;
 const Scalar = Edwards25519.scalar.Scalar;
+const ed25519 = sig.crypto.ed25519;
 const pedersen = sig.zksdk.pedersen;
 
 pub const Pubkey = struct {
@@ -28,11 +29,11 @@ pub const Pubkey = struct {
     pub fn fromSecret(secret: Keypair.Secret) Pubkey {
         const scalar = secret.scalar;
         std.debug.assert(!scalar.isZero());
-        // unreachable because `H` is known to not be an identity and `scalar` cannot be zero.
-        return .{ .point = Ristretto255.mul(
+        return .{ .point = ed25519.mul(
+            true,
             pedersen.H,
             scalar.invert().toBytes(),
-        ) catch unreachable };
+        ) };
     }
 
     pub fn fromBytes(bytes: [32]u8) !Pubkey {

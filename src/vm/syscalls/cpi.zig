@@ -146,8 +146,6 @@ fn RefCell(comptime T: type) type {
 /// [agave] https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/cpi.rs#L57
 fn VmValue(comptime T: type) type {
     return union(enum) {
-        const Self = @This();
-
         vm_address: struct {
             vm_addr: u64,
             memory_map: *const MemoryMap,
@@ -155,16 +153,19 @@ fn VmValue(comptime T: type) type {
         },
         translated_addr: usize,
 
-        pub fn get(self: Self, comptime state: memory.MemoryState) !(switch (state) {
+        pub fn get(self: @This(), comptime state: memory.MemoryState) !(switch (state) {
             .constant => *align(1) const T,
             .mutable => *align(1) T,
         }) {
-            switch (self) {
-                .translated_addr => |ptr| return @ptrFromInt(ptr),
-                .vm_address => |vma| {
-                    return vma.memory_map.translateType(T, state, vma.vm_addr, vma.check_aligned);
-                },
-            }
+            return switch (self) {
+                .translated_addr => |ptr| @ptrFromInt(ptr),
+                .vm_address => |vma| vma.memory_map.translateType(
+                    T,
+                    state,
+                    vma.vm_addr,
+                    vma.check_aligned,
+                ),
+            };
         }
     };
 }

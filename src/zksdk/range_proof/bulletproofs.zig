@@ -10,12 +10,11 @@ const sig = @import("../../sig.zig");
 const table = @import("table");
 pub const InnerProductProof = @import("ipp.zig").Proof; // pub so tests can run
 
-const pippenger = sig.crypto.ed25519.pippenger;
 const pedersen = sig.zksdk.pedersen;
 const Edwards25519 = std.crypto.ecc.Edwards25519;
 const Ristretto255 = std.crypto.ecc.Ristretto255;
 const Scalar = std.crypto.ecc.Edwards25519.scalar.Scalar;
-const weak_mul = sig.vm.syscalls.ecc.weak_mul;
+const ed25519 = sig.crypto.ed25519;
 const Transcript = sig.zksdk.Transcript;
 const ProofType = sig.runtime.program.zk_elgamal.ProofType;
 
@@ -159,8 +158,12 @@ pub fn Proof(bit_size: comptime_int) type {
                 for (0..n) |j| {
                     // init functions aren't exposed, so doesn't need to be constant time.
                     const v = (amount >> @intCast(j)) & 0b1 != 0;
-                    const point = if (v) table.G[bit] else table.H[bit].neg();
-                    A = A.add(.{ .p = point });
+                    const point: Ristretto255 = if (v)
+                        table.G[bit]
+                    else
+                        // TODO: use ristretto neg() alias when added to stdlib
+                        .{ .p = table.H[bit].p.neg() };
+                    A = A.add(point);
                     bit += 1;
                 }
             }
@@ -173,11 +176,11 @@ pub fn Proof(bit_size: comptime_int) type {
             }
             const s_blinding = Scalar.random();
 
-            const S: Ristretto255 = .{ .p = Edwards25519.mulMulti(
+            const S = sig.crypto.ed25519.mulMulti(
                 1 + bit_size * 2,
-                .{pedersen.H.p} ++ table.G[0..bit_size].* ++ table.H[0..bit_size].*,
+                .{pedersen.H} ++ table.G[0..bit_size].* ++ table.H[0..bit_size].*,
                 .{s_blinding.toBytes()} ++ s_L ++ s_R,
-            ) catch unreachable };
+            );
 
             comptime var session = Transcript.getSession(contract);
             defer session.finish();
@@ -256,7 +259,7 @@ pub fn Proof(bit_size: comptime_int) type {
             // compute the inner product argument on the commitment:
             // P = <l(x), G> + <r(x), H'> + <l(x), r(x)>*Q
             const w = transcript.challengeScalar(&session, "w");
-            const Q = weak_mul.mul(pedersen.G.p, w.toBytes());
+            const Q = ed25519.straus.mulByKnown(pedersen.G, w.toBytes());
 
             const G_factors: [bit_size]Scalar = @splat(ONE);
             const H_factors = genPowers(bit_size, y.invert());
@@ -266,7 +269,7 @@ pub fn Proof(bit_size: comptime_int) type {
             var l_vec = l_poly.eval(x);
             var r_vec = r_poly.eval(x);
             const ipp_proof = InnerProductProof(bit_size).init(
-                .{ .p = Q },
+                Q,
                 &G_factors,
                 &H_factors,
                 &l_vec,
@@ -380,8 +383,8 @@ pub fn Proof(bit_size: comptime_int) type {
             for (self.ipp.L_vec) |l| points.appendAssumeCapacity(l);
             for (self.ipp.R_vec) |r| points.appendAssumeCapacity(r);
 
-            points.appendSliceAssumeCapacity(table.H_ristretto[0..bit_size]);
-            points.appendSliceAssumeCapacity(table.G_ristretto[0..bit_size]);
+            points.appendSliceAssumeCapacity(table.H[0..bit_size]);
+            points.appendSliceAssumeCapacity(table.G[0..bit_size]);
 
             const d_txb = d.mul(self.t_x_blinding);
             const H = Edwards25519.scalar.neg(d_txb.add(self.e_blinding).toBytes());
@@ -447,7 +450,7 @@ pub fn Proof(bit_size: comptime_int) type {
             scalars.appendAssumeCapacity(basepoint_scalar.toBytes()); // G
             points.appendAssumeCapacity(pedersen.G);
 
-            const check: Ristretto255 = pippenger.mulMulti(
+            const check: Ristretto255 = sig.crypto.ed25519.mulMultiRuntime(
                 max,
                 false,
                 true,
