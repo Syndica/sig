@@ -1977,6 +1977,7 @@ pub const AccountsDB = struct {
         CannotWriteRootedSlot,
         GeyserWriteError,
         CorruptAccountIndex,
+        InsertIndexFailed,
     } || std.mem.Allocator.Error;
 
     /// writes one account to storage
@@ -2088,13 +2089,13 @@ pub const AccountsDB = struct {
             error.OutOfMemory,
             error.AllocTooBig,
             error.AllocFailed,
-            error.AttemptedZeroAlloc,
             error.CollapseFailed,
-            error.InsertIndexFailed,
             => |e| {
                 self.logger.err().logf("expandSlotRefsAndInsert: {s}", .{@errorName(e)});
                 return error.OutOfMemory;
             },
+            error.InsertIndexFailed,
+            => |e| return e,
         };
     }
 
