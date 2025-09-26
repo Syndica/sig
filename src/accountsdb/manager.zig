@@ -239,7 +239,6 @@ pub const Manager = struct {
         }
     }
 
-    /// Returns the latest full snapshot slot by the end of the attempt.
     pub fn tryGenerateSnapshots(self: *Manager) !void {
         const largest_flushed_slot = self.db.max_slots.readCopy().flushed orelse 0;
 
