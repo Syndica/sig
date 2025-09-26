@@ -164,7 +164,7 @@ pub fn convertExecutionError(err: ExecutionError) struct { i64, ExecutionErrorKi
         InstructionError.AccountBorrowFailed =>                     .{ 23, .Instruction, "instruction tries to borrow reference for an account which is already borrowed" },
         InstructionError.AccountBorrowOutstanding =>                .{ 24, .Instruction, "instruction left account with an outstanding borrowed reference" },
         InstructionError.DuplicateAccountOutOfSync =>               .{ 25, .Instruction, "instruction modifications of multiply-passed account differ" },
-        InstructionError.Custom =>                                  .{ 26, .Instruction, "custom program error: 0x0" },
+        InstructionError.Custom =>                                  .{ 26, .Instruction, "" }, // message handled in `programFailure`
         InstructionError.InvalidError =>                            .{ 27, .Instruction, "program returned invalid error code" },
         InstructionError.ExecutableDataModified =>                  .{ 28, .Instruction, "instruction changed executable accounts data" },
         InstructionError.ExecutableLamportChange =>                 .{ 29, .Instruction, "instruction changed the balance of an executable account" },
