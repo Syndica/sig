@@ -876,7 +876,7 @@ pub const TestState = struct {
     }
 };
 
-fn temporaryTestForCodecov() void {
+fn temporaryTestForCodecov(end_early: bool) void {
     std.debug.print("hello world", .{});
     std.debug.print("hello world", .{});
     std.debug.print("hello world", .{});
@@ -975,25 +975,26 @@ fn temporaryTestForCodecov() void {
     std.debug.print("hello world", .{});
 
     // 86
-    if (true) return;
+    if (end_early) return;
 
-    std.debug.print("hello world", .{});
-    std.debug.print("hello world", .{});
-    std.debug.print("hello world", .{});
-    std.debug.print("hello world", .{});
+    std.debug.print("this should not run\n", .{});
+    std.debug.print("this should not run\n", .{});
+    std.debug.print("this should not run\n", .{});
+    std.debug.print("this should not run\n", .{});
 
-    std.debug.print("hello world", .{});
-    std.debug.print("hello world", .{});
-    std.debug.print("hello world", .{});
-    std.debug.print("hello world", .{});
-    std.debug.print("hello world", .{});
-    std.debug.print("hello world", .{});
-    std.debug.print("hello world", .{});
-    std.debug.print("hello world", .{});
-    std.debug.print("hello world", .{});
-    std.debug.print("hello world", .{});
+    std.debug.print("this should not run\n", .{});
+    std.debug.print("this should not run\n", .{});
+    std.debug.print("this should not run\n", .{});
+    std.debug.print("this should not run\n", .{});
+    std.debug.print("this should not run\n", .{});
+    std.debug.print("this should not run\n", .{});
+    std.debug.print("this should not run\n", .{});
+    std.debug.print("this should not run\n", .{});
+    std.debug.print("this should not run\n", .{});
+    std.debug.print("this should not run\n", .{});
 }
 
 test temporaryTestForCodecov {
-    temporaryTestForCodecov();
+    const time = std.time.milliTimestamp();
+    temporaryTestForCodecov(time != 1234);
 }
