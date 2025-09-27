@@ -221,7 +221,7 @@ pub const G2 = struct {
         // G2 does *not* have prime order, so we need to perform a secondary subgroup membership check.
         // https://eprint.iacr.org/2022/348, Sec 3.1.
         // [r]P == 0 <==> [x+1]P + ψ([x]P) + ψ²([x]P) = ψ³([2x]P)
-        const xp: G2 = mulScalar(p, @bitCast(Fp.constants.x));
+        const xp: G2 = mulScalar(p, Fp.constants.x);
 
         const psi = xp.frob();
         const psi2 = xp.frob2();
@@ -464,16 +464,17 @@ fn dbl(p: anytype) @TypeOf(p) {
 ///
 /// https://encrypt.a41.io/primitives/abstract-algebra/elliptic-curve/scalar-multiplication/double-and-add
 /// https://en.wikipedia.org/wiki/Elliptic_curve_point_multiplication#Double-and-add
-fn mulScalar(a: anytype, scalar: [4]u64) @TypeOf(a) {
+fn mulScalar(a: anytype, scalar: u256) @TypeOf(a) {
     // TODO: can be further optimized with GLV and wNAF
-    const leading = @clz(@as(u256, @bitCast(scalar)));
+    const limbs: [4]u64 = @bitCast(scalar);
+    const leading = @clz(scalar);
     if (leading == 256) return .zero;
     var i: u8 = @intCast(256 - 1 - leading);
     var r = a;
     while (i > 0) {
         i -= 1;
         r = dbl(r);
-        if (bit(scalar, i)) r = addMixed(r, a);
+        if (bit(limbs, i)) r = addMixed(r, a);
     }
     return r;
 }
@@ -488,7 +489,7 @@ pub fn addSyscall(out: *[64]u8, input: *const [128]u8) !void {
 pub fn mulSyscall(out: *[64]u8, input: *const [96]u8) !void {
     const a: G1 = try .fromBytes(input[0..64]);
     // Scalar is provided in big-endian and we do *not* validate it.
-    const b: [4]u64 = @bitCast(Fp.byteSwap(input[64..][0..32].*));
+    const b: u256 = @bitCast(Fp.byteSwap(input[64..][0..32].*));
     const result = mulScalar(a, b);
     result.toBytes(out);
 }
