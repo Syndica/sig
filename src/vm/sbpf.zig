@@ -19,6 +19,8 @@ pub const Version = enum(u32) {
     v2,
     /// SIMD-0178, SIMD-0179, SIMD-0189
     v3,
+    /// SIMD-0177
+    v4,
     /// support other versions as well!
     reserved,
     _,
@@ -62,8 +64,11 @@ pub const Version = enum(u32) {
     }
 
     /// Enable SIMD-0178: SBPF Static Syscalls
-    /// Enable SIMD-0179: SBPF stricter verification constraints
     pub fn enableStaticSyscalls(version: Version) bool {
+        return version.gte(.v3);
+    }
+    /// Enable SIMD-0179: SBPF stricter verification constraints
+    pub fn enableStricterVerification(version: Version) bool {
         return version.gte(.v3);
     }
     /// Enable SIMD-0189: SBPF stricter ELF headers
@@ -719,6 +724,10 @@ pub const Instruction = packed struct(u64) {
             return error.CannotWriteR10;
         }
         return error.InvalidDestinationRegister;
+    }
+
+    pub fn isFunctionStartMarker(inst: Instruction) bool {
+        return inst.opcode == .add64_imm and inst.dst == .r10;
     }
 
     pub fn format(

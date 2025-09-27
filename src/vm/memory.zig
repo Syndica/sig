@@ -32,7 +32,7 @@ pub const MemoryMap = union(enum) {
         version: sbpf.Version,
         config: exe.Config,
     ) (error{OutOfMemory} || InitError)!MemoryMap {
-        return if (config.aligned_memory_mapping)
+        return if (version == .v4 or config.aligned_memory_mapping)
             .{ .aligned = try AlignedMemoryMap.init(allocator, regions, version, config) }
         else
             .{ .unaligned = try UnalignedMemoryMap.init(allocator, regions, version, config) };
@@ -677,7 +677,7 @@ test "aligned vmap" {
             Region.init(.mutable, &program_mem, RODATA_START),
             Region.init(.constant, &stack_mem, STACK_START),
         },
-        .v3,
+        .v4,
         .{},
     );
     defer m.deinit(allocator);
@@ -721,7 +721,7 @@ test "aligned region" {
             Region.init(.mutable, &program_mem, RODATA_START),
             Region.init(.constant, &stack_mem, STACK_START),
         },
-        .v3,
+        .v4,
         .{},
     );
     defer m.deinit(allocator);
@@ -737,8 +737,8 @@ test "aligned region" {
 }
 
 test "invalid memory region" {
-    var program_mem: [4]u8 = .{0xFF} ** 4;
-    var stack_mem: [4]u8 = .{0xDD} ** 4;
+    var program_mem: [4]u8 = @splat(0xFF);
+    var stack_mem: [4]u8 = @splat(0xDD);
 
     try expectError(
         error.InvalidMemoryRegion,

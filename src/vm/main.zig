@@ -121,6 +121,7 @@ pub fn main() !void {
         m,
         &loader,
         stack_memory.len,
+        0,
         &tc,
     );
     defer ebpf_vm.deinit();
