@@ -11,7 +11,7 @@ const lib = @import("lib.zig");
 const Config = lib.Config;
 const Registry = lib.Registry;
 const Section = lib.Section;
-const Syscall = sig.vm.syscalls.Syscall;
+const SyscallMap = sig.vm.SyscallMap;
 
 const elf = std.elf;
 const assert = std.debug.assert;
@@ -26,7 +26,7 @@ pub const Elf = struct {
     data: Data,
     entry_pc: u64,
     version: sbpf.Version,
-    function_registry: Registry(u64),
+    function_registry: Registry,
     ro_section: Section,
     config: Config,
 
@@ -490,8 +490,8 @@ pub const Elf = struct {
             allocator: std.mem.Allocator,
             headers: Headers,
             bytes: []u8,
-            loader: *const Registry(Syscall),
-            function_registry: *Registry(u64),
+            loader: *const SyscallMap,
+            function_registry: *Registry,
             version: sbpf.Version,
             config: Config,
         ) !void {
@@ -705,7 +705,7 @@ pub const Elf = struct {
                         } else {
                             const hash = sbpf.hashSymbolName(symbol_name);
                             if (config.reject_broken_elfs and
-                                loader.lookupKey(hash) == null)
+                                loader.get(hash) == null)
                             {
                                 return error.UnresolvedSymbol;
                             }
@@ -783,7 +783,7 @@ pub const Elf = struct {
     pub fn parse(
         allocator: std.mem.Allocator,
         bytes: []u8,
-        loader: *const Registry(Syscall),
+        loader: *const SyscallMap,
         config: Config,
     ) !Elf {
         const headers = try Headers.parse(bytes);
@@ -990,7 +990,7 @@ pub const Elf = struct {
         data: Data,
         sbpf_version: sbpf.Version,
         config: Config,
-        loader: *const Registry(Syscall),
+        loader: *const SyscallMap,
     ) !Elf {
         // Lenient parsing uses the v0 sbpf.Version parsing which differs from v1+ version passed in
         // https://github.com/anza-xyz/sbpf/blob/v0.10.0/src/elf.rs#L626-L630
@@ -1020,7 +1020,7 @@ pub const Elf = struct {
             text_section.sh_addr != text_section.sh_offset or
             text_section_vaddr_end > memory.STACK_START) return error.ValueOutOfBounds;
 
-        var function_registry: Registry(u64) = .{};
+        var function_registry: Registry = .{};
         errdefer function_registry.deinit(allocator);
 
         try data.relocate(
@@ -1246,8 +1246,7 @@ test "parsing failing allocation" {
             const bytes = try input_file.readToEndAlloc(allocator, sbpf.MAX_FILE_SIZE);
             defer allocator.free(bytes);
 
-            var loader: Registry(Syscall) = .{};
-            var parsed = try Elf.parse(allocator, bytes, &loader, .{});
+            var parsed = try Elf.parse(allocator, bytes, &.ALL_DISABLED, .{});
             defer parsed.deinit(allocator);
         }
     };
@@ -1258,7 +1257,7 @@ test "parsing failing allocation" {
 
 test "strict header empty" {
     const allocator = std.testing.allocator;
-    var loader: Registry(Syscall) = .{};
+    var loader: SyscallMap = .ALL_DISABLED;
     try expectEqual(
         error.OutOfBounds,
         Elf.parse(allocator, &.{}, &loader, .{}),
@@ -1274,7 +1273,7 @@ test "strict header version" {
     // set the e_flags to an invalid SBPF version
     bytes[0x0030] = 0xFF;
 
-    var loader: Registry(Syscall) = .{};
+    var loader: SyscallMap = .ALL_DISABLED;
     try expectEqual(
         error.VersionUnsupported,
         Elf.parse(allocator, bytes, &loader, .{}),
@@ -1287,7 +1286,7 @@ test "strict header functions" {
     const bytes = try input_file.readToEndAlloc(allocator, sbpf.MAX_FILE_SIZE);
     defer allocator.free(bytes);
 
-    var loader: Registry(Syscall) = .{};
+    var loader: SyscallMap = .ALL_DISABLED;
     var parsed = try Elf.parse(
         allocator,
         bytes,
@@ -1333,7 +1332,7 @@ test "strict header corrupt file header" {
         defer allocator.free(copy);
         copy[offset] = 0xAF;
 
-        var loader: Registry(Syscall) = .{};
+        var loader: SyscallMap = .ALL_DISABLED;
         var result = Elf.parse(allocator, copy, &loader, .{});
         defer if (result) |*parsed| parsed.deinit(allocator) else |_| {};
 
@@ -1381,7 +1380,7 @@ test "strict header corrupt program header" {
             defer allocator.free(copy);
             copy[true_offset] = 0xAF;
 
-            var loader: Registry(Syscall) = .{};
+            var loader: SyscallMap = .ALL_DISABLED;
             var result = Elf.parse(allocator, copy, &loader, .{}) catch |e| switch (e) {
                 error.OutOfBounds => error.InvalidProgramHeader,
                 else => e,
@@ -1407,7 +1406,7 @@ test "elf load" {
     const bytes = try input_file.readToEndAlloc(allocator, sbpf.MAX_FILE_SIZE);
     defer allocator.free(bytes);
 
-    var loader: Registry(Syscall) = .{};
+    var loader: SyscallMap = .ALL_DISABLED;
     var parsed = try Elf.parse(allocator, bytes, &loader, .{});
     defer parsed.deinit(allocator);
 }
@@ -1490,7 +1489,7 @@ test "SHT_DYNAMIC fallback" {
     // specific input, the p_type is 232 bytes from the start.
     @as(*align(1) u32, @ptrCast(bytes[232..][0..4])).* = elf.PT_NULL;
 
-    var loader: Registry(Syscall) = .{};
+    var loader: SyscallMap = .ALL_DISABLED;
     var parsed = try Elf.parse(
         allocator,
         bytes,
@@ -1509,7 +1508,7 @@ test "add all symbols during relocate" {
     const bytes = try input_file.readToEndAlloc(allocator, sbpf.MAX_FILE_SIZE);
     defer allocator.free(bytes);
 
-    var loader: Registry(Syscall) = .{};
+    var loader: SyscallMap = .ALL_DISABLED;
     var parsed = try Elf.parse(allocator, bytes, &loader, .{
         .maximum_version = .v0, // parseLenient
         .enable_symbol_and_section_labels = true, // all symbols in registry codepath.

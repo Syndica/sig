@@ -203,10 +203,9 @@ test "loadPrograms: load v1, v2 program" {
     );
 
     const environment = vm.Environment{
-        .loader = .{},
+        .loader = .ALL_DISABLED,
         .config = .{},
     };
-    defer environment.deinit(allocator);
 
     { // Success
         var loaded_programs = try loadPrograms(
@@ -286,7 +285,7 @@ test "loadPrograms: load v3 program" {
     );
 
     const environment = vm.Environment{
-        .loader = .{},
+        .loader = .ALL_DISABLED,
         .config = .{},
     };
 
@@ -387,7 +386,7 @@ test "loadPrograms: load v4 program" {
     defer allocator.free(program_elf);
 
     const environment = vm.Environment{
-        .loader = .{},
+        .loader = .ALL_DISABLED,
         .config = .{},
     };
 
@@ -490,7 +489,7 @@ test "loadPrograms: bad owner" {
     );
 
     const environment = vm.Environment{
-        .loader = .{},
+        .loader = .ALL_DISABLED,
         .config = .{},
     };
 

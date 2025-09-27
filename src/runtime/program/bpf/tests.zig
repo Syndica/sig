@@ -79,8 +79,7 @@ pub fn prepareBpfV3Test(
 
     const compute_budget = ComputeBudget.default(1_400_000);
 
-    const environment = try sig.vm.Environment.initV1(
-        allocator,
+    const environment = sig.vm.Environment.initV1(
         &feature_set,
         &compute_budget,
         0,
@@ -131,10 +130,7 @@ test "hello_world" {
         elf_bytes,
         feature_params,
     );
-    defer {
-        allocator.free(program_account.data);
-        environment.deinit(allocator);
-    }
+    defer allocator.free(program_account.data);
 
     try expectProgramExecuteResult(
         allocator,
@@ -192,10 +188,7 @@ test "print_account" {
         elf_bytes,
         feature_params,
     );
-    defer {
-        allocator.free(program_account.data);
-        environment.deinit(allocator);
-    }
+    defer allocator.free(program_account.data);
 
     const accounts: []const AccountParams = &.{
         program_account,
@@ -257,10 +250,7 @@ test "fast_copy" {
         elf_bytes,
         feature_params,
     );
-    defer {
-        allocator.free(program_account.data);
-        environment.deinit(allocator);
-    }
+    defer allocator.free(program_account.data);
 
     const program_id = program_account.pubkey.?;
     const account_id = Pubkey.initRandom(prng.random());
@@ -343,10 +333,7 @@ test "set_return_data" {
         elf_bytes,
         feature_params,
     );
-    defer {
-        allocator.free(program_account.data);
-        environment.deinit(allocator);
-    }
+    defer allocator.free(program_account.data);
 
     try expectProgramExecuteResult(
         allocator,
@@ -477,10 +464,7 @@ test "program_init_vm_not_enough_compute" {
         elf_bytes,
         feature_params,
     );
-    defer {
-        allocator.free(program_account.data);
-        environment.deinit(allocator);
-    }
+    defer allocator.free(program_account.data);
 
     var compute_budget = sig.runtime.ComputeBudget.default(1_400_000);
     // Set heap size so that heap cost is 8
@@ -528,10 +512,7 @@ test "basic direct mapping" {
         elf_bytes,
         feature_params,
     );
-    defer {
-        allocator.free(program_account.data);
-        environment.deinit(allocator);
-    }
+    defer allocator.free(program_account.data);
 
     const program_id = program_account.pubkey.?;
     const accounts: []const AccountParams = &.{
@@ -573,7 +554,7 @@ test "basic direct mapping" {
         },
         .{
             .accounts = accounts,
-            .compute_meter = 109,
+            .compute_meter = 106,
             .program_map = program_map,
             .vm_environment = &environment,
             .feature_set = feature_params,

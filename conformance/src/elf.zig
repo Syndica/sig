@@ -7,7 +7,6 @@ const ELFLoaderCtx = pb.ELFLoaderCtx;
 const ElfLoaderEffects = pb.ELFLoaderEffects;
 
 const svm = sig.vm;
-const syscalls = svm.syscalls;
 const Elf = svm.Elf;
 const Executable = svm.Executable;
 const Config = svm.Config;
@@ -49,26 +48,21 @@ fn executeElfTest(ctx: ELFLoaderCtx, allocator: std.mem.Allocator) !ElfLoaderEff
         .calldests = std.ArrayList(u64).init(allocator),
     };
 
-    const env = svm.Environment{ .config = .{}, .loader = .{} };
+    const env: svm.Environment = .{
+        .config = .{},
+        .loader = .ALL_DISABLED,
+    };
     var loader = env.loader;
-    defer loader.deinit(allocator);
 
     inline for (.{
-        .{ "sol_log_", syscalls.log },
-        .{ "sol_log_64_", syscalls.log64 },
-        .{ "sol_log_pubkey", syscalls.logPubkey },
-        .{ "sol_log_compute_units_", syscalls.logComputeUnits },
-        .{ "sol_memset_", syscalls.memops.memset },
-        .{ "sol_memcpy_", syscalls.memops.memcpy },
-        .{ "abort", syscalls.abort },
-    }) |entry| {
-        const name, const function = entry;
-        _ = try loader.registerHashed(
-            allocator,
-            name,
-            function,
-        );
-    }
+        .sol_log_,
+        .sol_log_64_,
+        .sol_log_pubkey,
+        .sol_log_compute_units_,
+        .sol_memset_,
+        .sol_memcpy_,
+        .abort,
+    }) |syscall| loader.enable(syscall);
 
     const config: Config = .{
         .maximum_version = .v0,
