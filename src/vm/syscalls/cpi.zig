@@ -213,6 +213,36 @@ const CallerAccount = struct {
     vm_data_addr: u64,
     ref_to_len_in_vm: VmValue(u64),
 
+    fn getSerializedData(
+        memory_map: *const MemoryMap,
+        vm_addr: u64,
+        len: u64,
+        stricter_abi_and_runtime_constraints: bool,
+        direct_mapping: bool,
+    ) ![]u8 {
+        if (stricter_abi_and_runtime_constraints and direct_mapping) {
+            // when direct mapping is enabled, the permissions on the
+            // realloc region can change during CPI so we must delay
+            // translating until when we know whether we're going to mutate
+            // the realloc region or not. Consider this case:
+            //
+            // [caller can't write to an account] <- we are here
+            // [callee grows and assigns account to the caller]
+            // [caller can now write to the account]
+            //
+            // If we always translated the realloc area here, we'd get a
+            // memory access violation since we can't write to the account
+            // _yet_, but we will be able to once the caller returns.
+            return &.{};
+        } else if (stricter_abi_and_runtime_constraints) {
+            // Workaround the memory permissions (as these are from the PoV of being inside the VM)
+            const slice = try memory_map.translateSlice(u8, .mutable, MM_INPUT_START, 1, false);
+            return (slice.ptr + (vm_addr -| MM_INPUT_START))[0..len];
+        } else {
+            return try memory_map.translateSlice(u8, .mutable, vm_addr, len, false);
+        }
+    }
+
     /// Parses out a CallerAccount from an AccountInfoRust that lives in VM host memory.
     fn fromAccountInfoRust(
         ic: *const InstructionContext,
@@ -223,12 +253,12 @@ const CallerAccount = struct {
     ) !CallerAccount {
         _ = _vm_addr; // unused, but have same signature as fromAccountInfoC().
 
-        const direct_mapping = ic.tc.feature_set.active(
-            .bpf_account_data_direct_mapping,
+        const stricter_abi_and_runtime_constraints = ic.tc.feature_set.active(
+            .stricter_abi_and_runtime_constraints,
             ic.tc.slot,
         );
 
-        if (direct_mapping) {
+        if (stricter_abi_and_runtime_constraints) {
             try checkAccountInfoPtr(
                 ic,
                 account_info.key_addr,
@@ -257,7 +287,7 @@ const CallerAccount = struct {
                 lamports_addr,
                 ic.getCheckAligned(),
             );
-            if (direct_mapping) {
+            if (stricter_abi_and_runtime_constraints) {
                 if (lamports_addr >= MM_INPUT_START) {
                     return SyscallError.InvalidPointer;
                 }
@@ -283,11 +313,10 @@ const CallerAccount = struct {
             ic.getCheckAligned(),
         );
 
-        const serialized, const vm_data_addr, const ref_to_len = blk: {
+        const serialized, const vm_data_addr, const ref_to_len_addr = blk: {
             // See above on lamports regarding Rc(RefCell) pointer accessing.
             const data_ptr: u64 = @intFromPtr(account_info.data.deref().asPtr());
-
-            if (direct_mapping and data_ptr >= MM_INPUT_START) {
+            if (stricter_abi_and_runtime_constraints and data_ptr >= MM_INPUT_START) {
                 return SyscallError.InvalidPointer;
             }
 
@@ -298,67 +327,38 @@ const CallerAccount = struct {
                 data_ptr,
                 ic.getCheckAligned(),
             )).*;
-
-            if (direct_mapping) {
+            if (stricter_abi_and_runtime_constraints) {
                 try checkAccountInfoPtr(
                     ic,
-                    data_ptr,
+                    data.ptr,
                     account_metadata.vm_data_addr,
                     "data",
                 );
             }
 
-            try ic.tc.consumeCompute(std.math.divFloor(
-                u64,
-                data.len,
-                ic.tc.compute_budget.cpi_bytes_per_unit,
-            ) catch std.math.maxInt(u64));
+            try ic.tc.consumeCompute(data.len / ic.tc.compute_budget.cpi_bytes_per_unit);
 
-            const ref_to_len = if (direct_mapping) r2l: {
-                const vm_addr = data_ptr +| @sizeOf(u64);
-                if (vm_addr >= MM_INPUT_START) {
-                    return SyscallError.InvalidPointer;
-                }
+            const vm_len_addr = data_ptr +| @sizeOf(u64);
+            if (stricter_abi_and_runtime_constraints) {
                 // In the same vein as the other check_account_info_pointer() checks, we don't lock
                 // this pointer to a specific address but we don't want it to be inside accounts, or
                 // callees might be able to write to the pointed memory.
-                break :r2l VmValue(u64){ .vm_address = .{
-                    .vm_addr = vm_addr,
-                    .memory_map = memory_map,
-                    .check_aligned = ic.getCheckAligned(),
-                } };
-            } else r2l: {
-                break :r2l VmValue(u64){ .translated_addr = try memory_map.translate(
-                    .constant,
-                    data_ptr +| @sizeOf(u64),
-                    @sizeOf(u64),
-                ) };
-            };
+                if (vm_len_addr >= MM_INPUT_START) {
+                    return SyscallError.InvalidPointer;
+                }
+            }
 
+            const ref_to_len_addr = try memory_map.translate(.mutable, vm_len_addr, @sizeOf(u64));
             const vm_data_addr = data.ptr;
-            const serialized: []u8 = if (direct_mapping) ser: {
-                // when direct mapping is enabled, the permissions on the
-                // realloc region can change during CPI so we must delay
-                // translating until when we know whether we're going to mutate
-                // the realloc region or not. Consider this case:
-                //
-                // [caller can't write to an account] <- we are here
-                // [callee grows and assigns account to the caller]
-                // [caller can now write to the account]
-                //
-                // If we always translated the realloc area here, we'd get a
-                // memory access violation since we can't write to the account
-                // _yet_, but we will be able to once the caller returns.
-                break :ser &.{}; // &mut []
-            } else try memory_map.translateSlice(
-                u8,
-                .mutable,
+            const serialized: []u8 = try getSerializedData(
+                memory_map,
                 vm_data_addr,
                 data.len,
-                ic.getCheckAligned(),
+                stricter_abi_and_runtime_constraints,
+                ic.tc.account_data_direct_mapping,
             );
 
-            break :blk .{ serialized, vm_data_addr, ref_to_len };
+            break :blk .{ serialized, vm_data_addr, ref_to_len_addr };
         };
 
         return .{
@@ -367,7 +367,7 @@ const CallerAccount = struct {
             .original_data_len = account_metadata.original_data_len,
             .serialized_data = serialized,
             .vm_data_addr = vm_data_addr,
-            .ref_to_len_in_vm = ref_to_len,
+            .ref_to_len_in_vm = .{ .translated_addr = ref_to_len_addr },
         };
     }
 
@@ -379,12 +379,12 @@ const CallerAccount = struct {
         account_info: *align(1) const AccountInfoC,
         account_metadata: *const SerializedAccountMetadata,
     ) !CallerAccount {
-        const direct_mapping = ic.tc.feature_set.active(
-            .bpf_account_data_direct_mapping,
+        const stricter_abi_and_runtime_constraints = ic.tc.feature_set.active(
+            .stricter_abi_and_runtime_constraints,
             ic.tc.slot,
         );
 
-        if (direct_mapping) {
+        if (stricter_abi_and_runtime_constraints) {
             try checkAccountInfoPtr(
                 ic,
                 account_info.key_addr,
@@ -426,51 +426,32 @@ const CallerAccount = struct {
             ic.getCheckAligned(),
         );
 
-        try ic.tc.consumeCompute(std.math.divFloor(
-            u64,
-            account_info.data_len,
-            ic.tc.compute_budget.cpi_bytes_per_unit,
-        ) catch std.math.maxInt(u64));
+        try ic.tc.consumeCompute(account_info.data_len / ic.tc.compute_budget.cpi_bytes_per_unit);
 
-        const serialized_data: []u8 = if (direct_mapping) ser: {
-            // See comment in CallerAccount.fromAccountInfoRust()
-            break :ser &.{}; // &mut []
-        } else try memory_map.translateSlice(
-            u8,
-            .mutable,
+        const serialized_data: []u8 = try getSerializedData(
+            memory_map,
             account_info.data_addr,
             account_info.data_len,
-            ic.getCheckAligned(),
+            stricter_abi_and_runtime_constraints,
+            ic.tc.account_data_direct_mapping,
         );
 
         // we already have the host addr we want: &mut account_info.data_len.
         // The account info might be read only in the vm though, so we translate
         // to ensure we can write. This is tested by programs/sbf/rust/ro_modify
         // which puts SolAccountInfo in rodata.
-        const data_len_vm_addr = vm_addr +|
+        const vm_len_addr = vm_addr +|
             @intFromPtr(&account_info.data_len) -|
             @intFromPtr(account_info);
 
-        const ref_to_len = if (direct_mapping)
-            VmValue(u64){ .vm_address = .{
-                .vm_addr = data_len_vm_addr,
-                .memory_map = memory_map,
-                .check_aligned = ic.getCheckAligned(),
-            } }
-        else
-            VmValue(u64){ .translated_addr = try memory_map.translate(
-                .mutable,
-                data_len_vm_addr,
-                @sizeOf(u64),
-            ) };
-
+        const ref_to_len_addr = try memory_map.translate(.mutable, vm_len_addr, @sizeOf(u64));
         return .{
             .lamports = lamports,
             .owner = owner,
             .original_data_len = account_metadata.original_data_len,
             .serialized_data = serialized_data,
             .vm_data_addr = account_info.data_addr,
-            .ref_to_len_in_vm = ref_to_len,
+            .ref_to_len_in_vm = .{ .translated_addr = ref_to_len_addr },
         };
     }
 };
@@ -491,11 +472,10 @@ const CallerAccount = struct {
 fn updateCalleeAccount(
     allocator: std.mem.Allocator,
     ic: *const InstructionContext,
-    memory_map: *const MemoryMap,
     callee_account: *BorrowedAccount,
     caller_account: *const CallerAccount,
-    is_loader_deprecated: bool,
-    direct_mapping: bool,
+    stricter_abi_and_runtime_constraints: bool,
+    account_data_direct_mapping: bool,
 ) !bool {
     var must_update_caller = false;
 
@@ -503,58 +483,42 @@ fn updateCalleeAccount(
         try callee_account.setLamports(caller_account.lamports.*);
     }
 
-    if (direct_mapping) blk: {
+    if (stricter_abi_and_runtime_constraints) {
         const prev_len = callee_account.constAccountData().len;
         const post_len = (try caller_account.ref_to_len_in_vm.get(.constant)).*;
-
-        const maybe_err: ?InstructionError = callee_account.checkCanSetDataLength(
-            ic.tc.accounts_resize_delta,
-            post_len,
-        ) orelse callee_account.checkDataIsMutable();
-
-        if (maybe_err) |err| {
-            if (prev_len != post_len) return err;
-            break :blk;
-        }
-
-        // bpf_loader_deprecated programs don't have a realloc region
-        const realloc_bytes_used = post_len -| caller_account.original_data_len;
-        if (is_loader_deprecated and realloc_bytes_used > 0) {
-            return InstructionError.InvalidRealloc;
-        }
         if (prev_len != post_len) {
+            const is_caller_loader_deprecated = !ic.getCheckAligned();
+            const address_space = caller_account.original_data_len +|
+                (MAX_PERMITTED_DATA_INCREASE * @intFromBool(!is_caller_loader_deprecated));
+            if (post_len > address_space) {
+                return InstructionError.InvalidRealloc;
+            }
             try callee_account.setDataLength(allocator, &ic.tc.accounts_resize_delta, post_len);
+            // pointer to data may have changed, so caller must be updated
             must_update_caller = true;
         }
-        if (realloc_bytes_used > 0) {
-            const serialized_data = try memory_map.translateSlice(
-                u8,
-                .constant,
-                caller_account.vm_data_addr +| caller_account.original_data_len,
-                realloc_bytes_used,
-                ic.getCheckAligned(),
+        if (!account_data_direct_mapping and callee_account.checkDataIsMutable() == null) {
+            try callee_account.setDataFromSlice(
+                allocator,
+                &ic.tc.accounts_resize_delta,
+                caller_account.serialized_data,
             );
-
-            var data = try callee_account.mutableAccountData();
-            if (data.len < post_len) return SyscallError.InvalidLength;
-            data = data[caller_account.original_data_len..post_len];
-            @memcpy(data, serialized_data);
         }
     } else {
         // The redundant check helps to avoid the expensive data comparison if we can
-        const serialized_data: []const u8 = caller_account.serialized_data;
-        const maybe_err: ?InstructionError = callee_account.checkCanSetDataLength(
-            ic.tc.accounts_resize_delta,
-            serialized_data.len,
-        ) orelse callee_account.checkDataIsMutable();
-
-        if (maybe_err) |err| {
-            if (!std.mem.eql(u8, callee_account.constAccountData(), serialized_data)) return err;
+        const can_data_be_resized =
+            callee_account.checkCanSetDataLength(
+                ic.tc.accounts_resize_delta,
+                caller_account.serialized_data.len,
+            );
+        if (can_data_be_resized) |err| {
+            if (!std.mem.eql(u8, callee_account.account.data, caller_account.serialized_data))
+                return err;
         } else {
             try callee_account.setDataFromSlice(
                 allocator,
                 &ic.tc.accounts_resize_delta,
-                serialized_data,
+                caller_account.serialized_data,
             );
         }
     }
@@ -562,13 +526,20 @@ fn updateCalleeAccount(
     // Change the owner at the end so that we are allowed to change the lamports and data before
     if (!callee_account.account.owner.equals(caller_account.owner)) {
         try callee_account.setOwner(caller_account.owner.*);
+        // caller gave ownership and thus write access away, so caller must be updated
+        must_update_caller = true;
     }
 
     return must_update_caller;
 }
 
-const TranslatedAccount = struct { index_in_caller: u16, caller_account: ?CallerAccount };
 const TranslatedAccounts = std.BoundedArray(TranslatedAccount, InstructionInfo.MAX_ACCOUNT_METAS);
+const TranslatedAccount = struct {
+    index_in_caller: u16,
+    caller_account: CallerAccount,
+    update_caller_account_region: bool,
+    update_caller_account_info: bool,
+};
 
 /// Implements SyscallInvokeSigned::translate_accounts for both AccountInfoRust & AccountInfoC.
 /// Reads the AccountInfos from VM and converting them into CallerAccounts + metadata index.
@@ -579,24 +550,24 @@ fn translateAccounts(
     allocator: std.mem.Allocator,
     ic: *const InstructionContext,
     memory_map: *const MemoryMap,
-    is_loader_deprecated: bool,
     comptime AccountInfoType: type,
     account_infos_addr: u64,
     account_infos_len: u64,
-    program_index_in_transaction: u16,
-    account_metas: []const InstructionInfo.AccountMeta,
+    cpi_info: *const InstructionInfo,
 ) !TranslatedAccounts {
+    const account_metas = cpi_info.account_metas.slice();
+
     // translate_account_infos():
 
-    const direct_mapping = ic.tc.feature_set.active(
-        .bpf_account_data_direct_mapping,
+    const stricter_abi_and_runtime_constraints = ic.tc.feature_set.active(
+        .stricter_abi_and_runtime_constraints,
         ic.tc.slot,
     );
 
     // In the same vein as the other checkAccountInfoPtr() checks, we don't lock
     // this pointer to a specific address but we don't want it to be inside accounts, or
     // callees might be able to write to the pointed memory.
-    if (direct_mapping and
+    if (stricter_abi_and_runtime_constraints and
         (account_infos_addr +| (account_infos_len *| @sizeOf(AccountInfoType))) >= MM_INPUT_START)
     {
         return SyscallError.InvalidPointer;
@@ -611,24 +582,13 @@ fn translateAccounts(
     );
 
     // check_account_infos():
-    if (ic.tc.feature_set.active(.loosen_cpi_size_restriction, ic.tc.slot)) {
-        const max_cpi_account_infos: u64 = if (ic.tc.feature_set.active(
-            .increase_tx_account_lock_limit,
-            ic.tc.slot,
-        )) 128 else 64;
+    const max_cpi_account_infos: u64 = if (ic.tc.feature_set.active(
+        .increase_tx_account_lock_limit,
+        ic.tc.slot,
+    )) 128 else 64;
 
-        if (account_infos.len > max_cpi_account_infos) {
-            // TODO: add {account_infos.len} and {max_cpi_account_infos} as context to error.
-            // [agave] https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/programs/bpf_loader/src/syscalls/mod.rs#L124-L128
-            return SyscallError.MaxInstructionAccountInfosExceeded;
-        }
-    } else {
-        const adjusted_len = @as(u64, account_infos.len) *| @sizeOf(Pubkey);
-        if (adjusted_len > ic.tc.compute_budget.max_cpi_instruction_size) {
-            // Cap the number of account_infos a caller can pass to approximate
-            // maximum that accounts that could be passed in an instruction
-            return SyscallError.TooManyAccounts;
-        }
+    if (account_infos.len > max_cpi_account_infos) {
+        return SyscallError.MaxInstructionAccountInfosExceeded;
     }
 
     // translate keys upfront before inner loop below.
@@ -648,15 +608,18 @@ fn translateAccounts(
     // translate_and_update_accounts():
 
     var accounts: TranslatedAccounts = .{};
-    try accounts.append(.{
-        .index_in_caller = program_index_in_transaction,
-        .caller_account = null,
-    });
+    for (account_metas, 0..) |meta, index_in_instruction| {
+        const cpi_index_in_caller =
+            try cpi_info.getAccountInstructionIndex(meta.index_in_transaction);
 
-    for (account_metas, 0..) |meta, i| {
-        if (meta.index_in_callee != i) continue; // Skip duplicate account
+        if (cpi_index_in_caller != index_in_instruction) {
+            continue; // Skip duplicate account.
+        }
 
-        var callee_account = try ic.borrowInstructionAccount(meta.index_in_caller);
+        const index_in_caller =
+            try ic.ixn_info.getAccountInstructionIndex(meta.index_in_transaction);
+
+        var callee_account = try ic.borrowInstructionAccount(index_in_caller);
         defer callee_account.release();
 
         const account_key = blk: {
@@ -667,16 +630,9 @@ fn translateAccounts(
 
         if (callee_account.account.executable) {
             // Use the known account
-            try ic.tc.consumeCompute(std.math.divFloor(
-                u64,
-                callee_account.constAccountData().len,
-                ic.tc.compute_budget.cpi_bytes_per_unit,
-            ) catch std.math.maxInt(u64));
-
-            try accounts.append(.{
-                .index_in_caller = meta.index_in_caller,
-                .caller_account = null,
-            });
+            try ic.tc.consumeCompute(
+                callee_account.constAccountData().len / ic.tc.compute_budget.cpi_bytes_per_unit,
+            );
             continue;
         }
 
@@ -688,8 +644,8 @@ fn translateAccounts(
         };
 
         const serialized_account_metas = ic.tc.serialized_accounts.constSlice();
-        const serialized_metadata = if (meta.index_in_caller < serialized_account_metas.len) blk: {
-            break :blk &serialized_account_metas[meta.index_in_caller];
+        const serialized_metadata = if (index_in_caller < serialized_account_metas.len) blk: {
+            break :blk &serialized_account_metas[index_in_caller];
         } else {
             try ic.tc.log("Internal error: index mismatch for account {}", .{account_key});
             return InstructionError.MissingAccount;
@@ -723,16 +679,17 @@ fn translateAccounts(
         const update_caller = try updateCalleeAccount(
             allocator,
             ic,
-            memory_map,
             &callee_account,
             &caller_account,
-            is_loader_deprecated,
-            direct_mapping,
+            stricter_abi_and_runtime_constraints,
+            ic.tc.account_data_direct_mapping,
         );
 
         try accounts.append(.{
-            .index_in_caller = meta.index_in_caller,
-            .caller_account = if (meta.is_writable or update_caller) caller_account else null,
+            .index_in_caller = index_in_caller,
+            .caller_account = caller_account,
+            .update_caller_account_region = meta.is_writable or update_caller,
+            .update_caller_account_info = meta.is_writable,
         });
     }
 
@@ -762,6 +719,17 @@ fn translateInstruction(
         vm_addr,
         ic.getCheckAligned(),
     );
+
+    const program_id = switch (AccountInfoType) {
+        AccountInfoRust => stable_instruction.program_id,
+        AccountInfoC => (try memory_map.translateType(
+            Pubkey,
+            .constant,
+            stable_instruction.program_id_addr,
+            ic.getCheckAligned(),
+        )).*,
+        else => unreachable,
+    };
     const account_metas = try memory_map.translateSlice(
         AccountMetaType,
         .constant,
@@ -776,53 +744,19 @@ fn translateInstruction(
         stable_instruction.data_len,
         ic.getCheckAligned(),
     );
-    const program_id = switch (AccountInfoType) {
-        AccountInfoRust => stable_instruction.program_id,
-        AccountInfoC => (try memory_map.translateType(
-            Pubkey,
-            .constant,
-            stable_instruction.program_id_addr,
-            ic.getCheckAligned(),
-        )).*,
-        else => unreachable,
-    };
-
-    const loosen_cpi_size_restriction = ic.tc.feature_set.active(
-        .loosen_cpi_size_restriction,
-        ic.tc.slot,
-    );
 
     // check_instruction_size():
-    if (loosen_cpi_size_restriction) {
-        // [agave] https://github.com/anza-xyz/agave/blob/04fd7a006d8b400096e14a69ac16e10dc3f6018a/programs/bpf_loader/src/syscalls/cpi.rs#L19
-        const MAX_CPI_INSTRUCTION_DATA_LEN = 10 * 1024;
-        if (data.len > MAX_CPI_INSTRUCTION_DATA_LEN) {
-            // TODO: add error context { data_len, max_data_len }
-            return SyscallError.MaxInstructionDataLenExceeded;
-        }
-
-        // [agave] https://github.com/anza-xyz/agave/blob/04fd7a006d8b400096e14a69ac16e10dc3f6018a/programs/bpf_loader/src/syscalls/cpi.rs#L25
-        const MAX_CPI_INSTRUCTION_ACCOUNTS = std.math.maxInt(u8);
-        if (account_metas.len > MAX_CPI_INSTRUCTION_ACCOUNTS) {
-            // TODO: add error context { num_accounts, max_accounts }
-            return SyscallError.MaxInstructionAccountsExceeded;
-        }
-    } else {
-        const max_size = ic.tc.compute_budget.max_cpi_instruction_size;
-        const size = (@as(u64, account_metas.len) *| @sizeOf(AccountMetaType)) +| data.len;
-        if (size > max_size) {
-            // TODO: add error context { size, max_size }
-            return SyscallError.InstructionTooLarge;
-        }
+    const MAX_ACCOUNTS_PER_INSTRUCTION = InstructionInfo.MAX_ACCOUNT_METAS - 1;
+    if (account_metas.len > MAX_ACCOUNTS_PER_INSTRUCTION) {
+        return SyscallError.MaxInstructionAccountsExceeded;
     }
 
-    if (loosen_cpi_size_restriction) {
-        try ic.tc.consumeCompute(std.math.divFloor(
-            u64,
-            data.len,
-            ic.tc.compute_budget.cpi_bytes_per_unit,
-        ) catch std.math.maxInt(u64));
+    const MAX_INSTRUCTION_DATA_LEN = 10 * 1024;
+    if (data.len > MAX_INSTRUCTION_DATA_LEN) {
+        return SyscallError.MaxInstructionDataLenExceeded;
     }
+
+    try ic.tc.consumeCompute(data.len / ic.tc.compute_budget.cpi_bytes_per_unit);
 
     var accounts = try allocator.alloc(InstructionAccount, account_metas.len);
     errdefer allocator.free(accounts);
@@ -965,240 +899,73 @@ fn accountReallocRegion(
 ///
 /// [agave] https://github.com/anza-xyz/agave/blob/bb5a6e773d5f41388a962c5c4f96f5f2ef2209d0/programs/bpf_loader/src/syscalls/cpi.rs#L1335
 fn updateCallerAccount(
-    allocator: std.mem.Allocator,
     ic: *const InstructionContext,
     memory_map: *const MemoryMap,
     caller_account: *CallerAccount,
     callee_account: *BorrowedAccount,
-    is_loader_deprecated: bool,
-    direct_mapping: bool,
+    stricter_abi_and_runtime_constraints: bool,
 ) !void {
     caller_account.lamports.* = callee_account.account.lamports;
     caller_account.owner.* = callee_account.account.owner;
 
-    var zero_all_mapped_spare_capacity = false;
-    if (direct_mapping) {
-        if (try accountDataRegion(
-            memory_map,
-            caller_account.vm_data_addr,
-            caller_account.original_data_len,
-        )) |region| {
-            // Since each instruction account is directly mapped in a memory region with a *fixed*
-            // length, upon returning from CPI we must ensure that the current capacity is at least
-            // the original length (what is mapped in memory), so that the account's memory region
-            // never points to an invalid address.
-            //
-            // Note that the capacity can be smaller than the original length only if the account is
-            // reallocated using the AccountSharedData API directly (deprecated) or using
-            // BorrowedAccount.setDataFromSlice(), which implements an optimization to avoid an
-            // extra allocation.
+    const prev_len: usize = (try caller_account.ref_to_len_in_vm.get(.constant)).*;
+    const post_len = callee_account.constAccountData().len;
+    const is_caller_loader_deprecated = !ic.getCheckAligned();
 
-            // TODO: ensureTotalCapcaity on account data (no data capacity atm).
-            // const min_size = caller_account.original_data_len;
-            // if (callee_account.capacity < min_size) {
-            //     try callee_account.account.resize(allocator, min_size);
-            //     zero_all_mapped_spare_capacity = true;
-            // }
-            _ = allocator;
+    const reserve = stricter_abi_and_runtime_constraints and is_caller_loader_deprecated;
+    const address_space = caller_account.original_data_len +|
+        (MAX_PERMITTED_DATA_INCREASE * @intFromBool(!reserve));
 
-            // If an account's data pointer has changed we must update the corresponding
-            // MemoryRegion in the caller's address space. Address spaces are fixed so we don't need
-            // to update the MemoryRegion's length.
-            const callee_ptr = callee_account.constAccountData().ptr;
-            if (region.constSlice().ptr != callee_ptr) {
-                region.host_memory = switch (region.host_memory) {
-                    .mutable => .{ .mutable = @constCast(callee_ptr)[0..region.constSlice().len] },
-                    .constant => .{ .constant = callee_ptr[0..region.constSlice().len] },
-                };
-                zero_all_mapped_spare_capacity = true;
-            }
-        }
+    if (post_len > address_space and
+        (stricter_abi_and_runtime_constraints or prev_len != post_len))
+    {
+        try ic.tc.log(
+            "Account data size realloc limited to {} in inner instructions",
+            .{address_space -| caller_account.original_data_len},
+        );
+        return InstructionError.InvalidRealloc;
     }
 
-    const prev_len = (try caller_account.ref_to_len_in_vm.get(.constant)).*;
-    const post_len = callee_account.constAccountData().len;
     if (prev_len != post_len) {
-        const max_increase =
-            if (direct_mapping and !ic.getCheckAligned()) 0 else MAX_PERMITTED_DATA_INCREASE;
-
-        if (post_len > (caller_account.original_data_len +| max_increase)) {
-            try ic.tc.log(
-                "Account data size realloc limited to {} in inner instructions",
-                .{max_increase},
-            );
-            return InstructionError.InvalidRealloc;
-        }
-
-        // If the account has been shrunk, we're going to zero the unused memory
-        // *that was previously used*.
-        if (post_len < prev_len) {
-            if (direct_mapping) {
-                // We have two separate regions to zero out: the account data
-                // and the realloc region. Here we zero the realloc region, the
-                // data region is zeroed further down below.
-                //
-                // This is done for compatibility but really only necessary for
-                // the fringe case of a program calling itself, see
-                // TEST_CPI_ACCOUNT_UPDATE_CALLER_GROWS_CALLEE_SHRINKS.
-                //
-                // Zeroing the realloc region isn't necessary in the normal
-                // invoke case because consider the following scenario:
-                //
-                // 1. Caller grows an account (prev_len > original_data_len)
-                // 2. Caller assigns the account to the callee (needed for 3 to
-                //    work)
-                // 3. Callee shrinks the account (post_len < prev_len)
-                //
-                // In order for the caller to assign the account to the callee,
-                // the caller _must_ either set the account length to zero,
-                // therefore making prev_len > original_data_len impossible,
-                // or it must zero the account data, therefore making the
-                // zeroing we do here redundant.
-                if (prev_len > caller_account.original_data_len) {
-                    // If we get here and prev_len > original_data_len, then
-                    // we've already returned InvalidRealloc for the
-                    // bpf_loader_deprecated case.
-                    std.debug.assert(!is_loader_deprecated);
-
-                    // Temporarily configure the realloc region as writable then set it back to
-                    // whatever state it had.
-                    const region = (try accountReallocRegion(
-                        memory_map,
-                        caller_account.vm_data_addr,
-                        caller_account.original_data_len,
-                        is_loader_deprecated,
-                    )).?; // unwrap here is fine, we already asserted !is_loader_deprecated
-
-                    const original = region.host_memory;
-                    region.host_memory = .{ .mutable = @constCast(region.constSlice()) };
-                    defer region.host_memory = original;
-
-                    // We need to zero the unused space in the realloc region, starting after the
-                    // last byte of the new data which might be > original_data_len.
-                    const dirty_realloc_start = @max(post_len, caller_account.original_data_len);
-                    // and we want to zero up to the old length
-                    const dirty_realloc_len = prev_len -| dirty_realloc_start;
-                    const serialized_data = try memory_map.translateSlice(
-                        u8,
-                        .mutable,
-                        caller_account.vm_data_addr +| dirty_realloc_start,
-                        dirty_realloc_len,
-                        ic.getCheckAligned(),
-                    );
-                    @memset(serialized_data, 0);
-                }
-            } else {
-                if (caller_account.serialized_data.len < post_len) {
+        // when stricter_abi_and_runtime_constraints is enabled we don't cache the serialized data
+        // in caller_account.serialized_data. See CallerAccount.fromAccountInfoRust.
+        if (!(stricter_abi_and_runtime_constraints and ic.tc.account_data_direct_mapping)) {
+            // If the account has been shrunk, we're going to zero the unused memory
+            // *that was previously used*.
+            if (post_len < prev_len) {
+                if (post_len > caller_account.serialized_data.len)
                     return InstructionError.AccountDataTooSmall;
-                }
                 @memset(caller_account.serialized_data[post_len..], 0);
             }
-        }
-
-        // when direct mapping is enabled we don't cache the serialized data in
-        // caller_account.serialized_data. See CallerAccount::from_account_info.
-        if (!direct_mapping) {
-            caller_account.serialized_data = try memory_map.translateSlice(
-                u8,
-                .mutable,
+            // Set the length of caller_account.serialized_data to post_len.
+            caller_account.serialized_data = try CallerAccount.getSerializedData(
+                memory_map,
                 caller_account.vm_data_addr,
                 post_len,
-                false, // Don't care since it is byte aligned,
+                stricter_abi_and_runtime_constraints,
+                ic.tc.account_data_direct_mapping,
             );
         }
-        // This is the len field in the AccountInfo::data slice.
+        // this is the len field in the AccountInfo.data slice
         (try caller_account.ref_to_len_in_vm.get(.mutable)).* = post_len;
 
-        // This is the len field in the serialized parameters
-        const serialized_len_ptr = try memory_map.translateType(
+        // this is the len field in the serialized parameters
+        const serialized_len = try memory_map.translateType(
             u64,
             .mutable,
             caller_account.vm_data_addr -| @sizeOf(u64),
-            ic.getCheckAligned(),
+            ic.tc.getCheckAligned(),
         );
-        serialized_len_ptr.* = post_len;
+        serialized_len.* = post_len;
     }
 
-    if (direct_mapping) {
-        // Here we zero the account data region.
-        //
-        // If zero_all_mapped_spare_capacity=true, we need to zero regardless of whether the account
-        // size changed, because the underlying vector holding the account might have been
-        // reallocated and contain uninitialized memory in the spare capacity.
-        //
-        // See TEST_CPI_CHANGE_ACCOUNT_DATA_MEMORY_ALLOCATION for an example of
-        // this case.
-        const start_len = if (zero_all_mapped_spare_capacity)
-            // In the unlikely case where the account data vector has
-            // changed - which can happen during CoW - we zero the whole
-            // extra capacity up to the original data length.
-            //
-            // The extra capacity up to original data length is
-            // accessible from the vm and since it's uninitialized
-            // memory, it could be a source of non determinism.
-            caller_account.original_data_len
-        else
-            // If the allocation has not changed, we only zero the
-            // difference between the previous and current lengths. The
-            // rest of the memory contains whatever it contained before,
-            // which is deterministic.
-            prev_len;
-
-        if ((start_len -| post_len) > 0) {
-            // TODO: zero account data spare capacity (no data capacity atm).
-            // const dst = try callee_account.mutableAccountData();
-            // if (dst.len < start_len) return InstructionError.AccountDataTooSmall;
-            // @memset(dst[start_len..], 0);
-        }
-
-        // Propagate changes to the realloc region in the callee up to the caller.
-        const realloc_bytes_used = post_len -| caller_account.original_data_len;
-        if (realloc_bytes_used > 0) {
-            // In the is_loader_deprecated case, we must've failed InvalidRealloc by now.
-            std.debug.assert(!is_loader_deprecated);
-
-            const dst = blk: {
-                // If a callee reallocs an account, we write into the caller's
-                // realloc region regardless of whether the caller has write
-                // permissions to the account or not. If the callee has been able to
-                // make changes, it means they had permissions to do so, and here
-                // we're just going to reflect those changes to the caller's frame.
-                //
-                // Therefore we temporarily configure the realloc region as writable
-                // then set it back to whatever state it had.
-                const region = (try accountReallocRegion(
-                    memory_map,
-                    caller_account.vm_data_addr,
-                    caller_account.original_data_len,
-                    is_loader_deprecated,
-                )).?; // unwrapping here is fine, we asserted !is_loader_deprecated
-
-                const original = region.host_memory;
-                region.host_memory = .{ .mutable = @constCast(region.constSlice()) };
-                defer region.host_memory = original;
-
-                break :blk try memory_map.translateSlice(
-                    u8,
-                    .mutable,
-                    caller_account.vm_data_addr +| caller_account.original_data_len,
-                    realloc_bytes_used,
-                    ic.getCheckAligned(),
-                );
-            };
-
-            var src = callee_account.constAccountData();
-            if (src.len < post_len) return SyscallError.InvalidLength;
-            src = src[caller_account.original_data_len..post_len];
-            if (dst.len != src.len) return InstructionError.AccountDataTooSmall;
-            @memcpy(dst, src);
-        }
-    } else {
-        const dst = caller_account.serialized_data;
-        var src = callee_account.constAccountData();
-        if (src.len < post_len) return SyscallError.InvalidLength;
-        src = src[0..post_len];
-        if (dst.len != src.len) return InstructionError.AccountDataTooSmall;
-        @memcpy(dst, src);
+    if (!(stricter_abi_and_runtime_constraints and ic.tc.account_data_direct_mapping)) {
+        // Propagate changes in the callee up to the caller.
+        const to = caller_account.serialized_data;
+        const from = callee_account.constAccountData();
+        if (from.len < post_len) return SyscallError.InvalidLength;
+        if (to.len != from.len) return InstructionError.AccountDataTooSmall;
+        @memcpy(to, from);
     }
 }
 
@@ -1235,11 +1002,6 @@ fn cpiCommon(
         ic.ixn_info.program_meta.pubkey,
     );
 
-    const is_loader_deprecated = blk: {
-        const account = ic.tc.getAccountAtIndex(ic.ixn_info.program_meta.index_in_transaction).?;
-        break :blk account.account.owner.equals(&bpf_loader_program.v1.ID);
-    };
-
     // check_authorized_program(ic, instruction):
     // [agave] https://github.com/anza-xyz/agave/blob/bb5a6e773d5f41388a962c5c4f96f5f2ef2209d0/programs/bpf_loader/src/syscalls/cpi.rs#L1028C4-L1028C28
     if (ids.NATIVE_LOADER_ID.equals(&instruction.program_id) or
@@ -1267,12 +1029,10 @@ fn cpiCommon(
         allocator,
         ic,
         memory_map,
-        is_loader_deprecated,
         AccountInfoType,
         account_infos_addr,
         account_infos_len,
-        info.program_meta.index_in_transaction,
-        info.account_metas.constSlice(),
+        &info,
     );
 
     // Process the callee instruction.
@@ -1281,66 +1041,59 @@ fn cpiCommon(
 
     // CPI Exit.
     // Synchronize the callee's account changes so the caller can see them.
-    const direct_mapping = ic.tc.feature_set.active(
-        .bpf_account_data_direct_mapping,
+    const stricter_abi_and_runtime_constraints = ic.tc.feature_set.active(
+        .stricter_abi_and_runtime_constraints,
         ic.tc.slot,
     );
 
-    if (direct_mapping) {
-        // Update all perms at once before doing account data updates. This
-        // isn't strictly required as agave forbids updates to an account to touch
-        // other accounts, but since agave did have bugs around this in the past,
-        // it's better to be safe than sorry.
-        for (accounts.slice()) |acc| {
-            const caller_account: CallerAccount = acc.caller_account orelse continue;
-            const callee_account = try ic.borrowInstructionAccount(acc.index_in_caller);
-            defer callee_account.release();
+    for (accounts.slice()) |*translated| {
+        var callee_account = try ic.borrowInstructionAccount(translated.index_in_caller);
+        defer callee_account.release();
 
-            // update_caller_account_perms:
-            // [agave] https://github.com/anza-xyz/agave/blob/bb5a6e773d5f41388a962c5c4f96f5f2ef2209d0/programs/bpf_loader/src/syscalls/cpi.rs#L1250
-
-            if (try accountDataRegion(
+        if (translated.update_caller_account_info) {
+            try updateCallerAccount(
+                ic,
                 memory_map,
-                caller_account.vm_data_addr,
-                caller_account.original_data_len,
-            )) |region| {
-                const shared = false; // TODO: callee_account.account.data is not ref-counted
-                const writable = callee_account.checkDataIsMutable() == null;
-                const data: []u8 = @constCast(region.constSlice());
-
-                region.host_memory =
-                    if (writable and !shared) .{ .mutable = data } else .{ .constant = data };
-            }
-
-            if (try accountReallocRegion(
-                memory_map,
-                caller_account.vm_data_addr,
-                caller_account.original_data_len,
-                is_loader_deprecated,
-            )) |region| {
-                const writable = callee_account.checkDataIsMutable() == null;
-                const data: []u8 = @constCast(region.constSlice());
-                region.host_memory = if (writable) .{ .mutable = data } else .{ .constant = data };
-            }
+                &translated.caller_account,
+                &callee_account,
+                stricter_abi_and_runtime_constraints,
+            );
         }
     }
 
-    for (accounts.slice()) |*acc| {
-        if (acc.caller_account == null) continue;
+    if (stricter_abi_and_runtime_constraints) {
+        for (accounts.constSlice()) |translated| {
+            var callee_account = try ic.borrowInstructionAccount(translated.index_in_caller);
+            defer callee_account.release();
 
-        const caller_account: *CallerAccount = &acc.caller_account.?;
-        var callee_account = try ic.borrowInstructionAccount(acc.index_in_caller);
-        defer callee_account.release();
+            if (translated.update_caller_account_region) {
+                // update_caller_account_region()
 
-        try updateCallerAccount(
-            allocator,
-            ic,
-            memory_map,
-            caller_account,
-            &callee_account,
-            is_loader_deprecated,
-            direct_mapping,
-        );
+                const caller_account = &translated.caller_account;
+                const is_caller_loader_deprecated = !ic.getCheckAligned();
+                const address_space = if (is_caller_loader_deprecated)
+                    caller_account.original_data_len
+                else
+                    caller_account.original_data_len +| MAX_PERMITTED_DATA_INCREASE;
+
+                if (address_space > 0) {
+                    const region = memory_map.findRegion(caller_account.vm_data_addr) catch
+                        return InstructionError.MissingAccount;
+                    std.debug.assert(region.vm_addr_start == caller_account.vm_data_addr);
+
+                    switch (callee_account.checkDataIsMutable() == null) {
+                        inline true, false => |mutable| {
+                            const state: memory.MemoryState = if (mutable) .mutable else .constant;
+                            const data = if (ic.tc.account_data_direct_mapping)
+                                callee_account.account.data
+                            else
+                                region.hostSlice(state).?[0..callee_account.account.data.len];
+                            region.* = .init(state, data, region.vm_addr_start);
+                        },
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -1520,6 +1273,7 @@ const TestAccount = struct {
         allocator: std.mem.Allocator,
         comptime AccountInfoType: type,
         vm_addr: u64,
+        custom_vm_data_addr: ?u64,
     ) !struct { []u8, SerializedAccountMetadata } {
         const size = @sizeOf(AccountInfoType) +
             @sizeOf(Pubkey) * 2 +
@@ -1538,6 +1292,8 @@ const TestAccount = struct {
         const data_cell_addr = owner_addr + @sizeOf(Pubkey);
         const data_addr = data_cell_addr + @sizeOf(RcBox(RefCell([]u8)));
         const data_len = self.data.len;
+
+        const actual_data_addr = custom_vm_data_addr orelse data_addr;
 
         switch (AccountInfoType) {
             AccountInfoRust => buffer[0..@sizeOf(AccountInfoRust)].* = @bitCast(AccountInfoRust{
@@ -1559,7 +1315,7 @@ const TestAccount = struct {
                 .is_signer = @intFromBool(self.is_signer),
                 .is_writable = @intFromBool(self.is_writable),
                 .lamports_addr = lamports_addr,
-                .data_addr = data_addr,
+                .data_addr = actual_data_addr,
                 .data_len = data_len,
                 .owner_addr = owner_addr,
                 .executable = @intFromBool(self.executable),
@@ -1576,14 +1332,14 @@ const TestAccount = struct {
         buffer[owner_addr - vm_addr ..][0..@sizeOf(Pubkey)].* = @bitCast(self.owner);
         buffer[data_cell_addr - vm_addr ..][0..@sizeOf(RcBox(RefCell([]u8)))].* = @bitCast(
             RcBox(RefCell([]u8)){
-                .value = RefCell([]u8).init(@as([*]u8, @ptrFromInt(data_addr))[0..data_len]),
+                .value = RefCell([]u8).init(@as([*]u8, @ptrFromInt(actual_data_addr))[0..data_len]),
             },
         );
         @memcpy(buffer[data_addr - vm_addr ..][0..data_len], self.data);
 
         return .{ buffer, SerializedAccountMetadata{
             .original_data_len = data_len,
-            .vm_data_addr = data_addr,
+            .vm_data_addr = actual_data_addr,
             .vm_key_addr = key_addr,
             .vm_lamports_addr = lamports_addr,
             .vm_owner_addr = owner_addr,
@@ -1602,7 +1358,7 @@ test "CallerAccount.fromAccountInfoRust" {
     const vm_addr = MM_INPUT_START;
 
     const buffer, const serialized_metadata =
-        try account.intoAccountInfo(allocator, AccountInfoRust, vm_addr);
+        try account.intoAccountInfo(allocator, AccountInfoRust, vm_addr, null);
     defer allocator.free(buffer);
 
     const memory_map = try MemoryMap.init(
@@ -1742,7 +1498,7 @@ test "translateAccounts" {
     const vm_addr = MM_INPUT_START;
 
     const buffer, const serialized_metadata =
-        try account.intoAccountInfo(allocator, AccountInfoRust, vm_addr);
+        try account.intoAccountInfo(allocator, AccountInfoRust, vm_addr, null);
     defer allocator.free(buffer);
 
     const memory_map = try MemoryMap.init(
@@ -1760,40 +1516,42 @@ test "translateAccounts" {
 
     ctx.tc.serialized_accounts.appendAssumeCapacity(serialized_metadata);
 
-    // [agave] https://github.com/anza-xyz/agave/blob/04fd7a006d8b400096e14a69ac16e10dc3f6018a/programs/bpf_loader/src/syscalls/cpi.rs#L2554
-    const accounts = try translateAccounts(
-        allocator,
-        &ctx.ic,
-        &memory_map,
-        false, // is_loader_deprecated
-        AccountInfoRust,
-        vm_addr, // account_infos_addr
-        1, // account_infos_len
-        ctx.ic.ixn_info.program_meta.index_in_transaction, // program_meta_index
-        &.{
+    var dedupe_map: [InstructionInfo.MAX_ACCOUNT_METAS]u8 = @splat(0xff);
+    dedupe_map[account.index] = 0;
+    const cpi_info: InstructionInfo = .{
+        .program_meta = ctx.ic.ixn_info.program_meta,
+        .account_metas = try InstructionInfo.AccountMetas.fromSlice(&.{
             .{
                 .pubkey = account.key,
                 .index_in_transaction = account.index,
-                .index_in_caller = 0,
-                .index_in_callee = 0,
                 .is_signer = account.is_signer,
                 .is_writable = account.is_writable,
             },
             .{ // intentional duplicate to test skipping it
                 .pubkey = account.key,
                 .index_in_transaction = account.index,
-                .index_in_caller = 0,
-                .index_in_callee = 0,
                 .is_signer = account.is_signer,
                 .is_writable = account.is_writable,
             },
-        },
+        }),
+        .dedupe_map = dedupe_map,
+        .instruction_data = "",
+    };
+
+    const accounts = try translateAccounts(
+        allocator,
+        &ctx.ic,
+        &memory_map,
+        AccountInfoRust,
+        vm_addr, // account_infos_addr
+        1, // account_infos_len
+        &cpi_info, // cpi_info
     );
 
-    try std.testing.expectEqual(accounts.len, 2);
-    try std.testing.expect(accounts.get(0).caller_account == null);
+    try std.testing.expectEqual(accounts.len, 1);
+    try std.testing.expect(accounts.get(0).update_caller_account_region);
 
-    const caller_account = accounts.get(1).caller_account.?;
+    const caller_account = accounts.get(0).caller_account;
     try std.testing.expect(std.mem.eql(u8, caller_account.serialized_data, account.data));
     try std.testing.expectEqual(caller_account.original_data_len, account.data.len);
 }
@@ -2109,100 +1867,137 @@ test "updateCalleeAccount: lamports owner" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
-    var ctx = try TestContext.init(allocator, prng.random(), &.{});
-    defer ctx.deinit(allocator);
-    const account = ctx.getAccount();
+    for ([_]bool{ false, true }) |stricter_abi_and_runtime_constraints| {
+        var ctx = try TestContext.init(allocator, prng.random(), &.{});
+        defer ctx.deinit(allocator);
+        const account = ctx.getAccount();
 
-    var ca = try TestCallerAccount.init(
-        allocator,
-        1234,
-        account.owner,
-        account.data,
-        false, // direct mapping
-    );
-    defer ca.deinit(allocator);
-    var caller_account = ca.getCallerAccount();
+        var ca = try TestCallerAccount.init(
+            allocator,
+            1234,
+            account.owner,
+            account.data,
+            false, // direct mapping
+        );
+        defer ca.deinit(allocator);
+        var caller_account = ca.getCallerAccount();
 
-    var callee_account = try ctx.ic.borrowInstructionAccount(account.index);
-    defer callee_account.release();
+        var callee_account = try ctx.ic.borrowInstructionAccount(account.index);
+        defer callee_account.release();
 
-    caller_account.lamports.* = 42;
-    caller_account.owner.* = Pubkey.initRandom(prng.random());
+        caller_account.lamports.* = 42;
+        caller_account.owner.* = Pubkey.initRandom(prng.random());
 
-    _ = try updateCalleeAccount(
-        allocator,
-        &ctx.ic,
-        &ca.memory_map,
-        &callee_account,
-        &caller_account,
-        false, // is_loader_deprecated
-        false, // direct_mapping
-    );
+        _ = try updateCalleeAccount(
+            allocator,
+            &ctx.ic,
+            &callee_account,
+            &caller_account,
+            stricter_abi_and_runtime_constraints,
+            false, // account_data_direct_mapping
+        );
 
-    try std.testing.expectEqual(callee_account.account.lamports, 42);
-    try std.testing.expect(callee_account.account.owner.equals(caller_account.owner));
+        try std.testing.expectEqual(callee_account.account.lamports, 42);
+        try std.testing.expect(callee_account.account.owner.equals(caller_account.owner));
+    }
 }
 
-test "updateCalleeAccount: data" {
+test "updateCalleeAccount: data writable" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
-    var ctx = try TestContext.init(allocator, prng.random(), "foobar");
-    defer ctx.deinit(allocator);
-    const account = ctx.getAccount();
+    for ([_]bool{ false, true }) |stricter_abi_and_runtime_constraints| {
+        var ctx = try TestContext.init(allocator, prng.random(), "foobar");
+        defer ctx.deinit(allocator);
+        const account = ctx.getAccount();
 
-    var ca = try TestCallerAccount.init(
-        allocator,
-        1234,
-        account.owner,
-        account.data,
-        false, // direct mapping
-    );
-    defer ca.deinit(allocator);
-    var caller_account = ca.getCallerAccount();
+        var ca = try TestCallerAccount.init(
+            allocator,
+            1234,
+            account.owner,
+            account.data,
+            false, // direct mapping
+        );
+        defer ca.deinit(allocator);
+        var caller_account = ca.getCallerAccount();
 
-    var callee_account = try ctx.ic.borrowInstructionAccount(account.index);
-    defer callee_account.release();
+        var callee_account = try ctx.ic.borrowInstructionAccount(account.index);
+        defer callee_account.release();
 
-    // Update the serialized data into account data
-    {
-        var data = "foo".*;
-        caller_account.serialized_data = &data;
-
+        // stricter_abi_and_runtime_constraints does not copy data in updateCalleeAccount()
+        caller_account.serialized_data[0] = 'b';
         _ = try updateCalleeAccount(
             allocator,
             &ctx.ic,
-            &ca.memory_map,
             &callee_account,
             &caller_account,
-            false, // is_loader_deprecated
-            false, // direct_mapping
+            stricter_abi_and_runtime_constraints,
+            false, // account_data_direct_mapping
         );
-        try std.testing.expect(std.mem.eql(
-            u8,
-            callee_account.account.data,
-            caller_account.serialized_data,
-        ));
-    }
+        try std.testing.expectEqualSlices(u8, callee_account.constAccountData(), "boobar");
 
-    // Close the account.
-    {
-        caller_account.serialized_data = &.{};
+        // growing resize
+        var resize_data = "foobarbaz".*;
+        (try caller_account.ref_to_len_in_vm.get(.mutable)).* = resize_data.len;
+        caller_account.serialized_data = &resize_data;
+        try std.testing.expectEqual(
+            stricter_abi_and_runtime_constraints,
+            try updateCalleeAccount(
+                allocator,
+                &ctx.ic,
+                &callee_account,
+                &caller_account,
+                stricter_abi_and_runtime_constraints,
+                true, // account_data_direct_mapping
+            ),
+        );
+
+        // truncating resize
+        var truncate_data = "baz".*;
+        (try caller_account.ref_to_len_in_vm.get(.mutable)).* = truncate_data.len;
+        caller_account.serialized_data = &truncate_data;
+        try std.testing.expectEqual(
+            stricter_abi_and_runtime_constraints,
+            try updateCalleeAccount(
+                allocator,
+                &ctx.ic,
+                &callee_account,
+                &caller_account,
+                stricter_abi_and_runtime_constraints,
+                true, // account_data_direct_mapping
+            ),
+        );
+
+        // close account
         (try caller_account.ref_to_len_in_vm.get(.mutable)).* = 0;
-
+        caller_account.serialized_data = &.{};
         var owner = system_program.ID;
         caller_account.owner = &owner;
-
         _ = try updateCalleeAccount(
             allocator,
             &ctx.ic,
-            &ca.memory_map,
             &callee_account,
             &caller_account,
-            false, // is_loader_deprecated
-            false, // direct_mapping
+            stricter_abi_and_runtime_constraints,
+            true, // account_data_direct_mapping
         );
-        try std.testing.expect(std.mem.eql(u8, callee_account.account.data, &.{}));
+        try std.testing.expectEqualSlices(u8, callee_account.constAccountData(), "");
+
+        // growing beyond `address_space`
+        (try caller_account.ref_to_len_in_vm.get(.mutable)).* = MAX_PERMITTED_DATA_INCREASE + 7;
+        const result = updateCalleeAccount(
+            allocator,
+            &ctx.ic,
+            &callee_account,
+            &caller_account,
+            stricter_abi_and_runtime_constraints,
+            true, // account_data_direct_mapping
+        );
+        if (stricter_abi_and_runtime_constraints) {
+            try std.testing.expectError(InstructionError.InvalidRealloc, result);
+        } else {
+            _ = try result;
+        }
     }
 }
 
@@ -2210,124 +2005,76 @@ test "updateCalleeAccount: data readonly" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
-    var ctx = try TestContext.init(allocator, prng.random(), "foobar");
-    defer ctx.deinit(allocator);
-    const account = ctx.getAccount();
+    for ([_]bool{ false, true }) |stricter_abi_and_runtime_constraints| {
+        // Custom TestContext to set readonly account.
+        var ctx = try TestContext.init(allocator, prng.random(), "foobar");
+        defer ctx.deinit(allocator);
 
-    var ca = try TestCallerAccount.init(
-        allocator,
-        1234,
-        account.owner,
-        account.data,
-        false, // direct mapping
-    );
-    defer ca.deinit(allocator);
-    var caller_account = ca.getCallerAccount();
+        // Set random owner to mark readonly.
+        const random_owner = Pubkey.initRandom(prng.random());
+        ctx.tc.accounts[0].account.owner = random_owner;
 
-    var callee_account = try ctx.ic.borrowInstructionAccount(account.index);
-    defer callee_account.release();
+        const account = ctx.getAccount();
 
-    // Make account readonly (going through setOwner would hit error.ModifiedProgramId).
-    callee_account.account.owner = Pubkey.initRandom(prng.random());
-
-    // Check data must be the same when readonly
-    caller_account.serialized_data[0] = 'b';
-    try std.testing.expectError(
-        InstructionError.ExternalAccountDataModified,
-        updateCalleeAccount(
+        var ca = try TestCallerAccount.init(
             allocator,
-            &ctx.ic,
-            &ca.memory_map,
-            &callee_account,
-            &caller_account,
-            false, // is_loader_deprecated
-            false, // direct_mapping
-        ),
-    );
-
-    // Check without direct mapping + different size.
-    var data = "foobarbaz".*;
-    caller_account.serialized_data = &data;
-    (try caller_account.ref_to_len_in_vm.get(.mutable)).* = data.len;
-    try std.testing.expectError(
-        InstructionError.AccountDataSizeChanged,
-        updateCalleeAccount(
-            allocator,
-            &ctx.ic,
-            &ca.memory_map,
-            &callee_account,
-            &caller_account,
-            false, // is_loader_deprecated
-            false, // direct_mapping
-        ),
-    );
-}
-
-test "updateCalleeAccount: data direct mapping" {
-    const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
-
-    var ctx = try TestContext.init(allocator, prng.random(), "foobar");
-    defer ctx.deinit(allocator);
-    const account = ctx.getAccount();
-
-    var ca = try TestCallerAccount.init(
-        allocator,
-        1234,
-        account.owner,
-        account.data,
-        true, // direct mapping
-    );
-    defer ca.deinit(allocator);
-    var caller_account = ca.getCallerAccount();
-
-    var callee_account = try ctx.ic.borrowInstructionAccount(account.index);
-    defer callee_account.release();
-
-    const serialized_data = try ca.memory_map.translateSlice(
-        u8,
-        .mutable,
-        caller_account.vm_data_addr +| caller_account.original_data_len,
-        3,
-        ctx.ic.getCheckAligned(),
-    );
-    @memcpy(serialized_data, "baz");
-
-    for ([_]struct { usize, []const u8 }{
-        .{ 9, "foobarbaz" }, // > original_data_len, copies from realloc region
-        .{ 6, "foobar" }, // == original_data_len, truncates
-        .{ 3, "foo" }, // < original_data_len, truncates
-    }) |entry| {
-        const len, const expected = entry;
-
-        (try caller_account.ref_to_len_in_vm.get(.mutable)).* = len;
-        _ = try updateCalleeAccount(
-            allocator,
-            &ctx.ic,
-            &ca.memory_map,
-            &callee_account,
-            &caller_account,
-            false, // is_loader_deprecated
-            true, // direct_mapping
+            1234,
+            account.owner,
+            account.data,
+            false, // direct mapping
         );
-        try std.testing.expect(std.mem.eql(u8, expected, callee_account.account.data));
-    }
+        defer ca.deinit(allocator);
+        var caller_account = ca.getCallerAccount();
 
-    // Close the account
-    caller_account.serialized_data = &.{};
-    (try caller_account.ref_to_len_in_vm.get(.mutable)).* = 0;
-    var owner = system_program.ID;
-    caller_account.owner = &owner;
-    _ = try updateCalleeAccount(
-        allocator,
-        &ctx.ic,
-        &ca.memory_map,
-        &callee_account,
-        &caller_account,
-        false, // is_loader_deprecated
-        true, // direct_mapping
-    );
-    try std.testing.expect(std.mem.eql(u8, callee_account.account.data, ""));
+        var callee_account = try ctx.ic.borrowInstructionAccount(account.index);
+        defer callee_account.release();
+
+        // stricter_abi_and_runtime_constraints does not copy data in updateCalleeAccount()
+        caller_account.serialized_data[0] = 'b';
+        try std.testing.expectError(
+            InstructionError.ExternalAccountDataModified,
+            updateCalleeAccount(
+                allocator,
+                &ctx.ic,
+                &callee_account,
+                &caller_account,
+                false, // stricter_abi_and_runtime_constraints
+                false, // account_data_direct_mapping
+            ),
+        );
+
+        // growing resize
+        var resize_data = "foobarbaz".*;
+        (try caller_account.ref_to_len_in_vm.get(.mutable)).* = resize_data.len;
+        caller_account.serialized_data = &resize_data;
+        try std.testing.expectError(
+            InstructionError.AccountDataSizeChanged,
+            updateCalleeAccount(
+                allocator,
+                &ctx.ic,
+                &callee_account,
+                &caller_account,
+                stricter_abi_and_runtime_constraints,
+                true, // account_data_direct_mapping
+            ),
+        );
+
+        // truncating resize
+        var truncate_data = "baz".*;
+        (try caller_account.ref_to_len_in_vm.get(.mutable)).* = truncate_data.len;
+        caller_account.serialized_data = &truncate_data;
+        try std.testing.expectError(
+            InstructionError.AccountDataSizeChanged,
+            updateCalleeAccount(
+                allocator,
+                &ctx.ic,
+                &callee_account,
+                &caller_account,
+                stricter_abi_and_runtime_constraints,
+                true, // account_data_direct_mapping
+            ),
+        );
+    }
 }
 
 // test CallerAccount updates
@@ -2336,38 +2083,38 @@ test "updateCallerAccount: lamports owner" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
-    var ctx = try TestContext.init(allocator, prng.random(), &.{});
-    defer ctx.deinit(allocator);
-    const account = ctx.getAccount();
+    for ([_]bool{ false, true }) |stricter_abi_and_runtime_constraints| {
+        var ctx = try TestContext.init(allocator, prng.random(), &.{});
+        defer ctx.deinit(allocator);
+        const account = ctx.getAccount();
 
-    var ca = try TestCallerAccount.init(
-        allocator,
-        1234, // lamports
-        account.owner,
-        account.data,
-        false, // direct mapping
-    );
-    defer ca.deinit(allocator);
-    var caller_account = ca.getCallerAccount();
+        var ca = try TestCallerAccount.init(
+            allocator,
+            1234, // lamports
+            account.owner,
+            account.data,
+            false, // direct mapping
+        );
+        defer ca.deinit(allocator);
+        var caller_account = ca.getCallerAccount();
 
-    var callee_account = try ctx.ic.borrowInstructionAccount(account.index);
-    defer callee_account.release();
+        var callee_account = try ctx.ic.borrowInstructionAccount(account.index);
+        defer callee_account.release();
 
-    try callee_account.setLamports(42);
-    try callee_account.setOwner(Pubkey.initRandom(prng.random()));
+        try callee_account.setLamports(42);
+        try callee_account.setOwner(Pubkey.initRandom(prng.random()));
 
-    try updateCallerAccount(
-        allocator,
-        &ctx.ic,
-        &ca.memory_map,
-        &caller_account,
-        &callee_account,
-        false, // is loader account
-        false, // direct mapping
-    );
+        try updateCallerAccount(
+            &ctx.ic,
+            &ca.memory_map,
+            &caller_account,
+            &callee_account,
+            stricter_abi_and_runtime_constraints,
+        );
 
-    try std.testing.expectEqual(caller_account.lamports.*, 42);
-    try std.testing.expect(caller_account.owner.equals(&callee_account.account.owner));
+        try std.testing.expectEqual(caller_account.lamports.*, 42);
+        try std.testing.expect(caller_account.owner.equals(&callee_account.account.owner));
+    }
 }
 
 test "updateCallerAccount: data" {
@@ -2410,13 +2157,11 @@ test "updateCallerAccount: data" {
         // Set to new slice.
         try callee_account.setDataFromSlice(allocator, &ctx.tc.accounts_resize_delta, new_value);
         try updateCallerAccount(
-            allocator,
             &ctx.ic,
             &ca.memory_map,
             &caller_account,
             &callee_account,
-            false, // is_loader_deprecated
-            false, // direct_mapping
+            false, // stricter_abi_and_runtime_constraints
         );
 
         const size = callee_account.account.data.len;
@@ -2441,13 +2186,11 @@ test "updateCallerAccount: data" {
         original_data_len + MAX_PERMITTED_DATA_INCREASE,
     );
     try updateCallerAccount(
-        allocator,
         &ctx.ic,
         &ca.memory_map,
         &caller_account,
         &callee_account,
-        false, // is_loader_deprecated
-        false, // direct_mapping
+        false, // stricter_abi_and_runtime_constraints
     );
 
     const realloced = ca.slice()[callee_account.account.data.len..];
@@ -2461,235 +2204,23 @@ test "updateCallerAccount: data" {
         original_data_len + MAX_PERMITTED_DATA_INCREASE + 1,
     );
     try std.testing.expectError(InstructionError.InvalidRealloc, updateCallerAccount(
-        allocator,
         &ctx.ic,
         &ca.memory_map,
         &caller_account,
         &callee_account,
-        false, // is_loader_deprecated
-        false, // direct_mapping
+        false, // stricter_abi_and_runtime_constraints
     ));
 
     // close the account
     try callee_account.setDataLength(allocator, &ctx.tc.accounts_resize_delta, 0);
     try updateCallerAccount(
-        allocator,
         &ctx.ic,
         &ca.memory_map,
         &caller_account,
         &callee_account,
-        false, // is_loader_deprecated
-        false, // direct_mapping
+        false, // stricter_abi_and_runtime_constraints
     );
     try std.testing.expectEqual(callee_account.account.data.len, 0);
-}
-
-test "updateCallerAccount: data direct mapping" {
-    const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
-
-    var ctx = try TestContext.init(allocator, prng.random(), "foobar");
-    defer ctx.deinit(allocator);
-    const account = ctx.getAccount();
-
-    var ca = try TestCallerAccount.init(
-        allocator,
-        account.lamports,
-        account.owner,
-        account.data,
-        true, // direct mapping
-    );
-    defer ca.deinit(allocator);
-    var caller_account = ca.getCallerAccount();
-
-    var callee_account = try ctx.ic.borrowInstructionAccount(account.index);
-    defer callee_account.release();
-
-    const len_ptr: *align(1) u64 = @ptrCast(ca.buffer[0..8]);
-    const original_data_len = account.data.len;
-
-    for ([_]bool{ false, true }) |change_ptr| {
-        for ([_]struct { []const u8, usize }{
-            .{ "foobazbad", 3 }, // > original_data_len, writes into realloc
-            .{ "foo", 0 }, // < original_data_len, zeroes account capacity + realloc capacity
-            .{ "foobaz", 0 }, // = original_data_len
-            .{ "", 0 }, // check lower bound
-        }) |entry| {
-            const new, const realloc_used = entry;
-            if (change_ptr) {
-                const copy = try allocator.dupe(u8, callee_account.account.data);
-                allocator.free(callee_account.account.data);
-                callee_account.account.data = copy;
-            }
-
-            try callee_account.setDataFromSlice(allocator, &ctx.tc.accounts_resize_delta, new);
-            try updateCallerAccount(
-                allocator,
-                &ctx.ic,
-                &ca.memory_map,
-                &caller_account,
-                &callee_account,
-                false, // is_loader_deprecated
-                true, // direct_mapping
-            );
-
-            // Check the caller & callee account data pointers match
-            try std.testing.expectEqual(
-                callee_account.account.data.ptr,
-                (try ca.memory_map.translateSlice(
-                    u8,
-                    .constant,
-                    caller_account.vm_data_addr,
-                    1,
-                    true,
-                )).ptr,
-            );
-
-            // Check account info lengths were updated
-            const size = callee_account.account.data.len;
-            try std.testing.expectEqual(size, len_ptr.*);
-            try std.testing.expectEqual(
-                size,
-                (try caller_account.ref_to_len_in_vm.get(.constant)).*,
-            );
-
-            const realloc_area = try ca.memory_map.translateSlice(
-                u8,
-                .constant,
-                caller_account.vm_data_addr +| caller_account.original_data_len,
-                MAX_PERMITTED_DATA_INCREASE,
-                ctx.ic.getCheckAligned(),
-            );
-
-            // TODO: Make sure spare capacity account data is zeroed (no data capacity atm).
-            // if (size < original_data_len) {
-            //     const original_slice = callee_account.constAccountData().ptr[0..original_data_len];
-            //     try std.testing.expect(std.mem.allEqual(
-            //         u8,
-            //         original_slice[original_data_len - size..],
-            //         0,
-            //     ));
-            // }
-
-            try std.testing.expect(std.mem.allEqual(u8, realloc_area[realloc_used..], 0));
-            try std.testing.expect(std.mem.eql(
-                u8,
-                realloc_area[0..realloc_used],
-                callee_account.constAccountData()[size - realloc_used ..],
-            ));
-        }
-    }
-
-    // Bump size to max & check zero padding.
-    {
-        try callee_account.setDataLength(
-            allocator,
-            &ctx.tc.accounts_resize_delta,
-            original_data_len + MAX_PERMITTED_DATA_INCREASE,
-        );
-        try updateCallerAccount(
-            allocator,
-            &ctx.ic,
-            &ca.memory_map,
-            &caller_account,
-            &callee_account,
-            false, // is_loader_deprecated
-            true, // direct_mapping
-        );
-        try std.testing.expect(std.mem.allEqual(u8, caller_account.serialized_data, 0));
-    }
-
-    // Bump size and over & check still zero padded.
-    {
-        try callee_account.setDataLength(
-            allocator,
-            &ctx.tc.accounts_resize_delta,
-            original_data_len + MAX_PERMITTED_DATA_INCREASE + 1,
-        );
-        try std.testing.expectError(InstructionError.InvalidRealloc, updateCallerAccount(
-            allocator,
-            &ctx.ic,
-            &ca.memory_map,
-            &caller_account,
-            &callee_account,
-            false, // is_loader_deprecated
-            false, // direct_mapping (false on overgrow?)
-        ));
-        try std.testing.expect(std.mem.allEqual(u8, caller_account.serialized_data, 0));
-    }
-
-    // Close account
-    {
-        try callee_account.setDataLength(allocator, &ctx.tc.accounts_resize_delta, 0);
-        try callee_account.setOwner(system_program.ID);
-        try updateCallerAccount(
-            allocator,
-            &ctx.ic,
-            &ca.memory_map,
-            &caller_account,
-            &callee_account,
-            false, // is_loader_deprecated
-            true, // direct_mapping
-        );
-        try std.testing.expectEqual(callee_account.constAccountData().len, 0);
-    }
-}
-
-test "updateCallerAccount: data capacity direct mapping" {
-    const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
-
-    var ctx = try TestContext.init(allocator, prng.random(), "foobar");
-    defer ctx.deinit(allocator);
-    const account = ctx.getAccount();
-
-    var ca = try TestCallerAccount.init(
-        allocator,
-        account.lamports,
-        account.owner,
-        account.data,
-        true, // direct mapping
-    );
-    defer ca.deinit(allocator);
-    var caller_account = ca.getCallerAccount();
-
-    var callee_account = try ctx.ic.borrowInstructionAccount(account.index);
-    defer callee_account.release();
-
-    // Update the buffer.
-    try callee_account.setDataFromSlice(allocator, &ctx.tc.accounts_resize_delta, "baz");
-
-    {
-        // TODO: ensure enough account data capacity (no data capacity atm).
-        // try std.testing.expect(callee_account.capacity >= 3);
-        try std.testing.expectEqual(callee_account.constAccountData().len, 3);
-
-        try updateCallerAccount(
-            allocator,
-            &ctx.ic,
-            &ca.memory_map,
-            &caller_account,
-            &callee_account,
-            false, // is_loader_deprecated
-            true, // direct_mapping
-        );
-
-        // TODO: ensure enough account data capacity (no data capacity atm).
-        // try std.testing.expect(callee_account.capacity >= caller_account.original_data_len);
-        try std.testing.expectEqual(callee_account.constAccountData().len, 3);
-    }
-
-    try std.testing.expect(std.mem.eql(
-        u8,
-        callee_account.constAccountData(),
-        try ca.memory_map.translateSlice(
-            u8,
-            .constant,
-            caller_account.vm_data_addr,
-            callee_account.constAccountData().len,
-            true,
-        ),
-    ));
 }
 
 test "cpiCommon (invokeSignedRust)" {
@@ -2704,69 +2235,92 @@ fn testCpiCommon(comptime AccountInfoType: type) !void {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
-    var ctx = try TestContext.init(allocator, prng.random(), "");
-    defer ctx.deinit(allocator);
-    const account = ctx.getAccount();
+    for ([_]bool{ false, true }) |stricter_abi_and_runtime_constraints| {
+        var ctx = try TestContext.init(allocator, prng.random(), "hello world");
+        defer ctx.deinit(allocator);
+        const account = ctx.getAccount();
 
-    // the CPI program to execute.
-    const program_id = system_program.ID;
-    const data = try sig.bincode.writeAlloc(
-        allocator,
-        system_program.Instruction{ .assign = .{ .owner = Pubkey.initRandom(prng.random()) } },
-        .{},
-    );
-    defer allocator.free(data);
-    const accounts = [_]InstructionAccount{.{
-        .pubkey = account.key,
-        .is_signer = true,
-        .is_writable = true,
-    }};
+        if (stricter_abi_and_runtime_constraints) {
+            const feature_set: *sig.core.FeatureSet = @constCast(ctx.tc.feature_set);
+            feature_set.setSlot(.stricter_abi_and_runtime_constraints, ctx.tc.slot);
 
-    // setting up CPI structs in memory
-    const instruction_addr = memory.HEAP_START;
-    const heap_buffer = try intoStableInstruction(
-        allocator,
-        AccountInfoType,
-        instruction_addr,
-        data,
-        program_id,
-        &accounts,
-    );
-    defer allocator.free(heap_buffer);
+            // also enable account_data_direct_mapping for getSerializedData
+            ctx.tc.account_data_direct_mapping = true;
+        }
 
-    const account_info_addr = memory.INPUT_START;
-    const input_buffer, const serialized_metadata =
-        try account.intoAccountInfo(allocator, AccountInfoType, account_info_addr);
-    defer allocator.free(input_buffer);
+        // the CPI program to execute.
+        const program_id = system_program.ID;
+        const data = try sig.bincode.writeAlloc(
+            allocator,
+            system_program.Instruction{ .assign = .{ .owner = program_id } },
+            .{},
+        );
+        defer allocator.free(data);
+        const accounts = [_]InstructionAccount{.{
+            .pubkey = account.key,
+            .is_signer = true,
+            .is_writable = true,
+        }};
 
-    ctx.tc.serialized_accounts.appendAssumeCapacity(serialized_metadata);
+        // setting up CPI structs in memory
+        const instruction_addr = memory.HEAP_START;
+        const instruction_buffer = try intoStableInstruction(
+            allocator,
+            AccountInfoType,
+            instruction_addr,
+            data,
+            program_id,
+            &accounts,
+        );
+        defer allocator.free(instruction_buffer);
 
-    var memory_map = try MemoryMap.init(
-        allocator,
-        &.{
-            memory.Region.init(.constant, &.{}, memory.RODATA_START),
-            memory.Region.init(.mutable, &.{}, memory.STACK_START),
-            memory.Region.init(.constant, heap_buffer, instruction_addr),
-            memory.Region.init(.mutable, input_buffer, account_info_addr),
-        },
-        .v3,
-        .{ .aligned_memory_mapping = false },
-    );
-    defer memory_map.deinit(allocator);
+        // Update the account data to be:
+        // - its own region for stricter_abi_and_runtime_constraints.
+        // - start at INPUT_START for getSerializedData().
+        const account_data_addr = memory.INPUT_START;
+        const account_data_buffer = try allocator.dupe(u8, account.data);
+        defer allocator.free(account_data_buffer);
 
-    // invoke CPI
+        const account_info_addr =
+            std.mem.alignForward(u64, instruction_addr + instruction_buffer.len, BPF_ALIGN_OF_U128);
+        const account_info_buffer, const serialized_metadata = try account.intoAccountInfo(
+            allocator,
+            AccountInfoType,
+            account_info_addr,
+            account_data_addr,
+        );
+        defer allocator.free(account_info_buffer);
 
-    var registers = RegisterMap.initFill(0);
-    registers.set(.r1, instruction_addr);
-    registers.set(.r2, account_info_addr);
-    registers.set(.r3, 1); // account_infos_len
-    registers.set(.r4, 0); // null signers_addr
-    registers.set(.r5, 0); // zero signers_len
+        ctx.tc.serialized_accounts.appendAssumeCapacity(serialized_metadata);
 
-    switch (AccountInfoType) {
-        AccountInfoRust => try invokeSignedRust(ctx.tc, &memory_map, &registers),
-        AccountInfoC => try invokeSignedC(ctx.tc, &memory_map, &registers),
-        else => @compileError("invalid AccountInfo type"),
+        var memory_map = try MemoryMap.init(
+            allocator,
+            &.{
+                memory.Region.init(.constant, &.{}, memory.RODATA_START),
+                memory.Region.init(.mutable, &.{}, memory.STACK_START),
+                memory.Region.init(.constant, instruction_buffer, instruction_addr),
+                memory.Region.init(.mutable, account_info_buffer, account_info_addr),
+                memory.Region.init(.mutable, account_data_buffer, account_data_addr),
+            },
+            .v3,
+            .{ .aligned_memory_mapping = false },
+        );
+        defer memory_map.deinit(allocator);
+
+        // invoke CPI
+
+        var registers = RegisterMap.initFill(0);
+        registers.set(.r1, instruction_addr);
+        registers.set(.r2, account_info_addr);
+        registers.set(.r3, 1); // account_infos_len
+        registers.set(.r4, 0); // null signers_addr
+        registers.set(.r5, 0); // zero signers_len
+
+        switch (AccountInfoType) {
+            AccountInfoRust => try invokeSignedRust(ctx.tc, &memory_map, &registers),
+            AccountInfoC => try invokeSignedC(ctx.tc, &memory_map, &registers),
+            else => @compileError("invalid AccountInfo type"),
+        }
     }
 }
 

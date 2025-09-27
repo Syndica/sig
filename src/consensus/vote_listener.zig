@@ -1304,27 +1304,17 @@ pub const vote_parser = struct {
             std.debug.assert(message.instructions.len != 0);
             const first_ix = message.instructions[0];
 
+            var dedupe_map: [sig.runtime.InstructionInfo.MAX_ACCOUNT_METAS]u8 = @splat(0xff);
             var account_metas = sig.runtime.InstructionInfo.AccountMetas{};
-            var seen = std.bit_set.ArrayBitSet(usize, 256).initEmpty();
             for (first_ix.account_indexes, 0..) |acct_index_u8, i| {
                 const acct_index: usize = acct_index_u8;
-                const index_in_callee: usize = if (seen.isSet(acct_index))
-                    std.mem.indexOfScalar(
-                        u8,
-                        first_ix.account_indexes[0..i],
-                        acct_index_u8,
-                    ) orelse i
-                else
-                    i;
-                seen.set(acct_index);
+                if (dedupe_map[i] == 0xff)
+                    dedupe_map[i] = @intCast(i);
 
                 const pubkey = message.account_keys[acct_index];
-
                 account_metas.append(.{
                     .pubkey = pubkey,
                     .index_in_transaction = @intCast(acct_index),
-                    .index_in_caller = @intCast(acct_index),
-                    .index_in_callee = @intCast(index_in_callee),
                     .is_signer = message.isSigner(acct_index),
                     .is_writable = false,
                 }) catch @panic("Vote instructions have 4 accounts, below MAX_ACCOUNT_METAS (256)");
@@ -1339,6 +1329,7 @@ pub const vote_parser = struct {
                         .index_in_transaction = first_ix.program_index,
                     },
                     .account_metas = account_metas,
+                    .dedupe_map = dedupe_map,
                     .instruction_data = first_ix.data,
                 }},
             };
@@ -1393,15 +1384,15 @@ pub const vote_parser = struct {
         std.debug.assert(message.instructions.len != 0);
         const first_ix = message.instructions[0];
 
+        var dedupe_map: [sig.runtime.InstructionInfo.MAX_ACCOUNT_METAS]u8 = @splat(0xff);
         var account_metas = sig.runtime.InstructionInfo.AccountMetas{};
         // minimal one account to satisfy check
         if (first_ix.account_indexes.len != 0) {
             const acct_index: usize = first_ix.account_indexes[0];
+            dedupe_map[0] = 0;
             try account_metas.append(.{
                 .pubkey = message.account_keys[acct_index],
                 .index_in_transaction = @intCast(acct_index),
-                .index_in_caller = @intCast(acct_index),
-                .index_in_callee = 0,
                 .is_signer = message.isSigner(acct_index),
                 .is_writable = false,
             });
@@ -1416,6 +1407,7 @@ pub const vote_parser = struct {
                     .index_in_transaction = first_ix.program_index,
                 },
                 .account_metas = account_metas,
+                .dedupe_map = dedupe_map,
                 .instruction_data = first_ix.data,
             }},
         };

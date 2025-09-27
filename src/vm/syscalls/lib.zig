@@ -1062,15 +1062,15 @@ test getProcessedSiblingInstruction {
                     .index_in_transaction = 0,
                 },
                 .account_metas = .{},
+                .dedupe_map = @splat(0xff),
                 .instruction_data = @as(*const [1]u8, &trace_indexes[index_in_trace]),
             };
 
             const index_in_tc = index_in_trace +| 1;
+            info.dedupe_map[index_in_tc] = 0;
             info.account_metas.appendAssumeCapacity(.{
                 .pubkey = tc.accounts[index_in_tc].pubkey,
                 .index_in_transaction = @intCast(index_in_tc),
-                .index_in_caller = 0, // inconsistent but not required
-                .index_in_callee = 0,
                 .is_signer = false,
                 .is_writable = false,
             });
@@ -1337,6 +1337,7 @@ test "set and get return data" {
             .pubkey = program_id,
         },
         .account_metas = .{},
+        .dedupe_map = @splat(0xff),
         .instruction_data = &.{},
         .initial_account_lamports = 0,
     };

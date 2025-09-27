@@ -3230,6 +3230,7 @@ test "test loader v4 and bpf v3 migrate custom errors" {
                 .pubkey = Pubkey.ZEROES,
             },
             .account_metas = .{},
+            .dedupe_map = @splat(0xff),
             .instruction_data = &.{},
             .initial_account_lamports = 0,
         },
