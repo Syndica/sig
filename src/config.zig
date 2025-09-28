@@ -24,6 +24,8 @@ pub const Cmd = struct {
     tee_logs: bool = false,
     metrics_port: u16 = 12345,
     shred_version: ?u16 = null,
+    replay_threads: u16 = 4,
+    disable_consensus: bool = false,
 
     pub fn genesisFilePath(self: Cmd) error{UnknownCluster}!?[]const u8 {
         return if (self.genesis_file_path) |provided_path|
@@ -59,7 +61,7 @@ pub const Geyser = struct {
 /// gets its own struct. `ShredNetworkConfig` represents the inputs to the start
 /// function.
 pub const ShredNetwork = struct {
-    start_slot: ?sig.core.Slot = null,
+    root_slot: ?sig.core.Slot = null,
     repair_port: u16 = 8003,
     turbine_recv_port: u16 = 8002,
     no_retransmit: bool = true,
@@ -68,7 +70,7 @@ pub const ShredNetwork = struct {
     /// Converts from the CLI args into the `shred_network.start` parameters
     pub fn toConfig(self: ShredNetwork, fallback_slot: sig.core.Slot) ShredNetworkConfig {
         return .{
-            .start_slot = self.start_slot orelse fallback_slot,
+            .root_slot = self.root_slot orelse fallback_slot,
             .repair_port = self.repair_port,
             .turbine_recv_port = self.turbine_recv_port,
             .retransmit = !self.no_retransmit,
@@ -98,10 +100,6 @@ pub const AccountsDB = struct {
     /// estimate of the number of accounts per file (used for preallocation)
     accounts_per_file_estimate: u64 = getAccountPerFileEstimateFromCluster(.testnet) catch
         @compileError("account_per_file_estimate missing for default cluster"),
-    /// loads accounts-db from pre-existing state which has been saved with the `save_index` option
-    fastload: bool = false,
-    /// saves the accounts index to disk after loading to support fastloading
-    save_index: bool = false,
     /// only load snapshot metadata when starting up
     snapshot_metadata_only: bool = false,
     /// maximum number of snapshot download attempts before failing

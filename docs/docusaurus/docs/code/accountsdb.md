@@ -59,9 +59,6 @@ try accounts_db.loadWithDefaults(
     options.validate_snapshot,
     // used for preallocation of the index
     current_config.accounts_db.accounts_per_file_estimate,
-    // fastload/save options
-    current_config.accounts_db.fastload,
-    current_config.accounts_db.save_index,
 );
 ```
 

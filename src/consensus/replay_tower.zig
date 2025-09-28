@@ -221,8 +221,8 @@ pub const ReplayTower = struct {
             .logger = logger,
             .tower = tower,
             .node_pubkey = node_pubkey,
-            .threshold_depth = 0,
-            .threshold_size = 0,
+            .threshold_depth = VOTE_THRESHOLD_DEPTH,
+            .threshold_size = VOTE_THRESHOLD_SIZE,
             .last_vote = VoteTransaction.DEFAULT,
             .last_vote_tx_blockhash = .uninitialized,
             .last_timestamp = BlockTimestamp.ZEROES,
@@ -2765,6 +2765,62 @@ test "check vote threshold lockouts not updated" {
     try std.testing.expect(result.len == 0);
 }
 
+test "default thresholds" {
+    const allocator = std.testing.allocator;
+
+    // Build a minimal fork with just the root slot present
+    var prng = std.Random.DefaultPrng.init(12345);
+    const random = prng.random();
+    const root = SlotAndHash{ .slot = 0, .hash = Hash.initRandom(random) };
+
+    var fixture = try TestFixture.init(allocator, root);
+    defer fixture.deinit(allocator);
+
+    const trees = try std.BoundedArray(TreeNode, MAX_TEST_TREE_LEN).init(0);
+    try fixture.fillFork(allocator, .{ .root = root, .data = trees }, .active);
+
+    var replay_tower = try ReplayTower.init(
+        allocator,
+        .noop,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        root.slot,
+        .noop,
+    );
+    defer replay_tower.deinit(allocator);
+
+    // Ensure candidate slot exists in progress
+    const candidate_slot = root.slot;
+
+    // Mark as leader slot so propagation is confirmed
+    if (fixture.progress.map.getPtr(candidate_slot)) |fp| {
+        fp.propagated_stats.is_leader_slot = true;
+    } else {
+        return error.MissingSlot;
+    }
+
+    // Inject a failed threshold at vote_depth=0 into fork stats
+    const stats = fixture.progress.getForkStats(candidate_slot).?;
+    try stats.vote_threshold.append(allocator, .{
+        .failed_threshold = .{ .vote_depth = 0, .observed_stake = 0 },
+    });
+
+    // Now verify that canVoteOnCandidateSlot returns true and does not treat
+    // vote_depth=0 as disqualifying with non-zero default threshold_depth
+    var failure_reasons: std.ArrayListUnmanaged(HeaviestForkFailures) = .empty;
+    defer failure_reasons.deinit(allocator);
+
+    const can_vote = try replay_tower.canVoteOnCandidateSlot(
+        allocator,
+        candidate_slot,
+        &fixture.progress,
+        &failure_reasons,
+        &SwitchForkDecision{ .same_fork = {} },
+    );
+
+    try std.testing.expect(can_vote);
+}
+
 test "maybe timestamp" {
     var replay_tower = try createTestReplayTower(0, 0);
     try std.testing.expect(replay_tower.maybeTimestamp(0) != null);
@@ -4233,7 +4289,7 @@ pub const TestFixture = struct {
         allocator: std.mem.Allocator,
         root: SlotAndHash,
     ) !TestFixture {
-        const slot_tracker = st: {
+        const constants, const state = st: {
             var constants = try sig.core.SlotConstants.genesis(allocator, .DEFAULT);
             errdefer constants.deinit(allocator);
 
@@ -4243,12 +4299,13 @@ pub const TestFixture = struct {
             constants.parent_slot = root.slot -| 1;
             state.hash = .init(root.hash);
 
-            break :st try SlotTracker.init(
-                allocator,
-                root.slot,
-                .{ .constants = constants, .state = state },
-            );
+            break :st .{ constants, state };
         };
+        const slot_tracker = try SlotTracker.init(
+            allocator,
+            root.slot,
+            .{ .constants = constants, .state = state },
+        );
         errdefer slot_tracker.deinit(allocator);
 
         return .{

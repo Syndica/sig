@@ -279,14 +279,7 @@ pub const GossipService = struct {
         const exit = try allocator.create(Atomic(bool));
         exit.* = Atomic(bool).init(false);
 
-        const service_manager = ServiceManager.init(
-            allocator,
-            .from(logger),
-            exit,
-            "gossip",
-            .{},
-            .{},
-        );
+        const service_manager = ServiceManager.init(allocator, .from(logger), exit, "gossip", .{});
 
         return .{
             .allocator = allocator,
