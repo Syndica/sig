@@ -105,6 +105,7 @@ pub const VoteListener = struct {
         allocator: std.mem.Allocator,
         exit: sig.sync.ExitCondition,
         logger: Logger,
+        registry: *sig.prometheus.Registry(.{}),
         params: struct {
             slot_data_provider: SlotDataProvider,
             gossip_table_rw: ?*sig.sync.RwMux(sig.gossip.GossipTable),
@@ -1756,7 +1757,7 @@ test "simple usage" {
     var exit: std.atomic.Value(bool) = .init(false);
     const exit_cond: sig.sync.ExitCondition = .{ .unordered = &exit };
 
-    const vote_listener: VoteListener = try .init(allocator, exit_cond, .noop, .{
+    const vote_listener: VoteListener = try .init(allocator, exit_cond, .noop, &registry, .{
         .slot_data_provider = slot_data_provider,
         .gossip_table_rw = &gossip_table_rw,
         .ledger_ref = ledger_ref,

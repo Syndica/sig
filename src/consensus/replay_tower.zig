@@ -2779,6 +2779,9 @@ test "default thresholds" {
     const trees = try std.BoundedArray(TreeNode, MAX_TEST_TREE_LEN).init(0);
     try fixture.fillFork(allocator, .{ .root = root, .data = trees }, .active);
 
+    var registry = sig.prometheus.Registry(.{}).init(allocator);
+    defer registry.deinit();
+
     var replay_tower = try ReplayTower.init(
         allocator,
         .noop,
@@ -2786,6 +2789,7 @@ test "default thresholds" {
         Pubkey.ZEROES,
         root.slot,
         .noop,
+        &registry,
     );
     defer replay_tower.deinit(allocator);
 
