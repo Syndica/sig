@@ -1,6 +1,7 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 
+const account_loader = sig.runtime.account_loader;
 const bpf_loader = sig.runtime.program.bpf_loader;
 const vm = sig.vm;
 
@@ -33,19 +34,20 @@ pub const LoadedProgram = union(enum(u8)) {
 
 pub fn loadPrograms(
     allocator: std.mem.Allocator,
-    accounts: *const std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData),
+    accounts: *const account_loader.BatchAccountCache.AccountMap,
     enviroment: *const vm.Environment,
     slot: u64,
 ) error{OutOfMemory}!ProgramMap {
     var programs = ProgramMap{};
     errdefer programs.deinit(allocator);
 
-    for (accounts.keys(), accounts.values()) |pubkey, account| {
-        if (!account.executable) continue;
+    for (accounts.keys(), accounts.values()) |pubkey, account_entry| {
+        const is_executable = account_entry.getConst().executable;
+        if (!is_executable) continue;
 
         var loaded_program = try loadProgram(
             allocator,
-            &account,
+            account_entry.getConst(),
             accounts,
             enviroment,
             slot,
@@ -62,7 +64,7 @@ pub fn loadPrograms(
 pub fn loadProgram(
     allocator: std.mem.Allocator,
     account: *const AccountSharedData,
-    accounts: *const std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData),
+    accounts: *const account_loader.BatchAccountCache.AccountMap,
     environment: *const vm.Environment,
     slot: u64,
 ) !LoadedProgram {
@@ -100,7 +102,7 @@ pub fn loadProgram(
 
 pub fn loadDeploymentSlotAndExecutableBytes(
     account: *const AccountSharedData,
-    accounts: *const std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData),
+    accounts: *const account_loader.BatchAccountCache.AccountMap,
 ) ?struct { ?u64, []const u8 } {
     if (account.owner.equals(&bpf_loader.v1.ID) or account.owner.equals(&bpf_loader.v2.ID)) {
         return .{ null, account.data };
@@ -117,8 +119,9 @@ pub fn loadDeploymentSlotAndExecutableBytes(
             else => return null,
         };
 
-        const program_data_account = accounts.getPtr(program_data_key) orelse
+        const program_data_account_entry = accounts.getPtr(program_data_key) orelse
             return null;
+        const program_data_account = program_data_account_entry.get();
 
         if (program_data_account.data.len < bpf_loader.v3.State.PROGRAM_DATA_METADATA_SIZE) {
             return null;
@@ -172,7 +175,7 @@ test "loadPrograms: load v1, v2 program" {
     );
     defer allocator.free(program_elf);
 
-    var accounts = std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData){};
+    var accounts = account_loader.BatchAccountCache.AccountMap{};
     defer accounts.deinit(allocator);
 
     const program_v1_key = Pubkey.initRandom(prng.random());
@@ -182,11 +185,13 @@ test "loadPrograms: load v1, v2 program" {
         allocator,
         program_v1_key,
         .{
-            .lamports = 1,
-            .owner = bpf_loader.v1.ID,
-            .data = program_elf,
-            .executable = true,
-            .rent_epoch = std.math.maxInt(u64),
+            .clean = .{
+                .lamports = 1,
+                .owner = bpf_loader.v1.ID,
+                .data = program_elf,
+                .executable = true,
+                .rent_epoch = std.math.maxInt(u64),
+            },
         },
     );
 
@@ -194,11 +199,13 @@ test "loadPrograms: load v1, v2 program" {
         allocator,
         program_v2_key,
         .{
-            .lamports = 1,
-            .owner = bpf_loader.v2.ID,
-            .data = program_elf,
-            .executable = true,
-            .rent_epoch = std.math.maxInt(u64),
+            .clean = .{
+                .lamports = 1,
+                .owner = bpf_loader.v2.ID,
+                .data = program_elf,
+                .executable = true,
+                .rent_epoch = std.math.maxInt(u64),
+            },
         },
     );
 
@@ -254,10 +261,14 @@ test "loadPrograms: load v3 program" {
         null,
         program_elf,
     );
+    defer allocator.free(program_bytes);
+    defer allocator.free(program_data_bytes);
 
-    var accounts = std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData){};
+    var accounts = account_loader.BatchAccountCache.AccountMap{};
     defer {
-        for (accounts.values()) |account| allocator.free(account.data);
+        for (accounts.values()) |account_entry| {
+            account_entry.deinit(allocator);
+        }
         accounts.deinit(allocator);
     }
 
@@ -265,11 +276,13 @@ test "loadPrograms: load v3 program" {
         allocator,
         program_key,
         .{
-            .lamports = 1,
-            .owner = bpf_loader.v3.ID,
-            .data = program_bytes,
-            .executable = true,
-            .rent_epoch = std.math.maxInt(u64),
+            .clean = .{
+                .lamports = 1,
+                .owner = bpf_loader.v3.ID,
+                .data = try allocator.dupe(u8, program_bytes),
+                .executable = true,
+                .rent_epoch = std.math.maxInt(u64),
+            },
         },
     );
 
@@ -277,11 +290,13 @@ test "loadPrograms: load v3 program" {
         allocator,
         program_data_key,
         .{
-            .lamports = 1,
-            .owner = program_key,
-            .data = program_data_bytes,
-            .executable = false,
-            .rent_epoch = std.math.maxInt(u64),
+            .clean = .{
+                .lamports = 1,
+                .owner = Pubkey.ZEROES,
+                .data = try allocator.dupe(u8, program_data_bytes),
+                .executable = false,
+                .rent_epoch = std.math.maxInt(u64),
+            },
         },
     );
 
@@ -327,10 +342,14 @@ test "loadPrograms: load v3 program" {
     }
 
     { // Bad program data meta
-        const account = accounts.getPtr(program_data_key).?;
-        const tmp_byte = account.data[0];
-        account.data[0] = 0xFF; // Corrupt the first byte of the metadata
-        defer account.data[0] = tmp_byte;
+        const account_entry = accounts.getPtr(program_data_key).?;
+        const account_data = switch (account_entry.*) {
+            .clean => |*acc| &acc.data,
+            .dirty => |*dirty| &dirty.modified.data,
+        };
+        const tmp_byte = account_data.*[0];
+        account_data.*[0] = 0xFF; // Corrupt the first byte of the metadata
+        defer account_data.*[0] = tmp_byte;
 
         var loaded_programs = try loadPrograms(
             allocator,
@@ -345,15 +364,19 @@ test "loadPrograms: load v3 program" {
 
         switch (loaded_programs.get(program_key).?) {
             .failed => {},
-            .loaded => std.debug.panic("Program should not load!", .{}),
+            .loaded => return error.ProgramShouldNotLoad,
         }
     }
 
     { // Bad elf
-        const account = accounts.getPtr(program_data_key).?;
-        const tmp_byte = account.data[bpf_loader.v3.State.PROGRAM_DATA_METADATA_SIZE + 1];
-        account.data[bpf_loader.v3.State.PROGRAM_DATA_METADATA_SIZE + 1] = 0xFF; // Corrupt the first byte of the elf
-        defer account.data[0] = tmp_byte;
+        const account_entry = accounts.getPtr(program_data_key).?;
+        const account_data = switch (account_entry.*) {
+            .clean => |*acc| &acc.data,
+            .dirty => |*dirty| &dirty.modified.data,
+        };
+        const tmp_byte = account_data.*[bpf_loader.v3.State.PROGRAM_DATA_METADATA_SIZE + 1];
+        account_data.*[bpf_loader.v3.State.PROGRAM_DATA_METADATA_SIZE + 1] = 0xFF; // Corrupt the first byte of the elf
+        defer account_data.*[0] = tmp_byte;
 
         var loaded_programs = try loadPrograms(
             allocator,
@@ -391,9 +414,11 @@ test "loadPrograms: load v4 program" {
         .config = .{},
     };
 
-    var accounts = std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData){};
+    var accounts = account_loader.BatchAccountCache.AccountMap{};
     defer {
-        for (accounts.values()) |account| allocator.free(account.data);
+        for (accounts.values()) |account_entry| {
+            account_entry.deinit(allocator);
+        }
         accounts.deinit(allocator);
     }
 
@@ -419,11 +444,13 @@ test "loadPrograms: load v4 program" {
         allocator,
         program_key,
         .{
-            .lamports = 1,
-            .owner = bpf_loader.v4.ID,
-            .data = program_data,
-            .executable = true,
-            .rent_epoch = std.math.maxInt(u64),
+            .clean = .{
+                .lamports = 1,
+                .owner = bpf_loader.v4.ID,
+                .data = program_data,
+                .executable = true,
+                .rent_epoch = std.math.maxInt(u64),
+            },
         },
     );
 
@@ -470,9 +497,11 @@ test "loadPrograms: bad owner" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(0);
 
-    var accounts = std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData){};
+    var accounts = account_loader.BatchAccountCache.AccountMap{};
     defer {
-        for (accounts.values()) |account| allocator.free(account.data);
+        for (accounts.values()) |account_entry| {
+            account_entry.deinit(allocator);
+        }
         accounts.deinit(allocator);
     }
 
@@ -481,11 +510,13 @@ test "loadPrograms: bad owner" {
         allocator,
         program_key,
         .{
-            .lamports = 1,
-            .owner = Pubkey.initRandom(prng.random()),
-            .data = try allocator.dupe(u8, &.{ 10, 0, 10, 3 }),
-            .executable = true,
-            .rent_epoch = std.math.maxInt(u64),
+            .clean = .{
+                .lamports = 1,
+                .owner = Pubkey.initRandom(prng.random()),
+                .data = try allocator.dupe(u8, &.{ 10, 0, 10, 3 }),
+                .executable = true,
+                .rent_epoch = std.math.maxInt(u64),
+            },
         },
     );
 

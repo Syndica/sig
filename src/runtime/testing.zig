@@ -147,21 +147,20 @@ pub fn createTransactionContext(
         try account_cache.account_cache.put(
             allocator,
             key,
-            .{
+            .{ .clean = .{
                 .lamports = account_params.lamports,
                 .data = try allocator.dupe(u8, account_params.data),
                 .owner = account_params.owner orelse Pubkey.initRandom(random),
                 .executable = account_params.executable,
                 .rent_epoch = account_params.rent_epoch,
-            },
+            } },
         );
     }
 
     for (account_keys.items) |key| {
-        accounts.appendAssumeCapacity(TransactionContextAccount.init(
-            key,
-            account_cache.account_cache.getPtr(key) orelse unreachable,
-        ));
+        const account_entry = account_cache.account_cache.getPtr(key) orelse unreachable;
+        const account_ref = account_entry.get();
+        accounts.appendAssumeCapacity(TransactionContextAccount.init(key, account_ref));
     }
 
     // Create Return Data

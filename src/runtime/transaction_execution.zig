@@ -920,33 +920,39 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
         allocator,
         sender_key,
         .{
-            .lamports = 10_000_000,
-            .data = &.{},
-            .owner = sig.runtime.program.system.ID,
-            .executable = false,
-            .rent_epoch = 0,
+            .clean = .{
+                .lamports = 10_000_000,
+                .data = &.{},
+                .owner = sig.runtime.program.system.ID,
+                .executable = false,
+                .rent_epoch = 0,
+            },
         },
     );
     try account_cache.account_cache.put(
         allocator,
         receiver_key,
         .{
-            .lamports = 10_000_000,
-            .data = &.{},
-            .owner = sig.runtime.program.system.ID,
-            .executable = false,
-            .rent_epoch = 0,
+            .clean = .{
+                .lamports = 10_000_000,
+                .data = &.{},
+                .owner = sig.runtime.program.system.ID,
+                .executable = false,
+                .rent_epoch = 0,
+            },
         },
     );
     try account_cache.account_cache.put(
         allocator,
         sig.runtime.program.system.ID,
         .{
-            .lamports = 1,
-            .data = &.{},
-            .owner = sig.runtime.ids.NATIVE_LOADER_ID,
-            .executable = true,
-            .rent_epoch = 0,
+            .clean = .{
+                .lamports = 1,
+                .data = &.{},
+                .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+                .executable = true,
+                .rent_epoch = 0,
+            },
         },
     );
 
@@ -1018,14 +1024,17 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
         const prioritization_fee = processed_transaction.executed.fees.prioritization_fee;
         const rent_collected = processed_transaction.executed.loaded_accounts.rent_collected;
 
-        const sender_account = account_cache.account_cache.get(sender_key).?;
-        const receiver_account = account_cache.account_cache.get(receiver_key).?;
+        const sender_account_entry = account_cache.account_cache.get(sender_key).?;
+        const receiver_account_entry = account_cache.account_cache.get(receiver_key).?;
+
+        const sender_lamports = sender_account_entry.getConst().lamports;
+        const receiver_lamports = receiver_account_entry.getConst().lamports;
 
         try std.testing.expectEqual(5_000, transaction_fee);
         try std.testing.expectEqual(0, prioritization_fee);
         try std.testing.expectEqual(0, rent_collected);
-        try std.testing.expectEqual(4_995_000, sender_account.lamports);
-        try std.testing.expectEqual(15_000_000, receiver_account.lamports);
+        try std.testing.expectEqual(4_995_000, sender_lamports);
+        try std.testing.expectEqual(15_000_000, receiver_lamports);
         try std.testing.expectEqual(null, executed_transaction.err);
         try std.testing.expectEqual(null, executed_transaction.log_collector);
         try std.testing.expectEqual(1, executed_transaction.instruction_trace.?.len);
@@ -1055,14 +1064,17 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
         const prioritization_fee = processed_transaction.executed.fees.prioritization_fee;
         const rent_collected = processed_transaction.executed.loaded_accounts.rent_collected;
 
-        const sender_account = account_cache.account_cache.get(sender_key).?;
-        const receiver_account = account_cache.account_cache.get(receiver_key).?;
+        const sender_account_entry = account_cache.account_cache.get(sender_key).?;
+        const receiver_account_entry = account_cache.account_cache.get(receiver_key).?;
+
+        const sender_lamports = sender_account_entry.getConst().lamports;
+        const receiver_lamports = receiver_account_entry.getConst().lamports;
 
         try std.testing.expectEqual(5_000, transaction_fee);
         try std.testing.expectEqual(0, prioritization_fee);
         try std.testing.expectEqual(0, rent_collected);
-        try std.testing.expectEqual(4_990_000, sender_account.lamports);
-        try std.testing.expectEqual(15_000_000, receiver_account.lamports);
+        try std.testing.expectEqual(4_990_000, sender_lamports);
+        try std.testing.expectEqual(15_000_000, receiver_lamports);
         try std.testing.expectEqual(0, executed_transaction.err.?.InstructionError[0]);
         try std.testing.expectEqual(
             InstructionErrorEnum{ .Custom = 1 },

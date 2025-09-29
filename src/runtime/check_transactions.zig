@@ -372,9 +372,10 @@ fn loadMessageNonceAccount(
 ) ?struct { CachedAccount, NonceData } {
     const nonce_address = getDurableNonce(transaction) orelse
         return null;
-    const nonce_account = batch_account_cache.account_cache.getPtr(nonce_address) orelse
+    const nonce_account_entry = batch_account_cache.account_cache.getPtr(nonce_address) orelse
         return null;
-    const nonce_data = verifyNonceAccount(nonce_account.*, &transaction.recent_blockhash) orelse
+    const nonce_account = nonce_account_entry.getConst().*;
+    const nonce_data = verifyNonceAccount(nonce_account, &transaction.recent_blockhash) orelse
         return null;
 
     const signers = transaction.instructions[
@@ -387,7 +388,7 @@ fn loadMessageNonceAccount(
     } else return null;
 
     return .{
-        .{ .pubkey = nonce_address, .account = nonce_account },
+        .{ .pubkey = nonce_address, .account = nonce_account_entry.get() },
         nonce_data,
     };
 }
@@ -566,7 +567,7 @@ test "checkAge: nonce account" {
 
     var account_cache = BatchAccountCache{};
     defer account_cache.deinit(allocator);
-    try account_cache.account_cache.put(allocator, nonce_key, nonce_account);
+    try account_cache.account_cache.put(allocator, nonce_key, .{ .clean = nonce_account });
 
     const instruction_data = try sig.bincode.writeAlloc(
         allocator,
@@ -698,11 +699,13 @@ test "checkFeePayer: happy path fee payer only" {
     defer account_cache.deinit(allocator);
 
     try account_cache.account_cache.put(allocator, transaction.fee_payer, .{
-        .lamports = 1_000_000,
-        .owner = sig.runtime.program.system.ID,
-        .data = &.{},
-        .executable = false,
-        .rent_epoch = 0,
+        .clean = .{
+            .lamports = 1_000_000,
+            .owner = sig.runtime.program.system.ID,
+            .data = &.{},
+            .executable = false,
+            .rent_epoch = 0,
+        },
     });
 
     const result = try checkFeePayer(
@@ -752,11 +755,13 @@ test "checkFeePayer: happy path with same nonce and fee payer" {
     defer account_cache.deinit(allocator);
 
     try account_cache.account_cache.put(allocator, transaction.fee_payer, .{
-        .lamports = 1_000_000,
-        .owner = sig.runtime.program.system.ID,
-        .data = &.{},
-        .executable = false,
-        .rent_epoch = 0,
+        .clean = .{
+            .lamports = 1_000_000,
+            .owner = sig.runtime.program.system.ID,
+            .data = &.{},
+            .executable = false,
+            .rent_epoch = 0,
+        },
     });
 
     const nonce_account = AccountSharedData{
@@ -816,11 +821,13 @@ test "checkFeePayer: happy path with separate nonce and fee payer" {
     defer account_cache.deinit(allocator);
 
     try account_cache.account_cache.put(allocator, transaction.fee_payer, .{
-        .lamports = 1_000_000,
-        .owner = sig.runtime.program.system.ID,
-        .data = &.{},
-        .executable = false,
-        .rent_epoch = 0,
+        .clean = .{
+            .lamports = 1_000_000,
+            .owner = sig.runtime.program.system.ID,
+            .data = &.{},
+            .executable = false,
+            .rent_epoch = 0,
+        },
     });
 
     const nonce_account = AccountSharedData{

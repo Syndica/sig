@@ -30,9 +30,11 @@ pub fn prepareBpfV3Test(
     const program_update_authority = null;
 
     const feature_set = try sig.runtime.testing.createFeatureSet(feature_params);
-    var accounts = std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData){};
+    var accounts = sig.runtime.account_loader.BatchAccountCache.AccountMap{};
     defer {
-        for (accounts.values()) |account| allocator.free(account.data);
+        for (accounts.values()) |account_entry| {
+            account_entry.deinit(allocator);
+        }
         accounts.deinit(allocator);
     }
 
@@ -48,11 +50,13 @@ pub fn prepareBpfV3Test(
         allocator,
         program_key,
         .{
-            .lamports = 1,
-            .owner = program.bpf_loader.v3.ID,
-            .data = program_bytes,
-            .executable = true,
-            .rent_epoch = std.math.maxInt(u64),
+            .clean = .{
+                .lamports = 1,
+                .owner = program.bpf_loader.v3.ID,
+                .data = program_bytes,
+                .executable = true,
+                .rent_epoch = std.math.maxInt(u64),
+            },
         },
     );
 
@@ -60,11 +64,13 @@ pub fn prepareBpfV3Test(
         allocator,
         program_data_key,
         .{
-            .lamports = 1,
-            .owner = program_key,
-            .data = program_data_bytes,
-            .executable = false,
-            .rent_epoch = std.math.maxInt(u64),
+            .clean = .{
+                .lamports = 1,
+                .owner = program_key,
+                .data = program_data_bytes,
+                .executable = false,
+                .rent_epoch = std.math.maxInt(u64),
+            },
         },
     );
 

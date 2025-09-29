@@ -93,10 +93,63 @@ pub const BatchAccountCache = struct {
 
     // NOTE: we might want to later add another field that keeps a copy of all writable accounts.
 
-    pub const AccountMap = std.AutoArrayHashMapUnmanaged(
-        Pubkey,
-        AccountSharedData,
-    );
+    pub const AccountMap = std.AutoArrayHashMapUnmanaged(Pubkey, Entry);
+
+    pub const Entry = union(enum) {
+        clean: AccountSharedData,
+        dirty: struct {
+            original: AccountSharedData,
+            modified: AccountSharedData,
+        },
+
+        pub fn deinit(self: Entry, allocator: Allocator) void {
+            switch (self) {
+                .clean => |acc| allocator.free(acc.data),
+                .dirty => |dirty| {
+                    allocator.free(dirty.original.data);
+                    allocator.free(dirty.modified.data);
+                },
+            }
+        }
+
+        pub fn get(self: *Entry) *AccountSharedData {
+            return switch (self.*) {
+                .clean => |*acc| acc,
+                // this *should* be unreachable, but it's not guaranteed by the
+                // code in this struct. it's more a replay-scoped requirement.
+                .dirty => unreachable,
+            };
+        }
+
+        pub fn getConst(self: *const Entry) *const AccountSharedData {
+            return switch (self.*) {
+                .clean => |*acc| acc,
+                // this *should* be unreachable, but it's not guaranteed by the
+                // code in this struct. it's more a replay-scoped requirement.
+                .dirty => unreachable,
+            };
+        }
+
+        pub fn commit(self: *Entry, allocator: Allocator) void {
+            switch (self.*) {
+                .clean => {},
+                .dirty => |*dirty| {
+                    allocator.free(dirty.original.data);
+                    self.* = dirty.modified;
+                },
+            }
+        }
+
+        pub fn rollback(self: *Entry, allocator: Allocator) void {
+            switch (self.*) {
+                .clean => {},
+                .dirty => |*dirty| {
+                    allocator.free(dirty.modified.data);
+                    self.* = dirty.original;
+                },
+            }
+        }
+    };
 
     /// Initializes a new instance with all the accounts needed for all the
     /// provided transactions.
@@ -159,17 +212,21 @@ pub const BatchAccountCache = struct {
                 }
 
                 var created_new_account: bool = false;
-                const account = if (map.get(account_key)) |acc| acc else blk: {
-                    if (try getAccountSharedData(allocator, account_reader, account_key)) |acc| {
-                        map.putAssumeCapacityNoClobber(account_key, acc);
-                        break :blk acc;
-                    } else {
-                        // account not found, create a new one at this address
-                        const account = AccountSharedData.NEW;
-                        map.putAssumeCapacityNoClobber(account_key, account);
-                        created_new_account = true;
-                        break :blk account;
-                    }
+                const account = if (map.get(account_key)) |account_entry|
+                    account_entry.getConst().*
+                else if (try getAccountSharedData(
+                    allocator,
+                    account_reader,
+                    account_key,
+                )) |account| blk: {
+                    map.putAssumeCapacityNoClobber(account_key, .{ .clean = account });
+                    break :blk account;
+                } else blk: {
+                    // account not found, create a new one at this address
+                    const account = AccountSharedData.NEW;
+                    map.putAssumeCapacityNoClobber(account_key, .{ .clean = account });
+                    created_new_account = true;
+                    break :blk account;
                 };
 
                 tx_data_loaded.increase(
@@ -198,7 +255,7 @@ pub const BatchAccountCache = struct {
 
                     const entry = map.getOrPutAssumeCapacity(program_data_address);
                     if (!entry.found_existing) {
-                        entry.value_ptr.* = program_data_account;
+                        entry.value_ptr.* = .{ .clean = program_data_account };
                     } else {
                         account_reader.allocator().free(program_data_account.data);
                     }
@@ -221,7 +278,7 @@ pub const BatchAccountCache = struct {
                 const program_account = map.get(program_key) orelse
                     unreachable; // safe: we loaded all accounts in the previous loop
 
-                const program_owner_key = program_account.owner;
+                const program_owner_key = program_account.getConst().owner;
 
                 if (validated_loaders.contains(program_owner_key))
                     continue; // already loaded + counted program account's owner
@@ -229,21 +286,21 @@ pub const BatchAccountCache = struct {
                 // the native loader doesn't have an account to load
                 if (program_owner_key.equals(&runtime.ids.NATIVE_LOADER_ID)) continue;
 
-                const owner_account = if (map.get(program_owner_key)) |owner| owner else blk: {
-                    const owner_account = try getAccountSharedData(
-                        allocator,
-                        account_reader,
-                        program_owner_key,
-                    ) orelse {
-                        // default account ~= account missing
-                        // every account which a load is attempted on should have an entry
-                        map.putAssumeCapacityNoClobber(program_owner_key, AccountSharedData.NEW);
-                        break; // tx will fail - can't get account
-                    };
+                const owner_account = if (map.get(program_owner_key)) |owner|
+                    owner.getConst().*
+                else if (try getAccountSharedData(
+                    allocator,
+                    account_reader,
+                    program_owner_key,
+                )) |owner_account| found_in_db: {
+                    map.putAssumeCapacityNoClobber(program_owner_key, .{ .clean = owner_account });
+                    break :found_in_db owner_account;
+                } else {
+                    // default account ~= account missing
+                    // every account which a load is attempted on should have an entry
+                    map.putAssumeCapacityNoClobber(program_owner_key, .{ .clean = AccountSharedData.NEW });
+                    break; // tx will fail - can't get account
 
-                    map.putAssumeCapacityNoClobber(program_owner_key, owner_account);
-
-                    break :blk owner_account;
                 };
 
                 tx_loaded_account_data_len.increase(
@@ -258,8 +315,8 @@ pub const BatchAccountCache = struct {
 
     pub fn deinit(self_const: BatchAccountCache, allocator: Allocator) void {
         var self = self_const;
-        for (self.account_cache.values()) |account| {
-            allocator.free(account.data);
+        for (self.account_cache.values()) |account_entry| {
+            account_entry.deinit(allocator);
         }
         self.account_cache.deinit(allocator);
         for (self.sysvar_instruction_account_datas.items) |account| {
@@ -391,10 +448,11 @@ pub const BatchAccountCache = struct {
                     }
                     if (additional_loaded_accounts.contains(programdata_address)) break :cont;
                     // ...and the programdata account exists (if it doesn't, it is *not* a load failure)...
-                    if (self.account_cache.get(programdata_address)) |programdata_account| {
+                    if (self.account_cache.get(programdata_address)) |programdata_account_entry| {
                         // ...count programdata toward this transaction's total size.
+                        const data_len = programdata_account_entry.getConst().data.len;
                         try loaded.increase(
-                            TRANSACTION_ACCOUNT_BASE_SIZE +| programdata_account.data.len,
+                            TRANSACTION_ACCOUNT_BASE_SIZE +| data_len,
                             compute_budget_limits.loaded_accounts_bytes,
                         );
                         additional_loaded_accounts.putAssumeCapacity(programdata_address, {});
@@ -589,11 +647,20 @@ pub const BatchAccountCache = struct {
             account.rent_epoch = RENT_EXEMPT_RENT_EPOCH;
 
             const account_ptr = self.account_cache.getPtr(key.*).?;
-            allocator.free(account_ptr.data);
-            account_ptr.* = account;
+            switch (account_ptr.*) {
+                .clean => |*acc| {
+                    allocator.free(acc.data);
+                    acc.* = account;
+                },
+                .dirty => |*dirty| {
+                    allocator.free(dirty.original.data);
+                    allocator.free(dirty.modified.data);
+                    account_ptr.* = .{ .clean = account };
+                },
+            }
 
             return LoadedTransactionAccount{
-                .account = account_ptr,
+                .account = account_ptr.get(),
                 .loaded_size = 0,
                 .rent_collected = 0,
             };
@@ -634,7 +701,7 @@ pub const BatchAccountCache = struct {
                 const account = try self.sysvar_instruction_account_datas.addOne(allocator);
                 account.* = try constructInstructionsAccount(allocator, transaction);
                 break :account account;
-            } else self.account_cache.getPtr(key.*);
+            } else if (self.account_cache.getPtr(key.*)) |account_entry| account_entry.get() else null;
 
         const account = maybe_account orelse unreachable;
         if (account.lamports == 0) return null;
@@ -1573,10 +1640,13 @@ test "deallocate account" {
     );
     defer account_cache.deinit(allocator);
 
-    try std.testing.expect(account_cache.account_cache.get(dying_account).?.data.len > 0);
+    const cached_entry = account_cache.account_cache.get(dying_account).?;
+    const data_len = cached_entry.getConst().data.len;
+    try std.testing.expect(data_len > 0);
 
     // "previous transaction" makes the account dead
-    account_cache.account_cache.getPtr(dying_account).?.lamports = 0;
+    const account_ptr = account_cache.account_cache.getPtr(dying_account).?;
+    account_ptr.get().lamports = 0;
 
     // load with the account being dead
     const loaded_accounts = try account_cache.loadTransactionAccountsOld(
