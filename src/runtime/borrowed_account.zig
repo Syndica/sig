@@ -30,6 +30,7 @@ pub const BorrowedAccountContext = struct {
     is_writable: bool = false,
     /// TODO: remove this after upgrading to agave 2.3+ (for conformance).
     remove_accounts_executable_flag_checks: bool,
+    accounts_lamport_delta: *i128,
 };
 
 /// `BorrowedAccount` represents an account which has been 'borrowed' from the `TransactionContext`
@@ -69,9 +70,6 @@ pub const BorrowedAccount = struct {
 
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L1077
     pub fn checkDataIsMutable(self: BorrowedAccount) ?InstructionError {
-        if (self.isExecutableInternal())
-            return InstructionError.ExecutableDataModified;
-
         if (!self.context.is_writable)
             return InstructionError.ReadonlyDataModified;
 
@@ -97,12 +95,12 @@ pub const BorrowedAccount = struct {
 
         const length_signed: i64 = @intCast(length);
         const old_length_signed: i64 = @intCast(old_length);
-        const new_accounts_resize_delta = resize_delta +| length_signed -| old_length_signed;
+        const new_accounts_resize_delta = resize_delta +| (length_signed -| old_length_signed);
 
         if (new_accounts_resize_delta > MAX_PERMITTED_ACCOUNTS_DATA_ALLOCATIONS_PER_TRANSACTION)
             return InstructionError.MaxAccountsDataAllocationsExceeded;
 
-        return null;
+        return self.checkDataIsMutable();
     }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/c5ed1663a1218e9e088e30c81677bc88059cc62b/sdk/transaction-context/src/lib.rs#L825
@@ -119,6 +117,15 @@ pub const BorrowedAccount = struct {
         if (self.isExecutableInternal()) {
             return InstructionError.ExecutableLamportChange;
         }
+
+        // Dont touch account if lamports dont change.
+        if (lamports == self.account.lamports) return;
+
+        self.context.accounts_lamport_delta.* = std.math.add(
+            i128,
+            self.context.accounts_lamport_delta.*,
+            @as(i128, lamports) -| @as(i128, self.account.lamports),
+        ) catch return InstructionError.ProgramArithmeticOverflow;
 
         self.account.lamports = lamports;
     }
@@ -160,7 +167,6 @@ pub const BorrowedAccount = struct {
         new_length: usize,
     ) (error{OutOfMemory} || InstructionError)!void {
         if (self.checkCanSetDataLength(resize_delta.*, new_length)) |err| return err;
-        if (self.checkDataIsMutable()) |err| return err;
         if (self.constAccountData().len == new_length) return;
 
         const old_length_signed: i64 = @intCast(self.constAccountData().len);
@@ -178,7 +184,6 @@ pub const BorrowedAccount = struct {
         data: []const u8,
     ) (error{OutOfMemory} || InstructionError)!void {
         if (self.checkCanSetDataLength(resize_delta.*, data.len)) |err| return err;
-        if (self.checkDataIsMutable()) |err| return err;
 
         const old_length_signed: i64 = @intCast(self.constAccountData().len);
         const new_length_signed: i64 = @intCast(data.len);
@@ -228,7 +233,6 @@ pub const BorrowedAccount = struct {
     ) InstructionError!void {
         if (!self.account.owner.equals(&self.context.program_id) or
             !self.context.is_writable or
-            self.isExecutableInternal() or
             !self.account.isZeroed())
         {
             return InstructionError.ModifiedProgramId;
@@ -243,10 +247,11 @@ pub const BorrowedAccount = struct {
         executable: bool,
         rent: Rent,
     ) InstructionError!void {
-        if (!rent.isExempt(self.account.lamports, self.account.data.len) or
-            !self.account.owner.equals(&self.context.program_id) or
-            !self.context.is_writable or
-            (self.account.executable and !executable))
+        if (!rent.isExempt(self.account.lamports, self.account.data.len))
+            return InstructionError.ExecutableAccountNotRentExempt;
+
+        if (!self.account.owner.equals(&self.context.program_id) or
+            !self.context.is_writable)
         {
             return InstructionError.ExecutableModified;
         }

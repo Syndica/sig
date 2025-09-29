@@ -2353,6 +2353,7 @@ pub fn testElfWithSyscalls(
             .pubkey = sig.runtime.program.system.ID,
         },
         .account_metas = .{},
+        .dedupe_map = @splat(0xff),
         .instruction_data = &.{},
         .initial_account_lamports = 0,
     };

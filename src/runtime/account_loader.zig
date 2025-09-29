@@ -975,21 +975,23 @@ test "load accounts rent paid" {
                     .{
                         .pubkey = fee_payer_address,
                         .index_in_transaction = 0,
-                        .index_in_caller = 0,
-                        .index_in_callee = 0,
                         .is_signer = true,
                         .is_writable = true,
                     },
                     .{
                         .pubkey = instruction_address,
                         .index_in_transaction = 1,
-                        .index_in_caller = 1,
-                        .index_in_callee = 1,
                         .is_signer = false,
                         .is_writable = false,
                     },
                 },
             ),
+            .dedupe_map = blk: {
+                var dedupe_map: [sig.runtime.InstructionInfo.MAX_ACCOUNT_METAS]u8 = @splat(0xff);
+                dedupe_map[0] = 0;
+                dedupe_map[1] = 1;
+                break :blk dedupe_map;
+            },
             .instruction_data = "",
         },
     };
@@ -1113,29 +1115,30 @@ test "load accounts with simd 186 and loaderv3 program" {
                     .{
                         .pubkey = fee_payer_address,
                         .index_in_transaction = 0,
-                        .index_in_caller = 0,
-                        .index_in_callee = 0,
                         .is_signer = true,
                         .is_writable = true,
                     },
                     .{
                         .pubkey = instruction_address,
                         .index_in_transaction = 1,
-                        .index_in_caller = 1,
-                        .index_in_callee = 1,
                         .is_signer = false,
                         .is_writable = false,
                     },
                     .{
                         .pubkey = program_address,
                         .index_in_transaction = 2,
-                        .index_in_caller = 2,
-                        .index_in_callee = 2,
                         .is_signer = false,
                         .is_writable = false,
                     },
                 },
             ),
+            .dedupe_map = blk: {
+                var dedupe_map: [sig.runtime.InstructionInfo.MAX_ACCOUNT_METAS]u8 = @splat(0xff);
+                dedupe_map[0] = 0;
+                dedupe_map[1] = 1;
+                dedupe_map[2] = 2;
+                break :blk dedupe_map;
+            },
             .instruction_data = "",
         },
     };
@@ -1188,6 +1191,7 @@ test "constructInstructionsAccount" {
             .{
                 .program_meta = .{ .pubkey = instruction_address, .index_in_transaction = 1 },
                 .account_metas = .{},
+                .dedupe_map = @splat(0xff),
                 .instruction_data = "",
                 .initial_account_lamports = 0,
             },
@@ -1345,21 +1349,20 @@ test "dont double count program owner account data size" {
     var tx: RuntimeTransaction = blk: {
         var tx = try emptyTxWithKeys(allocator, &.{ pk1, pk2 });
 
+        var dedupe_map: [sig.runtime.InstructionInfo.MAX_ACCOUNT_METAS]u8 = @splat(0xff);
+        dedupe_map[0] = 0;
+        dedupe_map[1] = 1;
         const metas = try sig.runtime.InstructionInfo.AccountMetas.fromSlice(
             &.{
                 .{
                     .pubkey = pk1,
                     .index_in_transaction = 0,
-                    .index_in_caller = 0,
-                    .index_in_callee = 0,
                     .is_signer = false,
                     .is_writable = false,
                 },
                 .{
                     .pubkey = pk2,
                     .index_in_transaction = 1,
-                    .index_in_caller = 1,
-                    .index_in_callee = 1,
                     .is_signer = false,
                     .is_writable = false,
                 },
@@ -1370,11 +1373,13 @@ test "dont double count program owner account data size" {
             .{
                 .program_meta = .{ .pubkey = pk2, .index_in_transaction = 1 },
                 .account_metas = metas,
+                .dedupe_map = dedupe_map,
                 .instruction_data = "",
             },
             .{
                 .program_meta = .{ .pubkey = pk1, .index_in_transaction = 0 },
                 .account_metas = metas,
+                .dedupe_map = dedupe_map,
                 .instruction_data = "",
             },
         };
@@ -1470,6 +1475,7 @@ test "invalid program owner owner" {
         .{
             .program_meta = .{ .pubkey = instruction_address, .index_in_transaction = 0 },
             .account_metas = .{},
+            .dedupe_map = @splat(0xff),
             .instruction_data = "",
             .initial_account_lamports = 0,
         },
@@ -1519,6 +1525,7 @@ test "missing program owner account" {
         .{
             .program_meta = .{ .pubkey = instruction_address, .index_in_transaction = 0 },
             .account_metas = .{},
+            .dedupe_map = @splat(0xff),
             .instruction_data = "",
             .initial_account_lamports = 0,
         },
@@ -1647,6 +1654,7 @@ test "load v3 program" {
         .{
             .program_meta = .{ .pubkey = pk_v3_program, .index_in_transaction = 0 },
             .account_metas = .{},
+            .dedupe_map = @splat(0xff),
             .instruction_data = "",
             .initial_account_lamports = 0,
         },
