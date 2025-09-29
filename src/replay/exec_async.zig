@@ -329,7 +329,7 @@ const TransactionScheduler = struct {
         while (self.results.tryReceive()) |message| {
             assert(0 == self.locks.unlock(self.batches.items[message.batch_index].accounts));
             self.batches_finished += 1;
-            tracy.plot(u32, "batches_finished", @intCast(self.batches_started));
+            tracy.plot(u32, "batches_finished", @intCast(self.batches_finished));
             switch (message.result) {
                 .success => {},
                 .failure => |err| {
@@ -342,15 +342,10 @@ const TransactionScheduler = struct {
     }
 
     pub fn poll(self: *TransactionScheduler) !ReplaySlotStatus {
-        // collect results
-        self.collectResults();
-
         // process results
         switch (self.thread_pool.pollFallible()) {
             .done => {
-                if (self.batches_started > self.batches_finished) {
-                    self.collectResults(); // collect results again
-                }
+                self.collectResults();
 
                 if (self.batches_started != self.batches_finished) std.debug.panic(
                     "batches started: {}, batches finished: {}\n",
@@ -370,8 +365,14 @@ const TransactionScheduler = struct {
                     return .{ .done = null };
                 }
             },
-            .pending => return .pending,
+            .pending => {
+                self.collectResults();
+
+                return .pending;
+            },
             .err => |err| {
+                self.collectResults();
+
                 self.logger.err().logf("transaction batch processor failed with error: {}", .{err});
                 return err;
             },
