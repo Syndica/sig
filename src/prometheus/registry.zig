@@ -33,15 +33,8 @@ pub const GetMetricError = error{
 };
 
 /// Global registry singleton for convenience.
-///
-/// The registry is initialized the first time this is called
-/// and reused for future calls.
-pub fn globalRegistry() *Registry(.{}) {
-    return global_registry_owned.getOrInit(Registry(.{}).init, .{gpa});
-}
-
-var gpa = std.heap.c_allocator;
-var global_registry_owned: OnceCell(Registry(.{})) = .{};
+pub const global_registry = &global_registry_owned;
+var global_registry_owned = Registry(.{}).init(std.heap.c_allocator);
 
 const RegistryOptions = struct {
     max_metrics: comptime_int = 8192,
@@ -64,9 +57,9 @@ pub fn Registry(comptime options: RegistryOptions) type {
 
         pub fn init(allocator: mem.Allocator) Self {
             return .{
-                .arena_state = heap.ArenaAllocator.init(allocator),
+                .arena_state = .init(allocator),
                 .mutex = .{},
-                .metrics = MetricMap{},
+                .metrics = .{},
             };
         }
 

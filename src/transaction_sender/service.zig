@@ -25,7 +25,7 @@ const TransactionInfo = sig.transaction_sender.TransactionInfo;
 const TransactionPool = sig.transaction_sender.TransactionPool;
 const EpochSchedule = sig.core.epoch_schedule.EpochSchedule;
 
-const globalRegistry = sig.prometheus.globalRegistry;
+const global_registry = sig.prometheus.global_registry;
 
 const Logger = sig.trace.Logger("transaction_sender");
 
@@ -373,7 +373,7 @@ pub const Metrics = struct {
     pub const prefix = "transaction_sender";
 
     pub fn init() GetMetricError!Metrics {
-        return globalRegistry().initStruct(Metrics);
+        return global_registry.initStruct(Metrics);
     }
 
     pub fn log(self: *const Metrics, logger: Logger) void {

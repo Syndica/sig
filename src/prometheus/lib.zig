@@ -15,5 +15,5 @@ pub const GetMetricError = registry.GetMetricError;
 pub const Histogram = histogram.Histogram;
 pub const Registry = registry.Registry;
 
-pub const globalRegistry = registry.globalRegistry;
+pub const global_registry = registry.global_registry;
 pub const servePrometheus = http.servePrometheus;

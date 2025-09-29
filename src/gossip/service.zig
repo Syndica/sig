@@ -56,7 +56,7 @@ const ExitCondition = sig.sync.ExitCondition;
 const SocketThread = sig.net.SocketThread;
 
 const endpointToString = sig.net.endpointToString;
-const globalRegistry = sig.prometheus.globalRegistry;
+const global_registry = sig.prometheus.global_registry;
 const getWallclockMs = sig.time.getWallclockMs;
 const deinitMux = sig.sync.mux.deinitMux;
 
@@ -2170,7 +2170,7 @@ pub const GossipMetrics = struct {
 
     pub fn init() GetMetricError!GossipMetrics {
         var self: GossipMetrics = undefined;
-        const registry = globalRegistry();
+        const registry = global_registry;
         std.debug.assert(try registry.initFields(&self) == 0);
         return self;
     }

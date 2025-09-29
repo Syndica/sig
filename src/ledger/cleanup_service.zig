@@ -403,7 +403,7 @@ test cleanLedger {
     // test setup
     const allocator = std.testing.allocator;
     const logger = sig.trace.DirectPrintLogger.init(allocator, .warn).logger("ledger.test");
-    const registry = sig.prometheus.globalRegistry();
+    const registry = sig.prometheus.global_registry;
     var db = try TestDB.init(@src());
     defer db.deinit();
     var lowest_cleanup_slot = sig.sync.RwMux(Slot).init(0);
@@ -586,7 +586,7 @@ test "purgeSlots" {
 test "run exits promptly" {
     const allocator = std.testing.allocator;
     const logger = sig.trace.DirectPrintLogger.init(allocator, .warn).logger("ledger.test");
-    const registry = sig.prometheus.globalRegistry();
+    const registry = sig.prometheus.global_registry;
     var db = try TestDB.init(@src());
     defer db.deinit();
     var lowest_cleanup_slot = sig.sync.RwMux(Slot).init(0);

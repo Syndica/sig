@@ -4,7 +4,7 @@ const sig = @import("sig");
 const cli = @import("cli");
 
 const servePrometheus = sig.prometheus.servePrometheus;
-const globalRegistry = sig.prometheus.globalRegistry;
+const global_registry = sig.prometheus.global_registry;
 
 const Cmd = struct {
     subcmd: ?union(enum) {
@@ -188,7 +188,7 @@ pub fn csvDump(allocator: std.mem.Allocator, config: Cmd.Csv) !void {
     const logger = std_logger.logger("csvDump");
 
     const metrics_thread = try std.Thread
-        .spawn(.{}, servePrometheus, .{ allocator, globalRegistry(), 12355 });
+        .spawn(.{}, servePrometheus, .{ allocator, global_registry, 12355 });
     metrics_thread.detach();
     logger.info().log("spawing metrics thread on port 12355");
 

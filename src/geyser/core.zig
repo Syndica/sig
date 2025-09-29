@@ -21,7 +21,7 @@ const Counter = sig.prometheus.Counter;
 const Gauge = sig.prometheus.Gauge;
 const Atomic = std.atomic.Value;
 
-const globalRegistry = sig.prometheus.globalRegistry;
+const global_registry = sig.prometheus.global_registry;
 
 const PIPE_MAX_SIZE_PATH = "/proc/sys/fs/pipe-max-size";
 
@@ -80,7 +80,7 @@ pub const GeyserWriterMetrics = struct {
     pub const prefix = "geyser_writer";
 
     pub fn init() !GeyserWriterMetrics {
-        return try globalRegistry().initStruct(GeyserWriterMetrics);
+        return try global_registry.initStruct(GeyserWriterMetrics);
     }
 };
 
@@ -289,7 +289,7 @@ pub const GeyserReaderMetrics = struct {
     pub const prefix = "geyser_reader";
 
     pub fn init() !GeyserReaderMetrics {
-        return try globalRegistry().initStruct(GeyserReaderMetrics);
+        return try global_registry.initStruct(GeyserReaderMetrics);
     }
 };
 

@@ -30,7 +30,7 @@ const TurbineTreeCache = shred_network.turbine_tree.TurbineTreeCache;
 
 const Logger = sig.trace.Logger("shred_retransmitter");
 
-const globalRegistry = sig.prometheus.globalRegistry;
+const global_registry = sig.prometheus.global_registry;
 
 /// Shred deduper configuration from agave
 const DEDUPER_MAX_DUPLICATE_COUNT: usize = 2;
@@ -425,7 +425,7 @@ pub const RetransmitServiceMetrics = struct {
 
     pub fn init() !RetransmitServiceMetrics {
         var self: RetransmitServiceMetrics = undefined;
-        std.debug.assert(try globalRegistry().initFields(&self) == 1);
+        std.debug.assert(try global_registry.initFields(&self) == 1);
         self.logging_fields = .{ .last_log_instant = sig.time.Instant.now() };
         return self;
     }

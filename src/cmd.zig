@@ -29,7 +29,7 @@ const createGeyserWriter = sig.geyser.core.createGeyserWriter;
 const downloadSnapshotsFromGossip = sig.accounts_db.snapshot.downloadSnapshotsFromGossip;
 const getShredAndIPFromEchoServer = sig.net.echo.getShredAndIPFromEchoServer;
 const getWallclockMs = sig.time.getWallclockMs;
-const globalRegistry = sig.prometheus.globalRegistry;
+const global_registry = sig.prometheus.global_registry;
 const loadSnapshot = sig.accounts_db.snapshot.loadSnapshot;
 const servePrometheus = sig.prometheus.servePrometheus;
 
@@ -1789,7 +1789,7 @@ const AppBase = struct {
         errdefer allocator.destroy(exit);
         exit.* = std.atomic.Value(bool).init(false);
 
-        const metrics_registry = globalRegistry();
+        const metrics_registry = global_registry;
         const metrics_thread = try sig.utils.service_manager.spawnService( //
             .from(logger), exit, "metrics endpoint", .{}, //
             servePrometheus, .{ allocator, metrics_registry, cfg.metrics_port });

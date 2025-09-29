@@ -2,7 +2,7 @@ const std = @import("std");
 const httpz = @import("httpz");
 
 const Registry = @import("registry.zig").Registry;
-const globalRegistry = @import("registry.zig").globalRegistry;
+const global_registry = @import("registry.zig").global_registry;
 const DEFAULT_BUCKETS = @import("histogram.zig").DEFAULT_BUCKETS;
 
 pub fn servePrometheus(
@@ -32,7 +32,7 @@ const MetricsEndpoint = struct {
 /// Initializes the global registry. Returns error if registry was already initialized.
 /// Spawns a thread to serve the metrics over http on the given port.
 pub fn spawnMetrics(gpa_allocator: std.mem.Allocator, port: u16) !std.Thread {
-    const registry = globalRegistry();
+    const registry = global_registry;
     return std.Thread.spawn(.{}, servePrometheus, .{ gpa_allocator, registry, port });
 }
 
@@ -53,7 +53,7 @@ pub fn main() !void {
         .{},
         struct {
             fn run() !void {
-                const reg = globalRegistry();
+                const reg = global_registry;
                 var secs_counter = try reg.getOrCreateCounter("seconds_since_start");
                 var gauge = try reg.getOrCreateGauge("seconds_hand", u64);
                 var hist = try reg.getOrCreateHistogram("hist", &DEFAULT_BUCKETS);
@@ -69,5 +69,5 @@ pub fn main() !void {
         .{},
     );
 
-    try servePrometheus(alloc, globalRegistry(), 12345);
+    try servePrometheus(alloc, global_registry, 12345);
 }

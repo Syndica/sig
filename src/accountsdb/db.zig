@@ -64,7 +64,7 @@ const assert = std.debug.assert;
 const parallelUnpackZstdTarBall = sig.accounts_db.snapshot.data.parallelUnpackZstdTarBall;
 const spawnThreadTasks = sig.utils.thread.spawnThreadTasks;
 const printTimeEstimate = sig.time.estimate.printTimeEstimate;
-const globalRegistry = sig.prometheus.registry.globalRegistry;
+const global_registry = sig.prometheus.registry.global_registry;
 
 const Logger = sig.trace.log.Logger("accounts_db");
 
@@ -2861,7 +2861,7 @@ pub const AccountsDBMetrics = struct {
     const Self = @This();
 
     pub fn init() GetMetricError!Self {
-        return globalRegistry().initStruct(Self);
+        return global_registry.initStruct(Self);
     }
 
     pub fn histogramBucketsForField(comptime field_name: []const u8) []const f64 {
