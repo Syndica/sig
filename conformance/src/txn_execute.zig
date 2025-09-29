@@ -1407,6 +1407,7 @@ pub fn hashSlot(
         const delta_hash = try freeze.deltaMerkleHash(account_reader, allocator, 0);
         hash.update(&delta_hash.data);
     }
+    hash.update(&signature_count_bytes);
     hash.update(&blockhash.data);
     const initial_hash = hash.finalResult();
 
