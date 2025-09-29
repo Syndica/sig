@@ -1125,7 +1125,7 @@ pub const TestState = struct {
         self: *TestState,
         allocator: Allocator,
         transactions: []const sig.core.Transaction,
-    ) Allocator.Error!void {
+    ) sig.accounts_db.ThreadSafeAccountMap.PutError!void {
         var bhq = self.blockhash_queue.write();
         defer bhq.unlock();
         for (transactions) |transaction| {
