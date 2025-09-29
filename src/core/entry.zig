@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const sig = @import("../sig.zig");
+const tracy = @import("tracy");
 
 const Allocator = std.mem.Allocator;
 const Hash = sig.core.hash.Hash;
@@ -103,6 +104,9 @@ pub fn verifyPoh(
         exit: ?*const std.atomic.Value(bool) = null,
     },
 ) (Allocator.Error || error{Exit})!bool {
+    const zone = tracy.Zone.init(@src(), .{ .name = "verifyPoh" });
+    defer zone.deinit();
+
     var current_hash = initial_hash;
 
     for (entries) |entry| {

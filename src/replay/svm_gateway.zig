@@ -95,6 +95,9 @@ pub const SvmGateway = struct {
         batch: []const ResolvedTransaction,
         params: Params,
     ) !SvmGateway {
+        const zone = tracy.Zone.init(@src(), .{ .name = "SvmGateway.init" });
+        defer zone.deinit();
+
         var accounts = try BatchAccountCache.initSufficientCapacity(allocator, batch);
         for (batch) |transaction| {
             try accounts.load(
