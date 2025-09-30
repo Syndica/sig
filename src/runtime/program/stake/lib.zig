@@ -16,6 +16,7 @@ const FeatureSet = sig.core.FeatureSet;
 const InstructionError = sig.core.instruction.InstructionError;
 const VoteStateVersions = runtime.program.vote.state.VoteStateVersions;
 const VoteState = runtime.program.vote.state.VoteState;
+const ExecuteContextsParams = runtime.testing.ExecuteContextsParams;
 
 const Instruction = instruction.Instruction;
 
@@ -1763,7 +1764,7 @@ fn moveLamports(
 
 test "stake.initialize" {
     const allocator = std.testing.allocator;
-    const ExecuteContextsParams = sig.runtime.testing.ExecuteContextsParams;
+
     var prng = std.Random.DefaultPrng.init(5083);
     const random = prng.random();
 
@@ -1776,10 +1777,10 @@ test "stake.initialize" {
 
     {
         var sysvar_cache = sysvar_cache_without_slot_hashes;
-        sysvar_cache.slot_hashes = try runtime.sysvar.SlotHashes.initWithEntries(
-            allocator,
-            &.{.{ .slot = std.math.maxInt(Slot), .hash = sig.core.Hash.ZEROES }},
-        );
+        sysvar_cache.slot_hashes = try .initWithEntries(&.{.{
+            .slot = std.math.maxInt(Slot),
+            .hash = sig.core.Hash.ZEROES,
+        }});
 
         const accounts: []const ExecuteContextsParams.AccountParams = &.{
             .{ .pubkey = Pubkey.initRandom(random), .owner = ID },
@@ -1805,17 +1806,10 @@ test "stake.initialize" {
     // success
     {
         var sysvar_cache = sysvar_cache_without_slot_hashes;
-        sysvar_cache.slot_hashes = try runtime.sysvar.SlotHashes.initWithEntries(
-            allocator,
-            &.{.{ .slot = std.math.maxInt(Slot), .hash = sig.core.Hash.ZEROES }},
-        );
-
-        // Hacky duplicate to avoid slot_hashes double free from storing same ref.
-        var expected_sysvar_cache = sysvar_cache_without_slot_hashes;
-        expected_sysvar_cache.slot_hashes = try runtime.sysvar.SlotHashes.initWithEntries(
-            allocator,
-            &.{.{ .slot = std.math.maxInt(Slot), .hash = sig.core.Hash.ZEROES }},
-        );
+        sysvar_cache.slot_hashes = try .initWithEntries(&.{.{
+            .slot = std.math.maxInt(Slot),
+            .hash = sig.core.Hash.ZEROES,
+        }});
 
         var buf: [StakeStateV2.SIZE]u8 = @splat(0);
         _ = try sig.bincode.writeToSlice(&buf, StakeStateV2.uninitialized, .{});
@@ -1868,7 +1862,7 @@ test "stake.initialize" {
             .{
                 .accounts = after_accounts,
                 .compute_meter = 10_000 - COMPUTE_UNITS,
-                .sysvar_cache = expected_sysvar_cache,
+                .sysvar_cache = sysvar_cache,
             },
             .{},
         );
@@ -1879,22 +1873,15 @@ test "stake.authorize" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
-    var sysvar_cache = sig.runtime.testing.ExecuteContextsParams.SysvarCacheParams{
-        .clock = runtime.sysvar.Clock.DEFAULT,
-        .slot_hashes = try runtime.sysvar.SlotHashes.initWithEntries(
-            allocator,
-            &.{.{ .slot = std.math.maxInt(Slot), .hash = sig.core.Hash.ZEROES }},
-        ),
-        .rent = runtime.sysvar.Rent.DEFAULT,
+    var sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
+        .clock = .DEFAULT,
+        .slot_hashes = try runtime.sysvar.SlotHashes.initWithEntries(&.{.{
+            .slot = std.math.maxInt(Slot),
+            .hash = sig.core.Hash.ZEROES,
+        }}),
+        .rent = .DEFAULT,
         .epoch_rewards = .DEFAULT,
     };
-
-    // Hacky duplicate to avoid slot_hashes double free from storing same ref.
-    var expected_sysvar_cache = sysvar_cache;
-    expected_sysvar_cache.slot_hashes = try runtime.sysvar.SlotHashes.initWithEntries(
-        allocator,
-        &.{.{ .slot = std.math.maxInt(Slot), .hash = sig.core.Hash.ZEROES }},
-    );
 
     const old_staker_auth = Pubkey.initRandom(prng.random());
     const new_staker_auth = Pubkey.initRandom(prng.random());
@@ -1966,7 +1953,7 @@ test "stake.authorize" {
                 .{ .pubkey = ID, .owner = runtime.ids.NATIVE_LOADER_ID },
             },
             .compute_meter = 10_000 - COMPUTE_UNITS,
-            .sysvar_cache = expected_sysvar_cache,
+            .sysvar_cache = sysvar_cache,
         },
         .{},
     );
@@ -1989,25 +1976,17 @@ test "stake.delegate_stake" {
     }, .{});
 
     for ([_]bool{ false, true }) |use_stake| {
-        var sysvar_cache = sig.runtime.testing.ExecuteContextsParams.SysvarCacheParams{
+        var sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
             .clock = runtime.sysvar.Clock.DEFAULT,
-            .slot_hashes = try runtime.sysvar.SlotHashes.initWithEntries(
-                allocator,
-                &.{.{ .slot = std.math.maxInt(Slot), .hash = sig.core.Hash.ZEROES }},
-            ),
+            .slot_hashes = try .initWithEntries(&.{.{
+                .slot = std.math.maxInt(Slot),
+                .hash = sig.core.Hash.ZEROES,
+            }}),
             .rent = runtime.sysvar.Rent.DEFAULT,
-            .stake_history = try sysvar.StakeHistory.init(allocator),
+            .stake_history = .DEFAULT,
             .epoch_rewards = .DEFAULT,
             .epoch_schedule = .DEFAULT,
         };
-
-        // Hacky duplicate to avoid slot_hashes & stake_history double free from storing same ref.
-        var expected_sysvar_cache = sysvar_cache;
-        expected_sysvar_cache.stake_history = try sysvar.StakeHistory.init(allocator);
-        expected_sysvar_cache.slot_hashes = try runtime.sysvar.SlotHashes.initWithEntries(
-            allocator,
-            &.{.{ .slot = std.math.maxInt(Slot), .hash = sig.core.Hash.ZEROES }},
-        );
 
         const stake_lamports = 1_000_000_000;
         const stake_rent = sysvar_cache.rent.?.minimumBalance(StakeStateV2.SIZE);
@@ -2117,7 +2096,7 @@ test "stake.delegate_stake" {
                     .{ .pubkey = ID, .owner = runtime.ids.NATIVE_LOADER_ID },
                 },
                 .compute_meter = 10_000 - COMPUTE_UNITS,
-                .sysvar_cache = expected_sysvar_cache,
+                .sysvar_cache = sysvar_cache,
             },
             .{},
         );
@@ -2159,25 +2138,17 @@ test "stake.split" {
     };
 
     for ([_]bool{ false, true }) |use_stake| {
-        const sysvar_cache = sig.runtime.testing.ExecuteContextsParams.SysvarCacheParams{
+        const sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
             .clock = runtime.sysvar.Clock.DEFAULT,
-            .slot_hashes = try runtime.sysvar.SlotHashes.initWithEntries(
-                allocator,
-                &.{.{ .slot = std.math.maxInt(Slot), .hash = sig.core.Hash.ZEROES }},
-            ),
-            .stake_history = try sysvar.StakeHistory.init(allocator),
+            .slot_hashes = try .initWithEntries(&.{.{
+                .slot = std.math.maxInt(Slot),
+                .hash = sig.core.Hash.ZEROES,
+            }}),
+            .stake_history = .DEFAULT,
             .rent = runtime.sysvar.Rent.DEFAULT,
             .epoch_rewards = .DEFAULT,
             .epoch_schedule = .DEFAULT,
         };
-
-        // Hacky duplicate to avoid slot_hashes & stake_history double free from storing same ref.
-        var expected_sysvar_cache = sysvar_cache;
-        expected_sysvar_cache.stake_history = try sysvar.StakeHistory.init(allocator);
-        expected_sysvar_cache.slot_hashes = try runtime.sysvar.SlotHashes.initWithEntries(
-            allocator,
-            &.{.{ .slot = std.math.maxInt(Slot), .hash = sig.core.Hash.ZEROES }},
-        );
 
         stake.stake.delegation.stake = stake_lamports;
 
@@ -2262,7 +2233,7 @@ test "stake.split" {
                     .{ .pubkey = ID, .owner = runtime.ids.NATIVE_LOADER_ID },
                 },
                 .compute_meter = 10_000 - COMPUTE_UNITS,
-                .sysvar_cache = expected_sysvar_cache,
+                .sysvar_cache = sysvar_cache,
             },
             .{},
         );
@@ -2273,25 +2244,17 @@ test "stake.withdraw" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
-    var sysvar_cache = sig.runtime.testing.ExecuteContextsParams.SysvarCacheParams{
+    var sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
         .clock = runtime.sysvar.Clock.DEFAULT,
-        .slot_hashes = try runtime.sysvar.SlotHashes.initWithEntries(
-            allocator,
-            &.{.{ .slot = std.math.maxInt(Slot), .hash = sig.core.Hash.ZEROES }},
-        ),
-        .stake_history = try sysvar.StakeHistory.init(allocator),
+        .slot_hashes = try .initWithEntries(&.{.{
+            .slot = std.math.maxInt(Slot),
+            .hash = sig.core.Hash.ZEROES,
+        }}),
+        .stake_history = .DEFAULT,
         .rent = runtime.sysvar.Rent.DEFAULT,
         .epoch_rewards = .DEFAULT,
         .epoch_schedule = .initRandom(prng.random()),
     };
-
-    // Hacky duplicate to avoid slot_hashes & stake_history double free from storing same ref.
-    var expected_sysvar_cache = sysvar_cache;
-    expected_sysvar_cache.stake_history = try sysvar.StakeHistory.init(allocator);
-    expected_sysvar_cache.slot_hashes = try runtime.sysvar.SlotHashes.initWithEntries(
-        allocator,
-        &.{.{ .slot = std.math.maxInt(Slot), .hash = sig.core.Hash.ZEROES }},
-    );
 
     const stake_lamports = 1_000_000_000;
     const withdrawer_lamports = 1_000;
@@ -2360,7 +2323,7 @@ test "stake.withdraw" {
                 .{ .pubkey = ID, .owner = runtime.ids.NATIVE_LOADER_ID },
             },
             .compute_meter = 10_000 - COMPUTE_UNITS,
-            .sysvar_cache = expected_sysvar_cache,
+            .sysvar_cache = sysvar_cache,
         },
         .{},
     );
@@ -2370,7 +2333,7 @@ test "stake.deactivate" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
-    const sysvar_cache = sig.runtime.testing.ExecuteContextsParams.SysvarCacheParams{
+    const sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
         .clock = runtime.sysvar.Clock.DEFAULT,
         .rent = runtime.sysvar.Rent.DEFAULT,
     };
@@ -2461,7 +2424,7 @@ test "stake.set_lockup" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
-    const sysvar_cache = sig.runtime.testing.ExecuteContextsParams.SysvarCacheParams{
+    const sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
         .clock = runtime.sysvar.Clock.DEFAULT,
         .rent = runtime.sysvar.Rent.DEFAULT,
     };
@@ -2590,25 +2553,17 @@ test "stake.merge" {
     };
 
     for ([_]bool{ false, true }) |use_stake| {
-        const sysvar_cache = sig.runtime.testing.ExecuteContextsParams.SysvarCacheParams{
+        const sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
             .clock = runtime.sysvar.Clock.DEFAULT,
-            .slot_hashes = try runtime.sysvar.SlotHashes.initWithEntries(
-                allocator,
-                &.{.{ .slot = std.math.maxInt(Slot), .hash = sig.core.Hash.ZEROES }},
-            ),
-            .stake_history = try sysvar.StakeHistory.init(allocator),
+            .slot_hashes = try .initWithEntries(&.{.{
+                .slot = std.math.maxInt(Slot),
+                .hash = sig.core.Hash.ZEROES,
+            }}),
+            .stake_history = .DEFAULT,
             .rent = runtime.sysvar.Rent.DEFAULT,
             .epoch_rewards = .DEFAULT,
             .epoch_schedule = .initRandom(prng.random()),
         };
-
-        // Hacky duplicate to avoid slot_hashes & stake_history double free from storing same ref.
-        var expected_sysvar_cache = sysvar_cache;
-        expected_sysvar_cache.stake_history = try sysvar.StakeHistory.init(allocator);
-        expected_sysvar_cache.slot_hashes = try runtime.sysvar.SlotHashes.initWithEntries(
-            allocator,
-            &.{.{ .slot = std.math.maxInt(Slot), .hash = sig.core.Hash.ZEROES }},
-        );
 
         var stake_buf: [StakeStateV2.SIZE]u8 = @splat(0);
         _ = try sig.bincode.writeToSlice(&stake_buf, stake_state, .{});
@@ -2691,7 +2646,7 @@ test "stake.merge" {
                     .{ .pubkey = ID, .owner = runtime.ids.NATIVE_LOADER_ID },
                 },
                 .compute_meter = 10_000 - COMPUTE_UNITS,
-                .sysvar_cache = expected_sysvar_cache,
+                .sysvar_cache = sysvar_cache,
             },
             .{},
         );
@@ -2702,22 +2657,15 @@ test "stake.authorize_with_seed" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
-    var sysvar_cache = sig.runtime.testing.ExecuteContextsParams.SysvarCacheParams{
+    var sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
         .clock = runtime.sysvar.Clock.DEFAULT,
-        .slot_hashes = try runtime.sysvar.SlotHashes.initWithEntries(
-            allocator,
-            &.{.{ .slot = std.math.maxInt(Slot), .hash = sig.core.Hash.ZEROES }},
-        ),
+        .slot_hashes = try .initWithEntries(&.{.{
+            .slot = std.math.maxInt(Slot),
+            .hash = sig.core.Hash.ZEROES,
+        }}),
         .rent = runtime.sysvar.Rent.DEFAULT,
         .epoch_rewards = .DEFAULT,
     };
-
-    // Hacky duplicate to avoid slot_hashes double free from storing same ref.
-    var expected_sysvar_cache = sysvar_cache;
-    expected_sysvar_cache.slot_hashes = try runtime.sysvar.SlotHashes.initWithEntries(
-        allocator,
-        &.{.{ .slot = std.math.maxInt(Slot), .hash = sig.core.Hash.ZEROES }},
-    );
 
     const auth_owner = Pubkey.initRandom(prng.random());
     const auth_base = Pubkey.initRandom(prng.random());
@@ -2808,7 +2756,7 @@ test "stake.authorize_with_seed" {
                 .{ .pubkey = ID, .owner = runtime.ids.NATIVE_LOADER_ID },
             },
             .compute_meter = 10_000 - COMPUTE_UNITS,
-            .sysvar_cache = expected_sysvar_cache,
+            .sysvar_cache = sysvar_cache,
         },
         .{},
     );
@@ -2818,7 +2766,7 @@ test "stake.initialize_checked" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
-    const sysvar_cache = sig.runtime.testing.ExecuteContextsParams.SysvarCacheParams{
+    const sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
         .rent = runtime.sysvar.Rent.DEFAULT,
     };
 
@@ -2891,22 +2839,15 @@ test "stake.authorize_checked" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
-    var sysvar_cache = sig.runtime.testing.ExecuteContextsParams.SysvarCacheParams{
+    var sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
         .clock = runtime.sysvar.Clock.DEFAULT,
-        .slot_hashes = try runtime.sysvar.SlotHashes.initWithEntries(
-            allocator,
-            &.{.{ .slot = std.math.maxInt(Slot), .hash = sig.core.Hash.ZEROES }},
-        ),
+        .slot_hashes = try .initWithEntries(&.{.{
+            .slot = std.math.maxInt(Slot),
+            .hash = sig.core.Hash.ZEROES,
+        }}),
         .rent = runtime.sysvar.Rent.DEFAULT,
         .epoch_rewards = .DEFAULT,
     };
-
-    // Hacky duplicate to avoid slot_hashes double free from storing same ref.
-    var expected_sysvar_cache = sysvar_cache;
-    expected_sysvar_cache.slot_hashes = try runtime.sysvar.SlotHashes.initWithEntries(
-        allocator,
-        &.{.{ .slot = std.math.maxInt(Slot), .hash = sig.core.Hash.ZEROES }},
-    );
 
     const old_staker_auth = Pubkey.initRandom(prng.random());
     const new_staker_auth = Pubkey.initRandom(prng.random());
@@ -2976,7 +2917,7 @@ test "stake.authorize_checked" {
                 .{ .pubkey = ID, .owner = runtime.ids.NATIVE_LOADER_ID },
             },
             .compute_meter = 10_000 - COMPUTE_UNITS,
-            .sysvar_cache = expected_sysvar_cache,
+            .sysvar_cache = sysvar_cache,
         },
         .{},
     );
@@ -2986,22 +2927,15 @@ test "stake.authorize_checked_with_seed" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
-    var sysvar_cache = sig.runtime.testing.ExecuteContextsParams.SysvarCacheParams{
+    var sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
         .clock = runtime.sysvar.Clock.DEFAULT,
-        .slot_hashes = try runtime.sysvar.SlotHashes.initWithEntries(
-            allocator,
-            &.{.{ .slot = std.math.maxInt(Slot), .hash = sig.core.Hash.ZEROES }},
-        ),
+        .slot_hashes = try .initWithEntries(&.{.{
+            .slot = std.math.maxInt(Slot),
+            .hash = sig.core.Hash.ZEROES,
+        }}),
         .rent = runtime.sysvar.Rent.DEFAULT,
         .epoch_rewards = .DEFAULT,
     };
-
-    // Hacky duplicate to avoid slot_hashes double free from storing same ref.
-    var expected_sysvar_cache = sysvar_cache;
-    expected_sysvar_cache.slot_hashes = try runtime.sysvar.SlotHashes.initWithEntries(
-        allocator,
-        &.{.{ .slot = std.math.maxInt(Slot), .hash = sig.core.Hash.ZEROES }},
-    );
 
     const auth_owner = Pubkey.initRandom(prng.random());
     const auth_base = Pubkey.initRandom(prng.random());
@@ -3083,7 +3017,7 @@ test "stake.authorize_checked_with_seed" {
                 .{ .pubkey = ID, .owner = runtime.ids.NATIVE_LOADER_ID },
             },
             .compute_meter = 10_000 - COMPUTE_UNITS,
-            .sysvar_cache = expected_sysvar_cache,
+            .sysvar_cache = sysvar_cache,
         },
         .{},
     );
@@ -3093,7 +3027,7 @@ test "stake.set_lockup_checked" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
-    const sysvar_cache = sig.runtime.testing.ExecuteContextsParams.SysvarCacheParams{
+    const sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
         .clock = runtime.sysvar.Clock.DEFAULT,
         .rent = runtime.sysvar.Rent.DEFAULT,
     };
@@ -3213,7 +3147,7 @@ test "stake.deactivate_delinquent" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
-    const sysvar_cache = sig.runtime.testing.ExecuteContextsParams.SysvarCacheParams{
+    const sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
         .clock = .{
             .epoch = 100,
             .epoch_start_timestamp = 100,
@@ -3404,7 +3338,7 @@ test "stake.move_stake" {
         // failing case (full history, valid active & deactive, hits more code)
         .{ .num_entries = 4, .active = 39, .deactive = 40, .maybe_error = error.Custom },
     }) |args| {
-        var sysvar_cache = sig.runtime.testing.ExecuteContextsParams.SysvarCacheParams{
+        var sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
             .clock = runtime.sysvar.Clock{
                 .epoch = stake_entries[0].epoch,
                 .epoch_start_timestamp = 0,
@@ -3412,27 +3346,15 @@ test "stake.move_stake" {
                 .unix_timestamp = 0,
                 .slot = 0,
             },
-            .slot_hashes = try runtime.sysvar.SlotHashes.initWithEntries(
-                allocator,
-                &.{.{ .slot = std.math.maxInt(Slot), .hash = sig.core.Hash.ZEROES }},
-            ),
-            .stake_history = try sysvar.StakeHistory.initWithEntries(
-                allocator,
-                stake_entries[0..args.num_entries],
-            ),
-            .rent = runtime.sysvar.Rent.DEFAULT,
+            .slot_hashes = try .initWithEntries(&.{.{
+                .slot = std.math.maxInt(Slot),
+                .hash = .ZEROES,
+            }}),
+            .stake_history = .initWithEntries(stake_entries[0..args.num_entries]),
+            .rent = .DEFAULT,
             .epoch_rewards = .DEFAULT,
             .epoch_schedule = .initRandom(prng.random()),
         };
-
-        // Hacky duplicate to avoid slot_hashes & stake_history double free from storing same ref.
-        var expected_sysvar_cache = sysvar_cache;
-        expected_sysvar_cache.stake_history =
-            try sysvar.StakeHistory.initWithEntries(allocator, stake_entries[0..args.num_entries]);
-        expected_sysvar_cache.slot_hashes = try runtime.sysvar.SlotHashes.initWithEntries(
-            allocator,
-            &.{.{ .slot = std.math.maxInt(Slot), .hash = sig.core.Hash.ZEROES }},
-        );
 
         const stake_rent = sysvar_cache.rent.?.minimumBalance(StakeStateV2.SIZE);
         const src_lamports = stake_rent * 100;
@@ -3536,7 +3458,7 @@ test "stake.move_stake" {
                     .{ .pubkey = ID, .owner = runtime.ids.NATIVE_LOADER_ID },
                 },
                 .compute_meter = 10_000 - COMPUTE_UNITS,
-                .sysvar_cache = expected_sysvar_cache,
+                .sysvar_cache = sysvar_cache,
             },
             .{},
         );
@@ -3553,25 +3475,17 @@ test "stake.move_lamports" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
-    var sysvar_cache = sig.runtime.testing.ExecuteContextsParams.SysvarCacheParams{
+    var sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
         .clock = runtime.sysvar.Clock.DEFAULT,
-        .slot_hashes = try runtime.sysvar.SlotHashes.initWithEntries(
-            allocator,
-            &.{.{ .slot = std.math.maxInt(Slot), .hash = sig.core.Hash.ZEROES }},
-        ),
-        .stake_history = try sysvar.StakeHistory.init(allocator),
+        .slot_hashes = try runtime.sysvar.SlotHashes.initWithEntries(&.{.{
+            .slot = std.math.maxInt(Slot),
+            .hash = sig.core.Hash.ZEROES,
+        }}),
+        .stake_history = .DEFAULT,
         .rent = runtime.sysvar.Rent.DEFAULT,
         .epoch_rewards = .DEFAULT,
         .epoch_schedule = .initRandom(prng.random()),
     };
-
-    // Hacky duplicate to avoid slot_hashes & stake_history double free from storing same ref.
-    var expected_sysvar_cache = sysvar_cache;
-    expected_sysvar_cache.stake_history = try sysvar.StakeHistory.init(allocator);
-    expected_sysvar_cache.slot_hashes = try runtime.sysvar.SlotHashes.initWithEntries(
-        allocator,
-        &.{.{ .slot = std.math.maxInt(Slot), .hash = sig.core.Hash.ZEROES }},
-    );
 
     const src_lamports = 1_000_000_000;
     const dst_lamports = 1_000;
@@ -3643,7 +3557,7 @@ test "stake.move_lamports" {
                 .{ .pubkey = ID, .owner = runtime.ids.NATIVE_LOADER_ID },
             },
             .compute_meter = 10_000 - COMPUTE_UNITS,
-            .sysvar_cache = expected_sysvar_cache,
+            .sysvar_cache = sysvar_cache,
         },
         .{},
     );

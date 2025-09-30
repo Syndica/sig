@@ -81,12 +81,7 @@ pub const SlotResolver = struct {
     account_reader: SlotAccountReader,
     /// borrowed
     reserved_accounts: *const ReservedAccounts,
-    /// owned
     slot_hashes: SlotHashes,
-
-    pub fn deinit(self: SlotResolver, allocator: Allocator) void {
-        self.slot_hashes.deinit(allocator);
-    }
 };
 
 pub fn resolveBatch(
@@ -309,7 +304,9 @@ fn getLookupTable(
 }
 
 test resolveBatch {
-    var rng = std.Random.DefaultPrng.init(0);
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+    const random = prng.random();
 
     // concisely represents all the expected account metas within an InstructionInfo
     const ExpectedAccountMetas = struct {
@@ -326,36 +323,36 @@ test resolveBatch {
 
     var pubkeys: [9]Pubkey = undefined;
     for (&pubkeys) |*pubkey| {
-        pubkey.* = Pubkey.initRandom(rng.random());
+        pubkey.* = Pubkey.initRandom(random);
     }
 
     const lookup_table_addresses = .{
-        Pubkey.initRandom(rng.random()),
-        Pubkey.initRandom(rng.random()),
+        Pubkey.initRandom(random),
+        Pubkey.initRandom(random),
     };
 
     const lookup_tables: [2]AddressLookupTable = .{
         .{
             .meta = .{},
             .addresses = &.{
-                Pubkey.initRandom(rng.random()),
-                Pubkey.initRandom(rng.random()),
-                Pubkey.initRandom(rng.random()),
-                Pubkey.initRandom(rng.random()),
+                Pubkey.initRandom(random),
+                Pubkey.initRandom(random),
+                Pubkey.initRandom(random),
+                Pubkey.initRandom(random),
             },
         },
         .{
             .meta = .{},
             .addresses = &.{
-                Pubkey.initRandom(rng.random()),
-                Pubkey.initRandom(rng.random()),
-                Pubkey.initRandom(rng.random()),
-                Pubkey.initRandom(rng.random()),
+                Pubkey.initRandom(random),
+                Pubkey.initRandom(random),
+                Pubkey.initRandom(random),
+                Pubkey.initRandom(random),
             },
         },
     };
 
-    var map = sig.accounts_db.ThreadSafeAccountMap.init(std.testing.allocator);
+    var map = sig.accounts_db.ThreadSafeAccountMap.init(allocator);
     defer map.deinit();
     try put(&map, lookup_table_addresses[0], lookup_tables[0]);
     try put(&map, lookup_table_addresses[1], lookup_tables[1]);
@@ -432,14 +429,13 @@ test resolveBatch {
     };
 
     var ancestors = Ancestors{ .ancestors = .empty };
-    defer ancestors.deinit(std.testing.allocator);
-    try ancestors.ancestors.put(std.testing.allocator, 0, {});
+    defer ancestors.deinit(allocator);
+    try ancestors.ancestors.put(allocator, 0, {});
 
-    const slot_hashes = try SlotHashes.init(std.testing.allocator);
-    defer slot_hashes.deinit(std.testing.allocator);
+    const slot_hashes: SlotHashes = .DEFAULT;
 
     const resolved = try resolveBatch(
-        std.testing.allocator,
+        allocator,
         &.{tx},
         .{
             .slot = 1, // Greater than lookup tables' last_extended_slot
@@ -448,7 +444,7 @@ test resolveBatch {
             .account_reader = map.accountReader().forSlot(&ancestors),
         },
     );
-    defer resolved.deinit(std.testing.allocator);
+    defer resolved.deinit(allocator);
 
     for (
         resolved.accounts,

@@ -349,9 +349,6 @@ pub fn deltaLtHash(
     slot: Slot,
     parent_ancestors: *const Ancestors,
 ) !LtHash {
-    const zone = tracy.Zone.init(@src(), .{ .name = "deltaLtHash" });
-    defer zone.deinit();
-
     assert(!parent_ancestors.containsSlot(slot));
 
     // TODO: perf - consider using a thread pool
@@ -409,13 +406,13 @@ test "freezeSlot: trivial e2e merkle hash test" {
     defer accounts.deinit();
     const account_store = accounts.accountStore();
 
-    const epoch = try EpochConstants.genesis(allocator, .default(allocator));
+    const epoch = EpochConstants.genesis(.default(allocator));
     defer epoch.deinit(allocator);
 
     const constants = try SlotConstants.genesis(allocator, .DEFAULT);
     defer constants.deinit(allocator);
 
-    var state = try SlotState.genesis(allocator);
+    var state: SlotState = .genesis;
     defer state.deinit(allocator);
 
     try freezeSlot(
@@ -466,7 +463,7 @@ test "freezeSlot: trivial e2e lattice hash test" {
     }) |account_store| {
         errdefer std.log.err("Failed with implementation '{s}'", .{@tagName(account_store)});
 
-        const epoch = try EpochConstants.genesis(allocator, .default(allocator));
+        const epoch = EpochConstants.genesis(.default(allocator));
         defer epoch.deinit(allocator);
 
         var constants = try SlotConstants.genesis(allocator, .DEFAULT);
@@ -474,7 +471,7 @@ test "freezeSlot: trivial e2e lattice hash test" {
         constants.feature_set.setSlot(.accounts_lt_hash, 0);
         constants.feature_set.setSlot(.remove_accounts_delta_hash, 0);
 
-        var state = try SlotState.genesis(allocator);
+        var state: SlotState = .genesis;
         defer state.deinit(allocator);
 
         try freezeSlot(

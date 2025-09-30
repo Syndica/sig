@@ -1376,7 +1376,6 @@ const TestData = struct {
         /// anything described by `self`.
         fn toDummyElem(
             self: SlotInfo,
-            allocator: Allocator,
             slot_infos: []const SlotInfo,
             random: std.Random,
         ) !SlotTracker.Element {
@@ -1403,7 +1402,7 @@ const TestData = struct {
                     .tick_height = .init(random.int(u64)),
                     .collected_rent = .init(random.int(u64)),
                     .accounts_lt_hash = .init(.{ .data = @splat(random.int(u16)) }),
-                    .stakes_cache = try .init(allocator),
+                    .stakes_cache = .EMPTY,
                     .collected_transaction_fees = .init(random.int(u64)),
                     .collected_priority_fees = .init(random.int(u64)),
                 },
@@ -1459,7 +1458,7 @@ const TestData = struct {
         var slot_tracker: SlotTracker = try .init(
             allocator,
             root_slot,
-            try slot_infos[root_slot].toDummyElem(allocator, slot_infos[0..], random),
+            try slot_infos[root_slot].toDummyElem(&slot_infos, random),
         );
         errdefer slot_tracker.deinit(allocator);
 
@@ -1492,7 +1491,7 @@ const TestData = struct {
                 } else null,
             );
 
-            var elem = try slot_info.toDummyElem(allocator, slot_infos[0..], random);
+            var elem = try slot_info.toDummyElem(slot_infos[0..], random);
             const gop = try slot_tracker.getOrPut(allocator, slot_info.slot, elem);
             if (gop.found_existing) {
                 std.debug.assert(slot_info.slot == root_slot);

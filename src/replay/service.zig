@@ -644,7 +644,7 @@ test trackNewSlots {
     }
 
     const slot_tracker_val: SlotTracker = try .init(allocator, 0, .{
-        .state = try .genesis(allocator),
+        .state = .genesis,
         .constants = try .genesis(allocator, .DEFAULT),
     });
     var slot_tracker = RwMux(SlotTracker).init(slot_tracker_val);
@@ -675,7 +675,7 @@ test trackNewSlots {
             .ns_per_slot = 1,
             .genesis_creation_time = 1,
             .slots_per_year = 1,
-            .stakes = try .initEmptyWithGenesisStakeHistoryEntry(allocator),
+            .stakes = .EMPTY_WITH_GENESIS,
             .rent_collector = .DEFAULT,
         });
     }
@@ -1127,7 +1127,7 @@ pub const DependencyStubs = struct {
             const root_slot_constants = try sig.core.SlotConstants.genesis(allocator, .DEFAULT);
             errdefer root_slot_constants.deinit(allocator);
 
-            var root_slot_state = try SlotState.genesis(allocator);
+            var root_slot_state: SlotState = .genesis;
             errdefer root_slot_state.deinit(allocator);
 
             { // this is to essentially root the slot
@@ -1137,7 +1137,7 @@ pub const DependencyStubs = struct {
                 try bhq.mut().insertGenesisHash(allocator, .ZEROES, 0);
             }
 
-            const epoch = try sig.core.EpochConstants.genesis(allocator, .default(allocator));
+            const epoch = sig.core.EpochConstants.genesis(.default(allocator));
             errdefer epoch.deinit(allocator);
 
             break :deps .{

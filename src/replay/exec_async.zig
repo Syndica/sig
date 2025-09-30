@@ -148,7 +148,6 @@ pub const ReplaySlotFuture = struct {
         }
 
         // deinit contained items
-        self.slot_resolver.deinit(allocator);
         self.scheduler.deinit();
         self.poh_verifier.deinit(allocator);
         for (self.entries) |entry| entry.deinit(allocator);
@@ -479,9 +478,6 @@ test "TransactionScheduler: happy path" {
     );
     defer scheduler.deinit();
 
-    const slot_hashes = try sig.runtime.sysvar.SlotHashes.init(allocator);
-    defer slot_hashes.deinit(allocator);
-
     {
         const batch1 = try resolveBatch(
             allocator,
@@ -490,7 +486,7 @@ test "TransactionScheduler: happy path" {
                 .slot = state.svmParams().slot,
                 .account_reader = .noop,
                 .reserved_accounts = &.empty,
-                .slot_hashes = slot_hashes,
+                .slot_hashes = .DEFAULT,
             },
         );
         errdefer batch1.deinit(allocator);
@@ -502,7 +498,7 @@ test "TransactionScheduler: happy path" {
                 .slot = state.svmParams().slot,
                 .account_reader = .noop,
                 .reserved_accounts = &.empty,
-                .slot_hashes = slot_hashes,
+                .slot_hashes = .DEFAULT,
             },
         );
         errdefer batch2.deinit(allocator);
@@ -552,9 +548,6 @@ test "TransactionScheduler: duplicate batch passes through to svm" {
     );
     defer scheduler.deinit();
 
-    const slot_hashes = try sig.runtime.sysvar.SlotHashes.init(allocator);
-    defer slot_hashes.deinit(allocator);
-
     {
         const batch1 = try resolveBatch(
             allocator,
@@ -563,7 +556,7 @@ test "TransactionScheduler: duplicate batch passes through to svm" {
                 .slot = state.svmParams().slot,
                 .account_reader = .noop,
                 .reserved_accounts = &.empty,
-                .slot_hashes = slot_hashes,
+                .slot_hashes = .DEFAULT,
             },
         );
         errdefer batch1.deinit(allocator);
@@ -575,7 +568,7 @@ test "TransactionScheduler: duplicate batch passes through to svm" {
                 .slot = state.svmParams().slot,
                 .account_reader = .noop,
                 .reserved_accounts = &.empty,
-                .slot_hashes = slot_hashes,
+                .slot_hashes = .DEFAULT,
             },
         );
         errdefer batch1_dupe.deinit(allocator);
@@ -625,9 +618,6 @@ test "TransactionScheduler: failed account locks" {
     );
     defer scheduler.deinit();
 
-    const slot_hashes = try sig.runtime.sysvar.SlotHashes.init(allocator);
-    defer slot_hashes.deinit(allocator);
-
     {
         const batch1 = try resolveBatch(
             allocator,
@@ -636,7 +626,7 @@ test "TransactionScheduler: failed account locks" {
                 .slot = state.svmParams().slot,
                 .account_reader = .noop,
                 .reserved_accounts = &.empty,
-                .slot_hashes = slot_hashes,
+                .slot_hashes = .DEFAULT,
             },
         );
         errdefer batch1.deinit(allocator);
@@ -693,9 +683,6 @@ test "TransactionScheduler: signature verification failure" {
     replaced_sigs[0].data[0] +%= 1;
     transactions[5].signatures = replaced_sigs;
 
-    const slot_hashes = try sig.runtime.sysvar.SlotHashes.init(allocator);
-    defer slot_hashes.deinit(allocator);
-
     {
         const batch1 = try resolveBatch(
             allocator,
@@ -704,7 +691,7 @@ test "TransactionScheduler: signature verification failure" {
                 .slot = state.svmParams().slot,
                 .account_reader = .noop,
                 .reserved_accounts = &.empty,
-                .slot_hashes = slot_hashes,
+                .slot_hashes = .DEFAULT,
             },
         );
         errdefer batch1.deinit(allocator);
@@ -716,7 +703,7 @@ test "TransactionScheduler: signature verification failure" {
                 .slot = state.svmParams().slot,
                 .account_reader = .noop,
                 .reserved_accounts = &.empty,
-                .slot_hashes = slot_hashes,
+                .slot_hashes = .DEFAULT,
             },
         );
         errdefer batch2.deinit(allocator);
@@ -786,8 +773,6 @@ test "TransactionScheduler: does not send replay vote for failed execution" {
     try state.makeTransactionsPassable(allocator, &txs);
 
     // Resolve batch
-    const slot_hashes = try sig.runtime.sysvar.SlotHashes.init(allocator);
-    defer slot_hashes.deinit(allocator);
     const batch = try resolveBatch(
         allocator,
         &txs,
@@ -795,7 +780,7 @@ test "TransactionScheduler: does not send replay vote for failed execution" {
             .slot = state.svmParams().slot,
             .account_reader = state.account_map.accountReader().forSlot(&state.ancestors),
             .reserved_accounts = &.empty,
-            .slot_hashes = slot_hashes,
+            .slot_hashes = .DEFAULT,
         },
     );
 
@@ -866,7 +851,7 @@ test "TransactionScheduler: sends replay vote after successful execution" {
             0,
         );
         // Seed the vote state with a prior slot so lastVotedSlot() can be non-null after process
-        try vote_program.state.processSlotVoteUnchecked(allocator, &vote_state, 1);
+        try vote_program.state.processSlotVoteUnchecked(&vote_state, 1);
 
         _ = try sig.bincode.writeToSlice(
             account.data,
@@ -901,14 +886,13 @@ test "TransactionScheduler: sends replay vote after successful execution" {
     defer vote_ix.deinit(allocator);
 
     // 3) Ensure SlotHashes contains the voted slot so vote processor accepts it
-    var slot_hashes = try sig.runtime.sysvar.SlotHashes.init(allocator);
-    defer slot_hashes.deinit(allocator);
+    var slot_hashes: SlotHashes = .DEFAULT;
     slot_hashes.add(1, sig.core.Hash.initRandom(rng.random()));
     slot_hashes.add(2, vote_hash);
 
     // Insert SlotHashes sysvar account so SVM's sysvar_cache sees these entries
     {
-        const sysvar_len = sig.runtime.sysvar.SlotHashes.STORAGE_SIZE;
+        const sysvar_len = SlotHashes.STORAGE_SIZE;
         var sysvar_account = sig.runtime.AccountSharedData.NEW;
         sysvar_account.data = try allocator.alloc(u8, sysvar_len);
         @memset(sysvar_account.data, 0);
@@ -916,7 +900,7 @@ test "TransactionScheduler: sends replay vote after successful execution" {
         const rent = sig.runtime.sysvar.Rent.DEFAULT;
         sysvar_account.lamports = rent.minimumBalance(sysvar_account.data.len);
         sysvar_account.owner = sig.runtime.sysvar.OWNER_ID;
-        try state.account_map.put(state.slot, sig.runtime.sysvar.SlotHashes.ID, sysvar_account);
+        try state.account_map.put(state.slot, SlotHashes.ID, sysvar_account);
         allocator.free(sysvar_account.data);
     }
 
