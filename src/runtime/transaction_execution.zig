@@ -772,7 +772,7 @@ test "loadAndExecuteTransactions: no transactions" {
         10,
     );
     defer blockhash_queue.deinit(allocator);
-    const epoch_stakes = try EpochStakes.initEmptyWithGenesisStakeHistoryEntry(allocator);
+    const epoch_stakes = EpochStakes.EMPTY_WITH_GENESIS;
     defer epoch_stakes.deinit(allocator);
     const vm_environment = vm.Environment{};
     defer vm_environment.deinit(allocator);
@@ -977,7 +977,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
     );
     defer blockhash_queue.deinit(allocator);
 
-    const epoch_stakes = try EpochStakes.initEmptyWithGenesisStakeHistoryEntry(allocator);
+    const epoch_stakes = EpochStakes.EMPTY_WITH_GENESIS;
     defer epoch_stakes.deinit(allocator);
 
     const environment = TransactionExecutionEnvironment{

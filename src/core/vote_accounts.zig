@@ -608,7 +608,7 @@ test "vote accounts serialize and deserialize" {
     var vote_accounts = VoteAccounts{};
     defer vote_accounts.deinit(allocator);
 
-    var stakes = try Stakes(.delegation).init(allocator);
+    var stakes: Stakes(.delegation) = .EMPTY;
     defer stakes.deinit(allocator);
 
     // Add stake delegation for the vote pubket for the calculate stake context.
@@ -696,7 +696,7 @@ test "staked nodes" {
     );
     defer accounts.deinit(allocator);
 
-    var stakes = try Stakes(.delegation).init(allocator);
+    var stakes: Stakes(.delegation) = .EMPTY;
     defer stakes.deinit(allocator);
 
     var vote_accounts = VoteAccounts{};
@@ -802,7 +802,7 @@ test "staked nodes update" {
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
-    var stakes = try Stakes(.delegation).init(allocator);
+    var stakes: Stakes(.delegation) = .EMPTY;
     defer stakes.deinit(allocator);
 
     var vote_accounts = VoteAccounts{};
@@ -923,7 +923,7 @@ test "staked nodes zero stake" {
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
-    var stakes = try Stakes(.delegation).init(allocator);
+    var stakes: Stakes(.delegation) = .EMPTY;
     defer stakes.deinit(allocator);
 
     var vote_accounts = VoteAccounts{};

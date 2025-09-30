@@ -473,21 +473,17 @@ test "SlotTracker.prune removes all slots less than root" {
     const root_slot: Slot = 4;
     var tracker: SlotTracker = try .init(allocator, root_slot, .{
         .constants = testDummySlotConstants(root_slot),
-        .state = try .genesis(allocator),
+        .state = .genesis,
     });
     defer tracker.deinit(allocator);
 
     // Add slots 1, 2, 3, 4, 5
     for (1..6) |slot| {
-        var state = try SlotState.genesis(allocator);
         const gop = try tracker.getOrPut(allocator, slot, .{
             .constants = testDummySlotConstants(slot),
-            .state = state,
+            .state = .genesis,
         });
-        if (gop.found_existing) {
-            std.debug.assert(slot == root_slot);
-            state.deinit(allocator);
-        }
+        if (gop.found_existing) std.debug.assert(slot == root_slot);
     }
 
     // Prune slots less than root (4)

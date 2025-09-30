@@ -26,23 +26,17 @@ const createVoteAccount = sig.core.vote_accounts.createVoteAccount;
 const failing_allocator = sig.utils.allocators.failing.allocator(.{});
 
 pub fn StakesCacheGeneric(comptime stakes_type: StakesType) type {
-    const StakesT = Stakes(stakes_type);
+    const T = Stakes(stakes_type);
 
     return struct {
-        stakes: RwMux(StakesT),
+        stakes: RwMux(T),
 
         const Self = @This();
 
-        pub fn T() type {
-            return StakesT;
-        }
-
-        pub fn init(allocator: Allocator) Allocator.Error!Self {
-            return .{ .stakes = RwMux(StakesT).init(try StakesT.init(allocator)) };
-        }
+        pub const EMPTY: Self = .{ .stakes = .init(.EMPTY) };
 
         pub fn deinit(self: *Self, allocator: Allocator) void {
-            var stakes: *StakesT, var stakes_guard = self.stakes.writeWithLock();
+            var stakes: *T, var stakes_guard = self.stakes.writeWithLock();
             defer stakes_guard.unlock();
             stakes.deinit(allocator);
         }
@@ -62,7 +56,7 @@ pub fn StakesCacheGeneric(comptime stakes_type: StakesType) type {
                     defer stakes_guard.unlock();
                     try stakes.removeVoteAccount(allocator, pubkey);
                 } else if (stake_program.ID.equals(&account.owner)) {
-                    var stakes: *StakesT, var stakes_guard = self.stakes.writeWithLock();
+                    var stakes: *T, var stakes_guard = self.stakes.writeWithLock();
                     defer stakes_guard.unlock();
                     try stakes.removeStakeAccount(allocator, pubkey, new_rate_activation_epoch);
                 }
@@ -71,7 +65,7 @@ pub fn StakesCacheGeneric(comptime stakes_type: StakesType) type {
 
             if (vote_program.ID.equals(&account.owner)) {
                 if (!VersionedVoteState.isCorrectSizeAndInitialized(account.data)) {
-                    var stakes: *StakesT, var stakes_guard = self.stakes.writeWithLock();
+                    var stakes: *T, var stakes_guard = self.stakes.writeWithLock();
                     defer stakes_guard.unlock();
                     try stakes.removeVoteAccount(allocator, pubkey);
                     return;
@@ -81,13 +75,13 @@ pub fn StakesCacheGeneric(comptime stakes_type: StakesType) type {
                     allocator,
                     try account.clone(allocator),
                 ) catch {
-                    var stakes: *StakesT, var stakes_guard = self.stakes.writeWithLock();
+                    var stakes: *T, var stakes_guard = self.stakes.writeWithLock();
                     defer stakes_guard.unlock();
                     try stakes.removeVoteAccount(allocator, pubkey);
                     return;
                 };
 
-                var stakes: *StakesT, var stakes_guard = self.stakes.writeWithLock();
+                var stakes: *T, var stakes_guard = self.stakes.writeWithLock();
                 defer stakes_guard.unlock();
                 try stakes.upsertVoteAccount(
                     allocator,
@@ -100,13 +94,13 @@ pub fn StakesCacheGeneric(comptime stakes_type: StakesType) type {
                     allocator,
                     try account.clone(allocator),
                 ) catch {
-                    var stakes: *StakesT, var stakes_guard = self.stakes.writeWithLock();
+                    var stakes: *T, var stakes_guard = self.stakes.writeWithLock();
                     defer stakes_guard.unlock();
                     try stakes.removeStakeAccount(allocator, pubkey, new_rate_activation_epoch);
                     return;
                 };
 
-                var stakes: *StakesT, var stakes_guard = self.stakes.writeWithLock();
+                var stakes: *T, var stakes_guard = self.stakes.writeWithLock();
                 defer stakes_guard.unlock();
                 try stakes.upsertStakeAccount(
                     allocator,
@@ -139,7 +133,6 @@ pub fn Stakes(comptime stakes_type: StakesType) type {
         .stake => Stake,
         .account => StakeAccount,
     };
-    const is_account_type = stakes_type == .account;
 
     return struct {
         vote_accounts: VoteAccounts,
@@ -150,23 +143,20 @@ pub fn Stakes(comptime stakes_type: StakesType) type {
 
         const Self = @This();
 
-        pub fn init(allocator: Allocator) Allocator.Error!Self {
-            return .{
-                .vote_accounts = .{},
-                .stake_delegations = .empty,
-                .unused = 0,
-                .epoch = 0,
-                .stake_history = try .init(allocator),
-            };
-        }
+        pub const EMPTY: Self = .{
+            .vote_accounts = .{},
+            .stake_delegations = .empty,
+            .unused = 0,
+            .epoch = 0,
+            .stake_history = .DEFAULT,
+        };
 
         pub fn deinit(self: *const Self, allocator: Allocator) void {
             self.vote_accounts.deinit(allocator);
             // Only the .account type contains allocated data in the stake_delegations.
-            if (is_account_type) for (self.stake_delegations.values()) |*v| v.deinit(allocator);
+            if (stakes_type == .account) for (self.stake_delegations.values()) |*v| v.deinit(allocator);
             var delegations = self.stake_delegations;
             delegations.deinit(allocator);
-            self.stake_history.deinit(allocator);
         }
 
         pub fn clone(self: *const Self, allocator: Allocator) Allocator.Error!Self {
@@ -181,7 +171,7 @@ pub fn Stakes(comptime stakes_type: StakesType) type {
             const vote_accs = try self.vote_accounts.clone(allocator);
             errdefer vote_accs.deinit(allocator);
 
-            var stake_delegations = std.AutoArrayHashMapUnmanaged(Pubkey, output_type.T()).empty;
+            var stake_delegations: std.AutoArrayHashMapUnmanaged(Pubkey, output_type.T()) = .empty;
             try stake_delegations.ensureTotalCapacity(allocator, self.stake_delegations.count());
             errdefer {
                 // Only the .account type contains allocated data in the stake_delegations.
@@ -206,15 +196,12 @@ pub fn Stakes(comptime stakes_type: StakesType) type {
                 stake_delegations.putAssumeCapacity(key, new_value);
             }
 
-            const stake_history = try self.stake_history.clone(allocator);
-            errdefer stake_history.deinit(allocator);
-
             return .{
                 .vote_accounts = vote_accs,
                 .stake_delegations = stake_delegations,
                 .unused = self.unused,
                 .epoch = self.epoch,
-                .stake_history = stake_history,
+                .stake_history = self.stake_history,
             };
         }
 
@@ -274,8 +261,8 @@ pub fn Stakes(comptime stakes_type: StakesType) type {
             new_rate_activation_epoch: ?Epoch,
         ) !void {
             std.debug.assert(account.account.lamports > 0);
-            defer if (!is_account_type) account.deinit(allocator);
-            errdefer if (is_account_type) account.deinit(allocator);
+            defer if (stakes_type != .account) account.deinit(allocator);
+            errdefer if (stakes_type == .account) account.deinit(allocator);
 
             const delegation = account.getDelegation();
             const voter_pubkey = delegation.voter_pubkey;
@@ -297,7 +284,7 @@ pub fn Stakes(comptime stakes_type: StakesType) type {
                 entry,
             )) |old_account_entry| {
                 const old_account: T = old_account_entry.value;
-                defer if (is_account_type) old_account.deinit(allocator);
+                defer if (stakes_type == .account) old_account.deinit(allocator);
 
                 const old_delegation = old_account.getDelegation();
                 const old_voter_pubkey = old_delegation.voter_pubkey;
@@ -323,7 +310,7 @@ pub fn Stakes(comptime stakes_type: StakesType) type {
             new_rate_activation_epoch: ?Epoch,
         ) !void {
             var account: T = (self.stake_delegations.fetchSwapRemove(pubkey) orelse return).value;
-            defer if (is_account_type) account.deinit(allocator);
+            defer if (stakes_type == .account) account.deinit(allocator);
 
             const removed_delegation = account.getDelegation();
             const removed_stake = removed_delegation.getStake(
@@ -345,7 +332,7 @@ pub fn Stakes(comptime stakes_type: StakesType) type {
 
             var stake_delegations = std.AutoArrayHashMapUnmanaged(Pubkey, T).empty;
             errdefer {
-                if (is_account_type) for (stake_delegations.values()) |*v| v.deinit(allocator);
+                if (stakes_type == .account) for (stake_delegations.values()) |*v| v.deinit(allocator);
                 stake_delegations.deinit(allocator);
             }
 
@@ -353,11 +340,11 @@ pub fn Stakes(comptime stakes_type: StakesType) type {
                 try stake_delegations.put(
                     allocator,
                     Pubkey.initRandom(random),
-                    if (is_account_type) T.initRandom(allocator, random) else T.initRandom(random),
+                    if (stakes_type == .account) T.initRandom(allocator, random) else T.initRandom(random),
                 );
             }
 
-            const stake_history = try StakeHistory.initRandom(allocator, random);
+            const stake_history = StakeHistory.initRandom(random);
             errdefer stake_history.deinit(allocator);
 
             return .{
@@ -848,10 +835,9 @@ test "stakes basic" {
         for (0..4) |i| {
             const StakesT = Stakes(stakes_type);
 
-            const stake_history_empty = try StakeHistory.init(allocator);
-            defer stake_history_empty.deinit(allocator);
+            const stake_history_empty: StakeHistory = .DEFAULT;
 
-            var stakes_cache = try StakesCacheGeneric(stakes_type).init(allocator);
+            var stakes_cache: StakesCacheGeneric(stakes_type) = .EMPTY;
             defer stakes_cache.deinit(allocator);
             {
                 const stakes: *StakesT, var guard = stakes_cache.stakes.writeWithLock();
@@ -948,7 +934,7 @@ test "stakes vote account disappear reappear" {
         StakesType.stake,
         StakesType.account,
     }) |stakes_type| {
-        var stakes_cache = try StakesCacheGeneric(stakes_type).init(allocator);
+        var stakes_cache: StakesCacheGeneric(stakes_type) = .EMPTY;
         defer stakes_cache.deinit(allocator);
 
         {
@@ -1054,7 +1040,6 @@ test "stakes vote account disappear reappear" {
 }
 
 test "get stake effective and activating" {
-    const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
@@ -1066,8 +1051,7 @@ test "get stake effective and activating" {
         .deprecated_warmup_cooldown_rate = DEFAULT_WARMUP_COOLDOWN_RATE,
     };
 
-    var stake_history = try StakeHistory.init(allocator);
-    defer stake_history.deinit(allocator);
+    var stake_history: StakeHistory = .DEFAULT;
     stake_history.entries.appendAssumeCapacity(.{
         .epoch = 5,
         .stake = .{
@@ -1088,7 +1072,6 @@ test "get stake effective and activating" {
 }
 
 test "get stake state" {
-    const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
@@ -1100,8 +1083,7 @@ test "get stake state" {
         .deprecated_warmup_cooldown_rate = DEFAULT_WARMUP_COOLDOWN_RATE,
     };
 
-    var stake_history = try StakeHistory.init(allocator);
-    defer stake_history.deinit(allocator);
+    var stake_history: StakeHistory = .DEFAULT;
     stake_history.entries.appendSliceAssumeCapacity(&.{
         .{ .epoch = 13, .stake = .{
             .effective = 0,

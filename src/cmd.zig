@@ -2059,7 +2059,6 @@ fn replayDependencies(
     errdefer root_slot_constants.deinit(allocator);
 
     const lt_hash = collapsed_manifest.bank_extra.accounts_lt_hash;
-
     var root_slot_state = try sig.core.SlotState.fromBankFields(allocator, bank_fields, lt_hash);
     errdefer root_slot_state.deinit(allocator);
 

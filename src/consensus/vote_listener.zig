@@ -1844,14 +1844,14 @@ test "simple usage" {
             .feature_set = .ALL_DISABLED,
             .reserved_accounts = .empty,
         },
-        .state = try .genesis(allocator),
+        .state = .genesis,
     });
     defer slot_tracker.deinit(allocator);
 
     var epoch_tracker: EpochTracker = .{ .schedule = .DEFAULT };
     defer epoch_tracker.deinit(allocator);
     {
-        const stakes: sig.core.EpochStakes = try .initEmptyWithGenesisStakeHistoryEntry(allocator);
+        const stakes: sig.core.EpochStakes = .EMPTY_WITH_GENESIS;
         try epoch_tracker.epochs.ensureUnusedCapacity(allocator, 1);
         epoch_tracker.epochs.putAssumeCapacity(0, .{
             .hashes_per_tick = 1,
@@ -1952,14 +1952,14 @@ test "check trackers" {
             .feature_set = .ALL_DISABLED,
             .reserved_accounts = .empty,
         },
-        .state = try .genesis(allocator),
+        .state = .genesis,
     });
     defer slot_tracker2.deinit(allocator);
 
     var epoch_tracker2: EpochTracker = .{ .schedule = .DEFAULT };
     defer epoch_tracker2.deinit(allocator);
     {
-        var stakes: sig.core.EpochStakes = try .initEmptyWithGenesisStakeHistoryEntry(allocator);
+        var stakes: sig.core.EpochStakes = .EMPTY_WITH_GENESIS;
         for (tracker_templates) |template| {
             _, const vote_kp, _ = template;
             const vote_key: Pubkey = .fromPublicKey(&vote_kp.public_key);

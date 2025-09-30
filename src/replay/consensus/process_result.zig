@@ -537,7 +537,7 @@ test "processResult: confirm status with done poll and slot complete - success p
     };
 
     // Create slot state then modify tick height
-    var mock_slot_state = try sig.core.SlotState.genesis(allocator);
+    var mock_slot_state: sig.core.SlotState = .genesis;
 
     // Set tick height equal to max_tick_height to make slot complete
     _ = mock_slot_state.tick_height.swap(64, .monotonic);
