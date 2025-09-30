@@ -9,7 +9,6 @@ const syscalls = sig.vm.syscalls;
 const memory = sig.vm.memory;
 
 const Vm = sig.vm.Vm;
-const VmConfig = sig.vm.Config;
 const TransactionContext = sig.runtime.transaction_context.TransactionContext;
 
 const Pubkey = sig.core.Pubkey;
@@ -137,23 +136,13 @@ fn executeSyscall(
         .bpf_account_data_direct_mapping,
         tc.slot,
     );
-    const config = VmConfig{
-        .max_call_depth = tc.compute_budget.max_call_depth,
-        .stack_frame_size = tc.compute_budget.stack_frame_size,
-        .enable_address_translation = true,
-        .instruction_meter_checkpoint_distance = 10_000,
-        .enable_instruction_meter = true,
-        .enable_instruction_tracing = debugging_features,
-        .enable_symbol_and_section_labels = debugging_features,
-        .reject_broken_elfs = reject_broken_elfs,
-        .noop_instruction_rate = 256,
-        .sanitize_user_provided_values = true,
-        .optimize_rodata = false,
-        .aligned_memory_mapping = !direct_mapping,
-        .enable_stack_frame_gaps = !direct_mapping,
-        .maximum_version = .v0,
-        .minimum_version = .v0,
-    };
+    const config = sig.vm.Environment.initV1Config(
+        tc.feature_set,
+        &tc.compute_budget,
+        tc.slot,
+        debugging_features,
+        reject_broken_elfs,
+    );
     vm_environment.config = config;
 
     // Set return data
@@ -313,17 +302,18 @@ fn executeSyscall(
 
     var @"error": i64, var error_kind: pb.ErrKind = .{ 0, .UNSPECIFIED };
     if (execution_error) |err| {
-        const e, const ek, const msg = convertExecutionError(err);
-        @"error" = e;
+        @"error", const ek, _ = convertExecutionError(err);
         error_kind = switch (ek) {
             .Instruction => .INSTRUCTION,
             .Syscall => .SYSCALL,
             .Ebpf => .EBPF,
         };
         // Agave doesn't log Poseidon errors
-        if (e != -1) {
-            try sig.runtime.stable_log.programFailure(&tc, instr_info.program_meta.pubkey, msg);
-        }
+        if (@"error" != -1) try sig.runtime.stable_log.programFailure(
+            &tc,
+            instr_info.program_meta.pubkey,
+            err,
+        );
     }
 
     // Special casing to return only the custom error for transactions which have

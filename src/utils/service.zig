@@ -173,7 +173,11 @@ pub fn runService(
 
         // identify result
         if (result) |_| num_oks += 1 else |_| num_errors += 1;
-        const handler, const num_events, const event_name, const level_logger, const trace //
+        const handler, //
+        const num_events, //
+        const event_name, //
+        const level_logger, //
+        const maybe_trace: ?*std.builtin.StackTrace //
         = if (result) |_|
             .{ config.return_handler, num_oks, "return", logger.info(), null }
         else |_|
@@ -181,7 +185,13 @@ pub fn runService(
 
         // handle result
         if (handler.log_return) {
-            level_logger.logf("{s} has {s}ed: {any} {?}", .{ name, event_name, result, trace });
+            level_logger.logf(
+                "{s} has {s}ed: {any} {?}",
+                .{ name, event_name, result, maybe_trace },
+            );
+            // reset the stack trace so that if it returns an error in a loop it doesn't try to infinitely
+            // increment the stack trace index and concatenate the previous traces.
+            if (maybe_trace) |trace| trace.index = 0;
         }
         if (handler.max_iterations) |max| if (num_events >= max) {
             if (handler.set_exit_on_completion) {
