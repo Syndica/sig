@@ -10,9 +10,7 @@ pub const Fees = extern struct {
 
     pub const ID: Pubkey = .parse("SysvarFees111111111111111111111111111111111");
 
-    pub const DEFAULT = Fees{
-        .lamports_per_signature = 0,
-    };
+    pub const DEFAULT: Fees = .{ .lamports_per_signature = 0 };
 
     pub const STORAGE_SIZE: u64 = 8;
 

@@ -95,14 +95,32 @@ pub fn EpochStakesGeneric(comptime stakes_type: StakesType) type {
 
         const Self = @This();
 
-        pub fn init(allocator: Allocator) Allocator.Error!Self {
-            return .{
-                .stakes = try .init(allocator),
-                .total_stake = 0,
-                .node_id_to_vote_accounts = .{},
-                .epoch_authorized_voters = .{},
-            };
-        }
+        pub const EMPTY: Self = .{
+            .stakes = .EMPTY,
+            .total_stake = 0,
+            .node_id_to_vote_accounts = .{},
+            .epoch_authorized_voters = .{},
+        };
+
+        pub const EMPTY_WITH_GENESIS: Self = .{
+            .total_stake = 0,
+            .stakes = .{
+                .vote_accounts = .{},
+                .stake_delegations = .empty,
+                .unused = 0,
+                .epoch = 0,
+                .stake_history = StakeHistory.initWithEntries(&.{.{
+                    .epoch = 0,
+                    .stake = .{
+                        .effective = 0,
+                        .activating = 0,
+                        .deactivating = 0,
+                    },
+                }}),
+            },
+            .node_id_to_vote_accounts = .empty,
+            .epoch_authorized_voters = .empty,
+        };
 
         pub fn deinit(self: Self, allocator: Allocator) void {
             self.stakes.deinit(allocator);
@@ -135,30 +153,6 @@ pub fn EpochStakesGeneric(comptime stakes_type: StakesType) type {
                 .total_stake = self.total_stake,
                 .node_id_to_vote_accounts = node_id_to_vote_accounts,
                 .epoch_authorized_voters = epoch_authorized_voters,
-            };
-        }
-
-        pub fn initEmptyWithGenesisStakeHistoryEntry(
-            allocator: std.mem.Allocator,
-        ) !EpochStakesGeneric(stakes_type) {
-            return .{
-                .total_stake = 0,
-                .stakes = .{
-                    .vote_accounts = .{},
-                    .stake_delegations = .empty,
-                    .unused = 0,
-                    .epoch = 0,
-                    .stake_history = try StakeHistory.initWithEntries(allocator, &.{.{
-                        .epoch = 0,
-                        .stake = .{
-                            .effective = 0,
-                            .activating = 0,
-                            .deactivating = 0,
-                        },
-                    }}),
-                },
-                .node_id_to_vote_accounts = .empty,
-                .epoch_authorized_voters = .empty,
             };
         }
 

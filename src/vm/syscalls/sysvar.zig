@@ -497,7 +497,7 @@ fn testGetStakeHistory(filled: bool) !void {
         } });
     }
 
-    const src_history = try sysvar.StakeHistory.initWithEntries(allocator, entries.constSlice());
+    const src_history = sysvar.StakeHistory.initWithEntries(entries.constSlice());
     // deinitialised by transaction context
 
     {
@@ -541,7 +541,6 @@ fn testGetStakeHistory(filled: bool) !void {
     });
 
     const obj_parsed = try bincode.readFromSlice(allocator, sysvar.StakeHistory, &buffer, .{});
-    defer obj_parsed.deinit(allocator);
 
     try std.testing.expectEqualSlices(
         sysvar.StakeHistory.Entry,
@@ -575,7 +574,7 @@ fn testGetSlotHashes(filled: bool) !void {
         try entries.append(.{ .slot = slot, .hash = result });
     }
 
-    const src_hashes = try sysvar.SlotHashes.initWithEntries(allocator, entries.constSlice());
+    const src_hashes = try sysvar.SlotHashes.initWithEntries(entries.constSlice());
     // deinitialised by transaction context
 
     {
@@ -619,7 +618,6 @@ fn testGetSlotHashes(filled: bool) !void {
     });
 
     const obj_parsed = try bincode.readFromSlice(allocator, sysvar.SlotHashes, &buffer, .{});
-    defer obj_parsed.deinit(allocator);
 
     try std.testing.expectEqualSlices(
         sysvar.SlotHashes.Entry,

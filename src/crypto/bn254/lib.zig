@@ -159,7 +159,7 @@ pub const G1 = struct {
         // or they're opposite (one on the top, other one on the bottom).
         const lambda = if (a.x.eql(b.x)) r: {
             if (a.y.eql(b.y)) {
-                // // a == b => point double: lambda = 3 * x1^2 / (2 * y1)
+                // a == b => point double: lambda = 3 * x1^2 / (2 * y1)
                 const x = a.x.sq().triple();
                 const y = a.y.dbl(); // y = 2 * y1
                 break :r y.inverse().mul(x);

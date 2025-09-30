@@ -5148,7 +5148,7 @@ pub fn testEpochStakes(
             .stake_delegations = .empty,
             .unused = 0,
             .epoch = 0,
-            .stake_history = try .init(allocator),
+            .stake_history = .DEFAULT,
         },
         .epoch_authorized_voters = .empty,
         .node_id_to_vote_accounts = .empty,

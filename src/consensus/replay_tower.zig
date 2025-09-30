@@ -3760,7 +3760,7 @@ test "selectVoteAndResetForks stake not found" {
 
     const latest = LatestValidatorVotes.empty;
 
-    const epoch_stakes: EpochStakes = try .initEmptyWithGenesisStakeHistoryEntry(allocator);
+    const epoch_stakes: EpochStakes = .EMPTY_WITH_GENESIS;
     defer epoch_stakes.deinit(allocator);
 
     try std.testing.expectError(
@@ -4282,7 +4282,7 @@ pub const TestFixture = struct {
             var constants = try sig.core.SlotConstants.genesis(allocator, .DEFAULT);
             errdefer constants.deinit(allocator);
 
-            var state = try sig.core.SlotState.genesis(allocator);
+            var state: sig.core.SlotState = .genesis;
             errdefer state.deinit(allocator);
 
             constants.parent_slot = root.slot -| 1;
@@ -4405,7 +4405,7 @@ pub const TestFixture = struct {
                 var constants = try sig.core.SlotConstants.genesis(allocator, .DEFAULT);
                 errdefer constants.deinit(allocator);
 
-                var state = try sig.core.SlotState.genesis(allocator);
+                var state: sig.core.SlotState = .genesis;
                 errdefer state.deinit(allocator);
 
                 constants.parent_slot = parent_slot;
@@ -4466,8 +4466,7 @@ pub const TestFixture = struct {
         allocator: std.mem.Allocator,
         random: std.Random,
     ) !void {
-        var epoch_stakes =
-            try EpochStakes.initEmptyWithGenesisStakeHistoryEntry(allocator);
+        var epoch_stakes: EpochStakes = .EMPTY_WITH_GENESIS;
         epoch_stakes.total_stake = 1000;
         epoch_stakes.stakes.deinit(allocator);
         epoch_stakes.stakes = try Stakes(.delegation).initRandom(
@@ -4701,7 +4700,6 @@ fn genStakes(
         );
         for (votes) |slot| {
             try sig.runtime.program.vote.state.processSlotVoteUnchecked(
-                allocator,
                 &vote_state,
                 slot,
             );
