@@ -291,7 +291,6 @@ pub fn replaySlotSync(
     errdefer zone.color(0xFF0000);
 
     defer {
-        params.slot_resolver.deinit(allocator);
         for (params.entries) |entry| entry.deinit(allocator);
         allocator.free(params.entries);
     }
@@ -532,7 +531,6 @@ fn prepareSlot(
         state.allocator,
         slot_account_reader,
     ) orelse return error.MissingSlotHashesSysvar;
-    errdefer slot_hashes.deinit(state.allocator);
 
     const slot_resolver = replay.resolve_lookup.SlotResolver{
         .slot = slot,
@@ -935,7 +933,7 @@ fn testReplaySlot(
             .svm_params = state.svmParams(),
             .committer = state.committer(),
             .verify_ticks_params = verify_ticks_params,
-            .slot_resolver = try state.resolver(allocator),
+            .slot_resolver = state.resolver(),
         };
 
         break :result try replaySlotSync(allocator, logger, params);
@@ -962,7 +960,7 @@ fn testReplaySlot(
             .svm_params = state.svmParams(),
             .committer = state.committer(),
             .verify_ticks_params = verify_ticks_params,
-            .slot_resolver = try state.resolver(allocator),
+            .slot_resolver = state.resolver(),
         };
 
         var thread_pool = ThreadPool.init(.{});
@@ -1019,13 +1017,13 @@ pub const TestState = struct {
     exit: Atomic(bool),
 
     pub fn init(allocator: Allocator) !TestState {
-        const epoch_stakes = try sig.core.EpochStakes.init(allocator);
+        const epoch_stakes: sig.core.EpochStakes = .EMPTY;
         errdefer epoch_stakes.deinit(allocator);
 
-        var slot_state = try sig.core.SlotState.genesis(allocator);
+        var slot_state: sig.core.SlotState = .genesis;
         errdefer slot_state.deinit(allocator);
 
-        var stakes_cache = try sig.core.StakesCache.init(allocator);
+        var stakes_cache = sig.core.StakesCache.EMPTY;
         errdefer stakes_cache.deinit(allocator);
 
         const max_age = sig.core.BlockhashQueue.MAX_RECENT_BLOCKHASHES / 2;
@@ -1101,12 +1099,12 @@ pub const TestState = struct {
         };
     }
 
-    pub fn resolver(self: *TestState, allocator: Allocator) !SlotResolver {
+    pub fn resolver(self: *TestState) SlotResolver {
         return .{
             .slot = self.slot,
             .account_reader = self.account_map.accountReader().forSlot(&self.ancestors),
             .reserved_accounts = &.empty,
-            .slot_hashes = try SlotHashes.init(allocator),
+            .slot_hashes = .DEFAULT,
         };
     }
 

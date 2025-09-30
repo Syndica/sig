@@ -1747,6 +1747,7 @@ test "maybeRefreshLastVote - successfully refreshed and mark last_vote_tx_blockh
 }
 
 test "checkAndHandleNewRoot - missing slot" {
+    const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(91);
     const random = prng.random();
 
@@ -1755,43 +1756,44 @@ test "checkAndHandleNewRoot - missing slot" {
         .hash = Hash.initRandom(random),
     };
 
-    var fixture = try TestFixture.init(testing.allocator, root);
-    defer fixture.deinit(testing.allocator);
+    var fixture = try TestFixture.init(allocator, root);
+    defer fixture.deinit(allocator);
 
     // Build a tracked slot set wrapped in RwMux
-    const slot_tracker_val: SlotTracker = SlotTracker{ .root = root.slot, .slots = .{} };
-    var slot_tracker = RwMux(SlotTracker).init(slot_tracker_val);
+    var slot_tracker = RwMux(SlotTracker).init(.{ .root = root.slot, .slots = .empty });
     defer {
         const ptr, var lg = slot_tracker.writeWithLock();
         defer lg.unlock();
-        ptr.deinit(testing.allocator);
+        ptr.deinit(allocator);
     }
 
     {
-        const constants = try SlotConstants.genesis(testing.allocator, .initRandom(random));
-        errdefer constants.deinit(testing.allocator);
-        var state = try SlotState.genesis(testing.allocator);
-        errdefer state.deinit(testing.allocator);
+        const constants = try SlotConstants.genesis(allocator, .initRandom(random));
+        errdefer constants.deinit(allocator);
+
+        var state: SlotState = .genesis;
+        errdefer state.deinit(allocator);
+
         const ptr, var lg = slot_tracker.writeWithLock();
         defer lg.unlock();
-        try ptr.put(testing.allocator, root.slot, .{
+        try ptr.put(allocator, root.slot, .{
             .constants = constants,
             .state = state,
         });
     }
 
     const logger = .noop;
-    var registry = sig.prometheus.Registry(.{}).init(testing.allocator);
+    var registry = sig.prometheus.Registry(.{}).init(allocator);
     defer registry.deinit();
 
-    var test_state = try sig.ledger.tests.initTestLedger(testing.allocator, @src(), logger);
+    var test_state = try sig.ledger.tests.initTestLedger(allocator, @src(), logger);
     defer test_state.deinit();
 
     // Try to check a slot that doesn't exist in the tracker
     const slot_tracker_ptr, var slot_tracker_lg = slot_tracker.writeWithLock();
     defer slot_tracker_lg.unlock();
     const result = checkAndHandleNewRoot(
-        testing.allocator,
+        allocator,
         test_state.resultWriter(),
         slot_tracker_ptr,
         &fixture.progress,
@@ -1803,6 +1805,7 @@ test "checkAndHandleNewRoot - missing slot" {
 }
 
 test "checkAndHandleNewRoot - missing hash" {
+    const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(91);
     const random = prng.random();
 
@@ -1811,41 +1814,42 @@ test "checkAndHandleNewRoot - missing hash" {
         .hash = Hash.initRandom(random),
     };
 
-    var fixture = try TestFixture.init(testing.allocator, root);
-    defer fixture.deinit(testing.allocator);
+    var fixture = try TestFixture.init(allocator, root);
+    defer fixture.deinit(allocator);
 
-    const slot_tracker_val2: SlotTracker = SlotTracker{ .root = root.slot, .slots = .{} };
-    var slot_tracker2 = RwMux(SlotTracker).init(slot_tracker_val2);
+    var slot_tracker2 = RwMux(SlotTracker).init(.{ .root = root.slot, .slots = .empty });
     defer {
         const ptr, var lg = slot_tracker2.writeWithLock();
         defer lg.unlock();
-        ptr.deinit(testing.allocator);
+        ptr.deinit(allocator);
     }
     {
-        const constants = try SlotConstants.genesis(testing.allocator, .initRandom(random));
-        errdefer constants.deinit(testing.allocator);
-        var state = try SlotState.genesis(testing.allocator);
-        errdefer state.deinit(testing.allocator);
+        const constants = try SlotConstants.genesis(allocator, .initRandom(random));
+        errdefer constants.deinit(allocator);
+
+        var state: SlotState = .genesis;
+        errdefer state.deinit(allocator);
+
         const ptr, var lg = slot_tracker2.writeWithLock();
         defer lg.unlock();
-        try ptr.put(testing.allocator, root.slot, .{
+        try ptr.put(allocator, root.slot, .{
             .constants = constants,
             .state = state,
         });
     }
 
     const logger = .noop;
-    var registry = sig.prometheus.Registry(.{}).init(testing.allocator);
+    var registry = sig.prometheus.Registry(.{}).init(allocator);
     defer registry.deinit();
 
-    var test_state = try sig.ledger.tests.initTestLedger(testing.allocator, @src(), logger);
+    var test_state = try sig.ledger.tests.initTestLedger(allocator, @src(), logger);
     defer test_state.deinit();
 
     // Try to check a slot that doesn't exist in the tracker
     const slot_tracker2_ptr, var slot_tracker2_lg = slot_tracker2.writeWithLock();
     defer slot_tracker2_lg.unlock();
     const result = checkAndHandleNewRoot(
-        testing.allocator,
+        allocator,
         test_state.resultWriter(),
         slot_tracker2_ptr,
         &fixture.progress,
@@ -1898,6 +1902,7 @@ test "checkAndHandleNewRoot - empty slot tracker" {
 }
 
 test "checkAndHandleNewRoot - success" {
+    const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(91);
     const random = prng.random();
 
@@ -1918,37 +1923,41 @@ test "checkAndHandleNewRoot - success" {
         .hash = Hash.initRandom(random),
     };
 
-    var fixture = try TestFixture.init(testing.allocator, root);
-    defer fixture.deinit(testing.allocator);
+    var fixture = try TestFixture.init(allocator, root);
+    defer fixture.deinit(allocator);
 
-    const slot_tracker_val4: SlotTracker = SlotTracker{ .root = root.slot, .slots = .{} };
-    var slot_tracker4 = RwMux(SlotTracker).init(slot_tracker_val4);
+    var slot_tracker4 = RwMux(SlotTracker).init(.{ .root = root.slot, .slots = .empty });
     defer {
         const ptr, var lg = slot_tracker4.writeWithLock();
         defer lg.unlock();
-        ptr.deinit(testing.allocator);
+        ptr.deinit(allocator);
     }
 
     {
-        var constants2 = try SlotConstants.genesis(testing.allocator, .initRandom(random));
-        errdefer constants2.deinit(testing.allocator);
-        var constants3 = try SlotConstants.genesis(testing.allocator, .initRandom(random));
-        errdefer constants3.deinit(testing.allocator);
-        var state2 = try SlotState.genesis(testing.allocator);
-        errdefer state2.deinit(testing.allocator);
-        var state3 = try SlotState.genesis(testing.allocator);
-        errdefer state3.deinit(testing.allocator);
+        var constants2 = try SlotConstants.genesis(allocator, .initRandom(random));
+        errdefer constants2.deinit(allocator);
+
+        var constants3 = try SlotConstants.genesis(allocator, .initRandom(random));
+        errdefer constants3.deinit(allocator);
+
+        var state2: SlotState = .genesis;
+        errdefer state2.deinit(allocator);
+
+        var state3: SlotState = .genesis;
+        errdefer state3.deinit(allocator);
+
         constants2.parent_slot = hash1.slot;
         constants3.parent_slot = hash2.slot;
         state2.hash = .init(hash2.hash);
         state3.hash = .init(hash3.hash);
+
         const ptr, var lg = slot_tracker4.writeWithLock();
         defer lg.unlock();
-        try ptr.put(testing.allocator, hash2.slot, .{
+        try ptr.put(allocator, hash2.slot, .{
             .constants = constants2,
             .state = state2,
         });
-        try ptr.put(testing.allocator, hash3.slot, .{
+        try ptr.put(allocator, hash3.slot, .{
             .constants = constants3,
             .state = state3,
         });
@@ -1963,15 +1972,15 @@ test "checkAndHandleNewRoot - success" {
     });
 
     try fixture.fillFork(
-        testing.allocator,
+        allocator,
         .{ .root = root, .data = trees1 },
         .active,
     );
 
-    var registry = sig.prometheus.Registry(.{}).init(testing.allocator);
+    var registry = sig.prometheus.Registry(.{}).init(allocator);
     defer registry.deinit();
 
-    var test_state = try sig.ledger.tests.initTestLedger(testing.allocator, @src(), .noop);
+    var test_state = try sig.ledger.tests.initTestLedger(allocator, @src(), .noop);
     defer test_state.deinit();
 
     try testing.expectEqual(4, fixture.progress.map.count());
@@ -1980,7 +1989,7 @@ test "checkAndHandleNewRoot - success" {
         const slot_tracker4_ptr, var slot_tracker4_lg = slot_tracker4.writeWithLock();
         defer slot_tracker4_lg.unlock();
         try checkAndHandleNewRoot(
-            testing.allocator,
+            allocator,
             test_state.resultWriter(),
             slot_tracker4_ptr,
             &fixture.progress,

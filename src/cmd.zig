@@ -1947,8 +1947,8 @@ fn replayDependencies(
     );
     errdefer root_slot_constants.deinit(allocator);
 
-    const lt_hash = if (collapsed_manifest.bank_extra.accounts_lt_hash) |lt_hash|
-        sig.core.LtHash{ .data = lt_hash }
+    const lt_hash: ?sig.core.LtHash = if (collapsed_manifest.bank_extra.accounts_lt_hash) |lt_hash|
+        .{ .data = lt_hash }
     else
         null;
 
