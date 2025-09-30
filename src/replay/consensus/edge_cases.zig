@@ -1,6 +1,6 @@
 const std = @import("std");
-const sig = @import("../sig.zig");
-const replay = @import("lib.zig");
+const sig = @import("../../sig.zig");
+const replay = @import("../lib.zig");
 
 const Allocator = std.mem.Allocator;
 const collections = sig.utils.collections;
@@ -13,7 +13,7 @@ const SlotTracker = sig.replay.trackers.SlotTracker;
 
 const ProgressMap = sig.consensus.ProgressMap;
 const HeaviestSubtreeForkChoice = sig.consensus.HeaviestSubtreeForkChoice;
-const AncestorHashesReplayUpdate = replay.consensus.AncestorHashesReplayUpdate;
+const AncestorHashesReplayUpdate = replay.consensus.core.AncestorHashesReplayUpdate;
 const GossipVerifiedVoteHash = sig.consensus.vote_listener.GossipVerifiedVoteHash;
 const ThresholdConfirmedSlot = sig.consensus.vote_listener.ThresholdConfirmedSlot;
 const LatestValidatorVotes = sig.consensus.latest_validator_votes.LatestValidatorVotes;
@@ -41,8 +41,8 @@ pub fn processEdgeCases(
         latest_validator_votes: *LatestValidatorVotes,
         slot_data: *SlotData,
 
-        senders: replay.ConsensusState.Senders,
-        receivers: replay.ConsensusState.Receivers,
+        senders: replay.TowerConsensus.Senders,
+        receivers: replay.TowerConsensus.Receivers,
     },
 ) !ProcessEdgeCaseTimings {
     var timer = try sig.time.Timer.start();
@@ -1463,10 +1463,15 @@ const TestData = struct {
         );
         errdefer slot_tracker.deinit(allocator);
 
-        var fork_choice: HeaviestSubtreeForkChoice = try .init(allocator, .from(logger), .{
-            .slot = root_slot,
-            .hash = slot_infos[root_slot].hash,
-        });
+        var fork_choice: HeaviestSubtreeForkChoice = try .init(
+            allocator,
+            .from(logger),
+            .{
+                .slot = root_slot,
+                .hash = slot_infos[root_slot].hash,
+            },
+            sig.prometheus.globalRegistry(),
+        );
         errdefer fork_choice.deinit();
 
         var progress: ProgressMap = .INIT;

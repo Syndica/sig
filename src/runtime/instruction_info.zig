@@ -12,13 +12,14 @@ const Transaction = sig.core.Transaction;
 pub const InstructionInfo = struct {
     program_meta: ProgramMeta,
     account_metas: AccountMetas,
+    dedupe_map: [MAX_ACCOUNT_METAS]u8,
     instruction_data: []const u8,
     // Initial account lamports are computed and set immediately before
     // pushing an instruction onto the stack.
     initial_account_lamports: u128 = 0,
 
-    /// [fd] https://github.com/firedancer-io/firedancer/blob/dfadb7d33683aa8711dfe837282ad0983d3173a0/src/flamenco/runtime/info/fd_instr_info.h#L12
-    pub const MAX_ACCOUNT_METAS: usize = 256;
+    /// [agave] https://github.com/anza-xyz/agave/blob/v3.0/transaction-context/src/lib.rs#L23
+    pub const MAX_ACCOUNT_METAS = 256;
 
     /// Errors resulting from instructions with account metas > MAX_ACCOUNT_METAS are handled during
     /// transaction execution. We construct the account metas before transaction execution, so using an
@@ -34,26 +35,26 @@ pub const InstructionInfo = struct {
     pub const AccountMeta = struct {
         pubkey: Pubkey,
         index_in_transaction: u16,
-        // Non Cpi:
-        // - the index of the account in the transaction
-        // - [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/svm/src/message_processor.rs#L63
-        // Cpi:
-        // - the index of the account in the calling instruction context
-        // - [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L363-L376
-        index_in_caller: u16,
-        // Non Cpi:
-        // - the first index of the account in the called instruction context
-        // - [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/svm/src/message_processor.rs#L52-L60
-        // Cpi:
-        // - the index of the account in the called instruction context
-        // - [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L380
-        index_in_callee: u16,
         is_signer: bool,
         is_writable: bool,
     };
 
     pub fn deinit(self: InstructionInfo, allocator: std.mem.Allocator) void {
         allocator.free(self.instruction_data);
+    }
+
+    /// [agave] https://github.com/anza-xyz/agave/blob/v3.0/transaction-context/src/lib.rs#L690
+    pub fn getAccountInstructionIndex(
+        self: *const InstructionInfo,
+        index_in_transaction: u16,
+    ) InstructionError!u16 {
+        if (index_in_transaction < self.dedupe_map.len) {
+            const index = self.dedupe_map[index_in_transaction];
+            if (index < self.account_metas.len) {
+                return index;
+            }
+        }
+        return error.MissingAccount;
     }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/134be7c14066ea00c9791187d6bbc4795dd92f0e/sdk/src/transaction_context.rs#L523
