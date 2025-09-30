@@ -715,6 +715,7 @@ pub const LogHelper = struct {
             active_slots_hash.eql(last_slots)
         else
             false;
+        self.last_active_slots_hash = active_slots_hash;
 
         self.logger
             .entry(if (self.slots_are_the_same) .debug else .info)
