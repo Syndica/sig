@@ -41,7 +41,12 @@ pub fn loadPrograms(
     errdefer programs.deinit(allocator);
 
     for (accounts.keys(), accounts.values()) |pubkey, account| {
-        if (!account.executable) continue;
+        const executable = account.executable or
+            account.owner.equals(&bpf_loader.v1.ID) or 
+            account.owner.equals(&bpf_loader.v2.ID) or
+            account.owner.equals(&bpf_loader.v3.ID) or
+            account.owner.equals(&bpf_loader.v4.ID);
+        if (!executable) continue;
 
         var loaded_program = try loadProgram(
             allocator,
