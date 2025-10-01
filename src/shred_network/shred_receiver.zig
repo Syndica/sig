@@ -110,7 +110,10 @@ pub const ShredReceiver = struct {
 
         // Handle all incoming shreds from the channel.
         while (!exit.shouldExit()) {
-            defer for (shred_batch.items(.shred)) |shred| shred.deinit();
+            defer {
+                for (shred_batch.items(.shred)) |shred| shred.deinit();
+                shred_batch.clearRetainingCapacity();
+            }
 
             incoming_shreds.waitToReceive(exit) catch break;
             while (incoming_shreds.tryReceive()) |packet| {
@@ -123,7 +126,7 @@ pub const ShredReceiver = struct {
                     &verified_merkle_roots,
                     verifier_metrics,
                     metrics,
-                )) |shred| shred_batch.appendAssumeCapacity(.{
+                )) |shred| try shred_batch.append(self.allocator, .{
                     .shred = shred,
                     .is_repair = packet.flags.isSet(.repair),
                 });
