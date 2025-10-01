@@ -485,7 +485,7 @@ test "TransactionScheduler: happy path" {
             .{
                 .slot = state.svmParams().slot,
                 .account_reader = .noop,
-                .reserved_accounts = &.empty,
+                .reserved_accounts = &.EMPTY,
                 .slot_hashes = .DEFAULT,
             },
         );
@@ -497,7 +497,7 @@ test "TransactionScheduler: happy path" {
             .{
                 .slot = state.svmParams().slot,
                 .account_reader = .noop,
-                .reserved_accounts = &.empty,
+                .reserved_accounts = &.EMPTY,
                 .slot_hashes = .DEFAULT,
             },
         );
@@ -555,7 +555,7 @@ test "TransactionScheduler: duplicate batch passes through to svm" {
             .{
                 .slot = state.svmParams().slot,
                 .account_reader = .noop,
-                .reserved_accounts = &.empty,
+                .reserved_accounts = &.EMPTY,
                 .slot_hashes = .DEFAULT,
             },
         );
@@ -567,7 +567,7 @@ test "TransactionScheduler: duplicate batch passes through to svm" {
             .{
                 .slot = state.svmParams().slot,
                 .account_reader = .noop,
-                .reserved_accounts = &.empty,
+                .reserved_accounts = &.EMPTY,
                 .slot_hashes = .DEFAULT,
             },
         );
@@ -625,7 +625,7 @@ test "TransactionScheduler: failed account locks" {
             .{
                 .slot = state.svmParams().slot,
                 .account_reader = .noop,
-                .reserved_accounts = &.empty,
+                .reserved_accounts = &.EMPTY,
                 .slot_hashes = .DEFAULT,
             },
         );
@@ -690,7 +690,7 @@ test "TransactionScheduler: signature verification failure" {
             .{
                 .slot = state.svmParams().slot,
                 .account_reader = .noop,
-                .reserved_accounts = &.empty,
+                .reserved_accounts = &.EMPTY,
                 .slot_hashes = .DEFAULT,
             },
         );
@@ -702,7 +702,7 @@ test "TransactionScheduler: signature verification failure" {
             .{
                 .slot = state.svmParams().slot,
                 .account_reader = .noop,
-                .reserved_accounts = &.empty,
+                .reserved_accounts = &.EMPTY,
                 .slot_hashes = .DEFAULT,
             },
         );
@@ -779,7 +779,7 @@ test "TransactionScheduler: does not send replay vote for failed execution" {
         .{
             .slot = state.svmParams().slot,
             .account_reader = state.account_map.accountReader().forSlot(&state.ancestors),
-            .reserved_accounts = &.empty,
+            .reserved_accounts = &.EMPTY,
             .slot_hashes = .DEFAULT,
         },
     );
@@ -981,7 +981,7 @@ test "TransactionScheduler: sends replay vote after successful execution" {
         .{
             .slot = state.svmParams().slot,
             .account_reader = state.account_map.accountReader().forSlot(&state.ancestors),
-            .reserved_accounts = &.empty,
+            .reserved_accounts = &.EMPTY,
             .slot_hashes = slot_hashes,
         },
     );
