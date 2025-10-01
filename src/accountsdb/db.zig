@@ -2027,11 +2027,17 @@ pub const AccountsDB = struct {
             });
         }
 
+        // NOTE: take note of the ordering here between the two locks(!) reversal could cause a deadlock.
+        const slot_ref_map, var slot_ref_map_lg =
+            self.account_index.slot_reference_map.writeWithLock();
+        defer slot_ref_map_lg.unlock();
+
         // look for existing account at this slot and overwrite in-place if present.
         search_and_overwrite: {
-            const head_ref, var lock = self.account_index.pubkey_ref_map.getRead(&pubkey) orelse
+            const head_ref, var head_ref_lg =
+                self.account_index.pubkey_ref_map.getWrite(&pubkey) orelse
                 break :search_and_overwrite;
-            defer lock.unlock();
+            defer head_ref_lg.unlock();
 
             const min_slot = if (slot == 0) null else slot - 1;
             const ref = slotListMaxWithinBounds(head_ref.ref_ptr, min_slot, slot) orelse
@@ -2042,8 +2048,9 @@ pub const AccountsDB = struct {
                 .file => return error.CannotWriteRootedSlot,
             };
 
-            const unrooted_accounts, var unrooted_lock = self.unrooted_accounts.readWithLock();
-            defer unrooted_lock.unlock();
+            const unrooted_accounts, var unrooted_accounts_lg =
+                self.unrooted_accounts.writeWithLock();
+            defer unrooted_accounts_lg.unlock();
 
             const slot_list = unrooted_accounts.get(ref.slot) orelse {
                 // the index is telling us it contains a reference to an unrooted slot which doesn't exist.
@@ -2066,8 +2073,11 @@ pub const AccountsDB = struct {
             defer unrooted_accounts_lg.unlock();
 
             const entry = try unrooted_accounts.getOrPut(slot);
-
             if (!entry.found_existing) entry.value_ptr.* = .empty;
+            errdefer if (!entry.found_existing) {
+                entry.value_ptr.deinit(self.allocator);
+                unrooted_accounts.removeByPtr(entry.key_ptr);
+            };
             try entry.value_ptr.append(
                 self.allocator,
                 .{ .account = duplicated, .pubkey = pubkey },
@@ -2075,17 +2085,12 @@ pub const AccountsDB = struct {
             inserted_duplicate = true;
         }
 
-        // prealloc the ref map space
-        {
-            const shard_map_rw = self.account_index.pubkey_ref_map.getShard(&pubkey);
-            const shard_map, var shard_map_lg = shard_map_rw.writeWithLock();
-            defer shard_map_lg.unlock();
-
-            try shard_map.ensureTotalCapacity(1 + shard_map.count());
-        }
-
         // update index
-        self.expandSlotRefsAndInsert(slot, &.{pubkey}) catch |err| switch (err) {
+        self.expandSlotRefsAndInsertWithSlotMapLocked(
+            slot,
+            &.{pubkey},
+            slot_ref_map,
+        ) catch |err| switch (err) {
             error.OutOfMemory,
             error.AllocTooBig,
             error.AllocFailed,
@@ -2099,12 +2104,24 @@ pub const AccountsDB = struct {
         };
     }
 
-    fn expandSlotRefsAndInsert(self: *AccountsDB, slot: Slot, pubkeys: []const Pubkey) !void {
-        std.debug.assert(pubkeys.len > 0);
-
+    fn expandSlotRefsAndInsert(
+        self: *AccountsDB,
+        slot: Slot,
+        pubkeys: []const Pubkey,
+    ) !void {
         // NOTE: take note of the ordering here between the two locks(!) reversal could cause a deadlock.
         const slot_ref_map, var lock = self.account_index.slot_reference_map.writeWithLock();
         defer lock.unlock();
+        try self.expandSlotRefsAndInsertWithSlotMapLocked(slot, pubkeys, slot_ref_map);
+    }
+
+    fn expandSlotRefsAndInsertWithSlotMapLocked(
+        self: *AccountsDB,
+        slot: Slot,
+        pubkeys: []const Pubkey,
+        slot_ref_map: *AccountIndex.SlotRefMap,
+    ) !void {
+        std.debug.assert(pubkeys.len > 0);
         const reference_manager = self.account_index.reference_manager;
 
         const slot_gop = try slot_ref_map.getOrPut(slot);
@@ -4827,4 +4844,35 @@ test "loadAndVerifyAccountsFiles ref manager expand" {
     // If we've made more account ref capacity per slot than we've estimated, we have expanded our
     // reference manager.
     try std.testing.expect(ref_capacity / n_slots > accounts_per_file_estimate);
+}
+
+// TODO: this test is dumb, remove it
+test "CannotWriteRootedSlot overwrite in file" {
+    const allocator = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    var db: AccountsDB = try .init(.minimal(allocator, .FOR_TESTS, tmp_dir.dir, null));
+    defer db.deinit();
+
+    var manager: sig.accounts_db.manager.Manager = try .init(allocator, &db, .{
+        .snapshot = null,
+    });
+    defer manager.deinit(allocator);
+
+    const pk: Pubkey = .{ .data = @splat(7) };
+    const asd: AccountSharedData = .{
+        .data = &.{},
+        .executable = false,
+        .lamports = 32,
+        .owner = .ZEROES,
+        .rent_epoch = 0,
+    };
+
+    try std.testing.expectEqual({}, db.putAccount(1, pk, asd));
+    db.max_slots.set(.{ .rooted = 6, .flushed = null });
+    try manager.manage(allocator);
+    db.max_slots.set(.{ .rooted = 0, .flushed = null });
+    try std.testing.expectError(error.CannotWriteRootedSlot, db.putAccount(1, pk, asd));
 }
