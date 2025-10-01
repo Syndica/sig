@@ -1140,7 +1140,7 @@ fn validator(
 
         try epoch_context_manager.put(epoch, .{
             .staked_nodes = staked_nodes_cloned,
-            .leader_schedule = leader_schedule,
+            .leader_schedule = leader_schedule.slot_leaders,
         });
     }
 

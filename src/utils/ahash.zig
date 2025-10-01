@@ -14,7 +14,30 @@ pub const AHasher = struct {
     const MULTIPLE: u64 = 6364136223846793005;
     const ROTATE: u32 = 23;
 
-    pub fn fromSeed(seed: AHashSeed) AHasher {
+    pub const Seed = struct {
+        k0: u64,
+        k1: u64,
+        k2: u64,
+        k3: u64,
+
+        const PI2 = [_]u64{
+            0x4528_21e6_38d0_1377,
+            0xbe54_66cf_34e9_0c6c,
+            0xc0ac_29b7_c97c_50dd,
+            0x3f84_d5b5_b547_0917,
+        };
+
+        pub fn fromSeeds(k0: u64, k1: u64, k2: u64, k3: u64) Seed {
+            return .{
+                .k0 = k0 ^ PI2[0],
+                .k1 = k1 ^ PI2[1],
+                .k2 = k2 ^ PI2[2],
+                .k3 = k3 ^ PI2[3],
+            };
+        }
+    };
+
+    pub fn fromSeed(seed: Seed) AHasher {
         return .{
             .buffer = seed.k0,
             .pad = seed.k1,
@@ -128,38 +151,6 @@ pub const AHasher = struct {
     }
 };
 
-pub const AHashSeed = struct {
-    k0: u64,
-    k1: u64,
-    k2: u64,
-    k3: u64,
-
-    const PI2 = [_]u64{
-        0x4528_21e6_38d0_1377,
-        0xbe54_66cf_34e9_0c6c,
-        0xc0ac_29b7_c97c_50dd,
-        0x3f84_d5b5_b547_0917,
-    };
-
-    pub fn initRandom(random: Random) AHashSeed {
-        return AHashSeed.fromSeeds(
-            random.int(u64),
-            random.int(u64),
-            random.int(u64),
-            random.int(u64),
-        );
-    }
-
-    pub fn fromSeeds(k0: u64, k1: u64, k2: u64, k3: u64) AHashSeed {
-        return .{
-            .k0 = k0 ^ PI2[0],
-            .k1 = k1 ^ PI2[1],
-            .k2 = k2 ^ PI2[2],
-            .k3 = k3 ^ PI2[3],
-        };
-    }
-};
-
 inline fn readFirstInt(comptime T: type, data: []const u8) T {
     return std.mem.readInt(T, data[0..@sizeOf(T)], .little);
 }
@@ -178,7 +169,7 @@ inline fn foldedMultiply(s: u64, by: u64) u64 {
 
 test "AHasher.write" {
     // Test cases are derived from running the reference implementation in Rust.
-    const random_state = AHashSeed.fromSeeds(0, 0, 0, 0);
+    const random_state = AHasher.Seed.fromSeeds(0, 0, 0, 0);
     {
         var hasher = AHasher.fromSeed(random_state);
         hasher.write(&[_]u8{});
@@ -208,7 +199,7 @@ test "AHasher.write" {
 
 test "AHasher.hash" {
     // Test cases are derived from running the reference implementation in Rust.
-    const random_state = AHashSeed.fromSeeds(0, 0, 0, 0);
+    const random_state = AHasher.Seed.fromSeeds(0, 0, 0, 0);
     {
         var hasher = AHasher.fromSeed(random_state);
         const data: u32 = 10;

@@ -20,6 +20,7 @@ const SlotAndHash = sig.core.hash.SlotAndHash;
 const SlotHistory = sig.runtime.sysvar.SlotHistory;
 const VersionedEpochStakes = sig.core.VersionedEpochStakes;
 const UnixTimestamp = sig.core.UnixTimestamp;
+const LeaderSchedule = sig.core.leader_schedule.LeaderSchedule;
 
 const FileId = sig.accounts_db.accounts_file.FileId;
 
@@ -622,16 +623,17 @@ pub const Manifest = struct {
         allocator: std.mem.Allocator,
         /// Default is the bank's epoch.
         custom_epoch: ?Epoch,
-    ) !sig.core.leader_schedule.LeaderSchedule {
+    ) !LeaderSchedule {
         const epoch = custom_epoch orelse self.bank_fields.epoch;
         const slots_in_epoch =
             self.bank_fields.epoch_schedule.getSlotsInEpoch(self.bank_fields.epoch);
         const staked_nodes = try self.epochStakes(epoch);
-        return .{
-            .allocator = allocator,
-            .slot_leaders = try sig.core.leader_schedule.LeaderSchedule
-                .fromStakedNodes(allocator, epoch, slots_in_epoch, staked_nodes),
-        };
+        return try .fromStakedNodes(
+            allocator,
+            epoch,
+            slots_in_epoch,
+            staked_nodes,
+        );
     }
 };
 

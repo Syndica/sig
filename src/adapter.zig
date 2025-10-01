@@ -23,55 +23,53 @@ pub const EpochContextManager = struct {
         std.mem.Allocator,
     );
 
-    const Self = @This();
-
     /// all contexts that are `put` into this context manager must be
     /// allocated using the same allocator passed here.
-    pub fn init(allocator: Allocator, schedule: EpochSchedule) Allocator.Error!Self {
+    pub fn init(allocator: Allocator, schedule: EpochSchedule) Allocator.Error!EpochContextManager {
         return .{
             .schedule = schedule,
             .contexts = try ContextWindow.init(allocator, 3, 0, allocator),
         };
     }
 
-    pub fn deinit(self: Self) void {
+    pub fn deinit(self: EpochContextManager) void {
         self.contexts.deinit();
     }
 
-    pub fn put(self: *Self, epoch: Epoch, context: sig.core.EpochContext) !void {
+    pub fn put(self: *EpochContextManager, epoch: Epoch, context: sig.core.EpochContext) !void {
         try self.contexts.put(epoch, context);
     }
 
     /// call `release` when done with pointer
-    pub fn get(self: *Self, epoch: Epoch) ?*const sig.core.EpochContext {
+    pub fn get(self: *EpochContextManager, epoch: Epoch) ?*const sig.core.EpochContext {
         return self.contexts.get(@intCast(epoch));
     }
 
-    pub fn contains(self: *Self, epoch: Epoch) bool {
+    pub fn contains(self: *EpochContextManager, epoch: Epoch) bool {
         return self.contexts.contains(@intCast(epoch));
     }
 
-    pub fn setEpoch(self: *Self, epoch: Epoch) !void {
+    pub fn setEpoch(self: *EpochContextManager, epoch: Epoch) !void {
         try self.contexts.realign(@intCast(epoch));
     }
 
-    pub fn setSlot(self: *Self, slot: Slot) !void {
+    pub fn setSlot(self: *EpochContextManager, slot: Slot) !void {
         try self.contexts.realign(@intCast(self.schedule.getEpoch(slot)));
     }
 
-    pub fn release(self: *Self, context: *const sig.core.EpochContext) void {
+    pub fn release(self: *EpochContextManager, context: *const sig.core.EpochContext) void {
         self.contexts.release(context);
     }
 
-    pub fn getLeader(self: *Self, slot: Slot) ?sig.core.Pubkey {
+    pub fn getLeader(self: *EpochContextManager, slot: Slot) ?sig.core.Pubkey {
         const epoch, const slot_index = self.schedule.getEpochAndSlotIndex(slot);
         const context = self.contexts.get(epoch) orelse return null;
         defer self.contexts.release(context);
         return context.leader_schedule[slot_index];
     }
 
-    pub fn slotLeaders(self: *Self) sig.core.leader_schedule.SlotLeaders {
-        return sig.core.leader_schedule.SlotLeaders.init(self, getLeader);
+    pub fn slotLeaders(self: *EpochContextManager) sig.core.leader_schedule.SlotLeaders {
+        return .{ .ecm = self };
     }
 };
 
@@ -146,8 +144,11 @@ pub const RpcEpochContextService = struct {
     fn getLeaderSchedule(self: *Self, slot: sig.core.Slot) ![]const sig.core.Pubkey {
         const response = try self.rpc_client.getLeaderSchedule(.{ .slot = slot });
         defer response.deinit();
-        const rpc_schedule = (try response.result()).value;
-        const schedule = try leader_schedule.LeaderSchedule.fromMap(self.allocator, rpc_schedule);
+        const rpc_schedule = try response.result();
+        const schedule = try leader_schedule.LeaderSchedule.fromMap(
+            self.allocator,
+            &rpc_schedule.value,
+        );
         return schedule.slot_leaders;
     }
 };

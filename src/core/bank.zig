@@ -652,7 +652,7 @@ pub const UnusedAccounts = struct {
             var managed = ptr.promote(allocator);
             defer ptr.* = managed.unmanaged;
 
-            try sig.rand.fillHashmapWithRng(
+            try sig.random.fillHashmapWithRng(
                 &managed,
                 random,
                 random.uintAtMost(usize, max_list_entries),

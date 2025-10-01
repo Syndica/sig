@@ -143,8 +143,8 @@ fn receiveShreds(
     metrics: *RetransmitServiceMetrics,
     overwrite_stake_for_testing: bool,
 ) !void {
-    var turbine_tree_cache = TurbineTreeCache.init(allocator);
-    defer turbine_tree_cache.deinit();
+    var turbine_tree_cache: TurbineTreeCache = .empty;
+    defer turbine_tree_cache.deinit(allocator);
 
     var deduper = try ShredDeduper(2).init(
         allocator,
@@ -280,7 +280,7 @@ fn createAndSendRetransmitInfo(
                 &epoch_context.staked_nodes,
                 overwrite_stake_for_testing,
             );
-            try turbine_tree_cache.put(epoch, turbine_tree);
+            try turbine_tree_cache.put(allocator, epoch, turbine_tree);
             break :blk turbine_tree;
         };
         defer turbine_tree.releaseUnsafe();
