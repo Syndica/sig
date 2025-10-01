@@ -1102,7 +1102,7 @@ pub const TestState = struct {
         return .{
             .slot = self.slot,
             .account_reader = self.account_map.accountReader().forSlot(&self.ancestors),
-            .reserved_accounts = &.empty,
+            .reserved_accounts = &.EMPTY,
             .slot_hashes = .DEFAULT,
         };
     }
