@@ -123,8 +123,7 @@ fn executeSyscall(
 
     // Will be deinit by utils.deinitTransactionContext
     const syscall_registry = &vm_environment.loader;
-    syscall_registry.* = try sig.vm.Environment.initV1Loader(
-        allocator,
+    syscall_registry.* = sig.vm.Environment.initV1Loader(
         tc.feature_set,
         tc.slot,
         false,
@@ -287,11 +286,11 @@ fn executeSyscall(
     utils.copyPrefix(stack, pb_syscall_invocation.stack_prefix.getSlice());
 
     const syscall_name = pb_syscall_ctx.syscall_invocation.?.function_name.getSlice();
-    const syscall_entry = syscall_registry.lookupName(syscall_name) orelse {
+    const syscall_tag = std.meta.stringToEnum(syscalls.Syscall, syscall_name) orelse {
         std.debug.print("Syscall not found: {s}\n", .{syscall_name});
         return error.SyscallNotFound;
     };
-    const syscall_fn = syscall_entry.value;
+    const syscall_fn = syscalls.Syscall.map.get(syscall_tag);
 
     var execution_error: ?sig.vm.ExecutionError = null;
     syscall_fn(&tc, &vm.memory_map, &vm.registers) catch |err| {

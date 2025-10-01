@@ -774,8 +774,10 @@ test "loadAndExecuteTransactions: no transactions" {
     defer blockhash_queue.deinit(allocator);
     const epoch_stakes = try EpochStakes.initEmptyWithGenesisStakeHistoryEntry(allocator);
     defer epoch_stakes.deinit(allocator);
-    const vm_environment = vm.Environment{};
-    defer vm_environment.deinit(allocator);
+    const vm_environment: vm.Environment = .{
+        .loader = .ALL_DISABLED,
+        .config = .{},
+    };
 
     const environment: TransactionExecutionEnvironment = .{
         .ancestors = &ancestors,
@@ -988,7 +990,10 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
         .rent_collector = &rent_collector,
         .blockhash_queue = &blockhash_queue,
         .epoch_stakes = &epoch_stakes,
-        .vm_environment = &vm.Environment{},
+        .vm_environment = &.{
+            .loader = .ALL_DISABLED,
+            .config = .{},
+        },
         .next_vm_environment = null,
         .slot = 0,
         .max_age = 0,
