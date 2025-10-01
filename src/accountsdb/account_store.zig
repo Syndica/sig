@@ -4,6 +4,7 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 const accounts_db = @import("lib.zig");
+const tracy = @import("tracy");
 
 const Allocator = std.mem.Allocator;
 
@@ -34,6 +35,9 @@ pub const AccountStore = union(enum) {
     }
 
     pub fn put(self: AccountStore, slot: Slot, address: Pubkey, account: AccountSharedData) !void {
+        const zone = tracy.Zone.init(@src(), .{ .name = "AccountStore.put" });
+        defer zone.deinit();
+
         return switch (self) {
             .accounts_db => |db| db.putAccount(slot, address, account),
             .thread_safe_map => |map| try map.put(slot, address, account),
@@ -188,6 +192,9 @@ pub const SlotAccountReader = union(enum) {
 
     /// Deinit all returned accounts using `account_reader.allocator()`
     pub fn get(self: SlotAccountReader, address: Pubkey) !?Account {
+        const zone = tracy.Zone.init(@src(), .{ .name = "SlotAccountReader.get" });
+        defer zone.deinit();
+
         return switch (self) {
             .accounts_db => |pair| {
                 const db, const ancestors = pair;

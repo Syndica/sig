@@ -349,6 +349,9 @@ pub fn deltaLtHash(
     slot: Slot,
     parent_ancestors: *const Ancestors,
 ) !LtHash {
+    const zone = tracy.Zone.init(@src(), .{ .name = "deltaLtHash" });
+    defer zone.deinit();
+
     assert(!parent_ancestors.containsSlot(slot));
 
     // TODO: perf - consider using a thread pool

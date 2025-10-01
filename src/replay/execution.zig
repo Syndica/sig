@@ -69,7 +69,7 @@ fn replayActiveSlotsAsync(state: *ReplayState) ![]struct { Slot, *ReplaySlotFutu
 
     const active_slots = try slot_tracker.activeSlots(state.allocator);
     defer state.allocator.free(active_slots);
-    state.execution_log_helper.logActiveSlots(active_slots, state.allocator);
+    state.execution_log_helper.logActiveSlots(active_slots);
 
     if (active_slots.len == 0) {
         return &.{};
@@ -143,7 +143,7 @@ fn replayActiveSlotsSync(state: *ReplayState) ![]const ReplayResult {
 
     const active_slots = try slot_tracker.activeSlots(allocator);
     defer allocator.free(active_slots);
-    state.execution_log_helper.logActiveSlots(active_slots, allocator);
+    state.execution_log_helper.logActiveSlots(active_slots);
 
     if (active_slots.len == 0) {
         return &.{};
@@ -696,30 +696,26 @@ pub const BlockError = enum {
 
 pub const LogHelper = struct {
     logger: Logger,
-    last_active_slots: ?[]const Slot,
+    // we store a hash of the previous set of active slots, to avoid printing duplicate sets
+    last_active_slots_hash: ?Hash,
     slots_are_the_same: bool,
 
     pub fn init(logger: Logger) LogHelper {
         return .{
             .logger = logger,
-            .last_active_slots = null,
+            .last_active_slots_hash = null,
             .slots_are_the_same = false,
         };
     }
 
-    /// takes ownership of active_slots,
-    pub fn logActiveSlots(
-        self: *LogHelper,
-        active_slots: []const u64,
-        deinit_allocator: Allocator,
-    ) void {
-        self.slots_are_the_same = if (self.last_active_slots) |last_slots|
-            std.mem.eql(u64, active_slots, last_slots)
+    pub fn logActiveSlots(self: *LogHelper, active_slots: []const u64) void {
+        const active_slots_hash = Hash.generateSha256(std.mem.sliceAsBytes(active_slots));
+
+        self.slots_are_the_same = if (self.last_active_slots_hash) |last_slots|
+            active_slots_hash.eql(last_slots)
         else
             false;
-
-        if (self.last_active_slots) |slots| deinit_allocator.free(slots);
-        self.last_active_slots = active_slots;
+        self.last_active_slots_hash = active_slots_hash;
 
         self.logger
             .entry(if (self.slots_are_the_same) .debug else .info)

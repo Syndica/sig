@@ -185,6 +185,9 @@ pub const SlotTracker = struct {
     //  TODO Revisit: Currently this removes all slots less than the rooted slot.
     // In Agave, only the slots not in the root path are removed.
     pub fn pruneNonRooted(self: *SlotTracker, allocator: Allocator) void {
+        const zone = tracy.Zone.init(@src(), .{ .name = "SlotTracker.pruneNonRooted" });
+        defer zone.deinit();
+
         defer tracy.plot(u32, "slots tracked", @intCast(self.slots.count()));
 
         var slice = self.slots.entries.slice();
