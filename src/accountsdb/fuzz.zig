@@ -482,6 +482,19 @@ pub fn run(
     logger.info().logf("fuzzing complete", .{});
 }
 
+test run {
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const seed: u64 = 18144;
+    try run(std.testing.allocator, .FOR_TESTS, seed, tmp_dir.dir, .{
+        .enable_manager = false,
+        .index_allocation = .ram,
+        .max_slots = 100,
+        .non_sequential_slots = true,
+    });
+}
+
 fn readRandomAccounts(
     logger: Logger,
     db: *AccountsDB,
