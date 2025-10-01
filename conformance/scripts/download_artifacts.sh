@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-# Specifically this commit of solfuzz-agave: 7e7b4935d66e17b478910b8a1e43b461cbb43f7d
+# Specifically this commit of solfuzz-agave: 6c5035af319226680dea1c1d3622200e153a80a8
 artifact_id=3999155212
 artifact_name="libsolfuzz-agave.so"
 
