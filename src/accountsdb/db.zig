@@ -56,8 +56,6 @@ const Gauge = sig.prometheus.Gauge;
 const GetMetricError = sig.prometheus.registry.GetMetricError;
 const Histogram = sig.prometheus.histogram.Histogram;
 
-const WeightedAliasSampler = sig.rand.WeightedAliasSampler;
-
 const RwMux = sig.sync.RwMux;
 
 const assert = std.debug.assert;
@@ -4435,23 +4433,16 @@ pub const BenchmarkAccountsDB = struct {
             }
         };
 
-        // set up a WeightedAliasSampler to give our accounts normally distributed access probabilities.
-        // this models how some accounts are far more commonly read than others.
-        // TODO: is this distribution accurate? Probably not, but I don't have the data.
-        const pubkeys_read_weighting = try allocator.alloc(f32, n_accounts);
-        defer allocator.free(pubkeys_read_weighting);
-        for (pubkeys_read_weighting) |*read_probability| read_probability.* = random.floatNorm(f32);
-        var indexer = try WeightedAliasSampler.init(allocator, random, pubkeys_read_weighting);
-        defer indexer.deinit(allocator);
+        var sampler = sig.random.weighted_shuffle.SamplerTree(.shift).init(0, @splat(0));
 
         // "warm up" accounts cache
         {
             var i: usize = 0;
             while (i < n_accounts) : (i += 1) {
-                const pubkey_idx = indexer.sample();
+                const index = sampler.roll(pubkeys.len);
                 const account = try accounts_db.getAccountLatest(
                     allocator,
-                    &pubkeys[pubkey_idx],
+                    &pubkeys[index],
                 ) orelse unreachable;
                 account.deinit(allocator);
             }
@@ -4462,13 +4453,13 @@ pub const BenchmarkAccountsDB = struct {
         const do_read_count = n_accounts;
         var i: usize = 0;
         while (i < do_read_count) : (i += 1) {
-            const pubkey_idx = indexer.sample();
-            const account = try accounts_db.getAccountLatest(allocator, &pubkeys[pubkey_idx]) orelse
+            const index = sampler.roll(pubkeys.len);
+            const account = try accounts_db.getAccountLatest(allocator, &pubkeys[index]) orelse
                 unreachable;
             defer account.deinit(allocator);
-            if (account.data.len() != (pubkey_idx % 1_000)) std.debug.panic(
+            if (account.data.len() != (index % 1_000)) std.debug.panic(
                 "account data len dnm {}: {} != {}",
-                .{ pubkey_idx, account.data.len(), pubkey_idx % 1_000 },
+                .{ index, account.data.len(), index % 1_000 },
             );
         }
         const read_time = timer.read();

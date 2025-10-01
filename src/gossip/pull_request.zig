@@ -175,7 +175,7 @@ pub const GossipPullFilterSet = struct {
 
         if (!can_consume_all) {
             // shuffle the indexs
-            sig.rand.shuffleFocusedRange(random, usize, indexs.items, 0, n_filters);
+            sig.random.shuffleFocusedRange(random, usize, indexs.items, 0, n_filters);
 
             // release others
             for (n_filters..set_size) |i| {

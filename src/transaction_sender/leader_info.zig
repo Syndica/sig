@@ -142,6 +142,6 @@ pub const LeaderInfo = struct {
             .getLeaderSchedule(.{ .slot = slot });
         defer rpc_leader_schedule_response.deinit();
         const rpc_leader_schedule = try rpc_leader_schedule_response.result();
-        return try LeaderSchedule.fromMap(self.allocator, rpc_leader_schedule.value);
+        return try LeaderSchedule.fromMap(self.allocator, &rpc_leader_schedule.value);
     }
 };

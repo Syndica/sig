@@ -24,7 +24,7 @@ const ShredId = sig.ledger.shred.ShredId;
 const Slot = sig.core.Slot;
 const ThreadSafeContactInfo = sig.gossip.data.ThreadSafeContactInfo;
 
-const ShredDeduper = shred_network.shred_deduper.ShredDeduper;
+const ShredDeduper = shred_network.ShredDeduper;
 const TurbineTree = shred_network.turbine_tree.TurbineTree;
 const TurbineTreeCache = shred_network.turbine_tree.TurbineTreeCache;
 
@@ -144,8 +144,8 @@ fn receiveShreds(
     metrics: *RetransmitServiceMetrics,
     overwrite_stake_for_testing: bool,
 ) !void {
-    var turbine_tree_cache = TurbineTreeCache.init(allocator);
-    defer turbine_tree_cache.deinit();
+    var turbine_tree_cache: TurbineTreeCache = .empty;
+    defer turbine_tree_cache.deinit(allocator);
 
     var deduper = try ShredDeduper(2).init(
         allocator,
@@ -281,7 +281,7 @@ fn createAndSendRetransmitInfo(
                 &epoch_context.staked_nodes,
                 overwrite_stake_for_testing,
             );
-            try turbine_tree_cache.put(epoch, turbine_tree);
+            try turbine_tree_cache.put(allocator, epoch, turbine_tree);
             break :blk turbine_tree;
         };
         defer turbine_tree.releaseUnsafe();

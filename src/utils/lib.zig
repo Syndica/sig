@@ -1,4 +1,4 @@
-pub const ahash = @import("ahash.zig");
+pub const AHasher = @import("AHasher.zig");
 pub const allocators = @import("allocators.zig");
 pub const base64 = @import("base64.zig");
 pub const bitflags = @import("bitflags.zig");

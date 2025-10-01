@@ -26,3 +26,10 @@ pub const TICKS_PER_DAY: u64 = DEFAULT_TICKS_PER_SECOND * SECONDS_PER_DAY;
 /// The number of slots per epoch after initial network warmup.
 /// 1 Epoch ~= 2 days.
 pub const DEFAULT_SLOTS_PER_EPOCH: u64 = 2 * TICKS_PER_DAY / DEFAULT_TICKS_PER_SLOT;
+
+// Ensure the number of consecutive leader slots evenly divides the number of slots per epoch.
+comptime {
+    const assert = @import("std").debug.assert;
+    const sig = @import("../sig.zig");
+    assert(DEFAULT_SLOTS_PER_EPOCH % sig.core.leader_schedule.NUM_CONSECUTIVE_LEADER_SLOTS == 0);
+}

@@ -1,5 +1,8 @@
 const std = @import("std");
 
+const chacha = @import("chacha.zig");
+pub const ChaCha = chacha.ChaCha;
+
 pub const FnvHasher = @import("fnv.zig").FnvHasher;
 pub const bn254 = @import("bn254/lib.zig");
 pub const ed25519 = @import("ed25519/lib.zig");

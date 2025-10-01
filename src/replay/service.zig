@@ -1034,7 +1034,6 @@ fn testExecuteBlock(allocator: Allocator, config: struct {
     };
 
     const expected_slot_hash = sig.core.Hash.parse("4UeCbit4YGY42p9KrDzoD1LL21Vn3htb5N5G9w6L1kUE");
-
     try std.testing.expectEqual(expected_slot_hash, actual_slot_hash);
 }
 
