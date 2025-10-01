@@ -19,7 +19,6 @@ const sig = @import("../sig.zig");
 const tracy = @import("tracy");
 
 const core = sig.core;
-const reserved_accounts = sig.core.reserved_accounts;
 
 const Allocator = std.mem.Allocator;
 const Atomic = std.atomic.Value;
@@ -119,7 +118,7 @@ pub const SlotConstants = struct {
             .epoch_reward_status = .inactive,
             .ancestors = try bank_fields.ancestors.clone(allocator),
             .feature_set = feature_set,
-            .reserved_accounts = try reserved_accounts.initForSlot(
+            .reserved_accounts = try ReservedAccounts.initForSlot(
                 allocator,
                 &feature_set,
                 bank_fields.slot,
@@ -135,7 +134,7 @@ pub const SlotConstants = struct {
         try ancestors.ancestors.put(allocator, 0, {});
         errdefer ancestors.deinit(allocator);
 
-        const reserved_accounts_data = try reserved_accounts.init(allocator);
+        const reserved_accounts_data = try ReservedAccounts.init(allocator);
         errdefer reserved_accounts_data.deinit(allocator);
 
         return .{
