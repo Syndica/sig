@@ -240,6 +240,7 @@ pub const ReplayState = struct {
         self.slot_tree.deinit(self.allocator);
         self.status_cache.deinit(self.allocator);
         self.hard_forks.deinit(self.allocator);
+        self.execution_log_helper.deinit(self.allocator);
     }
 
     fn init(deps: *Dependencies, num_threads: u32) !ReplayState {

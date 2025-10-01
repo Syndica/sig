@@ -68,7 +68,6 @@ fn replayActiveSlotsAsync(state: *ReplayState) ![]struct { Slot, *ReplaySlotFutu
     defer slot_lock.unlock();
 
     const active_slots = try slot_tracker.activeSlots(state.allocator);
-    defer state.allocator.free(active_slots);
     state.execution_log_helper.logActiveSlots(active_slots, state.allocator);
 
     if (active_slots.len == 0) {
@@ -142,7 +141,6 @@ fn replayActiveSlotsSync(state: *ReplayState) ![]const ReplayResult {
     defer slot_lock.unlock();
 
     const active_slots = try slot_tracker.activeSlots(allocator);
-    defer allocator.free(active_slots);
     state.execution_log_helper.logActiveSlots(active_slots, allocator);
 
     if (active_slots.len == 0) {
@@ -705,6 +703,11 @@ pub const LogHelper = struct {
             .last_active_slots = null,
             .slots_are_the_same = false,
         };
+    }
+
+    pub fn deinit(self: *LogHelper, deinit_allocator: Allocator) void {
+        if (self.last_active_slots) |slots| deinit_allocator.free(slots);
+        self.last_active_slots = null;
     }
 
     /// takes ownership of active_slots,
