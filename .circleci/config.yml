@@ -73,6 +73,9 @@ jobs:
       - run:
           name: Check docs
           command: python docs/check.py ./
+      - run:
+          name: Check conformance commits
+          command: conformance/scripts/verify-commits.sh
 
   build_linux:
     executor: linux-executor
