@@ -137,8 +137,9 @@ pub const Set = struct {
         };
     }
 
-    pub fn iterator(set: *const Set, slot: Slot) Iterator {
+    pub fn iterator(set: *const Set, slot: Slot, state: Iterator.State) Iterator {
         return .{
+            .state = state,
             .set = set,
             .slot = slot,
             .index = 0,
@@ -146,15 +147,21 @@ pub const Set = struct {
     }
 
     const Iterator = struct {
+        state: State,
         set: *const Set,
         slot: Slot,
         index: std.math.IntFittingRange(0, NUM_FEATURES),
+
+        const State = enum { active, inactive };
 
         pub fn next(self: *Iterator) ?Feature {
             while (true) : (self.index += 1) {
                 if (self.index == NUM_FEATURES - 1) return null;
                 const feature: Feature = @enumFromInt(self.index);
-                if (self.set.active(feature, self.slot)) {
+                const is_active = self.set.active(feature, self.slot);
+                if ((self.state == .active and is_active) or
+                    (self.state == .inactive and !is_active))
+                {
                     self.index += 1;
                     return feature;
                 }

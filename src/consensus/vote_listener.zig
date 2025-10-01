@@ -1667,7 +1667,7 @@ test "simple usage" {
             .epoch_reward_status = .inactive,
             .ancestors = .{ .ancestors = .empty },
             .feature_set = .ALL_DISABLED,
-            .reserved_accounts = .empty,
+            .reserved_accounts = .EMPTY,
         },
         .state = .genesis,
     });
@@ -1799,7 +1799,7 @@ test "check trackers" {
             .epoch_reward_status = .inactive,
             .ancestors = .{ .ancestors = .empty },
             .feature_set = .ALL_DISABLED,
-            .reserved_accounts = .empty,
+            .reserved_accounts = .EMPTY,
         },
         .state = .genesis,
     });
