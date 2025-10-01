@@ -1273,12 +1273,12 @@ test "fuzzDiskMemoryAllocator - past failures" {
             "\n>>> Test Case: {}, {}, {}\n",
             .{ seed, mmap_ratio, iterations },
         );
-        try fuzzDiskMemoryAllocator(.{
+        try fuzzer.fuzzDiskMemoryAllocator(mmap_ratio, .{
             .allocator = std.testing.allocator,
             .random = rng.random(),
             .iterations = iterations,
             .debug = debug,
-        }, mmap_ratio);
+        });
     }
 }
 
@@ -1301,198 +1301,13 @@ test "fuzzBatchAllocator - past failures" {
             "\n>>> Test Case: {}, {}, {}\n",
             .{ seed, iterations, batch_size },
         );
-        try fuzzBatchAllocator(.{
+        try fuzzer.fuzzBatchAllocator(.{
             .allocator = std.testing.allocator,
             .random = rng.random(),
             .iterations = iterations,
             .debug = debug,
         }, batch_size);
     }
-}
-
-/// args "[allocator] [max_actions]"
-pub fn runFuzzer(seed: u64, args: []const []const u8) !void {
-    var gpa: std.heap.DebugAllocator(.{}) = .init;
-
-    // parse args
-    const Fuzzable = enum { all, disk, batch };
-    var to_fuzz: Fuzzable = .all;
-    var max_actions: usize = std.math.maxInt(usize);
-    if (args.len > 0) {
-        const next_arg = args[0];
-        if (std.meta.stringToEnum(Fuzzable, next_arg)) |fuzzable| {
-            to_fuzz = fuzzable;
-            if (args.len > 1) {
-                const max_actions_str = args[1];
-                max_actions = try std.fmt.parseInt(usize, max_actions_str, 10);
-            }
-        } else {
-            max_actions = try std.fmt.parseInt(usize, next_arg, 10);
-        }
-    }
-
-    const debug = false;
-    const iterations = 10_000;
-    for (0..max_actions / iterations) |i| {
-        var rng = std.Random.DefaultPrng.init(seed +% i);
-        const random = rng.random();
-        const config: AllocatorFuzzParams = .{
-            .allocator = gpa.allocator(),
-            .random = random,
-            .iterations = iterations,
-            .debug = debug,
-        };
-
-        if (to_fuzz == .all or to_fuzz == .disk) {
-            const mmap_ratio: u16 = randomLog2(random, u16, 16);
-            std.debug.print(
-                "DiskMemoryAllocator | seed: {}, iterations: {}, mmap_ratio: {}\n",
-                .{ seed +% i, iterations, mmap_ratio },
-            );
-            try fuzzDiskMemoryAllocator(config, mmap_ratio);
-        }
-
-        if (to_fuzz == .all or to_fuzz == .batch) {
-            const batch_size: usize = randomLog2(random, usize, 30);
-            std.debug.print(
-                "BatchAllocator      | seed: {}, iterations: {}, batch_size: {}\n",
-                .{ seed +% i, iterations, batch_size },
-            );
-            try fuzzBatchAllocator(config, batch_size);
-        }
-    }
-    if (gpa.deinit() == .leak) return error.Leaked;
-}
-
-fn fuzzDiskMemoryAllocator(config: AllocatorFuzzParams, mmap_ratio: u16) !void {
-    var dir = std.testing.tmpDir(.{});
-    defer dir.cleanup();
-    var disk_memory_allocator = DiskMemoryAllocator{
-        .dir = dir.dir,
-        .logger = .noop,
-        .mmap_ratio = mmap_ratio,
-    };
-    try fuzzAllocator(config, disk_memory_allocator.allocator());
-}
-
-fn fuzzBatchAllocator(config: AllocatorFuzzParams, batch_size: usize) !void {
-    var gpa: std.heap.DebugAllocator(.{}) = .init;
-    {
-        var batch_allocator = BatchAllocator{
-            .backing_allocator = gpa.allocator(),
-            .batch_size = batch_size,
-        };
-        defer batch_allocator.deinit();
-        if (config.debug) {
-            std.debug.print(
-                \\var batch_allocator = BatchAllocator{{
-                \\    .backing_allocator = std.testing.allocator,
-                \\    .batch_size = {},
-                \\}};
-                \\defer batch_allocator.deinit();
-                \\const allocator = batch_allocator.allocator();
-                \\
-            , .{batch_size});
-        }
-        try fuzzAllocatorMultiThreaded(1, config, batch_allocator.allocator());
-        // try fuzzAllocator(config, batch_allocator.allocator());
-    }
-    if (gpa.detectLeaks()) return error.Leaked;
-}
-
-const AllocatorFuzzParams = struct {
-    /// Used for bookkeeping during the test. This allocator will *not* be fuzzed.
-    allocator: Allocator,
-    /// Determines which actions to take, and how much to allocate.
-    random: std.Random,
-    /// Number of actions to take.
-    iterations: usize,
-    /// Set true to print code that runs this specific test case.
-    debug: bool,
-};
-
-/// Randomly takes actions with the allocator: alloc, realloc, or free
-fn fuzzAllocatorMultiThreaded(
-    comptime num_threads: usize,
-    params: AllocatorFuzzParams,
-    /// The allocator being tested.
-    subject: Allocator,
-) !void {
-    var threads: [num_threads - 1]std.Thread = undefined;
-    for (0..num_threads - 1) |i| {
-        threads[i] = try std.Thread.spawn(.{}, fuzzAllocator, .{ params, subject });
-    }
-    try fuzzAllocator(params, subject);
-    for (threads) |t| t.join();
-}
-
-/// Randomly takes actions with the allocator: alloc, realloc, or free
-fn fuzzAllocator(
-    params: AllocatorFuzzParams,
-    /// The allocator being tested.
-    subject: Allocator,
-) Allocator.Error!void {
-    // all existing allocations from the allocator
-    var allocations = std.ArrayList(struct { usize, []u8 }).init(params.allocator);
-    defer {
-        for (allocations.items) |pair| {
-            const item_id, const item = pair;
-            if (params.debug) std.debug.print("allocator.free(item{});\n", .{item_id});
-            subject.free(item);
-        }
-        allocations.deinit();
-        if (params.debug) std.debug.print("done\n", .{});
-    }
-
-    // take some random actions: alloc, realloc, or free
-    var item_id_sequence: usize = 0;
-    for (0..params.iterations) |_| {
-        const Options = enum { alloc, realloc, free };
-        const choice = if (allocations.items.len == 0)
-            .alloc
-        else
-            params.random.enumValue(Options);
-        switch (choice) {
-            .alloc => {
-                const size = randomLog2(params.random, usize, 20);
-                if (params.debug) std.debug.print(
-                    "var item{} = try allocator.alloc(u8, {});\n",
-                    .{ item_id_sequence, size },
-                );
-                const data = try subject.alloc(u8, size);
-                errdefer subject.free(data);
-                @memset(data, 0x22);
-                try allocations.append(.{ item_id_sequence, data });
-                item_id_sequence += 1;
-            },
-            .realloc => {
-                const index = params.random.intRangeLessThan(usize, 0, allocations.items.len);
-                const size = randomLog2(params.random, usize, 20);
-                const item_id, const item = allocations.items[index];
-                if (params.debug) std.debug.print(
-                    "item{} = try allocator.realloc(item{}, {});\n",
-                    .{ item_id, item_id, size },
-                );
-                const new_data = try subject.realloc(item, size);
-                @memset(new_data, 0x33);
-                allocations.items[index] = .{ item_id, new_data };
-            },
-            .free => {
-                const index = params.random.intRangeLessThan(usize, 0, allocations.items.len);
-                const item_id, const data = allocations.swapRemove(index);
-                if (params.debug) std.debug.print("allocator.free(item{});\n", .{item_id});
-                subject.free(data);
-            },
-        }
-    }
-}
-
-fn randomLog2(random: std.Random, T: type, max_pow2: u64) T {
-    return @intFromFloat(std.math.pow(
-        f64,
-        2,
-        @as(f64, @floatFromInt(max_pow2)) * random.float(f64),
-    ));
 }
 
 /// An allocator that transparently limits the amount of bytes allocated with the backing_allocator.
@@ -1610,7 +1425,7 @@ pub const LimitAllocator = struct {
     }
 };
 
-test "LimitAllocator" {
+test LimitAllocator {
     var buffer: [1024]u8 = undefined;
     var fba = std.heap.FixedBufferAllocator.init(&buffer);
 
@@ -1664,3 +1479,207 @@ test "LimitAllocator" {
     try std.testing.expectEqual(limit_alloc.bytes_remaining, limit);
     try std.testing.expectEqual(fba.end_index, 0);
 }
+
+pub const fuzzer = struct {
+    const cli = @import("cli");
+
+    pub const RunCmd = struct {
+        target: Fuzzable,
+        max_actions: ?usize,
+
+        pub const Fuzzable = enum { all, disk, batch };
+
+        pub const cmd_info: cli.CommandInfo(RunCmd) = .{
+            .help = .{
+                .short = "Fuzz allocators.",
+                .long = null,
+            },
+            .sub = .{
+                .target = .{
+                    .kind = .named,
+                    .name_override = null,
+                    .alias = .none,
+                    .default_value = .all,
+                    .config = {},
+                    .help = "Which allocators to target.",
+                },
+                .max_actions = .{
+                    .kind = .named,
+                    .name_override = null,
+                    .alias = .m,
+                    .default_value = null,
+                    .config = {},
+                    .help = "The maximum number of actions before terminating the fuzzer.",
+                },
+            },
+        };
+    };
+
+    /// args "[allocator] [max_actions]"
+    pub fn run(
+        allocator: std.mem.Allocator,
+        seed: u64,
+        run_cmd: RunCmd,
+    ) !void {
+        const debug = false;
+        const iterations = 10_000;
+
+        const max_actions = run_cmd.max_actions orelse std.math.maxInt(usize);
+        for (0..max_actions / iterations) |i| {
+            var rng: std.Random.DefaultPrng = .init(seed +% i);
+            const random = rng.random();
+            const config: FuzzParams = .{
+                .allocator = allocator,
+                .random = random,
+                .iterations = iterations,
+                .debug = debug,
+            };
+
+            if (run_cmd.target == .all or run_cmd.target == .disk) {
+                const mmap_ratio: u16 = randomPow2(random, u16, 16);
+                std.debug.print(
+                    "DiskMemoryAllocator | seed: {}, iterations: {}, mmap_ratio: {}\n",
+                    .{ seed +% i, iterations, mmap_ratio },
+                );
+                try fuzzDiskMemoryAllocator(mmap_ratio, config);
+            }
+
+            if (run_cmd.target == .all or run_cmd.target == .batch) {
+                const batch_size: usize = randomPow2(random, usize, 30);
+                std.debug.print(
+                    "BatchAllocator      | seed: {}, iterations: {}, batch_size: {}\n",
+                    .{ seed +% i, iterations, batch_size },
+                );
+                try fuzzer.fuzzBatchAllocator(config, batch_size);
+            }
+        }
+    }
+
+    pub const FuzzParams = struct {
+        /// Used for bookkeeping during the test. This allocator will *not* be fuzzed.
+        allocator: std.mem.Allocator,
+        /// Determines which actions to take, and how much to allocate.
+        random: std.Random,
+        /// Number of actions to take.
+        iterations: usize,
+        /// Set true to print code that runs this specific test case.
+        debug: bool,
+    };
+
+    /// Randomly takes actions with the allocator: alloc, realloc, or free
+    pub fn fuzzAllocator(
+        /// The allocator being tested.
+        subject: std.mem.Allocator,
+        params: FuzzParams,
+    ) std.mem.Allocator.Error!void {
+        // all existing allocations from the allocator
+        var allocations = std.ArrayList(struct { usize, []u8 }).init(params.allocator);
+        defer {
+            for (allocations.items) |pair| {
+                const item_id, const item = pair;
+                if (params.debug) std.debug.print("allocator.free(item{});\n", .{item_id});
+                subject.free(item);
+            }
+            allocations.deinit();
+            if (params.debug) std.debug.print("done\n", .{});
+        }
+
+        // take some random actions: alloc, realloc, or free
+        var item_id_sequence: usize = 0;
+        for (0..params.iterations) |_| {
+            const Options = enum { alloc, realloc, free };
+            const choice = if (allocations.items.len == 0)
+                .alloc
+            else
+                params.random.enumValue(Options);
+            switch (choice) {
+                .alloc => {
+                    const size = randomPow2(params.random, usize, 20);
+                    if (params.debug) std.debug.print(
+                        "var item{} = try allocator.alloc(u8, {});\n",
+                        .{ item_id_sequence, size },
+                    );
+                    const data = try subject.alloc(u8, size);
+                    errdefer subject.free(data);
+                    @memset(data, 0x22);
+                    try allocations.append(.{ item_id_sequence, data });
+                    item_id_sequence += 1;
+                },
+                .realloc => {
+                    const index = params.random.intRangeLessThan(usize, 0, allocations.items.len);
+                    const size = randomPow2(params.random, usize, 20);
+                    const item_id, const item = allocations.items[index];
+                    if (params.debug) std.debug.print(
+                        "item{} = try allocator.realloc(item{}, {});\n",
+                        .{ item_id, item_id, size },
+                    );
+                    const new_data = try subject.realloc(item, size);
+                    @memset(new_data, 0x33);
+                    allocations.items[index] = .{ item_id, new_data };
+                },
+                .free => {
+                    const index = params.random.intRangeLessThan(usize, 0, allocations.items.len);
+                    const item_id, const data = allocations.swapRemove(index);
+                    if (params.debug) std.debug.print("allocator.free(item{});\n", .{item_id});
+                    subject.free(data);
+                },
+            }
+        }
+    }
+
+    /// Randomly takes actions with the allocator: alloc, realloc, or free
+    pub fn fuzzAllocatorMultiThreaded(
+        /// The allocator being tested.
+        subject: std.mem.Allocator,
+        comptime num_threads: usize,
+        params: FuzzParams,
+    ) !void {
+        var threads: [num_threads - 1]std.Thread = undefined;
+        for (0..num_threads - 1) |i| {
+            threads[i] = try std.Thread.spawn(.{}, fuzzAllocator, .{ params, subject });
+        }
+        try fuzzAllocator(subject, params);
+        for (threads) |t| t.join();
+    }
+
+    pub fn fuzzBatchAllocator(config: FuzzParams, batch_size: usize) !void {
+        var gpa: std.heap.DebugAllocator(.{ .safety = true }) = .init;
+        defer _ = gpa.deinit();
+        {
+            var batch_allocator = BatchAllocator{
+                .backing_allocator = gpa.allocator(),
+                .batch_size = batch_size,
+            };
+            defer batch_allocator.deinit();
+            if (config.debug) {
+                std.debug.print(
+                    \\var batch_allocator = BatchAllocator{{
+                    \\    .backing_allocator = std.testing.allocator,
+                    \\    .batch_size = {},
+                    \\}};
+                    \\defer batch_allocator.deinit();
+                    \\const allocator = batch_allocator.allocator();
+                    \\
+                , .{batch_size});
+            }
+            try fuzzAllocatorMultiThreaded(batch_allocator.allocator(), 1, config);
+            // try fuzzAllocator(config, batch_allocator.allocator());
+        }
+        if (gpa.detectLeaks()) return error.Leaked;
+    }
+
+    pub fn fuzzDiskMemoryAllocator(mmap_ratio: u16, config: FuzzParams) !void {
+        var dir = std.testing.tmpDir(.{});
+        defer dir.cleanup();
+        var disk_memory_allocator: DiskMemoryAllocator = .{
+            .dir = dir.dir,
+            .logger = .noop,
+            .mmap_ratio = mmap_ratio,
+        };
+        try fuzzAllocator(disk_memory_allocator.allocator(), config);
+    }
+
+    fn randomPow2(random: std.Random, T: type, max_pow2: u64) T {
+        return @min(max_pow2, @as(T, 1) << random.int(std.math.Log2Int(T)));
+    }
+};

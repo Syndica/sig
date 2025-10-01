@@ -1,5 +1,6 @@
 const std = @import("std");
 const sig = @import("../../sig.zig");
+const cli = @import("cli");
 
 const bincode = sig.bincode;
 
@@ -15,42 +16,40 @@ const SnapshotManifest = sig.accounts_db.snapshot.Manifest;
 
 const MAX_FUZZ_TIME_NS = std.time.ns_per_s * 100_000;
 
-pub fn run() !void {
-    const seed = std.crypto.random.int(u64);
+pub const RunCmd = struct {
+    pub const cmd_info: cli.CommandInfo(RunCmd) = .{
+        .help = .{
+            .short = "Fuzz snapshots.",
+            .long = null,
+        },
+        .sub = .{},
+    };
+};
 
-    var gpa: std.heap.DebugAllocator(.{}) = .init;
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+pub fn run(
+    allocator: std.mem.Allocator,
+    seed: u64,
+    run_cmd: RunCmd,
+) !void {
+    _ = run_cmd;
 
-    {
-        // open and append seed
-        const SEED_FILE_PATH = sig.TEST_DATA_DIR ++ "fuzz_snapshot_seeds.txt";
-        const seed_file = try std.fs.cwd().createFile(SEED_FILE_PATH, .{ .truncate = false });
-        defer seed_file.close();
+    var prng_state: std.Random.DefaultPrng = .init(seed);
+    const prng = prng_state.random();
 
-        try seed_file.writer().print("{}\n", .{seed});
-    }
-    std.debug.print("seed: {}\n", .{seed});
-
-    var prng = std.Random.DefaultPrng.init(seed);
-    const random = prng.random();
-
-    var bytes_buffer = std.ArrayList(u8).init(allocator);
-    defer bytes_buffer.deinit();
+    var bytes_buffer: std.ArrayListUnmanaged(u8) = .empty;
+    defer bytes_buffer.deinit(allocator);
 
     var i: u64 = 0;
-
-    var timer = try std.time.Timer.start();
+    var timer: std.time.Timer = try .start();
     while (timer.read() < MAX_FUZZ_TIME_NS) : (i += 1) {
         bytes_buffer.clearRetainingCapacity();
 
-        const manifest_original: SnapshotManifest = try randomSnapshotManifest(allocator, random);
+        const manifest_original: SnapshotManifest = try randomSnapshotManifest(allocator, prng);
         defer manifest_original.deinit(allocator);
 
-        try bytes_buffer.ensureUnusedCapacity(bincode.sizeOf(manifest_original, .{}) * 2);
-
+        try bytes_buffer.ensureUnusedCapacity(allocator, bincode.sizeOf(manifest_original, .{}) * 2);
         const original_bytes_start = bytes_buffer.items.len;
-        try bincode.write(bytes_buffer.writer(), manifest_original, .{});
+        try bincode.write(bytes_buffer.writer(allocator), manifest_original, .{});
         const original_bytes_end = bytes_buffer.items.len;
 
         const snapshot_deserialized = try bincode.readFromSlice(
@@ -62,7 +61,7 @@ pub fn run() !void {
         defer snapshot_deserialized.deinit(allocator);
 
         const serialized_bytes_start = bytes_buffer.items.len;
-        try bincode.write(bytes_buffer.writer(), snapshot_deserialized, .{});
+        try bincode.write(bytes_buffer.writer(allocator), snapshot_deserialized, .{});
         const serialized_bytes_end = bytes_buffer.items.len;
 
         const original_bytes = bytes_buffer.items[original_bytes_start..original_bytes_end];

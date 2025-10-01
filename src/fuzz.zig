@@ -7,6 +7,7 @@ const gossip_service_fuzz = sig.gossip.fuzz_service;
 const gossip_table_fuzz = sig.gossip.fuzz_table;
 const snapshot_fuzz = sig.accounts_db.snapshot.fuzz;
 const ledger_fuzz = sig.ledger.fuzz_ledger;
+const allocators_fuzz = sig.utils.allocators.fuzzer;
 
 // Supported fuzz filters.
 // NOTE: changing these enum variants will require a change to the fuzz/kcov in `scripts/`
@@ -24,33 +25,12 @@ const Cmd = struct {
     seed: ?u64,
     fuzzer: ?union(FuzzFilter) {
         accountsdb: accountsdb_fuzz.RunCmd,
-        snapshot: FuzzerTodo,
-        gossip_service: FuzzerTodo,
-        gossip_table: FuzzerTodo,
-        ledger: FuzzerTodo,
-        allocators: FuzzerTodo,
+        snapshot: snapshot_fuzz.RunCmd,
+        gossip_service: gossip_service_fuzz.RunCmd,
+        gossip_table: gossip_table_fuzz.RunCmd,
+        ledger: ledger_fuzz.RunCmd,
+        allocators: allocators_fuzz.RunCmd,
     },
-
-    const FuzzerTodo = struct {
-        args: []const []const u8,
-
-        pub const cmd_info: cli.CommandInfo(FuzzerTodo) = .{
-            .help = .{
-                .short = "TODO: implement bespoke CLI integration for this fuzzer.",
-                .long = null,
-            },
-            .sub = .{
-                .args = .{
-                    .kind = .positional,
-                    .name_override = null,
-                    .alias = .none,
-                    .default_value = &.{},
-                    .config = .string,
-                    .help = "Args to pass to the specified fuzzer.",
-                },
-            },
-        };
-    };
 
     const parser = cli.Parser(Cmd, .{
         .help = .{
@@ -61,7 +41,7 @@ const Cmd = struct {
             .data_dir = .{
                 .kind = .named,
                 .name_override = null,
-                .alias = .none,
+                .alias = .d,
                 .default_value = null,
                 .config = .string,
                 .help = "Directory for all fuzzers to store their on-disk data relative to.",
@@ -69,25 +49,25 @@ const Cmd = struct {
             .seed = .{
                 .kind = .named,
                 .name_override = null,
-                .alias = .none,
+                .alias = .s,
                 .default_value = null,
                 .config = {},
                 .help = "Seed for the PRNG for all random actions taken during fuzzing.",
             },
             .fuzzer = .{
                 .accountsdb = accountsdb_fuzz.RunCmd.cmd_info,
-                .snapshot = FuzzerTodo.cmd_info,
-                .gossip_service = FuzzerTodo.cmd_info,
-                .gossip_table = FuzzerTodo.cmd_info,
-                .ledger = FuzzerTodo.cmd_info,
-                .allocators = FuzzerTodo.cmd_info,
+                .snapshot = snapshot_fuzz.RunCmd.cmd_info,
+                .gossip_service = gossip_service_fuzz.RunCmd.cmd_info,
+                .gossip_table = gossip_table_fuzz.RunCmd.cmd_info,
+                .ledger = ledger_fuzz.RunCmd.cmd_info,
+                .allocators = allocators_fuzz.RunCmd.cmd_info,
             },
         },
     });
 };
 
 pub fn main() !void {
-    var gpa_state: std.heap.DebugAllocator(.{}) = .init;
+    var gpa_state: std.heap.DebugAllocator(.{ .safety = true }) = .init;
     defer _ = gpa_state.deinit();
     const gpa = gpa_state.allocator();
 
@@ -165,10 +145,19 @@ pub fn main() !void {
             run_cmd,
         ),
 
-        .snapshot => try snapshot_fuzz.run(),
-        .gossip_service => |run_cmd| try gossip_service_fuzz.run(seed, run_cmd.args),
-        .gossip_table => |run_cmd| try gossip_table_fuzz.run(seed, run_cmd.args),
-        .ledger => |run_cmd| try ledger_fuzz.run(seed, run_cmd.args),
-        .allocators => |run_cmd| try sig.utils.allocators.runFuzzer(seed, run_cmd.args),
+        .snapshot,
+        => |run_cmd| try snapshot_fuzz.run(gpa, seed, run_cmd),
+
+        .gossip_service,
+        => |run_cmd| try gossip_service_fuzz.run(gpa, seed, run_cmd),
+
+        .gossip_table,
+        => |run_cmd| try gossip_table_fuzz.run(gpa, .from(logger), seed, run_cmd),
+
+        .allocators,
+        => |run_cmd| try allocators_fuzz.run(gpa, seed, run_cmd),
+
+        .ledger,
+        => |run_cmd| try ledger_fuzz.run(seed, run_cmd),
     }
 }
