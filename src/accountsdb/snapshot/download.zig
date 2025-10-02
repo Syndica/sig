@@ -467,8 +467,8 @@ fn downloadFile(
     var buffered_out = std.io.bufferedWriter(output_file.writer());
 
     var total_bytes_read: u64 = 0;
-    var lap_timer = try sig.time.Timer.start();
-    var full_timer = try sig.time.Timer.start();
+    var lap_timer = sig.time.Timer.start();
+    var full_timer = sig.time.Timer.start();
     var checked_speed = false;
 
     while (true) {
