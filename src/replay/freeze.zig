@@ -342,17 +342,17 @@ pub fn deltaMerkleHash(account_reader: AccountReader, allocator: Allocator, slot
         }
     }.lt);
 
-    // TODO put more thought into the nesting - should there be multiple?
-    // is NestedHashTree the right data structure?
+    // TODO put more thought into how to layout the merkle tree
     const hashes = try allocator.alloc(Hash, pubkey_hashes.len);
     defer allocator.free(hashes);
     for (hashes, pubkey_hashes) |*h, pubkey_hash| {
         h.* = pubkey_hash[1];
     }
-    const hash_tree = sig.utils.merkle_tree.NestedHashTree{ .items = &.{hashes} };
 
-    const hash = try sig.utils.merkle_tree
-        .computeMerkleRoot(&hash_tree, sig.accounts_db.db.MERKLE_FANOUT);
+    const hash = try sig.utils.merkle_tree.computeMerkleRoot(
+        &.{hashes},
+        sig.accounts_db.db.MERKLE_FANOUT,
+    );
 
     return hash;
 }
