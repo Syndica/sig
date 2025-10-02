@@ -73,7 +73,7 @@ pub fn StakesCacheGeneric(comptime stakes_type: StakesType) type {
 
                 const vote_account = VoteAccount.fromAccountSharedData(
                     allocator,
-                    try account.clone(allocator),
+                    account, // does *not* take ownership of the account
                 ) catch {
                     var stakes: *T, var stakes_guard = self.stakes.writeWithLock();
                     defer stakes_guard.unlock();
