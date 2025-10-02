@@ -841,6 +841,7 @@ test "TransactionScheduler: sends replay vote after successful execution" {
         var account = sig.runtime.AccountSharedData.NEW;
         account.owner = sig.runtime.program.vote.ID;
         account.data = try allocator.alloc(u8, vote_program.state.VoteState.MAX_VOTE_STATE_SIZE);
+        defer allocator.free(account.data);
         @memset(account.data, 0);
 
         var vote_state = try vote_program.state.createTestVoteState(
@@ -850,8 +851,10 @@ test "TransactionScheduler: sends replay vote after successful execution" {
             node_pubkey,
             0,
         );
+        defer vote_state.deinit(allocator);
+
         // Seed the vote state with a prior slot so lastVotedSlot() can be non-null after process
-        try vote_program.state.processSlotVoteUnchecked(&vote_state, 1);
+        try vote_program.state.processSlotVoteUnchecked(allocator, &vote_state, 1);
 
         _ = try sig.bincode.writeToSlice(
             account.data,
@@ -864,9 +867,6 @@ test "TransactionScheduler: sends replay vote after successful execution" {
 
         // Insert account into the test map so committer can update stakes
         try state.account_map.put(state.slot, vote_pubkey, account);
-        // Cleanup local allocations
-        vote_state.deinit();
-        allocator.free(account.data);
     }
 
     // 2) Make a Vote instruction (includes SlotHashes and Clock accounts)
