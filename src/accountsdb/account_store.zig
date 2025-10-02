@@ -57,9 +57,6 @@ pub const AccountStore = union(enum) {
                 allocator,
                 db,
                 newly_rooted_slot,
-                // currently, we don't want to mutate the account files of older slots, as this
-                // would invalidate the index made from the snapshot.
-                .{ .do_cleaning = false },
                 lamports_per_signature,
             ),
             .thread_safe_map => |db| try db.onSlotRooted(newly_rooted_slot),
@@ -457,15 +454,17 @@ pub const ThreadSafeAccountMap = struct {
                 std.debug.assert(removed_pubkey.equals(&pubkey));
                 std.debug.assert(removed_account.equals(&account_popped));
 
-                // if the slot has no more entries, deinit and remove it
-                if (slot_entries.items.len == 0) {
-                    std.debug.assert(self.slot_map.orderedRemove(old_slot));
-                    slot_entries.deinit(self.allocator);
+                // if the len of slot_entries has shrunk considerably, shrink the capacity
+                if (slot_entries.items.len > 0 and
+                    slot_entries.capacity > slot_entries.items.len * 10)
+                {
+                    slot_entries.shrinkAndFree(self.allocator, slot_entries.items.len);
                 }
 
-                // if the len of slot_entries has shrunk considerably, shrink the capacity
-                if (slot_entries.capacity > slot_entries.items.len * 10) {
-                    slot_entries.shrinkAndFree(self.allocator, slot_entries.items.len);
+                // if the slot has no more entries, deinit and remove it
+                if (slot_entries.items.len == 0) {
+                    slot_entries.deinit(self.allocator);
+                    std.debug.assert(self.slot_map.orderedRemove(old_slot));
                 }
             }
         }
@@ -816,6 +815,7 @@ test "put and get zero lamports before & after cleanup" {
     defer simple_state.deinit();
 
     var real_state: AccountsDB = try .init(.minimal(allocator, .FOR_TESTS, tmp_dir.dir, null));
+    real_state.on_root_config.do_cleaning = true;
     defer real_state.deinit();
 
     const simple_store = simple_state.accountStore();

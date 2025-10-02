@@ -149,6 +149,8 @@ pub const AccountsDB = struct {
     // TODO: move to Bank struct
     bank_hash_stats: RwMux(BankHashStatsMap),
 
+    on_root_config: sig.accounts_db.manager.Config,
+
     const PubkeyAndAccount = struct { pubkey: Pubkey, account: Account };
 
     pub const PubkeysAndAccounts = std.MultiArrayList(PubkeyAndAccount);
@@ -180,6 +182,7 @@ pub const AccountsDB = struct {
         gossip_view: ?GossipView,
         index_allocation: Index,
         number_of_index_shards: usize,
+        on_root_config: sig.accounts_db.manager.Config = .{},
         /// Amount of BufferPool frames, used for cached reads. Default = 1GiB.
         buffer_pool_frames: u32 = 2 * 1024 * 1024,
 
@@ -264,6 +267,7 @@ pub const AccountsDB = struct {
             .latest_snapshot_gen_info = .init(null),
 
             .bank_hash_stats = .init(.{}),
+            .on_root_config = params.on_root_config,
         };
     }
 

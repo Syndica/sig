@@ -357,7 +357,6 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                 allocator,
                 &accounts_db,
                 largest_rooted_slot,
-                .{},
                 5000,
             );
 

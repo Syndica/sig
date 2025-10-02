@@ -36,7 +36,9 @@ pub const Config = struct {
     zstd_nb_workers: u31 = 0,
     /// Enable/disable the clean (+ shrink & purge) cycle. Keep this disabled if you don't want to
     /// overwrite previous slots.
-    do_cleaning: bool = true,
+    /// Currently, we don't want to mutate the account files of older slots, as this
+    /// would invalidate the index made from the snapshot.
+    do_cleaning: bool = false,
 };
 
 /// Flushes a rooted slot to accountsdb, creating a new AccountFile, and doing some cleanup of old
@@ -45,12 +47,13 @@ pub fn onSlotRooted(
     allocator: std.mem.Allocator,
     db: *AccountsDB,
     newly_rooted_slot: Slot,
-    config: Config,
     lamports_per_signature: u64,
 ) !void {
     const zone = tracy.Zone.init(@src(), .{ .name = "onSlotRooted" });
     defer zone.deinit();
     errdefer zone.color(0xFF0000);
+
+    const config = db.on_root_config;
 
     {
         var max_slots, var max_slots_lg = db.max_slots.writeWithLock();
@@ -1493,6 +1496,7 @@ test "onSlotRooted basic" {
         .gossip_view = null,
         .index_allocation = .ram,
         .number_of_index_shards = 4,
+        .on_root_config = .{ .do_cleaning = true },
     });
     defer db.deinit();
 
@@ -1503,17 +1507,17 @@ test "onSlotRooted basic" {
 
     // interleave put + root
     try db.putAccount(149, pk, account);
-    try onSlotRooted(allocator, &db, 149, .{}, 5000);
+    try onSlotRooted(allocator, &db, 149, 5000);
     try db.putAccount(150, pk, account);
-    try onSlotRooted(allocator, &db, 150, .{}, 5000);
+    try onSlotRooted(allocator, &db, 150, 5000);
 
     // put some + root some
     try db.putAccount(151, pk, account);
     try db.putAccount(152, pk, account);
     try db.putAccount(153, pk, account);
-    try onSlotRooted(allocator, &db, 151, .{}, 5000);
-    try onSlotRooted(allocator, &db, 152, .{}, 5000);
-    try onSlotRooted(allocator, &db, 153, .{}, 5000);
+    try onSlotRooted(allocator, &db, 151, 5000);
+    try onSlotRooted(allocator, &db, 152, 5000);
+    try onSlotRooted(allocator, &db, 153, 5000);
 
     // check failure cases
     for (&[_]u64{
@@ -1523,7 +1527,7 @@ test "onSlotRooted basic" {
     }) |slot| {
         try std.testing.expectError(
             error.SlotNotFound,
-            onSlotRooted(allocator, &db, slot, .{}, 5000),
+            onSlotRooted(allocator, &db, slot, 5000),
         );
     }
 
@@ -1554,6 +1558,7 @@ test "onSlotRooted zero_lamports" {
         .gossip_view = null,
         .index_allocation = .ram,
         .number_of_index_shards = 4,
+        .on_root_config = .{ .do_cleaning = true },
     });
     defer db.deinit();
 
@@ -1562,7 +1567,7 @@ test "onSlotRooted zero_lamports" {
 
     // interleave put + root
     try db.putAccount(149, pk, account);
-    try onSlotRooted(allocator, &db, 149, .{}, 5000);
+    try onSlotRooted(allocator, &db, 149, 5000);
 
     var accounts_dir = try snapshot_dir.openDir("accounts", .{ .iterate = true });
     defer accounts_dir.close();
@@ -1590,6 +1595,7 @@ test "onSlotRooted shrink and delete" {
         .gossip_view = null,
         .index_allocation = .ram,
         .number_of_index_shards = 4,
+        .on_root_config = .{ .do_cleaning = true },
     });
     defer db.deinit();
 
@@ -1608,7 +1614,7 @@ test "onSlotRooted shrink and delete" {
         for (accounts, pubkeys) |account, pubkey| {
             try db.putAccount(149, pubkey, account);
         }
-        try onSlotRooted(allocator, &db, 149, .{}, 5000);
+        try onSlotRooted(allocator, &db, 149, 5000);
     }
 
     const size_149_before = blk: {
@@ -1623,7 +1629,7 @@ test "onSlotRooted shrink and delete" {
         for (accounts[0..9], pubkeys[0..9]) |account, pubkey| {
             try db.putAccount(150, pubkey, account);
         }
-        try onSlotRooted(allocator, &db, 150, .{}, 5000);
+        try onSlotRooted(allocator, &db, 150, 5000);
     }
 
     const size_149_after = blk: {
@@ -1641,7 +1647,7 @@ test "onSlotRooted shrink and delete" {
         for (accounts, pubkeys) |account, pubkey| {
             try db.putAccount(151, pubkey, account);
         }
-        try onSlotRooted(allocator, &db, 151, .{}, 5000);
+        try onSlotRooted(allocator, &db, 151, 5000);
     }
 
     // slot 150 and 149 are gone
@@ -1670,6 +1676,7 @@ test "snapshot generation happens without error" {
         .gossip_view = null,
         .index_allocation = .ram,
         .number_of_index_shards = 4,
+        .on_root_config = .{ .do_cleaning = true, .slots_per_full_snapshot = 1 },
     });
     defer db.deinit();
 
@@ -1693,7 +1700,6 @@ test "snapshot generation happens without error" {
         allocator,
         &db,
         149,
-        .{ .slots_per_full_snapshot = 1 },
         5000,
     );
 
@@ -1704,10 +1710,12 @@ test "snapshot generation happens without error" {
     for (accounts, pubkeys) |account, pubkey| try db.putAccount(154, pubkey, account);
 
     // generate incremental
-    try onSlotRooted(allocator, &db, 150, .{
+    db.on_root_config = .{
+        .do_cleaning = true,
         .slots_per_full_snapshot = 100,
         .slots_per_incremental_snapshot = 1,
-    }, 5000);
+    };
+    try onSlotRooted(allocator, &db, 150, 5000);
 
     var found_inc = false;
     var found_full = false;
