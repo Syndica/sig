@@ -49,6 +49,15 @@ pub fn onSlotRooted(
     defer zone.deinit();
     errdefer zone.color(0xFF0000);
 
+    {
+        var max_slots, var max_slots_lg = db.max_slots.writeWithLock();
+        defer max_slots_lg.unlock();
+        if (max_slots.rooted) |previously_rooted| {
+            if (newly_rooted_slot < previously_rooted) return error.SlotNotFound;
+        }
+        max_slots.rooted = newly_rooted_slot;
+    }
+
     db.logger.info().logf("flushing slot {} to disk", .{newly_rooted_slot});
 
     var failed: bool = false;
@@ -67,8 +76,11 @@ pub fn onSlotRooted(
     // make a new AccountFile for our newly rooted slot, and "flush" the data to it
     const file_id = try flushSlot(db, newly_rooted_slot);
 
-    // TODO: audit this and related fields - not sure why this is an atomic to begin with
-    db.largest_flushed_slot.store(newly_rooted_slot, .monotonic);
+    {
+        var max_slots, var max_slots_lg = db.max_slots.writeWithLock();
+        defer max_slots_lg.unlock();
+        max_slots.flushed = newly_rooted_slot;
+    }
 
     // when we last made a full snapshot, and when we last made an incremental snapshot (relative to
     // the last full snapshot).
@@ -1695,56 +1707,4 @@ test "snapshot generation happens without error" {
 
     try std.testing.expect(found_inc);
     try std.testing.expect(found_full);
-}
-
-test "snapshot generation" {
-    const allocator = std.testing.allocator;
-    const logger: Logger = .noop;
-
-    var bp: BufferPool = try .init(allocator, 100);
-    defer bp.deinit(allocator);
-
-    var tmp_dir_root = std.testing.tmpDir(.{});
-    defer tmp_dir_root.cleanup();
-    const snapshot_dir = tmp_dir_root.dir;
-
-    var accounts_db: AccountsDB = try .init(
-        .minimal(allocator, .from(logger), snapshot_dir, null),
-    );
-    defer accounts_db.deinit();
-
-    var manager = try Manager.init(allocator, &accounts_db, .{
-        .snapshot = .{
-            .slots_per_full_snapshot = 2,
-            .slots_per_incremental_snapshot = 1,
-            .zstd_nb_workers = 1,
-        },
-    });
-    defer manager.deinit(allocator);
-
-    try manager.manage(allocator);
-
-    accounts_db.max_slots.set(.{
-        .rooted = 1,
-        .flushed = accounts_db.max_slots.readCopy().flushed,
-    });
-    try manager.manage(allocator);
-
-    accounts_db.max_slots.set(.{
-        .rooted = 2,
-        .flushed = accounts_db.max_slots.readCopy().flushed,
-    });
-    try manager.manage(allocator);
-
-    accounts_db.max_slots.set(.{
-        .rooted = 3,
-        .flushed = accounts_db.max_slots.readCopy().flushed,
-    });
-    try manager.manage(allocator);
-
-    accounts_db.max_slots.set(.{
-        .rooted = 4,
-        .flushed = accounts_db.max_slots.readCopy().flushed,
-    });
-    try manager.manage(allocator);
 }

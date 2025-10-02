@@ -733,11 +733,6 @@ test "put and get zero lamports before & after cleanup" {
     var real_state: AccountsDB = try .init(.minimal(allocator, .FOR_TESTS, tmp_dir.dir, null));
     defer real_state.deinit();
 
-    var manager: sig.accounts_db.manager.Manager = try .init(allocator, &real_state, .{
-        .snapshot = null,
-    });
-    defer manager.deinit(allocator);
-
     const simple_store = simple_state.accountStore();
     const real_store = real_state.accountStore();
     const stores = [_]sig.accounts_db.AccountStore{ simple_store, real_store };
@@ -810,7 +805,7 @@ test "put and get zero lamports before & after cleanup" {
 
     // but after we run the manager on it to clean it up...
     setRootedLargestSlotForTest(&simple_state, &real_state, slot100);
-    try manager.manage(allocator);
+    try sig.accounts_db.manager.onSlotRooted(allocator, &real_state, slot100, .{}, 5000);
 
     // the unrooted entry for slot100 is removed, and all the zero-lamport accounts should
     // not be present in the flushed accounts.
@@ -835,7 +830,7 @@ test "put and get zero lamports before & after cleanup" {
 
     // and after we run the manager on it to clean up slot200 as well...
     setRootedLargestSlotForTest(&simple_state, &real_state, slot200);
-    try manager.manage(allocator);
+    try sig.accounts_db.manager.onSlotRooted(allocator, &real_state, slot200, .{}, 5000);
 
     try expectDbUnrootedPubkeysInSlot(&real_state, slot200, null);
     try std.testing.expectEqual(false, real_state.account_index.exists(&pk1, slot200));
@@ -858,11 +853,6 @@ test "put and get zero lamports across forks" {
 
     var real_state: AccountsDB = try .init(.minimal(allocator, .FOR_TESTS, tmp_dir.dir, null));
     defer real_state.deinit();
-
-    var manager: sig.accounts_db.manager.Manager = try .init(allocator, &real_state, .{
-        .snapshot = null,
-    });
-    defer manager.deinit(allocator);
 
     const simple_store = simple_state.accountStore();
     const real_store = real_state.accountStore();
@@ -922,11 +912,6 @@ test "put and get across competing forks" {
 
     var real_state: AccountsDB = try .init(.minimal(allocator, .FOR_TESTS, tmp_dir.dir, null));
     defer real_state.deinit();
-
-    var manager: sig.accounts_db.manager.Manager = try .init(allocator, &real_state, .{
-        .snapshot = null,
-    });
-    defer manager.deinit(allocator);
 
     const simple_store = simple_state.accountStore();
     const real_store = real_state.accountStore();
