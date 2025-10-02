@@ -614,7 +614,7 @@ pub const BenchmarkPacketProcessing = struct {
 
         // run incoming until received n_packets
         var packets_to_recv = n_packets;
-        var timer = try sig.time.Timer.start();
+        var timer = sig.time.Timer.start();
         while (packets_to_recv > 0) {
             incoming_channel.waitToReceive(exit_condition) catch break;
             while (incoming_channel.tryReceive()) |_| {

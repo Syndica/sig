@@ -768,7 +768,7 @@ pub const LedgerReader = struct {
         // Figure the `slot` to start listing signatures at, based on the ledger location of the
         // `before` signature if present.  Also generate a HashSet of signatures that should
         // be excluded from the results.
-        var get_before_slot_timer = try Timer.start();
+        var get_before_slot_timer = Timer.start();
         const slot: Slot, //
         var before_excluded_signatures: AutoHashMap(Signature, void) //
         = if (before) |before_signature| blk: {
@@ -794,7 +794,7 @@ pub const LedgerReader = struct {
         // Generate a HashSet of signatures that should be excluded from the results based on
         // `until` signature
         const first_available_block = try self.getFirstAvailableBlock();
-        var get_until_slot_timer = try Timer.start();
+        var get_until_slot_timer = Timer.start();
         const lowest_slot, var until_excluded_signatures = if (until) |until_signature| blk: {
             if (try self.getTransactionStatus(
                 until_signature,
@@ -825,7 +825,7 @@ pub const LedgerReader = struct {
         var address_signatures = ArrayList(struct { Slot, Signature }).init(self.allocator);
 
         // Get signatures in `slot`
-        var get_initial_slot_timer = try Timer.start();
+        var get_initial_slot_timer = Timer.start();
         const signatures = try self.findAddressSignaturesForSlot(address, slot);
         for (1..signatures.items.len + 1) |i| {
             const this_slot, const signature = signatures.items[signatures.items.len - i];
@@ -839,7 +839,7 @@ pub const LedgerReader = struct {
         self.metrics.get_initial_slot_us
             .observe(get_initial_slot_timer.read().asMicros());
 
-        var address_signatures_iter_timer = try Timer.start();
+        var address_signatures_iter_timer = Timer.start();
         // Regardless of whether a `before` signature is provided, the latest relevant
         // `slot` is queried directly with the `find_address_signatures_for_slot()`
         // call above. Thus, this iterator starts at the lowest entry of `address,
@@ -871,7 +871,7 @@ pub const LedgerReader = struct {
         address_signatures.items.len = @min(address_signatures.items.len, limit);
 
         // Fill in the status information for each found transaction
-        var get_status_info_timer = try Timer.start();
+        var get_status_info_timer = Timer.start();
         var infos = ArrayList(ConfirmedTransactionStatusWithSignature).init(self.allocator);
         for (address_signatures.items) |asig| {
             const the_slot, const signature = asig;

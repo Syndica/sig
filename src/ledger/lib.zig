@@ -129,7 +129,7 @@ test "UnifiedLedger doesn't leak" {
     defer ledger.deinit(allocator);
 
     exit.store(true, .monotonic);
-    var timer = try sig.time.Timer.start();
+    var timer = sig.time.Timer.start();
     ledger.join();
     try std.testing.expect(timer.read().lt(.fromSecs(1)));
 }

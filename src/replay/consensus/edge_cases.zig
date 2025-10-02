@@ -45,7 +45,7 @@ pub fn processEdgeCases(
         receivers: replay.TowerConsensus.Receivers,
     },
 ) !ProcessEdgeCaseTimings {
-    var timer = try sig.time.Timer.start();
+    var timer = sig.time.Timer.start();
 
     // Process cluster-agreed versions of duplicate slots for which we potentially
     // have the wrong version. Our version was dead or pruned.

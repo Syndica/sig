@@ -496,7 +496,7 @@ pub fn benchmark(
 
             //
             var ran_out_of_time = false;
-            var runtime_timer = try sig.time.Timer.start();
+            var runtime_timer = sig.time.Timer.start();
             var iter_count: u64 = 0;
             while (iter_count < min_iterations or
                 (iter_count < max_iterations and ran_out_of_time)) : (iter_count += 1)

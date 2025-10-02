@@ -320,7 +320,7 @@ pub const LedgerResultWriter = struct {
         var ancestor_iterator = try AncestorIterator
             .initExclusive(self.allocator, &self.db, start_root);
 
-        var find_missing_roots_timer = try Timer.start();
+        var find_missing_roots_timer = Timer.start();
         var roots_to_fix = ArrayList(Slot).init(self.allocator);
         defer roots_to_fix.deinit();
 
@@ -334,7 +334,7 @@ pub const LedgerResultWriter = struct {
             }
         }
         const find_missing_roots_us = find_missing_roots_timer.read().asMicros();
-        var fix_roots_timer = try Timer.start();
+        var fix_roots_timer = Timer.start();
         if (roots_to_fix.items.len != 0) {
             self.logger.info().logf("{} slots to be rooted", .{roots_to_fix.items.len});
             const chunk_size = 100;
