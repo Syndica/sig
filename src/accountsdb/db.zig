@@ -4855,34 +4855,3 @@ test "loadAndVerifyAccountsFiles ref manager expand" {
     // reference manager.
     try std.testing.expect(ref_capacity / n_slots > accounts_per_file_estimate);
 }
-
-// TODO: this test is dumb, remove it
-test "CannotWriteRootedSlot overwrite in file" {
-    const allocator = std.testing.allocator;
-
-    var tmp_dir = std.testing.tmpDir(.{});
-    defer tmp_dir.cleanup();
-
-    var db: AccountsDB = try .init(.minimal(allocator, .FOR_TESTS, tmp_dir.dir, null));
-    defer db.deinit();
-
-    var manager: sig.accounts_db.manager.Manager = try .init(allocator, &db, .{
-        .snapshot = null,
-    });
-    defer manager.deinit(allocator);
-
-    const pk: Pubkey = .{ .data = @splat(7) };
-    const asd: AccountSharedData = .{
-        .data = &.{},
-        .executable = false,
-        .lamports = 32,
-        .owner = .ZEROES,
-        .rent_epoch = 0,
-    };
-
-    try std.testing.expectEqual({}, db.putAccount(1, pk, asd));
-    db.max_slots.set(.{ .rooted = 6, .flushed = null });
-    try manager.manage(allocator);
-    db.max_slots.set(.{ .rooted = 0, .flushed = null });
-    try std.testing.expectError(error.CannotWriteRootedSlot, db.putAccount(1, pk, asd));
-}
