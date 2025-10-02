@@ -3,39 +3,22 @@ const sig = @import("../sig.zig");
 const Hash = sig.core.Hash;
 const Sha256 = std.crypto.hash.sha2.Sha256;
 
-pub fn NestedList(comptime T: type) type {
-    return struct {
-        items: []const []T,
-        const Self = @This();
-
-        pub fn getValue(self: *const Self, index: u64) *T {
-            std.debug.assert(index < self.len());
-            var search_index: usize = 0;
-            for (self.items) |slice| {
-                if (search_index + slice.len > index) {
-                    const index_in_nested = index - search_index;
-                    return &slice[index_in_nested];
-                } else {
-                    search_index += slice.len;
-                }
-            }
-            unreachable;
+fn search(tree: []const []Hash, index: u64) *Hash {
+    var search_index: usize = 0;
+    for (tree) |slice| {
+        if (search_index + slice.len > index) {
+            const index_in_nested = index - search_index;
+            return &slice[index_in_nested];
+        } else {
+            search_index += slice.len;
         }
-
-        pub fn len(self: *const Self) u64 {
-            var length: u64 = 0;
-            for (self.items) |*slice| {
-                length += slice.len;
-            }
-            return length;
-        }
-    };
+    }
+    unreachable;
 }
 
-pub const NestedHashTree = NestedList(Hash);
-
-pub fn computeMerkleRoot(self: *const NestedHashTree, fanout: usize) !Hash {
-    var length = self.len();
+pub fn computeMerkleRoot(tree: []const []Hash, fanout: usize) !Hash {
+    var length: u64 = 0;
+    for (tree) |level| length += level.len;
 
     if (length == 0) return comptime empty: {
         @setEvalBranchQuota(3187);
@@ -53,31 +36,25 @@ pub fn computeMerkleRoot(self: *const NestedHashTree, fanout: usize) !Hash {
 
             var hasher = Sha256.init(.{});
             for (start..end) |j| {
-                const h = self.getValue(j);
+                const h = search(tree, j);
                 hasher.update(&h.data);
             }
             const hash = hasher.finalResult();
-            self.getValue(index).data = hash;
+            search(tree, index).data = hash;
             index += 1;
         }
+
         length = index;
-        if (length == 1) {
-            return self.getValue(0).*;
-        }
+        if (length == 1) return search(tree, 0).*;
     }
 }
 
 test "common.merkle_tree: test nested impl" {
     const init_length: usize = 10;
     var hashes: [init_length]Hash = undefined;
-    for (&hashes, 0..) |*hash, i| {
-        hash.* = Hash{ .data = [_]u8{@intCast(i)} ** 32 };
-    }
-    const nested_hashes = NestedHashTree{
-        .items = &.{&hashes},
-    };
+    for (&hashes, 0..) |*hash, i| hash.* = .{ .data = @splat(@intCast(i)) };
 
-    const root = try computeMerkleRoot(&nested_hashes, 3);
+    const root = try computeMerkleRoot(&.{&hashes}, 3);
     const expected_root: [32]u8 = .{
         56, 239, 163, 39,  169, 252, 144, 195, 85,  228, 99,
         82, 225, 185, 237, 141, 186, 90,  36,  220, 86,  140,
@@ -88,25 +65,15 @@ test "common.merkle_tree: test nested impl" {
 
 test "common.merkle_tree: test nested impl deeper" {
     var hashes: [4]Hash = undefined;
-    for (&hashes, 0..) |*hash, i| {
-        hash.* = Hash{ .data = [_]u8{@intCast(i)} ** 32 };
-    }
+    for (&hashes, 0..) |*hash, i| hash.* = .{ .data = @splat(@intCast(i)) };
 
     var hashes2: [4]Hash = undefined;
-    for (&hashes2, 4..) |*hash, i| {
-        hash.* = Hash{ .data = [_]u8{@intCast(i)} ** 32 };
-    }
+    for (&hashes2, 4..) |*hash, i| hash.* = .{ .data = @splat(@intCast(i)) };
 
     var hashes3: [2]Hash = undefined;
-    for (&hashes3, 8..) |*hash, i| {
-        hash.* = Hash{ .data = [_]u8{@intCast(i)} ** 32 };
-    }
+    for (&hashes3, 8..) |*hash, i| hash.* = .{ .data = @splat(@intCast(i)) };
 
-    const nested_hashes = NestedHashTree{
-        .items = &.{ &hashes, &hashes2, &hashes3 },
-    };
-
-    const root = try computeMerkleRoot(&nested_hashes, 3);
+    const root = try computeMerkleRoot(&.{ &hashes, &hashes2, &hashes3 }, 3);
     const expected_root: [32]u8 = .{
         56,  239, 163, 39,  169, 252, 144, 195, 85,  228, 99, 82, 225,
         185, 237, 141, 186, 90,  36,  220, 86,  140, 59,  47, 18, 172,
