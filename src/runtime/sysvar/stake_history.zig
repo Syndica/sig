@@ -2,8 +2,6 @@ const builtin = @import("builtin");
 const std = @import("std");
 const sig = @import("../../sig.zig");
 
-const Allocator = std.mem.Allocator;
-
 const bincode = sig.bincode;
 
 const Epoch = sig.core.Epoch;
