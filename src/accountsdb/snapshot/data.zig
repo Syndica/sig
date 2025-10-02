@@ -969,11 +969,10 @@ pub const FullSnapshotFileInfo = struct {
             }
 
             const str_max_len = Hash.BASE58_MAX_SIZE;
-            const end_max = @min(filename.len, start + str_max_len + 1);
-            const filename_truncated = filename[0..end_max];
+            const truncated = filename[0..@min(filename.len, start + str_max_len + 1)];
             const alphabet = std.mem.asBytes(&base58.Table.BITCOIN.alphabet);
-            const end = std.mem.indexOfNonePos(u8, filename_truncated, start + 1, alphabet) orelse
-                filename_truncated.len;
+            const end = std.mem.indexOfNonePos(u8, truncated, start + 1, alphabet) orelse
+                truncated.len;
 
             const str = filename[start..end];
             const hash = Hash.parseRuntime(str) catch |err| switch (err) {
@@ -1132,11 +1131,10 @@ pub const IncrementalSnapshotFileInfo = struct {
             }
 
             const str_max_len = Hash.BASE58_MAX_SIZE;
-            const end_max = @min(filename.len, start + str_max_len + 1);
-            const filename_truncated = filename[0..end_max];
+            const truncated = filename[0..@min(filename.len, start + str_max_len + 1)];
             const alphabet = std.mem.asBytes(&base58.Table.BITCOIN.alphabet);
-            const end = std.mem.indexOfNonePos(u8, filename_truncated, start + 1, alphabet) orelse
-                filename_truncated.len;
+            const end = std.mem.indexOfNonePos(u8, truncated, start + 1, alphabet) orelse
+                truncated.len;
 
             const str = filename[start..end];
             const hash = Hash.parseRuntime(str) catch |err| switch (err) {
