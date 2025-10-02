@@ -510,10 +510,8 @@ test "loadPrograms: bad owner" {
             loaded_programs.deinit(allocator);
         }
 
-        switch (loaded_programs.get(program_key).?) {
-            .failed => {},
-            .loaded => std.debug.panic("Program should not load!", .{}),
-        }
+        if (loaded_programs.get(program_key) != null)
+            std.debug.panic("Program should not load!", .{});
     }
 }
 
