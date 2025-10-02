@@ -52,6 +52,115 @@ const config: Config = {
       } satisfies Preset.Options,
     ],
   ],
+  headTags: [
+    // Standard favicon
+    {
+      tagName: "link",
+      attributes: { rel: "shortcut icon", href: "img/favicon.ico" },
+    },
+    {
+      tagName: "link",
+      attributes: {
+        rel: "icon",
+        href: "img/favicon.ico",
+        type: "image/x-icon",
+      },
+    },
+
+    // Modern favicon sizes
+    {
+      tagName: "link",
+      attributes: {
+        rel: "icon",
+        type: "image/png",
+        sizes: "16x16",
+        href: "img/favicon-16x16.png",
+      },
+    },
+    {
+      tagName: "link",
+      attributes: {
+        rel: "icon",
+        type: "image/png",
+        sizes: "32x32",
+        href: "img/favicon-32x32.png",
+      },
+    },
+    {
+      tagName: "link",
+      attributes: {
+        rel: "icon",
+        type: "image/png",
+        sizes: "48x48",
+        href: "img/favicon-48x48.png",
+      },
+    },
+
+    // Apple touch icons
+    {
+      tagName: "link",
+      attributes: {
+        rel: "apple-touch-icon",
+        sizes: "180x180",
+        href: "img/favicon-192x192.png",
+      },
+    },
+    {
+      tagName: "link",
+      attributes: {
+        rel: "apple-touch-icon",
+        sizes: "152x152",
+        href: "img/favicon-192x192.png",
+      },
+    },
+    {
+      tagName: "link",
+      attributes: {
+        rel: "apple-touch-icon",
+        sizes: "120x120",
+        href: "img/favicon-192x192.png",
+      },
+    },
+
+    // Android/Chrome
+    {
+      tagName: "link",
+      attributes: {
+        rel: "icon",
+        type: "image/png",
+        sizes: "192x192",
+        href: "img/favicon-192x192.png",
+      },
+    },
+    {
+      tagName: "link",
+      attributes: {
+        rel: "icon",
+        type: "image/png",
+        sizes: "512x512",
+        href: "img/favicon-512x512.png",
+      },
+    },
+
+    // Microsoft
+    {
+      tagName: "meta",
+      attributes: { name: "msapplication-TileColor", content: "#3675F8" },
+    },
+    {
+      tagName: "meta",
+      attributes: {
+        name: "msapplication-TileImage",
+        content: "img/favicon-48x48.png",
+      },
+    },
+
+    // Theme color
+    {
+      tagName: "meta",
+      attributes: { name: "theme-color", content: "#3675F8" },
+    },
+  ],
 
   staticDirectories: ["public", "static"],
 
