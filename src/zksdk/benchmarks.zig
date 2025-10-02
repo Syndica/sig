@@ -12,7 +12,7 @@ pub const Benchmark = struct {
         const kp = zksdk.ElGamalKeypair.random();
         const proof_data = zksdk.PubkeyProofData.init(&kp);
 
-        var start = try sig.time.Timer.start();
+        var start = sig.time.Timer.start();
         std.mem.doNotOptimizeAway(proof_data.verify());
         return start.read();
     }
@@ -22,7 +22,7 @@ pub const Benchmark = struct {
         const ciphertext = zksdk.el_gamal.encrypt(u64, 0, &kp.public);
         const proof_data = zksdk.ZeroCiphertextData.init(&kp, &ciphertext);
 
-        var start = try sig.time.Timer.start();
+        var start = sig.time.Timer.start();
         std.mem.doNotOptimizeAway(proof_data.verify());
         return start.read();
     }
@@ -57,7 +57,7 @@ pub const Benchmark = struct {
             opening_5, opening_6, opening_7, opening_8,
         });
 
-        var start = try sig.time.Timer.start();
+        var start = sig.time.Timer.start();
         std.mem.doNotOptimizeAway(proof_data.verify());
         return start.read();
     }
@@ -92,7 +92,7 @@ pub const Benchmark = struct {
             opening_5, opening_6, opening_7, opening_8,
         });
 
-        var start = try sig.time.Timer.start();
+        var start = sig.time.Timer.start();
         std.mem.doNotOptimizeAway(proof_data.verify());
         return start.read();
     }

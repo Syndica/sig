@@ -845,7 +845,7 @@ fn benchGetOrPut(
     var t = try T.initCapacity(allocator, accounts.len);
     defer t.deinit();
 
-    var timer = try sig.time.Timer.start();
+    var timer = sig.time.Timer.start();
     for (0..accounts.len) |i| {
         const result = t.getOrPutAssumeCapacity(accounts[i].pubkey);
         if (!result.found_existing) {

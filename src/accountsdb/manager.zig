@@ -254,7 +254,7 @@ fn flushSlot(db: *AccountsDB, slot: Slot) !FileId {
     defer zone.deinit();
     errdefer zone.color(0xFF0000);
 
-    var timer = try sig.time.Timer.start();
+    var timer = sig.time.Timer.start();
 
     defer db.metrics.number_files_flushed.inc();
 
@@ -385,7 +385,7 @@ fn cleanAccountFiles(
     const zone = tracy.Zone.init(@src(), .{ .name = "accountsdb cleanAccountFiles" });
     defer zone.deinit();
 
-    var timer = try sig.time.Timer.start();
+    var timer = sig.time.Timer.start();
 
     const number_of_files = unclean_account_files.len;
     defer db.metrics.number_files_cleaned.add(number_of_files);
@@ -649,7 +649,7 @@ fn shrinkAccountFiles(
     const zone = tracy.Zone.init(@src(), .{ .name = "accountsdb shrinkAccountFiles" });
     defer zone.deinit();
 
-    var timer = try sig.time.Timer.start();
+    var timer = sig.time.Timer.start();
 
     const number_of_files = shrink_account_files.len;
     defer db.metrics.number_files_shrunk.add(number_of_files);

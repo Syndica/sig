@@ -173,7 +173,7 @@ pub const Service = struct {
         while (!self.exit.load(.monotonic)) {
             std.Thread.sleep(self.config.pool_process_rate.asNanos());
             if (self.transaction_pool.count() == 0) continue;
-            var timer = try Timer.start();
+            var timer = Timer.start();
 
             try self.processTransactions(&rpc_client);
             self.metrics.process_transactions_millis.set(timer.lap().asMillis());
@@ -190,7 +190,7 @@ pub const Service = struct {
 
     /// Checks for transactions to retry or drop from the pool
     fn processTransactions(self: *Service, rpc_client: *RpcClient) !void {
-        var block_height_timer = try Timer.start();
+        var block_height_timer = Timer.start();
         const block_height_response = try rpc_client
             .getBlockHeight(.{ .config = .{ .commitment = .processed } });
         defer block_height_response.deinit();
@@ -203,7 +203,7 @@ pub const Service = struct {
             self.transaction_pool.readSignaturesAndTransactionsWithLock();
         defer transactions_lg.unlock();
 
-        var signature_statuses_timer = try Timer.start();
+        var signature_statuses_timer = Timer.start();
         const signature_statuses_response = try rpc_client.getSignatureStatuses(.{
             .signatures = signatures,
             .config = .{ .searchTransactionHistory = false },
@@ -283,7 +283,7 @@ pub const Service = struct {
 
     /// Gets the leader TPU addresses from leader info
     fn getLeaderAddresses(self: *Service) ![]const SocketAddr {
-        var get_leader_addresses_timer = try Timer.start();
+        var get_leader_addresses_timer = Timer.start();
         const leader_addresses = blk: {
             const leader_info: *LeaderInfo, var leader_info_lg = self.leader_info_rw.writeWithLock();
             defer leader_info_lg.unlock();
