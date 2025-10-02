@@ -125,7 +125,10 @@ pub const ShredReceiver = struct {
                 packet_count += 1;
                 tracy.plot(
                     u32,
-                    std.fmt.comptimePrint("packets received ({s})", .{if (is_repair) "repair" else "turbine"}),
+                    std.fmt.comptimePrint(
+                        "packets received ({s})",
+                        .{if (is_repair) "repair" else "turbine"},
+                    ),
                     @intCast(packet_count),
                 );
 

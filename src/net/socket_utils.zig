@@ -462,9 +462,10 @@ const PerThread = struct {
                     const new_sock_addr = socket_addrs.addOneAssumeCapacity();
                     new_sock_addr.* = toSocketAddress(p.addr);
 
-                    const sock_addr: *std.posix.sockaddr, const sock_size: u32 = switch (new_sock_addr.*) {
-                        inline else => |*sock| .{ @ptrCast(sock), @sizeOf(@TypeOf(sock.*)) },
-                    };
+                    const sock_addr: *std.posix.sockaddr, const sock_size: u32 = //
+                        switch (new_sock_addr.*) {
+                            inline else => |*sock| .{ @ptrCast(sock), @sizeOf(@TypeOf(sock.*)) },
+                        };
 
                     msgvecs.appendAssumeCapacity(.{
                         .hdr = .{
@@ -482,7 +483,11 @@ const PerThread = struct {
                     if (msgvecs.constSlice().len == PACKETS_PER_BATCH) break;
                 }
 
-                const messages_sent = sendmmsg(st.socket.internal, msgvecs.slice(), 0) catch |e| blk: {
+                const messages_sent = sendmmsg(
+                    st.socket.internal,
+                    msgvecs.slice(),
+                    0,
+                ) catch |e| blk: {
                     st.logger.err().logf("sendmmsg error: {s}", .{@errorName(e)});
                     break :blk msgvecs.slice().len; // skip all packets in this batch
                 };
