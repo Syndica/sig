@@ -44,6 +44,28 @@ pub const AccountStore = union(enum) {
             .noop => {},
         };
     }
+
+    /// To be called from consensus when a slot is rooted
+    pub fn onSlotRooted(
+        self: AccountStore,
+        allocator: std.mem.Allocator,
+        newly_rooted_slot: Slot,
+        lamports_per_signature: u64,
+    ) !void {
+        switch (self) {
+            .accounts_db => |db| try accounts_db.manager.onSlotRooted(
+                allocator,
+                db,
+                newly_rooted_slot,
+                // currently, we don't want to mutate the account files of older slots, as this
+                // would invalidate the index made from the snapshot.
+                .{ .do_cleaning = false },
+                lamports_per_signature,
+            ),
+            .thread_safe_map => |db| try db.onSlotRooted(newly_rooted_slot),
+            .noop => {},
+        }
+    }
 };
 
 /// Interface for only reading accounts
@@ -382,6 +404,69 @@ pub const ThreadSafeAccountMap = struct {
                 versions_list.items[index] = .{ slot, account_shared_data };
             } else {
                 try versions_list.insert(self.allocator, index, .{ slot, account_shared_data });
+            }
+        }
+    }
+
+    fn onSlotRooted(
+        self: *ThreadSafeAccountMap,
+        newly_rooted_slot: Slot,
+    ) !void {
+        self.rwlock.lock();
+        defer self.rwlock.unlock();
+
+        if (self.largest_rooted_slot) |previously_rooted| {
+            if (newly_rooted_slot < previously_rooted) return error.SlotNotFound;
+        }
+
+        self.largest_rooted_slot = newly_rooted_slot;
+
+        const rooted_slot_entries = self.slot_map.get(newly_rooted_slot) orelse
+            return; // No account modifications in the newly rooted slot? Skipping cleanup.
+
+        // for each pubkey modified in the newly rooted slot...
+        for (rooted_slot_entries.items) |account_entry| {
+            const pubkey, _ = account_entry;
+
+            // there were accounts mutated in this slot => we must have an entry
+            const pubkey_entries = self.pubkey_map.getPtr(pubkey) orelse unreachable;
+            std.debug.assert(pubkey_entries.items.len > 0);
+
+            // attempt removal from pubkey_entry, trying backwards (oldest first)
+            var i = pubkey_entries.items.len;
+            while (i > 0) {
+                i -= 1;
+                const old_slot, const account = pubkey_entries.items[i];
+                if (old_slot >= newly_rooted_slot) break;
+                // This account has a newer rooted counterpart, we should remove it.
+
+                // remove account from pubkey_map(pubkey)->accounts, and free the account
+                const slot_popped, const account_popped = pubkey_entries.pop().?;
+                defer account_popped.deinit(self.allocator);
+                std.debug.assert(slot_popped == old_slot);
+                std.debug.assert(account_popped.equals(&account));
+
+                // find the same account in slot_map(slot)->accounts, and remove it from the list
+                const slot_entries = self.slot_map.getPtr(old_slot).?;
+                const removal_idx: usize = for (slot_entries.items, 0..) |slot_entry, j| {
+                    if (!slot_entry.@"0".equals(&pubkey)) continue;
+                    break j;
+                } else unreachable;
+                const removed_pubkey, const removed_account =
+                    slot_entries.orderedRemove(removal_idx);
+                std.debug.assert(removed_pubkey.equals(&pubkey));
+                std.debug.assert(removed_account.equals(&account_popped));
+
+                // if the slot has no more entries, deinit and remove it
+                if (slot_entries.items.len == 0) {
+                    std.debug.assert(self.slot_map.orderedRemove(old_slot));
+                    slot_entries.deinit(self.allocator);
+                }
+
+                // if the len of slot_entries has shrunk considerably, shrink the capacity
+                if (slot_entries.capacity > slot_entries.items.len * 10) {
+                    slot_entries.shrinkAndFree(self.allocator, slot_entries.items.len);
+                }
             }
         }
     }
@@ -805,7 +890,8 @@ test "put and get zero lamports before & after cleanup" {
 
     // but after we run the manager on it to clean it up...
     setRootedLargestSlotForTest(&simple_state, &real_state, slot100);
-    try sig.accounts_db.manager.onSlotRooted(allocator, &real_state, slot100, .{}, 5000);
+    try real_store.onSlotRooted(allocator, slot100, 5000);
+    try simple_store.onSlotRooted(allocator, slot100, 5000);
 
     // the unrooted entry for slot100 is removed, and all the zero-lamport accounts should
     // not be present in the flushed accounts.
@@ -830,7 +916,8 @@ test "put and get zero lamports before & after cleanup" {
 
     // and after we run the manager on it to clean up slot200 as well...
     setRootedLargestSlotForTest(&simple_state, &real_state, slot200);
-    try sig.accounts_db.manager.onSlotRooted(allocator, &real_state, slot200, .{}, 5000);
+    try real_store.onSlotRooted(allocator, slot200, 5000);
+    try simple_store.onSlotRooted(allocator, slot200, 5000);
 
     try expectDbUnrootedPubkeysInSlot(&real_state, slot200, null);
     try std.testing.expectEqual(false, real_state.account_index.exists(&pk1, slot200));

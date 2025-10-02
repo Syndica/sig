@@ -575,17 +575,12 @@ fn bypassConsensus(state: *ReplayState) !void {
         state.logger.info().logf("rooting slot with SlotTree.reRoot: {}", .{new_root});
         slot_tracker.root = new_root;
         slot_tracker.pruneNonRooted(state.allocator);
-        if (state.account_store == .accounts_db) {
-            try sig.accounts_db.manager.onSlotRooted(
-                state.allocator,
-                state.account_store.accounts_db,
-                new_root,
-                // currently, we don't want to mutate the account files of older slots, as this
-                // would invalidate the index made from the snapshot.
-                .{ .do_cleaning = false },
-                slot_tracker.get(new_root).?.constants.fee_rate_governor.lamports_per_signature,
-            );
-        }
+
+        try state.account_store.onSlotRooted(
+            state.allocator,
+            new_root,
+            slot_tracker.get(new_root).?.constants.fee_rate_governor.lamports_per_signature,
+        );
     }
 }
 
