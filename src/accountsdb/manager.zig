@@ -188,9 +188,9 @@ pub fn onSlotRooted(
     // TODO: change APIs of {clean, shrink, delete}AccountFiles to take single accounts, and stop
     // doing this.
     // TODO: could use an arena allocator for this whole function
-    var to_shrink: std.AutoArrayHashMapUnmanaged(FileId, void) = try .init(allocator, &.{}, &.{});
+    var to_shrink: std.AutoArrayHashMapUnmanaged(FileId, void) = .empty;
     defer to_shrink.deinit(allocator);
-    var to_delete: std.AutoArrayHashMapUnmanaged(FileId, void) = try .init(allocator, &.{}, &.{});
+    var to_delete: std.AutoArrayHashMapUnmanaged(FileId, void) = .empty;
     defer to_delete.deinit(allocator);
 
     const clean_result = try cleanAccountFiles(
