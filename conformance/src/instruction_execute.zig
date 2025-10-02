@@ -7,6 +7,7 @@ const executor = sig.runtime.executor;
 const sysvar = sig.runtime.sysvar;
 const program_loader = sig.runtime.program_loader;
 
+const AccountMap = sig.runtime.account_loader.BatchAccountCache.AccountMap;
 const Pubkey = sig.core.Pubkey;
 const AccountSharedData = sig.runtime.AccountSharedData;
 const InstructionError = sig.core.instruction.InstructionError;
@@ -93,10 +94,10 @@ fn executeInstruction(
 
     // Create an accounts map for loading programs, account data is owned by transaction context
     // so does not need to be freed
-    var accounts_map = std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData){};
+    var accounts_map = AccountMap{};
     errdefer accounts_map.deinit(allocator);
     for (tc.accounts) |tc_account| {
-        try accounts_map.put(allocator, tc_account.pubkey, tc_account.account.*);
+        try accounts_map.put(allocator, tc_account.pubkey, .{ .clean = tc_account.account.* });
     }
 
     // Override vm environment in the tc context

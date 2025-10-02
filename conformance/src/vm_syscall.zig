@@ -8,6 +8,7 @@ const serialize = sig.runtime.program.bpf.serialize;
 const syscalls = sig.vm.syscalls;
 const memory = sig.vm.memory;
 
+const AccountMap = sig.runtime.account_loader.BatchAccountCache.AccountMap;
 const Vm = sig.vm.Vm;
 const VmConfig = sig.vm.Config;
 const TransactionContext = sig.runtime.transaction_context.TransactionContext;
@@ -167,11 +168,11 @@ fn executeSyscall(
     // Program Cache Load Builtins
     // https://github.com/firedancer-io/solfuzz-agave/blob/0b8a7971055d822df3f602c287c368400a784c15/src/vm_syscalls.rs#L128-L130
     {
-        var accounts: std.AutoArrayHashMapUnmanaged(Pubkey, sig.runtime.AccountSharedData) = .{};
+        var accounts: AccountMap = .{};
         defer accounts.deinit(allocator);
 
         for (tc.accounts) |acc| {
-            try accounts.put(allocator, acc.pubkey, acc.account.*);
+            try accounts.put(allocator, acc.pubkey, .{ .clean = acc.account.* });
         }
 
         const clock = try tc.sysvar_cache.get(sig.runtime.sysvar.Clock);
