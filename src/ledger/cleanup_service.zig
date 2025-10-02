@@ -545,7 +545,7 @@ test "run exits promptly" {
     defer state.deinit();
 
     var exit = std.atomic.Value(bool).init(false);
-    var timer = try sig.time.Timer.start();
+    var timer = sig.time.Timer.start();
 
     const thread = try std.Thread.spawn(
         .{},

@@ -124,7 +124,7 @@ pub const PendingInsertShredsState = struct {
 
     /// agave: get_index_meta_entry
     pub fn getIndexMetaEntry(self: *Self, slot: Slot) !*IndexMetaWorkingSetEntry {
-        var timer = try Timer.start();
+        var timer = Timer.start();
         const entry = try self.index_working_set.getOrPut(slot);
         if (!entry.found_existing) {
             if (try self.db.get(self.allocator, schema.index, slot)) |item| {
@@ -196,7 +196,7 @@ pub const PendingInsertShredsState = struct {
     }
 
     pub fn commit(self: *Self) !void {
-        var commit_working_sets_timer = try Timer.start();
+        var commit_working_sets_timer = Timer.start();
 
         // TODO: inputs and outputs of this function may need to be fleshed out
         // as the ledger is used more throughout the codebase.
@@ -217,7 +217,7 @@ pub const PendingInsertShredsState = struct {
         if (self.metrics) |m|
             m.insert_working_sets_elapsed_us.add(commit_working_sets_timer.read().asMicros());
 
-        var commit_timer = try Timer.start();
+        var commit_timer = Timer.start();
         try self.db.commit(&self.write_batch);
         if (self.metrics) |m| m.write_batch_elapsed_us.add(commit_timer.read().asMicros());
     }

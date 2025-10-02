@@ -606,7 +606,7 @@ pub const GossipService = struct {
         var prune_messages = try ArrayList(PruneData).initCapacity(self.allocator, init_capacity);
         defer prune_messages.deinit();
 
-        var trim_table_timer = try sig.time.Timer.start();
+        var trim_table_timer = sig.time.Timer.start();
 
         // keep waiting for new data until,
         // - `exit` isn't set,
@@ -751,7 +751,7 @@ pub const GossipService = struct {
             batch_handle_zone.value(msg_count);
 
             if (push_messages.items.len > 0) {
-                var x_timer = try sig.time.Timer.start();
+                var x_timer = sig.time.Timer.start();
                 self.handleBatchPushMessages(&push_messages) catch |err| {
                     self.logger.err().logf("handleBatchPushMessages failed: {}", .{err});
                 };
@@ -767,7 +767,7 @@ pub const GossipService = struct {
             }
 
             if (prune_messages.items.len > 0) {
-                var x_timer = try sig.time.Timer.start();
+                var x_timer = sig.time.Timer.start();
                 self.handleBatchPruneMessages(&prune_messages);
                 const elapsed = x_timer.read().asMillis();
                 self.metrics.handle_batch_prune_time.observe(elapsed);
@@ -779,7 +779,7 @@ pub const GossipService = struct {
             }
 
             if (pull_requests.items.len > 0) {
-                var x_timer = try sig.time.Timer.start();
+                var x_timer = sig.time.Timer.start();
                 self.handleBatchPullRequest(seed + msg_count, pull_requests.items) catch |err| {
                     self.logger.err().logf("handleBatchPullRequest failed: {}", .{err});
                 };
@@ -795,7 +795,7 @@ pub const GossipService = struct {
             }
 
             if (pull_responses.items.len > 0) {
-                var x_timer = try sig.time.Timer.start();
+                var x_timer = sig.time.Timer.start();
                 self.handleBatchPullResponses(pull_responses.items) catch |err| {
                     self.logger.err().logf("handleBatchPullResponses failed: {}", .{err});
                 };
@@ -811,7 +811,7 @@ pub const GossipService = struct {
             }
 
             if (ping_messages.items.len > 0) {
-                var x_timer = try sig.time.Timer.start();
+                var x_timer = sig.time.Timer.start();
                 self.handleBatchPingMessages(&ping_messages) catch |err| {
                     self.logger.err().logf("handleBatchPingMessages failed: {}", .{err});
                 };
@@ -822,7 +822,7 @@ pub const GossipService = struct {
             }
 
             if (pong_messages.items.len > 0) {
-                var x_timer = try sig.time.Timer.start();
+                var x_timer = sig.time.Timer.start();
                 self.handleBatchPongMessages(&pong_messages);
                 const elapsed = x_timer.read().asMillis();
                 self.metrics.handle_batch_pong_time.observe(elapsed);
@@ -857,7 +857,7 @@ pub const GossipService = struct {
             var gossip_table, var gossip_table_lock = self.gossip_table_rw.writeWithLock();
             defer gossip_table_lock.unlock();
 
-            var x_timer = sig.time.Timer.start() catch unreachable;
+            var x_timer = sig.time.Timer.start();
             const now = getWallclockMs();
             const n_pubkeys_dropped = gossip_table.attemptTrim(now, UNIQUE_PUBKEY_CAPACITY) catch |err| err_blk: {
                 self.logger.err().logf("gossip_table.attemptTrim failed: {s}", .{@errorName(err)});
@@ -884,11 +884,11 @@ pub const GossipService = struct {
             self.logger.info().log("buildMessages loop closed");
         }
 
-        var loop_timer = try sig.time.Timer.start();
-        var active_set_timer = try sig.time.Timer.start();
-        var pull_req_timer = try sig.time.Timer.start();
-        var stats_publish_timer = try sig.time.Timer.start();
-        var trim_memory_timer = try sig.time.Timer.start();
+        var loop_timer = sig.time.Timer.start();
+        var active_set_timer = sig.time.Timer.start();
+        var pull_req_timer = sig.time.Timer.start();
+        var stats_publish_timer = sig.time.Timer.start();
+        var trim_memory_timer = sig.time.Timer.start();
 
         var prng = std.Random.DefaultPrng.init(seed);
         const random = prng.random();
@@ -1688,7 +1688,7 @@ pub const GossipService = struct {
 
         // insert values and track the failed origins per pubkey
         {
-            var timer = try sig.time.Timer.start();
+            var timer = sig.time.Timer.start();
             defer {
                 const elapsed = timer.read().asMillis();
                 self.metrics.push_messages_time_to_insert.observe(elapsed);
@@ -1792,7 +1792,7 @@ pub const GossipService = struct {
 
         // build prune packets
         const now = getWallclockMs();
-        var timer = try sig.time.Timer.start();
+        var timer = sig.time.Timer.start();
         defer {
             const elapsed = timer.read().asMillis();
             self.metrics.push_messages_time_build_prune.observe(elapsed);
@@ -3452,7 +3452,7 @@ pub const BenchmarkGossipServiceGeneral = struct {
         });
 
         // wait for all messages to be processed
-        var timer = try sig.time.Timer.start();
+        var timer = sig.time.Timer.start();
 
         gossip_service.shutdown();
         packet_handle.join();
@@ -3565,7 +3565,7 @@ pub const BenchmarkGossipServicePullRequests = struct {
             },
         });
 
-        var timer = try sig.time.Timer.start();
+        var timer = sig.time.Timer.start();
 
         // wait for all messages to be processed
         gossip_service.shutdown();
