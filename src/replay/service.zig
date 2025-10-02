@@ -575,6 +575,15 @@ fn bypassConsensus(state: *ReplayState) !void {
         state.logger.info().logf("rooting slot with SlotTree.reRoot: {}", .{new_root});
         slot_tracker.root = new_root;
         slot_tracker.pruneNonRooted(state.allocator);
+        if (state.account_store == .accounts_db) {
+            try sig.accounts_db.manager.onSlotRooted(
+                state.allocator,
+                state.account_store.accounts_db,
+                new_root,
+                .{},
+                5000,
+            );
+        }
     }
 }
 
