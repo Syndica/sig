@@ -334,7 +334,7 @@ pub fn HomogeneousThreadPool(comptime TaskType: type) type {
         /// - Discard the results of the threads as we're doing this purely for cleanup.
         /// - Returns whether we successfully joined.
         pub fn joinForDeinit(self: *Self, timeout: sig.time.Duration) bool {
-            var timer = sig.time.Timer.start() catch unreachable;
+            var timer = sig.time.Timer.start();
             while (self.pollFallible() == .pending) {
                 std.Thread.yield() catch std.atomic.spinLoopHint();
                 if (timer.read().gt(timeout)) {
@@ -415,7 +415,7 @@ test "typed thread pool" {
 }
 
 test sleep {
-    var timer = try sig.time.Timer.start();
+    var timer = sig.time.Timer.start();
     try std.testing.expectEqual(.time, sleep(.fromMillis(12), .{}));
     try std.testing.expect(timer.lap().gt(.fromMillis(11)));
 
