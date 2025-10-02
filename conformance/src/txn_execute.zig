@@ -667,9 +667,10 @@ fn executeTxnContext(
     //     .accounts_db = &accounts_db,
     // });
 
-    // Remove address lookup table and config program accounts by inserting empty accounts (zero-lamports)
+    // Remove address lookup table, stake, and config program accounts by inserting empty accounts (zero-lamports)
     try accounts_db.putAccount(slot, program.address_lookup_table.ID, .EMPTY);
     try accounts_db.putAccount(slot, program.config.ID, .EMPTY);
+    try accounts_db.putAccount(slot, program.stake.ID, .EMPTY);
 
     // Load accounts into accounts db
     for (accounts_map.keys(), accounts_map.values()) |pubkey, account| {

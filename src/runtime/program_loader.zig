@@ -41,12 +41,11 @@ pub fn loadPrograms(
     errdefer programs.deinit(allocator);
 
     for (accounts.keys(), accounts.values()) |pubkey, account| {
-        const executable = account.executable or
-            account.owner.equals(&bpf_loader.v1.ID) or 
-            account.owner.equals(&bpf_loader.v2.ID) or
-            account.owner.equals(&bpf_loader.v3.ID) or
-            account.owner.equals(&bpf_loader.v4.ID);
-        if (!executable) continue;
+        // https://github.com/firedancer-io/solfuzz-agave/blob/agave-v3.0.3/src/lib.rs#L771-L800
+        if (!account.owner.equals(&bpf_loader.v1.ID) and
+            !account.owner.equals(&bpf_loader.v2.ID) and
+            !account.owner.equals(&bpf_loader.v3.ID) and
+            !account.owner.equals(&bpf_loader.v4.ID)) continue;
 
         var loaded_program = try loadProgram(
             allocator,
