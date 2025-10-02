@@ -26,19 +26,19 @@ const PubkeyVote = struct {
 };
 
 const UpdateLabel = enum {
-    Aggregate,
-    MarkValid,
-    MarkInvalid,
-    Subtract,
-    Add,
+    add,
+    mark_valid,
+    mark_invalid,
+    subtract,
+    aggregate,
 };
 
-const UpdateOperation = union(enum) {
-    Add: u64,
-    MarkValid: Slot,
-    MarkInvalid: Slot,
-    Subtract: u64,
-    Aggregate,
+const UpdateOperation = union(UpdateLabel) {
+    add: u64,
+    mark_valid: Slot,
+    mark_invalid: Slot,
+    subtract: u64,
+    aggregate,
 };
 
 const SlotAndHashLabel = struct {
@@ -625,7 +625,7 @@ pub const ForkChoice = struct {
         for (children_hash_keys.keys()) |child_hash_key| {
             _ = try doInsertAggregateOperation(
                 &update_operations,
-                UpdateOperation{ .MarkValid = valid_slot_hash_key.slot },
+                UpdateOperation{ .mark_valid = valid_slot_hash_key.slot },
                 child_hash_key,
             );
         }
@@ -662,7 +662,7 @@ pub const ForkChoice = struct {
             for (children_hash_keys.keys()) |child_hash_key| {
                 _ = try doInsertAggregateOperation(
                     &update_operations,
-                    UpdateOperation{ .MarkInvalid = invalid_slot_hash_key.slot },
+                    UpdateOperation{ .mark_invalid = invalid_slot_hash_key.slot },
                     child_hash_key,
                 );
             }
@@ -1092,15 +1092,15 @@ pub const ForkChoice = struct {
                 };
 
                 if (stake_update > 0) {
-                    const subtract_op = UpdateOperation{ .Subtract = stake_update };
-                    const subtract_label = SlotAndHashLabel{
+                    const subtract_op: UpdateOperation = .{ .subtract = stake_update };
+                    const subtract_label: SlotAndHashLabel = .{
                         .slot_hash_key = old_latest_vote,
-                        .label = .Subtract,
+                        .label = .subtract,
                     };
 
                     if (update_operations.getEntry(subtract_label)) |existing_op| {
                         switch (existing_op.value_ptr.*) {
-                            .Subtract => |*stake| stake.* += stake_update,
+                            .subtract => |*stake| stake.* += stake_update,
                             else => {}, // Shouldn't happen for Subtract label
                         }
                     } else {
@@ -1129,16 +1129,16 @@ pub const ForkChoice = struct {
             };
 
             if (stake_update > 0) {
-                const add_op = UpdateOperation{ .Add = stake_update };
-                const add_label = SlotAndHashLabel{
+                const add_op: UpdateOperation = .{ .add = stake_update };
+                const add_label: SlotAndHashLabel = .{
                     .slot_hash_key = new_vote_slot_hash,
-                    .label = .Add,
+                    .label = .add,
                 };
 
                 if (update_operations.getEntry(add_label)) |existing_op| {
                     switch (existing_op.value_ptr.*) {
-                        .Add => |*stake| stake.* += stake_update,
-                        else => {}, // Shouldn't happen for Add label
+                        .add => |*stake| stake.* += stake_update,
+                        else => {}, // Shouldn't happen for add label
                     }
                 } else {
                     try update_operations.put(add_label, add_op);
@@ -1172,11 +1172,11 @@ pub const ForkChoice = struct {
             const slot_hash_key = slot_hash_key_label.slot_hash_key;
             const operation = values[i];
             switch (operation) {
-                .MarkValid => |valid_slot| self.markForkValid(&slot_hash_key, valid_slot),
-                .MarkInvalid => |invalid_slot| self.markForkInvalid(slot_hash_key, invalid_slot),
-                .Aggregate => self.aggregateSlot(slot_hash_key),
-                .Add => |stake| self.addSlotStake(&slot_hash_key, stake),
-                .Subtract => |stake| self.subtractSlotStake(&slot_hash_key, stake),
+                .mark_valid => |valid_slot| self.markForkValid(&slot_hash_key, valid_slot),
+                .mark_invalid => |invalid_slot| self.markForkInvalid(slot_hash_key, invalid_slot),
+                .aggregate => self.aggregateSlot(slot_hash_key),
+                .add => |stake| self.addSlotStake(&slot_hash_key, stake),
+                .subtract => |stake| self.subtractSlotStake(&slot_hash_key, stake),
             }
         }
     }
@@ -1654,9 +1654,9 @@ fn doInsertAggregateOperation(
     modify_fork_validity: ?UpdateOperation,
     slot_hash_key: SlotAndHash,
 ) !bool {
-    const aggregate_label = SlotAndHashLabel{
+    const aggregate_label: SlotAndHashLabel = .{
         .slot_hash_key = slot_hash_key,
-        .label = .Aggregate,
+        .label = .aggregate,
     };
 
     if (update_operations.contains(aggregate_label)) {
@@ -1665,29 +1665,29 @@ fn doInsertAggregateOperation(
 
     if (modify_fork_validity) |mark_fork_validity| {
         switch (mark_fork_validity) {
-            .MarkValid => |slot| {
+            .mark_valid => |slot| {
                 try update_operations.put(
-                    SlotAndHashLabel{
+                    .{
                         .slot_hash_key = slot_hash_key,
-                        .label = .MarkValid,
+                        .label = .mark_valid,
                     },
-                    UpdateOperation{ .MarkValid = slot },
+                    .{ .mark_valid = slot },
                 );
             },
-            .MarkInvalid => |slot| {
+            .mark_invalid => |slot| {
                 try update_operations.put(
-                    SlotAndHashLabel{
+                    .{
                         .slot_hash_key = slot_hash_key,
-                        .label = .MarkInvalid,
+                        .label = .mark_invalid,
                     },
-                    UpdateOperation{ .MarkInvalid = slot },
+                    .{ .mark_invalid = slot },
                 );
             },
             else => {},
         }
     }
 
-    try update_operations.put(aggregate_label, .Aggregate);
+    try update_operations.put(aggregate_label, .aggregate);
     return true;
 }
 
@@ -3010,29 +3010,29 @@ test "HeaviestSubtreeForkChoice.generateUpdateOperations" {
 
             // Add/remove from new/old forks
             try operations.put(
-                .{ .slot_hash_key = .{ .slot = 1, .hash = Hash.ZEROES }, .label = .Add },
-                UpdateOperation{ .Add = stake },
+                .{ .slot_hash_key = .{ .slot = 1, .hash = Hash.ZEROES }, .label = .add },
+                .{ .add = stake },
             );
             try operations.put(
-                .{ .slot_hash_key = .{ .slot = 3, .hash = Hash.ZEROES }, .label = .Add },
-                UpdateOperation{ .Add = stake },
+                .{ .slot_hash_key = .{ .slot = 3, .hash = Hash.ZEROES }, .label = .add },
+                .{ .add = stake },
             );
             try operations.put(
-                .{ .slot_hash_key = .{ .slot = 4, .hash = Hash.ZEROES }, .label = .Add },
-                UpdateOperation{ .Add = stake },
+                .{ .slot_hash_key = .{ .slot = 4, .hash = Hash.ZEROES }, .label = .add },
+                .{ .add = stake },
             );
             // Aggregate all ancestors of changed slots
             try operations.put(
-                .{ .slot_hash_key = .{ .slot = 0, .hash = Hash.ZEROES }, .label = .Aggregate },
-                UpdateOperation.Aggregate,
+                .{ .slot_hash_key = .{ .slot = 0, .hash = Hash.ZEROES }, .label = .aggregate },
+                .aggregate,
             );
             try operations.put(
-                .{ .slot_hash_key = .{ .slot = 1, .hash = Hash.ZEROES }, .label = .Aggregate },
-                UpdateOperation.Aggregate,
+                .{ .slot_hash_key = .{ .slot = 1, .hash = Hash.ZEROES }, .label = .aggregate },
+                .aggregate,
             );
             try operations.put(
-                .{ .slot_hash_key = .{ .slot = 2, .hash = Hash.ZEROES }, .label = .Aggregate },
-                UpdateOperation.Aggregate,
+                .{ .slot_hash_key = .{ .slot = 2, .hash = Hash.ZEROES }, .label = .aggregate },
+                .aggregate,
             );
 
             break :blk operations;
@@ -3090,37 +3090,37 @@ test "HeaviestSubtreeForkChoice.generateUpdateOperations" {
 
             // Add/remove from new/old forks
             try operations.put(
-                .{ .slot_hash_key = .{ .slot = 3, .hash = Hash.ZEROES }, .label = .Add },
-                UpdateOperation{ .Add = stake },
+                .{ .slot_hash_key = .{ .slot = 3, .hash = Hash.ZEROES }, .label = .add },
+                .{ .add = stake },
             );
             try operations.put(
-                .{ .slot_hash_key = .{ .slot = 5, .hash = Hash.ZEROES }, .label = .Add },
-                UpdateOperation{ .Add = stake },
+                .{ .slot_hash_key = .{ .slot = 5, .hash = Hash.ZEROES }, .label = .add },
+                .{ .add = stake },
             );
             try operations.put(
-                .{ .slot_hash_key = .{ .slot = 1, .hash = Hash.ZEROES }, .label = .Subtract },
-                UpdateOperation{ .Subtract = stake },
+                .{ .slot_hash_key = .{ .slot = 1, .hash = Hash.ZEROES }, .label = .subtract },
+                .{ .subtract = stake },
             );
             try operations.put(
-                .{ .slot_hash_key = .{ .slot = 4, .hash = Hash.ZEROES }, .label = .Subtract },
-                UpdateOperation{ .Subtract = stake },
+                .{ .slot_hash_key = .{ .slot = 4, .hash = Hash.ZEROES }, .label = .subtract },
+                .{ .subtract = stake },
             );
             // Aggregate all ancestors of changed slots
             try operations.put(
-                .{ .slot_hash_key = .{ .slot = 0, .hash = Hash.ZEROES }, .label = .Aggregate },
-                UpdateOperation.Aggregate,
+                .{ .slot_hash_key = .{ .slot = 0, .hash = Hash.ZEROES }, .label = .aggregate },
+                .aggregate,
             );
             try operations.put(
-                .{ .slot_hash_key = .{ .slot = 1, .hash = Hash.ZEROES }, .label = .Aggregate },
-                UpdateOperation.Aggregate,
+                .{ .slot_hash_key = .{ .slot = 1, .hash = Hash.ZEROES }, .label = .aggregate },
+                .aggregate,
             );
             try operations.put(
-                .{ .slot_hash_key = .{ .slot = 2, .hash = Hash.ZEROES }, .label = .Aggregate },
-                UpdateOperation.Aggregate,
+                .{ .slot_hash_key = .{ .slot = 2, .hash = Hash.ZEROES }, .label = .aggregate },
+                .aggregate,
             );
             try operations.put(
-                .{ .slot_hash_key = .{ .slot = 3, .hash = Hash.ZEROES }, .label = .Aggregate },
-                UpdateOperation.Aggregate,
+                .{ .slot_hash_key = .{ .slot = 3, .hash = Hash.ZEROES }, .label = .aggregate },
+                .aggregate,
             );
 
             break :blk operations;
@@ -3160,41 +3160,41 @@ test "HeaviestSubtreeForkChoice.generateUpdateOperations" {
 
             // Add/remove from new/old forks
             try operations.put(
-                .{ .slot_hash_key = .{ .slot = 4, .hash = Hash.ZEROES }, .label = .Add },
-                UpdateOperation{ .Add = stake },
+                .{ .slot_hash_key = .{ .slot = 4, .hash = Hash.ZEROES }, .label = .add },
+                .{ .add = stake },
             );
             try operations.put(
-                .{ .slot_hash_key = .{ .slot = 6, .hash = Hash.ZEROES }, .label = .Add },
-                UpdateOperation{ .Add = stake },
+                .{ .slot_hash_key = .{ .slot = 6, .hash = Hash.ZEROES }, .label = .add },
+                .{ .add = stake },
             );
             try operations.put(
-                .{ .slot_hash_key = .{ .slot = 3, .hash = Hash.ZEROES }, .label = .Subtract },
-                UpdateOperation{ .Subtract = stake },
+                .{ .slot_hash_key = .{ .slot = 3, .hash = Hash.ZEROES }, .label = .subtract },
+                .{ .subtract = stake },
             );
             try operations.put(
-                .{ .slot_hash_key = .{ .slot = 5, .hash = Hash.ZEROES }, .label = .Subtract },
-                UpdateOperation{ .Subtract = stake },
+                .{ .slot_hash_key = .{ .slot = 5, .hash = Hash.ZEROES }, .label = .subtract },
+                .{ .subtract = stake },
             );
             // Aggregate all ancestors of changed slots
             try operations.put(
-                .{ .slot_hash_key = .{ .slot = 0, .hash = Hash.ZEROES }, .label = .Aggregate },
-                UpdateOperation.Aggregate,
+                .{ .slot_hash_key = .{ .slot = 0, .hash = Hash.ZEROES }, .label = .aggregate },
+                .aggregate,
             );
             try operations.put(
-                .{ .slot_hash_key = .{ .slot = 1, .hash = Hash.ZEROES }, .label = .Aggregate },
-                UpdateOperation.Aggregate,
+                .{ .slot_hash_key = .{ .slot = 1, .hash = Hash.ZEROES }, .label = .aggregate },
+                .aggregate,
             );
             try operations.put(
-                .{ .slot_hash_key = .{ .slot = 2, .hash = Hash.ZEROES }, .label = .Aggregate },
-                UpdateOperation.Aggregate,
+                .{ .slot_hash_key = .{ .slot = 2, .hash = Hash.ZEROES }, .label = .aggregate },
+                .aggregate,
             );
             try operations.put(
-                .{ .slot_hash_key = .{ .slot = 3, .hash = Hash.ZEROES }, .label = .Aggregate },
-                UpdateOperation.Aggregate,
+                .{ .slot_hash_key = .{ .slot = 3, .hash = Hash.ZEROES }, .label = .aggregate },
+                .aggregate,
             );
             try operations.put(
-                .{ .slot_hash_key = .{ .slot = 5, .hash = Hash.ZEROES }, .label = .Aggregate },
-                UpdateOperation.Aggregate,
+                .{ .slot_hash_key = .{ .slot = 5, .hash = Hash.ZEROES }, .label = .aggregate },
+                .aggregate,
             );
 
             break :blk operations;
