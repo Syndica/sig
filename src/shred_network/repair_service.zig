@@ -361,6 +361,7 @@ pub const RepairRequester = struct {
         exit: *Atomic(bool),
     ) !Self {
         const channel = try Channel(Packet).create(allocator);
+        channel.name = "repair requester channel(Packet)";
         errdefer channel.destroy();
 
         const thread = try SocketThread.spawnSender(
@@ -370,6 +371,8 @@ pub const RepairRequester = struct {
             channel,
             .{ .unordered = exit },
         );
+
+        try thread.handle.setName("repreq spwnSndr");
 
         return .{
             .allocator = allocator,

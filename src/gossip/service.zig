@@ -222,9 +222,12 @@ pub const GossipService = struct {
     ) !Self {
         // setup channels for communication between threads
         var packet_incoming_channel = try Channel(Packet).create(allocator);
+        packet_incoming_channel.name = "gossip packet incoming channel";
         errdefer packet_incoming_channel.destroy();
 
         var packet_outgoing_channel = try Channel(Packet).create(allocator);
+        packet_outgoing_channel.name = "gossip packet outgoing channel";
+
         errdefer packet_outgoing_channel.destroy();
 
         var verified_incoming_channel = try Channel(GossipMessageWithEndpoint).create(allocator);

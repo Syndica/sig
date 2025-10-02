@@ -1,4 +1,5 @@
 const std = @import("std");
+const tracy = @import("tracy");
 const sig = @import("../sig.zig");
 const shred_network = @import("lib.zig");
 
@@ -82,6 +83,9 @@ fn runShredProcessorOnceOver(
     metrics: Metrics,
     params: Params,
 ) !void {
+    const zone = tracy.Zone.init(@src(), .{ .name = "runShredProcessorOnceOver" });
+    defer zone.deinit();
+
     for (shreds_buffer.items(.shred)) |shred| shred.deinit();
     shreds_buffer.clearRetainingCapacity();
     std.debug.assert(shreds_buffer.capacity >= MAX_SHREDS_PER_ITER);

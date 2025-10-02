@@ -87,10 +87,15 @@ pub fn start(
 
     // channels (cant use arena as they need to alloc/free frequently & potentially from multiple sender threads)
     const unverified_shred_channel = try Channel(Packet).create(deps.allocator);
+    unverified_shred_channel.name = "unverified shred channel (Packet)";
     try defers.deferCall(Channel(Packet).destroy, .{unverified_shred_channel});
+
     const shreds_to_insert_channel = try Channel(Packet).create(deps.allocator);
+    shreds_to_insert_channel.name = "shreds to insert channel (Packet)";
     try defers.deferCall(Channel(Packet).destroy, .{shreds_to_insert_channel});
+
     const retransmit_channel = try Channel(Packet).create(deps.allocator);
+    retransmit_channel.name = "retransmit channel (Packet)";
     try defers.deferCall(Channel(Packet).destroy, .{retransmit_channel});
 
     // receiver (threads)

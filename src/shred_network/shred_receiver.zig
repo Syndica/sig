@@ -1,5 +1,6 @@
 const std = @import("std");
 const network = @import("zig-network");
+const tracy = @import("tracy");
 const sig = @import("../sig.zig");
 const shred_network = @import("lib.zig");
 
@@ -51,6 +52,7 @@ pub const ShredReceiver = struct {
 
         // Cretae pipe from response_sender -> repair_socket
         const response_sender = try Channel(Packet).create(self.allocator);
+        response_sender.name = "response sender channel (Packet)";
         defer response_sender.destroy();
 
         const response_sender_thread = try SocketThread.spawnSender(
@@ -90,8 +92,18 @@ pub const ShredReceiver = struct {
         exit: ExitCondition,
         comptime is_repair: bool,
     ) !void {
+        const zone = tracy.Zone.init(@src(), .{ .name = std.fmt.comptimePrint(
+            "runPacketHandler ({s})",
+            .{if (is_repair) "repair" else "turbine"},
+        ) });
+        defer zone.deinit();
+
         // Setup a channel.
         const receiver = try Channel(Packet).create(self.allocator);
+        receiver.name = std.fmt.comptimePrint(
+            "{s} receiver channel (Packet)",
+            .{if (is_repair) "repair" else "turbine"},
+        );
         defer receiver.destroy();
 
         // Receive from the socket into the channel.
@@ -111,6 +123,12 @@ pub const ShredReceiver = struct {
             while (receiver.tryReceive()) |packet| {
                 self.metrics.incReceived(is_repair);
                 packet_count += 1;
+                tracy.plot(
+                    u32,
+                    std.fmt.comptimePrint("packets received ({s})", .{if (is_repair) "repair" else "turbine"}),
+                    @intCast(packet_count),
+                );
+
                 try self.handlePacket(packet, response_sender, is_repair);
             }
             self.metrics.observeBatchSize(is_repair, packet_count);
