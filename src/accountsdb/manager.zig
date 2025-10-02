@@ -873,7 +873,7 @@ fn shrinkAccountFiles(
 /// only exist in the cache, and not on disk). this is mainly used for dropping
 /// forks.
 fn purgeSlot(db: *AccountsDB, slot: Slot) void {
-    var timer = sig.time.Timer.start() catch @panic("Timer unsupported");
+    var timer = sig.time.Timer.start();
 
     var pubkeys_and_accounts = blk: {
         const unrooted_accounts, var unrooted_accounts_lg = db.unrooted_accounts.writeWithLock();
