@@ -57,7 +57,10 @@ pub fn onSlotRooted(
         tracy.frameMarkNamed("rooted slots flushed");
     };
     errdefer |err| {
-        db.logger.err().logf("failed to flushed slot {} to disk, err: {}", .{ newly_rooted_slot, err });
+        db.logger.err().logf(
+            "failed to flushed slot {} to disk, err: {}",
+            .{ newly_rooted_slot, err },
+        );
         failed = true;
     }
 
