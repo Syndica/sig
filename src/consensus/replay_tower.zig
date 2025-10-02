@@ -17,12 +17,8 @@ const SortedSetUnmanaged = sig.utils.collections.SortedSetUnmanaged;
 const TowerSync = sig.runtime.program.vote.state.TowerSync;
 const TowerVoteState = sig.consensus.tower_state.TowerVoteState;
 const Vote = sig.runtime.program.vote.state.Vote;
-const VoteState = sig.runtime.program.vote.state.VoteState;
-const VoteStateVersions = sig.runtime.program.vote.state.VoteStateVersions;
 const VoteStateUpdate = sig.runtime.program.vote.state.VoteStateUpdate;
 const StakeAndVoteAccountsMap = sig.core.vote_accounts.StakeAndVoteAccountsMap;
-const StakeAndVoteAccount = sig.core.vote_accounts.StakeAndVoteAccount;
-const VoteAccount = sig.core.vote_accounts.VoteAccount;
 const UnixTimestamp = sig.core.UnixTimestamp;
 
 const HeaviestSubtreeForkChoice = sig.consensus.HeaviestSubtreeForkChoice;
@@ -1988,10 +1984,7 @@ test "check_vote_threshold_forks" {
         },
     );
     defer {
-        for (accounts.values()) |value| {
-            allocator.free(value.account.account.data);
-            value.account.state.deinit();
-        }
+        for (accounts.values()) |*value| value.account.state.deinit(allocator);
         accounts.deinit(allocator);
     }
 
@@ -2091,10 +2084,7 @@ test "collect vote lockouts root" {
         &[_]struct { u64, []u64 }{ .{ 1, votes }, .{ 1, votes } },
     );
     defer {
-        for (accounts.values()) |value| {
-            allocator.free(value.account.account.data);
-            value.account.state.deinit();
-        }
+        for (accounts.values()) |*value| value.account.state.deinit(allocator);
         accounts.deinit(allocator);
     }
 
@@ -2216,10 +2206,7 @@ test "collect vote lockouts sums" {
         &[_]struct { u64, []u64 }{ .{ 1, &votes }, .{ 1, &votes } },
     );
     defer {
-        for (accounts.values()) |value| {
-            allocator.free(value.account.account.data);
-            value.account.state.deinit();
-        }
+        for (accounts.values()) |*value| value.account.state.deinit(allocator);
         accounts.deinit(allocator);
     }
 
@@ -4693,17 +4680,14 @@ fn genStakes(
     random: std.Random,
     stakes: []const struct { u64, []u64 },
 ) !StakeAndVoteAccountsMap {
+    if (!builtin.is_test) @compileError("genStakes only intended for tests");
+
     var map = StakeAndVoteAccountsMap.empty;
 
     for (stakes) |stake| {
         const lamports = stake[0];
         const votes = stake[1];
 
-        var account = sig.runtime.AccountSharedData.NEW;
-        account.lamports = lamports;
-        const data = try allocator.alloc(u8, VoteState.MAX_VOTE_STATE_SIZE);
-        account.data = data;
-        account.owner = sig.runtime.program.vote.ID;
         var vote_state = try sig.runtime.program.vote.state.createTestVoteState(
             allocator,
             Pubkey.ZEROES,
@@ -4713,21 +4697,17 @@ fn genStakes(
         );
         for (votes) |slot| {
             try sig.runtime.program.vote.state.processSlotVoteUnchecked(
+                allocator,
                 &vote_state,
                 slot,
             );
         }
-        _ = try sig.bincode.writeToSlice(
-            account.data,
-            VoteStateVersions{ .current = vote_state },
-            .{},
-        );
         try map.put(
             allocator,
             Pubkey.initRandom(random),
-            StakeAndVoteAccount{
+            .{
                 .stake = lamports,
-                .account = VoteAccount{ .account = account, .state = vote_state },
+                .account = .{ .account = .{ .lamports = lamports }, .state = vote_state },
             },
         );
     }
