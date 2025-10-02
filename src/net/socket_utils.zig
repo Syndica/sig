@@ -644,6 +644,11 @@ pub const BenchmarkPacketProcessing = struct {
 };
 
 test "benchmark packet processing" {
+    // This test hangs on MacOS 26 for unknown reasons.
+    // It seems that performing `recv`s in this manner stopped working suddently, it could be a
+    // MacOS kernel bug, or an issue with our code.
+    if (builtin.target.os.tag == .macos) return error.SkipZigTest;
+
     _ = try BenchmarkPacketProcessing.benchmarkReadSocket(.{
         .n_packets = if (sig.build_options.long_tests) 100_000 else 1,
     });

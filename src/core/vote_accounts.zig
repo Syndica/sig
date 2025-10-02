@@ -1,6 +1,7 @@
 const builtin = @import("builtin");
 const std = @import("std");
 const sig = @import("../sig.zig");
+const tracy = @import("tracy");
 
 const Allocator = std.mem.Allocator;
 
@@ -66,6 +67,9 @@ pub const VoteAccounts = struct {
         self: *const VoteAccounts,
         allocator: std.mem.Allocator,
     ) Allocator.Error!VoteAccounts {
+        const zone = tracy.Zone.init(@src(), .{ .name = "VoteAccounts.clone" });
+        defer zone.deinit();
+
         var result = VoteAccounts{};
         errdefer result.deinit(allocator);
 

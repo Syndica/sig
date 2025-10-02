@@ -45,7 +45,7 @@ pub const MemoryMap = union(enum) {
         }
     }
 
-    fn findRegion(
+    pub fn findRegion(
         self: MemoryMap,
         vm_addr: u64,
     ) !*Region {

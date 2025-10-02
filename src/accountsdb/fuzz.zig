@@ -8,8 +8,8 @@ const Pubkey = sig.core.pubkey.Pubkey;
 const Slot = sig.core.time.Slot;
 
 const AccountsDB = sig.accounts_db.AccountsDB;
-const FullSnapshotFileInfo = sig.accounts_db.snapshots.FullSnapshotFileInfo;
-const IncrementalSnapshotFileInfo = sig.accounts_db.snapshots.IncrementalSnapshotFileInfo;
+const FullSnapshotFileInfo = sig.accounts_db.snapshot.data.FullSnapshotFileInfo;
+const IncrementalSnapshotFileInfo = sig.accounts_db.snapshot.data.IncrementalSnapshotFileInfo;
 
 const N_RANDOM_THREADS = 8;
 
@@ -186,12 +186,12 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     // prealloc some references to use throught the fuzz
     try accounts_db.account_index.expandRefCapacity(1_000_000);
 
-    var manager_exit: std.atomic.Value(bool) = .init(false);
     var manager: sig.accounts_db.manager.Manager = try .init(allocator, &accounts_db, .{
-        .exit = &manager_exit,
-        .slots_per_full_snapshot = 50_000,
-        .slots_per_incremental_snapshot = 5_000,
-        .zstd_nb_workers = @intCast(std.Thread.getCpuCount() catch 0),
+        .snapshot = .{
+            .slots_per_full_snapshot = 50_000,
+            .slots_per_incremental_snapshot = 5_000,
+            .zstd_nb_workers = @intCast(std.Thread.getCpuCount() catch 0),
+        },
     });
     defer manager.deinit(allocator);
 
@@ -358,7 +358,10 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
             random.int(u8) == 0;
         if (create_new_root) snapshot_validation: {
             largest_rooted_slot = @min(top_slot, largest_rooted_slot + 2);
-            accounts_db.largest_rooted_slot.store(largest_rooted_slot, .monotonic);
+            accounts_db.max_slots.set(.{
+                .rooted = largest_rooted_slot,
+                .flushed = null,
+            });
             try manager.manage(allocator);
 
             // holding the lock here means that the snapshot archive(s) wont be deleted
@@ -394,7 +397,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                     try main_accountsdb_dir.openFile(full_archive_name, .{ .mode = .read_only });
                 defer full_archive_file.close();
 
-                try sig.accounts_db.snapshots.parallelUnpackZstdTarBall(
+                try sig.accounts_db.snapshot.data.parallelUnpackZstdTarBall(
                     allocator,
                     .noop,
                     full_archive_file,
@@ -437,7 +440,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                     try alt_accountsdb_dir.openFile(inc_archive_name, .{});
                 defer inc_archive_file.close();
 
-                try sig.accounts_db.snapshots.parallelUnpackZstdTarBall(
+                try sig.accounts_db.snapshot.data.parallelUnpackZstdTarBall(
                     allocator,
                     .noop,
                     inc_archive_file,
@@ -453,17 +456,18 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                 break :inc inc_snapshot_file_info;
             };
 
-            const snapshot_files = sig.accounts_db.SnapshotFiles.fromFileInfos(
+            const snapshot_files = sig.accounts_db.snapshot.SnapshotFiles.fromFileInfos(
                 full_snapshot_file_info,
                 maybe_incremental_file_info,
             );
 
-            const combined_manifest = try sig.accounts_db.FullAndIncrementalManifest.fromFiles(
-                allocator,
-                .from(logger),
-                alt_accountsdb_dir,
-                snapshot_files,
-            );
+            const combined_manifest =
+                try sig.accounts_db.snapshot.FullAndIncrementalManifest.fromFiles(
+                    allocator,
+                    .from(logger),
+                    alt_accountsdb_dir,
+                    snapshot_files,
+                );
             defer combined_manifest.deinit(allocator);
 
             const index_type: AccountsDB.InitParams.Index =
@@ -484,15 +488,16 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
             });
             defer alt_accounts_db.deinit();
 
-            (try alt_accounts_db.loadWithDefaults(
-                allocator,
-                combined_manifest,
-                1,
-                true,
-                N_ACCOUNTS_PER_SLOT,
-                false,
-                false,
-            )).deinit(allocator);
+            {
+                const loaded = try alt_accounts_db.loadWithDefaults(
+                    allocator,
+                    combined_manifest,
+                    1,
+                    true,
+                    N_ACCOUNTS_PER_SLOT,
+                );
+                defer loaded.deinit(allocator);
+            }
 
             const maybe_inc_slot = if (snapshot_info.inc) |inc| inc.slot else null;
             logger.info().logf(

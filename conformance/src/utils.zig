@@ -217,7 +217,7 @@ pub fn createTransactionContextAccounts(
             .data = account_data,
             .owner = .{ .data = pb_account.owner.getSlice()[0..Pubkey.SIZE].* },
             .executable = pb_account.executable,
-            .rent_epoch = pb_account.rent_epoch,
+            .rent_epoch = sig.core.rent_collector.RENT_EXEMPT_RENT_EPOCH,
         };
 
         try accounts.append(
@@ -242,39 +242,24 @@ pub fn createInstructionInfo(
         std.debug.print("createInstructionInfo: error={}\n", .{err});
     }
 
-    const program_index_in_transaction = blk: {
-        for (tc.accounts, 0..) |acc, i| {
-            if (acc.pubkey.equals(&program_id)) {
-                break :blk i;
-            }
-        }
-        return error.CouldNotFindProgram;
-    };
+    const program_index_in_transaction =
+        tc.getAccountIndex(program_id) orelse return error.CouldNotFindProgram;
 
-    var account_metas = InstructionInfo.AccountMetas{};
-
+    var dedupe_map: [InstructionInfo.MAX_ACCOUNT_METAS]u8 = @splat(0xff);
     for (pb_instruction_accounts, 0..) |acc, idx| {
-        if (acc.index >= tc.accounts.len)
-            return error.AccountIndexOutOfBounds;
+        if (dedupe_map[acc.index] == 0xff)
+            dedupe_map[acc.index] = @intCast(idx);
+    }
 
-        const index_in_callee = blk: {
-            for (0..idx) |i| {
-                if (acc.index ==
-                    pb_instruction_accounts[i].index)
-                {
-                    break :blk i;
-                }
-            }
-            break :blk idx;
-        };
-
-        try account_metas.append(.{
-            .pubkey = tc.accounts[acc.index].pubkey,
-            .index_in_transaction = @intCast(acc.index),
-            .index_in_caller = @intCast(acc.index),
-            .index_in_callee = @intCast(index_in_callee),
-            .is_signer = acc.is_signer,
-            .is_writable = acc.is_writable,
+    var instruction_accounts = InstructionInfo.AccountMetas{};
+    for (pb_instruction_accounts) |account| {
+        const tc_acc = tc.getAccountAtIndex(@intCast(account.index)) orelse
+            return error.AccountNotInTransaction;
+        try instruction_accounts.append(.{
+            .pubkey = tc_acc.pubkey,
+            .index_in_transaction = @intCast(account.index),
+            .is_signer = account.is_signer,
+            .is_writable = account.is_writable,
         });
     }
 
@@ -283,7 +268,8 @@ pub fn createInstructionInfo(
             .pubkey = program_id,
             .index_in_transaction = @intCast(program_index_in_transaction),
         },
-        .account_metas = account_metas,
+        .account_metas = instruction_accounts,
+        .dedupe_map = dedupe_map,
         .instruction_data = try allocator.dupe(u8, instruction),
         .initial_account_lamports = 0,
     };
@@ -470,7 +456,6 @@ fn modifiedAccounts(
                 allocator,
             ),
             .executable = acc.account.executable,
-            .rent_epoch = acc.account.rent_epoch,
             .owner = try ManagedString.copy(
                 &acc.account.owner.data,
                 allocator,
@@ -589,7 +574,6 @@ pub fn printPbInstrContext(ctx: pb.InstrContext) !void {
         try std.fmt.format(writer, ",\n\t\t\tlamports: {d}", .{acc.lamports});
         try std.fmt.format(writer, ",\n\t\t\tdata.len: {any}", .{acc.data.getSlice().len});
         try std.fmt.format(writer, ",\n\t\t\texecutable: {}", .{acc.executable});
-        try std.fmt.format(writer, ",\n\t\t\trent_epoch: {}", .{acc.rent_epoch});
         try std.fmt.format(writer, ",\n\t\t\towner: {any}", .{
             Pubkey{ .data = acc.owner.getSlice()[0..Pubkey.SIZE].* },
         });
@@ -625,7 +609,6 @@ pub fn printPbInstrEffects(effects: pb.InstrEffects) !void {
         try std.fmt.format(writer, ",\n\t\t\tlamports: {d}", .{acc.lamports});
         try std.fmt.format(writer, ",\n\t\t\tdata: {any}", .{acc.data.getSlice()});
         try std.fmt.format(writer, ",\n\t\t\texecutable: {}", .{acc.executable});
-        try std.fmt.format(writer, ",\n\t\t\trent_epoch: {}", .{acc.rent_epoch});
         try std.fmt.format(writer, ",\n\t\t\towner: {}", .{
             Pubkey{ .data = acc.owner.getSlice()[0..Pubkey.SIZE].* },
         });

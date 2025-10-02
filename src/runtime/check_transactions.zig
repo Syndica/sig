@@ -601,20 +601,22 @@ test "checkAge: nonce account" {
                 .{
                     .pubkey = nonce_key,
                     .index_in_transaction = 1,
-                    .index_in_caller = 1,
-                    .index_in_callee = 1,
                     .is_signer = false,
                     .is_writable = true,
                 },
                 .{
                     .pubkey = nonce_authority_key,
                     .index_in_transaction = 2,
-                    .index_in_caller = 2,
-                    .index_in_callee = 2,
                     .is_signer = true,
                     .is_writable = false,
                 },
             }),
+            .dedupe_map = blk: {
+                var dedupe_map: [sig.runtime.InstructionInfo.MAX_ACCOUNT_METAS]u8 = @splat(0xff);
+                dedupe_map[1] = 1;
+                dedupe_map[2] = 2;
+                break :blk dedupe_map;
+            },
             .instruction_data = instruction_data,
             .initial_account_lamports = 0,
         }},

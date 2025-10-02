@@ -399,6 +399,16 @@ test "neg64" {
     , .{ 0xFFFFFFFFFFFFFFFE, 3 });
 }
 
+test "neg64 wrapping" {
+    try testAsm(.{ .maximum_version = .v0 },
+        \\entrypoint:
+        \\  mov64 r0, 1
+        \\  lsh64 r0, 63
+        \\  neg64 r0
+        \\  exit
+    , .{ 0x8000000000000000, 4 });
+}
+
 test "sub32 imm" {
     try testAsm(.{},
         \\entrypoint:
@@ -2353,6 +2363,7 @@ pub fn testElfWithSyscalls(
             .pubkey = sig.runtime.program.system.ID,
         },
         .account_metas = .{},
+        .dedupe_map = @splat(0xff),
         .instruction_data = &.{},
         .initial_account_lamports = 0,
     };

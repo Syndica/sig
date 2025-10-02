@@ -25,7 +25,6 @@ pub const ServiceManager = struct {
     defers: DeferList,
     name: []const u8,
     default_run_config: RunConfig,
-    default_spawn_config: std.Thread.SpawnConfig,
 
     const Self = @This();
 
@@ -37,7 +36,6 @@ pub const ServiceManager = struct {
         exit: *Atomic(bool),
         name: []const u8,
         default_run_config: RunConfig,
-        default_spawn_config: std.Thread.SpawnConfig,
     ) Self {
         return .{
             .logger = logger,
@@ -47,7 +45,6 @@ pub const ServiceManager = struct {
             .defers = .{ .allocator = backing_allocator },
             .name = name,
             .default_run_config = default_run_config,
-            .default_spawn_config = default_spawn_config,
         };
     }
 
@@ -59,7 +56,7 @@ pub const ServiceManager = struct {
         comptime function: anytype,
         args: anytype,
     ) !void {
-        try self.spawnCustom(name, .{}, function, args);
+        try self.spawnCustom(name, self.default_run_config, function, args);
     }
 
     /// Spawn a thread to be managed.
@@ -67,17 +64,11 @@ pub const ServiceManager = struct {
     pub fn spawnCustom(
         self: *Self,
         comptime name: []const u8,
-        config: struct {
-            run_config: ?RunConfig = null,
-            spawn_config: ?std.Thread.SpawnConfig = null,
-        },
+        config: RunConfig,
         comptime function: anytype,
         args: anytype,
     ) !void {
-        const thread = try spawnService(self.logger, self.exit, name, .{
-            .run_config = config.run_config orelse self.default_run_config,
-            .spawn_config = config.spawn_config orelse self.default_spawn_config,
-        }, function, args);
+        const thread = try spawnService(self.logger, self.exit, name, config, function, args);
         try self.threads.append(self.arena.allocator(), thread);
     }
 
@@ -110,6 +101,8 @@ pub const RunConfig = struct {
     /// The minimum amount of time to pause after one iteration
     /// of the function completes, before restarting the function.
     min_pause_ns: u64 = 0,
+
+    pub const loop: RunConfig = .{ .return_handler = .{ .log_return = false } };
 };
 
 pub const ReturnHandler = struct {
@@ -131,17 +124,14 @@ pub fn spawnService(
     logger: Logger,
     exit: *Atomic(bool),
     name: []const u8,
-    config: struct {
-        run_config: RunConfig = .{},
-        spawn_config: std.Thread.SpawnConfig = .{},
-    },
+    config: RunConfig,
     function: anytype,
     args: anytype,
 ) std.Thread.SpawnError!std.Thread {
     var thread = try std.Thread.spawn(
-        config.spawn_config,
+        .{},
         runService,
-        .{ logger, exit, name, config.run_config, function, args },
+        .{ logger, exit, name, config, function, args },
     );
 
     thread.setName(name[0..@min(name.len, std.Thread.max_name_len)]) catch |e|
@@ -183,7 +173,11 @@ pub fn runService(
 
         // identify result
         if (result) |_| num_oks += 1 else |_| num_errors += 1;
-        const handler, const num_events, const event_name, const level_logger, const trace //
+        const handler, //
+        const num_events, //
+        const event_name, //
+        const level_logger, //
+        const maybe_trace: ?*std.builtin.StackTrace //
         = if (result) |_|
             .{ config.return_handler, num_oks, "return", logger.info(), null }
         else |_|
@@ -191,7 +185,13 @@ pub fn runService(
 
         // handle result
         if (handler.log_return) {
-            level_logger.logf("{s} has {s}ed: {any} {?}", .{ name, event_name, result, trace });
+            level_logger.logf(
+                "{s} has {s}ed: {any} {?}",
+                .{ name, event_name, result, maybe_trace },
+            );
+            // reset the stack trace so that if it returns an error in a loop it doesn't try to infinitely
+            // increment the stack trace index and concatenate the previous traces.
+            if (maybe_trace) |trace| trace.index = 0;
         }
         if (handler.max_iterations) |max| if (num_events >= max) {
             if (handler.set_exit_on_completion) {

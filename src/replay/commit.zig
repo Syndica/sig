@@ -60,6 +60,9 @@ pub const Committer = struct {
         var signature_count: usize = 0;
         var rent_collected: u64 = 0;
 
+        var transaction_fees: u64 = 0;
+        var priority_fees: u64 = 0;
+
         for (transactions, tx_results) |transaction, result| {
             const message_hash, const tx_result = result;
             signature_count += transaction.transaction.signatures.len;
@@ -80,6 +83,8 @@ pub const Committer = struct {
             switch (tx_result) {
                 .executed => |exec| {
                     rent_collected += exec.loaded_accounts.rent_collected;
+                    transaction_fees += exec.fees.transaction_fee;
+                    priority_fees += exec.fees.prioritization_fee;
                     // Skip non successful or non vote transactions.
                     if (exec.executed_transaction.err == null and
                         isSimpleVoteTransaction(transaction.transaction))
@@ -96,7 +101,10 @@ pub const Committer = struct {
                         }
                     }
                 },
-                else => {},
+                .fees_only => |fees| {
+                    transaction_fees += fees.fees.transaction_fee;
+                    priority_fees += fees.fees.prioritization_fee;
+                },
             }
 
             const recent_blockhash = &transaction.transaction.msg.recent_blockhash;
@@ -108,6 +116,8 @@ pub const Committer = struct {
             // NOTE: we'll need to store the actual status at some point, probably for rpc.
         }
 
+        _ = self.slot_state.collected_transaction_fees.fetchAdd(transaction_fees, .monotonic);
+        _ = self.slot_state.collected_priority_fees.fetchAdd(priority_fees, .monotonic);
         _ = self.slot_state.transaction_count.fetchAdd(tx_results.len, .monotonic);
         _ = self.slot_state.signature_count.fetchAdd(signature_count, .monotonic);
         _ = self.slot_state.collected_rent.fetchAdd(rent_collected, .monotonic);

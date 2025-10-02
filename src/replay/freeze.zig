@@ -191,24 +191,33 @@ fn distributeTransactionFees(
     collected_transaction_fees: u64,
     collected_priority_fees: u64,
 ) !void {
-    var burn = collected_transaction_fees * 50 / 100;
+    var burn = collected_transaction_fees * rent.burn_percent / 100;
     const total_fees = collected_priority_fees + collected_transaction_fees;
     const payout = total_fees -| burn;
-    tryPayoutFees(
-        allocator,
-        account_store,
-        account_reader,
-        rent,
-        slot,
-        collector_id,
-        payout,
-    ) catch |e| switch (e) {
-        error.InvalidAccountOwner,
-        error.LamportOverflow,
-        error.InvalidRentPayingAccount,
-        => burn = total_fees,
-        else => return e,
-    };
+
+    if (payout > 0) blk: {
+        const post_balance = tryPayoutFees(
+            allocator,
+            account_store,
+            account_reader,
+            rent,
+            slot,
+            collector_id,
+            payout,
+        ) catch |err| switch (err) {
+            error.InvalidAccountOwner,
+            error.LamportOverflow,
+            error.InvalidRentPayingAccount,
+            => {
+                burn = total_fees;
+                break :blk;
+            },
+            else => return err,
+        };
+        // TODO: record rewards returned by tryPayoutFees
+        _ = post_balance;
+    }
+
     _ = capitalization.fetchSub(burn, .monotonic);
 }
 
@@ -221,7 +230,7 @@ fn tryPayoutFees(
     slot: Slot,
     collector_id: Pubkey,
     payout: u64,
-) !void {
+) !u64 {
     var fee_collector_account =
         if (try account_reader.get(collector_id)) |old_account|
             AccountSharedData{
@@ -244,6 +253,8 @@ fn tryPayoutFees(
     }
 
     try account_store.put(slot, collector_id, fee_collector_account);
+
+    return fee_collector_account.lamports;
 }
 
 pub const HashSlotParams = struct {
@@ -338,6 +349,9 @@ pub fn deltaLtHash(
     slot: Slot,
     parent_ancestors: *const Ancestors,
 ) !LtHash {
+    const zone = tracy.Zone.init(@src(), .{ .name = "deltaLtHash" });
+    defer zone.deinit();
+
     assert(!parent_ancestors.containsSlot(slot));
 
     // TODO: perf - consider using a thread pool
@@ -436,31 +450,43 @@ test "freezeSlot: trivial e2e merkle hash test" {
 test "freezeSlot: trivial e2e lattice hash test" {
     const allocator = std.testing.allocator;
 
-    var accounts, var tmp_dir = try sig.accounts_db.AccountsDB.initForTest(allocator);
+    var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
-    defer accounts.deinit();
-    const account_store = accounts.accountStore();
 
-    const epoch = try EpochConstants.genesis(allocator, .default(allocator));
-    defer epoch.deinit(allocator);
+    var simple_db: sig.accounts_db.ThreadSafeAccountMap = .init(allocator);
+    defer simple_db.deinit();
 
-    var constants = try SlotConstants.genesis(allocator, .DEFAULT);
-    defer constants.deinit(allocator);
-    constants.feature_set.setSlot(.accounts_lt_hash, 0);
-    constants.feature_set.setSlot(.remove_accounts_delta_hash, 0);
+    var real_db: sig.accounts_db.AccountsDB =
+        try .init(.minimal(allocator, .noop, tmp_dir.dir, null));
+    defer real_db.deinit();
 
-    var state = try SlotState.genesis(allocator);
-    defer state.deinit(allocator);
+    for ([_]sig.accounts_db.AccountStore{
+        simple_db.accountStore(),
+        real_db.accountStore(),
+    }) |account_store| {
+        errdefer std.log.err("Failed with implementation '{s}'", .{@tagName(account_store)});
 
-    try freezeSlot(
-        allocator,
-        .init(.FOR_TESTS, account_store, &epoch, &state, &constants, 0, .ZEROES),
-    );
+        const epoch = try EpochConstants.genesis(allocator, .default(allocator));
+        defer epoch.deinit(allocator);
 
-    try std.testing.expectEqual(
-        try Hash.parseRuntime("B513RgkSxeiHv4hJ3aaBfkoveWKeB6575S3CtG64AirS"),
-        state.hash.readCopy().?,
-    );
+        var constants = try SlotConstants.genesis(allocator, .DEFAULT);
+        defer constants.deinit(allocator);
+        constants.feature_set.setSlot(.accounts_lt_hash, 0);
+        constants.feature_set.setSlot(.remove_accounts_delta_hash, 0);
+
+        var state = try SlotState.genesis(allocator);
+        defer state.deinit(allocator);
+
+        try freezeSlot(
+            allocator,
+            .init(.FOR_TESTS, account_store, &epoch, &state, &constants, 0, .ZEROES),
+        );
+
+        try std.testing.expectEqual(
+            Hash.parse("B513RgkSxeiHv4hJ3aaBfkoveWKeB6575S3CtG64AirS"),
+            state.hash.readCopy().?,
+        );
+    }
 }
 
 // Ensures that the merkle and lattice hashes are both identical to agave for
