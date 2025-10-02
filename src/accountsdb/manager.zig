@@ -43,7 +43,7 @@ pub fn onSlotRooted(
     db: *AccountsDB,
     newly_rooted_slot: Slot,
     config: Config,
-    lamports_per_signature: u64, // TODO: best place to get this from?
+    lamports_per_signature: u64,
 ) !void {
     const zone = tracy.Zone.init(@src(), .{ .name = "onSlotRooted" });
     defer zone.deinit();

@@ -581,7 +581,7 @@ fn bypassConsensus(state: *ReplayState) !void {
                 state.account_store.accounts_db,
                 new_root,
                 .{},
-                5000,
+                slot_tracker.get(new_root).?.constants.fee_rate_governor.lamports_per_signature,
             );
         }
     }
