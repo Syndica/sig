@@ -451,8 +451,7 @@ fn newSlotFromParent(
     var state = try SlotState.fromFrozenParent(allocator, parent_state);
     errdefer state.deinit(allocator);
 
-    const epoch_reward_status = try parent_constants.epoch_reward_status
-        .clone(allocator);
+    const epoch_reward_status = try parent_constants.epoch_reward_status.clone(allocator);
     errdefer epoch_reward_status.deinit(allocator);
 
     var ancestors = try parent_constants.ancestors.clone(allocator);

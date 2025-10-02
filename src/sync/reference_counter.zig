@@ -241,7 +241,7 @@ fn RcBase(T: type) type {
         /// input must be the same pointer returned by `payload`
         /// otherwise this function has undefined behavior
         pub fn fromPayload(value: [*]const T) RcBase(T) {
-            const value_ptr: [*]u8 = @constCast(@ptrCast(value));
+            const value_ptr: [*]u8 = @ptrCast(@constCast(value));
             return Self{ .ptr = @alignCast(value_ptr - reserved_space) };
         }
 

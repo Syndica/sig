@@ -258,6 +258,7 @@ pub const SlotState = struct {
         defer zone.deinit();
 
         if (!parent.isFrozen()) return error.SlotNotFrozen;
+
         const blockhash_queue = foo: {
             var bhq = parent.blockhash_queue.read();
             defer bhq.unlock();

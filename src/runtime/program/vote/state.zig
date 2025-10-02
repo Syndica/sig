@@ -803,11 +803,8 @@ pub const VoteState1_14_11 = struct {
     }
 
     pub fn isCorrectSizeAndInitialized(data: []const u8) bool {
-        return data.len == MAX_VOTE_STATE_SIZE and !std.mem.eql(
-            u8,
-            data[4 .. 4 + DEFAULT_PRIOR_VOTERS_OFFSET],
-            &([_]u8{0} ** DEFAULT_PRIOR_VOTERS_OFFSET),
-        );
+        return data.len == MAX_VOTE_STATE_SIZE and
+            !std.mem.allEqual(u8, data[4..][0..DEFAULT_PRIOR_VOTERS_OFFSET], 0);
     }
 };
 
@@ -943,11 +940,8 @@ pub const VoteState = struct {
     }
 
     pub fn isCorrectSizeAndInitialized(data: []const u8) bool {
-        return data.len == MAX_VOTE_STATE_SIZE and !std.mem.eql(
-            u8,
-            data[4 .. 4 + DEFAULT_PRIOR_VOTERS_OFFSET],
-            &([_]u8{0} ** DEFAULT_PRIOR_VOTERS_OFFSET),
-        );
+        return data.len == MAX_VOTE_STATE_SIZE and
+            !std.mem.allEqual(u8, data[4..][0..DEFAULT_PRIOR_VOTERS_OFFSET], 0);
     }
 
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/mod.rs#L862
