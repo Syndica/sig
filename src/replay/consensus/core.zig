@@ -223,6 +223,7 @@ pub const TowerConsensus = struct {
             deps.vote_identity,
             deps.root_slot,
             deps.account_reader.forSlot(&slot_tracker.get(slot_tracker.root).?.constants.ancestors),
+            sig.prometheus.globalRegistry(),
         );
         errdefer replay_tower.deinit(allocator);
 
@@ -238,6 +239,7 @@ pub const TowerConsensus = struct {
             allocator,
             .{ .unordered = deps.exit },
             .from(deps.logger),
+            sig.prometheus.globalRegistry(),
             .{
                 .slot_data_provider = slot_data_provider,
                 .gossip_table_rw = deps.external.gossip_table,
@@ -299,10 +301,15 @@ pub const TowerConsensus = struct {
         //
         // Analogous to [`new_from_frozen_banks`](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/consensus/heaviest_subtree_fork_choice.rs#L235)
         var heaviest_subtree_fork_choice: HeaviestSubtreeForkChoice =
-            try .init(allocator, .from(logger), .{
-                .slot = root_slot,
-                .hash = root_hash,
-            });
+            try .init(
+                allocator,
+                .from(logger),
+                .{
+                    .slot = root_slot,
+                    .hash = root_hash,
+                },
+                sig.prometheus.globalRegistry(),
+            );
         errdefer heaviest_subtree_fork_choice.deinit();
 
         var prev_slot = root_slot;

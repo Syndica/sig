@@ -99,11 +99,13 @@ pub const VoteListener = struct {
     verified_vote_transactions: *sig.sync.Channel(Transaction),
     recv: std.Thread,
     process_votes: std.Thread,
+    metrics: *VoteListenerMetrics,
 
     pub fn init(
         allocator: std.mem.Allocator,
         exit: sig.sync.ExitCondition,
         logger: Logger,
+        registry: *sig.prometheus.Registry(.{}),
         params: struct {
             slot_data_provider: SlotDataProvider,
             gossip_table_rw: ?*sig.sync.RwMux(sig.gossip.GossipTable),
@@ -118,6 +120,7 @@ pub const VoteListener = struct {
             senders: Senders,
         },
     ) !VoteListener {
+        var metrics = try VoteListenerMetrics.init(registry);
         const verified_vote_transactions = try sig.sync.Channel(Transaction).create(allocator);
         errdefer verified_vote_transactions.destroy();
 
@@ -127,6 +130,7 @@ pub const VoteListener = struct {
             params.slot_data_provider,
             params.gossip_table_rw,
             verified_vote_transactions,
+            &metrics,
         });
         errdefer recv_thread.join();
         recv_thread.setName("sigSolCiVoteLstnr") catch {};
@@ -143,6 +147,7 @@ pub const VoteListener = struct {
 
             params.ledger_ref,
             exit,
+            &metrics,
         });
         errdefer process_votes_thread.join();
         process_votes_thread.setName("solCiProcVotes") catch {};
@@ -152,6 +157,7 @@ pub const VoteListener = struct {
             .verified_vote_transactions = verified_vote_transactions,
             .recv = recv_thread,
             .process_votes = process_votes_thread,
+            .metrics = &metrics,
         };
     }
 
@@ -218,6 +224,7 @@ const UnverifiedVoteReceptor = struct {
         unverified_votes_buffer: *std.ArrayListUnmanaged(Transaction),
         /// Sends to `processVotesLoop`'s `receivers.verified_vote_transactions` parameter.
         verified_vote_transactions_sender: *sig.sync.Channel(Transaction),
+        metrics: *VoteListenerMetrics,
     ) !void {
         unverified_votes_buffer.clearRetainingCapacity();
         defer for (unverified_votes_buffer.items) |vote_tx| vote_tx.deinit(allocator);
@@ -236,9 +243,10 @@ const UnverifiedVoteReceptor = struct {
 
         const epoch_tracker, var epoch_lg = slot_data_provider.epoch_tracker_rw.readWithLock();
         defer epoch_lg.unlock();
-        // TODO: Question should the lock for epoch_tracker be held here?
-        // or *sig.sync.RwMux(EpochTracker) be passed into consumeTransactionsAndSendVerified and passed
-        // down and only aquired at the site where it is accessed?
+
+        // Update metrics for gossip votes received
+        metrics.gossip_votes_received.add(unverified_votes_buffer.items.len);
+
         try consumeTransactionsAndSendVerified(
             allocator,
             epoch_tracker,
@@ -255,6 +263,7 @@ fn recvLoop(
     gossip_table_rw: ?*sig.sync.RwMux(sig.gossip.GossipTable),
     /// Sends to `processVotesLoop`'s `receivers.verified_vote_transactions` parameter.
     verified_vote_transactions_sender: *sig.sync.Channel(Transaction),
+    metrics: *VoteListenerMetrics,
 ) !void {
     defer exit.afterExit();
 
@@ -269,6 +278,7 @@ fn recvLoop(
             gossip_table_rw,
             &unverified_votes_buffer,
             verified_vote_transactions_sender,
+            metrics,
         );
     }
 }
@@ -359,6 +369,19 @@ const Receivers = struct {
     replay_votes: *sig.sync.Channel(vote_parser.ParsedVote),
 };
 
+pub const VoteListenerMetrics = struct {
+    gossip_votes_received: *sig.prometheus.Counter,
+    replay_votes_received: *sig.prometheus.Counter,
+    gossip_votes_processed: *sig.prometheus.Counter,
+    replay_votes_processed: *sig.prometheus.Counter,
+
+    pub const prefix = "vote_listener";
+
+    pub fn init(registry: *sig.prometheus.Registry(.{})) !VoteListenerMetrics {
+        return try registry.initStruct(VoteListenerMetrics);
+    }
+};
+
 fn processVotesLoop(
     allocator: std.mem.Allocator,
     logger: Logger,
@@ -367,6 +390,7 @@ fn processVotesLoop(
     receivers: Receivers,
     ledger_ref: LedgerRef,
     exit: sig.sync.ExitCondition,
+    metrics: *VoteListenerMetrics,
 ) !void {
     defer exit.afterExit();
 
@@ -397,6 +421,7 @@ fn processVotesLoop(
             &latest_vote_slot_per_validator,
             &last_process_root,
             &vote_processing_time,
+            metrics,
         )) {
             .ok => {},
             .disconnected => return,
@@ -425,6 +450,7 @@ fn processVotesOnce(
     latest_vote_slot_per_validator: *std.AutoArrayHashMapUnmanaged(Pubkey, Slot),
     last_process_root: *sig.time.Instant,
     vote_processing_time: *VoteProcessingTiming,
+    metrics: *VoteListenerMetrics,
 ) !enum { ok, disconnected, timeout, logged } {
     const root_slot = slot_data_provider.rootSlot();
     const root_hash = slot_data_provider.getSlotHash(root_slot);
@@ -454,6 +480,7 @@ fn processVotesOnce(
         receivers,
         vote_processing_time,
         latest_vote_slot_per_validator,
+        metrics,
     ) catch |err| switch (err) {
         error.RecvTimeoutDisconnected => {
             return .disconnected;
@@ -494,6 +521,7 @@ fn listenAndConfirmVotes(
     receivers: Receivers,
     vote_processing_time: ?*VoteProcessingTiming,
     latest_vote_slot_per_validator: *std.AutoArrayHashMapUnmanaged(Pubkey, Slot),
+    metrics: *VoteListenerMetrics,
 ) ListenAndConfirmVotesError![]const ThresholdConfirmedSlot {
     var gossip_vote_txs_buffer: std.ArrayListUnmanaged(Transaction) = .empty;
     defer gossip_vote_txs_buffer.deinit(allocator);
@@ -526,6 +554,7 @@ fn listenAndConfirmVotes(
             }
             break :blk replay_votes_buffer.items;
         };
+        if (replay_votes.len > 0) metrics.replay_votes_received.add(replay_votes.len);
         // TODO: either pass separate allocator to deinit replay votes, or document
         // that replay and the vote listener must use the same allocator
         defer for (replay_votes) |replay_vote| replay_vote.deinit(allocator);
@@ -544,6 +573,7 @@ fn listenAndConfirmVotes(
             latest_vote_slot_per_validator,
             gossip_vote_txs,
             replay_votes,
+            metrics,
         );
     }
 
@@ -560,6 +590,7 @@ fn filterAndConfirmWithNewVotes(
     latest_vote_slot_per_validator: *std.AutoArrayHashMapUnmanaged(Pubkey, Slot),
     gossip_vote_txs: []const Transaction,
     replayed_votes: []const vote_parser.ParsedVote,
+    metrics: *VoteListenerMetrics,
 ) std.mem.Allocator.Error![]const ThresholdConfirmedSlot {
     const root_slot = slot_data_provider.rootSlot();
 
@@ -601,6 +632,10 @@ fn filterAndConfirmWithNewVotes(
                 is_gossip,
                 latest_vote_slot_per_validator,
             );
+            if (is_gossip)
+                metrics.gossip_votes_processed.inc()
+            else
+                metrics.replay_votes_processed.inc();
         }
     }
 
@@ -1304,27 +1339,17 @@ pub const vote_parser = struct {
             std.debug.assert(message.instructions.len != 0);
             const first_ix = message.instructions[0];
 
+            var dedupe_map: [sig.runtime.InstructionInfo.MAX_ACCOUNT_METAS]u8 = @splat(0xff);
             var account_metas = sig.runtime.InstructionInfo.AccountMetas{};
-            var seen = std.bit_set.ArrayBitSet(usize, 256).initEmpty();
             for (first_ix.account_indexes, 0..) |acct_index_u8, i| {
                 const acct_index: usize = acct_index_u8;
-                const index_in_callee: usize = if (seen.isSet(acct_index))
-                    std.mem.indexOfScalar(
-                        u8,
-                        first_ix.account_indexes[0..i],
-                        acct_index_u8,
-                    ) orelse i
-                else
-                    i;
-                seen.set(acct_index);
+                if (dedupe_map[i] == 0xff)
+                    dedupe_map[i] = @intCast(i);
 
                 const pubkey = message.account_keys[acct_index];
-
                 account_metas.append(.{
                     .pubkey = pubkey,
                     .index_in_transaction = @intCast(acct_index),
-                    .index_in_caller = @intCast(acct_index),
-                    .index_in_callee = @intCast(index_in_callee),
                     .is_signer = message.isSigner(acct_index),
                     .is_writable = false,
                 }) catch @panic("Vote instructions have 4 accounts, below MAX_ACCOUNT_METAS (256)");
@@ -1339,6 +1364,7 @@ pub const vote_parser = struct {
                         .index_in_transaction = first_ix.program_index,
                     },
                     .account_metas = account_metas,
+                    .dedupe_map = dedupe_map,
                     .instruction_data = first_ix.data,
                 }},
             };
@@ -1393,15 +1419,15 @@ pub const vote_parser = struct {
         std.debug.assert(message.instructions.len != 0);
         const first_ix = message.instructions[0];
 
+        var dedupe_map: [sig.runtime.InstructionInfo.MAX_ACCOUNT_METAS]u8 = @splat(0xff);
         var account_metas = sig.runtime.InstructionInfo.AccountMetas{};
         // minimal one account to satisfy check
         if (first_ix.account_indexes.len != 0) {
             const acct_index: usize = first_ix.account_indexes[0];
+            dedupe_map[0] = 0;
             try account_metas.append(.{
                 .pubkey = message.account_keys[acct_index],
                 .index_in_transaction = @intCast(acct_index),
-                .index_in_caller = @intCast(acct_index),
-                .index_in_callee = 0,
                 .is_signer = message.isSigner(acct_index),
                 .is_writable = false,
             });
@@ -1416,6 +1442,7 @@ pub const vote_parser = struct {
                     .index_in_transaction = first_ix.program_index,
                 },
                 .account_metas = account_metas,
+                .dedupe_map = dedupe_map,
                 .instruction_data = first_ix.data,
             }},
         };
@@ -1722,7 +1749,7 @@ test "simple usage" {
     var exit: std.atomic.Value(bool) = .init(false);
     const exit_cond: sig.sync.ExitCondition = .{ .unordered = &exit };
 
-    const vote_listener: VoteListener = try .init(allocator, exit_cond, .noop, .{
+    const vote_listener: VoteListener = try .init(allocator, exit_cond, .noop, &registry, .{
         .slot_data_provider = slot_data_provider,
         .gossip_table_rw = &gossip_table_rw,
         .ledger_ref = ledger_ref,
@@ -1957,12 +1984,17 @@ test "check trackers" {
 
         var unverified_votes_buffer: std.ArrayListUnmanaged(Transaction) = .empty;
         defer unverified_votes_buffer.deinit(allocator);
+        var test_registry = sig.prometheus.Registry(.{}).init(allocator);
+        defer test_registry.deinit();
+        var test_metrics = try VoteListenerMetrics.init(&test_registry);
+
         try receptor.recvAndSendOnce(
             allocator,
             slot_data_provider_ptr,
             &gossip_table_rw,
             &unverified_votes_buffer,
             verified_vote_transactions_channel,
+            &test_metrics,
         );
 
         var latest_vote_slot_per_validator: std.AutoArrayHashMapUnmanaged(Pubkey, Slot) = .empty;
@@ -1995,6 +2027,7 @@ test "check trackers" {
             &latest_vote_slot_per_validator,
             &last_process_root,
             &vote_processing_time,
+            &test_metrics,
         ));
     }
 

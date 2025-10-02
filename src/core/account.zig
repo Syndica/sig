@@ -141,6 +141,18 @@ pub const Account = struct {
 
         return offset;
     }
+
+    pub fn expectEquals(
+        actual: sig.core.Account,
+        expected: sig.core.Account,
+    ) !void {
+        if (!@import("builtin").is_test) @compileError("Only intended for tests.");
+        try std.testing.expectEqual(expected.owner, actual.owner);
+        try std.testing.expectEqual(expected.lamports, actual.lamports);
+        try std.testing.expectEqual(expected.rent_epoch, actual.rent_epoch);
+        try std.testing.expectEqual(expected.executable, actual.executable);
+        try expected.data.expectEqual(actual.data);
+    }
 };
 
 /// helper function for writing to memory
