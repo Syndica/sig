@@ -53,9 +53,24 @@ pub fn onSlotRooted(
         var max_slots, var max_slots_lg = db.max_slots.writeWithLock();
         defer max_slots_lg.unlock();
         if (max_slots.rooted) |previously_rooted| {
-            if (newly_rooted_slot < previously_rooted) return error.SlotNotFound;
+            if (newly_rooted_slot < previously_rooted) {
+                db.logger.err().logf(
+                    "onSlotRooted called on previously rooted slot ({} < {})",
+                    .{ newly_rooted_slot, previously_rooted },
+                );
+                return error.SlotNotFound;
+            }
         }
         max_slots.rooted = newly_rooted_slot;
+
+        if (max_slots.flushed) |previously_flushed| {
+            if (newly_rooted_slot < previously_flushed) {
+                db.logger.err().logf(
+                    "onSlotRooted called on previously flushed slot ({} < {})",
+                    .{ newly_rooted_slot, previously_flushed },
+                );
+            }
+        }
     }
 
     db.logger.info().logf("flushing slot {} to disk", .{newly_rooted_slot});
