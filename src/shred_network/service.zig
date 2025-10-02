@@ -26,6 +26,7 @@ const RepairPeerProvider = shred_network.repair_service.RepairPeerProvider;
 const RepairRequester = shred_network.repair_service.RepairRequester;
 const RepairService = shred_network.repair_service.RepairService;
 const ShredReceiver = shred_network.shred_receiver.ShredReceiver;
+const ShredReceiverMetrics = shred_network.shred_receiver.ShredReceiverMetrics;
 
 /// Settings which instruct the Shred Network how to behave.
 pub const ShredNetworkConfig = struct {
@@ -97,6 +98,7 @@ pub fn start(
     // channels (cant use arena as they need to alloc/free frequently &
     // potentially from multiple sender threads)
     const retransmit_channel = try Channel(Packet).create(deps.allocator);
+    retransmit_channel.name = "retransmit channel (Packet)";
     try defers.deferCall(Channel(Packet).destroy, .{retransmit_channel});
 
     // receiver (threads)

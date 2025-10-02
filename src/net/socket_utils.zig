@@ -363,6 +363,9 @@ const PerThread = struct {
     }
 
     fn runReceiver(st: *SocketThread) !void {
+        const zone = tracy.Zone.init(@src(), .{ .name = "runReceiver" });
+        defer zone.deinit();
+
         defer {
             st.exit.afterExit();
             st.logger.info().log("readSocket loop closed");
@@ -390,6 +393,9 @@ const PerThread = struct {
     }
 
     fn runSender(st: *SocketThread) !void {
+        const zone = tracy.Zone.init(@src(), .{ .name = "runSender" });
+        defer zone.deinit();
+
         defer {
             // empty the channel
             while (st.channel.tryReceive()) |_| {}

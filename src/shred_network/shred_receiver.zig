@@ -1,5 +1,6 @@
 const std = @import("std");
 const network = @import("zig-network");
+const tracy = @import("tracy");
 const sig = @import("../sig.zig");
 const shred_network = @import("lib.zig");
 
@@ -72,9 +73,11 @@ pub const ShredReceiver = struct {
         params: Params,
     ) !ShredReceiver {
         var incoming_shreds = try Channel(Packet).init(allocator);
+        incoming_shreds.name = "ShredReceiver (incoming_shreds)";
         errdefer incoming_shreds.deinit();
 
         var outgoing_pongs = try Channel(Packet).init(allocator);
+        outgoing_pongs.name = "ShredReceiver (outgoing_pongs)";
         errdefer outgoing_pongs.deinit();
 
         var verified_merkle_roots = try VerifiedMerkleRoots.init(allocator, 1024);
@@ -156,9 +159,13 @@ pub const ShredReceiver = struct {
             self.shred_batch.clearRetainingCapacity();
         }
 
+        var packet_count: usize = 0;
         while (self.incoming_shreds.tryReceive()) |packet| {
             const is_repair = packet.flags.isSet(.repair);
             self.metrics.incReceived(is_repair);
+
+            packet_count += 1;
+            tracy.plot(u32, "shred-batch packets received", @intCast(packet_count));
 
             if (try self.handlePacket(allocator, packet)) |shred| {
                 try self.shred_batch.append(allocator, .{
