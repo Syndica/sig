@@ -2,6 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const sig = @import("../sig.zig");
 const network = @import("zig-network");
+const tracy = @import("tracy");
 const xev = @import("xev");
 
 const Allocator = std.mem.Allocator;
@@ -352,8 +353,10 @@ const PerThread = struct {
     pub const Handle = std.Thread;
 
     pub fn spawn(st: *SocketThread) !void {
+        const sender_fn = if (builtin.os.tag == .linux) runSenderBatched else runSender;
+
         st.handle = switch (st.direction) {
-            .sender => try std.Thread.spawn(.{}, runSender, .{st}),
+            .sender => try std.Thread.spawn(.{}, sender_fn, .{st}),
             .receiver => try std.Thread.spawn(.{}, runReceiver, .{st}),
         };
     }
@@ -430,6 +433,82 @@ const PerThread = struct {
             }
         }
     }
+
+    fn runSenderBatched(st: *SocketThread) !void {
+        const zone = tracy.Zone.init(@src(), .{ .name = "runSender (batched)" });
+        defer zone.deinit();
+
+        defer {
+            // empty the channel
+            while (st.channel.tryReceive()) |_| {}
+            st.exit.afterExit();
+            st.logger.debug().log("sendSocket loop closed");
+        }
+
+        while (true) {
+            st.channel.waitToReceive(st.exit) catch break;
+
+            var msgvecs: std.BoundedArray(std.os.linux.mmsghdr_const, PACKETS_PER_BATCH) = .{};
+            var iovecs: std.BoundedArray(std.posix.iovec_const, PACKETS_PER_BATCH) = .{};
+            var socket_addrs: std.BoundedArray(network.EndPoint.SockAddr, PACKETS_PER_BATCH) = .{};
+
+            while (!st.channel.isEmpty() or msgvecs.len > 0) {
+                while (st.channel.tryReceive()) |p| {
+                    if (st.exit.shouldExit()) return; // drop packets if exit prematurely.
+
+                    const new_iovec = iovecs.addOneAssumeCapacity();
+                    new_iovec.* = .{ .base = p.data().ptr, .len = p.data().len };
+
+                    const new_sock_addr = socket_addrs.addOneAssumeCapacity();
+                    new_sock_addr.* = toSocketAddress(p.addr);
+
+                    const sock_addr: *std.posix.sockaddr, const sock_size: u32 = switch (new_sock_addr.*) {
+                        inline else => |*sock| .{ @ptrCast(sock), @sizeOf(@TypeOf(sock.*)) },
+                    };
+
+                    msgvecs.appendAssumeCapacity(.{
+                        .hdr = .{
+                            .name = sock_addr,
+                            .namelen = sock_size,
+                            .iov = new_iovec[0..1],
+                            .iovlen = 1,
+                            .control = null,
+                            .controllen = 0,
+                            .flags = 0,
+                        },
+                        .len = 0,
+                    });
+
+                    if (msgvecs.constSlice().len == PACKETS_PER_BATCH) break;
+                }
+
+                const messages_sent = sendmmsg(st.socket.internal, msgvecs.slice(), 0) catch |e| blk: {
+                    st.logger.err().logf("sendmmsg error: {s}", .{@errorName(e)});
+                    break :blk msgvecs.slice().len; // skip all packets in this batch
+                };
+
+                std.mem.copyBackwards(
+                    std.os.linux.mmsghdr_const,
+                    msgvecs.buffer[0 .. msgvecs.len - messages_sent],
+                    msgvecs.buffer[messages_sent..msgvecs.len],
+                );
+                std.mem.copyBackwards(
+                    std.posix.iovec_const,
+                    iovecs.buffer[0 .. iovecs.len - messages_sent],
+                    iovecs.buffer[messages_sent..iovecs.len],
+                );
+                std.mem.copyBackwards(
+                    network.EndPoint.SockAddr,
+                    socket_addrs.buffer[0 .. socket_addrs.len - messages_sent],
+                    socket_addrs.buffer[messages_sent..socket_addrs.len],
+                );
+
+                msgvecs.len -= messages_sent;
+                iovecs.len -= messages_sent;
+                socket_addrs.len -= messages_sent;
+            }
+        }
+    }
 };
 
 // TODO: Evaluate when XevThread socket backend is beneficial.
@@ -496,6 +575,71 @@ pub const SocketThread = struct {
         self.allocator.destroy(self);
     }
 };
+
+fn toSocketAddress(self: network.EndPoint) network.EndPoint.SockAddr {
+    return switch (self.address) {
+        .ipv4 => |addr| network.EndPoint.SockAddr{
+            .ipv4 = .{
+                .family = std.posix.AF.INET,
+                .port = std.mem.nativeToBig(u16, self.port),
+                .addr = @bitCast(addr.value),
+                .zero = [_]u8{0} ** 8,
+            },
+        },
+        .ipv6 => |addr| network.EndPoint.SockAddr{
+            .ipv6 = .{
+                .family = std.posix.AF.INET6,
+                .port = std.mem.nativeToBig(u16, self.port),
+                .flowinfo = 0,
+                .addr = addr.value,
+                .scope_id = addr.scope_id,
+            },
+        },
+    };
+}
+
+/// std.os.posix.sendmsg ported over to use linux's sendmmsg instead
+fn sendmmsg(
+    /// The file descriptor of the sending socket.
+    sockfd: std.posix.socket_t,
+    /// Message header and iovecs
+    msgvec: []std.os.linux.mmsghdr_const,
+    flags: u32,
+) std.posix.SendMsgError!usize {
+    while (true) {
+        const rc = std.os.linux.sendmmsg(sockfd, msgvec.ptr, @intCast(msgvec.len), flags);
+
+        return switch (std.posix.errno(rc)) {
+            .SUCCESS => @intCast(rc),
+            .ACCES => error.AccessDenied,
+            .AGAIN => error.WouldBlock,
+            .ALREADY => error.FastOpenAlreadyInProgress,
+            .BADF => unreachable, // always a race condition
+            .CONNRESET => error.ConnectionResetByPeer,
+            .DESTADDRREQ => unreachable, // The socket is not connection-mode, and no peer address is set.
+            .FAULT => unreachable, // An invalid user space address was specified for an argument.
+            .INTR => continue,
+            .INVAL => unreachable, // Invalid argument passed.
+            .ISCONN => unreachable, // connection-mode socket was connected already but a recipient was specified
+            .MSGSIZE => error.MessageTooBig,
+            .NOBUFS => error.SystemResources,
+            .NOMEM => error.SystemResources,
+            .NOTSOCK => unreachable, // The file descriptor sockfd does not refer to a socket.
+            .OPNOTSUPP => unreachable, // Some bit in the flags argument is inappropriate for the socket type.
+            .PIPE => error.BrokenPipe,
+            .AFNOSUPPORT => error.AddressFamilyNotSupported,
+            .LOOP => error.SymLinkLoop,
+            .NAMETOOLONG => error.NameTooLong,
+            .NOENT => error.FileNotFound,
+            .NOTDIR => error.NotDir,
+            .HOSTUNREACH => error.NetworkUnreachable,
+            .NETUNREACH => error.NetworkUnreachable,
+            .NOTCONN => error.SocketNotConnected,
+            .NETDOWN => error.NetworkSubsystemFailed,
+            else => |err| std.posix.unexpectedErrno(err),
+        };
+    }
+}
 
 test "SocketThread: overload sendto" {
     const allocator = std.testing.allocator;
