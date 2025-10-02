@@ -21,7 +21,6 @@ const AccountStore = sig.accounts_db.AccountStore;
 const ForkProgress = sig.consensus.progress_map.ForkProgress;
 const ParsedVote = sig.consensus.vote_listener.vote_parser.ParsedVote;
 const ProcessedTransaction = sig.runtime.transaction_execution.ProcessedTransaction;
-const SlotHashes = sig.runtime.sysvar.SlotHashes;
 const TransactionError = sig.ledger.transaction_status.TransactionError;
 
 const Committer = replay.Committer;
