@@ -71,15 +71,14 @@ pub fn StakesCacheGeneric(comptime stakes_type: StakesType) type {
                     return;
                 }
 
-                const vote_account = VoteAccount.fromAccountSharedData(
-                    allocator,
-                    account, // does *not* take ownership of the account
-                ) catch {
+                // does *not* take ownership of the account
+                var vote_account = VoteAccount.fromAccountSharedData(allocator, account) catch {
                     var stakes: *T, var stakes_guard = self.stakes.writeWithLock();
                     defer stakes_guard.unlock();
                     try stakes.removeVoteAccount(allocator, pubkey);
                     return;
                 };
+                errdefer vote_account.deinit(allocator);
 
                 var stakes: *T, var stakes_guard = self.stakes.writeWithLock();
                 defer stakes_guard.unlock();
@@ -150,7 +149,9 @@ pub fn Stakes(comptime stakes_type: StakesType) type {
         pub fn deinit(self: *const Self, allocator: Allocator) void {
             self.vote_accounts.deinit(allocator);
             // Only the .account type contains allocated data in the stake_delegations.
-            if (stakes_type == .account) for (self.stake_delegations.values()) |*v| v.deinit(allocator);
+            if (stakes_type == .account) {
+                for (self.stake_delegations.values()) |*v| v.deinit(allocator);
+            }
             var delegations = self.stake_delegations;
             delegations.deinit(allocator);
         }
@@ -226,23 +227,16 @@ pub fn Stakes(comptime stakes_type: StakesType) type {
             new_rate_activation_epoch: ?Epoch,
         ) !void {
             std.debug.assert(account.account.lamports > 0);
-            errdefer account.deinit(allocator);
-
-            const maybe_old_account = try self.vote_accounts.insert(
+            var maybe_old_account = try self.vote_accounts.insert(
                 allocator,
                 pubkey,
                 account,
                 .init(stakes_type, self, new_rate_activation_epoch),
             );
-
-            if (maybe_old_account) |old_account| old_account.deinit(allocator);
+            if (maybe_old_account) |*old_account| old_account.deinit(allocator);
         }
 
-        pub fn removeVoteAccount(
-            self: *Self,
-            allocator: Allocator,
-            pubkey: Pubkey,
-        ) !void {
+        pub fn removeVoteAccount(self: *Self, allocator: Allocator, pubkey: Pubkey) !void {
             try self.vote_accounts.remove(allocator, pubkey);
         }
 
@@ -326,7 +320,9 @@ pub fn Stakes(comptime stakes_type: StakesType) type {
 
             var stake_delegations = std.AutoArrayHashMapUnmanaged(Pubkey, T).empty;
             errdefer {
-                if (stakes_type == .account) for (stake_delegations.values()) |*v| v.deinit(allocator);
+                if (stakes_type == .account) {
+                    for (stake_delegations.values()) |*v| v.deinit(allocator);
+                }
                 stake_delegations.deinit(allocator);
             }
 
@@ -334,7 +330,10 @@ pub fn Stakes(comptime stakes_type: StakesType) type {
                 try stake_delegations.put(
                     allocator,
                     Pubkey.initRandom(random),
-                    if (stakes_type == .account) T.initRandom(allocator, random) else T.initRandom(random),
+                    if (stakes_type == .account)
+                        T.initRandom(allocator, random)
+                    else
+                        T.initRandom(random),
                 );
             }
 
@@ -703,14 +702,16 @@ fn createStakeAccount(
     };
     errdefer allocator.free(stake_account.data);
 
-    const versioned_vote_state = try bincode.readFromSlice(
+    var versioned_vote_state = try bincode.readFromSlice(
         allocator,
         VersionedVoteState,
         vote_account.data,
         .{},
     );
-    const vote_state = try versioned_vote_state.convertToCurrent(allocator);
-    defer vote_state.deinit();
+    defer versioned_vote_state.deinit(allocator);
+
+    var vote_state = try versioned_vote_state.convertToCurrent(allocator);
+    defer vote_state.deinit(allocator);
 
     const minimum_rent = rent.minimumBalance(StakeStateV2.SIZE);
 
@@ -1010,8 +1011,8 @@ test "stakes vote account disappear reappear" {
         }
 
         // Uninitialized vote account removes vote account
-        var vote_state = VoteState.default(allocator);
-        errdefer vote_state.deinit();
+        var vote_state: VoteState = .DEFAULT;
+        errdefer vote_state.deinit(allocator);
 
         try std.testing.expect(vote_state.isUninitialized());
 
