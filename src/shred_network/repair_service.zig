@@ -378,7 +378,7 @@ pub const RepairRequester = struct {
             .{ .unordered = exit },
         );
 
-        try thread.handle.setName("repreq spwnSndr");
+        thread.handle.setName("repreq spwnSndr") catch {};
 
         return .{
             .allocator = allocator,
