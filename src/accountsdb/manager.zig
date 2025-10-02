@@ -34,6 +34,9 @@ pub const Config = struct {
     slots_per_incremental_snapshot: u64 = 100,
     /// 0 => no thread spawning
     zstd_nb_workers: u31 = 0,
+    /// Enable/disable the clean (+ shrink & purge) cycle. Keep this disabled if you don't want to
+    /// overwrite previous slots.
+    do_cleaning: bool = true,
 };
 
 /// Flushes a rooted slot to accountsdb, creating a new AccountFile, and doing some cleanup of old
@@ -206,35 +209,37 @@ pub fn onSlotRooted(
         }
     }
 
-    // TODO: change APIs of {clean, shrink, delete}AccountFiles to take single accounts, and stop
-    // doing this.
-    // TODO: could use an arena allocator for this whole function
-    var to_shrink: std.AutoArrayHashMapUnmanaged(FileId, void) = .empty;
-    defer to_shrink.deinit(allocator);
-    var to_delete: std.AutoArrayHashMapUnmanaged(FileId, void) = .empty;
-    defer to_delete.deinit(allocator);
+    if (config.do_cleaning) {
+        // TODO: change APIs of {clean, shrink, delete}AccountFiles to take single accounts, and stop
+        // doing this.
+        // TODO: could use an arena allocator for this whole function
+        var to_shrink: std.AutoArrayHashMapUnmanaged(FileId, void) = .empty;
+        defer to_shrink.deinit(allocator);
+        var to_delete: std.AutoArrayHashMapUnmanaged(FileId, void) = .empty;
+        defer to_delete.deinit(allocator);
 
-    const clean_result = try cleanAccountFiles(
-        allocator,
-        db,
-        newly_rooted_slot,
-        &.{file_id},
-        &to_shrink,
-        &to_delete,
-    );
-    _ = clean_result;
+        const clean_result = try cleanAccountFiles(
+            allocator,
+            db,
+            newly_rooted_slot,
+            &.{file_id},
+            &to_shrink,
+            &to_delete,
+        );
+        _ = clean_result;
 
-    // shrink any account files which have been cleaned
-    const shrink_result = try shrinkAccountFiles(
-        allocator,
-        db,
-        to_shrink.keys(),
-        &to_delete,
-    );
-    _ = shrink_result;
+        // shrink any account files which have been cleaned
+        const shrink_result = try shrinkAccountFiles(
+            allocator,
+            db,
+            to_shrink.keys(),
+            &to_delete,
+        );
+        _ = shrink_result;
 
-    // delete any empty account files
-    try deleteAccountFiles(db, to_delete.keys());
+        // delete any empty account files
+        try deleteAccountFiles(db, to_delete.keys());
+    }
 }
 
 /// flushes a slot account data from the cache onto disk, and updates the index
