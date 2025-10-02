@@ -384,7 +384,7 @@ pub const AccountsDB = struct {
         errdefer collapsed_manifest.deinit(self.allocator);
 
         {
-            var load_timer = try sig.time.Timer.start();
+            var load_timer = sig.time.Timer.start();
             try self.loadFromSnapshot(
                 collapsed_manifest.accounts_db_fields,
                 n_threads,
@@ -401,7 +401,7 @@ pub const AccountsDB = struct {
             else
                 null;
 
-            var validate_timer = try sig.time.Timer.start();
+            var validate_timer = sig.time.Timer.start();
             try self.validateLoadFromSnapshot(.{
                 .full_slot = full_man.bank_fields.slot,
                 .expected_full = .{
@@ -443,7 +443,7 @@ pub const AccountsDB = struct {
         errdefer collapsed_manifest.deinit(self.allocator);
 
         {
-            var load_timer = try sig.time.Timer.start();
+            var load_timer = sig.time.Timer.start();
             try self.loadFromSnapshot(
                 collapsed_manifest.accounts_db_fields,
                 n_threads,
@@ -460,7 +460,7 @@ pub const AccountsDB = struct {
             else
                 null;
 
-            var validate_timer = try sig.time.Timer.start();
+            var validate_timer = sig.time.Timer.start();
             try self.validateLoadFromSnapshot(.{
                 .full_slot = full_man.bank_fields.slot,
                 .expected_full = .{
@@ -550,7 +550,7 @@ pub const AccountsDB = struct {
             try geyser_writer.writePayloadToPipe(end_of_snapshot);
         }
 
-        var merge_timer = try sig.time.Timer.start();
+        var merge_timer = sig.time.Timer.start();
         try self.mergeMultipleDBs(loading_threads, n_combine_threads);
         self.logger.debug().logf("mergeMultipleDBs: total time: {}", .{merge_timer.read()});
     }
@@ -683,8 +683,8 @@ pub const AccountsDB = struct {
 
         try reference_manager.expandCapacity(n_accounts_estimate);
 
-        var timer = try sig.time.Timer.start();
-        var progress_timer = try sig.time.Timer.start();
+        var timer = sig.time.Timer.start();
+        var progress_timer = sig.time.Timer.start();
 
         if (n_account_files > std.math.maxInt(AccountIndex.SlotRefMap.Size)) {
             return error.FileMapTooBig;
@@ -1027,7 +1027,7 @@ pub const AccountsDB = struct {
         const shard_end_index = task.end_index;
 
         const total_shards = shard_end_index - shard_start_index;
-        var timer = try sig.time.Timer.start();
+        var timer = sig.time.Timer.start();
         var progress_timer = try std.time.Timer.start();
         const print_progress = task.thread_id == 0;
 
@@ -1116,7 +1116,7 @@ pub const AccountsDB = struct {
         });
         defer zone.deinit();
 
-        var timer = try sig.time.Timer.start();
+        var timer = sig.time.Timer.start();
 
         // going higher will only lead to more contention in the buffer pool reads
         const n_threads = @min(6, @as(u32, @truncate(try std.Thread.getCpuCount())));
@@ -1419,7 +1419,7 @@ pub const AccountsDB = struct {
         defer keys_buf.deinit();
 
         var local_total_lamports: u64 = 0;
-        var timer = try sig.time.Timer.start();
+        var timer = sig.time.Timer.start();
         var progress_timer = try std.time.Timer.start();
         for (shards, 1..) |*shard_rw, count| {
             // get and sort pubkeys inshardn
@@ -4059,7 +4059,7 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
             });
             defer accounts_db.deinit();
 
-            var load_timer = try sig.time.Timer.start();
+            var load_timer = sig.time.Timer.start();
             try accounts_db.loadFromSnapshot(
                 collapsed_manifest.accounts_db_fields,
                 bench_args.n_threads,
@@ -4074,7 +4074,7 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
             else
                 null;
 
-            var validate_timer = try sig.time.Timer.start();
+            var validate_timer = sig.time.Timer.start();
             try accounts_db.validateLoadFromSnapshot(.{
                 .full_slot = full_manifest.bank_fields.slot,
                 .expected_full = .{
@@ -4346,7 +4346,7 @@ pub const BenchmarkAccountsDB = struct {
                         );
                     }
 
-                    var timer = try sig.time.Timer.start();
+                    var timer = sig.time.Timer.start();
                     for (0..slot_list_len) |i| {
                         const start_index = i * n_accounts;
                         const end_index = start_index + n_accounts;
@@ -4426,7 +4426,7 @@ pub const BenchmarkAccountsDB = struct {
                         all_filenames.appendAssumeCapacity(try allocator.dupe(u8, filepath));
                     }
 
-                    var timer = try sig.time.Timer.start();
+                    var timer = sig.time.Timer.start();
                     for (account_files.items) |*account_file| {
                         try accounts_db.putAccountFile(account_file, n_accounts);
                     }
@@ -4457,7 +4457,7 @@ pub const BenchmarkAccountsDB = struct {
             }
         }
 
-        var timer = try sig.time.Timer.start();
+        var timer = sig.time.Timer.start();
 
         const do_read_count = n_accounts;
         var i: usize = 0;

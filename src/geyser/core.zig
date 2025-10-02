@@ -489,7 +489,7 @@ pub fn streamReader(
     measure_rate: ?sig.time.Duration,
 ) !void {
     var bytes_read: usize = 0;
-    var timer = try sig.time.Timer.start();
+    var timer = sig.time.Timer.start();
 
     while (!exit.load(.acquire)) {
         const n, const payload = reader.readPayload() catch |err| {

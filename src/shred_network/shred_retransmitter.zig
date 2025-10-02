@@ -155,7 +155,7 @@ fn receiveShreds(
     defer deduper.deinit();
 
     var shreds = std.ArrayList(Packet).init(allocator);
-    var receive_shreds_timer = try sig.time.Timer.start();
+    var receive_shreds_timer = sig.time.Timer.start();
 
     while (true) {
         receiver.waitToReceive(.{ .unordered = exit }) catch break;
@@ -219,7 +219,7 @@ fn dedupAndGroupShredsBySlot(
     deduper: *ShredDeduper(2),
     metrics: *RetransmitServiceMetrics,
 ) !std.AutoArrayHashMap(Slot, std.ArrayList(ShredIdAndPacket)) {
-    var dedup_and_group_shreds_timer = try sig.time.Timer.start();
+    var dedup_and_group_shreds_timer = sig.time.Timer.start();
     var result = std.AutoArrayHashMap(Slot, std.ArrayList(ShredIdAndPacket)).init(allocator);
     for (shreds.items) |shred_packet| {
         const shred_id = try sig.ledger.shred.layout.getShredId(&shred_packet);
@@ -261,17 +261,17 @@ fn createAndSendRetransmitInfo(
     metrics: *RetransmitServiceMetrics,
     overwrite_stake_for_testing: bool,
 ) !void {
-    var create_and_send_retransmit_info_timer = try sig.time.Timer.start();
+    var create_and_send_retransmit_info_timer = sig.time.Timer.start();
     for (shreds.keys(), shreds.values()) |slot, slot_shreds| {
         const epoch, const slot_index = epoch_context_mgr.schedule.getEpochAndSlotIndex(slot);
         const epoch_context = epoch_context_mgr.get(epoch) orelse continue;
         defer epoch_context_mgr.release(epoch_context);
 
-        var get_slot_leader_timer = try sig.time.Timer.start();
+        var get_slot_leader_timer = sig.time.Timer.start();
         const slot_leader = epoch_context.leader_schedule[slot_index];
         metrics.get_slot_leader_nanos.observe(get_slot_leader_timer.read().asNanos());
 
-        var get_turbine_tree_timer = try sig.time.Timer.start();
+        var get_turbine_tree_timer = sig.time.Timer.start();
         const turbine_tree = if (try turbine_tree_cache.get(epoch)) |tree| tree else blk: {
             const turbine_tree = try allocator.create(TurbineTree);
             turbine_tree.* = try TurbineTree.initForRetransmit(
@@ -325,7 +325,7 @@ fn retransmitShreds(
     defer shuffled_nodes.deinit();
 
     while (!exit.load(.acquire)) {
-        var retransmit_shred_timer = try sig.time.Timer.start();
+        var retransmit_shred_timer = sig.time.Timer.start();
 
         // NOTE: multiple `retransmitShreds` run concurrently so we can't use
         // `receiver.waitToReceive()` here as it only supports one caller thread.
@@ -334,7 +334,7 @@ fn retransmitShreds(
 
         children.clearRetainingCapacity();
         shuffled_nodes.clearRetainingCapacity();
-        var get_retransmit_children_timer = try sig.time.Timer.start();
+        var get_retransmit_children_timer = sig.time.Timer.start();
         const level = try retransmit_info.turbine_tree.getRetransmitChildren(
             &children,
             &shuffled_nodes,
