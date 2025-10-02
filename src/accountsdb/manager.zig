@@ -65,13 +65,7 @@ pub fn onSlotRooted(
     }
 
     // make a new AccountFile for our newly rooted slot, and "flush" the data to it
-    const file_id = new_id: {
-        // flush fail = loss of account data on slot -- should never happen
-        errdefer |err| db.logger.err()
-            .logf("flushSlot {d} error: {s}", .{ newly_rooted_slot, @errorName(err) });
-
-        break :new_id try flushSlot(db, newly_rooted_slot);
-    };
+    const file_id = try flushSlot(db, newly_rooted_slot);
 
     // TODO: audit this and related fields - not sure why this is an atomic to begin with
     db.largest_flushed_slot.store(newly_rooted_slot, .monotonic);
