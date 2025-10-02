@@ -38,6 +38,19 @@ pub const Service = struct {
     replay: ReplayState,
     consensus: ?TowerConsensus,
     num_threads: u32,
+    metrics: Metrics,
+
+    const Metrics = struct {
+        slot_execution_time: *sig.prometheus.Histogram,
+
+        pub const prefix = "replay";
+        pub const histogram_buckets = b: {
+            const base = 100 * std.time.ns_per_ms;
+            var buckets: [20]f64 = undefined;
+            for (&buckets, 0..) |*bucket, i| bucket.* = i * base;
+            break :b buckets;
+        };
+    };
 
     pub fn init(
         deps: *Dependencies,
@@ -75,6 +88,7 @@ pub const Service = struct {
             .replay = state,
             .consensus = consensus,
             .num_threads = num_threads,
+            .metrics = try sig.prometheus.globalRegistry().initStruct(Metrics),
         };
     }
 
@@ -92,6 +106,8 @@ pub const Service = struct {
 
         const allocator = self.replay.allocator;
         self.replay.logger.debug().log("advancing replay");
+
+        var start_time = sig.time.Timer.start();
 
         // find slots in the ledger
         try trackNewSlots(
@@ -125,6 +141,10 @@ pub const Service = struct {
             )
         else
             try bypassConsensus(&self.replay);
+
+        const elapsed = start_time.read().asNanos();
+        self.metrics.slot_execution_time.observe(elapsed);
+        self.replay.logger.info().logf("advanced in {}", .{std.fmt.fmtDuration(elapsed)});
 
         if (!processed_a_slot) try std.Thread.yield();
     }
