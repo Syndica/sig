@@ -279,22 +279,31 @@ pub const VoteAccounts = struct {
 };
 
 pub const VoteAccount = struct {
-    account: AccountSharedData,
+    // account: AccountSharedData,
+    account: MinimalAccount,
     state: VoteState,
+
+    /// Represents the minimal amount of information needed from the account data.
+    const MinimalAccount = struct {
+        lamports: u64,
+    };
 
     pub const @"!bincode-config" = bincode.FieldConfig(VoteAccount){ .deserializer = deserialize };
     pub const @"!bincode-config:state" = bincode.FieldConfig(VoteState){ .skip = true };
 
     pub fn deinit(self: *const VoteAccount, allocator: Allocator) void {
-        self.account.deinit(allocator);
+        _ = allocator; // autofix
+        // self.account.deinit(allocator);
         self.state.deinit();
     }
 
     pub fn clone(self: VoteAccount, allocator: Allocator) Allocator.Error!VoteAccount {
-        const account = try self.account.clone(allocator);
-        errdefer account.deinit(allocator);
+        _ = allocator; // autofix
+        // const account = try self.account.clone(allocator);
+        // errdefer account.deinit(allocator);
         return .{
-            .account = account,
+            .account = self.account,
+            // .account = account,
             .state = try self.state.clone(),
         };
     }
@@ -307,17 +316,11 @@ pub const VoteAccount = struct {
         return self.state.node_pubkey;
     }
 
-    pub fn equals(self: *const VoteAccount, other: *const VoteAccount) bool {
-        return self.account.equals(&other.account) and self.state.equals(&other.state);
-    }
-
-    /// Takes ownership of `account`.
+    /// Does not take ownership of `account`.
     pub fn fromAccountSharedData(
         allocator: std.mem.Allocator,
         account: AccountSharedData,
     ) !VoteAccount {
-        errdefer account.deinit(allocator);
-
         if (!vote_program.ID.equals(&account.owner)) return error.InvalidOwner;
 
         const versioned_vote_state = try bincode.readFromSlice(
@@ -329,7 +332,7 @@ pub const VoteAccount = struct {
         errdefer versioned_vote_state.deinit();
 
         return .{
-            .account = account,
+            .account = .{ .lamports = account.lamports },
             .state = try versioned_vote_state.convertToCurrent(allocator),
         };
     }
@@ -855,8 +858,8 @@ test "staked nodes update" {
         defer maybe_old.?.deinit(allocator);
 
         try std.testing.expectEqual(42, maybe_old.?.stake);
-        try std.testing.expect(account_0.equals(&maybe_old.?.account));
-        try std.testing.expect(account_0.equals(&vote_accounts.getAccount(pubkey).?));
+        // try std.testing.expect(account_0.equals(&maybe_old.?.account));
+        // try std.testing.expect(account_0.equals(&vote_accounts.getAccount(pubkey).?));
         try std.testing.expectEqual(42, vote_accounts.getDelegatedStake(pubkey));
         try std.testing.expectEqual(42, vote_accounts.staked_nodes.get(node_pubkey).?);
     }
@@ -881,8 +884,8 @@ test "staked nodes update" {
         defer maybe_old.?.deinit(allocator);
 
         try std.testing.expectEqual(42, maybe_old.?.stake);
-        try std.testing.expect(account_0.equals(&maybe_old.?.account));
-        try std.testing.expect(account_1.equals(&vote_accounts.getAccount(pubkey).?));
+        // try std.testing.expect(account_0.equals(&maybe_old.?.account));
+        // try std.testing.expect(account_1.equals(&vote_accounts.getAccount(pubkey).?));
         try std.testing.expectEqual(42, vote_accounts.getDelegatedStake(pubkey));
         try std.testing.expectEqual(42, vote_accounts.staked_nodes.get(node_pubkey).?);
     }
@@ -908,8 +911,8 @@ test "staked nodes update" {
         defer maybe_old.?.deinit(allocator);
 
         try std.testing.expectEqual(42, maybe_old.?.stake);
-        try std.testing.expect(account_1.equals(&maybe_old.?.account));
-        try std.testing.expect(account_2.equals(&vote_accounts.getAccount(pubkey).?));
+        // try std.testing.expect(account_1.equals(&maybe_old.?.account));
+        // try std.testing.expect(account_2.equals(&vote_accounts.getAccount(pubkey).?));
         try std.testing.expectEqual(42, vote_accounts.getDelegatedStake(pubkey));
         try std.testing.expectEqual(null, vote_accounts.staked_nodes.get(node_pubkey));
         try std.testing.expectEqual(42, vote_accounts.staked_nodes.get(new_node_pubkey).?);
@@ -950,7 +953,7 @@ test "staked nodes zero stake" {
         );
 
         try std.testing.expectEqual(null, maybe_old);
-        try std.testing.expect(account_0.equals(&vote_accounts.getAccount(pubkey).?));
+        // try std.testing.expect(account_0.equals(&vote_accounts.getAccount(pubkey).?));
         try std.testing.expectEqual(0, vote_accounts.getDelegatedStake(pubkey));
         try std.testing.expectEqual(null, vote_accounts.staked_nodes.get(node_pubkey));
     }
@@ -976,8 +979,8 @@ test "staked nodes zero stake" {
         defer maybe_old.?.deinit(allocator);
 
         try std.testing.expectEqual(0, maybe_old.?.stake);
-        try std.testing.expect(account_0.equals(&maybe_old.?.account));
-        try std.testing.expect(account_1.equals(&vote_accounts.getAccount(pubkey).?));
+        // try std.testing.expect(account_0.equals(&maybe_old.?.account));
+        // try std.testing.expect(account_1.equals(&vote_accounts.getAccount(pubkey).?));
         try std.testing.expectEqual(0, vote_accounts.getDelegatedStake(pubkey));
         try std.testing.expectEqual(null, vote_accounts.staked_nodes.get(node_pubkey));
         try std.testing.expectEqual(null, vote_accounts.staked_nodes.get(new_node_pubkey));
