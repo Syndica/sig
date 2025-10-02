@@ -91,8 +91,9 @@ pub fn onSlotRooted(
 
     const make_full_snapshot = snapshot_generation_enabled and newly_rooted_slot >=
         latest_full_snapshot_slot + config.slots_per_full_snapshot;
-    const make_inc_snapshot = snapshot_generation_enabled and newly_rooted_slot >=
-        latest_inc_snapshot + latest_full_snapshot_slot + config.slots_per_incremental_snapshot;
+    const make_inc_snapshot = snapshot_generation_enabled and !make_full_snapshot and
+        newly_rooted_slot >=
+            latest_inc_snapshot + latest_full_snapshot_slot + config.slots_per_incremental_snapshot;
 
     // TODO: might be a good idea to move snapshot creation to another thread
     if (make_full_snapshot or make_inc_snapshot) {
@@ -129,10 +130,8 @@ pub fn onSlotRooted(
                 db.latest_snapshot_gen_info.writeWithLock();
             defer gen_info_lg.unlock();
 
-            if (gen_info.*) |prev| {
-                std.debug.assert(newly_rooted_slot >=
-                    prev.full.slot + config.slots_per_full_snapshot);
-            }
+            const prev = gen_info.*.?; // value set in generateFullSnapshotWithCompressor
+            std.debug.assert(newly_rooted_slot == prev.full.slot);
 
             gen_info.* = .{
                 .full = .{
@@ -175,10 +174,8 @@ pub fn onSlotRooted(
             const gen_info = &((maybe_gen_info.*) orelse
                 @panic("illegal state - snapshot_gen_info (previously non-null) is now null"));
 
-            if (gen_info.inc) |prev_inc| {
-                std.debug.assert(newly_rooted_slot >=
-                    prev_inc.slot + config.slots_per_incremental_snapshot);
-            }
+            const prev_inc = gen_info.inc.?; // value set in generateIncrementalSnapshotWithCompressor
+            std.debug.assert(newly_rooted_slot == prev_inc.slot);
 
             gen_info.inc = .{
                 .capitalization = result.incremental_capitalization,
@@ -1627,6 +1624,83 @@ test "onSlotRooted shrink and delete" {
     var iter = accounts_dir.iterate();
     try std.testing.expectEqualStrings("151.4", (try iter.next()).?.name);
     try std.testing.expectEqual(null, try iter.next());
+}
+
+test "snapshot generation happens without error" {
+    const allocator = std.testing.allocator;
+    const logger: Logger = .noop;
+    var prng = std.Random.DefaultPrng.init(5083);
+    const random = prng.random();
+
+    var tmp_dir_root = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp_dir_root.cleanup();
+    const snapshot_dir = tmp_dir_root.dir;
+
+    var db = try AccountsDB.init(.{
+        .allocator = allocator,
+        .logger = .from(logger),
+        .snapshot_dir = snapshot_dir,
+        .geyser_writer = null,
+        .gossip_view = null,
+        .index_allocation = .ram,
+        .number_of_index_shards = 4,
+    });
+    defer db.deinit();
+
+    const accounts = try allocator.alloc(sig.runtime.AccountSharedData, 10);
+    defer allocator.free(accounts);
+    for (accounts) |*account| {
+        account.* = sig.runtime.AccountSharedData.EMPTY;
+        account.lamports = 1;
+    }
+    const pubkeys = try allocator.alloc(Pubkey, 10);
+    defer allocator.free(pubkeys);
+    for (pubkeys) |*pubkey| pubkey.* = Pubkey.initRandom(random);
+
+    // put all accounts
+    for (accounts, pubkeys) |account, pubkey| {
+        try db.putAccount(149, pubkey, account);
+    }
+
+    // generate full snapshot
+    try onSlotRooted(
+        allocator,
+        &db,
+        149,
+        .{ .slots_per_full_snapshot = 1 },
+        5000,
+    );
+
+    for (accounts, pubkeys) |account, pubkey| try db.putAccount(150, pubkey, account);
+    for (accounts, pubkeys) |account, pubkey| try db.putAccount(151, pubkey, account);
+    for (accounts, pubkeys) |account, pubkey| try db.putAccount(152, pubkey, account);
+    for (accounts, pubkeys) |account, pubkey| try db.putAccount(153, pubkey, account);
+    for (accounts, pubkeys) |account, pubkey| try db.putAccount(154, pubkey, account);
+
+    // generate incremental
+    try onSlotRooted(allocator, &db, 150, .{
+        .slots_per_full_snapshot = 100,
+        .slots_per_incremental_snapshot = 1,
+    }, 5000);
+
+    var found_inc = false;
+    var found_full = false;
+
+    var iter = snapshot_dir.iterate();
+    while (try iter.next()) |obj| {
+        if (obj.kind != .file) continue;
+
+        if (std.mem.startsWith(u8, obj.name, "incremental-snapshot-")) {
+            found_inc = true;
+        } else if (std.mem.startsWith(u8, obj.name, "snapshot-")) {
+            found_full = true;
+        } else {
+            return error.UnexpectedFileFound;
+        }
+    }
+
+    try std.testing.expect(found_inc);
+    try std.testing.expect(found_full);
 }
 
 test "snapshot generation" {
