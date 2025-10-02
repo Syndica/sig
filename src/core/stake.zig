@@ -128,11 +128,7 @@ pub const StakesType = enum {
 };
 
 pub fn Stakes(comptime stakes_type: StakesType) type {
-    const T = switch (stakes_type) {
-        .delegation => Delegation,
-        .stake => Stake,
-        .account => StakeAccount,
-    };
+    const T = stakes_type.T();
 
     return struct {
         vote_accounts: VoteAccounts,
@@ -168,8 +164,8 @@ pub fn Stakes(comptime stakes_type: StakesType) type {
             allocator: Allocator,
             comptime output_type: StakesType,
         ) Allocator.Error!Stakes(output_type) {
-            const vote_accs = try self.vote_accounts.clone(allocator);
-            errdefer vote_accs.deinit(allocator);
+            const vote_accounts = try self.vote_accounts.clone(allocator);
+            errdefer vote_accounts.deinit(allocator);
 
             var stake_delegations: std.AutoArrayHashMapUnmanaged(Pubkey, output_type.T()) = .empty;
             try stake_delegations.ensureTotalCapacity(allocator, self.stake_delegations.count());
@@ -181,23 +177,21 @@ pub fn Stakes(comptime stakes_type: StakesType) type {
                 stake_delegations.deinit(allocator);
             }
             for (self.stake_delegations.keys(), self.stake_delegations.values()) |key, value| {
-                const new_value =
-                    if (stakes_type == .account and output_type == .account)
-                        try value.clone(allocator)
-                    else if (stakes_type == .stake and output_type == .stake)
-                        value
-                    else if (stakes_type == .delegation and output_type == .delegation)
-                        value
-                    else if (stakes_type == .stake and output_type == .delegation)
-                        value.delegation
-                    else
-                        @compileLog("unsupported conversion.", stakes_type, output_type);
+                const new_value: output_type.T() = switch (stakes_type) {
+                    .account => try value.clone(allocator),
+                    .delegation => value,
+                    .stake => switch (output_type) {
+                        .stake => value,
+                        .delegation => value.delegation,
+                        else => unreachable,
+                    },
+                };
 
                 stake_delegations.putAssumeCapacity(key, new_value);
             }
 
             return .{
-                .vote_accounts = vote_accs,
+                .vote_accounts = vote_accounts,
                 .stake_delegations = stake_delegations,
                 .unused = self.unused,
                 .epoch = self.epoch,
