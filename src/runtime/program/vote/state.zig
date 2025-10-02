@@ -634,14 +634,14 @@ pub const VoteStateVersions = union(enum) {
 
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/vote_state_versions.rs#L31
     pub fn convertToCurrent(self: VoteStateVersions, allocator: std.mem.Allocator) !VoteState {
-        switch (self) {
-            .v0_23_5 => |state| {
+        return switch (self) {
+            .v0_23_5 => |state| v: {
                 const authorized_voters = try AuthorizedVoters.init(
                     allocator,
                     state.voter_epoch,
                     state.voter,
                 );
-                return VoteState{
+                break :v .{
                     .node_pubkey = state.node_pubkey,
                     .withdrawer = state.withdrawer,
                     .commission = state.commission,
@@ -653,7 +653,7 @@ pub const VoteStateVersions = union(enum) {
                     .last_timestamp = state.last_timestamp,
                 };
             },
-            .v1_14_11 => |state| return VoteState{
+            .v1_14_11 => |state| .{
                 .node_pubkey = state.node_pubkey,
                 .withdrawer = state.withdrawer,
                 .commission = state.commission,
@@ -664,8 +664,8 @@ pub const VoteStateVersions = union(enum) {
                 .epoch_credits = state.epoch_credits,
                 .last_timestamp = state.last_timestamp,
             },
-            .current => |state| return state,
-        }
+            .current => |state| state,
+        };
     }
 
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/vote_state_versions.rs#L84
