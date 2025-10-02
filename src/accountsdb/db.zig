@@ -1528,6 +1528,9 @@ pub const AccountsDB = struct {
         std.fs.File,
         FileId,
     } {
+        const zone = tracy.Zone.init(@src(), .{ .name = "createAccountFile" });
+        defer zone.deinit();
+
         self.largest_file_id = self.largest_file_id.increment();
         const file_id = self.largest_file_id;
 
