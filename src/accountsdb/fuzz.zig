@@ -362,7 +362,13 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                 .rooted = largest_rooted_slot,
                 .flushed = null,
             });
-            try manager.manage(allocator);
+            try sig.accounts_db.manager.onSlotRooted(
+                allocator,
+                &accounts_db,
+                largest_rooted_slot,
+                .{},
+                5000,
+            );
 
             // holding the lock here means that the snapshot archive(s) wont be deleted
             // since deletion requires a write lock
