@@ -366,9 +366,6 @@ pub fn deltaLtHash(
 
     assert(!parent_ancestors.containsSlot(slot));
 
-    const zone = tracy.Zone.init(@src(), .{ .name = "deltaLtHash" });
-    defer zone.deinit();
-
     var arena = std.heap.ArenaAllocator.init(tmp_alloc);
     defer arena.deinit();
     const allocator = arena.allocator();
