@@ -109,11 +109,9 @@ pub fn start(
 
     // receiver (threads)
     const shred_receiver = try arena.create(ShredReceiver);
-    shred_receiver.* = .{
-        .allocator = deps.allocator,
+    shred_receiver.* = try ShredReceiver.init(deps.allocator, .from(deps.logger), .{
         .keypair = deps.my_keypair,
         .exit = deps.exit,
-        .logger = .from(deps.logger),
         .repair_socket = repair_socket,
         .turbine_socket = turbine_socket,
         .shred_version = deps.my_shred_version,
@@ -123,8 +121,13 @@ pub fn start(
         .leader_schedule = deps.epoch_context_mgr.slotLeaders(),
         .tracker = shred_tracker,
         .inserter = shred_inserter,
-    };
-    try service_manager.spawn("Shred Receiver", ShredReceiver.run, .{shred_receiver});
+    });
+    try defers.deferCall(ShredReceiver.deinit, .{ shred_receiver, deps.allocator });
+    try service_manager.spawn(
+        "Shred Receiver",
+        ShredReceiver.run,
+        .{ shred_receiver, deps.allocator },
+    );
 
     // retransmitter (thread)
     if (conf.retransmit) {
