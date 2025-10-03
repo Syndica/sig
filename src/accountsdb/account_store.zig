@@ -71,14 +71,6 @@ pub const AccountReader = union(enum) {
     thread_safe_map: *ThreadSafeAccountMap,
     noop,
 
-    /// use this to deinit accounts returned by get methods
-    pub fn allocator(self: AccountReader) Allocator {
-        return switch (self) {
-            .noop => sig.utils.allocators.failing.allocator(.{}),
-            inline else => |item| item.allocator,
-        };
-    }
-
     pub fn forSlot(self: AccountReader, ancestors: *const Ancestors) SlotAccountReader {
         return switch (self) {
             .accounts_db => |db| .{ .accounts_db = .{ db, ancestors } },
@@ -88,13 +80,13 @@ pub const AccountReader = union(enum) {
     }
 
     /// Deinit all returned accounts using `account_reader.allocator()`
-    pub fn getLatest(self: AccountReader, address: Pubkey) !?Account {
+    pub fn getLatest(self: AccountReader, allocator: std.mem.Allocator, address: Pubkey) !?Account {
         return switch (self) {
             .accounts_db => |db| {
-                const account = try db.getAccountLatest(&address) orelse return null;
+                const account = try db.getAccountLatest(allocator, &address) orelse return null;
                 if (account.lamports == 0) {
                     // TODO: implement this check in accountsdb to avoid the unnecessary allocation
-                    account.deinit(db.allocator);
+                    account.deinit(allocator);
                     return null;
                 }
                 return account;
@@ -149,9 +141,12 @@ pub const SlotModifiedIterator = union(enum) {
         };
     }
 
-    pub fn next(self: *SlotModifiedIterator) !?struct { Pubkey, Account } {
+    pub fn next(
+        self: *SlotModifiedIterator,
+        allocator: std.mem.Allocator,
+    ) !?struct { Pubkey, Account } {
         return switch (self.*) {
-            inline else => |*item| try item.next(),
+            inline else => |*item| try item.next(allocator),
             .noop => null,
         };
     }
@@ -210,17 +205,20 @@ pub const SlotAccountReader = union(enum) {
     }
 
     /// Deinit all returned accounts using `account_reader.allocator()`
-    pub fn get(self: SlotAccountReader, address: Pubkey) !?Account {
+    pub fn get(self: SlotAccountReader, alloc: std.mem.Allocator, address: Pubkey) !?Account {
         const zone = tracy.Zone.init(@src(), .{ .name = "SlotAccountReader.get" });
         defer zone.deinit();
 
         return switch (self) {
             .accounts_db => |pair| {
                 const db, const ancestors = pair;
-                const account = try db.getAccountWithAncestors(&address, ancestors) orelse
-                    return null;
+                const account = try db.getAccountWithAncestors(
+                    alloc,
+                    &address,
+                    ancestors,
+                ) orelse return null;
                 if (account.lamports == 0) {
-                    account.deinit(db.allocator);
+                    account.deinit(alloc);
                     return null;
                 }
                 return account;
@@ -508,12 +506,16 @@ pub const ThreadSafeAccountMap = struct {
             return self.slot_list.len;
         }
 
-        pub fn next(self: *ThreadSafeAccountMap.SlotModifiedIterator) !?struct { Pubkey, Account } {
+        pub fn next(
+            self: *ThreadSafeAccountMap.SlotModifiedIterator,
+            allocator: std.mem.Allocator,
+        ) !?struct { Pubkey, Account } {
             std.debug.assert(self.cursor != std.math.maxInt(usize));
             defer self.cursor += 1;
             if (self.cursor >= self.slot_list.len) return null;
             const pubkey, const account = self.slot_list[self.cursor];
-            return .{ pubkey, try toAccount(self.allocator, account) };
+
+            return .{ pubkey, try toAccount(allocator, account) };
         }
     };
 
@@ -525,7 +527,9 @@ pub const ThreadSafeAccountMap = struct {
 };
 
 test "AccountStore does not return 0-lamport accounts from accountsdb" {
-    var db, var dir = try AccountsDB.initForTest(std.testing.allocator);
+    const allocator = std.testing.allocator;
+
+    var db, var dir = try AccountsDB.initForTest(allocator);
     defer {
         db.deinit();
         dir.cleanup();
@@ -552,16 +556,16 @@ test "AccountStore does not return 0-lamport accounts from accountsdb" {
 
     const reader = db.accountReader();
 
-    try std.testing.expectEqual(null, try reader.getLatest(zero_lamport_address));
-    try std.testing.expectEqual(1, (try reader.getLatest(one_lamport_address)).?.lamports);
+    try std.testing.expectEqual(null, try reader.getLatest(allocator, zero_lamport_address));
+    try std.testing.expectEqual(1, (try reader.getLatest(allocator, one_lamport_address)).?.lamports);
 
     var ancestors = Ancestors{};
     defer ancestors.deinit(std.testing.allocator);
-    try ancestors.ancestors.put(std.testing.allocator, 0, {});
+    try ancestors.ancestors.put(allocator, 0, {});
     const slot_reader = db.accountReader().forSlot(&ancestors);
 
-    try std.testing.expectEqual(null, try slot_reader.get(zero_lamport_address));
-    try std.testing.expectEqual(1, (try slot_reader.get(one_lamport_address)).?.lamports);
+    try std.testing.expectEqual(null, try slot_reader.get(allocator, zero_lamport_address));
+    try std.testing.expectEqual(1, (try slot_reader.get(allocator, one_lamport_address)).?.lamports);
 }
 
 test ThreadSafeAccountMap {
@@ -593,11 +597,12 @@ test ThreadSafeAccountMap {
     };
     try account_store.put(slot1, addr1, expected_account);
 
-    try expectAccount(account_reader, addr1, null, sharedToCoreAccount(expected_account));
-    try expectAccount(account_reader, addr1, ancestors1, sharedToCoreAccount(expected_account));
+    try expectAccount(allocator, account_reader, addr1, null, sharedToCoreAccount(expected_account));
+    try expectAccount(allocator, account_reader, addr1, ancestors1, sharedToCoreAccount(expected_account));
 }
 
 fn expectAccount(
+    allocator: std.mem.Allocator,
     account_reader: AccountReader,
     address: Pubkey,
     maybe_ancestors: ?Ancestors,
@@ -605,10 +610,10 @@ fn expectAccount(
 ) !void {
     if (!@import("builtin").is_test) @compileError("Not allowed outside of tests.");
     const actual = if (maybe_ancestors) |*ancestors|
-        try account_reader.forSlot(ancestors).get(address)
+        try account_reader.forSlot(ancestors).get(allocator, address)
     else
-        try account_reader.getLatest(address);
-    defer if (actual) |actual_account| actual_account.deinit(account_reader.allocator());
+        try account_reader.getLatest(allocator, address);
+    defer if (actual) |actual_account| actual_account.deinit(allocator);
 
     if ((expected == null) != (actual == null)) {
         try std.testing.expectEqual(expected, actual);

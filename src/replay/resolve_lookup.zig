@@ -282,7 +282,7 @@ fn getLookupTable(
     // it against the current slot's ancestors. This won't be usable
     // until consensus is implemented in replay, so it's not
     // implemented yet.
-    const account = try account_reader.get(table_address) orelse
+    const account = try account_reader.get(account_reader.allocator(), table_address) orelse
         return error.AddressLookupTableNotFound;
     defer account.deinit(account_reader.allocator());
 
