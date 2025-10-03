@@ -302,6 +302,7 @@ pub const ThreadSafeAccountMap = struct {
     pub fn getLatest(self: *ThreadSafeAccountMap, address: Pubkey) !?Account {
         self.rwlock.lockShared();
         defer self.rwlock.unlockShared();
+
         const list = self.pubkey_map.get(address) orelse return null;
         if (list.items.len == 0) return null;
         return asAccount(list.items[0][1]);
