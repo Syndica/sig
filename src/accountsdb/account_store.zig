@@ -150,14 +150,6 @@ pub const SlotModifiedIterator = union(enum) {
             .noop => null,
         };
     }
-
-    pub fn allocator(self: SlotModifiedIterator) std.mem.Allocator {
-        return switch (self) {
-            .accounts_db => |state| state.db.allocator,
-            .thread_safe_map => |state| state.allocator,
-            .noop => sig.utils.allocators.failing.allocator(.{}),
-        };
-    }
 };
 
 /// Interface for reading any account as it should appear during a particular slot.
@@ -291,7 +283,7 @@ pub const ThreadSafeAccountMap = struct {
                 else
                     asAccount(account);
             }
-            if (self.last_rooted_slot) |last_rooted_slot| if (slot <= last_rooted_slot) {
+            if (self.largest_rooted_slot) |largest_rooted_slot| if (slot <= largest_rooted_slot) {
                 return if (account.lamports == 0) null else asAccount(account);
             };
         }
@@ -664,6 +656,7 @@ test "insertion basic" {
     const stores = [_]sig.accounts_db.AccountStore{ simple_store, real_store };
 
     try expectEqualDatabaseWithAncestors(
+        allocator,
         &.EMPTY,
         simple_state.pubkey_map.keys(),
         simple_store.reader(),
@@ -684,6 +677,7 @@ test "insertion basic" {
         try ancestor_set.addSlot(allocator, slot);
         try putAccountIntoStores({}, &stores, slot, pubkey, account);
         try expectEqualDatabaseWithAncestors(
+            allocator,
             &ancestor_set,
             simple_state.pubkey_map.keys(),
             simple_store.reader(),
@@ -698,6 +692,7 @@ test "insertion basic" {
         const slot: Slot = i;
         try ancestor_set.subsetInto(slot, allocator, &ancestors_subset);
         try expectEqualDatabaseWithAncestors(
+            allocator,
             &ancestors_subset,
             simple_state.pubkey_map.keys(),
             simple_store.reader(),
@@ -737,6 +732,7 @@ test "insertion out of order" {
     const stores = [_]sig.accounts_db.AccountStore{ simple_store, real_store };
 
     try expectEqualDatabaseWithAncestors(
+        allocator,
         &.EMPTY,
         simple_state.pubkey_map.keys(),
         simple_store.reader(),
@@ -762,6 +758,7 @@ test "insertion out of order" {
         try putAccountIntoStores({}, &stores, slot, pubkey, account);
 
         try expectEqualDatabaseWithAncestors(
+            allocator,
             &ancestor_set,
             simple_state.pubkey_map.keys(),
             simple_store.reader(),
@@ -775,6 +772,7 @@ test "insertion out of order" {
     for (ancestor_set.ancestors.keys()) |slot| {
         try ancestor_set.subsetInto(slot, allocator, &ancestors_subset);
         try expectEqualDatabaseWithAncestors(
+            allocator,
             &ancestors_subset,
             simple_state.pubkey_map.keys(),
             simple_store.reader(),
@@ -1119,11 +1117,11 @@ fn expectAccountFromStores(
     for (stores) |store| {
         errdefer std.log.err("Occurred with store impl '{s}'", .{@tagName(store)});
         const reader = store.reader();
-        const actual_account = try reader.forSlot(ancestors).get(address) orelse {
+        const actual_account = try reader.forSlot(ancestors).get(allocator, address) orelse {
             try std.testing.expectEqual(maybe_expected_account, null);
             continue;
         };
-        defer actual_account.deinit(reader.allocator());
+        defer actual_account.deinit(allocator);
 
         const expected_account = maybe_expected_account orelse {
             try std.testing.expectEqual(null, actual_account);
@@ -1134,6 +1132,7 @@ fn expectAccountFromStores(
 }
 
 fn expectEqualDatabaseWithAncestors(
+    allocator: std.mem.Allocator,
     ancestors: *const Ancestors,
     pubkeys: []const Pubkey,
     expected: sig.accounts_db.AccountReader,
@@ -1145,11 +1144,11 @@ fn expectEqualDatabaseWithAncestors(
     const expected_for_slot = expected.forSlot(ancestors);
     const actual_for_slot = actual.forSlot(ancestors);
     for (pubkeys) |pubkey| {
-        const expected_account_opt = try expected_for_slot.get(pubkey);
-        defer if (expected_account_opt) |acc| acc.deinit(expected_for_slot.allocator());
+        const expected_account_opt = try expected_for_slot.get(allocator, pubkey);
+        defer if (expected_account_opt) |acc| acc.deinit(allocator);
 
-        const actual_account_opt = try actual_for_slot.get(pubkey);
-        defer if (actual_account_opt) |acc| acc.deinit(actual_for_slot.allocator());
+        const actual_account_opt = try actual_for_slot.get(allocator, pubkey);
+        defer if (actual_account_opt) |acc| acc.deinit(allocator);
 
         if (expected_account_opt == null and
             actual_account_opt == null)
@@ -1167,8 +1166,6 @@ fn expectEqualDatabaseWithAncestors(
         };
         try actual_account.expectEquals(expected_account);
     }
-
-    const allocator = std.testing.allocator;
 
     var expected_map: std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData) = .empty;
     defer expected_map.deinit(allocator);
@@ -1212,8 +1209,8 @@ fn collectModifiedSlotsIntoMap(
     defer iter.unlock();
     try map.ensureTotalCapacity(allocator, iter.len());
     while (true) {
-        const address, const account = try iter.next() orelse break;
-        defer account.deinit(iter.allocator());
+        const address, const account = try iter.next(allocator) orelse break;
+        defer account.deinit(allocator);
         map.putAssumeCapacity(address, .{
             .lamports = account.lamports,
             .data = try account.data.readAllAllocate(allocator),
