@@ -200,7 +200,7 @@ pub const BatchAccountCache = struct {
                     if (!entry.found_existing) {
                         entry.value_ptr.* = program_data_account;
                     } else {
-                        account_reader.allocator().free(program_data_account.data);
+                        allocator.free(program_data_account.data);
                     }
                 }
             }

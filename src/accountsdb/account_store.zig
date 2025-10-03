@@ -191,24 +191,8 @@ pub const SlotAccountReader = union(enum) {
     single_version_map: *const std.AutoArrayHashMapUnmanaged(Pubkey, Account),
     noop,
 
-    /// use this to deinit accounts returned by get methods
-    pub fn allocator(self: SlotAccountReader) Allocator {
-        return switch (self) {
-            .noop => sig.utils.allocators.failing.allocator(.{}),
-            .single_version_map => sig.utils.allocators.failing.allocator(.{
-                .alloc = .panics,
-                .resize = .panics,
-                .free = .panics,
-            }),
-            inline else => |item| item[0].allocator,
-        };
-    }
-
     /// Deinit all returned accounts using `account_reader.allocator()`
     pub fn get(self: SlotAccountReader, alloc: std.mem.Allocator, address: Pubkey) !?Account {
-        const zone = tracy.Zone.init(@src(), .{ .name = "SlotAccountReader.get" });
-        defer zone.deinit();
-
         return switch (self) {
             .accounts_db => |pair| {
                 const db, const ancestors = pair;
@@ -223,7 +207,7 @@ pub const SlotAccountReader = union(enum) {
                 }
                 return account;
             },
-            .thread_safe_map => |pair| try pair[0].get(address, pair[1]),
+            .thread_safe_map => |pair| pair[0].get(address, pair[1]),
             .single_version_map => |pair| pair.get(address),
             .noop => null,
         };
@@ -293,7 +277,7 @@ pub const ThreadSafeAccountMap = struct {
         self: *ThreadSafeAccountMap,
         address: Pubkey,
         ancestors: *const Ancestors,
-    ) !?Account {
+    ) ?Account {
         self.rwlock.lockShared();
         defer self.rwlock.unlockShared();
 
@@ -302,7 +286,10 @@ pub const ThreadSafeAccountMap = struct {
         for (slot_account_pairs.items) |slot_account| {
             const slot, const account = slot_account;
             if (ancestors.containsSlot(slot)) {
-                return if (account.lamports == 0) null else try toAccount(self.allocator, account);
+                return if (account.lamports == 0)
+                    null
+                else
+                    asAccount(account);
             }
             if (self.largest_rooted_slot) |largest_rooted_slot| if (slot <= largest_rooted_slot) {
                 return if (account.lamports == 0) null else try toAccount(self.allocator, account);
@@ -317,17 +304,13 @@ pub const ThreadSafeAccountMap = struct {
         defer self.rwlock.unlockShared();
         const list = self.pubkey_map.get(address) orelse return null;
         if (list.items.len == 0) return null;
-        _, const account = list.items[0];
-        return try toAccount(self.allocator, account);
+        return asAccount(list.items[0][1]);
     }
 
-    fn toAccount(allocator: Allocator, account: AccountSharedData) !Account {
-        const data = try allocator.dupe(u8, account.data);
-        errdefer allocator.free(account.data);
-
+    fn asAccount(account: AccountSharedData) Account {
         return .{
             .lamports = account.lamports,
-            .data = .{ .owned_allocation = data },
+            .data = .{ .unowned_allocation = account.data },
             .owner = account.owner,
             .executable = account.executable,
             .rent_epoch = account.rent_epoch,
@@ -341,7 +324,7 @@ pub const ThreadSafeAccountMap = struct {
         self: *ThreadSafeAccountMap,
         slot: Slot,
         address: Pubkey,
-        account: AccountSharedData,
+        put_account: AccountSharedData,
     ) PutError!void {
         self.rwlock.lock();
         defer self.rwlock.unlock();
@@ -352,16 +335,7 @@ pub const ThreadSafeAccountMap = struct {
             }
         }
 
-        const data = try self.allocator.dupe(u8, account.data);
-        errdefer self.allocator.free(account.data);
-
-        const account_shared_data: AccountSharedData = .{
-            .lamports = account.lamports,
-            .data = data,
-            .owner = account.owner,
-            .executable = account.executable,
-            .rent_epoch = account.rent_epoch,
-        };
+        const account = try put_account.clone(self.allocator);
 
         slot_map: {
             const slot_map = &self.slot_map;
@@ -370,11 +344,12 @@ pub const ThreadSafeAccountMap = struct {
             for (slot_gop.value_ptr.items) |*pubkey_account| {
                 if (pubkey_account[0].equals(&address)) {
                     self.allocator.free(pubkey_account[1].data);
-                    pubkey_account[1] = account_shared_data;
+                    pubkey_account[1] = account;
                     break :slot_map;
                 }
             }
-            try slot_gop.value_ptr.append(self.allocator, .{ address, account_shared_data });
+
+            try slot_gop.value_ptr.append(self.allocator, .{ address, account });
         }
 
         {
@@ -395,10 +370,10 @@ pub const ThreadSafeAccountMap = struct {
                 helper.compare,
             );
 
-            if (index != versions_list.items.len and versions_list.items[index][0] == slot) {
-                versions_list.items[index] = .{ slot, account_shared_data };
+            if (index != versions.len and versions[index][0] == slot) {
+                versions[index] = .{ slot, account };
             } else {
-                try versions_list.insert(self.allocator, index, .{ slot, account_shared_data });
+                try gop.value_ptr.insert(self.allocator, index, .{ slot, account });
             }
         }
     }
@@ -513,9 +488,12 @@ pub const ThreadSafeAccountMap = struct {
             std.debug.assert(self.cursor != std.math.maxInt(usize));
             defer self.cursor += 1;
             if (self.cursor >= self.slot_list.len) return null;
-            const pubkey, const account = self.slot_list[self.cursor];
+            const pubkey, const acc = self.slot_list[self.cursor];
 
-            return .{ pubkey, try toAccount(allocator, account) };
+            var account = asAccount(acc);
+            account.data = .{ .owned_allocation = try allocator.dupe(u8, acc.data) };
+
+            return .{ pubkey, account };
         }
     };
 
@@ -613,7 +591,6 @@ fn expectAccount(
         try account_reader.forSlot(ancestors).get(allocator, address)
     else
         try account_reader.getLatest(allocator, address);
-    defer if (actual) |actual_account| actual_account.deinit(allocator);
 
     if ((expected == null) != (actual == null)) {
         try std.testing.expectEqual(expected, actual);

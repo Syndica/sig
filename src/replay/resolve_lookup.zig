@@ -240,7 +240,8 @@ fn resolveLookupTableAccounts(
 
     // handle lookup table accounts
     for (address_lookups) |lookup| {
-        const table = try getLookupTable(account_reader, lookup.table_address);
+        const table = try getLookupTable(allocator, account_reader, lookup.table_address);
+        defer allocator.free(table.addresses);
 
         if (table.meta.status(slot, slot_hashes) == .Deactivated) {
             return error.AddressLookupTableNotFound;
@@ -275,6 +276,7 @@ fn resolveLookupTableAccounts(
 }
 
 fn getLookupTable(
+    allocator: std.mem.Allocator,
     account_reader: SlotAccountReader,
     table_address: Pubkey,
 ) !AddressLookupTable {
@@ -282,9 +284,9 @@ fn getLookupTable(
     // it against the current slot's ancestors. This won't be usable
     // until consensus is implemented in replay, so it's not
     // implemented yet.
-    const account = try account_reader.get(account_reader.allocator(), table_address) orelse
+    const account = try account_reader.get(allocator, table_address) orelse
         return error.AddressLookupTableNotFound;
-    defer account.deinit(account_reader.allocator());
+    defer account.deinit(allocator);
 
     if (!account.owner.equals(&sig.runtime.program.address_lookup_table.ID)) {
         return error.InvalidAddressLookupTableOwner;
@@ -298,14 +300,16 @@ fn getLookupTable(
     const account_bytes = buf[0..account.data.len()];
     account.data.readAll(account_bytes);
 
-    return AddressLookupTable.deserialize(account_bytes) catch {
+    var table = AddressLookupTable.deserialize(account_bytes) catch {
         return error.InvalidAddressLookupTableData;
     };
+    table.addresses = try allocator.dupe(Pubkey, table.addresses);
 
     // NOTE: deactivated lookup tables are allowed to be used,
     // according to agave's implementation. see here, where agave
     // discards the value:
     // https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/runtime/src/bank/address_lookup_table.rs#L36
+    return table;
 }
 
 test resolveBatch {
@@ -551,7 +555,7 @@ test getLookupTable {
 
         try std.testing.expectError(
             error.InvalidAddressLookupTableOwner,
-            getLookupTable(account_reader, pubkey),
+            getLookupTable(allocator, account_reader, pubkey),
         );
     }
 
@@ -570,7 +574,7 @@ test getLookupTable {
 
         try std.testing.expectError(
             error.InvalidAddressLookupTableData,
-            getLookupTable(account_reader, pubkey),
+            getLookupTable(allocator, account_reader, pubkey),
         );
     }
 
@@ -589,7 +593,7 @@ test getLookupTable {
 
         try std.testing.expectError(
             error.InvalidAddressLookupTableData,
-            getLookupTable(account_reader, pubkey),
+            getLookupTable(allocator, account_reader, pubkey),
         );
     }
 
@@ -602,7 +606,8 @@ test getLookupTable {
 
         try put(&map, pubkey, lookup_table);
 
-        const loaded_lookup_table = try getLookupTable(account_reader, pubkey);
+        const loaded_lookup_table = try getLookupTable(allocator, account_reader, pubkey);
+        defer allocator.free(loaded_lookup_table.addresses);
 
         try std.testing.expectEqual(lookup_table.meta, loaded_lookup_table.meta);
         try std.testing.expect(lookup_table.addresses[0].equals(&loaded_lookup_table.addresses[0]));

@@ -317,8 +317,8 @@ pub fn deltaMerkleHash(account_reader: AccountReader, allocator: Allocator, slot
         var i: usize = 0;
         while (try iterator.next(allocator)) |pubkey_account| : (i += 1) {
             const pubkey, const account = pubkey_account;
+            defer account.deinit(allocator);
             pubkey_hashes[i] = .{ pubkey, account.hash(pubkey) };
-            account.deinit(allocator);
         }
 
         break :pkh pubkey_hashes;
