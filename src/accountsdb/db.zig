@@ -624,7 +624,7 @@ pub const AccountsDB = struct {
     }
 
     /// multithread entrypoint into loadAndVerifyAccountsFiles.
-    pub fn loadAndVerifyAccountsFilesMultiThread(
+    fn loadAndVerifyAccountsFilesMultiThread(
         loading_threads: []AccountsDB,
         accounts_dir: std.fs.Dir,
         file_info_map: AccountsDbFields.FileMap,
@@ -649,7 +649,7 @@ pub const AccountsDB = struct {
 
     /// loads and verifies the account files into the threads file map
     /// and stores the accounts into the threads index
-    pub fn loadAndVerifyAccountsFiles(
+    fn loadAndVerifyAccountsFiles(
         self: *AccountsDB,
         accounts_dir: std.fs.Dir,
         accounts_per_file_est: usize,
@@ -928,7 +928,7 @@ pub const AccountsDB = struct {
 
     /// merges multiple thread accounts-dbs into self.
     /// index merging happens in parallel using `n_threads`.
-    pub fn mergeMultipleDBs(
+    fn mergeMultipleDBs(
         self: *AccountsDB,
         thread_dbs: []AccountsDB,
         n_threads: usize,
@@ -1013,7 +1013,7 @@ pub const AccountsDB = struct {
 
     /// combines multiple thread indexes into the given index.
     /// each bin is also sorted by pubkey.
-    pub fn mergeThreadIndexesMultiThread(
+    fn mergeThreadIndexesMultiThread(
         logger: Logger,
         index: *AccountIndex,
         thread_dbs: []const AccountsDB,
@@ -1108,7 +1108,7 @@ pub const AccountsDB = struct {
     /// NOTE: acquires a shared/read lock on `file_map_fd_rw` and `file_map` - those fields
     /// must not be under exclusive/write locks before calling this function on the same
     /// thread, or else this will dead lock.
-    pub fn computeAccountHashesAndLamports(
+    fn computeAccountHashesAndLamports(
         self: *AccountsDB,
         config: AccountHashesConfig,
     ) !struct { Hash, u64 } {
@@ -1249,7 +1249,7 @@ pub const AccountsDB = struct {
     /// Validates accountsdb against some snapshot info - if used, it must
     /// be after loading the snapshot(s) whose information is supplied,
     /// and before mutating accountsdb.
-    pub fn validateLoadFromSnapshot(
+    fn validateLoadFromSnapshot(
         self: *AccountsDB,
         params: ValidateLoadFromSnapshotParams,
     ) !void {
@@ -1390,7 +1390,7 @@ pub const AccountsDB = struct {
     }
 
     /// populates the account hashes and total lamports across a given shard slice
-    pub fn getHashesFromIndex(
+    fn getHashesFromIndex(
         self: *AccountsDB,
         config: AccountsDB.AccountHashesConfig,
         shards: []ShardedPubkeyRefMap.RwPubkeyRefMap,
@@ -1563,7 +1563,7 @@ pub const AccountsDB = struct {
         error{SlotNotFound};
 
     // NOTE: we need to acquire locks which requires `self: *Self` but we never modify any data
-    pub fn getAccountFromRef(
+    fn getAccountFromRef(
         self: *AccountsDB,
         account_ref: *const AccountRef,
     ) GetFileFromRefError!Account {
@@ -1614,7 +1614,7 @@ pub const AccountsDB = struct {
     };
 
     pub const GetAccountFromRefError = GetAccountInFileError || error{SlotNotFound};
-    pub fn getAccountFromRefWithReadLock(
+    fn getAccountFromRefWithReadLock(
         self: *AccountsDB,
         account_ref: *const AccountRef,
     ) GetAccountFromRefError!struct { AccountInCacheOrFile, AccountInCacheOrFileLock } {
@@ -1651,7 +1651,7 @@ pub const AccountsDB = struct {
     /// Gets an account given an file_id and offset value.
     /// Locks the account file entries, and then unlocks
     /// them, after returning the clone of the account.
-    pub fn getAccountInFile(
+    fn getAccountInFile(
         self: *AccountsDB,
         account_allocator: std.mem.Allocator,
         file_id: FileId,
@@ -1672,7 +1672,7 @@ pub const AccountsDB = struct {
     /// Locks the account file entries, and returns the account.
     /// Must call `self.file_map_fd_rw.unlockShared()`
     /// when done with the account.
-    pub fn getAccountInFileAndLock(
+    fn getAccountInFileAndLock(
         self: *AccountsDB,
         metadata_allocator: std.mem.Allocator,
         buffer_pool: *BufferPool,
@@ -1692,7 +1692,7 @@ pub const AccountsDB = struct {
     /// Gets an account given a file_id and an offset value.
     /// Assumes `self.file_map_fd_rw` is at least
     /// locked for reading (shared).
-    pub fn getAccountInFileAssumeLock(
+    fn getAccountInFileAssumeLock(
         self: *AccountsDB,
         metadata_allocator: std.mem.Allocator,
         buffer_pool: *BufferPool,
@@ -1808,24 +1808,9 @@ pub const AccountsDB = struct {
         return try self.getAccountFromRef(max_ref);
     }
 
-    pub fn getAccountAndReference(
-        self: *AccountsDB,
-        pubkey: *const Pubkey,
-    ) !struct { Account, AccountRef } {
-        const head_ref, var head_ref_lg =
-            self.account_index.pubkey_ref_map.getRead(pubkey) orelse return error.PubkeyNotInIndex;
-        defer head_ref_lg.unlock();
-
-        // NOTE: this will always be a safe unwrap since both bounds are null
-        const max_ref = slotListMaxWithinBounds(head_ref.ref_ptr, null, null).?;
-        const account = try self.getAccountFromRef(max_ref);
-
-        return .{ account, max_ref.* };
-    }
-
     pub const GetAccountWithReadLockError = GetAccountFromRefError || error{PubkeyNotInIndex};
 
-    pub fn getAccountWithReadLock(
+    fn getAccountWithReadLock(
         self: *AccountsDB,
         pubkey: *const Pubkey,
     ) GetAccountWithReadLockError!struct { AccountInCacheOrFile, AccountInCacheOrFileLock } {
@@ -1856,7 +1841,7 @@ pub const AccountsDB = struct {
 
     pub const GetTypeFromAccountError = GetAccountWithReadLockError || error{DeserializationError};
 
-    pub fn getTypeFromAccount(
+    fn getTypeFromAccount(
         self: *AccountsDB,
         allocator: std.mem.Allocator,
         comptime T: type,
