@@ -291,8 +291,8 @@ pub const ThreadSafeAccountMap = struct {
                 else
                     asAccount(account);
             }
-            if (self.largest_rooted_slot) |largest_rooted_slot| if (slot <= largest_rooted_slot) {
-                return if (account.lamports == 0) null else try toAccount(self.allocator, account);
+            if (self.last_rooted_slot) |last_rooted_slot| if (slot <= last_rooted_slot) {
+                return if (account.lamports == 0) null else asAccount(account);
             };
         }
 
@@ -370,10 +370,10 @@ pub const ThreadSafeAccountMap = struct {
                 helper.compare,
             );
 
-            if (index != versions.len and versions[index][0] == slot) {
-                versions[index] = .{ slot, account };
+            if (index != versions_list.items.len and versions_list.items[index][0] == slot) {
+                versions_list.items[index] = .{ slot, account };
             } else {
-                try gop.value_ptr.insert(self.allocator, index, .{ slot, account });
+                try versions_list.insert(self.allocator, index, .{ slot, account });
             }
         }
     }
