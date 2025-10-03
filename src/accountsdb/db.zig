@@ -149,6 +149,8 @@ pub const AccountsDB = struct {
     // TODO: move to Bank struct
     bank_hash_stats: RwMux(BankHashStatsMap),
 
+    on_root_config: sig.accounts_db.manager.Config,
+
     const PubkeyAndAccount = struct { pubkey: Pubkey, account: Account };
 
     pub const PubkeysAndAccounts = std.MultiArrayList(PubkeyAndAccount);
@@ -180,6 +182,7 @@ pub const AccountsDB = struct {
         gossip_view: ?GossipView,
         index_allocation: Index,
         number_of_index_shards: usize,
+        on_root_config: sig.accounts_db.manager.Config = .{},
         /// Amount of BufferPool frames, used for cached reads. Default = 1GiB.
         buffer_pool_frames: u32 = 2 * 1024 * 1024,
 
@@ -264,6 +267,7 @@ pub const AccountsDB = struct {
             .latest_snapshot_gen_info = .init(null),
 
             .bank_hash_stats = .init(.{}),
+            .on_root_config = params.on_root_config,
         };
     }
 
@@ -1528,6 +1532,9 @@ pub const AccountsDB = struct {
         std.fs.File,
         FileId,
     } {
+        const zone = tracy.Zone.init(@src(), .{ .name = "createAccountFile" });
+        defer zone.deinit();
+
         self.largest_file_id = self.largest_file_id.increment();
         const file_id = self.largest_file_id;
 
@@ -2474,6 +2481,9 @@ pub const AccountsDB = struct {
         zstd_buffer: []u8,
         params: FullSnapshotGenParams,
     ) !GenerateFullSnapshotResult {
+        const zone = tracy.Zone.init(@src(), .{ .name = "generateFullSnapshotWithCompressor" });
+        defer zone.deinit();
+
         // NOTE: we hold the lock for the rest of the duration of the procedure to ensure
         // flush and clean do not create files while generating a snapshot.
         self.file_map_fd_rw.lockShared();
@@ -4844,35 +4854,4 @@ test "loadAndVerifyAccountsFiles ref manager expand" {
     // If we've made more account ref capacity per slot than we've estimated, we have expanded our
     // reference manager.
     try std.testing.expect(ref_capacity / n_slots > accounts_per_file_estimate);
-}
-
-// TODO: this test is dumb, remove it
-test "CannotWriteRootedSlot overwrite in file" {
-    const allocator = std.testing.allocator;
-
-    var tmp_dir = std.testing.tmpDir(.{});
-    defer tmp_dir.cleanup();
-
-    var db: AccountsDB = try .init(.minimal(allocator, .FOR_TESTS, tmp_dir.dir, null));
-    defer db.deinit();
-
-    var manager: sig.accounts_db.manager.Manager = try .init(allocator, &db, .{
-        .snapshot = null,
-    });
-    defer manager.deinit(allocator);
-
-    const pk: Pubkey = .{ .data = @splat(7) };
-    const asd: AccountSharedData = .{
-        .data = &.{},
-        .executable = false,
-        .lamports = 32,
-        .owner = .ZEROES,
-        .rent_epoch = 0,
-    };
-
-    try std.testing.expectEqual({}, db.putAccount(1, pk, asd));
-    db.max_slots.set(.{ .rooted = 6, .flushed = null });
-    try manager.manage(allocator);
-    db.max_slots.set(.{ .rooted = 0, .flushed = null });
-    try std.testing.expectError(error.CannotWriteRootedSlot, db.putAccount(1, pk, asd));
 }
