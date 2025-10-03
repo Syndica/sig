@@ -167,7 +167,10 @@ fn finalizeState(allocator: Allocator, params: FinalizeStateParams) !void {
     );
 
     // Run incinerator
-    if (try params.account_reader.get(allocator, sig.runtime.ids.INCINERATOR)) |incinerator_account| {
+    if (try params.account_reader.get(
+        allocator,
+        sig.runtime.ids.INCINERATOR,
+    )) |incinerator_account| {
         defer incinerator_account.deinit(allocator);
 
         _ = params.capitalization.fetchSub(incinerator_account.lamports, .monotonic);
@@ -297,7 +300,12 @@ pub fn hashSlot(allocator: Allocator, params: HashSlotParams) !struct { ?LtHash,
         assert(parent_ancestors.ancestors.swapRemove(params.slot));
 
         var lt_hash = params.parent_lt_hash.* orelse return error.UnknownParentLtHash;
-        lt_hash.mixIn(try deltaLtHash(allocator, params.account_reader, params.slot, &parent_ancestors));
+        lt_hash.mixIn(try deltaLtHash(
+            allocator,
+            params.account_reader,
+            params.slot,
+            &parent_ancestors,
+        ));
 
         return .{ lt_hash, Hash.generateSha256(.{ initial_hash, lt_hash.bytes() }) };
     } else {
@@ -616,7 +624,12 @@ test "delta hashes with many accounts" {
     try parent_ancestors.ancestors.put(allocator, 0, {});
     try parent_ancestors.ancestors.put(allocator, 1, {});
 
-    const actual_lt_hash = try deltaLtHash(allocator, accounts.accountReader(), hash_slot, &parent_ancestors);
+    const actual_lt_hash = try deltaLtHash(
+        allocator,
+        accounts.accountReader(),
+        hash_slot,
+        &parent_ancestors,
+    );
     const actual_merkle_hash = try deltaMerkleHash(accounts.accountReader(), allocator, hash_slot);
 
     try std.testing.expectEqualSlices(u16, &expected_lt_hash, &actual_lt_hash.data);

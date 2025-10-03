@@ -535,7 +535,10 @@ test "AccountStore does not return 0-lamport accounts from accountsdb" {
     const reader = db.accountReader();
 
     try std.testing.expectEqual(null, try reader.getLatest(allocator, zero_lamport_address));
-    try std.testing.expectEqual(1, (try reader.getLatest(allocator, one_lamport_address)).?.lamports);
+    try std.testing.expectEqual(1, (try reader.getLatest(
+        allocator,
+        one_lamport_address,
+    )).?.lamports);
 
     var ancestors = Ancestors{};
     defer ancestors.deinit(std.testing.allocator);
@@ -543,7 +546,10 @@ test "AccountStore does not return 0-lamport accounts from accountsdb" {
     const slot_reader = db.accountReader().forSlot(&ancestors);
 
     try std.testing.expectEqual(null, try slot_reader.get(allocator, zero_lamport_address));
-    try std.testing.expectEqual(1, (try slot_reader.get(allocator, one_lamport_address)).?.lamports);
+    try std.testing.expectEqual(1, (try slot_reader.get(
+        allocator,
+        one_lamport_address,
+    )).?.lamports);
 }
 
 test ThreadSafeAccountMap {
@@ -575,8 +581,20 @@ test ThreadSafeAccountMap {
     };
     try account_store.put(slot1, addr1, expected_account);
 
-    try expectAccount(allocator, account_reader, addr1, null, sharedToCoreAccount(expected_account));
-    try expectAccount(allocator, account_reader, addr1, ancestors1, sharedToCoreAccount(expected_account));
+    try expectAccount(
+        allocator,
+        account_reader,
+        addr1,
+        null,
+        sharedToCoreAccount(expected_account),
+    );
+    try expectAccount(
+        allocator,
+        account_reader,
+        addr1,
+        ancestors1,
+        sharedToCoreAccount(expected_account),
+    );
 }
 
 fn expectAccount(
