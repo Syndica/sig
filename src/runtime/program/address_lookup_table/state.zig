@@ -103,10 +103,10 @@ pub const AddressLookupTable = struct {
 
     // [agave] https://github.com/anza-xyz/agave/blob/d300f3733f45d64a3b6b9fdb5a1157f378e181c2/sdk/program/src/address_lookup_table/state.rs#L224
     /// NOTE: This AddressLookupTable's 'addresses' slice will point to inside 'data' - consider
-    /// if you need to clone the buffer.
+    /// if you need to clone the buffer (see deserializeOwned).
     pub fn deserialize(
         data: []const u8,
-    ) (error{OutOfMemory} || InstructionError)!AddressLookupTable {
+    ) error{ UninitializedAccount, InvalidAccountData }!AddressLookupTable {
         const noalloc = sig.utils.allocators.failing.allocator(.{});
         const state = sig.bincode.readFromSlice(noalloc, ProgramState, data, .{}) catch
             return error.InvalidAccountData;
@@ -123,5 +123,15 @@ pub const AddressLookupTable = struct {
             .meta = state.LookupTable,
             .addresses = addresses,
         };
+    }
+
+    /// Deserializes an AddressLookupTable, coping .addresses into a new buffer.
+    pub fn deserializeOwned(
+        allocator: std.mem.Allocator,
+        data: []const u8,
+    ) error{ OutOfMemory, UninitializedAccount, InvalidAccountData }!AddressLookupTable {
+        var table = try AddressLookupTable.deserialize(data);
+        table.addresses = try allocator.dupe(Pubkey, table.addresses);
+        return table;
     }
 };

@@ -300,10 +300,10 @@ fn getLookupTable(
     const account_bytes = buf[0..account.data.len()];
     account.data.readAll(account_bytes);
 
-    var table = AddressLookupTable.deserialize(account_bytes) catch {
+    const table = AddressLookupTable.deserializeOwned(allocator, account_bytes) catch |err| {
+        if (err == error.OutOfMemory) return err;
         return error.InvalidAddressLookupTableData;
     };
-    table.addresses = try allocator.dupe(Pubkey, table.addresses);
 
     // NOTE: deactivated lookup tables are allowed to be used,
     // according to agave's implementation. see here, where agave
