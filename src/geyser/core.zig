@@ -525,7 +525,7 @@ test "streaming accounts" {
     const allocator = std.testing.allocator;
     const batch_len = 2;
 
-    var prng = std.Random.DefaultPrng.init(19);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     // generate some data
@@ -624,7 +624,7 @@ test "buf resizing" {
     const allocator = std.testing.allocator;
     const batch_len = 2;
 
-    var prng = std.Random.DefaultPrng.init(19);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     // generate some data

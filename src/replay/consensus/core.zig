@@ -1151,7 +1151,7 @@ test "processResult and handleDuplicateConfirmedFork" {
 }
 
 test "cacheTowerStats - missing ancestor" {
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     const root = SlotAndHash{ .slot = 0, .hash = Hash.initRandom(random) };
@@ -1187,7 +1187,7 @@ test "cacheTowerStats - missing ancestor" {
 }
 
 test "cacheTowerStats - missing slot" {
-    var prng = std.Random.DefaultPrng.init(92);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     const root = SlotAndHash{ .slot = 0, .hash = Hash.initRandom(random) };
@@ -1213,7 +1213,7 @@ test "cacheTowerStats - missing slot" {
 }
 
 test "cacheTowerStats - success sets flags and empty thresholds" {
-    var prng = std.Random.DefaultPrng.init(93);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     const root = SlotAndHash{ .slot = 0, .hash = Hash.initRandom(random) };
@@ -1248,7 +1248,7 @@ test "cacheTowerStats - success sets flags and empty thresholds" {
 }
 
 test "cacheTowerStats - records failed threshold at depth 0" {
-    var prng = std.Random.DefaultPrng.init(94);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     const root = SlotAndHash{ .slot = 0, .hash = Hash.initRandom(random) };
@@ -1288,7 +1288,7 @@ test "cacheTowerStats - records failed threshold at depth 0" {
 }
 
 test "maybeRefreshLastVote - no heaviest slot on same fork" {
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     const root = SlotAndHash{ .slot = 0, .hash = Hash.initRandom(random) };
@@ -1319,7 +1319,7 @@ test "maybeRefreshLastVote - no heaviest slot on same fork" {
 }
 
 test "maybeRefreshLastVote - no landed vote" {
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     const root = SlotAndHash{
@@ -1355,7 +1355,7 @@ test "maybeRefreshLastVote - no landed vote" {
 }
 
 test "maybeRefreshLastVote - latest landed vote newer than last vote" {
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     const root = SlotAndHash{
@@ -1433,7 +1433,7 @@ test "maybeRefreshLastVote - latest landed vote newer than last vote" {
 }
 
 test "maybeRefreshLastVote - non voting validator" {
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     const root = SlotAndHash{
@@ -1513,7 +1513,7 @@ test "maybeRefreshLastVote - non voting validator" {
 }
 
 test "maybeRefreshLastVote - hotspare validator" {
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     const root = SlotAndHash{
@@ -1593,7 +1593,7 @@ test "maybeRefreshLastVote - hotspare validator" {
 }
 
 test "maybeRefreshLastVote - refresh interval not elapsed" {
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     const root = SlotAndHash{
@@ -1676,7 +1676,7 @@ test "maybeRefreshLastVote - refresh interval not elapsed" {
 }
 
 test "maybeRefreshLastVote - successfully refreshed and mark last_vote_tx_blockhash as non voting" {
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     const hash3 = SlotAndHash{
@@ -1758,7 +1758,7 @@ test "maybeRefreshLastVote - successfully refreshed and mark last_vote_tx_blockh
 }
 
 test "checkAndHandleNewRoot - missing slot" {
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     const root = SlotAndHash{
@@ -1826,7 +1826,7 @@ test "checkAndHandleNewRoot - missing slot" {
 }
 
 test "checkAndHandleNewRoot - missing hash" {
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     const root = SlotAndHash{
@@ -1892,7 +1892,7 @@ test "checkAndHandleNewRoot - missing hash" {
 }
 
 test "checkAndHandleNewRoot - empty slot tracker" {
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     const root = SlotAndHash{
@@ -1945,7 +1945,7 @@ test "checkAndHandleNewRoot - empty slot tracker" {
 }
 
 test "checkAndHandleNewRoot - success" {
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     const hash3 = SlotAndHash{
@@ -2060,7 +2060,7 @@ test "checkAndHandleNewRoot - success" {
 }
 
 test "computeBankStats - child bank heavier" {
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     // Set up slots and hashes for the fork tree: 0 -> 1 -> 2
@@ -2182,7 +2182,7 @@ test "computeBankStats - child bank heavier" {
 }
 
 test "computeBankStats - same weight selects lower slot" {
-    var prng = std.Random.DefaultPrng.init(42);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     // Set up slots and hashes for the fork tree: 0 -> 1, 0 -> 2

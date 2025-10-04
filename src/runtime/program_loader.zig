@@ -163,7 +163,7 @@ pub fn loadDeploymentSlotAndExecutableBytes(
 
 test "loadPrograms: load v1, v2 program" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const program_elf = try std.fs.cwd().readFileAlloc(
         allocator,
@@ -234,7 +234,7 @@ test "loadPrograms: load v1, v2 program" {
 
 test "loadPrograms: load v3 program" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const program_key = Pubkey.initRandom(prng.random());
     const program_data_key = Pubkey.initRandom(prng.random());
@@ -375,7 +375,7 @@ test "loadPrograms: load v3 program" {
 
 test "loadPrograms: load v4 program" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const program_deployment_slot = 0;
     const program_key = Pubkey.initRandom(prng.random());
@@ -468,7 +468,7 @@ test "loadPrograms: load v4 program" {
 
 test "loadPrograms: bad owner" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     var accounts = std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData){};
     defer {

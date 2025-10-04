@@ -3512,7 +3512,7 @@ test "write and read an account - basic" {
     defer accounts_db.deinit();
     defer dir.cleanup();
 
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const pubkey = Pubkey.initRandom(prng.random());
     var data = [_]u8{ 1, 2, 3 };
     const test_account = Account{
@@ -3547,7 +3547,7 @@ test "write and read an account (write single + read with ancestors)" {
     defer accounts_db.deinit();
     defer dir.cleanup();
 
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const pubkey = Pubkey.initRandom(prng.random());
 
     var data = [_]u8{ 1, 2, 3 };
@@ -3836,7 +3836,7 @@ test "generate snapshot & update gossip snapshot hashes" {
 
     const allocator = std.testing.allocator;
 
-    var prng = std.Random.DefaultPrng.init(123); // TODO: use `std.testing.random_seed` when we update
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed); // TODO: use `std.testing.random_seed` when we update
     const random = prng.random();
 
     var tmp_dir_root = std.testing.tmpDir(.{});
@@ -4300,7 +4300,7 @@ pub const BenchmarkAccountsDB = struct {
             std.math.ceilPowerOfTwo(usize, total_n_accounts) catch total_n_accounts,
         );
 
-        var prng = std.Random.DefaultPrng.init(19);
+        var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
         const random = prng.random();
 
         var pubkeys = try allocator.alloc(Pubkey, n_accounts);
@@ -4497,7 +4497,7 @@ test "read/write benchmark disk" {
 
 test "insert multiple accounts on same slot" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     // Initialize empty accounts db
@@ -4578,7 +4578,7 @@ fn expectedAccountSharedDataEqualsAccount(
 
 test "insert multiple accounts on multiple slots" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     var accounts_db, var tmp_dir = try AccountsDB.initForTest(allocator);
@@ -4617,7 +4617,7 @@ test "insert multiple accounts on multiple slots" {
 
 test "insert account on multiple slots" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     var accounts_db, var tmp_dir = try AccountsDB.initForTest(allocator);
@@ -4666,7 +4666,7 @@ test "insert account on multiple slots" {
 
 test "missing ancestor returns null" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     var accounts_db, var tmp_dir = try AccountsDB.initForTest(allocator);
@@ -4688,7 +4688,7 @@ test "missing ancestor returns null" {
 
 test "overwrite account in same slot" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     var accounts_db, var tmp_dir = try AccountsDB.initForTest(allocator);
@@ -4721,7 +4721,7 @@ test "overwrite account in same slot" {
 
 test "insert many duplicate individual accounts, get latest with ancestors" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     var accounts_db, var tmp_dir = try AccountsDB.initForTest(allocator);
     defer tmp_dir.cleanup();

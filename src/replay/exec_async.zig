@@ -444,7 +444,7 @@ const ReplayBatchTask = struct {
 test "TransactionScheduler: happy path" {
     const allocator = std.testing.allocator;
 
-    var rng = std.Random.DefaultPrng.init(123);
+    var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     var state = try replay.execution.TestState.init(allocator);
     defer state.deinit(allocator);
@@ -517,7 +517,7 @@ test "TransactionScheduler: happy path" {
 test "TransactionScheduler: duplicate batch passes through to svm" {
     const allocator = std.testing.allocator;
 
-    var rng = std.Random.DefaultPrng.init(123);
+    var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     var state = try replay.execution.TestState.init(allocator);
     defer state.deinit(allocator);
@@ -596,7 +596,7 @@ test "TransactionScheduler: duplicate batch passes through to svm" {
 test "TransactionScheduler: failed account locks" {
     const allocator = std.testing.allocator;
 
-    var rng = std.Random.DefaultPrng.init(0);
+    var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     var state = try replay.execution.TestState.init(allocator);
     defer state.deinit(allocator);
@@ -653,7 +653,7 @@ test "TransactionScheduler: failed account locks" {
 test "TransactionScheduler: signature verification failure" {
     const allocator = std.testing.allocator;
 
-    var rng = std.Random.DefaultPrng.init(0);
+    var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     var state = try replay.execution.TestState.init(allocator);
     defer state.deinit(allocator);
@@ -736,7 +736,7 @@ test "TransactionScheduler: does not send replay vote for failed execution" {
     const vote_program = sig.runtime.program.vote;
     const vote_instruction = vote_program.vote_instruction;
 
-    var rng = std.Random.DefaultPrng.init(7);
+    var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     var state = try replay.execution.TestState.init(allocator);
     defer state.deinit(allocator);
@@ -832,7 +832,7 @@ test "TransactionScheduler: sends replay vote after successful execution" {
     const vote_program = sig.runtime.program.vote;
     const vote_instruction = vote_program.vote_instruction;
 
-    var rng = std.Random.DefaultPrng.init(9);
+    var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     var state = try replay.execution.TestState.init(allocator);
     defer state.deinit(allocator);

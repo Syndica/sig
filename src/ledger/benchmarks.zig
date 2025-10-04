@@ -14,7 +14,7 @@ const deinitShreds = ledger_tests.deinitShreds;
 const testShreds = ledger_tests.testShreds;
 
 fn createRewards(allocator: std.mem.Allocator, count: usize) !Rewards {
-    var rng = std.Random.DefaultPrng.init(100);
+    var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const rand = rng.random();
     var rewards: Rewards = Rewards.init(allocator);
     for (0..count) |i| {
@@ -120,7 +120,7 @@ pub const BenchmarkLedger = struct {
         const slot: u32 = 0;
         const num_reads = total_shreds / 15;
 
-        var rng = std.Random.DefaultPrng.init(100);
+        var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
         var timer = try sig.time.Timer.start();
         const start_index = rng.random().intRangeAtMost(u32, 0, @intCast(total_shreds));
@@ -151,7 +151,7 @@ pub const BenchmarkLedger = struct {
 
         const slot: u32 = 0;
 
-        var rng = std.Random.DefaultPrng.init(100);
+        var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
         var indices = try std.ArrayList(u32).initCapacity(inserter.allocator, num_reads);
         defer indices.deinit();
@@ -225,7 +225,7 @@ pub const BenchmarkLedger = struct {
 
         const slot: u32 = 1;
 
-        var rng = std.Random.DefaultPrng.init(100);
+        var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
         var indices = try std.ArrayList(u32).initCapacity(inserter.allocator, total_shreds);
         defer indices.deinit();
@@ -275,7 +275,7 @@ pub const BenchmarkLedger = struct {
         const state = try TestState.init(std.heap.c_allocator, @src(), .noop);
         defer state.deinit();
         var writer = try state.writer();
-        var rng = std.Random.DefaultPrng.init(100);
+        var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
         var signatures: std.ArrayList(Signature) =
             try std.ArrayList(Signature).initCapacity(state.allocator, 64);

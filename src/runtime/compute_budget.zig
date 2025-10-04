@@ -96,10 +96,10 @@ pub const ComputeBudget = struct {
     /// Number of compute units consumed to call secp256k1_recover
     secp256k1_recover_cost: u64,
 
-    pub const DEFAULT: ComputeBudget = ComputeBudget.default(1_400_000);
+    pub const DEFAULT: ComputeBudget = ComputeBudget.init(1_400_000);
 
     /// [agave] https://github.com/anza-xyz/agave/blob/8363752bd5e41aaf8eaf9137711e8d8b11d84be6/program-runtime/src/execution_budget.rs#L162
-    pub fn default(compute_unit_limit: u64) ComputeBudget {
+    pub fn init(compute_unit_limit: u64) ComputeBudget {
         return .{
             .compute_unit_limit = compute_unit_limit,
             .create_program_address_units = 1500,

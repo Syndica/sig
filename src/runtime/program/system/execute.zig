@@ -801,7 +801,7 @@ test "executeCreateAccount" {
     const ids = sig.runtime.ids;
     const testing = sig.runtime.program.testing;
 
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const account_0_key = Pubkey.initRandom(prng.random());
     const account_1_key = Pubkey.initRandom(prng.random());
@@ -849,7 +849,7 @@ test "executeAssign" {
     const ids = sig.runtime.ids;
     const testing = sig.runtime.program.testing;
 
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const account_0_key = Pubkey.initRandom(prng.random());
     const new_owner = Pubkey.initRandom(prng.random());
@@ -886,7 +886,7 @@ test "executeTransfer" {
     const ids = sig.runtime.ids;
     const testing = sig.runtime.program.testing;
 
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const account_0_key = Pubkey.initRandom(prng.random());
     const account_1_key = Pubkey.initRandom(prng.random());
@@ -926,7 +926,7 @@ test "executeCreateAccountWithSeed" {
     const ids = sig.runtime.ids;
     const testing = sig.runtime.program.testing;
 
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const base = Pubkey.initRandom(prng.random());
     const seed = &[_]u8{0x10} ** 32;
@@ -978,7 +978,7 @@ test "executeAdvanceNonceAccount" {
     const Hash = sig.core.Hash;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     // Last Blockhash is used to compute the next durable nonce
     const prev_blockhash = Hash.initRandom(prng.random());
@@ -1072,7 +1072,7 @@ test "executeWithdrawNonceAccount" {
     const Hash = sig.core.Hash;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     // The amount to withdraw
     const withdraw_lamports = 1_000;
@@ -1155,7 +1155,7 @@ test "executeInitializeNonceAccount" {
     const Hash = sig.core.Hash;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     // Last Blockhash is used to compute the next durable nonce
     const prev_blockhash = Hash.initRandom(prng.random());
@@ -1247,7 +1247,7 @@ test "executeAuthorizeNonceAccount" {
     const Hash = sig.core.Hash;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     // Create Initial Nonce State
     const initial_nonce_authority = Pubkey.initRandom(prng.random());
@@ -1315,7 +1315,7 @@ test "executeAllocate" {
     const ids = sig.runtime.ids;
     const testing = sig.runtime.program.testing;
 
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const allocation_size = 1024;
 
@@ -1361,7 +1361,7 @@ test "executeAllocateWithSeed" {
     const ids = sig.runtime.ids;
     const testing = sig.runtime.program.testing;
 
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const base = Pubkey.initRandom(prng.random());
     const seed = &[_]u8{0x10} ** 32;
@@ -1415,7 +1415,7 @@ test "executeAssignWithSeed" {
     const ids = sig.runtime.ids;
     const testing = sig.runtime.program.testing;
 
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const base = Pubkey.initRandom(prng.random());
     const seed = &[_]u8{0x10} ** 32;
@@ -1460,7 +1460,7 @@ test "executeTransferWithSeed" {
     const ids = sig.runtime.ids;
     const testing = sig.runtime.program.testing;
 
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const base = Pubkey.initRandom(prng.random());
     const seed = &[_]u8{0x10} ** 32;
@@ -1511,7 +1511,7 @@ test "executeUpgradeNonceAccount" {
     const Hash = sig.core.Hash;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     // Create Initial Nonce State
     const nonce_authority = Pubkey.initRandom(prng.random());

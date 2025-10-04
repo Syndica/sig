@@ -1764,7 +1764,7 @@ fn moveLamports(
 test "stake.initialize" {
     const allocator = std.testing.allocator;
     const ExecuteContextsParams = sig.runtime.testing.ExecuteContextsParams;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     const sysvar_cache_without_slot_hashes = ExecuteContextsParams.SysvarCacheParams{
@@ -1877,7 +1877,7 @@ test "stake.initialize" {
 
 test "stake.authorize" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     var sysvar_cache = sig.runtime.testing.ExecuteContextsParams.SysvarCacheParams{
         .clock = runtime.sysvar.Clock.DEFAULT,
@@ -1974,7 +1974,7 @@ test "stake.authorize" {
 
 test "stake.delegate_stake" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const staker_auth = Pubkey.initRandom(prng.random());
     const stake_account = Pubkey.initRandom(prng.random());
@@ -2126,7 +2126,7 @@ test "stake.delegate_stake" {
 
 test "stake.split" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const stake_lamports = 1_000_000_000;
     const split_lamports = 1_000_000_000;
@@ -2271,7 +2271,7 @@ test "stake.split" {
 
 test "stake.withdraw" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     var sysvar_cache = sig.runtime.testing.ExecuteContextsParams.SysvarCacheParams{
         .clock = runtime.sysvar.Clock.DEFAULT,
@@ -2368,7 +2368,7 @@ test "stake.withdraw" {
 
 test "stake.deactivate" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const sysvar_cache = sig.runtime.testing.ExecuteContextsParams.SysvarCacheParams{
         .clock = runtime.sysvar.Clock.DEFAULT,
@@ -2459,7 +2459,7 @@ test "stake.deactivate" {
 
 test "stake.set_lockup" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const sysvar_cache = sig.runtime.testing.ExecuteContextsParams.SysvarCacheParams{
         .clock = runtime.sysvar.Clock.DEFAULT,
@@ -2553,7 +2553,7 @@ test "stake.set_lockup" {
 
 test "stake.merge" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const stake_auth = Pubkey.initRandom(prng.random());
     const stake_account = Pubkey.initRandom(prng.random());
@@ -2700,7 +2700,7 @@ test "stake.merge" {
 
 test "stake.authorize_with_seed" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     var sysvar_cache = sig.runtime.testing.ExecuteContextsParams.SysvarCacheParams{
         .clock = runtime.sysvar.Clock.DEFAULT,
@@ -2816,7 +2816,7 @@ test "stake.authorize_with_seed" {
 
 test "stake.initialize_checked" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const sysvar_cache = sig.runtime.testing.ExecuteContextsParams.SysvarCacheParams{
         .rent = runtime.sysvar.Rent.DEFAULT,
@@ -2889,7 +2889,7 @@ test "stake.initialize_checked" {
 
 test "stake.authorize_checked" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     var sysvar_cache = sig.runtime.testing.ExecuteContextsParams.SysvarCacheParams{
         .clock = runtime.sysvar.Clock.DEFAULT,
@@ -2984,7 +2984,7 @@ test "stake.authorize_checked" {
 
 test "stake.authorize_checked_with_seed" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     var sysvar_cache = sig.runtime.testing.ExecuteContextsParams.SysvarCacheParams{
         .clock = runtime.sysvar.Clock.DEFAULT,
@@ -3091,7 +3091,7 @@ test "stake.authorize_checked_with_seed" {
 
 test "stake.set_lockup_checked" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const sysvar_cache = sig.runtime.testing.ExecuteContextsParams.SysvarCacheParams{
         .clock = runtime.sysvar.Clock.DEFAULT,
@@ -3211,7 +3211,7 @@ test "stake.get_minimum_delegation" {
 
 test "stake.deactivate_delinquent" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const sysvar_cache = sig.runtime.testing.ExecuteContextsParams.SysvarCacheParams{
         .clock = .{
@@ -3361,7 +3361,7 @@ test "stake.deactivate_delinquent" {
 
 test "stake.move_stake" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const stake_entries = [_]sysvar.StakeHistory.Entry{
         .{
@@ -3551,7 +3551,7 @@ test "stake.move_stake" {
 
 test "stake.move_lamports" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     var sysvar_cache = sig.runtime.testing.ExecuteContextsParams.SysvarCacheParams{
         .clock = runtime.sysvar.Clock.DEFAULT,

@@ -1225,7 +1225,7 @@ test "vote_program: executeIntializeAccount" {
     const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const rent = Rent.DEFAULT;
     const clock = Clock{
@@ -1317,7 +1317,7 @@ test "vote_program: executeAuthorize withdrawer signed by current withdrawer" {
     const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const clock = Clock{
         .slot = 0,
@@ -1419,7 +1419,7 @@ test "vote_program: executeAuthorize voter signed by current withdrawer" {
     const PriorVote = sig.runtime.program.vote.state.PriorVote;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const clock = Clock{
         .slot = 0,
@@ -1527,7 +1527,7 @@ test "vote_program: authorizeWithSeed withdrawer" {
     const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const clock = Clock{
         .slot = 0,
@@ -1638,7 +1638,7 @@ test "vote_program: authorizeCheckedWithSeed withdrawer" {
     const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const clock = Clock{
         .slot = 0,
@@ -1750,7 +1750,7 @@ test "vote_program: authorizeChecked withdrawer" {
     const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const clock = Clock{
         .slot = 0,
@@ -1849,7 +1849,7 @@ test "vote_program: update_validator_identity" {
     const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const clock = Clock{
         .slot = 0,
@@ -1939,7 +1939,7 @@ test "vote_program: update_validator_identity new authority did not sign" {
     const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const clock = Clock{
         .slot = 0,
@@ -2032,7 +2032,7 @@ test "vote_program: update_validator_identity current authority did not sign" {
     const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const clock = Clock{
         .slot = 0,
@@ -2125,7 +2125,7 @@ test "vote_program: update_commission increasing commission" {
     const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const clock = Clock{
         .slot = 0,
@@ -2236,7 +2236,7 @@ test "vote_program: update_commission decreasing commission" {
     const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const clock = Clock{
         .slot = 0,
@@ -2347,7 +2347,7 @@ test "vote_program: update_commission commission update too late passes with fea
     const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const clock = Clock{
         .slot = 1060, // needed to make isCommissionUpdateAllowed return false
@@ -2449,7 +2449,7 @@ test "vote_program: update_commission error commission update too late failure" 
     const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const clock = Clock{
         .slot = 1060, // needed to make isCommissionUpdateAllowed return false
@@ -2564,7 +2564,7 @@ test "vote_program: update_commission missing signature" {
     const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const clock = Clock{
         .slot = 0,
@@ -2680,7 +2680,7 @@ test "vote_program: widthdraw no changes" {
     // Do in a clean up PR after all instructions has been added.
     const RENT_EXEMPT_THRESHOLD = 27074400;
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const rent = Rent.DEFAULT;
     const clock = Clock.DEFAULT;
@@ -2764,7 +2764,7 @@ test "vote_program: widthdraw some amount below with balance above rent exempt" 
     // Do in a clean up PR after all instructions has been added.
     const RENT_EXEMPT_THRESHOLD = 27074400;
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const rent = Rent.DEFAULT;
     const clock = Clock.DEFAULT;
@@ -2849,7 +2849,7 @@ test "vote_program: widthdraw all and close account with active vote account" {
     // Do in a clean up PR after all instructions has been added.
     const RENT_EXEMPT_THRESHOLD = 27074400;
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const rent = Rent.DEFAULT;
     const clock = Clock{
@@ -2957,7 +2957,7 @@ test "vote_program: widthdraw some amount below with balance below rent exempt" 
     // Do in a clean up PR after all instructions has been added.
     const RENT_EXEMPT_THRESHOLD = 27074400;
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const rent = Rent.DEFAULT;
     const clock = Clock.DEFAULT;
@@ -3044,7 +3044,7 @@ test "vote_program: widthdraw insufficient funds" {
     // Do in a clean up PR after all instructions has been added.
     const RENT_EXEMPT_THRESHOLD = 27074400;
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const rent = Rent.DEFAULT;
     const clock = Clock.DEFAULT;
@@ -3129,7 +3129,7 @@ test "vote_program: widthdraw with missing signature" {
     // Do in a clean up PR after all instructions has been added.
     const RENT_EXEMPT_THRESHOLD = 27074400;
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const rent = Rent.DEFAULT;
     const clock = Clock.DEFAULT;
@@ -3215,7 +3215,7 @@ test "vote_program: vote" {
 
     const RENT_EXEMPT_THRESHOLD = 27074400;
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const clock = Clock.DEFAULT;
 
@@ -3331,7 +3331,7 @@ test "vote_program: vote switch" {
 
     const RENT_EXEMPT_THRESHOLD = 27074400;
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const clock = Clock.DEFAULT;
 
@@ -3447,7 +3447,7 @@ test "vote_program: vote missing signature" {
 
     const RENT_EXEMPT_THRESHOLD = 27074400;
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const clock = Clock.DEFAULT;
 
@@ -3566,7 +3566,7 @@ test "vote_program: empty vote" {
 
     const RENT_EXEMPT_THRESHOLD = 27074400;
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const clock = Clock.DEFAULT;
 
@@ -3687,7 +3687,7 @@ test "vote_program: vote state update" {
 
     const RENT_EXEMPT_THRESHOLD = 27074400;
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const clock = Clock.DEFAULT;
 
@@ -3826,7 +3826,7 @@ test "vote_program: vote state update switch" {
 
     const RENT_EXEMPT_THRESHOLD = 27074400;
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const clock = Clock.DEFAULT;
 
@@ -3966,7 +3966,7 @@ test "vote_program: compact vote state update" {
 
     const RENT_EXEMPT_THRESHOLD = 27074400;
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const clock = Clock.DEFAULT;
 
@@ -4105,7 +4105,7 @@ test "vote_program: compact vote state update switch" {
 
     const RENT_EXEMPT_THRESHOLD = 27074400;
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const clock = Clock.DEFAULT;
 
@@ -4245,7 +4245,7 @@ test "vote_program: tower sync" {
 
     const RENT_EXEMPT_THRESHOLD = 27074400;
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const clock = Clock.DEFAULT;
 
@@ -4391,7 +4391,7 @@ test "vote_program: tower sync switch" {
 
     const RENT_EXEMPT_THRESHOLD = 27074400;
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const clock = Clock.DEFAULT;
 

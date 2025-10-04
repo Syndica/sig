@@ -236,7 +236,7 @@ pub const Entry = struct {
 
 test "put and get" {
     const keypair = try std.crypto.sign.Ed25519.KeyPair.generateDeterministic([_]u8{1} ** 32);
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     var map = GossipMap{};
     defer map.deinit(std.testing.allocator);
@@ -267,7 +267,7 @@ test "put and get" {
 
 test "put, remove, and get" {
     const keypair = try std.crypto.sign.Ed25519.KeyPair.generateDeterministic([_]u8{1} ** 32);
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     var map = GossipMap{};
     defer map.deinit(std.testing.allocator);
@@ -312,7 +312,7 @@ test "put, remove, and get" {
 
 test "repeat add+remove" {
     const keypair = try std.crypto.sign.Ed25519.KeyPair.generateDeterministic([_]u8{1} ** 32);
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     var map = GossipMap{};

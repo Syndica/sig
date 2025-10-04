@@ -699,7 +699,7 @@ fn callProgramAddressSyscall(
 test findProgramAddress {
     const testing = sig.runtime.testing;
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     var cache, var tc = try testing.createTransactionContext(allocator, prng.random(), .{
         .accounts = &.{
@@ -817,7 +817,7 @@ test findProgramAddress {
 test createProgramAddress {
     const testing = sig.runtime.testing;
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     var cache, var tc = try testing.createTransactionContext(allocator, prng.random(), .{
         .accounts = &.{
@@ -986,7 +986,7 @@ test createProgramAddress {
 
 test allocFree {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     var cache, var tc = try sig.runtime.testing.createTransactionContext(
         allocator,
@@ -1034,7 +1034,7 @@ test allocFree {
 test getProcessedSiblingInstruction {
     const testing = sig.runtime.testing;
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     var account_params: [9]testing.ExecuteContextsParams.AccountParams = undefined;
     for (&account_params) |*a| a.* = .{
@@ -1186,7 +1186,7 @@ test getProcessedSiblingInstruction {
 
 test getEpochStake {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const target_vote_address = Pubkey.initRandom(prng.random());
     const total_epoch_stake = 200_000_000_000_000;
@@ -1313,7 +1313,7 @@ test "set and get return data" {
     var data_buffer: [16]u8 = .{0} ** 16;
     var id_buffer: [32]u8 = .{0} ** 32;
 
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     var cache, var tc = try sig.runtime.testing.createTransactionContext(
         allocator,
         prng.random(),
