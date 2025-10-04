@@ -117,7 +117,7 @@ pub const RepairService = struct {
             .report = MultiSlotReport.init(allocator),
             .thread_pool = try RequestBatchThreadPool.init(allocator, n_threads, n_threads),
             .metrics = try registry.initStruct(Metrics),
-            .prng = std.Random.DefaultPrng.init(0),
+            .prng = std.Random.DefaultPrng.init(std.testing.random_seed),
         };
     }
 
@@ -610,7 +610,7 @@ test "RepairService sends repair request to gossip peer" {
     const allocator = std.testing.allocator;
     var registry = sig.prometheus.Registry(.{}).init(allocator);
     defer registry.deinit();
-    var prng = std.Random.DefaultPrng.init(4328095);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     // my details
@@ -691,7 +691,7 @@ test "RepairService sends repair request to gossip peer" {
 
 test "RepairPeerProvider selects correct peers" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(4328095);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     // my details

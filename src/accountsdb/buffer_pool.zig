@@ -1359,7 +1359,7 @@ test "BufferPool random read" {
 
     const file_size: u32 = @intCast((try file.stat()).size);
 
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     var reads: usize = 0;
     while (reads < 5000) : (reads += 1) {

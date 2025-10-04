@@ -97,7 +97,7 @@ pub const SlotHashes = struct {
 
 test "add and get" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     var slot_hashes = try SlotHashes.init(allocator);
@@ -138,7 +138,7 @@ test "add and get" {
 
 test "serialize and deserialize" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     {

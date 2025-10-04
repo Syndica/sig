@@ -2104,7 +2104,7 @@ test "HeaviestSubtreeForkChoice.propagateNewLeaf" {
         try std.testing.expectEqual(9, fork_choice.deepestSlot(&item).?.slot);
     }
 
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     const stake: u64 = 100;
     const vote_pubkeys = [_]Pubkey{
@@ -2246,7 +2246,7 @@ test "HeaviestSubtreeForkChoice.propagateNewLeaf2" {
     try std.testing.expectEqual(2, fork_choice.heaviestOverallSlot().slot);
 
     // Add a vote for slot 4, so leaf 6 should be the best again
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     const stake: u64 = 100;
     const vote_pubkeys = [_]Pubkey{
@@ -2292,7 +2292,7 @@ test "HeaviestSubtreeForkChoice.setRootAndAddOutdatedVotes" {
     var fork_choice = try forkChoiceForTest(test_allocator, fork_tuples[0..]);
     defer fork_choice.deinit();
 
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     const stake: u64 = 100;
     const vote_pubkeys = [_]Pubkey{
@@ -2648,7 +2648,7 @@ test "HeaviestSubtreeForkChoice.isHeaviestChild" {
 
 // [Agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L1871
 test "HeaviestSubtreeForkChoice.addNewLeafSlot_duplicate" {
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     const duplicate_fork = try setupDuplicateForks();
@@ -2977,7 +2977,7 @@ test "HeaviestSubtreeForkChoice.heaviestSlotOnSameVotedFork_missing_candidate" {
 // Analogous to [test_generate_update_operations](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L2312)
 test "HeaviestSubtreeForkChoice.generateUpdateOperations" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     const stake = 100;
     const vote_pubkeys = [_]Pubkey{
@@ -3220,7 +3220,7 @@ test "HeaviestSubtreeForkChoice.generateUpdateOperations" {
 
 // Analogous to [add_root_parent](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L426)
 test "HeaviestSubtreeForkChoice.addRootParent" {
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     const vote_pubkeys = [_]Pubkey{Pubkey.initRandom(random)};
     // Build fork structure:
@@ -3314,7 +3314,7 @@ test "HeaviestSubtreeForkChoice.addRootParent" {
 
 // Analogous to [test_add_votes](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L2493)
 test "HeaviestSubtreeForkChoice.addVotes" {
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     const stake: u64 = 100;
     const vote_pubkeys = [_]Pubkey{
@@ -3365,7 +3365,7 @@ test "HeaviestSubtreeForkChoice.addVotes" {
 
 // Analogous to [test_add_votes_duplicate_greater_hash_ignored](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L2616)
 test "HeaviestSubtreeForkChoice.addVotesDuplicateGreaterHashIgnored" {
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     const vote_pubkeys = [_]Pubkey{
         Pubkey.initRandom(random),
@@ -3462,7 +3462,7 @@ test "HeaviestSubtreeForkChoice.addVotesDuplicateGreaterHashIgnored" {
 
 // Analogous to [test_add_votes_duplicate_smaller_hash_prioritized](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L2704)
 test "HeaviestSubtreeForkChoice.addVotesDuplicateSmallerHashPrioritized" {
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     const vote_pubkeys = [_]Pubkey{
         Pubkey.initRandom(random),
@@ -3580,7 +3580,7 @@ test "HeaviestSubtreeForkChoice.addVotesDuplicateSmallerHashPrioritized" {
 
 // Analogous to [test_add_votes_duplicate_then_outdated](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L2821)
 test "HeaviestSubtreeForkChoice.addVotesDuplicateThenOutdated" {
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     const vote_pubkeys = [_]Pubkey{
         Pubkey.initRandom(random),
@@ -3719,7 +3719,7 @@ test "HeaviestSubtreeForkChoice.addVotesDuplicateThenOutdated" {
 
 // Analogous to [test_add_votes_duplicate_tie](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L2518)
 test "HeaviestSubtreeForkChoice.addVotesDuplicateTie" {
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     const vote_pubkeys = [_]Pubkey{
         Pubkey.initRandom(random),
@@ -3823,7 +3823,7 @@ test "HeaviestSubtreeForkChoice.addVotesDuplicateTie" {
 
 // Analogous to [test_add_votes_duplicate_zero_stake](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L2947)
 test "HeaviestSubtreeForkChoice.addVotesDuplicateZeroStake" {
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     const vote_pubkeys = [_]Pubkey{
         Pubkey.initRandom(random),
@@ -3903,7 +3903,7 @@ test "HeaviestSubtreeForkChoice.addVotesDuplicateZeroStake" {
 
 // Analogous to [test_is_best_child](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L3015)
 test "HeaviestSubtreeForkChoice.isBestChild" {
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     const vote_pubkeys = [_]Pubkey{
         Pubkey.initRandom(random),
@@ -4013,7 +4013,7 @@ test "HeaviestSubtreeForkChoice.isBestChild" {
 
 // Analogous to [test_mark_invalid_then_add_new_heavier_duplicate_slot](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L3589)
 test "HeaviestSubtreeForkChoice.markInvalidThenAddNewHeavierDuplicateSlot" {
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     const vote_pubkeys = [_]Pubkey{
         Pubkey.initRandom(random),
@@ -4079,7 +4079,7 @@ test "HeaviestSubtreeForkChoice.markInvalidThenAddNewHeavierDuplicateSlot" {
 
 // Analogous to [test_mark_valid_invalid_forks](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L3383)
 test "HeaviestSubtreeForkChoice.markValidInvalidForks" {
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     const vote_pubkeys = [_]Pubkey{
         Pubkey.initRandom(random),
@@ -4226,7 +4226,7 @@ test "HeaviestSubtreeForkChoice.setRootAndAddVotes" {
     var fork_choice = try forkChoiceForTest(test_allocator, fork_tuples[0..]);
     defer fork_choice.deinit();
 
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     const stake: u64 = 100;
     const vote_pubkeys = [_]Pubkey{
@@ -4308,7 +4308,7 @@ test "HeaviestSubtreeForkChoice.splitOffOnBestPath" {
     var fork_choice = try forkChoiceForTest(test_allocator, fork_tuples[0..]);
     defer fork_choice.deinit();
 
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     const stake: u64 = 100;
 
@@ -4393,7 +4393,7 @@ test "HeaviestSubtreeForkChoice.splitOffSimple" {
     var fork_choice = try forkChoiceForTest(test_allocator, fork_tuples[0..]);
     defer fork_choice.deinit();
 
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     const stake: u64 = 100;
 
@@ -4477,7 +4477,7 @@ test "HeaviestSubtreeForkChoice.splitOffSimple" {
 
 // Analogous to [test_split_off_subtree_with_dups](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L4173)
 test "HeaviestSubtreeForkChoice.splitOffSubtreeWithDups" {
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     const vote_pubkeys = [_]Pubkey{
         Pubkey.initRandom(random),
@@ -4575,7 +4575,7 @@ test "HeaviestSubtreeForkChoice.splitOffUnvoted" {
     var fork_choice = try forkChoiceForTest(test_allocator, fork_tuples[0..]);
     defer fork_choice.deinit();
 
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     const stake: u64 = 100;
 
@@ -4650,7 +4650,7 @@ test "HeaviestSubtreeForkChoice.splitOffUnvoted" {
 
 // Analogous to [test_split_off_with_dups](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L4118)
 test "HeaviestSubtreeForkChoice.splitOffWithDups" {
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     const vote_pubkeys = [_]Pubkey{
         Pubkey.initRandom(random),
@@ -4744,7 +4744,7 @@ test "HeaviestSubtreeForkChoice.gossipVoteDoesntAffectForkChoice" {
     var fork_choice = try forkChoiceForTest(test_allocator, fork_tuples[0..]);
     defer fork_choice.deinit();
 
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     const stake: u64 = 100;
 
@@ -4958,7 +4958,7 @@ pub fn setupDuplicateForks() !struct {
     //             │   └── (10)
     //             ├── (10)
     //             └── (10)
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     // Build fork structure
     var fork_choice = try test_allocator.create(ForkChoice);

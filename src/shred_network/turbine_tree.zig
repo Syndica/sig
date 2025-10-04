@@ -619,7 +619,7 @@ fn testCheckRetransmitNodesRoundTrip(
     fanout: usize,
     size: comptime_int,
 ) !void {
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const rand = prng.random();
 
     var nodes = testGetRandomNodes(size, rand);
@@ -677,7 +677,7 @@ fn testCheckRetransmitNodesRoundTrip(
 
 test "agave: cluster nodes retransmit" {
     const allocator = std.testing.allocator;
-    var xrng = std.Random.DefaultPrng.init(0);
+    var xrng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const rng = xrng.random();
 
     // Setup Environment
@@ -727,7 +727,7 @@ test "agave: cluster nodes retransmit" {
 
 test "agave: get retransmit nodes" {
     { // 20 nodes, 2 fanout
-        var prng = std.Random.DefaultPrng.init(0);
+        var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
         const nds = testGetRandomNodes(20, prng.random());
         const nodes: []const TurbineTree.Node = &.{
             nds[7], // root
@@ -760,7 +760,7 @@ test "agave: get retransmit nodes" {
         try testCheckRetransmitNodes(std.testing.allocator, 2, nodes, peers);
     }
     { // 36 nodes, 3 fanout
-        var prng = std.Random.DefaultPrng.init(0);
+        var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
         const nds = testGetRandomNodes(36, prng.random());
         const nodes: []const TurbineTree.Node = &.{
             nds[19], // root
