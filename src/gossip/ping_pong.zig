@@ -142,7 +142,7 @@ pub const PingCache = struct {
 
     /// Records a `Pong` if corresponding `Ping` exists in `pending_cache`
     pub fn receviedPong(self: *Self, pong: *const Pong, socket: SocketAddr, now: std.time.Instant) bool {
-        const peer_and_addr = PubkeyAndSocketAddr{ .pubkey = pong.from, .socket_addr = socket };
+        const peer_and_addr: PubkeyAndSocketAddr = .{ .pubkey = pong.from, .socket_addr = socket };
         if (self.pending_cache.peek(pong.hash)) |*pubkey_and_addr| {
             if (pubkey_and_addr.pubkey.equals(&pong.from) and pubkey_and_addr.socket_addr.eql(&socket)) {
                 _ = self.pings.pop(peer_and_addr);
@@ -216,7 +216,7 @@ pub const PingCache = struct {
 
         for (peers, 0..) |*peer, i| {
             if (peer.gossip_addr) |gossip_addr| {
-                const result = self.check(now, PubkeyAndSocketAddr{ .pubkey = peer.pubkey, .socket_addr = gossip_addr }, &our_keypair);
+                const result = self.check(now, .{ .pubkey = peer.pubkey, .socket_addr = gossip_addr }, &our_keypair);
                 if (result.passes_ping_check) {
                     try valid_peers.append(i);
                 }

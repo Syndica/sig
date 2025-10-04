@@ -987,10 +987,9 @@ pub const NodeInstance = struct {
     timestamp: u64, // Timestamp when the instance was created.
     token: u64, // Randomly generated value at node instantiation.
 
-    const Self = @This();
 
-    pub fn initRandom(random: std.Random) Self {
-        return Self{
+    pub fn initRandom(random: std.Random) NodeInstance {
+        return .{
             .from = Pubkey.initRandom(random),
             .wallclock = getWallclockMs(),
             .timestamp = random.int(u64),
@@ -998,8 +997,8 @@ pub const NodeInstance = struct {
         };
     }
 
-    pub fn init(random: std.Random, from: Pubkey, wallclock: u64) Self {
-        return Self{
+    pub fn init(random: std.Random, from: Pubkey, wallclock: u64) NodeInstance {
+        return .{
             .from = from,
             .wallclock = wallclock,
             .timestamp = @intCast(std.time.microTimestamp()),
@@ -1007,8 +1006,8 @@ pub const NodeInstance = struct {
         };
     }
 
-    pub fn withWallclock(self: *Self, wallclock: u64) Self {
-        return Self{
+    pub fn withWallclock(self: *NodeInstance, wallclock: u64) NodeInstance {
+        return .{
             .from = self.from,
             .wallclock = wallclock,
             .timestamp = self.timestamp,
@@ -1016,7 +1015,7 @@ pub const NodeInstance = struct {
         };
     }
 
-    pub fn sanitize(self: *const Self) !void {
+    pub fn sanitize(self: *const NodeInstance) !void {
         try sanitizeWallclock(self.wallclock);
     }
 };
@@ -1232,27 +1231,31 @@ pub const SnapshotHashes = struct {
     };
 };
 
+/// [agave] https://github.com/anza-xyz/agave/blob/v3.0.4/gossip/src/contact_info.rs#L34-L47
 pub const SocketTag = enum(u8) {
     gossip = 0,
     repair = 1,
     rpc = 2,
     rpc_pubsub = 3,
     serve_repair = 4,
+
     tpu = 5,
     tpu_forwards = 6,
     tpu_forwards_quic = 7,
     tpu_quic = 8,
+
     tpu_vote = 9,
     tpu_vote_quic = 12,
-    /// Analogous to [SOCKET_TAG_TVU](https://github.com/anza-xyz/agave/blob/d9683093ec5ce3138ab94332e248c524a2e60454/gossip/src/contact_info.rs#L38)
+
     turbine_recv = 10,
-    /// Analogous to [SOCKET_TAG_TVU_QUIC](https://github.com/anza-xyz/agave/blob/d9683093ec5ce3138ab94332e248c524a2e60454/gossip/src/contact_info.rs#L39)
     turbine_recv_quic = 11,
+
+    alpenglow = 13,
     _,
 
     pub const BincodeSize = u8;
 };
-pub const SOCKET_CACHE_SIZE: usize = @intFromEnum(SocketTag.tpu_vote_quic) + 1;
+pub const SOCKET_CACHE_SIZE: usize = @typeInfo(SocketTag).@"enum".fields.len;
 
 pub const ContactInfo = struct {
     pubkey: Pubkey,
@@ -1260,12 +1263,10 @@ pub const ContactInfo = struct {
     outset: u64,
     shred_version: u16,
     version: ClientVersion,
-    addrs: ArrayList(IpAddr),
-    sockets: ArrayList(SocketEntry),
-    extensions: ArrayList(Extension),
-    cache: [SOCKET_CACHE_SIZE]SocketAddr = .{SocketAddr.UNSPECIFIED} ** SOCKET_CACHE_SIZE,
+    cache: [SOCKET_CACHE_SIZE]sig.net.Address = @splat(.UNSPECIFIED),
 
-    // TODO: improve implementation of post deserialise method
+    pub const @"!bincode-config" = bincode.FieldConfig(ContactInfo){ .deserializer = deserialize };
+
     pub const @"!bincode-config:post-deserialize" = bincode.FieldConfig(ContactInfo){ .post_deserialize_fn = ContactInfo.buildCache };
     pub const @"!bincode-config:cache" = bincode.FieldConfig([SOCKET_CACHE_SIZE]SocketAddr){ .skip = true };
     pub const @"!bincode-config:addrs" = bincode.shortvec.arrayListConfig(IpAddr);
@@ -1273,9 +1274,31 @@ pub const ContactInfo = struct {
     pub const @"!bincode-config:extensions" = bincode.shortvec.arrayListConfig(Extension);
     pub const @"!bincode-config:wallclock" = bincode.VarIntConfig(u64);
 
-    const Self = @This();
+    pub fn deserialize(
+        limit_allocator: *bincode.LimitAllocator,
+        reader: anytype,
+        _: bincode.Params,
+    ) !ContactInfo {
+        return .{
+            .pubkey = try bincode.readWithLimit(limit_allocator, Pubkey, reader, .{}),
+            .wallclock = try std.leb.readUleb128(u64, reader),
+            .outset = try reader.readInt(u64),
+            .shred_version = try reader.readInt(u16),
+            .version = try bincode.readWithLimit(limit_allocator, ClientVersion, reader, .{}),
+            .cache = addr: {
 
-    pub fn buildCache(self: *Self) void {
+                const addrs = try bincode.readWithLimit(limit_allocator, std.ArrayListUnmanaged(IpAddr), 
+
+
+
+    addrs: std.ArrayListUnmanaged(IpAddr),
+    sockets: std.ArrayListUnmanaged(SocketEntry),
+    extensions: std.ArrayListUnmanaged(Extension),
+            } , 
+        };
+    }
+
+    pub fn buildCache(self: *ContactInfo) void {
         var port: u16 = 0;
         for (self.sockets.items) |socket_entry| {
             port += socket_entry.offset;
@@ -1295,18 +1318,18 @@ pub const ContactInfo = struct {
         }
     }
 
-    pub fn toNodeInstance(self: *Self, random: std.Random) NodeInstance {
+    pub fn toNodeInstance(self: *ContactInfo, random: std.Random) NodeInstance {
         return NodeInstance.init(random, self.pubkey, @intCast(std.time.milliTimestamp()));
     }
 
-    pub fn deinit(self: *const Self) void {
+    pub fn deinit(self: *const ContactInfo) void {
         self.addrs.deinit();
         self.sockets.deinit();
         self.extensions.deinit();
     }
 
-    pub fn initSpy(allocator: std.mem.Allocator, id: Pubkey, gossip_socket_addr: SocketAddr, shred_version: u16) !Self {
-        var contact_info = Self.init(allocator, id, @intCast(std.time.microTimestamp()), shred_version);
+    pub fn initSpy(allocator: std.mem.Allocator, id: Pubkey, gossip_socket_addr: SocketAddr, shred_version: u16) !ContactInfo {
+        var contact_info = ContactInfo.init(allocator, id, @intCast(std.time.microTimestamp()), shred_version);
         try contact_info.setSocket(.gossip, gossip_socket_addr);
         return contact_info;
     }
@@ -1316,9 +1339,9 @@ pub const ContactInfo = struct {
         pubkey: Pubkey,
         wallclock: u64,
         shred_version: u16,
-    ) Self {
+    ) ContactInfo {
         const outset = @as(u64, @intCast(std.time.microTimestamp()));
-        return Self{
+        return ContactInfo{
             .pubkey = pubkey,
             .wallclock = wallclock,
             .outset = outset,
@@ -1368,11 +1391,11 @@ pub const ContactInfo = struct {
         };
     }
 
-    pub fn sanitize(self: *const Self) !void {
+    pub fn sanitize(self: *const ContactInfo) !void {
         try sanitizeWallclock(self.wallclock);
     }
 
-    pub fn getSocket(self: *const Self, key: SocketTag) ?SocketAddr {
+    pub fn getSocket(self: *const ContactInfo, key: SocketTag) ?SocketAddr {
         const socket = &self.cache[@intFromEnum(key)];
         if (socket.eql(&SocketAddr.UNSPECIFIED)) {
             return null;
@@ -1380,7 +1403,7 @@ pub const ContactInfo = struct {
         return socket.*;
     }
 
-    pub fn setSocket(self: *Self, key: SocketTag, socket_addr: SocketAddr) !void {
+    pub fn setSocket(self: *ContactInfo, key: SocketTag, socket_addr: SocketAddr) !void {
         self.removeSocket(key);
 
         const offset: u16, const index: ?usize = blk: {
@@ -1407,7 +1430,7 @@ pub const ContactInfo = struct {
         self.cache[@intFromEnum(key)] = socket_addr;
     }
 
-    pub fn removeSocket(self: *Self, key: SocketTag) void {
+    pub fn removeSocket(self: *ContactInfo, key: SocketTag) void {
         // find existing socket index
         const existing_socket_index = for (self.sockets.items, 0..) |socket, idx| {
             if (socket.key == key) break idx;
@@ -1427,17 +1450,17 @@ pub const ContactInfo = struct {
     }
 
     // Add IpAddr if it doesn't already exist otherwise return index
-    fn pushAddr(self: *Self, ip_addr: IpAddr) !u8 {
+    fn pushAddr(self: *ContactInfo, allocator: std.mem.Allocator, ip_addr: IpAddr) !u8 {
         for (self.addrs.items, 0..) |addr, index| {
             if (addr.eql(&ip_addr)) {
                 return std.math.cast(u8, index) orelse return error.IpAddrsSaturated;
             }
         }
-        try self.addrs.append(ip_addr);
+        try self.addrs.append(allocator, ip_addr);
         return std.math.cast(u8, self.addrs.items.len - 1) orelse return error.IpAddrsSaturated;
     }
 
-    pub fn removeAddrIfUnused(self: *Self, index: usize) void {
+    pub fn removeAddrIfUnused(self: *ContactInfo, index: usize) void {
         for (self.sockets.items) |socket| {
             if (socket.index == index) {
                 // exit because there's an existing socket entry that refs that addr index
@@ -1453,7 +1476,7 @@ pub const ContactInfo = struct {
         }
     }
 
-    pub fn clone(self: *const Self) error{OutOfMemory}!Self {
+    pub fn clone(self: *const ContactInfo) error{OutOfMemory}!ContactInfo {
         return .{
             .pubkey = self.pubkey,
             .wallclock = self.wallclock,
@@ -1471,19 +1494,14 @@ pub const ContactInfo = struct {
 /// This exists to provide a version of ContactInfo which can safely cross gossip table lock
 /// boundaries without exposing unsafe pointers. For now it contains only the fields
 /// required to satisfy existing usage, it can be extended in the future if required.
-/// TODO: This struct is starting to look a lot like LegacyContactInfo, it would be nice to
-/// create some comptime code that behaves like graphql.  For example, gossip would have a
-/// generic getContactInfo function where you could pass in a custom type definition for a
-/// struct that only includes fields for the specific ports you care about, and the function
-/// would be able to populate that custom struct by iterating over the struct fields.
 pub const ThreadSafeContactInfo = struct {
     pubkey: Pubkey,
     shred_version: u16,
-    gossip_addr: ?SocketAddr,
-    rpc_addr: ?SocketAddr,
-    tpu_addr: ?SocketAddr,
-    tvu_addr: ?SocketAddr,
-    tpu_quic_addr: ?SocketAddr,
+    gossip_addr: ?sig.net.Address,
+    rpc_addr: ?sig.net.Address,
+    tpu_addr: ?sig.net.Address,
+    tvu_addr: ?sig.net.Address,
+    tpu_quic_addr: ?sig.net.Address,
 
     pub fn initRandom(
         random: std.Random,
@@ -1493,11 +1511,11 @@ pub const ThreadSafeContactInfo = struct {
         return .{
             .pubkey = pubkey,
             .shred_version = shred_version,
-            .gossip_addr = SocketAddr.initRandom(random),
-            .rpc_addr = SocketAddr.initRandom(random),
-            .tpu_addr = SocketAddr.initRandom(random),
-            .tvu_addr = SocketAddr.initRandom(random),
-            .tpu_quic_addr = SocketAddr.initRandom(random),
+            .gossip_addr = .initRandom(random),
+            .rpc_addr = .initRandom(random),
+            .tpu_addr = .initRandom(random),
+            .tvu_addr = .initRandom(random),
+            .tpu_quic_addr = .initRandom(random),
         };
     }
 
@@ -1561,6 +1579,7 @@ const Sockets = struct {
     ancestor_hashes_requests: UdpSocket,
     tpu_quic: UdpSocket,
     tpu_forwards_quic: UdpSocket,
+    alpine: UdpSocket,
 };
 
 pub const SocketEntry = struct {
@@ -1571,11 +1590,9 @@ pub const SocketEntry = struct {
     /// Port offset with respect to the previous entry.
     offset: u16,
 
-    const Self = @This();
-
     pub const @"!bincode-config:offset" = bincode.VarIntConfig(u16);
 
-    pub fn eql(self: *const Self, other: *const Self) bool {
+    pub fn eql(self: *const SocketEntry, other: *const SocketEntry) bool {
         return self.key == other.key and
             self.index == other.index and
             self.offset == other.offset;
@@ -1590,9 +1607,7 @@ pub const RestartHeaviestFork = struct {
     observed_stake: u64,
     shred_version: u16,
 
-    const Self = @This();
-
-    pub fn sanitize(self: *const Self) !void {
+    pub fn sanitize(self: *const RestartHeaviestFork) !void {
         try sanitizeWallclock(self.wallclock);
     }
 };

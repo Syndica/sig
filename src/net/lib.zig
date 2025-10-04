@@ -4,6 +4,7 @@ pub const packet = @import("packet.zig");
 pub const socket_utils = @import("socket_utils.zig");
 pub const quic_client = @import("quic_client.zig");
 
+pub const Address = net.Address;
 pub const IpAddr = net.IpAddr;
 pub const SocketAddr = net.SocketAddr;
 pub const Packet = packet.Packet;

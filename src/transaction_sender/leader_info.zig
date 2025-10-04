@@ -8,7 +8,6 @@ const AtomicSlot = std.atomic.Value(Slot);
 const Slot = sig.core.Slot;
 const Pubkey = sig.core.Pubkey;
 const RwMux = sig.sync.RwMux;
-const SocketAddr = sig.net.SocketAddr;
 const GossipTable = sig.gossip.GossipTable;
 const RpcClient = sig.rpc.Client;
 const LeaderScheduleCache = sig.core.leader_schedule.LeaderScheduleCache;
@@ -29,11 +28,10 @@ pub const LeaderInfo = struct {
     logger: Logger,
     rpc_client: RpcClient,
     leader_schedule_cache: LeaderScheduleCache,
-    leader_addresses_cache: std.AutoArrayHashMapUnmanaged(Pubkey, SocketAddr),
+    leader_addresses_cache: std.AutoArrayHashMapUnmanaged(Pubkey, sig.net.Address),
     gossip_table_rw: *RwMux(GossipTable),
 
-    const Self = @This();
-    const Logger = sig.trace.Logger(@typeName(Self));
+    const Logger = sig.trace.Logger(@typeName(LeaderInfo));
 
     pub fn init(
         allocator: Allocator,
@@ -45,7 +43,7 @@ pub const LeaderInfo = struct {
         return .{
             .allocator = allocator,
             .config = config,
-            .logger = logger.withScope(@typeName(Self)),
+            .logger = logger.withScope(@typeName(LeaderInfo)),
             .rpc_client = try RpcClient.init(
                 allocator,
                 config.cluster,
@@ -57,18 +55,20 @@ pub const LeaderInfo = struct {
         };
     }
 
-    pub fn getLeaderAddresses(self: *LeaderInfo, allocator: Allocator) ![]const SocketAddr {
+    pub fn getLeaderAddresses(self: *LeaderInfo, allocator: Allocator) ![]const sig.net.Address {
         const current_slot_response = try self.rpc_client
             .getSlot(.{ .config = .{ .commitment = .processed } });
         defer current_slot_response.deinit();
         const current_slot = try current_slot_response.result();
 
-        var leader_addresses = std.ArrayList(SocketAddr).init(allocator);
+        var leader_addresses: std.ArrayListUnmanaged(sig.net.Address) = .empty;
+        errdefer leader_addresses.deinit(allocator);
         for (0..self.config.max_leaders_to_send_to) |position| {
             const slot = current_slot + position * self.config.number_of_consecutive_leader_slots;
             const leader = try self.getSlotLeader(slot) orelse continue;
             const socket = self.leader_addresses_cache.get(leader) orelse continue;
-            try leader_addresses.append(socket);
+
+            try leader_addresses.append(allocator, socket);
         }
 
         self.logger.info().logf("identified {}/{} leaders", .{
@@ -76,9 +76,8 @@ pub const LeaderInfo = struct {
             self.config.max_leaders_to_send_to,
         });
 
-        if (leader_addresses.items.len <= @divFloor(self.config.max_leaders_to_send_to, 2)) {
-            const gossip_table: *const GossipTable, var gossip_table_lg =
-                self.gossip_table_rw.readWithLock();
+        if (leader_addresses.items.len <= self.config.max_leaders_to_send_to / 2) {
+            const gossip_table, var gossip_table_lg = self.gossip_table_rw.readWithLock();
             defer gossip_table_lg.unlock();
 
             const unique_leaders = try self.leader_schedule_cache.uniqueLeaders(self.allocator);
@@ -95,7 +94,7 @@ pub const LeaderInfo = struct {
             }
         }
 
-        return leader_addresses.toOwnedSlice();
+        return try leader_addresses.toOwnedSlice(allocator);
     }
 
     fn updateLeaderAddressesCache(self: *LeaderInfo) !void {

@@ -2,6 +2,50 @@ const std = @import("std");
 const network = @import("zig-network");
 const builtin = @import("builtin");
 
+const posix = std.posix;
+
+/// A thin wrapper around `std.net.Address` that provides some sanitization methods
+/// and helper functions useful when working with gossip / leader info.
+pub const Address = struct {
+    addr: std.net.Address,
+
+    pub const UNSPECIFIED: Address = .{ .addr = .initIp4(@splat(0), 0) };
+
+    /// Only used for benchmarks/fuzzing/testing.
+    pub fn initRandom(random: std.Random) Address {
+        var octets: [4]u8 = undefined;
+        random.bytes(&octets);
+        return .{ .addr = .initIp4(octets, random.int(u16)) };
+    }
+
+    pub fn getPort(self: Address) u16 {
+        return self.addr.getPort();
+    }
+
+    pub fn isUnspecified(self: Address) bool {
+        return self.eql(UNSPECIFIED);
+    }
+
+    pub fn eql(self: Address, other: Address) void {
+        return self.addr.eql(other.addr);
+    }
+
+    pub fn isMulticast(self: Address) void {
+        const addr = self.addr;
+        return switch (addr.any.family) {
+            // multicast address falls between 224.0.0.0 and 239.255.255.255
+            posix.AF.INET => (addr.in.sa.addr >> (32 - 4)) == 0b1110,
+            posix.AF.INET6 => addr.in6.sa.addr[0] == 255,
+        };
+    }
+
+    pub fn sanitize(self: Address) !void {
+        if (self.getPort() == 0) return error.InvalidPort;
+        if (self.isUnspecified()) return error.UnspecifiedAddress;
+        if (self.isMulticast()) return error.MulticastAddress;
+    }
+};
+
 pub const SocketAddr = union(enum(u8)) {
     V4: SocketAddrV4,
     V6: SocketAddrV6,
@@ -309,6 +353,10 @@ pub const SocketAddr = union(enum(u8)) {
         if (socket.isMulticast()) {
             return error.MulticastAddress;
         }
+    }
+
+    pub fn toNew(socket: *const SocketAddr) std.net.Address {
+        return .initIp4(socket.V4.ip.octets, socket.V4.port);
     }
 
     pub fn format(

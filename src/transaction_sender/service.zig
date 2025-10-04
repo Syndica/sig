@@ -300,7 +300,7 @@ pub const Service = struct {
     fn sendTransactions(
         self: *Service,
         transactions: []TransactionInfo,
-        leader_addresses: []const SocketAddr,
+        leader_addresses: []const std.net.Address,
     ) !void {
         if (leader_addresses.len == 0) {
             self.logger.warn().log("No leader addresses found");
