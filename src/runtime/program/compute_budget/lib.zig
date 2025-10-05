@@ -148,7 +148,7 @@ fn BorshStaticTaggedUnionHelper(comptime U: type) type {
             tagged: U,
             buffer: *[ENCODED_SIZE_MAX]u8,
         ) EncodedSizeInt {
-            var fbs = std.io.fixedBufferStream(buffer);
+            var fbs = std.Io.fixedBufferStream(buffer);
             const w = fbs.writer();
 
             w.writeByte(@intFromEnum(tagged)) catch unreachable;

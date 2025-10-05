@@ -96,13 +96,13 @@ pub fn logPubkey(
     );
     const pubkey: Pubkey = @bitCast(pubkey_bytes[0..@sizeOf(Pubkey)].*);
 
-    try stable_log.programLog(tc, "{}", .{pubkey});
+    try stable_log.programLog(tc, "{f}", .{pubkey});
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/6f95c6aec57c74e3bed37265b07f44fcc0ae8333/programs/bpf_loader/src/syscalls/logging.rs#L58-L80
 pub fn logComputeUnits(tc: *TransactionContext, _: *MemoryMap, _: *RegisterMap) Error!void {
     try tc.consumeCompute(tc.compute_budget.syscall_base_cost);
-    try tc.log("Program consumption: {} units remaining", .{tc.compute_meter});
+    try tc.log("Program consumption: {d} units remaining", .{tc.compute_meter});
 }
 
 /// [agave] https://github.com/firedancer-io/agave/blob/66ea0a11f2f77086d33253b4028f6ae7083d78e4/programs/bpf_loader/src/syscalls/logging.rs#L107
@@ -594,7 +594,7 @@ fn translateAndCheckProgramAddressInputs(
     seeds_len: u64,
     program_id_addr: u64,
     check_aligned: bool,
-) Error!struct { Pubkey, std.BoundedArray([]const u8, pubkey_utils.MAX_SEEDS) } {
+) Error!struct { Pubkey, sig.utils.BoundedArray([]const u8, pubkey_utils.MAX_SEEDS) } {
     const untranslated_seeds = try memory_map.translateSlice(
         memory.VmSlice,
         .constant,
@@ -606,7 +606,7 @@ fn translateAndCheckProgramAddressInputs(
         return SyscallError.BadSeeds; // PubkeyError.MaxSeedLengthExceeded
     }
 
-    var seeds: std.BoundedArray([]const u8, pubkey_utils.MAX_SEEDS) = .{};
+    var seeds: sig.utils.BoundedArray([]const u8, pubkey_utils.MAX_SEEDS) = .{};
     for (untranslated_seeds) |untranslated_seed| {
         if (untranslated_seed.len > pubkey_utils.MAX_SEED_LEN) return SyscallError.BadSeeds;
         seeds.appendAssumeCapacity(try memory_map.translateSlice(
@@ -654,7 +654,7 @@ fn callProgramAddressSyscall(
     var out_address = Pubkey.ZEROES;
 
     // Setup in/out params.
-    var regions = std.ArrayList(memory.Region).init(allocator);
+    var regions = std.array_list.Managed(memory.Region).init(allocator);
     defer regions.deinit();
     try regions.appendSlice(&.{
         memory.Region.init(.constant, std.mem.asBytes(&program_id), program_id_addr),
@@ -663,7 +663,7 @@ fn callProgramAddressSyscall(
     });
 
     // Setup slice of VmSlices
-    var seed_slices = std.ArrayList(memory.VmSlice).init(allocator);
+    var seed_slices = std.array_list.Managed(memory.VmSlice).init(allocator);
     defer seed_slices.deinit();
     for (seeds, 0..) |seed, i| {
         const vm_addr = seed_data_addr +| (i *% 0x100000000);

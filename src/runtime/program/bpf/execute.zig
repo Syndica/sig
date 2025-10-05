@@ -113,7 +113,7 @@ pub fn execute(
     // TODO: timings
 
     // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1646-L1653
-    try ic.tc.log("Program {} consumed {} of {} compute units", .{
+    try ic.tc.log("Program {f} consumed {d} of {d} compute units", .{
         ic.ixn_info.program_meta.pubkey,
         compute_consumed,
         compute_available,
@@ -186,7 +186,7 @@ pub fn initVm(
     errdefer allocator.free(stack);
 
     // [agave] https://github.com/anza-xyz/agave/blob/32ac530151de63329f9ceb97dd23abfcee28f1d4/programs/bpf_loader/src/lib.rs#L256-L280
-    var mm_regions_array = std.ArrayList(vm.memory.Region).init(allocator);
+    var mm_regions_array = std.array_list.Managed(vm.memory.Region).init(allocator);
     errdefer mm_regions_array.deinit();
     const stack_gap: u64 = if (!executable.version.enableDynamicStackFrames() and
         executable.config.enable_stack_frame_gaps)

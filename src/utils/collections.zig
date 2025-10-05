@@ -2,7 +2,7 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 
 const Allocator = std.mem.Allocator;
-const ArrayList = std.ArrayList;
+const ArrayList = std.array_list.Managed;
 
 /// A list that recycles items that were removed from the list.
 ///
@@ -521,11 +521,15 @@ pub fn SortedMapCustom(
 
         fn bincodeDeserialize(
             limit_allocator: *sig.bincode.LimitAllocator,
-            reader: anytype,
+            reader: *std.io.Reader,
             params: sig.bincode.Params,
         ) !SortedMapSelf {
-            const unmanaged =
-                try sig.bincode.readWithLimit(limit_allocator, Unmanaged, reader, params);
+            const unmanaged = try sig.bincode.readWithLimit(
+                limit_allocator,
+                Unmanaged,
+                reader,
+                params,
+            );
             return .{
                 .allocator = limit_allocator.backing_allocator, // patch persistent.
                 .unmanaged = unmanaged,
@@ -533,14 +537,14 @@ pub fn SortedMapCustom(
         }
 
         fn bincodeSerialize(
-            writer: anytype,
-            data: anytype,
+            writer: *std.io.Writer,
+            data: SortedMapSelf,
             params: sig.bincode.Params,
         ) !void {
             try sig.bincode.write(writer, data.unmanaged, params);
         }
 
-        fn bincodeFree(_: std.mem.Allocator, data: anytype) void {
+        fn bincodeFree(_: std.mem.Allocator, data: SortedMapSelf) void {
             data.deinit();
         }
     };

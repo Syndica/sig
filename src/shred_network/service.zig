@@ -214,13 +214,16 @@ pub fn start(
 
     if (conf.dump_shred_tracker) {
         try service_manager.spawn("dump shred tracker", struct {
-            fn run(exit: *const Atomic(bool), trakr: *BasicShredTracker) !void {
+            fn run(exit: *const Atomic(bool), tracker: *BasicShredTracker) !void {
                 const file = try std.fs.cwd().createFile("shred-tracker.txt", .{});
                 while (!exit.load(.monotonic)) {
                     try file.seekTo(0);
                     try file.setEndPos(0);
-                    _ = trakr.print(file.writer()) catch unreachable;
-                    std.time.sleep(std.time.ns_per_s);
+                    var file_writer = file.writer(&.{});
+
+                    _ = tracker.print(&file_writer.interface) catch unreachable;
+
+                    std.Thread.sleep(std.time.ns_per_s);
                 }
             }
         }.run, .{ deps.exit, shred_tracker });

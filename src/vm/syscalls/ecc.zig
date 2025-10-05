@@ -280,12 +280,7 @@ fn groupOp(comptime T: type, group_op: GroupOp, left: [32]u8, right: [32]u8) !T 
             const right_point = try T.fromBytes(right);
             return switch (group_op) {
                 .add => left_point.add(right_point),
-                // TODO:(0.15) Use the alias https://github.com/ziglang/zig/pull/23724
-                .subtract => switch (T) {
-                    Edwards25519 => left_point.sub(right_point),
-                    Ristretto255 => .{ .p = left_point.p.sub(right_point.p) },
-                    else => unreachable,
-                },
+                .subtract => left_point.sub(right_point),
                 else => unreachable,
             };
         },

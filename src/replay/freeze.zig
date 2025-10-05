@@ -105,12 +105,13 @@ pub fn freezeSlot(allocator: Allocator, params: FreezeParams) !void {
 
     try finalizeState(allocator, params.finalize_state);
 
-    const maybe_lt_hash, slot_hash.mut().* = try hashSlot(allocator, params.hash_slot);
+    const maybe_lt_hash, const computed_slot_hash = try hashSlot(allocator, params.hash_slot);
     if (maybe_lt_hash) |lt_hash| params.accounts_lt_hash.set(lt_hash);
+    slot_hash.mut().* = computed_slot_hash;
 
     params.logger.info().logf(
-        "froze slot {} with hash {s}",
-        .{ params.hash_slot.slot, slot_hash.get().*.?.base58String().slice() },
+        "froze slot {} with hash {f}",
+        .{ params.hash_slot.slot, computed_slot_hash },
     );
 
     // NOTE: agave updates hard_forks and hash_overrides here

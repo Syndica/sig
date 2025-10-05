@@ -196,8 +196,8 @@ pub const Proof = struct {
         // ----------------------- MSM
         //      Y_0
 
-        var points: std.BoundedArray(Edwards25519, 16) = .{};
-        var scalars: std.BoundedArray([32]u8, 16) = .{};
+        var points: sig.utils.BoundedArray(Edwards25519, 16) = .{};
+        var scalars: sig.utils.BoundedArray([32]u8, 16) = .{};
 
         try points.appendSlice(&.{
             pedersen.G.p,

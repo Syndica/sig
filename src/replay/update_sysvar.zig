@@ -415,7 +415,8 @@ pub fn getSysvarFromAccount(
     defer account.deinit(allocator);
 
     var data = account.data.iterator();
-    return bincode.read(allocator, Sysvar, data.reader(), .{}) catch return null;
+    var reader = data.adaptToNewReaderApi();
+    return bincode.read(allocator, Sysvar, &reader.new_interface, .{}) catch return null;
 }
 
 fn nextClock(

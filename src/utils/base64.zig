@@ -22,7 +22,7 @@ pub const EncodingStream = struct {
     /// Flushes any buffered writes to the writer, writing the trailing padding character if needed.
     pub fn flush(
         self: *EncodingStream,
-        /// `std.io.AnyWriter` | `std.io.GenericWriter(...)`
+        /// `std.Io.AnyWriter` | `std.Io.GenericWriter(...)`
         dst_writer: anytype,
     ) @TypeOf(dst_writer).Error!void {
         const trail = self.trail_buf[0..self.trail_len];
@@ -38,7 +38,7 @@ pub const EncodingStream = struct {
     /// Returns the number of bytes which were actually written.
     pub fn write(
         self: *EncodingStream,
-        /// `std.io.AnyWriter` | `std.io.GenericWriter(...)`
+        /// `std.Io.AnyWriter` | `std.Io.GenericWriter(...)`
         dst_writer: anytype,
         bytes: []const u8,
     ) @TypeOf(dst_writer).Error!usize {
@@ -96,7 +96,7 @@ pub const EncodingStream = struct {
             inner: Inner,
             const Self = @This();
 
-            pub const Writer = std.io.Writer(Self, Inner.Error, writeFn);
+            pub const Writer = std.Io.Writer(Self, Inner.Error, writeFn);
 
             pub fn writer(self: Self) Writer {
                 return .{ .context = self };

@@ -97,10 +97,14 @@ pub const AccountIndex = struct {
                 var index_dir = try disk.accountsdb_dir.makeOpenPath("index", .{});
                 errdefer index_dir.close();
 
-                logger.info().logf(
-                    "using disk memory (@{s}) for account index",
-                    .{sig.utils.fmt.tryRealPath(index_dir, ".")},
-                );
+                {
+                    var realpath_buffer: [std.fs.max_path_bytes]u8 = undefined;
+                    const realpath = try index_dir.realpath(".", &realpath_buffer);
+                    logger.info().logf(
+                        "using disk memory (@{s}) for account index",
+                        .{realpath},
+                    );
+                }
 
                 const disk_allocator = try allocator.create(DiskMemoryAllocator);
                 errdefer allocator.destroy(disk_allocator);

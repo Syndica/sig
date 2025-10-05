@@ -237,7 +237,7 @@ const UnverifiedVoteReceptor = struct {
 
         // inc_new_counter_debug!("cluster_info_vote_listener-recv_count", votes.len());
         if (unverified_votes_buffer.items.len == 0) {
-            std.time.sleep(GOSSIP_SLEEP_MILLIS);
+            std.Thread.sleep(GOSSIP_SLEEP_MILLIS);
             return;
         }
 
@@ -1765,7 +1765,7 @@ test "simple usage" {
         },
     });
     defer vote_listener.joinAndDeinit();
-    std.time.sleep(sig.time.Duration.asNanos(.fromMillis(DEFAULT_MS_PER_SLOT * 2)));
+    std.Thread.sleep(sig.time.Duration.asNanos(.fromMillis(DEFAULT_MS_PER_SLOT * 2)));
     exit_cond.setExit();
 }
 

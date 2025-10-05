@@ -7,7 +7,7 @@ const meta = ledger.meta;
 const schema = ledger.schema.schema;
 
 const Allocator = std.mem.Allocator;
-const ArrayList = std.ArrayList;
+const ArrayList = std.array_list.Managed;
 const AutoHashMap = std.AutoHashMap;
 
 const Slot = sig.core.Slot;
@@ -30,7 +30,7 @@ const MerkleRootMeta = meta.MerkleRootMeta;
 const ShredIndex = meta.ShredIndex;
 const SlotMeta = meta.SlotMeta;
 
-const newlinesToSpaces = sig.utils.fmt.newlinesToSpaces;
+const newlinesToSpaces = sig.utils.newLinesToSpaces;
 
 const Logger = sig.trace.Logger("ledger.shred_inserter.working_state");
 
@@ -413,7 +413,7 @@ pub const ErasureMetaWorkingStore = struct {
 
 pub const DuplicateShredsWorkingStore = struct {
     db: *LedgerDB,
-    duplicate_shreds: *std.ArrayList(PossibleDuplicateShred),
+    duplicate_shreds: *std.array_list.Managed(PossibleDuplicateShred),
 
     const Self = DuplicateShredsWorkingStore;
 
@@ -545,7 +545,7 @@ pub const ShredWorkingStore = struct {
             try shred.clone() // TODO perf - avoid clone without causing memory issues
         else if (index.contains(shred_index)) blk: {
             const shred = try self.db.getBytes(cf, .{ slot, @intCast(id.index) }) orelse {
-                self.logger.err().logf(&newlinesToSpaces(
+                self.logger.err().logf(newlinesToSpaces(
                     \\Unable to read the {s} with slot {}, index {} for shred
                     \\recovery. The shred is marked present in the slot's index,
                     \\but the shred could not be found in the column.

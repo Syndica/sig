@@ -144,7 +144,7 @@ pub const Service = struct {
 
         const elapsed = start_time.read().asNanos();
         self.metrics.slot_execution_time.observe(elapsed);
-        self.replay.logger.info().logf("advanced in {}", .{std.fmt.fmtDuration(elapsed)});
+        self.replay.logger.info().logf("advanced in {D}", .{elapsed});
 
         if (!processed_a_slot) try std.Thread.yield();
     }
@@ -533,8 +533,8 @@ pub fn getActiveFeatures(
         }
 
         var data_iterator = feature_account.data.iterator();
-        const reader = data_iterator.reader();
-        const activated_at = try sig.bincode.read(allocator, ?u64, reader, .{});
+        var reader = data_iterator.adaptToNewReaderApi();
+        const activated_at = try sig.bincode.read(allocator, ?u64, &reader.new_interface, .{});
         if (activated_at) |activation_slot| {
             if (activation_slot <= slot) {
                 features.setSlot(possible_feature, activation_slot);

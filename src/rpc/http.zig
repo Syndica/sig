@@ -51,13 +51,13 @@ pub const HttpPostFetcher = struct {
         allocator: std.mem.Allocator,
         request: []const u8,
     ) Error![]const u8 {
-        var response = std.ArrayList(u8).init(allocator);
-        errdefer response.deinit();
+        var response: std.io.Writer.Allocating = .init(allocator);
+        defer response.deinit();
 
         var last_error: ?Error = null;
 
         for (0..self.max_retries + 1) |curr_retries| {
-            const result = self.fetchOnce(request, &response) catch |fetch_error| {
+            const result = self.fetchOnce(request, &response.writer) catch |fetch_error| {
                 last_error = fetch_error;
                 self.logger.warn().logf(
                     "HTTP client error, attempting reinitialisation: error={any}",
@@ -87,7 +87,7 @@ pub const HttpPostFetcher = struct {
     pub fn fetchOnce(
         self: *HttpPostFetcher,
         request_payload: []const u8,
-        response_payload: *std.ArrayList(u8),
+        response_writer: *std.io.Writer,
     ) ErrorReturn(std.http.Client.fetch)!std.http.Client.FetchResult {
         return self.http_client.fetch(.{
             .location = .{ .url = self.base_url },
@@ -101,8 +101,7 @@ pub const HttpPostFetcher = struct {
                 },
             },
             .payload = request_payload,
-            .response_storage = .{ .dynamic = response_payload },
-            .max_append_size = 100 * 1024 * 1024,
+            .response_writer = response_writer,
         });
     }
 

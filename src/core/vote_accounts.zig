@@ -224,7 +224,7 @@ pub const VoteAccounts = struct {
     /// Analogous to [deserialize_accounts_hash_map](https://github.com/anza-xyz/agave/blob/10fe1eb29aac9c236fd72d08ae60a3ef61ee8353/vote/src/vote_account.rs#L431-L438)
     fn deserialize(
         limit_allocator: *bincode.LimitAllocator,
-        reader: anytype,
+        reader: *std.Io.Reader,
         _: bincode.Params,
     ) !VoteAccounts {
         const allocator = limit_allocator.backing_allocator;
@@ -341,7 +341,7 @@ pub const VoteAccount = struct {
     /// `VoteState` from the account data.
     fn deserialize(
         limit_allocator: *bincode.LimitAllocator,
-        reader: anytype,
+        reader: *std.Io.Reader,
         _: bincode.Params,
     ) !VoteAccount {
         return fromAccountSharedData(

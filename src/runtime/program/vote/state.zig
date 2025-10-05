@@ -158,13 +158,13 @@ pub const VoteStateUpdate = struct {
 };
 
 pub fn serializeCompactVoteStateUpdate(
-    writer: anytype,
-    data: anytype,
+    writer: *std.Io.Writer,
+    data: VoteStateUpdate,
     _: sig.bincode.Params,
 ) anyerror!void {
     // Calculate lockout offsets
     var slot = data.root orelse 0;
-    var lockouts = std.BoundedArray(struct {
+    var lockouts = sig.utils.BoundedArray(struct {
         Slot,
         u8,
     }, MAX_LOCKOUT_HISTORY){};
@@ -196,35 +196,35 @@ pub fn serializeCompactVoteStateUpdate(
 
 pub fn deserializeCompactVoteStateUpdate(
     limit_allocator: *sig.bincode.LimitAllocator,
-    reader: anytype,
+    reader: *std.Io.Reader,
     _: sig.bincode.Params,
 ) anyerror!VoteStateUpdate {
     const allocator = limit_allocator.allocator();
 
-    var root: ?Slot = try reader.readInt(Slot, .little);
+    var root: ?Slot = try reader.takeInt(Slot, .little);
     root = if (root == std.math.maxInt(Slot)) null else root;
 
     var slot = root orelse 0;
-    const lockouts_len = try std.leb.readUleb128(u16, reader);
+    const lockouts_len = try reader.takeLeb128(u16);
     const lockouts = try allocator.alloc(Lockout, lockouts_len);
     errdefer allocator.free(lockouts);
     for (lockouts) |*lockout| {
-        const offset = try std.leb.readUleb128(u64, reader);
-        const confirmation_count = try reader.readInt(u8, .little);
+        const offset = try reader.takeLeb128(u64);
+        const confirmation_count = try reader.takeInt(u8, .little);
         slot = try std.math.add(Slot, slot, offset);
         lockout.* = .{ .slot = slot, .confirmation_count = confirmation_count };
     }
 
-    var hash = Hash.ZEROES;
-    if (try reader.readAll(&hash.data) != Hash.SIZE) return error.NoBytesLeft;
+    var hash: Hash = .ZEROES;
+    try reader.readSliceAll(&hash.data);
 
-    const timestamp = switch (try reader.readInt(u8, .little)) {
+    const timestamp = switch (try reader.takeInt(u8, .little)) {
         0 => null,
-        1 => try reader.readInt(i64, .little),
+        1 => try reader.takeInt(i64, .little),
         else => return error.InvalidOptionalTimestamp,
     };
 
-    return VoteStateUpdate{
+    return .{
         .lockouts = .{ .items = lockouts, .capacity = lockouts_len },
         .root = root,
         .hash = hash,
@@ -261,10 +261,14 @@ pub const TowerSync = struct {
     }
 };
 
-pub fn serializeTowerSync(writer: anytype, data: anytype, _: sig.bincode.Params) anyerror!void {
+pub fn serializeTowerSync(
+    writer: *std.Io.Writer,
+    data: TowerSync,
+    _: sig.bincode.Params,
+) anyerror!void {
     // Calculate lockout offsets
     var slot = data.root orelse 0;
-    var lockouts = std.BoundedArray(struct {
+    var lockouts = sig.utils.BoundedArray(struct {
         Slot,
         u8,
     }, MAX_LOCKOUT_HISTORY){};
@@ -297,37 +301,37 @@ pub fn serializeTowerSync(writer: anytype, data: anytype, _: sig.bincode.Params)
 
 pub fn deserializeTowerSync(
     limit_allocator: *sig.bincode.LimitAllocator,
-    reader: anytype,
+    reader: *std.Io.Reader,
     _: sig.bincode.Params,
 ) anyerror!TowerSync {
     const allocator = limit_allocator.allocator();
-    var root: ?Slot = try reader.readInt(Slot, .little);
+    var root: ?Slot = try reader.takeInt(Slot, .little);
     root = if (root == std.math.maxInt(Slot)) null else root;
 
     var slot = root orelse 0;
-    const lockouts_len = try std.leb.readUleb128(u16, reader);
+    const lockouts_len = try reader.takeLeb128(u16);
     const lockouts = try allocator.alloc(Lockout, lockouts_len);
     errdefer allocator.free(lockouts);
     for (lockouts) |*lockout| {
-        const offset = try std.leb.readUleb128(u64, reader);
-        const confirmation_count = try reader.readInt(u8, .little);
+        const offset = try reader.takeLeb128(u64);
+        const confirmation_count = try reader.takeInt(u8, .little);
         slot = try std.math.add(Slot, slot, offset);
         lockout.* = .{ .slot = slot, .confirmation_count = confirmation_count };
     }
 
-    var hash = Hash.ZEROES;
-    if (try reader.readAll(&hash.data) != Hash.SIZE) return error.NoBytesLeft;
+    var hash: Hash = .ZEROES;
+    try reader.readSliceAll(&hash.data);
 
-    const timestamp = switch (try reader.readInt(u8, .little)) {
+    const timestamp = switch (try reader.takeInt(u8, .little)) {
         0 => null,
-        1 => try reader.readInt(i64, .little),
+        1 => try reader.takeInt(i64, .little),
         else => return error.InvalidOptionalTimestamp,
     };
 
-    var block_id = Hash.ZEROES;
-    if (try reader.readAll(&block_id.data) != Hash.SIZE) return error.NoBytesLeft;
+    var block_id: Hash = .ZEROES;
+    try reader.readSliceAll(&block_id.data);
 
-    return TowerSync{
+    return .{
         .lockouts = .{ .items = lockouts, .capacity = lockouts_len },
         .root = root,
         .hash = hash,
@@ -401,7 +405,7 @@ pub const AuthorizedVoters = struct {
         allocator: std.mem.Allocator,
         current_epoch: Epoch,
     ) (error{OutOfMemory} || InstructionError)!bool {
-        var expired_keys = std.ArrayList(Epoch).init(allocator);
+        var expired_keys = std.array_list.Managed(Epoch).init(allocator);
         defer expired_keys.deinit();
 
         var voter_iter = self.voters.iterator();
@@ -477,7 +481,7 @@ pub const AuthorizedVoters = struct {
 
     fn deserialize(
         limit_allocator: *sig.bincode.LimitAllocator,
-        reader: anytype,
+        reader: *std.Io.Reader,
         _: sig.bincode.Params,
     ) !AuthorizedVoters {
         const allocator = limit_allocator.allocator();
@@ -485,18 +489,17 @@ pub const AuthorizedVoters = struct {
         var authorized_voters: AuthorizedVoters = .EMPTY;
         errdefer authorized_voters.deinit(allocator);
 
-        for (0..try reader.readInt(usize, .little)) |_| {
-            const epoch = try reader.readInt(u64, .little);
-            var pubkey = Pubkey.ZEROES;
-            const bytes_read = try reader.readAll(&pubkey.data);
-            if (bytes_read != Pubkey.SIZE) return error.NoBytesLeft;
+        for (0..try reader.takeInt(usize, .little)) |_| {
+            const epoch = try reader.takeInt(u64, .little);
+            var pubkey: Pubkey = .ZEROES;
+            try reader.readSliceAll(&pubkey.data);
             try authorized_voters.voters.put(allocator, epoch, pubkey);
         }
 
         return authorized_voters;
     }
 
-    pub fn serialize(writer: anytype, data: anytype, _: sig.bincode.Params) !void {
+    pub fn serialize(writer: *std.Io.Writer, data: AuthorizedVoters, _: sig.bincode.Params) !void {
         var authorized_voters: AuthorizedVoters = data;
         try writer.writeInt(usize, authorized_voters.len(), .little);
         const items = authorized_voters.voters.items();
@@ -1320,7 +1323,7 @@ pub const VoteState = struct {
         else
             0;
 
-        var recent_vote_slots = std.ArrayList(Slot).init(allocator);
+        var recent_vote_slots = std.array_list.Managed(Slot).init(allocator);
         defer recent_vote_slots.deinit();
 
         for (vote.slots) |slot| {
@@ -1536,7 +1539,7 @@ pub const VoteState = struct {
         // index into the slot_hashes, starting at the oldest known
         // slot hash
         var slot_hashes_index = slot_hash_entries.len;
-        var proposed_lockouts_indices_to_filter = std.BoundedArray(
+        var proposed_lockouts_indices_to_filter = sig.utils.BoundedArray(
             usize,
             MAX_LOCKOUT_HISTORY,
         ).init(
@@ -3409,7 +3412,7 @@ test "state.VoteState process new vote too many votes" {
     var vote_state: VoteState = .DEFAULT;
     defer vote_state.deinit(allocator);
 
-    var bad_votes = std.ArrayList(Lockout).init(allocator);
+    var bad_votes = std.array_list.Managed(Lockout).init(allocator);
     defer bad_votes.deinit();
 
     var slot: usize = 0;
@@ -5260,7 +5263,7 @@ fn runTestCheckAndFilterProposedVoteStateOlderThanHistoryRoot(
     const last_proposed = proposed_slots_and_lockouts[proposed_slots_and_lockouts.len - 1];
     const latest_slot_in_history = @max(last_proposed.slot, earliest_slot_in_history);
 
-    var slots = std.ArrayList(Slot).init(allocator);
+    var slots = std.array_list.Managed(Slot).init(allocator);
     defer slots.deinit();
 
     const first = if (current_vote_state_slots.len > 0)
@@ -5331,7 +5334,7 @@ fn runTestCheckAndFilterProposedVoteStateOlderThanHistoryRoot(
     try std.testing.expectEqual(null, another_maybe_error);
     try std.testing.expectEqual(expected_root, vote_state.root_slot);
 
-    var actual_lockouts = try std.ArrayList(Lockout).initCapacity(
+    var actual_lockouts = try std.array_list.Managed(Lockout).initCapacity(
         allocator,
         vote_state.votes.items.len,
     );
@@ -5354,7 +5357,7 @@ fn recentVotes(
     }
     const start = vote_state.votes.items.len -| MAX_RECENT_VOTES;
 
-    var votes = try std.ArrayList(Vote).initCapacity(
+    var votes = try std.array_list.Managed(Vote).initCapacity(
         allocator,
         vote_state.votes.items.len - start,
     );

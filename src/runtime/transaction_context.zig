@@ -58,7 +58,7 @@ pub const TransactionContext = struct {
     accounts: []TransactionContextAccount,
 
     /// Used by CPI to access serialized account metadata.
-    serialized_accounts: std.BoundedArray(
+    serialized_accounts: sig.utils.BoundedArray(
         SerializedAccountMetadata,
         InstructionInfo.MAX_ACCOUNT_METAS,
     ) = .{},
@@ -99,12 +99,12 @@ pub const TransactionContext = struct {
     prev_blockhash: Hash,
     prev_lamports_per_signature: u64,
 
-    pub const InstructionStack = std.BoundedArray(
+    pub const InstructionStack = sig.utils.BoundedArray(
         InstructionContext,
         MAX_INSTRUCTION_STACK_DEPTH,
     );
 
-    pub const InstructionTrace = std.BoundedArray(struct {
+    pub const InstructionTrace = sig.utils.BoundedArray(struct {
         ixn_info: InstructionInfo,
         depth: u8,
     }, MAX_INSTRUCTION_TRACE_LENGTH);
@@ -216,7 +216,7 @@ pub const TransactionContext = struct {
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/e1554f4067329a0dcf5035120ec6a06275d3b9ec/transaction-context/src/lib.rs#L493
 pub const TransactionReturnData = struct {
     program_id: Pubkey = Pubkey.ZEROES,
-    data: std.BoundedArray(u8, MAX_RETURN_DATA) = .{},
+    data: sig.utils.BoundedArray(u8, MAX_RETURN_DATA) = .{},
 
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/95764e268fe33a19819e6f9f411ff9e732cbdf0d/cpi/src/lib.rs#L329
     pub const MAX_RETURN_DATA: usize = 1024;

@@ -7,7 +7,7 @@ const meta = ledger.meta;
 const schema = ledger.schema.schema;
 
 const Allocator = std.mem.Allocator;
-const ArrayList = std.ArrayList;
+const ArrayList = std.array_list.Managed;
 const AutoHashMap = std.AutoHashMap;
 const Atomic = std.atomic.Value;
 const GetMetricError = sig.prometheus.registry.GetMetricError;
@@ -44,7 +44,7 @@ const SlotMeta = meta.SlotMeta;
 
 const handleChaining = lib.slot_chaining.handleChaining;
 const recover = lib.recovery.recover;
-const newlinesToSpaces = sig.utils.fmt.newlinesToSpaces;
+const newlinesToSpaces = sig.utils.newLinesToSpaces;
 
 const DEFAULT_TICKS_PER_SECOND = sig.core.time.DEFAULT_TICKS_PER_SECOND;
 
@@ -99,11 +99,11 @@ pub const ShredInserter = struct {
         ) RetransmitSender {
             const S = struct {
                 fn send(generic_state: *anyopaque, slot: []const []const u8) void {
-                    return sendFn(@alignCast(@ptrCast(generic_state)), slot);
+                    return sendFn(@ptrCast(@alignCast(generic_state)), slot);
                 }
             };
             return .{
-                .state = @alignCast(@ptrCast(state)),
+                .state = @ptrCast(@alignCast(state)),
                 .genericFn = S.send,
             };
         }
@@ -608,7 +608,7 @@ pub const ShredInserter = struct {
                     .ErasureConflict = .{ .original = .{ .code = original }, .conflict = conflict },
                 });
             } else {
-                self.logger.err().logf(&newlinesToSpaces(
+                self.logger.err().logf(newlinesToSpaces(
                     \\Unable to find the conflicting code shred that set {any}.
                     \\This should only happen in extreme cases where ledger cleanup has
                     \\caught up to the root. Skipping the erasure meta duplicate shred check
@@ -617,7 +617,7 @@ pub const ShredInserter = struct {
         }
         // TODO (agave): This is a potential slashing condition
         self.logger.warn().log("Received multiple erasure configs for the same erasure set!!!");
-        self.logger.warn().logf(&newlinesToSpaces(
+        self.logger.warn().logf(newlinesToSpaces(
             \\Slot: {}, shred index: {}, erasure_set: {any}, is_duplicate: {},
             \\stored config: {any}, new shred: {any}
         ), .{
@@ -802,7 +802,7 @@ pub const ShredInserter = struct {
                 };
                 const maybe_shred = try shred_store.get(shred_id);
                 const ending_shred = if (maybe_shred) |s| s else {
-                    self.logger.err().logf(&newlinesToSpaces(
+                    self.logger.err().logf(newlinesToSpaces(
                         \\Last received data shred {any} indicated by slot meta \
                         \\{any} is missing from ledger. This should only happen in \
                         \\extreme cases where ledger cleanup has caught up to the root. \
@@ -942,12 +942,14 @@ pub const ShredInserter = struct {
                     self.submitRecoveryMetrics(erasure_set.slot, erasure_meta, false, "complete", 0);
                 },
                 .still_need => |needed| {
-                    const str = sig.utils.fmt.boundedFmt("still need: {}", .{needed});
-                    self.submitRecoveryMetrics(erasure_set.slot, erasure_meta, false, str.slice(), 0);
+                    // TODO: the format should just be integrated with `submitRecoveryMetrics`
+                    var fmt: [256]u8 = undefined;
+                    const string = try std.fmt.bufPrint(&fmt, "still need: {}", .{needed});
+                    self.submitRecoveryMetrics(erasure_set.slot, erasure_meta, false, string, 0);
                 },
             }
         }
-        return std.ArrayList(Shred).init(self.allocator);
+        return std.array_list.Managed(Shred).init(self.allocator);
     }
 
     /// agave: recover_shreds
@@ -957,7 +959,7 @@ pub const ShredInserter = struct {
         erasure_meta: *const ErasureMeta,
         shred_store: ShredWorkingStore,
         reed_solomon_cache: *ReedSolomonCache,
-    ) !std.ArrayList(Shred) {
+    ) !std.array_list.Managed(Shred) {
         var available_shreds = ArrayList(Shred).init(self.allocator);
         defer {
             for (available_shreds.items) |shred| shred.deinit();
@@ -993,7 +995,7 @@ pub const ShredInserter = struct {
         } else |e| {
             self.logger.err().logf("shred recovery error: {}", .{e});
             self.submitRecoveryMetrics(index.slot, erasure_meta, true, "incomplete", 0);
-            return std.ArrayList(Shred).init(self.allocator);
+            return std.array_list.Managed(Shred).init(self.allocator);
         }
     }
 
@@ -1306,7 +1308,7 @@ test "insertShreds 100 shreds from mainnet" {
     defer state.deinit();
 
     const shred_bytes = test_shreds.mainnet_shreds;
-    var shreds = std.ArrayList(Shred).init(std.testing.allocator);
+    var shreds = std.array_list.Managed(Shred).init(std.testing.allocator);
     defer shreds.deinit();
     defer for (shreds.items) |s| s.deinit();
 

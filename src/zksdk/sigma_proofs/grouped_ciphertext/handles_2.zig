@@ -187,8 +187,8 @@ pub const Proof = struct {
         const c_negated_w = c_negated.mul(w);
         const z_r_w = self.z_r.mul(w);
 
-        var points: std.BoundedArray(Edwards25519, 12) = .{};
-        var scalars: std.BoundedArray([32]u8, 12) = .{};
+        var points: sig.utils.BoundedArray(Edwards25519, 12) = .{};
+        var scalars: sig.utils.BoundedArray([32]u8, 12) = .{};
 
         try points.appendSlice(&.{
             pedersen.G.p,

@@ -46,7 +46,7 @@ fn executeElfTest(ctx: ELFLoaderCtx, allocator: std.mem.Allocator) !ElfLoaderEff
     const elf_bytes = ctx_elf.data.getSlice();
 
     var elf_effects: ElfLoaderEffects = .{
-        .calldests = std.ArrayList(u64).init(allocator),
+        .calldests = std.array_list.Managed(u64).init(allocator),
     };
 
     const env = svm.Environment{ .config = .{}, .loader = .{} };

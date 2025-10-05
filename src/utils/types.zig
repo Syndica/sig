@@ -1,6 +1,7 @@
 //! Generic type reflection.
 
 const std = @import("std");
+const sig = @import("../sig.zig");
 
 pub fn getVariant(
     tagged_union: anytype,
@@ -82,20 +83,6 @@ pub fn ErrorReturn(function: anytype) type {
     return @typeInfo(ReturnType(@TypeOf(function))).error_union.error_set;
 }
 
-/// Casts the item's type into an optional if it is not optional. Otherwise the
-/// type in unchanged.
-///
-/// Useful for ensuring an anytype item is an optional and can be used in
-/// constructs like `if (maybe_x) |x|`
-///
-/// The value itself remains unchanged. This is only for type casting.
-pub fn toOptional(x: anytype) switch (@typeInfo(@TypeOf(x))) {
-    .optional, .null => @TypeOf(x),
-    else => ?@TypeOf(x),
-} {
-    return x;
-}
-
 /// Same as std.EnumFieldStruct, except every field may be a different type
 pub fn EnumStruct(comptime E: type, comptime Data: fn (E) type) type {
     @setEvalBranchQuota(@typeInfo(E).@"enum".fields.len);
@@ -143,10 +130,13 @@ pub fn arrayListInfo(comptime T: type) ?ArrayListInfo {
     };
     if (ptr_info.size != .slice) return null;
     if (ptr_info.alignment > std.math.maxInt(usize)) return null;
-    const alignment = if (@sizeOf(ptr_info.child) != 0) ptr_info.alignment else null;
+    const alignment: ?std.mem.Alignment = if (@sizeOf(ptr_info.child) != 0)
+        .fromByteUnits(ptr_info.alignment)
+    else
+        null;
     const management: AllocManagement = switch (T) {
-        std.ArrayListAligned(ptr_info.child, alignment) => .managed,
-        std.ArrayListAlignedUnmanaged(ptr_info.child, alignment) => .unmanaged,
+        std.array_list.AlignedManaged(ptr_info.child, alignment) => .managed,
+        std.ArrayListAligned(ptr_info.child, alignment) => .unmanaged,
         else => return null,
     };
     return .{
@@ -306,7 +296,11 @@ pub fn boundedArrayInfo(comptime T: type) ?BoundedArrayInfo {
         else => return null,
     };
 
-    const Actual = std.BoundedArrayAligned(Elem, alignment, capacity);
+    const Actual = sig.utils.bounded_array.BoundedArrayAligned(
+        Elem,
+        .fromByteUnits(alignment),
+        capacity,
+    );
     if (T != Actual) return null;
 
     return .{

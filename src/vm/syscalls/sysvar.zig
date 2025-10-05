@@ -477,7 +477,7 @@ fn testGetStakeHistory(filled: bool) !void {
     else
         sysvar.StakeHistory.MAX_ENTRIES / 2;
 
-    var entries: std.BoundedArray(
+    var entries: sig.utils.BoundedArray(
         sysvar.StakeHistory.Entry,
         sysvar.StakeHistory.MAX_ENTRIES,
     ) = .{};
@@ -556,7 +556,7 @@ fn testGetSlotHashes(filled: bool) !void {
     else
         sysvar.SlotHashes.MAX_ENTRIES / 2;
 
-    var entries: std.BoundedArray(
+    var entries: sig.utils.BoundedArray(
         sysvar.SlotHashes.Entry,
         sysvar.SlotHashes.MAX_ENTRIES,
     ) = .{};

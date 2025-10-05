@@ -43,7 +43,7 @@ pub fn BitVec(comptime T: type) type {
 pub fn BitVecConfig(comptime T: type) bincode.FieldConfig(DynamicArrayBitSet(T)) {
     const S = struct {
         pub fn serialize(
-            writer: anytype,
+            writer: *std.Io.Writer,
             data: DynamicArrayBitSet(T),
             params: bincode.Params,
         ) !void {
@@ -53,7 +53,7 @@ pub fn BitVecConfig(comptime T: type) bincode.FieldConfig(DynamicArrayBitSet(T))
 
         pub fn deserialize(
             limit_allocator: *bincode.LimitAllocator,
-            reader: anytype,
+            reader: *std.Io.Reader,
             params: bincode.Params,
         ) !DynamicArrayBitSet(T) {
             var bitvec = try bincode.readWithLimit(limit_allocator, BitVec(T), reader, params);
@@ -63,7 +63,7 @@ pub fn BitVecConfig(comptime T: type) bincode.FieldConfig(DynamicArrayBitSet(T))
             return dynamic_bitset;
         }
 
-        pub fn free(allocator: std.mem.Allocator, data: anytype) void {
+        pub fn free(allocator: std.mem.Allocator, data: DynamicArrayBitSet(T)) void {
             data.deinit(allocator);
         }
     };

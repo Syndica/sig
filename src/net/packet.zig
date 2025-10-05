@@ -50,12 +50,10 @@ pub const Packet = struct {
         maybe_dest: ?sig.net.SocketAddr,
         bincodable_data: anytype,
     ) !void {
-        var fbs = std.io.fixedBufferStream(&self.buffer);
-        try sig.bincode.write(fbs.writer(), bincodable_data, .{});
-        self.size = fbs.pos;
-        if (maybe_dest) |dest| {
-            self.addr = dest.toEndpoint();
-        }
+        var fixed: std.Io.Writer = .fixed(&self.buffer);
+        try sig.bincode.write(&fixed, bincodable_data, .{});
+        self.size = fixed.end;
+        if (maybe_dest) |dest| self.addr = dest.toEndpoint();
     }
 
     pub fn data(self: *const Packet) []const u8 {

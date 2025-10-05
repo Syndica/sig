@@ -213,14 +213,8 @@ fn iterateMemoryPairs(
 }
 
 const MemmoveContext = struct {
-    // memmove() is in Zig's compiler-rt, but not exposed via builtin or stdlib outside this symbol:
-    // https://github.com/ziglang/zig/blob/79460d4a3eef8eb927b02a7eda8bc9999a766672/lib/compiler_rt/memmove.zig#L9-L22
-    // TODO(0.15): Use `@memmove` builtin.
-    extern fn memmove(dst: ?[*]u8, src: ?[*]const u8, len: usize) callconv(.c) ?[*]u8;
-
     fn run(_: *@This(), src: []const u8, dst: []u8) !void {
-        std.debug.assert(dst.len == src.len);
-        _ = @This().memmove(dst.ptr, src.ptr, src.len);
+        @memmove(dst, src);
     }
 };
 
@@ -409,7 +403,7 @@ pub fn memmove(tc: *TransactionContext, memory_map: *MemoryMap, reg_map: *Regist
     } else {
         const dst_host = try memory_map.translateSlice(u8, .mutable, dst_addr, len, check_aligned);
         const src_host = try memory_map.translateSlice(u8, .constant, src_addr, len, check_aligned);
-        _ = MemmoveContext.memmove(dst_host.ptr, src_host.ptr, len);
+        @memmove(dst_host, src_host);
     }
 }
 

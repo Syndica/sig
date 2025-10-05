@@ -126,7 +126,7 @@ the `RecycleFBA` struct uses a fixed buffer allocation strategy but, for each al
 
 ```zig
 alloc_allocator: std.heap.FixedBufferAllocator,
-records: std.ArrayList(struct { is_free: bool, buf: []u8 }),
+records: std.array_list.Managed(struct { is_free: bool, buf: []u8 }),
 ```
 
 when requesting a new slice of memory from the recycle allocator, it will check for a record

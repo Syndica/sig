@@ -58,8 +58,8 @@ pub fn mulMulti(
         else => unreachable,
     };
 
-    var scalars: std.BoundedArray([64]i8, max_elements) = .{};
-    var points: std.BoundedArray(CachedPoint, max_elements) = .{};
+    var scalars: sig.utils.BoundedArray([64]i8, max_elements) = .{};
+    var points: sig.utils.BoundedArray(CachedPoint, max_elements) = .{};
 
     for (compressed_scalars) |s| {
         scalars.appendAssumeCapacity(asRadix(s, w));

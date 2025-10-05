@@ -111,7 +111,7 @@ pub const Config = struct {
                     "Override Sig's version string. The default is to find out through git.",
                 );
                 const version_slice = if (maybe_version_string) |version| version else v: {
-                    const version_string = b.fmt("{}", .{sig_version});
+                    const version_string = b.fmt("{f}", .{sig_version});
 
                     var code: u8 = undefined;
                     const git_describe_untrimmed = b.runAllowFail(&.{
@@ -147,7 +147,7 @@ pub const Config = struct {
                             const ancestor_ver = try std.SemanticVersion.parse(tagged_ancestor[1..]);
                             if (sig_version.order(ancestor_ver) != .gt) {
                                 std.debug.print(
-                                    "'{}' must be greater than tagged ancestor '{}'\n",
+                                    "'{f}' must be greater than tagged ancestor '{f}'\n",
                                     .{ sig_version, ancestor_ver },
                                 );
                                 std.process.exit(1);
@@ -196,7 +196,7 @@ pub fn build(b: *Build) !void {
     const sig_step = b.step("sig", "Run the sig executable");
     const test_step = b.step("test", "Run library tests");
     const fuzz_step = b.step("fuzz", "Gossip fuzz testing");
-    const benchmark_step = b.step("benchmark", "Benchmark client");
+    // const benchmark_step = b.step("benchmark", "Benchmark client");
     const geyser_reader_step = b.step("geyser_reader", "Read data from geyser");
     const vm_step = b.step("vm", "Run the VM client");
     const docs_step = b.step("docs", "Generate and install documentation for the Sig Library");
@@ -212,7 +212,7 @@ pub fn build(b: *Build) !void {
     const httpz_mod = b.dependency("httpz", dep_opts).module("httpz");
     const poseidon_mod = b.dependency("poseidon", dep_opts).module("poseidon");
     const xev_mod = b.dependency("xev", dep_opts).module("xev");
-    const pretty_table_mod = b.dependency("prettytable", dep_opts).module("prettytable");
+    // const pretty_table_mod = b.dependency("prettytable", dep_opts).module("prettytable");
 
     const lsquic_dep = b.dependency("lsquic", .{
         .target = config.target,
@@ -237,7 +237,7 @@ pub fn build(b: *Build) !void {
     const rocksdb_mod = rocksdb_dep.module("bindings");
     // TODO: UB might be fixed by future RocksDB version upgrade.
     // reproducable via: zig build test -Dfilter="ledger"
-    rocksdb_dep.artifact("rocksdb").root_module.sanitize_c = false;
+    rocksdb_dep.artifact("rocksdb").root_module.sanitize_c = .off;
 
     const secp256k1_mod = b.dependency("secp256k1", .{
         .target = config.target,
@@ -251,7 +251,7 @@ pub fn build(b: *Build) !void {
         .tracy_no_system_tracing = false,
         .tracy_callstack = 6,
     }).module("tracy");
-    tracy_mod.sanitize_c = false; // Workaround UB in Tracy.
+    tracy_mod.sanitize_c = .off; // Workaround UB in Tracy.
 
     const cli_mod = b.createModule(.{
         .root_source_file = b.path("src/cli.zig"),
@@ -271,7 +271,6 @@ pub fn build(b: *Build) !void {
         .{ .name = "httpz",         .module = httpz_mod },
         .{ .name = "lsquic",        .module = lsquic_mod },
         .{ .name = "poseidon",      .module = poseidon_mod },
-        .{ .name = "prettytable",   .module = pretty_table_mod },
         .{ .name = "secp256k1",     .module = secp256k1_mod },
         .{ .name = "ssl",           .module = ssl_mod },
         .{ .name = "tracy",         .module = tracy_mod },
@@ -356,26 +355,26 @@ pub fn build(b: *Build) !void {
     }
     addInstallAndRun(b, fuzz_step, fuzz_exe, config);
 
-    const benchmark_exe = b.addExecutable(.{
-        .name = "benchmark",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/benchmarks.zig"),
-            .target = config.target,
-            .optimize = config.optimize,
-            .imports = imports,
-            .error_tracing = config.error_tracing,
-            .sanitize_thread = config.enable_tsan,
-            .link_libc = true,
-        }),
-    });
-    // make sure pyroscope's got enough info to profile
-    benchmark_exe.build_id = .fast;
+    // const benchmark_exe = b.addExecutable(.{
+    //     .name = "benchmark",
+    //     .root_module = b.createModule(.{
+    //         .root_source_file = b.path("src/benchmarks.zig"),
+    //         .target = config.target,
+    //         .optimize = config.optimize,
+    //         .imports = imports,
+    //         .error_tracing = config.error_tracing,
+    //         .sanitize_thread = config.enable_tsan,
+    //         .link_libc = true,
+    //     }),
+    // });
+    // // make sure pyroscope's got enough info to profile
+    // benchmark_exe.build_id = .fast;
 
-    switch (config.ledger_db) {
-        .rocksdb => benchmark_exe.root_module.addImport("rocksdb", rocksdb_mod),
-        .hashmap => {},
-    }
-    addInstallAndRun(b, benchmark_step, benchmark_exe, config);
+    // switch (config.ledger_db) {
+    //     .rocksdb => benchmark_exe.root_module.addImport("rocksdb", rocksdb_mod),
+    //     .hashmap => {},
+    // }
+    // addInstallAndRun(b, benchmark_step, benchmark_exe, config);
 
     const geyser_reader_exe = b.addExecutable(.{
         .name = "geyser",
@@ -471,7 +470,12 @@ fn generateTable(b: *Build) Build.LazyPath {
             .root_source_file = b.path("scripts/generator_chain.zig"),
         }),
     });
-    return b.addRunArtifact(gen).captureStdOut();
+
+    // TODO: remove workaround in 0.16
+    const run = b.addRunArtifact(gen);
+    const stdout = run.captureStdOut();
+    run.captured_stdout.?.basename = "table.zig";
+    return stdout;
 }
 
 const LedgerDB = enum {
@@ -582,9 +586,11 @@ const ssh = struct {
         if (static.exe == null) {
             static.exe = b.addExecutable(.{
                 .name = "send-file",
-                .root_source_file = b.path("scripts/send-file.zig"),
-                .target = b.graph.host,
-                .link_libc = true,
+                .root_module = b.createModule(.{
+                    .root_source_file = b.path("scripts/send-file.zig"),
+                    .target = b.graph.host,
+                    .link_libc = true,
+                }),
             });
         }
 

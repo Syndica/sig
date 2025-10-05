@@ -16,6 +16,8 @@ const ThreadSafeContactInfo = sig.gossip.data.ThreadSafeContactInfo;
 
 const SnapshotFiles = sig.accounts_db.snapshot.SnapshotFiles;
 const FullAndIncrementalManifest = sig.accounts_db.snapshot.FullAndIncrementalManifest;
+const IncrementalSnapshotFileInfo = sig.accounts_db.snapshot.data.IncrementalSnapshotFileInfo;
+const FullSnapshotFileInfo = sig.accounts_db.snapshot.data.FullSnapshotFileInfo;
 
 const parallelUnpackZstdTarBall = sig.accounts_db.snapshot.parallelUnpackZstdTarBall;
 
@@ -65,7 +67,7 @@ pub fn findPeersToDownloadFromAssumeCapacity(
     /// `.capacity` must be >= `contact_infos.len`.
     /// The arraylist is first cleared, and then the outputs
     /// are appended to it.
-    valid_peers: *std.ArrayList(PeerSnapshotHash),
+    valid_peers: *std.array_list.Managed(PeerSnapshotHash),
 ) !PeerSearchResult {
     // clear the list
     valid_peers.clearRetainingCapacity();
@@ -201,16 +203,16 @@ pub fn downloadSnapshotsFromGossip(
 
     const my_contact_info = gossip_service.my_contact_info;
 
-    var available_snapshot_peers = std.ArrayList(PeerSnapshotHash).init(allocator);
+    var available_snapshot_peers = std.array_list.Managed(PeerSnapshotHash).init(allocator);
     defer available_snapshot_peers.deinit();
 
-    var slow_peer_pubkeys = std.ArrayList(Pubkey).init(allocator);
+    var slow_peer_pubkeys = std.array_list.Managed(Pubkey).init(allocator);
     defer slow_peer_pubkeys.deinit();
 
     var function_duration = try std.time.Timer.start();
     var download_attempts: u64 = 0;
     while (true) {
-        std.time.sleep(5 * std.time.ns_per_s); // wait while gossip table updates
+        std.Thread.sleep(5 * std.time.ns_per_s); // wait while gossip table updates
 
         if (download_attempts > max_number_of_download_attempts) {
             logger.err().logf(
@@ -264,54 +266,52 @@ pub fn downloadSnapshotsFromGossip(
                 .logf("searched for snapshot peers: {s}", .{write_buf[0..i]});
         }
 
-        const bStr = sig.utils.fmt.boundedString;
-        const bFmt = sig.utils.fmt.boundedFmt;
-        const FullSnapshotFileInfo = sig.accounts_db.snapshot.data.FullSnapshotFileInfo;
-        const IncrementalSnapshotFileInfo =
-            sig.accounts_db.snapshot.data.IncrementalSnapshotFileInfo;
-
         const download_buffer = try allocator.alloc(u8, 1 * BYTE_PER_MIB);
         defer allocator.free(download_buffer);
 
         for (available_snapshot_peers.items) |peer| {
             const rpc_socket = peer.contact_info.rpc_addr.?;
-            const rpc_url = rpc_socket.toString();
 
-            // download the full snapshot
-            const snapshot_filename = FullSnapshotFileInfo.snapshotArchiveName(.{
+            // TODO: collapse these
+            const full_info: FullSnapshotFileInfo = .{
                 .slot = peer.full_snapshot.slot,
                 .hash = peer.full_snapshot.hash,
-            });
-            const snapshot_url = bFmt("http://{s}/{s}", .{
-                bStr(&rpc_url), bStr(&snapshot_filename),
-            });
-            const snapshot_uri = std.Uri.parse(snapshot_url.constSlice()) catch {
-                const url_str = snapshot_url.constSlice();
+            };
+
+            // download the full snapshot
+            var snapshot_url_buffer: [2048]u8 = undefined;
+            const snapshot_url = std.fmt.bufPrint(
+                &snapshot_url_buffer,
+                "http://{f}/{f}",
+                .{ rpc_socket, full_info },
+            ) catch unreachable;
+
+            const snapshot_uri = std.Uri.parse(snapshot_url) catch {
+                const url_str = snapshot_url;
                 std.debug.panic("Failed to Upri.parse '{s}'", .{url_str});
             };
 
             logger.info().logf(
                 "downloading full_snapshot from: {s}",
-                .{snapshot_url.constSlice()},
+                .{snapshot_url},
             );
 
+            const full_archive_file = try full_info.openFile(output_dir);
+
             defer download_attempts += 1;
-            const full_archive_file = downloadFile(
+            downloadFile(
                 allocator,
                 logger,
                 snapshot_uri,
-                output_dir,
-                snapshot_filename.constSlice(),
+                full_archive_file,
                 min_mb_per_sec,
                 download_buffer,
             ) catch |err| {
                 switch (err) {
-                    error.TooSlow => {
-                        try slow_peer_pubkeys.append(peer.contact_info.pubkey);
-                    },
+                    error.TooSlow => try slow_peer_pubkeys.append(peer.contact_info.pubkey),
                     else => logger.info().logf(
-                        "failed to download full_snapshot: {s}",
-                        .{@errorName(err)},
+                        "failed to download full_snapshot: {t}",
+                        .{err},
                     ),
                 }
                 continue;
@@ -319,33 +319,35 @@ pub fn downloadSnapshotsFromGossip(
             errdefer comptime unreachable;
 
             // download the incremental snapshot
-            const inc_archive_file: ?std.fs.File = blk: {
+            const inc_archive_file: ?std.fs.File = if (peer.inc_snapshot) |inc_snapshot| blk: {
                 // PERF: maybe do this in another thread? while downloading the full snapshot
-                const inc_snapshot = peer.inc_snapshot orelse break :blk null;
 
-                const inc_snapshot_filename = IncrementalSnapshotFileInfo.snapshotArchiveName(.{
+                var info: IncrementalSnapshotFileInfo = .{
                     .base_slot = peer.full_snapshot.slot,
                     .slot = inc_snapshot.slot,
                     .hash = inc_snapshot.hash,
-                });
-                const inc_snapshot_url = bFmt("http://{s}/{s}", .{
-                    bStr(&rpc_url), bStr(&inc_snapshot_filename),
-                });
-                const inc_snapshot_uri = std.Uri.parse(inc_snapshot_url.constSlice()) catch {
-                    const url_str = inc_snapshot_url.constSlice();
-                    std.debug.panic("Failed to Upri.parse '{s}'", .{url_str});
                 };
 
-                logger.info().logf(
-                    "downloading inc_snapshot from: {s}",
-                    .{inc_snapshot_url.constSlice()},
-                );
-                break :blk downloadFile(
+                var url_buffer: [2048]u8 = undefined;
+                const url = std.fmt.bufPrint(&url_buffer, "http://{s}/{f}", .{
+                    rpc_socket,
+                    info,
+                }) catch unreachable;
+
+                const inc_snapshot_uri = std.Uri.parse(url) catch
+                    std.debug.panic("Failed to Uri.parse '{s}'", .{url});
+
+                const inc_file = info.openFile(output_dir) catch {
+                    logger.err().logf("failed to open incremental snapshot output: {f}", .{info});
+                    break :blk null;
+                };
+
+                logger.info().logf("downloading inc_snapshot from: {s}", .{url});
+                downloadFile(
                     allocator,
                     logger,
                     inc_snapshot_uri,
-                    output_dir,
-                    inc_snapshot_filename.constSlice(),
+                    inc_file,
                     // NOTE: no min limit (we already downloaded the full snapshot at a good speed so this should be ok)
                     null,
                     download_buffer,
@@ -354,7 +356,9 @@ pub fn downloadSnapshotsFromGossip(
                     logger.warn().logf("failed to download inc_snapshot: {s}", .{@errorName(err)});
                     break :blk null;
                 };
-            };
+
+                break :blk inc_file;
+            } else null;
 
             logger.info().logf("snapshot downloaded finished", .{});
             return .{ full_archive_file, inc_archive_file };
@@ -362,81 +366,100 @@ pub fn downloadSnapshotsFromGossip(
     }
 }
 
-/// downloads a file from a url into output_dir/filename
-/// returns error if it fails.
-/// the main errors include {HeaderRequestFailed, NoContentLength, TooSlow} or a curl-related error
+/// Downloads a file from the provided URI into the output file.
 fn downloadFile(
     allocator: std.mem.Allocator,
     logger: Logger,
     uri: std.Uri,
-    output_dir: std.fs.Dir,
-    filename: []const u8,
+    output_file: std.fs.File,
     maybe_min_mib_per_second: ?usize,
     /// Used as an intermediate buffer to read the response body before writing to disk.
     /// Recommended size is at least 1 MiB for payloads which are expected to occupy 1 GiB or more.
     download_buffer: []u8,
-) !std.fs.File {
+) !void {
     var http_client: std.http.Client = .{ .allocator = allocator };
     defer http_client.deinit();
 
-    var server_header_buffer: [4096]u8 = undefined;
-    var request = try http_client.open(.GET, uri, .{
-        .server_header_buffer = &server_header_buffer,
-    });
+    var request = try http_client.request(.GET, uri, .{});
     defer request.deinit();
+    // try http_client.initDefaultProxies(allocator);
 
-    try request.send();
-    try request.finish();
-    try request.wait();
+    try request.sendBodiless();
 
-    const download_size = request.response.content_length orelse
-        return error.NoContentLength;
+    var redirect_buffer: [1024]u8 = undefined;
+    var response = try request.receiveHead(&redirect_buffer);
+
+    if (response.head.status != .ok) {
+        logger.err().logf(
+            "bad HTTP response code: '{d} {s}'",
+            .{ response.head.status, response.head.status.phrase() orelse "" },
+        );
+        return error.HeadRequestFailed;
+    }
+
+    const download_size = response.head.content_length orelse return error.NoContentLength;
 
     if (download_buffer.len < 1 * BYTE_PER_MIB and
         download_size >= BYTE_PER_GIB)
     {
-        logger.warn().logf("Downloading file of size {} using a buffer of size {};" ++
+        logger.warn().logf("Downloading file of size {Bi} using a buffer of size {Bi};" ++
             " recommended buffer size for such a payload is at least 1 MiB.", .{
-            std.fmt.fmtIntSizeBin(download_size),
-            std.fmt.fmtIntSizeBin(download_buffer.len),
+            download_size,
+            download_buffer.len,
         });
     }
 
-    const output_file = try output_dir.createFile(filename, .{});
-    errdefer output_file.close();
     try output_file.setEndPos(download_size);
-    var buffered_out = std.io.bufferedWriter(output_file.writer());
 
-    var total_bytes_read: u64 = 0;
+    // TODO: see if `stream` makes better use of writer or readers buffer.
+
+    var file_writer = output_file.writer(download_buffer);
+    const writer = &file_writer.interface;
+
+    var response_buffer: [4096]u8 = undefined;
+    const reader = response.reader(&response_buffer);
+
+    if (response.head.content_type) |t| {
+        _ = t;
+        @panic("TODO: check here");
+
+        // const content_type = response.head.content_type orelse
+        //     return f.fail(f.location_tok, try eb.addString("missing 'Content-Type' header"));
+
+        // // Extract the MIME type, ignoring charset and boundary directives
+        // const mime_type_end = std.mem.indexOf(u8, content_type, ";") orelse content_type.len;
+        // const mime_type = content_type[0..mime_type_end];
+    }
+
+    var total_bytes_written: u64 = 0;
     var lap_timer = sig.time.Timer.start();
     var full_timer = sig.time.Timer.start();
     var checked_speed = false;
 
     while (true) {
-        const max_bytes_to_read = @min(download_buffer.len, download_size - total_bytes_read);
-        const bytes_read = try request.readAll(download_buffer[0..max_bytes_to_read]);
-        total_bytes_read += bytes_read;
-
-        try buffered_out.writer().writeAll(download_buffer[0..bytes_read]);
-        if (total_bytes_read == download_size) break;
-        std.debug.assert(total_bytes_read < download_size);
+        const bytes_written = reader.stream(writer, .unlimited) catch |err| switch (err) {
+            error.EndOfStream => break,
+            else => |e| return e,
+        };
+        total_bytes_written += bytes_written;
 
         const elapsed_since_start = full_timer.read();
         const elapsed_since_prev_lap = lap_timer.read();
+
         if (elapsed_since_prev_lap.asNanos() <= DOWNLOAD_WARMUP_TIME.asNanos()) continue;
         // reset at the end of the iteration, after the update, right before the next read & write.
         defer lap_timer.reset();
 
-        const total_bytes_left = download_size - total_bytes_read;
-        const time_left_ns = total_bytes_left * (elapsed_since_start.asNanos() / total_bytes_read);
+        const total_bytes_left = download_size - total_bytes_written;
+        const time_left_ns = total_bytes_left * (elapsed_since_start.asNanos() / total_bytes_written);
         logger.info().logf(
-            "[download progress]: {d}% done ({:.4}/s - {:.4}/{:.4}) (time left: {d})",
+            "[download progress]: {d}% done ({Bi:.4}/s - {Bi:.4}/{Bi:.4}) (time left: {D})",
             .{
-                total_bytes_read * 100 / download_size,
-                std.fmt.fmtIntSizeBin(total_bytes_read / elapsed_since_start.asSecs()),
-                std.fmt.fmtIntSizeBin(total_bytes_read),
-                std.fmt.fmtIntSizeBin(download_size),
-                std.fmt.fmtDuration(time_left_ns),
+                total_bytes_written * 100 / download_size,
+                total_bytes_written / elapsed_since_start.asSecs(),
+                total_bytes_written,
+                download_size,
+                time_left_ns,
             },
         );
 
@@ -444,25 +467,24 @@ fn downloadFile(
         checked_speed = true;
 
         const min_bytes_per_second = BYTE_PER_MIB * (maybe_min_mib_per_second orelse continue);
-        const actual_bytes_per_second = total_bytes_read / elapsed_since_start.asSecs();
+        const actual_bytes_per_second = total_bytes_written / elapsed_since_start.asSecs();
 
         if (actual_bytes_per_second < min_bytes_per_second) {
             // not fast enough => abort
             logger.info().logf(
-                "[download progress]: speed is too slow ({:.4}/s) -- disconnecting",
-                .{std.fmt.fmtIntSizeBin(actual_bytes_per_second)},
+                "[download progress]: speed is too slow ({Bi:.4}/s) -- disconnecting",
+                .{actual_bytes_per_second},
             );
             return error.TooSlow;
         }
 
         logger.info().logf(
-            "[download progress]: speed is ok ({:.4}/s) -- maintaining",
-            .{std.fmt.fmtIntSizeBin(actual_bytes_per_second)},
+            "[download progress]: speed is ok ({Bi:.4}/s) -- maintaining",
+            .{actual_bytes_per_second},
         );
     }
 
-    try buffered_out.flush();
-    return output_file;
+    try writer.flush();
 }
 
 pub fn getOrDownloadAndUnpackSnapshot(
@@ -597,15 +619,13 @@ pub fn getOrDownloadAndUnpackSnapshot(
 
         timer.reset();
         logger.info().logf(
-            "unpacking {s}...",
-            .{snapshot_files.full.snapshotArchiveName().constSlice()},
+            "unpacking {f}...",
+            .{snapshot_files.full},
         );
         {
-            const archive_file = try snapshot_dir.openFile(
-                snapshot_files.full.snapshotArchiveName().constSlice(),
-                .{},
-            );
+            const archive_file = try snapshot_files.full.openFile(snapshot_dir);
             defer archive_file.close();
+
             try parallelUnpackZstdTarBall(
                 allocator,
                 .from(logger),
@@ -615,20 +635,14 @@ pub fn getOrDownloadAndUnpackSnapshot(
                 true,
             );
         }
-        logger.info().logf("unpacked snapshot in {s}", .{std.fmt.fmtDuration(timer.read())});
+        logger.info().logf("unpacked snapshot in {D}", .{timer.read()});
 
         // TODO: can probs do this in parallel with full snapshot
         if (snapshot_files.incremental()) |incremental_snapshot| {
             timer.reset();
-            logger.info().logf(
-                "unpacking {s}...",
-                .{incremental_snapshot.snapshotArchiveName().constSlice()},
-            );
+            logger.info().logf("unpacking {f}...", .{incremental_snapshot});
 
-            const archive_file = try snapshot_dir.openFile(
-                incremental_snapshot.snapshotArchiveName().constSlice(),
-                .{},
-            );
+            const archive_file = try incremental_snapshot.openFile(snapshot_dir);
             defer archive_file.close();
 
             try parallelUnpackZstdTarBall(
@@ -639,7 +653,7 @@ pub fn getOrDownloadAndUnpackSnapshot(
                 n_threads_snapshot_unpack,
                 false,
             );
-            logger.info().logf("unpacked snapshot in {s}", .{std.fmt.fmtDuration(timer.read())});
+            logger.info().logf("unpacked snapshot in {D}", .{timer.read()});
         }
     } else {
         logger.info().log("not unpacking snapshot...");
@@ -654,7 +668,7 @@ pub fn getOrDownloadAndUnpackSnapshot(
         snapshot_dir,
         snapshot_files,
     );
-    logger.info().logf("read snapshot metdata in {s}", .{std.fmt.fmtDuration(timer.read())});
+    logger.info().logf("read snapshot metdata in {D}", .{timer.read()});
 
     return .{ snapshot_fields, snapshot_files };
 }
@@ -680,10 +694,10 @@ test "accounts_db.download: test remove untrusted peers" {
         ci.shred_version = 19; // matching shred version
     }
 
-    var valid_peers = try std.ArrayList(PeerSnapshotHash).initCapacity(allocator, 10);
+    var valid_peers = try std.array_list.Managed(PeerSnapshotHash).initCapacity(allocator, 10);
     defer valid_peers.deinit();
 
-    var trusted_validators = try std.ArrayList(Pubkey).initCapacity(allocator, 10);
+    var trusted_validators = try std.array_list.Managed(Pubkey).initCapacity(allocator, 10);
     defer trusted_validators.deinit();
 
     for (contact_infos) |ci| {
@@ -756,7 +770,7 @@ test "accounts_db.download: test finding peers" {
         ci.shred_version = 19; // matching shred version
     }
 
-    var valid_peers = try std.ArrayList(PeerSnapshotHash).initCapacity(allocator, 10);
+    var valid_peers = try std.array_list.Managed(PeerSnapshotHash).initCapacity(allocator, 10);
     defer valid_peers.deinit();
 
     var result = try findPeersToDownloadFromAssumeCapacity(

@@ -39,7 +39,7 @@ const Benchmark = enum {
 };
 
 fn exitWithUsage() noreturn {
-    var stdout = std.io.getStdOut().writer();
+    var stdout = std.Io.getStdOut().writer();
     stdout.writeAll(
         \\ benchmark name [options]
         \\
@@ -139,9 +139,9 @@ pub fn main() !void {
     const max_time_per_bench = Duration.fromSecs(5); // !!
     const run_all_benchmarks = filter == .all;
 
-    var maybe_metrics: ?std.ArrayList(Metric) = null;
+    var maybe_metrics: ?std.array_list.Managed(Metric) = null;
     if (collect_metrics) {
-        maybe_metrics = std.ArrayList(Metric).init(allocator);
+        maybe_metrics = std.array_list.Managed(Metric).init(allocator);
     }
     defer {
         if (maybe_metrics) |metrics| {
@@ -376,7 +376,7 @@ pub fn benchmark(
     comptime B: type,
     max_time_per_benchmark: Duration,
     time_unit: BenchTimeUnit,
-    maybe_metrics: *?std.ArrayList(Metric),
+    maybe_metrics: *?std.array_list.Managed(Metric),
 ) !void {
     const has_args = if (@hasDecl(B, "args")) true else false;
     const args = if (has_args) B.args else [_]void{{}};
@@ -417,7 +417,7 @@ pub fn benchmark(
         }
     };
 
-    var is_multi_return = try std.ArrayList(bool).initCapacity(allocator, functions.len);
+    var is_multi_return = try std.array_list.Managed(bool).initCapacity(allocator, functions.len);
     defer is_multi_return.deinit();
 
     inline for (functions) |def| {
@@ -792,8 +792,8 @@ pub fn benchmark(
                 }
             }
 
-            var field_names_cells = std.ArrayList(pt.Cell).init(allocator);
-            var stats_cells = std.ArrayList(pt.Cell).init(allocator);
+            var field_names_cells = std.array_list.Managed(pt.Cell).init(allocator);
+            var stats_cells = std.array_list.Managed(pt.Cell).init(allocator);
             for (0..i) |cell_i| {
                 try field_names_cells.append(try pt.Cell.init(allocator, field_name_data[cell_i]));
                 try stats_cells.append(try pt.Cell.init(allocator, stat_data_row[cell_i]));
@@ -834,7 +834,7 @@ pub fn saveMetricsJson(
     metrics: []const Metric,
     output_path: []const u8,
 ) !void {
-    var json_metrics = try std.ArrayList(JsonMetric).initCapacity(allocator, metrics.len);
+    var json_metrics = try std.array_list.Managed(JsonMetric).initCapacity(allocator, metrics.len);
     defer json_metrics.deinit();
     for (metrics) |m| json_metrics.appendAssumeCapacity(.{
         .name = m.name,

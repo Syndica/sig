@@ -148,7 +148,7 @@ fn executeCreateAccountWithSeed(
         base,
         owner,
         seed,
-        "Create: address {} does not match derived address {}",
+        "Create: address {f} does not match derived address {f}",
     );
     try createAccount(
         allocator,
@@ -209,7 +209,7 @@ fn executeTransferWithSeed(
     const from_pubkey = ic.ixn_info.account_metas.buffer[from_index].pubkey;
 
     if (!try ic.ixn_info.isIndexSigner(from_base_index)) {
-        try ic.tc.log("Transfer: `from` account {} must sign", .{from_base_pubkey});
+        try ic.tc.log("Transfer: `from` account {f} must sign", .{from_base_pubkey});
         return InstructionError.MissingRequiredSignature;
     }
 
@@ -219,7 +219,7 @@ fn executeTransferWithSeed(
         from_base_pubkey,
         from_owner,
         from_seed,
-        "Transfer: 'from' address {} does not match derived address {}",
+        "Transfer: 'from' address {f} does not match derived address {f}",
     );
 
     try transferVerified(
@@ -369,7 +369,7 @@ fn executeAllocateWithSeed(
         base,
         owner,
         seed,
-        "Create: address {} does not match derived address {}",
+        "Create: address {f} does not match derived address {f}",
     );
 
     try allocate(allocator, ic, &account, space, base);
@@ -394,7 +394,7 @@ fn executeAssignWithSeed(
         base,
         owner,
         seed,
-        "Create: address {} does not match derived address {}",
+        "Create: address {f} does not match derived address {f}",
     );
 
     try assign(ic, &account, owner, base);
@@ -417,7 +417,7 @@ fn createAccount(
 
         if (account.account.lamports > 0) {
             try ic.tc.log(
-                "Create Account: account {} already in use",
+                "Create Account: account {f} already in use",
                 .{account.pubkey},
             );
             ic.tc.custom_error = @intFromEnum(SystemProgramError.AccountAlreadyInUse);
@@ -446,7 +446,7 @@ fn assign(
     if (account.account.owner.equals(&owner)) return;
 
     if (!ic.ixn_info.isPubkeySigner(authority)) {
-        try ic.tc.log("Assign: 'base' account {} must sign", .{account.pubkey});
+        try ic.tc.log("Assign: 'base' account {f} must sign", .{account.pubkey});
         return InstructionError.MissingRequiredSignature;
     }
 
@@ -462,7 +462,7 @@ fn transfer(
 ) (error{OutOfMemory} || InstructionError)!void {
     if (!try ic.ixn_info.isIndexSigner(from_index)) {
         try ic.tc.log(
-            "Transfer: `from` account {} must sign",
+            "Transfer: `from` account {f} must sign",
             .{ic.ixn_info.account_metas.buffer[from_index].pubkey},
         );
         return InstructionError.MissingRequiredSignature;
@@ -519,7 +519,7 @@ fn advanceNonceAccount(
 ) (error{OutOfMemory} || InstructionError)!void {
     if (!account.context.is_writable) {
         try ic.tc.log(
-            "Advance nonce account: Account {} must be writeable",
+            "Advance nonce account: Account {f} must be writeable",
             .{account.pubkey},
         );
         return InstructionError.InvalidArgument;
@@ -529,7 +529,7 @@ fn advanceNonceAccount(
     switch (versioned_nonce.getState()) {
         .uninitialized => {
             try ic.tc.log(
-                "Advance nonce account: Account {} state is invalid",
+                "Advance nonce account: Account {f} state is invalid",
                 .{account.pubkey},
             );
             return InstructionError.InvalidAccountData;
@@ -537,7 +537,7 @@ fn advanceNonceAccount(
         .initialized => |data| {
             if (!ic.ixn_info.isPubkeySigner(data.authority)) {
                 try ic.tc.log(
-                    "Advance nonce account: Account {} must be a signer",
+                    "Advance nonce account: Account {f} must be a signer",
                     .{data.authority},
                 );
                 return InstructionError.MissingRequiredSignature;
@@ -582,7 +582,7 @@ fn withdrawNonceAccount(
 
         if (!from_account.context.is_writable) {
             try ic.tc.log(
-                "Withdraw nonce account: Account {} must be writeable",
+                "Withdraw nonce account: Account {f} must be writeable",
                 .{from_account.pubkey},
             );
             return InstructionError.InvalidArgument;
@@ -596,7 +596,7 @@ fn withdrawNonceAccount(
             .uninitialized => blk: {
                 if (lamports > from_account.account.lamports) {
                     try ic.tc.log(
-                        "Withdraw nonce account: insufficient lamports {}, need {}",
+                        "Withdraw nonce account: insufficient lamports {d}, need {d}",
                         .{ from_account.account.lamports, lamports },
                     );
                     return InstructionError.InsufficientFunds;
@@ -638,7 +638,7 @@ fn withdrawNonceAccount(
         };
 
         if (!ic.ixn_info.isPubkeySigner(authority)) {
-            try ic.tc.log("Withdraw nonce account: Account {} must sign", .{authority});
+            try ic.tc.log("Withdraw nonce account: Account {f} must sign", .{authority});
             return InstructionError.MissingRequiredSignature;
         }
 
@@ -660,7 +660,7 @@ fn initializeNonceAccount(
 ) (error{OutOfMemory} || InstructionError)!void {
     if (!account.context.is_writable) {
         try ic.tc.log(
-            "Initialize nonce account: Account {} must be writeable",
+            "Initialize nonce account: Account {f} must be writeable",
             .{account.pubkey},
         );
         return InstructionError.InvalidArgument;
@@ -672,7 +672,7 @@ fn initializeNonceAccount(
             const min_balance = rent.minimumBalance(account.constAccountData().len);
             if (min_balance > account.account.lamports) {
                 try ic.tc.log(
-                    "Initialize nonce account: insufficient lamports {}, need {}",
+                    "Initialize nonce account: insufficient lamports {d}, need {d}",
                     .{
                         account.account.lamports,
                         min_balance,
@@ -690,7 +690,7 @@ fn initializeNonceAccount(
         },
         .initialized => |_| {
             try ic.tc.log(
-                "Initialize nonce account: Account {} state is invalid",
+                "Initialize nonce account: Account {f} state is invalid",
                 .{account.pubkey},
             );
             return InstructionError.InvalidAccountData;
@@ -707,7 +707,7 @@ pub fn authorizeNonceAccount(
 ) (error{OutOfMemory} || InstructionError)!void {
     if (!account.context.is_writable) {
         try ic.tc.log(
-            "Authorize nonce account: Account {} must be writeable",
+            "Authorize nonce account: Account {f} must be writeable",
             .{account.pubkey},
         );
         return InstructionError.InvalidArgument;
@@ -718,7 +718,7 @@ pub fn authorizeNonceAccount(
     const nonce_data = switch (versioned_nonce.getState()) {
         .uninitialized => {
             try ic.tc.log(
-                "Authorize nonce account: Account {} state is invalid",
+                "Authorize nonce account: Account {f} state is invalid",
                 .{account.pubkey},
             );
             return InstructionError.InvalidAccountData;
@@ -728,7 +728,7 @@ pub fn authorizeNonceAccount(
 
     if (!ic.ixn_info.isPubkeySigner(nonce_data.authority)) {
         try ic.tc.log(
-            "Authorize nonce account: Account {} must sign",
+            "Authorize nonce account: Account {f} must sign",
             .{nonce_data.authority},
         );
         return InstructionError.MissingRequiredSignature;
@@ -755,19 +755,19 @@ fn allocate(
     authority: Pubkey,
 ) (error{OutOfMemory} || InstructionError)!void {
     if (!ic.ixn_info.isPubkeySigner(authority)) {
-        try ic.tc.log("Allocate: 'base' account {} must sign", .{account.pubkey});
+        try ic.tc.log("Allocate: 'base' account {f} must sign", .{account.pubkey});
         return InstructionError.MissingRequiredSignature;
     }
 
     if (account.constAccountData().len > 0 or !account.account.owner.equals(&system_program.ID)) {
-        try ic.tc.log("Allocate: account {} already in use", .{account.pubkey});
+        try ic.tc.log("Allocate: account {f} already in use", .{account.pubkey});
         ic.tc.custom_error = @intFromEnum(SystemProgramError.AccountAlreadyInUse);
         return InstructionError.Custom;
     }
 
     if (space > system_program.MAX_PERMITTED_DATA_LENGTH) {
         try ic.tc.log(
-            "Allocate: requested {}, max allowed {}",
+            "Allocate: requested {d}, max allowed {d}",
             .{ space, system_program.MAX_PERMITTED_DATA_LENGTH },
         );
         ic.tc.custom_error = @intFromEnum(SystemProgramError.InvalidAccountDataLength);

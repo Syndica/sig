@@ -17,7 +17,10 @@ pub const Ancestors = struct {
         HashMap(Slot, void),
         .{
             .key = .{},
-            .value = .{ .serializer = voidSerialize, .deserializer = voidDeserialize },
+            .value = .{
+                .serializer = voidSerialize,
+                .deserializer = voidDeserialize,
+            },
         },
     );
 
@@ -59,12 +62,11 @@ pub const Ancestors = struct {
         return self.ancestors.contains(slot);
     }
 
-    fn voidDeserialize(l: *bincode.LimitAllocator, reader: anytype, params: bincode.Params) !void {
+    fn voidDeserialize(l: *bincode.LimitAllocator, reader: *std.Io.Reader, params: bincode.Params) !void {
         _ = try bincode.readWithLimit(l, usize, reader, params);
     }
 
-    fn voidSerialize(writer: anytype, data: anytype, params: bincode.Params) !void {
-        _ = data;
+    fn voidSerialize(writer: *std.Io.Writer, _: void, params: bincode.Params) !void {
         try bincode.write(writer, @as(usize, 0), params);
     }
 

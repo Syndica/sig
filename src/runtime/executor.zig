@@ -126,7 +126,7 @@ fn processNextInstruction(
             return InstructionError.UnsupportedProgramId;
         defer program_account.release();
 
-        const program_key = program_account.pubkey.base58String().constSlice();
+        const program_key = &program_account.pubkey.data;
         if (ids.NATIVE_LOADER_ID.equals(&program_account.account.owner) or
             program.PRECOMPILE_ENTRYPOINTS.get(program_key) != null)
             break :blk .{ program_account.pubkey, program_account.pubkey };
@@ -141,13 +141,10 @@ fn processNextInstruction(
         return InstructionError.UnsupportedProgramId;
     };
 
-    const maybe_precompile_fn =
-        program.PRECOMPILE_ENTRYPOINTS.get(native_program_id.base58String().slice());
+    const maybe_precompile_fn = program.PRECOMPILE_ENTRYPOINTS.get(&native_program_id.data);
 
     const maybe_native_program_fn = maybe_precompile_fn orelse blk: {
-        const native_program_fn = program.PROGRAM_ENTRYPOINTS.get(
-            native_program_id.base58String().slice(),
-        );
+        const native_program_fn = program.PROGRAM_ENTRYPOINTS.get(&native_program_id.data);
         ic.tc.return_data.data.len = 0;
         break :blk native_program_fn;
     };
@@ -230,7 +227,7 @@ pub fn prepareCpiInstructionInfo(
 
     for (callee.accounts) |account| {
         const index_in_transaction = tc.getAccountIndex(account.pubkey) orelse {
-            try tc.log("Instruction references an unknown account {}", .{account.pubkey});
+            try tc.log("Instruction references an unknown account {f}", .{account.pubkey});
             return InstructionError.MissingAccount;
         };
 
@@ -271,7 +268,7 @@ pub fn prepareCpiInstructionInfo(
 
         // Readonly in caller cannot become writable in callee
         if (account_meta.is_writable and !caller_account_meta.is_writable) {
-            try tc.log("{}'s writable privilege escalated", .{callee_account_key});
+            try tc.log("{f}'s writable privilege escalated", .{callee_account_key});
             return error.PrivilegeEscalation;
         }
 
@@ -281,7 +278,7 @@ pub fn prepareCpiInstructionInfo(
             if (signer.equals(&callee_account_key)) break true;
         } else false;
         if (account_meta.is_signer and !(caller_account_meta.is_signer or in_signers)) {
-            try tc.log("{}'s signer privilege escalated", .{callee_account_key});
+            try tc.log("{f}'s signer privilege escalated", .{callee_account_key});
             return error.PrivilegeEscalation;
         }
     }
@@ -291,7 +288,7 @@ pub fn prepareCpiInstructionInfo(
         const tc_acc = tc.getAccountAtIndex(acc_meta.index_in_transaction) orelse continue;
         if (tc_acc.pubkey.equals(&callee.program_id)) break i;
     } else {
-        try tc.log("Unknown program {}", .{callee.program_id});
+        try tc.log("Unknown program {f}", .{callee.program_id});
         return error.MissingAccount;
     };
 

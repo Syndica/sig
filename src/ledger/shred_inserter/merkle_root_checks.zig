@@ -23,7 +23,7 @@ const MerkleRootMetaWorkingStore = shred_inserter.working_state.MerkleRootMetaWo
 const PendingInsertShredsState = shred_inserter.working_state.PendingInsertShredsState;
 const ShredWorkingStore = shred_inserter.working_state.ShredWorkingStore;
 
-const newlinesToSpaces = sig.utils.fmt.newlinesToSpaces;
+const newlinesToSpaces = sig.utils.newLinesToSpaces;
 
 pub const MerkleRootValidator = struct {
     allocator: Allocator,
@@ -59,7 +59,7 @@ pub const MerkleRootValidator = struct {
             return true;
         }
 
-        self.logger.warn().logf(&newlinesToSpaces(
+        self.logger.warn().logf(newlinesToSpaces(
             \\Received conflicting merkle roots for slot: {}, erasure_set: {any} original merkle
             \\root meta {any} vs conflicting merkle root {any} shred index {} type {any}. Reporting
             \\as duplicate
@@ -89,7 +89,7 @@ pub const MerkleRootValidator = struct {
                     .MerkleRootConflict = .{ .original = original, .conflict = conflict },
                 });
             } else {
-                self.logger.err().logf(&newlinesToSpaces(
+                self.logger.err().logf(newlinesToSpaces(
                     \\Shred {any} indiciated by merkle root meta {any} is
                     \\missing from ledger. This should only happen in extreme cases where
                     \\ledger cleanup has caught up to the root. Skipping the merkle root

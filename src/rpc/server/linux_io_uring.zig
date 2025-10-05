@@ -758,7 +758,7 @@ const EntryState = union(enum) {
                 // sending them as they become rendered.
 
                 var ww = sig.utils.io.WindowedWriter.init(entry_data.buffer, self.sent_bytes);
-                var cw = std.io.countingWriter(ww.writer());
+                var cw = std.Io.countingWriter(ww.writer());
                 const writer = cw.writer();
 
                 const status: std.http.Status = .ok;

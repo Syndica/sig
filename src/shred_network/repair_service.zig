@@ -7,7 +7,7 @@ const tracy = @import("tracy");
 const bincode = sig.bincode;
 
 const Allocator = std.mem.Allocator;
-const ArrayList = std.ArrayList;
+const ArrayList = std.array_list.Managed;
 const Atomic = std.atomic.Value;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Random = std.Random;
@@ -311,7 +311,7 @@ fn sleepRepair(num_requests: u64, last_iteration: Duration) void {
     // being processed no more than 80% of the time.
     const take_a_break = last_iteration.div(4);
 
-    std.time.sleep(remaining_sleep_for_target.max(MIN_REPAIR_DELAY).max(take_a_break).asNanos());
+    std.Thread.sleep(remaining_sleep_for_target.max(MIN_REPAIR_DELAY).max(take_a_break).asNanos());
 }
 
 /// The maximum time that we want the repair loop to take.

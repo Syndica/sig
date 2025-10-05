@@ -1,7 +1,8 @@
 const std = @import("std");
+const sig = @import("../sig.zig");
 const core = @import("lib.zig");
 const base58 = @import("base58");
-const BASE58_ENDEC = base58.Table.BITCOIN;
+const BASE58_TABLE = base58.Table.BITCOIN;
 
 const Ed25519 = std.crypto.sign.Ed25519;
 const Verifier = std.crypto.sign.Ed25519.Verifier;
@@ -50,39 +51,26 @@ pub const Signature = struct {
         }
     }
 
+    const MAX_ENCODED_SIZE = base58.encodedMaxSize(SIZE);
+
     pub fn parseRuntime(str: []const u8) error{InvalidSignature}!Signature {
-        if (str.len > BASE58_MAX_SIZE) return error.InvalidSignature;
-        var encoded: std.BoundedArray(u8, BASE58_MAX_SIZE) = .{};
-        encoded.appendSliceAssumeCapacity(str);
-
+        if (str.len > MAX_ENCODED_SIZE) return error.InvalidSignature;
         if (@inComptime()) @setEvalBranchQuota(str.len * str.len * str.len);
-        const decoded = BASE58_ENDEC.decodeBounded(BASE58_MAX_SIZE, encoded) catch {
-            return error.InvalidSignature;
-        };
 
-        if (decoded.len != SIZE) return error.InvalidSignature;
-        return .{ .data = decoded.constSlice()[0..SIZE].* };
+        var decoded: [MAX_ENCODED_SIZE]u8 = undefined;
+        const len = BASE58_TABLE.decode(&decoded, str) catch return error.InvalidSignature;
+        if (len != SIZE) return error.InvalidSignature;
+        return .{ .data = decoded[0..SIZE].* };
     }
 
-    pub const BASE58_MAX_SIZE = base58.encodedMaxSize(SIZE);
-    pub const Base58String = std.BoundedArray(u8, BASE58_MAX_SIZE);
-
-    pub fn base58String(self: Signature) Base58String {
-        return BASE58_ENDEC.encodeArray(SIZE, self.data);
+    pub fn format(self: Signature, writer: *std.Io.Writer) !void {
+        var encoded: [MAX_ENCODED_SIZE]u8 = undefined;
+        const len = BASE58_TABLE.encode(&encoded, &self.data);
+        return try writer.writeAll(encoded[0..len]);
     }
 
-    pub fn format(
-        self: Signature,
-        comptime _: []const u8,
-        _: std.fmt.FormatOptions,
-        writer: anytype,
-    ) !void {
-        const str = self.base58String();
-        return writer.writeAll(str.constSlice());
-    }
-
-    pub fn jsonStringify(self: Signature, writer: anytype) @TypeOf(writer.*).Error!void {
-        try writer.print("\"{s}\"", .{self.base58String().slice()});
+    pub fn jsonStringify(self: Signature, writer: *std.io.Writer) !void {
+        try writer.print("\"{f}\"", .{self});
     }
 
     pub fn jsonParse(

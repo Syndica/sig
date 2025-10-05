@@ -29,12 +29,17 @@ pub fn main() !void {
     const argv = try std.process.argsAlloc(gpa);
     defer std.process.argsFree(gpa, argv);
 
+    var buffer: [0x1000]u8 = undefined;
+    var stdout_writer = std.fs.File.stdout().writer(&buffer);
+    const stdout = &stdout_writer.interface;
+    defer stdout.flush() catch @panic("failed to write to stdout");
+
     const parser = cli.Parser(Cmd, Cmd.cmd_info);
     const cmd = try parser.parse(
         gpa,
         "vm",
-        std.io.tty.detectConfig(std.io.getStdOut()),
-        std.io.getStdOut().writer(),
+        std.Io.tty.detectConfig(.stdout()),
+        stdout,
         argv[1..],
     ) orelse return;
     defer parser.free(gpa, cmd);

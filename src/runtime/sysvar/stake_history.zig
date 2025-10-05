@@ -9,7 +9,7 @@ const Pubkey = sig.core.Pubkey;
 
 /// [agave] https://github.com/anza-xyz/agave/blob/8db563d3bba4d03edf0eb2737fba87f394c32b64/sdk/sysvar/src/stake_history.rs#L67
 pub const StakeHistory = struct {
-    entries: std.BoundedArray(Entry, MAX_ENTRIES),
+    entries: sig.utils.BoundedArray(Entry, MAX_ENTRIES),
 
     pub const DEFAULT: StakeHistory = .{ .entries = .{} };
 

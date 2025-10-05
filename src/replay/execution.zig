@@ -983,7 +983,7 @@ fn testReplaySlot(
 pub fn testAwait(future: anytype) !@typeInfo(@TypeOf(future.poll())).error_union.payload.Result {
     var i: usize = 0;
     while (try future.poll() == .pending) {
-        std.time.sleep(std.time.ns_per_ms);
+        std.Thread.sleep(std.time.ns_per_ms);
         i += 1;
         if (i > 100) return error.TooSlow;
     }

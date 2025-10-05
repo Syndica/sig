@@ -44,7 +44,7 @@ pub const Client = struct {
             .method = @unionInit(MethodAndParams, @tagName(method), params),
         };
 
-        const request_json = try std.json.stringifyAlloc(allocator, request, .{});
+        const request_json = try std.json.Stringify.valueAlloc(allocator, request, .{});
         defer allocator.free(request_json);
 
         const response_json = try self.fetcher.fetchWithRetries(allocator, request_json);

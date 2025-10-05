@@ -84,8 +84,13 @@ pub fn main() !void {
     defer std.process.argsFree(gpa, argv);
 
     const parser = cli.Parser(Cmd, Cmd.cmd_info);
-    const tty_config = std.io.tty.detectConfig(std.io.getStdOut());
-    const stdout = std.io.getStdOut().writer();
+
+    var buffer: [0x1000]u8 = undefined;
+    var stdout_writer = std.fs.File.stdout().writer(&buffer);
+    const stdout = &stdout_writer.interface;
+    defer stdout.flush() catch @panic("failed to write to stdout");
+    const tty_config = std.Io.tty.detectConfig(.stdout());
+
     const cmd = try parser.parse(
         gpa,
         "sig",
@@ -240,7 +245,7 @@ const Cmd = struct {
     const cmd_info: cli.CommandInfo(@This()) = .{
         .help = .{
             .short = std.fmt.comptimePrint(
-                \\Version: {}
+                \\Version: {f}
                 \\
                 \\Sig is a Solana validator client written in Zig. The project is still a
                 \\work in progress so contributions are welcome.
@@ -986,7 +991,7 @@ fn identity(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
     const keypair = try sig.identity.getOrInit(allocator, .from(logger));
     const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
 
-    logger.info().logf("Identity: {s}\n", .{pubkey});
+    logger.info().logf("Identity: {f}\n", .{pubkey});
 }
 
 /// entrypoint to run only gossip
@@ -1599,7 +1604,7 @@ fn printLeaderSchedule(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
         };
     };
 
-    var stdout = std.io.bufferedWriter(std.io.getStdOut().writer());
+    var stdout = std.Io.bufferedWriter(std.Io.getStdOut().writer());
     try leader_schedule.write(stdout.writer(), root_slot);
     try stdout.flush();
 }
@@ -1608,13 +1613,13 @@ fn getLeaderScheduleFromCli(
     allocator: std.mem.Allocator,
     cfg: config.Cmd,
 ) !?struct { Slot, LeaderSchedule } {
-    return if (cfg.leader_schedule_path) |path|
-        if (std.mem.eql(u8, "--", path))
-            try LeaderSchedule.read(allocator, std.io.getStdIn().reader())
-        else
-            try LeaderSchedule.read(allocator, (try std.fs.cwd().openFile(path, .{})).reader())
-    else
-        null;
+    const path = cfg.leader_schedule_path orelse return null;
+
+    const is_stdin = std.mem.eql(u8, path, "--");
+    const file: std.fs.File = if (is_stdin) .stdin() else try std.fs.cwd().openFile(path, .{});
+    var file_reader = file.reader(&.{});
+
+    return try LeaderSchedule.read(allocator, &file_reader.interface);
 }
 
 fn testTransactionSenderService(
@@ -1998,23 +2003,26 @@ fn spawnLogger(
     allocator: std.mem.Allocator,
     cfg: config.Cmd,
 ) !struct { ?std.fs.File, Logger } {
-    const file, const writer = if (cfg.log_file) |path| blk: {
-        const file = std.fs.cwd().openFile(path, .{ .mode = .write_only }) catch |e| switch (e) {
-            error.FileNotFound => try std.fs.cwd().createFile(path, .{}),
-            else => return e,
-        };
-        try file.seekFromEnd(0);
-        break :blk .{ file, file.writer() };
-    } else .{ null, null };
-
-    var std_logger = try ChannelPrintLogger.init(.{
+    const channel_config: ChannelPrintLogger.Config = .{
         .allocator = allocator,
         .max_level = cfg.log_level,
         .max_buffer = 1 << 20,
         .write_stderr = cfg.tee_logs or cfg.log_file == null,
-    }, writer);
+    };
 
-    return .{ file, .from(std_logger.logger("spawnLogger")) };
+    if (cfg.log_file) |path| {
+        const cwd = std.fs.cwd();
+        const file = cwd.openFile(path, .{ .mode = .write_only }) catch |e| switch (e) {
+            error.FileNotFound => try cwd.createFile(path, .{}),
+            else => return e,
+        };
+
+        var logger = try ChannelPrintLogger.init(channel_config, file.writer(&.{}));
+        return .{ file, .from(logger.logger("spawnLogger")) };
+    } else {
+        var logger = try ChannelPrintLogger.init(channel_config, null);
+        return .{ null, .from(logger.logger("spawnLogger")) };
+    }
 }
 
 /// entrypoint to download snapshot
@@ -2068,10 +2076,10 @@ fn downloadSnapshot(
     defer if (maybe_inc_file) |inc_file| inc_file.close();
 }
 
-fn getTrustedValidators(allocator: std.mem.Allocator, cfg: config.Cmd) !?std.ArrayList(Pubkey) {
-    var trusted_validators: ?std.ArrayList(Pubkey) = null;
+fn getTrustedValidators(allocator: std.mem.Allocator, cfg: config.Cmd) !?std.array_list.Managed(Pubkey) {
+    var trusted_validators: ?std.array_list.Managed(Pubkey) = null;
     if (cfg.gossip.trusted_validators.len > 0) {
-        trusted_validators = try std.ArrayList(Pubkey).initCapacity(
+        trusted_validators = try std.array_list.Managed(Pubkey).initCapacity(
             allocator,
             cfg.gossip.trusted_validators.len,
         );

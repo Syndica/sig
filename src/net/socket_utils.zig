@@ -338,7 +338,7 @@ const XevThread = struct {
         };
 
         node.data.packet.addr = blk: {
-            var buf = std.BoundedArray(u8, 256){};
+            var buf = sig.utils.BoundedArray(u8, 256){};
             try buf.writer().print("{}", .{peer_addr});
             break :blk try network.EndPoint.parse(buf.slice());
         };
@@ -518,7 +518,7 @@ test "SocketThread: overload sendto" {
     }
 
     // Wait for all sends to have started/happened.
-    while (!send_channel.isEmpty()) std.time.sleep(10 * std.time.ns_per_ms);
+    while (!send_channel.isEmpty()) std.Thread.sleep(10 * std.time.ns_per_ms);
 }
 
 pub const BenchmarkPacketProcessing = struct {
@@ -586,7 +586,7 @@ pub const BenchmarkPacketProcessing = struct {
                     if (i % 10 == 0) {
                         const elapsed = timer.read();
                         if (elapsed < std.time.ns_per_s) {
-                            std.time.sleep(std.time.ns_per_s);
+                            std.Thread.sleep(std.time.ns_per_s);
                         }
                     }
                 }

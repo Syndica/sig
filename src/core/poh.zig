@@ -114,7 +114,7 @@ pub const PohEntry = struct {
 };
 
 /// returns a valid PoH chain of entries with transactions that have valid signatures.
-pub fn testPoh(valid_signatures: bool) !struct { Poh, std.BoundedArray(sig.core.Entry, 7) } {
+pub fn testPoh(valid_signatures: bool) !struct { Poh, sig.utils.BoundedArray(sig.core.Entry, 7) } {
     const allocator = std.testing.allocator;
     const expect = std.testing.expect;
     const expectEqual = std.testing.expectEqual;
@@ -150,7 +150,7 @@ pub fn testPoh(valid_signatures: bool) !struct { Poh, std.BoundedArray(sig.core.
 
     var poh = Poh.init(.ZEROES, 20, 0);
 
-    var entries = try std.BoundedArray(sig.core.Entry, 7).init(0);
+    var entries = try sig.utils.BoundedArray(sig.core.Entry, 7).init(0);
 
     try expect(!poh.hash(18));
     try expect(poh.hash(100));

@@ -11,17 +11,17 @@ const Logger = sig.trace.log.Logger;
 const RwMux = sig.sync.mux.RwMux;
 const ExitCondition = sig.sync.ExitCondition;
 
+const BASE58_TABLE = base58.Table.BITCOIN;
+
 pub const DUMP_INTERVAL = Duration.fromSecs(10);
 
 pub const GossipDumpService = struct {
     allocator: Allocator,
-    logger: Logger(@typeName(Self)),
+    logger: Logger(@typeName(GossipDumpService)),
     gossip_table_rw: *RwMux(GossipTable),
     exit_condition: ExitCondition,
 
-    const Self = @This();
-
-    pub fn run(self: Self) !void {
+    pub fn run(self: GossipDumpService) !void {
         const zone = tracy.Zone.init(@src(), .{ .name = "gossip GossipDumpService.run" });
         defer zone.deinit();
 
@@ -32,74 +32,88 @@ pub const GossipDumpService = struct {
         }
 
         const start_time = std.time.timestamp();
-        const dir_name_bounded = sig.utils.fmt.boundedFmt("gossip-dumps/{}", .{start_time});
 
-        var dir = try std.fs.cwd().makeOpenPath(dir_name_bounded.constSlice(), .{});
+        var directory_path_buffer: [std.fs.max_path_bytes]u8 = undefined;
+        const directory_path = try std.fmt.bufPrint(
+            &directory_path_buffer,
+            "gossip-dumps/{d}",
+            .{start_time},
+        );
+
+        var dir = try std.fs.cwd().makeOpenPath(directory_path, .{});
         defer dir.close();
 
         while (self.exit_condition.shouldRun()) {
             try self.dumpGossip(dir, start_time);
-            std.time.sleep(DUMP_INTERVAL.asNanos());
+            std.Thread.sleep(DUMP_INTERVAL.asNanos());
         }
     }
 
-    fn dumpGossip(self: *const Self, dir: std.fs.Dir, start_time: i64) !void {
+    fn dumpGossip(self: *const GossipDumpService, dir: std.fs.Dir, start_time: i64) !void {
         const data = blk: {
             var gossip_table_lock = self.gossip_table_rw.read();
             defer gossip_table_lock.unlock();
             const gossip_table: *const GossipTable = gossip_table_lock.get();
 
             // allocate buffer to write records
-            const table_len = gossip_table.store.count();
-            const buf = try self.allocator.alloc(u8, (1 + table_len) * 200);
-            errdefer self.allocator.free(buf);
-            var stream = std.io.fixedBufferStream(buf);
-            const writer = stream.writer();
+            const table_length = gossip_table.store.count();
+
+            var buffer: std.Io.Writer.Allocating = .init(self.allocator);
+            defer buffer.deinit();
+            try buffer.ensureTotalCapacity((table_length + 1) * 200);
+
+            const writer = &buffer.writer;
 
             // write records to string
-            const endec = base58.Table.BITCOIN;
             var iterator = gossip_table.store.iterator();
             while (iterator.next()) |entry| {
                 const gossip_versioned_data = entry.getVersionedData();
                 const val: SignedGossipData = gossip_versioned_data.signedData();
 
                 var encoded_buf: [52]u8 = undefined;
-                const encoded_len = endec.encode(
+                const encoded_len = BASE58_TABLE.encode(
                     &encoded_buf,
                     &gossip_versioned_data.metadata.value_hash.data,
                 );
                 const encoded = encoded_buf[0..encoded_len];
 
                 try writer.print(
-                    "{s},{s},{s},{},",
-                    .{ @tagName(val.data), val.id(), encoded, val.wallclock() },
+                    "{t},{f},{s},{},",
+                    .{ val.data, val.id(), encoded, val.wallclock() },
                 );
                 if (val.data.gossipAddr()) |addr| {
-                    try addr.toAddress().format("", .{}, writer);
+                    try writer.print("{f}", .{addr.toAddress()});
                 }
-                try writer.writeAll(",");
+                try writer.writeByte(',');
                 if (val.data.shredVersion()) |shred| {
                     try writer.print("{}", .{shred});
                 }
-                try writer.writeAll("\n");
+                try writer.writeByte('\n');
             }
-            break :blk .{ .buf = buf, .buf_len = stream.pos, .table_len = table_len };
+
+            break :blk .{
+                try buffer.toOwnedSlice(),
+                table_length,
+            };
         };
-        defer self.allocator.free(data.buf);
+        const buffer, const length = data;
+        defer self.allocator.free(buffer);
 
         // create file
         const now = std.time.timestamp();
-        const filename_bounded = sig.utils.fmt.boundedFmt("gossip-dump-{}.csv", .{now});
 
-        var file = try dir.createFile(filename_bounded.constSlice(), .{});
+        var filename_buffer: [std.fs.max_path_bytes]u8 = undefined;
+        const filename = try std.fmt.bufPrint(&filename_buffer, "gossip-dump-{d}.csv", .{now});
+
+        var file = try dir.createFile(filename, .{});
         defer file.close();
 
         // output results
         try file.writeAll("message_type,pubkey,hash,wallclock,gossip_addr,shred_version\n");
-        try file.writeAll(data.buf[0..data.buf_len]);
+        try file.writeAll(buffer);
         self.logger.info().logf("gossip table size at {}s: {}", .{
             now -| start_time,
-            data.table_len,
+            length,
         });
     }
 };

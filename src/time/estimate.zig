@@ -16,7 +16,7 @@ pub fn printTimeEstimate(
         if (other_info) |info| {
             logger
                 .info()
-                .logf("{s} [{s}]: {d}/{d} (?%) (est: ? elp: {s})", .{
+                .logf("{s} [{s}]: {d}/{d} (?%) (est: ? elp: {f})", .{
                 name,
                 info,
                 i,
@@ -24,7 +24,7 @@ pub fn printTimeEstimate(
                 timer.read(),
             });
         } else {
-            logger.info().logf("{s}: {d}/{d} (?%) (est: ? elp: {s})", .{
+            logger.info().logf("{s}: {d}/{d} (?%) (est: ? elp: {f})", .{
                 name,
                 i,
                 total,
@@ -42,22 +42,22 @@ pub fn printTimeEstimate(
     const ns_left = ns_per_vec * left;
 
     if (other_info) |info| {
-        logger.info().logf("{s} [{s}]: {d}/{d} ({d}%) (est: {s} elp: {s})", .{
+        logger.info().logf("{s} [{s}]: {d}/{d} ({d}%) (est: {D} elp: {f})", .{
             name,
             info,
             i,
             total,
             p_done,
-            std.fmt.fmtDuration(ns_left),
+            ns_left,
             timer.read(),
         });
     } else {
-        logger.info().logf("{s}: {d}/{d} ({d}%) (est: {s} elp: {s})", .{
+        logger.info().logf("{s}: {d}/{d} ({d}%) (est: {D} elp: {f})", .{
             name,
             i,
             total,
             p_done,
-            std.fmt.fmtDuration(ns_left),
+            ns_left,
             timer.read(),
         });
     }
@@ -100,22 +100,22 @@ pub fn printTimeEstimateStderr(
     const ns_left = ns_per_vec * left;
 
     if (other_info) |info| {
-        std.debug.print("{s} [{s}]: {d}/{d} ({d}%) (est: {s} elp: {s})\r", .{
+        std.debug.print("{s} [{s}]: {d}/{d} ({d}%) (est: {D} elp: {s})\r", .{
             name,
             info,
             i,
             total,
             p_done,
-            std.fmt.fmtDuration(ns_left),
+            ns_left,
             timer.read(),
         });
     } else {
-        std.debug.print("{s}: {d}/{d} ({d}%) (est: {s} elp: {s})\r", .{
+        std.debug.print("{s}: {d}/{d} ({d}%) (est: {D} elp: {s})\r", .{
             name,
             i,
             total,
             p_done,
-            std.fmt.fmtDuration(ns_left),
+            ns_left,
             timer.read(),
         });
     }

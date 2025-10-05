@@ -2,7 +2,7 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 const base58 = @import("base58");
 
-const BASE58_ENDEC = base58.Table.BITCOIN;
+const BASE58_TABLE = base58.Table.BITCOIN;
 const Sha256 = std.crypto.hash.sha2.Sha256;
 const Slot = sig.core.time.Slot;
 
@@ -103,34 +103,22 @@ pub const Hash = extern struct {
         }
     }
 
+    pub const MAX_ENCODED_SIZE = base58.encodedMaxSize(SIZE);
+
     pub fn parseRuntime(str: []const u8) error{InvalidHash}!Hash {
-        if (str.len > BASE58_MAX_SIZE) return error.InvalidHash;
-        var encoded: std.BoundedArray(u8, BASE58_MAX_SIZE) = .{};
-        encoded.appendSliceAssumeCapacity(str);
-
+        if (str.len > MAX_ENCODED_SIZE) return error.InvalidHash;
         if (@inComptime()) @setEvalBranchQuota(str.len * str.len * str.len);
-        const decoded = BASE58_ENDEC.decodeBounded(BASE58_MAX_SIZE, encoded) catch {
-            return error.InvalidHash;
-        };
 
-        if (decoded.len != SIZE) return error.InvalidHash;
-        return .{ .data = decoded.constSlice()[0..SIZE].* };
+        var decoded: [MAX_ENCODED_SIZE]u8 = undefined;
+        const len = BASE58_TABLE.decode(&decoded, str) catch return error.InvalidHash;
+        if (len != SIZE) return error.InvalidHash;
+        return .{ .data = decoded[0..SIZE].* };
     }
 
-    pub const BASE58_MAX_SIZE = base58.encodedMaxSize(SIZE);
-    pub const Base58String = std.BoundedArray(u8, BASE58_MAX_SIZE);
-    pub fn base58String(self: Hash) Base58String {
-        return BASE58_ENDEC.encodeArray(SIZE, self.data);
-    }
-
-    pub fn format(
-        self: Hash,
-        comptime _: []const u8,
-        _: std.fmt.FormatOptions,
-        writer: anytype,
-    ) @TypeOf(writer).Error!void {
-        const str = self.base58String();
-        return writer.writeAll(str.constSlice());
+    pub fn format(self: Hash, writer: *std.Io.Writer) !void {
+        var encoded: [MAX_ENCODED_SIZE]u8 = undefined;
+        const len = BASE58_TABLE.encode(&encoded, &self.data);
+        return try writer.writeAll(encoded[0..len]);
     }
 
     /// Intended to be used in tests.

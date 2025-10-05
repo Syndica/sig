@@ -600,8 +600,8 @@ pub const ForkChoice = struct {
     pub fn markForkValidCandidate(
         self: *ForkChoice,
         valid_slot_hash_key: *const SlotAndHash,
-    ) !std.ArrayList(SlotAndHash) {
-        var newly_duplicate_confirmed_ancestors: std.ArrayList(SlotAndHash) = .init(self.allocator);
+    ) !std.array_list.Managed(SlotAndHash) {
+        var newly_duplicate_confirmed_ancestors: std.array_list.Managed(SlotAndHash) = .init(self.allocator);
         errdefer newly_duplicate_confirmed_ancestors.deinit();
         if (!(self.isDuplicateConfirmed(valid_slot_hash_key) orelse return error.MissingForkInfo)) {
             try newly_duplicate_confirmed_ancestors.append(valid_slot_hash_key.*);
@@ -994,7 +994,7 @@ pub const ForkChoice = struct {
         if (!self.containsBlock(root1)) {
             return SortedMap(SlotAndHash, void).init(self.allocator);
         }
-        var pending_keys = std.ArrayList(SlotAndHash).init(self.allocator);
+        var pending_keys = std.array_list.Managed(SlotAndHash).init(self.allocator);
         defer pending_keys.deinit();
 
         try pending_keys.append(root1.*);
@@ -1568,7 +1568,7 @@ pub const ForkChoice = struct {
 
         // Remove node + all children and add to new tree
         var split_tree_fork_infos = std.AutoHashMap(SlotAndHash, ForkInfo).init(allocator);
-        var to_visit = std.ArrayList(SlotAndHash).init(allocator);
+        var to_visit = std.array_list.Managed(SlotAndHash).init(allocator);
         defer to_visit.deinit();
 
         try to_visit.append(slot_hash_key);
@@ -2494,7 +2494,7 @@ test "HeaviestSubtreeForkChoice.aggregateSlot" {
         total_stake += slot.*;
     }
 
-    var slots_to_aggregate = std.ArrayList(SlotAndHash).init(std.testing.allocator);
+    var slots_to_aggregate = std.array_list.Managed(SlotAndHash).init(std.testing.allocator);
     defer slots_to_aggregate.deinit();
 
     try slots_to_aggregate.append(SlotAndHash{ .slot = 6, .hash = Hash.ZEROES });
@@ -4972,7 +4972,7 @@ pub fn setupDuplicateForks() !struct {
     const duplicate_slot: u64 = 10;
 
     // Create duplicate leaves descended from slot 4
-    var duplicate_leaves_descended_from_4 = std.ArrayList(SlotAndHash).init(test_allocator);
+    var duplicate_leaves_descended_from_4 = std.array_list.Managed(SlotAndHash).init(test_allocator);
     defer duplicate_leaves_descended_from_4.deinit();
     for (0..2) |_| {
         try duplicate_leaves_descended_from_4.append(SlotAndHash{
@@ -4982,7 +4982,7 @@ pub fn setupDuplicateForks() !struct {
     }
 
     // Create duplicate leaves descended from slot 5
-    var duplicate_leaves_descended_from_5 = std.ArrayList(SlotAndHash).init(test_allocator);
+    var duplicate_leaves_descended_from_5 = std.array_list.Managed(SlotAndHash).init(test_allocator);
     defer duplicate_leaves_descended_from_5.deinit();
     for (0..2) |_| {
         try duplicate_leaves_descended_from_5.append(SlotAndHash{
@@ -4992,7 +4992,7 @@ pub fn setupDuplicateForks() !struct {
     }
 
     // Create duplicate leaves descended from slot 6
-    var duplicate_leaves_descended_from_6 = std.ArrayList(SlotAndHash).init(test_allocator);
+    var duplicate_leaves_descended_from_6 = std.array_list.Managed(SlotAndHash).init(test_allocator);
     defer duplicate_leaves_descended_from_6.deinit();
     for (0..2) |_| {
         try duplicate_leaves_descended_from_6.append(SlotAndHash{
@@ -5035,7 +5035,7 @@ pub fn setupDuplicateForks() !struct {
     std.debug.assert(dup_children_4.keys()[0].equals(duplicate_leaves_descended_from_4.items[0]));
     std.debug.assert(dup_children_4.keys()[1].equals(duplicate_leaves_descended_from_4.items[1]));
 
-    var dup_children_5 = std.ArrayList(SlotAndHash).init(test_allocator);
+    var dup_children_5 = std.array_list.Managed(SlotAndHash).init(test_allocator);
     defer dup_children_5.deinit();
 
     var children_5 = fork_choice.getChildren(&.{
@@ -5054,7 +5054,7 @@ pub fn setupDuplicateForks() !struct {
     std.debug.assert(dup_children_5.items[1].equals(duplicate_leaves_descended_from_5.items[1]));
 
     // Verify children of slot 6
-    var dup_children_6 = std.ArrayList(SlotAndHash).init(test_allocator);
+    var dup_children_6 = std.array_list.Managed(SlotAndHash).init(test_allocator);
     defer dup_children_6.deinit();
 
     var children_6 = fork_choice.getChildren(&.{

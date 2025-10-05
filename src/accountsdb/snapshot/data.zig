@@ -224,7 +224,7 @@ pub const ExtraFields = struct {
 
     fn bincodeRead(
         limit_allocator: *bincode.LimitAllocator,
-        reader: anytype,
+        reader: *std.Io.Reader,
         params: bincode.Params,
     ) !ExtraFields {
         var extra_fields: ExtraFields = INIT_EOF;
@@ -261,7 +261,7 @@ pub const ExtraFields = struct {
         return extra_fields;
     }
 
-    fn bincodeFree(allocator: std.mem.Allocator, data: anytype) void {
+    fn bincodeFree(allocator: std.mem.Allocator, data: ExtraFields) void {
         comptime if (@TypeOf(data) == ExtraFields) unreachable;
         data.deinit(allocator);
     }
@@ -431,7 +431,7 @@ pub const AccountsDbFields = struct {
 
     fn bincodeRead(
         limit_allocator: *bincode.LimitAllocator,
-        reader: anytype,
+        reader: *std.Io.Reader,
         params: bincode.Params,
     ) !AccountsDbFields {
         const allocator = limit_allocator.allocator();
@@ -489,7 +489,7 @@ pub const AccountsDbFields = struct {
         };
     }
 
-    fn bincodeWrite(writer: anytype, data: anytype, params: bincode.Params) !void {
+    fn bincodeWrite(writer: *std.Io.Writer, data: AccountsDbFields, params: bincode.Params) !void {
         comptime if (@TypeOf(data) != AccountsDbFields) unreachable;
 
         {
@@ -511,7 +511,7 @@ pub const AccountsDbFields = struct {
         try bincode.write(writer, data.rooted_slot_hashes, params);
     }
 
-    fn bincodeFree(allocator: std.mem.Allocator, data: anytype) void {
+    fn bincodeFree(allocator: std.mem.Allocator, data: AccountsDbFields) void {
         data.deinit(allocator);
     }
 };
@@ -565,24 +565,21 @@ pub const Manifest = struct {
         return readFromFile(allocator, file);
     }
 
-    pub fn readFromFile(
-        allocator: std.mem.Allocator,
-        file: std.fs.File,
-    ) !Manifest {
-        const size = (try file.stat()).size;
-        const contents = try file.readToEndAllocOptions(allocator, size, size, @alignOf(u8), null);
-        defer allocator.free(contents);
-
-        var fbs = std.io.fixedBufferStream(contents);
-        return try decodeFromBincode(allocator, fbs.reader());
+    pub fn readFromFile(allocator: std.mem.Allocator, file: std.fs.File) !Manifest {
+        var reader = file.reader(&.{});
+        return try decodeFromBincode(
+            allocator,
+            &reader.interface,
+        );
     }
 
-    pub fn decodeFromBincode(
-        allocator: std.mem.Allocator,
-        /// `std.io.GenericReader(...)` | `std.io.AnyReader`
-        reader: anytype,
-    ) !Manifest {
-        return try bincode.read(allocator, Manifest, reader, .{ .allocation_limit = 2 << 30 });
+    pub fn decodeFromBincode(allocator: std.mem.Allocator, reader: *std.Io.Reader) !Manifest {
+        return try bincode.read(
+            allocator,
+            Manifest,
+            reader,
+            .{ .allocation_limit = 2 << 30 },
+        );
     }
 
     pub fn epochStakes(
@@ -796,14 +793,11 @@ pub const StatusCache = struct {
     }
 
     pub fn readFromFile(allocator: std.mem.Allocator, file: std.fs.File) !StatusCache {
-        return decodeFromBincode(allocator, file.reader());
+        var reader = file.reader(&.{});
+        return decodeFromBincode(allocator, &reader.interface);
     }
 
-    pub fn decodeFromBincode(
-        allocator: std.mem.Allocator,
-        /// `std.io.GenericReader(...)` | `std.io.AnyReader`
-        reader: anytype,
-    ) !StatusCache {
+    pub fn decodeFromBincode(allocator: std.mem.Allocator, reader: *std.Io.Reader) !StatusCache {
         return try bincode.read(allocator, StatusCache, reader, .{});
     }
 
@@ -866,28 +860,21 @@ pub const StatusCache = struct {
     }
 };
 
-/// information on a full snapshot including the filename, slot, and hash
+/// Information on a full snapshot including the filename, slot, and hash
 ///
 /// Analogous to [SnapshotArchiveInfo](https://github.com/anza-xyz/agave/blob/59bf1809fe5115f0fad51e80cc0a19da1496e2e9/runtime/src/snapshot_archive_info.rs#L44)
 pub const FullSnapshotFileInfo = struct {
     slot: Slot,
     hash: Hash,
 
-    pub const SnapshotArchiveNameFmtSpec = sig.utils.fmt.BoundedSpec(
-        "snapshot-{[slot]d}-{[hash]s}.tar.zst",
-    );
+    pub fn openFile(self: FullSnapshotFileInfo, parent: std.fs.Dir) !std.fs.File {
+        var path_buffer: [std.fs.max_path_bytes]u8 = undefined;
+        const path = try std.fmt.bufPrint(&path_buffer, "{f}", .{self});
+        return try parent.openFile(path, .{});
+    }
 
-    pub const SnapshotArchiveNameStr = SnapshotArchiveNameFmtSpec.BoundedArrayValue(.{
-        .slot = std.math.maxInt(Slot),
-        .hash = "1" ** Hash.BASE58_MAX_SIZE,
-    });
-
-    pub fn snapshotArchiveName(self: FullSnapshotFileInfo) SnapshotArchiveNameStr {
-        const b58_str = self.hash.base58String();
-        return SnapshotArchiveNameFmtSpec.fmt(.{
-            .slot = self.slot,
-            .hash = sig.utils.fmt.boundedString(&b58_str),
-        });
+    pub fn format(self: FullSnapshotFileInfo, writer: *std.Io.Writer) !void {
+        try writer.print("snapshot-{d}-{f}.tar.zst", .{ self.slot, self.hash });
     }
 
     pub const ParseFileNameTarZstError = ParseFileBaseNameError || error{
@@ -900,9 +887,7 @@ pub const FullSnapshotFileInfo = struct {
         filename: []const u8,
     ) ParseFileNameTarZstError!FullSnapshotFileInfo {
         const snapshot_file_info, const extension_start = try parseFileBaseName(filename);
-        if (extension_start == filename.len) {
-            return error.MissingExtension;
-        }
+        if (extension_start == filename.len) return error.MissingExtension;
         if (!std.mem.eql(u8, filename[extension_start..], ".tar.zst")) {
             return error.InvalidExtension;
         }
@@ -964,7 +949,7 @@ pub const FullSnapshotFileInfo = struct {
                 return error.MissingHash;
             }
 
-            const str_max_len = Hash.BASE58_MAX_SIZE;
+            const str_max_len = Hash.MAX_ENCODED_SIZE;
             const truncated = filename[0..@min(filename.len, start + str_max_len + 1)];
             const alphabet = std.mem.asBytes(&base58.Table.BITCOIN.alphabet);
             const end = std.mem.indexOfNonePos(u8, truncated, start + 1, alphabet) orelse
@@ -1003,23 +988,17 @@ pub const IncrementalSnapshotFileInfo = struct {
         };
     }
 
-    pub const SnapshotArchiveNameFmtSpec = sig.utils.fmt.BoundedSpec(
-        "incremental-snapshot-{[base_slot]d}-{[slot]d}-{[hash]s}.tar.zst",
-    );
+    pub fn openFile(self: IncrementalSnapshotFileInfo, parent: std.fs.Dir) !std.fs.File {
+        var path_buffer: [std.fs.max_path_bytes]u8 = undefined;
+        const path = try std.fmt.bufPrint(&path_buffer, "{f}", .{self});
+        return try parent.openFile(path, .{});
+    }
 
-    pub const SnapshotArchiveNameStr = SnapshotArchiveNameFmtSpec.BoundedArrayValue(.{
-        .base_slot = std.math.maxInt(Slot),
-        .slot = std.math.maxInt(Slot),
-        .hash = "1" ** Hash.BASE58_MAX_SIZE,
-    });
-
-    pub fn snapshotArchiveName(self: IncrementalSnapshotFileInfo) SnapshotArchiveNameStr {
-        const b58_str = self.hash.base58String();
-        return SnapshotArchiveNameFmtSpec.fmt(.{
-            .base_slot = self.base_slot,
-            .slot = self.slot,
-            .hash = sig.utils.fmt.boundedString(&b58_str),
-        });
+    pub fn format(self: IncrementalSnapshotFileInfo, writer: *std.Io.Writer) !void {
+        try writer.print(
+            "incremental-snapshot-{d}-{d}-{f}.tar.zst",
+            .{ self.base_slot, self.slot, self.hash },
+        );
     }
 
     pub const ParseFileNameTarZstError = ParseFileBaseNameError || error{
@@ -1123,7 +1102,7 @@ pub const IncrementalSnapshotFileInfo = struct {
                 return error.MissingHash;
             }
 
-            const str_max_len = Hash.BASE58_MAX_SIZE;
+            const str_max_len = Hash.MAX_ENCODED_SIZE;
             const truncated = filename[0..@min(filename.len, start + str_max_len + 1)];
             const alphabet = std.mem.asBytes(&base58.Table.BITCOIN.alphabet);
             const end = std.mem.indexOfNonePos(u8, truncated, start + 1, alphabet) orelse
@@ -1212,10 +1191,10 @@ pub const SnapshotFiles = struct {
             }
             if (latest_full.slot == full.slot) {
                 // TODO:
-                std.debug.panic("TODO: report this error gracefully in some way ({s} vs {s})", .{
-                    latest_full.snapshotArchiveName().constSlice(),
-                    full.snapshotArchiveName().constSlice(),
-                });
+                std.debug.panic(
+                    "TODO: report this error gracefully in some way ({f} vs {f})",
+                    .{ latest_full, full },
+                );
             }
         }
         const latest_full = maybe_latest_full orelse return error.NoFullSnapshotFileInfoFound;
@@ -1236,10 +1215,10 @@ pub const SnapshotFiles = struct {
                 // impossible for a given slot range to possess two different hashes; we have no way at this
                 // stage to unambiguously decide which of the two snapshots we want to select, since either
                 // could be valid. For now, we panic, but we should gracefully report this in some way.
-                std.debug.panic("TODO: report this error gracefully in some way ({s} vs {s})", .{
-                    latest_incremental.snapshotArchiveName().constSlice(),
-                    _incremental.snapshotArchiveName().constSlice(),
-                });
+                std.debug.panic(
+                    "TODO: report this error gracefully in some way ({f} vs {f})",
+                    .{ latest_incremental, _incremental },
+                );
             }
         }
 
@@ -1264,18 +1243,21 @@ pub const FullAndIncrementalManifest = struct {
         files: SnapshotFiles,
     ) !FullAndIncrementalManifest {
         const full_fields = blk: {
-            const rel_path_bounded = sig.utils.fmt.boundedFmt(
+            var relative_path_buffer: [std.fs.max_path_bytes]u8 = undefined;
+            const relative_path = try std.fmt.bufPrint(
+                &relative_path_buffer,
                 "snapshots/{0}/{0}",
                 .{files.full.slot},
             );
-            const rel_path = rel_path_bounded.constSlice();
 
-            logger.info().logf(
-                "reading *full* snapshot fields from: {s}",
-                .{sig.utils.fmt.tryRealPath(snapshot_dir, rel_path)},
-            );
+            {
+                var realpath_buffer: [std.fs.max_path_bytes]u8 = undefined;
+                const realpath = try snapshot_dir.realpath(relative_path, &realpath_buffer);
 
-            const full_file = try snapshot_dir.openFile(rel_path, .{});
+                logger.info().logf("reading *full* snapshot fields from: {s}", .{realpath});
+            }
+
+            const full_file = try snapshot_dir.openFile(relative_path, .{});
             defer full_file.close();
 
             break :blk try Manifest.readFromFile(allocator, full_file);
@@ -1283,17 +1265,20 @@ pub const FullAndIncrementalManifest = struct {
         errdefer full_fields.deinit(allocator);
 
         const incremental_fields = if (files.incremental_info) |inc_snap| blk: {
-            const rel_path_bounded = sig.utils.fmt.boundedFmt(
+            var relative_path_buffer: [std.fs.max_path_bytes]u8 = undefined;
+            const relative_path = try std.fmt.bufPrint(
+                &relative_path_buffer,
                 "snapshots/{0}/{0}",
                 .{inc_snap.slot},
             );
-            const rel_path = rel_path_bounded.constSlice();
-            logger.info().logf(
-                "reading *incremental* snapshot fields from: {s}",
-                .{sig.utils.fmt.tryRealPath(snapshot_dir, rel_path)},
-            );
 
-            const incremental_file = try snapshot_dir.openFile(rel_path, .{});
+            {
+                var realpath_buffer: [std.fs.max_path_bytes]u8 = undefined;
+                const realpath = try snapshot_dir.realpath(relative_path, &realpath_buffer);
+                logger.info().logf("reading *incremental* snapshot fields from: {s}", .{realpath});
+            }
+
+            const incremental_file = try snapshot_dir.openFile(relative_path, .{});
             defer incremental_file.close();
 
             break :blk try Manifest.readFromFile(allocator, incremental_file);
@@ -1411,60 +1396,55 @@ pub const generate = struct {
     /// Writes the version, status cache, and manifest files.
     /// Should call this first to begin generating the snapshot archive.
     pub fn writeMetadataFiles(
-        archive_writer: anytype,
+        archive_writer: *std.io.Writer,
         version: sig.version.ClientVersion,
         status_cache: StatusCache,
         manifest: *const Manifest,
     ) !void {
         const slot: Slot = manifest.bank_fields.slot;
 
-        var counting_writer_state = std.io.countingWriter(archive_writer);
-        const writer = counting_writer_state.writer();
-
         // write the version file
-        const version_str_bounded = sig.utils.fmt.boundedFmt(
+        var buffer: [256]u8 = undefined;
+        const version_string = try std.fmt.bufPrint(
+            &buffer,
             "{d}.{d}.{d}",
             .{ version.major, version.minor, version.patch },
         );
-        const version_str = version_str_bounded.constSlice();
-        try sig.utils.tar.writeTarHeader(writer, .regular, "version", version_str.len);
-        try writer.writeAll(version_str);
-        try writer.writeByteNTimes(0, sig.utils.tar.paddingBytes(
-            counting_writer_state.bytes_written,
-        ));
+        // header is exactly 512 bytes, so padding bytes don't matter on it
+        try sig.utils.tar.writeTarHeader(archive_writer, .regular, "version", version_string.len);
+        try archive_writer.writeAll(version_string);
+        try archive_writer.splatByteAll(0, sig.utils.tar.paddingBytes(version_string.len));
 
         // create the snapshots dir
-        try sig.utils.tar.writeTarHeader(writer, .directory, "snapshots/", 0);
+        try sig.utils.tar.writeTarHeader(archive_writer, .directory, "snapshots/", 0);
 
         // write the status cache
         try sig.utils.tar.writeTarHeader(
-            writer,
+            archive_writer,
             .regular,
             "snapshots/status_cache",
             bincode.sizeOf(status_cache, .{}),
         );
-        try bincode.write(writer, status_cache, .{});
-        try writer.writeByteNTimes(0, sig.utils.tar.paddingBytes(
+        try bincode.write(archive_writer, status_cache, .{});
+        try archive_writer.splatByteAll(0, sig.utils.tar.paddingBytes(
             counting_writer_state.bytes_written,
         ));
 
         // write the manifest
         const dir_name_bounded = sig.utils.fmt.boundedFmt("snapshots/{d}/", .{slot});
-        try sig.utils.tar.writeTarHeader(writer, .directory, dir_name_bounded.constSlice(), 0);
+        try sig.utils.tar.writeTarHeader(archive_writer, .directory, dir_name_bounded.constSlice(), 0);
 
         const file_name_bounded = sig.utils.fmt.boundedFmt("snapshots/{0d}/{0d}", .{slot});
         try sig.utils.tar.writeTarHeader(
-            writer,
+            archive_writer,
             .regular,
             file_name_bounded.constSlice(),
             bincode.sizeOf(manifest, .{}),
         );
-        try bincode.write(writer, manifest, .{});
-        try writer.writeByteNTimes(0, sig.utils.tar.paddingBytes(
+        try bincode.write(archive_writer, manifest, .{});
+        try archive_writer.splatByteAll(0, sig.utils.tar.paddingBytes(
             counting_writer_state.bytes_written,
         ));
-
-        std.debug.assert(counting_writer_state.bytes_written % 512 == 0);
     }
 
     /// Writes the accounts dir header. Do this after writing the metadata files.
@@ -1565,9 +1545,13 @@ test FullSnapshotFileInfo {
         snapshot_info.hash.base58String().constSlice(),
     );
 
-    try std.testing.expectEqualStrings(
+    const expected_snapshot_hash: Hash = .parse("EAHHZCVccCdAoCXH8RWxvv9edcwjY2boqni9MJuh3TCn");
+    try std.testing.expect(snapshot_info.hash.eql(expected_snapshot_hash));
+
+    try std.testing.expectFmt(
         snapshot_name,
-        snapshot_info.snapshotArchiveName().constSlice(),
+        "{f}",
+        .{snapshot_info},
     );
 }
 

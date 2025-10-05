@@ -488,7 +488,7 @@ test "send-hook" {
     };
 
     const Consumer = struct {
-        collected: std.ArrayList(u64),
+        collected: std.array_list.Managed(u64),
         hook: Channel(u64).SendHook = .{ .after_send = afterSend },
 
         fn afterSend(hook: *Channel(u64).SendHook, channel: *Channel(u64)) void {
@@ -513,7 +513,7 @@ test "send-hook" {
     try expect(counter.count == to_send);
 
     // Check that afterSend consumes any sent values.
-    var consumer = Consumer{ .collected = std.ArrayList(u64).init(allocator) };
+    var consumer = Consumer{ .collected = std.array_list.Managed(u64).init(allocator) };
     ch.send_hook = &consumer.hook;
     defer consumer.collected.deinit();
 
@@ -675,7 +675,7 @@ pub const BenchmarkChannel = struct {
         var ctx = Context{ .channel = try Channel(Packet).init(allocator) };
         defer ctx.channel.deinit();
 
-        var threads = std.ArrayList(std.Thread).init(allocator);
+        var threads = std.array_list.Managed(std.Thread).init(allocator);
         defer {
             ctx.stop.store(true, .monotonic);
             for (threads.items) |t| t.join();
@@ -692,7 +692,7 @@ pub const BenchmarkChannel = struct {
         }
 
         ctx.start.set();
-        std.time.sleep(if (!argss.is_unit_test) std.time.ns_per_s else 10 * std.time.ns_per_ms);
+        std.Thread.sleep(if (!argss.is_unit_test) std.time.ns_per_s else 10 * std.time.ns_per_ms);
 
         const popped = ctx.popped.load(.acquire); // NOTE: should happen-before len() read.
         const total = popped + ctx.channel.len();

@@ -215,13 +215,11 @@ const DeclType = union(enum) {
 
     pub fn format(
         self: DeclType,
-        comptime fmt: []const u8,
-        options: std.fmt.FormatOptions,
-        writer: anytype,
+        writer: *std.Io.Writer,
     ) !void {
         switch (self) {
-            .type => |T| try std.fmt.format(writer, "{}", .{T}),
-            .func => |f| try f.format(fmt, options, writer),
+            .type => |T| try writer.print("{}", .{T}),
+            .func => |f| try f.format(writer),
         }
     }
 
@@ -324,9 +322,7 @@ const FunctionSignature = struct {
 
     pub fn format(
         self: FunctionSignature,
-        comptime _: []const u8,
-        _: std.fmt.FormatOptions,
-        writer: anytype,
+        writer: *std.Io.Writer,
     ) !void {
         try writer.print("fn (", .{});
         for (self.params, 0..) |param, i| {

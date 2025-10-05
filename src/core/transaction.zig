@@ -152,25 +152,35 @@ pub const Transaction = struct {
         };
     }
 
-    pub fn serialize(writer: anytype, data: anytype, _: sig.bincode.Params) !void {
+    pub fn serialize(writer: *std.Io.Writer, data: Transaction, _: sig.bincode.Params) !void {
         std.debug.assert(data.signatures.len <= std.math.maxInt(u16));
-        try leb.writeULEB128(writer, @as(u16, @intCast(data.signatures.len)));
+        try writer.writeUleb128(@as(u16, @intCast(data.signatures.len)));
         for (data.signatures) |sgn| try writer.writeAll(&sgn.data);
         try data.msg.serialize(writer, data.version);
     }
 
-    pub fn deserialize(limit_allocator: *sig.bincode.LimitAllocator, reader: anytype, _: sig.bincode.Params) !Transaction {
+    pub fn deserialize(
+        limit_allocator: *sig.bincode.LimitAllocator,
+        reader: *std.Io.Reader,
+        _: sig.bincode.Params,
+    ) !Transaction {
         const allocator = limit_allocator.allocator();
-        const signatures = try allocator.alloc(Signature, try leb.readULEB128(u16, reader));
+        const signatures = try allocator.alloc(
+            Signature,
+            try reader.takeLeb128(u16),
+        );
         errdefer allocator.free(signatures);
 
-        for (signatures) |*sgn| sgn.* = .{ .data = try reader.readBytesNoEof(Signature.SIZE) };
-        var peekable = sig.utils.io.peekableReader(reader);
-        const version = try Version.deserialize(&peekable);
+        for (signatures) |*sgn| {
+            const signature = try reader.takeArray(Signature.SIZE);
+            sgn.* = .{ .data = signature.* };
+        }
+
+        const version = try Version.deserialize(reader);
         return .{
             .signatures = signatures,
             .version = version,
-            .msg = try Message.deserialize(limit_allocator, peekable.reader(), version),
+            .msg = try Message.deserialize(limit_allocator, reader, version),
         };
     }
 
@@ -192,9 +202,10 @@ pub const Transaction = struct {
     /// Does *not* ensure total internal consistency. Only does the minimum to
     /// verify signatures. Call `validate` to ensure full consistency.
     pub fn verify(self: Transaction) VerifyError!void {
-        const serialized_message = self.msg.serializeBounded(self.version) catch
-            return error.SerializationFailed;
-        try self.verifySignatures(serialized_message.constSlice());
+        var serialized_message_bytes: [Transaction.MAX_BYTES]u8 = undefined;
+        var fbs: std.Io.Writer = .fixed(&serialized_message_bytes);
+        self.msg.serialize(&fbs, self.version) catch return error.SerializationFailed;
+        try self.verifySignatures(fbs.buffered());
     }
 
     /// Verify the transaction signatures against the provided serialized message.
@@ -253,11 +264,9 @@ pub const Version = enum(u8) {
             try writer.writeByte(Transaction.VERSION_PREFIX | @intFromEnum(self));
     }
 
-    pub fn deserialize(peekable: anytype) !Version {
-        if (try peekable.peekByte() & Transaction.VERSION_PREFIX == 0)
-            return Version.legacy;
-
-        const version = try peekable.reader().readByte();
+    pub fn deserialize(reader: *std.Io.Reader) !Version {
+        if (try reader.peekByte() & Transaction.VERSION_PREFIX == 0) return .legacy;
+        const version = try reader.takeByte();
         return switch (version & ~Transaction.VERSION_PREFIX) {
             0 => .v0,
             127 => error.OffChain,
@@ -434,18 +443,7 @@ pub const Message = struct {
         return !(is_reserved or demote_program_id);
     }
 
-    /// Returns the serialized message as a bounded array.
-    /// Returns an error if the message would exceed the maximum allowed transaction size.
-    pub fn serializeBounded(
-        self: Message,
-        version: Version,
-    ) !std.BoundedArray(u8, Transaction.MAX_BYTES) {
-        var buf: std.BoundedArray(u8, Transaction.MAX_BYTES) = .{};
-        try self.serialize(buf.writer(), version);
-        return buf;
-    }
-
-    pub fn serialize(self: Message, writer: anytype, version: Version) !void {
+    pub fn serialize(self: Message, writer: *std.io.Writer, version: Version) !void {
         try version.serialize(writer);
 
         try writer.writeByte(self.signature_count);
@@ -454,46 +452,55 @@ pub const Message = struct {
 
         // WARN: Truncate okay if transaction is valid
         std.debug.assert(self.account_keys.len <= std.math.maxInt(u16));
-        try leb.writeULEB128(writer, @as(u16, @intCast(self.account_keys.len)));
+        try writer.writeUleb128(@as(u16, @intCast(self.account_keys.len)));
         for (self.account_keys) |id| try writer.writeAll(&id.data);
 
         try writer.writeAll(&self.recent_blockhash.data);
 
         // WARN: Truncate okay if transaction is valid
         std.debug.assert(self.instructions.len <= std.math.maxInt(u16));
-        try leb.writeULEB128(writer, @as(u16, @intCast(self.instructions.len)));
+        try writer.writeUleb128(@as(u16, @intCast(self.instructions.len)));
         for (self.instructions) |instr| try sig.bincode.write(writer, instr, .{});
 
         // WARN: Truncate okay if transaction is valid
         if (version != Version.legacy) {
             std.debug.assert(self.address_lookups.len <= std.math.maxInt(u16));
-            try leb.writeULEB128(writer, @as(u16, @intCast(self.address_lookups.len)));
+            try writer.writeUleb128(@as(u16, @intCast(self.address_lookups.len)));
             for (self.address_lookups) |alt| try sig.bincode.write(writer, alt, .{});
         }
     }
 
-    pub fn deserialize(limit_allocator: *sig.bincode.LimitAllocator, reader: anytype, version: Version) !Message {
+    pub fn deserialize(
+        limit_allocator: *sig.bincode.LimitAllocator,
+        reader: *std.Io.Reader,
+        version: Version,
+    ) !Message {
         const allocator = limit_allocator.allocator();
-        const signature_count = try reader.readByte();
-        const readonly_signed_count = try reader.readByte();
-        const readonly_unsigned_count = try reader.readByte();
+        const signature_count = try reader.takeByte();
+        const readonly_signed_count = try reader.takeByte();
+        const readonly_unsigned_count = try reader.takeByte();
 
-        const account_keys = try allocator.alloc(Pubkey, try leb.readULEB128(u16, reader));
+        const account_keys = try allocator.alloc(Pubkey, try reader.takeLeb128(u16));
         errdefer sig.bincode.free(allocator, account_keys);
-        for (account_keys) |*id| id.* = .{ .data = try reader.readBytesNoEof(Pubkey.SIZE) };
+        for (account_keys) |*id| {
+            const pubkey = try reader.takeArray(Pubkey.SIZE);
+            id.* = .{ .data = pubkey.* };
+        }
 
-        const recent_blockhash: Hash = .{ .data = try reader.readBytesNoEof(Hash.SIZE) };
+        const recent_blockhash: Hash = .{ .data = (try reader.takeArray(Hash.SIZE)).* };
 
-        const instructions = try allocator.alloc(Instruction, try leb.readULEB128(u16, reader));
+        const instructions = try allocator.alloc(Instruction, try reader.takeLeb128(u16));
         errdefer sig.bincode.free(allocator, instructions);
-        for (instructions) |*instr|
+        for (instructions) |*instr| {
             instr.* = try sig.bincode.readWithLimit(limit_allocator, Instruction, reader, .{});
+        }
 
-        const address_lookups_len = if (version == .legacy) 0 else try leb.readULEB128(u16, reader);
+        const address_lookups_len = if (version == .legacy) 0 else try reader.takeLeb128(u16);
         const address_lookups = try allocator.alloc(AddressLookup, address_lookups_len);
         errdefer sig.bincode.free(allocator, address_lookups);
-        for (address_lookups) |*alt|
+        for (address_lookups) |*alt| {
             alt.* = try sig.bincode.readWithLimit(limit_allocator, AddressLookup, reader, .{});
+        }
 
         return .{
             .signature_count = signature_count,
@@ -550,6 +557,12 @@ pub const Message = struct {
         var the_hash: Hash = .{ .data = undefined };
         hasher.final(&the_hash.data);
         return the_hash;
+    }
+
+    pub fn hashWriter(out: *std.io.Writer, buffer: []u8) std.Io.Writer.Hashed(Blake3) {
+        var hasher: Blake3 = .init(.{});
+        hasher.update("solana-tx-message-v1"); // domain seperate
+        return .initHasher(out, hasher, buffer);
     }
 
     pub fn getSigningKeypairPosition(self: Message, pubkey: Pubkey) ?usize {

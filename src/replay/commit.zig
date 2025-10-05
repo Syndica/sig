@@ -143,7 +143,7 @@ fn putAccount(
 ) error{ OutOfMemory, MultipleWritesInBatch }!void {
     const gop = try accounts_to_store.getOrPut(allocator, account.pubkey);
     if (gop.found_existing) {
-        logger.err().logf("multiple writes in a batch for address: {}\n", .{account.pubkey});
+        logger.err().logf("multiple writes in a batch for address: {f}\n", .{account.pubkey});
         // this error probably indicates a bug in the SVM or the account locking
         // code, since the account locks should have already been checked before
         // reaching this point.

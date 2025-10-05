@@ -101,7 +101,8 @@ pub const InstructionContext = struct {
         signers: []const Pubkey,
     ) (error{OutOfMemory} || InstructionError)!void {
         const data = bincode.writeAlloc(allocator, instruction, .{}) catch |e| switch (e) {
-            error.NoSpaceLeft, error.OutOfMemory => return error.OutOfMemory,
+            error.WriteFailed, error.OutOfMemory => return error.OutOfMemory,
+            else => undefined, // TODO: no anyerror in bincode
         };
         defer allocator.free(data);
 

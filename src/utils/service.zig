@@ -186,7 +186,7 @@ pub fn runService(
         // handle result
         if (handler.log_return) {
             level_logger.logf(
-                "{s} has {s}ed: {any} {?}",
+                "{s} has {s}ed: {any} {?f}",
                 .{ name, event_name, result, maybe_trace },
             );
             // reset the stack trace so that if it returns an error in a loop it doesn't try to infinitely
@@ -209,7 +209,7 @@ pub fn runService(
 
         // sleep before looping, if necessary
         last_iteration = timer.lap();
-        std.time.sleep(@max(
+        std.Thread.sleep(@max(
             config.min_pause_ns,
             config.min_loop_duration_ns -| last_iteration,
         ));

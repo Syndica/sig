@@ -202,7 +202,7 @@ pub const Serializer = struct {
 const SerializeReturn = struct {
     std.ArrayListUnmanaged(u8),
     std.ArrayListUnmanaged(Region),
-    std.BoundedArray(SerializedAccountMeta, InstructionInfo.MAX_ACCOUNT_METAS),
+    sig.utils.BoundedArray(SerializedAccountMeta, InstructionInfo.MAX_ACCOUNT_METAS),
 };
 
 /// [agave] https://github.com/anza-xyz/agave/blob/108fcb4ff0f3cb2e7739ca163e6ead04e377e567/program-runtime/src/serialization.rs#L188
@@ -223,7 +223,7 @@ pub fn serializeParameters(
         break :blk program_account.account.owner.equals(&program.bpf_loader.v1.ID);
     };
 
-    var accounts = std.ArrayList(SerializedAccount).initCapacity(
+    var accounts = std.array_list.Managed(SerializedAccount).initCapacity(
         allocator,
         ic.ixn_info.account_metas.len,
     ) catch return InstructionError.ProgramEnvironmentSetupFailure;
@@ -312,7 +312,7 @@ fn serializeParametersUnaligned(
         stricter_abi_and_runtime_constraints,
     );
 
-    var account_metas: std.BoundedArray(
+    var account_metas: sig.utils.BoundedArray(
         SerializedAccountMeta,
         InstructionInfo.MAX_ACCOUNT_METAS,
     ) = .{};
@@ -439,7 +439,7 @@ fn serializeParametersAligned(
     );
     errdefer serializer.deinit();
 
-    var account_metas: std.BoundedArray(
+    var account_metas: sig.utils.BoundedArray(
         SerializedAccountMeta,
         InstructionInfo.MAX_ACCOUNT_METAS,
     ) = .{};

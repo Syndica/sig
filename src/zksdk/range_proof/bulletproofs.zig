@@ -331,8 +331,8 @@ pub fn Proof(bit_size: comptime_int) type {
             //
             // basepoint_scalar depends on a bunch of values computed beforehand so it's added last
 
-            var points: std.BoundedArray(Ristretto255, max) = .{};
-            var scalars: std.BoundedArray([32]u8, max) = .{};
+            var points: sig.utils.BoundedArray(Ristretto255, max) = .{};
+            var scalars: sig.utils.BoundedArray([32]u8, max) = .{};
 
             points.appendSliceAssumeCapacity(&.{
                 pedersen.H,
@@ -585,8 +585,8 @@ pub fn Data(bit_size: comptime_int) type {
 
         pub fn verify(self: Self) !void {
             const context = self.context;
-            var commitments: std.BoundedArray(pedersen.Commitment, 8) = .{};
-            var bit_lengths: std.BoundedArray(u64, 8) = .{};
+            var commitments: sig.utils.BoundedArray(pedersen.Commitment, 8) = .{};
+            var bit_lengths: sig.utils.BoundedArray(u64, 8) = .{};
 
             for (context.commitments, context.bit_lengths) |commitment, length| {
                 if (std.mem.allEqual(u8, &commitment, 0)) break; // we've hit the terminator

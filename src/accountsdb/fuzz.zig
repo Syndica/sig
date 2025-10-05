@@ -124,13 +124,15 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
         defer argv_list.deinit(allocator);
         while (args.next()) |arg| try argv_list.append(allocator, arg);
 
-        const stderr = std.io.getStdErr();
-        const stderr_tty = std.io.tty.detectConfig(stderr);
+        const stderr = std.fs.File.stderr();
+        const stderr_tty = std.Io.tty.detectConfig(stderr);
+        var stderr_writer = stderr.writer(&.{});
+
         break :cmd try RunCmd.parser.parse(
             allocator,
             "fuzz accountsdb",
             stderr_tty,
-            stderr.writer(),
+            &stderr_writer.interface,
             argv_list.items,
         ) orelse return;
     };
@@ -200,7 +202,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     }
 
     var reader_exit: std.atomic.Value(bool) = .init(true);
-    var threads: std.BoundedArray(std.Thread, N_RANDOM_THREADS) = .{};
+    var threads: sig.utils.BoundedArray(std.Thread, N_RANDOM_THREADS) = .{};
     defer {
         reader_exit.store(true, .seq_cst);
         for (threads.constSlice()) |thread| thread.join();
@@ -325,7 +327,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                 const account =
                     try accounts_db.getAccountWithAncestors(&pubkey, &ancestors_sub) orelse {
                         logger.err().logf(
-                            "accounts_db missing tracked account '{}': {}",
+                            "accounts_db missing tracked account '{f}': {any}",
                             .{ pubkey, tracked_account },
                         );
                         return error.MissingAccount;
@@ -334,7 +336,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
 
                 if (!account.data.eqlSlice(&tracked_account.data)) {
                     logger.err().logf(
-                        "found account {} with different data: " ++
+                        "found account {f} with different data: " ++
                             "tracked: {any} vs found: {any}\n",
                         .{ pubkey, tracked_account.data, account.data },
                     );
@@ -386,11 +388,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                     .slot = full_snapshot_info.slot,
                     .hash = full_snapshot_info.hash,
                 };
-                const full_archive_name_bounded = full_snapshot_file_info.snapshotArchiveName();
-                const full_archive_name = full_archive_name_bounded.constSlice();
-
-                const full_archive_file =
-                    try main_accountsdb_dir.openFile(full_archive_name, .{ .mode = .read_only });
+                const full_archive_file = try full_snapshot_file_info.openFile(main_accountsdb_dir);
                 defer full_archive_file.close();
 
                 try sig.accounts_db.snapshot.data.parallelUnpackZstdTarBall(
@@ -402,8 +400,8 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                     true,
                 );
                 logger.info().logf(
-                    "fuzz[validate]: unpacked full snapshot '{s}'",
-                    .{full_archive_name},
+                    "fuzz[validate]: unpacked full snapshot '{f}'",
+                    .{full_snapshot_file_info},
                 );
 
                 break :full full_snapshot_file_info;
@@ -422,18 +420,23 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                     .hash = inc_snapshot_info.hash,
                     .slot = inc_snapshot_info.slot,
                 };
-                const inc_archive_name_bounded = inc_snapshot_file_info.snapshotArchiveName();
-                const inc_archive_name = inc_archive_name_bounded.constSlice();
+
+                // copy file to alternative directory
+                var inc_archive_buffer: [std.fs.max_path_bytes]u8 = undefined;
+                const inc_archive_path = try std.fmt.bufPrint(
+                    &inc_archive_buffer,
+                    "{f}",
+                    .{inc_snapshot_file_info},
+                );
 
                 try main_accountsdb_dir.copyFile(
-                    inc_archive_name,
+                    inc_archive_path,
                     alt_accountsdb_dir,
-                    inc_archive_name,
+                    inc_archive_path,
                     .{},
                 );
 
-                const inc_archive_file =
-                    try alt_accountsdb_dir.openFile(inc_archive_name, .{});
+                const inc_archive_file = try inc_snapshot_file_info.openFile(alt_accountsdb_dir);
                 defer inc_archive_file.close();
 
                 try sig.accounts_db.snapshot.data.parallelUnpackZstdTarBall(
@@ -446,7 +449,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                 );
                 logger.info().logf(
                     "fuzz[validate]: unpacked inc snapshot '{s}'",
-                    .{inc_archive_name},
+                    .{inc_archive_path},
                 );
 
                 break :inc inc_snapshot_file_info;
@@ -531,7 +534,7 @@ fn readRandomAccounts(
             const tracked_pubkeys = tracked_accounts.keys();
             if (tracked_pubkeys.len == 0) {
                 // wait for some accounts to exist
-                std.time.sleep(std.time.ns_per_s);
+                std.Thread.sleep(std.time.ns_per_s);
                 continue;
             }
 

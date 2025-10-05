@@ -264,18 +264,6 @@ pub const SocketAddr = union(enum(u8)) {
         }
     }
 
-    pub fn toString(self: SocketAddr) std.BoundedArray(u8, 53) {
-        var buf: [53]u8 = undefined;
-        const len = self.toStringBuf(&buf);
-        return std.BoundedArray(u8, 53).fromSlice(buf[0..len]) catch unreachable;
-    }
-
-    pub fn toStringBuf(self: SocketAddr, buf: *[53]u8) std.math.IntFittingRange(0, 53) {
-        var stream = std.io.fixedBufferStream(buf);
-        self.toAddress().format("", .{}, stream.writer()) catch unreachable;
-        return @intCast(stream.pos);
-    }
-
     pub fn isUnspecified(self: *const SocketAddr) bool {
         switch (self.*) {
             .V4 => |addr| {
@@ -311,15 +299,10 @@ pub const SocketAddr = union(enum(u8)) {
         }
     }
 
-    pub fn format(
-        self: SocketAddr,
-        comptime fmt: []const u8,
-        options: std.fmt.FormatOptions,
-        writer: anytype,
-    ) !void {
+    pub fn format(self: SocketAddr, writer: *std.Io.Writer) !void {
         switch (self) {
-            .V4 => |sav4| try sav4.format(fmt, options, writer),
-            .V6 => |sav6| try sav6.format(fmt, options, writer),
+            .V4 => |sav4| try sav4.format(writer),
+            .V6 => |sav6| try sav6.format(writer),
         }
     }
 };
@@ -328,15 +311,8 @@ pub const SocketAddrV4 = struct {
     ip: Ipv4Addr,
     port: u16,
 
-    pub fn format(
-        self: SocketAddrV4,
-        comptime fmt: []const u8,
-        options: std.fmt.FormatOptions,
-        writer: anytype,
-    ) !void {
-        _ = fmt;
-        _ = options;
-        try writer.print("{}:{d}", .{
+    pub fn format(self: SocketAddrV4, writer: *std.Io.Writer) !void {
+        try writer.print("{f}:{d}", .{
             self.ip,
             self.port,
         });
@@ -349,15 +325,8 @@ pub const SocketAddrV6 = struct {
     flowinfo: u32,
     scope_id: u32,
 
-    pub fn format(
-        self: SocketAddrV6,
-        comptime fmt: []const u8,
-        options: std.fmt.FormatOptions,
-        writer: anytype,
-    ) !void {
-        _ = fmt;
-        _ = options;
-        try writer.print("{}:{d}", .{
+    pub fn format(self: SocketAddrV6, writer: *std.Io.Writer) !void {
+        try writer.print("{f}:{d}", .{
             self.ip,
             self.port,
         });
@@ -375,15 +344,8 @@ pub const Ipv4Addr = struct {
         return std.mem.eql(u8, self.octets[0..], other.octets[0..]);
     }
 
-    pub fn format(
-        self: Ipv4Addr,
-        comptime fmt: []const u8,
-        options: std.fmt.FormatOptions,
-        writer: anytype,
-    ) !void {
-        _ = fmt;
-        _ = options;
-        try writer.print("{}.{}.{}.{}", .{
+    pub fn format(self: Ipv4Addr, writer: *std.Io.Writer) !void {
+        try writer.print("{d}.{d}.{d}.{d}", .{
             self.octets[0],
             self.octets[1],
             self.octets[2],
@@ -410,26 +372,18 @@ pub const Ipv6Addr = struct {
         return self.octets[0] == 255;
     }
 
-    pub fn format(
-        self: Ipv6Addr,
-        comptime fmt: []const u8,
-        options: std.fmt.FormatOptions,
-        writer: anytype,
-    ) !void {
-        _ = fmt;
-        _ = options;
+    pub fn format(self: Ipv6Addr, writer: *std.Io.Writer) !void {
         if (std.mem.eql(
             u8,
             self.octets[0..12],
             &[12]u8{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff },
         )) {
-            try std.fmt.format(writer, "[::ffff:{}.{}.{}.{}]", .{
+            try writer.print("[::ffff:{}.{}.{}.{}]", .{
                 self.octets[12],
                 self.octets[13],
                 self.octets[14],
                 self.octets[15],
             });
-            return;
         }
         const big_endian_parts: *align(1) const [8]u16 = @ptrCast(&self.octets);
         const native_endian_parts = switch (builtin.target.cpu.arch.endian()) {
@@ -453,7 +407,7 @@ pub const Ipv6Addr = struct {
                 }
                 continue;
             }
-            try std.fmt.format(writer, "{x}", .{native_endian_parts[i]});
+            try writer.print("{x}", .{native_endian_parts[i]});
             if (i != native_endian_parts.len - 1) {
                 try writer.writeAll(":");
             }
@@ -527,25 +481,14 @@ pub const IpAddr = union(enum(u32)) {
 
     pub fn format(
         self: Self,
-        comptime fmt: []const u8,
-        options: std.fmt.FormatOptions,
-        writer: anytype,
+        writer: *std.Io.Writer,
     ) !void {
         switch (self) {
-            .ipv4 => |ipv4| try ipv4.format(fmt, options, writer),
-            .ipv6 => |ipv6| try ipv6.format(fmt, options, writer),
+            .ipv4 => |ipv4| try ipv4.format(writer),
+            .ipv6 => |ipv6| try ipv6.format(writer),
         }
     }
 };
-
-pub fn endpointToString(
-    allocator: std.mem.Allocator,
-    endpoint: *const network.EndPoint,
-) error{OutOfMemory}!std.ArrayList(u8) {
-    var endpoint_buf = try std.ArrayList(u8).initCapacity(allocator, 14);
-    try endpoint.format(&[_]u8{}, std.fmt.FormatOptions{}, endpoint_buf.writer());
-    return endpoint_buf;
-}
 
 /// Socket.enablePortReuse does not actually enable SO_REUSEPORT. It sets SO_REUSEADDR.
 /// This is the correct implementation to enable SO_REUSEPORT.

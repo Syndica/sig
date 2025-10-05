@@ -139,7 +139,7 @@ pub fn RecycleBuffer(comptime T: type, default_init: T, config: struct {
                             if (config.thread_safe) self.mux.unlock();
                             defer if (config.thread_safe) self.mux.lock();
                             // wait some time and try to collapse again.
-                            std.time.sleep(std.time.ns_per_ms * config.collapse_sleep_ms);
+                            std.Thread.sleep(std.time.ns_per_ms * config.collapse_sleep_ms);
                             // NOTE: this is because there may be new free records
                             // (which were free'd by some other consumer thread) which
                             // can be collapsed and the alloc call will then succeed.
@@ -169,7 +169,7 @@ pub fn RecycleBuffer(comptime T: type, default_init: T, config: struct {
                             if (config.thread_safe) self.mux.unlock();
                             defer if (config.thread_safe) self.mux.lock();
                             // wait some time and try to collapse again.
-                            std.time.sleep(std.time.ns_per_ms * config.collapse_sleep_ms);
+                            std.Thread.sleep(std.time.ns_per_ms * config.collapse_sleep_ms);
                             // NOTE: this is because there may be new free records
                             // (which were free'd by some other consumer thread) which
                             // can be collapsed and the alloc call will then succeed.
@@ -323,7 +323,7 @@ pub fn RecycleFBA(config: struct {
         // this does the data allocations (data is returned from alloc)
         fba_allocator: std.heap.FixedBufferAllocator,
         // recycling depot
-        records: std.ArrayList(Record),
+        records: std.array_list.Managed(Record),
         // for thread safety
         mux: std.Thread.Mutex = .{},
 
@@ -339,7 +339,7 @@ pub fn RecycleFBA(config: struct {
         pub fn init(allocator_config: AllocatorConfig, n_bytes: u64) !Self {
             const buf = try allocator_config.bytes_allocator.alloc(u8, n_bytes);
             const fba_allocator = std.heap.FixedBufferAllocator.init(buf);
-            const records = std.ArrayList(Record).init(allocator_config.records_allocator);
+            const records = std.array_list.Managed(Record).init(allocator_config.records_allocator);
 
             return .{
                 .bytes_allocator = allocator_config.bytes_allocator,
@@ -519,7 +519,7 @@ pub fn RecycleFBA(config: struct {
 
         /// collapses adjacent free records into a single record
         pub fn tryCollapse(self: *Self) void {
-            var new_records = std.ArrayList(Record).init(self.bytes_allocator);
+            var new_records = std.array_list.Managed(Record).init(self.bytes_allocator);
             var last_was_free = false;
 
             for (self.records.items) |record| {
@@ -691,7 +691,7 @@ pub const BatchAllocator = struct {
         // create new batch
         const batch_bytes = self.backing_allocator
             .rawAlloc(batch_size, .fromByteUnits(@alignOf(Batch)), ret_addr) orelse return null;
-        const new_batch: *Batch = @alignCast(@ptrCast(batch_bytes));
+        const new_batch: *Batch = @ptrCast(@alignCast(batch_bytes));
         new_batch.* = Batch{
             .fba = FixedBufferAllocator.init(batch_bytes[@sizeOf(Batch)..batch_size]),
             .num_allocs = Atomic(usize).init(1),
@@ -799,8 +799,12 @@ pub const DiskMemoryAllocator = struct {
         const aligned_mmap_size = alignedMmapSize(file_aligned_size, self.mmap_ratio);
 
         const file_index = self.count.fetchAdd(1, .monotonic);
-        const file_name_bounded = fileNameBounded(file_index);
-        const file_name = file_name_bounded.constSlice();
+        var filename_buffer: [std.fs.max_path_bytes]u8 = undefined;
+        const file_name = std.fmt.bufPrint(
+            &filename_buffer,
+            "bin_{d}",
+            .{file_index},
+        ) catch unreachable;
 
         const file = self.dir.createFile(file_name, .{
             .read = true,
@@ -875,8 +879,12 @@ pub const DiskMemoryAllocator = struct {
             return false;
         }
 
-        const file_name_bounded = fileNameBounded(metadata.file_index);
-        const file_name = file_name_bounded.constSlice();
+        var filename_buffer: [std.fs.max_path_bytes]u8 = undefined;
+        const file_name = std.fmt.bufPrint(
+            &filename_buffer,
+            "bin_{d}",
+            .{metadata.file_index},
+        ) catch unreachable;
 
         const file = self.dir.openFile(file_name, .{ .mode = .read_write }) catch |err| {
             self.logFailure(err, file_name);
@@ -933,8 +941,12 @@ pub const DiskMemoryAllocator = struct {
         const metadata_start = file_aligned_size - @sizeOf(Metadata);
         const metadata: Metadata = @bitCast(buf_ptr[metadata_start..][0..@sizeOf(Metadata)].*);
 
-        const file_name_bounded = fileNameBounded(metadata.file_index);
-        const file_name = file_name_bounded.constSlice();
+        var filename_buffer: [std.fs.max_path_bytes]u8 = undefined;
+        const file_name = std.fmt.bufPrint(
+            &filename_buffer,
+            "bin_{d}",
+            .{metadata.file_index},
+        ) catch unreachable;
 
         std.posix.munmap(buf_ptr[0..metadata.mmap_size]);
         self.dir.deleteFile(file_name) catch |err| {
@@ -943,14 +955,13 @@ pub const DiskMemoryAllocator = struct {
     }
 
     fn logFailure(self: Self, err: anyerror, file_name: []const u8) void {
-        self.logger.err().logf("Disk Memory Allocator error: {s}, filepath: {s}", .{
-            @errorName(err), sig.utils.fmt.tryRealPath(self.dir, file_name),
-        });
-    }
-
-    const FileNameFmtSpec = sig.utils.fmt.BoundedSpec("bin_{d}");
-    inline fn fileNameBounded(file_index: u32) FileNameFmtSpec.BoundedArray(struct { u32 }) {
-        return FileNameFmtSpec.fmt(.{file_index});
+        var realpath_buffer: [std.fs.max_path_bytes]u8 = undefined;
+        const realpath = self.dir.realpath(file_name, &realpath_buffer) catch |rerr|
+            std.debug.panic("failed to realpath(): {t}", .{rerr});
+        self.logger.err().logf(
+            "Disk Memory Allocator error: {t}, filepath: {s}",
+            .{ err, realpath },
+        );
     }
 };
 
@@ -1076,7 +1087,7 @@ test "recycle buffer: freeUnused" {
     const bytes2 = try allocator.alloc(50);
     defer allocator.free(bytes2.ptr);
 
-    const expected_ptr: [*]X = @alignCast(@ptrCast(&bytes[50]));
+    const expected_ptr: [*]X = @ptrCast(@alignCast(&bytes[50]));
     try std.testing.expectEqual(expected_ptr, bytes2.ptr);
 }
 
@@ -1202,7 +1213,7 @@ test "disk allocator on arraylists" {
             tmp_dir.access("bin_0", .{}),
         ); // this should not exist
 
-        var disk_account_refs = try std.ArrayList(u8).initCapacity(dma, 1);
+        var disk_account_refs = try std.array_list.Managed(u8).initCapacity(dma, 1);
         defer disk_account_refs.deinit();
 
         disk_account_refs.appendAssumeCapacity(19);
@@ -1431,7 +1442,7 @@ fn fuzzAllocator(
     subject: Allocator,
 ) Allocator.Error!void {
     // all existing allocations from the allocator
-    var allocations = std.ArrayList(struct { usize, []u8 }).init(params.allocator);
+    var allocations = std.array_list.Managed(struct { usize, []u8 }).init(params.allocator);
     defer {
         for (allocations.items) |pair| {
             const item_id, const item = pair;

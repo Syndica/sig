@@ -26,9 +26,12 @@ pub fn getShredAndIPFromEchoServer(
         my_ip = my_ip orelse response.address;
 
         if (response.shred_version) |shred_version| {
+            var buffer: [0x100]u8 = undefined;
+            const socket_fmt = try std.fmt.bufPrint(&buffer, "{f}", .{socket_addr});
+
             logger.info()
                 .field("shred_version", shred_version.value)
-                .field("ip", socket_addr.toString().constSlice())
+                .field("ip", socket_fmt)
                 .log("ip echo response");
             my_shred_version = shred_version.value;
         }
@@ -43,32 +46,40 @@ pub fn getShredAndIPFromEchoServer(
     };
 }
 
-pub fn requestIpEcho(
-    addr: std.net.Address,
-    message: IpEchoRequest,
-) !IpEchoResponse {
+pub fn requestIpEcho(addr: std.net.Address, message: IpEchoRequest) !IpEchoResponse {
     // connect + send
-    const conn = try std.net.tcpConnectToAddress(addr);
-    defer conn.close();
-    try conn.writeAll(&(.{0} ** HEADER_LENGTH));
-    try sig.bincode.write(conn.writer(), message, .{});
-    try conn.writeAll("\n");
+    const stream = try std.net.tcpConnectToAddress(addr);
+    defer stream.close();
+
+    var buffer: [256]u8 = undefined;
+    var stream_writer = stream.writer(&buffer);
+    const writer = &stream_writer.interface;
+
+    try writer.splatByteAll(0, HEADER_LENGTH);
+    try sig.bincode.write(writer, message, .{});
+    try writer.writeByte('\n');
+
+    try writer.flush();
 
     // get response
-    var buff: [32]u8 = undefined;
-    const len = try conn.readAll(&buff);
-    var fbs = std.io.fixedBufferStream(buff[HEADER_LENGTH..len]);
+
     const assert_allocator = sig.utils.allocators.failing.allocator(.{
         .alloc = .assert,
         .resize = .assert,
         .free = .assert,
     });
-    return try sig.bincode.read(assert_allocator, IpEchoResponse, fbs.reader(), .{});
+
+    var stream_reader = stream.reader(&.{});
+    const reader: *std.Io.Reader = stream_reader.interface();
+
+    try reader.discardAll(HEADER_LENGTH); // skip the header
+
+    return try sig.bincode.read(assert_allocator, IpEchoResponse, reader, .{});
 }
 
 const IpEchoRequest = struct {
-    tcp_ports: [MAX_PORT_COUNT_PER_MSG]u16 = [_]u16{0} ** MAX_PORT_COUNT_PER_MSG,
-    udp_ports: [MAX_PORT_COUNT_PER_MSG]u16 = [_]u16{0} ** MAX_PORT_COUNT_PER_MSG,
+    tcp_ports: [MAX_PORT_COUNT_PER_MSG]u16 = @splat(0),
+    udp_ports: [MAX_PORT_COUNT_PER_MSG]u16 = @splat(0),
 };
 
 const IpEchoResponse = struct {
@@ -243,7 +254,7 @@ const ConnectionTask = struct {
         };
 
         const content_len = blk: {
-            var counter = std.io.countingWriter(std.io.null_writer);
+            var counter = std.Io.countingWriter(std.Io.null_writer);
             try std.json.stringify(ip_echo_response, .{}, counter.writer());
             break :blk counter.bytes_written;
         };

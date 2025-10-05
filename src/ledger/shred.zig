@@ -200,10 +200,9 @@ pub const CodeShred = struct {
         @memcpy(payload[constants.headers_size..][0..shard.len], shard);
         @memset(payload[constants.headers_size + shard.len ..], 0);
 
-        var buf = std.io.fixedBufferStream(payload);
-        const writer = buf.writer();
-        try bincode.write(writer, common_header, .{});
-        try bincode.write(writer, code_header, .{});
+        var fbs: std.io.Writer = .fixed(payload);
+        try bincode.write(&fbs, common_header, .{});
+        try bincode.write(&fbs, code_header, .{});
 
         if (chained_merkle_root) |hash|
             try setChainedMerkleRoot(payload, common_header.variant, hash);
@@ -459,11 +458,12 @@ fn GenericShred(shred_type: ShredType) type {
         /// - `payload` was allocated with `allocator`
         /// - payload.len >= constants.payload_size
         fn fromPayloadOwned(allocator: Allocator, payload: []u8) !Self {
-            var buf = std.io.fixedBufferStream(payload[0..constants.payload_size]);
-            const self = Self{
+            var fbs: std.io.Reader = .fixed(payload[0..constants.payload_size]);
+
+            const self: Self = .{
                 .allocator = allocator,
-                .common = try bincode.read(allocator, CommonHeader, buf.reader(), .{}),
-                .custom = try bincode.read(allocator, CustomHeader, buf.reader(), .{}),
+                .common = try bincode.read(allocator, CommonHeader, &fbs, .{}),
+                .custom = try bincode.read(allocator, CustomHeader, &fbs, .{}),
                 .payload = payload,
             };
 
@@ -682,7 +682,7 @@ const MERKLE_HASH_PREFIX_LEAF: *const [26]u8 = "\x00SOLANA_MERKLE_SHREDS_LEAF";
 const MERKLE_HASH_PREFIX_NODE: *const [26]u8 = "\x01SOLANA_MERKLE_SHREDS_NODE";
 
 /// agave: make_merkle_tree
-pub fn makeMerkleTree(nodes: *std.ArrayList(Hash)) !void {
+pub fn makeMerkleTree(nodes: *std.array_list.Managed(Hash)) !void {
     var size = nodes.items.len;
     while (size > 1) {
         const offset = nodes.items.len - size;
@@ -1031,25 +1031,24 @@ pub const ShredVariant = struct {
 
 pub const ShredVariantConfig = blk: {
     const S = struct {
-        pub fn serialize(writer: anytype, data: anytype, _: bincode.Params) !void {
-            return writer.writeByte(try ShredVariant.toByte(data));
+        pub fn serialize(writer: *std.io.Writer, data: ShredVariant, _: bincode.Params) !void {
+            const byte = try ShredVariant.toByte(data);
+            return writer.writeByte(byte);
         }
 
         pub fn deserialize(
             _: *bincode.LimitAllocator,
-            reader: anytype,
+            reader: *std.io.Reader,
             _: bincode.Params,
         ) !ShredVariant {
-            return try ShredVariant.fromByte(try reader.readByte());
+            const byte = try reader.takeByte();
+            return try ShredVariant.fromByte(byte);
         }
-
-        pub fn free(_: std.mem.Allocator, _: anytype) void {}
     };
 
     break :blk bincode.FieldConfig(ShredVariant){
         .serializer = S.serialize,
         .deserializer = S.deserialize,
-        .free = S.free,
     };
 };
 
@@ -1200,7 +1199,7 @@ pub fn overwriteShredForTest(allocator: Allocator, shred: *Shred, data: []const 
     const new_payload = try allocator.dupe(u8, shred.payload());
     @memset(new_payload, 0);
 
-    var buf = std.io.fixedBufferStream(new_payload[0..constants.payload_size]);
+    var buf = std.Io.fixedBufferStream(new_payload[0..constants.payload_size]);
     const writer = buf.writer();
 
     switch (shred.*) {
@@ -1345,7 +1344,7 @@ test "merkle tree round trip" {
     const random = prng.random();
     const size = 100;
 
-    var nodes = try std.ArrayList(Hash).initCapacity(allocator, size);
+    var nodes = try std.array_list.Managed(Hash).initCapacity(allocator, size);
     defer nodes.deinit();
     for (0..size) |_| {
         nodes.appendAssumeCapacity(Hash.initRandom(random));
@@ -1458,7 +1457,7 @@ test makeMerkleTree {
         .parse("EsV8thKpJBh72M4pEm3ZYUrTS8xge7CEzY4L4waQVcrJ"),
         .parse("4Ldwcp5b81BrE9e4SECwc4kmDq3AEuvaaATvU1eF7Phb"),
     };
-    var nodes_list = std.ArrayList(Hash).init(std.testing.allocator);
+    var nodes_list = std.array_list.Managed(Hash).init(std.testing.allocator);
     defer nodes_list.deinit();
     for (nodes) |n| try nodes_list.append(n);
     try makeMerkleTree(&nodes_list);

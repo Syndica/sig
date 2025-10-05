@@ -125,7 +125,7 @@ pub const Tower = struct {
             );
         }
         self.vote_state = TowerVoteState{
-            .votes = try std.BoundedArray(Lockout, MAX_LOCKOUT_HISTORY)
+            .votes = try sig.utils.BoundedArray(Lockout, MAX_LOCKOUT_HISTORY)
                 .fromSlice(try lockouts.toOwnedSlice(allocator)),
             .root_slot = vote_state.root_slot,
         };
@@ -149,7 +149,7 @@ pub const Tower = struct {
         should_retain: std.DynamicBitSetUnmanaged,
     ) !void {
         std.debug.assert(should_retain.capacity() >= self.vote_state.votes.len);
-        var retained = try std.BoundedArray(Lockout, MAX_LOCKOUT_HISTORY).init(0);
+        var retained = try sig.utils.BoundedArray(Lockout, MAX_LOCKOUT_HISTORY).init(0);
         for (self.vote_state.votes.constSlice(), 0..) |item, i| {
             if (should_retain.isSet(i)) {
                 _ = try retained.append(item);

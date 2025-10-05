@@ -29,14 +29,15 @@ pub fn run(args: *std.process.ArgIterator) !void {
         const seed_file = try std.fs.cwd().createFile(SEED_FILE_PATH, .{ .truncate = false });
         defer seed_file.close();
 
-        try seed_file.writer().print("{}\n", .{seed});
+        var writer = seed_file.writer(&.{});
+        try writer.interface.print("{}\n", .{seed});
     }
     std.debug.print("seed: {}\n", .{seed});
 
     var prng = std.Random.DefaultPrng.init(seed);
     const random = prng.random();
 
-    var bytes_buffer = std.ArrayList(u8).init(allocator);
+    var bytes_buffer: std.Io.Writer.Allocating = .init(allocator);
     defer bytes_buffer.deinit();
 
     var i: u64 = 0;
@@ -50,24 +51,25 @@ pub fn run(args: *std.process.ArgIterator) !void {
 
         try bytes_buffer.ensureUnusedCapacity(bincode.sizeOf(manifest_original, .{}) * 2);
 
-        const original_bytes_start = bytes_buffer.items.len;
-        try bincode.write(bytes_buffer.writer(), manifest_original, .{});
-        const original_bytes_end = bytes_buffer.items.len;
+        const original_bytes_start = bytes_buffer.written().len;
+        try bincode.write(&bytes_buffer.writer, manifest_original, .{});
+        const original_bytes_end = bytes_buffer.written().len;
 
         const snapshot_deserialized = try bincode.readFromSlice(
             allocator,
             SnapshotManifest,
-            bytes_buffer.items[original_bytes_start..original_bytes_end],
+            bytes_buffer.written()[original_bytes_start..original_bytes_end],
             .{},
         );
         defer snapshot_deserialized.deinit(allocator);
 
-        const serialized_bytes_start = bytes_buffer.items.len;
-        try bincode.write(bytes_buffer.writer(), snapshot_deserialized, .{});
-        const serialized_bytes_end = bytes_buffer.items.len;
+        const serialized_bytes_start = bytes_buffer.written().len;
+        try bincode.write(&bytes_buffer.writer, snapshot_deserialized, .{});
+        const serialized_bytes_end = bytes_buffer.written().len;
 
-        const original_bytes = bytes_buffer.items[original_bytes_start..original_bytes_end];
-        const serialized_bytes = bytes_buffer.items[serialized_bytes_start..serialized_bytes_end];
+        const bytes_written = bytes_buffer.written();
+        const original_bytes = bytes_written[original_bytes_start..original_bytes_end];
+        const serialized_bytes = bytes_written[serialized_bytes_start..serialized_bytes_end];
         try std.testing.expectEqualSlices(u8, original_bytes, serialized_bytes);
         std.debug.print("Verified {d} snapshots\n", .{i});
     }

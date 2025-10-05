@@ -8,7 +8,7 @@ const socket_utils = sig.net.socket_utils;
 const pull_request = sig.gossip.pull_request;
 const pull_response = sig.gossip.pull_response;
 
-const ArrayList = std.ArrayList;
+const ArrayList = std.array_list.Managed;
 const Thread = std.Thread;
 const Atomic = std.atomic.Value;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
@@ -55,7 +55,6 @@ const Duration = sig.time.Duration;
 const ExitCondition = sig.sync.ExitCondition;
 const SocketThread = sig.net.SocketThread;
 
-const endpointToString = sig.net.endpointToString;
 const globalRegistry = sig.prometheus.globalRegistry;
 const getWallclockMs = sig.time.getWallclockMs;
 const deinitMux = sig.sync.mux.deinitMux;
@@ -465,20 +464,20 @@ pub const GossipService = struct {
                 packet.data(),
                 bincode.Params.standard,
             ) catch |e| {
-                self.logger.err().logf("packet_verify: failed to deserialize: {s}", .{@errorName(e)});
+                self.logger.err().logf("packet_verify: failed to deserialize: {t}", .{e});
                 return;
             };
 
             message.sanitize() catch |e| {
-                self.logger.err().logf("packet_verify: failed to sanitize: {s}", .{@errorName(e)});
+                self.logger.err().logf("packet_verify: failed to sanitize: {t}", .{e});
                 bincode.free(self.gossip_data_allocator, message);
                 return;
             };
 
             message.verifySignature() catch |e| {
                 self.logger.err().logf(
-                    "packet_verify: failed to verify signature from {}: {s}",
-                    .{ packet.addr, @errorName(e) },
+                    "packet_verify: failed to verify signature from {f}: {t}",
+                    .{ packet.addr, e },
                 );
                 bincode.free(self.gossip_data_allocator, message);
                 return;
@@ -980,7 +979,7 @@ pub const GossipService = struct {
             // sleep
             if (loop_timer.read().asNanos() < BUILD_MESSAGE_LOOP_MIN.asNanos()) {
                 const time_left_ms = BUILD_MESSAGE_LOOP_MIN.asMillis() -| loop_timer.read().asMillis();
-                std.time.sleep(time_left_ms * std.time.ns_per_ms);
+                std.Thread.sleep(time_left_ms * std.time.ns_per_ms);
             }
         }
     }
@@ -1523,9 +1522,6 @@ pub const GossipService = struct {
             packet.size = bytes_written.len;
             packet.addr = ping_message.from_endpoint.*;
 
-            const endpoint_str = try endpointToString(self.allocator, ping_message.from_endpoint);
-            defer endpoint_str.deinit();
-
             try self.packet_outgoing_channel.send(packet);
             self.metrics.pong_messages_sent.add(1);
         }
@@ -1678,7 +1674,7 @@ pub const GossipService = struct {
         for (batch_push_messages.items) |push_message| {
             max_inserts_per_push = @max(max_inserts_per_push, push_message.gossip_values.len);
         }
-        var insert_results = try std.ArrayList(GossipTable.InsertResult).initCapacity(
+        var insert_results = try std.array_list.Managed(GossipTable.InsertResult).initCapacity(
             self.allocator,
             max_inserts_per_push,
         );
@@ -1891,9 +1887,17 @@ pub const GossipService = struct {
         for (self.entrypoints.items) |entrypoint| {
             if (entrypoint.info) |info| {
                 if (info.shred_version != 0) {
+                    // TODO: rework logger API to not need this
+                    var buffer: [0x100]u8 = undefined;
+                    const socket_fmt = std.fmt.bufPrint(
+                        &buffer,
+                        "{f}",
+                        .{entrypoint.addr},
+                    ) catch unreachable;
+
                     self.logger.info()
                         .field("shred_version", info.shred_version)
-                        .field("entrypoint", entrypoint.addr.toString().constSlice())
+                        .field("entrypoint", socket_fmt)
                         .log("shred_version_from_entrypoint");
 
                     self.my_shred_version.store(info.shred_version, .monotonic);
@@ -2488,7 +2492,7 @@ test "handling prune messages" {
     };
     try prune_data.sign(&my_keypair);
 
-    var data = std.ArrayList(PruneData).init(allocator);
+    var data = std.array_list.Managed(PruneData).init(allocator);
     defer data.deinit();
     try data.append(prune_data);
 
@@ -2641,12 +2645,12 @@ test "handle old prune & pull request message" {
     const MAX_N_SLEEPS = 100;
     var i: u64 = 0;
     while (gossip_service.metrics.pull_requests_dropped.get() != 2) {
-        std.time.sleep(std.time.ns_per_ms * 100);
+        std.Thread.sleep(std.time.ns_per_ms * 100);
         if (i > MAX_N_SLEEPS) return error.LoopRangeExceeded;
         i += 1;
     }
     while (gossip_service.metrics.prune_messages_dropped.get() != 1) {
-        std.time.sleep(std.time.ns_per_ms * 100);
+        std.Thread.sleep(std.time.ns_per_ms * 100);
         if (i > MAX_N_SLEEPS) return error.LoopRangeExceeded;
         i += 1;
     }
@@ -3263,7 +3267,7 @@ test "process contact info push packet" {
     const MAX_N_SLEEPS = 100;
     var i: u64 = 0;
     while (gossip_service.metrics.gossip_packets_processed_total.get() != valid_messages_sent) {
-        std.time.sleep(std.time.ns_per_ms * 100);
+        std.Thread.sleep(std.time.ns_per_ms * 100);
         if (i > MAX_N_SLEEPS) return error.LoopRangeExceeded;
         i += 1;
     }

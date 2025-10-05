@@ -13,14 +13,14 @@ pub fn standardConfig(comptime List: type) bincode.FieldConfig(List) {
     const list_info = arrayListInfo(List).?;
 
     const S = struct {
-        fn serialize(writer: anytype, data: anytype, params: bincode.Params) anyerror!void {
+        fn serialize(writer: *std.Io.Writer, data: List, params: bincode.Params) anyerror!void {
             try bincode.write(writer, data.items.len, params);
             for (data.items) |item| try bincode.write(writer, item, params);
         }
 
         fn deserialize(
             limit_allocator: *bincode.LimitAllocator,
-            reader: anytype,
+            reader: *std.Io.Reader,
             params: Params,
         ) anyerror!List {
             const len = (try readIntAsLength(usize, reader, params)) orelse return error.ArrayListTooBig;
@@ -43,7 +43,7 @@ pub fn standardConfig(comptime List: type) bincode.FieldConfig(List) {
             return data;
         }
 
-        fn free(allocator: std.mem.Allocator, data: anytype) void {
+        fn free(allocator: std.mem.Allocator, data: List) void {
             var copy = data;
             for (copy.items) |value| bincode.free(allocator, value);
             switch (list_info.management) {

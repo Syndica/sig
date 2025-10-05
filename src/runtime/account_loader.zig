@@ -38,9 +38,9 @@ pub const RentDebit = struct { rent_collected: u64, rent_balance: u64 };
 /// loader), which seems pointless.
 pub const LoadedTransactionAccounts = struct {
     /// data owned by BatchAccountCache
-    accounts: std.BoundedArray(CachedAccount, MAX_TX_ACCOUNT_LOCKS),
+    accounts: sig.utils.BoundedArray(CachedAccount, MAX_TX_ACCOUNT_LOCKS),
     /// equal len to .accounts
-    rent_debits: std.BoundedArray(RentDebit, MAX_TX_ACCOUNT_LOCKS),
+    rent_debits: sig.utils.BoundedArray(RentDebit, MAX_TX_ACCOUNT_LOCKS),
 
     rent_collected: u64,
     loaded_accounts_data_size: u32,
@@ -713,7 +713,7 @@ fn constructInstructionsAccount(
     const Instruction = sig.core.Instruction;
     const InstructionAccount = sig.core.instruction.InstructionAccount;
 
-    var decompiled_instructions = try std.ArrayList(Instruction).initCapacity(
+    var decompiled_instructions = try std.array_list.Managed(Instruction).initCapacity(
         allocator,
         transaction.instructions.len,
     );
@@ -1618,7 +1618,7 @@ test "load v3 program" {
         },
     };
 
-    var v3_program_buf = std.ArrayList(u8).init(allocator);
+    var v3_program_buf = std.array_list.Managed(u8).init(allocator);
     defer v3_program_buf.deinit();
 
     try sig.bincode.write(v3_program_buf.writer(), v3_program, .{});

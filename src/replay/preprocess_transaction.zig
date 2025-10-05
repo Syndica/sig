@@ -38,12 +38,15 @@ pub fn preprocessTransaction(
 
     txn.validate() catch return .{ .err = .SanitizeFailure };
 
-    const msg_bytes = txn.msg.serializeBounded(txn.version) catch return .{
-        .err = .SanitizeFailure,
-    };
+    var msg_bytes: [1500]u8 = undefined; // message must fit into txn, so it must be less than MTU
+    var fbs: std.Io.Writer = .fixed(&msg_bytes);
+    var hashing_writer = Message.hashWriter(&fbs, &.{});
+
+    txn.msg.serialize(&hashing_writer.writer, txn.version) catch
+        return .{ .err = .SanitizeFailure };
 
     if (sig_verify == .run_sig_verify) {
-        txn.verifySignatures(msg_bytes.constSlice()) catch |err| return switch (err) {
+        txn.verifySignatures(fbs.buffered()) catch |err| return switch (err) {
             error.SignatureVerificationFailed => .{ .err = .SignatureFailure },
             else => .{ .err = .SanitizeFailure },
         };
@@ -54,8 +57,11 @@ pub fn preprocessTransaction(
         .err => |err| return .{ .err = err },
     };
 
+    var message_hash: Hash = .{ .data = undefined };
+    hashing_writer.hasher.final(&message_hash.data);
+
     return .{ .ok = .{
-        Message.hash(msg_bytes.constSlice()),
+        message_hash,
         compute_budget_instruction_details,
     } };
 }

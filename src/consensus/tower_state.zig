@@ -8,11 +8,11 @@ const VoteAccount = sig.core.vote_accounts.VoteAccount;
 
 pub const TowerVoteState = struct {
     root_slot: ?Slot = null,
-    votes: std.BoundedArray(Lockout, MAX_LOCKOUT_HISTORY) = .{},
+    votes: sig.utils.BoundedArray(Lockout, MAX_LOCKOUT_HISTORY) = .{},
 
     pub fn fromAccount(account: *const VoteAccount) !TowerVoteState {
         const vote_state = account.state;
-        var lockouts: std.BoundedArray(Lockout, MAX_LOCKOUT_HISTORY) = .{};
+        var lockouts: sig.utils.BoundedArray(Lockout, MAX_LOCKOUT_HISTORY) = .{};
         for (vote_state.votes.items) |landed| {
             try lockouts.append(.{
                 .slot = landed.lockout.slot,

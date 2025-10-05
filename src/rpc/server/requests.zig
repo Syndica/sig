@@ -17,7 +17,7 @@ pub const ContentType = enum(u8) {
     @"application/json",
 };
 
-pub const TargetBoundedStr = std.BoundedArray(u8, MAX_TARGET_LEN);
+pub const TargetBoundedStr = sig.utils.BoundedArray(u8, MAX_TARGET_LEN);
 pub const MAX_TARGET_LEN: usize = blk: {
     const SnapSpec = IncrementalSnapshotFileInfo.SnapshotArchiveNameFmtSpec;
     break :blk "/".len + SnapSpec.fmtLenValue(.{

@@ -207,7 +207,7 @@ fn RcBase(T: type) type {
 
         pub fn alloc(allocator: Allocator, n: usize) Allocator.Error!Self {
             const total_size = totalSize(n) catch return error.OutOfMemory;
-            const bytes = try allocator.alignedAlloc(u8, alignment, total_size);
+            const bytes = try allocator.alignedAlloc(u8, .fromByteUnits(alignment), total_size);
 
             @as(*ReferenceCounter, @ptrCast(bytes.ptr)).* = .{};
             return .{ .ptr = @alignCast(bytes.ptr) };

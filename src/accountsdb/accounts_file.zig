@@ -59,16 +59,17 @@ pub const FileId = enum(Int) {
     }
 
     fn serialize(
-        writer: anytype,
-        data: anytype,
+        writer: *std.Io.Writer,
+        data: FileId,
         params: sig.bincode.Params,
     ) anyerror!void {
-        try sig.bincode.write(writer, @as(usize, data.toInt()), params);
+        const int: u64 = data.toInt();
+        try sig.bincode.write(writer, int, params);
     }
 
     fn deserialize(
         _: *bincode.LimitAllocator,
-        reader: anytype,
+        reader: *std.Io.Reader,
         params: sig.bincode.Params,
     ) anyerror!FileId {
         const int = try sig.bincode.readInt(u64, reader, params);

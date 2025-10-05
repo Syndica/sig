@@ -366,7 +366,7 @@ pub const DateTime = struct {
         alloc: std.mem.Allocator,
         comptime fmt: []const u8,
     ) ![]const u8 {
-        var list = std.ArrayList(u8).init(alloc);
+        var list = std.array_list.Managed(u8).init(alloc);
         defer list.deinit();
 
         try self.format(fmt, .{}, list.writer());
@@ -595,13 +595,8 @@ pub const Duration = struct {
         return .{ .ns = self.ns / divisor };
     }
 
-    pub fn format(
-        self: @This(),
-        comptime _: []const u8,
-        _: std.fmt.FormatOptions,
-        writer: anytype,
-    ) !void {
-        return try writer.print("{s}", .{std.fmt.fmtDuration(self.ns)});
+    pub fn format(self: Duration, writer: *std.Io.Writer) !void {
+        return try writer.print("{D}", .{self.ns});
     }
 };
 
@@ -654,10 +649,8 @@ pub const Instant = struct {
     }
 
     pub fn format(
-        self: @This(),
-        comptime _: []const u8,
-        _: std.fmt.FormatOptions,
-        writer: anytype,
+        self: Instant,
+        writer: *std.Io.Writer,
     ) !void {
         const a: u64 = switch (@TypeOf(self.inner.timestamp)) {
             u64 => self.inner.timestamp,
@@ -666,7 +659,7 @@ pub const Instant = struct {
             ),
             else => @compileError("Instant: unknown timestamp type"),
         };
-        return try writer.print("{s}", .{std.fmt.fmtDuration(a)});
+        return try writer.print("{D}", .{a});
     }
 };
 

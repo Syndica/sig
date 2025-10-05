@@ -73,8 +73,8 @@ pub fn Proof(bit_size: comptime_int) type {
             transcript.appendDomSep("inner-product");
             transcript.appendU64("n", bit_size);
 
-            var L_vec: std.BoundedArray(Ristretto255, logn) = .{};
-            var R_vec: std.BoundedArray(Ristretto255, logn) = .{};
+            var L_vec: sig.utils.BoundedArray(Ristretto255, logn) = .{};
+            var R_vec: sig.utils.BoundedArray(Ristretto255, logn) = .{};
 
             var n: u64 = bit_size;
             while (n != 1) {
@@ -95,8 +95,8 @@ pub fn Proof(bit_size: comptime_int) type {
 
                 // after the first round, the size has been divded by two, meaning we
                 // only need to have bit_size / 2 + 1 elements in the arrays.
-                var scalars: std.BoundedArray([32]u8, bit_size + 1) = .{};
-                var points: std.BoundedArray(Edwards25519, bit_size + 1) = .{};
+                var scalars: sig.utils.BoundedArray([32]u8, bit_size + 1) = .{};
+                var points: sig.utils.BoundedArray(Edwards25519, bit_size + 1) = .{};
 
                 if (first_round) {
                     for (a_L, G_factors[n .. n * 2]) |ai, gi| {
@@ -217,8 +217,8 @@ pub fn Proof(bit_size: comptime_int) type {
         ) !void {
             const u_sq, const u_inv_sq, const s = try self.verificationScalars(transcript);
 
-            var scalars: std.BoundedArray([32]u8, max_elements) = .{};
-            var points: std.BoundedArray(Ristretto255, max_elements) = .{};
+            var scalars: sig.utils.BoundedArray([32]u8, max_elements) = .{};
+            var points: sig.utils.BoundedArray(Ristretto255, max_elements) = .{};
 
             scalars.appendAssumeCapacity(self.a.mul(self.b).toBytes());
             for (G_factors, s) |gi, si| {
@@ -381,12 +381,12 @@ test "basic correctness" {
     //             P = <a,G> + <b',H> + <a,b> Q,
     // where b' = b ∘ y^(-n)
     const P_len = 2 * n + 1;
-    var scalars: std.BoundedArray([32]u8, P_len) = .{};
+    var scalars: sig.utils.BoundedArray([32]u8, P_len) = .{};
     for (a) |as| try scalars.append(as.toBytes());
     for (b, H_factors) |bi, yi| try scalars.append(bi.mul(yi).toBytes());
     try scalars.append(c.toBytes());
 
-    var points: std.BoundedArray(Edwards25519, P_len) = .{};
+    var points: sig.utils.BoundedArray(Edwards25519, P_len) = .{};
     try points.appendSlice(table.G[0..n]);
     try points.appendSlice(table.H[0..n]);
     try points.append(Q.p);

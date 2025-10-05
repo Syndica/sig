@@ -157,7 +157,7 @@ pub const MockTransferService = struct {
                 if (signature_status.confirmations == null) return true;
                 if (signature_status.err) |_| return false;
             }
-            std.time.sleep(sig.time.Duration.fromSecs(1).asNanos());
+            std.Thread.sleep(sig.time.Duration.fromSecs(1).asNanos());
         }
         return false;
     }
@@ -395,7 +395,7 @@ pub const MockTransferService = struct {
         errdefer allocator.free(account_indexes);
 
         var data = [_]u8{0} ** 12;
-        var fbs = std.io.fixedBufferStream(&data);
+        var fbs = std.Io.fixedBufferStream(&data);
         const writer = fbs.writer();
         try writer.writeInt(u32, 2, .little);
         try writer.writeInt(u64, lamports, .little);

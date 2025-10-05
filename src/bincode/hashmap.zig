@@ -116,15 +116,13 @@ pub fn readCtx(
 
 /// The standard bincode serialization for a HashMap
 pub fn hashMapFieldConfig(
-    comptime HashMapType: type,
-    comptime config: HashMapConfig(hashMapInfo(HashMapType).?),
-) FieldConfig(HashMapType) {
-    const hm_info = hashMapInfo(HashMapType).?;
+    comptime T: type,
+    comptime config: HashMapConfig(hashMapInfo(T).?),
+) FieldConfig(T) {
+    const hm_info = hashMapInfo(T).?;
 
     const S = struct {
-        fn serialize(writer: anytype, data: anytype, params: Params) anyerror!void {
-            const T = @TypeOf(data);
-
+        fn serialize(writer: *std.Io.Writer, data: T, params: Params) anyerror!void {
             // NOTE: we need to use unmanaged here because managed requires a mutable reference
             if (data.count() > std.math.maxInt(u64)) return error.HashMapTooBig;
             const len: u64 = @intCast(data.count());
@@ -154,10 +152,10 @@ pub fn hashMapFieldConfig(
 
         fn deserialize(
             limit_allocator: *bincode.LimitAllocator,
-            reader: anytype,
+            reader: *std.Io.Reader,
             params: Params,
-        ) anyerror!HashMapType {
-            return readCtx(limit_allocator, HashMapType, reader, params, struct {
+        ) anyerror!T {
+            return readCtx(limit_allocator, T, reader, params, struct {
                 pub fn readKey(
                     _limit_allocator: *bincode.LimitAllocator,
                     _reader: anytype,
@@ -193,7 +191,7 @@ pub fn hashMapFieldConfig(
             });
         }
 
-        fn free(allocator: std.mem.Allocator, data: anytype) void {
+        fn free(allocator: std.mem.Allocator, data: T) void {
             var copy = data;
             var iter = copy.iterator();
             while (iter.next()) |entry| {

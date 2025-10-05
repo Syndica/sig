@@ -2,7 +2,7 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 
 const Allocator = std.mem.Allocator;
-const ArrayList = std.ArrayList;
+const ArrayList = std.array_list.Managed;
 const Mutex = std.Thread.Mutex;
 
 const Duration = sig.time.Duration;
@@ -143,7 +143,7 @@ pub const BasicShredTracker = struct {
 
     /// Writes the contents of the monitored slots as progress bars.
     /// Returns the number of slots printed.
-    pub fn print(self: *Self, writer: anytype) !Slot {
+    pub fn print(self: *Self, writer: *std.Io.Writer) !Slot {
         const start = self.current_bottom_slot;
         const end = @max(self.max_slot_seen + 1, self.current_bottom_slot);
         var found_incomplete = false;

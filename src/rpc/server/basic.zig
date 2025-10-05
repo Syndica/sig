@@ -488,7 +488,7 @@ fn writeFinalJsonResponse(
     const json_stringify_opts: std.json.StringifyOptions = .{};
 
     const content_length = blk: {
-        var cw = std.io.countingWriter(std.io.null_writer);
+        var cw = std.Io.countingWriter(std.Io.null_writer);
         var cjw = std.json.writeStream(cw.writer(), json_stringify_opts);
         cjw.write(json_value) catch |err| switch (err) {};
         break :blk cw.bytes_written;

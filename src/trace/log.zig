@@ -126,8 +126,9 @@ pub const ChannelPrintLogger = struct {
         write_stderr: bool = true,
     };
 
-    pub fn init(config: Config, maybe_writer: anytype) !*Self {
+    pub fn init(config: Config, maybe_file_writer: ?std.fs.File.Writer) !*Self {
         const max_buffer = config.max_buffer;
+
         const recycle_fba = try config.allocator.create(RecycleFBA(.{}));
         errdefer config.allocator.destroy(recycle_fba);
         recycle_fba.* = try RecycleFBA(.{}).init(.{
@@ -150,7 +151,7 @@ pub const ChannelPrintLogger = struct {
             .write_stderr = config.write_stderr,
         };
 
-        self.handle = try std.Thread.spawn(.{}, run, .{ self, maybe_writer });
+        self.handle = try std.Thread.spawn(.{}, run, .{ self, maybe_file_writer });
         errdefer comptime unreachable;
 
         return self;
@@ -158,7 +159,7 @@ pub const ChannelPrintLogger = struct {
 
     pub fn deinit(self: *Self) void {
         if (self.handle) |handle| {
-            std.time.sleep(std.time.ns_per_ms * 5);
+            std.Thread.sleep(std.time.ns_per_ms * 5);
             self.exit.store(true, .seq_cst);
             handle.join();
         }
@@ -173,8 +174,13 @@ pub const ChannelPrintLogger = struct {
         return .{ .channel_print = self };
     }
 
-    pub fn run(self: *Self, maybe_writer: anytype) void {
-        const stderr_writer = std.io.getStdErr().writer();
+    pub fn run(self: *Self, fw: ?std.fs.File.Writer) void {
+        var stderr_writer = std.fs.File.stderr().writer(&.{});
+        const stderr_interface = &stderr_writer.interface;
+
+        var maybe_file_writer = fw;
+        const maybe_writer = if (maybe_file_writer) |*file_writer| &file_writer.interface else null;
+
         while (true) {
             self.channel.waitToReceive(.{ .unordered = &self.exit }) catch break;
 
@@ -183,9 +189,9 @@ pub const ChannelPrintLogger = struct {
                 if (self.write_stderr) {
                     std.debug.lockStdErr();
                     defer std.debug.unlockStdErr();
-                    stderr_writer.writeAll(message) catch {};
+                    stderr_interface.writeAll(message) catch {};
                 }
-                if (sig.utils.types.toOptional(maybe_writer)) |writer| {
+                if (maybe_writer) |writer| {
                     writer.writeAll(message) catch {};
                 }
             }
@@ -207,13 +213,13 @@ pub const ChannelPrintLogger = struct {
             return;
         };
 
-        var stream = std.io.fixedBufferStream(msg_buf);
-        logfmt.writeLog(stream.writer(), scope, level, fields, fmt, args) catch |err| {
+        var writer: std.Io.Writer = .fixed(msg_buf);
+        logfmt.writeLog(&writer, scope, level, fields, fmt, args) catch |err| {
             std.debug.print("writeLog failed with err: {any}", .{err});
             self.log_allocator.free(msg_buf);
             return;
         };
-        std.debug.assert(size == stream.pos);
+        std.debug.assert(writer.buffered().len == size);
 
         self.channel.send(msg_buf) catch |err| {
             std.debug.print("Send msg through channel failed with err: {any}", .{err});
@@ -229,18 +235,16 @@ pub const ChannelPrintLogger = struct {
 pub const DirectPrintLogger = struct {
     max_level: Level,
 
-    const Self = @This();
-
-    pub fn init(_: std.mem.Allocator, max_level: Level) Self {
+    pub fn init(_: std.mem.Allocator, max_level: Level) DirectPrintLogger {
         return .{ .max_level = max_level };
     }
 
-    pub fn logger(self: Self, comptime scope: []const u8) Logger(scope) {
+    pub fn logger(self: DirectPrintLogger, comptime scope: []const u8) Logger(scope) {
         return .{ .direct_print = self };
     }
 
     pub fn log(
-        self: Self,
+        self: DirectPrintLogger,
         comptime scope: ?[]const u8,
         level: Level,
         fields: anytype,
@@ -248,10 +252,11 @@ pub const DirectPrintLogger = struct {
         args: anytype,
     ) void {
         if (@intFromEnum(self.max_level) < @intFromEnum(level)) return;
-        const writer = std.io.getStdErr().writer();
         std.debug.lockStdErr();
         defer std.debug.unlockStdErr();
-        logfmt.writeLog(writer, scope, level, fields, fmt, args) catch {};
+
+        var stderr = std.fs.File.stderr().writer(&.{});
+        logfmt.writeLog(&stderr.interface, scope, level, fields, fmt, args) catch {};
     }
 };
 
@@ -404,7 +409,7 @@ test "test_logger" {
 
 test "channel logger" {
     var buf: [256]u8 = undefined;
-    var stream = std.io.fixedBufferStream(&buf);
+    var stream = std.Io.fixedBufferStream(&buf);
 
     const logger = try ChannelPrintLogger.init(.{
         .allocator = std.testing.allocator,
@@ -413,7 +418,7 @@ test "channel logger" {
     }, stream.writer());
 
     logger.logger("test").log(.info, "hello world");
-    std.time.sleep(10 * std.time.ns_per_ms);
+    std.Thread.sleep(10 * std.time.ns_per_ms);
     logger.deinit();
 
     const actual = stream.getWritten();

@@ -68,12 +68,10 @@ pub const Histogram = struct {
         shard: u1 = 0,
     };
 
-    const Self = @This();
-
-    pub fn init(allocator: Allocator, buckets: []const f64) !Self {
+    pub fn init(allocator: Allocator, buckets: []const f64) !Histogram {
         var upper_bounds = try ArrayList(f64).initCapacity(allocator, buckets.len);
         upper_bounds.appendSliceAssumeCapacity(buckets);
-        return Self{
+        return .{
             .allocator = allocator,
             .upper_bounds = upper_bounds,
             .shards = .{
@@ -83,13 +81,15 @@ pub const Histogram = struct {
         };
     }
 
-    pub fn deinit(self: *Self) void {
-        self.shards[0].buckets.deinit();
-        self.shards[1].buckets.deinit();
-        self.upper_bounds.deinit();
+    pub fn deinit(self: *Histogram) void {
+        const allocator = self.allocator;
+
+        self.shards[0].buckets.deinit(allocator);
+        self.shards[1].buckets.deinit(allocator);
+        self.upper_bounds.deinit(allocator);
     }
 
-    pub fn reset(self: *Self) void {
+    pub fn reset(self: *Histogram) void {
         for (0..2) |shard_i| {
             var shard = &self.shards[shard_i];
             for (shard.buckets.items) |*bucket| {
@@ -101,14 +101,14 @@ pub const Histogram = struct {
     }
 
     fn shardBuckets(allocator: Allocator, size: usize) !ArrayList(Atomic(u64)) {
-        const slice = try allocator.alloc(u64, size);
-        @memset(slice, 0);
-        return ArrayList(Atomic(u64)).fromOwnedSlice(allocator, @ptrCast(slice));
+        const slice = try allocator.alloc(Atomic(u64), size);
+        @memset(slice, .init(0));
+        return .fromOwnedSlice(slice);
     }
 
     /// Writes a value into the histogram.
     pub fn observe(
-        self: *Self,
+        self: *Histogram,
         /// Must be f64 or int
         value: anytype,
     ) void {
@@ -126,7 +126,7 @@ pub const Histogram = struct {
     }
 
     /// Reads the current state of the histogram.
-    pub fn getSnapshot(self: *Self, allocator: ?Allocator) !HistogramSnapshot {
+    pub fn getSnapshot(self: *Histogram, allocator: ?Allocator) !HistogramSnapshot {
         var alloc = self.allocator;
         if (allocator) |a| alloc = a;
 
@@ -169,7 +169,7 @@ pub const Histogram = struct {
     }
 
     fn getResult(metric: *Metric, allocator: Allocator) Metric.Error!Metric.Result {
-        const self: *Self = @fieldParentPtr("metric", metric);
+        const self: *Histogram = @fieldParentPtr("metric", metric);
         const snapshot = try self.getSnapshot(allocator);
         return Metric.Result{ .histogram = snapshot };
     }
@@ -199,21 +199,18 @@ pub const HistogramSnapshot = struct {
     /// The len *must* be the same as the amount of memory that was
     /// allocated for this slice, or else the memory will leak.
     buckets: []Bucket,
-    /// Allocator that was used to allocate the buckets.
-    allocator: Allocator,
 
-    pub fn init(sum: f64, count: u64, buckets: ArrayList(Bucket)) @This() {
+    pub fn init(sum: f64, count: u64, buckets: ArrayList(Bucket)) HistogramSnapshot {
         std.debug.assert(buckets.capacity == buckets.items.len);
         return .{
             .sum = sum,
             .count = count,
             .buckets = buckets.items,
-            .allocator = buckets.allocator,
         };
     }
 
-    pub fn deinit(self: *const @This()) void {
-        self.allocator.free(self.buckets);
+    pub fn deinit(self: HistogramSnapshot, allocator: std.mem.Allocator) void {
+        allocator.free(self.buckets);
     }
 };
 

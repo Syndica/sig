@@ -11,6 +11,5 @@ pub const SocketThread = socket_utils.SocketThread;
 
 pub const requestIpEcho = echo.requestIpEcho;
 pub const enablePortReuse = net.enablePortReuse;
-pub const endpointToString = net.endpointToString;
 
 pub const SOCKET_TIMEOUT_US = socket_utils.SOCKET_TIMEOUT_US;

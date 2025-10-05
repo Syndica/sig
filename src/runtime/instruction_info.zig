@@ -25,7 +25,7 @@ pub const InstructionInfo = struct {
     /// transaction execution. We construct the account metas before transaction execution, so using an
     /// array of size MAX_ACCOUNTS_METAS + 1 allows us to check the account metas length during transaction
     /// execution and return the appropriate error.
-    pub const AccountMetas = std.BoundedArray(AccountMeta, MAX_ACCOUNT_METAS + 1);
+    pub const AccountMetas = sig.utils.BoundedArray(AccountMeta, MAX_ACCOUNT_METAS + 1);
 
     pub const ProgramMeta = struct {
         pubkey: Pubkey,
@@ -100,8 +100,8 @@ pub const InstructionInfo = struct {
     /// [agave] https://github.com/anza-xyz/agave/blob/9eee2f66775291a1ec4c4b1be32efc1d314002f7/transaction-context/src/lib.rs#L736
     pub fn getSigners(
         self: *const InstructionInfo,
-    ) std.BoundedArray(Pubkey, MAX_ACCOUNT_METAS) {
-        var signers = std.BoundedArray(Pubkey, MAX_ACCOUNT_METAS){};
+    ) sig.utils.BoundedArray(Pubkey, MAX_ACCOUNT_METAS) {
+        var signers = sig.utils.BoundedArray(Pubkey, MAX_ACCOUNT_METAS){};
         for (self.account_metas.constSlice()) |account_meta| {
             if (account_meta.is_signer) {
                 signers.appendAssumeCapacity(account_meta.pubkey);
@@ -111,10 +111,8 @@ pub const InstructionInfo = struct {
     }
 
     pub fn instructionDataToDeserialize(self: *const InstructionInfo) []const u8 {
-        return self.instruction_data[0..@min(
-            self.instruction_data.len,
-            Transaction.MAX_BYTES,
-        )];
+        const length = @min(self.instruction_data.len, Transaction.MAX_BYTES);
+        return self.instruction_data[0..length];
     }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/program_utils.rs#L9
@@ -123,23 +121,24 @@ pub const InstructionInfo = struct {
         allocator: std.mem.Allocator,
         comptime T: type,
     ) InstructionError!T {
-        var fbs = std.io.fixedBufferStream(self.instructionDataToDeserialize());
-        const data = bincode.read(allocator, T, fbs.reader(), .{}) catch {
+        var source: std.Io.Reader = .fixed(self.instructionDataToDeserialize());
+        const data = bincode.read(allocator, T, &source, .{}) catch {
             return InstructionError.InvalidInstructionData;
         };
         return data;
     }
 
-    /// Identical to deserializeInstruction but using `alloc_buf` to avoid heap allocation.
+    /// Identical to deserializeInstruction but using `buffer` to avoid heap allocation.
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/1276772ee61fbd1f8a60cfec7cd553aa4f6a55f3/bincode/src/lib.rs#L9
     pub fn limitedDeserializeInstruction(
         self: *const InstructionInfo,
         comptime T: type,
-        alloc_buf: []u8,
+        buffer: []u8,
     ) InstructionError!T {
-        var fbs = std.io.fixedBufferStream(self.instructionDataToDeserialize());
-        var fba = std.heap.FixedBufferAllocator.init(alloc_buf);
-        return bincode.read(fba.allocator(), T, fbs.reader(), .{}) catch {
+        var fba: std.heap.FixedBufferAllocator = .init(buffer);
+        var source: std.Io.Reader = .fixed(self.instructionDataToDeserialize());
+
+        return bincode.read(fba.allocator(), T, &source, .{}) catch {
             return InstructionError.InvalidInstructionData;
         };
     }

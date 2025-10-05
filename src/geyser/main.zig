@@ -129,8 +129,8 @@ pub fn main() !void {
     const cmd = try parser.parse(
         gpa,
         "geyser",
-        std.io.tty.detectConfig(std.io.getStdOut()),
-        std.io.getStdOut().writer(),
+        std.Io.tty.detectConfig(std.Io.getStdOut()),
+        std.Io.getStdOut().writer(),
         argv[1..],
     ) orelse return;
     defer parser.free(gpa, cmd);

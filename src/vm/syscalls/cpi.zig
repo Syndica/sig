@@ -533,7 +533,7 @@ fn updateCalleeAccount(
     return must_update_caller;
 }
 
-const TranslatedAccounts = std.BoundedArray(TranslatedAccount, InstructionInfo.MAX_ACCOUNT_METAS);
+const TranslatedAccounts = sig.utils.BoundedArray(TranslatedAccount, InstructionInfo.MAX_ACCOUNT_METAS);
 const TranslatedAccount = struct {
     index_in_caller: u16,
     caller_account: CallerAccount,
@@ -592,7 +592,7 @@ fn translateAccounts(
     }
 
     // translate keys upfront before inner loop below.
-    var account_info_keys: std.BoundedArray(
+    var account_info_keys: sig.utils.BoundedArray(
         *align(1) const Pubkey,
         InstructionInfo.MAX_ACCOUNT_METAS,
     ) = .{};
@@ -639,7 +639,7 @@ fn translateAccounts(
         const caller_account_index = for (account_info_keys.constSlice(), 0..) |key, idx| {
             if (key.equals(&account_key)) break idx;
         } else {
-            try ic.tc.log("Instruction references an unknown account {}", .{account_key});
+            try ic.tc.log("Instruction references an unknown account {f}", .{account_key});
             return InstructionError.MissingAccount;
         };
 
@@ -647,7 +647,7 @@ fn translateAccounts(
         const serialized_metadata = if (index_in_caller < serialized_account_metas.len) blk: {
             break :blk &serialized_account_metas[index_in_caller];
         } else {
-            try ic.tc.log("Internal error: index mismatch for account {}", .{account_key});
+            try ic.tc.log("Internal error: index mismatch for account {f}", .{account_key});
             return InstructionError.MissingAccount;
         };
 
@@ -803,7 +803,7 @@ fn translateSigners(
     signers_seeds_addr: u64,
     signers_seeds_len: u64,
     program_id: Pubkey,
-) !std.BoundedArray(Pubkey, MAX_SIGNERS) {
+) !sig.utils.BoundedArray(Pubkey, MAX_SIGNERS) {
     if (signers_seeds_len == 0) return .{};
 
     const signers_seeds = try memory_map.translateSlice(
@@ -818,7 +818,7 @@ fn translateSigners(
         return SyscallError.TooManySigners;
     }
 
-    var signers: std.BoundedArray(Pubkey, MAX_SIGNERS) = .{};
+    var signers: sig.utils.BoundedArray(Pubkey, MAX_SIGNERS) = .{};
     for (signers_seeds) |signer_vm_slice| {
         const untranslated_seeds = try memory_map.translateSlice(
             VmSlice,
@@ -832,7 +832,7 @@ fn translateSigners(
             return SyscallError.MaxSeedLengthExceeded;
         }
 
-        var seeds: std.BoundedArray([]const u8, MAX_SIGNERS) = .{};
+        var seeds: sig.utils.BoundedArray([]const u8, MAX_SIGNERS) = .{};
         for (untranslated_seeds) |seeds_vm_slice| {
             seeds.appendAssumeCapacity(try memory_map.translateSlice(
                 u8,
@@ -1436,7 +1436,7 @@ test "CallerAccount.fromAccountInfoC" {
     const lamports_addr = owner_addr + @sizeOf(Pubkey);
     const data_addr = lamports_addr + @sizeOf(u64);
 
-    var buf = std.io.fixedBufferStream(buffer);
+    var buf = std.Io.fixedBufferStream(buffer);
     try buf.writer().writeAll(std.mem.asBytes(&AccountInfoC{
         .key_addr = key_addr,
         .lamports_addr = lamports_addr,
@@ -1601,7 +1601,7 @@ fn intoStableInstruction(
         else => unreachable,
     };
 
-    var buf = std.io.fixedBufferStream(buffer);
+    var buf = std.Io.fixedBufferStream(buffer);
     try buf.writer().writeAll(std.mem.asBytes(&ins));
 
     for (accounts, 0..) |ins_account, i| {
@@ -1731,7 +1731,7 @@ test "translateSigners" {
     );
     defer memory_map.deinit(allocator);
 
-    var buf = std.io.fixedBufferStream(buffer);
+    var buf = std.Io.fixedBufferStream(buffer);
     try buf.writer().writeAll(std.mem.asBytes(&VmSlice{
         .ptr = vm_addr + @sizeOf(VmSlice), // start of signers below
         .len = signers.len,
@@ -1793,7 +1793,7 @@ const TestCallerAccount = struct {
         }
 
         // Setup regions
-        var regions: std.BoundedArray(memory.Region, 6) = .{};
+        var regions: sig.utils.BoundedArray(memory.Region, 6) = .{};
         try regions.append(memory.Region.init(.constant, &.{}, memory.RODATA_START));
         try regions.append(memory.Region.init(.constant, &.{}, memory.STACK_START));
         const vm_addr = memory.HEAP_START;

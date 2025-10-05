@@ -57,10 +57,8 @@ pub fn main() !void {
         const maybe_filter = cli_args.next();
         if (maybe_filter) |filter| {
             const parsed_filter = std.meta.stringToEnum(FuzzFilter, filter) orelse {
-                std.debug.print(
-                    "Unknown filter. Supported values are: {s} ",
-                    .{std.meta.fieldNames(FuzzFilter)},
-                );
+                std.debug.print("Unknown filter. Supported values are: ", .{});
+                for (std.meta.fieldNames(FuzzFilter)) |name| std.debug.print("{s} ", .{name});
                 return error.UnknownFilter;
             };
             std.debug.print("filtering fuzz testing with prefix: {s}\n", .{filter});
@@ -95,12 +93,12 @@ pub fn main() !void {
 
 /// writes the seed to the defined seed file (defined by SEED_FILE_PATH)
 pub fn writeSeedToFile(filter: FuzzFilter, seed: u64) !void {
-    const seed_file = try std.fs.cwd().createFile(SEED_FILE_PATH, .{
-        .truncate = false,
-    });
+    const seed_file = try std.fs.cwd().createFile(SEED_FILE_PATH, .{ .truncate = false });
     defer seed_file.close();
-    try seed_file.seekFromEnd(0);
+
+    var file_writer = seed_file.writer(&.{});
+    const writer = &file_writer.interface;
 
     const now: u64 = @intCast(std.time.timestamp());
-    try seed_file.writer().print("{s}: time: {d}, seed: {d}\n", .{ @tagName(filter), now, seed });
+    try writer.print("{t}: time: {d}, seed: {d}\n", .{ filter, now, seed });
 }

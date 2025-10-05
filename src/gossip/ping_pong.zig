@@ -209,10 +209,10 @@ pub const PingCache = struct {
         allocator: std.mem.Allocator,
         our_keypair: KeyPair,
         peers: []ThreadSafeContactInfo,
-    ) error{OutOfMemory}!struct { valid_peers: std.ArrayList(usize), pings: std.ArrayList(PingAndSocketAddr) } {
+    ) error{OutOfMemory}!struct { valid_peers: std.array_list.Managed(usize), pings: std.array_list.Managed(PingAndSocketAddr) } {
         const now = std.time.Instant.now() catch @panic("time not supported by OS!");
-        var valid_peers = std.ArrayList(usize).init(allocator);
-        var pings = std.ArrayList(PingAndSocketAddr).init(allocator);
+        var valid_peers = std.array_list.Managed(usize).init(allocator);
+        var pings = std.array_list.Managed(PingAndSocketAddr).init(allocator);
 
         for (peers, 0..) |*peer, i| {
             if (peer.gossip_addr) |gossip_addr| {

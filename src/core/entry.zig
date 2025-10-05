@@ -300,7 +300,7 @@ test hashTransactions {
 
     var transactions: [3]Transaction = undefined;
     for (serialized_transactions, 0..) |stx, i| {
-        var stream = std.io.fixedBufferStream(&stx);
+        var stream = std.Io.fixedBufferStream(&stx);
         var limit_allocator = sig.bincode.LimitAllocator{
             .backing_allocator = std.testing.allocator,
             .bytes_remaining = std.math.maxInt(usize),

@@ -52,19 +52,19 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     var total_action_count: u64 = 0;
     var now: u64 = 100;
 
-    var insertion_times = try std.ArrayList(u64).initCapacity(allocator, 100);
+    var insertion_times = try std.array_list.Managed(u64).initCapacity(allocator, 100);
     defer insertion_times.deinit();
 
-    var pubkeys = try std.ArrayList(Pubkey).initCapacity(allocator, 100);
+    var pubkeys = try std.array_list.Managed(Pubkey).initCapacity(allocator, 100);
     defer pubkeys.deinit();
 
-    var keypairs = try std.ArrayList(KeyPair).initCapacity(allocator, 100);
+    var keypairs = try std.array_list.Managed(KeyPair).initCapacity(allocator, 100);
     defer keypairs.deinit();
 
     var signatures = std.AutoArrayHashMap(Pubkey, Signature).init(allocator);
     defer signatures.deinit();
 
-    var keys = try std.ArrayList(GossipKey).initCapacity(allocator, 100);
+    var keys = try std.array_list.Managed(GossipKey).initCapacity(allocator, 100);
     defer keys.deinit();
 
     var timer = sig.time.Timer.start();
@@ -104,7 +104,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                     const signed_data = SignedGossipData.initSigned(&keypair, data);
 
                     // !
-                    logger.trace().logf("putting pubkey: {}", .{pubkey});
+                    logger.trace().logf("putting pubkey: {f}", .{pubkey});
                     const result = try gossip_table.insert(signed_data, now);
                     std.debug.assert(result.wasInserted());
 
@@ -128,10 +128,10 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
 
                     const should_overwrite = random.boolean();
                     if (should_overwrite) {
-                        logger.trace().logf("overwriting pubkey: {}", .{pubkey});
+                        logger.trace().logf("overwriting pubkey: {f}", .{pubkey});
                         data.wallclockPtr().* = now;
                     } else {
-                        logger.trace().logf("writing old pubkey: {}", .{pubkey});
+                        logger.trace().logf("writing old pubkey: {f}", .{pubkey});
                         const old_value = random.boolean();
                         const other_insertion_time = insertion_times.items[index];
                         if (old_value) {
@@ -155,11 +155,11 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                         }
                     }
                     if (result == .IgnoredOldValue) {
-                        logger.trace().logf("ignored old value: {}", .{pubkey});
+                        logger.trace().logf("ignored old value: {f}", .{pubkey});
                         std.debug.assert(!should_overwrite);
                     }
                     if (result == .IgnoredDuplicateValue) {
-                        logger.trace().logf("duplicate value: {}", .{pubkey});
+                        logger.trace().logf("duplicate value: {f}", .{pubkey});
                     }
 
                     if (result.wasInserted()) {
@@ -180,22 +180,22 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                 const search_key = keys.items[index];
 
                 errdefer {
-                    logger.err().logf("pubkey failed: {} with key: {}", .{ pubkey, search_key });
+                    logger.err().logf("pubkey failed: {f} with key: {any}", .{ pubkey, search_key });
                 }
 
                 const metadata = gossip_table.getMetadata(search_key) orelse {
-                    logger.err().logf("failed to get pubkey: {}", .{search_key});
+                    logger.err().logf("failed to get pubkey: {any}", .{search_key});
                     return error.PubkeyNotFound;
                 };
 
                 if (!metadata.signature.eql(&signatures.get(pubkey).?)) {
-                    logger.err().logf("signature mismatch: {}", .{pubkey});
+                    logger.err().logf("signature mismatch: {f}", .{pubkey});
                     return error.SignatureMismatch;
                 }
 
                 // via direct method
                 if (gossip_table.getThreadSafeContactInfo(pubkey) == null) {
-                    logger.err().logf("failed to get contact info: {}", .{pubkey});
+                    logger.err().logf("failed to get contact info: {f}", .{pubkey});
                     return error.ContactInfoNotFound;
                 }
 
@@ -207,7 +207,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                     }
                 } else false;
                 if (!found) {
-                    logger.err().logf("failed to find pubkey: {}", .{pubkey});
+                    logger.err().logf("failed to find pubkey: {f}", .{pubkey});
                     return error.ContactInfoNotFound;
                 }
 
@@ -225,14 +225,14 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                 const pubkeys_droppped_count = try gossip_table.attemptTrim(now, max_pubkey_capacity);
                 if (pubkeys_droppped_count == 0) continue;
 
-                logger.info().logf("op(trim): table size: {} -> {}", .{ size, gossip_table.len() });
+                logger.info().logf("op(trim): table size: {d} -> {d}", .{ size, gossip_table.len() });
             } else {
                 // NOTE: not completely accurate, but good enough
                 const middle_index = insertion_times.items.len / 2;
                 const middle_insert_time = insertion_times.items[middle_index];
                 _ = try gossip_table.removeOldLabels(middle_insert_time, 0);
 
-                logger.info().logf("op(remove-old-labels): table size: {} -> {}", .{ size, gossip_table.len() });
+                logger.info().logf("op(remove-old-labels): table size: {d} -> {d}", .{ size, gossip_table.len() });
             }
 
             // reset the pubkey list
@@ -258,13 +258,16 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                 }
             }
 
-            logger.info().logf("put: {}, get: {}", .{ put_count, get_count });
+            logger.info().logf("put: {d}, get: {d}", .{ put_count, get_count });
             put_count = 0;
             get_count = 0;
 
             if (maybe_max_actions) |max_actions| {
                 const percent_int = (total_action_count * 100) / max_actions;
-                logger.info().logf("total actions: {} / {} ({}%)", .{ total_action_count, max_actions, percent_int });
+                logger.info().logf(
+                    "total actions: {d} / {d} ({d}%)",
+                    .{ total_action_count, max_actions, percent_int },
+                );
             }
         }
     }

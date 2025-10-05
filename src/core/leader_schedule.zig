@@ -27,7 +27,7 @@ pub const SlotLeaders = struct {
             .state = state,
             .getFn = struct {
                 fn genericFn(generic_state: *anyopaque, slot: Slot) ?Pubkey {
-                    return getSlotLeader(@alignCast(@ptrCast(generic_state)), slot);
+                    return getSlotLeader(@ptrCast(@alignCast(generic_state)), slot);
                 }
             }.genericFn,
         };
@@ -246,37 +246,42 @@ pub const LeaderSchedule = struct {
     /// `sig leader-schedule` commands. Return the start slot and the leader schedule.
     pub fn read(
         allocator: std.mem.Allocator,
-        reader: anytype,
+        reader: *std.io.Reader,
     ) !struct { Slot, LeaderSchedule } {
-        const nextNonEmpty = struct {
-            pub fn nextNonEmpty(word_iter: anytype) ?[]const u8 {
-                while (word_iter.next()) |word| if (word.len > 0) return word;
-                return null;
-            }
-        }.nextNonEmpty;
-
-        var slot_leaders = std.ArrayList(Pubkey).init(allocator);
+        var slot_leaders = std.array_list.Managed(Pubkey).init(allocator);
         var start_slot: Slot = 0;
-        var expect: ?Slot = null;
+        var maybe_expect: ?Slot = null;
+
         var row: [256]u8 = undefined;
+        var fbs: std.io.Writer = .fixed(&row);
+
         while (true) {
-            const line = reader.readUntilDelimiter(&row, '\n') catch |e| switch (e) {
-                error.EndOfStream => break,
+            _ = reader.streamDelimiter(&fbs, '\n') catch |e| switch (e) {
+                error.EndOfStream => break, // end of file
                 else => return e,
             };
-            var word_iter = std.mem.splitScalar(u8, line, ' ');
-            const slot = try std.fmt.parseInt(Slot, nextNonEmpty(&word_iter) orelse continue, 10);
-            if (expect) |*exp_slot| {
-                if (slot != exp_slot.*) {
-                    return error.Discontinuity;
-                }
-                exp_slot.* += 1;
+            const line = fbs.buffered();
+            defer fbs.end = 0; // reset the buffer to 0
+
+            var iterator = std.mem.splitScalar(u8, line, ' ');
+            const slot = while (iterator.next()) |word| {
+                if (word.len == 0) continue;
+                break try std.fmt.parseInt(Slot, word, 10);
+            } else continue;
+
+            if (maybe_expect) |*expect| {
+                if (slot != expect.*) return error.Discontinuity;
+                expect.* += 1;
             } else {
-                expect = slot + 1;
+                maybe_expect = slot + 1;
                 start_slot = slot;
             }
-            const node_str = nextNonEmpty(&word_iter) orelse return error.MissingPubkey;
-            try slot_leaders.append(try Pubkey.parseRuntime(node_str));
+
+            const node_string = while (iterator.next()) |word| {
+                if (word.len == 0) continue;
+                break word;
+            } else continue;
+            try slot_leaders.append(try Pubkey.parseRuntime(node_string));
         }
 
         return .{
@@ -366,13 +371,15 @@ test "parseLeaderSchedule writeLeaderSchedule happy path roundtrip" {
         .parse("DWvDTSh3qfn88UoQTEKRV2JnLt5jtJAVoiCo3ivtMwXP"),
         .parse("DWvDTSh3qfn88UoQTEKRV2JnLt5jtJAVoiCo3ivtMwXP"),
     };
-    // const expected_start = 270864000;
+    const expected_start = 270864000;
 
     // parse input file
-    var stream = std.io.fixedBufferStream(input_file);
-    _, const leader_schedule = try LeaderSchedule.read(allocator, stream.reader());
+    var fbs: std.io.Reader = .fixed(input_file);
+
+    const start_slot, const leader_schedule = try LeaderSchedule.read(allocator, &fbs);
     defer leader_schedule.deinit();
-    // try std.testing.expect(expected_start == leader_schedule.start_slot);
+
+    try std.testing.expect(expected_start == start_slot);
     try std.testing.expect(expected_nodes.len == leader_schedule.slot_leaders.len);
     for (expected_nodes, leader_schedule.slot_leaders) |expected, actual| {
         try std.testing.expect(expected.equals(&actual));
@@ -380,7 +387,7 @@ test "parseLeaderSchedule writeLeaderSchedule happy path roundtrip" {
 
     // write file out
     var out_buf: [2 * input_file.len]u8 = undefined;
-    var out_stream = std.io.fixedBufferStream(&out_buf);
+    var out_stream = std.Io.fixedBufferStream(&out_buf);
     try leader_schedule.write(out_stream.writer(), 270864000);
     const out_file = out_stream.getWritten();
     try std.testing.expect(std.mem.eql(u8, out_file, input_file));

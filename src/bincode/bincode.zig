@@ -40,25 +40,35 @@ pub fn sizeOf(data: anytype, params: bincode.Params) usize {
     if (@TypeOf(data) == type) {
         @compileError("sizeOf called with type instead of value");
     }
-    var stream = std.io.countingWriter(std.io.null_writer);
-    bincode.write(stream.writer(), data, params) catch unreachable;
-    return @intCast(stream.bytes_written);
+    var writer: std.Io.Writer.Discarding = .init(&.{});
+    bincode.write(&writer.writer, data, params) catch unreachable;
+    return @intCast(writer.fullCount());
 }
 
-pub fn readFromSlice(allocator: std.mem.Allocator, comptime T: type, slice: []const u8, params: bincode.Params) !T {
-    var stream = std.io.fixedBufferStream(slice);
-    return bincode.read(allocator, T, stream.reader(), params);
+pub fn readFromSlice(
+    allocator: std.mem.Allocator,
+    comptime T: type,
+    slice: []const u8,
+    params: bincode.Params,
+) !T {
+    var fbs: std.Io.Reader = .fixed(slice);
+    return bincode.read(allocator, T, &fbs, params);
 }
 
-pub fn readFromSliceWithLimit(limit_allocator: *LimitAllocator, comptime T: type, slice: []const u8, params: bincode.Params) !T {
-    var stream = std.io.fixedBufferStream(slice);
-    return bincode.readWithLimit(limit_allocator, T, stream.reader(), params);
+pub fn readFromSliceWithLimit(
+    limit_allocator: *LimitAllocator,
+    comptime T: type,
+    slice: []const u8,
+    params: bincode.Params,
+) !T {
+    var fbs: std.Io.Reader = .fixed(slice);
+    return bincode.readWithLimit(limit_allocator, T, &fbs, params);
 }
 
 pub fn writeToSlice(slice: []u8, data: anytype, params: bincode.Params) ![]u8 {
-    var stream = std.io.fixedBufferStream(slice);
-    try bincode.write(stream.writer(), data, params);
-    return stream.getWritten();
+    var writer: std.Io.Writer = .fixed(slice);
+    try bincode.write(&writer, data, params);
+    return writer.buffered();
 }
 
 pub fn writeAlloc(allocator: std.mem.Allocator, data: anytype, params: bincode.Params) ![]u8 {
@@ -70,7 +80,7 @@ pub fn writeAlloc(allocator: std.mem.Allocator, data: anytype, params: bincode.P
 pub fn read(
     allocator: std.mem.Allocator,
     comptime U: type,
-    reader: anytype,
+    reader: *std.Io.Reader,
     params: bincode.Params,
 ) !U {
     return readWithConfig(allocator, U, reader, params, getConfig(U) orelse .{});
@@ -79,7 +89,7 @@ pub fn read(
 pub fn readWithLimit(
     limit_allocator: *LimitAllocator,
     comptime U: type,
-    reader: anytype,
+    reader: *std.Io.Reader,
     params: bincode.Params,
 ) !U {
     return readWithConfigAndLimit(limit_allocator, U, reader, params, getConfig(U) orelse .{});
@@ -88,7 +98,7 @@ pub fn readWithLimit(
 pub fn readWithConfig(
     base_allocator: std.mem.Allocator,
     comptime U: type,
-    reader: anytype,
+    reader: *std.Io.Reader,
     params: bincode.Params,
     comptime config: FieldConfig(U),
 ) !U {
@@ -99,7 +109,7 @@ pub fn readWithConfig(
 pub fn readWithConfigAndLimit(
     limit_allocator: *LimitAllocator,
     comptime U: type,
-    reader: anytype,
+    reader: *std.Io.Reader,
     params: bincode.Params,
     comptime config: FieldConfig(U),
 ) !U {
@@ -109,13 +119,13 @@ pub fn readWithConfigAndLimit(
         else => U,
     };
 
-    if (config.deserializer) |deserialize_fcn| {
-        return deserialize_fcn(limit_allocator, reader, params);
+    if (config.deserializer) |func| {
+        return func(limit_allocator, reader, params);
     }
 
     switch (@typeInfo(T)) {
         .void => return {},
-        .bool => return switch (try reader.readByte()) {
+        .bool => return switch (try reader.takeByte()) {
             0 => false,
             1 => true,
             else => error.BadBoolean,
@@ -126,10 +136,7 @@ pub fn readWithConfigAndLimit(
                 SerializedSize = T.BincodeSize;
             };
 
-            const tag = try switch (params.endian) {
-                .little => reader.readInt(SerializedSize, .little),
-                .big => reader.readInt(SerializedSize, .big),
-            };
+            const tag = try reader.takeInt(SerializedSize, params.endian);
             return std.meta.intToEnum(T, tag);
         },
         .@"union" => |info| {
@@ -138,10 +145,12 @@ pub fn readWithConfigAndLimit(
 
             inline for (info.fields) |field| {
                 if (raw_tag == @field(tag_type, field.name)) {
-                    // https://github.com/ziglang/zig/issues/7866
-                    if (field.type == void) return @unionInit(T, field.name, {});
-                    const payload =
-                        try bincode.readWithLimit(limit_allocator, field.type, reader, params);
+                    const payload = try bincode.readWithLimit(
+                        limit_allocator,
+                        field.type,
+                        reader,
+                        params,
+                    );
                     return @unionInit(T, field.name, payload);
                 }
             }
@@ -159,22 +168,22 @@ pub fn readWithConfigAndLimit(
 
                 if (field.is_comptime) continue;
                 const field_config: FieldConfig(field.type) = getFieldConfig(T, field) orelse {
-                    // // if we dont want print statements when our tests run we need to comment this out :(
-                    // // specifically, the geyser test fail bincode deser and then recover from it
-                    // errdefer {
-                    //     // TODO(x19): maybe use a logger instead? (sometimes we can recover from this
-                    //     // and so we don't want to print)
-                    //     if (builtin.mode == .Debug) {
-                    //         std.debug.print("failed to deserialize field {s}\n", .{field.name});
-                    //     }
-                    // }
-                    @field(data, field.name) =
-                        try bincode.readWithLimit(limit_allocator, field.type, reader, params);
+                    @field(data, field.name) = try bincode.readWithLimit(
+                        limit_allocator,
+                        field.type,
+                        reader,
+                        params,
+                    );
                     continue;
                 };
 
-                @field(data, field.name) =
-                    try readFieldWithConfig(limit_allocator, reader, params, field, field_config);
+                @field(data, field.name) = try readFieldWithConfig(
+                    limit_allocator,
+                    reader,
+                    params,
+                    field,
+                    field_config,
+                );
             }
 
             // TODO: improve implementation of post deserialise method
@@ -189,7 +198,7 @@ pub fn readWithConfigAndLimit(
             return data;
         },
         .optional => |info| {
-            return switch (try reader.readByte()) {
+            return switch (try reader.takeByte()) {
                 0 => null,
                 1 => try bincode.readWithLimit(limit_allocator, info.child, reader, params),
                 else => error.BadOptionalBoolean,
@@ -247,8 +256,10 @@ pub fn readWithConfigAndLimit(
             if (info.bits != 32 and info.bits != 64) {
                 @compileError("Only f{32, 64} floating-point integers may be serialized, but attempted to serialize " ++ @typeName(T) ++ ".");
             }
-            const bytes = try reader.readBytesNoEof((info.bits + 7) / 8);
-            return @as(T, @bitCast(bytes));
+
+            const bytes = comptime std.math.divCeil(u16, info.bits, 8) catch unreachable;
+            const data = try reader.takeArray(bytes);
+            return @bitCast(data.*);
         },
         .comptime_int => return bincode.readWithLimit(limit_allocator, u64, reader, params),
         .int => return try bincode.readInt(T, reader, params),
@@ -258,7 +269,7 @@ pub fn readWithConfigAndLimit(
     @compileError("Deserializing '" ++ @typeName(T) ++ "' is unsupported.");
 }
 
-pub fn readInt(comptime U: type, reader: anytype, params: bincode.Params) !U {
+pub fn readInt(comptime U: type, reader: *std.Io.Reader, params: bincode.Params) !U {
     const T = switch (U) {
         usize => u64,
         isize => i64,
@@ -272,7 +283,7 @@ pub fn readInt(comptime U: type, reader: anytype, params: bincode.Params) !U {
 
     switch (params.int_encoding) {
         .variable => {
-            const b = try reader.readByte();
+            const b = try reader.takeByte();
             if (b < 251) {
                 return switch (info.signedness) {
                     .unsigned => b,
@@ -285,10 +296,7 @@ pub fn readInt(comptime U: type, reader: anytype, params: bincode.Params) !U {
                     },
                 };
             } else if (b == 251) {
-                const z = try switch (params.endian) {
-                    .little => reader.readInt(u16, .little),
-                    .big => reader.readInt(u16, .big),
-                };
+                const z = try reader.takeInt(u16, params.endian);
                 return switch (info.signedness) {
                     .unsigned => std.math.cast(T, z) orelse return error.FailedToCastZZ,
                     .signed => zigzag: {
@@ -300,10 +308,7 @@ pub fn readInt(comptime U: type, reader: anytype, params: bincode.Params) !U {
                     },
                 };
             } else if (b == 252) {
-                const z = try switch (params.endian) {
-                    .little => reader.readInt(u32, .little),
-                    .big => reader.readInt(u32, .big),
-                };
+                const z = try reader.takeInt(u32, params.endian);
                 return switch (info.signedness) {
                     .unsigned => std.math.cast(T, z) orelse return error.FailedToCastZZ,
                     .signed => zigzag: {
@@ -315,10 +320,7 @@ pub fn readInt(comptime U: type, reader: anytype, params: bincode.Params) !U {
                     },
                 };
             } else if (b == 253) {
-                const z = try switch (params.endian) {
-                    .little => reader.readInt(u64, .little),
-                    .big => reader.readInt(u64, .big),
-                };
+                const z = try reader.takeInt(u64, params.endian);
                 return switch (info.signedness) {
                     .unsigned => std.math.cast(T, z) orelse return error.FailedToCastZZ,
                     .signed => zigzag: {
@@ -330,10 +332,7 @@ pub fn readInt(comptime U: type, reader: anytype, params: bincode.Params) !U {
                     },
                 };
             } else if (b == 254) {
-                const z = try switch (params.endian) {
-                    .little => reader.readInt(u128, .little),
-                    .big => reader.readInt(u128, .big),
-                };
+                const z = try reader.takeInt(u128, params.endian);
                 return switch (info.signedness) {
                     .unsigned => std.math.cast(T, z) orelse return error.FailedToCastZZ,
                     .signed => zigzag: {
@@ -345,10 +344,7 @@ pub fn readInt(comptime U: type, reader: anytype, params: bincode.Params) !U {
                     },
                 };
             } else {
-                const z = try switch (params.endian) {
-                    .little => reader.readInt(u256, .little),
-                    .big => reader.readInt(u256, .big),
-                };
+                const z = try reader.takeInt(u256, params.endian);
                 return switch (info.signedness) {
                     .unsigned => std.math.cast(T, z) orelse return error.FailedToCastZZ,
                     .signed => zigzag: {
@@ -361,21 +357,13 @@ pub fn readInt(comptime U: type, reader: anytype, params: bincode.Params) !U {
                 };
             }
         },
-        .fixed => switch (params.endian) {
-            .little => {
-                return reader.readInt(T, .little);
-            },
-            .big => {
-                return reader.readInt(T, .big);
-            },
-        },
+        .fixed => return try reader.takeInt(T, params.endian),
     }
 }
 
-pub fn readIntAsLength(comptime T: type, reader: anytype, params: bincode.Params) !?T {
-    const len_u64 = try bincode.readInt(u64, reader, params);
-    if (len_u64 > std.math.maxInt(T)) return null;
-    return @intCast(len_u64);
+pub fn readIntAsLength(comptime T: type, reader: *std.Io.Reader, params: bincode.Params) !?T {
+    const length = try bincode.readInt(u64, reader, params);
+    return std.math.cast(T, length);
 }
 
 pub fn utf8StringCodec(
@@ -386,19 +374,15 @@ pub fn utf8StringCodec(
     const S = struct {
         fn deserialize(
             limit_allocator: *bincode.LimitAllocator,
-            reader: anytype,
+            reader: *std.Io.Reader,
             _: bincode.Params,
         ) !Str {
             const len = try bincode.readInt(u64, reader, .{});
             if (len > max_len) return error.DataTooLarge;
-
             const allocator = limit_allocator.allocator();
-            const str = try allocator.alloc(u8, len);
-            errdefer allocator.free(str);
-
-            try reader.readNoEof(str);
-            if (!std.unicode.utf8ValidateSlice(str[0..])) return error.InvalidUtf8;
-            return str;
+            const string = try reader.readAlloc(allocator, len);
+            if (!std.unicode.utf8ValidateSlice(string)) return error.InvalidUtf8;
+            return string;
         }
     };
     return .{ .deserializer = S.deserialize };
@@ -422,12 +406,12 @@ pub fn readFieldWithConfig(
     return try bincode.readWithLimit(limit_allocator, field.type, reader, params);
 }
 
-pub fn write(writer: anytype, data: anytype, params: bincode.Params) !void {
+pub fn write(writer: *std.Io.Writer, data: anytype, params: bincode.Params) !void {
     return writeWithConfig(writer, data, params, getConfig(@TypeOf(data)) orelse .{});
 }
 
 pub fn writeWithConfig(
-    writer: anytype,
+    writer: *std.Io.Writer,
     data: anytype,
     params: bincode.Params,
     comptime config: FieldConfig(@TypeOf(data)),
@@ -451,7 +435,8 @@ pub fn writeWithConfig(
                 SerializedSize = T.BincodeSize;
             };
 
-            return bincode.write(writer, @as(SerializedSize, @intFromEnum(data)), params);
+            const tag: SerializedSize = @intFromEnum(data);
+            return bincode.write(writer, tag, params);
         },
         .@"union" => |info| {
             try bincode.write(writer, @as(u32, @intFromEnum(data)), params);
@@ -577,7 +562,7 @@ pub fn writeWithConfig(
 pub fn writeFieldWithConfig(
     comptime field: std.builtin.Type.StructField,
     comptime maybe_field_config: ?FieldConfig(field.type),
-    writer: anytype,
+    writer: *std.Io.Writer,
     data: field.type,
     params: bincode.Params,
 ) !void {
@@ -651,19 +636,19 @@ pub fn freeWithConfig(
 
 pub fn VarIntConfig(comptime T: type) bincode.FieldConfig(T) {
     const S = struct {
-        pub fn serialize(writer: anytype, data: anytype, params: bincode.Params) !void {
+        pub fn serialize(writer: *std.Io.Writer, data: T, params: bincode.Params) !void {
             _ = params;
             return std.leb.writeUleb128(writer, data);
         }
 
         pub fn deserialize(
             limit_allocator: *bincode.LimitAllocator,
-            reader: anytype,
+            reader: *std.Io.Reader,
             params: bincode.Params,
         ) !T {
             _ = params;
             _ = limit_allocator;
-            return std.leb.readUleb128(T, reader);
+            return try reader.takeLeb128(T);
         }
     };
 
@@ -675,10 +660,12 @@ pub fn VarIntConfig(comptime T: type) bincode.FieldConfig(T) {
 
 pub fn FieldConfig(comptime T: type) type {
     return struct {
-        deserializer: ?fn (limit_allocator: *LimitAllocator, reader: anytype, params: Params) anyerror!T = null,
-        serializer: ?fn (writer: anytype, data: anytype, params: Params) anyerror!void = null,
-        free: ?fn (allocator: std.mem.Allocator, data: anytype) void = null,
+        deserializer: ?fn (limit_allocator: *LimitAllocator, reader: *std.Io.Reader, params: Params) anyerror!T = null,
+        serializer: ?fn (writer: *std.Io.Writer, data: T, params: Params) anyerror!void = null,
+        free: ?fn (allocator: std.mem.Allocator, data: T) void = null,
         skip: bool = false,
+
+        // TODO: remove this field, unnecassary abstraction
         post_deserialize_fn: ?fn (self: *T) void = null,
         /// NOTE: we use this default parameter to avoid incorrect usage
         /// of structs which should only have defaults on deserialization
@@ -705,9 +692,9 @@ pub fn getConfig(comptime T: type) ?FieldConfig(T) {
     else if (T == u8)
         int.U8Config()
     else if (T == []const u8)
-        int.U8ConstSliceConfig()
+        int.U8SliceConfig([]const u8)
     else if (T == []u8)
-        int.U8SliceConfig()
+        int.U8SliceConfig([]u8)
     else if (@typeInfo(T) == .array and @typeInfo(T).array.child == u8)
         if (@typeInfo(T).array.sentinel()) |_|
             int.U8ArraySentinelConfig(@typeInfo(T).array.len)
@@ -753,8 +740,8 @@ pub fn getSerializedSizeWithSlice(slice: []u8, data: anytype, params: Params) !u
     return ser_slice.len;
 }
 
-pub fn writeToArray(allocator: std.mem.Allocator, data: anytype, params: Params) !std.ArrayList(u8) {
-    var array_buf = try std.ArrayList(u8).initCapacity(allocator, 2048);
+pub fn writeToArray(allocator: std.mem.Allocator, data: anytype, params: Params) !std.array_list.Managed(u8) {
+    var array_buf = try std.array_list.Managed(u8).initCapacity(allocator, 2048);
     try bincode.write(array_buf.writer(), data, params);
 
     return array_buf;
@@ -776,7 +763,7 @@ fn TestSliceConfig(comptime Child: type) FieldConfig([]Child) {
             return elems;
         }
 
-        pub fn serilaizeTestSlice(writer: anytype, data: anytype, params: bincode.Params) !void {
+        pub fn serilaizeTestSlice(writer: *std.Io.Writer, data: anytype, params: bincode.Params) !void {
             const len = std.math.cast(u16, data.len) orelse return error.DataTooLarge;
             try bincode.write(writer, len, params);
             for (data) |item| {
@@ -794,7 +781,7 @@ fn TestSliceConfig(comptime Child: type) FieldConfig([]Child) {
 
 fn ShredTypeConfig() bincode.FieldConfig(ShredType) {
     const S = struct {
-        pub fn serialize(writer: anytype, data: anytype, params: bincode.Params) !void {
+        pub fn serialize(writer: *std.Io.Writer, data: anytype, params: bincode.Params) !void {
             try bincode.write(writer, @intFromEnum(data), params);
             return;
         }
@@ -830,7 +817,7 @@ pub fn testRoundTrip(deserialized_item: anytype, bincode_serialized_bytes: []con
 
 test "bincode: custom enum" {
     const x = ShredType.Data;
-    var buf = std.ArrayList(u8).init(std.testing.allocator);
+    var buf = std.array_list.Managed(u8).init(std.testing.allocator);
     defer buf.deinit();
 
     try bincode.write(buf.writer(), x, .{});
@@ -839,8 +826,8 @@ test "bincode: custom enum" {
 test "bincode: default on eof" {
     const Foo = struct {
         value: u8 = 0,
-        accounts: std.ArrayList(u64),
-        pub const @"!bincode-config:accounts" = arraylist.defaultOnEofConfig(std.ArrayList(u64));
+        accounts: std.array_list.Managed(u64),
+        pub const @"!bincode-config:accounts" = arraylist.defaultOnEofConfig(std.array_list.Managed(u64));
         pub const @"!bincode-config:value" = int.defaultOnEof(u8, 0);
     };
 
@@ -851,7 +838,7 @@ test "bincode: default on eof" {
     var buf2: [1024]u8 = undefined;
     const buf3 = try writeToSlice(&buf2, Foo{
         .value = 10,
-        .accounts = std.ArrayList(u64).init(std.testing.allocator),
+        .accounts = std.array_list.Managed(u64).init(std.testing.allocator),
     }, .{});
 
     const r2 = try readFromSlice(std.testing.allocator, Foo, buf3, .{});
@@ -895,7 +882,7 @@ test "bincode: custom field serialization" {
 }
 
 test "bincode: test arraylist" {
-    var array = std.ArrayList(u8).init(std.testing.allocator);
+    var array = std.array_list.Managed(u8).init(std.testing.allocator);
     defer array.deinit();
 
     try array.append(10);
@@ -905,7 +892,7 @@ test "bincode: test arraylist" {
     const bytes = try writeToSlice(&buf, array, .{});
 
     // var bytes = [_]u8{ 2, 0, 0, 0, 0, 0, 0, 0, 10, 11};
-    var array2 = try readFromSlice(std.testing.allocator, std.ArrayList(u8), bytes, .{});
+    var array2 = try readFromSlice(std.testing.allocator, std.array_list.Managed(u8), bytes, .{});
     defer array2.deinit();
 
     try std.testing.expectEqualSlices(u8, array.items, array2.items);
@@ -1025,7 +1012,7 @@ test "bincode: test serialization" {
 }
 
 test "bincode: tuples" {
-    var buffer = std.ArrayList(u8).init(std.testing.allocator);
+    var buffer = std.array_list.Managed(u8).init(std.testing.allocator);
     defer buffer.deinit();
 
     const Foo = struct { u16, u16 };
@@ -1036,7 +1023,7 @@ test "bincode: tuples" {
 }
 
 test "bincode: (legacy) serialize an array" {
-    var buffer = std.ArrayList(u8).init(std.testing.allocator);
+    var buffer = std.array_list.Managed(u8).init(std.testing.allocator);
     defer buffer.deinit();
 
     const Foo = struct {
@@ -1071,7 +1058,7 @@ test "default value" {
 }
 
 test "bincode: serialize and deserialize" {
-    var buffer = std.ArrayList(u8).init(testing.allocator);
+    var buffer = std.array_list.Managed(u8).init(testing.allocator);
     defer buffer.deinit();
 
     inline for (.{

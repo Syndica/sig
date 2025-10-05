@@ -723,11 +723,8 @@ pub const Instruction = packed struct(u64) {
 
     pub fn format(
         inst: Instruction,
-        comptime fmt: []const u8,
-        _: std.fmt.FormatOptions,
-        writer: anytype,
+        writer: *std.Io.Writer,
     ) !void {
-        comptime assert(fmt.len == 0);
         try writer.print("{}({} {} {} {})", .{
             inst.opcode,
             inst.dst,

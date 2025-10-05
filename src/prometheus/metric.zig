@@ -11,8 +11,7 @@ const VariantCounts = prometheus.variant_counter.VariantCounts;
 pub const Metric = struct {
     pub const Error =
         std.mem.Allocator.Error ||
-        std.posix.WriteError ||
-        std.http.Server.Response.WriteError;
+        std.posix.WriteError;
 
     pub const Result = union(enum) {
         counter: u64,
@@ -36,9 +35,9 @@ pub const Metric = struct {
     pub fn write(
         self: *Metric,
         allocator: mem.Allocator,
-        writer: anytype,
+        writer: *std.Io.Writer,
         name: []const u8,
-    ) (@TypeOf(writer).Error || Error)!void {
+    ) (std.Io.Writer.Error || Error)!void {
         const result = try self.getResultFn(self, allocator);
         defer result.deinit(allocator);
 
@@ -64,17 +63,17 @@ pub const Metric = struct {
 
                 if (name_and_labels.labels.len > 0) {
                     for (v.buckets) |bucket| {
-                        try writer.print("{s}_bucket{{{s},le=\"{s}\"}} {d:.6}\n", .{
+                        try writer.print("{s}_bucket{{{s},le=\"{d}\"}} {d:.6}\n", .{
                             name_and_labels.name,
                             name_and_labels.labels,
-                            floatMetric(bucket.upper_bound),
+                            bucket.upper_bound,
                             bucket.cumulative_count,
                         });
                     }
                     try writer.print("{s}_sum{{{s}}} {:.6}\n", .{
                         name_and_labels.name,
                         name_and_labels.labels,
-                        floatMetric(v.sum),
+                        v.sum,
                     });
                     try writer.print("{s}_count{{{s}}} {d}\n", .{
                         name_and_labels.name,
@@ -83,15 +82,15 @@ pub const Metric = struct {
                     });
                 } else {
                     for (v.buckets) |bucket| {
-                        try writer.print("{s}_bucket{{le=\"{s}\"}} {d:.6}\n", .{
+                        try writer.print("{s}_bucket{{le=\"{d}\"}} {d:.6}\n", .{
                             name_and_labels.name,
-                            floatMetric(bucket.upper_bound),
+                            bucket.upper_bound,
                             bucket.cumulative_count,
                         });
                     }
                     try writer.print("{s}_sum {:.6}\n", .{
                         name_and_labels.name,
-                        floatMetric(v.sum),
+                        v.sum,
                     });
                     try writer.print("{s}_count {d}\n", .{
                         name_and_labels.name,
@@ -111,30 +110,6 @@ pub const MetricType = enum {
     histogram,
 };
 
-/// Converts a float into an anonymous type that can be formatted properly for prometheus.
-pub fn floatMetric(value: anytype) struct {
-    value: @TypeOf(value),
-
-    pub fn format(
-        self: @This(),
-        comptime _: []const u8,
-        options: fmt.FormatOptions,
-        writer: anytype,
-    ) !void {
-        const as_int: u64 = @intFromFloat(self.value);
-        if (@as(f64, @floatFromInt(as_int)) == self.value) {
-            try fmt.formatInt(as_int, 10, .lower, options, writer);
-        } else {
-            const str_size = fmt.format_float.bufferSize(.decimal, @TypeOf(value));
-            var buf: [str_size]u8 = undefined;
-            const output = try fmt.formatFloat(&buf, self.value, .{ .mode = .decimal });
-            try fmt.formatBuf(output, options, writer);
-        }
-    }
-} {
-    return .{ .value = value };
-}
-
 const NameAndLabels = struct {
     name: []const u8,
     labels: []const u8 = "",
@@ -142,16 +117,10 @@ const NameAndLabels = struct {
 
 fn splitName(name: []const u8) NameAndLabels {
     const bracket_pos = mem.indexOfScalar(u8, name, '{');
-    if (bracket_pos) |pos| {
-        return NameAndLabels{
-            .name = name[0..pos],
-            .labels = name[pos + 1 .. name.len - 1],
-        };
-    } else {
-        return NameAndLabels{
-            .name = name,
-        };
-    }
+    return if (bracket_pos) |pos| .{
+        .name = name[0..pos],
+        .labels = name[pos + 1 .. name.len - 1],
+    } else .{ .name = name };
 }
 
 test "prometheus.metric: ensure splitName works" {

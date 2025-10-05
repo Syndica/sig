@@ -99,8 +99,8 @@ pub const ActiveSet = struct {
         allocator: std.mem.Allocator,
         origin: Pubkey,
         table: *const GossipTable,
-    ) error{OutOfMemory}!std.ArrayList(EndPoint) {
-        var active_set_endpoints = try std.ArrayList(EndPoint).initCapacity(
+    ) error{OutOfMemory}!std.array_list.Managed(EndPoint) {
+        var active_set_endpoints = try std.array_list.Managed(EndPoint).initCapacity(
             allocator,
             GOSSIP_PUSH_FANOUT,
         );
@@ -138,7 +138,7 @@ test "init/denit" {
 
     // insert some contacts
     var prng = std.Random.DefaultPrng.init(100);
-    var gossip_peers = try std.ArrayList(ThreadSafeContactInfo).initCapacity(alloc, 10);
+    var gossip_peers = try std.array_list.Managed(ThreadSafeContactInfo).initCapacity(alloc, 10);
     defer gossip_peers.deinit();
 
     for (0..GOSSIP_PUSH_FANOUT) |_| {
@@ -178,7 +178,7 @@ test "gracefully rotates with duplicate contact ids" {
     const alloc = std.testing.allocator;
 
     var prng = std.Random.DefaultPrng.init(100);
-    var gossip_peers = try std.ArrayList(ThreadSafeContactInfo).initCapacity(alloc, 10);
+    var gossip_peers = try std.array_list.Managed(ThreadSafeContactInfo).initCapacity(alloc, 10);
     defer gossip_peers.deinit();
 
     var data = try LegacyContactInfo.initRandom(prng.random()).toContactInfo(alloc);

@@ -326,7 +326,7 @@ const TarOutputHeader = extern struct {
 };
 
 pub fn writeTarHeader(
-    writer: anytype,
+    writer: *std.Io.Writer,
     typeflag: TarOutputHeader.FileType,
     path: []const u8,
     size: u64,

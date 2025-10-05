@@ -195,7 +195,7 @@ pub fn createTransactionContextAccounts(
         std.debug.print("createTransactionContextAccounts: error={}\n", .{err});
     }
 
-    var accounts = std.ArrayList(TransactionContextAccount).init(allocator);
+    var accounts = std.array_list.Managed(TransactionContextAccount).init(allocator);
     errdefer {
         for (accounts.items) |account| {
             allocator.free(account.account.data);
@@ -440,8 +440,8 @@ pub fn createInstrEffects(
 fn modifiedAccounts(
     allocator: std.mem.Allocator,
     tc: *const TransactionContext,
-) !std.ArrayList(pb.AcctState) {
-    var accounts = std.ArrayList(pb.AcctState).init(allocator);
+) !std.array_list.Managed(pb.AcctState) {
+    var accounts = std.array_list.Managed(pb.AcctState).init(allocator);
     errdefer accounts.deinit();
 
     for (tc.accounts) |acc| {
@@ -477,7 +477,7 @@ pub fn createSyscallEffect(allocator: std.mem.Allocator, params: struct {
     memory_map: sig.vm.memory.MemoryMap,
     registers: sig.vm.interpreter.RegisterMap = sig.vm.interpreter.RegisterMap.initFill(0),
 }) !pb.SyscallEffects {
-    var log = std.ArrayList(u8).init(allocator);
+    var log = std.array_list.Managed(u8).init(allocator);
     defer log.deinit();
     if (params.tc.log_collector) |log_collector| {
         for (log_collector.collect()) |msg| {
@@ -526,8 +526,8 @@ pub fn copyPrefix(dst: []u8, prefix: []const u8) void {
 pub fn extractInputDataRegions(
     allocator: std.mem.Allocator,
     memory_map: memory.MemoryMap,
-) !std.ArrayList(pb.InputDataRegion) {
-    var regions = std.ArrayList(pb.InputDataRegion).init(allocator);
+) !std.array_list.Managed(pb.InputDataRegion) {
+    var regions = std.array_list.Managed(pb.InputDataRegion).init(allocator);
     errdefer regions.deinit();
 
     const mm_regions: []const sig.vm.memory.Region = switch (memory_map) {
@@ -558,23 +558,25 @@ pub fn extractInputDataRegions(
 }
 
 pub fn printPbInstrContext(ctx: pb.InstrContext) !void {
-    var buffer = [_]u8{0} ** (1024 * 1024);
-    var fbs = std.io.fixedBufferStream(&buffer);
-    var writer = fbs.writer();
+    var buffer: [1024 * 1024]u8 = @splat(0);
+    var stderr_writer = std.fs.File.stderr().writer(&buffer);
+    const writer = &stderr_writer.interface;
+    defer writer.flush();
+
     try writer.writeAll("InstrContext {");
-    try std.fmt.format(writer, "\n\tprogram_id: {any}", .{
+    try writer.print("\n\tprogram_id: {any}", .{
         Pubkey{ .data = ctx.program_id.getSlice()[0..Pubkey.SIZE].* },
     });
     try writer.writeAll(",\n\taccounts: [");
     for (ctx.accounts.items) |acc| {
         try writer.writeAll("\n\t\tAcctState {");
-        try std.fmt.format(writer, "\n\t\t\taddress: {any}", .{
+        try writer.print("\n\t\t\taddress: {any}", .{
             Pubkey{ .data = acc.address.getSlice()[0..Pubkey.SIZE].* },
         });
-        try std.fmt.format(writer, ",\n\t\t\tlamports: {d}", .{acc.lamports});
-        try std.fmt.format(writer, ",\n\t\t\tdata.len: {any}", .{acc.data.getSlice().len});
-        try std.fmt.format(writer, ",\n\t\t\texecutable: {}", .{acc.executable});
-        try std.fmt.format(writer, ",\n\t\t\towner: {any}", .{
+        try writer.print(",\n\t\t\tlamports: {d}", .{acc.lamports});
+        try writer.print(",\n\t\t\tdata.len: {any}", .{acc.data.getSlice().len});
+        try writer.print(",\n\t\t\texecutable: {}", .{acc.executable});
+        try writer.print(",\n\t\t\towner: {any}", .{
             Pubkey{ .data = acc.owner.getSlice()[0..Pubkey.SIZE].* },
         });
         try writer.writeAll("\n\t\t},\n");
@@ -582,20 +584,21 @@ pub fn printPbInstrContext(ctx: pb.InstrContext) !void {
     try writer.writeAll("\t],\n\tinstr_accounts: [");
     for (ctx.instr_accounts.items) |acc| {
         try writer.writeAll("\n\t\tInstrAcct {");
-        try std.fmt.format(writer, "\n\t\t\tindex: {}", .{acc.index});
-        try std.fmt.format(writer, ",\n\t\t\tis_signer: {}", .{acc.is_signer});
-        try std.fmt.format(writer, ",\n\t\t\tis_writable: {}", .{acc.is_writable});
+        try writer.print("\n\t\t\tindex: {}", .{acc.index});
+        try writer.print(",\n\t\t\tis_signer: {}", .{acc.is_signer});
+        try writer.print(",\n\t\t\tis_writable: {}", .{acc.is_writable});
         try writer.writeAll("\n\t\t},\n");
     }
-    try std.fmt.format(writer, "\t],\n\tdata: {any}", .{ctx.data.getSlice()});
-    try std.fmt.format(writer, ",\n\tcu_avail: {d}", .{ctx.cu_avail});
+    try writer.print("\t],\n\tdata: {any}", .{ctx.data.getSlice()});
+    try writer.print(",\n\tcu_avail: {d}", .{ctx.cu_avail});
     try writer.writeAll(",\n}\n");
+
     std.debug.print("{s}", .{writer.context.getWritten()});
 }
 
 pub fn printPbInstrEffects(effects: pb.InstrEffects) !void {
     var buffer = [_]u8{0} ** (1024 * 1024);
-    var fbs = std.io.fixedBufferStream(&buffer);
+    var fbs = std.Io.fixedBufferStream(&buffer);
     var writer = fbs.writer();
     try writer.writeAll("InstrEffects {");
     try std.fmt.format(writer, "\n\tresult: {d}", .{effects.result});
@@ -623,7 +626,7 @@ pub fn printPbInstrEffects(effects: pb.InstrEffects) !void {
 
 pub fn printPbVmContext(ctx: pb.VmContext) !void {
     var buffer = [_]u8{0} ** (1024 * 1024);
-    var fbs = std.io.fixedBufferStream(&buffer);
+    var fbs = std.Io.fixedBufferStream(&buffer);
     var writer = fbs.writer();
     try writer.writeAll("VmContext {");
     try std.fmt.format(writer, "\n\theap_max: {}", .{ctx.heap_max});
@@ -669,7 +672,7 @@ pub fn printPbVmContext(ctx: pb.VmContext) !void {
 
 pub fn printPbSyscallInvocation(ctx: pb.SyscallInvocation) !void {
     var buffer = [_]u8{0} ** (1024 * 1024);
-    var fbs = std.io.fixedBufferStream(&buffer);
+    var fbs = std.Io.fixedBufferStream(&buffer);
     var writer = fbs.writer();
     try writer.writeAll("SyscallInvocation {");
     try std.fmt.format(writer, "\n\tfunction_name: {s}", .{ctx.function_name.getSlice()});
@@ -693,7 +696,7 @@ pub fn printPbSyscallContext(pb_syscall_ctx: pb.SyscallContext) !void {
 
 pub fn printPbSyscallEffects(ctx: pb.SyscallEffects) !void {
     var buffer = [_]u8{0} ** (1024 * 1024);
-    var fbs = std.io.fixedBufferStream(&buffer);
+    var fbs = std.Io.fixedBufferStream(&buffer);
     var writer = fbs.writer();
     try writer.writeAll("SyscallEffects {");
     try std.fmt.format(writer, "\n\terror: {}", .{ctx.@"error"});

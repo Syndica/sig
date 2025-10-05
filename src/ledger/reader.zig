@@ -4,7 +4,7 @@ pub const ledger = @import("lib.zig");
 
 // std
 const Allocator = std.mem.Allocator;
-const ArrayList = std.ArrayList;
+const ArrayList = std.array_list.Managed;
 const AutoHashMap = std.AutoHashMap;
 
 // sig common
@@ -190,7 +190,7 @@ pub const LedgerReader = struct {
     ) !ArrayList(Shred) {
         var iterator = try self.db.iterator(cf, .forward, .{ slot, start_index });
         defer iterator.deinit();
-        var shreds = std.ArrayList(Shred).init(self.allocator);
+        var shreds = std.array_list.Managed(Shred).init(self.allocator);
         while (try iterator.nextBytes()) |shred_entry| {
             const key, const payload = shred_entry;
             defer key.deinit();
@@ -1303,7 +1303,7 @@ pub const LedgerReader = struct {
         self: *Self,
         num: usize,
     ) !ArrayList(OptimisticSlot) {
-        var optimistic_slots = std.ArrayList(OptimisticSlot).init(self.allocator);
+        var optimistic_slots = std.array_list.Managed(OptimisticSlot).init(self.allocator);
         errdefer optimistic_slots.deinit();
 
         var iter = try self.db.iterator(schema.optimistic_slots, .reverse, null);

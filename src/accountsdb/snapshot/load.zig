@@ -80,14 +80,9 @@ pub fn loadSnapshot(
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{ .iterate = true });
     errdefer snapshot_dir.close();
 
-    logger.info().logf("full snapshot: {s}", .{sig.utils.fmt.tryRealPath(
-        snapshot_dir,
-        snapshot_files.full.snapshotArchiveName().constSlice(),
-    )});
+    logger.info().logf("full snapshot: {s}/{f}", .{ snapshot_dir_str, snapshot_files.full });
     if (snapshot_files.incremental()) |inc_snap| {
-        logger.info().logf("incremental snapshot: {s}", .{
-            sig.utils.fmt.tryRealPath(snapshot_dir, inc_snap.snapshotArchiveName().constSlice()),
-        });
+        logger.info().logf("incremental snapshot: {s}/{f}", .{ snapshot_dir_str, inc_snap });
     }
 
     // cli parsing

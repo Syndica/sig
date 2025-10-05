@@ -126,7 +126,11 @@ pub const BufferPool = struct {
         if (num_frames == 0 or num_frames == 1) return error.InvalidArgument;
 
         // Alignment of frames is good for read performance (and necessary if we want to use O_DIRECT.)
-        const frames = try allocator.alignedAlloc(Frame, std.heap.page_size_min, num_frames);
+        const frames = try allocator.alignedAlloc(
+            Frame,
+            .fromByteUnits(std.heap.page_size_min),
+            num_frames,
+        );
         errdefer allocator.free(frames);
 
         var frame_manager = try FrameManager.init(allocator, num_frames);
@@ -349,7 +353,7 @@ pub const FrameManager = struct {
     frame_map_rw: sig.sync.RwMux(Map),
 
     /// Evicts unused frames for reuse.
-    eviction_lfu: sig.sync.RwMux(HierarchicalFIFO),
+    eviction_lfu: sig.sync.RwMux(HierarchicalFifo),
 
     /// Per-frame refcounts. Used to track what frames still have handles associated with them.
     frame_ref_counts: []Atomic(u32),
@@ -370,7 +374,7 @@ pub const FrameManager = struct {
         errdefer frame_map.deinit(allocator);
         try frame_map.ensureTotalCapacity(allocator, num_frames * 2);
 
-        var eviction_lfu = HierarchicalFIFO.init(
+        var eviction_lfu = HierarchicalFifo.init(
             allocator,
             @max(num_frames / 10, 1),
             num_frames,
@@ -404,7 +408,7 @@ pub const FrameManager = struct {
 
         return .{
             .frame_map_rw = sig.sync.RwMux(Map).init(frame_map),
-            .eviction_lfu = sig.sync.RwMux(HierarchicalFIFO).init(eviction_lfu),
+            .eviction_lfu = sig.sync.RwMux(HierarchicalFifo).init(eviction_lfu),
             .frame_ref_counts = frame_ref_counts,
             .contains_valid_data = contains_valid_data,
         };
@@ -573,9 +577,9 @@ pub const FrameManager = struct {
 ///    indices back into the main queue (freq=1).
 /// 7) Asserts that it will always return a value upon eviction. Calling
 ///    eviction when no free frames can be made available is illegal behaviour.
-pub const HierarchicalFIFO = struct {
+pub const HierarchicalFifo = struct {
     pub const Key = FrameIndex;
-    pub const Fifo = std.fifo.LinearFifo(FrameIndex, .Slice);
+    const Fifo = sig.utils.Deque(FrameIndex);
 
     pub const InQueue = enum(u8) { none, small, main, ghost }; // u8 required for extern usage
 
@@ -587,7 +591,7 @@ pub const HierarchicalFIFO = struct {
     /// value when their key is evicted.
     key: []FileIdFileOffset,
 
-    /// Frequency for the HierarchicalFIFO entries.
+    /// Frequency for the HierarchicalFifo entries.
     /// Yes, really, only 0, 1, 2, 3.
     freq: []u2,
 
@@ -598,7 +602,7 @@ pub const HierarchicalFIFO = struct {
         allocator: std.mem.Allocator,
         small_size: u32,
         num_frames: u32,
-    ) error{ InvalidArgument, OutOfMemory }!HierarchicalFIFO {
+    ) error{ InvalidArgument, OutOfMemory }!HierarchicalFifo {
         if (small_size > num_frames) return error.InvalidArgument;
 
         const small_buf = try allocator.alloc(FrameIndex, small_size);
@@ -623,19 +627,19 @@ pub const HierarchicalFIFO = struct {
         @memset(in_queue, .none);
 
         return .{
-            .small = Fifo.init(small_buf),
-            .main = Fifo.init(main_buf),
-            .ghost = Fifo.init(ghost_buf),
+            .small = .initBuffer(small_buf),
+            .main = .initBuffer(main_buf),
+            .ghost = .initBuffer(ghost_buf),
             .key = key,
             .freq = freq,
             .in_queue = in_queue,
         };
     }
 
-    pub fn deinit(self: *HierarchicalFIFO, allocator: std.mem.Allocator) void {
-        allocator.free(self.small.buf);
-        allocator.free(self.main.buf);
-        allocator.free(self.ghost.buf);
+    pub fn deinit(self: *HierarchicalFifo, allocator: std.mem.Allocator) void {
+        self.small.deinit(allocator);
+        self.main.deinit(allocator);
+        self.ghost.deinit(allocator);
 
         allocator.free(self.key);
         allocator.free(self.freq);
@@ -644,11 +648,11 @@ pub const HierarchicalFIFO = struct {
         self.* = undefined;
     }
 
-    pub fn numFrames(self: *HierarchicalFIFO) u32 {
+    pub fn numFrames(self: *HierarchicalFifo) u32 {
         return @intCast(self.main.buf.len);
     }
 
-    pub fn insert(self: *HierarchicalFIFO, key: Key) void {
+    pub fn insert(self: *HierarchicalFifo, key: Key) void {
         switch (self.in_queue[key]) {
             .main, .small => {
                 self.freq[key] +|= 1;
@@ -658,22 +662,22 @@ pub const HierarchicalFIFO = struct {
                 self.freq[key] = 1;
                 // Add key to main too - important to note that the key *still*
                 // exists within ghost, but from now on we'll ignore that entry.
-                self.main.writeItemAssumeCapacity(key);
+                self.main.pushBackAssumeCapacity(key);
                 self.in_queue[key] = .main;
             },
             .none => {
-                if (self.small.writableLength() == 0) {
-                    const popped_small = self.small.readItem().?;
+                if (self.small.len == 0) {
+                    const popped_small = self.small.popFront().?;
 
                     if (self.freq[popped_small] == 0) {
-                        self.ghost.writeItemAssumeCapacity(popped_small);
+                        self.ghost.pushBackAssumeCapacity(popped_small);
                         self.in_queue[popped_small] = .ghost;
                     } else {
-                        self.main.writeItemAssumeCapacity(popped_small);
+                        self.main.pushBackAssumeCapacity(popped_small);
                         self.in_queue[popped_small] = .main;
                     }
                 }
-                self.small.writeItemAssumeCapacity(key);
+                self.small.pushBackAssumeCapacity(key);
                 self.in_queue[key] = .small;
             },
         }
@@ -683,7 +687,7 @@ pub const HierarchicalFIFO = struct {
     /// This does not return an optional, as the caller *requires* a key to be
     /// evicted. Not being able to return a key means illegal internal state in
     /// the BufferPool.
-    pub fn evict(self: *HierarchicalFIFO, frame_ref_counts: []const Atomic(u32)) Key {
+    pub fn evict(self: *HierarchicalFifo, frame_ref_counts: []const Atomic(u32)) Key {
         var alive_eviction_attempts: usize = 0;
 
         const dead_key: Key = while (true) {
@@ -713,7 +717,7 @@ pub const HierarchicalFIFO = struct {
             // alive evicted keys are reinserted, we try again
             if (frame_ref_counts[evicted].load(.seq_cst) > 0) {
                 self.freq[evicted] = 1;
-                self.main.writeItemAssumeCapacity(evicted);
+                self.main.pushBackAssumeCapacity(evicted);
                 self.in_queue[evicted] = .main;
                 alive_eviction_attempts += 1;
                 continue;
@@ -727,8 +731,8 @@ pub const HierarchicalFIFO = struct {
         return dead_key;
     }
 
-    fn evictGhost(self: *HierarchicalFIFO) ?Key {
-        const evicted: ?Key = while (self.ghost.readItem()) |ghost_key| {
+    fn evictGhost(self: *HierarchicalFifo) ?Key {
+        const evicted: ?Key = while (self.ghost.popFront()) |ghost_key| {
             switch (self.in_queue[ghost_key]) {
                 .ghost => {
                     break ghost_key;
@@ -751,7 +755,7 @@ pub const HierarchicalFIFO = struct {
     }
 
     fn evictSmallOrMain(
-        self: *HierarchicalFIFO,
+        self: *HierarchicalFifo,
         comptime target_queue: enum { small, main },
     ) ?Key {
         const queue = switch (target_queue) {
@@ -759,7 +763,7 @@ pub const HierarchicalFIFO = struct {
             .main => &self.main,
         };
 
-        const evicted: ?Key = while (queue.readItem()) |popped_key| {
+        const evicted: ?Key = while (queue.popFront()) |popped_key| {
             switch (target_queue) {
                 .small => if (self.in_queue[popped_key] != .small) unreachable,
                 .main => if (self.in_queue[popped_key] != .main) unreachable,
@@ -769,7 +773,7 @@ pub const HierarchicalFIFO = struct {
                 break popped_key;
             } else {
                 self.freq[popped_key] -= 1;
-                queue.writeItemAssumeCapacity(popped_key);
+                queue.pushBackAssumeCapacity(popped_key);
             }
         } else null;
 
@@ -873,7 +877,11 @@ pub const AccountDataHandle = union(enum) {
     }
 
     pub fn iterator(self: *const AccountDataHandle) Iterator {
-        return .{ .read_handle = self, .start = 0, .end = self.len() };
+        return .{
+            .read_handle = self,
+            .start = 0,
+            .end = self.len(),
+        };
     }
 
     /// Copies all data into specified buffer. Buf.len === self.len()
@@ -1044,10 +1052,13 @@ pub const AccountDataHandle = union(enum) {
         start: FileOffset,
         end: FileOffset,
 
-        pub const Reader = std.io.GenericReader(*Iterator, error{}, Iterator.readBytes);
+        pub const Reader = std.Io.GenericReader(*Iterator, error{}, Iterator.readBytes);
 
-        pub fn reader(self: *Iterator) Reader {
-            return .{ .context = self };
+        // TODO: rewrite this to properly use the new interface.
+        // we can definitly buffer at least a frame for each read.
+        pub fn adaptToNewReaderApi(self: *Iterator) Reader.Adapter {
+            const reader: Reader = .{ .context = self };
+            return reader.adaptToNewApi(&.{});
         }
 
         pub fn len(self: Iterator) FileOffset {
@@ -1127,8 +1138,8 @@ pub const AccountDataHandle = union(enum) {
     };
 
     fn bincodeSerialize(
-        writer: anytype,
-        read_handle: anytype,
+        writer: *std.Io.Writer,
+        read_handle: AccountDataHandle,
         params: bincode.Params,
     ) anyerror!void {
         // we want to serialise it as if it's a slice
@@ -1142,14 +1153,14 @@ pub const AccountDataHandle = union(enum) {
 
     fn bincodeDeserialize(
         limit_allocator: *bincode.LimitAllocator,
-        reader: anytype,
+        reader: *std.Io.Reader,
         params: bincode.Params,
     ) anyerror!AccountDataHandle {
         const data = try bincode.readWithLimit(limit_allocator, []u8, reader, params);
         return AccountDataHandle.initAllocatedOwned(data);
     }
 
-    fn bincodeFree(allocator: std.mem.Allocator, read_handle: anytype) void {
+    fn bincodeFree(allocator: std.mem.Allocator, read_handle: AccountDataHandle) void {
         read_handle.deinit(allocator);
     }
 };
@@ -1486,7 +1497,7 @@ test "AccountDataHandle bincode" {
     defer allocator.free(read_data);
 
     {
-        var serialised_from_slice = std.ArrayList(u8).init(allocator);
+        var serialised_from_slice = std.array_list.Managed(u8).init(allocator);
         defer serialised_from_slice.deinit();
 
         try bincode.write(serialised_from_slice.writer(), read_data, .{});
@@ -1507,7 +1518,7 @@ test "AccountDataHandle bincode" {
     }
 
     {
-        var serialised_from_handle = std.ArrayList(u8).init(allocator);
+        var serialised_from_handle = std.array_list.Managed(u8).init(allocator);
         defer serialised_from_handle.deinit();
 
         try bincode.write(serialised_from_handle.writer(), read, .{});

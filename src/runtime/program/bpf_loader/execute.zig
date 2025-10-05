@@ -922,7 +922,7 @@ pub fn executeV3DeployWithMaxDataLen(
         );
     }
 
-    try ic.tc.log("Deployed program {}", .{new_program_id});
+    try ic.tc.log("Deployed program {f}", .{new_program_id});
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/bpf_loader/src/lib.rs#L705-L894
@@ -1232,7 +1232,7 @@ pub fn executeV3SetAuthority(
     }
 
     if (new_authority) |some| {
-        try ic.tc.log("New authority Some({?})", .{some});
+        try ic.tc.log("New authority Some({f})", .{some});
     } else {
         try ic.tc.log("New authority None", .{});
     }
@@ -1322,7 +1322,7 @@ pub fn executeV3SetAuthorityChecked(
         },
     }
 
-    try ic.tc.log("New authority {?}", .{new_authority});
+    try ic.tc.log("New authority {f}", .{new_authority});
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/bpf_loader/src/lib.rs#L1033-L1138
@@ -1960,17 +1960,17 @@ pub fn deployProgram(
         &environment.loader,
         environment.config,
     ) catch |err| {
-        try tc.log("{s}", .{@errorName(err)});
+        try tc.log("{t}", .{err});
         return InstructionError.InvalidAccountData;
     };
     defer executable.deinit(allocator);
 
     executable.verify(&environment.loader) catch |err| {
-        try tc.log("{s}", .{@errorName(err)});
+        try tc.log("{t}", .{err});
         return InstructionError.InvalidAccountData;
     };
 
-    try tc.log("Deploying program {}", .{program_id});
+    try tc.log("Deploying program {f}", .{program_id});
 
     // Remove from the program map since it should not be accessible on this slot anymore.
     const gop = try tc.program_map.getOrPut(allocator, program_id);
@@ -3899,7 +3899,7 @@ test executeV4SetProgramLength {
             },
         };
 
-        var instr_accounts: std.BoundedArray(testing.InstructionContextAccountMetaParams, 4) = .{};
+        var instr_accounts: sig.utils.BoundedArray(testing.InstructionContextAccountMetaParams, 4) = .{};
         instr_accounts.appendSliceAssumeCapacity(&.{
             .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 }, // program
             .{ .is_signer = true, .is_writable = false, .index_in_transaction = 0 }, // auth

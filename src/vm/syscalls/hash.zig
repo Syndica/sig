@@ -54,7 +54,7 @@ pub fn poseidon(
 
     // We need to translateSlice all of the inputs before checking the length for zero.
     // We already know the top bound of the length is 12, so a BoundedArray works just fine.
-    var slices: std.BoundedArray([]const u8, 12) = .{};
+    var slices: sig.utils.BoundedArray([]const u8, 12) = .{};
     for (inputs) |input| {
         slices.appendAssumeCapacity(try memory_map.translateSlice(
             u8,

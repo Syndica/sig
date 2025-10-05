@@ -5,7 +5,7 @@ const sig = @import("../sig.zig");
 const testing = std.testing;
 const bincode = sig.bincode;
 
-const ArrayList = std.ArrayList;
+const ArrayList = std.array_list.Managed;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const UdpSocket = network.Socket;
 const TcpListener = network.Socket;
@@ -19,6 +19,7 @@ const IpAddr = sig.net.IpAddr;
 const ClientVersion = sig.version.ClientVersion;
 const DynamicArrayBitSet = sig.bloom.bit_set.DynamicArrayBitSet;
 const SlotAndHash = sig.core.hash.SlotAndHash;
+const FullSnapshotFileInfo = sig.accounts_db.snapshot.data.FullSnapshotFileInfo;
 
 const getWallclockMs = sig.time.getWallclockMs;
 const BitVecConfig = sig.bloom.bit_vec.BitVecConfig;
@@ -85,14 +86,13 @@ pub const GossipMetadata = struct {
 pub const SignedGossipData = struct {
     signature: Signature,
     data: GossipData,
-    const Self = @This();
 
     pub fn initSigned(
         /// Assumed to be a valid & strong keypair, passing a bad or invalid keypair is illegal.
         keypair: *const KeyPair,
         /// Assumed to be valid, passing invalid data is illegal.
         data: GossipData,
-    ) Self {
+    ) SignedGossipData {
         // should always be enough space or is invalid msg
         var buf: [PACKET_DATA_SIZE]u8 = undefined;
         const bytes = bincode.writeToSlice(&buf, data, bincode.Params.standard) catch |err| {
@@ -114,33 +114,33 @@ pub const SignedGossipData = struct {
         };
     }
 
-    pub fn clone(self: *const Self, allocator: std.mem.Allocator) error{OutOfMemory}!Self {
+    pub fn clone(self: *const SignedGossipData, allocator: std.mem.Allocator) error{OutOfMemory}!SignedGossipData {
         return .{
             .signature = self.signature,
             .data = try self.data.clone(allocator),
         };
     }
 
-    pub fn deinit(self: *const Self, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *const SignedGossipData, allocator: std.mem.Allocator) void {
         self.data.deinit(allocator);
     }
 
-    pub fn verify(self: *const Self, pubkey: Pubkey) !bool {
+    pub fn verify(self: *const SignedGossipData, pubkey: Pubkey) !bool {
         // should always be enough space or is invalid msg
         var buf: [PACKET_DATA_SIZE]u8 = undefined;
         const msg = try bincode.writeToSlice(&buf, self.data, bincode.Params.standard);
         return self.signature.verify(pubkey, msg);
     }
 
-    pub fn id(self: *const Self) Pubkey {
+    pub fn id(self: *const SignedGossipData) Pubkey {
         return self.data.id();
     }
 
-    pub fn label(self: *const Self) GossipKey {
+    pub fn label(self: *const SignedGossipData) GossipKey {
         return self.data.label();
     }
 
-    pub fn wallclock(self: *const Self) u64 {
+    pub fn wallclock(self: *const SignedGossipData) u64 {
         return self.data.wallclock();
     }
 
@@ -149,7 +149,7 @@ pub const SignedGossipData = struct {
         random: std.Random,
         /// Assumed to be a valid & strong keypair, passing a bad or invalid keypair is illegal.
         keypair: *const KeyPair,
-    ) Self {
+    ) SignedGossipData {
         return initSigned(keypair, GossipData.initRandom(random));
     }
 
@@ -159,7 +159,7 @@ pub const SignedGossipData = struct {
         /// Assumed to be a valid & strong keypair, passing a bad or invalid keypair is illegal.
         keypair: *const KeyPair,
         index: usize,
-    ) !Self {
+    ) !SignedGossipData {
         var data = GossipData.randomFromIndex(random, index);
         const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
         data.setId(pubkey);
@@ -1021,27 +1021,11 @@ pub const NodeInstance = struct {
     }
 };
 
-fn ShredTypeConfig() bincode.FieldConfig(ShredType) {
-    const S = struct {
-        pub fn serialize(writer: anytype, data: anytype, params: bincode.Params) !void {
-            try bincode.write(writer, @intFromEnum(data), params);
-            return;
-        }
-    };
-
-    return bincode.FieldConfig(ShredType){
-        .serializer = S.serialize,
-    };
-}
-
 pub const ShredType = enum(u8) {
     Data = 0b1010_0101,
     Code = 0b0101_1010,
 
     pub const BincodeSize = u8;
-
-    /// Enables bincode serializer to serialize this data into a single byte instead of 4.
-    pub const @"!bincode-config" = ShredTypeConfig();
 };
 
 pub const DuplicateShred = struct {
@@ -1190,24 +1174,38 @@ pub const SnapshotHashes = struct {
 
         /// Responsibility to `.deinit` the returned snapshot collection with the specified allocator falls to the caller.
         /// Accepts any `list.len`.
-        pub fn initListCloned(allocator: std.mem.Allocator, list: []const SlotAndHash) !IncrementalSnapshotsList {
+        pub fn initListCloned(
+            allocator: std.mem.Allocator,
+            list: []const SlotAndHash,
+        ) !IncrementalSnapshotsList {
             if (list.len == 1) return initSingle(list[0]);
             const uncloned = initList(list);
             return uncloned.clone(allocator);
         }
 
-        pub fn clone(inc: *const IncrementalSnapshotsList, allocator: std.mem.Allocator) !IncrementalSnapshotsList {
+        pub fn clone(
+            inc: *const IncrementalSnapshotsList,
+            allocator: std.mem.Allocator,
+        ) !IncrementalSnapshotsList {
             return switch (inc.*) {
                 .single => |single| .{ .single = single },
                 .multiple => |list| .{ .multiple = try allocator.dupe(SlotAndHash, list) },
             };
         }
 
-        fn bincodeSerializeFn(writer: anytype, inc_list: anytype, params: bincode.Params) !void {
+        fn bincodeSerializeFn(
+            writer: *std.Io.Writer,
+            inc_list: IncrementalSnapshotsList,
+            params: bincode.Params,
+        ) !void {
             try bincode.write(writer, inc_list.getSlice(), params);
         }
 
-        fn bincodeDeserializeFn(limit_allocator: *bincode.LimitAllocator, reader: anytype, params: bincode.Params) !IncrementalSnapshotsList {
+        fn bincodeDeserializeFn(
+            limit_allocator: *bincode.LimitAllocator,
+            reader: *std.Io.Reader,
+            params: bincode.Params,
+        ) !IncrementalSnapshotsList {
             const faililng_allocator = sig.utils.allocators.failing.allocator(.{});
 
             const maybe_len = try bincode.readIntAsLength(usize, reader, params);
@@ -1226,7 +1224,7 @@ pub const SnapshotHashes = struct {
             }
         }
 
-        fn bincodeFreeFn(allocator: std.mem.Allocator, inc_list: anytype) void {
+        fn bincodeFreeFn(allocator: std.mem.Allocator, inc_list: IncrementalSnapshotsList) void {
             IncrementalSnapshotsList.deinit(&inc_list, allocator);
         }
     };
@@ -1628,7 +1626,7 @@ pub const RestartLastVotedForkSlots = struct {
 };
 
 pub const SlotsOffsets = union(enum(u32)) {
-    RunLengthEncoding: std.ArrayList(u16),
+    RunLengthEncoding: std.array_list.Managed(u16),
     RawOffsets: RawOffsets,
 
     pub fn clone(self: *const SlotsOffsets, allocator: std.mem.Allocator) error{OutOfMemory}!SlotsOffsets {
@@ -1815,13 +1813,13 @@ test "contact info bincode serialize matches rust bincode" {
     }
 
     // Check that the serialized bytes match the rust serialized bytes
-    var buf = std.ArrayList(u8).init(testing.allocator);
+    var buf = std.array_list.Managed(u8).init(testing.allocator);
     bincode.write(buf.writer(), sig_contact_info, bincode.Params.standard) catch unreachable;
     defer buf.deinit();
     try testing.expect(std.mem.eql(u8, &rust_contact_info_serialized_bytes, buf.items));
 
     // Check that the deserialized contact info matches the original
-    var stream = std.io.fixedBufferStream(buf.items);
+    var stream = std.Io.fixedBufferStream(buf.items);
     var sig_contact_info_deserialised = try bincode.read(testing.allocator, ContactInfo, stream.reader(), bincode.Params.standard);
     defer sig_contact_info_deserialised.deinit();
     try testing.expect(sig_contact_info_deserialised.addrs.items.len == 1);
@@ -1844,11 +1842,11 @@ test "ContactInfo bincode roundtrip maintains data integrity" {
         0,
     };
 
-    var stream = std.io.fixedBufferStream(&contact_info_bytes_from_mainnet);
+    var stream = std.Io.fixedBufferStream(&contact_info_bytes_from_mainnet);
     const ci2 = try bincode.read(testing.allocator, ContactInfo, stream.reader(), bincode.Params.standard);
     defer ci2.deinit();
 
-    var buf = std.ArrayList(u8).init(testing.allocator);
+    var buf = std.array_list.Managed(u8).init(testing.allocator);
     bincode.write(buf.writer(), ci2, bincode.Params.standard) catch unreachable;
     defer buf.deinit();
 
@@ -1861,11 +1859,11 @@ test "SocketEntry serializer works" {
     comptime std.debug.assert(@intFromEnum(SocketTag.rpc_pubsub) == 3);
     const se: SocketEntry = .{ .key = .rpc_pubsub, .index = 3, .offset = 30304 };
 
-    var buf = std.ArrayList(u8).init(testing.allocator);
+    var buf = std.array_list.Managed(u8).init(testing.allocator);
     defer buf.deinit();
     try bincode.write(buf.writer(), se, bincode.Params.standard);
 
-    var stream = std.io.fixedBufferStream(buf.items);
+    var stream = std.Io.fixedBufferStream(buf.items);
     const other_se = try bincode.read(testing.allocator, SocketEntry, stream.reader(), bincode.Params.standard);
 
     try testing.expect(other_se.index == se.index);

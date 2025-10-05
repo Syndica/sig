@@ -964,7 +964,7 @@ fn serializeOutput(
     const acct_states = blk: {
         const relevant_acct_states = switch (txn) {
             .executed => |executed| acct_states: {
-                var acct_states: std.ArrayList(pb.AcctState) = .init(allocator);
+                var acct_states: std.array_list.Managed(pb.AcctState) = .init(allocator);
                 errdefer acct_states.deinit();
 
                 for (executed.loaded_accounts.accounts.constSlice()) |acc| {
@@ -981,7 +981,7 @@ fn serializeOutput(
                 break :acct_states acct_states;
             },
             .fees_only => |fees_only| acct_states: {
-                var acct_states: std.ArrayList(pb.AcctState) = .init(allocator);
+                var acct_states: std.array_list.Managed(pb.AcctState) = .init(allocator);
                 errdefer acct_states.deinit();
                 errdefer for (acct_states.items) |acct_state| acct_state.deinit();
                 try acct_states.ensureTotalCapacityPrecise(fees_only.rollbacks.count());
@@ -1022,7 +1022,7 @@ fn serializeOutput(
         defer relevant_acct_states.deinit();
 
         // Filter relevant accounts.
-        var acct_states: std.ArrayList(pb.AcctState) = .init(allocator);
+        var acct_states: std.array_list.Managed(pb.AcctState) = .init(allocator);
         errdefer acct_states.deinit();
         try acct_states.ensureTotalCapacityPrecise(relevant_acct_states.items.len);
 
@@ -1518,8 +1518,8 @@ pub fn createPbManagedStrings(
     allocator: std.mem.Allocator,
     comptime T: type,
     strings: []const []const u8,
-) !std.ArrayList(ManagedString) {
-    var result = try std.ArrayList(ManagedString).initCapacity(allocator, strings.len);
+) !std.array_list.Managed(ManagedString) {
+    var result = try std.array_list.Managed(ManagedString).initCapacity(allocator, strings.len);
     for (strings) |string| {
         const parsed = T.parseRuntime(string) catch unreachable;
         result.appendAssumeCapacity(try ManagedString.copy(&parsed.data, allocator));
@@ -1536,13 +1536,13 @@ pub const PbInstructionsParams = struct {
 pub fn createPbInstructions(
     allocator: std.mem.Allocator,
     instructions: []const PbInstructionsParams,
-) !std.ArrayList(pb.CompiledInstruction) {
-    var result = try std.ArrayList(pb.CompiledInstruction).initCapacity(
+) !std.array_list.Managed(pb.CompiledInstruction) {
+    var result = try std.array_list.Managed(pb.CompiledInstruction).initCapacity(
         allocator,
         instructions.len,
     );
     for (instructions) |instruction| {
-        var accounts = std.ArrayList(u32).init(allocator);
+        var accounts = std.array_list.Managed(u32).init(allocator);
         try accounts.appendSlice(instruction.accounts);
         const data = try ManagedString.copy(instruction.data, allocator);
         try result.append(.{
@@ -1563,15 +1563,15 @@ pub const PbAddressLookupTablesParams = struct {
 pub fn createPbAddressLookupTables(
     allocator: std.mem.Allocator,
     lookup_tables: []const PbAddressLookupTablesParams,
-) !std.ArrayList(pb.MessageAddressTableLookup) {
-    var result = try std.ArrayList(pb.MessageAddressTableLookup).initCapacity(
+) !std.array_list.Managed(pb.MessageAddressTableLookup) {
+    var result = try std.array_list.Managed(pb.MessageAddressTableLookup).initCapacity(
         allocator,
         lookup_tables.len,
     );
     for (lookup_tables) |lookup_table| {
-        var writable_indexes = std.ArrayList(u32).init(allocator);
+        var writable_indexes = std.array_list.Managed(u32).init(allocator);
         try writable_indexes.appendSlice(lookup_table.writable_indexes);
-        var readonly_indexes = std.ArrayList(u32).init(allocator);
+        var readonly_indexes = std.array_list.Managed(u32).init(allocator);
         try readonly_indexes.appendSlice(lookup_table.readonly_indexes);
         try result.append(.{
             .account_key = try createPbManagedString(allocator, Pubkey, lookup_table.account_key),

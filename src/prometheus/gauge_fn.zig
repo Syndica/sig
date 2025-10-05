@@ -137,7 +137,7 @@ test "prometheus.gauge_fn: non-pointer state" {
 test "prometheus.gauge_fn: shared state" {
     const State = struct {
         mutex: std.Thread.Mutex = .{},
-        items: std.ArrayList(usize) = std.ArrayList(usize).init(testing.allocator),
+        items: std.array_list.Managed(usize) = std.array_list.Managed(usize).init(testing.allocator),
     };
     var shared_state = State{};
     defer shared_state.items.deinit();
@@ -185,7 +185,7 @@ test "prometheus.gauge_fn: write" {
         @as(usize, 0),
     );
 
-    var buffer = std.ArrayList(u8).init(testing.allocator);
+    var buffer = std.array_list.Managed(u8).init(testing.allocator);
     defer buffer.deinit();
 
     var metric = &gauge.metric;
