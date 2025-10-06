@@ -53,9 +53,13 @@ pub const SlotDataProvider = struct {
     ) ?*const sig.core.Ancestors {
         const slot_tracker, var lg = self.slot_tracker_rw.readWithLock();
         defer lg.unlock();
-        if (slot_tracker.get(slot)) |ref|
-            return &ref.constants.ancestors
-        else {
+        if (slot_tracker.get(slot)) |ref| {
+            std.log.info(
+                "getSlotAncestorsPtr: found slot {}, current_root={}",
+                .{ slot, slot_tracker.root },
+            );
+            return &ref.constants.ancestors;
+        } else {
             std.log.info(
                 "getSlotAncestorsPtr: missing slot {}, current_root={}",
                 .{ slot, slot_tracker.root },
