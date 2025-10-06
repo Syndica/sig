@@ -55,8 +55,13 @@ pub const SlotDataProvider = struct {
         defer lg.unlock();
         if (slot_tracker.get(slot)) |ref|
             return &ref.constants.ancestors
-        else
+        else {
+            std.log.info(
+                "getSlotAncestorsPtr: missing slot {}, current_root={}",
+                .{ slot, slot_tracker.root },
+            );
             return null;
+    }
     }
 
     fn getEpochTotalStake(self: *const SlotDataProvider, epoch: u64) ?u64 {
