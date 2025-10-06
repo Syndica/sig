@@ -263,6 +263,70 @@ pub const ShredReceiver = struct {
     }
 };
 
+test "handleBatch/handlePacket" {
+    const allocator = std.testing.allocator;
+    const keypair = try sig.identity.KeyPair.generateDeterministic(.{1} ** 32);
+    const root_slot = 0;
+    const invalid_socket = Socket{
+        .family = .ipv4,
+        .internal = -1,
+        .endpoint = null,
+    };
+
+    var registry = sig.prometheus.Registry(.{}).init(allocator);
+    defer registry.deinit();
+
+    var epoch_ctx = try sig.adapter.EpochContextManager.init(allocator, .DEFAULT);
+    defer epoch_ctx.deinit();
+
+    var ledger_db = try sig.ledger.tests.TestDB.init(@src());
+    defer ledger_db.deinit();
+
+    var shred_tracker = try sig.shred_network.shred_tracker.BasicShredTracker.init(
+        allocator,
+        root_slot + 1,
+        .noop,
+        &registry,
+    );
+    defer shred_tracker.deinit();
+
+    var shred_inserter = try sig.ledger.ShredInserter.init(
+        allocator,
+        .noop,
+        &registry,
+        ledger_db,
+    );
+    defer shred_inserter.deinit();
+
+    var exit = Atomic(bool).init(false);
+    const shred_version = Atomic(u16).init(0);
+
+    var shred_receiver = try ShredReceiver.init(allocator, .noop, .{
+        .keypair = &keypair,
+        .exit = &exit,
+        .repair_socket = invalid_socket,
+        .turbine_socket = invalid_socket,
+        .shred_version = &shred_version,
+        .registry = &registry,
+        .root_slot = root_slot,
+        .maybe_retransmit_shred_sender = null,
+        .leader_schedule = epoch_ctx.slotLeaders(),
+        .tracker = &shred_tracker,
+        .inserter = shred_inserter,
+    });
+    defer shred_receiver.deinit(allocator);
+
+    const addr = sig.net.SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 88);
+    {
+        const ping = try Ping.init(.{1} ** 32, &keypair);
+        var packet = try Packet.initFromBincode(addr, RepairPing{ .Ping = ping });
+        packet.flags = .from(.repair);
+        try shred_receiver.incoming_shreds.send(packet);
+    }
+
+    try shred_receiver.handleBatch(allocator);
+}
+
 test "handlePing" {
     const allocator = std.testing.allocator;
     var metrics_registry = sig.prometheus.Registry(.{}).init(allocator);
