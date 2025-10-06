@@ -167,7 +167,12 @@ fn finalizeState(allocator: Allocator, params: FinalizeStateParams) !void {
     );
 
     // Run incinerator
-    if (try params.account_reader.get(sig.runtime.ids.INCINERATOR)) |incinerator_account| {
+    if (try params.account_reader.get(
+        allocator,
+        sig.runtime.ids.INCINERATOR,
+    )) |incinerator_account| {
+        defer incinerator_account.deinit(allocator);
+
         _ = params.capitalization.fetchSub(incinerator_account.lamports, .monotonic);
         try params.account_store.put(
             params.update_sysvar.slot,
@@ -232,16 +237,17 @@ fn tryPayoutFees(
     payout: u64,
 ) !u64 {
     var fee_collector_account =
-        if (try account_reader.get(collector_id)) |old_account|
-            AccountSharedData{
+        if (try account_reader.get(allocator, collector_id)) |old_account| blk: {
+            defer old_account.deinit(allocator);
+
+            break :blk AccountSharedData{
                 .data = try old_account.data.readAllAllocate(allocator),
                 .lamports = old_account.lamports,
                 .owner = old_account.owner,
                 .executable = old_account.executable,
                 .rent_epoch = old_account.rent_epoch,
-            }
-        else
-            AccountSharedData.EMPTY;
+            };
+        } else AccountSharedData.EMPTY;
 
     if (!fee_collector_account.owner.equals(&sig.runtime.program.system.ID)) {
         return error.InvalidAccountOwner;
@@ -294,7 +300,12 @@ pub fn hashSlot(allocator: Allocator, params: HashSlotParams) !struct { ?LtHash,
         assert(parent_ancestors.ancestors.swapRemove(params.slot));
 
         var lt_hash = params.parent_lt_hash.* orelse return error.UnknownParentLtHash;
-        lt_hash.mixIn(try deltaLtHash(params.account_reader, params.slot, &parent_ancestors));
+        lt_hash.mixIn(try deltaLtHash(
+            allocator,
+            params.account_reader,
+            params.slot,
+            &parent_ancestors,
+        ));
 
         return .{ lt_hash, Hash.generateSha256(.{ initial_hash, lt_hash.bytes() }) };
     } else {
@@ -312,10 +323,10 @@ pub fn deltaMerkleHash(account_reader: AccountReader, allocator: Allocator, slot
         errdefer allocator.free(pubkey_hashes);
 
         var i: usize = 0;
-        while (try iterator.next()) |pubkey_account| : (i += 1) {
+        while (try iterator.next(allocator)) |pubkey_account| : (i += 1) {
             const pubkey, const account = pubkey_account;
+            defer account.deinit(allocator);
             pubkey_hashes[i] = .{ pubkey, account.hash(pubkey) };
-            account.deinit(allocator);
         }
 
         break :pkh pubkey_hashes;
@@ -345,6 +356,7 @@ pub fn deltaMerkleHash(account_reader: AccountReader, allocator: Allocator, slot
 
 /// Returns the lattice hash of every account that was modified in the slot.
 pub fn deltaLtHash(
+    tmp_alloc: std.mem.Allocator,
     account_reader: AccountReader,
     slot: Slot,
     parent_ancestors: *const Ancestors,
@@ -354,6 +366,10 @@ pub fn deltaLtHash(
 
     assert(!parent_ancestors.containsSlot(slot));
 
+    var arena = std.heap.ArenaAllocator.init(tmp_alloc);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
     // TODO: perf - consider using a thread pool
     // TODO: perf - consider caching old hashes
 
@@ -362,11 +378,13 @@ pub fn deltaLtHash(
 
     var hash = LtHash.IDENTITY;
     var i: usize = 0;
-    while (try iterator.next()) |pubkey_account| : (i += 1) {
+    while (try iterator.next(allocator)) |pubkey_account| : (i += 1) {
         const pubkey, const account = pubkey_account;
-        defer account.deinit(account_reader.allocator());
-        if (try account_reader.forSlot(parent_ancestors).get(pubkey)) |old_acct| {
-            defer old_acct.deinit(account_reader.allocator());
+        defer account.deinit(allocator);
+
+        if (try account_reader.forSlot(parent_ancestors).get(allocator, pubkey)) |old_acct| {
+            defer old_acct.deinit(allocator);
+
             if (!old_acct.equals(&account)) {
                 hash.mixOut(old_acct.ltHash(pubkey));
                 hash.mixIn(account.ltHash(pubkey));
@@ -380,7 +398,10 @@ pub fn deltaLtHash(
 }
 
 test "deltaLtHash is identity for 0 accounts" {
-    try std.testing.expectEqual(LtHash.IDENTITY, try deltaLtHash(.noop, 0, &Ancestors{}));
+    try std.testing.expectEqual(
+        LtHash.IDENTITY,
+        try deltaLtHash(std.testing.allocator, .noop, 0, &Ancestors{}),
+    );
 }
 
 test "deltaMerkleHash for 0 accounts" {
@@ -600,7 +621,12 @@ test "delta hashes with many accounts" {
     try parent_ancestors.ancestors.put(allocator, 0, {});
     try parent_ancestors.ancestors.put(allocator, 1, {});
 
-    const actual_lt_hash = try deltaLtHash(accounts.accountReader(), hash_slot, &parent_ancestors);
+    const actual_lt_hash = try deltaLtHash(
+        allocator,
+        accounts.accountReader(),
+        hash_slot,
+        &parent_ancestors,
+    );
     const actual_merkle_hash = try deltaMerkleHash(accounts.accountReader(), allocator, hash_slot);
 
     try std.testing.expectEqualSlices(u16, &expected_lt_hash, &actual_lt_hash.data);

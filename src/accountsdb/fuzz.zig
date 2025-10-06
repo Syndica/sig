@@ -323,7 +323,11 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                 }{ .ancestors_sub = ancestors_sub.ancestors.keys() });
 
                 const account =
-                    try accounts_db.getAccountWithAncestors(&pubkey, &ancestors_sub) orelse {
+                    try accounts_db.getAccountWithAncestors(
+                        allocator,
+                        &pubkey,
+                        &ancestors_sub,
+                    ) orelse {
                         logger.err().logf(
                             "accounts_db missing tracked account '{}': {}",
                             .{ pubkey, tracked_account },
@@ -542,7 +546,7 @@ fn readRandomAccounts(
         }
 
         for (pubkeys) |pubkey| {
-            const account = db.getAccountLatest(&pubkey) catch |e|
+            const account = db.getAccountLatest(db.allocator, &pubkey) catch |e|
                 std.debug.panic("getAccount failed with error: {}", .{e}) orelse
                 continue;
             defer account.deinit(db.allocator);
