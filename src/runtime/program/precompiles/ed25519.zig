@@ -353,17 +353,18 @@ test "ed25519 signature offset" {
 
 // https://github.com/anza-xyz/agave/blob/2d834361c096198176dbdc4524d5003bccf6c192/precompiles/src/ed25519.rs#L446
 test "ed25519_malleability" {
+    const allocator = std.testing.allocator;
     {
         const message = "hello";
         const keypair = Ed25519.KeyPair.generate();
         const signature = try keypair.sign(message, null);
         const instruction = try newInstruction(
-            std.testing.allocator,
+            allocator,
             &signature,
             &keypair.public_key,
             message,
         );
-        defer std.testing.allocator.free(instruction.data);
+        defer allocator.free(instruction.data);
         const tx: sig.core.Transaction = .{
             .msg = .{
                 .account_keys = &.{ID},
@@ -379,8 +380,8 @@ test "ed25519_malleability" {
             .signatures = &.{},
         };
 
-        _ = try verifyPrecompiles(std.testing.allocator, &tx, &FeatureSet.ALL_DISABLED, 0);
-        _ = try verifyPrecompiles(std.testing.allocator, &tx, &FeatureSet.ALL_ENABLED_AT_GENESIS, 0);
+        _ = try verifyPrecompiles(allocator, &tx, &FeatureSet.ALL_DISABLED, 0);
+        _ = try verifyPrecompiles(allocator, &tx, &FeatureSet.ALL_ENABLED_AT_GENESIS, 0);
     }
 
     {
@@ -405,8 +406,8 @@ test "ed25519_malleability" {
                 0x71, 0x6f, 0xb8, 0x96, 0xff, 0xee, 0xac, 0x09,
             },
         );
-        const instruction = try newInstruction(std.testing.allocator, &signature, &pubkey, message);
-        defer std.testing.allocator.free(instruction.data);
+        const instruction = try newInstruction(allocator, &signature, &pubkey, message);
+        defer allocator.free(instruction.data);
         const tx: sig.core.Transaction = .{
             .msg = .{
                 .account_keys = &.{ID},
@@ -422,10 +423,10 @@ test "ed25519_malleability" {
             .signatures = &.{},
         };
 
-        _ = try verifyPrecompiles(std.testing.allocator, &tx, &FeatureSet.ALL_DISABLED, 0);
+        _ = try verifyPrecompiles(allocator, &tx, &FeatureSet.ALL_DISABLED, 0);
         try std.testing.expectEqual(
             TransactionError{ .InstructionError = .{ 0, .{ .Custom = 0 } } },
-            try verifyPrecompiles(std.testing.allocator, &tx, &FeatureSet.ALL_ENABLED_AT_GENESIS, 0),
+            try verifyPrecompiles(allocator, &tx, &FeatureSet.ALL_ENABLED_AT_GENESIS, 0),
         );
     }
 }

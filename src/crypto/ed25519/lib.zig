@@ -94,7 +94,7 @@ pub fn verifyBatchOverSingleMessage(
 
 /// See the doc-comment above `verifyBatchOverSingleMessage` for further detail,
 /// but this is that same thing, just for single messages, and with the ability to toggle
-/// between `verify` and `verify_strict` (used in ed25519 precompile).
+/// between `verify` and `verify_strict` semantics (used in ed25519 precompile).
 pub fn verifySignature(
     signature: sig.core.Signature,
     pubkey: sig.core.Pubkey,
@@ -125,7 +125,7 @@ pub fn verifySignature(
 }
 
 /// Equate two ed25519 points with the assumption that b.z is 1.
-/// b.z == 1 is commong when we have just deserialized a point from the wire
+/// b.z == 1 is common when we have just deserialized a point from the wire
 pub fn affineEqual(a: Edwards25519, b: Edwards25519) bool {
     const x1 = b.x.mul(a.z);
     const y1 = b.y.mul(a.z);

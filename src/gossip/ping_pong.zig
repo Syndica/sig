@@ -39,7 +39,7 @@ pub const Ping = struct {
         random.bytes(&token);
         const signature = try keypair.sign(&token, null);
 
-        return Ping{
+        return .{
             .from = Pubkey.fromPublicKey(&keypair.public_key),
             .token = token,
             .signature = .fromSignature(signature),
@@ -47,9 +47,8 @@ pub const Ping = struct {
     }
 
     pub fn verify(self: *const Ping) !void {
-        if (!try self.signature.verify(self.from, &self.token)) {
+        self.signature.verify(self.from, &self.token) catch
             return error.InvalidSignature;
-        }
     }
 };
 
@@ -71,9 +70,8 @@ pub const Pong = struct {
     }
 
     pub fn verify(self: *const Pong) !void {
-        if (!try self.signature.verify(self.from, &self.hash.data)) {
+        self.signature.verify(self.from, &self.hash.data) catch
             return error.InvalidSignature;
-        }
     }
 
     pub fn initRandom(random: std.Random, keypair: *const KeyPair) !Pong {

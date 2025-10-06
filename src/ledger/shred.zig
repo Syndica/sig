@@ -121,7 +121,7 @@ pub const Shred = union(ShredType) {
         };
     }
 
-    pub fn verify(self: Shred, signer: sig.core.Pubkey) bool {
+    pub fn verify(self: Shred, signer: sig.core.Pubkey) !void {
         return switch (self) {
             inline .data, .code => |s| @TypeOf(s).Generic.verify(s, signer),
         };
@@ -527,10 +527,11 @@ fn GenericShred(shred_type: ShredType) type {
             return self.payload[start..end];
         }
 
-        fn verify(self: Self, leader: sig.core.Pubkey) bool {
-            const signed_data = self.merkleRoot() catch return false;
-            const signature = layout.getLeaderSignature(self.payload) orelse return false;
-            return signature.verify(leader, &signed_data.data) catch return false;
+        fn verify(self: Self, leader: sig.core.Pubkey) !void {
+            const root = try self.merkleRoot();
+            const signature = layout.getLeaderSignature(self.payload) orelse
+                return error.InvalidSignature;
+            return try signature.verify(leader, &root.data);
         }
 
         /// this is the data that is signed by the signature

@@ -1,13 +1,10 @@
 const std = @import("std");
-const core = @import("lib.zig");
+const sig = @import("../sig.zig");
 const base58 = @import("base58");
 const BASE58_ENDEC = base58.Table.BITCOIN;
 
-const Ed25519 = std.crypto.sign.Ed25519;
-const Verifier = std.crypto.sign.Ed25519.Verifier;
-const e = std.crypto.errors;
-
-const Pubkey = core.Pubkey;
+const ed25519 = sig.crypto.ed25519;
+const Pubkey = sig.core.Pubkey;
 
 pub const Signature = extern struct {
     r: [32]u8,
@@ -28,33 +25,12 @@ pub const Signature = extern struct {
         return self.r ++ self.s;
     }
 
-    pub fn fromSignature(sig: Ed25519.Signature) Signature {
-        return .{ .r = sig.r, .s = sig.s };
+    pub fn fromSignature(signature: std.crypto.sign.Ed25519.Signature) Signature {
+        return .{ .r = signature.r, .s = signature.s };
     }
 
-    // TODO: replace with our own simd verify
-    pub const VerifyError = e.NonCanonicalError;
-    pub fn verify(
-        self: Signature,
-        pubkey: Pubkey,
-        msg: []const u8,
-    ) VerifyError!bool {
-        const signature: Ed25519.Signature = .{ .r = self.r, .s = self.s };
-        const byte_pubkey = try Ed25519.PublicKey.fromBytes(pubkey.data);
-        signature.verify(msg, byte_pubkey) catch return false;
-        return true;
-    }
-
-    pub const VerifierError =
-        e.NonCanonicalError ||
-        e.EncodingError ||
-        e.IdentityElementError;
-    pub fn verifier(
-        self: Signature,
-        pubkey: Pubkey,
-    ) VerifierError!Verifier {
-        const signature: Ed25519.Signature = .{ .r = self.r, .s = self.s };
-        return signature.verifier(try Ed25519.PublicKey.fromBytes(pubkey.data));
+    pub fn verify(self: Signature, pubkey: Pubkey, message: []const u8) !void {
+        try ed25519.verifySignature(self, pubkey, message, true);
     }
 
     pub fn eql(self: *const Signature, other: *const Signature) bool {
