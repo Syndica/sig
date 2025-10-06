@@ -36,12 +36,9 @@ pub const ShredReceiver = struct {
     params: Params,
     logger: Logger,
 
-    exit: ExitCondition,
-    response_sender: *Channel(Packet),
-    response_sender_thread: *SocketThread,
-    incoming_shreds: *Channel(Packet),
-    repair_receiver: *SocketThread,
-    turbine_receiver: *SocketThread,
+    incoming_shreds: Channel(Packet),
+    outgoing_pongs: Channel(Packet),
+
     metrics: ShredReceiverMetrics,
     verifier_metrics: shred_verifier.Metrics,
 
@@ -69,42 +66,14 @@ pub const ShredReceiver = struct {
     };
 
     pub fn init(allocator: Allocator, logger: Logger, params: Params) !ShredReceiver {
-        const exit = ExitCondition{ .unordered = params.exit };
+        var incoming_shreds = try Channel(Packet).init(allocator);
+        errdefer incoming_shreds.deinit();
 
-        // Create pipe from response_sender -> repair_socket
-        const response_sender = try Channel(Packet).create(allocator);
+        var outgoing_pongs = try Channel(Packet).init(allocator);
+        errdefer outgoing_pongs.deinit();
 
-        const response_sender_thread = try SocketThread.spawnSender(
-            allocator,
-            .from(logger),
-            params.repair_socket,
-            response_sender,
-            exit,
-        );
-
-        // Incoming shreds channel (from socket thread)
-        const incoming_shreds = try Channel(Packet).create(allocator);
-
-        // Receive repair thread
-        const repair_receiver = try SocketThread.spawnReceiverFlagged(
-            allocator,
-            .from(logger),
-            params.repair_socket,
-            incoming_shreds,
-            exit,
-            .from(.repair),
-        );
-
-        // Receive turbine thread
-        const turbine_receiver = try SocketThread.spawnReceiver(
-            allocator,
-            .from(logger),
-            params.turbine_socket,
-            incoming_shreds,
-            exit,
-        );
-
-        const verified_merkle_roots = try VerifiedMerkleRoots.init(allocator, 1024);
+        var verified_merkle_roots = try VerifiedMerkleRoots.init(allocator, 1024);
+        errdefer verified_merkle_roots.deinit();
 
         const metrics = try params.registry.initStruct(ShredReceiverMetrics);
         const verifier_metrics = try params.registry.initStruct(shred_verifier.Metrics);
@@ -112,12 +81,8 @@ pub const ShredReceiver = struct {
         return ShredReceiver{
             .params = params,
             .logger = logger,
-            .exit = exit,
-            .response_sender = response_sender,
-            .response_sender_thread = response_sender_thread,
             .incoming_shreds = incoming_shreds,
-            .repair_receiver = repair_receiver,
-            .turbine_receiver = turbine_receiver,
+            .outgoing_pongs = outgoing_pongs,
             .metrics = metrics,
             .verifier_metrics = verifier_metrics,
             .verified_merkle_roots = verified_merkle_roots,
@@ -126,22 +91,64 @@ pub const ShredReceiver = struct {
     }
 
     pub fn deinit(self: *ShredReceiver, allocator: Allocator) void {
-        self.response_sender.destroy();
-        self.response_sender_thread.join();
-        self.incoming_shreds.destroy();
-        self.repair_receiver.join();
-        self.turbine_receiver.join();
+        self.incoming_shreds.deinit();
+        self.outgoing_pongs.deinit();
         self.verified_merkle_roots.deinit();
         self.shred_batch.deinit(allocator);
     }
 
-    pub fn processNextBatch(self: *ShredReceiver, allocator: Allocator) !void {
+    /// Run threads to listen/send over socket and handle all incoming packets.
+    /// Returns when exit is set to true.
+    pub fn run(self: *ShredReceiver, allocator: Allocator) !void {
+        defer self.logger.info().log("exiting shred receiver");
+        errdefer self.logger.err().log("error in shred receiver");
+
+        const exit = ExitCondition{ .unordered = self.params.exit };
+
+        // Create pipe from outgoing_pongs -> repair_socket
+        const response_sender_thread = try SocketThread.spawnSender(
+            allocator,
+            .from(self.logger),
+            self.params.repair_socket,
+            &self.outgoing_pongs,
+            exit,
+        );
+        defer response_sender_thread.join();
+
+        // Create pipe from repair_socket -> incoming_shreds tagged .repair
+        const repair_receiver_thread = try SocketThread.spawnReceiverFlagged(
+            allocator,
+            .from(self.logger),
+            self.params.repair_socket,
+            &self.incoming_shreds,
+            exit,
+            .from(.repair),
+        );
+        defer repair_receiver_thread.join();
+
+        // Create pipe from turbine_socket -> incoming_shreds without a tagging.
+        const turbine_receiver_thread = try SocketThread.spawnReceiver(
+            allocator,
+            .from(self.logger),
+            self.params.turbine_socket,
+            &self.incoming_shreds,
+            exit,
+        );
+        defer turbine_receiver_thread.join();
+
+        // Handle all incoming shreds from the channel.
+        while (true) {
+            self.incoming_shreds.waitToReceive(exit) catch break;
+            try self.handleBatch(allocator);
+        }
+    }
+
+    fn handleBatch(self: *ShredReceiver, allocator: Allocator) !void {
         defer {
             for (self.shred_batch.items(.shred)) |shred| shred.deinit();
             self.shred_batch.clearRetainingCapacity();
         }
 
-        self.incoming_shreds.waitToReceive(self.exit) catch return;
         while (self.incoming_shreds.tryReceive()) |packet| {
             const is_repair = packet.flags.isSet(.repair);
             self.metrics.incReceived(is_repair);
@@ -149,10 +156,10 @@ pub const ShredReceiver = struct {
             if (try self.handlePacket(allocator, packet)) |shred| {
                 try self.shred_batch.append(allocator, .{
                     .shred = shred,
-                    .is_repair = packet.flags.isSet(.repair),
+                    .is_repair = is_repair,
                 });
+                if (self.shred_batch.len == MAX_SHREDS_PER_ITER) break;
             }
-            if (self.shred_batch.len == MAX_SHREDS_PER_ITER) break;
         }
 
         const result = try self.params.inserter.insertShreds(
@@ -169,16 +176,6 @@ pub const ShredReceiver = struct {
         self.metrics.batch_size.observe(self.shred_batch.len);
     }
 
-    /// Run threads to listen/send over socket and handle all incoming packets.
-    /// Returns when exit is set to true.
-    pub fn run(self: *ShredReceiver, allocator: Allocator) !void {
-        defer self.logger.info().log("exiting shred receiver");
-        errdefer self.logger.err().log("error in shred receiver");
-
-        // Handle all incoming shreds from the channel.
-        while (!self.exit.shouldExit()) try self.processNextBatch(allocator);
-    }
-
     const MAX_SHREDS_PER_ITER = 1024;
 
     /// Handle a single packet and return a shred if it's a valid shred.
@@ -190,7 +187,7 @@ pub const ShredReceiver = struct {
                 self.metrics,
                 self.params.keypair,
             )) |pong_packet| {
-                try self.response_sender.send(pong_packet);
+                try self.outgoing_pongs.send(pong_packet);
                 self.metrics.pong_sent_count.inc();
             }
             return null;
