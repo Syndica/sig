@@ -190,6 +190,11 @@ pub const SlotTracker = struct {
 
         defer tracy.plot(u32, "slots tracked", @intCast(self.slots.count()));
 
+        std.log.info("pruneNonRooted start: root={}, tracked_slots_before={d}", .{
+            self.root,
+            self.slots.count(),
+        });
+
         var slice = self.slots.entries.slice();
         var index: usize = 0;
         while (index < slice.len) {
@@ -204,6 +209,11 @@ pub const SlotTracker = struct {
                 index += 1;
             }
         }
+
+        std.log.info("pruneNonRooted done: root={}, tracked_slots_after={d}", .{
+            self.root,
+            self.slots.count(),
+        });
     }
 };
 
