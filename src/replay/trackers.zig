@@ -439,6 +439,10 @@ pub const EpochTracker = struct {
         epochs.deinit(allocator);
     }
 
+    pub fn get(self: *const EpochTracker, epoch: Epoch) ?EpochConstants {
+        return self.epochs.get(epoch);
+    }
+
     pub fn getForSlot(self: *const EpochTracker, slot: Slot) ?EpochConstants {
         return self.epochs.get(self.schedule.getEpoch(slot));
     }
@@ -446,6 +450,16 @@ pub const EpochTracker = struct {
     /// lifetime ends as soon as the map is modified
     pub fn getPtrForSlot(self: *const EpochTracker, slot: Slot) ?*const EpochConstants {
         return self.epochs.getPtr(self.schedule.getEpoch(slot));
+    }
+
+    pub fn put(
+        self: *EpochTracker,
+        allocator: Allocator,
+        epoch: Epoch,
+        epoch_constants: EpochConstants,
+    ) Allocator.Error!void {
+        try self.epochs.ensureUnusedCapacity(allocator, 1);
+        self.epochs.putAssumeCapacity(epoch, epoch_constants);
     }
 };
 

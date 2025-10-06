@@ -390,7 +390,7 @@ pub fn trackNewSlots(
 
     const slot_tracker, var slot_tracker_lg = slot_tracker_rw.writeWithLock();
     defer slot_tracker_lg.unlock();
-    const epoch_tracker, var epoch_tracker_lg = epoch_tracker_rw.readWithLock();
+    var epoch_tracker, var epoch_tracker_lg = epoch_tracker_rw.writeWithLock();
     defer epoch_tracker_lg.unlock();
 
     const root = slot_tracker.root;
@@ -420,7 +420,9 @@ pub fn trackNewSlots(
             const epoch_info = epoch_tracker.getPtrForSlot(slot) orelse
                 return error.MissingEpoch;
 
-            const constants, var state = try newSlotFromParent(
+            // Constants are not constant at this point since processing new epochs
+            // may modify the feature set.
+            var constants, var state = try newSlotFromParent(
                 allocator,
                 account_store.reader(),
                 epoch_info.ticks_per_slot,
@@ -432,6 +434,20 @@ pub fn trackNewSlots(
             );
             errdefer constants.deinit(allocator);
             errdefer state.deinit(allocator);
+
+            const parent_epoch = epoch_tracker.schedule.getEpoch(parent_slot);
+            const slot_epoch = epoch_tracker.schedule.getEpoch(slot);
+
+            if (parent_epoch < slot_epoch) {
+                try replay.epoch_transitions.process_new_epoch(
+                    allocator,
+                    slot,
+                    &state,
+                    &constants,
+                    epoch_tracker,
+                    account_store,
+                );
+            }
 
             try updateSysvarsForNewSlot(
                 allocator,
