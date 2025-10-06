@@ -2272,7 +2272,7 @@ test "state.VoteState.convertToCurrent" {
 
 test "state.VoteState.setNewAuthorizedVoter: success" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const node_publey = Pubkey.initRandom(prng.random());
     const authorized_voter = Pubkey.initRandom(prng.random());
     const new_voter = Pubkey.initRandom(prng.random());
@@ -2306,7 +2306,7 @@ test "state.VoteState.setNewAuthorizedVoter: success" {
 
 test "state.VoteState.setNewAuthorizedVoter: too soon to reauthorize" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const node_publey = Pubkey.initRandom(prng.random());
     const authorized_voter = Pubkey.initRandom(prng.random());
     const new_voter = Pubkey.initRandom(prng.random());
@@ -2343,7 +2343,7 @@ test "state.VoteState.setNewAuthorizedVoter: too soon to reauthorize" {
 test "state.VoteState.setNewAuthorizedVoter: invalid account data" {
     // Test attempt to set a voter with an invalid target epoch
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const node_publey = Pubkey.initRandom(prng.random());
     const authorized_voter = Pubkey.initRandom(prng.random());
     const new_voter = Pubkey.initRandom(prng.random());
@@ -2378,7 +2378,7 @@ test "state.VoteState.setNewAuthorizedVoter: invalid account data" {
 test "state.VoteState.isUninitialized: VoteState0_23_5 invalid account data" {
     // Test attempt to set a voter with an invalid target epoch
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const node_publey = Pubkey.initRandom(prng.random());
     const authorized_voter = Pubkey.initRandom(prng.random());
     const withdrawer = Pubkey.initRandom(prng.random());
@@ -2420,7 +2420,7 @@ test "state.VoteState.isUninitialized: VoteState0_23_5 invalid account data" {
 test "state.VoteState.isUninitialized: VoteStatev1_14_11 invalid account data" {
     // Test attempt to set a voter with an invalid target epoch
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const node_publey = Pubkey.initRandom(prng.random());
     const authorized_voter = Pubkey.initRandom(prng.random());
     const withdrawer = Pubkey.initRandom(prng.random());
@@ -2462,7 +2462,7 @@ test "state.VoteState.isUninitialized: VoteStatev1_14_11 invalid account data" {
 test "state.VoteState.isUninitialized: current invalid account data" {
     // Test attempt to set a voter with an invalid target epoch
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const node_publey = Pubkey.initRandom(prng.random());
     const authorized_voter = Pubkey.initRandom(prng.random());
     const withdrawer = Pubkey.initRandom(prng.random());
@@ -2503,7 +2503,7 @@ test "state.VoteState.isUninitialized: current invalid account data" {
 
 test "state.AuthorizedVoters.init" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const voter_pubkey = Pubkey.initRandom(prng.random());
     var authorized_voters = try AuthorizedVoters.init(allocator, 10, voter_pubkey);
     defer authorized_voters.deinit();
@@ -2512,7 +2512,7 @@ test "state.AuthorizedVoters.init" {
 
 test "state.AuthorizedVoters.getAuthorizedVoter" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const voter_pubkey = Pubkey.initRandom(prng.random());
     const new_pubkey = Pubkey.initRandom(prng.random());
@@ -2527,7 +2527,7 @@ test "state.AuthorizedVoters.getAuthorizedVoter" {
 
 test "state.AuthorizedVoters.purgeAuthorizedVoters" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const voter_pubkey = Pubkey.initRandom(prng.random());
     var authorized_voters = try AuthorizedVoters.init(allocator, 5, voter_pubkey);
@@ -2544,7 +2544,7 @@ test "state.AuthorizedVoters.purgeAuthorizedVoters" {
 
 test "state.AuthorizedVoters.first" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const voter_pubkey = Pubkey.initRandom(prng.random());
     var authorized_voters = try AuthorizedVoters.init(allocator, 5, voter_pubkey);
@@ -2560,7 +2560,7 @@ test "state.AuthorizedVoters.first" {
 
 test "state.AuthorizedVoters.last" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const voter_pubkey = Pubkey.initRandom(prng.random());
     var authorized_voters = try AuthorizedVoters.init(
@@ -2580,7 +2580,7 @@ test "state.AuthorizedVoters.last" {
 
 test "state.AuthorizedVoters.isEmpty" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     var authorized_voters = try AuthorizedVoters.init(
         allocator,
@@ -2593,7 +2593,7 @@ test "state.AuthorizedVoters.isEmpty" {
 
 test "state.AuthorizedVoters.len" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const voter_pubkey = Pubkey.initRandom(prng.random());
     var authorized_voters = try AuthorizedVoters.init(allocator, 5, voter_pubkey);
@@ -2609,7 +2609,7 @@ test "state.AuthorizedVoters.len" {
 
 test "state.AuthorizedVoters.contains" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const voter_pubkey = Pubkey.initRandom(prng.random());
     var authorized_voters = try AuthorizedVoters.init(allocator, 5, voter_pubkey);
@@ -2621,7 +2621,7 @@ test "state.AuthorizedVoters.contains" {
 
 test "state.VoteState.lastLockout" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const clock = Clock{
         .slot = 0,
@@ -2672,7 +2672,7 @@ test "state.VoteState.lastLockout" {
 
 test "state.VoteState.lastVotedSlot" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const clock = Clock{
         .slot = 0,
@@ -2716,7 +2716,7 @@ test "state.VoteState.lastVotedSlot" {
 // [agave] https://github.com/anza-xyz/agave/blob/6679ac4f38640496c64d234fffa61729f1572ce1/programs/vote/src/vote_state/mod.rs#L1275
 test "state.VoteState.lastLockout extended" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const clock = Clock{
         .slot = 0,
@@ -2758,7 +2758,7 @@ test "state.VoteState.lastLockout extended" {
 // [agave] https://github.com/anza-xyz/agave/blob/6679ac4f38640496c64d234fffa61729f1572ce1/programs/vote/src/vote_state/mod.rs#L1499
 test "state.VoteState.lockout double lockout after expiration" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const clock = Clock.DEFAULT;
 
@@ -2797,7 +2797,7 @@ test "state.VoteState.lockout double lockout after expiration" {
 // [agave] https://github.com/anza-xyz/agave/blob/6679ac4f38640496c64d234fffa61729f1572ce1/programs/vote/src/vote_state/mod.rs#L1527
 test "state.VoteState.lockout expire multiple votes" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const clock = Clock.DEFAULT;
 
@@ -2843,7 +2843,7 @@ test "state.VoteState.lockout expire multiple votes" {
 // [agave] https://github.com/anza-xyz/agave/blob/6679ac4f38640496c64d234fffa61729f1572ce1/programs/vote/src/vote_state/mod.rs#L1558
 test "state.VoteState.getCredits" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const clock = Clock.DEFAULT;
 
@@ -2874,7 +2874,7 @@ test "state.VoteState.getCredits" {
 // [agave] https://github.com/anza-xyz/agave/blob/6679ac4f38640496c64d234fffa61729f1572ce1/programs/vote/src/vote_state/mod.rs#L1577
 test "state.VoteState duplicate vote" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const clock = Clock.DEFAULT;
 
@@ -2900,7 +2900,7 @@ test "state.VoteState duplicate vote" {
 // [agave] https://github.com/anza-xyz/agave/blob/6679ac4f38640496c64d234fffa61729f1572ce1/programs/vote/src/vote_state/mod.rs#L1589
 test "state.VoteState nth recent lockout" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const clock = Clock.DEFAULT;
 
@@ -2933,7 +2933,7 @@ test "state.VoteState nth recent lockout" {
 // [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L1632
 test "state.VoteState.processVote process missed votes" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const account_a = Pubkey.initRandom(prng.random());
     var vote_state_a = try createTestVoteState(
@@ -3051,7 +3051,7 @@ test "state.VoteState.processVote skips old vote" {
 
 // [agave] https://github.com/anza-xyz/agave/blob/6679ac4f38640496c64d234fffa61729f1572ce1/programs/vote/src/vote_state/mod.rs#L2856
 test "state.VoteState filter old votes" {
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     const allocator = std.testing.allocator;
@@ -4078,7 +4078,7 @@ test "state.VoteState process new vote current state contains bigger slots" {
 // [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2916
 test "state.VoteState.checkAndFilterProposedVoteState empty" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     const empty_slot_hashes = try buildSlotHashes(allocator, random, &[_]Slot{});
     defer empty_slot_hashes.deinit(allocator);
@@ -4130,7 +4130,7 @@ test "state.VoteState.checkAndFilterProposedVoteState empty" {
 // [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2948
 test "state.VoteState.checkAndFilterProposedVoteState too old" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     const latest_vote = 4;
     const slot_hashes = try buildSlotHashes(allocator, random, &[_]Slot{ 1, 2, 3, 4 });
@@ -4197,7 +4197,7 @@ test "state.VoteState.checkAndFilterProposedVoteState too old" {
 // [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L3063
 test "state.VoteState.checkAndFilterProposedVoteState older than history root" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     // Test when `proposed_root` is in `current_vote_state_slots` but it's not the latest
     // slot
@@ -4375,7 +4375,7 @@ test "state.VoteState.checkAndFilterProposedVoteState older than history root" {
 // [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L3188
 test "state.VoteState.checkAndFilterProposedVoteState slots not ordered" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     const slot_hashes = try buildSlotHashes(allocator, random, &[_]Slot{ 1, 2, 3, 4 });
     defer slot_hashes.deinit(allocator);
@@ -4446,7 +4446,7 @@ test "state.VoteState.checkAndFilterProposedVoteState slots not ordered" {
 // [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L3228
 test "state.VoteState.checkAndFilterProposedVoteState older than history slots filtered" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     const init_slot_hashes = try buildSlotHashes(allocator, random, &[_]Slot{ 1, 2, 3, 4 });
     defer init_slot_hashes.deinit(allocator);
@@ -4525,7 +4525,7 @@ test "state.VoteState.checkAndFilterProposedVoteState older than history slots f
 // [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L3284
 test "state.VoteState.checkAndFilterProposedVoteState older than history slots not filtered" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     const init_slot_hashes = try buildSlotHashes(allocator, random, &[_]Slot{4});
     defer init_slot_hashes.deinit(allocator);
@@ -4605,7 +4605,7 @@ test "state.VoteState.checkAndFilterProposedVoteState older than history slots n
 // [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L3337
 test "state.VoteState.checkAndFilterProposedVoteState older history slots filtered/not filtered" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     const init_slot_hashes = try buildSlotHashes(allocator, random, &[_]Slot{6});
     defer init_slot_hashes.deinit(allocator);
@@ -4693,7 +4693,7 @@ test "state.VoteState.checkAndFilterProposedVoteState older history slots filter
 // [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L3404
 test "state.VoteState.checkAndFilterProposedVoteState slot not on fork" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     const slot_hashes = try buildSlotHashes(allocator, random, &[_]Slot{ 2, 4, 6, 8 });
     defer slot_hashes.deinit(allocator);
@@ -4770,7 +4770,7 @@ test "state.VoteState.checkAndFilterProposedVoteState slot not on fork" {
 // [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L3459
 test "state.VoteState.checkAndFilterProposedVoteState root on different fork" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     const slot_hashes = try buildSlotHashes(allocator, random, &[_]Slot{ 2, 4, 6, 8 });
     defer slot_hashes.deinit(allocator);
@@ -4824,7 +4824,7 @@ test "state.VoteState.checkAndFilterProposedVoteState root on different fork" {
 // [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L3495
 test "state.VoteState.checkAndFilterProposedVoteState slot newer than slot history" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     const slot_hashes = try buildSlotHashes(allocator, random, &[_]Slot{ 2, 4, 6, 8, 10 });
     defer slot_hashes.deinit(allocator);
@@ -4867,7 +4867,7 @@ test "state.VoteState.checkAndFilterProposedVoteState slot newer than slot histo
 // [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L3521
 test "state.VoteState.checkAndFilterProposedVoteState slot all slot hases in update ok" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     const slot_hashes = try buildSlotHashes(allocator, random, &[_]Slot{ 2, 4, 6, 8 });
     defer slot_hashes.deinit(allocator);
@@ -4941,7 +4941,7 @@ test "state.VoteState.checkAndFilterProposedVoteState slot all slot hases in upd
 // [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L3574
 test "state.VoteState.checkAndFilterProposedVoteState some slot hashes in update ok" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     const slot_hashes = try buildSlotHashes(allocator, random, &[_]Slot{ 2, 4, 6, 8, 10 });
     defer slot_hashes.deinit(allocator);
@@ -5014,7 +5014,7 @@ test "state.VoteState.checkAndFilterProposedVoteState some slot hashes in update
 // [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L3630
 test "state.VoteState.checkAndFilterProposedVoteState slot hashes mismatch" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     const slot_hashes = try buildSlotHashes(allocator, random, &[_]Slot{ 2, 4, 6, 8 });
     defer slot_hashes.deinit(allocator);

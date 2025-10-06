@@ -64,7 +64,7 @@ pub const ComputeBudgetLimits = struct {
     };
 
     pub fn intoComputeBudget(self: ComputeBudgetLimits) sig.runtime.ComputeBudget {
-        var default = sig.runtime.ComputeBudget.default(self.compute_unit_limit);
+        var default = sig.runtime.ComputeBudget.init(self.compute_unit_limit);
         default.heap_size = self.heap_size;
         return default;
     }
@@ -542,7 +542,7 @@ fn testCreateEmptyInstruction(program_index: u8) sig.core.transaction.Instructio
 
 test "compute_budget Instruction" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     var tx = try sig.runtime.testing.createTransactionContext(
         allocator,
         prng.random(),
@@ -575,7 +575,7 @@ test "compute_budget Instruction" {
 test execute {
     const allocator = std.testing.allocator;
 
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     // Units

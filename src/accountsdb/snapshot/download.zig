@@ -664,7 +664,7 @@ test "accounts_db.download: test remove untrusted peers" {
     var table = try GossipTable.init(allocator, allocator);
     defer table.deinit();
 
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     const my_shred_version: usize = 19;
@@ -740,7 +740,7 @@ test "accounts_db.download: test finding peers" {
     var table = try GossipTable.init(allocator, allocator);
     defer table.deinit();
 
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     const my_shred_version: usize = 19;

@@ -1940,7 +1940,7 @@ test "is slot duplicate confirmed pass" {
 
 test "check_vote_threshold_forks" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(19);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     // Create the ancestor relationships
     var ancestors = std.AutoArrayHashMapUnmanaged(u64, Ancestors).empty;
@@ -2076,7 +2076,7 @@ test "check_vote_threshold_forks" {
 
 test "collect vote lockouts root" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(19);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     const votes = try allocator.alloc(u64, MAX_LOCKOUT_HISTORY);
     for (votes, 0..) |*slot, i| {
@@ -2203,7 +2203,7 @@ test "collect vote lockouts root" {
 
 test "collect vote lockouts sums" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(42);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     // two accounts voting for slot 0 with 1 token staked
@@ -2770,7 +2770,7 @@ test "default thresholds" {
     const allocator = std.testing.allocator;
 
     // Build a minimal fork with just the root slot present
-    var prng = std.Random.DefaultPrng.init(12345);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     const root = SlotAndHash{ .slot = 0, .hash = Hash.initRandom(random) };
 
@@ -3804,7 +3804,7 @@ const Stakes = sig.core.Stakes;
 test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
     const allocator = std.testing.allocator;
 
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     const root = SlotAndHash{ .slot = 0, .hash = Hash.initRandom(random) };

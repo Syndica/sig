@@ -84,7 +84,7 @@ pub const MockTransferService = struct {
     pub fn run(self: *MockTransferService, n_transactions: u64, n_lamports_per_tx: u64) !void {
         errdefer self.exit.store(true, .monotonic);
 
-        var prng = std.Random.DefaultPrng.init(19);
+        var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
         const random = prng.random();
 
         if (n_lamports_per_tx < MIN_LAMPORTS_FOR_RENT) {

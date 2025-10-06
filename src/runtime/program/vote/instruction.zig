@@ -763,7 +763,7 @@ fn executeRoundTrip(
 
 test "InitializeAccount: roundtrip" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const pre, const post = try executeRoundTrip(
         allocator,
@@ -800,7 +800,7 @@ test "InitializeAccount: roundtrip" {
 
 test "Authorize: roundtrip" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const pre, const post = try executeRoundTrip(
         allocator,
@@ -825,7 +825,7 @@ test "Authorize: roundtrip" {
 
 test "VoteAuthorizeWithSeedArgs: roundtrip" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const pre, const post = try executeRoundTrip(
         allocator,
@@ -1084,7 +1084,7 @@ test "TowerSyncSwitch.serialize" {
 
 test createInitializeAccount {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const instruction = try createInitializeAccount(
         allocator,
@@ -1110,7 +1110,7 @@ test createInitializeAccount {
 
 test createAuthorize {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const instruction = try createAuthorize(
         allocator,
@@ -1135,7 +1135,7 @@ test createAuthorize {
 
 test createVote {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const instruction = try createVote(
         allocator,
@@ -1161,7 +1161,7 @@ test createVote {
 
 test createWithdraw {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const instruction = try createWithdraw(
         allocator,
@@ -1184,7 +1184,7 @@ test createWithdraw {
 
 test createUpdateValidatorIdentity {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const instruction = try createUpdateValidatorIdentity(
         allocator,
@@ -1206,7 +1206,7 @@ test createUpdateValidatorIdentity {
 
 test createUpdateCommission {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const instruction = try createUpdateCommission(
         allocator,
@@ -1228,7 +1228,7 @@ test createUpdateCommission {
 
 test createVoteSwitch {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const instruction = try createVoteSwitch(
         allocator,
@@ -1257,7 +1257,7 @@ test createVoteSwitch {
 
 test createAuthorizeChecked {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const instruction = try createAuthorizeChecked(
         allocator,
@@ -1280,7 +1280,7 @@ test createAuthorizeChecked {
 
 test createUpdateVoteState {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const instruction = try createUpdateVoteState(
         allocator,
@@ -1307,7 +1307,7 @@ test createUpdateVoteState {
 
 test createUpdateVoteStateSwitch {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const instruction = try createUpdateVoteStateSwitch(
         allocator,
@@ -1337,7 +1337,7 @@ test createUpdateVoteStateSwitch {
 
 test createAuthorizeWithSeed {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const instruction = try createAuthorizeWithSeed(
         allocator,
@@ -1362,7 +1362,7 @@ test createAuthorizeWithSeed {
 
 test createAuthorizeCheckedWithSeed {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const instruction = try createAuthorizeCheckedWithSeed(
         allocator,
@@ -1387,7 +1387,7 @@ test createAuthorizeCheckedWithSeed {
 
 test createCompactUpdateVoteState {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const instruction = try createCompactUpdateVoteState(
         allocator,
@@ -1414,7 +1414,7 @@ test createCompactUpdateVoteState {
 
 test createCompactUpdateVoteStateSwitch {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const instruction = try createCompactUpdateVoteStateSwitch(
         allocator,
@@ -1444,7 +1444,7 @@ test createCompactUpdateVoteStateSwitch {
 
 test createTowerSync {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const instruction = try createTowerSync(
         allocator,
@@ -1474,7 +1474,7 @@ test createTowerSync {
 
 test createTowerSyncSwitch {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const instruction = try createTowerSyncSwitch(
         allocator,

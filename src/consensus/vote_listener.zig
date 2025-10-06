@@ -1625,14 +1625,14 @@ fn newTowerSyncTransaction(
 // TODO: port applicable tests from https://github.com/anza-xyz/agave/blob/182823ee353ee64fde230dbad96d8e24b6cd065a/core/src/cluster_info_vote_listener.rs
 
 test "vote_parser.parseVoteTransaction" {
-    var prng = std.Random.DefaultPrng.init(42);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     try vote_parser.testParseVoteTransaction(null, random);
     try vote_parser.testParseVoteTransaction(Hash.generateSha256(&[_]u8{42}), random);
 }
 
 test "vote_parser.parseSanitizedVoteTransaction" {
-    var prng = std.Random.DefaultPrng.init(43);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     try vote_parser.testParseSanitizedVoteTransaction(null, random);
     try vote_parser.testParseSanitizedVoteTransaction(Hash.generateSha256(&[_]u8{43}), random);
@@ -1772,7 +1772,7 @@ test "simple usage" {
 test "check trackers" {
     const allocator = std.testing.allocator;
 
-    var prng = std.Random.DefaultPrng.init(123);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     const node_keypair: sig.identity.KeyPair = try .generateDeterministic(@splat(1));

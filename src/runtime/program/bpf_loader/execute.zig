@@ -1983,7 +1983,7 @@ test executeV3InitializeBuffer {
 
     const allocator = std.testing.allocator;
 
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const buffer_account_key = Pubkey.initRandom(prng.random());
     const buffer_authority_key = Pubkey.initRandom(prng.random());
@@ -2053,7 +2053,7 @@ test executeV3Write {
 
     const allocator = std.testing.allocator;
 
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const buffer_account_key = Pubkey.initRandom(prng.random());
     const buffer_authority_key = Pubkey.initRandom(prng.random());
@@ -2131,7 +2131,7 @@ test executeV3DeployWithMaxDataLen {
 
     const allocator = std.testing.allocator;
 
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const payer_account_key = Pubkey.initRandom(prng.random());
     const program_account_key = Pubkey.initRandom(prng.random());
@@ -2326,7 +2326,7 @@ test executeV3SetAuthority {
     const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const buffer_account_key = Pubkey.initRandom(prng.random());
     const buffer_authority_key = Pubkey.initRandom(prng.random());
@@ -2537,7 +2537,7 @@ test executeV3SetAuthorityChecked {
     const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const buffer_account_key = Pubkey.initRandom(prng.random());
     const buffer_authority_key = Pubkey.initRandom(prng.random());
@@ -2706,7 +2706,7 @@ test executeV3Close {
     const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const close_account_key = Pubkey.initRandom(prng.random());
     const repicient_key = Pubkey.initRandom(prng.random());
@@ -2963,7 +2963,7 @@ test executeV3Upgrade {
     const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const spill_account_key = Pubkey.initRandom(prng.random());
     const upgrade_authority_key = Pubkey.initRandom(prng.random());
@@ -3152,7 +3152,7 @@ test executeV3ExtendProgram {
     const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const payer_account_key = Pubkey.initRandom(prng.random());
     const upgrade_authority_key = Pubkey.initRandom(prng.random());
@@ -3437,7 +3437,7 @@ test executeV3ExtendProgram {
 test executeV3Migrate {
     const testing = sig.runtime.program.testing;
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     for ([_]enum { use_auth, no_auth, migrate, migrate_zero }{
         .use_auth,
@@ -3690,7 +3690,7 @@ fn createValidProgramData(
 test executeV4Write {
     const testing = sig.runtime.program.testing;
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const program_key = Pubkey.initRandom(prng.random());
 
@@ -3759,7 +3759,7 @@ test executeV4Write {
 test executeV4Retract {
     const testing = sig.runtime.program.testing;
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const program_key = Pubkey.initRandom(prng.random());
 
@@ -3837,7 +3837,7 @@ test executeV4Retract {
 test executeV4SetProgramLength {
     const testing = sig.runtime.program.testing;
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     for ([_]enum { open, grow, shrink, close }{ .open, .grow, .shrink, .close }) |mode| {
         const program_key = Pubkey.initRandom(prng.random());
@@ -3969,7 +3969,7 @@ test executeV4SetProgramLength {
 test checkProgramAccount {
     const testing = sig.runtime.testing;
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const program_key = Pubkey.initRandom(prng.random());
     var program_data: [@sizeOf(V4State)]u8 = @splat(0);

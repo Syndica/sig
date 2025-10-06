@@ -319,7 +319,7 @@ test pushInstruction {
     const system_program = sig.runtime.program.system;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     var cache, var tc = try testing.createTransactionContext(
         allocator,
@@ -396,7 +396,7 @@ test "pushInstruction sysvar account data" {
     const testing = sig.runtime.testing;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     var sysvar_data: [20]u8 = @splat(0);
     var cache, var tc = try testing.createTransactionContext(
@@ -443,7 +443,7 @@ test "pushInstruction sysvar account too small" {
     const testing = sig.runtime.testing;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     var sysvar_data: [1]u8 = @splat(0); // needs to be at least 2 bytes large
     var cache, var tc = try testing.createTransactionContext(
@@ -493,7 +493,7 @@ test "processNextInstruction" {
     const system_program = sig.runtime.program.system;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     var cache, var tc = try testing.createTransactionContext(
         allocator,
@@ -560,7 +560,7 @@ test popInstruction {
     const system_program = sig.runtime.program.system;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     var cache, var tc = try testing.createTransactionContext(
         allocator,
@@ -643,7 +643,7 @@ test prepareCpiInstructionInfo {
     const system_program = sig.runtime.program.system;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     var cache, var tc = try testing.createTransactionContext(
         allocator,

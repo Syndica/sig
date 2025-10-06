@@ -677,7 +677,7 @@ fn getInstructionDatasSliceForPrecompiles(
 test getInstructionDatasSliceForPrecompiles {
     const allocator = std.testing.allocator;
 
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     var feature_set = sig.core.FeatureSet.ALL_DISABLED;
@@ -756,7 +756,7 @@ test getInstructionDatasSliceForPrecompiles {
 
 test "loadAndExecuteTransactions: no transactions" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const transactions: []RuntimeTransaction = &.{};
     var batch_account_cache: account_loader.BatchAccountCache = .{};
@@ -816,7 +816,7 @@ test "loadAndExecuteTransactions: no transactions" {
 
 test "loadAndExecuteTransactions: invalid compute budget instruction" {
     const Signature = sig.core.Signature;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const recent_blockhash = Hash.initRandom(prng.random());
 
@@ -848,7 +848,7 @@ test "loadAndExecuteTransactions: invalid compute budget instruction" {
 
 test "loadAndExecuteTransaction: simple transfer transaction" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const sender_key = Pubkey.initRandom(prng.random());
     const receiver_key = Pubkey.initRandom(prng.random());

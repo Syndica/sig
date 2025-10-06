@@ -914,7 +914,7 @@ test "accumulated size" {
 
 test "load accounts rent paid" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     var accountsdb = std.AutoArrayHashMapUnmanaged(Pubkey, sig.core.Account).empty;
     defer accountsdb.deinit(allocator);
     var env = newTestingEnv();
@@ -1025,7 +1025,7 @@ test "load accounts rent paid" {
 
 test "load accounts with simd 186 and loaderv3 program" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     var accountsdb = std.AutoArrayHashMapUnmanaged(Pubkey, sig.core.Account).empty;
     defer accountsdb.deinit(allocator);
     var env = newTestingEnv();
@@ -1164,7 +1164,7 @@ test "load accounts with simd 186 and loaderv3 program" {
 
 test "constructInstructionsAccount" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     var data: [1024]u8 = undefined;
     prng.fill(&data);
@@ -1267,7 +1267,7 @@ test "load tx too large" {
     var env = newTestingEnv();
     env.compute_budget_limits.loaded_accounts_bytes = 1000;
 
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     const address = Pubkey.initRandom(random);
@@ -1311,7 +1311,7 @@ test "dont double count program owner account data size" {
     var accountsdb = std.AutoArrayHashMapUnmanaged(Pubkey, sig.core.Account).empty;
     defer accountsdb.deinit(allocator);
     const env = newTestingEnv();
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     const data1 = "data1"; // 5
@@ -1411,7 +1411,7 @@ test "dont double count program owner account data size" {
 
 test "load, create new account" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     const new_account_pk = Pubkey.initRandom(random);
     var accountsdb = std.AutoArrayHashMapUnmanaged(Pubkey, sig.core.Account).empty;
@@ -1444,7 +1444,7 @@ test "load, create new account" {
 
 test "invalid program owner owner" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     var accountsdb = std.AutoArrayHashMapUnmanaged(Pubkey, sig.core.Account).empty;
     defer accountsdb.deinit(allocator);
@@ -1502,7 +1502,7 @@ test "invalid program owner owner" {
 
 test "missing program owner account" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     var accountsdb = std.AutoArrayHashMapUnmanaged(Pubkey, sig.core.Account).empty;
     defer accountsdb.deinit(allocator);
@@ -1552,7 +1552,7 @@ test "missing program owner account" {
 
 test "deallocate account" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     var accountsdb = std.AutoArrayHashMapUnmanaged(Pubkey, sig.core.Account).empty;
     defer accountsdb.deinit(allocator);
@@ -1603,7 +1603,7 @@ test "deallocate account" {
 
 test "load v3 program" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     var accountsdb = std.AutoArrayHashMapUnmanaged(Pubkey, sig.core.Account).empty;
     defer accountsdb.deinit(allocator);

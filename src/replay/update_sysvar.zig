@@ -605,7 +605,7 @@ test fillMissingSysvarCacheEntries {
     const allocator = std.testing.allocator;
     const AccountsDB = sig.accounts_db.AccountsDB;
 
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     // Create accounts db
     var accounts_db, var tmp_dir = try AccountsDB.initForTest(allocator);
@@ -828,7 +828,7 @@ test "update all sysvars" {
     const allocator = std.testing.allocator;
     const AccountsDB = sig.accounts_db.AccountsDB;
 
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     // Create values for update sysvar deps
