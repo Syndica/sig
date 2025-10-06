@@ -3792,7 +3792,7 @@ test "generate snapshot & update gossip snapshot hashes" {
 
     const allocator = std.testing.allocator;
 
-    var prng = std.Random.DefaultPrng.init(std.testing.random_seed); // TODO: use `std.testing.random_seed` when we update
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     var tmp_dir_root = std.testing.tmpDir(.{});
