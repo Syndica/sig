@@ -358,7 +358,9 @@ pub const AuthorizedVoters = struct {
     };
 
     pub fn init(allocator: std.mem.Allocator, epoch: Epoch, pubkey: Pubkey) !AuthorizedVoters {
-        return .{ .voters = try .init(allocator, &.{epoch}, &.{pubkey}) };
+        var authorized_voters: SortedMap(Epoch, Pubkey) = .empty;
+        try authorized_voters.put(allocator, epoch, pubkey);
+        return .{ .voters = authorized_voters };
     }
 
     pub fn deinit(self: AuthorizedVoters, allocator: std.mem.Allocator) void {
@@ -630,6 +632,8 @@ pub const VoteStateVersions = union(enum) {
             VoteState1_14_11.isCorrectSizeAndInitialized(data);
     }
 
+    /// Clones the owned data within the vote state.
+    ///
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/vote_state_versions.rs#L31
     pub fn convertToCurrent(self: VoteStateVersions, allocator: std.mem.Allocator) !VoteState {
         switch (self) {
@@ -678,7 +682,7 @@ pub const VoteStateVersions = union(enum) {
                     .last_timestamp = state.last_timestamp,
                 };
             },
-            .current => |state| return state,
+            .current => |state| return try state.clone(allocator),
         }
     }
 
@@ -2244,7 +2248,7 @@ test "state.VoteState.convertToCurrent" {
 
     // Current -> Current
     {
-        const expected = try VoteState.init(
+        var expected = try VoteState.init(
             allocator,
             Pubkey.ZEROES,
             Pubkey.ZEROES,
@@ -2258,6 +2262,7 @@ test "state.VoteState.convertToCurrent" {
                 .unix_timestamp = 0,
             },
         );
+        defer expected.deinit(allocator);
 
         const vote_state_1_14_1 = VoteStateVersions{ .current = expected };
 
@@ -5102,13 +5107,15 @@ fn processSlotVotesUnchecked(
 fn processNewVoteStateFromLockouts(
     allocator: std.mem.Allocator,
     vote_state: *VoteState,
-    new_state: []Lockout,
+    new_state: []const Lockout,
     new_root: ?Slot,
     timestamp: ?i64,
     epoch: Epoch,
 ) !?VoteError {
+    if (!builtin.is_test) @compileError("only used for tests");
+
     const landed_votes = try VoteStateVersions.landedVotesFromLockouts(allocator, new_state);
-    errdefer allocator.free(landed_votes);
+    defer allocator.free(landed_votes);
 
     return try vote_state.processNewVoteState(
         allocator,
@@ -5121,9 +5128,7 @@ fn processNewVoteStateFromLockouts(
 }
 
 fn checkLockouts(vote_state: *const VoteState) !void {
-    if (!builtin.is_test) {
-        @panic("checkLockouts should only be called in test mode");
-    }
+    if (!builtin.is_test) @compileError("checkLockouts should only be called in test mode");
 
     for (vote_state.votes.items, 0..) |*vote, i| {
         const num_votes = vote_state.votes.items.len - i;
