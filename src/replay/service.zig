@@ -568,6 +568,7 @@ fn freezeCompletedSlots(state: *ReplayState, results: []const ReplayResult) !boo
 
 /// bypass the tower bft consensus protocol, simply rooting slots with SlotTree.reRoot
 fn bypassConsensus(state: *ReplayState) !void {
+    std.debug.print("bypassConsensus should not be called", .{});
     if (state.slot_tree.reRoot(state.allocator)) |new_root| {
         const slot_tracker, var slot_tracker_lg = state.slot_tracker.writeWithLock();
         defer slot_tracker_lg.unlock();

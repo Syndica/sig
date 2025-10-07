@@ -54,18 +54,18 @@ pub const SlotDataProvider = struct {
         const slot_tracker, var lg = self.slot_tracker_rw.readWithLock();
         defer lg.unlock();
         if (slot_tracker.get(slot)) |ref| {
-            std.log.info(
-                "getSlotAncestorsPtr: found slot {}, current_root={}",
+            std.debug.print(
+                "getSlotAncestorsPtr: found slot {}, current_root={}\n",
                 .{ slot, slot_tracker.root },
             );
             return &ref.constants.ancestors;
         } else {
-            std.log.info(
-                "getSlotAncestorsPtr: missing slot {}, current_root={}",
+            std.debug.print(
+                "getSlotAncestorsPtr: missing slot {}, current_root={}\n",
                 .{ slot, slot_tracker.root },
             );
             return null;
-    }
+        }
     }
 
     fn getEpochTotalStake(self: *const SlotDataProvider, epoch: u64) ?u64 {
