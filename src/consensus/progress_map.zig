@@ -664,7 +664,7 @@ pub const PropagatedStats = struct {
         try self.addNodePubkeyInternal(
             allocator,
             node_pubkey,
-            nva.vote_accounts,
+            nva.vote_accounts.items,
             epoch_vote_accounts.*,
         );
     }

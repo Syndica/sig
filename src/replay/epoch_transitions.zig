@@ -214,14 +214,14 @@ pub fn process_new_epoch(
     );
 
     // [agave] https://github.com/anza-xyz/agave/blob/b6c96e84b10396b92912d4574dae7d03f606da26/runtime/src/bank.rs#L1637-L1647
-    // beginPartitionedRewards()
+    try beginPartitionedRewards();
 }
 
 pub fn updateEpochStakes(
     allocator: Allocator,
     slot: Slot,
     parent_epoch: Epoch,
-    stakes_cache: *const StakesCache,
+    stakes_cache: *StakesCache,
     epoch_tracker: *EpochTracker,
 ) !void {
     const leader_schedule_epoch = epoch_tracker.schedule.getLeaderScheduleEpoch(slot);
@@ -254,13 +254,53 @@ pub fn updateEpochStakes(
 pub fn getEpochStakes(
     allocator: Allocator,
     leader_schedule_epoch: Epoch,
-    stakes_cache: *const StakesCache,
+    stakes_cache: *StakesCache,
 ) !EpochStakes {
-    _ = leader_schedule_epoch;
-    _ = stakes_cache;
-    // TODO: Currently does nothing
-    return try EpochStakes.init(allocator);
+    const stakes = blk: {
+        const stakes, var stakes_lg = stakes_cache.stakes.readWithLock();
+        defer stakes_lg.unlock();
+        break :blk try stakes.clone(allocator);
+    };
+    const epoch_vote_accounts = stakes.vote_accounts.vote_accounts;
+
+    var node_id_to_vote_accounts = std.AutoArrayHashMapUnmanaged(Pubkey, sig.core.epoch_stakes.NodeVoteAccounts){};
+    errdefer sig.utils.collections.deinitMapAndValues(allocator, node_id_to_vote_accounts);
+
+    var epoch_authorized_voters = std.AutoArrayHashMapUnmanaged(Pubkey, Pubkey){};
+    errdefer epoch_authorized_voters.deinit(allocator);
+
+    var total_stake: u64 = 0;
+    for (epoch_vote_accounts.keys(), epoch_vote_accounts.values()) |key, stake_and_vote_account| {
+        if (stake_and_vote_account.stake > 0) {
+            total_stake += stake_and_vote_account.stake;
+
+            var vote_state = stake_and_vote_account.account.state;
+            if (vote_state.voters.getAuthorizedVoter(leader_schedule_epoch)) |authorized_voter| {
+                const node_vote_accounts = try node_id_to_vote_accounts.getOrPut(allocator, authorized_voter);
+
+                if (!node_vote_accounts.found_existing) {
+                    node_vote_accounts.value_ptr.* = .EMPTY;
+                }
+
+                node_vote_accounts.value_ptr.total_stake += stake_and_vote_account.stake;
+                try node_vote_accounts.value_ptr.vote_accounts.append(allocator, key);
+
+                try epoch_authorized_voters.put(allocator, key, authorized_voter);
+            }
+        }
+    }
+
+    const new_stakes = try stakes.convert(allocator, .delegation);
+
+    return .{
+        .stakes = new_stakes,
+        .total_stake = total_stake,
+        .node_id_to_vote_accounts = node_id_to_vote_accounts,
+        .epoch_authorized_voters = epoch_authorized_voters,
+    };
 }
+
+pub fn initEpochStakes() !void {}
 
 pub fn activateEpoch(
     allocator: Allocator,
@@ -280,4 +320,8 @@ pub fn refreshVoteAccounts(
     _ = allocator;
     _ = epoch;
     _ = stakes_cache;
+}
+
+pub fn beginPartitionedRewards() !void {
+    // TODO: Implement partitioned rewards logic
 }
