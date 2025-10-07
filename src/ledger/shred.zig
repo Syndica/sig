@@ -121,7 +121,7 @@ pub const Shred = union(ShredType) {
         };
     }
 
-    pub fn verify(self: Shred, signer: sig.core.Pubkey) bool {
+    pub fn verify(self: Shred, signer: sig.core.Pubkey) !void {
         return switch (self) {
             inline .data, .code => |s| @TypeOf(s).Generic.verify(s, signer),
         };
@@ -327,7 +327,7 @@ pub const DataShred = struct {
 
         const payload = try allocator.alloc(u8, constants.payload_size);
         errdefer allocator.free(payload);
-        @memcpy(payload[0..Signature.SIZE], &leader_signature.data);
+        @memcpy(payload[0..Signature.SIZE], &leader_signature.toBytes());
         @memcpy(payload[Signature.SIZE..][0..shard.len], shard);
         @memset(payload[Signature.SIZE + shard.len ..], 0);
 
@@ -527,10 +527,11 @@ fn GenericShred(shred_type: ShredType) type {
             return self.payload[start..end];
         }
 
-        fn verify(self: Self, leader: sig.core.Pubkey) bool {
-            const signed_data = self.merkleRoot() catch return false;
-            const signature = layout.getLeaderSignature(self.payload) orelse return false;
-            return signature.verify(leader, &signed_data.data) catch return false;
+        fn verify(self: Self, leader: sig.core.Pubkey) !void {
+            const root = try self.merkleRoot();
+            const signature = layout.getLeaderSignature(self.payload) orelse
+                return error.InvalidSignature;
+            return try signature.verify(leader, &root.data);
         }
 
         /// this is the data that is signed by the signature
@@ -546,12 +547,8 @@ fn GenericShred(shred_type: ShredType) type {
         fn retransmitterSignature(self: Self) !Signature {
             const offset = try retransmitterSignatureOffset(self.common.variant);
             const end = offset + Signature.SIZE;
-            if (self.payload.len < end) {
-                return error.InvalidPayloadSize;
-            }
-            var sig_bytes: [Signature.SIZE]u8 = undefined;
-            @memcpy(&sig_bytes, self.payload[offset..end]);
-            return .{ .data = sig_bytes };
+            if (self.payload.len < end) return error.InvalidPayloadSize;
+            return .fromBytes(self.payload[offset..][0..64].*);
         }
     };
 }
@@ -872,7 +869,7 @@ fn setRetransmitterSignatureFor(shred: []u8, variant: ShredVariant, signature: S
     if (shred.len < end) {
         return error.InvalidPayloadSize;
     }
-    @memcpy(shred[offset..end], &signature.data);
+    @memcpy(shred[offset..end], &signature.toBytes());
 }
 
 pub const CommonHeader = struct {
@@ -889,7 +886,7 @@ pub const CommonHeader = struct {
     pub const @"!bincode-config:variant" = ShredVariantConfig;
 
     const ZEROED_FOR_TEST: CommonHeader = .{
-        .leader_signature = Signature{ .data = .{0} ** Signature.SIZE },
+        .leader_signature = .ZEROES,
         .variant = ShredVariant{ .shred_type = .data, .proof_size = 0, .chained = false, .resigned = false },
         .slot = 0,
         .index = 0,
@@ -1130,10 +1127,8 @@ pub const layout = struct {
     }
 
     pub fn getLeaderSignature(shred: []const u8) ?Signature {
-        if (shred.len < Signature.SIZE) {
-            return null;
-        }
-        return .{ .data = shred[0..SIZE_OF_SIGNATURE].* };
+        if (shred.len < Signature.SIZE) return null;
+        return .fromBytes(shred[0..SIZE_OF_SIGNATURE].*);
     }
 
     pub fn merkleRoot(shred: []const u8) ?Hash {
@@ -1271,7 +1266,7 @@ test "getLeaderSignature" {
         193, 194, 143, 192, 142, 141, 134, 85,  93,  252, 43,  200, 224, 101, 12,  28,  97,  202, 230, 215,
         34,  217, 20,  7,
     };
-    try std.testing.expect(std.mem.eql(u8, &expected_signature, &signature.data));
+    try std.testing.expect(std.mem.eql(u8, &expected_signature, &signature.toBytes()));
 }
 
 test "layout.merkleRoot" {

@@ -13,8 +13,6 @@ const TransactionError = sig.ledger.transaction_status.TransactionError;
 const getInstructionData = sig.runtime.program.precompiles.getInstructionData;
 
 const Ed25519 = std.crypto.sign.Ed25519;
-const Curve = std.crypto.ecc.Edwards25519;
-const Sha512 = std.crypto.hash.sha2.Sha512;
 
 pub const ID: Pubkey = .parse("Ed25519SigVerify111111111111111111111111111");
 
@@ -90,7 +88,7 @@ pub fn verify(
             sig_offsets.signature_offset,
             32 * 2, // 1 scalar + 1 point
         );
-        const signature: Ed25519.Signature = .fromBytes(signature_bytes[0..64].*);
+        const signature: sig.core.Signature = .fromBytes(signature_bytes[0..64].*);
 
         const pubkey_bytes = try getInstructionData(
             data,
@@ -99,8 +97,9 @@ pub fn verify(
             sig_offsets.public_key_offset,
             32,
         );
-        // identity is rejected in verifySignature()
-        const pubkey: Ed25519.PublicKey = .{ .bytes = pubkey_bytes[0..32].* };
+        // specifically not using `fromBytes`, since we want the encoding error to happen inside of
+        // the `verifySignature` call.
+        const pubkey: sig.core.Pubkey = .{ .data = pubkey_bytes[0..32].* };
 
         const msg = try getInstructionData(
             data,
@@ -110,59 +109,13 @@ pub fn verify(
             sig_offsets.message_data_size,
         );
 
-        verifySignature(
-            &signature,
-            &pubkey,
+        sig.crypto.ed25519.verifySignature(
+            signature,
+            pubkey,
             msg,
-            feature_set,
-            slot,
+            feature_set.active(.ed25519_precompile_verify_strict, slot),
         ) catch return error.InvalidSignature;
     }
-}
-
-fn verifySignature(
-    signature: *const Ed25519.Signature,
-    pubkey: *const Ed25519.PublicKey,
-    msg: []const u8,
-    feature_set: *const FeatureSet,
-    slot: Slot,
-) !void {
-    try Curve.scalar.rejectNonCanonical(signature.s);
-
-    const a = try Ed25519.Curve.fromBytes(pubkey.bytes);
-    try a.rejectIdentity();
-
-    // this guarantees that `st.expected_r` Z coordinate will be 1, which allows us to equate
-    // without that pesky inversion.
-    const r = try Ed25519.Curve.fromBytes(signature.r);
-    try r.rejectIdentity();
-
-    // https://github.com/dalek-cryptography/ed25519-dalek/blob/02001d8c3422fb0314b541fdb09d04760f7ab4ba/src/verifying.rs#L424-L427
-    if (feature_set.active(.ed25519_precompile_verify_strict, slot)) {
-        try a.rejectLowOrder();
-        try r.rejectLowOrder();
-    }
-
-    var h = Sha512.init(.{});
-    h.update(&signature.r);
-    h.update(&pubkey.bytes);
-    h.update(msg);
-
-    var hram64: [Sha512.digest_length]u8 = undefined;
-    h.final(&hram64);
-    const hram = Ed25519.Curve.scalar.reduce64(hram64);
-
-    // We can use [8][S]B = [8]R + [8][k]A' or [S]B = R + [k]A' verification here.
-    // We opt for cofactorless since it's faster.
-    const computed_r = try Curve.basePoint.mulDoubleBasePublic(signature.s, a.neg(), hram);
-    if (!fastEqual(computed_r, r)) return error.InvalidSignature;
-}
-
-/// Equate two ed25519 points with the assumption that b.z is 1.
-fn fastEqual(a: Curve, b: Curve) bool {
-    const x1 = b.x.mul(a.z);
-    const y1 = b.y.mul(a.z);
-    return x1.equivalent(a.x) and y1.equivalent(a.y);
 }
 
 // https://github.com/anza-xyz/agave/blob/a8aef04122068ec36a7af0721e36ee58efa0bef2/sdk/src/ed25519_instruction.rs#L35
@@ -400,17 +353,18 @@ test "ed25519 signature offset" {
 
 // https://github.com/anza-xyz/agave/blob/2d834361c096198176dbdc4524d5003bccf6c192/precompiles/src/ed25519.rs#L446
 test "ed25519_malleability" {
+    const allocator = std.testing.allocator;
     {
         const message = "hello";
         const keypair = Ed25519.KeyPair.generate();
         const signature = try keypair.sign(message, null);
         const instruction = try newInstruction(
-            std.testing.allocator,
+            allocator,
             &signature,
             &keypair.public_key,
             message,
         );
-        defer std.testing.allocator.free(instruction.data);
+        defer allocator.free(instruction.data);
         const tx: sig.core.Transaction = .{
             .msg = .{
                 .account_keys = &.{ID},
@@ -426,8 +380,8 @@ test "ed25519_malleability" {
             .signatures = &.{},
         };
 
-        _ = try verifyPrecompiles(std.testing.allocator, &tx, &FeatureSet.ALL_DISABLED, 0);
-        _ = try verifyPrecompiles(std.testing.allocator, &tx, &FeatureSet.ALL_ENABLED_AT_GENESIS, 0);
+        _ = try verifyPrecompiles(allocator, &tx, &FeatureSet.ALL_DISABLED, 0);
+        _ = try verifyPrecompiles(allocator, &tx, &FeatureSet.ALL_ENABLED_AT_GENESIS, 0);
     }
 
     {
@@ -452,8 +406,8 @@ test "ed25519_malleability" {
                 0x71, 0x6f, 0xb8, 0x96, 0xff, 0xee, 0xac, 0x09,
             },
         );
-        const instruction = try newInstruction(std.testing.allocator, &signature, &pubkey, message);
-        defer std.testing.allocator.free(instruction.data);
+        const instruction = try newInstruction(allocator, &signature, &pubkey, message);
+        defer allocator.free(instruction.data);
         const tx: sig.core.Transaction = .{
             .msg = .{
                 .account_keys = &.{ID},
@@ -469,10 +423,10 @@ test "ed25519_malleability" {
             .signatures = &.{},
         };
 
-        _ = try verifyPrecompiles(std.testing.allocator, &tx, &FeatureSet.ALL_DISABLED, 0);
+        _ = try verifyPrecompiles(allocator, &tx, &FeatureSet.ALL_DISABLED, 0);
         try std.testing.expectEqual(
             TransactionError{ .InstructionError = .{ 0, .{ .Custom = 0 } } },
-            try verifyPrecompiles(std.testing.allocator, &tx, &FeatureSet.ALL_ENABLED_AT_GENESIS, 0),
+            try verifyPrecompiles(allocator, &tx, &FeatureSet.ALL_ENABLED_AT_GENESIS, 0),
         );
     }
 }

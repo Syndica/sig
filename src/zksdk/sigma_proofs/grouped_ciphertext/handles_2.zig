@@ -13,7 +13,7 @@ const ElGamalPubkey = sig.zksdk.ElGamalPubkey;
 const Ristretto255 = std.crypto.ecc.Ristretto255;
 const Scalar = std.crypto.ecc.Edwards25519.scalar.Scalar;
 const Transcript = sig.zksdk.Transcript;
-const weak_mul = sig.vm.syscalls.ecc.weak_mul;
+const ed25519 = sig.crypto.ed25519;
 const GroupedElGamalCiphertext = el_gamal.GroupedElGamalCiphertext;
 const ProofType = sig.runtime.program.zk_elgamal.ProofType;
 
@@ -99,13 +99,13 @@ pub const Proof = struct {
             std.crypto.secureZero(u64, &y_x.limbs);
         }
 
-        const Y_0: Ristretto255 = .{ .p = weak_mul.mulMulti(
+        const Y_0 = ed25519.mulMulti(
             2,
-            .{ pedersen.H.p, pedersen.G.p },
+            .{ pedersen.H, pedersen.G },
             .{ y_r.toBytes(), y_x.toBytes() },
-        ) };
-        const Y_1: Ristretto255 = .{ .p = weak_mul.mul(P_first.p, y_r.toBytes()) };
-        const Y_2: Ristretto255 = .{ .p = weak_mul.mul(P_second.p, y_r.toBytes()) };
+        );
+        const Y_1: Ristretto255 = ed25519.mul(true, P_first, y_r.toBytes());
+        const Y_2: Ristretto255 = ed25519.mul(true, P_second, y_r.toBytes());
 
         comptime var session = Transcript.getSession(contract);
         defer session.finish();
@@ -218,17 +218,17 @@ pub const Proof = struct {
         const c_negated_w = c_negated.mul(w);
         const z_r_w = self.z_r.mul(w);
 
-        var points: std.BoundedArray(Edwards25519, 12) = .{};
+        var points: std.BoundedArray(Ristretto255, 12) = .{};
         var scalars: std.BoundedArray([32]u8, 12) = .{};
 
         try points.appendSlice(&.{
-            pedersen.G.p,
-            pedersen.H.p,
-            self.Y_1.p,
-            self.Y_2.p,
-            params.first_pubkey.point.p,
-            params.commitment.point.p,
-            params.first_handle.point.p,
+            pedersen.G,
+            pedersen.H,
+            self.Y_1,
+            self.Y_2,
+            params.first_pubkey.point,
+            params.commitment.point,
+            params.first_handle.point,
         });
 
         try scalars.appendSlice(&.{
@@ -243,8 +243,8 @@ pub const Proof = struct {
 
         if (batched) {
             try points.appendSlice(&.{
-                params.commitment_hi.point.p,
-                params.first_handle_hi.point.p,
+                params.commitment_hi.point,
+                params.first_handle_hi.point,
             });
             try scalars.appendSlice(&.{
                 c_negated.mul(t).toBytes(),
@@ -254,8 +254,8 @@ pub const Proof = struct {
 
         if (second_pubkey_not_zero) {
             try points.appendSlice(&.{
-                params.second_pubkey.point.p,
-                params.second_handle.point.p,
+                params.second_pubkey.point,
+                params.second_handle.point,
             });
             try scalars.appendSlice(&.{
                 z_r_w.mul(w).toBytes(),
@@ -264,28 +264,31 @@ pub const Proof = struct {
         }
 
         if (batched and second_pubkey_not_zero) {
-            try points.append(params.second_handle_hi.point.p);
+            try points.append(params.second_handle_hi.point);
             try scalars.append(c_negated_w.mul(w).mul(t).toBytes());
         }
 
-        const check = switch (points.len) {
-            inline
+        // assert the only possible lengths to help the optimizer a bit
+        switch (points.len) {
             // batched is false + pubkey2_not_zero is false
-            7,
+            7 => {},
             // batched is true  + pubkey2_not_zero is false
             // batched is false + pubkey2_not_zero is true
-            9,
+            9 => {},
             // batched is true  + pubkey2_not_zero is true
-            12,
-            => |N| weak_mul.mulMulti(
-                N,
-                points.constSlice()[0..N].*,
-                scalars.constSlice()[0..N].*,
-            ),
-            else => unreachable,
-        };
+            12 => {},
+            else => unreachable, // nothing else should be possible!
+        }
 
-        if (!self.Y_0.equivalent(.{ .p = check })) {
+        const check = ed25519.straus.mulMultiRuntime(
+            12,
+            false,
+            true,
+            points.constSlice(),
+            scalars.constSlice(),
+        );
+
+        if (!self.Y_0.equivalent(check)) {
             return error.AlgebraicRelation;
         }
     }

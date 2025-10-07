@@ -3,7 +3,7 @@
 //! See Section 4. of <https://eprint.iacr.org/2012/549.pdf>
 
 const std = @import("std");
-const sig = @import("../sig.zig");
+const sig = @import("../../sig.zig");
 const crypto = std.crypto;
 const Ed25519 = crypto.ecc.Edwards25519;
 const Ristretto255 = crypto.ecc.Ristretto255;
@@ -22,21 +22,47 @@ fn PointType(encoded: bool, ristretto: bool) type {
     return if (ristretto) Ristretto255 else Ed25519;
 }
 
-pub fn mulMulti(
+fn asRadix2w(c: CompressedScalar, w: u6) [64]i8 {
+    var scalars: [4]u64 = @splat(0);
+    @memcpy(scalars[0..4], std.mem.bytesAsSlice(u64, &c));
+
+    const radix = @as(u64, 1) << w;
+    const window_mask = radix - 1;
+
+    var carry: u64 = 0;
+    const digits_count = (@as(u64, 256) + w - 1) / w;
+    var digits: [64]i8 = @splat(0);
+
+    for (0..digits_count) |i| {
+        const bit_offset = i * w;
+        const u64_idx = bit_offset / 64;
+        const bit_idx: u6 = @truncate(bit_offset);
+        const element = scalars[u64_idx] >> bit_idx;
+
+        const below = bit_idx < @as(u64, 64) - w or u64_idx == 3;
+        const bit_buf: u64 = switch (below) {
+            true => element,
+            else => element | (scalars[1 + u64_idx] << @intCast(@as(u64, 64) - bit_idx)),
+        };
+
+        const coef = carry + (bit_buf & window_mask);
+        carry = (coef + (radix / 2)) >> w;
+        const signed_coef: i64 = @bitCast(coef);
+        const cindex: i64 = @bitCast(carry << w);
+        digits[i] = @truncate(signed_coef - cindex);
+    }
+
+    switch (w) {
+        8 => digits[digits_count] += @intCast(@as(i64, @bitCast(carry))),
+        else => digits[digits_count - 1] += @intCast(@as(i64, @bitCast(carry << w))),
+    }
+
+    return digits;
+}
+
+pub fn mulMultiRuntime(
     comptime max_elements: comptime_int,
-    /// Set to true if the input is in wire-format. This lets us usually save
-    /// an extra stack copy and loop when buffering the decoding process,
-    /// instead just doing it once here straight into the extended point form.
-    ///
-    /// Changes the return type of the function to an error union, in case
-    /// the encoded points decode into a non-canonical form.
     comptime encoded: bool,
-    /// (Option only applies if we're decoding from a wire format).
-    ///
-    /// Set to true if the wire format we're decoding from is Ristretto instead
-    /// of Edwards25519. The actual MSM itself still happens on the underlying
-    /// Edwards25519 element, since there's no difference between the operation
-    /// on Ristretto and Edwards25519, but the decoding is different.
     comptime ristretto: bool,
     ed_points: []const PointType(encoded, ristretto),
     compressed_scalars: []const CompressedScalar,
@@ -62,7 +88,7 @@ pub fn mulMulti(
     var points: std.BoundedArray(CachedPoint, max_elements) = .{};
 
     for (compressed_scalars) |s| {
-        scalars.appendAssumeCapacity(asRadix(s, w));
+        scalars.appendAssumeCapacity(asRadix2w(s, w));
     }
     for (ed_points) |l| {
         // Translate from whatever the input format is to a decompressed Ed25519 point.
@@ -105,8 +131,8 @@ pub fn mulMulti(
         var sum = buckets[buckets_count - 1];
         for (0..buckets_count - 1) |bucket_fwd| {
             const i = buckets_count - 2 - bucket_fwd;
-            interm_sum = interm_sum.addCached(.fromExtended(buckets[i]));
-            sum = sum.addCached(.fromExtended(interm_sum));
+            interm_sum = interm_sum.add(buckets[i]);
+            sum = sum.add(interm_sum);
         }
 
         column.* = sum;
@@ -114,55 +140,11 @@ pub fn mulMulti(
 
     var hi_column = columns[0];
     for (columns[1..]) |p| {
-        hi_column = mulByPow2(hi_column, w).addCached(.fromExtended(p));
+        hi_column = hi_column.mulByPow2(w).add(p);
     }
 
     return switch (ristretto) {
         true => .{ .p = hi_column.toPoint() },
         else => hi_column.toPoint(),
     };
-}
-
-inline fn mulByPow2(p: ExtendedPoint, k: u32) ExtendedPoint {
-    var s = p;
-    for (0..k) |_| s = s.dbl();
-    return s;
-}
-
-fn asRadix(c: CompressedScalar, w: u6) [64]i8 {
-    var scalars: [4]u64 = @splat(0);
-    @memcpy(scalars[0..4], std.mem.bytesAsSlice(u64, &c));
-
-    const radix = @as(u64, 1) << w;
-    const window_mask = radix - 1;
-
-    var carry: u64 = 0;
-    const digits_count = (@as(u64, 256) + w - 1) / w;
-    var digits: [64]i8 = @splat(0);
-
-    for (0..digits_count) |i| {
-        const bit_offset = i * w;
-        const u64_idx = bit_offset / 64;
-        const bit_idx: u6 = @truncate(bit_offset);
-        const element = scalars[u64_idx] >> bit_idx;
-
-        const below = bit_idx < @as(u64, 64) - w or u64_idx == 3;
-        const bit_buf: u64 = switch (below) {
-            true => element,
-            else => element | (scalars[1 + u64_idx] << @intCast(@as(u64, 64) - bit_idx)),
-        };
-
-        const coef = carry + (bit_buf & window_mask);
-        carry = (coef + (radix / 2)) >> w;
-        const signed_coef: i64 = @bitCast(coef);
-        const cindex: i64 = @bitCast(carry << w);
-        digits[i] = @truncate(signed_coef - cindex);
-    }
-
-    switch (w) {
-        8 => digits[digits_count] += @intCast(@as(i64, @bitCast(carry))),
-        else => digits[digits_count - 1] += @intCast(@as(i64, @bitCast(carry << w))),
-    }
-
-    return digits;
 }

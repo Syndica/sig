@@ -13,7 +13,7 @@ const ElGamalPubkey = sig.zksdk.ElGamalPubkey;
 const Ristretto255 = std.crypto.ecc.Ristretto255;
 const Scalar = std.crypto.ecc.Edwards25519.scalar.Scalar;
 const Transcript = sig.zksdk.Transcript;
-const weak_mul = sig.vm.syscalls.ecc.weak_mul;
+const ed25519 = sig.crypto.ed25519;
 const GroupedElGamalCiphertext = sig.zksdk.GroupedElGamalCiphertext;
 const ProofType = sig.runtime.program.zk_elgamal.ProofType;
 
@@ -108,14 +108,14 @@ pub const Proof = struct {
             std.crypto.secureZero(u64, &y_x.limbs);
         }
 
-        const Y_0: Ristretto255 = .{ .p = weak_mul.mulMulti(
+        const Y_0 = ed25519.mulMulti(
             2,
-            .{ pedersen.H.p, pedersen.G.p },
+            .{ pedersen.H, pedersen.G },
             .{ y_r.toBytes(), y_x.toBytes() },
-        ) };
-        const Y_1: Ristretto255 = .{ .p = weak_mul.mul(P_first.p, y_r.toBytes()) };
-        const Y_2: Ristretto255 = .{ .p = weak_mul.mul(P_second.p, y_r.toBytes()) };
-        const Y_3: Ristretto255 = .{ .p = weak_mul.mul(P_third.p, y_r.toBytes()) };
+        );
+        const Y_1: Ristretto255 = ed25519.mul(true, P_first, y_r.toBytes());
+        const Y_2: Ristretto255 = ed25519.mul(true, P_second, y_r.toBytes());
+        const Y_3: Ristretto255 = ed25519.mul(true, P_third, y_r.toBytes());
 
         transcript.appendNoValidate(&session, "Y_0", Y_0);
         transcript.appendNoValidate(&session, "Y_1", Y_1);
@@ -227,22 +227,22 @@ pub const Proof = struct {
         // ----------------------- MSM
         //      Y_0
 
-        var points: std.BoundedArray(Edwards25519, 16) = .{};
+        var points: std.BoundedArray(Ristretto255, 16) = .{};
         var scalars: std.BoundedArray([32]u8, 16) = .{};
 
         try points.appendSlice(&.{
-            pedersen.G.p,
-            pedersen.H.p,
-            params.commitment.point.p,
-            params.first_pubkey.point.p,
-            self.Y_1.p,
-            params.first_handle.point.p,
-            params.second_pubkey.point.p,
-            self.Y_2.p,
-            params.second_handle.point.p,
-            params.third_pubkey.point.p,
-            self.Y_3.p,
-            params.third_handle.point.p,
+            pedersen.G,
+            pedersen.H,
+            params.commitment.point,
+            params.first_pubkey.point,
+            self.Y_1,
+            params.first_handle.point,
+            params.second_pubkey.point,
+            self.Y_2,
+            params.second_handle.point,
+            params.third_pubkey.point,
+            self.Y_3,
+            params.third_handle.point,
         });
         // zig fmt: off
         try scalars.appendSlice(&.{
@@ -263,10 +263,10 @@ pub const Proof = struct {
 
         if (batched) {
             try points.appendSlice(&.{
-                params.commitment_hi.point.p,
-                params.first_handle_hi.point.p,
-                params.second_handle_hi.point.p,
-                params.third_handle_hi.point.p,
+                params.commitment_hi.point,
+                params.first_handle_hi.point,
+                params.second_handle_hi.point,
+                params.third_handle_hi.point,
             });
             try scalars.appendSlice(&.{
                 c_negated.mul(t).toBytes(), // -c * t
@@ -276,19 +276,21 @@ pub const Proof = struct {
             });
         }
 
-        const check = switch (points.len) {
-            inline //
-            12,
-            16,
-            => |N| weak_mul.mulMulti(
-                N,
-                points.constSlice()[0..N].*,
-                scalars.constSlice()[0..N].*,
-            ),
+        // give the optimizer a little hint on the two possible lengths
+        switch (points.len) {
+            12, 16 => {},
             else => unreachable,
-        };
+        }
 
-        if (!self.Y_0.equivalent(.{ .p = check })) {
+        const check = ed25519.straus.mulMultiRuntime(
+            16,
+            false,
+            true,
+            points.constSlice(),
+            scalars.constSlice(),
+        );
+
+        if (!self.Y_0.equivalent(check)) {
             return error.AlgebraicRelation;
         }
     }
