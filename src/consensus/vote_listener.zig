@@ -465,6 +465,14 @@ fn processVotesOnce(
     const root_hash = slot_data_provider.getSlotHash(root_slot);
 
     if (last_process_root.elapsed().asMillis() > DEFAULT_MS_PER_SLOT) {
+        {
+            const st, var st_lg = slot_data_provider.slot_tracker_rw.readWithLock();
+            defer st_lg.unlock();
+            std.debug.print(
+                "processVotesOnce: root={} exists_in_map={}, slots_count={d}\n",
+                .{ root_slot, st.contains(root_slot), st.slots.count() },
+            );
+        }
         const unrooted_optimistic_slots = try confirmation_verifier.verifyForUnrootedOptimisticSlots(
             allocator,
             ledger_ref.reader,

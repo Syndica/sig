@@ -97,6 +97,15 @@ pub fn freezeSlot(allocator: Allocator, params: FreezeParams) !void {
     zone.value(params.finalize_state.slot);
     defer zone.deinit();
 
+    std.debug.print(
+        "freezeSlot start: slot={}, parent_hash_prefix={s}, ancestors_count={d}\n",
+        .{
+            params.finalize_state.slot,
+            params.hash_slot.parent_slot_hash.base58String().slice()[0..8],
+            params.hash_slot.ancestors.ancestors.count(),
+        },
+    );
+
     // TODO: reconsider locking the hash for the entire function. (this is how agave does it)
     var slot_hash = params.slot_hash.write();
     defer slot_hash.unlock();
