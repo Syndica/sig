@@ -445,72 +445,93 @@ const PerThread = struct {
             st.logger.debug().log("sendSocket loop closed");
         }
 
+        var packets: std.ArrayListUnmanaged(Packet) = try .initCapacity(
+            st.allocator,
+            PACKETS_PER_BATCH,
+        );
+        defer packets.deinit(st.allocator);
+
+        // temp data needed for sending packets
+        const Msg = struct {
+            hdr: std.os.linux.mmsghdr_const,
+            sock_addr: network.EndPoint.SockAddr,
+            iovec: std.posix.iovec_const,
+        };
+
+        var msgs: std.MultiArrayList(Msg) = .empty;
+        defer msgs.deinit(st.allocator);
+        try msgs.setCapacity(st.allocator, PACKETS_PER_BATCH);
+
         while (true) {
             st.channel.waitToReceive(st.exit) catch break;
 
-            var msgvecs: std.BoundedArray(std.os.linux.mmsghdr_const, PACKETS_PER_BATCH) = .{};
-            var iovecs: std.BoundedArray(std.posix.iovec_const, PACKETS_PER_BATCH) = .{};
-            var socket_addrs: std.BoundedArray(network.EndPoint.SockAddr, PACKETS_PER_BATCH) = .{};
+            // drain packets and channel
+            while (!st.channel.isEmpty() or packets.items.len > 0) {
 
-            while (!st.channel.isEmpty() or msgvecs.len > 0) {
-                while (st.channel.tryReceive()) |p| {
-                    if (st.exit.shouldExit()) return; // drop packets if exit prematurely.
+                // refill packets buf from channel
+                while (packets.items.len < PACKETS_PER_BATCH) {
+                    packets.appendAssumeCapacity(st.channel.tryReceive() orelse break);
+                }
 
-                    const new_iovec = iovecs.addOneAssumeCapacity();
-                    new_iovec.* = .{ .base = p.data().ptr, .len = p.data().len };
+                defer msgs.clearRetainingCapacity();
+                std.debug.assert(msgs.len == 0);
 
-                    const new_sock_addr = socket_addrs.addOneAssumeCapacity();
-                    new_sock_addr.* = toSocketAddress(p.addr);
+                // setup for sending packet batch
+                for (packets.items) |packet| {
+                    // we're just filling buffers here, let's not error
+                    errdefer comptime unreachable;
+
+                    const new_msg_idx = msgs.addOneAssumeCapacity();
+                    const msgs_slice = msgs.slice();
+
+                    const new_io_vec: *std.posix.iovec_const =
+                        &msgs_slice.items(.iovec)[new_msg_idx];
+                    new_io_vec.* = .{ .base = packet.data().ptr, .len = packet.size };
+
+                    const new_sock_addr: *network.EndPoint.SockAddr =
+                        &msgs_slice.items(.sock_addr)[new_msg_idx];
+                    new_sock_addr.* = toSocketAddress(packet.addr);
 
                     const sock_addr: *std.posix.sockaddr, const sock_size: u32 = //
                         switch (new_sock_addr.*) {
                             inline else => |*sock| .{ @ptrCast(sock), @sizeOf(@TypeOf(sock.*)) },
                         };
 
-                    msgvecs.appendAssumeCapacity(.{
+                    const new_hdr: *std.os.linux.mmsghdr_const =
+                        &msgs_slice.items(.hdr)[new_msg_idx];
+                    new_hdr.* = .{
                         .hdr = .{
                             .name = sock_addr,
                             .namelen = sock_size,
-                            .iov = new_iovec[0..1],
+                            .iov = new_io_vec[0..1],
                             .iovlen = 1,
                             .control = null,
                             .controllen = 0,
                             .flags = 0,
                         },
                         .len = 0,
-                    });
-
-                    if (msgvecs.constSlice().len == PACKETS_PER_BATCH) break;
+                    };
                 }
 
+                std.debug.assert(msgs.len == packets.items.len);
+                std.debug.assert(msgs.len <= PACKETS_PER_BATCH);
+
+                // send off packet batch
                 const messages_sent = sendmmsg(
                     st.socket.internal,
-                    msgvecs.slice(),
+                    msgs.items(.hdr),
                     0,
                 ) catch |e| blk: {
                     st.logger.err().logf("sendmmsg error: {s}", .{@errorName(e)});
-                    break :blk msgvecs.slice().len; // skip all packets in this batch
+                    break :blk msgs.len; // skip all packets in this batch
                 };
 
                 std.mem.copyBackwards(
-                    std.os.linux.mmsghdr_const,
-                    msgvecs.buffer[0 .. msgvecs.len - messages_sent],
-                    msgvecs.buffer[messages_sent..msgvecs.len],
+                    Packet,
+                    packets.items[0 .. packets.items.len - messages_sent],
+                    packets.items[messages_sent..packets.items.len],
                 );
-                std.mem.copyBackwards(
-                    std.posix.iovec_const,
-                    iovecs.buffer[0 .. iovecs.len - messages_sent],
-                    iovecs.buffer[messages_sent..iovecs.len],
-                );
-                std.mem.copyBackwards(
-                    network.EndPoint.SockAddr,
-                    socket_addrs.buffer[0 .. socket_addrs.len - messages_sent],
-                    socket_addrs.buffer[messages_sent..socket_addrs.len],
-                );
-
-                msgvecs.len -= messages_sent;
-                iovecs.len -= messages_sent;
-                socket_addrs.len -= messages_sent;
+                packets.items.len -= messages_sent;
             }
         }
     }
