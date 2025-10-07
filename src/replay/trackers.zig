@@ -82,8 +82,8 @@ pub const SlotTracker = struct {
         slot_init: Element,
     ) Allocator.Error!void {
         std.debug.print(
-            "SlotTracker.put start: inserting slot {} (before_count={d})\n",
-            .{ slot, self.slots.count() },
+            "SlotTracker.put start: self_ptr={*}, inserting slot {} (before_count={d})\n",
+            .{ self, slot, self.slots.count() },
         );
         defer tracy.plot(u32, "slots tracked", @intCast(self.slots.count()));
 
@@ -118,8 +118,8 @@ pub const SlotTracker = struct {
         slot_init: Element,
     ) Allocator.Error!GetOrPutResult {
         std.debug.print(
-            "SlotTracker.getOrPut start: slot {} (before_count={d})\n",
-            .{ slot, self.slots.count() },
+            "SlotTracker.getOrPut start: self_ptr={*}, slot {} (before_count={d})\n",
+            .{ self, slot, self.slots.count() },
         );
         defer tracy.plot(u32, "slots tracked", @intCast(self.slots.count()));
 

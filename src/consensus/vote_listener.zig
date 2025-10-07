@@ -469,8 +469,8 @@ fn processVotesOnce(
             const st, var st_lg = slot_data_provider.slot_tracker_rw.readWithLock();
             defer st_lg.unlock();
             std.debug.print(
-                "processVotesOnce: root={} exists_in_map={}, slots_count={d}\n",
-                .{ root_slot, st.contains(root_slot), st.slots.count() },
+                "processVotesOnce: st_ptr={*}, root={} exists_in_map={}, slots_count={d}\n",
+                .{ st, root_slot, st.contains(root_slot), st.slots.count() },
             );
         }
         const unrooted_optimistic_slots = try confirmation_verifier.verifyForUnrootedOptimisticSlots(
