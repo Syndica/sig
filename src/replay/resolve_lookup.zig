@@ -102,7 +102,10 @@ pub fn resolveBatch(
             resolved.accounts.items(.pubkey),
             resolved.accounts.items(.is_writable),
         ) |pubkey, is_writable| {
-            accounts.appendAssumeCapacity(.{ .address = pubkey, .writable = is_writable });
+            accounts.appendAssumeCapacity(.{
+                .address = pubkey,
+                .writable = is_writable,
+            });
         }
     }
 
@@ -189,7 +192,7 @@ pub fn resolveTransaction(
             return error.InvalidAddressLookupTableIndex;
         }
         output_ix.* = .{
-            .program_meta = ProgramMeta{
+            .program_meta = .{
                 .pubkey = message.account_keys[input_ix.program_index],
                 .index_in_transaction = input_ix.program_index,
             },
@@ -456,6 +459,10 @@ test resolveBatch {
         expected_accounts.is_writable,
         0..,
     ) |acc, pubkey, is_writable, i| {
+        std.debug.print("pubkey: {}\n", .{pubkey});
+        std.debug.print("acc: {}\n", .{acc.address});
+        std.debug.print("same: {}\n", .{std.mem.eql(u8, &pubkey.data, &acc.address.data)});
+
         const tx_account = resolved.transactions[0].accounts.get(i);
         try std.testing.expectEqual(pubkey, acc.address);
         try std.testing.expectEqual(pubkey, tx_account.pubkey);

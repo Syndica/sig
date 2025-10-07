@@ -292,10 +292,12 @@ fn authorize(
     clock: Clock,
     signers: []const Pubkey,
 ) (error{OutOfMemory} || InstructionError)!void {
-    const versioned_state = try vote_account.deserializeFromAccountData(
+    var versioned_state = try vote_account.deserializeFromAccountData(
         allocator,
         VoteStateVersions,
     );
+    defer versioned_state.deinit(allocator);
+
     var vote_state = try versioned_state.convertToCurrent(allocator);
     defer vote_state.deinit(allocator);
 
@@ -531,10 +533,11 @@ fn updateValidatorIdentity(
     vote_account: *BorrowedAccount,
     new_identity: Pubkey,
 ) (error{OutOfMemory} || InstructionError)!void {
-    const versioned_state = try vote_account.deserializeFromAccountData(
+    var versioned_state = try vote_account.deserializeFromAccountData(
         allocator,
         VoteStateVersions,
     );
+    defer versioned_state.deinit(allocator);
 
     var vote_state = try versioned_state.convertToCurrent(allocator);
     defer vote_state.deinit(allocator);
@@ -590,21 +593,19 @@ fn updateCommission(
 
     const enforce_commission_update_rule = blk: {
         if (ic.tc.feature_set.active(.allow_commission_decrease_at_any_time, ic.tc.slot)) {
-            const versioned_state = vote_account.deserializeFromAccountData(
+            var versioned_state = vote_account.deserializeFromAccountData(
                 allocator,
                 VoteStateVersions,
-            ) catch {
-                break :blk true;
-            };
+            ) catch break :blk true;
+            defer versioned_state.deinit(allocator);
+
             const vote_state = try versioned_state.convertToCurrent(allocator);
             maybe_vote_state = vote_state;
             // [agave] https://github.com/anza-xyz/agave/blob/9806724b6d49dec06a9d50396adf26565d6b7745/programs/vote/src/vote_state/mod.rs#L792
             //
             // Given a proposed new commission, returns true if this would be a commission increase, false otherwise
             break :blk commission > vote_state.commission;
-        } else {
-            break :blk true;
-        }
+        } else break :blk true;
     };
 
     if (enforce_commission_update_rule and ic.tc.feature_set.active(
@@ -620,10 +621,11 @@ fn updateCommission(
     }
 
     var vote_state = maybe_vote_state orelse state: {
-        const versioned_state = try vote_account.deserializeFromAccountData(
+        var versioned_state = try vote_account.deserializeFromAccountData(
             allocator,
             VoteStateVersions,
         );
+        defer versioned_state.deinit(allocator);
 
         break :state versioned_state.convertToCurrent(allocator) catch {
             return InstructionError.InvalidAccountData;
@@ -703,10 +705,11 @@ fn widthraw(
     var vote_account = try ic.borrowInstructionAccount(vote_account_index);
     defer vote_account.release();
 
-    const versioned_state = try vote_account.deserializeFromAccountData(
+    var versioned_state = try vote_account.deserializeFromAccountData(
         allocator,
         VoteStateVersions,
     );
+    defer versioned_state.deinit(allocator);
 
     var vote_state = try versioned_state.convertToCurrent(allocator);
     defer vote_state.deinit(allocator);
@@ -996,9 +999,7 @@ fn verifyAndGetVoteState(
     // we either clone it in `convertToCurrent` or don't use at all
     defer versioned_state.deinit(allocator);
 
-    if (versioned_state.isUninitialized()) {
-        return InstructionError.UninitializedAccount;
-    }
+    if (versioned_state.isUninitialized()) return InstructionError.UninitializedAccount;
 
     var vote_state = try versioned_state.convertToCurrent(allocator);
     errdefer vote_state.deinit(allocator);

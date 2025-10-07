@@ -425,9 +425,7 @@ pub const BankFields = struct {
         ancestors.deinit(allocator);
 
         bank_fields.hard_forks.deinit(allocator);
-
         bank_fields.stakes.deinit(allocator);
-
         bank_fields.unused_accounts.deinit(allocator);
 
         deinitMapAndValues(allocator, bank_fields.epoch_stakes);

@@ -194,7 +194,9 @@ pub const BorrowedAccount = struct {
         try self.account.resize(allocator, data.len);
         @memcpy(self.account.data[0..data.len], data);
     }
-    /// Deserialize the account data into a type `T`\
+
+    /// Deserialize the account data into a type `T`
+    ///
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L968
     pub fn deserializeFromAccountData(
         self: BorrowedAccount,
@@ -209,8 +211,10 @@ pub const BorrowedAccount = struct {
         ) catch return InstructionError.InvalidAccountData;
     }
 
-    /// Serialize the state into the account data.\
-    /// `state` must support bincode serialization\
+    /// Serialize the state into the account data.
+    ///
+    /// `state` must support bincode serialization
+    ///
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L976
     pub fn serializeIntoAccountData(self: BorrowedAccount, state: anytype) InstructionError!void {
         if (self.checkDataIsMutable()) |err| return err;
