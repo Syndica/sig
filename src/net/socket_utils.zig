@@ -609,7 +609,7 @@ fn toSocketAddress(self: network.EndPoint) network.EndPoint.SockAddr {
     };
 }
 
-/// std.os.posix.sendmsg ported over to use linux's sendmmsg instead
+/// std.posix.sendmsg ported over to use linux's sendmmsg instead
 fn sendmmsg(
     /// The file descriptor of the sending socket.
     sockfd: std.posix.socket_t,
