@@ -91,6 +91,14 @@ pub const SlotTracker = struct {
         const elem = try allocator.create(Element);
         elem.* = slot_init;
         self.slots.putAssumeCapacity(slot, elem);
+        std.debug.print(
+            "SlotTracker.put ends: inserting slot {} (after_count={d})\n",
+            .{ slot, self.slots.count() },
+        );
+        std.debug.print(
+            "SlotTracker.put ends: inserting slot {} (block height={d})\n",
+            .{ slot, self.slots.get(slot).?.constants.block_height },
+        );
     }
 
     pub fn get(self: *const SlotTracker, slot: Slot) ?Reference {
