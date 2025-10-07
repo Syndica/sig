@@ -77,6 +77,11 @@ pub const TransactionContext = struct {
 
     /// Total change to account data size within transaction
     accounts_resize_delta: i64 = 0,
+    /// Total change to account lamports
+    accounts_lamport_delta: i128 = 0,
+
+    // TODO: is this correct?
+    account_data_direct_mapping: bool = false,
 
     /// Instruction compute meter, for tracking compute units consumed against
     /// the designated compute budget during program execution.
@@ -84,7 +89,7 @@ pub const TransactionContext = struct {
     compute_budget: ComputeBudget,
 
     /// If an error other than an InstructionError occurs during execution its value will
-    /// be set here and InstructionError.custom will be returned
+    /// be set here and InstructionError.Custom will be returned
     custom_error: ?u32 = null,
 
     log_collector: ?LogCollector = null,
@@ -111,7 +116,7 @@ pub const TransactionContext = struct {
 
     /// [agave] https://github.com/anza-xyz/agave/blob/134be7c14066ea00c9791187d6bbc4795dd92f0e/sdk/src/transaction_context.rs#L233
     pub fn getAccountIndex(
-        self: *TransactionContext,
+        self: *const TransactionContext,
         pubkey: Pubkey,
     ) ?u16 {
         for (self.accounts, 0..) |account, index|

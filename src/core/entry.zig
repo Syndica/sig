@@ -1,5 +1,7 @@
-pub const std = @import("std");
-pub const sig = @import("../sig.zig");
+const std = @import("std");
+const builtin = @import("builtin");
+const sig = @import("../sig.zig");
+const tracy = @import("tracy");
 
 const Allocator = std.mem.Allocator;
 const Hash = sig.core.hash.Hash;
@@ -24,6 +26,21 @@ pub const Entry = struct {
     pub fn deinit(self: Entry, allocator: std.mem.Allocator) void {
         for (self.transactions) |tx| tx.deinit(allocator);
         allocator.free(self.transactions);
+    }
+
+    pub fn clone(self: Entry, allocator: std.mem.Allocator) Allocator.Error!Entry {
+        if (!builtin.is_test) @compileError("only for tests");
+        const transactions = try allocator.dupe(Transaction, self.transactions);
+        errdefer allocator.free(transactions);
+        for (transactions, 0..) |*txn, i| {
+            errdefer for (0..i) |j| transactions[j].deinit(allocator);
+            txn.* = try txn.clone(allocator);
+        }
+        return .{
+            .num_hashes = self.num_hashes,
+            .hash = self.hash,
+            .transactions = transactions,
+        };
     }
 };
 
@@ -87,6 +104,9 @@ pub fn verifyPoh(
         exit: ?*const std.atomic.Value(bool) = null,
     },
 ) (Allocator.Error || error{Exit})!bool {
+    const zone = tracy.Zone.init(@src(), .{ .name = "verifyPoh" });
+    defer zone.deinit();
+
     var current_hash = initial_hash;
 
     for (entries) |entry| {

@@ -328,7 +328,7 @@ pub const Vm = struct {
                             Instruction.neg => value: {
                                 if (version.disableNegation()) return error.UnsupportedInstruction;
                                 const signed: SignedInt = @bitCast(lhs);
-                                break :value @bitCast(-signed);
+                                break :value @bitCast(-%signed);
                             },
                             Instruction.arsh => value: {
                                 const signed: SignedInt = @bitCast(lhs);
@@ -510,7 +510,7 @@ pub const Vm = struct {
                 switch (access) {
                     .constant => registers.set(inst.dst, try self.memory_map.load(T, vaddr)),
                     .mutable => {
-                        const operand = switch (@as(u3, @truncate(@intFromEnum(opcode)))) {
+                        const operand = switch (@intFromEnum(opcode) & 0b111) {
                             Instruction.stx => registers.get(inst.src),
                             Instruction.st => extend(inst.imm),
                             else => unreachable,

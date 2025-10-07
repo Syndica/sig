@@ -20,260 +20,230 @@ const AccountFile = sig.accounts_db.accounts_file.AccountFile;
 const FileId = sig.accounts_db.accounts_file.FileId;
 const AccountRef = sig.accounts_db.index.AccountRef;
 const BufferPool = sig.accounts_db.buffer_pool.BufferPool;
+const SnapshotGenerationInfo = AccountsDB.SnapshotGenerationInfo;
 
 const Logger = sig.trace.log.Logger("accounts_db.manager");
 
 const DB_MANAGER_LOOP_MIN = sig.time.Duration.fromSecs(5);
 const ACCOUNT_FILE_SHRINK_THRESHOLD = 70; // shrink account files with more than X% dead bytes
 
-pub const ManagerLoopConfig = Manager.Config;
+pub const Config = struct {
+    /// default copied from Agave
+    slots_per_full_snapshot: u64 = 100_000,
+    /// default copied from Agave
+    slots_per_incremental_snapshot: u64 = 100,
+    /// 0 => no thread spawning
+    zstd_nb_workers: u31 = 0,
+    /// Enable/disable the clean (+ shrink & purge) cycle. Keep this disabled if you don't want to
+    /// overwrite previous slots.
+    /// Currently, we don't want to mutate the account files of older slots, as this
+    /// would invalidate the index made from the snapshot.
+    do_cleaning: bool = false,
+};
 
-/// periodically runs flush/clean/shrink, and generates snapshots.
-pub fn runLoop(db: *AccountsDB, config: Manager.Config) !void {
-    var manager = try Manager.init(db.allocator, db, config);
-    defer manager.deinit(db.allocator);
-    try manager.run(db.allocator);
-}
-
-pub const Manager = struct {
+/// Flushes a rooted slot to accountsdb, creating a new AccountFile, and doing some cleanup of old
+/// AccountFiles.
+pub fn onSlotRooted(
+    allocator: std.mem.Allocator,
     db: *AccountsDB,
-    config: Config,
-    timer: std.time.Timer,
-    flush_slots: std.ArrayListUnmanaged(Slot),
-    unclean_account_files: std.ArrayListUnmanaged(FileId),
-    shrink_account_files: std.AutoArrayHashMapUnmanaged(FileId, void),
-    delete_account_files: std.AutoArrayHashMapUnmanaged(FileId, void),
-    zstd_compressor: zstd.Compressor,
-    zstd_buffer: []u8,
-    prng: std.Random.DefaultPrng,
-    tmp_bank_fields: BankFields,
+    newly_rooted_slot: Slot,
+    lamports_per_signature: u64,
+) !void {
+    const zone = tracy.Zone.init(@src(), .{ .name = "onSlotRooted" });
+    defer zone.deinit();
+    errdefer zone.color(0xFF0000);
 
-    const sfba_size = 4096 * 4;
+    const config = db.on_root_config;
 
-    pub const Config = struct {
-        exit: *std.atomic.Value(bool),
-        slots_per_full_snapshot: u64,
-        slots_per_incremental_snapshot: u64,
-        zstd_nb_workers: u31 = 0,
+    {
+        var max_slots, var max_slots_lg = db.max_slots.writeWithLock();
+        defer max_slots_lg.unlock();
+        if (max_slots.rooted) |previously_rooted| {
+            if (newly_rooted_slot < previously_rooted) {
+                db.logger.err().logf(
+                    "onSlotRooted called on previously rooted slot ({} < {})",
+                    .{ newly_rooted_slot, previously_rooted },
+                );
+                return error.SlotNotFound;
+            }
+        }
+        max_slots.rooted = newly_rooted_slot;
+
+        if (max_slots.flushed) |previously_flushed| {
+            if (newly_rooted_slot < previously_flushed) {
+                db.logger.err().logf(
+                    "onSlotRooted called on previously flushed slot ({} < {})",
+                    .{ newly_rooted_slot, previously_flushed },
+                );
+            }
+        }
+    }
+
+    db.logger.info().logf("flushing slot {} to disk", .{newly_rooted_slot});
+
+    var failed: bool = false;
+    defer if (!failed) {
+        db.logger.info().logf("successfully flushed slot {} to disk", .{newly_rooted_slot});
+        tracy.frameMarkNamed("rooted slots flushed");
+    };
+    errdefer |err| {
+        db.logger.err().logf(
+            "failed to flushed slot {} to disk, err: {}",
+            .{ newly_rooted_slot, err },
+        );
+        failed = true;
+    }
+
+    // make a new AccountFile for our newly rooted slot, and "flush" the data to it
+    const file_id = try flushSlot(db, newly_rooted_slot);
+
+    {
+        var max_slots, var max_slots_lg = db.max_slots.writeWithLock();
+        defer max_slots_lg.unlock();
+        max_slots.flushed = newly_rooted_slot;
+    }
+
+    // when we last made a full snapshot, and when we last made an incremental snapshot (relative to
+    // the last full snapshot).
+    const latest_full_snapshot_slot, const latest_inc_snapshot = blk: {
+        const snapshot_gen_info = db.latest_snapshot_gen_info.readCopy() orelse
+            break :blk .{ 0, 0 };
+        const incremental_info = snapshot_gen_info.inc orelse
+            break :blk .{ snapshot_gen_info.full.slot, 0 };
+        break :blk .{ snapshot_gen_info.full.slot, incremental_info.slot };
     };
 
-    pub fn init(allocator: Allocator, db: *AccountsDB, config: Config) !Manager {
-        const timer = try std.time.Timer.start();
+    // TODO: this should be configurable - leaving disabled until snapshot generation is fixed
+    const snapshot_generation_enabled = builtin.is_test;
 
-        const zstd_compressor = try zstd.Compressor.init(.{
-            .nb_workers = config.zstd_nb_workers,
-        });
-        errdefer zstd_compressor.deinit();
+    const make_full_snapshot = snapshot_generation_enabled and newly_rooted_slot >=
+        latest_full_snapshot_slot + config.slots_per_full_snapshot;
+    const make_inc_snapshot = snapshot_generation_enabled and !make_full_snapshot and
+        newly_rooted_slot >=
+            latest_inc_snapshot + latest_full_snapshot_slot + config.slots_per_incremental_snapshot;
 
+    // TODO: might be a good idea to move snapshot creation to another thread
+    if (make_full_snapshot or make_inc_snapshot) {
+        // set up ztd compression for snapshot generation
         const zstd_buffer = try allocator.alloc(u8, zstd.Compressor.recommOutSize());
-        errdefer allocator.free(zstd_buffer);
+        defer allocator.free(zstd_buffer);
+        const zstd_compressor = try zstd.Compressor.init(.{ .nb_workers = config.zstd_nb_workers });
+        defer zstd_compressor.deinit();
 
         // TODO: get rid of this once `generateFullSnapshot` can actually
         // derive this data correctly by itdb.
         var prng = std.Random.DefaultPrng.init(1234);
-        const tmp_bank_fields = try BankFields.initRandom(allocator, prng.random(), 128);
-        errdefer tmp_bank_fields.deinit(allocator);
+        var tmp_bank_fields = try BankFields.initRandom(allocator, prng.random(), 128);
+        defer tmp_bank_fields.deinit(allocator);
 
-        return .{
-            .db = db,
-            .config = config,
-            .timer = timer,
-            .flush_slots = .empty,
-            .unclean_account_files = .empty,
-            .shrink_account_files = .empty,
-            .delete_account_files = .empty,
-            .zstd_compressor = zstd_compressor,
-            .zstd_buffer = zstd_buffer,
-            .prng = prng,
-            .tmp_bank_fields = tmp_bank_fields,
-        };
-    }
-
-    pub fn deinit(const_self: Manager, allocator: Allocator) void {
-        var self = const_self;
-        allocator.free(self.zstd_buffer);
-        self.zstd_compressor.deinit();
-        self.tmp_bank_fields.deinit(allocator);
-        self.flush_slots.deinit(allocator);
-        self.unclean_account_files.deinit(allocator);
-        self.shrink_account_files.deinit(allocator);
-        self.delete_account_files.deinit(allocator);
-    }
-
-    /// Continuously runs the manager loop
-    pub fn run(self: *Manager, allocator: Allocator) !void {
-        const zone = tracy.Zone.init(@src(), .{ .name = "accountsdb runManagerLoop" });
-        defer zone.deinit();
-
-        self.timer = try std.time.Timer.start();
-        while (!self.config.exit.load(.acquire)) {
-            try self.manage(allocator);
-            const elapsed = self.timer.lap();
-            if (elapsed < DB_MANAGER_LOOP_MIN.asNanos()) {
-                const delay = DB_MANAGER_LOOP_MIN.asNanos() - elapsed;
-                std.Thread.sleep(delay);
-            }
-        }
-    }
-
-    pub fn manage(self: *Manager, allocator: Allocator) !void {
-        tracy.frameMarkNamed("manager loop");
-
-        {
-            const unrooted_accounts, var unrooted_accounts_lg =
-                self.db.unrooted_accounts.readWithLock();
-            defer unrooted_accounts_lg.unlock();
-
-            // we're careful to load this value only after acquiring a read lock on the
-            // account cache, such as to avoid the edge case where:
-            // * we load the largest rooted slot value.
-            // * the account cache lock is acquired by a different thread.
-            // * another thread increments the largest rooted slot value while
-            //   we're waiting on the account cache lock.
-            // * we eventually acquire the lock, but have already read a now-stale
-            //   largest rooted slot value.
-            const root_slot = self.db.largest_rooted_slot.load(.monotonic);
-
-            // flush slots <= root slot
-            // TODO: account for forks when consensus is implemented
-            var unrooted_slot_iter = unrooted_accounts.keyIterator();
-            while (unrooted_slot_iter.next()) |unrooted_slot| {
-                if (unrooted_slot.* <= root_slot) {
-                    // NOTE: need to flush all references <= root_slot before we call clean
-                    // or things break by trying to clean unrooted references
-                    // NOTE: this might be too much in production, not sure
-                    try self.flush_slots.append(allocator, unrooted_slot.*);
-                }
-            }
-        }
-
-        const must_flush_slots = self.flush_slots.items.len > 0;
-        defer if (must_flush_slots) {
-            self.flush_slots.clearRetainingCapacity();
-            self.unclean_account_files.clearRetainingCapacity();
-            self.shrink_account_files.clearRetainingCapacity();
-        };
-
-        if (must_flush_slots) {
-            self.db.logger.debug()
-                .logf("flushing slots: min: {}...{}", std.mem.minMax(Slot, self.flush_slots.items));
-
-            // flush the slots
-            try self.unclean_account_files.ensureTotalCapacityPrecise(
-                allocator,
-                self.flush_slots.items.len,
+        if (make_full_snapshot) {
+            db.logger.info().logf(
+                "accountsdb[manager]: generating full snapshot at slot {d}",
+                .{newly_rooted_slot},
             );
 
-            var largest_flushed_slot: Slot = 0;
-            for (self.flush_slots.items) |flush_slot| {
-                const unclean_file_id = flushSlot(self.db, flush_slot) catch |err| {
-                    // flush fail = loss of account data on slot -- should never happen
-                    self.db.logger.err()
-                        .logf("flushing slot {d} error: {s}", .{ flush_slot, @errorName(err) });
-                    continue;
-                };
-                self.unclean_account_files.appendAssumeCapacity(unclean_file_id);
-                largest_flushed_slot = @max(largest_flushed_slot, flush_slot);
-            }
-            _ = self.db.largest_flushed_slot.fetchMax(largest_flushed_slot, .seq_cst);
-        }
-
-        const largest_flushed_slot = self.db.largest_flushed_slot.load(.seq_cst);
-
-        const latest_full_snapshot_slot_before_generation = blk: {
-            const maybe_latest_snapshot_info, var latest_snapshot_info_lg =
-                self.db.latest_snapshot_gen_info.readWithLock();
-            defer latest_snapshot_info_lg.unlock();
-            const latest_info = maybe_latest_snapshot_info.* orelse break :blk 0;
-            break :blk latest_info.full.slot;
-        };
-        if (largest_flushed_slot - latest_full_snapshot_slot_before_generation >=
-            self.config.slots_per_full_snapshot)
-        {
-            self.db.logger.info().logf(
-                "accountsdb[manager]: generating full snapshot for slot {d}",
-                .{largest_flushed_slot},
-            );
-            _ = try self.db.generateFullSnapshotWithCompressor(
-                self.zstd_compressor,
-                self.zstd_buffer,
+            const result = try db.generateFullSnapshotWithCompressor(
+                zstd_compressor,
+                zstd_buffer,
                 .{
-                    .target_slot = largest_flushed_slot,
-                    .bank_fields = &self.tmp_bank_fields,
-                    .lamports_per_signature = self.prng.random().int(u64),
+                    .target_slot = newly_rooted_slot,
+                    .bank_fields = &tmp_bank_fields,
+                    .lamports_per_signature = lamports_per_signature,
                     .old_snapshot_action = .delete_old,
                 },
             );
-        }
 
-        // we may have just generated a full snapshot,
-        // so we re-read the latest full snapshot slot
-        const latest_full_snapshot_slot, //
-        const latest_inc_snapshot_slot //
-        = blk: {
-            const maybe_latest_snapshot_info, var latest_snapshot_info_lg =
-                self.db.latest_snapshot_gen_info.readWithLock();
-            defer latest_snapshot_info_lg.unlock();
-            const latest_info = maybe_latest_snapshot_info.* orelse
-                break :blk .{largest_flushed_slot} ** 2;
-            const latest_info_inc = latest_info.inc orelse
-                break :blk .{ latest_info.full.slot, largest_flushed_slot };
-            break :blk .{
-                latest_info.full.slot,
-                latest_info_inc.slot,
+            const gen_info: *?SnapshotGenerationInfo, var gen_info_lg =
+                db.latest_snapshot_gen_info.writeWithLock();
+            defer gen_info_lg.unlock();
+
+            const prev = gen_info.*.?; // value set in generateFullSnapshotWithCompressor
+            std.debug.assert(newly_rooted_slot == prev.full.slot);
+
+            gen_info.* = .{
+                .full = .{
+                    .capitalization = result.capitalization,
+                    .hash = result.hash,
+                    .slot = newly_rooted_slot,
+                },
+                .inc = null,
             };
+        }
+
+        const has_made_full_snapshot = blk: {
+            const maybe_gen_info, var gen_info_lg = db.latest_snapshot_gen_info.readWithLock();
+            defer gen_info_lg.unlock();
+            break :blk maybe_gen_info.* != null;
         };
 
-        const slots_per_incremental_snapshot = self.config.slots_per_incremental_snapshot;
+        if (make_inc_snapshot and has_made_full_snapshot) {
+            std.debug.assert(!make_full_snapshot);
 
-        if (largest_flushed_slot - latest_inc_snapshot_slot >= slots_per_incremental_snapshot and
-            largest_flushed_slot - latest_full_snapshot_slot >= slots_per_incremental_snapshot)
-        {
-            self.db.logger.info().logf(
+            db.logger.info().logf(
                 "accountsdb[manager]: generating incremental snapshot from {d} to {d}",
-                .{ latest_full_snapshot_slot, largest_flushed_slot },
+                .{ latest_full_snapshot_slot, newly_rooted_slot },
             );
-            _ = try self.db.generateIncrementalSnapshotWithCompressor(
-                self.zstd_compressor,
-                self.zstd_buffer,
+            const result = try db.generateIncrementalSnapshotWithCompressor(
+                zstd_compressor,
+                zstd_buffer,
                 .{
-                    .target_slot = largest_flushed_slot,
-                    .bank_fields = &self.tmp_bank_fields,
-                    .lamports_per_signature = self.prng.random().int(u64),
+                    .target_slot = newly_rooted_slot,
+                    .bank_fields = &tmp_bank_fields,
+                    .lamports_per_signature = lamports_per_signature,
                     .old_snapshot_action = .delete_old,
                 },
             );
-        }
 
-        if (must_flush_slots) {
-            // clean the flushed slots account files
-            const clean_result = try cleanAccountFiles(
-                allocator,
-                self.db,
-                latest_full_snapshot_slot,
-                self.unclean_account_files.items,
-                &self.shrink_account_files,
-                &self.delete_account_files,
-            );
-            _ = clean_result;
-            // self.db.logger.debug().logf("clean_result: {any}", .{clean_result});
+            const maybe_gen_info: *?SnapshotGenerationInfo, var gen_info_lg =
+                db.latest_snapshot_gen_info.writeWithLock();
+            defer gen_info_lg.unlock();
 
-            // shrink any account files which have been cleaned
-            const shrink_result = try shrinkAccountFiles(
-                allocator,
-                self.db,
-                self.shrink_account_files.keys(),
-                &self.delete_account_files,
-            );
-            _ = shrink_result;
-            // self.db.logger.debug().logf("shrink_results: {any}", .{shrink_results});
+            const gen_info = &((maybe_gen_info.*) orelse
+                @panic("illegal state - snapshot_gen_info (previously non-null) is now null"));
 
-            // delete any empty account files
-            defer self.delete_account_files.clearRetainingCapacity();
-            try deleteAccountFiles(self.db, self.delete_account_files.keys());
+            const prev_inc = gen_info.inc.?; // value set in generateIncrementalSnapshotWithCompressor
+            std.debug.assert(newly_rooted_slot == prev_inc.slot);
+
+            gen_info.inc = .{
+                .capitalization = result.incremental_capitalization,
+                .hash = result.incremental_hash,
+                .slot = newly_rooted_slot,
+            };
         }
     }
-};
+
+    if (config.do_cleaning) {
+        // TODO: change APIs of {clean, shrink, delete}AccountFiles to take single accounts, and stop
+        // doing this.
+        // TODO: could use an arena allocator for this whole function
+        var to_shrink: std.AutoArrayHashMapUnmanaged(FileId, void) = .empty;
+        defer to_shrink.deinit(allocator);
+        var to_delete: std.AutoArrayHashMapUnmanaged(FileId, void) = .empty;
+        defer to_delete.deinit(allocator);
+
+        const clean_result = try cleanAccountFiles(
+            allocator,
+            db,
+            newly_rooted_slot,
+            &.{file_id},
+            &to_shrink,
+            &to_delete,
+        );
+        _ = clean_result;
+
+        // shrink any account files which have been cleaned
+        const shrink_result = try shrinkAccountFiles(
+            allocator,
+            db,
+            to_shrink.keys(),
+            &to_delete,
+        );
+        _ = shrink_result;
+
+        // delete any empty account files
+        try deleteAccountFiles(db, to_delete.keys());
+    }
+}
 
 /// flushes a slot account data from the cache onto disk, and updates the index
 /// note: this deallocates the []account and []pubkey data from the cache, as well
@@ -282,6 +252,7 @@ pub const Manager = struct {
 fn flushSlot(db: *AccountsDB, slot: Slot) !FileId {
     const zone = tracy.Zone.init(@src(), .{ .name = "accountsdb flushSlot" });
     defer zone.deinit();
+    errdefer zone.color(0xFF0000);
 
     var timer = try sig.time.Timer.start();
 
@@ -293,8 +264,7 @@ fn flushSlot(db: *AccountsDB, slot: Slot) !FileId {
         const unrooted_accounts, var unrooted_accounts_lg = db.unrooted_accounts.readWithLock();
         defer unrooted_accounts_lg.unlock();
 
-        const pubkeys_and_accounts = unrooted_accounts.get(slot) orelse
-            return error.SlotNotFound;
+        const pubkeys_and_accounts = unrooted_accounts.get(slot) orelse return error.SlotNotFound;
         break :blk pubkeys_and_accounts;
     };
 
@@ -328,7 +298,7 @@ fn flushSlot(db: *AccountsDB, slot: Slot) !FileId {
 
         offset.* = current_offset;
         // write the account to the file
-        const bytes_written = account.writeToBuf(&pubkey, account_file_buf.items);
+        const bytes_written = account.serialize(&pubkey, account_file_buf.items);
         current_offset += bytes_written;
 
         if (bytes_written != account.getSizeInFile()) unreachable;
@@ -360,10 +330,10 @@ fn flushSlot(db: *AccountsDB, slot: Slot) !FileId {
         var curr_ref: ?*AccountRef = head_ref.ref_ptr;
         const did_update = while (curr_ref) |ref| : (curr_ref = ref.next_ptr) {
             if (ref.slot == slot) {
-                ref.location = .{ .File = .{ .file_id = file_id, .offset = offset } };
+                ref.location = .{ .file = .{ .file_id = file_id, .offset = offset } };
                 // NOTE: we break here because we dont allow multiple account states per slot
                 // NOTE: if there are multiple states, then it will likely break during clean
-                // trying to access a .File location which is actually still .UnrootedMap (bc it
+                // trying to access a .file location which is actually still .unrooted_map (bc it
                 // was never updated)
                 break true;
             }
@@ -450,7 +420,7 @@ fn cleanAccountFiles(
         var account_iter = account_file.iterator(&db.buffer_pool);
         while (try account_iter.nextNoData()) |account| {
             defer account.deinit(db.allocator);
-            const pubkey = account.pubkey().*;
+            const pubkey = account.store_info.pubkey;
 
             // check if already cleaned
             if (try cleaned_pubkeys.fetchPut(pubkey, {}) != null) continue;
@@ -495,7 +465,7 @@ fn cleanAccountFiles(
 
                     // NOTE: we should never clean non-rooted references
                     // (ie, should always be in a file)
-                    const ref_file_id = ref.location.File.file_id;
+                    const ref_file_id = ref.location.file.file_id;
                     const ref_slot = ref.slot;
 
                     const accounts_total_count, const accounts_dead_count = blk: {
@@ -722,17 +692,17 @@ fn shrinkAccountFiles(
         while (try account_iter.nextNoData()) |*account_in_file| {
             defer account_in_file.deinit(db.allocator);
 
-            const pubkey = account_in_file.pubkey();
+            const pubkey = account_in_file.store_info.pubkey;
             // account is dead if it is not in the index; dead accounts
             // are removed from the index during cleaning
-            const is_alive = db.account_index.exists(pubkey, shrink_account_file.slot);
+            const is_alive = db.account_index.exists(&pubkey, shrink_account_file.slot);
             // NOTE: there may be duplicate state in account files which we must account for
-            const is_not_duplicate = !alive_pubkeys.contains(pubkey.*);
+            const is_not_duplicate = !alive_pubkeys.contains(pubkey);
             if (is_alive and is_not_duplicate) {
                 accounts_alive_size += account_in_file.getSizeInFile();
                 accounts_alive_count += 1;
                 is_alive_flags.appendAssumeCapacity(true);
-                alive_pubkeys.putAssumeCapacity(pubkey.*, {});
+                alive_pubkeys.putAssumeCapacity(pubkey, {});
             } else {
                 accounts_dead_size += account_in_file.getSizeInFile();
                 accounts_dead_count += 1;
@@ -784,7 +754,7 @@ fn shrinkAccountFiles(
             if (is_alive) {
                 try account_file_buf.resize(account.getSizeInFile());
                 offsets.appendAssumeCapacity(offset);
-                offset += account.writeToBuf(account_file_buf.items);
+                offset += account.serialize(account_file_buf.items);
                 try new_file.writeAll(account_file_buf.items);
             }
         }
@@ -807,9 +777,8 @@ fn shrinkAccountFiles(
         }
 
         // update the references
-        const new_reference_block, const new_global_index = try db.account_index
-            .reference_manager.allocOrExpand(accounts_alive_count);
-
+        const new_reference_block =
+            try db.account_index.reference_manager.allocOrExpand(accounts_alive_count);
         account_iter.reset();
         var offset_index: u64 = 0;
         for (is_alive_flags.items) |is_alive| {
@@ -818,13 +787,15 @@ fn shrinkAccountFiles(
             defer account.deinit(db.allocator);
             if (is_alive) {
                 // find the slot in the reference list
-                const pubkey = account.pubkey();
+                const pubkey = &account.store_info.pubkey;
 
-                const ref_parent, var ref_lg =
-                    db.account_index.getReferenceParent(pubkey, slot) catch |err| switch (err) {
-                        // SAFE: we know the pubkey exists in the index because its alive
-                        error.SlotNotFound, error.PubkeyNotFound => unreachable,
-                    };
+                const ref_parent, var ref_lg = db.account_index.getReferenceParent(
+                    pubkey,
+                    slot,
+                ) catch |err| switch (err) {
+                    // SAFE: we know the pubkey exists in the index because its alive
+                    error.SlotNotFound, error.PubkeyNotFound => unreachable,
+                };
                 defer ref_lg.unlock();
                 const ptr_to_ref_field = switch (ref_parent) {
                     .head => |head| &head.ref_ptr,
@@ -834,7 +805,7 @@ fn shrinkAccountFiles(
                 // copy + update the values
                 const new_ref_ptr = &new_reference_block[offset_index];
                 new_ref_ptr.* = ptr_to_ref_field.*.*;
-                new_ref_ptr.location.File = .{
+                new_ref_ptr.location.file = .{
                     .offset = offsets.items[offset_index],
                     .file_id = new_file_id,
                 };
@@ -865,7 +836,6 @@ fn shrinkAccountFiles(
                     .items = new_reference_block,
                     .capacity = new_reference_block.len,
                 },
-                .global_index = new_global_index,
             };
         }
 
@@ -1158,7 +1128,7 @@ test "clean to shrink account file works with zero-lamports" {
     // slot 500 will be fully dead because its all zero lamports
     try std.testing.expectEqual(1, delete_account_files.count());
 
-    var account = try accounts_db.getAccountLatest(&pubkey_remain) orelse unreachable;
+    var account = try accounts_db.getAccountLatest(allocator, &pubkey_remain) orelse unreachable;
     defer account.deinit(allocator);
 }
 
@@ -1504,6 +1474,265 @@ test "shrink account file works" {
     }
 
     // last account ref should still be accessible
-    const account = try accounts_db.getAccountLatest(&pubkey_remain) orelse unreachable;
+    const account = try accounts_db.getAccountLatest(allocator, &pubkey_remain) orelse unreachable;
     account.deinit(allocator);
+}
+
+test "onSlotRooted basic" {
+    const allocator = std.testing.allocator;
+    const logger: Logger = .noop;
+    var prng = std.Random.DefaultPrng.init(5083);
+    const random = prng.random();
+
+    var tmp_dir_root = std.testing.tmpDir(.{});
+    defer tmp_dir_root.cleanup();
+    const snapshot_dir = tmp_dir_root.dir;
+
+    var db = try AccountsDB.init(.{
+        .allocator = allocator,
+        .logger = .from(logger),
+        .snapshot_dir = snapshot_dir,
+        .geyser_writer = null,
+        .gossip_view = null,
+        .index_allocation = .ram,
+        .number_of_index_shards = 4,
+        .on_root_config = .{ .do_cleaning = true },
+    });
+    defer db.deinit();
+
+    const pk = Pubkey.initRandom(random);
+
+    var account: sig.runtime.AccountSharedData = .EMPTY;
+    account.lamports = 1;
+
+    // interleave put + root
+    try db.putAccount(149, pk, account);
+    try onSlotRooted(allocator, &db, 149, 5000);
+    try db.putAccount(150, pk, account);
+    try onSlotRooted(allocator, &db, 150, 5000);
+
+    // put some + root some
+    try db.putAccount(151, pk, account);
+    try db.putAccount(152, pk, account);
+    try db.putAccount(153, pk, account);
+    try onSlotRooted(allocator, &db, 151, 5000);
+    try onSlotRooted(allocator, &db, 152, 5000);
+    try onSlotRooted(allocator, &db, 153, 5000);
+
+    // check failure cases
+    for (&[_]u64{
+        154, // no accounts are in 154 yet
+        153, 150, // we already flushed these!
+        1, 0, // nope
+    }) |slot| {
+        try std.testing.expectError(
+            error.SlotNotFound,
+            onSlotRooted(allocator, &db, slot, 5000),
+        );
+    }
+
+    var accounts_dir = try snapshot_dir.openDir("accounts", .{ .iterate = true });
+    defer accounts_dir.close();
+
+    // the last slot should be the only one that remains after onSlotRooted(last_slot)
+    var iter = accounts_dir.iterate();
+    try std.testing.expectEqualStrings("153.5", (try iter.next()).?.name);
+    try std.testing.expectEqual(null, try iter.next());
+}
+
+test "onSlotRooted zero_lamports" {
+    const allocator = std.testing.allocator;
+    const logger: Logger = .noop;
+    var prng = std.Random.DefaultPrng.init(5083);
+    const random = prng.random();
+
+    var tmp_dir_root = std.testing.tmpDir(.{});
+    defer tmp_dir_root.cleanup();
+    const snapshot_dir = tmp_dir_root.dir;
+
+    var db = try AccountsDB.init(.{
+        .allocator = allocator,
+        .logger = .from(logger),
+        .snapshot_dir = snapshot_dir,
+        .geyser_writer = null,
+        .gossip_view = null,
+        .index_allocation = .ram,
+        .number_of_index_shards = 4,
+        .on_root_config = .{ .do_cleaning = true },
+    });
+    defer db.deinit();
+
+    const pk = Pubkey.initRandom(random);
+    const account: sig.runtime.AccountSharedData = .EMPTY;
+
+    // interleave put + root
+    try db.putAccount(149, pk, account);
+    try onSlotRooted(allocator, &db, 149, 5000);
+
+    var accounts_dir = try snapshot_dir.openDir("accounts", .{ .iterate = true });
+    defer accounts_dir.close();
+
+    var iter = accounts_dir.iterate();
+    // all files containing just zero lamport accounts should be deleted
+    try std.testing.expectEqual(null, try iter.next());
+}
+
+test "onSlotRooted shrink and delete" {
+    const allocator = std.testing.allocator;
+    const logger: Logger = .noop;
+    var prng = std.Random.DefaultPrng.init(5083);
+    const random = prng.random();
+
+    var tmp_dir_root = std.testing.tmpDir(.{});
+    defer tmp_dir_root.cleanup();
+    const snapshot_dir = tmp_dir_root.dir;
+
+    var db = try AccountsDB.init(.{
+        .allocator = allocator,
+        .logger = .from(logger),
+        .snapshot_dir = snapshot_dir,
+        .geyser_writer = null,
+        .gossip_view = null,
+        .index_allocation = .ram,
+        .number_of_index_shards = 4,
+        .on_root_config = .{ .do_cleaning = true },
+    });
+    defer db.deinit();
+
+    const accounts = try allocator.alloc(sig.runtime.AccountSharedData, 10);
+    defer allocator.free(accounts);
+    for (accounts) |*account| {
+        account.* = sig.runtime.AccountSharedData.EMPTY;
+        account.lamports = 1;
+    }
+    const pubkeys = try allocator.alloc(Pubkey, 10);
+    defer allocator.free(pubkeys);
+    for (pubkeys) |*pubkey| pubkey.* = Pubkey.initRandom(random);
+
+    // put all accounts
+    {
+        for (accounts, pubkeys) |account, pubkey| {
+            try db.putAccount(149, pubkey, account);
+        }
+        try onSlotRooted(allocator, &db, 149, 5000);
+    }
+
+    const size_149_before = blk: {
+        var accounts_dir = try snapshot_dir.openDir("accounts", .{ .iterate = true });
+        defer accounts_dir.close();
+        const stat = try accounts_dir.statFile("149.1");
+        break :blk stat.size;
+    };
+
+    // overwrite 90% of accounts in next slot
+    {
+        for (accounts[0..9], pubkeys[0..9]) |account, pubkey| {
+            try db.putAccount(150, pubkey, account);
+        }
+        try onSlotRooted(allocator, &db, 150, 5000);
+    }
+
+    const size_149_after = blk: {
+        var accounts_dir = try snapshot_dir.openDir("accounts", .{ .iterate = true });
+        defer accounts_dir.close();
+        const stat = try accounts_dir.statFile("149.3"); // shrinking a file means a new file id
+        break :blk stat.size;
+    };
+
+    // slot 149 has been shrunk!
+    try std.testing.expect(size_149_after < size_149_before);
+
+    // overwrite 100% of accounts in both previous slots
+    {
+        for (accounts, pubkeys) |account, pubkey| {
+            try db.putAccount(151, pubkey, account);
+        }
+        try onSlotRooted(allocator, &db, 151, 5000);
+    }
+
+    // slot 150 and 149 are gone
+    var accounts_dir = try snapshot_dir.openDir("accounts", .{ .iterate = true });
+    defer accounts_dir.close();
+    var iter = accounts_dir.iterate();
+    try std.testing.expectEqualStrings("151.4", (try iter.next()).?.name);
+    try std.testing.expectEqual(null, try iter.next());
+}
+
+test "snapshot generation happens without error" {
+    const allocator = std.testing.allocator;
+    const logger: Logger = .noop;
+    var prng = std.Random.DefaultPrng.init(5083);
+    const random = prng.random();
+
+    var tmp_dir_root = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp_dir_root.cleanup();
+    const snapshot_dir = tmp_dir_root.dir;
+
+    var db = try AccountsDB.init(.{
+        .allocator = allocator,
+        .logger = .from(logger),
+        .snapshot_dir = snapshot_dir,
+        .geyser_writer = null,
+        .gossip_view = null,
+        .index_allocation = .ram,
+        .number_of_index_shards = 4,
+        .on_root_config = .{ .do_cleaning = true, .slots_per_full_snapshot = 1 },
+    });
+    defer db.deinit();
+
+    const accounts = try allocator.alloc(sig.runtime.AccountSharedData, 10);
+    defer allocator.free(accounts);
+    for (accounts) |*account| {
+        account.* = sig.runtime.AccountSharedData.EMPTY;
+        account.lamports = 1;
+    }
+    const pubkeys = try allocator.alloc(Pubkey, 10);
+    defer allocator.free(pubkeys);
+    for (pubkeys) |*pubkey| pubkey.* = Pubkey.initRandom(random);
+
+    // put all accounts
+    for (accounts, pubkeys) |account, pubkey| {
+        try db.putAccount(149, pubkey, account);
+    }
+
+    // generate full snapshot
+    try onSlotRooted(
+        allocator,
+        &db,
+        149,
+        5000,
+    );
+
+    for (accounts, pubkeys) |account, pubkey| try db.putAccount(150, pubkey, account);
+    for (accounts, pubkeys) |account, pubkey| try db.putAccount(151, pubkey, account);
+    for (accounts, pubkeys) |account, pubkey| try db.putAccount(152, pubkey, account);
+    for (accounts, pubkeys) |account, pubkey| try db.putAccount(153, pubkey, account);
+    for (accounts, pubkeys) |account, pubkey| try db.putAccount(154, pubkey, account);
+
+    // generate incremental
+    db.on_root_config = .{
+        .do_cleaning = true,
+        .slots_per_full_snapshot = 100,
+        .slots_per_incremental_snapshot = 1,
+    };
+    try onSlotRooted(allocator, &db, 150, 5000);
+
+    var found_inc = false;
+    var found_full = false;
+
+    var iter = snapshot_dir.iterate();
+    while (try iter.next()) |obj| {
+        if (obj.kind != .file) continue;
+
+        if (std.mem.startsWith(u8, obj.name, "incremental-snapshot-")) {
+            found_inc = true;
+        } else if (std.mem.startsWith(u8, obj.name, "snapshot-")) {
+            found_full = true;
+        } else {
+            return error.UnexpectedFileFound;
+        }
+    }
+
+    try std.testing.expect(found_inc);
+    try std.testing.expect(found_full);
 }

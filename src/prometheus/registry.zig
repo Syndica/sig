@@ -134,7 +134,10 @@ pub fn Registry(comptime options: RegistryOptions) type {
             const name = prefix ++ local_name;
             metric.* = switch (MetricType.metric_type) {
                 .counter => try self.getOrCreateCounter(name),
-                .variant_counter => try self.getOrCreateVariantCounter(name, MetricType.Type),
+                .variant_counter => try self.getOrCreateVariantCounter(
+                    name,
+                    MetricType.ObservedType,
+                ),
                 .gauge => try self.getOrCreateGauge(name, MetricType.Data),
                 .gauge_fn => @compileError("GaugeFn does not support auto-init."),
                 .histogram => try self
@@ -229,12 +232,12 @@ pub fn Registry(comptime options: RegistryOptions) type {
         pub fn getOrCreateVariantCounter(
             self: *Self,
             name: []const u8,
-            ErrorSet: type,
-        ) GetMetricError!*VariantCounter(ErrorSet) {
+            Observed: type,
+        ) GetMetricError!*VariantCounter(Observed) {
             return self.getOrCreateMetric(
                 name,
-                VariantCounter(ErrorSet),
-                VariantCounter(ErrorSet){},
+                VariantCounter(Observed),
+                VariantCounter(Observed){},
             );
         }
 

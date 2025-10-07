@@ -173,27 +173,20 @@ pub fn resolveTransaction(
     errdefer allocator.free(instructions);
     for (message.instructions, instructions) |input_ix, *output_ix| {
         var account_metas = InstructionInfo.AccountMetas{};
-        var seen = std.bit_set.ArrayBitSet(usize, 256).initEmpty();
-        for (input_ix.account_indexes, 0..) |index, i| {
+        var dedupe_map: [InstructionInfo.MAX_ACCOUNT_METAS]u8 = @splat(0xff);
+        for (input_ix.account_indexes, 0..) |index_in_transaction, i| {
             // find first usage of this account in this instruction
-            const index_in_callee = if (seen.isSet(index))
-                for (input_ix.account_indexes[0..i], 0..) |prior_index, j| {
-                    if (prior_index == index) break j;
-                } else unreachable
-            else
-                i;
-            seen.set(index);
+            if (dedupe_map[index_in_transaction] == 0xff)
+                dedupe_map[index_in_transaction] = @intCast(i);
 
             // expand the account metadata
-            if (index >= accounts.len) return error.InvalidAccountIndex;
-            const account = accounts.get(index);
+            if (index_in_transaction >= accounts.len) return error.InvalidAccountIndex;
+            const account = accounts.get(index_in_transaction);
             (account_metas.addOne() catch break).* = .{
                 .pubkey = account.pubkey,
                 .is_signer = account.is_signer,
                 .is_writable = account.is_writable,
-                .index_in_transaction = index,
-                .index_in_caller = index,
-                .index_in_callee = @intCast(index_in_callee),
+                .index_in_transaction = index_in_transaction,
             };
         }
 
@@ -206,6 +199,7 @@ pub fn resolveTransaction(
                 .index_in_transaction = input_ix.program_index,
             },
             .account_metas = account_metas,
+            .dedupe_map = dedupe_map,
             .instruction_data = input_ix.data,
         };
     }
@@ -246,7 +240,8 @@ fn resolveLookupTableAccounts(
 
     // handle lookup table accounts
     for (address_lookups) |lookup| {
-        const table = try getLookupTable(account_reader, lookup.table_address);
+        const table = try getLookupTable(allocator, account_reader, lookup.table_address);
+        defer allocator.free(table.addresses);
 
         if (table.meta.status(slot, slot_hashes) == .Deactivated) {
             return error.AddressLookupTableNotFound;
@@ -281,6 +276,7 @@ fn resolveLookupTableAccounts(
 }
 
 fn getLookupTable(
+    allocator: std.mem.Allocator,
     account_reader: SlotAccountReader,
     table_address: Pubkey,
 ) !AddressLookupTable {
@@ -288,9 +284,9 @@ fn getLookupTable(
     // it against the current slot's ancestors. This won't be usable
     // until consensus is implemented in replay, so it's not
     // implemented yet.
-    const account = try account_reader.get(table_address) orelse
+    const account = try account_reader.get(allocator, table_address) orelse
         return error.AddressLookupTableNotFound;
-    defer account.deinit(account_reader.allocator());
+    defer account.deinit(allocator);
 
     if (!account.owner.equals(&sig.runtime.program.address_lookup_table.ID)) {
         return error.InvalidAddressLookupTableOwner;
@@ -304,7 +300,8 @@ fn getLookupTable(
     const account_bytes = buf[0..account.data.len()];
     account.data.readAll(account_bytes);
 
-    return AddressLookupTable.deserialize(account_bytes) catch {
+    const table = AddressLookupTable.deserializeOwned(allocator, account_bytes) catch |err| {
+        if (err == error.OutOfMemory) return err;
         return error.InvalidAddressLookupTableData;
     };
 
@@ -312,6 +309,7 @@ fn getLookupTable(
     // according to agave's implementation. see here, where agave
     // discards the value:
     // https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/runtime/src/bank/address_lookup_table.rs#L36
+    return table;
 }
 
 test resolveBatch {
@@ -320,8 +318,6 @@ test resolveBatch {
     // concisely represents all the expected account metas within an InstructionInfo
     const ExpectedAccountMetas = struct {
         index_in_transaction: []const u8,
-        index_in_caller: []const u8,
-        index_in_callee: []const u16,
         is_signer: []const u8,
         is_writable: []const u8,
     };
@@ -429,15 +425,11 @@ test resolveBatch {
     const expected_account_metas = [2]ExpectedAccountMetas{
         .{
             .index_in_transaction = tx.msg.instructions[0].account_indexes,
-            .index_in_caller = tx.msg.instructions[0].account_indexes,
-            .index_in_callee = &.{ 0, 1, 2, 3, 4, 5, 6, 7 },
             .is_signer = &.{ 1, 1, 1, 1, 0, 0, 0, 0 },
             .is_writable = &.{ 1, 1, 0, 0, 1, 1, 0, 0 },
         },
         .{
             .index_in_transaction = tx.msg.instructions[1].account_indexes,
-            .index_in_caller = tx.msg.instructions[1].account_indexes,
-            .index_in_callee = &.{ 0, 1, 0, 3, 4, 5, 6, 7 },
             .is_signer = &.{ 1, 0, 1, 0, 0, 0, 0, 0 },
             .is_writable = &.{ 0, 0, 0, 0, 1, 0, 0, 0 },
         },
@@ -495,24 +487,18 @@ test resolveBatch {
             input_ix.account_indexes,
             output_ix.account_metas.slice(),
             expect.index_in_transaction,
-            expect.index_in_caller,
-            expect.index_in_callee,
             expect.is_signer,
             expect.is_writable,
         ) |
             input_index,
             output_meta,
             index_in_transaction,
-            index_in_caller,
-            index_in_callee,
             is_signer,
             is_writable,
         | {
             const address = resolved.accounts[input_index].address;
             try std.testing.expectEqual(address, output_meta.pubkey);
             try std.testing.expectEqual(index_in_transaction, output_meta.index_in_transaction);
-            try std.testing.expectEqual(index_in_caller, output_meta.index_in_caller);
-            try std.testing.expectEqual(index_in_callee, output_meta.index_in_callee);
             try std.testing.expectEqual(is_signer != 0, output_meta.is_signer);
             try std.testing.expectEqual(is_writable != 0, output_meta.is_writable);
         }
@@ -569,7 +555,7 @@ test getLookupTable {
 
         try std.testing.expectError(
             error.InvalidAddressLookupTableOwner,
-            getLookupTable(account_reader, pubkey),
+            getLookupTable(allocator, account_reader, pubkey),
         );
     }
 
@@ -588,7 +574,7 @@ test getLookupTable {
 
         try std.testing.expectError(
             error.InvalidAddressLookupTableData,
-            getLookupTable(account_reader, pubkey),
+            getLookupTable(allocator, account_reader, pubkey),
         );
     }
 
@@ -607,7 +593,7 @@ test getLookupTable {
 
         try std.testing.expectError(
             error.InvalidAddressLookupTableData,
-            getLookupTable(account_reader, pubkey),
+            getLookupTable(allocator, account_reader, pubkey),
         );
     }
 
@@ -620,7 +606,8 @@ test getLookupTable {
 
         try put(&map, pubkey, lookup_table);
 
-        const loaded_lookup_table = try getLookupTable(account_reader, pubkey);
+        const loaded_lookup_table = try getLookupTable(allocator, account_reader, pubkey);
+        defer allocator.free(loaded_lookup_table.addresses);
 
         try std.testing.expectEqual(lookup_table.meta, loaded_lookup_table.meta);
         try std.testing.expect(lookup_table.addresses[0].equals(&loaded_lookup_table.addresses[0]));

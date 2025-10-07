@@ -32,8 +32,9 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
             logger: database.interface.Logger,
             path: []const u8,
         ) OpenError!Self {
-            logger.info().log("Initializing RocksDB");
+            logger.info().log("Opening RocksDB for ledger");
             const owned_path = try std.fmt.allocPrintZ(allocator, "{s}/rocksdb", .{path});
+            errdefer allocator.free(owned_path);
             try std.fs.cwd().makePath(owned_path);
 
             // allocate cf descriptions
@@ -60,6 +61,7 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
                     column_family_descriptions,
                 },
             );
+            errdefer db.deinit();
             defer allocator.free(cfs);
 
             // allocate handle slice
@@ -351,9 +353,12 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
 }
 
 fn callRocks(logger: Logger, comptime func: anytype, args: anytype) ReturnType(@TypeOf(func)) {
-    var err_str: ?rocks.Data = null;
-    return @call(.auto, func, args ++ .{&err_str}) catch |e| {
-        logger.err().logf("{} - {s}", .{ e, err_str.? });
+    var maybe_err_str: ?rocks.Data = null;
+    return @call(.auto, func, args ++ .{&maybe_err_str}) catch |e| {
+        if (maybe_err_str) |err_str|
+            logger.err().logf("{} - {s}", .{ e, err_str })
+        else
+            logger.err().logf("{}", .{e});
         return e;
     };
 }

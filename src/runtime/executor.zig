@@ -54,7 +54,7 @@ pub fn pushInstruction(
     tc: *TransactionContext,
     initial_instruction_info: InstructionInfo,
 ) InstructionError!void {
-    var instruction_info = initial_instruction_info;
+    const instruction_info = initial_instruction_info;
     const program_id = instruction_info.program_meta.pubkey;
 
     // [agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/program-runtime/src/invoke_context.rs#L245-L283
@@ -68,28 +68,14 @@ pub fn pushInstruction(
         }
     }
 
-    // Push the instruction onto the stack and trace, creating the instruction context
-    // [agave] https://github.com/anza-xyz/solana-sdk/blob/e1554f4067329a0dcf5035120ec6a06275d3b9ec/transaction-context/src/lib.rs#L366-L403
-    // [fd] https://github.com/firedancer-io/firedancer/blob/dfadb7d33683aa8711dfe837282ad0983d3173a0/src/flamenco/runtime/fd_executor.c#L975-L976
-
-    // Set initial account lamports before pushing the instruction context
-    instruction_info.initial_account_lamports = try sumAccountLamports(
-        tc,
-        instruction_info.account_metas.constSlice(),
-    );
-
-    if (tc.instruction_stack.len > 0) {
-        const parent = &tc.instruction_stack.buffer[tc.instruction_stack.len - 1];
-        const initial_lamports = parent.ixn_info.initial_account_lamports;
-        const current_lamports =
-            try sumAccountLamports(tc, parent.ixn_info.account_metas.constSlice());
-        if (initial_lamports != current_lamports) return InstructionError.UnbalancedInstruction;
+    // Push to transaction context():
+    // [agave] https://github.com/anza-xyz/agave/blob/v3.0/transaction-context/src/lib.rs#L420
+    if (tc.instruction_stack.len > 0 and tc.accounts_lamport_delta != 0) {
+        return InstructionError.UnbalancedInstruction;
     }
-
     if (tc.instruction_trace.len >= tc.instruction_trace.capacity()) {
         return InstructionError.MaxInstructionTraceLengthExceeded;
     }
-
     if (tc.instruction_stack.len >= tc.instruction_stack.capacity()) {
         return InstructionError.CallDepth;
     }
@@ -114,6 +100,8 @@ pub fn pushInstruction(
         if (!account.account.owner.equals(&sig.runtime.sysvar.OWNER_ID)) {
             return InstructionError.InvalidAccountOwner;
         }
+
+        // store_current_index_checked()
         const data = account.account.data;
         if (data.len < 2) return InstructionError.AccountDataTooSmall;
         const last_index = data.len - 2;
@@ -138,34 +126,23 @@ fn processNextInstruction(
             return InstructionError.UnsupportedProgramId;
         defer program_account.release();
 
-        if (ids.NATIVE_LOADER_ID.equals(&program_account.account.owner))
+        const program_key = program_account.pubkey.base58String().constSlice();
+        if (ids.NATIVE_LOADER_ID.equals(&program_account.account.owner) or
+            program.PRECOMPILE_ENTRYPOINTS.get(program_key) != null)
             break :blk .{ program_account.pubkey, program_account.pubkey };
 
         const owner_id = program_account.account.owner;
-        if (ic.tc.feature_set.active(.remove_accounts_executable_flag_checks, ic.tc.slot)) {
-            if (bpf_loader_program.v1.ID.equals(&owner_id) or
-                bpf_loader_program.v2.ID.equals(&owner_id) or
-                bpf_loader_program.v3.ID.equals(&owner_id) or
-                bpf_loader_program.v4.ID.equals(&owner_id))
-                break :blk .{ owner_id, program_account.pubkey };
-            return InstructionError.UnsupportedProgramId;
-        }
+        if (bpf_loader_program.v1.ID.equals(&owner_id) or
+            bpf_loader_program.v2.ID.equals(&owner_id) or
+            bpf_loader_program.v3.ID.equals(&owner_id) or
+            bpf_loader_program.v4.ID.equals(&owner_id))
+            break :blk .{ owner_id, program_account.pubkey };
 
-        break :blk .{ owner_id, program_account.pubkey };
+        return InstructionError.UnsupportedProgramId;
     };
-
-    // Lookup native program function
-    // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/svm/src/message_processor.rs#L72-L75
-    // [fd] https://github.com/firedancer-io/firedancer/blob/dfadb7d33683aa8711dfe837282ad0983d3173a0/src/flamenco/runtime/fd_executor.c#L1150-L1159
-    const move_verify_precompiles_to_svm = ic.tc.feature_set.active(
-        .move_precompile_verification_to_svm,
-        ic.tc.slot,
-    );
 
     const maybe_precompile_fn =
         program.PRECOMPILE_ENTRYPOINTS.get(native_program_id.base58String().slice());
-
-    if (!move_verify_precompiles_to_svm and maybe_precompile_fn != null) return;
 
     const maybe_native_program_fn = maybe_precompile_fn orelse blk: {
         const native_program_fn = program.PROGRAM_ENTRYPOINTS.get(
@@ -195,7 +172,7 @@ fn processNextInstruction(
             try stable_log.programFailure(
                 ic.tc,
                 program_id,
-                sig.vm.getExecutionErrorMessage(err),
+                err,
             );
         return err;
     };
@@ -219,21 +196,16 @@ pub fn popInstruction(
 
     // [agave] https://github.com/anza-xyz/solana-sdk/blob/e1554f4067329a0dcf5035120ec6a06275d3b9ec/transaction-context/src/lib.rs#L411-L426
     const unbalanced_instruction = blk: {
-        const ic = &tc.instruction_stack.buffer[tc.instruction_stack.len - 1];
+        const ic = try tc.getCurrentInstructionContext();
 
         // Check program account has no outstanding borrows
-        const program_account = ic.borrowProgramAccount() catch {
-            return InstructionError.AccountBorrowOutstanding;
+        const program_account = ic.borrowProgramAccount() catch |err| switch (err) {
+            error.AccountBorrowFailed => return InstructionError.AccountBorrowOutstanding,
+            else => |e| return e,
         };
         program_account.release();
 
-        const initial_lamports = ic.ixn_info.initial_account_lamports;
-        const current_lamports = try sumAccountLamports(
-            tc,
-            ic.ixn_info.account_metas.constSlice(),
-        );
-
-        break :blk (initial_lamports != current_lamports);
+        break :blk tc.accounts_lamport_delta != 0;
     };
 
     _ = tc.instruction_stack.pop();
@@ -253,125 +225,81 @@ pub fn prepareCpiInstructionInfo(
 ) (error{OutOfMemory} || InstructionError)!InstructionInfo {
     const caller = try tc.getCurrentInstructionContext();
 
-    var deduped_account_metas = std.BoundedArray(
-        InstructionInfo.AccountMeta,
-        InstructionInfo.MAX_ACCOUNT_METAS,
-    ){};
-    var deduped_indexes = std.BoundedArray(
-        usize,
-        InstructionInfo.MAX_ACCOUNT_METAS,
-    ){};
+    var dedupe_map: [InstructionInfo.MAX_ACCOUNT_METAS]u8 = @splat(0xff);
+    var deduped_account_metas = InstructionInfo.AccountMetas{};
 
-    // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L337-L386
-    for (callee.accounts, 0..) |account, index| {
+    for (callee.accounts) |account| {
         const index_in_transaction = tc.getAccountIndex(account.pubkey) orelse {
             try tc.log("Instruction references an unknown account {}", .{account.pubkey});
             return InstructionError.MissingAccount;
         };
 
-        const maybe_duplicate_index: ?usize = blk: {
-            for (deduped_account_metas.slice(), 0..) |*deduped_meta, deduped_index| {
-                if (deduped_meta.index_in_transaction == index_in_transaction) {
-                    break :blk deduped_index;
-                }
-            }
-            break :blk null;
-        };
-
-        if (maybe_duplicate_index) |duplicate_index| {
-            deduped_indexes.appendAssumeCapacity(duplicate_index);
-            const deduped_meta = &deduped_account_metas.buffer[duplicate_index];
-            deduped_meta.is_signer = deduped_meta.is_signer or account.is_signer;
-            deduped_meta.is_writable = deduped_meta.is_writable or account.is_writable;
+        const index_in_callee_ptr = &dedupe_map[index_in_transaction];
+        if (index_in_callee_ptr.* < deduped_account_metas.len) {
+            const prev = &deduped_account_metas.slice()[index_in_callee_ptr.*];
+            prev.is_signer = prev.is_signer or account.is_signer;
+            prev.is_writable = prev.is_writable or account.is_writable;
+            deduped_account_metas.appendAssumeCapacity(prev.*);
         } else {
-            const index_in_caller = caller.ixn_info.getAccountMetaIndex(account.pubkey) orelse {
-                try tc.log("Instruction references an unknown account {}", .{account.pubkey});
-                return InstructionError.MissingAccount;
-            };
-
-            deduped_indexes.appendAssumeCapacity(deduped_account_metas.len);
+            index_in_callee_ptr.* = @intCast(deduped_account_metas.len);
             deduped_account_metas.appendAssumeCapacity(.{
                 .pubkey = account.pubkey,
                 .index_in_transaction = index_in_transaction,
-                .index_in_caller = index_in_caller,
-                .index_in_callee = @intCast(index),
                 .is_signer = account.is_signer,
                 .is_writable = account.is_writable,
             });
         }
     }
 
-    // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L386-L415
-    for (deduped_account_metas.slice()) |callee_account| {
-        // Borrow the account via the caller context
-        const caller_account =
-            try caller.borrowInstructionAccount(callee_account.index_in_caller);
-        defer caller_account.release();
+    for (deduped_account_metas.slice(), 0..) |*account_meta, index_in_instruction| {
+        const index_in_callee = dedupe_map[account_meta.index_in_transaction];
+
+        if (index_in_callee != index_in_instruction) {
+            if (index_in_callee >= deduped_account_metas.len) return error.NotEnoughAccountKeys;
+            const prev = deduped_account_metas.get(index_in_callee);
+            account_meta.is_signer = account_meta.is_signer or prev.is_signer;
+            account_meta.is_writable = account_meta.is_writable or prev.is_writable;
+            // This account is repeated, so theres no need to check for perms
+            continue;
+        }
+
+        const index_in_caller =
+            try caller.ixn_info.getAccountInstructionIndex(account_meta.index_in_transaction);
+
+        const callee_account_key = callee.accounts[index_in_instruction].pubkey;
+        const caller_account_meta = caller.ixn_info.account_metas.get(index_in_caller);
 
         // Readonly in caller cannot become writable in callee
-        if (!caller_account.context.is_writable and callee_account.is_writable) {
-            try tc.log("{}'s writable privilege escalated", .{caller_account.pubkey});
-            return InstructionError.PrivilegeEscalation;
+        if (account_meta.is_writable and !caller_account_meta.is_writable) {
+            try tc.log("{}'s writable privilege escalated", .{callee_account_key});
+            return error.PrivilegeEscalation;
         }
 
         // To be signed in the callee,
         // it must be either signed in the caller or by the program
-        var allow_callee_signer = caller_account.context.is_signer;
-        for (signers) |signer| {
-            if (allow_callee_signer) break;
-            if (signer.equals(&caller_account.pubkey)) allow_callee_signer = true;
-        }
-        if (!allow_callee_signer and callee_account.is_signer) {
-            try tc.log("{}'s signer privilege escalated", .{caller_account.pubkey});
-            return InstructionError.PrivilegeEscalation;
+        const in_signers = for (signers) |signer| {
+            if (signer.equals(&callee_account_key)) break true;
+        } else false;
+        if (account_meta.is_signer and !(caller_account_meta.is_signer or in_signers)) {
+            try tc.log("{}'s signer privilege escalated", .{callee_account_key});
+            return error.PrivilegeEscalation;
         }
     }
 
-    // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L415-L425
-    var instruction_accounts = InstructionInfo.AccountMetas{};
-    for (deduped_indexes.slice()) |index| {
-        const deduped_account = deduped_account_metas.buffer[index];
-        instruction_accounts.appendAssumeCapacity(.{
-            .pubkey = deduped_account.pubkey,
-            .index_in_transaction = deduped_account.index_in_transaction,
-            .index_in_caller = deduped_account.index_in_caller,
-            .index_in_callee = deduped_account.index_in_callee,
-            .is_signer = deduped_account.is_signer,
-            .is_writable = deduped_account.is_writable,
-        });
-    }
+    // Find and validate executables / program accounts
+    const program_account_index = for (caller.ixn_info.account_metas.slice(), 0..) |acc_meta, i| {
+        const tc_acc = tc.getAccountAtIndex(acc_meta.index_in_transaction) orelse continue;
+        if (tc_acc.pubkey.equals(&callee.program_id)) break i;
+    } else {
+        try tc.log("Unknown program {}", .{callee.program_id});
+        return error.MissingAccount;
+    };
 
-    // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L426-L457
-    const program_index_in_transaction = if (tc.feature_set.active(
-        .lift_cpi_caller_restriction,
-        tc.slot,
-    )) blk: {
-        break :blk tc.getAccountIndex(callee.program_id) orelse {
-            try tc.log("Unknown program {}", .{callee.program_id});
-            return InstructionError.MissingAccount;
-        };
-    } else blk: {
-        const index_in_caller = caller.ixn_info.getAccountMetaIndex(callee.program_id) orelse {
-            try tc.log("Unknown program {}", .{callee.program_id});
-            return InstructionError.MissingAccount;
-        };
-        const program_meta = caller.ixn_info.account_metas.buffer[index_in_caller];
-
-        const borrowed_account =
-            try caller.borrowInstructionAccount(index_in_caller);
-        defer borrowed_account.release();
-
-        if (!tc.feature_set.active(
-            .remove_accounts_executable_flag_checks,
-            tc.slot,
-        ) and
-            !borrowed_account.account.executable)
-        {
-            try tc.log("Account {} is not executable", .{callee.program_id});
-            return InstructionError.AccountNotExecutable;
-        }
-
-        break :blk program_meta.index_in_transaction;
+    const program_index_in_transaction = blk: {
+        const program_account_meta = caller.ixn_info.getAccountMetaAtIndex(
+            @intCast(program_account_index),
+        ) orelse return error.NotEnoughAccountKeys;
+        break :blk program_account_meta.index_in_transaction;
     };
 
     return .{
@@ -379,36 +307,11 @@ pub fn prepareCpiInstructionInfo(
             .pubkey = callee.program_id,
             .index_in_transaction = program_index_in_transaction,
         },
-        .account_metas = instruction_accounts,
+        .account_metas = deduped_account_metas,
+        .dedupe_map = dedupe_map,
         .instruction_data = callee.data,
         .initial_account_lamports = 0,
     };
-}
-
-/// [agave] https://github.com/anza-xyz/solana-sdk/blob/e1554f4067329a0dcf5035120ec6a06275d3b9ec/transaction-context/src/lib.rs#L452
-fn sumAccountLamports(
-    tc: *const TransactionContext,
-    account_metas: []const InstructionInfo.AccountMeta,
-) InstructionError!u128 {
-    var lamports: u128 = 0;
-    for (account_metas, 0..) |account_meta, index| {
-        if (account_meta.index_in_callee != index) continue;
-
-        const transaction_account = tc.getAccountAtIndex(
-            account_meta.index_in_transaction,
-        ) orelse return InstructionError.NotEnoughAccountKeys;
-
-        const account, const read_lock = transaction_account.readWithLock() orelse
-            return InstructionError.AccountBorrowOutstanding;
-        defer read_lock.release();
-
-        lamports = std.math.add(u128, lamports, account.lamports) catch {
-            // Effectively unreachable, would required greater
-            // than 1.8e19 accounts with max u64 lamports
-            return InstructionError.ProgramArithmeticOverflow;
-        };
-    }
-    return lamports;
 }
 
 test pushInstruction {
@@ -423,7 +326,7 @@ test pushInstruction {
         prng.random(),
         .{
             .accounts = &.{
-                .{ .lamports = 2_000 },
+                .{ .lamports = 2_000, .owner = system_program.ID },
                 .{ .lamports = 0 },
                 .{ .pubkey = system_program.ID },
             },
@@ -443,7 +346,7 @@ test pushInstruction {
             },
         },
         &.{
-            .{ .index_in_transaction = 0 },
+            .{ .index_in_transaction = 0, .is_writable = true },
             .{ .index_in_transaction = 1 },
         },
     );
@@ -459,9 +362,12 @@ test pushInstruction {
     {
         // Failure: UnbalancedInstruction
         // Modify and defer reset the first account's lamports
-        const original_lamports = tc.accounts[0].account.lamports;
-        defer tc.accounts[0].account.lamports = original_lamports;
-        tc.accounts[0].account.lamports = original_lamports + 1;
+        tc.accounts[0].account.lamports += 1;
+        tc.accounts_lamport_delta += 1;
+        defer {
+            tc.accounts[0].account.lamports -= 1;
+            tc.accounts_lamport_delta -= 1;
+        }
 
         try std.testing.expectError(
             InstructionError.UnbalancedInstruction,
@@ -649,7 +555,7 @@ test "processNextInstruction" {
     try processNextInstruction(allocator, &tc);
 }
 
-test "popInstruction" {
+test popInstruction {
     const testing = sig.runtime.testing;
     const system_program = sig.runtime.program.system;
 
@@ -661,7 +567,7 @@ test "popInstruction" {
         prng.random(),
         .{
             .accounts = &.{
-                .{ .lamports = 2_000 },
+                .{ .lamports = 2_000, .owner = system_program.ID },
                 .{ .lamports = 0 },
                 .{ .pubkey = system_program.ID },
             },
@@ -681,7 +587,7 @@ test "popInstruction" {
             },
         },
         &.{
-            .{ .index_in_transaction = 0 },
+            .{ .index_in_transaction = 0, .is_writable = true },
             .{ .index_in_transaction = 1 },
         },
     );
@@ -698,12 +604,7 @@ test "popInstruction" {
 
     {
         // Failure: AccountBorrowOutstanding
-        const borrowed_account = try tc.borrowAccountAtIndex(0, .{
-            .program_id = .ZEROES,
-            .is_signer = false,
-            .is_writable = false,
-            .remove_accounts_executable_flag_checks = false,
-        });
+        const borrowed_account = try (try tc.getCurrentInstructionContext()).borrowProgramAccount();
         defer borrowed_account.release();
         try std.testing.expectError(
             InstructionError.AccountBorrowOutstanding,
@@ -713,9 +614,13 @@ test "popInstruction" {
 
     {
         // Failure: UnbalancedInstruction
-        const original_lamports = tc.accounts[0].account.lamports;
-        defer tc.accounts[0].account.lamports = original_lamports;
-        tc.accounts[0].account.lamports = original_lamports + 1;
+        tc.accounts[0].account.lamports += 1;
+        tc.accounts_lamport_delta += 1;
+        defer {
+            tc.accounts[0].account.lamports -= 1;
+            tc.accounts_lamport_delta -= 1;
+        }
+
         try std.testing.expectError(
             InstructionError.UnbalancedInstruction,
             popInstruction(&tc),
@@ -733,20 +638,17 @@ test "popInstruction" {
     );
 }
 
-test "prepareCpiInstructionInfo" {
+test prepareCpiInstructionInfo {
     const testing = sig.runtime.testing;
     const system_program = sig.runtime.program.system;
-    const FeatureSet = sig.core.FeatureSet;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(0);
 
-    var feature_set = try allocator.create(FeatureSet);
     var cache, var tc = try testing.createTransactionContext(
         allocator,
         prng.random(),
         .{
-            .feature_set_ptr = feature_set,
             .accounts = &.{
                 .{ .pubkey = Pubkey.initRandom(prng.random()), .lamports = 2_000 },
                 .{ .pubkey = Pubkey.initRandom(prng.random()), .lamports = 0 },
@@ -858,122 +760,6 @@ test "prepareCpiInstructionInfo" {
         try std.testing.expectError(
             InstructionError.PrivilegeEscalation,
             prepareCpiInstructionInfo(&tc, callee, &.{}),
-        );
-    }
-
-    // Failure: AccountNotExecutable
-    {
-        tc.accounts[2].account.executable = false;
-        defer tc.accounts[2].account.executable = true;
-
-        try std.testing.expectError(
-            InstructionError.AccountNotExecutable,
-            prepareCpiInstructionInfo(&tc, callee, &.{}),
-        );
-    }
-
-    // Success: REMOVE_ACCOUNTS_EXECUTABLE_FLAG_CHECKS
-    {
-        tc.accounts[2].account.executable = false;
-        defer tc.accounts[2].account.executable = true;
-
-        feature_set.setSlot(.remove_accounts_executable_flag_checks, 0);
-        defer feature_set.disable(.remove_accounts_executable_flag_checks);
-
-        _ = try prepareCpiInstructionInfo(&tc, callee, &.{});
-    }
-}
-
-test "sumAccountLamports" {
-    const testing = sig.runtime.testing;
-
-    const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
-
-    var cache, var tc = try testing.createTransactionContext(
-        allocator,
-        prng.random(),
-        .{
-            .accounts = &.{
-                .{ .lamports = 0 },
-                .{ .lamports = 1 },
-                .{ .lamports = 2 },
-                .{ .lamports = 3 },
-            },
-        },
-    );
-    defer {
-        testing.deinitTransactionContext(allocator, tc);
-        cache.deinit(allocator);
-    }
-
-    {
-        // Success: 0 + 1 + 2 + 3 = 6
-        const account_metas = try testing.createInstructionInfoAccountMetas(&tc, &.{
-            .{ .index_in_transaction = 0 },
-            .{ .index_in_transaction = 1 },
-            .{ .index_in_transaction = 2 },
-            .{ .index_in_transaction = 3 },
-        });
-        try std.testing.expectEqual(
-            6,
-            try sumAccountLamports(&tc, account_metas.constSlice()),
-        );
-    }
-
-    {
-        // Success: 0 + 1 + 2 + 0 = 3
-        // First and last instruction account metas reference the same transaction account
-        const account_metas = try testing.createInstructionInfoAccountMetas(&tc, &.{
-            .{ .index_in_transaction = 0 },
-            .{ .index_in_transaction = 1 },
-            .{ .index_in_transaction = 2 },
-            .{ .index_in_transaction = 0 },
-        });
-
-        try std.testing.expectEqual(
-            3,
-            try sumAccountLamports(&tc, account_metas.constSlice()),
-        );
-    }
-
-    {
-        // Failure: NotEnoughAccountKeys
-        var account_metas = try testing.createInstructionInfoAccountMetas(&tc, &.{
-            .{ .index_in_transaction = 0 },
-            .{ .index_in_transaction = 1 },
-            .{ .index_in_transaction = 2 },
-            .{ .index_in_transaction = 3 },
-        });
-
-        account_metas.buffer[0].index_in_transaction = 4;
-
-        try std.testing.expectError(
-            InstructionError.NotEnoughAccountKeys,
-            sumAccountLamports(&tc, account_metas.constSlice()),
-        );
-    }
-
-    {
-        // Failure: AccountBorrowOutstanding
-        const borrowed_account = try tc.borrowAccountAtIndex(0, .{
-            .program_id = .ZEROES,
-            .is_signer = false,
-            .is_writable = false,
-            .remove_accounts_executable_flag_checks = false,
-        });
-        defer borrowed_account.release();
-
-        const account_metas = try testing.createInstructionInfoAccountMetas(&tc, &.{
-            .{ .index_in_transaction = 0 },
-            .{ .index_in_transaction = 1 },
-            .{ .index_in_transaction = 2 },
-            .{ .index_in_transaction = 3 },
-        });
-
-        try std.testing.expectError(
-            InstructionError.AccountBorrowOutstanding,
-            sumAccountLamports(&tc, account_metas.constSlice()),
         );
     }
 }

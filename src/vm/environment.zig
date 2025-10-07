@@ -1,5 +1,6 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
+const tracy = @import("tracy");
 
 const syscalls = sig.vm.syscalls;
 
@@ -27,6 +28,9 @@ pub const Environment = struct {
         debugging_features: bool,
         reject_deployment_of_broken_elfs: bool,
     ) !Environment {
+        const zone = tracy.Zone.init(@src(), .{ .name = "Environment.initV1" });
+        defer zone.deinit();
+
         return .{
             .loader = try initV1Loader(
                 allocator,

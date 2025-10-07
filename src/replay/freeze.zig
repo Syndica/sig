@@ -167,7 +167,12 @@ fn finalizeState(allocator: Allocator, params: FinalizeStateParams) !void {
     );
 
     // Run incinerator
-    if (try params.account_reader.get(sig.runtime.ids.INCINERATOR)) |incinerator_account| {
+    if (try params.account_reader.get(
+        allocator,
+        sig.runtime.ids.INCINERATOR,
+    )) |incinerator_account| {
+        defer incinerator_account.deinit(allocator);
+
         _ = params.capitalization.fetchSub(incinerator_account.lamports, .monotonic);
         try params.account_store.put(
             params.update_sysvar.slot,
@@ -191,24 +196,33 @@ fn distributeTransactionFees(
     collected_transaction_fees: u64,
     collected_priority_fees: u64,
 ) !void {
-    var burn = collected_transaction_fees * 50 / 100;
+    var burn = collected_transaction_fees * rent.burn_percent / 100;
     const total_fees = collected_priority_fees + collected_transaction_fees;
     const payout = total_fees -| burn;
-    tryPayoutFees(
-        allocator,
-        account_store,
-        account_reader,
-        rent,
-        slot,
-        collector_id,
-        payout,
-    ) catch |e| switch (e) {
-        error.InvalidAccountOwner,
-        error.LamportOverflow,
-        error.InvalidRentPayingAccount,
-        => burn = total_fees,
-        else => return e,
-    };
+
+    if (payout > 0) blk: {
+        const post_balance = tryPayoutFees(
+            allocator,
+            account_store,
+            account_reader,
+            rent,
+            slot,
+            collector_id,
+            payout,
+        ) catch |err| switch (err) {
+            error.InvalidAccountOwner,
+            error.LamportOverflow,
+            error.InvalidRentPayingAccount,
+            => {
+                burn = total_fees;
+                break :blk;
+            },
+            else => return err,
+        };
+        // TODO: record rewards returned by tryPayoutFees
+        _ = post_balance;
+    }
+
     _ = capitalization.fetchSub(burn, .monotonic);
 }
 
@@ -221,18 +235,19 @@ fn tryPayoutFees(
     slot: Slot,
     collector_id: Pubkey,
     payout: u64,
-) !void {
+) !u64 {
     var fee_collector_account =
-        if (try account_reader.get(collector_id)) |old_account|
-            AccountSharedData{
+        if (try account_reader.get(allocator, collector_id)) |old_account| blk: {
+            defer old_account.deinit(allocator);
+
+            break :blk AccountSharedData{
                 .data = try old_account.data.readAllAllocate(allocator),
                 .lamports = old_account.lamports,
                 .owner = old_account.owner,
                 .executable = old_account.executable,
                 .rent_epoch = old_account.rent_epoch,
-            }
-        else
-            AccountSharedData.EMPTY;
+            };
+        } else AccountSharedData.EMPTY;
 
     if (!fee_collector_account.owner.equals(&sig.runtime.program.system.ID)) {
         return error.InvalidAccountOwner;
@@ -244,6 +259,8 @@ fn tryPayoutFees(
     }
 
     try account_store.put(slot, collector_id, fee_collector_account);
+
+    return fee_collector_account.lamports;
 }
 
 pub const HashSlotParams = struct {
@@ -283,7 +300,12 @@ pub fn hashSlot(allocator: Allocator, params: HashSlotParams) !struct { ?LtHash,
         assert(parent_ancestors.ancestors.swapRemove(params.slot));
 
         var lt_hash = params.parent_lt_hash.* orelse return error.UnknownParentLtHash;
-        lt_hash.mixIn(try deltaLtHash(params.account_reader, params.slot, &parent_ancestors));
+        lt_hash.mixIn(try deltaLtHash(
+            allocator,
+            params.account_reader,
+            params.slot,
+            &parent_ancestors,
+        ));
 
         return .{ lt_hash, Hash.generateSha256(.{ initial_hash, lt_hash.bytes() }) };
     } else {
@@ -301,10 +323,10 @@ pub fn deltaMerkleHash(account_reader: AccountReader, allocator: Allocator, slot
         errdefer allocator.free(pubkey_hashes);
 
         var i: usize = 0;
-        while (try iterator.next()) |pubkey_account| : (i += 1) {
+        while (try iterator.next(allocator)) |pubkey_account| : (i += 1) {
             const pubkey, const account = pubkey_account;
+            defer account.deinit(allocator);
             pubkey_hashes[i] = .{ pubkey, account.hash(pubkey) };
-            account.deinit(allocator);
         }
 
         break :pkh pubkey_hashes;
@@ -334,11 +356,19 @@ pub fn deltaMerkleHash(account_reader: AccountReader, allocator: Allocator, slot
 
 /// Returns the lattice hash of every account that was modified in the slot.
 pub fn deltaLtHash(
+    tmp_alloc: std.mem.Allocator,
     account_reader: AccountReader,
     slot: Slot,
     parent_ancestors: *const Ancestors,
 ) !LtHash {
+    const zone = tracy.Zone.init(@src(), .{ .name = "deltaLtHash" });
+    defer zone.deinit();
+
     assert(!parent_ancestors.containsSlot(slot));
+
+    var arena = std.heap.ArenaAllocator.init(tmp_alloc);
+    defer arena.deinit();
+    const allocator = arena.allocator();
 
     // TODO: perf - consider using a thread pool
     // TODO: perf - consider caching old hashes
@@ -348,11 +378,13 @@ pub fn deltaLtHash(
 
     var hash = LtHash.IDENTITY;
     var i: usize = 0;
-    while (try iterator.next()) |pubkey_account| : (i += 1) {
+    while (try iterator.next(allocator)) |pubkey_account| : (i += 1) {
         const pubkey, const account = pubkey_account;
-        defer account.deinit(account_reader.allocator());
-        if (try account_reader.forSlot(parent_ancestors).get(pubkey)) |old_acct| {
-            defer old_acct.deinit(account_reader.allocator());
+        defer account.deinit(allocator);
+
+        if (try account_reader.forSlot(parent_ancestors).get(allocator, pubkey)) |old_acct| {
+            defer old_acct.deinit(allocator);
+
             if (!old_acct.equals(&account)) {
                 hash.mixOut(old_acct.ltHash(pubkey));
                 hash.mixIn(account.ltHash(pubkey));
@@ -366,7 +398,10 @@ pub fn deltaLtHash(
 }
 
 test "deltaLtHash is identity for 0 accounts" {
-    try std.testing.expectEqual(LtHash.IDENTITY, try deltaLtHash(.noop, 0, &Ancestors{}));
+    try std.testing.expectEqual(
+        LtHash.IDENTITY,
+        try deltaLtHash(std.testing.allocator, .noop, 0, &Ancestors{}),
+    );
 }
 
 test "deltaMerkleHash for 0 accounts" {
@@ -436,31 +471,43 @@ test "freezeSlot: trivial e2e merkle hash test" {
 test "freezeSlot: trivial e2e lattice hash test" {
     const allocator = std.testing.allocator;
 
-    var accounts, var tmp_dir = try sig.accounts_db.AccountsDB.initForTest(allocator);
+    var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
-    defer accounts.deinit();
-    const account_store = accounts.accountStore();
 
-    const epoch = try EpochConstants.genesis(allocator, .default(allocator));
-    defer epoch.deinit(allocator);
+    var simple_db: sig.accounts_db.ThreadSafeAccountMap = .init(allocator);
+    defer simple_db.deinit();
 
-    var constants = try SlotConstants.genesis(allocator, .DEFAULT);
-    defer constants.deinit(allocator);
-    constants.feature_set.setSlot(.accounts_lt_hash, 0);
-    constants.feature_set.setSlot(.remove_accounts_delta_hash, 0);
+    var real_db: sig.accounts_db.AccountsDB =
+        try .init(.minimal(allocator, .noop, tmp_dir.dir, null));
+    defer real_db.deinit();
 
-    var state = try SlotState.genesis(allocator);
-    defer state.deinit(allocator);
+    for ([_]sig.accounts_db.AccountStore{
+        simple_db.accountStore(),
+        real_db.accountStore(),
+    }) |account_store| {
+        errdefer std.log.err("Failed with implementation '{s}'", .{@tagName(account_store)});
 
-    try freezeSlot(
-        allocator,
-        .init(.FOR_TESTS, account_store, &epoch, &state, &constants, 0, .ZEROES),
-    );
+        const epoch = try EpochConstants.genesis(allocator, .default(allocator));
+        defer epoch.deinit(allocator);
 
-    try std.testing.expectEqual(
-        try Hash.parseRuntime("B513RgkSxeiHv4hJ3aaBfkoveWKeB6575S3CtG64AirS"),
-        state.hash.readCopy().?,
-    );
+        var constants = try SlotConstants.genesis(allocator, .DEFAULT);
+        defer constants.deinit(allocator);
+        constants.feature_set.setSlot(.accounts_lt_hash, 0);
+        constants.feature_set.setSlot(.remove_accounts_delta_hash, 0);
+
+        var state = try SlotState.genesis(allocator);
+        defer state.deinit(allocator);
+
+        try freezeSlot(
+            allocator,
+            .init(.FOR_TESTS, account_store, &epoch, &state, &constants, 0, .ZEROES),
+        );
+
+        try std.testing.expectEqual(
+            Hash.parse("B513RgkSxeiHv4hJ3aaBfkoveWKeB6575S3CtG64AirS"),
+            state.hash.readCopy().?,
+        );
+    }
 }
 
 // Ensures that the merkle and lattice hashes are both identical to agave for
@@ -574,7 +621,12 @@ test "delta hashes with many accounts" {
     try parent_ancestors.ancestors.put(allocator, 0, {});
     try parent_ancestors.ancestors.put(allocator, 1, {});
 
-    const actual_lt_hash = try deltaLtHash(accounts.accountReader(), hash_slot, &parent_ancestors);
+    const actual_lt_hash = try deltaLtHash(
+        allocator,
+        accounts.accountReader(),
+        hash_slot,
+        &parent_ancestors,
+    );
     const actual_merkle_hash = try deltaMerkleHash(accounts.accountReader(), allocator, hash_slot);
 
     try std.testing.expectEqualSlices(u16, &expected_lt_hash, &actual_lt_hash.data);

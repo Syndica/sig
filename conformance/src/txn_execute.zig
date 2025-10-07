@@ -316,6 +316,7 @@ fn executeTxnContext(
                 // For fuzzing purposes, accounts db is currently empty so we do not need to check if
                 // the builtin program is migrated or not.
                 const builtin_is_bpf_program = if (try accounts_db.getAccountWithAncestors(
+                    allocator,
                     &builtin_program.program_id,
                     &ancestors,
                 )) |account| blk: {
@@ -699,6 +700,7 @@ fn executeTxnContext(
     // Get lamports per signature from first entry in recent blockhashes
     const lamports_per_signature = blk: {
         const account = try accounts_db.getAccountWithAncestors(
+            allocator,
             &RecentBlockhashes.ID,
             &ancestors,
         ) orelse break :blk null;
@@ -974,7 +976,6 @@ fn serializeOutput(
                         .lamports = acc.account.lamports,
                         .data = try .copy(acc.account.data, allocator),
                         .executable = acc.account.executable,
-                        .rent_epoch = acc.account.rent_epoch,
                         .owner = try .copy(&acc.account.owner.data, allocator),
                         .seed_addr = null,
                     });
@@ -1104,7 +1105,6 @@ fn sharedAccountToState(
         .lamports = value.lamports,
         .data = data_duped,
         .executable = value.executable,
-        .rent_epoch = value.rent_epoch,
         .owner = owner_duped,
         .seed_addr = null,
     };
@@ -1187,7 +1187,7 @@ fn loadAccountsMap(
             .data = try allocator.dupe(u8, pb_account.data.getSlice()),
             .owner = try parsePubkey(pb_account.owner.getSlice()),
             .executable = pb_account.executable,
-            .rent_epoch = pb_account.rent_epoch,
+            .rent_epoch = sig.core.rent_collector.RENT_EXEMPT_RENT_EPOCH,
         });
     }
 
