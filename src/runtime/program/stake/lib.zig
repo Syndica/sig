@@ -1390,10 +1390,13 @@ fn deactivateDelinquent(
     defer delinquent_vote_account.release();
     if (!delinquent_vote_account.account.owner.equals(&runtime.program.vote.ID))
         return error.IncorrectProgramId;
-    const delinquent_vote_state_raw = try delinquent_vote_account.deserializeFromAccountData(
+
+    var delinquent_vote_state_raw = try delinquent_vote_account.deserializeFromAccountData(
         allocator,
         VoteStateVersions,
     );
+    defer delinquent_vote_state_raw.deinit(allocator);
+
     var delinquent_vote_state = try delinquent_vote_state_raw.convertToCurrent(allocator);
     defer delinquent_vote_state.deinit(allocator);
 
@@ -1401,10 +1404,13 @@ fn deactivateDelinquent(
     defer reference_vote_account.release();
     if (!reference_vote_account.account.owner.equals(&runtime.program.vote.ID))
         return error.IncorrectProgramId;
-    const reference_vote_state_raw = try reference_vote_account.deserializeFromAccountData(
+
+    var reference_vote_state_raw = try reference_vote_account.deserializeFromAccountData(
         allocator,
         VoteStateVersions,
     );
+    defer reference_vote_state_raw.deinit(allocator);
+
     var reference_vote_state = try reference_vote_state_raw.convertToCurrent(allocator);
     defer reference_vote_state.deinit(allocator);
 

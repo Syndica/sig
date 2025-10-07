@@ -41,7 +41,10 @@ pub const StakeAndVoteAccount = struct {
         self: *const StakeAndVoteAccount,
         allocator: Allocator,
     ) Allocator.Error!StakeAndVoteAccount {
-        return .{ .stake = self.stake, .account = try self.account.clone(allocator) };
+        return .{
+            .stake = self.stake,
+            .account = try self.account.clone(allocator),
+        };
     }
 };
 
@@ -228,6 +231,7 @@ pub const VoteAccounts = struct {
         _: bincode.Params,
     ) !VoteAccounts {
         const allocator = limit_allocator.backing_allocator;
+
         var vote_accounts = try bincode.readWithLimit(
             limit_allocator,
             StakeAndVoteAccountsMap,
@@ -256,18 +260,21 @@ pub const VoteAccounts = struct {
         // TODO: Uncomment once not required by bank init random
         // if (!builtin.is_test) @compileError("only for testing");
 
-        var self = VoteAccounts{};
+        var self: VoteAccounts = .{};
         errdefer self.deinit(allocator);
 
         for (0..random.intRangeAtMost(u64, 1, max_list_entries)) |_| {
             try self.vote_accounts.put(
                 allocator,
                 Pubkey.initRandom(random),
-                .{ .stake = random.int(u64), .account = try createRandomVoteAccount(
-                    allocator,
-                    random,
-                    Pubkey.initRandom(random),
-                ) },
+                .{
+                    .stake = random.int(u64),
+                    .account = try createRandomVoteAccount(
+                        allocator,
+                        random,
+                        Pubkey.initRandom(random),
+                    ),
+                },
             );
         }
 
@@ -290,7 +297,10 @@ pub const VoteAccount = struct {
         lamports: u64,
     };
 
-    pub const @"!bincode-config" = bincode.FieldConfig(VoteAccount){ .deserializer = deserialize };
+    pub const @"!bincode-config" = bincode.FieldConfig(VoteAccount){
+        .serializer = serialize,
+        .deserializer = deserialize,
+    };
     pub const @"!bincode-config:state" = bincode.FieldConfig(VoteState){ .skip = true };
 
     pub fn deinit(self: *VoteAccount, allocator: Allocator) void {
@@ -329,7 +339,7 @@ pub const VoteAccount = struct {
             account.data,
             .{},
         );
-        errdefer versioned_vote_state.deinit(allocator);
+        defer versioned_vote_state.deinit(allocator); // `convertToCurrent` clones
 
         return .{
             .account = .{ .lamports = account.lamports },
@@ -337,16 +347,30 @@ pub const VoteAccount = struct {
         };
     }
 
-    /// Deserialize the `AccountSharedData`, and attempt to deserialize
-    /// `VoteState` from the account data.
+    fn serialize(writer: anytype, data: anytype, _: bincode.Params) anyerror!void {
+        _ = writer;
+        _ = data;
+        @compileError("can't serialize VoteAccount with current representation");
+    }
+
+    /// Deserialize the `AccountSharedData`, and attempt to deserialize `VoteState` from the account data.
     fn deserialize(
         limit_allocator: *bincode.LimitAllocator,
         reader: anytype,
         _: bincode.Params,
     ) !VoteAccount {
+        const allocator = limit_allocator.allocator();
+        const deserialized = try bincode.readWithLimit(
+            limit_allocator,
+            AccountSharedData,
+            reader,
+            .{},
+        );
+        defer deserialized.deinit(allocator);
+
         return fromAccountSharedData(
-            limit_allocator.backing_allocator, // VoteState stores this.
-            try bincode.readWithLimit(limit_allocator, AccountSharedData, reader, .{}),
+            limit_allocator.backing_allocator,
+            deserialized,
         );
     }
 
@@ -367,11 +391,9 @@ pub const VoteAccount = struct {
             random.intRangeAtMost(u64, 1, 1_000_000),
             .initRandom(random),
         );
+        defer account.deinit(allocator);
 
-        return VoteAccount.fromAccountSharedData(
-            allocator,
-            account,
-        ) catch |err| {
+        return VoteAccount.fromAccountSharedData(allocator, account) catch |err| {
             switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
                 // We just created a 'valid' vote account, so the only possible
@@ -441,11 +463,9 @@ pub fn createRandomVoteAccount(
         random.intRangeAtMost(u64, 1, 1_000_000),
         Clock.initRandom(random),
     );
+    defer account.deinit(allocator);
 
-    return VoteAccount.fromAccountSharedData(
-        allocator,
-        account,
-    ) catch |err| {
+    return VoteAccount.fromAccountSharedData(allocator, account) catch |err| {
         switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             // We just created a 'valid' vote account, so the only possible
