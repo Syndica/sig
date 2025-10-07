@@ -47,6 +47,17 @@ pub const Service = struct {
         var state = try ReplayState.init(deps, num_threads);
         errdefer state.deinit();
 
+        // Debug: log addresses for slot_tracker RwMux and inner SlotTracker
+        {
+            const st_rw_ptr = &state.slot_tracker;
+            const st, var lg = state.slot_tracker.readWithLock();
+            defer lg.unlock();
+            std.debug.print(
+                "Service.init: slot_tracker_rw_ptr={*}, slot_tracker_ptr={*}\n",
+                .{ st_rw_ptr, st },
+            );
+        }
+
         var consensus: ?TowerConsensus = if (enable_consensus) |consensus_deps| blk: {
             const slot_tracker, var slot_tracker_lock = state.slot_tracker.readWithLock();
             defer slot_tracker_lock.unlock();
