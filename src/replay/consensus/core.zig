@@ -919,8 +919,13 @@ fn checkAndHandleNewRoot(
     // Audit: The rest of the code maps to Self::handle_new_root in Agave.
     // Update the slot tracker.
     // Set new root.
+    std.debug.print(
+        "checkAndHandleNewRoot start: new_root={}, current_root={}\n",
+        .{ new_root, slot_tracker.root },
+    );
     slot_tracker.root = new_root;
     // Prune non rooted slots
+    std.debug.print("checkAndHandleNewRoot: pruning non-rooted below {}\n", .{new_root});
     slot_tracker.pruneNonRooted(allocator);
 
     // TODO

@@ -65,6 +65,7 @@ pub const SlotTracker = struct {
     }
 
     pub fn deinit(self: SlotTracker, allocator: Allocator) void {
+        std.debug.print("SlotTracker deinit\n", .{});
         var slots = self.slots;
         for (slots.values()) |element| {
             element.constants.deinit(allocator);
@@ -80,6 +81,10 @@ pub const SlotTracker = struct {
         slot: Slot,
         slot_init: Element,
     ) Allocator.Error!void {
+        std.debug.print(
+            "SlotTracker.put start: inserting slot {} (before_count={d})\n",
+            .{ slot, self.slots.count() },
+        );
         defer tracy.plot(u32, "slots tracked", @intCast(self.slots.count()));
 
         try self.slots.ensureUnusedCapacity(allocator, 1);
@@ -104,6 +109,10 @@ pub const SlotTracker = struct {
         slot: Slot,
         slot_init: Element,
     ) Allocator.Error!GetOrPutResult {
+        std.debug.print(
+            "SlotTracker.getOrPut start: slot {} (before_count={d})\n",
+            .{ slot, self.slots.count() },
+        );
         defer tracy.plot(u32, "slots tracked", @intCast(self.slots.count()));
 
         if (self.get(slot)) |existing| return .{
@@ -200,6 +209,10 @@ pub const SlotTracker = struct {
         while (index < slice.len) {
             if (slice.items(.key)[index] < self.root) {
                 const element = slice.items(.value)[index];
+                std.debug.print(
+                    "SlotTracker.pruneNonRooted: removing slot {} (< root {})\n",
+                    .{ slice.items(.key)[index], self.root },
+                );
                 element.state.deinit(allocator);
                 element.constants.deinit(allocator);
                 allocator.destroy(element);
@@ -214,6 +227,7 @@ pub const SlotTracker = struct {
             self.root,
             self.slots.count(),
         });
+        std.debug.assert(self.contains(self.root));
     }
 };
 
