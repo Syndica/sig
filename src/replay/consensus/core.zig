@@ -205,8 +205,16 @@ pub const TowerConsensus = struct {
         const zone = tracy.Zone.init(@src(), .{ .name = "TowerConsensus.init" });
         defer zone.deinit();
 
+        std.debug.print(
+            "TowerConsensus.init: slot_tracker_rw_ptr={*}\n",
+            .{deps.slot_tracker_rw},
+        );
         const slot_tracker, var slot_tracker_lock = deps.slot_tracker_rw.readWithLock();
         defer slot_tracker_lock.unlock();
+        std.debug.print(
+            "TowerConsensus.init: observed slot_tracker_ptr={*}, root={} count={d}\n",
+            .{ slot_tracker, slot_tracker.root, slot_tracker.slots.count() },
+        );
 
         var fork_choice = try initForkChoice(
             allocator,
@@ -257,6 +265,12 @@ pub const TowerConsensus = struct {
                 },
             },
         ) else null;
+        if (vote_listener) |_| {
+            std.debug.print(
+                "VoteListener wiring: slot_tracker_rw_ptr={*} (same as deps)\n",
+                .{deps.slot_tracker_rw},
+            );
+        }
 
         return .{
             .fork_choice = fork_choice,
