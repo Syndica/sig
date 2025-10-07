@@ -1201,7 +1201,21 @@ fn validator(
         try consensusDependencies(allocator, &gossip_service.gossip_table_rw);
     defer if (consensus_deps) |d| d.deinit();
 
-    var replay_service = try replay.Service.init(&replay_deps, consensus_deps, cfg.replay_threads);
+    var slot_tracker = try replay.trackers.SlotTracker.init(
+        allocator,
+        replay_deps.root.slot,
+        .{
+            .constants = replay_deps.root.constants.take(),
+            .state = replay_deps.root.state.take(),
+        },
+    );
+    errdefer slot_tracker.deinit(allocator);
+    var replay_service = try replay.Service.initWithSlotTracker(
+        &replay_deps,
+        consensus_deps,
+        cfg.replay_threads,
+        slot_tracker,
+    );
     defer replay_service.deinit(allocator);
 
     const replay_thread = try app_base.spawnService(
@@ -1330,7 +1344,21 @@ fn replayOffline(
         try consensusDependencies(allocator, null);
     defer if (consensus_deps) |d| d.deinit();
 
-    var replay_service = try replay.Service.init(&replay_deps, consensus_deps, cfg.replay_threads);
+    var slot_tracker = try replay.trackers.SlotTracker.init(
+        allocator,
+        replay_deps.root.slot,
+        .{
+            .constants = replay_deps.root.constants.take(),
+            .state = replay_deps.root.state.take(),
+        },
+    );
+    errdefer slot_tracker.deinit(allocator);
+    var replay_service = try replay.Service.initWithSlotTracker(
+        &replay_deps,
+        consensus_deps,
+        cfg.replay_threads,
+        slot_tracker,
+    );
     defer replay_service.deinit(allocator);
 
     const replay_thread = try app_base.spawnService(

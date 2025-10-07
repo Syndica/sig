@@ -39,67 +39,85 @@ pub const Service = struct {
     consensus: ?TowerConsensus,
     num_threads: u32,
 
-    fn initServiceWithReplayState(
-        deps: *Dependencies,
-        num_threads: u32,
-    ) !Service {
-        var svc: Service = .{
-            .replay = try ReplayState.init(deps, num_threads),
-            .consensus = null,
-            .num_threads = num_threads,
-        };
-        errdefer svc.replay.deinit();
-
-        // Debug: log addresses for slot_tracker RwMux and inner SlotTracker
-        {
-            const st_rw_ptr = &svc.replay.slot_tracker;
-            const st, var lg = svc.replay.slot_tracker.readWithLock();
-            defer lg.unlock();
-            std.debug.print(
-                "Service.init: slot_tracker_rw_ptr={*}, slot_tracker_ptr={*}\n",
-                .{ st_rw_ptr, st },
-            );
-        }
-        return svc;
-    }
-
-    fn initServiceWithConsensus(
-        self: *Service,
-        deps: *Dependencies,
-        external: TowerConsensus.Dependencies.External,
-    ) !void {
-        const slot_tracker, var slot_tracker_lock = self.replay.slot_tracker.readWithLock();
-        defer slot_tracker_lock.unlock();
-
-        const consensus_state_deps: TowerConsensus.Dependencies = .{
-            .logger = .from(deps.logger),
-            .my_identity = deps.my_identity,
-            .vote_identity = deps.vote_identity,
-            .root_slot = deps.root.slot,
-            .root_hash = slot_tracker.get(slot_tracker.root).?.state.hash.readCopy().?,
-            .account_reader = deps.account_store.reader(),
-            .ledger_reader = deps.ledger.reader,
-            .ledger_writer = deps.ledger.writer,
-            .exit = deps.exit,
-            .replay_votes_channel = self.replay.replay_votes_channel,
-            .slot_tracker_rw = &self.replay.slot_tracker,
-            .epoch_tracker_rw = &self.replay.epoch_tracker,
-            .external = external,
-        };
-
-        self.consensus = try TowerConsensus.init(deps.allocator, consensus_state_deps);
-    }
-
     pub fn init(
         deps: *Dependencies,
         enable_consensus: ?TowerConsensus.Dependencies.External,
         num_threads: u32,
     ) !Service {
-        var svc = try initServiceWithReplayState(deps, num_threads);
-        if (enable_consensus) |external| {
-            try svc.initServiceWithConsensus(deps, external);
-        }
-        return svc;
+        var state = try ReplayState.init(deps, num_threads);
+        errdefer state.deinit();
+
+        var consensus: ?TowerConsensus = if (enable_consensus) |consensus_deps| blk: {
+            const slot_tracker, var slot_tracker_lock = state.slot_tracker.readWithLock();
+            defer slot_tracker_lock.unlock();
+
+            const consensus_state_deps: TowerConsensus.Dependencies = .{
+                .logger = .from(deps.logger),
+                .my_identity = deps.my_identity,
+                .vote_identity = deps.vote_identity,
+                .root_slot = deps.root.slot,
+                .root_hash = slot_tracker.get(slot_tracker.root).?.state.hash.readCopy().?,
+                .account_reader = deps.account_store.reader(),
+                .ledger_reader = deps.ledger.reader,
+                .ledger_writer = deps.ledger.writer,
+                .exit = deps.exit,
+                .replay_votes_channel = state.replay_votes_channel,
+                .slot_tracker_rw = &state.slot_tracker,
+                .epoch_tracker_rw = &state.epoch_tracker,
+                .external = consensus_deps,
+            };
+
+            break :blk try TowerConsensus.init(deps.allocator, consensus_state_deps);
+        } else null;
+        errdefer if (consensus) |*c| c.deinit(deps.allocator);
+
+        return .{
+            .replay = state,
+            .consensus = consensus,
+            .num_threads = num_threads,
+        };
+    }
+
+    /// Initialize service using a pre-constructed SlotTracker. Ownership of the tracker is
+    /// transferred to the ReplayState.
+    pub fn initWithSlotTracker(
+        deps: *Dependencies,
+        enable_consensus: ?TowerConsensus.Dependencies.External,
+        num_threads: u32,
+        provided_slot_tracker: SlotTracker,
+    ) !Service {
+        var state = try ReplayState.initWithSlotTracker(deps, num_threads, provided_slot_tracker);
+        errdefer state.deinit();
+
+        var consensus: ?TowerConsensus = if (enable_consensus) |consensus_deps| blk: {
+            const slot_tracker, var slot_tracker_lock = state.slot_tracker.readWithLock();
+            defer slot_tracker_lock.unlock();
+
+            const consensus_state_deps: TowerConsensus.Dependencies = .{
+                .logger = .from(deps.logger),
+                .my_identity = deps.my_identity,
+                .vote_identity = deps.vote_identity,
+                .root_slot = deps.root.slot,
+                .root_hash = slot_tracker.get(slot_tracker.root).?.state.hash.readCopy().?,
+                .account_reader = deps.account_store.reader(),
+                .ledger_reader = deps.ledger.reader,
+                .ledger_writer = deps.ledger.writer,
+                .exit = deps.exit,
+                .replay_votes_channel = state.replay_votes_channel,
+                .slot_tracker_rw = &state.slot_tracker,
+                .epoch_tracker_rw = &state.epoch_tracker,
+                .external = consensus_deps,
+            };
+
+            break :blk try TowerConsensus.init(deps.allocator, consensus_state_deps);
+        } else null;
+        errdefer if (consensus) |*c| c.deinit(deps.allocator);
+
+        return .{
+            .replay = state,
+            .consensus = consensus,
+            .num_threads = num_threads,
+        };
     }
 
     pub fn deinit(self: *Service, allocator: Allocator) void {
@@ -274,6 +292,62 @@ pub const ReplayState = struct {
             .constants = deps.root.constants.take(),
             .state = deps.root.state.take(),
         });
+        errdefer slot_tracker.deinit(deps.allocator);
+
+        const replay_votes_channel = try Channel(ParsedVote).create(deps.allocator);
+        errdefer replay_votes_channel.destroy();
+
+        var epoch_tracker: EpochTracker = .{ .schedule = deps.epoch_schedule };
+        errdefer epoch_tracker.deinit(deps.allocator);
+
+        {
+            const epoch_constants = deps.current_epoch_constants.take();
+            errdefer epoch_constants.deinit(deps.allocator);
+            try epoch_tracker.epochs.put(deps.allocator, deps.current_epoch, epoch_constants);
+        }
+
+        const progress_map = try initProgressMap(
+            deps.allocator,
+            &slot_tracker,
+            &epoch_tracker,
+            deps.my_identity,
+            deps.vote_identity,
+        );
+        errdefer progress_map.deinit(deps.allocator);
+
+        const slot_tree = try SlotTree.init(deps.allocator, deps.root.slot);
+        errdefer slot_tree.deinit(deps.allocator);
+
+        return .{
+            .allocator = deps.allocator,
+            .logger = .from(deps.logger),
+            .thread_pool = .init(.{ .max_threads = num_threads }),
+            .my_identity = deps.my_identity,
+            .slot_leaders = deps.slot_leaders,
+            .slot_tracker = .init(slot_tracker),
+            .epoch_tracker = .init(epoch_tracker),
+            .slot_tree = slot_tree,
+            .hard_forks = deps.hard_forks.take(),
+            .account_store = deps.account_store,
+            .ledger = deps.ledger,
+            .progress_map = progress_map,
+            .status_cache = .DEFAULT,
+            .execution_log_helper = .init(.from(deps.logger)),
+            .replay_votes_channel = replay_votes_channel,
+        };
+    }
+
+    /// Variant that accepts a pre-constructed SlotTracker to ensure external ownership/address stability
+    fn initWithSlotTracker(
+        deps: *Dependencies,
+        num_threads: u32,
+        provided_slot_tracker: SlotTracker,
+    ) !ReplayState {
+        const zone = tracy.Zone.init(@src(), .{ .name = "ReplayState initWithSlotTracker" });
+        defer zone.deinit();
+
+        // Provided tracker will be owned by ReplayState from now on
+        var slot_tracker = provided_slot_tracker;
         errdefer slot_tracker.deinit(deps.allocator);
 
         const replay_votes_channel = try Channel(ParsedVote).create(deps.allocator);
@@ -592,7 +666,6 @@ fn freezeCompletedSlots(state: *ReplayState, results: []const ReplayResult) !boo
 
 /// bypass the tower bft consensus protocol, simply rooting slots with SlotTree.reRoot
 fn bypassConsensus(state: *ReplayState) !void {
-    std.debug.print("bypassConsensus should not be called", .{});
     if (state.slot_tree.reRoot(state.allocator)) |new_root| {
         const slot_tracker, var slot_tracker_lg = state.slot_tracker.writeWithLock();
         defer slot_tracker_lg.unlock();
