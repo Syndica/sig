@@ -316,11 +316,30 @@ test "handleBatch/handlePacket" {
     });
     defer shred_receiver.deinit(allocator);
 
-    const addr = sig.net.SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 88);
+    // test repair packet
     {
         const ping = try Ping.init(.{1} ** 32, &keypair);
+        const addr = sig.net.SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 88);
         var packet = try Packet.initFromBincode(addr, RepairPing{ .Ping = ping });
         packet.flags = .from(.repair);
+        try shred_receiver.incoming_shreds.send(packet);
+    }
+
+    // test shred packet
+    {
+        const shreds = try sig.ledger.tests.loadShredsFromFile(
+            allocator,
+            sig.TEST_DATA_DIR ++ "shreds/merkle_root_metas_coding_test_shreds_3_1228.bin",
+        );
+        defer sig.ledger.tests.deinitShreds(allocator, shreds);
+        const shred_data = shreds[0].payload();
+
+        var packet: Packet = undefined;
+        @memcpy(packet.buffer[0..shred_data.len], shred_data);
+        packet.size = @intCast(shred_data.len);
+        packet.addr = .{ .address = .{ .ipv4 = .init(0, 0, 0, 0) }, .port = 0 };
+        packet.flags = .{};
+
         try shred_receiver.incoming_shreds.send(packet);
     }
 
