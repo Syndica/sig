@@ -120,10 +120,7 @@ pub const VoteListener = struct {
             senders: Senders,
         },
     ) !VoteListener {
-        const metrics_ptr = try allocator.create(VoteListenerMetrics);
-        errdefer allocator.destroy(metrics_ptr);
-        metrics_ptr.* = try VoteListenerMetrics.init(registry);
-
+        var metrics = try VoteListenerMetrics.init(registry);
         const verified_vote_transactions = try sig.sync.Channel(Transaction).create(allocator);
         errdefer verified_vote_transactions.destroy();
 
@@ -133,7 +130,7 @@ pub const VoteListener = struct {
             params.slot_data_provider,
             params.gossip_table_rw,
             verified_vote_transactions,
-            metrics_ptr,
+            &metrics,
         });
         errdefer recv_thread.join();
         recv_thread.setName("sigSolCiVoteLstnr") catch {};
@@ -150,7 +147,7 @@ pub const VoteListener = struct {
 
             params.ledger_ref,
             exit,
-            metrics_ptr,
+            &metrics,
         });
         errdefer process_votes_thread.join();
         process_votes_thread.setName("solCiProcVotes") catch {};
@@ -160,7 +157,7 @@ pub const VoteListener = struct {
             .verified_vote_transactions = verified_vote_transactions,
             .recv = recv_thread,
             .process_votes = process_votes_thread,
-            .metrics = metrics_ptr,
+            .metrics = &metrics,
         };
     }
 
@@ -172,7 +169,6 @@ pub const VoteListener = struct {
             verified_vote.deinit(self.allocator);
         }
         self.verified_vote_transactions.destroy();
-        self.allocator.destroy(self.metrics);
     }
 };
 
