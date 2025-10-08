@@ -5,16 +5,16 @@
 //! [paper](https://eprint.iacr.org/2017/1066) (Section 4.3).
 
 const std = @import("std");
+const builtin = @import("builtin");
 const sig = @import("../../sig.zig");
 const table = @import("table");
 pub const InnerProductProof = @import("ipp.zig").Proof; // pub so tests can run
 
-const pippenger = sig.crypto.ed25519.pippenger;
 const pedersen = sig.zksdk.pedersen;
 const Edwards25519 = std.crypto.ecc.Edwards25519;
 const Ristretto255 = std.crypto.ecc.Ristretto255;
 const Scalar = std.crypto.ecc.Edwards25519.scalar.Scalar;
-const weak_mul = sig.vm.syscalls.ecc.weak_mul;
+const ed25519 = sig.crypto.ed25519;
 const Transcript = sig.zksdk.Transcript;
 const ProofType = sig.runtime.program.zk_elgamal.ProofType;
 
@@ -28,6 +28,30 @@ pub fn Proof(bit_size: comptime_int) type {
     std.debug.assert(bit_size <= 256);
     const logn: u64 = std.math.log2_int(u64, bit_size);
     const max = (2 * bit_size) + (2 * logn) + 5 + 8;
+
+    const contract: Transcript.Contract = &[_]Transcript.Input{
+        .{ .label = "A", .type = .validate_point },
+        .{ .label = "S", .type = .validate_point },
+        .{ .label = "y", .type = .challenge },
+        .{ .label = "z", .type = .challenge },
+
+        .{ .label = "T_1", .type = .validate_point },
+        .{ .label = "T_2", .type = .validate_point },
+        .{ .label = "x", .type = .challenge },
+
+        .{ .label = "t_x", .type = .scalar },
+        .{ .label = "t_x_blinding", .type = .scalar },
+        .{ .label = "e_blinding", .type = .scalar },
+        .{ .label = "w", .type = .challenge },
+
+        .{ .label = "c", .type = .challenge },
+
+        //  InnerProductProof(bit_size).contract runs here
+
+        .{ .label = "ipp_a", .type = .scalar },
+        .{ .label = "ipp_b", .type = .scalar },
+        .{ .label = "d", .type = .challenge },
+    };
 
     return struct {
         A: Ristretto255,
@@ -123,8 +147,7 @@ pub fn Proof(bit_size: comptime_int) type {
             }
             std.debug.assert(nm == bit_size);
 
-            transcript.appendDomSep("range-proof");
-            transcript.appendU64("n", bit_size);
+            transcript.appendRangeProof(.range, bit_size);
 
             // bit-decompose values and generate their Pedersen vector commitment
             const a_blinding: Scalar = .random();
@@ -135,8 +158,12 @@ pub fn Proof(bit_size: comptime_int) type {
                 for (0..n) |j| {
                     // init functions aren't exposed, so doesn't need to be constant time.
                     const v = (amount >> @intCast(j)) & 0b1 != 0;
-                    const point = if (v) table.G[bit] else table.H[bit].neg();
-                    A = A.add(.{ .p = point });
+                    const point: Ristretto255 = if (v)
+                        table.G[bit]
+                    else
+                        // TODO: use ristretto neg() alias when added to stdlib
+                        .{ .p = table.H[bit].p.neg() };
+                    A = A.add(point);
                     bit += 1;
                 }
             }
@@ -149,18 +176,21 @@ pub fn Proof(bit_size: comptime_int) type {
             }
             const s_blinding = Scalar.random();
 
-            const S: Ristretto255 = .{ .p = Edwards25519.mulMulti(
+            const S = sig.crypto.ed25519.mulMulti(
                 1 + bit_size * 2,
-                .{pedersen.H.p} ++ table.G[0..bit_size].* ++ table.H[0..bit_size].*,
+                .{pedersen.H} ++ table.G[0..bit_size].* ++ table.H[0..bit_size].*,
                 .{s_blinding.toBytes()} ++ s_L ++ s_R,
-            ) catch unreachable };
+            );
 
-            transcript.appendPoint("A", A);
-            transcript.appendPoint("S", S);
+            comptime var session = Transcript.getSession(contract);
+            defer session.finish();
+
+            transcript.appendNoValidate(&session, "A", A);
+            transcript.appendNoValidate(&session, "S", S);
 
             // y and z are used to merge multiple inner product relations into one inner product
-            const y = transcript.challengeScalar("y");
-            const z = transcript.challengeScalar("z");
+            const y = transcript.challengeScalar(&session, "y");
+            const z = transcript.challengeScalar(&session, "z");
 
             var l_poly: VecPoly1 = .zero;
             var r_poly: VecPoly1 = .zero;
@@ -196,12 +226,12 @@ pub fn Proof(bit_size: comptime_int) type {
             const T_1, const t_1_blinding = pedersen.initScalar(t_poly.b);
             const T_2, const t_2_blinding = pedersen.initScalar(t_poly.c);
 
-            transcript.appendPoint("T_1", T_1.point);
-            transcript.appendPoint("T_2", T_2.point);
+            transcript.appendNoValidate(&session, "T_1", T_1.point);
+            transcript.appendNoValidate(&session, "T_2", T_2.point);
 
             // evaluate t(x) on challenge x and homomorphically compute the openings for
             // z^2 * V_1 + z^3 * V_2 + ... + z^{m+1} * V_m + delta(y, z)*G + x*T_1 + x^2*T_2
-            const x = transcript.challengeScalar("x");
+            const x = transcript.challengeScalar(&session, "x");
 
             var agg_opening = ZERO;
             var agg_scalar = z;
@@ -219,33 +249,39 @@ pub fn Proof(bit_size: comptime_int) type {
             const t_x = t_poly.evaluate(x);
             const t_x_blinding = t_binding_poly.evaluate(x);
 
-            transcript.appendScalar("t_x", t_x);
-            transcript.appendScalar("t_x_blinding", t_x_blinding);
+            transcript.append(&session, .scalar, "t_x", t_x);
+            transcript.append(&session, .scalar, "t_x_blinding", t_x_blinding);
 
             // homomorphically compuate the openings for A + x*S
             const e_blinding = s_blinding.mul(x).add(a_blinding);
-            transcript.appendScalar("e_blinding", e_blinding);
+            transcript.append(&session, .scalar, "e_blinding", e_blinding);
 
             // compute the inner product argument on the commitment:
             // P = <l(x), G> + <r(x), H'> + <l(x), r(x)>*Q
-            const w = transcript.challengeScalar("w");
-            const Q = weak_mul.mul(pedersen.G.p, w.toBytes());
+            const w = transcript.challengeScalar(&session, "w");
+            const Q = ed25519.straus.mulByKnown(pedersen.G, w.toBytes());
 
             const G_factors: [bit_size]Scalar = @splat(ONE);
             const H_factors = genPowers(bit_size, y.invert());
 
-            _ = transcript.challengeScalar("c");
+            _ = transcript.challengeScalar(&session, "c");
 
             var l_vec = l_poly.eval(x);
             var r_vec = r_poly.eval(x);
             const ipp_proof = InnerProductProof(bit_size).init(
-                .{ .p = Q },
+                Q,
                 &G_factors,
                 &H_factors,
                 &l_vec,
                 &r_vec,
                 transcript,
             );
+
+            if (builtin.mode == .Debug) {
+                transcript.append(&session, .scalar, "ipp_a", ipp_proof.a);
+                transcript.append(&session, .scalar, "ipp_b", ipp_proof.b);
+                _ = transcript.challengeScalar(&session, "d");
+            }
 
             return .{
                 .A = A,
@@ -269,27 +305,29 @@ pub fn Proof(bit_size: comptime_int) type {
         ) !void {
             std.debug.assert(commitments.len == bit_lengths.len);
 
-            transcript.appendDomSep("range-proof");
-            transcript.appendU64("n", bit_size);
+            transcript.appendRangeProof(.range, bit_size);
 
-            try transcript.validateAndAppendPoint("A", self.A);
-            try transcript.validateAndAppendPoint("S", self.S);
+            comptime var session = Transcript.getSession(contract);
+            defer session.finish();
 
-            const y = transcript.challengeScalar("y");
-            const z = transcript.challengeScalar("z");
+            try transcript.append(&session, .validate_point, "A", self.A);
+            try transcript.append(&session, .validate_point, "S", self.S);
 
-            try transcript.validateAndAppendPoint("T_1", self.T_1);
-            try transcript.validateAndAppendPoint("T_2", self.T_2);
+            const y = transcript.challengeScalar(&session, "y");
+            const z = transcript.challengeScalar(&session, "z");
 
-            const x = transcript.challengeScalar("x");
+            try transcript.append(&session, .validate_point, "T_1", self.T_1);
+            try transcript.append(&session, .validate_point, "T_2", self.T_2);
 
-            transcript.appendScalar("t_x", self.t_x);
-            transcript.appendScalar("t_x_blinding", self.t_x_blinding);
-            transcript.appendScalar("e_blinding", self.e_blinding);
+            const x = transcript.challengeScalar(&session, "x");
 
-            const w = transcript.challengeScalar("w");
+            transcript.append(&session, .scalar, "t_x", self.t_x);
+            transcript.append(&session, .scalar, "t_x_blinding", self.t_x_blinding);
+            transcript.append(&session, .scalar, "e_blinding", self.e_blinding);
+
+            const w = transcript.challengeScalar(&session, "w");
             // only left for legacy reasons, use `d` instead
-            _ = transcript.challengeScalar("c");
+            _ = transcript.challengeScalar(&session, "c");
 
             const x_sq, //
             const x_inv_sq, //
@@ -299,10 +337,10 @@ pub fn Proof(bit_size: comptime_int) type {
             const a = self.ipp.a;
             const b = self.ipp.b;
 
-            transcript.appendScalar("ipp_a", a);
-            transcript.appendScalar("ipp_b", b);
+            transcript.append(&session, .scalar, "ipp_a", a);
+            transcript.append(&session, .scalar, "ipp_b", b);
 
-            const d = transcript.challengeScalar("d");
+            const d = transcript.challengeScalar(&session, "d");
 
             // (numbers use u128 as the example)
             //        points                scalars
@@ -345,8 +383,8 @@ pub fn Proof(bit_size: comptime_int) type {
             for (self.ipp.L_vec) |l| points.appendAssumeCapacity(l);
             for (self.ipp.R_vec) |r| points.appendAssumeCapacity(r);
 
-            points.appendSliceAssumeCapacity(table.H_ristretto[0..bit_size]);
-            points.appendSliceAssumeCapacity(table.G_ristretto[0..bit_size]);
+            points.appendSliceAssumeCapacity(table.H[0..bit_size]);
+            points.appendSliceAssumeCapacity(table.G[0..bit_size]);
 
             const d_txb = d.mul(self.t_x_blinding);
             const H = Edwards25519.scalar.neg(d_txb.add(self.e_blinding).toBytes());
@@ -412,7 +450,7 @@ pub fn Proof(bit_size: comptime_int) type {
             scalars.appendAssumeCapacity(basepoint_scalar.toBytes()); // G
             points.appendAssumeCapacity(pedersen.G);
 
-            const check: Ristretto255 = pippenger.mulMulti(
+            const check: Ristretto255 = sig.crypto.ed25519.mulMultiRuntime(
                 max,
                 false,
                 true,
@@ -658,18 +696,14 @@ pub fn Data(bit_size: comptime_int) type {
                 return @bitCast(self);
             }
 
+            // sig fmt: off
             fn newTranscript(self: Context) Transcript {
-                var transcript = Transcript.init("batched-range-proof-instruction");
-                transcript.appendMessage(
-                    "commitments",
-                    std.mem.sliceAsBytes(&self.commitments),
-                );
-                transcript.appendMessage(
-                    "bit-lengths",
-                    std.mem.sliceAsBytes(&self.bit_lengths),
-                );
-                return transcript;
+                return .init(.@"batched-range-proof-instruction", &.{
+                    .{ .label = "commitments", .message = .{ .bytes = std.mem.sliceAsBytes(&self.commitments) } },
+                    .{ .label = "bit-lengths", .message = .{ .bytes = std.mem.sliceAsBytes(&self.bit_lengths) } },
+                });
             }
+            // sig fmt: on
         };
     };
 }
@@ -699,8 +733,8 @@ pub fn genPowers(comptime n: usize, x: Scalar) [n]Scalar {
 test "single rangeproof" {
     const commitment, const opening = pedersen.initValue(u64, 55);
 
-    var creation_transcript = Transcript.init("Test");
-    var verification_transcript = Transcript.init("Test");
+    var creation_transcript = Transcript.initTest("Test");
+    var verification_transcript = Transcript.initTest("Test");
 
     const proof = try Proof(32).init(
         &.{55},
@@ -721,8 +755,8 @@ test "aggregated rangeproof" {
     const comm2, const opening2 = pedersen.initValue(u64, 77);
     const comm3, const opening3 = pedersen.initValue(u64, 99);
 
-    var creation_transcript = Transcript.init("Test");
-    var verification_transcript = Transcript.init("Test");
+    var creation_transcript = Transcript.initTest("Test");
+    var verification_transcript = Transcript.initTest("Test");
 
     const proof = try Proof(128).init(
         &.{ 55, 77, 99 },
@@ -753,7 +787,7 @@ test "proof string" {
     const proof = try Proof(128).fromBase64(proof_string);
     // zig fmt: on
 
-    var verification_transcript = Transcript.init("Test");
+    var verification_transcript = Transcript.initTest("Test");
     try proof.verify(
         &.{ commitment_1, commitment_2, commitment_3 },
         &.{ 64, 32, 32 },

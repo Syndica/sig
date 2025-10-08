@@ -2,6 +2,7 @@
 //! [agave](https://github.com/anza-xyz/agave/blob/5a9906ebf4f24cd2a2b15aca638d609ceed87797/zk-sdk/src/sigma_proofs/ciphertext_commitment_equality.rs)
 
 const std = @import("std");
+const builtin = @import("builtin");
 const sig = @import("../../sig.zig");
 
 const Edwards25519 = std.crypto.ecc.Edwards25519;
@@ -13,7 +14,7 @@ const ElGamalPubkey = sig.zksdk.ElGamalPubkey;
 const Ristretto255 = std.crypto.ecc.Ristretto255;
 const Scalar = std.crypto.ecc.Edwards25519.scalar.Scalar;
 const Transcript = sig.zksdk.Transcript;
-const weak_mul = sig.vm.syscalls.ecc.weak_mul;
+const ed25519 = sig.crypto.ed25519;
 const ProofType = sig.runtime.program.zk_elgamal.ProofType;
 
 pub const Proof = struct {
@@ -24,6 +25,18 @@ pub const Proof = struct {
     z_x: Scalar,
     z_r: Scalar,
 
+    const contract: Transcript.Contract = &.{
+        .{ .label = "Y_0", .type = .validate_point },
+        .{ .label = "Y_1", .type = .validate_point },
+        .{ .label = "Y_2", .type = .validate_point },
+        .{ .label = "c", .type = .challenge },
+
+        .{ .label = "z_s", .type = .scalar },
+        .{ .label = "z_x", .type = .scalar },
+        .{ .label = "z_r", .type = .scalar },
+        .{ .label = "w", .type = .challenge }, // w used for batch verification
+    };
+
     pub fn init(
         kp: *const ElGamalKeypair,
         ciphertext: *const ElGamalCiphertext,
@@ -31,51 +44,61 @@ pub const Proof = struct {
         amount: u64,
         transcript: *Transcript,
     ) Proof {
-        transcript.appendDomSep("ciphertext-commitment-equality-proof");
+        transcript.appendDomSep(.@"ciphertext-commitment-equality-proof");
 
         const P = kp.public;
         const D = ciphertext.handle.point;
 
-        const s = kp.secret.scalar;
-        const x = pedersen.scalarFromInt(u64, amount);
         const r = opening.scalar;
+        const s = kp.secret.scalar;
+        var x = pedersen.scalarFromInt(u64, amount);
 
         var y_s = Scalar.random();
         var y_x = Scalar.random();
         var y_r = Scalar.random();
         defer {
+            std.crypto.secureZero(u64, &x.limbs);
             std.crypto.secureZero(u64, &y_s.limbs);
             std.crypto.secureZero(u64, &y_x.limbs);
             std.crypto.secureZero(u64, &y_r.limbs);
         }
 
-        const Y_0 = weak_mul.mul(P.point.p, y_s.toBytes());
-        const Y_1 = weak_mul.mulMulti(
+        const Y_0 = ed25519.mul(true, P.point, y_s.toBytes());
+        const Y_1 = ed25519.mulMulti(
             2,
-            .{ pedersen.G.p, D.p },
+            .{ pedersen.G, D },
             .{ y_x.toBytes(), y_s.toBytes() },
         );
-        const Y_2 = weak_mul.mulMulti(
+        const Y_2 = ed25519.mulMulti(
             2,
-            .{ pedersen.G.p, pedersen.H.p },
+            .{ pedersen.G, pedersen.H },
             .{ y_x.toBytes(), y_r.toBytes() },
         );
 
-        transcript.appendPoint("Y_0", .{ .p = Y_0 });
-        transcript.appendPoint("Y_1", .{ .p = Y_1 });
-        transcript.appendPoint("Y_2", .{ .p = Y_2 });
+        comptime var session = Transcript.getSession(contract);
+        defer session.finish();
 
-        const c = transcript.challengeScalar("c");
-        _ = transcript.challengeScalar("w");
+        transcript.appendNoValidate(&session, "Y_0", Y_0);
+        transcript.appendNoValidate(&session, "Y_1", Y_1);
+        transcript.appendNoValidate(&session, "Y_2", Y_2);
+
+        const c = transcript.challengeScalar(&session, "c");
 
         const z_s = c.mul(s).add(y_s);
         const z_x = c.mul(x).add(y_x);
         const z_r = c.mul(r).add(y_r);
 
+        if (builtin.mode == .Debug) {
+            transcript.append(&session, .scalar, "z_s", z_s);
+            transcript.append(&session, .scalar, "z_x", z_x);
+            transcript.append(&session, .scalar, "z_r", z_r);
+            _ = transcript.challengeScalar(&session, "w");
+        }
+
         return .{
-            .Y_0 = .{ .p = Y_0 },
-            .Y_1 = .{ .p = Y_1 },
-            .Y_2 = .{ .p = Y_2 },
+            .Y_0 = Y_0,
+            .Y_1 = Y_1,
+            .Y_2 = Y_2,
             .z_s = z_s,
             .z_x = z_x,
             .z_r = z_r,
@@ -89,19 +112,26 @@ pub const Proof = struct {
         commitment: *const pedersen.Commitment,
         transcript: *Transcript,
     ) !void {
-        transcript.appendDomSep("ciphertext-commitment-equality-proof");
+        transcript.appendDomSep(.@"ciphertext-commitment-equality-proof");
 
         const P = pubkey.point;
         const C_ciphertext = ciphertext.commitment.point;
         const D = ciphertext.handle.point;
         const C_commitment = commitment.point;
 
-        try transcript.validateAndAppendPoint("Y_0", self.Y_0);
-        try transcript.validateAndAppendPoint("Y_1", self.Y_1);
-        try transcript.validateAndAppendPoint("Y_2", self.Y_2);
+        comptime var session = Transcript.getSession(contract);
+        defer session.finish();
 
-        const c = transcript.challengeScalar("c").toBytes();
-        const w = transcript.challengeScalar("w");
+        try transcript.append(&session, .validate_point, "Y_0", self.Y_0);
+        try transcript.append(&session, .validate_point, "Y_1", self.Y_1);
+        try transcript.append(&session, .validate_point, "Y_2", self.Y_2);
+
+        const c = transcript.challengeScalar(&session, "c").toBytes();
+
+        transcript.append(&session, .scalar, "z_s", self.z_s);
+        transcript.append(&session, .scalar, "z_x", self.z_x);
+        transcript.append(&session, .scalar, "z_r", self.z_r);
+        const w = transcript.challengeScalar(&session, "w");
 
         const c_negated = Scalar.fromBytes(Edwards25519.scalar.neg(c));
         const z_s_w = self.z_s.mul(w);
@@ -120,16 +150,15 @@ pub const Proof = struct {
         // ----------------------- MSM
         //     Y_2
 
-        // zig fmt: off
-        const check = weak_mul.mulMulti(8, .{
-            pedersen.G.p,
-            pedersen.H.p,
-            self.Y_0.p,
-            self.Y_1.p,
-            P.p,
-            C_ciphertext.p,
-            D.p,
-            C_commitment.p,
+        const check = ed25519.mulMulti(8, .{
+            pedersen.G,
+            pedersen.H,
+            self.Y_0,
+            self.Y_1,
+            P,
+            C_ciphertext,
+            D,
+            C_commitment,
         }, .{
             self.z_x.mul(w).add(self.z_x).toBytes(),
             c_negated_w.mul(w).add(self.z_r).toBytes(),
@@ -140,9 +169,8 @@ pub const Proof = struct {
             z_s_w.toBytes(),
             c_negated.toBytes(),
         });
-        // zig fmt: on
 
-        if (!self.Y_2.equivalent(.{ .p = check })) {
+        if (!self.Y_2.equivalent(check)) {
             return error.AlgebraicRelation;
         }
     }
@@ -216,11 +244,11 @@ pub const Data = struct {
         }
 
         fn newTranscript(self: Context) Transcript {
-            var transcript = Transcript.init("ciphertext-commitment-equality-instruction");
-            transcript.appendPubkey("pubkey", self.pubkey);
-            transcript.appendCiphertext("ciphertext", self.ciphertext);
-            transcript.appendCommitment("commitment", self.commitment);
-            return transcript;
+            return .init(.@"ciphertext-commitment-equality-instruction", &.{
+                .{ .label = "pubkey", .message = .{ .pubkey = self.pubkey } },
+                .{ .label = "ciphertext", .message = .{ .ciphertext = self.ciphertext } },
+                .{ .label = "commitment", .message = .{ .commitment = self.commitment } },
+            });
         }
     };
 
@@ -294,8 +322,8 @@ test "success case" {
     const ciphertext = el_gamal.encrypt(u64, message, &kp.public);
     const commitment, const opening = pedersen.initValue(u64, message);
 
-    var prover_transcript = Transcript.init("Test");
-    var verifier_transcript = Transcript.init("Test");
+    var prover_transcript = Transcript.initTest("Test");
+    var verifier_transcript = Transcript.initTest("Test");
 
     const proof = Proof.init(
         &kp,
@@ -320,8 +348,8 @@ test "fail case" {
     const ciphertext = el_gamal.encrypt(u64, encrypted_message, &kp.public);
     const commitment, const opening = pedersen.initValue(u64, committed_message);
 
-    var prover_transcript = Transcript.init("test");
-    var verifier_transcript = Transcript.init("test");
+    var prover_transcript = Transcript.initTest("Test");
+    var verifier_transcript = Transcript.initTest("Test");
 
     const proof = Proof.init(
         &kp,
@@ -352,8 +380,8 @@ test "public key zeroed" {
     const ciphertext = el_gamal.encrypt(u64, message, &kp.public);
     const commitment, const opening = pedersen.initValue(u64, message);
 
-    var prover_transcript = Transcript.init("test");
-    var verifier_transcript = Transcript.init("test");
+    var prover_transcript = Transcript.initTest("Test");
+    var verifier_transcript = Transcript.initTest("Test");
 
     const proof = Proof.init(
         &kp,
@@ -384,8 +412,8 @@ test "all zoered" {
     const commitment = try pedersen.Commitment.fromBytes(.{0} ** 32);
     const opening = try pedersen.Opening.fromBytes(.{0} ** 32);
 
-    var prover_transcript = Transcript.init("test");
-    var verifier_transcript = Transcript.init("test");
+    var prover_transcript = Transcript.initTest("Test");
+    var verifier_transcript = Transcript.initTest("Test");
 
     const proof = Proof.init(
         &kp,
@@ -413,8 +441,8 @@ test "commitment zeroed" {
     const commitment = try pedersen.Commitment.fromBytes(.{0} ** 32);
     const opening = try pedersen.Opening.fromBytes(.{0} ** 32);
 
-    var prover_transcript = Transcript.init("test");
-    var verifier_transcript = Transcript.init("test");
+    var prover_transcript = Transcript.initTest("Test");
+    var verifier_transcript = Transcript.initTest("Test");
 
     const proof = Proof.init(
         &kp,
@@ -441,8 +469,8 @@ test "ciphertext zeroed" {
     const ciphertext = try ElGamalCiphertext.fromBytes(.{0} ** 64);
     const commitment, const opening = pedersen.initValue(u64, message);
 
-    var prover_transcript = Transcript.init("test");
-    var verifier_transcript = Transcript.init("test");
+    var prover_transcript = Transcript.initTest("Test");
+    var verifier_transcript = Transcript.initTest("Test");
 
     const proof = Proof.init(
         &kp,
@@ -475,7 +503,7 @@ test "proof strings" {
     const proof = try Proof.fromBase64(proof_string);
     // zig fmt: on
 
-    var verifier_transcript = Transcript.init("Test");
+    var verifier_transcript = Transcript.initTest("Test");
     try proof.verify(
         &pubkey,
         &ciphertext,

@@ -363,17 +363,17 @@ pub const ExtendedPoint = struct {
         var tmp0 = self.shuffle(.ABAB);
         var tmp1 = tmp0.shuffle(.BADC);
 
-        tmp0 = self.blend(tmp0.add(tmp1), .D);
+        tmp0 = self.blend(tmp0.addLimbs(tmp1), .D);
         tmp1 = tmp0.squareAndNegateD();
 
         const S_1 = tmp1.shuffle(.AAAA);
         const S_2 = tmp1.shuffle(.BBBB);
 
-        tmp0 = zero.blend(tmp1.add(tmp1), .C);
+        tmp0 = zero.blend(tmp1.addLimbs(tmp1), .C);
         tmp0 = tmp0.blend(tmp1, .D);
-        tmp0 = tmp0.add(S_1);
-        tmp0 = tmp0.add(zero.blend(S_2, .AD));
-        tmp0 = tmp0.add(zero.blend(S_2.negateLazy(), .BC));
+        tmp0 = tmp0.addLimbs(S_1);
+        tmp0 = tmp0.addLimbs(zero.blend(S_2, .AD));
+        tmp0 = tmp0.addLimbs(zero.blend(S_2.negateLazy(), .BC));
 
         tmp1 = tmp0.shuffle(.DBBD);
         tmp0 = tmp0.shuffle(.CACA);
@@ -527,6 +527,10 @@ pub const ExtendedPoint = struct {
     }
 
     pub fn add(self: ExtendedPoint, other: ExtendedPoint) ExtendedPoint {
+        return self.addCached(.fromExtended(other));
+    }
+
+    pub fn addLimbs(self: ExtendedPoint, other: ExtendedPoint) ExtendedPoint {
         return .{ .limbs = .{
             self.limbs[0] + other.limbs[0],
             self.limbs[1] + other.limbs[1],
@@ -562,7 +566,7 @@ pub const ExtendedPoint = struct {
         // tmp2 = (-A, B, -C, D)
         const tmp2 = self.blend(self.negateLazy(), .AC);
         // (B - A, B + A, D - C, D + C)
-        return tmp1.add(tmp2);
+        return tmp1.addLimbs(tmp2);
     }
 
     /// Square the field element and negate the result's `D` value.
@@ -631,10 +635,26 @@ pub const ExtendedPoint = struct {
 
         return reduce64(.{ z0, z1, z2, z3, z4, z5, z6, z7, z8, z9 });
     }
+
+    pub fn mulByPow2(self: ExtendedPoint, comptime k: u32) ExtendedPoint {
+        var s = self;
+        for (0..k) |_| s = s.dbl();
+        return s;
+    }
 };
 
 pub const CachedPoint = struct {
     element: ExtendedPoint,
+
+    // zig fmt: off
+    pub const identityElement: CachedPoint = .{ .element = .{ .limbs = .{
+        .{ 121647,   121666, 0,        0, 243332, 67108845, 0, 33554431 },
+        .{ 67108864, 0,      33554431, 0, 0,      67108863, 0, 33554431 },
+        .{ 67108863, 0,      33554431, 0, 0,      67108863, 0, 33554431 },
+        .{ 67108863, 0,      33554431, 0, 0,      67108863, 0, 33554431 },
+        .{ 67108863, 0,      33554431, 0, 0,      67108863, 0, 33554431 },
+    } } };
+    // zig fmt: on
 
     pub fn fromExtended(p: ExtendedPoint) CachedPoint {
         var x = p;
@@ -646,7 +666,7 @@ pub const CachedPoint = struct {
         return .{ .element = x };
     }
 
-    fn neg(self: CachedPoint) CachedPoint {
+    pub fn neg(self: CachedPoint) CachedPoint {
         const swapped = self.element.shuffle(.BACD);
         const element = swapped.blend(swapped.negateLazy(), .D);
         return .{ .element = element };
@@ -726,7 +746,7 @@ test "add vs serial" {
     const vec = ExtendedPoint.init(x0, x1, x2, x3);
     const vecprime = vec;
 
-    const result = vec.add(vecprime).split();
+    const result = vec.addLimbs(vecprime).split();
 
     try std.testing.expectEqual(x0.add(x0), result[0]);
     try std.testing.expectEqual(x1.add(x1), result[1]);

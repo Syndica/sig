@@ -2,6 +2,7 @@
 //! [agave](https://github.com/anza-xyz/agave/blob/5a9906ebf4f24cd2a2b15aca638d609ceed87797/zk-sdk/src/sigma_proofs/percentage_with_cap.rs)
 
 const std = @import("std");
+const builtin = @import("builtin");
 const sig = @import("../../sig.zig");
 
 const Edwards25519 = std.crypto.ecc.Edwards25519;
@@ -9,12 +10,26 @@ const pedersen = sig.zksdk.pedersen;
 const Ristretto255 = std.crypto.ecc.Ristretto255;
 const Scalar = std.crypto.ecc.Edwards25519.scalar.Scalar;
 const Transcript = sig.zksdk.Transcript;
-const weak_mul = sig.vm.syscalls.ecc.weak_mul;
+const ed25519 = sig.crypto.ed25519;
 const ProofType = sig.runtime.program.zk_elgamal.ProofType;
 
 pub const Proof = struct {
     max_proof: MaxProof,
     equality_proof: EqualityProof,
+
+    const contract: Transcript.Contract = &.{
+        .{ .label = "Y_max_proof", .type = .validate_point },
+        .{ .label = "Y_delta", .type = .validate_point },
+        .{ .label = "Y_claimed", .type = .validate_point },
+        .{ .label = "c", .type = .challenge },
+
+        .{ .label = "z_max", .type = .scalar },
+        .{ .label = "c_max_proof", .type = .scalar },
+        .{ .label = "z_x", .type = .scalar },
+        .{ .label = "z_delta_real", .type = .scalar },
+        .{ .label = "z_claimed", .type = .scalar },
+        .{ .label = "w", .type = .challenge },
+    };
 
     pub fn init(
         percentage_commitment: *const pedersen.Commitment,
@@ -28,7 +43,7 @@ pub const Proof = struct {
         max_value: u64,
         transcript: *Transcript,
     ) Proof {
-        transcript.appendDomSep("percentage-with-cap-proof");
+        transcript.appendDomSep(.@"percentage-with-cap-proof");
 
         var transcript_percentage_above_max = transcript.*;
         var transcript_percentage_below_max = transcript.*;
@@ -54,12 +69,22 @@ pub const Proof = struct {
         const below_max = percentage_amount <= max_value;
         const active = if (below_max) proof_below_max else proof_above_max;
 
-        transcript.appendPoint("Y_max_proof", active.max_proof.Y_max_proof);
-        transcript.appendPoint("Y_delta", active.equality_proof.Y_delta);
-        transcript.appendPoint("Y_claimed", active.equality_proof.Y_claimed);
+        if (builtin.mode == .Debug) {
+            comptime var session = Transcript.getSession(contract);
+            defer session.finish();
 
-        _ = transcript.challengeScalar("c");
-        _ = transcript.challengeScalar("w");
+            transcript.appendNoValidate(&session, "Y_max_proof", active.max_proof.Y_max_proof);
+            transcript.appendNoValidate(&session, "Y_delta", active.equality_proof.Y_delta);
+            transcript.appendNoValidate(&session, "Y_claimed", active.equality_proof.Y_claimed);
+            _ = transcript.challengeScalar(&session, "c");
+
+            transcript.append(&session, .scalar, "z_max", active.max_proof.z_max_proof);
+            transcript.append(&session, .scalar, "c_max_proof", active.max_proof.c_max_proof);
+            transcript.append(&session, .scalar, "z_x", active.equality_proof.z_x);
+            transcript.append(&session, .scalar, "z_delta_real", active.equality_proof.z_delta);
+            transcript.append(&session, .scalar, "z_claimed", active.equality_proof.z_claimed);
+            _ = transcript.challengeScalar(&session, "w");
+        }
 
         return .{
             .max_proof = active.max_proof,
@@ -79,22 +104,23 @@ pub const Proof = struct {
         const z_x = Scalar.random();
         const z_delta = Scalar.random();
         const z_claimed = Scalar.random();
-        const c_equality = Scalar.random();
+        var c_equality = Scalar.random();
+        defer std.crypto.secureZero(u64, &c_equality.limbs);
 
-        const Y_delta = weak_mul.mulMulti(3, .{
-            pedersen.G.p,
-            pedersen.H.p,
-            C_delta.p,
+        const Y_delta = ed25519.mulMulti(3, .{
+            pedersen.G,
+            pedersen.H,
+            C_delta,
         }, .{
             z_x.toBytes(),
             z_delta.toBytes(),
             Edwards25519.scalar.neg(c_equality.toBytes()),
         });
 
-        const Y_claimed = weak_mul.mulMulti(3, .{
-            pedersen.G.p,
-            pedersen.H.p,
-            C_claimed.p,
+        const Y_claimed = ed25519.mulMulti(3, .{
+            pedersen.G,
+            pedersen.H,
+            C_claimed,
         }, .{
             z_x.toBytes(),
             z_claimed.toBytes(),
@@ -102,8 +128,8 @@ pub const Proof = struct {
         });
 
         const equality_proof: EqualityProof = .{
-            .Y_delta = .{ .p = Y_delta },
-            .Y_claimed = .{ .p = Y_claimed },
+            .Y_delta = Y_delta,
+            .Y_claimed = Y_claimed,
             .z_x = z_x,
             .z_delta = z_delta,
             .z_claimed = z_claimed,
@@ -111,18 +137,20 @@ pub const Proof = struct {
 
         const r_percentage = percentage_opening.scalar;
 
-        const y_max_proof = Scalar.random();
+        var y_max_proof = Scalar.random();
         // Scalar.random() cannot return zero, and H isn't an identity.
         const Y_max_proof = pedersen.H.mul(y_max_proof.toBytes()) catch unreachable;
+        defer std.crypto.secureZero(u64, &y_max_proof.limbs);
 
-        transcript.appendPoint("Y_max_proof", Y_max_proof);
-        transcript.appendPoint("Y_delta", .{ .p = Y_delta });
-        transcript.appendPoint("Y_claimed", .{ .p = Y_claimed });
+        comptime var session = Transcript.getSession(contract);
+        defer session.finish();
 
-        const c = transcript.challengeScalar("c").toBytes();
+        transcript.appendNoValidate(&session, "Y_max_proof", Y_max_proof);
+        transcript.appendNoValidate(&session, "Y_delta", Y_delta);
+        transcript.appendNoValidate(&session, "Y_claimed", Y_claimed);
+
+        const c = transcript.challengeScalar(&session, "c").toBytes();
         const c_max_proof = Edwards25519.scalar.sub(c, c_equality.toBytes());
-
-        _ = transcript.challengeScalar("w");
 
         const z_max_proof = Scalar.fromBytes(c_max_proof).mul(r_percentage).add(y_max_proof);
 
@@ -131,6 +159,15 @@ pub const Proof = struct {
             .z_max_proof = z_max_proof,
             .c_max_proof = Scalar.fromBytes(c_max_proof),
         };
+
+        if (builtin.mode == .Debug) {
+            transcript.append(&session, .scalar, "z_max", z_max_proof);
+            transcript.append(&session, .scalar, "c_max_proof", Scalar.fromBytes(c_max_proof));
+            transcript.append(&session, .scalar, "z_x", z_x);
+            transcript.append(&session, .scalar, "z_delta_real", z_delta);
+            transcript.append(&session, .scalar, "z_claimed", z_claimed);
+            _ = transcript.challengeScalar(&session, "w");
+        }
 
         return .{
             .max_proof = max_proof,
@@ -152,10 +189,10 @@ pub const Proof = struct {
         const z_max_proof = Scalar.random();
         const c_max_proof = Scalar.random();
 
-        const Y_max_proof = weak_mul.mulMulti(3, .{
-            pedersen.H.p,
-            C_percentage.p,
-            pedersen.G.p,
+        const Y_max_proof = ed25519.mulMulti(3, .{
+            pedersen.H,
+            C_percentage,
+            pedersen.G,
         }, .{
             z_max_proof.toBytes(),
             Edwards25519.scalar.neg(c_max_proof.toBytes()),
@@ -163,56 +200,73 @@ pub const Proof = struct {
         });
 
         const max_proof: MaxProof = .{
-            .Y_max_proof = .{ .p = Y_max_proof },
+            .Y_max_proof = Y_max_proof,
             .z_max_proof = z_max_proof,
             .c_max_proof = c_max_proof,
         };
 
-        const x = pedersen.scalarFromInt(u64, delta_amount);
+        var x = pedersen.scalarFromInt(u64, delta_amount);
+        defer std.crypto.secureZero(u64, &x.limbs);
 
         const r_delta = delta_opening.scalar;
         const r_claimed = claimed_opening.scalar;
 
-        const y_x = Scalar.random();
-        const y_delta = Scalar.random();
-        const y_claimed = Scalar.random();
+        var y_x = Scalar.random();
+        var y_delta = Scalar.random();
+        var y_claimed = Scalar.random();
+        defer {
+            std.crypto.secureZero(u64, &y_x.limbs);
+            std.crypto.secureZero(u64, &y_delta.limbs);
+            std.crypto.secureZero(u64, &y_claimed.limbs);
+        }
 
-        const Y_delta = weak_mul.mulMulti(2, .{
-            pedersen.G.p,
-            pedersen.H.p,
+        const Y_delta = ed25519.mulMulti(2, .{
+            pedersen.G,
+            pedersen.H,
         }, .{
             y_x.toBytes(),
             y_delta.toBytes(),
         });
 
-        const Y_claimed = weak_mul.mulMulti(2, .{
-            pedersen.G.p,
-            pedersen.H.p,
+        const Y_claimed = ed25519.mulMulti(2, .{
+            pedersen.G,
+            pedersen.H,
         }, .{
             y_x.toBytes(),
             y_claimed.toBytes(),
         });
 
-        transcript.appendPoint("Y_max_proof", .{ .p = Y_max_proof });
-        transcript.appendPoint("Y_delta", .{ .p = Y_delta });
-        transcript.appendPoint("Y_claimed", .{ .p = Y_claimed });
+        comptime var session = Transcript.getSession(contract);
+        defer session.finish();
 
-        const c = transcript.challengeScalar("c").toBytes();
-        const c_equality = Scalar.fromBytes(Edwards25519.scalar.sub(c, c_max_proof.toBytes()));
+        transcript.appendNoValidate(&session, "Y_max_proof", Y_max_proof);
+        transcript.appendNoValidate(&session, "Y_delta", Y_delta);
+        transcript.appendNoValidate(&session, "Y_claimed", Y_claimed);
 
-        _ = transcript.challengeScalar("w");
+        const c = transcript.challengeScalar(&session, "c").toBytes();
+        var c_equality = Scalar.fromBytes(Edwards25519.scalar.sub(c, c_max_proof.toBytes()));
+        defer std.crypto.secureZero(u64, &c_equality.limbs);
 
         const z_x = c_equality.mul(x).add(y_x);
         const z_delta = c_equality.mul(r_delta).add(y_delta);
         const z_claimed = c_equality.mul(r_claimed).add(y_claimed);
 
         const equality_proof: EqualityProof = .{
-            .Y_delta = .{ .p = Y_delta },
-            .Y_claimed = .{ .p = Y_claimed },
+            .Y_delta = Y_delta,
+            .Y_claimed = Y_claimed,
             .z_x = z_x,
             .z_delta = z_delta,
             .z_claimed = z_claimed,
         };
+
+        if (builtin.mode == .Debug) {
+            transcript.append(&session, .scalar, "z_max", z_max_proof);
+            transcript.append(&session, .scalar, "c_max_proof", c_max_proof);
+            transcript.append(&session, .scalar, "z_x", z_x);
+            transcript.append(&session, .scalar, "z_delta_real", z_delta);
+            transcript.append(&session, .scalar, "z_claimed", z_claimed);
+            _ = transcript.challengeScalar(&session, "w");
+        }
 
         return .{
             .max_proof = max_proof,
@@ -228,7 +282,7 @@ pub const Proof = struct {
         max_value: u64,
         transcript: *Transcript,
     ) !void {
-        transcript.appendDomSep("percentage-with-cap-proof");
+        transcript.appendDomSep(.@"percentage-with-cap-proof");
 
         const m = pedersen.scalarFromInt(u64, max_value);
 
@@ -236,9 +290,12 @@ pub const Proof = struct {
         const C_delta = delta_commitment.point;
         const C_claimed = claimed_commitment.point;
 
-        try transcript.validateAndAppendPoint("Y_max_proof", self.max_proof.Y_max_proof);
-        try transcript.validateAndAppendPoint("Y_delta", self.equality_proof.Y_delta);
-        try transcript.validateAndAppendPoint("Y_claimed", self.equality_proof.Y_claimed);
+        comptime var session = Transcript.getSession(contract);
+        defer session.finish();
+
+        try transcript.append(&session, .validate_point, "Y_max_proof", self.max_proof.Y_max_proof);
+        try transcript.append(&session, .validate_point, "Y_delta", self.equality_proof.Y_delta);
+        try transcript.append(&session, .validate_point, "Y_claimed", self.equality_proof.Y_claimed);
 
         const Y_max = self.max_proof.Y_max_proof;
         const z_max = self.max_proof.z_max_proof;
@@ -250,16 +307,17 @@ pub const Proof = struct {
         const z_delta_real = self.equality_proof.z_delta;
         const z_claimed = self.equality_proof.z_claimed;
 
-        const c = transcript.challengeScalar("c").toBytes();
+        const c = transcript.challengeScalar(&session, "c").toBytes();
         const c_max_proof = self.max_proof.c_max_proof;
         const c_equality = Edwards25519.scalar.sub(c, c_max_proof.toBytes());
 
-        transcript.appendScalar("z_max", z_max);
-        transcript.appendScalar("z_x", z_x);
-        transcript.appendScalar("z_delta_real", z_delta_real);
-        transcript.appendScalar("z_claimed", z_claimed);
+        transcript.append(&session, .scalar, "z_max", z_max);
+        transcript.append(&session, .scalar, "c_max_proof", c_max_proof);
+        transcript.append(&session, .scalar, "z_x", z_x);
+        transcript.append(&session, .scalar, "z_delta_real", z_delta_real);
+        transcript.append(&session, .scalar, "z_claimed", z_claimed);
 
-        const w = transcript.challengeScalar("w");
+        const w = transcript.challengeScalar(&session, "w");
         const ww = w.mul(w);
 
         //     We store points and scalars in the following arrays:
@@ -289,14 +347,14 @@ pub const Proof = struct {
             break :h Edwards25519.scalar.sub(z_max.toBytes(), b.toBytes());
         };
 
-        const check = weak_mul.mulMulti(7, .{
-            pedersen.G.p,
-            pedersen.H.p,
-            C_max.p,
-            Y_delta_real.p,
-            C_delta.p,
-            Y_claimed.p,
-            C_claimed.p,
+        const check = ed25519.mulMulti(7, .{
+            pedersen.G,
+            pedersen.H,
+            C_max,
+            Y_delta_real,
+            C_delta,
+            Y_claimed,
+            C_claimed,
         }, .{
             g, // c_max * m - (w + ww) z_x
             h, // z_max - (w z_delta + ww z_claimed)
@@ -307,7 +365,7 @@ pub const Proof = struct {
             ww.mul(Scalar.fromBytes(c_equality)).toBytes(), // ww * c_eq
         });
 
-        if (!Y_max.equivalent(.{ .p = check })) {
+        if (!Y_max.equivalent(check)) {
             return error.AlgebraicRelation;
         }
     }
@@ -395,14 +453,16 @@ pub const Data = struct {
                 self.claimed_commitment.toBytes() ++ @as([8]u8, @bitCast(self.max_value));
         }
 
+        // zig fmt: off
         fn newTranscript(self: Context) Transcript {
-            var transcript = Transcript.init("percentage-with-cap-instruction");
-            transcript.appendCommitment("percentage-commitment", self.percentage_commitment);
-            transcript.appendCommitment("delta-commitment", self.delta_commitment);
-            transcript.appendCommitment("claimed-commitment", self.claimed_commitment);
-            transcript.appendU64("max-value", self.max_value);
-            return transcript;
+            return .init(.@"percentage-with-cap-instruction", &.{
+                .{ .label = "percentage-commitment", .message = .{ .commitment = self.percentage_commitment } },
+                .{ .label = "delta-commitment",      .message = .{ .commitment = self.delta_commitment } },
+                .{ .label = "claimed-commitment",    .message = .{ .commitment = self.claimed_commitment } },
+                .{ .label = "max-value",             .message = .{ .u64 = self.max_value } },
+            });
         }
+        // zig fmt: on
     };
 
     pub fn init(
@@ -593,8 +653,8 @@ test "above max proof" {
 
     const claimed_commitment, const claimed_opening = pedersen.initValue(u64, 0);
 
-    var prover_transcript = Transcript.init("test");
-    var verifier_transcript = Transcript.init("test");
+    var prover_transcript = Transcript.initTest("Test");
+    var verifier_transcript = Transcript.initTest("Test");
 
     var proof = Proof.init(
         &percentage_commitment,
@@ -657,8 +717,8 @@ test "below max proof" {
         try std.testing.expect(b.equivalent(d));
     }
 
-    var prover_transcript = Transcript.init("test");
-    var verifier_transcript = Transcript.init("test");
+    var prover_transcript = Transcript.initTest("Test");
+    var verifier_transcript = Transcript.initTest("Test");
 
     var proof = Proof.init(
         &percentage_commitment,
@@ -711,8 +771,8 @@ test "is zero" {
     };
     const claimed_commitment, const claimed_opening = pedersen.initValue(u64, delta);
 
-    var prover_transcript = Transcript.init("test");
-    var verifier_transcript = Transcript.init("test");
+    var prover_transcript = Transcript.initTest("Test");
+    var verifier_transcript = Transcript.initTest("Test");
 
     var proof = Proof.init(
         &percentage_commitment,
@@ -753,7 +813,7 @@ test "proof string" {
     const proof = try Proof.fromBase64(proof_string);
     // zig fmt: on
 
-    var verifier_transcript = Transcript.init("test");
+    var verifier_transcript = Transcript.initTest("test");
 
     try proof.verify(
         &percentage_commitment,
