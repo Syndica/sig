@@ -325,11 +325,11 @@ const TransactionScheduler = struct {
         self.batches.appendAssumeCapacity(batch);
     }
 
-    pub fn poll(self: *TransactionScheduler) !ReplaySlotStatus {
-        // collect results
+    fn collectResults(self: *TransactionScheduler) void {
         while (self.results.tryReceive()) |message| {
             assert(0 == self.locks.unlock(self.batches.items[message.batch_index].accounts));
             self.batches_finished += 1;
+            tracy.plot(u32, "batches_finished", @intCast(self.batches_finished));
             switch (message.result) {
                 .success => {},
                 .failure => |err| {
@@ -339,11 +339,19 @@ const TransactionScheduler = struct {
                 .exit => {},
             }
         }
+    }
 
+    pub fn poll(self: *TransactionScheduler) !ReplaySlotStatus {
         // process results
         switch (self.thread_pool.pollFallible()) {
             .done => {
-                assert(self.batches_started == self.batches_finished);
+                self.collectResults();
+
+                if (self.batches_started != self.batches_finished) std.debug.panic(
+                    "batches started: {}, batches finished: {}\n",
+                    .{ self.batches_started, self.batches_finished },
+                );
+
                 if (self.failure) |f| {
                     return .{ .done = f };
                 } else if (self.batches.items.len != self.batches_started) {
@@ -357,8 +365,14 @@ const TransactionScheduler = struct {
                     return .{ .done = null };
                 }
             },
-            .pending => return .pending,
+            .pending => {
+                self.collectResults();
+
+                return .pending;
+            },
             .err => |err| {
+                self.collectResults();
+
                 self.logger.err().logf("transaction batch processor failed with error: {}", .{err});
                 return err;
             },
@@ -394,6 +408,7 @@ const TransactionScheduler = struct {
                 .exit = self.exit,
             }));
             self.batches_started += 1;
+            tracy.plot(u32, "batches_started", @intCast(self.batches_started));
         }
         return null;
     }
@@ -675,7 +690,7 @@ test "TransactionScheduler: signature verification failure" {
 
     const replaced_sigs = try tx_arena.allocator()
         .dupe(sig.core.Signature, transactions[5].signatures);
-    replaced_sigs[0].data[0] +%= 1;
+    replaced_sigs[0].r[0] +%= 1;
     transactions[5].signatures = replaced_sigs;
 
     const slot_hashes = try sig.runtime.sysvar.SlotHashes.init(allocator);

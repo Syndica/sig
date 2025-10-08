@@ -316,6 +316,7 @@ fn executeTxnContext(
                 // For fuzzing purposes, accounts db is currently empty so we do not need to check if
                 // the builtin program is migrated or not.
                 const builtin_is_bpf_program = if (try accounts_db.getAccountWithAncestors(
+                    allocator,
                     &builtin_program.program_id,
                     &ancestors,
                 )) |account| blk: {
@@ -667,9 +668,10 @@ fn executeTxnContext(
     //     .accounts_db = &accounts_db,
     // });
 
-    // Remove address lookup table and config program accounts by inserting empty accounts (zero-lamports)
+    // Remove address lookup table, stake, and config program accounts by inserting empty accounts (zero-lamports)
     try accounts_db.putAccount(slot, program.address_lookup_table.ID, .EMPTY);
     try accounts_db.putAccount(slot, program.config.ID, .EMPTY);
+    try accounts_db.putAccount(slot, program.stake.ID, .EMPTY);
 
     // Load accounts into accounts db
     for (accounts_map.keys(), accounts_map.values()) |pubkey, account| {
@@ -699,6 +701,7 @@ fn executeTxnContext(
     // Get lamports per signature from first entry in recent blockhashes
     const lamports_per_signature = blk: {
         const account = try accounts_db.getAccountWithAncestors(
+            allocator,
             &RecentBlockhashes.ID,
             &ancestors,
         ) orelse break :blk null;
@@ -1205,7 +1208,7 @@ fn loadTransaction(
     );
 
     for (pb_txn.signatures.items, 0..) |pb_signature, i|
-        signatures[i] = .{ .data = pb_signature.getSlice()[0..Signature.SIZE].* };
+        signatures[i] = .fromBytes(pb_signature.getSlice()[0..Signature.SIZE].*);
 
     if (pb_txn.signatures.items.len == 0)
         signatures[0] = Signature.ZEROES;

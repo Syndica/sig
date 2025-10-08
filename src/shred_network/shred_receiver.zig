@@ -163,7 +163,7 @@ pub const ShredReceiver = struct {
             return null;
         };
         const ping = switch (repair_ping) {
-            .Ping => |ping| ping,
+            .ping => |ping| ping,
         };
         ping.verify() catch {
             metrics.ping_verify_fail_count.inc();
@@ -171,7 +171,7 @@ pub const ShredReceiver = struct {
         };
         metrics.valid_ping_count.inc();
 
-        const reply: RepairMessage = .{ .Pong = try Pong.init(&ping, keypair) };
+        const reply: RepairMessage = .{ .pong = try Pong.init(&ping, keypair) };
 
         return try Packet.initFromBincode(
             sig.net.SocketAddr.fromEndpoint(&packet.addr),
@@ -192,9 +192,9 @@ test "handlePing" {
     const pong = try Pong.init(&ping, &my_keypair);
 
     const addr = sig.net.SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 88);
-    const input_ping_packet = try Packet.initFromBincode(addr, RepairPing{ .Ping = ping });
+    const input_ping_packet = try Packet.initFromBincode(addr, RepairPing{ .ping = ping });
 
-    const expected_pong_packet = try Packet.initFromBincode(addr, RepairMessage{ .Pong = pong });
+    const expected_pong_packet = try Packet.initFromBincode(addr, RepairMessage{ .pong = pong });
     const actual_pong_packet = try ShredReceiver.handlePingInner(
         allocator,
         &input_ping_packet,
@@ -207,7 +207,7 @@ test "handlePing" {
     const evil_keypair = try sig.identity.KeyPair.generateDeterministic(.{64} ** 32);
     var evil_ping = ping;
     evil_ping.from = sig.core.Pubkey.fromPublicKey(&evil_keypair.public_key);
-    const evil_ping_packet = try Packet.initFromBincode(addr, RepairPing{ .Ping = evil_ping });
+    const evil_ping_packet = try Packet.initFromBincode(addr, RepairPing{ .ping = evil_ping });
     try std.testing.expectEqual(null, try ShredReceiver.handlePingInner(
         allocator,
         &evil_ping_packet,
@@ -270,7 +270,7 @@ fn verifyShredSlots(slot: Slot, parent: Slot, root: Slot) bool {
 
 const REPAIR_RESPONSE_SERIALIZED_PING_BYTES = 132;
 
-const RepairPing = union(enum) { Ping: Ping };
+const RepairPing = union(enum) { ping: Ping };
 
 pub const ShredReceiverMetrics = struct {
     received_count: *Counter,

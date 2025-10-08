@@ -95,6 +95,9 @@ pub const SvmGateway = struct {
         batch: []const ResolvedTransaction,
         params: Params,
     ) !SvmGateway {
+        const zone = tracy.Zone.init(@src(), .{ .name = "SvmGateway.init" });
+        defer zone.deinit();
+
         var accounts = try BatchAccountCache.initSufficientCapacity(allocator, batch);
         for (batch) |transaction| {
             try accounts.load(
@@ -139,11 +142,12 @@ pub const SvmGateway = struct {
                 .next_vm_environment = null, // TODO epoch boundary
                 .accounts = accounts,
                 .programs = programs,
-                .blockhash_queue = params.blockhash_queue.tryRead() orelse
-                    // blockhash queue is only written when freezing a slot,
-                    // which comes *after* executing all transactions, not
-                    // concurrently (with this struct's existence).
-                    unreachable,
+
+                // blockhash queue is only written when freezing a slot,
+                // which comes *after* executing all transactions, not
+                // concurrently (with this struct's existence).
+                // TODO: why does tryRead sometimes fail here - this seems weird?
+                .blockhash_queue = params.blockhash_queue.read(),
             },
         };
     }

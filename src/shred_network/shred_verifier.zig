@@ -50,6 +50,16 @@ pub fn runShredVerifier(
     }
 }
 
+pub const ShredVerificationFailure = error{
+    InsufficientShredSize,
+    SlotMissing,
+    SignatureMissing,
+    SignedDataMissing,
+    LeaderUnknown,
+    FailedVerification,
+    FailedCaching,
+};
+
 /// Analogous to [verify_shred_cpu](https://github.com/anza-xyz/agave/blob/83e7d84bcc4cf438905d07279bc07e012a49afd9/ledger/src/sigverify_shreds.rs#L35)
 fn verifyShred(
     packet: *const Packet,
@@ -57,31 +67,19 @@ fn verifyShred(
     verified_merkle_roots: *VerifiedMerkleRoots,
     metrics: Metrics,
 ) ShredVerificationFailure!void {
-    const shred = shred_layout.getShred(packet) orelse return error.insufficient_shred_size;
-    const slot = shred_layout.getSlot(shred) orelse return error.slot_missing;
-    const signature = shred_layout.getLeaderSignature(shred) orelse return error.signature_missing;
-    const signed_data = shred_layout.merkleRoot(shred) orelse return error.signed_data_missing;
+    const shred = shred_layout.getShred(packet) orelse return error.InsufficientShredSize;
+    const slot = shred_layout.getSlot(shred) orelse return error.SlotMissing;
+    const signature = shred_layout.getLeaderSignature(shred) orelse return error.SignatureMissing;
+    const signed_data = shred_layout.merkleRoot(shred) orelse return error.SignedDataMissing;
 
-    if (verified_merkle_roots.get(signed_data)) |_| {
-        return;
-    }
+    if (verified_merkle_roots.get(signed_data) != null) return;
+
     metrics.cache_miss_count.inc();
-    const leader = leader_schedule.get(slot) orelse return error.leader_unknown;
-    const valid = signature.verify(leader, &signed_data.data) catch
-        return error.failed_verification;
-    if (!valid) return error.failed_verification;
-    verified_merkle_roots.insert(signed_data, {}) catch return error.failed_caching;
-}
+    const leader = leader_schedule.get(slot) orelse return error.LeaderUnknown;
 
-pub const ShredVerificationFailure = error{
-    insufficient_shred_size,
-    slot_missing,
-    signature_missing,
-    signed_data_missing,
-    leader_unknown,
-    failed_verification,
-    failed_caching,
-};
+    signature.verify(leader, &signed_data.data) catch return error.FailedVerification;
+    verified_merkle_roots.insert(signed_data, {}) catch return error.FailedCaching;
+}
 
 const Metrics = struct {
     received_count: *Counter,

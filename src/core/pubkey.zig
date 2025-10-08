@@ -2,12 +2,19 @@ const std = @import("std");
 const base58 = @import("base58");
 const BASE58_ENDEC = base58.Table.BITCOIN;
 
+const Edwards25519 = std.crypto.ecc.Edwards25519;
+
 pub const Pubkey = extern struct {
     data: [SIZE]u8,
 
     pub const SIZE = 32;
 
     pub const ZEROES: Pubkey = .{ .data = .{0} ** SIZE };
+
+    pub fn fromBytes(data: [SIZE]u8) !Pubkey {
+        try Edwards25519.rejectNonCanonical(data);
+        return .{ .data = data };
+    }
 
     pub fn fromPublicKey(public_key: *const std.crypto.sign.Ed25519.PublicKey) Pubkey {
         return .{ .data = public_key.bytes };

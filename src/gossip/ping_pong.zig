@@ -30,7 +30,7 @@ pub const Ping = struct {
         return .{
             .from = Pubkey.fromPublicKey(&keypair.public_key),
             .token = token,
-            .signature = .{ .data = signature.toBytes() },
+            .signature = .fromSignature(signature),
         };
     }
 
@@ -39,17 +39,16 @@ pub const Ping = struct {
         random.bytes(&token);
         const signature = try keypair.sign(&token, null);
 
-        return Ping{
+        return .{
             .from = Pubkey.fromPublicKey(&keypair.public_key),
             .token = token,
-            .signature = .{ .data = signature.toBytes() },
+            .signature = .fromSignature(signature),
         };
     }
 
     pub fn verify(self: *const Ping) !void {
-        if (!try self.signature.verify(self.from, &self.token)) {
+        self.signature.verify(self.from, &self.token) catch
             return error.InvalidSignature;
-        }
     }
 };
 
@@ -66,14 +65,13 @@ pub const Pong = struct {
         return .{
             .from = Pubkey.fromPublicKey(&keypair.public_key),
             .hash = hash,
-            .signature = .{ .data = signature.toBytes() },
+            .signature = .fromSignature(signature),
         };
     }
 
     pub fn verify(self: *const Pong) !void {
-        if (!try self.signature.verify(self.from, &self.hash.data)) {
+        self.signature.verify(self.from, &self.hash.data) catch
             return error.InvalidSignature;
-        }
     }
 
     pub fn initRandom(random: std.Random, keypair: *const KeyPair) !Pong {
@@ -84,7 +82,7 @@ pub const Pong = struct {
     pub fn eql(self: *const Pong, other: *const @This()) bool {
         return std.mem.eql(u8, &self.from.data, &other.from.data) and
             std.mem.eql(u8, &self.hash.data, &other.hash.data) and
-            std.mem.eql(u8, &self.signature.data, &other.signature.data);
+            std.mem.eql(u8, &self.signature.toBytes(), &other.signature.toBytes());
     }
 };
 
@@ -274,14 +272,15 @@ test "PingCache works" {
 }
 
 test "ping signatures match rust" {
-    var keypair = try KeyPair.fromSecretKey(try std.crypto.sign.Ed25519.SecretKey.fromBytes([_]u8{
+    var keypair = try KeyPair.fromSecretKey(try .fromBytes(.{
         125, 52,  162, 97,  231, 139, 58,  13,  185, 212, 57,  142, 136, 12,  21,  127, 228, 71,
         115, 126, 138, 52,  102, 69,  103, 185, 45,  255, 132, 222, 243, 138, 25,  117, 21,  11,
         61,  170, 38,  18,  67,  196, 242, 219, 50,  154, 4,   254, 79,  227, 253, 229, 188, 230,
         121, 12,  227, 248, 199, 156, 253, 144, 175, 67,
     }));
-    var ping = Ping.init([_]u8{0} ** PING_TOKEN_SIZE, &keypair) catch unreachable;
-    const signature = ping.signature.data;
+    var ping = Ping.init(@splat(0), &keypair) catch unreachable;
+
+    const signature = ping.signature.toBytes();
 
     const rust_sig = [_]u8{ 52, 171, 91, 205, 183, 211, 38, 219, 53, 155, 163, 118, 202, 169, 15, 237, 147, 87, 209, 20, 6, 115, 24, 114, 196, 41, 217, 55, 123, 245, 35, 138, 126, 47, 233, 182, 90, 206, 13, 173, 212, 107, 94, 120, 167, 254, 14, 11, 253, 199, 158, 4, 203, 42, 173, 143, 214, 209, 132, 158, 223, 62, 214, 11 };
     try testing.expect(std.mem.eql(u8, &signature, &rust_sig));

@@ -1,5 +1,6 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
+const tracy = @import("tracy");
 
 const compute_budget = sig.runtime.program.compute_budget;
 
@@ -32,6 +33,9 @@ pub fn preprocessTransaction(
     txn: Transaction,
     sig_verify: SigVerifyOption,
 ) PreprocessTransactionResult {
+    var zone = tracy.Zone.init(@src(), .{ .name = "preprocessTransaction" });
+    defer zone.deinit();
+
     txn.validate() catch return .{ .err = .SanitizeFailure };
 
     const msg_bytes = txn.msg.serializeBounded(txn.version) catch return .{
@@ -39,9 +43,11 @@ pub fn preprocessTransaction(
     };
 
     if (sig_verify == .run_sig_verify) {
-        txn.verifySignatures(msg_bytes.constSlice()) catch |err| return switch (err) {
-            error.SignatureVerificationFailed => .{ .err = .SignatureFailure },
-            else => .{ .err = .SanitizeFailure },
+        txn.verifySignatures(msg_bytes.constSlice()) catch |err| {
+            return switch (err) {
+                error.SignatureVerificationFailed => .{ .err = .SignatureFailure },
+                else => .{ .err = .SanitizeFailure },
+            };
         };
     }
 

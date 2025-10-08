@@ -318,7 +318,7 @@ pub const ShredInserter = struct {
                 if (leader == null) {
                     continue;
                 }
-                if (!shred.verify(leader.?)) {
+                if (std.meta.isError(shred.verify(leader.?))) {
                     self.metrics.num_recovered_failed_sig.inc();
                     continue;
                 }

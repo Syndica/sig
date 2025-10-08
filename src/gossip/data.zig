@@ -109,7 +109,7 @@ pub const SignedGossipData = struct {
             error.NonCanonical => unreachable,
         };
         return .{
-            .signature = .{ .data = signature.toBytes() },
+            .signature = .fromSignature(signature),
             .data = data,
         };
     }
@@ -125,11 +125,11 @@ pub const SignedGossipData = struct {
         self.data.deinit(allocator);
     }
 
-    pub fn verify(self: *const Self, pubkey: Pubkey) !bool {
+    pub fn verify(self: *const Self, pubkey: Pubkey) !void {
         // should always be enough space or is invalid msg
         var buf: [PACKET_DATA_SIZE]u8 = undefined;
         const msg = try bincode.writeToSlice(&buf, self.data, bincode.Params.standard);
-        return self.signature.verify(pubkey, msg);
+        return try self.signature.verify(pubkey, msg);
     }
 
     pub fn id(self: *const Self) Pubkey {
@@ -1881,7 +1881,7 @@ test "sig verify duplicateShreds" {
     data.from = pubkey;
 
     const value = SignedGossipData.initSigned(&keypair, .{ .DuplicateShred = .{ 0, data } });
-    try std.testing.expect(try value.verify(pubkey));
+    try value.verify(pubkey);
 }
 
 test "sanitize GossipData" {

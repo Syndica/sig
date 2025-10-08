@@ -11,31 +11,41 @@ const ElGamalPubkey = sig.zksdk.ElGamalPubkey;
 const Ristretto255 = std.crypto.ecc.Ristretto255;
 const Scalar = std.crypto.ecc.Edwards25519.scalar.Scalar;
 const Transcript = sig.zksdk.Transcript;
-const weak_mul = sig.vm.syscalls.ecc.weak_mul;
+const ed25519 = sig.crypto.ed25519;
 const ProofType = sig.runtime.program.zk_elgamal.ProofType;
 
 pub const Proof = struct {
     Y: Ristretto255,
     z: Scalar,
 
+    const contract: Transcript.Contract = &.{
+        .{ .label = "Y", .type = .validate_point },
+        .{ .label = "c", .type = .challenge },
+    };
+
     pub fn init(
         kp: *const ElGamalKeypair,
         transcript: *Transcript,
     ) Proof {
-        transcript.appendDomSep("pubkey-proof");
+        transcript.appendDomSep(.@"pubkey-proof");
 
         const s = kp.secret.scalar;
         std.debug.assert(!s.isZero());
+        var s_inv = s.invert();
+        defer std.crypto.secureZero(u64, &s_inv.limbs);
 
         var y = Scalar.random();
         defer std.crypto.secureZero(u64, &y.limbs);
 
         // Scalar.random() cannot return zero, and H isn't an identity
-        const Y = pedersen.H.mul(y.toBytes()) catch unreachable;
-        transcript.appendPoint("Y", Y);
+        const Y = ed25519.straus.mulByKnown(pedersen.H, y.toBytes());
 
-        const c = transcript.challengeScalar("c");
-        const z = c.mul(s.invert()).add(y);
+        comptime var session = Transcript.getSession(contract);
+        defer session.finish();
+
+        transcript.appendNoValidate(&session, "Y", Y);
+        const c = transcript.challengeScalar(&session, "c");
+        const z = c.mul(s_inv).add(y);
 
         return .{
             .Y = Y,
@@ -48,10 +58,16 @@ pub const Proof = struct {
         pubkey: *const ElGamalPubkey,
         transcript: *Transcript,
     ) !void {
-        transcript.appendDomSep("pubkey-proof");
+        transcript.appendDomSep(.@"pubkey-proof");
 
-        try transcript.validateAndAppendPoint("Y", self.Y);
-        const c = transcript.challengeScalar("c");
+        // [agave] https://github.com/solana-program/zk-elgamal-proof/blob/8c84822593d393c2305eea917fdffd1ec2525aa7/zk-sdk/src/sigma_proofs/pubkey_validity.rs#L107-L109
+        try pubkey.point.rejectIdentity();
+
+        comptime var session = Transcript.getSession(contract);
+        defer session.finish();
+
+        try transcript.append(&session, .validate_point, "Y", self.Y);
+        const c = transcript.challengeScalar(&session, "c");
 
         //     points  scalars
         // 0   H        z
@@ -59,15 +75,15 @@ pub const Proof = struct {
         // ----------------------- MSM
         //     Y
 
-        const check = weak_mul.mulMulti(2, .{
-            pedersen.H.p,
-            pubkey.point.p,
+        const check = ed25519.mulMulti(2, .{
+            pedersen.H,
+            pubkey.point,
         }, .{
             self.z.toBytes(),
             Edwards25519.scalar.neg(c.toBytes()),
         });
 
-        if (!self.Y.equivalent(.{ .p = check })) {
+        if (!self.Y.equivalent(check)) {
             return error.AlgebraicRelation;
         }
     }
@@ -119,9 +135,9 @@ pub const Data = struct {
         }
 
         fn newTranscript(self: Context) Transcript {
-            var transcript = Transcript.init("pubkey-validity-instruction");
-            transcript.appendPubkey("pubkey", self.pubkey);
-            return transcript;
+            return .init(.@"pubkey-validity-instruction", &.{
+                .{ .label = "pubkey", .message = .{ .pubkey = self.pubkey } },
+            });
         }
     };
 
@@ -162,8 +178,8 @@ pub const Data = struct {
 test "correctness" {
     const kp = ElGamalKeypair.random();
 
-    var prover_transcript = Transcript.init("test");
-    var verifier_transcript = Transcript.init("test");
+    var prover_transcript = Transcript.initTest("Test");
+    var verifier_transcript = Transcript.initTest("Test");
 
     const proof = Proof.init(&kp, &prover_transcript);
     try proof.verify(&kp.public, &verifier_transcript);
@@ -173,8 +189,8 @@ test "incorrect pubkey" {
     const kp = ElGamalKeypair.random();
     const incorrect_kp = ElGamalKeypair.random();
 
-    var prover_transcript = Transcript.init("test");
-    var verifier_transcript = Transcript.init("test");
+    var prover_transcript = Transcript.initTest("Test");
+    var verifier_transcript = Transcript.initTest("Test");
 
     const proof = Proof.init(&kp, &prover_transcript);
 
@@ -193,6 +209,6 @@ test "proof string" {
     const proof = try Proof.fromBase64(proof_string);
     // zig fmt: on
 
-    var verifier_transcript = Transcript.init("test");
+    var verifier_transcript = Transcript.initTest("test");
     try proof.verify(&pubkey, &verifier_transcript);
 }

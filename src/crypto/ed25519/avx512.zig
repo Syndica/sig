@@ -8,6 +8,7 @@ const Fe = Ed25519.Fe;
 const u32x8 = @Vector(8, u32);
 const i32x8 = @Vector(8, i32);
 const u64x4 = @Vector(4, u64);
+const u52x4 = @Vector(4, u52);
 
 // TODO: there's no inherent limitation from using inline assembly instead,
 // however this currently (Zig 0.14.1) crashes both LLVM and the self-hosted backend.
@@ -15,8 +16,28 @@ const u64x4 = @Vector(4, u64);
 // better codegen as opposed to inline assembly.
 extern fn @"llvm.x86.avx512.vpmadd52l.uq.256"(u64x4, u64x4, u64x4) u64x4;
 extern fn @"llvm.x86.avx512.vpmadd52h.uq.256"(u64x4, u64x4, u64x4) u64x4;
-const madd52lo = @"llvm.x86.avx512.vpmadd52l.uq.256";
-const madd52hi = @"llvm.x86.avx512.vpmadd52h.uq.256";
+
+inline fn madd52lo(x: u64x4, y: u64x4, z: u64x4) u64x4 {
+    if (@inComptime()) {
+        const V = @Vector(4, u128);
+        const tsrc2: u52x4 = @truncate(z);
+        const temp128 = @as(V, @as(u52x4, @truncate(y))) * @as(V, tsrc2);
+        return x + @as(u52x4, @truncate(temp128));
+    } else {
+        return @"llvm.x86.avx512.vpmadd52l.uq.256"(x, y, z);
+    }
+}
+
+inline fn madd52hi(x: u64x4, y: u64x4, z: u64x4) u64x4 {
+    if (@inComptime()) {
+        const V = @Vector(4, u128);
+        const tsrc2: u52x4 = @truncate(z);
+        const temp128 = @as(V, @as(u52x4, @truncate(y))) * @as(V, tsrc2);
+        return x + @as(u52x4, @truncate(temp128 >> @splat(52)));
+    } else {
+        return @"llvm.x86.avx512.vpmadd52h.uq.256"(x, y, z);
+    }
+}
 
 /// A vector of four field elements.
 pub const ExtendedPoint = struct {
@@ -93,7 +114,11 @@ pub const ExtendedPoint = struct {
         } };
     }
 
-    fn add(self: ExtendedPoint, other: ExtendedPoint) ExtendedPoint {
+    pub fn add(self: ExtendedPoint, other: ExtendedPoint) ExtendedPoint {
+        return self.addCached(.fromExtended(other));
+    }
+
+    fn addLimbs(self: ExtendedPoint, other: ExtendedPoint) ExtendedPoint {
         return .{ .limbs = .{
             self.limbs[0] + other.limbs[0],
             self.limbs[1] + other.limbs[1],
@@ -117,7 +142,7 @@ pub const ExtendedPoint = struct {
     }
 
     pub fn subCached(self: ExtendedPoint, cp: CachedPoint) ExtendedPoint {
-        return self.addCached(cp.negate());
+        return self.addCached(cp.neg());
     }
 
     fn shuffle(self: ExtendedPoint, comptime control: Shuffle) ExtendedPoint {
@@ -143,7 +168,7 @@ pub const ExtendedPoint = struct {
     fn diffSum(self: ExtendedPoint) ExtendedPoint {
         const tmp1 = self.shuffle(.BADC);
         const tmp2 = self.blend(self.negateLazy(), .AC);
-        return tmp1.add(tmp2);
+        return tmp1.addLimbs(tmp2);
     }
 
     fn negateLazy(self: ExtendedPoint) ExtendedPoint {
@@ -160,7 +185,7 @@ pub const ExtendedPoint = struct {
 
     pub fn dbl(self: ExtendedPoint) ExtendedPoint {
         var tmp0 = self.shuffle(.BADC);
-        var tmp1 = self.add(tmp0).shuffle(.ABAB);
+        var tmp1 = self.addLimbs(tmp0).shuffle(.ABAB);
 
         tmp0 = self.blend(tmp1, .D);
         tmp1 = tmp0.reduce().square();
@@ -170,17 +195,33 @@ pub const ExtendedPoint = struct {
 
         const S2_S2_S2_S4 = S2_S2_S2_S2.blend(tmp1, .D).negateLazy();
 
-        tmp0 = S1_S1_S1_S1.add(zero.blend(tmp1.add(tmp1), .C));
-        tmp0 = tmp0.add(zero.blend(S2_S2_S2_S2, .AD));
-        tmp0 = tmp0.add(zero.blend(S2_S2_S2_S4, .BCD));
+        tmp0 = S1_S1_S1_S1.addLimbs(zero.blend(tmp1.addLimbs(tmp1), .C));
+        tmp0 = tmp0.addLimbs(zero.blend(S2_S2_S2_S2, .AD));
+        tmp0 = tmp0.addLimbs(zero.blend(S2_S2_S2_S4, .BCD));
 
         const tmp2 = tmp0.reduce();
         return tmp2.shuffle(.DBBD).mul(tmp2.shuffle(.CACA));
+    }
+
+    pub fn mulByPow2(self: ExtendedPoint, comptime k: u32) ExtendedPoint {
+        var s = self;
+        for (0..k) |_| s = s.dbl();
+        return s;
     }
 };
 
 pub const CachedPoint = struct {
     limbs: [5]u64x4,
+
+    // zig fmt: off
+    pub const identityElement: CachedPoint = .{ .limbs = .{
+        .{ 121647,           121666, 243332, 2251799813685229 },
+        .{ 2251799813685248, 0,      0,      2251799813685247 },
+        .{ 2251799813685247, 0,      0,      2251799813685247 },
+        .{ 2251799813685247, 0,      0,      2251799813685247 },
+        .{ 2251799813685247, 0,      0,      2251799813685247 },
+    } };
+    // zig fmt: on
 
     fn mul(self: CachedPoint, b: CachedPoint) ExtendedPoint {
         const x = self.limbs;
@@ -485,7 +526,7 @@ pub const CachedPoint = struct {
         } };
     }
 
-    fn negate(self: CachedPoint) CachedPoint {
+    pub fn neg(self: CachedPoint) CachedPoint {
         const swapped = self.shuffle(.BACD);
         const negated = ExtendedPoint.fromCached(self).negateLazy().reduce();
         return swapped.blend(negated, .D);
@@ -582,8 +623,8 @@ test "vpmadd52luq" {
     const z: u64x4 = @splat(5);
 
     try std.testing.expectEqual(
-        madd52lo(z, x, y),
-        @as(u64x4, @splat(5 + 2 * 3)),
+        madd52lo(x, y, z),
+        @as(u64x4, @splat(2 + 3 * 5)),
     );
 }
 

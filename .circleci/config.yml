@@ -291,7 +291,7 @@ jobs:
 
             pip install -e ".[dev]"
       - restore_cache:
-          key: test-vectors-e0b55b1fd3d72532b87a53fa6c313c8a09e34164
+          key: test-vectors-233b764514a3cd35adf986e0b9967946d486c987
       - run:
           name: Checkout Test Vectors
           command: |
@@ -312,7 +312,7 @@ jobs:
               find vm_interp/fixtures/v2 -type f -name '*.fix' -print0 | xargs -0 rename "s/\.fix\$/-v2.fix/"
             fi
       - save_cache:
-          key: test-vectors-e0b55b1fd3d72532b87a53fa6c313c8a09e34164
+          key: test-vectors-233b764514a3cd35adf986e0b9967946d486c987
           paths:
             - test-vectors/
       - run:
