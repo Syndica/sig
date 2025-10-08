@@ -15,7 +15,6 @@ const account_loader = sig.runtime.account_loader;
 const AccountSharedData = sig.runtime.AccountSharedData;
 const BatchAccountCache = sig.runtime.account_loader.BatchAccountCache;
 const CachedAccount = sig.runtime.account_loader.CachedAccount;
-const CopiedAccount = sig.runtime.transaction_execution.CopiedAccount;
 const ComputeBudgetLimits = sig.runtime.program.compute_budget.ComputeBudgetLimits;
 const FeatureSet = sig.core.FeatureSet;
 const NonceData = sig.runtime.nonce.Data;
@@ -56,7 +55,7 @@ pub fn checkAge(
     max_age: u64,
     next_durable_nonce: *const Hash,
     next_lamports_per_signature: u64,
-) error{OutOfMemory}!TransactionResult(?CopiedAccount) {
+) error{OutOfMemory}!TransactionResult(?CachedAccount) {
     if (blockhash_queue.getHashInfoIfValid(transaction.recent_blockhash, max_age) != null) {
         return .{ .ok = null };
     }
@@ -90,36 +89,34 @@ pub fn checkFeePayer(
     batch_account_cache: *BatchAccountCache,
     compute_budget_limits: *const ComputeBudgetLimits,
     /// Takes ownership of this
-    nonce_account: ?CopiedAccount,
+    maybe_nonce: ?CachedAccount,
     rent_collector: *const RentCollector,
     feature_set: *const FeatureSet,
     slot: sig.core.Slot,
     lamports_per_signature: u64,
 ) error{OutOfMemory}!TransactionResult(struct {
     FeeDetails,
-    TransactionRollbacks,
+    std.BoundedArray(CachedAccount, 2),
 }) {
     var zone = tracy.Zone.init(@src(), .{ .name = "checkFeePayer" });
     defer zone.deinit();
 
+    var rollbacks = std.BoundedArray(CachedAccount, 2){};
+    // errdefer TODO
+
     var nonce_account_is_owned = true;
-    defer if (nonce_account_is_owned) if (nonce_account) |na| allocator.free(na.account.data);
+    defer if (nonce_account_is_owned) if (maybe_nonce) |na| na.deinit(allocator);
 
     const enable_secp256r1 = feature_set.active(.enable_secp256r1_precompile, slot);
     const fee_payer_key = transaction.accounts.items(.pubkey)[0];
 
-    var loaded_fee_payer = try batch_account_cache.loadAccount(
-        allocator,
-        transaction,
-        &fee_payer_key,
-        true,
-        feature_set.active(.formalize_loaded_transaction_data_size, slot),
-    ) orelse return .{ .err = .AccountNotFound };
+    const cached_payer = batch_account_cache.mutateInPlace(&fee_payer_key) orelse
+        return .{ .err = .AccountNotFound };
 
-    const fee_payer_loaded_rent_epoch = loaded_fee_payer.account.rent_epoch;
+    const fee_payer_loaded_rent_epoch = cached_payer.rent_epoch;
 
-    loaded_fee_payer.rent_collected = account_loader.collectRentFromAccount(
-        loaded_fee_payer.account,
+    const rent_collected = account_loader.collectRentFromAccount(
+        cached_payer,
         &fee_payer_key,
         feature_set,
         slot,
@@ -137,27 +134,41 @@ pub fn checkFeePayer(
         );
     };
 
-    const cached_fee_payer_account: CachedAccount = .{
-        .pubkey = fee_payer_key,
-        .account = loaded_fee_payer.account,
-    };
-
     if (validateFeePayer(
-        cached_fee_payer_account,
+        fee_payer_key,
+        cached_payer,
         rent_collector,
         fee_details.total(),
     )) |validation_error| return .{ .err = validation_error };
 
+    const saved_payer = if (maybe_nonce) |nonce|
+        if (fee_payer_key.equals(&maybe_nonce.?.pubkey)) same: {
+            var payer_and_nonce = nonce;
+            payer_and_nonce.account = cached_payer.*;
+            payer_and_nonce.account.lamports += rent_collected;
+            payer_and_nonce.account.rent_epoch = fee_payer_loaded_rent_epoch;
+            rollbacks.append(payer_and_nonce) catch unreachable;
+            break :same true;
+        } else diff: {
+            rollbacks.append(nonce) catch unreachable;
+            break :diff false;
+        }
+    else
+        false;
     nonce_account_is_owned = false;
-    const rollback_accounts = try TransactionRollbacks.init(
-        allocator,
-        nonce_account,
-        cached_fee_payer_account,
-        loaded_fee_payer.rent_collected,
-        fee_payer_loaded_rent_epoch,
-    );
 
-    return .{ .ok = .{ fee_details, rollback_accounts } };
+    if (!saved_payer) {
+        var rollback_payer = CachedAccount{
+            .pubkey = fee_payer_key,
+            .account = try cached_payer.clone(allocator),
+            .is_writable = true,
+        };
+        rollback_payer.account.lamports += rent_collected;
+        rollback_payer.account.rent_epoch = fee_payer_loaded_rent_epoch;
+        rollbacks.append(rollback_payer) catch unreachable;
+    }
+
+    return .{ .ok = .{ fee_details, rollbacks } };
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/dad81b9b2ecf81ceb518dd9f7cc91e83ba33bda8/fee/src/lib.rs#L85
@@ -272,13 +283,14 @@ const FeeBudgetLimits = struct {
 
 // [agave] https://github.com/anza-xyz/agave/blob/64b616042450fa6553427471f70895f1dfe0cd86/svm/src/account_loader.rs#L293
 fn validateFeePayer(
-    payer: CachedAccount,
+    pubkey: Pubkey,
+    payer: *AccountSharedData,
     rent_collector: *const RentCollector,
     fee: u64,
 ) ?TransactionError {
-    if (payer.account.lamports == 0) return .AccountNotFound;
+    if (payer.lamports == 0) return .AccountNotFound;
 
-    const system_account_kind = getSystemAccountKind(payer.account) orelse
+    const system_account_kind = getSystemAccountKind(payer) orelse
         return .InvalidAccountForFee;
 
     const min_balance = switch (system_account_kind) {
@@ -286,25 +298,25 @@ fn validateFeePayer(
         .Nonce => rent_collector.rent.minimumBalance(NonceVersions.SERIALIZED_SIZE),
     };
 
-    if (payer.account.lamports < min_balance) return .InsufficientFundsForFee;
+    if (payer.lamports < min_balance) return .InsufficientFundsForFee;
 
     const pre_rent_state = rent_collector.getAccountRentState(
-        payer.account.lamports,
-        payer.account.data.len,
+        payer.lamports,
+        payer.data.len,
     );
 
-    payer.account.lamports = std.math.sub(u64, payer.account.lamports, fee) catch
+    payer.lamports = std.math.sub(u64, payer.lamports, fee) catch
         return .InsufficientFundsForFee;
 
     const post_rent_state = rent_collector.getAccountRentState(
-        payer.account.lamports,
-        payer.account.data.len,
+        payer.lamports,
+        payer.data.len,
     );
 
     if (RentCollector.checkRentStateWithAccount(
         pre_rent_state,
         post_rent_state,
-        &payer.pubkey,
+        &pubkey,
         0, // Fee payer is always at index 0
     )) |err| return err;
 
@@ -336,10 +348,10 @@ fn checkLoadAndAdvanceMessageNonceAccount(
     next_durable_nonce: *const Hash,
     next_lamports_per_signature: u64,
     batch_account_cache: *const BatchAccountCache,
-) error{OutOfMemory}!?struct { CopiedAccount, u64 } {
+) error{OutOfMemory}!?struct { CachedAccount, u64 } {
     if (transaction.recent_blockhash.eql(next_durable_nonce.*)) return null;
 
-    const cached_account, const nonce_data = loadMessageNonceAccount(
+    const address, const cached_account, const nonce_data = loadMessageNonceAccount(
         transaction,
         batch_account_cache,
     ) orelse return null;
@@ -360,8 +372,15 @@ fn checkLoadAndAdvanceMessageNonceAccount(
         else => return null,
     };
 
+    var owned_account = CachedAccount{
+        .pubkey = address,
+        .account = cached_account.*,
+        .is_writable = true,
+    };
+    owned_account.account.data = new_data; // TODO find a cleaner approach to this
+
     return .{
-        CopiedAccount.init(cached_account, new_data, cached_account.account.lamports),
+        owned_account,
         previous_lamports_per_signature,
     };
 }
@@ -369,7 +388,12 @@ fn checkLoadAndAdvanceMessageNonceAccount(
 fn loadMessageNonceAccount(
     transaction: *const RuntimeTransaction,
     batch_account_cache: *const BatchAccountCache,
-) ?struct { CachedAccount, NonceData } {
+) ?struct {
+    Pubkey,
+    /// pointer to the account cache
+    *AccountSharedData,
+    NonceData,
+} {
     const nonce_address = getDurableNonce(transaction) orelse
         return null;
     const nonce_account = batch_account_cache.account_cache.getPtr(nonce_address) orelse
@@ -386,10 +410,7 @@ fn loadMessageNonceAccount(
         if (signer.equals(&nonce_data.authority)) break;
     } else return null;
 
-    return .{
-        .{ .pubkey = nonce_address, .account = nonce_account },
-        nonce_data,
-    };
+    return .{ nonce_address, nonce_account, nonce_data };
 }
 
 fn verifyNonceAccount(account: AccountSharedData, recent_blockhash: *const Hash) ?NonceData {
@@ -724,8 +745,10 @@ test "checkFeePayer: happy path fee payer only" {
     try std.testing.expectEqual(5000, fee_details.transaction_fee);
     try std.testing.expectEqual(0, fee_details.prioritization_fee);
 
-    try std.testing.expectEqual(995_000, rollbacks.fee_payer_only.account.lamports);
-    try std.testing.expectEqual(0, rollbacks.fee_payer_only.account.rent_epoch);
+    try std.testing.expectEqual(1, rollbacks.slice().len);
+    const payer = rollbacks.slice()[0];
+    try std.testing.expectEqual(995_000, payer.account.lamports);
+    try std.testing.expectEqual(0, payer.account.rent_epoch);
 }
 
 test "checkFeePayer: happy path with same nonce and fee payer" {
@@ -774,7 +797,11 @@ test "checkFeePayer: happy path with same nonce and fee payer" {
         &transaction,
         &account_cache,
         &ComputeBudgetLimits.DEFAULT,
-        .{ .pubkey = transaction.fee_payer, .account = nonce_account },
+        .{
+            .pubkey = transaction.fee_payer,
+            .account = nonce_account,
+            .is_writable = true,
+        },
         &sig.core.rent_collector.defaultCollector(10),
         &sig.core.FeatureSet.ALL_DISABLED,
         0,
@@ -782,9 +809,10 @@ test "checkFeePayer: happy path with same nonce and fee payer" {
     );
 
     const fee_details, const rollbacks = result.ok;
-    defer rollbacks.deinit(allocator);
+    defer for (rollbacks.slice()) |r| r.deinit(allocator);
 
-    const rollback_account = rollbacks.same_nonce_and_fee_payer.account;
+    try std.testing.expectEqual(1, rollbacks.len);
+    const rollback_account = rollbacks.get(0).account;
 
     try std.testing.expectEqual(5000, fee_details.transaction_fee);
     try std.testing.expectEqual(0, fee_details.prioritization_fee);
@@ -838,7 +866,11 @@ test "checkFeePayer: happy path with separate nonce and fee payer" {
         &transaction,
         &account_cache,
         &ComputeBudgetLimits.DEFAULT,
-        .{ .pubkey = Pubkey.initRandom(prng.random()), .account = nonce_account },
+        .{
+            .pubkey = Pubkey.initRandom(prng.random()),
+            .account = nonce_account,
+            .is_writable = true,
+        },
         &sig.core.rent_collector.defaultCollector(10),
         &sig.core.FeatureSet.ALL_DISABLED,
         0,
@@ -846,10 +878,10 @@ test "checkFeePayer: happy path with separate nonce and fee payer" {
     );
 
     const fee_details, const rollbacks = result.ok;
-    defer rollbacks.deinit(allocator);
+    defer for (rollbacks.slice()) |r| r.deinit(allocator);
 
-    const rollback_nonce_account = rollbacks.separate_nonce_and_fee_payer[0].account;
-    const rollback_fee_payer_account = rollbacks.separate_nonce_and_fee_payer[1].account;
+    const rollback_nonce_account = rollbacks.get(0).account;
+    const rollback_fee_payer_account = rollbacks.get(1).account;
 
     try std.testing.expectEqual(5000, fee_details.transaction_fee);
     try std.testing.expectEqual(0, fee_details.prioritization_fee);

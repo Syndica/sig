@@ -38,12 +38,14 @@ pub const RentDebit = struct { rent_collected: u64, rent_balance: u64 };
 /// loader), which seems pointless.
 pub const LoadedTransactionAccounts = struct {
     /// data owned by BatchAccountCache
-    accounts: std.BoundedArray(CachedAccount, MAX_TX_ACCOUNT_LOCKS),
+    accounts: Accounts,
     /// equal len to .accounts
     rent_debits: std.BoundedArray(RentDebit, MAX_TX_ACCOUNT_LOCKS),
 
     rent_collected: u64,
     loaded_accounts_data_size: u32,
+
+    pub const Accounts = std.BoundedArray(CachedAccount, MAX_TX_ACCOUNT_LOCKS);
 
     const DEFAULT: LoadedTransactionAccounts = .{
         .accounts = .{},
@@ -72,10 +74,21 @@ pub const LoadedTransactionAccounts = struct {
 
 pub const CachedAccount = struct {
     pubkey: Pubkey,
-    account: *AccountSharedData,
+    // TODO: document
+    // TODO: ptr + fields separation
+    account: AccountSharedData,
+    is_writable: bool,
+
+    pub fn deinit(self: CachedAccount, allocator: Allocator) void {
+        std.debug.print("calling\n", .{});
+        if (self.is_writable) {
+            std.debug.print("deinitting\n", .{});
+            self.account.deinit(allocator);
+        }
+    }
 
     pub fn getAccount(self: *const CachedAccount) *const AccountSharedData {
-        return self.account;
+        return &self.account;
     }
 };
 
@@ -405,6 +418,7 @@ pub const BatchAccountCache = struct {
             loaded.accounts.appendAssumeCapacity(.{
                 .account = loaded_account.account,
                 .pubkey = account_key,
+                .is_writable = is_writable,
             });
         }
 
@@ -489,6 +503,7 @@ pub const BatchAccountCache = struct {
             loaded.accounts.appendAssumeCapacity(.{
                 .account = loaded_account.account,
                 .pubkey = account_key,
+                .is_writable = is_writable,
             });
         }
 
@@ -539,7 +554,7 @@ pub const BatchAccountCache = struct {
     }
 
     pub const LoadedTransactionAccount = struct {
-        account: *AccountSharedData,
+        account: AccountSharedData,
         loaded_size: usize,
         rent_collected: u64,
 
@@ -571,13 +586,13 @@ pub const BatchAccountCache = struct {
             const account = try self.sysvar_instruction_account_datas.addOne(allocator);
             account.* = try constructInstructionsAccount(allocator, transaction);
             return .{
-                .account = account,
+                .account = account.*,
                 .loaded_size = 0,
                 .rent_collected = 0,
             };
         }
 
-        const account = (try self.loadAccount(
+        var account = (try self.loadAccount(
             allocator,
             transaction,
             key,
@@ -593,14 +608,14 @@ pub const BatchAccountCache = struct {
             account_ptr.* = account;
 
             return LoadedTransactionAccount{
-                .account = account_ptr,
+                .account = account_ptr.*,
                 .loaded_size = 0,
                 .rent_collected = 0,
             };
         };
 
         const rent_collected = collectRentFromAccount(
-            account.account,
+            &account.account,
             key,
             feature_set,
             slot,
@@ -636,18 +651,26 @@ pub const BatchAccountCache = struct {
                 break :account account;
             } else self.account_cache.getPtr(key.*);
 
-        const account = maybe_account orelse unreachable;
+        var account = maybe_account.?.*;
         if (account.lamports == 0) return null;
 
-        // agave "inspects" the account here, which caches the initial state of writeable accounts
-        // TODO: we should probably do this at init time
-        _ = is_writable;
+        if (is_writable) {
+            account = try account.clone(allocator);
+        }
 
         return .{
             .account = account,
             .loaded_size = base_account_size +| account.data.len,
             .rent_collected = 0,
         };
+    }
+
+    pub fn mutateInPlace(self: *BatchAccountCache, key: *const Pubkey) ?*AccountSharedData {
+        const account = self.account_cache.getPtr(key.*);
+
+        if (account.?.lamports == 0) return null;
+
+        return account;
     }
 };
 

@@ -160,7 +160,7 @@ pub fn createTransactionContext(
     for (account_keys.items) |key| {
         accounts.appendAssumeCapacity(TransactionContextAccount.init(
             key,
-            account_cache.account_cache.getPtr(key) orelse unreachable,
+            (account_cache.account_cache.getPtr(key) orelse unreachable).*, // TODO should this be cloned for writable keys like in runtime?
         ));
     }
 

@@ -67,44 +67,37 @@ pub const Committer = struct {
             const message_hash, const tx_result = result;
             signature_count += transaction.transaction.signatures.len;
 
-            // collect accounts to store
-            switch (tx_result.accounts()) {
-                .all_loaded => |accounts| {
-                    for (accounts, transaction.accounts.items(.is_writable)) |account, is_writable|
-                        if (is_writable)
-                            try putAccount(allocator, self.logger, &accounts_to_store, account);
-                },
-                .written => |accounts| {
-                    for (accounts) |account|
-                        try putAccount(allocator, self.logger, &accounts_to_store, account);
-                },
+            for (tx_result.writes.slice()) |account| {
+                const gop = try accounts_to_store.getOrPut(allocator, account.pubkey);
+                if (gop.found_existing) {
+                    self.logger.err()
+                        .logf("multiple writes in a batch for address: {}\n", .{account.pubkey});
+                    // this error probably indicates a bug in the SVM or the account locking
+                    // code, since the account locks should have already been checked before
+                    // reaching this point.
+                    return error.MultipleWritesInBatch;
+                }
+                gop.value_ptr.* = account.getAccount().*;
             }
+            transaction_fees += tx_result.fees.transaction_fee;
+            priority_fees += tx_result.fees.prioritization_fee;
 
-            switch (tx_result) {
-                .executed => |exec| {
-                    rent_collected += exec.loaded_accounts.rent_collected;
-                    transaction_fees += exec.fees.transaction_fee;
-                    priority_fees += exec.fees.prioritization_fee;
-                    // Skip non successful or non vote transactions.
-                    if (exec.executed_transaction.err == null and
-                        isSimpleVoteTransaction(transaction.transaction))
-                    {
-                        if (try vote_listener.vote_parser.parseSanitizedVoteTransaction(
-                            allocator,
-                            transaction,
-                        )) |parsed| {
-                            if (parsed.vote.lastVotedSlot() != null) {
-                                self.replay_votes_sender.send(parsed) catch parsed.deinit(allocator);
-                            } else {
-                                parsed.deinit(allocator);
-                            }
+            if (tx_result.outputs != null) {
+                rent_collected += tx_result.rent;
+
+                // Skip non successful or non vote transactions.
+                if (tx_result.err == null and isSimpleVoteTransaction(transaction.transaction)) {
+                    if (try vote_listener.vote_parser.parseSanitizedVoteTransaction(
+                        allocator,
+                        transaction,
+                    )) |parsed| {
+                        if (parsed.vote.lastVotedSlot() != null) {
+                            self.replay_votes_sender.send(parsed) catch parsed.deinit(allocator);
+                        } else {
+                            parsed.deinit(allocator);
                         }
                     }
-                },
-                .fees_only => |fees| {
-                    transaction_fees += fees.fees.transaction_fee;
-                    priority_fees += fees.fees.prioritization_fee;
-                },
+                }
             }
 
             const recent_blockhash = &transaction.transaction.msg.recent_blockhash;
@@ -133,21 +126,3 @@ pub const Committer = struct {
         }
     }
 };
-
-fn putAccount(
-    allocator: Allocator,
-    logger: Logger,
-    accounts_to_store: *std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData),
-    /// CachedAccount or CopiedAccount
-    account: anytype,
-) error{ OutOfMemory, MultipleWritesInBatch }!void {
-    const gop = try accounts_to_store.getOrPut(allocator, account.pubkey);
-    if (gop.found_existing) {
-        logger.err().logf("multiple writes in a batch for address: {}\n", .{account.pubkey});
-        // this error probably indicates a bug in the SVM or the account locking
-        // code, since the account locks should have already been checked before
-        // reaching this point.
-        return error.MultipleWritesInBatch;
-    }
-    gop.value_ptr.* = account.getAccount().*;
-}
