@@ -65,7 +65,6 @@ pub const SlotTracker = struct {
     }
 
     pub fn deinit(self: SlotTracker, allocator: Allocator) void {
-        std.debug.print("SlotTracker deinit\n", .{});
         var slots = self.slots;
         for (slots.values()) |element| {
             element.constants.deinit(allocator);
@@ -81,24 +80,12 @@ pub const SlotTracker = struct {
         slot: Slot,
         slot_init: Element,
     ) Allocator.Error!void {
-        std.debug.print(
-            "SlotTracker.put start: self_ptr={*}, inserting slot {} (before_count={d})\n",
-            .{ self, slot, self.slots.count() },
-        );
         defer tracy.plot(u32, "slots tracked", @intCast(self.slots.count()));
 
         try self.slots.ensureUnusedCapacity(allocator, 1);
         const elem = try allocator.create(Element);
         elem.* = slot_init;
         self.slots.putAssumeCapacity(slot, elem);
-        std.debug.print(
-            "SlotTracker.put ends: inserting slot {} (after_count={d})\n",
-            .{ slot, self.slots.count() },
-        );
-        std.debug.print(
-            "SlotTracker.put ends: inserting slot {} (block height={d})\n",
-            .{ slot, self.slots.get(slot).?.constants.block_height },
-        );
     }
 
     pub fn get(self: *const SlotTracker, slot: Slot) ?Reference {
@@ -117,10 +104,6 @@ pub const SlotTracker = struct {
         slot: Slot,
         slot_init: Element,
     ) Allocator.Error!GetOrPutResult {
-        std.debug.print(
-            "SlotTracker.getOrPut start: self_ptr={*}, slot {} (before_count={d})\n",
-            .{ self, slot, self.slots.count() },
-        );
         defer tracy.plot(u32, "slots tracked", @intCast(self.slots.count()));
 
         if (self.get(slot)) |existing| return .{
@@ -207,20 +190,11 @@ pub const SlotTracker = struct {
 
         defer tracy.plot(u32, "slots tracked", @intCast(self.slots.count()));
 
-        std.debug.print("pruneNonRooted start: root={}, tracked_slots_before={d}\n", .{
-            self.root,
-            self.slots.count(),
-        });
-
         var slice = self.slots.entries.slice();
         var index: usize = 0;
         while (index < slice.len) {
             if (slice.items(.key)[index] < self.root) {
                 const element = slice.items(.value)[index];
-                std.debug.print(
-                    "SlotTracker.pruneNonRooted: removing slot {} (< root {})\n",
-                    .{ slice.items(.key)[index], self.root },
-                );
                 element.state.deinit(allocator);
                 element.constants.deinit(allocator);
                 allocator.destroy(element);
@@ -230,12 +204,6 @@ pub const SlotTracker = struct {
                 index += 1;
             }
         }
-
-        std.debug.print("pruneNonRooted done: root={}, tracked_slots_after={d}\n", .{
-            self.root,
-            self.slots.count(),
-        });
-        std.debug.assert(self.contains(self.root));
     }
 };
 

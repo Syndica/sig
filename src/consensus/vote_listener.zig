@@ -54,16 +54,8 @@ pub const SlotDataProvider = struct {
         const slot_tracker, var lg = self.slot_tracker_rw.readWithLock();
         defer lg.unlock();
         if (slot_tracker.get(slot)) |ref| {
-            std.debug.print(
-                "getSlotAncestorsPtr: found slot {}, current_root={}\n",
-                .{ slot, slot_tracker.root },
-            );
             return &ref.constants.ancestors;
         } else {
-            std.debug.print(
-                "getSlotAncestorsPtr: missing slot {}, current_root={}\n",
-                .{ slot, slot_tracker.root },
-            );
             return null;
         }
     }
@@ -469,14 +461,6 @@ fn processVotesOnce(
     const root_hash = slot_data_provider.getSlotHash(root_slot);
 
     if (last_process_root.elapsed().asMillis() > DEFAULT_MS_PER_SLOT) {
-        {
-            const st, var st_lg = slot_data_provider.slot_tracker_rw.readWithLock();
-            defer st_lg.unlock();
-            std.debug.print(
-                "processVotesOnce: st_ptr={*}, root={} exists_in_map={}, slots_count={d}\n",
-                .{ st, root_slot, st.contains(root_slot), st.slots.count() },
-            );
-        }
         const unrooted_optimistic_slots = try confirmation_verifier.verifyForUnrootedOptimisticSlots(
             allocator,
             ledger_ref.reader,
@@ -955,9 +939,6 @@ fn trackNewVotesAndNotifyConfirmations(
 
             const maybe_hash: ?Hash = get_hash: {
                 if (slot == last_vote_slot) break :get_hash last_vote_hash;
-                // For intermediate slots, use the frozen hash of that specific slot
-                // rather than the last vote slot's hash, to ensure duplicate-confirmed
-                // notifications carry the correct per-slot hash.
                 break :get_hash slot_data_provider.getSlotHash(slot);
             };
             const hash: Hash = maybe_hash orelse {

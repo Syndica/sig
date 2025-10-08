@@ -232,7 +232,6 @@ pub const ReplayState = struct {
         slots.get().deinit(self.allocator);
         slots.unlock();
 
-        // destroy heap-allocated RwMux(SlotTracker)
         self.allocator.destroy(self.slot_tracker);
 
         var epoch_tracker = self.epoch_tracker.tryRead() orelse

@@ -205,16 +205,8 @@ pub const TowerConsensus = struct {
         const zone = tracy.Zone.init(@src(), .{ .name = "TowerConsensus.init" });
         defer zone.deinit();
 
-        std.debug.print(
-            "TowerConsensus.init: slot_tracker_rw_ptr={*}\n",
-            .{deps.slot_tracker_rw},
-        );
         const slot_tracker, var slot_tracker_lock = deps.slot_tracker_rw.readWithLock();
         defer slot_tracker_lock.unlock();
-        std.debug.print(
-            "TowerConsensus.init: observed slot_tracker_ptr={*}, root={} count={d}\n",
-            .{ slot_tracker, slot_tracker.root, slot_tracker.slots.count() },
-        );
 
         var fork_choice = try initForkChoice(
             allocator,
@@ -265,12 +257,6 @@ pub const TowerConsensus = struct {
                 },
             },
         ) else null;
-        if (vote_listener) |_| {
-            std.debug.print(
-                "VoteListener wiring: slot_tracker_rw_ptr={*} (same as deps)\n",
-                .{deps.slot_tracker_rw},
-            );
-        }
 
         return .{
             .fork_choice = fork_choice,
@@ -933,13 +919,8 @@ fn checkAndHandleNewRoot(
     // Audit: The rest of the code maps to Self::handle_new_root in Agave.
     // Update the slot tracker.
     // Set new root.
-    std.debug.print(
-        "checkAndHandleNewRoot start: new_root={}, current_root={}\n",
-        .{ new_root, slot_tracker.root },
-    );
     slot_tracker.root = new_root;
     // Prune non rooted slots
-    std.debug.print("checkAndHandleNewRoot: pruning non-rooted below {}\n", .{new_root});
     slot_tracker.pruneNonRooted(allocator);
 
     // TODO
