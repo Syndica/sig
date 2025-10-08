@@ -163,7 +163,7 @@ pub fn hashTransactions(
     try nodes.ensureTotalCapacity(allocator, capacity);
 
     for (transactions) |tx| for (tx.signatures) |signature| {
-        const hash = Hash.generateSha256(.{ LEAF_PREFIX, &signature.data });
+        const hash = Hash.generateSha256(.{ LEAF_PREFIX, &signature.toBytes() });
         nodes.appendAssumeCapacity(hash);
     };
 

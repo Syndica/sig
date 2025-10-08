@@ -15,6 +15,7 @@ const FeatureSet = sig.core.FeatureSet;
 
 const Edwards25519 = std.crypto.ecc.Edwards25519;
 const Ristretto255 = std.crypto.ecc.Ristretto255;
+const ed25519 = sig.crypto.ed25519;
 
 const Keccak256 = std.crypto.hash.sha3.Keccak256;
 const Secp256k1 = std.crypto.ecc.Secp256k1;
@@ -150,129 +151,6 @@ pub fn curveGroupOp(
     }
 }
 
-pub const weak_mul = struct {
-    inline fn cMov(p: *Edwards25519, a: Edwards25519, c: u64) void {
-        p.x.cMov(a.x, c);
-        p.y.cMov(a.y, c);
-        p.z.cMov(a.z, c);
-        p.t.cMov(a.t, c);
-    }
-
-    inline fn pcSelect(comptime n: usize, pc: *const [n]Edwards25519, b: u8) Edwards25519 {
-        var t = Edwards25519.identityElement;
-        comptime var i: u8 = 1;
-        inline while (i < pc.len) : (i += 1) {
-            cMov(&t, pc[i], ((@as(usize, b ^ i) -% 1) >> 8) & 1);
-        }
-        return t;
-    }
-
-    fn pcMul16(pc: *const [16]Edwards25519, s: [32]u8, comptime vartime: bool) Edwards25519 {
-        var q = Edwards25519.identityElement;
-        var pos: usize = 252;
-        while (true) : (pos -= 4) {
-            const slot: u4 = @truncate((s[pos >> 3] >> @as(u3, @truncate(pos))));
-            if (vartime) {
-                if (slot != 0) {
-                    q = q.add(pc[slot]);
-                }
-            } else {
-                q = q.add(pcSelect(16, pc, slot));
-            }
-            if (pos == 0) break;
-            q = q.dbl().dbl().dbl().dbl();
-        }
-        // try q.rejectIdentity();
-        return q;
-    }
-
-    fn precompute(p: Edwards25519, comptime count: usize) [1 + count]Edwards25519 {
-        var pc: [1 + count]Edwards25519 = undefined;
-        pc[0] = Edwards25519.identityElement;
-        pc[1] = p;
-        var i: usize = 2;
-        while (i <= count) : (i += 1) {
-            pc[i] = if (i % 2 == 0) pc[i / 2].dbl() else pc[i - 1].add(p);
-        }
-        return pc;
-    }
-
-    fn slide(s: [32]u8) [2 * 32]i8 {
-        const reduced = if ((s[s.len - 1] & 0x80) == 0) s else Edwards25519.scalar.reduce(s);
-        var e: [2 * 32]i8 = undefined;
-        for (reduced, 0..) |x, i| {
-            e[i * 2 + 0] = @as(i8, @as(u4, @truncate(x)));
-            e[i * 2 + 1] = @as(i8, @as(u4, @truncate(x >> 4)));
-        }
-        // Now, e[0..63] is between 0 and 15, e[63] is between 0 and 7
-        var carry: i8 = 0;
-        for (e[0..63]) |*x| {
-            x.* += carry;
-            carry = (x.* + 8) >> 4;
-            x.* -= carry * 16;
-        }
-        e[63] += carry;
-        // Now, e[*] is between -8 and 8, including e[63]
-        return e;
-    }
-
-    const basePointPc = pc: {
-        @setEvalBranchQuota(10000);
-        break :pc precompute(Edwards25519.basePoint, 15);
-    };
-
-    /// NOTE: Does not perform checks for weak points!
-    pub fn mul(p: Edwards25519, s: [32]u8) Edwards25519 {
-        const xpc = if (p.is_base) basePointPc else precompute(p, 15);
-        // xpc[4].rejectIdentity() catch return error.WeakPublicKey;
-        return pcMul16(&xpc, s, false);
-    }
-
-    /// Multiscalar multiplication *IN VARIABLE TIME* for public data
-    /// Computes ps0*ss0 + ps1*ss1 + ps2*ss2... faster than doing many of these operations individually
-    ///
-    /// NOTE: Does not perform checks for weak points!
-    pub fn mulMulti(
-        comptime count: usize,
-        ps: [count]Edwards25519,
-        ss: [count][32]u8,
-    ) Edwards25519 {
-        var pcs: [count][9]Edwards25519 = undefined;
-
-        var bpc: [9]Edwards25519 = undefined;
-        @memcpy(&bpc, basePointPc[0..bpc.len]);
-
-        for (ps, 0..) |p, i| {
-            if (p.is_base) {
-                pcs[i] = bpc;
-            } else {
-                pcs[i] = precompute(p, 8);
-                // pcs[i][4].rejectIdentity() catch return error.WeakPublicKey;
-            }
-        }
-        var es: [count][2 * 32]i8 = undefined;
-        for (ss, 0..) |s, i| {
-            es[i] = slide(s);
-        }
-        var q = Edwards25519.identityElement;
-        var pos: usize = 2 * 32 - 1;
-        while (true) : (pos -= 1) {
-            for (es, 0..) |e, i| {
-                const slot = e[pos];
-                if (slot > 0) {
-                    q = q.add(pcs[i][@as(usize, @intCast(slot))]);
-                } else if (slot < 0) {
-                    q = q.sub(pcs[i][@as(usize, @intCast(-slot))]);
-                }
-            }
-            if (pos == 0) break;
-            q = q.dbl().dbl().dbl().dbl();
-        }
-        // try q.rejectIdentity();
-        return q;
-    }
-};
-
 fn groupOp(comptime T: type, group_op: GroupOp, left: [32]u8, right: [32]u8) !T {
     switch (group_op) {
         .add, .subtract => {
@@ -292,11 +170,7 @@ fn groupOp(comptime T: type, group_op: GroupOp, left: [32]u8, right: [32]u8) !T 
         .multiply => {
             try Edwards25519.scalar.rejectNonCanonical(left);
             const input_point = try T.fromBytes(right);
-            return switch (T) {
-                Edwards25519 => weak_mul.mul(input_point, left),
-                Ristretto255 => .{ .p = weak_mul.mul(input_point.p, left) },
-                else => unreachable,
-            };
+            return ed25519.mul(T == Ristretto255, input_point, left);
         },
     }
 }
@@ -359,7 +233,7 @@ pub fn curveMultiscalarMul(
                 };
             }
 
-            const msm = sig.crypto.ed25519.pippenger.mulMulti(
+            const msm = sig.crypto.ed25519.mulMultiRuntime(
                 512,
                 true,
                 id == .ristretto,

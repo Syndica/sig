@@ -33,27 +33,18 @@ pub const GossipMessage = union(enum(u32)) {
         switch (self.*) {
             .PullRequest => |*pull| {
                 var value = pull[1];
-                const is_verified = try value.verify(value.id());
-                if (!is_verified) {
-                    return error.InvalidPullRequest;
-                }
+                value.verify(value.id()) catch return error.InvalidPullRequest;
             },
             .PullResponse => |*pull| {
                 const values = pull[1];
                 for (values) |*value| {
-                    const is_verified = try value.verify(value.id());
-                    if (!is_verified) {
-                        return error.InvalidPullResponse;
-                    }
+                    value.verify(value.id()) catch return error.InvalidPullResponse;
                 }
             },
             .PushMessage => |*push| {
                 const values = push[1];
                 for (values) |*value| {
-                    const is_verified = try value.verify(value.id());
-                    if (!is_verified) {
-                        return error.InvalidPushMessage;
-                    }
+                    value.verify(value.id()) catch return error.InvalidPushMessage;
                 }
             },
             .PruneMessage => |*prune| {

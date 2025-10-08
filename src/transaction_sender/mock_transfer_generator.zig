@@ -416,7 +416,7 @@ pub const MockTransferService = struct {
             random.bytes(&noise);
 
             const signature = try from_keypair.sign(signable, noise);
-            break :blk .{ .data = signature.toBytes() };
+            break :blk .fromSignature(signature);
         };
 
         const signatures = try allocator.dupe(Signature, &.{signature});

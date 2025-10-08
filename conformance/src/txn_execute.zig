@@ -668,9 +668,10 @@ fn executeTxnContext(
     //     .accounts_db = &accounts_db,
     // });
 
-    // Remove address lookup table and config program accounts by inserting empty accounts (zero-lamports)
+    // Remove address lookup table, stake, and config program accounts by inserting empty accounts (zero-lamports)
     try accounts_db.putAccount(slot, program.address_lookup_table.ID, .EMPTY);
     try accounts_db.putAccount(slot, program.config.ID, .EMPTY);
+    try accounts_db.putAccount(slot, program.stake.ID, .EMPTY);
 
     // Load accounts into accounts db
     for (accounts_map.keys(), accounts_map.values()) |pubkey, account| {
@@ -1207,7 +1208,7 @@ fn loadTransaction(
     );
 
     for (pb_txn.signatures.items, 0..) |pb_signature, i|
-        signatures[i] = .{ .data = pb_signature.getSlice()[0..Signature.SIZE].* };
+        signatures[i] = .fromBytes(pb_signature.getSlice()[0..Signature.SIZE].*);
 
     if (pb_txn.signatures.items.len == 0)
         signatures[0] = Signature.ZEROES;

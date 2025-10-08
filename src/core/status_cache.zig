@@ -250,7 +250,7 @@ test "status cache empty" {
     try std.testing.expectEqual(
         null,
         status_cache.getStatus(
-            &signature.data,
+            &signature.toBytes(),
             &block_hash,
             &Ancestors{},
         ),
@@ -273,11 +273,11 @@ test "status cache find with ancestor fork" {
     var status_cache: StatusCache = .DEFAULT;
     defer status_cache.deinit(allocator);
 
-    try status_cache.insert(allocator, random, &blockhash, &signature.data, 0);
+    try status_cache.insert(allocator, random, &blockhash, &signature.toBytes(), 0);
 
     try std.testing.expectEqual(
         Fork{ .slot = 0 },
-        status_cache.getStatus(&signature.data, &blockhash, &ancestors),
+        status_cache.getStatus(&signature.toBytes(), &blockhash, &ancestors),
     );
 }
 
@@ -294,11 +294,11 @@ test "status cache find without ancestor fork" {
     var status_cache: StatusCache = .DEFAULT;
     defer status_cache.deinit(allocator);
 
-    try status_cache.insert(allocator, random, &blockhash, &signature.data, 1);
+    try status_cache.insert(allocator, random, &blockhash, &signature.toBytes(), 1);
 
     try std.testing.expectEqual(
         null,
-        status_cache.getStatus(&signature.data, &blockhash, &ancestors),
+        status_cache.getStatus(&signature.toBytes(), &blockhash, &ancestors),
     );
 }
 
@@ -315,12 +315,12 @@ test "status cache find with root ancestor fork" {
     var status_cache: StatusCache = .DEFAULT;
     defer status_cache.deinit(allocator);
 
-    try status_cache.insert(allocator, random, &blockhash, &signature.data, 0);
+    try status_cache.insert(allocator, random, &blockhash, &signature.toBytes(), 0);
     try status_cache.addRoot(allocator, 0);
 
     try std.testing.expectEqual(
         Fork{ .slot = 0 },
-        status_cache.getStatus(&signature.data, &blockhash, &ancestors),
+        status_cache.getStatus(&signature.toBytes(), &blockhash, &ancestors),
     );
 }
 
@@ -340,13 +340,13 @@ test "status cache insert picks latest blockhash fork" {
     var status_cache: StatusCache = .DEFAULT;
     defer status_cache.deinit(allocator);
 
-    try status_cache.insert(allocator, random, &blockhash, &signature.data, 0);
-    try status_cache.insert(allocator, random, &blockhash, &signature.data, 1);
+    try status_cache.insert(allocator, random, &blockhash, &signature.toBytes(), 0);
+    try status_cache.insert(allocator, random, &blockhash, &signature.toBytes(), 1);
 
     for (0..StatusCache.MAX_CACHE_ENTRIES + 1) |i| try status_cache.addRoot(allocator, i);
 
     try std.testing.expect(
-        status_cache.getStatus(&signature.data, &blockhash, &ancestors) != null,
+        status_cache.getStatus(&signature.toBytes(), &blockhash, &ancestors) != null,
     );
 }
 
@@ -363,11 +363,11 @@ test "status cache root expires" {
     var status_cache: StatusCache = .DEFAULT;
     defer status_cache.deinit(allocator);
 
-    try status_cache.insert(allocator, random, &blockhash, &signature.data, 0);
+    try status_cache.insert(allocator, random, &blockhash, &signature.toBytes(), 0);
     for (0..StatusCache.MAX_CACHE_ENTRIES + 1) |i| try status_cache.addRoot(allocator, i);
 
     try std.testing.expectEqual(
         null,
-        status_cache.getStatus(&signature.data, &blockhash, &ancestors),
+        status_cache.getStatus(&signature.toBytes(), &blockhash, &ancestors),
     );
 }

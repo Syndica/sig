@@ -1,8 +1,8 @@
 #!/bin/bash
 set -e
 
-# Specifically this commit of solfuzz-agave: 7e7b4935d66e17b478910b8a1e43b461cbb43f7d
-artifact_id=3999155212
+# Specifically this commit of solfuzz-agave: cef278ea3216bde6ea7fe760a89217560c2da856
+artifact_id=4077531638
 artifact_name="libsolfuzz-agave.so"
 
 artifacts_url="https://api.github.com/repos/firedancer-io/solfuzz-agave/actions/artifacts"

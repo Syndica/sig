@@ -29,6 +29,7 @@ const Benchmark = enum {
     accounts_db_snapshot, // expensive
     accounts_db,
     bincode,
+    crypto,
     geyser,
     gossip,
     ledger,
@@ -354,6 +355,17 @@ pub fn main() !void {
             allocator,
             .from(logger),
             @import("zksdk/benchmarks.zig").Benchmark,
+            max_time_per_bench,
+            .micros,
+            &maybe_metrics,
+        );
+    }
+
+    if (filter == .crypto or run_all_benchmarks) {
+        try benchmark(
+            allocator,
+            .from(logger),
+            @import("crypto/benchmark.zig").Benchmark,
             max_time_per_bench,
             .micros,
             &maybe_metrics,
