@@ -6,7 +6,7 @@ const builtin = @import("builtin");
 const sig = @import("../../../sig.zig");
 
 const Edwards25519 = std.crypto.ecc.Edwards25519;
-const el_gamal = sig.zksdk.el_gamal;
+const elgamal = sig.zksdk.elgamal;
 const pedersen = sig.zksdk.pedersen;
 const ElGamalKeypair = sig.zksdk.ElGamalKeypair;
 const ElGamalPubkey = sig.zksdk.ElGamalPubkey;
@@ -449,7 +449,7 @@ pub const Data = struct {
 
         const amount: u64 = 55;
         const opening = pedersen.Opening.random();
-        const grouped_ciphertext = el_gamal.GroupedElGamalCiphertext(3).encryptWithOpening(
+        const grouped_ciphertext = elgamal.GroupedElGamalCiphertext(3).encryptWithOpening(
             .{ first_pubkey, second_pubkey, third_pubkey },
             amount,
             &opening,
@@ -608,12 +608,12 @@ pub const BatchedData = struct {
         const opening_lo = pedersen.Opening.random();
         const opening_hi = pedersen.Opening.random();
 
-        const grouped_ciphertext_lo = el_gamal.GroupedElGamalCiphertext(3).encryptWithOpening(
+        const grouped_ciphertext_lo = elgamal.GroupedElGamalCiphertext(3).encryptWithOpening(
             .{ first_pubkey, second_pubkey, third_pubkey },
             amount_lo,
             &opening_lo,
         );
-        const grouped_ciphertext_hi = el_gamal.GroupedElGamalCiphertext(3).encryptWithOpening(
+        const grouped_ciphertext_hi = elgamal.GroupedElGamalCiphertext(3).encryptWithOpening(
             .{ first_pubkey, second_pubkey, third_pubkey },
             amount_hi,
             &opening_hi,

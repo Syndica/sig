@@ -225,14 +225,14 @@ pub const Transcript = struct {
         bytes: []const u8,
 
         point: Ristretto255,
-        pubkey: zksdk.el_gamal.Pubkey,
+        pubkey: zksdk.elgamal.Pubkey,
         scalar: Scalar,
-        ciphertext: zksdk.el_gamal.Ciphertext,
+        ciphertext: zksdk.elgamal.Ciphertext,
         commitment: zksdk.pedersen.Commitment,
         u64: u64,
 
-        grouped_2: zksdk.el_gamal.GroupedElGamalCiphertext(2),
-        grouped_3: zksdk.el_gamal.GroupedElGamalCiphertext(3),
+        grouped_2: zksdk.elgamal.GroupedElGamalCiphertext(2),
+        grouped_3: zksdk.elgamal.GroupedElGamalCiphertext(3),
     };
 
     pub fn init(comptime seperator: DomainSeperator, inputs: []const TranscriptInput) Transcript {
@@ -401,7 +401,7 @@ pub const Transcript = struct {
                     .bytes => []const u8,
                     .scalar => Scalar,
                     .validate_point, .point => Ristretto255,
-                    .pubkey => zksdk.el_gamal.Pubkey,
+                    .pubkey => zksdk.elgamal.Pubkey,
                     .challenge => unreachable, // call `challenge*`
                 };
             }

@@ -1,11 +1,11 @@
-pub const el_gamal = @import("el_gamal.zig");
+pub const elgamal = @import("elgamal.zig");
 pub const pedersen = @import("pedersen.zig");
 pub const merlin = @import("merlin.zig");
 
-pub const ElGamalCiphertext = el_gamal.Ciphertext;
-pub const ElGamalKeypair = el_gamal.Keypair;
-pub const ElGamalPubkey = el_gamal.Pubkey;
-pub const GroupedElGamalCiphertext = el_gamal.GroupedElGamalCiphertext;
+pub const ElGamalCiphertext = elgamal.Ciphertext;
+pub const ElGamalKeypair = elgamal.Keypair;
+pub const ElGamalPubkey = elgamal.Pubkey;
+pub const GroupedElGamalCiphertext = elgamal.GroupedElGamalCiphertext;
 pub const Strobe128 = merlin.Strobe128;
 pub const Transcript = merlin.Transcript;
 
