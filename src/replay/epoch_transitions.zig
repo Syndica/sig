@@ -29,6 +29,11 @@ const SlotState = sig.core.SlotState;
 const SlotConstants = sig.core.SlotConstants;
 const AccountSharedData = sig.runtime.AccountSharedData;
 const FeatureSet = sig.core.FeatureSet;
+const Stakes = sig.core.Stakes;
+const StakeHistory = sig.runtime.sysvar.StakeHistory;
+const VoteAccounts = sig.core.vote_accounts.VoteAccounts;
+const StakeAndVoteAccountsMap = sig.core.vote_accounts.StakeAndVoteAccountsMap;
+const Delegation = sig.core.stake.Delegation;
 
 const applyFeatureActivations = @import("apply_feature_activations.zig").applyFeatureActivations;
 
@@ -201,6 +206,7 @@ pub fn process_new_epoch(
         allocator,
         current_epoch,
         &slot_state.stakes_cache,
+        null, // TODO: pass in new_rate_activation_epoch
     );
 
     // [agave] https://github.com/anza-xyz/agave/blob/b6c96e84b10396b92912d4574dae7d03f606da26/runtime/src/bank.rs#L1632-L1636
@@ -300,26 +306,73 @@ pub fn getEpochStakes(
     };
 }
 
-pub fn initEpochStakes() !void {}
-
 pub fn activateEpoch(
     allocator: Allocator,
     epoch: Epoch,
     stakes_cache: *StakesCache,
+    new_rate_activation_epoch: ?Epoch,
 ) !void {
-    _ = allocator;
-    _ = epoch;
-    _ = stakes_cache;
+    const stakes, var stakes_lg = stakes_cache.stakes.writeWithLock();
+    defer stakes_lg.unlock();
+
+    const stake_delegations = stakes.stake_delegations.values();
+    var stake_history_entry = StakeHistory.StakeState.DEFAULT;
+    for (stake_delegations) |stake_delegation| {
+        const delegation = stake_delegation.getDelegation();
+        stake_history_entry.add(delegation.getStakeState(
+            epoch,
+            stakes.stake_history,
+            new_rate_activation_epoch,
+        ));
+    }
+
+    try stakes.stake_history.insertEntry(epoch, stake_history_entry);
+    stakes.epoch = epoch;
+    stakes.vote_accounts = try refreshVoteAccounts(
+        allocator,
+        epoch,
+        stakes.vote_accounts.vote_accounts,
+        stakes.stake_delegations.values(),
+        stakes.stake_history,
+        new_rate_activation_epoch,
+    );
 }
 
 pub fn refreshVoteAccounts(
     allocator: Allocator,
     epoch: Epoch,
-    stakes_cache: *StakesCache,
-) !void {
-    _ = allocator;
-    _ = epoch;
-    _ = stakes_cache;
+    stake_and_vote_accounts: StakeAndVoteAccountsMap,
+    stake_delegations: []Delegation,
+    stake_history: StakeHistory,
+    new_activation_rate_epoch: ?Epoch,
+) !VoteAccounts {
+    var delegated_stakes = std.AutoArrayHashMapUnmanaged(Pubkey, u64){};
+    errdefer delegated_stakes.deinit(allocator);
+
+    for (stake_delegations) |stake_delegation| {
+        const delegation = stake_delegation.getDelegation();
+        const entry = try delegated_stakes.getOrPut(allocator, delegation.voter_pubkey);
+        if (!entry.found_existing) {
+            entry.value_ptr.* = 0;
+        }
+        entry.value_ptr.* += delegation.getStake(
+            epoch,
+            stake_history,
+            new_activation_rate_epoch,
+        );
+    }
+
+    var new_vote_accounts = VoteAccounts{};
+    errdefer new_vote_accounts.deinit(allocator);
+    for (stake_and_vote_accounts.keys(), stake_and_vote_accounts.values()) |vote_pubkey, stake_and_vote_account| {
+        const delegated_stake = delegated_stakes.get(vote_pubkey) orelse 0;
+        try new_vote_accounts.vote_accounts.put(allocator, vote_pubkey, .{
+            .stake = delegated_stake,
+            .account = try stake_and_vote_account.account.clone(allocator),
+        });
+    }
+
+    return new_vote_accounts;
 }
 
 pub fn beginPartitionedRewards() !void {
