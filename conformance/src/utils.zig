@@ -35,8 +35,8 @@ pub const ConvertedErrorCodes = struct {
     };
 };
 
-pub fn convertTransactionError(err: TransactionError) ConvertedErrorCodes {
-    switch (err) {
+pub fn convertTransactionError(maybe_err: ?TransactionError) ConvertedErrorCodes {
+    return if (maybe_err) |err| switch (err) {
         .InstructionError => |p| {
             const index, const instruction_error = p;
             return .{
@@ -55,7 +55,7 @@ pub fn convertTransactionError(err: TransactionError) ConvertedErrorCodes {
             .custom_error = 0,
             .instruction_index = 0,
         },
-    }
+    } else .default;
 }
 
 pub fn createTransactionContext(

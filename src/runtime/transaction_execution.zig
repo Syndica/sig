@@ -112,17 +112,13 @@ pub const ProcessedTransaction = struct {
     rent: u64,
     writes: Writes,
     err: ?TransactionError,
-    /// If null, the transaction did not execute due to a failure before
+    /// Analogous to [loaded_accounts_data_size](https://github.com/anza-xyz/agave/blob/10fe1eb29aac9c236fd72d08ae60a3ef61ee8353/svm/src/transaction_processing_result.rs#L97).
+    loaded_accounts_data_size: u32,
+    /// If null, the transaction did not execute, due to a failure before
     /// execution could begin.
-    outputs: ?struct { // TODO reconsider layering of optionals
-        /// If null, this means what? TODO
-        log_collector: ?LogCollector,
-        /// If null, this means what? TODO
-        return_data: ?TransactionReturnData,
-    },
+    outputs: ?ExecutedTransaction,
 
-    pub const Writes =
-        std.BoundedArray(CachedAccount, sig.runtime.account_loader.MAX_TX_ACCOUNT_LOCKS);
+    pub const Writes = LoadedTransactionAccounts.Accounts;
 
     pub fn deinit(self: ProcessedTransaction, allocator: std.mem.Allocator) void {
         for (self.writes.slice()) |account| account.deinit(allocator);
@@ -255,13 +251,19 @@ pub fn loadAndExecuteTransaction(
         .ok => |x| x,
         .err => |err| {
             var writes = ProcessedTransaction.Writes{};
-            while (rollbacks.pop()) |rollback| writes.append(rollback) catch unreachable;
-            for (writes.slice()) |*acct| batch_account_cache.store(allocator, acct);
+            var loaded_accounts_data_size: u32 = 0;
+            while (rollbacks.pop()) |rollback| {
+                const item = writes.addOne() catch unreachable;
+                item.* = rollback;
+                batch_account_cache.store(allocator, item);
+                loaded_accounts_data_size += @intCast(rollback.account.data.len);
+            }
             return .{ .ok = .{
                 .fees = fees,
                 .rent = 0,
                 .writes = writes,
                 .err = err,
+                .loaded_accounts_data_size = loaded_accounts_data_size,
                 .outputs = null,
             } };
         },
@@ -291,10 +293,8 @@ pub fn loadAndExecuteTransaction(
             .rent = 0,
             .writes = writes,
             .err = executed_transaction.err,
-            .outputs = .{
-                .log_collector = executed_transaction.log_collector,
-                .return_data = executed_transaction.return_data,
-            },
+            .loaded_accounts_data_size = loaded_accounts.loaded_accounts_data_size,
+            .outputs = executed_transaction,
         },
     };
 }
@@ -905,10 +905,10 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
         try std.testing.expectEqual(15_000_000, receiver_account.lamports);
         try std.testing.expectEqual(null, processed_transaction.err);
         try std.testing.expectEqual(null, executed_transaction.log_collector);
-        // try std.testing.expectEqual(1, executed_transaction.instruction_trace.?.len);
+        try std.testing.expectEqual(1, executed_transaction.instruction_trace.?.len);
         try std.testing.expectEqual(null, executed_transaction.return_data);
-        // try std.testing.expectEqual(2_850, executed_transaction.compute_meter);
-        // try std.testing.expectEqual(0, executed_transaction.accounts_data_len_delta);
+        try std.testing.expectEqual(2_850, executed_transaction.compute_meter);
+        try std.testing.expectEqual(0, executed_transaction.accounts_data_len_delta);
     }
 
     { // Insufficient funds
@@ -945,9 +945,9 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
             processed_transaction.err.?.InstructionError[1],
         );
         try std.testing.expectEqual(null, executed_transaction.log_collector);
-        // try std.testing.expectEqual(1, executed_transaction.instruction_trace.?.len);
+        try std.testing.expectEqual(1, executed_transaction.instruction_trace.?.len);
         try std.testing.expectEqual(null, executed_transaction.return_data);
-        // try std.testing.expectEqual(2_850, executed_transaction.compute_meter);
-        // try std.testing.expectEqual(0, executed_transaction.accounts_data_len_delta);
+        try std.testing.expectEqual(2_850, executed_transaction.compute_meter);
+        try std.testing.expectEqual(0, executed_transaction.accounts_data_len_delta);
     }
 }

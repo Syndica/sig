@@ -885,14 +885,11 @@ fn executeTxnContext(
 fn printLogs(result: TransactionResult(ProcessedTransaction)) void {
     switch (result) {
         .ok => |txn| {
-            switch (txn) {
-                .executed => |executed| {
-                    const msgs = executed.executed_transaction.log_collector.?.messages;
-                    for (msgs.items, 0..) |msg, i| {
-                        std.debug.print("log {}: {s}\n", .{ i, msg });
-                    }
-                },
-                .fees_only => {},
+            if (txn.outputs) |executed| {
+                const msgs = executed.log_collector.?.messages;
+                for (msgs.items, 0..) |msg, i| {
+                    std.debug.print("log {}: {s}\n", .{ i, msg });
+                }
             }
         },
         .err => {},
@@ -921,32 +918,7 @@ fn serializeOutput(
         .err => |err| return serializeSanitizationError(err),
     };
 
-    const is_ok = switch (txn) {
-        .executed => |executed| executed.executed_transaction.err == null,
-        .fees_only => false,
-    };
-
-    const errors: utils.ConvertedErrorCodes = switch (txn) {
-        .executed => |executed| if (executed.executed_transaction.err) |err| blk: {
-            const txn_err_code = @intFromEnum(err) + 1;
-            const ixn_err_index, const ixn_err_code, const custom_err_code = switch (err) {
-                .InstructionError => |ixn_err| .{
-                    ixn_err[0], @intFromEnum(ixn_err[1]) + 1, switch (ixn_err[1]) {
-                        .Custom => |v| v,
-                        else => 0,
-                    },
-                },
-                else => .{ 0, 0, 0 },
-            };
-            break :blk .{
-                .err = txn_err_code,
-                .instruction_error = ixn_err_code,
-                .custom_error = custom_err_code,
-                .instruction_index = ixn_err_index,
-            };
-        } else .default,
-        .fees_only => |fees_only| utils.convertTransactionError(fees_only.err),
-    };
+    const errors = utils.convertTransactionError(txn.err);
 
     // Special casing to return only the custom error for transactions which have
     // encountered the loader v4 program or bpf loader v3 migrate instruction.
@@ -954,75 +926,15 @@ fn serializeOutput(
         return .{ .custom_error = errors.custom_error };
     }
 
-    const rent = switch (txn) {
-        .executed => |executed_txn| executed_txn.loaded_accounts.rent_collected,
-        .fees_only => 0,
-    };
-
-    const fees = switch (txn) {
-        .fees_only => |fees_only| fees_only.fees,
-        .executed => |executed| executed.fees,
-    };
-
     const acct_states = blk: {
-        const relevant_acct_states = switch (txn) {
-            .executed => |executed| acct_states: {
-                var acct_states: std.ArrayList(pb.AcctState) = .init(allocator);
-                errdefer acct_states.deinit();
-
-                for (executed.loaded_accounts.accounts.constSlice()) |acc| {
-                    try acct_states.append(.{
-                        .address = try .copy(&acc.pubkey.data, allocator),
-                        .lamports = acc.account.lamports,
-                        .data = try .copy(acc.account.data, allocator),
-                        .executable = acc.account.executable,
-                        .owner = try .copy(&acc.account.owner.data, allocator),
-                        .seed_addr = null,
-                    });
-                }
-
-                break :acct_states acct_states;
-            },
-            .fees_only => |fees_only| acct_states: {
-                var acct_states: std.ArrayList(pb.AcctState) = .init(allocator);
-                errdefer acct_states.deinit();
-                errdefer for (acct_states.items) |acct_state| acct_state.deinit();
-                try acct_states.ensureTotalCapacityPrecise(fees_only.rollbacks.count());
-
-                const fee_payer_address = sanitized.fee_payer;
-                switch (fees_only.rollbacks) {
-                    .fee_payer_only => |fee_payer_account| {
-                        acct_states.appendAssumeCapacity(try sharedAccountToState(
-                            allocator,
-                            fee_payer_address,
-                            fee_payer_account.account,
-                        ));
-                    },
-                    .same_nonce_and_fee_payer => |nonce| {
-                        acct_states.appendAssumeCapacity(try sharedAccountToState(
-                            allocator,
-                            nonce.pubkey,
-                            nonce.account,
-                        ));
-                    },
-                    .separate_nonce_and_fee_payer => |pair| {
-                        const nonce, const fee_payer_account = pair;
-                        acct_states.appendAssumeCapacity(try sharedAccountToState(
-                            allocator,
-                            fee_payer_address,
-                            fee_payer_account.account,
-                        ));
-                        acct_states.appendAssumeCapacity(try sharedAccountToState(
-                            allocator,
-                            nonce.pubkey,
-                            nonce.account,
-                        ));
-                    },
-                }
-                break :acct_states acct_states;
-            },
-        };
-        defer relevant_acct_states.deinit();
+        var relevant_acct_states: std.ArrayList(pb.AcctState) =
+            try .initCapacity(allocator, txn.writes.len);
+        errdefer relevant_acct_states.deinit();
+        for (txn.writes.constSlice()) |account| {
+            relevant_acct_states.appendAssumeCapacity(
+                try sharedAccountToState(allocator, account.pubkey, account.account),
+            );
+        }
 
         // Filter relevant accounts.
         var acct_states: std.ArrayList(pb.AcctState) = .init(allocator);
@@ -1049,26 +961,20 @@ fn serializeOutput(
 
     const resulting_state: pb.ResultingState = .{
         .rent_debits = .init(allocator),
-        .transaction_rent = rent,
+        .transaction_rent = txn.rent,
         .acct_states = acct_states,
     };
 
-    const return_data: ManagedString = switch (txn) {
-        .executed => |executed| blk: {
-            if (executed.executed_transaction.return_data) |return_data| {
-                break :blk try .copy(return_data.data.constSlice(), allocator);
-            } else {
-                break :blk .Empty;
-            }
-        },
-        .fees_only => .Empty,
-    };
+    const return_data: ManagedString = if (txn.outputs) |out|
+        if (out.return_data) |ret| try .copy(ret.data.constSlice(), allocator) else .Empty
+    else
+        .Empty;
 
     return .{
         .executed = true,
         .sanitization_error = false,
-        .is_ok = is_ok,
-        .rent = rent,
+        .is_ok = txn.err == null,
+        .rent = txn.rent,
 
         .status = errors.err,
         .instruction_error = errors.instruction_error,
@@ -1078,11 +984,11 @@ fn serializeOutput(
         .return_data = return_data,
         .resulting_state = resulting_state,
         .fee_details = .{
-            .transaction_fee = fees.transaction_fee,
-            .prioritization_fee = fees.prioritization_fee,
+            .transaction_fee = txn.fees.transaction_fee,
+            .prioritization_fee = txn.fees.prioritization_fee,
         },
-        .executed_units = txn.executedUnits() orelse 0,
-        .loaded_accounts_data_size = txn.loadedAccountsDataSize(),
+        .executed_units = if (txn.outputs) |out| out.compute_limit - out.compute_meter else 0,
+        .loaded_accounts_data_size = txn.loaded_accounts_data_size,
     };
 }
 
