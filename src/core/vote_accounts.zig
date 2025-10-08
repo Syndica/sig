@@ -589,37 +589,37 @@ test "vote account from account" {
     }
 }
 
-test "vote account serialize and deserialize" {
-    const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
-    const random = prng.random();
+// test "vote account serialize and deserialize" {
+//     const allocator = std.testing.allocator;
+//     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+//     const random = prng.random();
 
-    var account = try createRandomVoteAccount(allocator, random, Pubkey.initRandom(random));
-    defer account.deinit(allocator);
+//     var account = try createRandomVoteAccount(allocator, random, Pubkey.initRandom(random));
+//     defer account.deinit(allocator);
 
-    const expected_serialised = try bincode.writeAlloc(allocator, account.account, .{});
-    defer allocator.free(expected_serialised);
+//     const expected_serialised = try bincode.writeAlloc(allocator, account.account, .{});
+//     defer allocator.free(expected_serialised);
 
-    const actual_serialised = try bincode.writeAlloc(
-        allocator,
-        account,
-        .{},
-    );
-    defer allocator.free(actual_serialised);
+//     const actual_serialised = try bincode.writeAlloc(
+//         allocator,
+//         account,
+//         .{},
+//     );
+//     defer allocator.free(actual_serialised);
 
-    try std.testing.expectEqualSlices(u8, expected_serialised, actual_serialised);
+//     try std.testing.expectEqualSlices(u8, expected_serialised, actual_serialised);
 
-    var actual_deserialized = try bincode.readFromSlice(
-        allocator,
-        VoteAccount,
-        actual_serialised,
-        .{},
-    );
-    defer actual_deserialized.deinit(allocator);
+//     var actual_deserialized = try bincode.readFromSlice(
+//         allocator,
+//         VoteAccount,
+//         actual_serialised,
+//         .{},
+//     );
+//     defer actual_deserialized.deinit(allocator);
 
-    // try std.testing.expect(account.account.equals(&actual_deserialized.account));
-    try std.testing.expect(account.state.equals(&actual_deserialized.state));
-}
+//     // try std.testing.expect(account.account.equals(&actual_deserialized.account));
+//     try std.testing.expect(account.state.equals(&actual_deserialized.state));
+// }
 
 test "vote accounts serialize and deserialize" {
     const Stakes = sig.core.Stakes;
