@@ -3105,7 +3105,7 @@ test "test packet verification" {
     data.LegacyContactInfo.wallclock = 0;
     var value = SignedGossipData.initSigned(&keypair, data);
 
-    try std.testing.expect(try value.verify(id));
+    try value.verify(id);
 
     var values = [_]SignedGossipData{value};
     const message = GossipMessage{

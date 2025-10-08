@@ -1610,7 +1610,7 @@ fn newTowerSyncTransaction(
         const pos = vote_tx_msg.getSigningKeypairPosition(pubkey) orelse
             return error.MissingOrInvalidSigner;
         const signature = try keypairs[i].sign(msg_serialized.constSlice(), null);
-        signatures[pos] = .{ .data = signature.toBytes() };
+        signatures[pos] = .fromSignature(signature);
     }
 
     const tx: Transaction = .{

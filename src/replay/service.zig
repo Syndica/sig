@@ -514,8 +514,11 @@ pub fn getActiveFeatures(
     for (0..sig.core.features.NUM_FEATURES) |i| {
         const possible_feature: sig.core.features.Feature = @enumFromInt(i);
         const possible_feature_pubkey = sig.core.features.map.get(possible_feature).key;
-        const feature_account = try account_reader.get(possible_feature_pubkey) orelse continue;
-        defer feature_account.deinit(account_reader.allocator());
+
+        const feature_account = try account_reader.get(allocator, possible_feature_pubkey) orelse
+            continue;
+        defer feature_account.deinit(allocator);
+
         if (!feature_account.owner.equals(&sig.runtime.ids.FEATURE_PROGRAM_ID)) {
             continue;
         }

@@ -109,10 +109,20 @@ pub const Committer = struct {
 
             const recent_blockhash = &transaction.transaction.msg.recent_blockhash;
             const signature = transaction.transaction.signatures[0];
-            try self.status_cache
-                .insert(allocator, rng.random(), recent_blockhash, &message_hash.data, slot);
-            try self.status_cache
-                .insert(allocator, rng.random(), recent_blockhash, &signature.data, slot);
+            try self.status_cache.insert(
+                allocator,
+                rng.random(),
+                recent_blockhash,
+                &message_hash.data,
+                slot,
+            );
+            try self.status_cache.insert(
+                allocator,
+                rng.random(),
+                recent_blockhash,
+                &signature.toBytes(),
+                slot,
+            );
             // NOTE: we'll need to store the actual status at some point, probably for rpc.
         }
 

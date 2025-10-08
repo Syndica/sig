@@ -144,9 +144,10 @@ pub const SlotHistoryAccessor = struct {
         ancestors: *const Ancestors,
     ) !SlotHistory {
         const maybe_account =
-            try self.account_reader.forSlot(ancestors).get(SlotHistory.ID);
+            try self.account_reader.forSlot(ancestors).get(allocator, SlotHistory.ID);
         const account: sig.core.Account = maybe_account orelse
             return error.MissingSlotHistoryAccount;
+        defer account.deinit(allocator);
 
         var data_iter = account.data.iterator();
         const slot_history = try sig.bincode.read(
@@ -158,11 +159,8 @@ pub const SlotHistoryAccessor = struct {
         errdefer slot_history.deinit(allocator);
 
         if (data_iter.bytesRemaining() != 0) {
-            account.deinit(self.account_reader.allocator());
             return error.TrailingBytesInSlotHistory;
         }
-        account.deinit(self.account_reader.allocator());
-
         return slot_history;
     }
 };
@@ -1830,7 +1828,10 @@ pub fn lastVotedSlotInBank(
     accounts_db: *sig.accounts_db.AccountsDB,
     vote_account_pubkey: *const Pubkey,
 ) !?Slot {
-    const vote_account = try accounts_db.getAccountLatest(vote_account_pubkey) orelse return null;
+    const vote_account = try accounts_db.getAccountLatest(allocator, vote_account_pubkey) orelse
+        return null;
+    defer vote_account.deinit(allocator);
+
     const vote_state = stateFromAccount(
         allocator,
         &vote_account,

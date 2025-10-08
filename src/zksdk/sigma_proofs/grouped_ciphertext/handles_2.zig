@@ -2,6 +2,7 @@
 //! [agave](https://github.com/anza-xyz/agave/blob/5a9906ebf4f24cd2a2b15aca638d609ceed87797/zk-sdk/src/sigma_proofs/grouped_ciphertext_validity/handles_2.rs)
 
 const std = @import("std");
+const builtin = @import("builtin");
 const sig = @import("../../../sig.zig");
 
 const Edwards25519 = std.crypto.ecc.Edwards25519;
@@ -12,7 +13,7 @@ const ElGamalPubkey = sig.zksdk.ElGamalPubkey;
 const Ristretto255 = std.crypto.ecc.Ristretto255;
 const Scalar = std.crypto.ecc.Edwards25519.scalar.Scalar;
 const Transcript = sig.zksdk.Transcript;
-const weak_mul = sig.vm.syscalls.ecc.weak_mul;
+const ed25519 = sig.crypto.ed25519;
 const GroupedElGamalCiphertext = el_gamal.GroupedElGamalCiphertext;
 const ProofType = sig.runtime.program.zk_elgamal.ProofType;
 
@@ -23,6 +24,22 @@ pub const Proof = struct {
     z_r: Scalar,
     z_x: Scalar,
 
+    // the extra contract on top of the base `contract` used in `init`.
+    const batched_contract: Transcript.Contract = &.{
+        .{ .label = "t", .type = .challenge },
+    };
+
+    const contract: Transcript.Contract = &.{
+        .{ .label = "Y_0", .type = .validate_point },
+        .{ .label = "Y_1", .type = .validate_point },
+        .{ .label = "Y_2", .type = .point },
+        .{ .label = "c", .type = .challenge },
+
+        .{ .label = "z_r", .type = .scalar },
+        .{ .label = "z_x", .type = .scalar },
+        .{ .label = "w", .type = .challenge },
+    };
+
     pub fn initBatched(
         first_pubkey: *const ElGamalPubkey,
         second_pubkey: *const ElGamalPubkey,
@@ -32,10 +49,11 @@ pub const Proof = struct {
         opening_hi: *const pedersen.Opening,
         transcript: *Transcript,
     ) Proof {
-        transcript.appendDomSep("batched-validity-proof");
-        transcript.appendU64("handles", 2);
+        transcript.appendHandleDomSep(.batched, .two);
 
-        const t = transcript.challengeScalar("t");
+        comptime var session = Transcript.getSession(batched_contract);
+        defer session.finish();
+        const t = transcript.challengeScalar(&session, "t");
 
         const scalar_lo = pedersen.scalarFromInt(u64, amount_lo);
         const scalar_hi = pedersen.scalarFromInt(u64, amount_hi);
@@ -61,13 +79,12 @@ pub const Proof = struct {
         opening: *const pedersen.Opening,
         transcript: *Transcript,
     ) Proof {
-        transcript.appendDomSep("validity-proof");
-        transcript.appendU64("handles", 2);
+        transcript.appendHandleDomSep(.unbatched, .two);
 
         const P_first = first_pubkey.point;
         const P_second = second_pubkey.point;
 
-        const x: Scalar = switch (@TypeOf(amount)) {
+        var x: Scalar = switch (@TypeOf(amount)) {
             Scalar => amount,
             u64 => pedersen.scalarFromInt(u64, amount),
             else => unreachable,
@@ -77,28 +94,36 @@ pub const Proof = struct {
         var y_r = Scalar.random();
         var y_x = Scalar.random();
         defer {
+            std.crypto.secureZero(u64, &x.limbs);
             std.crypto.secureZero(u64, &y_r.limbs);
             std.crypto.secureZero(u64, &y_x.limbs);
         }
 
-        const Y_0: Ristretto255 = .{ .p = weak_mul.mulMulti(
+        const Y_0 = ed25519.mulMulti(
             2,
-            .{ pedersen.H.p, pedersen.G.p },
+            .{ pedersen.H, pedersen.G },
             .{ y_r.toBytes(), y_x.toBytes() },
-        ) };
-        const Y_1: Ristretto255 = .{ .p = weak_mul.mul(P_first.p, y_r.toBytes()) };
-        const Y_2: Ristretto255 = .{ .p = weak_mul.mul(P_second.p, y_r.toBytes()) };
+        );
+        const Y_1: Ristretto255 = ed25519.mul(true, P_first, y_r.toBytes());
+        const Y_2: Ristretto255 = ed25519.mul(true, P_second, y_r.toBytes());
 
-        transcript.appendPoint("Y_0", Y_0);
-        transcript.appendPoint("Y_1", Y_1);
-        transcript.appendPoint("Y_2", Y_2);
+        comptime var session = Transcript.getSession(contract);
+        defer session.finish();
 
-        const c = transcript.challengeScalar("c");
-        _ = transcript.challengeScalar("w");
+        transcript.appendNoValidate(&session, "Y_0", Y_0);
+        transcript.appendNoValidate(&session, "Y_1", Y_1);
+        transcript.append(&session, .point, "Y_2", Y_2);
+        const c = transcript.challengeScalar(&session, "c");
 
         // masked message and opening
         const z_r = c.mul(r).add(y_r);
         const z_x = c.mul(x).add(y_x);
+
+        if (builtin.mode == .Debug) {
+            transcript.append(&session, .scalar, "z_r", z_r);
+            transcript.append(&session, .scalar, "z_x", z_x);
+            _ = transcript.challengeScalar(&session, "w");
+        }
 
         return .{
             .Y_0 = Y_0,
@@ -134,25 +159,31 @@ pub const Proof = struct {
         params: Params(batched),
         transcript: *Transcript,
     ) !void {
+        // for batched we have the batched contract which includes the initial
+        // `t` challenge, and then the base one that's shared between batched and non batched.
+        comptime var session = Transcript.getSession(if (batched)
+            batched_contract ++ contract
+        else
+            contract);
+        defer session.finish();
+
         const t = if (batched) t: {
-            transcript.appendDomSep("batched-validity-proof");
-            transcript.appendU64("handles", 2);
-            break :t transcript.challengeScalar("t");
+            transcript.appendHandleDomSep(.batched, .two);
+            break :t transcript.challengeScalar(&session, "t");
         } else void; // shouldn't be referenced
 
-        transcript.appendDomSep("validity-proof");
-        transcript.appendU64("handles", 2);
+        transcript.appendHandleDomSep(.unbatched, .two);
 
-        try transcript.validateAndAppendPoint("Y_0", self.Y_0);
-        try transcript.validateAndAppendPoint("Y_1", self.Y_1);
+        try transcript.append(&session, .validate_point, "Y_0", self.Y_0);
+        try transcript.append(&session, .validate_point, "Y_1", self.Y_1);
         // Y_2 can be all zero point if the second public key is all zero
-        transcript.appendPoint("Y_2", self.Y_2);
+        transcript.append(&session, .point, "Y_2", self.Y_2);
 
-        const c = transcript.challengeScalar("c").toBytes();
+        const c = transcript.challengeScalar(&session, "c").toBytes();
 
-        transcript.appendScalar("z_r", self.z_r);
-        transcript.appendScalar("z_x", self.z_x);
-        const w = transcript.challengeScalar("w");
+        transcript.append(&session, .scalar, "z_r", self.z_r);
+        transcript.append(&session, .scalar, "z_x", self.z_x);
+        const w = transcript.challengeScalar(&session, "w");
 
         const c_negated = Scalar.fromBytes(Edwards25519.scalar.neg(c));
         const w_negated = Scalar.fromBytes(Edwards25519.scalar.neg(w.toBytes()));
@@ -187,17 +218,17 @@ pub const Proof = struct {
         const c_negated_w = c_negated.mul(w);
         const z_r_w = self.z_r.mul(w);
 
-        var points: std.BoundedArray(Edwards25519, 12) = .{};
+        var points: std.BoundedArray(Ristretto255, 12) = .{};
         var scalars: std.BoundedArray([32]u8, 12) = .{};
 
         try points.appendSlice(&.{
-            pedersen.G.p,
-            pedersen.H.p,
-            self.Y_1.p,
-            self.Y_2.p,
-            params.first_pubkey.point.p,
-            params.commitment.point.p,
-            params.first_handle.point.p,
+            pedersen.G,
+            pedersen.H,
+            self.Y_1,
+            self.Y_2,
+            params.first_pubkey.point,
+            params.commitment.point,
+            params.first_handle.point,
         });
 
         try scalars.appendSlice(&.{
@@ -212,8 +243,8 @@ pub const Proof = struct {
 
         if (batched) {
             try points.appendSlice(&.{
-                params.commitment_hi.point.p,
-                params.first_handle_hi.point.p,
+                params.commitment_hi.point,
+                params.first_handle_hi.point,
             });
             try scalars.appendSlice(&.{
                 c_negated.mul(t).toBytes(),
@@ -223,8 +254,8 @@ pub const Proof = struct {
 
         if (second_pubkey_not_zero) {
             try points.appendSlice(&.{
-                params.second_pubkey.point.p,
-                params.second_handle.point.p,
+                params.second_pubkey.point,
+                params.second_handle.point,
             });
             try scalars.appendSlice(&.{
                 z_r_w.mul(w).toBytes(),
@@ -233,28 +264,31 @@ pub const Proof = struct {
         }
 
         if (batched and second_pubkey_not_zero) {
-            try points.append(params.second_handle_hi.point.p);
+            try points.append(params.second_handle_hi.point);
             try scalars.append(c_negated_w.mul(w).mul(t).toBytes());
         }
 
-        const check = switch (points.len) {
-            inline
+        // assert the only possible lengths to help the optimizer a bit
+        switch (points.len) {
             // batched is false + pubkey2_not_zero is false
-            7,
+            7 => {},
             // batched is true  + pubkey2_not_zero is false
             // batched is false + pubkey2_not_zero is true
-            9,
+            9 => {},
             // batched is true  + pubkey2_not_zero is true
-            12,
-            => |N| weak_mul.mulMulti(
-                N,
-                points.constSlice()[0..N].*,
-                scalars.constSlice()[0..N].*,
-            ),
-            else => unreachable,
-        };
+            12 => {},
+            else => unreachable, // nothing else should be possible!
+        }
 
-        if (!self.Y_0.equivalent(.{ .p = check })) {
+        const check = ed25519.straus.mulMultiRuntime(
+            12,
+            false,
+            true,
+            points.constSlice(),
+            scalars.constSlice(),
+        );
+
+        if (!self.Y_0.equivalent(check)) {
             return error.AlgebraicRelation;
         }
     }
@@ -323,13 +357,15 @@ pub const Data = struct {
                 self.grouped_ciphertext.toBytes();
         }
 
+        // zig fmt: off
         fn newTranscript(self: Context) Transcript {
-            var transcript = Transcript.init("grouped-ciphertext-validity-2-handles-instruction");
-            transcript.appendPubkey("first-pubkey", self.first_pubkey);
-            transcript.appendPubkey("second-pubkey", self.second_pubkey);
-            transcript.appendMessage("grouped-ciphertext", &self.grouped_ciphertext.toBytes());
-            return transcript;
+            return .init(.@"grouped-ciphertext-validity-2-handles-instruction", &.{
+                .{ .label = "first-pubkey",       .message = .{ .pubkey = self.first_pubkey } },
+                .{ .label = "second-pubkey",      .message = .{ .pubkey = self.second_pubkey } },
+                .{ .label = "grouped-ciphertext", .message = .{ .grouped_2 = self.grouped_ciphertext } },
+            });
         }
+        // zig fmt: on
     };
 
     pub fn init(
@@ -445,16 +481,16 @@ pub const BatchedData = struct {
                 self.grouped_ciphertext_hi.toBytes();
         }
 
+        // zig fmt: off
         fn newTranscript(self: Context) Transcript {
-            var transcript = Transcript.init(
-                "batched-grouped-ciphertext-validity-2-handles-instruction",
-            );
-            transcript.appendPubkey("first-pubkey", self.first_pubkey);
-            transcript.appendPubkey("second-pubkey", self.second_pubkey);
-            transcript.appendMessage("grouped-ciphertext-lo", &self.grouped_ciphertext_lo.toBytes());
-            transcript.appendMessage("grouped-ciphertext-hi", &self.grouped_ciphertext_hi.toBytes());
-            return transcript;
+            return .init(.@"batched-grouped-ciphertext-validity-2-handles-instruction", &.{
+                .{ .label = "first-pubkey",          .message = .{ .pubkey = self.first_pubkey } },
+                .{ .label = "second-pubkey",         .message = .{ .pubkey = self.second_pubkey } },
+                .{ .label = "grouped-ciphertext-lo", .message = .{ .grouped_2 = self.grouped_ciphertext_lo } },
+                .{ .label = "grouped-ciphertext-hi", .message = .{ .grouped_2 = self.grouped_ciphertext_hi } },
+            });
         }
+        // zig fmt: on
     };
 
     pub fn init(
@@ -577,8 +613,8 @@ test "correctness" {
     const first_handle = pedersen.DecryptHandle.init(&first_pubkey, &opening);
     const second_handle = pedersen.DecryptHandle.init(&second_pubkey, &opening);
 
-    var prover_transcript = Transcript.init("test");
-    var verifier_transcript = Transcript.init("test");
+    var prover_transcript = Transcript.initTest("Test");
+    var verifier_transcript = Transcript.initTest("Test");
 
     const proof = Proof.init(
         &first_pubkey,
@@ -614,8 +650,8 @@ test "first pubkey zeroed" {
     const first_handle = pedersen.DecryptHandle.init(&first_pubkey, &opening);
     const second_handle = pedersen.DecryptHandle.init(&second_pubkey, &opening);
 
-    var prover_transcript = Transcript.init("test");
-    var verifier_transcript = Transcript.init("test");
+    var prover_transcript = Transcript.initTest("Test");
+    var verifier_transcript = Transcript.initTest("Test");
 
     const proof = Proof.init(
         &first_pubkey,
@@ -656,8 +692,8 @@ test "zeroed ciphertext" {
     const first_handle = pedersen.DecryptHandle.init(&first_pubkey, &opening);
     const second_handle = pedersen.DecryptHandle.init(&second_pubkey, &opening);
 
-    var prover_transcript = Transcript.init("test");
-    var verifier_transcript = Transcript.init("test");
+    var prover_transcript = Transcript.initTest("Test");
+    var verifier_transcript = Transcript.initTest("Test");
 
     const proof = Proof.init(
         &first_pubkey,
@@ -695,8 +731,8 @@ test "zeroed decryption handle" {
     const first_handle = pedersen.DecryptHandle.init(&first_pubkey, &zeroed_opening);
     const second_handle = pedersen.DecryptHandle.init(&second_pubkey, &zeroed_opening);
 
-    var prover_transcript = Transcript.init("test");
-    var verifier_transcript = Transcript.init("test");
+    var prover_transcript = Transcript.initTest("Test");
+    var verifier_transcript = Transcript.initTest("Test");
 
     const proof = Proof.init(
         &first_pubkey,
@@ -740,7 +776,7 @@ test "proof string" {
     const proof = try Proof.fromBase64(proof_string);
     // zig fmt: on
 
-    var verifier_transcript = Transcript.init("Test");
+    var verifier_transcript = Transcript.initTest("Test");
     try proof.verify(
         false,
         .{
@@ -773,8 +809,8 @@ test "batched sanity" {
     const second_handle_lo = pedersen.DecryptHandle.init(&second_pubkey, &opening_lo);
     const second_handle_hi = pedersen.DecryptHandle.init(&second_pubkey, &opening_hi);
 
-    var prover_transcript = Transcript.init("test");
-    var verifier_transcript = Transcript.init("test");
+    var prover_transcript = Transcript.initTest("Test");
+    var verifier_transcript = Transcript.initTest("Test");
 
     const proof = Proof.initBatched(
         &first_pubkey,
@@ -832,7 +868,7 @@ test "batched proof string" {
     const proof = try Proof.fromBase64(proof_string);
     // zig fmt: on
 
-    var verifier_transcript = Transcript.init("Test");
+    var verifier_transcript = Transcript.initTest("Test");
 
     try proof.verify(
         true,

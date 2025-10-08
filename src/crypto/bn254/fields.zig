@@ -804,22 +804,6 @@ pub const Fp12 = struct {
             .c0 = c2.mulByGamma().add(c0),
             .c1 = c2.dbl(),
         };
-
-        // const c0 = a.c0.sub(a.c1)
-
-        // var c0: Fp6 = undefined;
-        // var c2: Fp6 = undefined;
-        // var c3: Fp6 = undefined;
-
-        // c0.sub(a.c0, a.c1);
-        // c3.mulByGamma(a.c1);
-        // c3.sub(a.c0, c3);
-        // c2.mul(a.c0, a.c1);
-        // c0.mul(c0, c3);
-        // c0.add(c0, c2);
-        // r.c1.add(c2, c2);
-        // r.c0.mulByGamma(c2);
-        // r.c0.add(r.c0, c0);
     }
 
     pub fn conj(a: Fp12) Fp12 {

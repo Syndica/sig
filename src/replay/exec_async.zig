@@ -690,7 +690,7 @@ test "TransactionScheduler: signature verification failure" {
 
     const replaced_sigs = try tx_arena.allocator()
         .dupe(sig.core.Signature, transactions[5].signatures);
-    replaced_sigs[0].data[0] +%= 1;
+    replaced_sigs[0].r[0] +%= 1;
     transactions[5].signatures = replaced_sigs;
 
     const slot_hashes = try sig.runtime.sysvar.SlotHashes.init(allocator);

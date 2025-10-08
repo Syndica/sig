@@ -183,8 +183,8 @@ pub const AccountsDB = struct {
         index_allocation: Index,
         number_of_index_shards: usize,
         on_root_config: sig.accounts_db.manager.Config = .{},
-        /// Amount of BufferPool frames, used for cached reads. Default = 1GiB.
-        buffer_pool_frames: u32 = 2 * 1024 * 1024,
+        /// Amount of BufferPool frames, used for cached reads. Default = 1GiB (32MiB for tests)
+        buffer_pool_frames: u32 = if (builtin.is_test) 64 * 1024 else 2 * 1024 * 1024,
 
         pub const Index = union(AccountIndex.AllocatorConfig.Tag) {
             ram,
@@ -624,7 +624,7 @@ pub const AccountsDB = struct {
     }
 
     /// multithread entrypoint into loadAndVerifyAccountsFiles.
-    pub fn loadAndVerifyAccountsFilesMultiThread(
+    fn loadAndVerifyAccountsFilesMultiThread(
         loading_threads: []AccountsDB,
         accounts_dir: std.fs.Dir,
         file_info_map: AccountsDbFields.FileMap,
@@ -649,7 +649,7 @@ pub const AccountsDB = struct {
 
     /// loads and verifies the account files into the threads file map
     /// and stores the accounts into the threads index
-    pub fn loadAndVerifyAccountsFiles(
+    fn loadAndVerifyAccountsFiles(
         self: *AccountsDB,
         accounts_dir: std.fs.Dir,
         accounts_per_file_est: usize,
@@ -928,7 +928,7 @@ pub const AccountsDB = struct {
 
     /// merges multiple thread accounts-dbs into self.
     /// index merging happens in parallel using `n_threads`.
-    pub fn mergeMultipleDBs(
+    fn mergeMultipleDBs(
         self: *AccountsDB,
         thread_dbs: []AccountsDB,
         n_threads: usize,
@@ -1013,7 +1013,7 @@ pub const AccountsDB = struct {
 
     /// combines multiple thread indexes into the given index.
     /// each bin is also sorted by pubkey.
-    pub fn mergeThreadIndexesMultiThread(
+    fn mergeThreadIndexesMultiThread(
         logger: Logger,
         index: *AccountIndex,
         thread_dbs: []const AccountsDB,
@@ -1108,7 +1108,7 @@ pub const AccountsDB = struct {
     /// NOTE: acquires a shared/read lock on `file_map_fd_rw` and `file_map` - those fields
     /// must not be under exclusive/write locks before calling this function on the same
     /// thread, or else this will dead lock.
-    pub fn computeAccountHashesAndLamports(
+    fn computeAccountHashesAndLamports(
         self: *AccountsDB,
         config: AccountHashesConfig,
     ) !struct { Hash, u64 } {
@@ -1215,12 +1215,15 @@ pub const AccountsDB = struct {
             return self.slot_index.refs.items.len;
         }
 
-        pub fn next(self: *SlotModifiedIterator) !?struct { Pubkey, Account } {
+        pub fn next(
+            self: *SlotModifiedIterator,
+            allocator: std.mem.Allocator,
+        ) !?struct { Pubkey, Account } {
             assert(self.cursor != std.math.maxInt(usize));
             defer self.cursor += 1;
             if (self.cursor >= self.slot_index.refs.items.len) return null;
             const account_ref = self.slot_index.refs.items[self.cursor];
-            const account = try self.db.getAccountFromRef(&account_ref);
+            const account = try self.db.getAccountFromRef(allocator, &account_ref);
             return .{ account_ref.pubkey, account };
         }
     };
@@ -1249,7 +1252,7 @@ pub const AccountsDB = struct {
     /// Validates accountsdb against some snapshot info - if used, it must
     /// be after loading the snapshot(s) whose information is supplied,
     /// and before mutating accountsdb.
-    pub fn validateLoadFromSnapshot(
+    fn validateLoadFromSnapshot(
         self: *AccountsDB,
         params: ValidateLoadFromSnapshotParams,
     ) !void {
@@ -1390,7 +1393,7 @@ pub const AccountsDB = struct {
     }
 
     /// populates the account hashes and total lamports across a given shard slice
-    pub fn getHashesFromIndex(
+    fn getHashesFromIndex(
         self: *AccountsDB,
         config: AccountsDB.AccountHashesConfig,
         shards: []ShardedPubkeyRefMap.RwPubkeyRefMap,
@@ -1563,18 +1566,19 @@ pub const AccountsDB = struct {
         error{SlotNotFound};
 
     // NOTE: we need to acquire locks which requires `self: *Self` but we never modify any data
-    pub fn getAccountFromRef(
+    fn getAccountFromRef(
         self: *AccountsDB,
+        allocator: std.mem.Allocator,
         account_ref: *const AccountRef,
     ) GetFileFromRefError!Account {
         switch (account_ref.location) {
             .file => |ref_info| {
                 const account = try self.getAccountInFile(
-                    self.allocator,
+                    allocator,
                     ref_info.file_id,
                     ref_info.offset,
                 );
-                errdefer account.deinit(self.allocator);
+                errdefer account.deinit(allocator);
 
                 return account;
             },
@@ -1588,7 +1592,7 @@ pub const AccountsDB = struct {
                 const accounts: []Account = slots_and_accounts.items(.account);
                 const account = accounts[ref_info.index];
 
-                return try account.cloneOwned(self.allocator);
+                return try account.cloneOwned(allocator);
             },
         }
     }
@@ -1614,7 +1618,7 @@ pub const AccountsDB = struct {
     };
 
     pub const GetAccountFromRefError = GetAccountInFileError || error{SlotNotFound};
-    pub fn getAccountFromRefWithReadLock(
+    fn getAccountFromRefWithReadLock(
         self: *AccountsDB,
         account_ref: *const AccountRef,
     ) GetAccountFromRefError!struct { AccountInCacheOrFile, AccountInCacheOrFileLock } {
@@ -1651,28 +1655,28 @@ pub const AccountsDB = struct {
     /// Gets an account given an file_id and offset value.
     /// Locks the account file entries, and then unlocks
     /// them, after returning the clone of the account.
-    pub fn getAccountInFile(
+    fn getAccountInFile(
         self: *AccountsDB,
-        account_allocator: std.mem.Allocator,
+        allocator: std.mem.Allocator,
         file_id: FileId,
         offset: usize,
     ) (GetAccountInFileError || std.mem.Allocator.Error)!Account {
         const account_in_file = try self.getAccountInFileAndLock(
-            self.allocator,
+            allocator,
             &self.buffer_pool,
             file_id,
             offset,
         );
-        defer account_in_file.deinit(account_allocator);
+        defer account_in_file.deinit(allocator);
         defer self.file_map_fd_rw.unlockShared();
-        return try account_in_file.dupeCachedAccount(account_allocator);
+        return try account_in_file.dupeCachedAccount(allocator);
     }
 
     /// Gets an account given an file_id and offset value.
     /// Locks the account file entries, and returns the account.
     /// Must call `self.file_map_fd_rw.unlockShared()`
     /// when done with the account.
-    pub fn getAccountInFileAndLock(
+    fn getAccountInFileAndLock(
         self: *AccountsDB,
         metadata_allocator: std.mem.Allocator,
         buffer_pool: *BufferPool,
@@ -1692,7 +1696,7 @@ pub const AccountsDB = struct {
     /// Gets an account given a file_id and an offset value.
     /// Assumes `self.file_map_fd_rw` is at least
     /// locked for reading (shared).
-    pub fn getAccountInFileAssumeLock(
+    fn getAccountInFileAssumeLock(
         self: *AccountsDB,
         metadata_allocator: std.mem.Allocator,
         buffer_pool: *BufferPool,
@@ -1754,6 +1758,7 @@ pub const AccountsDB = struct {
     /// mut ref is required for locks.
     pub fn getAccountLatest(
         self: *AccountsDB,
+        allocator: std.mem.Allocator,
         pubkey: *const Pubkey,
     ) GetAccountError!?Account {
         const head_ref, var lock = self.account_index.pubkey_ref_map.getRead(pubkey) orelse
@@ -1762,7 +1767,7 @@ pub const AccountsDB = struct {
 
         // NOTE: this will always be a safe unwrap since both bounds are null
         const max_ref = slotListMaxWithinBounds(head_ref.ref_ptr, null, null).?;
-        const account = try self.getAccountFromRef(max_ref);
+        const account = try self.getAccountFromRef(allocator, max_ref);
 
         return account;
     }
@@ -1771,6 +1776,7 @@ pub const AccountsDB = struct {
 
     pub fn getSlotAndAccount(
         self: *AccountsDB,
+        allocator: std.mem.Allocator,
         pubkey: *const Pubkey,
     ) GetAccountError!struct { Slot, Account } {
         const head_ref, var lock = self.account_index.pubkey_ref_map.getRead(pubkey) orelse
@@ -1779,7 +1785,7 @@ pub const AccountsDB = struct {
 
         // NOTE: this will always be a safe unwrap since both bounds are null
         const max_ref = slotListMaxWithinBounds(head_ref.ref_ptr, null, null).?;
-        const account = try self.getAccountFromRef(max_ref);
+        const account = try self.getAccountFromRef(allocator, max_ref);
 
         return .{ max_ref.slot, account };
     }
@@ -1788,6 +1794,7 @@ pub const AccountsDB = struct {
     /// Will only find rooted accounts, or unrooted accounts from a slot in ancestors.
     pub fn getAccountWithAncestors(
         self: *AccountsDB,
+        allocator: std.mem.Allocator,
         pubkey: *const Pubkey,
         ancestors: *const sig.core.Ancestors,
     ) GetFileFromRefError!?Account {
@@ -1805,27 +1812,12 @@ pub const AccountsDB = struct {
             self.getLargestRootedSlot(),
         ) orelse return null;
 
-        return try self.getAccountFromRef(max_ref);
-    }
-
-    pub fn getAccountAndReference(
-        self: *AccountsDB,
-        pubkey: *const Pubkey,
-    ) !struct { Account, AccountRef } {
-        const head_ref, var head_ref_lg =
-            self.account_index.pubkey_ref_map.getRead(pubkey) orelse return error.PubkeyNotInIndex;
-        defer head_ref_lg.unlock();
-
-        // NOTE: this will always be a safe unwrap since both bounds are null
-        const max_ref = slotListMaxWithinBounds(head_ref.ref_ptr, null, null).?;
-        const account = try self.getAccountFromRef(max_ref);
-
-        return .{ account, max_ref.* };
+        return try self.getAccountFromRef(allocator, max_ref);
     }
 
     pub const GetAccountWithReadLockError = GetAccountFromRefError || error{PubkeyNotInIndex};
 
-    pub fn getAccountWithReadLock(
+    fn getAccountWithReadLock(
         self: *AccountsDB,
         pubkey: *const Pubkey,
     ) GetAccountWithReadLockError!struct { AccountInCacheOrFile, AccountInCacheOrFileLock } {
@@ -1856,7 +1848,7 @@ pub const AccountsDB = struct {
 
     pub const GetTypeFromAccountError = GetAccountWithReadLockError || error{DeserializationError};
 
-    pub fn getTypeFromAccount(
+    fn getTypeFromAccount(
         self: *AccountsDB,
         allocator: std.mem.Allocator,
         comptime T: type,
@@ -3528,14 +3520,14 @@ test "write and read an account - basic" {
     var pubkeys = [_]Pubkey{pubkey};
     try accounts_db.putAccountSlice(&accounts, &pubkeys, 19);
 
-    var account = try accounts_db.getAccountLatest(&pubkey) orelse unreachable;
+    var account = try accounts_db.getAccountLatest(allocator, &pubkey) orelse unreachable;
     defer account.deinit(allocator);
     try std.testing.expect(test_account.equals(&account));
 
     // new account
     accounts[0].lamports = 20;
     try accounts_db.putAccountSlice(&accounts, &pubkeys, 28);
-    var account_2 = try accounts_db.getAccountLatest(&pubkey) orelse unreachable;
+    var account_2 = try accounts_db.getAccountLatest(allocator, &pubkey) orelse unreachable;
     defer account_2.deinit(allocator);
     try std.testing.expect(accounts[0].equals(&account_2));
 }
@@ -3571,7 +3563,7 @@ test "write and read an account (write single + read with ancestors)" {
 
     // normal get
     {
-        var account = (try accounts_db.getAccountLatest(&pubkey)).?;
+        var account = (try accounts_db.getAccountLatest(allocator, &pubkey)).?;
         defer account.deinit(allocator);
         try std.testing.expect(test_account.equals(&account));
     }
@@ -3579,7 +3571,7 @@ test "write and read an account (write single + read with ancestors)" {
     // assume we've progessed past the need for ancestors
     {
         accounts_db.max_slots.set(.{ .rooted = 10_000, .flushed = 10_000 });
-        var account = (try accounts_db.getAccountWithAncestors(&pubkey, &.{})).?;
+        var account = (try accounts_db.getAccountWithAncestors(allocator, &pubkey, &.{})).?;
         defer account.deinit(allocator);
         accounts_db.max_slots.set(.{ .rooted = null, .flushed = null });
         try account.expectEquals(test_account);
@@ -3591,13 +3583,13 @@ test "write and read an account (write single + read with ancestors)" {
         defer ancestors.deinit(allocator);
         try ancestors.ancestors.put(allocator, 5083, {});
 
-        var account = (try accounts_db.getAccountWithAncestors(&pubkey, &ancestors)).?;
+        var account = (try accounts_db.getAccountWithAncestors(allocator, &pubkey, &ancestors)).?;
         defer account.deinit(allocator);
         try account.expectEquals(test_account);
     }
 
     // slot is not in ancestors
-    try std.testing.expectEqual(null, accounts_db.getAccountWithAncestors(&pubkey, &.{}));
+    try std.testing.expectEqual(null, accounts_db.getAccountWithAncestors(allocator, &pubkey, &.{}));
 
     // write account to the same pubkey in the next slot (!)
     {
@@ -3627,7 +3619,11 @@ test "write and read an account (write single + read with ancestors)" {
             defer ancestors.deinit(allocator);
             try ancestors.ancestors.put(allocator, 5083, {});
 
-            var account = (try accounts_db.getAccountWithAncestors(&pubkey, &ancestors)).?;
+            var account = (try accounts_db.getAccountWithAncestors(
+                allocator,
+                &pubkey,
+                &ancestors,
+            )).?;
             defer account.deinit(allocator);
             try std.testing.expect(test_account.equals(&account));
         }
@@ -3638,7 +3634,11 @@ test "write and read an account (write single + read with ancestors)" {
             defer ancestors.deinit(allocator);
             try ancestors.ancestors.put(allocator, 5084, {});
 
-            var account = (try accounts_db.getAccountWithAncestors(&pubkey, &ancestors)).?;
+            var account = (try accounts_db.getAccountWithAncestors(
+                allocator,
+                &pubkey,
+                &ancestors,
+            )).?;
             defer account.deinit(allocator);
             try std.testing.expect(test_account_2.equals(&account));
         }
@@ -4448,8 +4448,10 @@ pub const BenchmarkAccountsDB = struct {
             var i: usize = 0;
             while (i < n_accounts) : (i += 1) {
                 const pubkey_idx = indexer.sample();
-                const account = try accounts_db.getAccountLatest(&pubkeys[pubkey_idx]) orelse
-                    unreachable;
+                const account = try accounts_db.getAccountLatest(
+                    allocator,
+                    &pubkeys[pubkey_idx],
+                ) orelse unreachable;
                 account.deinit(allocator);
             }
         }
@@ -4460,7 +4462,7 @@ pub const BenchmarkAccountsDB = struct {
         var i: usize = 0;
         while (i < do_read_count) : (i += 1) {
             const pubkey_idx = indexer.sample();
-            const account = try accounts_db.getAccountLatest(&pubkeys[pubkey_idx]) orelse
+            const account = try accounts_db.getAccountLatest(allocator, &pubkeys[pubkey_idx]) orelse
                 unreachable;
             defer account.deinit(allocator);
             if (account.data.len() != (pubkey_idx % 1_000)) std.debug.panic(
@@ -4522,7 +4524,11 @@ test "insert multiple accounts on same slot" {
 
         try accounts_db.putAccount(slot, pubkey, expected);
 
-        const maybe_actual = try accounts_db.getAccountWithAncestors(&pubkey, &ancestors);
+        const maybe_actual = try accounts_db.getAccountWithAncestors(
+            allocator,
+            &pubkey,
+            &ancestors,
+        );
         defer if (maybe_actual) |actual| actual.deinit(allocator);
 
         if (maybe_actual) |actual| {
@@ -4605,7 +4611,11 @@ test "insert multiple accounts on multiple slots" {
 
         try accounts_db.putAccount(slot, pubkey, expected);
 
-        const maybe_actual = try accounts_db.getAccountWithAncestors(&pubkey, &ancestors);
+        const maybe_actual = try accounts_db.getAccountWithAncestors(
+            allocator,
+            &pubkey,
+            &ancestors,
+        );
         defer if (maybe_actual) |actual| actual.deinit(allocator);
 
         if (maybe_actual) |actual|
@@ -4653,7 +4663,11 @@ test "insert account on multiple slots" {
 
             try accounts_db.putAccount(slot, pubkey, expected);
 
-            const maybe_actual = try accounts_db.getAccountWithAncestors(&pubkey, &ancestors);
+            const maybe_actual = try accounts_db.getAccountWithAncestors(
+                allocator,
+                &pubkey,
+                &ancestors,
+            );
             defer if (maybe_actual) |actual| actual.deinit(allocator);
 
             if (maybe_actual) |actual|
@@ -4683,7 +4697,10 @@ test "missing ancestor returns null" {
     var ancestors = Ancestors{};
     defer ancestors.deinit(allocator);
 
-    try std.testing.expectEqual(null, try accounts_db.getAccountWithAncestors(&pubkey, &ancestors));
+    try std.testing.expectEqual(
+        null,
+        try accounts_db.getAccountWithAncestors(allocator, &pubkey, &ancestors),
+    );
 }
 
 test "overwrite account in same slot" {
@@ -4710,7 +4727,7 @@ test "overwrite account in same slot" {
     defer allocator.free(second.data);
     try accounts_db.putAccount(slot, pubkey, second);
 
-    const maybe_actual = try accounts_db.getAccountWithAncestors(&pubkey, &ancestors);
+    const maybe_actual = try accounts_db.getAccountWithAncestors(allocator, &pubkey, &ancestors);
     defer if (maybe_actual) |actual| actual.deinit(allocator);
 
     if (maybe_actual) |actual|
@@ -4772,7 +4789,11 @@ test "insert many duplicate individual accounts, get latest with ancestors" {
         defer ancestors.deinit(allocator);
         try ancestors.ancestors.put(allocator, expected.slot, {});
 
-        const maybe_actual = try accounts_db.getAccountWithAncestors(&pubkey, &ancestors);
+        const maybe_actual = try accounts_db.getAccountWithAncestors(
+            allocator,
+            &pubkey,
+            &ancestors,
+        );
         defer if (maybe_actual) |actual| actual.deinit(allocator);
 
         if (maybe_actual) |actual| {

@@ -41,7 +41,11 @@ pub fn loadPrograms(
     errdefer programs.deinit(allocator);
 
     for (accounts.keys(), accounts.values()) |pubkey, account| {
-        if (!account.executable) continue;
+        // https://github.com/firedancer-io/solfuzz-agave/blob/agave-v3.0.3/src/lib.rs#L771-L800
+        if (!account.owner.equals(&bpf_loader.v1.ID) and
+            !account.owner.equals(&bpf_loader.v2.ID) and
+            !account.owner.equals(&bpf_loader.v3.ID) and
+            !account.owner.equals(&bpf_loader.v4.ID)) continue;
 
         var loaded_program = try loadProgram(
             allocator,
@@ -506,10 +510,8 @@ test "loadPrograms: bad owner" {
             loaded_programs.deinit(allocator);
         }
 
-        switch (loaded_programs.get(program_key).?) {
-            .failed => {},
-            .loaded => std.debug.panic("Program should not load!", .{}),
-        }
+        if (loaded_programs.get(program_key) != null)
+            std.debug.panic("Program should not load!", .{});
     }
 }
 
