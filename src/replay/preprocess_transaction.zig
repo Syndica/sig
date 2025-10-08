@@ -43,9 +43,11 @@ pub fn preprocessTransaction(
     };
 
     if (sig_verify == .run_sig_verify) {
-        txn.verifySignatures(msg_bytes.constSlice()) catch |err| return switch (err) {
-            error.SignatureVerificationFailed => .{ .err = .SignatureFailure },
-            else => .{ .err = .SanitizeFailure },
+        txn.verifySignatures(msg_bytes.constSlice()) catch |err| {
+            return switch (err) {
+                error.SignatureVerificationFailed => .{ .err = .SignatureFailure },
+                else => .{ .err = .SanitizeFailure },
+            };
         };
     }
 

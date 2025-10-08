@@ -507,8 +507,11 @@ pub fn getActiveFeatures(
     for (0..sig.core.features.NUM_FEATURES) |i| {
         const possible_feature: sig.core.features.Feature = @enumFromInt(i);
         const possible_feature_pubkey = sig.core.features.map.get(possible_feature).key;
-        const feature_account = try account_reader.get(possible_feature_pubkey) orelse continue;
-        defer feature_account.deinit(account_reader.allocator());
+
+        const feature_account = try account_reader.get(allocator, possible_feature_pubkey) orelse
+            continue;
+        defer feature_account.deinit(allocator);
+
         if (!feature_account.owner.equals(&sig.runtime.ids.FEATURE_PROGRAM_ID)) {
             continue;
         }
@@ -575,6 +578,12 @@ fn bypassConsensus(state: *ReplayState) !void {
         state.logger.info().logf("rooting slot with SlotTree.reRoot: {}", .{new_root});
         slot_tracker.root = new_root;
         slot_tracker.pruneNonRooted(state.allocator);
+
+        try state.account_store.onSlotRooted(
+            state.allocator,
+            new_root,
+            slot_tracker.get(new_root).?.constants.fee_rate_governor.lamports_per_signature,
+        );
     }
 }
 

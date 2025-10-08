@@ -168,6 +168,7 @@ fn applyBuiltinProgramFeatureTransitions(
         if (!feature_set.active(feature_id, 0)) continue;
 
         const maybe_account = accounts_db.getAccountLatest(
+            allocator,
             &precompile.program_id,
         ) catch |err| switch (err) {
             error.PubkeyNotInIndex => null,
@@ -247,7 +248,7 @@ fn tryGetAccount(
     accounts_db: *AccountsDb,
     pubkey: Pubkey,
 ) !?Account {
-    return accounts_db.getAccountLatest(&pubkey) catch |err| switch (err) {
+    return accounts_db.getAccountLatest(accounts_db.allocator, &pubkey) catch |err| switch (err) {
         error.PubkeyNotInIndex => null,
         else => error.AccountsDbInternal,
     };

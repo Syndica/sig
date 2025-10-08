@@ -211,7 +211,7 @@ pub const BatchAccountCache = struct {
                     if (!entry.found_existing) {
                         entry.value_ptr.* = program_data_account;
                     } else {
-                        account_reader.allocator().free(program_data_account.data);
+                        allocator.free(program_data_account.data);
                     }
                 }
             }
@@ -693,14 +693,14 @@ fn getAccountSharedData(
     reader: SlotAccountReader,
     pubkey: Pubkey,
 ) error{ OutOfMemory, GetAccountFailedUnexpectedly }!?AccountSharedData {
-    const account: sig.core.Account = reader.get(pubkey) catch |err| switch (err) {
+    const account: sig.core.Account = reader.get(allocator, pubkey) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.FileIdNotFound,
         error.InvalidOffset,
         error.SlotNotFound,
         => return error.GetAccountFailedUnexpectedly,
     } orelse return null;
-    defer account.deinit(reader.allocator());
+    defer account.deinit(allocator);
 
     // NOTE: Tmp fix since accounts DB should not return accounts with 0 lamports.
     if (account.lamports == 0) return null;
