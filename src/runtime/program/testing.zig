@@ -9,7 +9,7 @@ const Pubkey = sig.core.Pubkey;
 const LogCollector = sig.runtime.LogCollector;
 
 pub const InstructionContextAccountMetaParams = runtime_testing.InstructionInfoAccountMetaParams;
-pub const TransactionContextParams = runtime_testing.ExecuteContextsParams;
+pub const ExecuteContextsParams = runtime_testing.ExecuteContextsParams;
 
 const createTransactionContext = runtime_testing.createTransactionContext;
 const deinitTransactionContext = runtime_testing.deinitTransactionContext;
@@ -26,7 +26,7 @@ pub fn expectProgramExecuteError(
     program_id: Pubkey,
     instruction: anytype,
     instruction_accounts: []const InstructionContextAccountMetaParams,
-    initial_context_params: TransactionContextParams,
+    initial_context_params: ExecuteContextsParams,
     options: Options,
 ) !void {
     try std.testing.expectError(
@@ -48,8 +48,8 @@ pub fn expectProgramExecuteResult(
     program_id: Pubkey,
     instruction: anytype,
     instruction_accounts: []const InstructionContextAccountMetaParams,
-    initial_context_params: TransactionContextParams,
-    expected_context_params: TransactionContextParams,
+    initial_context_params: ExecuteContextsParams,
+    expected_context_params: ExecuteContextsParams,
     options: Options,
 ) !void {
     if (!builtin.is_test)

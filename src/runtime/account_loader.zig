@@ -80,9 +80,7 @@ pub const CachedAccount = struct {
     is_writable: bool,
 
     pub fn deinit(self: CachedAccount, allocator: Allocator) void {
-        std.debug.print("calling\n", .{});
         if (self.is_writable) {
-            std.debug.print("deinitting\n", .{});
             self.account.deinit(allocator);
         }
     }

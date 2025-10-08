@@ -158,10 +158,9 @@ pub fn createTransactionContext(
     }
 
     for (account_keys.items) |key| {
-        accounts.appendAssumeCapacity(TransactionContextAccount.init(
-            key,
-            (account_cache.account_cache.getPtr(key) orelse unreachable).*, // TODO should this be cloned for writable keys like in runtime?
-        ));
+        const cached_account = account_cache.account_cache.getPtr(key) orelse unreachable;
+        const account = try cached_account.clone(allocator);
+        accounts.appendAssumeCapacity(TransactionContextAccount.init(key, account));
     }
 
     // Create Return Data
@@ -216,6 +215,8 @@ pub fn deinitTransactionContext(
 
     tc.epoch_stakes.deinit(allocator);
     allocator.destroy(tc.epoch_stakes);
+
+    for (tc.accounts) |a| a.account.deinit(allocator);
 
     tc.deinit();
 }

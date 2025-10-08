@@ -101,11 +101,7 @@ pub fn checkFeePayer(
     var zone = tracy.Zone.init(@src(), .{ .name = "checkFeePayer" });
     defer zone.deinit();
 
-    var rollbacks = std.BoundedArray(CachedAccount, 2){};
-    // errdefer TODO
-
-    var nonce_account_is_owned = true;
-    defer if (nonce_account_is_owned) if (maybe_nonce) |na| na.deinit(allocator);
+    errdefer if (maybe_nonce) |na| na.deinit(allocator);
 
     const enable_secp256r1 = feature_set.active(.enable_secp256r1_precompile, slot);
     const fee_payer_key = transaction.accounts.items(.pubkey)[0];
@@ -141,29 +137,44 @@ pub fn checkFeePayer(
         fee_details.total(),
     )) |validation_error| return .{ .err = validation_error };
 
-    const saved_payer = if (maybe_nonce) |nonce|
-        if (fee_payer_key.equals(&maybe_nonce.?.pubkey)) same: {
-            var payer_and_nonce = nonce;
-            payer_and_nonce.account = cached_payer.*;
-            payer_and_nonce.account.lamports += rent_collected;
-            payer_and_nonce.account.rent_epoch = fee_payer_loaded_rent_epoch;
-            rollbacks.append(payer_and_nonce) catch unreachable;
-            break :same true;
-        } else diff: {
+    // TODO: why does the rent epoch only roll back when there is no nonce? that
+    // seems wrong, but this is how it was previously written, and the tests
+    // expect this behavior, so i've left it.
+    var rollbacks = std.BoundedArray(CachedAccount, 2){};
+    errdefer for (rollbacks.slice()) |rollback| {
+        if (maybe_nonce) |n| if (rollback.pubkey.equals(&n.pubkey)) continue;
+        rollback.deinit(allocator);
+    };
+    if (maybe_nonce) |nonce| {
+        if (fee_payer_key.equals(&nonce.pubkey)) {
+            rollbacks.append(.{
+                .pubkey = nonce.pubkey,
+                .account = .{
+                    .lamports = cached_payer.lamports +| rent_collected,
+                    .data = nonce.account.data,
+                    .owner = nonce.account.owner,
+                    .executable = nonce.account.executable,
+                    .rent_epoch = cached_payer.rent_epoch,
+                },
+                .is_writable = true,
+            }) catch unreachable;
+        } else {
             rollbacks.append(nonce) catch unreachable;
-            break :diff false;
+            var rollback_payer = CachedAccount{
+                .pubkey = fee_payer_key,
+                .account = try cached_payer.clone(allocator),
+                .is_writable = true,
+            };
+            rollback_payer.account.lamports +|= rent_collected;
+            rollbacks.append(rollback_payer) catch unreachable;
         }
-    else
-        false;
-    nonce_account_is_owned = false;
-
-    if (!saved_payer) {
+    } else {
         var rollback_payer = CachedAccount{
             .pubkey = fee_payer_key,
             .account = try cached_payer.clone(allocator),
             .is_writable = true,
         };
-        rollback_payer.account.lamports += rent_collected;
+        rollback_payer.account.lamports +|= rent_collected;
         rollback_payer.account.rent_epoch = fee_payer_loaded_rent_epoch;
         rollbacks.append(rollback_payer) catch unreachable;
     }
