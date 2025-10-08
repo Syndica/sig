@@ -569,8 +569,8 @@ fn processDuplicateConfirmedSlots(
             const prev_hash = kv.value;
             if (!prev_hash.eql(duplicate_confirmed_hash)) {
                 std.debug.panic(
-                    "Additional duplicate confirmed notification for slot {} with a different hash",
-                    .{confirmed_slot},
+                    "Additional duplicate confirmed notification for slot {} with a different hash. Prev: {} Dup_confirmed {}",
+                    .{confirmed_slot, prev_hash, duplicate_confirmed_hash},
                 );
             }
             // Already processed this signal
