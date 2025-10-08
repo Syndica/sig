@@ -45,6 +45,18 @@ pub const StakeHistory = struct {
         activating: u64 = 0,
         /// Requested to be cooled down, not fully deactivated yet
         deactivating: u64 = 0,
+
+        pub const DEFAULT: StakeState = .{
+            .effective = 0,
+            .activating = 0,
+            .deactivating = 0,
+        };
+
+        pub fn add(self: *StakeState, other: StakeState) void {
+            self.effective += other.effective;
+            self.activating += other.activating;
+            self.deactivating += other.deactivating;
+        }
     };
 
     pub const ID: Pubkey = .parse("SysvarStakeHistory1111111111111111111111111");
@@ -64,6 +76,22 @@ pub const StakeHistory = struct {
             epoch,
             Entry.searchCmp,
         )) |index| self.entries.buffer[index] else null;
+    }
+
+    pub fn insertEntry(self: *StakeHistory, epoch: Epoch, entry: StakeState) !void {
+        const index = std.sort.lowerBound(
+            Entry,
+            self.entries.constSlice(),
+            epoch,
+            Entry.searchCmp,
+        );
+
+        if (self.entries.len == MAX_ENTRIES) {
+            if (epoch < self.entries.buffer[MAX_ENTRIES - 1].epoch) return;
+            _ = self.entries.orderedRemove(MAX_ENTRIES - 1);
+        }
+
+        try self.entries.insert(index, .{ .epoch = epoch, .stake = entry });
     }
 
     pub fn initWithEntries(entries: []const Entry) StakeHistory {
