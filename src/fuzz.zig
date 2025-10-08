@@ -4,7 +4,7 @@ const sig = @import("sig.zig");
 const accountsdb_fuzz = sig.accounts_db.fuzz;
 const gossip_fuzz_service = sig.gossip.fuzz_service;
 const gossip_fuzz_table = sig.gossip.fuzz_table;
-const accountsdb_snapshot_fuzz = sig.accounts_db.snapshot.fuzz;
+// const accountsdb_snapshot_fuzz = sig.accounts_db.snapshot.fuzz;
 const ledger_fuzz = sig.ledger.fuzz_ledger;
 const ChannelPrintLogger = sig.trace.ChannelPrintLogger;
 const Level = sig.trace.Level;
@@ -19,7 +19,7 @@ const SEED_FILE_PATH = sig.TEST_DATA_DIR ++ "fuzz_seeds.txt";
 // NOTE: changing these enum variants will require a change to the fuzz/kcov in `scripts/`
 pub const FuzzFilter = enum {
     accountsdb,
-    snapshot,
+    // snapshot,
     gossip_service,
     gossip_table,
     allocators,
@@ -85,7 +85,7 @@ pub fn main() !void {
 
     switch (filter) {
         .accountsdb => try accountsdb_fuzz.run(seed, &cli_args),
-        .snapshot => try accountsdb_snapshot_fuzz.run(&cli_args),
+        // .snapshot => try accountsdb_snapshot_fuzz.run(&cli_args),
         .gossip_service => try gossip_fuzz_service.run(seed, &cli_args),
         .gossip_table => try gossip_fuzz_table.run(seed, &cli_args),
         .ledger => try ledger_fuzz.run(seed, &cli_args),

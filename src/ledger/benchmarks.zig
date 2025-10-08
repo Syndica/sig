@@ -56,9 +56,10 @@ pub const BenchmarkLedger = struct {
             is_repairs[i] = false;
         }
 
-        var timer = try sig.time.Timer.start();
+        var timer = sig.time.Timer.start();
         const shred_inserter = state.shredInserter();
         const result = try shred_inserter.insertShreds(
+            allocator,
             shreds,
             is_repairs,
             .{},
