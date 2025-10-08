@@ -90,7 +90,7 @@ pub const Senders = struct {
     verified_vote: *sig.sync.Channel(VerifiedVote),
     gossip_verified_vote_hash: *sig.sync.Channel(GossipVerifiedVoteHash),
     bank_notification: ?*sig.sync.Channel(BankNotification),
-    duplicate_confirmed_slot: ?*sig.sync.Channel(ThresholdConfirmedSlot),
+    duplicate_confirmed_slots: ?*sig.sync.Channel(ThresholdConfirmedSlot),
     subscriptions: RpcSubscriptionsStub,
 };
 
@@ -409,7 +409,7 @@ fn processVotesLoop(
     var last_process_root = sig.time.Instant.now();
     var vote_processing_time: VoteProcessingTiming = .ZEROES;
     while (exit.shouldRun()) {
-        switch (try processVotesOnce(
+        try processVotesOnce(
             allocator,
             logger,
             &vote_tracker,
@@ -422,12 +422,7 @@ fn processVotesLoop(
             &last_process_root,
             &vote_processing_time,
             metrics,
-        )) {
-            .ok => {},
-            .disconnected => return,
-            .timeout => continue,
-            .logged => continue,
-        }
+        );
     }
 }
 
@@ -451,7 +446,7 @@ fn processVotesOnce(
     last_process_root: *sig.time.Instant,
     vote_processing_time: *VoteProcessingTiming,
     metrics: *VoteListenerMetrics,
-) !enum { ok, disconnected, timeout, logged } {
+) !void {
     const root_slot = slot_data_provider.rootSlot();
     const root_hash = slot_data_provider.getSlotHash(root_slot);
 
@@ -471,7 +466,7 @@ fn processVotesOnce(
         last_process_root.* = sig.time.Instant.now();
     }
 
-    const confirmed_slots = listenAndConfirmVotes(
+    const confirmed_slots = try listenAndConfirmVotes(
         allocator,
         logger,
         vote_tracker,
@@ -481,21 +476,7 @@ fn processVotesOnce(
         vote_processing_time,
         latest_vote_slot_per_validator,
         metrics,
-    ) catch |err| switch (err) {
-        error.RecvTimeoutDisconnected => {
-            return .disconnected;
-        },
-        error.ReadyTimeout => {
-            return .timeout;
-        },
-        else => |e| {
-            logger.err().logf("thread {} error {s}", .{
-                std.Thread.getCurrentId(),
-                @errorName(e),
-            });
-            return .logged;
-        },
-    };
+    );
     defer allocator.free(confirmed_slots);
 
     try confirmation_verifier.addNewOptimisticConfirmedSlots(
@@ -503,14 +484,7 @@ fn processVotesOnce(
         confirmed_slots,
         ledger_ref.writer,
     );
-
-    return .ok;
 }
-
-const ListenAndConfirmVotesError = error{
-    RecvTimeoutDisconnected,
-    ReadyTimeout,
-} || std.mem.Allocator.Error;
 
 fn listenAndConfirmVotes(
     allocator: std.mem.Allocator,
@@ -522,7 +496,7 @@ fn listenAndConfirmVotes(
     vote_processing_time: ?*VoteProcessingTiming,
     latest_vote_slot_per_validator: *std.AutoArrayHashMapUnmanaged(Pubkey, Slot),
     metrics: *VoteListenerMetrics,
-) ListenAndConfirmVotesError![]const ThresholdConfirmedSlot {
+) std.mem.Allocator.Error![]const ThresholdConfirmedSlot {
     var gossip_vote_txs_buffer: std.ArrayListUnmanaged(Transaction) = .empty;
     defer gossip_vote_txs_buffer.deinit(allocator);
     try gossip_vote_txs_buffer.ensureTotalCapacityPrecise(allocator, 4096);
@@ -594,10 +568,10 @@ fn filterAndConfirmWithNewVotes(
 ) std.mem.Allocator.Error![]const ThresholdConfirmedSlot {
     const root_slot = slot_data_provider.rootSlot();
 
-    var diff = SlotsDiff.EMPTY;
+    var diff: SlotsDiff = .EMPTY;
     defer diff.deinit(allocator);
 
-    var new_optimistic_confirmed_slots: std.ArrayListUnmanaged(ThresholdConfirmedSlot) = .{};
+    var new_optimistic_confirmed_slots: std.ArrayListUnmanaged(ThresholdConfirmedSlot) = .empty;
     errdefer new_optimistic_confirmed_slots.deinit(allocator);
 
     // Process votes from gossip and ReplayStage
@@ -874,7 +848,7 @@ fn trackNewVotesAndNotifyConfirmations(
     new_optimistic_confirmed_slots: *std.ArrayListUnmanaged(ThresholdConfirmedSlot),
     is_gossip_vote: bool,
     latest_vote_slot_per_validator: *std.AutoArrayHashMapUnmanaged(Pubkey, Slot),
-) !void {
+) std.mem.Allocator.Error!void {
     if (vote.isEmpty()) return;
     const root = slot_data_provider.rootSlot();
 
@@ -957,17 +931,22 @@ fn trackNewVotesAndNotifyConfirmations(
             });
 
             if (is_gossip_vote and is_new and stake > 0) {
-                senders.gossip_verified_vote_hash.send(.{ vote_pubkey, slot, hash }) catch {
-                    // WARN: the original agave code does literally just ignore this error, is that fine?
-                    // TODO: evaluate this
+                senders.gossip_verified_vote_hash.send(.{ vote_pubkey, slot, hash }) catch |err| {
+                    logger.err().logf(
+                        "{s}: gossip verified vote hash couldn't send: " ++
+                            ".{{ .vote_pubkey = {f}, .slot = {}, .hash = {f} }}",
+                        .{ @errorName(err), vote_pubkey, slot, hash },
+                    );
                 };
             }
 
             if (reached_threshold_results.isSet(0)) {
-                if (senders.duplicate_confirmed_slot) |sender| {
-                    sender.send(.{ .slot = slot, .hash = hash }) catch {
-                        // WARN: the original agave code does literally just ignore this error, is that fine?
-                        // TODO: evaluate this
+                if (senders.duplicate_confirmed_slots) |sender| {
+                    sender.send(.{ .slot = slot, .hash = hash }) catch |err| {
+                        logger.err().logf(
+                            "{s}: duplicate confirmed slot couldn't send: {} (hash: {f})",
+                            .{ @errorName(err), slot, hash },
+                        );
                     };
                 }
             }
@@ -1029,9 +1008,12 @@ fn trackNewVotesAndNotifyConfirmations(
         senders.subscriptions.notifyVote(vote_pubkey, vote, vote_transaction_signature);
         const vote_slots_duped = try allocator.dupe(Slot, vote_slots);
         errdefer allocator.free(vote_slots);
-        senders.verified_vote.send(.{ vote_pubkey, vote_slots_duped }) catch {
-            // WARN: the original agave code does literally just ignore this error, is that fine?
-            // TODO: evaluate this
+        senders.verified_vote.send(.{ vote_pubkey, vote_slots_duped }) catch |err| {
+            logger.err().logf(
+                "{s}: verified vote couldn't send: " ++
+                    ".{{ .vote_pubkey = {f}, .vote_slots_duped = {any} }}",
+                .{ @errorName(err), vote_pubkey, vote_slots_duped },
+            );
         };
     }
 }
@@ -1760,7 +1742,7 @@ test "simple usage" {
             .verified_vote = verified_vote_channel,
             .gossip_verified_vote_hash = gossip_verified_vote_hash_channel,
             .bank_notification = null,
-            .duplicate_confirmed_slot = null,
+            .duplicate_confirmed_slots = null,
             .subscriptions = .{},
         },
     });
@@ -2006,7 +1988,7 @@ test "check trackers" {
         var confirmation_verifier: OptimisticConfirmationVerifier = .init(.now(), root_slot);
         defer confirmation_verifier.deinit(allocator);
 
-        try std.testing.expectEqual(.ok, try processVotesOnce(
+        try std.testing.expectEqual({}, processVotesOnce(
             allocator,
             .noop,
             &vote_tracker,
@@ -2015,7 +1997,7 @@ test "check trackers" {
                 .verified_vote = verified_vote_channel,
                 .gossip_verified_vote_hash = gossip_verified_vote_hash_channel,
                 .bank_notification = bank_notification_channel,
-                .duplicate_confirmed_slot = duplicate_confirmed_slot_channel,
+                .duplicate_confirmed_slots = duplicate_confirmed_slot_channel,
                 .subscriptions = .{},
             },
             .{
