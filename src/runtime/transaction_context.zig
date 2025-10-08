@@ -227,7 +227,7 @@ pub const TransactionReturnData = struct {
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L137-L139
 pub const TransactionContextAccount = struct {
     pubkey: Pubkey,
-    account: AccountSharedData,
+    account: *AccountSharedData,
     read_refs: usize = 0,
     write_ref: bool = false,
 
@@ -247,10 +247,7 @@ pub const TransactionContextAccount = struct {
         }
     };
 
-    pub fn init(
-        pubkey: Pubkey,
-        account: AccountSharedData,
-    ) TransactionContextAccount {
+    pub fn init(pubkey: Pubkey, account: *AccountSharedData) TransactionContextAccount {
         return .{
             .pubkey = pubkey,
             .account = account,
@@ -264,7 +261,7 @@ pub const TransactionContextAccount = struct {
     ) ?struct { *AccountSharedData, WLockGuard } {
         if (self.write_ref or self.read_refs > 0) return null;
         self.write_ref = true;
-        return .{ &self.account, .{ .write_ref = &self.write_ref } };
+        return .{ self.account, .{ .write_ref = &self.write_ref } };
     }
 
     pub fn readWithLock(
@@ -272,6 +269,6 @@ pub const TransactionContextAccount = struct {
     ) ?struct { *AccountSharedData, RLockGuard } {
         if (self.write_ref) return null;
         self.read_refs += 1;
-        return .{ &self.account, .{ .read_refs = &self.read_refs } };
+        return .{ self.account, .{ .read_refs = &self.read_refs } };
     }
 };

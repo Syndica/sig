@@ -159,7 +159,8 @@ pub fn createTransactionContext(
 
     for (account_keys.items) |key| {
         const cached_account = account_cache.account_cache.getPtr(key) orelse unreachable;
-        const account = try cached_account.clone(allocator);
+        const account = try allocator.create(sig.runtime.AccountSharedData);
+        account.* = try cached_account.clone(allocator);
         accounts.appendAssumeCapacity(TransactionContextAccount.init(key, account));
     }
 
@@ -216,7 +217,10 @@ pub fn deinitTransactionContext(
     tc.epoch_stakes.deinit(allocator);
     allocator.destroy(tc.epoch_stakes);
 
-    for (tc.accounts) |a| a.account.deinit(allocator);
+    for (tc.accounts) |a| {
+        a.account.deinit(allocator);
+        allocator.destroy(a.account);
+    }
 
     tc.deinit();
 }

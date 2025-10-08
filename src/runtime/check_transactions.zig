@@ -101,7 +101,7 @@ pub fn checkFeePayer(
     var zone = tracy.Zone.init(@src(), .{ .name = "checkFeePayer" });
     defer zone.deinit();
 
-    errdefer if (maybe_nonce) |na| na.deinit(allocator);
+    errdefer if (maybe_nonce) |na| na.deinit(allocator); // TODO doesn't handle return `.err` properly
 
     const enable_secp256r1 = feature_set.active(.enable_secp256r1_precompile, slot);
     const fee_payer_key = transaction.accounts.items(.pubkey)[0];
@@ -137,9 +137,9 @@ pub fn checkFeePayer(
         fee_details.total(),
     )) |validation_error| return .{ .err = validation_error };
 
-    // TODO: why does the rent epoch only roll back when there is no nonce? that
-    // seems wrong, but this is how it was previously written, and the tests
-    // expect this behavior, so i've left it.
+    // TODO: why does the payer's rent epoch only roll back when there is no
+    // nonce? that seems wrong, but this is how it was previously written, and
+    // the tests expect this behavior, so i've left it.
     var rollbacks = std.BoundedArray(CachedAccount, 2){};
     errdefer for (rollbacks.slice()) |rollback| {
         if (maybe_nonce) |n| if (rollback.pubkey.equals(&n.pubkey)) continue;

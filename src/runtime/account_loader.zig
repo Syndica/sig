@@ -77,7 +77,7 @@ pub const CachedAccount = struct {
     // TODO: document
     // TODO: ptr + fields separation
     account: AccountSharedData,
-    is_writable: bool,
+    is_writable: bool, // TODO rename to `is_owned`
 
     pub fn deinit(self: CachedAccount, allocator: Allocator) void {
         if (self.is_writable) {
@@ -99,7 +99,7 @@ pub const BatchAccountCache = struct {
 
     // holds SYSVAR_INSTRUCTIONS_ID accounts, purely so we can deallocate them later. Index of each
     // one isn't intended to be meaningful.
-    // NOTE: we could take this field out, and have the caller deinit it from inside LoadedTransactionAccounts
+    // NOTE: we could take this field out, and have the caller deinit it from inside LoadedTransactionAccounts -- TODO
     sysvar_instruction_account_datas: std.ArrayListUnmanaged(AccountSharedData) = .{},
 
     // NOTE: we might want to later add another field that keeps a copy of all writable accounts.
@@ -416,7 +416,7 @@ pub const BatchAccountCache = struct {
             loaded.accounts.appendAssumeCapacity(.{
                 .account = loaded_account.account,
                 .pubkey = account_key,
-                .is_writable = is_writable,
+                .is_writable = loaded_account.is_owned,
             });
         }
 
@@ -501,7 +501,7 @@ pub const BatchAccountCache = struct {
             loaded.accounts.appendAssumeCapacity(.{
                 .account = loaded_account.account,
                 .pubkey = account_key,
-                .is_writable = is_writable,
+                .is_writable = loaded_account.is_owned,
             });
         }
 
@@ -555,6 +555,7 @@ pub const BatchAccountCache = struct {
         account: AccountSharedData,
         loaded_size: usize,
         rent_collected: u64,
+        is_owned: bool,
 
         const DEFAULT: LoadedTransactionAccount = .{
             .account = .{
@@ -587,6 +588,7 @@ pub const BatchAccountCache = struct {
                 .account = account.*,
                 .loaded_size = 0,
                 .rent_collected = 0,
+                .is_owned = true, // TODO take advantage of this to make sure it's deinitted without needing the list in the struct
             };
         }
 
@@ -609,6 +611,7 @@ pub const BatchAccountCache = struct {
                 .account = account_ptr.*,
                 .loaded_size = 0,
                 .rent_collected = 0,
+                .is_owned = is_writable,
             };
         };
 
@@ -624,6 +627,7 @@ pub const BatchAccountCache = struct {
             .account = account.account,
             .loaded_size = account.loaded_size,
             .rent_collected = rent_collected.rent_amount,
+            .is_owned = account.is_owned,
         };
     }
 
@@ -660,15 +664,27 @@ pub const BatchAccountCache = struct {
             .account = account,
             .loaded_size = base_account_size +| account.data.len,
             .rent_collected = 0,
+            .is_owned = is_writable,
         };
     }
 
     pub fn mutateInPlace(self: *BatchAccountCache, key: *const Pubkey) ?*AccountSharedData {
-        const account = self.account_cache.getPtr(key.*);
-
-        if (account.?.lamports == 0) return null;
-
+        const account = self.account_cache.getPtr(key.*).?;
+        if (account.lamports == 0) return null;
         return account;
+    }
+
+    /// TODO document assumptions
+    pub fn store(
+        self: *BatchAccountCache,
+        allocator: Allocator,
+        modified_account: *CachedAccount,
+    ) void {
+        std.debug.assert(modified_account.is_writable);
+        const account = self.account_cache.getPtr(modified_account.pubkey).?;
+        account.deinit(allocator);
+        account.* = modified_account.account;
+        modified_account.is_writable = false;
     }
 };
 

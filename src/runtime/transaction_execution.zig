@@ -93,7 +93,6 @@ pub const TransactionExecutionConfig = struct {
     log_messages_byte_limit: ?u64,
 };
 
-
 pub const ExecutedTransaction = struct {
     err: ?TransactionError,
     log_collector: ?LogCollector,
@@ -130,7 +129,6 @@ pub const ProcessedTransaction = struct {
         if (self.outputs) |out| if (out.log_collector) |log| log.deinit(allocator);
     }
 };
-
 
 pub fn TransactionResult(comptime T: type) type {
     return union(enum(u8)) {
@@ -258,6 +256,7 @@ pub fn loadAndExecuteTransaction(
         .err => |err| {
             var writes = ProcessedTransaction.Writes{};
             while (rollbacks.pop()) |rollback| writes.append(rollback) catch unreachable;
+            for (writes.slice()) |*acct| batch_account_cache.store(allocator, acct);
             return .{ .ok = .{
                 .fees = fees,
                 .rent = 0,
@@ -272,7 +271,7 @@ pub fn loadAndExecuteTransaction(
     const executed_transaction = try executeTransaction(
         allocator,
         transaction,
-        loaded_accounts.accounts.constSlice(),
+        loaded_accounts.accounts.slice(),
         &compute_budget_limits,
         env,
         config,
@@ -284,6 +283,7 @@ pub fn loadAndExecuteTransaction(
         if (account.is_writable) writes.append(account) catch unreachable;
     }
     while (rollbacks.pop()) |rollback| rollback.deinit(allocator);
+    for (writes.slice()) |*acct| batch_account_cache.store(allocator, acct);
 
     return .{
         .ok = .{
@@ -298,7 +298,6 @@ pub fn loadAndExecuteTransaction(
         },
     };
 }
-
 
 /// Check for duplicate account keys.
 ///
@@ -339,7 +338,7 @@ test hasDuplicates {
 pub fn executeTransaction(
     allocator: std.mem.Allocator,
     transaction: *const RuntimeTransaction,
-    loaded_accounts: []const CachedAccount,
+    loaded_accounts: []CachedAccount,
     compute_budget_limits: *const ComputeBudgetLimits,
     environment: *const TransactionExecutionEnvironment,
     config: *const TransactionExecutionConfig,
@@ -360,10 +359,10 @@ pub fn executeTransaction(
         loaded_accounts.len,
     );
     defer allocator.free(accounts);
-    for (loaded_accounts, 0..) |account, index| {
+    for (loaded_accounts, 0..) |*account, index| {
         accounts[index] = .{
             .pubkey = account.pubkey,
-            .account = account.account,
+            .account = &account.account,
             .read_refs = 0,
             .write_ref = false,
         };
