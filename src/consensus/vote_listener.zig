@@ -53,11 +53,10 @@ pub const SlotDataProvider = struct {
     ) ?*const sig.core.Ancestors {
         const slot_tracker, var lg = self.slot_tracker_rw.readWithLock();
         defer lg.unlock();
-        if (slot_tracker.get(slot)) |ref| {
-            return &ref.constants.ancestors;
-        } else {
+        if (slot_tracker.get(slot)) |ref|
+            return &ref.constants.ancestors
+        else
             return null;
-        }
     }
 
     fn getEpochTotalStake(self: *const SlotDataProvider, epoch: u64) ?u64 {
