@@ -34,6 +34,7 @@ const StakeHistory = sig.runtime.sysvar.StakeHistory;
 const VoteAccounts = sig.core.vote_accounts.VoteAccounts;
 const StakeAndVoteAccountsMap = sig.core.vote_accounts.StakeAndVoteAccountsMap;
 const Delegation = sig.core.stake.Delegation;
+const Stake = sig.core.stake.Stake;
 
 const applyFeatureActivations = @import("apply_feature_activations.zig").applyFeatureActivations;
 
@@ -220,7 +221,7 @@ pub fn process_new_epoch(
     );
 
     // [agave] https://github.com/anza-xyz/agave/blob/b6c96e84b10396b92912d4574dae7d03f606da26/runtime/src/bank.rs#L1637-L1647
-    try beginPartitionedRewards();
+    // try beginPartitionedRewards();
 }
 
 pub fn updateEpochStakes(
@@ -375,6 +376,46 @@ pub fn refreshVoteAccounts(
     return new_vote_accounts;
 }
 
-pub fn beginPartitionedRewards() !void {
-    // TODO: Implement partitioned rewards logic
-}
+// pub fn beginPartitionedRewards() !void {
+//     // TODO: Implement partitioned rewards logic
+// }
+
+// pub const PartitionedStakeRewards = struct {
+//     stake_pubkey: Pubkey,
+//     stake: Stake,
+//     stake_reward: u64,
+//     commission: u8,
+// };
+
+// pub const CalculateRewardsAndDistributeRewardsResult = struct {
+//     distribute_rewards: u64,
+//     point_value: u64,
+//     stake_rewards: []PartitionedStakeRewards, // TODO: make reference counted
+// };
+
+// pub fn calculateRewardsAndDistributeVoteRewards(
+//     allocator: Allocator,
+//     previous_epoch: Epoch,
+//     // reward_calc_tracer,
+//     // rewards_metrics,
+// ) !void {
+//     _ = allocator;
+//     _ = previous_epoch;
+// }
+
+// pub fn calculateRewardsForPartitioning(
+//     previous_epoch: Epoch,
+// ) !void {}
+
+// pub fn getRewardDistributionNumBlocks() u64 {
+//     // TODO: Implement
+//     return 0;
+// }
+
+// pub fn setEpochRewardsStatusCalculation() !void {
+//     // TODO: Implement
+// }
+
+// pub fn createEpochRewardsSysvar() !void {
+//     // TODO: Implement
+// }

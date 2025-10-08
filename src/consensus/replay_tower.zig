@@ -4699,7 +4699,7 @@ fn genStakes(
             .{
                 .stake = lamports,
                 .account = .{
-                    .account = .{ .lamports = lamports },
+                    .account = .{ .lamports = lamports, .owner = Pubkey.initRandom(random) },
                     .state = vote_state,
                     .rc = rc,
                 },

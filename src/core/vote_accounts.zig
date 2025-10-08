@@ -294,6 +294,7 @@ pub const VoteAccount = struct {
     /// Represents the minimal amount of information needed from the account data.
     const MinimalAccount = struct {
         lamports: u64,
+        owner: Pubkey,
     };
 
     pub const @"!bincode-config" = bincode.FieldConfig(VoteAccount){
@@ -341,7 +342,7 @@ pub const VoteAccount = struct {
         rc.* = .init;
 
         return .{
-            .account = .{ .lamports = account.lamports },
+            .account = .{ .lamports = account.lamports, .owner = account.owner },
             .state = try versioned_vote_state.convertToCurrent(allocator),
             .rc = rc,
         };
