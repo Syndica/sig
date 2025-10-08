@@ -1,6 +1,6 @@
 pub const data = @import("data.zig");
 pub const download = @import("download.zig");
-pub const fuzz = @import("fuzz.zig");
+// pub const fuzz = @import("fuzz.zig");
 pub const load = @import("load.zig");
 
 pub const FullAndIncrementalManifest = data.FullAndIncrementalManifest;

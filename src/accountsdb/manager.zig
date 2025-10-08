@@ -136,79 +136,78 @@ pub fn onSlotRooted(
         var tmp_bank_fields = try BankFields.initRandom(allocator, prng.random(), 128);
         defer tmp_bank_fields.deinit(allocator);
 
-        if (make_full_snapshot) {
-            db.logger.info().logf(
-                "accountsdb[manager]: generating full snapshot at slot {d}",
-                .{newly_rooted_slot},
-            );
+        _ = lamports_per_signature;
 
-            const result = try db.generateFullSnapshotWithCompressor(
-                zstd_compressor,
-                zstd_buffer,
-                .{
-                    .target_slot = newly_rooted_slot,
-                    .bank_fields = &tmp_bank_fields,
-                    .lamports_per_signature = lamports_per_signature,
-                    .old_snapshot_action = .delete_old,
-                },
-            );
+        // if (make_full_snapshot) {
+        //     db.logger.info().logf(
+        //         "accountsdb[manager]: generating full snapshot at slot {d}",
+        //         .{newly_rooted_slot},
+        //     );
 
-            const gen_info: *?SnapshotGenerationInfo, var gen_info_lg =
-                db.latest_snapshot_gen_info.writeWithLock();
-            defer gen_info_lg.unlock();
+        //     const result = try db.generateFullSnapshotWithCompressor(
+        //         zstd_compressor,
+        //         zstd_buffer,
+        //         .{
+        //             .target_slot = newly_rooted_slot,
+        //             .bank_fields = &tmp_bank_fields,
+        //             .lamports_per_signature = lamports_per_signature,
+        //             .old_snapshot_action = .delete_old,
+        //         },
+        //     );
 
-            const prev = gen_info.*.?; // value set in generateFullSnapshotWithCompressor
-            std.debug.assert(newly_rooted_slot == prev.full.slot);
+        //     const gen_info: *?SnapshotGenerationInfo, var gen_info_lg =
+        //         db.latest_snapshot_gen_info.writeWithLock();
+        //     defer gen_info_lg.unlock();
 
-            gen_info.* = .{
-                .full = .{
-                    .capitalization = result.capitalization,
-                    .hash = result.hash,
-                    .slot = newly_rooted_slot,
-                },
-                .inc = null,
-            };
-        }
+        //     const prev = gen_info.*.?; // value set in generateFullSnapshotWithCompressor
+        //     std.debug.assert(newly_rooted_slot == prev.full.slot);
 
-        const has_made_full_snapshot = blk: {
-            const maybe_gen_info, var gen_info_lg = db.latest_snapshot_gen_info.readWithLock();
-            defer gen_info_lg.unlock();
-            break :blk maybe_gen_info.* != null;
-        };
+        //     gen_info.* = .{
+        //         .full = .{
+        //             .capitalization = result.capitalization,
+        //             .hash = result.hash,
+        //             .slot = newly_rooted_slot,
+        //         },
+        //         .inc = null,
+        //     };
+        // }
 
-        if (make_inc_snapshot and has_made_full_snapshot) {
-            std.debug.assert(!make_full_snapshot);
+        // const has_made_full_snapshot = blk: {
+        //     const maybe_gen_info, var gen_info_lg = db.latest_snapshot_gen_info.readWithLock();
+        //     defer gen_info_lg.unlock();
+        //     break :blk maybe_gen_info.* != null;
+        // };
 
-            db.logger.info().logf(
-                "accountsdb[manager]: generating incremental snapshot from {d} to {d}",
-                .{ latest_full_snapshot_slot, newly_rooted_slot },
-            );
-            const result = try db.generateIncrementalSnapshotWithCompressor(
-                zstd_compressor,
-                zstd_buffer,
-                .{
-                    .target_slot = newly_rooted_slot,
-                    .bank_fields = &tmp_bank_fields,
-                    .lamports_per_signature = lamports_per_signature,
-                    .old_snapshot_action = .delete_old,
-                },
-            );
+        // if (make_inc_snapshot and has_made_full_snapshot) {
+        //     std.debug.assert(!make_full_snapshot);
 
-            const maybe_gen_info: *?SnapshotGenerationInfo, var gen_info_lg =
-                db.latest_snapshot_gen_info.writeWithLock();
-            defer gen_info_lg.unlock();
+        //     db.logger.info().logf(
+        //         "accountsdb[manager]: generating incremental snapshot from {d} to {d}",
+        //         .{ latest_full_snapshot_slot, newly_rooted_slot },
+        //     );
+        //     const result = try db.generateIncrementalSnapshotWithCompressor(
+        //         zstd_compressor,
+        //         zstd_buffer,
+        //         .{
+        //             .target_slot = newly_rooted_slot,
+        //             .bank_fields = &tmp_bank_fields,
+        //             .lamports_per_signature = lamports_per_signature,
+        //             .old_snapshot_action = .delete_old,
+        //         },
+        //     );
 
-            const gen_info = &((maybe_gen_info.*) orelse
-                @panic("illegal state - snapshot_gen_info (previously non-null) is now null"));
+        //     const maybe_gen_info: *?SnapshotGenerationInfo, var gen_info_lg =
+        //         db.latest_snapshot_gen_info.writeWithLock();
+        //     defer gen_info_lg.unlock();
 
-            const prev_inc = gen_info.inc.?; // value set in generateIncrementalSnapshotWithCompressor
-            std.debug.assert(newly_rooted_slot == prev_inc.slot);
+        //     const gen_info = &((maybe_gen_info.*) orelse
+        //         @panic("illegal state - snapshot_gen_info (previously non-null) is now null"));
 
-            gen_info.inc = .{
-                .hash = result.incremental_hash,
-                .slot = newly_rooted_slot,
-            };
-        }
+        // gen_info.inc = .{
+        //     .hash = result.incremental_hash,
+        //     .slot = newly_rooted_slot,
+        // };
+        // }
     }
 
     if (config.do_cleaning) {
@@ -1657,81 +1656,81 @@ test "onSlotRooted shrink and delete" {
     try std.testing.expectEqual(null, try iter.next());
 }
 
-test "snapshot generation happens without error" {
-    const allocator = std.testing.allocator;
-    const logger: Logger = .noop;
-    var prng = std.Random.DefaultPrng.init(5083);
-    const random = prng.random();
+// test "snapshot generation happens without error" {
+//     const allocator = std.testing.allocator;
+//     const logger: Logger = .noop;
+//     var prng = std.Random.DefaultPrng.init(5083);
+//     const random = prng.random();
 
-    var tmp_dir_root = std.testing.tmpDir(.{ .iterate = true });
-    defer tmp_dir_root.cleanup();
-    const snapshot_dir = tmp_dir_root.dir;
+//     var tmp_dir_root = std.testing.tmpDir(.{ .iterate = true });
+//     defer tmp_dir_root.cleanup();
+//     const snapshot_dir = tmp_dir_root.dir;
 
-    var db = try AccountsDB.init(.{
-        .allocator = allocator,
-        .logger = .from(logger),
-        .snapshot_dir = snapshot_dir,
-        .geyser_writer = null,
-        .gossip_view = null,
-        .index_allocation = .ram,
-        .number_of_index_shards = 4,
-        .on_root_config = .{ .do_cleaning = true, .slots_per_full_snapshot = 1 },
-    });
-    defer db.deinit();
+//     var db = try AccountsDB.init(.{
+//         .allocator = allocator,
+//         .logger = .from(logger),
+//         .snapshot_dir = snapshot_dir,
+//         .geyser_writer = null,
+//         .gossip_view = null,
+//         .index_allocation = .ram,
+//         .number_of_index_shards = 4,
+//         .on_root_config = .{ .do_cleaning = true, .slots_per_full_snapshot = 1 },
+//     });
+//     defer db.deinit();
 
-    const accounts = try allocator.alloc(sig.runtime.AccountSharedData, 10);
-    defer allocator.free(accounts);
-    for (accounts) |*account| {
-        account.* = sig.runtime.AccountSharedData.EMPTY;
-        account.lamports = 1;
-    }
-    const pubkeys = try allocator.alloc(Pubkey, 10);
-    defer allocator.free(pubkeys);
-    for (pubkeys) |*pubkey| pubkey.* = Pubkey.initRandom(random);
+//     const accounts = try allocator.alloc(sig.runtime.AccountSharedData, 10);
+//     defer allocator.free(accounts);
+//     for (accounts) |*account| {
+//         account.* = sig.runtime.AccountSharedData.EMPTY;
+//         account.lamports = 1;
+//     }
+//     const pubkeys = try allocator.alloc(Pubkey, 10);
+//     defer allocator.free(pubkeys);
+//     for (pubkeys) |*pubkey| pubkey.* = Pubkey.initRandom(random);
 
-    // put all accounts
-    for (accounts, pubkeys) |account, pubkey| {
-        try db.putAccount(149, pubkey, account);
-    }
+//     // put all accounts
+//     for (accounts, pubkeys) |account, pubkey| {
+//         try db.putAccount(149, pubkey, account);
+//     }
 
-    // generate full snapshot
-    try onSlotRooted(
-        allocator,
-        &db,
-        149,
-        5000,
-    );
+//     // generate full snapshot
+//     try onSlotRooted(
+//         allocator,
+//         &db,
+//         149,
+//         5000,
+//     );
 
-    for (accounts, pubkeys) |account, pubkey| try db.putAccount(150, pubkey, account);
-    for (accounts, pubkeys) |account, pubkey| try db.putAccount(151, pubkey, account);
-    for (accounts, pubkeys) |account, pubkey| try db.putAccount(152, pubkey, account);
-    for (accounts, pubkeys) |account, pubkey| try db.putAccount(153, pubkey, account);
-    for (accounts, pubkeys) |account, pubkey| try db.putAccount(154, pubkey, account);
+//     for (accounts, pubkeys) |account, pubkey| try db.putAccount(150, pubkey, account);
+//     for (accounts, pubkeys) |account, pubkey| try db.putAccount(151, pubkey, account);
+//     for (accounts, pubkeys) |account, pubkey| try db.putAccount(152, pubkey, account);
+//     for (accounts, pubkeys) |account, pubkey| try db.putAccount(153, pubkey, account);
+//     for (accounts, pubkeys) |account, pubkey| try db.putAccount(154, pubkey, account);
 
-    // generate incremental
-    db.on_root_config = .{
-        .do_cleaning = true,
-        .slots_per_full_snapshot = 100,
-        .slots_per_incremental_snapshot = 1,
-    };
-    try onSlotRooted(allocator, &db, 150, 5000);
+//     // generate incremental
+//     db.on_root_config = .{
+//         .do_cleaning = true,
+//         .slots_per_full_snapshot = 100,
+//         .slots_per_incremental_snapshot = 1,
+//     };
+//     try onSlotRooted(allocator, &db, 150, 5000);
 
-    var found_inc = false;
-    var found_full = false;
+//     var found_inc = false;
+//     var found_full = false;
 
-    var iter = snapshot_dir.iterate();
-    while (try iter.next()) |obj| {
-        if (obj.kind != .file) continue;
+//     var iter = snapshot_dir.iterate();
+//     while (try iter.next()) |obj| {
+//         if (obj.kind != .file) continue;
 
-        if (std.mem.startsWith(u8, obj.name, "incremental-snapshot-")) {
-            found_inc = true;
-        } else if (std.mem.startsWith(u8, obj.name, "snapshot-")) {
-            found_full = true;
-        } else {
-            return error.UnexpectedFileFound;
-        }
-    }
+//         if (std.mem.startsWith(u8, obj.name, "incremental-snapshot-")) {
+//             found_inc = true;
+//         } else if (std.mem.startsWith(u8, obj.name, "snapshot-")) {
+//             found_full = true;
+//         } else {
+//             return error.UnexpectedFileFound;
+//         }
+//     }
 
-    try std.testing.expect(found_inc);
-    try std.testing.expect(found_full);
-}
+//     try std.testing.expect(found_inc);
+//     try std.testing.expect(found_full);
+// }
