@@ -157,11 +157,11 @@ pub const TransactionContext = struct {
         index: u16,
         context: BorrowedAccountContext,
     ) InstructionError!BorrowedAccount {
-        const txn_account =
-            self.getAccountAtIndex(index) orelse return InstructionError.MissingAccount;
+        const txn_account = self.getAccountAtIndex(index) orelse
+            return InstructionError.MissingAccount;
 
-        const account, const account_write_guard =
-            txn_account.writeWithLock() orelse return InstructionError.AccountBorrowFailed;
+        const account, const account_write_guard = txn_account.writeWithLock() orelse
+            return InstructionError.AccountBorrowFailed;
 
         return .{
             .pubkey = txn_account.pubkey,

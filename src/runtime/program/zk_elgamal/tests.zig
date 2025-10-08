@@ -25,7 +25,7 @@ test "zero ciphertext" {
     const allocator = std.testing.allocator;
 
     const kp = ElGamalKeypair.random();
-    const zero_ciphertext = zksdk.el_gamal.encrypt(u64, 0, &kp.public);
+    const zero_ciphertext = zksdk.elgamal.encrypt(u64, 0, &kp.public);
 
     const success_proof_data = ZeroCiphertextData.init(
         &kp,
@@ -75,10 +75,10 @@ test "ciphertext ciphertext equality" {
     const dest_kp = ElGamalKeypair.random();
 
     const amount: u64 = 0;
-    const source_ciphertext = zksdk.el_gamal.encrypt(u64, amount, &source_kp.public);
+    const source_ciphertext = zksdk.elgamal.encrypt(u64, amount, &source_kp.public);
 
     const dest_opening = zksdk.pedersen.Opening.random();
-    const dest_ciphertext = zksdk.el_gamal.encryptWithOpening(
+    const dest_ciphertext = zksdk.elgamal.encryptWithOpening(
         u64,
         amount,
         &dest_kp.public,
@@ -329,7 +329,7 @@ test "ciphertext commitment equality" {
     const allocator = std.testing.allocator;
     const kp = ElGamalKeypair.random();
     const amount: u64 = 55;
-    const ciphertext = zksdk.el_gamal.encrypt(u64, amount, &kp.public);
+    const ciphertext = zksdk.elgamal.encrypt(u64, amount, &kp.public);
     const commitment, const opening = zksdk.pedersen.initValue(u64, amount);
 
     const success_proof_data = CiphertextCommitmentData.init(

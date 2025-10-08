@@ -5,7 +5,7 @@ const std = @import("std");
 const sig = @import("../../sig.zig");
 
 const Edwards25519 = std.crypto.ecc.Edwards25519;
-const el_gamal = sig.zksdk.el_gamal;
+const elgamal = sig.zksdk.elgamal;
 const pedersen = sig.zksdk.pedersen;
 const ElGamalCiphertext = sig.zksdk.ElGamalCiphertext;
 const ElGamalKeypair = sig.zksdk.ElGamalKeypair;
@@ -226,13 +226,13 @@ pub const Data = struct {
 
         {
             // general case: encryption of 0
-            const ciphertext = el_gamal.encrypt(u64, 0, &kp.public);
+            const ciphertext = elgamal.encrypt(u64, 0, &kp.public);
             const zero_ciphertext_proof_data: Data = .init(&kp, &ciphertext);
             try zero_ciphertext_proof_data.verify();
         }
         {
             // general case: encryption of > 0
-            const ciphertext = el_gamal.encrypt(u64, 1, &kp.public);
+            const ciphertext = elgamal.encrypt(u64, 1, &kp.public);
             const zero_ciphertext_proof_data: Data = .init(&kp, &ciphertext);
             try std.testing.expectError(
                 error.AlgebraicRelation,
@@ -250,14 +250,14 @@ test "sanity" {
 
     // general case: encryption of 0
     {
-        const elgamal_ciphertext = el_gamal.encrypt(u64, 0, &kp.public);
+        const elgamal_ciphertext = elgamal.encrypt(u64, 0, &kp.public);
         const proof = Proof.init(&kp, &elgamal_ciphertext, &prover_transcript);
         try proof.verify(&kp.public, &elgamal_ciphertext, &verifier_transcript);
     }
 
     // general case: encryption of > 0
     {
-        const elgamal_ciphertext = el_gamal.encrypt(u64, 1, &kp.public);
+        const elgamal_ciphertext = elgamal.encrypt(u64, 1, &kp.public);
         const proof = Proof.init(&kp, &elgamal_ciphertext, &prover_transcript);
         try std.testing.expectError(
             error.AlgebraicRelation,
@@ -331,7 +331,7 @@ test "edge case" {
         var verifier_transcript = Transcript.initTest("Test");
 
         const public: ElGamalPubkey = .{ .point = try Ristretto255.fromBytes(@splat(0)) };
-        const ciphertext = el_gamal.encrypt(u64, 0, &public);
+        const ciphertext = elgamal.encrypt(u64, 0, &public);
 
         const proof = Proof.init(&kp, &ciphertext, &prover_transcript);
         try std.testing.expectError(
