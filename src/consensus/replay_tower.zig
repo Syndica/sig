@@ -129,41 +129,28 @@ pub const SelectVoteAndResetForkResult = struct {
     }
 };
 
-pub const SlotHistoryAccessor = struct {
-    account_reader: sig.accounts_db.AccountReader,
+pub fn getSlotHistory(
+    allocator: std.mem.Allocator,
+    account_reader: sig.accounts_db.SlotAccountReader,
+) !SlotHistory {
+    const maybe_account = try account_reader.get(allocator, SlotHistory.ID);
+    const account: sig.core.Account = maybe_account orelse return error.MissingSlotHistoryAccount;
+    defer account.deinit(allocator);
 
-    pub fn init(account_reader: sig.accounts_db.AccountReader) SlotHistoryAccessor {
-        return .{
-            .account_reader = account_reader,
-        };
+    var data_iter = account.data.iterator();
+    const slot_history = try sig.bincode.read(
+        allocator,
+        SlotHistory,
+        data_iter.reader(),
+        .{},
+    );
+    errdefer slot_history.deinit(allocator);
+
+    if (data_iter.bytesRemaining() != 0) {
+        return error.TrailingBytesInSlotHistory;
     }
-
-    pub fn getSlotHistory(
-        self: SlotHistoryAccessor,
-        allocator: std.mem.Allocator,
-        ancestors: *const Ancestors,
-    ) !SlotHistory {
-        const maybe_account =
-            try self.account_reader.forSlot(ancestors).get(allocator, SlotHistory.ID);
-        const account: sig.core.Account = maybe_account orelse
-            return error.MissingSlotHistoryAccount;
-        defer account.deinit(allocator);
-
-        var data_iter = account.data.iterator();
-        const slot_history = try sig.bincode.read(
-            allocator,
-            SlotHistory,
-            data_iter.reader(),
-            .{},
-        );
-        errdefer slot_history.deinit(allocator);
-
-        if (data_iter.bytesRemaining() != 0) {
-            return error.TrailingBytesInSlotHistory;
-        }
-        return slot_history;
-    }
-};
+    return slot_history;
+}
 
 // TODO Come up with a better name?
 // Consensus? Given this contains the logic of deciding what to vote or fork-switch into,
@@ -1419,7 +1406,8 @@ pub const ReplayTower = struct {
         latest_validator_votes: *const LatestValidatorVotes,
         fork_choice: *const HeaviestSubtreeForkChoice,
         epoch_stakes: *const EpochStakesMap,
-        slot_history_accessor: *const SlotHistoryAccessor,
+        /// For reading the slot history account
+        account_reader: sig.accounts_db.AccountReader,
     ) !SelectVoteAndResetForkResult {
         // Initialize result with failure list
         var failure_reasons: std.ArrayListUnmanaged(HeaviestForkFailures) = .empty;
@@ -1443,7 +1431,7 @@ pub const ReplayTower = struct {
             if (heaviest_slot_on_same_voted_fork) |heaviest| blk: {
                 const slot_ancestors = ancestors.getPtr(heaviest) orelse
                     return error.MissingAncestors;
-                break :blk try slot_history_accessor.getSlotHistory(allocator, slot_ancestors);
+                break :blk try getSlotHistory(allocator, account_reader.forSlot(slot_ancestors));
             } else null;
         defer {
             if (maybe_slot_history) |slot_history| slot_history.deinit(allocator);
@@ -3772,8 +3760,6 @@ test "selectVoteAndResetForks stake not found" {
 
     const latest = LatestValidatorVotes.empty;
 
-    var slot_history_accessor = SlotHistoryAccessor.init(.noop);
-
     const epoch_stakes: EpochStakes = try .initEmptyWithGenesisStakeHistoryEntry(allocator);
     defer epoch_stakes.deinit(allocator);
 
@@ -3790,7 +3776,7 @@ test "selectVoteAndResetForks stake not found" {
             &latest,
             &fork_choice,
             &.empty,
-            &slot_history_accessor,
+            .noop,
         ),
     );
 }
@@ -3915,8 +3901,6 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
         try accountsdb.putAccount(slot_to_write, SlotHistory.ID, sh_account);
     }
 
-    var slot_history_accessor = SlotHistoryAccessor.init(accountsdb.accountReader());
-
     const forks1 = try fixture.select_fork_slots(&replay_tower);
     const result = try replay_tower.selectVoteAndResetForks(
         allocator,
@@ -3929,7 +3913,7 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
         &LatestValidatorVotes.empty,
         &fixture.fork_choice,
         &fixture.epoch_stakes,
-        &slot_history_accessor,
+        accountsdb.accountReader(),
     );
     try std.testing.expectEqual(4, result.reset_slot.?);
     try std.testing.expectEqual(4, result.vote_slot.?.slot);
@@ -3950,7 +3934,7 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
         &LatestValidatorVotes.empty,
         &fixture.fork_choice,
         &fixture.epoch_stakes,
-        &slot_history_accessor,
+        accountsdb.accountReader(),
     );
 
     defer {
@@ -3975,7 +3959,7 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
         &LatestValidatorVotes.empty,
         &fixture.fork_choice,
         &fixture.epoch_stakes,
-        &slot_history_accessor,
+        accountsdb.accountReader(),
     );
 
     defer {
@@ -4040,7 +4024,7 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
         &LatestValidatorVotes.empty,
         &fixture.fork_choice,
         &fixture.epoch_stakes,
-        &slot_history_accessor,
+        accountsdb.accountReader(),
     );
 
     defer {
@@ -4085,7 +4069,7 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
         &LatestValidatorVotes.empty,
         &fixture.fork_choice,
         &fixture.epoch_stakes,
-        &slot_history_accessor,
+        accountsdb.accountReader(),
     );
 
     defer {

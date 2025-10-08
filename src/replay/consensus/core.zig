@@ -36,7 +36,6 @@ const LatestValidatorVotes = sig.consensus.latest_validator_votes.LatestValidato
 const ParsedVote = sig.consensus.vote_listener.vote_parser.ParsedVote;
 const ProgressMap = sig.consensus.progress_map.ProgressMap;
 const ReplayTower = sig.consensus.replay_tower.ReplayTower;
-const SlotHistoryAccessor = sig.consensus.replay_tower.SlotHistoryAccessor;
 const ThresholdConfirmedSlot = sig.consensus.vote_listener.ThresholdConfirmedSlot;
 const VerifiedVote = sig.consensus.vote_listener.VerifiedVote;
 const VoteListener = sig.consensus.vote_listener.VoteListener;
@@ -413,8 +412,6 @@ pub const TowerConsensus = struct {
             break :edge_cases_and_ancestors_descendants .{ ancestors, descendants };
         };
 
-        const slot_history_accessor = SlotHistoryAccessor.init(self.account_reader);
-
         const epoch_tracker, var epoch_tracker_lg = epoch_tracker_rw.readWithLock();
         defer epoch_tracker_lg.unlock();
 
@@ -428,7 +425,7 @@ pub const TowerConsensus = struct {
             slot_tracker_mut,
             epoch_tracker,
             progress_map,
-            &slot_history_accessor,
+            self.account_reader,
             self.my_identity, // vote_account
         );
     }
@@ -472,7 +469,8 @@ pub const TowerConsensus = struct {
         slot_tracker: *SlotTracker,
         epoch_tracker: *const EpochTracker,
         progress_map: *ProgressMap,
-        slot_history_accessor: *const SlotHistoryAccessor,
+        /// For reading the slot history account
+        account_reader: AccountReader,
         vote_account: Pubkey,
     ) !void {
         var epoch_stakes_map: EpochStakesMap = .empty;
@@ -570,7 +568,7 @@ pub const TowerConsensus = struct {
             &self.latest_validator_votes,
             &self.fork_choice,
             &epoch_stakes_map,
-            slot_history_accessor,
+            account_reader,
         );
         defer vote_and_reset_forks.deinit(allocator);
         const maybe_voted_slot = vote_and_reset_forks.vote_slot;
