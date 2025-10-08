@@ -4709,7 +4709,7 @@ fn genStakes(
             Pubkey.initRandom(random),
             .{
                 .stake = lamports,
-                .account = .{ .account = .{ .lamports = lamports }, .state = vote_state },
+                .account = .{ .account = .{ .lamports = lamports, .owner = Pubkey.initRandom(random) }, .state = vote_state },
             },
         );
     }
