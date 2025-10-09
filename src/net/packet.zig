@@ -8,7 +8,9 @@ pub const Packet = struct {
     buffer: [DATA_SIZE]u8,
     size: usize,
     addr: network.EndPoint,
-    flags: BitFlags(Flag),
+    flags: Flags,
+
+    pub const Flags = BitFlags(Flag);
 
     /// Maximum over-the-wire size of a Transaction
     ///   1280 is IPv6 minimum MTU
