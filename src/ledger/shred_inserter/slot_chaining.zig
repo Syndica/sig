@@ -1,4 +1,5 @@
 const std = @import("std");
+const tracy = @import("tracy");
 const sig = @import("../../sig.zig");
 const ledger = @import("../lib.zig");
 const shred_inserter = @import("lib.zig");
@@ -25,6 +26,9 @@ pub fn handleChaining(
     write_batch: *WriteBatch,
     working_set: *AutoHashMap(u64, SlotMetaWorkingSetEntry),
 ) !void {
+    const zone = tracy.Zone.init(@src(), .{ .name = "handleChaining" });
+    defer zone.deinit();
+
     const count = working_set.count();
     if (count == 0) return; // TODO is this correct?
 

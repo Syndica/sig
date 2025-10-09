@@ -16,6 +16,7 @@ pub fn Channel(T: type) type {
         allocator: Allocator,
         event: std.Thread.ResetEvent = .{},
         send_hook: ?*SendHook = null,
+        name: [:0]const u8 = std.fmt.comptimePrint("channel ({s})", .{@typeName(T)}),
 
         pub const SendHook = struct {
             /// Called after the channel has pushed the value.
@@ -150,6 +151,8 @@ pub fn Channel(T: type) type {
         pub fn send(channel: *Self, value: T) !void {
             const zone = tracy.Zone.init(@src(), .{ .name = "Channel.send" });
             defer zone.deinit();
+
+            defer tracy.plot(u32, channel.name, @intCast(channel.len()));
 
             if (channel.closed.load(.monotonic)) {
                 return error.ChannelClosed;

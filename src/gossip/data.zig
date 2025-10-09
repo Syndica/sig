@@ -557,6 +557,8 @@ pub const LegacyContactInfo = struct {
     /// call ContactInfo.deinit to free
     pub fn toContactInfo(self: *const LegacyContactInfo, allocator: std.mem.Allocator) !ContactInfo {
         var ci = ContactInfo.init(allocator, self.id, self.wallclock, self.shred_version);
+        errdefer ci.deinit();
+
         try ci.setSocket(.gossip, self.gossip);
         try ci.setSocket(.turbine_recv, self.turbine_recv);
         try ci.setSocket(.turbine_recv_quic, self.turbine_recv_quic);
@@ -567,6 +569,7 @@ pub const LegacyContactInfo = struct {
         try ci.setSocket(.rpc, self.rpc);
         try ci.setSocket(.rpc_pubsub, self.rpc_pubsub);
         try ci.setSocket(.serve_repair, self.serve_repair);
+
         return ci;
     }
 

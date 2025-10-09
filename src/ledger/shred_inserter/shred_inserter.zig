@@ -1,4 +1,5 @@
 const std = @import("std");
+const tracy = @import("tracy");
 const sig = @import("../../sig.zig");
 const ledger = @import("../lib.zig");
 const lib = @import("lib.zig");
@@ -196,6 +197,9 @@ pub const ShredInserter = struct {
         is_repaired: []const bool,
         options: Options,
     ) !Result {
+        const zone = tracy.Zone.init(@src(), .{ .name = "insertShreds" });
+        defer zone.deinit();
+
         const timestamp = sig.time.Instant.now();
         ///////////////////////////
         // check inputs for validity and edge cases
@@ -231,70 +235,79 @@ pub const ShredInserter = struct {
         var shred_insertion_timer = try Timer.start();
         var newly_completed_data_sets = ArrayList(CompletedDataSetInfo).init(allocator);
         errdefer newly_completed_data_sets.deinit();
-        for (shreds, is_repaired) |shred, is_repair| {
-            const shred_source: ShredSource = if (is_repair) .repaired else .turbine;
-            switch (shred) {
-                .data => |data_shred| {
-                    if (options.shred_tracker) |tracker| {
-                        tracker.registerDataShred(&shred.data, timestamp) catch |err| {
-                            self.metrics.register_shred_error.observe(@errorCast(err));
-                            switch (err) {
-                                error.SlotUnderflow, error.SlotOverflow => {},
-                                else => return err,
-                            }
-                        };
-                    }
-                    if (self.checkInsertDataShred(
-                        data_shred,
-                        &state,
-                        merkle_root_validator,
-                        write_batch,
-                        options.is_trusted,
-                        options.slot_leaders,
-                        shred_source,
-                    )) |completed_data_sets| {
-                        if (is_repair) {
-                            self.metrics.num_repair.inc();
-                        }
-                        defer completed_data_sets.deinit();
-                        try newly_completed_data_sets.appendSlice(completed_data_sets.items);
-                        self.metrics.num_inserted.inc();
-                    } else |e| switch (e) {
-                        error.Exists => if (is_repair) {
-                            self.metrics.num_repaired_data_shreds_exists.inc();
-                        } else {
-                            self.metrics.num_turbine_data_shreds_exists.inc();
-                        },
-                        error.InvalidShred => self.metrics.num_data_shreds_invalid.inc(),
-                        // error.LedgerError => {
-                        //     self.metrics.num_data_shreds_ledger_error.inc();
-                        //     // TODO improve this (maybe should be an error set)
-                        // },
-                        else => return e, // TODO explicit
-                    }
-                },
-                .code => |code_shred| {
-                    // TODO error handling?
-                    _ = try self.checkInsertCodeShred(
-                        code_shred,
-                        &state,
-                        merkle_root_validator,
-                        write_batch,
-                        options.is_trusted,
-                        shred_source,
-                    );
-                },
-            }
-        }
-        self.metrics.insert_shreds_elapsed_us.add(shred_insertion_timer.read().asMicros());
 
+        {
+            const z = tracy.Zone.init(@src(), .{ .name = "insert received shreds" });
+            defer z.deinit();
+
+            for (shreds, is_repaired) |shred, is_repair| {
+                const shred_source: ShredSource = if (is_repair) .repaired else .turbine;
+                switch (shred) {
+                    .data => |data_shred| {
+                        if (options.shred_tracker) |tracker| {
+                            tracker.registerDataShred(&shred.data, timestamp) catch |err| {
+                                self.metrics.register_shred_error.observe(@errorCast(err));
+                                switch (err) {
+                                    error.SlotUnderflow, error.SlotOverflow => {},
+                                    else => return err,
+                                }
+                            };
+                        }
+                        if (self.checkInsertDataShred(
+                            data_shred,
+                            &state,
+                            merkle_root_validator,
+                            write_batch,
+                            options.is_trusted,
+                            options.slot_leaders,
+                            shred_source,
+                        )) |completed_data_sets| {
+                            if (is_repair) {
+                                self.metrics.num_repair.inc();
+                            }
+                            defer completed_data_sets.deinit();
+                            try newly_completed_data_sets.appendSlice(completed_data_sets.items);
+                            self.metrics.num_inserted.inc();
+                        } else |e| switch (e) {
+                            error.Exists => if (is_repair) {
+                                self.metrics.num_repaired_data_shreds_exists.inc();
+                            } else {
+                                self.metrics.num_turbine_data_shreds_exists.inc();
+                            },
+                            error.InvalidShred => self.metrics.num_data_shreds_invalid.inc(),
+                            // error.LedgerError => {
+                            //     self.metrics.num_data_shreds_ledger_error.inc();
+                            //     // TODO improve this (maybe should be an error set)
+                            // },
+                            else => return e, // TODO explicit
+                        }
+                    },
+                    .code => |code_shred| {
+                        // TODO error handling?
+                        _ = try self.checkInsertCodeShred(
+                            code_shred,
+                            &state,
+                            merkle_root_validator,
+                            write_batch,
+                            options.is_trusted,
+                            shred_source,
+                        );
+                    },
+                }
+            }
+            self.metrics.insert_shreds_elapsed_us.add(shred_insertion_timer.read().asMicros());
+        }
         /////////////////////////////////////
         // recover shreds and insert them
         //
         var shred_recovery_timer = try Timer.start();
         var valid_recovered_shreds = ArrayList([]const u8).init(allocator);
         defer valid_recovered_shreds.deinit();
+
         if (options.slot_leaders) |leaders| {
+            const z = tracy.Zone.init(@src(), .{ .name = "recover shreds and insert" });
+            defer z.deinit();
+
             var reed_solomon_cache = try ReedSolomonCache.init(allocator);
             defer reed_solomon_cache.deinit();
             const recovered_shreds = try self.tryShredRecovery(
@@ -388,55 +401,65 @@ pub const ShredInserter = struct {
         //
         var merkle_chaining_timer = try Timer.start();
 
-        const em0_keys, const em0_values = state.erasure_metas.items();
-        for (em0_keys, em0_values) |erasure_set, working_em| if (working_em == .dirty) {
-            const slot = erasure_set.slot;
-            const erasure_meta: ErasureMeta = working_em.dirty;
-            if (try self.hasDuplicateShredsInSlot(slot)) {
-                continue;
-            }
-            // First code shred from this erasure batch, check the forward merkle root chaining
-            const shred_id = ShredId{
-                .slot = slot,
-                .index = @intCast(erasure_meta.first_received_code_index),
-                .shred_type = .code,
+        {
+            const z = tracy.Zone.init(@src(), .{ .name = "check forward chaining" });
+            defer z.deinit();
+
+            const em0_keys, const em0_values = state.erasure_metas.items();
+            for (em0_keys, em0_values) |erasure_set, working_em| if (working_em == .dirty) {
+                const slot = erasure_set.slot;
+                const erasure_meta: ErasureMeta = working_em.dirty;
+                if (try self.hasDuplicateShredsInSlot(slot)) {
+                    continue;
+                }
+                // First code shred from this erasure batch, check the forward merkle root chaining
+                const shred_id = ShredId{
+                    .slot = slot,
+                    .index = @intCast(erasure_meta.first_received_code_index),
+                    .shred_type = .code,
+                };
+                // unreachable: Erasure meta was just created, initial shred must exist
+                const shred = state.just_inserted_shreds.get(shred_id).?;
+                // TODO: agave discards the result here. should we also?
+                _ = try merkle_root_validator.checkForwardChaining(
+                    shred.code,
+                    erasure_meta,
+                    state.merkleRootMetas(),
+                );
             };
-            // unreachable: Erasure meta was just created, initial shred must exist
-            const shred = state.just_inserted_shreds.get(shred_id).?;
-            // TODO: agave discards the result here. should we also?
-            _ = try merkle_root_validator.checkForwardChaining(
-                shred.code,
-                erasure_meta,
-                state.merkleRootMetas(),
-            );
-        };
+        }
 
         //////////////////////////////////////////////////////
         // check backward chaining for each merkle root
         //
-        var merkle_root_metas_iter = state.merkle_root_metas.iterator();
-        while (merkle_root_metas_iter.next()) |mrm_entry| {
-            const erasure_set_id = mrm_entry.key_ptr.*;
-            const working_merkle_root_meta = mrm_entry.value_ptr;
-            if (working_merkle_root_meta.* == .clean or
-                try self.hasDuplicateShredsInSlot(erasure_set_id.slot))
-            {
-                continue;
-            }
-            // First shred from this erasure batch, check the backwards merkle root chaining
-            const merkle_root_meta = working_merkle_root_meta.asRef();
-            const shred_id = ShredId{
-                .slot = erasure_set_id.slot,
-                .index = merkle_root_meta.first_received_shred_index,
-                .shred_type = merkle_root_meta.first_received_shred_type,
-            };
-            // unreachable: Merkle root meta was just created, initial shred must exist
-            const shred = state.just_inserted_shreds.get(shred_id).?;
-            // TODO: agave discards the result here. should we also?
-            _ = try merkle_root_validator.checkBackwardChaining(shred, state.erasureMetas());
-        }
+        {
+            const z = tracy.Zone.init(@src(), .{ .name = "check backward chaining" });
+            defer z.deinit();
 
-        self.metrics.merkle_chaining_elapsed_us.add(merkle_chaining_timer.read().asMicros());
+            var merkle_root_metas_iter = state.merkle_root_metas.iterator();
+            while (merkle_root_metas_iter.next()) |mrm_entry| {
+                const erasure_set_id = mrm_entry.key_ptr.*;
+                const working_merkle_root_meta = mrm_entry.value_ptr;
+                if (working_merkle_root_meta.* == .clean or
+                    try self.hasDuplicateShredsInSlot(erasure_set_id.slot))
+                {
+                    continue;
+                }
+                // First shred from this erasure batch, check the backwards merkle root chaining
+                const merkle_root_meta = working_merkle_root_meta.asRef();
+                const shred_id = ShredId{
+                    .slot = erasure_set_id.slot,
+                    .index = merkle_root_meta.first_received_shred_index,
+                    .shred_type = merkle_root_meta.first_received_shred_type,
+                };
+                // unreachable: Merkle root meta was just created, initial shred must exist
+                const shred = state.just_inserted_shreds.get(shred_id).?;
+                // TODO: agave discards the result here. should we also?
+                _ = try merkle_root_validator.checkBackwardChaining(shred, state.erasureMetas());
+            }
+
+            self.metrics.merkle_chaining_elapsed_us.add(merkle_chaining_timer.read().asMicros());
+        }
 
         ///////////////////////////
         // commit and return

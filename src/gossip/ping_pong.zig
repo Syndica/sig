@@ -122,12 +122,22 @@ pub const PingCache = struct {
         cache_capacity: usize,
     ) error{OutOfMemory}!Self {
         std.debug.assert(rate_limit_delay.asNanos() <= ttl.asNanos() / 2);
+
+        var pings = try LruCache(.non_locking, PubkeyAndSocketAddr, std.time.Instant).init(allocator, cache_capacity);
+        errdefer pings.deinit();
+
+        var pongs = try LruCache(.non_locking, PubkeyAndSocketAddr, std.time.Instant).init(allocator, cache_capacity);
+        errdefer pongs.deinit();
+
+        var pending_cache = try LruCache(.non_locking, Hash, PubkeyAndSocketAddr).init(allocator, cache_capacity);
+        errdefer pending_cache.deinit();
+
         return Self{
             .ttl = ttl,
             .rate_limit_delay = rate_limit_delay,
-            .pings = try LruCache(.non_locking, PubkeyAndSocketAddr, std.time.Instant).init(allocator, cache_capacity),
-            .pongs = try LruCache(.non_locking, PubkeyAndSocketAddr, std.time.Instant).init(allocator, cache_capacity),
-            .pending_cache = try LruCache(.non_locking, Hash, PubkeyAndSocketAddr).init(allocator, cache_capacity),
+            .pings = pings,
+            .pongs = pongs,
+            .pending_cache = pending_cache,
             .allocator = allocator,
         };
     }

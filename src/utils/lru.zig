@@ -101,6 +101,7 @@ pub fn LruCacheCustom(
                 .mux = if (kind == .locking) Mutex{} else undefined,
                 .deinit_context = deinit_context,
             };
+            errdefer self.hashmap.deinit();
 
             // pre allocate enough capacity for max items since we will use
             // assumed capacity and non-clobber methods

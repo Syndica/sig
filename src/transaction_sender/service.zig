@@ -62,6 +62,7 @@ pub const Service = struct {
         exit: *AtomicBool,
     ) !Service {
         const send_channel = try Channel(Packet).create(allocator);
+        send_channel.name = "transaction sender channel(Packet)";
         errdefer send_channel.destroy();
 
         return .{
