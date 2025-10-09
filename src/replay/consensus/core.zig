@@ -1030,8 +1030,13 @@ fn computeBankStats(
             const fork_stats = progress.getForkStats(slot) orelse return error.MissingForkStats;
             fork_stats.fork_stake = computed_bank_state.fork_stake;
             fork_stats.total_stake = computed_bank_state.total_stake;
+
+            fork_stats.voted_stakes.deinit(allocator);
             fork_stats.voted_stakes = computed_bank_state.voted_stakes;
+
+            fork_stats.lockout_intervals.deinit(allocator);
             fork_stats.lockout_intervals = computed_bank_state.lockout_intervals;
+
             fork_stats.block_height = blk: {
                 const slot_info = slot_tracker.get(slot) orelse return error.MissingSlots;
                 break :blk slot_info.constants.block_height;
@@ -1066,6 +1071,8 @@ fn cacheTowerStats(
         &stats.voted_stakes,
         stats.total_stake,
     );
+    // Free old vote_threshold before replacing it to avoid memory leak
+    stats.vote_threshold.deinit(allocator);
     stats.vote_threshold = .fromOwnedSlice(slice);
 
     const slot_ancestors = ancestors.get(slot) orelse return error.MissingAncestor;
