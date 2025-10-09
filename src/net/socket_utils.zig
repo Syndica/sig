@@ -448,22 +448,12 @@ pub const SocketThread = struct {
         socket: UdpSocket,
         outgoing_channel: *Channel(Packet),
         exit: ExitCondition,
+        flags: Packet.Flags,
     ) !*SocketThread {
-        return spawn(allocator, logger, socket, outgoing_channel, exit, .sender, .empty);
+        return spawn(allocator, logger, socket, outgoing_channel, exit, .sender, flags);
     }
 
     pub fn spawnReceiver(
-        allocator: Allocator,
-        logger: Logger,
-        socket: UdpSocket,
-        incoming_channel: *Channel(Packet),
-        exit: ExitCondition,
-    ) !*SocketThread {
-        return spawn(allocator, logger, socket, incoming_channel, exit, .receiver, .empty);
-    }
-
-    /// Every packet will include the specified flags
-    pub fn spawnReceiverFlagged(
         allocator: Allocator,
         logger: Logger,
         socket: UdpSocket,
@@ -523,6 +513,7 @@ test "SocketThread: overload sendto" {
         socket,
         &send_channel,
         .{ .unordered = &exit },
+        .empty,
     );
     defer st.join();
     defer exit.store(true, .release);
@@ -577,6 +568,7 @@ pub const BenchmarkPacketProcessing = struct {
             socket,
             &incoming_channel,
             exit_condition,
+            .empty,
         );
         defer incoming_pipe.join();
 
@@ -618,6 +610,7 @@ pub const BenchmarkPacketProcessing = struct {
             socket,
             &outgoing_channel,
             exit_condition,
+            .empty,
         );
         defer outgoing_pipe.join();
 

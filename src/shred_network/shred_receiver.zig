@@ -112,11 +112,12 @@ pub const ShredReceiver = struct {
             self.params.repair_socket,
             &self.outgoing_pongs,
             exit,
+            .empty,
         );
         defer response_sender_thread.join();
 
         // Create pipe from repair_socket -> incoming_shreds tagged .repair
-        const repair_receiver_thread = try SocketThread.spawnReceiverFlagged(
+        const repair_receiver_thread = try SocketThread.spawnReceiver(
             allocator,
             .from(self.logger),
             self.params.repair_socket,
@@ -133,6 +134,7 @@ pub const ShredReceiver = struct {
             self.params.turbine_socket,
             &self.incoming_shreds,
             exit,
+            .empty,
         );
         defer turbine_receiver_thread.join();
 
