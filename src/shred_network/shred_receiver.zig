@@ -320,7 +320,7 @@ test "handleBatch/handlePacket" {
     {
         const ping = try Ping.init(.{1} ** 32, &keypair);
         const addr = sig.net.SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 88);
-        var packet = try Packet.initFromBincode(addr, RepairPing{ .Ping = ping });
+        var packet = try Packet.initFromBincode(addr, RepairPing{ .ping = ping });
         packet.flags = .from(.repair);
         try shred_receiver.incoming_shreds.send(packet);
     }
@@ -360,7 +360,7 @@ test "handlePing" {
     const addr = sig.net.SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 88);
     const input_ping_packet = try Packet.initFromBincode(addr, RepairPing{ .ping = ping });
 
-    const expected_pong_packet = try Packet.initFromBincode(addr, RepairMessage{ .Pong = pong });
+    const expected_pong_packet = try Packet.initFromBincode(addr, RepairMessage{ .pong = pong });
     const actual_pong_packet = try ShredReceiver.handlePing(
         allocator,
         &input_ping_packet,
@@ -373,7 +373,7 @@ test "handlePing" {
     const evil_keypair = try sig.identity.KeyPair.generateDeterministic(.{64} ** 32);
     var evil_ping = ping;
     evil_ping.from = sig.core.Pubkey.fromPublicKey(&evil_keypair.public_key);
-    const evil_ping_packet = try Packet.initFromBincode(addr, RepairPing{ .Ping = evil_ping });
+    const evil_ping_packet = try Packet.initFromBincode(addr, RepairPing{ .ping = evil_ping });
     try std.testing.expectEqual(null, try ShredReceiver.handlePing(
         allocator,
         &evil_ping_packet,
