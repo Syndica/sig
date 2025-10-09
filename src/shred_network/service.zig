@@ -109,13 +109,12 @@ pub fn start(
 
     // receiver (threads)
     const shred_receiver = try arena.create(ShredReceiver);
-    shred_receiver.* = try ShredReceiver.init(deps.allocator, .from(deps.logger), .{
+    shred_receiver.* = try .init(deps.allocator, .from(deps.logger), deps.registry, .{
         .keypair = deps.my_keypair,
         .exit = deps.exit,
         .repair_socket = repair_socket,
         .turbine_socket = turbine_socket,
         .shred_version = deps.my_shred_version,
-        .registry = deps.registry,
         .root_slot = conf.root_slot,
         .maybe_retransmit_shred_sender = if (conf.retransmit) retransmit_channel else null,
         .leader_schedule = deps.epoch_context_mgr.slotLeaders(),

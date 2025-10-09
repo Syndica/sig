@@ -56,7 +56,7 @@ pub const ShredReceiver = struct {
         maybe_retransmit_shred_sender: ?*Channel(Packet),
 
         shred_version: *const Atomic(u16),
-        registry: *sig.prometheus.Registry(.{}),
+
         root_slot: Slot,
         leader_schedule: SlotLeaders,
 
@@ -65,7 +65,12 @@ pub const ShredReceiver = struct {
         inserter: ShredInserter,
     };
 
-    pub fn init(allocator: Allocator, logger: Logger, params: Params) !ShredReceiver {
+    pub fn init(
+        allocator: Allocator,
+        logger: Logger,
+        registry: *sig.prometheus.Registry(.{}),
+        params: Params,
+    ) !ShredReceiver {
         var incoming_shreds = try Channel(Packet).init(allocator);
         errdefer incoming_shreds.deinit();
 
@@ -75,8 +80,8 @@ pub const ShredReceiver = struct {
         var verified_merkle_roots = try VerifiedMerkleRoots.init(allocator, 1024);
         errdefer verified_merkle_roots.deinit();
 
-        const metrics = try params.registry.initStruct(ShredReceiverMetrics);
-        const verifier_metrics = try params.registry.initStruct(shred_verifier.Metrics);
+        const metrics = try registry.initStruct(ShredReceiverMetrics);
+        const verifier_metrics = try registry.initStruct(shred_verifier.Metrics);
 
         return ShredReceiver{
             .params = params,
@@ -206,29 +211,29 @@ pub const ShredReceiver = struct {
             };
             self.metrics.satisfactory_shred_count.inc();
 
-            if (shred_verifier.verifyShred(
+            shred_verifier.verifyShred(
                 &packet,
                 self.params.leader_schedule,
                 &self.verified_merkle_roots,
                 self.verifier_metrics,
-            )) |_| {
-                self.verifier_metrics.verified_count.inc();
-                if (self.params.maybe_retransmit_shred_sender) |retransmit_shred_sender| {
-                    try retransmit_shred_sender.send(packet);
-                }
-                const shred_payload = layout.getShred(&packet) orelse
-                    return error.InvalidVerifiedShred;
-                return Shred.fromPayload(allocator, shred_payload) catch |e| {
-                    self.logger.err().logf(
-                        "failed to deserialize verified shred {?}.{?}: {}",
-                        .{ layout.getSlot(shred_payload), layout.getIndex(shred_payload), e },
-                    );
-                    return null;
-                };
-            } else |err| {
+            ) catch |err| {
                 self.verifier_metrics.fail.observe(err);
                 return null;
+            };
+            self.verifier_metrics.verified_count.inc();
+
+            if (self.params.maybe_retransmit_shred_sender) |retransmit_shred_sender| {
+                try retransmit_shred_sender.send(packet);
             }
+
+            const shred_payload = layout.getShred(&packet) orelse return error.InvalidVerifiedShred;
+            return Shred.fromPayload(allocator, shred_payload) catch |err| {
+                self.logger.err().logf(
+                    "failed to deserialize verified shred {?}.{?}: {}",
+                    .{ layout.getSlot(shred_payload), layout.getIndex(shred_payload), err },
+                );
+                return null;
+            };
         }
     }
 
@@ -303,13 +308,12 @@ test "handleBatch/handlePacket" {
     var exit = Atomic(bool).init(false);
     const shred_version = Atomic(u16).init(0);
 
-    var shred_receiver = try ShredReceiver.init(allocator, .noop, .{
+    var shred_receiver = try ShredReceiver.init(allocator, .noop, &registry, .{
         .keypair = &keypair,
         .exit = &exit,
         .repair_socket = invalid_socket,
         .turbine_socket = invalid_socket,
         .shred_version = &shred_version,
-        .registry = &registry,
         .root_slot = root_slot,
         .maybe_retransmit_shred_sender = null,
         .leader_schedule = epoch_ctx.slotLeaders(),
