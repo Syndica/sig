@@ -752,3 +752,165 @@ test "root advances after vote satisfies lockouts" {
         st.slots.deinit(allocator);
     }
 }
+
+// Test case:
+// - Setup: Validator has already voted on slot 1
+// - No new votable slots available (heaviest == last vote, no descendants)
+// - Process is called with no new replay results
+//
+// States updated (setup):
+// - SlotTracker: root slot 0 and slot 1 (both frozen)
+// - EpochTracker: epoch 0 with validator stake
+// - ProgressMap: entries for slots 0 and 1 (both computed)
+// - TowerConsensus: initialized and has voted on slot 1
+// - last_vote_tx_blockhash: set to non_voting initially
+//
+// States updated (via consensus.process):
+// - Called with empty replay results (no new slots to process)
+// - Consensus attempts to find votable bank but finds none (heaviest == last vote)
+//
+// States asserted:
+// - lastVotedSlot() remains unchanged (still slot 1)
+// - No new vote was recorded in the tower
+// - last_vote_tx_blockhash remains .non_voting
+test "vote refresh when no new vote available" {
+    const allocator = std.testing.allocator;
+
+    var stubs = try sig.replay.service.DependencyStubs.init(allocator, .noop);
+    defer stubs.deinit(allocator);
+
+    {
+        const SlotHistory = sig.runtime.sysvar.SlotHistory;
+        const slot_history = try SlotHistory.init(allocator);
+        defer slot_history.deinit(allocator);
+        const data = try allocator.alloc(u8, SlotHistory.STORAGE_SIZE);
+        defer allocator.free(data);
+        @memset(data, 0);
+        _ = try sig.bincode.writeToSlice(data, slot_history, .{});
+        const account = sig.runtime.AccountSharedData{
+            .lamports = 1,
+            .data = data,
+            .owner = sig.runtime.sysvar.OWNER_ID,
+            .executable = false,
+            .rent_epoch = 0,
+        };
+        const account_store = stubs.accountsdb.accountStore();
+        try account_store.put(0, SlotHistory.ID, account);
+    }
+
+    const root_slot: Slot = 0;
+    const root_consts = try sig.core.SlotConstants.genesis(allocator, .DEFAULT);
+    var root_state = try sig.core.SlotState.genesis(allocator);
+
+    root_state.hash.set(Hash.ZEROES);
+    {
+        var bhq = root_state.blockhash_queue.write();
+        defer bhq.unlock();
+        try bhq.mut().insertGenesisHash(allocator, Hash.ZEROES, 0);
+    }
+
+    var slot_tracker = try SlotTracker.init(allocator, root_slot, .{
+        .constants = root_consts,
+        .state = root_state,
+    });
+    defer slot_tracker.deinit(allocator);
+
+    const slot1_hash = Hash{ .data = .{1} ** Hash.SIZE };
+    {
+        var slot_constants = try sig.core.SlotConstants.genesis(allocator, .DEFAULT);
+        errdefer slot_constants.deinit(allocator);
+        slot_constants.parent_slot = root_slot;
+        slot_constants.parent_hash = Hash.ZEROES;
+        slot_constants.block_height = 1;
+
+        var slot_state = try sig.core.SlotState.genesis(allocator);
+        errdefer slot_state.deinit(allocator);
+        slot_state.hash = .init(slot1_hash);
+
+        try slot_tracker.put(allocator, 1, .{ .constants = slot_constants, .state = slot_state });
+    }
+
+    var slot_tracker_rw = RwMux(SlotTracker).init(slot_tracker);
+
+    var epoch_tracker: EpochTracker = .{
+        .epochs = .empty,
+        .schedule = sig.core.EpochSchedule.DEFAULT,
+    };
+    {
+        const epoch_consts = try sig.core.EpochConstants.genesis(allocator, .default(allocator));
+        errdefer epoch_consts.deinit(allocator);
+        try epoch_tracker.epochs.put(allocator, 0, epoch_consts);
+    }
+    defer epoch_tracker.deinit(allocator);
+    var epoch_tracker_rw = RwMux(EpochTracker).init(epoch_tracker);
+
+    var progress = sig.consensus.ProgressMap.INIT;
+    defer progress.deinit(allocator);
+    {
+        var fork_progress0 = try sig.consensus.progress_map.ForkProgress.zeroes(allocator);
+        fork_progress0.fork_stats.computed = true;
+        var fork_progress1 = try sig.consensus.progress_map.ForkProgress.zeroes(allocator);
+        fork_progress1.fork_stats.computed = true;
+        try progress.map.put(allocator, 0, fork_progress0);
+        try progress.map.put(allocator, 1, fork_progress1);
+    }
+
+    var replay_votes_channel = try Channel(ParsedVote).create(allocator);
+    defer replay_votes_channel.destroy();
+
+    const external = TowerConsensus.Dependencies.External{
+        .senders = stubs.senders,
+        .receivers = stubs.receivers,
+        .gossip_table = null,
+        .run_vote_listener = false,
+    };
+
+    const deps = TowerConsensus.Dependencies{
+        .logger = .noop,
+        .my_identity = Pubkey.initRandom(std.crypto.random),
+        .vote_identity = Pubkey.initRandom(std.crypto.random),
+        .root_slot = root_slot,
+        .root_hash = Hash.ZEROES,
+        .account_reader = stubs.accountsdb.accountReader(),
+        .ledger_reader = stubs.ledger.reader,
+        .ledger_writer = stubs.ledger.result_writer,
+        .exit = &stubs.exit,
+        .replay_votes_channel = replay_votes_channel,
+        .slot_tracker_rw = &slot_tracker_rw,
+        .epoch_tracker_rw = &epoch_tracker_rw,
+        .external = external,
+    };
+
+    var consensus = try TowerConsensus.init(allocator, deps);
+    defer consensus.deinit(allocator);
+
+    {
+        const results = [_]ReplayResult{
+            .{ .slot = 1, .output = .{ .last_entry_hash = slot1_hash } },
+        };
+        try consensus.process(allocator, &slot_tracker_rw, &epoch_tracker_rw, &progress, &results);
+    }
+
+    const initial_last_voted = consensus.replay_tower.lastVotedSlot();
+    try std.testing.expectEqual(1, initial_last_voted);
+    const initial_tx_blockhash = consensus.replay_tower.last_vote_tx_blockhash;
+    try std.testing.expect(initial_tx_blockhash == .non_voting);
+
+    // The Test
+    {
+        const empty_results: []const ReplayResult = &.{};
+        try consensus.process(allocator, &slot_tracker_rw, &epoch_tracker_rw, &progress, empty_results);
+    }
+
+    // Assert: No new vote recorded
+    const final_last_voted = consensus.replay_tower.lastVotedSlot();
+    try std.testing.expectEqual(initial_last_voted, final_last_voted);
+    try std.testing.expectEqual(1, final_last_voted);
+
+    // Assert: blockhash status remains non_voting (current stub behavior)
+    const final_tx_blockhash = consensus.replay_tower.last_vote_tx_blockhash;
+    try std.testing.expect(final_tx_blockhash == .non_voting);
+
+    // The vote count in tower should remain the same (1 vote)
+    try std.testing.expectEqual(1, consensus.replay_tower.tower.vote_state.votes.len);
+}
