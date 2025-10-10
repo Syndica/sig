@@ -400,10 +400,22 @@ test "vote accounts with landed votes populate bank stats" {
 //
 // States asserted:
 // - After pre-population: tower has 31 votes, root is 0
-// - After processing slot 32: root > 0 (advanced), tower maintains 31 votes (oldest popped, new added)
-// - After processing slot 33: root advanced again (new_root > old_root from slot 32)
-// - Final: root > initial_root (confirmed advancement from 0)
-// - Final: tower maintains MAX_LOCKOUT_HISTORY (31) votes
+// - After processing slot 32:
+//   - Root advances from 0 to 1
+//   - Tower maintains 31 votes (oldest popped, new added)
+//   - Pruning on root update:
+//     - Slot 0 (old root) is pruned from slot_tracker
+//     - Slot 1 (new root) and descendants remain in slot_tracker
+//     - Progress map entry for slot 0 is removed
+//     - Fork choice heaviest (slot 32) is on the rooted path
+// - After processing slot 33:
+//   - Root advances from 1 to 2
+//   - Tower maintains 31 votes
+//   - Pruning on root update:
+//     - Slots 0 and 1 (old roots) are pruned from slot_tracker
+//     - Slot 2 (new root) and descendants remain in slot_tracker
+//     - Progress map entries for slots 0 and 1 are removed
+//     - Fork choice heaviest (slot 33) is on the rooted path
 // - Final: lastVotedSlot() == 33 (most recent vote tracked correctly)
 test "root advances after vote satisfies lockouts" {
     const allocator = std.testing.allocator;
@@ -672,6 +684,18 @@ test "root advances after vote satisfies lockouts" {
         try std.testing.expect(new_root > old_root);
         try std.testing.expectEqual(1, new_root);
         try std.testing.expectEqual(31, consensus.replay_tower.tower.vote_state.votes.len);
+
+        {
+            const st, var st_lock = slot_tracker_rw.readWithLock();
+            defer st_lock.unlock();
+            try std.testing.expectEqual(1, st.root);
+            try std.testing.expect(!st.contains(0));
+            try std.testing.expect(st.contains(1));
+            try std.testing.expect(st.contains(32));
+        }
+        try std.testing.expect(progress.map.get(0) == null);
+        try std.testing.expect(progress.map.get(1) != null);
+        try std.testing.expectEqual(32, consensus.fork_choice.heaviestOverallSlot().slot);
     }
 
     {
@@ -735,6 +759,20 @@ test "root advances after vote satisfies lockouts" {
         try std.testing.expect(new_root > initial_root);
         const last_voted = consensus.replay_tower.tower.vote_state.lastVotedSlot();
         try std.testing.expectEqual(33, last_voted);
+
+        {
+            const st, var st_lock = slot_tracker_rw.readWithLock();
+            defer st_lock.unlock();
+            try std.testing.expectEqual(2, st.root);
+            try std.testing.expect(!st.contains(0));
+            try std.testing.expect(!st.contains(1));
+            try std.testing.expect(st.contains(2));
+            try std.testing.expect(st.contains(33));
+        }
+        try std.testing.expect(progress.map.get(0) == null);
+        try std.testing.expect(progress.map.get(1) == null);
+        try std.testing.expect(progress.map.get(2) != null);
+        try std.testing.expectEqual(33, consensus.fork_choice.heaviestOverallSlot().slot);
     }
 
     // Some cleanup.
