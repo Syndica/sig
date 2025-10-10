@@ -73,6 +73,9 @@ jobs:
       - run:
           name: Check docs
           command: python docs/check.py ./
+      - run:
+          name: Check conformance commits
+          command: conformance/scripts/verify-commits.sh
 
   build_linux:
     executor: linux-executor
@@ -275,10 +278,11 @@ jobs:
       - run:
           name: Setup solana-conformance
           command: |
+            . conformance/commits.env
             git clone https://github.com/firedancer-io/solana-conformance --depth 1
             cd solana-conformance/
-            git fetch origin d2bcbdc4b21d52d4579e87516d3eaad651e9f455
-            git checkout d2bcbdc4b21d52d4579e87516d3eaad651e9f455
+            git fetch origin $SOLANA_CONFORMANCE_COMMIT
+            git checkout $SOLANA_CONFORMANCE_COMMIT
             sudo add-apt-repository ppa:deadsnakes/ppa -y
             sudo apt install -y python3.11 python3.11-dev python3.11-venv rename
 
@@ -292,10 +296,11 @@ jobs:
           name: Checkout Test Vectors
           command: |
             if [ ! -d "test-vectors" ]; then
+              . conformance/commits.env
               git clone https://github.com/firedancer-io/test-vectors --depth 1
               cd test-vectors
-              git fetch origin 233b764514a3cd35adf986e0b9967946d486c987
-              git checkout 233b764514a3cd35adf986e0b9967946d486c987
+              git fetch origin $TEST_VECTORS_COMMIT
+              git checkout $TEST_VECTORS_COMMIT
 
               # We need each fixture file to have a unique name so that we can put them into the test-inputs directory
               # in a "flat" manner. The problem is that there are just too many files and it exceeds ARG_MAX for a single
