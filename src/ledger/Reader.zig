@@ -133,7 +133,8 @@ pub fn slotRangeConnected(
 
 /// Analogous to [get_data_shred](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L2220)
 pub fn getDataShred(self: *const Reader, slot: Slot, index: u64) !?BytesRef {
-    const shred = try self.ledger.db.getBytes(schema.data_shred, .{ slot, index }) orelse return null;
+    const shred = try self.ledger.db.getBytes(schema.data_shred, .{ slot, index }) orelse
+        return null;
     if (shred.data.len != DataShred.constants.payload_size) {
         return error.InvalidDataShred;
     }
@@ -146,7 +147,12 @@ pub fn getCodeShred(self: *const Reader, slot: Slot, index: u64) !?BytesRef {
 }
 
 /// Analogous to [get_data_shreds_for_slot](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L2230)
-pub fn getDataShredsForSlot(self: *const Reader, allocator: Allocator, slot: Slot, start_index: u64) !ArrayList(Shred) {
+pub fn getDataShredsForSlot(
+    self: *const Reader,
+    allocator: Allocator,
+    slot: Slot,
+    start_index: u64,
+) !ArrayList(Shred) {
     return getShredsForSlot(self, allocator, schema.data_shred, slot, start_index);
 }
 
@@ -313,7 +319,10 @@ pub fn getBlockHeight(self: *const Reader, allocator: Allocator, slot: Slot) !?u
 /// `slot` has already been cleaned-up.
 ///
 /// agave: check_lowest_cleanup_slot
-fn checkLowestCleanupSlot(self: *const Reader, slot: Slot) error{SlotCleanedUp}!RwMux(Slot).RLockGuard {
+fn checkLowestCleanupSlot(
+    self: *const Reader,
+    slot: Slot,
+) error{SlotCleanedUp}!RwMux(Slot).RLockGuard {
     // lowest_cleanup_slot is the last slot that was not cleaned up by LedgerCleanupService
     const guard = self.ledger.highest_slot_cleaned.read();
     const lowest_cleanup_slot = guard.get().*;
@@ -347,7 +356,8 @@ fn ensureLowestCleanupSlot(
 ///
 /// Analogous to [get_first_available_block](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L2556)
 pub fn getFirstAvailableBlock(self: *const Reader) !Slot {
-    var root_iterator = try self.ledger.db.iterator(schema.rooted_slots, .forward, try lowestSlotWithGenesis(self));
+    var root_iterator = try self.ledger.db
+        .iterator(schema.rooted_slots, .forward, try lowestSlotWithGenesis(self));
     defer root_iterator.deinit();
     const first_root = try root_iterator.nextKey() orelse return 0;
     // If the first root is slot 0, it is genesis. Genesis is always complete, so it is correct
@@ -422,7 +432,14 @@ pub fn getRootedBlockWithEntries(
     defer lock.unlock();
 
     if (try isRoot(self, allocator, slot)) {
-        return getCompleteBlockWithEntries(self, allocator, slot, require_previous_blockhash, true, false);
+        return getCompleteBlockWithEntries(
+            self,
+            allocator,
+            slot,
+            require_previous_blockhash,
+            true,
+            false,
+        );
     }
     return error.SlotNotRooted;
 }
@@ -437,12 +454,14 @@ pub fn getCompleteBlockWithEntries(
     allow_dead_slots: bool,
 ) !VersionedConfirmedBlockWithEntries {
     var slot_meta: SlotMeta = try self.ledger.db.get(allocator, schema.slot_meta, slot) orelse {
-        self.logger.debug().logf("getCompleteBlockWithEntries failed for slot {} (missing SlotMeta)", .{slot});
+        self.logger.debug()
+            .logf("getCompleteBlockWithEntries failed for slot {} (missing SlotMeta)", .{slot});
         return error.SlotUnavailable;
     };
     defer slot_meta.deinit();
     if (!slot_meta.isFull()) {
-        self.logger.debug().logf("getCompleteBlockWithEntries failed for slot {} (slot not full)", .{slot});
+        self.logger.debug()
+            .logf("getCompleteBlockWithEntries failed for slot {} (slot not full)", .{slot});
         return error.SlotUnavailable;
     }
 
@@ -453,7 +472,8 @@ pub fn getCompleteBlockWithEntries(
         allocator.free(slot_entries);
     }
     if (slot_entries.len == 0) {
-        self.logger.debug().logf("getCompleteBlockWithEntries failed for slot {} (missing slot entries)", .{slot});
+        self.logger.debug()
+            .logf("getCompleteBlockWithEntries failed for slot {} (missing slot entries)", .{slot});
         return error.SlotUnavailable;
     }
 
@@ -596,7 +616,12 @@ pub fn getTransactionStatus(
 ) !?struct { Slot, TransactionStatusMeta } {
     if (self.rpc_metrics) |m| m.num_get_transaction_status.inc();
 
-    const status = try getTransactionStatusWithCounter(self, allocator, signature, confirmed_unrooted_slots);
+    const status = try getTransactionStatusWithCounter(
+        self,
+        allocator,
+        signature,
+        confirmed_unrooted_slots,
+    );
     return status[0];
 }
 
@@ -880,7 +905,12 @@ pub fn getConfirmedSignaturesForAddress(
     var infos = ArrayList(ConfirmedTransactionStatusWithSignature).init(allocator);
     for (address_signatures.items) |asig| {
         const the_slot, const signature = asig;
-        const maybe_status = try getTransactionStatus(self, allocator, signature, &confirmed_unrooted_slots);
+        const maybe_status = try getTransactionStatus(
+            self,
+            allocator,
+            signature,
+            &confirmed_unrooted_slots,
+        );
         const err = if (maybe_status) |status| status[1].status else null;
         const memo = if (try self.ledger.db.getBytes(
             schema.transaction_memos,
@@ -989,7 +1019,11 @@ fn findAddressSignaturesForSlot(
 const SlotPerfSample = struct { Slot, PerfSample };
 
 /// Analogous to [get_recent_perf_samples](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L3408)
-pub fn getRecentPerfSamples(self: *const Reader, allocator: Allocator, num: usize) !ArrayList(SlotPerfSample) {
+pub fn getRecentPerfSamples(
+    self: *const Reader,
+    allocator: Allocator,
+    num: usize,
+) !ArrayList(SlotPerfSample) {
     var samples = ArrayList(SlotPerfSample).init(allocator);
     var iterator = try self.ledger.db.iterator(schema.perf_samples, .reverse, null);
     defer iterator.deinit();
@@ -1165,7 +1199,10 @@ fn getSlotEntriesInBlock(
     }
     for (all_ranges_start_index..all_ranges_end_index) |index| {
         // TODO perf: multi_get_bytes
-        if (try self.ledger.db.getBytes(schema.data_shred, .{ slot, @intCast(index) })) |shred_bytes| {
+        if (try self.ledger.db.getBytes(
+            schema.data_shred,
+            .{ slot, @intCast(index) },
+        )) |shred_bytes| {
             defer shred_bytes.deinit();
             const shred = try Shred.fromPayload(allocator, shred_bytes.data);
             data_shreds.appendAssumeCapacity(shred.data);
@@ -1308,7 +1345,11 @@ pub fn isDuplicateConfirmed(self: *const Reader, allocator: Allocator, slot: Slo
 /// Returns information about a single optimistically confirmed slot
 ///
 /// Analogous to [get_optimistic_slot](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L3899)
-pub fn getOptimisticSlot(self: *const Reader, allocator: Allocator, slot: Slot) !?struct { Hash, UnixTimestamp } {
+pub fn getOptimisticSlot(
+    self: *const Reader,
+    allocator: Allocator,
+    slot: Slot,
+) !?struct { Hash, UnixTimestamp } {
     const meta = try self.ledger.db.get(allocator, schema.optimistic_slots, slot) orelse
         return null;
     return .{ meta.V0.hash, meta.V0.timestamp };
@@ -1649,7 +1690,10 @@ test "getFirstDuplicateProof" {
     var registry = sig.prometheus.Registry(.{}).init(allocator);
     defer registry.deinit();
 
-    const path = std.fmt.comptimePrint("{s}/{s}", .{ sig.TEST_STATE_DIR ++ "blockstore/insert_shred", "getFirstDuplicateProof" });
+    const path = std.fmt.comptimePrint(
+        "{s}/{s}",
+        .{ sig.TEST_STATE_DIR ++ "blockstore/insert_shred", "getFirstDuplicateProof" },
+    );
     try sig.ledger.tests.freshDir(path);
     var db = try LedgerDB.open(allocator, logger, path);
     defer db.deinit();

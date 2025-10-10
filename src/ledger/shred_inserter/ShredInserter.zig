@@ -1076,8 +1076,10 @@ fn updateSlotMeta(
     slot_meta.received = @max(@as(u64, @intCast(index)) + 1, slot_meta.received);
     if (first_insert) {
         // predict the timestamp of what would have been the first shred in this slot
-        const slot_time_elapsed = @as(u64, @intCast(reference_tick)) * 1000 / DEFAULT_TICKS_PER_SECOND;
-        slot_meta.first_shred_timestamp_milli = @as(u64, @intCast(std.time.milliTimestamp())) -| slot_time_elapsed;
+        const slot_time_elapsed =
+            @as(u64, @intCast(reference_tick)) * 1000 / DEFAULT_TICKS_PER_SECOND;
+        slot_meta.first_shred_timestamp_milli =
+            @as(u64, @intCast(std.time.milliTimestamp())) -| slot_time_elapsed;
     }
     slot_meta.consecutive_received_from_0 = new_consecutive_received_from_0;
     // If the last index in the slot hasn't been set before, then
@@ -1273,7 +1275,11 @@ const ShredInserterTestState = struct {
     }
 };
 
-pub fn insertShredsForTest(self: *const ShredInserter, allocator: Allocator, shreds: []const Shred) !Result {
+pub fn insertShredsForTest(
+    self: *const ShredInserter,
+    allocator: Allocator,
+    shreds: []const Shred,
+) !Result {
     const is_repairs = try allocator.alloc(bool, shreds.len);
     defer allocator.free(is_repairs);
     for (0..shreds.len) |i| {
@@ -1349,7 +1355,7 @@ test "chaining basic" {
     var result = try state.insertShredBytes(slots[1]);
     result.deinit();
     {
-        var slot_meta: SlotMeta = (try state.ledger.db.get(state.allocator(), schema.slot_meta, 1)).?;
+        var slot_meta = (try state.ledger.db.get(state.allocator(), schema.slot_meta, 1)).?;
         defer slot_meta.deinit();
         try std.testing.expectEqualSlices(u64, &.{}, slot_meta.child_slots.items);
         try std.testing.expect(!slot_meta.isConnected());
@@ -1361,7 +1367,7 @@ test "chaining basic" {
     result = try state.insertShredBytes(slots[2]);
     result.deinit();
     {
-        var slot_meta: SlotMeta = (try state.ledger.db.get(state.allocator(), schema.slot_meta, 1)).?;
+        var slot_meta = (try state.ledger.db.get(state.allocator(), schema.slot_meta, 1)).?;
         defer slot_meta.deinit();
         try std.testing.expectEqualSlices(u64, &.{2}, slot_meta.child_slots.items);
         try std.testing.expect(!slot_meta.isConnected()); // since 0 is not yet inserted
@@ -1369,7 +1375,7 @@ test "chaining basic" {
         try std.testing.expectEqual(shreds_per_slot - 1, slot_meta.last_index);
     }
     {
-        var slot_meta: SlotMeta = (try state.ledger.db.get(state.allocator(), schema.slot_meta, 2)).?;
+        var slot_meta = (try state.ledger.db.get(state.allocator(), schema.slot_meta, 2)).?;
         defer slot_meta.deinit();
         try std.testing.expectEqualSlices(u64, &.{}, slot_meta.child_slots.items);
         try std.testing.expect(!slot_meta.isConnected()); // since 0 is not yet inserted
@@ -1381,7 +1387,7 @@ test "chaining basic" {
     result = try state.insertShredBytes(slots[0]);
     result.deinit();
     {
-        var slot_meta: SlotMeta = (try state.ledger.db.get(state.allocator(), schema.slot_meta, 0)).?;
+        var slot_meta = (try state.ledger.db.get(state.allocator(), schema.slot_meta, 0)).?;
         defer slot_meta.deinit();
         try std.testing.expectEqualSlices(u64, &.{1}, slot_meta.child_slots.items);
         try std.testing.expect(slot_meta.isConnected());
@@ -1389,7 +1395,7 @@ test "chaining basic" {
         try std.testing.expectEqual(shreds_per_slot - 1, slot_meta.last_index);
     }
     {
-        var slot_meta: SlotMeta = (try state.ledger.db.get(state.allocator(), schema.slot_meta, 1)).?;
+        var slot_meta = (try state.ledger.db.get(state.allocator(), schema.slot_meta, 1)).?;
         defer slot_meta.deinit();
         try std.testing.expectEqualSlices(u64, &.{2}, slot_meta.child_slots.items);
         try std.testing.expect(slot_meta.isConnected());
@@ -1397,7 +1403,7 @@ test "chaining basic" {
         try std.testing.expectEqual(shreds_per_slot - 1, slot_meta.last_index);
     }
     {
-        var slot_meta: SlotMeta = (try state.ledger.db.get(state.allocator(), schema.slot_meta, 2)).?;
+        var slot_meta = (try state.ledger.db.get(state.allocator(), schema.slot_meta, 2)).?;
         defer slot_meta.deinit();
         try std.testing.expectEqualSlices(u64, &.{}, slot_meta.child_slots.items);
         try std.testing.expect(slot_meta.isConnected());

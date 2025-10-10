@@ -328,7 +328,10 @@ pub fn scanAndFixRoots(
             try setRoots(self, chunk);
         }
     } else {
-        self.logger.debug().logf("No missing roots found in range {} to {}", .{ start_root, end_slot });
+        self.logger.debug().logf(
+            "No missing roots found in range {} to {}",
+            .{ start_root, end_slot },
+        );
     }
     const fix_roots_us = fix_roots_timer.read().asMicros();
     const num_roots_fixed = roots_to_fix.items.len;
@@ -513,7 +516,10 @@ test "markSlotsAsIfRootedNormallyAtStartup with hash" {
             .frozen_hash = maybe_hash.?,
             .is_duplicate_confirmed = true,
         } };
-        try std.testing.expectEqual(expected_value, try state.db.get(allocator, schema.bank_hash, slot));
+        try std.testing.expectEqual(
+            expected_value,
+            try state.db.get(allocator, schema.bank_hash, slot),
+        );
     }
 
     try std.testing.expectError(
