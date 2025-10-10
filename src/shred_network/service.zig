@@ -43,7 +43,7 @@ pub const ShredNetworkDependencies = struct {
     allocator: Allocator,
     logger: Logger,
     random: Random,
-    ledger_db: sig.ledger.LedgerDB,
+    ledger: *sig.ledger.Ledger,
     registry: *Registry(.{}),
     /// This validator's keypair
     my_keypair: *const KeyPair,
@@ -133,15 +133,6 @@ pub fn start(
     );
     try defers.deferCall(BasicShredTracker.deinit, .{shred_tracker});
 
-    const shred_inserter = try arena.create(sig.ledger.ShredInserter);
-    shred_inserter.* = try sig.ledger.ShredInserter.init(
-        deps.allocator,
-        .from(deps.logger),
-        deps.registry,
-        deps.ledger_db,
-    );
-    try defers.deferCall(sig.ledger.ShredInserter.deinit, .{shred_inserter});
-
     // processor (thread)
     const processor = shred_network.shred_processor;
     try service_manager.spawn(
@@ -155,7 +146,7 @@ pub fn start(
             processor.Params{
                 .verified_shred_receiver = shreds_to_insert_channel,
                 .tracker = shred_tracker,
-                .inserter = shred_inserter,
+                .ledger = deps.ledger,
                 .leader_schedule = deps.epoch_context_mgr.slotLeaders(),
             },
         },
@@ -270,14 +261,14 @@ test "start and stop gracefully" {
     var epoch_ctx = try EpochContextManager.init(allocator, sig.core.EpochSchedule.DEFAULT);
     defer epoch_ctx.deinit();
 
-    var ledger_db = try sig.ledger.tests.TestDB.init(@src());
-    defer ledger_db.deinit();
+    var state = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
+    defer state.deinit();
 
     const deps: ShredNetworkDependencies = .{
         .allocator = allocator,
         .logger = .FOR_TESTS,
         .random = rng.random(),
-        .ledger_db = ledger_db,
+        .ledger = &state,
         .registry = &registry,
         .my_keypair = &keypair,
         .exit = &exit,

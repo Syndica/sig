@@ -6,17 +6,17 @@ const ledger = @import("lib.zig");
 
 const Allocator = std.mem.Allocator;
 
-const LedgerDB = ledger.LedgerDB;
+const LedgerDB = ledger.db.LedgerDB;
 const Entry = sig.core.Entry;
+
 const Shred = ledger.shred.Shred;
 const Slot = sig.core.Slot;
 const DirectPrintLogger = sig.trace.DirectPrintLogger;
 const Logger = sig.trace.Logger("ledger.tests");
 const SlotMeta = ledger.meta.SlotMeta;
-const VersionedTransactionWithStatusMeta = ledger.reader.VersionedTransactionWithStatusMeta;
+const VersionedTransactionWithStatusMeta = ledger.Reader.VersionedTransactionWithStatusMeta;
 
 const comptimePrint = std.fmt.comptimePrint;
-const insertShredsForTest = ledger.shred_inserter.shred_inserter.insertShredsForTest;
 
 const schema = ledger.schema.schema;
 
@@ -24,7 +24,7 @@ test "put/get data consistency for merkle root" {
     var prng = std.Random.DefaultPrng.init(100);
     const random = prng.random();
 
-    var db = try TestDB.init(@src());
+    var db = try initTestDB(std.testing.allocator, @src());
     defer db.deinit();
 
     const id = sig.ledger.shred.ErasureSetId{
@@ -59,33 +59,45 @@ test "insert shreds and transaction statuses then get blocks" {
 
     const logger = test_logger.logger("ledger.test");
 
-    var state = try TestState.init(std.testing.allocator, @src(), .from(logger));
-    const result = try insertDataForBlockTest(state);
+    var ledger_state = try initTestLedger(std.testing.allocator, @src(), .from(logger));
+    defer ledger_state.deinit();
+
+    const result = try insertDataForBlockTest(&ledger_state);
     defer result.deinit();
 
     const blockhash = result.entries[result.entries.len - 1].hash;
 
-    defer state.deinit();
-    const allocator = state.allocator;
+    const allocator = ledger_state.db.allocator;
 
-    var db = state.db;
-    var reader = try state.reader();
+    var db = ledger_state.db;
 
     const slot = result.slot;
 
+    var reader = ledger_state.reader();
+
     // Even if marked as root, a slot that is empty of entries should return an error
-    try std.testing.expectError(error.SlotUnavailable, reader.getRootedBlock(slot - 1, true));
+    try std.testing.expectError(
+        error.SlotUnavailable,
+        reader.getRootedBlock(allocator, slot - 1, true),
+    );
 
     // The previous_blockhash of `expected_block` is default because its parent slot is a root,
     // but empty of entries (eg. snapshot root slots). This now returns an error.
-    try std.testing.expectError(error.ParentEntriesUnavailable, reader.getRootedBlock(slot, true));
+    try std.testing.expectError(
+        error.ParentEntriesUnavailable,
+        reader.getRootedBlock(allocator, slot, true),
+    );
 
     // Test if require_previous_blockhash is false
     {
-        const confirmed_block = try reader.getRootedBlock(slot, false);
+        const confirmed_block = try reader.getRootedBlock(
+            allocator,
+            slot,
+            false,
+        );
         defer confirmed_block.deinit(allocator);
         try std.testing.expectEqual(100, confirmed_block.transactions.len);
-        const expected_block: ledger.reader.VersionedConfirmedBlock = .{
+        const expected_block: ledger.Reader.VersionedConfirmedBlock = .{
             .allocator = allocator,
             .transactions = result.expected_transactions,
             .parent_slot = slot - 1,
@@ -99,10 +111,14 @@ test "insert shreds and transaction statuses then get blocks" {
         try std.testing.expect(sig.utils.types.eql(expected_block, confirmed_block));
     }
 
-    const confirmed_block = try reader.getRootedBlock(slot + 1, false);
+    const confirmed_block = try reader.getRootedBlock(
+        allocator,
+        slot + 1,
+        false,
+    );
     defer confirmed_block.deinit(allocator);
     try std.testing.expectEqual(100, confirmed_block.transactions.len);
-    var expected_block = ledger.reader.VersionedConfirmedBlock{
+    var expected_block = ledger.Reader.VersionedConfirmedBlock{
         .allocator = allocator,
         .transactions = result.expected_transactions,
         .parent_slot = slot,
@@ -115,12 +131,19 @@ test "insert shreds and transaction statuses then get blocks" {
     };
     try std.testing.expect(sig.utils.types.eql(expected_block, confirmed_block));
 
-    try std.testing.expectError(error.SlotNotRooted, reader.getRootedBlock(slot + 2, true));
+    try std.testing.expectError(
+        error.SlotNotRooted,
+        reader.getRootedBlock(allocator, slot + 2, true),
+    );
 
-    const complete_block = try reader.getCompleteBlock(slot + 2, true);
+    const complete_block = try reader.getCompleteBlock(
+        allocator,
+        slot + 2,
+        true,
+    );
     defer complete_block.deinit(allocator);
     try std.testing.expectEqual(100, complete_block.transactions.len);
-    var expected_complete_block = ledger.reader.VersionedConfirmedBlock{
+    var expected_complete_block = ledger.Reader.VersionedConfirmedBlock{
         .allocator = allocator,
         .transactions = result.expected_transactions,
         .parent_slot = slot + 1,
@@ -142,7 +165,11 @@ test "insert shreds and transaction statuses then get blocks" {
         try db.put(schema.block_height, slot + 1, block_height);
         expected_block.block_height = block_height;
 
-        const confirmed_block_extra = try reader.getRootedBlock(slot + 1, true);
+        const confirmed_block_extra = try reader.getRootedBlock(
+            allocator,
+            slot + 1,
+            true,
+        );
         defer confirmed_block_extra.deinit(allocator);
         try std.testing.expect(sig.utils.types.eql(expected_block, confirmed_block_extra));
     }
@@ -154,7 +181,11 @@ test "insert shreds and transaction statuses then get blocks" {
         try db.put(schema.block_height, slot + 2, block_height);
         expected_complete_block.block_height = block_height;
 
-        const complete_block_extra = try reader.getCompleteBlock(slot + 2, true);
+        const complete_block_extra = try reader.getCompleteBlock(
+            allocator,
+            slot + 2,
+            true,
+        );
         defer complete_block_extra.deinit(allocator);
         try std.testing.expect(sig.utils.types.eql(expected_complete_block, complete_block_extra));
     }
@@ -274,93 +305,32 @@ pub fn loadEntriesFromFile(allocator: Allocator, path: []const u8) ![]const Entr
     return entries.toOwnedSlice();
 }
 
-pub const TestState = struct {
-    db: LedgerDB,
-    registry: sig.prometheus.Registry(.{}),
-    lowest_cleanup_slot: sig.sync.RwMux(Slot),
-    max_root: std.atomic.Value(Slot),
+pub fn initTestLedger(
     allocator: std.mem.Allocator,
+    comptime test_src: std.builtin.SourceLocation,
     logger: Logger,
+) !ledger.Ledger {
+    var db = try initTestDB(allocator, test_src);
+    errdefer db.deinit();
 
-    const Self = @This();
+    return ledger.Ledger{
+        .db = db,
+        .highest_slot_cleaned = sig.sync.RwMux(Slot).init(0),
+        .max_root = std.atomic.Value(Slot).init(0),
+        .logger = .from(logger),
+        .metrics = null,
+    };
+}
 
-    pub fn init(
-        allocator: std.mem.Allocator,
-        comptime test_src: std.builtin.SourceLocation,
-        logger: Logger,
-    ) !*Self {
-        const self = try allocator.create(Self);
-        self.* = .{
-            .allocator = allocator,
-            .db = try TestDB.initCustom(allocator, test_src),
-            .registry = sig.prometheus.Registry(.{}).init(allocator),
-            .lowest_cleanup_slot = sig.sync.RwMux(Slot).init(0),
-            .max_root = std.atomic.Value(Slot).init(0),
-            .logger = logger,
-        };
-        return self;
-    }
-
-    pub fn shredInserter(self: *Self) !ledger.ShredInserter {
-        return ledger.ShredInserter.init(
-            self.allocator,
-            .from(self.logger),
-            &self.registry,
-            self.db,
-        );
-    }
-
-    pub fn writer(self: *Self) !ledger.LedgerResultWriter {
-        return try ledger.LedgerResultWriter.init(
-            self.allocator,
-            .from(self.logger),
-            self.db,
-            &self.registry,
-            &self.lowest_cleanup_slot,
-            &self.max_root,
-        );
-    }
-
-    pub fn reader(self: *Self) !ledger.LedgerReader {
-        return try ledger.LedgerReader.init(
-            self.allocator,
-            .from(self.logger),
-            self.db,
-            &self.registry,
-            &self.lowest_cleanup_slot,
-            &self.max_root,
-        );
-    }
-
-    pub fn deinit(self: *Self) void {
-        self.db.deinit();
-        self.registry.deinit();
-        self.allocator.destroy(self);
-    }
-};
-
-pub const TestDB = struct {
+fn initTestDB(
+    allocator: Allocator,
+    comptime test_src: std.builtin.SourceLocation,
+) !LedgerDB {
     const dir = sig.TEST_STATE_DIR ++ "/blockstore";
-
-    pub fn init(comptime test_src: std.builtin.SourceLocation) !LedgerDB {
-        return try initCustom(std.testing.allocator, test_src);
-    }
-
-    pub fn reuseLedger(comptime test_src: std.builtin.SourceLocation) !LedgerDB {
-        const path = comptimePrint("{s}/{s}/{s}", .{ dir, test_src.file, test_src.fn_name });
-        try std.fs.cwd().makePath(path);
-        return try LedgerDB.open(std.testing.allocator, .noop, path);
-    }
-
-    pub fn initCustom(
-        allocator: Allocator,
-        comptime test_src: std.builtin.SourceLocation,
-    ) !LedgerDB {
-        const path = comptimePrint("{s}/{s}/{s}", .{ dir, test_src.file, test_src.fn_name });
-        try sig.ledger.tests.freshDir(path);
-        return try LedgerDB.open(allocator, .noop, path);
-    }
-};
+    const path = comptimePrint("{s}/{s}/{s}", .{ dir, test_src.file, test_src.fn_name });
+    try sig.ledger.tests.freshDir(path);
+    return try LedgerDB.open(allocator, .noop, path);
+}
 
 const InsertDataForBlockResult = struct {
     allocator: Allocator,
@@ -379,12 +349,10 @@ const InsertDataForBlockResult = struct {
     }
 };
 
-pub fn insertDataForBlockTest(state: *TestState) !InsertDataForBlockResult {
-    const allocator = state.allocator;
+pub fn insertDataForBlockTest(state: *ledger.Ledger) !InsertDataForBlockResult {
+    const allocator = state.db.allocator;
 
     var db = state.db;
-    var inserter = try state.shredInserter();
-    var writer = try state.writer();
 
     const slot = 10;
 
@@ -405,14 +373,16 @@ pub fn insertDataForBlockTest(state: *TestState) !InsertDataForBlockResult {
         deinitShreds(allocator, slice);
     };
 
-    var result = try insertShredsForTest(&inserter, shreds);
+    var shred_inserter = state.shredInserter();
+    var result = try shred_inserter.insertShredsForTest(allocator, shreds);
     result.deinit();
-    result = try insertShredsForTest(&inserter, more_shreds);
+    result = try shred_inserter.insertShredsForTest(allocator, more_shreds);
     result.deinit();
-    result = try insertShredsForTest(&inserter, unrooted_shreds);
+    result = try shred_inserter.insertShredsForTest(allocator, unrooted_shreds);
     result.deinit();
 
-    try writer.setRoots(&.{ slot - 1, slot, slot + 1 });
+    var result_writer = state.resultWriter();
+    try result_writer.setRoots(&.{ slot - 1, slot, slot + 1 });
 
     const parent_meta = SlotMeta.init(allocator, 0, null);
     try db.put(schema.slot_meta, slot - 1, parent_meta);
