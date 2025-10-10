@@ -52,22 +52,21 @@ test "put/get data consistency for merkle root" {
 
 // Analogous to [test_get_rooted_block](https://github.com/anza-xyz/agave/blob/a72f981370c3f566fc1becf024f3178da041547a/ledger/src/blockstore.rs#L8271)
 test "insert shreds and transaction statuses then get blocks" {
+    const allocator = std.testing.allocator;
     var test_logger = DirectPrintLogger.init(
-        std.testing.allocator,
+        allocator,
         Logger.TEST_DEFAULT_LEVEL,
     );
 
     const logger = test_logger.logger("ledger.test");
 
-    var ledger_state = try initTestLedger(std.testing.allocator, @src(), .from(logger));
+    var ledger_state = try initTestLedger(allocator, @src(), .from(logger));
     defer ledger_state.deinit();
 
-    const result = try insertDataForBlockTest(&ledger_state);
+    const result = try insertDataForBlockTest(&ledger_state, allocator);
     defer result.deinit();
 
     const blockhash = result.entries[result.entries.len - 1].hash;
-
-    const allocator = ledger_state.db.allocator;
 
     var db = ledger_state.db;
 
@@ -349,9 +348,10 @@ const InsertDataForBlockResult = struct {
     }
 };
 
-pub fn insertDataForBlockTest(state: *ledger.Ledger) !InsertDataForBlockResult {
-    const allocator = state.db.allocator;
-
+pub fn insertDataForBlockTest(
+    state: *ledger.Ledger,
+    allocator: Allocator,
+) !InsertDataForBlockResult {
     var db = state.db;
 
     const slot = 10;

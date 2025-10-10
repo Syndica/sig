@@ -1209,47 +1209,44 @@ const ShredInserterTestState = struct {
     ledger: ledger_mod.Ledger,
 
     pub fn init(
-        allocator_: std.mem.Allocator,
+        allocator: std.mem.Allocator,
         comptime test_src: std.builtin.SourceLocation,
     ) !ShredInserterTestState {
         var test_logger = DirectPrintLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
         const logger = test_logger.logger("shred_inserter.test");
-        return initWithLogger(allocator_, test_src, .from(logger));
+        return initWithLogger(allocator, test_src, .from(logger));
     }
 
     fn initWithLogger(
-        allocator_: std.mem.Allocator,
+        allocator: std.mem.Allocator,
         comptime test_src: std.builtin.SourceLocation,
         logger: Logger,
     ) !ShredInserterTestState {
-        const self = try initTestLedger(allocator_, test_src, .from(logger));
-        return .{ .ledger = self };
-    }
-
-    pub fn allocator(self: ShredInserterTestState) Allocator {
-        return self.ledger.db.allocator;
+        const ledger = try initTestLedger(allocator, test_src, .from(logger));
+        return .{ .ledger = ledger };
     }
 
     /// Test helper to convert raw bytes into shreds and pass them to insertShreds
     fn insertShredBytes(
         self: *ShredInserterTestState,
+        allocator: std.mem.Allocator,
         shred_payloads: []const []const u8,
     ) !Result {
-        const shreds = try self.allocator().alloc(Shred, shred_payloads.len);
+        const shreds = try allocator.alloc(Shred, shred_payloads.len);
         defer {
             for (shreds) |shred| shred.deinit();
-            self.allocator().free(shreds);
+            allocator.free(shreds);
         }
         for (shred_payloads, 0..) |payload, i| {
-            shreds[i] = try Shred.fromPayload(self.allocator(), payload);
+            shreds[i] = try Shred.fromPayload(allocator, payload);
         }
-        const is_repairs = try self.allocator().alloc(bool, shreds.len);
-        defer self.allocator().free(is_repairs);
+        const is_repairs = try allocator.alloc(bool, shreds.len);
+        defer allocator.free(is_repairs);
         for (0..shreds.len) |i| {
             is_repairs[i] = false;
         }
         const shred_inserter = self.ledger.shredInserter();
-        return insertShreds(&shred_inserter, self.allocator(), shreds, is_repairs, .{});
+        return insertShreds(&shred_inserter, allocator, shreds, is_repairs, .{});
     }
 
     fn testCheckInsertCodeShred(
@@ -1289,9 +1286,9 @@ pub fn insertShredsForTest(
 }
 
 test "insertShreds single shred" {
+    const allocator = std.testing.allocator;
     var state = try ShredInserterTestState.init(std.testing.allocator, @src());
     defer state.deinit();
-    const allocator = std.testing.allocator;
     const shred = try Shred.fromPayload(allocator, &ledger_mod.shred.test_data_shred);
     defer shred.deinit();
     const shred_inserter = state.ledger.shredInserter();
@@ -1307,6 +1304,7 @@ test "insertShreds single shred" {
 }
 
 test "insertShreds 100 shreds from mainnet" {
+    const allocator = std.testing.allocator;
     var state = try ShredInserterTestState.init(std.testing.allocator, @src());
     defer state.deinit();
 
@@ -1322,7 +1320,7 @@ test "insertShreds 100 shreds from mainnet" {
     const shred_inserter = state.ledger.shredInserter();
     const result = try insertShredsForTest(
         &shred_inserter,
-        state.allocator(),
+        allocator,
         shreds.items,
     );
     result.deinit();
@@ -1338,6 +1336,7 @@ test "insertShreds 100 shreds from mainnet" {
 
 // agave: test_handle_chaining_basic
 test "chaining basic" {
+    const allocator = std.testing.allocator;
     var state = try ShredInserterTestState.init(std.testing.allocator, @src());
     defer state.deinit();
 
@@ -1352,10 +1351,10 @@ test "chaining basic" {
     };
 
     // insert slot 1
-    var result = try state.insertShredBytes(slots[1]);
+    var result = try state.insertShredBytes(allocator, slots[1]);
     result.deinit();
     {
-        var slot_meta = (try state.ledger.db.get(state.allocator(), schema.slot_meta, 1)).?;
+        var slot_meta = (try state.ledger.db.get(allocator, schema.slot_meta, 1)).?;
         defer slot_meta.deinit();
         try std.testing.expectEqualSlices(u64, &.{}, slot_meta.child_slots.items);
         try std.testing.expect(!slot_meta.isConnected());
@@ -1364,10 +1363,10 @@ test "chaining basic" {
     }
 
     // insert slot 2
-    result = try state.insertShredBytes(slots[2]);
+    result = try state.insertShredBytes(allocator, slots[2]);
     result.deinit();
     {
-        var slot_meta = (try state.ledger.db.get(state.allocator(), schema.slot_meta, 1)).?;
+        var slot_meta = (try state.ledger.db.get(allocator, schema.slot_meta, 1)).?;
         defer slot_meta.deinit();
         try std.testing.expectEqualSlices(u64, &.{2}, slot_meta.child_slots.items);
         try std.testing.expect(!slot_meta.isConnected()); // since 0 is not yet inserted
@@ -1375,7 +1374,7 @@ test "chaining basic" {
         try std.testing.expectEqual(shreds_per_slot - 1, slot_meta.last_index);
     }
     {
-        var slot_meta = (try state.ledger.db.get(state.allocator(), schema.slot_meta, 2)).?;
+        var slot_meta = (try state.ledger.db.get(allocator, schema.slot_meta, 2)).?;
         defer slot_meta.deinit();
         try std.testing.expectEqualSlices(u64, &.{}, slot_meta.child_slots.items);
         try std.testing.expect(!slot_meta.isConnected()); // since 0 is not yet inserted
@@ -1384,10 +1383,10 @@ test "chaining basic" {
     }
 
     // insert slot 0
-    result = try state.insertShredBytes(slots[0]);
+    result = try state.insertShredBytes(allocator, slots[0]);
     result.deinit();
     {
-        var slot_meta = (try state.ledger.db.get(state.allocator(), schema.slot_meta, 0)).?;
+        var slot_meta = (try state.ledger.db.get(allocator, schema.slot_meta, 0)).?;
         defer slot_meta.deinit();
         try std.testing.expectEqualSlices(u64, &.{1}, slot_meta.child_slots.items);
         try std.testing.expect(slot_meta.isConnected());
@@ -1395,7 +1394,7 @@ test "chaining basic" {
         try std.testing.expectEqual(shreds_per_slot - 1, slot_meta.last_index);
     }
     {
-        var slot_meta = (try state.ledger.db.get(state.allocator(), schema.slot_meta, 1)).?;
+        var slot_meta = (try state.ledger.db.get(allocator, schema.slot_meta, 1)).?;
         defer slot_meta.deinit();
         try std.testing.expectEqualSlices(u64, &.{2}, slot_meta.child_slots.items);
         try std.testing.expect(slot_meta.isConnected());
@@ -1403,7 +1402,7 @@ test "chaining basic" {
         try std.testing.expectEqual(shreds_per_slot - 1, slot_meta.last_index);
     }
     {
-        var slot_meta = (try state.ledger.db.get(state.allocator(), schema.slot_meta, 2)).?;
+        var slot_meta = (try state.ledger.db.get(allocator, schema.slot_meta, 2)).?;
         defer slot_meta.deinit();
         try std.testing.expectEqualSlices(u64, &.{}, slot_meta.child_slots.items);
         try std.testing.expect(slot_meta.isConnected());
@@ -1414,9 +1413,9 @@ test "chaining basic" {
 
 // agave: test_merkle_root_metas_coding
 test "merkle root metas coding" {
+    const allocator = std.testing.allocator;
     var state = try ShredInserterTestState.initWithLogger(std.testing.allocator, @src(), .noop);
     defer state.deinit();
-    const allocator = state.allocator();
 
     const slot = 1;
     const start_index = 0;
@@ -1432,7 +1431,7 @@ test "merkle root metas coding" {
         defer write_batch.deinit();
         const this_shred = shreds[0];
         var insert_state = try PendingInsertShredsState.init(
-            state.allocator(),
+            allocator,
             .noop,
             &state.ledger.db,
             null,
@@ -1468,7 +1467,7 @@ test "merkle root metas coding" {
     }
 
     var insert_state = try PendingInsertShredsState.init(
-        state.allocator(),
+        allocator,
         .noop,
         &state.ledger.db,
         null,
@@ -1502,7 +1501,7 @@ test "merkle root metas coding" {
         const original_erasure_set_id = shreds[0].commonHeader().erasureSetId();
         const original_meta_from_map = merkle_root_metas.get(original_erasure_set_id).?.asRef();
         const original_meta_from_db = (try state.ledger.db.get(
-            state.allocator(),
+            allocator,
             schema.merkle_root_meta,
             original_erasure_set_id,
         )).?;
@@ -1539,7 +1538,7 @@ test "merkle root metas coding" {
         const original_erasure_set_id = shreds[0].commonHeader().erasureSetId();
         const original_meta_from_map = merkle_root_metas.get(original_erasure_set_id).?.asRef();
         const original_meta_from_db = (try state.ledger.db.get(
-            state.allocator(),
+            allocator,
             schema.merkle_root_meta,
             original_erasure_set_id,
         )).?;
@@ -1564,9 +1563,9 @@ test "merkle root metas coding" {
 
 // agave: test_recovery
 test "recovery" {
+    const allocator = std.testing.allocator;
     var state = try ShredInserterTestState.init(std.testing.allocator, @src());
     defer state.deinit();
-    const allocator = state.allocator();
 
     const shreds = try loadShredsFromFile(
         allocator,

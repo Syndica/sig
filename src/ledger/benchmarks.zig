@@ -176,7 +176,7 @@ pub const BenchmarkLedger = struct {
     pub fn @"LedgerReader.getCompleteBlock"() !sig.time.Duration {
         var state = try initTestLedger(std.heap.c_allocator, @src(), .noop);
         defer state.deinit();
-        const result = try ledger_tests.insertDataForBlockTest(&state);
+        const result = try ledger_tests.insertDataForBlockTest(&state, std.heap.c_allocator);
         result.deinit();
 
         const reader = state.reader();
@@ -192,7 +192,7 @@ pub const BenchmarkLedger = struct {
     pub fn @"LedgerReader.getDataShredsForSlot"() !sig.time.Duration {
         var state = try initTestLedger(std.heap.c_allocator, @src(), .noop);
         defer state.deinit();
-        const result = try ledger_tests.insertDataForBlockTest(&state);
+        const result = try ledger_tests.insertDataForBlockTest(&state, std.heap.c_allocator);
         result.deinit();
 
         const reader = state.reader();
@@ -210,7 +210,7 @@ pub const BenchmarkLedger = struct {
     pub fn @"LedgerReader.getSlotEntriesWithShredInfo"() !sig.time.Duration {
         var state = try initTestLedger(std.heap.c_allocator, @src(), .noop);
         defer state.deinit();
-        const result = try ledger_tests.insertDataForBlockTest(&state);
+        const result = try ledger_tests.insertDataForBlockTest(&state, std.heap.c_allocator);
         result.deinit();
 
         const reader = state.reader();
@@ -291,24 +291,25 @@ pub const BenchmarkLedger = struct {
     ///
     /// Analogous to [bench_write_transaction_status]https://github.com/anza-xyz/agave/blob/ff1b22007c34669768c5b676cac491f580b39e0b/ledger/benches/blockstore.rs#L206
     pub fn @"LedgerResultWriter.writeTransactionStatus"() !sig.time.Duration {
+        const allocator = std.heap.c_allocator;
         const Signature = sig.core.Signature;
         const TransactionStatusMeta = ledger.transaction_status.TransactionStatusMeta;
 
-        var state = try initTestLedger(std.heap.c_allocator, @src(), .noop);
+        var state = try initTestLedger(allocator, @src(), .noop);
         defer state.deinit();
         var rng = std.Random.DefaultPrng.init(100);
 
         var signatures: std.ArrayList(Signature) =
-            try std.ArrayList(Signature).initCapacity(state.db.allocator, 64);
+            try std.ArrayList(Signature).initCapacity(allocator, 64);
         defer signatures.deinit();
         var writable_keys =
-            try std.ArrayList(std.ArrayList(Pubkey)).initCapacity(state.db.allocator, 64);
+            try std.ArrayList(std.ArrayList(Pubkey)).initCapacity(allocator, 64);
         defer {
             for (writable_keys.items) |l| l.deinit();
             writable_keys.deinit();
         }
         var readonly_keys =
-            try std.ArrayList(std.ArrayList(Pubkey)).initCapacity(state.db.allocator, 64);
+            try std.ArrayList(std.ArrayList(Pubkey)).initCapacity(allocator, 64);
         defer {
             for (readonly_keys.items) |l| l.deinit();
             readonly_keys.deinit();
@@ -316,13 +317,13 @@ pub const BenchmarkLedger = struct {
 
         for (0..64) |_| {
             // Two writable keys
-            var w_keys = try std.ArrayList(Pubkey).initCapacity(state.db.allocator, 2);
+            var w_keys = try std.ArrayList(Pubkey).initCapacity(allocator, 2);
             try w_keys.append(Pubkey.initRandom(rng.random()));
             try w_keys.append(Pubkey.initRandom(rng.random()));
             writable_keys.appendAssumeCapacity(w_keys);
 
             // Two readonly keys
-            var r_keys = try std.ArrayList(Pubkey).initCapacity(state.db.allocator, 2);
+            var r_keys = try std.ArrayList(Pubkey).initCapacity(allocator, 2);
             try r_keys.append(Pubkey.initRandom(rng.random()));
             try r_keys.append(Pubkey.initRandom(rng.random()));
             readonly_keys.appendAssumeCapacity(r_keys);
