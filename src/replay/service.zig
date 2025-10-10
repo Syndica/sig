@@ -62,7 +62,7 @@ pub const Service = struct {
                 .ledger_writer = deps.ledger.writer,
                 .exit = deps.exit,
                 .replay_votes_channel = state.replay_votes_channel,
-                .slot_tracker_rw = &state.slot_tracker,
+                .slot_tracker_rw = state.slot_tracker,
                 .epoch_tracker_rw = &state.epoch_tracker,
                 .external = consensus_deps,
             };
@@ -99,7 +99,7 @@ pub const Service = struct {
             self.replay.logger,
             self.replay.account_store,
             &self.replay.ledger.db,
-            &self.replay.slot_tracker,
+            self.replay.slot_tracker,
             &self.replay.epoch_tracker,
             &self.replay.slot_tree,
             self.replay.slot_leaders,
@@ -118,7 +118,7 @@ pub const Service = struct {
         if (self.consensus) |*consensus|
             try consensus.process(
                 allocator,
-                &self.replay.slot_tracker,
+                self.replay.slot_tracker,
                 &self.replay.epoch_tracker,
                 &self.replay.progress_map,
                 slot_results,
@@ -211,7 +211,7 @@ pub const ReplayState = struct {
     /// Borrowed across multiple threads (replay, vote_listener).
     /// These RwMuxes are deinitialized in `ReplayState.deinit()` only
     /// after all dependent threads have been joined based on defer order in `run`.
-    slot_tracker: RwMux(SlotTracker),
+    slot_tracker: *RwMux(SlotTracker),
     /// Lifetime rules are the same as `slot_tracker`.
     epoch_tracker: RwMux(EpochTracker),
     slot_tree: SlotTree,
@@ -230,6 +230,9 @@ pub const ReplayState = struct {
         var slots = self.slot_tracker.tryRead() orelse
             @panic("Slot tracker deinit while in use");
         slots.get().deinit(self.allocator);
+        slots.unlock();
+
+        self.allocator.destroy(self.slot_tracker);
 
         var epoch_tracker = self.epoch_tracker.tryRead() orelse
             @panic("Epoch tracker deinit while in use");
@@ -276,13 +279,17 @@ pub const ReplayState = struct {
         const slot_tree = try SlotTree.init(deps.allocator, deps.root.slot);
         errdefer slot_tree.deinit(deps.allocator);
 
+        const slot_tracker_rw = try deps.allocator.create(RwMux(SlotTracker));
+        errdefer deps.allocator.destroy(slot_tracker_rw);
+        slot_tracker_rw.* = RwMux(SlotTracker).init(slot_tracker);
+
         return .{
             .allocator = deps.allocator,
             .logger = .from(deps.logger),
             .thread_pool = .init(.{ .max_threads = num_threads }),
             .my_identity = deps.my_identity,
             .slot_leaders = deps.slot_leaders,
-            .slot_tracker = .init(slot_tracker),
+            .slot_tracker = slot_tracker_rw,
             .epoch_tracker = .init(epoch_tracker),
             .slot_tree = slot_tree,
             .hard_forks = deps.hard_forks.take(),
@@ -874,7 +881,7 @@ test "process runs without error with no replay results" {
     // coverage. currently consensus panics or hangs if you run it with actual data
     _ = try service.consensus.?.process(
         allocator,
-        &service.replay.slot_tracker,
+        service.replay.slot_tracker,
         &service.replay.epoch_tracker,
         &service.replay.progress_map,
         &.{},
