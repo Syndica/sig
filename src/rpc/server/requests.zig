@@ -115,14 +115,14 @@ pub fn getRequestTargetResolve(
             const latest_full = latest_snapshot_gen_info.full;
             const full_info: FullSnapshotFileInfo = .{
                 .slot = latest_full.slot,
-                .hash = latest_full.hash,
+                .hash = latest_full.hash.checksum(),
             };
             const latest_incremental = latest_snapshot_gen_info.inc orelse
                 break :blk .{ full_info, null };
             const inc_info: IncrementalSnapshotFileInfo = .{
                 .base_slot = latest_full.slot,
                 .slot = latest_incremental.slot,
-                .hash = latest_incremental.hash,
+                .hash = latest_incremental.hash.checksum(),
             };
             break :blk .{ full_info, inc_info };
         };
