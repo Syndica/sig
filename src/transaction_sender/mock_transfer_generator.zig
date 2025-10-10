@@ -157,7 +157,7 @@ pub const MockTransferService = struct {
                 if (signature_status.confirmations == null) return true;
                 if (signature_status.err) |_| return false;
             }
-            std.time.sleep(sig.time.Duration.fromSecs(1).asNanos());
+            std.Thread.sleep(sig.time.Duration.fromSecs(1).asNanos());
         }
         return false;
     }

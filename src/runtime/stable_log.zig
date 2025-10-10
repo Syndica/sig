@@ -167,7 +167,7 @@ test "stable_log" {
         allocator,
         prng.random(),
         .{
-            .log_collector = LogCollector.default(),
+            .log_collector = try LogCollector.default(allocator),
         },
     );
     defer {
@@ -196,13 +196,13 @@ test "stable_log" {
         "Program SigDefau1tPubkey111111111111111111111111111 failed: Verifier error",
         "Program SigDefau1tPubkey111111111111111111111111111 failed: custom program error: 0x1234",
     };
-    const actual = tc.log_collector.?.collect();
+    var actual_iter = tc.log_collector.?.iterator();
 
-    try std.testing.expectEqualSlices(u8, expected[0], actual[0]);
-    try std.testing.expectEqualSlices(u8, expected[1], actual[1]);
-    try std.testing.expectEqualSlices(u8, expected[2], actual[2]);
-    try std.testing.expectEqualSlices(u8, expected[3], actual[3]);
-    try std.testing.expectEqualSlices(u8, expected[4], actual[4]);
-    try std.testing.expectEqualSlices(u8, expected[5], actual[5]);
-    try std.testing.expectEqualSlices(u8, expected[6], actual[6]);
+    try std.testing.expectEqualSlices(u8, expected[0], actual_iter.next().?);
+    try std.testing.expectEqualSlices(u8, expected[1], actual_iter.next().?);
+    try std.testing.expectEqualSlices(u8, expected[2], actual_iter.next().?);
+    try std.testing.expectEqualSlices(u8, expected[3], actual_iter.next().?);
+    try std.testing.expectEqualSlices(u8, expected[4], actual_iter.next().?);
+    try std.testing.expectEqualSlices(u8, expected[5], actual_iter.next().?);
+    try std.testing.expectEqualSlices(u8, expected[6], actual_iter.next().?);
 }
