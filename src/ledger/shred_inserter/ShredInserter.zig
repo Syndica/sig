@@ -220,8 +220,7 @@ pub fn insertShreds(
                         }
                     };
                 }
-                if (checkInsertDataShred(
-                    self,
+                if (self.checkInsertDataShred(
                     data_shred,
                     &state,
                     merkle_root_validator,
@@ -252,8 +251,7 @@ pub fn insertShreds(
             },
             .code => |code_shred| {
                 // TODO error handling?
-                _ = try checkInsertCodeShred(
-                    self,
+                _ = try self.checkInsertCodeShred(
                     code_shred,
                     &state,
                     merkle_root_validator,
@@ -275,8 +273,7 @@ pub fn insertShreds(
     if (options.slot_leaders) |leaders| {
         var reed_solomon_cache = try ReedSolomonCache.init(allocator);
         defer reed_solomon_cache.deinit();
-        const recovered_shreds = try tryShredRecovery(
-            self,
+        const recovered_shreds = try self.tryShredRecovery(
             allocator,
             &state.erasure_metas,
             &state.index_working_set,
@@ -318,8 +315,7 @@ pub fn insertShreds(
                     }
                 };
             }
-            if (checkInsertDataShred(
-                self,
+            if (self.checkInsertDataShred(
                 shred.data,
                 &state,
                 merkle_root_validator,
@@ -452,8 +448,7 @@ fn checkInsertCodeShred(
     const erasure_set_id = shred.common.erasureSetId();
     try state.merkleRootMetas().load(erasure_set_id);
 
-    if (!try shouldInsertCodeShred(
-        self,
+    if (!try self.shouldInsertCodeShred(
         state.allocator,
         state,
         merkle_root_validator,
@@ -688,8 +683,7 @@ fn checkInsertDataShred(
             try write_batch.put(schema.dead_slots, slot, true);
         }
 
-        if (!try shouldInsertDataShred(
-            self,
+        if (!try self.shouldInsertDataShred(
             state.allocator,
             shred,
             slot_meta,
@@ -714,8 +708,7 @@ fn checkInsertDataShred(
         }
     }
 
-    const newly_completed_data_sets = try insertDataShred(
-        self,
+    const newly_completed_data_sets = try self.insertDataShred(
         state.allocator,
         slot_meta,
         &index_meta.data_index,
