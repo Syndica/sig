@@ -1212,3 +1212,166 @@ test "detect and mark duplicate confirmed fork" {
     try std.testing.expect(dup_hash != null);
     try std.testing.expect(dup_hash.?.eql(slot1_hash));
 }
+
+// Test case:
+// - Setup: A duplicate slot is detected (e.g., via shred verification, different hash for same slot)
+//   and sent to the duplicate_slots channel
+// - Action: Call consensus.process() which will read from the channel via processDuplicateSlots()
+//   and mark the slot as duplicate
+//
+// NOTE: This test exercises the duplicate slot detection mechanism where:
+//   1. WindowService/ShredVerifier detects conflicting shreds for the same slot
+//   2. Sends the slot number to duplicate_slots channel
+//   3. consensus.process() -> processEdgeCases() -> processDuplicateSlots() reads from channel
+//   4. Marks slot in duplicate_slots_tracker and updates fork_choice to mark fork invalid
+//
+// States updated (setup):
+// - SlotTracker: root slot 0 and slot 1 (both frozen)
+// - EpochTracker: epoch 0 with validators
+// - ProgressMap: entries for slots 0 and 1
+// - duplicate_slots channel: slot 1 is sent to the channel (simulating duplicate detection)
+//
+// States asserted:
+// - consensus.slot_data.duplicate_slots contains slot 1
+// - Fork choice marks slot 1 as invalid candidate (checked via fork_choice state)
+test "detect and mark duplicate slot" {
+    const allocator = std.testing.allocator;
+
+    var stubs = try sig.replay.service.DependencyStubs.init(allocator, .noop);
+    defer stubs.deinit(allocator);
+
+    {
+        const SlotHistory = sig.runtime.sysvar.SlotHistory;
+        const slot_history = try SlotHistory.init(allocator);
+        defer slot_history.deinit(allocator);
+        const data = try allocator.alloc(u8, SlotHistory.STORAGE_SIZE);
+        defer allocator.free(data);
+        @memset(data, 0);
+        _ = try sig.bincode.writeToSlice(data, slot_history, .{});
+        const account = sig.runtime.AccountSharedData{
+            .lamports = 1,
+            .data = data,
+            .owner = sig.runtime.sysvar.OWNER_ID,
+            .executable = false,
+            .rent_epoch = 0,
+        };
+        const account_store = stubs.accountsdb.accountStore();
+        try account_store.put(0, SlotHistory.ID, account);
+    }
+
+    const root_slot: Slot = 0;
+    const root_consts = try sig.core.SlotConstants.genesis(allocator, .DEFAULT);
+    var root_state = try sig.core.SlotState.genesis(allocator);
+
+    root_state.hash.set(Hash.ZEROES);
+    {
+        var bhq = root_state.blockhash_queue.write();
+        defer bhq.unlock();
+        try bhq.mut().insertGenesisHash(allocator, Hash.ZEROES, 0);
+    }
+
+    var slot_tracker = try SlotTracker.init(allocator, root_slot, .{
+        .constants = root_consts,
+        .state = root_state,
+    });
+    defer slot_tracker.deinit(allocator);
+
+    const slot1_hash = Hash{ .data = .{1} ** Hash.SIZE };
+    {
+        var slot_constants = try sig.core.SlotConstants.genesis(allocator, .DEFAULT);
+        errdefer slot_constants.deinit(allocator);
+        slot_constants.parent_slot = root_slot;
+        slot_constants.parent_hash = Hash.ZEROES;
+        slot_constants.block_height = 1;
+
+        slot_constants.ancestors.deinit(allocator);
+        slot_constants.ancestors = .{};
+        try slot_constants.ancestors.ancestors.put(allocator, 0, {});
+        try slot_constants.ancestors.ancestors.put(allocator, 1, {});
+
+        var slot_state = try sig.core.SlotState.genesis(allocator);
+        errdefer slot_state.deinit(allocator);
+        slot_state.hash.set(slot1_hash);
+
+        try slot_tracker.put(allocator, 1, .{ .constants = slot_constants, .state = slot_state });
+    }
+
+    var slot_tracker_rw = RwMux(SlotTracker).init(slot_tracker);
+
+    var epoch_tracker: EpochTracker = .{
+        .epochs = .empty,
+        .schedule = sig.core.EpochSchedule.DEFAULT,
+    };
+    {
+        const epoch_consts = try sig.core.EpochConstants.genesis(allocator, .default(allocator));
+        errdefer epoch_consts.deinit(allocator);
+        try epoch_tracker.epochs.put(allocator, 0, epoch_consts);
+    }
+    defer epoch_tracker.deinit(allocator);
+    var epoch_tracker_rw = RwMux(EpochTracker).init(epoch_tracker);
+
+    var progress = sig.consensus.ProgressMap.INIT;
+    defer progress.deinit(allocator);
+    {
+        var fork_progress0 = try sig.consensus.progress_map.ForkProgress.zeroes(allocator);
+        fork_progress0.fork_stats.computed = true;
+        const fork_progress1 = try sig.consensus.progress_map.ForkProgress.zeroes(allocator);
+        try progress.map.put(allocator, 0, fork_progress0);
+        try progress.map.put(allocator, 1, fork_progress1);
+    }
+
+    var replay_votes_channel = try Channel(ParsedVote).create(allocator);
+    defer replay_votes_channel.destroy();
+
+    const external = TowerConsensus.Dependencies.External{
+        .senders = stubs.senders,
+        .receivers = stubs.receivers,
+        .gossip_table = null,
+        .run_vote_listener = false,
+    };
+
+    const deps = TowerConsensus.Dependencies{
+        .logger = .noop,
+        .my_identity = Pubkey.initRandom(std.crypto.random),
+        .vote_identity = Pubkey.initRandom(std.crypto.random),
+        .root_slot = root_slot,
+        .root_hash = Hash.ZEROES,
+        .account_reader = stubs.accountsdb.accountReader(),
+        .ledger_reader = stubs.ledger.reader,
+        .ledger_writer = stubs.ledger.result_writer,
+        .exit = &stubs.exit,
+        .replay_votes_channel = replay_votes_channel,
+        .slot_tracker_rw = &slot_tracker_rw,
+        .epoch_tracker_rw = &epoch_tracker_rw,
+        .external = external,
+    };
+
+    var consensus = try TowerConsensus.init(allocator, deps);
+    defer consensus.deinit(allocator);
+
+    try std.testing.expect(!consensus.slot_data.duplicate_slots.contains(1));
+
+    // SIMULATE DUPLICATE DETECTION: Send slot 1 to duplicate_slots channel
+    // In a real validator, this would happen when:
+    //   1. WindowService receives conflicting shreds for slot 1 (different hashes)
+    //   2. ShredVerifier confirms the shreds are valid but conflicting
+    //   3. Sends slot 1 to the duplicate_slots channel
+    try stubs.receivers.duplicate_slots.send(1);
+
+    {
+        const results = [_]ReplayResult{
+            .{ .slot = 1, .output = .{ .last_entry_hash = slot1_hash } },
+        };
+        try consensus.process(allocator, &slot_tracker_rw, &epoch_tracker_rw, &progress, &results);
+    }
+
+    // Assert: slot 1 is now marked as duplicate
+    try std.testing.expect(consensus.slot_data.duplicate_slots.contains(1));
+
+    // Assert: fork choice should have marked the fork as invalid
+    // (The slot should be marked as invalid candidate in fork_choice)
+    // A fork is considered invalid if latest_duplicate_ancestor is not null
+    const fork_info = consensus.fork_choice.fork_infos.get(.{ .slot = 1, .hash = slot1_hash });
+    try std.testing.expect(fork_info != null);
+    try std.testing.expect(fork_info.?.latest_duplicate_ancestor != null);
+}
