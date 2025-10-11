@@ -490,7 +490,7 @@ fn prepareSlot(
     const previous_last_entry = confirmation_progress.last_entry;
     const entries, const slot_is_full = blk: {
         const entries, const num_shreds, const slot_is_full =
-            try state.ledger.reader.getSlotEntriesWithShredInfo(
+            try state.ledger.reader().getSlotEntriesWithShredInfo(
                 state.allocator,
                 slot,
                 confirmation_progress.num_shreds,

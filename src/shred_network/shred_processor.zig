@@ -14,7 +14,6 @@ const Histogram = sig.prometheus.Histogram;
 const Packet = sig.net.Packet;
 const Registry = sig.prometheus.Registry;
 const Shred = sig.ledger.shred.Shred;
-const ShredInserter = sig.ledger.ShredInserter;
 const SlotOutOfBounds = shred_network.shred_tracker.SlotOutOfBounds;
 const VariantCounter = sig.prometheus.VariantCounter;
 
@@ -25,7 +24,7 @@ pub const Params = struct {
     /// shred verifier --> me
     verified_shred_receiver: *Channel(Packet),
     tracker: *BasicShredTracker,
-    inserter: *ShredInserter,
+    ledger: *sig.ledger.Ledger,
     leader_schedule: sig.core.leader_schedule.SlotLeaders,
 };
 
@@ -104,7 +103,9 @@ fn runShredProcessorOnceOver(
 
     metrics.insertion_batch_size.observe(shreds_buffer.len);
     metrics.passed_to_inserter_count.add(shreds_buffer.len);
-    const result = try params.inserter.insertShreds(
+    var shred_inserter = params.ledger.shredInserter();
+    const result = try shred_inserter.insertShreds(
+        allocator,
         shreds_buffer.items(.shred),
         shreds_buffer.items(.is_required),
         .{
@@ -118,8 +119,8 @@ fn runShredProcessorOnceOver(
 test runShredProcessorOnceOver {
     const allocator = std.testing.allocator;
 
-    var ledger_db = try sig.ledger.tests.TestDB.init(@src());
-    defer ledger_db.deinit();
+    var state = try sig.ledger.tests.initTestLedger(allocator, @src(), .noop);
+    defer state.deinit();
 
     var registry: Registry(.{}) = .init(allocator);
     defer registry.deinit();
@@ -129,9 +130,6 @@ test runShredProcessorOnceOver {
 
     var shred_tracker: BasicShredTracker = try .init(allocator, 0, .noop, &registry);
     defer shred_tracker.deinit();
-
-    var shred_inserter: ShredInserter = try .init(allocator, .noop, &registry, ledger_db);
-    defer shred_inserter.deinit();
 
     const dummy_leader_schedule: sig.core.leader_schedule.SlotLeaders = .{
         .state = undefined,
@@ -146,7 +144,7 @@ test runShredProcessorOnceOver {
     const params: Params = .{
         .verified_shred_receiver = verified_shred_channel,
         .tracker = &shred_tracker,
-        .inserter = &shred_inserter,
+        .ledger = &state,
         .leader_schedule = dummy_leader_schedule,
     };
 

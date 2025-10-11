@@ -14,7 +14,7 @@ const Pubkey = core.Pubkey;
 const Slot = core.Slot;
 const Hash = sig.core.Hash;
 
-const LedgerReader = sig.ledger.LedgerReader;
+const Ledger = sig.ledger.Ledger;
 
 const AncestorHashesReplayUpdate = replay.consensus.core.AncestorHashesReplayUpdate;
 const ProgressMap = sig.consensus.ProgressMap;
@@ -43,8 +43,7 @@ pub const ProcessResultParams = struct {
     my_identity: Pubkey,
 
     // global validator state
-    ledger_reader: *LedgerReader,
-    ledger_result_writer: *sig.ledger.LedgerResultWriter,
+    ledger: *Ledger,
 
     // replay state
     progress_map: *ProgressMap,
@@ -99,7 +98,7 @@ fn markDeadSlot(
         return error.MissingBankProgress;
     };
     fork_progress.is_dead = true;
-    try params.ledger_result_writer.setDeadSlot(dead_slot);
+    try params.ledger.resultWriter().setDeadSlot(dead_slot);
     // TODOs
     // - blockstore.slots_stats.mark_dead(slot);
     // - slot_status_notifier
@@ -124,10 +123,11 @@ fn markDeadSlot(
     );
 
     // If blockstore previously marked this slot as duplicate, invoke duplicate state as well
-    const maybe_duplicate_proof = try params.ledger_reader.getDuplicateSlot(dead_slot);
+    const maybe_duplicate_proof = try params.ledger.reader()
+        .getDuplicateSlot(params.allocator, dead_slot);
     defer if (maybe_duplicate_proof) |proof| {
-        params.ledger_reader.allocator.free(proof.shred1);
-        params.ledger_reader.allocator.free(proof.shred2);
+        params.allocator.free(proof.shred1);
+        params.allocator.free(proof.shred2);
     };
     if (!params.duplicate_slots_tracker.contains(dead_slot) and
         maybe_duplicate_proof != null)
@@ -195,15 +195,16 @@ fn updateConsensusForFrozenSlot(params: ProcessResultParams, slot: Slot) !void {
         .from(params.logger),
         slot,
         params.slot_tracker.root,
-        params.ledger_result_writer,
+        params.ledger.resultWriter(),
         params.fork_choice,
         params.duplicate_slots_to_repair,
         params.purge_repair_slot_counter,
         slot_frozen_state,
     );
 
+    const reader = params.ledger.reader();
     if (!params.duplicate_slots_tracker.contains(slot) and
-        try params.ledger_reader.getDuplicateSlot(slot) != null)
+        try reader.getDuplicateSlot(params.allocator, slot) != null)
     {
         const duplicate_state: DuplicateState = .fromState(
             .from(params.logger),
@@ -251,8 +252,7 @@ const testing = std.testing;
 
 // Test helper structure that owns all the resources
 const TestReplayStateResources = struct {
-    ledger_reader: LedgerReader,
-    ledger_result_writer: sig.ledger.LedgerResultWriter,
+    ledger: Ledger,
     progress: ProgressMap,
     fork_choice: *HeaviestSubtreeForkChoice,
     duplicate_slots_tracker: DuplicateSlots,
@@ -264,43 +264,27 @@ const TestReplayStateResources = struct {
     purge_repair_slot_counter: PurgeRepairSlotCounters,
     slot_tracker: SlotTracker,
     params: ProcessResultParams,
-    db: sig.ledger.LedgerDB,
     registry: sig.prometheus.Registry(.{}),
     lowest_cleanup_slot: sig.sync.RwMux(Slot),
     max_root: std.atomic.Value(Slot),
 
     ancestor_hashes_replay_update_channel: sig.sync.Channel(AncestorHashesReplayUpdate),
 
-    pub fn init(allocator: Allocator) !*TestReplayStateResources {
+    pub fn init(
+        allocator: Allocator,
+        comptime test_src: std.builtin.SourceLocation,
+    ) !*TestReplayStateResources {
         const self = try allocator.create(TestReplayStateResources);
         errdefer allocator.destroy(self);
 
         self.registry = sig.prometheus.Registry(.{}).init(allocator);
         errdefer self.registry.deinit();
 
-        self.db = try sig.ledger.tests.TestDB.init(@src());
-        errdefer self.db.deinit();
-
         self.lowest_cleanup_slot = sig.sync.RwMux(Slot).init(0);
         self.max_root = std.atomic.Value(Slot).init(0);
 
-        self.ledger_reader = try LedgerReader.init(
-            allocator,
-            .noop,
-            self.db,
-            &self.registry,
-            &self.lowest_cleanup_slot,
-            &self.max_root,
-        );
-
-        self.ledger_result_writer = try sig.ledger.LedgerResultWriter.init(
-            allocator,
-            .noop,
-            self.db,
-            &self.registry,
-            &self.lowest_cleanup_slot,
-            &self.max_root,
-        );
+        self.ledger = try sig.ledger.tests.initTestLedger(allocator, test_src, .FOR_TESTS);
+        errdefer self.ledger.deinit();
 
         self.progress = ProgressMap.INIT;
 
@@ -339,8 +323,7 @@ const TestReplayStateResources = struct {
             .allocator = allocator,
             .logger = .FOR_TESTS,
             .my_identity = Pubkey.initRandom(std.crypto.random),
-            .ledger_reader = &self.ledger_reader,
-            .ledger_result_writer = &self.ledger_result_writer,
+            .ledger = &self.ledger,
             .slot_tracker = &self.slot_tracker,
             .progress_map = &self.progress,
             .fork_choice = self.fork_choice,
@@ -369,18 +352,13 @@ const TestReplayStateResources = struct {
         self.epoch_slots_frozen_slots.deinit(allocator);
         self.duplicate_slots_to_repair.deinit(allocator);
         self.purge_repair_slot_counter.deinit(allocator);
-        self.db.deinit();
         self.registry.deinit();
         self.ancestor_hashes_replay_update_channel.deinit();
+        self.ledger.deinit();
 
         allocator.destroy(self);
     }
 };
-
-// Helper to create a minimal ProcessResultParams for testing
-fn createTestReplayState(allocator: Allocator) !*TestReplayStateResources {
-    return TestReplayStateResources.init(allocator);
-}
 
 test "processResult: marks slot as dead correctly" {
     const allocator = testing.allocator;
@@ -425,7 +403,7 @@ test "processResult: marks slot as dead correctly" {
 test "processResult: confirm status with err poll result marks slot dead" {
     const allocator = testing.allocator;
 
-    var test_resources = createTestReplayState(allocator) catch |err| {
+    var test_resources = TestReplayStateResources.init(allocator, @src()) catch |err| {
         std.debug.print("Failed to create test replay state: {}\n", .{err});
         return err;
     };
@@ -466,7 +444,7 @@ test "processResult: confirm status with err poll result marks slot dead" {
 test "processResult: confirm status with done poll but missing slot in tracker" {
     const allocator = testing.allocator;
 
-    var test_resources = createTestReplayState(allocator) catch |err| {
+    var test_resources = TestReplayStateResources.init(allocator, @src()) catch |err| {
         std.debug.print("Failed to create test replay state: {}\n", .{err});
         return err;
     };
@@ -486,7 +464,7 @@ test "processResult: confirm status with done poll but missing slot in tracker" 
 test "processResult: confirm status with done poll and slot complete - success path" {
     const allocator = testing.allocator;
 
-    var test_resources = createTestReplayState(allocator) catch |err| {
+    var test_resources = TestReplayStateResources.init(allocator, @src()) catch |err| {
         std.debug.print("Failed to create test replay state: {}\n", .{err});
         return err;
     };
@@ -585,7 +563,7 @@ test "processResult: confirm status with done poll and slot complete - success p
 test "markDeadSlot: marks progress dead and writes to ledger" {
     const allocator = testing.allocator;
 
-    var test_resources = createTestReplayState(allocator) catch |err| {
+    var test_resources = TestReplayStateResources.init(allocator, @src()) catch |err| {
         std.debug.print("Failed to create test replay state: {}\n", .{err});
         return err;
     };
@@ -621,13 +599,13 @@ test "markDeadSlot: marks progress dead and writes to ledger" {
     try testing.expect(test_resources.progress.isDead(slot) orelse false);
 
     // Validate ledger records the dead slot
-    try testing.expect(try test_resources.ledger_reader.isDead(slot));
+    try testing.expect(try test_resources.ledger.reader().isDead(allocator, slot));
 }
 
 test "markDeadSlot: when duplicate proof exists, duplicate tracker records slot" {
     const allocator = testing.allocator;
 
-    var test_resources = createTestReplayState(allocator) catch |err| {
+    var test_resources = TestReplayStateResources.init(allocator, @src()) catch |err| {
         std.debug.print("Failed to create test replay state: {}\n", .{err});
         return err;
     };
@@ -676,7 +654,7 @@ test "markDeadSlot: when duplicate proof exists, duplicate tracker records slot"
         .shred1 = &[_]u8{ 0xAA, 0xBB },
         .shred2 = &[_]u8{ 0xCC, 0xDD },
     };
-    try test_resources.db.put(sig.ledger.schema.schema.duplicate_slots, slot, dup_proof);
+    try test_resources.ledger.db.put(sig.ledger.schema.schema.duplicate_slots, slot, dup_proof);
 
     // Tracker does not contain the slot yet
     try testing.expect(!test_resources.duplicate_slots_tracker.contains(slot));

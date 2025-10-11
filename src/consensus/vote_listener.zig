@@ -9,6 +9,9 @@ const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 const Transaction = sig.core.Transaction;
 const TransactionMessage = sig.core.transaction.Message;
+
+const Ledger = sig.ledger.Ledger;
+
 const VoteTransaction = sig.consensus.vote_transaction.VoteTransaction;
 const VoteTracker = sig.consensus.VoteTracker;
 const OptimisticConfirmationVerifier =
@@ -109,7 +112,7 @@ pub const VoteListener = struct {
         params: struct {
             slot_data_provider: SlotDataProvider,
             gossip_table_rw: ?*sig.sync.RwMux(sig.gossip.GossipTable),
-            ledger_ref: LedgerRef,
+            ledger: *Ledger,
 
             /// Channels that will be used to `receive` data.
             receivers: struct {
@@ -145,7 +148,7 @@ pub const VoteListener = struct {
                 .replay_votes = params.receivers.replay_votes_channel,
             },
 
-            params.ledger_ref,
+            params.ledger,
             exit,
             &metrics,
         });
@@ -388,7 +391,7 @@ fn processVotesLoop(
     slot_data_provider: SlotDataProvider,
     senders: Senders,
     receivers: Receivers,
-    ledger_ref: LedgerRef,
+    ledger: *Ledger,
     exit: sig.sync.ExitCondition,
     metrics: *VoteListenerMetrics,
 ) !void {
@@ -416,7 +419,7 @@ fn processVotesLoop(
             &slot_data_provider,
             senders,
             receivers,
-            ledger_ref,
+            ledger,
             &confirmation_verifier,
             &latest_vote_slot_per_validator,
             &last_process_root,
@@ -431,13 +434,6 @@ fn processVotesLoop(
     }
 }
 
-/// TODO: maybe add an abstraction like this to `sig.ledger` that can be shared across the codebase.
-/// Similar thing exists in `sig.replay.edge_cases` (in a separate PR at the time of writing).
-const LedgerRef = struct {
-    reader: *sig.ledger.LedgerReader,
-    writer: *sig.ledger.LedgerResultWriter,
-};
-
 fn processVotesOnce(
     allocator: std.mem.Allocator,
     logger: Logger,
@@ -445,7 +441,7 @@ fn processVotesOnce(
     slot_data_provider: *const SlotDataProvider,
     senders: Senders,
     receivers: Receivers,
-    ledger_ref: LedgerRef,
+    ledger: *Ledger,
     confirmation_verifier: *OptimisticConfirmationVerifier,
     latest_vote_slot_per_validator: *std.AutoArrayHashMapUnmanaged(Pubkey, Slot),
     last_process_root: *sig.time.Instant,
@@ -458,7 +454,7 @@ fn processVotesOnce(
     if (last_process_root.elapsed().asMillis() > DEFAULT_MS_PER_SLOT) {
         const unrooted_optimistic_slots = try confirmation_verifier.verifyForUnrootedOptimisticSlots(
             allocator,
-            ledger_ref.reader,
+            ledger,
             .{
                 .slot = root_slot,
                 .hash = root_hash,
@@ -501,7 +497,7 @@ fn processVotesOnce(
     try confirmation_verifier.addNewOptimisticConfirmedSlots(
         allocator,
         confirmed_slots,
-        ledger_ref.writer,
+        ledger,
     );
 
     return .ok;
@@ -1697,35 +1693,8 @@ test "simple usage" {
         .epoch_tracker_rw = &epoch_tracker_rw,
     };
 
-    var ledger_db = try sig.ledger.tests.TestDB.init(@src());
-    defer ledger_db.deinit();
-
-    var registry: sig.prometheus.Registry(.{}) = .init(allocator);
-    defer registry.deinit();
-    var lowest_cleanup_slot: sig.sync.RwMux(Slot) = .init(0);
-    var max_root: std.atomic.Value(u64) = .init(0);
-
-    var ledger_reader: sig.ledger.LedgerReader = try .init(
-        allocator,
-        .noop,
-        ledger_db,
-        &registry,
-        &lowest_cleanup_slot,
-        &max_root,
-    );
-    var ledger_writer: sig.ledger.LedgerResultWriter = try .init(
-        allocator,
-        .noop,
-        ledger_db,
-        &registry,
-        &lowest_cleanup_slot,
-        &max_root,
-    );
-
-    const ledger_ref: LedgerRef = .{
-        .reader = &ledger_reader,
-        .writer = &ledger_writer,
-    };
+    var state = try sig.ledger.tests.initTestLedger(allocator, @src(), .noop);
+    defer state.deinit();
 
     var gossip_table_rw: sig.sync.RwMux(sig.gossip.GossipTable) = .init(
         try .init(allocator, allocator),
@@ -1749,10 +1718,13 @@ test "simple usage" {
     var exit: std.atomic.Value(bool) = .init(false);
     const exit_cond: sig.sync.ExitCondition = .{ .unordered = &exit };
 
+    var registry = sig.prometheus.Registry(.{}).init(allocator);
+    defer registry.deinit();
+
     const vote_listener: VoteListener = try .init(allocator, exit_cond, .noop, &registry, .{
         .slot_data_provider = slot_data_provider,
         .gossip_table_rw = &gossip_table_rw,
-        .ledger_ref = ledger_ref,
+        .ledger = &state,
         .receivers = .{
             .replay_votes_channel = replay_votes_channel,
         },
@@ -1833,35 +1805,8 @@ test "check trackers" {
         .epoch_tracker_rw = &epoch_tracker2_rw,
     };
 
-    var ledger_db = try sig.ledger.tests.TestDB.init(@src());
-    defer ledger_db.deinit();
-
-    var registry: sig.prometheus.Registry(.{}) = .init(allocator);
-    defer registry.deinit();
-    var lowest_cleanup_slot: sig.sync.RwMux(Slot) = .init(0);
-    var max_root: std.atomic.Value(u64) = .init(0);
-
-    var ledger_reader: sig.ledger.LedgerReader = try .init(
-        allocator,
-        .noop,
-        ledger_db,
-        &registry,
-        &lowest_cleanup_slot,
-        &max_root,
-    );
-    var ledger_writer: sig.ledger.LedgerResultWriter = try .init(
-        allocator,
-        .noop,
-        ledger_db,
-        &registry,
-        &lowest_cleanup_slot,
-        &max_root,
-    );
-
-    const ledger_ref: LedgerRef = .{
-        .reader = &ledger_reader,
-        .writer = &ledger_writer,
-    };
+    var state2 = try sig.ledger.tests.initTestLedger(allocator, @src(), .noop);
+    defer state2.deinit();
 
     var gossip_table_rw = sig.sync.RwMux(sig.gossip.GossipTable).init(
         try sig.gossip.GossipTable.init(allocator, allocator),
@@ -2022,7 +1967,7 @@ test "check trackers" {
                 .replay_votes = replay_votes_channel,
                 .verified_vote_transactions = verified_vote_transactions_channel,
             },
-            ledger_ref,
+            &state2,
             &confirmation_verifier,
             &latest_vote_slot_per_validator,
             &last_process_root,
