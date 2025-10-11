@@ -153,7 +153,7 @@ pub fn getDataShredsForSlot(
     slot: Slot,
     start_index: u64,
 ) !ArrayList(Shred) {
-    return getShredsForSlot(self, allocator, schema.data_shred, slot, start_index);
+    return self.getShredsForSlot(allocator, schema.data_shred, slot, start_index);
 }
 
 /// Analogous to [get_coding_shreds_for_slot](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L2287-L2288)
@@ -163,7 +163,7 @@ pub fn getCodeShredsForSlot(
     slot: Slot,
     start_index: u64,
 ) !ArrayList(Shred) {
-    return getShredsForSlot(self, allocator, schema.code_shred, slot, start_index);
+    return self.getShredsForSlot(allocator, schema.code_shred, slot, start_index);
 }
 
 fn getShredsForSlot(
@@ -294,10 +294,10 @@ fn appendIntegers(
 /// Analogous to [get_rooted_block_time](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L2523)
 pub fn getRootedBlockTime(self: *const Reader, allocator: Allocator, slot: Slot) !UnixTimestamp {
     if (self.rpc_metrics) |m| m.num_get_rooted_block_time.inc();
-    var lock = try checkLowestCleanupSlot(self, slot);
+    var lock = try self.checkLowestCleanupSlot(slot);
     defer lock.unlock();
 
-    if (try isRoot(self, allocator, slot)) {
+    if (try self.isRoot(allocator, slot)) {
         return try self.ledger.db.get(allocator, schema.blocktime, slot) orelse
             error.SlotUnavailable;
     }
@@ -307,7 +307,7 @@ pub fn getRootedBlockTime(self: *const Reader, allocator: Allocator, slot: Slot)
 /// Analogous to [get_block_height](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L2542)
 pub fn getBlockHeight(self: *const Reader, allocator: Allocator, slot: Slot) !?u64 {
     if (self.rpc_metrics) |m| m.num_get_block_height.inc();
-    var lock = try checkLowestCleanupSlot(self, slot);
+    var lock = try self.checkLowestCleanupSlot(slot);
     defer lock.unlock();
     return try self.ledger.db.get(allocator, schema.block_height, slot);
 }
@@ -392,11 +392,11 @@ pub fn getRootedBlock(
     require_previous_blockhash: bool,
 ) !VersionedConfirmedBlock {
     if (self.rpc_metrics) |m| m.num_get_rooted_block.inc();
-    var lock = try checkLowestCleanupSlot(self, slot);
+    var lock = try self.checkLowestCleanupSlot(slot);
     defer lock.unlock();
 
-    if (try isRoot(self, allocator, slot)) {
-        return getCompleteBlock(self, allocator, slot, require_previous_blockhash);
+    if (try self.isRoot(allocator, slot)) {
+        return self.getCompleteBlock(allocator, slot, require_previous_blockhash);
     }
     return error.SlotNotRooted;
 }
@@ -428,12 +428,11 @@ pub fn getRootedBlockWithEntries(
     require_previous_blockhash: bool,
 ) !VersionedConfirmedBlockWithEntries {
     if (self.rpc_metrics) |m| m.num_get_rooted_block_with_entries.inc();
-    var lock = try checkLowestCleanupSlot(self, slot);
+    var lock = try self.checkLowestCleanupSlot(slot);
     defer lock.unlock();
 
-    if (try isRoot(self, allocator, slot)) {
-        return getCompleteBlockWithEntries(
-            self,
+    if (try self.isRoot(allocator, slot)) {
+        return self.getCompleteBlockWithEntries(
             allocator,
             slot,
             require_previous_blockhash,
@@ -466,7 +465,7 @@ pub fn getCompleteBlockWithEntries(
     }
 
     const slot_entries, _, _ =
-        try getSlotEntriesWithShredInfo(self, allocator, slot, 0, allow_dead_slots);
+        try self.getSlotEntriesWithShredInfo(allocator, slot, 0, allow_dead_slots);
     defer {
         for (slot_entries) |se| se.deinit(allocator);
         allocator.free(slot_entries);
@@ -539,8 +538,7 @@ pub fn getCompleteBlockWithEntries(
 
     // TODO perf: seems wasteful to get all of this, only to read the blockhash
     const parent_slot_entries = if (slot_meta.parent_slot) |parent_slot| blk: {
-        const parent_entries, _, _ = try getSlotEntriesWithShredInfo(
-            self,
+        const parent_entries, _, _ = try self.getSlotEntriesWithShredInfo(
             allocator,
             parent_slot,
             0,
@@ -602,7 +600,7 @@ pub fn getRootedTransactionStatus(
     if (self.rpc_metrics) |m| m.num_get_rooted_transaction_status.inc();
 
     const map = AutoHashMap(Slot, void).init(allocator);
-    return getTransactionStatus(self, allocator, signature, &map);
+    return self.getTransactionStatus(allocator, signature, &map);
 }
 
 /// Returns a transaction status
@@ -651,7 +649,7 @@ fn getTransactionStatusWithCounter(
         if (!signature.eql(&found_signature)) {
             break;
         }
-        if (!try isRoot(self, allocator, slot) and !confirmed_unrooted_slots.contains(slot)) {
+        if (!try self.isRoot(allocator, slot) and !confirmed_unrooted_slots.contains(slot)) {
             continue;
         }
         // TODO get from iterator
@@ -675,7 +673,7 @@ pub fn getRootedTransaction(
 ) !?ConfirmedTransactionWithStatusMeta {
     if (self.rpc_metrics) |m| m.num_get_rooted_transaction.inc();
     const map = AutoHashMap(Slot, void).init(allocator);
-    return getTransactionWithStatus(self, allocator, signature, &map);
+    return self.getTransactionWithStatus(allocator, signature, &map);
 }
 
 /// Returns a complete transaction
@@ -701,7 +699,7 @@ pub fn getCompleteTransaction(
         try confirmed_unrooted_slots.put(slot, {});
     }
 
-    return getTransactionWithStatus(self, allocator, signature, &confirmed_unrooted_slots);
+    return self.getTransactionWithStatus(allocator, signature, &confirmed_unrooted_slots);
 }
 
 /// Analogous to [get_transaction_with_status](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L3090)
@@ -711,14 +709,14 @@ fn getTransactionWithStatus(
     signature: Signature,
     confirmed_unrooted_slots: *const AutoHashMap(Slot, void),
 ) !?ConfirmedTransactionWithStatusMeta {
-    const status = try getTransactionStatus(self, allocator, signature, confirmed_unrooted_slots);
+    const status = try self.getTransactionStatus(allocator, signature, confirmed_unrooted_slots);
     const slot, const meta = status orelse return null;
-    const transaction = if (try findTransactionInSlot(self, allocator, slot, signature)) |t|
+    const transaction = if (try self.findTransactionInSlot(allocator, slot, signature)) |t|
         t
     else
         return error.TransactionStatusSlotMismatch; // Should not happen
 
-    const block_time = try getBlockTime(self, allocator, slot);
+    const block_time = try self.getBlockTime(allocator, slot);
 
     return .{
         .slot = slot,
@@ -728,7 +726,7 @@ fn getTransactionWithStatus(
 }
 
 fn getBlockTime(self: *const Reader, allocator: Allocator, slot: Slot) !?UnixTimestamp {
-    var lock = try checkLowestCleanupSlot(self, slot);
+    var lock = try self.checkLowestCleanupSlot(slot);
     defer lock.unlock();
     return self.ledger.db.get(allocator, schema.blocktime, slot);
 }
@@ -743,7 +741,11 @@ fn findTransactionInSlot(
     slot: Slot,
     signature: Signature,
 ) !?Transaction {
-    const slot_entries = try getSlotEntries(self, allocator, slot, 0);
+    const slot_entries = try self.getSlotEntries(allocator, slot, 0);
+    defer {
+        for (slot_entries) |entry| entry.deinit(allocator);
+        allocator.free(slot_entries);
+    }
     // NOTE perf: linear search runs from scratch every time this is called
     for (slot_entries) |entry| {
         for (entry.transactions) |transaction| {
@@ -755,7 +757,7 @@ fn findTransactionInSlot(
                 );
             }
             if (signature.eql(&transaction.signatures[0])) {
-                return transaction;
+                return try transaction.clone(allocator);
             }
         }
     }
@@ -794,14 +796,13 @@ pub fn getConfirmedSignaturesForAddress(
     const slot: Slot, //
     var before_excluded_signatures: AutoHashMap(Signature, void) //
     = if (before) |before_signature| blk: {
-        if (try getTransactionStatus(
-            self,
+        if (try self.getTransactionStatus(
             allocator,
             before_signature,
             &confirmed_unrooted_slots,
         )) |status| {
             const slot, _ = status;
-            const slot_signatures = try getBlockSignaturesReversed(self, allocator, slot);
+            const slot_signatures = try self.getBlockSignaturesReversed(allocator, slot);
             defer slot_signatures.deinit();
             var excluded = AutoHashMap(Signature, void).init(allocator);
             for (slot_signatures.items) |signature| {
@@ -821,14 +822,13 @@ pub fn getConfirmedSignaturesForAddress(
     const first_available_block = try getFirstAvailableBlock(self);
     var get_until_slot_timer = try Timer.start();
     const lowest_slot, var until_excluded_signatures = if (until) |until_signature| blk: {
-        if (try getTransactionStatus(
-            self,
+        if (try self.getTransactionStatus(
             allocator,
             until_signature,
             &confirmed_unrooted_slots,
         )) |status| {
             const lowest_slot, _ = status;
-            const slot_signatures = try getBlockSignatures(self, allocator, lowest_slot);
+            const slot_signatures = try self.getBlockSignatures(allocator, lowest_slot);
             defer slot_signatures.deinit();
             var excluded = AutoHashMap(Signature, void).init(allocator);
             for (slot_signatures.items) |signature| {
@@ -851,10 +851,11 @@ pub fn getConfirmedSignaturesForAddress(
 
     // Fetch the list of signatures that affect the given address
     var address_signatures = ArrayList(struct { Slot, Signature }).init(allocator);
+    defer address_signatures.deinit();
 
     // Get signatures in `slot`
     var get_initial_slot_timer = try Timer.start();
-    const signatures = try findAddressSignaturesForSlot(self, allocator, address, slot);
+    const signatures = try self.findAddressSignaturesForSlot(allocator, address, slot);
     for (1..signatures.items.len + 1) |i| {
         const this_slot, const signature = signatures.items[signatures.items.len - i];
         std.debug.assert(slot == this_slot);
@@ -880,6 +881,7 @@ pub fn getConfirmedSignaturesForAddress(
         .transaction_index = 0,
         .signature = Signature.ZEROES,
     });
+    defer iterator.deinit();
 
     // Iterate until limit is reached
     while (try iterator.nextKey()) |key| {
@@ -888,7 +890,8 @@ pub fn getConfirmedSignaturesForAddress(
             break;
         }
         if (address.equals(&key.address) and
-            (try isRoot(self, allocator, slot) or confirmed_unrooted_slots.contains(slot)) and
+            (try self.isRoot(allocator, key.slot) or
+                confirmed_unrooted_slots.contains(key.slot)) and
             !until_excluded_signatures.contains(key.signature))
         {
             try address_signatures.append(.{ key.slot, key.signature });
@@ -905,8 +908,7 @@ pub fn getConfirmedSignaturesForAddress(
     var infos = ArrayList(ConfirmedTransactionStatusWithSignature).init(allocator);
     for (address_signatures.items) |asig| {
         const the_slot, const signature = asig;
-        const maybe_status = try getTransactionStatus(
-            self,
+        const maybe_status = try self.getTransactionStatus(
             allocator,
             signature,
             &confirmed_unrooted_slots,
@@ -920,7 +922,7 @@ pub fn getConfirmedSignaturesForAddress(
             try memo.appendSlice(memo_ref.data);
             break :blk memo;
         } else null;
-        const block_time = try getBlockTime(self, allocator, the_slot);
+        const block_time = try self.getBlockTime(allocator, the_slot);
         try infos.append(.{
             .signature = signature,
             .slot = the_slot,
@@ -946,7 +948,8 @@ fn getBlockSignaturesReversed(
     allocator: Allocator,
     slot: Slot,
 ) !ArrayList(Signature) {
-    const block = try getCompleteBlock(self, allocator, slot, false);
+    const block = try self.getCompleteBlock(allocator, slot, false);
+    defer block.deinit(allocator);
 
     var signatures = try ArrayList(Signature)
         .initCapacity(allocator, block.transactions.len);
@@ -967,7 +970,8 @@ fn getBlockSignatures(
     allocator: Allocator,
     slot: Slot,
 ) !ArrayList(Signature) {
-    const block = try getCompleteBlock(self, allocator, slot, false);
+    const block = try self.getCompleteBlock(allocator, slot, false);
+    defer block.deinit(allocator);
 
     var signatures = try ArrayList(Signature)
         .initCapacity(allocator, block.transactions.len);
@@ -1062,7 +1066,7 @@ pub fn getSlotEntries(
     shred_start_index: u64,
 ) ![]const Entry {
     const entries, _, _ =
-        try getSlotEntriesWithShredInfo(self, allocator, slot, shred_start_index, false);
+        try self.getSlotEntriesWithShredInfo(allocator, slot, shred_start_index, false);
     return entries;
 }
 
@@ -1078,14 +1082,14 @@ pub fn getSlotEntriesWithShredInfo(
     allow_dead_slots: bool,
 ) !struct { []Entry, u64, bool } {
     const completed_ranges, const maybe_slot_meta =
-        try getCompletedRanges(self, allocator, slot, start_index);
+        try self.getCompletedRanges(allocator, slot, start_index);
     defer completed_ranges.deinit();
 
     // Check if the slot is dead *after* fetching completed ranges to avoid a race
     // where a slot is marked dead by another thread before the completed range query finishes.
     // This should be sufficient because full slots will never be marked dead from another thread,
     // this can only happen during entry processing during replay stage.
-    if (try isDead(self, allocator, slot) and !allow_dead_slots) {
+    if (try self.isDead(allocator, slot) and !allow_dead_slots) {
         return error.DeadSlot;
     }
     if (completed_ranges.items.len == 0) {
@@ -1164,7 +1168,7 @@ pub fn getEntriesInDataBlock(
     var fba = std.heap.FixedBufferAllocator.init(&fba_slice);
     var completed_ranges = CompletedRanges.initCapacity(fba.allocator(), 1) catch unreachable;
     completed_ranges.appendAssumeCapacity(.{ start_index, end_index });
-    return getSlotEntriesInBlock(self, allocator, slot, completed_ranges, slot_meta);
+    return self.getSlotEntriesInBlock(allocator, slot, completed_ranges, slot_meta);
 }
 
 /// Fetch the entries corresponding to all of the shred indices in `completed_ranges`
@@ -1409,8 +1413,8 @@ pub fn getDuplicateSlot(self: *const Reader, allocator: Allocator, slot: u64) !?
 pub fn isShredDuplicate(self: *const Reader, allocator: Allocator, shred: Shred) !?ArrayList(u8) {
     const id = shred.id();
     const other_ref = try switch (shred) {
-        .data => getDataShred(self, id.slot, @intCast(id.index)),
-        .code => getCodeShred(self, id.slot, @intCast(id.index)),
+        .data => self.getDataShred(id.slot, @intCast(id.index)),
+        .code => self.getCodeShred(id.slot, @intCast(id.index)),
     } orelse return null;
     defer other_ref.deinit();
 
@@ -1621,13 +1625,12 @@ const test_shreds = @import("test_shreds.zig");
 // getSlotEntriesInBlock
 // getCompleteBlockWithEntries
 
-test "getLatestOptimisticSlots" {
+test getLatestOptimisticSlots {
     const allocator = std.testing.allocator;
-    const logger = .noop;
     var registry = sig.prometheus.Registry(.{}).init(allocator);
     defer registry.deinit();
 
-    var state = try sig.ledger.tests.initTestLedger(allocator, @src(), logger);
+    var state = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
     defer state.deinit();
 
     {
@@ -1643,11 +1646,11 @@ test "getLatestOptimisticSlots" {
         try state.db.commit(&write_batch);
 
         const reader = state.reader();
-        const get_hash, const ts = (try getOptimisticSlot(&reader, allocator, 1)).?;
+        const get_hash, const ts = (try reader.getOptimisticSlot(allocator, 1)).?;
         try std.testing.expectEqual(hash, get_hash);
         try std.testing.expectEqual(10, ts);
 
-        var opt_slots = try getLatestOptimisticSlots(&reader, allocator, 1);
+        var opt_slots = try reader.getLatestOptimisticSlots(allocator, 1);
         defer opt_slots.deinit();
 
         try std.testing.expectEqual(1, opt_slots.items.len);
@@ -1669,11 +1672,11 @@ test "getLatestOptimisticSlots" {
         try state.db.commit(&write_batch);
 
         const reader = state.reader();
-        const get_hash, const ts = (try getOptimisticSlot(&reader, allocator, 10)).?;
+        const get_hash, const ts = (try reader.getOptimisticSlot(allocator, 10)).?;
         try std.testing.expectEqual(hash, get_hash);
         try std.testing.expectEqual(100, ts);
 
-        var opt_slots = try getLatestOptimisticSlots(&reader, allocator, 2);
+        var opt_slots = try reader.getLatestOptimisticSlots(allocator, 2);
         defer opt_slots.deinit();
 
         try std.testing.expectEqual(2, opt_slots.items.len);
@@ -1683,10 +1686,9 @@ test "getLatestOptimisticSlots" {
     }
 }
 
-test "getFirstDuplicateProof" {
+test getFirstDuplicateProof {
     const allocator = std.testing.allocator;
 
-    const logger = .noop;
     var registry = sig.prometheus.Registry(.{}).init(allocator);
     defer registry.deinit();
 
@@ -1695,14 +1697,14 @@ test "getFirstDuplicateProof" {
         .{ sig.TEST_STATE_DIR ++ "blockstore/insert_shred", "getFirstDuplicateProof" },
     );
     try sig.ledger.tests.freshDir(path);
-    var db = try LedgerDB.open(allocator, logger, path);
+    var db = try LedgerDB.open(allocator, .FOR_TESTS, path);
     defer db.deinit();
 
     var self = ledger_mod.Ledger{
         .db = db,
         .highest_slot_cleaned = RwMux(Slot).init(0),
         .max_root = std.atomic.Value(Slot).init(0),
-        .logger = logger,
+        .logger = .FOR_TESTS,
         .metrics = null,
     };
 
@@ -1717,7 +1719,7 @@ test "getFirstDuplicateProof" {
         try self.db.commit(&write_batch);
 
         const reader = self.reader();
-        const slot, const proof2 = (try getFirstDuplicateProof(&reader)).?;
+        const slot, const proof2 = (try reader.getFirstDuplicateProof()).?;
         defer bincode.free(allocator, proof2);
 
         try std.testing.expectEqual(19, slot);
@@ -1726,13 +1728,12 @@ test "getFirstDuplicateProof" {
     }
 }
 
-test "getDuplicateSlot" {
+test getDuplicateSlot {
     const allocator = std.testing.allocator;
-    const logger = .noop;
     var registry = sig.prometheus.Registry(.{}).init(allocator);
     defer registry.deinit();
 
-    var state = try sig.ledger.tests.initTestLedger(allocator, @src(), logger);
+    var state = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
     defer state.deinit();
 
     const slot: u64 = 42;
@@ -1740,7 +1741,7 @@ test "getDuplicateSlot" {
     // Test case 1: No duplicate slot proof exists
     const reader = state.reader();
     const result_none = try reader.getDuplicateSlot(allocator, slot);
-    try std.testing.expectEqual(@as(?DuplicateSlotProof, null), result_none);
+    try std.testing.expectEqual(null, result_none);
 
     // Test case 2: Insert a duplicate slot proof and retrieve it
     {
@@ -1771,16 +1772,15 @@ test "getDuplicateSlot" {
     // Test case 3: Different slot returns null
     const different_slot: u64 = 123;
     const result_different = try reader.getDuplicateSlot(allocator, different_slot);
-    try std.testing.expectEqual(@as(?DuplicateSlotProof, null), result_different);
+    try std.testing.expectEqual(null, result_different);
 }
 
-test "isDead" {
+test isDead {
     const allocator = std.testing.allocator;
-    const logger = .noop;
     var registry = sig.prometheus.Registry(.{}).init(allocator);
     defer registry.deinit();
 
-    var state = try sig.ledger.tests.initTestLedger(allocator, @src(), logger);
+    var state = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
     defer state.deinit();
 
     {
@@ -1801,13 +1801,12 @@ test "isDead" {
     try std.testing.expectEqual(try reader.isDead(allocator, 19), false);
 }
 
-test "getBlockHeight" {
+test getBlockHeight {
     const allocator = std.testing.allocator;
-    const logger = .noop;
     var registry = sig.prometheus.Registry(.{}).init(allocator);
     defer registry.deinit();
 
-    var state = try sig.ledger.tests.initTestLedger(allocator, @src(), logger);
+    var state = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
     defer state.deinit();
 
     var write_batch = try state.db.initWriteBatch();
@@ -1817,17 +1816,16 @@ test "getBlockHeight" {
 
     // should succeeed
     const reader = state.reader();
-    const height = try getBlockHeight(&reader, allocator, 19);
+    const height = try reader.getBlockHeight(allocator, 19);
     try std.testing.expectEqual(19, height);
 }
 
-test "getRootedBlockTime" {
+test getRootedBlockTime {
     const allocator = std.testing.allocator;
-    const logger = .noop;
     var registry = sig.prometheus.Registry(.{}).init(allocator);
     defer registry.deinit();
 
-    var state = try sig.ledger.tests.initTestLedger(allocator, @src(), logger);
+    var state = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
     defer state.deinit();
 
     var write_batch = try state.db.initWriteBatch();
@@ -1851,13 +1849,12 @@ test "getRootedBlockTime" {
     try std.testing.expectEqual(19, time);
 }
 
-test "slotMetaIterator" {
+test slotMetaIterator {
     const allocator = std.testing.allocator;
-    const logger = .noop;
     var registry = sig.prometheus.Registry(.{}).init(allocator);
     defer registry.deinit();
 
-    var state = try sig.ledger.tests.initTestLedger(allocator, @src(), logger);
+    var state = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
     defer state.deinit();
 
     var slot_metas = ArrayList(SlotMeta).init(allocator);
@@ -1891,7 +1888,7 @@ test "slotMetaIterator" {
     try state.db.commit(&write_batch);
 
     const reader = state.reader();
-    var iter = try slotMetaIterator(&reader, 0);
+    var iter = try reader.slotMetaIterator(0);
     defer iter.deinit();
     var index: u64 = 0;
     while (try iter.next()) |entry| {
@@ -1904,13 +1901,12 @@ test "slotMetaIterator" {
     }
 }
 
-test "rootedSlotIterator" {
+test rootedSlotIterator {
     const allocator = std.testing.allocator;
-    const logger = .noop;
     var registry = sig.prometheus.Registry(.{}).init(allocator);
     defer registry.deinit();
 
-    var state = try sig.ledger.tests.initTestLedger(allocator, @src(), logger);
+    var state = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
     defer state.deinit();
 
     var write_batch = try state.db.initWriteBatch();
@@ -1922,7 +1918,7 @@ test "rootedSlotIterator" {
     try state.db.commit(&write_batch);
 
     const reader = state.reader();
-    var iter = try rootedSlotIterator(&reader, 0);
+    var iter = try reader.rootedSlotIterator(0);
     defer iter.deinit();
     var i: u64 = 0;
     while (try iter.next()) |entry| {
@@ -1931,13 +1927,12 @@ test "rootedSlotIterator" {
     }
 }
 
-test "slotRangeConnected" {
+test slotRangeConnected {
     const allocator = std.testing.allocator;
-    const logger = .noop;
     var registry = sig.prometheus.Registry(.{}).init(allocator);
     defer registry.deinit();
 
-    var state = try sig.ledger.tests.initTestLedger(allocator, @src(), logger);
+    var state = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
     defer state.deinit();
 
     var write_batch = try state.db.initWriteBatch();
@@ -1983,13 +1978,12 @@ test "slotRangeConnected" {
     try std.testing.expectEqual(false, try reader.slotRangeConnected(allocator, 1, 5));
 }
 
-test "highestSlot" {
+test highestSlot {
     const allocator = std.testing.allocator;
-    const logger = .noop;
     var registry = sig.prometheus.Registry(.{}).init(allocator);
     defer registry.deinit();
 
-    var state = try sig.ledger.tests.initTestLedger(allocator, @src(), logger);
+    var state = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
     defer state.deinit();
 
     {
@@ -2009,7 +2003,7 @@ test "highestSlot" {
         try state.db.commit(&write_batch);
 
         const reader = state.reader();
-        const highest_slot = (try highestSlot(&reader)).?;
+        const highest_slot = (try reader.highestSlot()).?;
         try std.testing.expectEqual(slot_meta.slot, highest_slot);
     }
 
@@ -2034,13 +2028,12 @@ test "highestSlot" {
     }
 }
 
-test "lowestSlot" {
+test lowestSlot {
     const allocator = std.testing.allocator;
-    const logger = .noop;
     var registry = sig.prometheus.Registry(.{}).init(allocator);
     defer registry.deinit();
 
-    var state = try sig.ledger.tests.initTestLedger(allocator, @src(), logger);
+    var state = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
     defer state.deinit();
 
     const shred_slot = 10;
@@ -2067,17 +2060,16 @@ test "lowestSlot" {
     try state.db.commit(&write_batch);
 
     const reader = state.reader();
-    const lowest_slot = try lowestSlot(&reader);
+    const lowest_slot = try reader.lowestSlot();
     try std.testing.expectEqual(slot_meta.slot, lowest_slot);
 }
 
-test "isShredDuplicate" {
+test isShredDuplicate {
     const allocator = std.testing.allocator;
-    const logger = .noop;
     var registry = sig.prometheus.Registry(.{}).init(allocator);
     defer registry.deinit();
 
-    var state = try sig.ledger.tests.initTestLedger(allocator, @src(), logger);
+    var state = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
     defer state.deinit();
 
     const shred_slot = 10;
@@ -2114,13 +2106,12 @@ test "isShredDuplicate" {
     try std.testing.expectEqualSlices(u8, shred_payload, other_payload.items);
 }
 
-test "findMissingDataIndexes" {
+test findMissingDataIndexes {
     const allocator = std.testing.allocator;
-    const logger = .noop;
     var registry = sig.prometheus.Registry(.{}).init(allocator);
     defer registry.deinit();
 
-    var state = try sig.ledger.tests.initTestLedger(allocator, @src(), logger);
+    var state = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
     defer state.deinit();
 
     const shred_slot = 10;
@@ -2175,13 +2166,12 @@ test "findMissingDataIndexes" {
     try std.testing.expectEqualSlices(u64, &.{ 0, 1, 3 }, indexes.items);
 }
 
-test "getCodeShred" {
+test getCodeShred {
     const allocator = std.testing.allocator;
-    const logger = .noop;
     var registry = sig.prometheus.Registry(.{}).init(allocator);
     defer registry.deinit();
 
-    var state = try sig.ledger.tests.initTestLedger(allocator, @src(), logger);
+    var state = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
     defer state.deinit();
 
     var shred = Shred{ .code = try CodeShred.zeroedForTest(allocator) };
@@ -2249,19 +2239,18 @@ test "getCodeShred" {
     try std.testing.expectEqualSlices(u8, shred.payload(), shred_payload_2);
 }
 
-test "getDataShred" {
+test getDataShred {
     const allocator = std.testing.allocator;
-    const logger = .noop;
     var registry = sig.prometheus.Registry(.{}).init(allocator);
     defer registry.deinit();
 
-    var state = try sig.ledger.tests.initTestLedger(allocator, @src(), logger);
+    var state = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
     defer state.deinit();
 
     var shred_vec = sig.ledger.shred.test_data_shred; // local copy
     const shred_payload = shred_vec[0..sig.ledger.shred.DataShred.constants.payload_size];
     const shred_slot = shred_layout.getSlot(shred_payload) orelse return error.InvalidShredData;
-    // shred_payload[73] = 0; // zero-th shred index
+    // shred_payload[73] = 0; // zeroth shred index
     const shred_index = shred_layout.getIndex(shred_payload) orelse return error.InvalidShredData;
 
     var shred = try sig.ledger.shred.Shred.fromPayload(allocator, shred_payload);
@@ -2315,4 +2304,380 @@ test "getDataShred" {
 
     const shred_payload_2 = shreds.items[0].payload();
     try std.testing.expectEqualSlices(u8, shred_payload, shred_payload_2);
+}
+
+test ensureLowestCleanupSlot {
+    const allocator = std.testing.allocator;
+
+    var state = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
+    defer state.deinit();
+
+    state.highest_slot_cleaned = RwMux(Slot).init(5);
+    const reader = state.reader();
+
+    var lock, const slot = try reader.ensureLowestCleanupSlot();
+    defer lock.unlock();
+    try std.testing.expectEqual(6, slot);
+}
+
+test getBlockTime {
+    const allocator = std.testing.allocator;
+
+    var state = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
+    defer state.deinit();
+
+    const slot: Slot = 42;
+    const timestamp: UnixTimestamp = 1_234_567_890;
+
+    try state.db.put(schema.blocktime, slot, timestamp);
+
+    const reader = state.reader();
+    const result = try reader.getBlockTime(allocator, slot);
+    try std.testing.expectEqual(timestamp, result.?);
+
+    const no_result = try reader.getBlockTime(allocator, 999);
+    try std.testing.expectEqual(null, no_result);
+}
+
+test getRecentPerfSamples {
+    const allocator = std.testing.allocator;
+
+    var state = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
+    defer state.deinit();
+
+    var write_batch = try state.db.initWriteBatch();
+    defer write_batch.deinit();
+
+    // add some perf samples
+    for (1..6) |i| {
+        const slot: Slot = @intCast(i * 10);
+        const sample = PerfSample{
+            .num_transactions = @intCast(i * 100),
+            .num_slots = 1,
+            .sample_period_secs = 60,
+            .num_non_vote_transactions = @intCast(i * 90),
+        };
+        try write_batch.put(schema.perf_samples, slot, sample);
+    }
+    try state.db.commit(&write_batch);
+
+    const reader = state.reader();
+    // get 3 most recent samples
+    var samples = try reader.getRecentPerfSamples(allocator, 3);
+    defer samples.deinit();
+
+    try std.testing.expectEqual(3, samples.items.len);
+    // should be in reverse order (most recent first)
+    try std.testing.expectEqual(50, samples.items[0][0]);
+    try std.testing.expectEqual(40, samples.items[1][0]);
+    try std.testing.expectEqual(30, samples.items[2][0]);
+}
+
+test readProgramCosts {
+    const allocator = std.testing.allocator;
+    var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const random = rng.random();
+
+    var state = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
+    defer state.deinit();
+
+    var write_batch = try state.db.initWriteBatch();
+    defer write_batch.deinit();
+
+    // add some program costs
+    var pubkey1_data: [32]u8 = undefined;
+    random.bytes(&pubkey1_data);
+    const pubkey1 = Pubkey{ .data = pubkey1_data };
+
+    var pubkey2_data: [32]u8 = undefined;
+    random.bytes(&pubkey2_data);
+    const pubkey2 = Pubkey{ .data = pubkey2_data };
+
+    try write_batch.put(schema.program_costs, pubkey1, .{ .cost = 1000 });
+    try write_batch.put(schema.program_costs, pubkey2, .{ .cost = 2000 });
+    try state.db.commit(&write_batch);
+
+    const reader = state.reader();
+    var costs = try reader.readProgramCosts(allocator);
+    defer costs.deinit();
+
+    try std.testing.expectEqual(2, costs.items.len);
+}
+
+test getRootedBlockWithEntries {
+    const allocator = std.testing.allocator;
+
+    var state = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
+    defer state.deinit();
+
+    const result = try sig.ledger.tests.insertDataForBlockTest(&state, allocator);
+    defer result.deinit();
+
+    const reader = state.reader();
+    const slot = result.slot;
+
+    // test with require_previous_blockhash = false
+    const block_with_entries = try reader.getRootedBlockWithEntries(allocator, slot + 1, false);
+    defer {
+        block_with_entries.entries.deinit();
+        block_with_entries.block.deinit(allocator);
+    }
+
+    try std.testing.expect(block_with_entries.entries.items.len > 0);
+    try std.testing.expectEqual(100, block_with_entries.block.transactions.len);
+
+    // test error case: not rooted
+    const not_rooted = reader.getRootedBlockWithEntries(allocator, slot + 2, false);
+    try std.testing.expectError(error.SlotNotRooted, not_rooted);
+}
+
+test getTransactionStatus {
+    const allocator = std.testing.allocator;
+    var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const random = rng.random();
+
+    var state = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
+    defer state.deinit();
+
+    // create a signature and transaction status
+    var sig_data: [64]u8 = undefined;
+    random.bytes(&sig_data);
+    const signature = Signature{ .r = sig_data[0..32].*, .s = sig_data[32..64].* };
+
+    const slot: Slot = 50;
+    const status_meta = TransactionStatusMeta{
+        .status = null,
+        .fee = 100,
+        .pre_balances = &.{},
+        .post_balances = &.{},
+        .inner_instructions = &.{},
+        .log_messages = &.{},
+        .pre_token_balances = &.{},
+        .post_token_balances = &.{},
+        .rewards = &.{},
+        .loaded_addresses = .{},
+        .return_data = .{},
+        .compute_units_consumed = 1000,
+    };
+
+    // insert transaction status and root it
+    var write_batch = try state.db.initWriteBatch();
+    defer write_batch.deinit();
+    try write_batch.put(schema.transaction_status, .{ signature, slot }, status_meta);
+    try write_batch.put(schema.rooted_slots, slot, true);
+    try state.db.commit(&write_batch);
+
+    const reader = state.reader();
+    const rooted_status = try reader.getRootedTransactionStatus(allocator, signature);
+    try std.testing.expect(rooted_status != null);
+    const status_slot, const status = rooted_status.?;
+    defer status.deinit(allocator);
+    try std.testing.expectEqual(slot, status_slot);
+    try std.testing.expectEqual(100, status.fee);
+
+    // test with non-existent signature returns null
+    var fake_sig_data: [64]u8 = undefined;
+    random.bytes(&fake_sig_data);
+    const fake_sig = Signature{ .r = fake_sig_data[0..32].*, .s = fake_sig_data[32..64].* };
+    const no_status = try reader.getRootedTransactionStatus(allocator, fake_sig);
+    try std.testing.expectEqual(null, no_status);
+}
+
+test findTransactionInSlot {
+    const allocator = std.testing.allocator;
+    var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const random = rng.random();
+
+    var state = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
+    defer state.deinit();
+
+    const result = try sig.ledger.tests.insertDataForBlockTest(&state, allocator);
+    defer result.deinit();
+
+    const reader = state.reader();
+    const slot = result.slot;
+
+    const signature = result.entries[0].transactions[0].signatures[0];
+
+    // test finding transaction in slot
+    const tx = try reader.findTransactionInSlot(allocator, slot, signature);
+    try std.testing.expect(tx != null);
+    const found_tx = tx.?;
+    defer found_tx.deinit(allocator);
+    try std.testing.expect(found_tx.signatures[0].eql(&signature));
+
+    // test with wrong slot
+    const no_tx = try reader.findTransactionInSlot(allocator, slot + 100, signature);
+    try std.testing.expectEqual(null, no_tx);
+
+    // test with non-existent signature
+    var fake_sig_data: [64]u8 = undefined;
+    random.bytes(&fake_sig_data);
+    const fake_sig = Signature{ .r = fake_sig_data[0..32].*, .s = fake_sig_data[32..64].* };
+    const no_tx2 = try reader.findTransactionInSlot(allocator, slot, fake_sig);
+    try std.testing.expectEqual(null, no_tx2);
+}
+
+test getBlockSignatures {
+    const allocator = std.testing.allocator;
+
+    var state = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
+    defer state.deinit();
+
+    const result = try sig.ledger.tests.insertDataForBlockTest(&state, allocator);
+    defer result.deinit();
+
+    const reader = state.reader();
+    const slot = result.slot;
+
+    // test getBlockSignatures
+    var signatures = try reader.getBlockSignatures(allocator, slot);
+    defer signatures.deinit();
+    try std.testing.expect(signatures.items.len > 0);
+    try std.testing.expectEqual(100, signatures.items.len);
+
+    // test getBlockSignaturesReversed
+    var reversed_sigs = try reader.getBlockSignaturesReversed(allocator, slot);
+    defer reversed_sigs.deinit();
+    try std.testing.expect(reversed_sigs.items.len > 0);
+    try std.testing.expectEqual(signatures.items.len, reversed_sigs.items.len);
+
+    // check that reversed is actually reversed
+    for (signatures.items, 0..) |signature, i| {
+        const rev_idx = reversed_sigs.items.len - 1 - i;
+        try std.testing.expect(signature.eql(&reversed_sigs.items[rev_idx]));
+    }
+}
+
+test findAddressSignaturesForSlot {
+    const allocator = std.testing.allocator;
+    var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const random = rng.random();
+
+    var state = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
+    defer state.deinit();
+
+    const slot: Slot = 100;
+    var address_data: [32]u8 = undefined;
+    random.bytes(&address_data);
+    const address = Pubkey{ .data = address_data };
+
+    var sig1_data: [64]u8 = undefined;
+    random.bytes(&sig1_data);
+    const sig1 = Signature{ .r = sig1_data[0..32].*, .s = sig1_data[32..64].* };
+
+    var sig2_data: [64]u8 = undefined;
+    random.bytes(&sig2_data);
+    const sig2 = Signature{ .r = sig2_data[0..32].*, .s = sig2_data[32..64].* };
+
+    // insert address signatures
+    var write_batch = try state.db.initWriteBatch();
+    defer write_batch.deinit();
+    try write_batch.put(schema.address_signatures, .{
+        .address = address,
+        .slot = slot,
+        .transaction_index = 0,
+        .signature = sig1,
+    }, .{ .writeable = false });
+    try write_batch.put(schema.address_signatures, .{
+        .address = address,
+        .slot = slot,
+        .transaction_index = 1,
+        .signature = sig2,
+    }, .{ .writeable = false });
+    try state.db.commit(&write_batch);
+
+    const reader = state.reader();
+    var sigs = try reader.findAddressSignaturesForSlot(allocator, address, slot);
+    defer sigs.deinit();
+
+    try std.testing.expectEqual(2, sigs.items.len);
+    try std.testing.expect(sigs.items[0][1].eql(&sig1));
+    try std.testing.expect(sigs.items[1][1].eql(&sig2));
+
+    // test with different address
+    var other_address_data: [32]u8 = undefined;
+    random.bytes(&other_address_data);
+    const other_address = Pubkey{ .data = other_address_data };
+    var no_sigs = try reader.findAddressSignaturesForSlot(allocator, other_address, slot);
+    defer no_sigs.deinit();
+    try std.testing.expectEqual(0, no_sigs.items.len);
+}
+
+test getConfirmedSignaturesForAddress {
+    const allocator = std.testing.allocator;
+    var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const random = rng.random();
+
+    var state = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
+    defer state.deinit();
+
+    state.max_root.store(50, .monotonic);
+
+    const slot: Slot = 10;
+    var address_data: [32]u8 = undefined;
+    random.bytes(&address_data);
+    const address = Pubkey{ .data = address_data };
+
+    var sig_data: [64]u8 = undefined;
+    random.bytes(&sig_data);
+    const sig1 = Signature{ .r = sig_data[0..32].*, .s = sig_data[32..64].* };
+
+    // set up the database with required data
+    var write_batch = try state.db.initWriteBatch();
+    defer write_batch.deinit();
+
+    // root the slot
+    try write_batch.put(schema.rooted_slots, slot, true);
+
+    // add a slot meta for genesis check
+    var slot_meta = SlotMeta.init(allocator, 0, null);
+    slot_meta.received = 1;
+    try write_batch.put(schema.slot_meta, 0, slot_meta);
+
+    // add transaction status
+    const status_meta = TransactionStatusMeta{
+        .status = null,
+        .fee = 42,
+        .pre_balances = &.{},
+        .post_balances = &.{},
+        .inner_instructions = &.{},
+        .log_messages = &.{},
+        .pre_token_balances = &.{},
+        .post_token_balances = &.{},
+        .rewards = &.{},
+        .loaded_addresses = .{},
+        .return_data = .{},
+        .compute_units_consumed = 1000,
+    };
+    try write_batch.put(schema.transaction_status, .{ sig1, slot }, status_meta);
+
+    // add address signature mapping
+    try write_batch.put(schema.address_signatures, .{
+        .address = address,
+        .slot = slot,
+        .transaction_index = 0,
+        .signature = sig1,
+    }, .{ .writeable = false });
+
+    try state.db.commit(&write_batch);
+
+    const reader = state.reader();
+    var sig_infos = try reader.getConfirmedSignaturesForAddress(
+        allocator,
+        address,
+        slot + 1,
+        null,
+        null,
+        10,
+    );
+    defer {
+        for (sig_infos.infos.items) |*info| {
+            if (info.memo) |*m| m.deinit();
+        }
+        sig_infos.infos.deinit();
+    }
+
+    try std.testing.expect(sig_infos.infos.items.len > 0);
+    try std.testing.expect(sig_infos.found_before);
 }
