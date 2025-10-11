@@ -9,6 +9,8 @@ pub const Config = struct {
     filters: ?[]const []const u8,
     enable_tsan: bool,
     ledger_db: LedgerDB,
+    only_fetch: bool,
+    build_deps: bool,
     run: bool,
     install: bool,
     ssh_host: ?[]const u8,
@@ -52,6 +54,16 @@ pub const Config = struct {
                 "ledger",
                 "Ledger database backend",
             ) orelse .rocksdb,
+            .only_fetch = b.option(
+                bool,
+                "only-fetch",
+                "Don't build anything, just fetch packages",
+            ) orelse false,
+            .build_deps = b.option(
+                bool,
+                "build-deps",
+                "Build deps, even with no-bin and no-run",
+            ) orelse false,
             .run = !(b.option(
                 bool,
                 "no-run",
@@ -193,8 +205,9 @@ pub const Config = struct {
 
 pub fn build(b: *Build) !void {
     const config = try Config.fromBuild(b);
+    if (config.only_fetch) return;
     defer {
-        if (!config.install and !config.run) disableEmitBin(b);
+        if (!config.install and !config.run and !config.build_deps) disableEmitBin(b);
     }
 
     const build_options = b.addOptions();
@@ -206,11 +219,10 @@ pub fn build(b: *Build) !void {
     const sig_step = b.step("sig", "Run the sig executable");
     const test_step = b.step("test", "Run library tests");
     const fuzz_step = b.step("fuzz", "Gossip fuzz testing");
-    const benchmark_step = b.step("benchmark", "Benchmark client");
+    const benchmark_step = b.step("be nchmark", "Benchmark client");
     const geyser_reader_step = b.step("geyser_reader", "Read data from geyser");
     const vm_step = b.step("vm", "Run the VM client");
     const docs_step = b.step("docs", "Generate and install documentation for the Sig Library");
-
     // Dependencies
     const dep_opts = .{
         .target = config.target,
