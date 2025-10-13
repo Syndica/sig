@@ -367,27 +367,21 @@ pub fn replayBatch(
     var svm_gateway = try SvmGateway.init(allocator, transactions, svm_params);
     defer svm_gateway.deinit(allocator);
 
-    for (transactions, 0..) |transaction, i| {
-        if (exit.load(.monotonic)) {
-            return .exit;
-        }
+    const environment = try svm_gateway.environment();
 
-        const hash, const compute_budget_details =
-            switch (preprocessTransaction(transaction.transaction, .run_sig_verify)) {
-                .ok => |res| res,
-                .err => |err| return .{ .failure = err },
-            };
+    const result = try sig.runtime.transaction_execution.executeBatch_(
+        allocator,
+        transactions,
+        &environment,
+        &svm_gateway.state.accounts,
+        &svm_gateway.state.programs,
+        results,
+        &populated_count,
+        exit,
+    );
 
-        const runtime_transaction = transaction.toRuntimeTransaction(hash, compute_budget_details);
+    if (result != .success) return result;
 
-        switch (try executeTransaction(allocator, &svm_gateway, &runtime_transaction)) {
-            .ok => |result| {
-                results[i] = .{ hash, result };
-                populated_count += 1;
-            },
-            .err => |err| return .{ .failure = err },
-        }
-    }
     try committer.commitTransactions(
         allocator,
         svm_gateway.params.slot,

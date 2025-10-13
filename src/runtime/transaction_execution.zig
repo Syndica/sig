@@ -279,6 +279,67 @@ pub fn TransactionResult(comptime T: type) type {
     };
 }
 
+pub fn executeBatch_(
+    allocator: std.mem.Allocator,
+    transactions: []const sig.replay.resolve_lookup.ResolvedTransaction,
+    environment: *const TransactionExecutionEnvironment,
+    accounts: *BatchAccountCache,
+    programs: *ProgramMap,
+    results: []struct { Hash, ProcessedTransaction },
+    populated_count: *usize,
+    exit: *std.atomic.Value(bool),
+) !sig.replay.execution.BatchResult {
+    for (transactions, 0..) |transaction, i| {
+        if (exit.load(.monotonic)) {
+            return .exit;
+        }
+
+        const hash, const compute_budget_details =
+            switch (sig.replay.preprocess_transaction.preprocessTransaction(transaction.transaction, .run_sig_verify)) {
+                .ok => |res| res,
+                .err => |err| return .{ .failure = err },
+            };
+
+        const runtime_transaction = transaction.toRuntimeTransaction(hash, compute_budget_details);
+
+        switch (try executeTransaction_(
+            allocator,
+            &runtime_transaction,
+            environment,
+            accounts,
+            programs,
+        )) {
+            .ok => |result| {
+                results[i] = .{ hash, result };
+                populated_count.* += 1;
+            },
+            .err => |err| return .{ .failure = err },
+        }
+    }
+
+    return .success;
+}
+
+pub fn executeTransaction_(
+    allocator: std.mem.Allocator,
+    transaction: *const RuntimeTransaction,
+    environment: *const TransactionExecutionEnvironment,
+    accounts: *BatchAccountCache,
+    programs: *ProgramMap,
+) !TransactionResult(ProcessedTransaction) {
+    var zone = tracy.Zone.init(@src(), .{ .name = "executeTransaction" });
+    defer zone.deinit();
+
+    return try sig.runtime.transaction_execution.loadAndExecuteTransaction(
+        allocator,
+        transaction,
+        accounts,
+        environment,
+        &.{ .log = true, .log_messages_byte_limit = null },
+        programs,
+    );
+}
+
 /// [agave] https://github.com/firedancer-io/agave/blob/403d23b809fc513e2c4b433125c127cf172281a2/svm/src/transaction_processor.rs#L323-L324
 pub fn loadAndExecuteTransactions(
     allocator: std.mem.Allocator,
