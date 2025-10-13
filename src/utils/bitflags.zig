@@ -6,6 +6,8 @@ pub fn BitFlags(comptime FlagEnum: type) type {
 
         pub const Flag = FlagEnum;
 
+        pub const empty = Self{ .state = 0 };
+
         pub fn from(flag: FlagEnum) Self {
             return .{ .state = @intFromEnum(flag) };
         }
