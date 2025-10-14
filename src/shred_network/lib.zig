@@ -2,7 +2,6 @@ pub const repair_message = @import("repair_message.zig");
 pub const repair_service = @import("repair_service.zig");
 pub const service = @import("service.zig");
 pub const shred_deduper = @import("shred_deduper.zig");
-pub const shred_processor = @import("shred_processor.zig");
 pub const shred_receiver = @import("shred_receiver.zig");
 pub const shred_retransmitter = @import("shred_retransmitter.zig");
 pub const shred_tracker = @import("shred_tracker.zig");

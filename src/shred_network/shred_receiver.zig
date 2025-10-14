@@ -5,12 +5,14 @@ const shred_network = @import("lib.zig");
 
 const bincode = sig.bincode;
 const layout = sig.ledger.shred.layout;
+const shred_verifier = shred_network.shred_verifier;
 
 const Allocator = std.mem.Allocator;
 const Atomic = std.atomic.Value;
 const KeyPair = sig.identity.KeyPair;
 const Socket = network.Socket;
 
+const BasicShredTracker = shred_network.shred_tracker.BasicShredTracker;
 const Channel = sig.sync.Channel;
 const Counter = sig.prometheus.Counter;
 const Histogram = sig.prometheus.Histogram;
@@ -18,136 +20,225 @@ const Packet = sig.net.Packet;
 const Ping = sig.gossip.Ping;
 const Pong = sig.gossip.Pong;
 const RepairMessage = shred_network.repair_message.RepairMessage;
+const Shred = sig.ledger.shred.Shred;
+const ShredInserter = sig.ledger.ShredInserter;
 const Slot = sig.core.Slot;
+const SlotLeaders = sig.core.leader_schedule.SlotLeaders;
 const SocketThread = sig.net.SocketThread;
 const ExitCondition = sig.sync.ExitCondition;
 const VariantCounter = sig.prometheus.VariantCounter;
 
 const Logger = sig.trace.Logger("shred_receiver");
+const VerifiedMerkleRoots = sig.utils.lru.LruCache(.non_locking, sig.core.Hash, void);
 
 /// Analogous to [ShredFetchStage](https://github.com/anza-xyz/agave/blob/aa2f078836434965e1a5a03af7f95c6640fe6e1e/core/src/shred_fetch_stage.rs#L34)
 pub const ShredReceiver = struct {
-    allocator: Allocator,
-    keypair: *const KeyPair,
-    exit: *Atomic(bool),
+    params: Params,
     logger: Logger,
-    repair_socket: Socket,
-    turbine_socket: Socket,
-    /// me --> shred verifier
-    unverified_shred_sender: *Channel(Packet),
-    shred_version: *const Atomic(u16),
-    metrics: ShredReceiverMetrics,
-    root_slot: Slot, // TODO: eventually, this should be handled by BankForks
 
-    const Self = @This();
+    incoming_shreds: Channel(Packet),
+    outgoing_pongs: Channel(Packet),
+
+    metrics: ShredReceiverMetrics,
+    verifier_metrics: shred_verifier.Metrics,
+
+    verified_merkle_roots: VerifiedMerkleRoots,
+    shred_batch: std.MultiArrayList(struct { shred: Shred, is_repair: bool }),
+
+    const Params = struct {
+        keypair: *const KeyPair,
+        exit: *Atomic(bool),
+
+        repair_socket: Socket,
+        turbine_socket: Socket,
+
+        /// me --> retransmit service
+        maybe_retransmit_shred_sender: ?*Channel(Packet),
+
+        shred_version: *const Atomic(u16),
+
+        root_slot: Slot,
+        leader_schedule: SlotLeaders,
+
+        /// shared with repair
+        tracker: *BasicShredTracker,
+        inserter: ShredInserter,
+    };
+
+    pub fn init(
+        allocator: Allocator,
+        logger: Logger,
+        registry: *sig.prometheus.Registry(.{}),
+        params: Params,
+    ) !ShredReceiver {
+        var incoming_shreds = try Channel(Packet).init(allocator);
+        errdefer incoming_shreds.deinit();
+
+        var outgoing_pongs = try Channel(Packet).init(allocator);
+        errdefer outgoing_pongs.deinit();
+
+        var verified_merkle_roots = try VerifiedMerkleRoots.init(allocator, 1024);
+        errdefer verified_merkle_roots.deinit();
+
+        const metrics = try registry.initStruct(ShredReceiverMetrics);
+        const verifier_metrics = try registry.initStruct(shred_verifier.Metrics);
+
+        return ShredReceiver{
+            .params = params,
+            .logger = logger,
+            .incoming_shreds = incoming_shreds,
+            .outgoing_pongs = outgoing_pongs,
+            .metrics = metrics,
+            .verifier_metrics = verifier_metrics,
+            .verified_merkle_roots = verified_merkle_roots,
+            .shred_batch = .empty,
+        };
+    }
+
+    pub fn deinit(self: *ShredReceiver, allocator: Allocator) void {
+        self.incoming_shreds.deinit();
+        self.outgoing_pongs.deinit();
+        self.verified_merkle_roots.deinit();
+        self.shred_batch.deinit(allocator);
+    }
 
     /// Run threads to listen/send over socket and handle all incoming packets.
     /// Returns when exit is set to true.
-    pub fn run(self: *Self) !void {
+    pub fn run(self: *ShredReceiver, allocator: Allocator) !void {
         defer self.logger.info().log("exiting shred receiver");
         errdefer self.logger.err().log("error in shred receiver");
 
-        const exit = ExitCondition{ .unordered = self.exit };
+        const exit = ExitCondition{ .unordered = self.params.exit };
 
-        // Cretae pipe from response_sender -> repair_socket
-        const response_sender = try Channel(Packet).create(self.allocator);
-        defer response_sender.destroy();
-
+        // Create pipe from outgoing_pongs -> repair_socket
         const response_sender_thread = try SocketThread.spawnSender(
-            self.allocator,
+            allocator,
             .from(self.logger),
-            self.repair_socket,
-            response_sender,
+            self.params.repair_socket,
+            &self.outgoing_pongs,
             exit,
+            .empty,
         );
         defer response_sender_thread.join();
 
-        // Run a packetHandler thread which pipes from repair_socket -> handlePacket.
-        const response_thread = try std.Thread.spawn(.{}, runPacketHandler, .{
-            self,
-            response_sender,
-            self.repair_socket,
-            exit,
-            true, // is_repair
-        });
-        defer response_thread.join();
-
-        // Run a packetHandler thread which pipes from turbine_socket -> handlePacket.
-        const turbine_thread = try std.Thread.spawn(.{}, runPacketHandler, .{
-            self,
-            response_sender,
-            self.turbine_socket,
-            exit,
-            false, // is_repair
-        });
-        defer turbine_thread.join();
-    }
-
-    fn runPacketHandler(
-        self: *Self,
-        response_sender: *Channel(Packet),
-        receiver_socket: Socket,
-        exit: ExitCondition,
-        comptime is_repair: bool,
-    ) !void {
-        // Setup a channel.
-        const receiver = try Channel(Packet).create(self.allocator);
-        defer receiver.destroy();
-
-        // Receive from the socket into the channel.
-        const receiver_thread = try SocketThread.spawnReceiver(
-            self.allocator,
+        // Create pipe from repair_socket -> incoming_shreds tagged .repair
+        const repair_receiver_thread = try SocketThread.spawnReceiver(
+            allocator,
             .from(self.logger),
-            receiver_socket,
-            receiver,
+            self.params.repair_socket,
+            &self.incoming_shreds,
             exit,
+            .from(.repair),
         );
-        defer receiver_thread.join();
+        defer repair_receiver_thread.join();
 
-        // Handle packets from the channel.
+        // Create pipe from turbine_socket -> incoming_shreds without a tagging.
+        const turbine_receiver_thread = try SocketThread.spawnReceiver(
+            allocator,
+            .from(self.logger),
+            self.params.turbine_socket,
+            &self.incoming_shreds,
+            exit,
+            .empty,
+        );
+        defer turbine_receiver_thread.join();
+
+        // Handle all incoming shreds from the channel.
         while (true) {
-            receiver.waitToReceive(exit) catch break;
-            var packet_count: usize = 0;
-            while (receiver.tryReceive()) |packet| {
-                self.metrics.incReceived(is_repair);
-                packet_count += 1;
-                try self.handlePacket(packet, response_sender, is_repair);
-            }
-            self.metrics.observeBatchSize(is_repair, packet_count);
+            self.incoming_shreds.waitToReceive(exit) catch break;
+            try self.handleBatch(allocator);
         }
     }
 
-    /// Handle a single packet and return.
-    fn handlePacket(
-        self: Self,
-        packet: Packet,
-        response_sender: *Channel(Packet),
-        comptime is_repair: bool,
-    ) !void {
+    fn handleBatch(self: *ShredReceiver, allocator: Allocator) !void {
+        defer {
+            for (self.shred_batch.items(.shred)) |shred| shred.deinit();
+            self.shred_batch.clearRetainingCapacity();
+        }
+
+        while (self.incoming_shreds.tryReceive()) |packet| {
+            const is_repair = packet.flags.isSet(.repair);
+            self.metrics.incReceived(is_repair);
+
+            if (try self.handlePacket(allocator, packet)) |shred| {
+                try self.shred_batch.append(allocator, .{
+                    .shred = shred,
+                    .is_repair = is_repair,
+                });
+                if (self.shred_batch.len == MAX_SHREDS_PER_ITER) break;
+            }
+        }
+
+        const result = try self.params.inserter.insertShreds(
+            allocator,
+            self.shred_batch.items(.shred),
+            self.shred_batch.items(.is_repair),
+            .{
+                .slot_leaders = self.params.leader_schedule,
+                .shred_tracker = self.params.tracker,
+            },
+        );
+        self.metrics.passed_to_inserter_count.add(self.shred_batch.len);
+        result.deinit();
+
+        self.metrics.batch_size.observe(self.shred_batch.len);
+    }
+
+    const MAX_SHREDS_PER_ITER = 1024;
+
+    /// Handle a single packet and return a shred if it's a valid shred.
+    fn handlePacket(self: *ShredReceiver, allocator: Allocator, packet: Packet) !?Shred {
         if (packet.size == REPAIR_RESPONSE_SERIALIZED_PING_BYTES) {
-            if (try self.handlePing(&packet)) |pong_packet| {
-                try response_sender.send(pong_packet);
+            if (try handlePing(
+                allocator,
+                &packet,
+                self.metrics,
+                self.params.keypair,
+            )) |pong_packet| {
+                try self.outgoing_pongs.send(pong_packet);
                 self.metrics.pong_sent_count.inc();
             }
+            return null;
         } else {
             const max_slot = std.math.maxInt(Slot); // TODO agave uses BankForks for this
-            validateShred(&packet, self.root_slot, self.shred_version, max_slot) catch |err| {
+            validateShred(
+                &packet,
+                self.params.root_slot,
+                self.params.shred_version,
+                max_slot,
+            ) catch |err| {
                 self.metrics.discard.observe(err);
-                return;
+                return null;
             };
-            var our_packet = packet;
-            if (is_repair) our_packet.flags.set(.repair);
             self.metrics.satisfactory_shred_count.inc();
-            try self.unverified_shred_sender.send(our_packet);
+
+            shred_verifier.verifyShred(
+                &packet,
+                self.params.leader_schedule,
+                &self.verified_merkle_roots,
+                self.verifier_metrics,
+            ) catch |err| {
+                self.verifier_metrics.fail.observe(err);
+                return null;
+            };
+            self.verifier_metrics.verified_count.inc();
+
+            if (self.params.maybe_retransmit_shred_sender) |retransmit_shred_sender| {
+                try retransmit_shred_sender.send(packet);
+            }
+
+            const shred_payload = layout.getShred(&packet) orelse return error.InvalidVerifiedShred;
+            return Shred.fromPayload(allocator, shred_payload) catch |err| {
+                self.logger.err().logf(
+                    "failed to deserialize verified shred {?}.{?}: {}",
+                    .{ layout.getSlot(shred_payload), layout.getIndex(shred_payload), err },
+                );
+                return null;
+            };
         }
     }
 
-    /// Handle a ping message and returns the repair message.
-    fn handlePing(self: *const Self, packet: *const Packet) !?Packet {
-        return handlePingInner(self.allocator, packet, self.metrics, self.keypair);
-    }
-
-    fn handlePingInner(
+    fn handlePing(
         allocator: std.mem.Allocator,
         packet: *const Packet,
         metrics: ShredReceiverMetrics,
@@ -180,6 +271,80 @@ pub const ShredReceiver = struct {
     }
 };
 
+test "handleBatch/handlePacket" {
+    const allocator = std.testing.allocator;
+    const keypair = try sig.identity.KeyPair.generateDeterministic(.{1} ** 32);
+    const root_slot = 0;
+    const invalid_socket = Socket{
+        .family = .ipv4,
+        .internal = -1,
+        .endpoint = null,
+    };
+
+    var registry = sig.prometheus.Registry(.{}).init(allocator);
+    defer registry.deinit();
+
+    var epoch_ctx = try sig.adapter.EpochContextManager.init(allocator, .DEFAULT);
+    defer epoch_ctx.deinit();
+
+    var ledger = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
+    defer ledger.deinit();
+
+    var shred_tracker = try sig.shred_network.shred_tracker.BasicShredTracker.init(
+        allocator,
+        root_slot + 1,
+        .noop,
+        &registry,
+    );
+    defer shred_tracker.deinit();
+
+    var exit = Atomic(bool).init(false);
+    const shred_version = Atomic(u16).init(0);
+
+    var shred_receiver = try ShredReceiver.init(allocator, .noop, &registry, .{
+        .keypair = &keypair,
+        .exit = &exit,
+        .repair_socket = invalid_socket,
+        .turbine_socket = invalid_socket,
+        .shred_version = &shred_version,
+        .root_slot = root_slot,
+        .maybe_retransmit_shred_sender = null,
+        .leader_schedule = epoch_ctx.slotLeaders(),
+        .tracker = &shred_tracker,
+        .inserter = ledger.shredInserter(),
+    });
+    defer shred_receiver.deinit(allocator);
+
+    // test repair packet
+    {
+        const ping = try Ping.init(.{1} ** 32, &keypair);
+        const addr = sig.net.SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 88);
+        var packet = try Packet.initFromBincode(addr, RepairPing{ .ping = ping });
+        packet.flags = .from(.repair);
+        try shred_receiver.incoming_shreds.send(packet);
+    }
+
+    // test shred packet
+    {
+        const shreds = try sig.ledger.tests.loadShredsFromFile(
+            allocator,
+            sig.TEST_DATA_DIR ++ "shreds/merkle_root_metas_coding_test_shreds_3_1228.bin",
+        );
+        defer sig.ledger.tests.deinitShreds(allocator, shreds);
+        const shred_data = shreds[0].payload();
+
+        var packet: Packet = undefined;
+        @memcpy(packet.buffer[0..shred_data.len], shred_data);
+        packet.size = @intCast(shred_data.len);
+        packet.addr = .{ .address = .{ .ipv4 = .init(0, 0, 0, 0) }, .port = 0 };
+        packet.flags = .{};
+
+        try shred_receiver.incoming_shreds.send(packet);
+    }
+
+    try shred_receiver.handleBatch(allocator);
+}
+
 test "handlePing" {
     const allocator = std.testing.allocator;
     var metrics_registry = sig.prometheus.Registry(.{}).init(allocator);
@@ -195,7 +360,7 @@ test "handlePing" {
     const input_ping_packet = try Packet.initFromBincode(addr, RepairPing{ .ping = ping });
 
     const expected_pong_packet = try Packet.initFromBincode(addr, RepairMessage{ .pong = pong });
-    const actual_pong_packet = try ShredReceiver.handlePingInner(
+    const actual_pong_packet = try ShredReceiver.handlePing(
         allocator,
         &input_ping_packet,
         shred_metrics,
@@ -208,7 +373,7 @@ test "handlePing" {
     var evil_ping = ping;
     evil_ping.from = sig.core.Pubkey.fromPublicKey(&evil_keypair.public_key);
     const evil_ping_packet = try Packet.initFromBincode(addr, RepairPing{ .ping = evil_ping });
-    try std.testing.expectEqual(null, try ShredReceiver.handlePingInner(
+    try std.testing.expectEqual(null, try ShredReceiver.handlePing(
         allocator,
         &evil_ping_packet,
         shred_metrics,
@@ -277,12 +442,12 @@ pub const ShredReceiverMetrics = struct {
     turbine_received_count: *Counter,
     repair_received_count: *Counter,
     satisfactory_shred_count: *Counter,
+    passed_to_inserter_count: *Counter,
     valid_ping_count: *Counter,
     ping_deserialize_fail_count: *Counter,
     ping_verify_fail_count: *Counter,
     pong_sent_count: *Counter,
-    repair_batch_size: *Histogram,
-    turbine_batch_size: *Histogram,
+    batch_size: *Histogram,
     discard: *VariantCounter(ShredValidationError),
 
     pub const prefix = "shred_receiver";
@@ -294,18 +459,6 @@ pub const ShredReceiverMetrics = struct {
             self.repair_received_count.inc();
         } else {
             self.turbine_received_count.inc();
-        }
-    }
-
-    pub fn observeBatchSize(
-        self: *const ShredReceiverMetrics,
-        is_repair: bool,
-        packet_count: usize,
-    ) void {
-        if (is_repair) {
-            self.repair_batch_size.observe(packet_count);
-        } else {
-            self.turbine_batch_size.observe(packet_count);
         }
     }
 };

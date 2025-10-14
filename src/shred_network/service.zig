@@ -26,7 +26,6 @@ const RepairPeerProvider = shred_network.repair_service.RepairPeerProvider;
 const RepairRequester = shred_network.repair_service.RepairRequester;
 const RepairService = shred_network.repair_service.RepairService;
 const ShredReceiver = shred_network.shred_receiver.ShredReceiver;
-const ShredReceiverMetrics = shred_network.shred_receiver.ShredReceiverMetrics;
 
 /// Settings which instruct the Shred Network how to behave.
 pub const ShredNetworkConfig = struct {
@@ -85,44 +84,6 @@ pub fn start(
     const repair_socket = try bindUdpReusable(conf.repair_port);
     const turbine_socket = try bindUdpReusable(conf.turbine_recv_port);
 
-    // channels (cant use arena as they need to alloc/free frequently & potentially from multiple sender threads)
-    const unverified_shred_channel = try Channel(Packet).create(deps.allocator);
-    try defers.deferCall(Channel(Packet).destroy, .{unverified_shred_channel});
-    const shreds_to_insert_channel = try Channel(Packet).create(deps.allocator);
-    try defers.deferCall(Channel(Packet).destroy, .{shreds_to_insert_channel});
-    const retransmit_channel = try Channel(Packet).create(deps.allocator);
-    try defers.deferCall(Channel(Packet).destroy, .{retransmit_channel});
-
-    // receiver (threads)
-    const shred_receiver = try arena.create(ShredReceiver);
-    shred_receiver.* = .{
-        .allocator = deps.allocator,
-        .keypair = deps.my_keypair,
-        .exit = deps.exit,
-        .logger = .from(deps.logger),
-        .repair_socket = repair_socket,
-        .turbine_socket = turbine_socket,
-        .unverified_shred_sender = unverified_shred_channel,
-        .shred_version = deps.my_shred_version,
-        .metrics = try deps.registry.initStruct(ShredReceiverMetrics),
-        .root_slot = conf.root_slot,
-    };
-    try service_manager.spawn("Shred Receiver", ShredReceiver.run, .{shred_receiver});
-
-    // verifier (thread)
-    try service_manager.spawn(
-        "Shred Verifier",
-        shred_network.shred_verifier.runShredVerifier,
-        .{
-            deps.exit,
-            deps.registry,
-            unverified_shred_channel,
-            shreds_to_insert_channel,
-            if (conf.retransmit) retransmit_channel else null,
-            deps.epoch_context_mgr.slotLeaders(),
-        },
-    );
-
     // tracker (shared state, internal to Shred Network)
     const shred_tracker = try arena.create(BasicShredTracker);
     shred_tracker.* = try BasicShredTracker.init(
@@ -133,23 +94,30 @@ pub fn start(
     );
     try defers.deferCall(BasicShredTracker.deinit, .{shred_tracker});
 
-    // processor (thread)
-    const processor = shred_network.shred_processor;
+    // channels (cant use arena as they need to alloc/free frequently &
+    // potentially from multiple sender threads)
+    const retransmit_channel = try Channel(Packet).create(deps.allocator);
+    try defers.deferCall(Channel(Packet).destroy, .{retransmit_channel});
+
+    // receiver (threads)
+    const shred_receiver = try arena.create(ShredReceiver);
+    shred_receiver.* = try .init(deps.allocator, .from(deps.logger), deps.registry, .{
+        .keypair = deps.my_keypair,
+        .exit = deps.exit,
+        .repair_socket = repair_socket,
+        .turbine_socket = turbine_socket,
+        .shred_version = deps.my_shred_version,
+        .root_slot = conf.root_slot,
+        .maybe_retransmit_shred_sender = if (conf.retransmit) retransmit_channel else null,
+        .leader_schedule = deps.epoch_context_mgr.slotLeaders(),
+        .tracker = shred_tracker,
+        .inserter = deps.ledger.shredInserter(),
+    });
+    try defers.deferCall(ShredReceiver.deinit, .{ shred_receiver, deps.allocator });
     try service_manager.spawn(
-        "Shred Processor",
-        processor.runShredProcessor,
-        .{
-            deps.allocator,
-            processor.Logger.from(deps.logger),
-            deps.registry,
-            deps.exit,
-            processor.Params{
-                .verified_shred_receiver = shreds_to_insert_channel,
-                .tracker = shred_tracker,
-                .ledger = deps.ledger,
-                .leader_schedule = deps.epoch_context_mgr.slotLeaders(),
-            },
-        },
+        "Shred Receiver",
+        ShredReceiver.run,
+        .{ shred_receiver, deps.allocator },
     );
 
     // retransmitter (thread)
