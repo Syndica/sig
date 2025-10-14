@@ -60,7 +60,7 @@ pub const LastVoteSignal = enum {
     stray,
 };
 
-const ComputedBankState = struct {
+const StakeDistribution = struct {
     /// Maps each validator (by their Pubkey) to the amount of stake they have voted
     /// with on this fork. Helps determine who has already committed to this
     /// fork and how much total stake that represents.
@@ -75,7 +75,7 @@ const ComputedBankState = struct {
     lockout_intervals: LockoutIntervals,
     my_latest_landed_vote: ?Slot,
 
-    pub fn deinit(self: *ComputedBankState, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *StakeDistribution, allocator: std.mem.Allocator) void {
         self.voted_stakes.deinit(allocator);
         self.lockout_intervals.deinit(allocator);
     }
@@ -1678,7 +1678,7 @@ fn optimisticallyBypassVoteStakeThresholdCheck(
 /// Collects and aggregates vote lockout information from all validator vote accounts to compute
 /// aggregated vote lockouts, but also total stake distribution, fork-specific stake, and latest validator votes for frozen banks.
 /// Analogous to [collect_vote_lockouts]https://github.com/anza-xyz/agave/blob/91520c7095c4db968fe666b80a1b80dfef1bd909/core/src/consensus.rs#L389
-pub fn collectVoteLockouts(
+pub fn collectStakeDistribution(
     allocator: std.mem.Allocator,
     logger: Logger,
     vote_account_pubkey: *const Pubkey,
@@ -1687,7 +1687,7 @@ pub fn collectVoteLockouts(
     ancestors: *const AutoArrayHashMapUnmanaged(Slot, Ancestors),
     progress_map: *const ProgressMap,
     latest_validator_votes: *LatestValidatorVotes,
-) !ComputedBankState {
+) !StakeDistribution {
     var vote_slots: SortedSetUnmanaged(Slot) = .empty;
     defer vote_slots.deinit(allocator);
 
@@ -1814,7 +1814,7 @@ pub fn collectVoteLockouts(
         }
     };
 
-    return ComputedBankState{
+    return StakeDistribution{
         .voted_stakes = voted_stakes,
         .total_stake = total_stake,
         .fork_stake = fork_stake,
@@ -2021,7 +2021,7 @@ test "check_vote_threshold_forks" {
         var latest_votes: LatestValidatorVotes = .empty;
         defer latest_votes.deinit(allocator);
 
-        var computed_banks = try collectVoteLockouts(
+        var computed_banks = try collectStakeDistribution(
             allocator,
             .noop,
             &Pubkey.ZEROES,
@@ -2052,7 +2052,7 @@ test "check_vote_threshold_forks" {
         var latest_votes = LatestValidatorVotes.empty;
 
         const vote_to_evaluate = VOTE_THRESHOLD_DEPTH;
-        var computed_banks = try collectVoteLockouts(
+        var computed_banks = try collectStakeDistribution(
             allocator,
             .noop,
             &Pubkey.ZEROES,
@@ -2171,7 +2171,7 @@ test "collect vote lockouts root" {
         );
     }
 
-    var computed_banks = try collectVoteLockouts(
+    var computed_banks = try collectStakeDistribution(
         allocator,
         .noop,
         &Pubkey.initRandom(random),
@@ -2271,7 +2271,7 @@ test "collect vote lockouts sums" {
         );
     }
 
-    var computed_banks = try collectVoteLockouts(
+    var computed_banks = try collectStakeDistribution(
         allocator,
         .noop,
         &Pubkey.ZEROES,

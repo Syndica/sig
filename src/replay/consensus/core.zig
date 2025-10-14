@@ -52,7 +52,7 @@ const SlotStatus = sig.replay.consensus.edge_cases.SlotStatus;
 const ReplayResult = replay.execution.ReplayResult;
 const ProcessResultParams = replay.consensus.process_result.ProcessResultParams;
 
-const collectVoteLockouts = sig.consensus.replay_tower.collectVoteLockouts;
+const collectStakeDistribution = sig.consensus.replay_tower.collectStakeDistribution;
 const isDuplicateSlotConfirmed = sig.consensus.replay_tower.isDuplicateSlotConfirmed;
 const check_slot_agrees_with_cluster =
     sig.replay.consensus.edge_cases.check_slot_agrees_with_cluster;
@@ -484,7 +484,7 @@ pub const TowerConsensus = struct {
             epoch_stakes_map.putAssumeCapacity(key, constants.stakes);
         }
 
-        const newly_computed_slot_stats = try computeBankStats(
+        const newly_computed_slot_stats = try computeSlotVotingStats(
             allocator,
             self.logger,
             vote_account,
@@ -498,10 +498,13 @@ pub const TowerConsensus = struct {
             &self.latest_validator_votes,
         );
         defer allocator.free(newly_computed_slot_stats);
-
+        // For each of the newly computed slots stats,
+        // check their duplicate confirmation status and updates the data structures that
+        // needs this information.
         for (newly_computed_slot_stats) |slot_stat| {
             const fork_stats = progress_map.getForkStats(slot_stat) orelse
                 return error.MissingSlotInForkStats;
+            // Checking the duplicate confirmation status.
             // Analogous to [ReplayStage::tower_duplicate_confirmed_forks](https://github.com/anza-xyz/agave/blob/47c0383f2301e5a739543c1af9992ae182b7e06c/core/src/replay_stage.rs#L3928)
             var duplicate_confirmed_forks: std.ArrayListUnmanaged(SlotAndHash) = .empty;
             defer duplicate_confirmed_forks.deinit(allocator);
@@ -532,7 +535,7 @@ pub const TowerConsensus = struct {
                     );
                 }
             }
-
+            // Update cluster with the duplicate confirmation status.
             // Analogous to [ReplayStage::mark_slots_duplicate_confirmed](https://github.com/anza-xyz/agave/blob/47c0383f2301e5a739543c1af9992ae182b7e06c/core/src/replay_stage.rs#L3876)
             const root_slot = slot_tracker.root;
             for (duplicate_confirmed_forks.items) |duplicate_confirmed_fork| {
@@ -977,7 +980,15 @@ fn resetFork(
     _ = last_reset_bank_descendants;
 }
 
-fn computeBankStats(
+/// Compute voting statistics for slots.
+///
+/// It iterates through frozen banks and computes voting statistics only for banks that haven't been computed yet
+/// i.e. where computed flag on the fork stat is false.
+///
+/// It returns slots that just had their voting statistics calculated.
+///
+/// Analogous to [compute_bank_stats](https://github.com/anza-xyz/agave/blob/401ddc200b299a181b1437160189075958df49dd/core/src/replay_stage.rs#L3585)
+fn computeSlotVotingStats(
     allocator: std.mem.Allocator,
     logger: Logger,
     my_vote_pubkey: Pubkey,
@@ -1004,12 +1015,12 @@ fn computeBankStats(
             // Gather voting information from all vote accounts to understand the current consensus state.
             const slot_info_for_stakes = slot_tracker.get(slot) orelse return error.MissingSlot;
 
-            const computed_bank_state = blk: {
+            const stake_distribution = blk: {
                 const stakes, var stakes_lg =
                     slot_info_for_stakes.state.stakes_cache.stakes.readWithLock();
                 defer stakes_lg.unlock();
 
-                break :blk try collectVoteLockouts(
+                break :blk try collectStakeDistribution(
                     allocator,
                     .from(logger),
                     &my_vote_pubkey,
@@ -1021,22 +1032,22 @@ fn computeBankStats(
                 );
             };
 
-            try fork_choice.computeBankStats(
+            try fork_choice.processLatestVotes(
                 allocator,
                 epoch_stakes_map,
                 epoch_schedule,
                 latest_validator_votes,
             );
             const fork_stats = progress.getForkStats(slot) orelse return error.MissingForkStats;
-            fork_stats.fork_stake = computed_bank_state.fork_stake;
-            fork_stats.total_stake = computed_bank_state.total_stake;
-            fork_stats.voted_stakes = computed_bank_state.voted_stakes;
-            fork_stats.lockout_intervals = computed_bank_state.lockout_intervals;
+            fork_stats.fork_stake = stake_distribution.fork_stake;
+            fork_stats.total_stake = stake_distribution.total_stake;
+            fork_stats.voted_stakes = stake_distribution.voted_stakes;
+            fork_stats.lockout_intervals = stake_distribution.lockout_intervals;
             fork_stats.block_height = blk: {
                 const slot_info = slot_tracker.get(slot) orelse return error.MissingSlots;
                 break :blk slot_info.constants.block_height;
             };
-            fork_stats.my_latest_landed_vote = computed_bank_state.my_latest_landed_vote;
+            fork_stats.my_latest_landed_vote = stake_distribution.my_latest_landed_vote;
             fork_stats.computed = true;
             try new_stats.append(allocator, slot);
         }
@@ -2133,7 +2144,7 @@ test "computeBankStats - child bank heavier" {
     var slot_tracker_rw1 = RwMux(SlotTracker).init(fixture.slot_tracker);
     const slot_tracker_rw1_ptr, var slot_tracker_rw1_lg = slot_tracker_rw1.writeWithLock();
     defer slot_tracker_rw1_lg.unlock();
-    const newly_computed_slot_stats = try computeBankStats(
+    const newly_computed_slot_stats = try computeSlotVotingStats(
         testing.allocator,
         .noop,
         my_node_pubkey,
@@ -2230,7 +2241,7 @@ test "computeBankStats - same weight selects lower slot" {
     var slot_tracker_rw2 = RwMux(SlotTracker).init(fixture.slot_tracker);
     const slot_tracker_rw2_ptr, var slot_tracker_rw2_lg = slot_tracker_rw2.writeWithLock();
     defer slot_tracker_rw2_lg.unlock();
-    const newly_computed_slot_stats = try computeBankStats(
+    const newly_computed_slot_stats = try computeSlotVotingStats(
         testing.allocator,
         .noop,
         my_vote_pubkey,
