@@ -887,8 +887,9 @@ fn printLogs(result: TransactionResult(ProcessedTransaction)) void {
         .ok => |txn| {
             switch (txn) {
                 .executed => |executed| {
-                    const msgs = executed.executed_transaction.log_collector.?.messages;
-                    for (msgs.items, 0..) |msg, i| {
+                    var i: usize = 0;
+                    var msgs = executed.executed_transaction.log_collector.?.iterator();
+                    while (msgs.next()) |msg| : (i += 1) {
                         std.debug.print("log {}: {s}\n", .{ i, msg });
                     }
                 },

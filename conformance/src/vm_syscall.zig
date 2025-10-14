@@ -343,8 +343,10 @@ fn executeSyscall(
 
     if (emit_logs) {
         std.debug.print("Execution Logs:\n", .{});
-        for (tc.log_collector.?.collect(), 1..) |msg, index| {
-            std.debug.print("    {}: {s}\n", .{ index, msg });
+        var i: usize = 0;
+        var msgs = tc.log_collector.?.iterator();
+        while (msgs.next()) |msg| : (i += 1) {
+            std.debug.print("    {}: {s}\n", .{ i, msg });
         }
     }
 
