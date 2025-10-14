@@ -404,6 +404,7 @@ pub const GossipService = struct {
             self.gossip_socket,
             self.packet_incoming_channel,
             exit_condition,
+            .empty,
         );
         exit_condition.ordered.exit_index += 1;
 
@@ -435,6 +436,7 @@ pub const GossipService = struct {
             self.gossip_socket,
             self.packet_outgoing_channel,
             exit_condition,
+            .empty,
         );
         exit_condition.ordered.exit_index += 1;
 

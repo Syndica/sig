@@ -151,11 +151,8 @@ files_excluded_from_line_length_check = [
     "src/ledger/cleanup_service.zig",
     "src/ledger/database/hashmap.zig",
     "src/ledger/database/rocksdb.zig",
-    "src/ledger/reader.zig",
     "src/ledger/reed_solomon_table.zig",
     "src/ledger/reed_solomon.zig",
-    "src/ledger/result_writer.zig",
-    "src/ledger/shred_inserter/shred_inserter.zig",
     "src/ledger/shred_inserter/working_state.zig",
     "src/ledger/shred.zig",
     "src/ledger/test_shreds.zig",
@@ -168,7 +165,6 @@ files_excluded_from_line_length_check = [
     "src/transaction_sender/mock_transfer_generator.zig",
     "src/transaction_sender/service.zig",
     "src/transaction_sender/transaction_pool.zig",
-
     # Generated files, will not conform to style guide.
     "src/crypto/bn254/bn254_64.zig",
     "src/crypto/ed25519/wycheproof.zig",
