@@ -38,14 +38,12 @@ pub const RedeemRewardResult = struct {
 
 pub fn redeemRewards(
     epoch: Epoch,
-    stake_state: *StakeStateV2,
+    stake: *Stake,
     vote_state: *const VoteState,
     point_value: *const PointValue,
     stake_history: *const StakeHistory,
     new_rate_activation_epoch: ?Epoch,
 ) !RedeemRewardResult {
-    const stake = stake_state.getStakePtr() orelse return error.InvalidAccountData;
-
     const calculated_stake_rewards = try calculateStakeRewards(
         epoch,
         stake,
@@ -161,10 +159,7 @@ pub fn calculateStakePointsAndCredits(
     new_rate_activation_epoch: ?Epoch,
 ) CalculatedStakePoints {
     const credits_in_stake = stake.credits_observed;
-    const credits_in_vote = if (new_vote_state.epoch_credits.getLastOrNull()) |credit|
-        credit.credits
-    else
-        0;
+    const credits_in_vote = new_vote_state.epochCredits();
 
     if (credits_in_vote == credits_in_stake) {
         return .{
@@ -213,7 +208,7 @@ pub fn calculateStakePointsAndCredits(
 fn newStakeForTest(
     stake: u64,
     voter_pubkey: Pubkey,
-    epoch_credits: ?EpochCredit,
+    epoch_credits: u64,
     activation_epoch: Epoch,
 ) Stake {
     return .{
@@ -224,7 +219,7 @@ fn newStakeForTest(
             .deactivation_epoch = std.math.maxInt(Epoch),
             .deprecated_warmup_cooldown_rate = DEFAULT_WARMUP_COOLDOWN_RATE,
         },
-        .credits_observed = if (epoch_credits) |credit| credit.credits else 0,
+        .credits_observed = epoch_credits,
     };
 }
 
@@ -237,7 +232,7 @@ test "calculateStakePointsAndCredits" {
     const stake = newStakeForTest(
         10_000_000 * 1_000_000_000,
         Pubkey.ZEROES,
-        vote_state.epoch_credits.getLastOrNull(),
+        vote_state.epochCredits(),
         std.math.maxInt(Epoch),
     );
 
@@ -252,5 +247,48 @@ test "calculateStakePointsAndCredits" {
     );
 }
 
-// TODO: More tests
-// [agave] https://github.com/anza-xyz/agave/blob/b6c96e84b10396b92912d4574dae7d03f606da26/runtime/src/inflation_rewards/mod.rs#L255-L722
+test "redeemRewards" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+    const random = prng.random();
+
+    var vote_state = VoteState.DEFAULT;
+    defer vote_state.deinit(allocator);
+
+    var stake = newStakeForTest(
+        1,
+        Pubkey.initRandom(random),
+        vote_state.epochCredits(),
+        std.math.maxInt(Epoch),
+    );
+
+    {
+        const rewards = redeemRewards(
+            0,
+            &stake,
+            &vote_state,
+            &.{ .rewards = 1_000_000_000, .points = 1 },
+            &StakeHistory.DEFAULT,
+            null,
+        );
+        try std.testing.expectError(error.NoCreditsToRedeem, rewards);
+    }
+
+    try vote_state.incrementCredits(allocator, 0, 1);
+    try vote_state.incrementCredits(allocator, 0, 1);
+
+    {
+        const rewards = try redeemRewards(
+            0,
+            &stake,
+            &vote_state,
+            &.{ .rewards = 1, .points = 1 },
+            &StakeHistory.DEFAULT,
+            null,
+        );
+        try std.testing.expectEqual(RedeemRewardResult{ .stakers_reward = 2, .voters_reward = 0 }, rewards);
+        try std.testing.expectEqual(3, stake.delegation.stake);
+    }
+}
+
+// TODO: more tests
