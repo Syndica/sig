@@ -114,3 +114,90 @@ pub fn expectProgramExecuteResult(
     // Check the result
     try expectTransactionContextEqual(expected_tc, initial_tc);
 }
+
+test expectProgramExecuteError {
+    const allocator = std.testing.allocator;
+
+    // Test print_logs path
+    for ([_]bool{ false, true }) |print_logs| {
+        try expectProgramExecuteError(
+            error.UnsupportedProgramId,
+            allocator,
+            Pubkey.ZEROES, // invalid program id
+            &.{}, // empty instruction,
+            &.{.{ .index_in_transaction = 0 }},
+            .{
+                .accounts = &.{
+                    .{ .pubkey = Pubkey.ZEROES },
+                },
+            },
+            .{ .print_logs = print_logs },
+        );
+    }
+}
+
+test expectProgramExecuteResult {
+    const allocator = std.testing.allocator;
+    const system_program = sig.runtime.program.system;
+
+    var prng = std.Random.DefaultPrng.init(0);
+    const src_account = Pubkey.initRandom(prng.random());
+    const dst_account = Pubkey.initRandom(prng.random());
+
+    var expected_logger = try LogCollector.init(allocator, null);
+    try expected_logger.log(allocator, "Program {} invoke [1]", .{system_program.ID});
+    try expected_logger.log(allocator, "Program {} success", .{system_program.ID});
+
+    // Test log_collector.eql path
+    try expectProgramExecuteResult(
+        allocator,
+        system_program.ID,
+        system_program.Instruction{
+            .transfer = .{ .lamports = 10 },
+        },
+        &.{
+            .{ .index_in_transaction = 0, .is_writable = true, .is_signer = true },
+            .{ .index_in_transaction = 1, .is_writable = true },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = src_account,
+                    .owner = system_program.ID,
+                    .lamports = 100,
+                },
+                .{
+                    .pubkey = dst_account,
+                    .owner = system_program.ID,
+                    .lamports = 50,
+                },
+                .{
+                    .pubkey = system_program.ID,
+                    .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+                },
+            },
+            .compute_meter = system_program.COMPUTE_UNITS,
+            .log_collector = try LogCollector.init(allocator, null),
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = src_account,
+                    .owner = system_program.ID,
+                    .lamports = 100 - 10,
+                },
+                .{
+                    .pubkey = dst_account,
+                    .owner = system_program.ID,
+                    .lamports = 50 + 10,
+                },
+                .{
+                    .pubkey = system_program.ID,
+                    .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+                },
+            },
+            .log_collector = expected_logger,
+        },
+        .{},
+    );
+}
