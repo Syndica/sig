@@ -179,7 +179,6 @@ pub const VoteListener = struct {
     verified_vote_transactions: *sig.sync.Channel(Transaction),
     recv: std.Thread,
     process_votes: std.Thread,
-    metrics: *VoteListenerMetrics,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -200,7 +199,8 @@ pub const VoteListener = struct {
             senders: Senders,
         },
     ) !VoteListener {
-        var metrics = try VoteListenerMetrics.init(registry);
+        const metrics: VoteListenerMetrics = try .init(registry);
+
         const verified_vote_transactions = try sig.sync.Channel(Transaction).create(allocator);
         errdefer verified_vote_transactions.destroy();
 
@@ -210,7 +210,7 @@ pub const VoteListener = struct {
             params.slot_data_provider,
             params.gossip_table_rw,
             verified_vote_transactions,
-            &metrics,
+            metrics,
         });
         errdefer recv_thread.join();
         recv_thread.setName("sigSolCiVoteLstnr") catch {};
@@ -227,7 +227,7 @@ pub const VoteListener = struct {
 
             params.ledger,
             exit,
-            &metrics,
+            metrics,
         });
         errdefer process_votes_thread.join();
         process_votes_thread.setName("solCiProcVotes") catch {};
@@ -237,7 +237,6 @@ pub const VoteListener = struct {
             .verified_vote_transactions = verified_vote_transactions,
             .recv = recv_thread,
             .process_votes = process_votes_thread,
-            .metrics = &metrics,
         };
     }
 
@@ -304,7 +303,7 @@ const UnverifiedVoteReceptor = struct {
         unverified_votes_buffer: *std.ArrayListUnmanaged(Transaction),
         /// Sends to `processVotesLoop`'s `receivers.verified_vote_transactions` parameter.
         verified_vote_transactions_sender: *sig.sync.Channel(Transaction),
-        metrics: *VoteListenerMetrics,
+        metrics: VoteListenerMetrics,
     ) !void {
         unverified_votes_buffer.clearRetainingCapacity();
         defer for (unverified_votes_buffer.items) |vote_tx| vote_tx.deinit(allocator);
@@ -343,7 +342,7 @@ fn recvLoop(
     gossip_table_rw: ?*sig.sync.RwMux(sig.gossip.GossipTable),
     /// Sends to `processVotesLoop`'s `receivers.verified_vote_transactions` parameter.
     verified_vote_transactions_sender: *sig.sync.Channel(Transaction),
-    metrics: *VoteListenerMetrics,
+    metrics: VoteListenerMetrics,
 ) !void {
     defer exit.afterExit();
 
@@ -470,7 +469,7 @@ fn processVotesLoop(
     receivers: Receivers,
     ledger: *Ledger,
     exit: sig.sync.ExitCondition,
-    metrics: *VoteListenerMetrics,
+    metrics: VoteListenerMetrics,
 ) !void {
     defer exit.afterExit();
 
@@ -518,7 +517,7 @@ fn processVotesOnce(
     latest_vote_slot_per_validator: *std.AutoArrayHashMapUnmanaged(Pubkey, Slot),
     last_process_root: *sig.time.Instant,
     vote_processing_time: *VoteProcessingTiming,
-    metrics: *VoteListenerMetrics,
+    metrics: VoteListenerMetrics,
 ) !void {
     const root_slot = slot_data_provider.rootSlot();
     const root_hash = slot_data_provider.getSlotHash(root_slot);
@@ -568,7 +567,7 @@ fn listenAndConfirmVotes(
     receivers: Receivers,
     vote_processing_time: ?*VoteProcessingTiming,
     latest_vote_slot_per_validator: *std.AutoArrayHashMapUnmanaged(Pubkey, Slot),
-    metrics: *VoteListenerMetrics,
+    metrics: VoteListenerMetrics,
 ) std.mem.Allocator.Error![]const ThresholdConfirmedSlot {
     var gossip_vote_txs_buffer: std.ArrayListUnmanaged(Transaction) = .empty;
     defer gossip_vote_txs_buffer.deinit(allocator);
@@ -637,7 +636,7 @@ fn filterAndConfirmWithNewVotes(
     latest_vote_slot_per_validator: *std.AutoArrayHashMapUnmanaged(Pubkey, Slot),
     gossip_vote_txs: []const Transaction,
     replayed_votes: []const vote_parser.ParsedVote,
-    metrics: *VoteListenerMetrics,
+    metrics: VoteListenerMetrics,
 ) std.mem.Allocator.Error![]const ThresholdConfirmedSlot {
     const root_slot = slot_data_provider.rootSlot();
 
@@ -2175,9 +2174,11 @@ test "check trackers" {
 
         var unverified_votes_buffer: std.ArrayListUnmanaged(Transaction) = .empty;
         defer unverified_votes_buffer.deinit(allocator);
+
         var test_registry = sig.prometheus.Registry(.{}).init(allocator);
         defer test_registry.deinit();
-        var test_metrics = try VoteListenerMetrics.init(&test_registry);
+
+        const test_metrics: VoteListenerMetrics = try .init(&test_registry);
 
         try receptor.recvAndSendOnce(
             allocator,
@@ -2185,7 +2186,7 @@ test "check trackers" {
             &gossip_table_rw,
             &unverified_votes_buffer,
             verified_vote_transactions_channel,
-            &test_metrics,
+            test_metrics,
         );
 
         var latest_vote_slot_per_validator: std.AutoArrayHashMapUnmanaged(Pubkey, Slot) = .empty;
@@ -2218,7 +2219,7 @@ test "check trackers" {
             &latest_vote_slot_per_validator,
             &last_process_root,
             &vote_processing_time,
-            &test_metrics,
+            test_metrics,
         ));
     }
 
