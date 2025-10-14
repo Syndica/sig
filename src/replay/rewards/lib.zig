@@ -1,5 +1,6 @@
 const std = @import("std");
 const sig = @import("../../sig.zig");
+const builtin = @import("builtin");
 
 const Pubkey = sig.core.Pubkey;
 const Stake = sig.core.stake.Stake;
@@ -17,6 +18,7 @@ pub const PartitionedStakeReward = struct {
     commission: u8,
 
     pub fn initRandom(random: std.Random) PartitionedStakeReward {
+        if (builtin.is_test) @compileError("only for testing");
         return .{
             .stake_pubkey = Pubkey.initRandom(random),
             .stake = Stake.initRandom(random),
