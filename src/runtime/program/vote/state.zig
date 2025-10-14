@@ -960,6 +960,13 @@ pub const VoteState = struct {
             std.meta.eql(self.last_timestamp, other.last_timestamp);
     }
 
+    pub fn epochCredits(self: *const VoteState) u64 {
+        return if (self.epoch_credits.getLastOrNull()) |epoch_credit|
+            epoch_credit.credits
+        else
+            0;
+    }
+
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/vote_state_versions.rs#L84
     pub fn isUninitialized(self: VoteState) bool {
         return self.voters.count() == 0;
