@@ -449,6 +449,15 @@ pub const StakeStateV2 = union(enum) {
         };
     }
 
+    pub fn getStakePtr(self: *StakeStateV2) ?*Stake {
+        return switch (self.*) {
+            .uninitialized => null,
+            .initialized => null,
+            .stake => |*s| &s.stake,
+            .rewards_pool => null,
+        };
+    }
+
     pub fn getDelegation(self: *const StakeStateV2) ?Delegation {
         return switch (self.*) {
             .uninitialized => null,
@@ -672,7 +681,7 @@ pub const Delegation = struct {
     }
 };
 
-const DEFAULT_WARMUP_COOLDOWN_RATE: f64 = 0.25;
+pub const DEFAULT_WARMUP_COOLDOWN_RATE: f64 = 0.25;
 const NEW_WARMUP_COOLDOWN_RATE: f64 = 0.09;
 
 fn warmupCooldownRate(current_epoch: Epoch, new_rate_activation_epoch: ?Epoch) f64 {
