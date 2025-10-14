@@ -170,6 +170,7 @@ pub const ShredReceiver = struct {
         }
 
         const result = try self.params.inserter.insertShreds(
+            allocator,
             self.shred_batch.items(.shred),
             self.shred_batch.items(.is_repair),
             .{
@@ -286,8 +287,8 @@ test "handleBatch/handlePacket" {
     var epoch_ctx = try sig.adapter.EpochContextManager.init(allocator, .DEFAULT);
     defer epoch_ctx.deinit();
 
-    var ledger_db = try sig.ledger.tests.TestDB.init(@src());
-    defer ledger_db.deinit();
+    var ledger = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
+    defer ledger.deinit();
 
     var shred_tracker = try sig.shred_network.shred_tracker.BasicShredTracker.init(
         allocator,
@@ -296,14 +297,6 @@ test "handleBatch/handlePacket" {
         &registry,
     );
     defer shred_tracker.deinit();
-
-    var shred_inserter = try sig.ledger.ShredInserter.init(
-        allocator,
-        .noop,
-        &registry,
-        ledger_db,
-    );
-    defer shred_inserter.deinit();
 
     var exit = Atomic(bool).init(false);
     const shred_version = Atomic(u16).init(0);
@@ -318,7 +311,7 @@ test "handleBatch/handlePacket" {
         .maybe_retransmit_shred_sender = null,
         .leader_schedule = epoch_ctx.slotLeaders(),
         .tracker = &shred_tracker,
-        .inserter = shred_inserter,
+        .inserter = ledger.shredInserter(),
     });
     defer shred_receiver.deinit(allocator);
 

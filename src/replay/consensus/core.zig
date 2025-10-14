@@ -26,8 +26,7 @@ const Transaction = sig.core.transaction.Transaction;
 
 const AccountReader = sig.accounts_db.AccountReader;
 
-const LedgerReader = sig.ledger.LedgerReader;
-const LedgerResultWriter = sig.ledger.result_writer.LedgerResultWriter;
+const Ledger = sig.ledger.Ledger;
 
 const ForkChoice = sig.consensus.fork_choice.ForkChoice;
 const GossipVerifiedVoteHash = sig.consensus.vote_listener.GossipVerifiedVoteHash;
@@ -76,8 +75,7 @@ pub const TowerConsensus = struct {
 
     // Data sources
     account_reader: AccountReader,
-    ledger_reader: *LedgerReader,
-    ledger_writer: *sig.ledger.LedgerResultWriter,
+    ledger: *Ledger,
 
     // Communication channels
     senders: Senders,
@@ -108,8 +106,7 @@ pub const TowerConsensus = struct {
 
         // Data sources
         account_reader: AccountReader,
-        ledger_reader: *LedgerReader,
-        ledger_writer: *sig.ledger.LedgerResultWriter,
+        ledger: *sig.ledger.Ledger,
 
         // channels/signals/communication
         exit: *AtomicBool,
@@ -211,7 +208,7 @@ pub const TowerConsensus = struct {
             allocator,
             deps.logger,
             slot_tracker,
-            deps.ledger_reader,
+            deps.ledger,
         );
         errdefer fork_choice.deinit();
 
@@ -242,10 +239,7 @@ pub const TowerConsensus = struct {
             .{
                 .slot_data_provider = slot_data_provider,
                 .gossip_table_rw = deps.external.gossip_table,
-                .ledger_ref = .{
-                    .reader = deps.ledger_reader,
-                    .writer = deps.ledger_writer,
-                },
+                .ledger = deps.ledger,
                 .receivers = .{ .replay_votes_channel = deps.replay_votes_channel },
                 .senders = .{
                     .verified_vote = verified_vote_channel,
@@ -267,8 +261,7 @@ pub const TowerConsensus = struct {
             .logger = deps.logger,
             .my_identity = deps.my_identity,
             .account_reader = deps.account_reader,
-            .ledger_reader = deps.ledger_reader,
-            .ledger_writer = deps.ledger_writer,
+            .ledger = deps.ledger,
             .senders = deps.external.senders,
             .receivers = deps.external.receivers,
             .vote_listener = vote_listener,
@@ -281,7 +274,7 @@ pub const TowerConsensus = struct {
         allocator: std.mem.Allocator,
         logger: Logger,
         slot_tracker: *const SlotTracker,
-        ledger_reader: *LedgerReader,
+        ledger: *Ledger,
     ) !HeaviestSubtreeForkChoice {
         const root_slot, const root_hash = blk: {
             const root = slot_tracker.getRoot();
@@ -326,7 +319,7 @@ pub const TowerConsensus = struct {
             }
         }
 
-        var duplicate_slots = try ledger_reader.db.iterator(
+        var duplicate_slots = try ledger.db.iterator(
             sig.ledger.schema.schema.duplicate_slots,
             .forward,
             // It is important that the root bank is not marked as duplicate on initialization.
@@ -383,7 +376,7 @@ pub const TowerConsensus = struct {
                 .my_pubkey = self.my_identity,
                 .tpu_has_bank = false,
                 .fork_choice = &self.fork_choice,
-                .ledger = self.ledger_writer,
+                .result_writer = self.ledger.resultWriter(),
                 .slot_tracker = slot_tracker,
                 .progress = progress_map,
                 .latest_validator_votes = &self.latest_validator_votes,
@@ -441,8 +434,7 @@ pub const TowerConsensus = struct {
             .allocator = allocator,
             .logger = .from(self.logger),
             .my_identity = self.my_identity,
-            .ledger_reader = self.ledger_reader,
-            .ledger_result_writer = self.ledger_writer,
+            .ledger = self.ledger,
             .slot_tracker = slot_tracker,
             .progress_map = progress_map,
             .fork_choice = &self.fork_choice,
@@ -599,7 +591,7 @@ pub const TowerConsensus = struct {
 
             try handleVotableBank(
                 allocator,
-                self.ledger_writer,
+                self.ledger.resultWriter(),
                 voted.slot,
                 voted_hash,
                 slot_tracker,
@@ -650,7 +642,7 @@ pub const TowerConsensus = struct {
             .noop,
             slot,
             root,
-            self.ledger_writer,
+            self.ledger.resultWriter(),
             &self.fork_choice,
             &self.slot_data.duplicate_slots_to_repair,
             self.senders.ancestor_hashes_replay_update,
@@ -822,7 +814,7 @@ pub const GenerateVoteTxResult = union(enum) {
 /// Analogous to [handle_votable_bank](https://github.com/anza-xyz/agave/blob/ccdcdbe9b6ff7dbd583d2101fe57b7cc41a6f863/core/src/replay_stage.rs#L2388)
 fn handleVotableBank(
     allocator: std.mem.Allocator,
-    ledger_result_writer: *LedgerResultWriter,
+    ledger_result_writer: Ledger.ResultWriter,
     vote_slot: Slot,
     vote_hash: Hash,
     slot_tracker: *SlotTracker,
@@ -897,7 +889,7 @@ fn pushVote(
 /// Analogous to [check_and_handle_new_root](https://github.com/anza-xyz/agave/blob/ccdcdbe9b6ff7dbd583d2101fe57b7cc41a6f863/core/src/replay_stage.rs#L4002)
 fn checkAndHandleNewRoot(
     allocator: std.mem.Allocator,
-    ledger_result_writer: *LedgerResultWriter,
+    ledger: Ledger.ResultWriter,
     slot_tracker: *SlotTracker,
     progress: *ProgressMap,
     fork_choice: *ForkChoice,
@@ -912,7 +904,7 @@ fn checkAndHandleNewRoot(
     const rooted_slots = try slot_tracker.parents(allocator, new_root);
     defer allocator.free(rooted_slots);
 
-    try ledger_result_writer.setRoots(rooted_slots);
+    try ledger.setRoots(rooted_slots);
 
     // Audit: The rest of the code maps to Self::handle_new_root in Agave.
     // Update the slot tracker.
@@ -961,7 +953,7 @@ fn checkAndHandleNewRoot(
 /// TODO: Currently a placeholder function. Would be implemened when voting and producing blocks is supported.
 fn resetFork(
     progress: *const ProgressMap,
-    ledger: *const LedgerReader,
+    ledger: *const Ledger,
     reset_slot: Slot,
     last_reset_hash: Hash,
     last_blockhash: Hash,
@@ -1076,7 +1068,6 @@ fn cacheTowerStats(
 const testing = std.testing;
 const TreeNode = sig.consensus.fork_choice.TreeNode;
 const testEpochStakes = sig.consensus.fork_choice.testEpochStakes;
-const TestDB = sig.ledger.tests.TestDB;
 const TestFixture = sig.consensus.replay_tower.TestFixture;
 const MAX_TEST_TREE_LEN = sig.consensus.replay_tower.MAX_TEST_TREE_LEN;
 const Lockout = sig.runtime.program.vote.state.Lockout;
@@ -1793,27 +1784,15 @@ test "checkAndHandleNewRoot - missing slot" {
     var registry = sig.prometheus.Registry(.{}).init(testing.allocator);
     defer registry.deinit();
 
-    var db = try TestDB.init(@src());
-    defer db.deinit();
-
-    var lowest_cleanup_slot = RwMux(Slot).init(0);
-    var max_root = std.atomic.Value(Slot).init(0);
-
-    var ledger_result_writer = try LedgerResultWriter.init(
-        testing.allocator,
-        logger,
-        db,
-        &registry,
-        &lowest_cleanup_slot,
-        &max_root,
-    );
+    var test_state = try sig.ledger.tests.initTestLedger(testing.allocator, @src(), logger);
+    defer test_state.deinit();
 
     // Try to check a slot that doesn't exist in the tracker
     const slot_tracker_ptr, var slot_tracker_lg = slot_tracker.writeWithLock();
     defer slot_tracker_lg.unlock();
     const result = checkAndHandleNewRoot(
         testing.allocator,
-        &ledger_result_writer,
+        test_state.resultWriter(),
         slot_tracker_ptr,
         &fixture.progress,
         &fixture.fork_choice,
@@ -1859,27 +1838,15 @@ test "checkAndHandleNewRoot - missing hash" {
     var registry = sig.prometheus.Registry(.{}).init(testing.allocator);
     defer registry.deinit();
 
-    var db = try TestDB.init(@src());
-    defer db.deinit();
-
-    var lowest_cleanup_slot = RwMux(Slot).init(0);
-    var max_root = std.atomic.Value(Slot).init(0);
-
-    var ledger_result_writer = try LedgerResultWriter.init(
-        testing.allocator,
-        logger,
-        db,
-        &registry,
-        &lowest_cleanup_slot,
-        &max_root,
-    );
+    var test_state = try sig.ledger.tests.initTestLedger(testing.allocator, @src(), logger);
+    defer test_state.deinit();
 
     // Try to check a slot that doesn't exist in the tracker
     const slot_tracker2_ptr, var slot_tracker2_lg = slot_tracker2.writeWithLock();
     defer slot_tracker2_lg.unlock();
     const result = checkAndHandleNewRoot(
         testing.allocator,
-        &ledger_result_writer,
+        test_state.resultWriter(),
         slot_tracker2_ptr,
         &fixture.progress,
         &fixture.fork_choice,
@@ -1912,27 +1879,15 @@ test "checkAndHandleNewRoot - empty slot tracker" {
     var registry = sig.prometheus.Registry(.{}).init(testing.allocator);
     defer registry.deinit();
 
-    var db = try TestDB.init(@src());
-    defer db.deinit();
-
-    var lowest_cleanup_slot = RwMux(Slot).init(0);
-    var max_root = std.atomic.Value(Slot).init(0);
-
-    var ledger_result_writer = try LedgerResultWriter.init(
-        testing.allocator,
-        logger,
-        db,
-        &registry,
-        &lowest_cleanup_slot,
-        &max_root,
-    );
+    var test_state = try sig.ledger.tests.initTestLedger(testing.allocator, @src(), logger);
+    defer test_state.deinit();
 
     // Try to check a slot that doesn't exist in the tracker
     const slot_tracker3_ptr, var slot_tracker3_lg = slot_tracker3.writeWithLock();
     defer slot_tracker3_lg.unlock();
     const result = checkAndHandleNewRoot(
         testing.allocator,
-        &ledger_result_writer,
+        test_state.resultWriter(),
         slot_tracker3_ptr,
         &fixture.progress,
         &fixture.fork_choice,
@@ -2013,22 +1968,11 @@ test "checkAndHandleNewRoot - success" {
         .active,
     );
 
-    var db = try TestDB.init(@src());
-    defer db.deinit();
-
     var registry = sig.prometheus.Registry(.{}).init(testing.allocator);
     defer registry.deinit();
-    var lowest_cleanup_slot = RwMux(Slot).init(0);
-    var max_root = std.atomic.Value(Slot).init(0);
 
-    var ledger_result_writer = try LedgerResultWriter.init(
-        testing.allocator,
-        .noop,
-        db,
-        &registry,
-        &lowest_cleanup_slot,
-        &max_root,
-    );
+    var test_state = try sig.ledger.tests.initTestLedger(testing.allocator, @src(), .noop);
+    defer test_state.deinit();
 
     try testing.expectEqual(4, fixture.progress.map.count());
     try testing.expect(fixture.progress.map.contains(hash1.slot));
@@ -2037,7 +1981,7 @@ test "checkAndHandleNewRoot - success" {
         defer slot_tracker4_lg.unlock();
         try checkAndHandleNewRoot(
             testing.allocator,
-            &ledger_result_writer,
+            test_state.resultWriter(),
             slot_tracker4_ptr,
             &fixture.progress,
             &fixture.fork_choice,

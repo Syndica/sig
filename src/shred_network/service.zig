@@ -42,7 +42,7 @@ pub const ShredNetworkDependencies = struct {
     allocator: Allocator,
     logger: Logger,
     random: Random,
-    ledger_db: sig.ledger.LedgerDB,
+    ledger: *sig.ledger.Ledger,
     registry: *Registry(.{}),
     /// This validator's keypair
     my_keypair: *const KeyPair,
@@ -94,14 +94,6 @@ pub fn start(
     );
     try defers.deferCall(BasicShredTracker.deinit, .{shred_tracker});
 
-    var shred_inserter = try sig.ledger.ShredInserter.init(
-        deps.allocator,
-        .from(deps.logger),
-        deps.registry,
-        deps.ledger_db,
-    );
-    errdefer shred_inserter.deinit();
-
     // channels (cant use arena as they need to alloc/free frequently &
     // potentially from multiple sender threads)
     const retransmit_channel = try Channel(Packet).create(deps.allocator);
@@ -119,7 +111,7 @@ pub fn start(
         .maybe_retransmit_shred_sender = if (conf.retransmit) retransmit_channel else null,
         .leader_schedule = deps.epoch_context_mgr.slotLeaders(),
         .tracker = shred_tracker,
-        .inserter = shred_inserter,
+        .inserter = deps.ledger.shredInserter(),
     });
     try defers.deferCall(ShredReceiver.deinit, .{ shred_receiver, deps.allocator });
     try service_manager.spawn(
@@ -237,14 +229,14 @@ test "start and stop gracefully" {
     var epoch_ctx = try EpochContextManager.init(allocator, sig.core.EpochSchedule.DEFAULT);
     defer epoch_ctx.deinit();
 
-    var ledger_db = try sig.ledger.tests.TestDB.init(@src());
-    defer ledger_db.deinit();
+    var state = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
+    defer state.deinit();
 
     const deps: ShredNetworkDependencies = .{
         .allocator = allocator,
         .logger = .FOR_TESTS,
         .random = rng.random(),
-        .ledger_db = ledger_db,
+        .ledger = &state,
         .registry = &registry,
         .my_keypair = &keypair,
         .exit = &exit,

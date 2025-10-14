@@ -23,7 +23,7 @@ const Slot = sig.core.Slot;
 const SnapshotFiles = sig.accounts_db.snapshot.SnapshotFiles;
 const SocketAddr = sig.net.SocketAddr;
 const SocketTag = sig.gossip.SocketTag;
-const UnifiedLedger = sig.ledger.UnifiedLedger;
+const Ledger = sig.ledger.Ledger;
 
 const createGeyserWriter = sig.geyser.core.createGeyserWriter;
 const downloadSnapshotsFromGossip = sig.accounts_db.snapshot.downloadSnapshotsFromGossip;
@@ -1087,15 +1087,19 @@ fn validator(
     const bank_fields = &collapsed_manifest.bank_fields;
 
     // ledger
-    const ledger = try UnifiedLedger.init(
+    var ledger = try Ledger.init(
         allocator,
         .from(app_base.logger),
         sig.VALIDATOR_DIR ++ "ledger",
         app_base.metrics_registry,
-        app_base.exit,
-        cfg.max_shreds,
     );
-    defer ledger.deinit(allocator);
+    defer ledger.deinit();
+    const ledger_cleanup_service = try std.Thread.spawn(.{}, sig.ledger.cleanup_service.run, .{
+        sig.ledger.cleanup_service.Logger.from(app_base.logger),
+        &ledger,
+        cfg.max_shreds,
+        app_base.exit,
+    });
 
     // Random number generator
     var prng = std.Random.DefaultPrng.init(@bitCast(std.time.timestamp()));
@@ -1171,7 +1175,7 @@ fn validator(
             .logger = .from(app_base.logger),
             .registry = app_base.metrics_registry,
             .random = prng.random(),
-            .ledger_db = ledger.db.*,
+            .ledger = &ledger,
             .my_keypair = &app_base.my_keypair,
             .exit = app_base.exit,
             .gossip_table_rw = &gossip_service.gossip_table_rw,
@@ -1190,7 +1194,7 @@ fn validator(
         loaded_snapshot.accounts_db.accountStore(),
         &loaded_snapshot.collapsed_manifest,
         &app_base,
-        ledger,
+        &ledger,
         &epoch_context_manager,
     );
     defer replay_deps.deinit(allocator);
@@ -1215,7 +1219,7 @@ fn validator(
     rpc_epoch_ctx_service_thread.join();
     gossip_service.service_manager.join();
     shred_network_manager.join();
-    ledger.join();
+    ledger_cleanup_service.join();
 }
 
 /// entrypoint to run a minimal replay node
@@ -1267,15 +1271,19 @@ fn replayOffline(
     }
 
     // ledger
-    const ledger = try UnifiedLedger.init(
+    var ledger = try Ledger.init(
         allocator,
         .from(app_base.logger),
         sig.VALIDATOR_DIR ++ "ledger",
         app_base.metrics_registry,
-        app_base.exit,
-        cfg.max_shreds,
     );
-    defer ledger.deinit(allocator);
+    defer ledger.deinit();
+    const ledger_cleanup_service = try std.Thread.spawn(.{}, sig.ledger.cleanup_service.run, .{
+        sig.ledger.cleanup_service.Logger.from(app_base.logger),
+        &ledger,
+        cfg.max_shreds,
+        app_base.exit,
+    });
 
     const epoch_schedule = bank_fields.epoch_schedule;
     const epoch = bank_fields.epoch;
@@ -1319,7 +1327,7 @@ fn replayOffline(
         loaded_snapshot.accounts_db.accountStore(),
         &loaded_snapshot.collapsed_manifest,
         &app_base,
-        ledger,
+        &ledger,
         &epoch_context_manager,
     );
     defer replay_deps.deinit(allocator);
@@ -1341,7 +1349,7 @@ fn replayOffline(
     );
 
     replay_thread.join();
-    ledger.join();
+    ledger_cleanup_service.join();
 }
 
 fn shredNetwork(
@@ -1396,15 +1404,19 @@ fn shredNetwork(
         .{ &rpc_epoch_ctx_service, app_base.exit },
     );
 
-    const ledger = try UnifiedLedger.init(
+    var ledger = try Ledger.init(
         allocator,
         .from(app_base.logger),
         sig.VALIDATOR_DIR ++ "ledger",
         app_base.metrics_registry,
-        app_base.exit,
-        cfg.max_shreds,
     );
-    defer ledger.deinit(allocator);
+    defer ledger.deinit();
+    const ledger_cleanup_service = try std.Thread.spawn(.{}, sig.ledger.cleanup_service.run, .{
+        sig.ledger.cleanup_service.Logger.from(app_base.logger),
+        &ledger,
+        cfg.max_shreds,
+        app_base.exit,
+    });
 
     var prng = std.Random.DefaultPrng.init(@bitCast(std.time.timestamp()));
 
@@ -1417,7 +1429,7 @@ fn shredNetwork(
         .logger = .from(app_base.logger),
         .registry = app_base.metrics_registry,
         .random = prng.random(),
-        .ledger_db = ledger.db.*,
+        .ledger = &ledger,
         .my_keypair = &app_base.my_keypair,
         .exit = app_base.exit,
         .gossip_table_rw = &gossip_service.gossip_table_rw,
@@ -1432,7 +1444,7 @@ fn shredNetwork(
     rpc_epoch_ctx_service_thread.join();
     gossip_service.service_manager.join();
     shred_network_manager.join();
-    ledger.join();
+    ledger_cleanup_service.join();
 }
 
 fn printManifest(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
@@ -1914,7 +1926,7 @@ fn replayDependencies(
     account_store: sig.accounts_db.AccountStore,
     collapsed_manifest: *const sig.accounts_db.snapshot.Manifest,
     app_base: *const AppBase,
-    ledger: UnifiedLedger,
+    ledger: *Ledger,
     epoch_context_manager: *sig.adapter.EpochContextManager,
 ) !replay.Dependencies {
     const bank_fields = &collapsed_manifest.bank_fields;
@@ -1959,11 +1971,7 @@ fn replayDependencies(
         .vote_identity = .fromPublicKey(&app_base.my_keypair.public_key),
         .exit = app_base.exit,
         .account_store = account_store,
-        .ledger = .{
-            .db = ledger.db.*,
-            .reader = ledger.reader,
-            .writer = ledger.result_writer,
-        },
+        .ledger = ledger,
         .epoch_schedule = bank_fields.epoch_schedule,
         .slot_leaders = epoch_context_manager.slotLeaders(),
         .root = .{
