@@ -439,7 +439,7 @@ pub fn trackNewSlots(
             const slot_epoch = epoch_tracker.schedule.getEpoch(slot);
 
             if (parent_epoch < slot_epoch) {
-                try replay.epoch_transitions.process_new_epoch(
+                try replay.epoch_transitions.processNewEpoch(
                     allocator,
                     slot,
                     &state,

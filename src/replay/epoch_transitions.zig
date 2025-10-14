@@ -30,7 +30,7 @@ const applyFeatureActivations = @import("apply_feature_activations.zig").applyFe
 /// 2. Activate stakes cache for the new epoch.
 /// 3. Update epoch stakes
 /// 4. Begin partitioned rewards
-pub fn process_new_epoch(
+pub fn processNewEpoch(
     allocator: Allocator,
     slot: Slot,
     slot_state: *SlotState,
