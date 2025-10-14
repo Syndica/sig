@@ -17,3 +17,4 @@ pub const TowerConsensus = consensus.TowerConsensus;
 pub const Service = service.Service;
 
 pub const epoch_transitions = @import("epoch_transitions.zig");
+pub const slot_account_store = @import("slot_account_store.zig");

@@ -9,23 +9,18 @@ const features = sig.core.features;
 const program = sig.runtime.program;
 const builtin_programs = sig.runtime.program.builtin_programs;
 
-const AccountsDb = sig.accounts_db.AccountsDB;
 const AccountStore = sig.accounts_db.AccountStore;
-const SlotAccountReader = sig.accounts_db.SlotAccountReader;
 
-const StakesCache = sig.core.StakesCache;
 const Ancestors = sig.core.Ancestors;
 const Account = sig.core.Account;
 const Pubkey = sig.core.Pubkey;
-const Slot = sig.core.Slot;
 const ReservedAccounts = sig.core.ReservedAccounts;
 
 const SlotState = sig.core.SlotState;
-const SlotConstants = sig.core.SlotConstants;
 const AccountSharedData = sig.runtime.AccountSharedData;
 const FeatureSet = sig.core.FeatureSet;
 
-const SlotAccountStore = sig.replay.epoch_transitions.SlotAccountStore;
+const SlotAccountStore = sig.replay.slot_account_store.SlotAccountStore;
 
 const failing_allocator = sig.utils.allocators.failing.allocator(.{});
 
