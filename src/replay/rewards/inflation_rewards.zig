@@ -291,4 +291,286 @@ test "redeemRewards" {
     }
 }
 
-// TODO: more tests
+test "calculateStakeRewards" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+    const random = prng.random();
+
+    var vote_state = VoteState.DEFAULT;
+    defer vote_state.deinit(allocator);
+
+    var stake = newStakeForTest(
+        1,
+        Pubkey.initRandom(random),
+        vote_state.epochCredits(),
+        std.math.maxInt(Epoch),
+    );
+
+    try std.testing.expectEqual(
+        null,
+        calculateStakeRewards(
+            0,
+            &stake,
+            &.{ .rewards = 1_000_000_000, .points = 1 },
+            &vote_state,
+            &StakeHistory.DEFAULT,
+            null,
+        ),
+    );
+
+    try vote_state.incrementCredits(allocator, 0, 1);
+    try vote_state.incrementCredits(allocator, 0, 1);
+
+    try std.testing.expectEqual(
+        CalculatedStakeRewards{
+            .staker_rewards = stake.delegation.stake * 2,
+            .voter_rewards = 0,
+            .new_credits_observed = 2,
+        },
+        try calculateStakeRewards(
+            0,
+            &stake,
+            &.{ .rewards = 2, .points = 2 },
+            &vote_state,
+            &StakeHistory.DEFAULT,
+            null,
+        ),
+    );
+
+    stake.credits_observed = 1;
+
+    try std.testing.expectEqual(
+        CalculatedStakeRewards{
+            .staker_rewards = stake.delegation.stake,
+            .voter_rewards = 0,
+            .new_credits_observed = 2,
+        },
+        try calculateStakeRewards(
+            0,
+            &stake,
+            &.{ .rewards = 1, .points = 1 },
+            &vote_state,
+            &StakeHistory.DEFAULT,
+            null,
+        ),
+    );
+
+    try vote_state.incrementCredits(allocator, 1, 1);
+    stake.credits_observed = 2;
+
+    try std.testing.expectEqual(
+        CalculatedStakeRewards{
+            .staker_rewards = stake.delegation.stake,
+            .voter_rewards = 0,
+            .new_credits_observed = 3,
+        },
+        try calculateStakeRewards(
+            1,
+            &stake,
+            &.{ .rewards = 2, .points = 2 },
+            &vote_state,
+            &StakeHistory.DEFAULT,
+            null,
+        ),
+    );
+
+    try vote_state.incrementCredits(allocator, 2, 1);
+
+    try std.testing.expectEqual(
+        CalculatedStakeRewards{
+            .staker_rewards = stake.delegation.stake * 2,
+            .voter_rewards = 0,
+            .new_credits_observed = 4,
+        },
+        try calculateStakeRewards(
+            2,
+            &stake,
+            &.{ .rewards = 2, .points = 2 },
+            &vote_state,
+            &StakeHistory.DEFAULT,
+            null,
+        ),
+    );
+
+    stake.credits_observed = 0;
+
+    try std.testing.expectEqual(
+        CalculatedStakeRewards{
+            .staker_rewards = stake.delegation.stake * 4,
+            .voter_rewards = 0,
+            .new_credits_observed = 4,
+        },
+        try calculateStakeRewards(
+            2,
+            &stake,
+            &.{ .rewards = 4, .points = 4 },
+            &vote_state,
+            &StakeHistory.DEFAULT,
+            null,
+        ),
+    );
+
+    vote_state.commission = 99;
+
+    try std.testing.expectEqual(
+        null,
+        try calculateStakeRewards(
+            2,
+            &stake,
+            &.{ .rewards = 4, .points = 4 },
+            &vote_state,
+            &StakeHistory.DEFAULT,
+            null,
+        ),
+    );
+
+    try std.testing.expectEqual(
+        CalculatedStakeRewards{
+            .staker_rewards = 0,
+            .voter_rewards = 0,
+            .new_credits_observed = 4,
+        },
+        try calculateStakeRewards(
+            2,
+            &stake,
+            &.{ .rewards = 0, .points = 4 },
+            &vote_state,
+            &StakeHistory.DEFAULT,
+            null,
+        ),
+    );
+
+    stake.credits_observed = 4;
+
+    try std.testing.expectEqual(
+        CalculatedStakeRewards{
+            .staker_rewards = 0,
+            .voter_rewards = 0,
+            .new_credits_observed = 4,
+        },
+        calculateStakeRewards(
+            2,
+            &stake,
+            &.{ .rewards = 0, .points = 4 },
+            &vote_state,
+            &StakeHistory.DEFAULT,
+            null,
+        ),
+    );
+
+    try std.testing.expectEqual(
+        CalculatedStakePoints{
+            .points = 0,
+            .new_credits_observed = 4,
+            .force_credits_update_with_skipped_rewards = false,
+        },
+        calculateStakePointsAndCredits(
+            &stake,
+            &vote_state,
+            &StakeHistory.DEFAULT,
+            null,
+        ),
+    );
+
+    stake.credits_observed = 1_000;
+
+    try std.testing.expectEqual(
+        CalculatedStakePoints{
+            .points = 0,
+            .new_credits_observed = 4,
+            .force_credits_update_with_skipped_rewards = true,
+        },
+        calculateStakePointsAndCredits(
+            &stake,
+            &vote_state,
+            &StakeHistory.DEFAULT,
+            null,
+        ),
+    );
+
+    stake.credits_observed = 4;
+
+    try std.testing.expectEqual(
+        CalculatedStakePoints{
+            .points = 0,
+            .new_credits_observed = 4,
+            .force_credits_update_with_skipped_rewards = false,
+        },
+        calculateStakePointsAndCredits(
+            &stake,
+            &vote_state,
+            &StakeHistory.DEFAULT,
+            null,
+        ),
+    );
+
+    vote_state.commission = 0;
+    stake.credits_observed = 3;
+    stake.delegation.activation_epoch = 1;
+
+    try std.testing.expectEqual(
+        CalculatedStakeRewards{
+            .staker_rewards = stake.delegation.stake,
+            .voter_rewards = 0,
+            .new_credits_observed = 4,
+        },
+        try calculateStakeRewards(
+            2,
+            &stake,
+            &.{ .rewards = 1, .points = 1 },
+            &vote_state,
+            &StakeHistory.DEFAULT,
+            null,
+        ),
+    );
+
+    stake.delegation.activation_epoch = 2;
+    stake.credits_observed = 3;
+
+    try std.testing.expectEqual(
+        CalculatedStakeRewards{
+            .staker_rewards = 0,
+            .voter_rewards = 0,
+            .new_credits_observed = 4,
+        },
+        try calculateStakeRewards(
+            2,
+            &stake,
+            &.{ .rewards = 1, .points = 1 },
+            &vote_state,
+            &StakeHistory.DEFAULT,
+            null,
+        ),
+    );
+}
+
+test "commissionSplit" {
+    try std.testing.expectEqual(
+        CommissionSplit{ .staker_rewards = 1, .voter_rewards = 0, .is_split = false },
+        commissionSplit(0, 1),
+    );
+    try std.testing.expectEqual(
+        CommissionSplit{ .staker_rewards = 0, .voter_rewards = 1, .is_split = false },
+        commissionSplit(std.math.maxInt(u8), 1),
+    );
+    try std.testing.expectEqual(
+        CommissionSplit{ .staker_rewards = 0, .voter_rewards = 9, .is_split = true },
+        commissionSplit(99, 10),
+    );
+    try std.testing.expectEqual(
+        CommissionSplit{ .staker_rewards = 9, .voter_rewards = 0, .is_split = true },
+        commissionSplit(1, 10),
+    );
+    try std.testing.expectEqual(
+        CommissionSplit{ .staker_rewards = 5, .voter_rewards = 5, .is_split = true },
+        commissionSplit(50, 10),
+    );
+    try std.testing.expectEqual(
+        CommissionSplit{ .staker_rewards = 0, .voter_rewards = 0, .is_split = true },
+        commissionSplit(50, 1),
+    );
+    try std.testing.expectEqual(
+        CommissionSplit{ .staker_rewards = 1, .voter_rewards = 1, .is_split = true },
+        commissionSplit(51, 3),
+    );
+}
