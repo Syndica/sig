@@ -36,16 +36,6 @@ pub const StakeAndVoteAccount = struct {
     pub fn deinit(self: *StakeAndVoteAccount, allocator: Allocator) void {
         self.account.deinit(allocator);
     }
-
-    pub fn clone(
-        self: *const StakeAndVoteAccount,
-        allocator: Allocator,
-    ) Allocator.Error!StakeAndVoteAccount {
-        return .{
-            .stake = self.stake,
-            .account = try self.account.clone(allocator),
-        };
-    }
 };
 
 /// Deserialization in Agave allows invalid vote accounts to exist for snapshot
@@ -73,18 +63,26 @@ pub const VoteAccounts = struct {
         const zone = tracy.Zone.init(@src(), .{ .name = "VoteAccounts.clone" });
         defer zone.deinit();
 
-        var result = VoteAccounts{};
-        errdefer result.deinit(allocator);
+        var staked_nodes = try self.staked_nodes.clone(allocator);
+        errdefer staked_nodes.deinit(allocator);
 
-        try result.vote_accounts.ensureTotalCapacity(allocator, self.vote_accounts.capacity());
-        for (self.vote_accounts.keys(), self.vote_accounts.values()) |key, value|
-            try result.vote_accounts.put(allocator, key, try value.clone(allocator));
+        var vote_accounts: StakeAndVoteAccountsMap = .{};
+        errdefer vote_accounts.deinit(allocator);
 
-        try result.staked_nodes.ensureTotalCapacity(allocator, self.staked_nodes.capacity());
-        for (self.staked_nodes.keys(), self.staked_nodes.values()) |key, value|
-            try result.staked_nodes.put(allocator, key, value);
+        const accounts = self.vote_accounts.values();
+        for (self.vote_accounts.keys(), accounts, 0..) |key, value, i| {
+            // guaranteed to always have at least one reference remaining after the `release
+            // since we release all ones up to the last one acquired. this means the caller
+            // retains ownership of the vote accounts and we don't need to de-init anywhere.
+            errdefer for (accounts[0 .. i + 1]) |a| std.debug.assert(!a.account.rc.release());
+            value.account.acquire();
+            try vote_accounts.put(allocator, key, value);
+        }
 
-        return result;
+        return .{
+            .staked_nodes = staked_nodes,
+            .vote_accounts = vote_accounts,
+        };
     }
 
     pub fn deinit(self: *const VoteAccounts, allocator: Allocator) void {
@@ -291,6 +289,7 @@ pub const VoteAccount = struct {
     // account: AccountSharedData,
     account: MinimalAccount,
     state: VoteState,
+    rc: *sig.sync.ReferenceCounter,
 
     /// Represents the minimal amount of information needed from the account data.
     const MinimalAccount = struct {
@@ -304,18 +303,14 @@ pub const VoteAccount = struct {
     pub const @"!bincode-config:state" = bincode.FieldConfig(VoteState){ .skip = true };
 
     pub fn deinit(self: *VoteAccount, allocator: Allocator) void {
-        // self.account.deinit(allocator);
-        self.state.deinit(allocator);
+        if (self.rc.release()) {
+            self.state.deinit(allocator);
+            allocator.destroy(self.rc);
+        }
     }
 
-    pub fn clone(self: VoteAccount, allocator: Allocator) Allocator.Error!VoteAccount {
-        // const account = try self.account.clone(allocator);
-        // errdefer account.deinit(allocator);
-        return .{
-            .account = self.account,
-            // .account = account,
-            .state = try self.state.clone(allocator),
-        };
+    pub fn acquire(self: *const VoteAccount) void {
+        std.debug.assert(self.rc.acquire());
     }
 
     pub fn getLamports(self: *const VoteAccount) u64 {
@@ -341,9 +336,14 @@ pub const VoteAccount = struct {
         );
         defer versioned_vote_state.deinit(allocator); // `convertToCurrent` clones
 
+        const rc = try allocator.create(sig.sync.ReferenceCounter);
+        errdefer allocator.destroy(rc);
+        rc.* = .init;
+
         return .{
             .account = .{ .lamports = account.lamports },
             .state = try versioned_vote_state.convertToCurrent(allocator),
+            .rc = rc,
         };
     }
 
@@ -828,7 +828,7 @@ test "staked nodes update" {
     var stakes: Stakes(.delegation) = .EMPTY;
     defer stakes.deinit(allocator);
 
-    var vote_accounts = VoteAccounts{};
+    var vote_accounts: VoteAccounts = .{};
     defer vote_accounts.deinit(allocator);
 
     const pubkey = Pubkey.initRandom(random);
@@ -848,10 +848,11 @@ test "staked nodes update" {
             .deprecated_warmup_cooldown_rate = 0,
         });
 
+        account_0.acquire();
         const maybe_old = try vote_accounts.insert(
             allocator,
             pubkey,
-            try account_0.clone(allocator),
+            account_0,
             .init(.delegation, &stakes, null),
         );
 

@@ -18,6 +18,8 @@ const Atomic = std.atomic.Value;
 pub const ReferenceCounter = extern struct {
     state: Atomic(u64) = Atomic(u64).init(@bitCast(State{ .refs = 1 })),
 
+    pub const init: ReferenceCounter = .{ .state = .init(@bitCast(State{ .refs = 1 })) };
+
     /// If `refs > acquirers`, the resource is still alive.
     /// If `refs == acquirers`, the resource is dead.
     const State = packed struct {
