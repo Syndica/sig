@@ -4,10 +4,8 @@ const sig = @import("../../sig.zig");
 const Epoch = sig.core.Epoch;
 const Pubkey = sig.core.Pubkey;
 const Stake = sig.core.stake.Stake;
-const StakeStateV2 = sig.core.stake.StakeStateV2;
 
 const VoteState = sig.runtime.program.vote.state.VoteState;
-const EpochCredit = sig.runtime.program.vote.state.EpochCredit;
 const StakeHistory = sig.runtime.sysvar.StakeHistory;
 
 const DEFAULT_WARMUP_COOLDOWN_RATE = sig.core.stake.DEFAULT_WARMUP_COOLDOWN_RATE;
@@ -284,7 +282,10 @@ test "redeemRewards" {
             &StakeHistory.DEFAULT,
             null,
         );
-        try std.testing.expectEqual(RedeemRewardResult{ .stakers_reward = 2, .voters_reward = 0 }, rewards);
+        try std.testing.expectEqual(
+            RedeemRewardResult{ .stakers_reward = 2, .voters_reward = 0 },
+            rewards,
+        );
         try std.testing.expectEqual(3, stake.delegation.stake);
     }
 }
