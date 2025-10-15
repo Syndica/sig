@@ -99,7 +99,10 @@ pub const AccountSharedData = struct {
     }
 
     /// Converts an `Account` to an `AccountSharedData`, copying the data into owned memory.
-    pub fn fromAccount(allocator: std.mem.Allocator, account: *const sig.core.Account) !AccountSharedData {
+    pub fn fromAccount(
+        allocator: std.mem.Allocator,
+        account: *const sig.core.Account,
+    ) !AccountSharedData {
         const data = try account.data.dupeAllocatedOwned(allocator);
         defer data.deinit(allocator);
 
