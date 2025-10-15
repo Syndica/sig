@@ -259,6 +259,17 @@ pub const TowerSync = struct {
         var lockouts = self.lockouts;
         lockouts.deinit(allocator);
     }
+
+    pub fn fromLockouts(
+        allocator: std.mem.Allocator,
+        lockouts: []const Lockout,
+    ) std.mem.Allocator.Error!TowerSync {
+        if (!@import("builtin").is_test) @compileError("Not allowed");
+        var result: TowerSync = .ZEROES;
+        errdefer result.deinit(allocator);
+        try result.lockouts.appendSlice(allocator, lockouts);
+        return result;
+    }
 };
 
 pub fn serializeTowerSync(writer: anytype, data: anytype, _: sig.bincode.Params) anyerror!void {
