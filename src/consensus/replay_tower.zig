@@ -1965,13 +1965,13 @@ test "check_vote_threshold_forks" {
     var accounts = try genStakes(
         allocator,
         random,
-        &[_]struct { u64, []u64 }{
+        &.{
             .{ threshold_stake, &votes },
             .{ total_stake - threshold_stake, tower_votes },
         },
     );
     defer {
-        for (accounts.values()) |*value| value.account.state.deinit(allocator);
+        for (accounts.values()) |*value| value.deinit(allocator);
         accounts.deinit(allocator);
     }
 
@@ -2068,10 +2068,10 @@ test "collect vote lockouts root" {
     var accounts = try genStakes(
         allocator,
         random,
-        &[_]struct { u64, []u64 }{ .{ 1, votes }, .{ 1, votes } },
+        &.{ .{ 1, votes }, .{ 1, votes } },
     );
     defer {
-        for (accounts.values()) |*value| value.account.state.deinit(allocator);
+        for (accounts.values()) |*value| value.deinit(allocator);
         accounts.deinit(allocator);
     }
 
@@ -2190,10 +2190,10 @@ test "collect vote lockouts sums" {
     var accounts = try genStakes(
         allocator,
         random,
-        &[_]struct { u64, []u64 }{ .{ 1, &votes }, .{ 1, &votes } },
+        &.{ .{ 1, &votes }, .{ 1, &votes } },
     );
     defer {
-        for (accounts.values()) |*value| value.account.state.deinit(allocator);
+        for (accounts.values()) |*value| value.deinit(allocator);
         accounts.deinit(allocator);
     }
 
@@ -4669,11 +4669,10 @@ fn genStakes(
 ) !StakeAndVoteAccountsMap {
     if (!builtin.is_test) @compileError("genStakes only intended for tests");
 
-    var map = StakeAndVoteAccountsMap.empty;
+    var map: StakeAndVoteAccountsMap = .empty;
 
     for (stakes) |stake| {
-        const lamports = stake[0];
-        const votes = stake[1];
+        const lamports, const votes = stake;
 
         var vote_state = try sig.runtime.program.vote.state.createTestVoteState(
             allocator,
@@ -4689,12 +4688,21 @@ fn genStakes(
                 slot,
             );
         }
+
+        const rc = try allocator.create(sig.sync.ReferenceCounter);
+        errdefer allocator.destroy(rc);
+        rc.* = .init;
+
         try map.put(
             allocator,
             Pubkey.initRandom(random),
             .{
                 .stake = lamports,
-                .account = .{ .account = .{ .lamports = lamports }, .state = vote_state },
+                .account = .{
+                    .account = .{ .lamports = lamports },
+                    .state = vote_state,
+                    .rc = rc,
+                },
             },
         );
     }
