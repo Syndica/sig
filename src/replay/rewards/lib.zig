@@ -8,8 +8,9 @@ const AccountSharedData = sig.runtime.AccountSharedData;
 
 pub const calculation = @import("calculation.zig");
 pub const inflation_rewards = @import("inflation_rewards.zig");
-
 pub const EpochRewardsHasher = @import("EpochRewardsHasher.zig");
+
+const PointValue = inflation_rewards.PointValue;
 
 pub const REWARD_CALCULATION_NUM_BLOCKS: u64 = 1;
 
@@ -44,7 +45,7 @@ pub const RewardInfo = struct {
     commission: u8,
 };
 
-pub const PartitionedVoteRewards = struct {
+pub const PartitionedVoteReward = struct {
     vote_pubkey: Pubkey,
     rewards: RewardInfo,
     account: AccountSharedData,
@@ -56,14 +57,14 @@ pub const StakeRewards = struct {
 };
 
 pub const VoteRewards = struct {
-    vote_rewards: []const PartitionedVoteRewards,
+    vote_rewards: []const PartitionedVoteReward,
     total_vote_rewards_lamports: u64,
 };
 
 pub const ValidatorRewards = struct {
     vote_rewards: VoteRewards,
     stake_rewards: StakeRewards,
-    point_value: f64,
+    point_value: PointValue,
 };
 
 pub const PreviousEpochInflationRewards = struct {

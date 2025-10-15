@@ -137,13 +137,13 @@ pub fn commissionSplit(commission: u8, rewards: u64) CommissionSplit {
 pub fn calculatePoints(
     stake: Stake,
     vote_state: VoteState,
-    stake_history: StakeHistory,
+    stake_history: *const StakeHistory,
     new_rate_activation_epoch: ?Epoch,
 ) u128 {
     return calculateStakePointsAndCredits(
         &stake,
         &vote_state,
-        &stake_history,
+        stake_history,
         new_rate_activation_epoch,
     ).points;
 }
@@ -239,7 +239,7 @@ test "calculateStakePointsAndCredits" {
 
     try std.testing.expectEqual(
         stake.delegation.stake * epoch_slots,
-        calculatePoints(stake, vote_state, StakeHistory.DEFAULT, null),
+        calculatePoints(stake, vote_state, &StakeHistory.DEFAULT, null),
     );
 }
 
