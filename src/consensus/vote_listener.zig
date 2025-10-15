@@ -95,7 +95,84 @@ pub const Senders = struct {
     bank_notification: ?*sig.sync.Channel(BankNotification),
     duplicate_confirmed_slots: ?*sig.sync.Channel(ThresholdConfirmedSlot),
     subscriptions: RpcSubscriptionsStub,
+
+    const test_setup_enabled = @import("builtin").is_test;
+
+    /// Assumes `allocator` can be used to free all of the elements of the channels if any remain.
+    pub fn destroyForTest(self: Senders, allocator: std.mem.Allocator) void {
+        if (!test_setup_enabled) @compileError("not allowed");
+
+        while (self.verified_vote.tryReceive()) |verified_vote| {
+            _, const slots = verified_vote;
+            allocator.free(slots);
+        }
+        self.verified_vote.destroy();
+
+        self.gossip_verified_vote_hash.destroy();
+        if (self.bank_notification) |channel| channel.destroy();
+        if (self.duplicate_confirmed_slots) |channel| channel.destroy();
+    }
+
+    pub const CreateForTestParams = struct {
+        bank_notification: bool,
+        duplicate_confirmed_slots: bool,
+    };
+    pub fn createForTest(
+        allocator: std.mem.Allocator,
+        params: CreateForTestParams,
+    ) !Senders {
+        if (!test_setup_enabled) @compileError("not allowed");
+
+        const verified_vote: *sig.sync.Channel(VerifiedVote) =
+            try .create(allocator);
+        errdefer verified_vote.destroy();
+
+        const gossip_verified_vote_hash: *sig.sync.Channel(GossipVerifiedVoteHash) =
+            try .create(allocator);
+        errdefer gossip_verified_vote_hash.destroy();
+
+        const bank_notification: ?*sig.sync.Channel(BankNotification) =
+            if (params.bank_notification) try .create(allocator) else null;
+        errdefer if (bank_notification) |channel| channel.destroy();
+
+        const duplicate_confirmed_slots: ?*sig.sync.Channel(ThresholdConfirmedSlot) =
+            if (params.duplicate_confirmed_slots) try .create(allocator) else null;
+        errdefer if (duplicate_confirmed_slots) |channel| channel.destroy();
+
+        return .{
+            .verified_vote = verified_vote,
+            .gossip_verified_vote_hash = gossip_verified_vote_hash,
+            .bank_notification = bank_notification,
+            .duplicate_confirmed_slots = duplicate_confirmed_slots,
+            .subscriptions = .{},
+        };
+    }
 };
+
+// NOTE: this test exists purely to satisfy codecov
+test Senders {
+    const impl = struct {
+        fn createAndDestroy(
+            allocator: std.mem.Allocator,
+            params: Senders.CreateForTestParams,
+        ) std.mem.Allocator.Error!void {
+            const senders: Senders = try .createForTest(allocator, params);
+            senders.destroyForTest(allocator);
+        }
+    };
+    for ([_]Senders.CreateForTestParams{
+        .{ .bank_notification = false, .duplicate_confirmed_slots = false },
+        .{ .bank_notification = false, .duplicate_confirmed_slots = true },
+        .{ .bank_notification = true, .duplicate_confirmed_slots = false },
+        .{ .bank_notification = true, .duplicate_confirmed_slots = true },
+    }) |params| {
+        try std.testing.checkAllAllocationFailures(
+            std.testing.allocator,
+            impl.createAndDestroy,
+            .{params},
+        );
+    }
+}
 
 pub const VoteListener = struct {
     allocator: std.mem.Allocator,
