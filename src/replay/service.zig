@@ -888,6 +888,27 @@ test "process runs without error with no replay results" {
     dep_stubs.exit.store(true, .monotonic);
 }
 
+test "advance calls consensus.process with empty replay results" {
+    const allocator = std.testing.allocator;
+
+    var dep_stubs = try DependencyStubs.init(allocator, .FOR_TESTS);
+    defer dep_stubs.deinit(allocator);
+
+    var service = try dep_stubs.stubbedService(allocator, .FOR_TESTS, false);
+    defer service.deinit(allocator);
+
+    try service.advance();
+
+    // No slots were replayed
+    {
+        const slot_tracker, var lg = service.replay.slot_tracker.readWithLock();
+        defer lg.unlock();
+        try std.testing.expectEqual(0, slot_tracker.root);
+    }
+
+    dep_stubs.exit.store(true, .monotonic);
+}
+
 test "Execute testnet block single threaded" {
     if (!sig.build_options.long_tests) return error.SkipZigTest;
 
