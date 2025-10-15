@@ -36,7 +36,9 @@ pub fn getInflationNumSlots(
     epoch_schedule: *const EpochSchedule,
 ) u64 {
     const inflation_activation_slot = getInflationStartSlot(slot, feature_set);
-    const inflation_start_slot = epoch_schedule.getFirstSlotInEpoch(epoch_schedule.getEpoch(inflation_activation_slot) -| 1);
+    const inflation_start_slot = epoch_schedule.getFirstSlotInEpoch(
+        epoch_schedule.getEpoch(inflation_activation_slot) -| 1,
+    );
     return epoch_schedule.getFirstSlotInEpoch(epoch) - inflation_start_slot;
 }
 
@@ -48,7 +50,12 @@ pub fn getSlotInYearsForInflation(
     epoch_schedule: *const EpochSchedule,
 ) f64 {
     std.debug.assert(slots_per_year > 0.0);
-    const num_slots = getInflationNumSlots(slot, epoch, feature_set, epoch_schedule);
+    const num_slots = getInflationNumSlots(
+        slot,
+        epoch,
+        feature_set,
+        epoch_schedule,
+    );
     return @as(f64, @floatFromInt(num_slots)) / slots_per_year;
 }
 
@@ -141,44 +148,87 @@ test getInflationNumSlots {
 
     // Slot 0, epoch 0, no features activated
     var feature_set = FeatureSet.ALL_DISABLED;
-    try std.testing.expectEqual(0, getInflationNumSlots(slot, epoch, &feature_set, &epoch_schedule));
+    try std.testing.expectEqual(
+        0,
+        getInflationNumSlots(slot, epoch, &feature_set, &epoch_schedule),
+    );
 
     // Move forward 2 epochs
     slot += 2 * slots_per_epoch;
     epoch += 2;
-    try std.testing.expectEqual(2 * slots_per_epoch, getInflationNumSlots(slot, epoch, &feature_set, &epoch_schedule));
+    try std.testing.expectEqual(2 * slots_per_epoch, getInflationNumSlots(
+        slot,
+        epoch,
+        &feature_set,
+        &epoch_schedule,
+    ));
 
     // Activate pico inflation
     feature_set.setSlot(.pico_inflation, slot);
-    try std.testing.expectEqual(slots_per_epoch, getInflationNumSlots(slot, epoch, &feature_set, &epoch_schedule));
+    try std.testing.expectEqual(slots_per_epoch, getInflationNumSlots(
+        slot,
+        epoch,
+        &feature_set,
+        &epoch_schedule,
+    ));
 
     // Move forward 1 epoch
     slot += slots_per_epoch;
     epoch += 1;
-    try std.testing.expectEqual(2 * slots_per_epoch, getInflationNumSlots(slot, epoch, &feature_set, &epoch_schedule));
+    try std.testing.expectEqual(2 * slots_per_epoch, getInflationNumSlots(
+        slot,
+        epoch,
+        &feature_set,
+        &epoch_schedule,
+    ));
 
     // Activate full inflation for devnet/testnet
     feature_set.setSlot(.full_inflation_devnet_and_testnet, slot);
-    try std.testing.expectEqual(slots_per_epoch, getInflationNumSlots(slot, epoch, &feature_set, &epoch_schedule));
+    try std.testing.expectEqual(slots_per_epoch, getInflationNumSlots(
+        slot,
+        epoch,
+        &feature_set,
+        &epoch_schedule,
+    ));
 
     // Move forward 1 epoch
     slot += slots_per_epoch;
     epoch += 1;
-    try std.testing.expectEqual(2 * slots_per_epoch, getInflationNumSlots(slot, epoch, &feature_set, &epoch_schedule));
+    try std.testing.expectEqual(2 * slots_per_epoch, getInflationNumSlots(
+        slot,
+        epoch,
+        &feature_set,
+        &epoch_schedule,
+    ));
 
     // Activate full inflation for mainnet -- should have no effect
     feature_set.setSlot(.full_inflation_mainnet_enable, slot);
     feature_set.setSlot(.full_inflation_mainnet_vote, slot);
-    try std.testing.expectEqual(2 * slots_per_epoch, getInflationNumSlots(slot, epoch, &feature_set, &epoch_schedule));
+    try std.testing.expectEqual(2 * slots_per_epoch, getInflationNumSlots(
+        slot,
+        epoch,
+        &feature_set,
+        &epoch_schedule,
+    ));
 
     // Deactivate full inflation for devnet/testnet -- will revert to full inflation mainnet
     feature_set.setSlot(.full_inflation_devnet_and_testnet, std.math.maxInt(Slot));
-    try std.testing.expectEqual(slots_per_epoch, getInflationNumSlots(slot, epoch, &feature_set, &epoch_schedule));
+    try std.testing.expectEqual(slots_per_epoch, getInflationNumSlots(
+        slot,
+        epoch,
+        &feature_set,
+        &epoch_schedule,
+    ));
 
     // Move forward 1 epoch
     slot += slots_per_epoch;
     epoch += 1;
-    try std.testing.expectEqual(2 * slots_per_epoch, getInflationNumSlots(slot, epoch, &feature_set, &epoch_schedule));
+    try std.testing.expectEqual(2 * slots_per_epoch, getInflationNumSlots(
+        slot,
+        epoch,
+        &feature_set,
+        &epoch_schedule,
+    ));
 }
 
 test getSlotInYearsForInflation {
@@ -195,14 +245,26 @@ test getSlotInYearsForInflation {
 
     // Slot 0, epoch 0, no features activated
     var feature_set = FeatureSet.ALL_DISABLED;
-    try std.testing.expectEqual(0, getSlotInYearsForInflation(slot, epoch, slots_per_year, &feature_set, &epoch_schedule));
+    try std.testing.expectEqual(0, getSlotInYearsForInflation(
+        slot,
+        epoch,
+        slots_per_year,
+        &feature_set,
+        &epoch_schedule,
+    ));
 
     // Move forward 2 epochs
     slot += 2 * slots_per_epoch;
     epoch += 2;
     try std.testing.expectEqual(
         @as(f64, @floatFromInt(2 * slots_per_epoch)) / slots_per_year,
-        getSlotInYearsForInflation(slot, epoch, slots_per_year, &feature_set, &epoch_schedule),
+        getSlotInYearsForInflation(
+            slot,
+            epoch,
+            slots_per_year,
+            &feature_set,
+            &epoch_schedule,
+        ),
     );
 }
 

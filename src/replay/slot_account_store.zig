@@ -73,7 +73,11 @@ pub const SlotAccountStore = struct {
         _ = old_account_data_len;
     }
 
-    pub fn burnAndPurgeAccount(self: SlotAccountStore, key: Pubkey, account: AccountSharedData) !void {
+    pub fn burnAndPurgeAccount(
+        self: SlotAccountStore,
+        key: Pubkey,
+        account: AccountSharedData,
+    ) !void {
         const account_data_len = account.data.len;
 
         _ = self.state.capitalization.fetchSub(account.lamports, .monotonic);

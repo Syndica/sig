@@ -226,7 +226,8 @@ pub const NodeVoteAccounts = struct {
         allocator: Allocator,
         max_list_entries: usize,
     ) Allocator.Error!NodeVoteAccounts {
-        var vote_accounts = try std.ArrayListUnmanaged(Pubkey).initCapacity(allocator, max_list_entries);
+        var vote_accounts = try std.ArrayListUnmanaged(Pubkey)
+            .initCapacity(allocator, max_list_entries);
         errdefer vote_accounts.deinit(allocator);
         for (0..random.uintAtMost(usize, max_list_entries)) |_| {
             try vote_accounts.append(allocator, Pubkey.initRandom(random));

@@ -180,6 +180,7 @@ pub const Inflation = struct {
 
     /// Percentage of total inflation allocated to the foundation
     foundation: f64,
+
     /// Duration of foundation pool inflation, in years
     foundation_term: f64,
 
@@ -204,6 +205,26 @@ pub const Inflation = struct {
             .foundation_term = random.float(f64),
             .__unused = random.float(f64),
         };
+    }
+
+    pub fn total(self: *const Inflation, slot_in_years: f64) f64 {
+        std.debug.assert(slot_in_years >= 0.0);
+        return @max(
+            self.terminal,
+            self.initial * std.math.pow(f64, 1.0 - self.taper, slot_in_years),
+        );
+    }
+
+    pub fn validatorRate(self: *const Inflation, slot_in_years: f64) f64 {
+        std.debug.assert(slot_in_years >= 0.0);
+        return self.total(slot_in_years) - self.foundationRate(slot_in_years);
+    }
+
+    pub fn foundationRate(self: *const Inflation, slot_in_years: f64) f64 {
+        return if (slot_in_years < self.foundation_term)
+            self.total(slot_in_years) * self.foundation
+        else
+            0.0;
     }
 };
 

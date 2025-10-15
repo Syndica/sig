@@ -123,7 +123,10 @@ pub fn getEpochStakes(
     };
     const epoch_vote_accounts = stakes.vote_accounts.vote_accounts;
 
-    var node_id_to_vote_accounts = std.AutoArrayHashMapUnmanaged(Pubkey, sig.core.epoch_stakes.NodeVoteAccounts){};
+    var node_id_to_vote_accounts = std.AutoArrayHashMapUnmanaged(
+        Pubkey,
+        sig.core.epoch_stakes.NodeVoteAccounts,
+    ){};
     errdefer sig.utils.collections.deinitMapAndValues(allocator, node_id_to_vote_accounts);
 
     var epoch_authorized_voters = std.AutoArrayHashMapUnmanaged(Pubkey, Pubkey){};
@@ -136,7 +139,10 @@ pub fn getEpochStakes(
 
             var vote_state = stake_and_vote_account.account.state;
             if (vote_state.voters.getAuthorizedVoter(leader_schedule_epoch)) |authorized_voter| {
-                const node_vote_accounts = try node_id_to_vote_accounts.getOrPut(allocator, authorized_voter);
+                const node_vote_accounts = try node_id_to_vote_accounts.getOrPut(
+                    allocator,
+                    authorized_voter,
+                );
 
                 if (!node_vote_accounts.found_existing) {
                     node_vote_accounts.value_ptr.* = .EMPTY;
@@ -205,7 +211,10 @@ pub fn refreshVoteAccounts(
 
     for (stake_delegations) |stake_delegation| {
         const delegation = stake_delegation.getDelegation();
-        const entry = try delegated_stakes.getOrPut(allocator, delegation.voter_pubkey);
+        const entry = try delegated_stakes.getOrPut(
+            allocator,
+            delegation.voter_pubkey,
+        );
         if (!entry.found_existing) {
             entry.value_ptr.* = 0;
         }
@@ -218,7 +227,9 @@ pub fn refreshVoteAccounts(
 
     var new_vote_accounts = VoteAccounts{};
     errdefer new_vote_accounts.deinit(allocator);
-    for (stake_and_vote_accounts.keys(), stake_and_vote_accounts.values()) |vote_pubkey, stake_and_vote_account| {
+    const keys = stake_and_vote_accounts.keys();
+    const values = stake_and_vote_accounts.values();
+    for (keys, values) |vote_pubkey, stake_and_vote_account| {
         const delegated_stake = delegated_stakes.get(vote_pubkey) orelse 0;
         try new_vote_accounts.vote_accounts.put(allocator, vote_pubkey, .{
             .stake = delegated_stake,
