@@ -3607,7 +3607,7 @@ test "load and validate from test snapshot - single threaded" {
     const snapshot_dir = tmp_dir_root.dir;
 
     var accounts_db, const full_inc_manifest =
-        try loadTestAccountsDBFromSnapshot(allocator, false, 1, .noop, snapshot_dir, 500);
+        try loadTestAccountsDBFromSnapshot(allocator, false, 1, .FOR_TESTS, snapshot_dir, 500);
     defer {
         accounts_db.deinit();
         full_inc_manifest.deinit(allocator);
@@ -3629,6 +3629,13 @@ test "load and validate from test snapshot - single threaded" {
             .capitalization = inc_persistence.incremental_capitalization,
         } else null,
     });
+
+    // use the genesis to verify loading
+    const genesis_path = sig.TEST_DATA_DIR ++ "genesis.bin";
+    const genesis_config = try sig.core.GenesisConfig.init(allocator, genesis_path);
+    defer genesis_config.deinit(allocator);
+
+    try full_inc_manifest.full.bank_fields.validate(&genesis_config);
 }
 
 test "load and validate from test snapshot - disk index" {
@@ -3722,10 +3729,10 @@ test "load sysvars" {
         const inc = full_inc_manifest.incremental;
         const expected_clock: sysvar.Clock = .{
             .slot = (inc orelse full).bank_fields.slot,
-            .epoch_start_timestamp = 1733349736,
+            .epoch_start_timestamp = 1760562439,
             .epoch = (inc orelse full).bank_fields.epoch,
             .leader_schedule_epoch = 1,
-            .unix_timestamp = 1733350255,
+            .unix_timestamp = 1760562439,
         };
         try std.testing.expectEqual(
             expected_clock,
@@ -3839,7 +3846,7 @@ test "generate snapshot & update gossip snapshot hashes" {
     const full_hash = full_gen_result.hash;
 
     try std.testing.expectEqual(
-        full_inc_manifest.full.accounts_db_fields.bank_hash_info.obsolete_accounts_hash,
+        full_inc_manifest.full.bank_extra.accounts_lt_hash.checksum(),
         full_gen_result.hash.checksum(),
     );
     try std.testing.expectEqual(
@@ -3880,10 +3887,6 @@ test "generate snapshot & update gossip snapshot hashes" {
         });
         const inc_hash = inc_gen_result.incremental_hash;
 
-        try std.testing.expectEqual(
-            inc_manifest.bank_extra.snapshot_persistence,
-            inc_gen_result.intoSnapshotPersistence(),
-        );
         try std.testing.expectEqual(
             full_slot,
             inc_gen_result.full_slot,
