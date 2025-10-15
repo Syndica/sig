@@ -111,7 +111,7 @@ pub const TransactionContext = struct {
 
     pub fn deinit(self: TransactionContext) void {
         self.allocator.free(self.accounts);
-        if (self.log_collector) |lc| lc.deinit(self.allocator);
+        if (self.log_collector) |*lc| lc.deinit(self.allocator);
     }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/134be7c14066ea00c9791187d6bbc4795dd92f0e/sdk/src/transaction_context.rs#L233

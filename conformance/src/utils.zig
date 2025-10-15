@@ -102,7 +102,11 @@ pub fn createTransactionContext(
         ptr
     else
         try allocator.create(ProgramMap);
+    errdefer if (environment.program_map == null) allocator.destroy(program_map);
     program_map.* = ProgramMap{};
+
+    const log_collector = try sig.runtime.LogCollector.default(allocator);
+    errdefer log_collector.deinit(allocator);
 
     tc.* = TransactionContext{
         .allocator = allocator,
@@ -124,7 +128,7 @@ pub fn createTransactionContext(
         .compute_meter = instr_ctx.cu_avail,
         .compute_budget = sig.runtime.ComputeBudget.default(instr_ctx.cu_avail),
         .custom_error = null,
-        .log_collector = sig.runtime.LogCollector.default(),
+        .log_collector = log_collector,
         .rent = sysvar_cache.get(sysvar.Rent) catch sysvar.Rent.DEFAULT,
         .prev_blockhash = sig.core.Hash.ZEROES,
         .prev_lamports_per_signature = 0,
@@ -480,7 +484,8 @@ pub fn createSyscallEffect(allocator: std.mem.Allocator, params: struct {
     var log = std.ArrayList(u8).init(allocator);
     defer log.deinit();
     if (params.tc.log_collector) |log_collector| {
-        for (log_collector.collect()) |msg| {
+        var iter = log_collector.iterator();
+        while (iter.next()) |msg| {
             try log.appendSlice(msg);
             try log.append('\n');
         }
