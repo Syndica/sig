@@ -18,6 +18,8 @@ const GossipVerifiedVoteHash = sig.consensus.vote_listener.GossipVerifiedVoteHas
 const ThresholdConfirmedSlot = sig.consensus.vote_listener.ThresholdConfirmedSlot;
 const LatestValidatorVotes = sig.consensus.latest_validator_votes.LatestValidatorVotes;
 
+const ledger_tests = sig.ledger.tests;
+
 pub const ProcessEdgeCaseTimings = struct {
     ancestor_hashes_duplicate_slots: sig.time.Duration,
     duplicate_confirmed_slots: sig.time.Duration,
@@ -36,7 +38,7 @@ pub fn processEdgeCases(
         slot_tracker: *const SlotTracker,
         progress: *const ProgressMap,
         fork_choice: *HeaviestSubtreeForkChoice,
-        ledger: *sig.ledger.LedgerResultWriter,
+        result_writer: sig.ledger.Ledger.ResultWriter,
 
         latest_validator_votes: *LatestValidatorVotes,
         slot_data: *SlotData,
@@ -75,7 +77,7 @@ pub fn processEdgeCases(
         allocator,
         logger,
         params.receivers.duplicate_confirmed_slots,
-        params.ledger,
+        params.result_writer,
         &params.slot_data.duplicate_confirmed_slots,
         slot_tracker,
         params.progress,
@@ -547,7 +549,7 @@ fn processDuplicateConfirmedSlots(
     allocator: std.mem.Allocator,
     logger: replay.service.Logger,
     duplicate_confirmed_slots_receiver: *sig.sync.Channel(ThresholdConfirmedSlot),
-    ledger: *sig.ledger.LedgerResultWriter,
+    result_writer: sig.ledger.Ledger.ResultWriter,
     duplicate_confirmed_slots: *SlotData.DuplicateConfirmedSlots,
     slot_tracker: *const SlotTracker,
     progress: *const ProgressMap,
@@ -592,7 +594,7 @@ fn processDuplicateConfirmedSlots(
             logger,
             confirmed_slot,
             root,
-            ledger,
+            result_writer,
             fork_choice,
             duplicate_slots_to_repair,
             ancestor_hashes_replay_update_sender,
@@ -771,7 +773,7 @@ pub const check_slot_agrees_with_cluster = struct {
         logger: replay.service.Logger,
         slot: Slot,
         root: Slot,
-        ledger: *sig.ledger.LedgerResultWriter,
+        result_writer: sig.ledger.Ledger.ResultWriter,
         fork_choice: *HeaviestSubtreeForkChoice,
         duplicate_slots_to_repair: *SlotData.DuplicateSlotsToRepair,
         purge_repair_slot_counter: *SlotData.PurgeRepairSlotCounters,
@@ -815,7 +817,7 @@ pub const check_slot_agrees_with_cluster = struct {
                             slot,
                             fork_choice,
                             duplicate_slots_to_repair,
-                            ledger,
+                            result_writer,
                             purge_repair_slot_counter,
                             &confirmed_non_dupe_frozen_hash,
                             frozen_hash,
@@ -875,7 +877,7 @@ pub const check_slot_agrees_with_cluster = struct {
             try fork_choice.markForkInvalidCandidate(&.{ .slot = slot, .hash = frozen_hash });
         }
 
-        try confirmed_non_dupe_frozen_hash.finalize(slot, ledger);
+        try confirmed_non_dupe_frozen_hash.finalize(slot, result_writer);
     }
 
     pub fn duplicateConfirmed(
@@ -883,7 +885,7 @@ pub const check_slot_agrees_with_cluster = struct {
         logger: replay.service.Logger,
         slot: Slot,
         root: Slot,
-        ledger: *sig.ledger.LedgerResultWriter,
+        result_writer: sig.ledger.Ledger.ResultWriter,
         fork_choice: *HeaviestSubtreeForkChoice,
         duplicate_slots_to_repair: *SlotData.DuplicateSlotsToRepair,
         ancestor_hashes_replay_update_sender: *sig.sync.Channel(AncestorHashesReplayUpdate),
@@ -949,7 +951,7 @@ pub const check_slot_agrees_with_cluster = struct {
                         slot,
                         fork_choice,
                         duplicate_slots_to_repair,
-                        ledger,
+                        result_writer,
                         purge_repair_slot_counter,
                         &confirmed_non_dupe_frozen_hash,
                         frozen_hash,
@@ -974,7 +976,7 @@ pub const check_slot_agrees_with_cluster = struct {
             },
         }
 
-        try confirmed_non_dupe_frozen_hash.finalize(slot, ledger);
+        try confirmed_non_dupe_frozen_hash.finalize(slot, result_writer);
     }
 
     pub fn dead(
@@ -1248,12 +1250,12 @@ const state_change = struct {
         fn finalize(
             self: *ConfirmedNonDupeFrozenHash,
             slot: Slot,
-            ledger: *sig.ledger.LedgerResultWriter,
+            result_writer: sig.ledger.Ledger.ResultWriter,
         ) !void {
             std.debug.assert(!self.finalized);
             self.finalized = true;
             if (self.frozen_hash) |frozen_hash| {
-                try ledger.insertBankHash(slot, frozen_hash, false);
+                try result_writer.insertBankHash(slot, frozen_hash, false);
             }
         }
     };
@@ -1290,7 +1292,7 @@ const state_change = struct {
         slot: u64,
         fork_choice: *HeaviestSubtreeForkChoice,
         duplicate_slots_to_repair: *SlotData.DuplicateSlotsToRepair,
-        ledger: *sig.ledger.LedgerResultWriter,
+        result_writer: sig.ledger.Ledger.ResultWriter,
         purge_repair_slot_counter: *SlotData.PurgeRepairSlotCounters,
         confirmed_non_dupe_frozen_hash: *ConfirmedNonDupeFrozenHash,
         slot_frozen_hash: Hash,
@@ -1306,7 +1308,7 @@ const state_change = struct {
         defer new_duplicate_and_confirmed_slot_hashes.deinit();
 
         {
-            var setter = try ledger.setDuplicateConfirmedSlotsAndHashesIncremental();
+            var setter = try result_writer.setDuplicateConfirmedSlotsAndHashesIncremental();
             defer setter.deinit();
             for (new_duplicate_and_confirmed_slot_hashes.items) |confirmed| {
                 try setter.addSlotAndHash(confirmed.slot, confirmed.hash);
@@ -1522,60 +1524,6 @@ const TestData = struct {
     }
 };
 
-const TestLedgerRwState = struct {
-    registry: sig.prometheus.Registry(.{}),
-    lowest_cleanup_slot: sig.sync.RwMux(Slot),
-    max_root: std.atomic.Value(Slot),
-
-    fn init() TestLedgerRwState {
-        return .{
-            .registry = .init(std.testing.allocator),
-            .lowest_cleanup_slot = .init(0),
-            .max_root = .init(0),
-        };
-    }
-
-    fn deinit(self: *TestLedgerRwState) void {
-        self.registry.deinit();
-    }
-};
-
-fn testLedgerRw(
-    comptime src_loc: std.builtin.SourceLocation,
-    logger: replay.service.Logger,
-    state: *TestLedgerRwState,
-) !struct {
-    sig.ledger.LedgerDB,
-    sig.ledger.LedgerReader,
-    sig.ledger.LedgerResultWriter,
-} {
-    var ledger_db = try sig.ledger.tests.TestDB.init(src_loc);
-    errdefer ledger_db.deinit();
-
-    const reader: sig.ledger.LedgerReader = try .init(
-        std.testing.allocator,
-        .from(logger),
-        ledger_db,
-        &state.registry,
-        &state.lowest_cleanup_slot,
-        &state.max_root,
-    );
-    const writer: sig.ledger.LedgerResultWriter = try .init(
-        std.testing.allocator,
-        .from(logger),
-        ledger_db,
-        &state.registry,
-        &state.lowest_cleanup_slot,
-        &state.max_root,
-    );
-
-    return .{
-        ledger_db,
-        reader,
-        writer,
-    };
-}
-
 test "apply state changes" {
     const allocator = std.testing.allocator;
 
@@ -1648,11 +1596,7 @@ test "apply state changes slot frozen" {
     const slot_tracker = test_data.slot_tracker;
     const heaviest_subtree_fork_choice = &test_data.heaviest_subtree_fork_choice;
 
-    var ledger_state: TestLedgerRwState = .init();
-    defer ledger_state.deinit();
-
-    var ledger, var ledger_reader, var ledger_writer =
-        try testLedgerRw(@src(), .noop, &ledger_state);
+    var ledger = try ledger_tests.initTestLedger(allocator, @src(), .FOR_TESTS);
     defer ledger.deinit();
 
     const duplicate_slot = slot_tracker.root + 1;
@@ -1660,7 +1604,10 @@ test "apply state changes slot frozen" {
 
     // Simulate ReplayStage freezing a Slot with the given hash.
     // 'slot frozen' should mark it down in Ledger.
-    try std.testing.expectEqual(null, ledger_reader.getBankHash(duplicate_slot));
+    try std.testing.expectEqual(
+        null,
+        ledger.reader().getBankHash(allocator, duplicate_slot),
+    );
 
     {
         // Handle cases where the slot is frozen, but not duplicate confirmed yet.
@@ -1672,11 +1619,17 @@ test "apply state changes slot frozen" {
             duplicate_slot,
             duplicate_slot_hash,
         );
-        try confirmed_non_dupe_frozen_hash.finalize(duplicate_slot, &ledger_writer);
+        try confirmed_non_dupe_frozen_hash.finalize(duplicate_slot, ledger.resultWriter());
     }
 
-    try std.testing.expectEqual(duplicate_slot_hash, ledger_reader.getBankHash(duplicate_slot));
-    try std.testing.expectEqual(false, ledger_reader.isDuplicateConfirmed(duplicate_slot));
+    try std.testing.expectEqual(
+        duplicate_slot_hash,
+        ledger.reader().getBankHash(allocator, duplicate_slot),
+    );
+    try std.testing.expectEqual(
+        false,
+        ledger.reader().isDuplicateConfirmed(allocator, duplicate_slot),
+    );
 
     // If we freeze another version of the slot, it should overwrite the first
     // version in blockstore.
@@ -1705,10 +1658,16 @@ test "apply state changes slot frozen" {
             duplicate_slot,
             new_slot_hash,
         );
-        try confirmed_non_dupe_frozen_hash.finalize(duplicate_slot, &ledger_writer);
+        try confirmed_non_dupe_frozen_hash.finalize(duplicate_slot, ledger.resultWriter());
     }
-    try std.testing.expectEqual(new_slot_hash, ledger_reader.getBankHash(duplicate_slot));
-    try std.testing.expectEqual(false, ledger_reader.isDuplicateConfirmed(duplicate_slot));
+    try std.testing.expectEqual(
+        new_slot_hash,
+        ledger.reader().getBankHash(allocator, duplicate_slot),
+    );
+    try std.testing.expectEqual(
+        false,
+        ledger.reader().isDuplicateConfirmed(allocator, duplicate_slot),
+    );
 }
 
 test "apply state changes duplicate confirmed matches frozen" {
@@ -1724,11 +1683,7 @@ test "apply state changes duplicate confirmed matches frozen" {
     const heaviest_subtree_fork_choice = &test_data.heaviest_subtree_fork_choice;
     const descendants = &test_data.descendants;
 
-    var ledger_state: TestLedgerRwState = .init();
-    defer ledger_state.deinit();
-
-    var ledger, var ledger_reader, var ledger_writer =
-        try testLedgerRw(@src(), .noop, &ledger_state);
+    var ledger = try ledger_tests.initTestLedger(allocator, @src(), .FOR_TESTS);
     defer ledger.deinit();
 
     const duplicate_slot = slot_tracker.root + 1;
@@ -1743,8 +1698,14 @@ test "apply state changes duplicate confirmed matches frozen" {
     // Setup and check the state that is about to change.
     try duplicate_slots_to_repair.put(allocator, duplicate_slot, .initRandom(random));
     try purge_repair_slot_counter.put(allocator, duplicate_slot, 1);
-    try std.testing.expectEqual(null, ledger_reader.getBankHash(duplicate_slot));
-    try std.testing.expectEqual(false, ledger_reader.isDuplicateConfirmed(duplicate_slot));
+    try std.testing.expectEqual(
+        null,
+        ledger.reader().getBankHash(allocator, duplicate_slot),
+    );
+    try std.testing.expectEqual(
+        false,
+        ledger.reader().isDuplicateConfirmed(allocator, duplicate_slot),
+    );
 
     // DuplicateConfirmedSlotMatchesCluster should:
     // 1) Re-enable fork choice
@@ -1759,13 +1720,13 @@ test "apply state changes duplicate confirmed matches frozen" {
             duplicate_slot,
             heaviest_subtree_fork_choice,
             &duplicate_slots_to_repair,
-            &ledger_writer,
+            ledger.resultWriter(),
             &purge_repair_slot_counter,
             &confirmed_non_dupe_frozen_hash,
             our_duplicate_slot_hash,
         );
 
-        try confirmed_non_dupe_frozen_hash.finalize(duplicate_slot, &ledger_writer);
+        try confirmed_non_dupe_frozen_hash.finalize(duplicate_slot, ledger.resultWriter());
     }
 
     for ([_][]const Slot{
@@ -1788,8 +1749,14 @@ test "apply state changes duplicate confirmed matches frozen" {
     }));
     try std.testing.expectEqual(0, duplicate_slots_to_repair.count());
     try std.testing.expectEqual(0, purge_repair_slot_counter.count());
-    try std.testing.expectEqual(our_duplicate_slot_hash, ledger_reader.getBankHash(duplicate_slot));
-    try std.testing.expectEqual(true, ledger_reader.isDuplicateConfirmed(duplicate_slot));
+    try std.testing.expectEqual(
+        our_duplicate_slot_hash,
+        ledger.reader().getBankHash(allocator, duplicate_slot),
+    );
+    try std.testing.expectEqual(
+        true,
+        ledger.reader().isDuplicateConfirmed(allocator, duplicate_slot),
+    );
 }
 
 test "apply state changes slot frozen and duplicate confirmed matches frozen" {
@@ -1805,11 +1772,7 @@ test "apply state changes slot frozen and duplicate confirmed matches frozen" {
     const heaviest_subtree_fork_choice = &test_data.heaviest_subtree_fork_choice;
     const descendants = &test_data.descendants;
 
-    var ledger_state: TestLedgerRwState = .init();
-    defer ledger_state.deinit();
-
-    var ledger, var ledger_reader, var ledger_writer =
-        try testLedgerRw(@src(), .noop, &ledger_state);
+    var ledger = try ledger_tests.initTestLedger(allocator, @src(), .FOR_TESTS);
     defer ledger.deinit();
 
     var duplicate_slots_to_repair: SlotData.DuplicateSlotsToRepair = .empty;
@@ -1824,8 +1787,14 @@ test "apply state changes slot frozen and duplicate confirmed matches frozen" {
     // Setup and check the state that is about to change.
     try duplicate_slots_to_repair.put(allocator, duplicate_slot, .initRandom(random));
     try purge_repair_slot_counter.put(allocator, duplicate_slot, 1);
-    try std.testing.expectEqual(null, ledger_reader.getBankHash(duplicate_slot));
-    try std.testing.expectEqual(false, ledger_reader.isDuplicateConfirmed(duplicate_slot));
+    try std.testing.expectEqual(
+        null,
+        ledger.reader().getBankHash(allocator, duplicate_slot),
+    );
+    try std.testing.expectEqual(
+        false,
+        ledger.reader().isDuplicateConfirmed(allocator, duplicate_slot),
+    );
 
     // DuplicateConfirmedSlotMatchesCluster should:
     // 1) Re-enable fork choice
@@ -1841,7 +1810,7 @@ test "apply state changes slot frozen and duplicate confirmed matches frozen" {
             duplicate_slot,
             heaviest_subtree_fork_choice,
             &duplicate_slots_to_repair,
-            &ledger_writer,
+            ledger.resultWriter(),
             &purge_repair_slot_counter,
             &confirmed_non_dupe_frozen_hash,
             our_duplicate_slot_hash,
@@ -1855,7 +1824,7 @@ test "apply state changes slot frozen and duplicate confirmed matches frozen" {
             our_duplicate_slot_hash,
         );
 
-        try confirmed_non_dupe_frozen_hash.finalize(duplicate_slot, &ledger_writer);
+        try confirmed_non_dupe_frozen_hash.finalize(duplicate_slot, ledger.resultWriter());
     }
 
     for ([_][]const Slot{
@@ -1879,8 +1848,14 @@ test "apply state changes slot frozen and duplicate confirmed matches frozen" {
     }));
     try std.testing.expectEqual(0, duplicate_slots_to_repair.count());
     try std.testing.expectEqual(0, purge_repair_slot_counter.count());
-    try std.testing.expectEqual(our_duplicate_slot_hash, ledger_reader.getBankHash(duplicate_slot));
-    try std.testing.expectEqual(true, ledger_reader.isDuplicateConfirmed(duplicate_slot));
+    try std.testing.expectEqual(
+        our_duplicate_slot_hash,
+        ledger.reader().getBankHash(allocator, duplicate_slot),
+    );
+    try std.testing.expectEqual(
+        true,
+        ledger.reader().isDuplicateConfirmed(allocator, duplicate_slot),
+    );
 }
 
 test "check slot agrees with cluster dead duplicate confirmed" {
@@ -1896,11 +1871,7 @@ test "check slot agrees with cluster dead duplicate confirmed" {
     const heaviest_subtree_fork_choice = &test_data.heaviest_subtree_fork_choice;
     const progress = &test_data.progress;
 
-    var ledger_state: TestLedgerRwState = .init();
-    defer ledger_state.deinit();
-
-    var ledger, _, var ledger_writer =
-        try testLedgerRw(@src(), .noop, &ledger_state);
+    var ledger = try ledger_tests.initTestLedger(allocator, @src(), .FOR_TESTS);
     defer ledger.deinit();
 
     const root = 0;
@@ -1924,7 +1895,7 @@ test "check slot agrees with cluster dead duplicate confirmed" {
         .noop,
         2,
         root,
-        &ledger_writer,
+        ledger.resultWriter(),
         heaviest_subtree_fork_choice,
         &duplicate_slots_to_repair,
         &ancestor_hashes_replay_update_channel,
@@ -1958,11 +1929,7 @@ fn testStateDuplicateThenSlotFrozen(initial_slot_hash: ?Hash) !void {
     const heaviest_subtree_fork_choice = &test_data.heaviest_subtree_fork_choice;
     const progress = &test_data.progress;
 
-    var ledger_state: TestLedgerRwState = .init();
-    defer ledger_state.deinit();
-
-    var ledger, _, var ledger_writer =
-        try testLedgerRw(@src(), .noop, &ledger_state);
+    var ledger = try ledger_tests.initTestLedger(allocator, @src(), .FOR_TESTS);
     defer ledger.deinit();
 
     // Setup a duplicate slot state transition with the initial slot state of the duplicate slot
@@ -2026,7 +1993,7 @@ fn testStateDuplicateThenSlotFrozen(initial_slot_hash: ?Hash) !void {
         .noop,
         duplicate_slot,
         root,
-        &ledger_writer,
+        ledger.resultWriter(),
         heaviest_subtree_fork_choice,
         &duplicate_slots_to_repair,
         &purge_repair_slot_counter,
@@ -2072,11 +2039,7 @@ test "state ancestor confirmed descendant duplicate" {
     const heaviest_subtree_fork_choice = &test_data.heaviest_subtree_fork_choice;
     const progress = &test_data.progress;
 
-    var ledger_state: TestLedgerRwState = .init();
-    defer ledger_state.deinit();
-
-    var ledger, _, var ledger_writer =
-        try testLedgerRw(@src(), .noop, &ledger_state);
+    var ledger = try ledger_tests.initTestLedger(allocator, @src(), .FOR_TESTS);
     defer ledger.deinit();
 
     const slot3_hash = slot_tracker.get(3).?.state.hash.readCopy().?;
@@ -2113,7 +2076,7 @@ test "state ancestor confirmed descendant duplicate" {
             .noop,
             2,
             root,
-            &ledger_writer,
+            ledger.resultWriter(),
             heaviest_subtree_fork_choice,
             &duplicate_slots_to_repair,
             &ancestor_hashes_replay_update_channel,
@@ -2221,11 +2184,7 @@ test "state ancestor duplicate descendant confirmed" {
     const heaviest_subtree_fork_choice = &test_data.heaviest_subtree_fork_choice;
     const progress = &test_data.progress;
 
-    var ledger_state: TestLedgerRwState = .init();
-    defer ledger_state.deinit();
-
-    var ledger, _, var ledger_writer =
-        try testLedgerRw(@src(), .noop, &ledger_state);
+    var ledger = try ledger_tests.initTestLedger(allocator, @src(), .FOR_TESTS);
     defer ledger.deinit();
 
     const slot3_hash = slot_tracker.get(3).?.state.hash.readCopy().?;
@@ -2297,7 +2256,7 @@ test "state ancestor duplicate descendant confirmed" {
             .noop,
             3,
             root,
-            &ledger_writer,
+            ledger.resultWriter(),
             heaviest_subtree_fork_choice,
             &duplicate_slots_to_repair,
             &ancestor_hashes_replay_update_sender,
@@ -2370,11 +2329,7 @@ test "state descendant confirmed ancestor duplicate" {
     const heaviest_subtree_fork_choice = &test_data.heaviest_subtree_fork_choice;
     const progress = &test_data.progress;
 
-    var ledger_state: TestLedgerRwState = .init();
-    defer ledger_state.deinit();
-
-    var ledger, _, var ledger_writer =
-        try testLedgerRw(@src(), .noop, &ledger_state);
+    var ledger = try ledger_tests.initTestLedger(allocator, @src(), .FOR_TESTS);
     defer ledger.deinit();
 
     const slot3_hash = slot_tracker.get(3).?.state.hash.readCopy().?;
@@ -2414,7 +2369,7 @@ test "state descendant confirmed ancestor duplicate" {
         .noop,
         3,
         root,
-        &ledger_writer,
+        ledger.resultWriter(),
         heaviest_subtree_fork_choice,
         &duplicate_slots_to_repair,
         &ancestor_hashes_replay_update_sender,
@@ -2468,11 +2423,7 @@ test "duplicate confirmed and epoch slots frozen" {
     const heaviest_subtree_fork_choice = &test_data.heaviest_subtree_fork_choice;
     const progress = &test_data.progress;
 
-    var ledger_state: TestLedgerRwState = .init();
-    defer ledger_state.deinit();
-
-    var ledger, _, var ledger_writer =
-        try testLedgerRw(@src(), .noop, &ledger_state);
+    var ledger = try ledger_tests.initTestLedger(allocator, @src(), .FOR_TESTS);
     defer ledger.deinit();
 
     const slot3_hash = slot_tracker.get(3).?.state.hash.readCopy().?;
@@ -2543,7 +2494,7 @@ test "duplicate confirmed and epoch slots frozen" {
         .noop,
         3,
         root,
-        &ledger_writer,
+        ledger.resultWriter(),
         heaviest_subtree_fork_choice,
         &duplicate_slots_to_repair,
         &ancestor_hashes_replay_update_sender,
@@ -2579,11 +2530,7 @@ test "duplicate confirmed and epoch slots frozen mismatched" {
     const heaviest_subtree_fork_choice = &test_data.heaviest_subtree_fork_choice;
     const progress = &test_data.progress;
 
-    var ledger_state: TestLedgerRwState = .init();
-    defer ledger_state.deinit();
-
-    var ledger, _, var ledger_writer =
-        try testLedgerRw(@src(), .noop, &ledger_state);
+    var ledger = try ledger_tests.initTestLedger(allocator, @src(), .FOR_TESTS);
     defer ledger.deinit();
 
     const slot3_hash = slot_tracker.get(3).?.state.hash.readCopy().?;
@@ -2660,7 +2607,7 @@ test "duplicate confirmed and epoch slots frozen mismatched" {
         .noop,
         3,
         root,
-        &ledger_writer,
+        ledger.resultWriter(),
         heaviest_subtree_fork_choice,
         &duplicate_slots_to_repair,
         &ancestor_hashes_replay_update_sender,

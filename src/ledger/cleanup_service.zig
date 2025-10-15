@@ -8,10 +8,7 @@ const Duration = sig.time.Duration;
 const Pubkey = sig.core.Pubkey;
 const Signature = sig.core.Signature;
 const Slot = sig.core.Slot;
-
-const LedgerDB = ledger.LedgerDB;
-const LedgerReader = ledger.reader.LedgerReader;
-const LedgerResultWriter = ledger.result_writer.LedgerResultWriter;
+const LedgerDB = ledger.db.LedgerDB;
 
 const schema = ledger.schema.schema;
 
@@ -34,9 +31,7 @@ pub const Logger = sig.trace.Logger("ledger.cleanup_service");
 
 pub fn run(
     logger: Logger,
-    ledger_reader: *LedgerReader,
-    db: *LedgerDB,
-    lowest_cleanup_slot: *sig.sync.RwMux(Slot),
+    ledger_state: *sig.ledger.Ledger,
     max_ledger_shreds: u64,
     exit: *AtomicBool,
 ) !void {
@@ -46,9 +41,7 @@ pub fn run(
     while (!exit.load(.acquire)) {
         last_purge_slot = try cleanLedger(
             logger,
-            ledger_reader,
-            db,
-            lowest_cleanup_slot,
+            ledger_state,
             max_ledger_shreds,
             last_purge_slot,
             DEFAULT_CLEANUP_SLOT_INTERVAL,
@@ -79,32 +72,30 @@ pub fn run(
 /// Analogous to the [`cleanup_ledger`](https://github.com/anza-xyz/agave/blob/6476d5fac0c30d1f49d13eae118b89be78fb15d2/ledger/src/blockstore_cleanup_service.rs#L198) in agave:
 pub fn cleanLedger(
     logger: Logger,
-    ledger_reader: *LedgerReader,
-    db: *LedgerDB,
-    lowest_cleanup_slot: *sig.sync.RwMux(Slot),
+    ledger_state: *sig.ledger.Ledger,
     max_ledger_shreds: u64,
     last_purge_slot: u64,
     purge_interval: u64,
 ) !Slot {
     // // TODO: add back when max_root is implemented with consensus
-    // const root = ledger_reader.max_root.load(.acquire);
+    // const root = ledger.max_root.load(.acquire);
 
     // hack to get a conservative estimate of a recent slot that is almost definitely rooted
-    const root = if (try ledger_reader.highestSlot()) |highest|
+    const root = if (try ledger_state.reader().highestSlot()) |highest|
         highest -| 100
     else
-        try ledger_reader.lowestSlot();
+        try ledger_state.reader().lowestSlot();
 
     if (root - last_purge_slot <= purge_interval) return last_purge_slot;
 
-    const result = try findSlotsToClean(ledger_reader, root, max_ledger_shreds);
+    const result = try findSlotsToClean(ledger_state, root, max_ledger_shreds);
     logger.info().logf("findSlotsToClean result: {any}", .{result});
 
     if (result.should_clean) {
-        const slot, var lock = lowest_cleanup_slot.writeWithLock();
+        const slot, var lock = ledger_state.highest_slot_cleaned.writeWithLock();
         defer lock.unlock();
         slot.* = result.highest_slot_to_purge;
-        const did_purge = try purgeSlots(db, 0, result.highest_slot_to_purge);
+        const did_purge = try purgeSlots(&ledger_state.db, 0, result.highest_slot_to_purge);
         if (did_purge) {
             logger.info().log("Purged slots...");
         } else {
@@ -151,11 +142,11 @@ const SlotsToCleanResult = struct {
 ///
 /// Analogous to the [`find_slots_to_clean`](https://github.com/anza-xyz/agave/blob/6476d5fac0c30d1f49d13eae118b89be78fb15d2/ledger/src/blockstore_cleanup_service.rs#L103)
 fn findSlotsToClean(
-    ledger_reader: *LedgerReader,
+    ledger_state: *sig.ledger.Ledger,
     max_root: Slot,
     max_ledger_shreds: u64,
 ) !SlotsToCleanResult {
-    const num_shreds = try ledger_reader.db.count(schema.data_shred);
+    const num_shreds = try ledger_state.db.count(schema.data_shred);
 
     // Using the difference between the lowest and highest slot seen will
     // result in overestimating the number of slots in the ledger since
@@ -176,8 +167,8 @@ fn findSlotsToClean(
     // relevant when a cluster has extended periods of not rooting slots.
     // With healthy cluster operation, the minimum ledger size ensures
     // that purged slots will be quite old in relation to the newest root.
-    const lowest_slot = try ledger_reader.lowestSlot();
-    const highest_slot = try ledger_reader.highestSlot() orelse lowest_slot;
+    const lowest_slot = try ledger_state.reader().lowestSlot();
+    const highest_slot = try ledger_state.reader().highestSlot() orelse lowest_slot;
 
     if (highest_slot < lowest_slot) {
         return .{ .should_clean = false, .highest_slot_to_purge = 0, .total_shreds = num_shreds };
@@ -396,39 +387,33 @@ fn purgeFileRangeWithCount(
     count.* += 1;
 }
 
-const Ledger = ledger.LedgerDB;
-const TestDB = ledger.tests.TestDB;
+const Ledger = ledger.Ledger;
 
 test cleanLedger {
     // test setup
     const allocator = std.testing.allocator;
-    const logger = sig.trace.DirectPrintLogger.init(allocator, .warn).logger("ledger.test");
-    const registry = sig.prometheus.globalRegistry();
-    var db = try TestDB.init(@src());
-    defer db.deinit();
-    var lowest_cleanup_slot = sig.sync.RwMux(Slot).init(0);
-    var max_root = std.atomic.Value(Slot).init(0);
-    var reader = try LedgerReader
-        .init(allocator, .from(logger), db, registry, &lowest_cleanup_slot, &max_root);
+    const logger = sig.trace.DirectPrintLogger.init(allocator, .warn).logger("ledger.tests");
+    var state = try ledger.tests.initTestLedger(allocator, @src(), logger);
+    defer state.deinit();
 
     // insert data
-    var batch = try db.initWriteBatch();
+    var batch = try state.db.initWriteBatch();
     defer batch.deinit();
     for (0..1_000) |i| {
         for (0..10) |j| try batch.put(ledger.schema.schema.data_shred, .{ i, j }, &.{});
         try batch.put(ledger.schema.schema.slot_meta, i, undefined);
     }
-    try db.commit(&batch);
-    try db.flush(ledger.schema.schema.data_shred);
+    try state.db.commit(&batch);
+    try state.db.flush(ledger.schema.schema.data_shred);
 
     // run test subject
-    const slot = try cleanLedger(.from(logger), &reader, &db, &lowest_cleanup_slot, 100, 0, 0);
+    const slot = try cleanLedger(.from(logger), &state, 100, 0, 0);
     try std.testing.expectEqual(899, slot);
 
     // verify correct data was purged
-    var shred_iter = try db.iterator(ledger.schema.schema.data_shred, .forward, .{ 0, 0 });
+    var shred_iter = try state.db.iterator(ledger.schema.schema.data_shred, .forward, .{ 0, 0 });
     defer shred_iter.deinit();
-    var meta_iter = try db.iterator(ledger.schema.schema.slot_meta, .forward, 0);
+    var meta_iter = try state.db.iterator(ledger.schema.schema.slot_meta, .forward, 0);
     defer meta_iter.deinit();
     for (900..1_000) |i| {
         for (0..10) |j| try std.testing.expectEqual(.{ i, j }, (try shred_iter.nextKey()).?);
@@ -440,24 +425,10 @@ test cleanLedger {
 
 test "findSlotsToClean" {
     const allocator = std.testing.allocator;
-    var registry = sig.prometheus.Registry(.{}).init(allocator);
-    defer registry.deinit();
     const logger = .noop;
 
-    var db = try TestDB.init(@src());
-    defer db.deinit();
-
-    var lowest_cleanup_slot = sig.sync.RwMux(Slot).init(0);
-    var max_root = std.atomic.Value(Slot).init(0);
-
-    var reader = try LedgerReader.init(
-        allocator,
-        logger,
-        db,
-        &registry,
-        &lowest_cleanup_slot,
-        &max_root,
-    );
+    var state = try ledger.tests.initTestLedger(allocator, @src(), logger);
+    defer state.deinit();
 
     // set highest and lowest slot by inserting slot_meta
     var lowest_slot_meta = ledger.meta.SlotMeta.init(allocator, 10, null);
@@ -469,7 +440,7 @@ test "findSlotsToClean" {
     highest_slot_meta.received = 20;
 
     {
-        var write_batch = try db.initWriteBatch();
+        var write_batch = try state.db.initWriteBatch();
         defer write_batch.deinit();
         try write_batch.put(
             ledger.schema.schema.slot_meta,
@@ -481,31 +452,28 @@ test "findSlotsToClean" {
             highest_slot_meta.slot,
             highest_slot_meta,
         );
-        try db.commit(&write_batch);
+        try state.db.commit(&write_batch);
     }
 
-    const r = try findSlotsToClean(&reader, 0, 100);
+    const r = try findSlotsToClean(&state, 0, 100);
     try std.testing.expectEqual(false, r.should_clean);
     try std.testing.expectEqual(0, r.total_shreds);
     try std.testing.expectEqual(0, r.highest_slot_to_purge);
     var data_shred = try ledger.shred.DataShred.zeroedForTest(allocator);
     defer data_shred.deinit();
     {
-        var write_batch = try db.initWriteBatch();
+        var write_batch = try state.db.initWriteBatch();
         defer write_batch.deinit();
         for (0..1000) |i| {
             try write_batch.put(ledger.schema.schema.data_shred, .{ 19, i }, data_shred.payload);
         }
-        try db.commit(&write_batch);
+        try state.db.commit(&write_batch);
     }
     // When implementation is rocksdb, we need to flush memtable to disk to be able to assert.
-    // We do that by deiniting the current db, which triggers the flushing.
     if (sig.build_options.ledger_db == .rocksdb) {
-        db.deinit();
-        db = try TestDB.reuseLedger(@src());
-        reader.db = db;
+        try state.db.flush(ledger.schema.schema.data_shred);
     }
-    const r2 = try findSlotsToClean(&reader, 0, 100);
+    const r2 = try findSlotsToClean(&state, 0, 100);
     try std.testing.expectEqual(true, r2.should_clean);
     try std.testing.expectEqual(1000, r2.total_shreds);
     try std.testing.expectEqual(0, r2.highest_slot_to_purge);
@@ -514,44 +482,30 @@ test "findSlotsToClean" {
 test "purgeSlots" {
     const allocator = std.testing.allocator;
     const logger = .noop;
-    var registry = sig.prometheus.Registry(.{}).init(allocator);
-    defer registry.deinit();
 
-    var db = try TestDB.init(@src());
-    defer db.deinit();
-
-    var lowest_cleanup_slot = sig.sync.RwMux(Slot).init(0);
-    var max_root = std.atomic.Value(Slot).init(0);
-    var writer = LedgerResultWriter{
-        .allocator = allocator,
-        .db = db,
-        .logger = logger,
-        .lowest_cleanup_slot = &lowest_cleanup_slot,
-        .max_root = &max_root,
-        .scan_and_fix_roots_metrics = try registry
-            .initStruct(ledger.result_writer.ScanAndFixRootsMetrics),
-    };
+    var state = try ledger.tests.initTestLedger(allocator, @src(), logger);
+    defer state.deinit();
 
     // write some roots
     const roots: [10]Slot = .{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
-    try writer.setRoots(&roots);
+    try state.resultWriter().setRoots(&roots);
 
     // purge the range [0, 5]
-    const did_purge = try purgeSlots(&db, 0, 5);
+    const did_purge = try purgeSlots(&state.db, 0, 5);
     try std.testing.expectEqual(true, did_purge);
 
     for (0..5 + 1) |slot| {
-        const is_root = try db.get(allocator, schema.rooted_slots, slot) orelse false;
+        const is_root = try state.db.get(allocator, schema.rooted_slots, slot) orelse false;
         try std.testing.expectEqual(false, is_root);
     }
 
     for (6..10 + 1) |slot| {
-        const is_root = try db.get(allocator, schema.rooted_slots, slot) orelse false;
+        const is_root = try state.db.get(allocator, schema.rooted_slots, slot) orelse false;
         try std.testing.expectEqual(true, is_root);
     }
 
     // write another type
-    var write_batch = try db.initWriteBatch();
+    var write_batch = try state.db.initWriteBatch();
     defer write_batch.deinit();
     for (0..roots.len + 1) |i| {
         const merkle_root_meta = sig.ledger.shred.ErasureSetId{
@@ -566,33 +520,29 @@ test "purgeSlots" {
 
         try write_batch.put(schema.merkle_root_meta, merkle_root_meta, merkle_meta);
     }
-    try db.commit(&write_batch);
+    try state.db.commit(&write_batch);
 
     // purge the range [0, 5]
-    const did_purge2 = try purgeSlots(&db, 0, 5);
+    const did_purge2 = try purgeSlots(&state.db, 0, 5);
     try std.testing.expectEqual(true, did_purge2);
 
     for (0..5 + 1) |i| {
-        const r = try db.get(allocator, schema.merkle_root_meta, .{ .slot = i, .erasure_set_index = i });
+        const r = try state.db.get(allocator, schema.merkle_root_meta, .{ .slot = i, .erasure_set_index = i });
         try std.testing.expectEqual(null, r);
     }
 
     for (6..10 + 1) |i| {
-        const r = try db.get(allocator, schema.merkle_root_meta, .{ .slot = i, .erasure_set_index = i });
+        const r = try state.db.get(allocator, schema.merkle_root_meta, .{ .slot = i, .erasure_set_index = i });
         try std.testing.expect(r != null);
     }
 }
 
 test "run exits promptly" {
     const allocator = std.testing.allocator;
-    const logger = sig.trace.DirectPrintLogger.init(allocator, .warn).logger("ledger.test");
-    const registry = sig.prometheus.globalRegistry();
-    var db = try TestDB.init(@src());
-    defer db.deinit();
-    var lowest_cleanup_slot = sig.sync.RwMux(Slot).init(0);
-    var max_root = std.atomic.Value(Slot).init(0);
-    var reader = try LedgerReader
-        .init(allocator, .from(logger), db, registry, &lowest_cleanup_slot, &max_root);
+    const logger = sig.trace.DirectPrintLogger.init(allocator, .warn).logger("ledger.tests");
+
+    var state = try ledger.tests.initTestLedger(allocator, @src(), logger);
+    defer state.deinit();
 
     var exit = std.atomic.Value(bool).init(false);
     var timer = try sig.time.Timer.start();
@@ -600,7 +550,7 @@ test "run exits promptly" {
     const thread = try std.Thread.spawn(
         .{},
         run,
-        .{ .noop, &reader, &db, &lowest_cleanup_slot, 0, &exit },
+        .{ .noop, &state, 0, &exit },
     );
     std.Thread.sleep(10 * std.time.ns_per_ms);
     exit.store(true, .monotonic);

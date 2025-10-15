@@ -1,7 +1,6 @@
 const std = @import("std");
 const sig = @import("../../sig.zig");
 const ledger = @import("../lib.zig");
-const shred_inserter = @import("lib.zig");
 
 const meta = ledger.meta;
 const schema = ledger.schema.schema;
@@ -15,7 +14,6 @@ const SortedMap = sig.utils.collections.SortedMap;
 const Timer = sig.time.Timer;
 
 const LedgerDB = ledger.db.LedgerDB;
-const LedgerInsertionMetrics = shred_inserter.shred_inserter.LedgerInsertionMetrics;
 const BytesRef = ledger.database.BytesRef;
 const CodeShred = ledger.shred.CodeShred;
 const ColumnFamily = ledger.database.ColumnFamily;
@@ -87,7 +85,7 @@ pub const PendingInsertShredsState = struct {
     slot_meta_working_set: AutoHashMap(u64, SlotMetaWorkingSetEntry),
     index_working_set: AutoHashMap(u64, IndexMetaWorkingSetEntry),
     duplicate_shreds: ArrayList(PossibleDuplicateShred),
-    metrics: LedgerInsertionMetrics,
+    metrics: ?ledger.ShredInserter.Metrics,
 
     // TODO unmanaged
 
@@ -97,7 +95,7 @@ pub const PendingInsertShredsState = struct {
         allocator: Allocator,
         logger: Logger,
         db: *LedgerDB,
-        metrics: LedgerInsertionMetrics,
+        metrics: ?ledger.ShredInserter.Metrics,
     ) !Self {
         return .{
             .allocator = allocator,
@@ -135,7 +133,7 @@ pub const PendingInsertShredsState = struct {
                 entry.value_ptr.* = IndexMetaWorkingSetEntry.init(self.allocator, slot);
             }
         }
-        self.metrics.index_meta_time_us.add(timer.read().asMicros());
+        if (self.metrics) |m| m.index_meta_time_us.add(timer.read().asMicros());
         return entry.value_ptr;
     }
 
@@ -216,11 +214,12 @@ pub const PendingInsertShredsState = struct {
             }
         }
 
-        self.metrics.insert_working_sets_elapsed_us.add(commit_working_sets_timer.read().asMicros());
+        if (self.metrics) |m|
+            m.insert_working_sets_elapsed_us.add(commit_working_sets_timer.read().asMicros());
 
         var commit_timer = try Timer.start();
         try self.db.commit(&self.write_batch);
-        self.metrics.write_batch_elapsed_us.add(commit_timer.read().asMicros());
+        if (self.metrics) |m| m.write_batch_elapsed_us.add(commit_timer.read().asMicros());
     }
 
     /// For each slot in the slot_meta_working_set which has any change, include
