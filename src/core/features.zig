@@ -127,6 +127,16 @@ pub const Set = struct {
                 set.active(.full_inflation_devnet_and_testnet, slot)) return true;
             return false;
         }
+
+        pub fn mainnetSlot(self: FullInflationFeatures, set: *const Set) ?Slot {
+            if (self.mainnet) return set.get(.full_inflation_mainnet_enable);
+            return null;
+        }
+
+        pub fn devnetAndTestnetSlot(self: FullInflationFeatures, set: *const Set) ?Slot {
+            if (self.devnet_and_testnet) return set.get(.full_inflation_devnet_and_testnet);
+            return null;
+        }
     };
 
     pub fn fullInflationFeatures(self: *const Set, slot: Slot) FullInflationFeatures {
