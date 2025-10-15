@@ -322,7 +322,7 @@ pub fn execute(
             try setLockup(allocator, &me, &lockup, ic.ixn_info.getSigners().slice(), &clock);
         },
         .get_minimum_delegation => {
-            const min_delegation = getMinimumDelegation(ic, ic.tc.feature_set);
+            const min_delegation = getMinimumDelegation(ic.tc.slot, ic.tc.feature_set);
             const bytes = std.mem.asBytes(&std.mem.nativeToLittle(u64, min_delegation));
 
             std.debug.assert(bytes.len == 8);
@@ -552,9 +552,9 @@ fn authorizeWithSeed(
     );
 }
 
-fn getMinimumDelegation(ic: *InstructionContext, feature_set: *const FeatureSet) u64 {
+pub fn getMinimumDelegation(slot: Slot, feature_set: *const FeatureSet) u64 {
     const LAMPORTS_PER_SOL: u64 = 1_000_000_000;
-    return if (feature_set.active(.stake_raise_minimum_delegation_to_1_sol, ic.tc.slot))
+    return if (feature_set.active(.stake_raise_minimum_delegation_to_1_sol, slot))
         1 * LAMPORTS_PER_SOL
     else
         1;
@@ -569,7 +569,7 @@ fn validateDelegatedAmount(
     feature_set: *const FeatureSet,
 ) InstructionError!ValidatedDelegatedInfo {
     const stake_amount = account.account.lamports -| meta.rent_exempt_reserve;
-    if (stake_amount < getMinimumDelegation(ic, feature_set)) {
+    if (stake_amount < getMinimumDelegation(ic.tc.slot, feature_set)) {
         ic.tc.custom_error = @intFromEnum(StakeError.insufficient_delegation);
         return error.Custom;
     }
@@ -834,7 +834,7 @@ fn split(
             var args = stake_args;
             try args.meta.authorized.check(signers, .staker);
 
-            const minimum_delegation = getMinimumDelegation(ic, feature_set);
+            const minimum_delegation = getMinimumDelegation(ic.tc.slot, feature_set);
             const is_active = blk: {
                 const clock = try ic.tc.sysvar_cache.get(sysvar.Clock);
                 const status = try getStakeStatus(ic, &args.stake, &clock);
@@ -1555,7 +1555,7 @@ fn moveStake(
     var source_stake = source_merge_kind.fully_active.@"1";
     const source_meta = source_merge_kind.fully_active.@"0";
 
-    const min_delegation = getMinimumDelegation(ic, ic.tc.feature_set);
+    const min_delegation = getMinimumDelegation(ic.tc.slot, ic.tc.feature_set);
     const source_effective_stake = source_stake.delegation.stake;
 
     const source_final_stake = std.math.sub(u64, source_effective_stake, lamports) catch
