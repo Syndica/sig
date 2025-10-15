@@ -18,7 +18,7 @@ pub const PartitionedStakeReward = struct {
     commission: u8,
 
     pub fn initRandom(random: std.Random) PartitionedStakeReward {
-        if (builtin.is_test) @compileError("only for testing");
+        if (!builtin.is_test) @compileError("only for testing");
         return .{
             .stake_pubkey = Pubkey.initRandom(random),
             .stake = Stake.initRandom(random),
