@@ -528,6 +528,7 @@ fn newSlotFromParent(
         .ancestors = ancestors,
         .feature_set = feature_set,
         .reserved_accounts = reserved_accounts,
+        .inflation = parent_constants.inflation,
     };
 
     return .{ constants, state };
