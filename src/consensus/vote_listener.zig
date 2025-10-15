@@ -1112,6 +1112,170 @@ fn trackNewVotesAndNotifyConfirmations(
     }
 }
 
+test "trackNewVotesAndNotifyConfirmations filter" {
+    const allocator = std.testing.allocator;
+
+    var prng_state: std.Random.DefaultPrng = .init(std.testing.random_seed);
+    const prng = prng_state.random();
+
+    var slot_tracker: SlotTracker = try .init(allocator, 0, .{
+        .constants = .{
+            .parent_slot = 0,
+            .parent_hash = .ZEROES,
+            .parent_lt_hash = .IDENTITY,
+            .block_height = 1,
+            .collector_id = .ZEROES,
+            .max_tick_height = 1,
+            .fee_rate_governor = .DEFAULT,
+            .epoch_reward_status = .inactive,
+            .ancestors = .{ .ancestors = .empty },
+            .feature_set = .ALL_DISABLED,
+            .reserved_accounts = .empty,
+        },
+        .state = try .genesis(allocator),
+    });
+    defer slot_tracker.deinit(allocator);
+
+    var epoch_tracker: EpochTracker = .{ .schedule = .DEFAULT };
+    defer epoch_tracker.deinit(allocator);
+
+    {
+        const stakes: sig.core.EpochStakes = try .initEmptyWithGenesisStakeHistoryEntry(allocator);
+        errdefer stakes.deinit(allocator);
+        try epoch_tracker.epochs.ensureUnusedCapacity(allocator, 1);
+        epoch_tracker.epochs.putAssumeCapacity(0, .{
+            .hashes_per_tick = 1,
+            .ticks_per_slot = 1,
+            .ns_per_slot = 1,
+            .genesis_creation_time = 1,
+            .slots_per_year = 1,
+            .stakes = stakes,
+            .rent_collector = .DEFAULT,
+        });
+    }
+
+    var slot_tracker_rw: sig.sync.RwMux(SlotTracker) = .init(slot_tracker);
+    var epoch_tracker_rw: sig.sync.RwMux(EpochTracker) = .init(epoch_tracker);
+
+    const slot_data_provider: SlotDataProvider = .{
+        .slot_tracker_rw = &slot_tracker_rw,
+        .epoch_tracker_rw = &epoch_tracker_rw,
+    };
+
+    const senders: Senders = try .createForTest(allocator, .{
+        .bank_notification = true,
+        .duplicate_confirmed_slots = true,
+    });
+    defer senders.destroyForTest(allocator);
+
+    const validator0_node_kp: sig.identity.KeyPair = try randomKeyPair(prng);
+    const validator0_vote_kp: sig.identity.KeyPair = try randomKeyPair(prng);
+
+    var vote_tracker: VoteTracker = .EMPTY;
+    defer vote_tracker.deinit(allocator);
+
+    var latest_vote_slot_per_validator: std.AutoArrayHashMapUnmanaged(Pubkey, Slot) = .empty;
+    defer latest_vote_slot_per_validator.deinit(allocator);
+
+    var diff: SlotsDiff = .EMPTY;
+    defer diff.deinit(allocator);
+
+    var new_optimistic_confirmed_slots: std.ArrayListUnmanaged(ThresholdConfirmedSlot) = .empty;
+    errdefer new_optimistic_confirmed_slots.deinit(allocator);
+
+    {
+        const tower_sync_tx_parsed: vote_parser.ParsedVote = blk: {
+            const tower_sync: vote_program.state.TowerSync = try .fromLockouts(allocator, &.{
+                .{ .slot = 1, .confirmation_count = 3 },
+                .{ .slot = 2, .confirmation_count = 2 },
+                .{ .slot = 6, .confirmation_count = 1 },
+            });
+            defer tower_sync.deinit(allocator);
+
+            const tower_sync_tx = try newTowerSyncTransaction(allocator, .{
+                .tower_sync = tower_sync,
+                .recent_blockhash = .ZEROES,
+                .node_keypair = validator0_node_kp,
+                .vote_keypair = validator0_vote_kp,
+                .authorized_voter_keypair = validator0_vote_kp,
+                .maybe_switch_proof_hash = null,
+            });
+            defer tower_sync_tx.deinit(allocator);
+
+            const maybe_tx_parsed = try vote_parser.parseVoteTransaction(allocator, tower_sync_tx);
+            break :blk maybe_tx_parsed.?;
+        };
+        defer tower_sync_tx_parsed.deinit(allocator);
+
+        const is_gossip_vote = true;
+        try trackNewVotesAndNotifyConfirmations(
+            allocator,
+            .FOR_TESTS,
+            &vote_tracker,
+            &slot_data_provider,
+            senders,
+            tower_sync_tx_parsed.vote,
+            tower_sync_tx_parsed.key,
+            tower_sync_tx_parsed.signature,
+            &diff,
+            &new_optimistic_confirmed_slots,
+            is_gossip_vote,
+            &latest_vote_slot_per_validator,
+        );
+    }
+    diff.sortAsc();
+    try std.testing.expectEqualSlices(Slot, diff.map.keys(), &.{ 1, 2, 6 });
+
+    // Vote on a new slot, only those later than 6 should show up. 4 is skipped.
+    diff.clearRetainingCapacity(allocator);
+
+    {
+        const tower_sync_tx_parsed: vote_parser.ParsedVote = blk: {
+            const tower_sync: vote_program.state.TowerSync = try .fromLockouts(allocator, &.{
+                .{ .slot = 1, .confirmation_count = 6 },
+                .{ .slot = 2, .confirmation_count = 5 },
+                .{ .slot = 3, .confirmation_count = 4 },
+                .{ .slot = 4, .confirmation_count = 3 },
+                .{ .slot = 7, .confirmation_count = 2 },
+                .{ .slot = 8, .confirmation_count = 1 },
+            });
+            defer tower_sync.deinit(allocator);
+
+            const tower_sync_tx = try newTowerSyncTransaction(allocator, .{
+                .tower_sync = tower_sync,
+                .recent_blockhash = .ZEROES,
+                .node_keypair = validator0_node_kp,
+                .vote_keypair = validator0_vote_kp,
+                .authorized_voter_keypair = validator0_vote_kp,
+                .maybe_switch_proof_hash = null,
+            });
+            defer tower_sync_tx.deinit(allocator);
+
+            const maybe_tx_parsed = try vote_parser.parseVoteTransaction(allocator, tower_sync_tx);
+            break :blk maybe_tx_parsed.?;
+        };
+        defer tower_sync_tx_parsed.deinit(allocator);
+
+        const is_gossip_vote = true;
+        try trackNewVotesAndNotifyConfirmations(
+            allocator,
+            .FOR_TESTS,
+            &vote_tracker,
+            &slot_data_provider,
+            senders,
+            tower_sync_tx_parsed.vote,
+            tower_sync_tx_parsed.key,
+            tower_sync_tx_parsed.signature,
+            &diff,
+            &new_optimistic_confirmed_slots,
+            is_gossip_vote,
+            &latest_vote_slot_per_validator,
+        );
+    }
+    diff.sortAsc();
+    try std.testing.expectEqualSlices(Slot, diff.map.keys(), &.{ 7, 8 });
+}
+
 const ThresholdReachedResults = std.bit_set.IntegerBitSet(THRESHOLDS_TO_CHECK.len);
 const THRESHOLDS_TO_CHECK: [2]f64 = .{
     sig.consensus.replay_tower.DUPLICATE_THRESHOLD,
