@@ -1843,6 +1843,7 @@ test "simple usage" {
             .ancestors = .{ .ancestors = .empty },
             .feature_set = .ALL_DISABLED,
             .reserved_accounts = .EMPTY,
+            .inflation = .DEFAULT,
         },
         .state = .GENESIS,
     });
@@ -1951,6 +1952,7 @@ test "check trackers" {
             .ancestors = .{ .ancestors = .empty },
             .feature_set = .ALL_DISABLED,
             .reserved_accounts = .EMPTY,
+            .inflation = .DEFAULT,
         },
         .state = .GENESIS,
     });
