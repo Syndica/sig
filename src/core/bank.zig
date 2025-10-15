@@ -102,6 +102,11 @@ pub const SlotConstants = struct {
     /// in the current slot.
     reserved_accounts: ReservedAccounts,
 
+    /// Inflation
+    /// NOTE: Agave keeps this in an RwLock in the Bank, but it should be constant across a slot,
+    /// so we keep it here.
+    inflation: Inflation,
+
     pub fn fromBankFields(
         allocator: Allocator,
         bank_fields: *const BankFields,
@@ -123,6 +128,7 @@ pub const SlotConstants = struct {
                 &feature_set,
                 bank_fields.slot,
             ),
+            .inflation = bank_fields.inflation,
         };
     }
 
@@ -149,6 +155,7 @@ pub const SlotConstants = struct {
             .ancestors = ancestors,
             .feature_set = .ALL_DISABLED,
             .reserved_accounts = reserved_accounts_data,
+            .inflation = .DEFAULT,
         };
     }
 

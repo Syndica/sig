@@ -476,6 +476,7 @@ fn testDummySlotConstants(slot: Slot) SlotConstants {
         .ancestors = .{ .ancestors = .empty },
         .feature_set = .ALL_DISABLED,
         .reserved_accounts = .EMPTY,
+        .inflation = .DEFAULT,
     };
 }
 

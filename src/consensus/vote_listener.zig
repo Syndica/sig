@@ -1664,6 +1664,7 @@ test "simple usage" {
             .ancestors = .{ .ancestors = .empty },
             .feature_set = .ALL_DISABLED,
             .reserved_accounts = .EMPTY,
+            .inflation = .DEFAULT,
         },
         .state = .genesis,
     });
@@ -1772,6 +1773,7 @@ test "check trackers" {
             .ancestors = .{ .ancestors = .empty },
             .feature_set = .ALL_DISABLED,
             .reserved_accounts = .EMPTY,
+            .inflation = .DEFAULT,
         },
         .state = .genesis,
     });
