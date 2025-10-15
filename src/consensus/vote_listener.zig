@@ -906,6 +906,27 @@ const SlotsDiff = struct {
             map.deinit(allocator);
         }
     };
+
+    /// Clears the map while retaining capacity, freeing all of the discarded values.
+    fn clearRetainingCapacity(self: *SlotsDiff, allocator: std.mem.Allocator) void {
+        if (!@import("builtin").is_test) @compileError("only intended for use in tests");
+        for (self.map.values()) |slot_diff| {
+            slot_diff.deinit(allocator);
+        }
+        self.map.clearRetainingCapacity();
+    }
+
+    fn sortAsc(self: *SlotsDiff) void {
+        if (!@import("builtin").is_test) @compileError("only intended for use in tests");
+        const SortCtx = struct {
+            keys: []const Slot,
+            pub fn lessThan(ctx: @This(), a_index: usize, b_index: usize) bool {
+                return ctx.keys[a_index] < ctx.keys[b_index];
+            }
+        };
+        const sort_ctx: SortCtx = .{ .keys = self.map.keys() };
+        self.map.sort(sort_ctx);
+    }
 };
 
 fn trackNewVotesAndNotifyConfirmations(
