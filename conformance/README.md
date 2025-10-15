@@ -1,0 +1,22 @@
+Dependencies:
+- python 3.11
+- rust
+- zig 0.14.1
+
+```bash
+# set up the test environment
+scripts/setup-env.sh
+source env/pyvenv/bin/activate
+
+# compile the sig binary to test
+zig build -Doptimize=ReleaseSafe
+
+# run the conformance tests for the first time
+python run.py --create
+
+# re-run conformance tests without re-creating the fixtures from scratch
+python run.py
+
+# for more options
+python run.py --help
+```

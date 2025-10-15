@@ -56,9 +56,11 @@ if __name__ == "__main__":
     exclude_dirs = [
         src_path + "docs", # dont search yourself
         src_path + "data", # this should only include data
+        src_path + "conformance/env", # other repositories
     ]
 
     for src_path, docs_path in get_markdown_files(src_path, exclude_dirs, code_docs_path):
+        print(src_path)
         # copy the file to the docs/code directory
         with open(src_path, "r") as f:
             src_lines = f.readlines()
