@@ -93,9 +93,9 @@ def path(path):
     return os.path.join(conformance_dir, path)
 
 
-def run_test(vectors, config, line_length):
+def run_test(vectors, config, pad):
     if not config.run_separately:
-        print_noln(f"{vectors}" + " " * (1 + line_length - len(vectors)))
+        print_noln(f"{vectors:<{pad}}")
     vectors_path = path(f"env/test-vectors/{vectors}")
     fixtures_path = path(f"env/test-fixtures/{vectors}")
     outputs_folder = os.path.dirname(vectors) if vectors.endswith(".fix") else vectors
@@ -132,12 +132,11 @@ def run_test(vectors, config, line_length):
             "skipped": 0,
             "failed_fixtures": [],
         }
-        for fixture_filename in os.listdir(fixtures_path):
-            fixture_path = os.path.join(fixtures_path, fixture_filename)
-            print_noln(
-                f"{os.path.join(vectors, fixture_filename)}"
-                + " " * (1 + line_length - len(vectors)),
-            )
+        filenames = sorted(os.listdir(fixtures_path))
+        pad = max(len(os.path.join(vectors, f)) for f in filenames)
+        for fixture in filenames:
+            print_noln(f"{os.path.join(vectors, fixture):<{pad}}")
+            fixture_path = os.path.join(fixtures_path, fixture)
             one_result = exec_fixtures(config, fixture_path, outputs_path)
             result["passed"] += one_result.get("passed", 0)
             result["failed"] += one_result.get("failed", 0)
@@ -171,7 +170,7 @@ def exec_fixtures(config, fixtures_path, outputs_path):
     failed = int(summary.split(",")[1].split(": ")[1])
     skipped = int(summary.split(",")[2].split(": ")[1])
 
-    print("│ Pass{:>5} │ Fail{:>5} │ Skip{:>5}".format(passed, failed, skipped))
+    print(f" │ Pass{passed:>5} │ Fail{failed:>5} │ Skip{skipped:>5}")
 
     failed_fixtures = []
     if failed > 0:
