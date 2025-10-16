@@ -63,7 +63,7 @@ test "vote on heaviest frozen descendant with no switch" {
     {
         var bhq = root_state.blockhash_queue.write();
         defer bhq.unlock();
-        try bhq.mut().insertGenesisHash(allocator, Hash.ZEROES, 0);
+        try bhq.mut().insertGenesisHash(allocator, root_state.hash.readCopy().?, 0);
     }
 
     var slot_tracker = try SlotTracker.init(
@@ -77,13 +77,13 @@ test "vote on heaviest frozen descendant with no switch" {
     defer slot_tracker.deinit(allocator);
 
     // Add frozen descendant slot 1
-    const slot1_hash = Hash{ .data = .{1} ** Hash.SIZE };
+    const slot_1: u64 = 1;
+    const slot1_hash = Hash{ .data = .{slot_1} ** Hash.SIZE };
     {
-        const slot: u64 = 1;
         var slot_constants = try sig.core.SlotConstants.genesis(allocator, .DEFAULT);
         errdefer slot_constants.deinit(allocator);
         slot_constants.parent_slot = root_slot;
-        slot_constants.parent_hash = Hash.ZEROES;
+        slot_constants.parent_hash = root_state.hash.readCopy().?;
         slot_constants.block_height = 1;
 
         var slot_state = try sig.core.SlotState.genesis(allocator);
@@ -92,12 +92,16 @@ test "vote on heaviest frozen descendant with no switch" {
 
         try slot_tracker.put(
             allocator,
-            slot,
-            .{ .constants = slot_constants, .state = slot_state },
+            slot_1,
+            .{
+                .constants = slot_constants,
+                .state = slot_state,
+            },
         );
     }
 
     var slot_tracker_rw = RwMux(SlotTracker).init(slot_tracker);
+
     var epoch_tracker: EpochTracker = .{
         .epochs = .empty,
         .schedule = sig.core.EpochSchedule.DEFAULT,
@@ -105,7 +109,7 @@ test "vote on heaviest frozen descendant with no switch" {
     {
         const epoch_consts = try sig.core.EpochConstants.genesis(allocator, .default(allocator));
         errdefer epoch_consts.deinit(allocator);
-        try epoch_tracker.epochs.put(allocator, 0, epoch_consts);
+        try epoch_tracker.epochs.put(allocator, root_slot, epoch_consts);
     }
     defer epoch_tracker.deinit(allocator);
     var epoch_tracker_rw = RwMux(EpochTracker).init(epoch_tracker);
@@ -117,14 +121,14 @@ test "vote on heaviest frozen descendant with no switch" {
         var fork_progress0 = try sig.consensus.progress_map.ForkProgress.zeroes(allocator);
         fork_progress0.fork_stats.computed = true;
         const fork_progress1 = try sig.consensus.progress_map.ForkProgress.zeroes(allocator);
-        try progress.map.put(allocator, 0, fork_progress0);
-        try progress.map.put(allocator, 1, fork_progress1);
+        try progress.map.put(allocator, root_slot, fork_progress0);
+        try progress.map.put(allocator, slot_1, fork_progress1);
     }
 
     // Include a ReplayResult for slot 1 to drive processResult/fork-choice
     const results = [_]ReplayResult{
         .{
-            .slot = 1,
+            .slot = slot_1,
             .output = .{
                 .last_entry_hash = Hash{ .data = .{9} ** Hash.SIZE },
             },
@@ -147,7 +151,7 @@ test "vote on heaviest frozen descendant with no switch" {
         .my_identity = Pubkey.initRandom(std.crypto.random),
         .vote_identity = Pubkey.initRandom(std.crypto.random),
         .root_slot = root_slot,
-        .root_hash = Hash.ZEROES,
+        .root_hash = root_state.hash.readCopy().?,
         .account_reader = stubs.accountsdb.accountReader(),
         .ledger = &stubs.ledger,
         .exit = &stubs.exit,
@@ -160,6 +164,11 @@ test "vote on heaviest frozen descendant with no switch" {
     var consensus = try TowerConsensus.init(allocator, deps);
     defer consensus.deinit(allocator);
 
+    try std.testing.expectEqual(null, consensus.replay_tower.lastVotedSlot());
+    try std.testing.expectEqual(false, progress.getForkStats(slot_1).?.computed);
+    try std.testing.expectEqual(0, progress.getForkStats(1).?.block_height);
+    try std.testing.expectEqual(.uninitialized, consensus.replay_tower.last_vote_tx_blockhash);
+
     // Component entry point being tested
     try consensus.process(
         allocator,
@@ -169,14 +178,36 @@ test "vote on heaviest frozen descendant with no switch" {
         &results,
     );
 
-    try std.testing.expectEqual(1, consensus.replay_tower.lastVotedSlot());
-    try std.testing.expectEqual(1, consensus.fork_choice.heaviestOverallSlot().slot);
-
-    const stats1 = progress.getForkStats(1).?;
-    try std.testing.expect(stats1.computed);
+    // 1. Assert fork stat in progress map
+    const stats1 = progress.getForkStats(slot_1).?;
+    try std.testing.expectEqual(0, stats1.fork_stake);
+    try std.testing.expectEqual(0, stats1.total_stake);
     try std.testing.expectEqual(1, stats1.block_height);
-    // Since we are not voting yet
-    try std.testing.expect(consensus.replay_tower.last_vote_tx_blockhash == .non_voting);
+    try std.testing.expectEqual(slot1_hash, stats1.slot_hash);
+    try std.testing.expectEqual(true, stats1.computed);
+    // Check voted_stakes
+    try std.testing.expect(stats1.voted_stakes.count() == 0);
+    // Verify my_latest_landed_vote
+    // It should be null (vote hasn't landed on-chain yet)
+    try std.testing.expectEqual(null, stats1.my_latest_landed_vote);
+
+    // 2. Assert the replay tower
+    try std.testing.expect(consensus.replay_tower.last_vote.getHash().eql(slot1_hash));
+    try std.testing.expectEqual(slot_1, consensus.replay_tower.lastVotedSlot());
+    // Check that root has not changed (no vote is old enough to advance root)
+    try std.testing.expectEqual(root_slot, consensus.replay_tower.tower.vote_state.root_slot.?);
+    try std.testing.expectEqual(.non_voting, consensus.replay_tower.last_vote_tx_blockhash);
+
+    // 3. Check lockout intervals.
+    try std.testing.expect(stats1.lockout_intervals.map.count() == 0);
+
+    // 4. Check propagated stats in progress map
+    // Not propagated in minimal test
+    const prop_stats = progress.getPropagatedStats(slot_1).?;
+    try std.testing.expectEqual(false, prop_stats.is_propagated);
+
+    // 5. Assert forkchoice
+    try std.testing.expectEqual(slot_1, consensus.fork_choice.heaviestOverallSlot().slot);
 }
 
 // State setup
@@ -207,7 +238,7 @@ test "vote accounts with landed votes populate bank stats" {
     {
         var bhq = root_state.blockhash_queue.write();
         defer bhq.unlock();
-        try bhq.mut().insertGenesisHash(allocator, Hash.ZEROES, 0);
+        try bhq.mut().insertGenesisHash(allocator, root_state.hash.readCopy().?, 0);
     }
 
     var slot_tracker = try SlotTracker.init(
@@ -221,9 +252,9 @@ test "vote accounts with landed votes populate bank stats" {
     defer slot_tracker.deinit(allocator);
 
     // Add frozen descendant slot 1
+    const slot_1: u64 = 1;
     const slot1_hash = Hash{ .data = .{2} ** Hash.SIZE };
     {
-        const slot: u64 = 1;
         var slot_constants = try sig.core.SlotConstants.genesis(allocator, .DEFAULT);
         errdefer slot_constants.deinit(allocator);
         slot_constants.parent_slot = root_slot;
@@ -236,7 +267,7 @@ test "vote accounts with landed votes populate bank stats" {
 
         try slot_tracker.put(
             allocator,
-            slot,
+            slot_1,
             .{ .constants = slot_constants, .state = slot_state },
         );
     }
@@ -248,13 +279,14 @@ test "vote accounts with landed votes populate bank stats" {
         .schedule = sig.core.EpochSchedule.DEFAULT,
     };
 
-    // Seed epoch 0 constants with vote accounts and landed votes
+    // NOTE: The core setup for this test
+    // Seed epoch 0 constants with 5 vote accounts and landed votes
     {
         var prng = std.Random.DefaultPrng.init(12345);
         const random = prng.random();
         const stake_per_account = 1000;
 
-        const pubkey_count = 5;
+        const pubkey_count = 6;
         const vote_pubkeys = try allocator.alloc(Pubkey, pubkey_count);
         defer allocator.free(vote_pubkeys);
         for (vote_pubkeys) |*k| k.* = Pubkey.initRandom(random);
@@ -269,13 +301,19 @@ test "vote accounts with landed votes populate bank stats" {
         errdefer epoch_stakes.deinit(allocator);
 
         // Inject landed votes for slot 1 into each vote account
+        //
+        // This affects the lockouts:
+        // Voted slot: 1 (slot_1)
+        // Confirmation count: 2
+        // Lockout duration: 2² = 4 slots
+        // Expiration slot: 1 + 4 = 5
         {
             var vote_accounts = &epoch_stakes.stakes.vote_accounts.vote_accounts;
 
             for (vote_accounts.values()) |*vote_account| {
                 try vote_account.account.state.votes.append(LandedVote{
                     .latency = 0,
-                    .lockout = .{ .slot = 1, .confirmation_count = 2 },
+                    .lockout = .{ .slot = slot_1, .confirmation_count = 2 },
                 });
             }
         }
@@ -283,8 +321,8 @@ test "vote accounts with landed votes populate bank stats" {
         var epoch_consts = try sig.core.EpochConstants.genesis(allocator, .default(allocator));
         errdefer epoch_consts.deinit(allocator);
         epoch_consts.stakes.deinit(allocator);
-        epoch_consts.stakes = epoch_stakes;
 
+        epoch_consts.stakes = epoch_stakes;
         try epoch_tracker.epochs.put(allocator, 0, epoch_consts);
     }
     defer epoch_tracker.deinit(allocator);
@@ -312,8 +350,8 @@ test "vote accounts with landed votes populate bank stats" {
         var fork_progress0 = try sig.consensus.progress_map.ForkProgress.zeroes(allocator);
         fork_progress0.fork_stats.computed = true;
         const fork_progress1 = try sig.consensus.progress_map.ForkProgress.zeroes(allocator);
-        try progress.map.put(allocator, 0, fork_progress0);
-        try progress.map.put(allocator, 1, fork_progress1);
+        try progress.map.put(allocator, root_slot, fork_progress0);
+        try progress.map.put(allocator, slot_1, fork_progress1);
     }
 
     // ReplayResult for slot 1
@@ -349,21 +387,49 @@ test "vote accounts with landed votes populate bank stats" {
     var consensus = try TowerConsensus.init(allocator, deps);
     defer consensus.deinit(allocator);
 
-    try consensus.process(allocator, &slot_tracker_rw, &epoch_tracker_rw, &progress, &results);
+    try std.testing.expect(progress.getForkStats(1).?.voted_stakes.count() == 0);
+
+    try consensus.process(
+        allocator,
+        &slot_tracker_rw,
+        &epoch_tracker_rw,
+        &progress,
+        &results,
+    );
 
     const stats1 = progress.getForkStats(1).?;
     try std.testing.expect(stats1.computed);
     try std.testing.expectEqual(1, stats1.block_height);
 
     // With seeded landed votes, these should be populated
-    try std.testing.expect(stats1.voted_stakes.count() > 0);
-    try std.testing.expect(stats1.lockout_intervals.map.count() > 0);
+    // Landed votes were seeded for slot 1 in consensus.process updateAncestorVotedStakes
+    // ensures the stake is also applied to ancestors: slot 0 hence 2.
+    try std.testing.expect(stats1.voted_stakes.count() == 2);
+    try std.testing.expectEqual(1, stats1.lockout_intervals.map.count());
 
-    try std.testing.expectEqual(1, consensus.replay_tower.lastVotedSlot());
-    try std.testing.expect(consensus.replay_tower.last_vote_tx_blockhash == .non_voting);
+    // Voted slot: 1 (slot_1)
+    // Confirmation count: 2
+    // Lockout duration: 2² = 4 slots
+    // Expiration slot: 1 + 4 = 5
+    //
+    // lockout_intervals.map = {
+    //     5 => [  // Key: Expiration slot
+    //         (1, validator1_pubkey),  // Voted on slot 1
+    //         (1, validator2_pubkey),  // Voted on slot 1
+    //         (1, validator3_pubkey),  // Voted on slot 1
+    //         (1, validator4_pubkey),  // Voted on slot 1
+    //         (1, validator5_pubkey),  // Voted on slot 1
+    //         (1, validator6_pubkey),  // Voted on slot 1
+    //     ]
+    // }
+    try std.testing.expectEqual(6, stats1.lockout_intervals.map.get(5).?.items.len);
 }
 
 // Test case:
+// This test simulates a validator voting on a chain of blocks (slots 0-33) and 
+// verifies that the root automatically advances as the tower accumulates enough 
+// votes to satisfy lockout requirements.
+//
 // - Pre-populate tower with votes on slots 1-31 (simulating past voting history)
 // - Tower is at MAX_LOCKOUT_HISTORY capacity, root is still 0
 // - Sync internal state by processing slots 30-31 via consensus.process()
@@ -448,7 +514,7 @@ test "root advances after vote satisfies lockouts" {
     {
         var bhq = root_state.blockhash_queue.write();
         defer bhq.unlock();
-        try bhq.mut().insertGenesisHash(allocator, Hash.ZEROES, 0);
+        try bhq.mut().insertGenesisHash(allocator, root_state.hash.readCopy().?, 0);
     }
     // 34 because slots 0..33
     const chain_length = 34;
@@ -1543,7 +1609,6 @@ test "successful fork switch (switch_proof)" {
 
     var slot_tracker_rw = RwMux(SlotTracker).init(slot_tracker);
 
-
     var epoch_tracker: EpochTracker = .{ .epochs = .empty, .schedule = sig.core.EpochSchedule.DEFAULT };
     var vote_pubkeys = try allocator.alloc(Pubkey, 5);
     defer allocator.free(vote_pubkeys);
@@ -1565,7 +1630,6 @@ test "successful fork switch (switch_proof)" {
         epoch_consts.stakes.deinit(allocator);
         epoch_consts.stakes = epoch_stakes;
         try epoch_tracker.epochs.put(allocator, 0, epoch_consts);
-
 
         const epoch_consts_ptr = epoch_tracker.epochs.getPtr(0).?;
 
@@ -1726,7 +1790,6 @@ test "successful fork switch (switch_proof)" {
         try consensus.process(allocator, &slot_tracker_rw, &epoch_tracker_rw, &progress, &results2);
         try std.testing.expectEqual(4, consensus.replay_tower.lastVotedSlot());
     }
-
 
     const decision = try consensus.replay_tower.makeCheckSwitchThresholdDecision(
         allocator,
