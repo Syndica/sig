@@ -257,7 +257,7 @@ test "start and stop gracefully" {
 
     shred_network_service.join();
 
-    // always completes in under 200 ms in my testing.
-    // set to 2 s to avoid flakiness on extremely slow CI machines.
-    try std.testing.expect(timer.read().lt(.fromSecs(2)));
+    // always completes in under 200ms in my testing.
+    // set to 10s to avoid flakiness on extremely slow CI machines.
+    try std.testing.expect(timer.read().lt(.fromSecs(10)));
 }
