@@ -172,7 +172,7 @@ jobs:
             ulimit -Sn unlimited
             export PATH="workspace/zig:$PATH"
             zig build test -Dno-run -Denable-tsan=true -Dcpu=apple_m4 --summary all
-            zig-out/bin/test 2>&1 | cat
+            stdbuf -o0 -e0 zig-out/bin/test 2>&1 | stdbuf -o0 -e0 cat
       - save_cache:
           key: macos-aarch64-0.14.1-{{ checksum "build.zig.zon" }}
           paths:
@@ -194,7 +194,7 @@ jobs:
             ulimit -Sn unlimited
             export PATH="workspace/zig:$PATH"
             zig build test -Dno-run -Denable-tsan=true -Dcpu=apple_m4 --summary all -Dlong-tests -Dledger=hashmap -Dfilter="ledger"
-            zig-out/bin/test 2>&1 | cat
+            stdbuf -o0 -e0 zig-out/bin/test 2>&1 | stdbuf -o0 -e0 cat
       - save_cache:
           key: macos-aarch64-0.14.1-{{ checksum "build.zig.zon" }}
           paths:
@@ -211,9 +211,9 @@ jobs:
           key: linux-x86_64-0.14.1-{{ checksum "build.zig.zon" }}-v1
       - run:
           name: Build and Test
-          command: 
+          command: |
             workspace/zig/zig build test -Dno-run -Dlong-tests -Denable-tsan=true -Dledger=hashmap -Dcpu=x86_64_v3 -Dfilter="ledger" --summary all
-            zig-out/bin/test 2>&1 | cat
+            stdbuf -o0 -e0 zig-out/bin/test 2>&1 | stdbuf -o0 -e0 cat
 
   test_linux:
     executor: linux-executor
@@ -228,7 +228,9 @@ jobs:
       - run:
           name: Test
           # Disable network-accessing tests for this job, which behave badly on circleci
-          command: workspace/zig/zig build test -Dno-run -Dlong-tests -Dcpu=x86_64_v3 -Denable-tsan=true -Dno-network-tests --summary all
+          command: |
+            workspace/zig/zig build test -Dno-run -Dlong-tests -Dcpu=x86_64_v3 -Denable-tsan=true -Dno-network-tests --summary all
+            stdbuf -o0 -e0 zig-out/bin/test 2>&1 | stdbuf -o0 -e0 cat
 
   test_kcov_linux:
     executor: linux-executor
@@ -422,5 +424,5 @@ workflows:
           requires:
             - build_check_macos
       - test_macos_hashmap_ledger:
-            requires:
+          requires:
             - build_check_macos
