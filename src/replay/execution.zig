@@ -1019,7 +1019,7 @@ pub const TestState = struct {
         const epoch_stakes: sig.core.EpochStakes = .EMPTY;
         errdefer epoch_stakes.deinit(allocator);
 
-        var slot_state: sig.core.SlotState = .genesis;
+        var slot_state: sig.core.SlotState = .GENESIS;
         errdefer slot_state.deinit(allocator);
 
         var stakes_cache = sig.core.StakesCache.EMPTY;

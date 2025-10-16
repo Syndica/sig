@@ -4282,7 +4282,7 @@ pub const TestFixture = struct {
             var constants = try sig.core.SlotConstants.genesis(allocator, .DEFAULT);
             errdefer constants.deinit(allocator);
 
-            var state: sig.core.SlotState = .genesis;
+            var state: sig.core.SlotState = .GENESIS;
             errdefer state.deinit(allocator);
 
             constants.parent_slot = root.slot -| 1;
@@ -4405,7 +4405,7 @@ pub const TestFixture = struct {
                 var constants = try sig.core.SlotConstants.genesis(allocator, .DEFAULT);
                 errdefer constants.deinit(allocator);
 
-                var state: sig.core.SlotState = .genesis;
+                var state: sig.core.SlotState = .GENESIS;
                 errdefer state.deinit(allocator);
 
                 constants.parent_slot = parent_slot;

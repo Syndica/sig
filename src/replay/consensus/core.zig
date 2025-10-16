@@ -1802,7 +1802,7 @@ test "checkAndHandleNewRoot - missing slot" {
         const constants = try SlotConstants.genesis(allocator, .initRandom(random));
         errdefer constants.deinit(allocator);
 
-        var state: SlotState = .genesis;
+        var state: SlotState = .GENESIS;
         errdefer state.deinit(allocator);
 
         const ptr, var lg = slot_tracker.writeWithLock();
@@ -1858,7 +1858,7 @@ test "checkAndHandleNewRoot - missing hash" {
         const constants = try SlotConstants.genesis(allocator, .initRandom(random));
         errdefer constants.deinit(allocator);
 
-        var state: SlotState = .genesis;
+        var state: SlotState = .GENESIS;
         errdefer state.deinit(allocator);
 
         const ptr, var lg = slot_tracker2.writeWithLock();
@@ -1971,10 +1971,10 @@ test "checkAndHandleNewRoot - success" {
         var constants3 = try SlotConstants.genesis(allocator, .initRandom(random));
         errdefer constants3.deinit(allocator);
 
-        var state2: SlotState = .genesis;
+        var state2: SlotState = .GENESIS;
         errdefer state2.deinit(allocator);
 
-        var state3: SlotState = .genesis;
+        var state3: SlotState = .GENESIS;
         errdefer state3.deinit(allocator);
 
         constants2.parent_slot = hash1.slot;

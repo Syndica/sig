@@ -671,7 +671,7 @@ test trackNewSlots {
     }
 
     const slot_tracker_val: SlotTracker = try .init(allocator, 0, .{
-        .state = .genesis,
+        .state = .GENESIS,
         .constants = try .genesis(allocator, .DEFAULT),
     });
     var slot_tracker = RwMux(SlotTracker).init(slot_tracker_val);
@@ -1161,7 +1161,7 @@ pub const DependencyStubs = struct {
             const root_slot_constants = try sig.core.SlotConstants.genesis(allocator, .DEFAULT);
             errdefer root_slot_constants.deinit(allocator);
 
-            var root_slot_state: SlotState = .genesis;
+            var root_slot_state: SlotState = .GENESIS;
             errdefer root_slot_state.deinit(allocator);
 
             { // this is to essentially root the slot
