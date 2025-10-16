@@ -31,7 +31,7 @@ pub const SlotDataProvider = struct {
     slot_tracker_rw: *sig.sync.RwMux(SlotTracker),
     epoch_tracker_rw: *sig.sync.RwMux(EpochTracker),
 
-    fn rootSlot(self: *const SlotDataProvider) Slot {
+    pub fn rootSlot(self: *const SlotDataProvider) Slot {
         const slot_tracker, var lg = self.slot_tracker_rw.readWithLock();
         defer lg.unlock();
         return slot_tracker.root;
@@ -102,10 +102,7 @@ pub const Senders = struct {
     pub fn destroyForTest(self: Senders, allocator: std.mem.Allocator) void {
         if (!test_setup_enabled) @compileError("not allowed");
 
-        while (self.verified_vote.tryReceive()) |verified_vote| {
-            _, const slots = verified_vote;
-            allocator.free(slots);
-        }
+        while (self.verified_vote.tryReceive()) |verified_vote| verified_vote.deinit(allocator);
         self.verified_vote.destroy();
 
         self.gossip_verified_vote_hash.destroy();
@@ -173,56 +170,6 @@ test Senders {
         );
     }
 }
-
-pub const VoteListener = struct {
-    process_votes: std.Thread,
-
-    pub fn joinAndDeinit(self: VoteListener) void {
-        self.process_votes.join();
-    }
-
-    pub fn init(
-        allocator: std.mem.Allocator,
-        exit: sig.sync.ExitCondition,
-        logger: Logger,
-        registry: *sig.prometheus.Registry(.{}),
-        params: struct {
-            slot_data_provider: SlotDataProvider,
-            gossip_table_rw: ?*sig.sync.RwMux(sig.gossip.GossipTable),
-            ledger: *Ledger,
-
-            /// Channels that will be used to `receive` data.
-            receivers: struct {
-                replay_votes_channel: *sig.sync.Channel(vote_parser.ParsedVote),
-            },
-
-            /// Direct outputs
-            senders: Senders,
-        },
-    ) !VoteListener {
-        const metrics: VoteListenerMetrics = try .init(registry);
-
-        const process_votes_thread: std.Thread = try .spawn(.{}, processVotesLoop, .{
-            allocator,
-            logger,
-            params.slot_data_provider,
-            params.senders,
-            Receivers{
-                .replay_votes = params.receivers.replay_votes_channel,
-            },
-            params.ledger,
-            params.gossip_table_rw,
-            exit,
-            metrics,
-        });
-        errdefer process_votes_thread.join();
-        process_votes_thread.setName("solCiProcVotes") catch {};
-
-        return .{
-            .process_votes = process_votes_thread,
-        };
-    }
-};
 
 const GossipVoteReceptor = struct {
     cursor: u64,
@@ -374,7 +321,14 @@ fn verifyVoteTransaction(
 
 pub const ThresholdConfirmedSlot = sig.core.hash.SlotAndHash;
 pub const GossipVerifiedVoteHash = struct { Pubkey, Slot, Hash };
-pub const VerifiedVote = struct { Pubkey, []const Slot };
+pub const VerifiedVote = struct {
+    key: Pubkey,
+    slots: []const Slot,
+
+    pub fn deinit(self: VerifiedVote, allocator: std.mem.Allocator) void {
+        allocator.free(self.slots);
+    }
+};
 
 /// The expected duration of a slot (400 milliseconds).
 const DEFAULT_MS_PER_SLOT: u64 =
@@ -399,120 +353,106 @@ pub const VoteListenerMetrics = struct {
     }
 };
 
-fn processVotesLoop(
-    allocator: std.mem.Allocator,
-    logger: Logger,
-    slot_data_provider: SlotDataProvider,
-    senders: Senders,
-    receivers: Receivers,
-    ledger: *Ledger,
-    gossip_table_rw: ?*sig.sync.RwMux(sig.gossip.GossipTable),
-    exit: sig.sync.ExitCondition,
+pub const VoteCollector = struct {
+    gossip_vote_receptor: GossipVoteReceptor,
+    vote_tracker: sig.consensus.VoteTracker,
+    confirmation_verifier: OptimisticConfirmationVerifier,
+    latest_vote_slot_per_validator: std.AutoArrayHashMapUnmanaged(Pubkey, Slot),
+    last_process_root: sig.time.Instant,
+    vote_processing_time: VoteProcessingTiming,
     metrics: VoteListenerMetrics,
-) !void {
-    defer exit.afterExit();
 
-    var gossip_vote_receptor: GossipVoteReceptor = .INIT;
-    defer gossip_vote_receptor.deinit(allocator);
+    pub fn deinit(self: *VoteCollector, allocator: std.mem.Allocator) void {
+        self.gossip_vote_receptor.deinit(allocator);
+        self.vote_tracker.deinit(allocator);
+        self.confirmation_verifier.deinit(allocator);
+        self.latest_vote_slot_per_validator.deinit(allocator);
+    }
 
-    var vote_tracker: sig.consensus.VoteTracker = .EMPTY;
-    defer vote_tracker.deinit(allocator);
+    pub fn init(
+        /// Should usually be `.now()`.
+        now: sig.time.Instant,
+        root_slot: Slot,
+        registry: *sig.prometheus.Registry(.{}),
+    ) !VoteCollector {
+        return .{
+            .gossip_vote_receptor = .INIT,
+            .vote_tracker = .EMPTY,
+            .confirmation_verifier = .init(now, root_slot),
+            .latest_vote_slot_per_validator = .empty,
+            .last_process_root = now,
+            .vote_processing_time = .ZEROES,
+            .metrics = try .init(registry),
+        };
+    }
 
-    var confirmation_verifier: OptimisticConfirmationVerifier = .init(
-        .now(),
-        slot_data_provider.rootSlot(),
-    );
-    defer confirmation_verifier.deinit(allocator);
+    pub fn collectAndProcessVotes(
+        self: *VoteCollector,
+        allocator: std.mem.Allocator,
+        logger: Logger,
+        params: struct {
+            slot_data_provider: SlotDataProvider,
+            senders: Senders,
+            receivers: Receivers,
+            ledger: *Ledger,
+            gossip_table: ?*sig.sync.RwMux(sig.gossip.GossipTable),
+        },
+    ) !void {
+        const slot_data_provider = params.slot_data_provider;
+        const senders = params.senders;
+        const receivers = params.receivers;
+        const ledger = params.ledger;
+        const gossip_table_rw = params.gossip_table;
 
-    var latest_vote_slot_per_validator: std.AutoArrayHashMapUnmanaged(Pubkey, Slot) = .empty;
-    defer latest_vote_slot_per_validator.deinit(allocator);
-
-    var last_process_root = sig.time.Instant.now();
-    var vote_processing_time: VoteProcessingTiming = .ZEROES;
-    while (exit.shouldRun()) {
         const gossip_vote_txs: []const Transaction = blk: {
             const table = gossip_table_rw orelse break :blk &.{};
-            break :blk try gossip_vote_receptor.receiveVerifiedVotes(
+            break :blk try self.gossip_vote_receptor.receiveVerifiedVotes(
                 allocator,
                 &slot_data_provider,
                 table,
-                metrics,
+                self.metrics,
             );
         };
 
-        try processVotesOnce(
+        const root_slot = slot_data_provider.rootSlot();
+        const root_hash = slot_data_provider.getSlotHash(root_slot);
+
+        if (self.last_process_root.elapsed().asMillis() > DEFAULT_MS_PER_SLOT) {
+            const confirmation_verifier = &self.confirmation_verifier;
+            const unrooted_optimistic_slots =
+                try confirmation_verifier.verifyForUnrootedOptimisticSlots(allocator, ledger, .{
+                    .slot = root_slot,
+                    .hash = root_hash,
+                    .ancestors = slot_data_provider.getSlotAncestorsPtr(root_slot).?, // must exist for the root slot
+                });
+            defer allocator.free(unrooted_optimistic_slots);
+
+            self.vote_tracker.progressWithNewRootBank(allocator, root_slot);
+            self.last_process_root = .now();
+        }
+
+        const confirmed_slots = try listenAndConfirmVotes(
             allocator,
             logger,
-            &vote_tracker,
+            &self.vote_tracker,
             &slot_data_provider,
             senders,
             receivers,
-            ledger,
             gossip_vote_txs,
-            &confirmation_verifier,
-            &latest_vote_slot_per_validator,
-            &last_process_root,
-            &vote_processing_time,
-            metrics,
+            &self.vote_processing_time,
+            &self.latest_vote_slot_per_validator,
+            self.metrics,
         );
-    }
-}
+        defer allocator.free(confirmed_slots);
 
-fn processVotesOnce(
-    allocator: std.mem.Allocator,
-    logger: Logger,
-    vote_tracker: *VoteTracker,
-    slot_data_provider: *const SlotDataProvider,
-    senders: Senders,
-    receivers: Receivers,
-    ledger: *Ledger,
-    /// Usually from `GossipVoteReceptor`.
-    gossip_vote_txs: []const Transaction,
-    confirmation_verifier: *OptimisticConfirmationVerifier,
-    latest_vote_slot_per_validator: *std.AutoArrayHashMapUnmanaged(Pubkey, Slot),
-    last_process_root: *sig.time.Instant,
-    vote_processing_time: *VoteProcessingTiming,
-    metrics: VoteListenerMetrics,
-) !void {
-    const root_slot = slot_data_provider.rootSlot();
-    const root_hash = slot_data_provider.getSlotHash(root_slot);
-
-    if (last_process_root.elapsed().asMillis() > DEFAULT_MS_PER_SLOT) {
-        const unrooted_optimistic_slots = try confirmation_verifier.verifyForUnrootedOptimisticSlots(
+        try self.confirmation_verifier.addNewOptimisticConfirmedSlots(
             allocator,
+            confirmed_slots,
             ledger,
-            .{
-                .slot = root_slot,
-                .hash = root_hash,
-                .ancestors = slot_data_provider.getSlotAncestorsPtr(root_slot).?, // must exist for the root slot
-            },
+            .from(logger),
         );
-        defer allocator.free(unrooted_optimistic_slots);
-
-        vote_tracker.progressWithNewRootBank(allocator, root_slot);
-        last_process_root.* = .now();
     }
-
-    const confirmed_slots = try listenAndConfirmVotes(
-        allocator,
-        logger,
-        vote_tracker,
-        slot_data_provider,
-        senders,
-        receivers,
-        gossip_vote_txs,
-        vote_processing_time,
-        latest_vote_slot_per_validator,
-        metrics,
-    );
-    defer allocator.free(confirmed_slots);
-
-    try confirmation_verifier.addNewOptimisticConfirmedSlots(
-        allocator,
-        confirmed_slots,
-        ledger,
-    );
-}
+};
 
 fn listenAndConfirmVotes(
     allocator: std.mem.Allocator,
@@ -1035,7 +975,10 @@ fn trackNewVotesAndNotifyConfirmations(
         senders.subscriptions.notifyVote(vote_pubkey, vote, vote_transaction_signature);
         const vote_slots_duped = try allocator.dupe(Slot, vote_slots);
         errdefer allocator.free(vote_slots);
-        senders.verified_vote.send(.{ vote_pubkey, vote_slots_duped }) catch |err| {
+        senders.verified_vote.send(.{
+            .key = vote_pubkey,
+            .slots = vote_slots_duped,
+        }) catch |err| {
             logger.err().logf(
                 "{s}: verified vote couldn't send: " ++
                     ".{{ .vote_pubkey = {f}, .vote_slots_duped = {any} }}",
@@ -1830,50 +1773,31 @@ test verifyVoteTransaction {
 test "simple usage" {
     const allocator = std.testing.allocator;
 
-    var slot_tracker: SlotTracker = try .init(allocator, 0, .{
-        .constants = .{
-            .parent_slot = 0,
-            .parent_hash = .ZEROES,
-            .parent_lt_hash = .IDENTITY,
-            .block_height = 1,
-            .collector_id = .ZEROES,
-            .max_tick_height = 1,
-            .fee_rate_governor = .DEFAULT,
-            .epoch_reward_status = .inactive,
-            .ancestors = .{ .ancestors = .empty },
-            .feature_set = .ALL_DISABLED,
-            .reserved_accounts = .empty,
-        },
-        .state = try .genesis(allocator),
-    });
-    defer slot_tracker.deinit(allocator);
+    var registry = sig.prometheus.Registry(.{}).init(allocator);
+    defer registry.deinit();
 
-    var epoch_tracker: EpochTracker = .{ .schedule = .DEFAULT };
-    defer epoch_tracker.deinit(allocator);
-    {
-        const stakes: sig.core.EpochStakes = try .initEmptyWithGenesisStakeHistoryEntry(allocator);
-        try epoch_tracker.epochs.ensureUnusedCapacity(allocator, 1);
-        epoch_tracker.epochs.putAssumeCapacity(0, .{
-            .hashes_per_tick = 1,
-            .ticks_per_slot = 1,
-            .ns_per_slot = 1,
-            .genesis_creation_time = 1,
-            .slots_per_year = 1,
-            .stakes = stakes,
-            .rent_collector = undefined,
-        });
+    var slot_tracker_rw: sig.sync.RwMux(SlotTracker) = blk: {
+        const slot_tracker_init = try slotTrackerElementGenesis(allocator, .DEFAULT);
+        break :blk .init(try .init(allocator, 0, slot_tracker_init));
+    };
+    defer {
+        var lg = slot_tracker_rw.write();
+        lg.get().deinit(allocator);
     }
 
-    var slot_tracker_rw: sig.sync.RwMux(SlotTracker) = .init(slot_tracker);
-    var epoch_tracker_rw: sig.sync.RwMux(EpochTracker) = .init(epoch_tracker);
+    var epoch_tracker_rw: sig.sync.RwMux(EpochTracker) = .init(.{ .schedule = .DEFAULT });
+    defer {
+        var lg = epoch_tracker_rw.write();
+        lg.get().deinit(allocator);
+    }
 
     const slot_data_provider: SlotDataProvider = .{
         .slot_tracker_rw = &slot_tracker_rw,
         .epoch_tracker_rw = &epoch_tracker_rw,
     };
 
-    var state = try sig.ledger.tests.initTestLedger(allocator, @src(), .noop);
-    defer state.deinit();
+    var ledger = try sig.ledger.tests.initTestLedger(allocator, @src(), .noop);
+    defer ledger.deinit();
 
     var gossip_table_rw: sig.sync.RwMux(sig.gossip.GossipTable) = .init(
         try .init(allocator, allocator),
@@ -1883,41 +1807,26 @@ test "simple usage" {
         gossip_table.deinit();
     }
 
-    const replay_votes_channel: *sig.sync.Channel(vote_parser.ParsedVote) =
-        try .create(allocator);
+    const senders: Senders = try .createForTest(allocator, .{
+        .bank_notification = true,
+        .duplicate_confirmed_slots = true,
+    });
+    defer senders.destroyForTest(allocator);
+
+    const replay_votes_channel: *sig.sync.Channel(vote_parser.ParsedVote) = try .create(allocator);
     defer replay_votes_channel.destroy();
 
-    const verified_vote_channel: *sig.sync.Channel(VerifiedVote) = try .create(allocator);
-    defer verified_vote_channel.destroy();
+    var vote_collector: VoteCollector =
+        try .init(.UNIX_EPOCH, slot_data_provider.rootSlot(), &registry);
+    defer vote_collector.deinit(allocator);
 
-    const gossip_verified_vote_hash_channel: *sig.sync.Channel(GossipVerifiedVoteHash) =
-        try .create(allocator);
-    defer gossip_verified_vote_hash_channel.destroy();
-
-    var exit: std.atomic.Value(bool) = .init(false);
-    const exit_cond: sig.sync.ExitCondition = .{ .unordered = &exit };
-
-    var registry = sig.prometheus.Registry(.{}).init(allocator);
-    defer registry.deinit();
-
-    const vote_listener: VoteListener = try .init(allocator, exit_cond, .noop, &registry, .{
+    try vote_collector.collectAndProcessVotes(allocator, .FOR_TESTS, .{
         .slot_data_provider = slot_data_provider,
-        .gossip_table_rw = &gossip_table_rw,
-        .ledger = &state,
-        .receivers = .{
-            .replay_votes_channel = replay_votes_channel,
-        },
-        .senders = .{
-            .verified_vote = verified_vote_channel,
-            .gossip_verified_vote_hash = gossip_verified_vote_hash_channel,
-            .bank_notification = null,
-            .duplicate_confirmed_slots = null,
-            .subscriptions = .{},
-        },
+        .senders = senders,
+        .receivers = .{ .replay_votes = replay_votes_channel },
+        .ledger = &ledger,
+        .gossip_table = &gossip_table_rw,
     });
-    defer vote_listener.joinAndDeinit();
-    std.time.sleep(sig.time.Duration.asNanos(.fromMillis(DEFAULT_MS_PER_SLOT * 2)));
-    exit_cond.setExit();
 }
 
 test "check trackers" {
@@ -1926,7 +1835,8 @@ test "check trackers" {
     var prng = std.Random.DefaultPrng.init(123);
     const random = prng.random();
 
-    const node_keypair: sig.identity.KeyPair = try .generateDeterministic(@splat(1));
+    var registry = sig.prometheus.Registry(.{}).init(allocator);
+    defer registry.deinit();
 
     const tracker_templates = [_]struct { Slot, sig.identity.KeyPair, Hash }{
         .{ 2, try .generateDeterministic(@splat(2)), .initRandom(random) },
@@ -1936,56 +1846,74 @@ test "check trackers" {
         .{ 6, try .generateDeterministic(@splat(6)), .initRandom(random) },
     };
 
+    const node_keypair: sig.identity.KeyPair = try .generateDeterministic(@splat(1));
+
     const root_slot: Slot = 0;
 
-    var slot_tracker2: SlotTracker = try .init(allocator, root_slot, .{
-        .constants = .{
-            .parent_slot = 0,
-            .parent_hash = .ZEROES,
-            .parent_lt_hash = .IDENTITY,
-            .block_height = 1,
-            .collector_id = .ZEROES,
-            .max_tick_height = 1,
-            .fee_rate_governor = .DEFAULT,
-            .epoch_reward_status = .inactive,
-            .ancestors = .{ .ancestors = .empty },
-            .feature_set = .ALL_DISABLED,
-            .reserved_accounts = .empty,
-        },
-        .state = try .genesis(allocator),
-    });
-    defer slot_tracker2.deinit(allocator);
+    var slot_tracker_rw: sig.sync.RwMux(SlotTracker) = .init(blk: {
+        var state: sig.core.SlotState = try .genesis(allocator);
+        errdefer state.deinit(allocator);
 
-    var epoch_tracker2: EpochTracker = .{ .schedule = .DEFAULT };
-    defer epoch_tracker2.deinit(allocator);
+        break :blk try .init(allocator, root_slot, .{
+            .constants = .{
+                .parent_slot = root_slot -| 1,
+                .parent_hash = .ZEROES,
+                .parent_lt_hash = .IDENTITY,
+                .block_height = 1,
+                .collector_id = .ZEROES,
+                .max_tick_height = 1,
+                .fee_rate_governor = .DEFAULT,
+                .epoch_reward_status = .inactive,
+                .ancestors = .{ .ancestors = .empty },
+                .feature_set = .ALL_DISABLED,
+                .reserved_accounts = .empty,
+            },
+            .state = state,
+        });
+    });
+    defer {
+        var lg = slot_tracker_rw.write();
+        lg.get().deinit(allocator);
+    }
+
+    var epoch_tracker_rw: sig.sync.RwMux(EpochTracker) = .init(.{ .schedule = .DEFAULT });
+    defer {
+        var lg = epoch_tracker_rw.write();
+        lg.get().deinit(allocator);
+    }
+
     {
+        const epoch_tracker, var epoch_tracker_lg = epoch_tracker_rw.writeWithLock();
+        defer epoch_tracker_lg.unlock();
+
         var stakes: sig.core.EpochStakes = try .initEmptyWithGenesisStakeHistoryEntry(allocator);
+        errdefer stakes.deinit(allocator);
+
         for (tracker_templates) |template| {
             _, const vote_kp, _ = template;
             const vote_key: Pubkey = .fromPublicKey(&vote_kp.public_key);
             try stakes.epoch_authorized_voters.put(allocator, vote_key, vote_key);
         }
-        try epoch_tracker2.epochs.ensureUnusedCapacity(allocator, 1);
-        epoch_tracker2.epochs.putAssumeCapacity(0, .{
+
+        try epoch_tracker.epochs.ensureUnusedCapacity(allocator, 1);
+        epoch_tracker.epochs.putAssumeCapacity(0, .{
             .hashes_per_tick = 1,
             .ticks_per_slot = 1,
             .ns_per_slot = 1,
             .genesis_creation_time = 1,
             .slots_per_year = 1,
             .stakes = stakes,
-            .rent_collector = undefined,
+            .rent_collector = .DEFAULT,
         });
     }
 
-    var slot_tracker2_rw: sig.sync.RwMux(SlotTracker) = .init(slot_tracker2);
-    var epoch_tracker2_rw: sig.sync.RwMux(EpochTracker) = .init(epoch_tracker2);
-    var slot_data_provider2: SlotDataProvider = .{
-        .slot_tracker_rw = &slot_tracker2_rw,
-        .epoch_tracker_rw = &epoch_tracker2_rw,
+    const slot_data_provider: SlotDataProvider = .{
+        .slot_tracker_rw = &slot_tracker_rw,
+        .epoch_tracker_rw = &epoch_tracker_rw,
     };
 
-    var state2 = try sig.ledger.tests.initTestLedger(allocator, @src(), .noop);
-    defer state2.deinit();
+    var state = try sig.ledger.tests.initTestLedger(allocator, @src(), .noop);
+    defer state.deinit();
 
     var gossip_table_rw = sig.sync.RwMux(sig.gossip.GossipTable).init(
         try sig.gossip.GossipTable.init(allocator, allocator),
@@ -1995,29 +1923,18 @@ test "check trackers" {
         gossip_table.deinit();
     }
 
-    var vote_tracker: VoteTracker = .EMPTY;
-    defer vote_tracker.deinit(allocator);
+    const senders: Senders = try .createForTest(allocator, .{
+        .bank_notification = true,
+        .duplicate_confirmed_slots = true,
+    });
+    defer senders.destroyForTest(allocator);
 
     const replay_votes_channel = try sig.sync.Channel(vote_parser.ParsedVote).create(allocator);
     defer replay_votes_channel.destroy();
 
-    const verified_vote_channel = try sig.sync.Channel(VerifiedVote).create(allocator);
-    defer verified_vote_channel.destroy();
-    defer while (verified_vote_channel.tryReceive()) |verified_vote| {
-        _, const vote_slots = verified_vote;
-        allocator.free(vote_slots);
-    };
-
-    const gossip_verified_vote_hash_channel =
-        try sig.sync.Channel(GossipVerifiedVoteHash).create(allocator);
-    defer gossip_verified_vote_hash_channel.destroy();
-
-    const bank_notification_channel = try sig.sync.Channel(BankNotification).create(allocator);
-    defer bank_notification_channel.destroy();
-
-    const duplicate_confirmed_slot_channel =
-        try sig.sync.Channel(ThresholdConfirmedSlot).create(allocator);
-    defer duplicate_confirmed_slot_channel.destroy();
+    var vote_collector: VoteCollector =
+        try .init(.UNIX_EPOCH, slot_data_provider.rootSlot(), &registry);
+    defer vote_collector.deinit(allocator);
 
     var expected_trackers: std.ArrayListUnmanaged(struct { Slot, TestSlotVoteTracker }) = .empty;
     defer expected_trackers.deinit(allocator);
@@ -2091,69 +2008,33 @@ test "check trackers" {
         }
     }
 
-    {
-        // this code represents the equivalent of `VoteListener.init`, except
-        // with each loop only running for exactly one iteration.
-        _ = &VoteListener.init;
-
-        var gossip_vote_receptor: GossipVoteReceptor = .INIT;
-        defer gossip_vote_receptor.deinit(allocator);
-
-        const slot_data_provider_ptr: *const SlotDataProvider = &slot_data_provider2;
-
-        var test_registry = sig.prometheus.Registry(.{}).init(allocator);
-        defer test_registry.deinit();
-        const test_metrics: VoteListenerMetrics = try .init(&test_registry);
-
-        var latest_vote_slot_per_validator: std.AutoArrayHashMapUnmanaged(Pubkey, Slot) = .empty;
-        defer latest_vote_slot_per_validator.deinit(allocator);
-
-        var last_process_root: sig.time.Instant = .now();
-        var vote_processing_time: VoteProcessingTiming = .ZEROES;
-
-        var confirmation_verifier: OptimisticConfirmationVerifier = .init(.now(), root_slot);
-        defer confirmation_verifier.deinit(allocator);
-
-        const gossip_vote_txs = try gossip_vote_receptor.receiveVerifiedVotes(
-            allocator,
-            slot_data_provider_ptr,
-            &gossip_table_rw,
-            test_metrics,
-        );
-
-        try std.testing.expectEqual({}, processVotesOnce(
-            allocator,
-            .noop,
-            &vote_tracker,
-            slot_data_provider_ptr,
-            .{
-                .verified_vote = verified_vote_channel,
-                .gossip_verified_vote_hash = gossip_verified_vote_hash_channel,
-                .bank_notification = bank_notification_channel,
-                .duplicate_confirmed_slots = duplicate_confirmed_slot_channel,
-                .subscriptions = .{},
-            },
-            .{ .replay_votes = replay_votes_channel },
-            &state2,
-            gossip_vote_txs,
-            &confirmation_verifier,
-            &latest_vote_slot_per_validator,
-            &last_process_root,
-            &vote_processing_time,
-            test_metrics,
-        ));
-    }
+    try std.testing.expectEqual({}, vote_collector.collectAndProcessVotes(allocator, .FOR_TESTS, .{
+        .slot_data_provider = slot_data_provider,
+        .senders = senders,
+        .receivers = .{ .replay_votes = replay_votes_channel },
+        .ledger = &state,
+        .gossip_table = &gossip_table_rw,
+    }));
 
     var actual_trackers: std.ArrayListUnmanaged(struct { Slot, TestSlotVoteTracker }) = .empty;
     defer actual_trackers.deinit(allocator);
-    defer for (actual_trackers.items) |slot_tracker| slot_tracker[1].deinit(allocator);
+    defer for (actual_trackers.items) |actual_pair| {
+        _, const tsvt = actual_pair;
+        tsvt.deinit(allocator);
+    };
 
     {
-        vote_tracker.map_rwlock.lockShared();
-        defer vote_tracker.map_rwlock.unlockShared();
-        try actual_trackers.ensureTotalCapacityPrecise(allocator, vote_tracker.map.count());
+        vote_collector.vote_tracker.map_rwlock.lockShared();
+        defer vote_collector.vote_tracker.map_rwlock.unlockShared();
+        try actual_trackers.ensureTotalCapacityPrecise(
+            allocator,
+            vote_collector.vote_tracker.map.count(),
+        );
 
-        for (vote_tracker.map.keys(), vote_tracker.map.values()) |vt_key, vt_val| {
+        for (
+            vote_collector.vote_tracker.map.keys(),
+            vote_collector.vote_tracker.map.values(),
+        ) |vt_key, vt_val| {
             const svt, var svt_lg = vt_val.tracker.readWithLock();
             defer svt_lg.unlock();
             actual_trackers.appendAssumeCapacity(.{ vt_key, try .from(allocator, svt) });
