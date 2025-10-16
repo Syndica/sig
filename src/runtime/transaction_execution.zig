@@ -281,10 +281,15 @@ pub fn loadAndExecuteTransaction(
     );
 
     var writes = ProcessedTransaction.Writes{};
-    while (loaded_accounts.accounts.pop()) |account| {
-        if (account.is_writable) writes.append(account) catch unreachable;
+    if (executed_transaction.err == null) {
+        while (loaded_accounts.accounts.pop()) |account| {
+            if (account.is_writable) writes.append(account) catch unreachable;
+        }
+        while (rollbacks.pop()) |rollback| rollback.deinit(allocator);
+    } else {
+        while (rollbacks.pop()) |account| writes.append(account) catch unreachable;
+        while (loaded_accounts.accounts.pop()) |account| account.deinit(allocator);
     }
-    while (rollbacks.pop()) |rollback| rollback.deinit(allocator);
     for (writes.slice()) |*acct| batch_account_cache.store(allocator, acct);
 
     return .{

@@ -860,7 +860,7 @@ fn executeTxnContext(
         .log_messages_byte_limit = null,
     };
 
-    const txn_results = try loadAndExecuteTransactions(
+    var txn_results = try loadAndExecuteTransactions(
         allocator,
         &.{runtime_transaction},
         &accounts,
@@ -879,7 +879,7 @@ fn executeTxnContext(
         printLogs(txn_results[0]);
     }
 
-    return try serializeOutput(allocator, txn_results[0], runtime_transaction);
+    return try serializeOutput(allocator, txn_results[0], runtime_transaction, &accounts);
 }
 
 fn printLogs(result: TransactionResult(ProcessedTransaction)) void {
@@ -913,6 +913,7 @@ fn serializeOutput(
     allocator: std.mem.Allocator,
     result: TransactionResult(ProcessedTransaction),
     sanitized: RuntimeTransaction,
+    account_cache: *BatchAccountCache,
 ) !pb.TxnResult {
     const txn = switch (result) {
         .ok => |txn| txn,
@@ -931,7 +932,21 @@ fn serializeOutput(
         var relevant_acct_states: std.ArrayList(pb.AcctState) =
             try .initCapacity(allocator, txn.writes.len);
         errdefer relevant_acct_states.deinit();
-        for (txn.writes.constSlice()) |account| {
+
+        if (result.ok.outputs != null and result.ok.err != null) {
+            // In the event that the transaction is executed and fails, agave
+            // returns *all* the loaded accounts, whereas we only return the
+            // rollback accounts. Our approach makes more sense, but for
+            // compatibility with the test outputs, we also need to provide the
+            // other writable accounts here, which has the bonus of validating
+            // that they are in fact unchanged.
+            for (sanitized.accounts.items(.pubkey)) |pubkey| {
+                const cached_account = account_cache.account_cache.get(pubkey).?;
+                try relevant_acct_states.append(
+                    try sharedAccountToState(allocator, pubkey, cached_account),
+                );
+            }
+        } else for (txn.writes.constSlice()) |account| {
             relevant_acct_states.appendAssumeCapacity(
                 try sharedAccountToState(allocator, account.pubkey, account.account),
             );
