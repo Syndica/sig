@@ -143,8 +143,6 @@ def run_test(vectors, config, line_length):
     if failed > 0:
         failed_fixtures = result.stdout.split("\n")[4].strip("Failed tests: ").strip()
         failed_fixtures = json.loads(failed_fixtures.replace("'", '"'))
-        if config.verbose:
-            print("failed fixtures:", failed_fixtures)
 
     return {
         "name": vectors,
