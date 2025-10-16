@@ -436,7 +436,7 @@ test "freezeSlot: trivial e2e merkle hash test" {
     const constants = try SlotConstants.genesis(allocator, .DEFAULT);
     defer constants.deinit(allocator);
 
-    var state: SlotState = .genesis;
+    var state: SlotState = .GENESIS;
     defer state.deinit(allocator);
 
     try freezeSlot(
@@ -495,7 +495,7 @@ test "freezeSlot: trivial e2e lattice hash test" {
         constants.feature_set.setSlot(.accounts_lt_hash, 0);
         constants.feature_set.setSlot(.remove_accounts_delta_hash, 0);
 
-        var state: SlotState = .genesis;
+        var state: SlotState = .GENESIS;
         defer state.deinit(allocator);
 
         try freezeSlot(

@@ -213,7 +213,7 @@ pub const SlotState = struct {
         blockhash_queue.get().deinit(allocator);
     }
 
-    pub const genesis: SlotState = .{
+    pub const GENESIS: SlotState = .{
         .blockhash_queue = .init(.DEFAULT),
         .hash = .init(null),
         .capitalization = .init(0),

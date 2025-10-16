@@ -203,7 +203,7 @@ fn executeTxnContext(
     var hard_forks: HardForks = .{};
     defer hard_forks.deinit(allocator);
 
-    var stakes_cache = try StakesCache.init(allocator);
+    var stakes_cache: StakesCache = .EMPTY;
     defer stakes_cache.deinit(allocator);
 
     var vm_environment: vm.Environment = .{};
@@ -367,7 +367,7 @@ fn executeTxnContext(
         // Add epoch stakes for all epochs up to the banks slot using banks stakes cache
         // The bank slot is 0 and stakes cache is empty, so we add default epoch stakes.
         for (0..epoch_schedule.getLeaderScheduleEpoch(epoch)) |e| {
-            try epoch_stakes_map.put(allocator, e, try .init(allocator));
+            try epoch_stakes_map.put(allocator, e, .EMPTY);
         }
 
         const update_sysvar_deps = update_sysvar.UpdateSysvarAccountDeps{
@@ -526,8 +526,7 @@ fn executeTxnContext(
                 // an entry for the parent epoch with zero stakes.
                 // https://github.com/firedancer-io/agave/blob/10fe1eb29aac9c236fd72d08ae60a3ef61ee8353/runtime/src/stakes.rs#L297
                 {
-                    const stakes: *StakesCache.T(), //
-                    var stakes_guard = stakes_cache.stakes.writeWithLock();
+                    const stakes, var stakes_guard = stakes_cache.stakes.writeWithLock();
                     defer stakes_guard.unlock();
                     stakes.epoch = epoch;
                     std.debug.assert(stakes.stake_history.entries.len == 0);
@@ -549,7 +548,7 @@ fn executeTxnContext(
                     try epoch_stakes_map.put(
                         allocator,
                         leader_schedule_epoch,
-                        try .init(allocator),
+                        .EMPTY,
                     );
 
                 // Bank::begin_partitioned_epoch_rewards(...)
@@ -577,12 +576,9 @@ fn executeTxnContext(
                 // Since stakes cache is empty, we just need to insert an empty stakes entry
                 // into the epoch stakes map at the leader schedule epoch stakes map if it is not present
                 // updateEpochStakes(leader_schedule_epoch);
-                if (!epoch_stakes_map.contains(leader_schedule_epoch))
-                    try epoch_stakes_map.put(
-                        allocator,
-                        leader_schedule_epoch,
-                        try .init(allocator),
-                    );
+                if (!epoch_stakes_map.contains(leader_schedule_epoch)) {
+                    try epoch_stakes_map.put(allocator, leader_schedule_epoch, .EMPTY);
+                }
             }
 
             // Bank::distribute_partitioned_epoch_rewards(...)
@@ -824,7 +820,7 @@ fn executeTxnContext(
         .slots_per_year = genesis_config.slotsPerYear(),
     };
 
-    const current_epoch_stakes = try EpochStakes.init(allocator);
+    const current_epoch_stakes: EpochStakes = .EMPTY;
     defer current_epoch_stakes.deinit(allocator);
 
     var status_cache: StatusCache = .DEFAULT;
