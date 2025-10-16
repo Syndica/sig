@@ -12,11 +12,11 @@ source env/pyvenv/bin/activate
 zig build -Doptimize=ReleaseSafe
 
 # run the conformance tests for the first time
-python run.py --create
+./run.py --create
 
 # re-run conformance tests without re-creating the fixtures from scratch
-python run.py
+./run.py
 
 # for more options
-python run.py --help
+./run.py --help
 ```
