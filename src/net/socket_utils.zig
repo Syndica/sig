@@ -106,11 +106,11 @@ const XevThread = struct {
         if (rc.active == 1) {
             // Lock the ref_count to detect if theres races (i.e. another spawn()) during shutdown.
             rc = @bitCast(ref_count.swap(@bitCast(RefCount{ .shutdown = true }), .acquire));
-            std.debug.assert(std.meta.eql(rc, RefCount{}));
+            std.debug.assert(rc == .{});
 
             defer {
                 rc = @bitCast(ref_count.swap(@bitCast(RefCount{}), .release));
-                std.debug.assert(std.meta.eql(rc, RefCount{ .shutdown = true }));
+                std.debug.assert(rc == .{ .shutdown = true });
             }
 
             notifyIoThread(); // wake up xev thread to see ref_count.shutdown to stop/shutdown
@@ -384,6 +384,7 @@ const PerThread = struct {
             if (bytes_read == 0) return error.SocketClosed;
             packet.addr = recv_meta.sender;
             packet.size = bytes_read;
+            packet.flags = st.flags;
             try st.channel.send(packet);
         }
     }
@@ -437,6 +438,7 @@ pub const SocketThread = struct {
     exit: ExitCondition,
     direction: Direction,
     handle: SocketBackend.Handle,
+    flags: Packet.Flags,
 
     const Direction = enum { sender, receiver };
 
@@ -446,8 +448,9 @@ pub const SocketThread = struct {
         socket: UdpSocket,
         outgoing_channel: *Channel(Packet),
         exit: ExitCondition,
+        flags: Packet.Flags,
     ) !*SocketThread {
-        return spawn(allocator, logger, socket, outgoing_channel, exit, .sender);
+        return spawn(allocator, logger, socket, outgoing_channel, exit, .sender, flags);
     }
 
     pub fn spawnReceiver(
@@ -456,8 +459,9 @@ pub const SocketThread = struct {
         socket: UdpSocket,
         incoming_channel: *Channel(Packet),
         exit: ExitCondition,
+        flags: Packet.Flags,
     ) !*SocketThread {
-        return spawn(allocator, logger, socket, incoming_channel, exit, .receiver);
+        return spawn(allocator, logger, socket, incoming_channel, exit, .receiver, flags);
     }
 
     fn spawn(
@@ -467,6 +471,7 @@ pub const SocketThread = struct {
         channel: *Channel(Packet),
         exit: ExitCondition,
         direction: Direction,
+        flags: Packet.Flags,
     ) !*SocketThread {
         const self = try allocator.create(SocketThread);
         errdefer allocator.destroy(self);
@@ -479,6 +484,7 @@ pub const SocketThread = struct {
             .exit = exit,
             .direction = direction,
             .handle = undefined,
+            .flags = flags,
         };
 
         try SocketBackend.spawn(self);
@@ -507,6 +513,7 @@ test "SocketThread: overload sendto" {
         socket,
         &send_channel,
         .{ .unordered = &exit },
+        .empty,
     );
     defer st.join();
     defer exit.store(true, .release);
@@ -518,7 +525,7 @@ test "SocketThread: overload sendto" {
     }
 
     // Wait for all sends to have started/happened.
-    while (!send_channel.isEmpty()) std.time.sleep(10 * std.time.ns_per_ms);
+    while (!send_channel.isEmpty()) std.Thread.sleep(10 * std.time.ns_per_ms);
 }
 
 pub const BenchmarkPacketProcessing = struct {
@@ -561,6 +568,7 @@ pub const BenchmarkPacketProcessing = struct {
             socket,
             &incoming_channel,
             exit_condition,
+            .empty,
         );
         defer incoming_pipe.join();
 
@@ -586,7 +594,7 @@ pub const BenchmarkPacketProcessing = struct {
                     if (i % 10 == 0) {
                         const elapsed = timer.read();
                         if (elapsed < std.time.ns_per_s) {
-                            std.time.sleep(std.time.ns_per_s);
+                            std.Thread.sleep(std.time.ns_per_s);
                         }
                     }
                 }
@@ -602,6 +610,7 @@ pub const BenchmarkPacketProcessing = struct {
             socket,
             &outgoing_channel,
             exit_condition,
+            .empty,
         );
         defer outgoing_pipe.join();
 

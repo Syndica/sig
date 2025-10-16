@@ -39,7 +39,7 @@ pub const GossipDumpService = struct {
 
         while (self.exit_condition.shouldRun()) {
             try self.dumpGossip(dir, start_time);
-            std.time.sleep(DUMP_INTERVAL.asNanos());
+            std.Thread.sleep(DUMP_INTERVAL.asNanos());
         }
     }
 

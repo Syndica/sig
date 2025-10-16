@@ -404,6 +404,7 @@ pub const GossipService = struct {
             self.gossip_socket,
             self.packet_incoming_channel,
             exit_condition,
+            .empty,
         );
         exit_condition.ordered.exit_index += 1;
 
@@ -435,6 +436,7 @@ pub const GossipService = struct {
             self.gossip_socket,
             self.packet_outgoing_channel,
             exit_condition,
+            .empty,
         );
         exit_condition.ordered.exit_index += 1;
 
@@ -980,7 +982,7 @@ pub const GossipService = struct {
             // sleep
             if (loop_timer.read().asNanos() < BUILD_MESSAGE_LOOP_MIN.asNanos()) {
                 const time_left_ms = BUILD_MESSAGE_LOOP_MIN.asMillis() -| loop_timer.read().asMillis();
-                std.time.sleep(time_left_ms * std.time.ns_per_ms);
+                std.Thread.sleep(time_left_ms * std.time.ns_per_ms);
             }
         }
     }
@@ -2641,12 +2643,12 @@ test "handle old prune & pull request message" {
     const MAX_N_SLEEPS = 100;
     var i: u64 = 0;
     while (gossip_service.metrics.pull_requests_dropped.get() != 2) {
-        std.time.sleep(std.time.ns_per_ms * 100);
+        std.Thread.sleep(std.time.ns_per_ms * 100);
         if (i > MAX_N_SLEEPS) return error.LoopRangeExceeded;
         i += 1;
     }
     while (gossip_service.metrics.prune_messages_dropped.get() != 1) {
-        std.time.sleep(std.time.ns_per_ms * 100);
+        std.Thread.sleep(std.time.ns_per_ms * 100);
         if (i > MAX_N_SLEEPS) return error.LoopRangeExceeded;
         i += 1;
     }
@@ -3263,7 +3265,7 @@ test "process contact info push packet" {
     const MAX_N_SLEEPS = 100;
     var i: u64 = 0;
     while (gossip_service.metrics.gossip_packets_processed_total.get() != valid_messages_sent) {
-        std.time.sleep(std.time.ns_per_ms * 100);
+        std.Thread.sleep(std.time.ns_per_ms * 100);
         if (i > MAX_N_SLEEPS) return error.LoopRangeExceeded;
         i += 1;
     }

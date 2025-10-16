@@ -29,6 +29,15 @@ pub const Config = struct {
             "List of filters, used for example to filter unit tests by name. " ++
                 "Specified as a series like `-Dfilter='filter1' -Dfilter='filter2'`.",
         );
+
+        const zls_is_build_runner = b.option(
+            bool,
+            "zls-is-build-runner",
+            "Option passed by zls to indicate that it's the one running this build script " ++
+                "(configured in the local zls.build.json). This should not be specified on the " ++
+                "command line nor as a dependency argument.",
+        ) orelse false;
+
         var self: Config = .{
             .target = b.standardTargetOptions(.{}),
             .optimize = b.standardOptimizeOption(.{}),
@@ -48,13 +57,13 @@ pub const Config = struct {
                 "no-run",
                 "Don't run any of the executables implied by the specified steps, only install " ++
                     "them. Use in conjunction with 'no-bin' to avoid installation as well.",
-            ) orelse false),
+            ) orelse false or zls_is_build_runner),
             .install = !(b.option(
                 bool,
                 "no-bin",
                 "Don't install any of the binaries implied by the specified steps, only run " ++
                     "them. Use in conjunction with 'no-run' to avoid running as well.",
-            ) orelse false),
+            ) orelse false or zls_is_build_runner),
             .ssh_host = b.option(
                 []const u8,
                 "ssh-host",
@@ -183,9 +192,10 @@ pub const Config = struct {
 };
 
 pub fn build(b: *Build) !void {
-    defer makeZlsNotInstallAnythingDuringBuildOnSave(b);
-
     const config = try Config.fromBuild(b);
+    defer {
+        if (!config.install and !config.run) disableEmitBin(b);
+    }
 
     const build_options = b.addOptions();
     build_options.addOption(LedgerDB, "ledger_db", config.ledger_db);
@@ -503,16 +513,7 @@ const LedgerDB = enum {
 };
 
 /// Reference/inspiration: https://kristoff.it/blog/improving-your-zls-experience/
-fn makeZlsNotInstallAnythingDuringBuildOnSave(b: *Build) void {
-    const zls_is_build_runner = b.option(
-        bool,
-        "zls-is-build-runner",
-        "Option passed by zls to indicate that it's the one running this build script " ++
-            "(configured in the local zls.build.json). This should not be specified on the " ++
-            "command line nor as a dependency argument.",
-    ) orelse false;
-    if (!zls_is_build_runner) return;
-
+fn disableEmitBin(b: *Build) void {
     for (b.install_tls.step.dependencies.items) |*install_step_dep| {
         const install_artifact = install_step_dep.*.cast(Build.Step.InstallArtifact) orelse continue;
         const artifact = install_artifact.artifact;

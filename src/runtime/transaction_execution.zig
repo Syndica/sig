@@ -201,8 +201,8 @@ pub const ExecutedTransaction = struct {
     compute_meter: u64,
     accounts_data_len_delta: i64,
 
-    pub fn deinit(self: ExecutedTransaction, allocator: std.mem.Allocator) void {
-        if (self.log_collector) |lc| lc.deinit(allocator);
+    pub fn deinit(self: *ExecutedTransaction, allocator: std.mem.Allocator) void {
+        if (self.log_collector) |*lc| lc.deinit(allocator);
     }
 };
 
@@ -479,7 +479,7 @@ pub fn executeTransaction(
     const compute_budget = compute_budget_limits.intoComputeBudget();
 
     const log_collector = if (config.log)
-        LogCollector.init(config.log_messages_byte_limit)
+        try LogCollector.init(allocator, config.log_messages_byte_limit)
     else
         null;
 

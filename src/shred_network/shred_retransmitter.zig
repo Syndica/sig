@@ -122,6 +122,7 @@ pub fn runShredRetransmitter(params: ShredRetransmitterParams) !void {
         retransmit_socket,
         &retransmit_to_socket_channel,
         .{ .unordered = params.exit },
+        .empty,
     );
     defer sender_thread.join();
 
