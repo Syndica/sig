@@ -1052,7 +1052,7 @@ pub fn slotTrackerElementGenesis(
     const constants: sig.core.SlotConstants = try .genesis(allocator, fee_rate_governor);
     errdefer constants.deinit(allocator);
 
-    const state: sig.core.SlotState = try .genesis(allocator);
+    const state: sig.core.SlotState = .GENESIS;
     errdefer state.deinit(allocator);
 
     return .{
@@ -1086,7 +1086,7 @@ test "trackNewVotesAndNotifyConfirmations filter" {
         const epoch_tracker, var epoch_tracker_lg = epoch_tracker_rw.writeWithLock();
         defer epoch_tracker_lg.unlock();
 
-        const epoch_genesis: sig.core.EpochConstants = try .genesis(allocator, .default(allocator));
+        const epoch_genesis: sig.core.EpochConstants = .genesis(.default(allocator));
         errdefer epoch_genesis.deinit(allocator);
 
         try epoch_tracker.epochs.put(allocator, 0, epoch_genesis);
@@ -1844,7 +1844,7 @@ test "simple usage" {
             .feature_set = .ALL_DISABLED,
             .reserved_accounts = .empty,
         },
-        .state = .genesis,
+        .state = .GENESIS,
     });
     defer slot_tracker.deinit(allocator);
 
@@ -1952,7 +1952,7 @@ test "check trackers" {
             .feature_set = .ALL_DISABLED,
             .reserved_accounts = .empty,
         },
-        .state = .genesis,
+        .state = .GENESIS,
     });
     defer slot_tracker2.deinit(allocator);
 
