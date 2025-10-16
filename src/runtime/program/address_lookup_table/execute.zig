@@ -622,6 +622,9 @@ pub fn deriveLookupTableAddress(
 }
 
 test "address-lookup-table missing accounts" {
+    // temporarily make this test take a long time to see if it's detectable in CI
+    // TODO remove
+    std.Thread.sleep(std.time.ns_per_day); 
     const ExecuteContextsParams = sig.runtime.testing.ExecuteContextsParams;
     const expectProgramExecuteError = sig.runtime.program.testing.expectProgramExecuteError;
 
