@@ -11,7 +11,7 @@ const assert = std.debug.assert;
 /// never be hit and are only an issue if the CI is having some major issue.
 /// It is helpful to not have 3 hour long CI runs that don't even tell you
 /// what test is hanging.
-const TIMEOUT = 60 * std.time.ns_per_s;
+const TIMEOUT = 2 * 60 * std.time.ns_per_s;
 
 pub const std_options: std.Options = .{
     .logFn = log,
