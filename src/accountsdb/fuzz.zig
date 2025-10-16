@@ -388,7 +388,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
 
                 const full_snapshot_file_info: FullSnapshotFileInfo = .{
                     .slot = full_snapshot_info.slot,
-                    .hash = full_snapshot_info.hash,
+                    .hash = full_snapshot_info.hash.checksum(),
                 };
                 const full_archive_name_bounded = full_snapshot_file_info.snapshotArchiveName();
                 const full_archive_name = full_archive_name_bounded.constSlice();
@@ -423,7 +423,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
 
                 const inc_snapshot_file_info: IncrementalSnapshotFileInfo = .{
                     .base_slot = full_snapshot_info.slot,
-                    .hash = inc_snapshot_info.hash,
+                    .hash = inc_snapshot_info.hash.checksum(),
                     .slot = inc_snapshot_info.slot,
                 };
                 const inc_archive_name_bounded = inc_snapshot_file_info.snapshotArchiveName();
