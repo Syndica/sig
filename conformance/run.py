@@ -89,7 +89,7 @@ def run_test(vectors, config, line_length):
     print(f"{vectors}" + " " * (1 + line_length - len(vectors)), end="")
     vectors_path = path(f"env/test-vectors/{vectors}")
     fixtures_path = path(f"env/test-fixtures/{vectors}")
-    outputs_folder = os.path.basename(vectors) if vectors.endswith(".fix") else vectors
+    outputs_folder = os.path.dirname(vectors) if vectors.endswith(".fix") else vectors
     outputs_path = path(f"env/test-outputs/{outputs_folder}")
     if not os.path.exists(vectors_path):
         os.makedirs(fixtures_path, exist_ok=True)
