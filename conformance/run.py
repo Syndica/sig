@@ -3,7 +3,9 @@
 import os
 import argparse
 import json
+import sys
 import textwrap
+from collections import defaultdict
 
 conformance_dir = os.path.dirname(os.path.abspath(__file__))
 
@@ -45,25 +47,31 @@ def main():
     parser.add_argument("--create-lib", default=agave, help=f"Default: {agave}")
     parser.add_argument("--exec-lib", default=sig, help=f"Default: {sig}")
     parser.add_argument("--num-processes", type=int, default=os.cpu_count())
+    parser.add_argument(
+        "--run-separately",
+        action="store_true",
+        help="Run each fixture with a separate invocation of solana-test-suite. "
+        "This makes it easier to see which fixture caused a panic, but takes longer.",
+    )
 
-    args = parser.parse_args()
+    config = parser.parse_args()
 
     results = []
-    if args.fixtures:
-        line_length = max(len(test) for test in args.fixtures)
-        for fixture in args.fixtures:
-            results.append(run_test(fixture, args, len(fixture)))
+    if config.fixtures:
+        line_length = max(len(test) for test in config.fixtures)
+        for fixture in config.fixtures:
+            results.append(run_test(fixture, config, len(fixture)))
     else:
         with open(path("scripts/fixtures.txt")) as f:
             TESTS = [line.strip() for line in f if line.strip()]
         line_length = max(len(test) for test in TESTS)
         for test in TESTS:
-            if args.filter and args.filter not in test:
+            if config.filter and config.filter not in test:
                 continue
-            results.append(run_test(test, args, line_length))
+            results.append(run_test(test, config, line_length))
 
     if None in results:
-        assert args.no_run
+        assert config.no_run
         return
 
     total_passed = sum(r.get("passed", 0) for r in results)
@@ -75,8 +83,8 @@ def main():
     print(f"\tFailed:  {total_failed}")
     print(f"\tSkipped: {total_skipped}")
 
-    if args.save:
-        with open(args.save, "w") as f:
+    if config.save:
+        with open(config.save, "w") as f:
             json.dump(results, f, indent=4)
 
 
@@ -86,7 +94,8 @@ def path(path):
 
 
 def run_test(vectors, config, line_length):
-    print(f"{vectors}" + " " * (1 + line_length - len(vectors)), end="")
+    if not config.run_separately:
+        print_noln(f"{vectors}" + " " * (1 + line_length - len(vectors)))
     vectors_path = path(f"env/test-vectors/{vectors}")
     fixtures_path = path(f"env/test-fixtures/{vectors}")
     outputs_folder = os.path.dirname(vectors) if vectors.endswith(".fix") else vectors
@@ -115,6 +124,33 @@ def run_test(vectors, config, line_length):
     if config.no_run:
         return None
 
+    if config.run_separately:
+        result = {
+            "name": vectors,
+            "passed": 0,
+            "failed": 0,
+            "skipped": 0,
+            "failed_fixtures": [],
+        }
+        for fixture_filename in os.listdir(fixtures_path):
+            fixture_path = os.path.join(fixtures_path, fixture_filename)
+            print_noln(
+                f"{os.path.join(vectors, fixture_filename)}"
+                + " " * (1 + line_length - len(vectors)),
+            )
+            one_result = exec_fixtures(config, fixture_path, outputs_path)
+            result["passed"] += one_result.get("passed", 0)
+            result["failed"] += one_result.get("failed", 0)
+            result["skipped"] += one_result.get("skipped", 0)
+            result["failed_fixtures"].extend(one_result.get("failed_fixtures", []))
+        return result
+    else:
+        result = exec_fixtures(config, fixtures_path, outputs_path)
+        result["name"] = vectors
+        return result
+
+
+def exec_fixtures(config, fixtures_path, outputs_path):
     # fmt: off
     result = run_command([
         "exec-fixtures",
@@ -126,11 +162,9 @@ def run_test(vectors, config, line_length):
         verbose=config.verbose,
     )
     # fmt: on
+
     if result.exit_code != 0:
-        return {
-            "name": vectors,
-            "failed": 1,
-        }
+        return {"failed": 1}
 
     summary = result.stdout.split("\n")[3]
     passed = int(summary.split(",")[0].split(": ")[1])
@@ -139,18 +173,26 @@ def run_test(vectors, config, line_length):
 
     print("│ Pass{:>5} │ Fail{:>5} │ Skip{:>5}".format(passed, failed, skipped))
 
-    failed_fixtures = None
+    failed_fixtures = []
     if failed > 0:
         failed_fixtures = result.stdout.split("\n")[4].strip("Failed tests: ").strip()
         failed_fixtures = json.loads(failed_fixtures.replace("'", '"'))
 
     return {
-        "name": vectors,
         "passed": passed,
         "failed": failed,
         "skipped": skipped,
         "failed_fixtures": failed_fixtures,
     }
+
+
+def print_noln(string):
+    """
+    Equivalent to `print(string, end="")` but flushes immediately. This allows
+    us to see which test causes a panic before the full test line is printed.
+    """
+    sys.stdout.write(string)
+    sys.stdout.flush()
 
 
 def run_command(args, verbose=False, show_output=False):
