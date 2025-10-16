@@ -1228,7 +1228,7 @@ fn validator(
         );
     defer if (consensus_deps) |d| d.deinit();
 
-    var replay_service = try replay.Service.init(&replay_deps, consensus_deps, cfg.replay_threads);
+    var replay_service = try replay.Service.init(&replay_deps, cfg.replay_threads, consensus_deps);
     defer replay_service.deinit(allocator);
 
     const replay_thread = try app_base.spawnService(
@@ -1367,7 +1367,7 @@ fn replayOffline(
         );
     defer if (consensus_deps) |d| d.deinit();
 
-    var replay_service = try replay.Service.init(&replay_deps, consensus_deps, cfg.replay_threads);
+    var replay_service = try replay.Service.init(&replay_deps, cfg.replay_threads, consensus_deps);
     defer replay_service.deinit(allocator);
 
     const replay_thread = try app_base.spawnService(
@@ -2006,7 +2006,6 @@ fn replayDependencies(
             else
                 &.{},
         },
-        .exit = app_base.exit,
         .account_store = account_store,
         .ledger = ledger,
         .epoch_schedule = bank_fields.epoch_schedule,

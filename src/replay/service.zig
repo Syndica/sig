@@ -40,17 +40,19 @@ pub const Service = struct {
 
     pub fn init(
         deps: *Dependencies,
-        enable_consensus: ?TowerConsensus.Dependencies.External,
         num_threads: u32,
+        enable_consensus: ?TowerConsensus.Dependencies.External,
     ) !Service {
         var state = try ReplayState.init(deps, num_threads);
         errdefer state.deinit();
 
-        var consensus: ?TowerConsensus = if (enable_consensus) |consensus_deps| blk: {
+        const maybe_consensus: ?TowerConsensus = blk: {
+            const consensus_deps = enable_consensus orelse break :blk null;
+
             const slot_tracker, var slot_tracker_lock = state.slot_tracker.readWithLock();
             defer slot_tracker_lock.unlock();
 
-            const consensus_state_deps: TowerConsensus.Dependencies = .{
+            break :blk try TowerConsensus.init(deps.allocator, .{
                 .logger = .from(deps.logger),
                 .identity = deps.identity,
                 .signing = deps.signing,
@@ -58,20 +60,15 @@ pub const Service = struct {
                 .root_hash = slot_tracker.get(slot_tracker.root).?.state.hash.readCopy().?,
                 .account_reader = deps.account_store.reader(),
                 .ledger = deps.ledger,
-                .exit = deps.exit,
-                .replay_votes_channel = state.replay_votes_channel,
-                .slot_tracker_rw = state.slot_tracker,
-                .epoch_tracker_rw = state.epoch_tracker,
+                .slot_tracker = slot_tracker,
                 .external = consensus_deps,
-            };
-
-            break :blk try TowerConsensus.init(deps.allocator, consensus_state_deps);
-        } else null;
-        errdefer if (consensus) |*c| c.deinit(deps.allocator);
+            });
+        };
+        errdefer if (maybe_consensus) |consensus| consensus.deinit(deps.allocator);
 
         return .{
             .replay = state,
-            .consensus = consensus,
+            .consensus = maybe_consensus,
             .num_threads = num_threads,
         };
     }
@@ -97,8 +94,8 @@ pub const Service = struct {
             self.replay.logger,
             self.replay.account_store,
             self.replay.ledger,
-            self.replay.slot_tracker,
-            self.replay.epoch_tracker,
+            &self.replay.slot_tracker,
+            &self.replay.epoch_tracker,
             &self.replay.slot_tree,
             self.replay.slot_leaders,
             &self.replay.hard_forks,
@@ -116,8 +113,10 @@ pub const Service = struct {
         if (self.consensus) |*consensus|
             try consensus.process(
                 allocator,
-                self.replay.slot_tracker,
-                self.replay.epoch_tracker,
+                self.replay.account_store.reader(),
+                self.replay.ledger,
+                &self.replay.slot_tracker,
+                &self.replay.epoch_tracker,
                 &self.replay.progress_map,
                 slot_results,
             )
@@ -135,8 +134,6 @@ pub const Dependencies = struct {
     logger: Logger,
     identity: sig.identity.ValidatorIdentity,
     signing: sig.identity.SigningKeys,
-    /// Tell replay when to exit
-    exit: *std.atomic.Value(bool),
     /// Used in the EpochManager
     epoch_schedule: sig.core.EpochSchedule,
     account_store: sig.accounts_db.AccountStore,
@@ -200,12 +197,11 @@ pub const ReplayState = struct {
     thread_pool: ThreadPool,
     slot_leaders: SlotLeaders,
     /// Lifetime: owned by `ReplayState`.
-    /// Borrowed across multiple threads (replay, vote_listener).
     /// These RwMuxes are deinitialized in `ReplayState.deinit()` only
     /// after all dependent threads have been joined based on defer order in `run`.
-    slot_tracker: *RwMux(SlotTracker),
+    slot_tracker: RwMux(SlotTracker),
     /// Lifetime rules are the same as `slot_tracker`.
-    epoch_tracker: *RwMux(EpochTracker),
+    epoch_tracker: RwMux(EpochTracker),
     slot_tree: SlotTree,
     hard_forks: sig.core.HardForks,
     account_store: AccountStore,
@@ -224,14 +220,10 @@ pub const ReplayState = struct {
         slots.get().deinit(self.allocator);
         slots.unlock();
 
-        self.allocator.destroy(self.slot_tracker);
-
         var epoch_tracker = self.epoch_tracker.tryRead() orelse
             @panic("Epoch tracker deinit while in use");
         epoch_tracker.get().deinit(self.allocator);
         epoch_tracker.unlock();
-
-        self.allocator.destroy(self.epoch_tracker);
 
         self.progress_map.deinit(self.allocator);
         self.replay_votes_channel.destroy();
@@ -274,22 +266,14 @@ pub const ReplayState = struct {
         const slot_tree = try SlotTree.init(deps.allocator, deps.root.slot);
         errdefer slot_tree.deinit(deps.allocator);
 
-        const slot_tracker_rw = try deps.allocator.create(RwMux(SlotTracker));
-        errdefer deps.allocator.destroy(slot_tracker_rw);
-        slot_tracker_rw.* = RwMux(SlotTracker).init(slot_tracker);
-
-        const epoch_tracker_rw = try deps.allocator.create(RwMux(EpochTracker));
-        errdefer deps.allocator.destroy(epoch_tracker_rw);
-        epoch_tracker_rw.* = RwMux(EpochTracker).init(epoch_tracker);
-
         return .{
             .allocator = deps.allocator,
             .logger = .from(deps.logger),
             .thread_pool = .init(.{ .max_threads = num_threads }),
             .my_identity = deps.identity.validator,
             .slot_leaders = deps.slot_leaders,
-            .slot_tracker = slot_tracker_rw,
-            .epoch_tracker = epoch_tracker_rw,
+            .slot_tracker = .init(slot_tracker),
+            .epoch_tracker = .init(epoch_tracker),
             .slot_tree = slot_tree,
             .hard_forks = deps.hard_forks.take(),
             .account_store = deps.account_store,
@@ -854,12 +838,10 @@ test "Service clean init and deinit" {
     const ns = struct {
         pub fn run(allocator: Allocator) !void {
             var dep_stubs = try DependencyStubs.init(allocator, .noop);
-            defer dep_stubs.deinit(allocator);
+            defer dep_stubs.deinit();
 
-            var service = try dep_stubs.stubbedService(allocator, .FOR_TESTS, false);
+            var service = try dep_stubs.stubbedService(allocator, .FOR_TESTS);
             defer service.deinit(allocator);
-
-            dep_stubs.exit.store(true, .monotonic);
         }
     };
     try ns.run(std.testing.allocator);
@@ -869,32 +851,63 @@ test "Service clean init and deinit" {
 test "process runs without error with no replay results" {
     const allocator = std.testing.allocator;
 
-    var dep_stubs = try DependencyStubs.init(allocator, .FOR_TESTS);
-    defer dep_stubs.deinit(allocator);
+    var registry: sig.prometheus.Registry(.{}) = .init(allocator);
+    defer registry.deinit();
 
-    var service = try dep_stubs.stubbedService(allocator, .FOR_TESTS, true);
+    var dep_stubs = try DependencyStubs.init(allocator, .FOR_TESTS);
+    defer dep_stubs.deinit();
+
+    var service = try dep_stubs.stubbedService(allocator, .FOR_TESTS);
     defer service.deinit(allocator);
+
+    const slot_data_provider: sig.consensus.vote_listener.SlotDataProvider = .{
+        .slot_tracker_rw = &service.replay.slot_tracker,
+        .epoch_tracker_rw = &service.replay.epoch_tracker,
+    };
+
+    var vote_collector: sig.consensus.vote_listener.VoteCollector =
+        try .init(.UNIX_EPOCH, slot_data_provider.rootSlot(), &registry);
+    defer vote_collector.deinit(allocator);
+
+    const verified_vote_channel: *sig.sync.Channel(sig.consensus.vote_listener.VerifiedVote) =
+        try .create(allocator);
+    defer verified_vote_channel.destroy();
+    defer while (verified_vote_channel.tryReceive()) |vv| vv.deinit(allocator);
+
+    try vote_collector.collectAndProcessVotes(allocator, .FOR_TESTS, .{
+        .slot_data_provider = slot_data_provider,
+        .senders = .{
+            .verified_vote = verified_vote_channel,
+            .gossip_verified_vote_hash = service.consensus.?.receivers.gossip_verified_vote_hash,
+            .bank_notification = null,
+            .duplicate_confirmed_slots = service.consensus.?.receivers.duplicate_confirmed_slots,
+            .subscriptions = .{},
+        },
+        .receivers = .{ .replay_votes = service.replay.replay_votes_channel },
+        .ledger = service.replay.ledger,
+        .gossip_table = null,
+    });
 
     // TODO: run consensus in the tests that actually execute blocks for better
     // coverage. currently consensus panics or hangs if you run it with actual data
-    _ = try service.consensus.?.process(
+    try service.consensus.?.process(
         allocator,
-        service.replay.slot_tracker,
-        service.replay.epoch_tracker,
+        dep_stubs.accountsdb.accountReader(),
+        &dep_stubs.ledger,
+        &service.replay.slot_tracker,
+        &service.replay.epoch_tracker,
         &service.replay.progress_map,
         &.{},
     );
-
-    dep_stubs.exit.store(true, .monotonic);
 }
 
 test "advance calls consensus.process with empty replay results" {
     const allocator = std.testing.allocator;
 
     var dep_stubs = try DependencyStubs.init(allocator, .FOR_TESTS);
-    defer dep_stubs.deinit(allocator);
+    defer dep_stubs.deinit();
 
-    var service = try dep_stubs.stubbedService(allocator, .FOR_TESTS, false);
+    var service = try dep_stubs.stubbedService(allocator, .FOR_TESTS);
     defer service.deinit(allocator);
 
     try service.advance();
@@ -905,8 +918,6 @@ test "advance calls consensus.process with empty replay results" {
         defer lg.unlock();
         try std.testing.expectEqual(0, slot_tracker.root);
     }
-
-    dep_stubs.exit.store(true, .monotonic);
 }
 
 test "Execute testnet block single threaded" {
@@ -938,7 +949,7 @@ fn testExecuteBlock(allocator: Allocator, config: struct {
     accounts_path: []const u8,
 }) !void {
     var dep_stubs = try DependencyStubs.init(allocator, .FOR_TESTS);
-    defer dep_stubs.deinit(allocator);
+    defer dep_stubs.deinit();
 
     // get snapshot manifest
     const fba_buf = try allocator.alloc(u8, 175_000_000);
@@ -1076,17 +1087,14 @@ fn parseBincodeFromGzipFile(
 /// outlive replay, and is used by replay.
 pub const DependencyStubs = struct {
     accountsdb: sig.accounts_db.ThreadSafeAccountMap,
-    exit: std.atomic.Value(bool),
     dir: std.testing.TmpDir,
-    ledger_path: []const u8,
     ledger: Ledger,
     senders: TowerConsensus.Senders,
     receivers: TowerConsensus.Receivers,
 
-    pub fn deinit(self: *DependencyStubs, allocator: Allocator) void {
+    pub fn deinit(self: *DependencyStubs) void {
         self.accountsdb.deinit();
         self.dir.cleanup();
-        allocator.free(self.ledger_path);
         self.ledger.deinit();
         self.senders.destroy();
         self.receivers.destroy();
@@ -1100,22 +1108,20 @@ pub const DependencyStubs = struct {
         errdefer dir.cleanup();
 
         const ledger_path = try dir.dir.realpathAlloc(allocator, ".");
-        errdefer allocator.free(ledger_path);
+        defer allocator.free(ledger_path);
 
         var ledger = try Ledger.init(allocator, .from(logger), ledger_path, null);
         errdefer ledger.deinit();
 
-        var senders = try TowerConsensus.Senders.create(allocator);
+        const senders: TowerConsensus.Senders = try .create(allocator);
         errdefer senders.destroy();
 
-        var receivers = try TowerConsensus.Receivers.create(allocator);
+        const receivers: TowerConsensus.Receivers = try .create(allocator);
         errdefer receivers.destroy();
 
         return .{
             .accountsdb = accountsdb,
-            .exit = .init(false),
             .dir = dir,
-            .ledger_path = ledger_path,
             .ledger = ledger,
             .senders = senders,
             .receivers = receivers,
@@ -1131,7 +1137,6 @@ pub const DependencyStubs = struct {
         self: *DependencyStubs,
         allocator: Allocator,
         logger: Logger,
-        run_vote_listener: bool,
     ) !Service {
         var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
         const random = rng.random();
@@ -1166,7 +1171,6 @@ pub const DependencyStubs = struct {
                     .node = null,
                     .authorized_voters = &.{},
                 },
-                .exit = &self.exit,
                 .epoch_schedule = .DEFAULT,
                 .account_store = self.accountsdb.accountStore(),
                 .ledger = &self.ledger,
@@ -1187,15 +1191,12 @@ pub const DependencyStubs = struct {
         };
         defer deps.deinit(allocator);
 
-        const consensus_deps = TowerConsensus.Dependencies.External{
+        return try Service.init(&deps, 1, .{
             .senders = self.senders,
             .receivers = self.receivers,
             .gossip_table = null,
             .slot_leaders = null,
-            .run_vote_listener = run_vote_listener,
-        };
-
-        return try Service.init(&deps, consensus_deps, 1);
+        });
     }
 
     // TODO: consider deduplicating with above and similar function in cmd.zig
@@ -1247,7 +1248,6 @@ pub const DependencyStubs = struct {
                     .node = null,
                     .authorized_voters = &.{},
                 },
-                .exit = &self.exit,
                 .account_store = self.accountsdb.accountStore(),
                 .ledger = &self.ledger,
                 .epoch_schedule = bank_fields.epoch_schedule,
@@ -1267,7 +1267,7 @@ pub const DependencyStubs = struct {
         };
         defer deps.deinit(allocator);
 
-        return try Service.init(&deps, null, num_threads);
+        return try Service.init(&deps, num_threads, null);
     }
 };
 
