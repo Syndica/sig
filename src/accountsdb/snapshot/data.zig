@@ -1373,9 +1373,7 @@ pub const FullAndIncrementalManifest = struct {
 
     pub fn deinit(self: FullAndIncrementalManifest, allocator: std.mem.Allocator) void {
         self.full.deinit(allocator);
-        if (self.incremental) |inc| {
-            inc.deinit(allocator);
-        }
+        if (self.incremental) |inc| inc.deinit(allocator);
     }
 };
 
