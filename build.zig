@@ -339,6 +339,10 @@ pub fn build(b: *Build) !void {
         }),
         .filters = config.filters orelse &.{},
         .use_llvm = config.use_llvm,
+        .test_runner = .{
+            .mode = .server,
+            .path = b.path("src/test_runner.zig"),
+        },
     });
     unit_tests_exe.root_module.addImport("cli", cli_mod);
     switch (config.ledger_db) {
