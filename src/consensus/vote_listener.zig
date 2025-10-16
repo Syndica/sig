@@ -1112,50 +1112,52 @@ fn trackNewVotesAndNotifyConfirmations(
     }
 }
 
+pub fn slotTrackerElementGenesis(
+    allocator: std.mem.Allocator,
+    fee_rate_governor: sig.core.genesis_config.FeeRateGovernor,
+) std.mem.Allocator.Error!SlotTracker.Element {
+    const constants: sig.core.SlotConstants = try .genesis(allocator, fee_rate_governor);
+    errdefer constants.deinit(allocator);
+
+    const state: sig.core.SlotState = try .genesis(allocator);
+    errdefer state.deinit(allocator);
+
+    return .{
+        .constants = constants,
+        .state = state,
+    };
+}
+
 test "trackNewVotesAndNotifyConfirmations filter" {
     const allocator = std.testing.allocator;
 
     var prng_state: std.Random.DefaultPrng = .init(std.testing.random_seed);
     const prng = prng_state.random();
 
-    var slot_tracker: SlotTracker = try .init(allocator, 0, .{
-        .constants = .{
-            .parent_slot = 0,
-            .parent_hash = .ZEROES,
-            .parent_lt_hash = .IDENTITY,
-            .block_height = 1,
-            .collector_id = .ZEROES,
-            .max_tick_height = 1,
-            .fee_rate_governor = .DEFAULT,
-            .epoch_reward_status = .inactive,
-            .ancestors = .{ .ancestors = .empty },
-            .feature_set = .ALL_DISABLED,
-            .reserved_accounts = .empty,
-        },
-        .state = try .genesis(allocator),
-    });
-    defer slot_tracker.deinit(allocator);
-
-    var epoch_tracker: EpochTracker = .{ .schedule = .DEFAULT };
-    defer epoch_tracker.deinit(allocator);
-
-    {
-        const stakes: sig.core.EpochStakes = try .initEmptyWithGenesisStakeHistoryEntry(allocator);
-        errdefer stakes.deinit(allocator);
-        try epoch_tracker.epochs.ensureUnusedCapacity(allocator, 1);
-        epoch_tracker.epochs.putAssumeCapacity(0, .{
-            .hashes_per_tick = 1,
-            .ticks_per_slot = 1,
-            .ns_per_slot = 1,
-            .genesis_creation_time = 1,
-            .slots_per_year = 1,
-            .stakes = stakes,
-            .rent_collector = .DEFAULT,
-        });
+    var slot_tracker_rw: sig.sync.RwMux(SlotTracker) = blk: {
+        const slot_tracker_init = try slotTrackerElementGenesis(allocator, .DEFAULT);
+        break :blk .init(try .init(allocator, 0, slot_tracker_init));
+    };
+    defer {
+        var lg = slot_tracker_rw.write();
+        lg.get().deinit(allocator);
     }
 
-    var slot_tracker_rw: sig.sync.RwMux(SlotTracker) = .init(slot_tracker);
-    var epoch_tracker_rw: sig.sync.RwMux(EpochTracker) = .init(epoch_tracker);
+    var epoch_tracker_rw: sig.sync.RwMux(EpochTracker) = .init(.{ .schedule = .DEFAULT });
+    defer {
+        var lg = epoch_tracker_rw.write();
+        lg.get().deinit(allocator);
+    }
+
+    {
+        const epoch_tracker, var epoch_tracker_lg = epoch_tracker_rw.writeWithLock();
+        defer epoch_tracker_lg.unlock();
+
+        const epoch_genesis: sig.core.EpochConstants = try .genesis(allocator, .default(allocator));
+        errdefer epoch_genesis.deinit(allocator);
+
+        try epoch_tracker.epochs.put(allocator, 0, epoch_genesis);
+    }
 
     const slot_data_provider: SlotDataProvider = .{
         .slot_tracker_rw = &slot_tracker_rw,
