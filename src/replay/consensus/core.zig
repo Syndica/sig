@@ -511,7 +511,6 @@ pub const TowerConsensus = struct {
                 }
 
                 // Skip if the slot's hash is Hash.ZEROES (e.g., root slot)
-                // TODO: Can non root slot have Hash.ZEROES?
                 const slot_hash = slot_info.state.hash.readCopy() orelse return error.MissingHash;
                 if (slot_hash.eql(Hash.ZEROES)) {
                     continue;
