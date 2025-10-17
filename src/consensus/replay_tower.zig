@@ -17,12 +17,8 @@ const SortedSetUnmanaged = sig.utils.collections.SortedSetUnmanaged;
 const TowerSync = sig.runtime.program.vote.state.TowerSync;
 const TowerVoteState = sig.consensus.tower_state.TowerVoteState;
 const Vote = sig.runtime.program.vote.state.Vote;
-const VoteState = sig.runtime.program.vote.state.VoteState;
-const VoteStateVersions = sig.runtime.program.vote.state.VoteStateVersions;
 const VoteStateUpdate = sig.runtime.program.vote.state.VoteStateUpdate;
 const StakeAndVoteAccountsMap = sig.core.vote_accounts.StakeAndVoteAccountsMap;
-const StakeAndVoteAccount = sig.core.vote_accounts.StakeAndVoteAccount;
-const VoteAccount = sig.core.vote_accounts.VoteAccount;
 const UnixTimestamp = sig.core.UnixTimestamp;
 
 const HeaviestSubtreeForkChoice = sig.consensus.HeaviestSubtreeForkChoice;
@@ -1969,16 +1965,13 @@ test "check_vote_threshold_forks" {
     var accounts = try genStakes(
         allocator,
         random,
-        &[_]struct { u64, []u64 }{
+        &.{
             .{ threshold_stake, &votes },
             .{ total_stake - threshold_stake, tower_votes },
         },
     );
     defer {
-        for (accounts.values()) |value| {
-            allocator.free(value.account.account.data);
-            value.account.state.deinit();
-        }
+        for (accounts.values()) |*value| value.deinit(allocator);
         accounts.deinit(allocator);
     }
 
@@ -2075,13 +2068,10 @@ test "collect vote lockouts root" {
     var accounts = try genStakes(
         allocator,
         random,
-        &[_]struct { u64, []u64 }{ .{ 1, votes }, .{ 1, votes } },
+        &.{ .{ 1, votes }, .{ 1, votes } },
     );
     defer {
-        for (accounts.values()) |value| {
-            allocator.free(value.account.account.data);
-            value.account.state.deinit();
-        }
+        for (accounts.values()) |*value| value.deinit(allocator);
         accounts.deinit(allocator);
     }
 
@@ -2200,13 +2190,10 @@ test "collect vote lockouts sums" {
     var accounts = try genStakes(
         allocator,
         random,
-        &[_]struct { u64, []u64 }{ .{ 1, &votes }, .{ 1, &votes } },
+        &.{ .{ 1, &votes }, .{ 1, &votes } },
     );
     defer {
-        for (accounts.values()) |value| {
-            allocator.free(value.account.account.data);
-            value.account.state.deinit();
-        }
+        for (accounts.values()) |*value| value.deinit(allocator);
         accounts.deinit(allocator);
     }
 
@@ -3760,7 +3747,7 @@ test "selectVoteAndResetForks stake not found" {
 
     const latest = LatestValidatorVotes.empty;
 
-    const epoch_stakes: EpochStakes = try .initEmptyWithGenesisStakeHistoryEntry(allocator);
+    const epoch_stakes: EpochStakes = .EMPTY_WITH_GENESIS;
     defer epoch_stakes.deinit(allocator);
 
     try std.testing.expectError(
@@ -4282,7 +4269,7 @@ pub const TestFixture = struct {
             var constants = try sig.core.SlotConstants.genesis(allocator, .DEFAULT);
             errdefer constants.deinit(allocator);
 
-            var state = try sig.core.SlotState.genesis(allocator);
+            var state: sig.core.SlotState = .genesis;
             errdefer state.deinit(allocator);
 
             constants.parent_slot = root.slot -| 1;
@@ -4405,7 +4392,7 @@ pub const TestFixture = struct {
                 var constants = try sig.core.SlotConstants.genesis(allocator, .DEFAULT);
                 errdefer constants.deinit(allocator);
 
-                var state = try sig.core.SlotState.genesis(allocator);
+                var state: sig.core.SlotState = .genesis;
                 errdefer state.deinit(allocator);
 
                 constants.parent_slot = parent_slot;
@@ -4466,8 +4453,7 @@ pub const TestFixture = struct {
         allocator: std.mem.Allocator,
         random: std.Random,
     ) !void {
-        var epoch_stakes =
-            try EpochStakes.initEmptyWithGenesisStakeHistoryEntry(allocator);
+        var epoch_stakes: EpochStakes = .EMPTY_WITH_GENESIS;
         epoch_stakes.total_stake = 1000;
         epoch_stakes.stakes.deinit(allocator);
         epoch_stakes.stakes = try Stakes(.delegation).initRandom(
@@ -4681,17 +4667,13 @@ fn genStakes(
     random: std.Random,
     stakes: []const struct { u64, []u64 },
 ) !StakeAndVoteAccountsMap {
-    var map = StakeAndVoteAccountsMap.empty;
+    if (!builtin.is_test) @compileError("genStakes only intended for tests");
+
+    var map: StakeAndVoteAccountsMap = .empty;
 
     for (stakes) |stake| {
-        const lamports = stake[0];
-        const votes = stake[1];
+        const lamports, const votes = stake;
 
-        var account = sig.runtime.AccountSharedData.NEW;
-        account.lamports = lamports;
-        const data = try allocator.alloc(u8, VoteState.MAX_VOTE_STATE_SIZE);
-        account.data = data;
-        account.owner = sig.runtime.program.vote.ID;
         var vote_state = try sig.runtime.program.vote.state.createTestVoteState(
             allocator,
             Pubkey.ZEROES,
@@ -4706,17 +4688,21 @@ fn genStakes(
                 slot,
             );
         }
-        _ = try sig.bincode.writeToSlice(
-            account.data,
-            VoteStateVersions{ .current = vote_state },
-            .{},
-        );
+
+        const rc = try allocator.create(sig.sync.ReferenceCounter);
+        errdefer allocator.destroy(rc);
+        rc.* = .init;
+
         try map.put(
             allocator,
             Pubkey.initRandom(random),
-            StakeAndVoteAccount{
+            .{
                 .stake = lamports,
-                .account = VoteAccount{ .account = account, .state = vote_state },
+                .account = .{
+                    .account = .{ .lamports = lamports },
+                    .state = vote_state,
+                    .rc = rc,
+                },
             },
         );
     }

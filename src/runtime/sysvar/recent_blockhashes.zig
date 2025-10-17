@@ -14,7 +14,9 @@ const Pubkey = sig.core.Pubkey;
 /// The first entry holds the most recent blockhash.
 /// [agave] https://github.com/anza-xyz/agave/blob/8db563d3bba4d03edf0eb2737fba87f394c32b64/sdk/sysvar/src/recent_blockhashes.rs#L99
 pub const RecentBlockhashes = struct {
-    entries: *std.BoundedArray(Entry, MAX_ENTRIES),
+    entries: std.BoundedArray(Entry, MAX_ENTRIES),
+
+    pub const DEFAULT: RecentBlockhashes = .{ .entries = .{} };
 
     pub const Entry = extern struct {
         blockhash: Hash,
@@ -26,16 +28,6 @@ pub const RecentBlockhashes = struct {
     pub const MAX_ENTRIES: u64 = 150;
 
     pub const STORAGE_SIZE: u64 = 6_008;
-
-    pub fn init(allocator: Allocator) Allocator.Error!RecentBlockhashes {
-        const entries = try allocator.create(std.BoundedArray(Entry, MAX_ENTRIES));
-        entries.* = std.BoundedArray(Entry, MAX_ENTRIES){};
-        return .{ .entries = entries };
-    }
-
-    pub fn deinit(self: RecentBlockhashes, allocator: Allocator) void {
-        allocator.destroy(self.entries);
-    }
 
     pub fn isEmpty(self: RecentBlockhashes) bool {
         return self.entries.len == 0;
@@ -74,32 +66,27 @@ pub const RecentBlockhashes = struct {
                 },
             });
         }
-
         std.sort.heap(IndexAndEntry, entries.items, {}, IndexAndEntry.compareFn);
 
-        var self = try RecentBlockhashes.init(allocator);
-        errdefer self.deinit(allocator);
-
+        var self: RecentBlockhashes = .DEFAULT;
         const num_entries = @min(entries.items.len, MAX_ENTRIES);
         for (entries.items[0..num_entries]) |entry| self.entries.appendAssumeCapacity(entry.entry);
-
         return self;
     }
 
-    pub fn initWithEntries(
-        allocator: Allocator,
-        entries: []const Entry,
-    ) Allocator.Error!RecentBlockhashes {
+    pub fn initWithEntries(entries: []const Entry) Allocator.Error!RecentBlockhashes {
         if (!builtin.is_test) @compileError("only for tests");
         std.debug.assert(entries.len <= MAX_ENTRIES);
-        var self = try RecentBlockhashes.init(allocator);
+
+        var self: RecentBlockhashes = .DEFAULT;
         self.entries.appendSliceAssumeCapacity(entries);
         return self;
     }
 
-    pub fn initRandom(allocator: Allocator, random: std.Random) Allocator.Error!RecentBlockhashes {
+    pub fn initRandom(random: std.Random) RecentBlockhashes {
         if (!builtin.is_test) @compileError("only for tests");
-        var self = try RecentBlockhashes.init(allocator);
+
+        var self: RecentBlockhashes = .DEFAULT;
         for (0..random.intRangeAtMost(u64, 1, MAX_ENTRIES)) |_| {
             self.entries.appendAssumeCapacity(.{
                 .blockhash = Hash.initRandom(random),
@@ -118,7 +105,6 @@ test "from blockhash queue" {
     defer queue.deinit(allocator);
 
     const recent_blockhashes = try RecentBlockhashes.fromBlockhashQueue(allocator, &queue);
-    defer recent_blockhashes.deinit(allocator);
 
     for (recent_blockhashes.entries.constSlice(), 0..) |entry, i| {
         const info = queue.hash_infos.get(entry.blockhash) orelse unreachable;
@@ -134,17 +120,14 @@ test "serialize and deserialize" {
     const random = prng.random();
 
     {
-        var blockhashes = try RecentBlockhashes.initRandom(allocator, random);
-        defer blockhashes.deinit(allocator);
+        var blockhashes = RecentBlockhashes.initRandom(random);
 
         const serialized = try bincode.writeAlloc(allocator, blockhashes, .{});
         defer allocator.free(serialized);
 
         const deserialized =
             try bincode.readFromSlice(allocator, RecentBlockhashes, serialized, .{});
-        defer deserialized.deinit(allocator);
 
-        try std.testing.expectEqual(RecentBlockhashes.MAX_ENTRIES, deserialized.entries.capacity());
         try std.testing.expectEqualSlices(
             RecentBlockhashes.Entry,
             blockhashes.entries.constSlice(),
@@ -153,8 +136,7 @@ test "serialize and deserialize" {
     }
 
     {
-        var blockhashes = try RecentBlockhashes.init(allocator);
-        defer blockhashes.deinit(allocator);
+        var blockhashes: RecentBlockhashes = .DEFAULT;
         blockhashes.entries.appendAssumeCapacity(.{
             .blockhash = Hash.initRandom(random),
             .lamports_per_signature = random.int(u64),
@@ -169,9 +151,7 @@ test "serialize and deserialize" {
             serialized,
             .{},
         );
-        defer deserialized.deinit(allocator);
 
-        try std.testing.expectEqual(RecentBlockhashes.MAX_ENTRIES, deserialized.entries.capacity());
         try std.testing.expectEqualSlices(
             RecentBlockhashes.Entry,
             blockhashes.entries.constSlice(),

@@ -1106,7 +1106,7 @@ pub fn cloneMapAndValues(allocator: Allocator, map: anytype) Allocator.Error!@Ty
 
 pub fn deinitMapAndValues(allocator: Allocator, const_map: anytype) void {
     var map = const_map;
-    for (map.values()) |value| value.deinit(allocator);
+    for (map.values()) |*value| value.deinit(allocator);
     (&map).deinit(allocator);
 }
 

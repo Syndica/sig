@@ -78,8 +78,8 @@ pub fn parallelUntarToFileSystem(
         if (!pool.joinForDeinit(.fromSecs(1))) logger.warn().log("failed to join for deinit");
         pool.deinit(allocator);
     }
-    var timer = try sig.time.Timer.start();
-    var progress_timer = try sig.time.Timer.start();
+    var timer = sig.time.Timer.start();
+    var progress_timer = sig.time.Timer.start();
     var file_count: usize = 0;
     const strip_components: u32 = 0;
     loop: while (true) {
