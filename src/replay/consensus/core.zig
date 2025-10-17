@@ -61,7 +61,6 @@ const check_slot_agrees_with_cluster =
 
 const MAX_VOTE_REFRESH_INTERVAL_MILLIS: usize = 5000;
 
-
 /// TowerConsensus contains all the state needed for operating the Tower BFT
 /// consensus mechanism in sig.
 pub const TowerConsensus = struct {
