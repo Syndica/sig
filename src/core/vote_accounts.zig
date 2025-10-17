@@ -8,6 +8,7 @@ const Allocator = std.mem.Allocator;
 const bincode = sig.bincode;
 const vote_program = sig.runtime.program.vote;
 
+const Epoch = sig.core.Epoch;
 const Pubkey = sig.core.Pubkey;
 const CalculateStakeContext = sig.core.stake.CaclulateStakeContext;
 
@@ -395,7 +396,7 @@ pub const VoteAccount = struct {
             .initRandom(random),
             random.int(u8),
             random.intRangeAtMost(u64, 1, 1_000_000),
-            .initRandom(random),
+            random.int(Epoch),
         );
         defer account.deinit(allocator);
 
@@ -417,7 +418,7 @@ pub fn createVoteAccount(
     authorized_withdrawer: Pubkey,
     commission: u8,
     lamports: u64,
-    clock: ?Clock,
+    voter_epoch: ?Epoch,
 ) Allocator.Error!AccountSharedData {
     // TODO: Uncomment once not required by bank init random
     // if (!builtin.is_test) @compileError("only for testing");
@@ -437,7 +438,7 @@ pub fn createVoteAccount(
         authorized_voter,
         authorized_withdrawer,
         commission,
-        clock orelse Clock.DEFAULT,
+        voter_epoch orelse 0,
     );
     defer vote_state.deinit(allocator);
 
@@ -467,7 +468,7 @@ pub fn createRandomVoteAccount(
         Pubkey.initRandom(random),
         random.int(u8),
         random.intRangeAtMost(u64, 1, 1_000_000),
-        Clock.initRandom(random),
+        random.int(Epoch),
     );
     defer account.deinit(allocator);
 
