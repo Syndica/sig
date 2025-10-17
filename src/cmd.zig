@@ -1969,6 +1969,8 @@ fn replayDependencies(
         .logger = .from(app_base.logger),
         .my_identity = .fromPublicKey(&app_base.my_keypair.public_key),
         .vote_identity = .fromPublicKey(&app_base.my_keypair.public_key),
+        .node_keypair = app_base.my_keypair, // TODO deduplicate this with my_identity
+        .authorized_voter_keypairs = &.{}, // TODO: Pass actual authorized voter keypairs
         .exit = app_base.exit,
         .account_store = account_store,
         .ledger = ledger,

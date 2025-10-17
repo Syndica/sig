@@ -6,6 +6,9 @@ const tracy = @import("tracy");
 const Allocator = std.mem.Allocator;
 const AtomicBool = std.atomic.Value(bool);
 
+const vote_program = sig.runtime.program.vote;
+const vote_instruction = vote_program.vote_instruction;
+
 pub const Logger = sig.trace.Logger("consensus");
 
 const Channel = sig.sync.Channel;
@@ -35,6 +38,7 @@ const LatestValidatorVotes = sig.consensus.latest_validator_votes.LatestValidato
 const ParsedVote = sig.consensus.vote_listener.vote_parser.ParsedVote;
 const ProgressMap = sig.consensus.progress_map.ProgressMap;
 const ReplayTower = sig.consensus.replay_tower.ReplayTower;
+const SwitchForkDecision = sig.consensus.replay_tower.SwitchForkDecision;
 const ThresholdConfirmedSlot = sig.consensus.vote_listener.ThresholdConfirmedSlot;
 const VerifiedVote = sig.consensus.vote_listener.VerifiedVote;
 const VoteListener = sig.consensus.vote_listener.VoteListener;
@@ -57,11 +61,25 @@ const check_slot_agrees_with_cluster =
 
 const MAX_VOTE_REFRESH_INTERVAL_MILLIS: usize = 5000;
 
+pub const VoteOp = union(enum) {
+    push_vote: struct {
+        tx: Transaction,
+        tower_slots: []Slot,
+    },
+    refresh_vote: struct {
+        tx: Transaction,
+        last_voted_slot: Slot,
+    },
+};
+
 /// TowerConsensus contains all the state needed for operating the Tower BFT
 /// consensus mechanism in sig.
 pub const TowerConsensus = struct {
     logger: Logger,
     my_identity: Pubkey,
+    vote_account_pubkey: Pubkey,
+    node_keypair: ?sig.identity.KeyPair,
+    authorized_voter_keypairs: []const sig.identity.KeyPair,
 
     // Core consensus state
     fork_choice: HeaviestSubtreeForkChoice,
@@ -81,6 +99,9 @@ pub const TowerConsensus = struct {
     senders: Senders,
     receivers: Receivers,
     verified_vote_channel: *Channel(VerifiedVote),
+
+    // Sending votes
+    gossip_table: ?*sig.sync.RwMux(sig.gossip.GossipTable),
 
     // Supporting services
     vote_listener: ?VoteListener,
@@ -103,6 +124,8 @@ pub const TowerConsensus = struct {
         vote_identity: Pubkey,
         root_slot: Slot,
         root_hash: Hash,
+        node_keypair: ?sig.identity.KeyPair,
+        authorized_voter_keypairs: []const sig.identity.KeyPair,
 
         // Data sources
         account_reader: AccountReader,
@@ -260,10 +283,14 @@ pub const TowerConsensus = struct {
             .arena_state = .{},
             .logger = deps.logger,
             .my_identity = deps.my_identity,
+            .vote_account_pubkey = deps.vote_identity,
+            .node_keypair = deps.node_keypair,
+            .authorized_voter_keypairs = deps.authorized_voter_keypairs,
             .account_reader = deps.account_reader,
             .ledger = deps.ledger,
             .senders = deps.external.senders,
             .receivers = deps.external.receivers,
+            .gossip_table = deps.external.gossip_table,
             .vote_listener = vote_listener,
             .verified_vote_channel = verified_vote_channel,
         };
@@ -595,9 +622,16 @@ pub const TowerConsensus = struct {
                 voted.slot,
                 voted_hash,
                 slot_tracker,
+                epoch_tracker,
                 &self.replay_tower,
                 progress_map,
                 &self.fork_choice,
+                account_reader,
+                self.node_keypair,
+                self.authorized_voter_keypairs,
+                self.vote_account_pubkey,
+                voted.decision,
+                self.gossip_table,
             );
         }
 
@@ -803,7 +837,7 @@ pub const GenerateVoteTxResult = union(enum) {
     // until set identity is invoked
     hot_spare,
     // failed generation, eligible for refresh
-    fails,
+    failed,
     // TODO add Transaction
     tx: Transaction,
 };
@@ -818,9 +852,16 @@ fn handleVotableBank(
     vote_slot: Slot,
     vote_hash: Hash,
     slot_tracker: *SlotTracker,
+    epoch_tracker: *const EpochTracker,
     replay_tower: *ReplayTower,
     progress: *ProgressMap,
     fork_choice: *ForkChoice,
+    account_reader: AccountReader,
+    node_keypair: ?sig.identity.KeyPair,
+    authorized_voter_keypairs: []const sig.identity.KeyPair,
+    vote_account_pubkey: Pubkey,
+    switch_fork_decision: SwitchForkDecision,
+    gossip_table_rw: ?*sig.sync.RwMux(sig.gossip.GossipTable),
 ) !void {
     const maybe_new_root = try replay_tower.recordBankVote(
         allocator,
@@ -844,7 +885,16 @@ fn handleVotableBank(
     // TODO update_commitment_cache
 
     try pushVote(
+        allocator,
         replay_tower,
+        slot_tracker,
+        epoch_tracker,
+        account_reader,
+        node_keypair,
+        authorized_voter_keypairs,
+        vote_account_pubkey,
+        switch_fork_decision,
+        gossip_table_rw,
     );
 }
 
@@ -852,22 +902,52 @@ fn handleVotableBank(
 ///
 /// - Generates a new vote transaction.
 /// - Updates the tower's last vote blockhash.
-/// - Creates a saved tower state.
 /// - Sends the vote operation to the voting sender.
 ///
 /// Analogous to [push_vote](https://github.com/anza-xyz/agave/blob/ccdcdbe9b6ff7dbd583d2101fe57b7cc41a6f863/core/src/replay_stage.rs#L2775)
 fn pushVote(
+    allocator: std.mem.Allocator,
     replay_tower: *ReplayTower,
+    slot_tracker: *SlotTracker,
+    epoch_tracker: *const EpochTracker,
+    account_reader: AccountReader,
+    node_keypair: ?sig.identity.KeyPair,
+    authorized_voter_keypairs: []const sig.identity.KeyPair,
+    vote_account_pubkey: Pubkey,
+    switch_fork_decision: SwitchForkDecision,
+    gossip_table_rw: ?*sig.sync.RwMux(sig.gossip.GossipTable),
 ) !void {
-
-    // TODO Transaction generation to be implemented.
-    // Currently hardcoding to non voting transaction.
-    const vote_tx_result: GenerateVoteTxResult = .non_voting;
+    const vote_tx_result = try generateVoteTx(
+        allocator,
+        vote_account_pubkey,
+        authorized_voter_keypairs,
+        node_keypair,
+        switch_fork_decision,
+        replay_tower,
+        account_reader,
+        slot_tracker,
+        epoch_tracker,
+    );
 
     switch (vote_tx_result) {
         .tx => |vote_tx| {
-            _ = vote_tx;
-            // TODO to be implemented
+            // Update the tower's last vote blockhash
+            replay_tower.refreshLastVoteTxBlockhash(vote_tx.msg.recent_blockhash);
+
+            // Get tower slots for tracking
+            const tower_slots = try replay_tower.tower.towerSlots(allocator);
+            errdefer allocator.free(tower_slots);
+
+            try sendVote(
+                .{
+                    .push_vote = .{
+                        .tower_slots = tower_slots,
+                        .tx = vote_tx,
+                    },
+                },
+                gossip_table_rw,
+                node_keypair,
+            );
         },
         .non_voting => {
             replay_tower.markLastVoteTxBlockhashNonVoting();
@@ -878,6 +958,268 @@ fn pushVote(
     }
 }
 
+fn sendVote(
+    vote_op: VoteOp,
+    gossip_table_rw: ?*sig.sync.RwMux(sig.gossip.GossipTable),
+    my_keypair: ?sig.identity.KeyPair,
+) !void {
+    if (gossip_table_rw) |table| {
+        const gossip_table, var gossip_table_lock = table.writeWithLock();
+        defer gossip_table_lock.unlock();
+
+        const now = sig.time.getWallclockMs();
+
+        if (my_keypair) |keypair| {
+            const my_pubkey = Pubkey.fromPublicKey(&keypair.public_key);
+
+            switch (vote_op) {
+                .push_vote => |push_vote_data| {
+                    const vote_data = sig.gossip.data.GossipData{
+                        .Vote = .{
+                            0, // tag
+                            .{
+                                .from = my_pubkey,
+                                .transaction = push_vote_data.tx,
+                                .wallclock = now,
+                                .slot = 0, // will be set from transaction
+                            },
+                        },
+                    };
+
+                    const signed_vote_data = sig.gossip.data.SignedGossipData.initSigned(
+                        &keypair,
+                        vote_data,
+                    );
+                    _ = try gossip_table.insert(signed_vote_data, now);
+                },
+                .refresh_vote => |refresh_vote_data| {
+                    const vote_data = sig.gossip.data.GossipData{
+                        .Vote = .{
+                            0, // tag
+                            .{
+                                .from = my_pubkey,
+                                .transaction = refresh_vote_data.tx,
+                                .wallclock = now,
+                                .slot = refresh_vote_data.last_voted_slot,
+                            },
+                        },
+                    };
+
+                    const signed_vote_data = sig.gossip.data.SignedGossipData.initSigned(
+                        &keypair,
+                        vote_data,
+                    );
+                    _ = try gossip_table.insert(signed_vote_data, now);
+                },
+            }
+        }
+    }
+}
+
+/// Generates a vote transaction
+///
+/// TODO Investigate newly added &mut tracked_vote_transactions parameter in Agave
+/// Also the existing wait_to_vote_slot parameter
+///
+/// Analogous to [generate_vote_tx](https://github.com/anza-xyz/agave/blob/8e696b9a6ec1dc84a9add834f25325b9e39cbcb4/core/src/replay_stage.rs#L2561)
+fn generateVoteTx(
+    allocator: std.mem.Allocator,
+    vote_account_pubkey: Pubkey,
+    authorized_voter_keypairs: []const sig.identity.KeyPair,
+    node_keypair: ?sig.identity.KeyPair,
+    switch_fork_decision: SwitchForkDecision,
+    replay_tower: *ReplayTower,
+    account_reader: AccountReader,
+    slot_tracker: *const SlotTracker,
+    epoch_tracker: *const EpochTracker,
+) !GenerateVoteTxResult {
+    if (authorized_voter_keypairs.len == 0) {
+        return .non_voting;
+    }
+
+    const node_kp = node_keypair orelse return .non_voting;
+
+    const last_voted_slot = replay_tower.lastVotedSlot() orelse return .failed;
+
+    const slot_info = slot_tracker.get(last_voted_slot) orelse return .failed;
+
+    const vote_account_result = account_reader.forSlot(&slot_info.constants.ancestors)
+        .get(allocator, vote_account_pubkey) catch return .failed;
+    const vote_account = vote_account_result orelse {
+        return .failed;
+    };
+    defer vote_account.deinit(allocator);
+
+    const vote_account_data = vote_account.data.readAllAllocate(allocator) catch return .failed;
+    defer allocator.free(vote_account_data);
+
+    const vote_state_versions = sig.bincode.readFromSlice(
+        allocator,
+        sig.runtime.program.vote.state.VoteStateVersions,
+        vote_account_data,
+        .{},
+    ) catch return .failed;
+    defer sig.bincode.free(allocator, vote_state_versions);
+
+    var vote_state = vote_state_versions.convertToCurrent(allocator) catch return .failed;
+    defer vote_state.deinit();
+
+    const node_pubkey = Pubkey.fromPublicKey(&node_kp.public_key);
+    if (!vote_state.node_pubkey.equals(&node_pubkey)) {
+        return .hot_spare;
+    }
+
+    const current_epoch = epoch_tracker.schedule.getEpoch(last_voted_slot);
+
+    const authorized_voter_pubkey = vote_state.voters.getAuthorizedVoter(current_epoch) orelse {
+        return .failed;
+    };
+
+    const auth_voter_kp = blk: {
+        for (authorized_voter_keypairs) |voter_keypair| {
+            const pubkey = Pubkey.fromPublicKey(&voter_keypair.public_key);
+            if (pubkey.equals(&authorized_voter_pubkey)) {
+                break :blk voter_keypair;
+            }
+        }
+        return .non_voting;
+    };
+
+    // Send our last few votes along with the new one
+    // Compact the vote state update before sending
+    const vote = switch (replay_tower.last_vote) {
+        .vote_state_update => |vsu| sig.consensus.vote_transaction.VoteTransaction{
+            .compact_vote_state_update = vsu,
+        },
+        else => replay_tower.last_vote,
+    };
+
+    const maybe_switch_proof_hash: ?Hash = switch (switch_fork_decision) {
+        .switch_proof => |hash| hash,
+        .same_fork => null,
+        else => return .failed,
+    };
+
+    const vote_ix = try createVoteInstruction(
+        allocator,
+        vote,
+        vote_account_pubkey,
+        authorized_voter_pubkey,
+        maybe_switch_proof_hash,
+    );
+    defer vote_ix.deinit(allocator);
+
+    const blockhash = slot_info.state.hash.readCopy() orelse return .failed;
+
+    const vote_tx_msg = try sig.core.transaction.Message.initCompile(
+        allocator,
+        &.{vote_ix},
+        Pubkey.fromPublicKey(&node_kp.public_key),
+        blockhash,
+        null,
+    );
+    errdefer vote_tx_msg.deinit(allocator);
+
+    const vote_tx = try Transaction.initOwnedMessageWithSigningKeypairs(
+        allocator,
+        .legacy,
+        vote_tx_msg,
+        &.{ node_kp, auth_voter_kp },
+    );
+
+    return GenerateVoteTxResult{ .tx = vote_tx };
+}
+
+fn createVoteInstruction(
+    allocator: std.mem.Allocator,
+    vote: sig.consensus.vote_transaction.VoteTransaction,
+    vote_pubkey: Pubkey,
+    authorized_voter_pubkey: Pubkey,
+    maybe_switch_proof_hash: ?Hash,
+) !sig.core.Instruction {
+    return switch (vote) {
+        .vote => |v| {
+            if (maybe_switch_proof_hash) |switch_hash| {
+                return try vote_instruction.createVoteSwitch(
+                    allocator,
+                    vote_pubkey,
+                    authorized_voter_pubkey,
+                    .{
+                        .vote = v,
+                        .hash = switch_hash,
+                    },
+                );
+            } else {
+                return try vote_instruction.createVote(
+                    allocator,
+                    vote_pubkey,
+                    authorized_voter_pubkey,
+                    .{ .vote = v },
+                );
+            }
+        },
+        .vote_state_update => |vsu| {
+            if (maybe_switch_proof_hash) |switch_hash| {
+                return try vote_instruction.createUpdateVoteStateSwitch(
+                    allocator,
+                    vote_pubkey,
+                    authorized_voter_pubkey,
+                    .{
+                        .vote_state_update = vsu,
+                        .hash = switch_hash,
+                    },
+                );
+            } else {
+                return try vote_instruction.createUpdateVoteState(
+                    allocator,
+                    vote_pubkey,
+                    authorized_voter_pubkey,
+                    .{ .vote_state_update = vsu },
+                );
+            }
+        },
+        .compact_vote_state_update => |vsu| {
+            if (maybe_switch_proof_hash) |switch_hash| {
+                return try vote_instruction.createCompactUpdateVoteStateSwitch(
+                    allocator,
+                    vote_pubkey,
+                    authorized_voter_pubkey,
+                    .{
+                        .vote_state_update = vsu,
+                        .hash = switch_hash,
+                    },
+                );
+            } else {
+                return try vote_instruction.createCompactUpdateVoteState(
+                    allocator,
+                    vote_pubkey,
+                    authorized_voter_pubkey,
+                    .{ .vote_state_update = vsu },
+                );
+            }
+        },
+        .tower_sync => |ts| {
+            if (maybe_switch_proof_hash) |switch_hash| {
+                return try vote_instruction.createTowerSyncSwitch(
+                    allocator,
+                    vote_pubkey,
+                    authorized_voter_pubkey,
+                    .{
+                        .tower_sync = ts,
+                        .hash = switch_hash,
+                    },
+                );
+            } else {
+                return try vote_instruction.createTowerSync(
+                    allocator,
+                    vote_pubkey,
+                    authorized_voter_pubkey,
+                    .{ .tower_sync = ts },
+                );
+            }
+        },
+    };
+}
 /// Processes a new root slot by updating various system components to reflect the new root.
 ///
 /// - Validates the new root exists and has a hash.
