@@ -60,8 +60,8 @@ pub const Service = struct {
                 .ledger = deps.ledger,
                 .exit = deps.exit,
                 .replay_votes_channel = state.replay_votes_channel,
-                .slot_tracker_rw = &state.slot_tracker,
-                .epoch_tracker_rw = &state.epoch_tracker,
+                .slot_tracker_rw = state.slot_tracker,
+                .epoch_tracker_rw = state.epoch_tracker,
                 .external = consensus_deps,
             };
 
@@ -97,8 +97,8 @@ pub const Service = struct {
             self.replay.logger,
             self.replay.account_store,
             self.replay.ledger,
-            &self.replay.slot_tracker,
-            &self.replay.epoch_tracker,
+            self.replay.slot_tracker,
+            self.replay.epoch_tracker,
             &self.replay.slot_tree,
             self.replay.slot_leaders,
             &self.replay.hard_forks,
@@ -116,8 +116,8 @@ pub const Service = struct {
         if (self.consensus) |*consensus|
             try consensus.process(
                 allocator,
-                &self.replay.slot_tracker,
-                &self.replay.epoch_tracker,
+                self.replay.slot_tracker,
+                self.replay.epoch_tracker,
                 &self.replay.progress_map,
                 slot_results,
             )
@@ -203,9 +203,9 @@ pub const ReplayState = struct {
     /// Borrowed across multiple threads (replay, vote_listener).
     /// These RwMuxes are deinitialized in `ReplayState.deinit()` only
     /// after all dependent threads have been joined based on defer order in `run`.
-    slot_tracker: RwMux(SlotTracker),
+    slot_tracker: *RwMux(SlotTracker),
     /// Lifetime rules are the same as `slot_tracker`.
-    epoch_tracker: RwMux(EpochTracker),
+    epoch_tracker: *RwMux(EpochTracker),
     slot_tree: SlotTree,
     hard_forks: sig.core.HardForks,
     account_store: AccountStore,
@@ -222,10 +222,16 @@ pub const ReplayState = struct {
         var slots = self.slot_tracker.tryRead() orelse
             @panic("Slot tracker deinit while in use");
         slots.get().deinit(self.allocator);
+        slots.unlock();
+
+        self.allocator.destroy(self.slot_tracker);
 
         var epoch_tracker = self.epoch_tracker.tryRead() orelse
             @panic("Epoch tracker deinit while in use");
         epoch_tracker.get().deinit(self.allocator);
+        epoch_tracker.unlock();
+
+        self.allocator.destroy(self.epoch_tracker);
 
         self.progress_map.deinit(self.allocator);
         self.replay_votes_channel.destroy();
@@ -268,14 +274,22 @@ pub const ReplayState = struct {
         const slot_tree = try SlotTree.init(deps.allocator, deps.root.slot);
         errdefer slot_tree.deinit(deps.allocator);
 
+        const slot_tracker_rw = try deps.allocator.create(RwMux(SlotTracker));
+        errdefer deps.allocator.destroy(slot_tracker_rw);
+        slot_tracker_rw.* = RwMux(SlotTracker).init(slot_tracker);
+
+        const epoch_tracker_rw = try deps.allocator.create(RwMux(EpochTracker));
+        errdefer deps.allocator.destroy(epoch_tracker_rw);
+        epoch_tracker_rw.* = RwMux(EpochTracker).init(epoch_tracker);
+
         return .{
             .allocator = deps.allocator,
             .logger = .from(deps.logger),
             .thread_pool = .init(.{ .max_threads = num_threads }),
             .my_identity = deps.my_identity,
             .slot_leaders = deps.slot_leaders,
-            .slot_tracker = .init(slot_tracker),
-            .epoch_tracker = .init(epoch_tracker),
+            .slot_tracker = slot_tracker_rw,
+            .epoch_tracker = epoch_tracker_rw,
             .slot_tree = slot_tree,
             .hard_forks = deps.hard_forks.take(),
             .account_store = deps.account_store,
@@ -865,11 +879,32 @@ test "process runs without error with no replay results" {
     // coverage. currently consensus panics or hangs if you run it with actual data
     _ = try service.consensus.?.process(
         allocator,
-        &service.replay.slot_tracker,
-        &service.replay.epoch_tracker,
+        service.replay.slot_tracker,
+        service.replay.epoch_tracker,
         &service.replay.progress_map,
         &.{},
     );
+
+    dep_stubs.exit.store(true, .monotonic);
+}
+
+test "advance calls consensus.process with empty replay results" {
+    const allocator = std.testing.allocator;
+
+    var dep_stubs = try DependencyStubs.init(allocator, .FOR_TESTS);
+    defer dep_stubs.deinit(allocator);
+
+    var service = try dep_stubs.stubbedService(allocator, .FOR_TESTS, false);
+    defer service.deinit(allocator);
+
+    try service.advance();
+
+    // No slots were replayed
+    {
+        const slot_tracker, var lg = service.replay.slot_tracker.readWithLock();
+        defer lg.unlock();
+        try std.testing.expectEqual(0, slot_tracker.root);
+    }
 
     dep_stubs.exit.store(true, .monotonic);
 }
