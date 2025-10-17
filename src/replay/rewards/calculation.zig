@@ -314,6 +314,7 @@ test calculateRewardPointsPartitioned {
     const random = prng.random();
 
     const slot = 32;
+    const epoch = 1;
 
     { // Empty returns null point value
         var stakes = Stakes(.stake).EMPTY;
@@ -344,10 +345,6 @@ test calculateRewardPointsPartitioned {
 
     // Non-empty returns point value
 
-    var clock = sig.runtime.sysvar.Clock.DEFAULT;
-    clock.slot = slot;
-    clock.epoch = 2;
-
     var vote_accounts = VoteAccounts{};
     defer vote_accounts.deinit(allocator);
 
@@ -368,7 +365,7 @@ test calculateRewardPointsPartitioned {
             Pubkey.initRandom(random),
             Pubkey.initRandom(random),
             10,
-            clock,
+            epoch,
         ),
         .rc = rc,
     };

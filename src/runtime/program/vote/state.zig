@@ -12,7 +12,6 @@ const Pubkey = sig.core.Pubkey;
 const Hash = sig.core.hash.Hash;
 const SortedMap = sig.utils.collections.SortedMapUnmanaged;
 
-const Clock = sig.runtime.sysvar.Clock;
 const SlotHashes = sig.runtime.sysvar.SlotHashes;
 
 pub const MAX_PRIOR_VOTERS: usize = 32;
@@ -744,12 +743,12 @@ pub const VoteState0_23_5 = struct {
         authorized_voter: Pubkey,
         withdrawer: Pubkey,
         commission: u8,
-        clock: Clock,
+        voter_epoch: Epoch,
     ) !VoteState0_23_5 {
         return .{
             .node_pubkey = node_pubkey,
             .voter = authorized_voter,
-            .voter_epoch = clock.epoch,
+            .voter_epoch = voter_epoch,
             .prior_voters = CircBufV0.init(),
             .withdrawer = withdrawer,
             .commission = commission,
@@ -812,11 +811,11 @@ pub const VoteState1_14_11 = struct {
         authorized_voter: Pubkey,
         withdrawer: Pubkey,
         commission: u8,
-        clock: Clock,
+        voter_epoch: Epoch,
     ) !VoteState1_14_11 {
         const authorized_voters = try AuthorizedVoters.init(
             allocator,
-            clock.epoch,
+            voter_epoch,
             authorized_voter,
         );
         errdefer authorized_voters.deinit(allocator);
@@ -903,11 +902,11 @@ pub const VoteState = struct {
         authorized_voter: Pubkey,
         withdrawer: Pubkey,
         commission: u8,
-        clock: Clock,
+        voter_epoch: Epoch,
     ) std.mem.Allocator.Error!VoteState {
         const authorized_voters = try AuthorizedVoters.init(
             allocator,
-            clock.epoch,
+            voter_epoch,
             authorized_voter,
         );
         errdefer authorized_voters.deinit(allocator);
@@ -2015,30 +2014,6 @@ pub fn createTestVoteState(
     };
 }
 
-pub fn verifyAndGetVoteState(
-    allocator: std.mem.Allocator,
-    ic: *sig.runtime.InstructionContext,
-    vote_account: *sig.runtime.BorrowedAccount,
-    clock: *const Clock,
-) (error{OutOfMemory} || InstructionError)!VoteState {
-    const versioned_state = try vote_account.deserializeFromAccountData(
-        allocator,
-        VoteStateVersions,
-    );
-
-    if (!versioned_state.isUninitialized()) {
-        return (InstructionError.UninitializedAccount);
-    }
-    var vote_state = try versioned_state.convertToCurrent(allocator);
-
-    const authorized_voter = try vote_state.getAndUpdateAuthorizedVoter(allocator, clock.epoch);
-    if (!ic.ixn_info.isPubkeySigner(authorized_voter)) {
-        return InstructionError.MissingRequiredSignature;
-    }
-
-    return vote_state;
-}
-
 test "AuthorizeVoters.serialize" {
     const allocator = std.testing.allocator;
 
@@ -2207,13 +2182,7 @@ test "state.VoteState.convertToCurrent" {
             Pubkey.ZEROES,
             Pubkey.ZEROES,
             10,
-            .{
-                .slot = 0,
-                .epoch_start_timestamp = 0,
-                .epoch = 0,
-                .leader_schedule_epoch = 0,
-                .unix_timestamp = 0,
-            },
+            0,
         ) };
         defer vote_state_0_23_5.deinit(allocator);
 
@@ -2240,13 +2209,7 @@ test "state.VoteState.convertToCurrent" {
             Pubkey.ZEROES,
             Pubkey.ZEROES,
             10,
-            Clock{
-                .slot = 0,
-                .epoch_start_timestamp = 0,
-                .epoch = 0,
-                .leader_schedule_epoch = 0,
-                .unix_timestamp = 0,
-            },
+            0,
         ) };
         defer vote_state_1_14_1.deinit(allocator);
 
@@ -2274,13 +2237,7 @@ test "state.VoteState.convertToCurrent" {
             Pubkey.ZEROES,
             Pubkey.ZEROES,
             10,
-            Clock{
-                .slot = 0,
-                .epoch_start_timestamp = 0,
-                .epoch = 0,
-                .leader_schedule_epoch = 0,
-                .unix_timestamp = 0,
-            },
+            0,
         );
         defer expected.deinit(allocator);
 
@@ -2330,14 +2287,7 @@ test "state.VoteState.setNewAuthorizedVoter: success" {
     const new_voter = Pubkey.initRandom(prng.random());
     const withdrawer = Pubkey.initRandom(prng.random());
     const commission: u8 = 10;
-
-    const clock = Clock{
-        .slot = 0,
-        .epoch_start_timestamp = 0,
-        .epoch = 0,
-        .leader_schedule_epoch = 0,
-        .unix_timestamp = 0,
-    };
+    const epoch = 0;
 
     var vote_state = try VoteState.init(
         allocator,
@@ -2345,7 +2295,7 @@ test "state.VoteState.setNewAuthorizedVoter: success" {
         authorized_voter,
         withdrawer,
         commission,
-        clock,
+        epoch,
     );
     defer vote_state.deinit(allocator);
 
@@ -2364,14 +2314,7 @@ test "state.VoteState.setNewAuthorizedVoter: too soon to reauthorize" {
     const new_voter = Pubkey.initRandom(prng.random());
     const withdrawer = Pubkey.initRandom(prng.random());
     const commission: u8 = 10;
-
-    const clock = Clock{
-        .slot = 0,
-        .epoch_start_timestamp = 0,
-        .epoch = 0,
-        .leader_schedule_epoch = 0,
-        .unix_timestamp = 0,
-    };
+    const epoch = 0;
 
     var vote_state = try VoteState.init(
         allocator,
@@ -2379,7 +2322,7 @@ test "state.VoteState.setNewAuthorizedVoter: too soon to reauthorize" {
         authorized_voter,
         withdrawer,
         commission,
-        clock,
+        epoch,
     );
     defer vote_state.deinit(allocator);
 
@@ -2401,14 +2344,7 @@ test "state.VoteState.setNewAuthorizedVoter: invalid account data" {
     const new_voter = Pubkey.initRandom(prng.random());
     const withdrawer = Pubkey.initRandom(prng.random());
     const commission: u8 = 10;
-
-    const clock = Clock{
-        .slot = 0,
-        .epoch_start_timestamp = 0,
-        .epoch = 2, // epoch of current authorized voter
-        .leader_schedule_epoch = 1,
-        .unix_timestamp = 0,
-    };
+    const epoch = 2; // epoch of current authorized voter
 
     var vote_state = try VoteState.init(
         allocator,
@@ -2416,7 +2352,7 @@ test "state.VoteState.setNewAuthorizedVoter: invalid account data" {
         authorized_voter,
         withdrawer,
         commission,
-        clock,
+        epoch,
     );
     defer vote_state.deinit(allocator);
 
@@ -2435,21 +2371,14 @@ test "state.VoteState.isUninitialized: VoteState0_23_5 invalid account data" {
     const authorized_voter = Pubkey.initRandom(prng.random());
     const withdrawer = Pubkey.initRandom(prng.random());
     const commission: u8 = 10;
-
-    const clock = Clock{
-        .slot = 0,
-        .epoch_start_timestamp = 0,
-        .epoch = 2, // epoch of current authorized voter
-        .leader_schedule_epoch = 1,
-        .unix_timestamp = 0,
-    };
+    const epoch = 2; // epoch of current authorized voter
 
     var vote_state = VoteStateVersions{ .v0_23_5 = try VoteState0_23_5.init(
         node_publey,
         authorized_voter,
         withdrawer,
         commission,
-        clock,
+        epoch,
     ) };
     defer vote_state.deinit(allocator);
 
@@ -2476,14 +2405,7 @@ test "state.VoteState.isUninitialized: VoteStatev1_14_11 invalid account data" {
     const authorized_voter = Pubkey.initRandom(prng.random());
     const withdrawer = Pubkey.initRandom(prng.random());
     const commission: u8 = 10;
-
-    const clock = Clock{
-        .slot = 0,
-        .epoch_start_timestamp = 0,
-        .epoch = 2, // epoch of current authorized voter
-        .leader_schedule_epoch = 1,
-        .unix_timestamp = 0,
-    };
+    const epoch = 2; // epoch of current authorized voter
 
     var vote_state = VoteStateVersions{ .v1_14_11 = try VoteState1_14_11.init(
         allocator,
@@ -2491,7 +2413,7 @@ test "state.VoteState.isUninitialized: VoteStatev1_14_11 invalid account data" {
         authorized_voter,
         withdrawer,
         commission,
-        clock,
+        epoch,
     ) };
     defer vote_state.deinit(allocator);
 
@@ -2518,14 +2440,7 @@ test "state.VoteState.isUninitialized: current invalid account data" {
     const authorized_voter = Pubkey.initRandom(prng.random());
     const withdrawer = Pubkey.initRandom(prng.random());
     const commission: u8 = 10;
-
-    const clock = Clock{
-        .slot = 0,
-        .epoch_start_timestamp = 0,
-        .epoch = 2, // epoch of current authorized voter
-        .leader_schedule_epoch = 1,
-        .unix_timestamp = 0,
-    };
+    const epoch = 2; // epoch of current authorized voter
 
     var vote_state = VoteStateVersions{ .current = try VoteState.init(
         allocator,
@@ -2533,7 +2448,7 @@ test "state.VoteState.isUninitialized: current invalid account data" {
         authorized_voter,
         withdrawer,
         commission,
-        clock,
+        epoch,
     ) };
     defer vote_state.deinit(allocator);
 
@@ -2678,14 +2593,7 @@ test "state.AuthorizedVoters.contains" {
 test "state.VoteState.lastLockout" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
-
-    const clock = Clock{
-        .slot = 0,
-        .epoch_start_timestamp = 0,
-        .epoch = 2,
-        .leader_schedule_epoch = 1,
-        .unix_timestamp = 0,
-    };
+    const epoch = 2; // epoch of current authorized voter
 
     var vote_state = try VoteState.init(
         allocator,
@@ -2693,7 +2601,7 @@ test "state.VoteState.lastLockout" {
         Pubkey.initRandom(prng.random()),
         Pubkey.initRandom(prng.random()),
         0,
-        clock,
+        epoch,
     );
     defer vote_state.deinit(allocator);
 
@@ -2735,14 +2643,7 @@ test "state.VoteState.lastLockout" {
 test "state.VoteState.lastVotedSlot" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
-
-    const clock = Clock{
-        .slot = 0,
-        .epoch_start_timestamp = 0,
-        .epoch = 2,
-        .leader_schedule_epoch = 1,
-        .unix_timestamp = 0,
-    };
+    const epoch = 2; // epoch of current authorized voter
 
     var vote_state = try VoteState.init(
         allocator,
@@ -2750,7 +2651,7 @@ test "state.VoteState.lastVotedSlot" {
         Pubkey.initRandom(prng.random()),
         Pubkey.initRandom(prng.random()),
         0,
-        clock,
+        epoch,
     );
     defer vote_state.deinit(allocator);
 
@@ -2785,14 +2686,7 @@ test "state.VoteState.lastVotedSlot" {
 test "state.VoteState.lastLockout extended" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
-
-    const clock = Clock{
-        .slot = 0,
-        .epoch_start_timestamp = 0,
-        .epoch = 2, // epoch of current authorized voter
-        .leader_schedule_epoch = 1,
-        .unix_timestamp = 0,
-    };
+    const epoch = 2; // epoch of current authorized voter
 
     var vote_state = try VoteState.init(
         allocator,
@@ -2800,7 +2694,7 @@ test "state.VoteState.lastLockout extended" {
         Pubkey.initRandom(prng.random()),
         Pubkey.initRandom(prng.random()),
         0,
-        clock,
+        epoch,
     );
     defer vote_state.deinit(allocator);
 
@@ -2828,15 +2722,13 @@ test "state.VoteState.lockout double lockout after expiration" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
-    const clock = Clock.DEFAULT;
-
     var vote_state = try VoteState.init(
         allocator,
         Pubkey.initRandom(prng.random()),
         Pubkey.initRandom(prng.random()),
         Pubkey.initRandom(prng.random()),
         0,
-        clock,
+        0,
     );
     defer vote_state.deinit(allocator);
 
@@ -2867,15 +2759,13 @@ test "state.VoteState.lockout expire multiple votes" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
-    const clock = Clock.DEFAULT;
-
     var vote_state = try VoteState.init(
         allocator,
         Pubkey.initRandom(prng.random()),
         Pubkey.initRandom(prng.random()),
         Pubkey.initRandom(prng.random()),
         0,
-        clock,
+        0,
     );
     defer vote_state.deinit(allocator);
 
@@ -2913,15 +2803,13 @@ test "state.VoteState.getCredits" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
-    const clock = Clock.DEFAULT;
-
     var vote_state = try VoteState.init(
         allocator,
         Pubkey.initRandom(prng.random()),
         Pubkey.initRandom(prng.random()),
         Pubkey.initRandom(prng.random()),
         0,
-        clock,
+        0,
     );
     defer vote_state.deinit(allocator);
 
@@ -2944,15 +2832,13 @@ test "state.VoteState duplicate vote" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
-    const clock = Clock.DEFAULT;
-
     var vote_state = try VoteState.init(
         allocator,
         Pubkey.initRandom(prng.random()),
         Pubkey.initRandom(prng.random()),
         Pubkey.initRandom(prng.random()),
         0,
-        clock,
+        0,
     );
     defer vote_state.deinit(allocator);
 
@@ -2970,15 +2856,13 @@ test "state.VoteState nth recent lockout" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
-    const clock = Clock.DEFAULT;
-
     var vote_state = try VoteState.init(
         allocator,
         Pubkey.initRandom(prng.random()),
         Pubkey.initRandom(prng.random()),
         Pubkey.initRandom(prng.random()),
         0,
-        clock,
+        0,
     );
     defer vote_state.deinit(allocator);
 
