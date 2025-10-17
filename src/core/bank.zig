@@ -19,7 +19,6 @@ const sig = @import("../sig.zig");
 const tracy = @import("tracy");
 
 const core = sig.core;
-const reserved_accounts = sig.core.reserved_accounts;
 
 const Allocator = std.mem.Allocator;
 const Atomic = std.atomic.Value;
@@ -103,6 +102,11 @@ pub const SlotConstants = struct {
     /// in the current slot.
     reserved_accounts: ReservedAccounts,
 
+    /// Inflation
+    /// NOTE: Agave keeps this in an RwLock in the Bank, but it should be constant across a slot,
+    /// so we keep it here.
+    inflation: Inflation,
+
     pub fn fromBankFields(
         allocator: Allocator,
         bank_fields: *const BankFields,
@@ -119,11 +123,12 @@ pub const SlotConstants = struct {
             .epoch_reward_status = .inactive,
             .ancestors = try bank_fields.ancestors.clone(allocator),
             .feature_set = feature_set,
-            .reserved_accounts = try reserved_accounts.initForSlot(
+            .reserved_accounts = try ReservedAccounts.initForSlot(
                 allocator,
                 &feature_set,
                 bank_fields.slot,
             ),
+            .inflation = bank_fields.inflation,
         };
     }
 
@@ -135,7 +140,7 @@ pub const SlotConstants = struct {
         try ancestors.ancestors.put(allocator, 0, {});
         errdefer ancestors.deinit(allocator);
 
-        const reserved_accounts_data = try reserved_accounts.init(allocator);
+        const reserved_accounts_data = try ReservedAccounts.init(allocator);
         errdefer reserved_accounts_data.deinit(allocator);
 
         return .{
@@ -150,6 +155,7 @@ pub const SlotConstants = struct {
             .ancestors = ancestors,
             .feature_set = .ALL_DISABLED,
             .reserved_accounts = reserved_accounts_data,
+            .inflation = .DEFAULT,
         };
     }
 

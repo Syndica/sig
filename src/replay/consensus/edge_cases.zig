@@ -1392,7 +1392,8 @@ const TestData = struct {
                     .epoch_reward_status = .inactive,
                     .ancestors = .{ .ancestors = .empty },
                     .feature_set = .ALL_DISABLED,
-                    .reserved_accounts = .empty,
+                    .reserved_accounts = .EMPTY,
+                    .inflation = .DEFAULT,
                 },
                 .state = .{
                     .blockhash_queue = .init(.DEFAULT),

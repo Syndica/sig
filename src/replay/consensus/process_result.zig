@@ -536,7 +536,8 @@ test "processResult: confirm status with done poll and slot complete - success p
         .epoch_reward_status = .inactive,
         .ancestors = .{ .ancestors = .empty },
         .feature_set = .ALL_DISABLED,
-        .reserved_accounts = .empty,
+        .reserved_accounts = .EMPTY,
+        .inflation = .DEFAULT,
     };
 
     // Create slot state then modify tick height
@@ -642,7 +643,8 @@ test "markDeadSlot: when duplicate proof exists, duplicate tracker records slot"
         .epoch_reward_status = .inactive,
         .ancestors = .{ .ancestors = .empty },
         .feature_set = .ALL_DISABLED,
-        .reserved_accounts = .empty,
+        .reserved_accounts = .EMPTY,
+        .inflation = .DEFAULT,
     };
     try test_resources.slot_tracker.put(allocator, slot, .{
         .constants = slot_consts,
