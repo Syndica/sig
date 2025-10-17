@@ -108,7 +108,6 @@ fn calculateRewardPointsPartitioned(
         const vote_pubkey = stake.delegation.voter_pubkey;
         const vote_account = epoch_vote_accounts.getAccount(vote_pubkey) orelse continue;
         if (!vote_account.account.owner.equals(&sig.runtime.program.vote.ID)) continue;
-        std.debug.print("calculating points\n", .{});
         points += calculatePoints(
             stake,
             vote_account.state,
@@ -279,8 +278,7 @@ fn calculatePreviousEpochInflationRewards(
 }
 
 test filterStakesDelegations {
-    const allocator = std.heap.c_allocator;
-    // const allocator = std.testing.allocator;
+    const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(0);
     const random = prng.random();
 
@@ -311,8 +309,7 @@ test filterStakesDelegations {
 test calculateRewardPointsPartitioned {
     const VoteAccount = sig.core.vote_accounts.VoteAccount;
 
-    const allocator = std.heap.c_allocator;
-    // const allocator = std.testing.allocator;
+    const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(0);
     const random = prng.random();
 
@@ -354,6 +351,10 @@ test calculateRewardPointsPartitioned {
     var vote_accounts = VoteAccounts{};
     defer vote_accounts.deinit(allocator);
 
+    const rc = try allocator.create(sig.sync.ReferenceCounter);
+    errdefer allocator.destroy(rc);
+    rc.* = .init;
+
     const vote_account_0_pubkey = Pubkey.initRandom(random);
     const vote_account_0_stake: u64 = 5_000_000_000;
     var vote_account_0 = VoteAccount{
@@ -369,6 +370,7 @@ test calculateRewardPointsPartitioned {
             10,
             clock,
         ),
+        .rc = rc,
     };
     try vote_account_0.state.epoch_credits.append(allocator, .{
         .credits = 10,
