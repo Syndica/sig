@@ -426,8 +426,8 @@ test "vote accounts with landed votes populate bank stats" {
 }
 
 // Test case:
-// This test simulates a validator voting on a chain of blocks (slots 0-33) and 
-// verifies that the root automatically advances as the tower accumulates enough 
+// This test simulates a validator voting on a chain of blocks (slots 0-33) and
+// verifies that the root automatically advances as the tower accumulates enough
 // votes to satisfy lockout requirements.
 //
 // - Pre-populate tower with votes on slots 1-31 (simulating past voting history)
@@ -1034,7 +1034,7 @@ test "vote refresh when no new vote available" {
 // - SlotTracker: root slot 0 and slot 1 (both frozen)
 // - EpochTracker: epoch 0 with multiple validators (total stake = 600)
 // - ProgressMap: entries for slots 0, 1, and 2
-// - Vote accounts: seeded with votes on slots 0 and 1 (simulating what vote_listener would track)
+// - Vote accounts: seeded with votes on slots 0 and 1 (simulating what block replay would update)
 //
 // States asserted:
 // - progress_map.getForkStats(1).?.duplicate_confirmed_hash == slot 1's hash
@@ -1151,12 +1151,12 @@ test "detect and mark duplicate confirmed fork" {
         );
         errdefer epoch_stakes.deinit(allocator);
 
-        // SIMULATES VOTE_LISTENER: Inject landed votes for slot 1 into all 6 vote accounts
-        // In a real validator, vote_listener would:
-        //   1. Observe vote transactions from gossip containing votes for slot 1
-        //   2. Track these votes via trackOptimisticConfirmationVote()
-        //   3. Check if stake threshold (52%) is reached
-        //   4. Send to duplicate_confirmed_slot channel when threshold crossed
+        // SIMULATES BLOCK REPLAY: Inject landed votes for slot 1 into all 6 vote accounts
+        // In a real validator, vote account state would be updated during:
+        //   1. Block replay processes vote transactions
+        //   2. executeProcessVoteWithAccount() -> processVoteWithAccount()
+        //   3. vote_state.processVote() -> processNextVoteSlot()
+        //   4. self.votes.append(landed_vote) updates the vote account state
         // Here we directly inject the votes into vote account state.
         {
             var vote_accounts = &epoch_stakes.stakes.vote_accounts.vote_accounts;
@@ -1281,8 +1281,8 @@ test "detect and mark duplicate confirmed fork" {
 //   and mark the slot as duplicate
 //
 // NOTE: This test exercises the duplicate slot detection mechanism where:
-//   1. WindowService/ShredVerifier detects conflicting shreds for the same slot
-//   2. Sends the slot number to duplicate_slots channel
+//   1. ShredInserter detects conflicting shreds for the same slot (different hashes)
+//   2. Stores duplicate slot proof in database and sends slot to duplicate_slots channel
 //   3. consensus.process() -> processEdgeCases() -> processDuplicateSlots() reads from channel
 //   4. Marks slot in duplicate_slots_tracker and updates fork_choice to mark fork invalid
 //
@@ -1413,8 +1413,8 @@ test "detect and mark duplicate slot" {
 
     // SIMULATE DUPLICATE DETECTION: Send slot 1 to duplicate_slots channel
     // In a real validator, this would happen when:
-    //   1. WindowService receives conflicting shreds for slot 1 (different hashes)
-    //   2. ShredVerifier confirms the shreds are valid but conflicting
+    //   1. ShredInserter receives conflicting shreds for slot 1 (different hashes)
+    //   2. Detects the conflict and stores duplicate slot proof in database
     //   3. Sends slot 1 to the duplicate_slots channel
     try stubs.receivers.duplicate_slots.send(1);
 
