@@ -43,7 +43,8 @@ pub fn applyFeatureActivations(
     var inactive_iterator = feature_set.iterator(slot_store.slot, .inactive);
     while (inactive_iterator.next()) |feature| {
         const feature_id: Pubkey = features.map.get(feature).key;
-        if (try slot_store.get(feature_id)) |feature_account| {
+        if (try slot_store.get(allocator, feature_id)) |feature_account| {
+            defer feature_account.deinit(allocator);
             if (try featureActivationSlotFromAccount(feature_account)) |activation_slot| {
                 feature_set.setSlot(feature, activation_slot);
             } else if (allow_new_activations) {
@@ -120,12 +121,10 @@ fn applyBuiltinProgramFeatureTransitions(
                     is_core_bpf = false;
                 };
             } else {
-                const maybe_account = try slot_store.get(builtin_program.program_id);
-                defer if (maybe_account) |account| account.deinit(allocator);
-                is_core_bpf = if (maybe_account) |account|
-                    account.owner.equals(&program.bpf_loader.v3.ID)
-                else
-                    false;
+                if (try slot_store.get(allocator, builtin_program.program_id)) |account| {
+                    defer account.deinit(allocator);
+                    is_core_bpf = account.owner.equals(&program.bpf_loader.v3.ID);
+                } else is_core_bpf = false;
             }
         }
 
