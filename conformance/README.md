@@ -9,7 +9,7 @@ scripts/setup-env.sh
 source env/pyvenv/bin/activate
 
 # compile the sig binary to test
-zig build -Doptimize=ReleaseSafe
+zig build -Doptimize=ReleaseSafe solfuzz_sig
 
 # run the conformance tests for the first time
 ./run.py --create
