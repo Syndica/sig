@@ -38,8 +38,8 @@ pub const SlotAccountStore = struct {
         };
     }
 
-    pub fn get(self: *const SlotAccountStore, key: Pubkey) !?Account {
-        return self.reader.get(key);
+    pub fn get(self: *const SlotAccountStore, allocator: Allocator, key: Pubkey) !?Account {
+        return self.reader.get(allocator, key);
     }
 
     pub fn put(
@@ -52,10 +52,13 @@ pub const SlotAccountStore = struct {
 
     pub fn putAndUpdateCapitalization(
         self: SlotAccountStore,
+        allocator: Allocator,
         key: Pubkey,
         new_account: AccountSharedData,
     ) !void {
-        const old_account_data_len = if (try self.get(key)) |old_account| blk: {
+        const old_account_data_len = if (try self.get(allocator, key)) |old_account| blk: {
+            defer old_account.deinit(allocator);
+
             const diff = if (new_account.lamports > old_account.lamports)
                 new_account.lamports - old_account.lamports
             else
@@ -95,7 +98,7 @@ pub const SlotAccountStore = struct {
         allocator: Allocator,
         precompile: program.precompiles.Precompile,
     ) !void {
-        const maybe_account = try self.get(precompile.program_id);
+        const maybe_account = try self.get(allocator, precompile.program_id);
         defer if (maybe_account) |account| account.deinit(allocator);
 
         if (maybe_account) |account| if (!account.executable) {
@@ -110,6 +113,7 @@ pub const SlotAccountStore = struct {
         const lamports, const rent_epoch = inheritLamportsAndRentEpoch(maybe_account);
 
         try self.putAndUpdateCapitalization(
+            allocator,
             precompile.program_id,
             .{
                 .lamports = lamports,
@@ -126,7 +130,8 @@ pub const SlotAccountStore = struct {
         allocator: Allocator,
         builtin_program: builtin_programs.BuiltinProgram,
     ) !void {
-        if (try self.reader.get(builtin_program.program_id)) |account| {
+        if (try self.reader.get(allocator, builtin_program.program_id)) |account| {
+            defer account.deinit(allocator);
             if (sig.runtime.ids.NATIVE_LOADER_ID.equals(&account.owner)) return;
             const account_shared_data = try AccountSharedData.fromAccount(allocator, &account);
             defer allocator.free(account_shared_data.data);
@@ -143,7 +148,7 @@ pub const SlotAccountStore = struct {
         };
         defer allocator.free(account.data);
 
-        try self.putAndUpdateCapitalization(builtin_program.program_id, account);
+        try self.putAndUpdateCapitalization(allocator, builtin_program.program_id, account);
     }
 
     fn inheritLamportsAndRentEpoch(

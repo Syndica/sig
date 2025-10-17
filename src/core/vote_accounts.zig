@@ -314,6 +314,11 @@ pub const VoteAccount = struct {
         std.debug.assert(self.rc.acquire());
     }
 
+    pub fn getAcquire(self: *const VoteAccount) VoteAccount {
+        self.acquire();
+        return self.*;
+    }
+
     pub fn getLamports(self: *const VoteAccount) u64 {
         return self.account.lamports;
     }

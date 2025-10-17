@@ -233,7 +233,7 @@ pub fn refreshVoteAccounts(
         const delegated_stake = delegated_stakes.get(vote_pubkey) orelse 0;
         try new_vote_accounts.vote_accounts.put(allocator, vote_pubkey, .{
             .stake = delegated_stake,
-            .account = try stake_and_vote_account.account.clone(allocator),
+            .account = stake_and_vote_account.account.getAcquire(),
         });
     }
 
