@@ -282,8 +282,12 @@ pub fn loadAndExecuteTransaction(
 
     var writes = ProcessedTransaction.Writes{};
     if (executed_transaction.err == null) {
-        while (loaded_accounts.accounts.pop()) |account| {
-            if (account.is_writable) writes.append(account) catch unreachable;
+        for (loaded_accounts.accounts.slice()) |account| {
+            if (account.is_writable) {
+                writes.append(account) catch unreachable;
+            } else {
+                account.deinit(allocator);
+            }
         }
         while (rollbacks.pop()) |rollback| rollback.deinit(allocator);
     } else {

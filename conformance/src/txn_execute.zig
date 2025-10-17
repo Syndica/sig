@@ -928,52 +928,31 @@ fn serializeOutput(
         return .{ .custom_error = errors.custom_error };
     }
 
-    const acct_states = blk: {
-        var relevant_acct_states: std.ArrayList(pb.AcctState) =
-            try .initCapacity(allocator, txn.writes.len);
-        errdefer relevant_acct_states.deinit();
-
-        if (result.ok.outputs != null and result.ok.err != null) {
-            // In the event that the transaction is executed and fails, agave
-            // returns *all* the loaded accounts, whereas we only return the
-            // rollback accounts. Our approach makes more sense, but for
-            // compatibility with the test outputs, we also need to provide the
-            // other writable accounts here, which has the bonus of validating
-            // that they are in fact unchanged.
-            for (sanitized.accounts.items(.pubkey)) |pubkey| {
+    var acct_states: std.ArrayList(pb.AcctState) = .init(allocator);
+    errdefer acct_states.deinit();
+    if (result.ok.outputs != null and result.ok.err != null) {
+        // In the event that the transaction is executed and fails, agave
+        // returns *all* the loaded accounts, whereas we only return the
+        // rollback accounts. Our approach makes more sense, but for
+        // compatibility with the test outputs, we also need to provide the
+        // other writable accounts here, which has the bonus of validating
+        // that they are in fact unchanged.
+        for (
+            sanitized.accounts.items(.pubkey),
+            sanitized.accounts.items(.is_writable),
+        ) |pubkey, is_writable| {
+            if (is_writable) {
                 const cached_account = account_cache.account_cache.get(pubkey).?;
-                try relevant_acct_states.append(
+                try acct_states.append(
                     try sharedAccountToState(allocator, pubkey, cached_account),
                 );
             }
-        } else for (txn.writes.constSlice()) |account| {
-            relevant_acct_states.appendAssumeCapacity(
-                try sharedAccountToState(allocator, account.pubkey, account.account),
-            );
         }
-
-        // Filter relevant accounts.
-        var acct_states: std.ArrayList(pb.AcctState) = .init(allocator);
-        errdefer acct_states.deinit();
-        try acct_states.ensureTotalCapacityPrecise(relevant_acct_states.items.len);
-
-        for (relevant_acct_states.items, 0..) |acct_state, i| {
-            // Only keep accounts that were passed in as account_keys or as ALUT accounts
-            const pubkey = try parsePubkey(acct_state.address.getSlice());
-            const is_loaded_account = for (sanitized.accounts.items(.pubkey)) |key| {
-                if (key.equals(&pubkey)) break true;
-            } else false;
-
-            // Also, only keep accounts that are writable.
-            if (sanitized.accounts.get(i).is_writable and is_loaded_account) {
-                acct_states.appendAssumeCapacity(acct_state);
-            } else {
-                acct_state.deinit();
-            }
-        }
-
-        break :blk acct_states;
-    };
+    } else for (txn.writes.constSlice()) |account| {
+        try acct_states.append(
+            try sharedAccountToState(allocator, account.pubkey, account.account),
+        );
+    }
 
     const resulting_state: pb.ResultingState = .{
         .rent_debits = .init(allocator),
