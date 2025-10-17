@@ -56,6 +56,8 @@ pub const Service = struct {
                 .vote_identity = deps.vote_identity,
                 .root_slot = deps.root.slot,
                 .root_hash = slot_tracker.get(slot_tracker.root).?.state.hash.readCopy().?,
+                .node_keypair = deps.node_keypair,
+                .authorized_voter_keypairs = deps.authorized_voter_keypairs,
                 .account_reader = deps.account_store.reader(),
                 .ledger = deps.ledger,
                 .exit = deps.exit,
@@ -135,6 +137,11 @@ pub const Dependencies = struct {
     logger: Logger,
     my_identity: Pubkey,
     vote_identity: Pubkey,
+    // TODO: Maybe move to consensus dependencies instead?
+    /// Keypair for my_identity (used for signing vote transactions)
+    node_keypair: ?sig.identity.KeyPair,
+    /// Authorized voter keypairs (used for signing vote transactions)
+    authorized_voter_keypairs: []const sig.identity.KeyPair,
     /// Tell replay when to exit
     exit: *std.atomic.Value(bool),
     /// Used in the EpochManager
@@ -1160,6 +1167,8 @@ pub const DependencyStubs = struct {
                 .logger = logger,
                 .my_identity = .initRandom(random),
                 .vote_identity = .initRandom(random),
+                .node_keypair = null,
+                .authorized_voter_keypairs = &.{},
                 .exit = &self.exit,
                 .epoch_schedule = .DEFAULT,
                 .account_store = self.accountsdb.accountStore(),
@@ -1237,6 +1246,8 @@ pub const DependencyStubs = struct {
                 .logger = .FOR_TESTS,
                 .my_identity = .ZEROES,
                 .vote_identity = .ZEROES,
+                .node_keypair = null,
+                .authorized_voter_keypairs = &.{},
                 .exit = &self.exit,
                 .account_store = self.accountsdb.accountStore(),
                 .ledger = &self.ledger,
