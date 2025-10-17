@@ -3202,9 +3202,10 @@ test "state.VoteState.checkSlotsAreValid bad hash" {
         .timestamp = null,
     };
 
-    const slot_hashes = try SlotHashes.initWithEntries(allocator, &.{
-        .{ .slot = vote.slots[vote.slots.len - 1], .hash = Hash.generateSha256(&vote.hash.data) },
-    });
+    const slot_hashes = try SlotHashes.initWithEntries(allocator, &.{.{
+        .slot = vote.slots[vote.slots.len - 1],
+        .hash = Hash.init(&vote.hash.data),
+    }});
     defer slot_hashes.deinit(allocator);
 
     const result = try vote_state.checkSlotsAreValid(&vote, vote.slots, &slot_hashes);

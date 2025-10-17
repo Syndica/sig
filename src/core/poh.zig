@@ -36,7 +36,7 @@ pub const Poh = struct {
     pub fn hash(self: *Poh, max_num_hashes: u64) bool {
         const num_hashes = @min(self.remaining_hashes -| 1, max_num_hashes);
         for (0..num_hashes) |_| {
-            self.latest_hash = self.latest_hash.extendAndHash(.{});
+            self.latest_hash = .init(&self.latest_hash.data);
         }
         self.num_hashes += num_hashes;
         self.remaining_hashes -= num_hashes;
@@ -70,12 +70,12 @@ pub const Poh = struct {
             return null; // needs a tick first
         }
 
-        self.latest_hash = self.latest_hash.extendAndHash(mixin.data);
+        self.latest_hash = self.latest_hash.extend(&mixin.data);
         const num_hashes = self.num_hashes + 1;
         self.num_hashes = 0;
         self.remaining_hashes -= 1;
 
-        return PohEntry{
+        return .{
             .num_hashes = num_hashes,
             .hash = self.latest_hash,
         };
@@ -84,7 +84,7 @@ pub const Poh = struct {
     /// Calculate the hash for a tick entry, without a mixin hash, and increment
     /// the tick counter
     pub fn tick(self: *Poh) ?PohEntry {
-        self.latest_hash = self.latest_hash.extendAndHash(.{});
+        self.latest_hash = .init(&self.latest_hash.data);
         self.num_hashes += 1;
         self.remaining_hashes -= 1;
 
@@ -98,7 +98,7 @@ pub const Poh = struct {
         self.num_hashes = 0;
         self.tick_count += 1;
 
-        return PohEntry{
+        return .{
             .num_hashes = num_hashes,
             .hash = self.latest_hash,
         };

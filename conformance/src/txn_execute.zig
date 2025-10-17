@@ -1401,25 +1401,23 @@ pub fn hashSlot(
     var signature_count_bytes: [8]u8 = undefined;
     std.mem.writeInt(u64, &signature_count_bytes, 0, .little);
 
-    const initial_hash =
-        if (feature_set.active(.remove_accounts_delta_hash, 0))
-            Hash.generateSha256(.{
-                Hash.ZEROES,
-                &signature_count_bytes,
-                blockhash,
-            })
-        else
-            Hash.generateSha256(.{
-                Hash.ZEROES,
-                try freeze.deltaMerkleHash(account_reader, allocator, 0),
-                &signature_count_bytes,
-                blockhash,
-            });
+    var hash = std.crypto.hash.sha2.Sha256.init(.{});
+    hash.update(&sig.core.Hash.ZEROES.data); // no parent lt hash, start with zeroes
+    if (!feature_set.active(.remove_accounts_delta_hash, 0)) {
+        const delta_hash = try freeze.deltaMerkleHash(account_reader, allocator, 0);
+        hash.update(&delta_hash.data);
+    }
+    hash.update(&signature_count_bytes);
+    hash.update(&blockhash.data);
+    const initial_hash = hash.finalResult();
 
     return if (feature_set.active(.accounts_lt_hash, 0))
-        Hash.generateSha256(.{ initial_hash, sig.core.hash.LtHash.IDENTITY.constBytes() })
+        Hash.initMany(&.{
+            &initial_hash,
+            sig.core.hash.LtHash.IDENTITY.constBytes(),
+        })
     else
-        initial_hash;
+        .{ .data = initial_hash };
 }
 
 const State = struct {

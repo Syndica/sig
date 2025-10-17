@@ -450,8 +450,8 @@ test checkStatusCache {
     var status_cache: sig.core.StatusCache = .DEFAULT;
     defer status_cache.deinit(allocator);
 
-    const msg_hash = Hash.generateSha256("msg hash");
-    const recent_blockhash = Hash.generateSha256("recent blockhash");
+    const msg_hash = Hash.init("msg hash");
+    const recent_blockhash = Hash.init("recent blockhash");
 
     try std.testing.expectEqual(
         null,
