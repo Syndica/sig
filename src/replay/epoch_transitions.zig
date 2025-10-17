@@ -51,6 +51,7 @@ pub fn processNewEpoch(
     try applyFeatureActivations(
         allocator,
         slot_store,
+        epoch_tracker,
         &slot_constants.feature_set,
         &slot_constants.reserved_accounts,
         true, // allow_new_activations
