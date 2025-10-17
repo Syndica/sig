@@ -423,6 +423,7 @@ test "vote accounts with landed votes populate bank stats" {
     //     ]
     // }
     try std.testing.expectEqual(6, stats1.lockout_intervals.map.get(5).?.items.len);
+    try std.testing.expectEqual(slot_1, consensus.fork_choice.heaviestOverallSlot().slot);
 }
 
 // Test case:
@@ -1013,6 +1014,8 @@ test "vote refresh when no new vote available" {
 
     // The vote count in tower should remain the same (1 vote)
     try std.testing.expectEqual(1, consensus.replay_tower.tower.vote_state.votes.len);
+
+    try std.testing.expectEqual(1, consensus.fork_choice.heaviestOverallSlot().slot);
 }
 
 // Test case:
@@ -1272,6 +1275,9 @@ test "detect and mark duplicate confirmed fork" {
     const dup_hash = consensus.slot_data.duplicate_confirmed_slots.get(1);
     try std.testing.expect(dup_hash != null);
     try std.testing.expect(dup_hash.?.eql(slot1_hash));
+
+    // Assert fork choice: heaviest slot should be slot 2 (the processed slot)
+    try std.testing.expectEqual(2, consensus.fork_choice.heaviestOverallSlot().slot);
 }
 
 // Test case:
