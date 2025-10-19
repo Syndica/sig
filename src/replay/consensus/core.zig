@@ -1219,7 +1219,6 @@ fn generateVoteTx(
         vote_account_data,
         .{},
     ) catch return .failed;
-    defer sig.bincode.free(allocator, vote_state_versions);
 
     var vote_state = vote_state_versions.convertToCurrent(allocator) catch return .failed;
     defer vote_state.deinit();
@@ -2705,6 +2704,704 @@ test "computeBankStats - same weight selects lower slot" {
     const heaviest = fixture.fork_choice.heaviestOverallSlot();
     // Should pick the lower of the two equally weighted banks
     try testing.expectEqual(@as(u64, 1), heaviest.slot);
+}
+
+test "generateVoteTx - empty authorized voter keypairs returns non_voting" {
+    const allocator = testing.allocator;
+    var prng = std.Random.DefaultPrng.init(42);
+    const random = prng.random();
+
+    const root = SlotAndHash{ .slot = 0, .hash = Hash.initRandom(random) };
+    var fixture = try TestFixture.init(allocator, root);
+    defer fixture.deinit(allocator);
+
+    fixture.slot_tracker.get(0).?.state.hash.set(root.hash);
+
+    var replay_tower = try createTestReplayTower(1, 0.67);
+    defer replay_tower.deinit(allocator);
+
+    const node_kp = sig.identity.KeyPair.generate();
+    const vote_account_pubkey = Pubkey.initRandom(random);
+
+    const empty_keypairs = &[_]sig.identity.KeyPair{};
+
+    const epoch_tracker: EpochTracker = .{ .schedule = .DEFAULT, .epochs = .empty };
+    const account_reader: AccountReader = .noop;
+
+    const result = try generateVoteTx(
+        allocator,
+        vote_account_pubkey,
+        empty_keypairs,
+        node_kp,
+        .same_fork,
+        &replay_tower,
+        account_reader,
+        &fixture.slot_tracker,
+        &epoch_tracker,
+    );
+
+    try testing.expectEqual(.non_voting, result);
+}
+
+test "generateVoteTx - no node keypair returns non_voting" {
+    const allocator = testing.allocator;
+    var prng = std.Random.DefaultPrng.init(43);
+    const random = prng.random();
+
+    const root = SlotAndHash{ .slot = 0, .hash = Hash.initRandom(random) };
+    var fixture = try TestFixture.init(allocator, root);
+    defer fixture.deinit(allocator);
+
+    fixture.slot_tracker.get(0).?.state.hash.set(root.hash);
+
+    var replay_tower = try createTestReplayTower(1, 0.67);
+    defer replay_tower.deinit(allocator);
+
+    const auth_voter_kp = sig.identity.KeyPair.generate();
+    const vote_account_pubkey = Pubkey.initRandom(random);
+
+    const epoch_tracker: EpochTracker = .{ .schedule = .DEFAULT, .epochs = .empty };
+    const account_reader: AccountReader = .noop;
+
+    const result = try generateVoteTx(
+        allocator,
+        vote_account_pubkey,
+        &.{auth_voter_kp},
+        null,
+        .same_fork,
+        &replay_tower,
+        account_reader,
+        &fixture.slot_tracker,
+        &epoch_tracker,
+    );
+
+    try testing.expectEqual(.non_voting, result);
+}
+
+test "generateVoteTx - no last voted slot returns failed" {
+    const allocator = testing.allocator;
+    var prng = std.Random.DefaultPrng.init(44);
+    const random = prng.random();
+
+    const root = SlotAndHash{ .slot = 0, .hash = Hash.initRandom(random) };
+    var fixture = try TestFixture.init(allocator, root);
+    defer fixture.deinit(allocator);
+
+    fixture.slot_tracker.get(0).?.state.hash.set(root.hash);
+
+    var replay_tower = try createTestReplayTower(1, 0.67);
+    defer replay_tower.deinit(allocator);
+    replay_tower.last_vote = .{ .vote = .{ .slots = &.{}, .hash = Hash.ZEROES, .timestamp = null } };
+
+    const node_kp = sig.identity.KeyPair.generate();
+    const auth_voter_kp = sig.identity.KeyPair.generate();
+    const vote_account_pubkey = Pubkey.initRandom(random);
+
+    const epoch_tracker: EpochTracker = .{ .schedule = .DEFAULT, .epochs = .empty };
+    const account_reader: AccountReader = .noop;
+
+    const result = try generateVoteTx(
+        allocator,
+        vote_account_pubkey,
+        &.{auth_voter_kp},
+        node_kp,
+        .same_fork,
+        &replay_tower,
+        account_reader,
+        &fixture.slot_tracker,
+        &epoch_tracker,
+    );
+
+    try testing.expectEqual(.failed, result);
+}
+
+test "generateVoteTx - slot not in tracker returns failed" {
+    const allocator = testing.allocator;
+    var prng = std.Random.DefaultPrng.init(45);
+    const random = prng.random();
+
+    const root = SlotAndHash{ .slot = 0, .hash = Hash.initRandom(random) };
+    var fixture = try TestFixture.init(allocator, root);
+    defer fixture.deinit(allocator);
+
+    fixture.slot_tracker.get(0).?.state.hash.set(root.hash);
+
+    var replay_tower = try createTestReplayTower(1, 0.67);
+    defer replay_tower.deinit(allocator);
+
+    replay_tower.last_vote = sig.consensus.vote_transaction.VoteTransaction{
+        .tower_sync = sig.runtime.program.vote.state.TowerSync{
+            .lockouts = .fromOwnedSlice(try allocator.dupe(Lockout, &.{
+                .{ .slot = 999, .confirmation_count = 1 },
+            })),
+            .root = null,
+            .hash = Hash.ZEROES,
+            .timestamp = null,
+            .block_id = Hash.ZEROES,
+        },
+    };
+
+    const node_kp = sig.identity.KeyPair.generate();
+    const auth_voter_kp = sig.identity.KeyPair.generate();
+    const vote_account_pubkey = Pubkey.initRandom(random);
+
+    const epoch_tracker: EpochTracker = .{ .schedule = .DEFAULT, .epochs = .empty };
+    const account_reader: AccountReader = .noop;
+
+    const result = try generateVoteTx(
+        allocator,
+        vote_account_pubkey,
+        &.{auth_voter_kp},
+        node_kp,
+        .same_fork,
+        &replay_tower,
+        account_reader,
+        &fixture.slot_tracker,
+        &epoch_tracker,
+    );
+
+    try testing.expectEqual(.failed, result);
+}
+
+test "generateVoteTx - vote account not found returns failed" {
+    const allocator = testing.allocator;
+    var prng = std.Random.DefaultPrng.init(46);
+    const random = prng.random();
+
+    const root = SlotAndHash{ .slot = 0, .hash = Hash.initRandom(random) };
+    var fixture = try TestFixture.init(allocator, root);
+    defer fixture.deinit(allocator);
+
+    fixture.slot_tracker.get(0).?.state.hash.set(root.hash);
+
+    var replay_tower = try createTestReplayTower(1, 0.67);
+    defer replay_tower.deinit(allocator);
+
+    replay_tower.last_vote = sig.consensus.vote_transaction.VoteTransaction{
+        .tower_sync = sig.runtime.program.vote.state.TowerSync{
+            .lockouts = .fromOwnedSlice(try allocator.dupe(Lockout, &.{
+                .{ .slot = 0, .confirmation_count = 1 },
+            })),
+            .root = null,
+            .hash = Hash.ZEROES,
+            .timestamp = null,
+            .block_id = Hash.ZEROES,
+        },
+    };
+
+    const node_kp = sig.identity.KeyPair.generate();
+    const auth_voter_kp = sig.identity.KeyPair.generate();
+    const vote_account_pubkey = Pubkey.initRandom(random);
+
+    const epoch_tracker: EpochTracker = .{ .schedule = .DEFAULT, .epochs = .empty };
+    const account_reader: AccountReader = .noop;
+
+    const result = try generateVoteTx(
+        allocator,
+        vote_account_pubkey,
+        &.{auth_voter_kp},
+        node_kp,
+        .same_fork,
+        &replay_tower,
+        account_reader,
+        &fixture.slot_tracker,
+        &epoch_tracker,
+    );
+
+    try testing.expectEqual(.failed, result);
+}
+
+test "generateVoteTx - invalid switch fork decision returns failed" {
+    const allocator = testing.allocator;
+    var prng = std.Random.DefaultPrng.init(52);
+    const random = prng.random();
+
+    const root = SlotAndHash{ .slot = 0, .hash = Hash.initRandom(random) };
+    var fixture = try TestFixture.init(allocator, root);
+    defer fixture.deinit(allocator);
+
+    fixture.slot_tracker.get(0).?.state.hash.set(root.hash);
+
+    var replay_tower = try createTestReplayTower(1, 0.67);
+    defer replay_tower.deinit(allocator);
+
+    replay_tower.last_vote = sig.consensus.vote_transaction.VoteTransaction{
+        .tower_sync = sig.runtime.program.vote.state.TowerSync{
+            .lockouts = .fromOwnedSlice(try allocator.dupe(Lockout, &.{
+                .{ .slot = 0, .confirmation_count = 1 },
+            })),
+            .root = null,
+            .hash = Hash.ZEROES,
+            .timestamp = null,
+            .block_id = Hash.ZEROES,
+        },
+    };
+
+    const node_kp = sig.identity.KeyPair.generate();
+    const auth_voter_kp = sig.identity.KeyPair.generate();
+    const vote_account_pubkey = Pubkey.initRandom(random);
+
+    const epoch_tracker: EpochTracker = .{ .schedule = .DEFAULT, .epochs = .empty };
+    const account_reader: AccountReader = .noop;
+
+    const result = try generateVoteTx(
+        allocator,
+        vote_account_pubkey,
+        &.{auth_voter_kp},
+        node_kp,
+        .{ .failed_switch_threshold = .{ .switch_proof_stake = 0, .total_stake = 100 } },
+        &replay_tower,
+        account_reader,
+        &fixture.slot_tracker,
+        &epoch_tracker,
+    );
+
+    try testing.expectEqual(.failed, result);
+}
+
+test "generateVoteTx - success with tower_sync vote" {
+    const allocator = testing.allocator;
+    var prng = std.Random.DefaultPrng.init(100);
+    const random = prng.random();
+
+    const root = SlotAndHash{ .slot = 0, .hash = Hash.initRandom(random) };
+    var fixture = try TestFixture.init(allocator, root);
+    defer fixture.deinit(allocator);
+
+    fixture.slot_tracker.get(0).?.state.hash.set(root.hash);
+
+    var replay_tower = try createTestReplayTower(1, 0.67);
+    defer replay_tower.deinit(allocator);
+
+    replay_tower.last_vote = sig.consensus.vote_transaction.VoteTransaction{
+        .tower_sync = sig.runtime.program.vote.state.TowerSync{
+            .lockouts = .fromOwnedSlice(try allocator.dupe(Lockout, &.{
+                .{ .slot = 0, .confirmation_count = 1 },
+            })),
+            .root = null,
+            .hash = Hash.ZEROES,
+            .timestamp = null,
+            .block_id = Hash.ZEROES,
+        },
+    };
+
+    const node_kp = sig.identity.KeyPair.generate();
+    const auth_voter_kp = sig.identity.KeyPair.generate();
+    const vote_account_pubkey = Pubkey.initRandom(random);
+
+    const epoch_tracker: EpochTracker = .{ .schedule = .DEFAULT, .epochs = .empty };
+
+    var account_map = sig.accounts_db.ThreadSafeAccountMap.init(allocator);
+    defer account_map.deinit();
+
+    var vote_state = try sig.runtime.program.vote.state.createTestVoteState(
+        allocator,
+        Pubkey.fromPublicKey(&node_kp.public_key),
+        Pubkey.fromPublicKey(&auth_voter_kp.public_key),
+        Pubkey.fromPublicKey(&auth_voter_kp.public_key),
+        0,
+    );
+    defer vote_state.deinit();
+
+    const vote_account_data_buf = try allocator.alloc(
+        u8,
+        sig.runtime.program.vote.state.VoteState.MAX_VOTE_STATE_SIZE,
+    );
+    defer allocator.free(vote_account_data_buf);
+    const vote_account_data = try sig.bincode.writeToSlice(
+        vote_account_data_buf,
+        sig.runtime.program.vote.state.VoteStateVersions{ .current = vote_state },
+        .{},
+    );
+
+    const vote_account = sig.runtime.AccountSharedData{
+        .lamports = 1000000,
+        .data = vote_account_data,
+        .owner = sig.runtime.program.vote.ID,
+        .executable = false,
+        .rent_epoch = 0,
+    };
+
+    const account_store = account_map.accountStore();
+    try account_store.put(0, vote_account_pubkey, vote_account);
+    try account_store.onSlotRooted(allocator, 0, 0);
+
+    const account_reader = account_map.accountReader();
+
+    const result = try generateVoteTx(
+        allocator,
+        vote_account_pubkey,
+        &.{auth_voter_kp},
+        node_kp,
+        .same_fork,
+        &replay_tower,
+        account_reader,
+        &fixture.slot_tracker,
+        &epoch_tracker,
+    );
+
+    switch (result) {
+        .tx => |tx| {
+            defer tx.deinit(allocator);
+            try testing.expect(tx.signatures.len > 0);
+            try testing.expect(tx.msg.instructions.len > 0);
+            try testing.expectEqual(2, tx.signatures.len);
+        },
+        else => try testing.expect(false),
+    }
+}
+
+test "generateVoteTx - success with vote_state_update compacted" {
+    const allocator = testing.allocator;
+    var prng = std.Random.DefaultPrng.init(101);
+    const random = prng.random();
+
+    const root = SlotAndHash{ .slot = 0, .hash = Hash.initRandom(random) };
+    var fixture = try TestFixture.init(allocator, root);
+    defer fixture.deinit(allocator);
+
+    fixture.slot_tracker.get(0).?.state.hash.set(root.hash);
+
+    var replay_tower = try createTestReplayTower(1, 0.67);
+    defer replay_tower.deinit(allocator);
+
+    const lockouts = try allocator.dupe(Lockout, &.{
+        .{ .slot = 0, .confirmation_count = 1 },
+    });
+    replay_tower.last_vote = sig.consensus.vote_transaction.VoteTransaction{
+        .vote_state_update = sig.runtime.program.vote.state.VoteStateUpdate{
+            .lockouts = .fromOwnedSlice(lockouts),
+            .root = null,
+            .hash = Hash.ZEROES,
+            .timestamp = null,
+        },
+    };
+
+    const node_kp = sig.identity.KeyPair.generate();
+    const auth_voter_kp = sig.identity.KeyPair.generate();
+    const vote_account_pubkey = Pubkey.initRandom(random);
+
+    const epoch_tracker: EpochTracker = .{ .schedule = .DEFAULT, .epochs = .empty };
+
+    var account_map = sig.accounts_db.ThreadSafeAccountMap.init(allocator);
+    defer account_map.deinit();
+
+    var vote_state = try sig.runtime.program.vote.state.createTestVoteState(
+        allocator,
+        Pubkey.fromPublicKey(&node_kp.public_key),
+        Pubkey.fromPublicKey(&auth_voter_kp.public_key),
+        Pubkey.fromPublicKey(&auth_voter_kp.public_key),
+        0,
+    );
+    defer vote_state.deinit();
+
+    const vote_account_data_buf = try allocator.alloc(
+        u8,
+        sig.runtime.program.vote.state.VoteState.MAX_VOTE_STATE_SIZE,
+    );
+    defer allocator.free(vote_account_data_buf);
+    const vote_account_data = try sig.bincode.writeToSlice(
+        vote_account_data_buf,
+        sig.runtime.program.vote.state.VoteStateVersions{ .current = vote_state },
+        .{},
+    );
+
+    const vote_account = sig.runtime.AccountSharedData{
+        .lamports = 1000000,
+        .data = vote_account_data,
+        .owner = sig.runtime.program.vote.ID,
+        .executable = false,
+        .rent_epoch = 0,
+    };
+
+    const account_store = account_map.accountStore();
+    try account_store.put(0, vote_account_pubkey, vote_account);
+    try account_store.onSlotRooted(allocator, 0, 0);
+
+    const account_reader = account_map.accountReader();
+
+    const result = try generateVoteTx(
+        allocator,
+        vote_account_pubkey,
+        &.{auth_voter_kp},
+        node_kp,
+        .same_fork,
+        &replay_tower,
+        account_reader,
+        &fixture.slot_tracker,
+        &epoch_tracker,
+    );
+
+    switch (result) {
+        .tx => |tx| {
+            defer tx.deinit(allocator);
+            try testing.expect(tx.signatures.len > 0);
+            try testing.expect(tx.msg.instructions.len > 0);
+        },
+        else => try testing.expect(false),
+    }
+}
+
+test "generateVoteTx - success with switch proof" {
+    const allocator = testing.allocator;
+    var prng = std.Random.DefaultPrng.init(102);
+    const random = prng.random();
+
+    const root = SlotAndHash{ .slot = 0, .hash = Hash.initRandom(random) };
+    var fixture = try TestFixture.init(allocator, root);
+    defer fixture.deinit(allocator);
+
+    fixture.slot_tracker.get(0).?.state.hash.set(root.hash);
+
+    var replay_tower = try createTestReplayTower(1, 0.67);
+    defer replay_tower.deinit(allocator);
+
+    replay_tower.last_vote = sig.consensus.vote_transaction.VoteTransaction{
+        .tower_sync = sig.runtime.program.vote.state.TowerSync{
+            .lockouts = .fromOwnedSlice(try allocator.dupe(Lockout, &.{
+                .{ .slot = 0, .confirmation_count = 1 },
+            })),
+            .root = null,
+            .hash = Hash.ZEROES,
+            .timestamp = null,
+            .block_id = Hash.ZEROES,
+        },
+    };
+
+    const node_kp = sig.identity.KeyPair.generate();
+    const auth_voter_kp = sig.identity.KeyPair.generate();
+    const vote_account_pubkey = Pubkey.initRandom(random);
+
+    const epoch_tracker: EpochTracker = .{ .schedule = .DEFAULT, .epochs = .empty };
+
+    var account_map = sig.accounts_db.ThreadSafeAccountMap.init(allocator);
+    defer account_map.deinit();
+
+    var vote_state = try sig.runtime.program.vote.state.createTestVoteState(
+        allocator,
+        Pubkey.fromPublicKey(&node_kp.public_key),
+        Pubkey.fromPublicKey(&auth_voter_kp.public_key),
+        Pubkey.fromPublicKey(&auth_voter_kp.public_key),
+        0,
+    );
+    defer vote_state.deinit();
+
+    const vote_account_data_buf = try allocator.alloc(
+        u8,
+        sig.runtime.program.vote.state.VoteState.MAX_VOTE_STATE_SIZE,
+    );
+    defer allocator.free(vote_account_data_buf);
+    const vote_account_data = try sig.bincode.writeToSlice(
+        vote_account_data_buf,
+        sig.runtime.program.vote.state.VoteStateVersions{ .current = vote_state },
+        .{},
+    );
+
+    const vote_account = sig.runtime.AccountSharedData{
+        .lamports = 1000000,
+        .data = vote_account_data,
+        .owner = sig.runtime.program.vote.ID,
+        .executable = false,
+        .rent_epoch = 0,
+    };
+
+    const account_store = account_map.accountStore();
+    try account_store.put(0, vote_account_pubkey, vote_account);
+    try account_store.onSlotRooted(allocator, 0, 0);
+
+    const account_reader = account_map.accountReader();
+
+    const switch_proof_hash = Hash.initRandom(random);
+    const result = try generateVoteTx(
+        allocator,
+        vote_account_pubkey,
+        &.{auth_voter_kp},
+        node_kp,
+        .{ .switch_proof = switch_proof_hash },
+        &replay_tower,
+        account_reader,
+        &fixture.slot_tracker,
+        &epoch_tracker,
+    );
+
+    switch (result) {
+        .tx => |tx| {
+            defer tx.deinit(allocator);
+            try testing.expect(tx.signatures.len > 0);
+            try testing.expect(tx.msg.instructions.len > 0);
+        },
+        else => try testing.expect(false),
+    }
+}
+
+test "generateVoteTx - hot spare validator returns hot_spare" {
+    const allocator = testing.allocator;
+    var prng = std.Random.DefaultPrng.init(103);
+    const random = prng.random();
+
+    const root = SlotAndHash{ .slot = 0, .hash = Hash.initRandom(random) };
+    var fixture = try TestFixture.init(allocator, root);
+    defer fixture.deinit(allocator);
+
+    fixture.slot_tracker.get(0).?.state.hash.set(root.hash);
+
+    var replay_tower = try createTestReplayTower(1, 0.67);
+    defer replay_tower.deinit(allocator);
+
+    replay_tower.last_vote = sig.consensus.vote_transaction.VoteTransaction{
+        .tower_sync = sig.runtime.program.vote.state.TowerSync{
+            .lockouts = .fromOwnedSlice(try allocator.dupe(Lockout, &.{
+                .{ .slot = 0, .confirmation_count = 1 },
+            })),
+            .root = null,
+            .hash = Hash.ZEROES,
+            .timestamp = null,
+            .block_id = Hash.ZEROES,
+        },
+    };
+
+    const node_kp = sig.identity.KeyPair.generate();
+    const different_node_kp = sig.identity.KeyPair.generate();
+    const auth_voter_kp = sig.identity.KeyPair.generate();
+    const vote_account_pubkey = Pubkey.initRandom(random);
+
+    const epoch_tracker: EpochTracker = .{ .schedule = .DEFAULT, .epochs = .empty };
+
+    var account_map = sig.accounts_db.ThreadSafeAccountMap.init(allocator);
+    defer account_map.deinit();
+
+    var vote_state = try sig.runtime.program.vote.state.createTestVoteState(
+        allocator,
+        Pubkey.fromPublicKey(&different_node_kp.public_key),
+        Pubkey.fromPublicKey(&auth_voter_kp.public_key),
+        Pubkey.fromPublicKey(&auth_voter_kp.public_key),
+        0,
+    );
+    defer vote_state.deinit();
+
+    const vote_account_data_buf = try allocator.alloc(
+        u8,
+        sig.runtime.program.vote.state.VoteState.MAX_VOTE_STATE_SIZE,
+    );
+    defer allocator.free(vote_account_data_buf);
+    const vote_account_data = try sig.bincode.writeToSlice(
+        vote_account_data_buf,
+        sig.runtime.program.vote.state.VoteStateVersions{ .current = vote_state },
+        .{},
+    );
+
+    const vote_account = sig.runtime.AccountSharedData{
+        .lamports = 1000000,
+        .data = vote_account_data,
+        .owner = sig.runtime.program.vote.ID,
+        .executable = false,
+        .rent_epoch = 0,
+    };
+
+    const account_store = account_map.accountStore();
+    try account_store.put(0, vote_account_pubkey, vote_account);
+    try account_store.onSlotRooted(allocator, 0, 0);
+
+    const account_reader = account_map.accountReader();
+
+    const result = try generateVoteTx(
+        allocator,
+        vote_account_pubkey,
+        &.{auth_voter_kp},
+        node_kp,
+        .same_fork,
+        &replay_tower,
+        account_reader,
+        &fixture.slot_tracker,
+        &epoch_tracker,
+    );
+
+    try testing.expectEqual(.hot_spare, result);
+}
+
+test "generateVoteTx - wrong authorized voter returns non_voting" {
+    const allocator = testing.allocator;
+    var prng = std.Random.DefaultPrng.init(104);
+    const random = prng.random();
+
+    const root = SlotAndHash{ .slot = 0, .hash = Hash.initRandom(random) };
+    var fixture = try TestFixture.init(allocator, root);
+    defer fixture.deinit(allocator);
+
+    fixture.slot_tracker.get(0).?.state.hash.set(root.hash);
+
+    var replay_tower = try createTestReplayTower(1, 0.67);
+    defer replay_tower.deinit(allocator);
+
+    replay_tower.last_vote = sig.consensus.vote_transaction.VoteTransaction{
+        .tower_sync = sig.runtime.program.vote.state.TowerSync{
+            .lockouts = .fromOwnedSlice(try allocator.dupe(Lockout, &.{
+                .{ .slot = 0, .confirmation_count = 1 },
+            })),
+            .root = null,
+            .hash = Hash.ZEROES,
+            .timestamp = null,
+            .block_id = Hash.ZEROES,
+        },
+    };
+
+    const node_kp = sig.identity.KeyPair.generate();
+    const wrong_auth_voter_kp = sig.identity.KeyPair.generate();
+    const actual_auth_voter_kp = sig.identity.KeyPair.generate();
+    const vote_account_pubkey = Pubkey.initRandom(random);
+
+    const epoch_tracker: EpochTracker = .{ .schedule = .DEFAULT, .epochs = .empty };
+
+    var account_map = sig.accounts_db.ThreadSafeAccountMap.init(allocator);
+    defer account_map.deinit();
+
+    var vote_state = try sig.runtime.program.vote.state.createTestVoteState(
+        allocator,
+        Pubkey.fromPublicKey(&node_kp.public_key),
+        Pubkey.fromPublicKey(&actual_auth_voter_kp.public_key),
+        Pubkey.fromPublicKey(&actual_auth_voter_kp.public_key),
+        0,
+    );
+    defer vote_state.deinit();
+
+    const vote_account_data_buf = try allocator.alloc(
+        u8,
+        sig.runtime.program.vote.state.VoteState.MAX_VOTE_STATE_SIZE,
+    );
+    defer allocator.free(vote_account_data_buf);
+    const vote_account_data = try sig.bincode.writeToSlice(
+        vote_account_data_buf,
+        sig.runtime.program.vote.state.VoteStateVersions{ .current = vote_state },
+        .{},
+    );
+
+    const vote_account = sig.runtime.AccountSharedData{
+        .lamports = 1000000,
+        .data = vote_account_data,
+        .owner = sig.runtime.program.vote.ID,
+        .executable = false,
+        .rent_epoch = 0,
+    };
+
+    const account_store = account_map.accountStore();
+    try account_store.put(0, vote_account_pubkey, vote_account);
+    try account_store.onSlotRooted(allocator, 0, 0);
+
+    const account_reader = account_map.accountReader();
+
+    const result = try generateVoteTx(
+        allocator,
+        vote_account_pubkey,
+        &.{wrong_auth_voter_kp},
+        node_kp,
+        .same_fork,
+        &replay_tower,
+        account_reader,
+        &fixture.slot_tracker,
+        &epoch_tracker,
+    );
+
+    try testing.expectEqual(.non_voting, result);
 }
 
 // TODO: Re-implement tests for the new consolidated API
