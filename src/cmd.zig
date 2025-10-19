@@ -1111,6 +1111,8 @@ fn validator(
     const epoch_schedule = bank_fields.epoch_schedule;
     const epoch = bank_fields.epoch;
 
+    var leader_schedule_cache = LeaderScheduleCache.init(allocator, epoch_schedule);
+
     const staked_nodes = try collapsed_manifest.epochStakes(epoch);
     var epoch_context_manager = try sig.adapter.EpochContextManager.init(allocator, epoch_schedule);
     defer epoch_context_manager.deinit();
@@ -1119,27 +1121,36 @@ fn validator(
         var staked_nodes_cloned = try staked_nodes.clone(allocator);
         errdefer staked_nodes_cloned.deinit(allocator);
 
-        const leader_schedule = if (try getLeaderScheduleFromCli(allocator, cfg)) |leader_schedule|
-            leader_schedule[1].slot_leaders
-        else ls: {
-            // TODO: Implement feature gating for vote keyed leader schedule.
-            // [agave] https://github.com/anza-xyz/agave/blob/e468acf4da519171510f2ec982f70a0fd9eb2c8b/ledger/src/leader_schedule_utils.rs#L12
-            // [agave] https://github.com/anza-xyz/agave/blob/e468acf4da519171510f2ec982f70a0fd9eb2c8b/runtime/src/bank.rs#L4833
-            break :ls if (true)
-                try LeaderSchedule.fromVoteAccounts(
-                    allocator,
-                    epoch,
-                    epoch_schedule.slots_per_epoch,
-                    try collapsed_manifest.epochVoteAccounts(epoch),
-                )
-            else
-                try LeaderSchedule.fromStakedNodes(
-                    allocator,
-                    epoch,
-                    epoch_schedule.slots_per_epoch,
-                    staked_nodes,
-                );
-        };
+        const leader_schedule =
+            if (try getLeaderScheduleFromCli(allocator, cfg)) |leader_schedule_data| blk: {
+                _, const leader_schedule = leader_schedule_data;
+                try leader_schedule_cache.put(epoch, leader_schedule);
+                break :blk leader_schedule.slot_leaders;
+            } else ls: {
+                // TODO: Implement feature gating for vote keyed leader schedule.
+                // [agave] https://github.com/anza-xyz/agave/blob/e468acf4da519171510f2ec982f70a0fd9eb2c8b/ledger/src/leader_schedule_utils.rs#L12
+                // [agave] https://github.com/anza-xyz/agave/blob/e468acf4da519171510f2ec982f70a0fd9eb2c8b/runtime/src/bank.rs#L4833
+                const ls_slots = if (true)
+                    try LeaderSchedule.fromVoteAccounts(
+                        allocator,
+                        epoch,
+                        epoch_schedule.slots_per_epoch,
+                        try collapsed_manifest.epochVoteAccounts(epoch),
+                    )
+                else
+                    try LeaderSchedule.fromStakedNodes(
+                        allocator,
+                        epoch,
+                        epoch_schedule.slots_per_epoch,
+                        staked_nodes,
+                    );
+                const ls_struct = LeaderSchedule{
+                    .allocator = allocator,
+                    .slot_leaders = ls_slots,
+                };
+                try leader_schedule_cache.put(epoch, ls_struct);
+                break :ls ls_slots;
+            };
         errdefer allocator.free(leader_schedule);
 
         try epoch_context_manager.put(epoch, .{
@@ -1202,7 +1213,11 @@ fn validator(
     const consensus_deps = if (cfg.disable_consensus)
         null
     else
-        try consensusDependencies(allocator, &gossip_service.gossip_table_rw);
+        try consensusDependencies(
+            allocator,
+            &gossip_service.gossip_table_rw,
+            &leader_schedule_cache,
+        );
     defer if (consensus_deps) |d| d.deinit();
 
     var replay_service = try replay.Service.init(&replay_deps, consensus_deps, cfg.replay_threads);
@@ -1335,7 +1350,11 @@ fn replayOffline(
     const consensus_deps = if (cfg.disable_consensus)
         null
     else
-        try consensusDependencies(allocator, null);
+        try consensusDependencies(
+            allocator,
+            null,
+            &leader_schedule_cache,
+        );
     defer if (consensus_deps) |d| d.deinit();
 
     var replay_service = try replay.Service.init(&replay_deps, consensus_deps, cfg.replay_threads);
@@ -1990,6 +2009,7 @@ fn replayDependencies(
 fn consensusDependencies(
     allocator: std.mem.Allocator,
     gossip_table: ?*sig.sync.RwMux(sig.gossip.GossipTable),
+    leader_schedule: ?*sig.core.leader_schedule.LeaderScheduleCache,
 ) !replay.TowerConsensus.Dependencies.External {
     const senders: sig.replay.TowerConsensus.Senders = try .create(allocator);
     errdefer senders.destroy();
@@ -2001,6 +2021,7 @@ fn consensusDependencies(
         .senders = senders,
         .receivers = receivers,
         .gossip_table = gossip_table,
+        .leader_schedule = leader_schedule,
     };
 }
 

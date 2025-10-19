@@ -2,6 +2,7 @@ const std = @import("std");
 const sig = @import("../../sig.zig");
 const replay = @import("../lib.zig");
 const tracy = @import("tracy");
+const network = @import("zig-network");
 
 const Allocator = std.mem.Allocator;
 const AtomicBool = std.atomic.Value(bool);
@@ -26,8 +27,12 @@ const SlotAndHash = sig.core.hash.SlotAndHash;
 const SlotConstants = sig.core.SlotConstants;
 const SlotState = sig.core.SlotState;
 const Transaction = sig.core.transaction.Transaction;
+const SocketAddr = sig.net.SocketAddr;
 
 const AccountReader = sig.accounts_db.AccountReader;
+
+/// Transaction forwarding, which leader to forward to and how long to hold
+const FORWARD_TRANSACTIONS_TO_LEADER_AT_SLOT_OFFSET: u64 = 2;
 
 const Ledger = sig.ledger.Ledger;
 
@@ -102,6 +107,7 @@ pub const TowerConsensus = struct {
 
     // Sending votes
     gossip_table: ?*sig.sync.RwMux(sig.gossip.GossipTable),
+    leader_schedule: ?*sig.core.leader_schedule.LeaderScheduleCache,
 
     // Supporting services
     vote_listener: ?VoteListener,
@@ -143,6 +149,7 @@ pub const TowerConsensus = struct {
             senders: Senders,
             receivers: Receivers,
             gossip_table: ?*RwMux(sig.gossip.GossipTable),
+            leader_schedule: ?*sig.core.leader_schedule.LeaderScheduleCache,
             run_vote_listener: bool = true,
 
             pub fn deinit(self: External) void {
@@ -291,6 +298,7 @@ pub const TowerConsensus = struct {
             .senders = deps.external.senders,
             .receivers = deps.external.receivers,
             .gossip_table = deps.external.gossip_table,
+            .leader_schedule = deps.external.leader_schedule,
             .vote_listener = vote_listener,
             .verified_vote_channel = verified_vote_channel,
         };
@@ -617,6 +625,7 @@ pub const TowerConsensus = struct {
                 return error.MissingSlotInTracker;
 
             try handleVotableBank(
+                self.logger,
                 allocator,
                 self.ledger.resultWriter(),
                 voted.slot,
@@ -632,6 +641,7 @@ pub const TowerConsensus = struct {
                 self.vote_account_pubkey,
                 voted.decision,
                 self.gossip_table,
+                self.leader_schedule,
             );
         }
 
@@ -847,6 +857,7 @@ pub const GenerateVoteTxResult = union(enum) {
 ///
 /// Analogous to [handle_votable_bank](https://github.com/anza-xyz/agave/blob/ccdcdbe9b6ff7dbd583d2101fe57b7cc41a6f863/core/src/replay_stage.rs#L2388)
 fn handleVotableBank(
+    logger: Logger,
     allocator: std.mem.Allocator,
     ledger_result_writer: Ledger.ResultWriter,
     vote_slot: Slot,
@@ -862,6 +873,7 @@ fn handleVotableBank(
     vote_account_pubkey: Pubkey,
     switch_fork_decision: SwitchForkDecision,
     gossip_table_rw: ?*sig.sync.RwMux(sig.gossip.GossipTable),
+    leader_schedule: ?*sig.core.leader_schedule.LeaderScheduleCache,
 ) !void {
     const maybe_new_root = try replay_tower.recordBankVote(
         allocator,
@@ -885,7 +897,9 @@ fn handleVotableBank(
     // TODO update_commitment_cache
 
     try pushVote(
+        logger,
         allocator,
+        vote_slot,
         replay_tower,
         slot_tracker,
         epoch_tracker,
@@ -895,6 +909,7 @@ fn handleVotableBank(
         vote_account_pubkey,
         switch_fork_decision,
         gossip_table_rw,
+        leader_schedule,
     );
 }
 
@@ -906,7 +921,9 @@ fn handleVotableBank(
 ///
 /// Analogous to [push_vote](https://github.com/anza-xyz/agave/blob/ccdcdbe9b6ff7dbd583d2101fe57b7cc41a6f863/core/src/replay_stage.rs#L2775)
 fn pushVote(
+    logger: Logger,
     allocator: std.mem.Allocator,
+    vote_slot: Slot,
     replay_tower: *ReplayTower,
     slot_tracker: *SlotTracker,
     epoch_tracker: *const EpochTracker,
@@ -916,6 +933,7 @@ fn pushVote(
     vote_account_pubkey: Pubkey,
     switch_fork_decision: SwitchForkDecision,
     gossip_table_rw: ?*sig.sync.RwMux(sig.gossip.GossipTable),
+    leader_schedule: ?*sig.core.leader_schedule.LeaderScheduleCache,
 ) !void {
     const vote_tx_result = try generateVoteTx(
         allocator,
@@ -939,6 +957,9 @@ fn pushVote(
             errdefer allocator.free(tower_slots);
 
             try sendVote(
+                logger,
+                allocator,
+                vote_slot,
                 .{
                     .push_vote = .{
                         .tower_slots = tower_slots,
@@ -946,6 +967,7 @@ fn pushVote(
                     },
                 },
                 gossip_table_rw,
+                leader_schedule,
                 node_keypair,
             );
         },
@@ -958,61 +980,199 @@ fn pushVote(
     }
 }
 
-fn sendVote(
-    vote_op: VoteOp,
-    gossip_table_rw: ?*sig.sync.RwMux(sig.gossip.GossipTable),
-    my_keypair: ?sig.identity.KeyPair,
-) !void {
-    if (gossip_table_rw) |table| {
-        const gossip_table, var gossip_table_lock = table.writeWithLock();
-        defer gossip_table_lock.unlock();
+/// Returns an owned slice of tpu vote sockets for the leaders of the next N fanout
+/// slots. Leaders and sockets are deduped. Caller owns the returned slice.
+fn upcomingLeaderTpuVoteSockets(
+    allocator: Allocator,
+    current_slot: Slot,
+    leader_schedule: *sig.core.leader_schedule.LeaderScheduleCache,
+    gossip_table_rw: *sig.sync.RwMux(sig.gossip.GossipTable),
+    fanout_slots: u64,
+) ![]SocketAddr {
+    var seen_leaders: std.AutoHashMapUnmanaged(Pubkey, void) = .empty;
+    defer seen_leaders.deinit(allocator);
 
-        const now = sig.time.getWallclockMs();
-
-        if (my_keypair) |keypair| {
-            const my_pubkey = Pubkey.fromPublicKey(&keypair.public_key);
-
-            switch (vote_op) {
-                .push_vote => |push_vote_data| {
-                    const vote_data = sig.gossip.data.GossipData{
-                        .Vote = .{
-                            0, // tag
-                            .{
-                                .from = my_pubkey,
-                                .transaction = push_vote_data.tx,
-                                .wallclock = now,
-                                .slot = 0, // will be set from transaction
-                            },
-                        },
-                    };
-
-                    const signed_vote_data = sig.gossip.data.SignedGossipData.initSigned(
-                        &keypair,
-                        vote_data,
-                    );
-                    _ = try gossip_table.insert(signed_vote_data, now);
-                },
-                .refresh_vote => |refresh_vote_data| {
-                    const vote_data = sig.gossip.data.GossipData{
-                        .Vote = .{
-                            0, // tag
-                            .{
-                                .from = my_pubkey,
-                                .transaction = refresh_vote_data.tx,
-                                .wallclock = now,
-                                .slot = refresh_vote_data.last_voted_slot,
-                            },
-                        },
-                    };
-
-                    const signed_vote_data = sig.gossip.data.SignedGossipData.initSigned(
-                        &keypair,
-                        vote_data,
-                    );
-                    _ = try gossip_table.insert(signed_vote_data, now);
-                },
-            }
+    for (0..fanout_slots) |n_slots| {
+        const target_slot = current_slot + n_slots;
+        if (leader_schedule.slotLeader(target_slot)) |leader| {
+            try seen_leaders.put(allocator, leader, {});
         }
+    }
+
+    const gossip_table, var gossip_table_lg = gossip_table_rw.readWithLock();
+    defer gossip_table_lg.unlock();
+
+    var seen_sockets: std.AutoHashMapUnmanaged(SocketAddr, void) = .empty;
+    defer seen_sockets.deinit(allocator);
+
+    var leader_sockets: std.ArrayListUnmanaged(SocketAddr) = .empty;
+    defer leader_sockets.deinit(allocator);
+
+    var leader_iter = seen_leaders.keyIterator();
+    while (leader_iter.next()) |leader_pubkey_ptr| {
+        const leader_pubkey = leader_pubkey_ptr.*;
+        const contact_info = gossip_table.getThreadSafeContactInfo(leader_pubkey) orelse continue;
+
+        const socket_addr = contact_info.tpu_addr orelse continue;
+
+        const gop = try seen_sockets.getOrPut(allocator, socket_addr);
+        if (!gop.found_existing) {
+            try leader_sockets.append(allocator, socket_addr);
+        }
+    }
+
+    return leader_sockets.toOwnedSlice(allocator);
+}
+
+fn sendVoteTransaction(
+    logger: Logger,
+    allocator: Allocator,
+    vote_tx: Transaction,
+    tpu_address: SocketAddr,
+) !void {
+    var serialized: std.ArrayListUnmanaged(u8) = .empty;
+    defer serialized.deinit(allocator);
+
+    try sig.bincode.write(serialized.writer(allocator), vote_tx, .{});
+
+    const socket = switch (tpu_address) {
+        .V4 => network.Socket.create(.ipv4, .udp) catch |err| {
+            logger.err().logf("Failed to create socket for vote send: {}", .{err});
+            return err;
+        },
+        .V6 => network.Socket.create(.ipv6, .udp) catch |err| {
+            logger.err().logf("Failed to create socket for vote send: {}", .{err});
+            return err;
+        },
+    };
+    defer socket.close();
+
+    const endpoint = tpu_address.toEndpoint();
+    _ = socket.sendTo(endpoint, serialized.items) catch |err| {
+        logger.err().logf("Failed to send vote transaction: {}", .{err});
+        return err;
+    };
+}
+
+fn sendVoteToLeaders(
+    logger: Logger,
+    allocator: Allocator,
+    vote_slot: Slot,
+    vote_tx: Transaction,
+    leader_schedule: *sig.core.leader_schedule.LeaderScheduleCache,
+    gossip_table_rw: *sig.sync.RwMux(sig.gossip.GossipTable),
+) !void {
+    const UPCOMING_LEADER_FANOUT_SLOTS: u64 =
+        FORWARD_TRANSACTIONS_TO_LEADER_AT_SLOT_OFFSET + 1;
+
+    const upcoming_leader_sockets = try upcomingLeaderTpuVoteSockets(
+        allocator,
+        vote_slot,
+        leader_schedule,
+        gossip_table_rw,
+        UPCOMING_LEADER_FANOUT_SLOTS,
+    );
+    defer allocator.free(upcoming_leader_sockets);
+
+    for (upcoming_leader_sockets) |tpu_vote_socket| {
+        sendVoteTransaction(logger, allocator, vote_tx, tpu_vote_socket) catch |err| {
+            logger.err().logf("Failed to send vote to leader: {}", .{err});
+        };
+    }
+}
+
+fn sendVoteToGossip(
+    vote_op: VoteOp,
+    gossip_table_rw: *sig.sync.RwMux(sig.gossip.GossipTable),
+    my_keypair: sig.identity.KeyPair,
+) !void {
+    const gossip_table, var gossip_table_lock = gossip_table_rw.writeWithLock();
+    defer gossip_table_lock.unlock();
+
+    const now = sig.time.getWallclockMs();
+
+    const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
+
+    switch (vote_op) {
+        .push_vote => |push_vote_data| {
+            const vote_data = sig.gossip.data.GossipData{
+                .Vote = .{
+                    0, // tag
+                    .{
+                        .from = my_pubkey,
+                        .transaction = push_vote_data.tx,
+                        .wallclock = now,
+                        .slot = 0, // will be set from transaction
+                    },
+                },
+            };
+
+            const signed_vote_data = sig.gossip.data.SignedGossipData.initSigned(
+                &my_keypair,
+                vote_data,
+            );
+            _ = try gossip_table.insert(signed_vote_data, now);
+        },
+        .refresh_vote => |refresh_vote_data| {
+            const vote_data = sig.gossip.data.GossipData{
+                .Vote = .{
+                    0, // tag
+                    .{
+                        .from = my_pubkey,
+                        .transaction = refresh_vote_data.tx,
+                        .wallclock = now,
+                        .slot = refresh_vote_data.last_voted_slot,
+                    },
+                },
+            };
+
+            const signed_vote_data = sig.gossip.data.SignedGossipData.initSigned(
+                &my_keypair,
+                vote_data,
+            );
+            _ = try gossip_table.insert(signed_vote_data, now);
+        },
+    }
+}
+
+fn sendVote(
+    logger: Logger,
+    allocator: Allocator,
+    vote_slot: Slot,
+    vote_op: VoteOp,
+    maybe_gossip_table_rw: ?*sig.sync.RwMux(sig.gossip.GossipTable),
+    maybe_leader_schedule: ?*sig.core.leader_schedule.LeaderScheduleCache,
+    maybe_my_keypair: ?sig.identity.KeyPair,
+) !void {
+    const gossip_table_rw = maybe_gossip_table_rw orelse {
+        logger.warn().log("Cannot send vote: gossip table not provided");
+        return;
+    };
+
+    const vote_tx = switch (vote_op) {
+        .push_vote => |push_vote_data| push_vote_data.tx,
+        .refresh_vote => |refresh_vote_data| refresh_vote_data.tx,
+    };
+
+    // Send to upcoming leaders
+    if (maybe_leader_schedule) |leader_schedule| {
+        try sendVoteToLeaders(
+            logger,
+            allocator,
+            vote_slot,
+            vote_tx,
+            leader_schedule,
+            gossip_table_rw,
+        );
+    }
+
+    // Send to gossip
+    if (maybe_my_keypair) |my_keypair| {
+        try sendVoteToGossip(
+            vote_op,
+            gossip_table_rw,
+            my_keypair,
+        );
     }
 }
 

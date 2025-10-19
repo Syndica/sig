@@ -1194,6 +1194,7 @@ pub const DependencyStubs = struct {
             .senders = self.senders,
             .receivers = self.receivers,
             .gossip_table = null,
+            .leader_schedule = null,
             .run_vote_listener = run_vote_listener,
         };
 
