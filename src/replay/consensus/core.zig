@@ -275,7 +275,7 @@ pub const TowerConsensus = struct {
                     .verified_vote = verified_vote_channel,
                     .gossip_verified_vote_hash = deps.external.receivers.gossip_verified_vote_hash,
                     .bank_notification = null,
-                    .duplicate_confirmed_slot = deps.external.receivers.duplicate_confirmed_slots,
+                    .duplicate_confirmed_slots = deps.external.receivers.duplicate_confirmed_slots,
                     .subscriptions = .{},
                 },
             },
