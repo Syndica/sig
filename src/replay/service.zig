@@ -267,7 +267,7 @@ pub const ReplayState = struct {
             &slot_tracker,
             &epoch_tracker,
             deps.identity.validator,
-            deps.identity.vote,
+            deps.identity.vote_account,
         );
         errdefer progress_map.deinit(deps.allocator);
 
@@ -1160,7 +1160,7 @@ pub const DependencyStubs = struct {
                 .logger = logger,
                 .identity = .{
                     .validator = .initRandom(random),
-                    .vote = .initRandom(random),
+                    .vote_account = .initRandom(random),
                 },
                 .signing = .{
                     .node = null,
