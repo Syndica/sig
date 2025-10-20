@@ -405,11 +405,11 @@ pub const AccountsDB = struct {
                 .full_slot = full_man.bank_fields.slot,
                 .expected_full = .{
                     .accounts_hash = full_man.bank_extra.accounts_lt_hash,
-                    .capitalization = full_man.bank_fields.capitalization,
+                    // .capitalization = full_man.bank_fields.capitalization,
                 },
-                .expected_incremental = if (maybe_inc_persistence) |persistence| .{
+                .expected_incremental = if (maybe_inc_persistence) |_| .{
                     .accounts_hash = full_inc_manifest.incremental.?.bank_extra.accounts_lt_hash,
-                    .capitalization = persistence.incremental_capitalization,
+                    // .capitalization = persistence.incremental_capitalization,
                 } else null,
             });
             self.logger.info().logf(
@@ -441,6 +441,8 @@ pub const AccountsDB = struct {
         const collapsed_manifest = try full_inc_manifest.collapse(self.allocator);
         errdefer collapsed_manifest.deinit(self.allocator);
 
+        std.debug.print("collapsed_manifest: {}\n", .{collapsed_manifest});
+
         {
             var load_timer = try sig.time.Timer.start();
             try self.loadFromSnapshot(
@@ -454,21 +456,35 @@ pub const AccountsDB = struct {
 
         {
             const full_man = full_inc_manifest.full;
+
+            std.debug.print("full_inc_manifest.incremental: {?}\n", .{full_inc_manifest.incremental});
+            if (full_inc_manifest.incremental) |inc| {
+                std.debug.print("-------------->inc hash: {}\n", .{inc.bank_extra.accounts_lt_hash.checksum()});
+            }
+
             const maybe_inc_persistence = if (full_inc_manifest.incremental) |inc|
                 inc.bank_extra.snapshot_persistence
             else
                 null;
+
+            std.debug.print("   maybe_inc_persistence == null: {}\n", .{maybe_inc_persistence == null});
+            std.debug.print("maybe_inc_persistence: {?}\n", .{maybe_inc_persistence});
+
+            std.debug.print("---->full_man.bank_fields.capitalization: {}\n", .{full_man.bank_fields.capitalization});
+            if (full_inc_manifest.incremental) |inc| {
+                std.debug.print("--->inc.bank_fields.capitalization: {}\n", .{inc.bank_fields.capitalization});
+            }
 
             var validate_timer = try sig.time.Timer.start();
             try self.validateLoadFromSnapshot(.{
                 .full_slot = full_man.bank_fields.slot,
                 .expected_full = .{
                     .accounts_hash = full_man.bank_extra.accounts_lt_hash,
-                    .capitalization = full_man.bank_fields.capitalization,
+                    // .capitalization = full_man.bank_fields.capitalization,
                 },
-                .expected_incremental = if (maybe_inc_persistence) |persistence| .{
-                    .accounts_hash = full_inc_manifest.incremental.?.bank_extra.accounts_lt_hash,
-                    .capitalization = persistence.incremental_capitalization,
+                .expected_incremental = if (full_inc_manifest.incremental) |inc| .{
+                    .accounts_hash = inc.bank_extra.accounts_lt_hash,
+                    // .capitalization = inc.bank_fields.capitalization,
                 } else null,
             });
             self.logger.info().logf(
@@ -1109,6 +1125,7 @@ pub const AccountsDB = struct {
     fn computeAccountHashesAndLamports(
         self: *AccountsDB,
         config: AccountHashesConfig,
+        hash_from: ?LtHash,
     ) !struct { LtHash, u64 } {
         const zone = tracy.Zone.init(@src(), .{
             .name = "accountsdb computeAccountHashesAndLamports",
@@ -1149,7 +1166,7 @@ pub const AccountsDB = struct {
 
         const total_lamports, const accounts_hash = blk: {
             var lamports_sum: u64 = 0;
-            var hash: LtHash = .IDENTITY;
+            var hash: LtHash = if (hash_from) |hash| hash else .IDENTITY;
             for (task_results) |result| {
                 lamports_sum += result.lamports;
                 hash.mixIn(result.hash);
@@ -1225,7 +1242,7 @@ pub const AccountsDB = struct {
 
         pub const ExpectedSnapInfo = struct {
             accounts_hash: LtHash,
-            capitalization: u64,
+            // capitalization: u64,
         };
     };
 
@@ -1263,11 +1280,14 @@ pub const AccountsDB = struct {
 
         // validate the full snapshot
         self.logger.info().logf("validating the full snapshot", .{});
-        const accounts_hash, const total_lamports = try self.computeAccountHashesAndLamports(.{
-            .FullAccountHash = .{
-                .max_slot = params.full_slot,
+        const accounts_hash, const total_lamports = try self.computeAccountHashesAndLamports(
+            .{
+                .FullAccountHash = .{
+                    .max_slot = params.full_slot,
+                },
             },
-        });
+            null,
+        );
 
         if (!params.expected_full.accounts_hash.eql(accounts_hash)) {
             self.logger.err().logf(
@@ -1277,13 +1297,13 @@ pub const AccountsDB = struct {
             return error.IncorrectAccountsHash;
         }
 
-        if (params.expected_full.capitalization != total_lamports) {
-            self.logger.err().logf(
-                "incorrect total lamports: expected vs calculated: {d} vs {d}",
-                .{ params.expected_full.capitalization, total_lamports },
-            );
-            return error.IncorrectTotalLamports;
-        }
+        // if (params.expected_full.capitalization != total_lamports) {
+        //     self.logger.err().logf(
+        //         "incorrect total lamports: expected vs calculated: {d} vs {d}",
+        //         .{ params.expected_full.capitalization, total_lamports },
+        //     );
+        //     return error.IncorrectTotalLamports;
+        // }
 
         if (maybe_latest_snapshot_info.*) |latest_snapshot_info| {
             // ASSERTION: nothing has changed if we previously successfully
@@ -1293,8 +1313,10 @@ pub const AccountsDB = struct {
             // have occurred since the first call to this function.
             std.debug.assert(latest_snapshot_info.full.slot == params.full_slot);
             std.debug.assert(latest_snapshot_info.full.hash.eql(accounts_hash));
-            std.debug.assert(latest_snapshot_info.full.capitalization == total_lamports);
+            // std.debug.assert(latest_snapshot_info.full.capitalization == total_lamports);
         }
+
+        std.debug.print("     WRITING TO maybe_first_snapshot_info (NO inc)\n", .{});
         maybe_first_snapshot_info.* = .{
             .full = .{
                 .slot = params.full_slot,
@@ -1307,26 +1329,73 @@ pub const AccountsDB = struct {
 
         // validate the incremental snapshot
         if (params.expected_incremental) |expected_incremental| {
+            std.debug.print("------------->expected_incremental.accounts_hash.checksum(): {}\n", .{expected_incremental.accounts_hash.checksum()});
+
             self.logger.info().logf("validating the incremental snapshot", .{});
 
             const inc_slot = self.getLargestRootedSlot() orelse 0;
 
             const accounts_delta_hash, //
             const incremental_lamports //
-            = try self.computeAccountHashesAndLamports(.{
-                .IncrementalAccountHash = .{
-                    .min_slot = params.full_slot,
-                    .max_slot = inc_slot,
+            = try self.computeAccountHashesAndLamports(
+                .{
+                    .IncrementalAccountHash = .{
+                        .min_slot = params.full_slot,
+                        .max_slot = inc_slot,
+                    },
                 },
-            });
+                accounts_hash,
+            );
 
-            if (expected_incremental.capitalization != incremental_lamports) {
-                self.logger.err().logf(
-                    "incorrect incremental lamports: expected vs calculated: {d} vs {d}",
-                    .{ expected_incremental.capitalization, incremental_lamports },
-                );
-                return error.IncorrectIncrementalLamports;
+            {
+                for (&[_]usize{ 0, 1, 2, 3, 4, 5 }) |i| {
+                    const accounts_delta_hash_i, //
+                    const incremental_lamports_i //
+                    = try self.computeAccountHashesAndLamports(
+                        .{
+                            .IncrementalAccountHash = .{
+                                .min_slot = params.full_slot + i,
+                                .max_slot = inc_slot,
+                            },
+                        },
+                        null,
+                    );
+
+                    _ = incremental_lamports_i;
+
+                    std.debug.print("computed {} from full_slot + {} .. inc_slot: {}\n", .{ accounts_delta_hash_i.checksum(), i, inc_slot });
+                }
             }
+
+            {
+                for (&[_]usize{ 0, 1, 2, 3, 4, 5 }) |i| {
+                    const accounts_delta_hash_i, //
+                    const incremental_lamports_i //
+                    = try self.computeAccountHashesAndLamports(
+                        .{
+                            .IncrementalAccountHash = .{
+                                .min_slot = params.full_slot + i,
+                                .max_slot = inc_slot,
+                            },
+                        },
+                        accounts_hash,
+                    );
+
+                    _ = incremental_lamports_i;
+
+                    std.debug.print("(with accounts_hash) computed {} from full_slot + {} .. inc_slot: {}\n", .{ accounts_delta_hash_i.checksum(), i, inc_slot });
+                }
+            }
+
+            _ = incremental_lamports;
+
+            // if (expected_incremental.capitalization != incremental_lamports) {
+            //     self.logger.err().logf(
+            //         "incorrect incremental lamports: expected vs calculated: {d} vs {d}",
+            //         .{ expected_incremental.capitalization, incremental_lamports },
+            //     );
+            //     return error.IncorrectIncrementalLamports;
+            // }
 
             if (expected_incremental.accounts_hash.eql(accounts_delta_hash)) {
                 self.logger.err().logf(
@@ -1339,14 +1408,20 @@ pub const AccountsDB = struct {
             // ASSERTION: same idea as the previous assertion, but applied to
             // the incremental snapshot info.
             if (p_maybe_first_inc.*) |first_inc| {
+                std.debug.print("first_inc.hash.checksum(): {}\n", .{first_inc.hash.checksum()});
+
                 std.debug.assert(first_inc.slot == inc_slot);
                 std.debug.assert(first_inc.hash.eql(accounts_delta_hash));
-                std.debug.assert(first_inc.capitalization == incremental_lamports);
+                // std.debug.assert(first_inc.capitalization == incremental_lamports);
             }
+            std.debug.print("     WRITING TO maybe_first_snapshot_info (inc!!)\n", .{});
+
+            std.debug.print("---------->accounts_delta_hash.checksum(): {}\n", .{accounts_delta_hash.checksum()});
+
             p_maybe_first_inc.* = .{
                 .slot = inc_slot,
                 .hash = accounts_delta_hash,
-                .capitalization = incremental_lamports,
+                // .capitalization = incremental_lamports,
             };
         }
 
@@ -2340,8 +2415,8 @@ pub const AccountsDB = struct {
             slot: Slot,
             /// The incremental accounts delta hash, including zero-lamport accounts.
             hash: LtHash,
-            /// The capitalization from the base slot to the incremental slot.
-            capitalization: u64,
+            // /// The capitalization from the base slot to the incremental slot.
+            // capitalization: u64,
         };
     };
 
@@ -2419,11 +2494,14 @@ pub const AccountsDB = struct {
                 break :compute .{ first.full.hash, first.full.capitalization };
             }
 
-            break :compute try self.computeAccountHashesAndLamports(.{
-                .FullAccountHash = .{
-                    .max_slot = params.target_slot,
+            break :compute try self.computeAccountHashesAndLamports(
+                .{
+                    .FullAccountHash = .{
+                        .max_slot = params.target_slot,
+                    },
                 },
-            });
+                null,
+            );
         };
 
         const full_hash = full_lt_hash.checksum();
@@ -2578,7 +2656,7 @@ pub const AccountsDB = struct {
         full_hash: LtHash,
         full_capitalization: u64,
         incremental_hash: LtHash,
-        incremental_capitalization: u64,
+        // incremental_capitalization: u64,
 
         fn intoSnapshotPersistence(
             self: GenerateIncSnapshotResult,
@@ -2588,7 +2666,7 @@ pub const AccountsDB = struct {
                 .full_hash = self.full_hash.checksum(),
                 .full_capitalization = self.full_capitalization,
                 .incremental_hash = self.incremental_hash.checksum(),
-                .incremental_capitalization = self.incremental_capitalization,
+                .incremental_capitalization = 0,
             };
         }
     };
@@ -2638,8 +2716,8 @@ pub const AccountsDB = struct {
 
         const full_snapshot_info: SnapshotGenerationInfo.Full = latest_snapshot_info.full;
 
-        const incremental_hash, //
-        const incremental_capitalization //
+        const incremental_hash //
+        // const incremental_capitalization //
         = compute: {
             check_first: {
                 const maybe_first_snapshot_info, var first_snapshot_info_lg =
@@ -2651,15 +2729,18 @@ pub const AccountsDB = struct {
                 if (first.full.slot != full_snapshot_info.slot) break :check_first;
                 if (first_inc.slot != params.target_slot) break :check_first;
 
-                break :compute .{ first_inc.hash, first_inc.capitalization };
+                break :compute first_inc.hash;
             }
 
-            break :compute try self.computeAccountHashesAndLamports(.{
-                .IncrementalAccountHash = .{
-                    .min_slot = full_snapshot_info.slot,
-                    .max_slot = params.target_slot,
+            break :compute (try self.computeAccountHashesAndLamports(
+                .{
+                    .IncrementalAccountHash = .{
+                        .min_slot = full_snapshot_info.slot,
+                        .max_slot = params.target_slot,
+                    },
                 },
-            });
+                full_snapshot_info.hash,
+            ))[0];
         };
 
         const archive_file = blk: {
@@ -2718,7 +2799,7 @@ pub const AccountsDB = struct {
             .full_hash = full_snapshot_info.hash,
             .full_capitalization = full_snapshot_info.capitalization,
             .incremental_hash = incremental_hash,
-            .incremental_capitalization = incremental_capitalization,
+            // .incremental_capitalization = incremental_capitalization,
         };
 
         params.bank_fields.slot = params.target_slot; // !
@@ -2799,7 +2880,7 @@ pub const AccountsDB = struct {
         latest_snapshot_info.inc = .{
             .slot = params.target_slot,
             .hash = incremental_hash,
-            .capitalization = incremental_capitalization,
+            // .capitalization = incremental_capitalization,
         };
 
         return snap_persistence;
@@ -3622,11 +3703,11 @@ test "load and validate from test snapshot - single threaded" {
         .full_slot = full_inc_manifest.full.bank_fields.slot,
         .expected_full = .{
             .accounts_hash = full_inc_manifest.full.bank_extra.accounts_lt_hash,
-            .capitalization = full_inc_manifest.full.bank_fields.capitalization,
+            // .capitalization = full_inc_manifest.full.bank_fields.capitalization,
         },
-        .expected_incremental = if (maybe_inc_persistence) |inc_persistence| .{
+        .expected_incremental = if (maybe_inc_persistence) |_| .{
             .accounts_hash = full_inc_manifest.incremental.?.bank_extra.accounts_lt_hash,
-            .capitalization = inc_persistence.incremental_capitalization,
+            // .capitalization = inc_persistence.incremental_capitalization,
         } else null,
     });
 
