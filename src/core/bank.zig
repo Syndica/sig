@@ -237,12 +237,55 @@ pub const SlotState = struct {
         allocator: Allocator,
         bank_fields: *const BankFields,
         lt_hash: ?LtHash,
-    ) Allocator.Error!SlotState {
+        account_reader: sig.accounts_db.account_store.SlotAccountReader,
+    ) !SlotState {
         const blockhash_queue = try bank_fields.blockhash_queue.clone(allocator);
         errdefer blockhash_queue.deinit(allocator);
 
-        const stakes = try bank_fields.stakes.clone(allocator);
-        errdefer stakes.deinit(allocator);
+        const vote_accounts = try bank_fields.stakes.vote_accounts.clone(allocator);
+        errdefer vote_accounts.deinit(allocator);
+
+        var stake_accounts = std.AutoArrayHashMapUnmanaged(Pubkey, sig.core.stake.Stake){};
+        errdefer stake_accounts.deinit(allocator);
+
+        const keys = bank_fields.stakes.stake_delegations.keys();
+        const values = bank_fields.stakes.stake_delegations.values();
+        for (keys, values) |key, value| {
+            const account = try account_reader.get(allocator, key) orelse
+                return error.StakeAccountNotFound;
+            defer account.deinit(allocator);
+
+            if (account.data.len() != sig.core.stake.StakeStateV2.SIZE) {
+                return error.InvalidStakeState;
+            }
+            var state_buffer = [_]u8{0} ** sig.core.stake.StakeStateV2.SIZE;
+            account.data.readAll(&state_buffer);
+
+            const state = try sig.bincode.readFromSlice(
+                allocator,
+                sig.core.stake.StakeStateV2,
+                &state_buffer,
+                .{},
+            );
+
+            const credits_observed = switch (state) {
+                .stake => |s| s.stake.credits_observed,
+                else => return error.InvalidStakeState,
+            };
+
+            try stake_accounts.put(allocator, key, sig.core.stake.Stake{
+                .delegation = value,
+                .credits_observed = credits_observed,
+            });
+        }
+
+        const stakes = Stakes(.stake){
+            .vote_accounts = vote_accounts,
+            .stake_delegations = stake_accounts,
+            .epoch = bank_fields.stakes.epoch,
+            .stake_history = bank_fields.stakes.stake_history,
+            .unused = bank_fields.stakes.unused,
+        };
 
         return .{
             .blockhash_queue = .init(blockhash_queue),

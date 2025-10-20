@@ -72,12 +72,7 @@ pub fn beginPartitionedRewards(
     const epoch_schedule = &epoch_tracker.schedule;
     const feature_set = &slot_constants.feature_set;
     const inflation = &slot_constants.inflation;
-
-    // TODO: This is a hack for compilation, we need to use .stake variant in runtime
-    // so we can access and modify the credits observed field
-    // const stakes_cache = &slot_state.stakes_cache;
-    var stakes_cache = StakesCache.EMPTY;
-    defer stakes_cache.deinit(allocator);
+    const stakes_cache = &slot_state.stakes_cache;
 
     const new_warmup_and_cooldown_rate_epoch = feature_set.newWarmupCooldownRateEpoch(
         epoch_schedule,
@@ -94,7 +89,7 @@ pub fn beginPartitionedRewards(
             epoch_schedule,
             feature_set,
             inflation,
-            &stakes_cache,
+            stakes_cache,
             &epoch_vote_accounts,
             new_warmup_and_cooldown_rate_epoch,
             slot_store,

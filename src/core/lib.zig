@@ -43,7 +43,7 @@ pub const VersionedEpochStakes = epoch_stakes.VersionedEpochStakes;
 /// change requires populating the `StakesCache` loading accounts from the accounts db, deserializing
 /// the account state, and creating either a `Stake` or `StakeAccount`. For now we will use the
 /// `.delegation` variant for simplicity.
-pub const StakesCache = stake.StakesCacheGeneric(.delegation);
+pub const StakesCache = stake.StakesCacheGeneric(.stake);
 pub const StakesType = stake.StakesType;
 pub const Stakes = stake.Stakes;
 
