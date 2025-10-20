@@ -1244,7 +1244,7 @@ pub const DependencyStubs = struct {
                 .logger = .FOR_TESTS,
                 .identity = .{
                     .validator = .ZEROES,
-                    .vote = .ZEROES,
+                    .vote_account = .ZEROES,
                 },
                 .signing = .{
                     .node = null,
