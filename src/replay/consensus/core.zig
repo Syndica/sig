@@ -3404,4 +3404,320 @@ test "generateVoteTx - wrong authorized voter returns non_voting" {
     try testing.expectEqual(.non_voting, result);
 }
 
+test "sendVote - without gossip table does not send and does not throw" {
+    const allocator = testing.allocator;
+
+    var tower_slots = [_]Slot{ 100, 200 };
+    const tower_slots_slice: []Slot = &tower_slots;
+
+    var leader_schedule_cache = sig.core.leader_schedule.LeaderScheduleCache.init(
+        allocator,
+        .DEFAULT,
+    );
+    defer {
+        const leader_schedules, var lg = leader_schedule_cache.leader_schedules.writeWithLock();
+        defer lg.unlock();
+        for (leader_schedules.values()) |schedule| {
+            schedule.deinit();
+        }
+        leader_schedules.deinit();
+    }
+
+    const vote_op = VoteOp{
+        .push_vote = .{
+            .tx = Transaction.EMPTY,
+            .tower_slots = tower_slots_slice,
+        },
+    };
+
+    sendVote(
+        .noop,
+        allocator,
+        0,
+        vote_op,
+        null,
+        &leader_schedule_cache,
+        sig.identity.KeyPair.generate(),
+    ) catch unreachable; // sendVote does not throw
+}
+
+test "sendVote - without keypair does not send and does not throw" {
+    const allocator = testing.allocator;
+
+    var tower_slots = [_]Slot{ 100, 200 };
+    const tower_slots_slice: []Slot = &tower_slots;
+
+    var leader_schedule_cache = sig.core.leader_schedule.LeaderScheduleCache.init(
+        allocator,
+        .DEFAULT,
+    );
+    defer {
+        const leader_schedules, var lg = leader_schedule_cache.leader_schedules.writeWithLock();
+        defer lg.unlock();
+        for (leader_schedules.values()) |schedule| {
+            schedule.deinit();
+        }
+        leader_schedules.deinit();
+    }
+
+    var gossip_table = try sig.gossip.GossipTable.init(allocator, allocator);
+    defer gossip_table.deinit();
+    var gossip_table_rw = sig.sync.RwMux(sig.gossip.GossipTable).init(gossip_table);
+
+    const vote_op = VoteOp{
+        .push_vote = .{
+            .tx = Transaction.EMPTY,
+            .tower_slots = tower_slots_slice,
+        },
+    };
+
+    sendVote(
+        .noop,
+        allocator,
+        0,
+        vote_op,
+        &gossip_table_rw,
+        &leader_schedule_cache,
+        null,
+    ) catch unreachable; // sendVote does not throw
+}
+
+test "sendVote - without leader schedule does not send and does not throw" {
+    const allocator = testing.allocator;
+
+    var tower_slots = [_]Slot{ 100, 200 };
+    const tower_slots_slice: []Slot = &tower_slots;
+
+    var gossip_table = try sig.gossip.GossipTable.init(allocator, allocator);
+    defer gossip_table.deinit();
+    var gossip_table_rw = sig.sync.RwMux(sig.gossip.GossipTable).init(gossip_table);
+
+    const vote_op = VoteOp{
+        .push_vote = .{
+            .tx = Transaction.EMPTY,
+            .tower_slots = tower_slots_slice,
+        },
+    };
+
+    sendVote(
+        .noop,
+        allocator,
+        0,
+        vote_op,
+        &gossip_table_rw,
+        null,
+        null,
+    ) catch unreachable; // sendVote does not throw
+}
+
+test "sendVote - sends to both gossip and upcoming leaders" {
+    const allocator = testing.allocator;
+
+    const vote_slot: Slot = 100;
+    var tower_slots = [_]Slot{vote_slot};
+    const tower_slots_slice: []Slot = &tower_slots;
+
+    const vote_op = VoteOp{
+        .push_vote = .{
+            .tx = Transaction.EMPTY,
+            .tower_slots = tower_slots_slice,
+        },
+    };
+
+    const leader_pubkey = Pubkey.initRandom(std.crypto.random);
+
+    const leader_schedule_slots = try allocator.alloc(Pubkey, 5);
+    for (leader_schedule_slots) |*slot| {
+        slot.* = leader_pubkey;
+    }
+
+    var leader_schedule_cache = sig.core.leader_schedule.LeaderScheduleCache.init(
+        allocator,
+        .DEFAULT,
+    );
+    defer {
+        const leader_schedules, var lg = leader_schedule_cache.leader_schedules.writeWithLock();
+        defer lg.unlock();
+        for (leader_schedules.values()) |schedule| {
+            schedule.deinit();
+        }
+        leader_schedules.deinit();
+    }
+
+    const leader_schedule = sig.core.leader_schedule.LeaderSchedule{
+        .allocator = allocator,
+        .slot_leaders = leader_schedule_slots,
+    };
+    try leader_schedule_cache.put(0, leader_schedule);
+
+    const gossip_table = try sig.gossip.GossipTable.init(allocator, allocator);
+    var gossip_table_rw = sig.sync.RwMux(sig.gossip.GossipTable).init(gossip_table);
+    defer sig.sync.mux.deinitMux(&gossip_table_rw);
+
+    var contact_info = sig.gossip.data.ContactInfo.init(
+        allocator,
+        leader_pubkey,
+        sig.time.getWallclockMs(),
+        0,
+    );
+    try contact_info.setSocket(.tpu_vote, sig.net.SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8001));
+
+    const leader_keypair = sig.identity.KeyPair.generate();
+    const signed_gossip_data = sig.gossip.data.SignedGossipData.initSigned(
+        &leader_keypair,
+        sig.gossip.data.GossipData{ .ContactInfo = contact_info },
+    );
+
+    {
+        const gossip_table_write, var lock = gossip_table_rw.writeWithLock();
+        defer lock.unlock();
+        _ = try gossip_table_write.insert(
+            signed_gossip_data,
+            sig.time.getWallclockMs(),
+        );
+    }
+
+    const my_keypair = sig.identity.KeyPair.generate();
+    const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
+
+    {
+        const gossip_table_read, var lock = gossip_table_rw.readWithLock();
+        defer lock.unlock();
+        // 1 entry: leader's ContactInfo with tpu_vote socket needed for sendVoteToLeaders
+        try testing.expectEqual(1, gossip_table_read.len());
+    }
+
+    try sendVote(
+        .noop,
+        allocator,
+        vote_slot,
+        vote_op,
+        &gossip_table_rw,
+        &leader_schedule_cache,
+        my_keypair,
+    );
+
+    {
+        const gossip_table_read, var lock = gossip_table_rw.readWithLock();
+        defer lock.unlock();
+
+        // 2 entries: leader's ContactInfo + vote added by sendVote
+        try testing.expectEqual(2, gossip_table_read.len());
+
+        const vote_key = sig.gossip.data.GossipKey{ .Vote = .{ 0, my_pubkey } };
+        const gossip_data = gossip_table_read.getData(vote_key).?;
+
+        try testing.expectEqual(.Vote, std.meta.activeTag(gossip_data));
+
+        const vote_data = gossip_data.Vote[1];
+        try testing.expectEqual(my_pubkey, vote_data.from);
+        try testing.expectEqual(Transaction.EMPTY, vote_data.transaction);
+    }
+}
+
+test "sendVote - refresh_vote sends to both gossip and upcoming leaders" {
+    const allocator = testing.allocator;
+
+    const vote_slot: Slot = 100;
+
+    const vote_op = VoteOp{
+        .refresh_vote = .{
+            .tx = Transaction.EMPTY,
+            .last_voted_slot = vote_slot,
+        },
+    };
+
+    const leader_pubkey = Pubkey.initRandom(std.crypto.random);
+
+    const leader_schedule_slots = try allocator.alloc(Pubkey, 5);
+    for (leader_schedule_slots) |*slot| {
+        slot.* = leader_pubkey;
+    }
+
+    var leader_schedule_cache = sig.core.leader_schedule.LeaderScheduleCache.init(
+        allocator,
+        .DEFAULT,
+    );
+    defer {
+        const leader_schedules, var lg = leader_schedule_cache.leader_schedules.writeWithLock();
+        defer lg.unlock();
+        for (leader_schedules.values()) |schedule| {
+            schedule.deinit();
+        }
+        leader_schedules.deinit();
+    }
+
+    const leader_schedule = sig.core.leader_schedule.LeaderSchedule{
+        .allocator = allocator,
+        .slot_leaders = leader_schedule_slots,
+    };
+    try leader_schedule_cache.put(0, leader_schedule);
+
+    const gossip_table = try sig.gossip.GossipTable.init(allocator, allocator);
+    var gossip_table_rw = sig.sync.RwMux(sig.gossip.GossipTable).init(gossip_table);
+    defer sig.sync.mux.deinitMux(&gossip_table_rw);
+
+    var contact_info = sig.gossip.data.ContactInfo.init(
+        allocator,
+        leader_pubkey,
+        sig.time.getWallclockMs(),
+        0,
+    );
+    try contact_info.setSocket(.tpu_vote, sig.net.SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8001));
+
+    const leader_keypair = sig.identity.KeyPair.generate();
+    const signed_gossip_data = sig.gossip.data.SignedGossipData.initSigned(
+        &leader_keypair,
+        sig.gossip.data.GossipData{ .ContactInfo = contact_info },
+    );
+
+    {
+        const gossip_table_write, var lock = gossip_table_rw.writeWithLock();
+        defer lock.unlock();
+        _ = try gossip_table_write.insert(
+            signed_gossip_data,
+            sig.time.getWallclockMs(),
+        );
+    }
+
+    const my_keypair = sig.identity.KeyPair.generate();
+    const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
+
+    {
+        const gossip_table_read, var lock = gossip_table_rw.readWithLock();
+        defer lock.unlock();
+        // 1 entry: leader's ContactInfo with tpu_vote socket needed for sendVoteToLeaders
+        try testing.expectEqual(1, gossip_table_read.len());
+    }
+
+    try sendVote(
+        .noop,
+        allocator,
+        vote_slot,
+        vote_op,
+        &gossip_table_rw,
+        &leader_schedule_cache,
+        my_keypair,
+    );
+
+    {
+        const gossip_table_read, var lock = gossip_table_rw.readWithLock();
+        defer lock.unlock();
+
+        // 2 entries: leader's ContactInfo + vote added by sendVote
+        try testing.expectEqual(2, gossip_table_read.len());
+
+        const vote_key = sig.gossip.data.GossipKey{ .Vote = .{ 0, my_pubkey } };
+        const maybe_gossip_data = gossip_table_read.getData(vote_key);
+        try testing.expect(maybe_gossip_data != null);
+
+        const gossip_data = maybe_gossip_data.?;
+        try testing.expectEqual(.Vote, std.meta.activeTag(gossip_data));
+
+        const vote_data = gossip_data.Vote[1];
+        try testing.expectEqual(my_pubkey, vote_data.from);
+        try testing.expectEqual(Transaction.EMPTY, vote_data.transaction);
+    }
+}
+
 // TODO: Re-implement tests for the new consolidated API
