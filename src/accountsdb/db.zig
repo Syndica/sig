@@ -439,6 +439,8 @@ pub const AccountsDB = struct {
         const collapsed_manifest = try full_inc_manifest.collapse(self.allocator);
         errdefer collapsed_manifest.deinit(self.allocator);
 
+        std.debug.print("collapsed_manifest: {}\n", .{collapsed_manifest});
+
         {
             var load_timer = sig.time.Timer.start();
             try self.loadFromSnapshot(
@@ -1114,6 +1116,7 @@ pub const AccountsDB = struct {
     fn computeAccountHashesAndLamports(
         self: *AccountsDB,
         config: AccountHashesConfig,
+        hash_from: ?LtHash,
     ) !struct { LtHash, u64 } {
         const zone = tracy.Zone.init(@src(), .{
             .name = "accountsdb computeAccountHashesAndLamports",
@@ -1154,7 +1157,7 @@ pub const AccountsDB = struct {
 
         const total_lamports, const accounts_hash = blk: {
             var lamports_sum: u64 = 0;
-            var hash: LtHash = .IDENTITY;
+            var hash: LtHash = if (hash_from) |hash| hash else .IDENTITY;
             for (task_results) |result| {
                 lamports_sum += result.lamports;
                 hash.mixIn(result.hash);
@@ -1272,11 +1275,14 @@ pub const AccountsDB = struct {
 
         // validate the full snapshot
         self.logger.info().logf("validating the full snapshot", .{});
-        const accounts_hash, const total_lamports = try self.computeAccountHashesAndLamports(.{
-            .FullAccountHash = .{
-                .max_slot = params.full_slot,
+        const accounts_hash, const total_lamports = try self.computeAccountHashesAndLamports(
+            .{
+                .FullAccountHash = .{
+                    .max_slot = params.full_slot,
+                },
             },
-        });
+            null,
+        );
 
         if (!params.expected_full.accounts_hash.eql(accounts_hash)) {
             self.logger.err().logf(
@@ -1308,6 +1314,8 @@ pub const AccountsDB = struct {
 
         // validate the incremental snapshot
         if (params.expected_incremental) |expected_incremental| {
+            std.debug.print("------------->expected_incremental.accounts_hash.checksum(): {}\n", .{expected_incremental.accounts_hash.checksum()});
+
             self.logger.info().logf("validating the incremental snapshot", .{});
 
             const inc_slot = self.getLargestRootedSlot() orelse 0;
@@ -1339,6 +1347,8 @@ pub const AccountsDB = struct {
             // ASSERTION: same idea as the previous assertion, but applied to
             // the incremental snapshot info.
             if (p_maybe_first_inc.*) |first_inc| {
+                std.debug.print("first_inc.hash.checksum(): {}\n", .{first_inc.hash.checksum()});
+
                 std.debug.assert(first_inc.slot == inc_slot);
                 std.debug.assert(first_inc.hash.eql(accounts_delta_hash));
             }
