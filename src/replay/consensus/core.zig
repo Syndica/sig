@@ -81,10 +81,8 @@ pub const VoteOp = union(enum) {
 /// consensus mechanism in sig.
 pub const TowerConsensus = struct {
     logger: Logger,
-    my_identity: Pubkey,
-    vote_account_pubkey: Pubkey,
-    node_keypair: ?sig.identity.KeyPair,
-    authorized_voter_keypairs: []const sig.identity.KeyPair,
+    identity: sig.identity.ValidatorIdentity,
+    signing: sig.identity.SigningKeys,
 
     // Core consensus state
     fork_choice: HeaviestSubtreeForkChoice,
@@ -126,12 +124,10 @@ pub const TowerConsensus = struct {
     pub const Dependencies = struct {
         // Basic parameters
         logger: Logger,
-        my_identity: Pubkey,
-        vote_identity: Pubkey,
+        identity: sig.identity.ValidatorIdentity,
+        signing: sig.identity.SigningKeys,
         root_slot: Slot,
         root_hash: Hash,
-        node_keypair: ?sig.identity.KeyPair,
-        authorized_voter_keypairs: []const sig.identity.KeyPair,
 
         // Data sources
         account_reader: AccountReader,
@@ -245,8 +241,8 @@ pub const TowerConsensus = struct {
         const replay_tower: ReplayTower = try .init(
             allocator,
             .from(deps.logger),
-            deps.my_identity,
-            deps.vote_identity,
+            deps.identity.validator,
+            deps.identity.vote,
             deps.root_slot,
             deps.account_reader.forSlot(&slot_tracker.get(slot_tracker.root).?.constants.ancestors),
             sig.prometheus.globalRegistry(),
@@ -289,10 +285,8 @@ pub const TowerConsensus = struct {
             .slot_data = .empty,
             .arena_state = .{},
             .logger = deps.logger,
-            .my_identity = deps.my_identity,
-            .vote_account_pubkey = deps.vote_identity,
-            .node_keypair = deps.node_keypair,
-            .authorized_voter_keypairs = deps.authorized_voter_keypairs,
+            .identity = deps.identity,
+            .signing = deps.signing,
             .account_reader = deps.account_reader,
             .ledger = deps.ledger,
             .senders = deps.external.senders,
@@ -408,7 +402,7 @@ pub const TowerConsensus = struct {
             defer slot_tracker_lg.unlock();
 
             _ = try replay.consensus.edge_cases.processEdgeCases(allocator, .from(self.logger), .{
-                .my_pubkey = self.my_identity,
+                .my_pubkey = self.identity.validator,
                 .tpu_has_bank = false,
                 .fork_choice = &self.fork_choice,
                 .result_writer = self.ledger.resultWriter(),
@@ -454,7 +448,7 @@ pub const TowerConsensus = struct {
             epoch_tracker,
             progress_map,
             self.account_reader,
-            self.my_identity, // vote_account
+            self.identity.validator, // vote_account
         );
     }
 
@@ -468,7 +462,7 @@ pub const TowerConsensus = struct {
         const process_state: ProcessResultParams = .{
             .allocator = allocator,
             .logger = .from(self.logger),
-            .my_identity = self.my_identity,
+            .my_identity = self.identity.validator,
             .ledger = self.ledger,
             .slot_tracker = slot_tracker,
             .progress_map = progress_map,
@@ -636,9 +630,9 @@ pub const TowerConsensus = struct {
                 progress_map,
                 &self.fork_choice,
                 account_reader,
-                self.node_keypair,
-                self.authorized_voter_keypairs,
-                self.vote_account_pubkey,
+                self.signing.node,
+                self.signing.authorized_voters,
+                self.identity.vote,
                 voted.decision,
                 self.gossip_table,
                 self.leader_schedule,
