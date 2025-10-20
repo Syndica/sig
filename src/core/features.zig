@@ -3,6 +3,7 @@ const sig = @import("../sig.zig");
 
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
+const EpochSchedule = sig.core.EpochSchedule;
 
 const ZonInfo = struct {
     name: [:0]const u8,
@@ -145,6 +146,13 @@ pub const Set = struct {
                 self.active(.full_inflation_mainnet_enable, slot),
             .devnet_and_testnet = self.active(.full_inflation_devnet_and_testnet, slot),
         };
+    }
+
+    pub fn newWarmupCooldownRateEpoch(self: *const Set, epoch_schedule: *const EpochSchedule) ?u64 {
+        return if (self.get(.reduce_stake_warmup_cooldown)) |slot|
+            epoch_schedule.getEpoch(slot)
+        else
+            null;
     }
 
     pub fn iterator(set: *const Set, slot: Slot, state: Iterator.State) Iterator {
