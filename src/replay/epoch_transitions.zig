@@ -24,6 +24,7 @@ const Delegation = sig.core.stake.Delegation;
 
 const SlotAccountStore = @import("slot_account_store.zig").SlotAccountStore;
 const applyFeatureActivations = @import("apply_feature_activations.zig").applyFeatureActivations;
+const beginPartitionedRewards = sig.replay.rewards.calculation.beginPartitionedRewards;
 
 /// Process a new epoch. This includes:
 /// 1. Apply feature activations.
@@ -74,7 +75,14 @@ pub fn processNewEpoch(
     );
 
     // [agave] https://github.com/anza-xyz/agave/blob/b6c96e84b10396b92912d4574dae7d03f606da26/runtime/src/bank.rs#L1637-L1647
-    // try beginPartitionedRewards();
+    try beginPartitionedRewards(
+        allocator,
+        slot,
+        slot_state,
+        slot_constants,
+        epoch_tracker,
+        slot_store,
+    );
 }
 
 pub fn updateEpochStakes(

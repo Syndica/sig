@@ -57,6 +57,11 @@ pub const StakeRewards = struct {
     stake_rewards: []const PartitionedStakeReward,
     total_stake_rewards_lamports: u64,
 
+    pub const EMPTY: StakeRewards = .{
+        .stake_rewards = &[_]PartitionedStakeReward{},
+        .total_stake_rewards_lamports = 0,
+    };
+
     pub fn deinit(self: StakeRewards, allocator: std.mem.Allocator) void {
         allocator.free(self.stake_rewards);
     }
@@ -65,6 +70,11 @@ pub const StakeRewards = struct {
 pub const VoteRewards = struct {
     vote_rewards: []const PartitionedVoteReward,
     total_vote_rewards_lamports: u64,
+
+    pub const EMPTY: VoteRewards = .{
+        .vote_rewards = &[_]PartitionedVoteReward{},
+        .total_vote_rewards_lamports = 0,
+    };
 
     pub fn deinit(self: VoteRewards, allocator: std.mem.Allocator) void {
         allocator.free(self.vote_rewards);
@@ -75,6 +85,12 @@ pub const ValidatorRewards = struct {
     vote_rewards: VoteRewards,
     stake_rewards: StakeRewards,
     point_value: PointValue,
+
+    pub const EMPTY: ValidatorRewards = .{
+        .vote_rewards = .EMPTY,
+        .stake_rewards = .EMPTY,
+        .point_value = .ZERO,
+    };
 
     pub fn deinit(self: ValidatorRewards, allocator: std.mem.Allocator) void {
         self.vote_rewards.deinit(allocator);

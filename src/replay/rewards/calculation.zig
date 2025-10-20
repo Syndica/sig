@@ -2,19 +2,22 @@ const std = @import("std");
 const sig = @import("../../sig.zig");
 
 const Allocator = std.mem.Allocator;
+const AtomicU64 = std.atomic.Value(u64);
 
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
+const Hash = sig.core.Hash;
 const Epoch = sig.core.Epoch;
 const EpochSchedule = sig.core.EpochSchedule;
 const FeatureSet = sig.core.FeatureSet;
 const Inflation = sig.core.Inflation;
-const StakesCache = sig.core.StakesCache;
 const VoteAccounts = sig.core.vote_accounts.VoteAccounts;
 const VoteAccount = sig.core.vote_accounts.VoteAccount;
 const VoteState = sig.runtime.program.vote.state.VoteState;
 const Stakes = sig.core.Stakes;
 const Stake = sig.core.stake.Stake;
+// const StakesCache = sig.core.StakesCache;
+const StakesCache = sig.core.stake.StakesCacheGeneric(.stake);
 
 const AccountSharedData = sig.runtime.AccountSharedData;
 const StakeHistory = sig.runtime.sysvar.StakeHistory;
@@ -27,37 +30,317 @@ const PointValue = sig.replay.rewards.inflation_rewards.PointValue;
 const PartitionedStakeReward = sig.replay.rewards.PartitionedStakeReward;
 const PartitionedVoteReward = sig.replay.rewards.PartitionedVoteReward;
 const RewardsForPartitioning = sig.replay.rewards.RewardsForPartitioning;
+const EpochTracker = sig.replay.trackers.EpochTracker;
+
+const EpochConstants = sig.core.EpochConstants;
+const SlotState = sig.core.SlotState;
+const SlotConstants = sig.core.SlotConstants;
 
 const bank_utils = sig.core.bank_utils;
+
+const SlotAccountStore = @import("../slot_account_store.zig").SlotAccountStore;
 
 const redeemRewards = sig.replay.rewards.inflation_rewards.redeemRewards;
 const calculatePoints = sig.replay.rewards.inflation_rewards.calculatePoints;
 
+const EpochRewards = sig.runtime.sysvar.EpochRewards;
+const UpdateSysvarAccountDeps = sig.replay.update_sysvar.UpdateSysvarAccountDeps;
+const updateSysvarAccount = sig.replay.update_sysvar.updateSysvarAccount;
+
+pub fn beginPartitionedRewards(
+    allocator: Allocator,
+    slot: Slot,
+    slot_state: *SlotState,
+    /// These are not constant until we process the new epoch
+    slot_constants: *SlotConstants,
+    epoch_tracker: *EpochTracker,
+    slot_store: SlotAccountStore,
+) !void {
+    const epoch = epoch_tracker.schedule.getEpoch(slot);
+    const parent_epoch = epoch_tracker.schedule.getEpoch(slot_constants.parent_slot);
+
+    const leader_schedule_epoch = epoch_tracker.schedule.getLeaderScheduleEpoch(slot);
+    const leader_schedule_epoch_constants = epoch_tracker.get(leader_schedule_epoch) orelse
+        return error.NoEpochConstantsForLeaderScheduleEpoch;
+    const epoch_vote_accounts = leader_schedule_epoch_constants.stakes.stakes.vote_accounts;
+
+    const epoch_constants = epoch_tracker.get(epoch) orelse
+        return error.NoEpochConstants;
+
+    const slots_per_year = epoch_constants.slots_per_year;
+    const previous_epoch_capitalization = &slot_state.capitalization;
+    const epoch_schedule = &epoch_tracker.schedule;
+    const feature_set = &slot_constants.feature_set;
+    const inflation = &slot_constants.inflation;
+
+    // TODO: This is a hack for compilation, we need to use .stake variant in runtime
+    // so we can access and modify the credits observed field
+    // const stakes_cache = &slot_state.stakes_cache;
+    var stakes_cache = StakesCache.EMPTY;
+    defer stakes_cache.deinit(allocator);
+
+    const new_warmup_and_cooldown_rate_epoch = feature_set.newWarmupCooldownRateEpoch(
+        epoch_schedule,
+    );
+
+    const distributed_rewards, const point_value, const stake_rewards =
+        try calculateRewardsAndDistributeVoteRewards(
+            allocator,
+            slot,
+            epoch,
+            slots_per_year,
+            parent_epoch,
+            previous_epoch_capitalization,
+            epoch_schedule,
+            feature_set,
+            inflation,
+            &stakes_cache,
+            &epoch_vote_accounts,
+            new_warmup_and_cooldown_rate_epoch,
+            slot_store,
+        );
+
+    const distribution_starting_blockheight = slot_constants.block_height + 1;
+    const num_partitions = try getRewardDistributionNumBlocks(
+        stake_rewards.len,
+        epoch,
+        epoch_schedule,
+    );
+
+    // TODO: Set epoch reward status calculation
+    // Implement as part of next phase, distributing rewards
+
+    try createEpochRewardsSysvar(
+        allocator,
+        point_value,
+        distributed_rewards,
+        distribution_starting_blockheight,
+        num_partitions,
+        slot_constants.parent_hash,
+        .{
+            .account_store = slot_store.writer,
+            .capitalization = &slot_state.capitalization,
+            .ancestors = &slot_constants.ancestors,
+            .rent = &epoch_constants.rent_collector.rent,
+            .slot = slot,
+        },
+    );
+}
+
+const MAX_PARTITIONED_REWARDS_PER_BLOCK: u64 = 4096;
+
+fn getRewardDistributionNumBlocks(
+    total_stake_accounts: usize,
+    epoch: Epoch,
+    epoch_schedule: *const EpochSchedule,
+) !u64 {
+    if (epoch_schedule.warmup and epoch < epoch_schedule.first_normal_epoch) {
+        return 1;
+    }
+
+    const num_chunks = try std.math.divCeil(
+        u64,
+        total_stake_accounts,
+        MAX_PARTITIONED_REWARDS_PER_BLOCK,
+    );
+
+    const MAX_FACTOR_OF_REWARD_BLOCKS_IN_EPOCH: u64 = 10;
+    const max_chunks = try std.math.divFloor(
+        u64,
+        epoch_schedule.slots_per_epoch,
+        MAX_FACTOR_OF_REWARD_BLOCKS_IN_EPOCH,
+    );
+
+    return if (num_chunks < 1) 1 else if (num_chunks > max_chunks) max_chunks else num_chunks;
+}
+
+fn createEpochRewardsSysvar(
+    allocator: Allocator,
+    point_value: PointValue,
+    distributed_rewards: u64,
+    distribution_starting_block_height: u64,
+    num_partitions: u64,
+    last_blockhash: Hash,
+    update_sysvar_deps: UpdateSysvarAccountDeps,
+) !void {
+    const epoch_rewards = EpochRewards{
+        .distribution_starting_block_height = distribution_starting_block_height,
+        .num_partitions = num_partitions,
+        .parent_blockhash = last_blockhash,
+        .total_points = point_value.points,
+        .total_rewards = point_value.rewards,
+        .distributed_rewards = distributed_rewards,
+        .active = true,
+    };
+
+    try updateSysvarAccount(
+        EpochRewards,
+        allocator,
+        epoch_rewards,
+        update_sysvar_deps,
+    );
+}
+
+fn calculateRewardsAndDistributeVoteRewards(
+    allocator: Allocator,
+    slot: Slot,
+    epoch: Epoch,
+    slots_per_year: f64,
+    previous_epoch: Epoch,
+    capitalization: *AtomicU64,
+    epoch_schedule: *const EpochSchedule,
+    feature_set: *const FeatureSet,
+    inflation: *const Inflation,
+    stakes_cache: *StakesCache,
+    epoch_vote_accounts: *const VoteAccounts,
+    new_warmup_and_cooldown_rate_epoch: ?Epoch,
+    slot_store: SlotAccountStore,
+) !struct {
+    u64,
+    PointValue,
+    []const PartitionedStakeReward,
+} {
+    // TODO: Lookup in rewards calculation cache
+    const rewards_for_partitioning = try calculateRewardsForPartitioning(
+        allocator,
+        slot,
+        epoch,
+        slots_per_year,
+        previous_epoch,
+        capitalization.load(.monotonic),
+        epoch_schedule,
+        feature_set,
+        inflation,
+        stakes_cache,
+        epoch_vote_accounts,
+        new_warmup_and_cooldown_rate_epoch,
+    );
+
+    try storeVoteAccountsPartitioned(
+        allocator,
+        slot_store,
+        rewards_for_partitioning.vote_rewards.vote_rewards,
+        new_warmup_and_cooldown_rate_epoch,
+    );
+
+    // TODO: Update vote rewards
+    // Looks like this is for metadata, and not protocol defining
+
+    std.debug.assert(rewards_for_partitioning.point_value.rewards >=
+        rewards_for_partitioning.vote_rewards.total_vote_rewards_lamports +
+            rewards_for_partitioning.stake_rewards.total_stake_rewards_lamports);
+
+    _ = capitalization.fetchAdd(
+        rewards_for_partitioning.vote_rewards.total_vote_rewards_lamports,
+        .monotonic,
+    );
+
+    return .{
+        rewards_for_partitioning.vote_rewards.total_vote_rewards_lamports,
+        rewards_for_partitioning.point_value,
+        rewards_for_partitioning.stake_rewards.stake_rewards,
+    };
+}
+
+fn storeVoteAccountsPartitioned(
+    allocator: Allocator,
+    slot_store: SlotAccountStore,
+    vote_rewards: []const PartitionedVoteReward,
+    new_warmup_and_cooldown_rate_epoch: ?Epoch,
+) !void {
+    for (vote_rewards) |vote_reward| {
+        const account = try slot_store.get(allocator, vote_reward.vote_pubkey) orelse return error.MissingVoteAccount;
+        defer account.deinit(allocator);
+
+        var account_shared_data = try AccountSharedData.fromAccount(allocator, &account);
+        defer account_shared_data.deinit(allocator);
+
+        account_shared_data.lamports = vote_reward.account.lamports;
+
+        try slot_store.state.stakes_cache.checkAndStore(
+            allocator,
+            vote_reward.vote_pubkey,
+            account_shared_data,
+            new_warmup_and_cooldown_rate_epoch,
+        );
+        try slot_store.put(vote_reward.vote_pubkey, account_shared_data);
+    }
+}
+
+fn calculateRewardsForPartitioning(
+    allocator: Allocator,
+    slot: Slot,
+    epoch: Epoch,
+    slots_per_year: f64,
+    previous_epoch: Epoch,
+    previous_epoch_capitalization: u64,
+    epoch_schedule: *const EpochSchedule,
+    feature_set: *const FeatureSet,
+    inflation: *const Inflation,
+    stakes_cache: *StakesCache,
+    epoch_vote_accounts: *const VoteAccounts,
+    new_warmup_and_cooldown_rate_epoch: ?Epoch,
+) !RewardsForPartitioning {
+    const prev_inflation_rewards = calculatePreviousEpochInflationRewards(
+        slot,
+        epoch,
+        slots_per_year,
+        previous_epoch,
+        previous_epoch_capitalization,
+        epoch_schedule,
+        feature_set,
+        inflation,
+    );
+
+    const validator_rewards = try calculateValidatorRewards(
+        allocator,
+        slot,
+        feature_set,
+        previous_epoch,
+        prev_inflation_rewards.validator_rewards,
+        stakes_cache,
+        epoch_vote_accounts,
+        new_warmup_and_cooldown_rate_epoch,
+    ) orelse ValidatorRewards.EMPTY;
+
+    return .{
+        .vote_rewards = validator_rewards.vote_rewards,
+        .stake_rewards = validator_rewards.stake_rewards,
+        .point_value = validator_rewards.point_value,
+        .validator_rate = prev_inflation_rewards.validator_rate,
+        .foundation_rate = prev_inflation_rewards.foundation_rate,
+        .previous_epoch_duration_in_years = prev_inflation_rewards.previous_epoch_duration_in_years,
+        .capitalization = previous_epoch_capitalization,
+    };
+}
+
 /// NOTE: UNTESTED
 fn calculateValidatorRewards(
+    allocator: Allocator,
     slot: Slot,
     feature_set: *const FeatureSet,
     rewarded_epoch: Epoch,
     rewards: u64,
-    stakes_cache: StakesCache,
+    stakes_cache: *StakesCache,
     epoch_vote_accounts: *const VoteAccounts,
     new_warmup_and_cooldown_rate_epoch: ?Epoch,
 ) !?ValidatorRewards {
-    const stakes, const stakes_lg = stakes_cache.stakes.readWithLock();
+    const stakes, var stakes_lg = stakes_cache.stakes.readWithLock();
     defer stakes_lg.unlock();
 
     const stake_history = &stakes.stake_history;
-    const filtered_stake_delegations = try filterStakesDelegations(slot, feature_set, stakes);
+    const filtered_stake_delegations = try filterStakesDelegations(allocator, slot, feature_set, stakes);
 
     const point_value = try calculateRewardPointsPartitioned(
         rewards,
         &stakes.stake_history,
-        filtered_stake_delegations.items(.delegation),
+        filtered_stake_delegations.items(.stake),
         epoch_vote_accounts,
         new_warmup_and_cooldown_rate_epoch,
     ) orelse return null;
 
     return try calculateStakeVoteRewards(
+        allocator,
         stake_history,
         filtered_stake_delegations,
         epoch_vote_accounts,
