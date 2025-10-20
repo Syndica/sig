@@ -224,9 +224,6 @@ pub const VoteListener = struct {
     }
 };
 
-/// equivalent to agave's solana_gossip::cluster_info::GOSSIP_SLEEP_MILLIS
-const GOSSIP_SLEEP_MILLIS = 100 * std.time.ns_per_ms;
-
 const GossipVoteReceptor = struct {
     cursor: u64,
     vote_tx_buffer: std.ArrayListUnmanaged(Transaction),
