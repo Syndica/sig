@@ -34,17 +34,17 @@ pub fn hashAddressToPartition(
     return @intCast(@as(u128, v_self.partitions * hash) / @as(u128, std.math.maxInt(u64) + 1));
 }
 
-fn hashRewardsIntoPartitions(
+pub fn hashRewardsIntoPartitions(
     allocator: Allocator,
     stake_rewards: []const PartitionedStakeReward,
     parent_blockhash: *const Hash,
     num_partitions: usize,
-) ![]std.ArrayListUnmanaged(usize) {
+) ![][]const usize {
     const hasher = try EpochRewardsHasher.init(num_partitions, parent_blockhash);
 
     var indices = try allocator.alloc(std.ArrayListUnmanaged(usize), num_partitions);
     for (indices) |*list| list.* = std.ArrayListUnmanaged(usize).empty;
-    errdefer {
+    defer {
         for (indices) |*list| list.deinit(allocator);
         allocator.free(indices);
     }
@@ -54,7 +54,12 @@ fn hashRewardsIntoPartitions(
         try indices[partition_index].append(allocator, index);
     }
 
-    return indices;
+    const result = try allocator.alloc([]const usize, indices.len);
+    for (indices, 0..) |*list, i| {
+        result[i] = try list.toOwnedSlice(allocator);
+    }
+
+    return result;
 }
 
 test "hashRewardsIntoPartitions" {
@@ -71,12 +76,12 @@ test "hashRewardsIntoPartitions" {
             5,
         );
         defer {
-            for (partition_indices) |*list| list.deinit(allocator);
+            for (partition_indices) |list| allocator.free(list);
             allocator.free(partition_indices);
         }
 
         var total_hashed: usize = 0;
-        for (partition_indices) |list| total_hashed += list.items.len;
+        for (partition_indices) |list| total_hashed += list.len;
 
         try std.testing.expectEqual(0, total_hashed);
     }
@@ -97,12 +102,12 @@ test "hashRewardsIntoPartitions" {
             5,
         );
         defer {
-            for (partition_indices) |*list| list.deinit(allocator);
+            for (partition_indices) |list| allocator.free(list);
             allocator.free(partition_indices);
         }
 
         var total_hashed: usize = 0;
-        for (partition_indices) |list| total_hashed += list.items.len;
+        for (partition_indices) |list| total_hashed += list.len;
 
         try std.testing.expectEqual(expected_num, total_hashed);
     }

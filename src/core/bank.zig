@@ -85,7 +85,7 @@ pub const SlotConstants = struct {
     fee_rate_governor: FeeRateGovernor,
 
     /// Whether and how epoch rewards should be distributed in this slot.
-    epoch_reward_status: EpochRewardStatus,
+    epoch_reward_status: sig.replay.rewards.EpochRewardStatus,
 
     /// Set of slots leading to this one.
     /// Includes the current slot.
@@ -210,6 +210,9 @@ pub const SlotState = struct {
     /// 100% paid to leader
     collected_priority_fees: Atomic(u64),
 
+    /// Reward status
+    reward_status: sig.replay.rewards.EpochRewardStatus,
+
     pub fn deinit(self: *SlotState, allocator: Allocator) void {
         self.stakes_cache.deinit(allocator);
 
@@ -231,6 +234,7 @@ pub const SlotState = struct {
         .stakes_cache = .EMPTY,
         .collected_transaction_fees = .init(0),
         .collected_priority_fees = .init(0),
+        .reward_status = .inactive,
     };
 
     pub fn fromBankFields(
@@ -299,6 +303,7 @@ pub const SlotState = struct {
             .stakes_cache = .{ .stakes = .init(stakes) },
             .collected_transaction_fees = .init(0),
             .collected_priority_fees = .init(0),
+            .reward_status = .inactive,
         };
     }
 
@@ -334,6 +339,7 @@ pub const SlotState = struct {
             .stakes_cache = .{ .stakes = .init(stakes) },
             .collected_transaction_fees = .init(0),
             .collected_priority_fees = .init(0),
+            .reward_status = parent.reward_status,
         };
     }
 
@@ -718,76 +724,4 @@ pub const UnusedAccounts = struct {
 
         return self;
     }
-};
-
-pub const EpochRewardStatus = union(enum) {
-    /// this bank is in the reward phase.
-    /// Contents are the start point for epoch reward calculation,
-    /// i.e. parent_slot and parent_block height for the starting
-    /// block of the current epoch.
-    active: StartBlockHeightAndRewards,
-    /// this bank is outside of the rewarding phase.
-    inactive,
-
-    pub fn deinit(self: EpochRewardStatus, allocator: Allocator) void {
-        switch (self) {
-            .active => |s| s.deinit(allocator),
-            .inactive => {},
-        }
-    }
-
-    pub fn clone(self: EpochRewardStatus, allocator: Allocator) Allocator.Error!EpochRewardStatus {
-        return switch (self) {
-            .active => |s| .{ .active = try s.clone(allocator) },
-            .inactive => .inactive,
-        };
-    }
-};
-
-pub const StartBlockHeightAndRewards = struct {
-    /// the block height of the slot at which rewards distribution began
-    distribution_starting_block_height: u64,
-    /// calculated epoch rewards pending distribution, outer Vec is by partition (one partition per block)
-    stake_rewards_by_partition: []const []const PartitionedStakeReward,
-
-    pub fn deinit(self: StartBlockHeightAndRewards, allocator: Allocator) void {
-        for (self.stake_rewards_by_partition) |buf| {
-            allocator.free(buf);
-        }
-        allocator.free(self.stake_rewards_by_partition);
-    }
-
-    pub fn clone(
-        self: StartBlockHeightAndRewards,
-        allocator: Allocator,
-    ) Allocator.Error!StartBlockHeightAndRewards {
-        const stake_rewards_by_partition = try allocator
-            .alloc([]const PartitionedStakeReward, self.stake_rewards_by_partition.len);
-        errdefer allocator.free(stake_rewards_by_partition);
-
-        for (self.stake_rewards_by_partition, stake_rewards_by_partition, 0..) |old, *new, i| {
-            errdefer for (stake_rewards_by_partition[0..i]) |x| allocator.free(x);
-            const slice = try allocator.alloc(PartitionedStakeReward, old.len);
-            @memcpy(slice, old);
-            new.* = slice;
-        }
-
-        return .{
-            .distribution_starting_block_height = self.distribution_starting_block_height,
-            .stake_rewards_by_partition = stake_rewards_by_partition,
-        };
-    }
-};
-
-const PartitionedStakeRewards = []const PartitionedStakeReward;
-
-pub const PartitionedStakeReward = struct {
-    /// Stake account address
-    stake_pubkey: Pubkey,
-    /// `Stake` state to be stored in account
-    stake: core.stake.Stake,
-    /// Stake reward for recording in the Bank on distribution
-    stake_reward: u64,
-    /// Vote commission for recording reward info
-    commission: u8,
 };

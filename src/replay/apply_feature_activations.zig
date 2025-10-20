@@ -187,7 +187,7 @@ test "applyBuiltinProgramFeatureTransitions" {
     const ThreadSafeAccountMap = sig.accounts_db.account_store.ThreadSafeAccountMap;
     const allocator = std.testing.allocator;
 
-    var slot_state = SlotState.genesis;
+    var slot_state = SlotState.GENESIS;
     defer slot_state.deinit(allocator);
 
     var account_map = ThreadSafeAccountMap.init(allocator);
