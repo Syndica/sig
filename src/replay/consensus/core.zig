@@ -889,7 +889,7 @@ fn handleVotableBank(
     }
 
     // TODO update_commitment_cache
-
+    
     try pushVote(
         logger,
         allocator,
@@ -1129,6 +1129,8 @@ fn sendVoteToGossip(
     }
 }
 
+// This processing currently runs on the same thread. If it proves to be a bottleneck
+// in practice, we can offload it to a dedicated thread.
 fn sendVote(
     logger: Logger,
     allocator: Allocator,
