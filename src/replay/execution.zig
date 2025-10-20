@@ -709,7 +709,7 @@ pub const LogHelper = struct {
     }
 
     pub fn logActiveSlots(self: *LogHelper, active_slots: []const u64) void {
-        const active_slots_hash = Hash.generateSha256(std.mem.sliceAsBytes(active_slots));
+        const active_slots_hash = Hash.init(std.mem.sliceAsBytes(active_slots));
 
         self.slots_are_the_same = if (self.last_active_slots_hash) |last_slots|
             active_slots_hash.eql(last_slots)

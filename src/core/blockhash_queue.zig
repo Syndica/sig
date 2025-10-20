@@ -212,15 +212,15 @@ test "reject old last hash" {
     defer queue.deinit(allocator);
 
     for (0..102) |i| {
-        const last_hash_i = Hash.ZEROES.extendAndHash(&[_]u8{@intCast(i)});
+        const last_hash_i = Hash.ZEROES.extend(&[_]u8{@intCast(i)});
         try queue.insertHash(allocator, last_hash_i, 0);
     }
 
-    const hash_0 = Hash.ZEROES.extendAndHash(&[_]u8{@intCast(0)});
+    const hash_0 = Hash.ZEROES.extend(&[_]u8{@intCast(0)});
     try std.testing.expect(!queue.isHashValidForAge(hash_0, max_age));
     try std.testing.expect(!queue.isHashValidForAge(hash_0, 0));
 
-    const hash_1 = Hash.ZEROES.extendAndHash(&[_]u8{@intCast(1)});
+    const hash_1 = Hash.ZEROES.extend(&[_]u8{@intCast(1)});
     try std.testing.expect(queue.isHashValidForAge(hash_1, max_age));
     try std.testing.expect(!queue.isHashValidForAge(hash_1, 0));
 }
