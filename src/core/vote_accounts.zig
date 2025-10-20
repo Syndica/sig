@@ -293,7 +293,7 @@ pub const VoteAccount = struct {
     rc: *sig.sync.ReferenceCounter,
 
     /// Represents the minimal amount of information needed from the account data.
-    const MinimalAccount = struct {
+    pub const MinimalAccount = struct {
         lamports: u64,
         owner: Pubkey,
     };
@@ -303,6 +303,18 @@ pub const VoteAccount = struct {
         .deserializer = deserialize,
     };
     pub const @"!bincode-config:state" = bincode.FieldConfig(VoteState){ .skip = true };
+
+    pub fn init(allocator: Allocator, account: MinimalAccount, state: VoteState) Allocator.Error!VoteAccount {
+        const rc = try allocator.create(sig.sync.ReferenceCounter);
+        errdefer allocator.destroy(rc);
+        rc.* = .init;
+
+        return .{
+            .account = .{ .lamports = account.lamports, .owner = account.owner },
+            .state = state,
+            .rc = rc,
+        };
+    }
 
     pub fn deinit(self: *VoteAccount, allocator: Allocator) void {
         if (self.rc.release()) {

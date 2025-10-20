@@ -11,6 +11,8 @@ const FeatureSet = sig.core.FeatureSet;
 const Inflation = sig.core.Inflation;
 const StakesCache = sig.core.StakesCache;
 const VoteAccounts = sig.core.vote_accounts.VoteAccounts;
+const VoteAccount = sig.core.vote_accounts.VoteAccount;
+const VoteState = sig.runtime.program.vote.state.VoteState;
 const Stakes = sig.core.Stakes;
 const Stake = sig.core.stake.Stake;
 
@@ -20,9 +22,11 @@ const StakeHistory = sig.runtime.sysvar.StakeHistory;
 const PreviousEpochInflationRewards = sig.replay.rewards.PreviousEpochInflationRewards;
 const ValidatorRewards = sig.replay.rewards.ValidatorRewards;
 const VoteRewards = sig.replay.rewards.VoteRewards;
+const StakeRewards = sig.replay.rewards.StakeRewards;
 const PointValue = sig.replay.rewards.inflation_rewards.PointValue;
 const PartitionedStakeReward = sig.replay.rewards.PartitionedStakeReward;
 const PartitionedVoteReward = sig.replay.rewards.PartitionedVoteReward;
+const RewardsForPartitioning = sig.replay.rewards.RewardsForPartitioning;
 
 const bank_utils = sig.core.bank_utils;
 
@@ -38,7 +42,7 @@ fn calculateValidatorRewards(
     stakes_cache: StakesCache,
     epoch_vote_accounts: *const VoteAccounts,
     new_warmup_and_cooldown_rate_epoch: ?Epoch,
-) !ValidatorRewards {
+) !?ValidatorRewards {
     const stakes, const stakes_lg = stakes_cache.stakes.readWithLock();
     defer stakes_lg.unlock();
 
@@ -51,9 +55,9 @@ fn calculateValidatorRewards(
         filtered_stake_delegations.items(.delegation),
         epoch_vote_accounts,
         new_warmup_and_cooldown_rate_epoch,
-    ) orelse return 0;
+    ) orelse return null;
 
-    const result = try calculateStakeVoteRewards(
+    return try calculateStakeVoteRewards(
         stake_history,
         filtered_stake_delegations,
         epoch_vote_accounts,
@@ -61,11 +65,6 @@ fn calculateValidatorRewards(
         point_value,
         new_warmup_and_cooldown_rate_epoch,
     );
-
-    _ = result;
-
-    // TODO: Implement
-    return error.Unimplemented;
 }
 
 const FilteredStakesDelegations = std.MultiArrayList(struct { pubkey: Pubkey, stake: Stake });
@@ -121,10 +120,9 @@ fn calculateRewardPointsPartitioned(
 const VoteReward = struct {
     commission: u8,
     rewards: u64,
-    account: AccountSharedData,
+    account: VoteAccount.MinimalAccount,
 };
 
-/// NOTE: UNTESTED
 fn calculateStakeVoteRewards(
     allocator: Allocator,
     stake_history: *const StakeHistory,
@@ -135,7 +133,7 @@ fn calculateStakeVoteRewards(
     new_warmup_and_cooldown_rate_epoch: ?Epoch,
 ) !ValidatorRewards {
     var vote_account_rewards_map = std.AutoArrayHashMapUnmanaged(Pubkey, VoteReward).empty;
-    errdefer vote_account_rewards_map.deinit(allocator);
+    defer vote_account_rewards_map.deinit(allocator);
     try vote_account_rewards_map.ensureTotalCapacity(
         allocator,
         cached_vote_accounts.vote_accounts.count(),
@@ -146,23 +144,22 @@ fn calculateStakeVoteRewards(
 
     // Use par iter?
     var total_stake_rewards: u64 = 0;
-    const pubkeys = stake_delegations.keys();
-    const stakes = stake_delegations.values();
-    for (pubkeys, stakes) |stake_pubkey, stake_delegation| {
-        const vote_pubkey = stake_delegation.voter_pubkey;
+    const pubkeys = stake_delegations.items(.pubkey);
+    const stakes = stake_delegations.items(.stake);
+    for (pubkeys, stakes) |stake_pubkey, *stake| {
+        const vote_pubkey = stake.delegation.voter_pubkey;
         const vote_account = cached_vote_accounts.getAccount(vote_pubkey) orelse {
             return error.MissingVoteAccount;
         };
-        var stake_state = stake_delegation.stake;
 
         const redeemed = try redeemRewards(
             rewarded_epoch,
-            &stake_state,
+            stake,
             &vote_account.state,
             &point_value,
             stake_history,
             new_warmup_and_cooldown_rate_epoch,
-        ) orelse continue; // TODO: Log warning
+        );
 
         const commission = vote_account.state.commission;
 
@@ -171,35 +168,38 @@ fn calculateStakeVoteRewards(
             voters_reward_entry.value_ptr.* = .{
                 .commission = commission,
                 .rewards = 0,
-                .account = vote_account.account, // TODO: Cloning account here, does minimal account work?
+                .account = vote_account.account,
             };
         } else {
-            voters_reward_entry.value_ptr.voter_rewards +|= redeemed.voters_reward;
+            voters_reward_entry.value_ptr.rewards +|= redeemed.voters_reward;
         }
 
         total_stake_rewards += redeemed.stakers_reward;
 
         try partitioned_stake_rewards.append(allocator, .{
             .stake_pubkey = stake_pubkey,
-            .stake = stake_state,
+            .stake = stake.*,
             .stake_reward = redeemed.stakers_reward,
             .commission = commission,
         });
     }
 
+    const vote_rewards = try calculateVoteAccountsToStore(allocator, vote_account_rewards_map);
+    errdefer vote_rewards.deinit(allocator);
+
+    const stake_rewards = StakeRewards{
+        .stake_rewards = try partitioned_stake_rewards.toOwnedSlice(allocator),
+        .total_stake_rewards_lamports = total_stake_rewards,
+    };
+    errdefer stake_rewards.deinit(allocator);
+
     return .{
-        .vote_rewards = try calculateVoteAccountsToStore(vote_account_rewards_map),
-        .stake_rewards = .{
-            .stake_rewards = partitioned_stake_rewards.toOwnedSlice(allocator),
-            .total_stake_rewards_lamports = total_stake_rewards,
-        },
+        .vote_rewards = vote_rewards,
+        .stake_rewards = stake_rewards,
         .point_value = point_value,
     };
 }
 
-/// NOTE: This function expects compete vote accounts i.e. AccountSharedData's, not MinimalAccounts
-/// Hopefully we can work around this.
-/// NOTE: UNTESTED
 fn calculateVoteAccountsToStore(
     allocator: Allocator,
     vote_reward_map: std.AutoArrayHashMapUnmanaged(Pubkey, VoteReward),
@@ -212,7 +212,7 @@ fn calculateVoteAccountsToStore(
 
     const keys = vote_reward_map.keys();
     const values = vote_reward_map.values();
-    for (keys, values) |vote_pubkey, vote_reward| {
+    for (keys, values) |vote_pubkey, *vote_reward| {
         vote_reward.account.lamports = try std.math.add(
             u64,
             vote_reward.account.lamports,
@@ -233,7 +233,7 @@ fn calculateVoteAccountsToStore(
     }
 
     return .{
-        .vote_rewards = vote_rewards.toOwnedSlice(allocator),
+        .vote_rewards = try vote_rewards.toOwnedSlice(allocator),
         .total_vote_rewards_lamports = total_vote_rewards,
     };
 }
@@ -277,6 +277,35 @@ fn calculatePreviousEpochInflationRewards(
     };
 }
 
+fn newVoteAccountForTest(
+    allocator: Allocator,
+    random: std.Random,
+    comission: u8,
+    voter_epoch: Epoch,
+) !VoteAccount {
+    const vote_state = try VoteState.init(
+        allocator,
+        Pubkey.initRandom(random),
+        Pubkey.initRandom(random),
+        Pubkey.initRandom(random),
+        comission,
+        voter_epoch,
+    );
+    return VoteAccount.init(
+        allocator,
+        .{
+            .lamports = 1234,
+            .owner = sig.runtime.program.vote.ID,
+        },
+        vote_state,
+    );
+}
+
+test calculateValidatorRewards {
+    // TODO: Implement test
+    _ = calculateValidatorRewards;
+}
+
 test filterStakesDelegations {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(0);
@@ -307,8 +336,6 @@ test filterStakesDelegations {
 }
 
 test calculateRewardPointsPartitioned {
-    const VoteAccount = sig.core.vote_accounts.VoteAccount;
-
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(0);
     const random = prng.random();
@@ -413,6 +440,153 @@ test calculateRewardPointsPartitioned {
         .points = 25_000_000_000,
         .rewards = rewards,
     }, point_value);
+}
+
+test calculateStakeVoteRewards {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+    const random = prng.random();
+
+    var stake_delegations = FilteredStakesDelegations{};
+    defer stake_delegations.deinit(allocator);
+
+    var cached_vote_accounts = VoteAccounts{};
+    defer cached_vote_accounts.deinit(allocator);
+
+    var rewarded_epoch: Epoch = 5;
+    const vote_epoch: Epoch = 0;
+    const vote_commission: u8 = 0;
+    const stake_epoch_credits: u64 = 0;
+    const stake_activation_epoch: Epoch = 3;
+
+    const vote_pubkey_0 = Pubkey.initRandom(random);
+    const vote_account_0 = try newVoteAccountForTest(
+        allocator,
+        random,
+        vote_commission,
+        vote_epoch,
+    );
+    try cached_vote_accounts.vote_accounts.put(allocator, vote_pubkey_0, .{ .stake = 1_000_000_000, .account = vote_account_0 });
+
+    const stake_0_pubkey = Pubkey.initRandom(random);
+    const stake_0 = sig.replay.rewards.inflation_rewards.newStakeForTest(
+        1_000_000_000,
+        vote_pubkey_0,
+        stake_epoch_credits,
+        stake_activation_epoch,
+    );
+    try stake_delegations.append(allocator, .{ .pubkey = stake_0_pubkey, .stake = stake_0 });
+
+    { // No Credits To Redeem
+
+        const result = calculateStakeVoteRewards(
+            allocator,
+            &StakeHistory.DEFAULT,
+            stake_delegations,
+            &cached_vote_accounts,
+            rewarded_epoch,
+            .{ .rewards = 1, .points = 0 },
+            null,
+        );
+
+        try std.testing.expectError(error.NoCreditsToRedeem, result);
+    }
+
+    rewarded_epoch -= 1;
+
+    { // Zero Rewards
+        const result = try calculateStakeVoteRewards(
+            allocator,
+            &StakeHistory.DEFAULT,
+            stake_delegations,
+            &cached_vote_accounts,
+            rewarded_epoch,
+            .ZERO,
+            null,
+        );
+        defer result.deinit(allocator);
+
+        for (result.vote_rewards.vote_rewards) |pvr| {
+            try std.testing.expectEqual(0, pvr.rewards.lamports);
+        }
+
+        for (result.stake_rewards.stake_rewards) |psr| {
+            try std.testing.expectEqual(0, psr.stake_reward);
+        }
+    }
+
+    rewarded_epoch += 1;
+    var stake_account = &stake_delegations.items(.stake)[0];
+    stake_account.credits_observed = 5;
+
+    var vote_account = cached_vote_accounts.vote_accounts.getPtr(vote_pubkey_0).?;
+    try vote_account.account.state.incrementCredits(allocator, stake_activation_epoch + 1, 10);
+
+    var stake_history = StakeHistory.DEFAULT;
+    try stake_history.entries.append(.{ .epoch = stake_activation_epoch, .stake = .{
+        .activating = 1_000_000_000,
+        .effective = 500_000_000_000,
+        .deactivating = 1_000_000_000,
+    } });
+
+    { // Non-zero Rewards
+        const result = try calculateStakeVoteRewards(
+            allocator,
+            &stake_history,
+            stake_delegations,
+            &cached_vote_accounts,
+            rewarded_epoch,
+            .{ .points = 1, .rewards = 1 },
+            null,
+        );
+        defer result.deinit(allocator);
+
+        try std.testing.expectEqual(1, result.vote_rewards.vote_rewards.len);
+        try std.testing.expectEqual(1, result.stake_rewards.stake_rewards.len);
+    }
+}
+
+test calculateVoteAccountsToStore {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+    const random = prng.random();
+
+    var vote_reward_map = std.AutoArrayHashMapUnmanaged(Pubkey, VoteReward).empty;
+    defer vote_reward_map.deinit(allocator);
+
+    {
+        const vote_rewards = try calculateVoteAccountsToStore(allocator, vote_reward_map);
+        try std.testing.expectEqual(0, vote_rewards.vote_rewards.len);
+    }
+
+    const vote_account_0_pubkey = Pubkey.initRandom(random);
+    const vote_account_0_reward = VoteReward{
+        .commission = 10,
+        .rewards = 1_000_000_000,
+        .account = .{
+            .lamports = 10_000_000_000,
+            .owner = sig.runtime.program.vote.ID,
+        },
+    };
+    try vote_reward_map.put(allocator, vote_account_0_pubkey, vote_account_0_reward);
+
+    {
+        const vote_rewards = try calculateVoteAccountsToStore(allocator, vote_reward_map);
+        defer vote_rewards.deinit(allocator);
+        try std.testing.expectEqual(1, vote_rewards.vote_rewards.len);
+        try std.testing.expectEqual(
+            vote_account_0_pubkey,
+            vote_rewards.vote_rewards[0].vote_pubkey,
+        );
+        try std.testing.expectEqual(
+            vote_account_0_reward.rewards,
+            vote_rewards.vote_rewards[0].rewards.lamports,
+        );
+        try std.testing.expectEqual(
+            vote_account_0_reward.rewards,
+            vote_rewards.total_vote_rewards_lamports,
+        );
+    }
 }
 
 // The values in this test are derived from an Agave bank vote state rewards update test
