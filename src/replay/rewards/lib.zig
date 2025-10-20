@@ -6,6 +6,8 @@ const Pubkey = sig.core.Pubkey;
 const Stake = sig.core.stake.Stake;
 const AccountSharedData = sig.runtime.AccountSharedData;
 
+const VoteAccount = sig.core.vote_accounts.VoteAccount;
+
 pub const calculation = @import("calculation.zig");
 pub const inflation_rewards = @import("inflation_rewards.zig");
 pub const EpochRewardsHasher = @import("EpochRewardsHasher.zig");
@@ -48,23 +50,36 @@ pub const RewardInfo = struct {
 pub const PartitionedVoteReward = struct {
     vote_pubkey: Pubkey,
     rewards: RewardInfo,
-    account: AccountSharedData,
+    account: VoteAccount.MinimalAccount,
 };
 
 pub const StakeRewards = struct {
     stake_rewards: []const PartitionedStakeReward,
     total_stake_rewards_lamports: u64,
+
+    pub fn deinit(self: StakeRewards, allocator: std.mem.Allocator) void {
+        allocator.free(self.stake_rewards);
+    }
 };
 
 pub const VoteRewards = struct {
     vote_rewards: []const PartitionedVoteReward,
     total_vote_rewards_lamports: u64,
+
+    pub fn deinit(self: VoteRewards, allocator: std.mem.Allocator) void {
+        allocator.free(self.vote_rewards);
+    }
 };
 
 pub const ValidatorRewards = struct {
     vote_rewards: VoteRewards,
     stake_rewards: StakeRewards,
     point_value: PointValue,
+
+    pub fn deinit(self: ValidatorRewards, allocator: std.mem.Allocator) void {
+        self.vote_rewards.deinit(allocator);
+        self.stake_rewards.deinit(allocator);
+    }
 };
 
 pub const PreviousEpochInflationRewards = struct {
@@ -77,9 +92,9 @@ pub const PreviousEpochInflationRewards = struct {
 pub const RewardsForPartitioning = struct {
     vote_rewards: VoteRewards,
     stake_rewards: StakeRewards,
+    point_value: PointValue,
     validator_rate: f64,
     foundation_rate: f64,
     previous_epoch_duration_in_years: f64,
     capitalization: u64,
-    point_value: f64,
 };

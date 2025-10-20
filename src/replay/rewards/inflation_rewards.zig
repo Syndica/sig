@@ -13,6 +13,8 @@ const DEFAULT_WARMUP_COOLDOWN_RATE = sig.core.stake.DEFAULT_WARMUP_COOLDOWN_RATE
 pub const PointValue = struct {
     rewards: u64,
     points: u128,
+
+    pub const ZERO: PointValue = .{ .rewards = 0, .points = 0 };
 };
 
 pub const CalculatedStakePoints = struct {
@@ -201,7 +203,7 @@ pub fn calculateStakePointsAndCredits(
     };
 }
 
-fn newStakeForTest(
+pub fn newStakeForTest(
     stake: u64,
     voter_pubkey: Pubkey,
     epoch_credits: u64,
