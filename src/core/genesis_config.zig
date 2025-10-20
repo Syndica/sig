@@ -196,6 +196,28 @@ pub const Inflation = struct {
         .__unused = 0.0,
     };
 
+    pub const FULL: Inflation = .{
+        .initial = DEFAULT.initial,
+        .terminal = DEFAULT.terminal,
+        .taper = DEFAULT.taper,
+        .foundation = 0.0,
+        .foundation_term = 0.0,
+        .__unused = 0.0,
+    };
+
+    pub const PICO = fixed(0.0001); // 0.01% inflation
+
+    pub fn fixed(validator: f64) Inflation {
+        return .{
+            .initial = validator,
+            .terminal = validator,
+            .taper = 1.0,
+            .foundation = 0.0,
+            .foundation_term = 0.0,
+            .__unused = 0.0,
+        };
+    }
+
     pub fn initRandom(random: std.Random) Inflation {
         return .{
             .initial = random.float(f64),

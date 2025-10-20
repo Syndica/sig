@@ -52,8 +52,7 @@ pub fn processNewEpoch(
         allocator,
         slot_store,
         epoch_tracker,
-        &slot_constants.feature_set,
-        &slot_constants.reserved_accounts,
+        slot_constants,
         true, // allow_new_activations
     );
 

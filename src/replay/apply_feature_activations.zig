@@ -15,14 +15,14 @@ const AccountSharedData = sig.runtime.AccountSharedData;
 const Ancestors = sig.core.Ancestors;
 const Account = sig.core.Account;
 const Pubkey = sig.core.Pubkey;
-const ReservedAccounts = sig.core.ReservedAccounts;
 const Slot = sig.core.Slot;
 const SlotState = sig.core.SlotState;
+const SlotConstants = sig.core.SlotConstants;
+const EpochConstants = sig.core.EpochConstants;
 const FeatureSet = sig.core.FeatureSet;
 
 const SlotAccountStore = sig.replay.slot_account_store.SlotAccountStore;
 const EpochTracker = sig.replay.trackers.EpochTracker;
-const EpochConstants = sig.core.EpochConstants;
 
 const failing_allocator = sig.utils.allocators.failing.allocator(.{});
 
@@ -31,8 +31,7 @@ pub fn applyFeatureActivations(
     allocator: Allocator,
     slot_store: SlotAccountStore,
     epoch_tracker: *EpochTracker,
-    feature_set: *FeatureSet,
-    reserved_accounts: *ReservedAccounts,
+    slot_constants: *SlotConstants,
     allow_new_activations: bool,
 ) !void {
     // Iterate through the inactive features and:
@@ -42,6 +41,7 @@ pub fn applyFeatureActivations(
     // 4. If it has not been activated, and new activations are allowed,
     //    add it to the active set and activate it by setting the slot
     //    and writing it back to the accounts db.
+    const feature_set = &slot_constants.feature_set;
     var new_feature_activations = FeatureSet.ALL_DISABLED;
     var inactive_iterator = feature_set.iterator(slot_store.slot, .inactive);
     while (inactive_iterator.next()) |feature| {
@@ -61,26 +61,24 @@ pub fn applyFeatureActivations(
     }
 
     // Update active set of reserved account keys which are not allowed to be write locked
-    reserved_accounts.update(feature_set, slot_store.slot);
+    slot_constants.reserved_accounts.update(feature_set, slot_store.slot);
 
-    const epoch_constants = epoch_tracker.getPtrForSlot(slot_store.slot).?;
+    const epoch_constants = epoch_tracker.getMutablePtrForSlot(slot_store.slot).?;
 
     // Activate pico inflation if it is in the newly activated set
     if (new_feature_activations.active(.pico_inflation, slot_store.slot)) {
-        // *self.inflation.write().unwrap() = Inflation::pico();
-        // self.fee_rate_governor.burn_percent = solana_fee_calculator::DEFAULT_BURN_PERCENT; // 50% fee burn
-        // self.rent_collector.rent.burn_percent = 50; // 50% rent burn
-        return error.PicoInflationActivationNotImplemented;
+        slot_constants.inflation = .PICO;
+        slot_constants.fee_rate_governor.burn_percent = 50; // DEFAULT_BURN_PERCENT: 50% fee burn.
+        epoch_constants.rent_collector.rent.burn_percent = 50; // 50% rent bur.
     }
 
     if (feature_set
         .fullInflationFeatures(slot_store.slot)
         .enabled(new_feature_activations, slot_store.slot))
     {
-        // *self.inflation.write().unwrap() = Inflation::full();
-        // self.fee_rate_governor.burn_percent = solana_fee_calculator::DEFAULT_BURN_PERCENT; // 50% fee burn
-        // self.rent_collector.rent.burn_percent = 50; // 50% rent burn
-        return error.FullInflationActivationNotImplemented;
+        slot_constants.inflation = .FULL;
+        slot_constants.fee_rate_governor.burn_percent = 50; // DEFAULT_BURN_PERCENT: 50% fee burn.
+        epoch_constants.rent_collector.rent.burn_percent = 50; // 50% rent bur.
     }
 
     // Apply built-in program feature transitions
@@ -436,7 +434,7 @@ fn featureActivationSlotFromAccount(account: Account) !?u64 {
     return bincode.readFromSlice(failing_allocator, ?u64, &feature_bytes, .{});
 }
 
-test applyBuiltinProgramFeatureTransitions {
+test applyFeatureActivations {
     const ThreadSafeAccountMap = sig.accounts_db.account_store.ThreadSafeAccountMap;
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(0);
@@ -472,16 +470,14 @@ test applyBuiltinProgramFeatureTransitions {
         .ticks_per_slot = 0,
     });
 
-    const feature_set = FeatureSet.ALL_DISABLED;
-    const feature_activations = FeatureSet.ALL_DISABLED;
+    var slot_constants = try SlotConstants.genesis(allocator, .initRandom(prng.random()));
+    defer slot_constants.deinit(allocator);
 
-    const epoch_constants = epoch_tracker.getPtrForSlot(0).?;
-    try applyBuiltinProgramFeatureTransitions(
+    try applyFeatureActivations(
         allocator,
         slot_store,
-        epoch_constants,
-        &feature_set,
-        &feature_activations,
+        &epoch_tracker,
+        &slot_constants,
         false,
     );
 }
