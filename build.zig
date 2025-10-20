@@ -334,7 +334,7 @@ pub fn build(b: *Build) !void {
     addInstallAndRun(b, sig_step, sig_exe, config);
 
     const unit_test_exe = b.addTest(.{
-        .name = "unit-test",
+        .name = "test",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/tests.zig"),
             .target = config.target,
