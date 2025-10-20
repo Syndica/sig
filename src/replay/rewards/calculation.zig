@@ -28,6 +28,7 @@ const VoteRewards = sig.replay.rewards.VoteRewards;
 const StakeRewards = sig.replay.rewards.StakeRewards;
 const PointValue = sig.replay.rewards.inflation_rewards.PointValue;
 const PartitionedStakeReward = sig.replay.rewards.PartitionedStakeReward;
+const PartitionedStakeRewards = sig.replay.rewards.PartitionedStakeRewards;
 const PartitionedVoteReward = sig.replay.rewards.PartitionedVoteReward;
 const RewardsForPartitioning = sig.replay.rewards.RewardsForPartitioning;
 const EpochTracker = sig.replay.trackers.EpochTracker;
@@ -97,7 +98,7 @@ pub fn beginPartitionedRewards(
 
     const distribution_starting_blockheight = slot_constants.block_height + 1;
     const num_partitions = try getRewardDistributionNumBlocks(
-        stake_rewards.len,
+        stake_rewards.entries.len,
         epoch,
         epoch_schedule,
     );
@@ -193,7 +194,7 @@ fn calculateRewardsAndDistributeVoteRewards(
 ) !struct {
     u64,
     PointValue,
-    []const PartitionedStakeReward,
+    PartitionedStakeRewards,
 } {
     // TODO: Lookup in rewards calculation cache
     const rewards_for_partitioning = try calculateRewardsForPartitioning(
@@ -214,7 +215,7 @@ fn calculateRewardsAndDistributeVoteRewards(
     try storeVoteAccountsPartitioned(
         allocator,
         slot_store,
-        rewards_for_partitioning.vote_rewards.vote_rewards,
+        rewards_for_partitioning.vote_rewards.vote_rewards.entries,
         new_warmup_and_cooldown_rate_epoch,
     );
 
@@ -296,7 +297,8 @@ fn calculateRewardsForPartitioning(
         stakes_cache,
         epoch_vote_accounts,
         new_warmup_and_cooldown_rate_epoch,
-    ) orelse ValidatorRewards.EMPTY;
+    ) orelse try ValidatorRewards.initEmpty(allocator);
+    errdefer validator_rewards.deinit(allocator);
 
     return .{
         .vote_rewards = validator_rewards.vote_rewards,
@@ -465,8 +467,11 @@ fn calculateStakeVoteRewards(
     const vote_rewards = try calculateVoteAccountsToStore(allocator, vote_account_rewards_map);
     errdefer vote_rewards.deinit(allocator);
 
+    const stake_rewards_slice = try partitioned_stake_rewards.toOwnedSlice(allocator);
+    errdefer allocator.free(stake_rewards_slice);
+
     const stake_rewards = StakeRewards{
-        .stake_rewards = try partitioned_stake_rewards.toOwnedSlice(allocator),
+        .stake_rewards = try .init(allocator, stake_rewards_slice),
         .total_stake_rewards_lamports = total_stake_rewards,
     };
     errdefer stake_rewards.deinit(allocator);
@@ -510,8 +515,11 @@ fn calculateVoteAccountsToStore(
         total_vote_rewards += vote_reward.rewards;
     }
 
+    const vote_rewards_slice = try vote_rewards.toOwnedSlice(allocator);
+    errdefer allocator.free(vote_rewards_slice);
+
     return .{
-        .vote_rewards = try vote_rewards.toOwnedSlice(allocator),
+        .vote_rewards = try .init(allocator, vote_rewards_slice),
         .total_vote_rewards_lamports = total_vote_rewards,
     };
 }
@@ -784,11 +792,11 @@ test calculateStakeVoteRewards {
         );
         defer result.deinit(allocator);
 
-        for (result.vote_rewards.vote_rewards) |pvr| {
+        for (result.vote_rewards.vote_rewards.entries) |pvr| {
             try std.testing.expectEqual(0, pvr.rewards.lamports);
         }
 
-        for (result.stake_rewards.stake_rewards) |psr| {
+        for (result.stake_rewards.stake_rewards.entries) |psr| {
             try std.testing.expectEqual(0, psr.stake_reward);
         }
     }
@@ -819,8 +827,8 @@ test calculateStakeVoteRewards {
         );
         defer result.deinit(allocator);
 
-        try std.testing.expectEqual(1, result.vote_rewards.vote_rewards.len);
-        try std.testing.expectEqual(1, result.stake_rewards.stake_rewards.len);
+        try std.testing.expectEqual(1, result.vote_rewards.vote_rewards.entries.len);
+        try std.testing.expectEqual(1, result.stake_rewards.stake_rewards.entries.len);
     }
 }
 
@@ -834,7 +842,8 @@ test calculateVoteAccountsToStore {
 
     {
         const vote_rewards = try calculateVoteAccountsToStore(allocator, vote_reward_map);
-        try std.testing.expectEqual(0, vote_rewards.vote_rewards.len);
+        defer vote_rewards.deinit(allocator);
+        try std.testing.expectEqual(0, vote_rewards.vote_rewards.entries.len);
     }
 
     const vote_account_0_pubkey = Pubkey.initRandom(random);
@@ -851,14 +860,14 @@ test calculateVoteAccountsToStore {
     {
         const vote_rewards = try calculateVoteAccountsToStore(allocator, vote_reward_map);
         defer vote_rewards.deinit(allocator);
-        try std.testing.expectEqual(1, vote_rewards.vote_rewards.len);
+        try std.testing.expectEqual(1, vote_rewards.vote_rewards.entries.len);
         try std.testing.expectEqual(
             vote_account_0_pubkey,
-            vote_rewards.vote_rewards[0].vote_pubkey,
+            vote_rewards.vote_rewards.entries[0].vote_pubkey,
         );
         try std.testing.expectEqual(
             vote_account_0_reward.rewards,
-            vote_rewards.vote_rewards[0].rewards.lamports,
+            vote_rewards.vote_rewards.entries[0].rewards.lamports,
         );
         try std.testing.expectEqual(
             vote_account_0_reward.rewards,

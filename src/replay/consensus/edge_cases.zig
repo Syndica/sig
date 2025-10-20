@@ -1409,6 +1409,7 @@ const TestData = struct {
                     .stakes_cache = .EMPTY,
                     .collected_transaction_fees = .init(random.int(u64)),
                     .collected_priority_fees = .init(random.int(u64)),
+                    .reward_status = .inactive,
                 },
             };
         }
