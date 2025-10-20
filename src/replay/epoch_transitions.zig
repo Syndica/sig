@@ -12,6 +12,7 @@ const Ancestors = sig.core.Ancestors;
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 const EpochStakes = sig.core.EpochStakes;
+const Stake = sig.core.stake.Stake;
 
 const EpochTracker = sig.replay.trackers.EpochTracker;
 const EpochConstants = sig.core.EpochConstants;
@@ -210,7 +211,7 @@ pub fn refreshVoteAccounts(
     allocator: Allocator,
     epoch: Epoch,
     stake_and_vote_accounts: StakeAndVoteAccountsMap,
-    stake_delegations: []Delegation,
+    stake_delegations: []Stake,
     stake_history: StakeHistory,
     new_activation_rate_epoch: ?Epoch,
 ) !VoteAccounts {

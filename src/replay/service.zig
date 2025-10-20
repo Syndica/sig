@@ -1261,8 +1261,14 @@ pub const DependencyStubs = struct {
             else
                 null;
 
+            const account_reader = self.accountsdb.accountReader().forSlot(&bank_fields.ancestors);
             var root_slot_state =
-                try sig.core.SlotState.fromBankFields(allocator, bank_fields, lt_hash);
+                try sig.core.SlotState.fromBankFields(
+                    allocator,
+                    bank_fields,
+                    lt_hash,
+                    account_reader,
+                );
             errdefer root_slot_state.deinit(allocator);
 
             const hard_forks = try bank_fields.hard_forks.clone(allocator);
