@@ -6,8 +6,9 @@ const Allocator = std.mem.Allocator;
 
 const Pubkey = sig.core.Pubkey;
 const Stake = sig.core.stake.Stake;
-
 const VoteAccount = sig.core.vote_accounts.VoteAccount;
+
+const AccountSharedData = sig.runtime.AccountSharedData;
 
 pub const calculation = @import("calculation.zig");
 pub const distribution = @import("distribution.zig");

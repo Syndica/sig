@@ -4,11 +4,8 @@ const sig = @import("../sig.zig");
 const Allocator = std.mem.Allocator;
 const AtomicU64 = std.atomic.Value(u64);
 
-const AccountStore = sig.accounts_db.AccountStore;
-
 const Epoch = sig.core.Epoch;
 const StakesCache = sig.core.StakesCache;
-const Ancestors = sig.core.Ancestors;
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 const EpochStakes = sig.core.EpochStakes;

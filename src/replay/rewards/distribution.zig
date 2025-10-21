@@ -18,10 +18,10 @@ const SlotAccountReader = sig.accounts_db.SlotAccountReader;
 const SlotAccountStore = sig.replay.slot_account_store.SlotAccountStore;
 
 const EpochRewardStatus = sig.replay.rewards.EpochRewardStatus;
-const StartBlockHeightAndPartitionedRewards = sig.replay.rewards.StartBlockHeightAndPartitionedRewards;
+const StartBlockHeightAndPartitionedRewards =
+    sig.replay.rewards.StartBlockHeightAndPartitionedRewards;
 const StakeReward = sig.replay.rewards.StakeReward;
 
-const AccountSharedData = sig.runtime.AccountSharedData;
 const EpochRewards = sig.runtime.sysvar.EpochRewards;
 const Rent = sig.runtime.sysvar.Rent;
 
@@ -203,7 +203,9 @@ fn storeStakeAccountsInPartition(
         defer stakes_lg.unlock();
 
         for (indices) |index| {
-            const partitioned_reward = if (index >= partition_rewards.all_stake_rewards.entries.len) {
+            const partitioned_reward = if (index >=
+                partition_rewards.all_stake_rewards.entries.len)
+            {
                 return error.InvalidStakeRewardIndex;
             } else partition_rewards.all_stake_rewards.entries[index];
 
