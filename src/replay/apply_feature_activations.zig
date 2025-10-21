@@ -264,7 +264,7 @@ fn migrateBuiltinProgramToCoreBpf(
             if (source.data[backwards_idx] != 0) break backwards_idx + 1;
         } else 0);
 
-        const hash = sig.core.Hash.generateSha256(source.data[offset..end_offset]);
+        const hash = sig.core.Hash.init(source.data[offset..end_offset]);
         if (!hash.eql(expected_hash)) {
             return error.BuildHashMismatch;
         }
