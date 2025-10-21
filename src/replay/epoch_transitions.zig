@@ -39,15 +39,8 @@ pub fn processNewEpoch(
     /// These are not constant until we process the new epoch
     slot_constants: *SlotConstants,
     epoch_tracker: *EpochTracker,
-    account_store: AccountStore,
+    slot_store: SlotAccountStore,
 ) !void {
-    const slot_store = SlotAccountStore.init(
-        slot,
-        slot_state,
-        account_store,
-        &Ancestors.EMPTY,
-    );
-
     try applyFeatureActivations(
         allocator,
         slot_store,

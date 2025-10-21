@@ -438,6 +438,13 @@ pub fn trackNewSlots(
             const parent_epoch = epoch_tracker.schedule.getEpoch(parent_slot);
             const slot_epoch = epoch_tracker.schedule.getEpoch(slot);
 
+            const slot_store = sig.replay.slot_account_store.SlotAccountStore.init(
+                slot,
+                &state,
+                account_store,
+                &constants.ancestors,
+            );
+
             if (parent_epoch < slot_epoch) {
                 try replay.epoch_transitions.processNewEpoch(
                     allocator,
@@ -445,7 +452,7 @@ pub fn trackNewSlots(
                     &state,
                     &constants,
                     epoch_tracker,
-                    account_store,
+                    slot_store,
                 );
             } else {
                 try replay.epoch_transitions.updateEpochStakes(
@@ -457,15 +464,22 @@ pub fn trackNewSlots(
                 );
             }
 
-            try replay.rewards.distribution.distributePartitionedEpochRewards(
-                allocator,
-                constants.block_height,
-                &state.reward_status,
-                account_store.reader().forSlot(&constants.ancestors),
-            );
-
             const epoch_info = epoch_tracker.getPtrForSlot(slot) orelse
                 return error.MissingEpoch;
+
+            try replay.rewards.distribution.distributePartitionedEpochRewards(
+                allocator,
+                slot,
+                slot_epoch,
+                constants.block_height,
+                epoch_tracker.schedule,
+                &state.reward_status,
+                &state.stakes_cache,
+                &state.capitalization,
+                &constants.ancestors,
+                &epoch_info.rent_collector.rent,
+                slot_store,
+            );
 
             try updateSysvarsForNewSlot(
                 allocator,

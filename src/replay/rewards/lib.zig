@@ -33,6 +33,12 @@ pub const RewardInfo = struct {
     commission: u8,
 };
 
+pub const StakeReward = struct {
+    pubkey: Pubkey,
+    reward_info: RewardInfo,
+    stake_account: AccountSharedData,
+};
+
 pub const PartitionedVoteReward = struct {
     vote_pubkey: Pubkey,
     rewards: RewardInfo,

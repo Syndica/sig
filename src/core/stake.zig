@@ -8,6 +8,7 @@ const bincode = sig.bincode;
 const vote_program = sig.runtime.program.vote;
 const stake_program = sig.runtime.program.stake;
 
+const Account = sig.core.Account;
 const Pubkey = sig.core.Pubkey;
 const Epoch = sig.core.Epoch;
 const VoteAccounts = sig.core.vote_accounts.VoteAccounts;
@@ -465,6 +466,17 @@ pub const StakeStateV2 = union(enum) {
             .stake => |s| s.stake.delegation,
             .rewards_pool => null,
         };
+    }
+
+    pub fn fromAccount(account: Account) !StakeStateV2 {
+        var buffer = [_]u8{0} ** SIZE;
+        account.data.readAll(&buffer);
+        return sig.bincode.readFromSlice(
+            failing_allocator,
+            StakeStateV2,
+            &buffer,
+            .{},
+        );
     }
 };
 
