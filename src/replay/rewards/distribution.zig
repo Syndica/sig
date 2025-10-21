@@ -209,17 +209,24 @@ fn storeStakeAccountsInPartition(
                 return error.InvalidStakeRewardIndex;
             } else partition_rewards.all_stake_rewards.entries[index];
 
-            if (try buildUpdatedStakeReward(
+            const stake_reward = buildUpdatedStakeReward(
                 allocator,
                 stakes.stake_delegations,
                 partitioned_reward,
                 slot_store,
-            )) |stake_reward| {
-                lamports_distributed += partitioned_reward.stake_reward;
-                updated_stake_rewards.appendAssumeCapacity(stake_reward);
-            } else {
-                lamports_burnt += partitioned_reward.stake_reward;
-            }
+            ) catch |err| switch (err) {
+                error.MissingStakeAccountInCache,
+                error.MissingStakeAccountInDb,
+                error.InvalidAccountData,
+                => {
+                    lamports_burnt += partitioned_reward.stake_reward;
+                    continue;
+                },
+                else => return err,
+            };
+
+            lamports_distributed += partitioned_reward.stake_reward;
+            updated_stake_rewards.appendAssumeCapacity(stake_reward);
         }
     }
 
@@ -245,19 +252,19 @@ fn buildUpdatedStakeReward(
     stake_accounts: std.AutoArrayHashMapUnmanaged(Pubkey, Stake),
     partitioned_reward: sig.replay.rewards.PartitionedStakeReward,
     slot_store: SlotAccountStore,
-) !?StakeReward {
+) !StakeReward {
     const cached_stake_state = stake_accounts.get(partitioned_reward.stake_pubkey) orelse
-        return null;
+        return error.MissingStakeAccountInCache;
 
     var account = try slot_store.get(allocator, partitioned_reward.stake_pubkey) orelse
-        return null;
+        return error.MissingStakeAccountInDb;
 
     // NOTE: If we stored the full stake state in the stake account we might be able to skip
     // deserializing and just update the stake directly.
     var stake_state = try StakeStateV2.fromAccount(account);
     switch (stake_state) {
         .stake => {},
-        else => return null,
+        else => return error.InvalidAccountData,
     }
 
     stake_state.stake.stake = cached_stake_state;
@@ -291,4 +298,152 @@ fn buildUpdatedStakeReward(
             .rent_epoch = account.rent_epoch,
         },
     };
+}
+
+test distributePartitionedEpochRewards {
+    // TODO
+}
+
+test distributeEpochRewardsInPartition {
+    // TODO
+}
+
+test storeStakeAccountsInPartition {
+    // TODO
+}
+
+test buildUpdatedStakeReward {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+    const random = prng.random();
+
+    const slot = 0;
+
+    const slot_constants = try sig.core.bank.SlotConstants.genesis(
+        allocator,
+        .DEFAULT,
+    );
+    defer slot_constants.deinit(allocator);
+
+    var slot_state = sig.core.bank.SlotState.GENESIS;
+    defer slot_state.deinit(allocator);
+
+    var account_map = sig.accounts_db.account_store.ThreadSafeAccountMap.init(allocator);
+    defer account_map.deinit();
+
+    const slot_store = SlotAccountStore{
+        .slot = slot,
+        .state = &slot_state,
+        .reader = SlotAccountReader{ .thread_safe_map = .{
+            &account_map,
+            &slot_constants.ancestors,
+        } },
+        .writer = sig.accounts_db.account_store.AccountStore{
+            .thread_safe_map = &account_map,
+        },
+    };
+
+    var partitioned_reward = sig.replay.rewards.PartitionedStakeReward{
+        .stake_pubkey = Pubkey.initRandom(random),
+        .stake = .{
+            .delegation = .{
+                .voter_pubkey = Pubkey.initRandom(random),
+                .stake = 1_000_000_000,
+                .activation_epoch = 0,
+                .deactivation_epoch = std.math.maxInt(Epoch),
+                .deprecated_warmup_cooldown_rate = 0.0,
+            },
+            .credits_observed = 0,
+        },
+        .stake_reward = 1_000_000_000,
+        .commission = 50,
+    };
+
+    var stake_accounts = std.AutoArrayHashMapUnmanaged(Pubkey, Stake).empty;
+    defer stake_accounts.deinit(allocator);
+
+    {
+        const result = buildUpdatedStakeReward(
+            allocator,
+            stake_accounts,
+            partitioned_reward,
+            slot_store,
+        );
+        try std.testing.expectError(error.MissingStakeAccountInCache, result);
+    }
+
+    try stake_accounts.put(allocator, partitioned_reward.stake_pubkey, partitioned_reward.stake);
+
+    {
+        const result = buildUpdatedStakeReward(
+            allocator,
+            stake_accounts,
+            partitioned_reward,
+            slot_store,
+        );
+        try std.testing.expectError(error.MissingStakeAccountInDb, result);
+    }
+
+    var invalid_data = [_]u8{0} ** StakeStateV2.SIZE;
+    try slot_store.put(partitioned_reward.stake_pubkey, .{
+        .lamports = 5_000_000_000,
+        .data = &invalid_data,
+        .owner = sig.runtime.program.stake.ID,
+        .executable = false,
+        .rent_epoch = 0,
+    });
+
+    {
+        const result = buildUpdatedStakeReward(
+            allocator,
+            stake_accounts,
+            partitioned_reward,
+            slot_store,
+        );
+        try std.testing.expectError(error.InvalidAccountData, result);
+    }
+
+    var data = [_]u8{0} ** StakeStateV2.SIZE;
+    const stake_state = StakeStateV2{ .stake = .{
+        .meta = .{
+            .rent_exempt_reserve = 0,
+            .authorized = .{
+                .staker = Pubkey.initRandom(random),
+                .withdrawer = Pubkey.initRandom(random),
+            },
+            .lockup = .{
+                .unix_timestamp = 0,
+                .epoch = 0,
+                .custodian = Pubkey.initRandom(random),
+            },
+        },
+        .stake = partitioned_reward.stake,
+        .flags = .EMPTY,
+    } };
+    _ = try sig.bincode.writeToSlice(
+        &data,
+        stake_state,
+        .{},
+    );
+    try slot_store.put(partitioned_reward.stake_pubkey, .{
+        .lamports = 5_000_000_000,
+        .data = &data,
+        .owner = sig.runtime.program.stake.ID,
+        .executable = false,
+        .rent_epoch = 0,
+    });
+
+    partitioned_reward.stake.delegation.stake = 2_000_000_000;
+
+    {
+        const result = try buildUpdatedStakeReward(
+            allocator,
+            stake_accounts,
+            partitioned_reward,
+            slot_store,
+        );
+        defer result.deinit(allocator);
+
+        try std.testing.expectEqual(6_000_000_000, result.reward_info.post_balance);
+    }
 }

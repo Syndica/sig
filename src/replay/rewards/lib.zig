@@ -37,6 +37,10 @@ pub const StakeReward = struct {
     pubkey: Pubkey,
     reward_info: RewardInfo,
     stake_account: AccountSharedData,
+
+    pub fn deinit(self: StakeReward, allocator: Allocator) void {
+        self.stake_account.deinit(allocator);
+    }
 };
 
 pub const PartitionedVoteReward = struct {
