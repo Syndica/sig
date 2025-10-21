@@ -206,7 +206,7 @@ fn migrateBuiltinProgramToCoreBpf(
             },
             .stateless_builtin => blk: {
                 if ((slot_store.get(allocator, builtin_program_id) catch null) != null)
-                    return error.AcocuntExists;
+                    return error.AccountExists;
                 break :blk null;
             },
         },
@@ -329,49 +329,17 @@ fn migrateBuiltinProgramToCoreBpf(
         new_target_pda.data.len,
     ) catch return error.ArithmeticOverflow;
 
-    // NOTE: duplicated from src/runtime/program/bpf_loader/execute.zig:deployProgram
+    // Do the verification part of bpf_loader.v3.deployProgram
     {
         const compute_budget: sig.runtime.ComputeBudget = .DEFAULT;
-
-        // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L124-L131
-        var environment = sig.vm.Environment.initV1(
-            allocator,
-            feature_set,
-            &compute_budget,
-            slot_store.slot,
-            false,
-            true,
-        ) catch {
-            return error.ProgramEnvironmentSetupFailure;
-        };
-        defer environment.deinit(allocator);
-
-        // Deployment of programs with sol_alloc_free is disabled.
-        {
-            const loader_map = &environment.loader.map;
-            for (loader_map.values(), 0..) |entry, i| {
-                if (std.mem.eql(u8, entry.name, "sol_alloc_free_")) {
-                    loader_map.swapRemoveAt(i);
-                    allocator.free(entry.name); // was allocator.dupe()'d internally
-                    break;
-                }
-            }
-        }
-
-        // Modifies new_target_pda.data in-place, which is fine as it lives only in this function.
-        var executable = sig.vm.Executable.fromBytes(
+        try program.bpf_loader.verifyProgram(
             allocator,
             new_target_pda.data[loader_v3.State.PROGRAM_DATA_METADATA_SIZE..],
-            &environment.loader,
-            environment.config,
-        ) catch {
-            return error.InvalidAccountData;
-        };
-        defer executable.deinit(allocator);
-
-        executable.verify(&environment.loader) catch {
-            return error.InvalidAccountData;
-        };
+            slot_store.slot,
+            feature_set,
+            &compute_budget,
+            null, // no LogCollector
+        );
     }
 
     // update capitalization
