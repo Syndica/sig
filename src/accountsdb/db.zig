@@ -1126,7 +1126,8 @@ pub const AccountsDB = struct {
         var timer = sig.time.Timer.start();
 
         // going higher will only lead to more contention in the buffer pool reads
-        const n_threads = @min(6, @as(u32, @truncate(try std.Thread.getCpuCount())));
+        // const n_threads = @min(6, @as(u32, @truncate(try std.Thread.getCpuCount())));
+        const n_threads = 1;
 
         // split processing the bins over muliple threads
         self.logger.info().logf(
@@ -1155,7 +1156,7 @@ pub const AccountsDB = struct {
             },
         );
 
-        const total_lamports, const accounts_hash = blk: {
+        var total_lamports, var accounts_hash = blk: {
             var lamports_sum: u64 = 0;
             var hash: LtHash = if (hash_from) |hash| hash else .IDENTITY;
             for (task_results) |result| {
@@ -1169,6 +1170,17 @@ pub const AccountsDB = struct {
             }
             break :blk .{ lamports_sum, hash };
         };
+
+        std.debug.print("(pre-duplicate removal) accounts_hash.checksum(): {}\n", .{accounts_hash.checksum()});
+        std.debug.print("(pre-duplicate removal) total_lamports: {}\n", .{total_lamports});
+
+        for (task_results) |result| {
+            total_lamports -|= result.subtract;
+            accounts_hash.mixOut(result.mix_out);
+        }
+
+        std.debug.print("(post-duplicate removal) accounts_hash.checksum(): {}\n", .{accounts_hash.checksum()});
+        std.debug.print("(post-duplicate removal) total_lamports: {}\n", .{total_lamports});
 
         self.logger.debug().logf("collecting hashes from accounts took: {s}", .{timer.read()});
         timer.reset();
@@ -1405,6 +1417,13 @@ pub const AccountsDB = struct {
         var arena = std.heap.ArenaAllocator.init(tmp_allocator);
         defer arena.deinit();
         const allocator = arena.allocator();
+
+        const maybe_min_slot: ?Slot, const maybe_max_slot: ?Slot = switch (config) {
+            inline else => |cfg| .{ cfg.min_slot, cfg.max_slot },
+        };
+
+        std.debug.print("maybe_min_slot: {?}\n", .{maybe_min_slot});
+        std.debug.print("maybe_max_slot: {?}\n", .{maybe_max_slot});
 
         for (shards, results, 0..) |*shard_rw, *result, i| {
             // get and sort pubkeys inshardn
