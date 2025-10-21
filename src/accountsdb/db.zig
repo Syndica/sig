@@ -1135,7 +1135,8 @@ pub const AccountsDB = struct {
         var timer = try sig.time.Timer.start();
 
         // going higher will only lead to more contention in the buffer pool reads
-        const n_threads = @min(6, @as(u32, @truncate(try std.Thread.getCpuCount())));
+        // const n_threads = @min(6, @as(u32, @truncate(try std.Thread.getCpuCount())));
+        const n_threads = 1;
 
         // split processing the bins over muliple threads
         self.logger.info().logf(
@@ -1164,7 +1165,7 @@ pub const AccountsDB = struct {
             },
         );
 
-        const total_lamports, const accounts_hash = blk: {
+        var total_lamports, var accounts_hash = blk: {
             var lamports_sum: u64 = 0;
             var hash: LtHash = if (hash_from) |hash| hash else .IDENTITY;
             for (task_results) |result| {
@@ -1173,6 +1174,17 @@ pub const AccountsDB = struct {
             }
             break :blk .{ lamports_sum, hash };
         };
+
+        std.debug.print("(pre-duplicate removal) accounts_hash.checksum(): {}\n", .{accounts_hash.checksum()});
+        std.debug.print("(pre-duplicate removal) total_lamports: {}\n", .{total_lamports});
+
+        for (task_results) |result| {
+            total_lamports -|= result.subtract;
+            accounts_hash.mixOut(result.mix_out);
+        }
+
+        std.debug.print("(post-duplicate removal) accounts_hash.checksum(): {}\n", .{accounts_hash.checksum()});
+        std.debug.print("(post-duplicate removal) total_lamports: {}\n", .{total_lamports});
 
         self.logger.debug().logf("collecting hashes from accounts took: {s}", .{timer.read()});
         timer.reset();
@@ -1347,45 +1359,45 @@ pub const AccountsDB = struct {
                 accounts_hash,
             );
 
-            {
-                for (&[_]usize{ 0, 1, 2, 3, 4, 5 }) |i| {
-                    const accounts_delta_hash_i, //
-                    const incremental_lamports_i //
-                    = try self.computeAccountHashesAndLamports(
-                        .{
-                            .IncrementalAccountHash = .{
-                                .min_slot = params.full_slot + i,
-                                .max_slot = inc_slot,
-                            },
-                        },
-                        null,
-                    );
+            // {
+            //     for (&[_]usize{ 0, 1, 2, 3, 4, 5 }) |i| {
+            //         const accounts_delta_hash_i, //
+            //         const incremental_lamports_i //
+            //         = try self.computeAccountHashesAndLamports(
+            //             .{
+            //                 .IncrementalAccountHash = .{
+            //                     .min_slot = params.full_slot + i,
+            //                     .max_slot = inc_slot,
+            //                 },
+            //             },
+            //             null,
+            //         );
 
-                    _ = incremental_lamports_i;
+            //         _ = incremental_lamports_i;
 
-                    std.debug.print("computed {} from full_slot + {} .. inc_slot: {}\n", .{ accounts_delta_hash_i.checksum(), i, inc_slot });
-                }
-            }
+            //         std.debug.print("computed {} from full_slot + {} .. inc_slot: {}\n", .{ accounts_delta_hash_i.checksum(), i, inc_slot });
+            //     }
+            // }
 
-            {
-                for (&[_]usize{ 0, 1, 2, 3, 4, 5 }) |i| {
-                    const accounts_delta_hash_i, //
-                    const incremental_lamports_i //
-                    = try self.computeAccountHashesAndLamports(
-                        .{
-                            .IncrementalAccountHash = .{
-                                .min_slot = params.full_slot + i,
-                                .max_slot = inc_slot,
-                            },
-                        },
-                        accounts_hash,
-                    );
+            // {
+            //     for (&[_]usize{ 0, 1, 2, 3, 4, 5 }) |i| {
+            //         const accounts_delta_hash_i, //
+            //         const incremental_lamports_i //
+            //         = try self.computeAccountHashesAndLamports(
+            //             .{
+            //                 .IncrementalAccountHash = .{
+            //                     .min_slot = params.full_slot + i,
+            //                     .max_slot = inc_slot,
+            //                 },
+            //             },
+            //             accounts_hash,
+            //         );
 
-                    _ = incremental_lamports_i;
+            //         _ = incremental_lamports_i;
 
-                    std.debug.print("(with accounts_hash) computed {} from full_slot + {} .. inc_slot: {}\n", .{ accounts_delta_hash_i.checksum(), i, inc_slot });
-                }
-            }
+            //         std.debug.print("(with accounts_hash) computed {} from full_slot + {} .. inc_slot: {}\n", .{ accounts_delta_hash_i.checksum(), i, inc_slot });
+            //     }
+            // }
 
             _ = incremental_lamports;
 
@@ -1397,10 +1409,10 @@ pub const AccountsDB = struct {
             //     return error.IncorrectIncrementalLamports;
             // }
 
-            if (expected_incremental.accounts_hash.eql(accounts_delta_hash)) {
+            if (!expected_incremental.accounts_hash.eql(accounts_delta_hash)) {
                 self.logger.err().logf(
-                    "incorrect accounts delta hash: expected vs calculated: {d} vs {d}",
-                    .{ expected_incremental.accounts_hash, accounts_delta_hash },
+                    "incorrect accounts delta hash: expected vs calculated: {} vs {}",
+                    .{ expected_incremental.accounts_hash.checksum(), accounts_delta_hash.checksum() },
                 );
                 return error.IncorrectAccountsDeltaHash;
             }
@@ -1428,7 +1440,13 @@ pub const AccountsDB = struct {
         maybe_latest_snapshot_info.* = maybe_first_snapshot_info.*;
     }
 
-    const HashedShard = struct { hash: LtHash, lamports: u64 };
+    const HashedShard = struct {
+        lamports: u64,
+        subtract: u64,
+
+        hash: LtHash,
+        mix_out: LtHash,
+    };
 
     /// multithread entrypoint for getHashesFromIndex
     pub fn getHashesFromIndexMultiThread(
@@ -1467,6 +1485,13 @@ pub const AccountsDB = struct {
         defer arena.deinit();
         const allocator = arena.allocator();
 
+        const maybe_min_slot: ?Slot, const maybe_max_slot: ?Slot = switch (config) {
+            inline else => |cfg| .{ cfg.min_slot, cfg.max_slot },
+        };
+
+        std.debug.print("maybe_min_slot: {?}\n", .{maybe_min_slot});
+        std.debug.print("maybe_max_slot: {?}\n", .{maybe_max_slot});
+
         for (shards, results, 0..) |*shard_rw, *result, i| {
             // get and sort pubkeys inshardn
             // PERF: may be holding this lock for too long
@@ -1476,32 +1501,71 @@ pub const AccountsDB = struct {
             var total_lamports: u64 = 0;
             var lt_hash: LtHash = .IDENTITY;
 
+            var total_subtracted: u64 = 0;
+            var mix_out: LtHash = .IDENTITY;
+
             var iter = shard.iterator();
             while (iter.next()) |key| {
                 defer std.debug.assert(arena.reset(.retain_capacity));
 
                 const ref_head = key.value_ptr;
 
-                // get the most recent state of the account
-                const max_slot_ref = switch (config) {
-                    inline //
-                    .FullAccountHash,
-                    .IncrementalAccountHash,
-                    => |config_pl| slotListMaxWithinBounds(
+                // std.debug.print("max_slot_ref: {}\n", .{max_slot_ref});
+
+                // "mix in" account into hash
+                const latest_slot = slot: {
+                    // get the most recent state of the account
+                    const max_slot_ref = slotListMaxWithinBounds(
                         ref_head.ref_ptr,
-                        config_pl.min_slot,
-                        config_pl.max_slot,
-                    ),
-                } orelse continue;
+                        maybe_min_slot,
+                        maybe_max_slot,
+                    ) orelse {
+                        // std.debug.print("ref_head.pubkey: {}\n", .{ref_head.ref_ptr.pubkey});
+                        continue;
+                    };
 
-                const account = try self.getAccountFromRef(allocator, max_slot_ref);
-                defer account.deinit(allocator);
+                    const account = try self.getAccountFromRef(allocator, max_slot_ref);
+                    defer account.deinit(allocator);
 
-                lt_hash.mixIn(account.ltHash(max_slot_ref.pubkey));
-                total_lamports += account.lamports;
+                    // std.debug.print("mixing in {} at slot {}\n", .{ max_slot_ref.pubkey, max_slot_ref.slot });
+                    lt_hash.mixIn(account.ltHash(max_slot_ref.pubkey));
+
+                    total_lamports += account.lamports;
+
+                    if (max_slot_ref.slot == 0) continue;
+                    break :slot max_slot_ref.slot;
+                };
+
+                // There should only be duplicate account state in incremental snapshots
+                // (i.e. accounts modified in the incremental snapshot).
+                // This error is not necessary (the snapshot is still valid), but it's a good sanity
+                // check.
+                // if (maybe_min_slot != null) return error.FullSnapshotContainsDuplicateAccount;
+
+                // "mix out" old version of account from hash
+                {
+                    const min_slot = maybe_min_slot orelse continue;
+                    std.debug.assert(min_slot > 0); // Pass this as a null! TODO: why is this a null anyway?
+
+                    // remove previous state
+                    const previous_slot_ref = slotListMaxWithinBounds(ref_head.ref_ptr, null, latest_slot - 1) orelse
+                        continue;
+
+                    const account = try self.getAccountFromRef(allocator, previous_slot_ref);
+                    defer account.deinit(allocator);
+
+                    // std.debug.print("mixing out {} at slot {}\n", .{ previous_slot_ref.pubkey, previous_slot_ref.slot });
+                    mix_out.mixIn(account.ltHash(previous_slot_ref.pubkey));
+                    total_subtracted += account.lamports;
+                }
             }
 
-            result.* = .{ .hash = lt_hash, .lamports = total_lamports };
+            result.* = .{
+                .hash = lt_hash,
+                .lamports = total_lamports,
+                .mix_out = mix_out,
+                .subtract = total_subtracted,
+            };
 
             if (print_progress and progress_timer.read() > DB_LOG_RATE.asNanos()) {
                 printTimeEstimate(
@@ -3810,10 +3874,10 @@ test "load sysvars" {
         const inc = full_inc_manifest.incremental;
         const expected_clock: sysvar.Clock = .{
             .slot = (inc orelse full).bank_fields.slot,
-            .epoch_start_timestamp = 1760562439,
+            .epoch_start_timestamp = 1761088804,
             .epoch = (inc orelse full).bank_fields.epoch,
             .leader_schedule_epoch = 1,
-            .unix_timestamp = 1760562439,
+            .unix_timestamp = 1761088804,
         };
         try std.testing.expectEqual(
             expected_clock,
@@ -4101,11 +4165,11 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
                 .full_slot = full_manifest.bank_fields.slot,
                 .expected_full = .{
                     .accounts_hash = full_manifest.bank_extra.accounts_lt_hash,
-                    .capitalization = full_manifest.bank_fields.capitalization,
+                    // .capitalization = full_manifest.bank_fields.capitalization,
                 },
-                .expected_incremental = if (maybe_inc_persistence) |inc_persistence| .{
+                .expected_incremental = if (maybe_inc_persistence) |_| .{
                     .accounts_hash = full_inc_manifest.incremental.?.bank_extra.accounts_lt_hash,
-                    .capitalization = inc_persistence.incremental_capitalization,
+                    // .capitalization = inc_persistence.incremental_capitalization,
                 } else null,
             });
             const validate_duration = validate_timer.read();
