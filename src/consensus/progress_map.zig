@@ -1290,7 +1290,8 @@ test "ForkProgress.init" {
         );
     }
 
-    var slot_state: sig.core.SlotState = try .fromBankFields(allocator, &bank_data, null, account_reader);
+    var slot_state: sig.core.SlotState =
+        try .fromBankFields(allocator, &bank_data, null, account_reader);
     defer slot_state.deinit(allocator);
 
     const slot_info: replay.trackers.SlotTracker.Reference = .{

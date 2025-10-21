@@ -5,6 +5,7 @@ const features = sig.core.features;
 
 const Feature = features.Feature;
 const Pubkey = sig.core.Pubkey;
+const Hash = sig.core.Hash;
 
 /// Configuration for migrating a built-in program to Core BPF.
 pub const CoreBpfMigrationConfig = struct {
@@ -28,6 +29,10 @@ pub const CoreBpfMigrationConfig = struct {
     /// `enable_feature_id`. It should always be a feature gate that will be
     /// activated after the builtin is already enabled.
     enable_feature_id: Feature,
+
+    /// If specified, the expected verifiable build hash of the bpf program.
+    /// This will be checked against the buffer account before migration.
+    verified_build_hash: ?Hash = null,
 };
 
 /// Transitions of built-in programs at epoch boundaries when features are activated.
@@ -80,6 +85,7 @@ pub const BUILTINS = [_]BuiltinProgram{
             .source_buffer_address = program.stake.SOURCE_ID,
             .upgrade_authority_address = null,
             .enable_feature_id = .migrate_stake_program_to_core_bpf,
+            .verified_build_hash = null,
         },
     },
     .{
@@ -91,6 +97,7 @@ pub const BUILTINS = [_]BuiltinProgram{
             .source_buffer_address = program.config.SOURCE_ID,
             .upgrade_authority_address = null,
             .enable_feature_id = .migrate_config_program_to_core_bpf,
+            .verified_build_hash = null,
         },
     },
     .{
@@ -102,6 +109,7 @@ pub const BUILTINS = [_]BuiltinProgram{
             .source_buffer_address = program.address_lookup_table.SOURCE_ID,
             .upgrade_authority_address = null,
             .enable_feature_id = .migrate_address_lookup_table_program_to_core_bpf,
+            .verified_build_hash = null,
         },
     },
     .{
@@ -156,6 +164,11 @@ pub const STATELESS_BUILTINS = [_]StatelessBuiltinPrototype{
             .source_buffer_address = sig.runtime.ids.FEATURE_PROGRAM_SOURCE_ID,
             .upgrade_authority_address = null,
             .enable_feature_id = .migrate_feature_gate_program_to_core_bpf,
+            .verified_build_hash = .{ .data = .{
+                0x19, 0x2e, 0xd7, 0x27, 0x33, 0x4a, 0xbe, 0x82, 0x2d, 0x5a, 0xcc, 0xba, 0x8b, 0x88,
+                0x6e, 0x25, 0xf8, 0x8b, 0x03, 0xc7, 0x69, 0x73, 0xc2, 0xe7, 0x29, 0x0c, 0xfb, 0x55,
+                0xb9, 0xe1, 0x11, 0x5f,
+            } },
         },
     },
 };

@@ -63,12 +63,13 @@ pub fn distributePartitionedEpochRewards(
                 slot_store.reader,
             ) orelse EpochRewards.DEFAULT;
 
-            const partition_indices = try sig.replay.rewards.EpochRewardsHasher.hashRewardsIntoPartitions(
-                allocator,
-                calc.all_stake_rewards.entries,
-                &epoch_rewards_sysvar.parent_blockhash,
-                epoch_rewards_sysvar.num_partitions,
-            );
+            const partition_indices =
+                try sig.replay.rewards.EpochRewardsHasher.hashRewardsIntoPartitions(
+                    allocator,
+                    calc.all_stake_rewards.entries,
+                    &epoch_rewards_sysvar.parent_blockhash,
+                    epoch_rewards_sysvar.num_partitions,
+                );
 
             epoch_reward_status.* = .{ .active = .{
                 .distributing = .{

@@ -452,6 +452,11 @@ pub const EpochTracker = struct {
         return self.epochs.getPtr(self.schedule.getEpoch(slot));
     }
 
+    // lifetime ends as soon as the map is modified
+    pub fn getMutablePtrForSlot(self: *EpochTracker, slot: Slot) ?*EpochConstants {
+        return self.epochs.getPtr(self.schedule.getEpoch(slot));
+    }
+
     pub fn put(
         self: *EpochTracker,
         allocator: Allocator,
