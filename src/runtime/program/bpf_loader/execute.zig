@@ -1959,7 +1959,7 @@ pub fn verifyProgram(
         true,
     ) catch |err| {
         if (log_collector) |lc| {
-            lc.log(allocator, "Failed to register syscalls: {s}", .{@errorName(err)});
+            try lc.log(allocator, "Failed to register syscalls: {s}", .{@errorName(err)});
         }
         return InstructionError.ProgramEnvironmentSetupFailure;
     };
@@ -1987,13 +1987,13 @@ pub fn verifyProgram(
         &environment.loader,
         environment.config,
     ) catch |err| {
-        if (log_collector) |lc| lc.log(allocator, "{s}", .{@errorName(err)});
+        if (log_collector) |lc| try lc.log(allocator, "{s}", .{@errorName(err)});
         return InstructionError.InvalidAccountData;
     };
     defer executable.deinit(allocator);
 
     executable.verify(&environment.loader) catch |err| {
-        if (log_collector) |lc| lc.log(allocator, "{s}", .{@errorName(err)});
+        if (log_collector) |lc| try lc.log(allocator, "{s}", .{@errorName(err)});
         return InstructionError.InvalidAccountData;
     };
 }

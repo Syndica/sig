@@ -21,7 +21,6 @@ const SlotConstants = sig.core.SlotConstants;
 const StakeHistory = sig.runtime.sysvar.StakeHistory;
 const VoteAccounts = sig.core.vote_accounts.VoteAccounts;
 const StakeAndVoteAccountsMap = sig.core.vote_accounts.StakeAndVoteAccountsMap;
-const Delegation = sig.core.stake.Delegation;
 
 const SlotAccountStore = @import("slot_account_store.zig").SlotAccountStore;
 const applyFeatureActivations = @import("apply_feature_activations.zig").applyFeatureActivations;

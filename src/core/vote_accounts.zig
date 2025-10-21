@@ -17,8 +17,6 @@ const AccountSharedData = sig.runtime.AccountSharedData;
 const VoteState = sig.runtime.program.vote.state.VoteState;
 const VoteStateVersions = sig.runtime.program.vote.state.VoteStateVersions;
 
-const Clock = sig.runtime.sysvar.Clock;
-
 const failing_allocator = sig.utils.allocators.failing.allocator(.{});
 
 const deinitMapAndValues = sig.utils.collections.deinitMapAndValues;
@@ -304,7 +302,11 @@ pub const VoteAccount = struct {
     };
     pub const @"!bincode-config:state" = bincode.FieldConfig(VoteState){ .skip = true };
 
-    pub fn init(allocator: Allocator, account: MinimalAccount, state: VoteState) Allocator.Error!VoteAccount {
+    pub fn init(
+        allocator: Allocator,
+        account: MinimalAccount,
+        state: VoteState,
+    ) Allocator.Error!VoteAccount {
         const rc = try allocator.create(sig.sync.ReferenceCounter);
         errdefer allocator.destroy(rc);
         rc.* = .init;

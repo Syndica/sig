@@ -33,7 +33,6 @@ const PartitionedVoteReward = sig.replay.rewards.PartitionedVoteReward;
 const RewardsForPartitioning = sig.replay.rewards.RewardsForPartitioning;
 const EpochTracker = sig.replay.trackers.EpochTracker;
 
-const EpochConstants = sig.core.EpochConstants;
 const SlotState = sig.core.SlotState;
 const SlotConstants = sig.core.SlotConstants;
 
@@ -245,7 +244,8 @@ fn storeVoteAccountsPartitioned(
     new_warmup_and_cooldown_rate_epoch: ?Epoch,
 ) !void {
     for (vote_rewards) |vote_reward| {
-        const account = try slot_store.get(allocator, vote_reward.vote_pubkey) orelse return error.MissingVoteAccount;
+        const account = (try slot_store.get(allocator, vote_reward.vote_pubkey)) orelse
+            return error.MissingVoteAccount;
         defer account.deinit(allocator);
 
         var account_shared_data = try AccountSharedData.fromAccount(allocator, &account);
@@ -326,7 +326,8 @@ fn calculateValidatorRewards(
     defer stakes_lg.unlock();
 
     const stake_history = &stakes.stake_history;
-    const filtered_stake_delegations = try filterStakesDelegations(allocator, slot, feature_set, stakes);
+    const filtered_stake_delegations =
+        try filterStakesDelegations(allocator, slot, feature_set, stakes);
 
     const point_value = try calculateRewardPointsPartitioned(
         rewards,
@@ -752,7 +753,11 @@ test calculateStakeVoteRewards {
         vote_commission,
         vote_epoch,
     );
-    try cached_vote_accounts.vote_accounts.put(allocator, vote_pubkey_0, .{ .stake = 1_000_000_000, .account = vote_account_0 });
+    try cached_vote_accounts.vote_accounts.put(
+        allocator,
+        vote_pubkey_0,
+        .{ .stake = 1_000_000_000, .account = vote_account_0 },
+    );
 
     const stake_0_pubkey = Pubkey.initRandom(random);
     const stake_0 = sig.replay.rewards.inflation_rewards.newStakeForTest(
