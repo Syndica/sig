@@ -279,20 +279,17 @@ pub fn hashSlot(allocator: Allocator, params: HashSlotParams) !struct { ?LtHash,
     var signature_count_bytes: [8]u8 = undefined;
     std.mem.writeInt(u64, &signature_count_bytes, params.signature_count, .little);
 
-    const initial_hash =
-        if (params.feature_set.active(.remove_accounts_delta_hash, params.slot))
-            Hash.generateSha256(.{
-                params.parent_slot_hash,
-                &signature_count_bytes,
-                params.blockhash,
-            })
-        else
-            Hash.generateSha256(.{
-                params.parent_slot_hash,
-                try deltaMerkleHash(params.account_reader, allocator, params.slot),
-                &signature_count_bytes,
-                params.blockhash,
-            });
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    hasher.update(&params.parent_slot_hash.data);
+    const remove_delta_hash = params.feature_set.active(.remove_accounts_delta_hash, params.slot);
+    if (!remove_delta_hash) {
+        const merkle_hash = try deltaMerkleHash(params.account_reader, allocator, params.slot);
+        hasher.update(&merkle_hash.data);
+    }
+    hasher.update(&signature_count_bytes);
+    hasher.update(&params.blockhash.data);
+
+    const initial_hash = hasher.finalResult();
 
     if (params.feature_set.active(.accounts_lt_hash, params.slot)) {
         var parent_ancestors = try params.ancestors.clone(allocator);
@@ -307,9 +304,15 @@ pub fn hashSlot(allocator: Allocator, params: HashSlotParams) !struct { ?LtHash,
             &parent_ancestors,
         ));
 
-        return .{ lt_hash, Hash.generateSha256(.{ initial_hash, lt_hash.bytes() }) };
+        return .{
+            lt_hash,
+            Hash.initMany(&.{ &initial_hash, lt_hash.constBytes() }),
+        };
     } else {
-        return .{ null, initial_hash };
+        return .{
+            null,
+            .{ .data = initial_hash },
+        };
     }
 }
 

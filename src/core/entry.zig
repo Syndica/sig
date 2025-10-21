@@ -114,20 +114,19 @@ pub fn verifyPoh(
         if (entry.num_hashes == 0) continue;
 
         for (1..entry.num_hashes) |_| {
-            current_hash = Hash.generateSha256(&current_hash.data);
+            current_hash = Hash.init(&current_hash.data);
         }
 
         if (entry.transactions.len > 0) {
-            const mixin =
-                try hashTransactions(allocator, optional.preallocated_nodes, entry.transactions);
-            current_hash = current_hash.extendAndHash(&mixin.data);
-        } else {
-            current_hash = Hash.generateSha256(&current_hash.data);
-        }
+            const mixin = try hashTransactions(
+                allocator,
+                optional.preallocated_nodes,
+                entry.transactions,
+            );
+            current_hash = current_hash.extend(&mixin.data);
+        } else current_hash = Hash.init(&current_hash.data);
 
-        if (!current_hash.eql(entry.hash)) {
-            return false;
-        }
+        if (!current_hash.eql(entry.hash)) return false;
     }
 
     return true;
@@ -163,7 +162,7 @@ pub fn hashTransactions(
     try nodes.ensureTotalCapacity(allocator, capacity);
 
     for (transactions) |tx| for (tx.signatures) |signature| {
-        const hash = Hash.generateSha256(.{ LEAF_PREFIX, &signature.toBytes() });
+        const hash = Hash.initMany(&.{ LEAF_PREFIX, &signature.toBytes() });
         nodes.appendAssumeCapacity(hash);
     };
 
@@ -181,7 +180,7 @@ pub fn hashTransactions(
                 // Duplicate last entry if the level length is odd
                 &nodes.items[prev_level_start + prev_level_idx];
 
-            const hash = Hash.generateSha256(.{ INTERMEDIATE_PREFIX, &lsib.data, &rsib.data });
+            const hash = Hash.initMany(&.{ INTERMEDIATE_PREFIX, &lsib.data, &rsib.data });
             nodes.appendAssumeCapacity(hash);
         }
         prev_level_start = level_start;
