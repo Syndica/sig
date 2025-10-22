@@ -106,7 +106,7 @@ const LoadedTransactionAccountsError = error{
 /// By the time this is called, we have no dependency on accountsdb.
 pub fn loadTransactionAccounts(
     // note: think we make this a *const by moving sysvar instruction account construction into init
-    self: *AccountMap,
+    map: *AccountMap,
     allocator: Allocator,
     transaction: *const RuntimeTransaction,
     rent_collector: *const RentCollector,
@@ -119,7 +119,7 @@ pub fn loadTransactionAccounts(
 
     const result = if (feature_set.active(.formalize_loaded_transaction_data_size, slot))
         loadTransactionAccountsSimd186(
-            self,
+            map,
             allocator,
             transaction,
             rent_collector,
@@ -129,7 +129,7 @@ pub fn loadTransactionAccounts(
         )
     else
         loadTransactionAccountsOld(
-            self,
+            map,
             allocator,
             transaction,
             rent_collector,
@@ -149,7 +149,7 @@ pub fn loadTransactionAccounts(
 }
 
 fn loadTransactionAccountsSimd186(
-    self: *AccountMap,
+    map: *AccountMap,
     allocator: Allocator,
     transaction: *const RuntimeTransaction,
     rent_collector: *const RentCollector,
@@ -173,7 +173,7 @@ fn loadTransactionAccountsSimd186(
     const accounts = transaction.accounts.slice();
     for (accounts.items(.pubkey), accounts.items(.is_writable)) |account_key, is_writable| {
         const loaded_account = try loadTransactionAccount(
-            self,
+            map,
             allocator,
             transaction,
             rent_collector,
@@ -218,7 +218,7 @@ fn loadTransactionAccountsSimd186(
                 }
                 if (additional_loaded_accounts.contains(programdata_address)) break :cont;
                 // ...and the programdata account exists (if it doesn't, it is *not* a load failure)...
-                if (self.get(programdata_address)) |programdata_account| {
+                if (map.get(programdata_address)) |programdata_account| {
                     // ...count programdata toward this transaction's total size.
                     try loaded.increase(
                         TRANSACTION_ACCOUNT_BASE_SIZE +| programdata_account.data.len,
@@ -239,7 +239,7 @@ fn loadTransactionAccountsSimd186(
     for (transaction.instructions) |instr| {
         const program_id = &instr.program_meta.pubkey;
         const program_account = try loadAccount(
-            self,
+            map,
             allocator,
             transaction,
             program_id,
@@ -272,7 +272,7 @@ fn loadTransactionAccountsSimd186(
 }
 
 fn loadTransactionAccountsOld(
-    self: *AccountMap,
+    map: *AccountMap,
     allocator: Allocator,
     transaction: *const RuntimeTransaction,
     rent_collector: *const RentCollector,
@@ -287,7 +287,7 @@ fn loadTransactionAccountsOld(
     const accounts = transaction.accounts.slice();
     for (accounts.items(.pubkey), accounts.items(.is_writable)) |account_key, is_writable| {
         const loaded_account = try loadTransactionAccount(
-            self,
+            map,
             allocator,
             transaction,
             rent_collector,
@@ -330,7 +330,7 @@ fn loadTransactionAccountsOld(
         const program_id = &instr.program_meta.pubkey;
         if (program_id.equals(&runtime.ids.NATIVE_LOADER_ID)) continue;
         const program_account = try loadAccount(
-            self,
+            map,
             allocator,
             transaction,
             program_id,
@@ -347,7 +347,7 @@ fn loadTransactionAccountsOld(
             if (validated_loaders.contains(owner_id)) continue; // only load + count owners once
 
             break :account try loadAccount(
-                self,
+                map,
                 allocator,
                 transaction,
                 &owner_id,
@@ -390,7 +390,7 @@ pub const LoadedTransactionAccount = struct {
 };
 
 fn loadTransactionAccount(
-    self: *AccountMap,
+    map: *AccountMap,
     allocator: Allocator,
     transaction: *const RuntimeTransaction,
     rent_collector: *const RentCollector,
@@ -410,7 +410,7 @@ fn loadTransactionAccount(
     }
 
     var account = (try loadAccount(
-        self,
+        map,
         allocator,
         transaction,
         key,
@@ -421,7 +421,7 @@ fn loadTransactionAccount(
         var account = AccountSharedData.EMPTY;
         account.rent_epoch = RENT_EXEMPT_RENT_EPOCH;
 
-        const account_ptr = self.getPtr(key.*).?;
+        const account_ptr = map.getPtr(key.*).?;
         allocator.free(account_ptr.data);
         account_ptr.* = account;
 
@@ -451,7 +451,7 @@ fn loadTransactionAccount(
 
 /// null return => account is now dead
 pub fn loadAccount(
-    self: *AccountMap,
+    map: *AccountMap,
     allocator: Allocator,
     transaction: *const RuntimeTransaction,
     key: *const Pubkey,
@@ -469,7 +469,7 @@ pub fn loadAccount(
             @branchHint(.unlikely);
             is_owned = true;
             break :account try constructInstructionsAccount(allocator, transaction);
-        } else self.get(key.*);
+        } else map.get(key.*);
 
     var account = maybe_account.?;
     if (account.lamports == 0) return null;
@@ -487,20 +487,16 @@ pub fn loadAccount(
     };
 }
 
-pub fn mutateInPlace(self: *AccountMap, key: *const Pubkey) ?*AccountSharedData {
-    const account = self.getPtr(key.*).?;
+pub fn mutateInPlace(map: *AccountMap, key: *const Pubkey) ?*AccountSharedData {
+    const account = map.getPtr(key.*).?;
     if (account.lamports == 0) return null;
     return account;
 }
 
 /// TODO document assumptions
-pub fn store(
-    self: *AccountMap,
-    allocator: Allocator,
-    modified_account: *CachedAccount,
-) void {
+pub fn store(map: *AccountMap, allocator: Allocator, modified_account: *CachedAccount) void {
     std.debug.assert(modified_account.is_owned);
-    const account = self.getPtr(modified_account.pubkey).?;
+    const account = map.getPtr(modified_account.pubkey).?;
     account.deinit(allocator);
     account.* = modified_account.account;
     modified_account.is_owned = false;

@@ -27,9 +27,9 @@ const TransactionResult = runtime.transaction_execution.TransactionResult;
 /// special case (constructed on a per-transaction basis)
 pub const AccountMap = std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData);
 
-pub fn deinit(self: AccountMap, allocator: Allocator) void {
-    for (self.values()) |account| account.deinit(allocator);
-    var mut = self;
+pub fn deinit(map: AccountMap, allocator: Allocator) void {
+    for (map.values()) |account| account.deinit(allocator);
+    var mut = map;
     mut.deinit(allocator);
 }
 
@@ -40,11 +40,11 @@ pub fn initFromAccountsDb(
     account_reader: SlotAccountReader,
     transactions: []const RuntimeTransaction,
 ) !std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData) {
-    var self = try initSufficientCapacity(allocator, transactions);
+    var map = try initSufficientCapacity(allocator, transactions);
     for (transactions) |tx| {
-        try load(&self, allocator, account_reader, &tx.accounts, tx.instructions);
+        try load(&map, allocator, account_reader, &tx.accounts, tx.instructions);
     }
-    return self;
+    return map;
 }
 
 /// Allocates a sufficiently large account cache to hold every account that
