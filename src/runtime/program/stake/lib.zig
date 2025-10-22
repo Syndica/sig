@@ -1,7 +1,7 @@
 const std = @import("std");
 const sig = @import("../../../sig.zig");
 
-const state = @import("state.zig");
+pub const state = @import("state.zig");
 const instruction = @import("instruction.zig");
 const program = @import("lib.zig");
 

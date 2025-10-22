@@ -372,6 +372,16 @@ pub const StakeStateV2 = union(enum) {
         fn isBootstrap(self: *const Delegation) bool {
             return self.activation_epoch == std.math.maxInt(u64);
         }
+
+        pub fn initRandom(random: std.Random) Delegation {
+            return .{
+                .voter_pubkey = Pubkey.initRandom(random),
+                .stake = random.int(u64),
+                .activation_epoch = random.int(Epoch),
+                .deactivation_epoch = random.int(Epoch),
+                ._warmup_cooldown_rate = random.float(f64),
+            };
+        }
     };
 
     pub const StakeAuthorize = enum { staker, withdrawer };

@@ -136,20 +136,13 @@ pub const Reward = struct {
     lamports: i64,
     /// Account balance in lamports after `lamports` was applied
     post_balance: u64,
-    reward_type: ?RewardType,
+    reward_type: ?sig.replay.rewards.RewardType,
     /// Vote account commission when the reward was credited, only present for voting and staking rewards
     commission: ?u8,
 
     pub fn deinit(self: @This(), allocator: Allocator) void {
         allocator.free(self.pubkey);
     }
-};
-
-pub const RewardType = enum {
-    Fee,
-    Rent,
-    Staking,
-    Voting,
 };
 
 pub const LoadedAddresses = struct {

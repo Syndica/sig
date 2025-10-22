@@ -34,8 +34,8 @@ pub const RewardInfo = struct {
 };
 
 pub const StakeReward = struct {
-    pubkey: Pubkey,
-    reward_info: RewardInfo,
+    stake_pubkey: Pubkey,
+    stake_reward_info: RewardInfo,
     stake_account: AccountSharedData,
 
     pub fn deinit(self: StakeReward, allocator: Allocator) void {

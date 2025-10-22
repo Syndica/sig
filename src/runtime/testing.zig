@@ -239,7 +239,7 @@ pub fn createEpochStakes(
             .stake = param.stake,
             .activation_epoch = 0,
             .deactivation_epoch = 0,
-            .deprecated_warmup_cooldown_rate = 0.0,
+            ._warmup_cooldown_rate = 0.0,
         });
     }
 

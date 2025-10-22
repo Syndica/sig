@@ -233,11 +233,11 @@ fn storeStakeAccountsInPartition(
     for (updated_stake_rewards.items) |stake_reward| {
         try stakes_cache.checkAndStore(
             allocator,
-            stake_reward.pubkey,
+            stake_reward.stake_pubkey,
             stake_reward.stake_account,
             new_rate_activation_epoch,
         );
-        try slot_store.put(stake_reward.pubkey, stake_reward.stake_account);
+        try slot_store.put(stake_reward.stake_pubkey, stake_reward.stake_account);
     }
 
     return .{
@@ -283,8 +283,8 @@ fn buildUpdatedStakeReward(
     );
 
     return .{
-        .pubkey = partitioned_reward.stake_pubkey,
-        .reward_info = .{
+        .stake_pubkey = partitioned_reward.stake_pubkey,
+        .stake_reward_info = .{
             .reward_type = .staking,
             .lamports = partitioned_reward.stake_reward,
             .post_balance = account.lamports,
@@ -366,7 +366,7 @@ test distributePartitionedEpochRewards {
                             .stake = 1_000_000_000,
                             .activation_epoch = 0,
                             .deactivation_epoch = std.math.maxInt(Epoch),
-                            .deprecated_warmup_cooldown_rate = 0.0,
+                            ._warmup_cooldown_rate = 0.0,
                         },
                         .credits_observed = 0,
                     },
@@ -401,7 +401,7 @@ test distributeEpochRewardsInPartition {
                             .stake = 1_000_000_000,
                             .activation_epoch = 0,
                             .deactivation_epoch = std.math.maxInt(Epoch),
-                            .deprecated_warmup_cooldown_rate = 0.0,
+                            ._warmup_cooldown_rate = 0.0,
                         },
                         .credits_observed = 0,
                     },
@@ -436,7 +436,7 @@ test storeStakeAccountsInPartition {
                             .stake = 1_000_000_000,
                             .activation_epoch = 0,
                             .deactivation_epoch = std.math.maxInt(Epoch),
-                            .deprecated_warmup_cooldown_rate = 0.0,
+                            ._warmup_cooldown_rate = 0.0,
                         },
                         .credits_observed = 0,
                     },
@@ -464,7 +464,7 @@ test buildUpdatedStakeReward {
                 .stake = 1_000_000_000,
                 .activation_epoch = 0,
                 .deactivation_epoch = std.math.maxInt(Epoch),
-                .deprecated_warmup_cooldown_rate = 0.0,
+                ._warmup_cooldown_rate = 0.0,
             },
             .credits_observed = 0,
         },
@@ -557,6 +557,6 @@ test buildUpdatedStakeReward {
         );
         defer result.deinit(allocator);
 
-        try std.testing.expectEqual(6_000_000_000, result.reward_info.post_balance);
+        try std.testing.expectEqual(6_000_000_000, result.stake_reward_info.post_balance);
     }
 }

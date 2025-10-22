@@ -503,21 +503,9 @@ pub const Stake = struct {
     }
 };
 
-pub const StakeFlags = struct {
-    bits: u8,
-    pub const EMPTY: StakeFlags = .{ .bits = 0 };
-};
-
-pub const Authorized = struct {
-    staker: Pubkey,
-    withdrawer: Pubkey,
-};
-
-pub const Lockup = struct {
-    unix_timestamp: i64,
-    epoch: Epoch,
-    custodian: Pubkey,
-};
+const StakeFlags = sig.runtime.program.stake.state.StakeStateV2.StakeFlags;
+const Authorized = sig.runtime.program.stake.state.StakeStateV2.Authorized;
+const Lockup = sig.runtime.program.stake.state.StakeStateV2.Lockup;
 
 pub const Delegation = struct {
     /// to whom the stake is delegated
@@ -529,7 +517,7 @@ pub const Delegation = struct {
     /// epoch the stake was deactivated, std::Epoch::MAX if not deactivated
     deactivation_epoch: Epoch,
     /// DEPRECATED: since 1.16.7
-    deprecated_warmup_cooldown_rate: f64,
+    _warmup_cooldown_rate: f64,
 
     pub fn isBootstrap(self: *const Delegation) bool {
         return self.activation_epoch == std.math.maxInt(u64);
@@ -688,7 +676,7 @@ pub const Delegation = struct {
             .stake = random.int(u64),
             .activation_epoch = random.int(Epoch),
             .deactivation_epoch = random.int(Epoch),
-            .deprecated_warmup_cooldown_rate = random.float(f64),
+            ._warmup_cooldown_rate = random.float(f64),
         };
     }
 };
@@ -748,7 +736,7 @@ fn createStakeAccount(
                 .voter_pubkey = voter_pubkey,
                 .activation_epoch = activation_epoch,
                 .deactivation_epoch = std.math.maxInt(u64),
-                .deprecated_warmup_cooldown_rate = DEFAULT_WARMUP_COOLDOWN_RATE,
+                ._warmup_cooldown_rate = DEFAULT_WARMUP_COOLDOWN_RATE,
             },
             .credits_observed = vote_state.getCredits(),
         },
@@ -1064,7 +1052,7 @@ test "get stake effective and activating" {
         .stake = 1000,
         .activation_epoch = 5,
         .deactivation_epoch = 10,
-        .deprecated_warmup_cooldown_rate = DEFAULT_WARMUP_COOLDOWN_RATE,
+        ._warmup_cooldown_rate = DEFAULT_WARMUP_COOLDOWN_RATE,
     };
 
     var stake_history: StakeHistory = .DEFAULT;
@@ -1096,7 +1084,7 @@ test "get stake state" {
         .stake = 1_000,
         .activation_epoch = 5,
         .deactivation_epoch = 10,
-        .deprecated_warmup_cooldown_rate = DEFAULT_WARMUP_COOLDOWN_RATE,
+        ._warmup_cooldown_rate = DEFAULT_WARMUP_COOLDOWN_RATE,
     };
 
     var stake_history: StakeHistory = .DEFAULT;

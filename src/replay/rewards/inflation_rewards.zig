@@ -215,7 +215,7 @@ pub fn newStakeForTest(
             .stake = stake,
             .activation_epoch = activation_epoch,
             .deactivation_epoch = std.math.maxInt(Epoch),
-            .deprecated_warmup_cooldown_rate = DEFAULT_WARMUP_COOLDOWN_RATE,
+            ._warmup_cooldown_rate = DEFAULT_WARMUP_COOLDOWN_RATE,
         },
         .credits_observed = epoch_credits,
     };

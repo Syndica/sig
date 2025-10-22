@@ -632,7 +632,7 @@ test "staked nodes" {
             .stake = stake,
             .activation_epoch = std.math.maxInt(u64),
             .deactivation_epoch = std.math.maxInt(u64),
-            .deprecated_warmup_cooldown_rate = 0,
+            ._warmup_cooldown_rate = 0,
         });
 
         var maybe_old = try vote_accounts.insert(
@@ -741,7 +741,7 @@ test "staked nodes update" {
             .stake = 42,
             .activation_epoch = std.math.maxInt(u64),
             .deactivation_epoch = std.math.maxInt(u64),
-            .deprecated_warmup_cooldown_rate = 0,
+            ._warmup_cooldown_rate = 0,
         });
 
         account_0.acquire();
@@ -763,7 +763,7 @@ test "staked nodes update" {
             .stake = 0,
             .activation_epoch = std.math.maxInt(u64),
             .deactivation_epoch = std.math.maxInt(u64),
-            .deprecated_warmup_cooldown_rate = 0,
+            ._warmup_cooldown_rate = 0,
         });
 
         var maybe_old = try vote_accounts.insert(
@@ -789,7 +789,7 @@ test "staked nodes update" {
             .stake = 0,
             .activation_epoch = std.math.maxInt(u64),
             .deactivation_epoch = std.math.maxInt(u64),
-            .deprecated_warmup_cooldown_rate = 0,
+            ._warmup_cooldown_rate = 0,
         });
 
         var maybe_old = try vote_accounts.insert(
@@ -816,7 +816,7 @@ test "staked nodes update" {
             .stake = 0,
             .activation_epoch = std.math.maxInt(u64),
             .deactivation_epoch = std.math.maxInt(u64),
-            .deprecated_warmup_cooldown_rate = 0,
+            ._warmup_cooldown_rate = 0,
         });
 
         var maybe_old = try vote_accounts.insert(
@@ -859,7 +859,7 @@ test "staked nodes zero stake" {
             .stake = 0,
             .activation_epoch = std.math.maxInt(u64),
             .deactivation_epoch = std.math.maxInt(u64),
-            .deprecated_warmup_cooldown_rate = 0,
+            ._warmup_cooldown_rate = 0,
         });
 
         const maybe_old = try vote_accounts.insert(
@@ -884,7 +884,7 @@ test "staked nodes zero stake" {
             .stake = 0,
             .activation_epoch = std.math.maxInt(u64),
             .deactivation_epoch = std.math.maxInt(u64),
-            .deprecated_warmup_cooldown_rate = 0,
+            ._warmup_cooldown_rate = 0,
         });
 
         var maybe_old = try vote_accounts.insert(

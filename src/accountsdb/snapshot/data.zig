@@ -63,66 +63,6 @@ pub const BankIncrementalSnapshotPersistence = struct {
     }
 };
 
-/// Analogous to [StakeReward](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/accounts-db/src/stake_rewards.rs#L12)
-pub const StakeReward = struct {
-    stake_pubkey: Pubkey,
-    stake_reward_info: RewardInfo,
-    stake_account: Account,
-};
-
-/// Analogous to [RewardInfo](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/sdk/src/reward_info.rs#L5)
-pub const RewardInfo = struct {
-    reward_type: RewardType,
-    /// Reward amount
-    lamports: i64,
-    /// Account balance in lamports after `lamports` was applied
-    post_balance: u64,
-    /// Vote account commission when the reward was credited, only present for voting and staking rewards
-    commission: ?u8,
-};
-
-/// Analogous to [RewardType](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/sdk/src/reward_type.rs#L7)
-pub const RewardType = enum {
-    Fee,
-    Rent,
-    Staking,
-    Voting,
-};
-
-/// Analogous to [Authorized](https://github.com/anza-xyz/agave/blob/8d1ef48c785a5d9ee5c0df71dc520ee1a49d8168/sdk/program/src/stake/state.rs#L362)
-pub const Authorized = struct {
-    staker: Pubkey,
-    withdrawer: Pubkey,
-
-    pub fn initRandom(random: std.Random) Authorized {
-        return .{
-            .staker = Pubkey.initRandom(random),
-            .withdrawer = Pubkey.initRandom(random),
-        };
-    }
-};
-
-/// Analogous to [Lockup](https://github.com/anza-xyz/agave/blob/8d1ef48c785a5d9ee5c0df71dc520ee1a49d8168/sdk/program/src/stake/state.rs#L273)
-pub const Lockup = struct {
-    /// UnixTimestamp at which this stake will allow withdrawal, unless the
-    ///   transaction is signed by the custodian
-    unix_timestamp: UnixTimestamp,
-    /// epoch height at which this stake will allow withdrawal, unless the
-    ///   transaction is signed by the custodian
-    epoch: Epoch,
-    /// custodian signature on a transaction exempts the operation from
-    ///  lockup constraints
-    custodian: Pubkey,
-
-    pub fn initRandom(random: std.Random) Lockup {
-        return .{
-            .unix_timestamp = random.int(UnixTimestamp),
-            .epoch = random.int(Epoch),
-            .custodian = Pubkey.initRandom(random),
-        };
-    }
-};
-
 /// Analogous to [ExtraFieldsToDeserialize](https://github.com/anza-xyz/agave/blob/8d1ef48c785a5d9ee5c0df71dc520ee1a49d8168/runtime/src/serde_snapshot.rs#L396).
 pub const ExtraFields = struct {
     lamports_per_signature: u64,
