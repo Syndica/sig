@@ -151,9 +151,6 @@ pub fn getRequestTargetResolve(
             const inc_archive_name_bounded = inc.snapshotArchiveName();
             const inc_archive_name = inc_archive_name_bounded.constSlice();
 
-            std.debug.print("-------->target: {s}\n", .{target});
-            std.debug.print("-------->inc_archive_name: {s}\n", .{inc_archive_name});
-
             if (std.mem.eql(u8, target, inc_archive_name)) {
                 // acquire another lock on the rwmux, since the first one we got is going to unlock after we return.
                 const latest_snapshot_info_lg_again = latest_snapshot_gen_info_rw.read();

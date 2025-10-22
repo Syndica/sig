@@ -124,24 +124,16 @@ test "serveSpawn snapshots" {
     var prng = std.Random.DefaultPrng.init(0);
     const random = prng.random();
 
-    const logger_unscoped: Logger = .{ .direct_print = .{ .max_level = .trace } };
-    // const logger_unscoped: Logger = .noop;
+    const logger_unscoped: Logger = .noop;
     const logger = logger_unscoped.withScope(@src().fn_name);
 
     var tmp_dir_root = std.testing.tmpDir(.{});
-    defer {
-        std.debug.print("tmp dir: {s}", .{sig.utils.fmt.tryRealPath(tmp_dir_root.dir, "")});
-
-        // tmp_dir_root.cleanup();
-        tmp_dir_root = tmp_dir_root;
-    }
+    defer tmp_dir_root.cleanup();
     const tmp_dir = tmp_dir_root.dir;
 
     // the directory into which the snapshots will be unpacked and copied to.
     var unpacked_snap_dir = try tmp_dir.makeOpenPath("snapshot", .{});
     defer unpacked_snap_dir.close();
-
-    std.debug.print("snapdir: {s}\n", .{"snapshot"});
 
     var accountsdb = try sig.accounts_db.AccountsDB.init(.{
         .allocator = allocator,
@@ -159,8 +151,6 @@ test "serveSpawn snapshots" {
         unpacked_snap_dir,
     );
 
-    std.debug.print("snap_files: {}\n", .{snap_files});
-
     {
         // the source from which `fundAndUnpackTestSnapshots` will unpack the snapshots.
         var test_data_dir = try std.fs.cwd().openDir(sig.TEST_DATA_DIR, .{ .iterate = true });
@@ -173,18 +163,13 @@ test "serveSpawn snapshots" {
             .{},
         );
         if (snap_files.incremental()) |incremental| {
-            std.debug.print("incremental: {}\n", .{incremental});
-
             try test_data_dir.copyFile(
                 incremental.snapshotArchiveName().constSlice(),
                 unpacked_snap_dir,
                 incremental.snapshotArchiveName().constSlice(),
                 .{},
             );
-        } else {
-            std.debug.print(" NO INCREMENTAL?\n", .{});
         }
-
         const FullAndIncrementalManifest = sig.accounts_db.snapshot.data.FullAndIncrementalManifest;
         const full_inc_manifest = try FullAndIncrementalManifest.fromFiles(
             allocator,
@@ -194,10 +179,6 @@ test "serveSpawn snapshots" {
         );
         defer full_inc_manifest.deinit(allocator);
 
-        std.debug.print("    full_inc_manifest: {}\n", .{full_inc_manifest});
-
-        // std.debug.print("full_inc_manifest: {}\n", .{full_inc_manifest});
-
         const man = try accountsdb.loadFromSnapshotAndValidate(.{
             .allocator = allocator,
             .full_inc_manifest = full_inc_manifest,
@@ -205,39 +186,6 @@ test "serveSpawn snapshots" {
             .accounts_per_file_estimate = 1_500,
         });
         defer man.deinit(allocator);
-    }
-
-    std.debug.print("    accountsdb.getLargestRootedSlot(): {?}\n", .{accountsdb.getLargestRootedSlot()});
-    blk: {
-        const maybe_info, var info_lg = accountsdb.latest_snapshot_gen_info.readWithLock();
-        defer info_lg.unlock();
-
-        const info: *const sig.accounts_db.AccountsDB.SnapshotGenerationInfo = &(maybe_info.* orelse {
-            std.debug.print("    NO latest_snapshot_gen_info\n", .{});
-            break :blk;
-        });
-        const inc: *const sig.accounts_db.AccountsDB.SnapshotGenerationInfo.Incremental = &(info.inc orelse {
-            std.debug.print("    NO latest_snapshot_gen_info incremental\n", .{});
-            break :blk;
-        });
-
-        std.debug.print("    inc: {}\n", .{inc});
-    }
-
-    blk: {
-        const maybe_info, var info_lg = accountsdb.first_snapshot_load_info.readWithLock();
-        defer info_lg.unlock();
-
-        const info: *const sig.accounts_db.AccountsDB.SnapshotGenerationInfo = &(maybe_info.* orelse {
-            std.debug.print("    NO first_snapshot_load_info\n", .{});
-            break :blk;
-        });
-        const inc: *const sig.accounts_db.AccountsDB.SnapshotGenerationInfo.Incremental = &(info.inc orelse {
-            std.debug.print("    NO first_snapshot_load_info incremental\n", .{});
-            break :blk;
-        });
-
-        std.debug.print("    inc: {}\n", .{inc});
     }
 
     const rpc_port = random.intRangeLessThan(u16, 8_000, 10_000);
@@ -436,14 +384,8 @@ fn testExpectSnapshotResponse(
     const snap_name_bounded = snap_info.snapshotArchiveName();
     const snap_name = snap_name_bounded.constSlice();
 
-    std.debug.print("snap_dir/{s}\n", .{snap_name});
-
     const expected_file = try snap_dir.openFile(snap_name, .{});
     defer expected_file.close();
-
-    std.debug.print("expected_file: {}\n", .{expected_file});
-
-    std.debug.print("expected_file: {s}\n", .{sig.utils.fmt.tryRealPath(snap_dir, snap_name)});
 
     const expected_data: []align(std.heap.page_size_min) const u8 = try std.posix.mmap(
         null,
@@ -455,15 +397,11 @@ fn testExpectSnapshotResponse(
     );
     defer std.posix.munmap(expected_data);
 
-    std.debug.print("expected_data.len: {}\n", .{expected_data.len});
-
     const snap_url_str_bounded = sig.utils.fmt.boundedFmt(
         "http://localhost:{d}/{s}",
         .{ rpc_port, sig.utils.fmt.boundedString(&snap_name_bounded) },
     );
     const snap_url = try std.Uri.parse(snap_url_str_bounded.constSlice());
-
-    std.debug.print("snap_url: {}\n\n", .{snap_url});
 
     const actual_data = try testHttpFetchSelf(allocator, .GET, snap_url, .{});
     defer allocator.free(actual_data);
@@ -505,7 +443,6 @@ fn testHttpFetchSelf(
 
     const response_content = try reader.readAllAlloc(allocator, 1 << 32);
     errdefer allocator.free(response_content);
-    std.debug.print("status: {}\n", .{request.response.status});
 
     if (request.response.content_length) |content_len| {
         try std.testing.expectEqual(content_len, response_content.len);

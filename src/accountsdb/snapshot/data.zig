@@ -1021,10 +1021,6 @@ pub const IncrementalSnapshotFileInfo = struct {
     pub fn snapshotArchiveName(self: IncrementalSnapshotFileInfo) SnapshotArchiveNameStr {
         const b58_str = self.hash.base58String();
 
-        std.debug.print("!!!!!snapshotArchiveName: b58_str: {s}\n", .{b58_str.constSlice()});
-        std.debug.print("!!!!!snapshotArchiveName: slot: {}\n", .{self.slot});
-        std.debug.print("!!!!!snapshotArchiveName: base_slot: {}\n", .{self.base_slot});
-
         return SnapshotArchiveNameFmtSpec.fmt(.{
             .base_slot = self.base_slot,
             .slot = self.slot,
