@@ -628,7 +628,7 @@ test "slots are not skipped when the current fork is developed" {
     try tracker.init(allocator, 1, .noop, &registry);
     defer tracker.deinit();
 
-    const start = Instant.EPOCH_ZERO;
+    const start: Instant = .EPOCH_ZERO;
 
     // complete slots 1 and 3, where 3 skips 2.
     try tracker.registerShred(1, 0, 0, true, start);
