@@ -963,6 +963,7 @@ fn pushVote(
                 gossip_table_rw,
                 leader_schedule,
                 node_keypair,
+                sig.time.getWallclockMs(),
             );
         },
         .non_voting => {
@@ -1029,15 +1030,13 @@ fn sendVoteTransaction(
 
     try sig.bincode.write(serialized.writer(allocator), vote_tx, .{});
 
-    const socket = switch (tpu_address) {
-        .V4 => network.Socket.create(.ipv4, .udp) catch |err| {
-            logger.err().logf("Failed to create socket for vote send: {}", .{err});
-            return err;
-        },
-        .V6 => network.Socket.create(.ipv6, .udp) catch |err| {
-            logger.err().logf("Failed to create socket for vote send: {}", .{err});
-            return err;
-        },
+    const addr_family: network.AddressFamily = switch (tpu_address) {
+        .V4 => .ipv4,
+        .V6 => .ipv6,
+    };
+    const socket = network.Socket.create(addr_family, .udp) catch |err| {
+        logger.err().logf("Failed to create socket for vote send: {}", .{err});
+        return err;
     };
     defer socket.close();
 
@@ -1079,11 +1078,10 @@ fn sendVoteToGossip(
     vote_op: VoteOp,
     gossip_table_rw: *sig.sync.RwMux(sig.gossip.GossipTable),
     my_keypair: sig.identity.KeyPair,
+    now: u64,
 ) !void {
     const gossip_table, var gossip_table_lock = gossip_table_rw.writeWithLock();
     defer gossip_table_lock.unlock();
-
-    const now = sig.time.getWallclockMs();
 
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
 
@@ -1139,6 +1137,7 @@ fn sendVote(
     maybe_gossip_table_rw: ?*sig.sync.RwMux(sig.gossip.GossipTable),
     maybe_leader_schedule: ?*sig.core.leader_schedule.LeaderScheduleCache,
     maybe_my_keypair: ?sig.identity.KeyPair,
+    now: u64,
 ) !void {
     const gossip_table_rw = maybe_gossip_table_rw orelse {
         logger.warn().log("Cannot send vote: gossip table not provided");
@@ -1168,6 +1167,7 @@ fn sendVote(
             vote_op,
             gossip_table_rw,
             my_keypair,
+            now,
         );
     }
 }
@@ -1888,7 +1888,7 @@ test "maybeRefreshLastVote - latest landed vote newer than last vote" {
     );
     defer replay_tower.deinit(std.testing.allocator);
 
-    replay_tower.last_vote = sig.consensus.vote_transaction.VoteTransaction{
+    replay_tower.last_vote = .{
         .tower_sync = sig.runtime.program.vote.state.TowerSync{
             .lockouts = .fromOwnedSlice(try std.testing.allocator.dupe(Lockout, &.{
                 .{ .slot = 3, .confirmation_count = 3 },
@@ -1966,7 +1966,7 @@ test "maybeRefreshLastVote - non voting validator" {
     );
     defer replay_tower.deinit(std.testing.allocator);
 
-    replay_tower.last_vote = sig.consensus.vote_transaction.VoteTransaction{
+    replay_tower.last_vote = .{
         .tower_sync = sig.runtime.program.vote.state.TowerSync{
             .lockouts = .fromOwnedSlice(try std.testing.allocator.dupe(Lockout, &.{
                 .{ .slot = 3, .confirmation_count = 3 },
@@ -2046,7 +2046,7 @@ test "maybeRefreshLastVote - hotspare validator" {
     );
     defer replay_tower.deinit(std.testing.allocator);
 
-    replay_tower.last_vote = sig.consensus.vote_transaction.VoteTransaction{
+    replay_tower.last_vote = .{
         .tower_sync = sig.runtime.program.vote.state.TowerSync{
             .lockouts = .fromOwnedSlice(try std.testing.allocator.dupe(Lockout, &.{
                 .{ .slot = 3, .confirmation_count = 3 },
@@ -2126,7 +2126,7 @@ test "maybeRefreshLastVote - refresh interval not elapsed" {
     );
     defer replay_tower.deinit(std.testing.allocator);
 
-    replay_tower.last_vote = sig.consensus.vote_transaction.VoteTransaction{
+    replay_tower.last_vote = .{
         .tower_sync = sig.runtime.program.vote.state.TowerSync{
             .lockouts = .fromOwnedSlice(try std.testing.allocator.dupe(Lockout, &.{
                 .{ .slot = 3, .confirmation_count = 3 },
@@ -2209,7 +2209,7 @@ test "maybeRefreshLastVote - successfully refreshed and mark last_vote_tx_blockh
     );
     defer replay_tower.deinit(std.testing.allocator);
 
-    replay_tower.last_vote = sig.consensus.vote_transaction.VoteTransaction{
+    replay_tower.last_vote = .{
         .tower_sync = sig.runtime.program.vote.state.TowerSync{
             .lockouts = .fromOwnedSlice(try std.testing.allocator.dupe(Lockout, &.{
                 .{ .slot = 3, .confirmation_count = 3 },
@@ -2735,6 +2735,10 @@ test "generateVoteTx - empty authorized voter keypairs returns non_voting" {
         &fixture.slot_tracker,
         &epoch_tracker,
     );
+    errdefer switch (result) {
+        .tx => |tx| tx.deinit(allocator),
+        else => {},
+    };
 
     try testing.expectEqual(.non_voting, result);
 }
@@ -2770,6 +2774,10 @@ test "generateVoteTx - no node keypair returns non_voting" {
         &fixture.slot_tracker,
         &epoch_tracker,
     );
+    errdefer switch (result) {
+        .tx => |tx| tx.deinit(allocator),
+        else => {},
+    };
 
     try testing.expectEqual(.non_voting, result);
 }
@@ -2807,6 +2815,10 @@ test "generateVoteTx - no last voted slot returns failed" {
         &fixture.slot_tracker,
         &epoch_tracker,
     );
+    errdefer switch (result) {
+        .tx => |tx| tx.deinit(allocator),
+        else => {},
+    };
 
     try testing.expectEqual(.failed, result);
 }
@@ -2825,7 +2837,7 @@ test "generateVoteTx - slot not in tracker returns failed" {
     var replay_tower = try createTestReplayTower(1, 0.67);
     defer replay_tower.deinit(allocator);
 
-    replay_tower.last_vote = sig.consensus.vote_transaction.VoteTransaction{
+    replay_tower.last_vote = .{
         .tower_sync = sig.runtime.program.vote.state.TowerSync{
             .lockouts = .fromOwnedSlice(try allocator.dupe(Lockout, &.{
                 .{ .slot = 999, .confirmation_count = 1 },
@@ -2855,6 +2867,10 @@ test "generateVoteTx - slot not in tracker returns failed" {
         &fixture.slot_tracker,
         &epoch_tracker,
     );
+    errdefer switch (result) {
+        .tx => |tx| tx.deinit(allocator),
+        else => {},
+    };
 
     try testing.expectEqual(.failed, result);
 }
@@ -2873,7 +2889,7 @@ test "generateVoteTx - vote account not found returns failed" {
     var replay_tower = try createTestReplayTower(1, 0.67);
     defer replay_tower.deinit(allocator);
 
-    replay_tower.last_vote = sig.consensus.vote_transaction.VoteTransaction{
+    replay_tower.last_vote = .{
         .tower_sync = sig.runtime.program.vote.state.TowerSync{
             .lockouts = .fromOwnedSlice(try allocator.dupe(Lockout, &.{
                 .{ .slot = 0, .confirmation_count = 1 },
@@ -2903,6 +2919,10 @@ test "generateVoteTx - vote account not found returns failed" {
         &fixture.slot_tracker,
         &epoch_tracker,
     );
+    errdefer switch (result) {
+        .tx => |tx| tx.deinit(allocator),
+        else => {},
+    };
 
     try testing.expectEqual(.failed, result);
 }
@@ -2921,7 +2941,7 @@ test "generateVoteTx - invalid switch fork decision returns failed" {
     var replay_tower = try createTestReplayTower(1, 0.67);
     defer replay_tower.deinit(allocator);
 
-    replay_tower.last_vote = sig.consensus.vote_transaction.VoteTransaction{
+    replay_tower.last_vote = .{
         .tower_sync = sig.runtime.program.vote.state.TowerSync{
             .lockouts = .fromOwnedSlice(try allocator.dupe(Lockout, &.{
                 .{ .slot = 0, .confirmation_count = 1 },
@@ -2951,6 +2971,10 @@ test "generateVoteTx - invalid switch fork decision returns failed" {
         &fixture.slot_tracker,
         &epoch_tracker,
     );
+    errdefer switch (result) {
+        .tx => |tx| tx.deinit(allocator),
+        else => {},
+    };
 
     try testing.expectEqual(.failed, result);
 }
@@ -2969,7 +2993,7 @@ test "generateVoteTx - success with tower_sync vote" {
     var replay_tower = try createTestReplayTower(1, 0.67);
     defer replay_tower.deinit(allocator);
 
-    replay_tower.last_vote = sig.consensus.vote_transaction.VoteTransaction{
+    replay_tower.last_vote = .{
         .tower_sync = sig.runtime.program.vote.state.TowerSync{
             .lockouts = .fromOwnedSlice(try allocator.dupe(Lockout, &.{
                 .{ .slot = 0, .confirmation_count = 1 },
@@ -3035,6 +3059,10 @@ test "generateVoteTx - success with tower_sync vote" {
         &fixture.slot_tracker,
         &epoch_tracker,
     );
+    errdefer switch (result) {
+        .tx => |tx| tx.deinit(allocator),
+        else => {},
+    };
 
     switch (result) {
         .tx => |tx| {
@@ -3064,7 +3092,7 @@ test "generateVoteTx - success with vote_state_update compacted" {
     const lockouts = try allocator.dupe(Lockout, &.{
         .{ .slot = 0, .confirmation_count = 1 },
     });
-    replay_tower.last_vote = sig.consensus.vote_transaction.VoteTransaction{
+    replay_tower.last_vote = .{
         .vote_state_update = sig.runtime.program.vote.state.VoteStateUpdate{
             .lockouts = .fromOwnedSlice(lockouts),
             .root = null,
@@ -3127,6 +3155,10 @@ test "generateVoteTx - success with vote_state_update compacted" {
         &fixture.slot_tracker,
         &epoch_tracker,
     );
+    errdefer switch (result) {
+        .tx => |tx| tx.deinit(allocator),
+        else => {},
+    };
 
     switch (result) {
         .tx => |tx| {
@@ -3152,7 +3184,7 @@ test "generateVoteTx - success with switch proof" {
     var replay_tower = try createTestReplayTower(1, 0.67);
     defer replay_tower.deinit(allocator);
 
-    replay_tower.last_vote = sig.consensus.vote_transaction.VoteTransaction{
+    replay_tower.last_vote = .{
         .tower_sync = sig.runtime.program.vote.state.TowerSync{
             .lockouts = .fromOwnedSlice(try allocator.dupe(Lockout, &.{
                 .{ .slot = 0, .confirmation_count = 1 },
@@ -3219,6 +3251,10 @@ test "generateVoteTx - success with switch proof" {
         &fixture.slot_tracker,
         &epoch_tracker,
     );
+    errdefer switch (result) {
+        .tx => |tx| tx.deinit(allocator),
+        else => {},
+    };
 
     switch (result) {
         .tx => |tx| {
@@ -3244,7 +3280,7 @@ test "generateVoteTx - hot spare validator returns hot_spare" {
     var replay_tower = try createTestReplayTower(1, 0.67);
     defer replay_tower.deinit(allocator);
 
-    replay_tower.last_vote = sig.consensus.vote_transaction.VoteTransaction{
+    replay_tower.last_vote = .{
         .tower_sync = sig.runtime.program.vote.state.TowerSync{
             .lockouts = .fromOwnedSlice(try allocator.dupe(Lockout, &.{
                 .{ .slot = 0, .confirmation_count = 1 },
@@ -3311,6 +3347,10 @@ test "generateVoteTx - hot spare validator returns hot_spare" {
         &fixture.slot_tracker,
         &epoch_tracker,
     );
+    errdefer switch (result) {
+        .tx => |tx| tx.deinit(allocator),
+        else => {},
+    };
 
     try testing.expectEqual(.hot_spare, result);
 }
@@ -3329,7 +3369,7 @@ test "generateVoteTx - wrong authorized voter returns non_voting" {
     var replay_tower = try createTestReplayTower(1, 0.67);
     defer replay_tower.deinit(allocator);
 
-    replay_tower.last_vote = sig.consensus.vote_transaction.VoteTransaction{
+    replay_tower.last_vote = .{
         .tower_sync = sig.runtime.program.vote.state.TowerSync{
             .lockouts = .fromOwnedSlice(try allocator.dupe(Lockout, &.{
                 .{ .slot = 0, .confirmation_count = 1 },
@@ -3396,6 +3436,10 @@ test "generateVoteTx - wrong authorized voter returns non_voting" {
         &fixture.slot_tracker,
         &epoch_tracker,
     );
+    errdefer switch (result) {
+        .tx => |tx| tx.deinit(allocator),
+        else => {},
+    };
 
     try testing.expectEqual(.non_voting, result);
 }
@@ -3434,6 +3478,7 @@ test "sendVote - without gossip table does not send and does not throw" {
         null,
         &leader_schedule_cache,
         sig.identity.KeyPair.generate(),
+        100,
     ) catch unreachable; // sendVote does not throw
 }
 
@@ -3475,6 +3520,7 @@ test "sendVote - without keypair does not send and does not throw" {
         &gossip_table_rw,
         &leader_schedule_cache,
         null,
+        200,
     ) catch unreachable; // sendVote does not throw
 }
 
@@ -3503,6 +3549,7 @@ test "sendVote - without leader schedule does not send and does not throw" {
         &gossip_table_rw,
         null,
         null,
+        300,
     ) catch unreachable; // sendVote does not throw
 }
 
@@ -3591,6 +3638,7 @@ test "sendVote - sends to both gossip and upcoming leaders" {
         &gossip_table_rw,
         &leader_schedule_cache,
         my_keypair,
+        400,
     );
 
     {
@@ -3694,6 +3742,7 @@ test "sendVote - refresh_vote sends to both gossip and upcoming leaders" {
         &gossip_table_rw,
         &leader_schedule_cache,
         my_keypair,
+        500,
     );
 
     {

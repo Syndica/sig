@@ -1130,25 +1130,16 @@ fn validator(
                 // TODO: Implement feature gating for vote keyed leader schedule.
                 // [agave] https://github.com/anza-xyz/agave/blob/e468acf4da519171510f2ec982f70a0fd9eb2c8b/ledger/src/leader_schedule_utils.rs#L12
                 // [agave] https://github.com/anza-xyz/agave/blob/e468acf4da519171510f2ec982f70a0fd9eb2c8b/runtime/src/bank.rs#L4833
-                const ls_slots = if (true)
-                    try LeaderSchedule.fromVoteAccounts(
-                        allocator,
-                        epoch,
-                        epoch_schedule.slots_per_epoch,
-                        try collapsed_manifest.epochVoteAccounts(epoch),
-                    )
-                else
-                    try LeaderSchedule.fromStakedNodes(
-                        allocator,
-                        epoch,
-                        epoch_schedule.slots_per_epoch,
-                        staked_nodes,
-                    );
-                const ls_struct = LeaderSchedule{
+                const ls_slots: LeaderSchedule = try .fromVoteAccounts(
+                    allocator,
+                    epoch,
+                    epoch_schedule.slots_per_epoch,
+                    if (true) try collapsed_manifest.epochVoteAccounts(epoch) else staked_nodes,
+                );
+                try leader_schedule_cache.put(epoch, .{
                     .allocator = allocator,
                     .slot_leaders = ls_slots,
-                };
-                try leader_schedule_cache.put(epoch, ls_struct);
+                });
                 break :ls ls_slots;
             };
         errdefer allocator.free(leader_schedule);
