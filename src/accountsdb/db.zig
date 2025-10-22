@@ -1314,7 +1314,10 @@ pub const AccountsDB = struct {
             if (!expected_incremental.accounts_hash.eql(accounts_delta_hash)) {
                 self.logger.err().logf(
                     "incorrect accounts delta hash: expected vs calculated: {} vs {}",
-                    .{ expected_incremental.accounts_hash.checksum(), accounts_delta_hash.checksum() },
+                    .{
+                        expected_incremental.accounts_hash.checksum(),
+                        accounts_delta_hash.checksum(),
+                    },
                 );
                 return error.IncorrectAccountsDeltaHash;
             }
@@ -1431,8 +1434,11 @@ pub const AccountsDB = struct {
                     // are effectively removing the old entry.
 
                     // remove previous state
-                    const previous_slot_ref = slotListMaxWithinBounds(ref_head.ref_ptr, null, latest_slot - 1) orelse
-                        continue;
+                    const previous_slot_ref = slotListMaxWithinBounds(
+                        ref_head.ref_ptr,
+                        null,
+                        latest_slot - 1,
+                    ) orelse continue;
 
                     const account = try self.getAccountFromRef(allocator, previous_slot_ref);
                     defer account.deinit(allocator);
