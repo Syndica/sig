@@ -1455,7 +1455,6 @@ pub const AccountsDB = struct {
                 }
             }
 
-            lt_hash.mixOut(mix_out);
             result.* = .{
                 .hash = lt_hash,
                 .lamports = total_lamports,
