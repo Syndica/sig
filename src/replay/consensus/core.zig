@@ -4,6 +4,8 @@ const replay = @import("../lib.zig");
 const tracy = @import("tracy");
 const network = @import("zig-network");
 
+const cluster_sync = replay.consensus.cluster_sync;
+
 const Allocator = std.mem.Allocator;
 const AtomicBool = std.atomic.Value(bool);
 
@@ -137,8 +139,6 @@ pub const TowerConsensus = struct {
         logger: Logger,
         identity: sig.identity.ValidatorIdentity,
         signing: sig.identity.SigningKeys,
-        root_slot: Slot,
-        root_hash: Hash,
 
         // Data sources
         account_reader: AccountReader,
@@ -247,7 +247,7 @@ pub const TowerConsensus = struct {
             .from(deps.logger),
             deps.identity.validator,
             deps.identity.vote_account,
-            deps.root_slot,
+            deps.slot_tracker.root,
             deps.account_reader.forSlot(root_ancestors),
             sig.prometheus.globalRegistry(),
         );
@@ -353,8 +353,8 @@ pub const TowerConsensus = struct {
         allocator: Allocator,
         account_reader: AccountReader,
         ledger: *Ledger,
-        slot_tracker_rw: *RwMux(SlotTracker),
-        epoch_tracker_rw: *RwMux(EpochTracker),
+        slot_tracker: *SlotTracker,
+        epoch_tracker: *EpochTracker,
         progress_map: *ProgressMap,
         results: []const ReplayResult,
     ) !void {
@@ -365,21 +365,14 @@ pub const TowerConsensus = struct {
         }
         const arena = arena_state.allocator();
 
-        { // Process replay results
-            const slot_tracker, var lock = slot_tracker_rw.readWithLock();
-            defer lock.unlock();
-            for (results) |r| {
-                try self.processResult(allocator, ledger, progress_map, slot_tracker, r);
-            }
+        // Process replay results
+        for (results) |r| {
+            try self.processResult(allocator, ledger, progress_map, slot_tracker, r);
         }
 
         // Process cluster sync and prepare ancestors/descendants
         const ancestors, const descendants = cluster_sync_and_ancestors_descendants: {
-            const slot_tracker, var slot_tracker_lg = slot_tracker_rw.readWithLock();
-            defer slot_tracker_lg.unlock();
-
-            _ = try replay.consensus.cluster_sync
-                .processClusterSync(allocator, .from(self.logger), .{
+            _ = try cluster_sync.processClusterSync(allocator, .from(self.logger), .{
                 .my_pubkey = self.identity.validator,
                 .tpu_has_bank = false,
                 .fork_choice = &self.fork_choice,
@@ -412,18 +405,12 @@ pub const TowerConsensus = struct {
             break :cluster_sync_and_ancestors_descendants .{ ancestors, descendants };
         };
 
-        const epoch_tracker, var epoch_tracker_lg = epoch_tracker_rw.readWithLock();
-        defer epoch_tracker_lg.unlock();
-
-        const slot_tracker_mut, var slot_tracker_mut_lg = slot_tracker_rw.writeWithLock();
-        defer slot_tracker_mut_lg.unlock();
-
         try self.executeProtocol(
             allocator,
             ledger,
             &ancestors,
             &descendants,
-            slot_tracker_mut,
+            slot_tracker,
             epoch_tracker,
             progress_map,
             account_reader,
@@ -1666,28 +1653,18 @@ test "processResult and handleDuplicateConfirmedFork" {
     defer service.deinit(allocator);
 
     const consensus = &service.consensus.?;
-    {
-        const slot_tracker, var slock = service.replay.slot_tracker.writeWithLock();
-        defer slock.unlock();
+    service.replay.slot_tracker.get(0).?.state.hash.set(.{ .data = @splat(1) });
 
-        slot_tracker.get(0).?.state.hash.set(.{ .data = @splat(1) });
-    }
-
-    {
-        const slot_tracker, var slock = service.replay.slot_tracker.readWithLock();
-        defer slock.unlock();
-
-        try consensus.processResult(
-            allocator,
-            &stubs.ledger,
-            &service.replay.progress_map,
-            slot_tracker,
-            .{
-                .slot = 0,
-                .output = .{ .last_entry_hash = .ZEROES },
-            },
-        );
-    }
+    try consensus.processResult(
+        allocator,
+        &stubs.ledger,
+        &service.replay.progress_map,
+        &service.replay.slot_tracker,
+        .{
+            .slot = 0,
+            .output = .{ .last_entry_hash = .ZEROES },
+        },
+    );
 
     const stats = service.replay.progress_map.map.get(0).?;
     try service.replay.progress_map.map.put(allocator, 1, stats);
@@ -2343,25 +2320,18 @@ test "checkAndHandleNewRoot - missing slot" {
     defer fixture.deinit(allocator);
 
     // Build a tracked slot set wrapped in RwMux
-    var slot_tracker = RwMux(SlotTracker).init(.{ .root = root.slot, .slots = .empty });
-    defer {
-        const ptr, var lg = slot_tracker.writeWithLock();
-        defer lg.unlock();
-        ptr.deinit(allocator);
-    }
+    var slot_tracker: SlotTracker = .{
+        .root = root.slot,
+        .slots = .empty,
+    };
+    defer slot_tracker.deinit(testing.allocator);
 
     {
-        const constants = try SlotConstants.genesis(allocator, .initRandom(random));
+        const constants: SlotConstants = try .genesis(allocator, .initRandom(random));
         errdefer constants.deinit(allocator);
-
-        var state: SlotState = .GENESIS;
-        errdefer state.deinit(allocator);
-
-        const ptr, var lg = slot_tracker.writeWithLock();
-        defer lg.unlock();
-        try ptr.put(allocator, root.slot, .{
+        try slot_tracker.put(testing.allocator, root.slot, .{
             .constants = constants,
-            .state = state,
+            .state = .GENESIS,
         });
     }
 
@@ -2373,12 +2343,10 @@ test "checkAndHandleNewRoot - missing slot" {
     defer test_state.deinit();
 
     // Try to check a slot that doesn't exist in the tracker
-    const slot_tracker_ptr, var slot_tracker_lg = slot_tracker.writeWithLock();
-    defer slot_tracker_lg.unlock();
     const result = checkAndHandleNewRoot(
         allocator,
         test_state.resultWriter(),
-        slot_tracker_ptr,
+        &slot_tracker,
         &fixture.progress,
         &fixture.fork_choice,
         123, // Non-existent slot
@@ -4355,8 +4323,6 @@ test "vote on heaviest frozen descendant with no switch" {
         );
     }
 
-    var slot_tracker_rw = RwMux(SlotTracker).init(slot_tracker);
-
     var epoch_tracker: EpochTracker = .{
         .epochs = .empty,
         .schedule = .INIT,
@@ -4367,7 +4333,6 @@ test "vote on heaviest frozen descendant with no switch" {
         try epoch_tracker.epochs.put(allocator, root_slot, epoch_consts);
     }
     defer epoch_tracker.deinit(allocator);
-    var epoch_tracker_rw = RwMux(EpochTracker).init(epoch_tracker);
 
     // Add root and slot 1 entries into progress map.
     var progress = sig.consensus.ProgressMap.INIT;
@@ -4411,8 +4376,6 @@ test "vote on heaviest frozen descendant with no switch" {
             .node = null,
             .authorized_voters = &.{},
         },
-        .root_slot = root_slot,
-        .root_hash = root_state.hash.readCopy().?,
         .account_reader = stubs.accountsdb.accountReader(),
         .ledger = &stubs.ledger,
         .slot_tracker = &slot_tracker,
@@ -4432,8 +4395,8 @@ test "vote on heaviest frozen descendant with no switch" {
         allocator,
         deps.account_reader,
         deps.ledger,
-        &slot_tracker_rw,
-        &epoch_tracker_rw,
+        &slot_tracker,
+        &epoch_tracker,
         &progress,
         &results,
     );
@@ -4532,8 +4495,6 @@ test "vote accounts with landed votes populate bank stats" {
         );
     }
 
-    var slot_tracker_rw = RwMux(SlotTracker).init(slot_tracker);
-
     var epoch_tracker: EpochTracker = .{
         .epochs = .empty,
         .schedule = .INIT,
@@ -4587,16 +4548,9 @@ test "vote accounts with landed votes populate bank stats" {
     }
     defer epoch_tracker.deinit(allocator);
 
-    var epoch_tracker_rw = RwMux(EpochTracker).init(epoch_tracker);
-
     {
-        const epochs_ptr, var epochs_lg = epoch_tracker_rw.readWithLock();
-        defer epochs_lg.unlock();
-        const epoch_consts_ptr = epochs_ptr.epochs.getPtr(0).?;
-
-        const slot_tracker_ptr, var st_lg = slot_tracker_rw.writeWithLock();
-        defer st_lg.unlock();
-        const slot1_ref = slot_tracker_ptr.get(1).?;
+        const epoch_consts_ptr = epoch_tracker.epochs.getPtr(0).?;
+        const slot1_ref = slot_tracker.get(1).?;
         const stakes_ptr, var stakes_guard = slot1_ref.state.stakes_cache.stakes.writeWithLock();
         defer stakes_guard.unlock();
         stakes_ptr.deinit(allocator);
@@ -4639,8 +4593,6 @@ test "vote accounts with landed votes populate bank stats" {
             .node = null,
             .authorized_voters = &.{},
         },
-        .root_slot = root_slot,
-        .root_hash = .ZEROES,
         .account_reader = stubs.accountsdb.accountReader(),
         .ledger = &stubs.ledger,
         .slot_tracker = &slot_tracker,
@@ -4656,8 +4608,8 @@ test "vote accounts with landed votes populate bank stats" {
         allocator,
         deps.account_reader,
         deps.ledger,
-        &slot_tracker_rw,
-        &epoch_tracker_rw,
+        &slot_tracker,
+        &epoch_tracker,
         &progress,
         &results,
     );
@@ -4798,8 +4750,6 @@ test "root advances after vote satisfies lockouts" {
     });
     defer slot_tracker.deinit(allocator);
 
-    var slot_tracker_rw: RwMux(SlotTracker) = .init(slot_tracker);
-
     var prng = std.Random.DefaultPrng.init(12345);
     const random = prng.random();
     const validator_vote_pubkey = Pubkey.initRandom(random);
@@ -4850,7 +4800,6 @@ test "root advances after vote satisfies lockouts" {
         try epoch_tracker.epochs.put(allocator, 1, epoch_consts);
     }
     defer epoch_tracker.deinit(allocator);
-    var epoch_tracker_rw = RwMux(EpochTracker).init(epoch_tracker);
 
     var progress = sig.consensus.ProgressMap.INIT;
     defer progress.deinit(allocator);
@@ -4881,8 +4830,6 @@ test "root advances after vote satisfies lockouts" {
             .node = null,
             .authorized_voters = &.{},
         },
-        .root_slot = initial_root,
-        .root_hash = Hash.ZEROES,
         .account_reader = stubs.accountsdb.accountReader(),
         .ledger = &stubs.ledger,
         .slot_tracker = &slot_tracker,
@@ -4895,9 +4842,6 @@ test "root advances after vote satisfies lockouts" {
         const slot: Slot = @intCast(i);
 
         {
-            const st, var st_lock = slot_tracker_rw.writeWithLock();
-            defer st_lock.unlock();
-
             const parent_slot: Slot = slot - 1;
             const parent_hash = hashes[parent_slot];
             const slot_hash = hashes[slot];
@@ -4916,7 +4860,10 @@ test "root advances after vote satisfies lockouts" {
             var slot_state: sig.core.SlotState = .GENESIS;
             slot_state.hash = .init(slot_hash);
 
-            try st.put(allocator, slot, .{ .constants = slot_constants, .state = slot_state });
+            try slot_tracker.put(allocator, slot, .{
+                .constants = slot_constants,
+                .state = slot_state,
+            });
         }
 
         {
@@ -4963,8 +4910,8 @@ test "root advances after vote satisfies lockouts" {
             allocator,
             deps.account_reader,
             deps.ledger,
-            &slot_tracker_rw,
-            &epoch_tracker_rw,
+            &slot_tracker,
+            &epoch_tracker,
             &progress,
             &sync_results,
         );
@@ -4972,9 +4919,6 @@ test "root advances after vote satisfies lockouts" {
 
     {
         const slot: Slot = 32;
-        const st, var st_lock = slot_tracker_rw.writeWithLock();
-        defer st_lock.unlock();
-
         const parent_slot: Slot = slot - 1;
         const parent_hash = hashes[parent_slot];
         const slot_hash = hashes[slot];
@@ -4994,7 +4938,7 @@ test "root advances after vote satisfies lockouts" {
         var slot_state: sig.core.SlotState = .GENESIS;
         slot_state.hash = .init(slot_hash);
 
-        try st.put(allocator, slot, .{ .constants = slot_constants, .state = slot_state });
+        try slot_tracker.put(allocator, slot, .{ .constants = slot_constants, .state = slot_state });
     }
     {
         var fp = try sig.consensus.progress_map.ForkProgress.zeroes(allocator);
@@ -5021,8 +4965,8 @@ test "root advances after vote satisfies lockouts" {
             allocator,
             deps.account_reader,
             deps.ledger,
-            &slot_tracker_rw,
-            &epoch_tracker_rw,
+            &slot_tracker,
+            &epoch_tracker,
             &progress,
             &results,
         );
@@ -5036,16 +4980,13 @@ test "root advances after vote satisfies lockouts" {
             consensus.replay_tower.tower.vote_state.votes.len,
         );
 
-        {
-            const st, var st_lock = slot_tracker_rw.readWithLock();
-            defer st_lock.unlock();
-            try std.testing.expectEqual(1, st.root);
-            // No longer tracking slot 0
-            try std.testing.expect(!st.contains(0));
-            // Still tracking slot 1
-            try std.testing.expect(st.contains(1));
-            try std.testing.expect(st.contains(32));
-        }
+        try std.testing.expectEqual(1, slot_tracker.root);
+        // No longer tracking slot 0
+        try std.testing.expect(!slot_tracker.contains(0));
+        // Still tracking slot 1
+        try std.testing.expect(slot_tracker.contains(1));
+        try std.testing.expect(slot_tracker.contains(32));
+
         // No longer tracking slot 0
         try std.testing.expect(progress.map.get(0) == null);
         // Still tracking slot 1
@@ -5055,9 +4996,6 @@ test "root advances after vote satisfies lockouts" {
 
     {
         const slot: Slot = 33;
-        const st, var st_lock = slot_tracker_rw.writeWithLock();
-        defer st_lock.unlock();
-
         const parent_slot: Slot = slot - 1;
         const parent_hash = hashes[parent_slot];
         const slot_hash = hashes[slot];
@@ -5076,7 +5014,7 @@ test "root advances after vote satisfies lockouts" {
         var slot_state: sig.core.SlotState = .GENESIS;
         slot_state.hash = .init(slot_hash);
 
-        try st.put(allocator, slot, .{ .constants = slot_constants, .state = slot_state });
+        try slot_tracker.put(allocator, slot, .{ .constants = slot_constants, .state = slot_state });
     }
     {
         var fp = try sig.consensus.progress_map.ForkProgress.zeroes(allocator);
@@ -5102,8 +5040,8 @@ test "root advances after vote satisfies lockouts" {
             allocator,
             deps.account_reader,
             deps.ledger,
-            &slot_tracker_rw,
-            &epoch_tracker_rw,
+            &slot_tracker,
+            &epoch_tracker,
             &progress,
             &results,
         );
@@ -5121,18 +5059,15 @@ test "root advances after vote satisfies lockouts" {
         const last_voted = consensus.replay_tower.tower.vote_state.lastVotedSlot();
         try std.testing.expectEqual(33, last_voted);
 
-        {
-            const st, var st_lock = slot_tracker_rw.readWithLock();
-            defer st_lock.unlock();
-            try std.testing.expectEqual(2, st.root);
-            // No longer tracking slot 0
-            try std.testing.expect(!st.contains(0));
-            // No longer tracking slot 1
-            try std.testing.expect(!st.contains(1));
-            // Still tracking slot 2
-            try std.testing.expect(st.contains(2));
-            try std.testing.expect(st.contains(33));
-        }
+        try std.testing.expectEqual(2, slot_tracker.root);
+        // No longer tracking slot 0
+        try std.testing.expect(!slot_tracker.contains(0));
+        // No longer tracking slot 1
+        try std.testing.expect(!slot_tracker.contains(1));
+        // Still tracking slot 2
+        try std.testing.expect(slot_tracker.contains(2));
+        try std.testing.expect(slot_tracker.contains(33));
+
         // No longer tracking slot 0
         try std.testing.expect(progress.map.get(0) == null);
         // No longer tracking slot 1
@@ -5220,8 +5155,6 @@ test "vote refresh when no new vote available" {
         try slot_tracker.put(allocator, 1, .{ .constants = slot_constants, .state = slot_state });
     }
 
-    var slot_tracker_rw = RwMux(SlotTracker).init(slot_tracker);
-
     var epoch_tracker: EpochTracker = .{
         .epochs = .empty,
         .schedule = .INIT,
@@ -5232,7 +5165,6 @@ test "vote refresh when no new vote available" {
         try epoch_tracker.epochs.put(allocator, 0, epoch_consts);
     }
     defer epoch_tracker.deinit(allocator);
-    var epoch_tracker_rw = RwMux(EpochTracker).init(epoch_tracker);
 
     var progress = sig.consensus.ProgressMap.INIT;
     defer progress.deinit(allocator);
@@ -5265,8 +5197,6 @@ test "vote refresh when no new vote available" {
             .node = null,
             .authorized_voters = &.{},
         },
-        .root_slot = root_slot,
-        .root_hash = Hash.ZEROES,
         .account_reader = stubs.accountsdb.accountReader(),
         .ledger = &stubs.ledger,
         .slot_tracker = &slot_tracker,
@@ -5284,8 +5214,8 @@ test "vote refresh when no new vote available" {
             allocator,
             deps.account_reader,
             deps.ledger,
-            &slot_tracker_rw,
-            &epoch_tracker_rw,
+            &slot_tracker,
+            &epoch_tracker,
             &progress,
             &results,
         );
@@ -5303,8 +5233,8 @@ test "vote refresh when no new vote available" {
             allocator,
             deps.account_reader,
             deps.ledger,
-            &slot_tracker_rw,
-            &epoch_tracker_rw,
+            &slot_tracker,
+            &epoch_tracker,
             &progress,
             empty_results,
         );
@@ -5435,8 +5365,6 @@ test "detect and mark duplicate confirmed fork" {
         try slot_tracker.put(allocator, 2, .{ .constants = slot_constants, .state = slot_state });
     }
 
-    var slot_tracker_rw = RwMux(SlotTracker).init(slot_tracker);
-
     var epoch_tracker: EpochTracker = .{
         .epochs = .empty,
         .schedule = .INIT,
@@ -5488,18 +5416,11 @@ test "detect and mark duplicate confirmed fork" {
     }
     defer epoch_tracker.deinit(allocator);
 
-    var epoch_tracker_rw = RwMux(EpochTracker).init(epoch_tracker);
-
     {
-        const epochs_ptr, var epochs_lg = epoch_tracker_rw.readWithLock();
-        defer epochs_lg.unlock();
-        const epoch_consts_ptr = epochs_ptr.epochs.getPtr(0).?;
-
-        const slot_tracker_ptr, var st_lg = slot_tracker_rw.writeWithLock();
-        defer st_lg.unlock();
+        const epoch_consts_ptr = epoch_tracker.epochs.getPtr(0).?;
 
         {
-            const slot1_ref = slot_tracker_ptr.get(1).?;
+            const slot1_ref = slot_tracker.get(1).?;
             const stakes_ptr, var stakes_guard = slot1_ref.state.stakes_cache.stakes.writeWithLock();
             defer stakes_guard.unlock();
             stakes_ptr.deinit(allocator);
@@ -5507,7 +5428,7 @@ test "detect and mark duplicate confirmed fork" {
         }
 
         {
-            const slot2_ref = slot_tracker_ptr.get(2).?;
+            const slot2_ref = slot_tracker.get(2).?;
             const stakes_ptr, var stakes_guard = slot2_ref.state.stakes_cache.stakes.writeWithLock();
             defer stakes_guard.unlock();
             stakes_ptr.deinit(allocator);
@@ -5550,8 +5471,6 @@ test "detect and mark duplicate confirmed fork" {
             .node = null,
             .authorized_voters = &.{},
         },
-        .root_slot = root_slot,
-        .root_hash = Hash.ZEROES,
         .account_reader = stubs.accountsdb.accountReader(),
         .ledger = &stubs.ledger,
         .slot_tracker = &slot_tracker,
@@ -5575,8 +5494,8 @@ test "detect and mark duplicate confirmed fork" {
             allocator,
             deps.account_reader,
             deps.ledger,
-            &slot_tracker_rw,
-            &epoch_tracker_rw,
+            &slot_tracker,
+            &epoch_tracker,
             &progress,
             &results,
         );
@@ -5679,8 +5598,6 @@ test "detect and mark duplicate slot" {
         try slot_tracker.put(allocator, 1, .{ .constants = slot_constants, .state = slot_state });
     }
 
-    var slot_tracker_rw = RwMux(SlotTracker).init(slot_tracker);
-
     var epoch_tracker: EpochTracker = .{
         .epochs = .empty,
         .schedule = .INIT,
@@ -5691,7 +5608,6 @@ test "detect and mark duplicate slot" {
         try epoch_tracker.epochs.put(allocator, 0, epoch_consts);
     }
     defer epoch_tracker.deinit(allocator);
-    var epoch_tracker_rw = RwMux(EpochTracker).init(epoch_tracker);
 
     var progress = sig.consensus.ProgressMap.INIT;
     defer progress.deinit(allocator);
@@ -5723,8 +5639,6 @@ test "detect and mark duplicate slot" {
             .node = null,
             .authorized_voters = &.{},
         },
-        .root_slot = root_slot,
-        .root_hash = Hash.ZEROES,
         .account_reader = stubs.accountsdb.accountReader(),
         .ledger = &stubs.ledger,
         .slot_tracker = &slot_tracker,
@@ -5751,8 +5665,8 @@ test "detect and mark duplicate slot" {
             allocator,
             deps.account_reader,
             deps.ledger,
-            &slot_tracker_rw,
-            &epoch_tracker_rw,
+            &slot_tracker,
+            &epoch_tracker,
             &progress,
             &results,
         );
@@ -5940,8 +5854,6 @@ test "successful fork switch (switch_proof)" {
         try slot_tracker.put(allocator, 4, .{ .constants = slot_constants, .state = slot_state });
     }
 
-    var slot_tracker_rw = RwMux(SlotTracker).init(slot_tracker);
-
     var epoch_tracker: EpochTracker = .{
         .epochs = .empty,
         .schedule = .INIT,
@@ -5969,24 +5881,22 @@ test "successful fork switch (switch_proof)" {
 
         const epoch_consts_ptr = epoch_tracker.epochs.getPtr(0).?;
 
-        const slot_tracker_ptr, var st_lg = slot_tracker_rw.writeWithLock();
-        defer st_lg.unlock();
         {
-            const s1 = slot_tracker_ptr.get(1).?;
+            const s1 = slot_tracker.get(1).?;
             const stakes_ptr1, var g1 = s1.state.stakes_cache.stakes.writeWithLock();
             defer g1.unlock();
             stakes_ptr1.deinit(allocator);
             stakes_ptr1.* = try epoch_consts_ptr.stakes.stakes.clone(allocator);
         }
         {
-            const s2 = slot_tracker_ptr.get(2).?;
+            const s2 = slot_tracker.get(2).?;
             const stakes_ptr2, var g2 = s2.state.stakes_cache.stakes.writeWithLock();
             defer g2.unlock();
             stakes_ptr2.deinit(allocator);
             stakes_ptr2.* = try epoch_consts_ptr.stakes.stakes.clone(allocator);
         }
         {
-            const s4 = slot_tracker_ptr.get(4).?;
+            const s4 = slot_tracker.get(4).?;
             const stakes_ptr4, var g4 = s4.state.stakes_cache.stakes.writeWithLock();
             defer g4.unlock();
             stakes_ptr4.deinit(allocator);
@@ -5994,7 +5904,6 @@ test "successful fork switch (switch_proof)" {
         }
     }
     defer epoch_tracker.deinit(allocator);
-    var epoch_tracker_rw = RwMux(EpochTracker).init(epoch_tracker);
 
     var progress = sig.consensus.ProgressMap.INIT;
     defer progress.deinit(allocator);
@@ -6032,8 +5941,6 @@ test "successful fork switch (switch_proof)" {
             .node = null,
             .authorized_voters = &.{},
         },
-        .root_slot = root_slot,
-        .root_hash = Hash.ZEROES,
         .account_reader = stubs.accountsdb.accountReader(),
         .ledger = &stubs.ledger,
         .slot_tracker = &slot_tracker,
@@ -6076,30 +5983,23 @@ test "successful fork switch (switch_proof)" {
         while (it2.next()) |entry| entry.value_ptr.deinit(allocator);
         descendants_map.deinit(allocator);
     }
-    {
-        const st_ptr, var lg = slot_tracker_rw.readWithLock();
-        defer lg.unlock();
-        try ancestors_map.ensureTotalCapacity(allocator, st_ptr.slots.count());
-        try descendants_map.ensureTotalCapacity(allocator, st_ptr.slots.count());
-        for (st_ptr.slots.keys(), st_ptr.slots.values()) |slot, info| {
-            const slot_ancestors = &info.constants.ancestors.ancestors;
-            const gop = try ancestors_map.getOrPutValue(allocator, slot, .EMPTY);
-            if (!gop.found_existing) {
-                try gop.value_ptr.ancestors.ensureUnusedCapacity(allocator, slot_ancestors.count());
-            }
-            for (slot_ancestors.keys()) |a| {
-                try gop.value_ptr.addSlot(allocator, a);
-                const dg = try descendants_map.getOrPutValue(allocator, a, .empty);
-                try dg.value_ptr.put(allocator, slot);
-            }
+
+    try ancestors_map.ensureTotalCapacity(allocator, slot_tracker.slots.count());
+    try descendants_map.ensureTotalCapacity(allocator, slot_tracker.slots.count());
+    for (slot_tracker.slots.keys(), slot_tracker.slots.values()) |slot, info| {
+        const slot_ancestors = &info.constants.ancestors.ancestors;
+        const gop = try ancestors_map.getOrPutValue(allocator, slot, .EMPTY);
+        if (!gop.found_existing) {
+            try gop.value_ptr.ancestors.ensureUnusedCapacity(allocator, slot_ancestors.count());
+        }
+        for (slot_ancestors.keys()) |a| {
+            try gop.value_ptr.addSlot(allocator, a);
+            const dg = try descendants_map.getOrPutValue(allocator, a, .empty);
+            try dg.value_ptr.put(allocator, slot);
         }
     }
 
-    const epoch_consts_ptr = blk: {
-        const epochs_ptr, var epochs_lg = epoch_tracker_rw.readWithLock();
-        defer epochs_lg.unlock();
-        break :blk epochs_ptr.epochs.getPtr(0).?;
-    };
+    const epoch_consts_ptr = epoch_tracker.epochs.getPtr(0).?;
     const vote_accounts_map = &epoch_consts_ptr.stakes.stakes.vote_accounts.vote_accounts;
     const total_stake: u64 = 500;
 
@@ -6131,8 +6031,8 @@ test "successful fork switch (switch_proof)" {
             allocator,
             deps.account_reader,
             deps.ledger,
-            &slot_tracker_rw,
-            &epoch_tracker_rw,
+            &slot_tracker,
+            &epoch_tracker,
             &progress,
             &results2,
         );
@@ -6165,8 +6065,8 @@ test "successful fork switch (switch_proof)" {
             allocator,
             deps.account_reader,
             deps.ledger,
-            &slot_tracker_rw,
-            &epoch_tracker_rw,
+            &slot_tracker,
+            &epoch_tracker,
             &progress,
             &results,
         );
@@ -6202,11 +6102,7 @@ test "successful fork switch (switch_proof)" {
         var slot_state: sig.core.SlotState = .GENESIS;
         errdefer slot_state.deinit(allocator);
         slot_state.hash.set(slot5_hash);
-        {
-            const st_ptr, var st_lg = slot_tracker_rw.writeWithLock();
-            defer st_lg.unlock();
-            try st_ptr.put(allocator, 5, .{ .constants = slot_constants, .state = slot_state });
-        }
+        try slot_tracker.put(allocator, 5, .{ .constants = slot_constants, .state = slot_state });
     }
     // Progress map entry for slot 5
     {
@@ -6223,8 +6119,8 @@ test "successful fork switch (switch_proof)" {
             allocator,
             deps.account_reader,
             deps.ledger,
-            &slot_tracker_rw,
-            &epoch_tracker_rw,
+            &slot_tracker,
+            &epoch_tracker,
             &progress,
             empty_results,
         );
@@ -6242,24 +6138,22 @@ test "successful fork switch (switch_proof)" {
         while (it2.next()) |entry| entry.value_ptr.deinit(allocator);
         descendants_map2.deinit(allocator);
     }
-    {
-        const st_ptr, var lg = slot_tracker_rw.readWithLock();
-        defer lg.unlock();
-        try ancestors_map2.ensureTotalCapacity(allocator, st_ptr.slots.count());
-        try descendants_map2.ensureTotalCapacity(allocator, st_ptr.slots.count());
-        for (st_ptr.slots.keys(), st_ptr.slots.values()) |slot, info| {
-            const slot_ancestors = &info.constants.ancestors.ancestors;
-            const gop = try ancestors_map2.getOrPutValue(allocator, slot, .EMPTY);
-            if (!gop.found_existing) {
-                try gop.value_ptr.ancestors.ensureUnusedCapacity(allocator, slot_ancestors.count());
-            }
-            for (slot_ancestors.keys()) |a| {
-                try gop.value_ptr.addSlot(allocator, a);
-                const dg = try descendants_map2.getOrPutValue(allocator, a, .empty);
-                try dg.value_ptr.put(allocator, slot);
-            }
+
+    try ancestors_map2.ensureTotalCapacity(allocator, slot_tracker.slots.count());
+    try descendants_map2.ensureTotalCapacity(allocator, slot_tracker.slots.count());
+    for (slot_tracker.slots.keys(), slot_tracker.slots.values()) |slot, info| {
+        const slot_ancestors = &info.constants.ancestors.ancestors;
+        const gop = try ancestors_map2.getOrPutValue(allocator, slot, .EMPTY);
+        if (!gop.found_existing) {
+            try gop.value_ptr.ancestors.ensureUnusedCapacity(allocator, slot_ancestors.count());
+        }
+        for (slot_ancestors.keys()) |a| {
+            try gop.value_ptr.addSlot(allocator, a);
+            const dg = try descendants_map2.getOrPutValue(allocator, a, .empty);
+            try dg.value_ptr.put(allocator, slot);
         }
     }
+
     // Check switch threshold decision for slot 5 fails due to insufficient stake
     const decision5 = try consensus.replay_tower.makeCheckSwitchThresholdDecision(
         allocator,
@@ -6291,8 +6185,8 @@ test "successful fork switch (switch_proof)" {
             allocator,
             deps.account_reader,
             deps.ledger,
-            &slot_tracker_rw,
-            &epoch_tracker_rw,
+            &slot_tracker,
+            &epoch_tracker,
             &progress,
             &results5,
         );
@@ -6300,17 +6194,10 @@ test "successful fork switch (switch_proof)" {
     }
 
     // Cleanup: free SlotTracker elements owned via slot_tracker_rw
-    {
-        const st, var st_lock = slot_tracker_rw.writeWithLock();
-        defer st_lock.unlock();
-
-        var it = st.slots.iterator();
-        while (it.next()) |entry| {
-            const element = entry.value_ptr.*;
-            element.state.deinit(allocator);
-            element.constants.deinit(allocator);
-            allocator.destroy(element);
-        }
-        st.slots.deinit(allocator);
+    for (slot_tracker.slots.values()) |element| {
+        element.state.deinit(allocator);
+        element.constants.deinit(allocator);
+        allocator.destroy(element);
     }
+    slot_tracker.slots.deinit(allocator);
 }
