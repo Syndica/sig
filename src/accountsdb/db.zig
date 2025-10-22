@@ -1114,7 +1114,6 @@ pub const AccountsDB = struct {
     fn computeAccountHashesAndLamports(
         self: *AccountsDB,
         config: AccountHashesConfig,
-        hash_from: ?LtHash,
     ) !struct { LtHash, u64 } {
         const zone = tracy.Zone.init(@src(), .{
             .name = "accountsdb computeAccountHashesAndLamports",
@@ -1153,9 +1152,9 @@ pub const AccountsDB = struct {
             },
         );
 
-        var total_lamports, var accounts_hash = blk: {
+        var total_lamports, const accounts_hash = blk: {
             var lamports_sum: u64 = 0;
-            var hash: LtHash = if (hash_from) |hash| hash else .IDENTITY;
+            var hash: LtHash = .IDENTITY;
             for (task_results) |result| {
                 lamports_sum += result.lamports;
                 hash.mixIn(result.hash);
@@ -1170,7 +1169,6 @@ pub const AccountsDB = struct {
 
         for (task_results) |result| {
             total_lamports -|= result.subtract;
-            accounts_hash.mixOut(result.mix_out);
         }
 
         self.logger.debug().logf("collecting hashes from accounts took: {s}", .{timer.read()});
@@ -1278,14 +1276,11 @@ pub const AccountsDB = struct {
 
         // validate the full snapshot
         self.logger.info().logf("validating the full snapshot", .{});
-        const accounts_hash, const total_lamports = try self.computeAccountHashesAndLamports(
-            .{
-                .FullAccountHash = .{
-                    .max_slot = params.full_slot,
-                },
+        const accounts_hash, const total_lamports = try self.computeAccountHashesAndLamports(.{
+            .FullAccountHash = .{
+                .max_slot = params.full_slot,
             },
-            null,
-        );
+        });
 
         if (!params.expected_full.accounts_hash.eql(accounts_hash)) {
             self.logger.err().logf(
@@ -1460,6 +1455,7 @@ pub const AccountsDB = struct {
                 }
             }
 
+            lt_hash.mixOut(mix_out);
             result.* = .{
                 .hash = lt_hash,
                 .lamports = total_lamports,
