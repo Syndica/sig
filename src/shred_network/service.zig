@@ -97,6 +97,7 @@ pub fn start(
     // channels (cant use arena as they need to alloc/free frequently &
     // potentially from multiple sender threads)
     const retransmit_channel = try Channel(Packet).create(deps.allocator);
+    retransmit_channel.name = "retransmit channel (Packet)";
     try defers.deferCall(Channel(Packet).destroy, .{retransmit_channel});
 
     // receiver (threads)
