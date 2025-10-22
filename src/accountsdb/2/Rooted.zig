@@ -22,13 +22,16 @@ pub fn init(file_path: [:0]const u8) !Rooted {
 
     const schema =
         \\CREATE TABLE IF NOT EXISTS entries (
-        \\  address BLOB PRIMARY KEY,
+        \\  address BLOB(32) PRIMARY KEY,
         \\  lamports INTEGER NOT NULL,
         \\  data BLOB NOT NULL,
-        \\  owner BLOB NOT NULL,
+        \\  owner BLOB(32) NOT NULL,
         \\  executable INTEGER NOT NULL,
         \\  rent_epoch INTEGER NOT NULL
-        \\);
+        \\) WITHOUT ROWID;
+        \\
+        \\PRAGMA journal_mode = WAL;
+        \\PRAGMA synchronous = NORMAL;
     ;
 
     if (sql.sqlite3_exec(maybe_db, schema, null, null, null) != OK)
