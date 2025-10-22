@@ -588,7 +588,7 @@ pub const BatchAccountCache = struct {
                 .account = account.*,
                 .loaded_size = 0,
                 .rent_collected = 0,
-                .is_owned = true, // TODO take advantage of this to make sure it's deinitted without needing the list in the struct
+                .is_owned = false, // TODO FIX ME, this is owned i think --- also, take advantage of this to make sure it's deinitted without needing the list in the struct
             };
         }
 

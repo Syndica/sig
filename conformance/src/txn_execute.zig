@@ -781,25 +781,18 @@ fn executeTxnContext(
         };
 
     // Resolve transaction
-    const resolved_transaction_result: TransactionResult(ResolvedTransaction) = blk: {
-        const resolved = resolveTransaction(allocator, transaction, .{
-            .slot = slot,
-            .account_reader = accounts_db.accountReader().forSlot(&ancestors),
-            .reserved_accounts = &reserved_accounts,
-            .slot_hashes = try sysvar_cache.get(sig.runtime.sysvar.SlotHashes),
-        }) catch |err| break :blk switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            error.AddressLookupTableNotFound => .{ .err = .AddressLookupTableNotFound },
-            error.InvalidAddressLookupTableOwner => .{ .err = .InvalidAddressLookupTableOwner },
-            error.InvalidAddressLookupTableData => .{ .err = .InvalidAddressLookupTableData },
-            error.InvalidAddressLookupTableIndex => .{ .err = .InvalidAddressLookupTableIndex },
-            else => std.debug.panic("Unexpected error: {s}\n", .{@errorName(err)}),
-        };
-        break :blk .{ .ok = resolved };
-    };
-    const resolved_transaction = switch (resolved_transaction_result) {
-        .ok => |txn| txn,
-        .err => |err| return serializeSanitizationError(err),
+    const resolved_transaction = resolveTransaction(allocator, transaction, .{
+        .slot = slot,
+        .account_reader = accounts_db.accountReader().forSlot(&ancestors),
+        .reserved_accounts = &reserved_accounts,
+        .slot_hashes = try sysvar_cache.get(sig.runtime.sysvar.SlotHashes),
+    }) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.AddressLookupTableNotFound => return serializeSanitizationError(.AddressLookupTableNotFound),
+        error.InvalidAddressLookupTableOwner => return serializeSanitizationError(.InvalidAddressLookupTableOwner),
+        error.InvalidAddressLookupTableData => return serializeSanitizationError(.InvalidAddressLookupTableData),
+        error.InvalidAddressLookupTableIndex => return serializeSanitizationError(.InvalidAddressLookupTableIndex),
+        else => std.debug.panic("Unexpected error: {s}\n", .{@errorName(err)}),
     };
     defer resolved_transaction.deinit(allocator);
 
@@ -879,7 +872,7 @@ fn executeTxnContext(
         printLogs(txn_results[0]);
     }
 
-    return try serializeOutput(allocator, txn_results[0], runtime_transaction, &accounts);
+    return try serializeOutput(allocator, txn_results[0], runtime_transaction);
 }
 
 fn printLogs(result: TransactionResult(ProcessedTransaction)) void {
@@ -913,7 +906,6 @@ fn serializeOutput(
     allocator: std.mem.Allocator,
     result: TransactionResult(ProcessedTransaction),
     sanitized: RuntimeTransaction,
-    account_cache: *BatchAccountCache,
 ) !pb.TxnResult {
     const txn = switch (result) {
         .ok => |txn| txn,
@@ -932,21 +924,37 @@ fn serializeOutput(
     errdefer acct_states.deinit();
     if (result.ok.outputs != null and result.ok.err != null) {
         // In the event that the transaction is executed and fails, agave
-        // returns *all* the loaded accounts, whereas we only return the
-        // rollback accounts. Our approach makes more sense, but for
-        // compatibility with the test outputs, we also need to provide the
-        // other writable accounts here, which has the bonus of validating
-        // that they are in fact unchanged.
-        for (
-            sanitized.accounts.items(.pubkey),
-            sanitized.accounts.items(.is_writable),
-        ) |pubkey, is_writable| {
-            if (is_writable) {
-                const cached_account = account_cache.account_cache.get(pubkey).?;
+        // returns *all* the loaded accounts, including all the modifications
+        // from the failed transaction, whereas we only return the rollback
+        // accounts. Our approach makes more sense, but for compatibility with
+        // the test outputs, we need to return the modified loaded accounts.
+        for (result.ok.failed_accounts_for_conformance.?.slice()) |account| {
+            const was_an_input_and_is_writable = for (
+                sanitized.accounts.items(.pubkey),
+                sanitized.accounts.items(.is_writable),
+            ) |pubkey, is_writable| {
+                if (account.pubkey.equals(&pubkey)) break is_writable;
+            } else false;
+
+            if (was_an_input_and_is_writable) {
                 try acct_states.append(
-                    try sharedAccountToState(allocator, pubkey, cached_account),
+                    try sharedAccountToState(allocator, account.pubkey, account.account),
                 );
             }
+        }
+    } else if (result.ok.outputs == null and result.ok.err != null) {
+        // This block exists solely to replicate a bug in solfuzz_agave.
+        // solfuzz_agave zips the rollback accounts with the list of all
+        // accounts, but they don't line up correctly. The rollback accounts are
+        // actually all writeable, but solfuzz_agave filters them out because it
+        // mistakenly compares them against the is_writable field from a totally
+        // different account. This is nonsense, but we need to replicate the bug
+        // in order to return a conformant set of accounts.
+        const writes = result.ok.writes.slice();
+        for (writes, sanitized.accounts.items(.is_writable)[0..writes.len]) |account, is_writable| {
+            if (is_writable) try acct_states.append(
+                try sharedAccountToState(allocator, account.pubkey, account.account),
+            );
         }
     } else for (txn.writes.constSlice()) |account| {
         try acct_states.append(

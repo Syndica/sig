@@ -118,6 +118,11 @@ pub const ProcessedTransaction = struct {
     /// execution could begin.
     outputs: ?ExecutedTransaction,
 
+    /// this is populated when a transaction executes and fails. it contains all
+    /// the loaded accounts. it's only used for conformance testing.
+    /// TODO: come up with a cleaner approach for this
+    failed_accounts_for_conformance: ?LoadedTransactionAccounts.Accounts,
+
     pub const Writes = LoadedTransactionAccounts.Accounts;
 
     pub fn deinit(self: ProcessedTransaction, allocator: std.mem.Allocator) void {
@@ -178,6 +183,8 @@ pub fn loadAndExecuteTransaction(
     var zone = tracy.Zone.init(@src(), .{ .name = "executeTransaction" });
     defer zone.deinit();
     errdefer zone.color(0xFF0000);
+
+    var failed_accounts_for_conformance: ?LoadedTransactionAccounts.Accounts = null;
 
     const max_tx_locks: usize = if (env.feature_set.active(
         .increase_tx_account_lock_limit,
@@ -265,6 +272,7 @@ pub fn loadAndExecuteTransaction(
                 .err = err,
                 .loaded_accounts_data_size = loaded_accounts_data_size,
                 .outputs = null,
+                .failed_accounts_for_conformance = failed_accounts_for_conformance,
             } };
         },
     };
@@ -282,8 +290,11 @@ pub fn loadAndExecuteTransaction(
 
     var writes = ProcessedTransaction.Writes{};
     if (executed_transaction.err == null) {
-        for (loaded_accounts.accounts.slice()) |account| {
-            if (account.is_writable) {
+        for (
+            loaded_accounts.accounts.slice(),
+            transaction.accounts.items(.is_writable),
+        ) |account, is_writable| {
+            if (is_writable) {
                 writes.append(account) catch unreachable;
             } else {
                 account.deinit(allocator);
@@ -291,9 +302,15 @@ pub fn loadAndExecuteTransaction(
         }
         while (rollbacks.pop()) |rollback| rollback.deinit(allocator);
     } else {
-        while (rollbacks.pop()) |account| writes.append(account) catch unreachable;
-        while (loaded_accounts.accounts.pop()) |account| account.deinit(allocator);
+        while (rollbacks.pop()) |account| {
+            writes.append(account) catch unreachable;
+        }
+        failed_accounts_for_conformance = loaded_accounts.accounts;
+        for (failed_accounts_for_conformance.?.slice()) |*a| {
+            a.account = a.account.clone(allocator) catch unreachable;
+        }
     }
+
     for (writes.slice()) |*acct| batch_account_cache.store(allocator, acct);
 
     return .{
@@ -304,6 +321,7 @@ pub fn loadAndExecuteTransaction(
             .err = executed_transaction.err,
             .loaded_accounts_data_size = loaded_accounts.loaded_accounts_data_size,
             .outputs = executed_transaction,
+            .failed_accounts_for_conformance = failed_accounts_for_conformance,
         },
     };
 }
