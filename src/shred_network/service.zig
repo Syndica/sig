@@ -56,6 +56,8 @@ pub const ShredNetworkDependencies = struct {
     overwrite_turbine_stake_for_testing: bool,
     /// RPC Observability
     rpc_hooks: ?*sig.rpc.Hooks = null,
+    /// Optional channel to send duplicate slot notifications to consensus
+    duplicate_slots_sender: ?*Channel(Slot),
 };
 
 /// Start the Shred Network.
@@ -86,7 +88,12 @@ pub fn start(
 
     // tracker (shared state, internal to Shred Network)
     const shred_tracker = try arena.create(BasicShredTracker);
-    try shred_tracker.init(deps.allocator, conf.root_slot + 1, .from(deps.logger), deps.registry);
+    try shred_tracker.init(
+        deps.allocator,
+        conf.root_slot + 1,
+        .from(deps.logger),
+        deps.registry,
+    );
     try defers.deferCall(BasicShredTracker.deinit, .{shred_tracker});
 
     // channels (cant use arena as they need to alloc/free frequently &
@@ -108,6 +115,7 @@ pub fn start(
         .leader_schedule = deps.epoch_context_mgr.slotLeaders(),
         .tracker = shred_tracker,
         .inserter = deps.ledger.shredInserter(),
+        .duplicate_slots_sender = deps.duplicate_slots_sender,
     });
     try defers.deferCall(ShredReceiver.deinit, .{ shred_receiver, deps.allocator });
     try service_manager.spawn(
@@ -242,6 +250,7 @@ test "start and stop gracefully" {
         .epoch_context_mgr = &epoch_ctx,
         .n_retransmit_threads = 1,
         .overwrite_turbine_stake_for_testing = true,
+        .duplicate_slots_sender = null,
     };
 
     var timer = sig.time.Timer.start();
