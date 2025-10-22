@@ -889,7 +889,7 @@ fn handleVotableBank(
     }
 
     // TODO update_commitment_cache
-    
+
     try pushVote(
         logger,
         allocator,
