@@ -1012,7 +1012,7 @@ fn computeConsensusInputs(
             // Gather voting information from all vote accounts to understand the current consensus state.
             const slot_info_for_stakes = slot_tracker.get(slot) orelse return error.MissingSlot;
 
-            const stake_distribution = blk: {
+            const cluster_vote_state = blk: {
                 const stakes, var stakes_lg =
                     slot_info_for_stakes.state.stakes_cache.stakes.readWithLock();
                 defer stakes_lg.unlock();
@@ -1037,15 +1037,15 @@ fn computeConsensusInputs(
                 latest_validator_votes,
             );
             const fork_stats = progress.getForkStats(slot) orelse return error.MissingForkStats;
-            fork_stats.fork_stake = stake_distribution.fork_stake;
-            fork_stats.total_stake = stake_distribution.total_stake;
-            fork_stats.voted_stakes = stake_distribution.voted_stakes;
-            fork_stats.lockout_intervals = stake_distribution.lockout_intervals;
+            fork_stats.fork_stake = cluster_vote_state.fork_stake;
+            fork_stats.total_stake = cluster_vote_state.total_stake;
+            fork_stats.voted_stakes = cluster_vote_state.voted_stakes;
+            fork_stats.lockout_intervals = cluster_vote_state.lockout_intervals;
             fork_stats.block_height = blk: {
                 const slot_info = slot_tracker.get(slot) orelse return error.MissingSlots;
                 break :blk slot_info.constants.block_height;
             };
-            fork_stats.my_latest_landed_vote = stake_distribution.my_latest_landed_vote;
+            fork_stats.my_latest_landed_vote = cluster_vote_state.my_latest_landed_vote;
             fork_stats.computed = true;
             try new_stats.append(allocator, slot);
         }
