@@ -1,4 +1,5 @@
 const std = @import("std");
+const tracy = @import("tracy");
 const sig = @import("../../sig.zig");
 const ledger = @import("../lib.zig");
 
@@ -196,6 +197,9 @@ pub const PendingInsertShredsState = struct {
     }
 
     pub fn commit(self: *Self) !void {
+        const zone = tracy.Zone.init(@src(), .{ .name = "commit" });
+        defer zone.deinit();
+
         var commit_working_sets_timer = try Timer.start();
 
         // TODO: inputs and outputs of this function may need to be fleshed out
