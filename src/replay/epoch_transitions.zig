@@ -16,8 +16,8 @@ const EpochConstants = sig.core.EpochConstants;
 const SlotState = sig.core.SlotState;
 const SlotConstants = sig.core.SlotConstants;
 const StakeHistory = sig.runtime.sysvar.StakeHistory;
-const VoteAccounts = sig.core.vote_accounts.VoteAccounts;
-const StakeAndVoteAccountsMap = sig.core.vote_accounts.StakeAndVoteAccountsMap;
+const VoteAccounts = sig.core.stakes.VoteAccounts;
+const StakeAndVoteAccountsMap = sig.core.stakes.StakeAndVoteAccountsMap;
 
 const SlotAccountStore = @import("slot_account_store.zig").SlotAccountStore;
 const applyFeatureActivations = @import("apply_feature_activations.zig").applyFeatureActivations;

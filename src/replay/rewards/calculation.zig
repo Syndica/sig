@@ -11,12 +11,12 @@ const Epoch = sig.core.Epoch;
 const EpochSchedule = sig.core.EpochSchedule;
 const FeatureSet = sig.core.FeatureSet;
 const Inflation = sig.core.Inflation;
-const VoteAccounts = sig.core.vote_accounts.VoteAccounts;
-const VoteAccount = sig.core.vote_accounts.VoteAccount;
+const VoteAccounts = sig.core.stakes.VoteAccounts;
+const VoteAccount = sig.core.stakes.VoteAccount;
 const VoteState = sig.runtime.program.vote.state.VoteState;
 const Stakes = sig.core.Stakes;
 const Stake = sig.runtime.program.stake.StakeStateV2.Stake;
-const StakesCache = sig.core.stake.StakesCacheGeneric(.stake);
+const StakesCache = sig.core.stakes.StakesCacheGeneric(.stake);
 
 const AccountSharedData = sig.runtime.AccountSharedData;
 const StakeHistory = sig.runtime.sysvar.StakeHistory;

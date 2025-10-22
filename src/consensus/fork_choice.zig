@@ -5124,7 +5124,7 @@ pub fn testEpochStakes(
         @compileError("testEpochStakes should only be called in test mode");
     }
 
-    var vote_accounts = sig.core.vote_accounts.VoteAccounts{};
+    var vote_accounts = sig.core.stakes.VoteAccounts{};
     errdefer vote_accounts.deinit(allocator);
 
     for (pubkeys) |pubkey| {
@@ -5133,7 +5133,7 @@ pub fn testEpochStakes(
             pubkey,
             .{
                 .stake = stake,
-                .account = try sig.core.vote_accounts.VoteAccount.initRandom(
+                .account = try sig.core.stakes.VoteAccount.initRandom(
                     allocator,
                     random,
                     Pubkey.initRandom(random),

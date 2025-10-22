@@ -6,7 +6,7 @@ const Allocator = std.mem.Allocator;
 
 const Pubkey = sig.core.Pubkey;
 const Stake = sig.runtime.program.stake.StakeStateV2.Stake;
-const VoteAccount = sig.core.vote_accounts.VoteAccount;
+const VoteAccount = sig.core.stakes.VoteAccount;
 
 const AccountSharedData = sig.runtime.AccountSharedData;
 

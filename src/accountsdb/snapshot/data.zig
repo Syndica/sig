@@ -8,18 +8,15 @@ const tracy = @import("tracy");
 
 const bincode = sig.bincode;
 
-const Account = sig.core.account.Account;
 const BankFields = sig.core.BankFields;
 const Epoch = sig.core.time.Epoch;
 const Hash = sig.core.hash.Hash;
 const InstructionError = sig.core.instruction.InstructionErrorEnum;
 const Pubkey = sig.core.pubkey.Pubkey;
-const Rent = sig.core.genesis_config.Rent;
 const Slot = sig.core.time.Slot;
 const SlotAndHash = sig.core.hash.SlotAndHash;
 const SlotHistory = sig.runtime.sysvar.SlotHistory;
 const VersionedEpochStakes = sig.core.VersionedEpochStakes;
-const UnixTimestamp = sig.core.UnixTimestamp;
 
 const FileId = sig.accounts_db.accounts_file.FileId;
 
@@ -543,7 +540,7 @@ pub const Manifest = struct {
     pub fn epochVoteAccounts(
         self: *const Manifest,
         epoch: Epoch,
-    ) !*const sig.core.vote_accounts.StakeAndVoteAccountsMap {
+    ) !*const sig.core.stakes.StakeAndVoteAccountsMap {
         if (self.bank_fields.epoch_stakes.getPtr(epoch)) |_| {
             // Agave simply ignores this field. I've added this log message just
             // as a sanity check, but I don't expect to ever see it.

@@ -18,11 +18,10 @@ pub const rent_collector = @import("rent_collector.zig");
 pub const reserved_accounts = @import("reserved_accounts.zig");
 pub const shred = @import("shred.zig");
 pub const signature = @import("signature.zig");
-pub const stake = @import("stake.zig");
+pub const stakes = @import("stakes.zig");
 pub const status_cache = @import("status_cache.zig");
 pub const time = @import("time.zig");
 pub const transaction = @import("transaction.zig");
-pub const vote_accounts = @import("vote_accounts.zig");
 
 pub const bank_utils = @import("bank_utils.zig");
 
@@ -43,9 +42,9 @@ pub const VersionedEpochStakes = epoch_stakes.VersionedEpochStakes;
 /// change requires populating the `StakesCache` loading accounts from the accounts db, deserializing
 /// the account state, and creating either a `Stake` or `StakeAccount`. For now we will use the
 /// `.delegation` variant for simplicity.
-pub const StakesCache = stake.StakesCacheGeneric(.stake);
-pub const StakesType = stake.StakesType;
-pub const Stakes = stake.Stakes;
+pub const StakesCache = stakes.StakesCacheGeneric(.stake);
+pub const StakesType = stakes.StakesType;
+pub const Stakes = stakes.Stakes;
 
 pub const Account = account.Account;
 pub const Ancestors = ancestors.Ancestors;

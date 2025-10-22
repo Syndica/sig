@@ -674,7 +674,7 @@ pub const PropagatedStats = struct {
         allocator: std.mem.Allocator,
         node_pubkey: Pubkey,
         vote_account_pubkeys: []const Pubkey,
-        epoch_vote_accounts: sig.core.vote_accounts.StakeAndVoteAccountsMap,
+        epoch_vote_accounts: sig.core.stakes.StakeAndVoteAccountsMap,
     ) std.mem.Allocator.Error!void {
         try self.propagated_node_ids.put(allocator, node_pubkey, {});
 
@@ -1500,7 +1500,7 @@ test "addNodePubkeyInternal" {
         break :blk pubkeys;
     };
 
-    var epoch_vote_accounts: sig.core.vote_accounts.StakeAndVoteAccountsMap = .empty;
+    var epoch_vote_accounts: sig.core.stakes.StakeAndVoteAccountsMap = .empty;
     defer sig.utils.collections.deinitMapAndValues(allocator, epoch_vote_accounts);
     for (vote_account_pubkeys1[num_vote_accounts - staked_vote_accounts ..]) |pubkey| {
         try epoch_vote_accounts.ensureUnusedCapacity(allocator, 1);
