@@ -1101,7 +1101,6 @@ pub const AccountsDB = struct {
     fn computeAccountHashesAndLamports(
         self: *AccountsDB,
         config: AccountHashesConfig,
-        hash_from: ?LtHash,
     ) !struct { LtHash, u64 } {
         const zone = tracy.Zone.init(@src(), .{
             .name = "accountsdb computeAccountHashesAndLamports",
@@ -1140,9 +1139,9 @@ pub const AccountsDB = struct {
             },
         );
 
-        var total_lamports, var accounts_hash = blk: {
+        var total_lamports, const accounts_hash = blk: {
             var lamports_sum: u64 = 0;
-            var hash: LtHash = if (hash_from) |hash| hash else .IDENTITY;
+            var hash: LtHash = .IDENTITY;
             for (task_results) |result| {
                 lamports_sum += result.lamports;
                 hash.mixIn(result.hash);
@@ -1152,7 +1151,6 @@ pub const AccountsDB = struct {
 
         for (task_results) |result| {
             total_lamports -|= result.subtract;
-            accounts_hash.mixOut(result.mix_out);
         }
 
         self.logger.debug().logf("collecting hashes from accounts took: {s}", .{timer.read()});
@@ -1260,14 +1258,11 @@ pub const AccountsDB = struct {
 
         // validate the full snapshot
         self.logger.info().logf("validating the full snapshot", .{});
-        const accounts_hash, const total_lamports = try self.computeAccountHashesAndLamports(
-            .{
-                .FullAccountHash = .{
-                    .max_slot = params.full_slot,
-                },
+        const accounts_hash, const total_lamports = try self.computeAccountHashesAndLamports(.{
+            .FullAccountHash = .{
+                .max_slot = params.full_slot,
             },
-            null,
-        );
+        });
 
         if (!params.expected_full.accounts_hash.eql(accounts_hash)) {
             self.logger.err().logf(
@@ -1303,18 +1298,18 @@ pub const AccountsDB = struct {
 
             const inc_slot = self.getLargestRootedSlot() orelse 0;
 
-            const accounts_delta_hash, //
+            var accounts_delta_hash = accounts_hash;
+
+            const incr_hash, //
             const incremental_lamports //
-            = try self.computeAccountHashesAndLamports(
-                .{
-                    .IncrementalAccountHash = .{
-                        .min_slot = params.full_slot,
-                        .max_slot = inc_slot,
-                    },
+            = try self.computeAccountHashesAndLamports(.{
+                .IncrementalAccountHash = .{
+                    .min_slot = params.full_slot,
+                    .max_slot = inc_slot,
                 },
-                accounts_hash,
-            );
+            });
             _ = incremental_lamports;
+            accounts_delta_hash.mixIn(incr_hash);
 
             if (!expected_incremental.accounts_hash.eql(accounts_delta_hash)) {
                 self.logger.err().logf(
@@ -1345,7 +1340,6 @@ pub const AccountsDB = struct {
         subtract: u64,
 
         hash: LtHash,
-        mix_out: LtHash,
     };
 
     /// multithread entrypoint for getHashesFromIndex
@@ -1448,10 +1442,10 @@ pub const AccountsDB = struct {
                 }
             }
 
+            lt_hash.mixOut(mix_out);
             result.* = .{
                 .hash = lt_hash,
                 .lamports = total_lamports,
-                .mix_out = mix_out,
                 .subtract = total_subtracted,
             };
 
@@ -2446,14 +2440,11 @@ pub const AccountsDB = struct {
                 break :compute .{ first.full.hash, first.full.capitalization };
             }
 
-            break :compute try self.computeAccountHashesAndLamports(
-                .{
-                    .FullAccountHash = .{
-                        .max_slot = params.target_slot,
-                    },
+            break :compute try self.computeAccountHashesAndLamports(.{
+                .FullAccountHash = .{
+                    .max_slot = params.target_slot,
                 },
-                null,
-            );
+            });
         };
 
         const full_hash = full_lt_hash.checksum();
@@ -2668,9 +2659,7 @@ pub const AccountsDB = struct {
 
         const full_snapshot_info: SnapshotGenerationInfo.Full = latest_snapshot_info.full;
 
-        const incremental_hash //
-        // const incremental_capitalization //
-        = compute: {
+        const incremental_hash = compute: {
             check_first: {
                 const maybe_first_snapshot_info, var first_snapshot_info_lg =
                     self.first_snapshot_load_info.readWithLock();
@@ -2684,15 +2673,16 @@ pub const AccountsDB = struct {
                 break :compute first_inc.hash;
             }
 
-            break :compute (try self.computeAccountHashesAndLamports(
-                .{
-                    .IncrementalAccountHash = .{
-                        .min_slot = full_snapshot_info.slot,
-                        .max_slot = params.target_slot,
-                    },
+            var hash = full_snapshot_info.hash;
+            const incremental = (try self.computeAccountHashesAndLamports(.{
+                .IncrementalAccountHash = .{
+                    .min_slot = full_snapshot_info.slot,
+                    .max_slot = params.target_slot,
                 },
-                full_snapshot_info.hash,
-            ))[0];
+            }))[0];
+            hash.mixIn(incremental);
+
+            break :compute hash;
         };
 
         const archive_file = blk: {
@@ -2751,7 +2741,6 @@ pub const AccountsDB = struct {
             .full_hash = full_snapshot_info.hash,
             .full_capitalization = full_snapshot_info.capitalization,
             .incremental_hash = incremental_hash,
-            // .incremental_capitalization = incremental_capitalization,
         };
 
         params.bank_fields.slot = params.target_slot; // !
