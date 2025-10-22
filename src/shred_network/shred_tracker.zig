@@ -44,6 +44,8 @@ pub const BasicShredTracker = struct {
     /// ring buffer
     slots: [num_slots]MonitoredSlot = @splat(.{}),
     metrics: Metrics,
+    /// Optional channel to send duplicate slot notifications to consensus
+    duplicate_slots_sender: ?*sig.sync.Channel(Slot),
 
     const num_slots: usize = 1024;
 
@@ -61,6 +63,7 @@ pub const BasicShredTracker = struct {
         slot: Slot,
         logger: Logger,
         registry: *Registry(.{}),
+        duplicate_slots_sender: ?*sig.sync.Channel(Slot),
     ) !Self {
         const metrics = try registry.initStruct(Metrics);
         metrics.finished_slots_through.set(slot);
@@ -73,6 +76,7 @@ pub const BasicShredTracker = struct {
             .max_slot_seen = slot,
             .logger = logger,
             .metrics = try registry.initStruct(Metrics),
+            .duplicate_slots_sender = duplicate_slots_sender,
         };
     }
 
@@ -123,6 +127,15 @@ pub const BasicShredTracker = struct {
                 "parent conflict for slot {}. prior parent is {?}. index {} specifies parent {}",
                 .{ slot, monitored_slot.parent_slot, shred_index, parent_slot },
             );
+
+            if (self.duplicate_slots_sender) |sender| {
+                sender.send(slot) catch |err| {
+                    self.logger.err().logf(
+                        "failed to send duplicate slot {} to consensus: {}",
+                        .{ slot, err },
+                    );
+                };
+            }
         }
         monitored_slot.parent_slot = parent_slot;
 
@@ -492,7 +505,7 @@ test "trivial happy path" {
 
     var registry = sig.prometheus.Registry(.{}).init(allocator);
     defer registry.deinit();
-    var tracker = try BasicShredTracker.init(std.testing.allocator, 13579, .noop, &registry);
+    var tracker = try BasicShredTracker.init(std.testing.allocator, 13579, .noop, &registry, null);
     defer tracker.deinit();
 
     _ = try tracker.identifyMissing(&msr, Instant.UNIX_EPOCH.plus(Duration.fromSecs(1)));
@@ -513,7 +526,7 @@ test "1 registered shred is identified" {
 
     var registry = sig.prometheus.Registry(.{}).init(allocator);
     defer registry.deinit();
-    var tracker = try BasicShredTracker.init(std.testing.allocator, 13579, .noop, &registry);
+    var tracker = try BasicShredTracker.init(std.testing.allocator, 13579, .noop, &registry, null);
     defer tracker.deinit();
 
     try tracker.registerShred(13579, 123, 13578, false, Instant.UNIX_EPOCH);
@@ -541,7 +554,7 @@ test "slots are only skipped after a competing fork has developed sufficiently" 
 
     var registry = sig.prometheus.Registry(.{}).init(allocator);
     defer registry.deinit();
-    var tracker = try BasicShredTracker.init(std.testing.allocator, 1, .noop, &registry);
+    var tracker = try BasicShredTracker.init(std.testing.allocator, 1, .noop, &registry, null);
     defer tracker.deinit();
 
     const start = Instant.UNIX_EPOCH;
@@ -590,7 +603,7 @@ test "slots are not skipped when the current fork is developed" {
 
     var registry = sig.prometheus.Registry(.{}).init(allocator);
     defer registry.deinit();
-    var tracker = try BasicShredTracker.init(std.testing.allocator, 1, .noop, &registry);
+    var tracker = try BasicShredTracker.init(std.testing.allocator, 1, .noop, &registry, null);
     defer tracker.deinit();
 
     const start = Instant.UNIX_EPOCH;
