@@ -3,7 +3,7 @@ const sig = @import("../../sig.zig");
 
 const Epoch = sig.core.Epoch;
 const Pubkey = sig.core.Pubkey;
-const Stake = sig.core.stake.Stake;
+const Stake = sig.runtime.program.stake.StakeStateV2.Stake;
 
 const VoteState = sig.runtime.program.vote.state.VoteState;
 const StakeHistory = sig.runtime.sysvar.StakeHistory;

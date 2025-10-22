@@ -15,7 +15,7 @@ const VoteAccounts = sig.core.vote_accounts.VoteAccounts;
 const VoteAccount = sig.core.vote_accounts.VoteAccount;
 const VoteState = sig.runtime.program.vote.state.VoteState;
 const Stakes = sig.core.Stakes;
-const Stake = sig.core.stake.Stake;
+const Stake = sig.runtime.program.stake.StakeStateV2.Stake;
 // const StakesCache = sig.core.StakesCache;
 const StakesCache = sig.core.stake.StakesCacheGeneric(.stake);
 

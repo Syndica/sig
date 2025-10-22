@@ -1233,6 +1233,7 @@ test "ProgressMap memory ownership" {
 }
 
 test "ForkProgress.init" {
+    const StakeStateV2 = sig.runtime.program.stake.StakeStateV2;
     const allocator = std.testing.allocator;
 
     var prng: std.Random.DefaultPrng = .init(3744);
@@ -1258,7 +1259,7 @@ test "ForkProgress.init" {
     const keys = bank_data.stakes.stake_accounts.keys();
     const values = bank_data.stakes.stake_accounts.values();
     for (keys, values) |key, value| {
-        const stake = sig.core.stake.StakeStateV2{ .stake = .{
+        const stake = StakeStateV2{ .stake = .{
             .meta = .{ .rent_exempt_reserve = 0, .authorized = .{
                 .staker = Pubkey.ZEROES,
                 .withdrawer = Pubkey.ZEROES,
@@ -1274,7 +1275,7 @@ test "ForkProgress.init" {
             .flags = .EMPTY,
         } };
 
-        var stake_data = [_]u8{0} ** sig.core.stake.StakeStateV2.SIZE;
+        var stake_data = [_]u8{0} ** StakeStateV2.SIZE;
         _ = try sig.bincode.writeToSlice(&stake_data, stake, .{});
 
         try account_map.put(

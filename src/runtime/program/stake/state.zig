@@ -97,6 +97,17 @@ pub const StakeStateV2 = union(enum) {
             self.delegation.deactivation_epoch = epoch;
             return null;
         }
+
+        pub fn getDelegation(self: *const Stake) Delegation {
+            return self.delegation;
+        }
+
+        pub fn initRandom(random: std.Random) Stake {
+            return .{
+                .delegation = Delegation.initRandom(random),
+                .credits_observed = random.int(u64),
+            };
+        }
     };
 
     pub const StakeFlags = packed struct {
@@ -381,4 +392,42 @@ pub const StakeStateV2 = union(enum) {
     };
 
     pub const StakeAuthorize = enum { staker, withdrawer };
+
+    pub fn getStake(self: *const StakeStateV2) ?Stake {
+        return switch (self.*) {
+            .uninitialized => null,
+            .initialized => null,
+            .stake => |s| s.stake,
+            .rewards_pool => null,
+        };
+    }
+
+    pub fn getStakePtr(self: *StakeStateV2) ?*Stake {
+        return switch (self.*) {
+            .uninitialized => null,
+            .initialized => null,
+            .stake => |*s| &s.stake,
+            .rewards_pool => null,
+        };
+    }
+
+    pub fn getDelegation(self: *const StakeStateV2) ?Delegation {
+        return switch (self.*) {
+            .uninitialized => null,
+            .initialized => null,
+            .stake => |s| s.stake.delegation,
+            .rewards_pool => null,
+        };
+    }
+
+    pub fn fromAccount(account: sig.core.Account) !StakeStateV2 {
+        var buffer = [_]u8{0} ** SIZE;
+        account.data.readAll(&buffer);
+        return sig.bincode.readFromSlice(
+            sig.utils.allocators.failing.allocator(.{}),
+            StakeStateV2,
+            &buffer,
+            .{},
+        );
+    }
 };

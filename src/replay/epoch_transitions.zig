@@ -9,7 +9,7 @@ const StakesCache = sig.core.StakesCache;
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 const EpochStakes = sig.core.EpochStakes;
-const Stake = sig.core.stake.Stake;
+const Stake = sig.runtime.program.stake.StakeStateV2.Stake;
 
 const EpochTracker = sig.replay.trackers.EpochTracker;
 const EpochConstants = sig.core.EpochConstants;

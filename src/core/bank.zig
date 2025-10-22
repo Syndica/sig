@@ -46,6 +46,8 @@ const Ancestors = sig.core.Ancestors;
 const EpochStakesMap = core.EpochStakesMap;
 const Stakes = core.Stakes;
 
+const StakeStateV2 = sig.runtime.program.stake.StakeStateV2;
+
 const deinitMapAndValues = sig.utils.collections.deinitMapAndValues;
 const cloneMapAndValues = sig.utils.collections.cloneMapAndValues;
 
@@ -250,7 +252,7 @@ pub const SlotState = struct {
         const vote_accounts = try bank_fields.stakes.vote_accounts.clone(allocator);
         errdefer vote_accounts.deinit(allocator);
 
-        var stake_accounts = std.AutoArrayHashMapUnmanaged(Pubkey, sig.core.stake.Stake){};
+        var stake_accounts = std.AutoArrayHashMapUnmanaged(Pubkey, StakeStateV2.Stake){};
         errdefer stake_accounts.deinit(allocator);
 
         const keys = bank_fields.stakes.stake_accounts.keys();
@@ -260,15 +262,15 @@ pub const SlotState = struct {
                 return error.StakeAccountNotFound;
             defer account.deinit(allocator);
 
-            if (account.data.len() != sig.core.stake.StakeStateV2.SIZE) {
+            if (account.data.len() != StakeStateV2.SIZE) {
                 return error.InvalidStakeState;
             }
-            var state_buffer = [_]u8{0} ** sig.core.stake.StakeStateV2.SIZE;
+            var state_buffer = [_]u8{0} ** StakeStateV2.SIZE;
             account.data.readAll(&state_buffer);
 
             const state = try sig.bincode.readFromSlice(
                 allocator,
-                sig.core.stake.StakeStateV2,
+                StakeStateV2,
                 &state_buffer,
                 .{},
             );
@@ -278,7 +280,7 @@ pub const SlotState = struct {
                 else => return error.InvalidStakeState,
             };
 
-            try stake_accounts.put(allocator, key, sig.core.stake.Stake{
+            try stake_accounts.put(allocator, key, StakeStateV2.Stake{
                 .delegation = value,
                 .credits_observed = credits_observed,
             });

@@ -5,7 +5,7 @@ const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 
 const Pubkey = sig.core.Pubkey;
-const Stake = sig.core.stake.Stake;
+const Stake = sig.runtime.program.stake.StakeStateV2.Stake;
 const VoteAccount = sig.core.vote_accounts.VoteAccount;
 
 const AccountSharedData = sig.runtime.AccountSharedData;

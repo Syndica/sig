@@ -10,8 +10,8 @@ const Pubkey = sig.core.Pubkey;
 const Epoch = sig.core.Epoch;
 const EpochSchedule = sig.core.EpochSchedule;
 const StakesCache = sig.core.StakesCache;
-const Stake = sig.core.stake.Stake;
-const StakeStateV2 = sig.core.stake.StakeStateV2;
+const Stake = sig.runtime.program.stake.StakeStateV2.Stake;
+const StakeStateV2 = sig.runtime.program.stake.StakeStateV2;
 
 const SlotAccountReader = sig.accounts_db.SlotAccountReader;
 

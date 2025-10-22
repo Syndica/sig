@@ -23,7 +23,7 @@ const Instruction = instruction.Instruction;
 const InstructionContext = runtime.InstructionContext;
 const BorrowedAccount = runtime.BorrowedAccount;
 
-const StakeStateV2 = state.StakeStateV2;
+pub const StakeStateV2 = state.StakeStateV2;
 const Authorized = StakeStateV2.Authorized;
 const Lockup = StakeStateV2.Lockup;
 const StakeAuthorize = StakeStateV2.StakeAuthorize;

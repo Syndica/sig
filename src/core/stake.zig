@@ -20,10 +20,13 @@ const Rent = sig.runtime.sysvar.Rent;
 const StakeHistory = sig.runtime.sysvar.StakeHistory;
 const StakeState = sig.runtime.sysvar.StakeHistory.StakeState;
 
-const StakeFlags = sig.runtime.program.stake.state.StakeStateV2.StakeFlags;
-const Authorized = sig.runtime.program.stake.state.StakeStateV2.Authorized;
-const Lockup = sig.runtime.program.stake.state.StakeStateV2.Lockup;
-const Delegation = sig.runtime.program.stake.state.StakeStateV2.Delegation;
+const StakeStateV2 = sig.runtime.program.stake.StakeStateV2;
+const StakeFlags = StakeStateV2.StakeFlags;
+const Authorized = StakeStateV2.Authorized;
+const Lockup = StakeStateV2.Lockup;
+const Delegation = StakeStateV2.Delegation;
+const Stake = StakeStateV2.Stake;
+pub const Meta = StakeStateV2.Meta;
 
 const RwMux = sig.sync.RwMux;
 
@@ -436,76 +439,6 @@ pub const StakeAccount = struct {
 
     pub fn getStake(self: StakeAccount) Stake {
         return self.stake;
-    }
-};
-
-pub const StakeStateV2 = union(enum) {
-    uninitialized,
-    initialized: Meta,
-    stake: struct { meta: Meta, stake: Stake, flags: StakeFlags },
-    rewards_pool,
-
-    pub const SIZE = 200;
-
-    pub fn getStake(self: *const StakeStateV2) ?Stake {
-        return switch (self.*) {
-            .uninitialized => null,
-            .initialized => null,
-            .stake => |s| s.stake,
-            .rewards_pool => null,
-        };
-    }
-
-    pub fn getStakePtr(self: *StakeStateV2) ?*Stake {
-        return switch (self.*) {
-            .uninitialized => null,
-            .initialized => null,
-            .stake => |*s| &s.stake,
-            .rewards_pool => null,
-        };
-    }
-
-    pub fn getDelegation(self: *const StakeStateV2) ?Delegation {
-        return switch (self.*) {
-            .uninitialized => null,
-            .initialized => null,
-            .stake => |s| s.stake.delegation,
-            .rewards_pool => null,
-        };
-    }
-
-    pub fn fromAccount(account: Account) !StakeStateV2 {
-        var buffer = [_]u8{0} ** SIZE;
-        account.data.readAll(&buffer);
-        return sig.bincode.readFromSlice(
-            failing_allocator,
-            StakeStateV2,
-            &buffer,
-            .{},
-        );
-    }
-};
-
-pub const Meta = struct {
-    rent_exempt_reserve: u64,
-    authorized: Authorized,
-    lockup: Lockup,
-};
-
-pub const Stake = struct {
-    delegation: Delegation,
-    /// Credits observed is credits from vote account state when delegated or redeemed.
-    credits_observed: u64,
-
-    pub fn getDelegation(self: *const Stake) Delegation {
-        return self.delegation;
-    }
-
-    pub fn initRandom(random: std.Random) Stake {
-        return .{
-            .delegation = Delegation.initRandom(random),
-            .credits_observed = random.int(u64),
-        };
     }
 };
 
