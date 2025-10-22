@@ -618,7 +618,7 @@ fn redelegateStake(
 ) ?StakeError {
     const new_rate_activation_epoch = newWarmupCooldownRateEpoch(ic);
 
-    if (stake.delegation.effectiveStake(
+    if (stake.delegation.getEffectiveStake(
         clock.epoch,
         stake_history,
         new_rate_activation_epoch,
@@ -732,7 +732,7 @@ fn getStakeStatus(
     clock: *const sysvar.Clock,
 ) InstructionError!sysvar.StakeHistory.StakeState {
     const stake_history = try ic.tc.sysvar_cache.get(sysvar.StakeHistory);
-    return stake.delegation.stakeActivatingAndDeactivating(
+    return stake.delegation.getStakeState(
         clock.epoch,
         &stake_history,
         newWarmupCooldownRateEpoch(ic),
@@ -1016,7 +1016,7 @@ const MergeKind = union(enum) {
     ) (error{OutOfMemory} || InstructionError)!MergeKind {
         switch (stake_state.*) {
             .stake => |args| {
-                const status = args.stake.delegation.stakeActivatingAndDeactivating(
+                const status = args.stake.delegation.getStakeState(
                     clock.epoch,
                     stake_history,
                     newWarmupCooldownRateEpoch(ic),
@@ -1282,7 +1282,7 @@ fn withdraw(
                 try args.meta.authorized.check(signers, .withdrawer);
 
                 const staked = if (clock.epoch >= args.stake.delegation.deactivation_epoch)
-                    args.stake.delegation.effectiveStake(
+                    args.stake.delegation.getEffectiveStake(
                         clock.epoch,
                         stake_history,
                         new_rate_activation_epoch,

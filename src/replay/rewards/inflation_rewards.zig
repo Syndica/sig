@@ -8,8 +8,6 @@ const Stake = sig.core.stake.Stake;
 const VoteState = sig.runtime.program.vote.state.VoteState;
 const StakeHistory = sig.runtime.sysvar.StakeHistory;
 
-const DEFAULT_WARMUP_COOLDOWN_RATE = sig.core.stake.DEFAULT_WARMUP_COOLDOWN_RATE;
-
 pub const PointValue = struct {
     rewards: u64,
     points: u128,
@@ -177,9 +175,9 @@ pub fn calculateStakePointsAndCredits(
     var new_credits_observed: u64 = credits_in_stake;
 
     for (new_vote_state.epoch_credits.items) |epoch_credits| {
-        const stake_amount: u128 = stake.getDelegation().getStake(
+        const stake_amount: u128 = stake.getDelegation().getEffectiveStake(
             epoch_credits.epoch,
-            stake_history.*, // Change to take pointer?
+            stake_history,
             new_rate_activation_epoch,
         );
 
@@ -215,7 +213,6 @@ pub fn newStakeForTest(
             .stake = stake,
             .activation_epoch = activation_epoch,
             .deactivation_epoch = std.math.maxInt(Epoch),
-            ._warmup_cooldown_rate = DEFAULT_WARMUP_COOLDOWN_RATE,
         },
         .credits_observed = epoch_credits,
     };

@@ -179,7 +179,7 @@ pub fn activateEpoch(
         const delegation = stake_delegation.getDelegation();
         stake_history_entry.add(delegation.getStakeState(
             epoch,
-            stakes.stake_history,
+            &stakes.stake_history,
             new_rate_activation_epoch,
         ));
     }
@@ -216,9 +216,9 @@ pub fn refreshVoteAccounts(
         if (!entry.found_existing) {
             entry.value_ptr.* = 0;
         }
-        entry.value_ptr.* += delegation.getStake(
+        entry.value_ptr.* += delegation.getEffectiveStake(
             epoch,
-            stake_history,
+            &stake_history,
             new_activation_rate_epoch,
         );
     }

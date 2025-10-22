@@ -701,7 +701,7 @@ test calculateRewardPointsPartitioned {
             .stake = 5_000_000_000,
             .activation_epoch = 0,
             .deactivation_epoch = std.math.maxInt(Epoch),
-            ._warmup_cooldown_rate = 0.0,
+            .deprecated_warmup_cooldown_rate = 0.0,
         },
         .credits_observed = 0,
     };

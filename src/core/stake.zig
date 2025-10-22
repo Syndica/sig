@@ -20,6 +20,11 @@ const Rent = sig.runtime.sysvar.Rent;
 const StakeHistory = sig.runtime.sysvar.StakeHistory;
 const StakeState = sig.runtime.sysvar.StakeHistory.StakeState;
 
+const StakeFlags = sig.runtime.program.stake.state.StakeStateV2.StakeFlags;
+const Authorized = sig.runtime.program.stake.state.StakeStateV2.Authorized;
+const Lockup = sig.runtime.program.stake.state.StakeStateV2.Lockup;
+const Delegation = sig.runtime.program.stake.state.StakeStateV2.Delegation;
+
 const RwMux = sig.sync.RwMux;
 
 const createVoteAccount = sig.core.vote_accounts.createVoteAccount;
@@ -210,9 +215,9 @@ pub fn Stakes(comptime stakes_type: StakesType) type {
             for (self.stake_delegations.values()) |*stake_delegations| {
                 const delegation = stake_delegations.getDelegation();
                 if (!delegation.voter_pubkey.equals(&pubkey)) continue;
-                stake += delegation.getStake(
+                stake += delegation.getEffectiveStake(
                     self.epoch,
-                    self.stake_history,
+                    &self.stake_history,
                     new_rate_activation_epoch,
                 );
             }
@@ -255,9 +260,9 @@ pub fn Stakes(comptime stakes_type: StakesType) type {
 
             const delegation = account.getDelegation();
             const voter_pubkey = delegation.voter_pubkey;
-            const stake = delegation.getStake(
+            const stake = delegation.getEffectiveStake(
                 self.epoch,
-                self.stake_history,
+                &self.stake_history,
                 new_rate_activation_epoch,
             );
 
@@ -277,9 +282,9 @@ pub fn Stakes(comptime stakes_type: StakesType) type {
 
                 const old_delegation = old_account.getDelegation();
                 const old_voter_pubkey = old_delegation.voter_pubkey;
-                const old_stake = old_delegation.getStake(
+                const old_stake = old_delegation.getEffectiveStake(
                     self.epoch,
-                    self.stake_history,
+                    &self.stake_history,
                     new_rate_activation_epoch,
                 );
 
@@ -302,9 +307,9 @@ pub fn Stakes(comptime stakes_type: StakesType) type {
             defer if (stakes_type == .account) account.deinit(allocator);
 
             const removed_delegation = account.getDelegation();
-            const removed_stake = removed_delegation.getStake(
+            const removed_stake = removed_delegation.getEffectiveStake(
                 self.epoch,
-                self.stake_history,
+                &self.stake_history,
                 new_rate_activation_epoch,
             );
 
@@ -503,194 +508,6 @@ pub const Stake = struct {
     }
 };
 
-const StakeFlags = sig.runtime.program.stake.state.StakeStateV2.StakeFlags;
-const Authorized = sig.runtime.program.stake.state.StakeStateV2.Authorized;
-const Lockup = sig.runtime.program.stake.state.StakeStateV2.Lockup;
-
-pub const Delegation = struct {
-    /// to whom the stake is delegated
-    voter_pubkey: Pubkey,
-    /// activated stake amount, set at delegate() time
-    stake: u64,
-    /// epoch at which this stake was activated, std::Epoch::MAX if is a bootstrap stake
-    activation_epoch: Epoch,
-    /// epoch the stake was deactivated, std::Epoch::MAX if not deactivated
-    deactivation_epoch: Epoch,
-    /// DEPRECATED: since 1.16.7
-    _warmup_cooldown_rate: f64,
-
-    pub fn isBootstrap(self: *const Delegation) bool {
-        return self.activation_epoch == std.math.maxInt(u64);
-    }
-
-    pub fn getDelegation(self: *const Delegation) Delegation {
-        return self.*;
-    }
-
-    pub fn getStake(
-        self: *const Delegation,
-        epoch: Epoch,
-        stake_history: StakeHistory,
-        new_rate_activation_epoch: ?Epoch,
-    ) u64 {
-        return self.getStakeState(
-            epoch,
-            stake_history,
-            new_rate_activation_epoch,
-        ).effective;
-    }
-
-    pub fn getStakeState(
-        self: *const Delegation,
-        epoch: Epoch,
-        history: StakeHistory,
-        new_rate_activation_epoch: ?Epoch,
-    ) StakeState {
-        const effective_stake, const activating_stake = self.getEffectiveAndActivatingStake(
-            epoch,
-            history,
-            new_rate_activation_epoch,
-        );
-
-        if (epoch < self.deactivation_epoch) {
-            return .{
-                .effective = effective_stake,
-                .activating = activating_stake,
-                .deactivating = 0,
-            };
-        } else if (epoch == self.deactivation_epoch) {
-            return .{
-                .effective = effective_stake,
-                .activating = 0,
-                .deactivating = effective_stake,
-            };
-        } else if (history.getEntry(self.deactivation_epoch)) |entry| {
-            var prev_epoch = entry.epoch;
-            var prev_cluster_stake = entry.stake;
-            var current_epoch: Epoch = undefined;
-            var current_effective_stake = effective_stake;
-
-            while (true) {
-                current_epoch = prev_epoch + 1;
-
-                if (prev_cluster_stake.deactivating == 0) break;
-
-                const weight = @as(f64, @floatFromInt(current_effective_stake)) /
-                    @as(f64, @floatFromInt(prev_cluster_stake.deactivating));
-                const warmup_cooldown_rate =
-                    warmupCooldownRate(current_epoch, new_rate_activation_epoch);
-
-                const newly_not_effective_cluster_stake =
-                    @as(f64, @floatFromInt(prev_cluster_stake.effective)) * warmup_cooldown_rate;
-                const wieghted_not_effective_state: u64 =
-                    @intFromFloat(weight * newly_not_effective_cluster_stake);
-                const newly_not_effective_stake = @max(wieghted_not_effective_state, 1);
-
-                current_effective_stake = current_effective_stake -| newly_not_effective_stake;
-                if (current_effective_stake == 0) break;
-                if (current_epoch >= epoch) break;
-
-                if (history.getEntry(current_epoch)) |next_entry| {
-                    prev_epoch = next_entry.epoch;
-                    prev_cluster_stake = next_entry.stake;
-                } else break;
-            }
-
-            return .{
-                .effective = current_effective_stake,
-                .activating = 0,
-                .deactivating = current_effective_stake,
-            };
-        } else {
-            return .{
-                .effective = 0,
-                .activating = 0,
-                .deactivating = 0,
-            };
-        }
-    }
-
-    pub fn getEffectiveAndActivatingStake(
-        self: *const Delegation,
-        epoch: Epoch,
-        history: StakeHistory,
-        new_rate_activation_epoch: ?Epoch,
-    ) struct { u64, u64 } {
-        if (self.activation_epoch == std.math.maxInt(u64)) {
-            return .{ self.stake, 0 };
-        } else if (self.activation_epoch == self.deactivation_epoch) {
-            return .{ 0, 0 };
-        } else if (epoch == self.activation_epoch) {
-            return .{ 0, self.stake };
-        } else if (epoch < self.activation_epoch) {
-            return .{ 0, 0 };
-        } else if (history.getEntry(self.activation_epoch)) |entry| {
-            var prev_epoch = entry.epoch;
-            var prev_cluster_stake = entry.stake;
-            var current_epoch: Epoch = undefined;
-            var current_effective_stake: u64 = 0;
-
-            while (true) {
-                current_epoch = prev_epoch + 1;
-
-                if (prev_cluster_stake.deactivating == 0) break;
-
-                const remaining_activated_stake = self.stake - current_effective_stake;
-                const weight = @as(f64, @floatFromInt(remaining_activated_stake)) /
-                    @as(f64, @floatFromInt(prev_cluster_stake.activating));
-                const warmup_cooldown_rate =
-                    warmupCooldownRate(current_epoch, new_rate_activation_epoch);
-
-                const newly_effective_cluster_stake =
-                    @as(f64, @floatFromInt(prev_cluster_stake.effective)) * warmup_cooldown_rate;
-                const weighted_effective_state: u64 =
-                    @intFromFloat(weight * newly_effective_cluster_stake);
-                const newly_effective_stake = @max(weighted_effective_state, 1);
-
-                current_effective_stake += newly_effective_stake;
-                if (current_effective_stake >= self.stake) {
-                    current_effective_stake = self.stake;
-                    break;
-                }
-
-                if (current_epoch >= epoch or current_epoch >= self.deactivation_epoch) break;
-
-                if (history.getEntry(current_epoch)) |next_entry| {
-                    prev_epoch = next_entry.epoch;
-                    prev_cluster_stake = next_entry.stake;
-                } else break;
-            }
-
-            return .{
-                current_effective_stake,
-                self.stake - current_effective_stake,
-            };
-        } else {
-            return .{ self.stake, 0 };
-        }
-    }
-
-    pub fn initRandom(random: std.Random) Delegation {
-        return .{
-            .voter_pubkey = Pubkey.initRandom(random),
-            .stake = random.int(u64),
-            .activation_epoch = random.int(Epoch),
-            .deactivation_epoch = random.int(Epoch),
-            ._warmup_cooldown_rate = random.float(f64),
-        };
-    }
-};
-
-pub const DEFAULT_WARMUP_COOLDOWN_RATE: f64 = 0.25;
-const NEW_WARMUP_COOLDOWN_RATE: f64 = 0.09;
-
-fn warmupCooldownRate(current_epoch: Epoch, new_rate_activation_epoch: ?Epoch) f64 {
-    return if (current_epoch < new_rate_activation_epoch orelse std.math.maxInt(u64))
-        DEFAULT_WARMUP_COOLDOWN_RATE
-    else
-        NEW_WARMUP_COOLDOWN_RATE;
-}
-
 fn createStakeAccount(
     allocator: Allocator,
     authorized: Pubkey,
@@ -736,7 +553,6 @@ fn createStakeAccount(
                 .voter_pubkey = voter_pubkey,
                 .activation_epoch = activation_epoch,
                 .deactivation_epoch = std.math.maxInt(u64),
-                ._warmup_cooldown_rate = DEFAULT_WARMUP_COOLDOWN_RATE,
             },
             .credits_observed = vote_state.getCredits(),
         },
@@ -860,7 +676,7 @@ test "stakes basic" {
                 defer stakes_guard.unlock();
                 try std.testing.expect(stakes.vote_accounts.getAccount(accs.vote_pubkey) != null);
                 try std.testing.expectEqual(
-                    stake.delegation.getStake(i, stake_history_empty, null),
+                    stake.delegation.getEffectiveStake(i, &stake_history_empty, null),
                     stakes.vote_accounts.getDelegatedStake(accs.vote_pubkey),
                 );
             }
@@ -872,7 +688,7 @@ test "stakes basic" {
                 defer stakes_guard.unlock();
                 try std.testing.expect(stakes.vote_accounts.getAccount(accs.vote_pubkey) != null);
                 try std.testing.expectEqual(
-                    stake.delegation.getStake(i, stake_history_empty, null),
+                    stake.delegation.getEffectiveStake(i, &stake_history_empty, null),
                     stakes.vote_accounts.getDelegatedStake(accs.vote_pubkey),
                 );
             }
@@ -906,7 +722,7 @@ test "stakes basic" {
                 defer stakes_guard.unlock();
                 try std.testing.expect(stakes.vote_accounts.getAccount(accs.vote_pubkey) != null);
                 try std.testing.expectEqual(
-                    stake.delegation.getStake(i, stake_history_empty, null),
+                    stake.delegation.getEffectiveStake(i, &stake_history_empty, null),
                     stakes.vote_accounts.getDelegatedStake(accs.vote_pubkey),
                 );
             }
@@ -1052,7 +868,6 @@ test "get stake effective and activating" {
         .stake = 1000,
         .activation_epoch = 5,
         .deactivation_epoch = 10,
-        ._warmup_cooldown_rate = DEFAULT_WARMUP_COOLDOWN_RATE,
     };
 
     var stake_history: StakeHistory = .DEFAULT;
@@ -1067,7 +882,7 @@ test "get stake effective and activating" {
 
     const effective, const activating = delegation.getEffectiveAndActivatingStake(
         6,
-        stake_history,
+        &stake_history,
         null,
     );
 
@@ -1084,7 +899,6 @@ test "get stake state" {
         .stake = 1_000,
         .activation_epoch = 5,
         .deactivation_epoch = 10,
-        ._warmup_cooldown_rate = DEFAULT_WARMUP_COOLDOWN_RATE,
     };
 
     var stake_history: StakeHistory = .DEFAULT;
@@ -1113,14 +927,14 @@ test "get stake state" {
 
     const effective, const activating = delegation.getEffectiveAndActivatingStake(
         12,
-        stake_history,
+        &stake_history,
         null,
     );
 
     try std.testing.expectEqual(1000, effective);
     try std.testing.expectEqual(0, activating);
 
-    const stake_state = delegation.getStakeState(12, stake_history, null);
+    const stake_state = delegation.getStakeState(12, &stake_history, null);
 
     try std.testing.expectEqual(250, stake_state.effective);
     try std.testing.expectEqual(0, stake_state.activating);
