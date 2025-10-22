@@ -845,6 +845,8 @@ pub const ReplayTower = struct {
     ///
     /// This is used to experiment with vote lockout behavior and assess whether a vote is
     /// justified based on recent vote history, lockout depth, and voting stake.
+    ///
+    /// Analogous to [check_vote_stake_thresholds](https://github.com/anza-xyz/agave/blob/3572983cc28393e3c39a971c274cdac9b2eb902a/core/src/consensus.rs#L1346)
     pub fn checkVoteStakeThresholds(
         self: *const ReplayTower,
         allocator: std.mem.Allocator,
@@ -856,7 +858,6 @@ pub const ReplayTower = struct {
         var threshold_decisions: [threshold_size]ThresholdDecision = undefined;
 
         // Generate the vote state assuming this vote is included.
-        //
         var vote_state = self.tower.vote_state;
         try vote_state.processNextVoteSlot(slot);
 
