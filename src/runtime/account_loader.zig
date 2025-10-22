@@ -72,17 +72,16 @@ pub const LoadedTransactionAccounts = struct {
     }
 };
 
+// TODO rename
 pub const CachedAccount = struct {
     pubkey: Pubkey,
     // TODO: document
     // TODO: ptr + fields separation
     account: AccountSharedData,
-    is_writable: bool, // TODO rename to `is_owned`
+    is_owned: bool,
 
     pub fn deinit(self: CachedAccount, allocator: Allocator) void {
-        if (self.is_writable) {
-            self.account.deinit(allocator);
-        }
+        if (self.is_owned) self.account.deinit(allocator);
     }
 
     pub fn getAccount(self: *const CachedAccount) *const AccountSharedData {
@@ -416,7 +415,7 @@ pub const BatchAccountCache = struct {
             loaded.accounts.appendAssumeCapacity(.{
                 .account = loaded_account.account,
                 .pubkey = account_key,
-                .is_writable = loaded_account.is_owned,
+                .is_owned = loaded_account.is_owned,
             });
         }
 
@@ -501,7 +500,7 @@ pub const BatchAccountCache = struct {
             loaded.accounts.appendAssumeCapacity(.{
                 .account = loaded_account.account,
                 .pubkey = account_key,
-                .is_writable = loaded_account.is_owned,
+                .is_owned = loaded_account.is_owned,
             });
         }
 
@@ -680,11 +679,11 @@ pub const BatchAccountCache = struct {
         allocator: Allocator,
         modified_account: *CachedAccount,
     ) void {
-        std.debug.assert(modified_account.is_writable);
+        std.debug.assert(modified_account.is_owned);
         const account = self.account_cache.getPtr(modified_account.pubkey).?;
         account.deinit(allocator);
         account.* = modified_account.account;
-        modified_account.is_writable = false;
+        modified_account.is_owned = false;
     }
 };
 

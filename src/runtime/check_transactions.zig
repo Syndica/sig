@@ -156,14 +156,14 @@ pub fn checkFeePayer(
                     .executable = nonce.account.executable,
                     .rent_epoch = cached_payer.rent_epoch,
                 },
-                .is_writable = true,
+                .is_owned = true,
             }) catch unreachable;
         } else {
             rollbacks.append(nonce) catch unreachable;
             var rollback_payer = CachedAccount{
                 .pubkey = fee_payer_key,
                 .account = try cached_payer.clone(allocator),
-                .is_writable = true,
+                .is_owned = true,
             };
             rollback_payer.account.lamports +|= rent_collected;
             rollbacks.append(rollback_payer) catch unreachable;
@@ -172,7 +172,7 @@ pub fn checkFeePayer(
         var rollback_payer = CachedAccount{
             .pubkey = fee_payer_key,
             .account = try cached_payer.clone(allocator),
-            .is_writable = true,
+            .is_owned = true,
         };
         rollback_payer.account.lamports +|= rent_collected;
         rollback_payer.account.rent_epoch = fee_payer_loaded_rent_epoch;
@@ -386,7 +386,7 @@ fn checkLoadAndAdvanceMessageNonceAccount(
     var owned_account = CachedAccount{
         .pubkey = address,
         .account = cached_account.*,
-        .is_writable = true,
+        .is_owned = true,
     };
     owned_account.account.data = new_data; // TODO find a cleaner approach to this
 
@@ -811,7 +811,7 @@ test "checkFeePayer: happy path with same nonce and fee payer" {
         .{
             .pubkey = transaction.fee_payer,
             .account = nonce_account,
-            .is_writable = true,
+            .is_owned = true,
         },
         &sig.core.rent_collector.defaultCollector(10),
         &sig.core.FeatureSet.ALL_DISABLED,
@@ -880,7 +880,7 @@ test "checkFeePayer: happy path with separate nonce and fee payer" {
         .{
             .pubkey = Pubkey.initRandom(prng.random()),
             .account = nonce_account,
-            .is_writable = true,
+            .is_owned = true,
         },
         &sig.core.rent_collector.defaultCollector(10),
         &sig.core.FeatureSet.ALL_DISABLED,
