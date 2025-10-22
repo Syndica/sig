@@ -42,10 +42,10 @@ const VoteListener = sig.consensus.vote_listener.VoteListener;
 const SlotTracker = sig.replay.trackers.SlotTracker;
 const EpochTracker = sig.replay.trackers.EpochTracker;
 
-const AncestorDuplicateSlotToRepair = replay.consensus.edge_cases.AncestorDuplicateSlotToRepair;
-const DuplicateConfirmedState = sig.replay.consensus.edge_cases.DuplicateConfirmedState;
-const SlotData = sig.replay.consensus.edge_cases.SlotData;
-const SlotStatus = sig.replay.consensus.edge_cases.SlotStatus;
+const AncestorDuplicateSlotToRepair = replay.consensus.cluster_sync.AncestorDuplicateSlotToRepair;
+const DuplicateConfirmedState = sig.replay.consensus.cluster_sync.DuplicateConfirmedState;
+const SlotData = sig.replay.consensus.cluster_sync.SlotData;
+const SlotStatus = sig.replay.consensus.cluster_sync.SlotStatus;
 
 const ReplayResult = replay.execution.ReplayResult;
 const ProcessResultParams = replay.consensus.process_result.ProcessResultParams;
@@ -53,7 +53,7 @@ const ProcessResultParams = replay.consensus.process_result.ProcessResultParams;
 const collectStakeDistribution = sig.consensus.replay_tower.collectStakeDistribution;
 const isDuplicateSlotConfirmed = sig.consensus.replay_tower.isDuplicateSlotConfirmed;
 const check_slot_agrees_with_cluster =
-    sig.replay.consensus.edge_cases.check_slot_agrees_with_cluster;
+    sig.replay.consensus.cluster_sync.check_slot_agrees_with_cluster;
 
 const MAX_VOTE_REFRESH_INTERVAL_MILLIS: usize = 5000;
 
@@ -344,7 +344,7 @@ pub const TowerConsensus = struct {
 
     /// Run all phases of consensus:
     /// - process replay results
-    /// - edge cases
+    /// - cluster sync
     /// - actual consensus protocol.
     pub fn process(
         self: *TowerConsensus,
@@ -367,12 +367,12 @@ pub const TowerConsensus = struct {
             for (results) |r| try self.processResult(allocator, progress_map, slot_tracker, r);
         }
 
-        // Process edge cases and prepare ancestors/descendants
-        const ancestors, const descendants = edge_cases_and_ancestors_descendants: {
+        // Process cluster sync and prepare ancestors/descendants
+        const ancestors, const descendants = cluster_sync_and_ancestors_descendants: {
             const slot_tracker, var slot_tracker_lg = slot_tracker_rw.readWithLock();
             defer slot_tracker_lg.unlock();
 
-            _ = try replay.consensus.edge_cases.processEdgeCases(allocator, .from(self.logger), .{
+            _ = try replay.consensus.cluster_sync.processClusterSync(allocator, .from(self.logger), .{
                 .my_pubkey = self.my_identity,
                 .tpu_has_bank = false,
                 .fork_choice = &self.fork_choice,
@@ -402,7 +402,7 @@ pub const TowerConsensus = struct {
                     try descendants_gop.value_ptr.put(arena, slot);
                 }
             }
-            break :edge_cases_and_ancestors_descendants .{ ancestors, descendants };
+            break :cluster_sync_and_ancestors_descendants .{ ancestors, descendants };
         };
 
         const epoch_tracker, var epoch_tracker_lg = epoch_tracker_rw.readWithLock();

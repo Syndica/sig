@@ -23,19 +23,19 @@ const LatestValidatorVotes = sig.consensus.latest_validator_votes.LatestValidato
 
 const SlotTracker = replay.trackers.SlotTracker;
 
-const DuplicateSlots = replay.consensus.edge_cases.SlotData.DuplicateSlots;
-const DuplicateState = replay.consensus.edge_cases.DuplicateState;
-const SlotFrozenState = replay.consensus.edge_cases.SlotFrozenState;
-const DuplicateSlotsToRepair = replay.consensus.edge_cases.SlotData.DuplicateSlotsToRepair;
-const DuplicateConfirmedSlots = replay.consensus.edge_cases.SlotData.DuplicateConfirmedSlots;
-const PurgeRepairSlotCounters = replay.consensus.edge_cases.SlotData.PurgeRepairSlotCounters;
-const EpochSlotsFrozenSlots = replay.consensus.edge_cases.SlotData.EpochSlotsFrozenSlots;
+const DuplicateSlots = replay.consensus.cluster_sync.SlotData.DuplicateSlots;
+const DuplicateState = replay.consensus.cluster_sync.DuplicateState;
+const SlotFrozenState = replay.consensus.cluster_sync.SlotFrozenState;
+const DuplicateSlotsToRepair = replay.consensus.cluster_sync.SlotData.DuplicateSlotsToRepair;
+const DuplicateConfirmedSlots = replay.consensus.cluster_sync.SlotData.DuplicateConfirmedSlots;
+const PurgeRepairSlotCounters = replay.consensus.cluster_sync.SlotData.PurgeRepairSlotCounters;
+const EpochSlotsFrozenSlots = replay.consensus.cluster_sync.SlotData.EpochSlotsFrozenSlots;
 const UnfrozenGossipVerifiedVoteHashes =
-    replay.consensus.edge_cases.UnfrozenGossipVerifiedVoteHashes;
+    replay.consensus.cluster_sync.UnfrozenGossipVerifiedVoteHashes;
 
 const Logger = sig.trace.Logger("replay.process_result");
 
-const check_slot_agrees_with_cluster = replay.consensus.edge_cases.check_slot_agrees_with_cluster;
+const check_slot_agrees_with_cluster = replay.consensus.cluster_sync.check_slot_agrees_with_cluster;
 
 pub const ProcessResultParams = struct {
     allocator: Allocator,
@@ -104,7 +104,7 @@ fn markDeadSlot(
     // - slot_status_notifier
     // - rpc_subscriptions
 
-    const dead_state: replay.consensus.edge_cases.DeadState = .fromState(
+    const dead_state: replay.consensus.cluster_sync.DeadState = .fromState(
         .from(params.logger),
         dead_slot,
         params.duplicate_slots_tracker,
