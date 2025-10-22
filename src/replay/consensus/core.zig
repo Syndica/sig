@@ -1024,21 +1024,17 @@ fn sendVoteTransaction(
     allocator: Allocator,
     vote_tx: Transaction,
     tpu_address: SocketAddr,
+    sockets: struct { ipv4: network.Socket, ipv6: network.Socket },
 ) !void {
     var serialized: std.ArrayListUnmanaged(u8) = .empty;
     defer serialized.deinit(allocator);
 
     try sig.bincode.write(serialized.writer(allocator), vote_tx, .{});
 
-    const addr_family: network.AddressFamily = switch (tpu_address) {
-        .V4 => .ipv4,
-        .V6 => .ipv6,
+    const socket = switch (tpu_address) {
+        .V4 => sockets.ipv4,
+        .V6 => sockets.ipv6,
     };
-    const socket = network.Socket.create(addr_family, .udp) catch |err| {
-        logger.err().logf("Failed to create socket for vote send: {}", .{err});
-        return err;
-    };
-    defer socket.close();
 
     const endpoint = tpu_address.toEndpoint();
     _ = socket.sendTo(endpoint, serialized.items) catch |err| {
@@ -1067,8 +1063,26 @@ fn sendVoteToLeaders(
     );
     defer allocator.free(upcoming_leader_sockets);
 
+    const ipv4_socket = network.Socket.create(.ipv4, .udp) catch |err| {
+        logger.err().logf("Failed to create IPv4 socket for vote send: {}", .{err});
+        return err;
+    };
+    defer ipv4_socket.close();
+
+    const ipv6_socket = network.Socket.create(.ipv6, .udp) catch |err| {
+        logger.err().logf("Failed to create IPv6 socket for vote send: {}", .{err});
+        return err;
+    };
+    defer ipv6_socket.close();
+
     for (upcoming_leader_sockets) |tpu_vote_socket| {
-        sendVoteTransaction(logger, allocator, vote_tx, tpu_vote_socket) catch |err| {
+        sendVoteTransaction(
+            logger,
+            allocator,
+            vote_tx,
+            tpu_vote_socket,
+            .{ .ipv4 = ipv4_socket, .ipv6 = ipv6_socket },
+        ) catch |err| {
             logger.err().logf("Failed to send vote to leader: {}", .{err});
         };
     }
