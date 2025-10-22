@@ -60,6 +60,9 @@ pub const ShredReceiver = struct {
         /// shared with repair
         tracker: *BasicShredTracker,
         inserter: ShredInserter,
+
+        /// Optional channel to send duplicate slot notifications to consensus
+        duplicate_slots_sender: ?*Channel(Slot),
     };
 
     pub fn init(
@@ -184,12 +187,47 @@ pub const ShredReceiver = struct {
             },
         );
         self.metrics.passed_to_inserter_count.add(self.shred_batch.len);
+
+        try self.handleDuplicateSlots(allocator, &result);
+
         result.deinit();
 
         self.metrics.batch_size.observe(self.shred_batch.len);
     }
 
     const MAX_SHREDS_PER_ITER = 1024;
+
+    /// Send duplicate slot notifications to consensus for all unique slots
+    /// with duplicate shreds detected by the ShredInserter.
+    /// TODO Investigate Agave's check_duplicate.
+    fn handleDuplicateSlots(
+        self: *ShredReceiver,
+        allocator: Allocator,
+        result: *const ShredInserter.Result,
+    ) !void {
+        const sender = self.params.duplicate_slots_sender orelse return;
+        if (result.duplicate_shreds.items.len == 0) return;
+
+        var duplicate_slots = std.AutoArrayHashMap(Slot, void).init(allocator);
+        defer duplicate_slots.deinit();
+
+        for (result.duplicate_shreds.items) |duplicate_shred| {
+            const slot = switch (duplicate_shred) {
+                .Exists => |shred| shred.commonHeader().slot,
+                inline else => |conflict| conflict.original.commonHeader().slot,
+            };
+            try duplicate_slots.put(slot, {});
+        }
+
+        for (duplicate_slots.keys()) |slot| {
+            sender.send(slot) catch |err| {
+                self.logger.err().logf(
+                    "failed to send duplicate slot {} to consensus: {}",
+                    .{ slot, err },
+                );
+            };
+        }
+    }
 
     /// Handle a single packet and return a shred if it's a valid shred.
     fn handlePacket(
@@ -321,6 +359,7 @@ test "handleBatch/handlePacket" {
         .epoch_tracker = &epoch_tracker,
         .tracker = shred_tracker,
         .inserter = ledger.shredInserter(),
+        .duplicate_slots_sender = null,
     });
     defer shred_receiver.deinit(allocator);
 
