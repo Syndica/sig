@@ -1193,7 +1193,7 @@ const TestContext = struct {
 
         const account_key = Pubkey.initRandom(prng);
 
-        var cache, tc.* = try testing.createTransactionContext(allocator, prng, .{
+        const cache, tc.* = try testing.createTransactionContext(allocator, prng, .{
             .accounts = &.{
                 .{
                     .pubkey = account_key,
@@ -1211,7 +1211,7 @@ const TestContext = struct {
         });
         errdefer {
             testing.deinitTransactionContext(allocator, tc.*);
-            cache.deinit(allocator);
+            sig.runtime.account_preload.deinit(cache, allocator);
         }
 
         try sig.runtime.executor.pushInstruction(tc, try testing.createInstructionInfo(
@@ -1235,7 +1235,7 @@ const TestContext = struct {
         testing.deinitTransactionContext(allocator, self.tc.*);
         allocator.destroy(self.tc);
         self.ic.deinit(allocator);
-        self.cache.deinit(allocator);
+        sig.runtime.account_preload.deinit(self.cache, allocator);
     }
 
     fn getAccount(self: *const TestContext) TestAccount {
