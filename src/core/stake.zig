@@ -134,10 +134,11 @@ pub const StakesType = enum {
 
 pub fn Stakes(comptime stakes_type: StakesType) type {
     const T = stakes_type.T();
+    const StakeAccounts = std.AutoArrayHashMapUnmanaged(Pubkey, T);
 
     return struct {
         vote_accounts: VoteAccounts,
-        stake_delegations: std.AutoArrayHashMapUnmanaged(Pubkey, T),
+        stake_accounts: StakeAccounts,
         unused: u64,
         epoch: Epoch,
         stake_history: StakeHistory,
@@ -146,7 +147,7 @@ pub fn Stakes(comptime stakes_type: StakesType) type {
 
         pub const EMPTY: Self = .{
             .vote_accounts = .{},
-            .stake_delegations = .empty,
+            .stake_accounts = .empty,
             .unused = 0,
             .epoch = 0,
             .stake_history = .DEFAULT,
@@ -156,9 +157,9 @@ pub fn Stakes(comptime stakes_type: StakesType) type {
             self.vote_accounts.deinit(allocator);
             // Only the .account type contains allocated data in the stake_delegations.
             if (stakes_type == .account) {
-                for (self.stake_delegations.values()) |*v| v.deinit(allocator);
+                for (self.stake_accounts.values()) |*v| v.deinit(allocator);
             }
-            var delegations = self.stake_delegations;
+            var delegations = self.stake_accounts;
             delegations.deinit(allocator);
         }
 
@@ -175,7 +176,7 @@ pub fn Stakes(comptime stakes_type: StakesType) type {
             errdefer vote_accounts.deinit(allocator);
 
             var stake_delegations: std.AutoArrayHashMapUnmanaged(Pubkey, output_type.T()) = .empty;
-            try stake_delegations.ensureTotalCapacity(allocator, self.stake_delegations.count());
+            try stake_delegations.ensureTotalCapacity(allocator, self.stake_accounts.count());
             errdefer {
                 // Only the .account type contains allocated data in the stake_delegations.
                 if (output_type == .account) {
@@ -183,7 +184,7 @@ pub fn Stakes(comptime stakes_type: StakesType) type {
                 }
                 stake_delegations.deinit(allocator);
             }
-            for (self.stake_delegations.keys(), self.stake_delegations.values()) |key, value| {
+            for (self.stake_accounts.keys(), self.stake_accounts.values()) |key, value| {
                 const new_value: output_type.T() = switch (stakes_type) {
                     .account => try value.clone(allocator),
                     .delegation => value,
@@ -199,7 +200,7 @@ pub fn Stakes(comptime stakes_type: StakesType) type {
 
             return .{
                 .vote_accounts = vote_accounts,
-                .stake_delegations = stake_delegations,
+                .stake_accounts = stake_delegations,
                 .unused = self.unused,
                 .epoch = self.epoch,
                 .stake_history = self.stake_history,
@@ -212,7 +213,7 @@ pub fn Stakes(comptime stakes_type: StakesType) type {
             new_rate_activation_epoch: ?Epoch,
         ) u64 {
             var stake: u64 = 0;
-            for (self.stake_delegations.values()) |*stake_delegations| {
+            for (self.stake_accounts.values()) |*stake_delegations| {
                 const delegation = stake_delegations.getDelegation();
                 if (!delegation.voter_pubkey.equals(&pubkey)) continue;
                 stake += delegation.getEffectiveStake(
@@ -272,7 +273,7 @@ pub fn Stakes(comptime stakes_type: StakesType) type {
                 .account => account,
             };
 
-            if (try self.stake_delegations.fetchPut(
+            if (try self.stake_accounts.fetchPut(
                 allocator,
                 pubkey,
                 entry,
@@ -303,7 +304,7 @@ pub fn Stakes(comptime stakes_type: StakesType) type {
             pubkey: Pubkey,
             new_rate_activation_epoch: ?Epoch,
         ) !void {
-            var account: T = (self.stake_delegations.fetchSwapRemove(pubkey) orelse return).value;
+            var account: T = (self.stake_accounts.fetchSwapRemove(pubkey) orelse return).value;
             defer if (stakes_type == .account) account.deinit(allocator);
 
             const removed_delegation = account.getDelegation();
@@ -348,7 +349,7 @@ pub fn Stakes(comptime stakes_type: StakesType) type {
 
             return .{
                 .vote_accounts = vote_accounts,
-                .stake_delegations = stake_delegations,
+                .stake_accounts = stake_delegations,
                 .unused = random.int(u64),
                 .epoch = random.int(Epoch),
                 .stake_history = stake_history,

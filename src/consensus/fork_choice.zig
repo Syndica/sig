@@ -5145,7 +5145,7 @@ pub fn testEpochStakes(
     const stakes = sig.core.epoch_stakes.EpochStakesGeneric(.delegation){
         .stakes = sig.core.Stakes(.delegation){
             .vote_accounts = vote_accounts,
-            .stake_delegations = .empty,
+            .stake_accounts = .empty,
             .unused = 0,
             .epoch = 0,
             .stake_history = .DEFAULT,

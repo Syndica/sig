@@ -253,8 +253,8 @@ pub const SlotState = struct {
         var stake_accounts = std.AutoArrayHashMapUnmanaged(Pubkey, sig.core.stake.Stake){};
         errdefer stake_accounts.deinit(allocator);
 
-        const keys = bank_fields.stakes.stake_delegations.keys();
-        const values = bank_fields.stakes.stake_delegations.values();
+        const keys = bank_fields.stakes.stake_accounts.keys();
+        const values = bank_fields.stakes.stake_accounts.values();
         for (keys, values) |key, value| {
             const account = try account_reader.get(allocator, key) orelse
                 return error.StakeAccountNotFound;
@@ -286,7 +286,7 @@ pub const SlotState = struct {
 
         const stakes = Stakes(.stake){
             .vote_accounts = vote_accounts,
-            .stake_delegations = stake_accounts,
+            .stake_accounts = stake_accounts,
             .epoch = bank_fields.stakes.epoch,
             .stake_history = bank_fields.stakes.stake_history,
             .unused = bank_fields.stakes.unused,

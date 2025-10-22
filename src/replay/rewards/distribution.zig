@@ -211,7 +211,7 @@ fn storeStakeAccountsInPartition(
 
             const stake_reward = buildUpdatedStakeReward(
                 allocator,
-                stakes.stake_delegations,
+                stakes.stake_accounts,
                 partitioned_reward,
                 slot_store,
             ) catch |err| switch (err) {

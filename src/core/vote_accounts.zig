@@ -627,7 +627,7 @@ test "staked nodes" {
         const stake = item[1].stake;
         const account = item[1].account;
 
-        try stakes.stake_delegations.put(allocator, Pubkey.initRandom(random), .{
+        try stakes.stake_accounts.put(allocator, Pubkey.initRandom(random), .{
             .voter_pubkey = pubkey,
             .stake = stake,
             .activation_epoch = std.math.maxInt(u64),
@@ -736,7 +736,7 @@ test "staked nodes update" {
     );
 
     {
-        try stakes.stake_delegations.put(allocator, Pubkey.initRandom(random), .{
+        try stakes.stake_accounts.put(allocator, Pubkey.initRandom(random), .{
             .voter_pubkey = pubkey,
             .stake = 42,
             .activation_epoch = std.math.maxInt(u64),
@@ -758,7 +758,7 @@ test "staked nodes update" {
     }
 
     {
-        try stakes.stake_delegations.put(allocator, Pubkey.initRandom(random), .{
+        try stakes.stake_accounts.put(allocator, Pubkey.initRandom(random), .{
             .voter_pubkey = pubkey,
             .stake = 0,
             .activation_epoch = std.math.maxInt(u64),
@@ -784,7 +784,7 @@ test "staked nodes update" {
     const account_1 = try createRandomVoteAccount(allocator, random, node_pubkey);
 
     {
-        try stakes.stake_delegations.put(allocator, Pubkey.initRandom(random), .{
+        try stakes.stake_accounts.put(allocator, Pubkey.initRandom(random), .{
             .voter_pubkey = pubkey,
             .stake = 0,
             .activation_epoch = std.math.maxInt(u64),
@@ -811,7 +811,7 @@ test "staked nodes update" {
     const account_2 = try createRandomVoteAccount(allocator, random, new_node_pubkey);
 
     {
-        try stakes.stake_delegations.put(allocator, Pubkey.initRandom(random), .{
+        try stakes.stake_accounts.put(allocator, Pubkey.initRandom(random), .{
             .voter_pubkey = pubkey,
             .stake = 0,
             .activation_epoch = std.math.maxInt(u64),
@@ -854,7 +854,7 @@ test "staked nodes zero stake" {
     const account_0 = try createRandomVoteAccount(allocator, random, node_pubkey);
 
     {
-        try stakes.stake_delegations.put(allocator, Pubkey.initRandom(random), .{
+        try stakes.stake_accounts.put(allocator, Pubkey.initRandom(random), .{
             .voter_pubkey = pubkey,
             .stake = 0,
             .activation_epoch = std.math.maxInt(u64),
@@ -879,7 +879,7 @@ test "staked nodes zero stake" {
     const account_1 = try createRandomVoteAccount(allocator, random, new_node_pubkey);
 
     {
-        try stakes.stake_delegations.put(allocator, Pubkey.initRandom(random), .{
+        try stakes.stake_accounts.put(allocator, Pubkey.initRandom(random), .{
             .voter_pubkey = pubkey,
             .stake = 0,
             .activation_epoch = std.math.maxInt(u64),

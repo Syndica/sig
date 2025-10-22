@@ -1255,8 +1255,8 @@ test "ForkProgress.init" {
     const account_reader = sig.accounts_db.account_store.SlotAccountReader{
         .thread_safe_map = .{ &account_map, &bank_data.ancestors },
     };
-    const keys = bank_data.stakes.stake_delegations.keys();
-    const values = bank_data.stakes.stake_delegations.values();
+    const keys = bank_data.stakes.stake_accounts.keys();
+    const values = bank_data.stakes.stake_accounts.values();
     for (keys, values) |key, value| {
         const stake = sig.core.stake.StakeStateV2{ .stake = .{
             .meta = .{ .rent_exempt_reserve = 0, .authorized = .{

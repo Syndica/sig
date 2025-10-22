@@ -173,7 +173,7 @@ pub fn activateEpoch(
     const stakes, var stakes_lg = stakes_cache.stakes.writeWithLock();
     defer stakes_lg.unlock();
 
-    const stake_delegations = stakes.stake_delegations.values();
+    const stake_delegations = stakes.stake_accounts.values();
     var stake_history_entry = StakeHistory.StakeState.DEFAULT;
     for (stake_delegations) |stake_delegation| {
         const delegation = stake_delegation.getDelegation();
@@ -190,7 +190,7 @@ pub fn activateEpoch(
         allocator,
         epoch,
         stakes.vote_accounts.vote_accounts,
-        stakes.stake_delegations.values(),
+        stakes.stake_accounts.values(),
         stakes.stake_history,
         new_rate_activation_epoch,
     );

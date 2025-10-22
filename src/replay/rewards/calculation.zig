@@ -363,13 +363,13 @@ fn filterStakesDelegations(
             feature_set,
         ), 1_000_000_000); // LAMPORTS_PER_SOL
 
-        for (stakes.stake_delegations.keys(), stakes.stake_delegations.values()) |key, value| {
+        for (stakes.stake_accounts.keys(), stakes.stake_accounts.values()) |key, value| {
             if (value.delegation.stake >= min_delegation) {
                 try result.append(allocator, .{ .pubkey = key, .stake = value });
             }
         }
     } else {
-        for (stakes.stake_delegations.keys(), stakes.stake_delegations.values()) |key, value| {
+        for (stakes.stake_accounts.keys(), stakes.stake_accounts.values()) |key, value| {
             try result.append(allocator, .{ .pubkey = key, .stake = value });
         }
     }
@@ -607,7 +607,7 @@ test filterStakesDelegations {
     {
         var result = try filterStakesDelegations(allocator, slot, &feature_set, &stakes);
         defer result.deinit(allocator);
-        try std.testing.expectEqual(stakes.stake_delegations.count(), result.items(.stake).len);
+        try std.testing.expectEqual(stakes.stake_accounts.count(), result.items(.stake).len);
     }
 
     feature_set.setSlot(.stake_minimum_delegation_for_rewards, slot);

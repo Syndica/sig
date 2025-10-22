@@ -106,7 +106,7 @@ pub fn EpochStakesGeneric(comptime stakes_type: StakesType) type {
             .total_stake = 0,
             .stakes = .{
                 .vote_accounts = .{},
-                .stake_delegations = .empty,
+                .stake_accounts = .empty,
                 .unused = 0,
                 .epoch = 0,
                 .stake_history = StakeHistory.initWithEntries(&.{.{
