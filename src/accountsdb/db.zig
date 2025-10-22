@@ -3637,7 +3637,7 @@ test "load and validate from test snapshot - single threaded" {
     const snapshot_dir = tmp_dir_root.dir;
 
     var accounts_db, const full_inc_manifest =
-        try loadTestAccountsDBFromSnapshot(allocator, false, 1, .FOR_TESTS, snapshot_dir, 500);
+        try loadTestAccountsDBFromSnapshot(allocator, false, 1, .noop, snapshot_dir, 500);
     defer {
         accounts_db.deinit();
         full_inc_manifest.deinit(allocator);
