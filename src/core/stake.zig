@@ -30,7 +30,7 @@ pub const Meta = StakeStateV2.Meta;
 
 const RwMux = sig.sync.RwMux;
 
-const createVoteAccount = sig.core.vote_accounts.createVoteAccount;
+const createTestVoteAccount = sig.runtime.program.vote.state.createTestVoteAccount;
 
 const failing_allocator = sig.utils.allocators.failing.allocator(.{});
 
@@ -523,14 +523,13 @@ const TestStakedNodeAccounts = struct {
         const vote_pubkey, const vote_account = blk: {
             const vote_pubkey = Pubkey.initRandom(random);
             const vote_authority = Pubkey.initRandom(random);
-            const vote_account = try createVoteAccount(
+            const vote_account = try createTestVoteAccount(
                 allocator,
                 vote_pubkey,
                 vote_authority,
-                vote_authority,
                 0,
                 1,
-                null,
+                0,
             );
             break :blk .{ vote_pubkey, vote_account };
         };
@@ -538,14 +537,13 @@ const TestStakedNodeAccounts = struct {
 
         const stake_pubkey, const stake_account = blk: {
             const staked_vote_authority = Pubkey.initRandom(random);
-            const staked_vote_account = try createVoteAccount(
+            const staked_vote_account = try createTestVoteAccount(
                 allocator,
                 vote_pubkey,
                 staked_vote_authority,
-                staked_vote_authority,
                 0,
                 1,
-                null,
+                0,
             );
             defer allocator.free(staked_vote_account.data);
 
@@ -627,14 +625,13 @@ test "stakes basic" {
                 );
             }
 
-            const vote_account = try createVoteAccount(
+            const vote_account = try createTestVoteAccount(
                 allocator,
                 Pubkey.initRandom(prng.random()),
                 accs.vote_pubkey,
-                accs.vote_pubkey,
                 0,
                 1,
-                null,
+                0,
             );
             defer allocator.free(vote_account.data);
 

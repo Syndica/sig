@@ -17,12 +17,14 @@ const AccountSharedData = sig.runtime.AccountSharedData;
 const VoteState = sig.runtime.program.vote.state.VoteState;
 const VoteStateVersions = sig.runtime.program.vote.state.VoteStateVersions;
 
-const failing_allocator = sig.utils.allocators.failing.allocator(.{});
-
-const deinitMapAndValues = sig.utils.collections.deinitMapAndValues;
-
 pub const StakeAndVoteAccountsMap = std.AutoArrayHashMapUnmanaged(Pubkey, StakeAndVoteAccount);
 pub const StakedNodesMap = std.AutoArrayHashMapUnmanaged(Pubkey, u64);
+
+const deinitMapAndValues = sig.utils.collections.deinitMapAndValues;
+const createTestVoteAccountWithAuthorized =
+    sig.runtime.program.vote.state.createTestVoteAccountWithAuthorized;
+
+const failing_allocator = sig.utils.allocators.failing.allocator(.{});
 
 pub const StakeAndVoteAccount = struct {
     stake: u64,
@@ -266,7 +268,7 @@ pub const VoteAccounts = struct {
                 Pubkey.initRandom(random),
                 .{
                     .stake = random.int(u64),
-                    .account = try createRandomVoteAccount(
+                    .account = try .initRandom(
                         allocator,
                         random,
                         Pubkey.initRandom(random),
@@ -400,10 +402,9 @@ pub const VoteAccount = struct {
         random: std.Random,
         node_pubkey: ?Pubkey,
     ) Allocator.Error!VoteAccount {
-        // TODO: Uncomment once not required by bank init random
-        // if (!builtin.is_test) @compileError("only for testing");
+        if (!builtin.is_test) @compileError("only for tests");
 
-        const account = try createVoteAccount(
+        const account = try createTestVoteAccountWithAuthorized(
             allocator,
             node_pubkey orelse .initRandom(random),
             .initRandom(random),
@@ -425,77 +426,6 @@ pub const VoteAccount = struct {
     }
 };
 
-pub fn createVoteAccount(
-    allocator: Allocator,
-    node_pubkey: Pubkey,
-    authorized_voter: Pubkey,
-    authorized_withdrawer: Pubkey,
-    commission: u8,
-    lamports: u64,
-    voter_epoch: ?Epoch,
-) Allocator.Error!AccountSharedData {
-    // TODO: Uncomment once not required by bank init random
-    // if (!builtin.is_test) @compileError("only for testing");
-
-    const vote_account = AccountSharedData{
-        .lamports = lamports,
-        .owner = vote_program.ID,
-        .data = try allocator.alloc(u8, VoteState.MAX_VOTE_STATE_SIZE),
-        .executable = false,
-        .rent_epoch = 0,
-    };
-    errdefer allocator.free(vote_account.data);
-
-    var vote_state = try VoteState.init(
-        allocator,
-        node_pubkey,
-        authorized_voter,
-        authorized_withdrawer,
-        commission,
-        voter_epoch orelse 0,
-    );
-    defer vote_state.deinit(allocator);
-
-    _ = bincode.writeToSlice(
-        vote_account.data,
-        VoteStateVersions{ .current = vote_state },
-        .{},
-    ) catch unreachable;
-    // unreachable: We just created a 'valid' vote state and allocated
-    // MAX_VOTE_STATE_SIZE bytes
-
-    return vote_account;
-}
-
-pub fn createRandomVoteAccount(
-    allocator: Allocator,
-    random: std.Random,
-    node_pubkey: Pubkey,
-) Allocator.Error!VoteAccount {
-    // TODO: Uncomment once not required by bank init random
-    // if (!builtin.is_test) @compileError("only for testing");
-
-    const account = try createVoteAccount(
-        allocator,
-        node_pubkey,
-        Pubkey.initRandom(random),
-        Pubkey.initRandom(random),
-        random.int(u8),
-        random.intRangeAtMost(u64, 1, 1_000_000),
-        random.int(Epoch),
-    );
-    defer account.deinit(allocator);
-
-    return VoteAccount.fromAccountSharedData(allocator, account) catch |err| {
-        switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            // We just created a 'valid' vote account, so the only possible
-            // error is `OutOfMemory`.
-            else => unreachable,
-        }
-    };
-}
-
 const VoteAccountsArray = std.ArrayListUnmanaged(struct { Pubkey, StakeAndVoteAccount });
 
 pub fn createRandomVoteAccounts(
@@ -515,7 +445,7 @@ pub fn createRandomVoteAccounts(
 
     for (0..num_entries) |_| {
         const node_pubkey = node_pukeys[random.intRangeLessThan(u64, 0, num_nodes)];
-        const account = try createRandomVoteAccount(allocator, random, node_pubkey);
+        const account = try VoteAccount.initRandom(allocator, random, node_pubkey);
         const stake = random.intRangeAtMost(u64, 0, 1_000_000);
         vote_accounts.appendAssumeCapacity(.{ Pubkey.initRandom(random), .{
             .stake = stake,
@@ -554,7 +484,7 @@ pub fn calculateStakedNodes(
 //     var prng = std.Random.DefaultPrng.init(0);
 //     const random = prng.random();
 
-//     var account = try createRandomVoteAccount(allocator, random, Pubkey.initRandom(random));
+//     var account = try VoteAccount.initRandom(allocator, random, Pubkey.initRandom(random));
 //     defer account.deinit(allocator);
 
 //     const expected_serialised = try bincode.writeAlloc(allocator, account.account, .{});
@@ -729,7 +659,7 @@ test "staked nodes update" {
 
     const pubkey = Pubkey.initRandom(random);
     const node_pubkey = Pubkey.initRandom(random);
-    const account_0 = try createRandomVoteAccount(
+    const account_0 = try VoteAccount.initRandom(
         allocator,
         random,
         node_pubkey,
@@ -781,7 +711,7 @@ test "staked nodes update" {
         try std.testing.expectEqual(42, vote_accounts.staked_nodes.get(node_pubkey).?);
     }
 
-    const account_1 = try createRandomVoteAccount(allocator, random, node_pubkey);
+    const account_1 = try VoteAccount.initRandom(allocator, random, node_pubkey);
 
     {
         try stakes.stake_accounts.put(allocator, Pubkey.initRandom(random), .{
@@ -808,7 +738,7 @@ test "staked nodes update" {
     }
 
     const new_node_pubkey = Pubkey.initRandom(random);
-    const account_2 = try createRandomVoteAccount(allocator, random, new_node_pubkey);
+    const account_2 = try VoteAccount.initRandom(allocator, random, new_node_pubkey);
 
     {
         try stakes.stake_accounts.put(allocator, Pubkey.initRandom(random), .{
@@ -851,7 +781,7 @@ test "staked nodes zero stake" {
 
     const pubkey = Pubkey.initRandom(random);
     const node_pubkey = Pubkey.initRandom(random);
-    const account_0 = try createRandomVoteAccount(allocator, random, node_pubkey);
+    const account_0 = try VoteAccount.initRandom(allocator, random, node_pubkey);
 
     {
         try stakes.stake_accounts.put(allocator, Pubkey.initRandom(random), .{
@@ -876,7 +806,7 @@ test "staked nodes zero stake" {
     }
 
     const new_node_pubkey = Pubkey.initRandom(random);
-    const account_1 = try createRandomVoteAccount(allocator, random, new_node_pubkey);
+    const account_1 = try VoteAccount.initRandom(allocator, random, new_node_pubkey);
 
     {
         try stakes.stake_accounts.put(allocator, Pubkey.initRandom(random), .{

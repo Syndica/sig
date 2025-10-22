@@ -3,6 +3,8 @@ const std = @import("std");
 const sig = @import("../../../sig.zig");
 const builtin = @import("builtin");
 
+const Allocator = std.mem.Allocator;
+
 const vote_program = sig.runtime.program.vote;
 const InstructionError = sig.core.instruction.InstructionError;
 const VoteError = vote_program.VoteError;
@@ -11,6 +13,7 @@ const Epoch = sig.core.Epoch;
 const Pubkey = sig.core.Pubkey;
 const Hash = sig.core.hash.Hash;
 const SortedMap = sig.utils.collections.SortedMapUnmanaged;
+const AccountSharedData = sig.runtime.AccountSharedData;
 
 const SlotHashes = sig.runtime.sysvar.SlotHashes;
 
@@ -119,11 +122,11 @@ pub const Vote = struct {
         .timestamp = null,
     };
 
-    pub fn deinit(vote: Vote, allocator: std.mem.Allocator) void {
+    pub fn deinit(vote: Vote, allocator: Allocator) void {
         allocator.free(vote.slots);
     }
 
-    pub fn clone(self: Vote, allocator: std.mem.Allocator) std.mem.Allocator.Error!Vote {
+    pub fn clone(self: Vote, allocator: Allocator) Allocator.Error!Vote {
         return .{
             .slots = try allocator.dupe(Slot, self.slots),
             .hash = self.hash,
@@ -150,7 +153,7 @@ pub const VoteStateUpdate = struct {
         .timestamp = null,
     };
 
-    pub fn deinit(self: VoteStateUpdate, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: VoteStateUpdate, allocator: Allocator) void {
         var lockouts = self.lockouts;
         lockouts.deinit(allocator);
     }
@@ -254,15 +257,15 @@ pub const TowerSync = struct {
         .block_id = Hash.ZEROES,
     };
 
-    pub fn deinit(self: TowerSync, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: TowerSync, allocator: Allocator) void {
         var lockouts = self.lockouts;
         lockouts.deinit(allocator);
     }
 
     pub fn fromLockouts(
-        allocator: std.mem.Allocator,
+        allocator: Allocator,
         lockouts: []const Lockout,
-    ) std.mem.Allocator.Error!TowerSync {
+    ) Allocator.Error!TowerSync {
         if (!@import("builtin").is_test) @compileError("Not allowed");
         var result: TowerSync = .ZEROES;
         errdefer result.deinit(allocator);
@@ -356,17 +359,17 @@ pub const AuthorizedVoters = struct {
         .serializer = serialize,
     };
 
-    pub fn init(allocator: std.mem.Allocator, epoch: Epoch, pubkey: Pubkey) !AuthorizedVoters {
+    pub fn init(allocator: Allocator, epoch: Epoch, pubkey: Pubkey) !AuthorizedVoters {
         var authorized_voters: SortedMap(Epoch, Pubkey) = .empty;
         try authorized_voters.put(allocator, epoch, pubkey);
         return .{ .voters = authorized_voters };
     }
 
-    pub fn deinit(self: AuthorizedVoters, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: AuthorizedVoters, allocator: Allocator) void {
         self.voters.deinit(allocator);
     }
 
-    pub fn clone(self: *const AuthorizedVoters, allocator: std.mem.Allocator) !AuthorizedVoters {
+    pub fn clone(self: *const AuthorizedVoters, allocator: Allocator) !AuthorizedVoters {
         return .{ .voters = try self.voters.clone(allocator) };
     }
 
@@ -386,7 +389,7 @@ pub const AuthorizedVoters = struct {
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/authorized_voters.rs#L27
     pub fn getAndCacheAuthorizedVoterForEpoch(
         self: *AuthorizedVoters,
-        allocator: std.mem.Allocator,
+        allocator: Allocator,
         epoch: Epoch,
     ) !?Pubkey {
         if (self.getOrCalculateAuthorizedVoterForEpoch(epoch)) |entry| {
@@ -400,7 +403,7 @@ pub const AuthorizedVoters = struct {
 
     pub fn insert(
         self: *AuthorizedVoters,
-        allocator: std.mem.Allocator,
+        allocator: Allocator,
         epoch: Epoch,
         authorized_voter: Pubkey,
     ) !void {
@@ -410,7 +413,7 @@ pub const AuthorizedVoters = struct {
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/authorized_voters.rs#L42
     pub fn purgeAuthorizedVoters(
         self: *AuthorizedVoters,
-        allocator: std.mem.Allocator,
+        allocator: Allocator,
         current_epoch: Epoch,
     ) (error{OutOfMemory} || InstructionError)!bool {
         var expired_keys = std.ArrayList(Epoch).init(allocator);
@@ -602,7 +605,7 @@ pub const VoteStateVersions = union(enum) {
 
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/vote_state_versions.rs#L80
     pub fn landedVotesFromLockouts(
-        allocator: std.mem.Allocator,
+        allocator: Allocator,
         lockouts: []const Lockout,
     ) ![]LandedVote {
         const landed_votes = try allocator.alloc(LandedVote, lockouts.len);
@@ -618,7 +621,7 @@ pub const VoteStateVersions = union(enum) {
         return landed_votes;
     }
 
-    pub fn deinit(self: *VoteStateVersions, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *VoteStateVersions, allocator: Allocator) void {
         switch (self.*) {
             .v0_23_5 => |*vote_state| vote_state.deinit(allocator),
             .v1_14_11 => |*vote_state| vote_state.deinit(allocator),
@@ -634,7 +637,7 @@ pub const VoteStateVersions = union(enum) {
     /// Clones the owned data within the vote state.
     ///
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/vote_state_versions.rs#L31
-    pub fn convertToCurrent(self: VoteStateVersions, allocator: std.mem.Allocator) !VoteState {
+    pub fn convertToCurrent(self: VoteStateVersions, allocator: Allocator) !VoteState {
         switch (self) {
             .v0_23_5 => |state| {
                 const authorized_voters = try AuthorizedVoters.init(
@@ -759,7 +762,7 @@ pub const VoteState0_23_5 = struct {
         };
     }
 
-    pub fn deinit(self: *VoteState0_23_5, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *VoteState0_23_5, allocator: Allocator) void {
         self.votes.deinit(allocator);
         self.epoch_credits.deinit(allocator);
     }
@@ -806,7 +809,7 @@ pub const VoteState1_14_11 = struct {
     const DEFAULT_PRIOR_VOTERS_OFFSET: usize = 82;
 
     pub fn init(
-        allocator: std.mem.Allocator,
+        allocator: Allocator,
         node_pubkey: Pubkey,
         authorized_voter: Pubkey,
         withdrawer: Pubkey,
@@ -833,7 +836,7 @@ pub const VoteState1_14_11 = struct {
         };
     }
 
-    pub fn deinit(self: *VoteState1_14_11, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *VoteState1_14_11, allocator: Allocator) void {
         self.votes.deinit(allocator);
         self.voters.deinit(allocator);
         self.epoch_credits.deinit(allocator);
@@ -897,13 +900,13 @@ pub const VoteState = struct {
     };
 
     pub fn init(
-        allocator: std.mem.Allocator,
+        allocator: Allocator,
         node_pubkey: Pubkey,
         authorized_voter: Pubkey,
         withdrawer: Pubkey,
         commission: u8,
         voter_epoch: Epoch,
-    ) std.mem.Allocator.Error!VoteState {
+    ) Allocator.Error!VoteState {
         const authorized_voters = try AuthorizedVoters.init(
             allocator,
             voter_epoch,
@@ -924,13 +927,13 @@ pub const VoteState = struct {
         };
     }
 
-    pub fn deinit(self: *VoteState, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *VoteState, allocator: Allocator) void {
         self.votes.deinit(allocator);
         self.voters.deinit(allocator);
         self.epoch_credits.deinit(allocator);
     }
 
-    pub fn clone(self: VoteState, allocator: std.mem.Allocator) std.mem.Allocator.Error!VoteState {
+    pub fn clone(self: VoteState, allocator: Allocator) Allocator.Error!VoteState {
         var votes = try self.votes.clone(allocator);
         errdefer votes.deinit(allocator);
 
@@ -990,7 +993,7 @@ pub const VoteState = struct {
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/mod.rs#L862
     pub fn setNewAuthorizedVoter(
         self: *VoteState,
-        allocator: std.mem.Allocator,
+        allocator: Allocator,
         new_authorized_voter: Pubkey,
         target_epoch: Epoch,
     ) (error{OutOfMemory} || InstructionError)!?VoteError {
@@ -1033,7 +1036,7 @@ pub const VoteState = struct {
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/mod.rs#L922
     pub fn getAndUpdateAuthorizedVoter(
         self: *VoteState,
-        allocator: std.mem.Allocator,
+        allocator: Allocator,
         current_epoch: Epoch,
     ) (error{OutOfMemory} || InstructionError)!Pubkey {
         const maybe_pubkey = self.voters.getAndCacheAuthorizedVoterForEpoch(
@@ -1109,7 +1112,7 @@ pub const VoteState = struct {
     /// increment credits, record credits for last epoch if new epoch
     pub fn incrementCredits(
         self: *VoteState,
-        allocator: std.mem.Allocator,
+        allocator: Allocator,
         epoch: Epoch,
         credits: u64,
     ) error{OutOfMemory}!void {
@@ -1247,7 +1250,7 @@ pub const VoteState = struct {
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/fb8a9a06eb7ed1db556d9ef018eefafa5f707467/vote-interface/src/state/mod.rs#L709
     pub fn processNextVoteSlot(
         self: *VoteState,
-        allocator: std.mem.Allocator,
+        allocator: Allocator,
         next_vote_slot: Slot,
         epoch: Epoch,
         current_slot: Slot,
@@ -1336,7 +1339,7 @@ pub const VoteState = struct {
     /// [agave] https://github.com/anza-xyz/agave/blob/a0717a15d349dc5e0c30384bee6d039377b92167/programs/vote/src/vote_state/mod.rs#L618
     pub fn processVote(
         self: *VoteState,
-        allocator: std.mem.Allocator,
+        allocator: Allocator,
         vote: *const Vote,
         slot_hashes: SlotHashes,
         epoch: Epoch,
@@ -1378,7 +1381,7 @@ pub const VoteState = struct {
     /// [agave] https://github.com/anza-xyz/agave/blob/a0717a15d349dc5e0c30384bee6d039377b92167/programs/vote/src/vote_state/mod.rs#L603
     pub fn processVoteUnfiltered(
         self: *VoteState,
-        allocator: std.mem.Allocator,
+        allocator: Allocator,
         recent_vote_slots: []const Slot,
         vote: *const Vote,
         slot_hashes: *const SlotHashes,
@@ -1431,7 +1434,7 @@ pub const VoteState = struct {
     /// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L1014
     pub fn processTowerSync(
         self: *VoteState,
-        allocator: std.mem.Allocator,
+        allocator: Allocator,
         slot_hashes: *const SlotHashes,
         epoch: Epoch,
         slot: Slot,
@@ -1465,7 +1468,7 @@ pub const VoteState = struct {
     /// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L964
     pub fn processVoteStateUpdate(
         self: *VoteState,
-        allocator: std.mem.Allocator,
+        allocator: Allocator,
         slot_hashes: *const SlotHashes,
         epoch: Epoch,
         slot: Slot,
@@ -1791,7 +1794,7 @@ pub const VoteState = struct {
     /// popped off.
     pub fn processNewVoteState(
         self: *VoteState,
-        allocator: std.mem.Allocator,
+        allocator: Allocator,
         new_state: []LandedVote,
         new_root: ?Slot,
         timestamp: ?i64,
@@ -1988,7 +1991,7 @@ pub const VoteState = struct {
 pub const VoteAuthorize = vote_program.vote_instruction.VoteAuthorize;
 
 pub fn createTestVoteState(
-    allocator: std.mem.Allocator,
+    allocator: Allocator,
     node_pubkey: Pubkey,
     maybe_authorized_voter: ?Pubkey,
     withdrawer: Pubkey,
@@ -2011,6 +2014,67 @@ pub fn createTestVoteState(
         .prior_voters = CircBufV1.init(),
         .epoch_credits = .empty,
         .last_timestamp = BlockTimestamp{ .slot = 0, .timestamp = 0 },
+    };
+}
+
+pub fn createTestVoteAccount(
+    allocator: Allocator,
+    node_pubkey: Pubkey,
+    vote_pubkey: Pubkey,
+    commission: u8,
+    lamports: u64,
+    voter_epoch: Epoch,
+) Allocator.Error!AccountSharedData {
+    if (!builtin.is_test) @compileError("only for test");
+
+    return createTestVoteAccountWithAuthorized(
+        allocator,
+        node_pubkey,
+        vote_pubkey,
+        vote_pubkey,
+        commission,
+        lamports,
+        voter_epoch,
+    );
+}
+
+pub fn createTestVoteAccountWithAuthorized(
+    allocator: Allocator,
+    node_pubkey: Pubkey,
+    authorized_voter: Pubkey,
+    authorized_withdrawer: Pubkey,
+    commission: u8,
+    lamports: u64,
+    voter_epoch: Epoch,
+) Allocator.Error!AccountSharedData {
+    if (!builtin.is_test) @compileError("only for test");
+
+    var vote_state = try VoteState.init(
+        allocator,
+        node_pubkey,
+        authorized_voter,
+        authorized_withdrawer,
+        commission,
+        voter_epoch,
+    );
+    defer vote_state.deinit(allocator);
+
+    const vote_state_data = try allocator.alloc(u8, VoteState.MAX_VOTE_STATE_SIZE);
+    errdefer allocator.free(vote_state_data);
+    @memset(vote_state_data, 0);
+
+    _ = sig.bincode.writeToSlice(
+        vote_state_data,
+        VoteStateVersions{ .current = vote_state },
+        .{},
+    ) catch unreachable;
+
+    return .{
+        .lamports = lamports,
+        .owner = vote_program.ID,
+        .data = vote_state_data,
+        .executable = false,
+        .rent_epoch = 0,
     };
 }
 
@@ -4958,7 +5022,7 @@ test "state.VoteState.checkAndFilterProposedVoteState slot hashes mismatch" {
 }
 
 pub fn processSlotVoteUnchecked(
-    allocator: std.mem.Allocator,
+    allocator: Allocator,
     vote_state: *VoteState,
     slot: Slot,
 ) !void {
@@ -4993,7 +5057,7 @@ pub fn processSlotVoteUnchecked(
 }
 
 fn processSlotVotesUnchecked(
-    allocator: std.mem.Allocator,
+    allocator: Allocator,
     vote_state: *VoteState,
     slots: []Slot,
 ) !void {
@@ -5009,7 +5073,7 @@ fn processSlotVotesUnchecked(
 }
 
 fn processNewVoteStateFromLockouts(
-    allocator: std.mem.Allocator,
+    allocator: Allocator,
     vote_state: *VoteState,
     new_state: []const Lockout,
     new_root: ?Slot,
@@ -5079,7 +5143,7 @@ fn buildSlotHashes(random: std.Random, slots: []const Slot) !SlotHashes {
 }
 
 fn buildVoteState(
-    allocator: std.mem.Allocator,
+    allocator: Allocator,
     vote_slots: []const Slot,
     slot_hashes: SlotHashes,
 ) !VoteState {
@@ -5117,7 +5181,7 @@ fn buildVoteState(
     return vote_state;
 }
 
-fn testTowerSync(allocator: std.mem.Allocator, lockouts_slice: []const Lockout) !TowerSync {
+fn testTowerSync(allocator: Allocator, lockouts_slice: []const Lockout) !TowerSync {
     if (!builtin.is_test) {
         @panic("testTowerSync should only be called in test mode");
     }
@@ -5148,7 +5212,7 @@ fn testTowerSync(allocator: std.mem.Allocator, lockouts_slice: []const Lockout) 
 }
 
 fn runTestCheckAndFilterProposedVoteStateOlderThanHistoryRoot(
-    allocator: std.mem.Allocator,
+    allocator: Allocator,
     random: std.Random,
     earliest_slot_in_history: Slot,
     current_vote_state_slots: []const Slot,
@@ -5264,7 +5328,7 @@ fn runTestCheckAndFilterProposedVoteStateOlderThanHistoryRoot(
 
 const MAX_RECENT_VOTES: usize = 16;
 fn recentVotes(
-    allocator: std.mem.Allocator,
+    allocator: Allocator,
     vote_state: *const VoteState,
 ) ![]const Vote {
     if (!builtin.is_test) {

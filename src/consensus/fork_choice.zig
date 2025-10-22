@@ -5133,7 +5133,7 @@ pub fn testEpochStakes(
             pubkey,
             .{
                 .stake = stake,
-                .account = try sig.core.vote_accounts.createRandomVoteAccount(
+                .account = try sig.core.vote_accounts.VoteAccount.initRandom(
                     allocator,
                     random,
                     Pubkey.initRandom(random),
