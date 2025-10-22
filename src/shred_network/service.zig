@@ -56,6 +56,8 @@ pub const ShredNetworkDependencies = struct {
     overwrite_turbine_stake_for_testing: bool,
     /// RPC Observability
     rpc_hooks: ?*sig.rpc.Hooks = null,
+    /// Optional channel to send duplicate slot notifications to consensus
+    duplicate_slots_sender: ?*Channel(Slot),
 };
 
 /// Start the Shred Network.
@@ -113,6 +115,7 @@ pub fn start(
         .epoch_tracker = deps.epoch_tracker,
         .tracker = shred_tracker,
         .inserter = deps.ledger.shredInserter(),
+        .duplicate_slots_sender = deps.duplicate_slots_sender,
     });
     try defers.deferCall(ShredReceiver.deinit, .{ shred_receiver, deps.allocator });
     try service_manager.spawn(
@@ -248,6 +251,7 @@ test "start and stop gracefully" {
         .n_retransmit_threads = 1,
         .overwrite_turbine_stake_for_testing = true,
         .epoch_tracker = &epoch_tracker,
+        .duplicate_slots_sender = null,
     };
 
     var timer = sig.time.Timer.start();

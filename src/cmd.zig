@@ -1610,27 +1610,6 @@ fn validator(
 
     const turbine_config = cfg.turbine;
 
-    // shred network
-    var shred_network_manager = try sig.shred_network.start(
-        cfg.shred_network.toConfig(loaded_snapshot.collapsed_manifest.bank_fields.slot),
-        .{
-            .allocator = allocator,
-            .logger = .from(app_base.logger),
-            .registry = app_base.metrics_registry,
-            .random = prng.random(),
-            .ledger = &ledger,
-            .my_keypair = &app_base.my_keypair,
-            .exit = app_base.exit,
-            .gossip_table_rw = &gossip_service.gossip_table_rw,
-            .my_shred_version = &gossip_service.my_shred_version,
-            .epoch_tracker = &epoch_tracker,
-            .my_contact_info = my_contact_info,
-            .n_retransmit_threads = turbine_config.num_retransmit_threads,
-            .overwrite_turbine_stake_for_testing = turbine_config.overwrite_stake_for_testing,
-        },
-    );
-    defer shred_network_manager.deinit();
-
     // Vote account. if not provided, disable voting
     const maybe_vote_pubkey: ?Pubkey = if (cfg.voting_enabled) blk: {
         const vote_keypair_path = cfg.vote_account orelse default_path: {
@@ -1686,6 +1665,32 @@ fn validator(
         if (maybe_vote_sockets) |*vs| vs else null,
         &gossip_votes,
     );
+
+    // shred network
+    var shred_network_manager = try sig.shred_network.start(
+        cfg.shred_network.toConfig(loaded_snapshot.collapsed_manifest.bank_fields.slot),
+        .{
+            .allocator = allocator,
+            .logger = .from(app_base.logger),
+            .registry = app_base.metrics_registry,
+            .random = prng.random(),
+            .ledger = &ledger,
+            .my_keypair = &app_base.my_keypair,
+            .exit = app_base.exit,
+            .gossip_table_rw = &gossip_service.gossip_table_rw,
+            .my_shred_version = &gossip_service.my_shred_version,
+            .epoch_tracker = &epoch_tracker,
+            .my_contact_info = my_contact_info,
+            .n_retransmit_threads = turbine_config.num_retransmit_threads,
+            .overwrite_turbine_stake_for_testing = turbine_config.overwrite_stake_for_testing,
+            .duplicate_slots_sender = if (replay_service_state.consensus) |consensus|
+                consensus.receivers.duplicate_slots
+            else
+                null,
+            .rpc_hooks = null,
+        },
+    );
+    defer shred_network_manager.deinit();
 
     const rpc_server_thread = if (cfg.rpc_port) |rpc_port|
         try std.Thread.spawn(.{}, runRPCServer, .{
@@ -1979,6 +1984,9 @@ fn shredNetwork(
         .my_contact_info = my_contact_info,
         .n_retransmit_threads = cfg.turbine.num_retransmit_threads,
         .overwrite_turbine_stake_for_testing = cfg.turbine.overwrite_stake_for_testing,
+        // No consensus in the standalone mode, so duplicate slots are not reported
+        .duplicate_slots_sender = null,
+        .rpc_hooks = null,
     });
     defer shred_network_manager.deinit();
 
