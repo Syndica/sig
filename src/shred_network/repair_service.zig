@@ -274,7 +274,9 @@ pub const RepairService = struct {
 /// Allows the number of repair requester threads to scale up when a lot of
 /// repairs are necessary, and scale down during normal operation.
 fn numRequesterThreads(num_requests: usize) usize {
-    const target_requests_per_thread = 100;
+    // serialising a repair request takes approx 50us
+    const target_requests_per_thread = 20000;
+
     const target_threads = num_requests / target_requests_per_thread;
     return @max(1, @min(target_threads, maxRequesterThreads()));
 }
@@ -282,8 +284,12 @@ fn numRequesterThreads(num_requests: usize) usize {
 /// Sets the maximum number of repair threads to either 16 or half the cpu
 /// count, whatever is less.
 fn maxRequesterThreads() u32 {
-    const cpu_count = std.Thread.getCpuCount() catch 1;
-    return @min(16, cpu_count / 2);
+    // Fast enough for sending ~60K requests/second in testing. We can tweak this later, but this
+    // will likely require either a) making our packet sender faster, or b) adding backpressure to
+    // our channels. Currently too many threads will overwhelm our request sender thread, and cause
+    // its channel to grow indefinitely.
+
+    return 4;
 }
 
 /// Sleeps an appropriate duration after sending some repair requests.
@@ -361,6 +367,7 @@ pub const RepairRequester = struct {
         exit: *Atomic(bool),
     ) !Self {
         const channel = try Channel(Packet).create(allocator);
+        channel.name = "repair requester channel(Packet)";
         errdefer channel.destroy();
 
         const thread = try SocketThread.spawnSender(
@@ -371,6 +378,8 @@ pub const RepairRequester = struct {
             .{ .unordered = exit },
             .empty,
         );
+
+        thread.handle.setName("repreq spwnSndr") catch {};
 
         return .{
             .allocator = allocator,
