@@ -372,7 +372,8 @@ pub const TowerConsensus = struct {
             const slot_tracker, var slot_tracker_lg = slot_tracker_rw.readWithLock();
             defer slot_tracker_lg.unlock();
 
-            _ = try replay.consensus.cluster_sync.processClusterSync(allocator, .from(self.logger), .{
+            _ = try replay.consensus.cluster_sync
+                .processClusterSync(allocator, .from(self.logger), .{
                 .my_pubkey = self.my_identity,
                 .tpu_has_bank = false,
                 .fork_choice = &self.fork_choice,
