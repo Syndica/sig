@@ -50,7 +50,7 @@ const SlotStatus = sig.replay.consensus.cluster_sync.SlotStatus;
 const ReplayResult = replay.execution.ReplayResult;
 const ProcessResultParams = replay.consensus.process_result.ProcessResultParams;
 
-const collectStakeDistribution = sig.consensus.replay_tower.collectStakeDistribution;
+const collectClusterVoteState = sig.consensus.replay_tower.collectClusterVoteState;
 const isDuplicateSlotConfirmed = sig.consensus.replay_tower.isDuplicateSlotConfirmed;
 const check_slot_agrees_with_cluster =
     sig.replay.consensus.cluster_sync.check_slot_agrees_with_cluster;
@@ -1011,7 +1011,7 @@ fn computeSlotVotingStats(
                     slot_info_for_stakes.state.stakes_cache.stakes.readWithLock();
                 defer stakes_lg.unlock();
 
-                break :blk try collectStakeDistribution(
+                break :blk try collectClusterVoteState(
                     allocator,
                     .from(logger),
                     &my_vote_pubkey,
