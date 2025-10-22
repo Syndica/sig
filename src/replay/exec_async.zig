@@ -25,7 +25,7 @@ const TransactionError = sig.ledger.transaction_status.TransactionError;
 
 const AccountLocks = replay.account_locks.AccountLocks;
 const BatchResult = replay.execution.BatchResult;
-const Committer = replay.commit.Committer;
+const Committer = replay.Committer;
 const ReplaySlotError = replay.execution.ReplaySlotError;
 const ResolvedBatch = replay.resolve_lookup.ResolvedBatch;
 const ResolvedTransaction = replay.resolve_lookup.ResolvedTransaction;
