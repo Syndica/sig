@@ -405,11 +405,9 @@ pub const AccountsDB = struct {
                 .full_slot = full_man.bank_fields.slot,
                 .expected_full = .{
                     .accounts_hash = full_man.bank_extra.accounts_lt_hash,
-                    // .capitalization = full_man.bank_fields.capitalization,
                 },
                 .expected_incremental = if (maybe_inc_persistence) |_| .{
                     .accounts_hash = full_inc_manifest.incremental.?.bank_extra.accounts_lt_hash,
-                    // .capitalization = persistence.incremental_capitalization,
                 } else null,
             });
             self.logger.info().logf(
@@ -1287,7 +1285,6 @@ pub const AccountsDB = struct {
             // have occurred since the first call to this function.
             std.debug.assert(latest_snapshot_info.full.slot == params.full_slot);
             std.debug.assert(latest_snapshot_info.full.hash.eql(accounts_hash));
-            // std.debug.assert(latest_snapshot_info.full.capitalization == total_lamports);
         }
 
         maybe_first_snapshot_info.* = .{
@@ -1337,7 +1334,6 @@ pub const AccountsDB = struct {
             p_maybe_first_inc.* = .{
                 .slot = inc_slot,
                 .hash = accounts_delta_hash,
-                // .capitalization = incremental_lamports,
             };
         }
 
@@ -1431,16 +1427,14 @@ pub const AccountsDB = struct {
                     break :slot max_slot_ref.slot;
                 };
 
-                // There should only be duplicate account state in incremental snapshots
-                // (i.e. accounts modified in the incremental snapshot).
-                // This error is not necessary (the snapshot is still valid), but it's a good sanity
-                // check.
-                // if (maybe_min_slot != null) return error.FullSnapshotContainsDuplicateAccount;
-
                 // "mix out" old version of account from hash
                 {
-                    const min_slot = maybe_min_slot orelse continue;
-                    std.debug.assert(min_slot > 0); // Pass this as a null! TODO: why is this a null anyway?
+                    // I expect this branch to not be taken for full snapshots, however it would
+                    // still be entirely legal.
+                    // The expected case is that we are validating an incremental snapshot, whose
+                    // lt_hash is initialised by the full snapshot's lt_hash. Accounts modified
+                    // in the incremental snapshot may also exist in the full snapshot, meaning we
+                    // are effectively removing the old entry.
 
                     // remove previous state
                     const previous_slot_ref = slotListMaxWithinBounds(ref_head.ref_ptr, null, latest_slot - 1) orelse
@@ -2838,7 +2832,6 @@ pub const AccountsDB = struct {
         latest_snapshot_info.inc = .{
             .slot = params.target_slot,
             .hash = incremental_hash,
-            // .capitalization = incremental_capitalization,
         };
 
         return snap_persistence;
@@ -3661,11 +3654,9 @@ test "load and validate from test snapshot - single threaded" {
         .full_slot = full_inc_manifest.full.bank_fields.slot,
         .expected_full = .{
             .accounts_hash = full_inc_manifest.full.bank_extra.accounts_lt_hash,
-            // .capitalization = full_inc_manifest.full.bank_fields.capitalization,
         },
         .expected_incremental = if (maybe_inc_persistence) |_| .{
             .accounts_hash = full_inc_manifest.incremental.?.bank_extra.accounts_lt_hash,
-            // .capitalization = inc_persistence.incremental_capitalization,
         } else null,
     });
 
@@ -4059,11 +4050,9 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
                 .full_slot = full_manifest.bank_fields.slot,
                 .expected_full = .{
                     .accounts_hash = full_manifest.bank_extra.accounts_lt_hash,
-                    // .capitalization = full_manifest.bank_fields.capitalization,
                 },
                 .expected_incremental = if (maybe_inc_persistence) |_| .{
                     .accounts_hash = full_inc_manifest.incremental.?.bank_extra.accounts_lt_hash,
-                    // .capitalization = inc_persistence.incremental_capitalization,
                 } else null,
             });
             const validate_duration = validate_timer.read();
