@@ -27,7 +27,6 @@ pub const Resolution = enum {
 };
 
 const Filter = enum {
-    none, // TODO: support no default value in cli.zig
     accounts_db,
     accounts_db_readwrite,
     accounts_db_snapshot, // expensive
@@ -49,8 +48,7 @@ const Benchmark = struct {
 
 fn usageText() []const u8 {
     var text: []const u8 = "Available Benchmarks:\n";
-    // TODO: don't skip the first entry for the none case, when cli.zig supports no default
-    const filters = @typeInfo(Filter).@"enum".fields[1..];
+    const filters = @typeInfo(Filter).@"enum".fields;
     inline for (filters, 0..) |field, i| {
         text = text ++ " " ++ field.name;
         if (i != filters.len - 1) text = text ++ "\n";
@@ -100,7 +98,7 @@ const benchmarks: std.EnumMap(Filter, []const Benchmark) = .init(.{
 });
 
 const Cmd = struct {
-    filter: Filter,
+    filter: ?Filter,
     debug: bool,
     collect_metrics: bool,
     run_expensive_benchmarks: bool,
@@ -117,7 +115,7 @@ const Cmd = struct {
                 .kind = .positional,
                 .name_override = "filter",
                 .alias = .none,
-                .default_value = .none,
+                .default_value = null,
                 .config = {},
                 .help = "chooses which benchmarks to run",
             },
@@ -190,7 +188,13 @@ pub fn main() !void {
     defer parser.free(gpa, cmd);
 
     if (cmd.collect_metrics) logger.info().log("collecting metrics");
-    logger.info().logf("running benchmark with filter: {s}", .{@tagName(cmd.filter)});
+
+    const filter = cmd.filter orelse {
+        logger.err().log("no filter chosen! please select one");
+        return;
+    };
+
+    logger.info().logf("running benchmark with filter: {s}", .{@tagName(filter)});
     if (cmd.force_fresh_state) {
         logger.info().log("forcing fresh state for expensive benchmarks");
     }
@@ -202,7 +206,7 @@ pub fn main() !void {
     var metrics: std.ArrayListUnmanaged(Metric) = .empty;
     defer metrics.deinit(gpa);
 
-    switch (cmd.filter) {
+    switch (filter) {
         inline else => |tag| {
             const benches = benchmarks.get(tag).?;
             inline for (benches) |bench| {
@@ -215,10 +219,6 @@ pub fn main() !void {
                     &metrics,
                 );
             }
-        },
-        .none => {
-            logger.err().log("no filter chosen! please select one");
-            return;
         },
         .geyser => {
             // NOTE: we dont support CSV output on this method so all results are printed as debug

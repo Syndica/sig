@@ -3987,7 +3987,7 @@ test "generate snapshot & update gossip snapshot hashes" {
 pub const BenchmarkAccountsDBSnapshotLoad = struct {
     pub const min_iterations = 1;
     pub const max_iterations = 1;
-    pub const name = "AccoutnsDBSnapshotLoad";
+    pub const name = "AccountsDBSnapshotLoad";
 
     pub const SNAPSHOT_DIR_PATH = sig.TEST_DATA_DIR ++ "bench_snapshot/";
 
