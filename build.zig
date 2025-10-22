@@ -3,6 +3,11 @@ const Build = std.Build;
 
 const sig_version: std.SemanticVersion = .{ .major = 0, .minor = 2, .patch = 0 };
 
+const LedgerDB = enum {
+    rocksdb,
+    hashmap,
+};
+
 pub const Config = struct {
     target: Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
@@ -270,9 +275,9 @@ pub fn build(b: *Build) !void {
     });
 
     // G/H table for Bulletproofs
-    const gh_table = b.createModule(.{
-        .root_source_file = generateTable(b),
-    });
+    const gh_table = b.createModule(.{ .root_source_file = generateTable(b) });
+
+    const sqlite_mod = genSqlite(b, config.target, config.optimize);
 
     // zig fmt: off
     const imports: []const Build.Module.Import = &.{
@@ -283,12 +288,13 @@ pub fn build(b: *Build) !void {
         .{ .name = "poseidon",      .module = poseidon_mod },
         .{ .name = "prettytable",   .module = pretty_table_mod },
         .{ .name = "secp256k1",     .module = secp256k1_mod },
+        .{ .name = "sqlite",        .module = sqlite_mod },
         .{ .name = "ssl",           .module = ssl_mod },
+        .{ .name = "table",         .module = gh_table },
         .{ .name = "tracy",         .module = tracy_mod },
         .{ .name = "xev",           .module = xev_mod },
         .{ .name = "zig-network",   .module = zig_network_mod },
         .{ .name = "zstd",          .module = zstd_mod },
-        .{ .name = "table",         .module = gh_table },
     };
     // zig fmt: on
 
@@ -425,6 +431,20 @@ pub fn build(b: *Build) !void {
         .install_subdir = "docs",
     });
     docs_step.dependOn(&install_sig_docs.step);
+
+    const testing_exe = b.addExecutable(.{
+        .name = "testing",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/accountsdb/2/Rooted.zig"),
+            .target = config.target,
+            .optimize = config.optimize,
+            .sanitize_thread = config.enable_tsan,
+            .error_tracing = config.error_tracing,
+            .imports = imports,
+        }),
+    });
+    testing_exe.root_module.addImport("sig", sig_mod);
+    addInstallAndRun(b, random_testing, testing_exe, config);
 }
 
 /// the standard approach for installing and running the executables produced in
@@ -486,10 +506,35 @@ fn generateTable(b: *Build) Build.LazyPath {
     return b.addRunArtifact(gen).captureStdOut();
 }
 
-const LedgerDB = enum {
-    rocksdb,
-    hashmap,
-};
+fn genSqlite(
+    b: *Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+) *Build.Module {
+    const dep = b.dependency("sqlite", .{});
+
+    const lib = b.addLibrary(.{
+        .name = "sqlite",
+        .linkage = .static,
+        .root_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    lib.addCSourceFile(.{ .file = dep.path("sqlite3.c") });
+    lib.linkLibC();
+
+    const translate_c = b.addTranslateC(.{
+        .root_source_file = dep.path("sqlite3.h"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    const mod = translate_c.createModule();
+    mod.linkLibrary(lib);
+
+    return mod;
+}
 
 /// Reference/inspiration: https://kristoff.it/blog/improving-your-zls-experience/
 fn disableEmitBin(b: *Build) void {
