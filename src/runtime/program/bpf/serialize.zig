@@ -774,7 +774,7 @@ test serializeParameters {
         }) |stricter_abi_and_runtime_constraints| {
             const program_id = Pubkey.initRandom(prng.random());
 
-            var cache, var tc = try createTransactionContext(
+            const cache, var tc = try createTransactionContext(
                 allocator,
                 prng.random(),
                 .{
@@ -847,7 +847,7 @@ test serializeParameters {
             );
             defer {
                 deinitTransactionContext(allocator, tc);
-                cache.deinit(allocator);
+                sig.runtime.account_preload.deinit(cache, allocator);
             }
 
             const instruction_info = try createInstructionInfo(

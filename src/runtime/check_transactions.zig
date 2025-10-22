@@ -13,7 +13,7 @@ const AccountMeta = sig.core.instruction.InstructionAccount;
 
 const account_loader = sig.runtime.account_loader;
 const AccountSharedData = sig.runtime.AccountSharedData;
-const BatchAccountCache = sig.runtime.account_loader.BatchAccountCache;
+const AccountMap = sig.runtime.account_preload.AccountMap;
 const CachedAccount = sig.runtime.account_loader.CachedAccount;
 const ComputeBudgetLimits = sig.runtime.program.compute_budget.ComputeBudgetLimits;
 const FeatureSet = sig.core.FeatureSet;
@@ -50,7 +50,7 @@ pub fn checkStatusCache(
 pub fn checkAge(
     allocator: Allocator,
     transaction: *const RuntimeTransaction,
-    batch_account_cache: *const BatchAccountCache,
+    account_map: *const AccountMap,
     blockhash_queue: *const BlockhashQueue,
     max_age: u64,
     next_durable_nonce: *const Hash,
@@ -65,7 +65,7 @@ pub fn checkAge(
         transaction,
         next_durable_nonce,
         next_lamports_per_signature,
-        batch_account_cache,
+        account_map,
     )) |nonce| {
         const nonce_account = nonce[0];
         return .{ .ok = nonce_account };
@@ -86,7 +86,7 @@ pub fn checkFeePayer(
     /// same allocator as batch account cache
     allocator: Allocator,
     transaction: *const RuntimeTransaction,
-    batch_account_cache: *BatchAccountCache,
+    account_map: *AccountMap,
     compute_budget_limits: *const ComputeBudgetLimits,
     /// Takes ownership of this
     maybe_nonce: ?CachedAccount,
@@ -106,7 +106,7 @@ pub fn checkFeePayer(
     const enable_secp256r1 = feature_set.active(.enable_secp256r1_precompile, slot);
     const fee_payer_key = transaction.accounts.items(.pubkey)[0];
 
-    const cached_payer = batch_account_cache.mutateInPlace(&fee_payer_key) orelse
+    const cached_payer = account_loader.mutateInPlace(account_map, &fee_payer_key) orelse
         return .{ .err = .AccountNotFound };
 
     const fee_payer_loaded_rent_epoch = cached_payer.rent_epoch;
@@ -358,13 +358,13 @@ fn checkLoadAndAdvanceMessageNonceAccount(
     transaction: *const RuntimeTransaction,
     next_durable_nonce: *const Hash,
     next_lamports_per_signature: u64,
-    batch_account_cache: *const BatchAccountCache,
+    account_map: *const AccountMap,
 ) error{OutOfMemory}!?struct { CachedAccount, u64 } {
     if (transaction.recent_blockhash.eql(next_durable_nonce.*)) return null;
 
     const address, const cached_account, const nonce_data = loadMessageNonceAccount(
         transaction,
-        batch_account_cache,
+        account_map,
     ) orelse return null;
 
     const previous_lamports_per_signature = nonce_data.lamports_per_signature;
@@ -398,7 +398,7 @@ fn checkLoadAndAdvanceMessageNonceAccount(
 
 fn loadMessageNonceAccount(
     transaction: *const RuntimeTransaction,
-    batch_account_cache: *const BatchAccountCache,
+    account_map: *const AccountMap,
 ) ?struct {
     Pubkey,
     /// pointer to the account cache
@@ -407,7 +407,7 @@ fn loadMessageNonceAccount(
 } {
     const nonce_address = getDurableNonce(transaction) orelse
         return null;
-    const nonce_account = batch_account_cache.account_cache.getPtr(nonce_address) orelse
+    const nonce_account = account_map.getPtr(nonce_address) orelse
         return null;
     const nonce_data = verifyNonceAccount(nonce_account.*, &transaction.recent_blockhash) orelse
         return null;
@@ -540,7 +540,7 @@ test "checkAge: recent blockhash" {
             const result = try checkAge(
                 allocator,
                 &transaction,
-                &BatchAccountCache{},
+                &.{},
                 &blockhash_queue,
                 max_age,
                 &Hash.ZEROES,
@@ -557,7 +557,7 @@ test "checkAge: recent blockhash" {
         const result = try checkAge(
             allocator,
             &transaction,
-            &BatchAccountCache{},
+            &.{},
             &blockhash_queue,
             max_age,
             &Hash.ZEROES,
@@ -596,9 +596,9 @@ test "checkAge: nonce account" {
         .rent_epoch = 0,
     };
 
-    var account_cache = BatchAccountCache{};
-    defer account_cache.deinit(allocator);
-    try account_cache.account_cache.put(allocator, nonce_key, nonce_account);
+    var account_map = AccountMap{};
+    defer sig.runtime.account_preload.deinit(account_map, allocator);
+    try account_map.put(allocator, nonce_key, nonce_account);
 
     const instruction_data = try sig.bincode.writeAlloc(
         allocator,
@@ -666,7 +666,7 @@ test "checkAge: nonce account" {
     const result = try checkAge(
         allocator,
         &transaction,
-        &account_cache,
+        &account_map,
         &blockhash_queue,
         0,
         &next_durable_nonce,
@@ -728,10 +728,10 @@ test "checkFeePayer: happy path fee payer only" {
         .{ .pubkey = transaction.fee_payer, .is_signer = true, .is_writable = true },
     );
 
-    var account_cache = BatchAccountCache{};
-    defer account_cache.deinit(allocator);
+    var account_map = AccountMap{};
+    defer sig.runtime.account_preload.deinit(account_map, allocator);
 
-    try account_cache.account_cache.put(allocator, transaction.fee_payer, .{
+    try account_map.put(allocator, transaction.fee_payer, .{
         .lamports = 1_000_000,
         .owner = sig.runtime.program.system.ID,
         .data = &.{},
@@ -742,7 +742,7 @@ test "checkFeePayer: happy path fee payer only" {
     const result = try checkFeePayer(
         allocator,
         &transaction,
-        &account_cache,
+        &account_map,
         &ComputeBudgetLimits.DEFAULT,
         null,
         &sig.core.rent_collector.defaultCollector(10),
@@ -784,10 +784,10 @@ test "checkFeePayer: happy path with same nonce and fee payer" {
         .{ .pubkey = transaction.fee_payer, .is_signer = true, .is_writable = true },
     );
 
-    var account_cache = BatchAccountCache{};
-    defer account_cache.deinit(allocator);
+    var account_map = AccountMap{};
+    defer sig.runtime.account_preload.deinit(account_map, allocator);
 
-    try account_cache.account_cache.put(allocator, transaction.fee_payer, .{
+    try account_map.put(allocator, transaction.fee_payer, .{
         .lamports = 1_000_000,
         .owner = sig.runtime.program.system.ID,
         .data = &.{},
@@ -806,7 +806,7 @@ test "checkFeePayer: happy path with same nonce and fee payer" {
     const result = try checkFeePayer(
         allocator,
         &transaction,
-        &account_cache,
+        &account_map,
         &ComputeBudgetLimits.DEFAULT,
         .{
             .pubkey = transaction.fee_payer,
@@ -853,10 +853,10 @@ test "checkFeePayer: happy path with separate nonce and fee payer" {
         .{ .pubkey = transaction.fee_payer, .is_signer = true, .is_writable = true },
     );
 
-    var account_cache = BatchAccountCache{};
-    defer account_cache.deinit(allocator);
+    var account_map = AccountMap{};
+    defer sig.runtime.account_preload.deinit(account_map, allocator);
 
-    try account_cache.account_cache.put(allocator, transaction.fee_payer, .{
+    try account_map.put(allocator, transaction.fee_payer, .{
         .lamports = 1_000_000,
         .owner = sig.runtime.program.system.ID,
         .data = &.{},
@@ -875,7 +875,7 @@ test "checkFeePayer: happy path with separate nonce and fee payer" {
     const result = try checkFeePayer(
         allocator,
         &transaction,
-        &account_cache,
+        &account_map,
         &ComputeBudgetLimits.DEFAULT,
         .{
             .pubkey = Pubkey.initRandom(prng.random()),

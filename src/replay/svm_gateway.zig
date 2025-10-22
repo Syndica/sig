@@ -4,6 +4,7 @@ const replay = @import("lib.zig");
 const tracy = @import("tracy");
 
 const vm = sig.vm;
+const account_preload = sig.runtime.account_preload;
 
 const Allocator = std.mem.Allocator;
 
@@ -14,7 +15,7 @@ const StatusCache = sig.core.StatusCache;
 
 const SlotAccountReader = sig.accounts_db.SlotAccountReader;
 
-const BatchAccountCache = sig.runtime.account_loader.BatchAccountCache;
+const AccountMap = sig.runtime.account_preload.AccountMap;
 const ComputeBudget = sig.runtime.ComputeBudget;
 const FeatureSet = sig.core.FeatureSet;
 const ProcessedTransaction = sig.runtime.transaction_execution.ProcessedTransaction;
@@ -62,7 +63,7 @@ pub const SvmGateway = struct {
         sysvar_cache: SysvarCache,
         vm_environment: vm.Environment,
         next_vm_environment: ?vm.Environment,
-        accounts: BatchAccountCache,
+        accounts: AccountMap,
         programs: ProgramMap,
 
         /// This is an ugly solution, but it doesn't actually lead to any issues
@@ -98,9 +99,10 @@ pub const SvmGateway = struct {
         const zone = tracy.Zone.init(@src(), .{ .name = "SvmGateway.init" });
         defer zone.deinit();
 
-        var accounts = try BatchAccountCache.initSufficientCapacity(allocator, batch);
+        var accounts = try account_preload.initSufficientCapacity(allocator, batch);
         for (batch) |transaction| {
-            try accounts.load(
+            try account_preload.load(
+                &accounts,
                 allocator,
                 params.account_reader,
                 &transaction.accounts,
@@ -121,7 +123,7 @@ pub const SvmGateway = struct {
         );
 
         var programs =
-            try loadPrograms(allocator, &accounts.account_cache, &vm_environment, params.slot);
+            try loadPrograms(allocator, &accounts, &vm_environment, params.slot);
         errdefer {
             for (programs.values()) |*program| program.deinit(allocator);
             programs.deinit(allocator);
@@ -158,7 +160,7 @@ pub const SvmGateway = struct {
 
         self.state.sysvar_cache.deinit(allocator);
         self.state.vm_environment.deinit(allocator);
-        self.state.accounts.deinit(allocator);
+        sig.runtime.account_preload.deinit(self.state.accounts, allocator);
         if (self.state.next_vm_environment) |next_vm| next_vm.deinit(allocator);
 
         var programs = self.state.programs;

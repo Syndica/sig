@@ -103,7 +103,7 @@ const TransactionAddressLookup = sig.core.transaction.AddressLookup;
 const ResolvedTransaction = sig.replay.resolve_lookup.ResolvedTransaction;
 
 const AccountSharedData = sig.runtime.AccountSharedData;
-const BatchAccountCache = sig.runtime.account_loader.BatchAccountCache;
+const AccountMap = sig.runtime.account_preload.AccountMap;
 const ComputeBudget = sig.runtime.ComputeBudget;
 const EpochRewards = sig.runtime.sysvar.EpochRewards;
 const EpochSchedule = sig.runtime.sysvar.EpochSchedule;
@@ -803,12 +803,12 @@ fn executeTxnContext(
     );
 
     // Create batch account cache from accounts db
-    var accounts = try BatchAccountCache.initFromAccountsDb(
+    var accounts = try sig.runtime.account_preload.initFromAccountsDb(
         allocator,
         accounts_db.accountReader().forSlot(&ancestors),
         &.{runtime_transaction},
     );
-    defer accounts.deinit(allocator);
+    defer sig.runtime.account_preload.deinit(accounts, allocator);
 
     const rent_collector = RentCollector{
         .epoch = epoch,

@@ -15,7 +15,7 @@ const Instruction = sig.core.Instruction;
 const InstructionAccount = sig.core.instruction.InstructionAccount;
 const InstructionError = sig.core.instruction.InstructionError;
 
-const BatchAccountCache = sig.runtime.account_loader.BatchAccountCache;
+const AccountMap = sig.runtime.account_preload.AccountMap;
 const BorrowedAccount = sig.runtime.BorrowedAccount;
 const InstructionInfo = sig.runtime.InstructionInfo;
 const InstructionContext = sig.runtime.InstructionContext;
@@ -1181,7 +1181,7 @@ pub fn invokeSignedRust(
 const testing = sig.runtime.testing;
 
 const TestContext = struct {
-    cache: BatchAccountCache,
+    cache: AccountMap,
     tc: *TransactionContext,
     ic: InstructionContext,
 

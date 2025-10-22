@@ -20,7 +20,7 @@ const Slot = sig.core.Slot;
 const RentState = sig.core.RentCollector.RentState;
 
 const AccountSharedData = sig.runtime.AccountSharedData;
-const BatchAccountCache = sig.runtime.account_loader.BatchAccountCache;
+const AccountMap = sig.runtime.account_preload.AccountMap;
 const CachedAccount = sig.runtime.account_loader.CachedAccount;
 const FeatureSet = sig.core.FeatureSet;
 const FeeDetails = sig.runtime.check_transactions.FeeDetails;
@@ -128,6 +128,9 @@ pub const ProcessedTransaction = struct {
     pub fn deinit(self: ProcessedTransaction, allocator: std.mem.Allocator) void {
         for (self.writes.slice()) |account| account.deinit(allocator);
         if (self.outputs) |out| if (out.log_collector) |log| log.deinit(allocator);
+        if (self.failed_accounts_for_conformance) |accounts| {
+            for (accounts.slice()) |account| account.deinit(allocator);
+        }
     }
 };
 
@@ -142,13 +145,13 @@ pub fn TransactionResult(comptime T: type) type {
 pub fn loadAndExecuteTransactions(
     allocator: std.mem.Allocator,
     transactions: []const RuntimeTransaction,
-    batch_account_cache: *BatchAccountCache,
+    account_map: *AccountMap,
     environment: *const TransactionExecutionEnvironment,
     config: *const TransactionExecutionConfig,
 ) error{OutOfMemory}![]TransactionResult(ProcessedTransaction) {
     var program_map = try program_loader.loadPrograms(
         allocator,
-        &batch_account_cache.account_cache,
+        account_map,
         environment.vm_environment,
         environment.slot,
     );
@@ -162,7 +165,7 @@ pub fn loadAndExecuteTransactions(
         transaction_results[index] = try loadAndExecuteTransaction(
             allocator,
             transaction,
-            batch_account_cache,
+            account_map,
             environment,
             config,
             &program_map,
@@ -175,7 +178,7 @@ pub fn loadAndExecuteTransactions(
 pub fn loadAndExecuteTransaction(
     allocator: std.mem.Allocator,
     transaction: *const RuntimeTransaction,
-    batch_account_cache: *BatchAccountCache,
+    account_map: *AccountMap,
     env: *const TransactionExecutionEnvironment,
     config: *const TransactionExecutionConfig,
     program_map: *ProgramMap,
@@ -202,7 +205,7 @@ pub fn loadAndExecuteTransaction(
     const maybe_nonce_info = switch (try sig.runtime.check_transactions.checkAge(
         allocator,
         transaction,
-        batch_account_cache,
+        account_map,
         env.blockhash_queue,
         env.max_age,
         &env.next_durable_nonce,
@@ -234,7 +237,7 @@ pub fn loadAndExecuteTransaction(
     const fees, var rollbacks = switch (try sig.runtime.check_transactions.checkFeePayer(
         allocator,
         transaction,
-        batch_account_cache,
+        account_map,
         &compute_budget_limits,
         maybe_nonce_info,
         env.rent_collector,
@@ -247,7 +250,8 @@ pub fn loadAndExecuteTransaction(
     };
     errdefer for (rollbacks.slice()) |r| r.deinit(allocator);
 
-    var loaded_accounts = switch (try batch_account_cache.loadTransactionAccounts(
+    var loaded_accounts = switch (try account_loader.loadTransactionAccounts(
+        account_map,
         allocator,
         transaction,
         env.rent_collector,
@@ -262,7 +266,7 @@ pub fn loadAndExecuteTransaction(
             while (rollbacks.pop()) |rollback| {
                 const item = writes.addOne() catch unreachable;
                 item.* = rollback;
-                batch_account_cache.store(allocator, item);
+                account_loader.store(account_map, allocator, item);
                 loaded_accounts_data_size += @intCast(rollback.account.data.len);
             }
             return .{ .ok = .{
@@ -294,24 +298,18 @@ pub fn loadAndExecuteTransaction(
             loaded_accounts.accounts.slice(),
             transaction.accounts.items(.is_writable),
         ) |account, is_writable| {
-            if (is_writable) {
-                writes.append(account) catch unreachable;
-            } else {
+            if (is_writable)
+                writes.append(account) catch unreachable
+            else
                 account.deinit(allocator);
-            }
         }
         while (rollbacks.pop()) |rollback| rollback.deinit(allocator);
     } else {
-        while (rollbacks.pop()) |account| {
-            writes.append(account) catch unreachable;
-        }
+        while (rollbacks.pop()) |account| writes.append(account) catch unreachable;
         failed_accounts_for_conformance = loaded_accounts.accounts;
-        for (failed_accounts_for_conformance.?.slice()) |*a| {
-            a.account = a.account.clone(allocator) catch unreachable;
-        }
     }
 
-    for (writes.slice()) |*acct| batch_account_cache.store(allocator, acct);
+    for (writes.slice()) |*acct| account_loader.store(account_map, allocator, acct);
 
     return .{
         .ok = .{
@@ -657,7 +655,7 @@ test "loadAndExecuteTransactions: no transactions" {
     var prng = std.Random.DefaultPrng.init(0);
 
     const transactions: []RuntimeTransaction = &.{};
-    var batch_account_cache: account_loader.BatchAccountCache = .{};
+    var account_map: AccountMap = .{};
 
     const ancestors: Ancestors = .{};
     const feature_set: FeatureSet = .ALL_DISABLED;
@@ -704,7 +702,7 @@ test "loadAndExecuteTransactions: no transactions" {
     const result = try loadAndExecuteTransactions(
         allocator,
         transactions,
-        &batch_account_cache,
+        &account_map,
         &environment,
         &config,
     );
@@ -819,9 +817,9 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
     transaction.compute_budget_instruction_details.num_non_compute_budget_instructions = 1;
     transaction.compute_budget_instruction_details.num_non_migratable_builtin_instructions = 1;
 
-    var account_cache = BatchAccountCache{};
-    defer account_cache.deinit(allocator);
-    try account_cache.account_cache.put(
+    var account_map = AccountMap{};
+    defer sig.runtime.account_preload.deinit(account_map, allocator);
+    try account_map.put(
         allocator,
         sender_key,
         .{
@@ -832,7 +830,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
             .rent_epoch = 0,
         },
     );
-    try account_cache.account_cache.put(
+    try account_map.put(
         allocator,
         receiver_key,
         .{
@@ -843,7 +841,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
             .rent_epoch = 0,
         },
     );
-    try account_cache.account_cache.put(
+    try account_map.put(
         allocator,
         sig.runtime.program.system.ID,
         .{
@@ -908,7 +906,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
         const result = try loadAndExecuteTransaction(
             allocator,
             &transaction,
-            &account_cache,
+            &account_map,
             &environment,
             &config,
             &program_map,
@@ -922,8 +920,8 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
         const transaction_fee = processed_transaction.fees.transaction_fee;
         const prioritization_fee = processed_transaction.fees.prioritization_fee;
 
-        const sender_account = account_cache.account_cache.get(sender_key).?;
-        const receiver_account = account_cache.account_cache.get(receiver_key).?;
+        const sender_account = account_map.get(sender_key).?;
+        const receiver_account = account_map.get(receiver_key).?;
 
         try std.testing.expectEqual(5_000, transaction_fee);
         try std.testing.expectEqual(0, prioritization_fee);
@@ -944,7 +942,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
         const result = try loadAndExecuteTransaction(
             allocator,
             &transaction,
-            &account_cache,
+            &account_map,
             &environment,
             &config,
             &program_map,
@@ -958,8 +956,8 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
         const transaction_fee = processed_transaction.fees.transaction_fee;
         const prioritization_fee = processed_transaction.fees.prioritization_fee;
 
-        const sender_account = account_cache.account_cache.get(sender_key).?;
-        const receiver_account = account_cache.account_cache.get(receiver_key).?;
+        const sender_account = account_map.get(sender_key).?;
+        const receiver_account = account_map.get(receiver_key).?;
 
         try std.testing.expectEqual(5_000, transaction_fee);
         try std.testing.expectEqual(0, prioritization_fee);

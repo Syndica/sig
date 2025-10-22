@@ -20,7 +20,7 @@ const TransactionContextAccount = sig.runtime.TransactionContextAccount;
 const TransactionReturnData = sig.runtime.transaction_context.TransactionReturnData;
 const Rent = sig.runtime.sysvar.Rent;
 const ComputeBudget = sig.runtime.ComputeBudget;
-const AccountCache = sig.runtime.account_loader.BatchAccountCache;
+const AccountMap = sig.runtime.account_preload.AccountMap;
 const ProgramMap = sig.runtime.program_loader.ProgramMap;
 
 pub const ExecuteContextsParams = struct {
@@ -96,7 +96,7 @@ pub fn createTransactionContext(
     allocator: std.mem.Allocator,
     random: std.Random,
     params: ExecuteContextsParams,
-) !struct { AccountCache, TransactionContext } {
+) !struct { AccountMap, TransactionContext } {
     if (!builtin.is_test)
         @compileError("createTransactionContext should only be called in test mode");
 
@@ -132,8 +132,8 @@ pub fn createTransactionContext(
     );
     errdefer accounts.deinit(allocator);
 
-    var account_cache = AccountCache{};
-    errdefer account_cache.deinit(allocator);
+    var account_map = AccountMap{};
+    errdefer sig.runtime.account_preload.deinit(account_map, allocator);
 
     var account_keys = try std.ArrayListUnmanaged(Pubkey).initCapacity(
         allocator,
@@ -144,7 +144,7 @@ pub fn createTransactionContext(
     for (params.accounts) |account_params| {
         const key = account_params.pubkey orelse Pubkey.initRandom(random);
         account_keys.appendAssumeCapacity(key);
-        try account_cache.account_cache.put(
+        try account_map.put(
             allocator,
             key,
             .{
@@ -158,7 +158,7 @@ pub fn createTransactionContext(
     }
 
     for (account_keys.items) |key| {
-        const cached_account = account_cache.account_cache.getPtr(key) orelse unreachable;
+        const cached_account = account_map.getPtr(key) orelse unreachable;
         const account = try allocator.create(sig.runtime.AccountSharedData);
         account.* = try cached_account.clone(allocator);
         accounts.appendAssumeCapacity(TransactionContextAccount.init(key, account));
@@ -195,7 +195,7 @@ pub fn createTransactionContext(
         .slot = params.slot,
     };
 
-    return .{ account_cache, tc };
+    return .{ account_map, tc };
 }
 
 pub fn deinitTransactionContext(
