@@ -977,7 +977,7 @@ fn resetFork(
 /// Consensus inputs computed:
 /// - Stake distribution inputs (via collectClusterVoteState)
 /// - Fork choice state (via fork_choice.processLatestVotes)
-/// - Safety checks (via computeVotingSafetyChecks)
+/// - Safety checks (via cacheVotingSafetyChecks)
 ///
 /// All computed consensus inputs are updated in the fork choice and
 /// cached in the ProgressMap (fork_stats field)
@@ -1049,7 +1049,7 @@ fn computeConsensusInputs(
             fork_stats.computed = true;
             try new_stats.append(allocator, slot);
         }
-        try computeVotingSafetyChecks(
+        try cacheVotingSafetyChecks(
             allocator,
             progress,
             replay_tower,
@@ -1072,7 +1072,7 @@ fn computeConsensusInputs(
 /// These computed values are used in canVoteOnCandidateSlot during fork selection.
 ///
 /// Analogous to [cache_tower_stats](https://github.com/anza-xyz/agave/blob/3572983cc28393e3c39a971c274cdac9b2eb902a/core/src/replay_stage.rs#L3799)
-fn computeVotingSafetyChecks(
+fn cacheVotingSafetyChecks(
     allocator: std.mem.Allocator,
     progress: *ProgressMap,
     replay_tower: *const ReplayTower,
@@ -1195,7 +1195,7 @@ test "cacheTowerStats - missing ancestor" {
     // and cacheTowerStats should return error.MissingAncestor.
     var empty_ancestors: std.AutoArrayHashMapUnmanaged(Slot, Ancestors) = .empty;
 
-    const result = computeVotingSafetyChecks(
+    const result = cacheVotingSafetyChecks(
         testing.allocator,
         &fixture.progress,
         &replay_tower,
@@ -1221,7 +1221,7 @@ test "cacheTowerStats - missing slot" {
     // Do not populate progress for root.slot; ensure getForkStats returns null.
     const empty_ancestors: std.AutoArrayHashMapUnmanaged(Slot, Ancestors) = .empty;
 
-    const result = computeVotingSafetyChecks(
+    const result = cacheVotingSafetyChecks(
         testing.allocator,
         &fixture.progress,
         &replay_tower,
@@ -1252,7 +1252,7 @@ test "cacheTowerStats - success sets flags and empty thresholds" {
     var replay_tower = try createTestReplayTower(10, 0.67);
     defer replay_tower.deinit(std.testing.allocator);
 
-    try computeVotingSafetyChecks(
+    try cacheVotingSafetyChecks(
         testing.allocator,
         &fixture.progress,
         &replay_tower,
@@ -1289,7 +1289,7 @@ test "cacheTowerStats - records failed threshold at depth 0" {
     var replay_tower = try createTestReplayTower(0, 0.67);
     defer replay_tower.deinit(std.testing.allocator);
 
-    try computeVotingSafetyChecks(
+    try cacheVotingSafetyChecks(
         testing.allocator,
         &fixture.progress,
         &replay_tower,
