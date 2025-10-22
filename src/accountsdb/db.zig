@@ -439,8 +439,6 @@ pub const AccountsDB = struct {
         const collapsed_manifest = try full_inc_manifest.collapse(self.allocator);
         errdefer collapsed_manifest.deinit(self.allocator);
 
-        std.debug.print("collapsed_manifest: {}\n", .{collapsed_manifest});
-
         {
             var load_timer = sig.time.Timer.start();
             try self.loadFromSnapshot(
@@ -1126,8 +1124,7 @@ pub const AccountsDB = struct {
         var timer = sig.time.Timer.start();
 
         // going higher will only lead to more contention in the buffer pool reads
-        // const n_threads = @min(6, @as(u32, @truncate(try std.Thread.getCpuCount())));
-        const n_threads = 1;
+        const n_threads = @min(6, @as(u32, @truncate(try std.Thread.getCpuCount())));
 
         // split processing the bins over muliple threads
         self.logger.info().logf(
@@ -1171,16 +1168,10 @@ pub const AccountsDB = struct {
             break :blk .{ lamports_sum, hash };
         };
 
-        std.debug.print("(pre-duplicate removal) accounts_hash.checksum(): {}\n", .{accounts_hash.checksum()});
-        std.debug.print("(pre-duplicate removal) total_lamports: {}\n", .{total_lamports});
-
         for (task_results) |result| {
             total_lamports -|= result.subtract;
             accounts_hash.mixOut(result.mix_out);
         }
-
-        std.debug.print("(post-duplicate removal) accounts_hash.checksum(): {}\n", .{accounts_hash.checksum()});
-        std.debug.print("(post-duplicate removal) total_lamports: {}\n", .{total_lamports});
 
         self.logger.debug().logf("collecting hashes from accounts took: {s}", .{timer.read()});
         timer.reset();
@@ -1326,8 +1317,6 @@ pub const AccountsDB = struct {
 
         // validate the incremental snapshot
         if (params.expected_incremental) |expected_incremental| {
-            std.debug.print("------------->expected_incremental.accounts_hash.checksum(): {}\n", .{expected_incremental.accounts_hash.checksum()});
-
             self.logger.info().logf("validating the incremental snapshot", .{});
 
             const inc_slot = self.getLargestRootedSlot() orelse 0;
@@ -1359,8 +1348,6 @@ pub const AccountsDB = struct {
             // ASSERTION: same idea as the previous assertion, but applied to
             // the incremental snapshot info.
             if (p_maybe_first_inc.*) |first_inc| {
-                std.debug.print("first_inc.hash.checksum(): {}\n", .{first_inc.hash.checksum()});
-
                 std.debug.assert(first_inc.slot == inc_slot);
                 std.debug.assert(first_inc.hash.eql(accounts_delta_hash));
             }
@@ -1417,13 +1404,6 @@ pub const AccountsDB = struct {
         var arena = std.heap.ArenaAllocator.init(tmp_allocator);
         defer arena.deinit();
         const allocator = arena.allocator();
-
-        const maybe_min_slot: ?Slot, const maybe_max_slot: ?Slot = switch (config) {
-            inline else => |cfg| .{ cfg.min_slot, cfg.max_slot },
-        };
-
-        std.debug.print("maybe_min_slot: {?}\n", .{maybe_min_slot});
-        std.debug.print("maybe_max_slot: {?}\n", .{maybe_max_slot});
 
         for (shards, results, 0..) |*shard_rw, *result, i| {
             // get and sort pubkeys inshardn
