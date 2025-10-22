@@ -4,6 +4,8 @@ const replay = @import("../lib.zig");
 const tracy = @import("tracy");
 const network = @import("zig-network");
 
+const cluster_sync = replay.consensus.cluster_sync;
+
 const Allocator = std.mem.Allocator;
 const AtomicBool = std.atomic.Value(bool);
 
@@ -136,8 +138,6 @@ pub const TowerConsensus = struct {
         logger: Logger,
         identity: sig.identity.ValidatorIdentity,
         signing: sig.identity.SigningKeys,
-        root_slot: Slot,
-        root_hash: Hash,
 
         // Data sources
         account_reader: AccountReader,
@@ -246,7 +246,7 @@ pub const TowerConsensus = struct {
             .from(deps.logger),
             deps.identity.validator,
             deps.identity.vote_account,
-            deps.root_slot,
+            deps.slot_tracker.root,
             deps.account_reader.forSlot(root_ancestors),
             sig.prometheus.globalRegistry(),
         );
@@ -352,8 +352,8 @@ pub const TowerConsensus = struct {
         allocator: Allocator,
         account_reader: AccountReader,
         ledger: *Ledger,
-        slot_tracker_rw: *RwMux(SlotTracker),
-        epoch_tracker_rw: *RwMux(EpochTracker),
+        slot_tracker: *SlotTracker,
+        epoch_tracker: *EpochTracker,
         progress_map: *ProgressMap,
         results: []const ReplayResult,
     ) !void {
@@ -364,21 +364,14 @@ pub const TowerConsensus = struct {
         }
         const arena = arena_state.allocator();
 
-        { // Process replay results
-            const slot_tracker, var lock = slot_tracker_rw.readWithLock();
-            defer lock.unlock();
-            for (results) |r| {
-                try self.processResult(allocator, ledger, progress_map, slot_tracker, r);
-            }
+        // Process replay results
+        for (results) |r| {
+            try self.processResult(allocator, ledger, progress_map, slot_tracker, r);
         }
 
         // Process cluster sync and prepare ancestors/descendants
         const ancestors, const descendants = cluster_sync_and_ancestors_descendants: {
-            const slot_tracker, var slot_tracker_lg = slot_tracker_rw.readWithLock();
-            defer slot_tracker_lg.unlock();
-
-            _ = try replay.consensus.cluster_sync
-                .processClusterSync(allocator, .from(self.logger), .{
+            _ = try cluster_sync.processClusterSync(allocator, .from(self.logger), .{
                 .my_pubkey = self.identity.validator,
                 .tpu_has_bank = false,
                 .fork_choice = &self.fork_choice,
@@ -411,18 +404,12 @@ pub const TowerConsensus = struct {
             break :cluster_sync_and_ancestors_descendants .{ ancestors, descendants };
         };
 
-        const epoch_tracker, var epoch_tracker_lg = epoch_tracker_rw.readWithLock();
-        defer epoch_tracker_lg.unlock();
-
-        const slot_tracker_mut, var slot_tracker_mut_lg = slot_tracker_rw.writeWithLock();
-        defer slot_tracker_mut_lg.unlock();
-
         try self.executeProtocol(
             allocator,
             ledger,
             &ancestors,
             &descendants,
-            slot_tracker_mut,
+            slot_tracker,
             epoch_tracker,
             progress_map,
             account_reader,
@@ -1656,28 +1643,18 @@ test "processResult and handleDuplicateConfirmedFork" {
     defer service.deinit(allocator);
 
     const consensus = &service.consensus.?;
-    {
-        const slot_tracker, var slock = service.replay.slot_tracker.writeWithLock();
-        defer slock.unlock();
+    service.replay.slot_tracker.get(0).?.state.hash.set(.{ .data = @splat(1) });
 
-        slot_tracker.get(0).?.state.hash.set(.{ .data = @splat(1) });
-    }
-
-    {
-        const slot_tracker, var slock = service.replay.slot_tracker.readWithLock();
-        defer slock.unlock();
-
-        try consensus.processResult(
-            allocator,
-            &stubs.ledger,
-            &service.replay.progress_map,
-            slot_tracker,
-            .{
-                .slot = 0,
-                .output = .{ .last_entry_hash = .ZEROES },
-            },
-        );
-    }
+    try consensus.processResult(
+        allocator,
+        &stubs.ledger,
+        &service.replay.progress_map,
+        &service.replay.slot_tracker,
+        .{
+            .slot = 0,
+            .output = .{ .last_entry_hash = .ZEROES },
+        },
+    );
 
     const stats = service.replay.progress_map.map.get(0).?;
     try service.replay.progress_map.map.put(allocator, 1, stats);

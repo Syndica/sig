@@ -64,8 +64,8 @@ fn replayActiveSlotsAsync(state: *ReplayState) ![]struct { Slot, *ReplaySlotFutu
     var zone = tracy.Zone.init(@src(), .{ .name = "replayActiveSlotsAsync" });
     defer zone.deinit();
 
-    const slot_tracker, var slot_lock = state.slot_tracker.readWithLock();
-    defer slot_lock.unlock();
+    const slot_tracker = &state.slot_tracker;
+    const epoch_tracker = &state.epoch_tracker;
 
     const active_slots = try slot_tracker.activeSlots(state.allocator);
     defer state.allocator.free(active_slots);
@@ -81,13 +81,10 @@ fn replayActiveSlotsAsync(state: *ReplayState) ![]struct { Slot, *ReplaySlotFutu
         slot_statuses.deinit(state.allocator);
     }
 
-    const epoch_tracker_inner, var epoch_lock = state.epoch_tracker.readWithLock();
-    defer epoch_lock.unlock();
-
     for (active_slots) |slot| {
         state.logger.debug().logf("replaying slot: {}", .{slot});
 
-        const params = switch (try prepareSlot(state, slot_tracker, epoch_tracker_inner, slot)) {
+        const params = switch (try prepareSlot(state, slot_tracker, epoch_tracker, slot)) {
             .confirm => |params| params,
             .empty, .dead, .leader => continue,
         };
@@ -138,8 +135,8 @@ fn replayActiveSlotsSync(state: *ReplayState) ![]const ReplayResult {
     var zone = tracy.Zone.init(@src(), .{ .name = "replayActiveSlotsSync" });
     defer zone.deinit();
 
-    const slot_tracker, var slot_lock = state.slot_tracker.readWithLock();
-    defer slot_lock.unlock();
+    const slot_tracker = &state.slot_tracker;
+    const epoch_tracker = &state.epoch_tracker;
 
     const active_slots = try slot_tracker.activeSlots(allocator);
     defer allocator.free(active_slots);
@@ -152,9 +149,6 @@ fn replayActiveSlotsSync(state: *ReplayState) ![]const ReplayResult {
     var results = try std.ArrayListUnmanaged(ReplayResult)
         .initCapacity(allocator, active_slots.len);
     errdefer results.deinit(allocator);
-
-    const epoch_tracker, var epoch_lock = state.epoch_tracker.readWithLock();
-    defer epoch_lock.unlock();
 
     for (active_slots) |slot| {
         state.logger.debug().logf("replaying slot: {}", .{slot});
@@ -454,7 +448,7 @@ fn prepareSlot(
     const epoch_constants = epoch_tracker.getPtrForSlot(slot) orelse return error.MissingEpoch;
     const slot_info = slot_tracker.get(slot) orelse return error.MissingSlot;
 
-    const i_am_leader = slot_info.constants.collector_id.equals(&state.my_identity);
+    const i_am_leader = slot_info.constants.collector_id.equals(&state.identity.validator);
 
     if (!progress_get_or_put.found_existing) {
         const parent_slot = slot_info.constants.parent_slot;

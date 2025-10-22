@@ -23,56 +23,39 @@ const EpochTracker = sig.replay.trackers.EpochTracker;
 const Logger = sig.trace.Logger("vote_listener");
 
 pub const SlotDataProvider = struct {
-    /// Thread safe guards that wrap the actual resources.
-    /// Readers acquire read locks; writers acquire write locks when mutating.
-    /// Lifetime: these are borrowed from `replay.service.ReplayState` and are guaranteed
-    /// to outlive all VoteListener threads. They are deinitialized only after
-    /// `VoteListener.joinAndDeinit()` completes (see `replay.service.run`).
-    slot_tracker_rw: *sig.sync.RwMux(SlotTracker),
-    epoch_tracker_rw: *sig.sync.RwMux(EpochTracker),
+    slot_tracker: *SlotTracker,
+    epoch_tracker: *EpochTracker,
 
     pub fn rootSlot(self: *const SlotDataProvider) Slot {
-        const slot_tracker, var lg = self.slot_tracker_rw.readWithLock();
-        defer lg.unlock();
-        return slot_tracker.root;
+        return self.slot_tracker.root;
     }
 
     fn getSlotHash(self: *const SlotDataProvider, slot: Slot) ?Hash {
-        const slot_tracker, var lg = self.slot_tracker_rw.readWithLock();
-        defer lg.unlock();
-        const slot_info = slot_tracker.get(slot) orelse return null;
+        const slot_info = self.slot_tracker.get(slot) orelse return null;
         return slot_info.state.hash.readCopy();
     }
 
     fn getSlotEpoch(self: *const SlotDataProvider, slot: Slot) sig.core.Epoch {
-        const epoch_tracker, var lg = self.epoch_tracker_rw.readWithLock();
-        defer lg.unlock();
-        return epoch_tracker.schedule.getEpoch(slot);
+        return self.epoch_tracker.schedule.getEpoch(slot);
     }
 
     fn getSlotAncestorsPtr(
         self: *const SlotDataProvider,
         slot: Slot,
     ) ?*const sig.core.Ancestors {
-        const slot_tracker, var lg = self.slot_tracker_rw.readWithLock();
-        defer lg.unlock();
-        if (slot_tracker.get(slot)) |ref|
+        if (self.slot_tracker.get(slot)) |ref|
             return &ref.constants.ancestors
         else
             return null;
     }
 
     fn getEpochTotalStake(self: *const SlotDataProvider, epoch: u64) ?u64 {
-        const epoch_tracker, var lg = self.epoch_tracker_rw.readWithLock();
-        defer lg.unlock();
-        const epoch_info = epoch_tracker.epochs.get(epoch) orelse return null;
+        const epoch_info = self.epoch_tracker.epochs.get(epoch) orelse return null;
         return epoch_info.stakes.total_stake;
     }
 
     fn getDelegatedStake(self: *const SlotDataProvider, slot: Slot, pubkey: Pubkey) ?u64 {
-        const epoch_tracker, var lg = self.epoch_tracker_rw.readWithLock();
-        defer lg.unlock();
-        const epoch_info = epoch_tracker.getForSlot(slot) orelse return null;
+        const epoch_info = self.epoch_tracker.getForSlot(slot) orelse return null;
         return epoch_info.stakes.stakes.vote_accounts.getDelegatedStake(pubkey);
     }
 
@@ -81,9 +64,7 @@ pub const SlotDataProvider = struct {
         slot: Slot,
         vote_account_key: Pubkey,
     ) ?Pubkey {
-        const epoch_tracker, var lg = self.epoch_tracker_rw.readWithLock();
-        defer lg.unlock();
-        const epoch_consts = epoch_tracker.getForSlot(slot) orelse return null;
+        const epoch_consts = self.epoch_tracker.getForSlot(slot) orelse return null;
         const epoch_authorized_voters = &epoch_consts.stakes.epoch_authorized_voters;
         return epoch_authorized_voters.get(vote_account_key);
     }
@@ -92,8 +73,12 @@ pub const SlotDataProvider = struct {
 pub const Senders = struct {
     verified_vote: *sig.sync.Channel(VerifiedVote),
     gossip_verified_vote_hash: *sig.sync.Channel(GossipVerifiedVoteHash),
+    /// TODO: when the RPC hook design is closer to being finished,
+    /// see if this could be re-designed to use that, instead of this
+    /// slightly awkward channel design.
     bank_notification: ?*sig.sync.Channel(BankNotification),
     duplicate_confirmed_slots: ?*sig.sync.Channel(ThresholdConfirmedSlot),
+    /// TODO: same advisory as on `bank_notification` wrt hooking into RPC.
     subscriptions: RpcSubscriptionsStub,
 
     const test_setup_enabled = @import("builtin").is_test;
@@ -229,12 +214,10 @@ const GossipVoteReceptor = struct {
         metrics.gossip_votes_received.add(vote_tx_buffer.items.len);
         if (vote_tx_buffer.items.len == 0) return &.{};
 
-        const epoch_tracker, var epoch_lg = slot_data_provider.epoch_tracker_rw.readWithLock();
-        defer epoch_lg.unlock();
-
         var index: usize = 0;
         while (index != vote_tx_buffer.items.len) {
             const vote_tx = vote_tx_buffer.items[index];
+            const epoch_tracker = slot_data_provider.epoch_tracker;
             switch (try verifyVoteTransaction(allocator, vote_tx, epoch_tracker)) {
                 .verified => index += 1,
                 .unverified => {
@@ -1010,34 +993,25 @@ test "trackNewVotesAndNotifyConfirmations filter" {
     var prng_state: std.Random.DefaultPrng = .init(std.testing.random_seed);
     const prng = prng_state.random();
 
-    var slot_tracker_rw: sig.sync.RwMux(SlotTracker) = blk: {
-        const slot_tracker_init = try slotTrackerElementGenesis(allocator, .DEFAULT);
-        break :blk .init(try .init(allocator, 0, slot_tracker_init));
-    };
-    defer {
-        var lg = slot_tracker_rw.write();
-        lg.get().deinit(allocator);
-    }
+    var slot_tracker: SlotTracker = try .init(
+        allocator,
+        0,
+        try slotTrackerElementGenesis(allocator, .DEFAULT),
+    );
+    defer slot_tracker.deinit(allocator);
 
-    var epoch_tracker_rw: sig.sync.RwMux(EpochTracker) = .init(.{ .schedule = .DEFAULT });
-    defer {
-        var lg = epoch_tracker_rw.write();
-        lg.get().deinit(allocator);
-    }
+    var epoch_tracker: EpochTracker = .{ .schedule = .DEFAULT };
+    defer epoch_tracker.deinit(allocator);
 
     {
-        const epoch_tracker, var epoch_tracker_lg = epoch_tracker_rw.writeWithLock();
-        defer epoch_tracker_lg.unlock();
-
         const epoch_genesis: sig.core.EpochConstants = try .genesis(allocator, .default(allocator));
         errdefer epoch_genesis.deinit(allocator);
-
         try epoch_tracker.epochs.put(allocator, 0, epoch_genesis);
     }
 
     const slot_data_provider: SlotDataProvider = .{
-        .slot_tracker_rw = &slot_tracker_rw,
-        .epoch_tracker_rw = &epoch_tracker_rw,
+        .slot_tracker = &slot_tracker,
+        .epoch_tracker = &epoch_tracker,
     };
 
     const senders: Senders = try .createForTest(allocator, .{
@@ -1776,24 +1750,19 @@ test "simple usage" {
     var registry = sig.prometheus.Registry(.{}).init(allocator);
     defer registry.deinit();
 
-    var slot_tracker_rw: sig.sync.RwMux(SlotTracker) = blk: {
-        const slot_tracker_init = try slotTrackerElementGenesis(allocator, .DEFAULT);
-        break :blk .init(try .init(allocator, 0, slot_tracker_init));
-    };
-    defer {
-        var lg = slot_tracker_rw.write();
-        lg.get().deinit(allocator);
-    }
+    var slot_tracker: SlotTracker = try .init(
+        allocator,
+        0,
+        try slotTrackerElementGenesis(allocator, .DEFAULT),
+    );
+    defer slot_tracker.deinit(allocator);
 
-    var epoch_tracker_rw: sig.sync.RwMux(EpochTracker) = .init(.{ .schedule = .DEFAULT });
-    defer {
-        var lg = epoch_tracker_rw.write();
-        lg.get().deinit(allocator);
-    }
+    var epoch_tracker: EpochTracker = .{ .schedule = .DEFAULT };
+    defer epoch_tracker.deinit(allocator);
 
     const slot_data_provider: SlotDataProvider = .{
-        .slot_tracker_rw = &slot_tracker_rw,
-        .epoch_tracker_rw = &epoch_tracker_rw,
+        .slot_tracker = &slot_tracker,
+        .epoch_tracker = &epoch_tracker,
     };
 
     var ledger = try sig.ledger.tests.initTestLedger(allocator, @src(), .noop);
@@ -1850,7 +1819,7 @@ test "check trackers" {
 
     const root_slot: Slot = 0;
 
-    var slot_tracker_rw: sig.sync.RwMux(SlotTracker) = .init(blk: {
+    var slot_tracker: SlotTracker = blk: {
         var state: sig.core.SlotState = try .genesis(allocator);
         errdefer state.deinit(allocator);
 
@@ -1870,22 +1839,13 @@ test "check trackers" {
             },
             .state = state,
         });
-    });
-    defer {
-        var lg = slot_tracker_rw.write();
-        lg.get().deinit(allocator);
-    }
+    };
+    defer slot_tracker.deinit(allocator);
 
-    var epoch_tracker_rw: sig.sync.RwMux(EpochTracker) = .init(.{ .schedule = .DEFAULT });
-    defer {
-        var lg = epoch_tracker_rw.write();
-        lg.get().deinit(allocator);
-    }
+    var epoch_tracker: EpochTracker = .{ .schedule = .DEFAULT };
+    defer epoch_tracker.deinit(allocator);
 
     {
-        const epoch_tracker, var epoch_tracker_lg = epoch_tracker_rw.writeWithLock();
-        defer epoch_tracker_lg.unlock();
-
         var stakes: sig.core.EpochStakes = try .initEmptyWithGenesisStakeHistoryEntry(allocator);
         errdefer stakes.deinit(allocator);
 
@@ -1895,8 +1855,7 @@ test "check trackers" {
             try stakes.epoch_authorized_voters.put(allocator, vote_key, vote_key);
         }
 
-        try epoch_tracker.epochs.ensureUnusedCapacity(allocator, 1);
-        epoch_tracker.epochs.putAssumeCapacity(0, .{
+        try epoch_tracker.epochs.put(allocator, 0, .{
             .hashes_per_tick = 1,
             .ticks_per_slot = 1,
             .ns_per_slot = 1,
@@ -1908,8 +1867,8 @@ test "check trackers" {
     }
 
     const slot_data_provider: SlotDataProvider = .{
-        .slot_tracker_rw = &slot_tracker_rw,
-        .epoch_tracker_rw = &epoch_tracker_rw,
+        .slot_tracker = &slot_tracker,
+        .epoch_tracker = &epoch_tracker,
     };
 
     var state = try sig.ledger.tests.initTestLedger(allocator, @src(), .noop);
