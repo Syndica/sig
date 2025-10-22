@@ -54,6 +54,10 @@ pub const LoadedTransactionAccounts = struct {
         .loaded_accounts_data_size = 0,
     };
 
+    pub fn deinit(self: *const LoadedTransactionAccounts, allocator: Allocator) void {
+        for (self.accounts.slice()) |account| account.deinit(allocator);
+    }
+
     // [agave] https://github.com/anza-xyz/agave/blob/bb5a6e773d5f41388a962c5c4f96f5f2ef2209d0/svm/src/account_loader.rs#L618
     fn increase(
         self: *LoadedTransactionAccounts,
@@ -95,13 +99,6 @@ pub const BatchAccountCache = struct {
     /// pubkey -> AccountSharedData for all pubkeys *except* SYSVAR_INSTRUCTIONS_ID, which is a
     /// special case (constructed on a per-transaction basis)
     account_cache: AccountMap = .{},
-
-    // holds SYSVAR_INSTRUCTIONS_ID accounts, purely so we can deallocate them later. Index of each
-    // one isn't intended to be meaningful.
-    // NOTE: we could take this field out, and have the caller deinit it from inside LoadedTransactionAccounts -- TODO
-    sysvar_instruction_account_datas: std.ArrayListUnmanaged(AccountSharedData) = .{},
-
-    // NOTE: we might want to later add another field that keeps a copy of all writable accounts.
 
     pub const AccountMap = std.AutoArrayHashMapUnmanaged(
         Pubkey,
@@ -272,10 +269,6 @@ pub const BatchAccountCache = struct {
             allocator.free(account.data);
         }
         self.account_cache.deinit(allocator);
-        for (self.sysvar_instruction_account_datas.items) |account| {
-            allocator.free(account.data);
-        }
-        self.sysvar_instruction_account_datas.deinit(allocator);
     }
 
     const LoadedTransactionAccountsError = error{
@@ -581,13 +574,11 @@ pub const BatchAccountCache = struct {
     ) error{OutOfMemory}!LoadedTransactionAccount {
         if (key.equals(&runtime.sysvar.instruction.ID)) {
             @branchHint(.unlikely);
-            const account = try self.sysvar_instruction_account_datas.addOne(allocator);
-            account.* = try constructInstructionsAccount(allocator, transaction);
             return .{
-                .account = account.*,
+                .account = try constructInstructionsAccount(allocator, transaction),
                 .loaded_size = 0,
                 .rent_collected = 0,
-                .is_owned = false, // TODO FIX ME, this is owned i think --- also, take advantage of this to make sure it's deinitted without needing the list in the struct
+                .is_owned = true,
             };
         }
 
@@ -644,26 +635,27 @@ pub const BatchAccountCache = struct {
         else
             0;
 
-        const maybe_account: ?*AccountSharedData =
+        var is_owned = false;
+        const maybe_account: ?AccountSharedData =
             if (key.equals(&runtime.sysvar.instruction.ID)) account: {
                 @branchHint(.unlikely);
-                const account = try self.sysvar_instruction_account_datas.addOne(allocator);
-                account.* = try constructInstructionsAccount(allocator, transaction);
-                break :account account;
-            } else self.account_cache.getPtr(key.*);
+                is_owned = true;
+                break :account try constructInstructionsAccount(allocator, transaction);
+            } else self.account_cache.get(key.*);
 
-        var account = maybe_account.?.*;
+        var account = maybe_account.?;
         if (account.lamports == 0) return null;
 
-        if (is_writable) {
+        if (is_writable and !is_owned) {
             account = try account.clone(allocator);
+            is_owned = true;
         }
 
         return .{
             .account = account,
             .loaded_size = base_account_size +| account.data.len,
             .rent_collected = 0,
-            .is_owned = is_writable,
+            .is_owned = is_owned,
         };
     }
 
@@ -916,6 +908,7 @@ test "loadTransactionAccounts sysvar instruction" {
         env.slot,
         &env.compute_budget_limits,
     );
+    defer tx_accounts.deinit(allocator);
 
     try std.testing.expectEqual(1, tx_accounts.accounts.len);
     const cached_account = tx_accounts.accounts.slice()[0];
