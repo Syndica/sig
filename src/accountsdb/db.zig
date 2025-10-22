@@ -3677,20 +3677,13 @@ test "load and validate from test snapshot - disk index" {
         full_inc_manifest.deinit(allocator);
     }
 
-    const maybe_inc_persistence = if (full_inc_manifest.incremental) |inc|
-        inc.bank_extra.snapshot_persistence
-    else
-        null;
-
     try accounts_db.validateLoadFromSnapshot(.{
         .full_slot = full_inc_manifest.full.bank_fields.slot,
         .expected_full = .{
             .accounts_hash = full_inc_manifest.full.bank_extra.accounts_lt_hash,
-            .capitalization = full_inc_manifest.full.bank_fields.capitalization,
         },
-        .expected_incremental = if (maybe_inc_persistence) |inc_persistence| .{
-            .accounts_hash = full_inc_manifest.incremental.?.bank_extra.accounts_lt_hash,
-            .capitalization = inc_persistence.incremental_capitalization,
+        .expected_incremental = if (full_inc_manifest.incremental) |inc| .{
+            .accounts_hash = inc.bank_extra.accounts_lt_hash,
         } else null,
     });
 }
@@ -3712,20 +3705,13 @@ test "load and validate from test snapshot - parallel" {
         full_inc_manifest.deinit(allocator);
     }
 
-    const maybe_inc_persistence = if (full_inc_manifest.incremental) |inc|
-        inc.bank_extra.snapshot_persistence
-    else
-        null;
-
     try accounts_db.validateLoadFromSnapshot(.{
         .full_slot = full_inc_manifest.full.bank_fields.slot,
         .expected_full = .{
             .accounts_hash = full_inc_manifest.full.bank_extra.accounts_lt_hash,
-            .capitalization = full_inc_manifest.full.bank_fields.capitalization,
         },
-        .expected_incremental = if (maybe_inc_persistence) |inc_persistence| .{
-            .accounts_hash = full_inc_manifest.incremental.?.bank_extra.accounts_lt_hash,
-            .capitalization = inc_persistence.incremental_capitalization,
+        .expected_incremental = if (full_inc_manifest.incremental) |inc| .{
+            .accounts_hash = inc.bank_extra.accounts_lt_hash,
         } else null,
     });
 }
