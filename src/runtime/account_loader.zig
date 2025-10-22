@@ -12,8 +12,6 @@ const RENT_EXEMPT_RENT_EPOCH = sig.core.rent_collector.RENT_EXEMPT_RENT_EPOCH;
 const CollectedInfo = sig.core.rent_collector.CollectedInfo;
 const AccountMeta = sig.core.instruction.InstructionAccount;
 
-const SlotAccountReader = sig.accounts_db.SlotAccountReader;
-
 const AccountMap = runtime.account_preload.AccountMap;
 const AccountSharedData = runtime.AccountSharedData;
 const ComputeBudgetLimits = runtime.program.compute_budget.ComputeBudgetLimits;

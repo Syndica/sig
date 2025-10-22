@@ -19,7 +19,6 @@ const StatusCache = sig.core.StatusCache;
 const Slot = sig.core.Slot;
 const RentState = sig.core.RentCollector.RentState;
 
-const AccountSharedData = sig.runtime.AccountSharedData;
 const AccountMap = sig.runtime.account_preload.AccountMap;
 const CachedAccount = sig.runtime.account_loader.CachedAccount;
 const FeatureSet = sig.core.FeatureSet;

@@ -100,10 +100,7 @@ const TransactionMessage = sig.core.transaction.Message;
 const TransactionInstruction = sig.core.transaction.Instruction;
 const TransactionAddressLookup = sig.core.transaction.AddressLookup;
 
-const ResolvedTransaction = sig.replay.resolve_lookup.ResolvedTransaction;
-
 const AccountSharedData = sig.runtime.AccountSharedData;
-const AccountMap = sig.runtime.account_preload.AccountMap;
 const ComputeBudget = sig.runtime.ComputeBudget;
 const EpochRewards = sig.runtime.sysvar.EpochRewards;
 const EpochSchedule = sig.runtime.sysvar.EpochSchedule;
@@ -786,14 +783,14 @@ fn executeTxnContext(
         .account_reader = accounts_db.accountReader().forSlot(&ancestors),
         .reserved_accounts = &reserved_accounts,
         .slot_hashes = try sysvar_cache.get(sig.runtime.sysvar.SlotHashes),
-    }) catch |err| switch (err) {
+    }) catch |err| return serializeSanitizationError(switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
-        error.AddressLookupTableNotFound => return serializeSanitizationError(.AddressLookupTableNotFound),
-        error.InvalidAddressLookupTableOwner => return serializeSanitizationError(.InvalidAddressLookupTableOwner),
-        error.InvalidAddressLookupTableData => return serializeSanitizationError(.InvalidAddressLookupTableData),
-        error.InvalidAddressLookupTableIndex => return serializeSanitizationError(.InvalidAddressLookupTableIndex),
+        error.AddressLookupTableNotFound => .AddressLookupTableNotFound,
+        error.InvalidAddressLookupTableOwner => .InvalidAddressLookupTableOwner,
+        error.InvalidAddressLookupTableData => .InvalidAddressLookupTableData,
+        error.InvalidAddressLookupTableIndex => .InvalidAddressLookupTableIndex,
         else => std.debug.panic("Unexpected error: {s}\n", .{@errorName(err)}),
-    };
+    });
     defer resolved_transaction.deinit(allocator);
 
     // Convert to runtime transaction

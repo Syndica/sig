@@ -1,24 +1,16 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
-const tracy = @import("tracy");
 const runtime = sig.runtime;
 
 const Allocator = std.mem.Allocator;
 
-const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
-const RentCollector = sig.core.rent_collector.RentCollector;
-const RENT_EXEMPT_RENT_EPOCH = sig.core.rent_collector.RENT_EXEMPT_RENT_EPOCH;
-const CollectedInfo = sig.core.rent_collector.CollectedInfo;
-const AccountMeta = sig.core.instruction.InstructionAccount;
 
 const SlotAccountReader = sig.accounts_db.SlotAccountReader;
 
 const AccountSharedData = runtime.AccountSharedData;
-const ComputeBudgetLimits = runtime.program.compute_budget.ComputeBudgetLimits;
 const LoadedTransactionAccounts = runtime.account_loader.LoadedTransactionAccounts;
 const RuntimeTransaction = runtime.transaction_execution.RuntimeTransaction;
-const TransactionResult = runtime.transaction_execution.TransactionResult;
 
 // TODO reconsider where these docs belong
 /// Implements much of Agave's AccountLoader functionality. Owns the accounts it loads.

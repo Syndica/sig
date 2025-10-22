@@ -22,7 +22,6 @@ const NonceState = sig.runtime.nonce.State;
 const NonceVersions = sig.runtime.nonce.Versions;
 const RuntimeTransaction = sig.runtime.transaction_execution.RuntimeTransaction;
 const TransactionResult = sig.runtime.transaction_execution.TransactionResult;
-const TransactionRollbacks = sig.runtime.transaction_execution.TransactionRollbacks;
 
 const TransactionError = sig.ledger.transaction_status.TransactionError;
 
