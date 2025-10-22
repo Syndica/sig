@@ -1130,7 +1130,7 @@ fn validator(
                 // TODO: Implement feature gating for vote keyed leader schedule.
                 // [agave] https://github.com/anza-xyz/agave/blob/e468acf4da519171510f2ec982f70a0fd9eb2c8b/ledger/src/leader_schedule_utils.rs#L12
                 // [agave] https://github.com/anza-xyz/agave/blob/e468acf4da519171510f2ec982f70a0fd9eb2c8b/runtime/src/bank.rs#L4833
-                const ls_slots: LeaderSchedule = try .fromVoteAccounts(
+                const ls_slots = try LeaderSchedule.fromVoteAccounts(
                     allocator,
                     epoch,
                     epoch_schedule.slots_per_epoch,
