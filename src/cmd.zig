@@ -1988,7 +1988,7 @@ fn replayDependencies(
         .logger = .from(app_base.logger),
         .identity = .{
             .validator = .fromPublicKey(&app_base.my_keypair.public_key),
-            .vote = .fromPublicKey(&app_base.my_keypair.public_key),
+            .vote_account = .fromPublicKey(&app_base.my_keypair.public_key),
         },
         .signing = .{
             .node = app_base.my_keypair,
