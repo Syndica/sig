@@ -13,7 +13,7 @@ executors:
   macos-executor:
     macos:
       xcode: 15.4.0
-    resource_class: m2pro.medium
+    resource_class: m4pro.medium
 
 jobs:
   setup_zig:
@@ -132,7 +132,7 @@ jobs:
             - "zig-out-release/bin/fuzz"
             - "conformance-release/lib/libsolfuzz_sig.so"
 
-  build_and_test_macos:
+  build_check_macos:
     executor: macos-executor
     steps:
       - checkout
@@ -141,16 +141,62 @@ jobs:
       - restore_cache:
           key: macos-aarch64-0.14.1-{{ checksum "build.zig.zon" }}
       - run:
-          name: Build
+          name: Build Check
           command: |
             ulimit -Hn unlimited
             ulimit -Sn unlimited
             export PATH="workspace/zig:$PATH"
+
             # it seems that the feature detection is a bit broken in CircleCI's virtual machines
-            # so we will manually say that it's an Apple M2.
-            zig build -Denable-tsan=true -Dno-run -Dcpu=apple_m2 --summary all
-            zig build test -Dlong-tests -Denable-tsan=true -Dledger=hashmap -Dfilter="ledger" -Dno-bin -Dcpu=apple_m2 --summary all
-            zig-out/bin/test
+            # so we will manually say that it's an Apple M4.
+
+            zig build -Denable-tsan=true -Dcpu=apple_m4 --summary all -Dno-run -Dno-bin
+      - save_cache:
+          key: macos-aarch64-0.14.1-{{ checksum "build.zig.zon" }}
+          paths:
+            - .zig-cache
+            - ~/.cache/zig
+
+  test_macos:
+    executor: macos-executor
+    steps:
+      - checkout
+      - attach_workspace:
+          at: workspace
+      - restore_cache:
+          key: macos-aarch64-0.14.1-{{ checksum "build.zig.zon" }}
+      - run:
+          name: Build Tests
+          command: workspace/zig/zig build test -Dno-run -Denable-tsan=true -Dcpu=apple_m4 --summary all
+      - run:
+          name: Run Tests
+          command: |
+            ulimit -Hn unlimited
+            ulimit -Sn unlimited
+            zig-out/bin/test 2>&1 | cat
+      - save_cache:
+          key: macos-aarch64-0.14.1-{{ checksum "build.zig.zon" }}
+          paths:
+            - .zig-cache
+            - ~/.cache/zig
+
+  test_macos_hashmap_ledger:
+    executor: macos-executor
+    steps:
+      - checkout
+      - attach_workspace:
+          at: workspace
+      - restore_cache:
+          key: macos-aarch64-0.14.1-{{ checksum "build.zig.zon" }}
+      - run:
+          name: Build Tests
+          command: workspace/zig/zig build test -Dno-run -Denable-tsan=true -Dcpu=apple_m4 --summary all -Dlong-tests -Dledger=hashmap -Dfilter="ledger"
+      - run:
+          name: Run Tests
+          command: |
+            ulimit -Hn unlimited
+            ulimit -Sn unlimited
+            zig-out/bin/test 2>&1 | cat
       - save_cache:
           key: macos-aarch64-0.14.1-{{ checksum "build.zig.zon" }}
           paths:
@@ -166,8 +212,11 @@ jobs:
       - restore_cache:
           key: linux-x86_64-0.14.1-{{ checksum "build.zig.zon" }}-v1
       - run:
-          name: Build and Test
-          command: workspace/zig/zig build test -Dlong-tests -Denable-tsan=true -Dledger=hashmap -Dcpu=x86_64_v3 -Dfilter="ledger" --summary all
+          name: Build Tests
+          command: workspace/zig/zig build test -Dno-run -Dlong-tests -Denable-tsan=true -Dledger=hashmap -Dcpu=x86_64_v3 -Dfilter="ledger" --summary all
+      - run:
+          name: Run Tests
+          command: zig-out/bin/test 2>&1 | cat
 
   test_linux:
     executor: linux-executor
@@ -180,9 +229,12 @@ jobs:
       - restore_cache:
           key: linux-x86_64-0.14.1-{{ checksum "build.zig.zon" }}-v1
       - run:
-          name: Test
+          name: Build Tests
           # Disable network-accessing tests for this job, which behave badly on circleci
-          command: workspace/zig/zig build test -Dlong-tests -Dcpu=x86_64_v3 -Denable-tsan=true -Dno-network-tests --summary all
+          command: workspace/zig/zig build test -Dno-run -Dlong-tests -Dcpu=x86_64_v3 -Denable-tsan=true -Dno-network-tests --summary all
+      - run:
+          name: Run Tests
+          command: zig-out/bin/test 2>&1 | cat
 
   test_kcov_linux:
     executor: linux-executor
@@ -194,7 +246,7 @@ jobs:
           key: linux-x86_64-0.14.1-{{ checksum "build.zig.zon" }}-v1
       - run:
           name: Build
-          command: workspace/zig/zig build test -Dlong-tests -Dtarget=x86_64-linux-gnu.2.36 -Dcpu=x86_64_v3 -Denable-tsan=false -Dno-run -Dno-network-tests --summary all
+          command: workspace/zig/zig build test -Dno-run -Dlong-tests -Dtarget=x86_64-linux-gnu.2.36 -Dcpu=x86_64_v3 -Denable-tsan=false -Dno-network-tests --summary all
       - run:
           name: Test and Collect
           command: |
@@ -317,7 +369,7 @@ jobs:
             - test-vectors/
       - run:
           name: Run Fixtures
-          command: ./conformance/scripts/fixtures.sh
+          command: ./conformance/scripts/ci-run.sh
 
 workflows:
   check_linux:
@@ -369,6 +421,12 @@ workflows:
       - setup_zig:
           name: setup_zig_macos
           target: "aarch64-macos"
-      - build_and_test_macos:
+      - build_check_macos:
           requires:
             - setup_zig_macos
+      - test_macos:
+          requires:
+            - build_check_macos
+      - test_macos_hashmap_ledger:
+          requires:
+            - build_check_macos

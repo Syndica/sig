@@ -61,7 +61,7 @@ pub const OptimisticConfirmationVerifier = struct {
     pub fn verifyForUnrootedOptimisticSlots(
         self: *OptimisticConfirmationVerifier,
         allocator: std.mem.Allocator,
-        ledger_reader: *sig.ledger.LedgerReader,
+        ledger: *sig.ledger.Ledger,
         root: struct {
             slot: Slot,
             hash: ?Hash,
@@ -95,7 +95,7 @@ pub const OptimisticConfirmationVerifier = struct {
             const root_hash_mismatch =
                 is_root_slot and root.hash != null and !slot_and_hash.hash.eql(root.hash.?);
             const not_in_ancestors = !root.ancestors.containsSlot(slot_and_hash.slot);
-            const not_rooted = !(try ledger_reader.isRoot(slot_and_hash.slot));
+            const not_rooted = !(try ledger.reader().isRoot(allocator, slot_and_hash.slot));
             if (root_hash_mismatch or (!is_root_slot and not_in_ancestors and not_rooted)) {
                 try optimistic_root_not_rooted.append(allocator, slot_and_hash);
             }
@@ -108,15 +108,16 @@ pub const OptimisticConfirmationVerifier = struct {
         self: *OptimisticConfirmationVerifier,
         allocator: std.mem.Allocator,
         new_optimistic_slots: []const sig.core.hash.SlotAndHash,
-        ledger_writer: *sig.ledger.LedgerResultWriter,
-    ) std.mem.Allocator.Error!void {
+        ledger: *sig.ledger.Ledger,
+    ) !void {
         if (new_optimistic_slots.len == 0) return;
 
         // We don't have any information about ancestors before the snapshot root,
         // so ignore those slots
+        var result_writer = ledger.resultWriter();
         for (new_optimistic_slots) |slot_and_hash| {
             if (slot_and_hash.slot > self.snapshot_start_slot) {
-                ledger_writer.insertOptimisticSlot(
+                result_writer.insertOptimisticSlot(
                     slot_and_hash.slot,
                     slot_and_hash.hash,
                     @intCast(sig.time.getWallclockMs()),
@@ -132,32 +133,8 @@ pub const OptimisticConfirmationVerifier = struct {
 test "OptimisticConfirmationVerifier.addNewOptimisticConfirmedSlots" {
     const allocator = std.testing.allocator;
 
-    var registry: sig.prometheus.Registry(.{}) = .init(allocator);
-    defer registry.deinit();
-
-    var db = try sig.ledger.tests.TestDB.init(@src());
-    defer db.deinit();
-
-    var lowest_cleanup_slot: sig.sync.RwMux(Slot) = .init(0);
-    var max_root: std.atomic.Value(u64) = .init(0);
-
-    var ledger_reader: sig.ledger.LedgerReader = try .init(
-        allocator,
-        .noop,
-        db,
-        &registry,
-        &lowest_cleanup_slot,
-        &max_root,
-    );
-
-    var ledger_writer: sig.ledger.LedgerResultWriter = try .init(
-        allocator,
-        .noop,
-        db,
-        &registry,
-        &lowest_cleanup_slot,
-        &max_root,
-    );
+    var state = try sig.ledger.tests.initTestLedger(allocator, @src(), .noop);
+    defer state.deinit();
 
     const snapshot_start_slot = 10;
 
@@ -172,28 +149,32 @@ test "OptimisticConfirmationVerifier.addNewOptimisticConfirmedSlots" {
     try verifier.addNewOptimisticConfirmedSlots(
         allocator,
         &.{.{ .slot = (snapshot_start_slot - 1), .hash = slot_hash }},
-        &ledger_writer,
+        &state,
     );
-    var latest = try ledger_reader.getLatestOptimisticSlots(10);
-    latest.deinit();
-    try std.testing.expectEqual(0, latest.items.len);
+    {
+        var latest = try state.reader().getLatestOptimisticSlots(allocator, 10);
+        defer latest.deinit();
+        try std.testing.expectEqual(0, latest.items.len);
+    }
 
     try verifier.addNewOptimisticConfirmedSlots(
         allocator,
         &.{.{ .slot = snapshot_start_slot, .hash = slot_hash }},
-        &ledger_writer,
+        &state,
     );
-    latest = try ledger_reader.getLatestOptimisticSlots(10);
-    latest.deinit();
-    try std.testing.expectEqual(0, latest.items.len);
+    {
+        var latest = try state.reader().getLatestOptimisticSlots(allocator, 10);
+        defer latest.deinit();
+        try std.testing.expectEqual(0, latest.items.len);
+    }
 
     try verifier.addNewOptimisticConfirmedSlots(
         allocator,
         &.{.{ .slot = (snapshot_start_slot + 1), .hash = slot_hash }},
-        &ledger_writer,
+        &state,
     );
-    latest = try ledger_reader.getLatestOptimisticSlots(10);
-    latest.deinit();
+    var latest = try state.reader().getLatestOptimisticSlots(allocator, 10);
+    defer latest.deinit();
     try std.testing.expectEqual(1, latest.items.len);
     try std.testing.expectEqual(1, verifier.unchecked_slots.count());
 
@@ -205,32 +186,8 @@ test "OptimisticConfirmationVerifier.addNewOptimisticConfirmedSlots" {
 test "OptimisticConfirmationVerifier.verifyForUnrootedOptimisticSlots: same slot different hash" {
     const allocator = std.testing.allocator;
 
-    var registry: sig.prometheus.Registry(.{}) = .init(allocator);
-    defer registry.deinit();
-
-    var db = try sig.ledger.tests.TestDB.init(@src());
-    defer db.deinit();
-
-    var lowest_cleanup_slot: sig.sync.RwMux(Slot) = .init(0);
-    var max_root: std.atomic.Value(u64) = .init(0);
-
-    var ledger_reader: sig.ledger.LedgerReader = try .init(
-        allocator,
-        .noop,
-        db,
-        &registry,
-        &lowest_cleanup_slot,
-        &max_root,
-    );
-
-    var ledger_writer: sig.ledger.LedgerResultWriter = try .init(
-        allocator,
-        .noop,
-        db,
-        &registry,
-        &lowest_cleanup_slot,
-        &max_root,
-    );
+    var state = try sig.ledger.tests.initTestLedger(allocator, @src(), .noop);
+    defer state.deinit();
 
     const snapshot_start_slot = 0;
     var verifier = OptimisticConfirmationVerifier.init(
@@ -246,10 +203,10 @@ test "OptimisticConfirmationVerifier.verifyForUnrootedOptimisticSlots: same slot
             .{ .slot = 1, .hash = bad_hash },
             .{ .slot = 3, .hash = Hash.ZEROES },
         },
-        &ledger_writer,
+        &state,
     );
-    const latest = try ledger_reader.getLatestOptimisticSlots(10);
-    latest.deinit();
+    const latest = try state.reader().getLatestOptimisticSlots(allocator, 10);
+    defer latest.deinit();
     try std.testing.expectEqual(2, latest.items.len);
 
     var root_ancestors: sig.core.Ancestors = .{ .ancestors = .empty };
@@ -257,7 +214,7 @@ test "OptimisticConfirmationVerifier.verifyForUnrootedOptimisticSlots: same slot
 
     const unrooted = try verifier.verifyForUnrootedOptimisticSlots(
         allocator,
-        &ledger_reader,
+        &state,
         .{
             .slot = 1,
             .hash = Hash.ZEROES,
@@ -278,37 +235,13 @@ test "OptimisticConfirmationVerifier.verifyForUnrootedOptimisticSlots: same slot
 test "OptimisticConfirmationVerifier.verifyForUnrootedOptimisticSlots: unrooted optimistic slots" {
     const allocator = std.testing.allocator;
 
-    var registry: sig.prometheus.Registry(.{}) = .init(allocator);
-    defer registry.deinit();
-
-    var db = try sig.ledger.tests.TestDB.init(@src());
-    defer db.deinit();
-
-    var lowest_cleanup_slot: sig.sync.RwMux(Slot) = .init(0);
-    var max_root: std.atomic.Value(u64) = .init(0);
-
-    var ledger_reader: sig.ledger.LedgerReader = try .init(
-        allocator,
-        .noop,
-        db,
-        &registry,
-        &lowest_cleanup_slot,
-        &max_root,
-    );
-
-    var ledger_writer: sig.ledger.LedgerResultWriter = try .init(
-        allocator,
-        .noop,
-        db,
-        &registry,
-        &lowest_cleanup_slot,
-        &max_root,
-    );
+    var state = try sig.ledger.tests.initTestLedger(allocator, @src(), .noop);
+    defer state.deinit();
 
     // Hashes for slots 1,3,5
-    const h1 = Hash.generateSha256("1");
-    const h3 = Hash.generateSha256("3");
-    const h5 = Hash.generateSha256("5");
+    const h1 = Hash.init("1");
+    const h3 = Hash.init("3");
+    const h5 = Hash.init("5");
 
     var verifier = OptimisticConfirmationVerifier.init(
         sig.time.Instant.now(),
@@ -321,10 +254,12 @@ test "OptimisticConfirmationVerifier.verifyForUnrootedOptimisticSlots: unrooted 
         .{ .slot = 3, .hash = h3 },
         .{ .slot = 5, .hash = h5 },
     };
-    try verifier.addNewOptimisticConfirmedSlots(allocator, optimistic, &ledger_writer);
-    var latest = try ledger_reader.getLatestOptimisticSlots(10);
-    latest.deinit();
-    try std.testing.expectEqual(3, latest.items.len);
+    try verifier.addNewOptimisticConfirmedSlots(allocator, optimistic, &state);
+    {
+        var latest = try state.reader().getLatestOptimisticSlots(allocator, 10);
+        defer latest.deinit();
+        try std.testing.expectEqual(3, latest.items.len);
+    }
 
     // Root on same fork at slot 5: ancestors include 1 and 3
     var anc5: sig.core.Ancestors = .{ .ancestors = .{} };
@@ -334,7 +269,7 @@ test "OptimisticConfirmationVerifier.verifyForUnrootedOptimisticSlots: unrooted 
     {
         const unrooted = try verifier.verifyForUnrootedOptimisticSlots(
             allocator,
-            &ledger_reader,
+            &state,
             .{ .slot = 5, .hash = h5, .ancestors = &anc5 },
         );
         defer allocator.free(unrooted);
@@ -343,14 +278,14 @@ test "OptimisticConfirmationVerifier.verifyForUnrootedOptimisticSlots: unrooted 
     try std.testing.expectEqual(0, verifier.unchecked_slots.count());
 
     // Re-add optimistic slots and check root at 3 (same fork)
-    try verifier.addNewOptimisticConfirmedSlots(allocator, optimistic, &ledger_writer);
+    try verifier.addNewOptimisticConfirmedSlots(allocator, optimistic, &state);
     var anc3: sig.core.Ancestors = .{ .ancestors = .{} };
     defer anc3.deinit(allocator);
     try anc3.addSlot(allocator, 1);
     {
         const unrooted = try verifier.verifyForUnrootedOptimisticSlots(
             allocator,
-            &ledger_reader,
+            &state,
             .{ .slot = 3, .hash = h3, .ancestors = &anc3 },
         );
         defer allocator.free(unrooted);
@@ -360,7 +295,7 @@ test "OptimisticConfirmationVerifier.verifyForUnrootedOptimisticSlots: unrooted 
     try std.testing.expect(verifier.unchecked_slots.contains(.{ .slot = 5, .hash = h5 }));
 
     // Re-add optimistic slots and set a different fork root at slot 4
-    try verifier.addNewOptimisticConfirmedSlots(allocator, optimistic, &ledger_writer);
+    try verifier.addNewOptimisticConfirmedSlots(allocator, optimistic, &state);
     var anc4: sig.core.Ancestors = .{ .ancestors = .{} };
     defer anc4.deinit(allocator);
     // ancestors for 4 include 1 (but not 3)
@@ -368,8 +303,8 @@ test "OptimisticConfirmationVerifier.verifyForUnrootedOptimisticSlots: unrooted 
     {
         const unrooted = try verifier.verifyForUnrootedOptimisticSlots(
             allocator,
-            &ledger_reader,
-            .{ .slot = 4, .hash = Hash.generateSha256("4"), .ancestors = &anc4 },
+            &state,
+            .{ .slot = 4, .hash = Hash.init("4"), .ancestors = &anc4 },
         );
         defer allocator.free(unrooted);
         try std.testing.expectEqual(1, unrooted.len);
@@ -389,13 +324,13 @@ test "OptimisticConfirmationVerifier.verifyForUnrootedOptimisticSlots: unrooted 
     try verifier.addNewOptimisticConfirmedSlots(
         allocator,
         optimistic,
-        &ledger_writer,
+        &state,
     );
     {
         const unrooted = try verifier.verifyForUnrootedOptimisticSlots(
             allocator,
-            &ledger_reader,
-            .{ .slot = 7, .hash = Hash.generateSha256("7"), .ancestors = &anc7 },
+            &state,
+            .{ .slot = 7, .hash = Hash.init("7"), .ancestors = &anc7 },
         );
         defer allocator.free(unrooted);
         // Expect two entries (1 and 3), order by slot ascending due to set ordering
@@ -412,25 +347,26 @@ test "OptimisticConfirmationVerifier.verifyForUnrootedOptimisticSlots: unrooted 
     try std.testing.expectEqual(0, verifier.unchecked_slots.count());
 
     // Mark 1 and 3 as roots in the ledger and ensure nothing is returned
-    var roots_setter = try ledger_writer.setRootsIncremental();
+    var result_writer = state.resultWriter();
+    var roots_setter = try result_writer.setRootsIncremental();
     defer roots_setter.deinit();
     try roots_setter.addRoot(1);
     try roots_setter.addRoot(3);
     try roots_setter.commit();
 
-    try verifier.addNewOptimisticConfirmedSlots(allocator, optimistic, &ledger_writer);
+    try verifier.addNewOptimisticConfirmedSlots(allocator, optimistic, &state);
     {
         const unrooted = try verifier.verifyForUnrootedOptimisticSlots(
             allocator,
-            &ledger_reader,
-            .{ .slot = 7, .hash = Hash.generateSha256("7"), .ancestors = &anc7 },
+            &state,
+            .{ .slot = 7, .hash = Hash.init("7"), .ancestors = &anc7 },
         );
         defer allocator.free(unrooted);
         try std.testing.expectEqual(0, unrooted.len);
     }
     try std.testing.expectEqual(0, verifier.unchecked_slots.count());
 
-    latest = try ledger_reader.getLatestOptimisticSlots(10);
-    latest.deinit();
+    var latest = try state.reader().getLatestOptimisticSlots(allocator, 10);
+    defer latest.deinit();
     try std.testing.expectEqual(3, latest.items.len);
 }

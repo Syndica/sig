@@ -259,6 +259,17 @@ pub const TowerSync = struct {
         var lockouts = self.lockouts;
         lockouts.deinit(allocator);
     }
+
+    pub fn fromLockouts(
+        allocator: std.mem.Allocator,
+        lockouts: []const Lockout,
+    ) std.mem.Allocator.Error!TowerSync {
+        if (!@import("builtin").is_test) @compileError("Not allowed");
+        var result: TowerSync = .ZEROES;
+        errdefer result.deinit(allocator);
+        try result.lockouts.appendSlice(allocator, lockouts);
+        return result;
+    }
 };
 
 pub fn serializeTowerSync(writer: anytype, data: anytype, _: sig.bincode.Params) anyerror!void {
@@ -3191,9 +3202,10 @@ test "state.VoteState.checkSlotsAreValid bad hash" {
         .timestamp = null,
     };
 
-    const slot_hashes = try SlotHashes.initWithEntries(allocator, &.{
-        .{ .slot = vote.slots[vote.slots.len - 1], .hash = Hash.generateSha256(&vote.hash.data) },
-    });
+    const slot_hashes = try SlotHashes.initWithEntries(allocator, &.{.{
+        .slot = vote.slots[vote.slots.len - 1],
+        .hash = Hash.init(&vote.hash.data),
+    }});
     defer slot_hashes.deinit(allocator);
 
     const result = try vote_state.checkSlotsAreValid(&vote, vote.slots, &slot_hashes);
@@ -3764,9 +3776,7 @@ test "state.VoteState process new vote state root progress" {
     // should succeed.
     for (MAX_LOCKOUT_HISTORY + 1..MAX_LOCKOUT_HISTORY + 3) |new_vote| {
         try processSlotVoteUnchecked(allocator, &vote_state2, new_vote);
-        try std.testing.expect(
-            !std.meta.eql(vote_state1.root_slot, vote_state2.root_slot),
-        );
+        try std.testing.expect(vote_state1.root_slot != vote_state2.root_slot);
 
         var cloned_votes = try vote_state2.votes.clone();
         defer cloned_votes.deinit();
@@ -3779,9 +3789,7 @@ test "state.VoteState process new vote state root progress" {
         );
         try std.testing.expectEqual(null, maybe_error);
         // TODO have a better way of comparing all of vote_state1 with vote_state2
-        try std.testing.expect(
-            std.meta.eql(vote_state1.root_slot, vote_state2.root_slot),
-        );
+        try std.testing.expectEqual(vote_state1.root_slot, vote_state2.root_slot);
         try std.testing.expectEqualSlices(
             LandedVote,
             vote_state1.votes.items,

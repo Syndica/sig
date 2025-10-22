@@ -23,6 +23,7 @@ pub fn Database(comptime Impl: type) type {
         impl: Impl,
 
         const Self = @This();
+        pub const name: []const u8 = Impl.name;
 
         pub fn open(
             allocator: Allocator,
@@ -309,11 +310,11 @@ pub const BytesRef = struct {
 
 /// Test cases that can be applied to any implementation of Database
 pub fn testDatabase(comptime Impl: fn ([]const ColumnFamily) type) type {
-    assertIsDatabase(Impl(&.{}));
+    const T = Impl(&.{});
+    assertIsDatabase(T);
 
     @setEvalBranchQuota(10_000);
-    const impl_id = sig.core.Hash.generateSha256(@typeName(Impl(&.{}))).base58String();
-    const test_dir = sig.TEST_STATE_DIR ++ "ledger/database/" ++ impl_id.buffer ++ "/";
+    const test_dir = sig.TEST_STATE_DIR ++ "ledger/database/" ++ T.name ++ "/";
 
     const Value1 = struct { hello: u16 };
     const Value2 = struct { world: u16 };

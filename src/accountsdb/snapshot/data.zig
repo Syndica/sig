@@ -945,7 +945,7 @@ pub const FullSnapshotFileInfo = struct {
             }
 
             const str_max_len = std.fmt.count("{d}", .{std.math.maxInt(Slot)});
-            const end_max = @max(filename.len, start + str_max_len + 1);
+            const end_max = @min(filename.len, start + str_max_len + 1);
             const filename_trunc = filename[0..end_max];
             const end = std.mem.indexOfScalarPos(u8, filename_trunc, start + 1, '-') orelse
                 return error.MissingSlotDelimiter;
@@ -1086,7 +1086,7 @@ pub const IncrementalSnapshotFileInfo = struct {
             }
 
             const str_max_len = std.fmt.count("{d}", .{std.math.maxInt(Slot)});
-            const end_max = @max(filename.len, start + str_max_len + 1);
+            const end_max = @min(filename.len, start + str_max_len + 1);
             const filename_trunc = filename[0..end_max];
             const end = std.mem.indexOfScalarPos(u8, filename_trunc, start + 1, '-') orelse
                 return error.MissingSlotDelimiter;
@@ -1107,7 +1107,7 @@ pub const IncrementalSnapshotFileInfo = struct {
             }
 
             const str_max_len = std.fmt.count("{d}", .{std.math.maxInt(Slot)});
-            const end_max = @max(filename.len, start + str_max_len + 1);
+            const end_max = @min(filename.len, start + str_max_len + 1);
             const filename_trunc = filename[0..end_max];
             const end = std.mem.indexOfScalarPos(u8, filename_trunc, start + 1, '-') orelse
                 return error.MissingSlotDelimiter;

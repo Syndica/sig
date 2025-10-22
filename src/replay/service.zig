@@ -17,8 +17,7 @@ const SlotState = sig.core.bank.SlotState;
 const AccountStore = sig.accounts_db.AccountStore;
 const AccountReader = sig.accounts_db.AccountReader;
 
-const LedgerDB = sig.ledger.LedgerDB;
-const LedgerReader = sig.ledger.LedgerReader;
+const Ledger = sig.ledger.Ledger;
 
 const ProgressMap = sig.consensus.ProgressMap;
 const TowerConsensus = replay.consensus.TowerConsensus;
@@ -58,12 +57,11 @@ pub const Service = struct {
                 .root_slot = deps.root.slot,
                 .root_hash = slot_tracker.get(slot_tracker.root).?.state.hash.readCopy().?,
                 .account_reader = deps.account_store.reader(),
-                .ledger_reader = deps.ledger.reader,
-                .ledger_writer = deps.ledger.writer,
+                .ledger = deps.ledger,
                 .exit = deps.exit,
                 .replay_votes_channel = state.replay_votes_channel,
-                .slot_tracker_rw = &state.slot_tracker,
-                .epoch_tracker_rw = &state.epoch_tracker,
+                .slot_tracker_rw = state.slot_tracker,
+                .epoch_tracker_rw = state.epoch_tracker,
                 .external = consensus_deps,
             };
 
@@ -98,9 +96,9 @@ pub const Service = struct {
             allocator,
             self.replay.logger,
             self.replay.account_store,
-            &self.replay.ledger.db,
-            &self.replay.slot_tracker,
-            &self.replay.epoch_tracker,
+            self.replay.ledger,
+            self.replay.slot_tracker,
+            self.replay.epoch_tracker,
             &self.replay.slot_tree,
             self.replay.slot_leaders,
             &self.replay.hard_forks,
@@ -118,8 +116,8 @@ pub const Service = struct {
         if (self.consensus) |*consensus|
             try consensus.process(
                 allocator,
-                &self.replay.slot_tracker,
-                &self.replay.epoch_tracker,
+                self.replay.slot_tracker,
+                self.replay.epoch_tracker,
                 &self.replay.progress_map,
                 slot_results,
             )
@@ -144,7 +142,7 @@ pub const Dependencies = struct {
     account_store: sig.accounts_db.AccountStore,
     /// Reader used to get the entries to validate them and execute the transactions
     /// Writer used to update the ledger with consensus results
-    ledger: LedgerRef,
+    ledger: *Ledger,
     /// Used to get the entries to validate them and execute the transactions
     slot_leaders: SlotLeaders,
     /// The slot to start replaying from.
@@ -195,12 +193,6 @@ pub const Dependencies = struct {
     }
 };
 
-pub const LedgerRef = struct {
-    db: LedgerDB,
-    reader: *sig.ledger.LedgerReader,
-    writer: *sig.ledger.LedgerResultWriter,
-};
-
 pub const ReplayState = struct {
     allocator: Allocator,
     my_identity: Pubkey,
@@ -211,14 +203,14 @@ pub const ReplayState = struct {
     /// Borrowed across multiple threads (replay, vote_listener).
     /// These RwMuxes are deinitialized in `ReplayState.deinit()` only
     /// after all dependent threads have been joined based on defer order in `run`.
-    slot_tracker: RwMux(SlotTracker),
+    slot_tracker: *RwMux(SlotTracker),
     /// Lifetime rules are the same as `slot_tracker`.
-    epoch_tracker: RwMux(EpochTracker),
+    epoch_tracker: *RwMux(EpochTracker),
     slot_tree: SlotTree,
     hard_forks: sig.core.HardForks,
     account_store: AccountStore,
     progress_map: ProgressMap,
-    ledger: LedgerRef,
+    ledger: *Ledger,
     status_cache: sig.core.StatusCache,
     execution_log_helper: replay.execution.LogHelper,
     replay_votes_channel: *Channel(ParsedVote),
@@ -230,10 +222,16 @@ pub const ReplayState = struct {
         var slots = self.slot_tracker.tryRead() orelse
             @panic("Slot tracker deinit while in use");
         slots.get().deinit(self.allocator);
+        slots.unlock();
+
+        self.allocator.destroy(self.slot_tracker);
 
         var epoch_tracker = self.epoch_tracker.tryRead() orelse
             @panic("Epoch tracker deinit while in use");
         epoch_tracker.get().deinit(self.allocator);
+        epoch_tracker.unlock();
+
+        self.allocator.destroy(self.epoch_tracker);
 
         self.progress_map.deinit(self.allocator);
         self.replay_votes_channel.destroy();
@@ -276,14 +274,22 @@ pub const ReplayState = struct {
         const slot_tree = try SlotTree.init(deps.allocator, deps.root.slot);
         errdefer slot_tree.deinit(deps.allocator);
 
+        const slot_tracker_rw = try deps.allocator.create(RwMux(SlotTracker));
+        errdefer deps.allocator.destroy(slot_tracker_rw);
+        slot_tracker_rw.* = RwMux(SlotTracker).init(slot_tracker);
+
+        const epoch_tracker_rw = try deps.allocator.create(RwMux(EpochTracker));
+        errdefer deps.allocator.destroy(epoch_tracker_rw);
+        epoch_tracker_rw.* = RwMux(EpochTracker).init(epoch_tracker);
+
         return .{
             .allocator = deps.allocator,
             .logger = .from(deps.logger),
             .thread_pool = .init(.{ .max_threads = num_threads }),
             .my_identity = deps.my_identity,
             .slot_leaders = deps.slot_leaders,
-            .slot_tracker = .init(slot_tracker),
-            .epoch_tracker = .init(epoch_tracker),
+            .slot_tracker = slot_tracker_rw,
+            .epoch_tracker = epoch_tracker_rw,
             .slot_tree = slot_tree,
             .hard_forks = deps.hard_forks.take(),
             .account_store = deps.account_store,
@@ -350,7 +356,7 @@ pub fn trackNewSlots(
     allocator: Allocator,
     logger: Logger,
     account_store: AccountStore,
-    ledger_db: *LedgerDB,
+    ledger: *Ledger,
     slot_tracker_rw: *RwMux(SlotTracker),
     epoch_tracker_rw: *RwMux(EpochTracker),
     slot_tree: *SlotTree,
@@ -378,8 +384,7 @@ pub fn trackNewSlots(
         frozen_slots_since_root.appendAssumeCapacity(slot);
     };
 
-    var next_slots = try LedgerReader
-        .getSlotsSince(allocator, ledger_db, frozen_slots_since_root.items);
+    var next_slots = try ledger.reader().getSlotsSince(allocator, frozen_slots_since_root.items);
     defer {
         for (next_slots.values()) |*list| list.deinit(allocator);
         next_slots.deinit(allocator);
@@ -621,8 +626,8 @@ test trackNewSlots {
     const allocator = std.testing.allocator;
     var rng = std.Random.DefaultPrng.init(0);
 
-    var ledger_db = try sig.ledger.tests.TestDB.init(@src());
-    defer ledger_db.deinit();
+    var ledger = try sig.ledger.tests.initTestLedger(allocator, @src(), .noop);
+    defer ledger.deinit();
     //     0
     //     1
     //    / \
@@ -643,7 +648,7 @@ test trackNewSlots {
         var meta = sig.ledger.meta.SlotMeta.init(allocator, slot, parent);
         defer meta.deinit();
         try meta.child_slots.appendSlice(children);
-        try ledger_db.put(sig.ledger.schema.schema.slot_meta, slot, meta);
+        try ledger.db.put(sig.ledger.schema.schema.slot_meta, slot, meta);
     }
 
     const slot_tracker_val: SlotTracker = try .init(allocator, 0, .{
@@ -722,7 +727,7 @@ test trackNewSlots {
         allocator,
         .FOR_TESTS,
         .noop,
-        &ledger_db,
+        &ledger,
         &slot_tracker,
         &epoch_tracker,
         &slot_tree,
@@ -746,7 +751,7 @@ test trackNewSlots {
         allocator,
         .FOR_TESTS,
         .noop,
-        &ledger_db,
+        &ledger,
         &slot_tracker,
         &epoch_tracker,
         &slot_tree,
@@ -775,7 +780,7 @@ test trackNewSlots {
         allocator,
         .FOR_TESTS,
         .noop,
-        &ledger_db,
+        &ledger,
         &slot_tracker,
         &epoch_tracker,
         &slot_tree,
@@ -805,7 +810,7 @@ test trackNewSlots {
         allocator,
         .FOR_TESTS,
         .noop,
-        &ledger_db,
+        &ledger,
         &slot_tracker,
         &epoch_tracker,
         &slot_tree,
@@ -874,11 +879,32 @@ test "process runs without error with no replay results" {
     // coverage. currently consensus panics or hangs if you run it with actual data
     _ = try service.consensus.?.process(
         allocator,
-        &service.replay.slot_tracker,
-        &service.replay.epoch_tracker,
+        service.replay.slot_tracker,
+        service.replay.epoch_tracker,
         &service.replay.progress_map,
         &.{},
     );
+
+    dep_stubs.exit.store(true, .monotonic);
+}
+
+test "advance calls consensus.process with empty replay results" {
+    const allocator = std.testing.allocator;
+
+    var dep_stubs = try DependencyStubs.init(allocator, .FOR_TESTS);
+    defer dep_stubs.deinit(allocator);
+
+    var service = try dep_stubs.stubbedService(allocator, .FOR_TESTS, false);
+    defer service.deinit(allocator);
+
+    try service.advance();
+
+    // No slots were replayed
+    {
+        const slot_tracker, var lg = service.replay.slot_tracker.readWithLock();
+        defer lg.unlock();
+        try std.testing.expectEqual(0, slot_tracker.root);
+    }
 
     dep_stubs.exit.store(true, .monotonic);
 }
@@ -946,13 +972,8 @@ fn testExecuteBlock(allocator: Allocator, config: struct {
             .is_repair = false,
         });
     }
-    var shred_inserter = try sig.ledger.ShredInserter.init(
+    const result = try dep_stubs.ledger.shredInserter().insertShreds(
         allocator,
-        .FOR_TESTS,
-        &dep_stubs.registry,
-        dep_stubs.ledger.db.*,
-    );
-    const result = try shred_inserter.insertShreds(
         shreds.items(.shred),
         shreds.items(.is_repair),
         .{},
@@ -1056,19 +1077,17 @@ fn parseBincodeFromGzipFile(
 pub const DependencyStubs = struct {
     accountsdb: sig.accounts_db.ThreadSafeAccountMap,
     exit: std.atomic.Value(bool),
-    registry: sig.prometheus.Registry(.{}),
     dir: std.testing.TmpDir,
     ledger_path: []const u8,
-    ledger: sig.ledger.UnifiedLedger,
+    ledger: Ledger,
     senders: TowerConsensus.Senders,
     receivers: TowerConsensus.Receivers,
 
     pub fn deinit(self: *DependencyStubs, allocator: Allocator) void {
         self.accountsdb.deinit();
-        self.registry.deinit();
         self.dir.cleanup();
         allocator.free(self.ledger_path);
-        self.ledger.deinit(allocator);
+        self.ledger.deinit();
         self.senders.destroy();
         self.receivers.destroy();
     }
@@ -1077,20 +1096,14 @@ pub const DependencyStubs = struct {
         var accountsdb = sig.accounts_db.ThreadSafeAccountMap.init(allocator);
         errdefer accountsdb.deinit();
 
-        var exit = std.atomic.Value(bool).init(false);
-
-        var registry = sig.prometheus.Registry(.{}).init(allocator);
-        errdefer registry.deinit();
-
         var dir = std.testing.tmpDir(.{});
         errdefer dir.cleanup();
 
         const ledger_path = try dir.dir.realpathAlloc(allocator, ".");
         errdefer allocator.free(ledger_path);
 
-        var ledger = try sig.ledger.UnifiedLedger
-            .init(allocator, .from(logger), ledger_path, &registry, &exit, null);
-        errdefer ledger.deinit(allocator);
+        var ledger = try Ledger.init(allocator, .from(logger), ledger_path, null);
+        errdefer ledger.deinit();
 
         var senders = try TowerConsensus.Senders.create(allocator);
         errdefer senders.destroy();
@@ -1101,7 +1114,6 @@ pub const DependencyStubs = struct {
         return .{
             .accountsdb = accountsdb,
             .exit = .init(false),
-            .registry = registry,
             .dir = dir,
             .ledger_path = ledger_path,
             .ledger = ledger,
@@ -1151,11 +1163,7 @@ pub const DependencyStubs = struct {
                 .exit = &self.exit,
                 .epoch_schedule = .DEFAULT,
                 .account_store = self.accountsdb.accountStore(),
-                .ledger = .{
-                    .db = self.ledger.db.*,
-                    .reader = self.ledger.reader,
-                    .writer = self.ledger.result_writer,
-                },
+                .ledger = &self.ledger,
                 .slot_leaders = SlotLeaders.init(&leader, struct {
                     pub fn get(pubkey: *Pubkey, _: Slot) ?Pubkey {
                         return pubkey.*;
@@ -1231,11 +1239,7 @@ pub const DependencyStubs = struct {
                 .vote_identity = .ZEROES,
                 .exit = &self.exit,
                 .account_store = self.accountsdb.accountStore(),
-                .ledger = .{
-                    .db = self.ledger.db.*,
-                    .reader = self.ledger.reader,
-                    .writer = self.ledger.result_writer,
-                },
+                .ledger = &self.ledger,
                 .epoch_schedule = bank_fields.epoch_schedule,
                 .slot_leaders = slot_leaders,
                 .root = .{

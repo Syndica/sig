@@ -57,7 +57,7 @@ pub fn expectProgramExecuteResult(
 
     var context_params = initial_context_params;
     if (options.print_logs and initial_context_params.log_collector == null) {
-        context_params.log_collector = LogCollector.init(null);
+        context_params.log_collector = try LogCollector.init(allocator, null);
     }
 
     // Create the initial transaction context
@@ -72,8 +72,10 @@ pub fn expectProgramExecuteResult(
         // Log messages before deiniting the transaction context
         if (options.print_logs) {
             std.debug.print("Execution Logs:\n", .{});
-            for (initial_tc.log_collector.?.collect(), 1..) |log, index| {
-                std.debug.print("    {}: {s}\n", .{ index, log });
+            var iter = initial_tc.log_collector.?.iterator();
+            var i: usize = 1;
+            while (iter.next()) |log| : (i += 1) {
+                std.debug.print("    {}: {s}\n", .{ i, log });
             }
         }
         deinitTransactionContext(allocator, initial_tc);
@@ -111,4 +113,84 @@ pub fn expectProgramExecuteResult(
 
     // Check the result
     try expectTransactionContextEqual(expected_tc, initial_tc);
+}
+
+test expectProgramExecuteError {
+    const allocator = std.testing.allocator;
+
+    try expectProgramExecuteError(
+        error.UnsupportedProgramId,
+        allocator,
+        Pubkey.ZEROES, // invalid program id
+        &.{}, // empty instruction,
+        &.{.{ .index_in_transaction = 0 }},
+        .{ .accounts = &.{.{ .pubkey = Pubkey.ZEROES }} },
+        .{ .print_logs = false },
+    );
+}
+
+test expectProgramExecuteResult {
+    const allocator = std.testing.allocator;
+    const system_program = sig.runtime.program.system;
+
+    var prng = std.Random.DefaultPrng.init(0);
+    const src_account = Pubkey.initRandom(prng.random());
+    const dst_account = Pubkey.initRandom(prng.random());
+
+    var expected_logger = try LogCollector.init(allocator, null);
+    try expected_logger.log(allocator, "Program {} invoke [1]", .{system_program.ID});
+    try expected_logger.log(allocator, "Program {} success", .{system_program.ID});
+
+    // Test log_collector.eql path
+    try expectProgramExecuteResult(
+        allocator,
+        system_program.ID,
+        system_program.Instruction{
+            .transfer = .{ .lamports = 10 },
+        },
+        &.{
+            .{ .index_in_transaction = 0, .is_writable = true, .is_signer = true },
+            .{ .index_in_transaction = 1, .is_writable = true },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = src_account,
+                    .owner = system_program.ID,
+                    .lamports = 100,
+                },
+                .{
+                    .pubkey = dst_account,
+                    .owner = system_program.ID,
+                    .lamports = 50,
+                },
+                .{
+                    .pubkey = system_program.ID,
+                    .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+                },
+            },
+            .compute_meter = system_program.COMPUTE_UNITS,
+            .log_collector = try LogCollector.init(allocator, null),
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = src_account,
+                    .owner = system_program.ID,
+                    .lamports = 100 - 10,
+                },
+                .{
+                    .pubkey = dst_account,
+                    .owner = system_program.ID,
+                    .lamports = 50 + 10,
+                },
+                .{
+                    .pubkey = system_program.ID,
+                    .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+                },
+            },
+            .log_collector = expected_logger,
+        },
+        .{},
+    );
 }

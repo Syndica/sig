@@ -59,7 +59,7 @@ pub const Pong = struct {
 
     pub fn init(ping: *const Ping, keypair: *const KeyPair) !Pong {
         const token_with_prefix = PING_PONG_HASH_PREFIX ++ ping.token;
-        const hash = Hash.generateSha256(token_with_prefix);
+        const hash = Hash.init(&token_with_prefix);
         const signature = keypair.sign(&hash.data, null) catch return error.SignatureError;
 
         return .{
@@ -122,12 +122,22 @@ pub const PingCache = struct {
         cache_capacity: usize,
     ) error{OutOfMemory}!Self {
         std.debug.assert(rate_limit_delay.asNanos() <= ttl.asNanos() / 2);
+
+        var pings = try LruCache(.non_locking, PubkeyAndSocketAddr, std.time.Instant).init(allocator, cache_capacity);
+        errdefer pings.deinit();
+
+        var pongs = try LruCache(.non_locking, PubkeyAndSocketAddr, std.time.Instant).init(allocator, cache_capacity);
+        errdefer pongs.deinit();
+
+        var pending_cache = try LruCache(.non_locking, Hash, PubkeyAndSocketAddr).init(allocator, cache_capacity);
+        errdefer pending_cache.deinit();
+
         return Self{
             .ttl = ttl,
             .rate_limit_delay = rate_limit_delay,
-            .pings = try LruCache(.non_locking, PubkeyAndSocketAddr, std.time.Instant).init(allocator, cache_capacity),
-            .pongs = try LruCache(.non_locking, PubkeyAndSocketAddr, std.time.Instant).init(allocator, cache_capacity),
-            .pending_cache = try LruCache(.non_locking, Hash, PubkeyAndSocketAddr).init(allocator, cache_capacity),
+            .pings = pings,
+            .pongs = pongs,
+            .pending_cache = pending_cache,
             .allocator = allocator,
         };
     }
@@ -170,7 +180,7 @@ pub const PingCache = struct {
         var prng = DefaultPrng.init(0);
         const ping = Ping.initRandom(prng.random(), keypair) catch return null;
         var token_with_prefix = PING_PONG_HASH_PREFIX ++ ping.token;
-        const hash = Hash.generateSha256(token_with_prefix[0..]);
+        const hash = Hash.init(&token_with_prefix);
         _ = self.pending_cache.put(hash, peer_and_addr);
         _ = self.pings.put(peer_and_addr, now);
         return ping;

@@ -223,12 +223,15 @@ pub const GossipService = struct {
         // setup channels for communication between threads
         var packet_incoming_channel = try Channel(Packet).create(allocator);
         errdefer packet_incoming_channel.destroy();
+        packet_incoming_channel.name = "gossip packet incoming channel";
 
         var packet_outgoing_channel = try Channel(Packet).create(allocator);
         errdefer packet_outgoing_channel.destroy();
+        packet_outgoing_channel.name = "gossip packet outgoing channel";
 
         var verified_incoming_channel = try Channel(GossipMessageWithEndpoint).create(allocator);
         errdefer verified_incoming_channel.destroy();
+        packet_outgoing_channel.name = "gossip verified incoming channel";
 
         // setup the socket (bind with read-timeout)
         const gossip_address = my_contact_info.getSocket(.gossip) orelse return error.GossipAddrUnspecified;
@@ -249,10 +252,13 @@ pub const GossipService = struct {
         errdefer gossip_table.deinit();
 
         // setup the active set for push messages
-        const active_set = ActiveSet.init(allocator);
+        var active_set = ActiveSet.init(allocator);
+        errdefer active_set.deinit();
 
         // setup entrypoints
         var entrypoints = ArrayList(Entrypoint).init(allocator);
+        errdefer entrypoints.deinit();
+
         if (maybe_entrypoints) |entrypoint_addrs| {
             try entrypoints.ensureTotalCapacityPrecise(entrypoint_addrs.len);
             for (entrypoint_addrs) |entrypoint_addr| {
@@ -261,25 +267,32 @@ pub const GossipService = struct {
         }
 
         // setup ping/pong cache
-        const ping_cache = try PingCache.init(
+        var ping_cache = try PingCache.init(
             allocator,
             PING_CACHE_TTL,
             PING_CACHE_RATE_LIMIT_DELAY,
             PING_CACHE_CAPACITY,
         );
+        errdefer ping_cache.deinit();
 
         const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
         const my_shred_version = my_contact_info.shred_version;
-        const failed_pull_hashes = HashTimeQueue.init(allocator);
+
+        var failed_pull_hashes = HashTimeQueue.init(allocator);
+        errdefer failed_pull_hashes.deinit();
+
         const metrics = try GossipMetrics.init();
 
         const exit_counter = try allocator.create(Atomic(u64));
+        errdefer allocator.destroy(exit_counter);
         exit_counter.* = Atomic(u64).init(0);
 
         const exit = try allocator.create(Atomic(bool));
+        errdefer allocator.destroy(exit);
         exit.* = Atomic(bool).init(false);
 
-        const service_manager = ServiceManager.init(allocator, .from(logger), exit, "gossip", .{});
+        var service_manager = ServiceManager.init(allocator, .from(logger), exit, "gossip", .{});
+        errdefer service_manager.deinit();
 
         return .{
             .allocator = allocator,
@@ -982,7 +995,7 @@ pub const GossipService = struct {
             // sleep
             if (loop_timer.read().asNanos() < BUILD_MESSAGE_LOOP_MIN.asNanos()) {
                 const time_left_ms = BUILD_MESSAGE_LOOP_MIN.asMillis() -| loop_timer.read().asMillis();
-                std.time.sleep(time_left_ms * std.time.ns_per_ms);
+                std.Thread.sleep(time_left_ms * std.time.ns_per_ms);
             }
         }
     }
@@ -1619,7 +1632,7 @@ pub const GossipService = struct {
                 const bytes = bincode.writeToSlice(&buf, gossip_value_ptr.*, bincode.Params.standard) catch {
                     continue;
                 };
-                const value_hash = Hash.generateSha256(bytes);
+                const value_hash = Hash.init(bytes);
                 try failed_pull_hashes.insert(value_hash, now);
                 gossip_value_ptr.deinit(self.gossip_data_allocator);
             }
@@ -2643,12 +2656,12 @@ test "handle old prune & pull request message" {
     const MAX_N_SLEEPS = 100;
     var i: u64 = 0;
     while (gossip_service.metrics.pull_requests_dropped.get() != 2) {
-        std.time.sleep(std.time.ns_per_ms * 100);
+        std.Thread.sleep(std.time.ns_per_ms * 100);
         if (i > MAX_N_SLEEPS) return error.LoopRangeExceeded;
         i += 1;
     }
     while (gossip_service.metrics.prune_messages_dropped.get() != 1) {
-        std.time.sleep(std.time.ns_per_ms * 100);
+        std.Thread.sleep(std.time.ns_per_ms * 100);
         if (i > MAX_N_SLEEPS) return error.LoopRangeExceeded;
         i += 1;
     }
@@ -3265,7 +3278,7 @@ test "process contact info push packet" {
     const MAX_N_SLEEPS = 100;
     var i: u64 = 0;
     while (gossip_service.metrics.gossip_packets_processed_total.get() != valid_messages_sent) {
-        std.time.sleep(std.time.ns_per_ms * 100);
+        std.Thread.sleep(std.time.ns_per_ms * 100);
         if (i > MAX_N_SLEEPS) return error.LoopRangeExceeded;
         i += 1;
     }
@@ -3324,6 +3337,30 @@ test "init, exit, and deinit" {
         gossip_service.shutdown();
         handle.join();
     }
+}
+
+test "leak checked gossip init" {
+    const testfn = struct {
+        fn f(allocator: std.mem.Allocator) !void {
+            var my_keypair = try KeyPair.generateDeterministic(@splat(1));
+            const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
+            const contact_info = try localhostTestContactInfo(my_pubkey);
+            errdefer contact_info.deinit();
+
+            var gossip_service = try GossipService.init(
+                allocator,
+                allocator,
+                contact_info,
+                my_keypair,
+                null,
+                .FOR_TESTS,
+            );
+            gossip_service.shutdown();
+            gossip_service.deinit();
+        }
+    }.f;
+
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, testfn, .{});
 }
 
 const fuzz_service = sig.gossip.fuzz_service;
@@ -3578,6 +3615,7 @@ pub const BenchmarkGossipServicePullRequests = struct {
 fn localhostTestContactInfo(id: Pubkey) !ContactInfo {
     comptime std.debug.assert(@import("builtin").is_test); // should only be used for testin
     var contact_info = try LegacyContactInfo.default(id).toContactInfo(std.testing.allocator);
+    errdefer contact_info.deinit();
     try contact_info.setSocket(.gossip, SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 0));
     return contact_info;
 }
