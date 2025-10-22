@@ -2367,8 +2367,6 @@ pub const AccountsDB = struct {
             slot: Slot,
             /// The incremental accounts delta hash, including zero-lamport accounts.
             hash: LtHash,
-            // /// The capitalization from the base slot to the incremental slot.
-            // capitalization: u64,
         };
     };
 
@@ -2605,7 +2603,6 @@ pub const AccountsDB = struct {
         full_hash: LtHash,
         full_capitalization: u64,
         incremental_hash: LtHash,
-        // incremental_capitalization: u64,
 
         fn intoSnapshotPersistence(
             self: GenerateIncSnapshotResult,
@@ -3634,7 +3631,7 @@ test "load and validate from test snapshot - single threaded" {
     const snapshot_dir = tmp_dir_root.dir;
 
     var accounts_db, const full_inc_manifest =
-        try loadTestAccountsDBFromSnapshot(allocator, false, 1, .FOR_TESTS, snapshot_dir, 500);
+        try loadTestAccountsDBFromSnapshot(allocator, false, 1, .noop, snapshot_dir, 500);
     defer {
         accounts_db.deinit();
         full_inc_manifest.deinit(allocator);
