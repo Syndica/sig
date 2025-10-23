@@ -76,6 +76,7 @@ const SlotStatus = sig.replay.consensus.cluster_sync.SlotStatus;
 
 const ReplayResult = replay.execution.ReplayResult;
 const ProcessResultParams = replay.consensus.process_result.ProcessResultParams;
+const GossipVerifiedVoteHash = sig.consensus.vote_listener.GossipVerifiedVoteHash;
 
 const collectClusterVoteState = sig.consensus.replay_tower.collectClusterVoteState;
 const isDuplicateSlotConfirmed = sig.consensus.replay_tower.isDuplicateSlotConfirmed;
@@ -123,69 +124,17 @@ pub const TowerConsensus = struct {
         self.arena_state.promote(allocator).deinit();
     }
 
-    /// All parameters needed for initialization
-    pub const Dependencies = struct {
-        // Basic parameters
-        logger: Logger,
-        identity: sig.identity.ValidatorIdentity,
-        signing: sig.identity.SigningKeys,
-
-        // Data sources
-        account_reader: AccountReader,
-        ledger: *sig.ledger.Ledger,
-        /// Reference not held onto, only used for some lookups.
-        slot_tracker: *const SlotTracker,
-    };
-
-    /// Channels where consensus sends messages to other services
-    pub const Senders = struct {
-        /// Received by repair ancestor_hashes_service
-        ancestor_hashes_replay_update: *Channel(AncestorHashesReplayUpdate),
-
-        pub fn destroy(self: Senders) void {
-            self.ancestor_hashes_replay_update.destroy();
-        }
-
-        pub fn create(allocator: std.mem.Allocator) std.mem.Allocator.Error!Senders {
-            return .{ .ancestor_hashes_replay_update = try .create(allocator) };
-        }
-    };
-
-    /// Channels where consensus receives messages from other services
-    pub const Receivers = struct {
-        /// Sent by repair ancestor_hashes_service
-        ancestor_duplicate_slots: *Channel(AncestorDuplicateSlotToRepair),
-        /// Sent by repair service
-        popular_pruned_forks: *Channel(Slot),
-        /// Sent by WindowService and DuplicateShred handlers
-        duplicate_slots: *Channel(Slot),
-
-        pub fn destroy(self: Receivers) void {
-            self.ancestor_duplicate_slots.destroy();
-            self.popular_pruned_forks.destroy();
-            self.duplicate_slots.destroy();
-        }
-
-        pub fn create(allocator: std.mem.Allocator) std.mem.Allocator.Error!Receivers {
-            const ancestor_duplicate_slots: *Channel(AncestorDuplicateSlotToRepair) =
-                try .create(allocator);
-            errdefer ancestor_duplicate_slots.destroy();
-
-            const popular_pruned_forks: *Channel(Slot) = try .create(allocator);
-            errdefer popular_pruned_forks.destroy();
-
-            const duplicate_slots: *Channel(Slot) = try .create(allocator);
-            errdefer duplicate_slots.destroy();
-
-            return .{
-                .ancestor_duplicate_slots = ancestor_duplicate_slots,
-                .popular_pruned_forks = popular_pruned_forks,
-                .duplicate_slots = duplicate_slots,
-            };
-        }
-    };
-
-    pub fn init(allocator: Allocator, deps: Dependencies) !TowerConsensus {
+    pub fn init(
+        allocator: Allocator,
+        deps: struct {
+            logger: Logger,
+            identity: sig.identity.ValidatorIdentity,
+            signing: sig.identity.SigningKeys,
+            account_reader: AccountReader,
+            ledger: *sig.ledger.Ledger,
+            slot_tracker: *const SlotTracker,
+        },
+    ) !TowerConsensus {
         const zone = tracy.Zone.init(@src(), .{ .name = "TowerConsensus.init" });
         defer zone.deinit();
 
@@ -297,6 +246,69 @@ pub const TowerConsensus = struct {
         return heaviest_subtree_fork_choice;
     }
 
+    /// Channels where consensus sends messages to other services
+    pub const Senders = struct {
+        /// Received by repair ancestor_hashes_service
+        ancestor_hashes_replay_update: *Channel(AncestorHashesReplayUpdate),
+
+        pub fn destroy(self: Senders) void {
+            self.ancestor_hashes_replay_update.destroy();
+        }
+
+        pub fn create(allocator: std.mem.Allocator) std.mem.Allocator.Error!Senders {
+            return .{ .ancestor_hashes_replay_update = try .create(allocator) };
+        }
+    };
+
+    /// Channels where consensus receives messages from other services
+    pub const Receivers = struct {
+        /// Sent by repair ancestor_hashes_service
+        ancestor_duplicate_slots: *Channel(AncestorDuplicateSlotToRepair),
+        /// Sent by repair service
+        popular_pruned_forks: *Channel(Slot),
+        /// Sent by WindowService and DuplicateShred handlers
+        duplicate_slots: *Channel(Slot),
+        /// Sent by `replayActiveSlots`, received by the vote collector.
+        replay_votes: *Channel(ParsedVote),
+
+        pub fn destroy(self: Receivers) void {
+            self.ancestor_duplicate_slots.destroy();
+            self.popular_pruned_forks.destroy();
+            self.duplicate_slots.destroy();
+            self.replay_votes.destroy();
+        }
+
+        pub fn create(allocator: std.mem.Allocator) std.mem.Allocator.Error!Receivers {
+            const ancestor_duplicate_slots: *Channel(AncestorDuplicateSlotToRepair) =
+                try .create(allocator);
+            errdefer ancestor_duplicate_slots.destroy();
+
+            const popular_pruned_forks: *Channel(Slot) = try .create(allocator);
+            errdefer popular_pruned_forks.destroy();
+
+            const duplicate_slots: *Channel(Slot) = try .create(allocator);
+            errdefer duplicate_slots.destroy();
+
+            const replay_votes: *Channel(ParsedVote) = try .create(allocator);
+            errdefer replay_votes.destroy();
+
+            return .{
+                .ancestor_duplicate_slots = ancestor_duplicate_slots,
+                .popular_pruned_forks = popular_pruned_forks,
+                .duplicate_slots = duplicate_slots,
+                .replay_votes = replay_votes,
+            };
+        }
+    };
+
+    pub const VoteCollectionParams = struct {
+        collector: *sig.consensus.VoteCollector,
+        /// Scanned by the vote collector if provided.
+        gossip_table: ?*sig.sync.RwMux(sig.gossip.GossipTable),
+        /// The vote collector sends verified votes through this channel.
+        verified_vote_channel_sender: *sig.sync.Channel(sig.consensus.vote_listener.VerifiedVote),
+    };
+
     /// Run all phases of consensus:
     /// - process replay results
     /// - cluster sync
@@ -304,19 +316,25 @@ pub const TowerConsensus = struct {
     pub fn process(
         self: *TowerConsensus,
         allocator: Allocator,
-        account_reader: AccountReader,
-        ledger: *Ledger,
-        gossip_table: ?*sig.sync.RwMux(sig.gossip.GossipTable),
-        slot_tracker: *SlotTracker,
-        epoch_tracker: *EpochTracker,
-        progress_map: *ProgressMap,
-        senders: Senders,
-        receivers: Receivers,
-        slot_leaders: ?sig.core.leader_schedule.SlotLeaders,
-        vote_sockets: ?*const VoteSockets,
-        duplicate_confirmed_slots: []const sig.consensus.vote_listener.ThresholdConfirmedSlot,
-        gossip_verified_vote_hashes: []const sig.consensus.vote_listener.GossipVerifiedVoteHash,
-        results: []const ReplayResult,
+        params: struct {
+            account_reader: AccountReader,
+            ledger: *Ledger,
+            gossip_table: ?*sig.sync.RwMux(sig.gossip.GossipTable),
+            slot_tracker: *SlotTracker,
+            epoch_tracker: *EpochTracker,
+            progress_map: *ProgressMap,
+            senders: Senders,
+            receivers: Receivers,
+            vote_collection: ?VoteCollectionParams,
+            vote_sockets: ?*const VoteSockets,
+            slot_leaders: ?sig.core.leader_schedule.SlotLeaders,
+            /// Generally expected to be empty, but can be non-empty for testing purposes.
+            /// Will be appended to, and then cleared after being used as an input to consensus.
+            duplicate_confirmed_slots: *std.ArrayListUnmanaged(ThresholdConfirmedSlot),
+            /// Same comments on `duplicate_confirmed_slots` apply.
+            gossip_verified_vote_hashes: *std.ArrayListUnmanaged(GossipVerifiedVoteHash),
+            results: []const ReplayResult,
+        },
     ) !void {
         var arena_state = self.arena_state.promote(allocator);
         defer {
@@ -325,14 +343,33 @@ pub const TowerConsensus = struct {
         }
         const arena = arena_state.allocator();
 
+        if (params.vote_collection) |vp| {
+            try vp.collector.collectAndProcessVotes(allocator, .from(self.logger), .{
+                .slot_data_provider = .{
+                    .slot_tracker = params.slot_tracker,
+                    .epoch_tracker = params.epoch_tracker,
+                },
+                .senders = .{
+                    .verified_vote = vp.verified_vote_channel_sender,
+                    .gossip_verified_vote_hashes = params.gossip_verified_vote_hashes,
+                    .duplicate_confirmed_slots = params.duplicate_confirmed_slots,
+                    .bank_notification = null,
+                    .subscriptions = .{},
+                },
+                .receivers = .{ .replay_votes = params.receivers.replay_votes },
+                .ledger = params.ledger,
+                .gossip_table = vp.gossip_table,
+            });
+        }
+
         // Process replay results
-        for (results) |r| {
+        for (params.results) |r| {
             try self.processResult(
                 allocator,
-                ledger,
-                progress_map,
-                slot_tracker,
-                senders.ancestor_hashes_replay_update,
+                params.ledger,
+                params.progress_map,
+                params.slot_tracker,
+                params.senders.ancestor_hashes_replay_update,
                 r,
             );
         }
@@ -343,23 +380,25 @@ pub const TowerConsensus = struct {
                 .my_pubkey = self.identity.validator,
                 .tpu_has_bank = false,
                 .fork_choice = &self.fork_choice,
-                .result_writer = ledger.resultWriter(),
-                .slot_tracker = slot_tracker,
-                .progress = progress_map,
+                .result_writer = params.ledger.resultWriter(),
+                .slot_tracker = params.slot_tracker,
+                .progress = params.progress_map,
                 .latest_validator_votes = &self.latest_validator_votes,
                 .slot_data = &self.slot_data,
-                .duplicate_confirmed_slots = duplicate_confirmed_slots,
-                .gossip_verified_vote_hashes = gossip_verified_vote_hashes,
-                .senders = senders,
-                .receivers = receivers,
+                .duplicate_confirmed_slots = params.duplicate_confirmed_slots.items,
+                .gossip_verified_vote_hashes = params.gossip_verified_vote_hashes.items,
+                .senders = params.senders,
+                .receivers = params.receivers,
             });
+            params.duplicate_confirmed_slots.clearRetainingCapacity();
+            params.gossip_verified_vote_hashes.clearRetainingCapacity();
 
             const SlotSet = SortedSetUnmanaged(Slot);
 
             // arena-allocated
             var ancestors: std.AutoArrayHashMapUnmanaged(Slot, Ancestors) = .empty;
             var descendants: std.AutoArrayHashMapUnmanaged(Slot, SlotSet) = .empty;
-            for (slot_tracker.slots.keys(), slot_tracker.slots.values()) |slot, info| {
+            for (params.slot_tracker.slots.keys(), params.slot_tracker.slots.values()) |slot, info| {
                 const slot_ancestors = &info.constants.ancestors.ancestors;
                 const ancestor_gop = try ancestors.getOrPutValue(arena, slot, .EMPTY);
                 try ancestor_gop.value_ptr.ancestors
@@ -376,18 +415,18 @@ pub const TowerConsensus = struct {
 
         try self.executeProtocol(
             allocator,
-            ledger,
-            gossip_table,
+            params.ledger,
+            params.gossip_table,
             &ancestors,
             &descendants,
-            slot_tracker,
-            epoch_tracker,
-            progress_map,
-            account_reader,
-            slot_leaders,
-            vote_sockets,
+            params.slot_tracker,
+            params.epoch_tracker,
+            params.progress_map,
+            params.account_reader,
+            params.slot_leaders,
+            params.vote_sockets,
             self.identity.vote_account,
-            senders,
+            params.senders,
         );
     }
 
@@ -4348,12 +4387,11 @@ test "vote on heaviest frozen descendant with no switch" {
         },
     };
 
-    // Build consensus dependencies
-    const deps = TowerConsensus.Dependencies{
+    var consensus = try TowerConsensus.init(allocator, .{
         .logger = .noop,
         .identity = .{
-            .vote_account = Pubkey.initRandom(std.crypto.random),
-            .validator = Pubkey.initRandom(std.crypto.random),
+            .vote_account = .initRandom(std.crypto.random),
+            .validator = .initRandom(std.crypto.random),
         },
         .signing = .{
             .node = null,
@@ -4362,9 +4400,7 @@ test "vote on heaviest frozen descendant with no switch" {
         .account_reader = stubs.accountsdb.accountReader(),
         .ledger = &stubs.ledger,
         .slot_tracker = &slot_tracker,
-    };
-
-    var consensus = try TowerConsensus.init(allocator, deps);
+    });
     defer consensus.deinit(allocator);
 
     try std.testing.expectEqual(null, consensus.replay_tower.lastVotedSlot());
@@ -4372,23 +4408,29 @@ test "vote on heaviest frozen descendant with no switch" {
     try std.testing.expectEqual(0, progress.getForkStats(1).?.block_height);
     try std.testing.expectEqual(.uninitialized, consensus.replay_tower.last_vote_tx_blockhash);
 
+    var duplicate_confirmed_slots: std.ArrayListUnmanaged(ThresholdConfirmedSlot) = .empty;
+    defer duplicate_confirmed_slots.deinit(allocator);
+
+    var gossip_verified_vote_hashes: std.ArrayListUnmanaged(GossipVerifiedVoteHash) = .empty;
+    defer gossip_verified_vote_hashes.deinit(allocator);
+
     // Component entry point being tested
-    try consensus.process(
-        allocator,
-        deps.account_reader,
-        deps.ledger,
-        null,
-        &slot_tracker,
-        &epoch_tracker,
-        &progress,
-        stubs.senders,
-        stubs.receivers,
-        null,
-        null,
-        &.{},
-        &.{},
-        &results,
-    );
+    try consensus.process(allocator, .{
+        .account_reader = stubs.accountsdb.accountReader(),
+        .ledger = &stubs.ledger,
+        .gossip_table = null,
+        .slot_tracker = &slot_tracker,
+        .epoch_tracker = &epoch_tracker,
+        .progress_map = &progress,
+        .senders = stubs.senders,
+        .receivers = stubs.receivers,
+        .vote_collection = null,
+        .vote_sockets = null,
+        .slot_leaders = null,
+        .duplicate_confirmed_slots = &duplicate_confirmed_slots,
+        .gossip_verified_vote_hashes = &gossip_verified_vote_hashes,
+        .results = &results,
+    });
 
     // 1. Assert fork stat in progress map
     const stats1 = progress.getForkStats(slot_1).?;
@@ -4565,11 +4607,11 @@ test "vote accounts with landed votes populate bank stats" {
     var replay_votes_channel = try Channel(ParsedVote).create(allocator);
     defer replay_votes_channel.destroy();
 
-    const deps = TowerConsensus.Dependencies{
+    var consensus = try TowerConsensus.init(allocator, .{
         .logger = .noop,
         .identity = .{
-            .vote_account = Pubkey.initRandom(std.crypto.random),
-            .validator = Pubkey.initRandom(std.crypto.random),
+            .vote_account = .initRandom(std.crypto.random),
+            .validator = .initRandom(std.crypto.random),
         },
         .signing = .{
             .node = null,
@@ -4578,29 +4620,34 @@ test "vote accounts with landed votes populate bank stats" {
         .account_reader = stubs.accountsdb.accountReader(),
         .ledger = &stubs.ledger,
         .slot_tracker = &slot_tracker,
-    };
-
-    var consensus = try TowerConsensus.init(allocator, deps);
+    });
     defer consensus.deinit(allocator);
 
     try std.testing.expectEqual(0, progress.getForkStats(1).?.voted_stakes.count());
 
-    try consensus.process(
-        allocator,
-        deps.account_reader,
-        deps.ledger,
-        null,
-        &slot_tracker,
-        &epoch_tracker,
-        &progress,
-        stubs.senders,
-        stubs.receivers,
-        null,
-        null,
-        &.{},
-        &.{},
-        &results,
-    );
+    var duplicate_confirmed_slots: std.ArrayListUnmanaged(ThresholdConfirmedSlot) = .empty;
+    defer duplicate_confirmed_slots.deinit(allocator);
+
+    var gossip_verified_vote_hashes: std.ArrayListUnmanaged(GossipVerifiedVoteHash) = .empty;
+    defer gossip_verified_vote_hashes.deinit(allocator);
+
+    // Component entry point being tested
+    try consensus.process(allocator, .{
+        .account_reader = stubs.accountsdb.accountReader(),
+        .ledger = &stubs.ledger,
+        .gossip_table = null,
+        .slot_tracker = &slot_tracker,
+        .epoch_tracker = &epoch_tracker,
+        .progress_map = &progress,
+        .senders = stubs.senders,
+        .receivers = stubs.receivers,
+        .vote_collection = null,
+        .vote_sockets = null,
+        .slot_leaders = null,
+        .duplicate_confirmed_slots = &duplicate_confirmed_slots,
+        .gossip_verified_vote_hashes = &gossip_verified_vote_hashes,
+        .results = &results,
+    });
 
     const stats1 = progress.getForkStats(1).?;
     try std.testing.expect(stats1.computed);
@@ -4801,21 +4848,6 @@ test "root advances after vote satisfies lockouts" {
     var replay_votes_channel = try Channel(ParsedVote).create(allocator);
     defer replay_votes_channel.destroy();
 
-    const deps = TowerConsensus.Dependencies{
-        .logger = .noop,
-        .identity = .{
-            .vote_account = Pubkey.initRandom(std.crypto.random),
-            .validator = Pubkey.initRandom(std.crypto.random),
-        },
-        .signing = .{
-            .node = null,
-            .authorized_voters = &.{},
-        },
-        .account_reader = stubs.accountsdb.accountReader(),
-        .ledger = &stubs.ledger,
-        .slot_tracker = &slot_tracker,
-    };
-
     const our_validator_stake: u64 = 1000;
 
     for (1..32) |i| {
@@ -4854,8 +4886,27 @@ test "root advances after vote satisfies lockouts" {
         }
     }
 
-    var consensus = try TowerConsensus.init(allocator, deps);
+    var consensus = try TowerConsensus.init(allocator, .{
+        .logger = .noop,
+        .identity = .{
+            .vote_account = Pubkey.initRandom(std.crypto.random),
+            .validator = Pubkey.initRandom(std.crypto.random),
+        },
+        .signing = .{
+            .node = null,
+            .authorized_voters = &.{},
+        },
+        .account_reader = stubs.accountsdb.accountReader(),
+        .ledger = &stubs.ledger,
+        .slot_tracker = &slot_tracker,
+    });
     defer consensus.deinit(allocator);
+
+    var duplicate_confirmed_slots: std.ArrayListUnmanaged(ThresholdConfirmedSlot) = .empty;
+    defer duplicate_confirmed_slots.deinit(allocator);
+
+    var gossip_verified_vote_hashes: std.ArrayListUnmanaged(GossipVerifiedVoteHash) = .empty;
+    defer gossip_verified_vote_hashes.deinit(allocator);
 
     for (1..32) |i| {
         const slot: Slot = @intCast(i);
@@ -4886,22 +4937,23 @@ test "root advances after vote satisfies lockouts" {
             .{ .slot = 30, .output = .{ .last_entry_hash = hashes[30] } },
             .{ .slot = 31, .output = .{ .last_entry_hash = hashes[31] } },
         };
-        try consensus.process(
-            allocator,
-            deps.account_reader,
-            deps.ledger,
-            null,
-            &slot_tracker,
-            &epoch_tracker,
-            &progress,
-            stubs.senders,
-            stubs.receivers,
-            null,
-            null,
-            &.{},
-            &.{},
-            &sync_results,
-        );
+
+        try consensus.process(allocator, .{
+            .account_reader = stubs.accountsdb.accountReader(),
+            .ledger = &stubs.ledger,
+            .gossip_table = null,
+            .slot_tracker = &slot_tracker,
+            .epoch_tracker = &epoch_tracker,
+            .progress_map = &progress,
+            .senders = stubs.senders,
+            .receivers = stubs.receivers,
+            .vote_collection = null,
+            .vote_sockets = null,
+            .slot_leaders = null,
+            .duplicate_confirmed_slots = &duplicate_confirmed_slots,
+            .gossip_verified_vote_hashes = &gossip_verified_vote_hashes,
+            .results = &sync_results,
+        });
     }
 
     {
@@ -4948,22 +5000,22 @@ test "root advances after vote satisfies lockouts" {
             .{ .slot = 32, .output = .{ .last_entry_hash = hashes[32] } },
         };
 
-        try consensus.process(
-            allocator,
-            deps.account_reader,
-            deps.ledger,
-            null,
-            &slot_tracker,
-            &epoch_tracker,
-            &progress,
-            stubs.senders,
-            stubs.receivers,
-            null,
-            null,
-            &.{},
-            &.{},
-            &results,
-        );
+        try consensus.process(allocator, .{
+            .account_reader = stubs.accountsdb.accountReader(),
+            .ledger = &stubs.ledger,
+            .gossip_table = null,
+            .slot_tracker = &slot_tracker,
+            .epoch_tracker = &epoch_tracker,
+            .progress_map = &progress,
+            .senders = stubs.senders,
+            .receivers = stubs.receivers,
+            .vote_collection = null,
+            .vote_sockets = null,
+            .slot_leaders = null,
+            .duplicate_confirmed_slots = &duplicate_confirmed_slots,
+            .gossip_verified_vote_hashes = &gossip_verified_vote_hashes,
+            .results = &results,
+        });
 
         const new_root = try consensus.replay_tower.tower.getRoot();
         try std.testing.expect(new_root > old_root);
@@ -5030,22 +5082,22 @@ test "root advances after vote satisfies lockouts" {
         const results = [_]ReplayResult{
             .{ .slot = 33, .output = .{ .last_entry_hash = hashes[33] } },
         };
-        try consensus.process(
-            allocator,
-            deps.account_reader,
-            deps.ledger,
-            null,
-            &slot_tracker,
-            &epoch_tracker,
-            &progress,
-            stubs.senders,
-            stubs.receivers,
-            null,
-            null,
-            &.{},
-            &.{},
-            &results,
-        );
+        try consensus.process(allocator, .{
+            .account_reader = stubs.accountsdb.accountReader(),
+            .ledger = &stubs.ledger,
+            .gossip_table = null,
+            .slot_tracker = &slot_tracker,
+            .epoch_tracker = &epoch_tracker,
+            .progress_map = &progress,
+            .senders = stubs.senders,
+            .receivers = stubs.receivers,
+            .vote_collection = null,
+            .vote_sockets = null,
+            .slot_leaders = null,
+            .duplicate_confirmed_slots = &duplicate_confirmed_slots,
+            .gossip_verified_vote_hashes = &gossip_verified_vote_hashes,
+            .results = &results,
+        });
 
         const new_root = try consensus.replay_tower.tower.getRoot();
         try std.testing.expect(new_root > old_root);
@@ -5181,11 +5233,11 @@ test "vote refresh when no new vote available" {
     var replay_votes_channel = try Channel(ParsedVote).create(allocator);
     defer replay_votes_channel.destroy();
 
-    const deps = TowerConsensus.Dependencies{
+    var consensus = try TowerConsensus.init(allocator, .{
         .logger = .noop,
         .identity = .{
-            .vote_account = Pubkey.initRandom(std.crypto.random),
-            .validator = Pubkey.initRandom(std.crypto.random),
+            .vote_account = .initRandom(std.crypto.random),
+            .validator = .initRandom(std.crypto.random),
         },
         .signing = .{
             .node = null,
@@ -5194,31 +5246,35 @@ test "vote refresh when no new vote available" {
         .account_reader = stubs.accountsdb.accountReader(),
         .ledger = &stubs.ledger,
         .slot_tracker = &slot_tracker,
-    };
-
-    var consensus = try TowerConsensus.init(allocator, deps);
+    });
     defer consensus.deinit(allocator);
+
+    var duplicate_confirmed_slots: std.ArrayListUnmanaged(ThresholdConfirmedSlot) = .empty;
+    defer duplicate_confirmed_slots.deinit(allocator);
+
+    var gossip_verified_vote_hashes: std.ArrayListUnmanaged(GossipVerifiedVoteHash) = .empty;
+    defer gossip_verified_vote_hashes.deinit(allocator);
 
     {
         const results = [_]ReplayResult{
             .{ .slot = 1, .output = .{ .last_entry_hash = slot1_hash } },
         };
-        try consensus.process(
-            allocator,
-            deps.account_reader,
-            deps.ledger,
-            null,
-            &slot_tracker,
-            &epoch_tracker,
-            &progress,
-            stubs.senders,
-            stubs.receivers,
-            null,
-            null,
-            &.{},
-            &.{},
-            &results,
-        );
+        try consensus.process(allocator, .{
+            .account_reader = stubs.accountsdb.accountReader(),
+            .ledger = &stubs.ledger,
+            .gossip_table = null,
+            .slot_tracker = &slot_tracker,
+            .epoch_tracker = &epoch_tracker,
+            .progress_map = &progress,
+            .senders = stubs.senders,
+            .receivers = stubs.receivers,
+            .vote_collection = null,
+            .vote_sockets = null,
+            .slot_leaders = null,
+            .duplicate_confirmed_slots = &duplicate_confirmed_slots,
+            .gossip_verified_vote_hashes = &gossip_verified_vote_hashes,
+            .results = &results,
+        });
     }
 
     const initial_last_voted = consensus.replay_tower.lastVotedSlot();
@@ -5229,22 +5285,22 @@ test "vote refresh when no new vote available" {
     // The Test
     {
         const empty_results: []const ReplayResult = &.{};
-        try consensus.process(
-            allocator,
-            deps.account_reader,
-            deps.ledger,
-            null,
-            &slot_tracker,
-            &epoch_tracker,
-            &progress,
-            stubs.senders,
-            stubs.receivers,
-            null,
-            null,
-            &.{},
-            &.{},
-            empty_results,
-        );
+        try consensus.process(allocator, .{
+            .account_reader = stubs.accountsdb.accountReader(),
+            .ledger = &stubs.ledger,
+            .gossip_table = null,
+            .slot_tracker = &slot_tracker,
+            .epoch_tracker = &epoch_tracker,
+            .progress_map = &progress,
+            .senders = stubs.senders,
+            .receivers = stubs.receivers,
+            .vote_collection = null,
+            .vote_sockets = null,
+            .slot_leaders = null,
+            .duplicate_confirmed_slots = &duplicate_confirmed_slots,
+            .gossip_verified_vote_hashes = &gossip_verified_vote_hashes,
+            .results = empty_results,
+        });
     }
 
     // Assert: No new vote recorded
@@ -5461,7 +5517,7 @@ test "detect and mark duplicate confirmed fork" {
     var replay_votes_channel = try Channel(ParsedVote).create(allocator);
     defer replay_votes_channel.destroy();
 
-    const deps = TowerConsensus.Dependencies{
+    var consensus = try TowerConsensus.init(allocator, .{
         .logger = .noop,
         .identity = .{
             .vote_account = Pubkey.initRandom(std.crypto.random),
@@ -5474,10 +5530,14 @@ test "detect and mark duplicate confirmed fork" {
         .account_reader = stubs.accountsdb.accountReader(),
         .ledger = &stubs.ledger,
         .slot_tracker = &slot_tracker,
-    };
-
-    var consensus = try TowerConsensus.init(allocator, deps);
+    });
     defer consensus.deinit(allocator);
+
+    var duplicate_confirmed_slots: std.ArrayListUnmanaged(ThresholdConfirmedSlot) = .empty;
+    defer duplicate_confirmed_slots.deinit(allocator);
+
+    var gossip_verified_vote_hashes: std.ArrayListUnmanaged(GossipVerifiedVoteHash) = .empty;
+    defer gossip_verified_vote_hashes.deinit(allocator);
 
     // Verify slot 1 is not yet marked as duplicate-confirmed
     try std.testing.expect(progress.getForkStats(1).?.duplicate_confirmed_hash == null);
@@ -5489,22 +5549,22 @@ test "detect and mark duplicate confirmed fork" {
         const results = [_]ReplayResult{
             .{ .slot = 2, .output = .{ .last_entry_hash = slot2_hash } },
         };
-        try consensus.process(
-            allocator,
-            deps.account_reader,
-            deps.ledger,
-            null,
-            &slot_tracker,
-            &epoch_tracker,
-            &progress,
-            stubs.senders,
-            stubs.receivers,
-            null,
-            null,
-            &.{},
-            &.{},
-            &results,
-        );
+        try consensus.process(allocator, .{
+            .account_reader = stubs.accountsdb.accountReader(),
+            .ledger = &stubs.ledger,
+            .gossip_table = null,
+            .slot_tracker = &slot_tracker,
+            .epoch_tracker = &epoch_tracker,
+            .progress_map = &progress,
+            .senders = stubs.senders,
+            .receivers = stubs.receivers,
+            .vote_collection = null,
+            .vote_sockets = null,
+            .slot_leaders = null,
+            .duplicate_confirmed_slots = &duplicate_confirmed_slots,
+            .gossip_verified_vote_hashes = &gossip_verified_vote_hashes,
+            .results = &results,
+        });
     }
 
     // Assert: slot 1 is now marked as duplicate-confirmed
@@ -5628,7 +5688,7 @@ test "detect and mark duplicate slot" {
     var replay_votes_channel = try Channel(ParsedVote).create(allocator);
     defer replay_votes_channel.destroy();
 
-    const deps = TowerConsensus.Dependencies{
+    var consensus = try TowerConsensus.init(allocator, .{
         .logger = .noop,
         .identity = .{
             .vote_account = Pubkey.initRandom(std.crypto.random),
@@ -5641,10 +5701,14 @@ test "detect and mark duplicate slot" {
         .account_reader = stubs.accountsdb.accountReader(),
         .ledger = &stubs.ledger,
         .slot_tracker = &slot_tracker,
-    };
-
-    var consensus = try TowerConsensus.init(allocator, deps);
+    });
     defer consensus.deinit(allocator);
+
+    var duplicate_confirmed_slots: std.ArrayListUnmanaged(ThresholdConfirmedSlot) = .empty;
+    defer duplicate_confirmed_slots.deinit(allocator);
+
+    var gossip_verified_vote_hashes: std.ArrayListUnmanaged(GossipVerifiedVoteHash) = .empty;
+    defer gossip_verified_vote_hashes.deinit(allocator);
 
     try std.testing.expect(!consensus.slot_data.duplicate_slots.contains(1));
 
@@ -5659,22 +5723,22 @@ test "detect and mark duplicate slot" {
         const results = [_]ReplayResult{
             .{ .slot = 1, .output = .{ .last_entry_hash = slot1_hash } },
         };
-        try consensus.process(
-            allocator,
-            deps.account_reader,
-            deps.ledger,
-            null,
-            &slot_tracker,
-            &epoch_tracker,
-            &progress,
-            stubs.senders,
-            stubs.receivers,
-            null,
-            null,
-            &.{},
-            &.{},
-            &results,
-        );
+        try consensus.process(allocator, .{
+            .account_reader = stubs.accountsdb.accountReader(),
+            .ledger = &stubs.ledger,
+            .gossip_table = null,
+            .slot_tracker = &slot_tracker,
+            .epoch_tracker = &epoch_tracker,
+            .progress_map = &progress,
+            .senders = stubs.senders,
+            .receivers = stubs.receivers,
+            .vote_collection = null,
+            .vote_sockets = null,
+            .slot_leaders = null,
+            .duplicate_confirmed_slots = &duplicate_confirmed_slots,
+            .gossip_verified_vote_hashes = &gossip_verified_vote_hashes,
+            .results = &results,
+        });
     }
 
     // Assert: slot 1 is now marked as duplicate
@@ -5929,7 +5993,7 @@ test "successful fork switch (switch_proof)" {
     var replay_votes_channel = try Channel(ParsedVote).create(allocator);
     defer replay_votes_channel.destroy();
 
-    const deps = TowerConsensus.Dependencies{
+    var consensus = try TowerConsensus.init(allocator, .{
         .logger = .noop,
         .identity = .{
             .vote_account = Pubkey.initRandom(std.crypto.random),
@@ -5942,10 +6006,14 @@ test "successful fork switch (switch_proof)" {
         .account_reader = stubs.accountsdb.accountReader(),
         .ledger = &stubs.ledger,
         .slot_tracker = &slot_tracker,
-    };
-
-    var consensus = try TowerConsensus.init(allocator, deps);
+    });
     defer consensus.deinit(allocator);
+
+    var duplicate_confirmed_slots: std.ArrayListUnmanaged(ThresholdConfirmedSlot) = .empty;
+    defer duplicate_confirmed_slots.deinit(allocator);
+
+    var gossip_verified_vote_hashes: std.ArrayListUnmanaged(GossipVerifiedVoteHash) = .empty;
+    defer gossip_verified_vote_hashes.deinit(allocator);
 
     _ = try consensus.replay_tower.recordBankVote(allocator, 1, slot1_hash);
 
@@ -6024,22 +6092,22 @@ test "successful fork switch (switch_proof)" {
         const results2 = [_]ReplayResult{
             .{ .slot = 2, .output = .{ .last_entry_hash = slot2_hash } },
         };
-        try consensus.process(
-            allocator,
-            deps.account_reader,
-            deps.ledger,
-            null,
-            &slot_tracker,
-            &epoch_tracker,
-            &progress,
-            stubs.senders,
-            stubs.receivers,
-            null,
-            null,
-            &.{},
-            &.{},
-            &results2,
-        );
+        try consensus.process(allocator, .{
+            .account_reader = stubs.accountsdb.accountReader(),
+            .ledger = &stubs.ledger,
+            .gossip_table = null,
+            .slot_tracker = &slot_tracker,
+            .epoch_tracker = &epoch_tracker,
+            .progress_map = &progress,
+            .senders = stubs.senders,
+            .receivers = stubs.receivers,
+            .vote_collection = null,
+            .vote_sockets = null,
+            .slot_leaders = null,
+            .duplicate_confirmed_slots = &duplicate_confirmed_slots,
+            .gossip_verified_vote_hashes = &gossip_verified_vote_hashes,
+            .results = &results2,
+        });
         try std.testing.expectEqual(4, consensus.replay_tower.lastVotedSlot());
     }
 
@@ -6065,22 +6133,22 @@ test "successful fork switch (switch_proof)" {
         const results = [_]ReplayResult{
             .{ .slot = 4, .output = .{ .last_entry_hash = slot4_hash } },
         };
-        try consensus.process(
-            allocator,
-            deps.account_reader,
-            deps.ledger,
-            null,
-            &slot_tracker,
-            &epoch_tracker,
-            &progress,
-            stubs.senders,
-            stubs.receivers,
-            null,
-            null,
-            &.{},
-            &.{},
-            &results,
-        );
+        try consensus.process(allocator, .{
+            .account_reader = stubs.accountsdb.accountReader(),
+            .ledger = &stubs.ledger,
+            .gossip_table = null,
+            .slot_tracker = &slot_tracker,
+            .epoch_tracker = &epoch_tracker,
+            .progress_map = &progress,
+            .senders = stubs.senders,
+            .receivers = stubs.receivers,
+            .vote_collection = null,
+            .vote_sockets = null,
+            .slot_leaders = null,
+            .duplicate_confirmed_slots = &duplicate_confirmed_slots,
+            .gossip_verified_vote_hashes = &gossip_verified_vote_hashes,
+            .results = &results,
+        });
     }
     try std.testing.expectEqual(4, consensus.replay_tower.lastVotedSlot());
 
@@ -6126,22 +6194,22 @@ test "successful fork switch (switch_proof)" {
     // Recompute bank stats for new frozen slot 5
     {
         const empty_results: []const ReplayResult = &.{};
-        try consensus.process(
-            allocator,
-            deps.account_reader,
-            deps.ledger,
-            null,
-            &slot_tracker,
-            &epoch_tracker,
-            &progress,
-            stubs.senders,
-            stubs.receivers,
-            null,
-            null,
-            &.{},
-            &.{},
-            empty_results,
-        );
+        try consensus.process(allocator, .{
+            .account_reader = stubs.accountsdb.accountReader(),
+            .ledger = &stubs.ledger,
+            .gossip_table = null,
+            .slot_tracker = &slot_tracker,
+            .epoch_tracker = &epoch_tracker,
+            .progress_map = &progress,
+            .senders = stubs.senders,
+            .receivers = stubs.receivers,
+            .vote_collection = null,
+            .vote_sockets = null,
+            .slot_leaders = null,
+            .duplicate_confirmed_slots = &duplicate_confirmed_slots,
+            .gossip_verified_vote_hashes = &gossip_verified_vote_hashes,
+            .results = empty_results,
+        });
     }
     // Build fresh ancestors/descendants for slot 5 decision
     var ancestors_map2 =
@@ -6199,22 +6267,22 @@ test "successful fork switch (switch_proof)" {
                 .output = .{ .last_entry_hash = slot5_hash },
             },
         };
-        try consensus.process(
-            allocator,
-            deps.account_reader,
-            deps.ledger,
-            null,
-            &slot_tracker,
-            &epoch_tracker,
-            &progress,
-            stubs.senders,
-            stubs.receivers,
-            null,
-            null,
-            &.{},
-            &.{},
-            &results5,
-        );
+        try consensus.process(allocator, .{
+            .account_reader = stubs.accountsdb.accountReader(),
+            .ledger = &stubs.ledger,
+            .gossip_table = null,
+            .slot_tracker = &slot_tracker,
+            .epoch_tracker = &epoch_tracker,
+            .progress_map = &progress,
+            .senders = stubs.senders,
+            .receivers = stubs.receivers,
+            .vote_collection = null,
+            .vote_sockets = null,
+            .slot_leaders = null,
+            .duplicate_confirmed_slots = &duplicate_confirmed_slots,
+            .gossip_verified_vote_hashes = &gossip_verified_vote_hashes,
+            .results = &results5,
+        });
         try std.testing.expectEqual(4, consensus.replay_tower.lastVotedSlot());
     }
 
