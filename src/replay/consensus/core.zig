@@ -916,7 +916,7 @@ fn computeConsensusInputs(
     logger: Logger,
     my_vote_pubkey: Pubkey,
     ancestors: *const std.AutoArrayHashMapUnmanaged(u64, Ancestors),
-    slot_tracker: *SlotTracker,
+    slot_tracker: *const SlotTracker,
     epoch_schedule: *const EpochSchedule,
     epoch_stakes_map: *const EpochStakesMap,
     progress: *ProgressMap,

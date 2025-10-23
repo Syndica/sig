@@ -23,8 +23,8 @@ const EpochTracker = sig.replay.trackers.EpochTracker;
 const Logger = sig.trace.Logger("vote_listener");
 
 pub const SlotDataProvider = struct {
-    slot_tracker: *SlotTracker,
-    epoch_tracker: *EpochTracker,
+    slot_tracker: *const SlotTracker,
+    epoch_tracker: *const EpochTracker,
 
     pub fn rootSlot(self: *const SlotDataProvider) Slot {
         return self.slot_tracker.root;
