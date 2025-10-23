@@ -72,12 +72,12 @@ pub const SlotDataProvider = struct {
 
 pub const Senders = struct {
     verified_vote: *sig.sync.Channel(VerifiedVote),
-    gossip_verified_vote_hash: *sig.sync.Channel(GossipVerifiedVoteHash),
+    gossip_verified_vote_hashes: *std.ArrayListUnmanaged(GossipVerifiedVoteHash),
+    duplicate_confirmed_slots: ?*std.ArrayListUnmanaged(ThresholdConfirmedSlot),
     /// TODO: when the RPC hook design is closer to being finished,
     /// see if this could be re-designed to use that, instead of this
     /// slightly awkward channel design.
     bank_notification: ?*sig.sync.Channel(BankNotification),
-    duplicate_confirmed_slots: ?*sig.sync.Channel(ThresholdConfirmedSlot),
     /// TODO: same advisory as on `bank_notification` wrt hooking into RPC.
     subscriptions: RpcSubscriptionsStub,
 
@@ -90,9 +90,15 @@ pub const Senders = struct {
         while (self.verified_vote.tryReceive()) |verified_vote| verified_vote.deinit(allocator);
         self.verified_vote.destroy();
 
-        self.gossip_verified_vote_hash.destroy();
+        self.gossip_verified_vote_hashes.deinit(allocator);
+        allocator.destroy(self.gossip_verified_vote_hashes);
+
+        if (self.duplicate_confirmed_slots) |duplicate_confirmed_slots| {
+            duplicate_confirmed_slots.deinit(allocator);
+            allocator.destroy(duplicate_confirmed_slots);
+        }
+
         if (self.bank_notification) |channel| channel.destroy();
-        if (self.duplicate_confirmed_slots) |channel| channel.destroy();
     }
 
     pub const CreateForTestParams = struct {
@@ -105,25 +111,30 @@ pub const Senders = struct {
     ) !Senders {
         if (!test_setup_enabled) @compileError("not allowed");
 
-        const verified_vote: *sig.sync.Channel(VerifiedVote) =
-            try .create(allocator);
+        const verified_vote: *sig.sync.Channel(VerifiedVote) = try .create(allocator);
         errdefer verified_vote.destroy();
 
-        const gossip_verified_vote_hash: *sig.sync.Channel(GossipVerifiedVoteHash) =
-            try .create(allocator);
-        errdefer gossip_verified_vote_hash.destroy();
+        const gossip_verified_vote_hashes = ptr: {
+            const ptr = try allocator.create(std.ArrayListUnmanaged(GossipVerifiedVoteHash));
+            ptr.* = .empty;
+            break :ptr ptr;
+        };
+        errdefer allocator.destroy(gossip_verified_vote_hashes);
+
+        const duplicate_confirmed_slots = if (params.duplicate_confirmed_slots) ptr: {
+            const ptr = try allocator.create(std.ArrayListUnmanaged(ThresholdConfirmedSlot));
+            ptr.* = .empty;
+            break :ptr ptr;
+        } else null;
+        errdefer if (duplicate_confirmed_slots) |ptr| allocator.destroy(ptr);
 
         const bank_notification: ?*sig.sync.Channel(BankNotification) =
             if (params.bank_notification) try .create(allocator) else null;
         errdefer if (bank_notification) |channel| channel.destroy();
 
-        const duplicate_confirmed_slots: ?*sig.sync.Channel(ThresholdConfirmedSlot) =
-            if (params.duplicate_confirmed_slots) try .create(allocator) else null;
-        errdefer if (duplicate_confirmed_slots) |channel| channel.destroy();
-
         return .{
             .verified_vote = verified_vote,
-            .gossip_verified_vote_hash = gossip_verified_vote_hash,
+            .gossip_verified_vote_hashes = gossip_verified_vote_hashes,
             .bank_notification = bank_notification,
             .duplicate_confirmed_slots = duplicate_confirmed_slots,
             .subscriptions = .{},
@@ -881,24 +892,13 @@ fn trackNewVotesAndNotifyConfirmations(
             });
 
             if (is_gossip_vote and is_new and stake > 0) {
-                senders.gossip_verified_vote_hash.send(.{ vote_pubkey, slot, hash }) catch |err| {
-                    logger.err().logf(
-                        "{s}: gossip verified vote hash couldn't send: " ++
-                            ".{{ .vote_pubkey = {f}, .slot = {}, .hash = {f} }}",
-                        .{ @errorName(err), vote_pubkey, slot, hash },
-                    );
-                };
+                const gossip_verified_vote_hash = senders.gossip_verified_vote_hashes;
+                try gossip_verified_vote_hash.append(allocator, .{ vote_pubkey, slot, hash });
             }
 
-            if (reached_threshold_results.isSet(0)) {
-                if (senders.duplicate_confirmed_slots) |sender| {
-                    sender.send(.{ .slot = slot, .hash = hash }) catch |err| {
-                        logger.err().logf(
-                            "{s}: duplicate confirmed slot couldn't send: {} (hash: {f})",
-                            .{ @errorName(err), slot, hash },
-                        );
-                    };
-                }
+            if (reached_threshold_results.isSet(0)) blk: {
+                const dupe_confirmed_slots = senders.duplicate_confirmed_slots orelse break :blk;
+                try dupe_confirmed_slots.append(allocator, .{ .slot = slot, .hash = hash });
             }
 
             if (reached_threshold_results.isSet(1)) {

@@ -1202,42 +1202,25 @@ fn validator(
     );
     defer shred_network_manager.deinit();
 
-    var replay_deps = try replayDependencies(
-        allocator,
-        epoch,
-        loaded_snapshot.accounts_db.accountStore(),
-        &loaded_snapshot.collapsed_manifest,
-        &app_base,
-        &ledger,
-        &epoch_context_manager,
-        cfg.voting_enabled,
-    );
-    defer replay_deps.deinit(allocator);
-
     const maybe_vote_sockets: ?replay.consensus.core.VoteSockets = if (cfg.voting_enabled)
         try replay.consensus.core.VoteSockets.init()
     else
         null;
 
-    const consensus_deps = if (cfg.disable_consensus)
-        null
-    else
-        try consensusDependencies(
-            allocator,
-            &gossip_service.gossip_table_rw,
-            epoch_context_manager.slotLeaders(),
-            maybe_vote_sockets,
-        );
-    defer if (consensus_deps) |d| d.deinit();
-
-    var replay_service = try replay.Service.init(&replay_deps, cfg.replay_threads, consensus_deps);
-    defer replay_service.deinit(allocator);
-
-    const replay_thread = try app_base.spawnService(
-        "replay",
-        .loop,
-        replay.Service.advance,
-        .{&replay_service},
+    var replay_consensus_state: ReplayConsensusState = try .init(allocator, .{
+        .epoch = epoch,
+        .loaded_snapshot = &loaded_snapshot,
+        .app_base = &app_base,
+        .ledger = &ledger,
+        .epoch_context_manager = &epoch_context_manager,
+        .replay_threads = cfg.replay_threads,
+        .disable_consensus = cfg.disable_consensus,
+        .voting_enabled = cfg.voting_enabled,
+    });
+    defer replay_consensus_state.deinit(allocator);
+    const replay_thread = try replay_consensus_state.spawnService(
+        &app_base,
+        if (maybe_vote_sockets) |*vs| vs else null,
     );
 
     // TODO: start RPC-server service using app_base.rpc_hooks
@@ -1383,37 +1366,25 @@ fn replayOffline(
         });
     }
 
-    var replay_deps = try replayDependencies(
-        allocator,
-        epoch,
-        loaded_snapshot.accounts_db.accountStore(),
-        &loaded_snapshot.collapsed_manifest,
-        &app_base,
-        &ledger,
-        &epoch_context_manager,
-        false,
-    );
-    defer replay_deps.deinit(allocator);
-
-    const consensus_deps = if (cfg.disable_consensus)
-        null
+    const maybe_vote_sockets: ?replay.consensus.core.VoteSockets = if (cfg.voting_enabled)
+        try replay.consensus.core.VoteSockets.init()
     else
-        try consensusDependencies(
-            allocator,
-            null,
-            epoch_context_manager.slotLeaders(),
-            null,
-        );
-    defer if (consensus_deps) |d| d.deinit();
+        null;
 
-    var replay_service = try replay.Service.init(&replay_deps, cfg.replay_threads, consensus_deps);
-    defer replay_service.deinit(allocator);
-
-    const replay_thread = try app_base.spawnService(
-        "replay",
-        .loop,
-        replay.Service.advance,
-        .{&replay_service},
+    var replay_consensus_state: ReplayConsensusState = try .init(allocator, .{
+        .epoch = epoch,
+        .loaded_snapshot = &loaded_snapshot,
+        .app_base = &app_base,
+        .ledger = &ledger,
+        .epoch_context_manager = &epoch_context_manager,
+        .replay_threads = cfg.replay_threads,
+        .disable_consensus = cfg.disable_consensus,
+        .voting_enabled = cfg.voting_enabled,
+    });
+    defer replay_consensus_state.deinit(allocator);
+    const replay_thread = try replay_consensus_state.spawnService(
+        &app_base,
+        if (maybe_vote_sockets) |*vs| vs else null,
     );
 
     replay_thread.join();
@@ -2035,100 +2006,161 @@ fn startGossip(
     return service;
 }
 
-fn replayDependencies(
-    allocator: std.mem.Allocator,
-    epoch: sig.core.Epoch,
-    account_store: sig.accounts_db.AccountStore,
-    collapsed_manifest: *const sig.accounts_db.snapshot.Manifest,
-    app_base: *const AppBase,
-    ledger: *Ledger,
-    epoch_context_manager: *sig.adapter.EpochContextManager,
-    voting_enabled: bool,
-) !replay.Dependencies {
-    const bank_fields = &collapsed_manifest.bank_fields;
-    const epoch_stakes_map = &collapsed_manifest.bank_extra.versioned_epoch_stakes;
-    const epoch_stakes = epoch_stakes_map.get(epoch) orelse
-        return error.EpochStakesMissingFromSnapshot;
+const ReplayConsensusState = struct {
+    replay_state: replay.service.ReplayState,
+    tower_consensus: ?replay.TowerConsensus,
+    senders: replay.TowerConsensus.Senders,
+    receivers: replay.TowerConsensus.Receivers,
+    metrics: replay.service.Metrics,
 
-    const feature_set = try sig.replay.service.getActiveFeatures(
-        allocator,
-        account_store.reader().forSlot(&bank_fields.ancestors),
-        bank_fields.slot,
-    );
+    pub fn deinit(self: *ReplayConsensusState, allocator: std.mem.Allocator) void {
+        self.replay_state.deinit();
+        if (self.tower_consensus) |*c| c.deinit(allocator);
+        self.senders.destroy();
+        self.receivers.destroy();
+    }
 
-    const root_slot_constants = try sig.core.SlotConstants.fromBankFields(
-        allocator,
-        bank_fields,
-        feature_set,
-    );
-    errdefer root_slot_constants.deinit(allocator);
-
-    const lt_hash = collapsed_manifest.bank_extra.accounts_lt_hash;
-    var root_slot_state = try sig.core.SlotState.fromBankFields(allocator, bank_fields, lt_hash);
-    errdefer root_slot_state.deinit(allocator);
-
-    const hard_forks = try bank_fields.hard_forks.clone(allocator);
-    errdefer hard_forks.deinit(allocator);
-
-    const current_epoch_constants: sig.core.EpochConstants = try .fromBankFields(
-        bank_fields,
-        try epoch_stakes.current.convert(allocator, .delegation),
-    );
-    errdefer current_epoch_constants.deinit(allocator);
-
-    return .{
-        .allocator = allocator,
-        .logger = .from(app_base.logger),
-        .identity = .{
-            .validator = .fromPublicKey(&app_base.my_keypair.public_key),
-            .vote_account = .fromPublicKey(&app_base.my_keypair.public_key),
+    pub fn init(
+        allocator: std.mem.Allocator,
+        params: struct {
+            epoch: sig.core.Epoch,
+            loaded_snapshot: *sig.accounts_db.snapshot.LoadedSnapshot,
+            app_base: *const AppBase,
+            ledger: *Ledger,
+            epoch_context_manager: *sig.adapter.EpochContextManager,
+            replay_threads: u32,
+            disable_consensus: bool,
+            voting_enabled: bool,
         },
-        .signing = .{
-            .node = app_base.my_keypair,
-            .authorized_voters = if (voting_enabled)
-                // TODO: Parse authorized voter keypairs from CLI args (--authorized-voter)
-                // For now, default to using the node keypair as the authorized voter
-                // (same as Agave's default behavior when no --authorized-voter is specified)
-                // ref https://github.com/anza-xyz/agave/blob/67a1cc9ef4222187820818d95325a0c8e700312f/validator/src/commands/run/execute.rs#L136-L138
-                &.{app_base.my_keypair}
-            else
-                &.{},
-        },
-        .account_store = account_store,
-        .ledger = ledger,
-        .epoch_schedule = bank_fields.epoch_schedule,
-        .slot_leaders = epoch_context_manager.slotLeaders(),
-        .root = .{
-            .slot = bank_fields.slot,
-            .constants = .init(root_slot_constants),
-            .state = .init(root_slot_state),
-        },
-        .current_epoch = epoch,
-        .current_epoch_constants = .init(current_epoch_constants),
-        .hard_forks = .init(hard_forks),
-    };
-}
+    ) !ReplayConsensusState {
+        var replay_state: replay.service.ReplayState = replay_state: {
+            const account_store = params.loaded_snapshot.accounts_db.accountStore();
+            const collapsed_manifest = &params.loaded_snapshot.collapsed_manifest;
+            const bank_fields = &collapsed_manifest.bank_fields;
+            const epoch_stakes_map = &collapsed_manifest.bank_extra.versioned_epoch_stakes;
+            const epoch_stakes = epoch_stakes_map.get(params.epoch) orelse
+                return error.EpochStakesMissingFromSnapshot;
 
-fn consensusDependencies(
-    allocator: std.mem.Allocator,
-    gossip_table: ?*sig.sync.RwMux(sig.gossip.GossipTable),
-    slot_leaders: ?sig.core.leader_schedule.SlotLeaders,
-    vote_sockets: ?replay.consensus.core.VoteSockets,
-) !replay.TowerConsensus.Dependencies.External {
-    const senders: sig.replay.TowerConsensus.Senders = try .create(allocator);
-    errdefer senders.destroy();
+            const feature_set = try sig.replay.service.getActiveFeatures(
+                allocator,
+                account_store.reader().forSlot(&bank_fields.ancestors),
+                bank_fields.slot,
+            );
 
-    const receivers: sig.replay.TowerConsensus.Receivers = try .create(allocator);
-    errdefer receivers.destroy();
+            const root_slot_constants = try sig.core.SlotConstants.fromBankFields(
+                allocator,
+                bank_fields,
+                feature_set,
+            );
+            errdefer root_slot_constants.deinit(allocator);
 
-    return .{
-        .senders = senders,
-        .receivers = receivers,
-        .vote_sockets = vote_sockets,
-        .gossip_table = gossip_table,
-        .slot_leaders = slot_leaders,
-    };
-}
+            const lt_hash = collapsed_manifest.bank_extra.accounts_lt_hash;
+
+            var root_slot_state: sig.core.SlotState =
+                try .fromBankFields(allocator, bank_fields, lt_hash);
+            errdefer root_slot_state.deinit(allocator);
+
+            const hard_forks = try bank_fields.hard_forks.clone(allocator);
+            errdefer hard_forks.deinit(allocator);
+
+            const current_epoch_constants: sig.core.EpochConstants = try .fromBankFields(
+                bank_fields,
+                try epoch_stakes.current.convert(allocator, .delegation),
+            );
+            errdefer current_epoch_constants.deinit(allocator);
+
+            break :replay_state try .init(.{
+                .allocator = allocator,
+                .logger = .from(params.app_base.logger),
+                .identity = .{
+                    .validator = .fromPublicKey(&params.app_base.my_keypair.public_key),
+                    .vote_account = .fromPublicKey(&params.app_base.my_keypair.public_key),
+                },
+                .signing = .{
+                    .node = params.app_base.my_keypair,
+                    .authorized_voters = if (params.voting_enabled)
+                        // TODO: Parse authorized voter keypairs from CLI args (--authorized-voter)
+                        // For now, default to using the node keypair as the authorized voter
+                        // (same as Agave's default behavior when no --authorized-voter is specified)
+                        // ref https://github.com/anza-xyz/agave/blob/67a1cc9ef4222187820818d95325a0c8e700312f/validator/src/commands/run/execute.rs#L136-L138
+                        &.{params.app_base.my_keypair}
+                    else
+                        &.{},
+                },
+                .account_store = account_store,
+                .ledger = params.ledger,
+                .epoch_schedule = bank_fields.epoch_schedule,
+                .slot_leaders = params.epoch_context_manager.slotLeaders(),
+                .root = .{
+                    .slot = bank_fields.slot,
+                    .constants = root_slot_constants,
+                    .state = root_slot_state,
+                },
+                .current_epoch = params.epoch,
+                .current_epoch_constants = current_epoch_constants,
+                .hard_forks = hard_forks,
+                .replay_threads = params.replay_threads,
+            });
+        };
+        errdefer replay_state.deinit();
+
+        const tower_consensus: ?replay.TowerConsensus = if (params.disable_consensus)
+            null
+        else
+            try .init(allocator, .{
+                .logger = .from(replay_state.logger),
+                .identity = replay_state.identity,
+                .signing = replay_state.signing,
+                .account_reader = replay_state.account_store.reader(),
+                .ledger = replay_state.ledger,
+                .slot_tracker = &replay_state.slot_tracker,
+            });
+        errdefer if (tower_consensus) |tc| tc.deinit(allocator);
+
+        const senders: replay.TowerConsensus.Senders = try .create(allocator);
+        errdefer senders.destroy();
+
+        const receivers: replay.TowerConsensus.Receivers = try .create(allocator);
+        errdefer receivers.destroy();
+
+        const metrics = try params.app_base.metrics_registry.initStruct(replay.service.Metrics);
+
+        return .{
+            .replay_state = replay_state,
+            .tower_consensus = tower_consensus,
+            .senders = senders,
+            .receivers = receivers,
+            .metrics = metrics,
+        };
+    }
+
+    pub fn spawnService(
+        self: *ReplayConsensusState,
+        app_base: *const AppBase,
+        vote_sockets: ?*const replay.consensus.core.VoteSockets,
+    ) !std.Thread {
+        return try app_base.spawnService(
+            "replay",
+            .loop,
+            replay.service.advanceReplay,
+            .{
+                replay.service.AdvanceReplayParams{
+                    .want_multi_threaded_replay = true,
+                    .replay_state = &self.replay_state,
+                    .vote_sockets = vote_sockets,
+                    .gossip_table = null,
+                    .consensus = if (self.tower_consensus) |*tc| .{
+                        .tower = tc,
+                        .vote_processing = null,
+                        .senders = self.senders,
+                        .receivers = self.receivers,
+                    } else null,
+                    .metrics = self.metrics,
+                },
+            },
+        );
+    }
+};
 
 fn spawnLogger(
     allocator: std.mem.Allocator,
