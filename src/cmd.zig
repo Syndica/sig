@@ -1190,6 +1190,10 @@ fn validator(
             .my_contact_info = my_contact_info,
             .n_retransmit_threads = turbine_config.num_retransmit_threads,
             .overwrite_turbine_stake_for_testing = turbine_config.overwrite_stake_for_testing,
+            .duplicate_slots_sender = if (consensus_deps) |d|
+                d.receivers.duplicate_slots
+            else
+                null,
         },
     );
     defer shred_network_manager.deinit();
@@ -1438,6 +1442,8 @@ fn shredNetwork(
         .my_contact_info = my_contact_info,
         .n_retransmit_threads = cfg.turbine.num_retransmit_threads,
         .overwrite_turbine_stake_for_testing = cfg.turbine.overwrite_stake_for_testing,
+        // No consensus in the standalone mode, so duplicate slots are not reported
+        .duplicate_slots_sender = null,
     });
     defer shred_network_manager.deinit();
 
