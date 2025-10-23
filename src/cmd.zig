@@ -1188,17 +1188,16 @@ fn validator(
     );
     defer shred_network_manager.deinit();
 
-    var replay_consensus_state: ReplayConsensusState = try .init(allocator, .{
-        .epoch = epoch,
-        .loaded_snapshot = &loaded_snapshot,
+    var replay_service_state: ReplayAndConsensusServiceState = try .init(allocator, .{
         .app_base = &app_base,
+        .loaded_snapshot = &loaded_snapshot,
         .ledger = &ledger,
         .epoch_context_manager = &epoch_context_manager,
         .replay_threads = cfg.replay_threads,
-        .disable_consensus = cfg.disable_consensus,
     });
-    defer replay_consensus_state.deinit(allocator);
-    const replay_thread = try replay_consensus_state.spawnService(&app_base);
+    defer replay_service_state.deinit(allocator);
+
+    const replay_thread = try replay_service_state.spawnService(&app_base, cfg);
 
     replay_thread.join();
     rpc_epoch_ctx_service_thread.join();
@@ -1306,17 +1305,16 @@ fn replayOffline(
         });
     }
 
-    var replay_consensus_state: ReplayConsensusState = try .init(allocator, .{
-        .epoch = epoch,
-        .loaded_snapshot = &loaded_snapshot,
+    var replay_service_state: ReplayAndConsensusServiceState = try .init(allocator, .{
         .app_base = &app_base,
+        .loaded_snapshot = &loaded_snapshot,
         .ledger = &ledger,
         .epoch_context_manager = &epoch_context_manager,
         .replay_threads = cfg.replay_threads,
-        .disable_consensus = cfg.disable_consensus,
     });
-    defer replay_consensus_state.deinit(allocator);
-    const replay_thread = try replay_consensus_state.spawnService(&app_base);
+    defer replay_service_state.deinit(allocator);
+
+    const replay_thread = try replay_service_state.spawnService(&app_base, cfg);
 
     replay_thread.join();
     ledger_cleanup_service.join();
@@ -1890,37 +1888,38 @@ fn startGossip(
     return service;
 }
 
-const ReplayConsensusState = struct {
+const ReplayAndConsensusServiceState = struct {
     replay_state: replay.service.ReplayState,
-    tower_consensus: ?replay.TowerConsensus,
-    senders: replay.TowerConsensus.Senders,
-    receivers: replay.TowerConsensus.Receivers,
+    tower_consensus: replay.TowerConsensus,
+    tc_senders: replay.TowerConsensus.Senders,
+    tc_receivers: replay.TowerConsensus.Receivers,
 
-    pub fn deinit(self: *ReplayConsensusState, allocator: std.mem.Allocator) void {
+    fn deinit(self: *ReplayAndConsensusServiceState, allocator: std.mem.Allocator) void {
         self.replay_state.deinit();
-        if (self.tower_consensus) |*c| c.deinit(allocator);
-        self.senders.destroy();
-        self.receivers.destroy();
+        self.tower_consensus.deinit(allocator);
+        self.tc_senders.destroy();
+        self.tc_receivers.destroy();
     }
 
-    pub fn init(
+    /// Helper for initializing replay state from relevant data.
+    fn init(
         allocator: std.mem.Allocator,
         params: struct {
-            epoch: sig.core.Epoch,
-            loaded_snapshot: *sig.accounts_db.snapshot.LoadedSnapshot,
             app_base: *const AppBase,
+            loaded_snapshot: *sig.accounts_db.snapshot.LoadedSnapshot,
             ledger: *Ledger,
             epoch_context_manager: *sig.adapter.EpochContextManager,
             replay_threads: u32,
-            disable_consensus: bool,
         },
-    ) !ReplayConsensusState {
+    ) !ReplayAndConsensusServiceState {
         var replay_state: replay.service.ReplayState = replay_state: {
             const account_store = params.loaded_snapshot.accounts_db.accountStore();
-            const collapsed_manifest = &params.loaded_snapshot.collapsed_manifest;
-            const bank_fields = &collapsed_manifest.bank_fields;
-            const epoch_stakes_map = &collapsed_manifest.bank_extra.versioned_epoch_stakes;
-            const epoch_stakes = epoch_stakes_map.get(params.epoch) orelse
+            const manifest = &params.loaded_snapshot.collapsed_manifest;
+            const bank_fields = &manifest.bank_fields;
+            const epoch = bank_fields.epoch;
+
+            const epoch_stakes_map = &manifest.bank_extra.versioned_epoch_stakes;
+            const epoch_stakes = epoch_stakes_map.get(epoch) orelse
                 return error.EpochStakesMissingFromSnapshot;
 
             const feature_set = try sig.replay.service.getActiveFeatures(
@@ -1929,14 +1928,11 @@ const ReplayConsensusState = struct {
                 bank_fields.slot,
             );
 
-            const root_slot_constants = try sig.core.SlotConstants.fromBankFields(
-                allocator,
-                bank_fields,
-                feature_set,
-            );
+            const root_slot_constants: sig.core.SlotConstants =
+                try .fromBankFields(allocator, bank_fields, feature_set);
             errdefer root_slot_constants.deinit(allocator);
 
-            const lt_hash = collapsed_manifest.bank_extra.accounts_lt_hash;
+            const lt_hash = manifest.bank_extra.accounts_lt_hash;
 
             var root_slot_state: sig.core.SlotState =
                 try .fromBankFields(allocator, bank_fields, lt_hash);
@@ -1965,7 +1961,7 @@ const ReplayConsensusState = struct {
                     .constants = root_slot_constants,
                     .state = root_slot_state,
                 },
-                .current_epoch = params.epoch,
+                .current_epoch = epoch,
                 .current_epoch_constants = current_epoch_constants,
                 .hard_forks = hard_forks,
                 .replay_threads = params.replay_threads,
@@ -1973,36 +1969,35 @@ const ReplayConsensusState = struct {
         };
         errdefer replay_state.deinit();
 
-        const tower_consensus: ?replay.TowerConsensus = if (params.disable_consensus)
-            null
-        else
-            try .init(allocator, .{
-                .logger = .from(replay_state.logger),
-                .my_identity = replay_state.my_identity,
-                .vote_identity = replay_state.vote_identity,
-                .account_reader = replay_state.account_store.reader(),
-                .ledger = replay_state.ledger,
-                .slot_tracker = &replay_state.slot_tracker,
-            });
-        errdefer if (tower_consensus) |tc| tc.deinit(allocator);
+        var tower_consensus: replay.TowerConsensus = try .init(allocator, .{
+            .logger = .from(replay_state.logger),
+            .my_identity = replay_state.my_identity,
+            .vote_identity = replay_state.vote_identity,
+            .account_reader = replay_state.account_store.reader(),
+            .ledger = replay_state.ledger,
+            .slot_tracker = &replay_state.slot_tracker,
+        });
+        errdefer tower_consensus.deinit(allocator);
 
-        const senders: replay.TowerConsensus.Senders = try .create(allocator);
-        errdefer senders.destroy();
+        const tc_senders: replay.TowerConsensus.Senders = try .create(allocator);
+        errdefer tc_senders.destroy();
 
-        const receivers: replay.TowerConsensus.Receivers = try .create(allocator);
-        errdefer receivers.destroy();
+        const tc_receivers: replay.TowerConsensus.Receivers = try .create(allocator);
+        errdefer tc_receivers.destroy();
 
         return .{
             .replay_state = replay_state,
             .tower_consensus = tower_consensus,
-            .senders = senders,
-            .receivers = receivers,
+            .tc_senders = tc_senders,
+            .tc_receivers = tc_receivers,
         };
     }
 
-    pub fn spawnService(
-        self: *ReplayConsensusState,
+    /// Run `replay.service.advanceReplay` in a loop as a service.
+    fn spawnService(
+        self: *ReplayAndConsensusServiceState,
         app_base: *const AppBase,
+        cfg: config.Cmd,
     ) !std.Thread {
         return try app_base.spawnService(
             "replay",
@@ -2012,12 +2007,12 @@ const ReplayConsensusState = struct {
                 replay.service.AdvanceReplayParams{
                     .want_multi_threaded_replay = true,
                     .replay_state = &self.replay_state,
-                    .consensus = if (self.tower_consensus) |*tc| .{
-                        .tower = tc,
-                        .vote_processing = null,
-                        .senders = self.senders,
-                        .receivers = self.receivers,
-                    } else null,
+                    .consensus = if (cfg.disable_consensus) null else .{
+                        .tower = &self.tower_consensus,
+                        .vote_collection = null, // TODO: enable
+                        .senders = self.tc_senders,
+                        .receivers = self.tc_receivers,
+                    },
                 },
             },
         );
