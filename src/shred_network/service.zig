@@ -56,6 +56,8 @@ pub const ShredNetworkDependencies = struct {
     epoch_context_mgr: *EpochContextManager,
     n_retransmit_threads: ?usize,
     overwrite_turbine_stake_for_testing: bool,
+    /// RPC Observability
+    rpc_hooks: *sig.rpc.Hooks,
 };
 
 /// Start the Shred Network.
