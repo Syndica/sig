@@ -81,69 +81,17 @@ pub const TowerConsensus = struct {
         self.arena_state.promote(allocator).deinit();
     }
 
-    /// All parameters needed for initialization
-    pub const Dependencies = struct {
-        // Basic parameters
-        logger: Logger,
-        my_identity: Pubkey,
-        vote_identity: Pubkey,
-
-        // Data sources
-        account_reader: AccountReader,
-        ledger: *sig.ledger.Ledger,
-        /// Reference not held onto, only used for some lookups.
-        slot_tracker: *const SlotTracker,
-    };
-
-    /// Channels where consensus sends messages to other services
-    pub const Senders = struct {
-        /// Received by repair ancestor_hashes_service
-        ancestor_hashes_replay_update: *Channel(AncestorHashesReplayUpdate),
-
-        pub fn destroy(self: Senders) void {
-            self.ancestor_hashes_replay_update.destroy();
-        }
-
-        pub fn create(allocator: std.mem.Allocator) std.mem.Allocator.Error!Senders {
-            return .{ .ancestor_hashes_replay_update = try .create(allocator) };
-        }
-    };
-
-    /// Channels where consensus receives messages from other services
-    pub const Receivers = struct {
-        /// Sent by repair ancestor_hashes_service
-        ancestor_duplicate_slots: *Channel(AncestorDuplicateSlotToRepair),
-        /// Sent by repair service
-        popular_pruned_forks: *Channel(Slot),
-        /// Sent by WindowService and DuplicateShred handlers
-        duplicate_slots: *Channel(Slot),
-
-        pub fn destroy(self: Receivers) void {
-            self.ancestor_duplicate_slots.destroy();
-            self.popular_pruned_forks.destroy();
-            self.duplicate_slots.destroy();
-        }
-
-        pub fn create(allocator: std.mem.Allocator) std.mem.Allocator.Error!Receivers {
-            const ancestor_duplicate_slots: *Channel(AncestorDuplicateSlotToRepair) =
-                try .create(allocator);
-            errdefer ancestor_duplicate_slots.destroy();
-
-            const popular_pruned_forks: *Channel(Slot) = try .create(allocator);
-            errdefer popular_pruned_forks.destroy();
-
-            const duplicate_slots: *Channel(Slot) = try .create(allocator);
-            errdefer duplicate_slots.destroy();
-
-            return .{
-                .ancestor_duplicate_slots = ancestor_duplicate_slots,
-                .popular_pruned_forks = popular_pruned_forks,
-                .duplicate_slots = duplicate_slots,
-            };
-        }
-    };
-
-    pub fn init(allocator: Allocator, deps: Dependencies) !TowerConsensus {
+    pub fn init(
+        allocator: Allocator,
+        deps: struct {
+            logger: Logger,
+            my_identity: Pubkey,
+            vote_identity: Pubkey,
+            account_reader: AccountReader,
+            ledger: *sig.ledger.Ledger,
+            slot_tracker: *const SlotTracker,
+        },
+    ) !TowerConsensus {
         const zone = tracy.Zone.init(@src(), .{ .name = "TowerConsensus.init" });
         defer zone.deinit();
 
@@ -253,6 +201,54 @@ pub const TowerConsensus = struct {
 
         return heaviest_subtree_fork_choice;
     }
+
+    /// Channels where consensus sends messages to other services
+    pub const Senders = struct {
+        /// Received by repair ancestor_hashes_service
+        ancestor_hashes_replay_update: *Channel(AncestorHashesReplayUpdate),
+
+        pub fn destroy(self: Senders) void {
+            self.ancestor_hashes_replay_update.destroy();
+        }
+
+        pub fn create(allocator: std.mem.Allocator) std.mem.Allocator.Error!Senders {
+            return .{ .ancestor_hashes_replay_update = try .create(allocator) };
+        }
+    };
+
+    /// Channels where consensus receives messages from other services
+    pub const Receivers = struct {
+        /// Sent by repair ancestor_hashes_service
+        ancestor_duplicate_slots: *Channel(AncestorDuplicateSlotToRepair),
+        /// Sent by repair service
+        popular_pruned_forks: *Channel(Slot),
+        /// Sent by WindowService and DuplicateShred handlers
+        duplicate_slots: *Channel(Slot),
+
+        pub fn destroy(self: Receivers) void {
+            self.ancestor_duplicate_slots.destroy();
+            self.popular_pruned_forks.destroy();
+            self.duplicate_slots.destroy();
+        }
+
+        pub fn create(allocator: std.mem.Allocator) std.mem.Allocator.Error!Receivers {
+            const ancestor_duplicate_slots: *Channel(AncestorDuplicateSlotToRepair) =
+                try .create(allocator);
+            errdefer ancestor_duplicate_slots.destroy();
+
+            const popular_pruned_forks: *Channel(Slot) = try .create(allocator);
+            errdefer popular_pruned_forks.destroy();
+
+            const duplicate_slots: *Channel(Slot) = try .create(allocator);
+            errdefer duplicate_slots.destroy();
+
+            return .{
+                .ancestor_duplicate_slots = ancestor_duplicate_slots,
+                .popular_pruned_forks = popular_pruned_forks,
+                .duplicate_slots = duplicate_slots,
+            };
+        }
+    };
 
     /// Run all phases of consensus:
     /// - process replay results
