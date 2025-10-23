@@ -56,8 +56,6 @@ pub const ShredNetworkDependencies = struct {
     epoch_context_mgr: *EpochContextManager,
     n_retransmit_threads: ?usize,
     overwrite_turbine_stake_for_testing: bool,
-    /// Optional channel to send duplicate slot notifications to consensus
-    duplicate_slots_sender: ?*Channel(Slot),
 };
 
 /// Start the Shred Network.
@@ -93,7 +91,6 @@ pub fn start(
         conf.root_slot + 1,
         .from(deps.logger),
         deps.registry,
-        deps.duplicate_slots_sender,
     );
     try defers.deferCall(BasicShredTracker.deinit, .{shred_tracker});
 
@@ -250,7 +247,6 @@ test "start and stop gracefully" {
         .epoch_context_mgr = &epoch_ctx,
         .n_retransmit_threads = 1,
         .overwrite_turbine_stake_for_testing = true,
-        .duplicate_slots_sender = null,
     };
 
     var timer = try sig.time.Timer.start();

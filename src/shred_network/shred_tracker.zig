@@ -44,8 +44,6 @@ pub const BasicShredTracker = struct {
     /// ring buffer
     slots: [num_slots]MonitoredSlot = @splat(.{}),
     metrics: Metrics,
-    /// Optional channel to send duplicate slot notifications to consensus
-    duplicate_slots_sender: ?*sig.sync.Channel(Slot),
 
     const num_slots: usize = 1024;
 
@@ -63,7 +61,6 @@ pub const BasicShredTracker = struct {
         slot: Slot,
         logger: Logger,
         registry: *Registry(.{}),
-        duplicate_slots_sender: ?*sig.sync.Channel(Slot),
     ) !Self {
         const metrics = try registry.initStruct(Metrics);
         metrics.finished_slots_through.set(slot);
@@ -76,7 +73,6 @@ pub const BasicShredTracker = struct {
             .max_slot_seen = slot,
             .logger = logger,
             .metrics = try registry.initStruct(Metrics),
-            .duplicate_slots_sender = duplicate_slots_sender,
         };
     }
 
@@ -127,18 +123,6 @@ pub const BasicShredTracker = struct {
                 "parent conflict for slot {}. prior parent is {?}. index {} specifies parent {}",
                 .{ slot, monitored_slot.parent_slot, shred_index, parent_slot },
             );
-
-            if (!monitored_slot.duplicate_notified) {
-                monitored_slot.duplicate_notified = true;
-                if (self.duplicate_slots_sender) |sender| {
-                    sender.send(slot) catch |err| {
-                        self.logger.err().logf(
-                            "failed to send duplicate slot {} to consensus: {}",
-                            .{ slot, err },
-                        );
-                    };
-                }
-            }
         }
         monitored_slot.parent_slot = parent_slot;
 
@@ -434,8 +418,6 @@ const MonitoredSlot = struct {
     is_skipped: bool = false,
     parent_slot: ?Slot = null,
     unique_observed_count: u32 = 0,
-    /// Track if we've already notified consensus about this slot being duplicate
-    duplicate_notified: bool = false,
 
     const Self = @This();
 
@@ -510,7 +492,7 @@ test "trivial happy path" {
 
     var registry = sig.prometheus.Registry(.{}).init(allocator);
     defer registry.deinit();
-    var tracker = try BasicShredTracker.init(std.testing.allocator, 13579, .noop, &registry, null);
+    var tracker = try BasicShredTracker.init(std.testing.allocator, 13579, .noop, &registry);
     defer tracker.deinit();
 
     _ = try tracker.identifyMissing(&msr, Instant.UNIX_EPOCH.plus(Duration.fromSecs(1)));
@@ -531,7 +513,7 @@ test "1 registered shred is identified" {
 
     var registry = sig.prometheus.Registry(.{}).init(allocator);
     defer registry.deinit();
-    var tracker = try BasicShredTracker.init(std.testing.allocator, 13579, .noop, &registry, null);
+    var tracker = try BasicShredTracker.init(std.testing.allocator, 13579, .noop, &registry);
     defer tracker.deinit();
 
     try tracker.registerShred(13579, 123, 13578, false, Instant.UNIX_EPOCH);
@@ -559,7 +541,7 @@ test "slots are only skipped after a competing fork has developed sufficiently" 
 
     var registry = sig.prometheus.Registry(.{}).init(allocator);
     defer registry.deinit();
-    var tracker = try BasicShredTracker.init(std.testing.allocator, 1, .noop, &registry, null);
+    var tracker = try BasicShredTracker.init(std.testing.allocator, 1, .noop, &registry);
     defer tracker.deinit();
 
     const start = Instant.UNIX_EPOCH;
@@ -608,7 +590,7 @@ test "slots are not skipped when the current fork is developed" {
 
     var registry = sig.prometheus.Registry(.{}).init(allocator);
     defer registry.deinit();
-    var tracker = try BasicShredTracker.init(std.testing.allocator, 1, .noop, &registry, null);
+    var tracker = try BasicShredTracker.init(std.testing.allocator, 1, .noop, &registry);
     defer tracker.deinit();
 
     const start = Instant.UNIX_EPOCH;
@@ -627,70 +609,4 @@ test "slots are not skipped when the current fork is developed" {
         _ = try tracker.identifyMissing(&msr, start.plus(.fromSecs(11)));
         try std.testing.expectEqual(2, msr.items()[0].slot);
     }
-}
-
-test "duplicate slot detection with conflicting parents" {
-    const allocator = std.testing.allocator;
-
-    var registry = sig.prometheus.Registry(.{}).init(allocator);
-    defer registry.deinit();
-
-    const duplicate_slots_channel = try sig.sync.Channel(Slot).create(allocator);
-    defer duplicate_slots_channel.destroy();
-
-    var tracker = try BasicShredTracker.init(
-        std.testing.allocator,
-        100,
-        .noop,
-        &registry,
-        duplicate_slots_channel,
-    );
-    defer tracker.deinit();
-
-    const start = Instant.UNIX_EPOCH;
-
-    try tracker.registerShred(105, 0, 104, false, start);
-
-    try std.testing.expectEqual(null, duplicate_slots_channel.tryReceive());
-
-    try tracker.registerShred(105, 1, 103, false, start);
-
-    // Channel should now have the duplicate slot notification
-    const duplicate_slot = duplicate_slots_channel.tryReceive();
-    try std.testing.expect(duplicate_slot != null);
-    try std.testing.expectEqual(105, duplicate_slot.?);
-
-    try tracker.registerShred(105, 2, 102, false, start);
-
-    // Channel should still be empty because of only one notification per slot
-    try std.testing.expectEqual(null, duplicate_slots_channel.tryReceive());
-}
-
-test "no duplicate notification when parents match" {
-    const allocator = std.testing.allocator;
-
-    var registry = sig.prometheus.Registry(.{}).init(allocator);
-    defer registry.deinit();
-
-    const duplicate_slots_channel = try sig.sync.Channel(Slot).create(allocator);
-    defer duplicate_slots_channel.destroy();
-
-    var tracker = try BasicShredTracker.init(
-        std.testing.allocator,
-        100,
-        .noop,
-        &registry,
-        duplicate_slots_channel,
-    );
-    defer tracker.deinit();
-
-    const start = Instant.UNIX_EPOCH;
-
-    // Register multiple shreds for slot 105, all with the same parent 104
-    try tracker.registerShred(105, 0, 104, false, start);
-    try tracker.registerShred(105, 1, 104, false, start);
-    try tracker.registerShred(105, 2, 104, false, start);
-
-    // Channel should remain empty because we did not have conflicting parents
-    try std.testing.expectEqual(null, duplicate_slots_channel.tryReceive());
 }

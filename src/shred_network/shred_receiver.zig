@@ -302,7 +302,6 @@ test "handleBatch/handlePacket" {
         root_slot + 1,
         .noop,
         &registry,
-        null,
     );
     defer shred_tracker.deinit();
 
