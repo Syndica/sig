@@ -997,11 +997,8 @@ fn upcomingLeaderTpuVoteSockets(
     const gossip_table, var gossip_table_lg = gossip_table_rw.readWithLock();
     defer gossip_table_lg.unlock();
 
-    var seen_sockets: std.AutoHashMapUnmanaged(SocketAddr, void) = .empty;
+    var seen_sockets: std.AutoArrayHashMapUnmanaged(SocketAddr, void) = .empty;
     defer seen_sockets.deinit(allocator);
-
-    var leader_sockets: std.ArrayListUnmanaged(SocketAddr) = .empty;
-    defer leader_sockets.deinit(allocator);
 
     var leader_iter = seen_leaders.keyIterator();
     while (leader_iter.next()) |leader_pubkey_ptr| {
@@ -1010,13 +1007,10 @@ fn upcomingLeaderTpuVoteSockets(
 
         const socket_addr = contact_info.tpu_addr orelse continue;
 
-        const gop = try seen_sockets.getOrPut(allocator, socket_addr);
-        if (!gop.found_existing) {
-            try leader_sockets.append(allocator, socket_addr);
-        }
+        try seen_sockets.put(allocator, socket_addr, {});
     }
 
-    return leader_sockets.toOwnedSlice(allocator);
+    return try allocator.dupe(SocketAddr, seen_sockets.keys());
 }
 
 fn sendVoteTransaction(
@@ -1903,7 +1897,7 @@ test "maybeRefreshLastVote - latest landed vote newer than last vote" {
     defer replay_tower.deinit(std.testing.allocator);
 
     replay_tower.last_vote = .{
-        .tower_sync = sig.runtime.program.vote.state.TowerSync{
+        .tower_sync = .{
             .lockouts = .fromOwnedSlice(try std.testing.allocator.dupe(Lockout, &.{
                 .{ .slot = 3, .confirmation_count = 3 },
                 .{ .slot = 4, .confirmation_count = 2 },
@@ -1981,7 +1975,7 @@ test "maybeRefreshLastVote - non voting validator" {
     defer replay_tower.deinit(std.testing.allocator);
 
     replay_tower.last_vote = .{
-        .tower_sync = sig.runtime.program.vote.state.TowerSync{
+        .tower_sync = .{
             .lockouts = .fromOwnedSlice(try std.testing.allocator.dupe(Lockout, &.{
                 .{ .slot = 3, .confirmation_count = 3 },
                 .{ .slot = 4, .confirmation_count = 2 },
@@ -2061,7 +2055,7 @@ test "maybeRefreshLastVote - hotspare validator" {
     defer replay_tower.deinit(std.testing.allocator);
 
     replay_tower.last_vote = .{
-        .tower_sync = sig.runtime.program.vote.state.TowerSync{
+        .tower_sync = .{
             .lockouts = .fromOwnedSlice(try std.testing.allocator.dupe(Lockout, &.{
                 .{ .slot = 3, .confirmation_count = 3 },
                 .{ .slot = 4, .confirmation_count = 2 },
@@ -2141,7 +2135,7 @@ test "maybeRefreshLastVote - refresh interval not elapsed" {
     defer replay_tower.deinit(std.testing.allocator);
 
     replay_tower.last_vote = .{
-        .tower_sync = sig.runtime.program.vote.state.TowerSync{
+        .tower_sync = .{
             .lockouts = .fromOwnedSlice(try std.testing.allocator.dupe(Lockout, &.{
                 .{ .slot = 3, .confirmation_count = 3 },
                 .{ .slot = 4, .confirmation_count = 2 },
@@ -2224,7 +2218,7 @@ test "maybeRefreshLastVote - successfully refreshed and mark last_vote_tx_blockh
     defer replay_tower.deinit(std.testing.allocator);
 
     replay_tower.last_vote = .{
-        .tower_sync = sig.runtime.program.vote.state.TowerSync{
+        .tower_sync = .{
             .lockouts = .fromOwnedSlice(try std.testing.allocator.dupe(Lockout, &.{
                 .{ .slot = 3, .confirmation_count = 3 },
                 .{ .slot = 4, .confirmation_count = 2 },
@@ -2852,7 +2846,7 @@ test "generateVoteTx - slot not in tracker returns failed" {
     defer replay_tower.deinit(allocator);
 
     replay_tower.last_vote = .{
-        .tower_sync = sig.runtime.program.vote.state.TowerSync{
+        .tower_sync = .{
             .lockouts = .fromOwnedSlice(try allocator.dupe(Lockout, &.{
                 .{ .slot = 999, .confirmation_count = 1 },
             })),
@@ -2904,7 +2898,7 @@ test "generateVoteTx - vote account not found returns failed" {
     defer replay_tower.deinit(allocator);
 
     replay_tower.last_vote = .{
-        .tower_sync = sig.runtime.program.vote.state.TowerSync{
+        .tower_sync = .{
             .lockouts = .fromOwnedSlice(try allocator.dupe(Lockout, &.{
                 .{ .slot = 0, .confirmation_count = 1 },
             })),
@@ -2956,7 +2950,7 @@ test "generateVoteTx - invalid switch fork decision returns failed" {
     defer replay_tower.deinit(allocator);
 
     replay_tower.last_vote = .{
-        .tower_sync = sig.runtime.program.vote.state.TowerSync{
+        .tower_sync = .{
             .lockouts = .fromOwnedSlice(try allocator.dupe(Lockout, &.{
                 .{ .slot = 0, .confirmation_count = 1 },
             })),
@@ -3008,7 +3002,7 @@ test "generateVoteTx - success with tower_sync vote" {
     defer replay_tower.deinit(allocator);
 
     replay_tower.last_vote = .{
-        .tower_sync = sig.runtime.program.vote.state.TowerSync{
+        .tower_sync = .{
             .lockouts = .fromOwnedSlice(try allocator.dupe(Lockout, &.{
                 .{ .slot = 0, .confirmation_count = 1 },
             })),
@@ -3199,7 +3193,7 @@ test "generateVoteTx - success with switch proof" {
     defer replay_tower.deinit(allocator);
 
     replay_tower.last_vote = .{
-        .tower_sync = sig.runtime.program.vote.state.TowerSync{
+        .tower_sync = .{
             .lockouts = .fromOwnedSlice(try allocator.dupe(Lockout, &.{
                 .{ .slot = 0, .confirmation_count = 1 },
             })),
@@ -3295,7 +3289,7 @@ test "generateVoteTx - hot spare validator returns hot_spare" {
     defer replay_tower.deinit(allocator);
 
     replay_tower.last_vote = .{
-        .tower_sync = sig.runtime.program.vote.state.TowerSync{
+        .tower_sync = .{
             .lockouts = .fromOwnedSlice(try allocator.dupe(Lockout, &.{
                 .{ .slot = 0, .confirmation_count = 1 },
             })),
@@ -3384,7 +3378,7 @@ test "generateVoteTx - wrong authorized voter returns non_voting" {
     defer replay_tower.deinit(allocator);
 
     replay_tower.last_vote = .{
-        .tower_sync = sig.runtime.program.vote.state.TowerSync{
+        .tower_sync = .{
             .lockouts = .fromOwnedSlice(try allocator.dupe(Lockout, &.{
                 .{ .slot = 0, .confirmation_count = 1 },
             })),
