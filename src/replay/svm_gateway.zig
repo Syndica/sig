@@ -29,8 +29,6 @@ const TransactionResult = sig.runtime.transaction_execution.TransactionResult;
 const loadPrograms = sig.runtime.program_loader.loadPrograms;
 const initDurableNonceFromHash = sig.runtime.nonce.initDurableNonceFromHash;
 
-const ResolvedTransaction = replay.resolve_lookup.ResolvedTransaction;
-
 pub fn executeTransaction(
     allocator: Allocator,
     svm_gateway: *SvmGateway,
@@ -93,14 +91,18 @@ pub const SvmGateway = struct {
 
     pub fn init(
         allocator: Allocator,
-        batch: []const ResolvedTransaction,
+        batches: []const replay.resolve_lookup.ResolvedBatch,
         params: Params,
     ) !SvmGateway {
         const zone = tracy.Zone.init(@src(), .{ .name = "SvmGateway.init" });
         defer zone.deinit();
 
-        var accounts = try account_preload.initSufficientCapacity(allocator, batch);
-        for (batch) |transaction| {
+        var max_accounts: usize = 0;
+        for (batches) |batch| max_accounts += account_preload.maxAccounts(batch.transactions);
+        var accounts = AccountMap{};
+        try accounts.ensureUnusedCapacity(allocator, max_accounts);
+
+        for (batches) |batch| for (batch.transactions) |transaction| {
             try account_preload.load(
                 &accounts,
                 allocator,
@@ -108,7 +110,7 @@ pub const SvmGateway = struct {
                 &transaction.accounts,
                 transaction.instructions,
             );
-        }
+        };
 
         const vm_environment = try vm.Environment.initV1(
             allocator,

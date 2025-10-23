@@ -32,7 +32,8 @@ pub fn initFromAccountsDb(
     account_reader: SlotAccountReader,
     transactions: []const RuntimeTransaction,
 ) !std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData) {
-    var map = try initSufficientCapacity(allocator, transactions);
+    var map: AccountMap = .{};
+    try map.ensureUnusedCapacity(allocator, maxAccounts(transactions));
     for (transactions) |tx| {
         try load(&map, allocator, account_reader, &tx.accounts, tx.instructions);
     }
@@ -42,19 +43,20 @@ pub fn initFromAccountsDb(
 /// Allocates a sufficiently large account cache to hold every account that
 /// may be needed by these transactions.
 pub fn initSufficientCapacity(allocator: Allocator, transactions: anytype) !AccountMap {
-    const max_map_entries = total_account_keys: {
-        var n: usize = 0;
-        for (transactions) |tx| n += tx.accounts.len;
-        // for getting program owner accounts and ProgramData accounts
-        for (transactions) |tx| n += tx.instructions.len * 2;
-        break :total_account_keys n;
-    };
-
-    // optimisation: we could also keep per-tx indexes to remove reliance on hashmap get
     var map: AccountMap = .{};
-    try map.ensureUnusedCapacity(allocator, max_map_entries);
+    try map.ensureUnusedCapacity(allocator, maxAccounts(transactions));
 
     return map;
+}
+
+/// Counts the maximum number of accounts that may be needed to process these transactions.
+/// This is a naive upper bound that doesn't check for duplicates.
+pub fn maxAccounts(transactions: anytype) usize {
+    var n: usize = 0;
+    for (transactions) |tx| n += tx.accounts.len;
+    // for getting program owner accounts and ProgramData accounts
+    for (transactions) |tx| n += tx.instructions.len * 2;
+    return n;
 }
 
 /// Loads all the accounts needed to process a single transaction.

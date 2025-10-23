@@ -86,10 +86,6 @@ pub const CachedAccount = struct {
     pub fn deinit(self: CachedAccount, allocator: Allocator) void {
         if (self.is_owned) self.account.deinit(allocator);
     }
-
-    pub fn getAccount(self: *const CachedAccount) *const AccountSharedData {
-        return &self.account;
-    }
 };
 
 const LoadedTransactionAccountsError = error{

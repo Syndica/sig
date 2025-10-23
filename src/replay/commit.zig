@@ -33,12 +33,16 @@ fn isSimpleVoteTransaction(tx: Transaction) bool {
 /// All contained state is required to be thread-safe.
 pub const Committer = struct {
     logger: Logger,
-    account_store: sig.accounts_db.AccountStore,
     slot_state: *sig.core.SlotState,
     status_cache: *sig.core.StatusCache,
     stakes_cache: *sig.core.StakesCache,
     new_rate_activation_epoch: ?sig.core.Epoch,
     replay_votes_sender: *Channel(ParsedVote),
+    writes: *Channel(Pubkey),
+
+    pub fn deinit(self: Committer) void {
+        self.writes.destroy();
+    }
 
     pub fn commitTransactions(
         self: Committer,
@@ -54,7 +58,10 @@ pub const Committer = struct {
 
         var rng = std.Random.DefaultPrng.init(slot + transactions.len);
 
-        var accounts_to_store = std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData).empty;
+        var accounts_to_store = std.AutoArrayHashMapUnmanaged(
+            Pubkey,
+            sig.runtime.account_loader.CachedAccount,
+        ).empty;
         defer accounts_to_store.deinit(allocator);
 
         var signature_count: usize = 0;
@@ -77,7 +84,7 @@ pub const Committer = struct {
                     // reaching this point.
                     return error.MultipleWritesInBatch;
                 }
-                gop.value_ptr.* = account.getAccount().*;
+                gop.value_ptr.* = account;
             }
             transaction_fees += tx_result.fees.transaction_fee;
             priority_fees += tx_result.fees.prioritization_fee;
@@ -125,14 +132,15 @@ pub const Committer = struct {
         _ = self.slot_state.signature_count.fetchAdd(signature_count, .monotonic);
         _ = self.slot_state.collected_rent.fetchAdd(rent_collected, .monotonic);
 
-        for (accounts_to_store.keys(), accounts_to_store.values()) |pubkey, account| {
+        for (accounts_to_store.values()) |account| {
             try self.stakes_cache.checkAndStore(
                 allocator,
-                pubkey,
-                account,
+                account.pubkey,
+                account.account,
                 self.new_rate_activation_epoch,
             );
-            try self.account_store.put(slot, pubkey, account);
+            account.deinit(allocator);
+            try self.writes.send(account.pubkey);
         }
     }
 };
