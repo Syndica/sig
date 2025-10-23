@@ -128,13 +128,16 @@ pub const BasicShredTracker = struct {
                 .{ slot, monitored_slot.parent_slot, shred_index, parent_slot },
             );
 
-            if (self.duplicate_slots_sender) |sender| {
-                sender.send(slot) catch |err| {
-                    self.logger.err().logf(
-                        "failed to send duplicate slot {} to consensus: {}",
-                        .{ slot, err },
-                    );
-                };
+            if (!monitored_slot.duplicate_notified) {
+                monitored_slot.duplicate_notified = true;
+                if (self.duplicate_slots_sender) |sender| {
+                    sender.send(slot) catch |err| {
+                        self.logger.err().logf(
+                            "failed to send duplicate slot {} to consensus: {}",
+                            .{ slot, err },
+                        );
+                    };
+                }
             }
         }
         monitored_slot.parent_slot = parent_slot;
@@ -431,6 +434,8 @@ const MonitoredSlot = struct {
     is_skipped: bool = false,
     parent_slot: ?Slot = null,
     unique_observed_count: u32 = 0,
+    /// Track if we've already notified consensus about this slot being duplicate
+    duplicate_notified: bool = false,
 
     const Self = @This();
 
