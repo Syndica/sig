@@ -1167,6 +1167,12 @@ fn validator(
 
     const turbine_config = cfg.turbine;
 
+    const consensus_deps = if (cfg.disable_consensus)
+        null
+    else
+        try consensusDependencies(allocator, &gossip_service.gossip_table_rw);
+    defer if (consensus_deps) |d| d.deinit();
+
     // shred network
     var shred_network_manager = try sig.shred_network.start(
         cfg.shred_network.toConfig(loaded_snapshot.collapsed_manifest.bank_fields.slot),
@@ -1184,6 +1190,10 @@ fn validator(
             .my_contact_info = my_contact_info,
             .n_retransmit_threads = turbine_config.num_retransmit_threads,
             .overwrite_turbine_stake_for_testing = turbine_config.overwrite_stake_for_testing,
+            .duplicate_slots_sender = if (consensus_deps) |d|
+                d.receivers.duplicate_slots
+            else
+                null,
         },
     );
     defer shred_network_manager.deinit();
@@ -1198,12 +1208,6 @@ fn validator(
         &epoch_context_manager,
     );
     defer replay_deps.deinit(allocator);
-
-    const consensus_deps = if (cfg.disable_consensus)
-        null
-    else
-        try consensusDependencies(allocator, &gossip_service.gossip_table_rw);
-    defer if (consensus_deps) |d| d.deinit();
 
     var replay_service = try replay.Service.init(&replay_deps, consensus_deps, cfg.replay_threads);
     defer replay_service.deinit(allocator);
