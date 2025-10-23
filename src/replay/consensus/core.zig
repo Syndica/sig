@@ -31,12 +31,10 @@ const AccountReader = sig.accounts_db.AccountReader;
 const Ledger = sig.ledger.Ledger;
 
 const ForkChoice = sig.consensus.fork_choice.ForkChoice;
-const GossipVerifiedVoteHash = sig.consensus.vote_listener.GossipVerifiedVoteHash;
 const HeaviestSubtreeForkChoice = sig.consensus.HeaviestSubtreeForkChoice;
 const LatestValidatorVotes = sig.consensus.latest_validator_votes.LatestValidatorVotes;
 const ProgressMap = sig.consensus.progress_map.ProgressMap;
 const ReplayTower = sig.consensus.replay_tower.ReplayTower;
-const ThresholdConfirmedSlot = sig.consensus.vote_listener.ThresholdConfirmedSlot;
 
 const SlotTracker = sig.replay.trackers.SlotTracker;
 const EpochTracker = sig.replay.trackers.EpochTracker;
@@ -72,10 +70,6 @@ pub const TowerConsensus = struct {
     /// functions; ie, it isn't used for any persistent data
     arena_state: std.heap.ArenaAllocator.State,
 
-    // Communication channels
-    senders: Senders,
-    receivers: Receivers,
-
     pub fn deinit(self: TowerConsensus, allocator: Allocator) void {
         self.replay_tower.deinit(allocator);
         self.fork_choice.deinit();
@@ -99,19 +93,6 @@ pub const TowerConsensus = struct {
         ledger: *sig.ledger.Ledger,
         /// Reference not held onto, only used for some lookups.
         slot_tracker: *const SlotTracker,
-        external: External,
-
-        /// Data that comes from outside replay
-        pub const External = struct {
-            senders: Senders,
-            receivers: Receivers,
-
-            /// WARN: Only use if you own everything in this struct.
-            pub fn deinit(self: External) void {
-                self.senders.destroy();
-                self.receivers.destroy();
-            }
-        };
     };
 
     /// Channels where consensus sends messages to other services
@@ -132,10 +113,6 @@ pub const TowerConsensus = struct {
     pub const Receivers = struct {
         /// Sent by repair ancestor_hashes_service
         ancestor_duplicate_slots: *Channel(AncestorDuplicateSlotToRepair),
-        /// Sent by vote_listener
-        duplicate_confirmed_slots: *Channel(ThresholdConfirmedSlot),
-        /// Sent by vote_listener
-        gossip_verified_vote_hash: *Channel(GossipVerifiedVoteHash),
         /// Sent by repair service
         popular_pruned_forks: *Channel(Slot),
         /// Sent by WindowService and DuplicateShred handlers
@@ -143,8 +120,6 @@ pub const TowerConsensus = struct {
 
         pub fn destroy(self: Receivers) void {
             self.ancestor_duplicate_slots.destroy();
-            self.duplicate_confirmed_slots.destroy();
-            self.gossip_verified_vote_hash.destroy();
             self.popular_pruned_forks.destroy();
             self.duplicate_slots.destroy();
         }
@@ -154,14 +129,6 @@ pub const TowerConsensus = struct {
                 try .create(allocator);
             errdefer ancestor_duplicate_slots.destroy();
 
-            const duplicate_confirmed_slots: *Channel(ThresholdConfirmedSlot) =
-                try .create(allocator);
-            errdefer duplicate_confirmed_slots.destroy();
-
-            const gossip_verified_vote_hash: *Channel(GossipVerifiedVoteHash) =
-                try .create(allocator);
-            errdefer gossip_verified_vote_hash.destroy();
-
             const popular_pruned_forks: *Channel(Slot) = try .create(allocator);
             errdefer popular_pruned_forks.destroy();
 
@@ -170,8 +137,6 @@ pub const TowerConsensus = struct {
 
             return .{
                 .ancestor_duplicate_slots = ancestor_duplicate_slots,
-                .duplicate_confirmed_slots = duplicate_confirmed_slots,
-                .gossip_verified_vote_hash = gossip_verified_vote_hash,
                 .popular_pruned_forks = popular_pruned_forks,
                 .duplicate_slots = duplicate_slots,
             };
@@ -213,9 +178,6 @@ pub const TowerConsensus = struct {
             .status_cache = .DEFAULT,
             .slot_data = .empty,
             .arena_state = .{},
-
-            .senders = deps.external.senders,
-            .receivers = deps.external.receivers,
         };
     }
 
@@ -304,6 +266,10 @@ pub const TowerConsensus = struct {
         slot_tracker: *SlotTracker,
         epoch_tracker: *EpochTracker,
         progress_map: *ProgressMap,
+        senders: Senders,
+        receivers: Receivers,
+        duplicate_confirmed_slots: []const sig.consensus.vote_listener.ThresholdConfirmedSlot,
+        gossip_verified_vote_hashes: []const sig.consensus.vote_listener.GossipVerifiedVoteHash,
         results: []const ReplayResult,
     ) !void {
         var arena_state = self.arena_state.promote(allocator);
@@ -315,7 +281,14 @@ pub const TowerConsensus = struct {
 
         // Process replay results
         for (results) |r| {
-            try self.processResult(allocator, ledger, progress_map, slot_tracker, r);
+            try self.processResult(
+                allocator,
+                ledger,
+                progress_map,
+                slot_tracker,
+                senders.ancestor_hashes_replay_update,
+                r,
+            );
         }
 
         // Process cluster sync and prepare ancestors/descendants
@@ -329,8 +302,10 @@ pub const TowerConsensus = struct {
                 .progress = progress_map,
                 .latest_validator_votes = &self.latest_validator_votes,
                 .slot_data = &self.slot_data,
-                .senders = self.senders,
-                .receivers = self.receivers,
+                .duplicate_confirmed_slots = duplicate_confirmed_slots,
+                .gossip_verified_vote_hashes = gossip_verified_vote_hashes,
+                .senders = senders,
+                .receivers = receivers,
             });
 
             const SlotSet = SortedSetUnmanaged(Slot);
@@ -363,6 +338,7 @@ pub const TowerConsensus = struct {
             progress_map,
             account_reader,
             self.my_identity, // vote_account
+            senders,
         );
     }
 
@@ -372,6 +348,7 @@ pub const TowerConsensus = struct {
         ledger: *Ledger,
         progress_map: *ProgressMap,
         slot_tracker: *const SlotTracker,
+        ancestor_hashes_replay_update_sender: *Channel(AncestorHashesReplayUpdate),
         result: ReplayResult,
     ) !void {
         const process_state: ProcessResultParams = .{
@@ -390,7 +367,7 @@ pub const TowerConsensus = struct {
             .epoch_slots_frozen_slots = &self.slot_data.epoch_slots_frozen_slots,
             .duplicate_slots_to_repair = &self.slot_data.duplicate_slots_to_repair,
             .purge_repair_slot_counter = &self.slot_data.purge_repair_slot_counter,
-            .ancestor_hashes_replay_update_sender = self.senders.ancestor_hashes_replay_update,
+            .ancestor_hashes_replay_update_sender = ancestor_hashes_replay_update_sender,
         };
 
         try replay.consensus.process_result.processResult(process_state, result);
@@ -409,6 +386,7 @@ pub const TowerConsensus = struct {
         /// For reading the slot history account
         account_reader: AccountReader,
         vote_account: Pubkey,
+        senders: Senders,
     ) !void {
         var epoch_stakes_map: EpochStakesMap = .empty;
         defer epoch_stakes_map.deinit(allocator);
@@ -482,6 +460,7 @@ pub const TowerConsensus = struct {
                     root_slot,
                     slot,
                     frozen_hash,
+                    senders.ancestor_hashes_replay_update,
                 );
             }
         }
@@ -565,6 +544,7 @@ pub const TowerConsensus = struct {
         root: Slot,
         slot: Slot,
         frozen_hash: Hash,
+        ancestor_hashes_replay_update_sender: *Channel(AncestorHashesReplayUpdate),
     ) !void {
         std.debug.assert(!frozen_hash.eql(Hash.ZEROES));
         if (slot <= root) return;
@@ -595,7 +575,7 @@ pub const TowerConsensus = struct {
             ledger.resultWriter(),
             &self.fork_choice,
             &self.slot_data.duplicate_slots_to_repair,
-            self.senders.ancestor_hashes_replay_update,
+            ancestor_hashes_replay_update_sender,
             &self.slot_data.purge_repair_slot_counter,
             duplicate_confirmed_state,
         );
@@ -1058,25 +1038,37 @@ test "processResult and handleDuplicateConfirmedFork" {
     var stubs = try replay.service.DependencyStubs.init(allocator, .FOR_TESTS);
     defer stubs.deinit();
 
-    var service = try stubs.stubbedService(allocator, .FOR_TESTS);
-    defer service.deinit(allocator);
+    var replay_state = try stubs.stubbedState(allocator, .FOR_TESTS);
+    defer replay_state.deinit();
+    replay_state.slot_tracker.get(0).?.state.hash.set(.{ .data = @splat(1) });
 
-    const consensus = &service.consensus.?;
-    service.replay.slot_tracker.get(0).?.state.hash.set(.{ .data = @splat(1) });
+    var consensus: TowerConsensus = try .init(allocator, .{
+        .logger = .FOR_TESTS,
+        .my_identity = replay_state.my_identity,
+        .vote_identity = replay_state.my_identity,
+        .account_reader = replay_state.account_store.reader(),
+        .ledger = replay_state.ledger,
+        .slot_tracker = &replay_state.slot_tracker,
+    });
+    defer consensus.deinit(allocator);
 
+    var ancestor_hashes_replay_updates: Channel(AncestorHashesReplayUpdate) =
+        try .init(allocator);
+    defer ancestor_hashes_replay_updates.deinit();
     try consensus.processResult(
         allocator,
         &stubs.ledger,
-        &service.replay.progress_map,
-        &service.replay.slot_tracker,
+        &replay_state.progress_map,
+        &replay_state.slot_tracker,
+        &ancestor_hashes_replay_updates,
         .{
             .slot = 0,
             .output = .{ .last_entry_hash = .ZEROES },
         },
     );
 
-    const stats = service.replay.progress_map.map.get(0).?;
-    try service.replay.progress_map.map.put(allocator, 1, stats);
+    const stats = replay_state.progress_map.map.get(0).?;
+    try replay_state.progress_map.map.put(allocator, 1, stats);
 
     const slot_hash = SlotAndHash{
         .slot = 1,
@@ -1101,10 +1093,11 @@ test "processResult and handleDuplicateConfirmedFork" {
     try consensus.handleDuplicateConfirmedFork(
         allocator,
         &stubs.ledger,
-        &service.replay.progress_map,
+        &replay_state.progress_map,
         0,
         1,
         .{ .data = @splat(1) },
+        &ancestor_hashes_replay_updates,
     );
 }
 
