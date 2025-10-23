@@ -2147,13 +2147,13 @@ const ReplayConsensusState = struct {
                 replay.service.AdvanceReplayParams{
                     .want_multi_threaded_replay = true,
                     .replay_state = &self.replay_state,
-                    .vote_sockets = vote_sockets,
                     .gossip_table = null,
                     .consensus = if (self.tower_consensus) |*tc| .{
                         .tower = tc,
                         .vote_processing = null,
                         .senders = self.senders,
                         .receivers = self.receivers,
+                        .vote_sockets = vote_sockets,
                     } else null,
                     .metrics = self.metrics,
                 },
