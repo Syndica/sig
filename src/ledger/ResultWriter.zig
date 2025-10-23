@@ -90,6 +90,22 @@ pub fn setDeadSlot(
     try self.ledger.db.put(schema.dead_slots, slot, true);
 }
 
+/// Store a duplicate slot proof for the given slot.
+///
+/// Analogous to [store_duplicate_slot](https://github.com/anza-xyz/agave/blob/60ba168d54d7ac6683f8f2e41a0e325f29d9ab2b/ledger/src/blockstore.rs#L4005)
+pub fn storeDuplicateSlot(
+    self: *const ResultWriter,
+    slot: Slot,
+    shred1: []const u8,
+    shred2: []const u8,
+) !void {
+    const duplicate_slot_proof = ledger_mod.meta.DuplicateSlotProof{
+        .shred1 = shred1,
+        .shred2 = shred2,
+    };
+    try self.ledger.db.put(schema.duplicate_slots, slot, duplicate_slot_proof);
+}
+
 /// agave: set_duplicate_confirmed_slots_and_hashes
 pub fn setDuplicateConfirmedSlotsAndHashes(
     self: *const ResultWriter,
@@ -747,4 +763,76 @@ test "setAndChainConnectedOnRootAndNextSlots: disconnected" {
     defer db_slot_meta_3.deinit();
     try std.testing.expectEqual(false, db_slot_meta_3.isParentConnected());
     try std.testing.expectEqual(false, db_slot_meta_3.isConnected());
+}
+
+test storeDuplicateSlot {
+    const allocator = std.testing.allocator;
+    var registry = sig.prometheus.Registry(.{}).init(allocator);
+    defer registry.deinit();
+
+    var state = try sig.ledger.tests.initTestLedger(allocator, @src(), .noop);
+    defer state.deinit();
+
+    const slot: Slot = 42;
+    const shred1_data = "test_shred_1_payload_data";
+    const shred2_data = "test_shred_2_payload_data";
+
+    // Test case: Store a duplicate slot proof
+    {
+        var result_writer = state.resultWriter();
+        try result_writer.storeDuplicateSlot(slot, shred1_data, shred2_data);
+
+        const reader = state.reader();
+        const stored_proof = try reader.getDuplicateSlot(allocator, slot);
+        try std.testing.expect(stored_proof != null);
+
+        const proof = stored_proof.?;
+        defer sig.bincode.free(allocator, proof);
+
+        try std.testing.expectEqualSlices(u8, shred1_data, proof.shred1);
+        try std.testing.expectEqualSlices(u8, shred2_data, proof.shred2);
+    }
+
+    // Test case: Overwrite an existing duplicate slot proof
+    {
+        const new_shred1 = "new_test_shred_1_data";
+        const new_shred2 = "new_test_shred_2_data";
+
+        var result_writer = state.resultWriter();
+        try result_writer.storeDuplicateSlot(slot, new_shred1, new_shred2);
+
+        const reader = state.reader();
+        const stored_proof = try reader.getDuplicateSlot(allocator, slot);
+        try std.testing.expect(stored_proof != null);
+
+        const proof = stored_proof.?;
+        defer sig.bincode.free(allocator, proof);
+
+        try std.testing.expectEqualSlices(u8, new_shred1, proof.shred1);
+        try std.testing.expectEqualSlices(u8, new_shred2, proof.shred2);
+    }
+
+    // Test case: Store duplicate slot proofs for multiple slots
+    {
+        const slot2: Slot = 100;
+        const slot3: Slot = 200;
+        const shred_a = "shred_a_data";
+        const shred_b = "shred_b_data";
+
+        var result_writer = state.resultWriter();
+        try result_writer.storeDuplicateSlot(slot2, shred_a, shred_b);
+        try result_writer.storeDuplicateSlot(slot3, shred_b, shred_a);
+
+        const reader = state.reader();
+
+        const proof2 = (try reader.getDuplicateSlot(allocator, slot2)).?;
+        defer sig.bincode.free(allocator, proof2);
+        try std.testing.expectEqualSlices(u8, shred_a, proof2.shred1);
+        try std.testing.expectEqualSlices(u8, shred_b, proof2.shred2);
+
+        const proof3 = (try reader.getDuplicateSlot(allocator, slot3)).?;
+        defer sig.bincode.free(allocator, proof3);
+        try std.testing.expectEqualSlices(u8, shred_b, proof3.shred1);
+        try std.testing.expectEqualSlices(u8, shred_a, proof3.shred2);
+    }
 }
