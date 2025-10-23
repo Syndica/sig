@@ -524,7 +524,7 @@ fn newSlotFromParent(
     var state = try SlotState.fromFrozenParent(allocator, parent_state);
     errdefer state.deinit(allocator);
 
-    const epoch_reward_status = parent_constants.epoch_reward_status.clone();
+    const epoch_reward_status = parent_state.reward_status.clone();
     errdefer epoch_reward_status.deinit(allocator);
 
     var ancestors = try parent_constants.ancestors.clone(allocator);
@@ -556,7 +556,6 @@ fn newSlotFromParent(
             &parent_constants.fee_rate_governor,
             parent_state.signature_count.load(.monotonic),
         ),
-        .epoch_reward_status = epoch_reward_status,
         .ancestors = ancestors,
         .feature_set = feature_set,
         .reserved_accounts = reserved_accounts,

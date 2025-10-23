@@ -477,7 +477,6 @@ fn testDummySlotConstants(slot: Slot) SlotConstants {
         .collector_id = .ZEROES,
         .max_tick_height = 0,
         .fee_rate_governor = .DEFAULT,
-        .epoch_reward_status = .inactive,
         .ancestors = .{ .ancestors = .empty },
         .feature_set = .ALL_DISABLED,
         .reserved_accounts = .EMPTY,

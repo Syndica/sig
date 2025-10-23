@@ -1391,7 +1391,6 @@ const TestData = struct {
                     .collector_id = .initRandom(random),
                     .max_tick_height = random.int(u64),
                     .fee_rate_governor = .initRandom(random),
-                    .epoch_reward_status = .inactive,
                     .ancestors = .{ .ancestors = .empty },
                     .feature_set = .ALL_DISABLED,
                     .reserved_accounts = .EMPTY,
