@@ -3,6 +3,7 @@ const sig = @import("../sig.zig");
 
 const Allocator = std.mem.Allocator;
 const InstructionErrorEnum = sig.core.instruction.InstructionErrorEnum;
+const RewardType = sig.replay.rewards.RewardType;
 
 pub const TransactionStatusMeta = struct {
     /// Indicates whether the transaction succeeded, or exactly what error caused it to fail
@@ -136,7 +137,7 @@ pub const Reward = struct {
     lamports: i64,
     /// Account balance in lamports after `lamports` was applied
     post_balance: u64,
-    reward_type: ?sig.replay.rewards.RewardType,
+    reward_type: ?RewardType,
     /// Vote account commission when the reward was credited, only present for voting and staking rewards
     commission: ?u8,
 

@@ -15,15 +15,13 @@ pub const leader_schedule = @import("leader_schedule.zig");
 pub const poh = @import("poh.zig");
 pub const pubkey = @import("pubkey.zig");
 pub const rent_collector = @import("rent_collector.zig");
-pub const reserved_accounts = @import("reserved_accounts.zig");
+pub const ReservedAccounts = @import("ReservedAccounts.zig");
 pub const shred = @import("shred.zig");
 pub const signature = @import("signature.zig");
 pub const stakes = @import("stakes.zig");
 pub const status_cache = @import("status_cache.zig");
 pub const time = @import("time.zig");
 pub const transaction = @import("transaction.zig");
-
-pub const bank_utils = @import("bank_utils.zig");
 
 /// TODO: Change EpochStakes to use EpochStakes(.stake) everywhere except in the `epoch_stakes` field
 /// of `BankFields` for serialization purposes. When initialising an epoch stakes for production we
@@ -68,7 +66,6 @@ pub const LtHash = hash.LtHash;
 pub const Nonce = shred.Nonce;
 pub const Pubkey = pubkey.Pubkey;
 pub const RentCollector = rent_collector.RentCollector;
-pub const ReservedAccounts = reserved_accounts.ReservedAccounts;
 pub const ShredVersion = shred.ShredVersion;
 pub const Signature = signature.Signature;
 pub const SlotConstants = bank.SlotConstants;

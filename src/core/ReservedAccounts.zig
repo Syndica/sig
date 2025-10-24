@@ -8,52 +8,52 @@ const Feature = sig.core.features.Feature;
 const FeatureSet = sig.core.FeatureSet;
 const Slot = sig.core.Slot;
 
-pub const ReservedAccounts = struct {
-    map: std.AutoHashMapUnmanaged(Pubkey, void),
+pub const ReservedAccounts = @This();
 
-    pub const EMPTY: ReservedAccounts = .{ .map = .empty };
+map: std.AutoHashMapUnmanaged(Pubkey, void),
 
-    pub fn init(allocator: Allocator) Allocator.Error!ReservedAccounts {
-        var reserved_accounts = ReservedAccounts{ .map = .empty };
-        errdefer reserved_accounts.deinit(allocator);
-        try reserved_accounts.map.ensureTotalCapacity(allocator, ACCOUNTS.len);
+pub const EMPTY: ReservedAccounts = .{ .map = .empty };
 
-        for (ACCOUNTS) |account| {
-            if (account.feature == null) reserved_accounts.map.putAssumeCapacity(account.pubkey, {});
-        }
+pub fn init(allocator: Allocator) Allocator.Error!ReservedAccounts {
+    var reserved_accounts = ReservedAccounts{ .map = .empty };
+    errdefer reserved_accounts.deinit(allocator);
+    try reserved_accounts.map.ensureTotalCapacity(allocator, ACCOUNTS.len);
 
-        return reserved_accounts;
+    for (ACCOUNTS) |account| {
+        if (account.feature == null) reserved_accounts.map.putAssumeCapacity(account.pubkey, {});
     }
 
-    pub fn deinit(self: ReservedAccounts, allocator: Allocator) void {
-        var map = self.map;
-        map.deinit(allocator);
-    }
+    return reserved_accounts;
+}
 
-    pub fn initForSlot(
-        allocator: Allocator,
-        feature_set: *const FeatureSet,
-        slot: Slot,
-    ) Allocator.Error!ReservedAccounts {
-        var reserved_accounts = try init(allocator);
-        reserved_accounts.update(feature_set, slot);
-        return reserved_accounts;
-    }
+pub fn deinit(self: ReservedAccounts, allocator: Allocator) void {
+    var map = self.map;
+    map.deinit(allocator);
+}
 
-    pub fn update(
-        self: *ReservedAccounts,
-        feature_set: *const FeatureSet,
-        slot: Slot,
-    ) void {
-        for (ACCOUNTS) |account| {
-            if (account.feature) |feature| {
-                if (feature_set.active(feature, slot)) {
-                    self.map.putAssumeCapacity(account.pubkey, {});
-                }
+pub fn initForSlot(
+    allocator: Allocator,
+    feature_set: *const FeatureSet,
+    slot: Slot,
+) Allocator.Error!ReservedAccounts {
+    var reserved_accounts = try init(allocator);
+    reserved_accounts.update(feature_set, slot);
+    return reserved_accounts;
+}
+
+pub fn update(
+    self: *ReservedAccounts,
+    feature_set: *const FeatureSet,
+    slot: Slot,
+) void {
+    for (ACCOUNTS) |account| {
+        if (account.feature) |feature| {
+            if (feature_set.active(feature, slot)) {
+                self.map.putAssumeCapacity(account.pubkey, {});
             }
         }
     }
-};
+}
 
 const ACCOUNTS: []const struct { pubkey: Pubkey, feature: ?Feature } = &.{
     // zig fmt: off

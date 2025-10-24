@@ -35,12 +35,12 @@ const EpochTracker = sig.replay.trackers.EpochTracker;
 const SlotState = sig.core.SlotState;
 const SlotConstants = sig.core.SlotConstants;
 
-const bank_utils = sig.core.bank_utils;
-
 const SlotAccountStore = @import("../slot_account_store.zig").SlotAccountStore;
 
 const redeemRewards = sig.replay.rewards.inflation_rewards.redeemRewards;
 const calculatePoints = sig.replay.rewards.inflation_rewards.calculatePoints;
+const getEpochDurationInYears = sig.replay.rewards.inflation_rewards.getEpochDurationInYears;
+const getSlotInYearsForInflation = sig.replay.rewards.inflation_rewards.getSlotInYearsForInflation;
 
 const EpochRewards = sig.runtime.sysvar.EpochRewards;
 const UpdateSysvarAccountDeps = sig.replay.update_sysvar.UpdateSysvarAccountDeps;
@@ -534,7 +534,7 @@ fn calculatePreviousEpochInflationRewards(
     feature_set: *const FeatureSet,
     inflation: *const Inflation,
 ) PreviousEpochInflationRewards {
-    const slot_in_years = bank_utils.getSlotInYearsForInflation(
+    const slot_in_years = getSlotInYearsForInflation(
         slot,
         epoch,
         slots_per_year,
@@ -545,7 +545,7 @@ fn calculatePreviousEpochInflationRewards(
     const validator_rate = inflation.validatorRate(slot_in_years);
     const foundation_rate = inflation.foundationRate(slot_in_years);
 
-    const previous_epoch_duration_in_years = bank_utils.getEpochDurationInYears(
+    const previous_epoch_duration_in_years = getEpochDurationInYears(
         previous_epoch,
         slots_per_year,
         epoch_schedule,
