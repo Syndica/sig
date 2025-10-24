@@ -736,9 +736,6 @@ test "accounts_db.download: test remove untrusted peers" {
         ci.shred_version = 19; // matching shred version
     }
 
-    var valid_peers = try std.ArrayList(PeerSnapshotHash).initCapacity(allocator, 10);
-    defer valid_peers.deinit();
-
     var trusted_validators = try std.ArrayList(Pubkey).initCapacity(allocator, 10);
     defer trusted_validators.deinit();
 
@@ -751,7 +748,7 @@ test "accounts_db.download: test remove untrusted peers" {
         _ = try table.insert(data, 0);
     }
 
-    _ = try findPeersToDownloadFrom(
+    var peers, _ = try findPeersToDownloadFrom(
         allocator,
         &table,
         contact_infos,
@@ -760,9 +757,10 @@ test "accounts_db.download: test remove untrusted peers" {
         &.{},
         null, // no trusted validators
     );
-    try std.testing.expectEqual(valid_peers.items.len, 10);
+    try std.testing.expectEqual(peers.len, 10);
+    allocator.free(peers);
 
-    _ = try findPeersToDownloadFrom(
+    peers, _ = try findPeersToDownloadFrom(
         allocator,
         &table,
         contact_infos,
@@ -771,12 +769,13 @@ test "accounts_db.download: test remove untrusted peers" {
         &.{},
         trusted_validators.items,
     );
-    try std.testing.expectEqual(valid_peers.items.len, 10);
+    try std.testing.expectEqual(peers.len, 10);
+    allocator.free(peers);
 
     _ = trusted_validators.pop();
     _ = trusted_validators.pop();
 
-    _ = try findPeersToDownloadFrom(
+    peers, _ = try findPeersToDownloadFrom(
         allocator,
         &table,
         contact_infos,
@@ -785,7 +784,8 @@ test "accounts_db.download: test remove untrusted peers" {
         &.{},
         trusted_validators.items,
     );
-    try std.testing.expectEqual(valid_peers.items.len, 8);
+    try std.testing.expectEqual(peers.len, 8);
+    allocator.free(peers);
 }
 
 test "accounts_db.download: test finding peers" {
@@ -809,9 +809,6 @@ test "accounts_db.download: test finding peers" {
         ci.shred_version = 19; // matching shred version
     }
 
-    var valid_peers = try std.ArrayList(PeerSnapshotHash).initCapacity(allocator, 10);
-    defer valid_peers.deinit();
-
     var peers, var result = try findPeersToDownloadFrom(
         allocator,
         &table,
@@ -821,6 +818,7 @@ test "accounts_db.download: test finding peers" {
         &.{},
         null,
     );
+    allocator.free(peers);
 
     // no snapshot hashes
     try std.testing.expect(result.is_valid == 0);
@@ -847,6 +845,7 @@ test "accounts_db.download: test finding peers" {
         &.{},
         null,
     );
+    allocator.free(peers);
     // all valid
     try std.testing.expect(result.is_valid == 10);
 
@@ -861,6 +860,7 @@ test "accounts_db.download: test finding peers" {
         &blist,
         null,
     );
+    allocator.free(peers);
     try std.testing.expect(result.is_valid == 9);
     try std.testing.expect(result.is_blacklist == 1);
 
@@ -876,6 +876,7 @@ test "accounts_db.download: test finding peers" {
         &.{},
         null,
     );
+    allocator.free(peers);
     try std.testing.expect(result.invalid_shred_version == 10);
 
     for (contact_infos) |*ci| {
@@ -890,5 +891,6 @@ test "accounts_db.download: test finding peers" {
         &.{},
         null,
     );
+    allocator.free(peers);
     try std.testing.expect(result.is_me_count == 10);
 }
