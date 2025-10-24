@@ -1396,7 +1396,6 @@ pub const AccountsDB = struct {
             var lt_hash: LtHash = .IDENTITY;
 
             var total_subtracted: u64 = 0;
-            var mix_out: LtHash = .IDENTITY;
 
             var iter = shard.iterator();
             while (iter.next()) |key| {
@@ -1443,12 +1442,11 @@ pub const AccountsDB = struct {
                     const account = try self.getAccountFromRef(allocator, previous_slot_ref);
                     defer account.deinit(allocator);
 
-                    mix_out.mixIn(account.ltHash(previous_slot_ref.pubkey));
+                    lt_hash.mixOut(account.ltHash(previous_slot_ref.pubkey));
                     total_subtracted += account.lamports;
                 }
             }
 
-            lt_hash.mixOut(mix_out);
             result.* = .{
                 .hash = lt_hash,
                 .lamports = total_lamports,
