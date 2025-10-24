@@ -526,3 +526,272 @@ pub const ShredValidationError = error{
     signature_missing,
     signed_data_missing,
 };
+
+const EpochContextManager = sig.adapter.EpochContextManager;
+const PossibleDuplicateShred = sig.ledger.shred_inserter.working_state.PossibleDuplicateShred;
+
+test "handleDuplicateSlots: no sender configured" {
+    const allocator = std.testing.allocator;
+    var registry = sig.prometheus.Registry(.{}).init(allocator);
+    defer registry.deinit();
+
+    const keypair = try sig.identity.KeyPair.generateDeterministic(.{1} ** 32);
+    var exit: Atomic(bool) = .init(false);
+    const shred_version: Atomic(u16) = .init(0);
+    const root_slot = 0;
+    const test_socket: Socket = .{
+        .family = .ipv4,
+        .internal = -1,
+        .endpoint = null,
+    };
+
+    var epoch_ctx: EpochContextManager = try .init(allocator, .DEFAULT);
+    defer epoch_ctx.deinit();
+
+    var ledger = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
+    defer ledger.deinit();
+
+    var shred_tracker: BasicShredTracker = try .init(
+        allocator,
+        root_slot + 1,
+        .noop,
+        &registry,
+    );
+    defer shred_tracker.deinit();
+
+    var shred_receiver: ShredReceiver = try .init(allocator, .noop, &registry, .{
+        .keypair = &keypair,
+        .exit = &exit,
+        .repair_socket = test_socket,
+        .turbine_socket = test_socket,
+        .shred_version = &shred_version,
+        .root_slot = root_slot,
+        .maybe_retransmit_shred_sender = null,
+        .leader_schedule = epoch_ctx.slotLeaders(),
+        .tracker = &shred_tracker,
+        .inserter = ledger.shredInserter(),
+        .duplicate_slots_sender = null, // No sender configured
+    });
+    defer shred_receiver.deinit(allocator);
+
+    // Create a result with a duplicate shred
+    const shred: Shred = try .fromPayload(allocator, &sig.ledger.shred.test_data_shred);
+
+    var duplicate_shreds = std.ArrayList(PossibleDuplicateShred).init(allocator);
+    try duplicate_shreds.append(.{ .Exists = shred });
+
+    const result = ShredInserter.Result{
+        .completed_data_set_infos = std.ArrayList(
+            ShredInserter.CompletedDataSetInfo,
+        ).init(allocator),
+        .duplicate_shreds = duplicate_shreds,
+    };
+    defer result.deinit();
+
+    // Should not crash or send anything since sender is null
+    try shred_receiver.handleDuplicateSlots(allocator, &result);
+}
+
+test "handleDuplicateSlots: no duplicate shreds" {
+    const allocator = std.testing.allocator;
+    var registry = sig.prometheus.Registry(.{}).init(allocator);
+    defer registry.deinit();
+
+    const keypair = try sig.identity.KeyPair.generateDeterministic(.{1} ** 32);
+    var exit: Atomic(bool) = Atomic(bool).init(false);
+    const shred_version: Atomic(u16) = Atomic(u16).init(0);
+    const root_slot = 0;
+    const test_socket: Socket = .{
+        .family = .ipv4,
+        .internal = -1,
+        .endpoint = null,
+    };
+
+    var epoch_ctx: EpochContextManager = try .init(allocator, .DEFAULT);
+    defer epoch_ctx.deinit();
+
+    var ledger = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
+    defer ledger.deinit();
+
+    var shred_tracker: BasicShredTracker = try .init(
+        allocator,
+        root_slot + 1,
+        .noop,
+        &registry,
+    );
+    defer shred_tracker.deinit();
+
+    var duplicate_slots_channel: Channel(Slot) = try .init(allocator);
+    defer duplicate_slots_channel.deinit();
+
+    var shred_receiver: ShredReceiver = try .init(allocator, .noop, &registry, .{
+        .keypair = &keypair,
+        .exit = &exit,
+        .repair_socket = test_socket,
+        .turbine_socket = test_socket,
+        .shred_version = &shred_version,
+        .root_slot = root_slot,
+        .maybe_retransmit_shred_sender = null,
+        .leader_schedule = epoch_ctx.slotLeaders(),
+        .tracker = &shred_tracker,
+        .inserter = ledger.shredInserter(),
+        .duplicate_slots_sender = &duplicate_slots_channel,
+    });
+    defer shred_receiver.deinit(allocator);
+
+    // Create a result with no duplicate shreds
+    const result = ShredInserter.Result{
+        .completed_data_set_infos = std.ArrayList(
+            ShredInserter.CompletedDataSetInfo,
+        ).init(allocator),
+        .duplicate_shreds = std.ArrayList(PossibleDuplicateShred).init(allocator),
+    };
+    defer result.deinit();
+
+    try shred_receiver.handleDuplicateSlots(allocator, &result);
+
+    // Verify no slot was sent
+    try std.testing.expect(duplicate_slots_channel.len() == 0);
+}
+
+test "handleDuplicateSlots: single duplicate shred" {
+    const allocator = std.testing.allocator;
+    var registry = sig.prometheus.Registry(.{}).init(allocator);
+    defer registry.deinit();
+
+    const keypair = try sig.identity.KeyPair.generateDeterministic(.{1} ** 32);
+    var exit: Atomic(bool) = .init(false);
+    const shred_version: Atomic(u16) = .init(0);
+    const root_slot = 0;
+    const test_socket: Socket = .{
+        .family = .ipv4,
+        .internal = -1,
+        .endpoint = null,
+    };
+
+    var epoch_ctx: EpochContextManager = try .init(allocator, .DEFAULT);
+    defer epoch_ctx.deinit();
+
+    var ledger = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
+    defer ledger.deinit();
+
+    var shred_tracker: BasicShredTracker = try .init(
+        allocator,
+        root_slot + 1,
+        .noop,
+        &registry,
+    );
+    defer shred_tracker.deinit();
+
+    var duplicate_slots_channel: Channel(Slot) = try .init(allocator);
+    defer duplicate_slots_channel.deinit();
+
+    var shred_receiver: ShredReceiver = try .init(allocator, .noop, &registry, .{
+        .keypair = &keypair,
+        .exit = &exit,
+        .repair_socket = test_socket,
+        .turbine_socket = test_socket,
+        .shred_version = &shred_version,
+        .root_slot = root_slot,
+        .maybe_retransmit_shred_sender = null,
+        .leader_schedule = epoch_ctx.slotLeaders(),
+        .tracker = &shred_tracker,
+        .inserter = ledger.shredInserter(),
+        .duplicate_slots_sender = &duplicate_slots_channel,
+    });
+    defer shred_receiver.deinit(allocator);
+
+    // Create a result with a single duplicate shred
+    const shred: Shred = try .fromPayload(allocator, &sig.ledger.shred.test_data_shred);
+    const expected_slot = shred.commonHeader().slot;
+
+    var duplicate_shreds = std.ArrayList(PossibleDuplicateShred).init(allocator);
+    try duplicate_shreds.append(.{ .Exists = shred });
+
+    const result = ShredInserter.Result{
+        .completed_data_set_infos = std.ArrayList(
+            ShredInserter.CompletedDataSetInfo,
+        ).init(allocator),
+        .duplicate_shreds = duplicate_shreds,
+    };
+    defer result.deinit();
+
+    try shred_receiver.handleDuplicateSlots(allocator, &result);
+
+    // Verify exactly one slot was sent
+    try std.testing.expectEqual(1, duplicate_slots_channel.len());
+    const received_slot = duplicate_slots_channel.tryReceive() orelse return error.TestFailed;
+    try std.testing.expectEqual(expected_slot, received_slot);
+}
+
+test "handleDuplicateSlots: multiple duplicates same slot" {
+    const allocator = std.testing.allocator;
+    var registry = sig.prometheus.Registry(.{}).init(allocator);
+    defer registry.deinit();
+
+    const keypair = try sig.identity.KeyPair.generateDeterministic(.{1} ** 32);
+    var exit: Atomic(bool) = .init(false);
+    const shred_version: Atomic(u16) = .init(0);
+    const root_slot = 0;
+    const test_socket: Socket = .{
+        .family = .ipv4,
+        .internal = -1,
+        .endpoint = null,
+    };
+
+    var epoch_ctx: EpochContextManager = try .init(allocator, .DEFAULT);
+    defer epoch_ctx.deinit();
+
+    var ledger = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
+    defer ledger.deinit();
+
+    var shred_tracker: BasicShredTracker = try .init(
+        allocator,
+        root_slot + 1,
+        .noop,
+        &registry,
+    );
+    defer shred_tracker.deinit();
+
+    var duplicate_slots_channel: Channel(Slot) = try .init(allocator);
+    defer duplicate_slots_channel.deinit();
+
+    var shred_receiver: ShredReceiver = try .init(allocator, .noop, &registry, .{
+        .keypair = &keypair,
+        .exit = &exit,
+        .repair_socket = test_socket,
+        .turbine_socket = test_socket,
+        .shred_version = &shred_version,
+        .root_slot = root_slot,
+        .maybe_retransmit_shred_sender = null,
+        .leader_schedule = epoch_ctx.slotLeaders(),
+        .tracker = &shred_tracker,
+        .inserter = ledger.shredInserter(),
+        .duplicate_slots_sender = &duplicate_slots_channel,
+    });
+    defer shred_receiver.deinit(allocator);
+
+    // Create multiple duplicate shreds from the same slot
+    const shred1: Shred = try .fromPayload(allocator, &sig.ledger.shred.test_data_shred);
+    const expected_slot = shred1.commonHeader().slot;
+    const shred2 = try Shred.fromPayload(allocator, &sig.ledger.shred.test_data_shred);
+
+    var duplicate_shreds = std.ArrayList(PossibleDuplicateShred).init(allocator);
+    try duplicate_shreds.append(.{ .Exists = shred1 });
+    try duplicate_shreds.append(.{ .Exists = shred2 });
+
+    const result = ShredInserter.Result{
+        .completed_data_set_infos = std.ArrayList(
+            ShredInserter.CompletedDataSetInfo,
+        ).init(allocator),
+        .duplicate_shreds = duplicate_shreds,
+    };
+    defer result.deinit();
+
+    try shred_receiver.handleDuplicateSlots(allocator, &result);
+
+    // Verify exactly one slot was sent because of deduplication
+    try std.testing.expectEqual(1, duplicate_slots_channel.len());
+    const received_slot = duplicate_slots_channel.tryReceive() orelse return error.TestFailed;
+    try std.testing.expectEqual(expected_slot, received_slot);
+}
