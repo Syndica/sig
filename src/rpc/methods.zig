@@ -35,9 +35,9 @@ pub const MethodAndParams = union(enum) {
     getFeeForMessage: noreturn,
     getFirstAvailableBlock: noreturn,
     getGenesisHash: noreturn,
-    getHealth: noreturn,
+    getHealth: GetHealth,
     getHighestSnapshotSlot: noreturn,
-    getIdentity: noreturn,
+    getIdentity: GetIdentity,
     getInflationGovernor: noreturn,
     getInflationRate: noreturn,
     getInflationReward: noreturn,
@@ -228,6 +228,25 @@ pub const GetBalance = struct {
     pub const Response = struct {
         context: common.Context,
         value: u64,
+    };
+};
+
+pub const GetHealth = struct {
+
+    pub const Response = union(enum) {
+        ok,
+        err: struct{}, // TODO: Our implementation-specifc error information
+
+        pub fn jsonStringify(
+            self: Response,
+            /// `*std.json.WriteStream(...)`
+            jw: anytype,
+        ) @TypeOf(jw.*).Error!void {
+            switch (self) {
+                .ok => jw.write("ok"),
+                .err => |e| jw.write(e),
+            }
+        }
     };
 };
 
@@ -481,6 +500,13 @@ pub const GetTransaction = struct {
 };
 
 // TODO: getTransactionCount
+
+pub const GetIdentity = struct {
+
+    pub const Response = struct {
+        identity: Pubkey,
+    };
+};
 
 pub const GetVersion = struct {
     pub const Response = struct {

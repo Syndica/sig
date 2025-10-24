@@ -2,87 +2,131 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 const rpc = @import("lib.zig");
 
-const Allocator = std.mem.Allocator;
-
 pub const Hooks = struct {
-    map: std.EnumMap(Method, VTable),
-
-    const VTable = struct {
-        ptr: *anyopaque,
-        callback: *const anyopaque,
-        free: *const fn (Allocator, *anyopaque) void,
-    };
+    map: std.EnumMap(Method, MethodImpl) = .{},
 
     pub const Request = rpc.methods.MethodAndParams;
-    pub const Method = @typeInfo(Request).@"enum".tag_type;
+    pub const Method = Request.Tag;
 
     fn ArgsType(comptime method: Method) type {
-        const value = @unionInit(Request, @tagName(method), undefined);
-        return switch (@TypeOf(@field(value, @tagName(method)))) {
-            noreturn => @compileError("TODO: define " ++ @tagName(method) ++ " in methods.zig"),
-            else => |T| T.Response, 
-        };
+        for (@typeInfo(Request).@"union".fields) |field| {
+            if (std.mem.eql(u8, field.name, @tagName(method))) {
+                if (field.type == noreturn) @compileError("TODO: impl " ++ @tagName(method));
+                return field.type;
+            }
+        } else unreachable;
     }
 
     fn ReturnType(comptime method: Method) type {
-        const value = @unionInit(Request, @tagName(method), undefined);
-        return switch (@TypeOf(@field(value, @tagName(method)))) {
-            noreturn => noreturn,
-            else => |T| T.Response, 
-        };
+        return ArgsType(method).Response;
     }
 
-    pub fn deinit(self: Hooks, allocator: Allocator) void {
-        var it = self.map.iterator();
-        while (it.next()) |entry| {
-            entry.value.free(allocator, entry.value.ptr);
+    const MethodImpl = struct {
+        ctx_ref: *ContextRef,
+        callback: *const anyopaque,
+    };
+
+    // The context for a MethodImpl's callback needs to:
+    // 1) live past the self.set(), at least until future self.calls (allocated)
+    // 2) not double-free during deinit(), given its shared by multiple impls (ref_count)
+    const ContextRef = struct {
+        ref_count: usize,
+        free: *const fn (*ContextRef, std.mem.Allocator) void,
+
+        fn Typed(comptime T: type) type {
+            return struct {
+                value: T,
+                ctx_ref: ContextRef,
+            };
+        }
+
+        fn init(allocator: std.mem.Allocator, value: anytype) !*Typed(@TypeOf(value)) {
+            const TypedRef = Typed(@TypeOf(value));
+            const typed = try allocator.create(TypedRef);
+            typed.* = .{
+                .value = value,
+                .ctx_ref = .{
+                    .ref_count = 1,
+                    .free = &(struct {
+                        fn free(ctx_ref: *ContextRef, _allocator: std.mem.Allocator) void {
+                            const t: *TypedRef = @alignCast(@fieldParentPtr("ctx_ref", ctx_ref));
+                            _allocator.destroy(t);
+                        }
+                    }.free)
+                }
+            };
+            return typed;
+        }
+
+        fn inc(self: *ContextRef) *ContextRef {
+            self.ref_count += 1;
+            return self;
+        }
+
+        fn dec(self: *ContextRef, allocator: std.mem.Allocator) void {
+            self.ref_count -= 1;
+            if (self.ref_count == 0) self.free(self, allocator);
+        }
+    };
+
+    pub fn deinit(self: Hooks, allocator: std.mem.Allocator) void {
+        var it = self.map.bits.iterator(.{});
+        while (it.next()) |i| {
+            self.map.values[i].ctx_ref.dec(allocator);
         }
     }
 
     pub fn set(
         self: *Hooks,
         allocator: std.mem.Allocator,
-        comptime method: Method,
         context: anytype,
-        comptime callback: anytype,
-    ) !void {
+    ) !void {        
+        const cref = try ContextRef.init(allocator, context);
+        defer cref.ctx_ref.dec(allocator);
+        
         const Context = @TypeOf(context);
-        const ctx_ptr = try allocator.create(Context);
-        ctx_ptr.* = context;
-
-        self.map.put(method, .{
-            .ptr = ctx_ptr,
-            .callback = &(struct {
-                fn wrapper(
-                    alloc: Allocator,
-                    ctx: *anyopaque,
-                    args: ArgsType(method),
-                ) anyerror!ReturnType(method) {
-                    const ptr: *Context = @ptrCast(@alignCast(ctx));
-                    return @call(.auto, callback, .{ptr.*, alloc, args});
+        inline for (comptime std.meta.declarations(Context)) |decl| {
+            const method = comptime for (std.meta.fieldNames(Method)) |method_name| {
+                if (std.mem.eql(u8, method_name, decl.name)) {
+                    break @field(Method, method_name);
                 }
-            }.wrapper),
-            .free = &(struct {
-                fn freeContext(alloc: Allocator, ctx: *anyopaque) void {
-                    const ptr: *Context = @ptrCast(@alignCast(ctx));
-                    alloc.destroy(ptr);
-                }
-            }.freeContext),
-        });
+            } else @compileError("No RPC method named: " ++ decl.name);
+            
+            const callback = @field(Context, decl.name);
+            if (self.map.contains(method)) {
+                return error.MethodAlreadyImplemented;
+            }
+            
+            const CRef = @TypeOf(cref.*);
+            self.map.put(method, .{
+                .ctx_ref = cref.ctx_ref.inc(), // keeps the cref alive.
+                .callback = &(struct {
+                    fn impl(
+                        _allocator: std.mem.Allocator,
+                        ctx_ref: *ContextRef,
+                        args: ArgsType(method),
+                    ) anyerror!ReturnType(method) {
+                        const _cref: *CRef = @alignCast(@fieldParentPtr("ctx_ref", ctx_ref));
+                        return @call(.auto, callback, .{_cref.value, _allocator, args});
+                    }
+                }.impl),
+            });
+        }
     }
 
+    /// NOTE: Remember to free the result with the given allocator
     pub fn call(
         self: *const Hooks,
         allocator: std.mem.Allocator,
         comptime method: Method,
         args: ArgsType(method),
     ) !ReturnType(method) {
-        const vtable = self.map.get(method) orelse return error.MethodNotImplemented;
-        const wrapper: *const fn (
-            Allocator,
-            *anyopaque,
-            ArgsType(method),
-        ) anyerror!ReturnType(method) = @ptrCast(@alignCast(vtable.callback));
-        return wrapper(allocator, vtable.ptr, args);
+        const method_impl = self.map.get(method) orelse return error.MethodNotImplemented;
+        const impl: *const fn (
+            _allocator: std.mem.Allocator,
+            ctx_ref: *ContextRef,
+            args: ArgsType(method),
+        ) anyerror!ReturnType(method) = @ptrCast(@alignCast(method_impl.callback));
+        return impl(allocator, method_impl.ctx_ref, args);
     }
 };

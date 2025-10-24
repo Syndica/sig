@@ -1215,6 +1215,9 @@ fn validator(
         .{&replay_service},
     );
 
+    // TODO: start RPC-server service using app_base.rpc_hooks
+
+
     replay_thread.join();
     rpc_epoch_ctx_service_thread.join();
     gossip_service.service_manager.join();
@@ -1783,6 +1786,8 @@ const AppBase = struct {
     metrics_registry: *sig.prometheus.Registry(.{}),
     metrics_thread: std.Thread,
 
+    rpc_hooks: sig.rpc.Hooks,
+
     my_keypair: sig.identity.KeyPair,
     entrypoints: []SocketAddr,
     shred_version: u16,
@@ -1837,6 +1842,7 @@ const AppBase = struct {
             .log_file = maybe_file,
             .metrics_registry = metrics_registry,
             .metrics_thread = metrics_thread,
+            .rpc_hooks = .{},
             .my_keypair = my_keypair,
             .entrypoints = entrypoints,
             .shred_version = my_shred_version,
@@ -1868,6 +1874,7 @@ const AppBase = struct {
     pub fn deinit(self: *AppBase) void {
         std.debug.assert(self.closed); // call `self.shutdown()` first
         self.allocator.free(self.entrypoints);
+        self.rpc_hooks.deinit(self.allocator);
         self.metrics_thread.detach();
         self.logger.deinit();
         if (self.log_file) |file| file.close();
@@ -1916,6 +1923,32 @@ fn startGossip(
         .spy_node = cfg.gossip.spy_node,
         .dump = cfg.gossip.dump,
     });
+
+    try app_base.rpc_hooks.set(allocator, struct {
+        info: ContactInfo,
+
+        pub fn getHealth(_: @This(), _: std.mem.Allocator, _: anytype) !sig.rpc.methods.GetHealth.Response {
+            return .ok; // TODO: more intricate
+        }
+
+        pub fn getIdentity(self: @This(), _: std.mem.Allocator, _: anytype) !sig.rpc.methods.GetIdentity.Response {
+            return .{ .identity = self.info.pubkey };
+        }
+
+        pub fn getVersion(self: @This(), gpa: std.mem.Allocator, _: anytype) !sig.rpc.methods.GetVersion.Response {
+            const client_version = self.info.version;
+            const solana_version = try std.fmt.allocPrint(gpa, "{}.{}.{}", .{
+                client_version.major,
+                client_version.minor,
+                client_version.patch,
+            });
+
+            return .{
+                .solana_core = solana_version,
+                .feature_set = client_version.feature_set,
+            };
+        }
+    }{ .info = contact_info });
 
     return service;
 }
