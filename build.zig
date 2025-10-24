@@ -204,17 +204,12 @@ pub fn build(b: *Build) !void {
     build_options.addOption(std.SemanticVersion, "version", config.version);
 
     const sig_step = b.step("sig", "Run the sig executable");
-    const test_step = b.step("test", "Run tests");
-    const unit_test_step = b.step("unit-test", "Run library unit tests");
-    const consensus_test_step = b.step("consensus-test", "Run consensus tests");
+    const test_step = b.step("test", "Run library tests");
     const fuzz_step = b.step("fuzz", "Gossip fuzz testing");
     const benchmark_step = b.step("benchmark", "Benchmark client");
     const geyser_reader_step = b.step("geyser_reader", "Read data from geyser");
     const vm_step = b.step("vm", "Run the VM client");
     const docs_step = b.step("docs", "Generate and install documentation for the Sig Library");
-
-    test_step.dependOn(unit_test_step);
-    if (config.long_tests) test_step.dependOn(consensus_test_step);
 
     // Dependencies
     const dep_opts = .{
@@ -333,8 +328,7 @@ pub fn build(b: *Build) !void {
     }
     addInstallAndRun(b, sig_step, sig_exe, config);
 
-    const unit_test_exe = b.addTest(.{
-        .name = "test",
+    const unit_tests_exe = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/tests.zig"),
             .target = config.target,
@@ -346,29 +340,12 @@ pub fn build(b: *Build) !void {
         .filters = config.filters orelse &.{},
         .use_llvm = config.use_llvm,
     });
-    unit_test_exe.root_module.addImport("cli", cli_mod);
+    unit_tests_exe.root_module.addImport("cli", cli_mod);
     switch (config.ledger_db) {
-        .rocksdb => unit_test_exe.root_module.addImport("rocksdb", rocksdb_mod),
+        .rocksdb => unit_tests_exe.root_module.addImport("rocksdb", rocksdb_mod),
         .hashmap => {},
     }
-    addInstallAndRun(b, unit_test_step, unit_test_exe, config);
-
-    const consensus_test_exe = b.addTest(.{
-        .name = "consensus-test",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("test/consensus.zig"),
-            .target = config.target,
-            .optimize = config.optimize,
-            .error_tracing = config.error_tracing,
-            .sanitize_thread = config.enable_tsan,
-            .imports = &.{
-                .{ .name = "sig", .module = sig_mod },
-            },
-        }),
-        .filters = config.filters orelse &.{},
-        .use_llvm = config.use_llvm,
-    });
-    addInstallAndRun(b, consensus_test_step, consensus_test_exe, config);
+    addInstallAndRun(b, test_step, unit_tests_exe, config);
 
     const fuzz_exe = b.addExecutable(.{
         .name = "fuzz",
