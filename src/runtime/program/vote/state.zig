@@ -651,6 +651,9 @@ pub const VoteStateVersions = union(enum) {
                 );
                 errdefer allocator.free(votes);
 
+                const epoch_credits = try state.epoch_credits.clone(allocator);
+                errdefer epoch_credits.deinit(allocator);
+
                 return .{
                     .node_pubkey = state.node_pubkey,
                     .withdrawer = state.withdrawer,
@@ -659,7 +662,7 @@ pub const VoteStateVersions = union(enum) {
                     .root_slot = state.root_slot,
                     .voters = authorized_voters,
                     .prior_voters = CircBufV1.init(),
-                    .epoch_credits = state.epoch_credits,
+                    .epoch_credits = epoch_credits,
                     .last_timestamp = state.last_timestamp,
                 };
             },
@@ -670,6 +673,9 @@ pub const VoteStateVersions = union(enum) {
                 );
                 errdefer allocator.free(votes);
 
+                const epoch_credits = try state.epoch_credits.clone(allocator);
+                errdefer epoch_credits.deinit(allocator);
+
                 return .{
                     .node_pubkey = state.node_pubkey,
                     .withdrawer = state.withdrawer,
@@ -678,7 +684,7 @@ pub const VoteStateVersions = union(enum) {
                     .root_slot = state.root_slot,
                     .voters = state.voters,
                     .prior_voters = state.prior_voters,
-                    .epoch_credits = state.epoch_credits,
+                    .epoch_credits = epoch_credits,
                     .last_timestamp = state.last_timestamp,
                 };
             },
