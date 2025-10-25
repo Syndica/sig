@@ -1390,6 +1390,11 @@ pub fn isDead(self: *const Reader, allocator: Allocator, slot: Slot) !bool {
     return try self.ledger.db.get(allocator, schema.dead_slots, slot) orelse false;
 }
 
+/// Analogous to [has_duplicate_shreds_in_slot](https://github.com/anza-xyz/agave/blob/60ba168d54d7ac6683f8f2e41a0e325f29d9ab2b/ledger/src/blockstore.rs#L4040)
+pub fn isDuplicateSlot(self: *const Reader, slot: Slot) !bool {
+    return try self.ledger.db.contains(schema.duplicate_slots, slot);
+}
+
 /// Analogous to [get_first_duplicate_proof](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L3983)
 pub fn getFirstDuplicateProof(self: *const Reader) !?struct { Slot, DuplicateSlotProof } {
     var iterator = try self.ledger.db.iterator(schema.duplicate_slots, .forward, 0);
@@ -2680,4 +2685,35 @@ test getConfirmedSignaturesForAddress {
 
     try std.testing.expect(sig_infos.infos.items.len > 0);
     try std.testing.expect(sig_infos.found_before);
+}
+
+test "isDuplicateSlot" {
+    const allocator = std.testing.allocator;
+    var registry = sig.prometheus.Registry(.{}).init(allocator);
+    defer registry.deinit();
+
+    var state = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
+    defer state.deinit();
+
+    const reader = state.reader();
+    const result_writer = state.resultWriter();
+
+    // Test case: Slot with no duplicate proof returns false
+    {
+        const slot: Slot = 42;
+        const is_duplicate = try reader.isDuplicateSlot(slot);
+        try std.testing.expectEqual(false, is_duplicate);
+    }
+
+    // Test case: Slot with duplicate proof returns true
+    {
+        const slot: Slot = 100;
+        const shred1 = "duplicate_shred_1_data";
+        const shred2 = "duplicate_shred_2_data";
+
+        try result_writer.storeDuplicateSlot(slot, shred1, shred2);
+
+        const is_duplicate = try reader.isDuplicateSlot(slot);
+        try std.testing.expectEqual(true, is_duplicate);
+    }
 }
