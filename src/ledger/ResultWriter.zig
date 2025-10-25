@@ -90,6 +90,22 @@ pub fn setDeadSlot(
     try self.ledger.db.put(schema.dead_slots, slot, true);
 }
 
+/// Store a duplicate slot proof for the given slot.
+/// 
+/// Analogous to [store_duplicate_slot](https://github.com/anza-xyz/agave/blob/60ba168d54d7ac6683f8f2e41a0e325f29d9ab2b/ledger/src/blockstore.rs#L4005)
+pub fn storeDuplicateSlot(
+    self: *const ResultWriter,
+    slot: Slot,
+    shred1: []const u8,
+    shred2: []const u8,
+) !void {
+    const duplicate_slot_proof = ledger_mod.meta.DuplicateSlotProof{
+        .shred1 = shred1,
+        .shred2 = shred2,
+    };
+    try self.ledger.db.put(schema.duplicate_slots, slot, duplicate_slot_proof);
+}
+
 /// agave: set_duplicate_confirmed_slots_and_hashes
 pub fn setDuplicateConfirmedSlotsAndHashes(
     self: *const ResultWriter,
