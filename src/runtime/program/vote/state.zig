@@ -667,6 +667,9 @@ pub const VoteStateVersions = union(enum) {
                 };
             },
             .v1_14_11 => |state| {
+                const authorized_voters = try state.voters.clone(allocator);
+                errdefer authorized_voters.deinit(allocator);
+
                 const votes = try VoteStateVersions.landedVotesFromLockouts(
                     allocator,
                     state.votes.items,
@@ -682,7 +685,7 @@ pub const VoteStateVersions = union(enum) {
                     .commission = state.commission,
                     .votes = .fromOwnedSlice(votes),
                     .root_slot = state.root_slot,
-                    .voters = state.voters,
+                    .voters = authorized_voters,
                     .prior_voters = state.prior_voters,
                     .epoch_credits = epoch_credits,
                     .last_timestamp = state.last_timestamp,
@@ -816,6 +819,7 @@ pub const VoteState1_14_11 = struct {
             clock.epoch,
             authorized_voter,
         );
+        errdefer authorized_voters.deinit(allocator);
 
         return .{
             .node_pubkey = node_pubkey,
@@ -906,6 +910,7 @@ pub const VoteState = struct {
             clock.epoch,
             authorized_voter,
         );
+        errdefer authorized_voters.deinit(allocator);
 
         return .{
             .node_pubkey = node_pubkey,
@@ -2190,7 +2195,7 @@ test "state.VoteState.convertToCurrent" {
     const allocator = std.testing.allocator;
     // VoteState0_23_5 -> Current
     {
-        const vote_state_0_23_5 = VoteStateVersions{ .v0_23_5 = try VoteState0_23_5.init(
+        var vote_state_0_23_5: VoteStateVersions = .{ .v0_23_5 = try VoteState0_23_5.init(
             Pubkey.ZEROES,
             Pubkey.ZEROES,
             Pubkey.ZEROES,
@@ -2203,6 +2208,7 @@ test "state.VoteState.convertToCurrent" {
                 .unix_timestamp = 0,
             },
         ) };
+        defer vote_state_0_23_5.deinit(allocator);
 
         var vote_state = try VoteStateVersions.convertToCurrent(vote_state_0_23_5, allocator);
         defer vote_state.deinit(allocator);
@@ -2221,7 +2227,7 @@ test "state.VoteState.convertToCurrent" {
     }
     // VoteStatev1_14_11 -> Current
     {
-        const vote_state_1_14_1 = VoteStateVersions{ .v1_14_11 = try VoteState1_14_11.init(
+        var vote_state_1_14_1: VoteStateVersions = .{ .v1_14_11 = try VoteState1_14_11.init(
             allocator,
             Pubkey.ZEROES,
             Pubkey.ZEROES,
@@ -2235,6 +2241,7 @@ test "state.VoteState.convertToCurrent" {
                 .unix_timestamp = 0,
             },
         ) };
+        defer vote_state_1_14_1.deinit(allocator);
 
         var vote_state = try VoteStateVersions.convertToCurrent(vote_state_1_14_1, allocator);
         defer vote_state.deinit(allocator);
@@ -2270,7 +2277,7 @@ test "state.VoteState.convertToCurrent" {
         );
         defer expected.deinit(allocator);
 
-        const vote_state_1_14_1 = VoteStateVersions{ .current = expected };
+        const vote_state_1_14_1: VoteStateVersions = .{ .current = expected };
 
         var vote_state = try VoteStateVersions.convertToCurrent(vote_state_1_14_1, allocator);
         defer vote_state.deinit(allocator);
