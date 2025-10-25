@@ -91,7 +91,7 @@ pub fn setDeadSlot(
 }
 
 /// Store a duplicate slot proof for the given slot.
-/// 
+///
 /// Analogous to [store_duplicate_slot](https://github.com/anza-xyz/agave/blob/60ba168d54d7ac6683f8f2e41a0e325f29d9ab2b/ledger/src/blockstore.rs#L4005)
 pub fn storeDuplicateSlot(
     self: *const ResultWriter,
