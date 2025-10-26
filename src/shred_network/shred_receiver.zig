@@ -65,6 +65,11 @@ pub const ShredReceiver = struct {
         tracker: *BasicShredTracker,
         inserter: ShredInserter,
 
+        /// Ledger reader for checking duplicate shreds
+        ledger_reader: sig.ledger.Reader,
+        /// Result writer for storing duplicate slots
+        result_writer: sig.ledger.ResultWriter,
+
         /// Optional channel to send duplicate slot notifications to consensus
         duplicate_slots_sender: ?*Channel(Slot),
     };
