@@ -5,7 +5,6 @@ const tracy = @import("tracy");
 const network = @import("zig-network");
 
 const cluster_sync = replay.consensus.cluster_sync;
-
 const Allocator = std.mem.Allocator;
 const AtomicBool = std.atomic.Value(bool);
 
@@ -4285,6 +4284,479 @@ test "findVoteIndexToEvict - full buffer evicts oldest index" {
 
     const maybe_index = findVoteIndexToEvict(&gossip_table, my_pubkey, tower_last);
     try testing.expectEqual(chosen_oldest_index, maybe_index);
+}
+
+test "edge cases - duplicate slot" {
+    // -- set up state -- //
+    const gpa = std.testing.allocator;
+
+    var prng_state: std.Random.DefaultPrng = .init(std.testing.random_seed);
+    const prng = prng_state.random();
+
+    var registry: sig.prometheus.Registry(.{}) = .init(gpa);
+    defer registry.deinit();
+
+    var dep_stubs: sig.replay.service.DependencyStubs = try .init(gpa, .FOR_TESTS);
+    defer dep_stubs.deinit();
+
+    var replay_state = try dep_stubs.stubbedState(gpa, .FOR_TESTS);
+    defer replay_state.deinit();
+
+    const slot_tracker = &replay_state.slot_tracker;
+    const progress_map = &replay_state.progress_map;
+    std.debug.assert(slot_tracker.root == 0);
+
+    const root_slot0 = slot_tracker.root;
+    const root_slot0_hash = slot_tracker.getRoot().state.hash.readCopy().?;
+
+    std.debug.assert(root_slot0 == 0); // assert initial root value
+    std.debug.assert(root_slot0_hash.eql(.ZEROES)); // assert initial root hash
+
+    // -- slot1 -- //
+    const slot1: Slot = 1;
+    const slot1_hash: Hash = .initRandom(prng);
+    {
+        var slot_constants: sig.core.SlotConstants = try .genesis(gpa, .DEFAULT);
+        errdefer slot_constants.deinit(gpa);
+        slot_constants.parent_slot = root_slot0;
+        slot_constants.parent_hash = root_slot0_hash;
+
+        var slot_state: sig.core.SlotState = .GENESIS;
+        errdefer slot_state.deinit(gpa);
+        slot_state.hash.set(slot1_hash);
+
+        try slot_tracker.put(gpa, slot1, .{
+            .constants = slot_constants,
+            .state = slot_state,
+        });
+    }
+    {
+        var fp: sig.consensus.progress_map.ForkProgress = try .zeroes(gpa);
+        errdefer fp.deinit(gpa);
+        try progress_map.map.put(gpa, slot1, fp);
+    }
+    // -- slot1 -- //
+
+    // -- slot2 -- //
+    const slot2: Slot = 2;
+    const slot2_hash: Hash = .initRandom(prng);
+    {
+        var slot_constants: sig.core.SlotConstants = try .genesis(gpa, .DEFAULT);
+        errdefer slot_constants.deinit(gpa);
+        slot_constants.parent_slot = root_slot0;
+        slot_constants.parent_hash = root_slot0_hash;
+
+        var slot_state: sig.core.SlotState = .GENESIS;
+        errdefer slot_state.deinit(gpa);
+        slot_state.hash.set(slot2_hash);
+
+        try slot_tracker.put(gpa, slot2, .{
+            .constants = slot_constants,
+            .state = slot_state,
+        });
+    }
+    {
+        var fp: sig.consensus.progress_map.ForkProgress = try .zeroes(gpa);
+        errdefer fp.deinit(gpa);
+        try progress_map.map.put(gpa, slot2, fp);
+    }
+    // -- slot2 -- //
+
+    var tower_consensus: TowerConsensus = try .init(gpa, .{
+        .logger = .FOR_TESTS,
+        .identity = replay_state.identity,
+        .signing = replay_state.signing,
+        .account_reader = replay_state.account_store.reader(),
+        .ledger = replay_state.ledger,
+        .slot_tracker = slot_tracker,
+        .now = .UNIX_EPOCH,
+        .registry = &registry,
+    });
+    defer tower_consensus.deinit(gpa);
+    slot_tracker.getRoot().state.hash.set(null); // freeze the root slot (only after initializing consensus, because it needs a non-null hash initially)
+
+    // -- I/O state -- //
+
+    const tc_output_channels: TowerConsensus.Senders = try .create(gpa);
+    defer tc_output_channels.destroy();
+
+    const tc_input_channels: TowerConsensus.Receivers = try .create(gpa);
+    defer tc_input_channels.destroy();
+
+    var duplicate_confirmed_slots: std.ArrayListUnmanaged(ThresholdConfirmedSlot) = .empty;
+    defer duplicate_confirmed_slots.deinit(gpa);
+
+    var gossip_verified_vote_hashes: std.ArrayListUnmanaged(GossipVerifiedVoteHash) = .empty;
+    defer gossip_verified_vote_hashes.deinit(gpa);
+
+    // -- input state -- //
+
+    try tc_input_channels.duplicate_slots.send(slot1);
+
+    const replay_slot_results = [_]ReplayResult{
+        .{
+            .slot = slot1,
+            .output = .{
+                .last_entry_hash = .initRandom(prng),
+            },
+        },
+        .{
+            .slot = slot2,
+            .output = .{
+                .last_entry_hash = .initRandom(prng),
+            },
+        },
+    };
+
+    // run consensus
+
+    try tower_consensus.process(gpa, .{
+        .account_reader = replay_state.account_store.reader(),
+        .ledger = replay_state.ledger,
+        .gossip_table = null,
+        .slot_tracker = &replay_state.slot_tracker,
+        .epoch_tracker = &replay_state.epoch_tracker,
+        .progress_map = &replay_state.progress_map,
+        .senders = tc_output_channels,
+        .receivers = tc_input_channels,
+        .vote_sockets = null,
+        .slot_leaders = null,
+        .duplicate_confirmed_slots = &duplicate_confirmed_slots,
+        .gossip_verified_vote_hashes = &gossip_verified_vote_hashes,
+        .results = &replay_slot_results,
+    });
+
+    // test outputs
+
+    const last_vote_slots = try gpa.alloc(Slot, tower_consensus.replay_tower.last_vote.slotCount());
+    defer gpa.free(last_vote_slots);
+    tower_consensus.replay_tower.last_vote.copyAllSlotsTo(last_vote_slots);
+
+    const expected_slot_hash: SlotAndHash = .{ .slot = slot2, .hash = slot2_hash };
+    try std.testing.expectEqualSlices(Slot, &.{expected_slot_hash.slot}, last_vote_slots);
+    try std.testing.expectEqual(
+        expected_slot_hash.hash,
+        tower_consensus.replay_tower.last_vote.getHash(),
+    );
+}
+
+test "edge cases - duplicate confirmed slot" {
+    // -- set up state -- //
+    const gpa = std.testing.allocator;
+
+    var prng_state: std.Random.DefaultPrng = .init(std.testing.random_seed);
+    const prng = prng_state.random();
+
+    var registry: sig.prometheus.Registry(.{}) = .init(gpa);
+    defer registry.deinit();
+
+    var dep_stubs: sig.replay.service.DependencyStubs = try .init(gpa, .FOR_TESTS);
+    defer dep_stubs.deinit();
+
+    var replay_state = try dep_stubs.stubbedState(gpa, .FOR_TESTS);
+    defer replay_state.deinit();
+
+    const slot_tracker = &replay_state.slot_tracker;
+    const progress_map = &replay_state.progress_map;
+    std.debug.assert(slot_tracker.root == 0);
+
+    const root_slot0 = slot_tracker.root;
+    const root_slot0_hash = slot_tracker.getRoot().state.hash.readCopy().?;
+
+    std.debug.assert(root_slot0 == 0); // assert initial root value
+    std.debug.assert(root_slot0_hash.eql(.ZEROES)); // assert initial root hash
+
+    // -- slot1 -- //
+    const slot1: Slot = 1;
+    const slot1_hash: Hash = .initRandom(prng);
+    {
+        var slot_constants: sig.core.SlotConstants = try .genesis(gpa, .DEFAULT);
+        errdefer slot_constants.deinit(gpa);
+        slot_constants.parent_slot = root_slot0;
+        slot_constants.parent_hash = root_slot0_hash;
+
+        var slot_state: sig.core.SlotState = .GENESIS;
+        errdefer slot_state.deinit(gpa);
+        slot_state.hash.set(slot1_hash);
+
+        try slot_tracker.put(gpa, slot1, .{
+            .constants = slot_constants,
+            .state = slot_state,
+        });
+    }
+    {
+        var fp: sig.consensus.progress_map.ForkProgress = try .zeroes(gpa);
+        errdefer fp.deinit(gpa);
+        try progress_map.map.put(gpa, slot1, fp);
+    }
+    // -- slot1 -- //
+
+    // -- slot2 -- //
+    const slot2: Slot = 2;
+    const slot2_hash: Hash = .initRandom(prng);
+    {
+        var slot_constants: sig.core.SlotConstants = try .genesis(gpa, .DEFAULT);
+        errdefer slot_constants.deinit(gpa);
+        slot_constants.parent_slot = root_slot0;
+        slot_constants.parent_hash = root_slot0_hash;
+
+        var slot_state: sig.core.SlotState = .GENESIS;
+        errdefer slot_state.deinit(gpa);
+        slot_state.hash.set(slot2_hash);
+
+        try slot_tracker.put(gpa, slot2, .{
+            .constants = slot_constants,
+            .state = slot_state,
+        });
+    }
+    {
+        var fp: sig.consensus.progress_map.ForkProgress = try .zeroes(gpa);
+        errdefer fp.deinit(gpa);
+        try progress_map.map.put(gpa, slot2, fp);
+    }
+    // -- slot2 -- //
+
+    var tower_consensus: TowerConsensus = try .init(gpa, .{
+        .logger = .FOR_TESTS,
+        .identity = replay_state.identity,
+        .signing = replay_state.signing,
+        .account_reader = replay_state.account_store.reader(),
+        .ledger = replay_state.ledger,
+        .slot_tracker = slot_tracker,
+        .now = .UNIX_EPOCH,
+        .registry = &registry,
+    });
+    defer tower_consensus.deinit(gpa);
+    slot_tracker.getRoot().state.hash.set(null); // freeze the root slot (only after initializing consensus, because it needs a non-null hash initially)
+
+    // -- I/O state -- //
+
+    const tc_output_channels: TowerConsensus.Senders = try .create(gpa);
+    defer tc_output_channels.destroy();
+
+    const tc_input_channels: TowerConsensus.Receivers = try .create(gpa);
+    defer tc_input_channels.destroy();
+
+    var duplicate_confirmed_slots: std.ArrayListUnmanaged(ThresholdConfirmedSlot) = .empty;
+    defer duplicate_confirmed_slots.deinit(gpa);
+
+    var gossip_verified_vote_hashes: std.ArrayListUnmanaged(GossipVerifiedVoteHash) = .empty;
+    defer gossip_verified_vote_hashes.deinit(gpa);
+
+    // -- input state -- //
+
+    try tc_input_channels.duplicate_slots.send(slot1);
+    try duplicate_confirmed_slots.append(gpa, .{ .slot = slot1, .hash = slot1_hash });
+
+    const replay_slot_results = [_]ReplayResult{
+        .{
+            .slot = slot1,
+            .output = .{
+                .last_entry_hash = .initRandom(prng),
+            },
+        },
+        .{
+            .slot = slot2,
+            .output = .{
+                .last_entry_hash = .initRandom(prng),
+            },
+        },
+    };
+
+    // run consensus
+
+    try tower_consensus.process(gpa, .{
+        .account_reader = replay_state.account_store.reader(),
+        .ledger = replay_state.ledger,
+        .gossip_table = null,
+        .slot_tracker = &replay_state.slot_tracker,
+        .epoch_tracker = &replay_state.epoch_tracker,
+        .progress_map = &replay_state.progress_map,
+        .senders = tc_output_channels,
+        .receivers = tc_input_channels,
+        .vote_sockets = null,
+        .slot_leaders = null,
+        .duplicate_confirmed_slots = &duplicate_confirmed_slots,
+        .gossip_verified_vote_hashes = &gossip_verified_vote_hashes,
+        .results = &replay_slot_results,
+    });
+
+    // test outputs
+
+    const last_vote_slots = try gpa.alloc(Slot, tower_consensus.replay_tower.last_vote.slotCount());
+    defer gpa.free(last_vote_slots);
+    tower_consensus.replay_tower.last_vote.copyAllSlotsTo(last_vote_slots);
+
+    const expected_slot_hash: SlotAndHash = .{ .slot = slot1, .hash = slot1_hash };
+    try std.testing.expectEqualSlices(Slot, &.{expected_slot_hash.slot}, last_vote_slots);
+    try std.testing.expectEqual(
+        expected_slot_hash.hash,
+        tower_consensus.replay_tower.last_vote.getHash(),
+    );
+}
+
+test "edge cases - gossip verified vote hashes" {
+    // -- set up state -- //
+    const gpa = std.testing.allocator;
+
+    var prng_state: std.Random.DefaultPrng = .init(std.testing.random_seed);
+    const prng = prng_state.random();
+
+    var registry: sig.prometheus.Registry(.{}) = .init(gpa);
+    defer registry.deinit();
+
+    var dep_stubs: sig.replay.service.DependencyStubs = try .init(gpa, .FOR_TESTS);
+    defer dep_stubs.deinit();
+
+    var replay_state = try dep_stubs.stubbedState(gpa, .FOR_TESTS);
+    defer replay_state.deinit();
+
+    const slot_tracker = &replay_state.slot_tracker;
+    const progress_map = &replay_state.progress_map;
+    std.debug.assert(slot_tracker.root == 0);
+
+    var vote_collector: sig.consensus.vote_listener.VoteCollector =
+        try .init(.UNIX_EPOCH, slot_tracker.root, &registry);
+    defer vote_collector.deinit(gpa);
+
+    const root_slot0 = slot_tracker.root;
+    const root_slot0_hash = slot_tracker.getRoot().state.hash.readCopy().?;
+
+    std.debug.assert(root_slot0 == 0); // assert initial root value
+    std.debug.assert(root_slot0_hash.eql(.ZEROES)); // assert initial root hash
+
+    // -- slot1 -- //
+    const slot1: Slot = 1;
+    const slot1_hash: Hash = .initRandom(prng);
+    {
+        var slot_constants: sig.core.SlotConstants = try .genesis(gpa, .DEFAULT);
+        errdefer slot_constants.deinit(gpa);
+        slot_constants.parent_slot = root_slot0;
+        slot_constants.parent_hash = root_slot0_hash;
+
+        var slot_state: sig.core.SlotState = .GENESIS;
+        errdefer slot_state.deinit(gpa);
+        slot_state.hash.set(slot1_hash);
+
+        try slot_tracker.put(gpa, slot1, .{
+            .constants = slot_constants,
+            .state = slot_state,
+        });
+    }
+    {
+        var fp: sig.consensus.progress_map.ForkProgress = try .zeroes(gpa);
+        errdefer fp.deinit(gpa);
+        try progress_map.map.put(gpa, slot1, fp);
+    }
+    // -- slot1 -- //
+
+    // -- slot2 -- //
+    const slot2: Slot = 2;
+    const slot2_hash: Hash = .initRandom(prng);
+    {
+        var slot_constants: sig.core.SlotConstants = try .genesis(gpa, .DEFAULT);
+        errdefer slot_constants.deinit(gpa);
+        slot_constants.parent_slot = root_slot0;
+        slot_constants.parent_hash = root_slot0_hash;
+
+        var slot_state: sig.core.SlotState = .GENESIS;
+        errdefer slot_state.deinit(gpa);
+        slot_state.hash.set(slot2_hash);
+
+        try slot_tracker.put(gpa, slot2, .{
+            .constants = slot_constants,
+            .state = slot_state,
+        });
+    }
+    {
+        var fp: sig.consensus.progress_map.ForkProgress = try .zeroes(gpa);
+        errdefer fp.deinit(gpa);
+        try progress_map.map.put(gpa, slot2, fp);
+    }
+    // -- slot2 -- //
+
+    var tower_consensus: TowerConsensus = try .init(gpa, .{
+        .logger = .FOR_TESTS,
+        .identity = replay_state.identity,
+        .signing = replay_state.signing,
+        .account_reader = replay_state.account_store.reader(),
+        .ledger = replay_state.ledger,
+        .slot_tracker = slot_tracker,
+        .now = .UNIX_EPOCH,
+        .registry = &registry,
+    });
+    defer tower_consensus.deinit(gpa);
+    slot_tracker.getRoot().state.hash.set(null); // freeze the root slot (only after initializing consensus, because it needs a non-null hash initially)
+
+    // -- I/O state -- //
+
+    var verified_vote_channel: sig.sync.Channel(sig.consensus.vote_listener.VerifiedVote) =
+        try .init(gpa);
+    defer verified_vote_channel.deinit();
+    defer while (verified_vote_channel.tryReceive()) |verified_vote| verified_vote.deinit(gpa);
+
+    const tc_output_channels: TowerConsensus.Senders = try .create(gpa);
+    defer tc_output_channels.destroy();
+
+    const tc_input_channels: TowerConsensus.Receivers = try .create(gpa);
+    defer tc_input_channels.destroy();
+
+    var duplicate_confirmed_slots: std.ArrayListUnmanaged(ThresholdConfirmedSlot) = .empty;
+    defer duplicate_confirmed_slots.deinit(gpa);
+
+    var gossip_verified_vote_hashes: std.ArrayListUnmanaged(GossipVerifiedVoteHash) = .empty;
+    defer gossip_verified_vote_hashes.deinit(gpa);
+
+    // -- input state -- //
+
+    const pk1: Pubkey = .initRandom(prng);
+    try gossip_verified_vote_hashes.append(gpa, .{ pk1, slot1, slot1_hash });
+
+    const pk2: Pubkey = .initRandom(prng);
+    try gossip_verified_vote_hashes.append(gpa, .{ pk2, slot2, slot2_hash });
+
+    const replay_slot_results = [_]ReplayResult{
+        .{
+            .slot = slot1,
+            .output = .{
+                .last_entry_hash = .initRandom(prng),
+            },
+        },
+        .{
+            .slot = slot2,
+            .output = .{
+                .last_entry_hash = .initRandom(prng),
+            },
+        },
+    };
+
+    // run consensus
+
+    try tower_consensus.process(gpa, .{
+        .account_reader = replay_state.account_store.reader(),
+        .ledger = replay_state.ledger,
+        .gossip_table = null,
+        .slot_tracker = &replay_state.slot_tracker,
+        .epoch_tracker = &replay_state.epoch_tracker,
+        .progress_map = &replay_state.progress_map,
+        .senders = tc_output_channels,
+        .receivers = tc_input_channels,
+        .vote_sockets = null,
+        .slot_leaders = null,
+        .duplicate_confirmed_slots = &duplicate_confirmed_slots,
+        .gossip_verified_vote_hashes = &gossip_verified_vote_hashes,
+        .results = &replay_slot_results,
+    });
+
+    // test outputs
+
+    // TODO: test the effect of gossip verified vote hashes on the dependents
+    // of `tower_consensus.latest_validator_votes`.
+    try std.testing.expectEqualSlices(
+        Pubkey,
+        &.{ pk1, pk2 },
+        tower_consensus.latest_validator_votes.max_gossip_frozen_votes.keys(),
+    );
 }
 
 // TODO: Re-implement tests for the new consolidated API

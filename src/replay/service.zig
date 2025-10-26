@@ -792,14 +792,6 @@ test "process runs without error with no replay results" {
     const consensus_receivers: TowerConsensus.Receivers = try .create(allocator);
     defer consensus_receivers.destroy();
 
-    // try vote_collector.collectAndProcessVotes(allocator, .FOR_TESTS, .{
-    //     .slot_data_provider = slot_data_provider,
-    //     .senders = vc_senders,
-    //     .receivers = .{ .replay_votes = replay_state.replay_votes_channel },
-    //     .ledger = replay_state.ledger,
-    //     .gossip_table = null,
-    // });
-
     // TODO: run consensus in the tests that actually execute blocks for better
     // coverage. currently consensus panics or hangs if you run it with actual data
     try consensus.process(allocator, .{
