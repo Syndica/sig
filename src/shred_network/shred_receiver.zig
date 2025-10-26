@@ -6,6 +6,7 @@ const shred_network = @import("lib.zig");
 
 const bincode = sig.bincode;
 const layout = sig.ledger.shred.layout;
+const schema = sig.ledger.schema.schema;
 const shred_verifier = shred_network.shred_verifier;
 
 const Allocator = std.mem.Allocator;
@@ -204,9 +205,11 @@ pub const ShredReceiver = struct {
 
     const MAX_SHREDS_PER_ITER = 1024;
 
-    /// Send duplicate slot notifications to consensus for all unique slots
-    /// with duplicate shreds detected by the ShredInserter.
-    /// TODO Investigate Agave's check_duplicate.
+    /// Handles detected duplicate slots by:
+    /// - Send duplicate slot notifications to be handled in consensus part of replay
+    /// - Store the duplicate proof in the ledger
+    /// - Broadcast the duplicate proof via gossip
+    /// Analogous to [check_duplicate](https://github.com/anza-xyz/agave/blob/aa2f078836434965e1a5a03af7f95c6640fe6e1e/core/src/window_service.rs#L155)
     fn handleDuplicateSlots(
         self: *ShredReceiver,
         allocator: Allocator,
@@ -215,25 +218,94 @@ pub const ShredReceiver = struct {
         const sender = self.params.duplicate_slots_sender orelse return;
         if (result.duplicate_shreds.items.len == 0) return;
 
-        var duplicate_slots = std.AutoArrayHashMap(Slot, void).init(allocator);
-        defer duplicate_slots.deinit();
-
         for (result.duplicate_shreds.items) |duplicate_shred| {
-            const slot = switch (duplicate_shred) {
-                .Exists => |shred| shred.commonHeader().slot,
-                inline else => |conflict| conflict.original.commonHeader().slot,
-            };
-            try duplicate_slots.put(slot, {});
-        }
+            switch (duplicate_shred) {
+                .Exists => |shred| {
+                    const shred_slot = shred.commonHeader().slot;
+                    // Unlike the other cases we have to wait until here to decide to handle the duplicate and store
+                    // in ledger. This is because the duplicate could have been part of the same insert batch,
+                    // so we wait until the batch has been written.
+                    if (try self.params.ledger_reader.isDuplicateSlot(shred_slot)) {
+                        continue; // A duplicate is already recorded, skip
+                    }
 
-        for (duplicate_slots.keys()) |slot| {
-            sender.send(slot) catch |err| {
-                self.logger.err().logf(
-                    "failed to send duplicate slot {} to consensus: {}",
-                    .{ slot, err },
-                );
-            };
+                    const existing_shred_payload =
+                        (try self.params.ledger_reader.isShredDuplicate(allocator, shred)) orelse
+                        continue; // Not a duplicate, skip this one
+                    defer existing_shred_payload.deinit();
+
+                    try self.handleDuplicateSlot(
+                        sender,
+                        shred_slot,
+                        shred.payload(),
+                        existing_shred_payload.items,
+                    );
+                },
+                .LastIndexConflict,
+                .ErasureConflict,
+                .MerkleRootConflict,
+                => |conflict| {
+                    const shred_slot = conflict.original.commonHeader().slot;
+                    try self.handleDuplicateSlot(
+                        sender,
+                        shred_slot,
+                        conflict.original.payload(),
+                        conflict.conflict.data,
+                    );
+                },
+                .ChainedMerkleRootConflict => |conflict| {
+                    const shred_slot = conflict.original.commonHeader().slot;
+
+                    // TODO: Check feature flag for chained_merkle_conflict_duplicate_proofs
+                    // For now, we'll store it unconditionally. When feature checking is implemented,
+                    // this should check: if (!chained_merkle_conflict_duplicate_proofs) continue;
+
+                    // Although this proof can be immediately stored on detection, we wait until
+                    // here in order to check the feature flag, as storage in ledger can
+                    // preclude the detection of other duplicate proofs in this slot
+                    if (try self.params.ledger_reader.isDuplicateSlot(shred_slot)) {
+                        continue;
+                    }
+
+                    try self.handleDuplicateSlot(
+                        sender,
+                        shred_slot,
+                        conflict.original.payload(),
+                        conflict.conflict.data,
+                    );
+                },
+            }
         }
+    }
+
+    fn handleDuplicateSlot(
+        self: *ShredReceiver,
+        sender: anytype,
+        slot: Slot,
+        shred_payload: []const u8,
+        duplicate_payload: []const u8,
+    ) !void {
+        // Store in ledger
+        self.params.result_writer.storeDuplicateSlot(
+            slot,
+            shred_payload,
+            duplicate_payload,
+        ) catch |err| {
+            self.logger.err().logf(
+                "failed to store duplicate slot {}: {}",
+                .{ slot, err },
+            );
+        };
+
+        // Send to consensus
+        sender.send(slot) catch |err| {
+            self.logger.err().logf(
+                "failed to send duplicate slot {} to consensus: {}",
+                .{ slot, err },
+            );
+        };
+
+        // TODO: send to gossip
     }
 
     /// Handle a single packet and return a shred if it's a valid shred.
@@ -362,6 +434,8 @@ test "handleBatch/handlePacket" {
         .leader_schedule = epoch_ctx.slotLeaders(),
         .tracker = &shred_tracker,
         .inserter = ledger.shredInserter(),
+        .ledger_reader = ledger.reader(),
+        .result_writer = ledger.resultWriter(),
         .duplicate_slots_sender = null,
     });
     defer shred_receiver.deinit(allocator);
@@ -575,6 +649,8 @@ test "handleDuplicateSlots: no sender configured" {
         .leader_schedule = epoch_ctx.slotLeaders(),
         .tracker = &shred_tracker,
         .inserter = ledger.shredInserter(),
+        .ledger_reader = ledger.reader(),
+        .result_writer = ledger.resultWriter(),
         .duplicate_slots_sender = null, // No sender configured
     });
     defer shred_receiver.deinit(allocator);
@@ -640,6 +716,8 @@ test "handleDuplicateSlots: no duplicate shreds" {
         .leader_schedule = epoch_ctx.slotLeaders(),
         .tracker = &shred_tracker,
         .inserter = ledger.shredInserter(),
+        .ledger_reader = ledger.reader(),
+        .result_writer = ledger.resultWriter(),
         .duplicate_slots_sender = &duplicate_slots_channel,
     });
     defer shred_receiver.deinit(allocator);
@@ -702,16 +780,42 @@ test "handleDuplicateSlots: single duplicate shred" {
         .leader_schedule = epoch_ctx.slotLeaders(),
         .tracker = &shred_tracker,
         .inserter = ledger.shredInserter(),
+        .ledger_reader = ledger.reader(),
+        .result_writer = ledger.resultWriter(),
         .duplicate_slots_sender = &duplicate_slots_channel,
     });
     defer shred_receiver.deinit(allocator);
 
     // Create a result with a single duplicate shred
+    // First shred - the original that goes into the ledger
     const shred: Shred = try .fromPayload(allocator, &sig.ledger.shred.test_data_shred);
+    defer shred.deinit();
     const expected_slot = shred.commonHeader().slot;
+    const shred_id = shred.id();
+
+    // Create a modified payload for the second shred (different data, same slot/index)
+    var modified_payload = try allocator.dupe(u8, shred.payload());
+    defer allocator.free(modified_payload);
+    // Modify the last byte to make it different
+    if (modified_payload.len > 0) {
+        modified_payload[modified_payload.len - 1] = modified_payload[modified_payload.len - 1] +% 1;
+    }
+
+    // Insert the ORIGINAL shred into the ledger
+    var write_batch = try ledger.db.initWriteBatch();
+    defer write_batch.deinit();
+    try write_batch.put(
+        schema.data_shred,
+        .{ shred_id.slot, shred_id.index },
+        shred.payload(),
+    );
+    try ledger.db.commit(&write_batch);
+
+    // Now create the duplicate shred with the modified payload
+    const duplicate_shred = try Shred.fromPayload(allocator, modified_payload);
 
     var duplicate_shreds = std.ArrayList(PossibleDuplicateShred).init(allocator);
-    try duplicate_shreds.append(.{ .Exists = shred });
+    try duplicate_shreds.append(.{ .Exists = duplicate_shred });
 
     const result = ShredInserter.Result{
         .completed_data_set_infos = std.ArrayList(
@@ -772,18 +876,49 @@ test "handleDuplicateSlots: multiple duplicates same slot" {
         .leader_schedule = epoch_ctx.slotLeaders(),
         .tracker = &shred_tracker,
         .inserter = ledger.shredInserter(),
+        .ledger_reader = ledger.reader(),
+        .result_writer = ledger.resultWriter(),
         .duplicate_slots_sender = &duplicate_slots_channel,
     });
     defer shred_receiver.deinit(allocator);
 
     // Create multiple duplicate shreds from the same slot
+    // First shred - the original that goes into the ledger
     const shred1: Shred = try .fromPayload(allocator, &sig.ledger.shred.test_data_shred);
+    defer shred1.deinit();
     const expected_slot = shred1.commonHeader().slot;
-    const shred2 = try Shred.fromPayload(allocator, &sig.ledger.shred.test_data_shred);
+    const shred_id = shred1.id();
+
+    // Create modified payloads for the duplicate shreds (different data, same slot/index)
+    var modified_payload1 = try allocator.dupe(u8, shred1.payload());
+    defer allocator.free(modified_payload1);
+    var modified_payload2 = try allocator.dupe(u8, shred1.payload());
+    defer allocator.free(modified_payload2);
+    // Modify to make them different from the original
+    if (modified_payload1.len > 0) {
+        modified_payload1[modified_payload1.len - 1] =
+            modified_payload1[modified_payload1.len - 1] +% 1;
+        modified_payload2[modified_payload2.len - 1] =
+            modified_payload2[modified_payload2.len - 1] +% 2;
+    }
+
+    // Insert the ORIGINAL shred into the ledger
+    var write_batch = try ledger.db.initWriteBatch();
+    defer write_batch.deinit();
+    try write_batch.put(
+        schema.data_shred,
+        .{ shred_id.slot, shred_id.index },
+        shred1.payload(),
+    );
+    try ledger.db.commit(&write_batch);
+
+    // Now create the duplicate shreds with the modified payloads
+    const duplicate_shred1 = try Shred.fromPayload(allocator, modified_payload1);
+    const duplicate_shred2 = try Shred.fromPayload(allocator, modified_payload2);
 
     var duplicate_shreds = std.ArrayList(PossibleDuplicateShred).init(allocator);
-    try duplicate_shreds.append(.{ .Exists = shred1 });
-    try duplicate_shreds.append(.{ .Exists = shred2 });
+    try duplicate_shreds.append(.{ .Exists = duplicate_shred1 });
+    try duplicate_shreds.append(.{ .Exists = duplicate_shred2 });
 
     const result = ShredInserter.Result{
         .completed_data_set_infos = std.ArrayList(
@@ -795,7 +930,7 @@ test "handleDuplicateSlots: multiple duplicates same slot" {
 
     try shred_receiver.handleDuplicateSlots(allocator, &result);
 
-    // Verify exactly one slot was sent because of deduplication
+    // Verify exactly one slot was sent (first duplicate is processed, subsequent ones are skipped)
     try std.testing.expectEqual(1, duplicate_slots_channel.len());
     const received_slot = duplicate_slots_channel.tryReceive() orelse return error.TestFailed;
     try std.testing.expectEqual(expected_slot, received_slot);
