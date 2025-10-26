@@ -115,6 +115,8 @@ pub fn start(
         .epoch_tracker = deps.epoch_tracker,
         .tracker = shred_tracker,
         .inserter = deps.ledger.shredInserter(),
+        .ledger_reader = deps.ledger.reader(),
+        .result_writer = deps.ledger.resultWriter(),
         .duplicate_slots_sender = deps.duplicate_slots_sender,
     });
     try defers.deferCall(ShredReceiver.deinit, .{ shred_receiver, deps.allocator });
