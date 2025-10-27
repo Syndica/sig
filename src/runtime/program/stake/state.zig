@@ -389,6 +389,14 @@ pub const StakeStateV2 = union(enum) {
                 .deprecated_warmup_cooldown_rate = random.float(f64),
             };
         }
+
+        pub fn eql(self: *const Delegation, other: *const Delegation) bool {
+            return self.voter_pubkey.equals(&other.voter_pubkey) and
+                self.stake == other.stake and
+                self.activation_epoch == other.activation_epoch and
+                self.deactivation_epoch == other.deactivation_epoch and
+                self.deprecated_warmup_cooldown_rate == other.deprecated_warmup_cooldown_rate;
+        }
     };
 
     pub const StakeAuthorize = enum { staker, withdrawer };

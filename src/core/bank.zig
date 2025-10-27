@@ -37,6 +37,7 @@ const LtHash = core.hash.LtHash;
 const Pubkey = core.pubkey.Pubkey;
 const RentCollector = sig.core.rent_collector.RentCollector;
 const ReservedAccounts = sig.core.ReservedAccounts;
+const VoteAccount = sig.core.stakes.VoteAccount;
 
 const Epoch = core.time.Epoch;
 const Slot = core.time.Slot;
@@ -50,6 +51,7 @@ const EpochStakesMap = core.EpochStakesMap;
 const Stakes = core.Stakes;
 
 const StakeStateV2 = sig.runtime.program.stake.StakeStateV2;
+const VoteState = sig.runtime.program.vote.state.VoteState;
 const EpochRewardStatus = sig.replay.rewards.EpochRewardStatus;
 
 const deinitMapAndValues = sig.utils.collections.deinitMapAndValues;
@@ -358,10 +360,33 @@ pub fn parseStakes(
             return error.StakeAccountNotFound;
         defer account.deinit(allocator);
 
-        if (account.data.len() != StakeStateV2.SIZE) return error.InvalidStakeState;
+        const voter_pubkey = value.voter_pubkey;
+        if (bank_fields.stakes.vote_accounts.getAccount(voter_pubkey) == null) {
+            if (try account_reader.get(allocator, voter_pubkey)) |vote_account| {
+                defer vote_account.deinit(allocator);
+
+                const data = try vote_account.data.readAllAllocate(allocator);
+                defer allocator.free(data);
+
+                if (VoteState.isCorrectSizeAndInitialized(data)) {
+                    const deserialize_result = VoteAccount.fromAccountSharedData(allocator, .{
+                        .lamports = vote_account.lamports,
+                        .data = data,
+                        .owner = vote_account.owner,
+                        .executable = vote_account.executable,
+                        .rent_epoch = vote_account.rent_epoch,
+                    });
+                    if (!std.meta.isError(deserialize_result)) {
+                        var deserialized = deserialize_result catch unreachable;
+                        defer deserialized.deinit(allocator);
+                        return error.VoteAccountNotCached;
+                    }
+                }
+            }
+        }
 
         var state_buffer = [_]u8{0} ** StakeStateV2.SIZE;
-        account.data.readAll(&state_buffer);
+        _ = account.data.readRange(0, StakeStateV2.SIZE, &state_buffer);
 
         const state = try sig.bincode.readFromSlice(
             allocator,
@@ -370,14 +395,15 @@ pub fn parseStakes(
             .{},
         );
 
-        const credits_observed = switch (state) {
-            .stake => |s| s.stake.credits_observed,
-            else => return error.InvalidStakeState,
-        };
+        const stake = state.getStake() orelse
+            return error.InvalidStakeAccount;
+
+        if (!stake.delegation.eql(&value.getDelegation()))
+            return error.InvalidDelegation;
 
         try stake_accounts.put(allocator, key, StakeStateV2.Stake{
             .delegation = value,
-            .credits_observed = credits_observed,
+            .credits_observed = stake.credits_observed,
         });
     }
 
