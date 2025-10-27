@@ -363,10 +363,10 @@ pub const Matrix = struct {
     ) Allocator.Error!Self {
         const result = try initUndefined(allocator, rmax - rmin, cmax - cmin);
         for (rmin..rmax) |r| {
-            for (cmin..cmax) |c| {
-                // TODO memcpy may be faster
-                result.data[result.index(r - rmin, c - cmin)] = self.get(r, c);
-            }
+            const row = self.getRow(r);
+
+            const start, const end = result.rowStartEnd(r - rmin);
+            @memcpy(result.data[start..end], row[cmin..cmax]);
         }
         return result;
     }
