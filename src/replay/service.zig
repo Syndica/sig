@@ -1330,7 +1330,26 @@ pub const DependencyStubs = struct {
         };
         defer deps.deinit(allocator);
 
-        return try Service.init(&deps, null, num_threads);
+        var service = try Service.init(&deps, null, num_threads);
+
+        // Add previous epoch info to epoch tracker.
+        // Required for updateEpochStakes after creating a new slot.
+        const epoch_tracker, var epoch_tracker_lg = service.replay.epoch_tracker.writeWithLock();
+        defer epoch_tracker_lg.unlock();
+
+        const current_constants = epoch_tracker.get(epoch) orelse
+            return error.MissingEpoch;
+
+        const previous_constants = try current_constants.clone(allocator);
+        errdefer previous_constants.deinit(allocator);
+
+        try epoch_tracker.put(
+            allocator,
+            epoch - 1,
+            previous_constants,
+        );
+
+        return service;
     }
 };
 

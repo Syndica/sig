@@ -84,7 +84,7 @@ pub fn updateEpochStakes(
 ) !void {
     const leader_schedule_epoch = epoch_tracker.schedule.getLeaderScheduleEpoch(slot);
     if (!epoch_tracker.epochs.contains(leader_schedule_epoch)) {
-        const parent_epoch_constants = epoch_tracker.getForSlot(parent_epoch) orelse {
+        const parent_epoch_constants = epoch_tracker.get(parent_epoch) orelse {
             return error.ParentEpochConstantsNotFound;
         };
 
