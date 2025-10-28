@@ -180,6 +180,7 @@ pub const Inflation = struct {
 
     /// Percentage of total inflation allocated to the foundation
     foundation: f64,
+
     /// Duration of foundation pool inflation, in years
     foundation_term: f64,
 
@@ -195,6 +196,28 @@ pub const Inflation = struct {
         .__unused = 0.0,
     };
 
+    pub const FULL: Inflation = .{
+        .initial = DEFAULT.initial,
+        .terminal = DEFAULT.terminal,
+        .taper = DEFAULT.taper,
+        .foundation = 0.0,
+        .foundation_term = 0.0,
+        .__unused = 0.0,
+    };
+
+    pub const PICO = fixed(0.0001); // 0.01% inflation
+
+    pub fn fixed(validator: f64) Inflation {
+        return .{
+            .initial = validator,
+            .terminal = validator,
+            .taper = 1.0,
+            .foundation = 0.0,
+            .foundation_term = 0.0,
+            .__unused = 0.0,
+        };
+    }
+
     pub fn initRandom(random: std.Random) Inflation {
         return .{
             .initial = random.float(f64),
@@ -204,6 +227,26 @@ pub const Inflation = struct {
             .foundation_term = random.float(f64),
             .__unused = random.float(f64),
         };
+    }
+
+    pub fn total(self: *const Inflation, slot_in_years: f64) f64 {
+        std.debug.assert(slot_in_years >= 0.0);
+        return @max(
+            self.terminal,
+            self.initial * std.math.pow(f64, 1.0 - self.taper, slot_in_years),
+        );
+    }
+
+    pub fn validatorRate(self: *const Inflation, slot_in_years: f64) f64 {
+        std.debug.assert(slot_in_years >= 0.0);
+        return self.total(slot_in_years) - self.foundationRate(slot_in_years);
+    }
+
+    pub fn foundationRate(self: *const Inflation, slot_in_years: f64) f64 {
+        return if (slot_in_years < self.foundation_term)
+            self.total(slot_in_years) * self.foundation
+        else
+            0.0;
     }
 };
 

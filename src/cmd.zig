@@ -1267,9 +1267,12 @@ fn replayOffline(
     if (try getLeaderScheduleFromCli(allocator, cfg)) |leader_schedule| {
         try leader_schedule_cache.put(bank_fields.epoch, leader_schedule[1]);
     } else {
-        const schedule = try collapsed_manifest.leaderSchedule(allocator, null);
-        errdefer schedule.deinit();
-        try leader_schedule_cache.put(bank_fields.epoch, schedule);
+        const schedule_1 = try collapsed_manifest.leaderSchedule(allocator, null);
+        errdefer schedule_1.deinit();
+        try leader_schedule_cache.put(bank_fields.epoch, schedule_1);
+        const schedule_2 = try collapsed_manifest.leaderSchedule(allocator, bank_fields.epoch + 1);
+        errdefer schedule_2.deinit();
+        try leader_schedule_cache.put(bank_fields.epoch + 1, schedule_2);
     }
 
     // ledger
@@ -1954,7 +1957,9 @@ fn replayDependencies(
     else
         null;
 
-    var root_slot_state = try sig.core.SlotState.fromBankFields(allocator, bank_fields, lt_hash);
+    const account_reader = account_store.reader().forSlot(&bank_fields.ancestors);
+    var root_slot_state =
+        try sig.core.SlotState.fromBankFields(allocator, bank_fields, lt_hash, account_reader);
     errdefer root_slot_state.deinit(allocator);
 
     const hard_forks = try bank_fields.hard_forks.clone(allocator);

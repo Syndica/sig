@@ -390,7 +390,7 @@ pub fn trackNewSlots(
 
     const slot_tracker, var slot_tracker_lg = slot_tracker_rw.writeWithLock();
     defer slot_tracker_lg.unlock();
-    const epoch_tracker, var epoch_tracker_lg = epoch_tracker_rw.readWithLock();
+    var epoch_tracker, var epoch_tracker_lg = epoch_tracker_rw.writeWithLock();
     defer epoch_tracker_lg.unlock();
 
     const root = slot_tracker.root;
@@ -417,13 +417,15 @@ pub fn trackNewSlots(
             if (slot_tracker.contains(slot)) continue;
             logger.info().logf("tracking new slot: {}", .{slot});
 
-            const epoch_info = epoch_tracker.getPtrForSlot(slot) orelse
-                return error.MissingEpoch;
+            const ticks_per_slot = (epoch_tracker.getPtrForSlot(slot) orelse
+                return error.MissingEpoch).ticks_per_slot;
 
-            const constants, var state = try newSlotFromParent(
+            // Constants are not constant at this point since processing new epochs
+            // may modify the feature set.
+            var constants, var state = try newSlotFromParent(
                 allocator,
                 account_store.reader(),
-                epoch_info.ticks_per_slot,
+                ticks_per_slot,
                 parent_slot,
                 parent_info.constants,
                 parent_info.state,
@@ -432,6 +434,52 @@ pub fn trackNewSlots(
             );
             errdefer constants.deinit(allocator);
             errdefer state.deinit(allocator);
+
+            const parent_epoch = epoch_tracker.schedule.getEpoch(parent_slot);
+            const slot_epoch = epoch_tracker.schedule.getEpoch(slot);
+
+            const slot_store = sig.replay.slot_account_store.SlotAccountStore.init(
+                slot,
+                &state,
+                account_store,
+                &constants.ancestors,
+            );
+
+            if (parent_epoch < slot_epoch) {
+                try replay.epoch_transitions.processNewEpoch(
+                    allocator,
+                    slot,
+                    &state,
+                    &constants,
+                    epoch_tracker,
+                    slot_store,
+                );
+            } else {
+                try replay.epoch_transitions.updateEpochStakes(
+                    allocator,
+                    slot,
+                    parent_epoch,
+                    &state.stakes_cache,
+                    epoch_tracker,
+                );
+            }
+
+            const epoch_info = epoch_tracker.getPtrForSlot(slot) orelse
+                return error.MissingEpoch;
+
+            try replay.rewards.distribution.distributePartitionedEpochRewards(
+                allocator,
+                slot,
+                slot_epoch,
+                constants.block_height,
+                epoch_tracker.schedule,
+                &state.reward_status,
+                &state.stakes_cache,
+                &state.capitalization,
+                &constants.ancestors,
+                &epoch_info.rent_collector.rent,
+                slot_store,
+            );
 
             try updateSysvarsForNewSlot(
                 allocator,
@@ -476,7 +524,7 @@ fn newSlotFromParent(
     var state = try SlotState.fromFrozenParent(allocator, parent_state);
     errdefer state.deinit(allocator);
 
-    const epoch_reward_status = try parent_constants.epoch_reward_status.clone(allocator);
+    const epoch_reward_status = parent_state.reward_status.clone();
     errdefer epoch_reward_status.deinit(allocator);
 
     var ancestors = try parent_constants.ancestors.clone(allocator);
@@ -490,7 +538,7 @@ fn newSlotFromParent(
     // This is inefficient, reserved accounts could live in epoch constants along with
     // the feature set since feature activations are only applied at epoch boundaries.
     // Then we only need to clone the map and update the reserved accounts once per epoch.
-    const reserved_accounts = try sig.core.reserved_accounts.initForSlot(
+    const reserved_accounts = try sig.core.ReservedAccounts.initForSlot(
         allocator,
         &feature_set,
         slot,
@@ -508,10 +556,10 @@ fn newSlotFromParent(
             &parent_constants.fee_rate_governor,
             parent_state.signature_count.load(.monotonic),
         ),
-        .epoch_reward_status = epoch_reward_status,
         .ancestors = ancestors,
         .feature_set = feature_set,
         .reserved_accounts = reserved_accounts,
+        .inflation = parent_constants.inflation,
     };
 
     return .{ constants, state };
@@ -1244,8 +1292,14 @@ pub const DependencyStubs = struct {
             else
                 null;
 
+            const account_reader = self.accountsdb.accountReader().forSlot(&bank_fields.ancestors);
             var root_slot_state =
-                try sig.core.SlotState.fromBankFields(allocator, bank_fields, lt_hash);
+                try sig.core.SlotState.fromBankFields(
+                    allocator,
+                    bank_fields,
+                    lt_hash,
+                    account_reader,
+                );
             errdefer root_slot_state.deinit(allocator);
 
             const hard_forks = try bank_fields.hard_forks.clone(allocator);
@@ -1276,7 +1330,26 @@ pub const DependencyStubs = struct {
         };
         defer deps.deinit(allocator);
 
-        return try Service.init(&deps, null, num_threads);
+        var service = try Service.init(&deps, null, num_threads);
+
+        // Add previous epoch info to epoch tracker.
+        // Required for updateEpochStakes after creating a new slot.
+        const epoch_tracker, var epoch_tracker_lg = service.replay.epoch_tracker.writeWithLock();
+        defer epoch_tracker_lg.unlock();
+
+        const current_constants = epoch_tracker.get(epoch) orelse
+            return error.MissingEpoch;
+
+        const previous_constants = try current_constants.clone(allocator);
+        errdefer previous_constants.deinit(allocator);
+
+        try epoch_tracker.put(
+            allocator,
+            epoch - 1,
+            previous_constants,
+        );
+
+        return service;
     }
 };
 
