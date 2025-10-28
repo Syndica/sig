@@ -363,3 +363,29 @@ test "zero edge cases" {
     try testing.expectEqual(0, log[0]);
     try testing.expectEqual(1, exp[0]);
 }
+
+// THE TESTS BELOW SHOULD BE REMOVED AS SOON
+// AS THE TABLE LITERALS ABOVE ARE REMOVED
+
+test "INTERMEDIARY TEST mul equals generateMulTable" {
+    const mul_table = generateMulTable();
+    for (mul, 0..) |m, i| {
+        for (m, 0..) |n, j| {
+            try testing.expectEqual(n, mul_table[i][j]);
+        }
+    }
+}
+
+test "INTERMEDIARY TEST exp equals generateExpTable" {
+    const exp_table = generateExpTable();
+    for (exp, 0..) |e, i| {
+        try testing.expectEqual(e, exp_table[i]);
+    }
+}
+
+test "INTERMEDIARY TEST log equals generateLogTable" {
+    const log_table = generateLogTable();
+    for (log, 0..) |l, i| {
+        try testing.expectEqual(l, log_table[i]);
+    }
+}
