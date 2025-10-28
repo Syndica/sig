@@ -236,7 +236,7 @@ fn updateConsensusForFrozenSlot(params: ProcessResultParams, slot: Slot) !void {
                     pubkey,
                     slot,
                     hash,
-                    .replay,
+                    .gossip,
                 );
             }
         }
