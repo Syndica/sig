@@ -1154,7 +1154,7 @@ test "downloadInfo Full" {
     }
 }
 
-test "download, can't find peers" {
+test "can't download snapshot" {
     const allocator = std.testing.allocator;
     var table = try GossipTable.init(allocator, allocator);
     defer table.deinit();
@@ -1181,15 +1181,12 @@ test "download, can't find peers" {
     var bad_peers: std.ArrayList(Pubkey) = .init(allocator);
     defer bad_peers.deinit();
 
-    try std.testing.expectError(error.UnableToDownloadSnapshot, downloadSnapshotWithRetry(
+    try std.testing.expectError(error.UnableToDownloadSnapshot, downloadSnapshotsFromGossip(
         allocator,
         .noop,
-        .full,
+        null,
         &gossip_service,
         tmp_dir.dir,
-        null,
-        &bad_peers,
-        null,
         1,
         1,
         sig.time.Duration.fromMillis(1),
