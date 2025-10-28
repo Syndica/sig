@@ -222,15 +222,7 @@ pub const ForkChoice = struct {
 
         var it = self.fork_infos.valueIterator();
         while (it.next()) |fork_info| {
-            total_stake = std.math.add(u64, total_stake, fork_info.stake_for_slot) catch |err| {
-                self.logger.warn().logf(
-                    "total_stake metric overflowed total={} add={} error={}",
-                    .{ total_stake, fork_info.stake_for_slot, err },
-                );
-                // Set to 0 as a sentinel to make the error obvious in grafana
-                total_stake = 0;
-                break;
-            };
+            total_stake += fork_info.stake_for_slot;
 
             // Count active forks (those that are candidates)
             if (!fork_info.isCandidate()) continue;
