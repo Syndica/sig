@@ -8,19 +8,6 @@ pub const Hooks = struct {
     pub const Request = rpc.methods.MethodAndParams;
     pub const Method = Request.Tag;
 
-    fn ArgsType(comptime method: Method) type {
-        for (@typeInfo(Request).@"union".fields) |field| {
-            if (std.mem.eql(u8, field.name, @tagName(method))) {
-                if (field.type == noreturn) @compileError("TODO: impl " ++ @tagName(method));
-                return field.type;
-            }
-        } else unreachable;
-    }
-
-    fn ReturnType(comptime method: Method) type {
-        return ArgsType(method).Response;
-    }
-
     const MethodImpl = struct {
         ctx_ref: *ContextRef,
         callback: *const anyopaque,
@@ -52,8 +39,8 @@ pub const Hooks = struct {
                             const t: *TypedRef = @alignCast(@fieldParentPtr("ctx_ref", ctx_ref));
                             _allocator.destroy(t);
                         }
-                    }.free)
-                }
+                    }.free),
+                },
             };
             return typed;
         }
@@ -80,10 +67,10 @@ pub const Hooks = struct {
         self: *Hooks,
         allocator: std.mem.Allocator,
         context: anytype,
-    ) !void {        
+    ) !void {
         const cref = try ContextRef.init(allocator, context);
         defer cref.ctx_ref.dec(allocator);
-        
+
         const Context = @TypeOf(context);
         inline for (comptime std.meta.declarations(Context)) |decl| {
             const method = comptime for (std.meta.fieldNames(Method)) |method_name| {
@@ -91,12 +78,12 @@ pub const Hooks = struct {
                     break @field(Method, method_name);
                 }
             } else @compileError("No RPC method named: " ++ decl.name);
-            
+
             const callback = @field(Context, decl.name);
             if (self.map.contains(method)) {
                 return error.MethodAlreadyImplemented;
             }
-            
+
             const CRef = @TypeOf(cref.*);
             self.map.put(method, .{
                 .ctx_ref = cref.ctx_ref.inc(), // keeps the cref alive.
@@ -104,10 +91,17 @@ pub const Hooks = struct {
                     fn impl(
                         _allocator: std.mem.Allocator,
                         ctx_ref: *ContextRef,
-                        args: ArgsType(method),
-                    ) anyerror!ReturnType(method) {
+                        args: sig.rpc.methods.Request(method),
+                    ) sig.rpc.methods.Result(method) {
                         const _cref: *CRef = @alignCast(@fieldParentPtr("ctx_ref", ctx_ref));
-                        return @call(.auto, callback, .{_cref.value, _allocator, args});
+                        if (@call(.auto, callback, .{ _cref.value, _allocator, args })) |response| {
+                            return .{ .ok = response };
+                        } else |err| {
+                            return .{ .err = .{
+                                .code = @enumFromInt(@intFromError(err)),
+                                .message = @errorName(err),
+                            } };
+                        }
                     }
                 }.impl),
             });
@@ -119,14 +113,14 @@ pub const Hooks = struct {
         self: *const Hooks,
         allocator: std.mem.Allocator,
         comptime method: Method,
-        args: ArgsType(method),
-    ) !ReturnType(method) {
+        args: sig.rpc.methods.Request(method),
+    ) !sig.rpc.methods.Result(method) {
         const method_impl = self.map.get(method) orelse return error.MethodNotImplemented;
         const impl: *const fn (
             _allocator: std.mem.Allocator,
             ctx_ref: *ContextRef,
-            args: ArgsType(method),
-        ) anyerror!ReturnType(method) = @ptrCast(@alignCast(method_impl.callback));
+            args: sig.rpc.methods.Request(method),
+        ) sig.rpc.methods.Result(method) = @ptrCast(@alignCast(method_impl.callback));
         return impl(allocator, method_impl.ctx_ref, args);
     }
 };

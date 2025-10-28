@@ -6,7 +6,6 @@ const rpc = sig.rpc;
 const server = @import("server.zig");
 const requests = server.requests;
 const connection = server.connection;
-const AccountDataHandle = sig.accounts_db.buffer_pool.AccountDataHandle;
 
 const Logger = sig.trace.Logger("rpc.server.basic");
 
@@ -14,6 +13,7 @@ pub const AcceptAndServeConnectionError =
     error{AcceptError} ||
     error{SetSocketSyncError} ||
     error{SystemIoError} ||
+    error{NoSpaceLeft} ||
     std.mem.Allocator.Error ||
     // TODO: eventually remove this once we move accountsdb operations to a separate thread, and/or handle them in a way that doesn't kill the server.
     error{AccountsDbError};
@@ -51,7 +51,8 @@ pub fn acceptAndServeConnection(server_ctx: *server.Context) AcceptAndServeConne
     );
 
     switch (head_info.method) {
-        .HEAD, .GET => try handleGetOrHead(server_ctx, &request, logger),
+        .HEAD => try handleGetOrHead(.HEAD, server_ctx, &request, logger),
+        .GET => try handleGetOrHead(.GET, server_ctx, &request, logger),
         .POST => try handlePost(server_ctx, &request, logger, head_info),
         else => try respondSimpleErrorStatusBody(&request, logger, .not_found, ""),
     }
@@ -116,97 +117,17 @@ fn parseAndHandleHead(
 }
 
 fn handleGetOrHead(
+    method: enum { HEAD, GET },
     server_ctx: *server.Context,
     request: *std.http.Server.Request,
     logger: Logger,
 ) !void {
-    const conn = request.server.connection;
-    switch (requests.getRequestTargetResolve(
-        .from(logger),
-        request.head.target,
-        &server_ctx.accountsdb.latest_snapshot_gen_info,
-    )) {
-        inline .full_snapshot, .inc_snapshot => |pair| {
-            const snap_info, var full_info_lg = pair;
-            defer full_info_lg.unlock();
+    const target = request.head.target;
+    if (std.mem.startsWith(u8, target, "/")) {
+        const path = target[1..];
 
-            const archive_name_bounded = snap_info.snapshotArchiveName();
-            const archive_name = archive_name_bounded.constSlice();
-
-            const archive_file = server_ctx.accountsdb.snapshot_dir.openFile(
-                archive_name,
-                .{},
-            ) catch |err| {
-                switch (err) {
-                    error.FileNotFound => {
-                        logger.err().logf("not found: {s}\n", .{sig.utils.fmt.tryRealPath(
-                            server_ctx.accountsdb.snapshot_dir,
-                            archive_name,
-                        )});
-                    },
-                    else => {},
-                }
-                return error.SystemIoError;
-            };
-            defer archive_file.close();
-
-            const archive_len = archive_file.getEndPos() catch
-                return error.SystemIoError;
-
-            var send_buffer: [4096]u8 = undefined;
-            var response = request.respondStreaming(.{
-                .send_buffer = &send_buffer,
-                .content_length = archive_len,
-                .respond_options = .{},
-            });
-            // flush the headers, so that if this is a head request, we can mock the response without doing unnecessary work
-            response.flush() catch |err| switch (err) {
-                error.ConnectionResetByPeer => return,
-                else => return error.SystemIoError,
-            };
-
-            if (!response.elide_body) {
-                // use a length which is still a multiple of 2, greater than the send_buffer length,
-                // in order to almost always force the http server method to flush, instead of
-                // pointlessly copying data into the send buffer.
-                const read_buffer_len = comptime std.mem.alignForward(
-                    usize,
-                    send_buffer.len + 1,
-                    2,
-                );
-
-                while (true) {
-                    var read_buffer: [read_buffer_len]u8 = undefined;
-                    const file_data_len =
-                        archive_file.read(&read_buffer) catch |err| switch (err) {
-                            error.ConnectionResetByPeer,
-                            error.ConnectionTimedOut,
-                            => return,
-                            else => return error.SystemIoError,
-                        };
-                    if (file_data_len == 0) break;
-                    const file_data = read_buffer[0..file_data_len];
-                    response.writeAll(file_data) catch |err| switch (err) {
-                        error.ConnectionResetByPeer => return,
-                        else => return error.SystemIoError,
-                    };
-                }
-            } else {
-                std.debug.assert(response.transfer_encoding.content_length == archive_len);
-                // NOTE: in order to avoid needing to actually spend time writing the response body,
-                // just trick the API into thinking we already wrote the entire thing by setting this
-                // to 0.
-                response.transfer_encoding.content_length = 0;
-            }
-
-            response.end() catch |err| switch (err) {
-                error.ConnectionResetByPeer => return,
-                else => return error.SystemIoError,
-            };
-            return;
-        },
-
-        .health => {
+        if (std.mem.eql(u8, path, "health")) {
+            // TODO: https://github.com/Syndica/sig/issues/558
             request.respond("unknown", .{
                 .status = .ok,
                 .keep_alive = false,
@@ -215,19 +136,107 @@ fn handleGetOrHead(
                 else => return error.SystemIoError,
             };
             return;
-        },
+        }
 
-        .genesis_file => {
-            logger.err()
-                .field("conn", conn.address)
-                .logf("Attempt to get our genesis file", .{});
-            try respondSimpleErrorStatusBody(request, logger, .service_unavailable,
-                \\Genesis file get is not yet implemented
-            );
-            return;
-        },
+        if (server_ctx.rpc_hooks.call(
+            server_ctx.allocator,
+            .getSnapshot,
+            .{
+                .path = path,
+                .get = switch (method) {
+                    .HEAD => .size,
+                    .GET => .file,
+                },
+            },
+        )) |snapshot_result| {
+            switch (snapshot_result) {
+                .ok => |result| switch (method) {
+                    .HEAD => {
+                        request.respond("", .{
+                            .status = .ok,
+                            .keep_alive = false,
+                            .content_length = result.size,
+                        }) catch |e| switch (e) {
+                            error.ConnectionResetByPeer => return,
+                            else => return error.SystemIoError,
+                        };
+                        return;
+                    },
+                    .GET => {
+                        const archive_file = result.file;
+                        defer archive_file.close();
 
-        .not_found => {},
+                        const archive_len = archive_file.getEndPos() catch
+                            return error.SystemIoError;
+
+                        var send_buffer: [4096]u8 = undefined;
+                        var response = request.respondStreaming(.{
+                            .send_buffer = &send_buffer,
+                            .content_length = archive_len,
+                            .respond_options = .{},
+                        });
+                        // flush the headers, so that if this is a head request, we can mock the response without doing unnecessary work
+                        response.flush() catch |err| switch (err) {
+                            error.ConnectionResetByPeer => return,
+                            else => return error.SystemIoError,
+                        };
+
+                        if (!response.elide_body) {
+                            // use a length which is still a multiple of 2, greater than the send_buffer length,
+                            // in order to almost always force the http server method to flush, instead of
+                            // pointlessly copying data into the send buffer.
+                            const read_buffer_len = comptime std.mem.alignForward(
+                                usize,
+                                send_buffer.len + 1,
+                                2,
+                            );
+
+                            while (true) {
+                                var read_buffer: [read_buffer_len]u8 = undefined;
+                                const file_data_len =
+                                    archive_file.read(&read_buffer) catch |err| switch (err) {
+                                        error.ConnectionResetByPeer,
+                                        error.ConnectionTimedOut,
+                                        => return,
+                                        else => return error.SystemIoError,
+                                    };
+                                if (file_data_len == 0) break;
+                                const file_data = read_buffer[0..file_data_len];
+                                response.writeAll(file_data) catch |err| switch (err) {
+                                    error.ConnectionResetByPeer => return,
+                                    else => return error.SystemIoError,
+                                };
+                            }
+                        } else {
+                            std.debug.assert(
+                                response.transfer_encoding.content_length == archive_len,
+                            );
+                            // NOTE: in order to avoid needing to actually spend time writing the response body,
+                            // just trick the API into thinking we already wrote the entire thing by setting this
+                            // to 0.
+                            response.transfer_encoding.content_length = 0;
+                        }
+
+                        response.end() catch |err| switch (err) {
+                            error.ConnectionResetByPeer => return,
+                            else => return error.SystemIoError,
+                        };
+                        return;
+                    },
+                },
+                .err => |err| {
+                    try respondSimpleErrorStatusBody(
+                        request,
+                        logger,
+                        .service_unavailable,
+                        err.message,
+                    );
+                    return;
+                },
+            }
+        } else |e| switch (e) {
+            error.MethodNotImplemented => {}, // not found
+        }
     }
 
     try respondSimpleErrorStatusBody(request, logger, .not_found, "");
@@ -387,97 +396,72 @@ fn handleRpcRequest(
         break :json result;
     };
 
-    switch (rpc_request.method) {
-        .getAccountInfo => |params| {
-            const config: rpc.methods.GetAccountInfo.Config = params.config orelse .{};
-            const encoding = config.encoding orelse .base64;
-            if (config.commitment) |commitment| {
-                std.debug.panic("TODO: handle commitment={s}", .{@tagName(commitment)});
-            }
+    switch (@as(rpc.methods.MethodAndParams.Tag, rpc_request.method)) {
+        inline else => |method| {
+            const allocator = json_arena;
+            const result = blk: {
+                // Avoid eager-eval of any inline-else method to call()'s rcp.methods.Request().
+                @setEvalBranchQuota(10_000);
+                inline for (@typeInfo(rpc.methods.MethodAndParams).@"union".fields) |field| {
+                    if (comptime std.mem.eql(u8, field.name, @tagName(method))) {
+                        if (comptime field.type == noreturn) {
+                            try sendFinalMethodNotFound(request, logger, method, rpc_request.id);
+                            return;
+                        }
+                    }
+                }
 
-            const account: sig.accounts_db.AccountsDB.AccountInCacheOrFile, //
-            const account_slot: sig.core.Slot, //
-            var account_lg: sig.accounts_db.AccountsDB.AccountInCacheOrFileLock //
-            = (server_ctx.accountsdb.getSlotAndAccountInSlotRangeWithReadLock(
-                &params.pubkey,
-                // if it's null, it's null, there's no floor to the query.
-                config.minContextSlot orelse null,
-                null,
-            ) catch return error.AccountsDbError) orelse {
-                try respondSimpleErrorStatusBody(request, logger, .range_not_satisfiable, "");
-                return;
-            };
-            defer account_lg.unlock();
-
-            const Facts = struct {
-                executable: bool,
-                lamports: u64,
-                owner: sig.core.Pubkey,
-                rent_epoch: u64,
-                space: u64,
-            };
-
-            const data_handle: AccountDataHandle, //
-            const facts: Facts //
-            = switch (account) {
-                .file => |aif| .{ aif.data, .{
-                    .executable = aif.account_info.executable,
-                    .lamports = aif.account_info.lamports,
-                    .owner = aif.account_info.owner,
-                    .rent_epoch = aif.account_info.rent_epoch,
-                    .space = aif.data.len(),
-                } },
-                .unrooted_map => |um| .{ um.data, .{
-                    .executable = um.executable,
-                    .lamports = um.lamports,
-                    .owner = um.owner,
-                    .rent_epoch = um.rent_epoch,
-                    .space = um.data.len(),
-                } },
-            };
-
-            const account_data_base64 = blk: {
-                var account_data_base64: std.ArrayListUnmanaged(u8) = .{};
-                defer account_data_base64.deinit(server_ctx.allocator);
-                try base64EncodeAccount(
-                    account_data_base64.writer(server_ctx.allocator),
-                    data_handle,
-                    config.dataSlice,
+                break :blk server_ctx.rpc_hooks.call(
+                    allocator,
+                    method,
+                    @field(rpc_request.method, @tagName(method)),
                 );
-                break :blk try account_data_base64.toOwnedSlice(server_ctx.allocator);
-            };
-            defer server_ctx.allocator.free(account_data_base64);
-
-            const response_result: rpc.methods.GetAccountInfo.Response = .{
-                .context = .{
-                    .slot = account_slot,
-                    .apiVersion = "2.0.15",
-                },
-                .value = .{
-                    .data = .{ .encoded = .{
-                        account_data_base64,
-                        encoding,
-                    } },
-                    .executable = facts.executable,
-                    .lamports = facts.lamports,
-                    .owner = facts.owner,
-                    .rentEpoch = facts.rent_epoch,
-                    .space = facts.space,
+            } catch |e| switch (e) {
+                error.MethodNotImplemented => {
+                    try sendFinalMethodNotFound(request, logger, method, rpc_request.id);
+                    return;
                 },
             };
 
-            try writeFinalJsonResponse(request, .{}, .{
-                .jsonrpc = "2.0",
-                .id = rpc_request.id,
-                .result = response_result,
-            });
-            return;
-        },
-        else => {
-            try respondSimpleErrorStatusBody(request, logger, .not_implemented, "");
-            return;
+            return switch (result) {
+                .ok => |response_result| try writeFinalJsonResponse(request, .{}, .{
+                    .jsonrpc = "2.0",
+                    .id = rpc_request.id,
+                    .result = response_result,
+                }),
+                .err => |err| try writeFinalJsonResponse(request, .{}, .{
+                    .jsonrpc = "2.0",
+                    .id = rpc_request.id,
+                    .@"error" = err,
+                }),
+            };
         },
     }
+}
+
+fn sendFinalMethodNotFound(
+    request: *std.http.Server.Request,
+    logger: Logger,
+    comptime method: sig.rpc.methods.MethodAndParams.Tag,
+    request_id: anytype,
+) !void {
+    logger.err().logf("RPC server hooks did not implement {s}", .{@tagName(method)});
+
+    var buffer: [256]u8 = undefined;
+    const message = try std.fmt.bufPrint(
+        &buffer,
+        "RPC server does not currently implement {s}",
+        .{@tagName(method)},
+    );
+
+    return try writeFinalJsonResponse(request, .{}, .{
+        .jsonrpc = "2.0",
+        .id = request_id,
+        .@"error" = rpc.response.Error{
+            .code = .method_not_found,
+            .message = message,
+        },
+    });
 }
 
 fn writeFinalJsonResponse(
@@ -511,31 +495,6 @@ fn writeFinalJsonResponse(
         error.ConnectionResetByPeer => return,
         else => return error.SystemIoError,
     };
-}
-
-fn base64EncodeAccount(
-    writer: anytype,
-    data_handle: AccountDataHandle,
-    data_slice: ?rpc.methods.common.DataSlice,
-) !void {
-    const acc_data_handle = if (data_slice) |ds|
-        // TODO: handle potental integer overflow properly here
-        data_handle.slice(
-            @intCast(ds.offset),
-            @intCast(ds.offset + ds.length),
-        )
-    else
-        data_handle;
-
-    var b64_enc_stream = sig.utils.base64.EncodingStream.init(std.base64.standard.Encoder);
-    const b64_enc_writer_ctx = b64_enc_stream.writerCtx(writer);
-    const b64_enc_writer = b64_enc_writer_ctx.writer();
-
-    var frame_iter = acc_data_handle.iterator();
-    while (frame_iter.nextFrame()) |frame_bytes| {
-        try b64_enc_writer.writeAll(frame_bytes);
-    }
-    try b64_enc_writer_ctx.flush();
 }
 
 const HttpResponseWriter = sig.utils.io.NarrowAnyWriter(std.http.Server.Response.WriteError);

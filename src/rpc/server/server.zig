@@ -11,7 +11,7 @@ pub const connection = @import("connection.zig");
 pub const requests = @import("requests.zig");
 
 pub const basic = @import("basic.zig");
-pub const LinuxIoUring = @import("linux_io_uring.zig").LinuxIoUring;
+// pub const LinuxIoUring = @import("linux_io_uring.zig").LinuxIoUring;
 
 const Logger = sig.trace.Logger("rpc.server");
 
@@ -20,7 +20,7 @@ test {
     _ = requests;
 
     _ = basic;
-    _ = LinuxIoUring;
+    // _ = LinuxIoUring;
 }
 
 /// The minimum buffer read size.
@@ -31,14 +31,14 @@ pub const MIN_READ_BUFFER_SIZE = 4096;
 /// backends.
 pub const WorkPool = union(enum) {
     basic,
-    linux_io_uring: if (LinuxIoUring.can_use) *LinuxIoUring else noreturn,
+    // linux_io_uring: noreturn,
 };
 
 /// The basic state required for the server to operate.
 pub const Context = struct {
     allocator: std.mem.Allocator,
     logger: Logger,
-    accountsdb: *sig.accounts_db.AccountsDB,
+    rpc_hooks: *sig.rpc.Hooks,
 
     /// Wait group for all currently running tasks, used to wait for
     /// all of them to finish before deinitializing.
@@ -52,7 +52,7 @@ pub const Context = struct {
         /// Must be a thread-safe allocator.
         allocator: std.mem.Allocator,
         logger: Logger,
-        accountsdb: *sig.accounts_db.AccountsDB,
+        rpc_hooks: *sig.rpc.Hooks,
 
         /// The size for the read buffer allocated to every request.
         /// Clamped to be greater than or equal to `MIN_READ_BUFFER_SIZE`.
@@ -71,7 +71,7 @@ pub const Context = struct {
         return .{
             .allocator = params.allocator,
             .logger = params.logger,
-            .accountsdb = params.accountsdb,
+            .rpc_hooks = params.rpc_hooks,
 
             .wait_group = .{},
             .read_buffer_size = @max(params.read_buffer_size, MIN_READ_BUFFER_SIZE),
@@ -97,8 +97,8 @@ pub fn serveSpawn(
 }
 
 pub const ServeError =
-    basic.AcceptAndServeConnectionError ||
-    LinuxIoUring.AcceptAndServeConnectionsError;
+    basic.AcceptAndServeConnectionError;
+// LinuxIoUring.AcceptAndServeConnectionsError;
 
 /// Until `exit.load(.acquire)`, accepts and serves connections in a loop.
 pub fn serve(
@@ -112,7 +112,7 @@ pub fn serve(
     while (!exit.load(.acquire)) {
         switch (work_pool) {
             .basic => try basic.acceptAndServeConnection(ctx),
-            .linux_io_uring => |linux| try linux.acceptAndServeConnections(ctx),
+            // .linux_io_uring => |linux| try linux.acceptAndServeConnections(ctx),
         }
     }
 }
@@ -188,25 +188,30 @@ test "serveSpawn snapshots" {
         defer man.deinit(allocator);
     }
 
+    var rpc_hooks = sig.rpc.Hooks{};
+    defer rpc_hooks.deinit(accountsdb.allocator);
+
+    try accountsdb.registerRPCHooks(&rpc_hooks);
+
     const rpc_port = random.intRangeLessThan(u16, 8_000, 10_000);
     const sock_addr = std.net.Address.initIp4(.{ 0, 0, 0, 0 }, rpc_port);
     var server_ctx = try Context.init(.{
         .allocator = allocator,
         .logger = .from(logger),
-        .accountsdb = &accountsdb,
+        .rpc_hooks = &rpc_hooks,
         .socket_addr = sock_addr,
         .read_buffer_size = 4096,
         .reuse_address = true,
     });
     defer server_ctx.joinDeinit();
 
-    var maybe_liou = try LinuxIoUring.init(&server_ctx);
-    defer if (maybe_liou) |*liou| liou.deinit();
+    // var maybe_liou = try LinuxIoUring.init(&server_ctx);
+    // defer if (maybe_liou) |*liou| liou.deinit();
 
     for ([_]?WorkPool{
         .basic,
         // TODO: see above TODO about `if (a) |*b|` on `?noreturn`.
-        if (maybe_liou != null) .{ .linux_io_uring = &maybe_liou.? } else null,
+        // if (maybe_liou != null) .{ .linux_io_uring = &maybe_liou.? } else null,
     }) |maybe_work_pool| {
         const work_pool = maybe_work_pool orelse continue;
         logger.info().logf("Running with {s}", .{@tagName(work_pool)});
@@ -283,20 +288,24 @@ test "serveSpawn getAccountInfo" {
         expected_slot,
     );
 
+    var rpc_hooks = sig.rpc.Hooks{};
+    defer rpc_hooks.deinit(allocator);
+    try accountsdb.registerRPCHooks(&rpc_hooks);
+
     const test_rpc_port = random.intRangeLessThan(u16, 8_000, 10_000);
     const test_sock_addr = std.net.Address.initIp4(.{ 0, 0, 0, 0 }, test_rpc_port);
     var server_ctx = try Context.init(.{
         .allocator = allocator,
         .logger = .from(logger),
-        .accountsdb = &accountsdb,
+        .rpc_hooks = &rpc_hooks,
         .socket_addr = test_sock_addr,
         .read_buffer_size = 4096,
         .reuse_address = true,
     });
     defer server_ctx.joinDeinit();
 
-    var maybe_liou = try LinuxIoUring.init(&server_ctx);
-    defer if (maybe_liou) |*liou| liou.deinit();
+    // var maybe_liou = try LinuxIoUring.init(&server_ctx);
+    // defer if (maybe_liou) |*liou| liou.deinit();
 
     for ([_]?WorkPool{
         .basic,
