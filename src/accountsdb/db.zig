@@ -1071,9 +1071,8 @@ pub const AccountsDB = struct {
     }
 
     pub const AccountHashesConfig = union(enum) {
-        /// compute hash from `(min_slot?, max_slot]`
+        /// compute hash from `(null, max_slot]`
         FullAccountHash: struct {
-            min_slot: ?Slot = null,
             max_slot: Slot,
         },
         /// compute hash from `(min_slot, max_slot?]`
@@ -1081,6 +1080,20 @@ pub const AccountsDB = struct {
             min_slot: Slot,
             max_slot: ?Slot = null,
         },
+
+        fn min_slot(self: AccountHashesConfig) ?Slot {
+            return switch (self) {
+                .FullAccountHash => null,
+                .IncrementalAccountHash => |iac| iac.min_slot,
+            };
+        }
+
+        fn max_slot(self: AccountHashesConfig) ?Slot {
+            return switch (self) {
+                .FullAccountHash => |fah| fah.max_slot,
+                .IncrementalAccountHash => |iac| iac.max_slot,
+            };
+        }
     };
 
     pub const ComputeAccountHashesAndLamportsError =
@@ -1382,10 +1395,6 @@ pub const AccountsDB = struct {
         defer arena.deinit();
         const allocator = arena.allocator();
 
-        const maybe_min_slot: ?Slot, const maybe_max_slot: ?Slot = switch (config) {
-            inline else => |cfg| .{ cfg.min_slot, cfg.max_slot },
-        };
-
         for (shards, results, 0..) |*shard_rw, *result, i| {
             // get and sort pubkeys inshardn
             // PERF: may be holding this lock for too long
@@ -1403,47 +1412,41 @@ pub const AccountsDB = struct {
 
                 const ref_head = key.value_ptr;
 
-                // "mix in" account into hash
-                const latest_slot = slot: {
-                    // get the most recent state of the account
+                // "mix in" latest version of account into hash
+                {
                     const max_slot_ref = slotListMaxWithinBounds(
                         ref_head.ref_ptr,
-                        maybe_min_slot,
-                        maybe_max_slot,
+                        config.min_slot(),
+                        config.max_slot(),
                     ) orelse continue;
+                    const latest_account = try self.getAccountFromRef(allocator, max_slot_ref);
+                    defer latest_account.deinit(allocator);
+                    lt_hash.mixIn(latest_account.ltHash(max_slot_ref.pubkey));
+                    total_lamports += latest_account.lamports;
+                }
 
-                    const account = try self.getAccountFromRef(allocator, max_slot_ref);
-                    defer account.deinit(allocator);
+                // "mix out" previous latest version of account from hash (if applicable)
+                if (config.min_slot()) |min_slot| {
+                    // we are calculating the incremental hash
+                    std.debug.assert(config == .IncrementalAccountHash);
 
-                    lt_hash.mixIn(account.ltHash(max_slot_ref.pubkey));
+                    // We've just mixed in the latest entry within our range, i.e. the latest
+                    // account modification in our incremental snapshot. We should mix out the
+                    // latest account found *before* our incremental snapshot (i.e. in the full
+                    // snapshot), so that we can combine our result with the previously calculated
+                    // full snapshot hash in order to produce the new full accounts hash.
 
-                    total_lamports += account.lamports;
-
-                    if (max_slot_ref.slot == 0) continue;
-                    break :slot max_slot_ref.slot;
-                };
-
-                // "mix out" old version of account from hash
-                {
-                    // I expect this branch to not be taken for full snapshots, however it would
-                    // still be entirely legal.
-                    // The expected case is that we are validating an incremental snapshot, whose
-                    // lt_hash is initialised by the full snapshot's lt_hash. Accounts modified
-                    // in the incremental snapshot may also exist in the full snapshot, meaning we
-                    // are effectively removing the old entry.
-
-                    // remove previous state
                     const previous_slot_ref = slotListMaxWithinBounds(
                         ref_head.ref_ptr,
                         null,
-                        latest_slot - 1,
+                        min_slot,
                     ) orelse continue;
 
-                    const account = try self.getAccountFromRef(allocator, previous_slot_ref);
-                    defer account.deinit(allocator);
+                    const prev_latest = try self.getAccountFromRef(allocator, previous_slot_ref);
+                    defer prev_latest.deinit(allocator);
 
-                    lt_hash.mixOut(account.ltHash(previous_slot_ref.pubkey));
-                    total_subtracted += account.lamports;
+                    lt_hash.mixOut(prev_latest.ltHash(previous_slot_ref.pubkey));
+                    total_subtracted += prev_latest.lamports;
                 }
             }
 
