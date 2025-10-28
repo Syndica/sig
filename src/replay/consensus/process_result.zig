@@ -226,11 +226,7 @@ fn updateConsensusForFrozenSlot(params: ProcessResultParams, slot: Slot) !void {
     }
 
     // Move unfrozen_gossip_verified_vote_hashes entries to latest_validator_votes
-    if (params
-        .unfrozen_gossip_verified_vote_hashes.votes_per_slot
-        .get(slot)) |slot_hashes_const|
-    {
-        var slot_hashes = slot_hashes_const;
+    if (params.unfrozen_gossip_verified_vote_hashes.votes_per_slot.getPtr(slot)) |slot_hashes| {
         if (slot_hashes.fetchSwapRemove(hash)) |kv| {
             var new_frozen_voters = kv.value;
             defer new_frozen_voters.deinit(params.allocator);

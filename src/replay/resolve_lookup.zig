@@ -25,7 +25,7 @@ const ProgramMeta = sig.runtime.InstructionInfo.ProgramMeta;
 const RuntimeTransaction = sig.runtime.transaction_execution.RuntimeTransaction;
 const SlotHashes = sig.runtime.sysvar.SlotHashes;
 
-const LockableAccount = sig.replay.account_locks.LockableAccount;
+const LockableAccount = sig.replay.AccountLocks.LockableAccount;
 
 const Logger = sig.trace.Logger("replay-resolve");
 

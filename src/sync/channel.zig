@@ -1,8 +1,8 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const sig = @import("../sig.zig");
 const tracy = @import("tracy");
 
-const Backoff = @import("backoff.zig").Backoff;
 const Atomic = std.atomic.Value;
 const Allocator = std.mem.Allocator;
 
@@ -382,6 +382,29 @@ pub fn Channel(T: type) type {
         }
     };
 }
+
+pub const Backoff = struct {
+    step: u32 = 0,
+
+    const SPIN_LIMIT = 6;
+
+    pub fn snooze(_: *Backoff) void {
+        switch (builtin.cpu.arch) {
+            .aarch64 => asm volatile ("wfe" ::: "memory"),
+            else => std.atomic.spinLoopHint(),
+        }
+    }
+
+    pub fn spin(b: *Backoff) void {
+        for (0..(@as(u32, 1) << @intCast(b.step))) |_| {
+            std.atomic.spinLoopHint();
+        }
+
+        if (b.step <= SPIN_LIMIT) {
+            b.step += 1;
+        }
+    }
+};
 
 const expect = std.testing.expect;
 
