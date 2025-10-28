@@ -215,6 +215,7 @@ pub const GossipService = struct {
         /// Can be supplied as a different allocator in order to reduce contention.
         /// Must be thread safe.
         gossip_data_allocator: std.mem.Allocator,
+        /// Shallow copied / ownership transferred
         my_contact_info: ContactInfo,
         my_keypair: KeyPair,
         maybe_entrypoints: ?[]const SocketAddr,
