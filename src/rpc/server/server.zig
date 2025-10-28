@@ -118,7 +118,7 @@ pub fn serve(
 }
 
 test "serveSpawn snapshots" {
-    if (sig.build_options.no_network_tests) return error.SkipZigTest;
+    // if (sig.build_options.no_network_tests) return error.SkipZigTest;
     const allocator = std.testing.allocator;
 
     var prng = std.Random.DefaultPrng.init(0);
@@ -242,7 +242,7 @@ test "serveSpawn snapshots" {
 }
 
 test "serveSpawn getAccountInfo" {
-    if (sig.build_options.no_network_tests) return error.SkipZigTest;
+    // if (sig.build_options.no_network_tests) return error.SkipZigTest;
     const allocator = std.testing.allocator;
 
     var prng = std.Random.DefaultPrng.init(0);
