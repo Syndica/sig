@@ -894,3 +894,235 @@ test "accounts_db.download: test finding peers" {
     allocator.free(peers);
     try std.testing.expect(result.is_me_count == 10);
 }
+
+test "PeerSearchResult format" {
+    const allocator = std.testing.allocator;
+
+    const Case = struct { PeerSearchResult, []const u8 };
+
+    const cases: []const Case = &.{
+        .{ .{}, "" },
+        .{ .{ .is_me_count = 2 }, "is_me_count: 2 " },
+        .{ .{ .is_blacklist = 0 }, "" },
+        .{ .{ .is_blacklist = 2 }, "is_blacklist: 2 " },
+        .{ .{ .is_me_count = 2, .is_blacklist = 1 }, "is_me_count: 2 is_blacklist: 1 " },
+    };
+
+    for (cases, 0..) |case, i| {
+        errdefer std.debug.print("case {} failed: {}\n", .{ i, case });
+
+        const result, const expected = case;
+        const buf = try std.fmt.allocPrint(allocator, "{}", .{result});
+        defer allocator.free(buf);
+        try std.testing.expectEqualStrings(expected, buf);
+    }
+}
+
+test "findpeers leak check" {
+    const test_fn = struct {
+        fn f(
+            allocator: std.mem.Allocator,
+            gossip_table: *GossipTable,
+            contact_infos: []ThreadSafeContactInfo,
+            my_shred_version: usize,
+            my_pubkey: Pubkey,
+        ) !void {
+            const peers, _ = try findPeersToDownloadFrom(
+                allocator,
+                gossip_table,
+                contact_infos,
+                my_shred_version,
+                my_pubkey,
+                &.{},
+                null,
+            );
+            allocator.free(peers);
+        }
+    }.f;
+
+    const allocator = std.testing.allocator;
+    var table = try GossipTable.init(allocator, allocator);
+    defer table.deinit();
+
+    var prng = std.Random.DefaultPrng.init(0);
+    const random = prng.random();
+
+    const my_shred_version: usize = 19;
+    const my_pubkey = Pubkey.initRandom(random);
+
+    const contact_infos: []ThreadSafeContactInfo = try allocator.alloc(ThreadSafeContactInfo, 10);
+    defer allocator.free(contact_infos);
+
+    for (contact_infos) |*ci| {
+        var lci = LegacyContactInfo.default(Pubkey.initRandom(random));
+        lci.rpc.setPort(19); // no long unspecified = valid
+        ci.* = ThreadSafeContactInfo.fromLegacyContactInfo(lci);
+        ci.shred_version = 19; // matching shred version
+    }
+
+    try std.testing.checkAllAllocationFailures(allocator, test_fn, .{
+        &table,
+        contact_infos,
+        my_shred_version,
+        my_pubkey,
+    });
+}
+
+test "downloadInfo Incremental" {
+    const test_fn = struct {
+        fn f(
+            allocator: std.mem.Allocator,
+            peer: PeerSnapshotHash,
+            full_snapshot_slot: Slot,
+            expected: ?[]const u8,
+        ) !void {
+            _, _, const url = (try downloadInfo(
+                allocator,
+                .incremental,
+                peer,
+                full_snapshot_slot,
+            )) orelse return error.NoSnapshotForPeer;
+            defer allocator.free(url);
+
+            try std.testing.expectEqualStrings(expected.?, url);
+        }
+    }.f;
+
+    const allocator = std.testing.allocator;
+
+    const Case = struct { PeerSnapshotHash, error{NoSnapshotForPeer}![]const u8 };
+
+    const cases: []const Case = &.{
+        .{
+            .{
+                .contact_info = .{
+                    .pubkey = .ZEROES,
+                    .shred_version = 0,
+                    .gossip_addr = null,
+                    .rpc_addr = null,
+                    .tpu_addr = null,
+                    .tvu_addr = null,
+                    .tpu_quic_addr = null,
+                },
+                .full_snapshot = .{ .slot = 100, .hash = .ZEROES },
+                .inc_snapshot = .{ .slot = 101, .hash = .ZEROES },
+            },
+            error.NoSnapshotForPeer,
+        },
+        .{
+            .{
+                .contact_info = .{
+                    .pubkey = .ZEROES,
+                    .shred_version = 0,
+                    .gossip_addr = null,
+                    .rpc_addr = .UNSPECIFIED,
+                    .tpu_addr = null,
+                    .tvu_addr = null,
+                    .tpu_quic_addr = null,
+                },
+                .full_snapshot = .{ .slot = 100, .hash = .ZEROES },
+                .inc_snapshot = null,
+            },
+            error.NoSnapshotForPeer,
+        },
+        .{
+            .{
+                .contact_info = .{
+                    .pubkey = .ZEROES,
+                    .shred_version = 0,
+                    .gossip_addr = null,
+                    .rpc_addr = .UNSPECIFIED,
+                    .tpu_addr = null,
+                    .tvu_addr = null,
+                    .tpu_quic_addr = null,
+                },
+                .full_snapshot = .{ .slot = 100, .hash = .ZEROES },
+                .inc_snapshot = .{ .slot = 101, .hash = .ZEROES },
+            },
+            "http://0.0.0.0:0/incremental-snapshot-100-101-11111111111111111111111111111111.tar.zst",
+        },
+    };
+
+    for (cases) |case| {
+        const peer, const expected = case;
+
+        if (expected) |expected_url| {
+            try std.testing.checkAllAllocationFailures(allocator, test_fn, .{
+                peer,
+                100,
+                expected_url,
+            });
+        } else |expected_error| {
+            try std.testing.expectError(
+                expected_error,
+                std.testing.checkAllAllocationFailures(allocator, test_fn, .{
+                    peer,
+                    100,
+                    null,
+                }),
+            );
+        }
+    }
+}
+
+test "downloadInfo Full" {
+    const test_fn = struct {
+        fn f(
+            allocator: std.mem.Allocator,
+            peer: PeerSnapshotHash,
+            expected: ?[]const u8,
+        ) !void {
+            _, _, const url = (try downloadInfo(
+                allocator,
+                .full,
+                peer,
+                null,
+            )) orelse return error.NoSnapshotForPeer;
+            defer allocator.free(url);
+
+            try std.testing.expectEqualStrings(expected.?, url);
+        }
+    }.f;
+
+    const allocator = std.testing.allocator;
+
+    const Case = struct { PeerSnapshotHash, error{NoSnapshotForPeer}![]const u8 };
+
+    const cases: []const Case = &.{
+        .{
+            .{
+                .contact_info = .{
+                    .pubkey = .ZEROES,
+                    .shred_version = 0,
+                    .gossip_addr = null,
+                    .rpc_addr = .UNSPECIFIED,
+                    .tpu_addr = null,
+                    .tvu_addr = null,
+                    .tpu_quic_addr = null,
+                },
+                .full_snapshot = .{ .slot = 100, .hash = .ZEROES },
+                .inc_snapshot = null,
+            },
+            "http://0.0.0.0:0/snapshot-100-11111111111111111111111111111111.tar.zst",
+        },
+    };
+
+    for (cases) |case| {
+        const peer, const expected = case;
+
+        if (expected) |expected_url| {
+            try std.testing.checkAllAllocationFailures(allocator, test_fn, .{
+                peer,
+                expected_url,
+            });
+        } else |expected_error| {
+            try std.testing.expectError(
+                expected_error,
+                std.testing.checkAllAllocationFailures(allocator, test_fn, .{
+                    peer,
+                    null,
+                }),
+            );
+        }
+    }
+}
