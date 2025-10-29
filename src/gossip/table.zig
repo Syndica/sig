@@ -223,80 +223,73 @@ pub const GossipTable = struct {
 
             // inserted new entry
             return .InsertedNewEntry;
-
-            // should overwrite existing entry
-        } else if (versioned_value.overwrites(&result.entry.getVersionedData())) {
-            const old_entry = result.entry.metadata_ptr.*;
-
-            switch (value.data) {
-                .ContactInfo => |*info| {
-                    try self.shred_versions.put(info.pubkey, info.shred_version);
-                },
-                .LegacyContactInfo => |*info| {
-                    try self.shred_versions.put(info.id, info.shred_version);
-                    const contact_info = try info.toContactInfo(self.allocator);
-                    var old_info = try self.converted_contact_infos.fetchPut(
-                        info.id,
-                        contact_info,
-                    );
-                    old_info.?.value.deinit();
-                },
-                .Vote => {
-                    const did_remove = self.votes.swapRemove(old_entry.cursor_on_insertion);
-                    std.debug.assert(did_remove);
-                    try self.votes.put(self.cursor, entry_index);
-                },
-                .EpochSlots => {
-                    const did_remove = self.epoch_slots.swapRemove(
-                        old_entry.cursor_on_insertion,
-                    );
-                    std.debug.assert(did_remove);
-                    try self.epoch_slots.put(self.cursor, entry_index);
-                },
-                .DuplicateShred => {
-                    const did_remove = self.duplicate_shreds.swapRemove(
-                        old_entry.cursor_on_insertion,
-                    );
-                    std.debug.assert(did_remove);
-                    try self.duplicate_shreds.put(self.cursor, entry_index);
-                },
-                else => {},
-            }
-
-            // remove and insert to make sure the shard ordering is oldest-to-newest
-            // NOTE: do we need the ordering to be oldest-to-newest?
-            self.shards.remove(entry_index, &old_entry.value_hash);
-            try self.shards.insert(entry_index, &metadata.value_hash);
-
-            const did_remove = self.entries.swapRemove(old_entry.cursor_on_insertion);
-            std.debug.assert(did_remove);
-            try self.entries.put(self.cursor, entry_index);
-
-            // As long as the pubkey does not change, self.records
-            // does not need to be updated.
-            std.debug.assert(result.entry.getGossipData().id().equals(&origin));
-
-            try self.purged.insert(old_entry.value_hash, now);
-
-            const overwritten_data = result.entry.getGossipData();
-            result.entry.setVersionedData(versioned_value);
-            self.cursor += 1;
-
+        } else switch (versioned_value.overwrites(&result.entry.getVersionedData())) {
             // overwrite existing entry
-            return .{ .OverwroteExistingEntry = overwritten_data };
+            .new => {
+                const old_entry = result.entry.metadata_ptr.*;
 
-            // do nothing
-        } else {
-            const current_entry = result.entry.metadata_ptr.*;
+                switch (value.data) {
+                    .ContactInfo => |*info| {
+                        try self.shred_versions.put(info.pubkey, info.shred_version);
+                    },
+                    .LegacyContactInfo => |*info| {
+                        try self.shred_versions.put(info.id, info.shred_version);
+                        const contact_info = try info.toContactInfo(self.allocator);
+                        var old_info = try self.converted_contact_infos.fetchPut(
+                            info.id,
+                            contact_info,
+                        );
+                        old_info.?.value.deinit();
+                    },
+                    .Vote => {
+                        const did_remove = self.votes.swapRemove(old_entry.cursor_on_insertion);
+                        std.debug.assert(did_remove);
+                        try self.votes.put(self.cursor, entry_index);
+                    },
+                    .EpochSlots => {
+                        const did_remove = self.epoch_slots.swapRemove(
+                            old_entry.cursor_on_insertion,
+                        );
+                        std.debug.assert(did_remove);
+                        try self.epoch_slots.put(self.cursor, entry_index);
+                    },
+                    .DuplicateShred => {
+                        const did_remove = self.duplicate_shreds.swapRemove(
+                            old_entry.cursor_on_insertion,
+                        );
+                        std.debug.assert(did_remove);
+                        try self.duplicate_shreds.put(self.cursor, entry_index);
+                    },
+                    else => {},
+                }
 
-            if (current_entry.value_hash.order(&metadata.value_hash) != .eq) {
-                // if hash isnt the same and override() is false then msg is old
+                // remove and insert to make sure the shard ordering is oldest-to-newest
+                // NOTE: do we need the ordering to be oldest-to-newest?
+                self.shards.remove(entry_index, &old_entry.value_hash);
+                try self.shards.insert(entry_index, &metadata.value_hash);
+
+                const did_remove = self.entries.swapRemove(old_entry.cursor_on_insertion);
+                std.debug.assert(did_remove);
+                try self.entries.put(self.cursor, entry_index);
+
+                // As long as the pubkey does not change, self.records
+                // does not need to be updated.
+                std.debug.assert(result.entry.getGossipData().id().equals(&origin));
+
+                try self.purged.insert(old_entry.value_hash, now);
+
+                const overwritten_data = result.entry.getGossipData();
+                result.entry.setVersionedData(versioned_value);
+                self.cursor += 1;
+
+                // overwrite existing entry
+                return .{ .OverwroteExistingEntry = overwritten_data };
+            },
+            .old => {
                 try self.purged.insert(metadata.value_hash, now);
                 return .IgnoredOldValue;
-            } else {
-                // hash is the same then its a duplicate value which isnt stored
-                return .IgnoredDuplicateValue;
-            }
+            },
+            .eq => return .IgnoredDuplicateValue,
         }
     }
 

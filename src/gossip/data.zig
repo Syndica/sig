@@ -48,22 +48,33 @@ pub const GossipVersionedData = struct {
         self.data.deinit(allocator);
     }
 
-    pub fn overwrites(new_value: *const @This(), old_value: *const @This()) bool {
+    /// Returns which value should overwrite the other, or if they're equal
+    pub fn overwrites(new_value: *const @This(), old_value: *const @This()) Overwrites {
         // labels must match
         std.debug.assert(@intFromEnum(new_value.data.label()) == @intFromEnum(old_value.data.label()));
 
         const new_ts = new_value.data.wallclock();
         const old_ts = old_value.data.wallclock();
 
-        // TODO: improve the return type here
         if (new_ts > old_ts) {
-            return true;
+            return .new;
         } else if (new_ts < old_ts) {
-            return false;
+            return .old;
         } else {
-            return old_value.metadata.value_hash.order(&new_value.metadata.value_hash) == .lt;
+            // If the timestamps are equal, the outcome is determined by comparing the hash sizes
+            return switch (new_value.metadata.value_hash.order(&old_value.metadata.value_hash)) {
+                .gt => .new,
+                .lt => .old,
+                .eq => .eq,
+            };
         }
     }
+
+    pub const Overwrites = enum {
+        new,
+        old,
+        eq,
+    };
 
     pub fn signedData(self: GossipVersionedData) SignedGossipData {
         return .{
