@@ -359,7 +359,7 @@ jobs:
             - test-vectors/
       - run:
           name: Run Fixtures
-          command: ./conformance/scripts/fixtures.sh
+          command: ./conformance/scripts/ci-run.sh
 
 workflows:
   check_linux:
@@ -418,5 +418,5 @@ workflows:
           requires:
             - build_check_macos
       - test_macos_hashmap_ledger:
-            requires:
+          requires:
             - build_check_macos
