@@ -222,7 +222,7 @@ pub const ForkChoice = struct {
 
         var it = self.fork_infos.valueIterator();
         while (it.next()) |fork_info| {
-            total_stake += fork_info.stake_for_subtree;
+            total_stake += fork_info.stake_for_slot;
 
             // Count active forks (those that are candidates)
             if (!fork_info.isCandidate()) continue;
