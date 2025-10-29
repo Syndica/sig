@@ -930,7 +930,7 @@ fn trackNewVotesAndNotifyConfirmations(
 
             const maybe_hash: ?Hash = get_hash: {
                 if (slot == last_vote_slot) break :get_hash last_vote_hash;
-                break :get_hash slot_data_provider.getSlotHash(last_vote_slot);
+                break :get_hash slot_data_provider.getSlotHash(slot);
             };
             const hash: Hash = maybe_hash orelse {
                 // In this case the supposed ancestor of this vote is missing. This can happen
