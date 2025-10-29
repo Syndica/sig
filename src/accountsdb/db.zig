@@ -11,10 +11,8 @@ const snapgen = sig.accounts_db.snapshot.data.generate;
 
 const Resolution = @import("../benchmarks.zig").Resolution;
 
-const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
 const ArrayListUnmanaged = std.ArrayListUnmanaged;
-const Blake3 = std.crypto.hash.Blake3;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 
 const BankFields = sig.core.BankFields;
@@ -26,8 +24,8 @@ const StatusCache = sig.accounts_db.snapshot.StatusCache;
 
 const AccountsDbFields = sig.accounts_db.snapshot.data.AccountsDbFields;
 const BankHashStats = sig.accounts_db.snapshot.data.BankHashStats;
-const BankIncrementalSnapshotPersistence =
-    sig.accounts_db.snapshot.data.BankIncrementalSnapshotPersistence;
+const ObsoleteIncrementalSnapshotPersistence =
+    sig.accounts_db.snapshot.data.ObsoleteIncrementalSnapshotPersistence;
 const FullAndIncrementalManifest = sig.accounts_db.snapshot.data.FullAndIncrementalManifest;
 const FullSnapshotFileInfo = sig.accounts_db.snapshot.data.FullSnapshotFileInfo;
 const IncrementalSnapshotFileInfo = sig.accounts_db.snapshot.data.IncrementalSnapshotFileInfo;
@@ -44,11 +42,11 @@ const ShardedPubkeyRefMap = sig.accounts_db.index.ShardedPubkeyRefMap;
 const Account = sig.core.Account;
 const Ancestors = sig.core.Ancestors;
 const Hash = sig.core.Hash;
+const LtHash = sig.core.LtHash;
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 const AccountSharedData = sig.runtime.AccountSharedData;
 
-const NestedHashTree = sig.utils.merkle_tree.NestedHashTree;
 const GeyserWriter = sig.geyser.GeyserWriter;
 
 const Counter = sig.prometheus.counter.Counter;
@@ -406,12 +404,10 @@ pub const AccountsDB = struct {
             try self.validateLoadFromSnapshot(.{
                 .full_slot = full_man.bank_fields.slot,
                 .expected_full = .{
-                    .accounts_hash = full_man.accounts_db_fields.bank_hash_info.accounts_hash,
-                    .capitalization = full_man.bank_fields.capitalization,
+                    .accounts_hash = full_man.bank_extra.accounts_lt_hash,
                 },
-                .expected_incremental = if (maybe_inc_persistence) |inc_persistence| .{
-                    .accounts_hash = inc_persistence.incremental_hash,
-                    .capitalization = inc_persistence.incremental_capitalization,
+                .expected_incremental = if (maybe_inc_persistence) |_| .{
+                    .accounts_hash = full_inc_manifest.incremental.?.bank_extra.accounts_lt_hash,
                 } else null,
             });
             self.logger.info().logf(
@@ -456,21 +452,15 @@ pub const AccountsDB = struct {
 
         {
             const full_man = full_inc_manifest.full;
-            const maybe_inc_persistence = if (full_inc_manifest.incremental) |inc|
-                inc.bank_extra.snapshot_persistence
-            else
-                null;
 
             var validate_timer = try sig.time.Timer.start();
             try self.validateLoadFromSnapshot(.{
                 .full_slot = full_man.bank_fields.slot,
                 .expected_full = .{
-                    .accounts_hash = full_man.accounts_db_fields.bank_hash_info.accounts_hash,
-                    .capitalization = full_man.bank_fields.capitalization,
+                    .accounts_hash = full_man.bank_extra.accounts_lt_hash,
                 },
-                .expected_incremental = if (maybe_inc_persistence) |inc_persistence| .{
-                    .accounts_hash = inc_persistence.incremental_hash,
-                    .capitalization = inc_persistence.incremental_capitalization,
+                .expected_incremental = if (full_inc_manifest.incremental) |inc| .{
+                    .accounts_hash = inc.bank_extra.accounts_lt_hash,
                 } else null,
             });
             self.logger.info().logf(
@@ -1081,9 +1071,8 @@ pub const AccountsDB = struct {
     }
 
     pub const AccountHashesConfig = union(enum) {
-        /// compute hash from `(min_slot?, max_slot]`
+        /// compute hash from `(null, max_slot]`
         FullAccountHash: struct {
-            min_slot: ?Slot = null,
             max_slot: Slot,
         },
         /// compute hash from `(min_slot, max_slot?]`
@@ -1091,6 +1080,20 @@ pub const AccountsDB = struct {
             min_slot: Slot,
             max_slot: ?Slot = null,
         },
+
+        fn minSlot(self: AccountHashesConfig) ?Slot {
+            return switch (self) {
+                .FullAccountHash => null,
+                .IncrementalAccountHash => |iac| iac.min_slot,
+            };
+        }
+
+        fn maxSlot(self: AccountHashesConfig) ?Slot {
+            return switch (self) {
+                .FullAccountHash => |fah| fah.max_slot,
+                .IncrementalAccountHash => |iac| iac.max_slot,
+            };
+        }
     };
 
     pub const ComputeAccountHashesAndLamportsError =
@@ -1111,7 +1114,7 @@ pub const AccountsDB = struct {
     fn computeAccountHashesAndLamports(
         self: *AccountsDB,
         config: AccountHashesConfig,
-    ) !struct { Hash, u64 } {
+    ) !struct { LtHash, u64 } {
         const zone = tracy.Zone.init(@src(), .{
             .name = "accountsdb computeAccountHashesAndLamports",
         });
@@ -1122,56 +1125,50 @@ pub const AccountsDB = struct {
         // going higher will only lead to more contention in the buffer pool reads
         const n_threads = @min(6, @as(u32, @truncate(try std.Thread.getCpuCount())));
 
-        // alloc the result
-        const hashes = try self.allocator.alloc(std.ArrayListUnmanaged(Hash), n_threads);
-        defer {
-            for (hashes) |*h| h.deinit(self.allocator);
-            self.allocator.free(hashes);
-        }
-        @memset(hashes, .{});
-
-        const lamports = try self.allocator.alloc(u64, n_threads);
-        defer self.allocator.free(lamports);
-        @memset(lamports, 0);
-
         // split processing the bins over muliple threads
         self.logger.info().logf(
             "[{} threads] collecting hashes from accounts",
             .{n_threads},
         );
-        try spawnThreadTasks(self.allocator, getHashesFromIndexMultiThread, .{
-            .data_len = self.account_index.pubkey_ref_map.numberOfShards(),
-            .max_threads = n_threads,
-            .params = .{
-                self,
-                config,
-                self.allocator,
-                hashes,
-                lamports,
+
+        const task_results: []HashedShard = try self.allocator.alloc(
+            HashedShard,
+            self.account_index.pubkey_ref_map.numberOfShards(),
+        );
+        defer self.allocator.free(task_results);
+
+        try spawnThreadTasks(
+            self.allocator,
+            getHashesFromIndexMultiThread,
+            .{
+                .data_len = self.account_index.pubkey_ref_map.numberOfShards(),
+                .max_threads = n_threads,
+                .params = .{
+                    self,
+                    self.allocator,
+                    config,
+                    task_results,
+                },
             },
-        });
+        );
+
+        const total_lamports, const accounts_hash = blk: {
+            var lamports_sum: u64 = 0;
+            var hash: LtHash = .IDENTITY;
+            for (task_results) |result| {
+                lamports_sum += result.lamports;
+                hash.mixIn(result.hash);
+            }
+            // do subtraction after, to avoid potential overflows when
+            // .subtract > .lamports for a shard.
+            for (task_results) |result| {
+                lamports_sum -|= result.subtract;
+            }
+            break :blk .{ lamports_sum, hash };
+        };
+
         self.logger.debug().logf("collecting hashes from accounts took: {s}", .{timer.read()});
         timer.reset();
-
-        self.logger.info().logf("computing the merkle root over accounts...", .{});
-        const nested_hashes = try self.allocator.alloc([]Hash, n_threads);
-        defer self.allocator.free(nested_hashes);
-        for (nested_hashes, 0..) |*h, i| {
-            h.* = hashes[i].items;
-        }
-        const hash_tree = NestedHashTree{ .items = nested_hashes };
-        const accounts_hash =
-            try sig.utils.merkle_tree.computeMerkleRoot(&hash_tree, MERKLE_FANOUT);
-        self.logger.debug().logf(
-            "computing the merkle root over accounts took {s}",
-            .{timer.read()},
-        );
-        timer.reset();
-
-        var total_lamports: u64 = 0;
-        for (lamports) |lamport| {
-            total_lamports += lamport;
-        }
 
         return .{
             accounts_hash,
@@ -1237,8 +1234,7 @@ pub const AccountsDB = struct {
         expected_incremental: ?ExpectedSnapInfo,
 
         pub const ExpectedSnapInfo = struct {
-            accounts_hash: Hash,
-            capitalization: u64,
+            accounts_hash: LtHash,
         };
     };
 
@@ -1282,20 +1278,12 @@ pub const AccountsDB = struct {
             },
         });
 
-        if (params.expected_full.accounts_hash.order(&accounts_hash) != .eq) {
+        if (!params.expected_full.accounts_hash.eql(accounts_hash)) {
             self.logger.err().logf(
                 "incorrect accounts hash: expected vs calculated: {d} vs {d}",
                 .{ params.expected_full.accounts_hash, accounts_hash },
             );
             return error.IncorrectAccountsHash;
-        }
-
-        if (params.expected_full.capitalization != total_lamports) {
-            self.logger.err().logf(
-                "incorrect total lamports: expected vs calculated: {d} vs {d}",
-                .{ params.expected_full.capitalization, total_lamports },
-            );
-            return error.IncorrectTotalLamports;
         }
 
         if (maybe_latest_snapshot_info.*) |latest_snapshot_info| {
@@ -1306,8 +1294,8 @@ pub const AccountsDB = struct {
             // have occurred since the first call to this function.
             std.debug.assert(latest_snapshot_info.full.slot == params.full_slot);
             std.debug.assert(latest_snapshot_info.full.hash.eql(accounts_hash));
-            std.debug.assert(latest_snapshot_info.full.capitalization == total_lamports);
         }
+
         maybe_first_snapshot_info.* = .{
             .full = .{
                 .slot = params.full_slot,
@@ -1324,7 +1312,9 @@ pub const AccountsDB = struct {
 
             const inc_slot = self.getLargestRootedSlot() orelse 0;
 
-            const accounts_delta_hash, //
+            var accounts_delta_hash = accounts_hash;
+
+            const incr_hash, //
             const incremental_lamports //
             = try self.computeAccountHashesAndLamports(.{
                 .IncrementalAccountHash = .{
@@ -1332,19 +1322,16 @@ pub const AccountsDB = struct {
                     .max_slot = inc_slot,
                 },
             });
+            _ = incremental_lamports;
+            accounts_delta_hash.mixIn(incr_hash);
 
-            if (expected_incremental.capitalization != incremental_lamports) {
+            if (!expected_incremental.accounts_hash.eql(accounts_delta_hash)) {
                 self.logger.err().logf(
-                    "incorrect incremental lamports: expected vs calculated: {d} vs {d}",
-                    .{ expected_incremental.capitalization, incremental_lamports },
-                );
-                return error.IncorrectIncrementalLamports;
-            }
-
-            if (expected_incremental.accounts_hash.order(&accounts_delta_hash) != .eq) {
-                self.logger.err().logf(
-                    "incorrect accounts delta hash: expected vs calculated: {d} vs {d}",
-                    .{ expected_incremental.accounts_hash, accounts_delta_hash },
+                    "incorrect accounts delta hash: expected vs calculated: {} vs {}",
+                    .{
+                        expected_incremental.accounts_hash.checksum(),
+                        accounts_delta_hash.checksum(),
+                    },
                 );
                 return error.IncorrectAccountsDeltaHash;
             }
@@ -1354,40 +1341,38 @@ pub const AccountsDB = struct {
             if (p_maybe_first_inc.*) |first_inc| {
                 std.debug.assert(first_inc.slot == inc_slot);
                 std.debug.assert(first_inc.hash.eql(accounts_delta_hash));
-                std.debug.assert(first_inc.capitalization == incremental_lamports);
             }
+
             p_maybe_first_inc.* = .{
                 .slot = inc_slot,
                 .hash = accounts_delta_hash,
-                .capitalization = incremental_lamports,
             };
         }
 
         maybe_latest_snapshot_info.* = maybe_first_snapshot_info.*;
     }
 
+    const HashedShard = struct {
+        lamports: u64,
+        subtract: u64,
+
+        hash: LtHash,
+    };
+
     /// multithread entrypoint for getHashesFromIndex
     pub fn getHashesFromIndexMultiThread(
         self: *AccountsDB,
+        tmp_allocator: std.mem.Allocator,
         config: AccountsDB.AccountHashesConfig,
-        /// Allocator shared by all the arraylists in `hashes`.
-        hashes_allocator: std.mem.Allocator,
-        hashes: []std.ArrayListUnmanaged(Hash),
-        total_lamports: []u64,
+        results: []HashedShard,
         task: sig.utils.thread.TaskParams,
     ) !void {
-        const zone = tracy.Zone.init(@src(), .{
-            .name = "accountsdb getHashesFromIndexMultiThread",
-        });
-        defer zone.deinit();
-
-        try getHashesFromIndex(
+        return try getHashesFromIndex(
             self,
+            tmp_allocator,
             config,
             self.account_index.pubkey_ref_map.shards[task.start_index..task.end_index],
-            hashes_allocator,
-            &hashes[task.thread_id],
-            &total_lamports[task.thread_id],
+            results[task.start_index..task.end_index],
             task.thread_id == 0,
         );
     }
@@ -1395,138 +1380,95 @@ pub const AccountsDB = struct {
     /// populates the account hashes and total lamports across a given shard slice
     fn getHashesFromIndex(
         self: *AccountsDB,
+        tmp_allocator: std.mem.Allocator,
         config: AccountsDB.AccountHashesConfig,
         shards: []ShardedPubkeyRefMap.RwPubkeyRefMap,
-        hashes_allocator: std.mem.Allocator,
-        hashes: *std.ArrayListUnmanaged(Hash),
-        total_lamports: *u64,
-        // when we multithread this function we only want to print on the first thread
+        results: []HashedShard,
         print_progress: bool,
     ) !void {
         const zone = tracy.Zone.init(@src(), .{ .name = "accountsdb getHashesFromIndex" });
         defer zone.deinit();
 
-        var total_n_pubkeys: usize = 0;
-        for (shards) |*shard_rw| {
-            const shard, var shard_lg = shard_rw.readWithLock();
-            defer shard_lg.unlock();
-
-            total_n_pubkeys += shard.count();
-        }
-        try hashes.ensureTotalCapacity(hashes_allocator, total_n_pubkeys);
-
-        var keys_buf = try std.ArrayList(Pubkey).initCapacity(self.allocator, 1000);
-        defer keys_buf.deinit();
-
-        var local_total_lamports: u64 = 0;
         var timer = try sig.time.Timer.start();
         var progress_timer = try std.time.Timer.start();
-        for (shards, 1..) |*shard_rw, count| {
+
+        var arena = std.heap.ArenaAllocator.init(tmp_allocator);
+        defer arena.deinit();
+        const allocator = arena.allocator();
+
+        for (shards, results, 0..) |*shard_rw, *result, i| {
             // get and sort pubkeys inshardn
             // PERF: may be holding this lock for too long
             const shard, var shard_lg = shard_rw.readWithLock();
             defer shard_lg.unlock();
 
-            const n_pubkeys_in_shard = shard.count();
-            if (n_pubkeys_in_shard == 0) continue;
+            var total_lamports: u64 = 0;
+            var lt_hash: LtHash = .IDENTITY;
 
-            try keys_buf.ensureTotalCapacity(n_pubkeys_in_shard);
-            keys_buf.clearRetainingCapacity();
+            var total_subtracted: u64 = 0;
 
-            const shard_pubkeys: []Pubkey = blk: {
-                var key_iter = shard.iterator();
-                while (key_iter.next()) |entry| {
-                    keys_buf.appendAssumeCapacity(entry.key_ptr.*);
-                }
-                break :blk keys_buf.items;
-            };
+            var iter = shard.iterator();
+            while (iter.next()) |key| {
+                defer std.debug.assert(arena.reset(.retain_capacity));
 
-            std.mem.sort(Pubkey, shard_pubkeys, {}, struct {
-                fn lessThan(_: void, lhs: Pubkey, rhs: Pubkey) bool {
-                    return std.mem.lessThan(u8, &lhs.data, &rhs.data);
-                }
-            }.lessThan);
+                const ref_head = key.value_ptr;
 
-            // get the hashes
-            for (shard_pubkeys) |key| {
-                const ref_head = shard.getPtr(key).?;
-
-                // get the most recent state of the account
-                const ref_ptr = ref_head.ref_ptr;
-                const max_slot_ref = switch (config) {
-                    inline //
-                    .FullAccountHash,
-                    .IncrementalAccountHash,
-                    => |config_pl| slotListMaxWithinBounds(
-                        ref_ptr,
-                        config_pl.min_slot,
-                        config_pl.max_slot,
-                    ),
-                } orelse continue;
-
-                // read the account state
-                var account_hash, const lamports =
-                    try self.getAccountHashAndLamportsFromRef(max_slot_ref.location);
-
-                // modify its hash, if needed
-                if (lamports == 0) {
-                    switch (config) {
-                        // for full snapshots, only include non-zero lamport accounts
-                        .FullAccountHash => continue,
-                        // zero-lamport accounts for incrementals = hash(pubkey)
-                        .IncrementalAccountHash => Blake3.hash(&key.data, &account_hash.data, .{}),
-                    }
-                } else {
-                    // hashes aren't always stored correctly in snapshots
-                    if (account_hash.eql(Hash.ZEROES)) {
-                        const account, var account_lg =
-                            try self.getAccountFromRefWithReadLock(max_slot_ref);
-                        defer {
-                            account_lg.unlock();
-                            switch (account) {
-                                .file => |in_file_account| in_file_account.deinit(self.allocator),
-                                .unrooted_map => {},
-                            }
-                        }
-
-                        account_hash = switch (account) {
-                            .file => |in_file_account| blk: {
-                                const info = in_file_account.account_info;
-                                var iterator = in_file_account.data.iterator();
-                                var hash = Hash.ZEROES;
-                                sig.core.account.hashAccount(
-                                    info.lamports,
-                                    &iterator,
-                                    &info.owner,
-                                    info.executable,
-                                    info.rent_epoch,
-                                    &in_file_account.store_info.pubkey,
-                                    &hash.data,
-                                );
-                                break :blk hash;
-                            },
-                            .unrooted_map => |unrooted_account| unrooted_account.hash(key),
-                        };
-                    }
+                // "mix in" latest version of account into hash
+                {
+                    const max_slot_ref = slotListMaxWithinBounds(
+                        ref_head.ref_ptr,
+                        config.minSlot(),
+                        config.maxSlot(),
+                    ) orelse continue;
+                    const latest_account = try self.getAccountFromRef(allocator, max_slot_ref);
+                    defer latest_account.deinit(allocator);
+                    lt_hash.mixIn(latest_account.ltHash(max_slot_ref.pubkey));
+                    total_lamports += latest_account.lamports;
                 }
 
-                hashes.appendAssumeCapacity(account_hash);
-                local_total_lamports += lamports;
+                // "mix out" previous latest version of account from hash (if applicable)
+                if (config.minSlot()) |min_slot| {
+                    // we are calculating the incremental hash
+                    std.debug.assert(config == .IncrementalAccountHash);
+
+                    // We've just mixed in the latest entry within our range, i.e. the latest
+                    // account modification in our incremental snapshot. We should mix out the
+                    // latest account found *before* our incremental snapshot (i.e. in the full
+                    // snapshot), so that we can combine our result with the previously calculated
+                    // full snapshot hash in order to produce the new full accounts hash.
+
+                    const previous_slot_ref = slotListMaxWithinBounds(
+                        ref_head.ref_ptr,
+                        null,
+                        min_slot,
+                    ) orelse continue;
+
+                    const prev_latest = try self.getAccountFromRef(allocator, previous_slot_ref);
+                    defer prev_latest.deinit(allocator);
+
+                    lt_hash.mixOut(prev_latest.ltHash(previous_slot_ref.pubkey));
+                    total_subtracted += prev_latest.lamports;
+                }
             }
+
+            result.* = .{
+                .hash = lt_hash,
+                .lamports = total_lamports,
+                .subtract = total_subtracted,
+            };
 
             if (print_progress and progress_timer.read() > DB_LOG_RATE.asNanos()) {
                 printTimeEstimate(
                     self.logger,
                     &timer,
                     shards.len,
-                    count,
+                    i + 1,
                     "gathering account hashes",
                     "thread0",
                 );
                 progress_timer.reset();
             }
         }
-        total_lamports.* = local_total_lamports;
     }
 
     /// creates a unique accounts file associated with a slot. uses the
@@ -2417,7 +2359,7 @@ pub const AccountsDB = struct {
             /// The full slot.
             slot: Slot,
             /// The full accounts hash.
-            hash: Hash,
+            hash: LtHash,
             /// The total lamports at the full slot.
             capitalization: u64,
         };
@@ -2426,9 +2368,7 @@ pub const AccountsDB = struct {
             /// The incremental slot relative to the base slot (.full.slot).
             slot: Slot,
             /// The incremental accounts delta hash, including zero-lamport accounts.
-            hash: Hash,
-            /// The capitalization from the base slot to the incremental slot.
-            capitalization: u64,
+            hash: LtHash,
         };
     };
 
@@ -2448,7 +2388,7 @@ pub const AccountsDB = struct {
     };
 
     pub const GenerateFullSnapshotResult = struct {
-        hash: Hash,
+        hash: LtHash,
         capitalization: u64,
     };
 
@@ -2494,7 +2434,7 @@ pub const AccountsDB = struct {
         std.debug.assert(zstd_buffer.len != 0);
         std.debug.assert(params.target_slot <= self.getLargestRootedSlot() orelse 0);
 
-        const full_hash, const full_capitalization = compute: {
+        const full_lt_hash, const full_capitalization = compute: {
             check_first: {
                 const maybe_first_snapshot_info, var first_snapshot_info_lg =
                     self.first_snapshot_load_info.readWithLock();
@@ -2513,8 +2453,7 @@ pub const AccountsDB = struct {
             });
         };
 
-        // TODO: this is a temporary value
-        const delta_hash = Hash.ZEROES;
+        const full_hash = full_lt_hash.checksum();
 
         const archive_file = blk: {
             const archive_info: FullSnapshotFileInfo = .{
@@ -2565,8 +2504,6 @@ pub const AccountsDB = struct {
                 .stored_meta_write_version = params.deprecated_stored_meta_write_version,
                 .slot = params.target_slot,
                 .bank_hash_info = .{
-                    .accounts_delta_hash = delta_hash,
-                    .accounts_hash = full_hash,
                     .stats = bank_hash_stats,
                 },
                 .rooted_slots = &.{},
@@ -2578,7 +2515,7 @@ pub const AccountsDB = struct {
                 .snapshot_persistence = null,
                 .epoch_accounts_hash = null,
                 .versioned_epoch_stakes = .{},
-                .accounts_lt_hash = null,
+                .accounts_lt_hash = full_lt_hash,
             },
         };
 
@@ -2620,13 +2557,13 @@ pub const AccountsDB = struct {
                     const full = old_snapshot_info.full;
                     try self.deleteOldSnapshotFile(.full, .{
                         .slot = full.slot,
-                        .hash = full.hash,
+                        .hash = full.hash.checksum(),
                     });
                     if (old_snapshot_info.inc) |inc| {
                         try self.deleteOldSnapshotFile(.incremental, .{
                             .base_slot = old_snapshot_info.full.slot,
                             .slot = inc.slot,
-                            .hash = inc.hash,
+                            .hash = inc.hash.checksum(),
                         });
                     }
                 },
@@ -2636,14 +2573,14 @@ pub const AccountsDB = struct {
         maybe_latest_snapshot_info.* = .{
             .full = .{
                 .slot = params.target_slot,
-                .hash = full_hash,
+                .hash = full_lt_hash,
                 .capitalization = full_capitalization,
             },
             .inc = null,
         };
 
         return .{
-            .hash = full_hash,
+            .hash = full_lt_hash,
             .capitalization = full_capitalization,
         };
     }
@@ -2663,7 +2600,24 @@ pub const AccountsDB = struct {
         deprecated_stored_meta_write_version: u64 = 0,
     };
 
-    pub const GenerateIncSnapshotResult = BankIncrementalSnapshotPersistence;
+    pub const GenerateIncSnapshotResult = struct {
+        full_slot: Slot,
+        full_hash: LtHash,
+        full_capitalization: u64,
+        incremental_hash: LtHash,
+
+        fn intoSnapshotPersistence(
+            self: GenerateIncSnapshotResult,
+        ) ObsoleteIncrementalSnapshotPersistence {
+            return .{
+                .full_slot = self.full_slot,
+                .full_hash = self.full_hash.checksum(),
+                .full_capitalization = self.full_capitalization,
+                .incremental_hash = self.incremental_hash.checksum(),
+                .incremental_capitalization = 0,
+            };
+        }
+    };
 
     pub fn generateIncrementalSnapshot(
         self: *AccountsDB,
@@ -2710,9 +2664,7 @@ pub const AccountsDB = struct {
 
         const full_snapshot_info: SnapshotGenerationInfo.Full = latest_snapshot_info.full;
 
-        const incremental_hash, //
-        const incremental_capitalization //
-        = compute: {
+        const incremental_hash = compute: {
             check_first: {
                 const maybe_first_snapshot_info, var first_snapshot_info_lg =
                     self.first_snapshot_load_info.readWithLock();
@@ -2723,25 +2675,26 @@ pub const AccountsDB = struct {
                 if (first.full.slot != full_snapshot_info.slot) break :check_first;
                 if (first_inc.slot != params.target_slot) break :check_first;
 
-                break :compute .{ first_inc.hash, first_inc.capitalization };
+                break :compute first_inc.hash;
             }
 
-            break :compute try self.computeAccountHashesAndLamports(.{
+            var hash = full_snapshot_info.hash;
+            const incremental = (try self.computeAccountHashesAndLamports(.{
                 .IncrementalAccountHash = .{
                     .min_slot = full_snapshot_info.slot,
                     .max_slot = params.target_slot,
                 },
-            });
-        };
+            }))[0];
+            hash.mixIn(incremental);
 
-        // TODO: compute the correct value during account writes
-        const delta_hash = Hash.ZEROES;
+            break :compute hash;
+        };
 
         const archive_file = blk: {
             const archive_info: IncrementalSnapshotFileInfo = .{
                 .base_slot = full_snapshot_info.slot,
                 .slot = params.target_slot,
-                .hash = incremental_hash,
+                .hash = incremental_hash.checksum(),
             };
             const archive_file_name_bounded = archive_info.snapshotArchiveName();
             const archive_file_name = archive_file_name_bounded.constSlice();
@@ -2788,12 +2741,11 @@ pub const AccountsDB = struct {
         };
         defer serializable_file_map.deinit(self.allocator);
 
-        const snap_persistence: BankIncrementalSnapshotPersistence = .{
+        const snap_persistence: GenerateIncSnapshotResult = .{
             .full_slot = full_snapshot_info.slot,
             .full_hash = full_snapshot_info.hash,
             .full_capitalization = full_snapshot_info.capitalization,
             .incremental_hash = incremental_hash,
-            .incremental_capitalization = incremental_capitalization,
         };
 
         params.bank_fields.slot = params.target_slot; // !
@@ -2805,8 +2757,6 @@ pub const AccountsDB = struct {
                 .stored_meta_write_version = params.deprecated_stored_meta_write_version,
                 .slot = params.target_slot,
                 .bank_hash_info = .{
-                    .accounts_delta_hash = delta_hash,
-                    .accounts_hash = Hash.ZEROES,
                     .stats = bank_hash_stats,
                 },
                 .rooted_slots = &.{},
@@ -2814,11 +2764,11 @@ pub const AccountsDB = struct {
             },
             .bank_extra = .{
                 .lamports_per_signature = params.lamports_per_signature,
-                .snapshot_persistence = snap_persistence,
+                .snapshot_persistence = snap_persistence.intoSnapshotPersistence(),
                 // TODO: the other fields default to empty/null, but this may not always be correct.
                 .epoch_accounts_hash = null,
                 .versioned_epoch_stakes = .{},
-                .accounts_lt_hash = null,
+                .accounts_lt_hash = latest_snapshot_info.full.hash,
             },
         };
 
@@ -2843,12 +2793,15 @@ pub const AccountsDB = struct {
                 sig.gossip.data.SnapshotHashes.IncrementalSnapshotsList;
             const incremental = IncrementalSnapshotsList.initSingle(.{
                 .slot = params.target_slot,
-                .hash = incremental_hash,
+                .hash = incremental_hash.checksum(),
             });
             try push_msg_queue.queue.append(.{
                 .SnapshotHashes = .{
                     .from = gossip_view.my_pubkey,
-                    .full = .{ .slot = full_snapshot_info.slot, .hash = full_snapshot_info.hash },
+                    .full = .{
+                        .slot = full_snapshot_info.slot,
+                        .hash = full_snapshot_info.hash.checksum(),
+                    },
                     .incremental = incremental,
                     .wallclock = 0, // the wallclock will be set when it's processed in the queue
                 },
@@ -2865,7 +2818,7 @@ pub const AccountsDB = struct {
                 .delete_old => try self.deleteOldSnapshotFile(.incremental, .{
                     .base_slot = full_snapshot_info.slot,
                     .slot = old_inc_snapshot_info.slot,
-                    .hash = old_inc_snapshot_info.hash,
+                    .hash = old_inc_snapshot_info.hash.checksum(),
                 }),
             }
         }
@@ -2873,7 +2826,6 @@ pub const AccountsDB = struct {
         latest_snapshot_info.inc = .{
             .slot = params.target_slot,
             .hash = incremental_hash,
-            .capitalization = incremental_capitalization,
         };
 
         return snap_persistence;
@@ -3687,18 +3639,27 @@ test "load and validate from test snapshot - single threaded" {
         full_inc_manifest.deinit(allocator);
     }
 
-    const maybe_inc_persistence = full_inc_manifest.incremental.?.bank_extra.snapshot_persistence;
+    const maybe_inc_persistence = if (full_inc_manifest.incremental) |inc|
+        inc.bank_extra.snapshot_persistence
+    else
+        null;
+
     try accounts_db.validateLoadFromSnapshot(.{
         .full_slot = full_inc_manifest.full.bank_fields.slot,
         .expected_full = .{
-            .accounts_hash = full_inc_manifest.full.accounts_db_fields.bank_hash_info.accounts_hash,
-            .capitalization = full_inc_manifest.full.bank_fields.capitalization,
+            .accounts_hash = full_inc_manifest.full.bank_extra.accounts_lt_hash,
         },
-        .expected_incremental = if (maybe_inc_persistence) |inc_persistence| .{
-            .accounts_hash = inc_persistence.incremental_hash,
-            .capitalization = inc_persistence.incremental_capitalization,
+        .expected_incremental = if (maybe_inc_persistence) |_| .{
+            .accounts_hash = full_inc_manifest.incremental.?.bank_extra.accounts_lt_hash,
         } else null,
     });
+
+    // use the genesis to verify loading
+    const genesis_path = sig.TEST_DATA_DIR ++ "genesis.bin";
+    const genesis_config = try sig.core.GenesisConfig.init(allocator, genesis_path);
+    defer genesis_config.deinit(allocator);
+
+    try full_inc_manifest.full.bank_fields.validate(&genesis_config);
 }
 
 test "load and validate from test snapshot - disk index" {
@@ -3718,16 +3679,13 @@ test "load and validate from test snapshot - disk index" {
         full_inc_manifest.deinit(allocator);
     }
 
-    const maybe_inc_persistence = full_inc_manifest.incremental.?.bank_extra.snapshot_persistence;
     try accounts_db.validateLoadFromSnapshot(.{
         .full_slot = full_inc_manifest.full.bank_fields.slot,
         .expected_full = .{
-            .accounts_hash = full_inc_manifest.full.accounts_db_fields.bank_hash_info.accounts_hash,
-            .capitalization = full_inc_manifest.full.bank_fields.capitalization,
+            .accounts_hash = full_inc_manifest.full.bank_extra.accounts_lt_hash,
         },
-        .expected_incremental = if (maybe_inc_persistence) |inc_persistence| .{
-            .accounts_hash = inc_persistence.incremental_hash,
-            .capitalization = inc_persistence.incremental_capitalization,
+        .expected_incremental = if (full_inc_manifest.incremental) |inc| .{
+            .accounts_hash = inc.bank_extra.accounts_lt_hash,
         } else null,
     });
 }
@@ -3749,16 +3707,13 @@ test "load and validate from test snapshot - parallel" {
         full_inc_manifest.deinit(allocator);
     }
 
-    const maybe_inc_persistence = full_inc_manifest.incremental.?.bank_extra.snapshot_persistence;
     try accounts_db.validateLoadFromSnapshot(.{
         .full_slot = full_inc_manifest.full.bank_fields.slot,
         .expected_full = .{
-            .accounts_hash = full_inc_manifest.full.accounts_db_fields.bank_hash_info.accounts_hash,
-            .capitalization = full_inc_manifest.full.bank_fields.capitalization,
+            .accounts_hash = full_inc_manifest.full.bank_extra.accounts_lt_hash,
         },
-        .expected_incremental = if (maybe_inc_persistence) |inc_persistence| .{
-            .accounts_hash = inc_persistence.incremental_hash,
-            .capitalization = inc_persistence.incremental_capitalization,
+        .expected_incremental = if (full_inc_manifest.incremental) |inc| .{
+            .accounts_hash = inc.bank_extra.accounts_lt_hash,
         } else null,
     });
 }
@@ -3784,10 +3739,10 @@ test "load sysvars" {
         const inc = full_inc_manifest.incremental;
         const expected_clock: sysvar.Clock = .{
             .slot = (inc orelse full).bank_fields.slot,
-            .epoch_start_timestamp = 1733349736,
+            .epoch_start_timestamp = 1761088804,
             .epoch = (inc orelse full).bank_fields.epoch,
             .leader_schedule_epoch = 1,
-            .unix_timestamp = 1733350255,
+            .unix_timestamp = 1761088804,
         };
         try std.testing.expectEqual(
             expected_clock,
@@ -3901,8 +3856,8 @@ test "generate snapshot & update gossip snapshot hashes" {
     const full_hash = full_gen_result.hash;
 
     try std.testing.expectEqual(
-        full_inc_manifest.full.accounts_db_fields.bank_hash_info.accounts_hash,
-        full_gen_result.hash,
+        full_inc_manifest.full.bank_extra.accounts_lt_hash.checksum(),
+        full_gen_result.hash.checksum(),
     );
     try std.testing.expectEqual(
         full_inc_manifest.full.bank_fields.capitalization,
@@ -3920,7 +3875,7 @@ test "generate snapshot & update gossip snapshot hashes" {
         try std.testing.expectEqualDeep(
             SnapshotHashes{
                 .from = Pubkey.fromPublicKey(&my_keypair.public_key),
-                .full = .{ .slot = full_slot, .hash = full_hash },
+                .full = .{ .slot = full_slot, .hash = full_hash.checksum() },
                 .incremental = SnapshotHashes.IncrementalSnapshotsList.EMPTY,
                 // set to zero when pushed to the queue, because it would be set in `drainPushQueueToGossipTable`.
                 .wallclock = 0,
@@ -3942,10 +3897,6 @@ test "generate snapshot & update gossip snapshot hashes" {
         });
         const inc_hash = inc_gen_result.incremental_hash;
 
-        try std.testing.expectEqual(
-            inc_manifest.bank_extra.snapshot_persistence,
-            inc_gen_result,
-        );
         try std.testing.expectEqual(
             full_slot,
             inc_gen_result.full_slot,
@@ -3970,10 +3921,10 @@ test "generate snapshot & update gossip snapshot hashes" {
             try std.testing.expectEqualDeep(
                 SnapshotHashes{
                     .from = Pubkey.fromPublicKey(&my_keypair.public_key),
-                    .full = .{ .slot = full_slot, .hash = full_hash },
+                    .full = .{ .slot = full_slot, .hash = full_hash.checksum() },
                     .incremental = SnapshotHashes.IncrementalSnapshotsList.initSingle(.{
                         .slot = inc_slot,
-                        .hash = inc_hash,
+                        .hash = inc_hash.checksum(),
                     }),
                     // set to zero when pushed to the queue, because it would be set in `drainPushQueueToGossipTable`.
                     .wallclock = 0,
@@ -4077,12 +4028,10 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
             try accounts_db.validateLoadFromSnapshot(.{
                 .full_slot = full_manifest.bank_fields.slot,
                 .expected_full = .{
-                    .accounts_hash = full_manifest.accounts_db_fields.bank_hash_info.accounts_hash,
-                    .capitalization = full_manifest.bank_fields.capitalization,
+                    .accounts_hash = full_manifest.bank_extra.accounts_lt_hash,
                 },
-                .expected_incremental = if (maybe_inc_persistence) |inc_persistence| .{
-                    .accounts_hash = inc_persistence.incremental_hash,
-                    .capitalization = inc_persistence.incremental_capitalization,
+                .expected_incremental = if (maybe_inc_persistence) |_| .{
+                    .accounts_hash = full_inc_manifest.incremental.?.bank_extra.accounts_lt_hash,
                 } else null,
             });
             const validate_duration = validate_timer.read();
