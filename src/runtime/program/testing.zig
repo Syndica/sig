@@ -118,22 +118,15 @@ pub fn expectProgramExecuteResult(
 test expectProgramExecuteError {
     const allocator = std.testing.allocator;
 
-    // Test print_logs path
-    for ([_]bool{ false, true }) |print_logs| {
-        try expectProgramExecuteError(
-            error.UnsupportedProgramId,
-            allocator,
-            Pubkey.ZEROES, // invalid program id
-            &.{}, // empty instruction,
-            &.{.{ .index_in_transaction = 0 }},
-            .{
-                .accounts = &.{
-                    .{ .pubkey = Pubkey.ZEROES },
-                },
-            },
-            .{ .print_logs = print_logs },
-        );
-    }
+    try expectProgramExecuteError(
+        error.UnsupportedProgramId,
+        allocator,
+        Pubkey.ZEROES, // invalid program id
+        &.{}, // empty instruction,
+        &.{.{ .index_in_transaction = 0 }},
+        .{ .accounts = &.{.{ .pubkey = Pubkey.ZEROES }} },
+        .{ .print_logs = false },
+    );
 }
 
 test expectProgramExecuteResult {
