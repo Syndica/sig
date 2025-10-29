@@ -912,10 +912,7 @@ test "PeerSearchResult format" {
     };
 
     for (cases) |case| {
-        const result, const expected = case;
-        const buf = try std.fmt.allocPrint(allocator, "{}", .{result});
-        defer allocator.free(buf);
-        try std.testing.expectEqualStrings(expected, buf);
+        try std.testing.expectFmt(expected, "{}", .{result});
     }
 }
 
