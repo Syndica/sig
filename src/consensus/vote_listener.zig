@@ -474,23 +474,43 @@ fn processVotesOnce(
     vote_processing_time: *VoteProcessingTiming,
     metrics: VoteListenerMetrics,
 ) !void {
-    const root_slot = slot_data_provider.rootSlot();
-    const root_hash = slot_data_provider.getSlotHash(root_slot);
+    const RootSnapshot = struct {
+        slot: sig.core.Slot,
+        hash: ?sig.core.Hash,
+        ancestors: sig.core.Ancestors,
+    };
+
+    const maybe_root_snapshot: ?RootSnapshot = blk: {
+        const slot_tracker, var lg = slot_data_provider.slot_tracker_rw.readWithLock();
+        defer lg.unlock();
+
+        const slot = slot_tracker.root;
+        if (slot_tracker.get(slot)) |ref| {
+            const hash = ref.state.hash.readCopy();
+            const ancestors = try ref.constants.ancestors.clone(allocator);
+            break :blk RootSnapshot{ .slot = slot, .hash = hash, .ancestors = ancestors };
+        }
+        break :blk null;
+    };
+    defer if (maybe_root_snapshot) |*root_snapshot| root_snapshot.ancestors.deinit(allocator);
 
     if (last_process_root.elapsed().asMillis() > DEFAULT_MS_PER_SLOT) {
-        const unrooted_optimistic_slots = try confirmation_verifier.verifyForUnrootedOptimisticSlots(
-            allocator,
-            ledger,
-            .{
-                .slot = root_slot,
-                .hash = root_hash,
-                .ancestors = slot_data_provider.getSlotAncestorsPtr(root_slot).?, // must exist for the root slot
-            },
-        );
-        defer allocator.free(unrooted_optimistic_slots);
+        if (maybe_root_snapshot) |root_snapshot| {
+            const unrooted_optimistic_slots =
+                try confirmation_verifier.verifyForUnrootedOptimisticSlots(
+                    allocator,
+                    ledger,
+                    .{
+                        .slot = root_snapshot.slot,
+                        .hash = root_snapshot.hash,
+                        .ancestors = &root_snapshot.ancestors,
+                    },
+                );
+            defer allocator.free(unrooted_optimistic_slots);
 
-        vote_tracker.progressWithNewRootBank(allocator, root_slot);
-        last_process_root.* = .now();
+            vote_tracker.progressWithNewRootBank(allocator, root_snapshot.slot);
+            last_process_root.* = .now();
+        }
     }
 
     const confirmed_slots = try listenAndConfirmVotes(
