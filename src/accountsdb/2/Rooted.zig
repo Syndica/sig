@@ -17,6 +17,12 @@ const ROW = sql.SQLITE_ROW;
 handle: *sql.sqlite3,
 put_stmt: *sql.sqlite3_stmt,
 
+fn err(self: *Rooted, code: c_int) !void {
+    if (code == OK) return;
+    std.debug.print("err ({}): {s}\n", .{ code, sql.sqlite3_errmsg(self.handle) });
+    return error.SqliteError;
+}
+
 pub fn init(file_path: [:0]const u8) !Rooted {
     const db = blk: {
         var maybe_db: ?*sql.sqlite3 = null;
@@ -38,18 +44,20 @@ pub fn init(file_path: [:0]const u8) !Rooted {
         \\
         \\
         \\CREATE TABLE IF NOT EXISTS entries (
-        \\  address BLOB(32) PRIMARY KEY,
+        \\  address BLOB(32) NOT NULL UNIQUE,
         \\  lamports INTEGER NOT NULL,
         \\  data BLOB NOT NULL,
         \\  owner BLOB(32) NOT NULL,
         \\  executable INTEGER NOT NULL,
         \\  rent_epoch INTEGER NOT NULL
-        \\) WITHOUT ROWID;
+        \\);
         \\
     ;
 
-    if (sql.sqlite3_exec(db, schema, null, null, null) != OK)
+    if (sql.sqlite3_exec(db, schema, null, null, null) != OK) {
+        std.debug.print("err  {s}\n", .{sql.sqlite3_errmsg(db)});
         return error.FailedToCreateTables;
+    }
 
     const put_stmt = blk: {
         const query =
@@ -59,8 +67,10 @@ pub fn init(file_path: [:0]const u8) !Rooted {
         ;
 
         var stmt: ?*sql.sqlite3_stmt = null;
-        if (sql.sqlite3_prepare_v2(db, query, -1, &stmt, null) != OK)
+        if (sql.sqlite3_prepare_v2(db, query, -1, &stmt, null) != OK) {
+            std.debug.print("err  {s}\n", .{sql.sqlite3_errmsg(db)});
             return error.FailedToPreparePut;
+        }
         break :blk stmt orelse return error.PutStmtNull;
     };
 
@@ -75,23 +85,23 @@ pub fn deinit(self: *Rooted) void {
 pub fn put(self: *Rooted, address: Pubkey, account: AccountSharedData) !void {
     const stmt = self.put_stmt;
 
-    _ = sql.sqlite3_bind_blob(stmt, 1, &address.data, Pubkey.SIZE, sql.SQLITE_STATIC);
-    _ = sql.sqlite3_bind_int64(stmt, 2, @bitCast(account.lamports));
-    _ = sql.sqlite3_bind_blob(
+    try self.err(sql.sqlite3_bind_blob(stmt, 1, &address.data, Pubkey.SIZE, sql.SQLITE_STATIC));
+    try self.err(sql.sqlite3_bind_int64(stmt, 2, @bitCast(account.lamports)));
+    try self.err(sql.sqlite3_bind_blob(
         stmt,
         3,
         account.data.ptr,
         @intCast(account.data.len),
         sql.SQLITE_STATIC,
-    );
-    _ = sql.sqlite3_bind_blob(stmt, 4, &account.owner.data, Pubkey.SIZE, sql.SQLITE_STATIC);
-    _ = sql.sqlite3_bind_int(stmt, 5, @intFromBool(account.executable));
-    _ = sql.sqlite3_bind_int64(stmt, 6, @bitCast(account.rent_epoch));
+    ));
+    try self.err(sql.sqlite3_bind_blob(stmt, 4, &account.owner.data, Pubkey.SIZE, sql.SQLITE_STATIC));
+    try self.err(sql.sqlite3_bind_int(stmt, 5, @intFromBool(account.executable)));
+    try self.err(sql.sqlite3_bind_int64(stmt, 6, @bitCast(account.rent_epoch)));
 
     if (sql.sqlite3_step(stmt) != DONE)
         return error.StepFailed;
 
-    _ = sql.sqlite3_reset(stmt);
+    try self.err(sql.sqlite3_reset(stmt));
 }
 
 // TODO: perhaps add a check function that checks if such an account exists? might be possible to do with less contention?
@@ -135,6 +145,55 @@ pub fn get(self: *Rooted, allocator: std.mem.Allocator, address: Pubkey) !?Accou
     } else return null;
 }
 
+const AccountFile = sig.accounts_db.accounts_file.AccountFile;
+
+const Entry = struct { []const u8, Slot, u32 };
+
+fn getEntries(allocator: std.mem.Allocator, accounts_dir: std.fs.Dir) ![]AccountFile {
+    var entries: std.ArrayList(AccountFile) = .init(allocator);
+    errdefer {
+        for (entries.items) |entry| entry.deinit();
+        entries.deinit();
+    }
+
+    var accounts_iter = accounts_dir.iterate();
+    while (try accounts_iter.next()) |entry| {
+        if (entry.kind != .file) return error.BadAccountsDir;
+        const split = std.mem.indexOf(u8, entry.name, ".") orelse return error.BadAccountsDir;
+        if (entry.name.len - 1 == split) return error.BadAccountsDir;
+        const slot_str = entry.name[0..split];
+        const id_str = entry.name[split + 1 ..];
+
+        const slot = try std.fmt.parseInt(u64, slot_str, 10);
+        const id = try std.fmt.parseInt(u32, id_str, 10);
+
+        const file = try accounts_dir.openFile(entry.name, .{});
+        errdefer file.close();
+
+        const file_len = (try file.stat()).size;
+
+        const accounts_file = try AccountFile.init(
+            file,
+            .{ .id = .fromInt(id), .length = file_len },
+            slot,
+        );
+        errdefer accounts_file.deinit();
+
+        try entries.append(accounts_file);
+    }
+
+    const lessThanFn = struct {
+        fn f(context: void, lhs: AccountFile, rhs: AccountFile) bool {
+            _ = context;
+            return lhs.slot < rhs.slot;
+        }
+    }.f;
+
+    std.mem.sort(AccountFile, entries.items, {}, lessThanFn);
+
+    return try entries.toOwnedSlice();
+}
+
 pub fn main() !void {
     const zone = tracy.Zone.init(@src(), .{ .name = "main" });
     defer zone.deinit();
@@ -148,11 +207,17 @@ pub fn main() !void {
     const accounts_folder = iter.next() orelse @panic("arg missing");
     const destination_file = iter.next() orelse @panic("arg missing");
 
+    var accounts_dir = try std.fs.cwd().openDir(accounts_folder, .{ .iterate = true });
+    defer accounts_dir.close();
+
+    const account_files = try getEntries(allocator, accounts_dir);
+    defer {
+        for (account_files) |entry| entry.deinit();
+        allocator.free(account_files);
+    }
+
     var rooted = try Rooted.init(destination_file);
     defer rooted.deinit();
-
-    var accounts_dir = try std.fs.cwd().openDir(accounts_folder, .{ .iterate = true });
-    var accounts_iter = accounts_dir.iterate();
 
     var bp = try sig.accounts_db.buffer_pool.BufferPool.init(allocator, 20480 + 2);
     defer bp.deinit(allocator);
@@ -160,76 +225,97 @@ pub fn main() !void {
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
 
-    _ = sql.sqlite3_exec(rooted.handle, "BEGIN TRANSACTION;", null, null, null);
+    try rooted.err(sql.sqlite3_exec(rooted.handle, "BEGIN TRANSACTION;", null, null, null));
 
-    while (try accounts_iter.next()) |entry| {
+    var n_accounts: u48 = 0;
+
+    for (account_files) |accounts_file| {
         defer tracy.frameMarkNamed("accountfile put");
-
-        if (entry.kind != .file) continue;
         defer _ = arena.reset(.retain_capacity);
 
-        std.debug.print("entry.name: {s}\n", .{entry.name});
-
-        const split = std.mem.indexOf(u8, entry.name, ".") orelse {
-            std.debug.print("WARNING: invalid file? (no dot) {s}\n", .{entry.name});
-            continue;
-        };
-
-        if (entry.name.len - 1 == split) {
-            std.debug.print("WARNING: invalid file? (no id) {s}\n", .{entry.name});
-            continue;
-        }
-
-        const slot_str = entry.name[0..split];
-        const id_str = entry.name[split + 1 ..];
-
-        const slot = try std.fmt.parseInt(u64, slot_str, 10);
-        const id = try std.fmt.parseInt(u32, id_str, 10);
-
-        const file = try accounts_dir.openFile(entry.name, .{});
-        defer file.close();
-
-        const file_len = (try file.stat()).size;
-
-        const accounts_file = try sig.accounts_db.accounts_file.AccountFile.init(
-            file,
-            .{ .id = .fromInt(id), .length = file_len },
-            slot,
-        );
-
-        var accounts_pushed: u48 = 0;
-
         var accounts = accounts_file.iterator(&bp);
-        while (try accounts.next(arena.allocator())) |account| : (accounts_pushed += 1) {
+        while (try accounts.next(arena.allocator())) |account| {
             defer account.deinit(arena.allocator());
-
-            const pk = try sig.core.Pubkey.fromBytes(account.hash.data);
 
             const cloned_data = try account.data.dupeAllocatedOwned(arena.allocator());
             defer cloned_data.deinit(arena.allocator());
 
             const data = @constCast(cloned_data.owned_allocation);
 
-            try rooted.put(pk, .{
+            try rooted.put(account.store_info.pubkey, .{
                 .data = data,
                 .executable = account.account_info.executable,
                 .lamports = account.account_info.lamports,
                 .owner = account.account_info.owner,
                 .rent_epoch = account.account_info.rent_epoch,
             });
+
+            n_accounts += 1;
         }
+        tracy.plot(u48, "accounts pushed", n_accounts);
     }
 
     std.debug.print("committing\n", .{});
 
-    _ = sql.sqlite3_exec(rooted.handle, "COMMIT;", null, null, null);
+    try rooted.err(sql.sqlite3_exec(rooted.handle, "COMMIT;", null, null, null));
 
-    // std.debug.print("creating index\n", .{});
+    const query =
+        \\SELECT address, owner, data, lamports, executable, rent_epoch FROM entries;
+    ;
 
-    // const make_index =
-    //     \\ CREATE UNIQUE INDEX entries_addr_idx ON entries(address);
-    // ;
+    var stmt: ?*sql.sqlite3_stmt = undefined;
+    if (sql.sqlite3_prepare_v2(rooted.handle, query, -1, &stmt, null) != OK)
+        return error.FailedToPrepareGet;
 
-    // if (sql.sqlite3_exec(rooted.handle, make_index, null, null, null) != OK)
-    //     return error.MakeIndexFailed;
+    defer err(&rooted, sql.sqlite3_finalize(stmt)) catch {};
+
+    var hash: sig.core.LtHash = .IDENTITY;
+
+    while (true) {
+        const step_result = sql.sqlite3_step(stmt);
+        switch (step_result) {
+            ROW => {},
+            DONE => break,
+            else => try err(&rooted, step_result),
+        }
+
+        const pubkey = blk: {
+            const ptr: [*]const u8 = @ptrCast(sql.sqlite3_column_blob(stmt, 0));
+            const slice = ptr[0..@intCast(sql.sqlite3_column_bytes(stmt, 0))];
+            std.debug.assert(slice.len == Pubkey.SIZE);
+            break :blk try Pubkey.fromBytes(slice[0..32].*);
+        };
+
+        const owner = blk: {
+            const ptr: [*]const u8 = @ptrCast(sql.sqlite3_column_blob(stmt, 1));
+            const slice = ptr[0..@intCast(sql.sqlite3_column_bytes(stmt, 1))];
+            std.debug.assert(slice.len == Pubkey.SIZE);
+            break :blk try Pubkey.fromBytes(slice[0..32].*);
+        };
+
+        const data = blk: {
+            const len: usize = @intCast(sql.sqlite3_column_bytes(stmt, 2));
+            if (len == 0) break :blk &.{}; // sqlite returns null pointers for 0-len data
+            const ptr: [*]const u8 = @ptrCast(sql.sqlite3_column_blob(stmt, 2));
+            break :blk ptr[0..len];
+        };
+
+        const lamports: u64 = @bitCast(sql.sqlite3_column_int64(stmt, 0));
+        const executable: bool = sql.sqlite3_column_int(stmt, 3) != 0;
+        const rent_epoch: u64 = @bitCast(sql.sqlite3_column_int64(stmt, 0));
+
+        const account: AccountSharedData = .{
+            .lamports = lamports,
+            .data = @constCast(data),
+            .owner = owner,
+            .executable = executable,
+            .rent_epoch = rent_epoch,
+        };
+
+        std.debug.print("mixing in {}\n", .{pubkey});
+
+        hash.mixIn(account.asAccount().ltHash(pubkey));
+    }
+
+    std.debug.print("hash.checksum(): {}\n", .{hash.checksum()});
 }
