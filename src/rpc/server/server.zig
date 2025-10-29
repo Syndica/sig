@@ -117,7 +117,43 @@ pub fn serve(
     }
 }
 
-test "serveSpawn allocating hooks" {
+test "serveSpawn hook missing" {
+    const allocator = std.testing.allocator;
+
+    const logger_unscoped: Logger = .noop;
+    const logger = logger_unscoped.withScope(@src().fn_name);
+
+    var rpc_hooks = sig.rpc.Hooks{};
+    defer rpc_hooks.deinit(allocator);
+
+    const sock_addr = std.net.Address.initIp4(.{ 0, 0, 0, 0 }, 0);
+    var server_ctx = try Context.init(.{
+        .allocator = allocator,
+        .logger = .from(logger),
+        .rpc_hooks = &rpc_hooks,
+        .socket_addr = sock_addr,
+        .read_buffer_size = 4096,
+        .reuse_address = true,
+    });
+    defer server_ctx.joinDeinit();
+
+    const resp_str, const resp_json = try testHttpRpcJsonRequest(
+        allocator,
+        &server_ctx,
+        .basic,
+        .getHealth,
+        .{},
+    );
+    defer {
+        resp_json.deinit();
+        allocator.free(resp_str);
+    }
+
+    const rpc_err = resp_json.payload.err;
+    try std.testing.expectEqual(rpc_err.code, .method_not_found);
+}
+
+test "serveSpawn hook alloc" {
     const allocator = std.testing.allocator;
 
     const logger_unscoped: Logger = .noop;
@@ -155,40 +191,20 @@ test "serveSpawn allocating hooks" {
     });
     defer server_ctx.joinDeinit();
 
-    const work_pool: WorkPool = .basic;
-
-    var exit = std.atomic.Value(bool).init(false);
-    const serve_thread = try serveSpawn(&exit, &server_ctx, work_pool);
-    defer serve_thread.join();
-    defer exit.store(true, .release);
-
-    const localhost_url_bounded = sig.utils.fmt.boundedFmt(
-        "http://localhost:{d}/",
-        .{server_ctx.tcp.listen_address.getPort()},
-    );
-    const localhost_url = try std.Uri.parse(localhost_url_bounded.constSlice());
-
-    const request: sig.rpc.request.Request = .{
-        .id = .null,
-        .method = .{ .getLeaderSchedule = .{
+    const resp_str, const resp_json = try testHttpRpcJsonRequest(
+        allocator,
+        &server_ctx,
+        .basic,
+        .getLeaderSchedule,
+        .{
             .slot = 0,
             .config = .{},
-        } },
-    };
-    const request_str = try std.json.stringifyAlloc(allocator, request, .{});
-    defer allocator.free(request_str);
-
-    const resp_str = try testHttpFetchSelf(allocator, .POST, localhost_url, .{
-        .body = request_str,
-        .headers = .{
-            .content_type = .{ .override = "application/json" },
         },
-    });
-    defer allocator.free(resp_str);
-
-    const Response = sig.rpc.methods.GetLeaderSchedule.Response;
-    const resp_json = try sig.rpc.response.Response(Response).fromJson(allocator, resp_str);
-    defer resp_json.deinit();
+    );
+    defer {
+        resp_json.deinit();
+        allocator.free(resp_str);
+    }
 
     const res = try resp_json.result();
     var it = res.value.iterator();
@@ -391,40 +407,22 @@ test "serveSpawn getAccountInfo" {
         const work_pool = maybe_work_pool orelse continue;
         logger.info().logf("Running with {s}", .{@tagName(work_pool)});
 
-        var exit = std.atomic.Value(bool).init(false);
-        const serve_thread = try serveSpawn(&exit, &server_ctx, work_pool);
-        defer serve_thread.join();
-        defer exit.store(true, .release);
-
-        const localhost_url_bounded = sig.utils.fmt.boundedFmt(
-            "http://localhost:{d}/",
-            .{server_ctx.tcp.listen_address.getPort()},
-        );
-        const localhost_url = try std.Uri.parse(localhost_url_bounded.constSlice());
-
-        const request: sig.rpc.request.Request = .{
-            .id = .null,
-            .method = .{ .getAccountInfo = .{
+        const resp_str, const resp_json = try testHttpRpcJsonRequest(
+            allocator,
+            &server_ctx,
+            work_pool,
+            .getAccountInfo,
+            .{
                 .pubkey = expected_pubkey,
                 .config = .{
                     .encoding = .base64,
                 },
-            } },
-        };
-        const request_str = try std.json.stringifyAlloc(allocator, request, .{});
-        defer allocator.free(request_str);
-
-        const resp_str = try testHttpFetchSelf(allocator, .POST, localhost_url, .{
-            .body = request_str,
-            .headers = .{
-                .content_type = .{ .override = "application/json" },
             },
-        });
-        defer allocator.free(resp_str);
-
-        const Response = sig.rpc.methods.GetAccountInfo.Response;
-        const resp_json = try sig.rpc.response.Response(Response).fromJson(allocator, resp_str);
-        defer resp_json.deinit();
+        );
+        defer {
+            resp_json.deinit();
+            allocator.free(resp_str);
+        }
 
         const resp_value = try resp_json.result();
         try std.testing.expectEqual(expected_slot, resp_value.context.slot);
@@ -441,7 +439,7 @@ test "serveSpawn getAccountInfo" {
         const encoded_data_buf = try allocator.alloc(u8, encoded_len);
         defer allocator.free(encoded_data_buf);
 
-        const expected_value: Response.Value = .{
+        const expected_value: @TypeOf(resp_value.value) = .{
             .data = .{ .encoded = .{
                 std.base64.standard.Encoder.encode(encoded_data_buf, raw_data),
                 .base64,
@@ -454,6 +452,44 @@ test "serveSpawn getAccountInfo" {
         };
         try std.testing.expectEqualDeep(expected_value, resp_value.value);
     }
+}
+
+fn testHttpRpcJsonRequest(
+    allocator: std.mem.Allocator,
+    server_ctx: *Context,
+    work_pool: WorkPool,
+    comptime method: sig.rpc.methods.MethodAndParams.Tag,
+    method_param: sig.rpc.methods.Request(method),
+) !struct { []const u8, sig.rpc.response.Response(sig.rpc.methods.Request(method).Response) } {
+    var exit = std.atomic.Value(bool).init(false);
+    const serve_thread = try serveSpawn(&exit, server_ctx, work_pool);
+    defer serve_thread.join();
+    defer exit.store(true, .release);
+
+    const localhost_url_bounded = sig.utils.fmt.boundedFmt(
+        "http://localhost:{d}/",
+        .{server_ctx.tcp.listen_address.getPort()},
+    );
+    const localhost_url = try std.Uri.parse(localhost_url_bounded.constSlice());
+
+    const request: sig.rpc.request.Request = .{
+        .id = .null,
+        .method = @unionInit(sig.rpc.methods.MethodAndParams, @tagName(method), method_param),
+    };
+    const request_str = try std.json.stringifyAlloc(allocator, request, .{});
+    defer allocator.free(request_str);
+
+    const resp_str = try testHttpFetchSelf(allocator, .POST, localhost_url, .{
+        .body = request_str,
+        .headers = .{
+            .content_type = .{ .override = "application/json" },
+        },
+    });
+    errdefer allocator.free(resp_str);
+
+    const Response = sig.rpc.methods.Request(method).Response;
+    const resp_json = try sig.rpc.response.Response(Response).fromJson(allocator, resp_str);
+    return .{ resp_str, resp_json };
 }
 
 fn testExpectSnapshotResponse(

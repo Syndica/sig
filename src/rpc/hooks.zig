@@ -108,13 +108,15 @@ pub const Hooks = struct {
         }
     }
 
+    pub const CallError = error{MethodNotImplemented};
+
     /// NOTE: Remember to free the result with the given allocator
     pub fn call(
         self: *const Hooks,
         allocator: std.mem.Allocator,
         comptime method: Method,
         args: sig.rpc.methods.Request(method),
-    ) !sig.rpc.methods.Result(method) {
+    ) CallError!sig.rpc.methods.Result(method) {
         const method_impl = self.map.get(method) orelse return error.MethodNotImplemented;
         const impl: *const fn (
             _allocator: std.mem.Allocator,
