@@ -117,12 +117,90 @@ pub fn serve(
     }
 }
 
-test "serveSpawn snapshots" {
-    // if (sig.build_options.no_network_tests) return error.SkipZigTest;
+test "serveSpawn allocating hooks" {
     const allocator = std.testing.allocator;
 
-    var prng = std.Random.DefaultPrng.init(0);
-    const random = prng.random();
+    const logger_unscoped: Logger = .noop;
+    const logger = logger_unscoped.withScope(@src().fn_name);
+
+    var rpc_hooks = sig.rpc.Hooks{};
+    defer rpc_hooks.deinit(allocator);
+
+    try rpc_hooks.set(allocator, struct {
+        pub fn getLeaderSchedule(
+            _: anytype,
+            gpa: std.mem.Allocator,
+            _: anytype,
+        ) !sig.rpc.methods.GetLeaderSchedule.Response {
+            var resp: sig.rpc.methods.GetLeaderSchedule.Response = .{ .value = .{} };
+            errdefer resp.value.deinit(gpa);
+
+            const buf = try gpa.alloc(u64, 4);
+            errdefer gpa.free(buf);
+            @memset(buf, 42);
+
+            try resp.value.put(gpa, sig.core.Pubkey.ZEROES, buf);
+            return resp;
+        }
+    }{});
+
+    const sock_addr = std.net.Address.initIp4(.{ 0, 0, 0, 0 }, 0);
+    var server_ctx = try Context.init(.{
+        .allocator = allocator,
+        .logger = .from(logger),
+        .rpc_hooks = &rpc_hooks,
+        .socket_addr = sock_addr,
+        .read_buffer_size = 4096,
+        .reuse_address = true,
+    });
+    defer server_ctx.joinDeinit();
+
+    const work_pool: WorkPool = .basic;
+
+    var exit = std.atomic.Value(bool).init(false);
+    const serve_thread = try serveSpawn(&exit, &server_ctx, work_pool);
+    defer serve_thread.join();
+    defer exit.store(true, .release);
+
+    const localhost_url_bounded = sig.utils.fmt.boundedFmt(
+        "http://localhost:{d}/",
+        .{server_ctx.tcp.listen_address.getPort()},
+    );
+    const localhost_url = try std.Uri.parse(localhost_url_bounded.constSlice());
+
+    const request: sig.rpc.request.Request = .{
+        .id = .null,
+        .method = .{ .getLeaderSchedule = .{
+            .slot = 0,
+            .config = .{},
+        } },
+    };
+    const request_str = try std.json.stringifyAlloc(allocator, request, .{});
+    defer allocator.free(request_str);
+
+    const resp_str = try testHttpFetchSelf(allocator, .POST, localhost_url, .{
+        .body = request_str,
+        .headers = .{
+            .content_type = .{ .override = "application/json" },
+        },
+    });
+    defer allocator.free(resp_str);
+
+    const Response = sig.rpc.methods.GetLeaderSchedule.Response;
+    const resp_json = try sig.rpc.response.Response(Response).fromJson(allocator, resp_str);
+    defer resp_json.deinit();
+
+    const res = try resp_json.result();
+    var it = res.value.iterator();
+    const entry = it.next().?;
+    try std.testing.expectEqual(entry.key_ptr.*, sig.core.Pubkey.ZEROES);
+    try std.testing.expectEqualSlices(u64, entry.value_ptr.*, &[_]u64{ 42, 42, 42, 42 });
+    try std.testing.expectEqual(it.next(), null);
+}
+
+test "serveSpawn getSnapshot" {
+    // if (sig.build_options.no_network_tests) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
 
     const logger_unscoped: Logger = .noop;
     const logger = logger_unscoped.withScope(@src().fn_name);
@@ -193,8 +271,7 @@ test "serveSpawn snapshots" {
 
     try accountsdb.registerRPCHooks(&rpc_hooks);
 
-    const rpc_port = random.intRangeLessThan(u16, 8_000, 10_000);
-    const sock_addr = std.net.Address.initIp4(.{ 0, 0, 0, 0 }, rpc_port);
+    const sock_addr = std.net.Address.initIp4(.{ 0, 0, 0, 0 }, 0);
     var server_ctx = try Context.init(.{
         .allocator = allocator,
         .logger = .from(logger),
@@ -292,8 +369,7 @@ test "serveSpawn getAccountInfo" {
     defer rpc_hooks.deinit(allocator);
     try accountsdb.registerRPCHooks(&rpc_hooks);
 
-    const test_rpc_port = random.intRangeLessThan(u16, 8_000, 10_000);
-    const test_sock_addr = std.net.Address.initIp4(.{ 0, 0, 0, 0 }, test_rpc_port);
+    const test_sock_addr = std.net.Address.initIp4(.{ 0, 0, 0, 0 }, 0);
     var server_ctx = try Context.init(.{
         .allocator = allocator,
         .logger = .from(logger),
@@ -412,15 +488,18 @@ fn testExpectSnapshotResponse(
     );
     const snap_url = try std.Uri.parse(snap_url_str_bounded.constSlice());
 
+    const content_length = try testHttpFetchSelf(allocator, .HEAD, snap_url, .{});
+
     const actual_data = try testHttpFetchSelf(allocator, .GET, snap_url, .{});
     defer allocator.free(actual_data);
 
+    try std.testing.expectEqual(content_length, actual_data.len);
     try std.testing.expectEqualSlices(u8, expected_data, actual_data);
 }
 
 fn testHttpFetchSelf(
     allocator: std.mem.Allocator,
-    http_method: std.http.Method,
+    comptime http_method: std.http.Method,
     uri: std.Uri,
     opts: struct {
         headers: std.http.Client.Request.Headers = .{},
@@ -428,7 +507,11 @@ fn testHttpFetchSelf(
         privileged_headers: []const std.http.Header = &.{},
         body: ?[]const u8 = null,
     },
-) ![]const u8 {
+) !(switch (http_method) {
+    .HEAD => u64,
+    .GET, .POST => []const u8,
+    else => unreachable,
+}) {
     var client: std.http.Client = .{ .allocator = allocator };
     defer client.deinit();
 
@@ -447,6 +530,10 @@ fn testHttpFetchSelf(
     try request.finish();
 
     try request.wait();
+
+    if (comptime http_method == .HEAD) {
+        return request.response.content_length.?;
+    }
 
     const reader = request.reader();
 

@@ -152,11 +152,13 @@ fn handleGetOrHead(
             switch (snapshot_result) {
                 .ok => |result| switch (method) {
                     .HEAD => {
+                        var send_buffer: [4096]u8 = undefined;
                         var response = request.respondStreaming(.{
-                            .send_buffer = &.{},
+                            .send_buffer = &send_buffer,
                             .content_length = result.size,
                             .respond_options = .{ .status = .ok, .keep_alive = false },
                         });
+                        response.transfer_encoding.content_length = 0;
                         response.end() catch |err| switch (err) {
                             error.ConnectionResetByPeer => return,
                             else => return error.SystemIoError,

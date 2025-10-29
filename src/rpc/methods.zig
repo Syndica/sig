@@ -408,6 +408,10 @@ pub const GetLeaderSchedule = struct {
     pub const Response = struct {
         value: std.AutoArrayHashMapUnmanaged(Pubkey, []const u64),
 
+        pub fn deinit(self: Response, allocator: std.mem.Allocator) void {
+            self.value.deinit(allocator);
+        }
+
         pub fn jsonParse(
             allocator: std.mem.Allocator,
             source: anytype,
