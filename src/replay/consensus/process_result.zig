@@ -20,6 +20,7 @@ const AncestorHashesReplayUpdate = replay.consensus.core.AncestorHashesReplayUpd
 const ProgressMap = sig.consensus.ProgressMap;
 const HeaviestSubtreeForkChoice = sig.consensus.HeaviestSubtreeForkChoice;
 const LatestValidatorVotes = sig.consensus.latest_validator_votes.LatestValidatorVotes;
+const latestVote = sig.consensus.latest_validator_votes.latestVote;
 
 const SlotTracker = replay.trackers.SlotTracker;
 
@@ -236,7 +237,7 @@ fn updateConsensusForFrozenSlot(params: ProcessResultParams, slot: Slot) !void {
                     pubkey,
                     slot,
                     hash,
-                    .replay,
+                    .gossip,
                 );
             }
         }
@@ -342,7 +343,7 @@ const TestReplayStateResources = struct {
         self.fork_choice.deinit();
         allocator.destroy(self.fork_choice);
         self.duplicate_slots_tracker.deinit(allocator);
-        self.unfrozen_gossip_verified_vote_hashes.votes_per_slot.deinit(allocator);
+        self.unfrozen_gossip_verified_vote_hashes.deinit(allocator);
         self.latest_validator_votes.deinit(allocator);
         self.duplicate_confirmed_slots.deinit(allocator);
         self.epoch_slots_frozen_slots.deinit(allocator);
@@ -667,4 +668,123 @@ test "markDeadSlot: when duplicate proof exists, duplicate tracker records slot"
 
     // The duplicate handler should record the slot in the duplicate tracker
     try testing.expect(test_resources.duplicate_slots_tracker.contains(slot));
+}
+
+test "updateConsensusForFrozenSlot: moves gossip votes with gossip vote_kind" {
+    const allocator = testing.allocator;
+
+    var test_state = TestReplayStateResources.init(allocator, @src()) catch |err| {
+        std.debug.print("Failed to create test replay state: {}\n", .{err});
+        return err;
+    };
+    defer test_state.deinit(allocator);
+
+    const slot: Slot = 100;
+    const parent_slot: Slot = 99;
+    var rng = std.Random.DefaultPrng.init(0);
+    const random = rng.random();
+
+    const slot_hash = Hash.initRandom(random);
+    const vote_pubkey = sig.core.Pubkey.initRandom(random);
+
+    // Add parent slot to progress map
+    try test_state.progress.map.putNoClobber(
+        allocator,
+        parent_slot,
+        try sig.consensus.progress_map.ForkProgress.init(allocator, .{
+            .now = sig.time.Instant.now(),
+            .last_entry = sig.core.Hash.ZEROES,
+            .prev_leader_slot = null,
+            .validator_stake_info = null,
+            .num_blocks_on_fork = 0,
+            .num_dropped_blocks_on_fork = 0,
+        }),
+    );
+
+    // Add current slot to progress map
+    try test_state.progress.map.putNoClobber(
+        allocator,
+        slot,
+        try sig.consensus.progress_map.ForkProgress.init(allocator, .{
+            .now = sig.time.Instant.now(),
+            .last_entry = sig.core.Hash.ZEROES,
+            .prev_leader_slot = null,
+            .validator_stake_info = null,
+            .num_blocks_on_fork = 0,
+            .num_dropped_blocks_on_fork = 0,
+        }),
+    );
+
+    // Setup slot in tracker with proper state
+    const parent_hash = Hash.initRandom(random);
+    const slot_consts = sig.core.SlotConstants{
+        .parent_slot = parent_slot,
+        .parent_hash = parent_hash,
+        .parent_lt_hash = .IDENTITY,
+        .block_height = 0,
+        .collector_id = sig.core.Pubkey.initRandom(random),
+        .max_tick_height = 64,
+        .fee_rate_governor = sig.core.FeeRateGovernor.DEFAULT,
+        .epoch_reward_status = .inactive,
+        .ancestors = .{ .ancestors = .empty },
+        .feature_set = .ALL_DISABLED,
+        .reserved_accounts = .empty,
+    };
+    var slot_state = try sig.core.SlotState.genesis(allocator);
+    slot_state.hash.set(slot_hash);
+
+    try test_state.slot_tracker.put(allocator, slot, .{
+        .constants = slot_consts,
+        .state = slot_state,
+    });
+
+    // Ensure fork choice knows about the parent before adding the leaf
+    try test_state.params.fork_choice.addNewLeafSlot(
+        .{ .slot = parent_slot, .hash = parent_hash },
+        .{ .slot = 0, .hash = Hash.ZEROES },
+    );
+
+    // Add gossip-verified vote to unfrozen_gossip_verified_vote_hashes
+    const votes_per_slot = &test_state.unfrozen_gossip_verified_vote_hashes.votes_per_slot;
+    const gop = try votes_per_slot.getOrPut(allocator, slot);
+    if (!gop.found_existing) {
+        gop.value_ptr.* = .{};
+    }
+    const slot_hashes = gop.value_ptr;
+    const gop2 = try slot_hashes.getOrPut(allocator, slot_hash);
+    if (!gop2.found_existing) {
+        gop2.value_ptr.* = .{};
+    }
+    try gop2.value_ptr.append(allocator, vote_pubkey);
+
+    {
+        // Precondition
+        const gossip_vote = latestVote(
+            &test_state.latest_validator_votes,
+            vote_pubkey,
+            .gossip,
+        );
+        try testing.expectEqual(null, gossip_vote);
+    }
+
+    // Process the frozen slot
+    try updateConsensusForFrozenSlot(test_state.params, slot);
+
+    // Verify the vote was added to latest_validator_votes with .gossip vote_kind
+    const gossip_vote = latestVote(
+        &test_state.latest_validator_votes,
+        vote_pubkey,
+        .gossip,
+    );
+    try testing.expect(gossip_vote != null);
+    try testing.expectEqual(slot, gossip_vote.?.slot);
+    try testing.expectEqual(slot_hash, gossip_vote.?.hashes[0]);
+
+    // Verify the vote is not in replay votes
+    const replay_vote = latestVote(
+        &test_state.latest_validator_votes,
+        vote_pubkey,
+        .replay,
+    );
+    try testing.expectEqual(null, replay_vote);
 }
