@@ -1152,19 +1152,20 @@ pub const AccountsDB = struct {
             },
         );
 
-        var total_lamports, const accounts_hash = blk: {
+        const total_lamports, const accounts_hash = blk: {
             var lamports_sum: u64 = 0;
             var hash: LtHash = .IDENTITY;
             for (task_results) |result| {
                 lamports_sum += result.lamports;
                 hash.mixIn(result.hash);
             }
+            // do subtraction after, to avoid potential overflows when
+            // .subtract > .lamports for a shard.
+            for (task_results) |result| {
+                lamports_sum -|= result.subtract;
+            }
             break :blk .{ lamports_sum, hash };
         };
-
-        for (task_results) |result| {
-            total_lamports -|= result.subtract;
-        }
 
         self.logger.debug().logf("collecting hashes from accounts took: {s}", .{timer.read()});
         timer.reset();
