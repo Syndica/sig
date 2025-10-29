@@ -5,7 +5,7 @@ After=network.target
 [Service]
 EnvironmentFile=/etc/sig.conf
 WorkingDirectory=/home/sig/sig
-ExecStart=/home/sig/sig/zig-out/bin/sig $CLI_ARGS
+ExecStart=/home/sig/sig/ci/run-and-update-service/run.sh $CLI_ARGS
 Restart=always
 User=sig
 Group=sig

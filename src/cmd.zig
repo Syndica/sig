@@ -2089,3 +2089,13 @@ fn getTrustedValidators(allocator: std.mem.Allocator, cfg: config.Cmd) !?std.Arr
     }
     return trusted_validators;
 }
+
+pub const panic = std.debug.FullPanic(loggingPanic);
+
+fn loggingPanic(message: []const u8, first_trace_addr: ?usize) noreturn {
+    std.debug.lockStdErr();
+    defer std.debug.unlockStdErr();
+    const writer = std.io.getStdErr().writer();
+    sig.trace.logfmt.writeLog(writer, "panic", .err, .{}, "{s}", .{message}) catch {};
+    std.debug.defaultPanic(message, first_trace_addr);
+}
