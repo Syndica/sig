@@ -899,8 +899,6 @@ test "accounts_db.download: test finding peers" {
 }
 
 test "PeerSearchResult format" {
-    const allocator = std.testing.allocator;
-
     const Case = struct { PeerSearchResult, []const u8 };
 
     const cases: []const Case = &.{
@@ -912,6 +910,7 @@ test "PeerSearchResult format" {
     };
 
     for (cases) |case| {
+        const result, const expected = case;
         try std.testing.expectFmt(expected, "{}", .{result});
     }
 }
