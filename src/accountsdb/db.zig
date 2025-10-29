@@ -1081,14 +1081,14 @@ pub const AccountsDB = struct {
             max_slot: ?Slot = null,
         },
 
-        fn min_slot(self: AccountHashesConfig) ?Slot {
+        fn minSlot(self: AccountHashesConfig) ?Slot {
             return switch (self) {
                 .FullAccountHash => null,
                 .IncrementalAccountHash => |iac| iac.min_slot,
             };
         }
 
-        fn max_slot(self: AccountHashesConfig) ?Slot {
+        fn maxSlot(self: AccountHashesConfig) ?Slot {
             return switch (self) {
                 .FullAccountHash => |fah| fah.max_slot,
                 .IncrementalAccountHash => |iac| iac.max_slot,
@@ -1416,8 +1416,8 @@ pub const AccountsDB = struct {
                 {
                     const max_slot_ref = slotListMaxWithinBounds(
                         ref_head.ref_ptr,
-                        config.min_slot(),
-                        config.max_slot(),
+                        config.minSlot(),
+                        config.maxSlot(),
                     ) orelse continue;
                     const latest_account = try self.getAccountFromRef(allocator, max_slot_ref);
                     defer latest_account.deinit(allocator);
@@ -1426,7 +1426,7 @@ pub const AccountsDB = struct {
                 }
 
                 // "mix out" previous latest version of account from hash (if applicable)
-                if (config.min_slot()) |min_slot| {
+                if (config.minSlot()) |min_slot| {
                     // we are calculating the incremental hash
                     std.debug.assert(config == .IncrementalAccountHash);
 
