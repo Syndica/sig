@@ -49,7 +49,8 @@ pub fn init(file_path: [:0]const u8) !Rooted {
         \\  data BLOB NOT NULL,
         \\  owner BLOB(32) NOT NULL,
         \\  executable INTEGER NOT NULL,
-        \\  rent_epoch INTEGER NOT NULL
+        \\  rent_epoch INTEGER NOT NULL,
+        \\  last_modified_slot INTEGER NOT NULL
         \\);
         \\
     ;
@@ -62,8 +63,8 @@ pub fn init(file_path: [:0]const u8) !Rooted {
     const put_stmt = blk: {
         const query =
             \\INSERT OR REPLACE INTO entries 
-            \\(address, lamports, data, owner, executable, rent_epoch)
-            \\VALUES (?, ?, ?, ?, ?, ?);
+            \\(address, lamports, data, owner, executable, rent_epoch, last_modified_slot)
+            \\VALUES (?, ?, ?, ?, ?, ?, ?);
         ;
 
         var stmt: ?*sql.sqlite3_stmt = null;
@@ -82,7 +83,7 @@ pub fn deinit(self: *Rooted) void {
     _ = sql.sqlite3_finalize(self.put_stmt);
 }
 
-pub fn put(self: *Rooted, address: Pubkey, account: AccountSharedData) !void {
+pub fn put(self: *Rooted, address: Pubkey, slot: Slot, account: AccountSharedData) !void {
     const stmt = self.put_stmt;
 
     try self.err(sql.sqlite3_bind_blob(stmt, 1, &address.data, Pubkey.SIZE, sql.SQLITE_STATIC));
@@ -97,6 +98,8 @@ pub fn put(self: *Rooted, address: Pubkey, account: AccountSharedData) !void {
     try self.err(sql.sqlite3_bind_blob(stmt, 4, &account.owner.data, Pubkey.SIZE, sql.SQLITE_STATIC));
     try self.err(sql.sqlite3_bind_int(stmt, 5, @intFromBool(account.executable)));
     try self.err(sql.sqlite3_bind_int64(stmt, 6, @bitCast(account.rent_epoch)));
+
+    try self.err(sql.sqlite3_bind_int64(stmt, 7, @bitCast(slot)));
 
     if (sql.sqlite3_step(stmt) != DONE)
         return error.StepFailed;
@@ -242,13 +245,17 @@ pub fn main() !void {
 
             const data = @constCast(cloned_data.owned_allocation);
 
-            try rooted.put(account.store_info.pubkey, .{
-                .data = data,
-                .executable = account.account_info.executable,
-                .lamports = account.account_info.lamports,
-                .owner = account.account_info.owner,
-                .rent_epoch = account.account_info.rent_epoch,
-            });
+            try rooted.put(
+                account.store_info.pubkey,
+                accounts_file.slot,
+                .{
+                    .data = data,
+                    .executable = account.account_info.executable,
+                    .lamports = account.account_info.lamports,
+                    .owner = account.account_info.owner,
+                    .rent_epoch = account.account_info.rent_epoch,
+                },
+            );
 
             n_accounts += 1;
         }
@@ -260,7 +267,7 @@ pub fn main() !void {
     try rooted.err(sql.sqlite3_exec(rooted.handle, "COMMIT;", null, null, null));
 
     const query =
-        \\SELECT address, owner, data, lamports, executable, rent_epoch FROM entries;
+        \\SELECT address, owner, data, lamports, executable, rent_epoch, last_modified_slot FROM entries;
     ;
 
     var stmt: ?*sql.sqlite3_stmt = undefined;
@@ -270,6 +277,8 @@ pub fn main() !void {
     defer err(&rooted, sql.sqlite3_finalize(stmt)) catch {};
 
     var hash: sig.core.LtHash = .IDENTITY;
+
+    std.debug.print("starting hashing\n", .{});
 
     while (true) {
         const step_result = sql.sqlite3_step(stmt);
@@ -300,9 +309,11 @@ pub fn main() !void {
             break :blk ptr[0..len];
         };
 
-        const lamports: u64 = @bitCast(sql.sqlite3_column_int64(stmt, 0));
-        const executable: bool = sql.sqlite3_column_int(stmt, 3) != 0;
-        const rent_epoch: u64 = @bitCast(sql.sqlite3_column_int64(stmt, 0));
+        const lamports: u64 = @bitCast(sql.sqlite3_column_int64(stmt, 3));
+        const executable: bool = sql.sqlite3_column_int(stmt, 4) != 0;
+        const rent_epoch: u64 = @bitCast(sql.sqlite3_column_int64(stmt, 5));
+        const last_modified_slot: Slot = @bitCast(sql.sqlite3_column_int64(stmt, 6));
+        _ = last_modified_slot;
 
         const account: AccountSharedData = .{
             .lamports = lamports,
@@ -311,8 +322,6 @@ pub fn main() !void {
             .executable = executable,
             .rent_epoch = rent_epoch,
         };
-
-        std.debug.print("mixing in {}\n", .{pubkey});
 
         hash.mixIn(account.asAccount().ltHash(pubkey));
     }
