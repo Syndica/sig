@@ -1828,7 +1828,7 @@ pub const AccountsDB = struct {
 
     /// index and validate an account file.
     /// NOTE: should only be called in tests/benchmarks
-    pub fn putAccountFile(
+    fn putAccountFile(
         self: *AccountsDB,
         account_file: *AccountFile,
         n_accounts: usize,
