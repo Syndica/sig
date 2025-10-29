@@ -150,82 +150,70 @@ fn handleGetOrHead(
             },
         )) |snapshot_result| {
             switch (snapshot_result) {
-                .ok => |result| switch (method) {
-                    .HEAD => {
-                        var send_buffer: [4096]u8 = undefined;
-                        var response = request.respondStreaming(.{
-                            .send_buffer = &send_buffer,
-                            .content_length = result.size,
-                            .respond_options = .{ .status = .ok, .keep_alive = false },
-                        });
-                        response.transfer_encoding.content_length = 0;
-                        response.end() catch |err| switch (err) {
-                            error.ConnectionResetByPeer => return,
-                            else => return error.SystemIoError,
-                        };
-                        return;
-                    },
-                    .GET => {
-                        const archive_file = result.file;
-                        defer archive_file.close();
+                .ok => |result| {
+                    const maybe_archive_file, const archive_len = switch (result) {
+                        .file => |file| blk: {
+                            errdefer file.close();
+                            const len = file.getEndPos() catch return error.SystemIoError;
+                            break :blk .{ file, len };
+                        },
+                        .size => |len| .{ null, len },
+                    };
+                    defer if (maybe_archive_file) |file| file.close();
 
-                        const archive_len = archive_file.getEndPos() catch
-                            return error.SystemIoError;
+                    var send_buffer: [4096]u8 = undefined;
+                    var response = request.respondStreaming(.{
+                        .send_buffer = &send_buffer,
+                        .content_length = archive_len,
+                        .respond_options = .{},
+                    });
+                    // flush the headers, so that if this is a head request, we can mock the response without doing unnecessary work
+                    response.flush() catch |err| switch (err) {
+                        error.ConnectionResetByPeer => return,
+                        else => return error.SystemIoError,
+                    };
 
-                        var send_buffer: [4096]u8 = undefined;
-                        var response = request.respondStreaming(.{
-                            .send_buffer = &send_buffer,
-                            .content_length = archive_len,
-                            .respond_options = .{},
-                        });
-                        // flush the headers, so that if this is a head request, we can mock the response without doing unnecessary work
-                        response.flush() catch |err| switch (err) {
-                            error.ConnectionResetByPeer => return,
-                            else => return error.SystemIoError,
-                        };
+                    if (!response.elide_body) {
+                        // use a length which is still a multiple of 2, greater than the send_buffer length,
+                        // in order to almost always force the http server method to flush, instead of
+                        // pointlessly copying data into the send buffer.
+                        const read_buffer_len = comptime std.mem.alignForward(
+                            usize,
+                            send_buffer.len + 1,
+                            2,
+                        );
 
-                        if (!response.elide_body) {
-                            // use a length which is still a multiple of 2, greater than the send_buffer length,
-                            // in order to almost always force the http server method to flush, instead of
-                            // pointlessly copying data into the send buffer.
-                            const read_buffer_len = comptime std.mem.alignForward(
-                                usize,
-                                send_buffer.len + 1,
-                                2,
-                            );
-
-                            while (true) {
-                                var read_buffer: [read_buffer_len]u8 = undefined;
-                                const file_data_len =
-                                    archive_file.read(&read_buffer) catch |err| switch (err) {
-                                        error.ConnectionResetByPeer,
-                                        error.ConnectionTimedOut,
-                                        => return,
-                                        else => return error.SystemIoError,
-                                    };
-                                if (file_data_len == 0) break;
-                                const file_data = read_buffer[0..file_data_len];
-                                response.writeAll(file_data) catch |err| switch (err) {
-                                    error.ConnectionResetByPeer => return,
+                        while (maybe_archive_file) |archive_file| {
+                            var read_buffer: [read_buffer_len]u8 = undefined;
+                            const file_data_len =
+                                archive_file.read(&read_buffer) catch |err| switch (err) {
+                                    error.ConnectionResetByPeer,
+                                    error.ConnectionTimedOut,
+                                    => return,
                                     else => return error.SystemIoError,
                                 };
-                            }
-                        } else {
-                            std.debug.assert(
-                                response.transfer_encoding.content_length == archive_len,
-                            );
-                            // NOTE: in order to avoid needing to actually spend time writing the response body,
-                            // just trick the API into thinking we already wrote the entire thing by setting this
-                            // to 0.
-                            response.transfer_encoding.content_length = 0;
+                            if (file_data_len == 0) break;
+                            const file_data = read_buffer[0..file_data_len];
+                            response.writeAll(file_data) catch |err| switch (err) {
+                                error.ConnectionResetByPeer => return,
+                                else => return error.SystemIoError,
+                            };
                         }
+                    } else {
+                        std.debug.assert(
+                            response.transfer_encoding.content_length == archive_len,
+                        );
+                        // NOTE: in order to avoid needing to actually spend time writing the response body,
+                        // just trick the API into thinking we already wrote the entire thing by setting this
+                        // to 0.
+                        response.transfer_encoding.content_length = 0;
+                    }
 
-                        response.end() catch |err| switch (err) {
-                            error.ConnectionResetByPeer => return,
-                            else => return error.SystemIoError,
-                        };
-                        return;
-                    },
+                    response.end() catch |err| switch (err) {
+                        error.ConnectionResetByPeer => return,
+                        else => return error.SystemIoError,
+                    };
+                    return;
                 },
                 .err => |err| {
                     try respondSimpleErrorStatusBody(

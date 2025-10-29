@@ -334,6 +334,63 @@ test "serveSpawn getSnapshot" {
     }
 }
 
+test "serveSpawn getSnapshot missing" {
+    const allocator = std.testing.allocator;
+
+    const logger_unscoped: Logger = .noop;
+    const logger = logger_unscoped.withScope(@src().fn_name);
+
+    var rpc_hooks = sig.rpc.Hooks{};
+    defer rpc_hooks.deinit(allocator);
+
+    try rpc_hooks.set(allocator, struct {
+        pub fn getSnapshot(
+            _: anytype,
+            _: std.mem.Allocator,
+            params: sig.rpc.methods.GetSnapshot,
+        ) !sig.rpc.methods.GetSnapshot.Response {
+            std.debug.assert(params.get == .size);
+            std.debug.assert(std.mem.eql(u8, params.path, "test-snapshot"));
+            return error.Missing;
+        }
+    }{});
+
+    const sock_addr = std.net.Address.initIp4(.{ 0, 0, 0, 0 }, 0);
+    var server_ctx = try Context.init(.{
+        .allocator = allocator,
+        .logger = .from(logger),
+        .rpc_hooks = &rpc_hooks,
+        .socket_addr = sock_addr,
+        .read_buffer_size = 4096,
+        .reuse_address = true,
+    });
+    defer server_ctx.joinDeinit();
+
+    var exit = std.atomic.Value(bool).init(false);
+    const serve_thread = try serveSpawn(&exit, &server_ctx, .basic);
+    defer serve_thread.join();
+    defer exit.store(true, .release);
+
+    var client: std.http.Client = .{ .allocator = allocator };
+    defer client.deinit();
+
+    const localhost_url_bounded = sig.utils.fmt.boundedFmt(
+        "http://localhost:{d}/test-snapshot",
+        .{server_ctx.tcp.listen_address.getPort()},
+    );
+    const localhost_url = try std.Uri.parse(localhost_url_bounded.constSlice());
+
+    var buffer: [4096]u8 = undefined;
+    var request = try client.open(.HEAD, localhost_url, .{ .server_header_buffer = &buffer });
+    defer request.deinit();
+
+    try request.send();
+    try request.finish();
+    try request.wait();
+
+    try std.testing.expectEqual(request.response.status, .service_unavailable);
+}
+
 test "serveSpawn getAccountInfo" {
     // if (sig.build_options.no_network_tests) return error.SkipZigTest;
     const allocator = std.testing.allocator;
