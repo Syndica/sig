@@ -9,7 +9,8 @@ const bincode = sig.bincode;
 const features = sig.core.features;
 const program = sig.runtime.program;
 
-const AccountsDb = sig.accounts_db.AccountsDB;
+const AccountStore = sig.accounts_db.AccountStore;
+const AccountReader = sig.accounts_db.AccountReader;
 
 const Account = sig.core.Account;
 const Pubkey = sig.core.Pubkey;
@@ -27,21 +28,22 @@ pub fn applyFeatureActivations(
     allocator: Allocator,
     slot: u64,
     feature_set: *FeatureSet,
-    accounts_db: *AccountsDb,
+    account_store: AccountStore,
     allow_new_activations: bool,
 ) !void {
     const new_feature_activations = try computeActiveFeatureSet(
         allocator,
         slot,
         feature_set,
-        accounts_db,
+        account_store.reader(),
         allow_new_activations,
     );
 
     var iterator = new_feature_activations.iterator(slot);
     while (iterator.next()) |feature| {
         const feature_id: Pubkey = features.map.get(feature).key;
-        const db_account = try tryGetAccount(accounts_db, feature_id) orelse continue;
+        const db_account =
+            try tryGetAccount(allocator, account_store.reader(), feature_id) orelse continue;
         defer db_account.deinit(allocator);
 
         const account = try accountSharedDataFromAccount(allocator, &db_account);
@@ -49,7 +51,7 @@ pub fn applyFeatureActivations(
 
         _ = try bincode.writeToSlice(account.data, slot, .{});
 
-        try accounts_db.putAccount(slot, feature_id, account);
+        try account_store.put(slot, feature_id, account);
     }
 
     // Update active set of reserved account keys which are not allowed to be write locked
@@ -70,7 +72,7 @@ pub fn applyFeatureActivations(
         allocator,
         slot,
         feature_set,
-        accounts_db,
+        account_store,
         &new_feature_activations,
         allow_new_activations,
     );
@@ -111,7 +113,7 @@ fn applyBuiltinProgramFeatureTransitions(
     allocator: Allocator,
     slot: Slot,
     feature_set: *const FeatureSet,
-    accounts_db: *AccountsDb,
+    account_store: AccountStore,
     new_feature_activations: *const FeatureSet,
     allow_new_activations: bool,
 ) !void {
@@ -122,7 +124,11 @@ fn applyBuiltinProgramFeatureTransitions(
                 try migrateBuiltinProgramToCoreBpf();
                 is_core_bpf = true;
             } else {
-                const maybe_account = try tryGetAccount(accounts_db, builtin_program.program_id);
+                const maybe_account = try tryGetAccount(
+                    allocator,
+                    account_store.reader(),
+                    builtin_program.program_id,
+                );
                 defer if (maybe_account) |account| account.deinit(allocator);
                 is_core_bpf = if (maybe_account) |account|
                     account.owner.equals(&program.bpf_loader.v3.ID)
@@ -141,7 +147,7 @@ fn applyBuiltinProgramFeatureTransitions(
                 const data = try allocator.dupe(u8, builtin_program.data);
                 defer allocator.free(data);
 
-                try accounts_db.putAccount(
+                try account_store.put(
                     slot,
                     builtin_program.program_id,
                     .{
@@ -167,9 +173,9 @@ fn applyBuiltinProgramFeatureTransitions(
         const feature_id = precompile.required_feature orelse continue;
         if (!feature_set.active(feature_id, 0)) continue;
 
-        const maybe_account = accounts_db.getAccountLatest(
+        const maybe_account = account_store.reader().getLatest(
             allocator,
-            &precompile.program_id,
+            precompile.program_id,
         ) catch |err| switch (err) {
             error.PubkeyNotInIndex => null,
             else => return err,
@@ -181,7 +187,7 @@ fn applyBuiltinProgramFeatureTransitions(
 
         // TODO: burn_and_purge_account
 
-        try accounts_db.putAccount(
+        try account_store.put(
             slot,
             precompile.program_id,
             .{
@@ -204,7 +210,7 @@ fn computeActiveFeatureSet(
     allocator: Allocator,
     slot: u64,
     feature_set: *FeatureSet,
-    accounts_db: *AccountsDb,
+    account_reader: AccountReader,
     allow_new_activations: bool,
 ) !FeatureSet {
     // TODO: requires reimplementation of feature_set.inactive or some other solution
@@ -216,7 +222,8 @@ fn computeActiveFeatureSet(
         const feature_id: Pubkey = features.map.get(feature).key;
         var maybe_activation_slot: ?u64 = null;
 
-        if (try tryGetAccount(accounts_db, feature_id)) |account| {
+        if (try tryGetAccount(allocator, account_reader, feature_id)) |account| {
+            defer account.deinit(allocator);
             if (try featureActivationSlotFromAccount(allocator, account)) |activation_slot| {
                 maybe_activation_slot = activation_slot;
             } else if (allow_new_activations) {
@@ -245,10 +252,11 @@ fn featureActivationSlotFromAccount(allocator: Allocator, account: Account) !?u6
 }
 
 fn tryGetAccount(
-    accounts_db: *AccountsDb,
+    allocator: std.mem.Allocator,
+    account_reader: AccountReader,
     pubkey: Pubkey,
 ) !?Account {
-    return accounts_db.getAccountLatest(accounts_db.allocator, &pubkey) catch |err| switch (err) {
+    return account_reader.getLatest(allocator, pubkey) catch |err| switch (err) {
         error.PubkeyNotInIndex => null,
         else => error.AccountsDbInternal,
     };
