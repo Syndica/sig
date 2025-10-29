@@ -245,12 +245,11 @@ test "signed/serialized RepairRequest is valid" {
 
 test "RepairRequestHeader serialization round trip" {
     const allocator = std.testing.allocator;
-    var prng: std.Random.DefaultPrng = .init(std.testing.random_seed);
 
     const header: RepairRequestHeader = .{
         .signature = .ZEROES,
-        .sender = .initRandom(prng.random()),
-        .recipient = .initRandom(prng.random()),
+        .sender = .parse("2Trk3PpxjMF2AYWr9pVjwzxZ9jXN4HMawCfqscupx4Nq"),
+        .recipient = .parse("C5bJrseEwRf4ffTr9dP7wsYmWkJKScZX8VqqpzvNNf4S"),
         .timestamp = 5924,
         .nonce = 123,
     };
@@ -270,7 +269,6 @@ test "RepairRequestHeader serialization round trip" {
         255, 82,  27,  175, 162, 144, 207, 151, 36,  23,  0,   0,   0,   0,   0,
         0,   123, 0,   0,   0,
     };
-
     try std.testing.expectEqualSlices(u8, &expected, serialized);
 
     const roundtripped = try bincode.readFromSlice(
