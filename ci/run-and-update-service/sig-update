@@ -35,7 +35,9 @@ if [[ $code == 58 ]]; then
     docker-compose up -d
 elif [[ $code == 0 ]]; then
     # 0 means there was a change and rebuild, so restart sig
-    systemctl restart sig
+    systemctl stop sig
+    rm -rf /home/sig/sig/validator  # needed until we have a resumable accountsdb
+    systemctl start sig
     cd /home/sig/sig/metrics
     docker-compose down
     docker-compose pull
