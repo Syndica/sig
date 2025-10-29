@@ -37,17 +37,17 @@ pub fn createWithSeed(
     seed: []const u8,
     owner: Pubkey,
 ) PubkeyError!Pubkey {
-    if (seed.len > MAX_SEED_LEN) {
-        return PubkeyError.MaxSeedLenExceeded;
-    }
+    if (seed.len > MAX_SEED_LEN) return PubkeyError.MaxSeedLenExceeded;
 
     const offset = owner.data.len - PDA_MARKER.len;
     if (std.mem.eql(u8, owner.data[offset..], PDA_MARKER))
         return PubkeyError.IllegalOwner;
 
-    return .{
-        .data = sig.core.Hash.generateSha256(.{ &base.data, seed, &owner.data }).data,
-    };
+    return .{ .data = sig.core.Hash.initMany(&.{
+        &base.data,
+        seed,
+        &owner.data,
+    }).data };
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/c5ed1663a1218e9e088e30c81677bc88059cc62b/sdk/pubkey/src/lib.rs#L633
