@@ -910,7 +910,7 @@ test "prepareSlot: empty and dead slots are handled correctly" {
 
     const constants, const slot_state = try sig.replay.service.newSlotFromParent(
         allocator,
-        dep_stubs.accountsdb.accountReader(),
+        .{ .accounts_db_two = &dep_stubs.accounts_db_state.db },
         epoch.?.ticks_per_slot,
         0,
         root.?.constants,
