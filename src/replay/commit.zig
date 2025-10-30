@@ -14,7 +14,6 @@ const Transaction = sig.core.Transaction;
 
 const ResolvedTransaction = replay.resolve_lookup.ResolvedTransaction;
 
-const AccountSharedData = sig.runtime.AccountSharedData;
 const ProcessedTransaction = sig.runtime.transaction_execution.ProcessedTransaction;
 
 const vote_listener = sig.consensus.vote_listener;

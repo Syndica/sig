@@ -32,7 +32,6 @@ const ResolvedTransaction = replay.resolve_lookup.ResolvedTransaction;
 const SvmGateway = replay.svm_gateway.SvmGateway;
 
 const verifyPoh = core.entry.verifyPoh;
-const resolveBatch = replay.resolve_lookup.resolveBatch;
 
 const assert = std.debug.assert;
 

@@ -13,13 +13,11 @@ const Atomic = std.atomic.Value;
 const ThreadPool = sig.sync.ThreadPool;
 
 const Ancestors = core.Ancestors;
-const EpochConstants = core.EpochConstants;
 const Entry = core.Entry;
 const Hash = core.Hash;
 const Slot = core.Slot;
 
 const AccountStore = sig.accounts_db.AccountStore;
-const SlotAccountReader = sig.accounts_db.SlotAccountReader;
 
 const ForkProgress = sig.consensus.progress_map.ForkProgress;
 const ParsedVote = sig.consensus.vote_listener.vote_parser.ParsedVote;
@@ -31,7 +29,6 @@ const Committer = replay.commit.Committer;
 const EpochTracker = replay.trackers.EpochTracker;
 const ReplaySlotFuture = replay.exec_async.ReplaySlotFuture;
 const ReplayState = replay.service.ReplayState;
-const ResolvedBatch = replay.resolve_lookup.ResolvedBatch;
 const ResolvedTransaction = replay.resolve_lookup.ResolvedTransaction;
 const SlotResolver = replay.resolve_lookup.SlotResolver;
 const SlotTracker = replay.trackers.SlotTracker;
