@@ -115,14 +115,14 @@ pub fn getRequestTargetResolve(
             const latest_full = latest_snapshot_gen_info.full;
             const full_info: FullSnapshotFileInfo = .{
                 .slot = latest_full.slot,
-                .hash = latest_full.hash,
+                .hash = latest_full.hash.checksum(),
             };
             const latest_incremental = latest_snapshot_gen_info.inc orelse
                 break :blk .{ full_info, null };
             const inc_info: IncrementalSnapshotFileInfo = .{
                 .base_slot = latest_full.slot,
                 .slot = latest_incremental.slot,
-                .hash = latest_incremental.hash,
+                .hash = latest_incremental.hash.checksum(),
             };
             break :blk .{ full_info, inc_info };
         };
@@ -150,6 +150,7 @@ pub fn getRequestTargetResolve(
         if (inc_info) |inc| {
             const inc_archive_name_bounded = inc.snapshotArchiveName();
             const inc_archive_name = inc_archive_name_bounded.constSlice();
+
             if (std.mem.eql(u8, target, inc_archive_name)) {
                 // acquire another lock on the rwmux, since the first one we got is going to unlock after we return.
                 const latest_snapshot_info_lg_again = latest_snapshot_gen_info_rw.read();

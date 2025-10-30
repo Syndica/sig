@@ -247,7 +247,6 @@ pub const Vm = struct {
             .arsh64_imm,
             .arsh32_reg,
             .arsh32_imm,
-            .hor64_imm,
             .lsh64_reg,
             .lsh64_imm,
             .lsh32_reg,
@@ -285,73 +284,43 @@ pub const Vm = struct {
 
                         const result: Int = switch (@intFromEnum(opcode) & 0b11110000) {
                             // zig fmt: off
-                            Instruction.div    => try divTrunc(Int, lhs, rhs),
+                            Instruction.mov    => rhs,
+                            Instruction.add    => lhs +% rhs,
+                            Instruction.mul    => lhs *% rhs,
+                           
+                            Instruction.neg    => -%lhs,
                             Instruction.xor    => lhs ^ rhs,
                             Instruction.@"or"  => lhs | rhs,
                             Instruction.@"and" => lhs & rhs,
-                            Instruction.mov    => rhs,
-                            Instruction.mod    => try mod(Int, lhs, rhs),
+
                             Instruction.lsh    => lhs << @truncate(rhs),
                             Instruction.rsh    => lhs >> @truncate(rhs),
+
+                            Instruction.div    => try divTrunc(Int, lhs, rhs),
+                            Instruction.mod    => try mod(Int, lhs, rhs),
                             // zig fmt: on
-                            Instruction.add => switch (opcode) {
-                                .add64_reg, .add64_imm => lhs +% rhs,
-                                .add32_reg, .add32_imm => v: {
-                                    const signed_lhs: SignedInt = @bitCast(lhs);
-                                    const signed_rhs: SignedInt = @bitCast(rhs);
-                                    break :v @bitCast(signed_lhs +% signed_rhs);
-                                },
-                                else => unreachable,
-                            },
                             Instruction.sub => v: {
-                                const swapped_lhs, const swapped_rhs = if (!opcode.isReg() and
-                                    version.swapSubRegImmOperands())
-                                    .{ rhs, lhs }
+                                const swapped = !opcode.isReg() and version.swapSubRegImmOperands();
+                                break :v if (swapped)
+                                    rhs -% lhs
                                 else
-                                    .{ lhs, rhs };
-                                switch (opcode) {
-                                    .sub32_reg, .sub32_imm => {
-                                        const lhs_signed: SignedInt = @bitCast(swapped_lhs);
-                                        const rhs_signed: SignedInt = @bitCast(swapped_rhs);
-                                        break :v @bitCast(lhs_signed -% rhs_signed);
-                                    },
-                                    .sub64_reg, .sub64_imm => break :v swapped_lhs -% swapped_rhs,
-                                    else => unreachable,
-                                }
-                            },
-                            Instruction.mul => value: {
-                                if (is_64) break :value lhs *% rhs;
-                                const lhs_signed: SignedInt = @bitCast(lhs);
-                                const rhs_signed: SignedInt = @bitCast(rhs);
-                                break :value @bitCast(lhs_signed *% rhs_signed);
-                            },
-                            Instruction.neg => value: {
-                                if (version.disableNegation()) return error.UnsupportedInstruction;
-                                const signed: SignedInt = @bitCast(lhs);
-                                break :value @bitCast(-%signed);
+                                    lhs -% rhs;
                             },
                             Instruction.arsh => value: {
                                 const signed: SignedInt = @bitCast(lhs);
                                 break :value @bitCast(signed >> @truncate(rhs));
                             },
-                            Instruction.hor => if (version.disableLddw()) value: {
-                                // The hor instruction only exists as hor64_imm, but Zig can't tell
-                                // that the the opcode can't possibly reach here. We'll nicely hint
-                                // to it, by specializing the rest of the function
-                                // behind the `is_64` boolean.
-                                if (!is_64) return error.UnsupportedInstruction;
-                                break :value lhs | @as(u64, inst.imm) << 32;
-                            } else return error.UnsupportedInstruction,
                             else => std.debug.panic("{s}", .{@tagName(opcode)}),
                         };
 
                         const large_result: u64 = switch (@intFromEnum(opcode) & 0b11110000) {
                             Instruction.add,
                             Instruction.sub,
-                            => if (!is_64) signExtend(version, @bitCast(result)) else result,
+                            => if (is_64) result else signExtend(version, @bitCast(result)),
                             // The mul32 instruction requires a sign extension to u64 from i32.
                             Instruction.mul => if (is_64) result else extend(result),
-                            Instruction.mov => if (!is_64 and opcode.isReg() and
+                            Instruction.mov => if (!is_64 and
+                                opcode.isReg() and
                                 version.explicitSignExtensionOfResults())
                                 extend(result)
                             else
@@ -361,6 +330,12 @@ pub const Vm = struct {
                         registers.set(inst.dst, large_result);
                     },
                 }
+            },
+
+            .hor64_imm => {
+                const lhs = registers.get(inst.dst);
+                const result = lhs | @as(u64, inst.imm) << 32;
+                registers.set(inst.dst, result);
             },
 
             .lmul32_reg,

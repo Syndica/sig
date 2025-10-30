@@ -7,6 +7,7 @@ const pedersen = zksdk.pedersen;
 pub const Benchmark = struct {
     pub const min_iterations = 100;
     pub const max_iterations = 1_000;
+    pub const name = "zksdk";
 
     pub fn pubkeyValidity() !sig.time.Duration {
         const kp = zksdk.ElGamalKeypair.random();

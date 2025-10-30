@@ -25,7 +25,7 @@ const ProcessedTransaction = sig.runtime.transaction_execution.ProcessedTransact
 const SlotHashes = sig.runtime.sysvar.SlotHashes;
 const TransactionError = sig.ledger.transaction_status.TransactionError;
 
-const Committer = replay.commit.Committer;
+const Committer = replay.Committer;
 const EpochTracker = replay.trackers.EpochTracker;
 const ReplaySlotFuture = replay.exec_async.ReplaySlotFuture;
 const ReplayState = replay.service.ReplayState;
@@ -551,7 +551,8 @@ fn prepareSlot(
 
     const writes = try sig.sync.Channel(sig.core.Pubkey).create(state.allocator);
     errdefer writes.destroy(state.allocator);
-    const committer = replay.commit.Committer{
+
+    const committer = replay.Committer{
         .logger = .from(state.logger),
         .slot_state = slot_info.state,
         .status_cache = &state.status_cache,
