@@ -236,7 +236,10 @@ pub const GossipData = union(GossipDataTag) {
     LegacyVersion: LegacyVersion,
     Version: Version,
     NodeInstance: NodeInstance,
-    DuplicateShred: struct { u16, DuplicateShred },
+    DuplicateShred: struct {
+        u16, // shred index
+        DuplicateShred,
+    },
     SnapshotHashes: SnapshotHashes,
     ContactInfo: ContactInfo,
     // https://github.com/anza-xyz/agave/commit/0a3810854fa4a11b0841c548dcbc0ada311b8830

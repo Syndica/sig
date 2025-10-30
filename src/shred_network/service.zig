@@ -118,6 +118,7 @@ pub fn start(
         .ledger_reader = deps.ledger.reader(),
         .result_writer = deps.ledger.resultWriter(),
         .duplicate_slots_sender = deps.duplicate_slots_sender,
+        .gossip_service = null,
     });
     try defers.deferCall(ShredReceiver.deinit, .{ shred_receiver, deps.allocator });
     try service_manager.spawn(
