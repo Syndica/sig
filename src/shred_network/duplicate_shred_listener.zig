@@ -418,7 +418,7 @@ const DuplicateShredHandler = struct {
     }
 };
 
-test "duplicate_shred_listener: invalid chunk index rejected" {
+test "DuplicateShredHandler: invalid chunk index rejected" {
     const allocator = std.testing.allocator;
     var epoch_ctx = try sig.adapter.EpochContextManager.init(allocator, .DEFAULT);
     defer epoch_ctx.deinit();
@@ -459,7 +459,7 @@ test "duplicate_shred_listener: invalid chunk index rejected" {
     try std.testing.expectError(error.InvalidChunkIndex, handler.handleShredData(dup));
 }
 
-test "duplicate_shred_listener: overwrite existing chunk at same index" {
+test "DuplicateShredHandler: overwrite existing chunk at same index" {
     const allocator = std.testing.allocator;
     var epoch_ctx = try sig.adapter.EpochContextManager.init(allocator, .DEFAULT);
     defer epoch_ctx.deinit();
@@ -511,7 +511,7 @@ test "duplicate_shred_listener: overwrite existing chunk at same index" {
     try std.testing.expectEqualSlices(u8, entry_ptr.chunks[0].?, &chunk2);
 }
 
-test "duplicate_shred_listener: complete invalid proof cleans up entry" {
+test "DuplicateShredHandler: complete invalid proof cleans up entry" {
     const allocator = std.testing.allocator;
     var epoch_ctx = try sig.adapter.EpochContextManager.init(allocator, .DEFAULT);
     defer epoch_ctx.deinit();
@@ -557,7 +557,7 @@ test "duplicate_shred_listener: complete invalid proof cleans up entry" {
     try std.testing.expectEqual(null, handler.dup_buffer.get(key));
 }
 
-test "duplicate_shred_listener: early duplicate slot skips buffering" {
+test "DuplicateShredHandler: early duplicate slot skips buffering" {
     const allocator = std.testing.allocator;
     var epoch_ctx = try sig.adapter.EpochContextManager.init(allocator, .DEFAULT);
     defer epoch_ctx.deinit();
