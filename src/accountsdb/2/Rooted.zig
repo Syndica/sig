@@ -122,25 +122,34 @@ pub fn get(self: *Rooted, allocator: std.mem.Allocator, address: Pubkey) !?Accou
     ;
 
     var stmt: ?*sql.sqlite3_stmt = undefined;
-    if (sql.sqlite3_prepare_v2(self.handle, query, -1, &stmt, null) != OK)
+    if (sql.sqlite3_prepare_v2(self.handle, query, -1, &stmt, null) != OK) {
+        std.debug.print("err: {s}\n", .{sql.sqlite3_errmsg(self.handle)});
         @panic("failed to prepare get");
+    }
 
     _ = sql.sqlite3_bind_blob(stmt, 1, &address.data, Pubkey.SIZE, sql.SQLITE_STATIC);
 
     const rc = sql.sqlite3_step(stmt);
     defer _ = sql.sqlite3_finalize(stmt);
     if (rc == ROW) {
-        const data_ptr: [*]const u8 = @ptrCast(sql.sqlite3_column_blob(stmt, 1));
-        const data = data_ptr[0..@intCast(sql.sqlite3_column_bytes(stmt, 1))];
-        const duped = try allocator.dupe(u8, data);
-        errdefer allocator.free(duped);
+        const data: []u8 = data: {
+            const length = sql.sqlite3_column_bytes(stmt, 1);
+            if (length == 0) break :data &.{}; // sqlite says 0 length blobs are NULL
+
+            const data_ptr: [*]const u8 = @ptrCast(sql.sqlite3_column_blob(stmt, 1));
+            const data = data_ptr[0..@intCast(length)];
+
+            const duped = try allocator.dupe(u8, data);
+            errdefer allocator.free(duped);
+            break :data duped;
+        };
 
         const owner_ptr: [*]const u8 = @ptrCast(sql.sqlite3_column_blob(stmt, 2));
         const owner: Pubkey = .{ .data = owner_ptr[0..32].* };
 
         return .{
             .lamports = @bitCast(sql.sqlite3_column_int64(stmt, 0)),
-            .data = duped,
+            .data = data,
             .owner = owner,
             .executable = sql.sqlite3_column_int(stmt, 3) != 0,
             .rent_epoch = @bitCast(sql.sqlite3_column_int64(stmt, 4)),

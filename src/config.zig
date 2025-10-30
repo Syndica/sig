@@ -26,6 +26,7 @@ pub const Cmd = struct {
     shred_version: ?u16 = null,
     replay_threads: u16 = 4,
     disable_consensus: bool = false,
+    recreate_sqlite: bool = false,
 
     pub fn genesisFilePath(self: Cmd) error{UnknownCluster}!?[]const u8 {
         return if (self.genesis_file_path) |provided_path|
