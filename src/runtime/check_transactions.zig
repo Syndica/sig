@@ -100,7 +100,8 @@ pub fn checkFeePayer(
     var zone = tracy.Zone.init(@src(), .{ .name = "checkFeePayer" });
     defer zone.deinit();
 
-    errdefer if (maybe_nonce) |na| na.deinit(allocator); // TODO doesn't handle return `.err` properly
+    var maybe_nonce_to_free = maybe_nonce;
+    defer if (maybe_nonce_to_free) |na| na.deinit(allocator);
 
     const enable_secp256r1 = feature_set.active(.enable_secp256r1_precompile, slot);
     const fee_payer_key = transaction.accounts.items(.pubkey)[0];
@@ -136,46 +137,34 @@ pub fn checkFeePayer(
         fee_details.total(),
     )) |validation_error| return .{ .err = validation_error };
 
-    // TODO: why does the payer's rent epoch only roll back when there is no
-    // nonce? that seems wrong, but this is how it was previously written, and
-    // the tests expect this behavior, so i've left it.
     var rollbacks = std.BoundedArray(CachedAccount, 2){};
-    errdefer for (rollbacks.slice()) |rollback| {
-        if (maybe_nonce) |n| if (rollback.pubkey.equals(&n.pubkey)) continue;
-        rollback.deinit(allocator);
-    };
-    if (maybe_nonce) |nonce| {
-        if (fee_payer_key.equals(&nonce.pubkey)) {
-            rollbacks.append(.{
-                .pubkey = nonce.pubkey,
-                .account = .{
-                    .lamports = cached_payer.lamports +| rent_collected,
-                    .data = nonce.account.data,
-                    .owner = nonce.account.owner,
-                    .executable = nonce.account.executable,
-                    .rent_epoch = cached_payer.rent_epoch,
-                },
-                .is_owned = true,
-            }) catch unreachable;
-        } else {
-            rollbacks.append(nonce) catch unreachable;
-            var rollback_payer = CachedAccount{
-                .pubkey = fee_payer_key,
-                .account = try cached_payer.clone(allocator),
-                .is_owned = true,
-            };
-            rollback_payer.account.lamports +|= rent_collected;
-            rollbacks.append(rollback_payer) catch unreachable;
-        }
-    } else {
-        var rollback_payer = CachedAccount{
-            .pubkey = fee_payer_key,
-            .account = try cached_payer.clone(allocator),
+    errdefer for (rollbacks.slice()) |rollback| rollback.deinit(allocator);
+
+    maybe_nonce_to_free = null;
+    if (maybe_nonce != null and fee_payer_key.equals(&maybe_nonce.?.pubkey)) {
+        rollbacks.append(.{
+            .pubkey = maybe_nonce.?.pubkey,
+            .account = .{
+                .lamports = cached_payer.lamports +| rent_collected,
+                .data = maybe_nonce.?.account.data,
+                .owner = maybe_nonce.?.account.owner,
+                .executable = maybe_nonce.?.account.executable,
+                .rent_epoch = cached_payer.rent_epoch,
+            },
             .is_owned = true,
-        };
-        rollback_payer.account.lamports +|= rent_collected;
-        rollback_payer.account.rent_epoch = fee_payer_loaded_rent_epoch;
-        rollbacks.append(rollback_payer) catch unreachable;
+        }) catch unreachable;
+    } else {
+        var rollback_payer = try cached_payer.clone(allocator);
+        if (maybe_nonce) |nonce|
+            rollbacks.append(nonce) catch unreachable
+        else
+            rollback_payer.rent_epoch = fee_payer_loaded_rent_epoch;
+        rollback_payer.lamports +|= rent_collected;
+        rollbacks.append(.{
+            .pubkey = fee_payer_key,
+            .account = rollback_payer,
+            .is_owned = true,
+        }) catch unreachable;
     }
 
     return .{ .ok = .{ fee_details, rollbacks } };
