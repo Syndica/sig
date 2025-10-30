@@ -12,11 +12,9 @@ const AccountSharedData = runtime.AccountSharedData;
 const LoadedTransactionAccounts = runtime.account_loader.LoadedTransactionAccounts;
 const RuntimeTransaction = runtime.transaction_execution.RuntimeTransaction;
 
-// TODO reconsider where these docs belong
-/// Implements much of Agave's AccountLoader functionality. Owns the accounts it loads.
-/// [agave] https://github.com/anza-xyz/agave/blob/bb5a6e773d5f41388a962c5c4f96f5f2ef2209d0/svm/src/account_loader.rs#L154
-/// pubkey -> AccountSharedData for all pubkeys *except* SYSVAR_INSTRUCTIONS_ID, which is a
-/// special case (constructed on a per-transaction basis)
+/// pubkey -> AccountSharedData for all pubkeys *except* SYSVAR_INSTRUCTIONS_ID,
+/// which is a special case (constructed on a per-transaction basis)
+/// Owns all the accounts it contains.
 pub const AccountMap = std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData);
 
 pub fn deinit(map: AccountMap, allocator: Allocator) void {

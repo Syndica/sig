@@ -1,3 +1,5 @@
+//! Implements much of Agave's AccountLoader functionality.
+//! [agave] https://github.com/anza-xyz/agave/blob/bb5a6e773d5f41388a962c5c4f96f5f2ef2209d0/svm/src/account_loader.rs#L154
 const std = @import("std");
 const sig = @import("../sig.zig");
 const tracy = @import("tracy");
