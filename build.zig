@@ -431,20 +431,6 @@ pub fn build(b: *Build) !void {
         .install_subdir = "docs",
     });
     docs_step.dependOn(&install_sig_docs.step);
-
-    const testing_exe = b.addExecutable(.{
-        .name = "testing",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/accountsdb/2/Rooted.zig"),
-            .target = config.target,
-            .optimize = config.optimize,
-            .sanitize_thread = config.enable_tsan,
-            .error_tracing = config.error_tracing,
-            .imports = imports,
-        }),
-    });
-    testing_exe.root_module.addImport("sig", sig_mod);
-    addInstallAndRun(b, random_testing, testing_exe, config);
 }
 
 /// the standard approach for installing and running the executables produced in

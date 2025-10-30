@@ -1,6 +1,6 @@
 //! Database for rooted accounts.
 const std = @import("std");
-const sig = @import("sig");
+const sig = @import("../../sig.zig");
 const sql = @import("sqlite");
 const Rooted = @This();
 
@@ -92,7 +92,7 @@ pub fn get(self: *Rooted, allocator: std.mem.Allocator, address: Pubkey) !?Accou
 
     var stmt: ?*sql.sqlite3_stmt = undefined;
     if (sql.sqlite3_prepare_v2(self.handle, query, -1, &stmt, null) != OK)
-        return error.FailedToPrepareGet;
+        @panic("failed to prepare get");
 
     _ = sql.sqlite3_bind_blob(stmt, 1, &address.data, Pubkey.SIZE, sql.SQLITE_STATIC);
 

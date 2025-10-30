@@ -13,6 +13,8 @@ pub const AccountReader = account_store.AccountReader;
 pub const SlotAccountReader = account_store.SlotAccountReader;
 pub const ThreadSafeAccountMap = account_store.ThreadSafeAccountMap;
 
+pub const Two = @import("2/lib.zig");
+
 pub const AccountsDB = db.AccountsDB;
 
 pub const ACCOUNT_INDEX_SHARDS = db.ACCOUNT_INDEX_SHARDS;

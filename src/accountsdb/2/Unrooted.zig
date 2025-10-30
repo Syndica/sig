@@ -1,86 +1,59 @@
 //! A database which stores unrooted account modifications.
-//! TODO: better doc comment
+//!
+//! Design notes:
+//! - This design assumes that the slots provided are never more than
+//! 4096 apart from each other.
+//!
+
 const std = @import("std");
-const sig = @import("sig");
+const sig = @import("../../sig.zig");
 
 const Atomic = std.atomic.Value;
 
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
+const Ancestors = sig.core.Ancestors;
+const Account = sig.core.Account;
 const AccountSharedData = sig.runtime.AccountSharedData;
 
+pub const MAX_SLOTS = 4096;
+
 const Unrooted = @This();
-const TABLE_BITS = 20; // 2^20 buckets TODO: maybe optimize this? can there really ever be a case when we need more?
-const TABLE_SIZE = 1 << TABLE_BITS;
-const TABLE_MASK = TABLE_SIZE - 1;
 
-// per slot, only ever one writer per key, but multiple readers per key
-// for an account/address, possible multiple writers for different slots
-//
-// very unlikely to have multiple writers on same account for different slots,
-// only happens on concurrent forked execution
+slots: []SlotIndex,
 
-table: []Bucket,
-
-const Bucket = Atomic(?*Entry);
-
-const Entry = struct {
-    key: Pubkey,
-    versions: std.ArrayListUnmanaged(Version),
-    next: ?*Entry,
-
-    fn create(allocator: std.mem.Allocator, key: Pubkey, version: Version) !*Entry {
-        const e = try allocator.create(Entry);
-        errdefer allocator.destroy(e);
-
-        var versions: std.ArrayListUnmanaged(Version) = try .initCapacity(allocator, 1);
-        errdefer versions.deinit(allocator);
-        versions.appendAssumeCapacity(version);
-
-        e.* = .{
-            .key = key,
-            .versions = versions,
-            .next = null,
-        };
-
-        return e;
-    }
-
-    // TODO: consider that this *can* be called multi-thread, although super rare
-    fn insert(self: *Entry, allocator: std.mem.Allocator, version: Version) !void {
-        const new_index = std.sort.partitionPoint(
-            Version,
-            self.versions.items,
-            version,
-            struct {
-                fn cmp(new: Version, old: Version) bool {
-                    return new.slot < old.slot;
-                }
-            }.cmp,
-        );
-        try self.versions.insert(allocator, new_index, version);
-    }
-};
-
-const Version = struct {
+pub const SlotIndex = struct {
+    lock: std.Thread.RwLock,
     slot: Slot,
-    data: AccountSharedData,
+    entries: std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData),
+
+    const empty: SlotIndex = .{
+        .lock = .{},
+        .entries = .empty,
+        .slot = 0,
+    };
 };
 
 pub fn init(allocator: std.mem.Allocator) !Unrooted {
-    const table = try allocator.alloc(Bucket, TABLE_SIZE);
-    @memset(table, .init(null));
-    return .{ .table = table };
+    const slots = try allocator.alloc(SlotIndex, MAX_SLOTS);
+    errdefer allocator.free(slots);
+    @memset(slots, .empty);
+
+    return .{ .slots = slots };
 }
 
 pub fn deinit(self: *Unrooted, allocator: std.mem.Allocator) void {
-    allocator.free(self.table);
+    for (self.slots) |*slot| slot.entries.deinit(allocator);
+    allocator.free(self.slots);
 }
 
-fn hash(key: Pubkey) u32 {
-    return std.hash.Fnv1a_32.hash(&key.data);
-}
-
+/// - For each unique (`slot`, `address`) pair, there will only ever be one concurrent writer.
+/// There can be multiple concurrent readers.
+/// - For each unique `address`, there can be multiple concurrent writers, however each
+/// one will have a different `slot`.
+///
+/// It is unlikely to have multiple writers on the same account for different slots,
+/// as this only happens during concurrent forked execution.
 pub fn put(
     self: *Unrooted,
     allocator: std.mem.Allocator,
@@ -88,41 +61,42 @@ pub fn put(
     address: Pubkey,
     data: AccountSharedData,
 ) !void {
-    // TODO: try just getting the last 32-bits instead of hashing
-    const h = hash(address);
-    const idx = h & TABLE_MASK;
-    const old_head = self.table[idx].load(.acquire);
+    const index = slot % MAX_SLOTS;
+    const entry = &self.slots[index];
 
-    while (true) {
-        var new_head: ?*Entry = null;
-        var maybe_current = old_head;
-        var found: bool = false;
+    entry.lock.lock();
+    defer entry.lock.unlock();
 
-        while (maybe_current) |current| : (maybe_current = current.next) {
-            if (current.key.equals(&address)) {
-                found = true;
-                try current.insert(allocator, .{ .slot = slot, .data = data });
-                break;
-            }
-        }
-
-        if (!found) {
-            // new entry
-            const entry: *Entry = try .create(allocator, address, .{
-                .slot = slot,
-                .data = data,
-            });
-            entry.next = new_head;
-            new_head = entry;
-        } else {
-            // new_head already contains clones
-        }
-
-        // publish
-        if (self.table[idx].cmpxchgWeak(old_head, new_head, .release, .acquire)) |_| {
-            @panic("TODO");
-        } else return;
+    if (entry.slot != slot) {
+        entry.entries.clearRetainingCapacity();
+        entry.slot = slot;
     }
+
+    try entry.entries.put(allocator, address, data);
+}
+
+/// Gets the latest state of the account keyed by `address` visible to the given ancestor set.
+pub fn get(
+    self: *Unrooted,
+    address: Pubkey,
+    ancestors: *const Ancestors,
+) ?Account {
+    var best_slot: Slot = 0;
+    var result: ?Account = null;
+
+    for (self.slots) |*index| {
+        index.lock.lockShared();
+        defer index.lock.unlockShared();
+
+        if (ancestors.containsSlot(index.slot)) {
+            if (index.slot < best_slot) continue;
+            const data = index.entries.get(address) orelse continue;
+            result = data.asAccount();
+            best_slot = index.slot;
+        }
+    }
+
+    return result;
 }
 
 pub fn main() !void {
@@ -156,11 +130,28 @@ pub fn main() !void {
         .{ // data
             .data = &.{},
             .executable = true,
-            .lamports = 2_000_000,
+            .lamports = 500_000,
             .owner = account_b,
             .rent_epoch = 30,
         },
     );
 
-    std.debug.print("hello world\n", .{});
+    try db.put(
+        allocator,
+        3, // slot
+        account_a, // address
+        .{ // data
+            .data = &.{},
+            .executable = true,
+            .lamports = 250_000,
+            .owner = account_b,
+            .rent_epoch = 30,
+        },
+    );
+
+    var ancestors: Ancestors = try .initWithSlots(allocator, &.{ 1, 3 });
+    defer ancestors.deinit(allocator);
+
+    const result = db.get(account_a, &ancestors).?;
+    std.debug.print("result: {d}\n", .{result.lamports});
 }
