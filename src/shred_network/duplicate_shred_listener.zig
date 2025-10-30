@@ -11,16 +11,16 @@ const RwMux = sig.sync.RwMux;
 const Slot = sig.core.Slot;
 
 const GossipVersionedData = sig.gossip.data.GossipVersionedData;
-const DuplicateShredData = sig.gossip.data.DuplicateShred;
+const DuplicateShred = sig.gossip.data.DuplicateShred;
 
 const ResultWriter = sig.ledger.ResultWriter;
 const LedgerReader = sig.ledger.Reader;
 const DuplicateSlotProof = sig.ledger.meta.DuplicateSlotProof;
 
-pub const GOSSIP_SLEEP_MILLIS: u64 = 100;
-pub const MAX_NUM_CHUNKS: usize = 3;
-pub const MAX_NUM_ENTRIES_PER_PUBKEY: usize = 128;
-pub const BUFFER_CAPACITY: usize = 512 * MAX_NUM_ENTRIES_PER_PUBKEY;
+const GOSSIP_SLEEP_MILLIS: u64 = 100;
+const MAX_NUM_CHUNKS: usize = 3;
+const MAX_NUM_ENTRIES_PER_PUBKEY: usize = 128;
+const BUFFER_CAPACITY: usize = 512 * MAX_NUM_ENTRIES_PER_PUBKEY;
 
 pub const Params = struct {
     exit: *Atomic(bool),
@@ -30,30 +30,6 @@ pub const Params = struct {
     duplicate_slots_sender: *Channel(Slot),
     shred_version: *const std.atomic.Value(u16),
     epoch_tracker: *sig.core.EpochTracker,
-};
-
-pub const DuplicateShredListener = struct {
-    thread: std.Thread,
-
-    pub fn start(
-        allocator: Allocator,
-        logger: Logger,
-        params: Params,
-    ) !DuplicateShredListener {
-        const thread = try std.Thread.spawn(
-            .{},
-            recvLoop,
-            .{ allocator, logger, params },
-        );
-        errdefer thread.join();
-
-        thread.setName("solCiEntryLstnr") catch {};
-        return .{ .thread = thread };
-    }
-
-    pub fn join(self: DuplicateShredListener) void {
-        self.thread.join();
-    }
 };
 
 const Key = struct { slot: Slot, from: Pubkey };
@@ -96,10 +72,10 @@ pub fn recvLoop(
             defer versioned.deinit(allocator);
             switch (versioned.data) {
                 .DuplicateShred => |data| {
-                    _, const dup = data;
-                    handler.handle(dup) catch |e| handler.logger.err().logf(
+                    _, const duplicate_shred = data;
+                    handler.handle(duplicate_shred) catch |e| handler.logger.err().logf(
                         "duplicate_shred_listener: handle chunk failed for slot {}: {}",
-                        .{ dup.slot, e },
+                        .{ duplicate_shred.slot, e },
                     );
                 },
                 else => {},
@@ -117,8 +93,12 @@ const DuplicateShredHandler = struct {
     // each shred is normally 1 packet(1500 bytes), so the whole proof is larger than
     // 1 packet and it needs to be cut down as chunks for transfer. So we need to piece
     // together the chunks into the original proof before anything useful is done.
-    dup_buffer: std.AutoHashMapUnmanaged(Key, BufferEntry),
+    dup_buffer: std.AutoArrayHashMapUnmanaged(Key, BufferEntry),
+    // Cached state: slots for which a duplicate proof is already ingested.
+    // This is synchronized with the blockstore during pruning to avoid redundant duplicate slot checks.
     consumed: std.AutoHashMapUnmanaged(Slot, bool),
+    // Cached state: last root slot from blockstore to reduce read overhead.
+    // Updated at the beginning of each handle() call.
     last_root: Slot,
     cached_slots_in_epoch: u64,
 
@@ -135,17 +115,16 @@ const DuplicateShredHandler = struct {
     }
 
     pub fn deinit(self: *DuplicateShredHandler) void {
-        var it = self.dup_buffer.valueIterator();
-        while (it.next()) |entry| {
+        for (self.dup_buffer.values()) |entry| {
             for (entry.chunks) |maybe_chunk| if (maybe_chunk) |chunk| self.allocator.free(chunk);
         }
         self.dup_buffer.deinit(self.allocator);
         self.consumed.deinit(self.allocator);
     }
 
-    pub fn handle(self: *DuplicateShredHandler, dup_shred_data: DuplicateShredData) !void {
+    pub fn handle(self: *DuplicateShredHandler, dup_shred_data: DuplicateShred) !void {
         self.cacheRootInfo();
-        self.maybePruneBuffer();
+        try self.maybePruneBuffer();
         try self.handleShredData(dup_shred_data);
     }
 
@@ -159,7 +138,8 @@ const DuplicateShredHandler = struct {
 
     fn shouldConsumeSlot(self: *DuplicateShredHandler, slot: Slot) !bool {
         const max_slot = self.last_root +| self.cached_slots_in_epoch;
-        if (!(slot > self.last_root and slot < max_slot)) return false;
+        const slot_in_range = slot > self.last_root and slot < max_slot;
+        if (!slot_in_range) return false;
         // Returns false if a duplicate proof is already ingested for the slot,
         // and updates local `consumed` cache with blockstore.
         const gop = try self.consumed.getOrPut(self.allocator, slot);
@@ -169,17 +149,15 @@ const DuplicateShredHandler = struct {
         return !gop.value_ptr.*;
     }
 
-    fn maybePruneBuffer(self: *DuplicateShredHandler) void {
+    fn maybePruneBuffer(self: *DuplicateShredHandler) !void {
         if (self.dup_buffer.count() < BUFFER_CAPACITY * 2) return;
 
         var counts: std.AutoHashMapUnmanaged(Pubkey, usize) = .empty;
         defer counts.deinit(self.allocator);
-        var keys_to_remove = std.ArrayListUnmanaged(Key){};
+        var keys_to_remove: std.ArrayListUnmanaged(Key) = .empty;
         defer keys_to_remove.deinit(self.allocator);
 
-        var it = self.dup_buffer.keyIterator();
-        while (it.next()) |key_ptr| {
-            const key = key_ptr.*;
+        for (self.dup_buffer.keys()) |key| {
             var keep =
                 key.slot > self.last_root and key.slot < self.last_root + self.cached_slots_in_epoch;
             if (keep) {
@@ -200,21 +178,19 @@ const DuplicateShredHandler = struct {
             }
         }
         for (keys_to_remove.items) |k| {
-            _ = self.dup_buffer.remove(k);
+            _ = self.dup_buffer.swapRemove(k);
         }
 
         if (self.dup_buffer.count() < BUFFER_CAPACITY) return;
 
-        var tmp = std.ArrayListUnmanaged(struct { u64, Key }){};
+        var tmp: std.ArrayListUnmanaged(struct { u64, Key }) = .empty;
         defer tmp.deinit(self.allocator);
-        var it2 = self.dup_buffer.keyIterator();
-        while (it2.next()) |key_ptr| {
-            const key = key_ptr.*;
+        for (self.dup_buffer.keys()) |key| {
             var stake: u64 = 0;
             if (self.params.epoch_tracker.getEpochInfo(key.slot)) |c| {
                 if (c.stakes.stakes.vote_accounts.staked_nodes.get(key.from)) |s| stake = s;
             } else |_| {}
-            tmp.append(self.allocator, .{ stake, key }) catch {};
+            try tmp.append(self.allocator, .{ stake, key });
         }
         std.sort.pdq(struct { u64, Key }, tmp.items, {}, struct {
             pub fn lessThan(_: void, a: struct { u64, Key }, b: struct { u64, Key }) bool {
@@ -226,12 +202,12 @@ const DuplicateShredHandler = struct {
             const to_remove_count = tmp.items.len - BUFFER_CAPACITY;
             var i: usize = 0;
             while (i < to_remove_count) : (i += 1) {
-                _ = self.dup_buffer.remove(tmp.items[i][1]);
+                _ = self.dup_buffer.swapRemove(tmp.items[i][1]);
             }
         }
     }
 
-    fn handleShredData(self: *DuplicateShredHandler, dup_shred_data: DuplicateShredData) !void {
+    fn handleShredData(self: *DuplicateShredHandler, dup_shred_data: DuplicateShred) !void {
         if (!try self.shouldConsumeSlot(dup_shred_data.slot)) {
             return;
         }
@@ -248,7 +224,7 @@ const DuplicateShredHandler = struct {
 
         const gop = try self.dup_buffer.getOrPut(self.allocator, key);
         if (!gop.found_existing) {
-            gop.value_ptr.* = .{ .chunks = [_]?[]u8{null} ** MAX_NUM_CHUNKS };
+            gop.value_ptr.* = .{ .chunks = @splat(null) };
         }
         const entry = gop.value_ptr;
 
@@ -269,14 +245,18 @@ const DuplicateShredHandler = struct {
         }
         if (filled != dup_shred_data.num_chunks) return;
 
-        var data = try self.allocator.alloc(u8, total_len);
+        const data = try self.allocator.alloc(u8, total_len);
         defer self.allocator.free(data);
 
         var offset: usize = 0;
         for (0..dup_shred_data.num_chunks) |k| {
-            const chunk = entry.chunks[k].?;
-            @memcpy(data[offset .. offset + chunk.len], chunk);
-            offset += chunk.len;
+            const maybe_chunk = entry.chunks[k];
+            if (maybe_chunk) |chunk| {
+                @memcpy(data[offset .. offset + chunk.len], chunk);
+                offset += chunk.len;
+            } else {
+                return error.InvalidDuplicateShreds;
+            }
         }
 
         const shred1, const shred2 =
@@ -308,7 +288,7 @@ const DuplicateShredHandler = struct {
     }
 
     fn cleanupEntry(self: *DuplicateShredHandler, key: Key) void {
-        if (self.dup_buffer.fetchRemove(key)) |kv| {
+        if (self.dup_buffer.fetchSwapRemove(key)) |kv| {
             const entry = kv.value;
             for (entry.chunks) |maybe_chunk| if (maybe_chunk) |chunk| self.allocator.free(chunk);
         }
@@ -368,13 +348,15 @@ const DuplicateShredHandler = struct {
         const mr1 = shred1.merkleRoot() catch null;
         const mr2 = shred2.merkleRoot() catch null;
         var conflict_ok = false;
-        if (same_fec and
-            ((mr1 == null and mr2 != null) or
-                (mr1 != null and mr2 == null) or
-                (mr1 != null and mr2 != null and
-                    !std.mem.eql(u8, &mr1.?.data, &mr2.?.data))))
-        {
-            conflict_ok = true;
+        if (same_fec) {
+            if ((mr1 == null) != (mr2 == null)) {
+                conflict_ok = true;
+            } else if (mr1) |h1| {
+                const h2 = mr2.?;
+                if (!std.mem.eql(u8, &h1.data, &h2.data)) {
+                    conflict_ok = true;
+                }
+            }
         } else {
             if (std.meta.activeTag(shred1) != std.meta.activeTag(shred2)) {
                 return error.ShredTypeMismatch;
@@ -387,7 +369,7 @@ const DuplicateShredHandler = struct {
             } else {
                 const is_data = switch (shred1) {
                     .data => true,
-                    else => false,
+                    .code => false,
                 };
                 if (is_data) {
                     const last1 = shred1.isLastInSlot();

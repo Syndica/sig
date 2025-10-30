@@ -218,7 +218,6 @@ pub const ShredReceiver = struct {
         allocator: Allocator,
         result: *const ShredInserter.Result,
     ) !void {
-        const sender = self.params.duplicate_slots_sender orelse return;
         if (result.duplicate_shreds.items.len == 0) return;
 
         for (result.duplicate_shreds.items) |duplicate_shred| {
@@ -233,12 +232,12 @@ pub const ShredReceiver = struct {
                     }
 
                     const existing_shred_payload =
-                        (try self.params.ledger_reader.isShredDuplicate(allocator, shred)) orelse
+                        try self.params.ledger_reader.isShredDuplicate(allocator, shred) orelse
                         continue; // Not a duplicate, skip this one
                     defer existing_shred_payload.deinit();
 
                     try self.handleDuplicateSlot(
-                        sender,
+                        self.params.duplicate_slots_sender,
                         shred_slot,
                         shred.payload(),
                         existing_shred_payload.items,
@@ -250,7 +249,7 @@ pub const ShredReceiver = struct {
                 => |conflict| {
                     const shred_slot = conflict.original.commonHeader().slot;
                     try self.handleDuplicateSlot(
-                        sender,
+                        self.params.duplicate_slots_sender,
                         shred_slot,
                         conflict.original.payload(),
                         conflict.conflict.data,
@@ -271,7 +270,7 @@ pub const ShredReceiver = struct {
                     }
 
                     try self.handleDuplicateSlot(
-                        sender,
+                        self.params.duplicate_slots_sender,
                         shred_slot,
                         conflict.original.payload(),
                         conflict.conflict.data,
@@ -283,11 +282,17 @@ pub const ShredReceiver = struct {
 
     fn handleDuplicateSlot(
         self: *ShredReceiver,
-        sender: anytype,
+        maybe_sender: ?*Channel(Slot),
         slot: Slot,
         shred_payload: []const u8,
         duplicate_payload: []const u8,
     ) !void {
+        // NOTE: All operations in this function (ledger storage, gossip broadcast,
+        // consensus notification) are best effort.
+        // We catch and log their errors rather than propagating them because:
+        // 1. One failure shouldn't prevent the other operations from attempting
+        // 2. Duplicate slot detection is auxiliary to the main shred processing pipeline
+
         // Store in ledger
         self.params.result_writer.storeDuplicateSlot(
             slot,
@@ -296,14 +301,6 @@ pub const ShredReceiver = struct {
         ) catch |err| {
             self.logger.err().logf(
                 "failed to store duplicate slot {}: {}",
-                .{ slot, err },
-            );
-        };
-
-        // Send to consensus
-        sender.send(slot) catch |err| {
-            self.logger.err().logf(
-                "failed to send duplicate slot {} to consensus: {}",
                 .{ slot, err },
             );
         };
@@ -318,6 +315,16 @@ pub const ShredReceiver = struct {
             ) catch |err| {
                 self.logger.err().logf(
                     "failed to push duplicate shred to gossip for slot {}: {}",
+                    .{ slot, err },
+                );
+            };
+        }
+
+        // Send to consensus (only if consensus is enabled)
+        if (maybe_sender) |sender| {
+            sender.send(slot) catch |err| {
+                self.logger.err().logf(
+                    "failed to send duplicate slot {} to consensus: {}",
                     .{ slot, err },
                 );
             };
@@ -352,7 +359,7 @@ pub const ShredReceiver = struct {
             slot,
             shred_payload,
             proof_bytes,
-            @as(usize, DUPLICATE_SHRED_MAX_PAYLOAD_SIZE),
+            DUPLICATE_SHRED_MAX_PAYLOAD_SIZE,
         );
         defer {
             for (chunks) |dup| gossip.allocator.free(dup.chunk);
@@ -379,8 +386,7 @@ pub const ShredReceiver = struct {
                 const versioned_data = gossip_table.store.getByIndex(record_ix);
                 switch (versioned_data.data) {
                     .DuplicateShred => |dup| {
-                        const index, const dup_shred = dup;
-                        _ = index;
+                        _, const dup_shred = dup;
                         if (dup_shred.slot == slot) return true;
                     },
                     else => {},
@@ -483,8 +489,8 @@ pub const ShredReceiver = struct {
         }) {
             const chunk_end = @min(offset + chunk_size, proof_bytes.len);
             const chunk_data = proof_bytes[offset..chunk_end];
-            const duplicate_shred = sig.gossip.data.DuplicateShred{
-                .from = sig.core.Pubkey.fromPublicKey(&self.params.keypair.public_key),
+            chunks.appendAssumeCapacity(.{
+                .from = .fromPublicKey(&self.params.keypair.public_key),
                 .wallclock = wallclock,
                 .slot = slot,
                 .shred_index = shred_index,
@@ -492,8 +498,7 @@ pub const ShredReceiver = struct {
                 .num_chunks = num_chunks,
                 .chunk_index = chunk_index,
                 .chunk = try gossip.allocator.dupe(u8, chunk_data),
-            };
-            chunks.appendAssumeCapacity(duplicate_shred);
+            });
         }
 
         return try chunks.toOwnedSlice(gossip.allocator);
