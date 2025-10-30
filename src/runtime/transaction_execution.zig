@@ -90,6 +90,16 @@ pub const TransactionExecutionEnvironment = struct {
 pub const TransactionExecutionConfig = struct {
     log: bool,
     log_messages_byte_limit: ?u64,
+
+    /// Optionally pass in a pointer here to have it populated it with all
+    /// loaded accounts when a transaction executes and fails. The list is
+    /// assumed to be empty, and any pre-existing entries in the list will be
+    /// discarded when this list is repopulated.
+    ///
+    /// These accounts are not useful to persist on-chain, but can be used to
+    /// debug a transaction failure. The original use case for this was
+    /// conformance testing.
+    failed_accounts: ?*LoadedTransactionAccounts.Accounts = null,
 };
 
 pub const ExecutedTransaction = struct {
@@ -117,19 +127,11 @@ pub const ProcessedTransaction = struct {
     /// execution could begin.
     outputs: ?ExecutedTransaction,
 
-    /// this is populated when a transaction executes and fails. it contains all
-    /// the loaded accounts. it's only used for conformance testing.
-    /// TODO: come up with a cleaner approach for this
-    failed_accounts_for_conformance: ?LoadedTransactionAccounts.Accounts,
-
     pub const Writes = LoadedTransactionAccounts.Accounts;
 
     pub fn deinit(self: ProcessedTransaction, allocator: std.mem.Allocator) void {
         for (self.writes.slice()) |account| account.deinit(allocator);
         if (self.outputs) |out| if (out.log_collector) |log| log.deinit(allocator);
-        if (self.failed_accounts_for_conformance) |accounts| {
-            for (accounts.slice()) |account| account.deinit(allocator);
-        }
     }
 };
 
@@ -185,8 +187,6 @@ pub fn loadAndExecuteTransaction(
     var zone = tracy.Zone.init(@src(), .{ .name = "executeTransaction" });
     defer zone.deinit();
     errdefer zone.color(0xFF0000);
-
-    var failed_accounts_for_conformance: ?LoadedTransactionAccounts.Accounts = null;
 
     const max_tx_locks: usize = if (env.feature_set.active(
         .increase_tx_account_lock_limit,
@@ -275,7 +275,6 @@ pub fn loadAndExecuteTransaction(
                 .err = err,
                 .loaded_accounts_data_size = loaded_accounts_data_size,
                 .outputs = null,
-                .failed_accounts_for_conformance = failed_accounts_for_conformance,
             } };
         },
     };
@@ -305,7 +304,9 @@ pub fn loadAndExecuteTransaction(
         while (rollbacks.pop()) |rollback| rollback.deinit(allocator);
     } else {
         while (rollbacks.pop()) |account| writes.append(account) catch unreachable;
-        failed_accounts_for_conformance = loaded_accounts.accounts;
+        if (config.failed_accounts) |f|
+            f.* = loaded_accounts.accounts
+        else for (loaded_accounts.accounts.slice()) |a| a.deinit(allocator);
     }
 
     for (writes.slice()) |*acct| account_loader.store(account_map, allocator, acct);
@@ -318,7 +319,6 @@ pub fn loadAndExecuteTransaction(
             .err = executed_transaction.err,
             .loaded_accounts_data_size = loaded_accounts.loaded_accounts_data_size,
             .outputs = executed_transaction,
-            .failed_accounts_for_conformance = failed_accounts_for_conformance,
         },
     };
 }

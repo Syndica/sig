@@ -845,9 +845,11 @@ fn executeTxnContext(
         .lamports_per_signature = 5000,
     };
 
+    var failed_accounts = sig.runtime.account_loader.LoadedTransactionAccounts.Accounts{};
     const config = sig.runtime.transaction_execution.TransactionExecutionConfig{
         .log = emit_logs,
         .log_messages_byte_limit = null,
+        .failed_accounts = &failed_accounts,
     };
 
     var txn_results = try loadAndExecuteTransactions(
@@ -869,7 +871,12 @@ fn executeTxnContext(
         printLogs(txn_results[0]);
     }
 
-    return try serializeOutput(allocator, txn_results[0], runtime_transaction);
+    return try serializeOutput(
+        allocator,
+        txn_results[0],
+        runtime_transaction,
+        failed_accounts.slice(),
+    );
 }
 
 fn printLogs(result: TransactionResult(ProcessedTransaction)) void {
@@ -903,6 +910,7 @@ fn serializeOutput(
     allocator: std.mem.Allocator,
     result: TransactionResult(ProcessedTransaction),
     sanitized: RuntimeTransaction,
+    failed_accounts: []const sig.runtime.account_loader.LoadedAccount,
 ) !pb.TxnResult {
     const txn = switch (result) {
         .ok => |txn| txn,
@@ -923,9 +931,10 @@ fn serializeOutput(
         // In the event that the transaction is executed and fails, agave
         // returns *all* the loaded accounts, including all the modifications
         // from the failed transaction, whereas we only return the rollback
-        // accounts. Our approach makes more sense, but for compatibility with
-        // the test outputs, we need to return the modified loaded accounts.
-        for (result.ok.failed_accounts_for_conformance.?.slice()) |account| {
+        // accounts. Our approach makes more sense in the context of the
+        // validator, but for compatibility with solfuzz_agave's outputs, we
+        // need to return the modified loaded accounts.
+        for (failed_accounts) |account| {
             const was_an_input_and_is_writable = for (
                 sanitized.accounts.items(.pubkey),
                 sanitized.accounts.items(.is_writable),
@@ -933,11 +942,9 @@ fn serializeOutput(
                 if (account.pubkey.equals(&pubkey)) break is_writable;
             } else false;
 
-            if (was_an_input_and_is_writable) {
-                try acct_states.append(
-                    try sharedAccountToState(allocator, account.pubkey, account.account),
-                );
-            }
+            if (was_an_input_and_is_writable) try acct_states.append(
+                try sharedAccountToState(allocator, account.pubkey, account.account),
+            );
         }
     } else if (result.ok.outputs == null and result.ok.err != null) {
         // This block exists solely to replicate a bug in solfuzz_agave.
