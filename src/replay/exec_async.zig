@@ -180,15 +180,7 @@ pub const ReplaySlotFuture = struct {
                     },
                 };
                 if (!pending) {
-                    // commit accounts to accountsdb -- TODO is this the best place for this?
-                    if (self.status_when_done == null) {
-                        const gw = self.scheduler.svm_gateway;
-                        while (self.scheduler.committer.writes.tryReceive()) |address| {
-                            const account = gw.state.accounts.get(address) orelse
-                                return error.AccountInconsistency;
-                            try self.account_store.put(gw.params.slot, address, account);
-                        }
-                    }
+                    try self.onCompletion(self.status_when_done);
                     self.status = .{ .done = self.status_when_done };
                 }
             },
@@ -207,6 +199,25 @@ pub const ReplaySlotFuture = struct {
             },
             try self.scheduler.poll(),
         };
+    }
+
+    /// This future's primary task is to manage work being done on other
+    /// threads. After all that work is done, there are some finalization steps
+    /// that need to occur on the current thread. These steps will block the
+    /// final call to poll. This will run exactly once, when `poll` has a result
+    /// to return for the first time.
+    ///
+    /// Currently, all this does is commit all the accounts to the account store
+    /// as long as the slot finished executing successfully.
+    fn onCompletion(self: *const ReplaySlotFuture, slot_result: ?ReplaySlotError) !void {
+        if (slot_result == null) {
+            const gw = self.scheduler.svm_gateway;
+            while (self.scheduler.committer.writes.tryReceive()) |address| {
+                const account = gw.state.accounts.get(address) orelse
+                    return error.AccountInconsistency;
+                try self.account_store.put(gw.params.slot, address, account);
+            }
+        }
     }
 };
 
