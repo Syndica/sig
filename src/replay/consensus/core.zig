@@ -3318,7 +3318,7 @@ test "detect and mark duplicate confirmed fork" {
         slot_constants.parent_hash = Hash.ZEROES;
         slot_constants.block_height = 1;
 
-        // Set up ancestors (slot 1 has ancestors 0 and 1)
+        // Set up ancestors (include root for lockout logic)
         slot_constants.ancestors.deinit(allocator);
         slot_constants.ancestors = .{};
         try slot_constants.ancestors.ancestors.put(allocator, 0, {});
@@ -3339,7 +3339,7 @@ test "detect and mark duplicate confirmed fork" {
         slot_constants.parent_hash = slot1_hash;
         slot_constants.block_height = 2;
 
-        // Set up ancestors (slot 2 has ancestors 0, 1, and 2)
+        // Set up ancestors (include root for lockout logic)
         slot_constants.ancestors.deinit(allocator);
         slot_constants.ancestors = .{};
         try slot_constants.ancestors.ancestors.put(allocator, 0, {});
@@ -3392,10 +3392,6 @@ test "detect and mark duplicate confirmed fork" {
             for (vote_accounts.values()) |*vote_account| {
                 try vote_account.account.state.votes.append(.{
                     .latency = 0,
-                    .lockout = .{ .slot = 0, .confirmation_count = 2 },
-                });
-                try vote_account.account.state.votes.append(.{
-                    .latency = 0,
                     .lockout = .{ .slot = 1, .confirmation_count = 2 },
                 });
             }
@@ -3443,6 +3439,8 @@ test "detect and mark duplicate confirmed fork" {
     {
         var fork_progress0 = try sig.consensus.progress_map.ForkProgress.zeroes(allocator);
         fork_progress0.fork_stats.computed = true;
+        // Mark root as already duplicate-confirmed to skip it in detection loop
+        fork_progress0.fork_stats.duplicate_confirmed_hash = Hash.ZEROES;
         const fork_progress1 = try sig.consensus.progress_map.ForkProgress.zeroes(allocator);
         const fork_progress2 = try sig.consensus.progress_map.ForkProgress.zeroes(allocator);
         try progress.map.put(allocator, 0, fork_progress0);
