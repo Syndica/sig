@@ -1305,3 +1305,309 @@ test "handleDuplicateSlots: emits and stores via handleDuplicateSlot" {
     const contains = try ledger.db.contains(schema.duplicate_slots, expected_slot);
     try std.testing.expect(contains);
 }
+
+test "pushDuplicateShredToGossip: enqueues chunks and ring indices" {
+    const allocator = std.testing.allocator;
+
+    var keypair = try sig.identity.KeyPair.generateDeterministic(.{1} ** 32);
+    const my_pubkey = sig.core.Pubkey.fromPublicKey(&keypair.public_key);
+
+    var registry = sig.prometheus.Registry(.{}).init(allocator);
+    defer registry.deinit();
+
+    var epoch_ctx = try sig.adapter.EpochContextManager.init(allocator, .DEFAULT);
+    defer epoch_ctx.deinit();
+
+    var ledger = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
+    defer ledger.deinit();
+
+    var tracker = try sig.shred_network.shred_tracker.BasicShredTracker.init(
+        allocator,
+        1,
+        .noop,
+        &registry,
+    );
+    defer tracker.deinit();
+
+    var exit = Atomic(bool).init(false);
+    const shred_version = Atomic(u16).init(0);
+
+    const invalid_socket = Socket{ .family = .ipv4, .internal = -1, .endpoint = null };
+
+    var shred_receiver = try ShredReceiver.init(allocator, .noop, &registry, .{
+        .keypair = &keypair,
+        .exit = &exit,
+        .repair_socket = invalid_socket,
+        .turbine_socket = invalid_socket,
+        .maybe_retransmit_shred_sender = null,
+        .shred_version = &shred_version,
+        .root_slot = 0,
+        .leader_schedule = epoch_ctx.slotLeaders(),
+        .tracker = &tracker,
+        .inserter = ledger.shredInserter(),
+        .ledger_reader = ledger.reader(),
+        .result_writer = ledger.resultWriter(),
+        .duplicate_slots_sender = null,
+        .gossip_service = null,
+    });
+    defer shred_receiver.deinit(allocator);
+
+    var contact_info =
+        try sig.gossip.data.LegacyContactInfo.default(my_pubkey).toContactInfo(allocator);
+    try contact_info.setSocket(.gossip, sig.net.SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 0));
+
+    var gossip_service = try sig.gossip.GossipService.create(
+        allocator,
+        allocator,
+        contact_info,
+        keypair,
+        null,
+        .noop,
+    );
+    defer {
+        gossip_service.shutdown();
+        gossip_service.deinit();
+        allocator.destroy(gossip_service);
+    }
+
+    const original_shred = try Shred.fromPayload(allocator, &sig.ledger.shred.test_data_shred);
+    defer original_shred.deinit();
+    const slot = original_shred.commonHeader().slot;
+    const shred_payload = original_shred.payload();
+
+    var other_payload = try allocator.dupe(u8, shred_payload);
+    defer allocator.free(other_payload);
+    if (other_payload.len > 0) other_payload[other_payload.len - 1] +%= 1;
+
+    var before_len: usize = 0;
+    {
+        var pqlg = gossip_service.push_msg_queue_mux.lock();
+        before_len = pqlg.get().queue.items.len;
+        pqlg.unlock();
+    }
+
+    try shred_receiver.pushDuplicateShredToGossip(
+        gossip_service,
+        slot,
+        shred_payload,
+        other_payload,
+    );
+
+    const proof_bytes = try ShredReceiver.serializeDuplicateProof(
+        allocator,
+        shred_payload,
+        other_payload,
+    );
+    defer allocator.free(proof_bytes);
+    const chunk_size: usize =
+        @as(usize, @intCast(DUPLICATE_SHRED_MAX_PAYLOAD_SIZE)) - @as(
+            usize,
+            @intCast(DUPLICATE_SHRED_HEADER_SIZE),
+        );
+    const expected_chunks: usize = (proof_bytes.len + chunk_size - 1) / chunk_size;
+
+    var after_items_len: usize = 0;
+    var ring_ok = true;
+    var have_dup_entries: usize = 0;
+    {
+        var pqlg = gossip_service.push_msg_queue_mux.lock();
+        defer pqlg.unlock();
+        after_items_len = pqlg.get().queue.items.len;
+
+        const start_index = after_items_len - expected_chunks;
+        var expect_ring: u16 = 0; // ring_offset should be 0 for empty table
+        var i: usize = 0;
+        while (i < expected_chunks) : (i += 1) {
+            const gd = pqlg.get().queue.items[start_index + i];
+            switch (gd) {
+                .DuplicateShred => |v| {
+                    const ring_index = v[0];
+                    const d = v[1];
+                    if (ring_index != expect_ring) ring_ok = false;
+                    // Basic field checks
+                    try std.testing.expectEqual(slot, d.slot);
+                    try std.testing.expect(d.chunk_index < d.num_chunks);
+                    have_dup_entries += 1;
+                    expect_ring +%= 1;
+                },
+                else => return error.TestFailed,
+            }
+        }
+    }
+
+    try std.testing.expectEqual(expected_chunks, have_dup_entries);
+    try std.testing.expect(ring_ok);
+    try std.testing.expectEqual(before_len + expected_chunks, after_items_len);
+}
+
+test "pushDuplicateShredToGossip: no-op when duplicate for slot exists" {
+    const allocator = std.testing.allocator;
+
+    var keypair = try sig.identity.KeyPair.generateDeterministic(.{2} ** 32);
+    const my_pubkey = sig.core.Pubkey.fromPublicKey(&keypair.public_key);
+
+    var contact_info =
+        try sig.gossip.data.LegacyContactInfo.default(my_pubkey).toContactInfo(allocator);
+    try contact_info.setSocket(.gossip, sig.net.SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 0));
+    var gossip_service = try sig.gossip.GossipService.create(
+        allocator,
+        allocator,
+        contact_info,
+        keypair,
+        null,
+        .noop,
+    );
+    defer {
+        gossip_service.shutdown();
+        gossip_service.deinit();
+        allocator.destroy(gossip_service);
+    }
+
+    var registry =
+        sig.prometheus.Registry(.{}).init(allocator);
+    defer registry.deinit();
+    var epoch_ctx =
+        try sig.adapter.EpochContextManager.init(allocator, .DEFAULT);
+    defer epoch_ctx.deinit();
+    var ledger =
+        try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
+    defer ledger.deinit();
+    var tracker =
+        try sig.shred_network.shred_tracker.BasicShredTracker.init(allocator, 1, .noop, &registry);
+    defer tracker.deinit();
+    var exit = Atomic(bool).init(false);
+    const shred_version = Atomic(u16).init(0);
+
+    var shred_receiver = try ShredReceiver.init(allocator, .noop, &registry, .{
+        .keypair = &keypair,
+        .exit = &exit,
+        .repair_socket = Socket{ .family = .ipv4, .internal = -1, .endpoint = null },
+        .turbine_socket = Socket{ .family = .ipv4, .internal = -1, .endpoint = null },
+        .maybe_retransmit_shred_sender = null,
+        .shred_version = &shred_version,
+        .root_slot = 0,
+        .leader_schedule = epoch_ctx.slotLeaders(),
+        .tracker = &tracker,
+        .inserter = ledger.shredInserter(),
+        .ledger_reader = ledger.reader(),
+        .result_writer = ledger.resultWriter(),
+        .duplicate_slots_sender = null,
+        .gossip_service = null,
+    });
+    defer shred_receiver.deinit(allocator);
+
+    const shred = try Shred.fromPayload(allocator, &sig.ledger.shred.test_data_shred);
+    defer shred.deinit();
+    const slot = shred.commonHeader().slot;
+    const shred_index = layout.getIndex(&sig.ledger.shred.test_data_shred).?;
+
+    const chunk_buf = try gossip_service.gossip_data_allocator.dupe(u8, &[_]u8{0});
+    const dup = sig.gossip.data.DuplicateShred{
+        .from = my_pubkey,
+        .wallclock = 1,
+        .slot = slot,
+        .shred_index = @intCast(shred_index),
+        .shred_type = .Code,
+        .num_chunks = 1,
+        .chunk_index = 0,
+        .chunk = chunk_buf,
+    };
+    const gd = sig.gossip.data.GossipData{ .DuplicateShred = .{ 0, dup } };
+    const signed = sig.gossip.data.SignedGossipData.initSigned(&keypair, gd);
+    {
+        var lg = gossip_service.gossip_table_rw.write();
+        defer lg.unlock();
+        _ = try lg.mut().insert(signed, 0);
+    }
+
+    var before_len: usize = 0;
+    {
+        var pqlg = gossip_service.push_msg_queue_mux.lock();
+        before_len = pqlg.get().queue.items.len;
+        pqlg.unlock();
+    }
+
+    var other = try allocator.dupe(u8, shred.payload());
+    defer allocator.free(other);
+    if (other.len > 0) other[other.len - 1] +%= 1;
+    try shred_receiver.pushDuplicateShredToGossip(
+        gossip_service,
+        slot,
+        shred.payload(),
+        other,
+    );
+
+    var after_len: usize = 0;
+    {
+        var pqlg = gossip_service.push_msg_queue_mux.lock();
+        after_len = pqlg.get().queue.items.len;
+        pqlg.unlock();
+    }
+    try std.testing.expectEqual(before_len, after_len);
+}
+
+test "computeRingOffset: under capacity and at capacity oldest index" {
+    const allocator = std.testing.allocator;
+
+    var keypair = try sig.identity.KeyPair.generateDeterministic(.{3} ** 32);
+    const my_pubkey = sig.core.Pubkey.fromPublicKey(&keypair.public_key);
+
+    var contact_info =
+        try sig.gossip.data.LegacyContactInfo.default(my_pubkey).toContactInfo(allocator);
+    try contact_info.setSocket(.gossip, sig.net.SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 0));
+    var gossip_service = try sig.gossip.GossipService.create(
+        allocator,
+        allocator,
+        contact_info,
+        keypair,
+        null,
+        .noop,
+    );
+    defer {
+        gossip_service.shutdown();
+        gossip_service.deinit();
+        allocator.destroy(gossip_service);
+    }
+
+    const insertDup = struct {
+        fn run(
+            g: *sig.gossip.GossipService,
+            kp: *const sig.identity.KeyPair,
+            ring_index: u16,
+            wallclock: u64,
+            slot: sig.core.Slot,
+        ) !void {
+            const buf = try g.gossip_data_allocator.dupe(u8, &[_]u8{0});
+            const ds = sig.gossip.data.DuplicateShred{
+                .from = sig.core.Pubkey.fromPublicKey(&kp.public_key),
+                .wallclock = wallclock,
+                .slot = slot,
+                .shred_index = 0,
+                .shred_type = .Code,
+                .num_chunks = 1,
+                .chunk_index = 0,
+                .chunk = buf,
+            };
+            const gd = sig.gossip.data.GossipData{ .DuplicateShred = .{ ring_index, ds } };
+            const signed = sig.gossip.data.SignedGossipData.initSigned(kp, gd);
+            var lg = g.gossip_table_rw.write();
+            defer lg.unlock();
+            _ = try lg.mut().insert(signed, wallclock);
+        }
+    };
+
+    try insertDup.run(gossip_service, &keypair, 0, 10, 1);
+    try insertDup.run(gossip_service, &keypair, 1, 11, 2);
+    try insertDup.run(gossip_service, &keypair, 2, 12, 3);
+    const offset_under = ShredReceiver.computeRingOffset(gossip_service, my_pubkey);
+    try std.testing.expectEqual(@as(u16, 3), offset_under);
+
+    const MAX = sig.gossip.data.MAX_DUPLICATE_SHREDS;
+    var i: u16 = 3;
+    while (i < MAX) : (i += 1) {
+        const wc: u64 = if (i == 5) 1 else @intCast(1000 + i);
+        try insertDup.run(gossip_service, &keypair, i, wc, 100 + i);
+    }
+    const offset_full = ShredReceiver.computeRingOffset(gossip_service, my_pubkey);
+    try std.testing.expectEqual(5, offset_full);
+}
