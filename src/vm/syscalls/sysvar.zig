@@ -574,7 +574,7 @@ fn testGetSlotHashes(filled: bool) !void {
         try entries.append(.{ .slot = slot, .hash = result });
     }
 
-    const src_hashes = try sysvar.SlotHashes.initWithEntries(entries.constSlice());
+    const src_hashes = sysvar.SlotHashes.initWithEntries(entries.constSlice());
     // deinitialised by transaction context
 
     {

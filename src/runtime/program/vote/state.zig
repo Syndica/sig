@@ -3097,7 +3097,7 @@ test "state.VoteState.processVote skips old vote" {
         .timestamp = null,
     };
 
-    const slot_hashes = try SlotHashes.initWithEntries(
+    const slot_hashes = SlotHashes.initWithEntries(
         &.{.{ .slot = 0, .hash = vote.hash }},
     );
 
@@ -3128,7 +3128,7 @@ test "state.VoteState filter old votes" {
 
     // Vote with all slots that are all older than the SlotHashe
     // error with `VotesTooOldAllFiltered`
-    const slot_hashes = try SlotHashes.initWithEntries(&.{
+    const slot_hashes = SlotHashes.initWithEntries(&.{
         .{ .slot = 3, .hash = Hash.initRandom(random) },
         .{ .slot = 2, .hash = Hash.initRandom(random) },
     });
@@ -3194,7 +3194,7 @@ test "state.VoteState.checkSlotsAreValid new vote" {
         .timestamp = null,
     };
 
-    const slot_hashes = try SlotHashes.initWithEntries(&.{
+    const slot_hashes = SlotHashes.initWithEntries(&.{
         .{ .slot = vote.slots[vote.slots.len - 1], .hash = vote.hash },
     });
 
@@ -3218,7 +3218,7 @@ test "state.VoteState.checkSlotsAreValid bad timestamp" {
         .timestamp = null,
     };
 
-    const slot_hashes = try SlotHashes.initWithEntries(&.{
+    const slot_hashes = SlotHashes.initWithEntries(&.{
         .{ .slot = vote.slots[vote.slots.len - 1], .hash = vote.hash },
     });
 
@@ -3243,7 +3243,7 @@ test "state.VoteState.checkSlotsAreValid bad hash" {
         .timestamp = null,
     };
 
-    const slot_hashes = try SlotHashes.initWithEntries(&.{.{
+    const slot_hashes = SlotHashes.initWithEntries(&.{.{
         .slot = vote.slots[vote.slots.len - 1],
         .hash = Hash.init(&vote.hash.data),
     }});
@@ -3267,7 +3267,7 @@ test "state.VoteState.checkSlotsAreValid bad slot" {
         .timestamp = null,
     };
 
-    const slot_hashes = try SlotHashes.initWithEntries(&.{.{ .slot = 0, .hash = vote.hash }});
+    const slot_hashes = SlotHashes.initWithEntries(&.{.{ .slot = 0, .hash = vote.hash }});
     const result = try vote_state.checkSlotsAreValid(&vote, vote.slots, &slot_hashes);
     try std.testing.expectEqual(VoteError.slots_mismatch, result);
 }
@@ -3287,7 +3287,7 @@ test "state.VoteState.checkSlotsAreValid duplicate vote" {
         .timestamp = null,
     };
 
-    const slot_hashes = try SlotHashes.initWithEntries(&.{.{ .slot = 0, .hash = vote.hash }});
+    const slot_hashes = SlotHashes.initWithEntries(&.{.{ .slot = 0, .hash = vote.hash }});
 
     const maybe_error = try vote_state.processVote(allocator, &vote, slot_hashes, 0, 0);
     try std.testing.expectEqual(null, maybe_error);
@@ -3310,7 +3310,7 @@ test "state.VoteState.checkSlotsAreValid next vote" {
         .timestamp = null,
     };
 
-    const slot_hashes = try SlotHashes.initWithEntries(&.{.{ .slot = 0, .hash = vote.hash }});
+    const slot_hashes = SlotHashes.initWithEntries(&.{.{ .slot = 0, .hash = vote.hash }});
 
     const maybe_error = try vote_state.processVote(allocator, &vote, slot_hashes, 0, 0);
     try std.testing.expectEqual(null, maybe_error);
@@ -3323,7 +3323,7 @@ test "state.VoteState.checkSlotsAreValid next vote" {
         .timestamp = null,
     };
 
-    const next_slot_hashes = try SlotHashes.initWithEntries(&.{
+    const next_slot_hashes = SlotHashes.initWithEntries(&.{
         .{ .slot = 1, .hash = vote.hash },
         .{ .slot = 0, .hash = vote.hash },
     });
@@ -3351,7 +3351,7 @@ test "state.VoteState.checkSlotsAreValid next vote only" {
         .timestamp = null,
     };
 
-    const slot_hashes = try SlotHashes.initWithEntries(&.{.{ .slot = 0, .hash = vote.hash }});
+    const slot_hashes = SlotHashes.initWithEntries(&.{.{ .slot = 0, .hash = vote.hash }});
 
     const maybe_error = try vote_state.processVote(allocator, &vote, slot_hashes, 0, 0);
     try std.testing.expectEqual(null, maybe_error);
@@ -3364,7 +3364,7 @@ test "state.VoteState.checkSlotsAreValid next vote only" {
         .timestamp = null,
     };
 
-    const next_slot_hashes = try SlotHashes.initWithEntries(&.{
+    const next_slot_hashes = SlotHashes.initWithEntries(&.{
         .{ .slot = 1, .hash = vote.hash },
         .{ .slot = 0, .hash = vote.hash },
     });
@@ -5081,7 +5081,7 @@ pub fn processSlotVoteUnchecked(
         .timestamp = null,
     };
 
-    const slot_hashes = try SlotHashes.initWithEntries(&.{.{
+    const slot_hashes = SlotHashes.initWithEntries(&.{.{
         .slot = vote.slots[vote.slots.len - 1],
         .hash = vote.hash,
     }});

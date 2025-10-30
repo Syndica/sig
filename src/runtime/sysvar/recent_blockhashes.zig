@@ -74,7 +74,7 @@ pub const RecentBlockhashes = struct {
         return self;
     }
 
-    pub fn initWithEntries(entries: []const Entry) Allocator.Error!RecentBlockhashes {
+    pub fn initWithEntries(entries: []const Entry) RecentBlockhashes {
         if (!builtin.is_test) @compileError("only for tests");
         std.debug.assert(entries.len <= MAX_ENTRIES);
 

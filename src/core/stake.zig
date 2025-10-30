@@ -36,7 +36,7 @@ pub fn StakesCacheGeneric(comptime stakes_type: StakesType) type {
         pub const EMPTY: Self = .{ .stakes = .init(.EMPTY) };
 
         pub fn deinit(self: *Self, allocator: Allocator) void {
-            var stakes: *T, var stakes_guard = self.stakes.writeWithLock();
+            const stakes: *T, var stakes_guard = self.stakes.writeWithLock();
             defer stakes_guard.unlock();
             stakes.deinit(allocator);
         }
@@ -56,7 +56,7 @@ pub fn StakesCacheGeneric(comptime stakes_type: StakesType) type {
                     defer stakes_guard.unlock();
                     try stakes.removeVoteAccount(allocator, pubkey);
                 } else if (stake_program.ID.equals(&account.owner)) {
-                    var stakes: *T, var stakes_guard = self.stakes.writeWithLock();
+                    const stakes: *T, var stakes_guard = self.stakes.writeWithLock();
                     defer stakes_guard.unlock();
                     try stakes.removeStakeAccount(allocator, pubkey, new_rate_activation_epoch);
                 }
@@ -65,7 +65,7 @@ pub fn StakesCacheGeneric(comptime stakes_type: StakesType) type {
 
             if (vote_program.ID.equals(&account.owner)) {
                 if (!VersionedVoteState.isCorrectSizeAndInitialized(account.data)) {
-                    var stakes: *T, var stakes_guard = self.stakes.writeWithLock();
+                    const stakes: *T, var stakes_guard = self.stakes.writeWithLock();
                     defer stakes_guard.unlock();
                     try stakes.removeVoteAccount(allocator, pubkey);
                     return;
@@ -73,14 +73,14 @@ pub fn StakesCacheGeneric(comptime stakes_type: StakesType) type {
 
                 // does *not* take ownership of the account
                 var vote_account = VoteAccount.fromAccountSharedData(allocator, account) catch {
-                    var stakes: *T, var stakes_guard = self.stakes.writeWithLock();
+                    const stakes: *T, var stakes_guard = self.stakes.writeWithLock();
                     defer stakes_guard.unlock();
                     try stakes.removeVoteAccount(allocator, pubkey);
                     return;
                 };
                 errdefer vote_account.deinit(allocator);
 
-                var stakes: *T, var stakes_guard = self.stakes.writeWithLock();
+                const stakes: *T, var stakes_guard = self.stakes.writeWithLock();
                 defer stakes_guard.unlock();
                 try stakes.upsertVoteAccount(
                     allocator,
@@ -93,13 +93,13 @@ pub fn StakesCacheGeneric(comptime stakes_type: StakesType) type {
                     allocator,
                     try account.clone(allocator),
                 ) catch {
-                    var stakes: *T, var stakes_guard = self.stakes.writeWithLock();
+                    const stakes: *T, var stakes_guard = self.stakes.writeWithLock();
                     defer stakes_guard.unlock();
                     try stakes.removeStakeAccount(allocator, pubkey, new_rate_activation_epoch);
                     return;
                 };
 
-                var stakes: *T, var stakes_guard = self.stakes.writeWithLock();
+                const stakes: *T, var stakes_guard = self.stakes.writeWithLock();
                 defer stakes_guard.unlock();
                 try stakes.upsertStakeAccount(
                     allocator,

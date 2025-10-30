@@ -625,7 +625,7 @@ test "markDeadSlot: when duplicate proof exists, duplicate tracker records slot"
     );
 
     // Provide a minimal slot in the slot tracker so markDeadSlot can read a hash
-    var slot_state: sig.core.SlotState = .genesis;
+    var slot_state: sig.core.SlotState = .GENESIS;
 
     var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
     slot_state.hash.set(sig.core.Hash.initRandom(rng.random()));
@@ -731,7 +731,7 @@ test "updateConsensusForFrozenSlot: moves gossip votes with gossip vote_kind" {
         .feature_set = .ALL_DISABLED,
         .reserved_accounts = .empty,
     };
-    var slot_state = try sig.core.SlotState.genesis(allocator);
+    var slot_state: sig.core.SlotState = .GENESIS;
     slot_state.hash.set(slot_hash);
 
     try test_state.slot_tracker.put(allocator, slot, .{

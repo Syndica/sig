@@ -1416,8 +1416,6 @@ test "vote_program: executeAuthorize withdrawer signed by current withdrawer" {
 test "vote_program: executeAuthorize voter signed by current withdrawer" {
     const ids = sig.runtime.ids;
     const testing = sig.runtime.program.testing;
-    const PriorVote = sig.runtime.program.vote.state.PriorVote;
-    _ = PriorVote; // autofix
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -3248,7 +3246,7 @@ test "vote_program: vote" {
         .timestamp = null,
     };
 
-    const slot_hashes = try SlotHashes.initWithEntries(
+    const slot_hashes = SlotHashes.initWithEntries(
         &.{.{ .slot = slots[slots.len - 1], .hash = vote.hash }},
     );
     // deinitialised by expectProgramExecuteResult
@@ -3363,7 +3361,7 @@ test "vote_program: vote switch" {
         .timestamp = null,
     };
 
-    const slot_hashes = try SlotHashes.initWithEntries(
+    const slot_hashes = SlotHashes.initWithEntries(
         &.{.{ .slot = slots[slots.len - 1], .hash = vote.hash }},
     );
     // deinitialised by expectProgramExecuteResult
@@ -3478,7 +3476,7 @@ test "vote_program: vote missing signature" {
         .timestamp = null,
     };
 
-    const slot_hashes = try SlotHashes.initWithEntries(
+    const slot_hashes = SlotHashes.initWithEntries(
         &.{.{ .slot = slots[slots.len - 1], .hash = vote.hash }},
     );
     // deinitialised by expectProgramExecuteResult
@@ -3597,7 +3595,7 @@ test "vote_program: empty vote" {
         .timestamp = null,
     };
 
-    const slot_hashes = try SlotHashes.initWithEntries(
+    const slot_hashes = SlotHashes.initWithEntries(
         &.{.{ .slot = 0, .hash = .ZEROES }},
     );
     // deinitialised by expectProgramExecuteResult
@@ -3763,7 +3761,7 @@ test "vote_program: vote state update" {
     var final_vote_state_bytes = ([_]u8{0} ** VoteState.MAX_VOTE_STATE_SIZE);
     _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
 
-    const slot_hashes = try SlotHashes.initWithEntries(
+    const slot_hashes = SlotHashes.initWithEntries(
         &.{
             .{ .slot = 8, .hash = vote_slot_hash },
             .{ .slot = 6, .hash = sig.core.Hash.ZEROES },
@@ -3903,7 +3901,7 @@ test "vote_program: vote state update switch" {
     var final_vote_state_bytes = ([_]u8{0} ** VoteState.MAX_VOTE_STATE_SIZE);
     _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
 
-    const slot_hashes = try SlotHashes.initWithEntries(
+    const slot_hashes = SlotHashes.initWithEntries(
         &.{
             .{ .slot = 8, .hash = vote_slot_hash },
             .{ .slot = 6, .hash = .ZEROES },
@@ -4044,7 +4042,7 @@ test "vote_program: compact vote state update" {
     var final_vote_state_bytes = ([_]u8{0} ** VoteState.MAX_VOTE_STATE_SIZE);
     _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
 
-    const slot_hashes = try SlotHashes.initWithEntries(
+    const slot_hashes = SlotHashes.initWithEntries(
         &.{
             .{ .slot = 8, .hash = vote_slot_hash },
             .{ .slot = 6, .hash = sig.core.Hash.ZEROES },
@@ -4184,7 +4182,7 @@ test "vote_program: compact vote state update switch" {
     var final_vote_state_bytes = ([_]u8{0} ** VoteState.MAX_VOTE_STATE_SIZE);
     _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
 
-    const slot_hashes = try SlotHashes.initWithEntries(
+    const slot_hashes = SlotHashes.initWithEntries(
         &.{
             .{ .slot = 8, .hash = vote_slot_hash },
             .{ .slot = 6, .hash = sig.core.Hash.ZEROES },
@@ -4326,7 +4324,7 @@ test "vote_program: tower sync" {
     var final_vote_state_bytes = ([_]u8{0} ** VoteState.MAX_VOTE_STATE_SIZE);
     _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
 
-    const slot_hashes = try SlotHashes.initWithEntries(
+    const slot_hashes = SlotHashes.initWithEntries(
         &.{
             .{ .slot = 8, .hash = vote_slot_hash },
             .{ .slot = 6, .hash = sig.core.Hash.ZEROES },
@@ -4473,7 +4471,7 @@ test "vote_program: tower sync switch" {
     var final_vote_state_bytes = ([_]u8{0} ** VoteState.MAX_VOTE_STATE_SIZE);
     _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
 
-    const slot_hashes = try SlotHashes.initWithEntries(
+    const slot_hashes = SlotHashes.initWithEntries(
         &.{
             .{ .slot = 8, .hash = vote_slot_hash },
             .{ .slot = 6, .hash = sig.core.Hash.ZEROES },

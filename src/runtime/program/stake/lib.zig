@@ -1784,7 +1784,7 @@ test "stake.initialize" {
 
     {
         var sysvar_cache = sysvar_cache_without_slot_hashes;
-        sysvar_cache.slot_hashes = try .initWithEntries(&.{.{
+        sysvar_cache.slot_hashes = .initWithEntries(&.{.{
             .slot = std.math.maxInt(Slot),
             .hash = sig.core.Hash.ZEROES,
         }});
@@ -1813,7 +1813,7 @@ test "stake.initialize" {
     // success
     {
         var sysvar_cache = sysvar_cache_without_slot_hashes;
-        sysvar_cache.slot_hashes = try .initWithEntries(&.{.{
+        sysvar_cache.slot_hashes = .initWithEntries(&.{.{
             .slot = std.math.maxInt(Slot),
             .hash = sig.core.Hash.ZEROES,
         }});
@@ -1882,7 +1882,7 @@ test "stake.authorize" {
 
     var sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
         .clock = .DEFAULT,
-        .slot_hashes = try runtime.sysvar.SlotHashes.initWithEntries(&.{.{
+        .slot_hashes = runtime.sysvar.SlotHashes.initWithEntries(&.{.{
             .slot = std.math.maxInt(Slot),
             .hash = sig.core.Hash.ZEROES,
         }}),
@@ -1984,7 +1984,7 @@ test "stake.delegate_stake" {
     for ([_]bool{ false, true }) |use_stake| {
         var sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
             .clock = runtime.sysvar.Clock.DEFAULT,
-            .slot_hashes = try .initWithEntries(&.{.{
+            .slot_hashes = .initWithEntries(&.{.{
                 .slot = std.math.maxInt(Slot),
                 .hash = sig.core.Hash.ZEROES,
             }}),
@@ -2149,7 +2149,7 @@ test "stake.split" {
     for ([_]bool{ false, true }) |use_stake| {
         const sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
             .clock = runtime.sysvar.Clock.DEFAULT,
-            .slot_hashes = try .initWithEntries(&.{.{
+            .slot_hashes = .initWithEntries(&.{.{
                 .slot = std.math.maxInt(Slot),
                 .hash = sig.core.Hash.ZEROES,
             }}),
@@ -2255,7 +2255,7 @@ test "stake.withdraw" {
 
     var sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
         .clock = runtime.sysvar.Clock.DEFAULT,
-        .slot_hashes = try .initWithEntries(&.{.{
+        .slot_hashes = .initWithEntries(&.{.{
             .slot = std.math.maxInt(Slot),
             .hash = sig.core.Hash.ZEROES,
         }}),
@@ -2564,7 +2564,7 @@ test "stake.merge" {
     for ([_]bool{ false, true }) |use_stake| {
         const sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
             .clock = runtime.sysvar.Clock.DEFAULT,
-            .slot_hashes = try .initWithEntries(&.{.{
+            .slot_hashes = .initWithEntries(&.{.{
                 .slot = std.math.maxInt(Slot),
                 .hash = sig.core.Hash.ZEROES,
             }}),
@@ -2668,7 +2668,7 @@ test "stake.authorize_with_seed" {
 
     var sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
         .clock = runtime.sysvar.Clock.DEFAULT,
-        .slot_hashes = try .initWithEntries(&.{.{
+        .slot_hashes = .initWithEntries(&.{.{
             .slot = std.math.maxInt(Slot),
             .hash = sig.core.Hash.ZEROES,
         }}),
@@ -2850,7 +2850,7 @@ test "stake.authorize_checked" {
 
     var sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
         .clock = runtime.sysvar.Clock.DEFAULT,
-        .slot_hashes = try .initWithEntries(&.{.{
+        .slot_hashes = .initWithEntries(&.{.{
             .slot = std.math.maxInt(Slot),
             .hash = sig.core.Hash.ZEROES,
         }}),
@@ -2938,7 +2938,7 @@ test "stake.authorize_checked_with_seed" {
 
     var sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
         .clock = runtime.sysvar.Clock.DEFAULT,
-        .slot_hashes = try .initWithEntries(&.{.{
+        .slot_hashes = .initWithEntries(&.{.{
             .slot = std.math.maxInt(Slot),
             .hash = sig.core.Hash.ZEROES,
         }}),
@@ -3355,7 +3355,7 @@ test "stake.move_stake" {
                 .unix_timestamp = 0,
                 .slot = 0,
             },
-            .slot_hashes = try .initWithEntries(&.{.{
+            .slot_hashes = .initWithEntries(&.{.{
                 .slot = std.math.maxInt(Slot),
                 .hash = .ZEROES,
             }}),
@@ -3486,7 +3486,7 @@ test "stake.move_lamports" {
 
     var sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
         .clock = runtime.sysvar.Clock.DEFAULT,
-        .slot_hashes = try runtime.sysvar.SlotHashes.initWithEntries(&.{.{
+        .slot_hashes = .initWithEntries(&.{.{
             .slot = std.math.maxInt(Slot),
             .hash = sig.core.Hash.ZEROES,
         }}),

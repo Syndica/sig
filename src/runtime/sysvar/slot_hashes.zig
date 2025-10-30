@@ -2,8 +2,6 @@ const builtin = @import("builtin");
 const std = @import("std");
 const sig = @import("../../sig.zig");
 
-const Allocator = std.mem.Allocator;
-
 const bincode = sig.bincode;
 
 const Hash = sig.core.Hash;
@@ -63,7 +61,7 @@ pub const SlotHashes = struct {
         }
     }
 
-    pub fn initWithEntries(entries: []const Entry) Allocator.Error!SlotHashes {
+    pub fn initWithEntries(entries: []const Entry) SlotHashes {
         if (!builtin.is_test) @compileError("only for testing");
         std.debug.assert(entries.len <= MAX_ENTRIES);
 

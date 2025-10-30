@@ -1012,7 +1012,7 @@ test "executeAdvanceNonceAccount" {
 
     // Create Sysvar Recent Blockhashes
     // Deinitialized by the syvar cache in the created transaction context
-    const recent_blockhashes: RecentBlockhashes = try .initWithEntries(&.{.{
+    const recent_blockhashes: RecentBlockhashes = .initWithEntries(&.{.{
         .blockhash = Hash.initRandom(prng.random()),
         .lamports_per_signature = 0,
     }});
@@ -1183,7 +1183,7 @@ test "executeInitializeNonceAccount" {
     defer allocator.free(nonce_state_bytes);
 
     // Create Sysvar Recent Blockhashes
-    const recent_blockhashes: RecentBlockhashes = try .initWithEntries(&.{.{
+    const recent_blockhashes: RecentBlockhashes = .initWithEntries(&.{.{
         .blockhash = Hash.initRandom(prng.random()),
         .lamports_per_signature = 0,
     }});
