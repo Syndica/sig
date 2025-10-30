@@ -175,7 +175,7 @@ pub const SlotTracker = struct {
             const parent_slot = current.constants.parent_slot;
             parents_list.appendAssumeCapacity(parent_slot);
 
-            // Stop if we've reached the root.
+            // Stop if we've reached the genesis.
             if (parent_slot == current_slot) break;
 
             current_slot = parent_slot;
