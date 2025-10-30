@@ -763,15 +763,12 @@ test "insertion basic" {
     var simple_state: sig.accounts_db.ThreadSafeAccountMap = .init(allocator);
     defer simple_state.deinit();
 
-    var real_state, var tmp_dir = try accounts_db.Two.initTest(allocator);
-    defer {
-        accounts_db.Two.Rooted.deinitThreadLocals();
-        real_state.deinit();
-        tmp_dir.cleanup();
-    }
+    var test_state = try accounts_db.Two.initTest(allocator);
+    defer test_state.deinit();
+    const real_state = &test_state.db;
 
     const simple_store = simple_state.accountStore();
-    const real_store: AccountStore = .{ .accounts_db_two = &real_state };
+    const real_store: AccountStore = .{ .accounts_db_two = real_state };
     const stores = [_]sig.accounts_db.AccountStore{ simple_store, real_store };
 
     try expectEqualDatabaseWithAncestors(
@@ -822,12 +819,12 @@ test "insertion basic" {
     try std.testing.expectEqual({}, simple_store.put(1, .ZEROES, .EMPTY));
     try std.testing.expectEqual({}, real_store.put(1, .ZEROES, .EMPTY));
 
-    setRootedLargestSlotForTest(&simple_state, &real_state, 2);
+    setRootedLargestSlotForTest(&simple_state, real_state, 2);
     try putAccountIntoStores(error.CannotWriteRootedSlot, &stores, 1, .ZEROES, .EMPTY);
 
     // this backtracking wouldn't/shouldn't really ever happen, but just
     // to demonstrate that the error is based on the rooted slot:
-    setRootedLargestSlotForTest(&simple_state, &real_state, null);
+    setRootedLargestSlotForTest(&simple_state, real_state, null);
     try putAccountIntoStores({}, &stores, 1, .ZEROES, .EMPTY);
 }
 
@@ -840,15 +837,12 @@ test "insertion out of order" {
     var simple_state: sig.accounts_db.ThreadSafeAccountMap = .init(allocator);
     defer simple_state.deinit();
 
-    var real_state, var tmp_dir = try accounts_db.Two.initTest(allocator);
-    defer {
-        accounts_db.Two.Rooted.deinitThreadLocals();
-        real_state.deinit();
-        tmp_dir.cleanup();
-    }
+    var test_state = try accounts_db.Two.initTest(allocator);
+    defer test_state.deinit();
+    const real_state = &test_state.db;
 
     const simple_store = simple_state.accountStore();
-    const real_store: AccountStore = .{ .accounts_db_two = &real_state };
+    const real_store: AccountStore = .{ .accounts_db_two = real_state };
     const stores = [_]sig.accounts_db.AccountStore{ simple_store, real_store };
 
     try expectEqualDatabaseWithAncestors(
@@ -908,7 +902,7 @@ test "insertion out of order" {
         break :slot slots[random.uintLessThan(usize, slots.len)];
     };
     const pk_of_ones: Pubkey = .{ .data = @splat(1) };
-    setRootedLargestSlotForTest(&simple_state, &real_state, slot_to_try_write_while_rooted);
+    setRootedLargestSlotForTest(&simple_state, real_state, slot_to_try_write_while_rooted);
     try std.testing.expectEqual(
         error.CannotWriteRootedSlot,
         simple_store.put(1, pk_of_ones, .EMPTY),
@@ -917,7 +911,7 @@ test "insertion out of order" {
         error.CannotWriteRootedSlot,
         real_store.put(1, pk_of_ones, .EMPTY),
     );
-    setRootedLargestSlotForTest(&simple_state, &real_state, null);
+    setRootedLargestSlotForTest(&simple_state, real_state, null);
     try putAccountIntoStores({}, &stores, 1, pk_of_ones, .EMPTY);
 }
 
@@ -930,15 +924,12 @@ test "put and get zero lamports before & after cleanup" {
     var simple_state: sig.accounts_db.ThreadSafeAccountMap = .init(allocator);
     defer simple_state.deinit();
 
-    var real_state, var tmp_dir = try accounts_db.Two.initTest(allocator);
-    defer {
-        accounts_db.Two.Rooted.deinitThreadLocals();
-        real_state.deinit();
-        tmp_dir.cleanup();
-    }
+    var test_state = try accounts_db.Two.initTest(allocator);
+    defer test_state.deinit();
+    const real_state = &test_state.db;
 
     const simple_store = simple_state.accountStore();
-    const real_store: AccountStore = .{ .accounts_db_two = &real_state };
+    const real_store: AccountStore = .{ .accounts_db_two = real_state };
     const stores = [_]sig.accounts_db.AccountStore{ simple_store, real_store };
 
     const pk1, const pk2, const pk3, const pk4 = pks: {
@@ -1004,20 +995,20 @@ test "put and get zero lamports before & after cleanup" {
     try expectAccountFromStores(&stores, &ancestors_after, pk4, one_lamport.asAccount());
 
     // but it still exists in the unrooted account map regardless
-    try expectDbUnrootedPubkeysInSlot(&real_state, slot100, &.{ pk1, pk2, pk3, pk4 });
-    try expectDbUnrootedPubkeysInSlot(&real_state, slot200, &.{ pk1, pk2, pk3, pk4 });
+    try expectDbUnrootedPubkeysInSlot(real_state, slot100, &.{ pk1, pk2, pk3, pk4 });
+    try expectDbUnrootedPubkeysInSlot(real_state, slot200, &.{ pk1, pk2, pk3, pk4 });
 
     // but after we run the manager on it to clean it up...
-    setRootedLargestSlotForTest(&simple_state, &real_state, slot100);
+    setRootedLargestSlotForTest(&simple_state, real_state, slot100);
     try real_store.onSlotRooted(allocator, slot100, 5000);
     try simple_store.onSlotRooted(allocator, slot100, 5000);
 
     // the unrooted entry for slot100 is removed, and all the zero-lamport accounts should
     // not be present in the flushed accounts.
-    try expectDbUnrootedPubkeysInSlot(&real_state, slot100, null);
+    try expectDbUnrootedPubkeysInSlot(real_state, slot100, null);
 
     // although they should all still exist in the unrooted slot200.
-    try expectDbUnrootedPubkeysInSlot(&real_state, slot200, &.{ pk1, pk2, pk3, pk4 });
+    try expectDbUnrootedPubkeysInSlot(real_state, slot200, &.{ pk1, pk2, pk3, pk4 });
 
     // and display the same outward behaviour as before.
     try expectAccountFromStores(&stores, &ancestors_before, pk1, null);
@@ -1030,11 +1021,11 @@ test "put and get zero lamports before & after cleanup" {
     try expectAccountFromStores(&stores, &ancestors_after, pk4, one_lamport.asAccount());
 
     // and after we run the manager on it to clean up slot200 as well...
-    setRootedLargestSlotForTest(&simple_state, &real_state, slot200);
+    setRootedLargestSlotForTest(&simple_state, real_state, slot200);
     try real_store.onSlotRooted(allocator, slot200, 5000);
     try simple_store.onSlotRooted(allocator, slot200, 5000);
 
-    try expectDbUnrootedPubkeysInSlot(&real_state, slot200, null);
+    try expectDbUnrootedPubkeysInSlot(real_state, slot200, null);
 }
 
 test "put and get zero lamports across forks" {
@@ -1046,15 +1037,12 @@ test "put and get zero lamports across forks" {
     var simple_state: sig.accounts_db.ThreadSafeAccountMap = .init(allocator);
     defer simple_state.deinit();
 
-    var real_state, var tmp_dir = try accounts_db.Two.initTest(allocator);
-    defer {
-        accounts_db.Two.Rooted.deinitThreadLocals();
-        real_state.deinit();
-        tmp_dir.cleanup();
-    }
+    var test_state = try accounts_db.Two.initTest(allocator);
+    defer test_state.deinit();
+    const real_state = &test_state.db;
 
     const simple_store = simple_state.accountStore();
-    const real_store: AccountStore = .{ .accounts_db_two = &real_state };
+    const real_store: AccountStore = .{ .accounts_db_two = real_state };
     const stores = [_]sig.accounts_db.AccountStore{ simple_store, real_store };
 
     const zero_lamports: AccountSharedData = .{
@@ -1078,7 +1066,7 @@ test "put and get zero lamports across forks" {
     const slot3: Slot = 300;
     const slot4: Slot = 400;
 
-    setRootedLargestSlotForTest(&simple_state, &real_state, slot1);
+    setRootedLargestSlotForTest(&simple_state, real_state, slot1);
     try putAccountIntoStores({}, &stores, slot2, pk, zero_lamports);
     try putAccountIntoStores({}, &stores, slot3, pk, one_lamport);
     try putAccountIntoStores({}, &stores, slot4, pk, zero_lamports);
@@ -1106,15 +1094,12 @@ test "put and get across competing forks" {
     var simple_state: sig.accounts_db.ThreadSafeAccountMap = .init(allocator);
     defer simple_state.deinit();
 
-    var real_state, var tmp_dir = try accounts_db.Two.initTest(allocator);
-    defer {
-        accounts_db.Two.Rooted.deinitThreadLocals();
-        real_state.deinit();
-        tmp_dir.cleanup();
-    }
+    var test_state = try accounts_db.Two.initTest(allocator);
+    defer test_state.deinit();
+    const real_state = &test_state.db;
 
     const simple_store = simple_state.accountStore();
-    const real_store: AccountStore = .{ .accounts_db_two = &real_state };
+    const real_store: AccountStore = .{ .accounts_db_two = real_state };
     const stores = [_]sig.accounts_db.AccountStore{ simple_store, real_store };
 
     const helper = struct {
@@ -1140,7 +1125,7 @@ test "put and get across competing forks" {
 
     // insert slot 1 state and root it (assume it exists in the ancestors)
     try putAccountIntoStores({}, &stores, slot1, pk, asd_a);
-    setRootedLargestSlotForTest(&simple_state, &real_state, slot1);
+    setRootedLargestSlotForTest(&simple_state, real_state, slot1);
     try simple_state.onSlotRooted(slot1);
     real_state.onSlotRooted(slot1);
 
