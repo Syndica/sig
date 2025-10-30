@@ -29,14 +29,14 @@ pub fn init(allocator: std.mem.Allocator, rooted: Rooted) !Db {
     };
 }
 
-const TestContext = struct {
+pub const TestContext = struct {
     db: Db,
-    tmp_dir: std.testing.TmpDir,
+    tmp: std.testing.TmpDir,
 
     pub fn deinit(self: *TestContext) void {
         Rooted.deinitThreadLocals();
         self.db.deinit();
-        self.tmp_dir.cleanup();
+        self.tmp.cleanup();
     }
 };
 
@@ -55,10 +55,7 @@ pub fn initTest(allocator: std.mem.Allocator) !TestContext {
     errdefer rooted.deinit();
 
     const db: @This() = try .init(allocator, rooted);
-    return .{
-        .db = db,
-        .tmp_dir = tmp,
-    };
+    return .{ .db = db, .tmp = tmp };
 }
 
 pub fn deinit(self: *Db) void {
