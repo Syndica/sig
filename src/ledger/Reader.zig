@@ -2734,11 +2734,7 @@ test isDuplicateSlot {
     const result_writer = state.resultWriter();
 
     // Test case: Slot with no duplicate proof returns false
-    {
-        const slot: Slot = 42;
-        const is_duplicate = try reader.isDuplicateSlot(slot);
-        try std.testing.expectEqual(false, is_duplicate);
-    }
+    try std.testing.expectEqual(false, reader.isDuplicateSlot(42));
 
     // Test case: Slot with duplicate proof returns true
     const slot: Slot = 100;

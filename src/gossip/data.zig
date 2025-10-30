@@ -1072,7 +1072,7 @@ pub const DuplicateShred = struct {
     // Serialized DuplicateSlotProof split into chunks.
     num_chunks: u8,
     chunk_index: u8,
-    chunk: []u8,
+    chunk: []const u8,
 
     pub fn clone(self: *const DuplicateShred, allocator: std.mem.Allocator) error{OutOfMemory}!DuplicateShred {
         return .{
