@@ -5,6 +5,7 @@ const tracy = @import("tracy");
 
 const Allocator = std.mem.Allocator;
 
+const Channel = sig.sync.Channel;
 const Logger = sig.trace.Logger("replay.committer");
 
 const Hash = sig.core.Hash;
@@ -17,10 +18,9 @@ const ResolvedTransaction = replay.resolve_lookup.ResolvedTransaction;
 const CachedAccount = sig.runtime.account_loader.CachedAccount;
 const ProcessedTransaction = sig.runtime.transaction_execution.ProcessedTransaction;
 
-const vote_listener = sig.consensus.vote_listener;
-const ParsedVote = vote_listener.vote_parser.ParsedVote;
-
-const Channel = sig.sync.Channel;
+const ParsedVote = sig.consensus.vote_listener.vote_parser.ParsedVote;
+const parseSanitizedVoteTransaction =
+    sig.consensus.vote_listener.vote_parser.parseSanitizedVoteTransaction;
 
 const Committer = @This();
 
@@ -50,10 +50,7 @@ pub fn commitTransactions(
 
     var rng = std.Random.DefaultPrng.init(slot + transactions.len);
 
-    var accounts_to_store = std.AutoArrayHashMapUnmanaged(
-        Pubkey,
-        sig.runtime.account_loader.CachedAccount,
-    ).empty;
+    var accounts_to_store = std.AutoArrayHashMapUnmanaged(Pubkey, CachedAccount).empty;
     defer accounts_to_store.deinit(allocator);
 
     var signature_count: usize = 0;
@@ -84,12 +81,9 @@ pub fn commitTransactions(
         if (tx_result.outputs != null) {
             rent_collected += tx_result.rent;
 
-            // Skip non successful or non vote transactions.
+            // Send out successful vote transactions.
             if (tx_result.err == null and isSimpleVoteTransaction(transaction.transaction)) {
-                if (try vote_listener.vote_parser.parseSanitizedVoteTransaction(
-                    allocator,
-                    transaction,
-                )) |parsed| {
+                if (try parseSanitizedVoteTransaction(allocator, transaction)) |parsed| {
                     if (parsed.vote.lastVotedSlot() != null) {
                         self.replay_votes_sender.send(parsed) catch parsed.deinit(allocator);
                     } else {
