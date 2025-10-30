@@ -615,12 +615,9 @@ test fillMissingSysvarCacheEntries {
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     // Create accounts db
-    var accounts_db, var tmp_dir = try AccountsDB.initTest(allocator);
-    defer {
-        AccountsDB.Rooted.deinitThreadLocals();
-        accounts_db.deinit();
-        tmp_dir.cleanup();
-    }
+    var test_state = try AccountsDB.initTest(allocator);
+    defer test_state.deinit();
+    const db = &test_state.db;
 
     // Set slot and ancestors
     const slot = 10;
@@ -635,7 +632,7 @@ test fillMissingSysvarCacheEntries {
     // Write all sysvars to accounts db. Do not inherit from old accounts.
     try insertSysvarCacheAccounts(
         allocator,
-        &accounts_db,
+        db,
         &expected,
         slot,
         false,
@@ -648,7 +645,7 @@ test fillMissingSysvarCacheEntries {
     // Fill missing entries in the sysvar cache from accounts db.
     try fillMissingSysvarCacheEntries(
         allocator,
-        .{ .accounts_db_two = .{ &accounts_db, &ancestors } },
+        .{ .accounts_db_two = .{ db, &ancestors } },
         &actual,
     );
 
@@ -828,12 +825,9 @@ test "update all sysvars" {
     const random = prng.random();
 
     // Create values for update sysvar deps
-    var accounts_db, var tmp_dir = try AccountsDB.initTest(allocator);
-    defer {
-        AccountsDB.Rooted.deinitThreadLocals();
-        accounts_db.deinit();
-        tmp_dir.cleanup();
-    }
+    var test_state = try AccountsDB.initTest(allocator);
+    defer test_state.deinit();
+    const db = &test_state.db;
 
     var capitalization = Atomic(u64).init(0);
     var slot: Slot = 10;
@@ -847,7 +841,7 @@ test "update all sysvars" {
     defer initial_sysvars.deinit(allocator);
     try insertSysvarCacheAccounts(
         allocator,
-        &accounts_db,
+        db,
         &initial_sysvars,
         slot,
         false,
@@ -864,12 +858,12 @@ test "update all sysvars" {
         null,
     );
     defer allocator.free(account.data);
-    accounts_db.rooted.put(SlotHistory.ID, slot, account);
+    db.rooted.put(SlotHistory.ID, slot, account);
 
     // NOTE: Putting accounts on the same slot is broken, so increment slot by 1 and add it to ancestors.
     slot = slot + 1;
     const update_sysvar_deps: UpdateSysvarAccountDeps = .{
-        .account_store = .{ .accounts_db_two = &accounts_db },
+        .account_store = .{ .accounts_db_two = db },
         .capitalization = &capitalization,
         .ancestors = &ancestors,
         .rent = &rent,

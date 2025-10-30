@@ -83,7 +83,9 @@ pub fn put(
         entry.slot = slot;
     }
 
-    try entry.entries.put(allocator, address, data);
+    const gop = try entry.entries.getOrPut(allocator, address);
+    if (gop.found_existing) gop.value_ptr.deinit(allocator);
+    gop.value_ptr.* = data;
     entry.is_empty.store(false, .release);
 }
 

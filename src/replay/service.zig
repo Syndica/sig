@@ -537,6 +537,7 @@ fn freezeCompletedSlots(state: *ReplayState, results: []const ReplayResult) !boo
                 try replay.freeze.freezeSlot(state.allocator, .init(
                     .from(state.logger),
                     state.account_store,
+                    &state.thread_pool,
                     &epoch,
                     slot_info.state,
                     slot_info.constants,
