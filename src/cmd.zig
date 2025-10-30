@@ -1188,32 +1188,16 @@ fn validator(
     );
     defer shred_network_manager.deinit();
 
-    var replay_deps = try replayDependencies(
-        allocator,
-        epoch,
-        loaded_snapshot.accounts_db.accountStore(),
-        &loaded_snapshot.collapsed_manifest,
-        &app_base,
-        &ledger,
-        &epoch_context_manager,
-    );
-    defer replay_deps.deinit(allocator);
+    var replay_service_state: ReplayAndConsensusServiceState = try .init(allocator, .{
+        .app_base = &app_base,
+        .loaded_snapshot = &loaded_snapshot,
+        .ledger = &ledger,
+        .epoch_context_manager = &epoch_context_manager,
+        .replay_threads = cfg.replay_threads,
+    });
+    defer replay_service_state.deinit(allocator);
 
-    const consensus_deps = if (cfg.disable_consensus)
-        null
-    else
-        try consensusDependencies(allocator);
-    defer if (consensus_deps) |d| d.deinit();
-
-    var replay_service = try replay.Service.init(&replay_deps, cfg.replay_threads, consensus_deps);
-    defer replay_service.deinit(allocator);
-
-    const replay_thread = try app_base.spawnService(
-        "replay",
-        .loop,
-        replay.Service.advance,
-        .{&replay_service},
-    );
+    const replay_thread = try replay_service_state.spawnService(&app_base, cfg);
 
     replay_thread.join();
     rpc_epoch_ctx_service_thread.join();
@@ -1321,32 +1305,16 @@ fn replayOffline(
         });
     }
 
-    var replay_deps = try replayDependencies(
-        allocator,
-        epoch,
-        loaded_snapshot.accounts_db.accountStore(),
-        &loaded_snapshot.collapsed_manifest,
-        &app_base,
-        &ledger,
-        &epoch_context_manager,
-    );
-    defer replay_deps.deinit(allocator);
+    var replay_service_state: ReplayAndConsensusServiceState = try .init(allocator, .{
+        .app_base = &app_base,
+        .loaded_snapshot = &loaded_snapshot,
+        .ledger = &ledger,
+        .epoch_context_manager = &epoch_context_manager,
+        .replay_threads = cfg.replay_threads,
+    });
+    defer replay_service_state.deinit(allocator);
 
-    const consensus_deps = if (cfg.disable_consensus)
-        null
-    else
-        try consensusDependencies(allocator);
-    defer if (consensus_deps) |d| d.deinit();
-
-    var replay_service = try replay.Service.init(&replay_deps, cfg.replay_threads, consensus_deps);
-    defer replay_service.deinit(allocator);
-
-    const replay_thread = try app_base.spawnService(
-        "replay",
-        .loop,
-        replay.Service.advance,
-        .{&replay_service},
-    );
+    const replay_thread = try replay_service_state.spawnService(&app_base, cfg);
 
     replay_thread.join();
     ledger_cleanup_service.join();
@@ -1920,81 +1888,136 @@ fn startGossip(
     return service;
 }
 
-fn replayDependencies(
-    allocator: std.mem.Allocator,
-    epoch: sig.core.Epoch,
-    account_store: sig.accounts_db.AccountStore,
-    collapsed_manifest: *const sig.accounts_db.snapshot.Manifest,
-    app_base: *const AppBase,
-    ledger: *Ledger,
-    epoch_context_manager: *sig.adapter.EpochContextManager,
-) !replay.Dependencies {
-    const bank_fields = &collapsed_manifest.bank_fields;
-    const epoch_stakes_map = &collapsed_manifest.bank_extra.versioned_epoch_stakes;
-    const epoch_stakes = epoch_stakes_map.get(epoch) orelse
-        return error.EpochStakesMissingFromSnapshot;
+const ReplayAndConsensusServiceState = struct {
+    replay_state: replay.service.ReplayState,
+    tower_consensus: replay.TowerConsensus,
+    tc_senders: replay.TowerConsensus.Senders,
+    tc_receivers: replay.TowerConsensus.Receivers,
 
-    const feature_set = try sig.replay.service.getActiveFeatures(
-        allocator,
-        account_store.reader().forSlot(&bank_fields.ancestors),
-        bank_fields.slot,
-    );
+    fn deinit(self: *ReplayAndConsensusServiceState, allocator: std.mem.Allocator) void {
+        self.replay_state.deinit();
+        self.tower_consensus.deinit(allocator);
+        self.tc_senders.destroy();
+        self.tc_receivers.destroy();
+    }
 
-    const root_slot_constants = try sig.core.SlotConstants.fromBankFields(
-        allocator,
-        bank_fields,
-        feature_set,
-    );
-    errdefer root_slot_constants.deinit(allocator);
-
-    const lt_hash = collapsed_manifest.bank_extra.accounts_lt_hash;
-
-    var root_slot_state = try sig.core.SlotState.fromBankFields(allocator, bank_fields, lt_hash);
-    errdefer root_slot_state.deinit(allocator);
-
-    const hard_forks = try bank_fields.hard_forks.clone(allocator);
-    errdefer hard_forks.deinit(allocator);
-
-    const current_epoch_constants: sig.core.EpochConstants = try .fromBankFields(
-        bank_fields,
-        try epoch_stakes.current.convert(allocator, .delegation),
-    );
-    errdefer current_epoch_constants.deinit(allocator);
-
-    return .{
-        .allocator = allocator,
-        .logger = .from(app_base.logger),
-        .my_identity = .fromPublicKey(&app_base.my_keypair.public_key),
-        .vote_identity = .fromPublicKey(&app_base.my_keypair.public_key),
-        .account_store = account_store,
-        .ledger = ledger,
-        .epoch_schedule = bank_fields.epoch_schedule,
-        .slot_leaders = epoch_context_manager.slotLeaders(),
-        .root = .{
-            .slot = bank_fields.slot,
-            .constants = .init(root_slot_constants),
-            .state = .init(root_slot_state),
+    /// Helper for initializing replay state from relevant data.
+    fn init(
+        allocator: std.mem.Allocator,
+        params: struct {
+            app_base: *const AppBase,
+            loaded_snapshot: *sig.accounts_db.snapshot.LoadedSnapshot,
+            ledger: *Ledger,
+            epoch_context_manager: *sig.adapter.EpochContextManager,
+            replay_threads: u32,
         },
-        .current_epoch = epoch,
-        .current_epoch_constants = .init(current_epoch_constants),
-        .hard_forks = .init(hard_forks),
-    };
-}
+    ) !ReplayAndConsensusServiceState {
+        var replay_state: replay.service.ReplayState = replay_state: {
+            const account_store = params.loaded_snapshot.accounts_db.accountStore();
+            const manifest = &params.loaded_snapshot.collapsed_manifest;
+            const bank_fields = &manifest.bank_fields;
+            const epoch = bank_fields.epoch;
 
-fn consensusDependencies(
-    allocator: std.mem.Allocator,
-) !replay.TowerConsensus.Dependencies.External {
-    const senders: sig.replay.TowerConsensus.Senders = try .create(allocator);
-    errdefer senders.destroy();
+            const epoch_stakes_map = &manifest.bank_extra.versioned_epoch_stakes;
+            const epoch_stakes = epoch_stakes_map.get(epoch) orelse
+                return error.EpochStakesMissingFromSnapshot;
 
-    const receivers: sig.replay.TowerConsensus.Receivers = try .create(allocator);
-    errdefer receivers.destroy();
+            const feature_set = try sig.replay.service.getActiveFeatures(
+                allocator,
+                account_store.reader().forSlot(&bank_fields.ancestors),
+                bank_fields.slot,
+            );
 
-    return .{
-        .senders = senders,
-        .receivers = receivers,
-    };
-}
+            const root_slot_constants: sig.core.SlotConstants =
+                try .fromBankFields(allocator, bank_fields, feature_set);
+            errdefer root_slot_constants.deinit(allocator);
+
+            const lt_hash = manifest.bank_extra.accounts_lt_hash;
+
+            var root_slot_state: sig.core.SlotState =
+                try .fromBankFields(allocator, bank_fields, lt_hash);
+            errdefer root_slot_state.deinit(allocator);
+
+            const hard_forks = try bank_fields.hard_forks.clone(allocator);
+            errdefer hard_forks.deinit(allocator);
+
+            const current_epoch_constants: sig.core.EpochConstants = try .fromBankFields(
+                bank_fields,
+                try epoch_stakes.current.convert(allocator, .delegation),
+            );
+            errdefer current_epoch_constants.deinit(allocator);
+
+            break :replay_state try .init(.{
+                .allocator = allocator,
+                .logger = .from(params.app_base.logger),
+                .my_identity = .fromPublicKey(&params.app_base.my_keypair.public_key),
+                .vote_identity = .fromPublicKey(&params.app_base.my_keypair.public_key),
+                .account_store = account_store,
+                .ledger = params.ledger,
+                .epoch_schedule = bank_fields.epoch_schedule,
+                .slot_leaders = params.epoch_context_manager.slotLeaders(),
+                .root = .{
+                    .slot = bank_fields.slot,
+                    .constants = root_slot_constants,
+                    .state = root_slot_state,
+                },
+                .current_epoch = epoch,
+                .current_epoch_constants = current_epoch_constants,
+                .hard_forks = hard_forks,
+                .replay_threads = params.replay_threads,
+            });
+        };
+        errdefer replay_state.deinit();
+
+        var tower_consensus: replay.TowerConsensus = try .init(allocator, .{
+            .logger = .from(replay_state.logger),
+            .my_identity = replay_state.my_identity,
+            .vote_identity = replay_state.vote_identity,
+            .account_reader = replay_state.account_store.reader(),
+            .ledger = replay_state.ledger,
+            .slot_tracker = &replay_state.slot_tracker,
+        });
+        errdefer tower_consensus.deinit(allocator);
+
+        const tc_senders: replay.TowerConsensus.Senders = try .create(allocator);
+        errdefer tc_senders.destroy();
+
+        const tc_receivers: replay.TowerConsensus.Receivers = try .create(allocator);
+        errdefer tc_receivers.destroy();
+
+        return .{
+            .replay_state = replay_state,
+            .tower_consensus = tower_consensus,
+            .tc_senders = tc_senders,
+            .tc_receivers = tc_receivers,
+        };
+    }
+
+    /// Run `replay.service.advanceReplay` in a loop as a service.
+    fn spawnService(
+        self: *ReplayAndConsensusServiceState,
+        app_base: *const AppBase,
+        cfg: config.Cmd,
+    ) !std.Thread {
+        return try app_base.spawnService(
+            "replay",
+            .loop,
+            replay.service.advanceReplay,
+            .{
+                replay.service.AdvanceReplayParams{
+                    .want_multi_threaded_replay = true,
+                    .replay_state = &self.replay_state,
+                    .consensus = if (cfg.disable_consensus) null else .{
+                        .tower = &self.tower_consensus,
+                        .vote_collection = null, // TODO: enable
+                        .senders = self.tc_senders,
+                        .receivers = self.tc_receivers,
+                    },
+                },
+            },
+        );
+    }
+};
 
 fn spawnLogger(
     allocator: std.mem.Allocator,

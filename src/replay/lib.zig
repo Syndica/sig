@@ -13,4 +13,3 @@ pub const update_sysvar = @import("update_sysvar.zig");
 
 pub const Dependencies = service.Dependencies;
 pub const TowerConsensus = consensus.TowerConsensus;
-pub const Service = service.Service;
