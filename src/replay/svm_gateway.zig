@@ -4,6 +4,7 @@ const replay = @import("lib.zig");
 const tracy = @import("tracy");
 
 const vm = sig.vm;
+const account_preload = sig.runtime.account_preload;
 
 const Allocator = std.mem.Allocator;
 
@@ -14,7 +15,7 @@ const StatusCache = sig.core.StatusCache;
 
 const SlotAccountReader = sig.accounts_db.SlotAccountReader;
 
-const BatchAccountCache = sig.runtime.account_loader.BatchAccountCache;
+const AccountMap = sig.runtime.account_preload.AccountMap;
 const ComputeBudget = sig.runtime.ComputeBudget;
 const FeatureSet = sig.core.FeatureSet;
 const ProcessedTransaction = sig.runtime.transaction_execution.ProcessedTransaction;
@@ -27,8 +28,6 @@ const TransactionResult = sig.runtime.transaction_execution.TransactionResult;
 
 const loadPrograms = sig.runtime.program_loader.loadPrograms;
 const initDurableNonceFromHash = sig.runtime.nonce.initDurableNonceFromHash;
-
-const ResolvedTransaction = replay.resolve_lookup.ResolvedTransaction;
 
 pub fn executeTransaction(
     allocator: Allocator,
@@ -62,7 +61,7 @@ pub const SvmGateway = struct {
         sysvar_cache: SysvarCache,
         vm_environment: vm.Environment,
         next_vm_environment: ?vm.Environment,
-        accounts: BatchAccountCache,
+        accounts: AccountMap,
         programs: ProgramMap,
 
         /// This is an ugly solution, but it doesn't actually lead to any issues
@@ -92,21 +91,26 @@ pub const SvmGateway = struct {
 
     pub fn init(
         allocator: Allocator,
-        batch: []const ResolvedTransaction,
+        batches: []const replay.resolve_lookup.ResolvedBatch,
         params: Params,
     ) !SvmGateway {
         const zone = tracy.Zone.init(@src(), .{ .name = "SvmGateway.init" });
         defer zone.deinit();
 
-        var accounts = try BatchAccountCache.initSufficientCapacity(allocator, batch);
-        for (batch) |transaction| {
-            try accounts.load(
+        var max_accounts: usize = 0;
+        for (batches) |batch| max_accounts += account_preload.maxAccounts(batch.transactions);
+        var accounts = AccountMap{};
+        try accounts.ensureUnusedCapacity(allocator, max_accounts);
+
+        for (batches) |batch| for (batch.transactions) |transaction| {
+            try account_preload.load(
+                &accounts,
                 allocator,
                 params.account_reader,
                 &transaction.accounts,
                 transaction.instructions,
             );
-        }
+        };
 
         const vm_environment = try vm.Environment.initV1(
             allocator,
@@ -121,7 +125,7 @@ pub const SvmGateway = struct {
         );
 
         var programs =
-            try loadPrograms(allocator, &accounts.account_cache, &vm_environment, params.slot);
+            try loadPrograms(allocator, &accounts, &vm_environment, params.slot);
         errdefer {
             for (programs.values()) |*program| program.deinit(allocator);
             programs.deinit(allocator);
@@ -158,7 +162,7 @@ pub const SvmGateway = struct {
 
         self.state.sysvar_cache.deinit(allocator);
         self.state.vm_environment.deinit(allocator);
-        self.state.accounts.deinit(allocator);
+        sig.runtime.account_preload.deinit(self.state.accounts, allocator);
         if (self.state.next_vm_environment) |next_vm| next_vm.deinit(allocator);
 
         var programs = self.state.programs;

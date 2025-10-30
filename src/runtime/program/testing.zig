@@ -9,7 +9,7 @@ const Pubkey = sig.core.Pubkey;
 const LogCollector = sig.runtime.LogCollector;
 
 pub const InstructionContextAccountMetaParams = runtime_testing.InstructionInfoAccountMetaParams;
-pub const TransactionContextParams = runtime_testing.ExecuteContextsParams;
+pub const ExecuteContextsParams = runtime_testing.ExecuteContextsParams;
 
 const createTransactionContext = runtime_testing.createTransactionContext;
 const deinitTransactionContext = runtime_testing.deinitTransactionContext;
@@ -26,7 +26,7 @@ pub fn expectProgramExecuteError(
     program_id: Pubkey,
     instruction: anytype,
     instruction_accounts: []const InstructionContextAccountMetaParams,
-    initial_context_params: TransactionContextParams,
+    initial_context_params: ExecuteContextsParams,
     options: Options,
 ) !void {
     try std.testing.expectError(
@@ -48,8 +48,8 @@ pub fn expectProgramExecuteResult(
     program_id: Pubkey,
     instruction: anytype,
     instruction_accounts: []const InstructionContextAccountMetaParams,
-    initial_context_params: TransactionContextParams,
-    expected_context_params: TransactionContextParams,
+    initial_context_params: ExecuteContextsParams,
+    expected_context_params: ExecuteContextsParams,
     options: Options,
 ) !void {
     if (!builtin.is_test)
@@ -63,7 +63,7 @@ pub fn expectProgramExecuteResult(
     // Create the initial transaction context
     var initial_prng = std.Random.DefaultPrng.init(0);
 
-    var initial_cache, var initial_tc = try createTransactionContext(
+    const initial_cache, var initial_tc = try createTransactionContext(
         allocator,
         initial_prng.random(),
         context_params,
@@ -79,20 +79,20 @@ pub fn expectProgramExecuteResult(
             }
         }
         deinitTransactionContext(allocator, initial_tc);
-        initial_cache.deinit(allocator);
+        sig.runtime.account_preload.deinit(initial_cache, allocator);
     }
 
     // Create the expected transaction context
     var expected_prng = std.Random.DefaultPrng.init(0);
 
-    var expected_cache, const expected_tc = try createTransactionContext(
+    const expected_cache, const expected_tc = try createTransactionContext(
         allocator,
         expected_prng.random(),
         expected_context_params,
     );
     defer {
         deinitTransactionContext(allocator, expected_tc);
-        expected_cache.deinit(allocator);
+        sig.runtime.account_preload.deinit(expected_cache, allocator);
     }
 
     // Create the instruction info

@@ -3983,7 +3983,7 @@ test checkProgramAccount {
         .{},
     );
 
-    var cache, var tc = try testing.createTransactionContext(allocator, prng.random(), .{
+    const cache, var tc = try testing.createTransactionContext(allocator, prng.random(), .{
         .accounts = &.{
             .{
                 .pubkey = program_key,
@@ -3998,7 +3998,7 @@ test checkProgramAccount {
     });
     defer {
         testing.deinitTransactionContext(allocator, tc);
-        cache.deinit(allocator);
+        sig.runtime.account_preload.deinit(cache, allocator);
     }
 
     var info = try testing.createInstructionInfo(

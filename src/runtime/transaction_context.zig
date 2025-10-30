@@ -247,10 +247,7 @@ pub const TransactionContextAccount = struct {
         }
     };
 
-    pub fn init(
-        pubkey: Pubkey,
-        account: *AccountSharedData,
-    ) TransactionContextAccount {
+    pub fn init(pubkey: Pubkey, account: *AccountSharedData) TransactionContextAccount {
         return .{
             .pubkey = pubkey,
             .account = account,
