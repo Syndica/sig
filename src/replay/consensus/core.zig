@@ -960,20 +960,20 @@ fn upcomingLeaderTpuVoteSockets(
         }
     }
 
-    const gossip_table, var gossip_table_lg = gossip_table_rw.readWithLock();
-    defer gossip_table_lg.unlock();
-
     var seen_sockets: std.AutoArrayHashMapUnmanaged(SocketAddr, void) = .empty;
+    try seen_sockets.ensureTotalCapacity(allocator, seen_leaders.count());
     defer seen_sockets.deinit(allocator);
-
-    var leader_iter = seen_leaders.keyIterator();
-    while (leader_iter.next()) |leader_pubkey_ptr| {
-        const leader_pubkey = leader_pubkey_ptr.*;
-        const contact_info = gossip_table.getThreadSafeContactInfo(leader_pubkey) orelse continue;
-
-        const socket_addr = contact_info.tpu_addr orelse continue;
-
-        try seen_sockets.put(allocator, socket_addr, {});
+    {
+        const gossip_table, var gossip_table_lg = gossip_table_rw.readWithLock();
+        defer gossip_table_lg.unlock();
+        var leader_iter = seen_leaders.keyIterator();
+        while (leader_iter.next()) |leader_pubkey_ptr| {
+            const leader_pubkey = leader_pubkey_ptr.*;
+            const contact_info =
+                gossip_table.getThreadSafeContactInfo(leader_pubkey) orelse continue;
+            const socket_addr = contact_info.tpu_addr orelse continue;
+            seen_sockets.putAssumeCapacity(socket_addr, {});
+        }
     }
 
     return try allocator.dupe(SocketAddr, seen_sockets.keys());
