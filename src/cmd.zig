@@ -3,6 +3,7 @@ const builtin = @import("builtin");
 const build_options = @import("build-options");
 const cli = @import("cli");
 const sig = @import("sig.zig");
+const sql = @import("sqlite");
 const config = @import("config.zig");
 const tracy = @import("tracy");
 
@@ -1224,6 +1225,55 @@ fn validator(
     ledger_cleanup_service.join();
 }
 
+const AccountFile = sig.accounts_db.accounts_file.AccountFile;
+
+const Entry = struct { []const u8, Slot, u32 };
+
+fn getEntries(allocator: std.mem.Allocator, accounts_dir: std.fs.Dir) ![]AccountFile {
+    var entries: std.ArrayList(AccountFile) = .init(allocator);
+    errdefer {
+        for (entries.items) |entry| entry.deinit();
+        entries.deinit();
+    }
+
+    var accounts_iter = accounts_dir.iterate();
+    while (try accounts_iter.next()) |entry| {
+        if (entry.kind != .file) return error.BadAccountsDir;
+        const split = std.mem.indexOf(u8, entry.name, ".") orelse return error.BadAccountsDir;
+        if (entry.name.len - 1 == split) return error.BadAccountsDir;
+        const slot_str = entry.name[0..split];
+        const id_str = entry.name[split + 1 ..];
+
+        const slot = try std.fmt.parseInt(u64, slot_str, 10);
+        const id = try std.fmt.parseInt(u32, id_str, 10);
+
+        const file = try accounts_dir.openFile(entry.name, .{});
+        errdefer file.close();
+
+        const file_len = (try file.stat()).size;
+
+        const accounts_file = try AccountFile.init(
+            file,
+            .{ .id = .fromInt(id), .length = file_len },
+            slot,
+        );
+        errdefer accounts_file.deinit();
+
+        try entries.append(accounts_file);
+    }
+
+    const lessThanFn = struct {
+        fn f(context: void, lhs: AccountFile, rhs: AccountFile) bool {
+            _ = context;
+            return lhs.slot < rhs.slot;
+        }
+    }.f;
+
+    std.mem.sort(AccountFile, entries.items, {}, lessThanFn);
+
+    return try entries.toOwnedSlice();
+}
+
 /// entrypoint to run a minimal replay node
 fn replayOffline(
     allocator: std.mem.Allocator,
@@ -1244,6 +1294,72 @@ fn replayOffline(
 
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{});
     defer snapshot_dir.close();
+
+    const rooted_db = db: {
+        var accounts_dir = try std.fs.cwd().openDir(
+            cfg.accounts_db.snapshot_dir,
+            .{ .iterate = true },
+        );
+        defer accounts_dir.close();
+
+        const account_files = try getEntries(allocator, accounts_dir);
+        defer {
+            for (account_files) |entry| entry.deinit();
+            allocator.free(account_files);
+        }
+
+        var rooted = try sig.accounts_db.Two.Rooted.init("accounts.db");
+        defer rooted.deinit();
+
+        var bp = try sig.accounts_db.buffer_pool.BufferPool.init(allocator, 20480 + 2);
+        defer bp.deinit(allocator);
+
+        var arena = std.heap.ArenaAllocator.init(allocator);
+        defer arena.deinit();
+
+        try rooted.err(sql.sqlite3_exec(rooted.handle, "BEGIN TRANSACTION;", null, null, null));
+
+        var n_accounts: u48 = 0;
+
+        for (account_files) |accounts_file| {
+            defer tracy.frameMarkNamed("accountfile put");
+            defer _ = arena.reset(.retain_capacity);
+
+            var accounts = accounts_file.iterator(&bp);
+            while (try accounts.next(arena.allocator())) |account| {
+                defer account.deinit(arena.allocator());
+
+                const cloned_data = try account.data.dupeAllocatedOwned(arena.allocator());
+                defer cloned_data.deinit(arena.allocator());
+
+                const data = @constCast(cloned_data.owned_allocation);
+
+                try rooted.put(
+                    account.store_info.pubkey,
+                    accounts_file.slot,
+                    .{
+                        .data = data,
+                        .executable = account.account_info.executable,
+                        .lamports = account.account_info.lamports,
+                        .owner = account.account_info.owner,
+                        .rent_epoch = account.account_info.rent_epoch,
+                    },
+                );
+
+                n_accounts += 1;
+            }
+            tracy.plot(u48, "accounts pushed", n_accounts);
+        }
+
+        std.debug.print("committing\n", .{});
+
+        try rooted.err(sql.sqlite3_exec(rooted.handle, "COMMIT;", null, null, null));
+
+        break :db rooted;
+    };
+
+    var new_db: sig.accounts_db.Two = try .init(allocator, rooted_db);
+    defer new_db.deinit();
 
     // snapshot
     var loaded_snapshot = try loadSnapshot(
@@ -1326,7 +1442,8 @@ fn replayOffline(
     var replay_deps = try replayDependencies(
         allocator,
         epoch,
-        loaded_snapshot.accounts_db.accountStore(),
+        // loaded_snapshot.accounts_db.accountStore(),
+        .{ .accounts_db_two = &new_db },
         &loaded_snapshot.collapsed_manifest,
         &app_base,
         &ledger,

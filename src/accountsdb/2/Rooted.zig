@@ -17,7 +17,7 @@ const ROW = sql.SQLITE_ROW;
 handle: *sql.sqlite3,
 put_stmt: *sql.sqlite3_stmt,
 
-fn err(self: *Rooted, code: c_int) !void {
+pub fn err(self: *Rooted, code: c_int) !void {
     if (code == OK) return;
     std.debug.print("err ({}): {s}\n", .{ code, sql.sqlite3_errmsg(self.handle) });
     return error.SqliteError;

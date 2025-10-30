@@ -3,7 +3,7 @@
 
 const std = @import("std");
 const sig = @import("../../sig.zig");
-const Rooted = @import("Rooted.zig");
+pub const Rooted = @import("Rooted.zig");
 const Unrooted = @import("Unrooted.zig");
 
 const Pubkey = sig.core.Pubkey;
@@ -18,10 +18,7 @@ allocator: std.mem.Allocator,
 rooted: Rooted,
 unrooted: Unrooted,
 
-pub fn init(allocator: std.mem.Allocator) !Db {
-    var rooted: Rooted = try .init("accounts.db");
-    errdefer rooted.deinit();
-
+pub fn init(allocator: std.mem.Allocator, rooted: Rooted) !Db {
     var unrooted: Unrooted = try .init(allocator);
     errdefer unrooted.deinit(allocator);
 
@@ -34,7 +31,7 @@ pub fn init(allocator: std.mem.Allocator) !Db {
 
 pub fn deinit(self: *Db) void {
     const allocator = self.allocator;
-    self.rooted.deinit(allocator);
+    self.rooted.deinit();
     self.unrooted.deinit(allocator);
 }
 
