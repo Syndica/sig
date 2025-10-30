@@ -509,13 +509,6 @@ pub const TowerConsensus = struct {
                 if (!slot_info.state.isFrozen()) {
                     continue;
                 }
-
-                // Skip if the slot's hash is Hash.ZEROES (e.g., root slot)
-                const slot_hash = slot_info.state.hash.readCopy() orelse return error.MissingHash;
-                if (slot_hash.eql(Hash.ZEROES)) {
-                    continue;
-                }
-
                 if (isDuplicateSlotConfirmed(
                     slot,
                     &fork_stats.voted_stakes,
@@ -524,7 +517,7 @@ pub const TowerConsensus = struct {
                     duplicate_confirmed_forks.appendAssumeCapacity(
                         .{
                             .slot = slot,
-                            .hash = slot_hash,
+                            .hash = slot_info.state.hash.readCopy() orelse return error.MissingHash,
                         },
                     );
                 }
