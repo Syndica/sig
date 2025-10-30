@@ -376,24 +376,82 @@ pub fn deltaLtHash(
     var iterator = account_reader.slotModifiedIterator(slot) orelse return .IDENTITY;
     defer iterator.unlock();
 
-    var hash = LtHash.IDENTITY;
-    var i: usize = 0;
-    while (try iterator.next(allocator)) |pubkey_account| : (i += 1) {
-        const pubkey, const account = pubkey_account;
-        defer account.deinit(allocator);
+    const Task = struct {
+        const Result = union(enum) {
+            new: LtHash,
+            existed: struct { LtHash, LtHash }, // old, new
+        };
 
-        if (try account_reader.forSlot(parent_ancestors).get(allocator, pubkey)) |old_acct| {
-            defer old_acct.deinit(allocator);
+        fn hashAccounts(
+            gpa: std.mem.Allocator,
+            slot_index: *sig.accounts_db.Two.Unrooted.SlotIndex,
+            db: *sig.accounts_db.Two,
+            ancestors: *const Ancestors,
+            hashes: []std.ArrayListUnmanaged(Result),
+            task: sig.utils.thread.TaskParams,
+        ) !void {
+            const hash = &hashes[task.thread_id];
 
-            if (!old_acct.equals(&account)) {
-                hash.mixOut(old_acct.ltHash(pubkey));
-                hash.mixIn(account.ltHash(pubkey));
+            const entries = slot_index.entries;
+            const accounts = entries.values()[task.start_index..task.end_index];
+            const keys = entries.keys()[task.start_index..task.end_index];
+
+            for (accounts, keys) |data, key| {
+                const account = data.asAccount();
+                if (try db.get(key, ancestors)) |old_account| {
+                    defer old_account.deinit(db.allocator);
+
+                    if (!old_account.equals(&account)) {
+                        try hash.append(gpa, .{ .existed = .{
+                            old_account.ltHash(key),
+                            account.ltHash(key),
+                        } });
+                    }
+                } else {
+                    try hash.append(
+                        gpa,
+                        .{ .new = account.ltHash(key) },
+                    );
+                }
             }
-        } else {
-            hash.mixIn(account.ltHash(pubkey));
+        }
+    };
+
+    const NUM_THREADS = 8;
+
+    var hashes: [NUM_THREADS]std.ArrayListUnmanaged(Task.Result) = @splat(.empty);
+    defer for (&hashes) |*hash| hash.deinit(allocator);
+
+    const slot_index = iterator.accounts_db_two.slot;
+
+    try sig.utils.thread.spawnThreadTasks(
+        allocator,
+        Task.hashAccounts,
+        .{
+            .data_len = iterator.len(),
+            .max_threads = NUM_THREADS,
+            .params = .{
+                allocator,
+                slot_index,
+                account_reader.accounts_db_two,
+                parent_ancestors,
+                &hashes,
+            },
+        },
+    );
+
+    var hash = LtHash.IDENTITY;
+    for (hashes) |results| {
+        for (results.items) |result| {
+            switch (result) {
+                .new => |h| hash.mixIn(h),
+                .existed => |pair| {
+                    hash.mixOut(pair[0]);
+                    hash.mixIn(pair[1]);
+                },
+            }
         }
     }
-
     return hash;
 }
 
