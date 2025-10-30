@@ -279,9 +279,13 @@ const DuplicateShredHandler = struct {
 
         var offset: usize = 0;
         for (0..dup_shred_data.num_chunks) |k| {
-            const chunk = entry.chunks[k].?;
-            @memcpy(data[offset .. offset + chunk.len], chunk);
-            offset += chunk.len;
+            const maybe_chunk = entry.chunks[k];
+            if (maybe_chunk) |chunk| {
+                @memcpy(data[offset .. offset + chunk.len], chunk);
+                offset += chunk.len;
+            } else {
+                return error.InvalidDuplicateShreds;
+            }
         }
 
         const shred1, const shred2 =
@@ -371,13 +375,16 @@ const DuplicateShredHandler = struct {
         const mr1 = shred1.merkleRoot() catch null;
         const mr2 = shred2.merkleRoot() catch null;
         var conflict_ok = false;
-        if (same_fec and
-            ((mr1 == null and mr2 != null) or
-                (mr1 != null and mr2 == null) or
-                (mr1 != null and mr2 != null and
-                    !std.mem.eql(u8, &mr1.?.data, &mr2.?.data))))
-        {
-            conflict_ok = true;
+        if (same_fec) {
+            if ((mr1 == null and mr2 != null) or (mr1 != null and mr2 == null)) {
+                conflict_ok = true;
+            } else if (mr1) |h1| {
+                if (mr2) |h2| {
+                    if (!std.mem.eql(u8, &h1.data, &h2.data)) {
+                        conflict_ok = true;
+                    }
+                }
+            }
         } else {
             if (std.meta.activeTag(shred1) != std.meta.activeTag(shred2)) {
                 return error.ShredTypeMismatch;
