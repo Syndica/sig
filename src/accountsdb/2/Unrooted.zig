@@ -25,7 +25,17 @@ slots: []SlotIndex,
 pub const SlotIndex = struct {
     lock: std.Thread.RwLock,
     slot: Slot,
-    entries: std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData),
+    entries: std.ArrayHashMapUnmanaged(Pubkey, AccountSharedData, Context, true),
+
+    const Context = struct {
+        pub fn hash(_: Context, pubkey: Pubkey) u32 {
+            return @bitCast(pubkey.data[0..4].*);
+        }
+
+        pub fn eql(_: Context, a: Pubkey, b: Pubkey, _: usize) bool {
+            return a.equals(&b);
+        }
+    };
 
     const empty: SlotIndex = .{
         .lock = .{},
