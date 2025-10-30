@@ -124,7 +124,6 @@ test "serveSpawn snapshots" {
     var prng = std.Random.DefaultPrng.init(0);
     const random = prng.random();
 
-    // const logger_unscoped: Logger = .{ .direct_print = .{ .max_level = .trace } };
     const logger_unscoped: Logger = .noop;
     const logger = logger_unscoped.withScope(@src().fn_name);
 
@@ -171,7 +170,6 @@ test "serveSpawn snapshots" {
                 .{},
             );
         }
-
         const FullAndIncrementalManifest = sig.accounts_db.snapshot.data.FullAndIncrementalManifest;
         const full_inc_manifest = try FullAndIncrementalManifest.fromFiles(
             allocator,

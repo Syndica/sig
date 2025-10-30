@@ -378,6 +378,8 @@ pub fn build(b: *Build) !void {
             .link_libc = true,
         }),
     });
+    benchmark_exe.root_module.addImport("cli", cli_mod);
+
     // make sure pyroscope's got enough info to profile
     benchmark_exe.build_id = .fast;
 
