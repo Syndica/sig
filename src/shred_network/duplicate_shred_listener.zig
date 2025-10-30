@@ -584,7 +584,8 @@ test "DuplicateShredHandler: early duplicate slot skips buffering" {
     defer handler.deinit();
 
     // Mark slot as duplicate in ledger
-    const shred: sig.ledger.shred.Shred = try .fromPayload(allocator, &sig.ledger.shred.test_data_shred);
+    const shred: sig.ledger.shred.Shred =
+        try .fromPayload(allocator, &sig.ledger.shred.test_data_shred);
     defer shred.deinit();
     const slot: Slot = shred.commonHeader().slot;
     try ledger.resultWriter().storeDuplicateSlot(slot, shred.payload(), shred.payload());
