@@ -1,7 +1,8 @@
 Dependencies:
 - python 3.11
-- rust
+- cargo/rust
 - zig 0.14.1
+- git 2.49
 
 ```bash
 # set up the test environment
