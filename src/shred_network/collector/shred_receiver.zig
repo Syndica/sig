@@ -29,6 +29,9 @@ const VariantCounter = sig.prometheus.VariantCounter;
 const Logger = sig.trace.Logger("shred_receiver");
 const VerifiedMerkleRoots = sig.utils.lru.LruCache(.non_locking, sig.core.Hash, void);
 
+const DUPLICATE_SHRED_HEADER_SIZE: u64 = 63;
+const DUPLICATE_SHRED_MAX_PAYLOAD_SIZE: u16 = 512;
+
 /// Analogous to [ShredFetchStage](https://github.com/anza-xyz/agave/blob/aa2f078836434965e1a5a03af7f95c6640fe6e1e/core/src/shred_fetch_stage.rs#L34)
 pub const ShredReceiver = struct {
     params: Params,
@@ -68,6 +71,9 @@ pub const ShredReceiver = struct {
 
         /// Optional channel to send duplicate slot notifications to consensus
         duplicate_slots_sender: ?*Channel(Slot),
+
+        /// Gossip service for broadcasting duplicate shred proofs
+        gossip_service: ?*sig.gossip.GossipService,
     };
 
     pub fn init(
@@ -302,7 +308,227 @@ pub const ShredReceiver = struct {
             );
         };
 
-        // TODO: send to gossip
+        // Broadcast duplicate shred proof via gossip
+        if (self.params.gossip_service) |gossip| {
+            self.pushDuplicateShredToGossip(
+                gossip,
+                slot,
+                shred_payload,
+                duplicate_payload,
+            ) catch |err| {
+                self.logger.err().logf(
+                    "failed to push duplicate shred to gossip for slot {}: {}",
+                    .{ slot, err },
+                );
+            };
+        }
+    }
+
+    fn pushDuplicateShredToGossip(
+        self: *ShredReceiver,
+        gossip: *sig.gossip.GossipService,
+        slot: Slot,
+        shred_payload: []const u8,
+        other_payload: []const u8,
+    ) !void {
+        const my_pubkey = sig.core.Pubkey.fromPublicKey(&self.params.keypair.public_key);
+
+        // Early return if we already have a duplicate for this slot.
+        if (hasDuplicateForSlot(gossip, my_pubkey, slot)) {
+            return;
+        }
+
+        // Compute ring offset where new entries should be placed/overwritten.
+        const ring_offset = computeRingOffset(gossip, my_pubkey);
+
+        // Serialize duplicate slot proof.
+        const allocator = gossip.allocator;
+        const proof_bytes = try serializeDuplicateProof(allocator, shred_payload, other_payload);
+        defer allocator.free(proof_bytes);
+
+        // Build chunks that will be converted to CRDS.
+        const chunks = try self.buildDuplicateShredChunks(
+            gossip,
+            slot,
+            shred_payload,
+            proof_bytes,
+            @as(usize, DUPLICATE_SHRED_MAX_PAYLOAD_SIZE),
+        );
+        defer {
+            for (chunks) |dup| gossip.allocator.free(dup.chunk);
+            gossip.allocator.free(chunks);
+        }
+
+        try enqueueDuplicateShredCrdsValues(
+            gossip,
+            ring_offset,
+            chunks,
+        );
+    }
+
+    fn hasDuplicateForSlot(
+        gossip: *sig.gossip.GossipService,
+        my_pubkey: sig.core.Pubkey,
+        slot: Slot,
+    ) bool {
+        var gossip_table, var lock = gossip.gossip_table_rw.readWithLock();
+        defer lock.unlock();
+
+        if (gossip_table.pubkey_to_values.get(my_pubkey)) |records| {
+            for (records.keys()) |record_ix| {
+                const versioned_data = gossip_table.store.getByIndex(record_ix);
+                switch (versioned_data.data) {
+                    .DuplicateShred => |dup| {
+                        const index, const dup_shred = dup;
+                        _ = index;
+                        if (dup_shred.slot == slot) return true;
+                    },
+                    else => {},
+                }
+            }
+        }
+        return false;
+    }
+
+    fn computeRingOffset(
+        gossip: *sig.gossip.GossipService,
+        my_pubkey: sig.core.Pubkey,
+    ) u16 {
+        const MAX_DUPLICATE_SHREDS = sig.gossip.data.MAX_DUPLICATE_SHREDS;
+        var num_dup_shreds: u16 = 0;
+        var oldest_index: u16 = 0;
+        var maybe_oldest_wallclock: ?u64 = null;
+
+        var gossip_table, var lock = gossip.gossip_table_rw.readWithLock();
+        defer lock.unlock();
+
+        if (gossip_table.pubkey_to_values.get(my_pubkey)) |records| {
+            for (records.keys()) |record_ix| {
+                const versioned_data = gossip_table.store.getByIndex(record_ix);
+                switch (versioned_data.data) {
+                    .DuplicateShred => |dup| {
+                        const index, const dup_shred = dup;
+                        num_dup_shreds +%= 1;
+                        const wc = dup_shred.wallclock;
+                        if (maybe_oldest_wallclock) |old_wc| {
+                            if (wc < old_wc or (wc == old_wc and index < oldest_index)) {
+                                maybe_oldest_wallclock = wc;
+                                oldest_index = index;
+                            }
+                        } else {
+                            maybe_oldest_wallclock = wc;
+                            oldest_index = index;
+                        }
+                    },
+                    else => {},
+                }
+            }
+        }
+
+        return if (num_dup_shreds < MAX_DUPLICATE_SHREDS) num_dup_shreds else oldest_index;
+    }
+
+    fn serializeDuplicateProof(
+        allocator: std.mem.Allocator,
+        shred_payload: []const u8,
+        other_payload: []const u8,
+    ) ![]const u8 {
+        // TODO validate the shreds. Implement check_shreds in Agave
+        const proof = sig.ledger.meta.DuplicateSlotProof{
+            .shred1 = shred_payload,
+            .shred2 = other_payload,
+        };
+        var proof_data: std.ArrayListUnmanaged(u8) = .empty;
+        errdefer proof_data.deinit(allocator);
+        try bincode.write(proof_data.writer(allocator), proof, bincode.Params.standard);
+        const bytes = try proof_data.toOwnedSlice(allocator);
+        return bytes;
+    }
+
+    fn buildDuplicateShredChunks(
+        self: *ShredReceiver,
+        gossip: *sig.gossip.GossipService,
+        slot: Slot,
+        shred_payload: []const u8,
+        proof_bytes: []const u8,
+        max_size: usize,
+    ) ![]const sig.gossip.data.DuplicateShred {
+        const chunk_size = if (DUPLICATE_SHRED_HEADER_SIZE < max_size)
+            max_size - DUPLICATE_SHRED_HEADER_SIZE
+        else
+            return error.InvalidSizeLimit;
+
+        const num_chunks_usize = (proof_bytes.len + chunk_size - 1) / chunk_size;
+        if (num_chunks_usize > std.math.maxInt(u8)) return error.TooManyChunks;
+        const num_chunks: u8 = @intCast(num_chunks_usize);
+
+        const wallclock = sig.time.getWallclockMs();
+
+        const shred_index = layout.getIndex(shred_payload) orelse return error.InvalidShred;
+
+        const shred_type: sig.gossip.data.ShredType = .Code;
+
+        var chunks: std.ArrayListUnmanaged(sig.gossip.data.DuplicateShred) = .empty;
+        errdefer {
+            for (chunks.items) |dup| gossip.allocator.free(dup.chunk);
+            chunks.deinit(gossip.allocator);
+        }
+        try chunks.ensureTotalCapacity(gossip.allocator, num_chunks_usize);
+
+        var chunk_index: u8 = 0;
+        var offset: usize = 0;
+        while (offset < proof_bytes.len) : ({
+            chunk_index += 1;
+            offset += chunk_size;
+        }) {
+            const chunk_end = @min(offset + chunk_size, proof_bytes.len);
+            const chunk_data = proof_bytes[offset..chunk_end];
+            const duplicate_shred = sig.gossip.data.DuplicateShred{
+                .from = sig.core.Pubkey.fromPublicKey(&self.params.keypair.public_key),
+                .wallclock = wallclock,
+                .slot = slot,
+                .shred_index = shred_index,
+                .shred_type = shred_type,
+                .num_chunks = num_chunks,
+                .chunk_index = chunk_index,
+                .chunk = try gossip.allocator.dupe(u8, chunk_data),
+            };
+            chunks.appendAssumeCapacity(duplicate_shred);
+        }
+
+        return try chunks.toOwnedSlice(gossip.allocator);
+    }
+
+    fn enqueueDuplicateShredCrdsValues(
+        gossip: *sig.gossip.GossipService,
+        ring_offset: u16,
+        chunks: []const sig.gossip.data.DuplicateShred,
+    ) !void {
+        const MAX_DUPLICATE_SHREDS = sig.gossip.data.MAX_DUPLICATE_SHREDS;
+
+        var push_queue, var lock = gossip.push_msg_queue_mux.writeWithLock();
+        defer lock.unlock();
+
+        for (chunks, 0..) |duplicate_shred, i| {
+            const ring_index: u16 = (ring_offset + @as(u16, @intCast(i))) % MAX_DUPLICATE_SHREDS;
+            const chunk_copy = try push_queue.data_allocator.dupe(u8, duplicate_shred.chunk);
+            errdefer push_queue.data_allocator.free(chunk_copy);
+
+            const dup_owned = sig.gossip.data.DuplicateShred{
+                .from = duplicate_shred.from,
+                .wallclock = duplicate_shred.wallclock,
+                .slot = duplicate_shred.slot,
+                .shred_index = duplicate_shred.shred_index,
+                .shred_type = duplicate_shred.shred_type,
+                .num_chunks = duplicate_shred.num_chunks,
+                .chunk_index = duplicate_shred.chunk_index,
+                .chunk = chunk_copy,
+            };
+
+            try push_queue.queue.append(.{
+                .DuplicateShred = .{ ring_index, dup_owned },
+            });
+        }
     }
 
     /// Handle a single packet and return a shred if it's a valid shred.
@@ -438,6 +664,7 @@ test "handleBatch/handlePacket" {
         .ledger_reader = ledger.reader(),
         .result_writer = ledger.resultWriter(),
         .duplicate_slots_sender = null,
+        .gossip_service = null,
     });
     defer shred_receiver.deinit(allocator);
 
