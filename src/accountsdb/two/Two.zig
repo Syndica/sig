@@ -29,8 +29,19 @@ pub fn init(allocator: std.mem.Allocator, rooted: Rooted) !Db {
     };
 }
 
+const TestContext = struct {
+    db: Db,
+    tmp_dir: std.testing.TmpDir,
+
+    pub fn deinit(self: *TestContext) void {
+        Rooted.deinitThreadLocals();
+        self.db.deinit();
+        self.tmp_dir.cleanup();
+    }
+};
+
 /// Initializes a temporary empty rooted storage. Call tmp.cleanup() when done with it.
-pub fn initTest(allocator: std.mem.Allocator) !struct { Db, std.testing.TmpDir } {
+pub fn initTest(allocator: std.mem.Allocator) !TestContext {
     if (!builtin.is_test) @compileError("only used in tests");
 
     const tmp = std.testing.tmpDir(.{});
@@ -44,7 +55,10 @@ pub fn initTest(allocator: std.mem.Allocator) !struct { Db, std.testing.TmpDir }
     errdefer rooted.deinit();
 
     const db: @This() = try .init(allocator, rooted);
-    return .{ db, tmp };
+    return .{
+        .db = db,
+        .tmp_dir = tmp,
+    };
 }
 
 pub fn deinit(self: *Db) void {
@@ -185,12 +199,10 @@ test "rooting edge cases" {
 
     // many slots, many accounts
     {
-        var db, var tmp_dir = try Db.initTest(allocator);
-        defer {
-            Rooted.deinitThreadLocals();
-            db.deinit();
-            tmp_dir.cleanup();
-        }
+        var test_state = try Db.initTest(allocator);
+        defer test_state.deinit();
+        const db = &test_state.db;
+
         for (0..Unrooted.MAX_SLOTS * 2) |i| {
             defer if (i > 50) db.onSlotRooted(i); // start rooting after 50 slots
             const random_account = try Account.initRandom(allocator, random, 30);
@@ -206,12 +218,10 @@ test "rooting edge cases" {
     }
     // many slot, same account
     {
-        var db, var tmp_dir = try Db.initTest(allocator);
-        defer {
-            Rooted.deinitThreadLocals();
-            db.deinit();
-            tmp_dir.cleanup();
-        }
+        var test_state = try Db.initTest(allocator);
+        defer test_state.deinit();
+        const db = &test_state.db;
+
         const random_pubkey = Pubkey.initRandom(random);
         for (0..Unrooted.MAX_SLOTS * 2) |i| {
             defer if (i % 64 == 0) db.onSlotRooted(i); // root every 64 slots
