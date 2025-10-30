@@ -415,7 +415,7 @@ pub fn benchmark(
             var min_s: RuntimeType = undefined;
             var max_s: RuntimeType = undefined;
 
-            var benchmark_time = try sig.time.Timer.start();
+            var benchmark_time = sig.time.Timer.start();
             var ran_out_of_time = false;
             var iterations: u64 = 0;
 

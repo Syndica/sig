@@ -131,7 +131,7 @@ pub const SlotConstants = struct {
         allocator: Allocator,
         fee_rate_governor: sig.core.genesis_config.FeeRateGovernor,
     ) Allocator.Error!SlotConstants {
-        var ancestors = Ancestors{};
+        var ancestors: Ancestors = .{};
         try ancestors.ancestors.put(allocator, 0, {});
         errdefer ancestors.deinit(allocator);
 
@@ -213,21 +213,19 @@ pub const SlotState = struct {
         blockhash_queue.get().deinit(allocator);
     }
 
-    pub fn genesis(allocator: Allocator) Allocator.Error!SlotState {
-        return .{
-            .blockhash_queue = .init(.DEFAULT),
-            .hash = .init(null),
-            .capitalization = .init(0),
-            .transaction_count = .init(0),
-            .signature_count = .init(0),
-            .tick_height = .init(0),
-            .collected_rent = .init(0),
-            .accounts_lt_hash = .init(.IDENTITY),
-            .stakes_cache = try .init(allocator),
-            .collected_transaction_fees = .init(0),
-            .collected_priority_fees = .init(0),
-        };
-    }
+    pub const GENESIS: SlotState = .{
+        .blockhash_queue = .init(.DEFAULT),
+        .hash = .init(null),
+        .capitalization = .init(0),
+        .transaction_count = .init(0),
+        .signature_count = .init(0),
+        .tick_height = .init(0),
+        .collected_rent = .init(0),
+        .accounts_lt_hash = .init(.IDENTITY),
+        .stakes_cache = .EMPTY,
+        .collected_transaction_fees = .init(0),
+        .collected_priority_fees = .init(0),
+    };
 
     pub fn fromBankFields(
         allocator: Allocator,
@@ -260,6 +258,7 @@ pub const SlotState = struct {
         defer zone.deinit();
 
         if (!parent.isFrozen()) return error.SlotNotFrozen;
+
         const blockhash_queue = foo: {
             var bhq = parent.blockhash_queue.read();
             defer bhq.unlock();
@@ -331,17 +330,14 @@ pub const EpochConstants = struct {
         self.stakes.deinit(allocator);
     }
 
-    pub fn genesis(
-        allocator: Allocator,
-        genesis_config: core.GenesisConfig,
-    ) std.mem.Allocator.Error!EpochConstants {
+    pub fn genesis(genesis_config: core.GenesisConfig) EpochConstants {
         return .{
             .hashes_per_tick = genesis_config.poh_config.hashes_per_tick,
             .ticks_per_slot = genesis_config.ticks_per_slot,
             .ns_per_slot = genesis_config.nsPerSlot(),
             .genesis_creation_time = genesis_config.creation_time,
             .slots_per_year = genesis_config.slotsPerYear(),
-            .stakes = try .initEmptyWithGenesisStakeHistoryEntry(allocator),
+            .stakes = .EMPTY_WITH_GENESIS,
             .rent_collector = .DEFAULT,
         };
     }
@@ -429,9 +425,7 @@ pub const BankFields = struct {
         ancestors.deinit(allocator);
 
         bank_fields.hard_forks.deinit(allocator);
-
         bank_fields.stakes.deinit(allocator);
-
         bank_fields.unused_accounts.deinit(allocator);
 
         deinitMapAndValues(allocator, bank_fields.epoch_stakes);

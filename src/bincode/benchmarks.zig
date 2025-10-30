@@ -11,7 +11,7 @@ pub const BenchmarkEntry = struct {
 
     pub fn serializeEntry() !sig.time.Duration {
         const allocator = std.heap.c_allocator;
-        var timer = try sig.time.Timer.start();
+        var timer = sig.time.Timer.start();
 
         const actual_bytes = try sig.bincode.writeAlloc(
             allocator,
@@ -26,7 +26,7 @@ pub const BenchmarkEntry = struct {
 
     pub fn deserializeEntry() !sig.time.Duration {
         const allocator = std.heap.c_allocator;
-        var timer = try sig.time.Timer.start();
+        var timer = sig.time.Timer.start();
 
         const actual_struct = try sig.bincode.readFromSlice(
             allocator,

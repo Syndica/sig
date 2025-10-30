@@ -29,7 +29,7 @@ pub const Benchmark = struct {
         switch (args.num_signatures) {
             inline 1, 100, 1_000 => |N| {
                 const signatures: [N]Ed25519.Signature = @splat(signature);
-                var start = try sig.time.Timer.start();
+                var start = sig.time.Timer.start();
                 for (signatures, 0..) |s, i| {
                     std.mem.doNotOptimizeAway(i);
                     std.mem.doNotOptimizeAway(s.verify(
@@ -60,7 +60,7 @@ pub const Benchmark = struct {
                         .sig = input,
                     };
                 }
-                var start = try sig.time.Timer.start();
+                var start = sig.time.Timer.start();
                 std.mem.doNotOptimizeAway(Ed25519.verifyBatch(N, batch));
                 return start.read().div(N);
             },
@@ -79,7 +79,7 @@ pub const Benchmark = struct {
                 const signatures: [N]sig.core.Signature = @splat(.fromSignature(signature));
                 const pubkey: [N]sig.core.Pubkey = @splat(.fromPublicKey(&keypair.public_key));
 
-                var start = try sig.time.Timer.start();
+                var start = sig.time.Timer.start();
                 std.mem.doNotOptimizeAway(sig.crypto.ed25519.verifyBatchOverSingleMessage(
                     N,
                     &signatures,

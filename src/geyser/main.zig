@@ -306,7 +306,7 @@ pub fn csvDumpIOWriter(
 ) !void {
     const total_payloads_estimate: u64 = 405_721;
     var payloads_written: u64 = 0;
-    var timer = try sig.time.Timer.start();
+    var timer = sig.time.Timer.start();
     errdefer exit.store(true, .monotonic);
 
     while (true) {

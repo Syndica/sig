@@ -249,7 +249,7 @@ test "start and stop gracefully" {
         .overwrite_turbine_stake_for_testing = true,
     };
 
-    var timer = try sig.time.Timer.start();
+    var timer = sig.time.Timer.start();
 
     var shred_network_service = try start(config, deps);
     defer shred_network_service.deinit();
