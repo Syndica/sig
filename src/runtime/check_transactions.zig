@@ -373,7 +373,7 @@ fn checkLoadAndAdvanceMessageNonceAccount(
         .account = cached_account.*,
         .is_owned = true,
     };
-    owned_account.account.data = new_data; // TODO find a cleaner approach to this
+    owned_account.account.data = new_data;
 
     return .{
         owned_account,
