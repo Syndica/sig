@@ -730,7 +730,7 @@ test "updateConsensusForFrozenSlot: moves gossip votes with gossip vote_kind" {
         .feature_set = .ALL_DISABLED,
         .reserved_accounts = .empty,
     };
-    var slot_state = try sig.core.SlotState.genesis(allocator);
+    var slot_state: sig.core.SlotState = .GENESIS;
     slot_state.hash.set(slot_hash);
 
     try test_state.slot_tracker.put(allocator, slot, .{

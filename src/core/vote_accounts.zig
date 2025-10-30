@@ -528,37 +528,42 @@ pub fn calculateStakedNodes(
     return staked_nodes;
 }
 
-// test "vote account serialize and deserialize" {
-//     const allocator = std.testing.allocator;
-//     var prng = std.Random.DefaultPrng.init(0);
-//     const random = prng.random();
+test "vote account serialize and deserialize" {
+    const allocator = std.testing.allocator;
 
-//     var account = try createRandomVoteAccount(allocator, random, Pubkey.initRandom(random));
-//     defer account.deinit(allocator);
+    const account_data = &[_]u8{
+        2,   0,   0,   0,   223, 35,  11,  73,  97,  93,  23,  83,  7,   213, 128, 195,
+        61,  111, 218, 97,  252, 123, 154, 236, 145, 223, 15,  92,  26,  94,  190, 59,
+        140, 191, 238, 2,   255, 240, 137, 35,  160, 160, 125, 75,  22,  76,  66,  192,
+        88,  252, 0,   19,  104, 153, 193, 6,   50,  132, 132, 80,  252, 77,  170, 233,
+        61,  7,   234, 16,  193, 0,   0,   0,   0,   0,   0,   0,   0,   0,   1,   0,
+        0,   0,   0,   0,   0,   0,   168, 4,   252, 208, 211, 32,  70,  160, 234, 94,
+        74,  175, 235, 4,   202, 126, 154, 141, 240, 87,  119, 195, 67,  5,   110, 2,
+        181, 90,  199, 144, 116, 219, 89,  201, 75,  70,  230, 67,  115, 216,
+    } ++ (.{0} ** 1536) ++ [_]u8{
+        31, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0,  0, 0, 0, 0, 0, 0, 0,
+    } ++ (.{202} ** 2067);
 
-//     const expected_serialised = try bincode.writeAlloc(allocator, account.account, .{});
-//     defer allocator.free(expected_serialised);
+    const actual_serialised = &[_]u8{
+        117, 110, 1, 0, 0, 0, 0, 0, 178, 14, 0, 0, 0, 0, 0, 0,
+    } ++ account_data ++ [_]u8{
+        7,   97, 72, 29,  53,  116, 116, 187, 124, 77,  118, 36,  235, 211, 189, 179,
+        216, 53, 94, 115, 209, 16,  67,  252, 13,  163, 83,  128, 0,   0,   0,   0,
+        0,   0,  0,  0,   0,   0,   0,   0,   0,
+    };
 
-//     const actual_serialised = try bincode.writeAlloc(
-//         allocator,
-//         account,
-//         .{},
-//     );
-//     defer allocator.free(actual_serialised);
+    var actual_deserialized = try bincode.readFromSlice(
+        allocator,
+        VoteAccount,
+        actual_serialised,
+        .{},
+    );
+    defer actual_deserialized.deinit(allocator);
 
-//     try std.testing.expectEqualSlices(u8, expected_serialised, actual_serialised);
-
-//     var actual_deserialized = try bincode.readFromSlice(
-//         allocator,
-//         VoteAccount,
-//         actual_serialised,
-//         .{},
-//     );
-//     defer actual_deserialized.deinit(allocator);
-
-//     // try std.testing.expect(account.account.equals(&actual_deserialized.account));
-//     try std.testing.expect(account.state.equals(&actual_deserialized.state));
-// }
+    const deserialized = actual_deserialized.account;
+    try std.testing.expectEqual(93813, deserialized.lamports);
+}
 
 test "vote account invalid owner" {
     const allocator = std.testing.allocator;
@@ -807,8 +812,8 @@ test "staked nodes update" {
         defer maybe_old.?.deinit(allocator);
 
         try std.testing.expectEqual(42, maybe_old.?.stake);
-        // try std.testing.expect(account_1.equals(&maybe_old.?.account));
-        // try std.testing.expect(account_2.equals(&vote_accounts.getAccount(pubkey).?));
+        try std.testing.expectEqual(account_1.account, maybe_old.?.account.account);
+        try std.testing.expectEqual(account_2.account, vote_accounts.getAccount(pubkey).?.account);
         try std.testing.expectEqual(42, vote_accounts.getDelegatedStake(pubkey));
         try std.testing.expectEqual(null, vote_accounts.staked_nodes.get(node_pubkey));
         try std.testing.expectEqual(42, vote_accounts.staked_nodes.get(new_node_pubkey).?);

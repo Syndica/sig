@@ -1019,7 +1019,7 @@ pub const AccountsDB = struct {
 
         const total_shards = shard_end_index - shard_start_index;
         var timer = sig.time.Timer.start();
-        var progress_timer = try std.time.Timer.start();
+        var progress_timer = sig.time.Timer.start();
         const print_progress = task.thread_id == 0;
 
         for (shard_start_index..shard_end_index, 1..) |shard_index, iteration_count| {
@@ -1056,7 +1056,7 @@ pub const AccountsDB = struct {
                 }
             }
 
-            if (print_progress and progress_timer.read() > DB_LOG_RATE.asNanos()) {
+            if (print_progress and progress_timer.read().gt(DB_LOG_RATE)) {
                 printTimeEstimate(
                     logger,
                     &timer,
@@ -1390,7 +1390,7 @@ pub const AccountsDB = struct {
         defer zone.deinit();
 
         var timer = sig.time.Timer.start();
-        var progress_timer = std.time.Timer.start();
+        var progress_timer = sig.time.Timer.start();
 
         var arena = std.heap.ArenaAllocator.init(tmp_allocator);
         defer arena.deinit();
@@ -1457,7 +1457,7 @@ pub const AccountsDB = struct {
                 .subtract = total_subtracted,
             };
 
-            if (print_progress and progress_timer.read() > DB_LOG_RATE.asNanos()) {
+            if (print_progress and progress_timer.read().gt(DB_LOG_RATE)) {
                 printTimeEstimate(
                     self.logger,
                     &timer,

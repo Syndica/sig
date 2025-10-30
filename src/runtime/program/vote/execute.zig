@@ -1416,8 +1416,6 @@ test "vote_program: executeAuthorize withdrawer signed by current withdrawer" {
 test "vote_program: executeAuthorize voter signed by current withdrawer" {
     const ids = sig.runtime.ids;
     const testing = sig.runtime.program.testing;
-    const PriorVote = sig.runtime.program.vote.state.PriorVote;
-    _ = PriorVote; // autofix
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
