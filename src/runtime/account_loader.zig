@@ -481,13 +481,9 @@ pub fn loadAccount(
     };
 }
 
-pub fn mutateInPlace(map: *AccountMap, key: *const Pubkey) ?*AccountSharedData {
-    const account = map.getPtr(key.*).?;
-    if (account.lamports == 0) return null;
-    return account;
-}
-
-/// TODO document assumptions
+/// This should only be called for writable accounts, which only should have
+/// been loaded as writes. That means the account will have is_owned = true.
+/// Violating this assumption has illegal behavior and may cause a panic.
 pub fn store(map: *AccountMap, allocator: Allocator, modified_account: *CachedAccount) void {
     std.debug.assert(modified_account.is_owned);
     const account = map.getPtr(modified_account.pubkey).?;

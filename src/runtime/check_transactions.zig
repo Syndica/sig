@@ -85,7 +85,7 @@ pub fn checkFeePayer(
     /// same allocator as batch account cache
     allocator: Allocator,
     transaction: *const RuntimeTransaction,
-    account_map: *AccountMap,
+    accounts: *AccountMap,
     compute_budget_limits: *const ComputeBudgetLimits,
     /// Takes ownership of this
     maybe_nonce: ?CachedAccount,
@@ -105,10 +105,7 @@ pub fn checkFeePayer(
 
     const enable_secp256r1 = feature_set.active(.enable_secp256r1_precompile, slot);
     const fee_payer_key = transaction.accounts.items(.pubkey)[0];
-
-    const cached_payer = account_loader.mutateInPlace(account_map, &fee_payer_key) orelse
-        return .{ .err = .AccountNotFound };
-
+    const cached_payer = accounts.getPtr(fee_payer_key) orelse return .{ .err = .AccountNotFound };
     const fee_payer_loaded_rent_epoch = cached_payer.rent_epoch;
 
     const rent_collected = account_loader.collectRentFromAccount(
