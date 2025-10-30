@@ -15,7 +15,7 @@ const Transaction = sig.core.Transaction;
 
 const ResolvedTransaction = replay.resolve_lookup.ResolvedTransaction;
 
-const CachedAccount = sig.runtime.account_loader.CachedAccount;
+const LoadedAccount = sig.runtime.account_loader.LoadedAccount;
 const ProcessedTransaction = sig.runtime.transaction_execution.ProcessedTransaction;
 
 const ParsedVote = sig.consensus.vote_listener.vote_parser.ParsedVote;
@@ -50,7 +50,7 @@ pub fn commitTransactions(
 
     var rng = std.Random.DefaultPrng.init(slot + transactions.len);
 
-    var accounts_to_store = std.AutoArrayHashMapUnmanaged(Pubkey, CachedAccount).empty;
+    var accounts_to_store = std.AutoArrayHashMapUnmanaged(Pubkey, LoadedAccount).empty;
     defer accounts_to_store.deinit(allocator);
 
     var signature_count: usize = 0;

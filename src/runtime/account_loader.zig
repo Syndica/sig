@@ -46,7 +46,7 @@ pub const LoadedTransactionAccounts = struct {
     rent_collected: u64,
     loaded_accounts_data_size: u32,
 
-    pub const Accounts = std.BoundedArray(CachedAccount, MAX_TX_ACCOUNT_LOCKS);
+    pub const Accounts = std.BoundedArray(LoadedAccount, MAX_TX_ACCOUNT_LOCKS);
 
     pub const DEFAULT: LoadedTransactionAccounts = .{
         .accounts = .{},
@@ -77,15 +77,16 @@ pub const LoadedTransactionAccounts = struct {
     }
 };
 
-// TODO rename
-pub const CachedAccount = struct {
+// An account that was loaded to execute a transaction. It may be either a
+// pointer to the account map, or an owned copy, as indicated by the is_owned
+// field. All writable accounts are expected to be owned, but there are some
+// cases where an owned account is not writable.
+pub const LoadedAccount = struct {
     pubkey: Pubkey,
-    // TODO: document
-    // TODO: ptr + fields separation
     account: AccountSharedData,
     is_owned: bool,
 
-    pub fn deinit(self: CachedAccount, allocator: Allocator) void {
+    pub fn deinit(self: LoadedAccount, allocator: Allocator) void {
         if (self.is_owned) self.account.deinit(allocator);
     }
 };
@@ -486,7 +487,7 @@ pub fn loadAccount(
 /// This should only be called for writable accounts, which only should have
 /// been loaded as writes. That means the account will have is_owned = true.
 /// Violating this assumption has illegal behavior and may cause a panic.
-pub fn store(map: *AccountMap, allocator: Allocator, modified_account: *CachedAccount) void {
+pub fn store(map: *AccountMap, allocator: Allocator, modified_account: *LoadedAccount) void {
     std.debug.assert(modified_account.is_owned);
     const account = map.getPtr(modified_account.pubkey).?;
     account.deinit(allocator);

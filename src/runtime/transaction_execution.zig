@@ -20,7 +20,7 @@ const Slot = sig.core.Slot;
 const RentState = sig.core.RentCollector.RentState;
 
 const AccountMap = sig.runtime.account_preload.AccountMap;
-const CachedAccount = sig.runtime.account_loader.CachedAccount;
+const LoadedAccount = sig.runtime.account_loader.LoadedAccount;
 const FeatureSet = sig.core.FeatureSet;
 const FeeDetails = sig.runtime.check_transactions.FeeDetails;
 const InstructionInfo = sig.runtime.InstructionInfo;
@@ -362,7 +362,7 @@ test hasDuplicates {
 pub fn executeTransaction(
     allocator: std.mem.Allocator,
     transaction: *const RuntimeTransaction,
-    loaded_accounts: []CachedAccount,
+    loaded_accounts: []LoadedAccount,
     compute_budget_limits: *const ComputeBudgetLimits,
     environment: *const TransactionExecutionEnvironment,
     config: *const TransactionExecutionConfig,

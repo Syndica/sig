@@ -14,7 +14,7 @@ const AccountMeta = sig.core.instruction.InstructionAccount;
 const account_loader = sig.runtime.account_loader;
 const AccountSharedData = sig.runtime.AccountSharedData;
 const AccountMap = sig.runtime.account_preload.AccountMap;
-const CachedAccount = sig.runtime.account_loader.CachedAccount;
+const LoadedAccount = sig.runtime.account_loader.LoadedAccount;
 const ComputeBudgetLimits = sig.runtime.program.compute_budget.ComputeBudgetLimits;
 const FeatureSet = sig.core.FeatureSet;
 const NonceData = sig.runtime.nonce.Data;
@@ -54,7 +54,7 @@ pub fn checkAge(
     max_age: u64,
     next_durable_nonce: *const Hash,
     next_lamports_per_signature: u64,
-) error{OutOfMemory}!TransactionResult(?CachedAccount) {
+) error{OutOfMemory}!TransactionResult(?LoadedAccount) {
     if (blockhash_queue.getHashInfoIfValid(transaction.recent_blockhash, max_age) != null) {
         return .{ .ok = null };
     }
@@ -88,14 +88,14 @@ pub fn checkFeePayer(
     accounts: *AccountMap,
     compute_budget_limits: *const ComputeBudgetLimits,
     /// Takes ownership of this
-    maybe_nonce: ?CachedAccount,
+    maybe_nonce: ?LoadedAccount,
     rent_collector: *const RentCollector,
     feature_set: *const FeatureSet,
     slot: sig.core.Slot,
     lamports_per_signature: u64,
 ) error{OutOfMemory}!TransactionResult(struct {
     FeeDetails,
-    std.BoundedArray(CachedAccount, 2),
+    std.BoundedArray(LoadedAccount, 2),
 }) {
     var zone = tracy.Zone.init(@src(), .{ .name = "checkFeePayer" });
     defer zone.deinit();
@@ -134,7 +134,7 @@ pub fn checkFeePayer(
         fee_details.total(),
     )) |validation_error| return .{ .err = validation_error };
 
-    var rollbacks = std.BoundedArray(CachedAccount, 2){};
+    var rollbacks = std.BoundedArray(LoadedAccount, 2){};
     errdefer for (rollbacks.slice()) |rollback| rollback.deinit(allocator);
 
     maybe_nonce_to_free = null;
@@ -344,7 +344,7 @@ fn checkLoadAndAdvanceMessageNonceAccount(
     next_durable_nonce: *const Hash,
     next_lamports_per_signature: u64,
     account_map: *const AccountMap,
-) error{OutOfMemory}!?struct { CachedAccount, u64 } {
+) error{OutOfMemory}!?struct { LoadedAccount, u64 } {
     if (transaction.recent_blockhash.eql(next_durable_nonce.*)) return null;
 
     const address, const cached_account, const nonce_data = loadMessageNonceAccount(
@@ -368,7 +368,7 @@ fn checkLoadAndAdvanceMessageNonceAccount(
         else => return null,
     };
 
-    var owned_account = CachedAccount{
+    var owned_account = LoadedAccount{
         .pubkey = address,
         .account = cached_account.*,
         .is_owned = true,
