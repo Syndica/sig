@@ -20,7 +20,7 @@ const LatestValidatorVotes = sig.consensus.latest_validator_votes.LatestValidato
 
 const ledger_tests = sig.ledger.tests;
 
-pub const ProcessEdgeCaseTimings = struct {
+pub const ProcessClusterSyncTimings = struct {
     ancestor_hashes_duplicate_slots: sig.time.Duration,
     duplicate_confirmed_slots: sig.time.Duration,
     unfrozen_gossip_verified_vote_hashes: sig.time.Duration,
@@ -28,7 +28,7 @@ pub const ProcessEdgeCaseTimings = struct {
     duplicate_slots: sig.time.Duration,
 };
 
-pub fn processEdgeCases(
+pub fn processClusterSync(
     allocator: std.mem.Allocator,
     logger: replay.service.Logger,
     params: struct {
@@ -46,7 +46,7 @@ pub fn processEdgeCases(
         senders: replay.TowerConsensus.Senders,
         receivers: replay.TowerConsensus.Receivers,
     },
-) !ProcessEdgeCaseTimings {
+) !ProcessClusterSyncTimings {
     var timer = try sig.time.Timer.start();
 
     // Process cluster-agreed versions of duplicate slots for which we potentially

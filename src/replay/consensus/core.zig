@@ -42,18 +42,18 @@ const VoteListener = sig.consensus.vote_listener.VoteListener;
 const SlotTracker = sig.replay.trackers.SlotTracker;
 const EpochTracker = sig.replay.trackers.EpochTracker;
 
-const AncestorDuplicateSlotToRepair = replay.consensus.edge_cases.AncestorDuplicateSlotToRepair;
-const DuplicateConfirmedState = sig.replay.consensus.edge_cases.DuplicateConfirmedState;
-const SlotData = sig.replay.consensus.edge_cases.SlotData;
-const SlotStatus = sig.replay.consensus.edge_cases.SlotStatus;
+const AncestorDuplicateSlotToRepair = replay.consensus.cluster_sync.AncestorDuplicateSlotToRepair;
+const DuplicateConfirmedState = sig.replay.consensus.cluster_sync.DuplicateConfirmedState;
+const SlotData = sig.replay.consensus.cluster_sync.SlotData;
+const SlotStatus = sig.replay.consensus.cluster_sync.SlotStatus;
 
 const ReplayResult = replay.execution.ReplayResult;
 const ProcessResultParams = replay.consensus.process_result.ProcessResultParams;
 
-const collectVoteLockouts = sig.consensus.replay_tower.collectVoteLockouts;
+const collectClusterVoteState = sig.consensus.replay_tower.collectClusterVoteState;
 const isDuplicateSlotConfirmed = sig.consensus.replay_tower.isDuplicateSlotConfirmed;
 const check_slot_agrees_with_cluster =
-    sig.replay.consensus.edge_cases.check_slot_agrees_with_cluster;
+    sig.replay.consensus.cluster_sync.check_slot_agrees_with_cluster;
 
 const MAX_VOTE_REFRESH_INTERVAL_MILLIS: usize = 5000;
 
@@ -344,7 +344,7 @@ pub const TowerConsensus = struct {
 
     /// Run all phases of consensus:
     /// - process replay results
-    /// - edge cases
+    /// - cluster sync
     /// - actual consensus protocol.
     pub fn process(
         self: *TowerConsensus,
@@ -367,12 +367,13 @@ pub const TowerConsensus = struct {
             for (results) |r| try self.processResult(allocator, progress_map, slot_tracker, r);
         }
 
-        // Process edge cases and prepare ancestors/descendants
-        const ancestors, const descendants = edge_cases_and_ancestors_descendants: {
+        // Process cluster sync and prepare ancestors/descendants
+        const ancestors, const descendants = cluster_sync_and_ancestors_descendants: {
             const slot_tracker, var slot_tracker_lg = slot_tracker_rw.readWithLock();
             defer slot_tracker_lg.unlock();
 
-            _ = try replay.consensus.edge_cases.processEdgeCases(allocator, .from(self.logger), .{
+            _ = try replay.consensus.cluster_sync
+                .processClusterSync(allocator, .from(self.logger), .{
                 .my_pubkey = self.my_identity,
                 .tpu_has_bank = false,
                 .fork_choice = &self.fork_choice,
@@ -402,7 +403,7 @@ pub const TowerConsensus = struct {
                     try descendants_gop.value_ptr.put(arena, slot);
                 }
             }
-            break :edge_cases_and_ancestors_descendants .{ ancestors, descendants };
+            break :cluster_sync_and_ancestors_descendants .{ ancestors, descendants };
         };
 
         const epoch_tracker, var epoch_tracker_lg = epoch_tracker_rw.readWithLock();
@@ -474,7 +475,7 @@ pub const TowerConsensus = struct {
             epoch_stakes_map.putAssumeCapacity(key, constants.stakes);
         }
 
-        const newly_computed_slot_stats = try computeBankStats(
+        const newly_computed_consensus_slots = try computeConsensusInputs(
             allocator,
             self.logger,
             vote_account,
@@ -487,11 +488,14 @@ pub const TowerConsensus = struct {
             &self.replay_tower,
             &self.latest_validator_votes,
         );
-        defer allocator.free(newly_computed_slot_stats);
-
-        for (newly_computed_slot_stats) |slot_stat| {
+        defer allocator.free(newly_computed_consensus_slots);
+        // For each of the newly computed consensus slots,
+        // check their duplicate confirmation status and updates the data structures that
+        // needs this information.
+        for (newly_computed_consensus_slots) |slot_stat| {
             const fork_stats = progress_map.getForkStats(slot_stat) orelse
                 return error.MissingSlotInForkStats;
+            // Checking the duplicate confirmation status.
             // Analogous to [ReplayStage::tower_duplicate_confirmed_forks](https://github.com/anza-xyz/agave/blob/47c0383f2301e5a739543c1af9992ae182b7e06c/core/src/replay_stage.rs#L3928)
             var duplicate_confirmed_forks: std.ArrayListUnmanaged(SlotAndHash) = .empty;
             defer duplicate_confirmed_forks.deinit(allocator);
@@ -522,7 +526,7 @@ pub const TowerConsensus = struct {
                     );
                 }
             }
-
+            // Update cluster with the duplicate confirmation status.
             // Analogous to [ReplayStage::mark_slots_duplicate_confirmed](https://github.com/anza-xyz/agave/blob/47c0383f2301e5a739543c1af9992ae182b7e06c/core/src/replay_stage.rs#L3876)
             const root_slot = slot_tracker.root;
             for (duplicate_confirmed_forks.items) |duplicate_confirmed_fork| {
@@ -967,7 +971,21 @@ fn resetFork(
     _ = last_reset_bank_descendants;
 }
 
-fn computeBankStats(
+/// Compute consensus inputs for frozen slots that haven't been processed yet (where fork_stats.computed = false).
+/// The computed consensus inputs are needed for voting decisions and fork selection.
+///
+/// Consensus inputs computed:
+/// - Stake distribution inputs (via collectClusterVoteState)
+/// - Fork choice state (via fork_choice.processLatestVotes)
+/// - Safety checks (via cacheVotingSafetyChecks)
+///
+/// All computed consensus inputs are updated in the fork choice and
+/// cached in the ProgressMap (fork_stats field)
+///
+/// Returns the list of slots that had their consensus inputs freshly computed.
+///
+/// Analogous to [compute_bank_stats](https://github.com/anza-xyz/agave/blob/401ddc200b299a181b1437160189075958df49dd/core/src/replay_stage.rs#L3585)
+fn computeConsensusInputs(
     allocator: std.mem.Allocator,
     logger: Logger,
     my_vote_pubkey: Pubkey,
@@ -994,12 +1012,12 @@ fn computeBankStats(
             // Gather voting information from all vote accounts to understand the current consensus state.
             const slot_info_for_stakes = slot_tracker.get(slot) orelse return error.MissingSlot;
 
-            const computed_bank_state = blk: {
+            const cluster_vote_state = blk: {
                 const stakes, var stakes_lg =
                     slot_info_for_stakes.state.stakes_cache.stakes.readWithLock();
                 defer stakes_lg.unlock();
 
-                break :blk try collectVoteLockouts(
+                break :blk try collectClusterVoteState(
                     allocator,
                     .from(logger),
                     &my_vote_pubkey,
@@ -1010,32 +1028,33 @@ fn computeBankStats(
                     latest_validator_votes,
                 );
             };
-
-            try fork_choice.computeBankStats(
+            // Update the fork choice tree with new votes discovered during collectClusterVoteState.
+            // This updates the internal state of fork_choice with the determined heaviest (best) fork to build on.
+            try fork_choice.processLatestVotes(
                 allocator,
                 epoch_stakes_map,
                 epoch_schedule,
                 latest_validator_votes,
             );
             const fork_stats = progress.getForkStats(slot) orelse return error.MissingForkStats;
-            fork_stats.fork_stake = computed_bank_state.fork_stake;
-            fork_stats.total_stake = computed_bank_state.total_stake;
+            fork_stats.fork_stake = cluster_vote_state.fork_stake;
+            fork_stats.total_stake = cluster_vote_state.total_stake;
 
             fork_stats.voted_stakes.deinit(allocator);
-            fork_stats.voted_stakes = computed_bank_state.voted_stakes;
+            fork_stats.voted_stakes = cluster_vote_state.voted_stakes;
 
             fork_stats.lockout_intervals.deinit(allocator);
-            fork_stats.lockout_intervals = computed_bank_state.lockout_intervals;
+            fork_stats.lockout_intervals = cluster_vote_state.lockout_intervals;
 
             fork_stats.block_height = blk: {
                 const slot_info = slot_tracker.get(slot) orelse return error.MissingSlots;
                 break :blk slot_info.constants.block_height;
             };
-            fork_stats.my_latest_landed_vote = computed_bank_state.my_latest_landed_vote;
+            fork_stats.my_latest_landed_vote = cluster_vote_state.my_latest_landed_vote;
             fork_stats.computed = true;
             try new_stats.append(allocator, slot);
         }
-        try cacheTowerStats(
+        try cacheVotingSafetyChecks(
             allocator,
             progress,
             replay_tower,
@@ -1046,7 +1065,19 @@ fn computeBankStats(
     return try new_stats.toOwnedSlice(allocator);
 }
 
-fn cacheTowerStats(
+/// This pre-computes and updates the ProgressMap with voting safety checks
+/// based on the tower for a frozen slot.
+///
+/// The critical checks are:
+/// 1. `vote_threshold` - Verifies sufficient stake has voted at each lockout depth
+/// 2. `is_locked_out` - Checks if prior votes on conflicting forks prevent voting here
+/// 3. `has_voted` - Determines if we've already cast a vote for this slot
+/// 4. `is_recent` - Ensures slot is newer than our last vote or root
+///
+/// These computed values are used in canVoteOnCandidateSlot during fork selection.
+///
+/// Analogous to [cache_tower_stats](https://github.com/anza-xyz/agave/blob/3572983cc28393e3c39a971c274cdac9b2eb902a/core/src/replay_stage.rs#L3799)
+fn cacheVotingSafetyChecks(
     allocator: std.mem.Allocator,
     progress: *ProgressMap,
     replay_tower: *const ReplayTower,
@@ -1172,7 +1203,7 @@ test "cacheTowerStats - missing ancestor" {
     // and cacheTowerStats should return error.MissingAncestor.
     var empty_ancestors: std.AutoArrayHashMapUnmanaged(Slot, Ancestors) = .empty;
 
-    const result = cacheTowerStats(
+    const result = cacheVotingSafetyChecks(
         testing.allocator,
         &fixture.progress,
         &replay_tower,
@@ -1198,7 +1229,7 @@ test "cacheTowerStats - missing slot" {
     // Do not populate progress for root.slot; ensure getForkStats returns null.
     const empty_ancestors: std.AutoArrayHashMapUnmanaged(Slot, Ancestors) = .empty;
 
-    const result = cacheTowerStats(
+    const result = cacheVotingSafetyChecks(
         testing.allocator,
         &fixture.progress,
         &replay_tower,
@@ -1229,7 +1260,7 @@ test "cacheTowerStats - success sets flags and empty thresholds" {
     var replay_tower = try createTestReplayTower(10, 0.67);
     defer replay_tower.deinit(std.testing.allocator);
 
-    try cacheTowerStats(
+    try cacheVotingSafetyChecks(
         testing.allocator,
         &fixture.progress,
         &replay_tower,
@@ -1266,7 +1297,7 @@ test "cacheTowerStats - records failed threshold at depth 0" {
     var replay_tower = try createTestReplayTower(0, 0.67);
     defer replay_tower.deinit(std.testing.allocator);
 
-    try cacheTowerStats(
+    try cacheVotingSafetyChecks(
         testing.allocator,
         &fixture.progress,
         &replay_tower,
@@ -2083,7 +2114,7 @@ test "computeBankStats - child bank heavier" {
     var slot_tracker_rw1 = RwMux(SlotTracker).init(fixture.slot_tracker);
     const slot_tracker_rw1_ptr, var slot_tracker_rw1_lg = slot_tracker_rw1.writeWithLock();
     defer slot_tracker_rw1_lg.unlock();
-    const newly_computed_slot_stats = try computeBankStats(
+    const newly_computed_consensus_slots = try computeConsensusInputs(
         testing.allocator,
         .noop,
         my_node_pubkey,
@@ -2096,7 +2127,7 @@ test "computeBankStats - child bank heavier" {
         &replay_tower,
         &fixture.latest_validator_votes_for_frozen_banks,
     );
-    defer testing.allocator.free(newly_computed_slot_stats);
+    defer testing.allocator.free(newly_computed_consensus_slots);
 
     // Sort frozen slots by slot number
     const slot_list = try testing.allocator.alloc(u64, frozen_slots.count());
@@ -2180,7 +2211,7 @@ test "computeBankStats - same weight selects lower slot" {
     var slot_tracker_rw2 = RwMux(SlotTracker).init(fixture.slot_tracker);
     const slot_tracker_rw2_ptr, var slot_tracker_rw2_lg = slot_tracker_rw2.writeWithLock();
     defer slot_tracker_rw2_lg.unlock();
-    const newly_computed_slot_stats = try computeBankStats(
+    const newly_computed_consensus_slots = try computeConsensusInputs(
         testing.allocator,
         .noop,
         my_vote_pubkey,
@@ -2193,7 +2224,7 @@ test "computeBankStats - same weight selects lower slot" {
         &replay_tower,
         &fixture.latest_validator_votes_for_frozen_banks,
     );
-    defer testing.allocator.free(newly_computed_slot_stats);
+    defer testing.allocator.free(newly_computed_consensus_slots);
 
     // Check that stake for slot 1 and slot 2 is equal
     const bank1 = fixture.slot_tracker.get(1).?;

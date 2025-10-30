@@ -23,9 +23,9 @@ const ParsedVote = sig.consensus.vote_listener.vote_parser.ParsedVote;
 const SlotHashes = sig.runtime.sysvar.SlotHashes;
 const TransactionError = sig.ledger.transaction_status.TransactionError;
 
-const AccountLocks = replay.account_locks.AccountLocks;
+const AccountLocks = replay.AccountLocks;
 const BatchResult = replay.execution.BatchResult;
-const Committer = replay.commit.Committer;
+const Committer = replay.Committer;
 const ReplaySlotError = replay.execution.ReplaySlotError;
 const ResolvedBatch = replay.resolve_lookup.ResolvedBatch;
 const ResolvedTransaction = replay.resolve_lookup.ResolvedTransaction;

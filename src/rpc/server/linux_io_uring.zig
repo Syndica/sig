@@ -34,6 +34,7 @@ pub const LinuxIoUring = struct {
         var io_uring = IoUring.init(4096, 0) catch |err| return switch (err) {
             error.SystemOutdated,
             error.PermissionDenied,
+            error.SystemResources,
             => return null,
             else => |e| e,
         };

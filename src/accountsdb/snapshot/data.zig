@@ -30,8 +30,8 @@ pub const MAX_RECENT_BLOCKHASHES: usize = 300;
 pub const MAX_CACHE_ENTRIES: usize = MAX_RECENT_BLOCKHASHES;
 const CACHED_KEY_SIZE: usize = 20;
 
-/// Analogous to [BankIncrementalSnapshotPersistence](https://github.com/anza-xyz/agave/blob/2de7b565e8b1101824a5e3bac74f3a8cce88ea72/runtime/src/serde_snapshot.rs#L100)
-pub const BankIncrementalSnapshotPersistence = struct {
+/// Analogous to [ObsoleteIncrementalSnapshotPersistence](https://github.com/anza-xyz/agave/blob/68c1077841eb5a2f0adb2b50f6cfa92a12b8d894/runtime/src/serde_snapshot.rs#L88)
+pub const ObsoleteIncrementalSnapshotPersistence = struct {
     /// slot of full snapshot
     full_slot: Slot,
     /// accounts hash from the full snapshot
@@ -43,7 +43,7 @@ pub const BankIncrementalSnapshotPersistence = struct {
     /// capitalization of the accounts in the incremental snapshot slot range
     incremental_capitalization: u64,
 
-    pub const ZEROES: BankIncrementalSnapshotPersistence = .{
+    pub const ZEROES: ObsoleteIncrementalSnapshotPersistence = .{
         .full_slot = 0,
         .full_hash = Hash.ZEROES,
         .full_capitalization = 0,
@@ -51,7 +51,7 @@ pub const BankIncrementalSnapshotPersistence = struct {
         .incremental_capitalization = 0,
     };
 
-    pub fn initRandom(random: std.Random) BankIncrementalSnapshotPersistence {
+    pub fn initRandom(random: std.Random) ObsoleteIncrementalSnapshotPersistence {
         const full_capitalization = random.int(u64);
         return .{
             .full_slot = random.int(Slot),
@@ -123,13 +123,14 @@ pub const Lockup = struct {
     }
 };
 
+// NOTE: Agave has since moved away from having these in "Extra" fields.
 /// Analogous to [ExtraFieldsToDeserialize](https://github.com/anza-xyz/agave/blob/8d1ef48c785a5d9ee5c0df71dc520ee1a49d8168/runtime/src/serde_snapshot.rs#L396).
 pub const ExtraFields = struct {
     lamports_per_signature: u64,
-    snapshot_persistence: ?BankIncrementalSnapshotPersistence,
+    snapshot_persistence: ?ObsoleteIncrementalSnapshotPersistence,
     epoch_accounts_hash: ?Hash,
     versioned_epoch_stakes: std.AutoArrayHashMapUnmanaged(Epoch, VersionedEpochStakes),
-    accounts_lt_hash: ?AccountsLtHash,
+    accounts_lt_hash: sig.core.hash.LtHash,
 
     pub const @"!bincode-config": bincode.FieldConfig(ExtraFields) = .{
         .deserializer = bincodeRead,
@@ -137,16 +138,12 @@ pub const ExtraFields = struct {
         .free = bincodeFree,
     };
 
-    /// TODO: https://github.com/orgs/Syndica/projects/2/views/10?pane=issue&itemId=85238686
-    pub const ACCOUNTS_LATTICE_HASH_LEN = 1024;
-    pub const AccountsLtHash = [ACCOUNTS_LATTICE_HASH_LEN]u16;
-
     pub const INIT_EOF: ExtraFields = .{
         .lamports_per_signature = 0,
         .snapshot_persistence = null,
         .epoch_accounts_hash = null,
         .versioned_epoch_stakes = .{},
-        .accounts_lt_hash = null,
+        .accounts_lt_hash = .IDENTITY,
     };
 
     pub fn deinit(self: *const ExtraFields, allocator: std.mem.Allocator) void {
@@ -191,7 +188,7 @@ pub const ExtraFields = struct {
                 => field_ptr.* = random.int(u64),
 
                 .snapshot_persistence,
-                => field_ptr.* = BankIncrementalSnapshotPersistence.initRandom(random),
+                => field_ptr.* = ObsoleteIncrementalSnapshotPersistence.initRandom(random),
 
                 .epoch_accounts_hash,
                 => field_ptr.* = Hash.initRandom(random),
@@ -212,7 +209,7 @@ pub const ExtraFields = struct {
 
                 .accounts_lt_hash,
                 => field_ptr.* = hash: {
-                    var hash: AccountsLtHash = undefined;
+                    var hash: sig.core.hash.LtHash = undefined;
                     random.bytes(std.mem.asBytes(&hash));
                     break :hash hash;
                 },
@@ -246,8 +243,14 @@ pub const ExtraFields = struct {
 
                     .snapshot_persistence,
                     .epoch_accounts_hash,
-                    .accounts_lt_hash,
                     => bincode.read(assert_allocator, field.type, reader, params),
+
+                    // We need to deserialise this as optional, but really we should always have it
+                    .accounts_lt_hash,
+                    => if (bincode.read(assert_allocator, ?field.type, reader, params)) |maybe_lt|
+                        maybe_lt orelse error.DeltaLtNotPresent
+                    else |err|
+                        err,
 
                     .versioned_epoch_stakes,
                     => bincode.readWithLimit(limit_allocator, field.type, reader, params),
@@ -309,14 +312,14 @@ pub const AccountFileInfo = struct {
 
 /// Analogous to [BankHashInfo](https://github.com/anza-xyz/agave/blob/2de7b565e8b1101824a5e3bac74f3a8cce88ea72/runtime/src/serde_snapshot.rs#L115)
 pub const BankHashInfo = struct {
-    accounts_delta_hash: Hash,
-    accounts_hash: Hash,
+    obsolete_accounts_delta_hash: Hash = Hash.ZEROES,
+    obsolete_accounts_hash: Hash = Hash.ZEROES,
     stats: BankHashStats,
 
     pub fn initRandom(random: std.Random) BankHashInfo {
         return .{
-            .accounts_delta_hash = Hash.initRandom(random),
-            .accounts_hash = Hash.initRandom(random),
+            .obsolete_accounts_delta_hash = Hash.initRandom(random),
+            .obsolete_accounts_hash = Hash.initRandom(random),
             .stats = BankHashStats.initRandom(random),
         };
     }
@@ -1017,6 +1020,7 @@ pub const IncrementalSnapshotFileInfo = struct {
 
     pub fn snapshotArchiveName(self: IncrementalSnapshotFileInfo) SnapshotArchiveNameStr {
         const b58_str = self.hash.base58String();
+
         return SnapshotArchiveNameFmtSpec.fmt(.{
             .base_slot = self.base_slot,
             .slot = self.slot,
@@ -1373,9 +1377,7 @@ pub const FullAndIncrementalManifest = struct {
 
     pub fn deinit(self: FullAndIncrementalManifest, allocator: std.mem.Allocator) void {
         self.full.deinit(allocator);
-        if (self.incremental) |inc| {
-            inc.deinit(allocator);
-        }
+        if (self.incremental) |inc| inc.deinit(allocator);
     }
 };
 

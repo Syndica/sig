@@ -222,7 +222,7 @@ pub const ForkChoice = struct {
 
         var it = self.fork_infos.valueIterator();
         while (it.next()) |fork_info| {
-            total_stake += fork_info.stake_for_subtree;
+            total_stake += fork_info.stake_for_slot;
 
             // Count active forks (those that are candidates)
             if (!fork_info.isCandidate()) continue;
@@ -1495,7 +1495,7 @@ pub const ForkChoice = struct {
     /// Updates fork choice statistics by processing new validator votes.
     ///
     /// Analogous to [compute_bank_stats](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L1250)
-    pub fn computeBankStats(
+    pub fn processLatestVotes(
         self: *ForkChoice,
         allocator: std.mem.Allocator,
         epoch_stakes: *const EpochStakesMap,
@@ -4804,7 +4804,7 @@ test "HeaviestSubtreeForkChoice.gossipVoteDoesntAffectForkChoice" {
     );
 
     // Call computeBankStats - gossip votes shouldn't affect fork choice
-    try fork_choice.computeBankStats(
+    try fork_choice.processLatestVotes(
         test_allocator,
         &epoch_stakes,
         &EpochSchedule.DEFAULT,
