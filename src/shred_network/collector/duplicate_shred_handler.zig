@@ -352,3 +352,549 @@ fn enqueueDuplicateShredCrdsValues(
         });
     }
 }
+
+const PossibleDuplicateShred = sig.ledger.shred_inserter.working_state.PossibleDuplicateShred;
+const Shred = sig.ledger.shred.Shred;
+const schema = sig.ledger.schema.schema;
+
+test "handleDuplicateSlots: no sender configured" {
+    const allocator = std.testing.allocator;
+
+    var ledger = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
+    defer ledger.deinit();
+
+    const keypair: KeyPair = try .generateDeterministic(@splat(1));
+
+    var handler: DuplicateShredHandler = .{
+        .ledger_reader = ledger.reader(),
+        .result_writer = ledger.resultWriter(),
+        .duplicate_slots_sender = null, // No sender configured
+        .gossip_service = null,
+        .keypair = &keypair,
+        .logger = .noop,
+    };
+
+    // Create a result with a duplicate shred
+    const shred: Shred = try .fromPayload(allocator, &sig.ledger.shred.test_data_shred);
+
+    var duplicate_shreds: std.ArrayList(PossibleDuplicateShred) = .init(allocator);
+    try duplicate_shreds.append(.{ .Exists = shred });
+
+    const result: ShredInserter.Result = .{
+        .completed_data_set_infos = .init(allocator),
+        .duplicate_shreds = duplicate_shreds,
+    };
+    defer result.deinit();
+
+    // Should not crash. Will attempt ledger storage and gossip broadcast, but not send to consensus.
+    try handler.handleDuplicateSlots(allocator, &result);
+}
+
+test "handleDuplicateSlots: no duplicate shreds" {
+    const allocator = std.testing.allocator;
+
+    var ledger = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
+    defer ledger.deinit();
+
+    const keypair: KeyPair = try .generateDeterministic(@splat(1));
+    var duplicate_slots_channel: Channel(Slot) = try .init(allocator);
+    defer duplicate_slots_channel.deinit();
+
+    var handler: DuplicateShredHandler = .{
+        .ledger_reader = ledger.reader(),
+        .result_writer = ledger.resultWriter(),
+        .duplicate_slots_sender = &duplicate_slots_channel,
+        .gossip_service = null,
+        .keypair = &keypair,
+        .logger = .noop,
+    };
+
+    // Create a result with no duplicate shreds
+    const result: ShredInserter.Result = .{
+        .completed_data_set_infos = .init(allocator),
+        .duplicate_shreds = .init(allocator),
+    };
+    defer result.deinit();
+
+    try handler.handleDuplicateSlots(allocator, &result);
+
+    // Verify no slot was sent
+    try std.testing.expectEqual(0, duplicate_slots_channel.len());
+}
+
+test "handleDuplicateSlots: single duplicate shred" {
+    const allocator = std.testing.allocator;
+
+    var ledger = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
+    defer ledger.deinit();
+
+    const keypair: KeyPair = try .generateDeterministic(@splat(1));
+    var duplicate_slots_channel: Channel(Slot) = try .init(allocator);
+    defer duplicate_slots_channel.deinit();
+
+    var handler: DuplicateShredHandler = .{
+        .ledger_reader = ledger.reader(),
+        .result_writer = ledger.resultWriter(),
+        .duplicate_slots_sender = &duplicate_slots_channel,
+        .gossip_service = null,
+        .keypair = &keypair,
+        .logger = .noop,
+    };
+
+    // Create a result with a single duplicate shred
+    const shred: Shred = try .fromPayload(allocator, &sig.ledger.shred.test_data_shred);
+    defer shred.deinit();
+    const expected_slot = shred.commonHeader().slot;
+    const shred_id = shred.id();
+
+    // Create a modified payload for the second shred (different data, same slot/index)
+    const modified_payload = try allocator.dupe(u8, shred.payload());
+    defer allocator.free(modified_payload);
+    if (modified_payload.len > 0) {
+        modified_payload[modified_payload.len - 1] = modified_payload[modified_payload.len - 1] +% 1;
+    }
+
+    // Insert the ORIGINAL shred into the ledger
+    var write_batch = try ledger.db.initWriteBatch();
+    defer write_batch.deinit();
+    try write_batch.put(
+        schema.data_shred,
+        .{ shred_id.slot, shred_id.index },
+        shred.payload(),
+    );
+    try ledger.db.commit(&write_batch);
+
+    // Now create the duplicate shred with the modified payload
+    const duplicate_shred: Shred = try .fromPayload(allocator, modified_payload);
+
+    var duplicate_shreds: std.ArrayList(PossibleDuplicateShred) = .init(allocator);
+    try duplicate_shreds.append(.{ .Exists = duplicate_shred });
+
+    const result: ShredInserter.Result = .{
+        .completed_data_set_infos = .init(allocator),
+        .duplicate_shreds = duplicate_shreds,
+    };
+    defer result.deinit();
+
+    try handler.handleDuplicateSlots(allocator, &result);
+
+    // Verify exactly one slot was sent
+    try std.testing.expectEqual(1, duplicate_slots_channel.len());
+    const received_slot = duplicate_slots_channel.tryReceive() orelse return error.TestFailed;
+    try std.testing.expectEqual(expected_slot, received_slot);
+}
+
+test "handleDuplicateSlots: multiple duplicates same slot" {
+    const allocator = std.testing.allocator;
+
+    var ledger = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
+    defer ledger.deinit();
+
+    const keypair: KeyPair = try .generateDeterministic(@splat(1));
+    var duplicate_slots_channel: Channel(Slot) = try .init(allocator);
+    defer duplicate_slots_channel.deinit();
+
+    var handler: DuplicateShredHandler = .{
+        .ledger_reader = ledger.reader(),
+        .result_writer = ledger.resultWriter(),
+        .duplicate_slots_sender = &duplicate_slots_channel,
+        .gossip_service = null,
+        .keypair = &keypair,
+        .logger = .noop,
+    };
+
+    // Create multiple duplicate shreds from the same slot
+    const shred1: Shred = try .fromPayload(allocator, &sig.ledger.shred.test_data_shred);
+    defer shred1.deinit();
+    const expected_slot = shred1.commonHeader().slot;
+    const shred_id = shred1.id();
+
+    // Create modified payloads for the duplicate shreds (different data, same slot/index)
+    const modified_payload1 = try allocator.dupe(u8, shred1.payload());
+    defer allocator.free(modified_payload1);
+    const modified_payload2 = try allocator.dupe(u8, shred1.payload());
+    defer allocator.free(modified_payload2);
+    if (modified_payload1.len > 0) {
+        modified_payload1[modified_payload1.len - 1] =
+            modified_payload1[modified_payload1.len - 1] +% 1;
+        modified_payload2[modified_payload2.len - 1] =
+            modified_payload2[modified_payload2.len - 1] +% 2;
+    }
+
+    // Insert the ORIGINAL shred into the ledger
+    var write_batch = try ledger.db.initWriteBatch();
+    defer write_batch.deinit();
+    try write_batch.put(
+        schema.data_shred,
+        .{ shred_id.slot, shred_id.index },
+        shred1.payload(),
+    );
+    try ledger.db.commit(&write_batch);
+
+    const result: ShredInserter.Result = result: {
+        // Now create the duplicate shreds with the modified payloads
+        const duplicate_shred1: Shred = try .fromPayload(allocator, modified_payload1);
+        errdefer duplicate_shred1.deinit();
+        const duplicate_shred2: Shred = try .fromPayload(allocator, modified_payload2);
+        errdefer duplicate_shred1.deinit();
+
+        var duplicate_shreds = std.ArrayList(PossibleDuplicateShred).init(allocator);
+        try duplicate_shreds.appendSlice(&.{
+            .{ .Exists = duplicate_shred1 },
+            .{ .Exists = duplicate_shred2 },
+        });
+        break :result .{
+            .completed_data_set_infos = .init(allocator),
+            .duplicate_shreds = duplicate_shreds,
+        };
+    };
+    defer result.deinit();
+
+    try handler.handleDuplicateSlots(allocator, &result);
+
+    // Verify exactly one slot was sent (first duplicate is processed, subsequent ones are skipped)
+    try std.testing.expectEqual(1, duplicate_slots_channel.len());
+    const received_slot = duplicate_slots_channel.tryReceive() orelse return error.TestFailed;
+    try std.testing.expectEqual(expected_slot, received_slot);
+}
+
+test "handleDuplicateSlots: Exists but slot already duplicate" {
+    const allocator = std.testing.allocator;
+
+    var ledger = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
+    defer ledger.deinit();
+
+    const keypair: KeyPair = try .generateDeterministic(@splat(1));
+    var duplicate_slots_channel: Channel(Slot) = try .init(allocator);
+    defer duplicate_slots_channel.deinit();
+
+    var handler: DuplicateShredHandler = .{
+        .ledger_reader = ledger.reader(),
+        .result_writer = ledger.resultWriter(),
+        .duplicate_slots_sender = &duplicate_slots_channel,
+        .gossip_service = null,
+        .keypair = &keypair,
+        .logger = .noop,
+    };
+
+    const shred: Shred = try .fromPayload(allocator, &sig.ledger.shred.test_data_shred);
+    defer shred.deinit();
+    const slot = shred.commonHeader().slot;
+
+    try ledger.resultWriter().storeDuplicateSlot(slot, shred.payload(), shred.payload());
+
+    var duplicate_shreds: std.ArrayList(PossibleDuplicateShred) = .init(allocator);
+    try duplicate_shreds.append(.{ .Exists = try shred.clone() });
+
+    const result: ShredInserter.Result = .{
+        .completed_data_set_infos = .init(allocator),
+        .duplicate_shreds = duplicate_shreds,
+    };
+    defer result.deinit();
+
+    try handler.handleDuplicateSlots(allocator, &result);
+
+    // Should skip sending since slot is already duplicate
+    try std.testing.expectEqual(0, duplicate_slots_channel.len());
+}
+
+test "handleDuplicateSlots: emits and stores via handleDuplicateSlot" {
+    const allocator = std.testing.allocator;
+
+    var ledger = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
+    defer ledger.deinit();
+
+    const keypair: KeyPair = try .generateDeterministic(@splat(1));
+    var duplicate_slots_channel: Channel(Slot) = try .init(allocator);
+    defer duplicate_slots_channel.deinit();
+
+    const original: Shred = try .fromPayload(allocator, &sig.ledger.shred.test_data_shred);
+    defer original.deinit();
+    const expected_slot = original.commonHeader().slot;
+
+    const conflict_payload = try allocator.dupe(u8, original.payload());
+    defer allocator.free(conflict_payload);
+    if (conflict_payload.len > 0) conflict_payload[conflict_payload.len - 1] +%= 1;
+
+    var handler: DuplicateShredHandler = .{
+        .ledger_reader = ledger.reader(),
+        .result_writer = ledger.resultWriter(),
+        .duplicate_slots_sender = &duplicate_slots_channel,
+        .gossip_service = null,
+        .keypair = &keypair,
+        .logger = .noop,
+    };
+    try handler.handleDuplicateSlot(
+        &duplicate_slots_channel,
+        expected_slot,
+        original.payload(),
+        conflict_payload,
+    );
+
+    try std.testing.expectEqual(1, duplicate_slots_channel.len());
+    const received_slot = duplicate_slots_channel.tryReceive() orelse return error.TestFailed;
+    try std.testing.expectEqual(expected_slot, received_slot);
+
+    // And the ledger should now contain the duplicate slot
+    try std.testing.expectEqual(true, ledger.db.contains(schema.duplicate_slots, expected_slot));
+}
+
+test "pushDuplicateShredToGossip: enqueues chunks and ring indices" {
+    const allocator = std.testing.allocator;
+
+    const keypair: KeyPair = try .generateDeterministic(@splat(1));
+    const my_pubkey: sig.core.Pubkey = .fromPublicKey(&keypair.public_key);
+
+    var ledger = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
+    defer ledger.deinit();
+
+    var contact_info =
+        try sig.gossip.data.LegacyContactInfo.default(my_pubkey).toContactInfo(allocator);
+    try contact_info.setSocket(.gossip, .initIpv4(.{ 127, 0, 0, 1 }, 0));
+
+    const gossip_service = try sig.gossip.GossipService.create(
+        allocator,
+        allocator,
+        contact_info,
+        keypair,
+        null,
+        .noop,
+        .{},
+    );
+    defer {
+        gossip_service.shutdown();
+        gossip_service.deinit();
+        allocator.destroy(gossip_service);
+    }
+
+    const original_shred: Shred = try .fromPayload(allocator, &sig.ledger.shred.test_data_shred);
+    defer original_shred.deinit();
+    const slot = original_shred.commonHeader().slot;
+    const shred_payload = original_shred.payload();
+
+    const other_payload = try allocator.dupe(u8, shred_payload);
+    defer allocator.free(other_payload);
+    if (other_payload.len > 0) other_payload[other_payload.len - 1] +%= 1;
+
+    var before_len: usize = 0;
+    {
+        var pqlg = gossip_service.push_msg_queue_mux.lock();
+        before_len = pqlg.get().queue.items.len;
+        pqlg.unlock();
+    }
+
+    var handler: DuplicateShredHandler = .{
+        .ledger_reader = ledger.reader(),
+        .result_writer = ledger.resultWriter(),
+        .duplicate_slots_sender = null,
+        .gossip_service = gossip_service,
+        .keypair = &keypair,
+        .logger = .noop,
+    };
+    try handler.pushDuplicateShredToGossip(
+        gossip_service,
+        slot,
+        shred_payload,
+        other_payload,
+    );
+
+    const proof_bytes = try serializeDuplicateProof(
+        allocator,
+        shred_payload,
+        other_payload,
+    );
+    defer allocator.free(proof_bytes);
+    const chunk_size: usize = DUPLICATE_SHRED_MAX_PAYLOAD_SIZE - DUPLICATE_SHRED_HEADER_SIZE;
+    const expected_chunks: usize = (proof_bytes.len + chunk_size - 1) / chunk_size;
+
+    var after_items_len: usize = 0;
+    var ring_ok = true;
+    var have_dup_entries: usize = 0;
+    {
+        var pqlg = gossip_service.push_msg_queue_mux.lock();
+        defer pqlg.unlock();
+        after_items_len = pqlg.get().queue.items.len;
+
+        const start_index = after_items_len - expected_chunks;
+        var expect_ring: u16 = 0; // ring_offset should be 0 for empty table
+        var i: usize = 0;
+        while (i < expected_chunks) : (i += 1) {
+            const gd = pqlg.get().queue.items[start_index + i];
+            switch (gd) {
+                .DuplicateShred => |v| {
+                    const ring_index = v[0];
+                    const d = v[1];
+                    if (ring_index != expect_ring) ring_ok = false;
+                    // Basic field checks
+                    try std.testing.expectEqual(slot, d.slot);
+                    try std.testing.expect(d.chunk_index < d.num_chunks);
+                    have_dup_entries += 1;
+                    expect_ring +%= 1;
+                },
+                else => return error.TestFailed,
+            }
+        }
+    }
+
+    try std.testing.expectEqual(expected_chunks, have_dup_entries);
+    try std.testing.expect(ring_ok);
+    try std.testing.expectEqual(before_len + expected_chunks, after_items_len);
+}
+
+test "pushDuplicateShredToGossip: no-op when duplicate for slot exists" {
+    const allocator = std.testing.allocator;
+
+    const keypair: KeyPair = try .generateDeterministic(@splat(2));
+    const my_pubkey: sig.core.Pubkey = .fromPublicKey(&keypair.public_key);
+
+    var contact_info =
+        try sig.gossip.data.LegacyContactInfo.default(my_pubkey).toContactInfo(allocator);
+    try contact_info.setSocket(.gossip, .initIpv4(.{ 127, 0, 0, 1 }, 0));
+
+    const gossip_service = try sig.gossip.GossipService.create(
+        allocator,
+        allocator,
+        contact_info,
+        keypair,
+        null,
+        .noop,
+        .{},
+    );
+    defer {
+        gossip_service.shutdown();
+        gossip_service.deinit();
+        allocator.destroy(gossip_service);
+    }
+
+    var ledger = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
+    defer ledger.deinit();
+
+    const shred: Shred = try .fromPayload(allocator, &sig.ledger.shred.test_data_shred);
+    defer shred.deinit();
+    const slot = shred.commonHeader().slot;
+    const shred_index = layout.getIndex(&sig.ledger.shred.test_data_shred).?;
+
+    {
+        const dup: sig.gossip.data.DuplicateShred = .{
+            .from = my_pubkey,
+            .wallclock = 1,
+            .slot = slot,
+            .shred_index = shred_index,
+            .shred_type = .Code,
+            .num_chunks = 1,
+            .chunk_index = 0,
+            .chunk = try gossip_service.gossip_data_allocator.dupe(u8, &.{0}),
+        };
+        errdefer dup.deinit(gossip_service.gossip_data_allocator);
+        var lg = gossip_service.gossip_table_rw.write();
+        defer lg.unlock();
+        _ = try lg.mut().insert(
+            .initSigned(&keypair, .{ .DuplicateShred = .{ 0, dup } }),
+            0,
+        );
+    }
+
+    var before_len: usize = 0;
+    {
+        var pqlg = gossip_service.push_msg_queue_mux.lock();
+        before_len = pqlg.get().queue.items.len;
+        pqlg.unlock();
+    }
+
+    var other = try allocator.dupe(u8, shred.payload());
+    defer allocator.free(other);
+    if (other.len > 0) other[other.len - 1] +%= 1;
+    var handler: DuplicateShredHandler = .{
+        .ledger_reader = ledger.reader(),
+        .result_writer = ledger.resultWriter(),
+        .duplicate_slots_sender = null,
+        .gossip_service = gossip_service,
+        .keypair = &keypair,
+        .logger = .noop,
+    };
+    try handler.pushDuplicateShredToGossip(
+        gossip_service,
+        slot,
+        shred.payload(),
+        other,
+    );
+
+    var after_len: usize = 0;
+    {
+        var pqlg = gossip_service.push_msg_queue_mux.lock();
+        after_len = pqlg.get().queue.items.len;
+        pqlg.unlock();
+    }
+    try std.testing.expectEqual(before_len, after_len);
+}
+
+test "computeRingOffset: under capacity and at capacity oldest index" {
+    const allocator = std.testing.allocator;
+
+    const keypair: KeyPair = try .generateDeterministic(@splat(3));
+    const my_pubkey: sig.core.Pubkey = .fromPublicKey(&keypair.public_key);
+
+    var contact_info =
+        try sig.gossip.data.LegacyContactInfo.default(my_pubkey).toContactInfo(allocator);
+    try contact_info.setSocket(.gossip, .initIpv4(.{ 127, 0, 0, 1 }, 0));
+
+    const gossip_service = try sig.gossip.GossipService.create(
+        allocator,
+        allocator,
+        contact_info,
+        keypair,
+        null,
+        .noop,
+        .{},
+    );
+    defer {
+        gossip_service.shutdown();
+        gossip_service.deinit();
+        allocator.destroy(gossip_service);
+    }
+
+    const insert_dup = struct {
+        fn run(
+            g: *sig.gossip.GossipService,
+            kp: *const KeyPair,
+            ring_index: u16,
+            wallclock: u64,
+            slotarg: Slot,
+        ) !void {
+            const buf = try g.gossip_data_allocator.dupe(u8, &.{0});
+            const signed: sig.gossip.data.SignedGossipData = .initSigned(kp, .{
+                .DuplicateShred = .{
+                    ring_index, .{
+                        .from = .fromPublicKey(&kp.public_key),
+                        .wallclock = wallclock,
+                        .slot = slotarg,
+                        .shred_index = 0,
+                        .shred_type = .Code,
+                        .num_chunks = 1,
+                        .chunk_index = 0,
+                        .chunk = buf,
+                    },
+                },
+            });
+            errdefer signed.deinit(allocator);
+            var lg = g.gossip_table_rw.write();
+            defer lg.unlock();
+            _ = try lg.mut().insert(signed, wallclock);
+        }
+    };
+
+    try insert_dup.run(gossip_service, &keypair, 0, 10, 1);
+    try insert_dup.run(gossip_service, &keypair, 1, 11, 2);
+    try insert_dup.run(gossip_service, &keypair, 2, 12, 3);
+    const offset_under = computeRingOffset(&gossip_service.gossip_table_rw, my_pubkey);
+    try std.testing.expectEqual(3, offset_under);
+
+    const MAX = sig.gossip.data.MAX_DUPLICATE_SHREDS;
+    var i: u16 = 3;
+    while (i < MAX) : (i += 1) {
+        const wc: u64 = if (i == 5) 1 else 1000 + i;
+        try insert_dup.run(gossip_service, &keypair, i, wc, 100 + i);
+    }
+    const offset_full = computeRingOffset(&gossip_service.gossip_table_rw, my_pubkey);
+    try std.testing.expectEqual(5, offset_full);
+}

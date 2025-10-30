@@ -447,3 +447,516 @@ const GossipDuplicateShredHandler = struct {
         return .{ shred1, shred2 };
     }
 };
+
+test "GossipDuplicateShredHandler: invalid chunk index rejected" {
+    const allocator = std.testing.allocator;
+
+    var prng_state: std.Random.DefaultPrng = .init(std.testing.random_seed);
+    const prng = prng_state.random();
+
+    var epoch_ctx = try sig.adapter.EpochContextManager.init(allocator, .INIT);
+    defer epoch_ctx.deinit();
+
+    var ledger = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
+    defer ledger.deinit();
+
+    var dup_slots_channel = try Channel(Slot).init(allocator);
+    defer dup_slots_channel.deinit();
+
+    const shred_version: std.atomic.Value(u16) = .init(0);
+    var handler: GossipDuplicateShredHandler = .init(allocator, .noop, .{
+        .result_writer = ledger.resultWriter(),
+        .ledger_reader = ledger.reader(),
+        .duplicate_slots_sender = &dup_slots_channel,
+        .leader_schedule = epoch_ctx.slotLeaders(),
+        .shred_version = &shred_version,
+        .epoch_schedule = epoch_ctx.schedule,
+        .epoch_ctx_mgr = &epoch_ctx,
+    });
+    defer handler.deinit();
+
+    const dup: DuplicateShred = .{
+        .from = .initRandom(prng),
+        .wallclock = 1000,
+        .slot = 10,
+        .shred_index = 0,
+        .shred_type = .Data,
+        .num_chunks = 2,
+        .chunk_index = 2, // invalid (>= num_chunks)
+        .chunk = &.{ 1, 2, 3 },
+    };
+    try std.testing.expectError(error.InvalidChunkIndex, handler.handleShredData(dup));
+}
+
+test "GossipDuplicateShredHandler: overwrite existing chunk at same index" {
+    const allocator = std.testing.allocator;
+
+    var prng_state: std.Random.DefaultPrng = .init(std.testing.random_seed);
+    const prng = prng_state.random();
+
+    var epoch_ctx = try sig.adapter.EpochContextManager.init(allocator, .INIT);
+    defer epoch_ctx.deinit();
+
+    var ledger = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
+    defer ledger.deinit();
+
+    var dup_slots_channel = try Channel(Slot).init(allocator);
+    defer dup_slots_channel.deinit();
+
+    const shred_version: std.atomic.Value(u16) = .init(0);
+
+    var handler: GossipDuplicateShredHandler = .init(allocator, .noop, .{
+        .result_writer = ledger.resultWriter(),
+        .ledger_reader = ledger.reader(),
+        .duplicate_slots_sender = &dup_slots_channel,
+        .leader_schedule = epoch_ctx.slotLeaders(),
+        .shred_version = &shred_version,
+        .epoch_schedule = epoch_ctx.schedule,
+        .epoch_ctx_mgr = &epoch_ctx,
+    });
+    defer handler.deinit();
+
+    const slot: Slot = 11;
+    const from: Pubkey = .initRandom(prng);
+
+    var dup: DuplicateShred = .{
+        .from = from,
+        .wallclock = 1000,
+        .slot = slot,
+        .shred_index = 0,
+        .shred_type = .Data,
+        .num_chunks = 2,
+        .chunk_index = 0,
+        .chunk = &.{ 9, 9 },
+    };
+    try handler.handleShredData(dup);
+
+    var chunk2 = [_]u8{ 7, 7, 7 };
+    dup.chunk = &chunk2;
+    try handler.handleShredData(dup);
+
+    const key: Key = .{ .slot = slot, .from = from };
+    const entry_ptr = handler.dup_buffer.getPtr(key).?;
+    try std.testing.expectEqual(chunk2.len, entry_ptr.chunks[0].?.len);
+    try std.testing.expectEqualSlices(u8, entry_ptr.chunks[0].?, &chunk2);
+}
+
+test "GossipDuplicateShredHandler: complete invalid proof cleans up entry" {
+    const allocator = std.testing.allocator;
+
+    var prng_state: std.Random.DefaultPrng = .init(std.testing.random_seed);
+    const prng = prng_state.random();
+
+    var epoch_ctx = try sig.adapter.EpochContextManager.init(allocator, .INIT);
+    defer epoch_ctx.deinit();
+
+    var ledger = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
+    defer ledger.deinit();
+
+    var dup_slots_channel = try Channel(Slot).init(allocator);
+    defer dup_slots_channel.deinit();
+
+    const shred_version: std.atomic.Value(u16) = .init(0);
+
+    var handler: GossipDuplicateShredHandler = .init(allocator, .noop, .{
+        .result_writer = ledger.resultWriter(),
+        .ledger_reader = ledger.reader(),
+        .duplicate_slots_sender = &dup_slots_channel,
+        .leader_schedule = epoch_ctx.slotLeaders(),
+        .shred_version = &shred_version,
+        .epoch_schedule = epoch_ctx.schedule,
+        .epoch_ctx_mgr = &epoch_ctx,
+    });
+    defer handler.deinit();
+
+    const slot: Slot = 12;
+    const from = Pubkey.initRandom(prng);
+    const key: Key = .{ .slot = slot, .from = from };
+
+    const dup: DuplicateShred = .{
+        .from = from,
+        .wallclock = 1000,
+        .slot = slot,
+        .shred_index = 0,
+        .shred_type = .Data,
+        .num_chunks = 1,
+        .chunk_index = 0,
+        .chunk = &.{ 0xAA, 0xBB, 0xCC }, // bogus
+    };
+    // Should attempt reconstruction, fail, and cleanup the entry
+    try handler.handleShredData(dup);
+    try std.testing.expectEqual(null, handler.dup_buffer.get(key));
+}
+
+test "GossipDuplicateShredHandler: early duplicate slot skips buffering" {
+    const allocator = std.testing.allocator;
+
+    var prng_state: std.Random.DefaultPrng = .init(std.testing.random_seed);
+    const prng = prng_state.random();
+
+    var epoch_ctx = try sig.adapter.EpochContextManager.init(allocator, .INIT);
+    defer epoch_ctx.deinit();
+
+    var ledger = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
+    defer ledger.deinit();
+
+    var dup_slots_channel = try Channel(Slot).init(allocator);
+    defer dup_slots_channel.deinit();
+
+    const shred_version: std.atomic.Value(u16) = .init(0);
+    var handler: GossipDuplicateShredHandler = .init(allocator, .noop, .{
+        .result_writer = ledger.resultWriter(),
+        .ledger_reader = ledger.reader(),
+        .duplicate_slots_sender = &dup_slots_channel,
+        .leader_schedule = epoch_ctx.slotLeaders(),
+        .shred_version = &shred_version,
+        .epoch_schedule = epoch_ctx.schedule,
+        .epoch_ctx_mgr = &epoch_ctx,
+    });
+    defer handler.deinit();
+
+    // Mark slot as duplicate in ledger
+    const shred: sig.ledger.shred.Shred =
+        try .fromPayload(allocator, &sig.ledger.shred.test_data_shred);
+    defer shred.deinit();
+    const slot: Slot = shred.commonHeader().slot;
+    try ledger.resultWriter().storeDuplicateSlot(slot, shred.payload(), shred.payload());
+
+    const from: Pubkey = .initRandom(prng);
+    const key: Key = .{ .slot = slot, .from = from };
+
+    try handler.handleShredData(.{
+        .from = from,
+        .wallclock = 1000,
+        .slot = slot,
+        .shred_index = 0,
+        .shred_type = .Data,
+        .num_chunks = 2,
+        .chunk_index = 0,
+        .chunk = &.{ 1, 2, 3 },
+    });
+    // Should not have buffered anything for this key
+    try std.testing.expectEqual(null, handler.dup_buffer.get(key));
+}
+
+test "GossipDuplicateShredHandler: cacheRootInfo updates cached slots in epoch" {
+    const allocator = std.testing.allocator;
+    var epoch_ctx: sig.adapter.EpochContextManager = try .init(allocator, .INIT);
+    defer epoch_ctx.deinit();
+
+    var ledger = try sig.ledger.tests.initTestLedger(allocator, @src(), .noop);
+    defer ledger.deinit();
+
+    var dup_slots_channel = try Channel(Slot).init(allocator);
+    defer dup_slots_channel.deinit();
+
+    const shred_version: std.atomic.Value(u16) = .init(0);
+    var handler: GossipDuplicateShredHandler = .init(allocator, .noop, .{
+        .result_writer = ledger.resultWriter(),
+        .ledger_reader = ledger.reader(),
+        .duplicate_slots_sender = &dup_slots_channel,
+        .leader_schedule = epoch_ctx.slotLeaders(),
+        .shred_version = &shred_version,
+        .epoch_schedule = epoch_ctx.schedule,
+        .epoch_ctx_mgr = &epoch_ctx,
+    });
+    defer handler.deinit();
+
+    {
+        var setter = try handler.params.result_writer.setRootsIncremental();
+        defer setter.deinit();
+        try setter.addRoot(1);
+        try setter.commit();
+
+        handler.cacheRootInfo();
+        const expected_epoch = handler.params.epoch_schedule.getEpoch(1);
+        const expected_slots_in_epoch =
+            handler.params.epoch_schedule.getSlotsInEpoch(expected_epoch);
+        try std.testing.expectEqual(1, handler.last_root);
+        try std.testing.expectEqual(expected_slots_in_epoch, handler.cached_slots_in_epoch);
+    }
+
+    {
+        const update_epoch: sig.core.Epoch = 2;
+        const update_slot = handler.params.epoch_schedule.getFirstSlotInEpoch(update_epoch);
+        var setter2 = try handler.params.result_writer.setRootsIncremental();
+        defer setter2.deinit();
+        try setter2.addRoot(update_slot);
+        try setter2.commit();
+
+        handler.cacheRootInfo();
+        try std.testing.expectEqual(update_slot, handler.last_root);
+        const expected_slots_in_epoch2 = handler.params.epoch_schedule.getSlotsInEpoch(update_epoch);
+        try std.testing.expectEqual(expected_slots_in_epoch2, handler.cached_slots_in_epoch);
+    }
+}
+
+test "GossipDuplicateShredHandler: cacheRootInfo populates and uses cached staked nodes" {
+    const allocator = std.testing.allocator;
+    var epoch_ctx_mgr = try sig.adapter.EpochContextManager.init(allocator, .INIT);
+    defer epoch_ctx_mgr.deinit();
+
+    // Set up an epoch context with staked nodes
+    var staked_nodes: sig.utils.collections.PubkeyMap(u64) = .empty;
+
+    var prng: std.Random.DefaultPrng = .init(std.testing.random_seed);
+    const node1 = Pubkey.initRandom(prng.random());
+    const node2 = Pubkey.initRandom(prng.random());
+    const node3 = Pubkey.initRandom(prng.random());
+
+    try staked_nodes.put(allocator, node1, 1_000_000);
+    try staked_nodes.put(allocator, node2, 500_000);
+    try staked_nodes.put(allocator, node3, 100_000);
+
+    {
+        const leader_schedule = try allocator.dupe(Pubkey, &.{node1});
+        errdefer allocator.free(leader_schedule);
+        // Transfer ownership - epoch_ctx_mgr will handle cleanup
+        try epoch_ctx_mgr.put(0, .{
+            .staked_nodes = staked_nodes,
+            .leader_schedule = leader_schedule,
+        });
+    }
+
+    var ledger = try sig.ledger.tests.initTestLedger(allocator, @src(), .noop);
+    defer ledger.deinit();
+
+    var dup_slots_channel = try Channel(Slot).init(allocator);
+    defer dup_slots_channel.deinit();
+
+    const shred_version: std.atomic.Value(u16) = .init(0);
+    var handler: GossipDuplicateShredHandler = .init(allocator, .noop, .{
+        .result_writer = ledger.resultWriter(),
+        .ledger_reader = ledger.reader(),
+        .duplicate_slots_sender = &dup_slots_channel,
+        .leader_schedule = epoch_ctx_mgr.slotLeaders(),
+        .shred_version = &shred_version,
+        .epoch_schedule = epoch_ctx_mgr.schedule,
+        .epoch_ctx_mgr = &epoch_ctx_mgr,
+    });
+    defer handler.deinit();
+
+    // Initially cached_staked_nodes should be empty
+    try std.testing.expectEqual(0, handler.cached_staked_nodes.count());
+    try std.testing.expectEqual(0, handler.cached_on_epoch);
+
+    // Set a root in epoch 0
+    {
+        var setter = try handler.params.result_writer.setRootsIncremental();
+        defer setter.deinit();
+        try setter.addRoot(10);
+        try setter.commit();
+    }
+
+    // Call cacheRootInfo - should populate cached_staked_nodes
+    handler.cacheRootInfo();
+
+    try std.testing.expectEqual(10, handler.last_root);
+    try std.testing.expectEqual(0, handler.cached_on_epoch);
+    try std.testing.expectEqual(3, handler.cached_staked_nodes.count());
+    try std.testing.expectEqual(1_000_000, handler.cached_staked_nodes.get(node1).?);
+    try std.testing.expectEqual(500_000, handler.cached_staked_nodes.get(node2).?);
+    try std.testing.expectEqual(100_000, handler.cached_staked_nodes.get(node3).?);
+
+    // Call cacheRootInfo again with same root - should return early without refetching
+    const initial_count = handler.cached_staked_nodes.count();
+    handler.cacheRootInfo();
+    try std.testing.expectEqual(initial_count, handler.cached_staked_nodes.count());
+
+    // Now test that pruning uses the cached stakes
+    handler.last_root = 100;
+    handler.cached_slots_in_epoch = 200_000;
+
+    const capacity = BUFFER_CAPACITY;
+    const total_entries: usize = capacity * 2;
+    const entries_per_node = MAX_NUM_ENTRIES_PER_PUBKEY;
+    const num_nodes = total_entries / entries_per_node;
+
+    // Create many nodes - half with high stake (node1), half with low stake (node3)
+    var high_stake_nodes = std.ArrayList(Pubkey).init(allocator);
+    defer high_stake_nodes.deinit();
+    var low_stake_nodes = std.ArrayList(Pubkey).init(allocator);
+    defer low_stake_nodes.deinit();
+
+    // Generate nodes and add them to cached_staked_nodes
+    for (0..num_nodes / 2) |_| {
+        const node = Pubkey.initRandom(prng.random());
+        try high_stake_nodes.append(node);
+        try handler.cached_staked_nodes.put(allocator, node, 1_000_000);
+    }
+    for (0..num_nodes / 2) |_| {
+        const node = Pubkey.initRandom(prng.random());
+        try low_stake_nodes.append(node);
+        try handler.cached_staked_nodes.put(allocator, node, 100_000);
+    }
+
+    // Create entries - each node gets MAX_NUM_ENTRIES_PER_PUBKEY entries
+    var slot: Slot = 150;
+    for (high_stake_nodes.items) |node| {
+        for (0..entries_per_node) |_| {
+            const key = Key{ .slot = slot, .from = node };
+            const gop = try handler.dup_buffer.getOrPut(allocator, key);
+            if (!gop.found_existing) gop.value_ptr.* = .{ .chunks = @splat(null) };
+            slot += 1;
+        }
+    }
+    for (low_stake_nodes.items) |node| {
+        for (0..entries_per_node) |_| {
+            const key = Key{ .slot = slot, .from = node };
+            const gop = try handler.dup_buffer.getOrPut(allocator, key);
+            if (!gop.found_existing) gop.value_ptr.* = .{ .chunks = @splat(null) };
+            slot += 1;
+        }
+    }
+
+    try std.testing.expect(handler.dup_buffer.count() >= capacity * 2);
+    try handler.maybePruneBuffer();
+
+    // After pruning, buffer should be at capacity
+    try std.testing.expectEqual(capacity, handler.dup_buffer.count());
+
+    // Count entries from high-stake vs low-stake nodes
+    var high_stake_count: usize = 0;
+    var low_stake_count: usize = 0;
+    for (handler.dup_buffer.keys()) |key| {
+        for (high_stake_nodes.items) |node| {
+            if (key.from.equals(&node)) {
+                high_stake_count += 1;
+                break;
+            }
+        }
+        for (low_stake_nodes.items) |node| {
+            if (key.from.equals(&node)) {
+                low_stake_count += 1;
+                break;
+            }
+        }
+    }
+
+    // High-stake nodes should have more entries retained than low-stake nodes
+    try std.testing.expect(high_stake_count > low_stake_count);
+}
+
+test "GossipDuplicateShredHandler: maybePruneBuffer prunes when over capacity" {
+    const allocator = std.testing.allocator;
+    var epoch_ctx: sig.adapter.EpochContextManager = try .init(allocator, .INIT);
+    defer epoch_ctx.deinit();
+
+    var ledger = try sig.ledger.tests.initTestLedger(allocator, @src(), .noop);
+    defer ledger.deinit();
+
+    var dup_slots_channel = try Channel(Slot).init(allocator);
+    defer dup_slots_channel.deinit();
+
+    const shred_version: std.atomic.Value(u16) = .init(0);
+
+    var handler: GossipDuplicateShredHandler = .init(allocator, .noop, .{
+        .result_writer = ledger.resultWriter(),
+        .ledger_reader = ledger.reader(),
+        .duplicate_slots_sender = &dup_slots_channel,
+        .leader_schedule = epoch_ctx.slotLeaders(),
+        .shred_version = &shred_version,
+        .epoch_schedule = epoch_ctx.schedule,
+        .epoch_ctx_mgr = &epoch_ctx,
+    });
+    defer handler.deinit();
+
+    handler.last_root = 1_000;
+    handler.cached_slots_in_epoch = 10;
+
+    const capacity = BUFFER_CAPACITY;
+    const total_entries: usize = capacity * 2;
+
+    const from: Pubkey = .ZEROES;
+    for (0..total_entries) |i| {
+        const key: Key = .{
+            .slot = handler.last_root + handler.cached_slots_in_epoch + 100 + i,
+            .from = from,
+        };
+        const gop = try handler.dup_buffer.getOrPut(allocator, key);
+        if (!gop.found_existing) {
+            gop.value_ptr.* = .{ .chunks = @splat(null) };
+        }
+    }
+
+    try std.testing.expect(handler.dup_buffer.count() >= capacity * 2);
+    try handler.maybePruneBuffer();
+    try std.testing.expectEqual(0, handler.dup_buffer.count());
+}
+
+test "GossipDuplicateShredHandler: reconstructShredsFromData returns shreds on valid proof" {
+    const allocator = std.testing.allocator;
+    var epoch_ctx: sig.adapter.EpochContextManager = try .init(allocator, .INIT);
+    defer epoch_ctx.deinit();
+
+    var ledger = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
+    defer ledger.deinit();
+
+    var dup_slots_channel = try Channel(Slot).init(allocator);
+    defer dup_slots_channel.deinit();
+
+    var base = try sig.ledger.shred.Shred.fromPayload(allocator, &sig.ledger.shred.test_data_shred);
+    defer base.deinit();
+
+    const slot: Slot = base.commonHeader().slot;
+    const version: u16 = base.commonHeader().version;
+
+    const keypair: sig.identity.KeyPair = try .generateDeterministic(@splat(1));
+    const leader: Pubkey = .fromPublicKey(&keypair.public_key);
+
+    const one_slot_leader_list = try allocator.dupe(Pubkey, &.{leader});
+    defer allocator.free(one_slot_leader_list);
+
+    var single: sig.core.leader_schedule.SingleEpochSlotLeaders = .{
+        .start_slot = slot,
+        .slot_leaders = one_slot_leader_list,
+    };
+
+    const shred_version: std.atomic.Value(u16) = .init(version);
+    var handler: GossipDuplicateShredHandler = .init(allocator, .noop, .{
+        .result_writer = ledger.resultWriter(),
+        .ledger_reader = ledger.reader(),
+        .duplicate_slots_sender = &dup_slots_channel,
+        .leader_schedule = single.slotLeaders(),
+        .shred_version = &shred_version,
+        .epoch_schedule = epoch_ctx.schedule,
+        .epoch_ctx_mgr = &epoch_ctx,
+    });
+    defer handler.deinit();
+
+    const shred1 = try base.clone();
+    defer shred1.deinit();
+    const shred2 = try base.clone();
+    defer shred2.deinit();
+
+    const mr1 = try shred1.merkleRoot();
+    const sig1_std = try keypair.sign(&mr1.data, null);
+    const sig1: sig.core.Signature = .fromSignature(sig1_std);
+    @memcpy(shred1.mutablePayload()[0..sig.core.Signature.SIZE], &sig1.toBytes());
+
+    const headers_size = sig.ledger.shred.DataShred.constants.headers_size;
+    const payload2 = shred2.mutablePayload();
+    payload2[headers_size] = payload2[headers_size] ^ 0x01;
+    const mr2 = try shred2.merkleRoot();
+    const sig2_std = try keypair.sign(&mr2.data, null);
+    const sig2 = sig.core.Signature.fromSignature(sig2_std);
+    @memcpy(payload2[0..sig.core.Signature.SIZE], &sig2.toBytes());
+
+    const proof: DuplicateSlotProof = .{ .shred1 = shred1.payload(), .shred2 = shred2.payload() };
+
+    var proof_buf: std.ArrayListUnmanaged(u8) = .empty;
+    defer proof_buf.deinit(allocator);
+    try sig.bincode.write(proof_buf.writer(allocator), proof, .{});
+    const proof_bytes = try proof_buf.toOwnedSlice(allocator);
+    defer allocator.free(proof_bytes);
+
+    const out1, const out2 = try handler.reconstructShredsFromData(
+        .{ .slot = slot, .from = leader },
+        proof_bytes,
+    );
+    defer out1.deinit();
+    defer out2.deinit();
+
+    try std.testing.expectEqual(slot, out1.commonHeader().slot);
+    try std.testing.expectEqual(slot, out2.commonHeader().slot);
+}
