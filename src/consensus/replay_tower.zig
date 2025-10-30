@@ -1430,9 +1430,7 @@ pub const ReplayTower = struct {
                     return error.MissingAncestors;
                 break :blk try getSlotHistory(allocator, account_reader.forSlot(slot_ancestors));
             } else null;
-        defer {
-            if (maybe_slot_history) |slot_history| slot_history.deinit(allocator);
-        }
+        defer if (maybe_slot_history) |slot_history| slot_history.deinit(allocator);
 
         // Select candidate slots
         const candidate_slots = try self.selectCandidateVoteAndResetBanks(

@@ -5381,7 +5381,7 @@ test "vote on heaviest frozen descendant with no switch" {
             .node = null,
             .authorized_voters = &.{},
         },
-        .account_reader = stubs.accountsdb.accountReader(),
+        .account_reader = stubs.accountReader(),
         .ledger = &stubs.ledger,
         .slot_tracker = &slot_tracker,
         .now = .EPOCH_ZERO,
@@ -5402,7 +5402,7 @@ test "vote on heaviest frozen descendant with no switch" {
 
     // Component entry point being tested
     try consensus.process(allocator, .{
-        .account_store = .{ .thread_safe_map = &stubs.accountsdb },
+        .account_store = stubs.accountStore(),
         .ledger = &stubs.ledger,
         .gossip_votes = null,
         .slot_tracker = &slot_tracker,
@@ -5606,7 +5606,7 @@ test "vote accounts with landed votes populate bank stats" {
             .node = null,
             .authorized_voters = &.{},
         },
-        .account_reader = stubs.accountsdb.accountReader(),
+        .account_reader = stubs.accountReader(),
         .ledger = &stubs.ledger,
         .slot_tracker = &slot_tracker,
         .now = .EPOCH_ZERO,
@@ -5624,7 +5624,7 @@ test "vote accounts with landed votes populate bank stats" {
 
     // Component entry point being tested
     try consensus.process(allocator, .{
-        .account_store = .{ .thread_safe_map = &stubs.accountsdb },
+        .account_store = stubs.accountStore(),
         .ledger = &stubs.ledger,
         .gossip_votes = null,
         .slot_tracker = &slot_tracker,
@@ -5751,8 +5751,7 @@ test "root advances after vote satisfies lockouts" {
             .executable = false,
             .rent_epoch = 0,
         };
-        const account_store = stubs.accountsdb.accountStore();
-        try account_store.put(0, SlotHistory.ID, account);
+        stubs.accounts_db_state.db.rooted.put(SlotHistory.ID, 0, account);
     }
 
     const initial_root: Slot = 0;
@@ -5890,7 +5889,7 @@ test "root advances after vote satisfies lockouts" {
             .node = null,
             .authorized_voters = &.{},
         },
-        .account_reader = stubs.accountsdb.accountReader(),
+        .account_reader = stubs.accountReader(),
         .ledger = &stubs.ledger,
         .slot_tracker = &slot_tracker,
         .now = .EPOCH_ZERO,
@@ -5935,7 +5934,7 @@ test "root advances after vote satisfies lockouts" {
         };
 
         try consensus.process(allocator, .{
-            .account_store = .{ .thread_safe_map = &stubs.accountsdb },
+            .account_store = stubs.accountStore(),
             .ledger = &stubs.ledger,
             .gossip_votes = null,
             .slot_tracker = &slot_tracker,
@@ -5997,7 +5996,7 @@ test "root advances after vote satisfies lockouts" {
         };
 
         try consensus.process(allocator, .{
-            .account_store = .{ .thread_safe_map = &stubs.accountsdb },
+            .account_store = stubs.accountStore(),
             .ledger = &stubs.ledger,
             .gossip_votes = null,
             .slot_tracker = &slot_tracker,
@@ -6078,8 +6077,9 @@ test "root advances after vote satisfies lockouts" {
         const results = [_]ReplayResult{
             .{ .slot = 33, .output = .{ .last_entry_hash = hashes[33] } },
         };
+
         try consensus.process(allocator, .{
-            .account_store = .{ .thread_safe_map = &stubs.accountsdb },
+            .account_store = stubs.accountStore(),
             .ledger = &stubs.ledger,
             .gossip_votes = null,
             .slot_tracker = &slot_tracker,
@@ -6171,7 +6171,7 @@ test "vote refresh when no new vote available" {
             .executable = false,
             .rent_epoch = 0,
         };
-        const account_store = stubs.accountsdb.accountStore();
+        const account_store = stubs.accountStore();
         try account_store.put(0, SlotHistory.ID, account);
     }
 
@@ -6242,7 +6242,7 @@ test "vote refresh when no new vote available" {
             .node = null,
             .authorized_voters = &.{},
         },
-        .account_reader = stubs.accountsdb.accountReader(),
+        .account_reader = stubs.accountReader(),
         .ledger = &stubs.ledger,
         .slot_tracker = &slot_tracker,
         .now = .EPOCH_ZERO,
@@ -6261,7 +6261,7 @@ test "vote refresh when no new vote available" {
             .{ .slot = 1, .output = .{ .last_entry_hash = slot1_hash } },
         };
         try consensus.process(allocator, .{
-            .account_store = .{ .thread_safe_map = &stubs.accountsdb },
+            .account_store = stubs.accountStore(),
             .ledger = &stubs.ledger,
             .gossip_votes = null,
             .slot_tracker = &slot_tracker,
@@ -6287,7 +6287,7 @@ test "vote refresh when no new vote available" {
     {
         const empty_results: []const ReplayResult = &.{};
         try consensus.process(allocator, .{
-            .account_store = .{ .thread_safe_map = &stubs.accountsdb },
+            .account_store = stubs.accountStore(),
             .ledger = &stubs.ledger,
             .gossip_votes = null,
             .slot_tracker = &slot_tracker,
@@ -6367,7 +6367,7 @@ test "detect and mark duplicate confirmed fork" {
             .executable = false,
             .rent_epoch = 0,
         };
-        const account_store = stubs.accountsdb.accountStore();
+        const account_store = stubs.accountStore();
         try account_store.put(0, SlotHistory.ID, account);
     }
 
@@ -6531,7 +6531,7 @@ test "detect and mark duplicate confirmed fork" {
             .node = null,
             .authorized_voters = &.{},
         },
-        .account_reader = stubs.accountsdb.accountReader(),
+        .account_reader = stubs.accountReader(),
         .ledger = &stubs.ledger,
         .slot_tracker = &slot_tracker,
         .now = .EPOCH_ZERO,
@@ -6556,7 +6556,7 @@ test "detect and mark duplicate confirmed fork" {
             .{ .slot = 2, .output = .{ .last_entry_hash = slot2_hash } },
         };
         try consensus.process(allocator, .{
-            .account_store = .{ .thread_safe_map = &stubs.accountsdb },
+            .account_store = stubs.accountStore(),
             .ledger = &stubs.ledger,
             .gossip_votes = null,
             .slot_tracker = &slot_tracker,
@@ -6632,7 +6632,7 @@ test "detect and mark duplicate slot" {
             .executable = false,
             .rent_epoch = 0,
         };
-        const account_store = stubs.accountsdb.accountStore();
+        const account_store = stubs.accountStore();
         try account_store.put(0, SlotHistory.ID, account);
     }
 
@@ -6707,7 +6707,7 @@ test "detect and mark duplicate slot" {
             .node = null,
             .authorized_voters = &.{},
         },
-        .account_reader = stubs.accountsdb.accountReader(),
+        .account_reader = stubs.accountReader(),
         .ledger = &stubs.ledger,
         .slot_tracker = &slot_tracker,
         .now = .EPOCH_ZERO,
@@ -6735,7 +6735,7 @@ test "detect and mark duplicate slot" {
             .{ .slot = 1, .output = .{ .last_entry_hash = slot1_hash } },
         };
         try consensus.process(allocator, .{
-            .account_store = .{ .thread_safe_map = &stubs.accountsdb },
+            .account_store = stubs.accountStore(),
             .ledger = &stubs.ledger,
             .gossip_votes = null,
             .slot_tracker = &slot_tracker,
@@ -6835,7 +6835,7 @@ test "successful fork switch (switch_proof)" {
             .executable = false,
             .rent_epoch = 0,
         };
-        const account_store = stubs.accountsdb.accountStore();
+        const account_store = stubs.accountStore();
         try account_store.put(0, SlotHistory.ID, account);
     }
 
@@ -7017,7 +7017,7 @@ test "successful fork switch (switch_proof)" {
             .node = null,
             .authorized_voters = &.{},
         },
-        .account_reader = stubs.accountsdb.accountReader(),
+        .account_reader = stubs.accountReader(),
         .ledger = &stubs.ledger,
         .slot_tracker = &slot_tracker,
         .now = .EPOCH_ZERO,
@@ -7109,7 +7109,7 @@ test "successful fork switch (switch_proof)" {
             .{ .slot = 2, .output = .{ .last_entry_hash = slot2_hash } },
         };
         try consensus.process(allocator, .{
-            .account_store = .{ .thread_safe_map = &stubs.accountsdb },
+            .account_store = stubs.accountStore(),
             .ledger = &stubs.ledger,
             .gossip_votes = null,
             .slot_tracker = &slot_tracker,
@@ -7150,7 +7150,7 @@ test "successful fork switch (switch_proof)" {
             .{ .slot = 4, .output = .{ .last_entry_hash = slot4_hash } },
         };
         try consensus.process(allocator, .{
-            .account_store = .{ .thread_safe_map = &stubs.accountsdb },
+            .account_store = stubs.accountStore(),
             .ledger = &stubs.ledger,
             .gossip_votes = null,
             .slot_tracker = &slot_tracker,
@@ -7211,7 +7211,7 @@ test "successful fork switch (switch_proof)" {
     {
         const empty_results: []const ReplayResult = &.{};
         try consensus.process(allocator, .{
-            .account_store = .{ .thread_safe_map = &stubs.accountsdb },
+            .account_store = stubs.accountStore(),
             .ledger = &stubs.ledger,
             .gossip_votes = null,
             .slot_tracker = &slot_tracker,
@@ -7284,7 +7284,7 @@ test "successful fork switch (switch_proof)" {
             },
         };
         try consensus.process(allocator, .{
-            .account_store = .{ .thread_safe_map = &stubs.accountsdb },
+            .account_store = stubs.accountStore(),
             .ledger = &stubs.ledger,
             .gossip_votes = null,
             .slot_tracker = &slot_tracker,
