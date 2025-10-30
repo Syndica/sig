@@ -214,6 +214,7 @@ pub const ReplayState = struct {
     status_cache: sig.core.StatusCache,
     execution_log_helper: replay.execution.LogHelper,
     replay_votes_channel: *Channel(ParsedVote),
+    num_threads: u32,
 
     fn deinit(self: *ReplayState) void {
         self.thread_pool.shutdown();
@@ -298,6 +299,7 @@ pub const ReplayState = struct {
             .status_cache = .DEFAULT,
             .execution_log_helper = .init(.from(deps.logger)),
             .replay_votes_channel = replay_votes_channel,
+            .num_threads = num_threads,
         };
     }
 };
@@ -1024,7 +1026,9 @@ fn testExecuteBlock(allocator: Allocator, config: struct {
     }
 
     // replay the block
+    var x = sig.time.Timer.start() catch unreachable;
     try service.advance();
+    std.debug.print("time: {}\n", .{x.read().asMillis()});
 
     // get slot hash
     const actual_slot_hash = tracker_lock: {

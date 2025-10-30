@@ -32,7 +32,6 @@ const ResolvedTransaction = replay.resolve_lookup.ResolvedTransaction;
 const SvmGateway = replay.svm_gateway.SvmGateway;
 
 const verifyPoh = core.entry.verifyPoh;
-const resolveBatch = replay.resolve_lookup.resolveBatch;
 
 const assert = std.debug.assert;
 
@@ -95,6 +94,9 @@ pub const ReplaySlotFuture = struct {
     /// Temporarily stores errors that occur before completion that need to be
     /// returned when all tasks are complete.
     status_when_done: ?ReplaySlotError = null,
+
+    // TODO delete
+    start: ?i64 = null,
 
     pub fn create(
         allocator: Allocator,
@@ -168,6 +170,9 @@ pub const ReplaySlotFuture = struct {
     }
 
     pub fn poll(self: *ReplaySlotFuture) !ReplaySlotStatus {
+        if (self.start == null) {
+            self.start = std.time.milliTimestamp();
+        }
         switch (self.status) {
             .pending => {
                 var pending = false;
@@ -181,6 +186,8 @@ pub const ReplaySlotFuture = struct {
                     },
                 };
                 if (!pending) {
+                    const time = std.time.milliTimestamp();
+                    std.debug.print("execution took: {}\n", .{time - self.start.?});
                     // commit accounts to accountsdb -- TODO is this the best place for this?
                     if (self.status_when_done == null) {
                         const gw = self.scheduler.svm_gateway;
@@ -190,6 +197,7 @@ pub const ReplaySlotFuture = struct {
                             try self.account_store.put(gw.params.slot, address, account);
                         }
                     }
+                    std.debug.print("commitment took: {}\n", .{std.time.milliTimestamp() - time});
                     self.status = .{ .done = self.status_when_done };
                 }
             },
@@ -923,7 +931,7 @@ fn resolveForTest(
         };
     }
 
-    return try replay.resolve_lookup.resolveBlock(allocator, entries, .{
+    return try replay.resolve_lookup.resolveBlock(allocator, entries, 100100100, .{
         .slot = 0,
         .account_reader = account_reader,
         .reserved_accounts = &.empty,

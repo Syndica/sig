@@ -83,41 +83,70 @@ pub const SlotResolver = struct {
     slot_hashes: SlotHashes,
 };
 
+const MAX_BATCH_COMBINATION_TARGET: usize = 128;
+
 pub fn resolveBlock(
     allocator: Allocator,
     entries: []const sig.core.Entry,
-    resolver: SlotResolver,
+    num_threads: usize,
+    params: SlotResolver,
 ) ![]const replay.resolve_lookup.ResolvedBatch {
-    var batch_count: usize = 0;
+    var txn_count: usize = 0;
+    var input_batch_count: usize = 0;
     for (entries) |entry| {
-        if (!entry.isTick()) batch_count += 1;
+        txn_count += entry.transactions.len;
+        if (!entry.isTick()) input_batch_count += 1;
     }
+
+    const target_batch_size = if (entries.len < num_threads * 2)
+        0
+    else
+        @min(MAX_BATCH_COMBINATION_TARGET, txn_count / num_threads);
+
     const resolved_batches =
-        try allocator.alloc(replay.resolve_lookup.ResolvedBatch, batch_count);
+        try allocator.alloc(replay.resolve_lookup.ResolvedBatch, input_batch_count);
     errdefer allocator.free(resolved_batches);
-    var i: usize = 0;
-    for (entries) |*entry| {
-        if (!entry.isTick()) {
-            resolved_batches[i] = try resolveBatch(allocator, entry.transactions, resolver);
-            i += 1;
+
+    var start: usize = 0;
+    var batch_index: usize = 0;
+    while (start < entries.len) {
+        var end: usize = start;
+        var transaction_so_far: usize = 0;
+        for (entries[start..]) |entry| {
+            transaction_so_far += entry.transactions.len;
+            if (transaction_so_far >= target_batch_size) break;
+            end += 1;
         }
+        end = @max(start + 1, end); // always include at least one entry
+        resolved_batches[batch_index] = try resolveBatch(allocator, entries[start..end], params);
+        batch_index += 1;
+        start = end;
     }
+
     return resolved_batches;
 }
 
 pub fn resolveBatch(
     allocator: Allocator,
-    batch: []const Transaction,
+    batch: []const sig.core.Entry,
     params: SlotResolver,
 ) !ResolvedBatch {
+    var num_accounts: usize = 0;
+    var num_transactions: usize = 0;
+    for (batch) |entry| {
+        num_accounts += Transaction.numAccounts(entry.transactions);
+        num_transactions += entry.transactions.len;
+    }
     var accounts = try std.ArrayListUnmanaged(LockableAccount)
-        .initCapacity(allocator, Transaction.numAccounts(batch));
+        .initCapacity(allocator, num_accounts);
     errdefer accounts.deinit(allocator);
 
-    const resolved_txns = try allocator.alloc(ResolvedTransaction, batch.len);
+    const resolved_txns = try allocator.alloc(ResolvedTransaction, num_transactions);
     errdefer allocator.free(resolved_txns);
 
-    for (batch, resolved_txns) |transaction, *resolved| {
+    var i: usize = 0;
+    for (batch) |entry| for (entry.transactions) |transaction| {
+        const resolved = &resolved_txns[i];
         resolved.* = try resolveTransaction(allocator, transaction, params);
         for (
             resolved.accounts.items(.pubkey),
@@ -125,7 +154,8 @@ pub fn resolveBatch(
         ) |pubkey, is_writable| {
             accounts.appendAssumeCapacity(.{ .address = pubkey, .writable = is_writable });
         }
-    }
+        i += 1;
+    };
 
     return .{
         .transactions = resolved_txns,
@@ -460,7 +490,11 @@ test resolveBatch {
 
     const resolved = try resolveBatch(
         std.testing.allocator,
-        &.{tx},
+        &.{.{
+            .transactions = &.{tx},
+            .hash = .ZEROES,
+            .num_hashes = 0,
+        }},
         .{
             .slot = 1, // Greater than lookup tables' last_extended_slot
             .slot_hashes = slot_hashes,

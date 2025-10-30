@@ -527,7 +527,7 @@ fn prepareSlot(
     ) orelse return error.MissingSlotHashesSysvar;
     defer slot_hashes.deinit(state.allocator);
 
-    const resolved_batches = try replay.resolve_lookup.resolveBlock(state.allocator, entries, .{
+    const resolved_batches = try replay.resolve_lookup.resolveBlock(state.allocator, entries, state.num_threads, .{
         .slot = slot,
         .account_reader = slot_account_reader,
         .reserved_accounts = &slot_info.constants.reserved_accounts,
@@ -926,7 +926,7 @@ fn testReplaySlot(
         for (entries_copy) |e| try state.makeTransactionsPassable(allocator, e.transactions);
 
         const batches = try replay.resolve_lookup
-            .resolveBlock(allocator, entries_copy, state.resolver());
+            .resolveBlock(allocator, entries_copy, 100100100, state.resolver());
         const svm_gateway = try SvmGateway.init(allocator, batches, state.svmParams());
         const params = ReplaySlotParams{
             .entries = entries_copy,
