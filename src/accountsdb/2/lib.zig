@@ -4,7 +4,7 @@
 const std = @import("std");
 const sig = @import("../../sig.zig");
 pub const Rooted = @import("Rooted.zig");
-const Unrooted = @import("Unrooted.zig");
+pub const Unrooted = @import("Unrooted.zig");
 
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;

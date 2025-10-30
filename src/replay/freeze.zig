@@ -34,6 +34,8 @@ const updateRecentBlockhashes = replay.update_sysvar.updateRecentBlockhashes;
 pub const FreezeParams = struct {
     logger: Logger,
 
+    thread_pool: *sig.sync.ThreadPool,
+
     slot_hash: *sig.sync.RwMux(?Hash),
     accounts_lt_hash: *sig.sync.Mux(?LtHash),
 
@@ -43,6 +45,7 @@ pub const FreezeParams = struct {
     pub fn init(
         logger: Logger,
         account_store: AccountStore,
+        thread_pool: *sig.sync.ThreadPool,
         epoch: *const EpochConstants,
         state: *SlotState,
         constants: *const SlotConstants,
@@ -52,6 +55,7 @@ pub const FreezeParams = struct {
         return .{
             .logger = logger,
             .slot_hash = &state.hash,
+            .thread_pool = thread_pool,
             .accounts_lt_hash = &state.accounts_lt_hash,
             .hash_slot = .{
                 .account_reader = account_store.reader(),
@@ -105,7 +109,11 @@ pub fn freezeSlot(allocator: Allocator, params: FreezeParams) !void {
 
     try finalizeState(allocator, params.finalize_state);
 
-    const maybe_lt_hash, slot_hash.mut().* = try hashSlot(allocator, params.hash_slot);
+    const maybe_lt_hash, slot_hash.mut().* = try hashSlot(
+        allocator,
+        params.hash_slot,
+        params.thread_pool,
+    );
     if (maybe_lt_hash) |lt_hash| params.accounts_lt_hash.set(lt_hash);
 
     params.logger.info().logf(
@@ -275,7 +283,11 @@ pub const HashSlotParams = struct {
 };
 
 /// Calculates the slot hash (known as the "bank hash" in agave)
-pub fn hashSlot(allocator: Allocator, params: HashSlotParams) !struct { ?LtHash, Hash } {
+pub fn hashSlot(
+    allocator: Allocator,
+    params: HashSlotParams,
+    thread_pool: *sig.sync.ThreadPool,
+) !struct { ?LtHash, Hash } {
     var signature_count_bytes: [8]u8 = undefined;
     std.mem.writeInt(u64, &signature_count_bytes, params.signature_count, .little);
 
@@ -299,6 +311,7 @@ pub fn hashSlot(allocator: Allocator, params: HashSlotParams) !struct { ?LtHash,
         var lt_hash = params.parent_lt_hash.* orelse return error.UnknownParentLtHash;
         lt_hash.mixIn(try deltaLtHash(
             allocator,
+            thread_pool,
             params.account_reader,
             params.slot,
             &parent_ancestors,
@@ -360,6 +373,7 @@ pub fn deltaMerkleHash(account_reader: AccountReader, allocator: Allocator, slot
 /// Returns the lattice hash of every account that was modified in the slot.
 pub fn deltaLtHash(
     tmp_alloc: std.mem.Allocator,
+    thread_pool: *sig.sync.ThreadPool,
     account_reader: AccountReader,
     slot: Slot,
     parent_ancestors: *const Ancestors,
@@ -376,24 +390,83 @@ pub fn deltaLtHash(
     var iterator = account_reader.slotModifiedIterator(slot) orelse return .IDENTITY;
     defer iterator.unlock();
 
-    var hash = LtHash.IDENTITY;
-    var i: usize = 0;
-    while (try iterator.next(allocator)) |pubkey_account| : (i += 1) {
-        const pubkey, const account = pubkey_account;
-        defer account.deinit(allocator);
+    const Task = struct {
+        const Result = union(enum) {
+            new: LtHash,
+            existed: struct { LtHash, LtHash }, // old, new
+        };
 
-        if (try account_reader.forSlot(parent_ancestors).get(allocator, pubkey)) |old_acct| {
-            defer old_acct.deinit(allocator);
+        fn hashAccounts(
+            gpa: std.mem.Allocator,
+            slot_index: *sig.accounts_db.Two.Unrooted.SlotIndex,
+            db: *sig.accounts_db.Two,
+            ancestors: *const Ancestors,
+            hashes: []std.ArrayListUnmanaged(Result),
+            task: sig.utils.thread.TaskParams,
+        ) !void {
+            const hash = &hashes[task.thread_id];
 
-            if (!old_acct.equals(&account)) {
-                hash.mixOut(old_acct.ltHash(pubkey));
-                hash.mixIn(account.ltHash(pubkey));
+            const entries = slot_index.entries;
+            const accounts = entries.values()[task.start_index..task.end_index];
+            const keys = entries.keys()[task.start_index..task.end_index];
+
+            for (accounts, keys) |data, key| {
+                const account = data.asAccount();
+                if (try db.get(key, ancestors)) |old_account| {
+                    defer old_account.deinit(db.allocator);
+
+                    if (!old_account.equals(&account)) {
+                        try hash.append(gpa, .{ .existed = .{
+                            old_account.ltHash(key),
+                            account.ltHash(key),
+                        } });
+                    }
+                } else {
+                    try hash.append(
+                        gpa,
+                        .{ .new = account.ltHash(key) },
+                    );
+                }
             }
-        } else {
-            hash.mixIn(account.ltHash(pubkey));
+        }
+    };
+
+    const NUM_THREADS = 8;
+
+    var hashes: [NUM_THREADS]std.ArrayListUnmanaged(Task.Result) = @splat(.empty);
+    defer for (&hashes) |*hash| hash.deinit(allocator);
+
+    const slot_index = iterator.accounts_db_two.slot;
+
+    try sig.utils.thread.spawnThreadTasks(
+        allocator,
+        Task.hashAccounts,
+        .{
+            .data_len = iterator.len(),
+            .max_threads = NUM_THREADS,
+            .params = .{
+                allocator,
+                slot_index,
+                account_reader.accounts_db_two,
+                parent_ancestors,
+                &hashes,
+            },
+            .pool = thread_pool,
+        },
+    );
+
+    var hash = LtHash.IDENTITY;
+    for (hashes) |results| {
+        for (results.items) |result| {
+            switch (result) {
+                .new => |h| hash.mixIn(h),
+                .existed => |pair| {
+                    hash.mixOut(pair[0]);
+                    hash.mixIn(pair[1]);
+                },
+            }
         }
     }
-
     return hash;
 }
 
