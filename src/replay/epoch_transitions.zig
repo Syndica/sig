@@ -46,16 +46,15 @@ pub fn processNewEpoch(
     );
 
     // [agave] https://github.com/anza-xyz/agave/blob/b6c96e84b10396b92912d4574dae7d03f606da26/runtime/src/bank.rs#L1623-L1631
-    const current_epoch = epoch_tracker.schedule.getEpoch(slot);
+    const parent_epoch = epoch_tracker.schedule.getEpoch(slot_constants.parent_slot);
     try activateEpoch(
         allocator,
-        current_epoch,
+        parent_epoch,
         &slot_state.stakes_cache,
-        null, // TODO: pass in new_rate_activation_epoch
+        slot_constants.feature_set.newWarmupCooldownRateEpoch(&epoch_tracker.schedule),
     );
 
     // [agave] https://github.com/anza-xyz/agave/blob/b6c96e84b10396b92912d4574dae7d03f606da26/runtime/src/bank.rs#L1632-L1636
-    const parent_epoch = epoch_tracker.schedule.getEpoch(slot_constants.parent_slot);
     try updateEpochStakes(
         allocator,
         slot,

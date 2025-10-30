@@ -233,7 +233,7 @@ pub const Inflation = struct {
         std.debug.assert(slot_in_years >= 0.0);
         return @max(
             self.terminal,
-            self.initial * std.math.pow(f64, 1.0 - self.taper, slot_in_years),
+            self.initial * pow(1.0 - self.taper, slot_in_years),
         );
     }
 
@@ -338,6 +338,11 @@ fn yearsAsSlots(years: f64, tick_duration: RustDuration, ticks_per_slot: u64) f6
     return years * SLOTS_PER_YEAR;
 }
 
+/// Zig pow implemetation is incorrect
+/// Failure (zig):  0.85, 4.019250798563942 -> 7.805634650110366e-2
+/// Expected:       0.85, 4.019250798563942 -> 7.805634650110367e-2
+extern fn pow(f64, f64) f64;
+
 test "genesis_config deserialize development config" {
     const allocator = std.testing.allocator;
 
@@ -376,6 +381,20 @@ test "genesis_config deserialize mainnet config" {
     defer config.deinit(allocator);
 
     try std.testing.expectEqual(ClusterType.MainnetBeta, config.cluster_type);
+}
+
+test "inflation" {
+    const inflation = Inflation{
+        .initial = 0.15,
+        .terminal = 0.015,
+        .taper = 0.15,
+        .foundation = 0.0,
+        .foundation_term = 0.0,
+        .__unused = 0.0,
+    };
+
+    try std.testing.expectEqual(7.805634650110367e-2, inflation.total(4.019250798563942));
+    std.debug.assert(4602862346652160054 == @as(u64, @bitCast(pow(0.85, 4.019250798563942))));
 }
 
 // cases generated randomly with this code:

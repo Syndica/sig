@@ -101,8 +101,13 @@ pub fn beginPartitionedRewards(
         epoch_schedule,
     );
 
-    // TODO: Set epoch reward status calculation
-    // Implement as part of next phase, distributing rewards
+    slot_state.reward_status = .{ .active = .{ .calculating = .{
+        .distribution_start_block_height = distribution_starting_blockheight,
+        .all_stake_rewards = stake_rewards,
+    } } };
+
+    const blockhash_queue, var blockhash_queue_lg = slot_state.blockhash_queue.readWithLock();
+    defer blockhash_queue_lg.unlock();
 
     try createEpochRewardsSysvar(
         allocator,
@@ -110,7 +115,7 @@ pub fn beginPartitionedRewards(
         distributed_rewards,
         distribution_starting_blockheight,
         num_partitions,
-        slot_constants.parent_hash,
+        blockhash_queue.last_hash orelse return error.NoLastBlockhashInBlockhashQueue,
         .{
             .account_store = slot_store.writer,
             .capitalization = &slot_state.capitalization,
@@ -428,18 +433,16 @@ fn calculateStakeVoteRewards(
     const stakes = stake_delegations.items(.stake);
     for (pubkeys, stakes) |stake_pubkey, *stake| {
         const vote_pubkey = stake.delegation.voter_pubkey;
-        const vote_account = cached_vote_accounts.getAccount(vote_pubkey) orelse {
-            return error.MissingVoteAccount;
-        };
+        const vote_account = cached_vote_accounts.getAccount(vote_pubkey) orelse continue;
 
-        const redeemed = try redeemRewards(
+        const redeemed = redeemRewards(
             rewarded_epoch,
             stake,
             &vote_account.state,
             &point_value,
             stake_history,
             new_warmup_and_cooldown_rate_epoch,
-        );
+        ) catch continue;
 
         const commission = vote_account.state.commission;
 
@@ -450,10 +453,9 @@ fn calculateStakeVoteRewards(
                 .rewards = 0,
                 .account = vote_account.account,
             };
-        } else {
-            voters_reward_entry.value_ptr.rewards +|= redeemed.voters_reward;
         }
 
+        voters_reward_entry.value_ptr.rewards +|= redeemed.voters_reward;
         total_stake_rewards += redeemed.stakers_reward;
 
         try partitioned_stake_rewards.append(allocator, .{

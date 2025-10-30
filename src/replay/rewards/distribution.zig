@@ -82,9 +82,12 @@ pub fn distributePartitionedEpochRewards(
         .distributing => {},
     }
 
-    const partition_rewards: StartBlockHeightAndPartitionedRewards = switch (reward_phase) {
-        .calculating => unreachable,
-        .distributing => |dist| dist,
+    const partition_rewards: StartBlockHeightAndPartitionedRewards = switch (epoch_reward_status.*) {
+        .active => |dist| switch (dist) {
+            .distributing => |d| d,
+            .calculating => unreachable,
+        },
+        .inactive => unreachable,
     };
 
     const end_block_height = start_block_height + partition_rewards.partitioned_indices.entries.len;

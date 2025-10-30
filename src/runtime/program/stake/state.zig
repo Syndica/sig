@@ -266,58 +266,61 @@ pub const StakeStateV2 = union(enum) {
                 return .{
                     .effective = effective_stake,
                     .activating = activating_stake,
-                    .deactivating = 0,
-                };
-            } else if (epoch == self.deactivation_epoch) {
-                return .{
-                    .effective = effective_stake,
-                    .activating = 0,
-                    .deactivating = effective_stake,
-                };
-            } else if (history.getEntry(self.deactivation_epoch)) |entry| {
-                var prev_epoch = entry.epoch;
-                var prev_cluster_stake = entry.stake;
-                var current_epoch: Epoch = undefined;
-                var current_effective_stake = effective_stake;
-
-                while (true) {
-                    current_epoch = prev_epoch + 1;
-
-                    if (prev_cluster_stake.deactivating == 0) break;
-
-                    const weight = @as(f64, @floatFromInt(current_effective_stake)) /
-                        @as(f64, @floatFromInt(prev_cluster_stake.deactivating));
-                    const warmup_cooldown_rate =
-                        warmupCooldownRate(current_epoch, new_rate_activation_epoch);
-
-                    const newly_not_effective_cluster_stake =
-                        @as(f64, @floatFromInt(prev_cluster_stake.effective)) * warmup_cooldown_rate;
-                    const wieghted_not_effective_state: u64 =
-                        @intFromFloat(weight * newly_not_effective_cluster_stake);
-                    const newly_not_effective_stake = @max(wieghted_not_effective_state, 1);
-
-                    current_effective_stake = current_effective_stake -| newly_not_effective_stake;
-                    if (current_effective_stake == 0) break;
-                    if (current_epoch >= epoch) break;
-
-                    if (history.getEntry(current_epoch)) |next_entry| {
-                        prev_epoch = next_entry.epoch;
-                        prev_cluster_stake = next_entry.stake;
-                    } else break;
-                }
-
-                return .{
-                    .effective = current_effective_stake,
-                    .activating = 0,
-                    .deactivating = current_effective_stake,
-                };
-            } else {
-                return .{
-                    .effective = 0,
-                    .activating = 0,
-                    .deactivating = 0,
                 };
             }
+
+            if (epoch == self.deactivation_epoch) {
+                return .{
+                    .effective = effective_stake,
+                    .deactivating = effective_stake,
+                };
+            }
+
+            const entry = history.getEntry(self.deactivation_epoch) orelse return .{};
+
+            var prev_epoch = self.deactivation_epoch;
+            var prev_cluster_stake = entry.stake;
+
+            var current_epoch: Epoch = undefined;
+            var current_effective_stake = effective_stake;
+
+            while (true) {
+                current_epoch = prev_epoch + 1;
+
+                if (prev_cluster_stake.deactivating == 0) break;
+
+                const weight = @as(f64, @floatFromInt(current_effective_stake)) /
+                    @as(f64, @floatFromInt(prev_cluster_stake.deactivating));
+
+                const warmup_cooldown_rate = warmupCooldownRate(
+                    current_epoch,
+                    new_rate_activation_epoch,
+                );
+
+                const newly_not_effective_cluster_stake = @as(
+                    f64,
+                    @floatFromInt(prev_cluster_stake.effective),
+                ) * warmup_cooldown_rate;
+
+                const newly_not_effective_stake: u64 = @max(1, std.math.lossyCast(
+                    u64,
+                    weight * newly_not_effective_cluster_stake,
+                ));
+
+                current_effective_stake = current_effective_stake -| newly_not_effective_stake;
+                if (current_effective_stake == 0) break;
+                if (current_epoch >= epoch) break;
+
+                if (history.getEntry(current_epoch)) |current_entry| {
+                    prev_epoch = current_entry.epoch;
+                    prev_cluster_stake = current_entry.stake;
+                } else break;
+            }
+
+            return .{
+                .effective = current_effective_stake,
+                .deactivating = current_effective_stake,
+            };
         }
 
         pub fn getEffectiveAndActivatingStake(
@@ -326,58 +329,54 @@ pub const StakeStateV2 = union(enum) {
             history: *const sysvar.StakeHistory,
             new_rate_activation_epoch: ?Epoch,
         ) struct { u64, u64 } {
-            if (self.activation_epoch == std.math.maxInt(u64)) {
-                return .{ self.stake, 0 };
-            } else if (self.activation_epoch == self.deactivation_epoch) {
-                return .{ 0, 0 };
-            } else if (epoch == self.activation_epoch) {
-                return .{ 0, self.stake };
-            } else if (epoch < self.activation_epoch) {
-                return .{ 0, 0 };
-            } else if (history.getEntry(self.activation_epoch)) |entry| {
-                var prev_epoch = entry.epoch;
-                var prev_cluster_stake = entry.stake;
-                var current_epoch: Epoch = undefined;
-                var current_effective_stake: u64 = 0;
+            if (self.isBootstrap()) return .{ self.stake, 0 };
+            if (self.activation_epoch == self.deactivation_epoch) return .{ 0, 0 };
+            if (epoch == self.activation_epoch) return .{ 0, self.stake };
+            if (epoch < self.activation_epoch) return .{ 0, 0 };
 
-                while (true) {
-                    current_epoch = prev_epoch + 1;
+            const entry = history.getEntry(self.activation_epoch) orelse return .{ self.stake, 0 };
 
-                    if (prev_cluster_stake.deactivating == 0) break;
+            var prev_epoch = self.activation_epoch;
+            var prev_cluster_stake = entry.stake;
 
-                    const remaining_activated_stake = self.stake - current_effective_stake;
-                    const weight = @as(f64, @floatFromInt(remaining_activated_stake)) /
-                        @as(f64, @floatFromInt(prev_cluster_stake.activating));
-                    const warmup_cooldown_rate =
-                        warmupCooldownRate(current_epoch, new_rate_activation_epoch);
+            var current_epoch: Epoch = undefined;
+            var current_effective_stake: u64 = 0;
 
-                    const newly_effective_cluster_stake =
-                        @as(f64, @floatFromInt(prev_cluster_stake.effective)) * warmup_cooldown_rate;
-                    const weighted_effective_state: u64 =
-                        @intFromFloat(weight * newly_effective_cluster_stake);
-                    const newly_effective_stake = @max(weighted_effective_state, 1);
+            while (true) {
+                current_epoch = prev_epoch + 1;
 
-                    current_effective_stake += newly_effective_stake;
-                    if (current_effective_stake >= self.stake) {
-                        current_effective_stake = self.stake;
-                        break;
-                    }
+                if (prev_cluster_stake.activating == 0) break;
 
-                    if (current_epoch >= epoch or current_epoch >= self.deactivation_epoch) break;
+                const remaining_activated_stake = self.stake - current_effective_stake;
+                const weight = @as(f64, @floatFromInt(remaining_activated_stake)) /
+                    @as(f64, @floatFromInt(prev_cluster_stake.activating));
+                const warmup_cooldown_rate =
+                    warmupCooldownRate(current_epoch, new_rate_activation_epoch);
 
-                    if (history.getEntry(current_epoch)) |next_entry| {
-                        prev_epoch = next_entry.epoch;
-                        prev_cluster_stake = next_entry.stake;
-                    } else break;
+                const newly_effective_cluster_stake =
+                    @as(f64, @floatFromInt(prev_cluster_stake.effective)) * warmup_cooldown_rate;
+                const weighted_effective_state: u64 =
+                    @intFromFloat(weight * newly_effective_cluster_stake);
+                const newly_effective_stake = @max(weighted_effective_state, 1);
+
+                current_effective_stake += newly_effective_stake;
+                if (current_effective_stake >= self.stake) {
+                    current_effective_stake = self.stake;
+                    break;
                 }
 
-                return .{
-                    current_effective_stake,
-                    self.stake - current_effective_stake,
-                };
-            } else {
-                return .{ self.stake, 0 };
+                if (current_epoch >= epoch or current_epoch >= self.deactivation_epoch) break;
+
+                if (history.getEntry(current_epoch)) |next_entry| {
+                    prev_epoch = next_entry.epoch;
+                    prev_cluster_stake = next_entry.stake;
+                } else break;
             }
+
+            return .{
+                current_effective_stake,
+                self.stake - current_effective_stake,
+            };
         }
 
         pub fn initRandom(random: std.Random) Delegation {
