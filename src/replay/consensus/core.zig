@@ -890,45 +890,11 @@ fn handleVotableBank(
 
     // TODO update_commitment_cache
 
-    try pushVote(
-        logger,
-        allocator,
-        vote_slot,
-        replay_tower,
-        slot_tracker,
-        epoch_tracker,
-        account_reader,
-        node_keypair,
-        authorized_voter_keypairs,
-        vote_account_pubkey,
-        switch_fork_decision,
-        gossip_table_rw,
-        slot_leaders,
-    );
-}
-
-/// Pushes a new vote transaction to the network and updates tower state.
-///
-/// - Generates a new vote transaction.
-/// - Updates the tower's last vote blockhash.
-/// - Sends the vote operation to the voting sender.
-///
-/// Analogous to [push_vote](https://github.com/anza-xyz/agave/blob/ccdcdbe9b6ff7dbd583d2101fe57b7cc41a6f863/core/src/replay_stage.rs#L2775)
-fn pushVote(
-    logger: Logger,
-    allocator: std.mem.Allocator,
-    vote_slot: Slot,
-    replay_tower: *ReplayTower,
-    slot_tracker: *SlotTracker,
-    epoch_tracker: *const EpochTracker,
-    account_reader: AccountReader,
-    node_keypair: ?sig.identity.KeyPair,
-    authorized_voter_keypairs: []const sig.identity.KeyPair,
-    vote_account_pubkey: Pubkey,
-    switch_fork_decision: SwitchForkDecision,
-    gossip_table_rw: ?*sig.sync.RwMux(sig.gossip.GossipTable),
-    slot_leaders: ?sig.core.leader_schedule.SlotLeaders,
-) !void {
+    // - Generates a new vote transaction.
+    // - Updates the tower's last vote blockhash.
+    // - Sends the vote operation to the voting sender.
+    //
+    // Analogous to [push_vote](https://github.com/anza-xyz/agave/blob/ccdcdbe9b6ff7dbd583d2101fe57b7cc41a6f863/core/src/replay_stage.rs#L2775)
     const vote_tx_result = try generateVoteTx(
         allocator,
         vote_account_pubkey,
