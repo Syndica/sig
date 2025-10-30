@@ -105,7 +105,7 @@ pub const TowerConsensus = struct {
 
     // Sending votes
     gossip_table: ?*sig.sync.RwMux(sig.gossip.GossipTable),
-    leader_schedule: ?*sig.core.leader_schedule.LeaderScheduleCache,
+    slot_leaders: ?sig.core.leader_schedule.SlotLeaders,
 
     // Supporting services
     vote_listener: ?VoteListener,
@@ -145,7 +145,7 @@ pub const TowerConsensus = struct {
             senders: Senders,
             receivers: Receivers,
             gossip_table: ?*RwMux(sig.gossip.GossipTable),
-            leader_schedule: ?*sig.core.leader_schedule.LeaderScheduleCache,
+            slot_leaders: ?sig.core.leader_schedule.SlotLeaders,
             run_vote_listener: bool = true,
 
             pub fn deinit(self: External) void {
@@ -292,7 +292,7 @@ pub const TowerConsensus = struct {
             .senders = deps.external.senders,
             .receivers = deps.external.receivers,
             .gossip_table = deps.external.gossip_table,
-            .leader_schedule = deps.external.leader_schedule,
+            .slot_leaders = deps.external.slot_leaders,
             .vote_listener = vote_listener,
             .verified_vote_channel = verified_vote_channel,
         };
@@ -635,7 +635,7 @@ pub const TowerConsensus = struct {
                 self.identity.vote_account,
                 voted.decision,
                 self.gossip_table,
-                self.leader_schedule,
+                self.slot_leaders,
             );
         }
 
@@ -867,7 +867,7 @@ fn handleVotableBank(
     vote_account_pubkey: Pubkey,
     switch_fork_decision: SwitchForkDecision,
     gossip_table_rw: ?*sig.sync.RwMux(sig.gossip.GossipTable),
-    leader_schedule: ?*sig.core.leader_schedule.LeaderScheduleCache,
+    slot_leaders: ?sig.core.leader_schedule.SlotLeaders,
 ) !void {
     const maybe_new_root = try replay_tower.recordBankVote(
         allocator,
@@ -903,7 +903,7 @@ fn handleVotableBank(
         vote_account_pubkey,
         switch_fork_decision,
         gossip_table_rw,
-        leader_schedule,
+        slot_leaders,
     );
 }
 
@@ -927,7 +927,7 @@ fn pushVote(
     vote_account_pubkey: Pubkey,
     switch_fork_decision: SwitchForkDecision,
     gossip_table_rw: ?*sig.sync.RwMux(sig.gossip.GossipTable),
-    leader_schedule: ?*sig.core.leader_schedule.LeaderScheduleCache,
+    slot_leaders: ?sig.core.leader_schedule.SlotLeaders,
 ) !void {
     const vote_tx_result = try generateVoteTx(
         allocator,
@@ -961,7 +961,7 @@ fn pushVote(
                     },
                 },
                 gossip_table_rw,
-                leader_schedule,
+                slot_leaders,
                 node_keypair,
                 sig.time.getWallclockMs(),
             );
@@ -980,7 +980,7 @@ fn pushVote(
 fn upcomingLeaderTpuVoteSockets(
     allocator: Allocator,
     current_slot: Slot,
-    leader_schedule: *sig.core.leader_schedule.LeaderScheduleCache,
+    slot_leaders: sig.core.leader_schedule.SlotLeaders,
     gossip_table_rw: *sig.sync.RwMux(sig.gossip.GossipTable),
     fanout_slots: u64,
 ) ![]SocketAddr {
@@ -989,7 +989,7 @@ fn upcomingLeaderTpuVoteSockets(
 
     for (0..fanout_slots) |n_slots| {
         const target_slot = current_slot + n_slots;
-        if (leader_schedule.slotLeader(target_slot)) |leader| {
+        if (slot_leaders.get(target_slot)) |leader| {
             try seen_leaders.put(allocator, leader, {});
         }
     }
@@ -1042,7 +1042,7 @@ fn sendVoteToLeaders(
     allocator: Allocator,
     vote_slot: Slot,
     vote_tx: Transaction,
-    leader_schedule: *sig.core.leader_schedule.LeaderScheduleCache,
+    slot_leaders: sig.core.leader_schedule.SlotLeaders,
     gossip_table_rw: *sig.sync.RwMux(sig.gossip.GossipTable),
 ) !void {
     const UPCOMING_LEADER_FANOUT_SLOTS: u64 =
@@ -1051,7 +1051,7 @@ fn sendVoteToLeaders(
     const upcoming_leader_sockets = try upcomingLeaderTpuVoteSockets(
         allocator,
         vote_slot,
-        leader_schedule,
+        slot_leaders,
         gossip_table_rw,
         UPCOMING_LEADER_FANOUT_SLOTS,
     );
@@ -1143,7 +1143,7 @@ fn sendVote(
     vote_slot: Slot,
     vote_op: VoteOp,
     maybe_gossip_table_rw: ?*sig.sync.RwMux(sig.gossip.GossipTable),
-    maybe_leader_schedule: ?*sig.core.leader_schedule.LeaderScheduleCache,
+    maybe_slot_leaders: ?sig.core.leader_schedule.SlotLeaders,
     maybe_my_keypair: ?sig.identity.KeyPair,
     now: u64,
 ) !void {
@@ -1158,13 +1158,13 @@ fn sendVote(
     };
 
     // Send to upcoming leaders
-    if (maybe_leader_schedule) |leader_schedule| {
+    if (maybe_slot_leaders) |slot_leaders| {
         try sendVoteToLeaders(
             logger,
             allocator,
             vote_slot,
             vote_tx,
-            leader_schedule,
+            slot_leaders,
             gossip_table_rw,
         );
     }
@@ -3484,7 +3484,7 @@ test "sendVote - without gossip table does not send and does not throw" {
         0,
         vote_op,
         null,
-        &leader_schedule_cache,
+        leader_schedule_cache.slotLeaders(),
         sig.identity.KeyPair.generate(),
         100,
     ) catch unreachable; // sendVote does not throw
@@ -3526,7 +3526,7 @@ test "sendVote - without keypair does not send and does not throw" {
         0,
         vote_op,
         &gossip_table_rw,
-        &leader_schedule_cache,
+        leader_schedule_cache.slotLeaders(),
         null,
         200,
     ) catch unreachable; // sendVote does not throw
@@ -3644,7 +3644,7 @@ test "sendVote - sends to both gossip and upcoming leaders" {
         vote_slot,
         vote_op,
         &gossip_table_rw,
-        &leader_schedule_cache,
+        leader_schedule_cache.slotLeaders(),
         my_keypair,
         400,
     );
@@ -3748,7 +3748,7 @@ test "sendVote - refresh_vote sends to both gossip and upcoming leaders" {
         vote_slot,
         vote_op,
         &gossip_table_rw,
-        &leader_schedule_cache,
+        leader_schedule_cache.slotLeaders(),
         my_keypair,
         500,
     );
