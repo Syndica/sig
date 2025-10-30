@@ -2,6 +2,11 @@ Install sig as a long running service on a linux system, and periodically have i
 
 ## Install
 
+Dependencies:
+- docker
+- docker-compose
+- zig 0.14.1
+
 ```bash
 git clone https://github.com/Syndica/sig.git
 cd sig/ci/run-and-update-service
