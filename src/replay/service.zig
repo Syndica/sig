@@ -6,7 +6,6 @@ const tracy = @import("tracy");
 const Allocator = std.mem.Allocator;
 
 const Channel = sig.sync.Channel;
-const RwMux = sig.sync.RwMux;
 const ThreadPool = sig.sync.ThreadPool;
 
 const Pubkey = sig.core.Pubkey;
@@ -40,38 +39,30 @@ pub const Service = struct {
 
     pub fn init(
         deps: *Dependencies,
-        enable_consensus: ?TowerConsensus.Dependencies.External,
         num_threads: u32,
+        enable_consensus: ?TowerConsensus.Dependencies.External,
     ) !Service {
         var state = try ReplayState.init(deps, num_threads);
         errdefer state.deinit();
 
-        var consensus: ?TowerConsensus = if (enable_consensus) |consensus_deps| blk: {
-            const slot_tracker, var slot_tracker_lock = state.slot_tracker.readWithLock();
-            defer slot_tracker_lock.unlock();
+        const maybe_consensus: ?TowerConsensus = blk: {
+            const consensus_deps = enable_consensus orelse break :blk null;
 
-            const consensus_state_deps: TowerConsensus.Dependencies = .{
+            break :blk try TowerConsensus.init(deps.allocator, .{
                 .logger = .from(deps.logger),
                 .my_identity = deps.my_identity,
                 .vote_identity = deps.vote_identity,
-                .root_slot = deps.root.slot,
-                .root_hash = slot_tracker.get(slot_tracker.root).?.state.hash.readCopy().?,
                 .account_reader = deps.account_store.reader(),
                 .ledger = deps.ledger,
-                .exit = deps.exit,
-                .replay_votes_channel = state.replay_votes_channel,
-                .slot_tracker_rw = state.slot_tracker,
-                .epoch_tracker_rw = state.epoch_tracker,
+                .slot_tracker = &state.slot_tracker,
                 .external = consensus_deps,
-            };
-
-            break :blk try TowerConsensus.init(deps.allocator, consensus_state_deps);
-        } else null;
-        errdefer if (consensus) |*c| c.deinit(deps.allocator);
+            });
+        };
+        errdefer if (maybe_consensus) |consensus| consensus.deinit(deps.allocator);
 
         return .{
             .replay = state,
-            .consensus = consensus,
+            .consensus = maybe_consensus,
             .num_threads = num_threads,
         };
     }
@@ -97,8 +88,8 @@ pub const Service = struct {
             self.replay.logger,
             self.replay.account_store,
             self.replay.ledger,
-            self.replay.slot_tracker,
-            self.replay.epoch_tracker,
+            &self.replay.slot_tracker,
+            &self.replay.epoch_tracker,
             &self.replay.slot_tree,
             self.replay.slot_leaders,
             &self.replay.hard_forks,
@@ -116,8 +107,10 @@ pub const Service = struct {
         if (self.consensus) |*consensus|
             try consensus.process(
                 allocator,
-                self.replay.slot_tracker,
-                self.replay.epoch_tracker,
+                self.replay.account_store.reader(),
+                self.replay.ledger,
+                &self.replay.slot_tracker,
+                &self.replay.epoch_tracker,
                 &self.replay.progress_map,
                 slot_results,
             )
@@ -135,8 +128,6 @@ pub const Dependencies = struct {
     logger: Logger,
     my_identity: Pubkey,
     vote_identity: Pubkey,
-    /// Tell replay when to exit
-    exit: *std.atomic.Value(bool),
     /// Used in the EpochManager
     epoch_schedule: sig.core.EpochSchedule,
     account_store: sig.accounts_db.AccountStore,
@@ -199,13 +190,8 @@ pub const ReplayState = struct {
     logger: Logger,
     thread_pool: ThreadPool,
     slot_leaders: SlotLeaders,
-    /// Lifetime: owned by `ReplayState`.
-    /// Borrowed across multiple threads (replay, vote_listener).
-    /// These RwMuxes are deinitialized in `ReplayState.deinit()` only
-    /// after all dependent threads have been joined based on defer order in `run`.
-    slot_tracker: *RwMux(SlotTracker),
-    /// Lifetime rules are the same as `slot_tracker`.
-    epoch_tracker: *RwMux(EpochTracker),
+    slot_tracker: SlotTracker,
+    epoch_tracker: EpochTracker,
     slot_tree: SlotTree,
     hard_forks: sig.core.HardForks,
     account_store: AccountStore,
@@ -218,21 +204,8 @@ pub const ReplayState = struct {
     fn deinit(self: *ReplayState) void {
         self.thread_pool.shutdown();
         self.thread_pool.deinit();
-
-        var slots = self.slot_tracker.tryRead() orelse
-            @panic("Slot tracker deinit while in use");
-        slots.get().deinit(self.allocator);
-        slots.unlock();
-
-        self.allocator.destroy(self.slot_tracker);
-
-        var epoch_tracker = self.epoch_tracker.tryRead() orelse
-            @panic("Epoch tracker deinit while in use");
-        epoch_tracker.get().deinit(self.allocator);
-        epoch_tracker.unlock();
-
-        self.allocator.destroy(self.epoch_tracker);
-
+        self.slot_tracker.deinit(self.allocator);
+        self.epoch_tracker.deinit(self.allocator);
         self.progress_map.deinit(self.allocator);
         self.replay_votes_channel.destroy();
         self.slot_tree.deinit(self.allocator);
@@ -274,22 +247,14 @@ pub const ReplayState = struct {
         const slot_tree = try SlotTree.init(deps.allocator, deps.root.slot);
         errdefer slot_tree.deinit(deps.allocator);
 
-        const slot_tracker_rw = try deps.allocator.create(RwMux(SlotTracker));
-        errdefer deps.allocator.destroy(slot_tracker_rw);
-        slot_tracker_rw.* = RwMux(SlotTracker).init(slot_tracker);
-
-        const epoch_tracker_rw = try deps.allocator.create(RwMux(EpochTracker));
-        errdefer deps.allocator.destroy(epoch_tracker_rw);
-        epoch_tracker_rw.* = RwMux(EpochTracker).init(epoch_tracker);
-
         return .{
             .allocator = deps.allocator,
             .logger = .from(deps.logger),
             .thread_pool = .init(.{ .max_threads = num_threads }),
             .my_identity = deps.my_identity,
             .slot_leaders = deps.slot_leaders,
-            .slot_tracker = slot_tracker_rw,
-            .epoch_tracker = epoch_tracker_rw,
+            .slot_tracker = slot_tracker,
+            .epoch_tracker = epoch_tracker,
             .slot_tree = slot_tree,
             .hard_forks = deps.hard_forks.take(),
             .account_store = deps.account_store,
@@ -357,8 +322,8 @@ pub fn trackNewSlots(
     logger: Logger,
     account_store: AccountStore,
     ledger: *Ledger,
-    slot_tracker_rw: *RwMux(SlotTracker),
-    epoch_tracker_rw: *RwMux(EpochTracker),
+    slot_tracker: *SlotTracker,
+    epoch_tracker: *EpochTracker,
     slot_tree: *SlotTree,
     slot_leaders: SlotLeaders,
     hard_forks: *const sig.core.HardForks,
@@ -367,11 +332,6 @@ pub fn trackNewSlots(
 ) !void {
     var zone = tracy.Zone.init(@src(), .{ .name = "trackNewSlots" });
     defer zone.deinit();
-
-    const slot_tracker, var slot_tracker_lg = slot_tracker_rw.writeWithLock();
-    defer slot_tracker_lg.unlock();
-    const epoch_tracker, var epoch_tracker_lg = epoch_tracker_rw.readWithLock();
-    defer epoch_tracker_lg.unlock();
 
     const root = slot_tracker.root;
     var frozen_slots = try slot_tracker.frozenSlots(allocator);
@@ -535,41 +495,36 @@ pub fn getActiveFeatures(
 
 /// freezes any slots that were completed according to these replay results
 fn freezeCompletedSlots(state: *ReplayState, results: []const ReplayResult) !bool {
-    const epoch_tracker, var epoch_tracker_lg = state.epoch_tracker.readWithLock();
-    defer epoch_tracker_lg.unlock();
+    const slot_tracker = &state.slot_tracker;
+    const epoch_tracker = &state.epoch_tracker;
 
     var processed_a_slot = false;
-    {
-        const slot_tracker, var slot_tracker_lg = state.slot_tracker.readWithLock();
-        defer slot_tracker_lg.unlock();
-
-        for (results) |result| switch (result.output) {
-            .err => |err| state.logger.err().logf(
-                "replayed slot {} with error: {}",
-                .{ result.slot, err },
-            ),
-            .last_entry_hash => |last_entry_hash| {
-                const slot = result.slot;
-                const slot_info = slot_tracker.get(slot) orelse return error.MissingSlotInTracker;
-                if (slot_info.state.tickHeight() == slot_info.constants.max_tick_height) {
-                    state.logger.info().logf("finished replaying slot: {}", .{slot});
-                    const epoch = epoch_tracker.getForSlot(slot) orelse return error.MissingEpoch;
-                    try replay.freeze.freezeSlot(state.allocator, .init(
-                        .from(state.logger),
-                        state.account_store,
-                        &epoch,
-                        slot_info.state,
-                        slot_info.constants,
-                        slot,
-                        last_entry_hash,
-                    ));
-                    processed_a_slot = true;
-                } else {
-                    state.logger.info().logf("partially replayed slot: {}", .{slot});
-                }
-            },
-        };
-    }
+    for (results) |result| switch (result.output) {
+        .err => |err| state.logger.err().logf(
+            "replayed slot {} with error: {}",
+            .{ result.slot, err },
+        ),
+        .last_entry_hash => |last_entry_hash| {
+            const slot = result.slot;
+            const slot_info = slot_tracker.get(slot) orelse return error.MissingSlotInTracker;
+            if (slot_info.state.tickHeight() == slot_info.constants.max_tick_height) {
+                state.logger.info().logf("finished replaying slot: {}", .{slot});
+                const epoch = epoch_tracker.getForSlot(slot) orelse return error.MissingEpoch;
+                try replay.freeze.freezeSlot(state.allocator, .init(
+                    .from(state.logger),
+                    state.account_store,
+                    &epoch,
+                    slot_info.state,
+                    slot_info.constants,
+                    slot,
+                    last_entry_hash,
+                ));
+                processed_a_slot = true;
+            } else {
+                state.logger.info().logf("partially replayed slot: {}", .{slot});
+            }
+        },
+    };
 
     return processed_a_slot;
 }
@@ -577,8 +532,7 @@ fn freezeCompletedSlots(state: *ReplayState, results: []const ReplayResult) !boo
 /// bypass the tower bft consensus protocol, simply rooting slots with SlotTree.reRoot
 fn bypassConsensus(state: *ReplayState) !void {
     if (state.slot_tree.reRoot(state.allocator)) |new_root| {
-        const slot_tracker, var slot_tracker_lg = state.slot_tracker.writeWithLock();
-        defer slot_tracker_lg.unlock();
+        const slot_tracker = &state.slot_tracker;
 
         state.logger.info().logf("rooting slot with SlotTree.reRoot: {}", .{new_root});
         slot_tracker.root = new_root;
@@ -651,42 +605,24 @@ test trackNewSlots {
         try ledger.db.put(sig.ledger.schema.schema.slot_meta, slot, meta);
     }
 
-    const slot_tracker_val: SlotTracker = try .init(allocator, 0, .{
+    var slot_tracker: SlotTracker = try .init(allocator, 0, .{
         .state = try .genesis(allocator),
         .constants = try .genesis(allocator, .DEFAULT),
     });
-    var slot_tracker = RwMux(SlotTracker).init(slot_tracker_val);
-    defer {
-        const ptr, var lg = slot_tracker.writeWithLock();
-        defer lg.unlock();
-        ptr.deinit(allocator);
-    }
-    {
-        const ptr, var lg = slot_tracker.writeWithLock();
-        defer lg.unlock();
-        ptr.get(0).?.state.hash.set(.ZEROES);
-    }
+    defer slot_tracker.deinit(allocator);
+    slot_tracker.get(0).?.state.hash.set(.ZEROES);
 
-    const epoch_tracker_val: EpochTracker = .{ .schedule = .DEFAULT };
-    var epoch_tracker = RwMux(EpochTracker).init(epoch_tracker_val);
-    defer {
-        const ptr, var lg = epoch_tracker.writeWithLock();
-        defer lg.unlock();
-        ptr.deinit(allocator);
-    }
-    {
-        const ptr, var lg = epoch_tracker.writeWithLock();
-        defer lg.unlock();
-        try ptr.epochs.put(allocator, 0, .{
-            .hashes_per_tick = 1,
-            .ticks_per_slot = 1,
-            .ns_per_slot = 1,
-            .genesis_creation_time = 1,
-            .slots_per_year = 1,
-            .stakes = try .initEmptyWithGenesisStakeHistoryEntry(allocator),
-            .rent_collector = .DEFAULT,
-        });
-    }
+    var epoch_tracker: EpochTracker = .{ .schedule = .DEFAULT };
+    defer epoch_tracker.deinit(allocator);
+    try epoch_tracker.epochs.put(allocator, 0, .{
+        .hashes_per_tick = 1,
+        .ticks_per_slot = 1,
+        .ns_per_slot = 1,
+        .genesis_creation_time = 1,
+        .slots_per_year = 1,
+        .stakes = try .initEmptyWithGenesisStakeHistoryEntry(allocator),
+        .rent_collector = .DEFAULT,
+    });
 
     const leader_schedule = sig.core.leader_schedule.LeaderSchedule{
         .allocator = undefined,
@@ -711,11 +647,7 @@ test trackNewSlots {
     const slot_leaders = lsc.slotLeaders();
 
     // slot tracker should start with only 0
-    {
-        const ptr, var lg = slot_tracker.readWithLock();
-        defer lg.unlock();
-        try expectSlotTracker(ptr, leader_schedule, &.{.{ 0, 0 }}, &.{ 1, 2, 3, 4, 5, 6 });
-    }
+    try expectSlotTracker(&slot_tracker, leader_schedule, &.{.{ 0, 0 }}, &.{ 1, 2, 3, 4, 5, 6 });
 
     const hard_forks = sig.core.HardForks{};
 
@@ -735,16 +667,12 @@ test trackNewSlots {
         &hard_forks,
         undefined,
     );
-    {
-        const ptr, var lg = slot_tracker.readWithLock();
-        defer lg.unlock();
-        try expectSlotTracker(
-            ptr,
-            leader_schedule,
-            &.{ .{ 0, 0 }, .{ 1, 0 } },
-            &.{ 2, 3, 4, 5, 6 },
-        );
-    }
+    try expectSlotTracker(
+        &slot_tracker,
+        leader_schedule,
+        &.{ .{ 0, 0 }, .{ 1, 0 } },
+        &.{ 2, 3, 4, 5, 6 },
+    );
 
     // doing nothing should result in the same tracker state
     try trackNewSlots(
@@ -759,23 +687,16 @@ test trackNewSlots {
         &hard_forks,
         undefined,
     );
-    {
-        const ptr, var lg = slot_tracker.readWithLock();
-        defer lg.unlock();
-        try expectSlotTracker(
-            ptr,
-            leader_schedule,
-            &.{ .{ 0, 0 }, .{ 1, 0 } },
-            &.{ 2, 3, 4, 5, 6 },
-        );
-    }
+    try expectSlotTracker(
+        &slot_tracker,
+        leader_schedule,
+        &.{ .{ 0, 0 }, .{ 1, 0 } },
+        &.{ 2, 3, 4, 5, 6 },
+    );
 
     // freezing 1 should result in 2 and 4 being added
-    {
-        const ptr, var lg = slot_tracker.writeWithLock();
-        defer lg.unlock();
-        ptr.get(1).?.state.hash.set(.ZEROES);
-    }
+    slot_tracker.get(1).?.state.hash.set(.ZEROES);
+
     try trackNewSlots(
         allocator,
         .FOR_TESTS,
@@ -788,24 +709,17 @@ test trackNewSlots {
         &hard_forks,
         undefined,
     );
-    {
-        const ptr, var lg = slot_tracker.readWithLock();
-        defer lg.unlock();
-        try expectSlotTracker(
-            ptr,
-            leader_schedule,
-            &.{ .{ 0, 0 }, .{ 1, 0 }, .{ 2, 1 }, .{ 4, 1 } },
-            &.{ 3, 5, 6 },
-        );
-    }
+    try expectSlotTracker(
+        &slot_tracker,
+        leader_schedule,
+        &.{ .{ 0, 0 }, .{ 1, 0 }, .{ 2, 1 }, .{ 4, 1 } },
+        &.{ 3, 5, 6 },
+    );
 
     // freezing 2 and 4 should only result in 6 being added since 3's parent is unknown
-    {
-        const ptr, var lg = slot_tracker.writeWithLock();
-        defer lg.unlock();
-        ptr.get(2).?.state.hash.set(.ZEROES);
-        ptr.get(4).?.state.hash.set(.ZEROES);
-    }
+    slot_tracker.get(2).?.state.hash.set(.ZEROES);
+    slot_tracker.get(4).?.state.hash.set(.ZEROES);
+
     try trackNewSlots(
         allocator,
         .FOR_TESTS,
@@ -818,16 +732,12 @@ test trackNewSlots {
         &hard_forks,
         undefined,
     );
-    {
-        const ptr, var lg = slot_tracker.readWithLock();
-        defer lg.unlock();
-        try expectSlotTracker(
-            ptr,
-            leader_schedule,
-            &.{ .{ 0, 0 }, .{ 1, 0 }, .{ 2, 1 }, .{ 4, 1 }, .{ 6, 4 } },
-            &.{ 3, 5 },
-        );
-    }
+    try expectSlotTracker(
+        &slot_tracker,
+        leader_schedule,
+        &.{ .{ 0, 0 }, .{ 1, 0 }, .{ 2, 1 }, .{ 4, 1 }, .{ 6, 4 } },
+        &.{ 3, 5 },
+    );
 }
 
 fn expectSlotTracker(
@@ -854,12 +764,10 @@ test "Service clean init and deinit" {
     const ns = struct {
         pub fn run(allocator: Allocator) !void {
             var dep_stubs = try DependencyStubs.init(allocator, .noop);
-            defer dep_stubs.deinit(allocator);
+            defer dep_stubs.deinit();
 
-            var service = try dep_stubs.stubbedService(allocator, .FOR_TESTS, false);
+            var service = try dep_stubs.stubbedService(allocator, .FOR_TESTS);
             defer service.deinit(allocator);
-
-            dep_stubs.exit.store(true, .monotonic);
         }
     };
     try ns.run(std.testing.allocator);
@@ -869,44 +777,69 @@ test "Service clean init and deinit" {
 test "process runs without error with no replay results" {
     const allocator = std.testing.allocator;
 
-    var dep_stubs = try DependencyStubs.init(allocator, .FOR_TESTS);
-    defer dep_stubs.deinit(allocator);
+    var registry: sig.prometheus.Registry(.{}) = .init(allocator);
+    defer registry.deinit();
 
-    var service = try dep_stubs.stubbedService(allocator, .FOR_TESTS, true);
+    var dep_stubs = try DependencyStubs.init(allocator, .FOR_TESTS);
+    defer dep_stubs.deinit();
+
+    var service = try dep_stubs.stubbedService(allocator, .FOR_TESTS);
     defer service.deinit(allocator);
+
+    const slot_data_provider: sig.consensus.vote_listener.SlotDataProvider = .{
+        .slot_tracker = &service.replay.slot_tracker,
+        .epoch_tracker = &service.replay.epoch_tracker,
+    };
+
+    var vote_collector: sig.consensus.vote_listener.VoteCollector =
+        try .init(.UNIX_EPOCH, slot_data_provider.rootSlot(), &registry);
+    defer vote_collector.deinit(allocator);
+
+    const verified_vote_channel: *sig.sync.Channel(sig.consensus.vote_listener.VerifiedVote) =
+        try .create(allocator);
+    defer verified_vote_channel.destroy();
+    defer while (verified_vote_channel.tryReceive()) |vv| vv.deinit(allocator);
+
+    try vote_collector.collectAndProcessVotes(allocator, .FOR_TESTS, .{
+        .slot_data_provider = slot_data_provider,
+        .senders = .{
+            .verified_vote = verified_vote_channel,
+            .gossip_verified_vote_hash = service.consensus.?.receivers.gossip_verified_vote_hash,
+            .bank_notification = null,
+            .duplicate_confirmed_slots = service.consensus.?.receivers.duplicate_confirmed_slots,
+            .subscriptions = .{},
+        },
+        .receivers = .{ .replay_votes = service.replay.replay_votes_channel },
+        .ledger = service.replay.ledger,
+        .gossip_table = null,
+    });
 
     // TODO: run consensus in the tests that actually execute blocks for better
     // coverage. currently consensus panics or hangs if you run it with actual data
-    _ = try service.consensus.?.process(
+    try service.consensus.?.process(
         allocator,
-        service.replay.slot_tracker,
-        service.replay.epoch_tracker,
+        dep_stubs.accountsdb.accountReader(),
+        &dep_stubs.ledger,
+        &service.replay.slot_tracker,
+        &service.replay.epoch_tracker,
         &service.replay.progress_map,
         &.{},
     );
-
-    dep_stubs.exit.store(true, .monotonic);
 }
 
 test "advance calls consensus.process with empty replay results" {
     const allocator = std.testing.allocator;
 
     var dep_stubs = try DependencyStubs.init(allocator, .FOR_TESTS);
-    defer dep_stubs.deinit(allocator);
+    defer dep_stubs.deinit();
 
-    var service = try dep_stubs.stubbedService(allocator, .FOR_TESTS, false);
+    var service = try dep_stubs.stubbedService(allocator, .FOR_TESTS);
     defer service.deinit(allocator);
 
     try service.advance();
 
     // No slots were replayed
-    {
-        const slot_tracker, var lg = service.replay.slot_tracker.readWithLock();
-        defer lg.unlock();
-        try std.testing.expectEqual(0, slot_tracker.root);
-    }
-
-    dep_stubs.exit.store(true, .monotonic);
+    try std.testing.expectEqual(0, service.replay.slot_tracker.root);
 }
 
 test "Execute testnet block single threaded" {
@@ -938,7 +871,7 @@ fn testExecuteBlock(allocator: Allocator, config: struct {
     accounts_path: []const u8,
 }) !void {
     var dep_stubs = try DependencyStubs.init(allocator, .FOR_TESTS);
-    defer dep_stubs.deinit(allocator);
+    defer dep_stubs.deinit();
 
     // get snapshot manifest
     const fba_buf = try allocator.alloc(u8, 175_000_000);
@@ -1028,9 +961,8 @@ fn testExecuteBlock(allocator: Allocator, config: struct {
 
     // get slot hash
     const actual_slot_hash = tracker_lock: {
-        var slot_tracker = service.replay.slot_tracker.tryRead() orelse unreachable;
-        defer slot_tracker.unlock();
-        break :tracker_lock slot_tracker.get().get(execution_slot).?.state.hash.readCopy().?;
+        const ref = service.replay.slot_tracker.get(execution_slot).?;
+        break :tracker_lock ref.state.hash.readCopy().?;
     };
 
     const expected_slot_hash = sig.core.Hash.parse("4UeCbit4YGY42p9KrDzoD1LL21Vn3htb5N5G9w6L1kUE");
@@ -1076,17 +1008,14 @@ fn parseBincodeFromGzipFile(
 /// outlive replay, and is used by replay.
 pub const DependencyStubs = struct {
     accountsdb: sig.accounts_db.ThreadSafeAccountMap,
-    exit: std.atomic.Value(bool),
     dir: std.testing.TmpDir,
-    ledger_path: []const u8,
     ledger: Ledger,
     senders: TowerConsensus.Senders,
     receivers: TowerConsensus.Receivers,
 
-    pub fn deinit(self: *DependencyStubs, allocator: Allocator) void {
+    pub fn deinit(self: *DependencyStubs) void {
         self.accountsdb.deinit();
         self.dir.cleanup();
-        allocator.free(self.ledger_path);
         self.ledger.deinit();
         self.senders.destroy();
         self.receivers.destroy();
@@ -1100,22 +1029,20 @@ pub const DependencyStubs = struct {
         errdefer dir.cleanup();
 
         const ledger_path = try dir.dir.realpathAlloc(allocator, ".");
-        errdefer allocator.free(ledger_path);
+        defer allocator.free(ledger_path);
 
         var ledger = try Ledger.init(allocator, .from(logger), ledger_path, null);
         errdefer ledger.deinit();
 
-        var senders = try TowerConsensus.Senders.create(allocator);
+        const senders: TowerConsensus.Senders = try .create(allocator);
         errdefer senders.destroy();
 
-        var receivers = try TowerConsensus.Receivers.create(allocator);
+        const receivers: TowerConsensus.Receivers = try .create(allocator);
         errdefer receivers.destroy();
 
         return .{
             .accountsdb = accountsdb,
-            .exit = .init(false),
             .dir = dir,
-            .ledger_path = ledger_path,
             .ledger = ledger,
             .senders = senders,
             .receivers = receivers,
@@ -1131,7 +1058,6 @@ pub const DependencyStubs = struct {
         self: *DependencyStubs,
         allocator: Allocator,
         logger: Logger,
-        run_vote_listener: bool,
     ) !Service {
         var rng = std.Random.DefaultPrng.init(0);
         const random = rng.random();
@@ -1160,7 +1086,6 @@ pub const DependencyStubs = struct {
                 .logger = logger,
                 .my_identity = .initRandom(random),
                 .vote_identity = .initRandom(random),
-                .exit = &self.exit,
                 .epoch_schedule = .DEFAULT,
                 .account_store = self.accountsdb.accountStore(),
                 .ledger = &self.ledger,
@@ -1181,14 +1106,10 @@ pub const DependencyStubs = struct {
         };
         defer deps.deinit(allocator);
 
-        const consensus_deps = TowerConsensus.Dependencies.External{
+        return try Service.init(&deps, 1, .{
             .senders = self.senders,
             .receivers = self.receivers,
-            .gossip_table = null,
-            .run_vote_listener = run_vote_listener,
-        };
-
-        return try Service.init(&deps, consensus_deps, 1);
+        });
     }
 
     // TODO: consider deduplicating with above and similar function in cmd.zig
@@ -1234,7 +1155,6 @@ pub const DependencyStubs = struct {
                 .logger = .FOR_TESTS,
                 .my_identity = .ZEROES,
                 .vote_identity = .ZEROES,
-                .exit = &self.exit,
                 .account_store = self.accountsdb.accountStore(),
                 .ledger = &self.ledger,
                 .epoch_schedule = bank_fields.epoch_schedule,
@@ -1254,7 +1174,7 @@ pub const DependencyStubs = struct {
         };
         defer deps.deinit(allocator);
 
-        return try Service.init(&deps, null, num_threads);
+        return try Service.init(&deps, num_threads, null);
     }
 };
 

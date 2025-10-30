@@ -1202,10 +1202,10 @@ fn validator(
     const consensus_deps = if (cfg.disable_consensus)
         null
     else
-        try consensusDependencies(allocator, &gossip_service.gossip_table_rw);
+        try consensusDependencies(allocator);
     defer if (consensus_deps) |d| d.deinit();
 
-    var replay_service = try replay.Service.init(&replay_deps, consensus_deps, cfg.replay_threads);
+    var replay_service = try replay.Service.init(&replay_deps, cfg.replay_threads, consensus_deps);
     defer replay_service.deinit(allocator);
 
     const replay_thread = try app_base.spawnService(
@@ -1335,10 +1335,10 @@ fn replayOffline(
     const consensus_deps = if (cfg.disable_consensus)
         null
     else
-        try consensusDependencies(allocator, null);
+        try consensusDependencies(allocator);
     defer if (consensus_deps) |d| d.deinit();
 
-    var replay_service = try replay.Service.init(&replay_deps, consensus_deps, cfg.replay_threads);
+    var replay_service = try replay.Service.init(&replay_deps, cfg.replay_threads, consensus_deps);
     defer replay_service.deinit(allocator);
 
     const replay_thread = try app_base.spawnService(
@@ -1966,7 +1966,6 @@ fn replayDependencies(
         .logger = .from(app_base.logger),
         .my_identity = .fromPublicKey(&app_base.my_keypair.public_key),
         .vote_identity = .fromPublicKey(&app_base.my_keypair.public_key),
-        .exit = app_base.exit,
         .account_store = account_store,
         .ledger = ledger,
         .epoch_schedule = bank_fields.epoch_schedule,
@@ -1984,7 +1983,6 @@ fn replayDependencies(
 
 fn consensusDependencies(
     allocator: std.mem.Allocator,
-    gossip_table: ?*sig.sync.RwMux(sig.gossip.GossipTable),
 ) !replay.TowerConsensus.Dependencies.External {
     const senders: sig.replay.TowerConsensus.Senders = try .create(allocator);
     errdefer senders.destroy();
@@ -1995,7 +1993,6 @@ fn consensusDependencies(
     return .{
         .senders = senders,
         .receivers = receivers,
-        .gossip_table = gossip_table,
     };
 }
 
