@@ -4,8 +4,6 @@
 const std = @import("std");
 const sig = @import("../../sig.zig");
 
-const SnapshotGenerationInfo = sig.accounts_db.AccountsDB.SnapshotGenerationInfo;
-const FullSnapshotFileInfo = sig.accounts_db.snapshot.data.FullSnapshotFileInfo;
 const IncrementalSnapshotFileInfo = sig.accounts_db.snapshot.data.IncrementalSnapshotFileInfo;
 
 /// A single request body cannot be larger than this.
@@ -72,99 +70,6 @@ pub const HeadInfo = struct {
         };
     }
 };
-
-pub const GetRequestTargetResolved = union(enum) {
-    full_snapshot: struct { FullSnapshotFileInfo, SnapshotReadLock },
-    inc_snapshot: struct { IncrementalSnapshotFileInfo, SnapshotReadLock },
-
-    /// https://github.com/Syndica/sig/issues/558
-    health,
-
-    /// https://github.com/Syndica/sig/issues/557
-    genesis_file,
-
-    not_found,
-
-    pub const SnapshotReadLock = sig.sync.RwMux(?SnapshotGenerationInfo).RLockGuard;
-};
-
-/// Resolve a `GET` request target.
-pub fn getRequestTargetResolve(
-    logger: Logger,
-    path: []const u8,
-    latest_snapshot_gen_info_rw: *sig.sync.RwMux(?SnapshotGenerationInfo),
-) GetRequestTargetResolved {
-    if (!std.mem.startsWith(u8, path, "/")) return .not_found;
-    const target = path[1..];
-
-    const is_snapshot_archive_like =
-        !std.meta.isError(FullSnapshotFileInfo.parseFileNameTarZst(target)) or
-        !std.meta.isError(IncrementalSnapshotFileInfo.parseFileNameTarZst(target));
-
-    if (is_snapshot_archive_like) check_snapshots: {
-        const maybe_latest_snapshot_gen_info, //
-        var latest_snapshot_info_lg //
-        = latest_snapshot_gen_info_rw.readWithLock();
-        defer latest_snapshot_info_lg.unlock();
-
-        const full_info: FullSnapshotFileInfo, //
-        const inc_info: ?IncrementalSnapshotFileInfo //
-        = blk: {
-            const latest_snapshot_gen_info = maybe_latest_snapshot_gen_info.* orelse
-                break :check_snapshots;
-            const latest_full = latest_snapshot_gen_info.full;
-            const full_info: FullSnapshotFileInfo = .{
-                .slot = latest_full.slot,
-                .hash = latest_full.hash.checksum(),
-            };
-            const latest_incremental = latest_snapshot_gen_info.inc orelse
-                break :blk .{ full_info, null };
-            const inc_info: IncrementalSnapshotFileInfo = .{
-                .base_slot = latest_full.slot,
-                .slot = latest_incremental.slot,
-                .hash = latest_incremental.hash.checksum(),
-            };
-            break :blk .{ full_info, inc_info };
-        };
-
-        logger.debug().logf("Available full: {?s}", .{
-            full_info.snapshotArchiveName().constSlice(),
-        });
-        logger.debug().logf("Available inc: {?s}", .{
-            if (inc_info) |info| info.snapshotArchiveName().constSlice() else null,
-        });
-
-        const full_archive_name_bounded = full_info.snapshotArchiveName();
-        const full_archive_name = full_archive_name_bounded.constSlice();
-        if (std.mem.eql(u8, target, full_archive_name)) {
-            // acquire another lock on the rwmux, since the first one we got is going to unlock after we return.
-            const latest_snapshot_info_lg_again = latest_snapshot_gen_info_rw.read();
-            return .{
-                .full_snapshot = .{
-                    full_info,
-                    latest_snapshot_info_lg_again,
-                },
-            };
-        }
-
-        if (inc_info) |inc| {
-            const inc_archive_name_bounded = inc.snapshotArchiveName();
-            const inc_archive_name = inc_archive_name_bounded.constSlice();
-
-            if (std.mem.eql(u8, target, inc_archive_name)) {
-                // acquire another lock on the rwmux, since the first one we got is going to unlock after we return.
-                const latest_snapshot_info_lg_again = latest_snapshot_gen_info_rw.read();
-                return .{ .inc_snapshot = .{ inc, latest_snapshot_info_lg_again } };
-            }
-        }
-    }
-
-    if (std.mem.eql(u8, target, "health")) {
-        return .health;
-    }
-
-    return .not_found;
-}
 
 pub fn httpMethodFmt(method: std.http.Method) MethodFmt {
     return .{ .method = method };

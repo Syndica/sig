@@ -5,6 +5,7 @@ pub const request = @import("request.zig");
 pub const response = @import("response.zig");
 pub const server = @import("server/lib.zig");
 pub const test_serialize = @import("test_serialize.zig");
+pub const Hooks = @import("hooks.zig").Hooks;
 
 pub const Client = client.Client;
 
