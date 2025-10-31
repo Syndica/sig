@@ -996,8 +996,7 @@ fn sendVoteTransaction(
         .V6 => sockets.ipv6,
     };
 
-    const endpoint = tpu_address.toEndpoint();
-    _ = socket.sendTo(endpoint, serialized) catch |err| {
+    _ = socket.sendTo(tpu_address.toEndpoint(), serialized) catch |err| {
         logger.err().logf("Failed to send vote transaction: {}", .{err});
         return err;
     };
