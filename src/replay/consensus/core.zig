@@ -1081,11 +1081,11 @@ fn findVoteIndexToEvict(
     tower_last: Slot,
 ) ?u8 {
     const MAX_VOTES: u8 = sig.gossip.data.MAX_VOTES;
-    var used_indices: [sig.gossip.data.MAX_VOTES]bool = .{false} ** sig.gossip.data.MAX_VOTES;
     var my_vote_count: usize = 0;
     var oldest_ts: u64 = std.math.maxInt(u64);
     var oldest_index: u8 = 0;
     var oldest_index_is_valid: bool = false;
+    var exists_newer_vote: bool = false;
 
     var iter = gossip_table.store.iterator();
     while (iter.next()) |entry| {
@@ -1096,12 +1096,15 @@ fn findVoteIndexToEvict(
         const key_from = key.Vote[1];
         if (!key_from.equals(&my_pubkey)) continue;
 
-        used_indices[key_index] = true;
         my_vote_count += 1;
 
         const vote_data = entry.getGossipData().Vote;
         const vote_slot = vote_data[1].slot;
         const is_evictable = (vote_slot == 0 or vote_slot < tower_last);
+        const is_newer_or_equal = (vote_slot != 0 and vote_slot >= tower_last);
+        if (is_newer_or_equal) {
+            exists_newer_vote = true;
+        }
 
         if (is_evictable) {
             const ts = entry.metadata_ptr.timestamp_on_insertion;
@@ -1113,11 +1116,12 @@ fn findVoteIndexToEvict(
         }
     }
 
+    if (exists_newer_vote) {
+        return null;
+    }
+
     if (my_vote_count < MAX_VOTES) {
-        for (0..used_indices.len) |idx| {
-            if (!used_indices[idx]) return @intCast(idx);
-        }
-        return 0;
+        return @intCast(my_vote_count);
     } else {
         if (!oldest_index_is_valid) return null;
         return oldest_index;
@@ -1139,6 +1143,8 @@ fn sendVoteToGossip(
         .push_vote => |push_vote_data| {
             if (push_vote_data.tower_slots.len == 0) return;
             const tower_last: Slot = push_vote_data.tower_slots[push_vote_data.tower_slots.len - 1];
+            // Find the oldest crds vote by wallclock that has a lower slot than `tower`
+            // and recycle its vote-index. If the crds buffer is not full we instead add a new vote-index.
             const vote_index: u8 =
                 findVoteIndexToEvict(gossip_table, my_pubkey, tower_last) orelse return;
 
