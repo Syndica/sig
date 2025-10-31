@@ -383,6 +383,9 @@ pub fn replayBatch(
 
         switch (try executeTransaction(allocator, &svm_gateway, &runtime_transaction)) {
             .ok => |result| {
+                // TODO: this memcpy is really expensive
+                // profiled taking ~200us per loop iter on testnet, which is more time than the
+                // actual execution
                 results[i] = .{ hash, result };
                 populated_count += 1;
             },
