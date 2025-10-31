@@ -163,7 +163,7 @@ pub const ReplaySlotFuture = struct {
             switch (poll_result) {
                 .done => |val| return val,
                 // TODO: consider futex-based wait like ResetEvent
-                .pending => std.time.sleep(0),
+                .pending => {},
             }
         }
     }

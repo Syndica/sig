@@ -1,4 +1,5 @@
 pub const std = @import("std");
+const tracy = @import("tracy");
 pub const sig = @import("../sig.zig");
 pub const ledger_mod = @import("lib.zig");
 
@@ -1187,6 +1188,9 @@ fn getSlotEntriesInBlock(
     completed_ranges: CompletedRanges,
     maybe_slot_meta: ?*const SlotMeta,
 ) ![]Entry {
+    const zone = tracy.Zone.init(@src(), .{ .name = "getSlotEntriesInBlock" });
+    defer zone.deinit();
+
     if (completed_ranges.items.len == 0) {
         return &.{};
     }

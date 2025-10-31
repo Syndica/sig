@@ -111,6 +111,9 @@ fn awaitResults(
     /// takes ownership and frees with allocator
     slot_futures: []struct { Slot, *ReplaySlotFuture },
 ) ![]const ReplayResult {
+    const zone = tracy.Zone.init(@src(), .{ .name = "awaitResults" });
+    defer zone.deinit();
+
     defer {
         for (slot_futures) |sf| sf[1].destroy(allocator);
         allocator.free(slot_futures);
@@ -380,6 +383,9 @@ pub fn replayBatch(
 
         switch (try executeTransaction(allocator, &svm_gateway, &runtime_transaction)) {
             .ok => |result| {
+                // TODO: this memcpy is really expensive
+                // profiled taking ~200us per loop iter on testnet, which is more time than the
+                // actual execution
                 results[i] = .{ hash, result };
                 populated_count += 1;
             },
@@ -438,7 +444,7 @@ fn prepareSlot(
     epoch_tracker: *const EpochTracker,
     slot: Slot,
 ) !PreparedSlot {
-    var zone = tracy.Zone.init(@src(), .{ .name = "replaySlot" });
+    var zone = tracy.Zone.init(@src(), .{ .name = "prepareSlot" });
     zone.value(slot);
     defer zone.deinit();
     errdefer zone.color(0xFF0000);
@@ -549,9 +555,12 @@ fn prepareSlot(
         .rent_collector = &epoch_constants.rent_collector,
         .epoch_stakes = &epoch_constants.stakes,
         .status_cache = &state.status_cache,
+        .sysvar_cache = &slot_info.constants.sysvar_cache,
+        .vm_environment = &slot_info.constants.vm_environment,
+        .next_vm_environment = if (slot_info.constants.next_vm_environment) |*env| env else null,
     };
 
-    const committer = replay.Committer{
+    const committer: replay.Committer = .{
         .logger = .from(state.logger),
         .account_store = state.account_store,
         .slot_state = slot_info.state,

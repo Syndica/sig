@@ -1,5 +1,6 @@
 const builtin = @import("builtin");
 const std = @import("std");
+const tracy = @import("tracy");
 const sig = @import("../../sig.zig");
 
 const bincode = sig.bincode;

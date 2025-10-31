@@ -321,7 +321,7 @@ pub fn loadAndExecuteTransaction(
     config: *const TransactionExecutionConfig,
     program_map: *ProgramMap,
 ) error{OutOfMemory}!TransactionResult(ProcessedTransaction) {
-    var zone = tracy.Zone.init(@src(), .{ .name = "executeTransaction" });
+    var zone = tracy.Zone.init(@src(), .{ .name = "loadAndExecuteTransaction" });
     defer zone.deinit();
     errdefer zone.color(0xFF0000);
 

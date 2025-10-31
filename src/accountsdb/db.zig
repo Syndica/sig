@@ -1152,7 +1152,7 @@ pub const AccountsDB = struct {
             },
         );
 
-        const total_lamports, const accounts_hash = blk: {
+        var total_lamports, const accounts_hash = blk: {
             var lamports_sum: u64 = 0;
             var hash: LtHash = .IDENTITY;
             for (task_results) |result| {
@@ -1166,6 +1166,10 @@ pub const AccountsDB = struct {
             }
             break :blk .{ lamports_sum, hash };
         };
+
+        for (task_results) |result| {
+            total_lamports -|= result.subtract;
+        }
 
         self.logger.debug().logf("collecting hashes from accounts took: {s}", .{timer.read()});
         timer.reset();

@@ -59,9 +59,6 @@ pub const SvmGateway = struct {
     /// Data initialized and owned by this struct that will be passed by
     /// reference into the SVM
     state: struct {
-        sysvar_cache: SysvarCache,
-        vm_environment: vm.Environment,
-        next_vm_environment: ?vm.Environment,
         accounts: BatchAccountCache,
         programs: ProgramMap,
 
@@ -88,6 +85,10 @@ pub const SvmGateway = struct {
         rent_collector: *const RentCollector,
         epoch_stakes: *const sig.core.EpochStakes,
         status_cache: *StatusCache,
+
+        sysvar_cache: *const SysvarCache,
+        vm_environment: *const vm.Environment,
+        next_vm_environment: ?*const vm.Environment,
     };
 
     pub fn init(
@@ -108,38 +109,20 @@ pub const SvmGateway = struct {
             );
         }
 
-        const vm_environment = try vm.Environment.initV1(
+        var programs = try loadPrograms(
             allocator,
-            &params.feature_set,
-            // This does not actually set the compute budget. it's only used to
-            // set that max call depth and stack frame size. the actual compute
-            // budgets are determined per transaction.
-            &ComputeBudget.default(1_400_000),
+            &accounts.account_cache,
+            params.vm_environment,
             params.slot,
-            false,
-            false,
         );
-
-        var programs =
-            try loadPrograms(allocator, &accounts.account_cache, &vm_environment, params.slot);
         errdefer {
             for (programs.values()) |*program| program.deinit(allocator);
             programs.deinit(allocator);
         }
 
-        var sysvar_cache = SysvarCache{};
-        try replay.update_sysvar.fillMissingSysvarCacheEntries(
-            allocator,
-            params.account_reader,
-            &sysvar_cache,
-        );
-
         return .{
             .params = params,
             .state = .{
-                .sysvar_cache = sysvar_cache,
-                .vm_environment = vm_environment,
-                .next_vm_environment = null, // TODO epoch boundary
                 .accounts = accounts,
                 .programs = programs,
 
@@ -155,12 +138,7 @@ pub const SvmGateway = struct {
     pub fn deinit(self: *const SvmGateway, allocator: Allocator) void {
         var bhq = self.state.blockhash_queue;
         bhq.unlock();
-
-        self.state.sysvar_cache.deinit(allocator);
-        self.state.vm_environment.deinit(allocator);
         self.state.accounts.deinit(allocator);
-        if (self.state.next_vm_environment) |next_vm| next_vm.deinit(allocator);
-
         var programs = self.state.programs;
         programs.deinit(allocator);
     }
@@ -177,12 +155,12 @@ pub const SvmGateway = struct {
             .ancestors = self.params.ancestors,
             .feature_set = &self.params.feature_set,
             .status_cache = self.params.status_cache,
-            .sysvar_cache = &self.state.sysvar_cache,
+            .sysvar_cache = self.params.sysvar_cache,
             .rent_collector = self.params.rent_collector,
             .blockhash_queue = self.state.blockhash_queue.get(),
             .epoch_stakes = self.params.epoch_stakes,
-            .vm_environment = &self.state.vm_environment,
-            .next_vm_environment = if (self.state.next_vm_environment) |env| &env else null,
+            .vm_environment = self.params.vm_environment,
+            .next_vm_environment = if (self.params.next_vm_environment) |env| env else null,
 
             .slot = self.params.slot,
             .max_age = self.params.max_age,
