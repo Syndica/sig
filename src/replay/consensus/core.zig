@@ -403,7 +403,7 @@ pub const TowerConsensus = struct {
 
             _ = try replay.consensus.cluster_sync
                 .processClusterSync(allocator, .from(self.logger), .{
-                .my_pubkey = self.my_identity,
+                .my_pubkey = self.identity.validator,
                 .tpu_has_bank = false,
                 .fork_choice = &self.fork_choice,
                 .result_writer = self.ledger.resultWriter(),
