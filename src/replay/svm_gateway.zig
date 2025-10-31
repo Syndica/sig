@@ -59,7 +59,6 @@ pub const SvmGateway = struct {
     /// Data initialized and owned by this struct that will be passed by
     /// reference into the SVM
     state: struct {
-        sysvar_cache: SysvarCache,
         vm_environment: vm.Environment,
         next_vm_environment: ?vm.Environment,
         accounts: BatchAccountCache,
@@ -88,6 +87,8 @@ pub const SvmGateway = struct {
         rent_collector: *const RentCollector,
         epoch_stakes: *const sig.core.EpochStakes,
         status_cache: *StatusCache,
+
+        sysvar_cache: *const SysvarCache,
     };
 
     pub fn init(
@@ -120,24 +121,20 @@ pub const SvmGateway = struct {
             false,
         );
 
-        var programs =
-            try loadPrograms(allocator, &accounts.account_cache, &vm_environment, params.slot);
+        var programs = try loadPrograms(
+            allocator,
+            &accounts.account_cache,
+            &vm_environment,
+            params.slot,
+        );
         errdefer {
             for (programs.values()) |*program| program.deinit(allocator);
             programs.deinit(allocator);
         }
 
-        var sysvar_cache = SysvarCache{};
-        try replay.update_sysvar.fillMissingSysvarCacheEntries(
-            allocator,
-            params.account_reader,
-            &sysvar_cache,
-        );
-
         return .{
             .params = params,
             .state = .{
-                .sysvar_cache = sysvar_cache,
                 .vm_environment = vm_environment,
                 .next_vm_environment = null, // TODO epoch boundary
                 .accounts = accounts,
@@ -156,7 +153,6 @@ pub const SvmGateway = struct {
         var bhq = self.state.blockhash_queue;
         bhq.unlock();
 
-        self.state.sysvar_cache.deinit(allocator);
         self.state.vm_environment.deinit(allocator);
         self.state.accounts.deinit(allocator);
         if (self.state.next_vm_environment) |next_vm| next_vm.deinit(allocator);
@@ -177,7 +173,7 @@ pub const SvmGateway = struct {
             .ancestors = self.params.ancestors,
             .feature_set = &self.params.feature_set,
             .status_cache = self.params.status_cache,
-            .sysvar_cache = &self.state.sysvar_cache,
+            .sysvar_cache = self.params.sysvar_cache,
             .rent_collector = self.params.rent_collector,
             .blockhash_queue = self.state.blockhash_queue.get(),
             .epoch_stakes = self.params.epoch_stakes,

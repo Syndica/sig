@@ -555,6 +555,7 @@ fn prepareSlot(
         .rent_collector = &epoch_constants.rent_collector,
         .epoch_stakes = &epoch_constants.stakes,
         .status_cache = &state.status_cache,
+        .sysvar_cache = &slot_info.constants.sysvar_cache,
     };
 
     const committer = replay.Committer{
