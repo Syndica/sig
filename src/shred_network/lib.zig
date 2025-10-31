@@ -1,3 +1,4 @@
+pub const duplicate_shred_listener = @import("duplicate_shred_listener.zig");
 pub const repair_message = @import("repair_message.zig");
 pub const repair_service = @import("repair_service.zig");
 pub const service = @import("service.zig");
