@@ -912,9 +912,8 @@ fn handleVotableBank(
             // Update the tower's last vote blockhash
             replay_tower.refreshLastVoteTxBlockhash(vote_tx.msg.recent_blockhash);
 
-            // Get tower slots for tracking
             const tower_slots = try replay_tower.tower.towerSlots(allocator);
-            errdefer allocator.free(tower_slots);
+            defer allocator.free(tower_slots);
 
             try sendVote(
                 logger,
@@ -1010,6 +1009,7 @@ fn sendVoteToLeaders(
     vote_tx: Transaction,
     slot_leaders: sig.core.leader_schedule.SlotLeaders,
     gossip_table_rw: *sig.sync.RwMux(sig.gossip.GossipTable),
+    maybe_my_pubkey: ?Pubkey,
 ) !void {
     const UPCOMING_LEADER_FANOUT_SLOTS: u64 =
         FORWARD_TRANSACTIONS_TO_LEADER_AT_SLOT_OFFSET + 1;
@@ -1045,6 +1045,84 @@ fn sendVoteToLeaders(
         ) catch |err| {
             logger.err().logf("Failed to send vote to leader: {}", .{err});
         };
+    } else {
+        // Fallback: send to our own TPU address if no leaders were found
+        if (maybe_my_pubkey) |my_pubkey| {
+            const gossip_table, var gossip_table_lg = gossip_table_rw.readWithLock();
+            defer gossip_table_lg.unlock();
+
+            const self_contact =
+                gossip_table.getThreadSafeContactInfo(my_pubkey) orelse {
+                    logger.warn().log("No self contact info available for vote fallback");
+                    return;
+                };
+
+            const self_tpu_addr = self_contact.tpu_addr orelse {
+                logger.warn().log("No self TPU address for vote fallback");
+                return;
+            };
+
+            sendVoteTransaction(
+                logger,
+                allocator,
+                vote_tx,
+                self_tpu_addr,
+                .{ .ipv4 = ipv4_socket, .ipv6 = ipv6_socket },
+            ) catch |err| {
+                logger.err().logf("Failed to send vote to self TPU: {}", .{err});
+            };
+        } else {
+            logger.warn().log("Missing my_pubkey; cannot send vote to self TPU");
+        }
+    }
+}
+
+fn findVoteIndexToEvict(
+    gossip_table: *sig.gossip.GossipTable,
+    my_pubkey: Pubkey,
+    tower_last: Slot,
+) ?u8 {
+    const MAX_VOTES: u8 = sig.gossip.data.MAX_VOTES;
+    var used_indices: [sig.gossip.data.MAX_VOTES]bool = .{false} ** sig.gossip.data.MAX_VOTES;
+    var my_vote_count: usize = 0;
+    var oldest_ts: u64 = std.math.maxInt(u64);
+    var oldest_index: u8 = 0;
+    var oldest_index_is_valid: bool = false;
+
+    var iter = gossip_table.store.iterator();
+    while (iter.next()) |entry| {
+        if (entry.tag() != .Vote) continue;
+        const key = entry.key_ptr.*;
+        if (key != .Vote) continue;
+        const key_index: u8 = key.Vote[0];
+        const key_from = key.Vote[1];
+        if (!key_from.equals(&my_pubkey)) continue;
+
+        used_indices[key_index] = true;
+        my_vote_count += 1;
+
+        const vote_data = entry.getGossipData().Vote;
+        const vote_slot = vote_data[1].slot;
+        const is_evictable = (vote_slot == 0 or vote_slot < tower_last);
+
+        if (is_evictable) {
+            const ts = entry.metadata_ptr.timestamp_on_insertion;
+            if (!oldest_index_is_valid or ts < oldest_ts) {
+                oldest_ts = ts;
+                oldest_index = key_index;
+                oldest_index_is_valid = true;
+            }
+        }
+    }
+
+    if (my_vote_count < MAX_VOTES) {
+        for (0..used_indices.len) |idx| {
+            if (!used_indices[idx]) return @intCast(idx);
+        }
+        return 0;
+    } else {
+        if (!oldest_index_is_valid) return null;
+        return oldest_index;
     }
 }
 
@@ -1061,9 +1139,14 @@ fn sendVoteToGossip(
 
     switch (vote_op) {
         .push_vote => |push_vote_data| {
+            if (push_vote_data.tower_slots.len == 0) return;
+            const tower_last: Slot = push_vote_data.tower_slots[push_vote_data.tower_slots.len - 1];
+            const vote_index: u8 =
+                findVoteIndexToEvict(gossip_table, my_pubkey, tower_last) orelse return;
+
             const vote_data = sig.gossip.data.GossipData{
                 .Vote = .{
-                    0, // tag
+                    vote_index,
                     .{
                         .from = my_pubkey,
                         .transaction = push_vote_data.tx,
@@ -1125,6 +1208,10 @@ fn sendVote(
 
     // Send to upcoming leaders
     if (maybe_slot_leaders) |slot_leaders| {
+        const maybe_my_pubkey = if (maybe_my_keypair) |kp|
+            Pubkey.fromPublicKey(&kp.public_key)
+        else
+            null;
         try sendVoteToLeaders(
             logger,
             allocator,
@@ -1132,6 +1219,7 @@ fn sendVote(
             vote_tx,
             slot_leaders,
             gossip_table_rw,
+            maybe_my_pubkey,
         );
     }
 
@@ -3724,6 +3812,118 @@ test "sendVote - refresh_vote sends to both gossip and upcoming leaders" {
         defer lock.unlock();
 
         // 2 entries: leader's ContactInfo + vote added by sendVote
+        try testing.expectEqual(2, gossip_table_read.len());
+
+        const vote_key = sig.gossip.data.GossipKey{ .Vote = .{ 0, my_pubkey } };
+        const maybe_gossip_data = gossip_table_read.getData(vote_key);
+        try testing.expect(maybe_gossip_data != null);
+
+        const gossip_data = maybe_gossip_data.?;
+        try testing.expectEqual(.Vote, std.meta.activeTag(gossip_data));
+
+        const vote_data = gossip_data.Vote[1];
+        try testing.expectEqual(my_pubkey, vote_data.from);
+        try testing.expectEqual(Transaction.EMPTY, vote_data.transaction);
+    }
+}
+
+test "sendVote - falls back to self TPU when no leader sockets found" {
+    const allocator = testing.allocator;
+
+    const vote_slot: Slot = 42;
+    var tower_slots = [_]Slot{vote_slot};
+    const tower_slots_slice: []Slot = &tower_slots;
+
+    const vote_op = VoteOp{
+        .push_vote = .{
+            .tx = Transaction.EMPTY,
+            .tower_slots = tower_slots_slice,
+        },
+    };
+
+    const unknown_leader = Pubkey.initRandom(std.crypto.random);
+
+    const leader_schedule_slots = try allocator.alloc(Pubkey, 5);
+    for (leader_schedule_slots) |*slot| {
+        slot.* = unknown_leader;
+    }
+
+    var leader_schedule_cache = sig.core.leader_schedule.LeaderScheduleCache.init(
+        allocator,
+        .DEFAULT,
+    );
+    defer {
+        const leader_schedules, var lg = leader_schedule_cache.leader_schedules.writeWithLock();
+        defer lg.unlock();
+        for (leader_schedules.values()) |schedule| {
+            schedule.deinit();
+        }
+        leader_schedules.deinit();
+    }
+
+    const leader_schedule = sig.core.leader_schedule.LeaderSchedule{
+        .allocator = allocator,
+        .slot_leaders = leader_schedule_slots,
+    };
+    try leader_schedule_cache.put(0, leader_schedule);
+
+    const my_keypair = sig.identity.KeyPair.generate();
+    const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
+
+    const gossip_table = try sig.gossip.GossipTable.init(allocator, allocator);
+    var gossip_table_rw = sig.sync.RwMux(sig.gossip.GossipTable).init(gossip_table);
+    defer sig.sync.mux.deinitMux(&gossip_table_rw);
+
+    var my_contact_info = sig.gossip.data.ContactInfo.init(
+        allocator,
+        my_pubkey,
+        sig.time.getWallclockMs(),
+        0,
+    );
+    try my_contact_info.setSocket(.tpu, sig.net.SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8101));
+
+    const signed_my_contact = sig.gossip.data.SignedGossipData.initSigned(
+        &my_keypair,
+        sig.gossip.data.GossipData{ .ContactInfo = my_contact_info },
+    );
+
+    {
+        const gossip_table_write, var lock = gossip_table_rw.writeWithLock();
+        defer lock.unlock();
+        _ = try gossip_table_write.insert(
+            signed_my_contact,
+            sig.time.getWallclockMs(),
+        );
+    }
+
+    {
+        const gossip_table_read, var lock = gossip_table_rw.readWithLock();
+        defer lock.unlock();
+        // 1 entry: our ContactInfo only
+        try testing.expectEqual(1, gossip_table_read.len());
+    }
+
+    // This should attempt to send to upcoming leaders (none found), then
+    // fall back to sending to our own TPU address, and finally insert the vote into gossip.
+    // NOTE: This test does not assert that a UDP packet was sent to the self TPU address;
+    // it only validates the control flow indirectly by checking that the vote was inserted
+    // into gossip. A socket capture or injection hook would be needed to assert the send.
+    try sendVote(
+        .noop,
+        allocator,
+        vote_slot,
+        vote_op,
+        &gossip_table_rw,
+        leader_schedule_cache.slotLeaders(),
+        my_keypair,
+        600,
+    );
+
+    {
+        const gossip_table_read, var lock = gossip_table_rw.readWithLock();
+        defer lock.unlock();
+
+        // 2 entries: our ContactInfo + vote added by sendVote
         try testing.expectEqual(2, gossip_table_read.len());
 
         const vote_key = sig.gossip.data.GossipKey{ .Vote = .{ 0, my_pubkey } };
