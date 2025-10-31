@@ -25,6 +25,7 @@ slots: []SlotIndex,
 pub const SlotIndex = struct {
     lock: std.Thread.RwLock,
     slot: Slot,
+    is_empty: Atomic(bool),
     entries: std.ArrayHashMapUnmanaged(Pubkey, AccountSharedData, Context, true),
 
     const Context = struct {
@@ -40,6 +41,7 @@ pub const SlotIndex = struct {
     const empty: SlotIndex = .{
         .lock = .{},
         .entries = .empty,
+        .is_empty = .init(true),
         .slot = 0,
     };
 };
@@ -83,6 +85,7 @@ pub fn put(
     }
 
     try entry.entries.put(allocator, address, data);
+    entry.is_empty.store(false, .release);
 }
 
 /// Gets the latest state of the account keyed by `address` visible to the given ancestor set.
@@ -95,6 +98,8 @@ pub fn get(
     var result: ?Account = null;
 
     for (self.slots) |*index| {
+        if (index.is_empty.load(.acquire)) continue;
+
         index.lock.lockShared();
         defer index.lock.unlockShared();
 
