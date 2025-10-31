@@ -19,9 +19,8 @@ const StatusCache = sig.core.StatusCache;
 const Slot = sig.core.Slot;
 const RentState = sig.core.RentCollector.RentState;
 
-const AccountSharedData = sig.runtime.AccountSharedData;
-const BatchAccountCache = sig.runtime.account_loader.BatchAccountCache;
-const CachedAccount = sig.runtime.account_loader.CachedAccount;
+const AccountMap = sig.runtime.account_preload.AccountMap;
+const LoadedAccount = sig.runtime.account_loader.LoadedAccount;
 const FeatureSet = sig.core.FeatureSet;
 const FeeDetails = sig.runtime.check_transactions.FeeDetails;
 const InstructionInfo = sig.runtime.InstructionInfo;
@@ -91,105 +90,16 @@ pub const TransactionExecutionEnvironment = struct {
 pub const TransactionExecutionConfig = struct {
     log: bool,
     log_messages_byte_limit: ?u64,
-};
 
-/// [agave] https://github.com/anza-xyz/agave/blob/5bcdd4934475fde094ffbddd3f8c4067238dc9b0/svm/src/rollback_accounts.rs#L11
-pub const TransactionRollbacks = union(enum(u8)) {
-    fee_payer_only: CopiedAccount,
-    same_nonce_and_fee_payer: CopiedAccount,
-    separate_nonce_and_fee_payer: [2]CopiedAccount,
-
-    pub fn init(
-        allocator: std.mem.Allocator,
-        /// Takes ownership of this
-        maybe_nonce: ?CopiedAccount,
-        fee_payer: CachedAccount,
-        fee_payer_rent_debit: u64,
-        fee_payer_rent_epoch: sig.core.Epoch,
-    ) error{OutOfMemory}!TransactionRollbacks {
-        const payer_lamports = fee_payer.account.lamports +| fee_payer_rent_debit;
-
-        if (maybe_nonce) |nonce| {
-            errdefer allocator.free(nonce.account.data);
-            if (fee_payer.pubkey.equals(&nonce.pubkey)) {
-                const account = CopiedAccount.init(fee_payer, nonce.account.data, payer_lamports);
-                return .{ .same_nonce_and_fee_payer = account };
-            } else {
-                const payer_data = try allocator.dupe(u8, fee_payer.account.data);
-                const payer = CopiedAccount.init(fee_payer, payer_data, payer_lamports);
-                return .{ .separate_nonce_and_fee_payer = .{ nonce, payer } };
-            }
-        } else {
-            const payer_data = try allocator.dupe(u8, fee_payer.account.data);
-            var copied_fee_payer = CopiedAccount.init(fee_payer, payer_data, payer_lamports);
-            copied_fee_payer.account.rent_epoch = fee_payer_rent_epoch;
-            return .{ .fee_payer_only = copied_fee_payer };
-        }
-    }
-
-    pub fn accounts(self: *const TransactionRollbacks) []const CopiedAccount {
-        return switch (self.*) {
-            .fee_payer_only, .same_nonce_and_fee_payer => |*item| item[0..1],
-            .separate_nonce_and_fee_payer => |*items| items,
-        };
-    }
-
-    pub fn deinit(self: TransactionRollbacks, allocator: std.mem.Allocator) void {
-        switch (self) {
-            .fee_payer_only => |fee_payer_account| allocator.free(fee_payer_account.account.data),
-            .same_nonce_and_fee_payer => |account| allocator.free(account.account.data),
-            .separate_nonce_and_fee_payer => |both_accounts| for (both_accounts) |account| {
-                allocator.free(account.account.data);
-            },
-        }
-    }
-
-    /// Number of accounts tracked for rollback
+    /// Optionally pass in a pointer here to have it populated it with all
+    /// loaded accounts when a transaction executes and fails. The list is
+    /// assumed to be empty, and any pre-existing entries in the list will be
+    /// discarded when this list is repopulated.
     ///
-    /// Analogous to [count](https://github.com/anza-xyz/agave/blob/10fe1eb29aac9c236fd72d08ae60a3ef61ee8353/svm/src/rollback_accounts.rs#L80).
-    pub fn count(self: *const TransactionRollbacks) usize {
-        return switch (self.*) {
-            .fee_payer_only, .same_nonce_and_fee_payer => 1,
-            .separate_nonce_and_fee_payer => 2,
-        };
-    }
-
-    /// Size of accounts tracked for rollback, used when calculating
-    /// the actual cost of transaction processing in the cost model.
-    ///
-    /// Analogous to [data_size](https://github.com/anza-xyz/agave/blob/10fe1eb29aac9c236fd72d08ae60a3ef61ee8353/svm/src/rollback_accounts.rs#L89).
-    pub fn dataSize(self: *const TransactionRollbacks) usize {
-        return switch (self.*) {
-            .fee_payer_only => |fee_payer_account| fee_payer_account.account.data.len,
-            .same_nonce_and_fee_payer => |nonce| nonce.account.data.len,
-            .separate_nonce_and_fee_payer => |pair| blk: {
-                const nonce, const fee_payer_account = pair;
-                break :blk fee_payer_account.account.data.len +| nonce.account.data.len;
-            },
-        };
-    }
-};
-
-pub const CopiedAccount = struct {
-    pubkey: Pubkey,
-    account: AccountSharedData,
-
-    pub fn init(cached_account: CachedAccount, data: []u8, lamports: u64) CopiedAccount {
-        return .{
-            .pubkey = cached_account.pubkey,
-            .account = .{
-                .data = data,
-                .lamports = lamports,
-                .owner = cached_account.account.owner,
-                .executable = cached_account.account.executable,
-                .rent_epoch = cached_account.account.rent_epoch,
-            },
-        };
-    }
-
-    pub fn getAccount(self: *const CopiedAccount) *const AccountSharedData {
-        return &self.account;
-    }
+    /// These accounts are not useful to persist on-chain, but can be used to
+    /// debug a transaction failure. The original use case for this was
+    /// conformance testing.
+    failed_accounts: ?*LoadedTransactionAccounts.Accounts = null,
 };
 
 pub const ExecutedTransaction = struct {
@@ -206,69 +116,22 @@ pub const ExecutedTransaction = struct {
     }
 };
 
-pub const ProcessedTransaction = union(enum(u8)) {
-    fees_only: struct {
-        err: TransactionError,
-        fees: FeeDetails,
-        rollbacks: TransactionRollbacks,
-    },
-    executed: struct {
-        fees: FeeDetails,
-        rollbacks: TransactionRollbacks,
-        loaded_accounts: LoadedTransactionAccounts,
-        executed_transaction: ExecutedTransaction,
-    },
-
-    pub fn deinit(self: *ProcessedTransaction, allocator: std.mem.Allocator) void {
-        switch (self.*) {
-            .executed => |*executed| {
-                executed.executed_transaction.deinit(allocator);
-                executed.rollbacks.deinit(allocator);
-            },
-            .fees_only => |*fees_only| {
-                fees_only.rollbacks.deinit(allocator);
-            },
-        }
-    }
-
-    pub const Accounts = union(enum) {
-        /// *all* of the accounts that were loaded for this transaction, in the
-        /// same order that they were present in the transaction.
-        all_loaded: []const CachedAccount,
-        /// *only* the accounts that definitely need to be written back to
-        /// accountsdb, in no particular order.
-        written: []const CopiedAccount,
-    };
-
-    pub fn accounts(self: *const ProcessedTransaction) Accounts {
-        return switch (self.*) {
-            .fees_only => |*f| .{ .written = f.rollbacks.accounts() },
-            .executed => |*e| if (e.executed_transaction.err != null) .{
-                .written = e.rollbacks.accounts(),
-            } else .{
-                .all_loaded = e.loaded_accounts.accounts.constSlice(),
-            },
-        };
-    }
-
-    /// Analogous to [executed_units](https://github.com/anza-xyz/agave/blob/10fe1eb29aac9c236fd72d08ae60a3ef61ee8353/svm/src/transaction_processing_result.rs#L91).
-    pub fn executedUnits(self: *const ProcessedTransaction) ?u64 {
-        return switch (self.*) {
-            .executed => |executed| {
-                const compute_start = executed.executed_transaction.compute_limit;
-                const compute_remain = executed.executed_transaction.compute_meter;
-                return compute_start - compute_remain;
-            },
-            .fees_only => null,
-        };
-    }
-
+pub const ProcessedTransaction = struct {
+    fees: FeeDetails,
+    rent: u64,
+    writes: Writes,
+    err: ?TransactionError,
     /// Analogous to [loaded_accounts_data_size](https://github.com/anza-xyz/agave/blob/10fe1eb29aac9c236fd72d08ae60a3ef61ee8353/svm/src/transaction_processing_result.rs#L97).
-    pub fn loadedAccountsDataSize(self: *const ProcessedTransaction) u32 {
-        return switch (self.*) {
-            .executed => |context| context.loaded_accounts.loaded_accounts_data_size,
-            .fees_only => |fees_only| @intCast(fees_only.rollbacks.dataSize()),
-        };
+    loaded_accounts_data_size: u32,
+    /// If null, the transaction did not execute, due to a failure before
+    /// execution could begin.
+    outputs: ?ExecutedTransaction,
+
+    pub const Writes = LoadedTransactionAccounts.Accounts;
+
+    pub fn deinit(self: ProcessedTransaction, allocator: std.mem.Allocator) void {
+        for (self.writes.slice()) |account| account.deinit(allocator);
+        if (self.outputs) |out| if (out.log_collector) |log| log.deinit(allocator);
     }
 };
 
@@ -283,13 +146,13 @@ pub fn TransactionResult(comptime T: type) type {
 pub fn loadAndExecuteTransactions(
     allocator: std.mem.Allocator,
     transactions: []const RuntimeTransaction,
-    batch_account_cache: *BatchAccountCache,
+    account_map: *AccountMap,
     environment: *const TransactionExecutionEnvironment,
     config: *const TransactionExecutionConfig,
 ) error{OutOfMemory}![]TransactionResult(ProcessedTransaction) {
     var program_map = try program_loader.loadPrograms(
         allocator,
-        &batch_account_cache.account_cache,
+        account_map,
         environment.vm_environment,
         environment.slot,
     );
@@ -303,7 +166,7 @@ pub fn loadAndExecuteTransactions(
         transaction_results[index] = try loadAndExecuteTransaction(
             allocator,
             transaction,
-            batch_account_cache,
+            account_map,
             environment,
             config,
             &program_map,
@@ -316,7 +179,7 @@ pub fn loadAndExecuteTransactions(
 pub fn loadAndExecuteTransaction(
     allocator: std.mem.Allocator,
     transaction: *const RuntimeTransaction,
-    batch_account_cache: *BatchAccountCache,
+    account_map: *AccountMap,
     env: *const TransactionExecutionEnvironment,
     config: *const TransactionExecutionConfig,
     program_map: *ProgramMap,
@@ -338,30 +201,28 @@ pub fn loadAndExecuteTransaction(
         return .{ .err = .AccountLoadedTwice };
     }
 
-    const check_age_result = try sig.runtime.check_transactions.checkAge(
+    const maybe_nonce_info = switch (try sig.runtime.check_transactions.checkAge(
         allocator,
         transaction,
-        batch_account_cache,
+        account_map,
         env.blockhash_queue,
         env.max_age,
         &env.next_durable_nonce,
         env.next_lamports_per_signature,
-    );
-    const maybe_nonce_info = switch (check_age_result) {
-        .ok => |copied_account| copied_account,
-        .err => |err| return .{ .err = err },
+    )) {
+        .ok => |x| x,
+        .err => |e| return .{ .err = e },
     };
     var nonce_account_is_owned = true;
     defer if (nonce_account_is_owned) if (maybe_nonce_info) |n| allocator.free(n.account.data);
 
-    const compute_budget_result = compute_budget_program.sanitize(
+    const compute_budget_limits = switch (compute_budget_program.sanitize(
         transaction.compute_budget_instruction_details,
         env.feature_set,
         env.slot,
-    );
-    const compute_budget_limits = switch (compute_budget_result) {
-        .ok => |limits| limits,
-        .err => |err| return .{ .err = err },
+    )) {
+        .ok => |x| x,
+        .err => |e| return .{ .err = e },
     };
 
     if (sig.runtime.check_transactions.checkStatusCache(
@@ -372,60 +233,94 @@ pub fn loadAndExecuteTransaction(
     )) |err| return .{ .err = err };
 
     nonce_account_is_owned = false;
-    const check_fee_payer_result = try sig.runtime.check_transactions.checkFeePayer(
+    const fees, var rollbacks = switch (try sig.runtime.check_transactions.checkFeePayer(
         allocator,
         transaction,
-        batch_account_cache,
+        account_map,
         &compute_budget_limits,
         maybe_nonce_info,
         env.rent_collector,
         env.feature_set,
         env.slot,
         env.lamports_per_signature,
-    );
-    const fees, const rollbacks = switch (check_fee_payer_result) {
-        .ok => |result| result,
-        .err => |err| return .{ .err = err },
+    )) {
+        .ok => |x| x,
+        .err => |e| return .{ .err = e },
     };
-    errdefer rollbacks.deinit(allocator);
+    errdefer for (rollbacks.slice()) |r| r.deinit(allocator);
 
-    const loaded_accounts_result = try batch_account_cache.loadTransactionAccounts(
+    var loaded_accounts = switch (try account_loader.loadTransactionAccounts(
+        account_map,
         allocator,
         transaction,
         env.rent_collector,
         env.feature_set,
         env.slot,
         &compute_budget_limits,
-    );
-    const loaded_accounts = switch (loaded_accounts_result) {
-        .ok => |loaded_accounts| loaded_accounts,
-        .err => |err| return .{ .ok = .{
-            .fees_only = .{
-                .err = err,
+    )) {
+        .ok => |x| x,
+        .err => |err| {
+            var writes = ProcessedTransaction.Writes{};
+            var loaded_accounts_data_size: u32 = 0;
+            while (rollbacks.pop()) |rollback| {
+                const item = writes.addOne() catch unreachable;
+                item.* = rollback;
+                account_loader.store(account_map, allocator, item);
+                loaded_accounts_data_size += @intCast(rollback.account.data.len);
+            }
+            return .{ .ok = .{
                 .fees = fees,
-                .rollbacks = rollbacks,
-            },
-        } },
+                .rent = 0,
+                .writes = writes,
+                .err = err,
+                .loaded_accounts_data_size = loaded_accounts_data_size,
+                .outputs = null,
+            } };
+        },
     };
+    errdefer for (loaded_accounts.accounts.slice()) |acct| acct.deinit(allocator);
 
     const executed_transaction = try executeTransaction(
         allocator,
         transaction,
-        loaded_accounts.accounts.constSlice(),
+        loaded_accounts.accounts.slice(),
         &compute_budget_limits,
         env,
         config,
         program_map,
     );
 
-    return .{ .ok = .{
-        .executed = .{
+    var writes = ProcessedTransaction.Writes{};
+    if (executed_transaction.err == null) {
+        for (
+            loaded_accounts.accounts.slice(),
+            transaction.accounts.items(.is_writable),
+        ) |account, is_writable| {
+            if (is_writable)
+                writes.append(account) catch unreachable
+            else
+                account.deinit(allocator);
+        }
+        while (rollbacks.pop()) |rollback| rollback.deinit(allocator);
+    } else {
+        while (rollbacks.pop()) |account| writes.append(account) catch unreachable;
+        if (config.failed_accounts) |f|
+            f.* = loaded_accounts.accounts
+        else for (loaded_accounts.accounts.slice()) |a| a.deinit(allocator);
+    }
+
+    for (writes.slice()) |*acct| account_loader.store(account_map, allocator, acct);
+
+    return .{
+        .ok = .{
             .fees = fees,
-            .rollbacks = rollbacks,
-            .loaded_accounts = loaded_accounts,
-            .executed_transaction = executed_transaction,
+            .rent = 0,
+            .writes = writes,
+            .err = executed_transaction.err,
+            .loaded_accounts_data_size = loaded_accounts.loaded_accounts_data_size,
+            .outputs = executed_transaction,
         },
-    } };
+    };
 }
 
 /// Check for duplicate account keys.
@@ -467,7 +362,7 @@ test hasDuplicates {
 pub fn executeTransaction(
     allocator: std.mem.Allocator,
     transaction: *const RuntimeTransaction,
-    loaded_accounts: []const CachedAccount,
+    loaded_accounts: []LoadedAccount,
     compute_budget_limits: *const ComputeBudgetLimits,
     environment: *const TransactionExecutionEnvironment,
     config: *const TransactionExecutionConfig,
@@ -488,10 +383,10 @@ pub fn executeTransaction(
         loaded_accounts.len,
     );
     defer allocator.free(accounts);
-    for (loaded_accounts, 0..) |account, index| {
+    for (loaded_accounts, 0..) |*account, index| {
         accounts[index] = .{
             .pubkey = account.pubkey,
-            .account = account.account,
+            .account = &account.account,
             .read_refs = 0,
             .write_ref = false,
         };
@@ -759,7 +654,7 @@ test "loadAndExecuteTransactions: no transactions" {
     var prng = std.Random.DefaultPrng.init(0);
 
     const transactions: []RuntimeTransaction = &.{};
-    var batch_account_cache: account_loader.BatchAccountCache = .{};
+    var account_map: AccountMap = .{};
 
     const ancestors: Ancestors = .{};
     const feature_set: FeatureSet = .ALL_DISABLED;
@@ -806,7 +701,7 @@ test "loadAndExecuteTransactions: no transactions" {
     const result = try loadAndExecuteTransactions(
         allocator,
         transactions,
-        &batch_account_cache,
+        &account_map,
         &environment,
         &config,
     );
@@ -921,9 +816,9 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
     transaction.compute_budget_instruction_details.num_non_compute_budget_instructions = 1;
     transaction.compute_budget_instruction_details.num_non_migratable_builtin_instructions = 1;
 
-    var account_cache = BatchAccountCache{};
-    defer account_cache.deinit(allocator);
-    try account_cache.account_cache.put(
+    var account_map = AccountMap{};
+    defer sig.runtime.account_preload.deinit(account_map, allocator);
+    try account_map.put(
         allocator,
         sender_key,
         .{
@@ -934,7 +829,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
             .rent_epoch = 0,
         },
     );
-    try account_cache.account_cache.put(
+    try account_map.put(
         allocator,
         receiver_key,
         .{
@@ -945,7 +840,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
             .rent_epoch = 0,
         },
     );
-    try account_cache.account_cache.put(
+    try account_map.put(
         allocator,
         sig.runtime.program.system.ID,
         .{
@@ -1010,7 +905,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
         const result = try loadAndExecuteTransaction(
             allocator,
             &transaction,
-            &account_cache,
+            &account_map,
             &environment,
             &config,
             &program_map,
@@ -1019,21 +914,20 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
         var processed_transaction = result.ok;
         defer processed_transaction.deinit(allocator);
 
-        const executed_transaction = processed_transaction.executed.executed_transaction;
+        const executed_transaction = processed_transaction.outputs.?;
 
-        const transaction_fee = processed_transaction.executed.fees.transaction_fee;
-        const prioritization_fee = processed_transaction.executed.fees.prioritization_fee;
-        const rent_collected = processed_transaction.executed.loaded_accounts.rent_collected;
+        const transaction_fee = processed_transaction.fees.transaction_fee;
+        const prioritization_fee = processed_transaction.fees.prioritization_fee;
 
-        const sender_account = account_cache.account_cache.get(sender_key).?;
-        const receiver_account = account_cache.account_cache.get(receiver_key).?;
+        const sender_account = account_map.get(sender_key).?;
+        const receiver_account = account_map.get(receiver_key).?;
 
         try std.testing.expectEqual(5_000, transaction_fee);
         try std.testing.expectEqual(0, prioritization_fee);
-        try std.testing.expectEqual(0, rent_collected);
+        try std.testing.expectEqual(0, processed_transaction.rent);
         try std.testing.expectEqual(4_995_000, sender_account.lamports);
         try std.testing.expectEqual(15_000_000, receiver_account.lamports);
-        try std.testing.expectEqual(null, executed_transaction.err);
+        try std.testing.expectEqual(null, processed_transaction.err);
         try std.testing.expectEqual(null, executed_transaction.log_collector);
         try std.testing.expectEqual(1, executed_transaction.instruction_trace.?.len);
         try std.testing.expectEqual(null, executed_transaction.return_data);
@@ -1047,7 +941,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
         const result = try loadAndExecuteTransaction(
             allocator,
             &transaction,
-            &account_cache,
+            &account_map,
             &environment,
             &config,
             &program_map,
@@ -1056,24 +950,23 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
         var processed_transaction = result.ok;
         defer processed_transaction.deinit(allocator);
 
-        const executed_transaction = processed_transaction.executed.executed_transaction;
+        const executed_transaction = processed_transaction.outputs.?;
 
-        const transaction_fee = processed_transaction.executed.fees.transaction_fee;
-        const prioritization_fee = processed_transaction.executed.fees.prioritization_fee;
-        const rent_collected = processed_transaction.executed.loaded_accounts.rent_collected;
+        const transaction_fee = processed_transaction.fees.transaction_fee;
+        const prioritization_fee = processed_transaction.fees.prioritization_fee;
 
-        const sender_account = account_cache.account_cache.get(sender_key).?;
-        const receiver_account = account_cache.account_cache.get(receiver_key).?;
+        const sender_account = account_map.get(sender_key).?;
+        const receiver_account = account_map.get(receiver_key).?;
 
         try std.testing.expectEqual(5_000, transaction_fee);
         try std.testing.expectEqual(0, prioritization_fee);
-        try std.testing.expectEqual(0, rent_collected);
+        try std.testing.expectEqual(0, processed_transaction.rent);
         try std.testing.expectEqual(4_990_000, sender_account.lamports);
         try std.testing.expectEqual(15_000_000, receiver_account.lamports);
-        try std.testing.expectEqual(0, executed_transaction.err.?.InstructionError[0]);
+        try std.testing.expectEqual(0, processed_transaction.err.?.InstructionError[0]);
         try std.testing.expectEqual(
             InstructionErrorEnum{ .Custom = 1 },
-            executed_transaction.err.?.InstructionError[1],
+            processed_transaction.err.?.InstructionError[1],
         );
         try std.testing.expectEqual(null, executed_transaction.log_collector);
         try std.testing.expectEqual(1, executed_transaction.instruction_trace.?.len);

@@ -19,13 +19,13 @@ pub const Entry = struct {
     /// pushed back into this list to ensure deterministic interpretation of the ledger.
     transactions: []const Transaction,
 
-    pub fn isTick(self: Entry) bool {
-        return self.transactions.len == 0;
-    }
-
     pub fn deinit(self: Entry, allocator: std.mem.Allocator) void {
         for (self.transactions) |tx| tx.deinit(allocator);
         allocator.free(self.transactions);
+    }
+
+    pub fn isTick(self: Entry) bool {
+        return self.transactions.len == 0;
     }
 
     pub fn clone(self: Entry, allocator: std.mem.Allocator) Allocator.Error!Entry {

@@ -15,7 +15,7 @@ const Instruction = sig.core.Instruction;
 const InstructionAccount = sig.core.instruction.InstructionAccount;
 const InstructionError = sig.core.instruction.InstructionError;
 
-const BatchAccountCache = sig.runtime.account_loader.BatchAccountCache;
+const AccountMap = sig.runtime.account_preload.AccountMap;
 const BorrowedAccount = sig.runtime.BorrowedAccount;
 const InstructionInfo = sig.runtime.InstructionInfo;
 const InstructionContext = sig.runtime.InstructionContext;
@@ -1181,7 +1181,7 @@ pub fn invokeSignedRust(
 const testing = sig.runtime.testing;
 
 const TestContext = struct {
-    cache: BatchAccountCache,
+    cache: AccountMap,
     tc: *TransactionContext,
     ic: InstructionContext,
 
@@ -1193,7 +1193,7 @@ const TestContext = struct {
 
         const account_key = Pubkey.initRandom(prng);
 
-        var cache, tc.* = try testing.createTransactionContext(allocator, prng, .{
+        const cache, tc.* = try testing.createTransactionContext(allocator, prng, .{
             .accounts = &.{
                 .{
                     .pubkey = account_key,
@@ -1211,7 +1211,7 @@ const TestContext = struct {
         });
         errdefer {
             testing.deinitTransactionContext(allocator, tc.*);
-            cache.deinit(allocator);
+            sig.runtime.account_preload.deinit(cache, allocator);
         }
 
         try sig.runtime.executor.pushInstruction(tc, try testing.createInstructionInfo(
@@ -1235,7 +1235,7 @@ const TestContext = struct {
         testing.deinitTransactionContext(allocator, self.tc.*);
         allocator.destroy(self.tc);
         self.ic.deinit(allocator);
-        self.cache.deinit(allocator);
+        sig.runtime.account_preload.deinit(self.cache, allocator);
     }
 
     fn getAccount(self: *const TestContext) TestAccount {
