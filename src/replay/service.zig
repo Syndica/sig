@@ -506,6 +506,19 @@ fn newSlotFromParent(
     );
     errdefer reserved_accounts.deinit(allocator);
 
+    const vm_environment = try sig.vm.Environment.initV1(
+        allocator,
+        &feature_set,
+        // This does not actually set the compute budget. it's only used to
+        // set that max call depth and stack frame size. the actual compute
+        // budgets are determined per transaction.
+        &sig.runtime.ComputeBudget.default(1_400_000),
+        slot,
+        false,
+        false,
+    );
+    errdefer vm_environment.deinit(allocator);
+
     const constants: sig.core.SlotConstants = .{
         .parent_slot = parent_slot,
         .parent_hash = parent_hash,
@@ -522,6 +535,8 @@ fn newSlotFromParent(
         .feature_set = feature_set,
         .reserved_accounts = reserved_accounts,
         .sysvar_cache = .{}, // initialized after sysvar accounts are updated
+        .vm_environment = vm_environment,
+        .next_vm_environment = null,
     };
 
     return .{ constants, state };

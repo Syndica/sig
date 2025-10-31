@@ -556,9 +556,11 @@ fn prepareSlot(
         .epoch_stakes = &epoch_constants.stakes,
         .status_cache = &state.status_cache,
         .sysvar_cache = &slot_info.constants.sysvar_cache,
+        .vm_environment = &slot_info.constants.vm_environment,
+        .next_vm_environment = if (slot_info.constants.next_vm_environment) |*env| env else null,
     };
 
-    const committer = replay.Committer{
+    const committer: replay.Committer = .{
         .logger = .from(state.logger),
         .account_store = state.account_store,
         .slot_state = slot_info.state,
