@@ -1,44 +1,51 @@
-# docs
+---
+sidebar_position: 1
+slug: /
+title: 🤖⚡ Sig
+description: Documentation for Syndica's read-optimized Solana validator client.
+---
 
-docs are hosted and served by docusaurus in `/src/docs/docusaurus/`.
+Welcome to Sig's doc site! 🎉
 
-to allows us to keep the documentation
-close to the code while also allowing for a single source of truth
-(e.g., `docusaurus/docs/code/accountsdb.md` and `src/accountsdb/readme.md`),
-we use `generate.py` to copy the document stored in the `src` folder to the
-`docusaurus/docs/code` folder.
+Sig is a reads-optimized Solana validator client written in Zig.
 
-**note**: make sure all modifications are made in the `SRC/` folder and then run
-`generate.py` to copy the files to the `docusaurus/` folder. changes made in the
-`docusaurus/` folder will be overwritten.
+Visit our full [website](https://www.syndica.io/sig) to learn more about Sig and Syndica.
 
-## usage
+Read our source code on [GitHub](https://github.com/Syndica/sig).
 
-to generate the docs, run:
+## Motivation
+
+Our motivation to build Sig focuses on enhancing system efficiency and resilience through
+three key pillars:
+- Performance → improved RPS (Reads-Per-Second)
+- Client Diversity → improved Network Fault Tolerance
+- Readability → improved Accessibility
+
+## Roadmap
+
+- [x] [Gossip](../code/gossip) - P2P Communication
+- [x] [AccountsDB](../code/accountsdb) - State Representation 
+- [x] [Turbine](../code/ledger#shred-network) - Send and Receive Blocks
+- [x] Repair - Fetch Missing Blocks
+- [x] [Ledger](../code/ledger) - Store Blocks
+- [x] [Gulf Stream](../code/transaction_sender) - Forward Transactions
+- 🔜 [SVM](../code/runtime) - Solana Virtual Machine
+- 🔜 Tower BFT - Consensus
+- 🔜 Replay - Validate Transactions & Blocks
+- 🔜 RPC - Read Chain Data
+- 🔜 Proof-of-History - Track the Passage of Time
+- [ ] TPU - Block Production
+
+## Build and Run
+
+Build and run Sig using the following command:
 
 ```bash
-python generate.py
+zig build -Doptimize=ReleaseSafe sig -- --help
 ```
 
-*note:* you need to run this command from the docs/ directory.
+## Learn More
 
-to check to see if all changes are up to date, run:
-
-```bash
-python docs/check.py ./ # from the src/ directory
-# or
-python check.py ../ # from the src/docs directory
-```
-
-*note:* this command is run during the CI/CD pipeline to ensure that the docs are up to date.
-
-## docs formatting
-
-to ensure that the markdown is formatted correctly, we use the following
-conventions:
-- '#' for headers which will correspond to the title and sidebar name in docusaurus
-- all images need to point to /docs/docusaurus/static/img/
-
-## exclusion
-
-to exclude a markdown file, insert a line with "docs: exclude\n" anywhere in the file.
+Below are some resources to help you learn more about Sig:
+- [Sig Code-Docs Site](https://syndica.github.io/sig/)
+- [Engineering Blog Posts](https://blog.syndica.io/tag/engineering/)
