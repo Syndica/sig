@@ -185,6 +185,25 @@ pub const LtHash = struct {
         return .{ .data = data };
     }
 
+    pub fn eql(lhs: LtHash, rhs: LtHash) bool {
+        return std.mem.eql(u16, &lhs.data, &rhs.data);
+    }
+
+    /// Computes a checksum of the LtHash, useful for when 2KiB is too large. This does feel a bit
+    /// silly maybe? But Agave does this in a few places.
+    // [agave] https://github.com/anza-xyz/agave/blob/8e831839feee2b16a51575026179ef1a60f239ad/lattice-hash/src/lt_hash.rs#L52
+    pub fn checksum(self: LtHash) Hash {
+        var out: Hash = undefined;
+
+        std.crypto.hash.Blake3.hash(
+            std.mem.asBytes(&self.data),
+            std.mem.asBytes(&out),
+            .{},
+        );
+
+        return out;
+    }
+
     pub fn format(
         lt_hash: LtHash,
         comptime _: []const u8,
