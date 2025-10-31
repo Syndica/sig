@@ -290,7 +290,15 @@ pub fn err(self: *Rooted, code: c_int) !void {
     return error.SqliteError;
 }
 
-/// Should not be called outside of snapshot loading.
+pub fn beginTransation(self: *Rooted) !void {
+    try self.err(sql.sqlite3_exec(self.handle, "BEGIN TRANSACTION;", null, null, null));
+}
+
+pub fn commitTransation(self: *Rooted) !void {
+    try self.err(sql.sqlite3_exec(self.handle, "COMMIT;", null, null, null));
+}
+
+/// Should not be called outside of snapshot loading or slot rooting.
 /// TODO: write putRootedSlot(slot, []pk, []account) and make that public instead.
 pub fn put(self: *Rooted, address: Pubkey, slot: Slot, account: AccountSharedData) !void {
     const stmt: *sql.sqlite3_stmt = if (put_stmt) |stmt| stmt else blk: {

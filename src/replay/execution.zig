@@ -111,6 +111,9 @@ fn awaitResults(
     /// takes ownership and frees with allocator
     slot_futures: []struct { Slot, *ReplaySlotFuture },
 ) ![]const ReplayResult {
+    const zone = tracy.Zone.init(@src(), .{ .name = "awaitResults" });
+    defer zone.deinit();
+
     defer {
         for (slot_futures) |sf| sf[1].destroy(allocator);
         allocator.free(slot_futures);

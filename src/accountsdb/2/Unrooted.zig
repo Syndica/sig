@@ -80,6 +80,7 @@ pub fn put(
     defer entry.lock.unlock();
 
     if (entry.slot != slot) {
+        std.debug.assert(entry.is_empty.load(.acquire));
         entry.entries.clearRetainingCapacity();
         entry.slot = slot;
     }

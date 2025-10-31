@@ -42,9 +42,45 @@ pub fn put(self: *Db, slot: Slot, address: Pubkey, data: AccountSharedData) !voi
     try self.unrooted.put(self.allocator, slot, address, cloned);
 }
 
-pub fn onSlotRooted(self: *Db, newly_rooted_slot: Slot) void {
-    _ = self;
-    std.debug.print("newly rooted slot: {d}\n", .{newly_rooted_slot});
+// TODO: this should be trivial to put on another thread; this currently blocks the main replay
+// thread for 30-40ms per slot on testnet.
+pub fn onSlotRooted(self: *Db, newly_rooted_slot: Slot) error{FailedToRoot}!void {
+    const rooted_index: *Unrooted.SlotIndex = for (self.unrooted.slots) |*index| {
+        if (index.is_empty.load(.acquire)) continue;
+        if (index.slot != newly_rooted_slot) continue;
+        break index;
+    } else unreachable; // we can't root a slot that doesn't exist!
+
+    // Get read lock on unrooted slot, commit to db
+    {
+        rooted_index.lock.lockShared();
+        defer rooted_index.lock.unlockShared();
+
+        std.debug.assert(rooted_index.slot == newly_rooted_slot);
+        std.debug.assert(!rooted_index.is_empty.load(.acquire));
+
+        self.rooted.beginTransation() catch return error.FailedToRoot;
+
+        var entries = rooted_index.entries.iterator();
+        while (entries.next()) |entry| {
+            self.rooted.put(entry.key_ptr.*, newly_rooted_slot, entry.value_ptr.*) catch
+                return error.FailedToRoot;
+        }
+
+        self.rooted.commitTransation() catch return error.FailedToRoot;
+    }
+
+    // Get write lock on unrooted slot, remove from unrooted
+    {
+        rooted_index.lock.lock();
+        defer rooted_index.lock.unlock();
+
+        std.debug.assert(rooted_index.slot == newly_rooted_slot);
+        std.debug.assert(!rooted_index.is_empty.load(.acquire));
+
+        rooted_index.entries.clearRetainingCapacity();
+        rooted_index.is_empty.store(true, .release);
+    }
 }
 
 pub fn get(self: *Db, address: Pubkey, ancestors: *const Ancestors) !?Account {
