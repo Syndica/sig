@@ -63,25 +63,34 @@ pub const Hooks = struct {
         }
     }
 
+    /// Takes in an instance of a struct, where the struct has RPC methods in the form of:
+    /// `fn {methodName}(ContextStruct, Allocator, {MethodInstance}) !{MethodInstance}.Response`
+    /// where {methodName} is a field in `Request` and `MethodInstance` is the field's value.
+    ///
+    /// The struct instance is not allowed to have other methods besides RPC methods, but it is
+    /// allowed to have other fields to hold relevant context for them.
+    ///
+    /// set() takes this struct instance, creates a heap allocated copy internally, and registers it
+    /// to be called on when the corresponding methods are invoked via `call()`. Panics if theres
+    /// already an instance registered to one of the RPC methods.
     pub fn set(
         self: *Hooks,
         allocator: std.mem.Allocator,
         context: anytype,
-    ) !void {
+    ) std.mem.Allocator.Error!void {
         const cref = try ContextRef.init(allocator, context);
         defer cref.ctx_ref.dec(allocator);
 
         const Context = @TypeOf(context);
         inline for (comptime std.meta.declarations(Context)) |decl| {
-            const method = comptime for (std.meta.fieldNames(Method)) |method_name| {
-                if (std.mem.eql(u8, method_name, decl.name)) {
-                    break @field(Method, method_name);
-                }
-            } else @compileError("No RPC method named: " ++ decl.name);
+            const method = if (@hasField(Method, decl.name))
+                @field(Method, decl.name)
+            else
+                @compileError("No RPC method named: " ++ decl.name);
 
             const callback = @field(Context, decl.name);
             if (self.map.contains(method)) {
-                return error.MethodAlreadyImplemented;
+                std.debug.panic("RPC method {s} already registered", .{decl.name});
             }
 
             const CRef = @TypeOf(cref.*);
@@ -97,6 +106,13 @@ pub const Hooks = struct {
                         if (@call(.auto, callback, .{ _cref.value, _allocator, args })) |response| {
                             return .{ .ok = response };
                         } else |err| {
+                            // JSON RPC spec reserves error codes at or below -32_000. So the
+                            // unsigned ones returned by `@intFromError` should be fine to use.
+                            // Solana RPC docs also don't dictate exactly what the error codes
+                            // should be, allowing them to be implementation-defined. This then
+                            // serves as a way to allow the callback to not worry about error codes
+                            // or error messages, while also letting it use `try`, `errdefer`, and
+                            // return the Result directly (instead of wrapping it in a union).
                             return .{ .err = .{
                                 .code = @enumFromInt(@intFromError(err)),
                                 .message = @errorName(err),

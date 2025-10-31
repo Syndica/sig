@@ -388,26 +388,25 @@ fn handleRpcRequest(
     };
 
     switch (@as(rpc.methods.MethodAndParams.Tag, rpc_request.method)) {
+        // GetSnapshot is not a real RPC method & should not be reachable from a POST request.
+        .getSnapshot => {
+            try sendFinalMethodNotFound(request, logger, .getSnapshot, rpc_request.id);
+            return;
+        },
         inline else => |method| {
-            const allocator = json_arena;
-            const result = blk: {
-                // Avoid eager-eval of any inline-else method to call()'s rcp.methods.Request().
-                @setEvalBranchQuota(10_000);
-                inline for (@typeInfo(rpc.methods.MethodAndParams).@"union".fields) |field| {
-                    if (comptime std.mem.eql(u8, field.name, @tagName(method))) {
-                        if (comptime field.type == noreturn) {
-                            try sendFinalMethodNotFound(request, logger, method, rpc_request.id);
-                            return;
-                        }
-                    }
-                }
+            // For unimplemented methods, hard-code sending a not-found error.
+            const FieldType = @FieldType(sig.rpc.methods.MethodAndParams, @tagName(method));
+            if (comptime FieldType == noreturn) {
+                try sendFinalMethodNotFound(request, logger, method, rpc_request.id);
+                return;
+            }
 
-                break :blk server_ctx.rpc_hooks.call(
-                    allocator,
-                    method,
-                    @field(rpc_request.method, @tagName(method)),
-                );
-            } catch |e| switch (e) {
+            const allocator = json_arena;
+            const result = server_ctx.rpc_hooks.call(
+                allocator,
+                method,
+                @field(rpc_request.method, @tagName(method)),
+            ) catch |e| switch (e) {
                 error.MethodNotImplemented => {
                     try sendFinalMethodNotFound(request, logger, method, rpc_request.id);
                     return;

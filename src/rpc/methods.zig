@@ -26,13 +26,11 @@ pub fn Result(comptime method: MethodAndParams.Tag) type {
     };
 }
 
+/// Returns t
 pub fn Request(comptime method: MethodAndParams.Tag) type {
-    for (@typeInfo(MethodAndParams).@"union".fields) |field| {
-        if (std.mem.eql(u8, field.name, @tagName(method))) {
-            if (field.type == noreturn) @compileError("TODO: impl " ++ @tagName(method));
-            return field.type;
-        }
-    } else unreachable;
+    const FieldType = @FieldType(MethodAndParams, @tagName(method));
+    if (FieldType == noreturn) @compileError("TODO: impl " ++ @tagName(method));
+    return FieldType;
 }
 
 pub const MethodAndParams = union(enum) {
@@ -147,18 +145,20 @@ pub const MethodAndParams = union(enum) {
 
 pub const GetSnapshot = struct {
     path: []const u8,
-    get: enum { file, size },
+    get: Getter,
+
+    pub const Getter = enum { file, size };
 
     pub fn jsonParse(
         _: std.mem.Allocator,
         source: anytype,
         _: std.json.ParseOptions,
     ) std.json.ParseError(@TypeOf(source.*))!GetSnapshot {
-        @panic("GetSnapshot is not a real JSON-RPC method" ++
+        @compileError("GetSnapshot is not a real JSON-RPC method" ++
             "It is meant only for RPC server. Do not serialize");
     }
 
-    pub const Response = union(enum) {
+    pub const Response = union(Getter) {
         file: std.fs.File,
         size: u64,
 
@@ -167,7 +167,7 @@ pub const GetSnapshot = struct {
             /// `*std.json.WriteStream(...)`
             jw: anytype,
         ) @TypeOf(jw.*).Error!void {
-            @panic("GetSnapshot is not a real JSON-RPC method" ++
+            @compileError("GetSnapshot is not a real JSON-RPC method" ++
                 "It is meant only for RPC server. Do not serialize");
         }
     };
