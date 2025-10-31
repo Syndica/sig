@@ -984,15 +984,12 @@ fn upcomingLeaderTpuVoteSockets(
 
 fn sendVoteTransaction(
     logger: Logger,
-    allocator: Allocator,
     vote_tx: Transaction,
     tpu_address: SocketAddr,
     sockets: struct { ipv4: network.Socket, ipv6: network.Socket },
 ) !void {
-    var serialized: std.ArrayListUnmanaged(u8) = .empty;
-    defer serialized.deinit(allocator);
-
-    try sig.bincode.write(serialized.writer(allocator), vote_tx, .{});
+    var buf: [sig.net.Packet.DATA_SIZE]u8 = undefined;
+    const serialized = try sig.bincode.writeToSlice(&buf, vote_tx, .{});
 
     const socket = switch (tpu_address) {
         .V4 => sockets.ipv4,
@@ -1000,7 +997,7 @@ fn sendVoteTransaction(
     };
 
     const endpoint = tpu_address.toEndpoint();
-    _ = socket.sendTo(endpoint, serialized.items) catch |err| {
+    _ = socket.sendTo(endpoint, serialized) catch |err| {
         logger.err().logf("Failed to send vote transaction: {}", .{err});
         return err;
     };
@@ -1042,7 +1039,6 @@ fn sendVoteToLeaders(
     for (upcoming_leader_sockets) |tpu_vote_socket| {
         sendVoteTransaction(
             logger,
-            allocator,
             vote_tx,
             tpu_vote_socket,
             .{ .ipv4 = ipv4_socket, .ipv6 = ipv6_socket },
@@ -1068,7 +1064,6 @@ fn sendVoteToLeaders(
 
             sendVoteTransaction(
                 logger,
-                allocator,
                 vote_tx,
                 self_tpu_addr,
                 .{ .ipv4 = ipv4_socket, .ipv6 = ipv6_socket },
