@@ -1207,7 +1207,7 @@ fn validator(
         try consensusDependencies(
             allocator,
             &gossip_service.gossip_table_rw,
-            &leader_schedule_cache,
+            leader_schedule_cache.slotLeaders(),
         );
     defer if (consensus_deps) |d| d.deinit();
 
@@ -1344,7 +1344,7 @@ fn replayOffline(
         try consensusDependencies(
             allocator,
             null,
-            &leader_schedule_cache,
+            leader_schedule_cache.slotLeaders(),
         );
     defer if (consensus_deps) |d| d.deinit();
 
@@ -2004,7 +2004,7 @@ fn replayDependencies(
 fn consensusDependencies(
     allocator: std.mem.Allocator,
     gossip_table: ?*sig.sync.RwMux(sig.gossip.GossipTable),
-    leader_schedule: ?*sig.core.leader_schedule.LeaderScheduleCache,
+    slot_leaders: ?sig.core.leader_schedule.SlotLeaders,
 ) !replay.TowerConsensus.Dependencies.External {
     const senders: sig.replay.TowerConsensus.Senders = try .create(allocator);
     errdefer senders.destroy();
@@ -2016,7 +2016,7 @@ fn consensusDependencies(
         .senders = senders,
         .receivers = receivers,
         .gossip_table = gossip_table,
-        .leader_schedule = leader_schedule,
+        .slot_leaders = slot_leaders,
     };
 }
 
