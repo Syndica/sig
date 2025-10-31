@@ -1321,7 +1321,7 @@ pub const ContactInfo = struct {
         shred_version: u16,
     ) Self {
         const outset = @as(u64, @intCast(std.time.microTimestamp()));
-        return Self{
+        return .{
             .pubkey = pubkey,
             .wallclock = wallclock,
             .outset = outset,
@@ -1352,18 +1352,18 @@ pub const ContactInfo = struct {
             sockets.appendAssumeCapacity(.{ .key = .turbine_recv, .index = 20, .offset = 30 });
         }
 
-        return ContactInfo{
+        return .{
             .pubkey = pubkey,
             .wallclock = wallclock,
             .outset = outset,
             .shred_version = shred_version,
-            .version = ClientVersion{
+            .version = .{
                 .major = 0,
                 .minor = 1,
                 .patch = 2,
                 .commit = 3,
                 .feature_set = 4,
-                .client = 5,
+                .client = .agave_bam, // 5
             },
             .addrs = addrs,
             .sockets = sockets,
@@ -1778,18 +1778,18 @@ test "contact info bincode serialize matches rust bincode" {
     };
 
     // Build identical Sig contact info
-    var sig_contact_info = ContactInfo{
+    var sig_contact_info: ContactInfo = .{
         .pubkey = .parse("4NftWecdfGcYZMJahnAAX5Cw1PLGLZhYFB19wL6AkXqW"),
         .wallclock = 1721060646885,
         .outset = 1721060141617172,
         .shred_version = 0,
-        .version = ClientVersion{
+        .version = .{
             .major = 2,
             .minor = 1,
             .patch = 0,
             .commit = 0,
             .feature_set = 12366211,
-            .client = 3,
+            .client = .agave,
         },
         .addrs = ArrayList(IpAddr).init(testing.allocator),
         .sockets = ArrayList(SocketEntry).init(testing.allocator),
