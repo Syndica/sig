@@ -372,17 +372,13 @@ pub fn deltaMerkleHash(account_reader: AccountReader, allocator: Allocator, slot
 
 /// Returns the lattice hash of every account that was modified in the slot.
 pub fn deltaLtHash(
-    tmp_alloc: std.mem.Allocator,
+    allocator: std.mem.Allocator,
     thread_pool: *sig.sync.ThreadPool,
     account_reader: AccountReader,
     slot: Slot,
     parent_ancestors: *const Ancestors,
 ) !LtHash {
     assert(!parent_ancestors.containsSlot(slot));
-
-    var arena = std.heap.ArenaAllocator.init(tmp_alloc);
-    defer arena.deinit();
-    const allocator = arena.allocator();
 
     // TODO: perf - consider using a thread pool
     // TODO: perf - consider caching old hashes
@@ -410,11 +406,13 @@ pub fn deltaLtHash(
             const accounts = entries.values()[task.start_index..task.end_index];
             const keys = entries.keys()[task.start_index..task.end_index];
 
+            var arena_state: std.heap.ArenaAllocator = .init(gpa);
+            defer arena_state.deinit();
+            const arena = arena_state.allocator();
+
             for (accounts, keys) |data, key| {
                 const account = data.asAccount();
-                if (try db.get(key, ancestors)) |old_account| {
-                    defer old_account.deinit(db.allocator);
-
+                if (try db.get(arena, key, ancestors)) |old_account| {
                     if (!old_account.equals(&account)) {
                         try hash.append(gpa, .{ .existed = .{
                             old_account.ltHash(key),
