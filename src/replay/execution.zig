@@ -438,7 +438,7 @@ fn prepareSlot(
     epoch_tracker: *const EpochTracker,
     slot: Slot,
 ) !PreparedSlot {
-    var zone = tracy.Zone.init(@src(), .{ .name = "replaySlot" });
+    var zone = tracy.Zone.init(@src(), .{ .name = "prepareSlot" });
     zone.value(slot);
     defer zone.deinit();
     errdefer zone.color(0xFF0000);

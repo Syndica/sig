@@ -142,6 +142,9 @@ pub const BatchAccountCache = struct {
         accounts: *const std.MultiArrayList(sig.core.instruction.InstructionAccount),
         instructions: []const sig.runtime.InstructionInfo,
     ) !void {
+        const zone = tracy.Zone.init(@src(), .{ .name = "BatchAccountCache.load" });
+        defer zone.deinit();
+
         const map = &self.account_cache;
 
         // we assume the largest is allowed

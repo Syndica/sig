@@ -1,5 +1,6 @@
 const builtin = @import("builtin");
 const std = @import("std");
+const tracy = @import("tracy");
 const sig = @import("../sig.zig");
 
 const Allocator = std.mem.Allocator;
@@ -107,6 +108,9 @@ pub fn fillMissingSysvarCacheEntries(
     account_reader: SlotAccountReader,
     sysvar_cache: *SysvarCache,
 ) !void {
+    const zone = tracy.Zone.init(@src(), .{ .name = "fillMissingSysvarCacheEntries" });
+    defer zone.deinit();
+
     if (sysvar_cache.clock == null) {
         if (try getSysvarAndDataFromAccount(Clock, allocator, account_reader)) |sysvar| {
             sysvar_cache.clock = sysvar.data;
