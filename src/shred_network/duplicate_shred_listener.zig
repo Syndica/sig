@@ -608,3 +608,187 @@ test "DuplicateShredHandler: early duplicate slot skips buffering" {
     // Should not have buffered anything for this key
     try std.testing.expectEqual(null, handler.dup_buffer.get(key));
 }
+
+test "DuplicateShredHandler: cacheRootInfo updates cached slots in epoch" {
+    const allocator = std.testing.allocator;
+    var epoch_ctx = try sig.adapter.EpochContextManager.init(allocator, .DEFAULT);
+    defer epoch_ctx.deinit();
+
+    var ledger = try sig.ledger.tests.initTestLedger(allocator, @src(), .noop);
+    defer ledger.deinit();
+
+    var dup_slots_channel = try Channel(Slot).init(allocator);
+    defer dup_slots_channel.deinit();
+
+    var shred_version = std.atomic.Value(u16).init(0);
+
+    var handler = DuplicateShredHandler.init(allocator, .noop, .{
+        .exit = undefined,
+        .gossip_table_rw = undefined,
+        .result_writer = ledger.resultWriter(),
+        .ledger_reader = ledger.reader(),
+        .duplicate_slots_sender = &dup_slots_channel,
+        .leader_schedule = epoch_ctx.slotLeaders(),
+        .shred_version = &shred_version,
+        .epoch_schedule = epoch_ctx.schedule,
+        .epoch_ctx_mgr = &epoch_ctx,
+    });
+    defer handler.deinit();
+
+    {
+        var setter = try handler.params.result_writer.setRootsIncremental();
+        defer setter.deinit();
+        try setter.addRoot(1);
+        try setter.commit();
+
+        handler.cacheRootInfo();
+        const expected_epoch = handler.params.epoch_schedule.getEpoch(1);
+        const expected_slots_in_epoch =
+            handler.params.epoch_schedule.getSlotsInEpoch(expected_epoch);
+        try std.testing.expectEqual(@as(Slot, 1), handler.last_root);
+        try std.testing.expectEqual(expected_slots_in_epoch, handler.cached_slots_in_epoch);
+    }
+
+    {
+        const update_epoch: sig.core.Epoch = 2;
+        const update_slot = handler.params.epoch_schedule.getFirstSlotInEpoch(update_epoch);
+        var setter2 = try handler.params.result_writer.setRootsIncremental();
+        defer setter2.deinit();
+        try setter2.addRoot(update_slot);
+        try setter2.commit();
+
+        handler.cacheRootInfo();
+        try std.testing.expectEqual(update_slot, handler.last_root);
+        const expected_slots_in_epoch2 = handler.params.epoch_schedule.getSlotsInEpoch(update_epoch);
+        try std.testing.expectEqual(expected_slots_in_epoch2, handler.cached_slots_in_epoch);
+    }
+}
+
+test "DuplicateShredHandler: maybePruneBuffer prunes when over capacity" {
+    const allocator = std.testing.allocator;
+    var epoch_ctx = try sig.adapter.EpochContextManager.init(allocator, .DEFAULT);
+    defer epoch_ctx.deinit();
+
+    var ledger = try sig.ledger.tests.initTestLedger(allocator, @src(), .noop);
+    defer ledger.deinit();
+
+    var dup_slots_channel = try Channel(Slot).init(allocator);
+    defer dup_slots_channel.deinit();
+
+    var shred_version = std.atomic.Value(u16).init(0);
+
+    var handler = DuplicateShredHandler.init(allocator, .noop, .{
+        .exit = undefined,
+        .gossip_table_rw = undefined,
+        .result_writer = ledger.resultWriter(),
+        .ledger_reader = ledger.reader(),
+        .duplicate_slots_sender = &dup_slots_channel,
+        .leader_schedule = epoch_ctx.slotLeaders(),
+        .shred_version = &shred_version,
+        .epoch_schedule = epoch_ctx.schedule,
+        .epoch_ctx_mgr = &epoch_ctx,
+    });
+    defer handler.deinit();
+
+    handler.last_root = 1_000;
+    handler.cached_slots_in_epoch = 10;
+
+    const capacity = BUFFER_CAPACITY;
+    const total_entries: usize = capacity * 2;
+
+    const from = Pubkey.ZEROES;
+    for (0..total_entries) |i| {
+        const key = Key{
+            .slot = handler.last_root + handler.cached_slots_in_epoch + 100 + i,
+            .from = from,
+        };
+        const gop = try handler.dup_buffer.getOrPut(allocator, key);
+        if (!gop.found_existing) {
+            gop.value_ptr.* = .{ .chunks = [_]?[]u8{null} ** MAX_NUM_CHUNKS };
+        }
+    }
+
+    try std.testing.expect(handler.dup_buffer.count() >= capacity * 2);
+    handler.maybePruneBuffer();
+    try std.testing.expectEqual(@as(usize, 0), handler.dup_buffer.count());
+}
+
+test "DuplicateShredHandler: reconstructShredsFromData returns shreds on valid proof" {
+    const allocator = std.testing.allocator;
+    var epoch_ctx = try sig.adapter.EpochContextManager.init(allocator, .DEFAULT);
+    defer epoch_ctx.deinit();
+
+    var ledger = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
+    defer ledger.deinit();
+
+    var dup_slots_channel = try Channel(Slot).init(allocator);
+    defer dup_slots_channel.deinit();
+
+    var base = try sig.ledger.shred.Shred.fromPayload(allocator, &sig.ledger.shred.test_data_shred);
+    defer base.deinit();
+
+    const slot: Slot = base.commonHeader().slot;
+    const version: u16 = base.commonHeader().version;
+
+    const KeyPair = std.crypto.sign.Ed25519.KeyPair;
+    const keypair = try KeyPair.generateDeterministic(.{1} ** 32);
+    const leader = Pubkey.fromPublicKey(&keypair.public_key);
+
+    var one_slot_leader_buf = try allocator.alloc(Pubkey, 1);
+    defer allocator.free(one_slot_leader_buf);
+    one_slot_leader_buf[0] = leader;
+    var single = sig.core.leader_schedule.SingleEpochSlotLeaders{
+        .start_slot = slot,
+        .slot_leaders = one_slot_leader_buf,
+    };
+
+    var shred_version = std.atomic.Value(u16).init(version);
+    var handler = DuplicateShredHandler.init(allocator, .noop, .{
+        .exit = undefined,
+        .gossip_table_rw = undefined,
+        .result_writer = ledger.resultWriter(),
+        .ledger_reader = ledger.reader(),
+        .duplicate_slots_sender = &dup_slots_channel,
+        .leader_schedule = single.slotLeaders(),
+        .shred_version = &shred_version,
+        .epoch_schedule = epoch_ctx.schedule,
+        .epoch_ctx_mgr = &epoch_ctx,
+    });
+    defer handler.deinit();
+
+    var shred1 = try base.clone();
+    defer shred1.deinit();
+    var shred2 = try base.clone();
+    defer shred2.deinit();
+
+    const mr1 = try shred1.merkleRoot();
+    const sig1_std = try keypair.sign(&mr1.data, null);
+    const sig1 = sig.core.Signature.fromSignature(sig1_std);
+    var payload1 = shred1.mutablePayload();
+    @memcpy(payload1[0..sig.core.Signature.SIZE], &sig1.toBytes());
+
+    const headers_size = sig.ledger.shred.DataShred.constants.headers_size;
+    var payload2 = shred2.mutablePayload();
+    payload2[headers_size] = payload2[headers_size] ^ 0x01;
+    const mr2 = try shred2.merkleRoot();
+    const sig2_std = try keypair.sign(&mr2.data, null);
+    const sig2 = sig.core.Signature.fromSignature(sig2_std);
+    @memcpy(payload2[0..sig.core.Signature.SIZE], &sig2.toBytes());
+
+    const proof = DuplicateSlotProof{ .shred1 = shred1.payload(), .shred2 = shred2.payload() };
+    var proof_buf = std.ArrayListUnmanaged(u8){};
+    defer proof_buf.deinit(allocator);
+    try sig.bincode.write(proof_buf.writer(allocator), proof, .{});
+    const proof_bytes = try proof_buf.toOwnedSlice(allocator);
+    defer allocator.free(proof_bytes);
+
+    const out1, const out2 = try handler.reconstructShredsFromData(
+        .{ .slot = slot, .from = leader },
+        proof_bytes,
+    );
+    defer out1.deinit();
+    defer out2.deinit();
+
+    try std.testing.expectEqual(slot, out1.commonHeader().slot);
+    try std.testing.expectEqual(slot, out2.commonHeader().slot);
+}
