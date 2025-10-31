@@ -60,7 +60,7 @@ pub const LastVoteSignal = enum {
     stray,
 };
 
-const ComputedBankState = struct {
+const ClusterVoteState = struct {
     /// Maps each validator (by their Pubkey) to the amount of stake they have voted
     /// with on this fork. Helps determine who has already committed to this
     /// fork and how much total stake that represents.
@@ -75,7 +75,7 @@ const ComputedBankState = struct {
     lockout_intervals: LockoutIntervals,
     my_latest_landed_vote: ?Slot,
 
-    pub fn deinit(self: *ComputedBankState, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *ClusterVoteState, allocator: std.mem.Allocator) void {
         self.voted_stakes.deinit(allocator);
         self.lockout_intervals.deinit(allocator);
     }
@@ -845,6 +845,8 @@ pub const ReplayTower = struct {
     ///
     /// This is used to experiment with vote lockout behavior and assess whether a vote is
     /// justified based on recent vote history, lockout depth, and voting stake.
+    ///
+    /// Analogous to [check_vote_stake_thresholds](https://github.com/anza-xyz/agave/blob/3572983cc28393e3c39a971c274cdac9b2eb902a/core/src/consensus.rs#L1346)
     pub fn checkVoteStakeThresholds(
         self: *const ReplayTower,
         allocator: std.mem.Allocator,
@@ -856,7 +858,6 @@ pub const ReplayTower = struct {
         var threshold_decisions: [threshold_size]ThresholdDecision = undefined;
 
         // Generate the vote state assuming this vote is included.
-        //
         var vote_state = self.tower.vote_state;
         try vote_state.processNextVoteSlot(slot);
 
@@ -1663,10 +1664,25 @@ fn optimisticallyBypassVoteStakeThresholdCheck(
     return false;
 }
 
-/// Collects and aggregates vote lockout information from all validator vote accounts to compute
-/// aggregated vote lockouts, but also total stake distribution, fork-specific stake, and latest validator votes for frozen banks.
+/// Collects cluster vote state for a frozen slot by aggregating landed votes across validators.
+/// The result is used by fork choice (threshold checks, duplicate confirmation) and related
+/// consensus decisions.
+///
+/// This function simulates each validator's next vote at `slot` (via processNextVoteSlot) to
+/// project the lockout landscape and identify relevant vote slots. It helps with:
+/// - Forward-looking analysis: see how the network would look AFTER everyone votes, helping
+///   predict safety and consensus.
+/// - Lockout expiry: when advancing to `slot`, expired votes are popped, changing the lockout
+///   landscape before thresholds are evaluated.
+/// - Root advancement: simulation may advance roots, revealing consensus that was not visible at
+///   earlier depths.
+/// - Consistent view: deterministic simulation produces the same projected state across validators.
+///
+/// Note: the simulated vote is excluded from stake accumulation; stake is credited only to the
+/// latest landed vote (and its ancestors). As a result, `fork_stake` is taken from the parent of `slot`.
+///
 /// Analogous to [collect_vote_lockouts]https://github.com/anza-xyz/agave/blob/91520c7095c4db968fe666b80a1b80dfef1bd909/core/src/consensus.rs#L389
-pub fn collectVoteLockouts(
+pub fn collectClusterVoteState(
     allocator: std.mem.Allocator,
     logger: Logger,
     vote_account_pubkey: *const Pubkey,
@@ -1675,19 +1691,16 @@ pub fn collectVoteLockouts(
     ancestors: *const AutoArrayHashMapUnmanaged(Slot, Ancestors),
     progress_map: *const ProgressMap,
     latest_validator_votes: *LatestValidatorVotes,
-) !ComputedBankState {
+) !ClusterVoteState {
+    // The state we are interested in.
     var vote_slots: SortedSetUnmanaged(Slot) = .empty;
     defer vote_slots.deinit(allocator);
-
     var voted_stakes = VotedStakes.empty;
-
     var total_stake: u64 = 0;
-
     // Tree of intervals of lockouts of the form [slot, slot + slot.lockout],
     // keyed by end of the range
     var lockout_intervals = LockoutIntervals.EMPTY;
     errdefer lockout_intervals.deinit(allocator);
-
     var my_latest_landed_vote: ?Slot = null;
 
     for (vote_accounts.keys(), vote_accounts.values()) |vote_address, vote| {
@@ -1802,7 +1815,7 @@ pub fn collectVoteLockouts(
         }
     };
 
-    return ComputedBankState{
+    return ClusterVoteState{
         .voted_stakes = voted_stakes,
         .total_stake = total_stake,
         .fork_stake = fork_stake,
@@ -2009,7 +2022,7 @@ test "check_vote_threshold_forks" {
         var latest_votes: LatestValidatorVotes = .empty;
         defer latest_votes.deinit(allocator);
 
-        var computed_banks = try collectVoteLockouts(
+        var computed_banks = try collectClusterVoteState(
             allocator,
             .noop,
             &Pubkey.ZEROES,
@@ -2040,7 +2053,7 @@ test "check_vote_threshold_forks" {
         var latest_votes = LatestValidatorVotes.empty;
 
         const vote_to_evaluate = VOTE_THRESHOLD_DEPTH;
-        var computed_banks = try collectVoteLockouts(
+        var computed_banks = try collectClusterVoteState(
             allocator,
             .noop,
             &Pubkey.ZEROES,
@@ -2159,7 +2172,7 @@ test "collect vote lockouts root" {
         );
     }
 
-    var computed_banks = try collectVoteLockouts(
+    var computed_banks = try collectClusterVoteState(
         allocator,
         .noop,
         &Pubkey.initRandom(random),
@@ -2259,7 +2272,7 @@ test "collect vote lockouts sums" {
         );
     }
 
-    var computed_banks = try collectVoteLockouts(
+    var computed_banks = try collectClusterVoteState(
         allocator,
         .noop,
         &Pubkey.ZEROES,

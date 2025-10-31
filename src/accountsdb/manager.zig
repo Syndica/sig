@@ -205,7 +205,6 @@ pub fn onSlotRooted(
             std.debug.assert(newly_rooted_slot == prev_inc.slot);
 
             gen_info.inc = .{
-                .capitalization = result.incremental_capitalization,
                 .hash = result.incremental_hash,
                 .slot = newly_rooted_slot,
             };
