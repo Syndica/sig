@@ -1304,7 +1304,7 @@ fn replayOffline(
         // TODO: Implement feature gating for vote keyed leader schedule.
         // [agave] https://github.com/anza-xyz/agave/blob/e468acf4da519171510f2ec982f70a0fd9eb2c8b/ledger/src/leader_schedule_utils.rs#L12
         // [agave] https://github.com/anza-xyz/agave/blob/e468acf4da519171510f2ec982f70a0fd9eb2c8b/runtime/src/bank.rs#L4833
-        const leader_schedule = if (true)
+        const leader_schedule_0 = if (true)
             try LeaderSchedule.fromVoteAccounts(
                 allocator,
                 epoch,
@@ -1318,11 +1318,39 @@ fn replayOffline(
                 epoch_schedule.slots_per_epoch,
                 staked_nodes,
             );
-        errdefer allocator.free(leader_schedule);
+        errdefer allocator.free(leader_schedule_0);
 
         try epoch_context_manager.put(epoch, .{
             .staked_nodes = staked_nodes_cloned,
-            .leader_schedule = leader_schedule,
+            .leader_schedule = leader_schedule_0,
+        });
+    }
+    { // TODO: This was a quick ugly fix, needs to be handled correctly before merging
+        var staked_nodes_cloned = try staked_nodes.clone(allocator);
+        errdefer staked_nodes_cloned.deinit(allocator);
+
+        // TODO: Implement feature gating for vote keyed leader schedule.
+        // [agave] https://github.com/anza-xyz/agave/blob/e468acf4da519171510f2ec982f70a0fd9eb2c8b/ledger/src/leader_schedule_utils.rs#L12
+        // [agave] https://github.com/anza-xyz/agave/blob/e468acf4da519171510f2ec982f70a0fd9eb2c8b/runtime/src/bank.rs#L4833
+        const leader_schedule_1 = if (true)
+            try LeaderSchedule.fromVoteAccounts(
+                allocator,
+                epoch + 1,
+                epoch_schedule.slots_per_epoch,
+                try collapsed_manifest.epochVoteAccounts(epoch + 1),
+            )
+        else
+            try LeaderSchedule.fromStakedNodes(
+                allocator,
+                epoch,
+                epoch_schedule.slots_per_epoch,
+                staked_nodes,
+            );
+        errdefer allocator.free(leader_schedule_1);
+
+        try epoch_context_manager.put(epoch + 1, .{
+            .staked_nodes = staked_nodes_cloned,
+            .leader_schedule = leader_schedule_1,
         });
     }
 

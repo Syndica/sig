@@ -256,7 +256,7 @@ fn buildUpdatedStakeReward(
     partitioned_reward: sig.replay.rewards.PartitionedStakeReward,
     slot_store: SlotAccountStore,
 ) !StakeReward {
-    const cached_stake_state = stake_accounts.get(partitioned_reward.stake_pubkey) orelse
+    _ = stake_accounts.get(partitioned_reward.stake_pubkey) orelse
         return error.MissingStakeAccountInCache;
 
     var account = try slot_store.get(allocator, partitioned_reward.stake_pubkey) orelse
@@ -270,13 +270,12 @@ fn buildUpdatedStakeReward(
         else => return error.InvalidAccountData,
     }
 
-    stake_state.stake.stake = cached_stake_state;
     account.lamports += partitioned_reward.stake_reward;
-
     std.debug.assert(stake_state.stake.stake.delegation.stake +| partitioned_reward.stake_reward ==
         partitioned_reward.stake.delegation.stake);
+    stake_state.stake.stake = partitioned_reward.stake;
 
-    const stake_data = try allocator.alloc(u8, StakeStateV2.SIZE);
+    const stake_data = try allocator.alloc(u8, account.data.len());
     errdefer allocator.free(stake_data);
     @memset(stake_data, 0);
     _ = try sig.bincode.writeToSlice(

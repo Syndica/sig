@@ -30,8 +30,7 @@ pub fn hashAddressToPartition(
 ) usize {
     var v_self = self;
     _ = try v_self.hasher.writer().write(&address.data);
-    const hash: u128 = v_self.hasher.finalInt();
-    return @intCast(@as(u128, v_self.partitions * hash) / @as(u128, std.math.maxInt(u64) + 1));
+    return hashToPartition(v_self.hasher.finalInt(), v_self.partitions);
 }
 
 pub fn hashRewardsIntoPartitions(
@@ -62,7 +61,11 @@ pub fn hashRewardsIntoPartitions(
     return result;
 }
 
-test "hashRewardsIntoPartitions" {
+fn hashToPartition(hash: u128, partitions: u128) usize {
+    return @intCast((hash * partitions) / (std.math.maxInt(u64) + 1));
+}
+
+test hashRewardsIntoPartitions {
     const allocator = std.testing.allocator;
 
     var prng = std.Random.DefaultPrng.init(0);
@@ -111,4 +114,34 @@ test "hashRewardsIntoPartitions" {
 
         try std.testing.expectEqual(expected_num, total_hashed);
     }
+}
+
+test hashAddressToPartition {
+    const partitions = 16;
+    const max_u64 = std.math.maxInt(u64);
+    try std.testing.expectEqual(0, hashToPartition(0, partitions));
+    try std.testing.expectEqual(0, hashToPartition(max_u64 / 16, partitions));
+    try std.testing.expectEqual(1, hashToPartition(max_u64 / 16 + 1, partitions));
+    try std.testing.expectEqual(1, hashToPartition(max_u64 / 16 * 2, partitions));
+    try std.testing.expectEqual(1, hashToPartition(max_u64 / 16 * 2 + 1, partitions));
+    try std.testing.expectEqual(partitions - 1, hashToPartition(max_u64 - 1, partitions));
+    try std.testing.expectEqual(partitions - 1, hashToPartition(max_u64, partitions));
+}
+
+test EpochRewardsHasher {
+    const seed = Hash.parse("4uQeVj5tqViQh7yWWGStvkEG1Zmhx6uasJtWCJziofM");
+    const partitions = 10;
+    const ehasher = try EpochRewardsHasher.init(partitions, &seed);
+
+    const pubkey = Pubkey.parse("1113eKEmP3gmGaNeoKSVoYwPpyfTmrmizMbi1TqGj2");
+    const b1 = ehasher.hashAddressToPartition(&pubkey);
+    const b2 = ehasher.hashAddressToPartition(&pubkey);
+    try std.testing.expectEqual(3, b1);
+    try std.testing.expectEqual(b1, b2);
+
+    const key: [SipHasher13.key_length]u8 = @splat(0);
+    var hasher = SipHasher13.init(&key);
+    _ = try hasher.writer().write(&seed.data);
+    _ = try hasher.writer().write(&pubkey.data);
+    try std.testing.expectEqual(7021953457010218011, hasher.finalInt());
 }
