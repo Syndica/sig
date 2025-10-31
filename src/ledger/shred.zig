@@ -1336,7 +1336,7 @@ test "merkleProof" {
 
 test "merkle tree round trip" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(123);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     const size = 100;
 

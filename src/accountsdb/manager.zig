@@ -132,7 +132,7 @@ pub fn onSlotRooted(
 
         // TODO: get rid of this once `generateFullSnapshot` can actually
         // derive this data correctly by itdb.
-        var prng = std.Random.DefaultPrng.init(1234);
+        var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
         var tmp_bank_fields = try BankFields.initRandom(allocator, prng.random(), 128);
         defer tmp_bank_fields.deinit(allocator);
 
@@ -943,7 +943,7 @@ test "flushing slots works" {
     });
     defer accounts_db.deinit();
 
-    var prng = std.Random.DefaultPrng.init(19);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     const n_accounts = 3;
 
@@ -1004,7 +1004,7 @@ test "purge accounts in cache works" {
     });
     defer accounts_db.deinit();
 
-    var prng = std.Random.DefaultPrng.init(19);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     const n_accounts = 3;
 
@@ -1062,7 +1062,7 @@ test "clean to shrink account file works with zero-lamports" {
     defer accounts_db.deinit();
     defer dir.cleanup();
 
-    var prng = std.Random.DefaultPrng.init(19);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     const n_accounts = 10;
 
@@ -1138,7 +1138,7 @@ test "clean to shrink account file works - basic" {
     defer accounts_db.deinit();
     defer dir.cleanup();
 
-    var prng = std.Random.DefaultPrng.init(19);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     const n_accounts = 10;
 
@@ -1218,7 +1218,7 @@ test "full clean account file works" {
     });
     defer accounts_db.deinit();
 
-    var prng = std.Random.DefaultPrng.init(19);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     const n_accounts = 3;
 
@@ -1336,7 +1336,7 @@ test "shrink account file works" {
     });
     defer accounts_db.deinit();
 
-    var prng = std.Random.DefaultPrng.init(19);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     const n_accounts = 10;
@@ -1480,7 +1480,7 @@ test "shrink account file works" {
 test "onSlotRooted basic" {
     const allocator = std.testing.allocator;
     const logger: Logger = .noop;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     var tmp_dir_root = std.testing.tmpDir(.{});
@@ -1542,7 +1542,7 @@ test "onSlotRooted basic" {
 test "onSlotRooted zero_lamports" {
     const allocator = std.testing.allocator;
     const logger: Logger = .noop;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     var tmp_dir_root = std.testing.tmpDir(.{});
@@ -1579,7 +1579,7 @@ test "onSlotRooted zero_lamports" {
 test "onSlotRooted shrink and delete" {
     const allocator = std.testing.allocator;
     const logger: Logger = .noop;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     var tmp_dir_root = std.testing.tmpDir(.{});
@@ -1660,7 +1660,7 @@ test "onSlotRooted shrink and delete" {
 test "snapshot generation happens without error" {
     const allocator = std.testing.allocator;
     const logger: Logger = .noop;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     var tmp_dir_root = std.testing.tmpDir(.{ .iterate = true });

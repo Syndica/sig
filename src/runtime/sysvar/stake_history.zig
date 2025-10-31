@@ -113,7 +113,7 @@ pub const StakeHistory = struct {
 
 test "serialize and deserialize" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     {

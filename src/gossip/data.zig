@@ -1666,7 +1666,7 @@ const RawOffsets = struct {
 };
 
 test "new contact info" {
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     var ci = ContactInfo.init(testing.allocator, Pubkey.initRandom(random), @as(u64, @intCast(std.time.microTimestamp())), 0);
@@ -1694,7 +1694,7 @@ test "socketaddr bincode serialize matches rust" {
 }
 
 test "set & get socket on contact info" {
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     var ci = ContactInfo.init(testing.allocator, Pubkey.initRandom(random), @as(u64, @intCast(std.time.microTimestamp())), 0);
@@ -1879,7 +1879,7 @@ test "SocketEntry serializer works" {
 test "sig verify duplicateShreds" {
     var keypair = try KeyPair.generateDeterministic([_]u8{1} ** 32);
     const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     var data = DuplicateShred.initRandom(prng.random());
     data.from = pubkey;
 
@@ -1888,7 +1888,7 @@ test "sig verify duplicateShreds" {
 }
 
 test "sanitize GossipData" {
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     for (0..4) |i| {
@@ -2038,7 +2038,7 @@ test "gossip data serialization matches rust" {
 }
 
 test "random gossip data" {
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     var buf: [1000]u8 = undefined;
@@ -2071,7 +2071,7 @@ test "random gossip data" {
 }
 
 test "LegacyContactInfo <-> ContactInfo roundtrip" {
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     const start = LegacyContactInfo.initRandom(random);
@@ -2083,7 +2083,7 @@ test "LegacyContactInfo <-> ContactInfo roundtrip" {
 }
 
 test "sanitize valid ContactInfo works" {
-    var prng = std.Random.DefaultPrng.init(871329);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     const info = try ContactInfo.initRandom(std.testing.allocator, random, Pubkey.initRandom(random), 100, 123, 246);
     defer info.deinit();
@@ -2092,7 +2092,7 @@ test "sanitize valid ContactInfo works" {
 }
 
 test "sanitize invalid ContactInfo has error" {
-    var prng = std.Random.DefaultPrng.init(3414214);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     const info = try ContactInfo.initRandom(std.testing.allocator, random, Pubkey.initRandom(random), 1_000_000_000_000_000, 123, 246);
     defer info.deinit();
@@ -2101,7 +2101,7 @@ test "sanitize invalid ContactInfo has error" {
 }
 
 test "sanitize valid NodeInstance works" {
-    var prng = std.Random.DefaultPrng.init(23523413);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     const instance = NodeInstance.initRandom(random);
     const data = GossipData{ .NodeInstance = instance };
@@ -2109,7 +2109,7 @@ test "sanitize valid NodeInstance works" {
 }
 
 test "sanitize invalid NodeInstance has error" {
-    var prng = std.Random.DefaultPrng.init(524145234);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     var instance = NodeInstance.initRandom(random);
     instance.wallclock = 1_000_000_000_487_283;
@@ -2118,7 +2118,7 @@ test "sanitize invalid NodeInstance has error" {
 }
 
 test "sanitize valid SnapshotHashes works" {
-    var prng = std.Random.DefaultPrng.init(23523413);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     var instance = SnapshotHashes.initRandom(random);
     instance.full.slot = 1000;
@@ -2127,7 +2127,7 @@ test "sanitize valid SnapshotHashes works" {
 }
 
 test "sanitize invalid SnapshotHashes full slot has error" {
-    var prng = std.Random.DefaultPrng.init(524145234);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     var instance = SnapshotHashes.initRandom(random);
     instance.full.slot = 1_000_000_000_487_283;
@@ -2136,7 +2136,7 @@ test "sanitize invalid SnapshotHashes full slot has error" {
 }
 
 test "sanitize invalid SnapshotHashes incremental slot has error" {
-    var prng = std.Random.DefaultPrng.init(524145234);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     var instance = SnapshotHashes.initRandom(random);
     instance.incremental = SnapshotHashes.IncrementalSnapshotsList.initSingle(.{ .slot = 1_000_000_000_487_283, .hash = Hash.ZEROES });
@@ -2145,7 +2145,7 @@ test "sanitize invalid SnapshotHashes incremental slot has error" {
 }
 
 test "sanitize SnapshotHashes full > incremental has error" {
-    var prng = std.Random.DefaultPrng.init(524145234);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     var instance = SnapshotHashes.initRandom(random);
     instance.full.slot = 2;

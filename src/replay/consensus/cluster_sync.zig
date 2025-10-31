@@ -1527,7 +1527,7 @@ const TestData = struct {
 test "apply state changes" {
     const allocator = std.testing.allocator;
 
-    var prng = std.Random.DefaultPrng.init(7353);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     var test_data: TestData = try .init(allocator, .noop, random);
@@ -1587,7 +1587,7 @@ test "apply state changes" {
 test "apply state changes slot frozen" {
     const allocator = std.testing.allocator;
 
-    var prng = std.Random.DefaultPrng.init(7353);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     var test_data: TestData = try .init(allocator, .noop, random);
@@ -1673,7 +1673,7 @@ test "apply state changes slot frozen" {
 test "apply state changes duplicate confirmed matches frozen" {
     const allocator = std.testing.allocator;
 
-    var prng = std.Random.DefaultPrng.init(7353);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     var test_data: TestData = try .init(allocator, .noop, random);
@@ -1762,7 +1762,7 @@ test "apply state changes duplicate confirmed matches frozen" {
 test "apply state changes slot frozen and duplicate confirmed matches frozen" {
     const allocator = std.testing.allocator;
 
-    var prng = std.Random.DefaultPrng.init(7353);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     var test_data: TestData = try .init(allocator, .noop, random);
@@ -1861,7 +1861,7 @@ test "apply state changes slot frozen and duplicate confirmed matches frozen" {
 test "check slot agrees with cluster dead duplicate confirmed" {
     const allocator = std.testing.allocator;
 
-    var prng = std.Random.DefaultPrng.init(13633);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     var test_data: TestData = try .init(allocator, .noop, random);
@@ -1919,7 +1919,7 @@ test "check slot agrees with cluster dead duplicate confirmed" {
 fn testStateDuplicateThenSlotFrozen(initial_slot_hash: ?Hash) !void {
     const allocator = std.testing.allocator;
 
-    var prng = std.Random.DefaultPrng.init(7353);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     var test_data: TestData = try .init(allocator, .noop, random);
@@ -2029,7 +2029,7 @@ test "state unreplayed slot duplicate then slot frozen" {
 test "state ancestor confirmed descendant duplicate" {
     const allocator = std.testing.allocator;
 
-    var prng = std.Random.DefaultPrng.init(7353);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     var test_data: TestData = try .init(allocator, .noop, random);
@@ -2174,7 +2174,7 @@ test "state ancestor confirmed descendant duplicate" {
 test "state ancestor duplicate descendant confirmed" {
     const allocator = std.testing.allocator;
 
-    var prng = std.Random.DefaultPrng.init(7353);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     var test_data: TestData = try .init(allocator, .noop, random);
@@ -2319,7 +2319,7 @@ fn verifyAllSlotsDuplicateConfirmed(
 test "state descendant confirmed ancestor duplicate" {
     const allocator = std.testing.allocator;
 
-    var prng = std.Random.DefaultPrng.init(7353);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     var test_data: TestData = try .init(allocator, .noop, random);
@@ -2413,7 +2413,7 @@ test "state descendant confirmed ancestor duplicate" {
 test "duplicate confirmed and epoch slots frozen" {
     const allocator = std.testing.allocator;
 
-    var prng = std.Random.DefaultPrng.init(7353);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     var test_data: TestData = try .init(allocator, .noop, random);
@@ -2520,7 +2520,7 @@ test "duplicate confirmed and epoch slots frozen" {
 test "duplicate confirmed and epoch slots frozen mismatched" {
     const allocator = std.testing.allocator;
 
-    var prng = std.Random.DefaultPrng.init(7353);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     var test_data: TestData = try .init(allocator, .noop, random);

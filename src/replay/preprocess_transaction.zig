@@ -69,7 +69,7 @@ test preprocessTransaction {
     const Signature = sig.core.Signature;
     const TransactionError = sig.ledger.transaction_status.TransactionError;
 
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     { // Verify succeeds

@@ -93,7 +93,7 @@ pub fn sanitizeWallclock(wallclock: u64) !void {
 }
 
 test "push message serialization is predictable" {
-    var prng = DefaultPrng.init(0);
+    var prng = DefaultPrng.init(std.testing.random_seed);
     const pubkey = Pubkey.initRandom(prng.random());
     var values = std.ArrayList(SignedGossipData).init(std.testing.allocator);
     defer values.deinit();
@@ -115,7 +115,7 @@ test "push message serialization is predictable" {
 test "ping message serializes and deserializes correctly" {
     var keypair = KeyPair.generate();
 
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     var original = GossipMessage{ .PingMessage = try Ping.initRandom(prng.random(), &keypair) };
     var buf = [_]u8{0} ** 1232;
@@ -132,7 +132,7 @@ test "ping message serializes and deserializes correctly" {
 test "test ping pong sig verify" {
     var keypair = KeyPair.generate();
 
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     var ping = try Ping.initRandom(prng.random(), &keypair);
     var msg = GossipMessage{ .PingMessage = ping };
     try msg.verifySignature();

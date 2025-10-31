@@ -1521,10 +1521,7 @@ fn createSnapshot(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
     _ = try accounts_db.generateFullSnapshot(.{
         .target_slot = slot,
         .bank_fields = &loaded_snapshot.combined_manifest.full.bank_fields,
-        .lamports_per_signature = lps: {
-            var prng = std.Random.DefaultPrng.init(1234);
-            break :lps prng.random().int(u64);
-        },
+        .lamports_per_signature = 123_456_567, // TODO: make this a real number
         .old_snapshot_action = .delete_old,
     });
 }

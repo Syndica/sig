@@ -624,7 +624,7 @@ test "getActiveFeatures rejects wrong ownership" {
 
 test trackNewSlots {
     const allocator = std.testing.allocator;
-    var rng = std.Random.DefaultPrng.init(0);
+    var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     var ledger = try sig.ledger.tests.initTestLedger(allocator, @src(), .noop);
     defer ledger.deinit();
@@ -1133,7 +1133,7 @@ pub const DependencyStubs = struct {
         logger: Logger,
         run_vote_listener: bool,
     ) !Service {
-        var rng = std.Random.DefaultPrng.init(0);
+        var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
         const random = rng.random();
 
         var deps: Dependencies = deps: {
@@ -1267,13 +1267,13 @@ const TestAccount = struct {
     rent_epoch: u64,
     data: []u8,
 
-    pub fn deinit(self: @This(), allocator: std.mem.Allocator) void {
+    pub fn deinit(self: TestAccount, allocator: std.mem.Allocator) void {
         allocator.free(self.pubkey);
         allocator.free(self.owner);
         allocator.free(self.data);
     }
 
-    pub fn toAccount(self: @This()) !struct { Slot, Pubkey, sig.runtime.AccountSharedData } {
+    pub fn toAccount(self: TestAccount) !struct { Slot, Pubkey, sig.runtime.AccountSharedData } {
         return .{
             self.slot,
             try .parseRuntime(self.pubkey),

@@ -69,7 +69,7 @@ fn testAsmWithMemory(
         config,
     );
 
-    var prng = std.Random.DefaultPrng.init(10);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     var cache, var tc = try createTransactionContext(
         allocator,
         prng.random(),
@@ -1912,7 +1912,7 @@ test "pqr" {
     program[33] = 16; // src = r1
     program[40] = @intFromEnum(OpCode.exit_or_syscall);
 
-    var prng = std.Random.DefaultPrng.init(10);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     var cache, var tc = try createTransactionContext(
         allocator,
         prng.random(),
@@ -2059,7 +2059,7 @@ test "pqr divide by zero" {
         defer executable.deinit(allocator);
 
         const map = try MemoryMap.init(allocator, &.{}, .v3, .{});
-        var prng = std.Random.DefaultPrng.init(10);
+        var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
         var cache, var tc = try createTransactionContext(
             allocator,
@@ -2341,7 +2341,7 @@ pub fn testElfWithSyscalls(
         config,
     );
 
-    var prng = std.Random.DefaultPrng.init(10);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     var cache, var tc = try createTransactionContext(
         allocator,
         prng.random(),
@@ -2955,7 +2955,7 @@ pub fn testSyscall(
 ) !void {
     const testing = sig.runtime.testing;
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     var cache, var tc = try testing.createTransactionContext(allocator, prng.random(), .{
         .accounts = &.{.{

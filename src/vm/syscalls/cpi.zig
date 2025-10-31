@@ -1350,7 +1350,7 @@ const TestAccount = struct {
 
 test "CallerAccount.fromAccountInfoRust" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     var ctx = try TestContext.init(allocator, prng.random(), "foobar");
     defer ctx.deinit(allocator);
@@ -1404,7 +1404,7 @@ test "CallerAccount.fromAccountInfoRust" {
 
 test "CallerAccount.fromAccountInfoC" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     var ctx = try TestContext.init(allocator, prng.random(), "foobar");
     defer ctx.deinit(allocator);
@@ -1490,7 +1490,7 @@ test "CallerAccount.fromAccountInfoC" {
 
 test "translateAccounts" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     var ctx = try TestContext.init(allocator, prng.random(), "foobar");
     defer ctx.deinit(allocator);
@@ -1633,7 +1633,7 @@ fn intoStableInstruction(
 
 fn testTranslateInstruction(comptime AccountInfoType: type) !void {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     var ctx = try TestContext.init(allocator, prng.random(), "foo");
     defer ctx.deinit(allocator);
@@ -1700,7 +1700,7 @@ test "translateInstructionC" {
 
 test "translateSigners" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     var ctx = try TestContext.init(allocator, prng.random(), "foo");
     defer ctx.deinit(allocator);
@@ -1866,7 +1866,7 @@ const TestCallerAccount = struct {
 
 test "updateCalleeAccount: lamports owner" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     for ([_]bool{ false, true }) |stricter_abi_and_runtime_constraints| {
         var ctx = try TestContext.init(allocator, prng.random(), &.{});
@@ -1905,7 +1905,7 @@ test "updateCalleeAccount: lamports owner" {
 
 test "updateCalleeAccount: data writable" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     for ([_]bool{ false, true }) |stricter_abi_and_runtime_constraints| {
         var ctx = try TestContext.init(allocator, prng.random(), "foobar");
@@ -2004,7 +2004,7 @@ test "updateCalleeAccount: data writable" {
 
 test "updateCalleeAccount: data readonly" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     for ([_]bool{ false, true }) |stricter_abi_and_runtime_constraints| {
         // Custom TestContext to set readonly account.
@@ -2082,7 +2082,7 @@ test "updateCalleeAccount: data readonly" {
 
 test "updateCallerAccount: lamports owner" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     for ([_]bool{ false, true }) |stricter_abi_and_runtime_constraints| {
         var ctx = try TestContext.init(allocator, prng.random(), &.{});
@@ -2120,7 +2120,7 @@ test "updateCallerAccount: lamports owner" {
 
 test "updateCallerAccount: data" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     var ctx = try TestContext.init(allocator, prng.random(), "foobar");
     defer ctx.deinit(allocator);
@@ -2234,7 +2234,7 @@ test "cpiCommon (invokeSignedC)" {
 
 fn testCpiCommon(comptime AccountInfoType: type) !void {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     for ([_]bool{ false, true }) |stricter_abi_and_runtime_constraints| {
         var ctx = try TestContext.init(allocator, prng.random(), "hello world");

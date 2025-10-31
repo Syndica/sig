@@ -121,7 +121,7 @@ test "serveSpawn snapshots" {
     if (sig.build_options.no_network_tests) return error.SkipZigTest;
     const allocator = std.testing.allocator;
 
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     const logger_unscoped: Logger = .noop;
@@ -240,7 +240,7 @@ test "serveSpawn getAccountInfo" {
     if (sig.build_options.no_network_tests) return error.SkipZigTest;
     const allocator = std.testing.allocator;
 
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     // const logger_unscoped: Logger = .{ .direct_print = .{ .max_level = .trace } };

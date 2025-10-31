@@ -979,7 +979,7 @@ pub const HashTimeQueue = struct {
 test "remove old values" {
     const keypair = try KeyPair.generateDeterministic(@splat(1));
 
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     var table = try GossipTable.init(std.testing.allocator, std.testing.allocator);
     defer table.deinit();
@@ -1008,7 +1008,7 @@ test "remove old values" {
 test "insert and remove value" {
     const keypair = try KeyPair.generateDeterministic(@splat(1));
 
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     var table = try GossipTable.init(std.testing.allocator, std.testing.allocator);
     defer table.deinit();
@@ -1026,7 +1026,7 @@ test "insert and remove value" {
 test "trim pruned values" {
     const keypair = try KeyPair.generateDeterministic(@splat(1));
 
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     var table = try GossipTable.init(std.testing.allocator, std.testing.allocator);
     defer table.deinit();
@@ -1068,7 +1068,7 @@ test "gossip.HashTimeQueue: insert multiple values" {
     var htq = HashTimeQueue.init(std.testing.allocator);
     defer htq.deinit();
 
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     try htq.insert(Hash.initRandom(random), 100);
@@ -1089,7 +1089,7 @@ test "gossip.HashTimeQueue: insert multiple values" {
 test "gossip.HashTimeQueue: trim pruned values" {
     const keypair = try KeyPair.generateDeterministic(@splat(1));
 
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     const data = GossipData{
         .LegacyContactInfo = LegacyContactInfo.initRandom(random),
@@ -1123,7 +1123,7 @@ test "gossip.HashTimeQueue: trim pruned values" {
 test "insert and get" {
     const keypair = try KeyPair.generateDeterministic(@splat(1));
 
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     var value = SignedGossipData.initRandom(random, &keypair);
 

@@ -259,7 +259,7 @@ test "status cache empty" {
 
 test "status cache find with ancestor fork" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     const signature = sig.core.Signature.ZEROES;
@@ -283,7 +283,7 @@ test "status cache find with ancestor fork" {
 
 test "status cache find without ancestor fork" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     const signature = sig.core.Signature.ZEROES;
@@ -304,7 +304,7 @@ test "status cache find without ancestor fork" {
 
 test "status cache find with root ancestor fork" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     const signature = sig.core.Signature.ZEROES;
@@ -326,7 +326,7 @@ test "status cache find with root ancestor fork" {
 
 test "status cache insert picks latest blockhash fork" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     const signature = sig.core.Signature.ZEROES;
@@ -352,7 +352,7 @@ test "status cache insert picks latest blockhash fork" {
 
 test "status cache root expires" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     const signature = sig.core.Signature.ZEROES;

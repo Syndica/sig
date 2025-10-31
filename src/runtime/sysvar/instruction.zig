@@ -72,7 +72,7 @@ pub fn serializeInstructions(
 // [agave] https://github.com/anza-xyz/agave/blob/a00f1b5cdea9a7d5a70f8d24b86ea3ae66feff11/sdk/program/src/sysvar/instructions.rs#L520
 test serializeInstructions {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const program_id0 = Pubkey.initRandom(prng.random());
     const program_id1 = Pubkey.initRandom(prng.random());

@@ -123,7 +123,7 @@ test "mapError" {
 
 // [agave] https://github.com/anza-xyz/agave/blob/c5ed1663a1218e9e088e30c81677bc88059cc62b/sdk/pubkey/src/lib.rs#L1336
 test "findProgramAddress" {
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     for (0..1_000) |_| {
         const program_id = Pubkey.initRandom(prng.random());
 
@@ -144,7 +144,7 @@ test "findProgramAddress" {
 }
 
 test "createProgramAddress" {
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     for (0..1_000) |_| {
         const program_id = Pubkey.initRandom(prng.random());
 

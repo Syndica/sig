@@ -550,7 +550,7 @@ test "edwards curve point validation" {
     };
     const invalid_bytes_addr = 0x200000000;
 
-    const compute_budget = sig.runtime.ComputeBudget.default(1_400_000);
+    const compute_budget = sig.runtime.ComputeBudget.DEFAULT;
     const total_compute = compute_budget.curve25519_edwards_validate_point_cost * 2;
 
     try sig.vm.tests.testSyscall(
@@ -587,7 +587,7 @@ test "ristretto curve point validation" {
     };
     const invalid_bytes_addr = 0x200000000;
 
-    const compute_budget = sig.runtime.ComputeBudget.default(1_400_000);
+    const compute_budget = sig.runtime.ComputeBudget.DEFAULT;
     const total_compute = compute_budget.curve25519_ristretto_validate_point_cost * 2;
 
     try sig.vm.tests.testSyscall(
@@ -643,7 +643,7 @@ test "edwards curve group operations" {
     var result_point: [32]u8 = undefined;
     const result_point_addr = 0x500000000;
 
-    const compute_budget = sig.runtime.ComputeBudget.default(1_400_000);
+    const compute_budget = sig.runtime.ComputeBudget.DEFAULT;
     const total_compute = (compute_budget.curve25519_edwards_add_cost +
         compute_budget.curve25519_edwards_subtract_cost +
         compute_budget.curve25519_edwards_multiply_cost);
@@ -671,7 +671,7 @@ test "edwards curve group operations" {
         .{ .compute_meter = total_compute },
     );
 
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     var cache, var tc = try sig.runtime.testing.createTransactionContext(
         allocator,
         prng.random(),
@@ -778,7 +778,7 @@ test "ristretto curve group operations" {
     var result_point: [32]u8 = undefined;
     const result_point_addr = 0x500000000;
 
-    const compute_budget = sig.runtime.ComputeBudget.default(1_400_000);
+    const compute_budget = sig.runtime.ComputeBudget.DEFAULT;
     const total_compute = (compute_budget.curve25519_ristretto_add_cost +
         compute_budget.curve25519_ristretto_subtract_cost +
         compute_budget.curve25519_ristretto_multiply_cost) * 2;
@@ -805,7 +805,7 @@ test "ristretto curve group operations" {
         .{ .compute_meter = total_compute },
     );
 
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     var cache, var tc = try sig.runtime.testing.createTransactionContext(
         allocator,
         prng.random(),
@@ -936,13 +936,13 @@ test "multiscalar multiplication" {
     }, .v3, .{});
     defer memory_map.deinit(allocator);
 
-    const compute_budget = sig.runtime.ComputeBudget.default(1_400_000);
+    const compute_budget = sig.runtime.ComputeBudget.DEFAULT;
     const total_compute = compute_budget.curve25519_edwards_msm_base_cost +
         compute_budget.curve25519_edwards_msm_incremental_cost +
         compute_budget.curve25519_ristretto_msm_base_cost +
         compute_budget.curve25519_ristretto_msm_incremental_cost;
 
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     var cache, var tc = try sig.runtime.testing.createTransactionContext(
         allocator,
         prng.random(),
@@ -1037,7 +1037,7 @@ test "multiscalar multiplication large" {
     }, .v3, .{});
     defer memory_map.deinit(allocator);
 
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     var cache, var tc = try sig.runtime.testing.createTransactionContext(
         allocator,
         prng.random(),
@@ -1126,7 +1126,7 @@ test "multiscalar multiplication large" {
 test "alt_bn128 add" {
     const allocator = std.testing.allocator;
 
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     var cache, var tc = try sig.runtime.testing.createTransactionContext(
         allocator,
         prng.random(),
@@ -1195,7 +1195,7 @@ test "alt_bn128 add" {
 test "alt_bn128 mul" {
     const allocator = std.testing.allocator;
 
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     var cache, var tc = try sig.runtime.testing.createTransactionContext(
         allocator,
         prng.random(),
@@ -1260,7 +1260,7 @@ test "alt_bn128 mul" {
 test "alt_bn128 pairing" {
     const allocator = std.testing.allocator;
 
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     var cache, var tc = try sig.runtime.testing.createTransactionContext(
         allocator,
         prng.random(),
@@ -1347,7 +1347,7 @@ test "alt_bn128 pairing" {
 test "alt_bn128 g1 compress/decompress" {
     const allocator = std.testing.allocator;
 
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     var cache, var tc = try sig.runtime.testing.createTransactionContext(
         allocator,
         prng.random(),
@@ -1410,7 +1410,7 @@ test "alt_bn128 g1 compress/decompress" {
 test "alt_bn128 g2 compress/decompress" {
     const allocator = std.testing.allocator;
 
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     var cache, var tc = try sig.runtime.testing.createTransactionContext(
         allocator,
         prng.random(),
@@ -1481,7 +1481,7 @@ test "alt_bn128 g2 compress/decompress" {
 test "alt_bn128 compression failure cases" {
     const allocator = std.testing.allocator;
 
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     var cache, var tc = try sig.runtime.testing.createTransactionContext(
         allocator,
         prng.random(),
@@ -1574,7 +1574,7 @@ test "alt_bn128 compression failure cases" {
 test "alt_bn128 group op failure cases" {
     const allocator = std.testing.allocator;
 
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     var cache, var tc = try sig.runtime.testing.createTransactionContext(
         allocator,
         prng.random(),
