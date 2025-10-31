@@ -215,7 +215,7 @@ pub const SlotAccountReader = union(enum) {
                 }
                 return account;
             },
-            .accounts_db_two => |pair| try pair[0].get(address, pair[1]),
+            .accounts_db_two => |pair| try pair[0].get(pair[0].allocator, address, pair[1]),
             .thread_safe_map => |pair| pair[0].get(address, pair[1]),
             .single_version_map => |pair| pair.get(address),
             .noop => null,

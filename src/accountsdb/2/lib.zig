@@ -83,13 +83,18 @@ pub fn onSlotRooted(self: *Db, newly_rooted_slot: Slot) error{FailedToRoot}!void
     }
 }
 
-pub fn get(self: *Db, address: Pubkey, ancestors: *const Ancestors) !?Account {
+pub fn get(
+    self: *Db,
+    allocator: std.mem.Allocator,
+    address: Pubkey,
+    ancestors: *const Ancestors,
+) !?Account {
     // first try finding it in the unrooted storage
     if (self.unrooted.get(address, ancestors)) |data| {
         return data;
     }
     // then try finding it in the rooted storage
-    if (try self.rooted.get(self.allocator, address)) |data| {
+    if (try self.rooted.get(allocator, address)) |data| {
         return data.asAccount();
     }
     // doesn't exist
