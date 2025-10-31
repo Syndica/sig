@@ -14,8 +14,7 @@ const SnapshotManifest = sig.accounts_db.snapshot.Manifest;
 
 const MAX_FUZZ_TIME_NS = std.time.ns_per_s * 100_000;
 
-pub fn run(args: *std.process.ArgIterator) !void {
-    _ = args;
+pub fn run() !void {
     const seed = std.crypto.random.int(u64);
 
     var gpa: std.heap.DebugAllocator(.{}) = .init;

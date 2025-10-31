@@ -275,7 +275,7 @@ jobs:
           at: workspace
       - run:
           name: Run Gossip Service Fuzzer
-          command: workspace/zig-out-release/bin/fuzz gossip_service 19 10000
+          command: workspace/zig-out-release/bin/fuzz --seed 19 gossip-service 10000
 
   gossip_table_fuzz:
     executor: linux-executor
@@ -285,7 +285,7 @@ jobs:
           at: workspace
       - run:
           name: Run Gossip Table Fuzzer
-          command: workspace/zig-out-release/bin/fuzz gossip_table 19 100000
+          command: workspace/zig-out-release/bin/fuzz --seed 19 gossip-table 100000
 
   allocators_fuzz:
     executor: linux-executor
@@ -295,7 +295,7 @@ jobs:
           at: workspace
       - run:
           name: Run Allocators Fuzzer
-          command: workspace/zig-out-release/bin/fuzz allocators 19 10000
+          command: workspace/zig-out-release/bin/fuzz --seed 19 allocators 10000
 
   ledger_fuzz:
     executor: linux-executor
@@ -305,7 +305,7 @@ jobs:
           at: workspace
       - run:
           name: Run Ledger Fuzzer
-          command: workspace/zig-out-release/bin/fuzz ledger 19 10000
+          command: workspace/zig-out-release/bin/fuzz --seed 19 ledger 10000
 
   solana_conformance:
     executor: linux-executor
