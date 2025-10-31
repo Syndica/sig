@@ -320,7 +320,7 @@ pub fn HomogeneousThreadPool(comptime TaskType: type) type {
             var it = self.tasks.iterator(0);
             while (it.next()) |task| task.join();
 
-            const results = try allocator.alloc(TaskResult, self.tasks.items.len);
+            const results = try allocator.alloc(TaskResult, self.tasks.count());
             errdefer allocator.free(results);
 
             var i: usize = 0;
