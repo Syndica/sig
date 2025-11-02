@@ -29,6 +29,25 @@ const SlotState = sig.core.SlotState;
 const Transaction = sig.core.transaction.Transaction;
 const SocketAddr = sig.net.SocketAddr;
 
+/// UDP sockets used to send vote transactions.
+pub const VoteSockets = struct {
+    ipv4: network.Socket,
+    ipv6: network.Socket,
+
+    pub fn init() !VoteSockets {
+        const s4 = try network.Socket.create(.ipv4, .udp);
+        errdefer s4.close();
+        const s6 = try network.Socket.create(.ipv6, .udp);
+        return .{ .ipv4 = s4, .ipv6 = s6 };
+    }
+
+    pub fn deinit(self: *const VoteSockets) void {
+        var mut = self.*;
+        mut.ipv4.close();
+        mut.ipv6.close();
+    }
+};
+
 const AccountReader = sig.accounts_db.AccountReader;
 
 /// Transaction forwarding, which leader to forward to and how long to hold
@@ -105,6 +124,7 @@ pub const TowerConsensus = struct {
 
     // Sending votes
     gossip_table: ?*sig.sync.RwMux(sig.gossip.GossipTable),
+    vote_sockets: ?*const VoteSockets,
     slot_leaders: ?sig.core.leader_schedule.SlotLeaders,
 
     // Supporting services
@@ -144,11 +164,13 @@ pub const TowerConsensus = struct {
         pub const External = struct {
             senders: Senders,
             receivers: Receivers,
+            vote_sockets: ?VoteSockets = null,
             gossip_table: ?*RwMux(sig.gossip.GossipTable),
             slot_leaders: ?sig.core.leader_schedule.SlotLeaders,
             run_vote_listener: bool = true,
 
             pub fn deinit(self: External) void {
+                if (self.vote_sockets) |*s| s.deinit();
                 self.senders.destroy();
                 self.receivers.destroy();
             }
@@ -295,6 +317,7 @@ pub const TowerConsensus = struct {
             .slot_leaders = deps.external.slot_leaders,
             .vote_listener = vote_listener,
             .verified_vote_channel = verified_vote_channel,
+            .vote_sockets = if (deps.external.vote_sockets) |*s| s else null,
         };
     }
 
@@ -640,6 +663,7 @@ pub const TowerConsensus = struct {
                 voted.decision,
                 self.gossip_table,
                 self.slot_leaders,
+                self.vote_sockets,
             );
         }
 
@@ -872,6 +896,7 @@ fn handleVotableBank(
     switch_fork_decision: SwitchForkDecision,
     gossip_table_rw: ?*sig.sync.RwMux(sig.gossip.GossipTable),
     slot_leaders: ?sig.core.leader_schedule.SlotLeaders,
+    maybe_sockets: ?*const VoteSockets,
 ) !void {
     const maybe_new_root = try replay_tower.recordBankVote(
         allocator,
@@ -893,6 +918,13 @@ fn handleVotableBank(
     }
 
     // TODO update_commitment_cache
+
+    // Skip vote generation and sending if not configured to vote
+    // Note: When voting is disabled, `authorized_voter_keypairs` is set to an empty slice
+    if (authorized_voter_keypairs.len == 0 or node_keypair == null) {
+        replay_tower.markLastVoteTxBlockhashNonVoting();
+        return;
+    }
 
     // - Generates a new vote transaction.
     // - Updates the tower's last vote blockhash.
@@ -933,6 +965,7 @@ fn handleVotableBank(
                 slot_leaders,
                 node_keypair,
                 sig.time.getWallclockMs(),
+                maybe_sockets,
             );
         },
         .non_voting => {
@@ -986,7 +1019,7 @@ fn sendVoteTransaction(
     logger: Logger,
     vote_tx: Transaction,
     tpu_address: SocketAddr,
-    sockets: struct { ipv4: network.Socket, ipv6: network.Socket },
+    sockets: *const VoteSockets,
 ) !void {
     var buf: [sig.net.Packet.DATA_SIZE]u8 = undefined;
     const serialized = try sig.bincode.writeToSlice(&buf, vote_tx, .{});
@@ -1010,6 +1043,7 @@ fn sendVoteToLeaders(
     slot_leaders: sig.core.leader_schedule.SlotLeaders,
     gossip_table_rw: *sig.sync.RwMux(sig.gossip.GossipTable),
     maybe_my_pubkey: ?Pubkey,
+    sockets: *const VoteSockets,
 ) !void {
     const UPCOMING_LEADER_FANOUT_SLOTS: u64 =
         FORWARD_TRANSACTIONS_TO_LEADER_AT_SLOT_OFFSET + 1;
@@ -1023,24 +1057,12 @@ fn sendVoteToLeaders(
     );
     defer allocator.free(upcoming_leader_sockets);
 
-    const ipv4_socket = network.Socket.create(.ipv4, .udp) catch |err| {
-        logger.err().logf("Failed to create IPv4 socket for vote send: {}", .{err});
-        return err;
-    };
-    defer ipv4_socket.close();
-
-    const ipv6_socket = network.Socket.create(.ipv6, .udp) catch |err| {
-        logger.err().logf("Failed to create IPv6 socket for vote send: {}", .{err});
-        return err;
-    };
-    defer ipv6_socket.close();
-
     for (upcoming_leader_sockets) |tpu_vote_socket| {
         sendVoteTransaction(
             logger,
             vote_tx,
             tpu_vote_socket,
-            .{ .ipv4 = ipv4_socket, .ipv6 = ipv6_socket },
+            sockets,
         ) catch |err| {
             logger.err().logf("Failed to send vote to leader: {}", .{err});
         };
@@ -1065,7 +1087,7 @@ fn sendVoteToLeaders(
                 logger,
                 vote_tx,
                 self_tpu_addr,
-                .{ .ipv4 = ipv4_socket, .ipv6 = ipv6_socket },
+                sockets,
             ) catch |err| {
                 logger.err().logf("Failed to send vote to self TPU: {}", .{err});
             };
@@ -1199,6 +1221,7 @@ fn sendVote(
     maybe_slot_leaders: ?sig.core.leader_schedule.SlotLeaders,
     maybe_my_keypair: ?sig.identity.KeyPair,
     now: u64,
+    maybe_sockets: ?*const VoteSockets,
 ) !void {
     const gossip_table_rw = maybe_gossip_table_rw orelse {
         logger.warn().log("Cannot send vote: gossip table not provided");
@@ -1216,15 +1239,18 @@ fn sendVote(
             Pubkey.fromPublicKey(&kp.public_key)
         else
             null;
-        try sendVoteToLeaders(
-            logger,
-            allocator,
-            vote_slot,
-            vote_tx,
-            slot_leaders,
-            gossip_table_rw,
-            maybe_my_pubkey,
-        );
+        if (maybe_sockets) |sockets| {
+            try sendVoteToLeaders(
+                logger,
+                allocator,
+                vote_slot,
+                vote_tx,
+                slot_leaders,
+                gossip_table_rw,
+                maybe_my_pubkey,
+                sockets,
+            );
+        }
     }
 
     // Send to gossip
@@ -3572,6 +3598,7 @@ test "sendVote - without gossip table does not send and does not throw" {
         leader_schedule_cache.slotLeaders(),
         sig.identity.KeyPair.generate(),
         100,
+        null,
     ) catch unreachable; // sendVote does not throw
 }
 
@@ -3614,6 +3641,7 @@ test "sendVote - without keypair does not send and does not throw" {
         leader_schedule_cache.slotLeaders(),
         null,
         200,
+        null,
     ) catch unreachable; // sendVote does not throw
 }
 
@@ -3643,6 +3671,7 @@ test "sendVote - without leader schedule does not send and does not throw" {
         null,
         null,
         300,
+        null,
     ) catch unreachable; // sendVote does not throw
 }
 
@@ -3732,6 +3761,7 @@ test "sendVote - sends to both gossip and upcoming leaders" {
         leader_schedule_cache.slotLeaders(),
         my_keypair,
         400,
+        null,
     );
 
     {
@@ -3836,6 +3866,7 @@ test "sendVote - refresh_vote sends to both gossip and upcoming leaders" {
         leader_schedule_cache.slotLeaders(),
         my_keypair,
         500,
+        null,
     );
 
     {
@@ -3948,6 +3979,7 @@ test "sendVote - falls back to self TPU when no leader sockets found" {
         leader_schedule_cache.slotLeaders(),
         my_keypair,
         600,
+        null,
     );
 
     {

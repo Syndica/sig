@@ -130,6 +130,7 @@ pub fn main() !void {
             params.geyser.apply(&current_config);
             current_config.replay_threads = params.replay_threads;
             current_config.disable_consensus = params.disable_consensus;
+            current_config.voting_enabled = params.voting_enabled;
             try validator(gpa, gossip_gpa, current_config);
         },
         .replay_offline => |params| {
@@ -374,6 +375,15 @@ const Cmd = struct {
         .default_value = false,
         .config = {},
         .help = "Disable running consensus in replay.",
+    };
+
+    const voting_enabled_arg: cli.ArgumentInfo(bool) = .{
+        .kind = .named,
+        .name_override = "voting-enabled",
+        .alias = .none,
+        .default_value = true,
+        .config = {},
+        .help = "Enable validator voting. When false, operate as non-voting.",
     };
 
     const GossipArgumentsCommon = struct {
@@ -713,6 +723,7 @@ const Cmd = struct {
         geyser: GeyserArgumentsBase,
         replay_threads: u16,
         disable_consensus: bool,
+        voting_enabled: bool,
 
         const cmd_info: cli.CommandInfo(@This()) = .{
             .help = .{
@@ -733,6 +744,7 @@ const Cmd = struct {
                 .geyser = GeyserArgumentsBase.cmd_info,
                 .replay_threads = replay_threads_arg,
                 .disable_consensus = disable_consensus_arg,
+                .voting_enabled = voting_enabled_arg,
             },
         };
     };
@@ -1198,8 +1210,14 @@ fn validator(
         &app_base,
         &ledger,
         &epoch_context_manager,
+        cfg.voting_enabled,
     );
     defer replay_deps.deinit(allocator);
+
+    const maybe_vote_sockets: ?replay.consensus.core.VoteSockets = if (cfg.voting_enabled)
+        replay.consensus.core.VoteSockets.init() catch null
+    else
+        null;
 
     const consensus_deps = if (cfg.disable_consensus)
         null
@@ -1208,6 +1226,7 @@ fn validator(
             allocator,
             &gossip_service.gossip_table_rw,
             leader_schedule_cache.slotLeaders(),
+            maybe_vote_sockets,
         );
     defer if (consensus_deps) |d| d.deinit();
 
@@ -1335,8 +1354,14 @@ fn replayOffline(
         &app_base,
         &ledger,
         &epoch_context_manager,
+        cfg.voting_enabled,
     );
     defer replay_deps.deinit(allocator);
+
+    const maybe_vote_sockets: ?replay.consensus.core.VoteSockets = if (cfg.voting_enabled)
+        replay.consensus.core.VoteSockets.init() catch null
+    else
+        null;
 
     const consensus_deps = if (cfg.disable_consensus)
         null
@@ -1345,6 +1370,7 @@ fn replayOffline(
             allocator,
             null,
             leader_schedule_cache.slotLeaders(),
+            maybe_vote_sockets,
         );
     defer if (consensus_deps) |d| d.deinit();
 
@@ -1938,6 +1964,7 @@ fn replayDependencies(
     app_base: *const AppBase,
     ledger: *Ledger,
     epoch_context_manager: *sig.adapter.EpochContextManager,
+    voting_enabled: bool,
 ) !replay.Dependencies {
     const bank_fields = &collapsed_manifest.bank_fields;
     const epoch_stakes_map = &collapsed_manifest.bank_extra.versioned_epoch_stakes;
@@ -1980,7 +2007,13 @@ fn replayDependencies(
         },
         .signing = .{
             .node = app_base.my_keypair,
-            .authorized_voters = &.{}, // TODO: Support actual authorized voter keypairs
+            .authorized_voters = if (voting_enabled)
+                // TODO: Parse authorized voter keypairs from CLI args (--authorized-voter)
+                // For now, default to using the node keypair as the authorized voter
+                // (same as Agave's default behavior when no --authorized-voter is specified)
+                &.{app_base.my_keypair}
+            else
+                &.{},
         },
         .exit = app_base.exit,
         .account_store = account_store,
@@ -2002,6 +2035,7 @@ fn consensusDependencies(
     allocator: std.mem.Allocator,
     gossip_table: ?*sig.sync.RwMux(sig.gossip.GossipTable),
     slot_leaders: ?sig.core.leader_schedule.SlotLeaders,
+    vote_sockets: ?replay.consensus.core.VoteSockets,
 ) !replay.TowerConsensus.Dependencies.External {
     const senders: sig.replay.TowerConsensus.Senders = try .create(allocator);
     errdefer senders.destroy();
@@ -2012,6 +2046,7 @@ fn consensusDependencies(
     return .{
         .senders = senders,
         .receivers = receivers,
+        .vote_sockets = vote_sockets,
         .gossip_table = gossip_table,
         .slot_leaders = slot_leaders,
     };
