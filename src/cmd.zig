@@ -2011,6 +2011,7 @@ fn replayDependencies(
                 // TODO: Parse authorized voter keypairs from CLI args (--authorized-voter)
                 // For now, default to using the node keypair as the authorized voter
                 // (same as Agave's default behavior when no --authorized-voter is specified)
+                // ref https://github.com/anza-xyz/agave/blob/67a1cc9ef4222187820818d95325a0c8e700312f/validator/src/commands/run/execute.rs#L136-L138
                 &.{app_base.my_keypair}
             else
                 &.{},
