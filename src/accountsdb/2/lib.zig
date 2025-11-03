@@ -95,7 +95,7 @@ pub fn get(
     }
     // then try finding it in the rooted storage
     if (try self.rooted.get(allocator, address)) |data| {
-        return data.asAccount();
+        return data.toAccount();
     }
     // doesn't exist
     return null;

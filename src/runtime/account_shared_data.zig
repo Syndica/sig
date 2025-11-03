@@ -97,4 +97,15 @@ pub const AccountSharedData = struct {
             .rent_epoch = self.rent_epoch,
         };
     }
+
+    /// Returns `self` as an account, while transferring ownership of the data.
+    pub fn toAccount(self: AccountSharedData) sig.core.Account {
+        return .{
+            .lamports = self.lamports,
+            .data = .{ .owned_allocation = self.data },
+            .owner = self.owner,
+            .executable = self.executable,
+            .rent_epoch = self.rent_epoch,
+        };
+    }
 };
