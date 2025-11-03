@@ -131,6 +131,7 @@ pub fn main() !void {
             params.geyser.apply(&current_config);
             current_config.replay_threads = params.replay_threads;
             current_config.disable_consensus = params.disable_consensus;
+            current_config.recreate_sqlite = params.recreate_sqlite;
             try validator(gpa, gossip_gpa, current_config);
         },
         .replay_offline => |params| {
@@ -1098,6 +1099,78 @@ fn validator(
     );
     defer loaded_snapshot.deinit();
 
+    const rooted_db = db: {
+        if (cfg.recreate_sqlite) {
+            var accounts_dir = try snapshot_dir.openDir("accounts", .{ .iterate = true });
+            defer accounts_dir.close();
+
+            const account_files = try getEntries(allocator, accounts_dir);
+            defer {
+                for (account_files) |entry| entry.deinit();
+                allocator.free(account_files);
+            }
+
+            var rooted = try sig.accounts_db.Two.Rooted.init("accounts.db");
+            errdefer rooted.deinit();
+
+            var bp = try sig.accounts_db.buffer_pool.BufferPool.init(allocator, 20480 + 2);
+            defer bp.deinit(allocator);
+
+            var arena = std.heap.ArenaAllocator.init(allocator);
+            errdefer arena.deinit();
+
+            try rooted.err(sql.sqlite3_exec(rooted.handle, "BEGIN TRANSACTION;", null, null, null));
+
+            var n_accounts: u48 = 0;
+
+            const progress = std.Progress.start(.{});
+            var node = progress.start("loading account files", account_files.len);
+
+            for (account_files) |accounts_file| {
+                defer tracy.frameMarkNamed("accountfile put");
+                defer _ = arena.reset(.retain_capacity);
+
+                node.completeOne();
+
+                var accounts = accounts_file.iterator(&bp);
+                while (try accounts.next(arena.allocator())) |account| {
+                    defer account.deinit(arena.allocator());
+
+                    const cloned_data = try account.data.dupeAllocatedOwned(arena.allocator());
+                    defer cloned_data.deinit(arena.allocator());
+
+                    const data = @constCast(cloned_data.owned_allocation);
+
+                    try rooted.put(
+                        account.store_info.pubkey,
+                        accounts_file.slot,
+                        .{
+                            .data = data,
+                            .executable = account.account_info.executable,
+                            .lamports = account.account_info.lamports,
+                            .owner = account.account_info.owner,
+                            .rent_epoch = account.account_info.rent_epoch,
+                        },
+                    );
+
+                    n_accounts += 1;
+                }
+                tracy.plot(u48, "accounts pushed", n_accounts);
+            }
+
+            std.debug.print("committing\n", .{});
+            try rooted.err(sql.sqlite3_exec(rooted.handle, "COMMIT;", null, null, null));
+            break :db rooted;
+        } else {
+            const rooted = try sig.accounts_db.Two.Rooted.init("accounts.db");
+            errdefer rooted.deinit();
+            break :db rooted;
+        }
+    };
+
+    var new_db: sig.accounts_db.Two = try .init(allocator, rooted_db);
+    defer new_db.deinit();
+
     const collapsed_manifest = &loaded_snapshot.collapsed_manifest;
     const bank_fields = &collapsed_manifest.bank_fields;
 
@@ -1206,7 +1279,8 @@ fn validator(
     var replay_deps = try replayDependencies(
         allocator,
         epoch,
-        loaded_snapshot.accounts_db.accountStore(),
+        // loaded_snapshot.accounts_db.accountStore(),
+        .{ .accounts_db_two = &new_db },
         &loaded_snapshot.collapsed_manifest,
         &app_base,
         &ledger,
@@ -1309,11 +1383,7 @@ fn replayOffline(
 
     const rooted_db = db: {
         if (cfg.recreate_sqlite) {
-            var accounts_dir = try std.fs.cwd().openDir(
-                // cfg.accounts_db.snapshot_dir,
-                "validator/accounts_db/accounts",
-                .{ .iterate = true },
-            );
+            var accounts_dir = try snapshot_dir.openDir("accounts", .{ .iterate = true });
             defer accounts_dir.close();
 
             const account_files = try getEntries(allocator, accounts_dir);
