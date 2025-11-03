@@ -1099,74 +1099,12 @@ fn validator(
     );
     defer loaded_snapshot.deinit();
 
-    const rooted_db = db: {
-        if (cfg.recreate_sqlite) {
-            var accounts_dir = try snapshot_dir.openDir("accounts", .{ .iterate = true });
-            defer accounts_dir.close();
-
-            const account_files = try getEntries(allocator, accounts_dir);
-            defer {
-                for (account_files) |entry| entry.deinit();
-                allocator.free(account_files);
-            }
-
-            var rooted = try sig.accounts_db.Two.Rooted.init("accounts.db");
-            errdefer rooted.deinit();
-
-            var bp = try sig.accounts_db.buffer_pool.BufferPool.init(allocator, 20480 + 2);
-            defer bp.deinit(allocator);
-
-            var arena = std.heap.ArenaAllocator.init(allocator);
-            errdefer arena.deinit();
-
-            try rooted.err(sql.sqlite3_exec(rooted.handle, "BEGIN TRANSACTION;", null, null, null));
-
-            var n_accounts: u48 = 0;
-
-            const progress = std.Progress.start(.{});
-            var node = progress.start("loading account files", account_files.len);
-
-            for (account_files) |accounts_file| {
-                defer tracy.frameMarkNamed("accountfile put");
-                defer _ = arena.reset(.retain_capacity);
-
-                node.completeOne();
-
-                var accounts = accounts_file.iterator(&bp);
-                while (try accounts.next(arena.allocator())) |account| {
-                    defer account.deinit(arena.allocator());
-
-                    const cloned_data = try account.data.dupeAllocatedOwned(arena.allocator());
-                    defer cloned_data.deinit(arena.allocator());
-
-                    const data = @constCast(cloned_data.owned_allocation);
-
-                    try rooted.put(
-                        account.store_info.pubkey,
-                        accounts_file.slot,
-                        .{
-                            .data = data,
-                            .executable = account.account_info.executable,
-                            .lamports = account.account_info.lamports,
-                            .owner = account.account_info.owner,
-                            .rent_epoch = account.account_info.rent_epoch,
-                        },
-                    );
-
-                    n_accounts += 1;
-                }
-                tracy.plot(u48, "accounts pushed", n_accounts);
-            }
-
-            std.debug.print("committing\n", .{});
-            try rooted.err(sql.sqlite3_exec(rooted.handle, "COMMIT;", null, null, null));
-            break :db rooted;
-        } else {
-            const rooted = try sig.accounts_db.Two.Rooted.init("accounts.db");
-            errdefer rooted.deinit();
-            break :db rooted;
-        }
-    };
+    var rooted_db: sig.accounts_db.Two.Rooted = try .init("accounts.db");
+    if (cfg.recreate_sqlite) {
+        var accounts_dir = try snapshot_dir.openDir("accounts", .{ .iterate = true });
+        defer accounts_dir.close();
+        try rooted_db.insertFromSnapshot(allocator, accounts_dir);
+    }
 
     var new_db: sig.accounts_db.Two = try .init(allocator, rooted_db);
     defer new_db.deinit();
@@ -1381,74 +1319,12 @@ fn replayOffline(
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{});
     defer snapshot_dir.close();
 
-    const rooted_db = db: {
-        if (cfg.recreate_sqlite) {
-            var accounts_dir = try snapshot_dir.openDir("accounts", .{ .iterate = true });
-            defer accounts_dir.close();
-
-            const account_files = try getEntries(allocator, accounts_dir);
-            defer {
-                for (account_files) |entry| entry.deinit();
-                allocator.free(account_files);
-            }
-
-            var rooted = try sig.accounts_db.Two.Rooted.init("accounts.db");
-            errdefer rooted.deinit();
-
-            var bp = try sig.accounts_db.buffer_pool.BufferPool.init(allocator, 20480 + 2);
-            defer bp.deinit(allocator);
-
-            var arena = std.heap.ArenaAllocator.init(allocator);
-            errdefer arena.deinit();
-
-            try rooted.err(sql.sqlite3_exec(rooted.handle, "BEGIN TRANSACTION;", null, null, null));
-
-            var n_accounts: u48 = 0;
-
-            const progress = std.Progress.start(.{});
-            var node = progress.start("loading account files", account_files.len);
-
-            for (account_files) |accounts_file| {
-                defer tracy.frameMarkNamed("accountfile put");
-                defer _ = arena.reset(.retain_capacity);
-
-                node.completeOne();
-
-                var accounts = accounts_file.iterator(&bp);
-                while (try accounts.next(arena.allocator())) |account| {
-                    defer account.deinit(arena.allocator());
-
-                    const cloned_data = try account.data.dupeAllocatedOwned(arena.allocator());
-                    defer cloned_data.deinit(arena.allocator());
-
-                    const data = @constCast(cloned_data.owned_allocation);
-
-                    try rooted.put(
-                        account.store_info.pubkey,
-                        accounts_file.slot,
-                        .{
-                            .data = data,
-                            .executable = account.account_info.executable,
-                            .lamports = account.account_info.lamports,
-                            .owner = account.account_info.owner,
-                            .rent_epoch = account.account_info.rent_epoch,
-                        },
-                    );
-
-                    n_accounts += 1;
-                }
-                tracy.plot(u48, "accounts pushed", n_accounts);
-            }
-
-            std.debug.print("committing\n", .{});
-            try rooted.err(sql.sqlite3_exec(rooted.handle, "COMMIT;", null, null, null));
-            break :db rooted;
-        } else {
-            const rooted = try sig.accounts_db.Two.Rooted.init("accounts.db");
-            errdefer rooted.deinit();
-            break :db rooted;
-        }
-    };
+    var rooted_db: sig.accounts_db.Two.Rooted = try .init("accounts.db");
+    if (cfg.recreate_sqlite) {
+        var accounts_dir = try snapshot_dir.openDir("accounts", .{ .iterate = true });
+        defer accounts_dir.close();
+        try rooted_db.insertFromSnapshot(allocator, accounts_dir);
+    }
 
     var new_db: sig.accounts_db.Two = try .init(allocator, rooted_db);
     defer new_db.deinit();
