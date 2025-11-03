@@ -4002,4 +4002,310 @@ test "sendVote - falls back to self TPU when no leader sockets found" {
     }
 }
 
+test "sendVote - leaders path uses sockets (exercises sendVoteToLeaders)" {
+    const allocator = testing.allocator;
+
+    const vote_slot: Slot = 100;
+    var tower_slots = [_]Slot{vote_slot};
+    const tower_slots_slice: []Slot = &tower_slots;
+
+    const vote_op = VoteOp{
+        .push_vote = .{
+            .tx = Transaction.EMPTY,
+            .tower_slots = tower_slots_slice,
+        },
+    };
+
+    // Prepare a leader schedule with a single repeating leader
+    const leader_pubkey = Pubkey.initRandom(std.crypto.random);
+
+    const leader_schedule_slots = try allocator.alloc(Pubkey, 5);
+    for (leader_schedule_slots) |*slot| slot.* = leader_pubkey;
+
+    var leader_schedule_cache = sig.core.leader_schedule.LeaderScheduleCache.init(
+        allocator,
+        .DEFAULT,
+    );
+    defer {
+        const leader_schedules, var lg = leader_schedule_cache.leader_schedules.writeWithLock();
+        defer lg.unlock();
+        for (leader_schedules.values()) |schedule| schedule.deinit();
+        leader_schedules.deinit();
+    }
+
+    const leader_schedule = sig.core.leader_schedule.LeaderSchedule{
+        .allocator = allocator,
+        .slot_leaders = leader_schedule_slots,
+    };
+    try leader_schedule_cache.put(0, leader_schedule);
+
+    // Gossip table with leader ContactInfo having tpu_vote socket
+    const gossip_table = try sig.gossip.GossipTable.init(allocator, allocator);
+    var gossip_table_rw = sig.sync.RwMux(sig.gossip.GossipTable).init(gossip_table);
+    defer sig.sync.mux.deinitMux(&gossip_table_rw);
+
+    var leader_contact = sig.gossip.data.ContactInfo.init(
+        allocator,
+        leader_pubkey,
+        sig.time.getWallclockMs(),
+        0,
+    );
+    try leader_contact.setSocket(.tpu_vote, sig.net.SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8002));
+
+    const leader_keypair = sig.identity.KeyPair.generate();
+    const leader_ci = sig.gossip.data.SignedGossipData.initSigned(
+        &leader_keypair,
+        sig.gossip.data.GossipData{ .ContactInfo = leader_contact },
+    );
+
+    {
+        const gossip_table_write, var lock = gossip_table_rw.writeWithLock();
+        defer lock.unlock();
+        _ = try gossip_table_write.insert(leader_ci, sig.time.getWallclockMs());
+    }
+
+    const my_keypair = sig.identity.KeyPair.generate();
+    const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
+
+    // Provide sockets so sendVoteToLeaders is executed
+    var sockets = try VoteSockets.init();
+    defer sockets.deinit();
+
+    try sendVote(
+        .noop,
+        allocator,
+        vote_slot,
+        vote_op,
+        &gossip_table_rw,
+        leader_schedule_cache.slotLeaders(),
+        my_keypair,
+        700,
+        &sockets,
+    );
+
+    // Validate gossip received the vote
+    {
+        const gossip_table_read, var lock = gossip_table_rw.readWithLock();
+        defer lock.unlock();
+        try testing.expectEqual(2, gossip_table_read.len());
+        const vote_key = sig.gossip.data.GossipKey{
+            .Vote = .{ 0, my_pubkey },
+        };
+        try testing.expect(gossip_table_read.getData(vote_key) != null);
+    }
+}
+
+test "sendVote - sendVoteToLeaders fallback to self TPU when leaders empty" {
+    const allocator = testing.allocator;
+
+    const vote_slot: Slot = 55;
+    var tower_slots = [_]Slot{vote_slot};
+    const tower_slots_slice: []Slot = &tower_slots;
+
+    const vote_op = VoteOp{
+        .push_vote = .{
+            .tx = Transaction.EMPTY,
+            .tower_slots = tower_slots_slice,
+        },
+    };
+
+    // Leader schedule points to an unknown leader; no leader ContactInfo in gossip
+    const unknown_leader = Pubkey.initRandom(std.crypto.random);
+
+    const leader_schedule_slots = try allocator.alloc(Pubkey, 5);
+    for (leader_schedule_slots) |*slot| slot.* = unknown_leader;
+
+    var leader_schedule_cache = sig.core.leader_schedule.LeaderScheduleCache.init(
+        allocator,
+        .DEFAULT,
+    );
+    defer {
+        const leader_schedules, var lg = leader_schedule_cache.leader_schedules.writeWithLock();
+        defer lg.unlock();
+        for (leader_schedules.values()) |schedule| schedule.deinit();
+        leader_schedules.deinit();
+    }
+
+    const leader_schedule = sig.core.leader_schedule.LeaderSchedule{
+        .allocator = allocator,
+        .slot_leaders = leader_schedule_slots,
+    };
+    try leader_schedule_cache.put(0, leader_schedule);
+
+    // Gossip table with our own ContactInfo having a TPU address
+    const my_keypair = sig.identity.KeyPair.generate();
+    const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
+
+    const gossip_table = try sig.gossip.GossipTable.init(allocator, allocator);
+    var gossip_table_rw = sig.sync.RwMux(sig.gossip.GossipTable).init(gossip_table);
+    defer sig.sync.mux.deinitMux(&gossip_table_rw);
+
+    var my_contact = sig.gossip.data.ContactInfo.init(
+        allocator,
+        my_pubkey,
+        sig.time.getWallclockMs(),
+        0,
+    );
+    try my_contact.setSocket(.tpu, sig.net.SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8102));
+
+    const signed_my_ci = sig.gossip.data.SignedGossipData.initSigned(
+        &my_keypair,
+        sig.gossip.data.GossipData{ .ContactInfo = my_contact },
+    );
+    {
+        const gossip_table_write, var lock = gossip_table_rw.writeWithLock();
+        defer lock.unlock();
+        _ = try gossip_table_write.insert(signed_my_ci, sig.time.getWallclockMs());
+    }
+
+    // Provide sockets so sendVoteToLeaders is called and triggers fallback to self TPU
+    var sockets = try VoteSockets.init();
+    defer sockets.deinit();
+
+    try sendVote(
+        .noop,
+        allocator,
+        vote_slot,
+        vote_op,
+        &gossip_table_rw,
+        leader_schedule_cache.slotLeaders(),
+        my_keypair,
+        800,
+        &sockets,
+    );
+
+    {
+        const gossip_table_read, var lock = gossip_table_rw.readWithLock();
+        defer lock.unlock();
+        try testing.expectEqual(2, gossip_table_read.len());
+        const vote_key = sig.gossip.data.GossipKey{ .Vote = .{ 0, my_pubkey } };
+        try testing.expect(gossip_table_read.getData(vote_key) != null);
+    }
+}
+test "findVoteIndexToEvict - no newer vote returns next index" {
+    const allocator = testing.allocator;
+
+    var gossip_table = try sig.gossip.GossipTable.init(allocator, allocator);
+    defer gossip_table.deinit();
+
+    const my_keypair = sig.identity.KeyPair.generate();
+    const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
+
+    const now: u64 = 1_000;
+    const tower_last: Slot = 10;
+
+    {
+        const vote_data = sig.gossip.data.GossipData{
+            .Vote = .{
+                0,
+                .{
+                    .from = my_pubkey,
+                    .transaction = Transaction.EMPTY,
+                    .wallclock = now,
+                    .slot = 0,
+                },
+            },
+        };
+        const signed = sig.gossip.data.SignedGossipData.initSigned(&my_keypair, vote_data);
+        _ = try gossip_table.insert(signed, now);
+    }
+
+    {
+        const vote_data = sig.gossip.data.GossipData{
+            .Vote = .{
+                1,
+                .{
+                    .from = my_pubkey,
+                    .transaction = Transaction.EMPTY,
+                    .wallclock = now + 1,
+                    .slot = 5,
+                },
+            },
+        };
+        const signed = sig.gossip.data.SignedGossipData.initSigned(&my_keypair, vote_data);
+        _ = try gossip_table.insert(signed, now + 1);
+    }
+
+    const maybe_index = findVoteIndexToEvict(&gossip_table, my_pubkey, tower_last);
+    try testing.expectEqual(2, maybe_index);
+}
+
+test "findVoteIndexToEvict - newer-or-equal vote returns null" {
+    const allocator = testing.allocator;
+
+    var gossip_table = try sig.gossip.GossipTable.init(allocator, allocator);
+    defer gossip_table.deinit();
+
+    const my_keypair = sig.identity.KeyPair.generate();
+    const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
+
+    const base: u64 = 2_000;
+    const tower_last: Slot = 10;
+
+    {
+        const vote_data = sig.gossip.data.GossipData{
+            .Vote = .{
+                0,
+                .{
+                    .from = my_pubkey,
+                    .transaction = Transaction.EMPTY,
+                    .wallclock = base,
+                    .slot = 5,
+                },
+            },
+        };
+        const signed = sig.gossip.data.SignedGossipData.initSigned(&my_keypair, vote_data);
+        _ = try gossip_table.insert(signed, base);
+    }
+
+    {
+        const vote_data = sig.gossip.data.GossipData{
+            .Vote = .{
+                1,
+                .{
+                    .from = my_pubkey,
+                    .transaction = Transaction.EMPTY,
+                    .wallclock = base + 1,
+                    .slot = tower_last,
+                },
+            },
+        };
+        const signed = sig.gossip.data.SignedGossipData.initSigned(&my_keypair, vote_data);
+        _ = try gossip_table.insert(signed, base + 1);
+    }
+
+    const maybe_index = findVoteIndexToEvict(&gossip_table, my_pubkey, tower_last);
+    try testing.expect(maybe_index == null);
+}
+
+test "findVoteIndexToEvict - full buffer evicts oldest index" {
+    const allocator = testing.allocator;
+
+    var gossip_table = try sig.gossip.GossipTable.init(allocator, allocator);
+    defer gossip_table.deinit();
+
+    const my_keypair = sig.identity.KeyPair.generate();
+    const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
+
+    const tower_last: Slot = 100;
+    const chosen_oldest_index: u8 = 5;
+
+    const base: u64 = 10_000;
+    for (0..sig.gossip.data.MAX_VOTES) |j| {
+        const i: u8 = @intCast(j);
+        const ts: u64 = if (i == chosen_oldest_index) 100 else base + @as(u64, i);
+        const vote_data = sig.gossip.data.GossipData{
+            .Vote = .{
+                i,
+                .{ .from = my_pubkey, .transaction = Transaction.EMPTY, .wallclock = ts, .slot = 0 },
+            },
+        };
+        const signed = sig.gossip.data.SignedGossipData.initSigned(&my_keypair, vote_data);
+        _ = try gossip_table.insert(signed, ts);
+    }
+
+    const maybe_index = findVoteIndexToEvict(&gossip_table, my_pubkey, tower_last);
+    try testing.expectEqual(chosen_oldest_index, maybe_index);
+}
+
 // TODO: Re-implement tests for the new consolidated API
