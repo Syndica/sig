@@ -168,7 +168,7 @@ pub fn main() !void {
         .snapshot => try snapshot_fuzz.run(),
         .gossip_service => |run_cmd| try gossip_service_fuzz.run(seed, run_cmd.args),
         .gossip_table => |run_cmd| try gossip_table_fuzz.run(seed, run_cmd.args),
-        .ledger => |run_cmd| try ledger_fuzz.run(seed, run_cmd.args),
+        .ledger => |run_cmd| try ledger_fuzz.run(seed, run_cmd.args, true),
         .allocators => |run_cmd| try sig.utils.allocators.runFuzzer(seed, run_cmd.args),
     }
 }

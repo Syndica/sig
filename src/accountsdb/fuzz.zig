@@ -525,3 +525,14 @@ fn readRandomAccounts(
         }
     }
 }
+
+test run {
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    try run(std.testing.allocator, .FOR_TESTS, std.testing.random_seed, tmp_dir.dir, .{
+        .enable_manager = false,
+        .max_slots = 100,
+        .index_allocation = .ram,
+        .non_sequential_slots = true,
+    });
+}
