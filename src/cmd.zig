@@ -1133,27 +1133,27 @@ fn validator(
         var staked_nodes_cloned = try staked_nodes.clone(allocator);
         errdefer staked_nodes_cloned.deinit(allocator);
 
-        const leader_schedule =
-            if (try getLeaderScheduleFromCli(allocator, cfg)) |leader_schedule_data| blk: {
-                _, const leader_schedule = leader_schedule_data;
-                try leader_schedule_cache.put(epoch, leader_schedule);
-                break :blk leader_schedule.slot_leaders;
-            } else ls: {
-                // TODO: Implement feature gating for vote keyed leader schedule.
-                // [agave] https://github.com/anza-xyz/agave/blob/e468acf4da519171510f2ec982f70a0fd9eb2c8b/ledger/src/leader_schedule_utils.rs#L12
-                // [agave] https://github.com/anza-xyz/agave/blob/e468acf4da519171510f2ec982f70a0fd9eb2c8b/runtime/src/bank.rs#L4833
-                const ls_slots = try LeaderSchedule.fromVoteAccounts(
+        const leader_schedule = if (try getLeaderScheduleFromCli(allocator, cfg)) |leader_schedule|
+            leader_schedule[1].slot_leaders
+        else ls: {
+            // TODO: Implement feature gating for vote keyed leader schedule.
+            // [agave] https://github.com/anza-xyz/agave/blob/e468acf4da519171510f2ec982f70a0fd9eb2c8b/ledger/src/leader_schedule_utils.rs#L12
+            // [agave] https://github.com/anza-xyz/agave/blob/e468acf4da519171510f2ec982f70a0fd9eb2c8b/runtime/src/bank.rs#L4833
+            break :ls if (true)
+                try LeaderSchedule.fromVoteAccounts(
                     allocator,
                     epoch,
                     epoch_schedule.slots_per_epoch,
-                    if (true) try collapsed_manifest.epochVoteAccounts(epoch) else staked_nodes,
+                    try collapsed_manifest.epochVoteAccounts(epoch),
+                )
+            else
+                try LeaderSchedule.fromStakedNodes(
+                    allocator,
+                    epoch,
+                    epoch_schedule.slots_per_epoch,
+                    staked_nodes,
                 );
-                try leader_schedule_cache.put(epoch, .{
-                    .allocator = allocator,
-                    .slot_leaders = ls_slots,
-                });
-                break :ls ls_slots;
-            };
+        };
         errdefer allocator.free(leader_schedule);
 
         try epoch_context_manager.put(epoch, .{
@@ -1215,7 +1215,7 @@ fn validator(
     defer replay_deps.deinit(allocator);
 
     const maybe_vote_sockets: ?replay.consensus.core.VoteSockets = if (cfg.voting_enabled)
-        replay.consensus.core.VoteSockets.init() catch null
+        try replay.consensus.core.VoteSockets.init()
     else
         null;
 
@@ -1354,14 +1354,9 @@ fn replayOffline(
         &app_base,
         &ledger,
         &epoch_context_manager,
-        cfg.voting_enabled,
+        false,
     );
     defer replay_deps.deinit(allocator);
-
-    const maybe_vote_sockets: ?replay.consensus.core.VoteSockets = if (cfg.voting_enabled)
-        replay.consensus.core.VoteSockets.init() catch null
-    else
-        null;
 
     const consensus_deps = if (cfg.disable_consensus)
         null
@@ -1370,7 +1365,7 @@ fn replayOffline(
             allocator,
             null,
             leader_schedule_cache.slotLeaders(),
-            maybe_vote_sockets,
+            null,
         );
     defer if (consensus_deps) |d| d.deinit();
 
