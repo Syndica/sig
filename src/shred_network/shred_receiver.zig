@@ -382,8 +382,7 @@ pub const ShredReceiver = struct {
                 const versioned_data = gossip_table.store.getByIndex(record_ix);
                 switch (versioned_data.data) {
                     .DuplicateShred => |dup| {
-                        const index, const dup_shred = dup;
-                        _ = index;
+                        _, const dup_shred = dup;
                         if (dup_shred.slot == slot) return true;
                     },
                     else => {},
