@@ -49,7 +49,7 @@ pub const DuplicateShredListener = struct {
         );
         errdefer thread.join();
 
-        thread.setName("solCiEntryLstnr") catch {};
+        thread.setName("sigCiEntryLstnr") catch {};
         return .{ .thread = thread };
     }
 
