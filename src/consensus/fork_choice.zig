@@ -4897,6 +4897,348 @@ test "HeaviestSubtreeForkChoice.gossipVoteDoesntAffectForkChoice" {
     try std.testing.expectEqual(4, fork_choice.heaviestOverallSlot().slot);
 }
 
+// Analogous to [test_purge_prune](https://github.com/anza-xyz/agave/blob/e854fc6749a14b3c9751201a9950f44192d97217/core/src/consensus/heaviest_subtree_fork_choice.rs#L4251)
+test "HeaviestSubtreeForkChoice.purgePrune" {
+    var fork_choice = try forkChoiceForTest(test_allocator, fork_tuples[0..]);
+    defer fork_choice.deinit();
+
+    try std.testing.expectEqual(0, fork_choice.tree_root.slot);
+
+    // Same root, no-op
+    {
+        const result = try fork_choice.purgePrune(
+            test_allocator,
+            sig.prometheus.globalRegistry(),
+            .{ .slot = 0, .hash = Hash.ZEROES },
+        );
+        defer test_allocator.free(result.purged_slots);
+        defer {
+            for (result.pruned_subtrees) |*subtree| {
+                subtree.deinit();
+            }
+            test_allocator.free(result.pruned_subtrees);
+        }
+
+        try std.testing.expectEqual(0, result.purged_slots.len);
+        try std.testing.expectEqual(0, result.pruned_subtrees.len);
+        try std.testing.expectEqual(0, fork_choice.tree_root.slot);
+    }
+
+    // Root update, purge no prune
+    {
+        const result = try fork_choice.purgePrune(
+            test_allocator,
+            sig.prometheus.globalRegistry(),
+            .{ .slot = 1, .hash = Hash.ZEROES },
+        );
+        defer test_allocator.free(result.purged_slots);
+        defer {
+            for (result.pruned_subtrees) |*subtree| {
+                subtree.deinit();
+            }
+            test_allocator.free(result.pruned_subtrees);
+        }
+
+        var purged_slots_mut = try test_allocator.dupe(SlotAndHash, result.purged_slots);
+        defer test_allocator.free(purged_slots_mut);
+        std.mem.sort(SlotAndHash, purged_slots_mut, {}, compareSlotHashKey);
+        // Linter doesn't recognize that std.mem.sort mutates, so explicitly mutate to satisfy it
+        if (purged_slots_mut.len > 0) {
+            purged_slots_mut[0] = purged_slots_mut[0];
+        }
+
+        try std.testing.expectEqual(1, purged_slots_mut.len);
+        try std.testing.expectEqual(
+            SlotAndHash{ .slot = 0, .hash = Hash.ZEROES },
+            result.purged_slots[0],
+        );
+        try std.testing.expectEqual(0, result.pruned_subtrees.len);
+        try std.testing.expectEqual(1, fork_choice.tree_root.slot);
+    }
+
+    // Root update, purge, prune
+    {
+        const result = try fork_choice.purgePrune(
+            test_allocator,
+            sig.prometheus.globalRegistry(),
+            .{ .slot = 3, .hash = Hash.ZEROES },
+        );
+        defer test_allocator.free(result.purged_slots);
+        defer {
+            for (result.pruned_subtrees) |*subtree| {
+                subtree.deinit();
+            }
+            test_allocator.free(result.pruned_subtrees);
+        }
+
+        var purged_slots_mut2 = try test_allocator.dupe(SlotAndHash, result.purged_slots);
+        defer test_allocator.free(purged_slots_mut2);
+        std.mem.sort(SlotAndHash, purged_slots_mut2, {}, compareSlotHashKey);
+        if (purged_slots_mut2.len > 0) purged_slots_mut2[0] = purged_slots_mut2[0];
+
+        try std.testing.expectEqual(2, purged_slots_mut2.len);
+        try std.testing.expectEqual(
+            SlotAndHash{ .slot = 1, .hash = Hash.ZEROES },
+            purged_slots_mut2[0],
+        );
+        try std.testing.expectEqual(
+            SlotAndHash{ .slot = 2, .hash = Hash.ZEROES },
+            purged_slots_mut2[1],
+        );
+        try std.testing.expectEqual(1, result.pruned_subtrees.len);
+        try std.testing.expectEqual(3, fork_choice.tree_root.slot);
+    }
+
+    // Root doesn't exist (same fork structure w/o 3)
+    {
+        const forks_without_3 = [_]TreeNode{
+            .{
+                .{ .slot = 1, .hash = Hash.ZEROES },
+                .{ .slot = 0, .hash = Hash.ZEROES },
+            },
+            .{
+                .{ .slot = 2, .hash = Hash.ZEROES },
+                .{ .slot = 1, .hash = Hash.ZEROES },
+            },
+            .{
+                .{ .slot = 4, .hash = Hash.ZEROES },
+                .{ .slot = 2, .hash = Hash.ZEROES },
+            },
+            .{
+                .{ .slot = 5, .hash = Hash.ZEROES },
+                .{ .slot = 1, .hash = Hash.ZEROES },
+            },
+            .{
+                .{ .slot = 6, .hash = Hash.ZEROES },
+                .{ .slot = 5, .hash = Hash.ZEROES },
+            },
+        };
+        var fork_choice2 = try forkChoiceForTest(test_allocator, forks_without_3[0..]);
+        defer fork_choice2.deinit();
+
+        const result = try fork_choice2.purgePrune(
+            test_allocator,
+            sig.prometheus.globalRegistry(),
+            .{ .slot = 3, .hash = Hash.ZEROES },
+        );
+        defer test_allocator.free(result.purged_slots);
+        defer {
+            for (result.pruned_subtrees) |*subtree| {
+                subtree.deinit();
+            }
+            test_allocator.free(result.pruned_subtrees);
+        }
+
+        var purged_slots_mut3 = try test_allocator.dupe(SlotAndHash, result.purged_slots);
+        defer test_allocator.free(purged_slots_mut3);
+        std.mem.sort(SlotAndHash, purged_slots_mut3, {}, compareSlotHashKey);
+        if (purged_slots_mut3.len > 0) purged_slots_mut3[0] = purged_slots_mut3[0];
+
+        try std.testing.expectEqual(3, purged_slots_mut3.len);
+        try std.testing.expectEqual(
+            SlotAndHash{ .slot = 0, .hash = Hash.ZEROES },
+            purged_slots_mut3[0],
+        );
+        try std.testing.expectEqual(
+            SlotAndHash{ .slot = 1, .hash = Hash.ZEROES },
+            purged_slots_mut3[1],
+        );
+        try std.testing.expectEqual(
+            SlotAndHash{ .slot = 2, .hash = Hash.ZEROES },
+            purged_slots_mut3[2],
+        );
+        try std.testing.expectEqual(2, result.pruned_subtrees.len);
+        try std.testing.expect(fork_choice2.fork_infos.count() == 0);
+    }
+}
+
+// Analogous to [test_purge_prune_complicated](https://github.com/anza-xyz/agave/blob/e854fc6749a14b3c9751201a9950f44192d97217/core/src/consensus/heaviest_subtree_fork_choice.rs#L4304)
+test "HeaviestSubtreeForkChoice.purgePruneComplicated" {
+    var fork_choice = try setupComplicatedForks(test_allocator);
+    defer fork_choice.deinit();
+
+    try std.testing.expectEqual(0, fork_choice.tree_root.slot);
+
+    // First purge_prune to slot 3
+    {
+        const expected_purged_slots = [_]u64{ 0, 1, 2 };
+
+        var expected_tree = try setupComplicatedForks(test_allocator);
+        defer expected_tree.deinit();
+        const expected_tree_split = try expected_tree.splitOff(
+            test_allocator,
+            sig.prometheus.globalRegistry(),
+            SlotAndHash{ .slot = 3, .hash = Hash.ZEROES },
+        );
+        defer expected_tree_split.deinit();
+
+        const result = try fork_choice.purgePrune(
+            test_allocator,
+            sig.prometheus.globalRegistry(),
+            SlotAndHash{ .slot = 3, .hash = Hash.ZEROES },
+        );
+        defer test_allocator.free(result.purged_slots);
+        defer {
+            for (result.pruned_subtrees) |*subtree| {
+                subtree.deinit();
+            }
+            test_allocator.free(result.pruned_subtrees);
+        }
+
+        var purged_slots_mut4 = try test_allocator.dupe(SlotAndHash, result.purged_slots);
+        defer test_allocator.free(purged_slots_mut4);
+        std.mem.sort(SlotAndHash, purged_slots_mut4, {}, compareSlotHashKey);
+        if (purged_slots_mut4.len > 0) purged_slots_mut4[0] = purged_slots_mut4[0];
+
+        try std.testing.expectEqual(expected_purged_slots.len, purged_slots_mut4.len);
+        for (expected_purged_slots, 0..) |expected_slot, i| {
+            try std.testing.expectEqual(
+                SlotAndHash{ .slot = expected_slot, .hash = Hash.ZEROES },
+                purged_slots_mut4[i],
+            );
+        }
+
+        // Verify pruned subtree structures match expected
+        // Expected: tr(5), tr(6), tr(7), tr(8), tr(9) / (tr(33) / tr(34)), tr(10), tr(31) / tr(32)
+        try std.testing.expectEqual(7, result.pruned_subtrees.len);
+
+        for (result.pruned_subtrees) |subtree| {
+            const root_slot = subtree.tree_root.slot;
+            switch (root_slot) {
+                5, 6, 7, 8, 10 => {
+                    // These should be leaves (only themselves in fork_infos)
+                    try std.testing.expectEqual(1, subtree.fork_infos.count());
+                },
+                9 => {
+                    // Should contain 9, 33, 34
+                    try std.testing.expectEqual(3, subtree.fork_infos.count());
+                    try std.testing.expect(
+                        subtree.fork_infos.contains(.{ .slot = 9, .hash = Hash.ZEROES }),
+                    );
+                    try std.testing.expect(
+                        subtree.fork_infos.contains(.{ .slot = 33, .hash = Hash.ZEROES }),
+                    );
+                    try std.testing.expect(
+                        subtree.fork_infos.contains(.{ .slot = 34, .hash = Hash.ZEROES }),
+                    );
+                },
+                31 => {
+                    // Should contain 31, 32
+                    try std.testing.expectEqual(2, subtree.fork_infos.count());
+                    try std.testing.expect(
+                        subtree.fork_infos.contains(.{ .slot = 31, .hash = Hash.ZEROES }),
+                    );
+                    try std.testing.expect(
+                        subtree.fork_infos.contains(.{ .slot = 32, .hash = Hash.ZEROES }),
+                    );
+                },
+                else => {
+                    std.debug.panic("Unexpected pruned subtree root: {}", .{root_slot});
+                },
+            }
+        }
+
+        try std.testing.expectEqual(3, fork_choice.tree_root.slot);
+    }
+
+    // Second purge_prune to slot 16
+    {
+        const expected_purged_slots = [_]u64{ 3, 11, 12, 13, 14, 15 };
+
+        var expected_tree = try setupComplicatedForks(test_allocator);
+        defer expected_tree.deinit();
+
+        // First purge to slot 3 to match the current state
+        const first_result = try expected_tree.purgePrune(
+            test_allocator,
+            sig.prometheus.globalRegistry(),
+            SlotAndHash{ .slot = 3, .hash = Hash.ZEROES },
+        );
+        defer test_allocator.free(first_result.purged_slots);
+        defer {
+            for (first_result.pruned_subtrees) |*subtree| {
+                subtree.deinit();
+            }
+            test_allocator.free(first_result.pruned_subtrees);
+        }
+
+        const expected_tree_split = try expected_tree.splitOff(
+            test_allocator,
+            sig.prometheus.globalRegistry(),
+            SlotAndHash{ .slot = 16, .hash = Hash.ZEROES },
+        );
+        defer expected_tree_split.deinit();
+
+        const result = try fork_choice.purgePrune(
+            test_allocator,
+            sig.prometheus.globalRegistry(),
+            SlotAndHash{ .slot = 16, .hash = Hash.ZEROES },
+        );
+        defer test_allocator.free(result.purged_slots);
+        defer {
+            for (result.pruned_subtrees) |*subtree| {
+                subtree.deinit();
+            }
+            test_allocator.free(result.pruned_subtrees);
+        }
+
+        var purged_slots_mut5 = try test_allocator.dupe(SlotAndHash, result.purged_slots);
+        defer test_allocator.free(purged_slots_mut5);
+        std.mem.sort(SlotAndHash, purged_slots_mut5, {}, compareSlotHashKey);
+        if (purged_slots_mut5.len > 0) purged_slots_mut5[0] = purged_slots_mut5[0];
+
+        try std.testing.expectEqual(expected_purged_slots.len, purged_slots_mut5.len);
+        for (expected_purged_slots, 0..) |expected_slot, i| {
+            try std.testing.expectEqual(
+                SlotAndHash{ .slot = expected_slot, .hash = Hash.ZEROES },
+                purged_slots_mut5[i],
+            );
+        }
+
+        // Verify pruned subtree structures match expected
+        // Expected: tr(17) / tr(21), tr(18) / tr(19) / tr(20), tr(24), tr(25), tr(26)
+        try std.testing.expectEqual(5, result.pruned_subtrees.len);
+
+        for (result.pruned_subtrees) |subtree| {
+            const root_slot = subtree.tree_root.slot;
+            switch (root_slot) {
+                24, 25, 26 => {
+                    // These should be leaves (only themselves in fork_infos)
+                    try std.testing.expectEqual(1, subtree.fork_infos.count());
+                },
+                17 => {
+                    // Should contain 17, 21
+                    try std.testing.expectEqual(2, subtree.fork_infos.count());
+                    try std.testing.expect(
+                        subtree.fork_infos.contains(.{ .slot = 17, .hash = Hash.ZEROES }),
+                    );
+                    try std.testing.expect(
+                        subtree.fork_infos.contains(.{ .slot = 21, .hash = Hash.ZEROES }),
+                    );
+                },
+                18 => {
+                    // Should contain 18, 19, 20
+                    try std.testing.expectEqual(3, subtree.fork_infos.count());
+                    try std.testing.expect(
+                        subtree.fork_infos.contains(.{ .slot = 18, .hash = Hash.ZEROES }),
+                    );
+                    try std.testing.expect(
+                        subtree.fork_infos.contains(.{ .slot = 19, .hash = Hash.ZEROES }),
+                    );
+                    try std.testing.expect(
+                        subtree.fork_infos.contains(.{ .slot = 20, .hash = Hash.ZEROES }),
+                    );
+                },
+                else => {
+                    std.debug.panic("Unexpected pruned subtree root: {}", .{root_slot});
+                },
+            }
+        }
+
+        try std.testing.expectEqual(16, fork_choice.tree_root.slot);
+    }
+}
+
 pub fn forkChoiceForTest(
     allocator: std.mem.Allocator,
     forks: []const TreeNode,
@@ -5160,6 +5502,162 @@ pub fn setupDuplicateForks() !struct {
         .duplicate_leaves_descended_from_5 = try duplicate_leaves_descended_from_5.toOwnedSlice(),
         .duplicate_leaves_descended_from_6 = try duplicate_leaves_descended_from_6.toOwnedSlice(),
     };
+}
+
+/// Analogous to [setup_complicated_forks](https://github.com/anza-xyz/agave/blob/e1634f7f6dea768ceef448871453d33918665a77/core/src/consensus/heaviest_subtree_fork_choice.rs#L4391)
+pub fn setupComplicatedForks(allocator: std.mem.Allocator) !ForkChoice {
+    // Build a complicated fork structure:
+    //
+    //     slot 0
+    //     ├── slot 1
+    //     │   ├── slot 5
+    //     │   └── slot 6
+    //     ├── slot 2
+    //     │   ├── slot 7
+    //     │   ├── slot 8
+    //     │   ├── slot 9
+    //     │   │   └── slot 33
+    //     │   │       └── slot 34
+    //     │   ├── slot 10
+    //     │   └── slot 31
+    //     │       └── slot 32
+    //     └── slot 3
+    //         ├── slot 11
+    //         ├── slot 12
+    //         │   └── slot 13
+    //         │       └── slot 14
+    //         │           ├── slot 15
+    //         │           │   ├── slot 16
+    //         │           │   │   └── slot 22
+    //         │           │   │       └── slot 23
+    //         │           │   ├── slot 17
+    //         │           │   │   └── slot 21
+    //         │           │   ├── slot 18
+    //         │           │   │   ├── slot 19
+    //         │           │   │   └── slot 20
+    //         │           │   └── slot 24
+    //         │           └── slot 25
+    //         └── slot 26
+    const complicated_fork_tuples = [_]TreeNode{
+        .{
+            SlotAndHash{ .slot = 1, .hash = Hash.ZEROES },
+            SlotAndHash{ .slot = 0, .hash = Hash.ZEROES },
+        },
+        .{
+            SlotAndHash{ .slot = 5, .hash = Hash.ZEROES },
+            SlotAndHash{ .slot = 1, .hash = Hash.ZEROES },
+        },
+        .{
+            SlotAndHash{ .slot = 6, .hash = Hash.ZEROES },
+            SlotAndHash{ .slot = 1, .hash = Hash.ZEROES },
+        },
+        .{
+            SlotAndHash{ .slot = 2, .hash = Hash.ZEROES },
+            SlotAndHash{ .slot = 0, .hash = Hash.ZEROES },
+        },
+        .{
+            SlotAndHash{ .slot = 7, .hash = Hash.ZEROES },
+            SlotAndHash{ .slot = 2, .hash = Hash.ZEROES },
+        },
+        .{
+            SlotAndHash{ .slot = 8, .hash = Hash.ZEROES },
+            SlotAndHash{ .slot = 2, .hash = Hash.ZEROES },
+        },
+        .{
+            SlotAndHash{ .slot = 9, .hash = Hash.ZEROES },
+            SlotAndHash{ .slot = 2, .hash = Hash.ZEROES },
+        },
+        .{
+            SlotAndHash{ .slot = 33, .hash = Hash.ZEROES },
+            SlotAndHash{ .slot = 9, .hash = Hash.ZEROES },
+        },
+        .{
+            SlotAndHash{ .slot = 34, .hash = Hash.ZEROES },
+            SlotAndHash{ .slot = 33, .hash = Hash.ZEROES },
+        },
+        .{
+            SlotAndHash{ .slot = 10, .hash = Hash.ZEROES },
+            SlotAndHash{ .slot = 2, .hash = Hash.ZEROES },
+        },
+        .{
+            SlotAndHash{ .slot = 31, .hash = Hash.ZEROES },
+            SlotAndHash{ .slot = 2, .hash = Hash.ZEROES },
+        },
+        .{
+            SlotAndHash{ .slot = 32, .hash = Hash.ZEROES },
+            SlotAndHash{ .slot = 31, .hash = Hash.ZEROES },
+        },
+        .{
+            SlotAndHash{ .slot = 3, .hash = Hash.ZEROES },
+            SlotAndHash{ .slot = 0, .hash = Hash.ZEROES },
+        },
+        .{
+            SlotAndHash{ .slot = 11, .hash = Hash.ZEROES },
+            SlotAndHash{ .slot = 3, .hash = Hash.ZEROES },
+        },
+        .{
+            SlotAndHash{ .slot = 12, .hash = Hash.ZEROES },
+            SlotAndHash{ .slot = 3, .hash = Hash.ZEROES },
+        },
+        .{
+            SlotAndHash{ .slot = 13, .hash = Hash.ZEROES },
+            SlotAndHash{ .slot = 12, .hash = Hash.ZEROES },
+        },
+        .{
+            SlotAndHash{ .slot = 14, .hash = Hash.ZEROES },
+            SlotAndHash{ .slot = 13, .hash = Hash.ZEROES },
+        },
+        .{
+            SlotAndHash{ .slot = 15, .hash = Hash.ZEROES },
+            SlotAndHash{ .slot = 14, .hash = Hash.ZEROES },
+        },
+        .{
+            SlotAndHash{ .slot = 16, .hash = Hash.ZEROES },
+            SlotAndHash{ .slot = 15, .hash = Hash.ZEROES },
+        },
+        .{
+            SlotAndHash{ .slot = 22, .hash = Hash.ZEROES },
+            SlotAndHash{ .slot = 16, .hash = Hash.ZEROES },
+        },
+        .{
+            SlotAndHash{ .slot = 23, .hash = Hash.ZEROES },
+            SlotAndHash{ .slot = 22, .hash = Hash.ZEROES },
+        },
+        .{
+            SlotAndHash{ .slot = 17, .hash = Hash.ZEROES },
+            SlotAndHash{ .slot = 15, .hash = Hash.ZEROES },
+        },
+        .{
+            SlotAndHash{ .slot = 21, .hash = Hash.ZEROES },
+            SlotAndHash{ .slot = 17, .hash = Hash.ZEROES },
+        },
+        .{
+            SlotAndHash{ .slot = 18, .hash = Hash.ZEROES },
+            SlotAndHash{ .slot = 15, .hash = Hash.ZEROES },
+        },
+        .{
+            SlotAndHash{ .slot = 19, .hash = Hash.ZEROES },
+            SlotAndHash{ .slot = 18, .hash = Hash.ZEROES },
+        },
+        .{
+            SlotAndHash{ .slot = 20, .hash = Hash.ZEROES },
+            SlotAndHash{ .slot = 18, .hash = Hash.ZEROES },
+        },
+        .{
+            SlotAndHash{ .slot = 24, .hash = Hash.ZEROES },
+            SlotAndHash{ .slot = 15, .hash = Hash.ZEROES },
+        },
+        .{
+            SlotAndHash{ .slot = 25, .hash = Hash.ZEROES },
+            SlotAndHash{ .slot = 14, .hash = Hash.ZEROES },
+        },
+        .{
+            SlotAndHash{ .slot = 26, .hash = Hash.ZEROES },
+            SlotAndHash{ .slot = 3, .hash = Hash.ZEROES },
+        },
+    };
+
+    return try forkChoiceForTest(allocator, complicated_fork_tuples[0..]);
 }
 
 fn isUpdateOpsEqual(expected: *UpdateOperations, actual: *UpdateOperations) !bool {
