@@ -1622,6 +1622,88 @@ pub const ForkChoice = struct {
             .metrics = try ForkChoiceMetrics.init(registry),
         };
     }
+
+    /// Analogous to [purge_prune](https://github.com/anza-xyz/agave/blob/e854fc6749a14b3c9751201a9950f44192d97217/core/src/consensus/heaviest_subtree_fork_choice.rs#L384)
+    ///
+    /// Purges all slots < `new_root` and prunes subtrees with slots > `new_root` not descending from `new_root`.
+    /// Also if the resulting tree is non-empty, updates `self.tree_root` to `new_root`
+    /// Returns (purged slots, pruned subtrees)
+    pub fn purgePrune(
+        self: *ForkChoice,
+        allocator: std.mem.Allocator,
+        registry: *sig.prometheus.Registry(.{}),
+        new_root: SlotAndHash,
+    ) !struct {
+        purged_slots: []const SlotAndHash,
+        pruned_subtrees: []ForkChoice,
+    } {
+        var pruned_subtrees: std.ArrayListUnmanaged(ForkChoice) = .empty;
+        errdefer {
+            for (pruned_subtrees.items) |*subtree| {
+                subtree.deinit();
+            }
+            allocator.free(pruned_subtrees.items);
+        }
+
+        var purged_slots: std.ArrayListUnmanaged(SlotAndHash) = .empty;
+        errdefer allocator.free(purged_slots.items);
+
+        var tree_root: ?SlotAndHash = null;
+
+        // Find the subtrees to prune
+        var to_visit: std.ArrayListUnmanaged(SlotAndHash) = .empty;
+        defer to_visit.deinit(allocator);
+
+        try to_visit.append(allocator, self.tree_root);
+
+        while (to_visit.pop()) |cur_slot| {
+            if (cur_slot.equals(new_root)) {
+                tree_root = new_root;
+                continue;
+            }
+            if (cur_slot.slot < new_root.slot) {
+                if (self.getChildren(&cur_slot)) |map| {
+                    var children = map;
+                    const child_keys = children.keys();
+                    try to_visit.ensureUnusedCapacity(allocator, child_keys.len);
+                    to_visit.appendSliceAssumeCapacity(child_keys);
+                }
+                // Purge this slot since it's < `new_root`
+                try purged_slots.append(allocator, cur_slot);
+            } else {
+                // The start of a pruned subtree. Split it out and stop traversing this subtree.
+                const subtree = try self.splitOff(allocator, registry, cur_slot);
+                try pruned_subtrees.append(allocator, subtree);
+            }
+        }
+
+        // Remove purged slots from fork_infos
+        for (purged_slots.items) |slot| {
+            const removed = self.fork_infos.fetchRemove(slot);
+            if (removed) |entry| {
+                var fork_info = entry.value;
+                fork_info.deinit();
+            }
+        }
+
+        // Update tree_root if found
+        if (tree_root) |root| {
+            if (self.fork_infos.getPtr(root)) |fork_info| {
+                fork_info.parent = null;
+            }
+            self.tree_root = root;
+            self.last_root_time = Instant.now();
+        }
+
+        // Transfer ownership of the slices to the caller
+        const purged_slots_slice: []const SlotAndHash = try purged_slots.toOwnedSlice(allocator);
+        const pruned_subtrees_slice = try pruned_subtrees.toOwnedSlice(allocator);
+
+        return .{
+            .purged_slots = purged_slots_slice,
+            .pruned_subtrees = pruned_subtrees_slice,
+        };
+    }
 };
 
 /// [Agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L1390
