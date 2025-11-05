@@ -1363,7 +1363,7 @@ pub const ContactInfo = struct {
                 .patch = 2,
                 .commit = 3,
                 .feature_set = 4,
-                .client = .agave_bam, // 5
+                .client = .sig,
             },
             .addrs = addrs,
             .sockets = sockets,
