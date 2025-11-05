@@ -838,7 +838,7 @@ const TestStakedNodeAccounts = struct {
 
 test "stakes basic" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     inline for (.{
         StakesType.delegation,
@@ -940,7 +940,7 @@ test "stakes vote account disappear reappear" {
     const VoteState = sig.runtime.program.vote.state.VoteState;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     inline for (.{
@@ -1055,7 +1055,7 @@ test "stakes vote account disappear reappear" {
 
 test "get stake effective and activating" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     const delegation = Delegation{
@@ -1089,7 +1089,7 @@ test "get stake effective and activating" {
 
 test "get stake state" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     const delegation = Delegation{

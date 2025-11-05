@@ -625,7 +625,7 @@ test "address-lookup-table missing accounts" {
     const ExecuteContextsParams = sig.runtime.testing.ExecuteContextsParams;
     const expectProgramExecuteError = sig.runtime.program.testing.expectProgramExecuteError;
 
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const unsigned_authority_address = Pubkey.initRandom(prng.random());
     const recent_slot = std.math.maxInt(Slot);
@@ -667,7 +667,7 @@ test "address-lookup-table create" {
     const expectProgramExecuteResult = sig.runtime.program.testing.expectProgramExecuteResult;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const payer = Pubkey.initRandom(prng.random());
     const unsigned_authority_address = Pubkey.initRandom(prng.random());
@@ -780,7 +780,7 @@ test "address-lookup-table freeze" {
     const expectProgramExecuteResult = sig.runtime.program.testing.expectProgramExecuteResult;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const unsigned_authority_address = Pubkey.initRandom(prng.random());
     const first_address = Pubkey.initRandom(prng.random());
@@ -889,7 +889,7 @@ test "address-lookup-table close" {
     const expectProgramExecuteResult = sig.runtime.program.testing.expectProgramExecuteResult;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const unsigned_authority_address = Pubkey.initRandom(prng.random());
     const first_address = Pubkey.initRandom(prng.random());
@@ -1000,7 +1000,7 @@ test "address-lookup-table deactivate" {
     const expectProgramExecuteResult = sig.runtime.program.testing.expectProgramExecuteResult;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const unsigned_authority_address = Pubkey.initRandom(prng.random());
     const first_address = Pubkey.initRandom(prng.random());
@@ -1109,7 +1109,7 @@ test "address-lookup-table extend" {
     const expectProgramExecuteResult = sig.runtime.program.testing.expectProgramExecuteResult;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const unsigned_authority_address = Pubkey.initRandom(prng.random());
     const first_address = Pubkey.initRandom(prng.random());

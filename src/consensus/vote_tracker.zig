@@ -378,7 +378,7 @@ pub const VoteStakeTracker = struct {
 test "VoteStakeTracker.addVotePubkey" {
     const allocator = std.testing.allocator;
 
-    var prng = std.Random.DefaultPrng.init(21410);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     const total_epoch_stake = 10;

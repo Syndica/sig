@@ -221,7 +221,7 @@ const expectEqual = std.testing.expectEqual;
 
 // Ensure that if you mix-in or mix-out with the identity, you get the original value
 test "identity" {
-    var rng = std.Random.DefaultPrng.init(0);
+    var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const a = LtHash.initRandom(rng.random());
     try expectEqual(a, a.add(LtHash.IDENTITY));
     try expectEqual(a, a.sub(LtHash.IDENTITY));
@@ -229,7 +229,7 @@ test "identity" {
 
 // Ensure that if you mix-in then mix-out a hash, you get the original value
 test "inverse" {
-    var rng = std.Random.DefaultPrng.init(1);
+    var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const a = LtHash.initRandom(rng.random());
     const b = LtHash.initRandom(rng.random());
     try expectEqual(a, a.add(b).sub(b));
@@ -238,7 +238,7 @@ test "inverse" {
 
 // Ensure that mixing is commutative
 test "commutative" {
-    var rng = std.Random.DefaultPrng.init(2);
+    var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const a = LtHash.initRandom(rng.random());
     const b = LtHash.initRandom(rng.random());
     try expectEqual(a.add(b), b.add(a));
@@ -246,7 +246,7 @@ test "commutative" {
 
 // Ensure that mixing is associative
 test "associative" {
-    var rng = std.Random.DefaultPrng.init(3);
+    var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const a = LtHash.initRandom(rng.random());
     const b = LtHash.initRandom(rng.random());
     const c = LtHash.initRandom(rng.random());
@@ -255,7 +255,7 @@ test "associative" {
 
 // Ensure that mixing out respects distribution
 test "distribute" {
-    var rng = std.Random.DefaultPrng.init(4);
+    var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const a = LtHash.initRandom(rng.random());
     const b = LtHash.initRandom(rng.random());
     const c = LtHash.initRandom(rng.random());
