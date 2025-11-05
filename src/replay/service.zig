@@ -35,49 +35,49 @@ const updateSysvarsForNewSlot = replay.update_sysvar.updateSysvarsForNewSlot;
 
 pub const Logger = sig.trace.Logger("replay");
 
-pub const AdvanceReplayParams = struct {
-    replay_state: *ReplayState,
-    consensus: ?struct {
-        tower: *TowerConsensus,
-        senders: TowerConsensus.Senders,
-        receivers: TowerConsensus.Receivers,
-        vote_collection: ?TowerConsensus.VoteCollectionParams,
-    },
+pub const AvanceReplayConsensusParams = struct {
+    tower: *TowerConsensus,
+    gossip_table: ?*sig.sync.RwMux(sig.gossip.GossipTable),
+    senders: TowerConsensus.Senders,
+    receivers: TowerConsensus.Receivers,
 };
 
 /// Run a single iteration of the entire replay process. Includes:
 /// - replay all active slots that have not been replayed yet
 /// - running consensus on the latest updates (if present)
-pub fn advanceReplay(params: AdvanceReplayParams) !void {
+pub fn advanceReplay(
+    replay_state: *ReplayState,
+    consensus_params: ?AvanceReplayConsensusParams,
+) !void {
     const zone = tracy.Zone.init(@src(), .{ .name = "advanceReplay" });
     defer zone.deinit();
 
-    const allocator = params.replay_state.allocator;
-    params.replay_state.logger.debug().log("advancing replay");
+    const allocator = replay_state.allocator;
+    replay_state.logger.debug().log("advancing replay");
 
     // find slots in the ledger
     try trackNewSlots(
         allocator,
-        params.replay_state.logger,
-        params.replay_state.account_store,
-        params.replay_state.ledger,
-        &params.replay_state.slot_tracker,
-        &params.replay_state.epoch_tracker,
-        &params.replay_state.slot_tree,
-        params.replay_state.slot_leaders,
-        &params.replay_state.hard_forks,
-        &params.replay_state.progress_map,
+        replay_state.logger,
+        replay_state.account_store,
+        replay_state.ledger,
+        &replay_state.slot_tracker,
+        &replay_state.epoch_tracker,
+        &replay_state.slot_tree,
+        replay_state.slot_leaders,
+        &replay_state.hard_forks,
+        &replay_state.progress_map,
     );
 
     // replay slots
-    const slot_results = try replay.execution.replayActiveSlots(params.replay_state);
+    const slot_results = try replay.execution.replayActiveSlots(replay_state);
     defer allocator.free(slot_results);
 
     // freeze slots
-    const processed_a_slot: bool = try freezeCompletedSlots(params.replay_state, slot_results);
+    const processed_a_slot: bool = try freezeCompletedSlots(replay_state, slot_results);
 
     // run consensus
-    if (params.consensus) |consensus| {
+    if (consensus_params) |consensus| {
         var duplicate_confirmed_slots: std.ArrayListUnmanaged(ThresholdConfirmedSlot) = .empty;
         defer duplicate_confirmed_slots.deinit(allocator);
 
@@ -85,19 +85,19 @@ pub fn advanceReplay(params: AdvanceReplayParams) !void {
         defer gossip_verified_vote_hashes.deinit(allocator);
 
         try consensus.tower.process(allocator, .{
-            .account_reader = params.replay_state.account_store.reader(),
-            .ledger = params.replay_state.ledger,
-            .slot_tracker = &params.replay_state.slot_tracker,
-            .epoch_tracker = &params.replay_state.epoch_tracker,
-            .progress_map = &params.replay_state.progress_map,
+            .account_reader = replay_state.account_store.reader(),
+            .ledger = replay_state.ledger,
+            .slot_tracker = &replay_state.slot_tracker,
+            .epoch_tracker = &replay_state.epoch_tracker,
+            .progress_map = &replay_state.progress_map,
             .senders = consensus.senders,
             .receivers = consensus.receivers,
-            .vote_collection = consensus.vote_collection,
+            .gossip_table = consensus.gossip_table,
             .duplicate_confirmed_slots = &duplicate_confirmed_slots,
             .gossip_verified_vote_hashes = &gossip_verified_vote_hashes,
             .results = slot_results,
         });
-    } else try bypassConsensus(params.replay_state);
+    } else try bypassConsensus(replay_state);
 
     if (!processed_a_slot) try std.Thread.yield();
 }
@@ -755,17 +755,10 @@ test "process runs without error with no replay results" {
         .account_reader = replay_state.account_store.reader(),
         .ledger = replay_state.ledger,
         .slot_tracker = &replay_state.slot_tracker,
+        .registry = &registry,
+        .now = .UNIX_EPOCH,
     });
     defer consensus.deinit(allocator);
-
-    const slot_data_provider: sig.consensus.vote_listener.SlotDataProvider = .{
-        .slot_tracker = &replay_state.slot_tracker,
-        .epoch_tracker = &replay_state.epoch_tracker,
-    };
-
-    var vote_collector: sig.consensus.VoteCollector =
-        try .init(.UNIX_EPOCH, slot_data_provider.rootSlot(), &registry);
-    defer vote_collector.deinit(allocator);
 
     const vc_senders: sig.consensus.vote_listener.Senders = try .createForTest(allocator, .{
         .bank_notification = false,
@@ -779,13 +772,13 @@ test "process runs without error with no replay results" {
     const consensus_receivers: TowerConsensus.Receivers = try .create(allocator);
     defer consensus_receivers.destroy();
 
-    try vote_collector.collectAndProcessVotes(allocator, .FOR_TESTS, .{
-        .slot_data_provider = slot_data_provider,
-        .senders = vc_senders,
-        .receivers = .{ .replay_votes = replay_state.replay_votes_channel },
-        .ledger = replay_state.ledger,
-        .gossip_table = null,
-    });
+    // try vote_collector.collectAndProcessVotes(allocator, .FOR_TESTS, .{
+    //     .slot_data_provider = slot_data_provider,
+    //     .senders = vc_senders,
+    //     .receivers = .{ .replay_votes = replay_state.replay_votes_channel },
+    //     .ledger = replay_state.ledger,
+    //     .gossip_table = null,
+    // });
 
     // TODO: run consensus in the tests that actually execute blocks for better
     // coverage. currently consensus panics or hangs if you run it with actual data
@@ -797,11 +790,7 @@ test "process runs without error with no replay results" {
         .progress_map = &replay_state.progress_map,
         .senders = consensus_senders,
         .receivers = consensus_receivers,
-        .vote_collection = .{
-            .collector = &vote_collector,
-            .gossip_table = null,
-            .verified_vote_channel_sender = vc_senders.verified_vote,
-        },
+        .gossip_table = null,
         .duplicate_confirmed_slots = vc_senders.duplicate_confirmed_slots.?,
         .gossip_verified_vote_hashes = vc_senders.gossip_verified_vote_hashes,
         .results = &.{},
@@ -817,10 +806,7 @@ test "advance calls consensus.process with empty replay results" {
     var replay_state = try dep_stubs.stubbedState(allocator, .FOR_TESTS);
     defer replay_state.deinit();
 
-    try advanceReplay(.{
-        .replay_state = &replay_state,
-        .consensus = null,
-    });
+    try advanceReplay(&replay_state, null);
 
     // No slots were replayed
     try std.testing.expectEqual(0, replay_state.slot_tracker.root);
@@ -938,10 +924,7 @@ fn testExecuteBlock(allocator: Allocator, config: struct {
     defer replay_state.deinit();
 
     // replay the block
-    try advanceReplay(.{
-        .replay_state = &replay_state,
-        .consensus = null,
-    });
+    try advanceReplay(&replay_state, null);
 
     // get slot hash
     const actual_slot_hash = tracker_lock: {

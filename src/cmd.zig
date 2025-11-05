@@ -1197,7 +1197,11 @@ fn validator(
     });
     defer replay_service_state.deinit(allocator);
 
-    const replay_thread = try replay_service_state.spawnService(&app_base, cfg);
+    const replay_thread = try replay_service_state.spawnService(
+        &app_base,
+        &gossip_service.gossip_table_rw,
+        cfg,
+    );
 
     replay_thread.join();
     rpc_epoch_ctx_service_thread.join();
@@ -1314,7 +1318,7 @@ fn replayOffline(
     });
     defer replay_service_state.deinit(allocator);
 
-    const replay_thread = try replay_service_state.spawnService(&app_base, cfg);
+    const replay_thread = try replay_service_state.spawnService(&app_base, null, cfg);
 
     replay_thread.join();
     ledger_cleanup_service.join();
@@ -1976,6 +1980,8 @@ const ReplayAndConsensusServiceState = struct {
             .account_reader = replay_state.account_store.reader(),
             .ledger = replay_state.ledger,
             .slot_tracker = &replay_state.slot_tracker,
+            .now = .now(),
+            .registry = params.app_base.metrics_registry,
         });
         errdefer tower_consensus.deinit(allocator);
 
@@ -1997,6 +2003,7 @@ const ReplayAndConsensusServiceState = struct {
     fn spawnService(
         self: *ReplayAndConsensusServiceState,
         app_base: *const AppBase,
+        gossip_table: ?*sig.sync.RwMux(sig.gossip.GossipTable),
         cfg: config.Cmd,
     ) !std.Thread {
         return try app_base.spawnService(
@@ -2004,14 +2011,12 @@ const ReplayAndConsensusServiceState = struct {
             .loop,
             replay.service.advanceReplay,
             .{
-                replay.service.AdvanceReplayParams{
-                    .replay_state = &self.replay_state,
-                    .consensus = if (cfg.disable_consensus) null else .{
-                        .tower = &self.tower_consensus,
-                        .vote_collection = null, // TODO: enable
-                        .senders = self.tc_senders,
-                        .receivers = self.tc_receivers,
-                    },
+                &self.replay_state,
+                if (cfg.disable_consensus) null else replay.service.AvanceReplayConsensusParams{
+                    .tower = &self.tower_consensus,
+                    .gossip_table = gossip_table,
+                    .senders = self.tc_senders,
+                    .receivers = self.tc_receivers,
                 },
             },
         );
