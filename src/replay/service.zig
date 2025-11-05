@@ -52,8 +52,8 @@ pub const Service = struct {
 
             const consensus_state_deps: TowerConsensus.Dependencies = .{
                 .logger = .from(deps.logger),
-                .my_identity = deps.my_identity,
-                .vote_identity = deps.vote_identity,
+                .identity = deps.identity,
+                .signing = deps.signing,
                 .root_slot = deps.root.slot,
                 .root_hash = slot_tracker.get(slot_tracker.root).?.state.hash.readCopy().?,
                 .account_reader = deps.account_store.reader(),
@@ -133,8 +133,8 @@ pub const Dependencies = struct {
     /// Used for all allocations within the replay stage
     allocator: Allocator,
     logger: Logger,
-    my_identity: Pubkey,
-    vote_identity: Pubkey,
+    identity: sig.identity.ValidatorIdentity,
+    signing: sig.identity.SigningKeys,
     /// Tell replay when to exit
     exit: *std.atomic.Value(bool),
     /// Used in the EpochManager
@@ -266,8 +266,8 @@ pub const ReplayState = struct {
             deps.allocator,
             &slot_tracker,
             &epoch_tracker,
-            deps.my_identity,
-            deps.vote_identity,
+            deps.identity.validator,
+            deps.identity.vote_account,
         );
         errdefer progress_map.deinit(deps.allocator);
 
@@ -286,7 +286,7 @@ pub const ReplayState = struct {
             .allocator = deps.allocator,
             .logger = .from(deps.logger),
             .thread_pool = .init(.{ .max_threads = num_threads }),
-            .my_identity = deps.my_identity,
+            .my_identity = deps.identity.validator,
             .slot_leaders = deps.slot_leaders,
             .slot_tracker = slot_tracker_rw,
             .epoch_tracker = epoch_tracker_rw,
@@ -1158,8 +1158,14 @@ pub const DependencyStubs = struct {
             break :deps .{
                 .allocator = allocator,
                 .logger = logger,
-                .my_identity = .initRandom(random),
-                .vote_identity = .initRandom(random),
+                .identity = .{
+                    .validator = .initRandom(random),
+                    .vote_account = .initRandom(random),
+                },
+                .signing = .{
+                    .node = null,
+                    .authorized_voters = &.{},
+                },
                 .exit = &self.exit,
                 .epoch_schedule = .DEFAULT,
                 .account_store = self.accountsdb.accountStore(),
@@ -1185,6 +1191,7 @@ pub const DependencyStubs = struct {
             .senders = self.senders,
             .receivers = self.receivers,
             .gossip_table = null,
+            .slot_leaders = null,
             .run_vote_listener = run_vote_listener,
         };
 
@@ -1232,8 +1239,14 @@ pub const DependencyStubs = struct {
             break :deps .{
                 .allocator = allocator,
                 .logger = .FOR_TESTS,
-                .my_identity = .ZEROES,
-                .vote_identity = .ZEROES,
+                .identity = .{
+                    .validator = .ZEROES,
+                    .vote_account = .ZEROES,
+                },
+                .signing = .{
+                    .node = null,
+                    .authorized_voters = &.{},
+                },
                 .exit = &self.exit,
                 .account_store = self.accountsdb.accountStore(),
                 .ledger = &self.ledger,
