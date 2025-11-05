@@ -2145,7 +2145,6 @@ const ReplayAndConsensusServiceState = struct {
             replay.service.advanceReplay,
             .{
                 replay.service.AdvanceReplayParams{
-                    .want_multi_threaded_replay = true,
                     .replay_state = &self.replay_state,
                     .gossip_table = null,
                     .consensus = if (cfg.disable_consensus) null else .{
