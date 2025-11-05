@@ -36,7 +36,6 @@ const updateSysvarsForNewSlot = replay.update_sysvar.updateSysvarsForNewSlot;
 pub const Logger = sig.trace.Logger("replay");
 
 pub const AdvanceReplayParams = struct {
-    want_multi_threaded_replay: bool,
     replay_state: *ReplayState,
     consensus: ?struct {
         tower: *TowerConsensus,
@@ -71,10 +70,7 @@ pub fn advanceReplay(params: AdvanceReplayParams) !void {
     );
 
     // replay slots
-    const slot_results = try replay.execution.replayActiveSlots(
-        params.replay_state,
-        params.want_multi_threaded_replay,
-    );
+    const slot_results = try replay.execution.replayActiveSlots(params.replay_state);
     defer allocator.free(slot_results);
 
     // freeze slots
@@ -822,7 +818,6 @@ test "advance calls consensus.process with empty replay results" {
     defer replay_state.deinit();
 
     try advanceReplay(.{
-        .want_multi_threaded_replay = false,
         .replay_state = &replay_state,
         .consensus = null,
     });
@@ -944,7 +939,6 @@ fn testExecuteBlock(allocator: Allocator, config: struct {
 
     // replay the block
     try advanceReplay(.{
-        .want_multi_threaded_replay = false,
         .replay_state = &replay_state,
         .consensus = null,
     });

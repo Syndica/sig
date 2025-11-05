@@ -2005,7 +2005,6 @@ const ReplayAndConsensusServiceState = struct {
             replay.service.advanceReplay,
             .{
                 replay.service.AdvanceReplayParams{
-                    .want_multi_threaded_replay = true,
                     .replay_state = &self.replay_state,
                     .consensus = if (cfg.disable_consensus) null else .{
                         .tower = &self.tower_consensus,
