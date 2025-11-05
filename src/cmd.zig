@@ -1099,7 +1099,10 @@ fn validator(
     );
     defer loaded_snapshot.deinit();
 
-    var rooted_db: sig.accounts_db.Two.Rooted = try .init("accounts.db");
+    const rooted_file = try std.fs.path.joinZ(allocator, &.{ snapshot_dir_str, "accounts.db" });
+    defer allocator.free(rooted_file);
+
+    var rooted_db: sig.accounts_db.Two.Rooted = try .init(rooted_file);
     if (cfg.recreate_sqlite) {
         var accounts_dir = try snapshot_dir.openDir("accounts", .{ .iterate = true });
         defer accounts_dir.close();
@@ -1319,7 +1322,10 @@ fn replayOffline(
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{});
     defer snapshot_dir.close();
 
-    var rooted_db: sig.accounts_db.Two.Rooted = try .init("accounts.db");
+    const rooted_file = try std.fs.path.joinZ(allocator, &.{ snapshot_dir_str, "accounts.db" });
+    defer allocator.free(rooted_file);
+
+    var rooted_db: sig.accounts_db.Two.Rooted = try .init(rooted_file);
     if (cfg.recreate_sqlite) {
         var accounts_dir = try snapshot_dir.openDir("accounts", .{ .iterate = true });
         defer accounts_dir.close();
