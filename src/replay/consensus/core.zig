@@ -109,6 +109,9 @@ pub const TowerConsensus = struct {
     latest_validator_votes: LatestValidatorVotes,
     status_cache: sig.core.StatusCache,
     slot_data: SlotData,
+
+    vote_collector: sig.consensus.VoteCollector,
+
     /// this is used for some temporary allocations that don't outlive
     /// functions; ie, it isn't used for any persistent data
     arena_state: std.heap.ArenaAllocator.State,
@@ -133,6 +136,9 @@ pub const TowerConsensus = struct {
             account_reader: AccountReader,
             ledger: *sig.ledger.Ledger,
             slot_tracker: *const SlotTracker,
+            /// Usually `.now()`.
+            now: sig.time.Instant,
+            registry: *sig.prometheus.Registry(.{}),
         },
     ) !TowerConsensus {
         const zone = tracy.Zone.init(@src(), .{ .name = "TowerConsensus.init" });
@@ -159,6 +165,10 @@ pub const TowerConsensus = struct {
         );
         errdefer replay_tower.deinit(allocator);
 
+        var vote_collector: sig.consensus.VoteCollector =
+            try .init(deps.now, deps.slot_tracker.root, deps.registry);
+        errdefer vote_collector.deinit(allocator);
+
         return .{
             .logger = deps.logger,
             .identity = deps.identity,
@@ -169,6 +179,9 @@ pub const TowerConsensus = struct {
             .latest_validator_votes = .empty,
             .status_cache = .DEFAULT,
             .slot_data = .empty,
+
+            .vote_collector = vote_collector,
+
             .arena_state = .{},
         };
     }
@@ -250,13 +263,26 @@ pub const TowerConsensus = struct {
     pub const Senders = struct {
         /// Received by repair ancestor_hashes_service
         ancestor_hashes_replay_update: *Channel(AncestorHashesReplayUpdate),
+        /// The vote collector sends verified votes through this channel.
+        verified_vote: *sig.sync.Channel(sig.consensus.vote_listener.VerifiedVote),
 
         pub fn destroy(self: Senders) void {
             self.ancestor_hashes_replay_update.destroy();
+            self.verified_vote.destroy();
         }
 
         pub fn create(allocator: std.mem.Allocator) std.mem.Allocator.Error!Senders {
-            return .{ .ancestor_hashes_replay_update = try .create(allocator) };
+            const ancestor_hashes_replay_update: *Channel(AncestorHashesReplayUpdate) =
+                try .create(allocator);
+            errdefer ancestor_hashes_replay_update.destroy();
+            const verified_vote: *sig.sync.Channel(sig.consensus.vote_listener.VerifiedVote) =
+                try .create(allocator);
+            errdefer verified_vote.destroy();
+
+            return .{
+                .ancestor_hashes_replay_update = ancestor_hashes_replay_update,
+                .verified_vote = verified_vote,
+            };
         }
     };
 
@@ -301,14 +327,6 @@ pub const TowerConsensus = struct {
         }
     };
 
-    pub const VoteCollectionParams = struct {
-        collector: *sig.consensus.VoteCollector,
-        /// Scanned by the vote collector if provided.
-        gossip_table: ?*sig.sync.RwMux(sig.gossip.GossipTable),
-        /// The vote collector sends verified votes through this channel.
-        verified_vote_channel_sender: *sig.sync.Channel(sig.consensus.vote_listener.VerifiedVote),
-    };
-
     /// Run all phases of consensus:
     /// - process replay results
     /// - cluster sync
@@ -319,13 +337,13 @@ pub const TowerConsensus = struct {
         params: struct {
             account_reader: AccountReader,
             ledger: *Ledger,
+            /// Scanned by the vote collector if provided.
             gossip_table: ?*sig.sync.RwMux(sig.gossip.GossipTable),
             slot_tracker: *SlotTracker,
             epoch_tracker: *EpochTracker,
             progress_map: *ProgressMap,
             senders: Senders,
             receivers: Receivers,
-            vote_collection: ?VoteCollectionParams,
             vote_sockets: ?*const VoteSockets,
             slot_leaders: ?sig.core.leader_schedule.SlotLeaders,
             /// Generally expected to be empty, but can be non-empty for testing purposes.
@@ -343,24 +361,22 @@ pub const TowerConsensus = struct {
         }
         const arena = arena_state.allocator();
 
-        if (params.vote_collection) |vp| {
-            try vp.collector.collectAndProcessVotes(allocator, .from(self.logger), .{
-                .slot_data_provider = .{
-                    .slot_tracker = params.slot_tracker,
-                    .epoch_tracker = params.epoch_tracker,
-                },
-                .senders = .{
-                    .verified_vote = vp.verified_vote_channel_sender,
-                    .gossip_verified_vote_hashes = params.gossip_verified_vote_hashes,
-                    .duplicate_confirmed_slots = params.duplicate_confirmed_slots,
-                    .bank_notification = null,
-                    .subscriptions = .{},
-                },
-                .receivers = .{ .replay_votes = params.receivers.replay_votes },
-                .ledger = params.ledger,
-                .gossip_table = vp.gossip_table,
-            });
-        }
+        try self.vote_collector.collectAndProcessVotes(allocator, .from(self.logger), .{
+            .slot_data_provider = .{
+                .slot_tracker = params.slot_tracker,
+                .epoch_tracker = params.epoch_tracker,
+            },
+            .senders = .{
+                .verified_vote = params.senders.verified_vote,
+                .gossip_verified_vote_hashes = params.gossip_verified_vote_hashes,
+                .duplicate_confirmed_slots = params.duplicate_confirmed_slots,
+                .bank_notification = null,
+                .subscriptions = .{},
+            },
+            .receivers = .{ .replay_votes = params.receivers.replay_votes },
+            .ledger = params.ledger,
+            .gossip_table = params.gossip_table,
+        });
 
         // Process replay results
         for (params.results) |r| {
@@ -1665,6 +1681,9 @@ test "processResult and handleDuplicateConfirmedFork" {
     // TODO add assertions to this test
     const allocator = std.testing.allocator;
 
+    var registry: sig.prometheus.Registry(.{}) = .init(allocator);
+    defer registry.deinit();
+
     var stubs = try replay.service.DependencyStubs.init(allocator, .FOR_TESTS);
     defer stubs.deinit();
 
@@ -1679,6 +1698,8 @@ test "processResult and handleDuplicateConfirmedFork" {
         .account_reader = replay_state.account_store.reader(),
         .ledger = replay_state.ledger,
         .slot_tracker = &replay_state.slot_tracker,
+        .registry = &registry,
+        .now = .UNIX_EPOCH,
     });
     defer consensus.deinit(allocator);
 
@@ -4306,6 +4327,9 @@ test "findVoteIndexToEvict - full buffer evicts oldest index" {
 test "vote on heaviest frozen descendant with no switch" {
     const allocator = std.testing.allocator;
 
+    var registry: sig.prometheus.Registry(.{}) = .init(allocator);
+    defer registry.deinit();
+
     var stubs = try sig.replay.service.DependencyStubs.init(allocator, .noop);
     defer stubs.deinit();
 
@@ -4400,6 +4424,8 @@ test "vote on heaviest frozen descendant with no switch" {
         .account_reader = stubs.accountsdb.accountReader(),
         .ledger = &stubs.ledger,
         .slot_tracker = &slot_tracker,
+        .now = .UNIX_EPOCH,
+        .registry = &registry,
     });
     defer consensus.deinit(allocator);
 
@@ -4424,7 +4450,6 @@ test "vote on heaviest frozen descendant with no switch" {
         .progress_map = &progress,
         .senders = stubs.senders,
         .receivers = stubs.receivers,
-        .vote_collection = null,
         .vote_sockets = null,
         .slot_leaders = null,
         .duplicate_confirmed_slots = &duplicate_confirmed_slots,
@@ -4479,6 +4504,9 @@ test "vote on heaviest frozen descendant with no switch" {
 // - Set up the progress map
 test "vote accounts with landed votes populate bank stats" {
     const allocator = std.testing.allocator;
+
+    var registry: sig.prometheus.Registry(.{}) = .init(allocator);
+    defer registry.deinit();
 
     var stubs = try sig.replay.service.DependencyStubs.init(allocator, .noop);
     defer stubs.deinit();
@@ -4620,6 +4648,8 @@ test "vote accounts with landed votes populate bank stats" {
         .account_reader = stubs.accountsdb.accountReader(),
         .ledger = &stubs.ledger,
         .slot_tracker = &slot_tracker,
+        .now = .UNIX_EPOCH,
+        .registry = &registry,
     });
     defer consensus.deinit(allocator);
 
@@ -4641,7 +4671,6 @@ test "vote accounts with landed votes populate bank stats" {
         .progress_map = &progress,
         .senders = stubs.senders,
         .receivers = stubs.receivers,
-        .vote_collection = null,
         .vote_sockets = null,
         .slot_leaders = null,
         .duplicate_confirmed_slots = &duplicate_confirmed_slots,
@@ -4738,6 +4767,9 @@ test "vote accounts with landed votes populate bank stats" {
 // - Final: lastVotedSlot() == 33 (most recent vote tracked correctly)
 test "root advances after vote satisfies lockouts" {
     const allocator = std.testing.allocator;
+
+    var registry: sig.prometheus.Registry(.{}) = .init(allocator);
+    defer registry.deinit();
 
     var stubs = try sig.replay.service.DependencyStubs.init(allocator, .noop);
     defer stubs.deinit();
@@ -4899,6 +4931,8 @@ test "root advances after vote satisfies lockouts" {
         .account_reader = stubs.accountsdb.accountReader(),
         .ledger = &stubs.ledger,
         .slot_tracker = &slot_tracker,
+        .now = .UNIX_EPOCH,
+        .registry = &registry,
     });
     defer consensus.deinit(allocator);
 
@@ -4947,7 +4981,6 @@ test "root advances after vote satisfies lockouts" {
             .progress_map = &progress,
             .senders = stubs.senders,
             .receivers = stubs.receivers,
-            .vote_collection = null,
             .vote_sockets = null,
             .slot_leaders = null,
             .duplicate_confirmed_slots = &duplicate_confirmed_slots,
@@ -5009,7 +5042,6 @@ test "root advances after vote satisfies lockouts" {
             .progress_map = &progress,
             .senders = stubs.senders,
             .receivers = stubs.receivers,
-            .vote_collection = null,
             .vote_sockets = null,
             .slot_leaders = null,
             .duplicate_confirmed_slots = &duplicate_confirmed_slots,
@@ -5091,7 +5123,6 @@ test "root advances after vote satisfies lockouts" {
             .progress_map = &progress,
             .senders = stubs.senders,
             .receivers = stubs.receivers,
-            .vote_collection = null,
             .vote_sockets = null,
             .slot_leaders = null,
             .duplicate_confirmed_slots = &duplicate_confirmed_slots,
@@ -5153,6 +5184,9 @@ test "root advances after vote satisfies lockouts" {
 // - last_vote_tx_blockhash remains .non_voting
 test "vote refresh when no new vote available" {
     const allocator = std.testing.allocator;
+
+    var registry: sig.prometheus.Registry(.{}) = .init(allocator);
+    defer registry.deinit();
 
     var stubs = try sig.replay.service.DependencyStubs.init(allocator, .noop);
     defer stubs.deinit();
@@ -5246,6 +5280,8 @@ test "vote refresh when no new vote available" {
         .account_reader = stubs.accountsdb.accountReader(),
         .ledger = &stubs.ledger,
         .slot_tracker = &slot_tracker,
+        .now = .UNIX_EPOCH,
+        .registry = &registry,
     });
     defer consensus.deinit(allocator);
 
@@ -5268,7 +5304,6 @@ test "vote refresh when no new vote available" {
             .progress_map = &progress,
             .senders = stubs.senders,
             .receivers = stubs.receivers,
-            .vote_collection = null,
             .vote_sockets = null,
             .slot_leaders = null,
             .duplicate_confirmed_slots = &duplicate_confirmed_slots,
@@ -5294,7 +5329,6 @@ test "vote refresh when no new vote available" {
             .progress_map = &progress,
             .senders = stubs.senders,
             .receivers = stubs.receivers,
-            .vote_collection = null,
             .vote_sockets = null,
             .slot_leaders = null,
             .duplicate_confirmed_slots = &duplicate_confirmed_slots,
@@ -5344,6 +5378,9 @@ test "vote refresh when no new vote available" {
 // - consensus.slot_data.duplicate_confirmed_slots.get(1) == slot 1's hash
 test "detect and mark duplicate confirmed fork" {
     const allocator = std.testing.allocator;
+
+    var registry: sig.prometheus.Registry(.{}) = .init(allocator);
+    defer registry.deinit();
 
     var stubs = try sig.replay.service.DependencyStubs.init(allocator, .noop);
     defer stubs.deinit();
@@ -5530,6 +5567,8 @@ test "detect and mark duplicate confirmed fork" {
         .account_reader = stubs.accountsdb.accountReader(),
         .ledger = &stubs.ledger,
         .slot_tracker = &slot_tracker,
+        .now = .UNIX_EPOCH,
+        .registry = &registry,
     });
     defer consensus.deinit(allocator);
 
@@ -5558,7 +5597,6 @@ test "detect and mark duplicate confirmed fork" {
             .progress_map = &progress,
             .senders = stubs.senders,
             .receivers = stubs.receivers,
-            .vote_collection = null,
             .vote_sockets = null,
             .slot_leaders = null,
             .duplicate_confirmed_slots = &duplicate_confirmed_slots,
@@ -5604,6 +5642,9 @@ test "detect and mark duplicate confirmed fork" {
 // - Fork choice marks slot 1 as invalid candidate (checked via fork_choice state)
 test "detect and mark duplicate slot" {
     const allocator = std.testing.allocator;
+
+    var registry: sig.prometheus.Registry(.{}) = .init(allocator);
+    defer registry.deinit();
 
     var stubs = try sig.replay.service.DependencyStubs.init(allocator, .noop);
     defer stubs.deinit();
@@ -5701,6 +5742,8 @@ test "detect and mark duplicate slot" {
         .account_reader = stubs.accountsdb.accountReader(),
         .ledger = &stubs.ledger,
         .slot_tracker = &slot_tracker,
+        .now = .UNIX_EPOCH,
+        .registry = &registry,
     });
     defer consensus.deinit(allocator);
 
@@ -5732,7 +5775,6 @@ test "detect and mark duplicate slot" {
             .progress_map = &progress,
             .senders = stubs.senders,
             .receivers = stubs.receivers,
-            .vote_collection = null,
             .vote_sockets = null,
             .slot_leaders = null,
             .duplicate_confirmed_slots = &duplicate_confirmed_slots,
@@ -5799,6 +5841,9 @@ test "detect and mark duplicate slot" {
 // - The switch proof hash is Hash.ZEROES (generation not implemented, same as Agave).
 test "successful fork switch (switch_proof)" {
     const allocator = std.testing.allocator;
+
+    var registry: sig.prometheus.Registry(.{}) = .init(allocator);
+    defer registry.deinit();
 
     var stubs = try sig.replay.service.DependencyStubs.init(allocator, .noop);
     defer stubs.deinit();
@@ -6006,6 +6051,8 @@ test "successful fork switch (switch_proof)" {
         .account_reader = stubs.accountsdb.accountReader(),
         .ledger = &stubs.ledger,
         .slot_tracker = &slot_tracker,
+        .now = .UNIX_EPOCH,
+        .registry = &registry,
     });
     defer consensus.deinit(allocator);
 
@@ -6101,7 +6148,6 @@ test "successful fork switch (switch_proof)" {
             .progress_map = &progress,
             .senders = stubs.senders,
             .receivers = stubs.receivers,
-            .vote_collection = null,
             .vote_sockets = null,
             .slot_leaders = null,
             .duplicate_confirmed_slots = &duplicate_confirmed_slots,
@@ -6142,7 +6188,6 @@ test "successful fork switch (switch_proof)" {
             .progress_map = &progress,
             .senders = stubs.senders,
             .receivers = stubs.receivers,
-            .vote_collection = null,
             .vote_sockets = null,
             .slot_leaders = null,
             .duplicate_confirmed_slots = &duplicate_confirmed_slots,
@@ -6203,7 +6248,6 @@ test "successful fork switch (switch_proof)" {
             .progress_map = &progress,
             .senders = stubs.senders,
             .receivers = stubs.receivers,
-            .vote_collection = null,
             .vote_sockets = null,
             .slot_leaders = null,
             .duplicate_confirmed_slots = &duplicate_confirmed_slots,
@@ -6276,7 +6320,6 @@ test "successful fork switch (switch_proof)" {
             .progress_map = &progress,
             .senders = stubs.senders,
             .receivers = stubs.receivers,
-            .vote_collection = null,
             .vote_sockets = null,
             .slot_leaders = null,
             .duplicate_confirmed_slots = &duplicate_confirmed_slots,
