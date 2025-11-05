@@ -88,7 +88,7 @@ const MAX_VOTE_REFRESH_INTERVAL_MILLIS: usize = 5000;
 pub const VoteOp = union(enum) {
     push_vote: struct {
         tx: Transaction,
-        tower_slots: []Slot,
+        last_tower_slot: ?Slot,
     },
     refresh_vote: struct {
         tx: Transaction,
@@ -948,16 +948,14 @@ fn handleVotableBank(
             // Update the tower's last vote blockhash
             replay_tower.refreshLastVoteTxBlockhash(vote_tx.msg.recent_blockhash);
 
-            const tower_slots = try replay_tower.tower.towerSlots(allocator);
-            defer allocator.free(tower_slots);
-
+            const last_tower_slot = replay_tower.tower.vote_state.lastVotedSlot();
             try sendVote(
                 logger,
                 allocator,
                 vote_slot,
                 .{
                     .push_vote = .{
-                        .tower_slots = tower_slots,
+                        .last_tower_slot = last_tower_slot,
                         .tx = vote_tx,
                     },
                 },
@@ -1163,8 +1161,7 @@ fn sendVoteToGossip(
 
     switch (vote_op) {
         .push_vote => |push_vote_data| {
-            if (push_vote_data.tower_slots.len == 0) return;
-            const tower_last: Slot = push_vote_data.tower_slots[push_vote_data.tower_slots.len - 1];
+            const tower_last = push_vote_data.last_tower_slot orelse return;
             // Find the oldest crds vote by wallclock that has a lower slot than `tower`
             // and recycle its vote-index. If the crds buffer is not full we instead add a new vote-index.
             const vote_index: u8 =
@@ -3566,9 +3563,6 @@ test "generateVoteTx - wrong authorized voter returns non_voting" {
 test "sendVote - without gossip table does not send and does not throw" {
     const allocator = testing.allocator;
 
-    var tower_slots = [_]Slot{ 100, 200 };
-    const tower_slots_slice: []Slot = &tower_slots;
-
     var leader_schedule_cache = sig.core.leader_schedule.LeaderScheduleCache.init(
         allocator,
         .DEFAULT,
@@ -3585,7 +3579,7 @@ test "sendVote - without gossip table does not send and does not throw" {
     const vote_op = VoteOp{
         .push_vote = .{
             .tx = Transaction.EMPTY,
-            .tower_slots = tower_slots_slice,
+            .last_tower_slot = 200,
         },
     };
 
@@ -3605,9 +3599,6 @@ test "sendVote - without gossip table does not send and does not throw" {
 test "sendVote - without keypair does not send and does not throw" {
     const allocator = testing.allocator;
 
-    var tower_slots = [_]Slot{ 100, 200 };
-    const tower_slots_slice: []Slot = &tower_slots;
-
     var leader_schedule_cache = sig.core.leader_schedule.LeaderScheduleCache.init(
         allocator,
         .DEFAULT,
@@ -3628,7 +3619,7 @@ test "sendVote - without keypair does not send and does not throw" {
     const vote_op = VoteOp{
         .push_vote = .{
             .tx = Transaction.EMPTY,
-            .tower_slots = tower_slots_slice,
+            .last_tower_slot = 200,
         },
     };
 
@@ -3648,9 +3639,6 @@ test "sendVote - without keypair does not send and does not throw" {
 test "sendVote - without leader schedule does not send and does not throw" {
     const allocator = testing.allocator;
 
-    var tower_slots = [_]Slot{ 100, 200 };
-    const tower_slots_slice: []Slot = &tower_slots;
-
     var gossip_table = try sig.gossip.GossipTable.init(allocator, allocator);
     defer gossip_table.deinit();
     var gossip_table_rw = sig.sync.RwMux(sig.gossip.GossipTable).init(gossip_table);
@@ -3658,7 +3646,7 @@ test "sendVote - without leader schedule does not send and does not throw" {
     const vote_op = VoteOp{
         .push_vote = .{
             .tx = Transaction.EMPTY,
-            .tower_slots = tower_slots_slice,
+            .last_tower_slot = 200,
         },
     };
 
@@ -3679,13 +3667,11 @@ test "sendVote - sends to both gossip and upcoming leaders" {
     const allocator = testing.allocator;
 
     const vote_slot: Slot = 100;
-    var tower_slots = [_]Slot{vote_slot};
-    const tower_slots_slice: []Slot = &tower_slots;
 
     const vote_op = VoteOp{
         .push_vote = .{
             .tx = Transaction.EMPTY,
-            .tower_slots = tower_slots_slice,
+            .last_tower_slot = vote_slot,
         },
     };
 
@@ -3893,13 +3879,11 @@ test "sendVote - falls back to self TPU when no leader sockets found" {
     const allocator = testing.allocator;
 
     const vote_slot: Slot = 42;
-    var tower_slots = [_]Slot{vote_slot};
-    const tower_slots_slice: []Slot = &tower_slots;
 
     const vote_op = VoteOp{
         .push_vote = .{
             .tx = Transaction.EMPTY,
-            .tower_slots = tower_slots_slice,
+            .last_tower_slot = vote_slot,
         },
     };
 
@@ -4006,13 +3990,11 @@ test "sendVote - leaders path uses sockets (exercises sendVoteToLeaders)" {
     const allocator = testing.allocator;
 
     const vote_slot: Slot = 100;
-    var tower_slots = [_]Slot{vote_slot};
-    const tower_slots_slice: []Slot = &tower_slots;
 
     const vote_op = VoteOp{
         .push_vote = .{
             .tx = Transaction.EMPTY,
-            .tower_slots = tower_slots_slice,
+            .last_tower_slot = vote_slot,
         },
     };
 
@@ -4099,13 +4081,11 @@ test "sendVote - sendVoteToLeaders fallback to self TPU when leaders empty" {
     const allocator = testing.allocator;
 
     const vote_slot: Slot = 55;
-    var tower_slots = [_]Slot{vote_slot};
-    const tower_slots_slice: []Slot = &tower_slots;
 
     const vote_op = VoteOp{
         .push_vote = .{
             .tx = Transaction.EMPTY,
-            .tower_slots = tower_slots_slice,
+            .last_tower_slot = vote_slot,
         },
     };
 
