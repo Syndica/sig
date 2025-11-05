@@ -404,7 +404,7 @@ test "agave: get tree size" {
 test "agave: empty weights" {
     const weights = [_]u64{};
 
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     var shuffle = try WeightedShuffle(u64).init(std.testing.allocator, &weights);
@@ -603,7 +603,7 @@ test "agave: hard coded" {
 
 test "agave: match slow" {
     // Initialise random weights
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     var weights = try std.ArrayList(u64).initCapacity(std.testing.allocator, 997);
     defer weights.deinit();
@@ -646,7 +646,7 @@ test "agave: match slow" {
 
 test "agave: paranoid" {
     // Default rng
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     const end = if (sig.build_options.long_tests) 1351 else 3;

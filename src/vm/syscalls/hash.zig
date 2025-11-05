@@ -194,7 +194,7 @@ test poseidon {
 }
 
 test "poseidon len 0" {
-    const budget = sig.runtime.ComputeBudget.default(1_400_000);
+    const budget = sig.runtime.ComputeBudget.DEFAULT;
     const total_compute = budget.poseidonCost(0); // enough for one call
     var buffer: [32]u8 = undefined;
     try sig.vm.tests.testSyscall(
@@ -228,7 +228,7 @@ test sha256 {
     const bytes_to_hash: [2]memory.VmSlice = .{ mock_slice1, mock_slice2 };
     var hash_result: [32]u8 = .{0} ** 32;
 
-    const compute_budget = sig.runtime.ComputeBudget.default(1_400_000);
+    const compute_budget = sig.runtime.ComputeBudget.DEFAULT;
     const total_compute = (compute_budget.sha256_base_cost + @max(
         compute_budget.mem_op_base_cost,
         compute_budget.sha256_byte_cost * (bytes1.len + bytes2.len) / 2,

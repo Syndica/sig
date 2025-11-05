@@ -1558,10 +1558,7 @@ fn createSnapshot(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
     _ = try accounts_db.generateFullSnapshot(.{
         .target_slot = slot,
         .bank_fields = &loaded_snapshot.combined_manifest.full.bank_fields,
-        .lamports_per_signature = lps: {
-            var prng = std.Random.DefaultPrng.init(1234);
-            break :lps prng.random().int(u64);
-        },
+        .lamports_per_signature = 123_456_567, // TODO: make this a real number
         .old_snapshot_action = .delete_old,
     });
 }
@@ -2169,4 +2166,14 @@ fn getTrustedValidators(allocator: std.mem.Allocator, cfg: config.Cmd) !?std.Arr
         }
     }
     return trusted_validators;
+}
+
+pub const panic = std.debug.FullPanic(loggingPanic);
+
+fn loggingPanic(message: []const u8, first_trace_addr: ?usize) noreturn {
+    std.debug.lockStdErr();
+    defer std.debug.unlockStdErr();
+    const writer = std.io.getStdErr().writer();
+    sig.trace.logfmt.writeLog(writer, "panic", .err, .{}, "{s}", .{message}) catch {};
+    std.debug.defaultPanic(message, first_trace_addr);
 }

@@ -112,7 +112,7 @@ pub const RecentBlockhashes = struct {
 
 test "from blockhash queue" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const queue = try BlockhashQueue.initRandom(allocator, prng.random(), 1000);
     defer queue.deinit(allocator);
@@ -130,7 +130,7 @@ test "from blockhash queue" {
 
 test "serialize and deserialize" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     {

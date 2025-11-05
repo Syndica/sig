@@ -215,7 +215,7 @@ test "start and stop gracefully" {
 
     var exit = Atomic(bool).init(false);
 
-    var rng = Random.DefaultPrng.init(0);
+    var rng = Random.DefaultPrng.init(std.testing.random_seed);
 
     var registry = Registry(.{}).init(allocator);
     defer registry.deinit();
