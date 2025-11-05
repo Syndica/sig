@@ -1123,8 +1123,6 @@ fn validator(
     const epoch_schedule = bank_fields.epoch_schedule;
     const epoch = bank_fields.epoch;
 
-    var leader_schedule_cache = LeaderScheduleCache.init(allocator, epoch_schedule);
-
     const staked_nodes = try collapsed_manifest.epochStakes(epoch);
     var epoch_context_manager = try sig.adapter.EpochContextManager.init(allocator, epoch_schedule);
     defer epoch_context_manager.deinit();
@@ -1225,7 +1223,7 @@ fn validator(
         try consensusDependencies(
             allocator,
             &gossip_service.gossip_table_rw,
-            leader_schedule_cache.slotLeaders(),
+            epoch_context_manager.slotLeaders(),
             maybe_vote_sockets,
         );
     defer if (consensus_deps) |d| d.deinit();
@@ -1364,7 +1362,7 @@ fn replayOffline(
         try consensusDependencies(
             allocator,
             null,
-            leader_schedule_cache.slotLeaders(),
+            epoch_context_manager.slotLeaders(),
             null,
         );
     defer if (consensus_deps) |d| d.deinit();
