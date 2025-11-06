@@ -136,7 +136,7 @@ groups:
               type: threshold
         dashboardUid: jBuN47BVz
         panelId: 26
-        noDataState: KeepLast
+        noDataState: OK
         for: 1m
         execErrState: Error
         annotations:
