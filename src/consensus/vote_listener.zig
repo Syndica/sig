@@ -73,7 +73,7 @@ pub const SlotDataProvider = struct {
 pub const Senders = struct {
     verified_vote: *sig.sync.Channel(VerifiedVote),
     gossip_verified_vote_hashes: *std.ArrayListUnmanaged(GossipVerifiedVoteHash),
-    duplicate_confirmed_slots: ?*std.ArrayListUnmanaged(ThresholdConfirmedSlot),
+    duplicate_confirmed_slots: *std.ArrayListUnmanaged(ThresholdConfirmedSlot),
     /// TODO: when the RPC hook design is closer to being finished,
     /// see if this could be re-designed to use that, instead of this
     /// slightly awkward channel design.
@@ -93,17 +93,14 @@ pub const Senders = struct {
         self.gossip_verified_vote_hashes.deinit(allocator);
         allocator.destroy(self.gossip_verified_vote_hashes);
 
-        if (self.duplicate_confirmed_slots) |duplicate_confirmed_slots| {
-            duplicate_confirmed_slots.deinit(allocator);
-            allocator.destroy(duplicate_confirmed_slots);
-        }
+        self.duplicate_confirmed_slots.deinit(allocator);
+        allocator.destroy(self.duplicate_confirmed_slots);
 
         if (self.bank_notification) |channel| channel.destroy();
     }
 
     pub const CreateForTestParams = struct {
         bank_notification: bool,
-        duplicate_confirmed_slots: bool,
     };
     pub fn createForTest(
         allocator: std.mem.Allocator,
@@ -121,12 +118,12 @@ pub const Senders = struct {
         };
         errdefer allocator.destroy(gossip_verified_vote_hashes);
 
-        const duplicate_confirmed_slots = if (params.duplicate_confirmed_slots) ptr: {
+        const duplicate_confirmed_slots = ptr: {
             const ptr = try allocator.create(std.ArrayListUnmanaged(ThresholdConfirmedSlot));
             ptr.* = .empty;
             break :ptr ptr;
-        } else null;
-        errdefer if (duplicate_confirmed_slots) |ptr| allocator.destroy(ptr);
+        };
+        errdefer allocator.destroy(duplicate_confirmed_slots);
 
         const bank_notification: ?*sig.sync.Channel(BankNotification) =
             if (params.bank_notification) try .create(allocator) else null;
@@ -154,10 +151,8 @@ test Senders {
         }
     };
     for ([_]Senders.CreateForTestParams{
-        .{ .bank_notification = false, .duplicate_confirmed_slots = false },
-        .{ .bank_notification = false, .duplicate_confirmed_slots = true },
-        .{ .bank_notification = true, .duplicate_confirmed_slots = false },
-        .{ .bank_notification = true, .duplicate_confirmed_slots = true },
+        .{ .bank_notification = false },
+        .{ .bank_notification = true },
     }) |params| {
         try std.testing.checkAllAllocationFailures(
             std.testing.allocator,
@@ -892,13 +887,16 @@ fn trackNewVotesAndNotifyConfirmations(
             });
 
             if (is_gossip_vote and is_new and stake > 0) {
-                const gossip_verified_vote_hash = senders.gossip_verified_vote_hashes;
-                try gossip_verified_vote_hash.append(allocator, .{ vote_pubkey, slot, hash });
+                try senders.gossip_verified_vote_hashes.append(allocator, .{
+                    vote_pubkey, slot, hash,
+                });
             }
 
-            if (reached_threshold_results.isSet(0)) blk: {
-                const dupe_confirmed_slots = senders.duplicate_confirmed_slots orelse break :blk;
-                try dupe_confirmed_slots.append(allocator, .{ .slot = slot, .hash = hash });
+            if (reached_threshold_results.isSet(0)) {
+                try senders.duplicate_confirmed_slots.append(allocator, .{
+                    .slot = slot,
+                    .hash = hash,
+                });
             }
 
             if (reached_threshold_results.isSet(1)) {
@@ -1015,7 +1013,6 @@ test "trackNewVotesAndNotifyConfirmations filter" {
 
     const senders: Senders = try .createForTest(allocator, .{
         .bank_notification = true,
-        .duplicate_confirmed_slots = true,
     });
     defer senders.destroyForTest(allocator);
 
@@ -1801,7 +1798,6 @@ test "simple usage" {
 
     const senders: Senders = try .createForTest(allocator, .{
         .bank_notification = true,
-        .duplicate_confirmed_slots = true,
     });
     defer senders.destroyForTest(allocator);
 
@@ -1910,7 +1906,6 @@ test "check trackers" {
 
     const senders: Senders = try .createForTest(allocator, .{
         .bank_notification = true,
-        .duplicate_confirmed_slots = true,
     });
     defer senders.destroyForTest(allocator);
 

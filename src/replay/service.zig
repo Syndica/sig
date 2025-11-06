@@ -783,7 +783,6 @@ test "process runs without error with no replay results" {
 
     const vc_senders: sig.consensus.vote_listener.Senders = try .createForTest(allocator, .{
         .bank_notification = false,
-        .duplicate_confirmed_slots = true,
     });
     defer vc_senders.destroyForTest(allocator);
 
@@ -814,7 +813,7 @@ test "process runs without error with no replay results" {
         .receivers = consensus_receivers,
         .vote_sockets = null,
         .slot_leaders = null,
-        .duplicate_confirmed_slots = vc_senders.duplicate_confirmed_slots.?,
+        .duplicate_confirmed_slots = vc_senders.duplicate_confirmed_slots,
         .gossip_verified_vote_hashes = vc_senders.gossip_verified_vote_hashes,
         .results = &.{},
     });
