@@ -52,8 +52,8 @@ pub const Service = struct {
 
             const consensus_state_deps: TowerConsensus.Dependencies = .{
                 .logger = .from(deps.logger),
-                .my_identity = deps.my_identity,
-                .vote_identity = deps.vote_identity,
+                .identity = deps.identity,
+                .signing = deps.signing,
                 .root_slot = deps.root.slot,
                 .root_hash = slot_tracker.get(slot_tracker.root).?.state.hash.readCopy().?,
                 .account_reader = deps.account_store.reader(),
@@ -133,8 +133,8 @@ pub const Dependencies = struct {
     /// Used for all allocations within the replay stage
     allocator: Allocator,
     logger: Logger,
-    my_identity: Pubkey,
-    vote_identity: Pubkey,
+    identity: sig.identity.ValidatorIdentity,
+    signing: sig.identity.SigningKeys,
     /// Tell replay when to exit
     exit: *std.atomic.Value(bool),
     /// Used in the EpochManager
@@ -266,8 +266,8 @@ pub const ReplayState = struct {
             deps.allocator,
             &slot_tracker,
             &epoch_tracker,
-            deps.my_identity,
-            deps.vote_identity,
+            deps.identity.validator,
+            deps.identity.vote_account,
         );
         errdefer progress_map.deinit(deps.allocator);
 
@@ -286,7 +286,7 @@ pub const ReplayState = struct {
             .allocator = deps.allocator,
             .logger = .from(deps.logger),
             .thread_pool = .init(.{ .max_threads = num_threads }),
-            .my_identity = deps.my_identity,
+            .my_identity = deps.identity.validator,
             .slot_leaders = deps.slot_leaders,
             .slot_tracker = slot_tracker_rw,
             .epoch_tracker = epoch_tracker_rw,
@@ -624,7 +624,7 @@ test "getActiveFeatures rejects wrong ownership" {
 
 test trackNewSlots {
     const allocator = std.testing.allocator;
-    var rng = std.Random.DefaultPrng.init(0);
+    var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     var ledger = try sig.ledger.tests.initTestLedger(allocator, @src(), .noop);
     defer ledger.deinit();
@@ -1133,7 +1133,7 @@ pub const DependencyStubs = struct {
         logger: Logger,
         run_vote_listener: bool,
     ) !Service {
-        var rng = std.Random.DefaultPrng.init(0);
+        var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
         const random = rng.random();
 
         var deps: Dependencies = deps: {
@@ -1158,8 +1158,14 @@ pub const DependencyStubs = struct {
             break :deps .{
                 .allocator = allocator,
                 .logger = logger,
-                .my_identity = .initRandom(random),
-                .vote_identity = .initRandom(random),
+                .identity = .{
+                    .validator = .initRandom(random),
+                    .vote_account = .initRandom(random),
+                },
+                .signing = .{
+                    .node = null,
+                    .authorized_voters = &.{},
+                },
                 .exit = &self.exit,
                 .epoch_schedule = .DEFAULT,
                 .account_store = self.accountsdb.accountStore(),
@@ -1185,6 +1191,7 @@ pub const DependencyStubs = struct {
             .senders = self.senders,
             .receivers = self.receivers,
             .gossip_table = null,
+            .slot_leaders = null,
             .run_vote_listener = run_vote_listener,
         };
 
@@ -1232,8 +1239,14 @@ pub const DependencyStubs = struct {
             break :deps .{
                 .allocator = allocator,
                 .logger = .FOR_TESTS,
-                .my_identity = .ZEROES,
-                .vote_identity = .ZEROES,
+                .identity = .{
+                    .validator = .ZEROES,
+                    .vote_account = .ZEROES,
+                },
+                .signing = .{
+                    .node = null,
+                    .authorized_voters = &.{},
+                },
                 .exit = &self.exit,
                 .account_store = self.accountsdb.accountStore(),
                 .ledger = &self.ledger,
@@ -1267,13 +1280,13 @@ const TestAccount = struct {
     rent_epoch: u64,
     data: []u8,
 
-    pub fn deinit(self: @This(), allocator: std.mem.Allocator) void {
+    pub fn deinit(self: TestAccount, allocator: std.mem.Allocator) void {
         allocator.free(self.pubkey);
         allocator.free(self.owner);
         allocator.free(self.data);
     }
 
-    pub fn toAccount(self: @This()) !struct { Slot, Pubkey, sig.runtime.AccountSharedData } {
+    pub fn toAccount(self: TestAccount) !struct { Slot, Pubkey, sig.runtime.AccountSharedData } {
         return .{
             self.slot,
             try .parseRuntime(self.pubkey),

@@ -191,7 +191,7 @@ test "PruneData sig verify" {
         121, 12,  227, 248, 199, 156, 253, 144, 175, 67,
     }));
 
-    var prng = DefaultPrng.init(0);
+    var prng = DefaultPrng.init(std.testing.random_seed);
     var prune = try PruneData.initRandom(prng.random(), &keypair);
 
     try prune.verify();

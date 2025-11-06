@@ -181,10 +181,10 @@ pub fn SwissMapUnmanaged(
                 memory.len / (@sizeOf([GROUP_SIZE]KeyValue) + @sizeOf([GROUP_SIZE]State));
 
             const group_size = n_groups * @sizeOf([GROUP_SIZE]KeyValue);
-            const group_ptr: [*][GROUP_SIZE]KeyValue = @alignCast(@ptrCast(memory.ptr));
+            const group_ptr: [*][GROUP_SIZE]KeyValue = @ptrCast(@alignCast(memory.ptr));
             const groups = group_ptr[0..n_groups];
             const states_ptr: [*]@Vector(GROUP_SIZE, u8) =
-                @alignCast(@ptrCast(memory.ptr + group_size));
+                @ptrCast(@alignCast(memory.ptr + group_size));
             const states = states_ptr[0..n_groups];
 
             self._capacity = n_groups * GROUP_SIZE;
@@ -226,10 +226,10 @@ pub fn SwissMapUnmanaged(
                 errdefer comptime unreachable;
                 @memset(memory, 0);
 
-                const group_ptr: [*][GROUP_SIZE]KeyValue = @alignCast(@ptrCast(memory.ptr));
+                const group_ptr: [*][GROUP_SIZE]KeyValue = @ptrCast(@alignCast(memory.ptr));
                 const groups = group_ptr[0..n_groups];
                 const states_ptr: [*]@Vector(GROUP_SIZE, u8) =
-                    @alignCast(@ptrCast(memory.ptr + group_size));
+                    @ptrCast(@alignCast(memory.ptr + group_size));
                 const states = states_ptr[0..n_groups];
 
                 self._capacity = n_groups * GROUP_SIZE;
@@ -250,10 +250,10 @@ pub fn SwissMapUnmanaged(
                 errdefer comptime unreachable;
                 @memset(memory, 0);
 
-                const group_ptr: [*][GROUP_SIZE]KeyValue = @alignCast(@ptrCast(memory.ptr));
+                const group_ptr: [*][GROUP_SIZE]KeyValue = @ptrCast(@alignCast(memory.ptr));
                 const groups = group_ptr[0..n_groups];
                 const states_ptr: [*]@Vector(GROUP_SIZE, u8) =
-                    @alignCast(@ptrCast(memory.ptr + group_size));
+                    @ptrCast(@alignCast(memory.ptr + group_size));
                 const states = states_ptr[0..n_groups];
 
                 var new_self = Self{
@@ -740,7 +740,7 @@ fn generateData(allocator: std.mem.Allocator, n_accounts: usize) !struct {
     []accounts_db.index.AccountRef,
     []sig.core.Pubkey,
 } {
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     const account_refs = try allocator.alloc(accounts_db.index.AccountRef, n_accounts);

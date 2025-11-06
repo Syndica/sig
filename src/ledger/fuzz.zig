@@ -62,15 +62,15 @@ fn createLedgerDB() !LedgerDB {
     );
 }
 
-pub fn run(initial_seed: u64, args: *std.process.ArgIterator) !void {
-    const maybe_max_actions_string = args.next();
+pub fn run(initial_seed: u64, args: []const []const u8, log: bool) !void {
+    const maybe_max_actions_string: ?[]const u8 = if (args.len == 0) null else args[0];
 
     const maybe_max_actions = if (maybe_max_actions_string) |max_actions_str|
         try std.fmt.parseInt(usize, max_actions_str, 10)
     else
         null;
 
-    try runInner(initial_seed, maybe_max_actions, true);
+    try runInner(initial_seed, maybe_max_actions, log);
 }
 
 fn runInner(initial_seed: u64, maybe_max_actions: ?usize, log: bool) !void {
@@ -348,7 +348,5 @@ fn batchAPI(data_map: *std.AutoHashMap(u32, Data), db: *LedgerDB, random: std.Ra
 }
 
 test run {
-    var args = std.process.ArgIterator.init();
-    while (args.next()) |_| {}
-    try runInner(0, 100, false);
+    try run(std.testing.random_seed, &.{"100"}, false);
 }

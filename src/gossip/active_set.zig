@@ -27,16 +27,14 @@ pub const ActiveSet = struct {
     peers: std.AutoHashMap(Pubkey, Bloom),
     allocator: std.mem.Allocator,
 
-    const Self = @This();
-
-    pub fn init(allocator: std.mem.Allocator) Self {
-        return Self{
+    pub fn init(allocator: std.mem.Allocator) ActiveSet {
+        return .{
             .peers = std.AutoHashMap(Pubkey, Bloom).init(allocator),
             .allocator = allocator,
         };
     }
 
-    pub fn deinit(self: *Self) void {
+    pub fn deinit(self: *ActiveSet) void {
         var iter = self.peers.iterator();
         while (iter.next()) |entry| {
             entry.value_ptr.deinit();
@@ -44,12 +42,12 @@ pub const ActiveSet = struct {
         self.peers.deinit();
     }
 
-    pub fn len(self: *const Self) u32 {
+    pub fn len(self: *const ActiveSet) u32 {
         return self.peers.count();
     }
 
     pub fn initRotate(
-        self: *Self,
+        self: *ActiveSet,
         random: std.Random,
         peers: []ThreadSafeContactInfo,
     ) error{OutOfMemory}!void {
@@ -60,9 +58,7 @@ pub const ActiveSet = struct {
         }
         self.peers.clearRetainingCapacity();
 
-        if (peers.len == 0) {
-            return;
-        }
+        if (peers.len == 0) return;
         const size = @min(peers.len, NUM_ACTIVE_SET_ENTRIES);
         sig.rand.shuffleFocusedRange(random, ThreadSafeContactInfo, peers, 0, size);
 
@@ -83,7 +79,7 @@ pub const ActiveSet = struct {
         }
     }
 
-    pub fn prune(self: *Self, from: Pubkey, origin: Pubkey) void {
+    pub fn prune(self: *ActiveSet, from: Pubkey, origin: Pubkey) void {
         // we only prune peers which we are sending push messages to
         if (self.peers.getEntry(from)) |entry| {
             const origin_bytes = origin.data;
@@ -95,7 +91,7 @@ pub const ActiveSet = struct {
     /// while accounting for peers that have been pruned from
     /// the given origin Pubkey
     pub fn getFanoutPeers(
-        self: *const Self,
+        self: *const ActiveSet,
         allocator: std.mem.Allocator,
         origin: Pubkey,
         table: *const GossipTable,
@@ -137,7 +133,7 @@ test "init/denit" {
     defer table.deinit();
 
     // insert some contacts
-    var prng = std.Random.DefaultPrng.init(100);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     var gossip_peers = try std.ArrayList(ThreadSafeContactInfo).initCapacity(alloc, 10);
     defer gossip_peers.deinit();
 
@@ -177,7 +173,7 @@ test "init/denit" {
 test "gracefully rotates with duplicate contact ids" {
     const alloc = std.testing.allocator;
 
-    var prng = std.Random.DefaultPrng.init(100);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     var gossip_peers = try std.ArrayList(ThreadSafeContactInfo).initCapacity(alloc, 10);
     defer gossip_peers.deinit();
 

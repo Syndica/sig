@@ -205,7 +205,7 @@ pub const RepairRequestHeader = struct {
 
 test "signed/serialized RepairRequest is valid" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(392138);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     inline for ([_]RepairRequest{
@@ -244,14 +244,12 @@ test "signed/serialized RepairRequest is valid" {
 }
 
 test "RepairRequestHeader serialization round trip" {
-    var prng = std.Random.DefaultPrng.init(5224);
-    var signature: [Signature.SIZE]u8 = undefined;
-    prng.fill(&signature);
+    const allocator = std.testing.allocator;
 
     const header: RepairRequestHeader = .{
-        .signature = .fromBytes(signature),
-        .sender = Pubkey.initRandom(prng.random()),
-        .recipient = Pubkey.initRandom(prng.random()),
+        .signature = .ZEROES,
+        .sender = .parse("2Trk3PpxjMF2AYWr9pVjwzxZ9jXN4HMawCfqscupx4Nq"),
+        .recipient = .parse("C5bJrseEwRf4ffTr9dP7wsYmWkJKScZX8VqqpzvNNf4S"),
         .timestamp = 5924,
         .nonce = 123,
     };
@@ -260,21 +258,21 @@ test "RepairRequestHeader serialization round trip" {
     const serialized = try bincode.writeToSlice(&buf, header, .{});
 
     const expected = [_]u8{
-        39,  95,  42,  53,  95,  32,  120, 241, 244, 206, 142, 80,  233, 26,  232, 206, 241,
-        24,  226, 101, 183, 172, 170, 201, 42,  127, 121, 127, 213, 234, 180, 0,   226, 0,
-        128, 58,  176, 144, 99,  139, 220, 112, 10,  117, 212, 239, 129, 197, 170, 11,  92,
-        151, 239, 163, 174, 85,  172, 227, 75,  115, 1,   143, 134, 9,   21,  189, 8,   17,
-        240, 55,  159, 41,  45,  133, 143, 153, 57,  113, 39,  28,  86,  183, 182, 76,  41,
-        19,  160, 55,  54,  41,  126, 184, 144, 195, 245, 38,  164, 157, 171, 233, 18,  178,
-        15,  2,   196, 46,  124, 59,  178, 108, 95,  194, 39,  18,  119, 16,  226, 118, 112,
-        26,  255, 82,  27,  175, 162, 144, 207, 151, 36,  23,  0,   0,   0,   0,   0,   0,
-        123, 0,   0,   0,
+        0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+        0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+        0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+        0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+        0,   0,   0,   0,   21,  189, 8,   17,  240, 55,  159, 41,  45,  133, 143,
+        153, 57,  113, 39,  28,  86,  183, 182, 76,  41,  19,  160, 55,  54,  41,
+        126, 184, 144, 195, 245, 38,  164, 157, 171, 233, 18,  178, 15,  2,   196,
+        46,  124, 59,  178, 108, 95,  194, 39,  18,  119, 16,  226, 118, 112, 26,
+        255, 82,  27,  175, 162, 144, 207, 151, 36,  23,  0,   0,   0,   0,   0,
+        0,   123, 0,   0,   0,
     };
-
-    try std.testing.expect(std.mem.eql(u8, &expected, serialized));
+    try std.testing.expectEqualSlices(u8, &expected, serialized);
 
     const roundtripped = try bincode.readFromSlice(
-        std.testing.allocator,
+        allocator,
         RepairRequestHeader,
         serialized,
         .{},
@@ -354,7 +352,7 @@ test "RepairProtocolMessage.ancestor_hashes serialization round trip" {
 }
 
 test "RepairProtocolMessage serializes to size <= MAX_SERIALIZED_SIZE" {
-    var prng = std.Random.DefaultPrng.init(184837);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     for (0..10) |_| {
         inline for (@typeInfo(RepairMessageType).@"enum".fields) |enum_field| {
             const tag = @field(RepairMessageType, enum_field.name);

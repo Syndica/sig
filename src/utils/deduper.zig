@@ -110,7 +110,7 @@ fn testGetCapacity(comptime K: usize, num_bits: u64, false_positive_rate: f64) u
 /// Checks that the deduper with a specific number of bits and false positive rate
 /// has the correct capacity.
 fn testDedupCapacity(num_bits: u64, false_positive_rate: f64, capacity: u64) !void {
-    var xoshiro = std.Random.DefaultPrng.init(0);
+    var xoshiro = std.Random.DefaultPrng.init(std.testing.random_seed);
     const rng = xoshiro.random();
 
     try std.testing.expectEqual(

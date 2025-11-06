@@ -130,6 +130,7 @@ pub fn main() !void {
             params.geyser.apply(&current_config);
             current_config.replay_threads = params.replay_threads;
             current_config.disable_consensus = params.disable_consensus;
+            current_config.voting_enabled = params.voting_enabled;
             try validator(gpa, gossip_gpa, current_config);
         },
         .replay_offline => |params| {
@@ -374,6 +375,15 @@ const Cmd = struct {
         .default_value = false,
         .config = {},
         .help = "Disable running consensus in replay.",
+    };
+
+    const voting_enabled_arg: cli.ArgumentInfo(bool) = .{
+        .kind = .named,
+        .name_override = "voting-enabled",
+        .alias = .none,
+        .default_value = true,
+        .config = {},
+        .help = "Enable validator voting. When false, operate as non-voting.",
     };
 
     const GossipArgumentsCommon = struct {
@@ -713,6 +723,7 @@ const Cmd = struct {
         geyser: GeyserArgumentsBase,
         replay_threads: u16,
         disable_consensus: bool,
+        voting_enabled: bool,
 
         const cmd_info: cli.CommandInfo(@This()) = .{
             .help = .{
@@ -733,6 +744,7 @@ const Cmd = struct {
                 .geyser = GeyserArgumentsBase.cmd_info,
                 .replay_threads = replay_threads_arg,
                 .disable_consensus = disable_consensus_arg,
+                .voting_enabled = voting_enabled_arg,
             },
         };
     };
@@ -1196,13 +1208,24 @@ fn validator(
         &app_base,
         &ledger,
         &epoch_context_manager,
+        cfg.voting_enabled,
     );
     defer replay_deps.deinit(allocator);
+
+    const maybe_vote_sockets: ?replay.consensus.core.VoteSockets = if (cfg.voting_enabled)
+        try replay.consensus.core.VoteSockets.init()
+    else
+        null;
 
     const consensus_deps = if (cfg.disable_consensus)
         null
     else
-        try consensusDependencies(allocator, &gossip_service.gossip_table_rw);
+        try consensusDependencies(
+            allocator,
+            &gossip_service.gossip_table_rw,
+            epoch_context_manager.slotLeaders(),
+            maybe_vote_sockets,
+        );
     defer if (consensus_deps) |d| d.deinit();
 
     var replay_service = try replay.Service.init(&replay_deps, consensus_deps, cfg.replay_threads);
@@ -1329,13 +1352,19 @@ fn replayOffline(
         &app_base,
         &ledger,
         &epoch_context_manager,
+        false,
     );
     defer replay_deps.deinit(allocator);
 
     const consensus_deps = if (cfg.disable_consensus)
         null
     else
-        try consensusDependencies(allocator, null);
+        try consensusDependencies(
+            allocator,
+            null,
+            epoch_context_manager.slotLeaders(),
+            null,
+        );
     defer if (consensus_deps) |d| d.deinit();
 
     var replay_service = try replay.Service.init(&replay_deps, consensus_deps, cfg.replay_threads);
@@ -1521,10 +1550,7 @@ fn createSnapshot(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
     _ = try accounts_db.generateFullSnapshot(.{
         .target_slot = slot,
         .bank_fields = &loaded_snapshot.combined_manifest.full.bank_fields,
-        .lamports_per_signature = lps: {
-            var prng = std.Random.DefaultPrng.init(1234);
-            break :lps prng.random().int(u64);
-        },
+        .lamports_per_signature = 123_456_567, // TODO: make this a real number
         .old_snapshot_action = .delete_old,
     });
 }
@@ -1928,6 +1954,7 @@ fn replayDependencies(
     app_base: *const AppBase,
     ledger: *Ledger,
     epoch_context_manager: *sig.adapter.EpochContextManager,
+    voting_enabled: bool,
 ) !replay.Dependencies {
     const bank_fields = &collapsed_manifest.bank_fields;
     const epoch_stakes_map = &collapsed_manifest.bank_extra.versioned_epoch_stakes;
@@ -1964,8 +1991,21 @@ fn replayDependencies(
     return .{
         .allocator = allocator,
         .logger = .from(app_base.logger),
-        .my_identity = .fromPublicKey(&app_base.my_keypair.public_key),
-        .vote_identity = .fromPublicKey(&app_base.my_keypair.public_key),
+        .identity = .{
+            .validator = .fromPublicKey(&app_base.my_keypair.public_key),
+            .vote_account = .fromPublicKey(&app_base.my_keypair.public_key),
+        },
+        .signing = .{
+            .node = app_base.my_keypair,
+            .authorized_voters = if (voting_enabled)
+                // TODO: Parse authorized voter keypairs from CLI args (--authorized-voter)
+                // For now, default to using the node keypair as the authorized voter
+                // (same as Agave's default behavior when no --authorized-voter is specified)
+                // ref https://github.com/anza-xyz/agave/blob/67a1cc9ef4222187820818d95325a0c8e700312f/validator/src/commands/run/execute.rs#L136-L138
+                &.{app_base.my_keypair}
+            else
+                &.{},
+        },
         .exit = app_base.exit,
         .account_store = account_store,
         .ledger = ledger,
@@ -1985,6 +2025,8 @@ fn replayDependencies(
 fn consensusDependencies(
     allocator: std.mem.Allocator,
     gossip_table: ?*sig.sync.RwMux(sig.gossip.GossipTable),
+    slot_leaders: ?sig.core.leader_schedule.SlotLeaders,
+    vote_sockets: ?replay.consensus.core.VoteSockets,
 ) !replay.TowerConsensus.Dependencies.External {
     const senders: sig.replay.TowerConsensus.Senders = try .create(allocator);
     errdefer senders.destroy();
@@ -1995,7 +2037,9 @@ fn consensusDependencies(
     return .{
         .senders = senders,
         .receivers = receivers,
+        .vote_sockets = vote_sockets,
         .gossip_table = gossip_table,
+        .slot_leaders = slot_leaders,
     };
 }
 
@@ -2085,4 +2129,14 @@ fn getTrustedValidators(allocator: std.mem.Allocator, cfg: config.Cmd) !?std.Arr
         }
     }
     return trusted_validators;
+}
+
+pub const panic = std.debug.FullPanic(loggingPanic);
+
+fn loggingPanic(message: []const u8, first_trace_addr: ?usize) noreturn {
+    std.debug.lockStdErr();
+    defer std.debug.unlockStdErr();
+    const writer = std.io.getStdErr().writer();
+    sig.trace.logfmt.writeLog(writer, "panic", .err, .{}, "{s}", .{message}) catch {};
+    std.debug.defaultPanic(message, first_trace_addr);
 }

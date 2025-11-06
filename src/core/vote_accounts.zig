@@ -507,7 +507,7 @@ pub fn calculateStakedNodes(
 
 test "vote account from account" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     var account = try createRandomVoteAccount(allocator, random, Pubkey.initRandom(random));
@@ -568,7 +568,7 @@ test "vote account from account" {
 
 test "vote account serialize and deserialize" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     var account = try createRandomVoteAccount(allocator, random, Pubkey.initRandom(random));
@@ -602,7 +602,7 @@ test "vote accounts serialize and deserialize" {
     const Stakes = sig.core.Stakes;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     var vote_accounts = VoteAccounts{};
@@ -685,7 +685,7 @@ test "staked nodes" {
     const Stakes = sig.core.Stakes;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     var accounts = try createRandomVoteAccounts(
@@ -799,7 +799,7 @@ test "staked nodes update" {
     const Stakes = sig.core.Stakes;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     var stakes = try Stakes(.delegation).init(allocator);
@@ -920,7 +920,7 @@ test "staked nodes zero stake" {
     const Stakes = sig.core.Stakes;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     var stakes = try Stakes(.delegation).init(allocator);

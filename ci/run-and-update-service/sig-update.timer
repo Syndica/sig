@@ -5,7 +5,7 @@ After=network.target
 [Timer]
 OnBootSec=0
 OnActiveSec=0
-OnUnitActiveSec=1w
+OnUnitActiveSec=5m
 
 [Install]
 WantedBy=timers.target

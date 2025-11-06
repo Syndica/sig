@@ -121,7 +121,7 @@ pub fn testPoh(valid_signatures: bool) !struct { Poh, std.BoundedArray(sig.core.
     const Transaction = sig.core.Transaction;
     const hashTransactions = sig.core.entry.hashTransactions;
 
-    var rng = std.Random.DefaultPrng.init(0);
+    var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     var a_transaction = try Transaction.initRandom(allocator, rng.random());
     if (!valid_signatures) {

@@ -265,7 +265,7 @@ test "building pull filters" {
     // insert a some value
     const kp = try KeyPair.generateDeterministic([_]u8{1} ** 32);
 
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     for (0..64) |_| {

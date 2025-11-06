@@ -169,7 +169,7 @@ test getSysvar {
 
     const testing = sig.runtime.testing;
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     var cache, var tc = try testing.createTransactionContext(allocator, prng.random(), .{
         .accounts = &.{},
@@ -507,7 +507,7 @@ fn testGetStakeHistory(filled: bool) !void {
     }
 
     const testing = sig.runtime.testing;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     var cache, var tc = try testing.createTransactionContext(allocator, prng.random(), .{
         .accounts = &.{},
         .compute_meter = std.math.maxInt(u64),
@@ -585,7 +585,7 @@ fn testGetSlotHashes(filled: bool) !void {
     }
 
     const testing = sig.runtime.testing;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     var cache, var tc = try testing.createTransactionContext(allocator, prng.random(), .{
         .accounts = &.{},
         .compute_meter = std.math.maxInt(u64),
