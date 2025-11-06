@@ -1238,11 +1238,48 @@ fn validator(
         .{&replay_service},
     );
 
+    // TODO: start RPC-server service using app_base.rpc_hooks
+    const rpc_server_thread = try std.Thread.spawn(.{}, runRPCServer, .{
+        allocator,
+        app_base.logger,
+        app_base.exit,
+        std.net.Address.initIp4(.{ 0, 0, 0, 0 }, 8899),
+        &app_base.rpc_hooks,
+    });
+
+    rpc_server_thread.join();
     replay_thread.join();
     rpc_epoch_ctx_service_thread.join();
     gossip_service.service_manager.join();
     shred_network_manager.join();
     ledger_cleanup_service.join();
+}
+
+fn runRPCServer(
+    allocator: std.mem.Allocator,
+    logger: Logger,
+    exit: *std.atomic.Value(bool),
+    server_addr: std.net.Address,
+    rpc_hooks: *sig.rpc.Hooks,
+) !void {
+    var server_ctx = try sig.rpc.server.Context.init(.{
+        .allocator = allocator,
+        .logger = .from(logger),
+        .rpc_hooks = rpc_hooks,
+        .read_buffer_size = sig.rpc.server.MIN_READ_BUFFER_SIZE,
+        .socket_addr = server_addr,
+        .reuse_address = true,
+    });
+    defer server_ctx.joinDeinit();
+
+    // var maybe_liou = try sig.rpc.server.LinuxIoUring.init(&server_ctx);
+    // defer if (maybe_liou) |*liou| liou.deinit();
+
+    try sig.rpc.server.serve(
+        exit,
+        &server_ctx,
+        .basic, // if (maybe_liou != null) .{ .linux_io_uring = &maybe_liou.? } else .basic,
+    );
 }
 
 /// entrypoint to run a minimal replay node
@@ -1778,10 +1815,14 @@ fn mockRpcServer(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
         defer manifest.deinit(allocator);
     }
 
+    var rpc_hooks = sig.rpc.Hooks{};
+    defer rpc_hooks.deinit(allocator);
+    try accountsdb.registerRPCHooks(&rpc_hooks);
+
     var server_ctx = try sig.rpc.server.Context.init(.{
         .allocator = allocator,
         .logger = .from(logger),
-        .accountsdb = &accountsdb,
+        .rpc_hooks = &rpc_hooks,
 
         .read_buffer_size = sig.rpc.server.MIN_READ_BUFFER_SIZE,
         .socket_addr = std.net.Address.initIp4(.{ 0, 0, 0, 0 }, 8899),
@@ -1789,14 +1830,14 @@ fn mockRpcServer(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
     });
     defer server_ctx.joinDeinit();
 
-    var maybe_liou = try sig.rpc.server.LinuxIoUring.init(&server_ctx);
-    defer if (maybe_liou) |*liou| liou.deinit();
+    // var maybe_liou = try sig.rpc.server.LinuxIoUring.init(&server_ctx);
+    // defer if (maybe_liou) |*liou| liou.deinit();
 
     var exit = std.atomic.Value(bool).init(false);
     try sig.rpc.server.serve(
         &exit,
         &server_ctx,
-        if (maybe_liou != null) .{ .linux_io_uring = &maybe_liou.? } else .basic,
+        .basic, // if (maybe_liou != null) .{ .linux_io_uring = &maybe_liou.? } else .basic,
     );
 }
 
@@ -1808,6 +1849,8 @@ const AppBase = struct {
     log_file: ?std.fs.File,
     metrics_registry: *sig.prometheus.Registry(.{}),
     metrics_thread: std.Thread,
+
+    rpc_hooks: sig.rpc.Hooks,
 
     my_keypair: sig.identity.KeyPair,
     entrypoints: []SocketAddr,
@@ -1863,6 +1906,7 @@ const AppBase = struct {
             .log_file = maybe_file,
             .metrics_registry = metrics_registry,
             .metrics_thread = metrics_thread,
+            .rpc_hooks = .{},
             .my_keypair = my_keypair,
             .entrypoints = entrypoints,
             .shred_version = my_shred_version,
@@ -1894,6 +1938,7 @@ const AppBase = struct {
     pub fn deinit(self: *AppBase) void {
         std.debug.assert(self.closed); // call `self.shutdown()` first
         self.allocator.free(self.entrypoints);
+        self.rpc_hooks.deinit(self.allocator);
         self.metrics_thread.detach();
         self.logger.deinit();
         if (self.log_file) |file| file.close();
@@ -1942,6 +1987,45 @@ fn startGossip(
         .spy_node = cfg.gossip.spy_node,
         .dump = cfg.gossip.dump,
     });
+
+    try app_base.rpc_hooks.set(allocator, struct {
+        info: ContactInfo,
+
+        pub fn getHealth(
+            _: @This(),
+            _: std.mem.Allocator,
+            _: anytype,
+        ) !sig.rpc.methods.GetHealth.Response {
+            // TODO: more intricate
+            return .ok;
+        }
+
+        pub fn getIdentity(
+            self: @This(),
+            _: std.mem.Allocator,
+            _: anytype,
+        ) !sig.rpc.methods.GetIdentity.Response {
+            return .{ .identity = self.info.pubkey };
+        }
+
+        pub fn getVersion(
+            self: @This(),
+            allocator_: std.mem.Allocator,
+            _: anytype,
+        ) !sig.rpc.methods.GetVersion.Response {
+            const client_version = self.info.version;
+            const solana_version = try std.fmt.allocPrint(allocator_, "{}.{}.{}", .{
+                client_version.major,
+                client_version.minor,
+                client_version.patch,
+            });
+
+            return .{
+                .solana_core = solana_version,
+                .feature_set = client_version.feature_set,
+            };
+        }
+    }{ .info = contact_info });
 
     return service;
 }

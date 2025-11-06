@@ -19,6 +19,20 @@ const Pubkey = sig.core.Pubkey;
 const Signature = sig.core.Signature;
 const Slot = sig.core.Slot;
 
+pub fn Result(comptime method: MethodAndParams.Tag) type {
+    return union(enum) {
+        ok: Request(method).Response,
+        err: rpc.response.Error,
+    };
+}
+
+/// Returns t
+pub fn Request(comptime method: MethodAndParams.Tag) type {
+    const FieldType = @FieldType(MethodAndParams, @tagName(method));
+    if (FieldType == noreturn) @compileError("TODO: impl " ++ @tagName(method));
+    return FieldType;
+}
+
 pub const MethodAndParams = union(enum) {
     getAccountInfo: GetAccountInfo,
     getBalance: GetBalance,
@@ -34,10 +48,16 @@ pub const MethodAndParams = union(enum) {
     getEpochSchedule: GetEpochSchedule,
     getFeeForMessage: noreturn,
     getFirstAvailableBlock: noreturn,
+
+    /// https://github.com/Syndica/sig/issues/557
     getGenesisHash: noreturn,
-    getHealth: noreturn,
+    /// https://github.com/Syndica/sig/issues/558
+    getHealth: GetHealth,
+    /// Custom (not standardized) RPC method for "GET /*snapshot*.tar.bz2"
+    getSnapshot: GetSnapshot,
+
     getHighestSnapshotSlot: noreturn,
-    getIdentity: noreturn,
+    getIdentity: GetIdentity,
     getInflationGovernor: noreturn,
     getInflationRate: noreturn,
     getInflationReward: noreturn,
@@ -119,6 +139,36 @@ pub const MethodAndParams = union(enum) {
                     }
                 },
             }
+        }
+    };
+};
+
+pub const GetSnapshot = struct {
+    path: []const u8,
+    get: Getter,
+
+    pub const Getter = enum { file, size };
+
+    pub fn jsonParse(
+        _: std.mem.Allocator,
+        source: anytype,
+        _: std.json.ParseOptions,
+    ) std.json.ParseError(@TypeOf(source.*))!GetSnapshot {
+        @compileError("GetSnapshot is not a real JSON-RPC method" ++
+            "It is meant only for RPC server. Do not serialize");
+    }
+
+    pub const Response = union(Getter) {
+        file: std.fs.File,
+        size: u64,
+
+        pub fn jsonStringify(
+            _: Response,
+            /// `*std.json.WriteStream(...)`
+            jw: anytype,
+        ) @TypeOf(jw.*).Error!void {
+            @compileError("GetSnapshot is not a real JSON-RPC method" ++
+                "It is meant only for RPC server. Do not serialize");
         }
     };
 };
@@ -231,6 +281,24 @@ pub const GetBalance = struct {
     };
 };
 
+pub const GetHealth = struct {
+    pub const Response = union(enum) {
+        ok,
+        err: struct {}, // TODO: Our implementation-specifc error information
+
+        pub fn jsonStringify(
+            self: Response,
+            /// `*std.json.WriteStream(...)`
+            jw: anytype,
+        ) !void {
+            switch (self) {
+                .ok => try jw.write("ok"),
+                .err => |e| try jw.write(e),
+            }
+        }
+    };
+};
+
 pub const GetBlock = struct {
     config: ?Config = null,
 
@@ -243,6 +311,7 @@ pub const GetBlock = struct {
     };
 
     // TODO: response
+    pub const Response = noreturn;
 };
 
 pub const GetBlockCommitment = struct {
@@ -267,38 +336,6 @@ pub const GetBlockHeight = struct {
 
 pub const GetClusterNodes = struct {
     pub const Response = []const common.RpcContactInfo;
-
-    // TODO field types
-    pub const RpcContactInfo = struct {
-        /// Pubkey of the node as a base-58 string
-        pubkey: []const u8,
-        /// Gossip port
-        gossip: ?[]const u8 = null,
-        /// Tvu UDP port
-        tvu: ?[]const u8 = null,
-        /// Tpu UDP port
-        tpu: ?[]const u8 = null,
-        /// Tpu QUIC port
-        tpuQuic: ?[]const u8 = null,
-        /// Tpu UDP forwards port
-        tpuForwards: ?[]const u8 = null,
-        /// Tpu QUIC forwards port
-        tpuForwardsQuic: ?[]const u8 = null,
-        /// Tpu UDP vote port
-        tpuVote: ?[]const u8 = null,
-        /// Server repair UDP port
-        serveRepair: ?[]const u8 = null,
-        /// JSON RPC port
-        rpc: ?[]const u8 = null,
-        /// WebSocket PubSub port
-        pubsub: ?[]const u8 = null,
-        /// Software version
-        version: ?[]const u8 = null,
-        /// First 4 bytes of the FeatureSet identifier
-        featureSet: ?u32 = null,
-        /// Shred version
-        shredVersion: ?u16 = null,
-    };
 };
 
 pub const GetEpochInfo = struct {
@@ -371,6 +408,10 @@ pub const GetLeaderSchedule = struct {
     pub const Response = struct {
         value: std.AutoArrayHashMapUnmanaged(Pubkey, []const u64),
 
+        pub fn deinit(self: Response, allocator: std.mem.Allocator) void {
+            self.value.deinit(allocator);
+        }
+
         pub fn jsonParse(
             allocator: std.mem.Allocator,
             source: anytype,
@@ -392,6 +433,22 @@ pub const GetLeaderSchedule = struct {
             }
 
             return .{ .value = map };
+        }
+
+        pub fn jsonStringify(
+            self: Response,
+            /// `*std.json.WriteStream(...)`
+            jw: anytype,
+        ) !void {
+            try jw.beginObject();
+
+            var it = self.value.iterator();
+            while (it.next()) |entry| {
+                try jw.objectField(entry.key_ptr.base58String().slice());
+                try jw.write(entry.value_ptr.*);
+            }
+
+            try jw.endObject();
         }
     };
 };
@@ -482,6 +539,12 @@ pub const GetTransaction = struct {
 
 // TODO: getTransactionCount
 
+pub const GetIdentity = struct {
+    pub const Response = struct {
+        identity: Pubkey,
+    };
+};
+
 pub const GetVersion = struct {
     pub const Response = struct {
         solana_core: []const u8,
@@ -503,11 +566,11 @@ pub const GetVersion = struct {
             self: Response,
             /// `*std.json.WriteStream(...)`
             jw: anytype,
-        ) @TypeOf(jw.*).Error!void {
-            try std.json.stringify(.{
+        ) !void {
+            try jw.write(.{
                 .@"solana-core" = self.solana_core,
                 .@"feature-set" = self.feature_set,
-            }, .{}, jw);
+            });
         }
     };
 };
@@ -589,5 +652,37 @@ pub const common = struct {
     pub const Context = struct {
         slot: u64,
         apiVersion: []const u8,
+    };
+
+    // TODO field types
+    pub const RpcContactInfo = struct {
+        /// Pubkey of the node as a base-58 string
+        pubkey: []const u8,
+        /// Gossip port
+        gossip: ?[]const u8 = null,
+        /// Tvu UDP port
+        tvu: ?[]const u8 = null,
+        /// Tpu UDP port
+        tpu: ?[]const u8 = null,
+        /// Tpu QUIC port
+        tpuQuic: ?[]const u8 = null,
+        /// Tpu UDP forwards port
+        tpuForwards: ?[]const u8 = null,
+        /// Tpu QUIC forwards port
+        tpuForwardsQuic: ?[]const u8 = null,
+        /// Tpu UDP vote port
+        tpuVote: ?[]const u8 = null,
+        /// Server repair UDP port
+        serveRepair: ?[]const u8 = null,
+        /// JSON RPC port
+        rpc: ?[]const u8 = null,
+        /// WebSocket PubSub port
+        pubsub: ?[]const u8 = null,
+        /// Software version
+        version: ?[]const u8 = null,
+        /// First 4 bytes of the FeatureSet identifier
+        featureSet: ?u32 = null,
+        /// Shred version
+        shredVersion: ?u16 = null,
     };
 };
