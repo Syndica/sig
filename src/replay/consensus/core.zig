@@ -4427,14 +4427,21 @@ test "vote on heaviest frozen descendant with no switch" {
         .senders = stubs.senders,
         .receivers = stubs.receivers,
         .gossip_table = null,
+        .slot_leaders = null,
         .run_vote_listener = false,
     };
 
     // Build consensus dependencies
     const deps = TowerConsensus.Dependencies{
         .logger = .noop,
-        .my_identity = Pubkey.initRandom(std.crypto.random),
-        .vote_identity = Pubkey.initRandom(std.crypto.random),
+        .identity = .{
+            .vote_account = Pubkey.initRandom(std.crypto.random),
+            .validator = Pubkey.initRandom(std.crypto.random),
+        },
+        .signing = .{
+            .node = null,
+            .authorized_voters = &.{},
+        },
         .root_slot = root_slot,
         .root_hash = root_state.hash.readCopy().?,
         .account_reader = stubs.accountsdb.accountReader(),
@@ -4651,13 +4658,20 @@ test "vote accounts with landed votes populate bank stats" {
         .senders = stubs.senders,
         .receivers = stubs.receivers,
         .gossip_table = null,
+        .slot_leaders = null,
         .run_vote_listener = false,
     };
 
     const deps = TowerConsensus.Dependencies{
         .logger = .noop,
-        .my_identity = Pubkey.initRandom(std.crypto.random),
-        .vote_identity = Pubkey.initRandom(std.crypto.random),
+        .identity = .{
+            .vote_account = Pubkey.initRandom(std.crypto.random),
+            .validator = Pubkey.initRandom(std.crypto.random),
+        },
+        .signing = .{
+            .node = null,
+            .authorized_voters = &.{},
+        },
         .root_slot = root_slot,
         .root_hash = Hash.ZEROES,
         .account_reader = stubs.accountsdb.accountReader(),
@@ -4825,7 +4839,6 @@ test "root advances after vote satisfies lockouts" {
     var prng = std.Random.DefaultPrng.init(12345);
     const random = prng.random();
     const validator_vote_pubkey = Pubkey.initRandom(random);
-    const validator_identity_pubkey = Pubkey.initRandom(random);
 
     var epoch_tracker: EpochTracker = .{
         .epochs = .empty,
@@ -4891,13 +4904,20 @@ test "root advances after vote satisfies lockouts" {
         .senders = stubs.senders,
         .receivers = stubs.receivers,
         .gossip_table = null,
+        .slot_leaders = null,
         .run_vote_listener = false,
     };
 
     const deps = TowerConsensus.Dependencies{
         .logger = .noop,
-        .my_identity = validator_identity_pubkey,
-        .vote_identity = validator_vote_pubkey,
+        .identity = .{
+            .vote_account = Pubkey.initRandom(std.crypto.random),
+            .validator = Pubkey.initRandom(std.crypto.random),
+        },
+        .signing = .{
+            .node = null,
+            .authorized_voters = &.{},
+        },
         .root_slot = initial_root,
         .root_hash = Hash.ZEROES,
         .account_reader = stubs.accountsdb.accountReader(),
@@ -5266,13 +5286,20 @@ test "vote refresh when no new vote available" {
         .senders = stubs.senders,
         .receivers = stubs.receivers,
         .gossip_table = null,
+        .slot_leaders = null,
         .run_vote_listener = false,
     };
 
     const deps = TowerConsensus.Dependencies{
         .logger = .noop,
-        .my_identity = Pubkey.initRandom(std.crypto.random),
-        .vote_identity = Pubkey.initRandom(std.crypto.random),
+        .identity = .{
+            .vote_account = Pubkey.initRandom(std.crypto.random),
+            .validator = Pubkey.initRandom(std.crypto.random),
+        },
+        .signing = .{
+            .node = null,
+            .authorized_voters = &.{},
+        },
         .root_slot = root_slot,
         .root_hash = Hash.ZEROES,
         .account_reader = stubs.accountsdb.accountReader(),
@@ -5538,13 +5565,20 @@ test "detect and mark duplicate confirmed fork" {
         .senders = stubs.senders,
         .receivers = stubs.receivers,
         .gossip_table = null,
+        .slot_leaders = null,
         .run_vote_listener = false,
     };
 
     const deps = TowerConsensus.Dependencies{
         .logger = .noop,
-        .my_identity = Pubkey.initRandom(std.crypto.random),
-        .vote_identity = Pubkey.initRandom(std.crypto.random),
+        .identity = .{
+            .vote_account = Pubkey.initRandom(std.crypto.random),
+            .validator = Pubkey.initRandom(std.crypto.random),
+        },
+        .signing = .{
+            .node = null,
+            .authorized_voters = &.{},
+        },
         .root_slot = root_slot,
         .root_hash = Hash.ZEROES,
         .account_reader = stubs.accountsdb.accountReader(),
@@ -5700,13 +5734,20 @@ test "detect and mark duplicate slot" {
         .senders = stubs.senders,
         .receivers = stubs.receivers,
         .gossip_table = null,
+        .slot_leaders = null,
         .run_vote_listener = false,
     };
 
     const deps = TowerConsensus.Dependencies{
         .logger = .noop,
-        .my_identity = Pubkey.initRandom(std.crypto.random),
-        .vote_identity = Pubkey.initRandom(std.crypto.random),
+        .identity = .{
+            .vote_account = Pubkey.initRandom(std.crypto.random),
+            .validator = Pubkey.initRandom(std.crypto.random),
+        },
+        .signing = .{
+            .node = null,
+            .authorized_voters = &.{},
+        },
         .root_slot = root_slot,
         .root_hash = Hash.ZEROES,
         .account_reader = stubs.accountsdb.accountReader(),
@@ -5998,13 +6039,20 @@ test "successful fork switch (switch_proof)" {
         .senders = stubs.senders,
         .receivers = stubs.receivers,
         .gossip_table = null,
+        .slot_leaders = null,
         .run_vote_listener = false,
     };
 
     const deps = TowerConsensus.Dependencies{
         .logger = .noop,
-        .my_identity = Pubkey.initRandom(std.crypto.random),
-        .vote_identity = Pubkey.initRandom(std.crypto.random),
+        .identity = .{
+            .vote_account = Pubkey.initRandom(std.crypto.random),
+            .validator = Pubkey.initRandom(std.crypto.random),
+        },
+        .signing = .{
+            .node = null,
+            .authorized_voters = &.{},
+        },
         .root_slot = root_slot,
         .root_hash = Hash.ZEROES,
         .account_reader = stubs.accountsdb.accountReader(),
