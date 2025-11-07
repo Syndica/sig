@@ -53,5 +53,9 @@
             .url = "git+https://github.com/Syndica/tracy-zig#e4dfba6d9b2c6cbae9575c8f0df1794ca674514f",
             .hash = "zig_tracy-0.12.2-4TLLRxFkAADqlI3jJRIfVpqKW99BKIjSi4aLKYGJnIYM",
         },
+        .sqlite = .{
+            .url = "https://www.sqlite.org/2025/sqlite-amalgamation-3490200.zip",
+            .hash = "N-V-__8AAH-mpwB7g3MnqYU-ooUBF1t99RP27dZ9addtMVXD",
+        },
     },
 }
