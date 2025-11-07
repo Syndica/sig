@@ -154,6 +154,7 @@ pub fn run(
         .number_of_index_shards = sig.accounts_db.db.ACCOUNT_INDEX_SHARDS,
     });
     defer accounts_db.deinit();
+    const account_store = accounts_db.accountStore();
 
     // prealloc some references to use throught the fuzz
     try accounts_db.account_index.expandRefCapacity(1_000_000);
@@ -184,8 +185,9 @@ pub fn run(
         // any validation (in the .get block of the main fuzzer
         // loop, we perform validation)
         threads.appendAssumeCapacity(try .spawn(.{}, readRandomAccounts, .{
+            allocator,
             logger,
-            &accounts_db,
+            account_store.reader(),
             &tracked_accounts_rw,
             seed + thread_i,
             &reader_exit,
@@ -258,7 +260,7 @@ pub fn run(
 
                     const account_shared_data = try tracked_account.toAccount(allocator);
                     defer account_shared_data.deinit(allocator);
-                    try accounts_db.putAccount(current_slot, pubkey, account_shared_data);
+                    try account_store.put(current_slot, pubkey, account_shared_data);
 
                     // always overwrite the old slot
                     try tracked_accounts.put(allocator, pubkey, tracked_account);
@@ -294,12 +296,9 @@ pub fn run(
                     }
                 }{ .ancestors_sub = ancestors_sub.ancestors.keys() });
 
+                const account_reader_for_slot = account_store.reader().forSlot(&ancestors_sub);
                 const account =
-                    try accounts_db.getAccountWithAncestors(
-                        allocator,
-                        &pubkey,
-                        &ancestors_sub,
-                    ) orelse {
+                    try account_reader_for_slot.get(allocator, pubkey) orelse {
                         logger.err().logf(
                             "accounts_db missing tracked account '{}': {}",
                             .{ pubkey, tracked_account },
@@ -483,8 +482,9 @@ pub fn run(
 }
 
 fn readRandomAccounts(
+    allocator: std.mem.Allocator,
     logger: Logger,
-    db: *AccountsDB,
+    account_reader: sig.accounts_db.AccountReader,
     tracked_accounts_rw: *sig.sync.RwMux(TrackedAccountsMap),
     seed: u64,
     exit: *std.atomic.Value(bool),
@@ -518,10 +518,11 @@ fn readRandomAccounts(
         }
 
         for (pubkeys) |pubkey| {
-            const account = db.getAccountLatest(db.allocator, &pubkey) catch |e|
-                std.debug.panic("getAccount failed with error: {}", .{e}) orelse
-                continue;
-            defer account.deinit(db.allocator);
+            const account = account_reader.getLatest(allocator, pubkey) catch |e| {
+                logger.err().logf("getAccount failed with error: {}", .{e});
+                return;
+            } orelse continue;
+            defer account.deinit(allocator);
         }
     }
 }
