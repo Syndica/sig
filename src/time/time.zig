@@ -601,7 +601,7 @@ pub const Duration = struct {
         _: std.fmt.FormatOptions,
         writer: anytype,
     ) !void {
-        return writer.print("{s}", .{std.fmt.fmtDuration(self.ns)}) catch unreachable;
+        return try writer.print("{s}", .{std.fmt.fmtDuration(self.ns)});
     }
 };
 
@@ -675,8 +675,8 @@ pub const Timer = struct {
 
     pub const Error = std.time.Timer.Error;
 
-    pub fn start() Error!Timer {
-        return .{ .inner = try std.time.Timer.start() };
+    pub fn start() Timer {
+        return .{ .inner = std.time.Timer.start() catch unreachable };
     }
 
     pub fn read(self: *Timer) Duration {

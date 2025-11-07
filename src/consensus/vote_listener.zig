@@ -1052,7 +1052,7 @@ pub fn slotTrackerElementGenesis(
     const constants: sig.core.SlotConstants = try .genesis(allocator, fee_rate_governor);
     errdefer constants.deinit(allocator);
 
-    const state: sig.core.SlotState = try .genesis(allocator);
+    const state: sig.core.SlotState = .GENESIS;
     errdefer state.deinit(allocator);
 
     return .{
@@ -1076,7 +1076,7 @@ test "trackNewVotesAndNotifyConfirmations filter" {
         lg.get().deinit(allocator);
     }
 
-    var epoch_tracker_rw: sig.sync.RwMux(EpochTracker) = .init(.{ .schedule = .DEFAULT });
+    var epoch_tracker_rw: sig.sync.RwMux(EpochTracker) = .init(.{ .schedule = .INIT });
     defer {
         var lg = epoch_tracker_rw.write();
         lg.get().deinit(allocator);
@@ -1086,7 +1086,7 @@ test "trackNewVotesAndNotifyConfirmations filter" {
         const epoch_tracker, var epoch_tracker_lg = epoch_tracker_rw.writeWithLock();
         defer epoch_tracker_lg.unlock();
 
-        const epoch_genesis: sig.core.EpochConstants = try .genesis(allocator, .default(allocator));
+        const epoch_genesis: sig.core.EpochConstants = .genesis(.default(allocator));
         errdefer epoch_genesis.deinit(allocator);
 
         try epoch_tracker.epochs.put(allocator, 0, epoch_genesis);
@@ -1815,7 +1815,7 @@ test "vote_parser.parseSanitizedVoteTransaction" {
 
 test verifyVoteTransaction {
     const allocator = std.testing.allocator;
-    const epoch_tracker: EpochTracker = .{ .schedule = .DEFAULT };
+    const epoch_tracker: EpochTracker = .{ .schedule = .INIT };
     defer epoch_tracker.deinit(allocator);
 
     try std.testing.expectEqual(
@@ -1844,14 +1844,14 @@ test "simple usage" {
             .feature_set = .ALL_DISABLED,
             .reserved_accounts = .empty,
         },
-        .state = try .genesis(allocator),
+        .state = .GENESIS,
     });
     defer slot_tracker.deinit(allocator);
 
-    var epoch_tracker: EpochTracker = .{ .schedule = .DEFAULT };
+    var epoch_tracker: EpochTracker = .{ .schedule = .INIT };
     defer epoch_tracker.deinit(allocator);
     {
-        const stakes: sig.core.EpochStakes = try .initEmptyWithGenesisStakeHistoryEntry(allocator);
+        const stakes: sig.core.EpochStakes = .EMPTY_WITH_GENESIS;
         try epoch_tracker.epochs.ensureUnusedCapacity(allocator, 1);
         epoch_tracker.epochs.putAssumeCapacity(0, .{
             .hashes_per_tick = 1,
@@ -1952,14 +1952,14 @@ test "check trackers" {
             .feature_set = .ALL_DISABLED,
             .reserved_accounts = .empty,
         },
-        .state = try .genesis(allocator),
+        .state = .GENESIS,
     });
     defer slot_tracker2.deinit(allocator);
 
-    var epoch_tracker2: EpochTracker = .{ .schedule = .DEFAULT };
+    var epoch_tracker2: EpochTracker = .{ .schedule = .INIT };
     defer epoch_tracker2.deinit(allocator);
     {
-        var stakes: sig.core.EpochStakes = try .initEmptyWithGenesisStakeHistoryEntry(allocator);
+        var stakes: sig.core.EpochStakes = .EMPTY_WITH_GENESIS;
         for (tracker_templates) |template| {
             _, const vote_kp, _ = template;
             const vote_key: Pubkey = .fromPublicKey(&vote_kp.public_key);

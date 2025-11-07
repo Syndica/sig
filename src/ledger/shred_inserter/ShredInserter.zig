@@ -75,11 +75,11 @@ pub const RetransmitSender = struct {
     ) RetransmitSender {
         const S = struct {
             fn send(generic_state: *anyopaque, slot: []const []const u8) void {
-                return sendFn(@alignCast(@ptrCast(generic_state)), slot);
+                return sendFn(@ptrCast(@alignCast(generic_state)), slot);
             }
         };
         return .{
-            .state = @alignCast(@ptrCast(state)),
+            .state = @ptrCast(@alignCast(state)),
             .genericFn = S.send,
         };
     }
@@ -187,7 +187,7 @@ pub fn insertShreds(
     ///////////////////////////
     // prepare state to insert shreds
     //
-    var total_timer = try Timer.start();
+    var total_timer = Timer.start();
     var state = try PendingInsertShredsState.init(
         allocator,
         .from(self.logger),
@@ -198,13 +198,13 @@ pub fn insertShreds(
     const write_batch = &state.write_batch;
     const merkle_root_validator = MerkleRootValidator.init(&state);
 
-    var get_lock_timer = try Timer.start();
+    var get_lock_timer = Timer.start();
     if (self.metrics) |m| m.insert_lock_elapsed_us.add(get_lock_timer.read().asMicros());
 
     ///////////////////////////
     // insert received shreds
     //
-    var shred_insertion_timer = try Timer.start();
+    var shred_insertion_timer = Timer.start();
     var newly_completed_data_sets = ArrayList(CompletedDataSetInfo).init(allocator);
     errdefer newly_completed_data_sets.deinit();
     for (shreds, is_repaired) |shred, is_repair| {
@@ -267,7 +267,7 @@ pub fn insertShreds(
     /////////////////////////////////////
     // recover shreds and insert them
     //
-    var shred_recovery_timer = try Timer.start();
+    var shred_recovery_timer = Timer.start();
     var valid_recovered_shreds = ArrayList([]const u8).init(allocator);
     defer valid_recovered_shreds.deinit();
     if (options.slot_leaders) |leaders| {
@@ -351,7 +351,7 @@ pub fn insertShreds(
     //
     // Handle chaining for the members of the slot_meta_working_set that were inserted into,
     // drop the others
-    var chaining_timer = try Timer.start();
+    var chaining_timer = Timer.start();
     try handleChaining(
         allocator,
         &self.ledger.db,
@@ -363,7 +363,7 @@ pub fn insertShreds(
     //////////////////////////////////////////////////////
     // check forward chaining for each erasure set
     //
-    var merkle_chaining_timer = try Timer.start();
+    var merkle_chaining_timer = Timer.start();
 
     const em0_keys, const em0_values = state.erasure_metas.items();
     for (em0_keys, em0_values) |erasure_set, working_em| if (working_em == .dirty) {

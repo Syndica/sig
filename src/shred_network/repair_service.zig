@@ -134,7 +134,7 @@ pub const RepairService = struct {
 
     pub fn run(self: *Self) !void {
         var waiting_for_peers = false;
-        var timer = try sig.time.Timer.start();
+        var timer = sig.time.Timer.start();
         while (!self.exit.load(.acquire)) {
             timer.reset();
             var num_repairs_sent: usize = 0;

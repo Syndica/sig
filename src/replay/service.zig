@@ -37,6 +37,19 @@ pub const Service = struct {
     replay: ReplayState,
     consensus: ?TowerConsensus,
     num_threads: u32,
+    metrics: Metrics,
+
+    const Metrics = struct {
+        slot_execution_time: *sig.prometheus.Histogram,
+
+        pub const prefix = "replay";
+        pub const histogram_buckets = b: {
+            const base = 100 * std.time.ns_per_ms;
+            var buckets: [20]f64 = undefined;
+            for (&buckets, 0..) |*bucket, i| bucket.* = i * base;
+            break :b buckets;
+        };
+    };
 
     pub fn init(
         deps: *Dependencies,
@@ -73,6 +86,7 @@ pub const Service = struct {
             .replay = state,
             .consensus = consensus,
             .num_threads = num_threads,
+            .metrics = try sig.prometheus.globalRegistry().initStruct(Metrics),
         };
     }
 
@@ -90,6 +104,8 @@ pub const Service = struct {
 
         const allocator = self.replay.allocator;
         self.replay.logger.debug().log("advancing replay");
+
+        var start_time = sig.time.Timer.start();
 
         // find slots in the ledger
         try trackNewSlots(
@@ -123,6 +139,10 @@ pub const Service = struct {
             )
         else
             try bypassConsensus(&self.replay);
+
+        const elapsed = start_time.read().asNanos();
+        self.metrics.slot_execution_time.observe(elapsed);
+        self.replay.logger.info().logf("advanced in {}", .{std.fmt.fmtDuration(elapsed)});
 
         if (!processed_a_slot) try std.Thread.yield();
     }
@@ -456,8 +476,7 @@ fn newSlotFromParent(
     var state = try SlotState.fromFrozenParent(allocator, parent_state);
     errdefer state.deinit(allocator);
 
-    const epoch_reward_status = try parent_constants.epoch_reward_status
-        .clone(allocator);
+    const epoch_reward_status = try parent_constants.epoch_reward_status.clone(allocator);
     errdefer epoch_reward_status.deinit(allocator);
 
     var ancestors = try parent_constants.ancestors.clone(allocator);
@@ -652,7 +671,7 @@ test trackNewSlots {
     }
 
     const slot_tracker_val: SlotTracker = try .init(allocator, 0, .{
-        .state = try .genesis(allocator),
+        .state = .GENESIS,
         .constants = try .genesis(allocator, .DEFAULT),
     });
     var slot_tracker = RwMux(SlotTracker).init(slot_tracker_val);
@@ -667,7 +686,7 @@ test trackNewSlots {
         ptr.get(0).?.state.hash.set(.ZEROES);
     }
 
-    const epoch_tracker_val: EpochTracker = .{ .schedule = .DEFAULT };
+    const epoch_tracker_val: EpochTracker = .{ .schedule = .INIT };
     var epoch_tracker = RwMux(EpochTracker).init(epoch_tracker_val);
     defer {
         const ptr, var lg = epoch_tracker.writeWithLock();
@@ -683,7 +702,7 @@ test trackNewSlots {
             .ns_per_slot = 1,
             .genesis_creation_time = 1,
             .slots_per_year = 1,
-            .stakes = try .initEmptyWithGenesisStakeHistoryEntry(allocator),
+            .stakes = .EMPTY_WITH_GENESIS,
             .rent_collector = .DEFAULT,
         });
     }
@@ -701,7 +720,7 @@ test trackNewSlots {
         },
     };
 
-    var lsc = sig.core.leader_schedule.LeaderScheduleCache.init(allocator, .DEFAULT);
+    var lsc = sig.core.leader_schedule.LeaderScheduleCache.init(allocator, .INIT);
     defer {
         var map = lsc.leader_schedules.write();
         map.mut().deinit();
@@ -1142,7 +1161,7 @@ pub const DependencyStubs = struct {
             const root_slot_constants = try sig.core.SlotConstants.genesis(allocator, .DEFAULT);
             errdefer root_slot_constants.deinit(allocator);
 
-            var root_slot_state = try SlotState.genesis(allocator);
+            var root_slot_state: SlotState = .GENESIS;
             errdefer root_slot_state.deinit(allocator);
 
             { // this is to essentially root the slot
@@ -1152,7 +1171,7 @@ pub const DependencyStubs = struct {
                 try bhq.mut().insertGenesisHash(allocator, .ZEROES, 0);
             }
 
-            const epoch = try sig.core.EpochConstants.genesis(allocator, .default(allocator));
+            const epoch = sig.core.EpochConstants.genesis(.default(allocator));
             errdefer epoch.deinit(allocator);
 
             break :deps .{
@@ -1167,7 +1186,7 @@ pub const DependencyStubs = struct {
                     .authorized_voters = &.{},
                 },
                 .exit = &self.exit,
-                .epoch_schedule = .DEFAULT,
+                .epoch_schedule = .INIT,
                 .account_store = self.accountsdb.accountStore(),
                 .ledger = &self.ledger,
                 .slot_leaders = SlotLeaders.init(&leader, struct {
