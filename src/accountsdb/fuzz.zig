@@ -528,7 +528,7 @@ fn readRandomAccounts(
 }
 
 test run {
-    if (true) return error.SkipZigTest;
+    if (true) return error.SkipZigTest; // flaky test
 
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
