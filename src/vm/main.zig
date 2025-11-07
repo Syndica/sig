@@ -67,12 +67,12 @@ pub fn main() !void {
         .accounts_resize_delta = 0,
         .return_data = .{},
         .custom_error = null,
-        .rent = Rent.DEFAULT,
+        .rent = .INIT,
         .log_collector = null,
         .compute_meter = cmd.limit,
         .prev_blockhash = Hash.ZEROES,
         .prev_lamports_per_signature = 0,
-        .compute_budget = ComputeBudget.DEFAULT,
+        .compute_budget = .DEFAULT,
         .slot = 0,
     };
     defer tc.deinit();

@@ -2133,7 +2133,7 @@ test "HeaviestSubtreeForkChoice.propagateNewLeaf" {
         test_allocator,
         &pubkey_votes,
         &epoch_stakes,
-        &EpochSchedule.DEFAULT,
+        &EpochSchedule.INIT,
     );
 
     // Leaf slot 9 stops being the `heaviest_slot` at slot 1 because there
@@ -2167,7 +2167,7 @@ test "HeaviestSubtreeForkChoice.propagateNewLeaf" {
         test_allocator,
         &pubkey_votes2,
         &epoch_stakes,
-        &EpochSchedule.DEFAULT,
+        &EpochSchedule.INIT,
     );
 
     try std.testing.expectEqual(8, fork_choice.heaviestOverallSlot().slot);
@@ -2274,7 +2274,7 @@ test "HeaviestSubtreeForkChoice.propagateNewLeaf2" {
         test_allocator,
         &pubkey_votes,
         &epoch_stakes,
-        &EpochSchedule.DEFAULT,
+        &EpochSchedule.INIT,
     );
     try std.testing.expectEqual(6, fork_choice.heaviestOverallSlot().slot);
 
@@ -2321,7 +2321,7 @@ test "HeaviestSubtreeForkChoice.setRootAndAddOutdatedVotes" {
         test_allocator,
         &pubkey_votes1,
         &epoch_stakes,
-        &EpochSchedule.DEFAULT,
+        &EpochSchedule.INIT,
     );
 
     // Set root to 1, should purge 0 from the tree, but
@@ -2337,7 +2337,7 @@ test "HeaviestSubtreeForkChoice.setRootAndAddOutdatedVotes" {
         test_allocator,
         &pubkey_votes2,
         &epoch_stakes,
-        &EpochSchedule.DEFAULT,
+        &EpochSchedule.INIT,
     );
 
     try std.testing.expectEqual(
@@ -2366,7 +2366,7 @@ test "HeaviestSubtreeForkChoice.setRootAndAddOutdatedVotes" {
         test_allocator,
         &pubkey_votes3,
         &epoch_stakes,
-        &EpochSchedule.DEFAULT,
+        &EpochSchedule.INIT,
     );
 
     try std.testing.expectEqual(
@@ -2390,7 +2390,7 @@ test "HeaviestSubtreeForkChoice.setRootAndAddOutdatedVotes" {
         test_allocator,
         &pubkey_votes4,
         &epoch_stakes,
-        &EpochSchedule.DEFAULT,
+        &EpochSchedule.INIT,
     );
 
     try std.testing.expectEqual(
@@ -3043,7 +3043,7 @@ test "HeaviestSubtreeForkChoice.generateUpdateOperations" {
             allocator,
             &pubkey_votes,
             &epoch_stakes,
-            &EpochSchedule.DEFAULT,
+            &EpochSchedule.INIT,
         );
         defer generated_update_operations.deinit();
 
@@ -3067,7 +3067,7 @@ test "HeaviestSubtreeForkChoice.generateUpdateOperations" {
             allocator,
             &pubkey_votes,
             &epoch_stakes,
-            &EpochSchedule.DEFAULT,
+            &EpochSchedule.INIT,
         );
         defer generated_update_operations.deinit();
         try std.testing.expect(generated_update_operations.count() == 0);
@@ -3131,7 +3131,7 @@ test "HeaviestSubtreeForkChoice.generateUpdateOperations" {
             allocator,
             &pubkey_votes,
             &epoch_stakes,
-            &EpochSchedule.DEFAULT,
+            &EpochSchedule.INIT,
         );
         defer generated_update_operations.deinit();
 
@@ -3205,7 +3205,7 @@ test "HeaviestSubtreeForkChoice.generateUpdateOperations" {
             allocator,
             &pubkey_votes,
             &epoch_stakes,
-            &EpochSchedule.DEFAULT,
+            &EpochSchedule.INIT,
         );
         defer generated_update_operations.deinit();
 
@@ -3267,7 +3267,7 @@ test "HeaviestSubtreeForkChoice.addRootParent" {
         test_allocator,
         &pubkey_votes,
         &epoch_stakes,
-        &EpochSchedule.DEFAULT,
+        &EpochSchedule.INIT,
     );
 
     try fork_choice.addRootParent(.{ .slot = 2, .hash = Hash.ZEROES });
@@ -3349,7 +3349,7 @@ test "HeaviestSubtreeForkChoice.addVotes" {
         test_allocator,
         &pubkey_votes,
         &epoch_stakes,
-        &EpochSchedule.DEFAULT,
+        &EpochSchedule.INIT,
     );
 
     try std.testing.expectEqual(
@@ -3408,7 +3408,7 @@ test "HeaviestSubtreeForkChoice.addVotesDuplicateGreaterHashIgnored" {
         test_allocator,
         &pubkey_votes,
         &epoch_stakes,
-        &EpochSchedule.DEFAULT,
+        &EpochSchedule.INIT,
     ));
     // we tie break the duplicate_leaves_descended_from_6 and pick the smaller one
     // for deepest
@@ -3427,7 +3427,7 @@ test "HeaviestSubtreeForkChoice.addVotesDuplicateGreaterHashIgnored" {
         test_allocator,
         &pubkey_votes2,
         &epoch_stakes,
-        &EpochSchedule.DEFAULT,
+        &EpochSchedule.INIT,
     ));
     try std.testing.expectEqual(
         expected_deepest_slot_hash,
@@ -3505,7 +3505,7 @@ test "HeaviestSubtreeForkChoice.addVotesDuplicateSmallerHashPrioritized" {
         test_allocator,
         &pubkey_votes,
         &epoch_stakes,
-        &EpochSchedule.DEFAULT,
+        &EpochSchedule.INIT,
     ));
     const expected_deepest_slot_hash = duplicate_leaves_descended_from_6[1];
 
@@ -3535,7 +3535,7 @@ test "HeaviestSubtreeForkChoice.addVotesDuplicateSmallerHashPrioritized" {
         test_allocator,
         &pubkey_votes2,
         &epoch_stakes,
-        &EpochSchedule.DEFAULT,
+        &EpochSchedule.INIT,
     ));
 
     // AFTER, only one of the validators is voting on this leaf
@@ -3623,7 +3623,7 @@ test "HeaviestSubtreeForkChoice.addVotesDuplicateThenOutdated" {
         test_allocator,
         &pubkey_votes,
         &epoch_stakes,
-        &EpochSchedule.DEFAULT,
+        &EpochSchedule.INIT,
     ));
 
     // Create two children for slots greater than the duplicate slot,
@@ -3664,7 +3664,7 @@ test "HeaviestSubtreeForkChoice.addVotesDuplicateThenOutdated" {
         test_allocator,
         &pubkey_votes2,
         &epoch_stakes,
-        &EpochSchedule.DEFAULT,
+        &EpochSchedule.INIT,
     ));
 
     // All the stake directly voting on the duplicates have been outdated
@@ -3762,7 +3762,7 @@ test "HeaviestSubtreeForkChoice.addVotesDuplicateTie" {
         test_allocator,
         &pubkey_votes,
         &epoch_stakes,
-        &EpochSchedule.DEFAULT,
+        &EpochSchedule.INIT,
     ));
     try std.testing.expectEqual(
         expected_best_slot_hash,
@@ -3789,7 +3789,7 @@ test "HeaviestSubtreeForkChoice.addVotesDuplicateTie" {
         test_allocator,
         &pubkey_votes2,
         &epoch_stakes,
-        &EpochSchedule.DEFAULT,
+        &EpochSchedule.INIT,
     ));
 
     try std.testing.expectEqual(
@@ -3876,7 +3876,7 @@ test "HeaviestSubtreeForkChoice.addVotesDuplicateZeroStake" {
         test_allocator,
         &pubkey_votes,
         &epoch_stakes,
-        &EpochSchedule.DEFAULT,
+        &EpochSchedule.INIT,
     ));
     try std.testing.expectEqual(
         duplicate_leaves_descended_from_4[1],
@@ -3893,7 +3893,7 @@ test "HeaviestSubtreeForkChoice.addVotesDuplicateZeroStake" {
         test_allocator,
         &pubkey_votes2,
         &epoch_stakes,
-        &EpochSchedule.DEFAULT,
+        &EpochSchedule.INIT,
     ));
     try std.testing.expectEqual(
         higher_child_with_duplicate_parent,
@@ -3997,7 +3997,7 @@ test "HeaviestSubtreeForkChoice.isBestChild" {
         test_allocator,
         &pubkey_votes,
         &epoch_stakes,
-        &EpochSchedule.DEFAULT,
+        &EpochSchedule.INIT,
     );
 
     try std.testing.expect(
@@ -4068,7 +4068,7 @@ test "HeaviestSubtreeForkChoice.markInvalidThenAddNewHeavierDuplicateSlot" {
         test_allocator,
         &pubkey_votes,
         &epoch_stakes,
-        &EpochSchedule.DEFAULT,
+        &EpochSchedule.INIT,
     );
 
     try std.testing.expectEqual(
@@ -4115,7 +4115,7 @@ test "HeaviestSubtreeForkChoice.markValidInvalidForks" {
         test_allocator,
         &pubkey_votes,
         &epoch_stakes,
-        &EpochSchedule.DEFAULT,
+        &EpochSchedule.INIT,
     ));
     try std.testing.expectEqual(
         expected_best_slot,
@@ -4176,7 +4176,7 @@ test "HeaviestSubtreeForkChoice.markValidInvalidForks" {
             test_allocator,
             &pubkey_votes2,
             &epoch_stakes,
-            &EpochSchedule.DEFAULT,
+            &EpochSchedule.INIT,
         ),
     );
 
@@ -4255,7 +4255,7 @@ test "HeaviestSubtreeForkChoice.setRootAndAddVotes" {
         test_allocator,
         &pubkey_votes1,
         &epoch_stakes,
-        &EpochSchedule.DEFAULT,
+        &EpochSchedule.INIT,
     );
     try std.testing.expectEqual(4, fork_choice.heaviestOverallSlot().slot);
 
@@ -4272,7 +4272,7 @@ test "HeaviestSubtreeForkChoice.setRootAndAddVotes" {
         test_allocator,
         &pubkey_votes2,
         &epoch_stakes,
-        &EpochSchedule.DEFAULT,
+        &EpochSchedule.INIT,
     );
 
     try std.testing.expectEqual(6, fork_choice.heaviestOverallSlot().slot);
@@ -4343,7 +4343,7 @@ test "HeaviestSubtreeForkChoice.splitOffOnBestPath" {
         test_allocator,
         &pubkey_votes,
         &epoch_stakes,
-        &EpochSchedule.DEFAULT,
+        &EpochSchedule.INIT,
     );
 
     try std.testing.expectEqual(6, fork_choice.heaviestOverallSlot().slot);
@@ -4428,7 +4428,7 @@ test "HeaviestSubtreeForkChoice.splitOffSimple" {
         test_allocator,
         &pubkey_votes,
         &epoch_stakes,
-        &EpochSchedule.DEFAULT,
+        &EpochSchedule.INIT,
     );
 
     var registry = sig.prometheus.Registry(.{}).init(test_allocator);
@@ -4527,7 +4527,7 @@ test "HeaviestSubtreeForkChoice.splitOffSubtreeWithDups" {
             test_allocator,
             &pubkey_votes,
             &epoch_stakes,
-            &EpochSchedule.DEFAULT,
+            &EpochSchedule.INIT,
         ),
     );
 
@@ -4610,7 +4610,7 @@ test "HeaviestSubtreeForkChoice.splitOffUnvoted" {
         test_allocator,
         &pubkey_votes,
         &epoch_stakes,
-        &EpochSchedule.DEFAULT,
+        &EpochSchedule.INIT,
     );
 
     var registry = sig.prometheus.Registry(.{}).init(test_allocator);
@@ -4698,7 +4698,7 @@ test "HeaviestSubtreeForkChoice.splitOffWithDups" {
             test_allocator,
             &pubkey_votes,
             &epoch_stakes,
-            &EpochSchedule.DEFAULT,
+            &EpochSchedule.INIT,
         ),
     );
 
@@ -4780,7 +4780,7 @@ test "HeaviestSubtreeForkChoice.gossipVoteDoesntAffectForkChoice" {
         test_allocator,
         &pubkey_votes,
         &epoch_stakes,
-        &EpochSchedule.DEFAULT,
+        &EpochSchedule.INIT,
     );
 
     // Best slot is 4
@@ -4807,7 +4807,7 @@ test "HeaviestSubtreeForkChoice.gossipVoteDoesntAffectForkChoice" {
     try fork_choice.processLatestVotes(
         test_allocator,
         &epoch_stakes,
-        &EpochSchedule.DEFAULT,
+        &EpochSchedule.INIT,
         &latest_validator_votes,
     );
 
@@ -5148,7 +5148,7 @@ pub fn testEpochStakes(
             .stake_delegations = .empty,
             .unused = 0,
             .epoch = 0,
-            .stake_history = .DEFAULT,
+            .stake_history = .INIT,
         },
         .epoch_authorized_voters = .empty,
         .node_id_to_vote_accounts = .empty,

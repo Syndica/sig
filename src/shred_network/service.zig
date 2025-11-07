@@ -229,7 +229,7 @@ test "start and stop gracefully" {
     defer gossip_table.deinit();
     var gossip_table_rw = RwMux(GossipTable).init(gossip_table);
 
-    var epoch_ctx = try EpochContextManager.init(allocator, sig.core.EpochSchedule.DEFAULT);
+    var epoch_ctx = try EpochContextManager.init(allocator, sig.core.EpochSchedule.INIT);
     defer epoch_ctx.deinit();
 
     var state = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);

@@ -16,7 +16,7 @@ const Pubkey = sig.core.Pubkey;
 pub const RecentBlockhashes = struct {
     entries: std.BoundedArray(Entry, MAX_ENTRIES),
 
-    pub const DEFAULT: RecentBlockhashes = .{ .entries = .{} };
+    pub const INIT: RecentBlockhashes = .{ .entries = .{} };
 
     pub const Entry = extern struct {
         blockhash: Hash,
@@ -68,7 +68,7 @@ pub const RecentBlockhashes = struct {
         }
         std.sort.heap(IndexAndEntry, entries.items, {}, IndexAndEntry.compareFn);
 
-        var self: RecentBlockhashes = .DEFAULT;
+        var self: RecentBlockhashes = .INIT;
         const num_entries = @min(entries.items.len, MAX_ENTRIES);
         for (entries.items[0..num_entries]) |entry| self.entries.appendAssumeCapacity(entry.entry);
         return self;
@@ -78,7 +78,7 @@ pub const RecentBlockhashes = struct {
         if (!builtin.is_test) @compileError("only for tests");
         std.debug.assert(entries.len <= MAX_ENTRIES);
 
-        var self: RecentBlockhashes = .DEFAULT;
+        var self: RecentBlockhashes = .INIT;
         self.entries.appendSliceAssumeCapacity(entries);
         return self;
     }
@@ -86,7 +86,7 @@ pub const RecentBlockhashes = struct {
     pub fn initRandom(random: std.Random) RecentBlockhashes {
         if (!builtin.is_test) @compileError("only for tests");
 
-        var self: RecentBlockhashes = .DEFAULT;
+        var self: RecentBlockhashes = .INIT;
         for (0..random.intRangeAtMost(u64, 1, MAX_ENTRIES)) |_| {
             self.entries.appendAssumeCapacity(.{
                 .blockhash = Hash.initRandom(random),
@@ -136,7 +136,7 @@ test "serialize and deserialize" {
     }
 
     {
-        var blockhashes: RecentBlockhashes = .DEFAULT;
+        var blockhashes: RecentBlockhashes = .INIT;
         blockhashes.entries.appendAssumeCapacity(.{
             .blockhash = Hash.initRandom(random),
             .lamports_per_signature = random.int(u64),

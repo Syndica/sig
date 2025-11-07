@@ -2821,7 +2821,7 @@ test "state.VoteState.lockout double lockout after expiration" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    const clock = Clock.DEFAULT;
+    const clock = Clock.INIT;
 
     var vote_state = try VoteState.init(
         allocator,
@@ -2860,7 +2860,7 @@ test "state.VoteState.lockout expire multiple votes" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    const clock = Clock.DEFAULT;
+    const clock = Clock.INIT;
 
     var vote_state = try VoteState.init(
         allocator,
@@ -2906,7 +2906,7 @@ test "state.VoteState.getCredits" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    const clock = Clock.DEFAULT;
+    const clock = Clock.INIT;
 
     var vote_state = try VoteState.init(
         allocator,
@@ -2937,7 +2937,7 @@ test "state.VoteState duplicate vote" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    const clock = Clock.DEFAULT;
+    const clock = Clock.INIT;
 
     var vote_state = try VoteState.init(
         allocator,
@@ -2963,7 +2963,7 @@ test "state.VoteState nth recent lockout" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    const clock = Clock.DEFAULT;
+    const clock = Clock.INIT;
 
     var vote_state = try VoteState.init(
         allocator,
@@ -3041,7 +3041,7 @@ test "state.VoteState.processVote process missed votes" {
 
     const vote = Vote{ .slots = &slots, .hash = Hash.ZEROES, .timestamp = null };
 
-    var slot_hashes: SlotHashes = .DEFAULT;
+    var slot_hashes: SlotHashes = .INIT;
 
     var iter = std.mem.reverseIterator(vote.slots);
     while (iter.next()) |vote_slot| {
@@ -3175,7 +3175,7 @@ test "state.VoteState.processVote empty slot hashes" {
         .timestamp = null,
     };
 
-    const result = try vote_state.checkSlotsAreValid(&vote, vote.slots, &.DEFAULT);
+    const result = try vote_state.checkSlotsAreValid(&vote, vote.slots, &.INIT);
     try std.testing.expectEqual(VoteError.vote_too_old, result);
 }
 
@@ -3393,7 +3393,7 @@ test "state.VoteState.processVote empty slots" {
     const maybe_error = try vote_state.processVote(
         allocator,
         &vote,
-        .DEFAULT,
+        .INIT,
         0,
         0,
     );
@@ -5176,7 +5176,7 @@ fn currentEpoch(self: *const VoteState) u64 {
 fn buildSlotHashes(random: std.Random, slots: []const Slot) !SlotHashes {
     if (!builtin.is_test) @compileError("buildSlotHashes should only be called in test mode");
 
-    var result: SlotHashes = .DEFAULT;
+    var result: SlotHashes = .INIT;
     var iter = std.mem.reverseIterator(slots);
     while (iter.next()) |slot| {
         result.entries.appendAssumeCapacity(.{

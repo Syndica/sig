@@ -1076,7 +1076,7 @@ test "trackNewVotesAndNotifyConfirmations filter" {
         lg.get().deinit(allocator);
     }
 
-    var epoch_tracker_rw: sig.sync.RwMux(EpochTracker) = .init(.{ .schedule = .DEFAULT });
+    var epoch_tracker_rw: sig.sync.RwMux(EpochTracker) = .init(.{ .schedule = .INIT });
     defer {
         var lg = epoch_tracker_rw.write();
         lg.get().deinit(allocator);
@@ -1815,7 +1815,7 @@ test "vote_parser.parseSanitizedVoteTransaction" {
 
 test verifyVoteTransaction {
     const allocator = std.testing.allocator;
-    const epoch_tracker: EpochTracker = .{ .schedule = .DEFAULT };
+    const epoch_tracker: EpochTracker = .{ .schedule = .INIT };
     defer epoch_tracker.deinit(allocator);
 
     try std.testing.expectEqual(
@@ -1848,7 +1848,7 @@ test "simple usage" {
     });
     defer slot_tracker.deinit(allocator);
 
-    var epoch_tracker: EpochTracker = .{ .schedule = .DEFAULT };
+    var epoch_tracker: EpochTracker = .{ .schedule = .INIT };
     defer epoch_tracker.deinit(allocator);
     {
         const stakes: sig.core.EpochStakes = .EMPTY_WITH_GENESIS;
@@ -1956,7 +1956,7 @@ test "check trackers" {
     });
     defer slot_tracker2.deinit(allocator);
 
-    var epoch_tracker2: EpochTracker = .{ .schedule = .DEFAULT };
+    var epoch_tracker2: EpochTracker = .{ .schedule = .INIT };
     defer epoch_tracker2.deinit(allocator);
     {
         var stakes: sig.core.EpochStakes = .EMPTY_WITH_GENESIS;

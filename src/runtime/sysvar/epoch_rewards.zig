@@ -38,7 +38,7 @@ pub const EpochRewards = extern struct {
 
     pub const ID: Pubkey = .parse("SysvarEpochRewards1111111111111111111111111");
 
-    pub const DEFAULT = EpochRewards{
+    pub const INIT: EpochRewards = .{
         .distribution_starting_block_height = 0,
         .num_partitions = 0,
         .parent_blockhash = Hash.ZEROES,

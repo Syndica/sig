@@ -431,7 +431,7 @@ pub fn createVoteAccount(
         authorized_voter,
         authorized_withdrawer,
         commission,
-        clock orelse Clock.DEFAULT,
+        clock orelse Clock.INIT,
     );
     defer vote_state.deinit(allocator);
 

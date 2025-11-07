@@ -151,12 +151,12 @@ fn executeTxnContext(
         allocator,
         EpochSchedule,
         &accounts_map,
-    ) orelse EpochSchedule.DEFAULT;
+    ) orelse EpochSchedule.INIT;
     genesis_config.rent = getSysvarFromAccounts(
         allocator,
         Rent,
         &accounts_map,
-    ) orelse Rent.DEFAULT;
+    ) orelse Rent.INIT;
     try genesis_config.accounts.put(program.address_lookup_table.ID, .{
         .lamports = 1,
         .data = .initEmpty(0),

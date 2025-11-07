@@ -1089,9 +1089,9 @@ test "executeWithdrawNonceAccount" {
     defer allocator.free(nonce_state_bytes);
 
     // Create Sysvars
-    const recent_blockhashes: RecentBlockhashes = .DEFAULT;
+    const recent_blockhashes: RecentBlockhashes = .INIT;
 
-    const rent = Rent.DEFAULT;
+    const rent = Rent.INIT;
     const rent_minimum_balance = rent.minimumBalance(sig.bincode.sizeOf(nonce_state, .{}));
 
     const account_0_key = Pubkey.initRandom(prng.random());
@@ -1187,7 +1187,7 @@ test "executeInitializeNonceAccount" {
         .blockhash = Hash.initRandom(prng.random()),
         .lamports_per_signature = 0,
     }});
-    const rent = Rent.DEFAULT;
+    const rent = Rent.INIT;
 
     const account_0_key = Pubkey.initRandom(prng.random());
 

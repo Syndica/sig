@@ -686,7 +686,7 @@ test trackNewSlots {
         ptr.get(0).?.state.hash.set(.ZEROES);
     }
 
-    const epoch_tracker_val: EpochTracker = .{ .schedule = .DEFAULT };
+    const epoch_tracker_val: EpochTracker = .{ .schedule = .INIT };
     var epoch_tracker = RwMux(EpochTracker).init(epoch_tracker_val);
     defer {
         const ptr, var lg = epoch_tracker.writeWithLock();
@@ -720,7 +720,7 @@ test trackNewSlots {
         },
     };
 
-    var lsc = sig.core.leader_schedule.LeaderScheduleCache.init(allocator, .DEFAULT);
+    var lsc = sig.core.leader_schedule.LeaderScheduleCache.init(allocator, .INIT);
     defer {
         var map = lsc.leader_schedules.write();
         map.mut().deinit();
@@ -1186,7 +1186,7 @@ pub const DependencyStubs = struct {
                     .authorized_voters = &.{},
                 },
                 .exit = &self.exit,
-                .epoch_schedule = .DEFAULT,
+                .epoch_schedule = .INIT,
                 .account_store = self.accountsdb.accountStore(),
                 .ledger = &self.ledger,
                 .slot_leaders = SlotLeaders.init(&leader, struct {

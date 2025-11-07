@@ -441,7 +441,7 @@ test resolveBatch {
     defer ancestors.deinit(allocator);
     try ancestors.ancestors.put(allocator, 0, {});
 
-    const slot_hashes: SlotHashes = .DEFAULT;
+    const slot_hashes: SlotHashes = .INIT;
 
     const resolved = try resolveBatch(
         allocator,

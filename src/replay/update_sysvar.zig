@@ -250,7 +250,7 @@ pub fn updateSlotHashes(
         SlotHashes,
         allocator,
         deps.account_store.reader().forSlot(deps.ancestors),
-    ) orelse .DEFAULT;
+    ) orelse .INIT;
 
     slot_hashes.add(parent_slot, parent_hash);
 
@@ -439,7 +439,7 @@ fn nextClock(
         .unix_timestamp = genesis_creation_time,
     };
 
-    const clock = try getSysvarFromAccount(Clock, allocator, account_reader) orelse Clock.DEFAULT;
+    const clock = try getSysvarFromAccount(Clock, allocator, account_reader) orelse Clock.INIT;
 
     var unix_timestamp = clock.unix_timestamp;
 
@@ -545,7 +545,7 @@ test createSysvarAccount {
         const default = if (@hasDecl(Sysvar, "init"))
             try Sysvar.init(allocator)
         else
-            Sysvar.DEFAULT;
+            Sysvar.INIT;
         defer if (@hasDecl(Sysvar, "deinit")) default.deinit(allocator) else {};
 
         try testCreateSysvarAccount(allocator, Sysvar, default, null);
@@ -565,7 +565,7 @@ fn testCreateSysvarAccount(
     sysvar: Sysvar,
     old_account: ?*const Account,
 ) !void {
-    const rent = Rent.DEFAULT;
+    const rent = Rent.INIT;
 
     const sysvar_data = try allocator.alloc(u8, @max(
         Sysvar.STORAGE_SIZE,
@@ -698,18 +698,18 @@ fn initSysvarCacheWithDefaultValues(allocator: Allocator) !SysvarCache {
     if (!builtin.is_test) @compileError("only for testing");
 
     return .{
-        .clock = try sysvars.serialize(allocator, Clock.DEFAULT),
-        .epoch_schedule = try sysvars.serialize(allocator, EpochSchedule.DEFAULT),
-        .epoch_rewards = try sysvars.serialize(allocator, EpochRewards.DEFAULT),
-        .rent = try sysvars.serialize(allocator, Rent.DEFAULT),
-        .last_restart_slot = try sysvars.serialize(allocator, LastRestartSlot.DEFAULT),
+        .clock = try sysvars.serialize(allocator, Clock.INIT),
+        .epoch_schedule = try sysvars.serialize(allocator, EpochSchedule.INIT),
+        .epoch_rewards = try sysvars.serialize(allocator, EpochRewards.INIT),
+        .rent = try sysvars.serialize(allocator, Rent.INIT),
+        .last_restart_slot = try sysvars.serialize(allocator, LastRestartSlot.INIT),
 
-        .slot_hashes = try sysvars.serialize(allocator, SlotHashes.DEFAULT),
-        .slot_hashes_obj = .DEFAULT,
-        .stake_history = try sysvars.serialize(allocator, StakeHistory.DEFAULT),
-        .stake_history_obj = .DEFAULT,
-        .fees_obj = .DEFAULT,
-        .recent_blockhashes_obj = .DEFAULT,
+        .slot_hashes = try sysvars.serialize(allocator, SlotHashes.INIT),
+        .slot_hashes_obj = .INIT,
+        .stake_history = try sysvars.serialize(allocator, StakeHistory.INIT),
+        .stake_history_obj = .INIT,
+        .fees_obj = .INIT,
+        .recent_blockhashes_obj = .INIT,
     };
 }
 
@@ -749,7 +749,7 @@ fn insertSysvarCacheAccounts(
 
         const account = try createSysvarAccount(
             allocator,
-            &Rent.DEFAULT,
+            &Rent.INIT,
             Sysvar,
             try sysvar_cache.get(Sysvar),
             if (old_account) |*acc| acc else null,
@@ -825,7 +825,7 @@ test "update all sysvars" {
 
     var capitalization = Atomic(u64).init(0);
     var slot: Slot = 10;
-    const rent = Rent.DEFAULT;
+    const rent = Rent.INIT;
     var ancestors = Ancestors{};
     defer ancestors.deinit(allocator);
     try ancestors.ancestors.put(allocator, slot, {});
@@ -846,7 +846,7 @@ test "update all sysvars" {
     defer slot_history.deinit(allocator);
     const account = try createSysvarAccount(
         allocator,
-        &Rent.DEFAULT,
+        &Rent.INIT,
         SlotHistory,
         slot_history,
         null,
@@ -872,7 +872,7 @@ test "update all sysvars" {
         defer allocator.free(old_account.data);
 
         const feature_set = FeatureSet.ALL_DISABLED;
-        const epoch_schedule = EpochSchedule.DEFAULT;
+        const epoch_schedule = EpochSchedule.INIT;
         const epoch_stakes: EpochStakes = .EMPTY;
         defer epoch_stakes.deinit(allocator);
         var stakes_cache = StakesCache.EMPTY;

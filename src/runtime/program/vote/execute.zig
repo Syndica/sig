@@ -1227,7 +1227,7 @@ test "vote_program: executeIntializeAccount" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    const rent = Rent.DEFAULT;
+    const rent = Rent.INIT;
     const clock = Clock{
         .slot = 0,
         .epoch_start_timestamp = 0,
@@ -2681,8 +2681,8 @@ test "vote_program: widthdraw no changes" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    const rent = Rent.DEFAULT;
-    const clock = Clock.DEFAULT;
+    const rent = Rent.INIT;
+    const clock: Clock = .INIT;
 
     // Account data.
     const node_pubkey = Pubkey.initRandom(prng.random());
@@ -2765,8 +2765,8 @@ test "vote_program: widthdraw some amount below with balance above rent exempt" 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    const rent = Rent.DEFAULT;
-    const clock = Clock.DEFAULT;
+    const rent = Rent.INIT;
+    const clock: Clock = .INIT;
 
     // Account data.
     const node_pubkey = Pubkey.initRandom(prng.random());
@@ -2851,7 +2851,7 @@ test "vote_program: widthdraw all and close account with active vote account" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    const rent = Rent.DEFAULT;
+    const rent = Rent.INIT;
     const clock = Clock{
         .slot = 0,
         .epoch_start_timestamp = 0,
@@ -2959,8 +2959,8 @@ test "vote_program: widthdraw some amount below with balance below rent exempt" 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    const rent = Rent.DEFAULT;
-    const clock = Clock.DEFAULT;
+    const rent = Rent.INIT;
+    const clock: Clock = .INIT;
 
     // Account data.
     const node_pubkey = Pubkey.initRandom(prng.random());
@@ -3046,8 +3046,8 @@ test "vote_program: widthdraw insufficient funds" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    const rent = Rent.DEFAULT;
-    const clock = Clock.DEFAULT;
+    const rent = Rent.INIT;
+    const clock: Clock = .INIT;
 
     // Account data.
     const node_pubkey = Pubkey.initRandom(prng.random());
@@ -3131,8 +3131,8 @@ test "vote_program: widthdraw with missing signature" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    const rent = Rent.DEFAULT;
-    const clock = Clock.DEFAULT;
+    const rent = Rent.INIT;
+    const clock: Clock = .INIT;
 
     // Account data.
     const node_pubkey = Pubkey.initRandom(prng.random());
@@ -3217,7 +3217,7 @@ test "vote_program: vote" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    const clock = Clock.DEFAULT;
+    const clock: Clock = .INIT;
 
     const node_pubkey = Pubkey.initRandom(prng.random());
     const authorized_voter = Pubkey.initRandom(prng.random());
@@ -3332,7 +3332,7 @@ test "vote_program: vote switch" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    const clock = Clock.DEFAULT;
+    const clock: Clock = .INIT;
 
     const node_pubkey = Pubkey.initRandom(prng.random());
     const authorized_voter = Pubkey.initRandom(prng.random());
@@ -3447,7 +3447,7 @@ test "vote_program: vote missing signature" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    const clock = Clock.DEFAULT;
+    const clock: Clock = .INIT;
 
     const node_pubkey = Pubkey.initRandom(prng.random());
     const authorized_voter = Pubkey.initRandom(prng.random());
@@ -3565,7 +3565,7 @@ test "vote_program: empty vote" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    const clock = Clock.DEFAULT;
+    const clock: Clock = .INIT;
 
     const node_pubkey = Pubkey.initRandom(prng.random());
     const authorized_voter = Pubkey.initRandom(prng.random());
@@ -3685,7 +3685,7 @@ test "vote_program: vote state update" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    const clock = Clock.DEFAULT;
+    const clock: Clock = .INIT;
 
     const node_pubkey = Pubkey.initRandom(prng.random());
     const authorized_voter = Pubkey.initRandom(prng.random());
@@ -3825,7 +3825,7 @@ test "vote_program: vote state update switch" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    const clock = Clock.DEFAULT;
+    const clock: Clock = .INIT;
 
     const node_pubkey = Pubkey.initRandom(prng.random());
     const authorized_voter = Pubkey.initRandom(prng.random());
@@ -3966,7 +3966,7 @@ test "vote_program: compact vote state update" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    const clock = Clock.DEFAULT;
+    const clock: Clock = .INIT;
 
     const node_pubkey = Pubkey.initRandom(prng.random());
     const authorized_voter = Pubkey.initRandom(prng.random());
@@ -4106,7 +4106,7 @@ test "vote_program: compact vote state update switch" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    const clock = Clock.DEFAULT;
+    const clock: Clock = .INIT;
 
     const node_pubkey = Pubkey.initRandom(prng.random());
     const authorized_voter = Pubkey.initRandom(prng.random());
@@ -4247,7 +4247,7 @@ test "vote_program: tower sync" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    const clock = Clock.DEFAULT;
+    const clock: Clock = .INIT;
 
     const node_pubkey = Pubkey.initRandom(prng.random());
     const authorized_voter = Pubkey.initRandom(prng.random());
@@ -4394,7 +4394,7 @@ test "vote_program: tower sync switch" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    const clock = Clock.DEFAULT;
+    const clock: Clock = .INIT;
 
     const node_pubkey = Pubkey.initRandom(prng.random());
     const authorized_voter = Pubkey.initRandom(prng.random());

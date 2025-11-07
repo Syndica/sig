@@ -2701,7 +2701,7 @@ test "computeBankStats - child bank heavier" {
         1,
         0.67,
     );
-    const epoch_schedule = EpochSchedule.DEFAULT;
+    const epoch_schedule = EpochSchedule.INIT;
     var slot_tracker_rw1 = RwMux(SlotTracker).init(fixture.slot_tracker);
     const slot_tracker_rw1_ptr, var slot_tracker_rw1_lg = slot_tracker_rw1.writeWithLock();
     defer slot_tracker_rw1_lg.unlock();
@@ -2798,7 +2798,7 @@ test "computeBankStats - same weight selects lower slot" {
         0.67,
     );
 
-    const epoch_schedule = EpochSchedule.DEFAULT;
+    const epoch_schedule = EpochSchedule.INIT;
     var slot_tracker_rw2 = RwMux(SlotTracker).init(fixture.slot_tracker);
     const slot_tracker_rw2_ptr, var slot_tracker_rw2_lg = slot_tracker_rw2.writeWithLock();
     defer slot_tracker_rw2_lg.unlock();
