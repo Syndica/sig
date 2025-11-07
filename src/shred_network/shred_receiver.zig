@@ -236,7 +236,7 @@ pub const ShredReceiver = struct {
                     }
 
                     const existing_shred_payload =
-                        (try self.params.ledger_reader.isShredDuplicate(allocator, shred)) orelse
+                        try self.params.ledger_reader.isShredDuplicate(allocator, shred) orelse
                         continue; // Not a duplicate, skip this one
                     defer existing_shred_payload.deinit();
 
@@ -286,7 +286,7 @@ pub const ShredReceiver = struct {
 
     fn handleDuplicateSlot(
         self: *ShredReceiver,
-        sender: anytype,
+        sender: *Channel(Slot),
         slot: Slot,
         shred_payload: []const u8,
         duplicate_payload: []const u8,
@@ -355,7 +355,7 @@ pub const ShredReceiver = struct {
             slot,
             shred_payload,
             proof_bytes,
-            @as(usize, DUPLICATE_SHRED_MAX_PAYLOAD_SIZE),
+            DUPLICATE_SHRED_MAX_PAYLOAD_SIZE,
         );
         defer {
             for (chunks) |dup| gossip.allocator.free(dup.chunk);
@@ -485,7 +485,7 @@ pub const ShredReceiver = struct {
         }) {
             const chunk_end = @min(offset + chunk_size, proof_bytes.len);
             const chunk_data = proof_bytes[offset..chunk_end];
-            const duplicate_shred = sig.gossip.data.DuplicateShred{
+            chunks.appendAssumeCapacity(.{
                 .from = sig.core.Pubkey.fromPublicKey(&self.params.keypair.public_key),
                 .wallclock = wallclock,
                 .slot = slot,
@@ -494,8 +494,7 @@ pub const ShredReceiver = struct {
                 .num_chunks = num_chunks,
                 .chunk_index = chunk_index,
                 .chunk = try gossip.allocator.dupe(u8, chunk_data),
-            };
-            chunks.appendAssumeCapacity(duplicate_shred);
+            });
         }
 
         return try chunks.toOwnedSlice(gossip.allocator);
@@ -645,8 +644,8 @@ test "handleBatch/handlePacket" {
     );
     defer shred_tracker.deinit();
 
-    var exit = Atomic(bool).init(false);
-    const shred_version = Atomic(u16).init(0);
+    var exit: Atomic(bool) = .init(false);
+    const shred_version: Atomic(u16) = .init(0);
 
     var shred_receiver = try ShredReceiver.init(allocator, .noop, &registry, .{
         .keypair = &keypair,
@@ -889,9 +888,7 @@ test "handleDuplicateSlots: no sender configured" {
     try duplicate_shreds.append(.{ .Exists = shred });
 
     const result = ShredInserter.Result{
-        .completed_data_set_infos = std.ArrayList(
-            ShredInserter.CompletedDataSetInfo,
-        ).init(allocator),
+        .completed_data_set_infos = .init(allocator),
         .duplicate_shreds = duplicate_shreds,
     };
     defer result.deinit();
@@ -906,8 +903,8 @@ test "handleDuplicateSlots: no duplicate shreds" {
     defer registry.deinit();
 
     const keypair = try sig.identity.KeyPair.generateDeterministic(.{1} ** 32);
-    var exit: Atomic(bool) = Atomic(bool).init(false);
-    const shred_version: Atomic(u16) = Atomic(u16).init(0);
+    var exit: Atomic(bool) = .init(false);
+    const shred_version: Atomic(u16) = .init(0);
     const root_slot = 0;
     const test_socket: Socket = .{
         .family = .ipv4,
@@ -952,9 +949,7 @@ test "handleDuplicateSlots: no duplicate shreds" {
 
     // Create a result with no duplicate shreds
     const result = ShredInserter.Result{
-        .completed_data_set_infos = std.ArrayList(
-            ShredInserter.CompletedDataSetInfo,
-        ).init(allocator),
+        .completed_data_set_infos = .init(allocator),
         .duplicate_shreds = std.ArrayList(PossibleDuplicateShred).init(allocator),
     };
     defer result.deinit();
@@ -1047,9 +1042,7 @@ test "handleDuplicateSlots: single duplicate shred" {
     try duplicate_shreds.append(.{ .Exists = duplicate_shred });
 
     const result = ShredInserter.Result{
-        .completed_data_set_infos = std.ArrayList(
-            ShredInserter.CompletedDataSetInfo,
-        ).init(allocator),
+        .completed_data_set_infos = .init(allocator),
         .duplicate_shreds = duplicate_shreds,
     };
     defer result.deinit();
@@ -1151,9 +1144,7 @@ test "handleDuplicateSlots: multiple duplicates same slot" {
     try duplicate_shreds.append(.{ .Exists = duplicate_shred2 });
 
     const result = ShredInserter.Result{
-        .completed_data_set_infos = std.ArrayList(
-            ShredInserter.CompletedDataSetInfo,
-        ).init(allocator),
+        .completed_data_set_infos = .init(allocator),
         .duplicate_shreds = duplicate_shreds,
     };
     defer result.deinit();
@@ -1222,9 +1213,7 @@ test "handleDuplicateSlots: Exists but slot already duplicate" {
     try duplicate_shreds.append(.{ .Exists = try shred.clone() });
 
     const result = ShredInserter.Result{
-        .completed_data_set_infos = std.ArrayList(
-            ShredInserter.CompletedDataSetInfo,
-        ).init(allocator),
+        .completed_data_set_infos = .init(allocator),
         .duplicate_shreds = duplicate_shreds,
     };
     defer result.deinit();
@@ -1328,8 +1317,8 @@ test "pushDuplicateShredToGossip: enqueues chunks and ring indices" {
     );
     defer tracker.deinit();
 
-    var exit = Atomic(bool).init(false);
-    const shred_version = Atomic(u16).init(0);
+    var exit: Atomic(bool) = .init(false);
+    const shred_version: Atomic(u16) = .init(0);
 
     const invalid_socket = Socket{ .family = .ipv4, .internal = -1, .endpoint = null };
 
@@ -1474,8 +1463,8 @@ test "pushDuplicateShredToGossip: no-op when duplicate for slot exists" {
     var tracker =
         try sig.shred_network.shred_tracker.BasicShredTracker.init(allocator, 1, .noop, &registry);
     defer tracker.deinit();
-    var exit = Atomic(bool).init(false);
-    const shred_version = Atomic(u16).init(0);
+    var exit: Atomic(bool) = .init(false);
+    const shred_version: Atomic(u16) = .init(0);
 
     var shred_receiver = try ShredReceiver.init(allocator, .noop, &registry, .{
         .keypair = &keypair,
@@ -1568,7 +1557,7 @@ test "computeRingOffset: under capacity and at capacity oldest index" {
         allocator.destroy(gossip_service);
     }
 
-    const insertDup = struct {
+    const insert_dup = struct {
         fn run(
             g: *sig.gossip.GossipService,
             kp: *const sig.identity.KeyPair,
@@ -1595,9 +1584,9 @@ test "computeRingOffset: under capacity and at capacity oldest index" {
         }
     };
 
-    try insertDup.run(gossip_service, &keypair, 0, 10, 1);
-    try insertDup.run(gossip_service, &keypair, 1, 11, 2);
-    try insertDup.run(gossip_service, &keypair, 2, 12, 3);
+    try insert_dup.run(gossip_service, &keypair, 0, 10, 1);
+    try insert_dup.run(gossip_service, &keypair, 1, 11, 2);
+    try insert_dup.run(gossip_service, &keypair, 2, 12, 3);
     const offset_under = ShredReceiver.computeRingOffset(gossip_service, my_pubkey);
     try std.testing.expectEqual(@as(u16, 3), offset_under);
 
@@ -1605,7 +1594,7 @@ test "computeRingOffset: under capacity and at capacity oldest index" {
     var i: u16 = 3;
     while (i < MAX) : (i += 1) {
         const wc: u64 = if (i == 5) 1 else @intCast(1000 + i);
-        try insertDup.run(gossip_service, &keypair, i, wc, 100 + i);
+        try insert_dup.run(gossip_service, &keypair, i, wc, 100 + i);
     }
     const offset_full = ShredReceiver.computeRingOffset(gossip_service, my_pubkey);
     try std.testing.expectEqual(5, offset_full);

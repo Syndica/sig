@@ -2706,8 +2706,7 @@ test "isDuplicateSlot" {
     // Test case: Slot with no duplicate proof returns false
     {
         const slot: Slot = 42;
-        const is_duplicate = try reader.isDuplicateSlot(slot);
-        try std.testing.expectEqual(false, is_duplicate);
+        try std.testing.expectEqual(false, reader.isDuplicateSlot(slot));
     }
 
     // Test case: Slot with duplicate proof returns true
@@ -2718,7 +2717,6 @@ test "isDuplicateSlot" {
 
         try result_writer.storeDuplicateSlot(slot, shred1, shred2);
 
-        const is_duplicate = try reader.isDuplicateSlot(slot);
-        try std.testing.expectEqual(true, is_duplicate);
+        try std.testing.expectEqual(true, try reader.isDuplicateSlot(slot));
     }
 }

@@ -99,11 +99,10 @@ pub fn storeDuplicateSlot(
     shred1: []const u8,
     shred2: []const u8,
 ) !void {
-    const duplicate_slot_proof = ledger_mod.meta.DuplicateSlotProof{
+    try self.ledger.db.put(schema.duplicate_slots, slot, .{
         .shred1 = shred1,
         .shred2 = shred2,
-    };
-    try self.ledger.db.put(schema.duplicate_slots, slot, duplicate_slot_proof);
+    });
 }
 
 /// agave: set_duplicate_confirmed_slots_and_hashes
