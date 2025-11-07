@@ -25,7 +25,6 @@ const Counter = sig.prometheus.Counter;
 const Gauge = sig.prometheus.Gauge;
 const Histogram = sig.prometheus.Histogram;
 const GetMetricError = sig.prometheus.registry.GetMetricError;
-const HomogeneousThreadPool = sig.utils.thread.HomogeneousThreadPool;
 const ThreadPool = sig.sync.ThreadPool;
 const Task = sig.sync.ThreadPool.Task;
 const Batch = sig.sync.ThreadPool.Batch;
@@ -523,9 +522,12 @@ pub const GossipService = struct {
             self.logger.debug().log("verifyPackets loop closed");
         }
 
-        var pool = try HomogeneousThreadPool(VerifyMessageTask)
-            .initBorrowed(self.allocator, &self.thread_pool, VERIFY_PACKET_PARALLEL_TASKS);
-        defer pool.deinit(self.allocator);
+        var task = VerifyMessageTask{
+            .gossip_data_allocator = self.gossip_data_allocator,
+            .verified_incoming_channel = self.verified_incoming_channel,
+            .packet = undefined, // set inside the loop below.
+            .logger = .from(self.logger),
+        };
 
         // loop until the previous service closes and triggers us to close
         while (true) {
@@ -534,22 +536,14 @@ pub const GossipService = struct {
             const zone_inner = tracy.Zone.init(@src(), .{ .name = "gossip verifyPackets: receiving" });
             defer zone_inner.deinit();
 
-            // verify in parallel using the threadpool
-            // PERF: investigate CPU pinning
+            // TODO: investigate doing verifyPacket in parallel using self.thread_pool.
             while (self.packet_incoming_channel.tryReceive()) |packet| {
                 defer self.metrics.gossip_packets_received_total.inc();
 
-                try pool.schedule(self.allocator, .{
-                    .gossip_data_allocator = self.gossip_data_allocator,
-                    .verified_incoming_channel = self.verified_incoming_channel,
-                    .packet = packet,
-                    .logger = .from(self.logger),
-                });
+                task.packet = packet;
+                try task.run();
             }
         }
-
-        pool.joinFallible() catch |err|
-            self.logger.err().logf("VerifyMessageTask encountered error: {s}", .{@errorName(err)});
     }
 
     // structs used in process_messages loop
@@ -620,6 +614,9 @@ pub const GossipService = struct {
         var prune_messages = try ArrayList(PruneData).initCapacity(self.allocator, init_capacity);
         defer prune_messages.deinit();
 
+        var received_messages = std.SegmentedList(GossipMessageWithEndpoint, 0){};
+        defer received_messages.deinit(self.allocator);
+
         var trim_table_timer = try sig.time.Timer.start();
 
         // keep waiting for new data until,
@@ -629,8 +626,14 @@ pub const GossipService = struct {
             self.verified_incoming_channel.waitToReceive(exit_condition) catch break;
 
             var msg_count: usize = 0;
-            while (self.verified_incoming_channel.tryReceive()) |message| {
+            while (self.verified_incoming_channel.tryReceive()) |msg| {
                 msg_count += 1;
+
+                // references to the message are stored in ArrayLists that escape this while loop
+                // so store the message in a local list with stable pointers across append()s.
+                const message = try received_messages.addOne(self.allocator);
+                message.* = msg;
+
                 switch (message.message) {
                     .PushMessage => |*push| {
                         try push_messages.append(.{
@@ -842,6 +845,10 @@ pub const GossipService = struct {
                 self.metrics.handle_batch_pong_time.observe(elapsed);
 
                 pong_messages.clearRetainingCapacity();
+            }
+
+            if (received_messages.count() > 0) {
+                received_messages.clearRetainingCapacity();
             }
 
             // TRIM gossip-table
