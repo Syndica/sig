@@ -2392,6 +2392,7 @@ pub const AccountsDB = struct {
         capitalization: u64,
     };
 
+    // NOTE: we don't store the information needed to create snapshots currently
     // pub fn generateFullSnapshot(
     //     self: *AccountsDB,
     //     params: FullSnapshotGenParams,
