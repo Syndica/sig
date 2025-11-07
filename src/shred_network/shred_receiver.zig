@@ -1285,7 +1285,7 @@ test "handleDuplicateSlots: emits and stores via handleDuplicateSlot" {
         conflict_payload,
     );
 
-    try std.testing.expectEqual(@as(usize, 1), duplicate_slots_channel.len());
+    try std.testing.expectEqual(1, duplicate_slots_channel.len());
     const received_slot = duplicate_slots_channel.tryReceive() orelse return error.TestFailed;
     try std.testing.expectEqual(expected_slot, received_slot);
 
@@ -1588,7 +1588,7 @@ test "computeRingOffset: under capacity and at capacity oldest index" {
     try insert_dup.run(gossip_service, &keypair, 1, 11, 2);
     try insert_dup.run(gossip_service, &keypair, 2, 12, 3);
     const offset_under = ShredReceiver.computeRingOffset(gossip_service, my_pubkey);
-    try std.testing.expectEqual(@as(u16, 3), offset_under);
+    try std.testing.expectEqual(3, offset_under);
 
     const MAX = sig.gossip.data.MAX_DUPLICATE_SHREDS;
     var i: u16 = 3;
