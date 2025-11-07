@@ -2,6 +2,7 @@
 //! accounts to and from a database.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const sig = @import("../sig.zig");
 const accounts_db = @import("lib.zig");
 const tracy = @import("tracy");
@@ -23,12 +24,14 @@ const AccountsDB = accounts_db.AccountsDB;
 /// Otherwise use AccountReader if you only need to read accounts.
 pub const AccountStore = union(enum) {
     accounts_db: *AccountsDB,
+    accounts_db_two: *accounts_db.Two,
     thread_safe_map: *ThreadSafeAccountMap,
     noop,
 
     pub fn reader(self: AccountStore) AccountReader {
         return switch (self) {
             .accounts_db => |db| .{ .accounts_db = db },
+            .accounts_db_two => |db| .{ .accounts_db_two = db },
             .thread_safe_map => |map| .{ .thread_safe_map = map },
             .noop => .noop,
         };
@@ -48,6 +51,7 @@ pub const AccountStore = union(enum) {
 
         return switch (self) {
             .accounts_db => |db| db.putAccount(slot, address, account),
+            .accounts_db_two => |db| try db.put(slot, address, account),
             .thread_safe_map => |map| try map.put(slot, address, account),
             .noop => {},
         };
@@ -67,6 +71,7 @@ pub const AccountStore = union(enum) {
                 newly_rooted_slot,
                 lamports_per_signature,
             ),
+            .accounts_db_two => |db| try db.onSlotRooted(newly_rooted_slot),
             .thread_safe_map => |db| try db.onSlotRooted(newly_rooted_slot),
             .noop => {},
         }
@@ -76,17 +81,21 @@ pub const AccountStore = union(enum) {
 /// Interface for only reading accounts
 pub const AccountReader = union(enum) {
     accounts_db: *AccountsDB,
+    accounts_db_two: *accounts_db.Two,
     thread_safe_map: *ThreadSafeAccountMap,
     noop,
 
     pub fn forSlot(self: AccountReader, ancestors: *const Ancestors) SlotAccountReader {
         return switch (self) {
             .accounts_db => |db| .{ .accounts_db = .{ db, ancestors } },
+            .accounts_db_two => |db| .{ .accounts_db_two = .{ db, ancestors } },
             .thread_safe_map => |map| .{ .thread_safe_map = .{ map, ancestors } },
             .noop => .noop,
         };
     }
 
+    /// Returns the latest known version of an account, if it exists.
+    ///
     /// Deinit all returned accounts using `account_reader.allocator()`
     pub fn getLatest(self: AccountReader, allocator: std.mem.Allocator, address: Pubkey) !?Account {
         return switch (self) {
@@ -99,6 +108,31 @@ pub const AccountReader = union(enum) {
                 }
                 return account;
             },
+            .accounts_db_two => |db| {
+                var latest_known: struct { Slot, ?Account } = .{ 0, null };
+                errdefer if (latest_known[1]) |acc| acc.deinit(allocator);
+
+                // search through unrooted
+                for (db.unrooted.slots) |*slot| {
+                    slot.lock.lockShared();
+                    defer slot.lock.unlockShared();
+                    for (slot.entries.keys(), slot.entries.values()) |*key, data| {
+                        if (address.equals(key)) {
+                            const cloned = try data.clone(allocator);
+                            if (slot.slot > latest_known[0]) {
+                                latest_known[1] = cloned.toOwnedAccount();
+                            }
+                        }
+                    }
+                }
+                // if we found it, return. unrooted storage will always have newer
+                // versions than rooted.
+                if (latest_known[1] != null) return latest_known[1];
+
+                // see if we have that account in rooted storage
+                const account = (try db.rooted.get(allocator, address)) orelse return null;
+                return account.toOwnedAccount();
+            },
             .thread_safe_map => |map| try map.getLatest(address),
             .noop => null,
         };
@@ -110,20 +144,20 @@ pub const AccountReader = union(enum) {
     /// Holds the read lock on the index, so unlock it when done, and be careful
     /// how long you hold this.
     pub fn slotModifiedIterator(self: AccountReader, slot: Slot) ?SlotModifiedIterator {
-        return switch (self) {
-            .accounts_db => |db| .{
-                .accounts_db = db.slotModifiedIterator(slot) orelse return null,
+        switch (self) {
+            inline .accounts_db, .accounts_db_two, .thread_safe_map => |db, tag| {
+                const iterator = db.slotModifiedIterator(slot) orelse return null;
+                return @unionInit(SlotModifiedIterator, @tagName(tag), iterator);
             },
-            .thread_safe_map => |map| .{
-                .thread_safe_map = map.slotModifiedIterator(slot) orelse return null,
-            },
-            .noop => .noop,
-        };
+            .noop => return .noop,
+        }
     }
 
     pub fn getLargestRootedSlot(self: AccountReader) ?Slot {
+        if (!builtin.is_test) @compileError("only used in tests");
         return switch (self) {
             .accounts_db => |db| db.getLargestRootedSlot(),
+            .accounts_db_two => |db| db.rooted.getLargestRootedSlot(),
             .thread_safe_map => |tsm| tsm.getLargestRootedSlot(),
             .noop => null,
         };
@@ -132,6 +166,7 @@ pub const AccountReader = union(enum) {
 
 pub const SlotModifiedIterator = union(enum) {
     accounts_db: AccountsDB.SlotModifiedIterator,
+    accounts_db_two: accounts_db.Two.SlotModifiedIterator,
     thread_safe_map: ThreadSafeAccountMap.SlotModifiedIterator,
     noop,
 
@@ -227,6 +262,7 @@ pub const SlotAccountStore = union(enum) {
 
 pub const SlotAccountReader = union(enum) {
     accounts_db: struct { *AccountsDB, *const Ancestors },
+    accounts_db_two: struct { *accounts_db.Two, *const Ancestors },
     /// Contains many versions of accounts and becomes fork-aware using
     /// ancestors, like accountsdb.
     thread_safe_map: struct { *ThreadSafeAccountMap, *const Ancestors },
@@ -252,6 +288,7 @@ pub const SlotAccountReader = union(enum) {
                 }
                 return account;
             },
+            .accounts_db_two => |pair| try pair[0].get(pair[0].allocator, address, pair[1]),
             .thread_safe_map => |pair| pair[0].get(address, pair[1]),
             .account_map => |pair| pair.get(address),
             .account_shared_data_map => |map| {
