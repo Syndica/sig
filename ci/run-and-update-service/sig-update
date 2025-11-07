@@ -22,7 +22,7 @@ sudo -iu sig bash <<'EOF' | tee /dev/null
     if [[ $ip =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] \
             && IFS=. read -r a b c d <<<"$ip" \
             && ((a<=255 && b<=255 && c<=255 && d<=255)); then
-        echo "GF_SERVER_ROOT_URL=http://$ip/" >> /home/sig/sig/metrics/.env
+        echo "GF_SERVER_ROOT_URL=http://$ip:3000/" >> /home/sig/sig/metrics/.env
     fi
     if ! [ -z "$SLACK_WEBHOOK_URL" ]; then
         echo "SLACK_WEBHOOK_URL=$SLACK_WEBHOOK_URL" >> /home/sig/sig/metrics/.env
