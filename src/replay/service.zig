@@ -174,13 +174,17 @@ pub const Dependencies = struct {
         state: Owned(sig.core.SlotState),
     },
     current_epoch: sig.core.Epoch,
+    next_epoch: ?sig.core.Epoch = null,
     /// ownership transferred to replay
     current_epoch_constants: Owned(sig.core.EpochConstants),
+    /// ownership transferred to replay
+    next_epoch_constants: ?Owned(sig.core.EpochConstants) = null,
     /// ownership transferred to replay
     hard_forks: Owned(sig.core.HardForks),
 
     pub fn deinit(self: *Dependencies, allocator: Allocator) void {
         if (self.current_epoch_constants.tryBorrowMut()) |x| x.deinit(allocator);
+        if (self.next_epoch_constants) |*x| if (x.tryBorrowMut()) |y| y.deinit(allocator);
         if (self.root.constants.tryBorrowMut()) |x| x.deinit(allocator);
         if (self.root.state.tryBorrowMut()) |x| x.deinit(allocator);
         if (self.hard_forks.tryBorrowMut()) |x| x.deinit(allocator);
@@ -280,6 +284,16 @@ pub const ReplayState = struct {
             const epoch_constants = deps.current_epoch_constants.take();
             errdefer epoch_constants.deinit(deps.allocator);
             try epoch_tracker.epochs.put(deps.allocator, deps.current_epoch, epoch_constants);
+        }
+
+        if (deps.next_epoch_constants) |*next_epoch_constants| {
+            const epoch_constants = next_epoch_constants.take();
+            errdefer epoch_constants.deinit(deps.allocator);
+            try epoch_tracker.epochs.put(
+                deps.allocator,
+                deps.next_epoch orelse @panic("missing next epoch while next epoch constants are present"),
+                epoch_constants,
+            );
         }
 
         const progress_map = try initProgressMap(

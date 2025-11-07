@@ -131,6 +131,86 @@ pub fn StakesCacheGeneric(comptime stakes_type: StakesType) type {
                 );
             }
         }
+
+        pub fn activateEpoch(
+            self: *Self,
+            allocator: Allocator,
+            next_epoch: Epoch,
+            new_rate_activation_epoch: ?Epoch,
+        ) !void {
+            const stakes, var stakes_lg = self.stakes.writeWithLock();
+            defer stakes_lg.unlock();
+
+            const stake_delegations = stakes.stake_accounts.values();
+            var stake_history_entry = StakeHistory.StakeState.DEFAULT;
+            for (stake_delegations) |stake_delegation| {
+                const delegation = stake_delegation.getDelegation();
+                stake_history_entry.add(delegation.getStakeState(
+                    stakes.epoch,
+                    &stakes.stake_history,
+                    new_rate_activation_epoch,
+                ));
+            }
+
+            try stakes.stake_history.insertEntry(stakes.epoch, stake_history_entry);
+            stakes.epoch = next_epoch;
+
+            stakes.vote_accounts = try refreshVoteAccounts(
+                allocator,
+                next_epoch,
+                stakes.vote_accounts.vote_accounts,
+                stakes.stake_accounts.values(),
+                stakes.stake_history,
+                new_rate_activation_epoch,
+            );
+        }
+
+        fn refreshVoteAccounts(
+            allocator: Allocator,
+            epoch: Epoch,
+            stake_and_vote_accounts: StakeAndVoteAccountsMap,
+            stake_delegations: []const Stake,
+            stake_history: StakeHistory,
+            new_activation_rate_epoch: ?Epoch,
+        ) !VoteAccounts {
+            var delegated_stakes = std.AutoArrayHashMapUnmanaged(Pubkey, u64){};
+            errdefer delegated_stakes.deinit(allocator);
+
+            for (stake_delegations) |stake_delegation| {
+                const delegation = stake_delegation.getDelegation();
+                const entry = try delegated_stakes.getOrPut(
+                    allocator,
+                    delegation.voter_pubkey,
+                );
+                if (!entry.found_existing) {
+                    entry.value_ptr.* = 0;
+                }
+                entry.value_ptr.* += delegation.getEffectiveStake(
+                    epoch,
+                    &stake_history,
+                    new_activation_rate_epoch,
+                );
+            }
+
+            var new_vote_accounts = VoteAccounts{};
+            errdefer new_vote_accounts.deinit(allocator);
+            const keys = stake_and_vote_accounts.keys();
+            const values = stake_and_vote_accounts.values();
+            for (keys, values) |vote_pubkey, stake_and_vote_account| {
+                const delegated_stake = delegated_stakes.get(vote_pubkey) orelse 0;
+                try new_vote_accounts.vote_accounts.put(allocator, vote_pubkey, .{
+                    .stake = delegated_stake,
+                    .account = stake_and_vote_account.account.getAcquire(),
+                });
+            }
+
+            new_vote_accounts.staked_nodes = try VoteAccounts.computeStakedNodes(
+                allocator,
+                &new_vote_accounts.vote_accounts,
+            );
+
+            return new_vote_accounts;
+        }
     };
 }
 
@@ -540,7 +620,7 @@ pub const VoteAccounts = struct {
         }
     }
 
-    fn computeStakedNodes(
+    pub fn computeStakedNodes(
         allocator: Allocator,
         accounts: *const StakeAndVoteAccountsMap,
     ) Allocator.Error!StakedNodesMap {

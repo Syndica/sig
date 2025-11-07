@@ -427,13 +427,14 @@ pub const StakeStateV2 = union(enum) {
         };
     }
 
-    pub fn fromAccount(account: sig.core.Account) !StakeStateV2 {
-        var buffer = [_]u8{0} ** SIZE;
-        account.data.readAll(&buffer);
+    pub fn fromAccount(allocator: std.mem.Allocator, account: sig.core.Account) !StakeStateV2 {
+        const buffer = try allocator.alloc(u8, account.data.len());
+        defer allocator.free(buffer);
+        account.data.readAll(buffer);
         return sig.bincode.readFromSlice(
             sig.utils.allocators.failing.allocator(.{}),
             StakeStateV2,
-            &buffer,
+            buffer,
             .{},
         );
     }

@@ -46,15 +46,15 @@ pub fn processNewEpoch(
     );
 
     // [agave] https://github.com/anza-xyz/agave/blob/b6c96e84b10396b92912d4574dae7d03f606da26/runtime/src/bank.rs#L1623-L1631
-    const parent_epoch = epoch_tracker.schedule.getEpoch(slot_constants.parent_slot);
-    try activateEpoch(
+    const epoch = epoch_tracker.schedule.getEpoch(slot);
+    try slot_state.stakes_cache.activateEpoch(
         allocator,
-        parent_epoch,
-        &slot_state.stakes_cache,
+        epoch,
         slot_constants.feature_set.newWarmupCooldownRateEpoch(&epoch_tracker.schedule),
     );
 
     // [agave] https://github.com/anza-xyz/agave/blob/b6c96e84b10396b92912d4574dae7d03f606da26/runtime/src/bank.rs#L1632-L1636
+    const parent_epoch = epoch_tracker.schedule.getEpoch(slot_constants.parent_slot);
     try updateEpochStakes(
         allocator,
         slot,
@@ -83,6 +83,8 @@ pub fn updateEpochStakes(
 ) !void {
     const leader_schedule_epoch = epoch_tracker.schedule.getLeaderScheduleEpoch(slot);
     if (!epoch_tracker.epochs.contains(leader_schedule_epoch)) {
+        // TODO: This is mixing the wrong epoch constants with the wrong stakes.
+        // We are setting epoch constants for the leader schedule epoch with the epoch constants from the parent epoch.
         const parent_epoch_constants = epoch_tracker.get(parent_epoch) orelse {
             return error.ParentEpochConstantsNotFound;
         };
@@ -161,78 +163,4 @@ pub fn getEpochStakes(
         .node_id_to_vote_accounts = node_id_to_vote_accounts,
         .epoch_authorized_voters = epoch_authorized_voters,
     };
-}
-
-pub fn activateEpoch(
-    allocator: Allocator,
-    epoch: Epoch,
-    stakes_cache: *StakesCache,
-    new_rate_activation_epoch: ?Epoch,
-) !void {
-    const stakes, var stakes_lg = stakes_cache.stakes.writeWithLock();
-    defer stakes_lg.unlock();
-
-    const stake_delegations = stakes.stake_accounts.values();
-    var stake_history_entry = StakeHistory.StakeState.DEFAULT;
-    for (stake_delegations) |stake_delegation| {
-        const delegation = stake_delegation.getDelegation();
-        stake_history_entry.add(delegation.getStakeState(
-            epoch,
-            &stakes.stake_history,
-            new_rate_activation_epoch,
-        ));
-    }
-
-    try stakes.stake_history.insertEntry(epoch, stake_history_entry);
-    stakes.epoch = epoch;
-    stakes.vote_accounts = try refreshVoteAccounts(
-        allocator,
-        epoch,
-        stakes.vote_accounts.vote_accounts,
-        stakes.stake_accounts.values(),
-        stakes.stake_history,
-        new_rate_activation_epoch,
-    );
-}
-
-pub fn refreshVoteAccounts(
-    allocator: Allocator,
-    epoch: Epoch,
-    stake_and_vote_accounts: StakeAndVoteAccountsMap,
-    stake_delegations: []Stake,
-    stake_history: StakeHistory,
-    new_activation_rate_epoch: ?Epoch,
-) !VoteAccounts {
-    var delegated_stakes = std.AutoArrayHashMapUnmanaged(Pubkey, u64){};
-    errdefer delegated_stakes.deinit(allocator);
-
-    for (stake_delegations) |stake_delegation| {
-        const delegation = stake_delegation.getDelegation();
-        const entry = try delegated_stakes.getOrPut(
-            allocator,
-            delegation.voter_pubkey,
-        );
-        if (!entry.found_existing) {
-            entry.value_ptr.* = 0;
-        }
-        entry.value_ptr.* += delegation.getEffectiveStake(
-            epoch,
-            &stake_history,
-            new_activation_rate_epoch,
-        );
-    }
-
-    var new_vote_accounts = VoteAccounts{};
-    errdefer new_vote_accounts.deinit(allocator);
-    const keys = stake_and_vote_accounts.keys();
-    const values = stake_and_vote_accounts.values();
-    for (keys, values) |vote_pubkey, stake_and_vote_account| {
-        const delegated_stake = delegated_stakes.get(vote_pubkey) orelse 0;
-        try new_vote_accounts.vote_accounts.put(allocator, vote_pubkey, .{
-            .stake = delegated_stake,
-            .account = stake_and_vote_account.account.getAcquire(),
-        });
-    }
-
-    return new_vote_accounts;
 }

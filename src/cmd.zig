@@ -1999,6 +1999,15 @@ fn replayDependencies(
     );
     errdefer current_epoch_constants.deinit(allocator);
 
+    const next_epoch = epoch + 1;
+    const next_epoch_stakes = epoch_stakes_map.get(next_epoch) orelse
+        return error.EpochStakesMissingFromSnapshot;
+    const next_epoch_constants: sig.core.EpochConstants = try .fromBankFields(
+        bank_fields,
+        try next_epoch_stakes.current.convert(allocator, .delegation),
+    );
+    errdefer next_epoch_constants.deinit(allocator);
+
     return .{
         .allocator = allocator,
         .logger = .from(app_base.logger),
@@ -2016,6 +2025,8 @@ fn replayDependencies(
         },
         .current_epoch = epoch,
         .current_epoch_constants = .init(current_epoch_constants),
+        .next_epoch = next_epoch,
+        .next_epoch_constants = .init(next_epoch_constants),
         .hard_forks = .init(hard_forks),
     };
 }
