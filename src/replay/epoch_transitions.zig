@@ -9,15 +9,11 @@ const StakesCache = sig.core.StakesCache;
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 const EpochStakes = sig.core.EpochStakes;
-const Stake = sig.runtime.program.stake.StakeStateV2.Stake;
 
 const EpochTracker = sig.replay.trackers.EpochTracker;
 const EpochConstants = sig.core.EpochConstants;
 const SlotState = sig.core.SlotState;
 const SlotConstants = sig.core.SlotConstants;
-const StakeHistory = sig.runtime.sysvar.StakeHistory;
-const VoteAccounts = sig.core.stakes.VoteAccounts;
-const StakeAndVoteAccountsMap = sig.core.stakes.StakeAndVoteAccountsMap;
 
 const SlotAccountStore = @import("slot_account_store.zig").SlotAccountStore;
 const applyFeatureActivations = @import("apply_feature_activations.zig").applyFeatureActivations;

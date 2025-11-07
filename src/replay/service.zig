@@ -291,7 +291,7 @@ pub const ReplayState = struct {
             errdefer epoch_constants.deinit(deps.allocator);
             try epoch_tracker.epochs.put(
                 deps.allocator,
-                deps.next_epoch orelse @panic("missing next epoch while next epoch constants are present"),
+                deps.next_epoch orelse return error.MissingNextEpoch,
                 epoch_constants,
             );
         }

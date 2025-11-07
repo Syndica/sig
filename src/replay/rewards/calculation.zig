@@ -770,8 +770,7 @@ test calculateStakeVoteRewards {
     try stake_delegations.append(allocator, .{ .pubkey = stake_0_pubkey, .stake = stake_0 });
 
     { // No Credits To Redeem
-
-        const result = calculateStakeVoteRewards(
+        const result = try calculateStakeVoteRewards(
             allocator,
             &StakeHistory.DEFAULT,
             stake_delegations,
@@ -780,8 +779,9 @@ test calculateStakeVoteRewards {
             .{ .rewards = 1, .points = 0 },
             null,
         );
+        defer result.deinit(allocator);
 
-        try std.testing.expectError(error.NoCreditsToRedeem, result);
+        try std.testing.expectEqual(0, result.stake_rewards.stake_rewards.entries.len);
     }
 
     rewarded_epoch -= 1;
