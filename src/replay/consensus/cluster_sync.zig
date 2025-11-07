@@ -585,7 +585,10 @@ fn processDuplicateConfirmedSlots(
             .duplicate_confirmed_hash = duplicate_confirmed_hash,
             .slot_status = status: {
                 if (progress.isDead(confirmed_slot) orelse false) break :status .dead;
-                const slot_hash = slot_tracker.get(confirmed_slot).?.state.hash.readCopy();
+                const slot_hash = if (slot_tracker.get(confirmed_slot)) |ref|
+                    ref.state.hash.readCopy()
+                else
+                    null;
                 break :status .fromHash(slot_hash);
             },
         };
