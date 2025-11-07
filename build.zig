@@ -1,7 +1,14 @@
 const std = @import("std");
 const Build = std.Build;
 
+// TODO(0.15): replace with `.parse(@import("build.zig.zon").version)` since
+// importing zon without a result type didn't make it into 0.14.x.
 const sig_version: std.SemanticVersion = .{ .major = 0, .minor = 2, .patch = 0 };
+
+const LedgerDB = enum {
+    rocksdb,
+    hashmap,
+};
 
 pub const Config = struct {
     target: Build.ResolvedTarget,
@@ -270,9 +277,9 @@ pub fn build(b: *Build) !void {
     });
 
     // G/H table for Bulletproofs
-    const gh_table = b.createModule(.{
-        .root_source_file = generateTable(b),
-    });
+    const gh_table = b.createModule(.{ .root_source_file = generateTable(b) });
+
+    const sqlite_mod = genSqlite(b, config.target, config.optimize);
 
     // zig fmt: off
     const imports: []const Build.Module.Import = &.{
@@ -283,6 +290,7 @@ pub fn build(b: *Build) !void {
         .{ .name = "poseidon",      .module = poseidon_mod },
         .{ .name = "prettytable",   .module = pretty_table_mod },
         .{ .name = "secp256k1",     .module = secp256k1_mod },
+        .{ .name = "sqlite",        .module = sqlite_mod },
         .{ .name = "ssl",           .module = ssl_mod },
         .{ .name = "tracy",         .module = tracy_mod },
         .{ .name = "xev",           .module = xev_mod },
@@ -486,10 +494,35 @@ fn generateTable(b: *Build) Build.LazyPath {
     return b.addRunArtifact(gen).captureStdOut();
 }
 
-const LedgerDB = enum {
-    rocksdb,
-    hashmap,
-};
+fn genSqlite(
+    b: *Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+) *Build.Module {
+    const dep = b.dependency("sqlite", .{});
+
+    const lib = b.addLibrary(.{
+        .name = "sqlite",
+        .linkage = .static,
+        .root_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    lib.addCSourceFile(.{ .file = dep.path("sqlite3.c") });
+    lib.linkLibC();
+
+    const translate_c = b.addTranslateC(.{
+        .root_source_file = dep.path("sqlite3.h"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    const mod = translate_c.createModule();
+    mod.linkLibrary(lib);
+
+    return mod;
+}
 
 /// Reference/inspiration: https://kristoff.it/blog/improving-your-zls-experience/
 fn disableEmitBin(b: *Build) void {

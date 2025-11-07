@@ -178,7 +178,7 @@ pub fn parallelUntarToFileSystem(
 /// intended to be used for outputting tar files; for parsing there is
 /// `std.tar.Header`.
 ///
-/// TODO:(Zig 0.15.0) Hopefully the change to expose this header from the stdlib
+/// TODO(0.15): Hopefully the change to expose this header from the stdlib
 /// will have made it in, update it if so!
 const TarOutputHeader = extern struct {
     // This struct was originally copied from
