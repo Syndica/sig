@@ -1179,10 +1179,20 @@ fn validator(
 
     const turbine_config = cfg.turbine;
 
+    const maybe_vote_sockets: ?replay.consensus.core.VoteSockets = if (cfg.voting_enabled)
+        try replay.consensus.core.VoteSockets.init()
+    else
+        null;
+
     const consensus_deps = if (cfg.disable_consensus)
         null
     else
-        try consensusDependencies(allocator, &gossip_service.gossip_table_rw);
+        try consensusDependencies(
+            allocator,
+            &gossip_service.gossip_table_rw,
+            epoch_context_manager.slotLeaders(),
+            maybe_vote_sockets,
+        );
     defer if (consensus_deps) |d| d.deinit();
 
     // shred network
@@ -1222,22 +1232,6 @@ fn validator(
         cfg.voting_enabled,
     );
     defer replay_deps.deinit(allocator);
-
-    const maybe_vote_sockets: ?replay.consensus.core.VoteSockets = if (cfg.voting_enabled)
-        try replay.consensus.core.VoteSockets.init()
-    else
-        null;
-
-    const consensus_deps = if (cfg.disable_consensus)
-        null
-    else
-        try consensusDependencies(
-            allocator,
-            &gossip_service.gossip_table_rw,
-            epoch_context_manager.slotLeaders(),
-            maybe_vote_sockets,
-        );
-    defer if (consensus_deps) |d| d.deinit();
 
     var replay_service = try replay.Service.init(&replay_deps, consensus_deps, cfg.replay_threads);
     defer replay_service.deinit(allocator);
