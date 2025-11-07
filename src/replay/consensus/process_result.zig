@@ -498,7 +498,7 @@ test "processResult: confirm status with done poll and slot complete - success p
         }),
     );
 
-    var rng = std.Random.DefaultPrng.init(0);
+    var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = rng.random();
 
     const last_entry_hash = sig.core.Hash.initRandom(random);
@@ -626,7 +626,7 @@ test "markDeadSlot: when duplicate proof exists, duplicate tracker records slot"
 
     // Provide a minimal slot in the slot tracker so markDeadSlot can read a hash
     var slot_state = try sig.core.SlotState.genesis(allocator);
-    var rng = std.Random.DefaultPrng.init(0);
+    var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
     slot_state.hash.set(sig.core.Hash.initRandom(rng.random()));
     const slot_consts = sig.core.SlotConstants{
         .parent_slot = 0,

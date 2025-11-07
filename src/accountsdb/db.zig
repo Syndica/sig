@@ -2868,6 +2868,234 @@ pub const AccountsDB = struct {
     inline fn slotInRange(slot: Slot, min_slot: ?Slot, max_slot: ?Slot) bool {
         return slotSatisfiesMax(slot, max_slot) and slotSatisfiesMin(slot, min_slot);
     }
+
+    pub fn registerRPCHooks(self: *AccountsDB, rpc_hooks: *sig.rpc.Hooks) !void {
+        try rpc_hooks.set(self.allocator, struct {
+            accountsdb: *AccountsDB,
+
+            pub fn getAccountInfo(
+                this: @This(),
+                allocator: std.mem.Allocator,
+                params: sig.rpc.methods.GetAccountInfo,
+            ) !sig.rpc.methods.GetAccountInfo.Response {
+                const config: sig.rpc.methods.GetAccountInfo.Config = params.config orelse .{};
+                const encoding = config.encoding orelse .base64;
+                if (config.commitment) |commitment| {
+                    std.debug.panic("TODO: handle commitment={s}", .{@tagName(commitment)});
+                }
+
+                const account: sig.accounts_db.AccountsDB.AccountInCacheOrFile, //
+                const account_slot: sig.core.Slot, //
+                var account_lg: sig.accounts_db.AccountsDB.AccountInCacheOrFileLock //
+                = (this.accountsdb.getSlotAndAccountInSlotRangeWithReadLock(
+                    &params.pubkey,
+                    // if it's null, it's null, there's no floor to the query.
+                    config.minContextSlot orelse null,
+                    null,
+                ) catch return error.AccountsDbError) orelse {
+                    return error.InvalidSlotSlot;
+                };
+                defer account_lg.unlock();
+
+                const Facts = struct {
+                    executable: bool,
+                    lamports: u64,
+                    owner: sig.core.Pubkey,
+                    rent_epoch: u64,
+                    space: u64,
+                };
+
+                const data_handle: AccountDataHandle, //
+                const facts: Facts //
+                = switch (account) {
+                    .file => |aif| .{ aif.data, .{
+                        .executable = aif.account_info.executable,
+                        .lamports = aif.account_info.lamports,
+                        .owner = aif.account_info.owner,
+                        .rent_epoch = aif.account_info.rent_epoch,
+                        .space = aif.data.len(),
+                    } },
+                    .unrooted_map => |um| .{ um.data, .{
+                        .executable = um.executable,
+                        .lamports = um.lamports,
+                        .owner = um.owner,
+                        .rent_epoch = um.rent_epoch,
+                        .space = um.data.len(),
+                    } },
+                };
+
+                const account_data_base64 = blk: {
+                    var account_data_base64: std.ArrayListUnmanaged(u8) = .{};
+                    defer account_data_base64.deinit(allocator);
+
+                    const acc_writer = account_data_base64.writer(allocator);
+                    const acc_data_handle = if (config.dataSlice) |ds|
+                        // TODO: handle potental integer overflow properly here
+                        data_handle.slice(
+                            @intCast(ds.offset),
+                            @intCast(ds.offset + ds.length),
+                        )
+                    else
+                        data_handle;
+
+                    var b64_enc_stream =
+                        sig.utils.base64.EncodingStream.init(std.base64.standard.Encoder);
+                    const b64_enc_writer_ctx = b64_enc_stream.writerCtx(acc_writer);
+                    const b64_enc_writer = b64_enc_writer_ctx.writer();
+
+                    var frame_iter = acc_data_handle.iterator();
+                    while (frame_iter.nextFrame()) |frame_bytes| {
+                        try b64_enc_writer.writeAll(frame_bytes);
+                    }
+                    try b64_enc_writer_ctx.flush();
+                    break :blk try account_data_base64.toOwnedSlice(allocator);
+                };
+                errdefer allocator.free(account_data_base64);
+
+                return .{
+                    .context = .{
+                        .slot = account_slot,
+                        .apiVersion = "2.0.15",
+                    },
+                    .value = .{
+                        .data = .{ .encoded = .{
+                            account_data_base64,
+                            encoding,
+                        } },
+                        .executable = facts.executable,
+                        .lamports = facts.lamports,
+                        .owner = facts.owner,
+                        .rentEpoch = facts.rent_epoch,
+                        .space = facts.space,
+                    },
+                };
+            }
+
+            pub fn getSnapshot(
+                this: @This(),
+                _: std.mem.Allocator,
+                params: sig.rpc.methods.GetSnapshot,
+            ) !sig.rpc.methods.GetSnapshot.Response {
+                const snapshot_target = getSnapshotTarget(
+                    this.accountsdb,
+                    params.path,
+                ) orelse return error.NoSnapshotForPathAvaialable;
+
+                switch (snapshot_target) {
+                    inline else => |pair| {
+                        const snap_info, var full_info_lg = pair;
+                        defer full_info_lg.unlock();
+
+                        const archive_name_bounded = snap_info.snapshotArchiveName();
+                        const archive_name = archive_name_bounded.constSlice();
+
+                        switch (params.get) {
+                            .size => {
+                                const stat = try this.accountsdb.snapshot_dir.statFile(archive_name);
+                                return .{ .size = stat.size };
+                            },
+                            .file => {
+                                const archive_file = this.accountsdb.snapshot_dir.openFile(
+                                    archive_name,
+                                    .{},
+                                ) catch |err| {
+                                    switch (err) {
+                                        error.FileNotFound => {
+                                            this.accountsdb.logger.err().logf(
+                                                "not found: {s}\n",
+                                                .{sig.utils.fmt.tryRealPath(
+                                                    this.accountsdb.snapshot_dir,
+                                                    archive_name,
+                                                )},
+                                            );
+                                        },
+                                        else => {},
+                                    }
+                                    return error.SystemIoError;
+                                };
+                                errdefer archive_file.close();
+                                return .{ .file = archive_file };
+                            },
+                        }
+                    },
+                }
+            }
+
+            fn getSnapshotTarget(
+                accounts_db: *AccountsDB,
+                target: []const u8,
+            ) ?union(enum) {
+                const SnapshotReadLock = sig.sync.RwMux(?SnapshotGenerationInfo).RLockGuard;
+                full_snapshot: struct { FullSnapshotFileInfo, SnapshotReadLock },
+                inc_snapshot: struct { IncrementalSnapshotFileInfo, SnapshotReadLock },
+            } {
+                const latest_snapshot_gen_info_rw = &accounts_db.latest_snapshot_gen_info;
+                const is_snapshot_archive_like =
+                    !std.meta.isError(FullSnapshotFileInfo.parseFileNameTarZst(target)) or
+                    !std.meta.isError(IncrementalSnapshotFileInfo.parseFileNameTarZst(target));
+
+                if (is_snapshot_archive_like) check_snapshots: {
+                    const maybe_latest_snapshot_gen_info, //
+                    var latest_snapshot_info_lg //
+                    = latest_snapshot_gen_info_rw.readWithLock();
+                    defer latest_snapshot_info_lg.unlock();
+
+                    const full_info: FullSnapshotFileInfo, //
+                    const inc_info: ?IncrementalSnapshotFileInfo //
+                    = blk: {
+                        const latest_snapshot_gen_info = maybe_latest_snapshot_gen_info.* orelse
+                            break :check_snapshots;
+                        const latest_full = latest_snapshot_gen_info.full;
+                        const full_info: FullSnapshotFileInfo = .{
+                            .slot = latest_full.slot,
+                            .hash = latest_full.hash.checksum(),
+                        };
+                        const latest_incremental = latest_snapshot_gen_info.inc orelse
+                            break :blk .{ full_info, null };
+                        const inc_info: IncrementalSnapshotFileInfo = .{
+                            .base_slot = latest_full.slot,
+                            .slot = latest_incremental.slot,
+                            .hash = latest_incremental.hash.checksum(),
+                        };
+                        break :blk .{ full_info, inc_info };
+                    };
+
+                    accounts_db.logger.debug().logf("Available full: {?s}", .{
+                        full_info.snapshotArchiveName().constSlice(),
+                    });
+                    accounts_db.logger.debug().logf("Available inc: {?s}", .{
+                        if (inc_info) |info| info.snapshotArchiveName().constSlice() else null,
+                    });
+
+                    const full_archive_name_bounded = full_info.snapshotArchiveName();
+                    const full_archive_name = full_archive_name_bounded.constSlice();
+                    if (std.mem.eql(u8, target, full_archive_name)) {
+                        // acquire another lock on the rwmux, since the first one we got is going to unlock after we return.
+                        const latest_snapshot_info_lg_again = latest_snapshot_gen_info_rw.read();
+                        return .{
+                            .full_snapshot = .{
+                                full_info,
+                                latest_snapshot_info_lg_again,
+                            },
+                        };
+                    }
+
+                    if (inc_info) |inc| {
+                        const inc_archive_name_bounded = inc.snapshotArchiveName();
+                        const inc_archive_name = inc_archive_name_bounded.constSlice();
+
+                        if (std.mem.eql(u8, target, inc_archive_name)) {
+                            // acquire another lock on the rwmux, since the first one we got is going to unlock after we return.
+                            const latest_snapshot_info_lg_again = latest_snapshot_gen_info_rw.read();
+                            return .{ .inc_snapshot = .{ inc, latest_snapshot_info_lg_again } };
+                        }
+                    }
+                }
+
+                return null;
+            }
+        }{ .accountsdb = self });
+    }
 };
 
 pub const AccountsDBMetrics = struct {
@@ -3456,7 +3684,7 @@ test "write and read an account - basic" {
     defer accounts_db.deinit();
     defer dir.cleanup();
 
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const pubkey = Pubkey.initRandom(prng.random());
     var data = [_]u8{ 1, 2, 3 };
     const test_account = Account{
@@ -3491,7 +3719,7 @@ test "write and read an account (write single + read with ancestors)" {
     defer accounts_db.deinit();
     defer dir.cleanup();
 
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const pubkey = Pubkey.initRandom(prng.random());
 
     var data = [_]u8{ 1, 2, 3 };
@@ -3792,7 +4020,7 @@ test "generate snapshot & update gossip snapshot hashes" {
 
     const allocator = std.testing.allocator;
 
-    var prng = std.Random.DefaultPrng.init(123); // TODO: use `std.testing.random_seed` when we update
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     var tmp_dir_root = std.testing.tmpDir(.{});
@@ -4252,7 +4480,7 @@ pub const BenchmarkAccountsDB = struct {
             std.math.ceilPowerOfTwo(usize, total_n_accounts) catch total_n_accounts,
         );
 
-        var prng = std.Random.DefaultPrng.init(19);
+        var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
         const random = prng.random();
 
         var pubkeys = try allocator.alloc(Pubkey, n_accounts);
@@ -4451,7 +4679,7 @@ test "read/write benchmark disk" {
 
 test "insert multiple accounts on same slot" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     // Initialize empty accounts db
@@ -4536,7 +4764,7 @@ fn expectedAccountSharedDataEqualsAccount(
 
 test "insert multiple accounts on multiple slots" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     var accounts_db, var tmp_dir = try AccountsDB.initForTest(allocator);
@@ -4579,7 +4807,7 @@ test "insert multiple accounts on multiple slots" {
 
 test "insert account on multiple slots" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     var accounts_db, var tmp_dir = try AccountsDB.initForTest(allocator);
@@ -4632,7 +4860,7 @@ test "insert account on multiple slots" {
 
 test "missing ancestor returns null" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     var accounts_db, var tmp_dir = try AccountsDB.initForTest(allocator);
@@ -4657,7 +4885,7 @@ test "missing ancestor returns null" {
 
 test "overwrite account in same slot" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     var accounts_db, var tmp_dir = try AccountsDB.initForTest(allocator);
@@ -4690,7 +4918,7 @@ test "overwrite account in same slot" {
 
 test "insert many duplicate individual accounts, get latest with ancestors" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     var accounts_db, var tmp_dir = try AccountsDB.initForTest(allocator);
     defer tmp_dir.cleanup();

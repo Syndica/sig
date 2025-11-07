@@ -187,7 +187,7 @@ pub const BlockhashQueue = struct {
 
 test "insert hash" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const max_age = 100;
     const last_hash = Hash.initRandom(prng.random());
@@ -227,7 +227,7 @@ test "reject old last hash" {
 
 test "queue init blockhash" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const last_hash = Hash.initRandom(prng.random());
 
@@ -242,7 +242,7 @@ test "queue init blockhash" {
 
 test "len" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const max_age = 10;
 
@@ -266,7 +266,7 @@ test "len" {
 
 test "get hash age" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const max_age = 10;
 
@@ -298,7 +298,7 @@ test "get hash age" {
 
 test "is hash valid for age" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const max_age = 10;
 
@@ -327,7 +327,7 @@ test "is hash valid for age" {
 
 test "get hash info if valid" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const max_age = 10;
 
@@ -365,7 +365,7 @@ test "get hash info if valid" {
 
 test "initialise with genesis hash" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const max_age = 2;
     const genesis_hash = Hash.initRandom(prng.random());

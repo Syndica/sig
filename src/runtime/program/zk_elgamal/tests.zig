@@ -679,7 +679,7 @@ fn testVerifyProofWithoutContext(
     success_proof_data: Proof,
     fail_proof_data: Proof,
 ) !void {
-    var prng = std.Random.DefaultPrng.init(123);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     var success_data: [Proof.BYTE_LEN + 1]u8 = undefined;

@@ -313,7 +313,7 @@ fn getLookupTable(
 }
 
 test resolveBatch {
-    var rng = std.Random.DefaultPrng.init(0);
+    var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     // concisely represents all the expected account metas within an InstructionInfo
     const ExpectedAccountMetas = struct {
@@ -530,7 +530,7 @@ fn put(
 test getLookupTable {
     const allocator = std.testing.allocator;
 
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     var map = sig.accounts_db.ThreadSafeAccountMap.init(allocator);

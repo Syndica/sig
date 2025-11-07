@@ -56,6 +56,8 @@ pub const ShredNetworkDependencies = struct {
     epoch_context_mgr: *EpochContextManager,
     n_retransmit_threads: ?usize,
     overwrite_turbine_stake_for_testing: bool,
+    /// RPC Observability
+    rpc_hooks: ?*sig.rpc.Hooks = null,
     /// Optional channel to send duplicate slot notifications to consensus
     duplicate_slots_sender: ?*Channel(Slot),
     /// Gossip service for broadcasting duplicate shred proofs
@@ -244,7 +246,7 @@ test "start and stop gracefully" {
 
     var exit = Atomic(bool).init(false);
 
-    var rng = Random.DefaultPrng.init(0);
+    var rng = Random.DefaultPrng.init(std.testing.random_seed);
 
     var registry = Registry(.{}).init(allocator);
     defer registry.deinit();

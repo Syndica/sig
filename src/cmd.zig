@@ -130,6 +130,7 @@ pub fn main() !void {
             params.geyser.apply(&current_config);
             current_config.replay_threads = params.replay_threads;
             current_config.disable_consensus = params.disable_consensus;
+            current_config.voting_enabled = params.voting_enabled;
             try validator(gpa, gossip_gpa, current_config);
         },
         .replay_offline => |params| {
@@ -374,6 +375,15 @@ const Cmd = struct {
         .default_value = false,
         .config = {},
         .help = "Disable running consensus in replay.",
+    };
+
+    const voting_enabled_arg: cli.ArgumentInfo(bool) = .{
+        .kind = .named,
+        .name_override = "voting-enabled",
+        .alias = .none,
+        .default_value = true,
+        .config = {},
+        .help = "Enable validator voting. When false, operate as non-voting.",
     };
 
     const GossipArgumentsCommon = struct {
@@ -713,6 +723,7 @@ const Cmd = struct {
         geyser: GeyserArgumentsBase,
         replay_threads: u16,
         disable_consensus: bool,
+        voting_enabled: bool,
 
         const cmd_info: cli.CommandInfo(@This()) = .{
             .help = .{
@@ -733,6 +744,7 @@ const Cmd = struct {
                 .geyser = GeyserArgumentsBase.cmd_info,
                 .replay_threads = replay_threads_arg,
                 .disable_consensus = disable_consensus_arg,
+                .voting_enabled = voting_enabled_arg,
             },
         };
     };
@@ -1207,8 +1219,25 @@ fn validator(
         &app_base,
         &ledger,
         &epoch_context_manager,
+        cfg.voting_enabled,
     );
     defer replay_deps.deinit(allocator);
+
+    const maybe_vote_sockets: ?replay.consensus.core.VoteSockets = if (cfg.voting_enabled)
+        try replay.consensus.core.VoteSockets.init()
+    else
+        null;
+
+    const consensus_deps = if (cfg.disable_consensus)
+        null
+    else
+        try consensusDependencies(
+            allocator,
+            &gossip_service.gossip_table_rw,
+            epoch_context_manager.slotLeaders(),
+            maybe_vote_sockets,
+        );
+    defer if (consensus_deps) |d| d.deinit();
 
     var replay_service = try replay.Service.init(&replay_deps, consensus_deps, cfg.replay_threads);
     defer replay_service.deinit(allocator);
@@ -1220,11 +1249,48 @@ fn validator(
         .{&replay_service},
     );
 
+    // TODO: start RPC-server service using app_base.rpc_hooks
+    const rpc_server_thread = try std.Thread.spawn(.{}, runRPCServer, .{
+        allocator,
+        app_base.logger,
+        app_base.exit,
+        std.net.Address.initIp4(.{ 0, 0, 0, 0 }, 8899),
+        &app_base.rpc_hooks,
+    });
+
+    rpc_server_thread.join();
     replay_thread.join();
     rpc_epoch_ctx_service_thread.join();
     gossip_service.service_manager.join();
     shred_network_manager.join();
     ledger_cleanup_service.join();
+}
+
+fn runRPCServer(
+    allocator: std.mem.Allocator,
+    logger: Logger,
+    exit: *std.atomic.Value(bool),
+    server_addr: std.net.Address,
+    rpc_hooks: *sig.rpc.Hooks,
+) !void {
+    var server_ctx = try sig.rpc.server.Context.init(.{
+        .allocator = allocator,
+        .logger = .from(logger),
+        .rpc_hooks = rpc_hooks,
+        .read_buffer_size = sig.rpc.server.MIN_READ_BUFFER_SIZE,
+        .socket_addr = server_addr,
+        .reuse_address = true,
+    });
+    defer server_ctx.joinDeinit();
+
+    // var maybe_liou = try sig.rpc.server.LinuxIoUring.init(&server_ctx);
+    // defer if (maybe_liou) |*liou| liou.deinit();
+
+    try sig.rpc.server.serve(
+        exit,
+        &server_ctx,
+        .basic, // if (maybe_liou != null) .{ .linux_io_uring = &maybe_liou.? } else .basic,
+    );
 }
 
 /// entrypoint to run a minimal replay node
@@ -1334,13 +1400,19 @@ fn replayOffline(
         &app_base,
         &ledger,
         &epoch_context_manager,
+        false,
     );
     defer replay_deps.deinit(allocator);
 
     const consensus_deps = if (cfg.disable_consensus)
         null
     else
-        try consensusDependencies(allocator, null);
+        try consensusDependencies(
+            allocator,
+            null,
+            epoch_context_manager.slotLeaders(),
+            null,
+        );
     defer if (consensus_deps) |d| d.deinit();
 
     var replay_service = try replay.Service.init(&replay_deps, consensus_deps, cfg.replay_threads);
@@ -1529,10 +1601,7 @@ fn createSnapshot(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
     _ = try accounts_db.generateFullSnapshot(.{
         .target_slot = slot,
         .bank_fields = &loaded_snapshot.combined_manifest.full.bank_fields,
-        .lamports_per_signature = lps: {
-            var prng = std.Random.DefaultPrng.init(1234);
-            break :lps prng.random().int(u64);
-        },
+        .lamports_per_signature = 123_456_567, // TODO: make this a real number
         .old_snapshot_action = .delete_old,
     });
 }
@@ -1760,10 +1829,14 @@ fn mockRpcServer(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
         defer manifest.deinit(allocator);
     }
 
+    var rpc_hooks = sig.rpc.Hooks{};
+    defer rpc_hooks.deinit(allocator);
+    try accountsdb.registerRPCHooks(&rpc_hooks);
+
     var server_ctx = try sig.rpc.server.Context.init(.{
         .allocator = allocator,
         .logger = .from(logger),
-        .accountsdb = &accountsdb,
+        .rpc_hooks = &rpc_hooks,
 
         .read_buffer_size = sig.rpc.server.MIN_READ_BUFFER_SIZE,
         .socket_addr = std.net.Address.initIp4(.{ 0, 0, 0, 0 }, 8899),
@@ -1771,14 +1844,14 @@ fn mockRpcServer(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
     });
     defer server_ctx.joinDeinit();
 
-    var maybe_liou = try sig.rpc.server.LinuxIoUring.init(&server_ctx);
-    defer if (maybe_liou) |*liou| liou.deinit();
+    // var maybe_liou = try sig.rpc.server.LinuxIoUring.init(&server_ctx);
+    // defer if (maybe_liou) |*liou| liou.deinit();
 
     var exit = std.atomic.Value(bool).init(false);
     try sig.rpc.server.serve(
         &exit,
         &server_ctx,
-        if (maybe_liou != null) .{ .linux_io_uring = &maybe_liou.? } else .basic,
+        .basic, // if (maybe_liou != null) .{ .linux_io_uring = &maybe_liou.? } else .basic,
     );
 }
 
@@ -1790,6 +1863,8 @@ const AppBase = struct {
     log_file: ?std.fs.File,
     metrics_registry: *sig.prometheus.Registry(.{}),
     metrics_thread: std.Thread,
+
+    rpc_hooks: sig.rpc.Hooks,
 
     my_keypair: sig.identity.KeyPair,
     entrypoints: []SocketAddr,
@@ -1845,6 +1920,7 @@ const AppBase = struct {
             .log_file = maybe_file,
             .metrics_registry = metrics_registry,
             .metrics_thread = metrics_thread,
+            .rpc_hooks = .{},
             .my_keypair = my_keypair,
             .entrypoints = entrypoints,
             .shred_version = my_shred_version,
@@ -1876,6 +1952,7 @@ const AppBase = struct {
     pub fn deinit(self: *AppBase) void {
         std.debug.assert(self.closed); // call `self.shutdown()` first
         self.allocator.free(self.entrypoints);
+        self.rpc_hooks.deinit(self.allocator);
         self.metrics_thread.detach();
         self.logger.deinit();
         if (self.log_file) |file| file.close();
@@ -1925,6 +2002,45 @@ fn startGossip(
         .dump = cfg.gossip.dump,
     });
 
+    try app_base.rpc_hooks.set(allocator, struct {
+        info: ContactInfo,
+
+        pub fn getHealth(
+            _: @This(),
+            _: std.mem.Allocator,
+            _: anytype,
+        ) !sig.rpc.methods.GetHealth.Response {
+            // TODO: more intricate
+            return .ok;
+        }
+
+        pub fn getIdentity(
+            self: @This(),
+            _: std.mem.Allocator,
+            _: anytype,
+        ) !sig.rpc.methods.GetIdentity.Response {
+            return .{ .identity = self.info.pubkey };
+        }
+
+        pub fn getVersion(
+            self: @This(),
+            allocator_: std.mem.Allocator,
+            _: anytype,
+        ) !sig.rpc.methods.GetVersion.Response {
+            const client_version = self.info.version;
+            const solana_version = try std.fmt.allocPrint(allocator_, "{}.{}.{}", .{
+                client_version.major,
+                client_version.minor,
+                client_version.patch,
+            });
+
+            return .{
+                .solana_core = solana_version,
+                .feature_set = client_version.feature_set,
+            };
+        }
+    }{ .info = contact_info });
+
     return service;
 }
 
@@ -1936,6 +2052,7 @@ fn replayDependencies(
     app_base: *const AppBase,
     ledger: *Ledger,
     epoch_context_manager: *sig.adapter.EpochContextManager,
+    voting_enabled: bool,
 ) !replay.Dependencies {
     const bank_fields = &collapsed_manifest.bank_fields;
     const epoch_stakes_map = &collapsed_manifest.bank_extra.versioned_epoch_stakes;
@@ -1972,8 +2089,21 @@ fn replayDependencies(
     return .{
         .allocator = allocator,
         .logger = .from(app_base.logger),
-        .my_identity = .fromPublicKey(&app_base.my_keypair.public_key),
-        .vote_identity = .fromPublicKey(&app_base.my_keypair.public_key),
+        .identity = .{
+            .validator = .fromPublicKey(&app_base.my_keypair.public_key),
+            .vote_account = .fromPublicKey(&app_base.my_keypair.public_key),
+        },
+        .signing = .{
+            .node = app_base.my_keypair,
+            .authorized_voters = if (voting_enabled)
+                // TODO: Parse authorized voter keypairs from CLI args (--authorized-voter)
+                // For now, default to using the node keypair as the authorized voter
+                // (same as Agave's default behavior when no --authorized-voter is specified)
+                // ref https://github.com/anza-xyz/agave/blob/67a1cc9ef4222187820818d95325a0c8e700312f/validator/src/commands/run/execute.rs#L136-L138
+                &.{app_base.my_keypair}
+            else
+                &.{},
+        },
         .exit = app_base.exit,
         .account_store = account_store,
         .ledger = ledger,
@@ -1993,6 +2123,8 @@ fn replayDependencies(
 fn consensusDependencies(
     allocator: std.mem.Allocator,
     gossip_table: ?*sig.sync.RwMux(sig.gossip.GossipTable),
+    slot_leaders: ?sig.core.leader_schedule.SlotLeaders,
+    vote_sockets: ?replay.consensus.core.VoteSockets,
 ) !replay.TowerConsensus.Dependencies.External {
     const senders: sig.replay.TowerConsensus.Senders = try .create(allocator);
     errdefer senders.destroy();
@@ -2003,7 +2135,9 @@ fn consensusDependencies(
     return .{
         .senders = senders,
         .receivers = receivers,
+        .vote_sockets = vote_sockets,
         .gossip_table = gossip_table,
+        .slot_leaders = slot_leaders,
     };
 }
 
@@ -2093,4 +2227,14 @@ fn getTrustedValidators(allocator: std.mem.Allocator, cfg: config.Cmd) !?std.Arr
         }
     }
     return trusted_validators;
+}
+
+pub const panic = std.debug.FullPanic(loggingPanic);
+
+fn loggingPanic(message: []const u8, first_trace_addr: ?usize) noreturn {
+    std.debug.lockStdErr();
+    defer std.debug.unlockStdErr();
+    const writer = std.io.getStdErr().writer();
+    sig.trace.logfmt.writeLog(writer, "panic", .err, .{}, "{s}", .{message}) catch {};
+    std.debug.defaultPanic(message, first_trace_addr);
 }
