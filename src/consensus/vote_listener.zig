@@ -961,7 +961,7 @@ fn trackNewVotesAndNotifyConfirmations(
                 senders.gossip_verified_vote_hash.send(.{ vote_pubkey, slot, hash }) catch |err| {
                     logger.err().logf(
                         "{s}: gossip verified vote hash couldn't send: " ++
-                            ".{{ .vote_pubkey = {f}, .slot = {}, .hash = {f} }}",
+                            ".{{ .vote_pubkey = {}, .slot = {}, .hash = {} }}",
                         .{ @errorName(err), vote_pubkey, slot, hash },
                     );
                 };
@@ -969,9 +969,13 @@ fn trackNewVotesAndNotifyConfirmations(
 
             if (reached_threshold_results.isSet(0)) {
                 if (senders.duplicate_confirmed_slots) |sender| {
+                    logger.info().logf(
+                        "slot {} with hash {} reached duplicate confirmation threshold",
+                        .{ slot, hash },
+                    );
                     sender.send(.{ .slot = slot, .hash = hash }) catch |err| {
                         logger.err().logf(
-                            "{s}: duplicate confirmed slot couldn't send: {} (hash: {f})",
+                            "{s}: duplicate confirmed slot couldn't send: {} (hash: {})",
                             .{ @errorName(err), slot, hash },
                         );
                     };
@@ -1038,7 +1042,7 @@ fn trackNewVotesAndNotifyConfirmations(
         senders.verified_vote.send(.{ vote_pubkey, vote_slots_duped }) catch |err| {
             logger.err().logf(
                 "{s}: verified vote couldn't send: " ++
-                    ".{{ .vote_pubkey = {f}, .vote_slots_duped = {any} }}",
+                    ".{{ .vote_pubkey = {}, .vote_slots_duped = {any} }}",
                 .{ @errorName(err), vote_pubkey, vote_slots_duped },
             );
         };
