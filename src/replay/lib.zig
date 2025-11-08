@@ -1,5 +1,6 @@
 pub const AccountLocks = @import("AccountLocks.zig");
 pub const exec_async = @import("exec_async.zig");
+pub const exec_async2 = @import("exec_async2.zig");
 pub const Committer = @import("Committer.zig");
 pub const consensus = @import("consensus/lib.zig");
 pub const execution = @import("execution.zig");
