@@ -18,8 +18,8 @@ const getVariant = sig.utils.types.getVariant;
 
 const TRIM_INTERVAL = Duration.fromSecs(2);
 
-pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
-    const maybe_max_actions_string = args.next();
+pub fn run(seed: u64, args: []const []const u8) !void {
+    const maybe_max_actions_string: ?[]const u8 = if (args.len == 0) null else args[0];
     const maybe_max_actions = blk: {
         if (maybe_max_actions_string) |max_actions_str| {
             break :blk try std.fmt.parseInt(usize, max_actions_str, 10);

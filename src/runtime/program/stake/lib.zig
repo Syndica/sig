@@ -1764,20 +1764,19 @@ fn moveLamports(
 
 test "stake.initialize" {
     const allocator = std.testing.allocator;
-
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     const sysvar_cache_without_slot_hashes = ExecuteContextsParams.SysvarCacheParams{
-        .clock = runtime.sysvar.Clock.DEFAULT,
+        .clock = runtime.sysvar.Clock.INIT,
         .slot_hashes = undefined,
-        .rent = runtime.sysvar.Rent.DEFAULT,
-        .epoch_rewards = .DEFAULT,
+        .rent = runtime.sysvar.Rent.INIT,
+        .epoch_rewards = .INIT,
     };
 
     {
         var sysvar_cache = sysvar_cache_without_slot_hashes;
-        sysvar_cache.slot_hashes = try .initWithEntries(&.{.{
+        sysvar_cache.slot_hashes = .initWithEntries(&.{.{
             .slot = std.math.maxInt(Slot),
             .hash = sig.core.Hash.ZEROES,
         }});
@@ -1806,7 +1805,7 @@ test "stake.initialize" {
     // success
     {
         var sysvar_cache = sysvar_cache_without_slot_hashes;
-        sysvar_cache.slot_hashes = try .initWithEntries(&.{.{
+        sysvar_cache.slot_hashes = .initWithEntries(&.{.{
             .slot = std.math.maxInt(Slot),
             .hash = sig.core.Hash.ZEROES,
         }});
@@ -1871,16 +1870,16 @@ test "stake.initialize" {
 
 test "stake.authorize" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     var sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
-        .clock = .DEFAULT,
-        .slot_hashes = try runtime.sysvar.SlotHashes.initWithEntries(&.{.{
+        .clock = .INIT,
+        .slot_hashes = runtime.sysvar.SlotHashes.initWithEntries(&.{.{
             .slot = std.math.maxInt(Slot),
             .hash = sig.core.Hash.ZEROES,
         }}),
-        .rent = .DEFAULT,
-        .epoch_rewards = .DEFAULT,
+        .rent = .INIT,
+        .epoch_rewards = .INIT,
     };
 
     const old_staker_auth = Pubkey.initRandom(prng.random());
@@ -1961,7 +1960,7 @@ test "stake.authorize" {
 
 test "stake.delegate_stake" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const staker_auth = Pubkey.initRandom(prng.random());
     const stake_account = Pubkey.initRandom(prng.random());
@@ -1976,15 +1975,15 @@ test "stake.delegate_stake" {
 
     for ([_]bool{ false, true }) |use_stake| {
         var sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
-            .clock = runtime.sysvar.Clock.DEFAULT,
-            .slot_hashes = try .initWithEntries(&.{.{
+            .clock = runtime.sysvar.Clock.INIT,
+            .slot_hashes = .initWithEntries(&.{.{
                 .slot = std.math.maxInt(Slot),
                 .hash = sig.core.Hash.ZEROES,
             }}),
-            .rent = runtime.sysvar.Rent.DEFAULT,
-            .stake_history = .DEFAULT,
-            .epoch_rewards = .DEFAULT,
-            .epoch_schedule = .DEFAULT,
+            .rent = runtime.sysvar.Rent.INIT,
+            .stake_history = .INIT,
+            .epoch_rewards = .INIT,
+            .epoch_schedule = .INIT,
         };
 
         const stake_lamports = 1_000_000_000;
@@ -2107,11 +2106,11 @@ test "stake.delegate_stake" {
 
 test "stake.split" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const stake_lamports = 1_000_000_000;
     const split_lamports = 1_000_000_000;
-    const stake_rent = sysvar.Rent.DEFAULT.minimumBalance(StakeStateV2.SIZE);
+    const stake_rent = sysvar.Rent.INIT.minimumBalance(StakeStateV2.SIZE);
     const to_split = stake_lamports; // split all to test empty case
 
     const staker_auth = Pubkey.initRandom(prng.random());
@@ -2141,15 +2140,15 @@ test "stake.split" {
 
     for ([_]bool{ false, true }) |use_stake| {
         const sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
-            .clock = runtime.sysvar.Clock.DEFAULT,
-            .slot_hashes = try .initWithEntries(&.{.{
+            .clock = runtime.sysvar.Clock.INIT,
+            .slot_hashes = .initWithEntries(&.{.{
                 .slot = std.math.maxInt(Slot),
                 .hash = sig.core.Hash.ZEROES,
             }}),
-            .stake_history = .DEFAULT,
-            .rent = runtime.sysvar.Rent.DEFAULT,
-            .epoch_rewards = .DEFAULT,
-            .epoch_schedule = .DEFAULT,
+            .stake_history = .INIT,
+            .rent = runtime.sysvar.Rent.INIT,
+            .epoch_rewards = .INIT,
+            .epoch_schedule = .INIT,
         };
 
         stake.stake.delegation.stake = stake_lamports;
@@ -2244,17 +2243,17 @@ test "stake.split" {
 
 test "stake.withdraw" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     var sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
-        .clock = runtime.sysvar.Clock.DEFAULT,
-        .slot_hashes = try .initWithEntries(&.{.{
+        .clock = runtime.sysvar.Clock.INIT,
+        .slot_hashes = .initWithEntries(&.{.{
             .slot = std.math.maxInt(Slot),
             .hash = sig.core.Hash.ZEROES,
         }}),
-        .stake_history = .DEFAULT,
-        .rent = runtime.sysvar.Rent.DEFAULT,
-        .epoch_rewards = .DEFAULT,
+        .stake_history = .INIT,
+        .rent = runtime.sysvar.Rent.INIT,
+        .epoch_rewards = .INIT,
         .epoch_schedule = .initRandom(prng.random()),
     };
 
@@ -2333,11 +2332,11 @@ test "stake.withdraw" {
 
 test "stake.deactivate" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
-        .clock = runtime.sysvar.Clock.DEFAULT,
-        .rent = runtime.sysvar.Rent.DEFAULT,
+        .clock = runtime.sysvar.Clock.INIT,
+        .rent = runtime.sysvar.Rent.INIT,
     };
 
     const stake_account = Pubkey.initRandom(prng.random());
@@ -2424,11 +2423,11 @@ test "stake.deactivate" {
 
 test "stake.set_lockup" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
-        .clock = runtime.sysvar.Clock.DEFAULT,
-        .rent = runtime.sysvar.Rent.DEFAULT,
+        .clock = runtime.sysvar.Clock.INIT,
+        .rent = runtime.sysvar.Rent.INIT,
     };
 
     const withdraw_auth = Pubkey.initRandom(prng.random());
@@ -2518,7 +2517,7 @@ test "stake.set_lockup" {
 
 test "stake.merge" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const stake_auth = Pubkey.initRandom(prng.random());
     const stake_account = Pubkey.initRandom(prng.random());
@@ -2526,7 +2525,7 @@ test "stake.merge" {
 
     const source_lamports = 10_000;
     const stake_lamports = 1_000_000_000;
-    const stake_rent = sysvar.Rent.DEFAULT.minimumBalance(StakeStateV2.SIZE);
+    const stake_rent = sysvar.Rent.INIT.minimumBalance(StakeStateV2.SIZE);
 
     const stake_credits = 5;
     const source_credits = 10;
@@ -2556,14 +2555,14 @@ test "stake.merge" {
 
     for ([_]bool{ false, true }) |use_stake| {
         const sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
-            .clock = runtime.sysvar.Clock.DEFAULT,
-            .slot_hashes = try .initWithEntries(&.{.{
+            .clock = runtime.sysvar.Clock.INIT,
+            .slot_hashes = .initWithEntries(&.{.{
                 .slot = std.math.maxInt(Slot),
                 .hash = sig.core.Hash.ZEROES,
             }}),
-            .stake_history = .DEFAULT,
-            .rent = runtime.sysvar.Rent.DEFAULT,
-            .epoch_rewards = .DEFAULT,
+            .stake_history = .INIT,
+            .rent = runtime.sysvar.Rent.INIT,
+            .epoch_rewards = .INIT,
             .epoch_schedule = .initRandom(prng.random()),
         };
 
@@ -2657,16 +2656,16 @@ test "stake.merge" {
 
 test "stake.authorize_with_seed" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     var sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
-        .clock = runtime.sysvar.Clock.DEFAULT,
-        .slot_hashes = try .initWithEntries(&.{.{
+        .clock = runtime.sysvar.Clock.INIT,
+        .slot_hashes = .initWithEntries(&.{.{
             .slot = std.math.maxInt(Slot),
             .hash = sig.core.Hash.ZEROES,
         }}),
-        .rent = runtime.sysvar.Rent.DEFAULT,
-        .epoch_rewards = .DEFAULT,
+        .rent = runtime.sysvar.Rent.INIT,
+        .epoch_rewards = .INIT,
     };
 
     const auth_owner = Pubkey.initRandom(prng.random());
@@ -2766,10 +2765,10 @@ test "stake.authorize_with_seed" {
 
 test "stake.initialize_checked" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
-        .rent = runtime.sysvar.Rent.DEFAULT,
+        .rent = runtime.sysvar.Rent.INIT,
     };
 
     const stake_account = Pubkey.initRandom(prng.random());
@@ -2839,16 +2838,16 @@ test "stake.initialize_checked" {
 
 test "stake.authorize_checked" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     var sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
-        .clock = runtime.sysvar.Clock.DEFAULT,
-        .slot_hashes = try .initWithEntries(&.{.{
+        .clock = runtime.sysvar.Clock.INIT,
+        .slot_hashes = .initWithEntries(&.{.{
             .slot = std.math.maxInt(Slot),
             .hash = sig.core.Hash.ZEROES,
         }}),
-        .rent = runtime.sysvar.Rent.DEFAULT,
-        .epoch_rewards = .DEFAULT,
+        .rent = runtime.sysvar.Rent.INIT,
+        .epoch_rewards = .INIT,
     };
 
     const old_staker_auth = Pubkey.initRandom(prng.random());
@@ -2927,16 +2926,16 @@ test "stake.authorize_checked" {
 
 test "stake.authorize_checked_with_seed" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     var sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
-        .clock = runtime.sysvar.Clock.DEFAULT,
-        .slot_hashes = try .initWithEntries(&.{.{
+        .clock = runtime.sysvar.Clock.INIT,
+        .slot_hashes = .initWithEntries(&.{.{
             .slot = std.math.maxInt(Slot),
             .hash = sig.core.Hash.ZEROES,
         }}),
-        .rent = runtime.sysvar.Rent.DEFAULT,
-        .epoch_rewards = .DEFAULT,
+        .rent = runtime.sysvar.Rent.INIT,
+        .epoch_rewards = .INIT,
     };
 
     const auth_owner = Pubkey.initRandom(prng.random());
@@ -3027,11 +3026,11 @@ test "stake.authorize_checked_with_seed" {
 
 test "stake.set_lockup_checked" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
-        .clock = runtime.sysvar.Clock.DEFAULT,
-        .rent = runtime.sysvar.Rent.DEFAULT,
+        .clock = runtime.sysvar.Clock.INIT,
+        .rent = runtime.sysvar.Rent.INIT,
     };
 
     const withdraw_auth = Pubkey.initRandom(prng.random());
@@ -3147,7 +3146,7 @@ test "stake.get_minimum_delegation" {
 
 test "stake.deactivate_delinquent" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
         .clock = .{
@@ -3157,7 +3156,7 @@ test "stake.deactivate_delinquent" {
             .slot = 0,
             .unix_timestamp = 100,
         },
-        .rent = runtime.sysvar.Rent.DEFAULT,
+        .rent = runtime.sysvar.Rent.INIT,
     };
 
     var reference_vote_state: VoteState = .DEFAULT;
@@ -3297,7 +3296,7 @@ test "stake.deactivate_delinquent" {
 
 test "stake.move_stake" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const stake_entries = [_]sysvar.StakeHistory.Entry{
         .{
@@ -3348,13 +3347,13 @@ test "stake.move_stake" {
                 .unix_timestamp = 0,
                 .slot = 0,
             },
-            .slot_hashes = try .initWithEntries(&.{.{
+            .slot_hashes = .initWithEntries(&.{.{
                 .slot = std.math.maxInt(Slot),
                 .hash = .ZEROES,
             }}),
             .stake_history = .initWithEntries(stake_entries[0..args.num_entries]),
-            .rent = .DEFAULT,
-            .epoch_rewards = .DEFAULT,
+            .rent = .INIT,
+            .epoch_rewards = .INIT,
             .epoch_schedule = .initRandom(prng.random()),
         };
 
@@ -3475,17 +3474,17 @@ test "stake.move_stake" {
 
 test "stake.move_lamports" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     var sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
-        .clock = runtime.sysvar.Clock.DEFAULT,
-        .slot_hashes = try runtime.sysvar.SlotHashes.initWithEntries(&.{.{
+        .clock = runtime.sysvar.Clock.INIT,
+        .slot_hashes = .initWithEntries(&.{.{
             .slot = std.math.maxInt(Slot),
             .hash = sig.core.Hash.ZEROES,
         }}),
-        .stake_history = .DEFAULT,
-        .rent = runtime.sysvar.Rent.DEFAULT,
-        .epoch_rewards = .DEFAULT,
+        .stake_history = .INIT,
+        .rent = runtime.sysvar.Rent.INIT,
+        .epoch_rewards = .INIT,
         .epoch_schedule = .initRandom(prng.random()),
     };
 

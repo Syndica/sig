@@ -625,7 +625,7 @@ test "address-lookup-table missing accounts" {
     const ExecuteContextsParams = sig.runtime.testing.ExecuteContextsParams;
     const expectProgramExecuteError = sig.runtime.program.testing.expectProgramExecuteError;
 
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const unsigned_authority_address = Pubkey.initRandom(prng.random());
     const recent_slot = std.math.maxInt(Slot);
@@ -667,7 +667,7 @@ test "address-lookup-table create" {
     const expectProgramExecuteResult = sig.runtime.program.testing.expectProgramExecuteResult;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const payer = Pubkey.initRandom(prng.random());
     const unsigned_authority_address = Pubkey.initRandom(prng.random());
@@ -744,13 +744,13 @@ test "address-lookup-table create" {
         .{ .is_signer = false, .is_writable = false, .index_in_transaction = 4 },
     };
 
-    const sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
-        .clock = runtime.sysvar.Clock.DEFAULT,
-        .slot_hashes = try sysvar.SlotHashes.initWithEntries(&.{.{
+    const sysvar_cache: ExecuteContextsParams.SysvarCacheParams = .{
+        .clock = .INIT,
+        .slot_hashes = .initWithEntries(&.{.{
             .slot = std.math.maxInt(Slot),
             .hash = sig.core.Hash.ZEROES,
         }}),
-        .rent = runtime.sysvar.Rent.DEFAULT,
+        .rent = .INIT,
     };
 
     try expectProgramExecuteResult(
@@ -780,7 +780,7 @@ test "address-lookup-table freeze" {
     const expectProgramExecuteResult = sig.runtime.program.testing.expectProgramExecuteResult;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const unsigned_authority_address = Pubkey.initRandom(prng.random());
     const first_address = Pubkey.initRandom(prng.random());
@@ -852,12 +852,12 @@ test "address-lookup-table freeze" {
     };
 
     const sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
-        .clock = runtime.sysvar.Clock.DEFAULT,
-        .slot_hashes = try .initWithEntries(&.{.{
+        .clock = runtime.sysvar.Clock.INIT,
+        .slot_hashes = .initWithEntries(&.{.{
             .slot = std.math.maxInt(Slot),
             .hash = sig.core.Hash.ZEROES,
         }}),
-        .rent = runtime.sysvar.Rent.DEFAULT,
+        .rent = runtime.sysvar.Rent.INIT,
     };
 
     const expected_used_compute = program.COMPUTE_UNITS;
@@ -889,7 +889,7 @@ test "address-lookup-table close" {
     const expectProgramExecuteResult = sig.runtime.program.testing.expectProgramExecuteResult;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const unsigned_authority_address = Pubkey.initRandom(prng.random());
     const first_address = Pubkey.initRandom(prng.random());
@@ -963,12 +963,12 @@ test "address-lookup-table close" {
     };
 
     const sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
-        .clock = runtime.sysvar.Clock.DEFAULT,
-        .slot_hashes = try .initWithEntries(&.{.{
+        .clock = runtime.sysvar.Clock.INIT,
+        .slot_hashes = .initWithEntries(&.{.{
             .slot = std.math.maxInt(Slot),
             .hash = sig.core.Hash.ZEROES,
         }}),
-        .rent = runtime.sysvar.Rent.DEFAULT,
+        .rent = runtime.sysvar.Rent.INIT,
     };
 
     const expected_used_compute = program.COMPUTE_UNITS;
@@ -1000,7 +1000,7 @@ test "address-lookup-table deactivate" {
     const expectProgramExecuteResult = sig.runtime.program.testing.expectProgramExecuteResult;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const unsigned_authority_address = Pubkey.initRandom(prng.random());
     const first_address = Pubkey.initRandom(prng.random());
@@ -1072,12 +1072,12 @@ test "address-lookup-table deactivate" {
     };
 
     const sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
-        .clock = runtime.sysvar.Clock.DEFAULT,
-        .slot_hashes = try .initWithEntries(&.{.{
+        .clock = runtime.sysvar.Clock.INIT,
+        .slot_hashes = .initWithEntries(&.{.{
             .slot = std.math.maxInt(Slot),
             .hash = sig.core.Hash.ZEROES,
         }}),
-        .rent = runtime.sysvar.Rent.DEFAULT,
+        .rent = runtime.sysvar.Rent.INIT,
     };
 
     const expected_used_compute = program.COMPUTE_UNITS;
@@ -1109,7 +1109,7 @@ test "address-lookup-table extend" {
     const expectProgramExecuteResult = sig.runtime.program.testing.expectProgramExecuteResult;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const unsigned_authority_address = Pubkey.initRandom(prng.random());
     const first_address = Pubkey.initRandom(prng.random());
@@ -1205,12 +1205,12 @@ test "address-lookup-table extend" {
         };
 
         const sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
-            .clock = runtime.sysvar.Clock.DEFAULT,
-            .slot_hashes = try .initWithEntries(&.{.{
+            .clock = runtime.sysvar.Clock.INIT,
+            .slot_hashes = .initWithEntries(&.{.{
                 .slot = std.math.maxInt(Slot),
                 .hash = sig.core.Hash.ZEROES,
             }}),
-            .rent = runtime.sysvar.Rent.DEFAULT,
+            .rent = runtime.sysvar.Rent.INIT,
         };
 
         const expected_used_compute = program.COMPUTE_UNITS +

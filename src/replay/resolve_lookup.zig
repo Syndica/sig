@@ -24,7 +24,7 @@ const InstructionInfo = sig.runtime.InstructionInfo;
 const RuntimeTransaction = sig.runtime.transaction_execution.RuntimeTransaction;
 const SlotHashes = sig.runtime.sysvar.SlotHashes;
 
-const LockableAccount = sig.replay.account_locks.LockableAccount;
+const LockableAccount = sig.replay.AccountLocks.LockableAccount;
 
 const Logger = sig.trace.Logger("replay-resolve");
 
@@ -314,8 +314,8 @@ test resolveBatch {
     if (true) return error.SkipZigTest;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
-    const random = prng.random();
+    var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const random = rng.random();
 
     // concisely represents all the expected account metas within an InstructionInfo
     const ExpectedAccountMetas = struct {
@@ -441,7 +441,7 @@ test resolveBatch {
     defer ancestors.deinit(allocator);
     try ancestors.ancestors.put(allocator, 0, {});
 
-    const slot_hashes: SlotHashes = .DEFAULT;
+    const slot_hashes: SlotHashes = .INIT;
 
     const resolved = try resolveBatch(
         allocator,
@@ -531,7 +531,7 @@ fn put(
 test getLookupTable {
     const allocator = std.testing.allocator;
 
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     var map = sig.accounts_db.ThreadSafeAccountMap.init(allocator);

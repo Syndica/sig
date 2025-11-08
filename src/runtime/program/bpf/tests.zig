@@ -30,7 +30,7 @@ pub fn prepareBpfV3Test(
     const program_update_authority = null;
 
     const feature_set = try sig.runtime.testing.createFeatureSet(feature_params);
-    var accounts = std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData){};
+    var accounts: std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData) = .{};
     defer {
         for (accounts.values()) |account| allocator.free(account.data);
         accounts.deinit(allocator);
@@ -77,7 +77,7 @@ pub fn prepareBpfV3Test(
         .rent_epoch = std.math.maxInt(u64),
     };
 
-    const compute_budget = ComputeBudget.default(1_400_000);
+    const compute_budget = ComputeBudget.DEFAULT;
 
     const environment = try sig.vm.Environment.initV1(
         allocator,
@@ -112,7 +112,7 @@ test "hello_world" {
     // }
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const elf_bytes = try std.fs.cwd().readFileAlloc(
         allocator,
@@ -173,7 +173,8 @@ test "print_account" {
     // }
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const elf_bytes = try std.fs.cwd().readFileAlloc(
         allocator,
@@ -200,9 +201,9 @@ test "print_account" {
     const accounts: []const AccountParams = &.{
         program_account,
         .{
-            .pubkey = Pubkey.initRandom(prng.random()),
+            .pubkey = .parse("2W3R4CDyfdPBsABjBF86kdThsR5s89iX2wbfoGVhZw4M"),
             .lamports = 1_234_456,
-            .owner = Pubkey.initRandom(prng.random()),
+            .owner = .parse("3DTD43NijdpuwzQL6fM19vU5hDZ2u6M7A9hMrJH3dJyD"),
             .executable = false,
             .rent_epoch = 25,
             .data = &[_]u8{ 'm', 'y', ' ', 'd', 'a', 't', 'a', ' ', ':', ')' },
@@ -238,7 +239,7 @@ test "print_account" {
 // [program source] https://github.com/solana-labs/solana-program-library/tree/master/shared-memory/program
 test "fast_copy" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const elf_bytes = try std.fs.cwd().readFileAlloc(
         allocator,
@@ -324,7 +325,7 @@ test "set_return_data" {
     // }
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const elf_bytes = try std.fs.cwd().readFileAlloc(
         allocator,
@@ -373,7 +374,7 @@ test "set_return_data" {
 
 test "program_is_not_executable" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const program_id = Pubkey.initRandom(prng.random());
     const program_bytes = try std.fs.cwd().readFileAlloc(
@@ -413,7 +414,7 @@ test "program_is_not_executable" {
 
 test "program_invalid_account_data" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const program_id = Pubkey.initRandom(prng.random());
     var program_bytes = try std.fs.cwd().readFileAlloc(
@@ -458,7 +459,7 @@ test "program_invalid_account_data" {
 
 test "program_init_vm_not_enough_compute" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const elf_bytes = try std.fs.cwd().readFileAlloc(
         allocator,
@@ -482,7 +483,7 @@ test "program_init_vm_not_enough_compute" {
         environment.deinit(allocator);
     }
 
-    var compute_budget = sig.runtime.ComputeBudget.default(1_400_000);
+    var compute_budget = sig.runtime.ComputeBudget.DEFAULT;
     // Set heap size so that heap cost is 8
     compute_budget.heap_size = 2 * 32 * 1024;
 
@@ -508,7 +509,7 @@ test "program_init_vm_not_enough_compute" {
 
 test "basic direct mapping" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const elf_bytes = try std.fs.cwd().readFileAlloc(
         allocator,

@@ -9,6 +9,7 @@ const GossipTable = sig.gossip.GossipTable;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const LegacyContactInfo = sig.gossip.data.LegacyContactInfo;
 const Pubkey = sig.core.Pubkey;
+const Slot = sig.core.Slot;
 
 const SignedGossipData = sig.gossip.data.SignedGossipData;
 const SlotAndHash = sig.core.hash.SlotAndHash;
@@ -16,6 +17,8 @@ const ThreadSafeContactInfo = sig.gossip.data.ThreadSafeContactInfo;
 
 const SnapshotFiles = sig.accounts_db.snapshot.SnapshotFiles;
 const FullAndIncrementalManifest = sig.accounts_db.snapshot.FullAndIncrementalManifest;
+const IncrementalSnapshotFileInfo = sig.accounts_db.snapshot.data.IncrementalSnapshotFileInfo;
+const FullSnapshotFileInfo = sig.accounts_db.snapshot.data.FullSnapshotFileInfo;
 
 const parallelUnpackZstdTarBall = sig.accounts_db.snapshot.parallelUnpackZstdTarBall;
 
@@ -45,6 +48,22 @@ pub const PeerSearchResult = struct {
     is_valid: usize = 0,
     untrusted_full_snapshot_count: usize = 0,
     untrusted_inc_snapshot_count: usize = 0,
+
+    pub fn format(
+        self: PeerSearchResult,
+        comptime fmt_str: []const u8,
+        fmt_options: std.fmt.FormatOptions,
+        writer: anytype,
+    ) @TypeOf(writer).Error!void {
+        _ = fmt_str;
+        _ = fmt_options;
+
+        inline for (@typeInfo(PeerSearchResult).@"struct".fields) |field| {
+            if (@field(self, field.name) != 0) {
+                try writer.print("{s}: {d} ", .{ field.name, @field(self, field.name) });
+            }
+        }
+    }
 };
 
 /// finds valid contact infos which we can download a snapshot from.
@@ -54,7 +73,7 @@ pub const PeerSearchResult = struct {
 /// - rpc socket is enabled
 /// - snapshot hash is available
 /// result is populated inside valid_peers (which is cleared at the beginning)
-pub fn findPeersToDownloadFromAssumeCapacity(
+fn findPeersToDownloadFrom(
     allocator: std.mem.Allocator,
     table: *const GossipTable,
     contact_infos: []const ThreadSafeContactInfo,
@@ -62,14 +81,12 @@ pub fn findPeersToDownloadFromAssumeCapacity(
     my_pubkey: Pubkey,
     blacklist: []const Pubkey,
     trusted_validators: ?[]const Pubkey,
-    /// `.capacity` must be >= `contact_infos.len`.
-    /// The arraylist is first cleared, and then the outputs
-    /// are appended to it.
-    valid_peers: *std.ArrayList(PeerSnapshotHash),
-) !PeerSearchResult {
-    // clear the list
-    valid_peers.clearRetainingCapacity();
-    std.debug.assert(valid_peers.capacity >= contact_infos.len);
+) !struct { []PeerSnapshotHash, PeerSearchResult } {
+    var valid_peers: std.ArrayList(PeerSnapshotHash) = try .initCapacity(
+        allocator,
+        contact_infos.len,
+    );
+    errdefer valid_peers.deinit();
 
     const TrustedMapType = std.AutoHashMap(
         SlotAndHash, // full snapshot hash
@@ -173,7 +190,162 @@ pub fn findPeersToDownloadFromAssumeCapacity(
     }
     result.is_valid = valid_peers.items.len;
 
-    return result;
+    return .{ try valid_peers.toOwnedSlice(), result };
+}
+
+const Mode = enum { incremental, full };
+
+fn downloadInfo(
+    allocator: std.mem.Allocator,
+    comptime mode: Mode,
+    peer: PeerSnapshotHash,
+    full_snapshot_slot: switch (mode) {
+        .incremental => Slot,
+        .full => @TypeOf(null),
+    },
+) !?struct {
+    std.Uri,
+    switch (mode) {
+        .incremental => IncrementalSnapshotFileInfo,
+        .full => FullSnapshotFileInfo,
+    }.SnapshotArchiveNameStr,
+    []const u8,
+} {
+    const rpc_socket = peer.contact_info.rpc_addr orelse return null;
+    const snapshot = switch (mode) {
+        .incremental => peer.inc_snapshot orelse return null,
+        .full => peer.full_snapshot,
+    };
+
+    const snapshot_file_name = switch (mode) {
+        .incremental => IncrementalSnapshotFileInfo.snapshotArchiveName(.{
+            .base_slot = full_snapshot_slot,
+            .slot = snapshot.slot,
+            .hash = snapshot.hash,
+        }),
+        .full => FullSnapshotFileInfo.snapshotArchiveName(.{
+            .slot = snapshot.slot,
+            .hash = snapshot.hash,
+        }),
+    };
+
+    const url = try std.fmt.allocPrint(
+        allocator,
+        "http://{}/{s}",
+        .{ rpc_socket, snapshot_file_name.constSlice() },
+    );
+
+    const uri = std.Uri.parse(url) catch unreachable; // we created this url from sanitised params
+
+    return .{ uri, snapshot_file_name, url };
+}
+
+fn downloadSnapshotWithRetry(
+    tmp_allocator: std.mem.Allocator,
+    logger: Logger,
+    comptime mode: Mode,
+    gossip: *GossipService,
+    output_dir: std.fs.Dir,
+    full_snapshot_slot: switch (mode) {
+        .incremental => Slot,
+        .full => @TypeOf(null),
+    },
+    bad_peers: *std.ArrayList(Pubkey),
+    maybe_trusted_validators: ?[]const Pubkey,
+    min_mb_per_sec: usize,
+    max_attempts: u64,
+    maybe_max_time: ?sig.time.Duration,
+) !struct { Slot, std.fs.File } {
+    const zone = tracy.Zone.init(@src(), .{
+        .name = std.fmt.comptimePrint("downloadSnapshotWithRetry ({})", .{mode}),
+    });
+    defer zone.deinit();
+
+    const max_time = maybe_max_time orelse sig.time.Duration{ .ns = std.math.maxInt(u64) };
+
+    const download_buffer = try tmp_allocator.alloc(u8, 1 * BYTE_PER_MIB);
+    defer tmp_allocator.free(download_buffer);
+
+    var arena = std.heap.ArenaAllocator.init(tmp_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var timer = try std.time.Timer.start();
+    var dl_attempts: u64 = 0;
+
+    return get_peers: while (timer.read() < max_time.ns and dl_attempts < max_attempts) {
+        defer _ = arena.reset(.retain_capacity);
+
+        // query our gossip table for peers we can download from
+        const peers = blk: {
+            const gossip_table, var gossip_table_lg = gossip.gossip_table_rw.readWithLock();
+            defer gossip_table_lg.unlock();
+
+            // TODO: maybe make this bigger? or dynamic?
+            var contact_info_buf: [1024]ThreadSafeContactInfo = undefined;
+            const contacts = gossip_table.getThreadSafeContactInfos(&contact_info_buf, 0);
+
+            const peers, const result = try findPeersToDownloadFrom(
+                allocator,
+                gossip_table,
+                contacts,
+                gossip.my_contact_info.shred_version,
+                gossip.my_contact_info.pubkey,
+                bad_peers.items,
+                maybe_trusted_validators,
+            );
+
+            logger.info().logf("searched for snapshot peers: {}", .{result});
+
+            break :blk peers;
+        };
+
+        // TODO: To download quickly, we should probably:
+        // 1) try to rank peers, and try "best" first (e.g. order by latency)
+        // 2) configure timeouts to be lower
+
+        // try to download from all eligible peers
+        downloads: for (peers) |peer| {
+            const uri, const file_name, const url = try downloadInfo(
+                allocator,
+                mode,
+                peer,
+                full_snapshot_slot,
+            ) orelse continue :downloads;
+            defer allocator.free(url);
+            defer dl_attempts += 1;
+
+            logger.info().logf("Attempting snapshot download from {}", .{uri});
+            const file = downloadFile(
+                allocator,
+                logger,
+                uri,
+                output_dir,
+                file_name.constSlice(),
+                min_mb_per_sec,
+                download_buffer,
+            ) catch |err| {
+                logger.info().logf("failed to download snapshot: {}", .{err});
+                switch (err) {
+                    error.TooSlow,
+                    error.BadStatus,
+                    error.ConnectionRefused,
+                    error.ConnectionTimedOut,
+                    => try bad_peers.append(peer.contact_info.pubkey),
+                    else => {},
+                }
+                continue :downloads;
+            };
+
+            break :get_peers .{ peer.full_snapshot.slot, file };
+        } else {
+            if (peers.len == 0) {
+                // We don't have peers yet, wait for gossip table population
+                std.time.sleep(1 * std.time.ns_per_s);
+            }
+            continue :get_peers; // Failed to download from all peers, getting new peers
+        }
+    } else error.UnableToDownloadSnapshot;
 }
 
 /// downloads full and incremental snapshots from peers found in gossip.
@@ -183,7 +355,7 @@ pub fn downloadSnapshotsFromGossip(
     logger: Logger,
     /// if null, then we trust any peer for snapshot download
     maybe_trusted_validators: ?[]const Pubkey,
-    gossip_service: *GossipService,
+    gossip: *GossipService,
     output_dir: std.fs.Dir,
     min_mb_per_sec: usize,
     max_number_of_download_attempts: u64,
@@ -192,174 +364,41 @@ pub fn downloadSnapshotsFromGossip(
     const zone = tracy.Zone.init(@src(), .{ .name = "accountsdb downloadSnapshotsFromGossip" });
     defer zone.deinit();
 
-    logger
-        .info()
-        .logf("starting snapshot download with min download speed: {d} MB/s", .{min_mb_per_sec});
+    var bad_peers: std.ArrayList(Pubkey) = .init(allocator);
+    defer bad_peers.deinit();
 
-    // TODO: maybe make this bigger? or dynamic?
-    var contact_info_buf: [1_000]ThreadSafeContactInfo = undefined;
+    const full_slot, const full_file = try downloadSnapshotWithRetry(
+        allocator,
+        logger,
+        .full,
+        gossip,
+        output_dir,
+        null,
+        &bad_peers,
+        maybe_trusted_validators,
+        min_mb_per_sec,
+        max_number_of_download_attempts,
+        timeout,
+    );
 
-    const my_contact_info = gossip_service.my_contact_info;
+    _, const incr_file = downloadSnapshotWithRetry(
+        allocator,
+        logger,
+        .incremental,
+        gossip,
+        output_dir,
+        full_slot,
+        &bad_peers,
+        maybe_trusted_validators,
+        min_mb_per_sec,
+        max_number_of_download_attempts,
+        timeout,
+    ) catch |err| {
+        logger.warn().logf("Failed to download incremental snapshot - {}", .{err});
+        return .{ full_file, null };
+    };
 
-    var available_snapshot_peers = std.ArrayList(PeerSnapshotHash).init(allocator);
-    defer available_snapshot_peers.deinit();
-
-    var slow_peer_pubkeys = std.ArrayList(Pubkey).init(allocator);
-    defer slow_peer_pubkeys.deinit();
-
-    var function_duration = try std.time.Timer.start();
-    var download_attempts: u64 = 0;
-    while (true) {
-        std.Thread.sleep(5 * std.time.ns_per_s); // wait while gossip table updates
-
-        if (download_attempts > max_number_of_download_attempts) {
-            logger.err().logf(
-                "exceeded max download attempts: {d}",
-                .{max_number_of_download_attempts},
-            );
-            return error.UnableToDownloadSnapshot;
-        }
-
-        if (timeout) |t| {
-            if (function_duration.read() > t.asNanos()) {
-                logger.err().logf("exceeded download timeout: {any}", .{t});
-                return error.UnableToDownloadSnapshot;
-            }
-        }
-
-        // only hold gossip table lock for this block
-        {
-            const gossip_table, var gossip_table_lg = gossip_service.gossip_table_rw.readWithLock();
-            defer gossip_table_lg.unlock();
-
-            const contacts = gossip_table.getThreadSafeContactInfos(&contact_info_buf, 0);
-
-            try available_snapshot_peers.ensureTotalCapacity(contacts.len);
-            const result = try findPeersToDownloadFromAssumeCapacity(
-                allocator,
-                gossip_table,
-                contacts,
-                my_contact_info.shred_version,
-                my_contact_info.pubkey,
-                slow_peer_pubkeys.items,
-                maybe_trusted_validators,
-                // this is cleared and populated
-                &available_snapshot_peers,
-            );
-
-            var write_buf: [512]u8 = undefined;
-            var i: usize = 0;
-            inline for (@typeInfo(PeerSearchResult).@"struct".fields) |field| {
-                if (@field(result, field.name) != 0) {
-                    const r = try std.fmt.bufPrint(
-                        write_buf[i..],
-                        "{s}: {d} ",
-                        .{ field.name, @field(result, field.name) },
-                    );
-                    i += r.len;
-                }
-            }
-            logger
-                .info()
-                .logf("searched for snapshot peers: {s}", .{write_buf[0..i]});
-        }
-
-        const bStr = sig.utils.fmt.boundedString;
-        const bFmt = sig.utils.fmt.boundedFmt;
-        const FullSnapshotFileInfo = sig.accounts_db.snapshot.data.FullSnapshotFileInfo;
-        const IncrementalSnapshotFileInfo =
-            sig.accounts_db.snapshot.data.IncrementalSnapshotFileInfo;
-
-        const download_buffer = try allocator.alloc(u8, 1 * BYTE_PER_MIB);
-        defer allocator.free(download_buffer);
-
-        for (available_snapshot_peers.items) |peer| {
-            const rpc_socket = peer.contact_info.rpc_addr.?;
-            const rpc_url = rpc_socket.toString();
-
-            // download the full snapshot
-            const snapshot_filename = FullSnapshotFileInfo.snapshotArchiveName(.{
-                .slot = peer.full_snapshot.slot,
-                .hash = peer.full_snapshot.hash,
-            });
-            const snapshot_url = bFmt("http://{s}/{s}", .{
-                bStr(&rpc_url), bStr(&snapshot_filename),
-            });
-            const snapshot_uri = std.Uri.parse(snapshot_url.constSlice()) catch {
-                const url_str = snapshot_url.constSlice();
-                std.debug.panic("Failed to Upri.parse '{s}'", .{url_str});
-            };
-
-            logger.info().logf(
-                "downloading full_snapshot from: {s}",
-                .{snapshot_url.constSlice()},
-            );
-
-            defer download_attempts += 1;
-            const full_archive_file = downloadFile(
-                allocator,
-                logger,
-                snapshot_uri,
-                output_dir,
-                snapshot_filename.constSlice(),
-                min_mb_per_sec,
-                download_buffer,
-            ) catch |err| {
-                switch (err) {
-                    error.TooSlow => {
-                        try slow_peer_pubkeys.append(peer.contact_info.pubkey);
-                    },
-                    else => logger.info().logf(
-                        "failed to download full_snapshot: {s}",
-                        .{@errorName(err)},
-                    ),
-                }
-                continue;
-            };
-            errdefer comptime unreachable;
-
-            // download the incremental snapshot
-            const inc_archive_file: ?std.fs.File = blk: {
-                // PERF: maybe do this in another thread? while downloading the full snapshot
-                const inc_snapshot = peer.inc_snapshot orelse break :blk null;
-
-                const inc_snapshot_filename = IncrementalSnapshotFileInfo.snapshotArchiveName(.{
-                    .base_slot = peer.full_snapshot.slot,
-                    .slot = inc_snapshot.slot,
-                    .hash = inc_snapshot.hash,
-                });
-                const inc_snapshot_url = bFmt("http://{s}/{s}", .{
-                    bStr(&rpc_url), bStr(&inc_snapshot_filename),
-                });
-                const inc_snapshot_uri = std.Uri.parse(inc_snapshot_url.constSlice()) catch {
-                    const url_str = inc_snapshot_url.constSlice();
-                    std.debug.panic("Failed to Upri.parse '{s}'", .{url_str});
-                };
-
-                logger.info().logf(
-                    "downloading inc_snapshot from: {s}",
-                    .{inc_snapshot_url.constSlice()},
-                );
-                break :blk downloadFile(
-                    allocator,
-                    logger,
-                    inc_snapshot_uri,
-                    output_dir,
-                    inc_snapshot_filename.constSlice(),
-                    // NOTE: no min limit (we already downloaded the full snapshot at a good speed so this should be ok)
-                    null,
-                    download_buffer,
-                ) catch |err| {
-                    // failure here is ok (for now?)
-                    logger.warn().logf("failed to download inc_snapshot: {s}", .{@errorName(err)});
-                    break :blk null;
-                };
-            };
-
-            logger.info().logf("snapshot downloaded finished", .{});
-            return .{ full_archive_file, inc_archive_file };
-        }
-    }
+    return .{ full_file, incr_file };
 }
 
 /// downloads a file from a url into output_dir/filename
@@ -376,6 +415,9 @@ fn downloadFile(
     /// Recommended size is at least 1 MiB for payloads which are expected to occupy 1 GiB or more.
     download_buffer: []u8,
 ) !std.fs.File {
+    const zone = tracy.Zone.init(@src(), .{ .name = "downloadFile" });
+    defer zone.deinit();
+
     var http_client: std.http.Client = .{ .allocator = allocator };
     defer http_client.deinit();
 
@@ -388,6 +430,8 @@ fn downloadFile(
     try request.send();
     try request.finish();
     try request.wait();
+
+    if (request.response.status != .ok) return error.BadStatus;
 
     const download_size = request.response.content_length orelse
         return error.NoContentLength;
@@ -402,8 +446,23 @@ fn downloadFile(
         });
     }
 
-    const output_file = try output_dir.createFile(filename, .{});
-    errdefer output_file.close();
+    const output_file: std.fs.File = output_dir.createFile(
+        filename,
+        .{ .exclusive = true },
+    ) catch |err| switch (err) {
+        error.PathAlreadyExists => {
+            logger.info().logf("snapshot {s} already on disk, skipping download", .{filename});
+            return try output_dir.openFile(filename, .{});
+        },
+        else => return err,
+    };
+    errdefer {
+        output_file.close();
+        output_dir.deleteFile(filename) catch logger.warn().logf(
+            "failed to delete snapshot file {s}, which failed to download",
+            .{filename},
+        );
+    }
     try output_file.setEndPos(download_size);
     var buffered_out = std.io.bufferedWriter(output_file.writer());
 
@@ -664,7 +723,7 @@ test "accounts_db.download: test remove untrusted peers" {
     var table = try GossipTable.init(allocator, allocator);
     defer table.deinit();
 
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     const my_shred_version: usize = 19;
@@ -680,9 +739,6 @@ test "accounts_db.download: test remove untrusted peers" {
         ci.shred_version = 19; // matching shred version
     }
 
-    var valid_peers = try std.ArrayList(PeerSnapshotHash).initCapacity(allocator, 10);
-    defer valid_peers.deinit();
-
     var trusted_validators = try std.ArrayList(Pubkey).initCapacity(allocator, 10);
     defer trusted_validators.deinit();
 
@@ -695,7 +751,7 @@ test "accounts_db.download: test remove untrusted peers" {
         _ = try table.insert(data, 0);
     }
 
-    _ = try findPeersToDownloadFromAssumeCapacity(
+    var peers, _ = try findPeersToDownloadFrom(
         allocator,
         &table,
         contact_infos,
@@ -703,11 +759,11 @@ test "accounts_db.download: test remove untrusted peers" {
         my_pubkey,
         &.{},
         null, // no trusted validators
-        &valid_peers,
     );
-    try std.testing.expectEqual(valid_peers.items.len, 10);
+    try std.testing.expectEqual(peers.len, 10);
+    allocator.free(peers);
 
-    _ = try findPeersToDownloadFromAssumeCapacity(
+    peers, _ = try findPeersToDownloadFrom(
         allocator,
         &table,
         contact_infos,
@@ -715,14 +771,14 @@ test "accounts_db.download: test remove untrusted peers" {
         my_pubkey,
         &.{},
         trusted_validators.items,
-        &valid_peers,
     );
-    try std.testing.expectEqual(valid_peers.items.len, 10);
+    try std.testing.expectEqual(peers.len, 10);
+    allocator.free(peers);
 
     _ = trusted_validators.pop();
     _ = trusted_validators.pop();
 
-    _ = try findPeersToDownloadFromAssumeCapacity(
+    peers, _ = try findPeersToDownloadFrom(
         allocator,
         &table,
         contact_infos,
@@ -730,12 +786,158 @@ test "accounts_db.download: test remove untrusted peers" {
         my_pubkey,
         &.{},
         trusted_validators.items,
-        &valid_peers,
     );
-    try std.testing.expectEqual(valid_peers.items.len, 8);
+    try std.testing.expectEqual(peers.len, 8);
+    allocator.free(peers);
 }
 
 test "accounts_db.download: test finding peers" {
+    const allocator = std.testing.allocator;
+    var table = try GossipTable.init(allocator, allocator);
+    defer table.deinit();
+
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const random = prng.random();
+
+    const my_shred_version: usize = 19;
+    const my_pubkey = Pubkey.initRandom(random);
+
+    const contact_infos: []ThreadSafeContactInfo = try allocator.alloc(ThreadSafeContactInfo, 10);
+    defer allocator.free(contact_infos);
+
+    for (contact_infos) |*ci| {
+        var lci = LegacyContactInfo.default(Pubkey.initRandom(random));
+        lci.rpc.setPort(19); // no long unspecified = valid
+        ci.* = ThreadSafeContactInfo.fromLegacyContactInfo(lci);
+        ci.shred_version = 19; // matching shred version
+    }
+
+    var peers, var result = try findPeersToDownloadFrom(
+        allocator,
+        &table,
+        contact_infos,
+        my_shred_version,
+        my_pubkey,
+        &.{},
+        null,
+    );
+    allocator.free(peers);
+
+    // no snapshot hashes
+    try std.testing.expect(result.is_valid == 0);
+    try std.testing.expect(result.invalid_shred_version == 0);
+    try std.testing.expect(result.no_rpc_count == 0);
+    try std.testing.expect(result.is_me_count == 0);
+    try std.testing.expect(result.is_blacklist == 0);
+    try std.testing.expect(result.no_snapshot_hashes_count == 10);
+
+    for (contact_infos) |*ci| {
+        const kp = KeyPair.generate();
+        var snapshot_hashes = sig.gossip.data.SnapshotHashes.initRandom(random);
+        snapshot_hashes.from = ci.pubkey;
+        const data = SignedGossipData.initSigned(&kp, .{ .SnapshotHashes = snapshot_hashes });
+        _ = try table.insert(data, 0);
+    }
+
+    peers, result = try findPeersToDownloadFrom(
+        allocator,
+        &table,
+        contact_infos,
+        my_shred_version,
+        my_pubkey,
+        &.{},
+        null,
+    );
+    allocator.free(peers);
+    // all valid
+    try std.testing.expect(result.is_valid == 10);
+
+    // blacklist one
+    var blist = [_]Pubkey{contact_infos[0].pubkey};
+    peers, result = try findPeersToDownloadFrom(
+        allocator,
+        &table,
+        contact_infos,
+        my_shred_version,
+        my_pubkey,
+        &blist,
+        null,
+    );
+    allocator.free(peers);
+    try std.testing.expect(result.is_valid == 9);
+    try std.testing.expect(result.is_blacklist == 1);
+
+    for (contact_infos) |*ci| {
+        ci.shred_version = 21; // non-matching shred version
+    }
+    peers, result = try findPeersToDownloadFrom(
+        allocator,
+        &table,
+        contact_infos,
+        my_shred_version,
+        my_pubkey,
+        &.{},
+        null,
+    );
+    allocator.free(peers);
+    try std.testing.expect(result.invalid_shred_version == 10);
+
+    for (contact_infos) |*ci| {
+        ci.pubkey = my_pubkey; // is_me pubkey
+    }
+    peers, result = try findPeersToDownloadFrom(
+        allocator,
+        &table,
+        contact_infos,
+        my_shred_version,
+        my_pubkey,
+        &.{},
+        null,
+    );
+    allocator.free(peers);
+    try std.testing.expect(result.is_me_count == 10);
+}
+
+test "PeerSearchResult format" {
+    const Case = struct { PeerSearchResult, []const u8 };
+
+    const cases: []const Case = &.{
+        .{ .{}, "" },
+        .{ .{ .is_me_count = 2 }, "is_me_count: 2 " },
+        .{ .{ .is_blacklist = 0 }, "" },
+        .{ .{ .is_blacklist = 2 }, "is_blacklist: 2 " },
+        .{ .{ .is_me_count = 2, .is_blacklist = 1 }, "is_me_count: 2 is_blacklist: 1 " },
+    };
+
+    for (cases) |case| {
+        const result, const expected = case;
+        try std.testing.expectFmt(expected, "{}", .{result});
+    }
+}
+
+test "findpeers leak check" {
+    const test_fn = struct {
+        fn f(
+            allocator: std.mem.Allocator,
+            gossip_table: *GossipTable,
+            contact_infos: []ThreadSafeContactInfo,
+            my_shred_version: usize,
+            my_pubkey: Pubkey,
+            trusted_validators: ?[]const Pubkey,
+        ) !void {
+            const peers, _ = try findPeersToDownloadFrom(
+                allocator,
+                gossip_table,
+                contact_infos,
+                my_shred_version,
+                my_pubkey,
+                &.{},
+                trusted_validators,
+            );
+            allocator.free(peers);
+        }
+    }.f;
+
     const allocator = std.testing.allocator;
     var table = try GossipTable.init(allocator, allocator);
     defer table.deinit();
@@ -756,91 +958,233 @@ test "accounts_db.download: test finding peers" {
         ci.shred_version = 19; // matching shred version
     }
 
-    var valid_peers = try std.ArrayList(PeerSnapshotHash).initCapacity(allocator, 10);
-    defer valid_peers.deinit();
-
-    var result = try findPeersToDownloadFromAssumeCapacity(
-        allocator,
+    try std.testing.checkAllAllocationFailures(allocator, test_fn, .{
         &table,
         contact_infos,
         my_shred_version,
         my_pubkey,
-        &.{},
         null,
-        &valid_peers,
-    );
+    });
 
-    // no snapshot hashes
-    try std.testing.expect(result.is_valid == 0);
-    try std.testing.expect(result.invalid_shred_version == 0);
-    try std.testing.expect(result.no_rpc_count == 0);
-    try std.testing.expect(result.is_me_count == 0);
-    try std.testing.expect(result.is_blacklist == 0);
-    try std.testing.expect(result.no_snapshot_hashes_count == 10);
+    try std.testing.checkAllAllocationFailures(allocator, test_fn, .{
+        &table,
+        contact_infos,
+        my_shred_version,
+        my_pubkey,
+        &.{Pubkey.ZEROES},
+    });
+}
 
-    for (contact_infos) |*ci| {
-        const kp = KeyPair.generate();
-        var snapshot_hashes = sig.gossip.data.SnapshotHashes.initRandom(random);
-        snapshot_hashes.from = ci.pubkey;
-        const data = SignedGossipData.initSigned(&kp, .{ .SnapshotHashes = snapshot_hashes });
-        _ = try table.insert(data, 0);
+test "downloadInfo Incremental" {
+    const test_fn = struct {
+        fn f(
+            allocator: std.mem.Allocator,
+            peer: PeerSnapshotHash,
+            full_snapshot_slot: Slot,
+            expected: ?[]const u8,
+        ) !void {
+            _, _, const url = (try downloadInfo(
+                allocator,
+                .incremental,
+                peer,
+                full_snapshot_slot,
+            )) orelse return error.NoSnapshotForPeer;
+            defer allocator.free(url);
+
+            try std.testing.expectEqualStrings(expected.?, url);
+        }
+    }.f;
+
+    const allocator = std.testing.allocator;
+
+    const Case = struct { PeerSnapshotHash, error{NoSnapshotForPeer}![]const u8 };
+
+    const cases: []const Case = &.{
+        .{
+            .{
+                .contact_info = .{
+                    .pubkey = .ZEROES,
+                    .shred_version = 0,
+                    .gossip_addr = null,
+                    .rpc_addr = null,
+                    .tpu_addr = null,
+                    .tvu_addr = null,
+                    .tpu_quic_addr = null,
+                },
+                .full_snapshot = .{ .slot = 100, .hash = .ZEROES },
+                .inc_snapshot = .{ .slot = 101, .hash = .ZEROES },
+            },
+            error.NoSnapshotForPeer,
+        },
+        .{
+            .{
+                .contact_info = .{
+                    .pubkey = .ZEROES,
+                    .shred_version = 0,
+                    .gossip_addr = null,
+                    .rpc_addr = .UNSPECIFIED,
+                    .tpu_addr = null,
+                    .tvu_addr = null,
+                    .tpu_quic_addr = null,
+                },
+                .full_snapshot = .{ .slot = 100, .hash = .ZEROES },
+                .inc_snapshot = null,
+            },
+            error.NoSnapshotForPeer,
+        },
+        .{
+            .{
+                .contact_info = .{
+                    .pubkey = .ZEROES,
+                    .shred_version = 0,
+                    .gossip_addr = null,
+                    .rpc_addr = .UNSPECIFIED,
+                    .tpu_addr = null,
+                    .tvu_addr = null,
+                    .tpu_quic_addr = null,
+                },
+                .full_snapshot = .{ .slot = 100, .hash = .ZEROES },
+                .inc_snapshot = .{ .slot = 101, .hash = .ZEROES },
+            },
+            "http://0.0.0.0:0/incremental-snapshot-100-101-11111111111111111111111111111111.tar.zst",
+        },
+    };
+
+    for (cases) |case| {
+        const peer, const expected = case;
+
+        if (expected) |expected_url| {
+            try std.testing.checkAllAllocationFailures(allocator, test_fn, .{
+                peer,
+                100,
+                expected_url,
+            });
+        } else |expected_error| {
+            try std.testing.expectError(
+                expected_error,
+                std.testing.checkAllAllocationFailures(allocator, test_fn, .{
+                    peer,
+                    100,
+                    null,
+                }),
+            );
+        }
+    }
+}
+
+test "downloadInfo Full" {
+    const test_fn = struct {
+        fn f(
+            allocator: std.mem.Allocator,
+            peer: PeerSnapshotHash,
+            expected: ?[]const u8,
+        ) !void {
+            _, _, const url = (try downloadInfo(
+                allocator,
+                .full,
+                peer,
+                null,
+            )) orelse return error.NoSnapshotForPeer;
+            defer allocator.free(url);
+
+            try std.testing.expectEqualStrings(expected.?, url);
+        }
+    }.f;
+
+    const allocator = std.testing.allocator;
+
+    const Case = struct { PeerSnapshotHash, error{NoSnapshotForPeer}![]const u8 };
+
+    const cases: []const Case = &.{
+        .{
+            .{
+                .contact_info = .{
+                    .pubkey = .ZEROES,
+                    .shred_version = 0,
+                    .gossip_addr = null,
+                    .rpc_addr = null,
+                    .tpu_addr = null,
+                    .tvu_addr = null,
+                    .tpu_quic_addr = null,
+                },
+                .full_snapshot = .{ .slot = 100, .hash = .ZEROES },
+                .inc_snapshot = .{ .slot = 101, .hash = .ZEROES },
+            },
+            error.NoSnapshotForPeer,
+        },
+        .{
+            .{
+                .contact_info = .{
+                    .pubkey = .ZEROES,
+                    .shred_version = 0,
+                    .gossip_addr = null,
+                    .rpc_addr = .UNSPECIFIED,
+                    .tpu_addr = null,
+                    .tvu_addr = null,
+                    .tpu_quic_addr = null,
+                },
+                .full_snapshot = .{ .slot = 100, .hash = .ZEROES },
+                .inc_snapshot = null,
+            },
+            "http://0.0.0.0:0/snapshot-100-11111111111111111111111111111111.tar.zst",
+        },
+    };
+
+    for (cases) |case| {
+        const peer, const expected = case;
+
+        if (expected) |expected_url| {
+            try std.testing.checkAllAllocationFailures(allocator, test_fn, .{
+                peer,
+                expected_url,
+            });
+        } else |expected_error| {
+            try std.testing.expectError(
+                expected_error,
+                std.testing.checkAllAllocationFailures(allocator, test_fn, .{
+                    peer,
+                    null,
+                }),
+            );
+        }
+    }
+}
+
+test "can't download snapshot" {
+    const allocator = std.testing.allocator;
+    var table = try GossipTable.init(allocator, allocator);
+    defer table.deinit();
+
+    var prng = std.Random.DefaultPrng.init(0);
+    const random = prng.random();
+
+    // const my_shred_version: usize = 19;
+    const my_keypair = KeyPair.generate();
+    const my_pubkey = Pubkey.initRandom(random);
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    var me = try sig.gossip.ContactInfo.initRandom(allocator, random, my_pubkey, 0, 0, 1);
+    try me.setSocket(.gossip, .{ .V4 = .{ .ip = .{ .octets = .{ 127, 0, 0, 1 } }, .port = 0 } });
+
+    var gossip_service = try GossipService.init(allocator, allocator, me, my_keypair, null, .noop);
+    defer {
+        gossip_service.shutdown();
+        gossip_service.deinit();
     }
 
-    result = try findPeersToDownloadFromAssumeCapacity(
-        allocator,
-        &table,
-        contact_infos,
-        my_shred_version,
-        my_pubkey,
-        &.{},
-        null,
-        &valid_peers,
-    );
-    // all valid
-    try std.testing.expect(result.is_valid == 10);
+    var bad_peers: std.ArrayList(Pubkey) = .init(allocator);
+    defer bad_peers.deinit();
 
-    // blacklist one
-    var blist = [_]Pubkey{contact_infos[0].pubkey};
-    result = try findPeersToDownloadFromAssumeCapacity(
+    try std.testing.expectError(error.UnableToDownloadSnapshot, downloadSnapshotsFromGossip(
         allocator,
-        &table,
-        contact_infos,
-        my_shred_version,
-        my_pubkey,
-        &blist,
+        .noop,
         null,
-        &valid_peers,
-    );
-    try std.testing.expect(result.is_valid == 9);
-    try std.testing.expect(result.is_blacklist == 1);
-
-    for (contact_infos) |*ci| {
-        ci.shred_version = 21; // non-matching shred version
-    }
-    result = try findPeersToDownloadFromAssumeCapacity(
-        allocator,
-        &table,
-        contact_infos,
-        my_shred_version,
-        my_pubkey,
-        &.{},
-        null,
-        &valid_peers,
-    );
-    try std.testing.expect(result.invalid_shred_version == 10);
-
-    for (contact_infos) |*ci| {
-        ci.pubkey = my_pubkey; // is_me pubkey
-    }
-    result = try findPeersToDownloadFromAssumeCapacity(
-        allocator,
-        &table,
-        contact_infos,
-        my_shred_version,
-        my_pubkey,
-        &.{},
-        null,
-        &valid_peers,
-    );
-    try std.testing.expect(result.is_me_count == 10);
+        &gossip_service,
+        tmp_dir.dir,
+        1,
+        1,
+        sig.time.Duration.fromMillis(1),
+    ));
 }

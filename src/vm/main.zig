@@ -15,8 +15,6 @@ const MemoryMap = memory.MemoryMap;
 const TransactionContext = sig.runtime.TransactionContext;
 const FeatureSet = sig.core.FeatureSet;
 const Hash = sig.core.Hash;
-const Rent = sig.runtime.sysvar.Rent;
-const ComputeBudget = sig.runtime.ComputeBudget;
 const EpochStakes = sig.core.EpochStakes;
 const SysvarCache = sig.runtime.SysvarCache;
 const ProgramMap = sig.runtime.program_loader.ProgramMap;
@@ -67,12 +65,12 @@ pub fn main() !void {
         .accounts_resize_delta = 0,
         .return_data = .{},
         .custom_error = null,
-        .rent = Rent.DEFAULT,
+        .rent = .INIT,
         .log_collector = null,
         .compute_meter = cmd.limit,
         .prev_blockhash = Hash.ZEROES,
         .prev_lamports_per_signature = 0,
-        .compute_budget = ComputeBudget.default(1_400_000),
+        .compute_budget = .DEFAULT,
         .slot = 0,
     };
     defer tc.deinit();

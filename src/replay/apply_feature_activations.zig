@@ -424,7 +424,7 @@ test applyFeatureActivations {
         &ancestors,
     );
 
-    var epoch_tracker: EpochTracker = .{ .schedule = .DEFAULT };
+    var epoch_tracker: EpochTracker = .{ .schedule = .INIT };
     defer epoch_tracker.deinit(allocator);
 
     const epoch: sig.core.Epoch = 0;

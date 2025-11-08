@@ -232,7 +232,7 @@ pub fn Stakes(comptime stakes_type: StakesType) type {
             .stake_accounts = .empty,
             .unused = 0,
             .epoch = 0,
-            .stake_history = .DEFAULT,
+            .stake_history = .INIT,
         };
 
         pub fn deinit(self: *const Self, allocator: Allocator) void {
@@ -1122,7 +1122,7 @@ test "stakes basic" {
         for (0..4) |i| {
             const StakesT = Stakes(stakes_type);
 
-            const stake_history_empty: StakeHistory = .DEFAULT;
+            const stake_history_empty: StakeHistory = .INIT;
 
             var stakes_cache: StakesCacheGeneric(stakes_type) = .EMPTY;
             defer stakes_cache.deinit(allocator);
@@ -1334,7 +1334,7 @@ test "get stake effective and activating" {
         .deactivation_epoch = 10,
     };
 
-    var stake_history: StakeHistory = .DEFAULT;
+    var stake_history: StakeHistory = .INIT;
     stake_history.entries.appendAssumeCapacity(.{
         .epoch = 5,
         .stake = .{
@@ -1365,7 +1365,7 @@ test "get stake state" {
         .deactivation_epoch = 10,
     };
 
-    var stake_history: StakeHistory = .DEFAULT;
+    var stake_history: StakeHistory = .INIT;
     stake_history.entries.appendSliceAssumeCapacity(&.{
         .{ .epoch = 13, .stake = .{
             .effective = 0,

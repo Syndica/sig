@@ -303,7 +303,7 @@ test calculateStakePointsAndCredits {
 
     try std.testing.expectEqual(
         stake.delegation.stake * epoch_slots,
-        calculatePoints(stake, vote_state, &StakeHistory.DEFAULT, null),
+        calculatePoints(stake, vote_state, &StakeHistory.INIT, null),
     );
 }
 
@@ -328,7 +328,7 @@ test redeemRewards {
             &stake,
             &vote_state,
             &.{ .rewards = 1_000_000_000, .points = 1 },
-            &StakeHistory.DEFAULT,
+            &StakeHistory.INIT,
             null,
         );
         try std.testing.expectError(error.NoCreditsToRedeem, rewards);
@@ -343,7 +343,7 @@ test redeemRewards {
             &stake,
             &vote_state,
             &.{ .rewards = 1, .points = 1 },
-            &StakeHistory.DEFAULT,
+            &StakeHistory.INIT,
             null,
         );
         try std.testing.expectEqual(
@@ -376,7 +376,7 @@ test calculateStakeRewards {
             &stake,
             &.{ .rewards = 1_000_000_000, .points = 1 },
             &vote_state,
-            &StakeHistory.DEFAULT,
+            &StakeHistory.INIT,
             null,
         ),
     );
@@ -395,7 +395,7 @@ test calculateStakeRewards {
             &stake,
             &.{ .rewards = 2, .points = 2 },
             &vote_state,
-            &StakeHistory.DEFAULT,
+            &StakeHistory.INIT,
             null,
         ),
     );
@@ -413,7 +413,7 @@ test calculateStakeRewards {
             &stake,
             &.{ .rewards = 1, .points = 1 },
             &vote_state,
-            &StakeHistory.DEFAULT,
+            &StakeHistory.INIT,
             null,
         ),
     );
@@ -432,7 +432,7 @@ test calculateStakeRewards {
             &stake,
             &.{ .rewards = 2, .points = 2 },
             &vote_state,
-            &StakeHistory.DEFAULT,
+            &StakeHistory.INIT,
             null,
         ),
     );
@@ -450,7 +450,7 @@ test calculateStakeRewards {
             &stake,
             &.{ .rewards = 2, .points = 2 },
             &vote_state,
-            &StakeHistory.DEFAULT,
+            &StakeHistory.INIT,
             null,
         ),
     );
@@ -468,7 +468,7 @@ test calculateStakeRewards {
             &stake,
             &.{ .rewards = 4, .points = 4 },
             &vote_state,
-            &StakeHistory.DEFAULT,
+            &StakeHistory.INIT,
             null,
         ),
     );
@@ -482,7 +482,7 @@ test calculateStakeRewards {
             &stake,
             &.{ .rewards = 4, .points = 4 },
             &vote_state,
-            &StakeHistory.DEFAULT,
+            &StakeHistory.INIT,
             null,
         ),
     );
@@ -498,7 +498,7 @@ test calculateStakeRewards {
             &stake,
             &.{ .rewards = 0, .points = 4 },
             &vote_state,
-            &StakeHistory.DEFAULT,
+            &StakeHistory.INIT,
             null,
         ),
     );
@@ -516,7 +516,7 @@ test calculateStakeRewards {
             &stake,
             &.{ .rewards = 0, .points = 4 },
             &vote_state,
-            &StakeHistory.DEFAULT,
+            &StakeHistory.INIT,
             null,
         ),
     );
@@ -530,7 +530,7 @@ test calculateStakeRewards {
         calculateStakePointsAndCredits(
             &stake,
             &vote_state,
-            &StakeHistory.DEFAULT,
+            &StakeHistory.INIT,
             null,
         ),
     );
@@ -546,7 +546,7 @@ test calculateStakeRewards {
         calculateStakePointsAndCredits(
             &stake,
             &vote_state,
-            &StakeHistory.DEFAULT,
+            &StakeHistory.INIT,
             null,
         ),
     );
@@ -562,7 +562,7 @@ test calculateStakeRewards {
         calculateStakePointsAndCredits(
             &stake,
             &vote_state,
-            &StakeHistory.DEFAULT,
+            &StakeHistory.INIT,
             null,
         ),
     );
@@ -582,7 +582,7 @@ test calculateStakeRewards {
             &stake,
             &.{ .rewards = 1, .points = 1 },
             &vote_state,
-            &StakeHistory.DEFAULT,
+            &StakeHistory.INIT,
             null,
         ),
     );
@@ -601,7 +601,7 @@ test calculateStakeRewards {
             &stake,
             &.{ .rewards = 1, .points = 1 },
             &vote_state,
-            &StakeHistory.DEFAULT,
+            &StakeHistory.INIT,
             null,
         ),
     );

@@ -11,7 +11,7 @@ pub const connection = @import("connection.zig");
 pub const requests = @import("requests.zig");
 
 pub const basic = @import("basic.zig");
-pub const LinuxIoUring = @import("linux_io_uring.zig").LinuxIoUring;
+// pub const LinuxIoUring = @import("linux_io_uring.zig").LinuxIoUring;
 
 const Logger = sig.trace.Logger("rpc.server");
 
@@ -20,7 +20,7 @@ test {
     _ = requests;
 
     _ = basic;
-    _ = LinuxIoUring;
+    // _ = LinuxIoUring;
 }
 
 /// The minimum buffer read size.
@@ -31,14 +31,14 @@ pub const MIN_READ_BUFFER_SIZE = 4096;
 /// backends.
 pub const WorkPool = union(enum) {
     basic,
-    linux_io_uring: if (LinuxIoUring.can_use) *LinuxIoUring else noreturn,
+    // linux_io_uring: noreturn,
 };
 
 /// The basic state required for the server to operate.
 pub const Context = struct {
     allocator: std.mem.Allocator,
     logger: Logger,
-    accountsdb: *sig.accounts_db.AccountsDB,
+    rpc_hooks: *sig.rpc.Hooks,
 
     /// Wait group for all currently running tasks, used to wait for
     /// all of them to finish before deinitializing.
@@ -52,7 +52,7 @@ pub const Context = struct {
         /// Must be a thread-safe allocator.
         allocator: std.mem.Allocator,
         logger: Logger,
-        accountsdb: *sig.accounts_db.AccountsDB,
+        rpc_hooks: *sig.rpc.Hooks,
 
         /// The size for the read buffer allocated to every request.
         /// Clamped to be greater than or equal to `MIN_READ_BUFFER_SIZE`.
@@ -71,7 +71,7 @@ pub const Context = struct {
         return .{
             .allocator = params.allocator,
             .logger = params.logger,
-            .accountsdb = params.accountsdb,
+            .rpc_hooks = params.rpc_hooks,
 
             .wait_group = .{},
             .read_buffer_size = @max(params.read_buffer_size, MIN_READ_BUFFER_SIZE),
@@ -97,8 +97,8 @@ pub fn serveSpawn(
 }
 
 pub const ServeError =
-    basic.AcceptAndServeConnectionError ||
-    LinuxIoUring.AcceptAndServeConnectionsError;
+    basic.AcceptAndServeConnectionError;
+// LinuxIoUring.AcceptAndServeConnectionsError;
 
 /// Until `exit.load(.acquire)`, accepts and serves connections in a loop.
 pub fn serve(
@@ -112,19 +112,112 @@ pub fn serve(
     while (!exit.load(.acquire)) {
         switch (work_pool) {
             .basic => try basic.acceptAndServeConnection(ctx),
-            .linux_io_uring => |linux| try linux.acceptAndServeConnections(ctx),
+            // .linux_io_uring => |linux| try linux.acceptAndServeConnections(ctx),
         }
     }
 }
 
-test "serveSpawn snapshots" {
-    if (sig.build_options.no_network_tests) return error.SkipZigTest;
+test "serveSpawn hook missing" {
     const allocator = std.testing.allocator;
 
-    var prng = std.Random.DefaultPrng.init(0);
-    const random = prng.random();
+    const logger_unscoped: Logger = .noop;
+    const logger = logger_unscoped.withScope(@src().fn_name);
 
-    // const logger_unscoped: Logger = .{ .direct_print = .{ .max_level = .trace } };
+    var rpc_hooks = sig.rpc.Hooks{};
+    defer rpc_hooks.deinit(allocator);
+
+    const sock_addr = std.net.Address.initIp4(.{ 0, 0, 0, 0 }, 0);
+    var server_ctx = try Context.init(.{
+        .allocator = allocator,
+        .logger = .from(logger),
+        .rpc_hooks = &rpc_hooks,
+        .socket_addr = sock_addr,
+        .read_buffer_size = 4096,
+        .reuse_address = true,
+    });
+    defer server_ctx.joinDeinit();
+
+    const resp_str, const resp_json = try testHttpRpcJsonRequest(
+        allocator,
+        &server_ctx,
+        .basic,
+        .getHealth,
+        .{},
+    );
+    defer {
+        resp_json.deinit();
+        allocator.free(resp_str);
+    }
+
+    const rpc_err = resp_json.payload.err;
+    try std.testing.expectEqual(rpc_err.code, .method_not_found);
+}
+
+test "serveSpawn hook alloc" {
+    const allocator = std.testing.allocator;
+
+    const logger_unscoped: Logger = .noop;
+    const logger = logger_unscoped.withScope(@src().fn_name);
+
+    var rpc_hooks = sig.rpc.Hooks{};
+    defer rpc_hooks.deinit(allocator);
+
+    try rpc_hooks.set(allocator, struct {
+        pub fn getLeaderSchedule(
+            _: anytype,
+            gpa: std.mem.Allocator,
+            _: anytype,
+        ) !sig.rpc.methods.GetLeaderSchedule.Response {
+            var resp: sig.rpc.methods.GetLeaderSchedule.Response = .{ .value = .{} };
+            errdefer resp.value.deinit(gpa);
+
+            const buf = try gpa.alloc(u64, 4);
+            errdefer gpa.free(buf);
+            @memset(buf, 42);
+
+            try resp.value.put(gpa, sig.core.Pubkey.ZEROES, buf);
+            return resp;
+        }
+    }{});
+
+    const sock_addr = std.net.Address.initIp4(.{ 0, 0, 0, 0 }, 0);
+    var server_ctx = try Context.init(.{
+        .allocator = allocator,
+        .logger = .from(logger),
+        .rpc_hooks = &rpc_hooks,
+        .socket_addr = sock_addr,
+        .read_buffer_size = 4096,
+        .reuse_address = true,
+    });
+    defer server_ctx.joinDeinit();
+
+    const resp_str, const resp_json = try testHttpRpcJsonRequest(
+        allocator,
+        &server_ctx,
+        .basic,
+        .getLeaderSchedule,
+        .{
+            .slot = 0,
+            .config = .{},
+        },
+    );
+    defer {
+        resp_json.deinit();
+        allocator.free(resp_str);
+    }
+
+    const res = try resp_json.result();
+    var it = res.value.iterator();
+    const entry = it.next().?;
+    try std.testing.expectEqual(entry.key_ptr.*, sig.core.Pubkey.ZEROES);
+    try std.testing.expectEqualSlices(u64, entry.value_ptr.*, &[_]u64{ 42, 42, 42, 42 });
+    try std.testing.expectEqual(it.next(), null);
+}
+
+test "serveSpawn getSnapshot" {
+    // if (sig.build_options.no_network_tests) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+
     const logger_unscoped: Logger = .noop;
     const logger = logger_unscoped.withScope(@src().fn_name);
 
@@ -171,7 +264,6 @@ test "serveSpawn snapshots" {
                 .{},
             );
         }
-
         const FullAndIncrementalManifest = sig.accounts_db.snapshot.data.FullAndIncrementalManifest;
         const full_inc_manifest = try FullAndIncrementalManifest.fromFiles(
             allocator,
@@ -190,25 +282,29 @@ test "serveSpawn snapshots" {
         defer man.deinit(allocator);
     }
 
-    const rpc_port = random.intRangeLessThan(u16, 8_000, 10_000);
-    const sock_addr = std.net.Address.initIp4(.{ 0, 0, 0, 0 }, rpc_port);
+    var rpc_hooks = sig.rpc.Hooks{};
+    defer rpc_hooks.deinit(accountsdb.allocator);
+
+    try accountsdb.registerRPCHooks(&rpc_hooks);
+
+    const sock_addr = std.net.Address.initIp4(.{ 0, 0, 0, 0 }, 0);
     var server_ctx = try Context.init(.{
         .allocator = allocator,
         .logger = .from(logger),
-        .accountsdb = &accountsdb,
+        .rpc_hooks = &rpc_hooks,
         .socket_addr = sock_addr,
         .read_buffer_size = 4096,
         .reuse_address = true,
     });
     defer server_ctx.joinDeinit();
 
-    var maybe_liou = try LinuxIoUring.init(&server_ctx);
-    defer if (maybe_liou) |*liou| liou.deinit();
+    // var maybe_liou = try LinuxIoUring.init(&server_ctx);
+    // defer if (maybe_liou) |*liou| liou.deinit();
 
     for ([_]?WorkPool{
         .basic,
         // TODO: see above TODO about `if (a) |*b|` on `?noreturn`.
-        if (maybe_liou != null) .{ .linux_io_uring = &maybe_liou.? } else null,
+        // if (maybe_liou != null) .{ .linux_io_uring = &maybe_liou.? } else null,
     }) |maybe_work_pool| {
         const work_pool = maybe_work_pool orelse continue;
         logger.info().logf("Running with {s}", .{@tagName(work_pool)});
@@ -238,11 +334,68 @@ test "serveSpawn snapshots" {
     }
 }
 
-test "serveSpawn getAccountInfo" {
-    if (sig.build_options.no_network_tests) return error.SkipZigTest;
+test "serveSpawn getSnapshot missing" {
     const allocator = std.testing.allocator;
 
-    var prng = std.Random.DefaultPrng.init(0);
+    const logger_unscoped: Logger = .noop;
+    const logger = logger_unscoped.withScope(@src().fn_name);
+
+    var rpc_hooks = sig.rpc.Hooks{};
+    defer rpc_hooks.deinit(allocator);
+
+    try rpc_hooks.set(allocator, struct {
+        pub fn getSnapshot(
+            _: anytype,
+            _: std.mem.Allocator,
+            params: sig.rpc.methods.GetSnapshot,
+        ) !sig.rpc.methods.GetSnapshot.Response {
+            std.debug.assert(params.get == .size);
+            std.debug.assert(std.mem.eql(u8, params.path, "test-snapshot"));
+            return error.Missing;
+        }
+    }{});
+
+    const sock_addr = std.net.Address.initIp4(.{ 0, 0, 0, 0 }, 0);
+    var server_ctx = try Context.init(.{
+        .allocator = allocator,
+        .logger = .from(logger),
+        .rpc_hooks = &rpc_hooks,
+        .socket_addr = sock_addr,
+        .read_buffer_size = 4096,
+        .reuse_address = true,
+    });
+    defer server_ctx.joinDeinit();
+
+    var exit = std.atomic.Value(bool).init(false);
+    const serve_thread = try serveSpawn(&exit, &server_ctx, .basic);
+    defer serve_thread.join();
+    defer exit.store(true, .release);
+
+    var client: std.http.Client = .{ .allocator = allocator };
+    defer client.deinit();
+
+    const localhost_url_bounded = sig.utils.fmt.boundedFmt(
+        "http://localhost:{d}/test-snapshot",
+        .{server_ctx.tcp.listen_address.getPort()},
+    );
+    const localhost_url = try std.Uri.parse(localhost_url_bounded.constSlice());
+
+    var buffer: [4096]u8 = undefined;
+    var request = try client.open(.HEAD, localhost_url, .{ .server_header_buffer = &buffer });
+    defer request.deinit();
+
+    try request.send();
+    try request.finish();
+    try request.wait();
+
+    try std.testing.expectEqual(request.response.status, .service_unavailable);
+}
+
+test "serveSpawn getAccountInfo" {
+    // if (sig.build_options.no_network_tests) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     // const logger_unscoped: Logger = .{ .direct_print = .{ .max_level = .trace } };
@@ -285,20 +438,23 @@ test "serveSpawn getAccountInfo" {
         expected_slot,
     );
 
-    const test_rpc_port = random.intRangeLessThan(u16, 8_000, 10_000);
-    const test_sock_addr = std.net.Address.initIp4(.{ 0, 0, 0, 0 }, test_rpc_port);
+    var rpc_hooks = sig.rpc.Hooks{};
+    defer rpc_hooks.deinit(allocator);
+    try accountsdb.registerRPCHooks(&rpc_hooks);
+
+    const test_sock_addr = std.net.Address.initIp4(.{ 0, 0, 0, 0 }, 0);
     var server_ctx = try Context.init(.{
         .allocator = allocator,
         .logger = .from(logger),
-        .accountsdb = &accountsdb,
+        .rpc_hooks = &rpc_hooks,
         .socket_addr = test_sock_addr,
         .read_buffer_size = 4096,
         .reuse_address = true,
     });
     defer server_ctx.joinDeinit();
 
-    var maybe_liou = try LinuxIoUring.init(&server_ctx);
-    defer if (maybe_liou) |*liou| liou.deinit();
+    // var maybe_liou = try LinuxIoUring.init(&server_ctx);
+    // defer if (maybe_liou) |*liou| liou.deinit();
 
     for ([_]?WorkPool{
         .basic,
@@ -308,40 +464,22 @@ test "serveSpawn getAccountInfo" {
         const work_pool = maybe_work_pool orelse continue;
         logger.info().logf("Running with {s}", .{@tagName(work_pool)});
 
-        var exit = std.atomic.Value(bool).init(false);
-        const serve_thread = try serveSpawn(&exit, &server_ctx, work_pool);
-        defer serve_thread.join();
-        defer exit.store(true, .release);
-
-        const localhost_url_bounded = sig.utils.fmt.boundedFmt(
-            "http://localhost:{d}/",
-            .{server_ctx.tcp.listen_address.getPort()},
-        );
-        const localhost_url = try std.Uri.parse(localhost_url_bounded.constSlice());
-
-        const request: sig.rpc.request.Request = .{
-            .id = .null,
-            .method = .{ .getAccountInfo = .{
+        const resp_str, const resp_json = try testHttpRpcJsonRequest(
+            allocator,
+            &server_ctx,
+            work_pool,
+            .getAccountInfo,
+            .{
                 .pubkey = expected_pubkey,
                 .config = .{
                     .encoding = .base64,
                 },
-            } },
-        };
-        const request_str = try std.json.stringifyAlloc(allocator, request, .{});
-        defer allocator.free(request_str);
-
-        const resp_str = try testHttpFetchSelf(allocator, .POST, localhost_url, .{
-            .body = request_str,
-            .headers = .{
-                .content_type = .{ .override = "application/json" },
             },
-        });
-        defer allocator.free(resp_str);
-
-        const Response = sig.rpc.methods.GetAccountInfo.Response;
-        const resp_json = try sig.rpc.response.Response(Response).fromJson(allocator, resp_str);
-        defer resp_json.deinit();
+        );
+        defer {
+            resp_json.deinit();
+            allocator.free(resp_str);
+        }
 
         const resp_value = try resp_json.result();
         try std.testing.expectEqual(expected_slot, resp_value.context.slot);
@@ -358,7 +496,7 @@ test "serveSpawn getAccountInfo" {
         const encoded_data_buf = try allocator.alloc(u8, encoded_len);
         defer allocator.free(encoded_data_buf);
 
-        const expected_value: Response.Value = .{
+        const expected_value: @TypeOf(resp_value.value) = .{
             .data = .{ .encoded = .{
                 std.base64.standard.Encoder.encode(encoded_data_buf, raw_data),
                 .base64,
@@ -371,6 +509,44 @@ test "serveSpawn getAccountInfo" {
         };
         try std.testing.expectEqualDeep(expected_value, resp_value.value);
     }
+}
+
+fn testHttpRpcJsonRequest(
+    allocator: std.mem.Allocator,
+    server_ctx: *Context,
+    work_pool: WorkPool,
+    comptime method: sig.rpc.methods.MethodAndParams.Tag,
+    method_param: sig.rpc.methods.Request(method),
+) !struct { []const u8, sig.rpc.response.Response(sig.rpc.methods.Request(method).Response) } {
+    var exit = std.atomic.Value(bool).init(false);
+    const serve_thread = try serveSpawn(&exit, server_ctx, work_pool);
+    defer serve_thread.join();
+    defer exit.store(true, .release);
+
+    const localhost_url_bounded = sig.utils.fmt.boundedFmt(
+        "http://localhost:{d}/",
+        .{server_ctx.tcp.listen_address.getPort()},
+    );
+    const localhost_url = try std.Uri.parse(localhost_url_bounded.constSlice());
+
+    const request: sig.rpc.request.Request = .{
+        .id = .null,
+        .method = @unionInit(sig.rpc.methods.MethodAndParams, @tagName(method), method_param),
+    };
+    const request_str = try std.json.stringifyAlloc(allocator, request, .{});
+    defer allocator.free(request_str);
+
+    const resp_str = try testHttpFetchSelf(allocator, .POST, localhost_url, .{
+        .body = request_str,
+        .headers = .{
+            .content_type = .{ .override = "application/json" },
+        },
+    });
+    errdefer allocator.free(resp_str);
+
+    const Response = sig.rpc.methods.Request(method).Response;
+    const resp_json = try sig.rpc.response.Response(Response).fromJson(allocator, resp_str);
+    return .{ resp_str, resp_json };
 }
 
 fn testExpectSnapshotResponse(
@@ -405,15 +581,18 @@ fn testExpectSnapshotResponse(
     );
     const snap_url = try std.Uri.parse(snap_url_str_bounded.constSlice());
 
+    const content_length = try testHttpFetchSelf(allocator, .HEAD, snap_url, .{});
+
     const actual_data = try testHttpFetchSelf(allocator, .GET, snap_url, .{});
     defer allocator.free(actual_data);
 
+    try std.testing.expectEqual(content_length, actual_data.len);
     try std.testing.expectEqualSlices(u8, expected_data, actual_data);
 }
 
 fn testHttpFetchSelf(
     allocator: std.mem.Allocator,
-    http_method: std.http.Method,
+    comptime http_method: std.http.Method,
     uri: std.Uri,
     opts: struct {
         headers: std.http.Client.Request.Headers = .{},
@@ -421,7 +600,11 @@ fn testHttpFetchSelf(
         privileged_headers: []const std.http.Header = &.{},
         body: ?[]const u8 = null,
     },
-) ![]const u8 {
+) !(switch (http_method) {
+    .HEAD => u64,
+    .GET, .POST => []const u8,
+    else => unreachable,
+}) {
     var client: std.http.Client = .{ .allocator = allocator };
     defer client.deinit();
 
@@ -440,6 +623,10 @@ fn testHttpFetchSelf(
     try request.finish();
 
     try request.wait();
+
+    if (comptime http_method == .HEAD) {
+        return request.response.content_length.?;
+    }
 
     const reader = request.reader();
 

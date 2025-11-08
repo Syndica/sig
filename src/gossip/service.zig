@@ -215,6 +215,7 @@ pub const GossipService = struct {
         /// Can be supplied as a different allocator in order to reduce contention.
         /// Must be thread safe.
         gossip_data_allocator: std.mem.Allocator,
+        /// Shallow copied / ownership transferred
         my_contact_info: ContactInfo,
         my_keypair: KeyPair,
         maybe_entrypoints: ?[]const SocketAddr,
@@ -2442,7 +2443,7 @@ test "build messages startup and shutdown" {
 }
 
 test "handling prune messages" {
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const allocator = std.testing.allocator;
     var my_keypair = try KeyPair.generateDeterministic(@splat(1));
@@ -2518,7 +2519,7 @@ test "handling prune messages" {
 test "handling pull responses" {
     const allocator = std.testing.allocator;
 
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     var my_keypair = try KeyPair.generateDeterministic(@splat(1));
     var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     const contact_info = try localhostTestContactInfo(my_pubkey);
@@ -2580,7 +2581,7 @@ test "handling pull responses" {
 test "handle old prune & pull request message" {
     const allocator = std.testing.allocator;
 
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     var my_keypair = try KeyPair.generateDeterministic(@splat(1));
@@ -2678,7 +2679,7 @@ test "handle pull request" {
 
     const allocator = std.testing.allocator;
 
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     var my_keypair = try KeyPair.generateDeterministic(@splat(1));
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     var contact_info = try localhostTestContactInfo(my_pubkey);
@@ -2789,7 +2790,7 @@ test "handle pull request" {
 
 test "test build prune messages and handle push messages" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     var my_keypair = try KeyPair.generateDeterministic(@splat(1));
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     const contact_info = try localhostTestContactInfo(my_pubkey);
@@ -2868,7 +2869,7 @@ test "test build prune messages and handle push messages" {
 }
 
 test testBuildPullRequests {
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const my_keypair = try KeyPair.generateDeterministic(.{1} ** 32);
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
@@ -2951,7 +2952,7 @@ fn testBuildPullRequests(
 
 test "test build push messages" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     var my_keypair = try KeyPair.generateDeterministic(@splat(1));
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     const contact_info = try localhostTestContactInfo(my_pubkey);
@@ -3026,13 +3027,11 @@ test "test build push messages" {
 test "large push messages" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(91);
-    var my_keypair = try KeyPair.generateDeterministic(@splat(1));
+
+    const my_keypair = KeyPair.generate();
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
+
     const contact_info = try localhostTestContactInfo(my_pubkey);
-
-    var test_logger = TestingLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
-
-    const logger = test_logger.logger("gossip.test");
 
     var gossip_service = try GossipService.create(
         allocator,
@@ -3040,7 +3039,7 @@ test "large push messages" {
         contact_info,
         my_keypair,
         null,
-        .from(logger),
+        .noop,
     );
     defer {
         gossip_service.shutdown();
@@ -3049,19 +3048,18 @@ test "large push messages" {
     }
 
     // add some peers
-    var peers = ArrayList(ThreadSafeContactInfo).init(allocator);
-    defer {
-        peers.deinit();
-    }
+    var peers: std.ArrayListUnmanaged(ThreadSafeContactInfo) = .empty;
+    defer peers.deinit(allocator);
     {
         var lock_guard = gossip_service.gossip_table_rw.write();
         defer lock_guard.unlock();
+
         const count = if (sig.build_options.long_tests) 2_000 else 20;
         for (0..count) |_| {
             var keypair = KeyPair.generate();
             const value = try SignedGossipData.randomWithIndex(prng.random(), &keypair, 0); // contact info
             _ = try lock_guard.mut().insert(value, getWallclockMs());
-            try peers.append(ThreadSafeContactInfo.fromLegacyContactInfo(value.data.LegacyContactInfo));
+            try peers.append(allocator, .fromLegacyContactInfo(value.data.LegacyContactInfo));
         }
     }
 
@@ -3114,7 +3112,7 @@ test "test packet verification" {
         packet_verifier_handle.join();
     }
 
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     var data = GossipData.randomFromIndex(prng.random(), 0);
     data.LegacyContactInfo.id = id;
     data.LegacyContactInfo.wallclock = 0;
@@ -3308,7 +3306,7 @@ test "process contact info push packet" {
 test "init, exit, and deinit" {
     const gossip_address = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 0);
     const my_keypair = KeyPair.generate();
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     var contact_info = try LegacyContactInfo.initRandom(prng.random()).toContactInfo(std.testing.allocator);
     try contact_info.setSocket(.gossip, gossip_address);
@@ -3368,6 +3366,7 @@ const fuzz_service = sig.gossip.fuzz_service;
 pub const BenchmarkGossipServiceGeneral = struct {
     pub const min_iterations = 1;
     pub const max_iterations = 5;
+    pub const name = "GossipServiceGeneral";
 
     pub const MessageCounts = struct {
         n_ping: usize,
@@ -3375,12 +3374,12 @@ pub const BenchmarkGossipServiceGeneral = struct {
         n_pull_response: usize,
     };
 
-    pub const BenchmarkArgs = struct {
+    pub const BenchmarkInputs = struct {
         name: []const u8 = "",
         message_counts: MessageCounts,
     };
 
-    pub const args = [_]BenchmarkArgs{
+    pub const inputs = [_]BenchmarkInputs{
         .{
             .name = "5k_ping_msgs",
             .message_counts = .{
@@ -3407,7 +3406,7 @@ pub const BenchmarkGossipServiceGeneral = struct {
         },
     };
 
-    pub fn benchmarkGossipService(bench_args: BenchmarkArgs) !sig.time.Duration {
+    pub fn benchmarkGossipService(bench_args: BenchmarkInputs) !sig.time.Duration {
         const allocator = if (@import("builtin").is_test) std.testing.allocator else std.heap.c_allocator;
         var keypair = KeyPair.generate();
         var address = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8888);
@@ -3417,12 +3416,6 @@ pub const BenchmarkGossipServiceGeneral = struct {
         var contact_info = ContactInfo.init(allocator, pubkey, 0, 19);
         try contact_info.setSocket(.gossip, address);
 
-        // const logger = Logger.init(allocator, .debug);
-        // defer logger.deinit();
-        // logger.spawn();
-
-        const logger: Logger = .noop;
-
         // process incoming packets/messsages
         var gossip_service = try GossipService.create(
             allocator,
@@ -3430,7 +3423,7 @@ pub const BenchmarkGossipServiceGeneral = struct {
             contact_info,
             keypair,
             null,
-            .from(logger),
+            .noop,
         );
         defer {
             gossip_service.metrics.reset();
@@ -3441,7 +3434,7 @@ pub const BenchmarkGossipServiceGeneral = struct {
         const outgoing_channel = gossip_service.packet_incoming_channel;
 
         // generate messages
-        var prng = std.Random.DefaultPrng.init(19);
+        var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
         const random = prng.random();
 
         var msg_sent: usize = 0;
@@ -3502,14 +3495,15 @@ pub const BenchmarkGossipServiceGeneral = struct {
 pub const BenchmarkGossipServicePullRequests = struct {
     pub const min_iterations = 1;
     pub const max_iterations = 5;
+    pub const name = "GossipServicePullRequests";
 
-    pub const BenchmarkArgs = struct {
+    pub const BenchmarkInputs = struct {
         name: []const u8 = "",
         n_data_populated: usize,
         n_pull_requests: usize,
     };
 
-    pub const args = [_]BenchmarkArgs{
+    pub const inputs = [_]BenchmarkInputs{
         .{
             .name = "1k_data_1k_pull_reqs",
             .n_data_populated = 1_000,
@@ -3522,7 +3516,7 @@ pub const BenchmarkGossipServicePullRequests = struct {
         },
     };
 
-    pub fn benchmarkPullRequests(bench_args: BenchmarkArgs) !sig.time.Duration {
+    pub fn benchmarkPullRequests(bench_args: BenchmarkInputs) !sig.time.Duration {
         const allocator = if (@import("builtin").is_test) std.testing.allocator else std.heap.c_allocator;
         var keypair = KeyPair.generate();
         var address = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8888);
@@ -3560,7 +3554,7 @@ pub const BenchmarkGossipServicePullRequests = struct {
         });
 
         const now = getWallclockMs();
-        var prng = std.Random.DefaultPrng.init(19);
+        var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
         const random = prng.random();
 
         {
@@ -3613,7 +3607,7 @@ pub const BenchmarkGossipServicePullRequests = struct {
 };
 
 fn localhostTestContactInfo(id: Pubkey) !ContactInfo {
-    comptime std.debug.assert(@import("builtin").is_test); // should only be used for testin
+    if (!@import("builtin").is_test) @compileError("only for testing");
     var contact_info = try LegacyContactInfo.default(id).toContactInfo(std.testing.allocator);
     errdefer contact_info.deinit();
     try contact_info.setSocket(.gossip, SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 0));

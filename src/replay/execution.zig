@@ -23,7 +23,7 @@ const ParsedVote = sig.consensus.vote_listener.vote_parser.ParsedVote;
 const ProcessedTransaction = sig.runtime.transaction_execution.ProcessedTransaction;
 const TransactionError = sig.ledger.transaction_status.TransactionError;
 
-const Committer = replay.commit.Committer;
+const Committer = replay.Committer;
 const EpochTracker = replay.trackers.EpochTracker;
 const ReplaySlotFuture = replay.exec_async.ReplaySlotFuture;
 const ReplayState = replay.service.ReplayState;
@@ -551,7 +551,7 @@ fn prepareSlot(
         .status_cache = &state.status_cache,
     };
 
-    const committer = replay.commit.Committer{
+    const committer = replay.Committer{
         .logger = .from(state.logger),
         .account_store = state.account_store,
         .slot_state = slot_info.state,
@@ -1103,7 +1103,7 @@ pub const TestState = struct {
             .slot = self.slot,
             .account_reader = self.account_map.accountReader().forSlot(&self.ancestors),
             .reserved_accounts = &.EMPTY,
-            .slot_hashes = .DEFAULT,
+            .slot_hashes = .INIT,
         };
     }
 

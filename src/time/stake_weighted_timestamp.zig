@@ -107,7 +107,7 @@ test "uses median: low-staked outliers" {
     const LAMPORTS_PER_SOL: u64 = 1_000_000_000;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     const recent_timestamp: i64 = 1_578_909_061;
@@ -243,7 +243,7 @@ test "uses median: high-staked outliers" {
     const LAMPORTS_PER_SOL: u64 = 1_000_000_000;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     const recent_timestamp: i64 = 1_578_909_061;
@@ -330,7 +330,7 @@ test "poh" {
     const LAMPORTS_PER_SOL: u64 = 1_000_000_000;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     const epoch_start_timestamp: i64 = 1_578_909_061;
@@ -455,7 +455,7 @@ test "levels" {
     const LAMPORTS_PER_SOL: u64 = 1_000_000_000;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     const epoch_start_timestamp: i64 = 1_578_909_061;
@@ -573,7 +573,7 @@ test "fast slow" {
     const LAMPORTS_PER_SOL: u64 = 1_000_000_000;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     const epoch_start_timestamp: i64 = 1_578_909_061;
@@ -681,7 +681,7 @@ test "early" {
     const LAMPORTS_PER_SOL: u64 = 1_000_000_000;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     const epoch_start_timestamp: i64 = 1_578_909_061;

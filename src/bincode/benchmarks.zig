@@ -7,20 +7,27 @@ pub const test_entry = sig.core.entry.test_entry;
 pub const BenchmarkEntry = struct {
     pub const min_iterations = 200_000;
     pub const max_iterations = 200_000;
+    pub const name = "Entry";
 
     pub fn serializeEntry() !sig.time.Duration {
         const allocator = std.heap.c_allocator;
-
         var timer = sig.time.Timer.start();
-        const actual_bytes = try sig.bincode.writeAlloc(allocator, test_entry.as_struct, .{});
+
+        const actual_bytes = try sig.bincode.writeAlloc(
+            allocator,
+            test_entry.as_struct,
+            .{},
+        );
+        std.mem.doNotOptimizeAway(actual_bytes);
         defer allocator.free(actual_bytes);
+
         return timer.read();
     }
 
     pub fn deserializeEntry() !sig.time.Duration {
         const allocator = std.heap.c_allocator;
-
         var timer = sig.time.Timer.start();
+
         const actual_struct = try sig.bincode.readFromSlice(
             allocator,
             Entry,
@@ -28,6 +35,7 @@ pub const BenchmarkEntry = struct {
             .{},
         );
         defer actual_struct.deinit(allocator);
+
         return timer.read();
     }
 };

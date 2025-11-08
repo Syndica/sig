@@ -707,20 +707,19 @@ test "SocketThread: overload sendto" {
 pub const BenchmarkPacketProcessing = struct {
     pub const min_iterations = 1;
     pub const max_iterations = 20;
+    pub const name = "PacketProcessing";
 
-    pub const BenchmarkArgs = struct {
+    pub const BenchmarkInputs = struct {
         n_packets: usize,
         name: []const u8 = "",
     };
 
-    pub const args = [_]BenchmarkArgs{
-        BenchmarkArgs{
-            .n_packets = 100_000,
-            .name = "100k_msgs",
-        },
-    };
+    pub const inputs = [_]BenchmarkInputs{.{
+        .n_packets = 100_000,
+        .name = "100k_msgs",
+    }};
 
-    pub fn benchmarkReadSocket(bench_args: BenchmarkArgs) !sig.time.Duration {
+    pub fn benchmarkReadSocket(bench_args: BenchmarkInputs) !sig.time.Duration {
         const n_packets = bench_args.n_packets;
         const allocator = if (builtin.is_test) std.testing.allocator else std.heap.c_allocator;
 
@@ -754,7 +753,7 @@ pub const BenchmarkPacketProcessing = struct {
             fn sender(channel: *Channel(Packet), addr: network.EndPoint, e: ExitCondition) !void {
                 var i: usize = 0;
                 var packet: Packet = undefined;
-                var prng = std.Random.DefaultPrng.init(0);
+                var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
                 var timer = try std.time.Timer.start();
 
                 while (e.shouldRun()) {

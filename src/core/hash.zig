@@ -185,6 +185,25 @@ pub const LtHash = struct {
         return .{ .data = data };
     }
 
+    pub fn eql(lhs: LtHash, rhs: LtHash) bool {
+        return std.mem.eql(u16, &lhs.data, &rhs.data);
+    }
+
+    /// Computes a checksum of the LtHash, useful for when 2KiB is too large. This does feel a bit
+    /// silly maybe? But Agave does this in a few places.
+    // [agave] https://github.com/anza-xyz/agave/blob/8e831839feee2b16a51575026179ef1a60f239ad/lattice-hash/src/lt_hash.rs#L52
+    pub fn checksum(self: LtHash) Hash {
+        var out: Hash = undefined;
+
+        std.crypto.hash.Blake3.hash(
+            std.mem.asBytes(&self.data),
+            std.mem.asBytes(&out),
+            .{},
+        );
+
+        return out;
+    }
+
     pub fn format(
         lt_hash: LtHash,
         comptime _: []const u8,
@@ -202,7 +221,7 @@ const expectEqual = std.testing.expectEqual;
 
 // Ensure that if you mix-in or mix-out with the identity, you get the original value
 test "identity" {
-    var rng = std.Random.DefaultPrng.init(0);
+    var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const a = LtHash.initRandom(rng.random());
     try expectEqual(a, a.add(LtHash.IDENTITY));
     try expectEqual(a, a.sub(LtHash.IDENTITY));
@@ -210,7 +229,7 @@ test "identity" {
 
 // Ensure that if you mix-in then mix-out a hash, you get the original value
 test "inverse" {
-    var rng = std.Random.DefaultPrng.init(1);
+    var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const a = LtHash.initRandom(rng.random());
     const b = LtHash.initRandom(rng.random());
     try expectEqual(a, a.add(b).sub(b));
@@ -219,7 +238,7 @@ test "inverse" {
 
 // Ensure that mixing is commutative
 test "commutative" {
-    var rng = std.Random.DefaultPrng.init(2);
+    var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const a = LtHash.initRandom(rng.random());
     const b = LtHash.initRandom(rng.random());
     try expectEqual(a.add(b), b.add(a));
@@ -227,7 +246,7 @@ test "commutative" {
 
 // Ensure that mixing is associative
 test "associative" {
-    var rng = std.Random.DefaultPrng.init(3);
+    var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const a = LtHash.initRandom(rng.random());
     const b = LtHash.initRandom(rng.random());
     const c = LtHash.initRandom(rng.random());
@@ -236,7 +255,7 @@ test "associative" {
 
 // Ensure that mixing out respects distribution
 test "distribute" {
-    var rng = std.Random.DefaultPrng.init(4);
+    var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const a = LtHash.initRandom(rng.random());
     const b = LtHash.initRandom(rng.random());
     const c = LtHash.initRandom(rng.random());

@@ -707,7 +707,7 @@ test calculateRewardPointsPartitioned {
         .credits_observed = 0,
     };
 
-    var stake_history = StakeHistory.DEFAULT;
+    var stake_history = StakeHistory.INIT;
     try stake_history.entries.append(.{ .epoch = 1, .stake = .{
         .activating = 0,
         .effective = 500_000_000_000,
@@ -772,7 +772,7 @@ test calculateStakeVoteRewards {
     { // No Credits To Redeem
         const result = try calculateStakeVoteRewards(
             allocator,
-            &StakeHistory.DEFAULT,
+            &StakeHistory.INIT,
             stake_delegations,
             &cached_vote_accounts,
             rewarded_epoch,
@@ -789,7 +789,7 @@ test calculateStakeVoteRewards {
     { // Zero Rewards
         const result = try calculateStakeVoteRewards(
             allocator,
-            &StakeHistory.DEFAULT,
+            &StakeHistory.INIT,
             stake_delegations,
             &cached_vote_accounts,
             rewarded_epoch,
@@ -814,7 +814,7 @@ test calculateStakeVoteRewards {
     var vote_account = cached_vote_accounts.vote_accounts.getPtr(vote_pubkey_0).?;
     try vote_account.account.state.incrementCredits(allocator, stake_activation_epoch + 1, 10);
 
-    var stake_history = StakeHistory.DEFAULT;
+    var stake_history = StakeHistory.INIT;
     try stake_history.entries.append(.{ .epoch = stake_activation_epoch, .stake = .{
         .activating = 1_000_000_000,
         .effective = 500_000_000_000,
@@ -893,7 +893,7 @@ test calculatePreviousEpochInflationRewards {
 
     const inflation = Inflation.DEFAULT;
     const feature_set = FeatureSet.ALL_DISABLED;
-    const epoch_schedule = EpochSchedule.DEFAULT;
+    const epoch_schedule = EpochSchedule.INIT;
 
     const result = calculatePreviousEpochInflationRewards(
         slot,

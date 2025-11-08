@@ -1226,9 +1226,9 @@ test "vote_program: executeIntializeAccount" {
     const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    const rent = Rent.DEFAULT;
+    const rent = Rent.INIT;
     const clock = Clock{
         .slot = 0,
         .epoch_start_timestamp = 0,
@@ -1318,7 +1318,7 @@ test "vote_program: executeAuthorize withdrawer signed by current withdrawer" {
     const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const clock = Clock{
         .slot = 0,
@@ -1417,11 +1417,9 @@ test "vote_program: executeAuthorize withdrawer signed by current withdrawer" {
 test "vote_program: executeAuthorize voter signed by current withdrawer" {
     const ids = sig.runtime.ids;
     const testing = sig.runtime.program.testing;
-    const PriorVote = sig.runtime.program.vote.state.PriorVote;
-    _ = PriorVote; // autofix
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const clock = Clock{
         .slot = 0,
@@ -1529,7 +1527,7 @@ test "vote_program: authorizeWithSeed withdrawer" {
     const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const clock = Clock{
         .slot = 0,
@@ -1640,7 +1638,7 @@ test "vote_program: authorizeCheckedWithSeed withdrawer" {
     const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const clock = Clock{
         .slot = 0,
@@ -1752,7 +1750,7 @@ test "vote_program: authorizeChecked withdrawer" {
     const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const clock = Clock{
         .slot = 0,
@@ -1851,7 +1849,7 @@ test "vote_program: update_validator_identity" {
     const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const clock = Clock{
         .slot = 0,
@@ -1941,7 +1939,7 @@ test "vote_program: update_validator_identity new authority did not sign" {
     const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const clock = Clock{
         .slot = 0,
@@ -2034,7 +2032,7 @@ test "vote_program: update_validator_identity current authority did not sign" {
     const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const clock = Clock{
         .slot = 0,
@@ -2127,7 +2125,7 @@ test "vote_program: update_commission increasing commission" {
     const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const clock = Clock{
         .slot = 0,
@@ -2238,7 +2236,7 @@ test "vote_program: update_commission decreasing commission" {
     const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const clock = Clock{
         .slot = 0,
@@ -2349,7 +2347,7 @@ test "vote_program: update_commission commission update too late passes with fea
     const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const clock = Clock{
         .slot = 1060, // needed to make isCommissionUpdateAllowed return false
@@ -2451,7 +2449,7 @@ test "vote_program: update_commission error commission update too late failure" 
     const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const clock = Clock{
         .slot = 1060, // needed to make isCommissionUpdateAllowed return false
@@ -2566,7 +2564,7 @@ test "vote_program: update_commission missing signature" {
     const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const clock = Clock{
         .slot = 0,
@@ -2682,10 +2680,10 @@ test "vote_program: widthdraw no changes" {
     // Do in a clean up PR after all instructions has been added.
     const RENT_EXEMPT_THRESHOLD = 27074400;
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    const rent = Rent.DEFAULT;
-    const clock = Clock.DEFAULT;
+    const rent = Rent.INIT;
+    const clock: Clock = .INIT;
 
     // Account data.
     const node_pubkey = Pubkey.initRandom(prng.random());
@@ -2766,10 +2764,10 @@ test "vote_program: widthdraw some amount below with balance above rent exempt" 
     // Do in a clean up PR after all instructions has been added.
     const RENT_EXEMPT_THRESHOLD = 27074400;
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    const rent = Rent.DEFAULT;
-    const clock = Clock.DEFAULT;
+    const rent = Rent.INIT;
+    const clock: Clock = .INIT;
 
     // Account data.
     const node_pubkey = Pubkey.initRandom(prng.random());
@@ -2852,9 +2850,9 @@ test "vote_program: widthdraw all and close account with active vote account" {
     // Do in a clean up PR after all instructions has been added.
     const RENT_EXEMPT_THRESHOLD = 27074400;
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    const rent = Rent.DEFAULT;
+    const rent = Rent.INIT;
     const clock = Clock{
         .slot = 0,
         .epoch_start_timestamp = 0,
@@ -2960,10 +2958,10 @@ test "vote_program: widthdraw some amount below with balance below rent exempt" 
     // Do in a clean up PR after all instructions has been added.
     const RENT_EXEMPT_THRESHOLD = 27074400;
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    const rent = Rent.DEFAULT;
-    const clock = Clock.DEFAULT;
+    const rent = Rent.INIT;
+    const clock: Clock = .INIT;
 
     // Account data.
     const node_pubkey = Pubkey.initRandom(prng.random());
@@ -3047,10 +3045,10 @@ test "vote_program: widthdraw insufficient funds" {
     // Do in a clean up PR after all instructions has been added.
     const RENT_EXEMPT_THRESHOLD = 27074400;
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    const rent = Rent.DEFAULT;
-    const clock = Clock.DEFAULT;
+    const rent = Rent.INIT;
+    const clock: Clock = .INIT;
 
     // Account data.
     const node_pubkey = Pubkey.initRandom(prng.random());
@@ -3132,10 +3130,10 @@ test "vote_program: widthdraw with missing signature" {
     // Do in a clean up PR after all instructions has been added.
     const RENT_EXEMPT_THRESHOLD = 27074400;
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    const rent = Rent.DEFAULT;
-    const clock = Clock.DEFAULT;
+    const rent = Rent.INIT;
+    const clock: Clock = .INIT;
 
     // Account data.
     const node_pubkey = Pubkey.initRandom(prng.random());
@@ -3218,9 +3216,9 @@ test "vote_program: vote" {
 
     const RENT_EXEMPT_THRESHOLD = 27074400;
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    const clock = Clock.DEFAULT;
+    const clock: Clock = .INIT;
 
     const node_pubkey = Pubkey.initRandom(prng.random());
     const authorized_voter = Pubkey.initRandom(prng.random());
@@ -3249,7 +3247,7 @@ test "vote_program: vote" {
         .timestamp = null,
     };
 
-    const slot_hashes = try SlotHashes.initWithEntries(
+    const slot_hashes = SlotHashes.initWithEntries(
         &.{.{ .slot = slots[slots.len - 1], .hash = vote.hash }},
     );
     // deinitialised by expectProgramExecuteResult
@@ -3333,9 +3331,9 @@ test "vote_program: vote switch" {
 
     const RENT_EXEMPT_THRESHOLD = 27074400;
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    const clock = Clock.DEFAULT;
+    const clock: Clock = .INIT;
 
     const node_pubkey = Pubkey.initRandom(prng.random());
     const authorized_voter = Pubkey.initRandom(prng.random());
@@ -3364,7 +3362,7 @@ test "vote_program: vote switch" {
         .timestamp = null,
     };
 
-    const slot_hashes = try SlotHashes.initWithEntries(
+    const slot_hashes = SlotHashes.initWithEntries(
         &.{.{ .slot = slots[slots.len - 1], .hash = vote.hash }},
     );
     // deinitialised by expectProgramExecuteResult
@@ -3448,9 +3446,9 @@ test "vote_program: vote missing signature" {
 
     const RENT_EXEMPT_THRESHOLD = 27074400;
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    const clock = Clock.DEFAULT;
+    const clock: Clock = .INIT;
 
     const node_pubkey = Pubkey.initRandom(prng.random());
     const authorized_voter = Pubkey.initRandom(prng.random());
@@ -3479,7 +3477,7 @@ test "vote_program: vote missing signature" {
         .timestamp = null,
     };
 
-    const slot_hashes = try SlotHashes.initWithEntries(
+    const slot_hashes = SlotHashes.initWithEntries(
         &.{.{ .slot = slots[slots.len - 1], .hash = vote.hash }},
     );
     // deinitialised by expectProgramExecuteResult
@@ -3566,9 +3564,9 @@ test "vote_program: empty vote" {
 
     const RENT_EXEMPT_THRESHOLD = 27074400;
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    const clock = Clock.DEFAULT;
+    const clock: Clock = .INIT;
 
     const node_pubkey = Pubkey.initRandom(prng.random());
     const authorized_voter = Pubkey.initRandom(prng.random());
@@ -3598,7 +3596,7 @@ test "vote_program: empty vote" {
         .timestamp = null,
     };
 
-    const slot_hashes = try SlotHashes.initWithEntries(
+    const slot_hashes = SlotHashes.initWithEntries(
         &.{.{ .slot = 0, .hash = .ZEROES }},
     );
     // deinitialised by expectProgramExecuteResult
@@ -3686,9 +3684,9 @@ test "vote_program: vote state update" {
 
     const RENT_EXEMPT_THRESHOLD = 27074400;
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    const clock = Clock.DEFAULT;
+    const clock: Clock = .INIT;
 
     const node_pubkey = Pubkey.initRandom(prng.random());
     const authorized_voter = Pubkey.initRandom(prng.random());
@@ -3764,7 +3762,7 @@ test "vote_program: vote state update" {
     var final_vote_state_bytes = ([_]u8{0} ** VoteState.MAX_VOTE_STATE_SIZE);
     _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
 
-    const slot_hashes = try SlotHashes.initWithEntries(
+    const slot_hashes = SlotHashes.initWithEntries(
         &.{
             .{ .slot = 8, .hash = vote_slot_hash },
             .{ .slot = 6, .hash = sig.core.Hash.ZEROES },
@@ -3826,9 +3824,9 @@ test "vote_program: vote state update switch" {
 
     const RENT_EXEMPT_THRESHOLD = 27074400;
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    const clock = Clock.DEFAULT;
+    const clock: Clock = .INIT;
 
     const node_pubkey = Pubkey.initRandom(prng.random());
     const authorized_voter = Pubkey.initRandom(prng.random());
@@ -3904,7 +3902,7 @@ test "vote_program: vote state update switch" {
     var final_vote_state_bytes = ([_]u8{0} ** VoteState.MAX_VOTE_STATE_SIZE);
     _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
 
-    const slot_hashes = try SlotHashes.initWithEntries(
+    const slot_hashes = SlotHashes.initWithEntries(
         &.{
             .{ .slot = 8, .hash = vote_slot_hash },
             .{ .slot = 6, .hash = .ZEROES },
@@ -3967,9 +3965,9 @@ test "vote_program: compact vote state update" {
 
     const RENT_EXEMPT_THRESHOLD = 27074400;
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    const clock = Clock.DEFAULT;
+    const clock: Clock = .INIT;
 
     const node_pubkey = Pubkey.initRandom(prng.random());
     const authorized_voter = Pubkey.initRandom(prng.random());
@@ -4045,7 +4043,7 @@ test "vote_program: compact vote state update" {
     var final_vote_state_bytes = ([_]u8{0} ** VoteState.MAX_VOTE_STATE_SIZE);
     _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
 
-    const slot_hashes = try SlotHashes.initWithEntries(
+    const slot_hashes = SlotHashes.initWithEntries(
         &.{
             .{ .slot = 8, .hash = vote_slot_hash },
             .{ .slot = 6, .hash = sig.core.Hash.ZEROES },
@@ -4107,9 +4105,9 @@ test "vote_program: compact vote state update switch" {
 
     const RENT_EXEMPT_THRESHOLD = 27074400;
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    const clock = Clock.DEFAULT;
+    const clock: Clock = .INIT;
 
     const node_pubkey = Pubkey.initRandom(prng.random());
     const authorized_voter = Pubkey.initRandom(prng.random());
@@ -4185,7 +4183,7 @@ test "vote_program: compact vote state update switch" {
     var final_vote_state_bytes = ([_]u8{0} ** VoteState.MAX_VOTE_STATE_SIZE);
     _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
 
-    const slot_hashes = try SlotHashes.initWithEntries(
+    const slot_hashes = SlotHashes.initWithEntries(
         &.{
             .{ .slot = 8, .hash = vote_slot_hash },
             .{ .slot = 6, .hash = sig.core.Hash.ZEROES },
@@ -4248,9 +4246,9 @@ test "vote_program: tower sync" {
 
     const RENT_EXEMPT_THRESHOLD = 27074400;
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    const clock = Clock.DEFAULT;
+    const clock: Clock = .INIT;
 
     const node_pubkey = Pubkey.initRandom(prng.random());
     const authorized_voter = Pubkey.initRandom(prng.random());
@@ -4327,7 +4325,7 @@ test "vote_program: tower sync" {
     var final_vote_state_bytes = ([_]u8{0} ** VoteState.MAX_VOTE_STATE_SIZE);
     _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
 
-    const slot_hashes = try SlotHashes.initWithEntries(
+    const slot_hashes = SlotHashes.initWithEntries(
         &.{
             .{ .slot = 8, .hash = vote_slot_hash },
             .{ .slot = 6, .hash = sig.core.Hash.ZEROES },
@@ -4395,9 +4393,9 @@ test "vote_program: tower sync switch" {
 
     const RENT_EXEMPT_THRESHOLD = 27074400;
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    const clock = Clock.DEFAULT;
+    const clock: Clock = .INIT;
 
     const node_pubkey = Pubkey.initRandom(prng.random());
     const authorized_voter = Pubkey.initRandom(prng.random());
@@ -4474,7 +4472,7 @@ test "vote_program: tower sync switch" {
     var final_vote_state_bytes = ([_]u8{0} ** VoteState.MAX_VOTE_STATE_SIZE);
     _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
 
-    const slot_hashes = try SlotHashes.initWithEntries(
+    const slot_hashes = SlotHashes.initWithEntries(
         &.{
             .{ .slot = 8, .hash = vote_slot_hash },
             .{ .slot = 6, .hash = sig.core.Hash.ZEROES },

@@ -1,19 +1,12 @@
 const std = @import("std");
 const sig = @import("sig.zig");
+const cli = @import("cli");
 
 const accountsdb_fuzz = sig.accounts_db.fuzz;
-const gossip_fuzz_service = sig.gossip.fuzz_service;
-const gossip_fuzz_table = sig.gossip.fuzz_table;
-// const accountsdb_snapshot_fuzz = sig.accounts_db.snapshot.fuzz;
+const gossip_service_fuzz = sig.gossip.fuzz_service;
+const gossip_table_fuzz = sig.gossip.fuzz_table;
+// const snapshot_fuzz = sig.accounts_db.snapshot.fuzz;
 const ledger_fuzz = sig.ledger.fuzz_ledger;
-const ChannelPrintLogger = sig.trace.ChannelPrintLogger;
-const Level = sig.trace.Level;
-
-const servePrometheus = sig.prometheus.servePrometheus;
-const globalRegistry = sig.prometheus.globalRegistry;
-
-// where seeds are saved (in case of too many logs)
-const SEED_FILE_PATH = sig.TEST_DATA_DIR ++ "fuzz_seeds.txt";
 
 // Supported fuzz filters.
 // NOTE: changing these enum variants will require a change to the fuzz/kcov in `scripts/`
@@ -22,85 +15,160 @@ pub const FuzzFilter = enum {
     // snapshot,
     gossip_service,
     gossip_table,
-    allocators,
     ledger,
+    allocators,
+};
+
+const Cmd = struct {
+    data_dir: ?[]const u8,
+    seed: ?u64,
+    fuzzer: ?union(FuzzFilter) {
+        accountsdb: accountsdb_fuzz.RunCmd,
+        // snapshot: FuzzerTodo,
+        gossip_service: FuzzerTodo,
+        gossip_table: FuzzerTodo,
+        ledger: FuzzerTodo,
+        allocators: FuzzerTodo,
+    },
+
+    const FuzzerTodo = struct {
+        args: []const []const u8,
+
+        pub const cmd_info: cli.CommandInfo(FuzzerTodo) = .{
+            .help = .{
+                .short = "TODO: implement bespoke CLI integration for this fuzzer.",
+                .long = null,
+            },
+            .sub = .{
+                .args = .{
+                    .kind = .positional,
+                    .name_override = null,
+                    .alias = .none,
+                    .default_value = &.{},
+                    .config = .string,
+                    .help = "Args to pass to the specified fuzzer.",
+                },
+            },
+        };
+    };
+
+    const parser = cli.Parser(Cmd, .{
+        .help = .{
+            .short = "Fuzz a component of the validator.",
+            .long = null,
+        },
+        .sub = .{
+            .data_dir = .{
+                .kind = .named,
+                .name_override = null,
+                .alias = .none,
+                .default_value = null,
+                .config = .string,
+                .help = "Directory for all fuzzers to store their on-disk data relative to.",
+            },
+            .seed = .{
+                .kind = .named,
+                .name_override = null,
+                .alias = .none,
+                .default_value = null,
+                .config = {},
+                .help = "Seed for the PRNG for all random actions taken during fuzzing.",
+            },
+            .fuzzer = .{
+                .accountsdb = accountsdb_fuzz.RunCmd.cmd_info,
+                // .snapshot = FuzzerTodo.cmd_info,
+                .gossip_service = FuzzerTodo.cmd_info,
+                .gossip_table = FuzzerTodo.cmd_info,
+                .ledger = FuzzerTodo.cmd_info,
+                .allocators = FuzzerTodo.cmd_info,
+            },
+        },
+    });
 };
 
 pub fn main() !void {
     var gpa_state: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa_state.deinit();
-    const allocator = gpa_state.allocator();
+    const gpa = gpa_state.allocator();
 
-    var std_logger = try ChannelPrintLogger.init(.{
-        .allocator = std.heap.c_allocator,
-        .max_level = Level.debug,
+    const argv = try std.process.argsAlloc(gpa);
+    defer std.process.argsFree(gpa, argv);
+    const args = argv[1..];
+
+    const stderr = std.io.getStdErr();
+    const stderr_tty = std.io.tty.detectConfig(stderr);
+    const cmd: Cmd = cmd: {
+        std.debug.lockStdErr();
+        defer std.debug.unlockStdErr();
+        break :cmd try Cmd.parser.parse(
+            gpa,
+            "fuzz",
+            stderr_tty,
+            stderr.writer(),
+            args,
+        ) orelse return;
+    };
+    defer Cmd.parser.free(gpa, cmd);
+
+    const std_logger: *sig.trace.ChannelPrintLogger = try .init(.{
+        .allocator = gpa,
+        .max_level = .debug,
         .max_buffer = 1 << 20,
     }, null);
     defer std_logger.deinit();
-
     const logger = std_logger.logger("fuzz");
 
-    var cli_args = try std.process.argsWithAllocator(allocator);
-    defer cli_args.deinit();
+    const data_dir_name = cmd.data_dir orelse sig.FUZZ_DATA_DIR;
+    const seed = cmd.seed orelse std.crypto.random.int(u64);
+    const fuzzer = cmd.fuzzer orelse {
+        std.debug.print("Missing filter.\n", .{});
+        return;
+    };
+
+    var data_dir = try std.fs.cwd().makeOpenPath(data_dir_name, .{});
+    defer data_dir.close();
+
+    {
+        std.debug.print("using seed: {d}\n", .{seed});
+        // where seeds are saved (in case of too many logs)
+        const seed_file = try data_dir.createFile("fuzz_seeds.txt", .{ .truncate = false });
+        defer seed_file.close();
+        try seed_file.seekFromEnd(0);
+        const now: u64 = @intCast(std.time.timestamp());
+        try seed_file.writer().print(
+            "{s}: time: {d}, seed: {d}\n",
+            .{ @tagName(fuzzer), now, seed },
+        );
+    }
 
     const metrics_port: u16 = 12345;
-
     logger.info().logf("metrics port: {d}", .{metrics_port});
-    const metrics_thread = try std.Thread
-        // TODO: use the GPA here, the server is just leaking because we're losing the handle
-        // to it and never deiniting.
-        .spawn(.{}, servePrometheus, .{ std.heap.c_allocator, globalRegistry(), 12355 });
+    // TODO: use the GPA here, the server is just leaking because we're losing the handle
+    // to it and never deiniting.
+    const metrics_thread: std.Thread = try .spawn(.{}, sig.prometheus.servePrometheus, .{
+        std.heap.c_allocator,
+        sig.prometheus.globalRegistry(),
+        metrics_port,
+    });
     metrics_thread.detach();
 
-    _ = cli_args.skip();
-    const filter = blk: {
-        const maybe_filter = cli_args.next();
-        if (maybe_filter) |filter| {
-            const parsed_filter = std.meta.stringToEnum(FuzzFilter, filter) orelse {
-                std.debug.print(
-                    "Unknown filter. Supported values are: {s} ",
-                    .{std.meta.fieldNames(FuzzFilter)},
-                );
-                return error.UnknownFilter;
-            };
-            std.debug.print("filtering fuzz testing with prefix: {s}\n", .{filter});
-            break :blk parsed_filter;
-        } else {
-            std.debug.print("fuzz filter required: usage: zig build fuzz -- <filter>\n", .{});
-            return error.NoFilterProvided;
-        }
-    };
+    var sub_data_dir = try data_dir.makeOpenPath(@tagName(fuzzer), .{});
+    defer sub_data_dir.close();
 
-    const seed = blk: {
-        const maybe_seed = cli_args.next();
-        if (maybe_seed) |seed_str| {
-            break :blk try std.fmt.parseInt(u64, seed_str, 10);
-        } else {
-            break :blk std.crypto.random.int(u64);
-        }
-    };
+    switch (fuzzer) {
+        .accountsdb,
+        => |run_cmd| try accountsdb_fuzz.run(
+            gpa,
+            .from(logger),
+            seed,
+            sub_data_dir,
+            run_cmd,
+        ),
 
-    std.debug.print("using seed: {d}\n", .{seed});
-    try writeSeedToFile(filter, seed);
-
-    switch (filter) {
-        .accountsdb => try accountsdb_fuzz.run(seed, &cli_args),
-        // .snapshot => try accountsdb_snapshot_fuzz.run(&cli_args),
-        .gossip_service => try gossip_fuzz_service.run(seed, &cli_args),
-        .gossip_table => try gossip_fuzz_table.run(seed, &cli_args),
-        .ledger => try ledger_fuzz.run(seed, &cli_args),
-        .allocators => try sig.utils.allocators.runFuzzer(seed, &cli_args),
+        // .snapshot => try snapshot_fuzz.run(),
+        .gossip_service => |run_cmd| try gossip_service_fuzz.run(seed, run_cmd.args),
+        .gossip_table => |run_cmd| try gossip_table_fuzz.run(seed, run_cmd.args),
+        .ledger => |run_cmd| try ledger_fuzz.run(seed, run_cmd.args, true),
+        .allocators => |run_cmd| try sig.utils.allocators.runFuzzer(seed, run_cmd.args),
     }
-}
-
-/// writes the seed to the defined seed file (defined by SEED_FILE_PATH)
-pub fn writeSeedToFile(filter: FuzzFilter, seed: u64) !void {
-    const seed_file = try std.fs.cwd().createFile(SEED_FILE_PATH, .{
-        .truncate = false,
-    });
-    defer seed_file.close();
-    try seed_file.seekFromEnd(0);
-
-    const now: u64 = @intCast(std.time.timestamp());
-    try seed_file.writer().print("{s}: time: {d}, seed: {d}\n", .{ @tagName(filter), now, seed });
 }

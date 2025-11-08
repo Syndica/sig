@@ -12,7 +12,7 @@ pub const LastRestartSlot = extern struct {
 
     pub const ID: Pubkey = .parse("SysvarLastRestartS1ot1111111111111111111111");
 
-    pub const DEFAULT = LastRestartSlot{
+    pub const INIT = LastRestartSlot{
         .last_restart_slot = 0,
     };
 

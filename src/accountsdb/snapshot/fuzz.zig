@@ -5,7 +5,6 @@ const bincode = sig.bincode;
 
 const BankFields = sig.core.BankFields;
 const Slot = sig.core.Slot;
-const Hash = sig.core.Hash;
 
 const AccountFileInfo = sig.accounts_db.snapshot.data.AccountFileInfo;
 const AccountsDbFields = sig.accounts_db.snapshot.data.AccountsDbFields;
@@ -15,8 +14,7 @@ const SnapshotManifest = sig.accounts_db.snapshot.Manifest;
 
 const MAX_FUZZ_TIME_NS = std.time.ns_per_s * 100_000;
 
-pub fn run(args: *std.process.ArgIterator) !void {
-    _ = args;
+pub fn run() !void {
     const seed = std.crypto.random.int(u64);
 
     var gpa: std.heap.DebugAllocator(.{}) = .init;
@@ -197,8 +195,6 @@ fn randomAccountsDbFields(
         .stored_meta_write_version = random.uintAtMost(u64, params.stored_meta_write_version_max),
         .slot = max_slot,
         .bank_hash_info = .{
-            .accounts_delta_hash = Hash.initRandom(random),
-            .accounts_hash = Hash.initRandom(random),
             .stats = .{
                 .num_updated_accounts = random.intRangeAtMost(
                     u64,

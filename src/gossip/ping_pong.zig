@@ -177,7 +177,7 @@ pub const PingCache = struct {
                 return null;
             }
         }
-        var prng = DefaultPrng.init(0);
+        var prng = DefaultPrng.init(std.testing.random_seed);
         const ping = Ping.initRandom(prng.random(), keypair) catch return null;
         var token_with_prefix = PING_PONG_HASH_PREFIX ++ ping.token;
         const hash = Hash.init(&token_with_prefix);
@@ -255,7 +255,7 @@ test "PingCache works" {
     );
     defer ping_cache.deinit();
 
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     const the_node = PubkeyAndSocketAddr{ .pubkey = Pubkey.initRandom(random), .socket_addr = SocketAddr.UNSPECIFIED };

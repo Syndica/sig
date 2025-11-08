@@ -23,9 +23,9 @@ const ParsedVote = sig.consensus.vote_listener.vote_parser.ParsedVote;
 const SlotHashes = sig.runtime.sysvar.SlotHashes;
 const TransactionError = sig.ledger.transaction_status.TransactionError;
 
-const AccountLocks = replay.account_locks.AccountLocks;
+const AccountLocks = replay.AccountLocks;
 const BatchResult = replay.execution.BatchResult;
-const Committer = replay.commit.Committer;
+const Committer = replay.Committer;
 const ReplaySlotError = replay.execution.ReplaySlotError;
 const ResolvedBatch = replay.resolve_lookup.ResolvedBatch;
 const ResolvedTransaction = replay.resolve_lookup.ResolvedTransaction;
@@ -443,7 +443,7 @@ const ReplayBatchTask = struct {
 test "TransactionScheduler: happy path" {
     const allocator = std.testing.allocator;
 
-    var rng = std.Random.DefaultPrng.init(123);
+    var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     var state = try replay.execution.TestState.init(allocator);
     defer state.deinit(allocator);
@@ -486,7 +486,7 @@ test "TransactionScheduler: happy path" {
                 .slot = state.svmParams().slot,
                 .account_reader = .noop,
                 .reserved_accounts = &.EMPTY,
-                .slot_hashes = .DEFAULT,
+                .slot_hashes = .INIT,
             },
         );
         errdefer batch1.deinit(allocator);
@@ -498,7 +498,7 @@ test "TransactionScheduler: happy path" {
                 .slot = state.svmParams().slot,
                 .account_reader = .noop,
                 .reserved_accounts = &.EMPTY,
-                .slot_hashes = .DEFAULT,
+                .slot_hashes = .INIT,
             },
         );
         errdefer batch2.deinit(allocator);
@@ -513,7 +513,7 @@ test "TransactionScheduler: happy path" {
 test "TransactionScheduler: duplicate batch passes through to svm" {
     const allocator = std.testing.allocator;
 
-    var rng = std.Random.DefaultPrng.init(123);
+    var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     var state = try replay.execution.TestState.init(allocator);
     defer state.deinit(allocator);
@@ -556,7 +556,7 @@ test "TransactionScheduler: duplicate batch passes through to svm" {
                 .slot = state.svmParams().slot,
                 .account_reader = .noop,
                 .reserved_accounts = &.EMPTY,
-                .slot_hashes = .DEFAULT,
+                .slot_hashes = .INIT,
             },
         );
         errdefer batch1.deinit(allocator);
@@ -568,7 +568,7 @@ test "TransactionScheduler: duplicate batch passes through to svm" {
                 .slot = state.svmParams().slot,
                 .account_reader = .noop,
                 .reserved_accounts = &.EMPTY,
-                .slot_hashes = .DEFAULT,
+                .slot_hashes = .INIT,
             },
         );
         errdefer batch1_dupe.deinit(allocator);
@@ -589,7 +589,7 @@ test "TransactionScheduler: duplicate batch passes through to svm" {
 test "TransactionScheduler: failed account locks" {
     const allocator = std.testing.allocator;
 
-    var rng = std.Random.DefaultPrng.init(0);
+    var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     var state = try replay.execution.TestState.init(allocator);
     defer state.deinit(allocator);
@@ -626,7 +626,7 @@ test "TransactionScheduler: failed account locks" {
                 .slot = state.svmParams().slot,
                 .account_reader = .noop,
                 .reserved_accounts = &.EMPTY,
-                .slot_hashes = .DEFAULT,
+                .slot_hashes = .INIT,
             },
         );
         errdefer batch1.deinit(allocator);
@@ -643,7 +643,7 @@ test "TransactionScheduler: failed account locks" {
 test "TransactionScheduler: signature verification failure" {
     const allocator = std.testing.allocator;
 
-    var rng = std.Random.DefaultPrng.init(0);
+    var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     var state = try replay.execution.TestState.init(allocator);
     defer state.deinit(allocator);
@@ -691,7 +691,7 @@ test "TransactionScheduler: signature verification failure" {
                 .slot = state.svmParams().slot,
                 .account_reader = .noop,
                 .reserved_accounts = &.EMPTY,
-                .slot_hashes = .DEFAULT,
+                .slot_hashes = .INIT,
             },
         );
         errdefer batch1.deinit(allocator);
@@ -703,7 +703,7 @@ test "TransactionScheduler: signature verification failure" {
                 .slot = state.svmParams().slot,
                 .account_reader = .noop,
                 .reserved_accounts = &.EMPTY,
-                .slot_hashes = .DEFAULT,
+                .slot_hashes = .INIT,
             },
         );
         errdefer batch2.deinit(allocator);
@@ -723,7 +723,7 @@ test "TransactionScheduler: does not send replay vote for failed execution" {
     const vote_program = sig.runtime.program.vote;
     const vote_instruction = vote_program.vote_instruction;
 
-    var rng = std.Random.DefaultPrng.init(7);
+    var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     var state = try replay.execution.TestState.init(allocator);
     defer state.deinit(allocator);
@@ -780,7 +780,7 @@ test "TransactionScheduler: does not send replay vote for failed execution" {
             .slot = state.svmParams().slot,
             .account_reader = state.account_map.accountReader().forSlot(&state.ancestors),
             .reserved_accounts = &.EMPTY,
-            .slot_hashes = .DEFAULT,
+            .slot_hashes = .INIT,
         },
     );
 
@@ -817,7 +817,7 @@ test "TransactionScheduler: sends replay vote after successful execution" {
     const vote_program = sig.runtime.program.vote;
     const vote_instruction = vote_program.vote_instruction;
 
-    var rng = std.Random.DefaultPrng.init(9);
+    var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     var state = try replay.execution.TestState.init(allocator);
     defer state.deinit(allocator);
@@ -862,7 +862,7 @@ test "TransactionScheduler: sends replay vote after successful execution" {
             .{},
         );
         // Ensure rent-exempt balance
-        const rent = sig.runtime.sysvar.Rent.DEFAULT;
+        const rent = sig.runtime.sysvar.Rent.INIT;
         account.lamports = rent.minimumBalance(account.data.len);
 
         // Insert account into the test map so committer can update stakes
@@ -886,7 +886,7 @@ test "TransactionScheduler: sends replay vote after successful execution" {
     defer vote_ix.deinit(allocator);
 
     // 3) Ensure SlotHashes contains the voted slot so vote processor accepts it
-    var slot_hashes: SlotHashes = .DEFAULT;
+    var slot_hashes: SlotHashes = .INIT;
     slot_hashes.add(1, sig.core.Hash.initRandom(rng.random()));
     slot_hashes.add(2, vote_hash);
 
@@ -897,7 +897,7 @@ test "TransactionScheduler: sends replay vote after successful execution" {
         sysvar_account.data = try allocator.alloc(u8, sysvar_len);
         @memset(sysvar_account.data, 0);
         _ = try sig.bincode.writeToSlice(sysvar_account.data, slot_hashes, .{});
-        const rent = sig.runtime.sysvar.Rent.DEFAULT;
+        const rent = sig.runtime.sysvar.Rent.INIT;
         sysvar_account.lamports = rent.minimumBalance(sysvar_account.data.len);
         sysvar_account.owner = sig.runtime.sysvar.OWNER_ID;
         try state.account_map.put(state.slot, SlotHashes.ID, sysvar_account);
@@ -918,7 +918,7 @@ test "TransactionScheduler: sends replay vote after successful execution" {
         sysvar_account.data = try allocator.alloc(u8, sysvar_len);
         @memset(sysvar_account.data, 0);
         _ = try sig.bincode.writeToSlice(sysvar_account.data, clock, .{});
-        const rent = sig.runtime.sysvar.Rent.DEFAULT;
+        const rent = sig.runtime.sysvar.Rent.INIT;
         sysvar_account.lamports = rent.minimumBalance(sysvar_account.data.len);
         sysvar_account.owner = sig.runtime.sysvar.OWNER_ID;
         try state.account_map.put(state.slot, sig.runtime.sysvar.Clock.ID, sysvar_account);
@@ -942,7 +942,7 @@ test "TransactionScheduler: sends replay vote after successful execution" {
 
     // Insert Rent sysvar account
     {
-        const rent = sig.runtime.sysvar.Rent.DEFAULT;
+        const rent = sig.runtime.sysvar.Rent.INIT;
         const sysvar_len = sig.runtime.sysvar.Rent.STORAGE_SIZE;
         var sysvar_account = sig.runtime.AccountSharedData.NEW;
         sysvar_account.data = try allocator.alloc(u8, sysvar_len);

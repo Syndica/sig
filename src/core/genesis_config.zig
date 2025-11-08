@@ -310,8 +310,8 @@ pub const GenesisConfig = struct {
             .inflation = .DEFAULT,
             .__backwards_compat_with_v0_23 = 0,
             .fee_rate_governor = .DEFAULT,
-            .rent = .DEFAULT,
-            .epoch_schedule = .DEFAULT,
+            .rent = .INIT,
+            .epoch_schedule = .INIT,
             .cluster_type = .Development,
         };
     }

@@ -61,7 +61,7 @@ pub fn distributePartitionedEpochRewards(
                 EpochRewards,
                 allocator,
                 slot_store.reader,
-            ) orelse EpochRewards.DEFAULT;
+            ) orelse EpochRewards.INIT;
 
             const partition_indices =
                 try sig.replay.rewards.EpochRewardsHasher.hashRewardsIntoPartitions(
@@ -116,7 +116,7 @@ pub fn distributePartitionedEpochRewards(
             EpochRewards,
             allocator,
             slot_store.reader,
-        ) orelse EpochRewards.DEFAULT;
+        ) orelse EpochRewards.INIT;
         epoch_rewards_sysvar.active = false;
         try updateSysvarAccount(
             EpochRewards,
@@ -159,7 +159,7 @@ fn distributeEpochRewardsInPartition(
         EpochRewards,
         allocator,
         slot_store.reader,
-    ) orelse EpochRewards.DEFAULT;
+    ) orelse EpochRewards.INIT;
 
     std.debug.assert(epoch_rewards.active);
     epoch_rewards.distributed_rewards += lamports_burnt + lamports_distributed;
@@ -319,8 +319,8 @@ const TestEnvironment = struct {
             .account_map = .init(allocator),
             .slot = 0,
             .epoch = 0,
-            .rent = .DEFAULT,
-            .epoch_schedule = .DEFAULT,
+            .rent = .INIT,
+            .epoch_schedule = .INIT,
         };
     }
 

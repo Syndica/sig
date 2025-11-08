@@ -56,6 +56,8 @@ pub const ShredNetworkDependencies = struct {
     epoch_context_mgr: *EpochContextManager,
     n_retransmit_threads: ?usize,
     overwrite_turbine_stake_for_testing: bool,
+    /// RPC Observability
+    rpc_hooks: ?*sig.rpc.Hooks = null,
 };
 
 /// Start the Shred Network.
@@ -213,7 +215,7 @@ test "start and stop gracefully" {
 
     var exit = Atomic(bool).init(false);
 
-    var rng = Random.DefaultPrng.init(0);
+    var rng = Random.DefaultPrng.init(std.testing.random_seed);
 
     var registry = Registry(.{}).init(allocator);
     defer registry.deinit();
@@ -227,7 +229,7 @@ test "start and stop gracefully" {
     defer gossip_table.deinit();
     var gossip_table_rw = RwMux(GossipTable).init(gossip_table);
 
-    var epoch_ctx = try EpochContextManager.init(allocator, sig.core.EpochSchedule.DEFAULT);
+    var epoch_ctx = try EpochContextManager.init(allocator, sig.core.EpochSchedule.INIT);
     defer epoch_ctx.deinit();
 
     var state = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);

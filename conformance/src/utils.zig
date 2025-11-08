@@ -126,10 +126,10 @@ pub fn createTransactionContext(
         .return_data = .{},
         .accounts_resize_delta = 0,
         .compute_meter = instr_ctx.cu_avail,
-        .compute_budget = sig.runtime.ComputeBudget.default(instr_ctx.cu_avail),
+        .compute_budget = .init(instr_ctx.cu_avail),
         .custom_error = null,
         .log_collector = log_collector,
-        .rent = sysvar_cache.get(sysvar.Rent) catch sysvar.Rent.DEFAULT,
+        .rent = sysvar_cache.get(sysvar.Rent) catch sysvar.Rent.INIT,
         .prev_blockhash = sig.core.Hash.ZEROES,
         .prev_lamports_per_signature = 0,
         .slot = if (instr_ctx.slot_context) |slot_ctx| slot_ctx.slot else 0,
@@ -290,7 +290,7 @@ pub fn createSysvarCache(
     var sysvar_cache: sig.runtime.SysvarCache = .{};
     sysvar_cache.clock = try cloneSysvarData(allocator, ctx, sysvar.Clock.ID);
     if (std.meta.isError(sysvar_cache.get(sysvar.Clock))) {
-        var clock = sysvar.Clock.DEFAULT;
+        var clock = sysvar.Clock.INIT;
         clock.slot = 10;
         sysvar_cache.clock = try sysvar.serialize(
             allocator,
@@ -302,7 +302,7 @@ pub fn createSysvarCache(
     if (std.meta.isError(sysvar_cache.get(sysvar.EpochSchedule))) {
         sysvar_cache.epoch_schedule = try sysvar.serialize(
             allocator,
-            sig.core.EpochSchedule.DEFAULT,
+            sig.core.EpochSchedule.INIT,
         );
     }
 
@@ -311,7 +311,7 @@ pub fn createSysvarCache(
     if (std.meta.isError(sysvar_cache.get(sysvar.Rent))) {
         sysvar_cache.rent = try sysvar.serialize(
             allocator,
-            sysvar.Rent.DEFAULT,
+            sysvar.Rent.INIT,
         );
     }
 
@@ -339,7 +339,7 @@ pub fn createSysvarCache(
             if (maybe_entries) |entries| {
                 const start = entries.len -| sysvar.SlotHashes.MAX_ENTRIES;
                 sysvar_cache.slot_hashes = slot_hashes_data;
-                sysvar_cache.slot_hashes_obj = .DEFAULT;
+                sysvar_cache.slot_hashes_obj = .INIT;
                 sysvar_cache.slot_hashes_obj.?.entries.appendSliceAssumeCapacity(entries[start..]);
             }
         }
@@ -358,7 +358,7 @@ pub fn createSysvarCache(
             if (maybe_entries) |entries| {
                 const start = entries.len -| sysvar.StakeHistory.MAX_ENTRIES;
                 sysvar_cache.stake_history = stake_history_data;
-                sysvar_cache.stake_history_obj = .DEFAULT;
+                sysvar_cache.stake_history_obj = .INIT;
                 sysvar_cache.stake_history_obj.?.entries.appendSliceAssumeCapacity(entries[start..]);
             }
         }
@@ -395,7 +395,7 @@ pub fn createSysvarCache(
 
             if (maybe_entries) |entries| {
                 const start = entries.len -| sysvar.RecentBlockhashes.MAX_ENTRIES;
-                sysvar_cache.recent_blockhashes_obj = .DEFAULT;
+                sysvar_cache.recent_blockhashes_obj = .INIT;
                 sysvar_cache.recent_blockhashes_obj.?.entries.appendSliceAssumeCapacity(
                     entries[start..],
                 );
