@@ -131,6 +131,7 @@ pub fn main() !void {
             current_config.replay_threads = params.replay_threads;
             current_config.disable_consensus = params.disable_consensus;
             current_config.voting_enabled = params.voting_enabled;
+            current_config.recreate_sqlite = params.recreate_sqlite;
             try validator(gpa, gossip_gpa, current_config);
         },
         .replay_offline => |params| {
@@ -146,6 +147,7 @@ pub fn main() !void {
             params.geyser.apply(&current_config);
             current_config.replay_threads = params.replay_threads;
             current_config.disable_consensus = params.disable_consensus;
+            current_config.recreate_sqlite = params.recreate_sqlite;
             try replayOffline(gpa, current_config);
         },
         .shred_network => |params| {
@@ -386,6 +388,15 @@ const Cmd = struct {
         .default_value = true,
         .config = {},
         .help = "Enable validator voting. When false, operate as non-voting.",
+    };
+
+    const recreate_sqlite_arg: cli.ArgumentInfo(bool) = .{
+        .kind = .named,
+        .name_override = "recreate-sqlite",
+        .alias = .none,
+        .default_value = false,
+        .config = {},
+        .help = "Re-build the sqlite rooted database from the snapshot.",
     };
 
     const GossipArgumentsCommon = struct {
@@ -726,6 +737,7 @@ const Cmd = struct {
         replay_threads: u16,
         disable_consensus: bool,
         voting_enabled: bool,
+        recreate_sqlite: bool,
 
         const cmd_info: cli.CommandInfo(@This()) = .{
             .help = .{
@@ -747,6 +759,7 @@ const Cmd = struct {
                 .replay_threads = replay_threads_arg,
                 .disable_consensus = disable_consensus_arg,
                 .voting_enabled = voting_enabled_arg,
+                .recreate_sqlite = recreate_sqlite_arg,
             },
         };
     };
@@ -1097,6 +1110,16 @@ fn validator(
     );
     defer loaded_snapshot.deinit();
 
+    var rooted_db: sig.accounts_db.Two.Rooted = try .init("accounts.db");
+    if (cfg.recreate_sqlite) {
+        var accounts_dir = try snapshot_dir.openDir("accounts", .{ .iterate = true });
+        defer accounts_dir.close();
+        try rooted_db.insertFromSnapshot(allocator, accounts_dir);
+    }
+
+    var new_db: sig.accounts_db.Two = try .init(allocator, rooted_db);
+    defer new_db.deinit();
+
     const collapsed_manifest = &loaded_snapshot.collapsed_manifest;
     const bank_fields = &collapsed_manifest.bank_fields;
 
@@ -1205,7 +1228,8 @@ fn validator(
     var replay_deps = try replayDependencies(
         allocator,
         epoch,
-        loaded_snapshot.accounts_db.accountStore(),
+        // loaded_snapshot.accounts_db.accountStore(),
+        .{ .accounts_db_two = &new_db },
         &loaded_snapshot.collapsed_manifest,
         &app_base,
         &ledger,
@@ -1319,6 +1343,16 @@ fn replayOffline(
     );
     defer loaded_snapshot.deinit();
 
+    var rooted_db: sig.accounts_db.Two.Rooted = try .init("accounts.db");
+    if (cfg.recreate_sqlite) {
+        var accounts_dir = try snapshot_dir.openDir("accounts", .{ .iterate = true });
+        defer accounts_dir.close();
+        try rooted_db.insertFromSnapshot(allocator, accounts_dir);
+    }
+
+    var new_db: sig.accounts_db.Two = try .init(allocator, rooted_db);
+    defer new_db.deinit();
+
     const collapsed_manifest = &loaded_snapshot.collapsed_manifest;
     const bank_fields = &collapsed_manifest.bank_fields;
 
@@ -1386,7 +1420,8 @@ fn replayOffline(
     var replay_deps = try replayDependencies(
         allocator,
         epoch,
-        loaded_snapshot.accounts_db.accountStore(),
+        // loaded_snapshot.accounts_db.accountStore(),
+        .{ .accounts_db_two = &new_db },
         &loaded_snapshot.collapsed_manifest,
         &app_base,
         &ledger,

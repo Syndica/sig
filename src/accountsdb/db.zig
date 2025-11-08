@@ -1123,7 +1123,7 @@ pub const AccountsDB = struct {
         var timer = sig.time.Timer.start();
 
         // going higher will only lead to more contention in the buffer pool reads
-        const n_threads = @min(6, @as(u32, @truncate(try std.Thread.getCpuCount())));
+        const n_threads = @min(64, @as(u32, @truncate(try std.Thread.getCpuCount())));
 
         // split processing the bins over muliple threads
         self.logger.info().logf(
