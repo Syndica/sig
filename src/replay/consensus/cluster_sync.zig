@@ -587,8 +587,21 @@ fn processDuplicateConfirmedSlots(
                 if (progress.isDead(confirmed_slot) orelse false) break :status .dead;
                 const slot_hash = if (slot_tracker.get(confirmed_slot)) |ref|
                     ref.state.hash.readCopy()
-                else
-                    null;
+                else blk: {
+                    const highest_slot = if (slot_tracker.slots.count() > 0)
+                        std.mem.max(Slot, slot_tracker.slots.keys())
+                    else
+                        0;
+
+                    logger
+                        .debug()
+                        .logf(
+                        \\ duplicate confirmed slot not found in tracker: root={}, highest_tracked_slot={}, confirmed_slot={}
+                    ,
+                        .{ root, highest_slot, confirmed_slot },
+                    );
+                    break :blk null;
+                };
                 break :status .fromHash(slot_hash);
             },
         };
