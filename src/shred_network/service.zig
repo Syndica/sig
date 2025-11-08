@@ -58,6 +58,10 @@ pub const ShredNetworkDependencies = struct {
     overwrite_turbine_stake_for_testing: bool,
     /// RPC Observability
     rpc_hooks: ?*sig.rpc.Hooks = null,
+    /// Optional channel to send duplicate slot notifications to consensus
+    duplicate_slots_sender: ?*Channel(Slot),
+    /// Gossip service for broadcasting duplicate shred proofs
+    gossip_service: ?*sig.gossip.GossipService,
 };
 
 /// Start the Shred Network.
@@ -115,6 +119,10 @@ pub fn start(
         .leader_schedule = deps.epoch_context_mgr.slotLeaders(),
         .tracker = shred_tracker,
         .inserter = deps.ledger.shredInserter(),
+        .ledger_reader = deps.ledger.reader(),
+        .result_writer = deps.ledger.resultWriter(),
+        .duplicate_slots_sender = deps.duplicate_slots_sender,
+        .gossip_service = deps.gossip_service,
     });
     try defers.deferCall(ShredReceiver.deinit, .{ shred_receiver, deps.allocator });
     try service_manager.spawn(
@@ -173,6 +181,29 @@ pub fn start(
         shred_tracker,
     );
     try service_manager.spawn("Repair Service", RepairService.run, .{repair_svc});
+
+    // duplicate shred listener (thread)
+    if (deps.duplicate_slots_sender) |dup_sender| {
+        try service_manager.spawn(
+            "Duplicate Shred Listener",
+            shred_network.duplicate_shred_listener.recvLoop,
+            .{
+                deps.allocator,
+                sig.trace.Logger("duplicate_shred_listener").from(deps.logger),
+                shred_network.duplicate_shred_listener.Params{
+                    .exit = deps.exit,
+                    .gossip_table_rw = deps.gossip_table_rw,
+                    .result_writer = deps.ledger.resultWriter(),
+                    .ledger_reader = deps.ledger.reader(),
+                    .duplicate_slots_sender = dup_sender,
+                    .leader_schedule = deps.epoch_context_mgr.slotLeaders(),
+                    .shred_version = deps.my_shred_version,
+                    .epoch_schedule = deps.epoch_context_mgr.schedule,
+                    .epoch_ctx_mgr = deps.epoch_context_mgr,
+                },
+            },
+        );
+    }
 
     if (conf.dump_shred_tracker) {
         try service_manager.spawn("dump shred tracker", struct {
@@ -249,6 +280,8 @@ test "start and stop gracefully" {
         .epoch_context_mgr = &epoch_ctx,
         .n_retransmit_threads = 1,
         .overwrite_turbine_stake_for_testing = true,
+        .duplicate_slots_sender = null,
+        .gossip_service = null,
     };
 
     var timer = sig.time.Timer.start();
