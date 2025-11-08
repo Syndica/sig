@@ -72,12 +72,9 @@ pub fn parallelUntarToFileSystem(
 
     logger.info().logf("using {d} threads to unpack snapshot", .{n_threads});
 
-    var pool =
-        try HomogeneousThreadPool(UnTarTask).init(allocator, @intCast(n_threads), n_threads);
-    defer {
-        if (!pool.joinForDeinit(.fromSecs(1))) logger.warn().log("failed to join for deinit");
-        pool.deinit(allocator);
-    }
+    var pool = try HomogeneousThreadPool(UnTarTask).init(allocator, @intCast(n_threads));
+    defer pool.deinit(allocator);
+
     var timer = sig.time.Timer.start();
     var progress_timer = sig.time.Timer.start();
     var file_count: usize = 0;
