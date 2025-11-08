@@ -744,13 +744,13 @@ test "address-lookup-table create" {
         .{ .is_signer = false, .is_writable = false, .index_in_transaction = 4 },
     };
 
-    const sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
-        .clock = runtime.sysvar.Clock.DEFAULT,
-        .slot_hashes = try sysvar.SlotHashes.initWithEntries(
-            allocator,
-            &.{.{ .slot = std.math.maxInt(Slot), .hash = sig.core.Hash.ZEROES }},
-        ),
-        .rent = runtime.sysvar.Rent.DEFAULT,
+    const sysvar_cache: ExecuteContextsParams.SysvarCacheParams = .{
+        .clock = .INIT,
+        .slot_hashes = .initWithEntries(&.{.{
+            .slot = std.math.maxInt(Slot),
+            .hash = sig.core.Hash.ZEROES,
+        }}),
+        .rent = .INIT,
     };
 
     try expectProgramExecuteResult(
@@ -852,12 +852,12 @@ test "address-lookup-table freeze" {
     };
 
     const sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
-        .clock = runtime.sysvar.Clock.DEFAULT,
-        .slot_hashes = try sysvar.SlotHashes.initWithEntries(
-            allocator,
-            &.{.{ .slot = std.math.maxInt(Slot), .hash = sig.core.Hash.ZEROES }},
-        ),
-        .rent = runtime.sysvar.Rent.DEFAULT,
+        .clock = runtime.sysvar.Clock.INIT,
+        .slot_hashes = .initWithEntries(&.{.{
+            .slot = std.math.maxInt(Slot),
+            .hash = sig.core.Hash.ZEROES,
+        }}),
+        .rent = runtime.sysvar.Rent.INIT,
     };
 
     const expected_used_compute = program.COMPUTE_UNITS;
@@ -963,12 +963,12 @@ test "address-lookup-table close" {
     };
 
     const sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
-        .clock = runtime.sysvar.Clock.DEFAULT,
-        .slot_hashes = try sysvar.SlotHashes.initWithEntries(
-            allocator,
-            &.{.{ .slot = std.math.maxInt(Slot), .hash = sig.core.Hash.ZEROES }},
-        ),
-        .rent = runtime.sysvar.Rent.DEFAULT,
+        .clock = runtime.sysvar.Clock.INIT,
+        .slot_hashes = .initWithEntries(&.{.{
+            .slot = std.math.maxInt(Slot),
+            .hash = sig.core.Hash.ZEROES,
+        }}),
+        .rent = runtime.sysvar.Rent.INIT,
     };
 
     const expected_used_compute = program.COMPUTE_UNITS;
@@ -1072,12 +1072,12 @@ test "address-lookup-table deactivate" {
     };
 
     const sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
-        .clock = runtime.sysvar.Clock.DEFAULT,
-        .slot_hashes = try sysvar.SlotHashes.initWithEntries(
-            allocator,
-            &.{.{ .slot = std.math.maxInt(Slot), .hash = sig.core.Hash.ZEROES }},
-        ),
-        .rent = runtime.sysvar.Rent.DEFAULT,
+        .clock = runtime.sysvar.Clock.INIT,
+        .slot_hashes = .initWithEntries(&.{.{
+            .slot = std.math.maxInt(Slot),
+            .hash = sig.core.Hash.ZEROES,
+        }}),
+        .rent = runtime.sysvar.Rent.INIT,
     };
 
     const expected_used_compute = program.COMPUTE_UNITS;
@@ -1205,12 +1205,12 @@ test "address-lookup-table extend" {
         };
 
         const sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
-            .clock = runtime.sysvar.Clock.DEFAULT,
-            .slot_hashes = try sysvar.SlotHashes.initWithEntries(
-                allocator,
-                &.{.{ .slot = std.math.maxInt(Slot), .hash = sig.core.Hash.ZEROES }},
-            ),
-            .rent = runtime.sysvar.Rent.DEFAULT,
+            .clock = runtime.sysvar.Clock.INIT,
+            .slot_hashes = .initWithEntries(&.{.{
+                .slot = std.math.maxInt(Slot),
+                .hash = sig.core.Hash.ZEROES,
+            }}),
+            .rent = runtime.sysvar.Rent.INIT,
         };
 
         const expected_used_compute = program.COMPUTE_UNITS +

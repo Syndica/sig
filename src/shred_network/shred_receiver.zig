@@ -291,7 +291,7 @@ test "handleBatch/handlePacket" {
     var registry = sig.prometheus.Registry(.{}).init(allocator);
     defer registry.deinit();
 
-    var epoch_ctx = try sig.adapter.EpochContextManager.init(allocator, .DEFAULT);
+    var epoch_ctx = try sig.adapter.EpochContextManager.init(allocator, .INIT);
     defer epoch_ctx.deinit();
 
     var ledger = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);

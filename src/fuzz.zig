@@ -5,14 +5,14 @@ const cli = @import("cli");
 const accountsdb_fuzz = sig.accounts_db.fuzz;
 const gossip_service_fuzz = sig.gossip.fuzz_service;
 const gossip_table_fuzz = sig.gossip.fuzz_table;
-const snapshot_fuzz = sig.accounts_db.snapshot.fuzz;
+// const snapshot_fuzz = sig.accounts_db.snapshot.fuzz;
 const ledger_fuzz = sig.ledger.fuzz_ledger;
 
 // Supported fuzz filters.
 // NOTE: changing these enum variants will require a change to the fuzz/kcov in `scripts/`
 pub const FuzzFilter = enum {
     accountsdb,
-    snapshot,
+    // snapshot,
     gossip_service,
     gossip_table,
     ledger,
@@ -24,7 +24,7 @@ const Cmd = struct {
     seed: ?u64,
     fuzzer: ?union(FuzzFilter) {
         accountsdb: accountsdb_fuzz.RunCmd,
-        snapshot: FuzzerTodo,
+        // snapshot: FuzzerTodo,
         gossip_service: FuzzerTodo,
         gossip_table: FuzzerTodo,
         ledger: FuzzerTodo,
@@ -76,7 +76,7 @@ const Cmd = struct {
             },
             .fuzzer = .{
                 .accountsdb = accountsdb_fuzz.RunCmd.cmd_info,
-                .snapshot = FuzzerTodo.cmd_info,
+                // .snapshot = FuzzerTodo.cmd_info,
                 .gossip_service = FuzzerTodo.cmd_info,
                 .gossip_table = FuzzerTodo.cmd_info,
                 .ledger = FuzzerTodo.cmd_info,
@@ -165,7 +165,7 @@ pub fn main() !void {
             run_cmd,
         ),
 
-        .snapshot => try snapshot_fuzz.run(),
+        // .snapshot => try snapshot_fuzz.run(),
         .gossip_service => |run_cmd| try gossip_service_fuzz.run(seed, run_cmd.args),
         .gossip_table => |run_cmd| try gossip_table_fuzz.run(seed, run_cmd.args),
         .ledger => |run_cmd| try ledger_fuzz.run(seed, run_cmd.args, true),
