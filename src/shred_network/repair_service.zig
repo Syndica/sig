@@ -115,7 +115,7 @@ pub const RepairService = struct {
             .logger = .from(logger),
             .exit = exit,
             .report = MultiSlotReport.init(allocator),
-            .thread_pool = try RequestBatchThreadPool.init(allocator, n_threads, n_threads),
+            .thread_pool = try RequestBatchThreadPool.init(allocator, n_threads),
             .metrics = try registry.initStruct(Metrics),
             .prng = std.Random.DefaultPrng.init(std.testing.random_seed),
         };

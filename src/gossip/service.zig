@@ -523,9 +523,12 @@ pub const GossipService = struct {
             self.logger.debug().log("verifyPackets loop closed");
         }
 
-        var pool = try HomogeneousThreadPool(VerifyMessageTask)
-            .initBorrowed(self.allocator, &self.thread_pool, VERIFY_PACKET_PARALLEL_TASKS);
-        defer pool.deinit(self.allocator);
+        var pool_arena = std.heap.ArenaAllocator.init(self.allocator);
+        const pool_allocator = pool_arena.allocator();
+        defer pool_arena.deinit();
+
+        var pool = HomogeneousThreadPool(VerifyMessageTask).initBorrowed(&self.thread_pool);
+        defer pool.deinit(pool_allocator);
 
         // loop until the previous service closes and triggers us to close
         while (true) {
@@ -539,7 +542,7 @@ pub const GossipService = struct {
             while (self.packet_incoming_channel.tryReceive()) |packet| {
                 defer self.metrics.gossip_packets_received_total.inc();
 
-                try pool.schedule(self.allocator, .{
+                try pool.schedule(pool_allocator, .{
                     .gossip_data_allocator = self.gossip_data_allocator,
                     .verified_incoming_channel = self.verified_incoming_channel,
                     .packet = packet,

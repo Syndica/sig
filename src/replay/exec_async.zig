@@ -49,18 +49,18 @@ pub fn startPohVerify(
     exit: *Atomic(bool),
 ) Allocator.Error!void {
     if (entries.len == 0) return;
-    const num_tasks = if (pool.max_concurrent_tasks) |max| @min(max, entries.len) else entries.len;
+    const num_tasks = @min(pool.getThreadPool().max_threads, entries.len);
     const entries_per_task = entries.len / num_tasks;
     var batch_initial_hash = initial_hash;
     for (0..num_tasks) |i| {
         const end = if (i == num_tasks - 1) entries.len else (i + 1) * entries_per_task;
-        assert(try pool.trySchedule(allocator, .{
+        try pool.schedule(allocator, .{
             .allocator = allocator,
             .logger = logger,
             .initial_hash = batch_initial_hash,
             .entries = entries[i * entries_per_task .. end],
             .exit = exit,
-        }));
+        });
         batch_initial_hash = entries[end - 1].hash;
     }
 }
@@ -107,8 +107,7 @@ pub const ReplaySlotFuture = struct {
         svm_params: SvmGateway.Params,
         slot_resolver: SlotResolver,
     ) !*ReplaySlotFuture {
-        const poh_verifier = try HomogeneousThreadPool(PohTask)
-            .initBorrowed(allocator, thread_pool, thread_pool.max_threads);
+        const poh_verifier = HomogeneousThreadPool(PohTask).initBorrowed(thread_pool);
         errdefer poh_verifier.deinit(allocator);
 
         const future = try allocator.create(ReplaySlotFuture);
@@ -140,12 +139,9 @@ pub const ReplaySlotFuture = struct {
         // tell threads to exit (they shouldn't be running unless there was an unexpected error)
         self.exit.store(true, .monotonic);
 
-        // join threads
-        const exited_scheduler = self.scheduler.thread_pool.joinForDeinit(.fromMillis(100));
-        const exited_poh = self.poh_verifier.joinForDeinit(.fromMillis(100));
-        if (!exited_scheduler or !exited_poh) {
-            @panic("Failed to deinit ReplaySlotFuture due to hanging threads.");
-        }
+        // join threads (ignore TransactionScheduler & PohVerifier task errors)
+        self.scheduler.thread_pool.joinFallible() catch {};
+        self.poh_verifier.joinFallible() catch {};
 
         // deinit contained items
         self.scheduler.deinit();
@@ -280,8 +276,7 @@ const TransactionScheduler = struct {
             .initCapacity(allocator, batch_capacity);
         errdefer batches.deinit(allocator);
 
-        const pool = try HomogeneousThreadPool(ReplayBatchTask)
-            .initBorrowed(allocator, thread_pool, null);
+        const pool = HomogeneousThreadPool(ReplayBatchTask).initBorrowed(thread_pool);
         errdefer pool.deinit(allocator);
 
         var channel = try Channel(BatchMessage).init(allocator);
@@ -392,11 +387,7 @@ const TransactionScheduler = struct {
                 },
                 else => return e,
             };
-            // trySchedule will always return true, meaning the task was
-            // scheduled successfully, because the thread pool does not have a
-            // maximum number of tasks. See the `null` value passed into
-            // HomogeneousThreadPool.initBorrowed
-            assert(try self.thread_pool.trySchedule(self.allocator, .{
+            try self.thread_pool.schedule(self.allocator, .{
                 .allocator = self.allocator,
                 .logger = self.logger,
                 .committer = self.committer,
@@ -405,7 +396,7 @@ const TransactionScheduler = struct {
                 .transactions = batch.transactions,
                 .results = &self.results,
                 .exit = self.exit,
-            }));
+            });
             self.batches_started += 1;
             tracy.plot(u32, "batches_started", @intCast(self.batches_started));
         }
