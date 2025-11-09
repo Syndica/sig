@@ -104,12 +104,16 @@ pub const ReplaySlotFuture = struct {
         wait_group.start();
         defer self.finish(); // if no tasks scheduled, this immediately completes the Future.
 
-        // Start the schedulers
+        // Start poh verifier.
         var task_batch = ThreadPool.Batch{};
         self.poh_verifier.start(&task_batch, params.last_entry) catch |e| {
             self.setError(e);
             return;
         };
+        self.schedule(task_batch);
+
+        // Start transaction scheduler.
+        task_batch = ThreadPool.Batch{};
         self.txn_scheduler.start(&task_batch, params.slot_resolver) catch |e| {
             self.setError(e);
             return;
@@ -141,6 +145,7 @@ pub const ReplaySlotFuture = struct {
 
     fn setError(self: *ReplaySlotFuture, err_or_sloterr: Error!ReplaySlotError) void {
         self.exit.store(true, .monotonic);
+
         if (self.result_ptr.swap(null, .release)) |result_ptr| {
             result_ptr.* = if (err_or_sloterr) |slot_err|
                 .{ .slot = self.slot, .output = .{ .err = slot_err } }
