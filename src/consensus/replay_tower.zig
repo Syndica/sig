@@ -304,6 +304,10 @@ pub const ReplayTower = struct {
         // TODO expose feature set on Bank
         const is_enable_tower_active = true;
 
+        // Track tower size before vote
+        const votes_before = self.tower.vote_state.votes.len;
+        const last_slot_before = self.tower.vote_state.lastVotedSlot();
+
         const new_root = self.tower.recordBankVoteAndUpdateLockouts(
             vote_slot,
         ) catch |err| switch (err) {
@@ -313,6 +317,16 @@ pub const ReplayTower = struct {
             },
             else => return err,
         };
+
+        // Log what happened during vote processing
+        const votes_after = self.tower.vote_state.votes.len;
+        if (votes_after < votes_before) {
+            const votes_popped = votes_before - votes_after + 1; // +1 because we added one
+            self.logger.info().logf(
+                "vote {d}: popped {} expired votes (last slot before: {?}, new slot: {})",
+                .{ vote_slot, votes_popped, last_slot_before, vote_slot },
+            );
+        }
 
         try self.updateLastVoteFromVoteState(
             allocator,
@@ -1432,6 +1446,19 @@ pub const ReplayTower = struct {
             self.logger.info().logf(
                 "voting: {d} {d:.1}%",
                 .{ candidate_vote_bank_slot, 100.0 * fork_weight },
+            );
+        } else {
+            // Log the specific reasons why we cannot vote
+            self.logger.info().logf(
+                "skipping vote on slot {d}: locked_out={}, threshold_failed={}, " ++
+                    "propagation_failed={}, switch_decision_failed={}",
+                .{
+                    candidate_vote_bank_slot,
+                    is_locked_out,
+                    !threshold_passed,
+                    !propagation_confirmed,
+                    !switch_fork_decision.canVote(),
+                },
             );
         }
 
