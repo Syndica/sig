@@ -1104,7 +1104,12 @@ fn validator(
     var accounts_dir = try snapshot_dir.openDir("accounts", .{ .iterate = true });
     defer accounts_dir.close();
 
-    var rooted_db: sig.accounts_db.Two.Rooted = try .init(allocator, rooted_file, accounts_dir);
+    var rooted_db: sig.accounts_db.Two.Rooted = try .init(
+        allocator,
+        rooted_file,
+        accounts_dir,
+        loaded_snapshot.combined_manifest.full.bank_fields.hash,
+    );
     defer rooted_db.deinit();
 
     var new_db: sig.accounts_db.Two = try .init(allocator, rooted_db);
@@ -1339,7 +1344,12 @@ fn replayOffline(
     var accounts_dir = try snapshot_dir.openDir("accounts", .{ .iterate = true });
     defer accounts_dir.close();
 
-    var rooted_db: sig.accounts_db.Two.Rooted = try .init(allocator, rooted_file, accounts_dir);
+    var rooted_db: sig.accounts_db.Two.Rooted = try .init(
+        allocator,
+        rooted_file,
+        accounts_dir,
+        loaded_snapshot.combined_manifest.full.bank_fields.hash,
+    );
     defer rooted_db.deinit();
 
     var new_db: sig.accounts_db.Two = try .init(allocator, rooted_db);
