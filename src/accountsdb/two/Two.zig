@@ -142,6 +142,9 @@ pub fn slotModifiedIterator(self: *Db, slot: Slot) ?SlotModifiedIterator {
     const index = slot % Unrooted.MAX_SLOTS;
     const entry = &self.unrooted.slots[index];
     if (entry.is_empty.load(.acquire)) return null;
+
+    std.debug.assert(slot == entry.slot);
+
     entry.lock.lockShared();
     return .{
         .slot = entry,

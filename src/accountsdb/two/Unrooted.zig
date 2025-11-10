@@ -82,6 +82,7 @@ pub fn put(
     defer entry.lock.unlock();
 
     if (entry.slot != slot) {
+        std.debug.print("overwriting slot {} with {}\n", .{ entry.slot, slot });
         std.debug.assert(entry.is_empty.load(.acquire));
         entry.entries.clearRetainingCapacity();
         entry.slot = slot;
@@ -108,6 +109,8 @@ pub fn get(
 
         if (ancestors.containsSlot(index.slot)) {
             if (index.slot < best_slot) continue;
+            std.debug.assert(index.slot != best_slot);
+
             const data = index.entries.get(address) orelse continue;
             result = data.asAccount();
             best_slot = index.slot;
