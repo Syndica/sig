@@ -108,8 +108,7 @@ pub const SvmGateway = struct {
             );
         }
 
-        const vm_environment = try vm.Environment.initV1(
-            allocator,
+        const vm_environment = vm.Environment.initV1(
             &params.feature_set,
             // This does not actually set the compute budget. it's only used to
             // set that max call depth and stack frame size. the actual compute
@@ -157,9 +156,7 @@ pub const SvmGateway = struct {
         bhq.unlock();
 
         self.state.sysvar_cache.deinit(allocator);
-        self.state.vm_environment.deinit(allocator);
         self.state.accounts.deinit(allocator);
-        if (self.state.next_vm_environment) |next_vm| next_vm.deinit(allocator);
 
         var programs = self.state.programs;
         programs.deinit(allocator);

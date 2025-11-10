@@ -55,7 +55,10 @@ pub fn main() !void {
         .feature_set = &FeatureSet.ALL_DISABLED,
         .epoch_stakes = &epoch_stakes,
         .sysvar_cache = &SysvarCache{},
-        .vm_environment = &vm.Environment{},
+        .vm_environment = &.{
+            .loader = .ALL_ENABLED,
+            .config = .{},
+        },
         .program_map = &program_map,
         .next_vm_environment = null,
         .accounts = &.{},
@@ -75,8 +78,7 @@ pub fn main() !void {
     };
     defer tc.deinit();
 
-    var loader = try sig.vm.Environment.initV1Loader(gpa, &FeatureSet.ALL_DISABLED, 0, true);
-    defer loader.deinit(gpa);
+    var loader = sig.vm.Environment.initV1Loader(&.ALL_DISABLED, 0, true);
 
     const config: Config = .{
         .maximum_version = cmd.version,
