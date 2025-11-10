@@ -225,7 +225,7 @@ const PohVerifier = struct {
         initial_hash: Hash,
 
         fn run(task: *ThreadPool.Task) void {
-            const zone = tracy.Zone.init(@src(), .{ .name = "replayPohWorker" });
+            const zone = tracy.Zone.init(@src(), .{ .name = "replayVerify" });
             defer zone.deinit();
 
             const self: *Worker = @alignCast(@fieldParentPtr("task", task));
@@ -275,7 +275,7 @@ const TransactionScheduler = struct {
     }
 
     fn start(self: *TransactionScheduler, slot_resolver: SlotResolver) !void {
-        const zone = tracy.Zone.init(@src(), .{ .name = "replayBatchStart" });
+        const zone = tracy.Zone.init(@src(), .{ .name = "replaySchedule" });
         defer zone.deinit();
 
         const allocator = self.future.arena.allocator();
@@ -365,7 +365,7 @@ const TransactionScheduler = struct {
         }
 
         fn run(task: *ThreadPool.Task) void {
-            const zone = tracy.Zone.init(@src(), .{ .name = "replayBatchWorker" });
+            const zone = tracy.Zone.init(@src(), .{ .name = "replayExecute" });
             defer zone.deinit();
 
             const self: *Worker = @alignCast(@fieldParentPtr("task", task));

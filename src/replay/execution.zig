@@ -62,7 +62,7 @@ pub fn replayActiveSlots(state: *ReplayState, num_threads: u32) ![]const ReplayR
 }
 
 fn replayActiveSlotsAsync(state: *ReplayState) ![]const ReplayResult {
-    var zone = tracy.Zone.init(@src(), .{ .name = "replayActiveSlotsAsync" });
+    const zone = tracy.Zone.init(@src(), .{ .name = "replayActiveSlotsAsync" });
     defer zone.deinit();
 
     var results = std.ArrayListUnmanaged(ReplaySlotFuture.Result){};
@@ -70,7 +70,11 @@ fn replayActiveSlotsAsync(state: *ReplayState) ![]const ReplayResult {
 
     {
         var wait_group = std.Thread.WaitGroup{};
-        defer wait_group.wait();
+        defer {
+            const zone_wg = tracy.Zone.init(@src(), .{ .name = "replayActiveSlotsWait" });
+            defer zone_wg.deinit();
+            wait_group.wait();
+        }
 
         const slot_tracker, var slot_lock = state.slot_tracker.readWithLock();
         defer slot_lock.unlock();
@@ -386,7 +390,7 @@ fn prepareSlot(
     epoch_tracker: *const EpochTracker,
     slot: Slot,
 ) !PreparedSlot {
-    var zone = tracy.Zone.init(@src(), .{ .name = "replaySlot" });
+    var zone = tracy.Zone.init(@src(), .{ .name = "prepareSlot" });
     zone.value(slot);
     defer zone.deinit();
     errdefer zone.color(0xFF0000);
