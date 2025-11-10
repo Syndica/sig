@@ -28,6 +28,7 @@ pub const Request = struct {
             error.InvalidJsonRpcVersion,
             error.InvalidMethod,
             error.InvalidParams,
+            error.MethodNotImplemented,
             => return error.UnexpectedToken,
 
             error.ParamsLengthMismatch,
@@ -81,6 +82,8 @@ pub const Request = struct {
             InvalidMethod,
             InvalidParams,
             ParamsLengthMismatch,
+
+            MethodNotImplemented,
         };
 
         pub fn parse(
@@ -112,7 +115,7 @@ pub const Request = struct {
                 inline else => |tag| @unionInit(MethodAndParams, @tagName(tag), blk: {
                     const Params = @FieldType(MethodAndParams, @tagName(tag));
                     if (Params == noreturn) {
-                        std.debug.panic("TODO: implement {s}", .{@tagName(method)});
+                        return error.MethodNotImplemented;
                     }
 
                     break :blk jsonParseValuesAsParamsArray(
