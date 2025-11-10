@@ -306,10 +306,24 @@ pub const ForkChoice = struct {
     ) !void {
         // TODO implement self.print_state();
 
+        self.logger.debug().logf(
+            "addNewLeafSlot: slot={}, hash={}, parent_slot={?}, parent_hash={?}",
+            .{
+                slot_hash_key.slot,
+                slot_hash_key.hash,
+                if (maybe_parent) |p| p.slot else null,
+                if (maybe_parent) |p| p.hash else null,
+            },
+        );
+
         if (self.fork_infos.contains(slot_hash_key)) {
             // Comment from Agave: Can potentially happen if we repair the same version of the duplicate slot, after
             // dumping the original version
             // TODO: What does repair the same version of the duplicate slot, after dumping the original version mean
+            self.logger.warn().logf(
+                "addNewLeafSlot: slot {} already exists, skipping (parent would be {?})",
+                .{ slot_hash_key.slot, if (maybe_parent) |p| p.slot else null },
+            );
             return;
         }
 
@@ -350,16 +364,48 @@ pub const ForkChoice = struct {
                 "block added to fork tree, active forks: {}, slots: {any}",
                 .{ active_fork_slots.len, active_fork_slots },
             );
+
+            // Debug: log details about each node in fork_infos
+            if (active_fork_slots.len > 1) {
+                self.logger.debug().log("fork tree state:");
+                var debug_iter = self.fork_infos.iterator();
+                while (debug_iter.next()) |entry| {
+                    const debug_slot = entry.key_ptr.slot;
+                    const debug_info = entry.value_ptr;
+                    self.logger.debug().logf(
+                        "  slot {}: {} children, parent: {?}",
+                        .{
+                            debug_slot,
+                            debug_info.children.count(),
+                            if (debug_info.parent) |p| p.slot else null,
+                        },
+                    );
+                }
+            }
         }
 
         // If no parent is given then we are done.
-        const parent = if (maybe_parent) |parent| parent else return;
+        const parent = if (maybe_parent) |parent| parent else {
+            self.logger.debug().logf(
+                "addNewLeafSlot: slot {} has no parent (root node)",
+                .{slot_hash_key.slot},
+            );
+            return;
+        };
 
         if (self.fork_infos.getPtr(parent)) |parent_fork_info| {
             try parent_fork_info.children.put(slot_hash_key, {});
+            self.logger.debug().logf(
+                "addNewLeafSlot: slot {} added as child of {} ({} children)",
+                .{ slot_hash_key.slot, parent.slot, parent_fork_info.children.count() },
+            );
         } else {
             // If parent is given then parent's info must
             // already exist by time child is being added.
+            self.logger.err().logf(
+                "addNewLeafSlot: parent slot {} not found in fork_infos for child slot {}",
+                .{ parent.slot, slot_hash_key.slot },
+            );
             return error.MissingParent;
         }
 
