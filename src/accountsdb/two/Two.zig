@@ -45,52 +45,49 @@ pub fn put(self: *Db, slot: Slot, address: Pubkey, data: AccountSharedData) !voi
 // TODO: this should be trivial to put on another thread; this currently blocks the main replay
 // thread for 30-40ms per slot on testnet.
 pub fn onSlotRooted(self: *Db, newly_rooted_slot: Slot) error{FailedToRoot}!void {
-    _ = self;
-    _ = newly_rooted_slot;
+    const rooted_index: *Unrooted.SlotIndex = for (self.unrooted.slots) |*index| {
+        if (index.is_empty.load(.acquire)) continue;
+        if (index.slot != newly_rooted_slot) continue;
+        break index;
+    } else unreachable; // we can't root a slot that doesn't exist!
 
-    // const rooted_index: *Unrooted.SlotIndex = for (self.unrooted.slots) |*index| {
-    //     if (index.is_empty.load(.acquire)) continue;
-    //     if (index.slot != newly_rooted_slot) continue;
-    //     break index;
-    // } else unreachable; // we can't root a slot that doesn't exist!
+    // Get read lock on unrooted slot, commit to db
+    {
+        rooted_index.lock.lockShared();
+        defer rooted_index.lock.unlockShared();
 
-    // // Get read lock on unrooted slot, commit to db
-    // {
-    //     rooted_index.lock.lockShared();
-    //     defer rooted_index.lock.unlockShared();
+        std.debug.assert(rooted_index.slot == newly_rooted_slot);
+        std.debug.assert(!rooted_index.is_empty.load(.acquire));
 
-    //     std.debug.assert(rooted_index.slot == newly_rooted_slot);
-    //     std.debug.assert(!rooted_index.is_empty.load(.acquire));
+        self.rooted.beginTransation() catch return error.FailedToRoot;
 
-    //     self.rooted.beginTransation() catch return error.FailedToRoot;
+        var entries = rooted_index.entries.iterator();
+        while (entries.next()) |entry| {
+            self.rooted.put(entry.key_ptr.*, newly_rooted_slot, entry.value_ptr.*) catch
+                return error.FailedToRoot;
+        }
 
-    //     var entries = rooted_index.entries.iterator();
-    //     while (entries.next()) |entry| {
-    //         self.rooted.put(entry.key_ptr.*, newly_rooted_slot, entry.value_ptr.*) catch
-    //             return error.FailedToRoot;
-    //     }
+        self.rooted.commitTransation() catch return error.FailedToRoot;
+    }
 
-    //     self.rooted.commitTransation() catch return error.FailedToRoot;
-    // }
+    // Get write lock on unrooted slot, remove from unrooted
+    {
+        rooted_index.lock.lock();
+        defer rooted_index.lock.unlock();
 
-    // // Get write lock on unrooted slot, remove from unrooted
-    // {
-    //     rooted_index.lock.lock();
-    //     defer rooted_index.lock.unlock();
+        std.debug.assert(rooted_index.slot == newly_rooted_slot);
+        std.debug.assert(!rooted_index.is_empty.load(.acquire));
 
-    //     std.debug.assert(rooted_index.slot == newly_rooted_slot);
-    //     std.debug.assert(!rooted_index.is_empty.load(.acquire));
+        rooted_index.entries.clearRetainingCapacity();
+        rooted_index.is_empty.store(true, .release);
+    }
 
-    //     rooted_index.entries.clearRetainingCapacity();
-    //     rooted_index.is_empty.store(true, .release);
-    // }
-
-    // if (builtin.is_test) {
-    //     self.rooted.largest_rooted_slot = @max(
-    //         self.rooted.largest_rooted_slot orelse 0,
-    //         newly_rooted_slot,
-    //     );
-    // }
+    if (builtin.is_test) {
+        self.rooted.largest_rooted_slot = @max(
+            self.rooted.largest_rooted_slot orelse 0,
+            newly_rooted_slot,
+        );
+    }
 }
 
 pub fn get(

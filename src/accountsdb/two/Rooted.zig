@@ -358,21 +358,21 @@ pub fn put(self: *Rooted, address: Pubkey, slot: Slot, account: AccountSharedDat
     };
     defer std.debug.assert(sql.sqlite3_reset(stmt) == OK);
 
-    try self.err(sql.sqlite3_bind_blob(stmt, 1, &address.data, Pubkey.SIZE, sql.SQLITE_STATIC));
+    try self.err(sql.sqlite3_bind_blob(stmt, 1, &address.data, Pubkey.SIZE, sql.SQLITE_TRANSIENT));
     try self.err(sql.sqlite3_bind_int64(stmt, 2, @bitCast(account.lamports)));
     try self.err(sql.sqlite3_bind_blob(
         stmt,
         3,
         account.data.ptr,
         @intCast(account.data.len),
-        sql.SQLITE_STATIC,
+        sql.SQLITE_TRANSIENT,
     ));
     try self.err(sql.sqlite3_bind_blob(
         stmt,
         4,
         &account.owner.data,
         Pubkey.SIZE,
-        sql.SQLITE_STATIC,
+        sql.SQLITE_TRANSIENT,
     ));
     try self.err(sql.sqlite3_bind_int(stmt, 5, @intFromBool(account.executable)));
     try self.err(sql.sqlite3_bind_int64(stmt, 6, @bitCast(account.rent_epoch)));
