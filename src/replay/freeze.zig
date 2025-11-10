@@ -113,6 +113,8 @@ pub fn freezeSlot(allocator: Allocator, params: FreezeParams) !void {
         .{ params.hash_slot.slot, slot_hash.get().*.?.base58String().slice() },
     );
 
+    try std.io.getStdOut().writer().print("slot={} hash={}\n", .{ params.hash_slot.slot, slot_hash.get().*.? });
+
     // NOTE: agave updates hard_forks and hash_overrides here
 }
 
@@ -141,6 +143,8 @@ fn finalizeState(allocator: Allocator, params: FinalizeStateParams) !void {
     var zone = tracy.Zone.init(@src(), .{ .name = "finalizeState" });
     zone.value(params.slot);
     defer zone.deinit();
+
+    try std.io.getStdOut().writer().print("slot={}, blockhash={}\n", .{ params.slot, params.blockhash });
 
     // Update recent blockhashes (NOTE: agave does this in registerTick)
     {
