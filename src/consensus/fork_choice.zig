@@ -565,6 +565,7 @@ pub const ForkChoice = struct {
 
         // Log fork stake distribution after updates
         self.logForkStakeDistribution();
+        self.logActiveForkStakeDistribution();
 
         // Update metrics after processing votes
         self.updateMetrics();
@@ -1498,6 +1499,68 @@ pub const ForkChoice = struct {
                 .{ entry.key_ptr.slot, fork_info.stake_for_slot, percentage },
             );
         }
+    }
+
+    /// Logs stake distribution across active forks (leaf nodes).
+    /// This shows which fork tips are competing and their relative stake weights.
+    /// This directly correlates to what fork choice decides - the fork with the highest stake wins.
+    fn logActiveForkStakeDistribution(self: *ForkChoice) void {
+        const total_stake = self.stakeForSubtree(&self.tree_root) orelse 0;
+        if (total_stake == 0) return;
+
+        // Get all leaf nodes (active forks)
+        var leaves = std.ArrayList(SlotAndHash).init(self.allocator);
+        defer leaves.deinit();
+
+        var it = self.fork_infos.iterator();
+        while (it.next()) |entry| {
+            if (entry.value_ptr.children.count() == 0) {
+                leaves.append(entry.key_ptr.*) catch continue;
+            }
+        }
+
+        if (leaves.items.len == 0) return;
+
+        self.logger.info().log("active fork stake distribution:");
+
+        for (leaves.items) |leaf| {
+            // Get the effective weight for this leaf
+            const effective_weight = self.getEffectiveLeafWeight(leaf);
+            const percentage = (@as(f64, @floatFromInt(effective_weight)) /
+                @as(f64, @floatFromInt(total_stake))) * 100.0;
+
+            self.logger.info().logf(
+                "  fork tip {}: {} effective stake ({d:.2}%)",
+                .{ leaf.slot, effective_weight, percentage },
+            );
+        }
+    }
+
+    /// Get the effective stake weight for a leaf node by finding where it
+    /// diverged from competing forks, or returning total tree stake if no competition.
+    fn getEffectiveLeafWeight(self: *ForkChoice, leaf: SlotAndHash) u64 {
+        const fork_info = self.fork_infos.get(leaf) orelse return 0;
+
+        // For a leaf, the effective weight is the stake_for_subtree at the point
+        // where it competes with other branches. Walk up to find competing siblings.
+        var current = leaf;
+        while (self.fork_infos.get(current)) |info| {
+            if (info.parent) |parent| {
+                if (self.fork_infos.get(parent)) |parent_info| {
+                    // If parent has multiple children, we're at a fork point
+                    if (parent_info.children.count() > 1) {
+                        // Return our subtree stake at this level
+                        return info.stake_for_subtree;
+                    }
+                }
+                current = parent;
+            } else {
+                break;
+            }
+        }
+
+        // No competing forks found - this leaf represents the entire tree
+        return fork_info.stake_for_subtree;
     }
 
     /// [Agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L1105
