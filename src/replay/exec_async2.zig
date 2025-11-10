@@ -37,6 +37,7 @@ const Logger = sig.trace.Logger("replay-async2");
 pub const ReplaySlotFuture = struct {
     // Shared state for workers.
     allocator: Allocator,
+    arena: std.heap.ArenaAllocator,
     logger: Logger,
     entries: []const Entry,
 
@@ -85,6 +86,7 @@ pub const ReplaySlotFuture = struct {
 
         self.* = .{
             .allocator = allocator,
+            .arena = .init(allocator),
             .logger = logger,
             .entries = params.entries,
             .poh_verifier = .{ .future = self },
@@ -170,6 +172,8 @@ pub const ReplaySlotFuture = struct {
 
             self.txn_scheduler.deinit();
             self.poh_verifier.deinit();
+
+            self.arena.deinit();
             self.allocator.destroy(self);
         }
     }
@@ -183,7 +187,7 @@ const PohVerifier = struct {
 
     fn deinit(const_self: PohVerifier) void {
         var self = const_self;
-        const allocator = self.future.allocator;
+        const allocator = self.future.arena.allocator();
 
         self.workers.deinit(allocator);
     }
@@ -196,7 +200,7 @@ const PohVerifier = struct {
         defer future.schedule(task_batch);
 
         const num_workers = @min(future.thread_pool.max_threads, entries.len);
-        try self.workers.ensureTotalCapacity(future.allocator, num_workers);
+        try self.workers.ensureTotalCapacity(self.future.arena.allocator(), num_workers);
         const entries_per_worker = entries.len / num_workers;
 
         var batch_initial_hash = last_entry;
@@ -229,7 +233,7 @@ const PohVerifier = struct {
 
             const success = verifyPoh(
                 self.entries,
-                self.future.allocator,
+                self.future.allocator, // cant use arena here as its multi-threaded.
                 self.initial_hash,
                 .{ .exit = &self.future.exit },
             ) catch |e| switch (e) {
@@ -264,7 +268,7 @@ const TransactionScheduler = struct {
 
     fn deinit(const_self: TransactionScheduler) void {
         var self = const_self;
-        const allocator = self.future.allocator;
+        const allocator = self.future.arena.allocator();
 
         for (self.workers.items) |worker| worker.deinit(allocator);
         self.workers.deinit(allocator);
@@ -274,11 +278,17 @@ const TransactionScheduler = struct {
         const zone = tracy.Zone.init(@src(), .{ .name = "replayBatchStart" });
         defer zone.deinit();
 
-        const allocator = self.future.allocator;
+        const allocator = self.future.arena.allocator();
         const entries = self.future.entries;
 
-        var writers = std.AutoHashMapUnmanaged(Pubkey, ?u32){};
-        defer writers.deinit(allocator);
+        var locks = std.AutoArrayHashMapUnmanaged(Pubkey, struct {
+            last_writer: ?u32 = null,
+            readers: std.ArrayListUnmanaged(u32) = .{},
+        }){};
+        defer {
+            for (locks.values()) |*lock| lock.readers.deinit(allocator);
+            locks.deinit(allocator);
+        }
 
         var deps = std.AutoArrayHashMapUnmanaged(u32, void){};
         defer deps.deinit(allocator);
@@ -292,16 +302,28 @@ const TransactionScheduler = struct {
 
                 const id: u32 = @intCast(self.workers.items.len);
                 deps.clearRetainingCapacity();
+
                 for (
                     transaction.accounts.items(.pubkey),
                     transaction.accounts.items(.is_writable),
                 ) |pubkey, writable| {
-                    const gop = try writers.getOrPut(allocator, pubkey);
-                    if (!gop.found_existing) gop.value_ptr.* = null;
-                    // if writer at pubkey, that worker is our dep.
-                    if (gop.value_ptr.*) |writer_id| try deps.put(allocator, writer_id, {});
-                    // if we write, we are now the dep for subsequent workerw on pubkey.
-                    if (writable) gop.value_ptr.* = id;
+                    const gop = try locks.getOrPut(allocator, pubkey);
+                    const lock = gop.value_ptr;
+                    if (!gop.found_existing) lock.* = .{};
+
+                    // Always depend on last writer.
+                    if (lock.last_writer) |writer_id|
+                        try deps.put(allocator, writer_id, {});
+
+                    if (writable) {
+                        // if we write, we depend on both & are now the writer for others later.
+                        for (lock.readers.items) |reader_id| try deps.put(allocator, reader_id, {});
+                        lock.readers.clearRetainingCapacity();
+                        lock.last_writer = id;
+                    } else {
+                        // if we read, we depend on last writer & becomes readers for next .
+                        try lock.readers.append(allocator, id);
+                    }
                 }
 
                 // Tell our deps to decrement our ref_count when done.
@@ -351,7 +373,7 @@ const TransactionScheduler = struct {
 
             const future = self.scheduler.future;
             const result = replayBatch(
-                future.allocator,
+                future.allocator, // cant use arena here as its multi-threaded
                 self.scheduler.svm_params,
                 self.scheduler.committer,
                 &.{self.transaction},
