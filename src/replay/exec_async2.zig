@@ -106,18 +106,12 @@ pub const ReplaySlotFuture = struct {
 
         // Start poh verifier.
         var task_batch = ThreadPool.Batch{};
-        self.poh_verifier.start(&task_batch, params.last_entry) catch |e| {
-            self.setError(e);
-            return;
-        };
+        self.poh_verifier.start(&task_batch, params.last_entry) catch |e| self.setError(e);
         self.schedule(task_batch);
 
         // Start transaction scheduler.
         task_batch = ThreadPool.Batch{};
-        self.txn_scheduler.start(&task_batch, params.slot_resolver) catch |e| {
-            self.setError(e);
-            return;
-        };
+        self.txn_scheduler.start(&task_batch, params.slot_resolver) catch |e| self.setError(e);
         self.schedule(task_batch);
     }
 
@@ -192,7 +186,7 @@ const PohVerifier = struct {
         self.workers.deinit(allocator);
     }
 
-    fn start(self: *PohVerifier, task_batch: *ThreadPool.Batch, last_entry: Hash) Error!void {
+    fn start(self: *PohVerifier, task_batch: *ThreadPool.Batch, last_entry: Hash) !void {
         const future = self.future;
         const entries = future.entries;
 
@@ -255,10 +249,11 @@ const TransactionScheduler = struct {
     svm_params: SvmGateway.Params,
     committer: Committer,
 
-    workers: std.ArrayListUnmanaged(Worker) = .{},
     locks: AccountLocks = .{},
-    waiting: ?*Worker = null,
+    workers: std.ArrayListUnmanaged(Worker) = .{},
+
     done: Atomic(?*Worker) = .init(null),
+    next_worker: usize = 0,
 
     const Error =
         Allocator.Error ||
@@ -278,32 +273,34 @@ const TransactionScheduler = struct {
         self: *TransactionScheduler,
         task_batch: *ThreadPool.Batch,
         slot_resolver: SlotResolver,
-    ) Error!void {
+    ) !void {
         const zone = tracy.Zone.init(@src(), .{ .name = "replayBatchStart" });
         defer zone.deinit();
 
         const allocator = self.future.allocator;
         const entries = self.future.entries;
-
         try self.workers.ensureTotalCapacity(allocator, entries.len);
+
+        var lock_failed = false;
         for (entries) |entry| {
             if (entry.isTick()) continue;
 
+            const batch = try resolveBatch(allocator, entry.transactions, slot_resolver);
             const worker = self.workers.addOneAssumeCapacity();
             worker.* = .{
                 .scheduler = self,
-                .batch = try resolveBatch(allocator, entry.transactions, slot_resolver),
+                .batch = batch,
             };
 
-            self.locks.lockStrict(allocator, worker.batch.accounts) catch |e| switch (e) {
-                error.OutOfMemory => return error.OutOfMemory,
-                error.LockFailed => { // couldnt schedule immediately, add to waiting list.
-                    worker.next = self.waiting;
-                    self.waiting = worker;
-                    continue;
-                },
-            };
-            task_batch.push(.from(&worker.task));
+            if (!lock_failed) {
+                if (self.locks.lockStrict(allocator, worker.batch.accounts)) |_| {
+                    task_batch.push(.from(&worker.task));
+                    self.next_worker += 1;
+                } else |e| switch (e) {
+                    error.LockFailed => lock_failed = true,
+                    error.OutOfMemory => return error.OutOfMemory,
+                }
+            }
         }
     }
 
@@ -318,7 +315,7 @@ const TransactionScheduler = struct {
             defer zone.deinit();
 
             const self: *Worker = @alignCast(@fieldParentPtr("task", task));
-            defer self.scheduler.finish(self);
+            defer self.scheduler.future.finish();
 
             const future = self.scheduler.future;
             const result = replay.execution.replayBatch(
@@ -339,16 +336,16 @@ const TransactionScheduler = struct {
                     .{result.failure},
                 );
                 future.setError(.{ .invalid_transaction = result.failure });
+                return;
             }
+
+            self.scheduler.scheduleNextAfter(self);
         }
     };
 
     // BCS queue into account locking + batch scheduling:
     // https://kprotty.me/2025/09/08/batched-critical-sections.html#is-there-a-fix
-    fn finish(self: *TransactionScheduler, worker: *Worker) void {
-        const future = self.future;
-        defer future.finish();
-
+    fn scheduleNextAfter(self: *TransactionScheduler, worker: *Worker) void {
         // Push worker on done stack.
         var done = self.done.load(.monotonic);
         while (true) {
@@ -364,8 +361,8 @@ const TransactionScheduler = struct {
             var top = worker;
             var bottom: ?*Worker = null;
             var task_batch = ThreadPool.Batch{};
-            defer future.schedule(task_batch);
 
+            const future = self.future;
             while (true) {
                 // Unlock all Worker accounts that have completed in done stack so far.
                 var node = top;
@@ -376,15 +373,13 @@ const TransactionScheduler = struct {
                 }
 
                 // Schedule any batches waiting on account locks.
-                var waiting = self.waiting;
-                self.waiting = null;
-                while (waiting) |w| : (waiting = w.next) {
+                while (self.next_worker < self.workers.items.len) : (self.next_worker += 1) {
+                    const w = &self.workers.items[self.next_worker];
                     self.locks.lockStrict(future.allocator, w.batch.accounts) catch |e| switch (e) {
-                        error.OutOfMemory => future.setError(error.OutOfMemory),
-                        error.LockFailed => { // add back to waiters list.
-                            w.next = self.waiting;
-                            self.waiting = w;
-                            continue;
+                        error.LockFailed => break,
+                        error.OutOfMemory => {
+                            future.setError(error.OutOfMemory);
+                            return;
                         },
                     };
                     task_batch.push(.from(&w.task));
@@ -392,7 +387,10 @@ const TransactionScheduler = struct {
 
                 // Try to mark as done stack as consumed. Retries loop if more were pushed.
                 bottom = top;
-                top = (self.done.cmpxchgStrong(top, null, .release, .acquire) orelse break).?;
+                top = (self.done.cmpxchgStrong(top, null, .release, .acquire) orelse {
+                    if (!future.exit.load(.monotonic)) future.schedule(task_batch);
+                    break;
+                }).?;
             }
         }
     }
