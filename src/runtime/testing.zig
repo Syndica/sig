@@ -188,7 +188,7 @@ pub fn createTransactionContext(
         .compute_meter = params.compute_meter,
         .compute_budget = params.compute_budget,
         .custom_error = params.custom_error,
-        .rent = Rent.DEFAULT,
+        .rent = Rent.INIT,
         .log_collector = params.log_collector,
         .prev_blockhash = params.prev_blockhash,
         .prev_lamports_per_signature = params.prev_lamports_per_signature,
@@ -225,7 +225,7 @@ pub fn createEpochStakes(
     params: []const ExecuteContextsParams.EpochStakeParam,
 ) !EpochStakes {
     var self: EpochStakes = .{
-        .stakes = try .init(allocator),
+        .stakes = .EMPTY,
         .total_stake = 0,
         .node_id_to_vote_accounts = .{},
         .epoch_authorized_voters = .{},

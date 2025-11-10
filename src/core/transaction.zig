@@ -212,8 +212,7 @@ pub const Transaction = struct {
         ) catch return error.SignatureVerificationFailed;
     }
 
-    /// Count the number of accounts in the slice of transactions,
-    /// including accounts from lookup tables
+    /// Count the number of accounts in the slice of transactions, including accounts from lookup tables
     pub fn numAccounts(transactions: []const Transaction) usize {
         var total_accounts: usize = 0;
         for (transactions) |transaction| {

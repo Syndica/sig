@@ -67,7 +67,7 @@ pub fn run(seed: u64, args: []const []const u8) !void {
     var keys = try std.ArrayList(GossipKey).initCapacity(allocator, 100);
     defer keys.deinit();
 
-    var timer = try sig.time.Timer.start();
+    var timer = sig.time.Timer.start();
 
     // get/put a bunch of accounts
     while (true) {

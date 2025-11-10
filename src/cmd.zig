@@ -177,9 +177,11 @@ pub fn main() !void {
             try validateSnapshot(gpa, current_config);
         },
         .snapshot_create => |params| {
-            current_config.accounts_db.snapshot_dir = params.snapshot_dir;
-            current_config.genesis_file_path = params.genesis_file_path;
-            try createSnapshot(gpa, current_config);
+            // current_config.accounts_db.snapshot_dir = params.snapshot_dir;
+            // current_config.genesis_file_path = params.genesis_file_path;
+            // try createSnapshot(gpa, current_config);
+            _ = params;
+            @panic("TODO: support snapshot creation");
         },
         .print_manifest => |params| {
             current_config.accounts_db.snapshot_dir = params.snapshot_dir;
@@ -1540,57 +1542,60 @@ fn printManifest(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
     std.debug.print("full snapshots: {any}\n", .{snapshots.full.bank_fields});
 }
 
-fn createSnapshot(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
-    var app_base = try AppBase.init(allocator, cfg);
-    defer {
-        app_base.shutdown();
-        app_base.deinit();
-    }
+// fn createSnapshot(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
+//     var app_base = try AppBase.init(allocator, cfg);
+//     defer {
+//         app_base.shutdown();
+//         app_base.deinit();
+//     }
 
-    const snapshot_dir_str = cfg.accounts_db.snapshot_dir;
-    var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{});
-    defer snapshot_dir.close();
+//     const snapshot_dir_str = cfg.accounts_db.snapshot_dir;
+//     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{});
+//     defer snapshot_dir.close();
 
-    var loaded_snapshot = try loadSnapshot(
-        allocator,
-        cfg.accounts_db,
-        try cfg.genesisFilePath() orelse return error.GenesisPathNotProvided,
-        .from(app_base.logger),
-        .{
-            .gossip_service = null,
-            .geyser_writer = null,
-            .validate_snapshot = false,
-            .metadata_only = false,
-        },
-    );
-    defer loaded_snapshot.deinit();
+//     var loaded_snapshot = try loadSnapshot(
+//         allocator,
+//         cfg.accounts_db,
+//         try cfg.genesisFilePath() orelse return error.GenesisPathNotProvided,
+//         .from(app_base.logger),
+//         .{
+//             .gossip_service = null,
+//             .geyser_writer = null,
+//             .validate_snapshot = false,
+//             .metadata_only = false,
+//         },
+//     );
+//     defer loaded_snapshot.deinit();
 
-    var accounts_db = loaded_snapshot.accounts_db;
-    const slot = loaded_snapshot.combined_manifest.full.bank_fields.slot;
+//     var accounts_db = loaded_snapshot.accounts_db;
+//     const slot = loaded_snapshot.combined_manifest.full.bank_fields.slot;
 
-    var n_accounts_indexed: u64 = 0;
-    for (accounts_db.account_index.pubkey_ref_map.shards) |*shard_rw| {
-        const shard, var lock = shard_rw.readWithLock();
-        defer lock.unlock();
-        n_accounts_indexed += shard.count();
-    }
-    app_base.logger.info().logf("accountsdb: indexed {d} accounts", .{n_accounts_indexed});
+//     var n_accounts_indexed: u64 = 0;
+//     for (accounts_db.account_index.pubkey_ref_map.shards) |*shard_rw| {
+//         const shard, var lock = shard_rw.readWithLock();
+//         defer lock.unlock();
+//         n_accounts_indexed += shard.count();
+//     }
+//     app_base.logger.info().logf("accountsdb: indexed {d} accounts", .{n_accounts_indexed});
 
-    const output_dir_name = "alt_" ++ sig.VALIDATOR_DIR; // TODO: pull out to cli arg
-    var output_dir = try std.fs.cwd().makeOpenPath(output_dir_name, .{});
-    defer output_dir.close();
+//     const output_dir_name = "alt_" ++ sig.VALIDATOR_DIR; // TODO: pull out to cli arg
+//     var output_dir = try std.fs.cwd().makeOpenPath(output_dir_name, .{});
+//     defer output_dir.close();
 
-    app_base.logger.info().logf(
-        "accountsdb[manager]: generating full snapshot for slot {d}",
-        .{slot},
-    );
-    _ = try accounts_db.generateFullSnapshot(.{
-        .target_slot = slot,
-        .bank_fields = &loaded_snapshot.combined_manifest.full.bank_fields,
-        .lamports_per_signature = 123_456_567, // TODO: make this a real number
-        .old_snapshot_action = .delete_old,
-    });
-}
+//     app_base.logger.info().logf(
+//         "accountsdb[manager]: generating full snapshot for slot {d}",
+//         .{slot},
+//     );
+//     _ = try accounts_db.generateFullSnapshot(.{
+//         .target_slot = slot,
+//         .bank_fields = &loaded_snapshot.combined_manifest.full.bank_fields,
+//         .lamports_per_signature = lps: {
+//             var prng = std.Random.DefaultPrng.init(1234);
+//             break :lps prng.random().int(u64);
+//         },
+//         .old_snapshot_action = .delete_old,
+//     });
+// }
 
 fn validateSnapshot(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
     var app_base = try AppBase.init(allocator, cfg);
@@ -2059,7 +2064,6 @@ fn replayDependencies(
     errdefer root_slot_constants.deinit(allocator);
 
     const lt_hash = collapsed_manifest.bank_extra.accounts_lt_hash;
-
     var root_slot_state = try sig.core.SlotState.fromBankFields(allocator, bank_fields, lt_hash);
     errdefer root_slot_state.deinit(allocator);
 
