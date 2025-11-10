@@ -63,7 +63,7 @@ pub fn replayActiveSlots(state: *ReplayState) ![]const ReplayResult {
 }
 
 fn replayActiveSlotsAsync(state: *ReplayState) ![]const ReplayResult {
-    var zone = tracy.Zone.init(@src(), .{ .name = "replayActiveSlotsAsync" });
+    const zone = tracy.Zone.init(@src(), .{ .name = "replayActiveSlotsAsync" });
     defer zone.deinit();
 
     const slot_tracker = &state.slot_tracker;

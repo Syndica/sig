@@ -10,14 +10,14 @@ const Atomic = std.atomic.Value;
 
 const ThreadPool = sig.sync.ThreadPool;
 
+const Pubkey = core.Pubkey;
 const Entry = core.Entry;
 const Hash = core.Hash;
 
-const AccountLocks = replay.AccountLocks;
 const Committer = replay.Committer;
 const ReplayResult = replay.execution.ReplayResult;
 const ReplaySlotError = replay.execution.ReplaySlotError;
-const ResolvedBatch = replay.resolve_lookup.ResolvedBatch;
+const ResolvedTransaction = replay.resolve_lookup.ResolvedTransaction;
 const SlotResolver = replay.resolve_lookup.SlotResolver;
 const SvmGateway = replay.svm_gateway.SvmGateway;
 
@@ -25,7 +25,7 @@ const assert = std.debug.assert;
 
 const verifyTicks = replay.execution.verifyTicks;
 const verifyPoh = core.entry.verifyPoh;
-const resolveBatch = replay.resolve_lookup.resolveBatch;
+const resolveTransaction = replay.resolve_lookup.resolveTransaction;
 const replayBatch = replay.execution.replayBatch;
 
 const Logger = sig.trace.Logger("replay-async2");
@@ -37,6 +37,7 @@ const Logger = sig.trace.Logger("replay-async2");
 pub const ReplaySlotFuture = struct {
     // Shared state for workers.
     allocator: Allocator,
+    arena: std.heap.ArenaAllocator,
     logger: Logger,
     entries: []const Entry,
 
@@ -85,6 +86,7 @@ pub const ReplaySlotFuture = struct {
 
         self.* = .{
             .allocator = allocator,
+            .arena = .init(allocator),
             .logger = logger,
             .entries = params.entries,
             .poh_verifier = .{ .future = self },
@@ -105,14 +107,16 @@ pub const ReplaySlotFuture = struct {
         defer self.finish(); // if no tasks scheduled, this immediately completes the Future.
 
         // Start poh verifier.
-        var task_batch = ThreadPool.Batch{};
-        self.poh_verifier.start(&task_batch, params.last_entry) catch |e| self.setError(e);
-        self.schedule(task_batch);
+        self.poh_verifier.start(params.last_entry) catch |e| {
+            self.setError(e);
+            return;
+        };
 
         // Start transaction scheduler.
-        task_batch = ThreadPool.Batch{};
-        self.txn_scheduler.start(&task_batch, params.slot_resolver) catch |e| self.setError(e);
-        self.schedule(task_batch);
+        self.txn_scheduler.start(params.slot_resolver) catch |e| {
+            self.setError(e);
+            return;
+        };
     }
 
     fn finishSync(
@@ -168,6 +172,8 @@ pub const ReplaySlotFuture = struct {
 
             self.txn_scheduler.deinit();
             self.poh_verifier.deinit();
+
+            self.arena.deinit();
             self.allocator.destroy(self);
         }
     }
@@ -181,17 +187,20 @@ const PohVerifier = struct {
 
     fn deinit(const_self: PohVerifier) void {
         var self = const_self;
-        const allocator = self.future.allocator;
+        const allocator = self.future.arena.allocator();
 
         self.workers.deinit(allocator);
     }
 
-    fn start(self: *PohVerifier, task_batch: *ThreadPool.Batch, last_entry: Hash) !void {
+    fn start(self: *PohVerifier, last_entry: Hash) !void {
         const future = self.future;
         const entries = future.entries;
 
+        var task_batch = ThreadPool.Batch{};
+        defer future.schedule(task_batch);
+
         const num_workers = @min(future.thread_pool.max_threads, entries.len);
-        try self.workers.ensureTotalCapacity(future.allocator, num_workers);
+        try self.workers.ensureTotalCapacity(self.future.arena.allocator(), num_workers);
         const entries_per_worker = entries.len / num_workers;
 
         var batch_initial_hash = last_entry;
@@ -216,7 +225,7 @@ const PohVerifier = struct {
         initial_hash: Hash,
 
         fn run(task: *ThreadPool.Task) void {
-            const zone = tracy.Zone.init(@src(), .{ .name = "replayPohWorker" });
+            const zone = tracy.Zone.init(@src(), .{ .name = "replayVerify" });
             defer zone.deinit();
 
             const self: *Worker = @alignCast(@fieldParentPtr("task", task));
@@ -224,7 +233,7 @@ const PohVerifier = struct {
 
             const success = verifyPoh(
                 self.entries,
-                self.future.allocator,
+                self.future.allocator, // cant use arena here as its multi-threaded.
                 self.initial_hash,
                 .{ .exit = &self.future.exit },
             ) catch |e| switch (e) {
@@ -248,81 +257,126 @@ const TransactionScheduler = struct {
     future: *ReplaySlotFuture,
     svm_params: SvmGateway.Params,
     committer: Committer,
-
-    locks: AccountLocks = .{},
     workers: std.ArrayListUnmanaged(Worker) = .{},
 
-    done: Atomic(?*Worker) = .init(null),
-    next_worker: usize = 0,
-
+    // zig fmt: off
     const Error =
         Allocator.Error ||
-        @typeInfo(@typeInfo(@TypeOf(resolveBatch)).@"fn".return_type.?).error_union.error_set ||
+        @typeInfo(@typeInfo(@TypeOf(resolveTransaction)).@"fn".return_type.?).error_union.error_set ||
         @typeInfo(@typeInfo(@TypeOf(replayBatch)).@"fn".return_type.?).error_union.error_set;
+    // zig fmt: on
 
     fn deinit(const_self: TransactionScheduler) void {
         var self = const_self;
-        const allocator = self.future.allocator;
+        const allocator = self.future.arena.allocator();
 
-        self.locks.deinit(allocator);
-        for (self.workers.items) |worker| worker.batch.deinit(allocator);
+        for (self.workers.items) |worker| worker.deinit(allocator);
         self.workers.deinit(allocator);
     }
 
-    fn start(
-        self: *TransactionScheduler,
-        task_batch: *ThreadPool.Batch,
-        slot_resolver: SlotResolver,
-    ) !void {
-        const zone = tracy.Zone.init(@src(), .{ .name = "replayBatchStart" });
+    fn start(self: *TransactionScheduler, slot_resolver: SlotResolver) !void {
+        const zone = tracy.Zone.init(@src(), .{ .name = "replaySchedule" });
         defer zone.deinit();
 
-        const allocator = self.future.allocator;
+        const allocator = self.future.arena.allocator();
         const entries = self.future.entries;
-        try self.workers.ensureTotalCapacity(allocator, entries.len);
 
-        var lock_failed = false;
+        var locks = std.AutoArrayHashMapUnmanaged(Pubkey, struct {
+            last_writer: ?u32 = null,
+            readers: std.ArrayListUnmanaged(u32) = .{},
+        }){};
+        defer {
+            for (locks.values()) |*lock| lock.readers.deinit(allocator);
+            locks.deinit(allocator);
+        }
+
+        var deps = std.AutoArrayHashMapUnmanaged(u32, void){};
+        defer deps.deinit(allocator);
+
         for (entries) |entry| {
             if (entry.isTick()) continue;
 
-            const batch = try resolveBatch(allocator, entry.transactions, slot_resolver);
-            const worker = self.workers.addOneAssumeCapacity();
-            worker.* = .{
-                .scheduler = self,
-                .batch = batch,
-            };
+            for (entry.transactions) |tx| {
+                const transaction = try resolveTransaction(allocator, tx, slot_resolver);
+                errdefer transaction.deinit(allocator);
 
-            if (!lock_failed) {
-                if (self.locks.lockStrict(allocator, worker.batch.accounts)) |_| {
-                    task_batch.push(.from(&worker.task));
-                    self.next_worker += 1;
-                } else |e| switch (e) {
-                    error.LockFailed => lock_failed = true,
-                    error.OutOfMemory => return error.OutOfMemory,
+                const id: u32 = @intCast(self.workers.items.len);
+                deps.clearRetainingCapacity();
+
+                for (
+                    transaction.accounts.items(.pubkey),
+                    transaction.accounts.items(.is_writable),
+                ) |pubkey, writable| {
+                    const gop = try locks.getOrPut(allocator, pubkey);
+                    const lock = gop.value_ptr;
+                    if (!gop.found_existing) lock.* = .{};
+
+                    // Always depend on last writer.
+                    if (lock.last_writer) |writer_id|
+                        try deps.put(allocator, writer_id, {});
+
+                    if (writable) {
+                        // if we write, we depend on both & are now the writer for others later.
+                        for (lock.readers.items) |reader_id| try deps.put(allocator, reader_id, {});
+                        lock.readers.clearRetainingCapacity();
+                        lock.last_writer = id;
+                    } else {
+                        // if we read, we depend on last writer & becomes readers for next .
+                        try lock.readers.append(allocator, id);
+                    }
                 }
+
+                // Tell our deps to decrement our ref_count when done.
+                for (deps.keys()) |writer_id| {
+                    try self.workers.items[writer_id].waiters.append(allocator, id);
+                }
+                // Create job with a ref_count for each dep + writer id.
+                try self.workers.append(allocator, .{
+                    .scheduler = self,
+                    .transaction = transaction,
+                    .ref_count = .init(@intCast(deps.count())),
+                    .waiters = .{},
+                });
+            }
+        }
+
+        var task_batch = ThreadPool.Batch{};
+        defer self.future.schedule(task_batch);
+
+        // Once workers have stable pointers, schedule the ones with no dependencies.
+        for (self.workers.items) |*worker| {
+            if (worker.ref_count.raw == 0) {
+                task_batch.push(.from(&worker.task));
             }
         }
     }
 
     const Worker = struct {
         task: ThreadPool.Task = .{ .callback = run },
-        next: ?*Worker = null,
         scheduler: *TransactionScheduler,
-        batch: ResolvedBatch,
+        transaction: ResolvedTransaction,
+        ref_count: Atomic(u32),
+        waiters: std.ArrayListUnmanaged(u32),
+
+        fn deinit(const_self: Worker, allocator: Allocator) void {
+            var self = const_self;
+            self.transaction.deinit(allocator);
+            self.waiters.deinit(allocator);
+        }
 
         fn run(task: *ThreadPool.Task) void {
-            const zone = tracy.Zone.init(@src(), .{ .name = "replayBatchWorker" });
+            const zone = tracy.Zone.init(@src(), .{ .name = "replayExecute" });
             defer zone.deinit();
 
             const self: *Worker = @alignCast(@fieldParentPtr("task", task));
             defer self.scheduler.future.finish();
 
             const future = self.scheduler.future;
-            const result = replay.execution.replayBatch(
-                future.allocator,
+            const result = replayBatch(
+                future.allocator, // cant use arena here as its multi-threaded
                 self.scheduler.svm_params,
                 self.scheduler.committer,
-                self.batch.transactions,
+                &.{self.transaction},
                 &future.exit,
             ) catch |err| {
                 future.logger.err().logf("replayBatch failed with error: {}", .{err});
@@ -339,59 +393,16 @@ const TransactionScheduler = struct {
                 return;
             }
 
-            self.scheduler.scheduleNextAfter(self);
-        }
-    };
-
-    // BCS queue into account locking + batch scheduling:
-    // https://kprotty.me/2025/09/08/batched-critical-sections.html#is-there-a-fix
-    fn scheduleNextAfter(self: *TransactionScheduler, worker: *Worker) void {
-        // Push worker on done stack.
-        var done = self.done.load(.monotonic);
-        while (true) {
-            worker.next = done;
-            done = self.done.cmpxchgWeak(done, worker, .acq_rel, .monotonic) orelse break;
-        }
-
-        // first to push on empty becomes the owner of the account locks
-        if (done == null) {
-            const zone = tracy.Zone.init(@src(), .{ .name = "replayBatchSchedule" });
-            defer zone.deinit();
-
-            var top = worker;
-            var bottom: ?*Worker = null;
             var task_batch = ThreadPool.Batch{};
+            defer future.schedule(task_batch);
 
-            const future = self.future;
-            while (true) {
-                // Unlock all Worker accounts that have completed in done stack so far.
-                var node = top;
-                while (true) {
-                    assert(0 == self.locks.unlock(node.batch.accounts));
-                    if (node.next == bottom) break;
-                    node = node.next.?;
+            // Try to schedule the other workers waiting for us
+            for (self.waiters.items) |id| {
+                const waiter = &self.scheduler.workers.items[id];
+                if (waiter.ref_count.fetchSub(1, .acq_rel) - 1 == 0) {
+                    task_batch.push(.from(&waiter.task));
                 }
-
-                // Schedule any batches waiting on account locks.
-                while (self.next_worker < self.workers.items.len) : (self.next_worker += 1) {
-                    const w = &self.workers.items[self.next_worker];
-                    self.locks.lockStrict(future.allocator, w.batch.accounts) catch |e| switch (e) {
-                        error.LockFailed => break,
-                        error.OutOfMemory => {
-                            future.setError(error.OutOfMemory);
-                            return;
-                        },
-                    };
-                    task_batch.push(.from(&w.task));
-                }
-
-                // Try to mark as done stack as consumed. Retries loop if more were pushed.
-                bottom = top;
-                top = (self.done.cmpxchgStrong(top, null, .release, .acquire) orelse {
-                    if (!future.exit.load(.monotonic)) future.schedule(task_batch);
-                    break;
-                }).?;
             }
         }
-    }
+    };
 };
