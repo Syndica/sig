@@ -1421,8 +1421,12 @@ pub const ReplayTower = struct {
 
             // Ignore shallow checks for voting purposes
             std.debug.print(
-                "vote_depth: {} and self.threshold_dept {}\n",
-                .{ vote_depth, self.threshold_depth },
+                "vote_depth: {} and self.threshold_dept {} and raw {}\n",
+                .{
+                    vote_depth,
+                    self.threshold_depth,
+                    threshold_failure.failed_threshold,
+                },
             );
             if (vote_depth >= self.threshold_depth) {
                 threshold_passed = false;
@@ -1740,6 +1744,12 @@ fn optimisticallyBypassVoteStakeThresholdCheck(
         if (old_vote.slot == threshold_vote.slot and
             old_vote.confirmation_count == threshold_vote.confirmation_count)
         {
+            std
+                .debug
+                .print("Passed optmistic check old_vote.confirmation_count {} threshold_vote.confirmation_count {}", .{
+                old_vote.confirmation_count,
+                threshold_vote.confirmation_count,
+            });
             return true;
         }
     }
