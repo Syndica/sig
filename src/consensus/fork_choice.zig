@@ -189,6 +189,7 @@ pub const ForkChoice = struct {
             .last_root_time = Instant.now(),
             .metrics = try registry.initStruct(ForkChoiceMetrics),
         };
+        errdefer self.deinit();
 
         try self.addNewLeafSlot(tree_root, null);
         return self;
@@ -337,9 +338,17 @@ pub const ForkChoice = struct {
             };
 
             try self.fork_infos.put(slot_hash_key, new_fork_info);
+            errdefer {
+                var removed = self.fork_infos.fetchRemove(slot_hash_key);
+                if (removed) |*kv| kv.value.deinit();
+            }
+
+            const active_fork_slots = try self.countActiveForks(self.allocator);
+            defer self.allocator.free(active_fork_slots);
+
             self.logger.info().logf(
-                "block added to fork tree, active forks: {}",
-                .{self.countActiveForks()},
+                "block added to fork tree, active forks: {}, slots: {any}",
+                .{ active_fork_slots.len, active_fork_slots },
             );
         }
 
@@ -366,16 +375,24 @@ pub const ForkChoice = struct {
         return self.fork_infos.contains(key.*);
     }
 
-    /// Returns the number of active forks (leaf nodes in the fork tree)
-    pub fn countActiveForks(self: *const ForkChoice) usize {
-        var count: usize = 0;
-        var iter = self.fork_infos.valueIterator();
-        while (iter.next()) |fork_info| {
+    /// Returns the slot numbers of all active forks (leaf nodes in the fork tree)
+    pub fn countActiveForks(
+        self: *const ForkChoice,
+        allocator: std.mem.Allocator,
+    ) ![]const Slot {
+        var slots: std.ArrayListUnmanaged(Slot) = .empty;
+        errdefer slots.deinit(allocator);
+
+        var iter = self.fork_infos.iterator();
+        while (iter.next()) |entry| {
+            const slot_hash = entry.key_ptr.*;
+            const fork_info = entry.value_ptr;
             if (fork_info.children.count() == 0) {
-                count += 1;
+                try slots.append(allocator, slot_hash.slot);
             }
         }
-        return count;
+
+        return slots.toOwnedSlice(allocator);
     }
 
     pub fn latestDuplicateAncestor(
