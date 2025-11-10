@@ -193,9 +193,7 @@ pub const Config = struct {
 
 pub fn build(b: *Build) !void {
     const config = try Config.fromBuild(b);
-    defer {
-        if (!config.install and !config.run) disableEmitBin(b);
-    }
+    defer if (!config.install and !config.run) disableEmitBin(b);
 
     const build_options = b.addOptions();
     build_options.addOption(LedgerDB, "ledger_db", config.ledger_db);

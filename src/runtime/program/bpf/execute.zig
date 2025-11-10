@@ -9,8 +9,7 @@ const ExecutionError = sig.vm.ExecutionError;
 const InstructionError = sig.core.instruction.InstructionError;
 const InstructionContext = sig.runtime.InstructionContext;
 const TransactionContext = sig.runtime.TransactionContext;
-const Registry = sig.vm.Registry;
-const Syscall = sig.vm.syscalls.Syscall;
+const SyscallMap = sig.vm.SyscallMap;
 
 pub fn execute(
     allocator: std.mem.Allocator,
@@ -162,7 +161,7 @@ pub fn initVm(
     tc: *TransactionContext,
     executable: *const vm.Executable,
     regions: []vm.memory.Region,
-    syscalls: *const Registry(Syscall),
+    syscalls: *const SyscallMap,
 ) !struct {
     vm.Vm,
     []u8,

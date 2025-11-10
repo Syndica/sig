@@ -1924,28 +1924,16 @@ pub fn deployProgram(
 
     // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L124-L131
     var environment = vm.Environment.initV1(
-        allocator,
         tc.feature_set,
         &tc.compute_budget,
         tc.slot,
         false,
         true,
-    ) catch |err| {
-        try tc.log("Failed to register syscalls: {s}", .{@errorName(err)});
-        return InstructionError.ProgramEnvironmentSetupFailure;
-    };
-    defer environment.deinit(allocator);
+    );
 
     // Deployment of programs with sol_alloc_free is disabled.
-    {
-        const loader_map = &environment.loader.map;
-        for (loader_map.values(), 0..) |entry, i| {
-            if (std.mem.eql(u8, entry.name, "sol_alloc_free_")) {
-                loader_map.swapRemoveAt(i);
-                allocator.free(entry.name); // was allocator.dupe()'d internally
-                break;
-            }
-        }
+    if (environment.loader.map.get(.sol_alloc_free_) != null) {
+        environment.loader.map.set(.sol_alloc_free_, null);
     }
 
     // Copy the program data to a new buffer
