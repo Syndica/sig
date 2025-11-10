@@ -29,6 +29,8 @@ const EpochTracker = replay.trackers.EpochTracker;
 const SlotTracker = replay.trackers.SlotTracker;
 const SlotTree = replay.trackers.SlotTree;
 
+const SysvarCache = sig.runtime.SysvarCache;
+
 const updateSysvarsForNewSlot = replay.update_sysvar.updateSysvarsForNewSlot;
 
 pub const Logger = sig.trace.Logger("replay");
@@ -420,7 +422,7 @@ pub fn trackNewSlots(
             const epoch_info = epoch_tracker.getPtrForSlot(slot) orelse
                 return error.MissingEpoch;
 
-            const constants, var state = try newSlotFromParent(
+            var constants, var state = try newSlotFromParent(
                 allocator,
                 account_store.reader(),
                 epoch_info.ticks_per_slot,
@@ -442,6 +444,13 @@ pub fn trackNewSlots(
                 &state,
                 slot,
                 hard_forks,
+            );
+
+            // TODO: don't uh do this
+            try sig.replay.update_sysvar.fillMissingSysvarCacheEntries(
+                allocator,
+                account_store.reader().forSlot(&constants.ancestors),
+                &constants.sysvar_cache,
             );
 
             try slot_tracker.put(allocator, slot, .{ .constants = constants, .state = state });
@@ -490,14 +499,27 @@ fn newSlotFromParent(
     // This is inefficient, reserved accounts could live in epoch constants along with
     // the feature set since feature activations are only applied at epoch boundaries.
     // Then we only need to clone the map and update the reserved accounts once per epoch.
-    const reserved_accounts = try sig.core.reserved_accounts.initForSlot(
+    var reserved_accounts = try sig.core.reserved_accounts.initForSlot(
         allocator,
         &feature_set,
         slot,
     );
     errdefer reserved_accounts.deinit(allocator);
 
-    const constants = sig.core.SlotConstants{
+    const vm_environment = try sig.vm.Environment.initV1(
+        allocator,
+        &feature_set,
+        // This does not actually set the compute budget. it's only used to
+        // set that max call depth and stack frame size. the actual compute
+        // budgets are determined per transaction.
+        &sig.runtime.ComputeBudget.DEFAULT,
+        slot,
+        false,
+        false,
+    );
+    errdefer vm_environment.deinit(allocator);
+
+    const constants: sig.core.SlotConstants = .{
         .parent_slot = parent_slot,
         .parent_hash = parent_hash,
         .parent_lt_hash = parent_state.accounts_lt_hash.readCopy().?,
@@ -512,6 +534,9 @@ fn newSlotFromParent(
         .ancestors = ancestors,
         .feature_set = feature_set,
         .reserved_accounts = reserved_accounts,
+        .sysvar_cache = .{}, // initialized after sysvar accounts are updated
+        .vm_environment = vm_environment,
+        .next_vm_environment = null,
     };
 
     return .{ constants, state };
@@ -576,6 +601,7 @@ fn freezeCompletedSlots(state: *ReplayState, results: []const ReplayResult) !boo
                     try replay.freeze.freezeSlot(state.allocator, .init(
                         .from(state.logger),
                         state.account_store,
+                        &state.thread_pool,
                         &epoch,
                         slot_info.state,
                         slot_info.constants,

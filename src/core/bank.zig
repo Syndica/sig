@@ -47,6 +47,8 @@ const Ancestors = sig.core.Ancestors;
 const EpochStakesMap = core.EpochStakesMap;
 const Stakes = core.Stakes;
 
+const SysvarCache = sig.runtime.SysvarCache;
+
 const deinitMapAndValues = sig.utils.collections.deinitMapAndValues;
 const cloneMapAndValues = sig.utils.collections.cloneMapAndValues;
 
@@ -103,6 +105,11 @@ pub const SlotConstants = struct {
     /// in the current slot.
     reserved_accounts: ReservedAccounts,
 
+    sysvar_cache: SysvarCache,
+
+    vm_environment: sig.vm.Environment,
+    next_vm_environment: ?sig.vm.Environment,
+
     pub fn fromBankFields(
         allocator: Allocator,
         bank_fields: *const BankFields,
@@ -124,6 +131,9 @@ pub const SlotConstants = struct {
                 &feature_set,
                 bank_fields.slot,
             ),
+            .sysvar_cache = .{},
+            .vm_environment = .{},
+            .next_vm_environment = null,
         };
     }
 
@@ -150,6 +160,9 @@ pub const SlotConstants = struct {
             .ancestors = ancestors,
             .feature_set = .ALL_DISABLED,
             .reserved_accounts = reserved_accounts_data,
+            .sysvar_cahche = .{},
+            .vm_environment = .{},
+            .next_vm_environment = null,
         };
     }
 
@@ -158,6 +171,9 @@ pub const SlotConstants = struct {
         self.epoch_reward_status.deinit(allocator);
         self.ancestors.deinit(allocator);
         self.reserved_accounts.deinit(allocator);
+        self.sysvar_cache.deinit(allocator);
+        self.vm_environment.deinit(allocator);
+        if (self.next_vm_environment) |env| env.deinit(allocator);
     }
 };
 

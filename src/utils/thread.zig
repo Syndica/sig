@@ -60,6 +60,7 @@ pub fn SpawnThreadTasksParams(comptime TaskFn: type) type {
         data_len: usize,
         max_threads: usize,
         params: Params,
+        pool: ?*ThreadPool = null,
 
         pub const Params = std.meta.ArgsTuple(@Type(.{ .@"fn" = blk: {
             var info = @typeInfo(TaskFn).@"fn";
@@ -87,12 +88,10 @@ pub fn spawnThreadTasks(
         }
     };
 
-    var thread_pool = try HomogeneousThreadPool(S).init(
-        allocator,
-        @intCast(n_threads),
-        @intCast(n_threads),
-    );
-    defer thread_pool.deinit(allocator);
+    var thread_pool: HomogeneousThreadPool(S) = if (config.pool) |tp|
+        try .initBorrowed(allocator, tp, n_threads)
+    else
+        try .init(allocator, @intCast(n_threads), n_threads);
 
     var start_index: usize = 0;
     for (0..n_threads) |thread_id| {
