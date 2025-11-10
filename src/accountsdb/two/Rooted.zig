@@ -24,7 +24,11 @@ largest_rooted_slot: if (builtin.is_test) ?Slot else void,
 threadlocal var put_stmt: ?*sql.sqlite3_stmt = null;
 threadlocal var get_stmt: ?*sql.sqlite3_stmt = null;
 
-pub fn init(file_path: [:0]const u8) !Rooted {
+pub fn init(
+    allocator: std.mem.Allocator,
+    file_path: [:0]const u8,
+    accounts_dir: std.fs.Dir,
+) !Rooted {
     const zone = tracy.Zone.init(@src(), .{ .name = "Rooted.init" });
     defer zone.deinit();
 
@@ -33,6 +37,20 @@ pub fn init(file_path: [:0]const u8) !Rooted {
         if (sql.sqlite3_open(file_path.ptr, &maybe_db) != OK)
             return error.FailedToOpenDb;
         break :blk maybe_db orelse return error.SqliteDbNull;
+    };
+
+    const db_has_entries = blk: {
+        const query = "SELECT count(*) from entries";
+
+        var stmt: ?*sql.sqlite3_stmt = null;
+        defer if (stmt) |st| std.debug.assert(sql.sqlite3_finalize(st) == OK);
+        const prep_err = sql.sqlite3_prepare_v2(db, query, -1, &stmt, null);
+        if (prep_err != OK) break :blk false; // table does not exist
+
+        const rc = sql.sqlite3_step(stmt);
+        if (rc != ROW) break :blk false; // other err
+
+        break :blk sql.sqlite3_column_int64(stmt, 0) > 0;
     };
 
     const schema =
@@ -59,10 +77,19 @@ pub fn init(file_path: [:0]const u8) !Rooted {
         return error.FailedToCreateTables;
     }
 
-    return .{
+    var self: Rooted = .{
         .handle = db,
         .largest_rooted_slot = if (builtin.is_test) null else {},
     };
+
+    if (db_has_entries) {
+        std.debug.print("db has entries, skipping load from snapshot\n", .{});
+    } else {
+        std.debug.print("db is empty -  loading from snapshot!\n", .{});
+        try self.insertFromSnapshot(allocator, accounts_dir);
+    }
+
+    return self;
 }
 
 pub fn deinit(self: *Rooted) void {
@@ -142,7 +169,7 @@ fn accountsHash(self: *Rooted) !sig.core.LtHash {
     return hash;
 }
 
-pub fn insertFromSnapshot(
+fn insertFromSnapshot(
     self: *Rooted,
     allocator: std.mem.Allocator,
     accounts_dir: std.fs.Dir,

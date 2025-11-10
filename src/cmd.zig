@@ -1093,9 +1093,22 @@ fn validator(
             .gossip_service = gossip_service,
             .geyser_writer = geyser_writer,
             .validate_snapshot = !cfg.accounts_db.skip_snapshot_validation,
+            .metadata_only = true,
         },
     );
     defer loaded_snapshot.deinit();
+
+    const rooted_file = try std.fs.path.joinZ(allocator, &.{ snapshot_dir_str, "accounts.db" });
+    defer allocator.free(rooted_file);
+
+    var accounts_dir = try snapshot_dir.openDir("accounts", .{ .iterate = true });
+    defer accounts_dir.close();
+
+    var rooted_db: sig.accounts_db.Two.Rooted = try .init(allocator, rooted_file, accounts_dir);
+    defer rooted_db.deinit();
+
+    var new_db: sig.accounts_db.Two = try .init(allocator, rooted_db);
+    defer new_db.deinit();
 
     const collapsed_manifest = &loaded_snapshot.collapsed_manifest;
     const bank_fields = &collapsed_manifest.bank_fields;
@@ -1205,7 +1218,7 @@ fn validator(
     var replay_deps = try replayDependencies(
         allocator,
         epoch,
-        loaded_snapshot.accounts_db.accountStore(),
+        .{ .accounts_db_two = &new_db },
         &loaded_snapshot.collapsed_manifest,
         &app_base,
         &ledger,
@@ -1315,9 +1328,22 @@ fn replayOffline(
             .gossip_service = null,
             .geyser_writer = null,
             .validate_snapshot = !cfg.accounts_db.skip_snapshot_validation,
+            .metadata_only = true,
         },
     );
     defer loaded_snapshot.deinit();
+
+    const rooted_file = try std.fs.path.joinZ(allocator, &.{ snapshot_dir_str, "accounts.db" });
+    defer allocator.free(rooted_file);
+
+    var accounts_dir = try snapshot_dir.openDir("accounts", .{ .iterate = true });
+    defer accounts_dir.close();
+
+    var rooted_db: sig.accounts_db.Two.Rooted = try .init(allocator, rooted_file, accounts_dir);
+    defer rooted_db.deinit();
+
+    var new_db: sig.accounts_db.Two = try .init(allocator, rooted_db);
+    defer new_db.deinit();
 
     const collapsed_manifest = &loaded_snapshot.collapsed_manifest;
     const bank_fields = &collapsed_manifest.bank_fields;
@@ -1386,7 +1412,7 @@ fn replayOffline(
     var replay_deps = try replayDependencies(
         allocator,
         epoch,
-        loaded_snapshot.accounts_db.accountStore(),
+        .{ .accounts_db_two = &new_db },
         &loaded_snapshot.collapsed_manifest,
         &app_base,
         &ledger,
