@@ -1450,13 +1450,13 @@ pub const ReplayTower = struct {
         } else {
             // Log the specific reasons why we cannot vote
             self.logger.info().logf(
-                "skipping vote on slot {d}: locked_out={}, threshold_failed={}, " ++
-                    "propagation_failed={}, switch_decision_failed={}",
+                "skipping vote on slot {d}: is_locked_out={}, threshold_passed={}, " ++
+                    "propagation_confirmed={}, switch_fork_decision={}",
                 .{
                     candidate_vote_bank_slot,
                     is_locked_out,
-                    !threshold_passed,
-                    !propagation_confirmed,
+                    threshold_passed,
+                    propagation_confirmed,
                     !switch_fork_decision.canVote(),
                 },
             );
