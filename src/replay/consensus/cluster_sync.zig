@@ -584,7 +584,10 @@ fn processDuplicateConfirmedSlots(
             .duplicate_confirmed_hash = duplicate_confirmed_hash,
             .slot_status = status: {
                 if (progress.isDead(confirmed_slot) orelse false) break :status .dead;
-                const slot_hash = slot_tracker.get(confirmed_slot).?.state.hash.readCopy();
+                const slot_hash = if (slot_tracker.get(confirmed_slot)) |ref|
+                    ref.state.hash.readCopy()
+                else
+                    null;
                 break :status .fromHash(slot_hash);
             },
         };
@@ -2624,4 +2627,183 @@ test "duplicate confirmed and epoch slots frozen mismatched" {
         sig.core.hash.SlotAndHash{ .slot = 3, .hash = slot3_hash },
         heaviest_subtree_fork_choice.heaviestOverallSlot(),
     );
+}
+
+test "processDuplicateConfirmedSlots with dead slot" {
+    const allocator = std.testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const random = prng.random();
+
+    var test_data: TestData = try .init(allocator, .noop, random);
+    defer test_data.deinit(allocator);
+
+    const slot_tracker = &test_data.slot_tracker;
+    const heaviest_subtree_fork_choice = &test_data.heaviest_subtree_fork_choice;
+    const progress = &test_data.progress;
+
+    var ledger = try ledger_tests.initTestLedger(allocator, @src(), .FOR_TESTS);
+    defer ledger.deinit();
+
+    var duplicate_confirmed_slots: SlotData.DuplicateConfirmedSlots = .empty;
+    defer duplicate_confirmed_slots.deinit(allocator);
+
+    var duplicate_slots_to_repair: SlotData.DuplicateSlotsToRepair = .empty;
+    defer duplicate_slots_to_repair.deinit(allocator);
+
+    var purge_repair_slot_counter: SlotData.PurgeRepairSlotCounters = .empty;
+    defer purge_repair_slot_counter.deinit(allocator);
+
+    var ancestor_hashes_replay_update_channel: sig.sync.Channel(AncestorHashesReplayUpdate) =
+        try .init(allocator);
+    defer ancestor_hashes_replay_update_channel.deinit();
+
+    var duplicate_confirmed_slots_channel: sig.sync.Channel(ThresholdConfirmedSlot) =
+        try .init(allocator);
+    defer duplicate_confirmed_slots_channel.deinit();
+
+    // Mark slot 2 as dead
+    progress.getForkProgress(2).?.is_dead = true;
+
+    // Send duplicate confirmed slot through channel
+    const slot2_hash = slot_tracker.get(2).?.state.hash.readCopy().?;
+    try duplicate_confirmed_slots_channel.send(.{ .slot = 2, .hash = slot2_hash });
+
+    // Process the duplicate confirmed slot
+    try processDuplicateConfirmedSlots(
+        allocator,
+        .noop,
+        &duplicate_confirmed_slots_channel,
+        ledger.resultWriter(),
+        &duplicate_confirmed_slots,
+        slot_tracker,
+        progress,
+        heaviest_subtree_fork_choice,
+        &duplicate_slots_to_repair,
+        &ancestor_hashes_replay_update_channel,
+        &purge_repair_slot_counter,
+    );
+
+    // Verify the dead slot was processed
+    try std.testing.expectEqual(
+        AncestorHashesReplayUpdate{ .dead_duplicate_confirmed = 2 },
+        ancestor_hashes_replay_update_channel.tryReceive(),
+    );
+}
+
+test "processDuplicateConfirmedSlots with non dead slot in tracker" {
+    const allocator = std.testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const random = prng.random();
+
+    var test_data: TestData = try .init(allocator, .noop, random);
+    defer test_data.deinit(allocator);
+
+    const slot_tracker = &test_data.slot_tracker;
+    const heaviest_subtree_fork_choice = &test_data.heaviest_subtree_fork_choice;
+    const progress = &test_data.progress;
+
+    var ledger = try ledger_tests.initTestLedger(allocator, @src(), .FOR_TESTS);
+    defer ledger.deinit();
+
+    var duplicate_confirmed_slots: SlotData.DuplicateConfirmedSlots = .empty;
+    defer duplicate_confirmed_slots.deinit(allocator);
+
+    var duplicate_slots_to_repair: SlotData.DuplicateSlotsToRepair = .empty;
+    defer duplicate_slots_to_repair.deinit(allocator);
+
+    var purge_repair_slot_counter: SlotData.PurgeRepairSlotCounters = .empty;
+    defer purge_repair_slot_counter.deinit(allocator);
+
+    var ancestor_hashes_replay_update_channel: sig.sync.Channel(AncestorHashesReplayUpdate) =
+        try .init(allocator);
+    defer ancestor_hashes_replay_update_channel.deinit();
+
+    var duplicate_confirmed_slots_channel: sig.sync.Channel(ThresholdConfirmedSlot) =
+        try .init(allocator);
+    defer duplicate_confirmed_slots_channel.deinit();
+
+    // Send duplicate confirmed slot through channel
+    // Slot 2 is in the tracker and not dead
+    const slot2_hash = slot_tracker.get(2).?.state.hash.readCopy().?;
+    try duplicate_confirmed_slots_channel.send(.{ .slot = 2, .hash = slot2_hash });
+
+    // Process the duplicate confirmed slot
+    try processDuplicateConfirmedSlots(
+        allocator,
+        .noop,
+        &duplicate_confirmed_slots_channel,
+        ledger.resultWriter(),
+        &duplicate_confirmed_slots,
+        slot_tracker,
+        progress,
+        heaviest_subtree_fork_choice,
+        &duplicate_slots_to_repair,
+        &ancestor_hashes_replay_update_channel,
+        &purge_repair_slot_counter,
+    );
+
+    // Verify the slot was recorded in duplicate_confirmed_slots
+    try std.testing.expectEqual(
+        slot2_hash,
+        duplicate_confirmed_slots.get(2),
+    );
+}
+
+test "processDuplicateConfirmedSlots with slot not in tracker" {
+    const allocator = std.testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const random = prng.random();
+
+    var test_data: TestData = try .init(allocator, .noop, random);
+    defer test_data.deinit(allocator);
+
+    const slot_tracker = &test_data.slot_tracker;
+    const heaviest_subtree_fork_choice = &test_data.heaviest_subtree_fork_choice;
+    const progress = &test_data.progress;
+
+    var ledger = try ledger_tests.initTestLedger(allocator, @src(), .FOR_TESTS);
+    defer ledger.deinit();
+
+    var duplicate_confirmed_slots: SlotData.DuplicateConfirmedSlots = .empty;
+    defer duplicate_confirmed_slots.deinit(allocator);
+
+    var duplicate_slots_to_repair: SlotData.DuplicateSlotsToRepair = .empty;
+    defer duplicate_slots_to_repair.deinit(allocator);
+
+    var purge_repair_slot_counter: SlotData.PurgeRepairSlotCounters = .empty;
+    defer purge_repair_slot_counter.deinit(allocator);
+
+    var ancestor_hashes_replay_update_channel: sig.sync.Channel(AncestorHashesReplayUpdate) =
+        try .init(allocator);
+    defer ancestor_hashes_replay_update_channel.deinit();
+
+    var duplicate_confirmed_slots_channel: sig.sync.Channel(ThresholdConfirmedSlot) =
+        try .init(allocator);
+    defer duplicate_confirmed_slots_channel.deinit();
+
+    // Use a slot that doesn't exist in the tracker (slot 100)
+    // This slot is not dead and not in tracker
+    const unknown_slot_hash: Hash = .initRandom(random);
+    try duplicate_confirmed_slots_channel.send(.{ .slot = 100, .hash = unknown_slot_hash });
+
+    // Process the duplicate confirmed slot
+    try processDuplicateConfirmedSlots(
+        allocator,
+        .noop,
+        &duplicate_confirmed_slots_channel,
+        ledger.resultWriter(),
+        &duplicate_confirmed_slots,
+        slot_tracker,
+        progress,
+        heaviest_subtree_fork_choice,
+        &duplicate_slots_to_repair,
+        &ancestor_hashes_replay_update_channel,
+        &purge_repair_slot_counter,
+    );
+
+    // Verify the slot was recorded in duplicate_confirmed_slots
+    try std.testing.expectEqual(unknown_slot_hash, duplicate_confirmed_slots.get(100));
 }
