@@ -488,12 +488,18 @@ fn prepareSlot(
     const previous_last_entry = confirmation_progress.last_entry;
     const entries, const slot_is_full = blk: {
         const entries, const num_shreds, const slot_is_full =
-            try state.ledger.reader().getSlotEntriesWithShredInfo(
+            state.ledger.reader().getSlotEntriesWithShredInfo(
                 state.allocator,
                 slot,
                 confirmation_progress.num_shreds,
                 false,
-            );
+            ) catch |err| switch (err) {
+                error.DeadSlot => {
+                    state.logger.info().logf("slot is dead: {}", .{slot});
+                    return .dead;
+                },
+                else => return err,
+            };
         errdefer {
             for (entries) |entry| entry.deinit(state.allocator);
             state.allocator.free(entries);
