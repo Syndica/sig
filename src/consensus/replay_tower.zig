@@ -947,7 +947,7 @@ pub const ReplayTower = struct {
                 voted_stakes,
                 total_stake,
             );
-
+            std.debug.print("vote_threshold {any}\n", .{vote_threshold});
             if (std.mem.eql(u8, @tagName(vote_threshold), "failed_threshold")) {
                 threshold_decisions[index] = vote_threshold;
                 index += 1;
