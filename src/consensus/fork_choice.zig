@@ -1539,7 +1539,8 @@ pub const ForkChoice = struct {
     /// Get the effective stake weight for a leaf node by finding where it
     /// diverged from competing forks, or returning total tree stake if no competition.
     fn getEffectiveLeafWeight(self: *ForkChoice, leaf: SlotAndHash) u64 {
-        const fork_info = self.fork_infos.get(leaf) orelse return 0;
+        // Verify the leaf exists in the tree
+        if (!self.fork_infos.contains(leaf)) return 0;
 
         // For a leaf, the effective weight is the stake_for_subtree at the point
         // where it competes with other branches. Walk up to find competing siblings.
@@ -1560,7 +1561,8 @@ pub const ForkChoice = struct {
         }
 
         // No competing forks found - this leaf represents the entire tree
-        return fork_info.stake_for_subtree;
+        // Return the total stake from the tree root
+        return self.stakeForSubtree(&self.tree_root) orelse 0;
     }
 
     /// [Agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L1105
@@ -5015,6 +5017,264 @@ test "HeaviestSubtreeForkChoice.gossipVoteDoesntAffectForkChoice" {
 
     // Best slot is still 4 (gossip vote didn't affect fork choice)
     try std.testing.expectEqual(4, fork_choice.heaviestOverallSlot().slot);
+}
+
+test "HeaviestSubtreeForkChoice.getEffectiveLeafWeight_singleLinearChain" {
+    // Test that a single linear chain returns the total tree stake for the leaf
+    var fork_choice = try forkChoiceForTest(test_allocator, linear_fork_tuples[0..]);
+    defer fork_choice.deinit();
+
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const random = prng.random();
+    const stake: u64 = 1000;
+    const vote_pubkeys = [_]Pubkey{
+        Pubkey.initRandom(random),
+        Pubkey.initRandom(random),
+        Pubkey.initRandom(random),
+    };
+
+    // Add votes on ancestor slots (not the leaf)
+    const pubkey_votes = [_]PubkeyVote{
+        .{ .pubkey = vote_pubkeys[0], .slot_hash = .{ .slot = 2, .hash = Hash.ZEROES } },
+        .{ .pubkey = vote_pubkeys[1], .slot_hash = .{ .slot = 3, .hash = Hash.ZEROES } },
+        .{ .pubkey = vote_pubkeys[2], .slot_hash = .{ .slot = 4, .hash = Hash.ZEROES } },
+    };
+
+    const versioned_stakes = try testEpochStakes(
+        test_allocator,
+        &vote_pubkeys,
+        stake,
+        random,
+    );
+    defer versioned_stakes.deinit(test_allocator);
+
+    var epoch_stakes = EpochStakesMap.empty;
+    defer epoch_stakes.deinit(test_allocator);
+    try epoch_stakes.put(test_allocator, 0, versioned_stakes);
+
+    _ = try fork_choice.addVotes(
+        test_allocator,
+        &pubkey_votes,
+        &epoch_stakes,
+        &EpochSchedule.DEFAULT,
+    );
+
+    // Slot 6 is the leaf of the linear chain
+    const leaf = SlotAndHash{ .slot = 6, .hash = Hash.ZEROES };
+    const effective_weight = fork_choice.getEffectiveLeafWeight(leaf);
+
+    // With no competing forks, the leaf should have the full tree stake
+    const total_stake = fork_choice.stakeForSubtree(&fork_choice.tree_root).?;
+    try std.testing.expectEqual(total_stake, effective_weight);
+
+    // Should be equal to 3 * stake (3 votes of 1000 each)
+    try std.testing.expectEqual(3 * stake, effective_weight);
+}
+
+test "HeaviestSubtreeForkChoice.getEffectiveLeafWeight_competingForksAtRoot" {
+    // Test competing forks branching from the root
+    // (0)
+    // └── (1)
+    //     ├── (2)
+    //     │   └── (4)
+    //     └── (3)
+    //         └── (5)
+    //             └── (6)
+    var fork_choice = try forkChoiceForTest(test_allocator, fork_tuples[0..]);
+    defer fork_choice.deinit();
+
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const random = prng.random();
+    const stake: u64 = 100;
+    const vote_pubkeys = [_]Pubkey{
+        Pubkey.initRandom(random),
+        Pubkey.initRandom(random),
+        Pubkey.initRandom(random),
+        Pubkey.initRandom(random),
+    };
+
+    // 3 votes on fork ending at slot 4, 1 vote on fork ending at slot 6
+    const pubkey_votes = [_]PubkeyVote{
+        .{ .pubkey = vote_pubkeys[0], .slot_hash = .{ .slot = 4, .hash = Hash.ZEROES } },
+        .{ .pubkey = vote_pubkeys[1], .slot_hash = .{ .slot = 2, .hash = Hash.ZEROES } },
+        .{ .pubkey = vote_pubkeys[2], .slot_hash = .{ .slot = 2, .hash = Hash.ZEROES } },
+        .{ .pubkey = vote_pubkeys[3], .slot_hash = .{ .slot = 6, .hash = Hash.ZEROES } },
+    };
+
+    const versioned_stakes = try testEpochStakes(
+        test_allocator,
+        &vote_pubkeys,
+        stake,
+        random,
+    );
+    defer versioned_stakes.deinit(test_allocator);
+
+    var epoch_stakes = EpochStakesMap.empty;
+    defer epoch_stakes.deinit(test_allocator);
+    try epoch_stakes.put(test_allocator, 0, versioned_stakes);
+
+    _ = try fork_choice.addVotes(
+        test_allocator,
+        &pubkey_votes,
+        &epoch_stakes,
+        &EpochSchedule.DEFAULT,
+    );
+
+    // Leaf 4 should have its subtree stake (3 votes)
+    const leaf_4 = SlotAndHash{ .slot = 4, .hash = Hash.ZEROES };
+    const weight_4 = fork_choice.getEffectiveLeafWeight(leaf_4);
+    try std.testing.expectEqual(3 * stake, weight_4);
+
+    // Leaf 6 should have its subtree stake (1 vote)
+    const leaf_6 = SlotAndHash{ .slot = 6, .hash = Hash.ZEROES };
+    const weight_6 = fork_choice.getEffectiveLeafWeight(leaf_6);
+    try std.testing.expectEqual(1 * stake, weight_6);
+
+    // Total should be 4 * stake
+    const total_stake = fork_choice.stakeForSubtree(&fork_choice.tree_root).?;
+    try std.testing.expectEqual(4 * stake, total_stake);
+
+    // Sum of effective weights should equal total
+    try std.testing.expectEqual(total_stake, weight_4 + weight_6);
+}
+
+test "HeaviestSubtreeForkChoice.getEffectiveLeafWeight_noVotesOnLeaf" {
+    // Test that a leaf with 0 votes still shows the correct effective weight
+    var fork_choice = try forkChoiceForTest(test_allocator, linear_fork_tuples[0..]);
+    defer fork_choice.deinit();
+
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const random = prng.random();
+    const stake: u64 = 500;
+    const vote_pubkeys = [_]Pubkey{
+        Pubkey.initRandom(random),
+        Pubkey.initRandom(random),
+    };
+
+    // Votes only on ancestors, not on the leaf
+    const pubkey_votes = [_]PubkeyVote{
+        .{ .pubkey = vote_pubkeys[0], .slot_hash = .{ .slot = 3, .hash = Hash.ZEROES } },
+        .{ .pubkey = vote_pubkeys[1], .slot_hash = .{ .slot = 4, .hash = Hash.ZEROES } },
+    };
+
+    const versioned_stakes = try testEpochStakes(
+        test_allocator,
+        &vote_pubkeys,
+        stake,
+        random,
+    );
+    defer versioned_stakes.deinit(test_allocator);
+
+    var epoch_stakes = EpochStakesMap.empty;
+    defer epoch_stakes.deinit(test_allocator);
+    try epoch_stakes.put(test_allocator, 0, versioned_stakes);
+
+    _ = try fork_choice.addVotes(
+        test_allocator,
+        &pubkey_votes,
+        &epoch_stakes,
+        &EpochSchedule.DEFAULT,
+    );
+
+    // Slot 6 is the leaf with 0 direct votes
+    const leaf = SlotAndHash{ .slot = 6, .hash = Hash.ZEROES };
+    const leaf_info = fork_choice.fork_infos.get(leaf).?;
+
+    // Verify the leaf has 0 direct stake
+    try std.testing.expectEqual(0, leaf_info.stake_for_slot);
+
+    // But effective weight should be the full tree stake
+    const effective_weight = fork_choice.getEffectiveLeafWeight(leaf);
+    const total_stake = fork_choice.stakeForSubtree(&fork_choice.tree_root).?;
+    try std.testing.expectEqual(total_stake, effective_weight);
+    try std.testing.expectEqual(2 * stake, effective_weight);
+}
+
+test "HeaviestSubtreeForkChoice.getEffectiveLeafWeight_multipleLeaves" {
+    // Test with 3 competing leaves
+    const three_fork_tuples = [_]TreeNode{
+        // (0)
+        // └── (1)
+        //     ├── (2)
+        //     ├── (3)
+        //     └── (4)
+        .{
+            SlotAndHash{ .slot = 1, .hash = Hash.ZEROES },
+            SlotAndHash{ .slot = 0, .hash = Hash.ZEROES },
+        },
+        .{
+            SlotAndHash{ .slot = 2, .hash = Hash.ZEROES },
+            SlotAndHash{ .slot = 1, .hash = Hash.ZEROES },
+        },
+        .{
+            SlotAndHash{ .slot = 3, .hash = Hash.ZEROES },
+            SlotAndHash{ .slot = 1, .hash = Hash.ZEROES },
+        },
+        .{
+            SlotAndHash{ .slot = 4, .hash = Hash.ZEROES },
+            SlotAndHash{ .slot = 1, .hash = Hash.ZEROES },
+        },
+    };
+
+    var fork_choice = try forkChoiceForTest(test_allocator, three_fork_tuples[0..]);
+    defer fork_choice.deinit();
+
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const random = prng.random();
+    const stake: u64 = 100;
+    const vote_pubkeys = [_]Pubkey{
+        Pubkey.initRandom(random),
+        Pubkey.initRandom(random),
+        Pubkey.initRandom(random),
+        Pubkey.initRandom(random),
+        Pubkey.initRandom(random),
+    };
+
+    // Distribute votes: 2 on fork 2, 2 on fork 3, 1 on fork 4
+    const pubkey_votes = [_]PubkeyVote{
+        .{ .pubkey = vote_pubkeys[0], .slot_hash = .{ .slot = 2, .hash = Hash.ZEROES } },
+        .{ .pubkey = vote_pubkeys[1], .slot_hash = .{ .slot = 2, .hash = Hash.ZEROES } },
+        .{ .pubkey = vote_pubkeys[2], .slot_hash = .{ .slot = 3, .hash = Hash.ZEROES } },
+        .{ .pubkey = vote_pubkeys[3], .slot_hash = .{ .slot = 3, .hash = Hash.ZEROES } },
+        .{ .pubkey = vote_pubkeys[4], .slot_hash = .{ .slot = 4, .hash = Hash.ZEROES } },
+    };
+
+    const versioned_stakes = try testEpochStakes(
+        test_allocator,
+        &vote_pubkeys,
+        stake,
+        random,
+    );
+    defer versioned_stakes.deinit(test_allocator);
+
+    var epoch_stakes = EpochStakesMap.empty;
+    defer epoch_stakes.deinit(test_allocator);
+    try epoch_stakes.put(test_allocator, 0, versioned_stakes);
+
+    _ = try fork_choice.addVotes(
+        test_allocator,
+        &pubkey_votes,
+        &epoch_stakes,
+        &EpochSchedule.DEFAULT,
+    );
+
+    // Check each leaf's effective weight
+    const leaf_2 = SlotAndHash{ .slot = 2, .hash = Hash.ZEROES };
+    const weight_2 = fork_choice.getEffectiveLeafWeight(leaf_2);
+    try std.testing.expectEqual(2 * stake, weight_2);
+
+    const leaf_3 = SlotAndHash{ .slot = 3, .hash = Hash.ZEROES };
+    const weight_3 = fork_choice.getEffectiveLeafWeight(leaf_3);
+    try std.testing.expectEqual(2 * stake, weight_3);
+
+    const leaf_4 = SlotAndHash{ .slot = 4, .hash = Hash.ZEROES };
+    const weight_4 = fork_choice.getEffectiveLeafWeight(leaf_4);
+    try std.testing.expectEqual(1 * stake, weight_4);
+
+    // Total should equal sum of all weights
+    const total_stake = fork_choice.stakeForSubtree(&fork_choice.tree_root).?;
+    try std.testing.expectEqual(5 * stake, total_stake);
+    try std.testing.expectEqual(total_stake, weight_2 + weight_3 + weight_4);
 }
 
 pub fn forkChoiceForTest(
