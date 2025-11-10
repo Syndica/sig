@@ -1420,6 +1420,7 @@ pub const ReplayTower = struct {
             } });
 
             // Ignore shallow checks for voting purposes
+            std.debug.print("vote_depth: {} and self.threshold_dept {}\n", .{vote_depth, self.threshold_depth});
             if (vote_depth >= self.threshold_depth) {
                 threshold_passed = false;
             }
@@ -1457,7 +1458,7 @@ pub const ReplayTower = struct {
                     is_locked_out,
                     threshold_passed,
                     propagation_confirmed,
-                    !switch_fork_decision.canVote(),
+                    switch_fork_decision.canVote(),
                 },
             );
         }
