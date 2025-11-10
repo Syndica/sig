@@ -337,7 +337,10 @@ pub const ForkChoice = struct {
             };
 
             try self.fork_infos.put(slot_hash_key, new_fork_info);
-            self.logger.info().logf("fork added, total forks: {}", .{self.fork_infos.count()});
+            self.logger.info().logf(
+                "block added to fork tree, active forks: {}",
+                .{self.countActiveForks()},
+            );
         }
 
         // If no parent is given then we are done.
@@ -361,6 +364,18 @@ pub const ForkChoice = struct {
 
     pub fn containsBlock(self: *const ForkChoice, key: *const SlotAndHash) bool {
         return self.fork_infos.contains(key.*);
+    }
+
+    /// Returns the number of active forks (leaf nodes in the fork tree)
+    pub fn countActiveForks(self: *const ForkChoice) usize {
+        var count: usize = 0;
+        var iter = self.fork_infos.valueIterator();
+        while (iter.next()) |fork_info| {
+            if (fork_info.children.count() == 0) {
+                count += 1;
+            }
+        }
+        return count;
     }
 
     pub fn latestDuplicateAncestor(
