@@ -1676,7 +1676,6 @@ fn cacheVotingSafetyChecks(
     );
     // Free old vote_threshold before replacing it to avoid memory leak
     stats.vote_threshold.deinit(allocator);
-    std.debug.print("ThresholdDecision: {any}\n", .{slice});
     stats.vote_threshold = .fromOwnedSlice(slice);
 
     const slot_ancestors = ancestors.get(slot) orelse return error.MissingAncestor;

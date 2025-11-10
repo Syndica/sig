@@ -1740,12 +1740,6 @@ fn optimisticallyBypassVoteStakeThresholdCheck(
         if (old_vote.slot == threshold_vote.slot and
             old_vote.confirmation_count == threshold_vote.confirmation_count)
         {
-            std
-                .debug
-                .print("Passed optmistic check old_vote.confirmation_count {} threshold_vote.confirmation_count {}", .{
-                old_vote.confirmation_count,
-                threshold_vote.confirmation_count,
-            });
             return true;
         }
     }
