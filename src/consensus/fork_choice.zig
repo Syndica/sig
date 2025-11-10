@@ -356,7 +356,16 @@ pub const ForkChoice = struct {
                 var removed = self.fork_infos.fetchRemove(slot_hash_key);
                 if (removed) |*kv| kv.value.deinit();
             }
+        }
 
+        // If no parent is given then we are done.
+        const parent = if (maybe_parent) |parent| parent else {
+            self.logger.debug().logf(
+                "addNewLeafSlot: slot {} has no parent (root node)",
+                .{slot_hash_key.slot},
+            );
+
+            // Log fork tree state for root nodes
             const active_fork_slots = try self.countActiveForks(self.allocator);
             defer self.allocator.free(active_fork_slots);
 
@@ -382,14 +391,7 @@ pub const ForkChoice = struct {
                     );
                 }
             }
-        }
 
-        // If no parent is given then we are done.
-        const parent = if (maybe_parent) |parent| parent else {
-            self.logger.debug().logf(
-                "addNewLeafSlot: slot {} has no parent (root node)",
-                .{slot_hash_key.slot},
-            );
             return;
         };
 
@@ -399,6 +401,33 @@ pub const ForkChoice = struct {
                 "addNewLeafSlot: slot {} added as child of {} ({} children)",
                 .{ slot_hash_key.slot, parent.slot, parent_fork_info.children.count() },
             );
+
+            // Log fork tree state after updating parent's children
+            const active_fork_slots = try self.countActiveForks(self.allocator);
+            defer self.allocator.free(active_fork_slots);
+
+            self.logger.info().logf(
+                "block added to fork tree, active forks: {}, slots: {any}",
+                .{ active_fork_slots.len, active_fork_slots },
+            );
+
+            // Debug: log details about each node in fork_infos
+            if (active_fork_slots.len > 1) {
+                self.logger.debug().log("fork tree state:");
+                var debug_iter = self.fork_infos.iterator();
+                while (debug_iter.next()) |entry| {
+                    const debug_slot = entry.key_ptr.slot;
+                    const debug_info = entry.value_ptr;
+                    self.logger.debug().logf(
+                        "  slot {}: {} children, parent: {?}",
+                        .{
+                            debug_slot,
+                            debug_info.children.count(),
+                            if (debug_info.parent) |p| p.slot else null,
+                        },
+                    );
+                }
+            }
         } else {
             // If parent is given then parent's info must
             // already exist by time child is being added.
