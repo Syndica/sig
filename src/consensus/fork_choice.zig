@@ -342,7 +342,10 @@ pub const ForkChoice = struct {
                 var removed = self.fork_infos.fetchRemove(slot_hash_key);
                 if (removed) |*kv| kv.value.deinit();
             }
+        }
 
+        const parent = if (maybe_parent) |parent| parent else {
+            // Log fork tree state for root nodes (after adding to fork_infos)
             const active_fork_slots = try self.countActiveForks(self.allocator);
             defer self.allocator.free(active_fork_slots);
 
@@ -350,13 +353,20 @@ pub const ForkChoice = struct {
                 "block added to fork tree, active forks: {}, slots: {any}",
                 .{ active_fork_slots.len, active_fork_slots },
             );
-        }
-
-        // If no parent is given then we are done.
-        const parent = if (maybe_parent) |parent| parent else return;
+            return;
+        };
 
         if (self.fork_infos.getPtr(parent)) |parent_fork_info| {
             try parent_fork_info.children.put(slot_hash_key, {});
+
+            // Log fork tree state after updating parent's children
+            const active_fork_slots = try self.countActiveForks(self.allocator);
+            defer self.allocator.free(active_fork_slots);
+
+            self.logger.info().logf(
+                "block added to fork tree, active forks: {}, slots: {any}",
+                .{ active_fork_slots.len, active_fork_slots },
+            );
         } else {
             // If parent is given then parent's info must
             // already exist by time child is being added.
