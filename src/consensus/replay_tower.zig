@@ -1690,6 +1690,7 @@ fn checkVoteStakeThreshold(
     };
 
     const fork_stake = voted_stakes.get(threshold_vote.slot) orelse {
+        std.debug.print("foiled here {}\n", .{1});
         // We haven't seen any votes on this fork yet, so no stake
         return .{
             .failed_threshold = .{ .vote_depth = threshold_depth, .observed_stake = 0 },
@@ -1721,6 +1722,7 @@ fn checkVoteStakeThreshold(
         return .passed_threshold;
     }
 
+    std.debug.print("foiled here {}\n", .{2});
     return .{
         .failed_threshold = .{
             .vote_depth = threshold_depth,
