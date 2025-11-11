@@ -388,8 +388,8 @@ fn checkLoadAndAdvanceMessageNonceAccount(
         .account = .{
             .lamports = nonce_account.lamports,
             .data = new_data,
-            .owner = sig.runtime.program.system.ID,
-            .executable = false,
+            .owner = nonce_account.owner,
+            .executable = nonce_account.executable,
             .rent_epoch = nonce_account.rent_epoch,
         },
         .is_owned = true,
